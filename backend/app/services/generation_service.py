@@ -18,7 +18,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.prompts import build_chapter_messages, build_polish_messages
-from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory
+from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import BadRequestError, ConflictError
 from app.core.security import SecretCipher
 from app.models import Chapter
@@ -40,6 +40,8 @@ class ChapterJob:
     provider: LLMProvider
     model: str
     messages: list[ChatMessage]
+    thinking: ThinkingLevel = "off"
+    max_tokens: int | None = None
 
 
 async def prepare_chapter_job(
@@ -66,7 +68,8 @@ async def prepare_chapter_job(
     if mode == "generate":
         assert isinstance(req, GenerateChapterRequest)
         outline = await find_chapter_outline(db, chapter)
-        context = await build_chapter_context(db, project, chapter, context_budget)
+        budget = ai_config_service.context_char_budget(cfg, context_budget)
+        context = await build_chapter_context(db, project, chapter, budget)
         messages = build_chapter_messages(
             context=context,
             chapter_no=chapter.chapter_no,
@@ -90,7 +93,13 @@ async def prepare_chapter_job(
     if result.rowcount != 1:
         raise ConflictError("该章节正在生成中，请稍候再试")
     return ChapterJob(
-        chapter_id=chapter.id, prev_status=prev_status, provider=provider, model=cfg.model, messages=messages
+        chapter_id=chapter.id,
+        prev_status=prev_status,
+        provider=provider,
+        model=cfg.model,
+        messages=messages,
+        thinking=cfg.thinking_level,  # type: ignore[arg-type]
+        max_tokens=ai_config_service.max_output_tokens(cfg),
     )
 
 
@@ -109,7 +118,10 @@ async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[Asyn
     finished = False
     pieces: list[str] = []
     try:
-        async with aclosing(job.provider.generate_stream(job.messages, job.model)) as stream:
+        stream_iter = job.provider.generate_stream(
+            job.messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking
+        )
+        async with aclosing(stream_iter) as stream:
             async for piece in stream:
                 pieces.append(piece)
                 yield "delta", {"text": piece}

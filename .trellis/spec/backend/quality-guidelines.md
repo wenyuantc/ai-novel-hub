@@ -111,8 +111,9 @@ async def test_registration_disabled(client): ...
 
 `FakeLLM` in `backend/tests/helpers.py` is injected as `create_app(settings, provider_factory=fake_llm.factory)`.
 `push("text")` splits into 7-char chunks; `push([..., AIProviderError(...)])` raises mid-stream;
-`fake.calls` records `provider/api_key/base_url/model/messages` for prompt assertions.
-An empty queue yields `["ok"]`.
+`fake.calls` records `provider/api_key/base_url/model/messages/max_tokens/thinking` for prompt and
+parameter assertions. An empty queue yields `["ok"]`. `fake.models` (list of `{"id", "name"?}` or an
+`AIProviderError`) drives `list_models()`; `fake.list_calls` records `provider/api_key/base_url/timeout`.
 
 ### No real DNS
 
@@ -152,9 +153,12 @@ def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool
 async def _resolve(host: str, port: int) -> list[str]          # patched in tests
 async def ensure_endpoint_allowed(base_url: str | None) -> None  # raises AIProviderError
 
-# backend/app/services/ai_config_service.py — the single exit
+# backend/app/services/ai_config_service.py — the two exits
 async def build_provider(cfg: AIConfig, cipher: SecretCipher, factory: ProviderFactory,
                          request_timeout: float, *, allow_private: bool) -> LLMProvider
+# POST /ai-configs/models: builds a provider from *unsaved* form values, so it repeats
+# ensure_endpoint_allowed + follow_redirects itself — keep both exits in sync.
+async def list_models(db, cipher, factory, user_id, req: ModelListRequest, *, allow_private: bool)
 ```
 
 Env: `ALLOW_PRIVATE_AI_ENDPOINTS` → `Settings.allow_private_ai_endpoints: bool = False`;
@@ -339,6 +343,46 @@ return AIConfigOut(id=cfg.id, ..., api_key_masked=masked, ...)
 ```
 
 ---
+
+## Scenario: AI config model parameters (thinking / context / max output)
+
+### 1. Scope / Trigger
+Touching `ai_configs.thinking_level|context_window_k|max_output_k`, a provider's `generate_stream`
+/ `list_models`, or how chapter/wizard jobs call the provider.
+
+### 2. Signatures
+```python
+ThinkingLevel = Literal["off", "low", "medium", "high"]          # app/ai/providers/base.py
+LLMProvider.generate_stream(messages, model, *, temperature=None, max_tokens=None, thinking="off")
+LLMProvider.list_models() -> list[ModelInfo]                      # ModelInfo = {id, name}
+ai_config_service.max_output_tokens(cfg) -> int | None           # max_output_k * 1000
+ai_config_service.context_char_budget(cfg, default) -> int        # replaces CONTEXT_CHAR_BUDGET
+```
+
+### 3. Contracts
+- K = 1000 tokens (not 1024): vendor "64K output" caps are 64000.
+- `thinking="off"` sends **no** thinking parameter. Never send `{"type": "disabled"}` — newer Claude
+  models (Opus 5.5, Sonnet 5.5, Fable) reject it with 400.
+- low/medium/high: OpenAI `reasoning_effort`; Claude 4.6+ `thinking={"type":"adaptive"}` +
+  `output_config={"effort":lvl}`; Claude ≤4.5 / 3.x `budget_tokens` 2048/8192/16384 with
+  `max_tokens ≥ budget+4096`; Gemini 1/2 `thinking_budget`, Gemini 3+ `thinking_level`.
+- Providers yield answer text only (Anthropic `text_stream`, Gemini `chunk.text` skip thoughts).
+- Connectivity test always `thinking="off", max_tokens=16`.
+- Context budget: `(context_window_k − (max_output_k or 8)) × 1000 − 4000`, 1 char ≈ 1 token, floor 1000;
+  unset → global default.
+
+### 4. Validation & Error Matrix
+| Input | Result |
+|---|---|
+| `context_window_k` ∉ 1..2000, `max_output_k` ∉ 1..256, unknown level | 422 |
+| create with `max_output_k ≥ context_window_k` | 422 |
+| PATCH making merged values violate the rule | 400 `最大输出必须小于上下文大小` |
+| `/models` provider error / timeout / private URL | 400 with Chinese detail |
+| `/models` with another user's `config_id` | 404 |
+
+### 5–7. Tests
+`backend/tests/test_ai_config_params.py` covers all rows above plus mapping tables. Wrong: adding a
+generation call site that forgets `max_tokens=job.max_tokens, thinking=job.thinking`.
 
 ## Code Review Checklist
 

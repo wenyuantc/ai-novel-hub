@@ -17,6 +17,9 @@ export interface Credentials {
 
 export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'
 
+/** off = 不发送思考参数 */
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
+
 export interface AIConfig {
   id: number
   name: string
@@ -25,6 +28,10 @@ export interface AIConfig {
   model: string
   api_key_masked: string
   is_default: boolean
+  thinking_level: ThinkingLevel
+  /** 单位 K（×1000 tokens），null = 默认 */
+  context_window_k: number | null
+  max_output_k: number | null
   created_at: string
   updated_at: string
 }
@@ -36,9 +43,25 @@ export interface AIConfigCreate {
   api_key?: string
   model: string
   is_default?: boolean
+  thinking_level?: ThinkingLevel
+  context_window_k?: number | null
+  max_output_k?: number | null
 }
 
 export type AIConfigUpdate = Partial<AIConfigCreate>
+
+export interface ModelListRequest {
+  provider: ProviderName
+  base_url?: string | null
+  /** 为空时用 config_id 对应配置已保存的 Key */
+  api_key?: string | null
+  config_id?: number | null
+}
+
+export interface ModelInfo {
+  id: string
+  name: string | null
+}
 
 export interface AIConfigTestResult {
   ok: boolean

@@ -1,7 +1,14 @@
 from fastapi import APIRouter, Response, status
 
 from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SettingsDep
-from app.schemas.ai_config import AIConfigCreate, AIConfigOut, AIConfigTestResult, AIConfigUpdate
+from app.schemas.ai_config import (
+    AIConfigCreate,
+    AIConfigOut,
+    AIConfigTestResult,
+    AIConfigUpdate,
+    ModelListRequest,
+    ModelListResult,
+)
 from app.services import ai_config_service as svc
 
 router = APIRouter(prefix="/ai-configs", tags=["ai-configs"])
@@ -15,6 +22,13 @@ async def list_configs(user: CurrentUser, db: DbDep, cipher: CipherDep) -> list[
 @router.post("", response_model=AIConfigOut, status_code=status.HTTP_201_CREATED)
 async def create_config(body: AIConfigCreate, user: CurrentUser, db: DbDep, cipher: CipherDep) -> AIConfigOut:
     return svc.to_out(await svc.create_config(db, cipher, user.id, body), cipher)
+
+
+@router.post("/models", response_model=ModelListResult)
+async def list_models(
+    body: ModelListRequest, user: CurrentUser, db: DbDep, cipher: CipherDep, factory: FactoryDep, settings: SettingsDep
+) -> ModelListResult:
+    return await svc.list_models(db, cipher, factory, user.id, body, allow_private=settings.allow_private_ai_endpoints)
 
 
 @router.get("/{config_id}", response_model=AIConfigOut)

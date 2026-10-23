@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端约定与质量闸门"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Alembic 迁移与字段约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、SSRF 防护契约"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "antd 表单组件约定"}

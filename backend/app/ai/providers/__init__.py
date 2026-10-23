@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 from app.ai.providers.anthropic import AnthropicProvider
-from app.ai.providers.base import AIProviderError, ChatMessage, LLMProvider
+from app.ai.providers.base import AIProviderError, ChatMessage, LLMProvider, ModelInfo, ThinkingLevel
 from app.ai.providers.gemini import GeminiProvider
 from app.ai.providers.openai_compat import OpenAICompatProvider
 
@@ -28,7 +28,9 @@ __all__ = [
     "ChatMessage",
     "GeminiProvider",
     "LLMProvider",
+    "ModelInfo",
     "OpenAICompatProvider",
     "ProviderFactory",
+    "ThinkingLevel",
     "create_provider",
 ]

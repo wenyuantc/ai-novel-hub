@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.ai.prompts import build_characters_messages, build_outline_messages, build_world_messages
-from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory
+from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.security import SecretCipher
 from app.models import Character, Outline, WorldSetting
 from app.schemas.chapter import WizardRequest
@@ -32,6 +32,8 @@ class WizardJob:
     provider: LLMProvider
     model: str
     messages: list[ChatMessage]
+    thinking: ThinkingLevel = "off"
+    max_tokens: int | None = None
 
 
 async def prepare_wizard_job(
@@ -78,7 +80,15 @@ async def prepare_wizard_job(
         messages = build_world_messages(
             info, outline_text=outline_text, characters_text=characters_text, instruction=req.instruction
         )
-    return WizardJob(project_id=project_id, kind=kind, provider=provider, model=cfg.model, messages=messages)
+    return WizardJob(
+        project_id=project_id,
+        kind=kind,
+        provider=provider,
+        model=cfg.model,
+        messages=messages,
+        thinking=cfg.thinking_level,  # type: ignore[arg-type]
+        max_tokens=ai_config_service.max_output_tokens(cfg),
+    )
 
 
 # ---------------- 解析与规范化 ----------------
@@ -218,7 +228,10 @@ async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind
 async def run_wizard_job(job: WizardJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:
     pieces: list[str] = []
     try:
-        async with aclosing(job.provider.generate_stream(job.messages, job.model)) as stream:
+        stream_iter = job.provider.generate_stream(
+            job.messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking
+        )
+        async with aclosing(stream_iter) as stream:
             async for piece in stream:
                 pieces.append(piece)
                 yield "delta", {"text": piece}

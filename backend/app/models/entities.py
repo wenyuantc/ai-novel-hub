@@ -33,6 +33,11 @@ class AIConfig(TimestampMixin, Base):
     api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # off / low / medium / high；关闭 = 不发送任何思考参数
+    thinking_level: Mapped[str] = mapped_column(String(16), default="off", server_default="off", nullable=False)
+    # 单位 K（×1000 tokens）；为空表示使用系统 / 接口默认
+    context_window_k: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_k: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Project(TimestampMixin, Base):

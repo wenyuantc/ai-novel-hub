@@ -1,12 +1,14 @@
-import { PlusOutlined } from '@ant-design/icons'
+import { CloudDownloadOutlined, PlusOutlined } from '@ant-design/icons'
 import {
   Alert,
   App,
+  AutoComplete,
   Button,
   Card,
   Checkbox,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Select,
@@ -16,9 +18,16 @@ import {
   Typography,
 } from 'antd'
 import { useEffect, useState } from 'react'
-import { aiConfigApi, PROVIDER_LABELS } from '../api/aiConfigs'
+import { aiConfigApi, PROVIDER_LABELS, THINKING_LABELS } from '../api/aiConfigs'
 import { errorMessage } from '../api/client'
-import type { AIConfig, AIConfigCreate, AIConfigTestResult, ProviderName } from '../api/types'
+import type {
+  AIConfig,
+  AIConfigCreate,
+  AIConfigTestResult,
+  ModelInfo,
+  ProviderName,
+  ThinkingLevel,
+} from '../api/types'
 import { useAIConfigStore } from '../stores/aiConfigs'
 import { formatTime } from '../utils/time'
 
@@ -29,6 +38,20 @@ interface FormValues {
   api_key?: string
   model: string
   is_default: boolean
+  thinking_level: ThinkingLevel
+  context_window_k?: number | null
+  max_output_k?: number | null
+}
+
+const THINKING_OPTIONS = (Object.keys(THINKING_LABELS) as ThinkingLevel[]).map((v) => ({
+  value: v,
+  label: THINKING_LABELS[v],
+}))
+
+/** 列表中的参数摘要 */
+function paramSummary(c: AIConfig): string {
+  const k = (v: number | null) => (v ? `${v}K` : '默认')
+  return `思考:${THINKING_LABELS[c.thinking_level]} · 上下文:${k(c.context_window_k)} · 输出:${k(c.max_output_k)}`
 }
 
 const MODEL_HINTS: Record<ProviderName, string> = {
@@ -47,6 +70,8 @@ export default function AIConfigPage() {
   const [testResults, setTestResults] = useState<Record<number, AIConfigTestResult>>({})
   const [form] = Form.useForm<FormValues>()
   const provider = Form.useWatch('provider', form)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
 
   useEffect(() => {
     void load(true)
@@ -63,7 +88,11 @@ export default function AIConfigPage() {
       api_key: '',
       model: '',
       is_default: configs.length === 0,
+      thinking_level: 'off',
+      context_window_k: null,
+      max_output_k: null,
     })
+    setModels([])
     setModalOpen(true)
   }
 
@@ -76,7 +105,11 @@ export default function AIConfigPage() {
       api_key: '',
       model: c.model,
       is_default: c.is_default,
+      thinking_level: c.thinking_level,
+      context_window_k: c.context_window_k,
+      max_output_k: c.max_output_k,
     })
+    setModels([])
     setModalOpen(true)
   }
 
@@ -88,6 +121,10 @@ export default function AIConfigPage() {
       base_url: v.base_url?.trim() ? v.base_url.trim() : null,
       model: v.model.trim(),
       is_default: v.is_default,
+      thinking_level: v.thinking_level,
+      // null = 清空恢复默认
+      context_window_k: v.context_window_k ?? null,
+      max_output_k: v.max_output_k ?? null,
     }
     const key = v.api_key?.trim() ?? ''
     setSaving(true)
@@ -106,6 +143,28 @@ export default function AIConfigPage() {
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleFetchModels = async () => {
+    const v = await form.validateFields(['provider', 'base_url'])
+    const key = (form.getFieldValue('api_key') as string | undefined)?.trim() ?? ''
+    setFetchingModels(true)
+    try {
+      const list = await aiConfigApi.listModels({
+        provider: v.provider,
+        base_url: v.base_url?.trim() ? v.base_url.trim() : null,
+        api_key: key || null,
+        // 编辑时 Key 留空则使用已保存的 Key
+        config_id: editing?.id ?? null,
+      })
+      setModels(list)
+      if (list.length) message.success(`已获取 ${list.length} 个模型`)
+      else message.warning('接口未返回任何模型，请手动填写')
+    } catch (err) {
+      message.error(errorMessage(err))
+    } finally {
+      setFetchingModels(false)
     }
   }
 
@@ -152,7 +211,7 @@ export default function AIConfigPage() {
           loading={loading}
           dataSource={configs}
           pagination={false}
-          scroll={{ x: 960 }}
+          scroll={{ x: 1210 }}
           columns={[
             {
               title: '名称',
@@ -166,6 +225,16 @@ export default function AIConfigPage() {
             },
             { title: '类型', dataIndex: 'provider', render: (p: ProviderName) => PROVIDER_LABELS[p] },
             { title: '模型', dataIndex: 'model' },
+            {
+              title: '参数',
+              key: 'params',
+              width: 250,
+              render: (_, r) => (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {paramSummary(r)}
+                </Typography.Text>
+              ),
+            },
             {
               title: 'Base URL',
               dataIndex: 'base_url',
@@ -253,6 +322,7 @@ export default function AIConfigPage() {
           </Form.Item>
           <Form.Item name="provider" label="接口类型" rules={[{ required: true }]}>
             <Select
+              onChange={() => setModels([])}
               options={(Object.keys(PROVIDER_LABELS) as ProviderName[]).map((p) => ({
                 value: p,
                 label: PROVIDER_LABELS[p],
@@ -291,9 +361,68 @@ export default function AIConfigPage() {
           >
             <Input.Password placeholder={editing ? '留空不修改' : 'sk-...'} autoComplete="new-password" />
           </Form.Item>
-          <Form.Item name="model" label="模型" rules={[{ required: true, whitespace: true, message: '请输入模型名' }]}>
-            <Input placeholder={MODEL_HINTS[provider ?? 'openai_compat']} maxLength={200} />
+          <Form.Item label="模型" required extra={models.length ? `可选 ${models.length} 个模型，也可手动输入` : undefined}>
+            <Space.Compact style={{ width: '100%' }}>
+              <Form.Item
+                name="model"
+                noStyle
+                rules={[{ required: true, whitespace: true, message: '请输入模型名' }]}
+              >
+                <AutoComplete
+                  style={{ width: '100%' }}
+                  placeholder={MODEL_HINTS[provider ?? 'openai_compat']}
+                  maxLength={200}
+                  options={models.map((m) => ({
+                    value: m.id,
+                    label: m.name && m.name !== m.id ? `${m.id}（${m.name}）` : m.id,
+                  }))}
+                  filterOption={(input, option) =>
+                    String(option?.value ?? '')
+                      .toLowerCase()
+                      .includes(input.trim().toLowerCase())
+                  }
+                />
+              </Form.Item>
+              <Button
+                icon={<CloudDownloadOutlined />}
+                loading={fetchingModels}
+                onClick={() => void handleFetchModels()}
+              >
+                获取模型
+              </Button>
+            </Space.Compact>
           </Form.Item>
+          <Form.Item
+            name="thinking_level"
+            label="思考等级"
+            extra="关闭时不发送思考参数；部分模型默认即会思考，无法强制关闭"
+          >
+            <Select options={THINKING_OPTIONS} />
+          </Form.Item>
+          <Space size="middle" style={{ display: 'flex' }} align="start">
+            <Form.Item name="context_window_k" label="上下文大小" extra="留空使用系统默认；用于截断章节前文">
+              <InputNumber min={1} max={2000} precision={0} addonAfter="K" placeholder="如 128" style={{ width: 200 }} />
+            </Form.Item>
+            <Form.Item
+              name="max_output_k"
+              label="最大输出"
+              extra="留空使用接口默认"
+              dependencies={['context_window_k']}
+              rules={[
+                ({ getFieldValue }) => ({
+                  validator: (_, value?: number | null) => {
+                    const ctx = getFieldValue('context_window_k') as number | null | undefined
+                    if (value != null && ctx != null && value >= ctx) {
+                      return Promise.reject(new Error('需小于上下文大小'))
+                    }
+                    return Promise.resolve()
+                  },
+                }),
+              ]}
+            >
+              <InputNumber min={1} max={256} precision={0} addonAfter="K" placeholder="如 8" style={{ width: 200 }} />
+            </Form.Item>
+          </Space>
           <Form.Item name="is_default" valuePropName="checked">
             <Checkbox>设为默认配置</Checkbox>
           </Form.Item>

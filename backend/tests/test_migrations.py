@@ -23,6 +23,8 @@ def test_upgrade_and_downgrade(tmp_path):
         fks = {fk["referred_table"]: fk for fk in insp.get_foreign_keys("chapters")}
         assert fks["projects"]["options"].get("ondelete") == "CASCADE"
         assert fks["outlines"]["options"].get("ondelete") == "SET NULL"
+        ai_cols = {c["name"] for c in insp.get_columns("ai_configs")}
+        assert {"thinking_level", "context_window_k", "max_output_k"} <= ai_cols
     finally:
         engine.dispose()
 

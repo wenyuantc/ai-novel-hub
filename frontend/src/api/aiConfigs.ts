@@ -1,5 +1,13 @@
 import { api } from './client'
-import type { AIConfig, AIConfigCreate, AIConfigTestResult, AIConfigUpdate } from './types'
+import type {
+  AIConfig,
+  AIConfigCreate,
+  AIConfigTestResult,
+  AIConfigUpdate,
+  ModelInfo,
+  ModelListRequest,
+  ThinkingLevel,
+} from './types'
 
 export const aiConfigApi = {
   list: () => api.get<AIConfig[]>('/ai-configs'),
@@ -8,10 +16,19 @@ export const aiConfigApi = {
   remove: (id: number) => api.del(`/ai-configs/${id}`),
   setDefault: (id: number) => api.post<AIConfig>(`/ai-configs/${id}/default`),
   test: (id: number) => api.post<AIConfigTestResult>(`/ai-configs/${id}/test`),
+  listModels: (body: ModelListRequest) =>
+    api.post<{ models: ModelInfo[] }>('/ai-configs/models', body).then((r) => r.models),
 }
 
 export const PROVIDER_LABELS: Record<AIConfig['provider'], string> = {
   openai_compat: 'OpenAI 兼容',
   anthropic: 'Anthropic Claude',
   gemini: 'Google Gemini',
+}
+
+export const THINKING_LABELS: Record<ThinkingLevel, string> = {
+  off: '关闭',
+  low: '低',
+  medium: '中',
+  high: '高',
 }

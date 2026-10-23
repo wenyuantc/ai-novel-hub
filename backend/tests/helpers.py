@@ -17,6 +17,9 @@ class FakeLLM:
 
     responses: list[list[str] | Exception] = field(default_factory=list)
     calls: list[dict] = field(default_factory=list)
+    # list_models 的预设结果（或异常），以及每次调用的参数
+    models: list[dict] | Exception = field(default_factory=list)
+    list_calls: list[dict] = field(default_factory=list)
 
     def push(self, item: str | list[str] | Exception) -> None:
         if isinstance(item, str):
@@ -27,7 +30,15 @@ class FakeLLM:
         fake = self
 
         class _Provider(LLMProvider):
-            async def generate_stream(self, messages, model, *, temperature=None, max_tokens=None):
+            async def list_models(self):
+                fake.list_calls.append(
+                    {"provider": provider, "api_key": api_key, "base_url": base_url, "timeout": timeout}
+                )
+                if isinstance(fake.models, Exception):
+                    raise fake.models
+                return [{"id": m["id"], "name": m.get("name")} for m in fake.models]
+
+            async def generate_stream(self, messages, model, *, temperature=None, max_tokens=None, thinking="off"):
                 fake.calls.append(
                     {
                         "provider": provider,
@@ -35,6 +46,8 @@ class FakeLLM:
                         "base_url": base_url,
                         "model": model,
                         "messages": messages,
+                        "max_tokens": max_tokens,
+                        "thinking": thinking,
                     }
                 )
                 item = fake.responses.pop(0) if fake.responses else ["ok"]
