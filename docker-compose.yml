@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ainovel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ainovel}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ainovel}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ainovel}
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?请在 .env 中设置 ENCRYPTION_KEY}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      CONTEXT_CHAR_BUDGET: ${CONTEXT_CHAR_BUDGET:-12000}
+      AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-300}
+      ALLOW_PRIVATE_AI_ENDPOINTS: ${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+volumes:
+  pgdata:

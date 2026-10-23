@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-22-ai-novel-platform/research/mumuainovel-reference.md", "reason": "参考项目功能清单与技术栈对标来源，MVP 功能边界依据"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口：目录结构、数据库、错误处理、日志、质量"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口：组件、状态管理、类型安全、质量"}
+{"file": ".trellis/spec/guides/index.md", "reason": "跨层数据流与代码复用思维指南入口"}

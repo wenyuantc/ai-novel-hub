@@ -1,0 +1,16 @@
+.git
+.env
+**/.env
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+frontend/dist
+.trellis
+.claude
+.agent
+.agents
+.codex
+.cursor
+.opencode

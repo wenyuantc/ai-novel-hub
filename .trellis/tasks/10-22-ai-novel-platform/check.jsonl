@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查标准"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量检查标准"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流一致性检查（API 契约、SSE、user_id 隔离）"}
+{"file": ".trellis/tasks/10-22-ai-novel-platform/research/mumuainovel-reference.md", "reason": "验收时对照参考项目功能边界"}
