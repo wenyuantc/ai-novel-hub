@@ -172,13 +172,14 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
 
 ---
 
-## 场景：SSE 流式契约 (generate / polish / wizard)
+## 场景：SSE 流式契约 (generate / polish / rewrite / wizard)
 
 ### 1. 范围 / 触发条件
 
-适用于 `POST /api/v1/chapters/{id}/generate`、`POST /api/v1/chapters/{id}/polish`
+适用于 `POST /api/v1/chapters/{id}/generate`、`POST /api/v1/chapters/{id}/polish`、
+`POST /api/v1/chapters/{id}/rewrite`（局部改写预览）
 以及 `POST /api/v1/projects/{id}/wizard/{outline|characters|world}`。跨层：
-后端 `app/api/sse.py` + `generation_service.py` / `wizard_service.py`，前端
+后端 `app/api/sse.py` + `generation_service.py` / `rewrite_service.py` / `wizard_service.py`，前端
 `frontend/src/api/sse.ts`（`postSSE`）。新增任何流式端点或修改事件名/payload 时，
 都需要遵循并更新此契约。
 
@@ -190,10 +191,18 @@ def format_sse(event: str, data: dict) -> str: ...
 def sse_response(events: AsyncIterator[tuple[str, dict]]) -> StreamingResponse: ...
 
 # backend/app/services/generation_service.py
-Event = tuple[Literal["delta", "done", "error"], dict]
+Event = tuple[Literal["delta", "continue", "done", "error"], dict]
+CONTINUE_RATIO = 0.85; MAX_CONTINUE_ROUNDS = 2
 async def prepare_chapter_job(db, *, user_id, chapter_id, mode, req, cipher, factory,
                               ai_timeout, allow_private, context_budget) -> ChapterJob
 async def run_chapter_job(job: ChapterJob, sessionmaker) -> AsyncIterator[Event]
+async def stream_pieces(provider, messages, model, *, max_tokens, thinking, pieces, prefix="") -> AsyncIterator[Event]
+
+# backend/app/services/rewrite_service.py
+async def prepare_rewrite_job(db, *, user_id, chapter_id, req: RewriteRequest, cipher, factory,
+                              ai_timeout, allow_private) -> RewriteJob
+async def run_rewrite_job(job: RewriteJob, sessionmaker) -> AsyncIterator[Event]
+async def apply_rewrite(db, user_id, project_id, chapter_id, data: RewriteApply) -> Chapter  # 普通 JSON
 
 # backend/app/services/wizard_service.py
 async def prepare_wizard_job(db, *, user_id, project_id, kind, req, cipher, factory,
@@ -223,8 +232,10 @@ return sse_response(generation_service.run_chapter_job(job, sessionmaker))
 
 | 事件 | Payload | 时机 |
 |-------|---------|------|
-| `delta` | `{"text": "<chunk>"}` | provider 每产出一个分块 |
-| `done`（章节） | `{"chapter": ChapterOut (mode="json")}` | 正文已保存，状态为 `done` |
+| `delta` | `{"text": "<chunk>"}` | provider 每产出一个分块；续写轮的首个分块前额外发一个 `{"text": "\n\n"}` |
+| `continue`（仅整章生成） | `{"round": n, "words": <当前字数>, "target": <target_words>}` | 每轮自动续写开始前；`n` 从 1 起，最多 2 |
+| `done`（章节） | `{"chapter": ChapterOut (mode="json"), "warning"?: "自动续写失败：…"}` | 正文已保存，状态为 `done`；`warning` 仅在续写轮失败时出现 |
+| `done`（局部改写） | `{"text": <结果>, "start": int, "end": int, "original": <选区原文>, "before": <选区前最多 200 码点原文>, "log_id": int\|null}` | 结果已写入生成记录；**正文未改** |
 | `done`（向导） | `{"kind": "outline"\|"characters"\|"world", "items": [Out...]}` | 已解析并保存（该类型的旧记录被替换） |
 | `error` | `{"detail": "<Chinese>"}` | 流内失败；始终是最后一个事件 |
 
@@ -244,6 +255,22 @@ finally:
   `sse_response` 用 `contextlib.aclosing` 包裹生成器，使 `finally` 在断开连接时
   确定性地执行，而不是等到垃圾回收时。
 - 向导任务不修改任何状态；解析失败时不删除任何数据。
+- 版本与生成记录（见 `database-guidelines.md`「章节版本写入规则」）：章节任务成功时在**同一事务**内
+  `ensure_baseline → 覆盖正文 → write_log(success) → record(generate|polish, log_id)`；非成功退出时
+  正文与版本都不变，在屏蔽取消的 `finally` 中额外用独立 session 写一条 `status=error|cancelled` 的记录
+  （`generation_log_service.save_log`，自身吞掉异常）。没有被 except 分支改写的失败即视为 `cancelled`。
+- 自动续写（D3）：`GenerateChapterRequest.auto_continue`（**接口默认 `false`**，兼容旧客户端；编辑器默认显式传
+  `true`）。首轮正文 `count_words < 0.85 × target_words` 时最多续写 2 轮：消息为原消息 +
+  `assistant(已生成正文)` + `user(build_continuation_messages 的续写指令)`，结果以 `"\n\n"` 拼接。
+  续写返回空白 → 停止续写；续写轮抛 `AIProviderError`/异常 → 丢弃本轮半截内容，已生成正文照常落库，
+  `done.warning = "自动续写失败：…"`，生成记录 `status=success`、`error` 存同一警告。润色不续写。
+  客户端断开仍按原规则不落库并回退状态。未触发续写时事件序列与旧版完全一致。
+- 局部改写预览（`/chapters/{id}/rewrite`）**不抢占 `generating` 锁、不改正文**，只流式返回结果并写一条
+  生成记录（`kind = op`）。采纳走普通 JSON `POST /projects/{pid}/chapters/{cid}/rewrite/apply`：
+  `content[start:end] != original`（或越界）→ 409 `正文已变化，请重新选择后再改写`（乐观并发校验）；
+  请求可选带 `before`（≤200 码点，取自预览 `done.before`），传入时还要求 `start >= len(before)` 且
+  `content[start-len(before):start] == before`，否则同样 409——光标续写的 `original` 为空串必然匹配，
+  只能靠它发现前文被改（前端采纳时总是传入）；章节生成中 → 409；`log_id` 不属于本章时忽略。偏移一律为**码点**偏移（前端负责与 UTF-16 互转）。
 
 ### 4. 校验与错误矩阵
 
@@ -255,13 +282,19 @@ finally:
 | 没有 AI 配置 | 流开始前 | 400 JSON `尚未配置 AI 模型...` |
 | Base URL 被拦截 / key 解密失败 | 流开始前 | 400 JSON（来自 `build_provider`） |
 | 润色时正文为空 | 流开始前 | 400 JSON `章节正文为空，无法润色` |
+| 改写：`start > end` 或 `end > len(content)` | 流开始前 | 400 JSON `选区超出正文范围，请重新选择` |
+| 改写：非续写 op 选区为空 / 仅空白 | 流开始前 | 400 JSON `请先选中要处理的文字` |
+| 改写：选区超过 5000 字（码点） | 流开始前 | 400 JSON `单次选区不能超过 5000 字` |
+| 改写：`op=continue` 但 `start != end` / 光标前无正文 | 流开始前 | 400 JSON `续写时请把光标放在续写位置…` / `光标前没有正文，无法续写` |
+| 改写：`op` 非法 | 流开始前 | 422 JSON |
 | 章节已处于 `generating` | 流开始前 | 409 JSON `该章节正在生成中，请稍候再试` |
 | provider 在流中途抛出 `AIProviderError` | 流内 | `error {"detail": str(exc)}`，状态已恢复 |
 | 模型只返回空白 | 流内 | `error {"detail": "模型未返回任何内容"}`，状态已恢复 |
 | 生成期间章节被删除 | 流内 | `error {"detail": "章节已被删除，生成结果未保存"}` |
+| 自动续写轮报错 | 流内 | `done` 照常（含已生成正文）+ `warning` |
 | 向导 JSON 无法解析 | 流内 | `error {"detail": "AI 输出解析失败：...，请重新生成"}`，保留旧数据 |
-| 意外异常 | 流内 | 记录日志；`error {"detail": "生成失败：服务器内部错误"}` |
-| 客户端断开 | 流内 | 无事件；通过 `aclosing` + 屏蔽取消的 `finally` 恢复状态 |
+| 意外异常 | 流内 | 记录日志；`error {"detail": "生成失败：服务器内部错误"}`（改写为 `改写失败：服务器内部错误`） |
+| 客户端断开 | 流内 | 无事件；通过 `aclosing` + 屏蔽取消的 `finally` 恢复状态，写 `cancelled` 生成记录 |
 
 流开始前的错误是普通 JSON（status != 200），因此前端在读取流之前先检查
 `resp.ok`。一旦发送了 200，错误就只能以 `error` 事件的形式出现。
@@ -286,9 +319,14 @@ finally:
 - `test_generate_requires_ai_config`、`test_polish`（正文为空时返回 400）。
 - `backend/tests/test_wizard.py::test_wizard_parse_error`（error + 保留旧数据）、
   `test_wizard_invalid_kind`（422）、`test_wizard_overwrites_and_keeps_chapters`。
+- `backend/tests/test_chapter_versions.py` —— baseline + generate 版本与日志关联、失败不写版本只写 error 记录、
+  `test_generate_cancelled_logs_cancelled`（直接驱动 `run_chapter_job` 后 `aclose()` 模拟断开：状态回退、
+  正文/版本不变、记录为 `cancelled`）、自动续写（`continue` 事件 payload、拼接、最多 2 轮、默认关闭、续写失败 warning）。
+- `backend/tests/test_rewrite.py` —— 预览不改正文、`done` payload、采纳替换（含 emoji / 扩展 B 区码点偏移）、
+  `original` 不一致 409、`test_continue_apply_rejects_changed_prefix`（光标前被同长度修改 / 删短 → 409）、校验矩阵（400/422/409）、错误写 error 记录。
 - 使用 `tests.helpers.parse_sse` 解析帧，它会跳过 `: stream-start` 注释。
-- 尚未自动化：客户端断开时的回退。对 `sse_response` 或
-  `finally` 块的任何改动都必须手动验证，或补充新测试覆盖。
+- 客户端断开：`test_generate_cancelled_logs_cancelled` 覆盖了生成器 `aclose()` 路径；对 `sse_response`
+  本身的改动仍需手动验证。
 
 ### 7. 错误写法 vs 正确写法
 

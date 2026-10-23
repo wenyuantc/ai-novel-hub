@@ -48,6 +48,8 @@ class GenerateChapterRequest(BaseModel):
     ai_config_id: int | None = None
     instruction: str = Field(default="", max_length=2000)
     target_words: int = Field(default=3000, ge=300, le=20000)
+    # 字数低于目标 85% 时自动续写（最多 2 轮）。接口默认关闭以兼容旧客户端，编辑器默认显式开启
+    auto_continue: bool = False
 
 
 class PolishChapterRequest(BaseModel):

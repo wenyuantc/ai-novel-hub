@@ -96,7 +96,7 @@ def test_0004_backfills_model_type(tmp_path):
     finally:
         engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0004")
     engine = create_engine(f"sqlite:///{db_file}")
     try:
         with engine.connect() as conn:
@@ -109,5 +109,37 @@ def test_0004_backfills_model_type(tmp_path):
     try:
         cols = {c["name"] for c in inspect(engine).get_columns("ai_configs")}
         assert "model_type" not in cols
+    finally:
+        engine.dispose()
+
+
+def test_0005_chapter_versions(tmp_path):
+    """0005 新建 chapter_versions / generation_logs（外键规则正确）；downgrade -1 删除两表且不影响章节。"""
+    db_file = tmp_path / "migrate0005.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0005")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert {"chapter_versions", "generation_logs"} <= set(insp.get_table_names())
+        vfks = {fk["referred_table"]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys("chapter_versions")}
+        assert vfks == {"chapters": "CASCADE", "generation_logs": "SET NULL"}
+        lfks = {fk["referred_table"]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys("generation_logs")}
+        assert lfks == {"projects": "CASCADE", "chapters": "SET NULL", "ai_configs": "SET NULL"}
+        uqs = [u["column_names"] for u in insp.get_unique_constraints("chapter_versions")]
+        assert ["chapter_id", "seq"] in uqs
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert not ({"chapter_versions", "generation_logs"} & tables)
+        assert "chapters" in tables
     finally:
         engine.dispose()

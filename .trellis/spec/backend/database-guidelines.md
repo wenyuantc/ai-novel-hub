@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -192,8 +192,14 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   `0002_ai_config_model_params.py`（`down_revision = '0001'`，新增 `thinking_level`，
   `server_default='off'`，以及可空的 `context_window_k` / `max_output_k`）、
   `0003_user_admin_fields.py`（`down_revision = '0002'`，新增 `users.is_admin` / `is_active` /
-  `token_version`，通过 `server_default` 回填；`test_0003_backfills_existing_users`）。
+  `token_version`，通过 `server_default` 回填；`test_0003_backfills_existing_users`）、
+  `0004_ai_config_model_type.py`（`down_revision = '0003'`，`ai_configs.model_type` 回填 `text`；
+  `test_0004_backfills_model_type`）、`0005_chapter_versions.py`（`down_revision = '0004'`，只新建
+  `generation_logs` 与 `chapter_versions` 两张表，不回填；`test_0005_chapter_versions` 断言外键规则与
+  `(chapter_id, seq)` 唯一约束）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
+- 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
+  否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
 - 应用：`cd backend && uv run alembic upgrade head`。Docker 镜像运行
   `alembic upgrade head && uvicorn app.main:app ...`（`Dockerfile`）。
 - 回滚：`uv run alembic downgrade -1` / `base`。
@@ -255,6 +261,66 @@ outline_id: Mapped[int | None] = mapped_column(
 会静默删除已写好的章节正文。由
 `backend/tests/test_wizard.py::test_wizard_overwrites_and_keeps_chapters` 覆盖
 （`assert ch["outline_id"] is None`，正文被保留）。
+
+其他 `SET NULL` 例外（`0005`）：`generation_logs.chapter_id` / `generation_logs.ai_config_id`（章节或配置删除后
+记录仍留在项目下，`provider`/`model` 冗余存储）、`chapter_versions.generation_log_id`（日志被 200 条上限裁剪后
+版本保留）。`chapter_versions.chapter_id`、`generation_logs.project_id` 为 CASCADE。
+
+---
+
+## 场景：章节版本写入规则
+
+### 1. 范围 / 触发条件
+
+任何改写 `chapters.content` 的代码路径：手动保存（`chapter_service.create_chapter` / `update_chapter`）、
+整章生成/润色（`generation_service.run_chapter_job`）、局部改写采纳（`rewrite_service.apply_rewrite`）、
+回滚（`chapter_version_service.restore_version`）。后续的批量生成、按建议重写也必须复用这里的原语。
+
+### 2. 签名
+
+```python
+# backend/app/services/version_service.py（只含写入原语，不依赖其他 service，避免与 chapter_service 循环导入）
+MANUAL_MERGE_WINDOW = timedelta(minutes=10); MAX_VERSIONS = 50
+async def record_manual(db, chapter) -> ChapterVersion | None
+async def ensure_baseline(db, chapter) -> None
+async def record(db, chapter, source, *, log_id=None, note="") -> ChapterVersion   # 内部会 prune
+async def prune(db, chapter_id) -> None
+async def get_latest(db, chapter_id) -> ChapterVersion | None
+
+# backend/app/services/chapter_version_service.py —— HTTP 入口（list/get/update/delete/restore）
+# backend/app/services/generation_log_service.py
+MAX_LOGS_PER_PROJECT = 200
+async def write_log(db, *, project_id, chapter_id, kind, ai_config_id, provider, model, params, messages,
+                    status, error="", output_chars=0, duration_ms=0) -> GenerationLog   # flush + 裁剪，不 commit
+async def save_log(sessionmaker, **kwargs) -> int | None   # 独立 session + commit，吞异常（失败/取消路径）
+# chapter_service
+async def commit_versioned(db) -> None   # (chapter_id, seq) 唯一约束冲突 → 409
+```
+
+### 3. 契约
+
+- 版本是**事件发生后**的正文快照；写版本时取 `chapter.content` / `chapter.word_count`，调用方须先更新这两个字段。
+- 原语**都不 commit**：改正文 + 写版本 + 写日志在同一事务里由调用方提交。
+- 手动保存（仅当 PATCH 的 `content` 与原正文不同；创建章节时正文非空）：新正文为空白 → 不写；
+  与最新版本相同 → 不写；最新版本是未标星的 `manual` 且 `_now() - created_at < 10 分钟` → 原地更新；
+  否则新建 `manual`。**固定窗口**：按版本 `created_at` 计时，合并刷新的 `updated_at` 不参与判断，
+  因此长时间连续写作每 10 分钟至少留一个版本（用户决策；`test_manual_merge_window_is_fixed_from_creation`
+  通过直接改写 `created_at`/`updated_at` 区分两种窗口，`_now` monkeypatch 无法区分，因为 `onupdate` 用的是数据库时间）。时间用服务端 UTC（SQLite 读出的
+  naive 时间按 UTC 处理）。
+- AI 覆盖 / 改写采纳 / 回滚之前 `ensure_baseline`：当前正文非空且 ≠ 最新版本内容 → 写 `baseline`。
+  这些来源（`baseline`/`generate`/`polish`/`rewrite`/`restore`）永不参与合并。
+- `seq = max(seq)+1`（章节内）；最新版本禁止删除（400 `不能删除最新版本`），因此序号不会复用。
+- `prune`：保留最新 50 个未标星 + 全部标星；最新版本若未标星必在前 50，故永不被删。
+- 回滚：`ensure_baseline` → 正文改为目标版本 → `record("restore", note="恢复自 v{seq}")`；不改标题、不改状态；
+  章节 `generating` 时 409。回滚前的快照仍在列表中，再恢复它即可撤销回滚。
+- 生成记录每个项目保留最近 200 条（按 id）；`write_log` 会把生成期间已被删除的章节/配置外键置空，避免外键失败。
+  `prompt_tokens`/`completion_tokens` 目前恒为 NULL（provider 流式接口拿不到用量）。
+
+### 4. 必需的测试
+
+`backend/tests/test_chapter_versions.py`：合并窗口（monkeypatch `version_service._now`）、标星不合并、
+上限裁剪（第 51 个未标星删最旧，标星保留）、删除最新版本 400、AI 覆盖补 baseline、回滚与撤销、
+日志 200 条裁剪、跨用户 404。
 
 ---
 

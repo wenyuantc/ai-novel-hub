@@ -4,7 +4,9 @@
 所有访问都经 service 层显式查询并按 user_id 过滤。
 """
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, false, true
+from typing import Any
+
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint, false, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -12,6 +14,11 @@ from app.models.base import Base, TimestampMixin
 CHAPTER_STATUSES = ("draft", "generating", "done")
 AI_PROVIDERS = ("openai_compat", "anthropic", "gemini")
 PROJECT_STATUSES = ("planning", "writing", "completed")
+# 版本来源：手动保存 / AI 或回滚替换前补的快照 / 整章生成 / 润色 / 局部改写采纳 / 回滚
+VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore")
+# 生成记录类型：整章生成、润色，以及局部改写的各个操作
+GENERATION_KINDS = ("generate", "polish", "rewrite", "expand", "condense", "deslop", "continue")
+GENERATION_STATUSES = ("success", "error", "cancelled")
 
 
 class User(TimestampMixin, Base):
@@ -107,3 +114,51 @@ class Chapter(TimestampMixin, Base):
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class GenerationLog(TimestampMixin, Base):
+    """一次 AI 调用的记录。provider / model 冗余存储，配置删除后仍可查看。"""
+
+    __tablename__ = "generation_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    # 章节删除后记录保留在项目下
+    chapter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    ai_config_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_configs.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    model: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    messages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    output_chars: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 预留：现有 provider 流式接口拿不到 token 用量，暂时为空
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class ChapterVersion(TimestampMixin, Base):
+    """章节正文快照（事件发生后的状态）。合并手动保存时会刷新 updated_at。"""
+
+    __tablename__ = "chapter_versions"
+    __table_args__ = (UniqueConstraint("chapter_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), index=True, nullable=False)
+    # 章节内递增序号（max+1），删除后不复用
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    starred: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    generation_log_id: Mapped[int | None] = mapped_column(
+        ForeignKey("generation_logs.id", ondelete="SET NULL"), index=True, nullable=True
+    )

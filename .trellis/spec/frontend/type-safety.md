@@ -23,12 +23,18 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
   | `ChapterUpdate.status` | `'draft' \| 'done' \| null`（绝不为 `generating`） | `ChapterUpdate.status: Literal["draft", "done"] \| None` |
   | `ProjectStatus` | `'planning' \| 'writing' \| 'completed'` | `schemas/project.py` |
   | `WizardKind` | `'outline' \| 'characters' \| 'world'` | 向导路由 `/projects/{pid}/wizard/{kind}` |
+  | `VersionSource` | `'manual' \| 'baseline' \| 'generate' \| 'polish' \| 'rewrite' \| 'restore'` | `schemas/chapter_version.py` |
+  | `GenerationKind` | `'generate' \| 'polish' \| 'rewrite' \| 'expand' \| 'condense' \| 'deslop' \| 'continue'` | 同上 |
+  | `GenerationStatus` | `'success' \| 'error' \| 'cancelled'` | 同上 |
+  | `RewriteOp` | `'rewrite' \| 'expand' \| 'condense' \| 'deslop' \| 'continue'` | 同上 |
 
 - UI 标签映射使用 `Record<Union, …>` 类型，因此新增枚举值后在补上标签前会产生编译错误：`PROJECT_STATUS: Record<ProjectStatus, { label; color }>`、`CHAPTER_STATUS: Record<ChapterStatus, …>`、`PROVIDER_LABELS: Record<AIConfig['provider'], string>`、`WIZARD_KIND_LABELS: Record<WizardKind, string>`。
 - 类型级映射把泛型参数与载荷绑定：`WizardItemMap { outline: Outline; characters: Character; world: WorldSetting }` → `runWizard<K>(…): Promise<WizardItemMap[K][]>`。
 - 组件本地的表单结构（`FormValues`）保留在组件文件中。
 
 - 认证/管理员类型：`User.is_admin` 镜像 `UserOut.is_admin`；`Page<T> = { items: T[]; total: number }` 镜像 `AdminUserList`；`AdminUser` 镜像 `AdminUserOut`（`id, username, is_admin, is_active, created_at, project_count`）；`AdminUserCreate`、`AdminUserUpdate`（`is_admin?`、`is_active?`）、`ResetPasswordRequest`、`ChangePasswordRequest`。后端契约：`.trellis/spec/backend/auth-admin.md`。
+- 章节版本 / 生成记录 / 局部改写类型（`10-23-chapter-versions`）：`ChapterVersionBrief`（`id, chapter_id, seq, source, word_count, starred, note, generation_log_id, created_at, updated_at`）、`ChapterVersion`（另加 `content`）、`ChapterVersionUpdate`（`starred?`、`note?` ≤200，省略或 null = 不变）、`GenerationLogBrief`（`params: Record<string, unknown>`、`prompt_tokens`/`completion_tokens` 恒为 null）、`GenerationLog`（另加 `messages: GenerationMessage[]`）、`RewriteRequest`、`RewriteDone`（含 `before`：选区前 ≤200 码点原文）、`RewriteApply`（`before?` 原样回传做乐观校验）、`ContinueEvent`、`ChapterDone`；`GenerateChapterRequest.auto_continue?`（后端默认 false）。标签映射在 `api/chapterVersions.ts`：`VERSION_SOURCE`、`GENERATION_KIND_LABELS`、`GENERATION_STATUS`、`REWRITE_OP_LABELS`（均为 `Record<Union, …>`）。
+- **偏移与字数按码点**：后端偏移与 `len()` 都按 Unicode 码点，JS 字符串按 UTF-16。TextArea 偏移发请求前用 `utils/textOffset.ts` 的 `utf16ToCodePoint` 换算，回显用 `codePointToUtf16`；选区长度用 `codePointLength`。`countWords` 为 `Array.from(text.replace(/\s+/g, '')).length`（emoji / 扩展 B 区生僻字算 1 字），与后端 `count_words` 一致。`textOffset.test.ts` 覆盖 emoji 与 `𠀀`/`𠮷`。
 - 共享表单规则放在 `src/utils/validation.ts`（`usernameRules` 3–32 位且不含空白、`passwordRules` 6–72 位、`confirmPasswordRules(field = 'password')`）。登录/注册、修改密码、管理员创建用户和重置密码都导入它们——绝不在页面中重复声明这些限制。
 
 ### PATCH 语义（必须与后端 service 一致）

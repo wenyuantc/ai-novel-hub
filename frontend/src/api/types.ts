@@ -231,6 +231,21 @@ export interface GenerateChapterRequest {
   ai_config_id?: number | null
   instruction?: string
   target_words?: number
+  /** 后端默认 false；编辑器默认开启并显式传 true */
+  auto_continue?: boolean
+}
+
+/** generate SSE 的 continue 事件：每轮自动续写开始前，round 从 1 起，最多 2 */
+export interface ContinueEvent {
+  round: number
+  words: number
+  target: number
+}
+
+/** 章节生成/润色的 done 载荷；warning 仅在自动续写失败时出现 */
+export interface ChapterDone {
+  chapter: Chapter
+  warning?: string
 }
 
 export interface PolishChapterRequest {
@@ -252,4 +267,93 @@ export interface WizardItemMap {
   outline: Outline
   characters: Character
   world: WorldSetting
+}
+
+export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore'
+
+export interface ChapterVersionBrief {
+  id: number
+  chapter_id: number
+  seq: number
+  source: VersionSource
+  word_count: number
+  starred: boolean
+  note: string
+  generation_log_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ChapterVersion extends ChapterVersionBrief {
+  content: string
+}
+
+/** 省略或 null = 不变 */
+export interface ChapterVersionUpdate {
+  starred?: boolean | null
+  note?: string | null
+}
+
+export type GenerationKind = 'generate' | 'polish' | 'rewrite' | 'expand' | 'condense' | 'deslop' | 'continue'
+
+export type GenerationStatus = 'success' | 'error' | 'cancelled'
+
+export interface GenerationLogBrief {
+  id: number
+  project_id: number
+  chapter_id: number | null
+  kind: GenerationKind
+  ai_config_id: number | null
+  provider: string
+  model: string
+  params: Record<string, unknown>
+  status: GenerationStatus
+  error: string
+  output_chars: number
+  duration_ms: number
+  /** 目前恒为 null（provider 流式接口拿不到用量） */
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  created_at: string
+}
+
+export interface GenerationMessage {
+  role: string
+  content: string
+}
+
+export interface GenerationLog extends GenerationLogBrief {
+  messages: GenerationMessage[]
+}
+
+export type RewriteOp = 'rewrite' | 'expand' | 'condense' | 'deslop' | 'continue'
+
+/** 偏移均为码点偏移；op=continue 时 start === end 表示光标位置 */
+export interface RewriteRequest {
+  ai_config_id?: number | null
+  op: RewriteOp
+  start: number
+  end: number
+  instruction?: string
+}
+
+/** 局部改写 done 载荷：正文未改，需调用 apply 采纳 */
+export interface RewriteDone {
+  text: string
+  start: number
+  end: number
+  original: string
+  /** 选区（光标）前最多 200 码点的原文；采纳时原样传回做乐观校验 */
+  before: string
+  log_id: number | null
+}
+
+export interface RewriteApply {
+  start: number
+  end: number
+  original: string
+  /** 预览 done 载荷的 before；光标续写 original 为空，必须靠它发现前文变化 */
+  before?: string | null
+  replacement: string
+  log_id?: number | null
 }

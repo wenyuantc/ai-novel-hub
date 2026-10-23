@@ -4,6 +4,8 @@ import type {
   Chapter,
   ChapterBrief,
   ChapterCreate,
+  ChapterDone,
+  ContinueEvent,
   ChapterStatus,
   ChapterUpdate,
   GenerateChapterRequest,
@@ -21,17 +23,27 @@ export const chapterApi = {
   remove: (pid: number, cid: number) => api.del(`/projects/${pid}/chapters/${cid}`),
 }
 
-interface ChapterDone {
-  chapter: Chapter
+function isContinueEvent(data: unknown): data is ContinueEvent {
+  if (typeof data !== 'object' || data === null) return false
+  const d = data as Record<string, unknown>
+  return typeof d.round === 'number' && typeof d.words === 'number' && typeof d.target === 'number'
 }
 
+/** 整章生成：返回 done 载荷（含可选 warning）；onContinue 在每轮自动续写开始前回调。 */
 export function generateChapter(
   cid: number,
   body: GenerateChapterRequest,
   onDelta: (text: string) => void,
   signal?: AbortSignal,
-): Promise<Chapter> {
-  return runGeneration<ChapterDone>(`/chapters/${cid}/generate`, body, { onDelta, signal }).then((d) => d.chapter)
+  onContinue?: (e: ContinueEvent) => void,
+): Promise<ChapterDone> {
+  return runGeneration<ChapterDone>(`/chapters/${cid}/generate`, body, {
+    onDelta,
+    signal,
+    onEvent: (event, data) => {
+      if (event === 'continue' && isContinueEvent(data)) onContinue?.(data)
+    },
+  })
 }
 
 export function polishChapter(
@@ -49,7 +61,7 @@ export const CHAPTER_STATUS: Record<ChapterStatus, { label: string; color: strin
   done: { label: '已完成', color: 'success' },
 }
 
-/** 字数统计：与后端一致，按非空白字符计。 */
+/** 字数统计：与后端一致，按非空白字符的码点计（emoji / 扩展 B 区生僻字算 1 字）。 */
 export function countWords(text: string): number {
-  return text.replace(/\s+/g, '').length
+  return Array.from(text.replace(/\s+/g, '')).length
 }

@@ -62,3 +62,24 @@ def build_polish_messages(*, content: str, style: str = "", instruction: str = "
         {"role": "system", "content": NOVELIST_SYSTEM},
         {"role": "user", "content": "\n".join(parts)},
     ]
+
+
+def build_continuation_messages(
+    *, messages: list[ChatMessage], generated: str, current_words: int, target_words: int
+) -> list[ChatMessage]:
+    """整章生成字数不足时的续写：在原对话后追加已生成正文（assistant）与续写指令（user）。"""
+    remaining = max(target_words - current_words, 300)
+    instruction = "\n".join(
+        [
+            f"本章目前约 {current_words} 字，目标约 {target_words} 字，还差约 {remaining} 字。",
+            f"请紧接上文继续写本章后续内容，约 {remaining} 字：",
+            "1. 从新的段落开始，不要重复、复述或改写已写内容，不要另起新章节或输出章节标题。",
+            "2. 保持人物、设定与文风一致，情节自然推进，围绕本章梗概收束，章末留有钩子。",
+            f"3. {PROSE_RULES}",
+        ]
+    )
+    return [
+        *messages,
+        {"role": "assistant", "content": generated},
+        {"role": "user", "content": instruction},
+    ]

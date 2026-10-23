@@ -1,11 +1,13 @@
 import re
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
+from app.services import version_service
 from app.services.project_service import get_owned_project
 
 _WS_RE = re.compile(r"\s+")
@@ -14,6 +16,15 @@ _WS_RE = re.compile(r"\s+")
 def count_words(text: str) -> int:
     """字数统计：按非空白字符计（中文惯例）。"""
     return len(_WS_RE.sub("", text or ""))
+
+
+async def commit_versioned(db: AsyncSession) -> None:
+    """提交含版本写入的事务；并发写入撞上 (chapter_id, seq) 唯一约束时返回 409。"""
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("正文同时被其他操作修改，请刷新后重试") from exc
 
 
 async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int) -> Chapter:
@@ -75,6 +86,9 @@ async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: 
         word_count=count_words(data.content),
     )
     db.add(chapter)
+    if data.content.strip():
+        await db.flush()
+        await version_service.record_manual(db, chapter)
     await db.commit()
     await db.refresh(chapter)
     return chapter
@@ -133,12 +147,16 @@ async def update_chapter(
         chapter.chapter_no = data.chapter_no
     if data.title is not None:
         chapter.title = data.title.strip()
+    content_changed = data.content is not None and data.content != chapter.content
     if data.content is not None:
         chapter.content = data.content
         chapter.word_count = count_words(data.content)
     if data.status is not None:
         chapter.status = data.status
-    await db.commit()
+    if content_changed:
+        # 手动保存：按 10 分钟窗口合并，与正文修改同一事务提交
+        await version_service.record_manual(db, chapter)
+    await commit_versioned(db)
     await db.refresh(chapter)
     return chapter
 

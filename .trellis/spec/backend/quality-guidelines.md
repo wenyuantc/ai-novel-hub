@@ -393,7 +393,7 @@ ai_config_service.context_char_budget(cfg, default) -> int        # 取代 CONTE
 - [ ] `app/api/v1/` 中没有 ORM 查询；新的 service 入口接收 `user_id` 并校验归属（他人资源返回 404）。
 - [ ] 新增的归属路由已加入 `test_cross_user_isolation`。
 - [ ] AI 调用经由 `build_provider(..., allow_private=settings.allow_private_ai_endpoints)`；新 provider 遵守 `follow_redirects`。
-- [ ] 流式：校验放在 `prepare_*` 中，请求 session 在 `sse_response` 之前关闭，事件仅限 `delta`/`done`/`error`。
+- [ ] 流式：校验放在 `prepare_*` 中，请求 session 在 `sse_response` 之前关闭，事件仅限 `delta`/`continue`（仅整章生成）/`done`/`error`。
 - [ ] AI 生成的字符串按列长度截断；内容变更时重新计算 `word_count`。
 - [ ] 错误为带中文 `detail` 的 `AppError` 子类；未经 `describe_error` 处理的 SDK 原始文本不得外露。
 - [ ] 响应和日志中没有密钥；已审查 Out schema。

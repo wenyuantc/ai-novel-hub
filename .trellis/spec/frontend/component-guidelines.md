@@ -41,6 +41,11 @@ dayjs.locale('zh-cn')
 | `WizardModal<K>` | 将 `WizardGenerator` 包在 `Modal` 中（`maskClosable={false}`、`destroyOnHidden`、`footer={null}`）。运行中拒绝关闭（`message.warning('正在生成，请先停止')`）。完成时：先 `onDone(items)` 再 `onClose()`。被 `WorldPanel`、`CharactersPanel`、`OutlinesPanel` 使用。 |
 | `ExportModal` | `{ projectId; open; onClose }`。仅在 `open` 时渲染 `ExportModalInner`（使其 `useLoader` 每次打开都获取最新章节）。格式单选 `txt`/`md`；行选择会禁用 `generating` 状态的章节；不选则导出全部。调用 `exportProject` 并显示 `已导出：{filename}`。被 `OverviewPanel` 使用。 |
 | `StoryPreview` | 具名导出 `WorldPreview`、`CharacterPreview`、`OutlinePreview`（使用 `utils/outline.ts` 中的 `groupOutlines`/`volumeLabel`）。 |
+| `TextDiff` | `{ a; b; maxHeight? = 480 }`。逐字（按码点，`utils/textDiff.ts` 的 `computeDiff` → jsdiff `diffChars`，`timeout` 3 秒）对比 a → b：删除 `<del>` 标红加删除线，新增 `<ins>` 标绿；顶部显示 `+N 字 / -M 字`（非空白码点数）。超时返回 null 时显示警告 `两份文本差异过大，无法逐字对比`。 |
+| `chapter/VersionDrawer` | `{ pid; chapterId; open; onClose; currentContent; currentDirty; restoreDisabled; onRestore(v) => Promise<boolean> }`。`Drawer destroyOnHidden`，每次打开重新拉取。Tab「版本」：表格（星标按钮、`v{seq}` + 最新标签、`VERSION_SOURCE` 来源标签、`updated_at`、字数、可编辑备注 ≤200、查看 / 对比当前 / 恢复 / 删除）；勾选最多 2 个（只保留最近勾选的两个）后「对比所选」按 seq 从旧到新对比；最新版本的删除按钮禁用（后端也会 400）。版本正文按 `id + updated_at` 缓存。恢复走 `modal.confirm`，确定后调用编辑器的 `onRestore`。Tab「生成记录」：`GenerationLogList`。 |
+| `chapter/GenerationLogList` | `{ pid; chapterId }`。列表（时间、类型 `GENERATION_KIND_LABELS`、模型、状态 Tag（有 error 时 tooltip）、字数、耗时）；「详情」弹窗只读展示参数 JSON 与全部提示词消息；token 恒为 `-`。 |
+| `chapter/RewritePanel` | `{ pid; chapterId; content; selection（UTF-16）; aiConfigId; disabled; ensureSaved; onLockChange(locked); onApplied(chapter) }`。有选区可选改写/扩写/缩写/去 AI 味/续写，无选区只能续写（光标处）；选区 >5000 码点、全空白、光标前无正文时禁用开始。开始前 `ensureSaved()`，偏移经 `utf16ToCodePoint` 换算。自带 `useStreamTask`；`locked = 流式中 \|\| 有待采纳结果`，通过 `onLockChange` 通知编辑器设为只读。完成后 `TextDiff(original, text)` + 采纳（把 `done` 的 `start/end/original/before` 原样传回，不再换算）/ 重新生成（沿用上次请求的码点偏移）/ 放弃。采纳 409 → 提示并作废预览。 |
+| `chapter/ChapterAIForms` | 具名导出 `GenerateForm`（目标字数、「字数不足时自动续写」开关——切换即写 `utils/preferences.ts` 的 localStorage、补充指令）与 `PolishForm`。 |
 
 ### 页面模式
 
@@ -74,10 +79,18 @@ dayjs.locale('zh-cn')
    `done` 时 → `applyServerChapter(outcome.value)`（服务端已保存，状态为 `done`）。中止/出错时 → `reloadChapter()` 只同步服务端状态并保留本地文本。
 3. **流式期间只读**：运行中文本域显示 `task.text`（`displayContent = task.running ? task.text : content`），并设置 `readOnly={task.running}`；标题输入框、AI 表单、标签页和 `AIConfigSelect` 都设置 `disabled={task.running}`。
 4. **Ctrl/Cmd+S**：只注册一次 window `keydown` 监听器；它通过 ref 调用最新的 `handleSave`（在无依赖的 effect 中执行 `saveShortcutRef.current = handleSave`），因此监听器永远不会捕获过期状态。`handleSave` 在运行/保存中不做任何事，无改动时显示 `没有需要保存的修改`。
-5. **未保存离开守卫**：`const guard = dirty || task.running`。浏览器卸载通过 `beforeunload` 监听器处理（仅在 `guard` 时挂载）；应用内导航通过 `useBlocker(({ currentLocation, nextLocation }) => guard && currentLocation.pathname !== nextLocation.pathname)` 处理，并弹出确认 `Modal`，其确定操作执行 `task.stop(); blocker.proceed?.()`。
+5. **未保存离开守卫**：`const guard = dirty || task.running || rewriteLocked`（局部改写流式中或有待采纳结果也提示，见第 9 条）。浏览器卸载通过 `beforeunload` 监听器处理（仅在 `guard` 时挂载）；应用内导航通过 `useBlocker(({ currentLocation, nextLocation }) => guard && currentLocation.pathname !== nextLocation.pathname)` 处理，并弹出确认 `Modal`，其确定操作执行 `task.stop(); blocker.proceed?.()`。
 6. **卡在 `generating` 的章节**：`const stuck = chapter.status === 'generating' && !task.running` 会显示一个带 `复位` 操作的警告 `Alert` → `chapterApi.update(pid, chapter.id, { status: 'draft' })`。卡住期间，保存、标记完成和 AI 按钮都被禁用，因为后端会以 409 拒绝对生成中章节的正文/标题 PATCH（`backend/app/services/chapter_service.py` 中的 `ConflictError`），且生成/润色会返回 409 `该章节正在生成中，请稍候再试`。
 7. **覆盖已有正文的重新生成**通过 `modal.confirm` 询问（`重新生成正文？`）；正文为空时禁用润色。
 8. 上一章/下一章导航按 `chapter_no` 再按 `id` 对同级章节排序。
+
+版本与局部改写（`10-23-chapter-versions`）在此基础上新增：
+
+9. **编辑锁**：`const editorLocked = task.running || rewriteLocked`（`rewriteLocked` 由 `RewritePanel.onLockChange` 上报：改写流式中或有待采纳结果）。正文 `readOnly`、标题、保存、`AIConfigSelect`、生成/润色 Tab 都按 `editorLocked` 禁用；`handleSave` 在 `editorLocked` 时不做任何事。离开守卫包含 `rewriteLocked`：确认离开时 `RewritePanel` 卸载，其 `useStreamTask` 自动中止请求，预览结果丢弃（正文不受影响），弹窗文案区分「正在生成 / 有未保存的修改 / 局部改写结果未采纳」。
+10. **选区跟踪**：文本域 `onSelect/onKeyUp/onMouseUp/onChange` 调 `syncSelection(el)`，状态保存 UTF-16 偏移；只有在发请求时才换算为码点（`utils/textOffset.ts`）。服务端改写正文的路径（生成完成、采纳改写、回滚）统一走 `replaceFromServer(c)`：`applyServerChapter` + 把选区记录移到正文末尾；普通保存仍用 `applyServerChapter`，不重置选区。
+11. **自动保存**：`ensureSaved()`（无改动直接返回 true，否则 `save()` + `已自动保存当前修改`）被整章生成/润色、局部改写开始、回滚共用。
+12. **整章生成**：请求体显式带 `auto_continue: genOptions.autoContinue`（后端默认 false，开关默认开，`utils/preferences.ts` 记住选择）；`generateChapter(..., onContinue)` 收到 `continue` 事件时显示 `字数不足，自动续写第 n 轮` 的 info `Alert`；`done.warning` 存在时用 `message.warning` 提示（正文已保存）。重新生成确认文案提示「当前正文会自动存为历史版本」。
+13. **版本历史**：标题栏「版本历史」按钮（任何时候都可打开查看）。`restoreDisabled = editorLocked || saving || stuck`。`handleRestore` = `ensureSaved` → `versionApi.restore` → `replaceFromServer` → `onChanged()` + `refreshProject()`。
 
 ### AI 配置页（`src/pages/AIConfigPage.tsx`）
 

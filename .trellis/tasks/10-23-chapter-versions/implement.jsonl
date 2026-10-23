@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键 CASCADE/SET NULL、归属校验、原子状态更新约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SSE 流式契约，需新增 continue 事件与 rewrite 端点"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "api/v1 → services → models 分层与 prompts 位置"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ruff/pytest、FakeLLM、测试隔离约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "章节编辑器既有 8 条必须保留的行为"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useStreamTask 与 SSE 客户端契约，需加 onEvent"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像后端 schema 与 API 客户端契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/test 门禁与包体积上限"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/current-inventory.md", "reason": "本项目现状与扩展挂点"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-creation-core.md", "reason": "MuMu 重写/版本/历史的缺陷对照（§8 §9 §11）"}

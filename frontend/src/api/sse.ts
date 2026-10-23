@@ -128,10 +128,12 @@ export async function postSSE(
   }
 }
 
-/** 业务流事件：delta 增量文本 / done 完成载荷 / error 流内错误。 */
+/** 业务流事件：delta 增量文本 / done 完成载荷 / error 流内错误；其余事件（如 continue）交给 onEvent。 */
 export interface GenerationCallbacks<TDone> {
   onDelta: (text: string) => void
   signal?: AbortSignal
+  /** 可选：接收 delta/done/error 以外的事件（data 已按 JSON 解析） */
+  onEvent?: (event: string, data: unknown) => void
   /** 可选：校验 done 载荷 */
   parseDone?: (data: unknown) => TDone
 }
@@ -184,6 +186,8 @@ export async function runGeneration<TDone>(path: string, body: unknown, cb: Gene
           result = { value: cb.parseDone ? cb.parseDone(data) : (data as TDone) }
         } else if (msg.event === 'error') {
           streamError = readDetail(data)
+        } else {
+          cb.onEvent?.(msg.event, data)
         }
       },
     },

@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  HistoryOutlined,
   LeftOutlined,
   RightOutlined,
   SaveOutlined,
@@ -12,9 +13,7 @@ import {
   Button,
   Card,
   Col,
-  Form,
   Input,
-  InputNumber,
   Modal,
   Result,
   Row,
@@ -26,14 +25,19 @@ import {
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useBlocker, useNavigate, useParams } from 'react-router-dom'
+import { versionApi } from '../../api/chapterVersions'
 import { chapterApi, CHAPTER_STATUS, countWords, generateChapter, polishChapter } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
-import type { Chapter, ChapterBrief } from '../../api/types'
+import type { Chapter, ChapterBrief, ChapterVersionBrief, ContinueEvent } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
+import { GenerateForm, type GenerateOptions, PolishForm } from '../../components/chapter/ChapterAIForms'
+import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
+import VersionDrawer from '../../components/chapter/VersionDrawer'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useLoader } from '../../hooks/useLoader'
 import { useStreamTask } from '../../hooks/useStreamTask'
 import { useProjectStore } from '../../stores/project'
+import { readAutoContinue } from '../../utils/preferences'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
 
@@ -80,7 +84,7 @@ interface EditorProps {
   onChanged: () => void
 }
 
-type AIMode = 'generate' | 'polish'
+type AIMode = 'generate' | 'polish' | 'rewrite'
 
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const { message, modal } = App.useApp()
@@ -95,14 +99,23 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [resetting, setResetting] = useState(false)
   const [aiMode, setAiMode] = useState<AIMode>('generate')
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
-  const [genInstruction, setGenInstruction] = useState('')
-  const [targetWords, setTargetWords] = useState<number>(3000)
+  const [genOptions, setGenOptions] = useState<GenerateOptions>(() => ({
+    targetWords: 3000,
+    instruction: '',
+    autoContinue: readAutoContinue(),
+  }))
   const [polishInstruction, setPolishInstruction] = useState('')
+  const [continueInfo, setContinueInfo] = useState<ContinueEvent | null>(null)
+  const [selection, setSelection] = useState<TextSelection>({ start: 0, end: 0 })
+  const [rewriteLocked, setRewriteLocked] = useState(false)
+  const [versionsOpen, setVersionsOpen] = useState(false)
   const task = useStreamTask()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const dirty = content !== chapter.content || title !== chapter.title
   const busy = task.running || saving
+  // 整章生成中或局部改写预览中：正文只读，避免选区失效
+  const editorLocked = task.running || rewriteLocked
   const displayContent = task.running ? task.text : content
   const words = useMemo(() => countWords(displayContent), [displayContent])
 
@@ -117,6 +130,20 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     setTitle(c.title)
     setContent(c.content)
   }, [])
+
+  /** 服务端改写了正文（生成 / 采纳改写 / 回滚）：同步并把光标记录移到末尾（与浏览器行为一致）。 */
+  const replaceFromServer = useCallback(
+    (c: Chapter) => {
+      applyServerChapter(c)
+      setSelection({ start: c.content.length, end: c.content.length })
+    },
+    [applyServerChapter],
+  )
+
+  const syncSelection = (el: HTMLTextAreaElement) => {
+    const { selectionStart: start, selectionEnd: end } = el
+    setSelection((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
+  }
 
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true)
@@ -135,13 +162,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }, [pid, chapter.id, title, content, applyServerChapter, onChanged, refreshProject, message])
 
   const handleSave = useCallback(async () => {
-    if (task.running || saving) return
+    if (editorLocked || saving) return
     if (!dirty) {
       message.info('没有需要保存的修改')
       return
     }
     if (await save()) message.success('已保存')
-  }, [task.running, saving, dirty, save, message])
+  }, [editorLocked, saving, dirty, save, message])
 
   // Ctrl/Cmd + S 保存
   const saveShortcutRef = useRef(handleSave)
@@ -159,8 +186,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // 未保存/生成中离开提示
-  const guard = dirty || task.running
+  // 未保存 / 生成中 / 局部改写预览中（流式或待采纳）离开提示
+  const guard = dirty || task.running || rewriteLocked
   useEffect(() => {
     if (!guard) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -190,24 +217,41 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const runAI = async (mode: AIMode) => {
-    if (dirty) {
-      if (!(await save())) return
-      message.info('已自动保存当前修改')
-    }
+  /** AI 操作 / 回滚前：有未保存修改先自动保存。 */
+  const ensureSaved = async (): Promise<boolean> => {
+    if (!dirty) return true
+    if (!(await save())) return false
+    message.info('已自动保存当前修改')
+    return true
+  }
+
+  const runAI = async (mode: 'generate' | 'polish') => {
+    if (!(await ensureSaved())) return
+    setContinueInfo(null)
     const outcome = await task.start((onDelta, signal) =>
       mode === 'generate'
         ? generateChapter(
             chapter.id,
-            { ai_config_id: aiConfigId, instruction: genInstruction.trim(), target_words: targetWords },
+            {
+              ai_config_id: aiConfigId,
+              instruction: genOptions.instruction.trim(),
+              target_words: genOptions.targetWords,
+              // 后端默认 false，必须显式传
+              auto_continue: genOptions.autoContinue,
+            },
             onDelta,
             signal,
+            setContinueInfo,
           )
-        : polishChapter(chapter.id, { ai_config_id: aiConfigId, instruction: polishInstruction.trim() }, onDelta, signal),
+        : polishChapter(chapter.id, { ai_config_id: aiConfigId, instruction: polishInstruction.trim() }, onDelta, signal).then(
+            (c) => ({ chapter: c, warning: undefined }),
+          ),
     )
+    setContinueInfo(null)
     if (outcome.status === 'done') {
-      applyServerChapter(outcome.value)
-      message.success(mode === 'generate' ? '生成完成，已保存' : '润色完成，已保存')
+      replaceFromServer(outcome.value.chapter)
+      if (outcome.value.warning) message.warning(`生成完成，已保存；${outcome.value.warning}`)
+      else message.success(mode === 'generate' ? '生成完成，已保存' : '润色完成，已保存')
       onChanged()
       void refreshProject()
     } else {
@@ -220,7 +264,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     if (content.trim()) {
       modal.confirm({
         title: '重新生成正文？',
-        content: '生成完成后将覆盖当前正文（中途停止则保持原样）。',
+        content: '当前正文会自动存为历史版本，可在「版本历史」中对比或恢复。生成完成后覆盖正文，中途停止则保持原样。',
         okText: '生成',
         cancelText: '取消',
         onOk: () => {
@@ -230,6 +274,27 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     } else {
       void runAI('generate')
     }
+  }
+
+  const handleRestore = async (v: ChapterVersionBrief): Promise<boolean> => {
+    if (!(await ensureSaved())) return false
+    try {
+      const updated = await versionApi.restore(pid, chapter.id, v.id)
+      replaceFromServer(updated)
+      message.success(`已恢复到 v${v.seq}`)
+      onChanged()
+      void refreshProject()
+      return true
+    } catch (err) {
+      message.error(errorMessage(err))
+      return false
+    }
+  }
+
+  const handleRewriteApplied = (c: Chapter) => {
+    replaceFromServer(c)
+    onChanged()
+    void refreshProject()
   }
 
   const handleResetStatus = async () => {
@@ -299,7 +364,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 >
                   下一章 <RightOutlined />
                 </Button>
-                <Button size="small" disabled={busy || stuck} onClick={() => void handleToggleDone()}>
+                <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
+                  版本历史
+                </Button>
+                <Button size="small" disabled={busy || stuck || rewriteLocked} onClick={() => void handleToggleDone()}>
                   {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}
                 </Button>
                 <Button
@@ -307,7 +375,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   size="small"
                   icon={<SaveOutlined />}
                   loading={saving}
-                  disabled={task.running || stuck || !dirty}
+                  disabled={editorLocked || stuck || !dirty}
                   onClick={() => void handleSave()}
                 >
                   保存
@@ -334,15 +402,21 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               onChange={(e) => setTitle(e.target.value)}
               placeholder="章节标题"
               maxLength={200}
-              disabled={task.running}
+              disabled={editorLocked}
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
             <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
               <Input.TextArea
                 value={displayContent}
-                onChange={(e) => setContent(e.target.value)}
-                readOnly={task.running}
+                onChange={(e) => {
+                  setContent(e.target.value)
+                  syncSelection(e.target)
+                }}
+                onSelect={(e) => syncSelection(e.currentTarget)}
+                onKeyUp={(e) => syncSelection(e.currentTarget)}
+                onMouseUp={(e) => syncSelection(e.currentTarget)}
+                readOnly={editorLocked}
                 autoSize={{ minRows: 20 }}
                 placeholder="在此书写正文，或使用右侧「AI 生成」"
                 style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}
@@ -358,7 +432,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             <Space direction="vertical" style={{ width: '100%' }}>
               <div>
                 <Typography.Text type="secondary">AI 配置</Typography.Text>
-                <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={task.running} />
+                <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
               </div>
               <Tabs
                 activeKey={aiMode}
@@ -367,52 +441,46 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   {
                     key: 'generate',
                     label: 'AI 生成',
-                    disabled: task.running,
-                    children: (
-                      <Form layout="vertical" disabled={task.running}>
-                        <Form.Item label="目标字数">
-                          <InputNumber
-                            min={300}
-                            max={20000}
-                            step={500}
-                            value={targetWords}
-                            onChange={(v) => setTargetWords(v ?? 3000)}
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                        <Form.Item label="补充指令（可选）">
-                          <Input.TextArea
-                            value={genInstruction}
-                            onChange={(e) => setGenInstruction(e.target.value)}
-                            maxLength={2000}
-                            autoSize={{ minRows: 3, maxRows: 8 }}
-                            placeholder="例如：本章重点描写主角与师父的冲突，结尾留悬念"
-                          />
-                        </Form.Item>
-                      </Form>
-                    ),
+                    disabled: editorLocked,
+                    children: <GenerateForm value={genOptions} onChange={setGenOptions} disabled={task.running} />,
                   },
                   {
                     key: 'polish',
                     label: 'AI 润色',
+                    disabled: editorLocked,
+                    children: (
+                      <PolishForm value={polishInstruction} onChange={setPolishInstruction} disabled={task.running} />
+                    ),
+                  },
+                  {
+                    key: 'rewrite',
+                    label: '局部改写',
                     disabled: task.running,
                     children: (
-                      <Form layout="vertical" disabled={task.running}>
-                        <Form.Item label="润色要求（可选）">
-                          <Input.TextArea
-                            value={polishInstruction}
-                            onChange={(e) => setPolishInstruction(e.target.value)}
-                            maxLength={2000}
-                            autoSize={{ minRows: 3, maxRows: 8 }}
-                            placeholder="例如：增强画面感，精简对话，统一人称"
-                          />
-                        </Form.Item>
-                      </Form>
+                      <RewritePanel
+                        pid={pid}
+                        chapterId={chapter.id}
+                        content={content}
+                        selection={selection}
+                        aiConfigId={aiConfigId}
+                        disabled={task.running || saving || stuck || hasConfig === false}
+                        ensureSaved={ensureSaved}
+                        onLockChange={setRewriteLocked}
+                        onApplied={handleRewriteApplied}
+                      />
                     ),
                   },
                 ]}
               />
-              {task.running ? (
+              {task.running && continueInfo && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`字数不足，自动续写第 ${continueInfo.round} 轮`}
+                  description={`首轮 ${continueInfo.words} 字 / 目标 ${continueInfo.target} 字`}
+                />
+              )}
+              {aiMode === 'rewrite' ? null : task.running ? (
                 <Button danger block icon={<StopOutlined />} onClick={task.stop}>
                   停止（已输出 {countWords(task.text)} 字）
                 </Button>
@@ -437,17 +505,31 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   润色本章
                 </Button>
               )}
-              {task.error && <Alert type="error" showIcon message="生成失败" description={task.error} />}
-              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
-                生成会自动带入世界观、角色、本卷大纲与前文；完成后自动保存。生成中不可编辑，可随时停止，停止后正文保持原样。
-              </Typography.Paragraph>
+              {task.error && aiMode !== 'rewrite' && (
+                <Alert type="error" showIcon message="生成失败" description={task.error} />
+              )}
+              {aiMode !== 'rewrite' && (
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                  生成会自动带入世界观、角色、本卷大纲与前文；完成后自动保存，被覆盖的旧稿自动存为历史版本。生成中不可编辑，可随时停止，停止后正文保持原样。
+                </Typography.Paragraph>
+              )}
             </Space>
           </Card>
         </Col>
       </Row>
+      <VersionDrawer
+        pid={pid}
+        chapterId={chapter.id}
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        currentContent={content}
+        currentDirty={dirty}
+        restoreDisabled={editorLocked || saving || stuck}
+        onRestore={handleRestore}
+      />
       <Modal
         open={blocker.state === 'blocked'}
-        title={task.running ? '正在生成' : '有未保存的修改'}
+        title={task.running ? '正在生成' : dirty ? '有未保存的修改' : '局部改写结果未采纳'}
         okText="离开"
         cancelText="留下"
         okButtonProps={{ danger: true }}
@@ -457,7 +539,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         }}
         onCancel={() => blocker.reset?.()}
       >
-        {task.running ? '离开将中止本次生成，正文保持原样。确定离开吗？' : '离开后未保存的修改将丢失，确定离开吗？'}
+        {task.running
+          ? '离开将中止本次生成，正文保持原样。确定离开吗？'
+          : dirty
+            ? '离开后未保存的修改将丢失，确定离开吗？'
+            : '离开将丢弃局部改写的预览结果（正文不受影响）。确定离开吗？'}
       </Modal>
     </>
   )

@@ -91,7 +91,14 @@ export function useHasAIConfig(): boolean | null  // store 尚未加载时为 nu
 export interface SSEMessage { event: string; data: string }
 export class SSEParser { feed(chunk: string): SSEMessage[]; flush(): SSEMessage[] }
 export async function postSSE(path: string, body: unknown, handlers: { onMessage: (msg: SSEMessage) => void }, signal?: AbortSignal): Promise<void>
-export interface GenerationCallbacks<TDone> { onDelta: (text: string) => void; signal?: AbortSignal; parseDone?: (data: unknown) => TDone }
+export interface GenerationCallbacks<TDone> {
+  onDelta: (text: string) => void; signal?: AbortSignal; parseDone?: (data: unknown) => TDone
+  onEvent?: (event: string, data: unknown) => void   // delta/done/error 以外的事件（如 continue）
+}
+// src/api/chapters.ts
+export function generateChapter(cid, body, onDelta, signal?, onContinue?: (e: ContinueEvent) => void): Promise<ChapterDone>
+// src/api/chapterVersions.ts
+export function rewriteChapter(cid, body: RewriteRequest, onDelta, signal?): Promise<RewriteDone>
 export async function runGeneration<TDone>(path: string, body: unknown, cb: GenerationCallbacks<TDone>): Promise<TDone>
 export class StreamError extends Error {}           // name = 'StreamError'
 export function isAbortError(err: unknown): boolean // DOMException 且 name === 'AbortError'
@@ -102,8 +109,10 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 - 传输格式（后端 `format_sse`）：第一帧是注释 `: stream-start\n\n`，之后是 `event: <delta|done|error>\ndata: <JSON>\n\n`。data 始终是 JSON，因此正文中的换行绝不会破坏帧。
 - 事件 payload：
   - `delta` → `{ "text": string }` → `cb.onDelta(text)`（空文本跳过）。
-  - `done` → 章节：`{ "chapter": ChapterOut }`；向导：`{ "kind": K, "items": [...] }`。先暂存，流结束后返回。
+  - `done` → 章节：`{ "chapter": ChapterOut, "warning"?: string }`（`ChapterDone`；`generateChapter` 返回整个载荷，`polishChapter` 仍只返回 `Chapter`）；局部改写：`{ text, start, end, original, before, log_id }`（`RewriteDone`，偏移为码点）；向导：`{ "kind": K, "items": [...] }`。先暂存，流结束后返回。
   - `error` → `{ "detail": string }` → 流结束后 `throw new StreamError(detail)`（兜底为 `生成失败`）。
+  - 其他事件（目前只有整章生成的 `continue` → `{ round, words, target }`，每轮自动续写开始前，round 从 1 起最多 2）→ `cb.onEvent?.(event, data)`；`generateChapter` 用类型守卫校验后转给 `onContinue`。续写轮首个分块前后端会先发一个 `delta {"text":"\n\n"}`，前端无需特殊处理。不认识的事件被忽略，所以新增事件对旧代码兼容。
+- `useStreamTask` 不感知额外事件：调用方在 runner 闭包里把自己的回调（如 `setContinueInfo`）传给 API 函数，并在 `start` 前后自行复位。
 - 解析规则：接受任意 chunk 切分；行尾可为 LF、CRLF 或单独的 CR；chunk 末尾的 `\r` 会保留到下一个 chunk（可能是 CRLF 的一半）；以 `:` 开头的行被忽略；`field: value` 去掉一个前导空格；多行 `data:` 以 `\n` 拼接；事件名为空时默认为 `message`；`flush()` 派发最后一个未以空行结尾的事件。`runGeneration` 会忽略非 JSON 的 `data`。
 - 解码器：`TextDecoder('utf-8')` 配合 `{ stream: true }`，使跨 chunk 拆分的多字节中文字符能正确解码；EOF 时执行最终的 `decoder.decode()` + `parser.flush()`；在 `finally` 中执行 `reader.releaseLock()`。
 
@@ -136,6 +145,7 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 - `处理 CRLF 且 \r 与 \n 被拆在两个 chunk` —— 断言只有一个 data 为 `{"detail":"x"}` 的 `error` 事件（没有因空行误派发的事件）。
 - `多行 data 以换行拼接，缺省事件名为 message` —— `data: a\ndata: b` → `{ event: 'message', data: 'a\nb' }`。
 - `流结束时 flush 未以空行结尾的事件` —— 未结束的 `done` 由 `flush()` 发出。
+- `runGeneration`（stub `fetch` 返回 `ReadableStream`）：delta 累积 + `continue` 走 `onEvent` + done 载荷含 `warning`，并断言 URL 前缀 / `credentials: 'include'` / 请求体；`generateChapter` 把 `continue` 转给 `onContinue`；`error` 事件与缺少 `done` → `StreamError`；409 → `ApiError(status, detail)`；已中止 signal → `isAbortError`。
 
 修改 `postSSE`/`runGeneration` 时，新增使用 stub `fetch`（返回 `ReadableStream`）的测试，断言：非 2xx → 带 `status`/`detail` 的 `ApiError`；`error` 事件 → `StreamError`；缺少 `done` → `StreamError`；已中止的 signal → `isAbortError(err) === true`。
 

@@ -32,7 +32,7 @@ proxy.on('proxyRes', (proxyRes) => {
 
 ### 包体积
 
-`vite build` 目前产出一个约 1.26 MB 的单一 JS chunk（`dist/assets/index-*.js` ≈ 1,260 kB，gzip 后 ≈ 393 kB），因为 AntD 和所有页面被打包在一起，且没有任何路由使用 `React.lazy` / 动态 `import()`。`build.chunkSizeWarningLimit` 已调高到 `1500`（kB），因此不会告警。如果 chunk 超过该上限，应在 `router.tsx` 中引入路由级懒加载（或 `manualChunks`），而不是再次调高上限。
+`vite build` 目前产出一个约 1.33 MB 的单一 JS chunk（`dist/assets/index-*.js` ≈ 1,326 kB，gzip 后 ≈ 413 kB；含 `10-23-chapter-versions` 引入的 `diff`），因为 AntD 和所有页面被打包在一起，且没有任何路由使用 `React.lazy` / 动态 `import()`。`build.chunkSizeWarningLimit` 已调高到 `1500`（kB），因此不会告警。如果 chunk 超过该上限，应在 `router.tsx` 中引入路由级懒加载（或 `manualChunks`），而不是再次调高上限。
 
 ---
 
@@ -62,7 +62,7 @@ proxy.on('proxyRes', (proxyRes) => {
 
 ## 测试要求
 
-- 纯逻辑（解析器、格式化函数、分组）需配套同目录的 `*.test.ts` Vitest 测试。现有测试套件：`src/api/sse.test.ts`（5 个用例，SSE 解析器）和 `src/utils/time.test.ts`（2 个用例，UTC 解析）——共 7 个测试，必须全部通过。
+- 纯逻辑（解析器、格式化函数、分组）需配套同目录的 `*.test.ts` Vitest 测试。现有测试套件包括 `src/api/sse.test.ts`（SSE 解析器 + `runGeneration` stub-fetch）、`src/utils/time.test.ts`（UTC 解析）、`src/utils/textOffset.test.ts`（UTF-16 ↔ 码点）、`src/utils/textDiff.test.ts`（逐字 diff 与增删字数）等，必须全部通过（`npm test`）。
 - 测试环境是 `node`（没有 jsdom）；没有组件测试。需要 DOM/`fetch` 的代码通过 stub 全局对象来测试。
 - 修改 `sse.ts` 或 `client.ts` 时，必须遵循 [hook-guidelines.md](./hook-guidelines.md#场景sse-客户端解析器) 和 [type-safety.md](./type-safety.md#场景api-客户端契约) 中的「必需的测试」清单。
 - 测试名可以使用中文，与现有测试套件保持一致（`it('处理跨 chunk 截断', …)`）。
