@@ -48,10 +48,10 @@ const THINKING_OPTIONS = (Object.keys(THINKING_LABELS) as ThinkingLevel[]).map((
   label: THINKING_LABELS[v],
 }))
 
-/** 列表中的参数摘要 */
-function paramSummary(c: AIConfig): string {
+/** 列表中的参数标签 */
+function paramTags(c: AIConfig): string[] {
   const k = (v: number | null) => (v ? `${v}K` : '默认')
-  return `思考:${THINKING_LABELS[c.thinking_level]} · 上下文:${k(c.context_window_k)} · 输出:${k(c.max_output_k)}`
+  return [`思考 ${THINKING_LABELS[c.thinking_level]}`, `上下文 ${k(c.context_window_k)}`, `输出 ${k(c.max_output_k)}`]
 }
 
 const MODEL_HINTS: Record<ProviderName, string> = {
@@ -211,45 +211,75 @@ export default function AIConfigPage() {
           loading={loading}
           dataSource={configs}
           pagination={false}
-          scroll={{ x: 1210 }}
+          scroll={{ x: 960 }}
           columns={[
             {
-              title: '名称',
-              dataIndex: 'name',
-              render: (name: string, r) => (
-                <Space>
-                  {name}
-                  {r.is_default && <Tag color="blue">默认</Tag>}
+              title: '配置',
+              key: 'name',
+              width: 200,
+              render: (_, r) => (
+                <Space direction="vertical" size={2}>
+                  <Space size={6}>
+                    <Typography.Text strong>{r.name}</Typography.Text>
+                    {r.is_default && (
+                      <Tag color="blue" bordered={false} style={{ marginInlineEnd: 0 }}>
+                        默认
+                      </Tag>
+                    )}
+                  </Space>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {PROVIDER_LABELS[r.provider]}
+                  </Typography.Text>
                 </Space>
               ),
             },
-            { title: '类型', dataIndex: 'provider', render: (p: ProviderName) => PROVIDER_LABELS[p] },
-            { title: '模型', dataIndex: 'model' },
             {
-              title: '参数',
-              key: 'params',
-              width: 250,
+              title: '模型 / 参数',
+              key: 'model',
               render: (_, r) => (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {paramSummary(r)}
-                </Typography.Text>
+                <Space direction="vertical" size={4}>
+                  <Typography.Text style={{ wordBreak: 'break-all' }}>{r.model}</Typography.Text>
+                  <Space size={4} wrap>
+                    {paramTags(r).map((t) => (
+                      <Tag key={t} bordered={false} style={{ marginInlineEnd: 0, fontSize: 12 }}>
+                        {t}
+                      </Tag>
+                    ))}
+                  </Space>
+                </Space>
               ),
             },
             {
-              title: 'Base URL',
-              dataIndex: 'base_url',
-              ellipsis: true,
-              render: (u: string | null) => u || <Typography.Text type="secondary">官方默认</Typography.Text>,
-            },
-            {
-              title: 'API Key',
-              dataIndex: 'api_key_masked',
-              render: (k: string) => <Typography.Text code>{k || '（未设置）'}</Typography.Text>,
+              title: '接入',
+              key: 'endpoint',
+              width: 240,
+              render: (_, r) => (
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  {r.base_url ? (
+                    <Typography.Text style={{ fontSize: 12 }} ellipsis={{ tooltip: r.base_url }}>
+                      {r.base_url}
+                    </Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      官方默认地址
+                    </Typography.Text>
+                  )}
+                  {r.api_key_masked ? (
+                    <Typography.Text code style={{ fontSize: 12 }}>
+                      {r.api_key_masked}
+                    </Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      未设置 Key
+                    </Typography.Text>
+                  )}
+                </Space>
+              ),
             },
             {
               title: '连通性',
               key: 'test',
-              width: 200,
+              width: 160,
               render: (_, r) => {
                 const t = testResults[r.id]
                 if (!t) return <Typography.Text type="secondary">未测试</Typography.Text>
@@ -270,7 +300,7 @@ export default function AIConfigPage() {
               title: '操作',
               key: 'actions',
               fixed: 'right',
-              width: 240,
+              width: 200,
               render: (_, r) => (
                 <Space size={0} wrap>
                   <Button type="link" size="small" loading={testing === r.id} onClick={() => void handleTest(r)}>
