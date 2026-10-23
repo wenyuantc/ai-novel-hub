@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对任务订阅 SSE 契约与实现一致"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对迁移、部分唯一索引、归属 404"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试覆盖与禁止模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "编辑器/向导行为与离开守卫变化"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与评审清单"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "任务跨 DB-引擎-SSE-store-组件多层"}

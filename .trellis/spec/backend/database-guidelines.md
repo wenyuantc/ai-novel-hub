@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -196,7 +196,9 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   `0004_ai_config_model_type.py`（`down_revision = '0003'`，`ai_configs.model_type` 回填 `text`；
   `test_0004_backfills_model_type`）、`0005_chapter_versions.py`（`down_revision = '0004'`，只新建
   `generation_logs` 与 `chapter_versions` 两张表，不回填；`test_0005_chapter_versions` 断言外键规则与
-  `(chapter_id, seq)` 唯一约束）。
+  `(chapter_id, seq)` 唯一约束）、`0006_tasks.py`（`down_revision = '0005'`，新建 `tasks`，给 `generation_logs`
+  加可空 `task_id`；`test_0006_tasks` 断言外键规则、部分唯一索引确实只约束活动任务、存量日志 `task_id` 为空，
+  `downgrade -1` 后存量日志保留）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -266,6 +268,10 @@ outline_id: Mapped[int | None] = mapped_column(
 记录仍留在项目下，`provider`/`model` 冗余存储）、`chapter_versions.generation_log_id`（日志被 200 条上限裁剪后
 版本保留）。`chapter_versions.chapter_id`、`generation_logs.project_id` 为 CASCADE。
 
+`0006`：`tasks.user_id` / `tasks.project_id` 为 CASCADE（删用户 / 项目时任务随之删除）；`tasks.chapter_id`
+（章节删除后任务仍可查看，`title` 冗余存储）、`tasks.retry_of_id`（原任务被清理后重试链断开）、
+`generation_logs.task_id`（任务被清理 / 裁剪后日志保留）为 SET NULL。
+
 ---
 
 ## 场景：章节版本写入规则
@@ -324,13 +330,67 @@ async def commit_versioned(db) -> None   # (chapter_id, seq) 唯一约束冲突 
 
 ---
 
+## 场景：后台任务表（`tasks`，数据库即队列）
+
+### 1. 范围 / 触发条件
+
+`app/services/task_engine/`、`task_service.py` 以及任何新增任务类型（后续批量生成、章节分析、拆书等）。
+SSE / 订阅契约见 `error-handling.md`「后台任务与 SSE 契约」。
+
+### 2. 结构
+
+```python
+# backend/app/models/entities.py
+TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world")
+TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
+ACTIVE_TASK_STATUSES = ("queued", "running"); FINISHED_TASK_STATUSES = (其余四个)
+
+class Task(TimestampMixin, Base):   # tasks
+    user_id, project_id?, chapter_id?, kind String(32), title String(200), resource_key String(100)?,
+    status String(16), input JSON, result JSON?, output_text Text, progress int, stage String(100),
+    error Text, step_cursor int, retry_of_id?, started_at?, finished_at?
+    # 索引：ix_tasks_status_id (status, id)、ix_tasks_user_id_id (user_id, id)，
+    # uq_tasks_active_resource：resource_key 上的部分唯一索引
+    #   WHERE status IN ('queued', 'running') AND resource_key IS NOT NULL（postgresql_where + sqlite_where 同时写）
+```
+
+### 3. 契约
+
+- **单进程前提**：调度协程与 hub 都在进程内；`start()` 时把库里所有 `running` 任务视为上次进程遗留并置为
+  `interrupted`。部署必须是单进程（`Dockerfile` 中 `uvicorn` 不带 `--workers`）。改为多实例前须把领取改成
+  `SELECT ... FOR UPDATE SKIP LOCKED` 并引入心跳 / 租约，否则一个实例重启会把其他实例的运行中任务误判为中断。
+- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}` 或 `wizard:{project_id}:{kind}`。插入撞索引 →
+  回滚 → 409。章节类还会先原子抢占 `chapters.status='generating'`（与插入同一事务，失败时一起回滚）。
+  新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。
+- **领取**：条件 `UPDATE ... SET status='running' WHERE id=? AND status='queued'`，影响行数为 1 才执行；
+  排队取消同样用 `WHERE status='queued'` 守卫，二者竞争时只有一方成功。
+- `input` 必须可 JSON 序列化，且含原始请求 `request`（重试时原样重新走 `validate_and_claim`）；章节类另存
+  `chapter_id`、`prev_status`、`ai_config_id`、`source_words`。运行时按 `request.ai_config_id` 重新解析配置
+  （未指定 = 运行时的默认配置）。
+- `title` 在创建时生成（`第 3 章 标题 · AI 生成` / `第 3 章 · AI 润色` / `大纲向导` 等），章节标题为默认的「第N章」时不再重复拼接；章节改名或删除后保持不变。
+- `output_text` 由引擎每 2 秒节流刷新、结束时最终写入；运行中的实时文本以内存 hub 为准（`/tasks/{id}/output`
+  在活动任务上读 hub）。`progress` / `stage` 同理，`TaskOut` 对活动任务用 hub 的实时值覆盖库值。
+- `started_at` / `finished_at` 用 `func.now()`（数据库时间）写入，不在 Python 中取时间。
+- **保留**：每个用户最多保留 `MAX_FINISHED_PER_USER = 200` 个已结束任务（按 id），每次任务结束、排队取消后裁剪；
+  活动任务不参与裁剪。`DELETE /tasks?finished=true[&project_id=]` 手动清理已结束任务。
+- `step_cursor`：多步任务的断点，重试时继承；当前单步类型恒为 0。
+
+### 4. 必需的测试
+
+`tests/test_migrations.py::test_0006_tasks`；`tests/test_tasks.py`（见 `error-handling.md` 第 6 节）中的
+`test_finished_tasks_pruned_to_limit`、`test_resource_conflicts`、`test_cancel_queued_task`、`test_start_recovers_crashed_running_task`。
+
+---
+
 ## 常见错误
 
 - 在面向用户的 service 中仅按主键查询（`db.get(Chapter, id)`）：
   这会跳过归属校验。`db.get` 只在归属已被证明的地方使用
-  （SSE 运行阶段使用 prepare 好的任务中的 `chapter_id`；`auth_service.get_user` 按 token subject 查询）。
+  （任务运行阶段使用创建时已校验归属的 `chapter_id`，且 `build_job` 仍按 `task.user_id` 走 `get_owned_*`；`auth_service.get_user` 按 token subject 查询）。
 - 手动构建 SQLite engine 时忘记 `PRAGMA foreign_keys=ON` —— CASCADE/SET NULL 测试会以错误的方式静默通过。
 - 将 AI 生成的字符串插入 `String(n)` 列时没有截断。
-- 在 `StreamingResponse` 生成器中复用请求的 `AsyncSession`。
+- 在 `StreamingResponse` 生成器或后台任务中复用请求的 `AsyncSession`。
+- 新增任务类型时在 `validate_and_claim` 里 commit：章节抢占与任务插入必须在同一事务，否则撞唯一索引时抢占无法回滚。
+- 部分唯一索引只写 `postgresql_where`：SQLite 测试会建成全表唯一索引，已结束任务也会阻止新任务。
 - 将某个会被向导批量替换的表的外键改为 CASCADE。
 - 更新 `content` 时没有重新计算 `word_count`。

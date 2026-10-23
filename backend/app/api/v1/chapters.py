@@ -1,8 +1,6 @@
 from fastapi import APIRouter, Response, status
-from fastapi.responses import StreamingResponse
 
-from app.api.sse import sse_response
-from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SessionmakerDep, SettingsDep
+from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.models import Chapter
 from app.schemas.chapter import (
     ChapterBrief,
@@ -13,8 +11,9 @@ from app.schemas.chapter import (
     GenerateChapterRequest,
     PolishChapterRequest,
 )
+from app.schemas.task import TaskOut
 from app.services import chapter_service as svc
-from app.services import generation_service
+from app.services import task_service
 
 router = APIRouter(tags=["chapters"])
 
@@ -58,55 +57,25 @@ async def delete_chapter(project_id: int, chapter_id: int, user: CurrentUser, db
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/chapters/{chapter_id}/generate", response_class=StreamingResponse)
+@router.post("/chapters/{chapter_id}/generate", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def generate_chapter(
     chapter_id: int,
     user: CurrentUser,
     db: DbDep,
-    settings: SettingsDep,
-    cipher: CipherDep,
-    factory: FactoryDep,
-    sessionmaker: SessionmakerDep,
+    engine: TaskEngineDep,
     body: GenerateChapterRequest | None = None,
-) -> StreamingResponse:
-    job = await generation_service.prepare_chapter_job(
-        db,
-        user_id=user.id,
-        chapter_id=chapter_id,
-        mode="generate",
-        req=body or GenerateChapterRequest(),
-        cipher=cipher,
-        factory=factory,
-        ai_timeout=settings.ai_request_timeout,
-        allow_private=settings.allow_private_ai_endpoints,
-        context_budget=settings.context_char_budget,
-    )
-    await db.close()
-    return sse_response(generation_service.run_chapter_job(job, sessionmaker))
+) -> TaskOut:
+    params = {"chapter_id": chapter_id, **(body or GenerateChapterRequest()).model_dump(mode="json")}
+    return await task_service.create_task(db, engine, user.id, "chapter.generate", params)
 
 
-@router.post("/chapters/{chapter_id}/polish", response_class=StreamingResponse)
+@router.post("/chapters/{chapter_id}/polish", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def polish_chapter(
     chapter_id: int,
     user: CurrentUser,
     db: DbDep,
-    settings: SettingsDep,
-    cipher: CipherDep,
-    factory: FactoryDep,
-    sessionmaker: SessionmakerDep,
+    engine: TaskEngineDep,
     body: PolishChapterRequest | None = None,
-) -> StreamingResponse:
-    job = await generation_service.prepare_chapter_job(
-        db,
-        user_id=user.id,
-        chapter_id=chapter_id,
-        mode="polish",
-        req=body or PolishChapterRequest(),
-        cipher=cipher,
-        factory=factory,
-        ai_timeout=settings.ai_request_timeout,
-        allow_private=settings.allow_private_ai_endpoints,
-        context_budget=settings.context_char_budget,
-    )
-    await db.close()
-    return sse_response(generation_service.run_chapter_job(job, sessionmaker))
+) -> TaskOut:
+    params = {"chapter_id": chapter_id, **(body or PolishChapterRequest()).model_dump(mode="json")}
+    return await task_service.create_task(db, engine, user.id, "chapter.polish", params)

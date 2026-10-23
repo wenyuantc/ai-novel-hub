@@ -7,6 +7,7 @@ from app.models.entities import (
     GenerationLog,
     Outline,
     Project,
+    Task,
     User,
     WorldSetting,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "GenerationLog",
     "Outline",
     "Project",
+    "Task",
     "User",
     "WorldSetting",
 ]

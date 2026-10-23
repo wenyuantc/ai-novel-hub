@@ -49,11 +49,17 @@ def settings_overrides() -> dict:
 @pytest.fixture
 async def app(tmp_path, fake_llm, settings_overrides):
     settings = make_settings(tmp_path, **settings_overrides)
-    application = create_app(settings, provider_factory=fake_llm.factory)
+    application = create_app(settings, provider_factory=fake_llm.factory, start_task_engine=False)
     async with application.state.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield application
-    await application.state.engine.dispose()
+    # 测试不触发 lifespan：显式启停任务引擎，结束前 stop，避免任务泄漏到下一个测试
+    task_engine = application.state.task_engine
+    await task_engine.start()
+    try:
+        yield application
+    finally:
+        await task_engine.stop()
+        await application.state.engine.dispose()
 
 
 def _new_client(app) -> httpx.AsyncClient:

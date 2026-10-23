@@ -27,6 +27,8 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
   | `GenerationKind` | `'generate' \| 'polish' \| 'rewrite' \| 'expand' \| 'condense' \| 'deslop' \| 'continue'` | 同上 |
   | `GenerationStatus` | `'success' \| 'error' \| 'cancelled'` | 同上 |
   | `RewriteOp` | `'rewrite' \| 'expand' \| 'condense' \| 'deslop' \| 'continue'` | 同上 |
+  | `TaskKind` | `'chapter.generate' \| 'chapter.polish' \| 'wizard.outline' \| 'wizard.characters' \| 'wizard.world'` | `schemas/task.py` |
+  | `TaskStatus` | `'queued' \| 'running' \| 'succeeded' \| 'failed' \| 'cancelled' \| 'interrupted'` | 同上 |
 
 - UI 标签映射使用 `Record<Union, …>` 类型，因此新增枚举值后在补上标签前会产生编译错误：`PROJECT_STATUS: Record<ProjectStatus, { label; color }>`、`CHAPTER_STATUS: Record<ChapterStatus, …>`、`PROVIDER_LABELS: Record<AIConfig['provider'], string>`、`WIZARD_KIND_LABELS: Record<WizardKind, string>`。
 - 类型级映射把泛型参数与载荷绑定：`WizardItemMap { outline: Outline; characters: Character; world: WorldSetting }` → `runWizard<K>(…): Promise<WizardItemMap[K][]>`。
@@ -34,6 +36,7 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
 
 - 认证/管理员类型：`User.is_admin` 镜像 `UserOut.is_admin`；`Page<T> = { items: T[]; total: number }` 镜像 `AdminUserList`；`AdminUser` 镜像 `AdminUserOut`（`id, username, is_admin, is_active, created_at, project_count`）；`AdminUserCreate`、`AdminUserUpdate`（`is_admin?`、`is_active?`）、`ResetPasswordRequest`、`ChangePasswordRequest`。后端契约：`.trellis/spec/backend/auth-admin.md`。
 - 章节版本 / 生成记录 / 局部改写类型（`10-23-chapter-versions`）：`ChapterVersionBrief`（`id, chapter_id, seq, source, word_count, starred, note, generation_log_id, created_at, updated_at`）、`ChapterVersion`（另加 `content`）、`ChapterVersionUpdate`（`starred?`、`note?` ≤200，省略或 null = 不变）、`GenerationLogBrief`（`params: Record<string, unknown>`、`prompt_tokens`/`completion_tokens` 恒为 null）、`GenerationLog`（另加 `messages: GenerationMessage[]`）、`RewriteRequest`、`RewriteDone`（含 `before`：选区前 ≤200 码点原文）、`RewriteApply`（`before?` 原样回传做乐观校验）、`ContinueEvent`、`ChapterDone`；`GenerateChapterRequest.auto_continue?`（后端默认 false）。标签映射在 `api/chapterVersions.ts`：`VERSION_SOURCE`、`GENERATION_KIND_LABELS`、`GENERATION_STATUS`、`REWRITE_OP_LABELS`（均为 `Record<Union, …>`）。
+- 后台任务类型（`10-23-task-engine`）：`Task` 镜像 `TaskOut`（`id, kind, status, title, project_id, chapter_id, progress 0–100, stage, error, retry_of_id, queue_position`（仅 queued 有值，0 = 下一个）`, created_at, started_at, finished_at`）；`TaskListQuery`（`project_id? chapter_id? kind? active? limit?`）、`TaskOutput {text}`、`TaskClearResult {deleted}`、`TaskProgress`（订阅 `progress` 载荷，`queue_position?`）。标签映射在 `api/tasks.ts`：`TASK_STATUS: Record<TaskStatus, {label, color}>`、`TASK_KIND_LABELS: Record<TaskKind, string>`；判定函数 `isActiveTask`、`canRetryTask`（`failed|cancelled|interrupted`，与后端 409 规则一致）。`generateChapter` / `polishChapter` / `runWizard` 返回 `Task`；`done.result` 是 `unknown`，必须经 `parseChapterDone` / `parseWizardDone(kind, …)` 收窄（结构不符返回 null，调用方回退为重新拉取 / 空列表）；订阅事件里的 `task` 用 `readTask`（`id: number` + `status: string`）收窄，可能为 null。
 - **偏移与字数按码点**：后端偏移与 `len()` 都按 Unicode 码点，JS 字符串按 UTF-16。TextArea 偏移发请求前用 `utils/textOffset.ts` 的 `utf16ToCodePoint` 换算，回显用 `codePointToUtf16`；选区长度用 `codePointLength`。`countWords` 为 `Array.from(text.replace(/\s+/g, '')).length`（emoji / 扩展 B 区生僻字算 1 字），与后端 `count_words` 一致。`textOffset.test.ts` 覆盖 emoji 与 `𠀀`/`𠮷`。
 - 共享表单规则放在 `src/utils/validation.ts`（`usernameRules` 3–32 位且不含空白、`passwordRules` 6–72 位、`confirmPasswordRules(field = 'password')`）。登录/注册、修改密码、管理员创建用户和重置密码都导入它们——绝不在页面中重复声明这些限制。
 
@@ -77,7 +80,7 @@ export function formatTime(value: string | null | undefined, fmt = 'YYYY-MM-DD H
   const data: unknown = JSON.parse(text)
   if (isRecord(data) && typeof data.detail === 'string') return data.detail
   ```
-  `sse.ts` 的 `readText`/`readDetail` 对 SSE 载荷做同样处理；`runGeneration` 接受一个可选的 `parseDone?: (data: unknown) => TDone` 校验函数。
+  `sse.ts` 的 `readText`/`readDetail` 对 SSE 载荷做同样处理；`runGeneration` 接受一个可选的 `parseDone?: (data: unknown) => TDone` 校验函数；`subscribeTask` 用 `isContinueEvent` / `isProgress` / `readTask` 守卫各事件载荷。
 
 ---
 

@@ -14,6 +14,8 @@ from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
 from app.services import auth_service
+from app.services.task_engine.engine import TaskEngine
+from app.services.task_engine.registry import TaskContext
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,13 @@ def _mount_frontend(app: FastAPI, dist_dir: str) -> None:
         return FileResponse(index)
 
 
-def create_app(settings: Settings | None = None, provider_factory: ProviderFactory | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    provider_factory: ProviderFactory | None = None,
+    *,
+    start_task_engine: bool = True,
+) -> FastAPI:
+    """start_task_engine：lifespan 中是否启停后台任务引擎（测试不触发 lifespan，由 fixture 显式 start/stop）。"""
     settings = settings or get_settings()
     engine = create_engine(settings.database_url)
 
@@ -46,8 +54,15 @@ def create_app(settings: Settings | None = None, provider_factory: ProviderFacto
     async def lifespan(app_: FastAPI):
         # 表结构由 alembic upgrade head 先行建立（Docker 入口已保证）
         await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
-        yield
-        await engine.dispose()
+        if start_task_engine:
+            # 先恢复（遗留 running → interrupted），再开始调度 queued 任务
+            await app_.state.task_engine.start()
+        try:
+            yield
+        finally:
+            if start_task_engine:
+                await app_.state.task_engine.stop()
+            await engine.dispose()
 
     app = FastAPI(title="AI 小说平台", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -55,6 +70,14 @@ def create_app(settings: Settings | None = None, provider_factory: ProviderFacto
     app.state.sessionmaker = create_sessionmaker(engine)
     app.state.cipher = SecretCipher(settings.encryption_key)
     app.state.provider_factory = provider_factory or create_provider
+    app.state.task_engine = TaskEngine(
+        TaskContext(
+            sessionmaker=app.state.sessionmaker,
+            settings=settings,
+            cipher=app.state.cipher,
+            factory=app.state.provider_factory,
+        )
+    )
 
     if settings.cors_origin_list:
         app.add_middleware(

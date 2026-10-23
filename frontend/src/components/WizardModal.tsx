@@ -13,7 +13,7 @@ interface Props<K extends WizardKind> {
   onDone: (items: WizardItemMap[K][]) => void
 }
 
-/** 面板内的「AI 重新生成」弹窗，复用向导流式组件。 */
+/** 面板内的「AI 重新生成」弹窗，复用向导任务组件；重新打开时自动接上进行中的同类任务。 */
 export default function WizardModal<K extends WizardKind>({
   projectId,
   kind,
@@ -34,7 +34,7 @@ export default function WizardModal<K extends WizardKind>({
       destroyOnHidden
       onCancel={() => {
         if (running) {
-          message.warning('正在生成，请先停止')
+          message.warning('正在生成，请等待完成或先停止')
           return
         }
         onClose()

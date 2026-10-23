@@ -1,9 +1,10 @@
-"""章节 AI 生成 / 润色。
+"""章节 AI 生成 / 润色（作为后台任务 chapter.generate / chapter.polish 运行）。
 
-分两阶段：
-- prepare_*：在请求会话内完成鉴权、配置解析、上下文组装，并原子地把章节置为 generating。
+分三段：
+- validate_and_claim：创建任务的请求内同步执行鉴权、配置解析、SSRF 与参数校验，并原子地把章节置为 generating。
   任何业务错误（404/400/409）在此抛出，以普通 JSON 响应返回。
-- run_chapter_job：流式阶段，使用独立会话落库；产出 (event, data) 事件。
+- build_chapter_job：任务开始运行时按最新数据组装 provider、上下文与 messages。
+- run_chapter_job：流式阶段，使用独立会话落库；产出 (event, data) 事件，由任务引擎消费。
   成功时在同一事务内：ensure_baseline → 覆盖正文 → 写生成记录 → 写 generate/polish 版本。
   未正常完成（模型报错、客户端断开等）时把章节状态回退为原状态，正文与版本不变，只留一条失败/取消记录。
 - 整章生成可选自动续写：字数低于目标 CONTINUE_RATIO 时最多续写 MAX_CONTINUE_ROUNDS 轮，
@@ -57,6 +58,7 @@ class ChapterJob:
     target_words: int = 0
     auto_continue: bool = False
     params: dict[str, Any] = field(default_factory=dict)
+    task_id: int | None = None
 
 
 def elapsed_ms(started: float) -> int:
@@ -84,7 +86,21 @@ async def stream_pieces(
             yield "delta", {"text": piece}
 
 
-async def prepare_chapter_job(
+@dataclass
+class ChapterClaim:
+    """创建任务时的校验 + 抢占结果（可序列化进 tasks.input）。"""
+
+    chapter_id: int
+    project_id: int
+    prev_status: str
+    ai_config_id: int
+    chapter_no: int
+    chapter_title: str
+    # 润色时原文字数（用于估算进度）
+    source_words: int = 0
+
+
+async def validate_and_claim(
     db: AsyncSession,
     *,
     user_id: int,
@@ -95,14 +111,63 @@ async def prepare_chapter_job(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
-    context_budget: int,
-) -> ChapterJob:
+) -> ChapterClaim:
+    """鉴权、配置解析、SSRF 校验与参数校验，并原子地把章节置为 generating。
+
+    不 commit：由调用方与任务插入放在同一事务内提交（插入失败时抢占随回滚撤销）。
+    """
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
     if chapter.status == "generating":
         raise ConflictError("该章节正在生成中，请稍候再试")
 
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
+    # 只做校验（解密 + 端点防护），运行时再按最新配置重新构建
+    await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    if mode == "polish" and not chapter.content.strip():
+        raise BadRequestError("章节正文为空，无法润色")
+
+    prev_status = chapter.status
+    # 原子抢占：防止同一章节被并发生成
+    result = await db.execute(
+        update(Chapter).where(Chapter.id == chapter.id, Chapter.status != "generating").values(status="generating")
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise ConflictError("该章节正在生成中，请稍候再试")
+    return ChapterClaim(
+        chapter_id=chapter.id,
+        project_id=project.id,
+        prev_status=prev_status,
+        ai_config_id=cfg.id,
+        chapter_no=chapter.chapter_no,
+        chapter_title=chapter.title,
+        source_words=chapter.word_count if mode == "polish" else 0,
+    )
+
+
+async def build_chapter_job(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    chapter_id: int,
+    mode: Literal["generate", "polish"],
+    req: GenerateChapterRequest | PolishChapterRequest,
+    prev_status: str,
+    ai_config_id: int | None,
+    cipher: SecretCipher,
+    factory: ProviderFactory,
+    ai_timeout: float,
+    allow_private: bool,
+    context_budget: int,
+    task_id: int | None = None,
+) -> ChapterJob:
+    """任务开始运行时按最新数据组装 provider、上下文与 messages；章节须仍处于 generating。"""
+    chapter = await get_owned_chapter(db, user_id, chapter_id)
+    project = await get_owned_project(db, user_id, chapter.project_id)
+    if chapter.status != "generating":
+        raise ConflictError("章节生成状态已被复位，任务未执行")
+    cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
 
     if mode == "generate":
@@ -130,14 +195,6 @@ async def prepare_chapter_job(
         messages = build_polish_messages(content=chapter.content, style=project.style, instruction=req.instruction)
         params = {"instruction": req.instruction}
 
-    prev_status = chapter.status
-    # 原子抢占：防止同一章节被并发生成
-    result = await db.execute(
-        update(Chapter).where(Chapter.id == chapter.id, Chapter.status != "generating").values(status="generating")
-    )
-    await db.commit()
-    if result.rowcount != 1:
-        raise ConflictError("该章节正在生成中，请稍候再试")
     return ChapterJob(
         chapter_id=chapter.id,
         prev_status=prev_status,
@@ -153,6 +210,7 @@ async def prepare_chapter_job(
         target_words=req.target_words if isinstance(req, GenerateChapterRequest) else 0,
         auto_continue=mode == "generate" and isinstance(req, GenerateChapterRequest) and req.auto_continue,
         params=params,
+        task_id=task_id,
     )
 
 
@@ -199,6 +257,7 @@ async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[Asyn
             "error": error,
             "output_chars": output_chars,
             "duration_ms": elapsed_ms(started),
+            "task_id": job.task_id,
         }
 
     try:

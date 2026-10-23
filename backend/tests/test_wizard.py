@@ -4,7 +4,7 @@ import pytest
 
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.services.wizard_service import normalize_outline
-from tests.helpers import create_ai_config, create_project, parse_sse, register
+from tests.helpers import Gate, create_ai_config, create_project, parse_sse, register, run_task, stream_with_gate
 
 OUTLINE_JSON = {
     "volumes": [
@@ -66,16 +66,25 @@ async def _setup(client):
     return await create_project(client)
 
 
-async def test_wizard_outline_with_fence(client, fake_llm):
+async def test_wizard_outline_with_fence(app, client, fake_llm):
     p = await _setup(client)
     raw = "好的，这是大纲：\n```json\n" + json.dumps(OUTLINE_JSON, ensure_ascii=False) + "\n```"
-    fake_llm.push(raw)
+    gate = Gate()
+    fake_llm.push([gate] + [raw[i : i + 7] for i in range(0, len(raw), 7)])
     resp = await client.post(f"/api/v1/projects/{p['id']}/wizard/outline", json={"volume_count": 2})
-    assert resp.status_code == 200
-    events = parse_sse(resp.text)
+    assert resp.status_code == 202
+    task = resp.json()
+    assert (task["kind"], task["project_id"], task["chapter_id"], task["title"]) == (
+        "wizard.outline",
+        p["id"],
+        None,
+        "大纲向导",
+    )
+    events = parse_sse((await stream_with_gate(app, client, task["id"], gate)).text)
     assert "".join(d["text"] for e, d in events if e == "delta") == raw
-    kind, data = events[-1]
-    assert kind == "done"
+    kind, payload = events[-1]
+    assert kind == "done" and payload["task"]["status"] == "succeeded"
+    data = payload["result"]
     assert data["kind"] == "outline"
     assert [(i["volume_no"], i["chapter_no"], i["title"]) for i in data["items"]] == [
         (1, 1, "出发"),
@@ -94,13 +103,13 @@ async def test_wizard_overwrites_and_keeps_chapters(client, fake_llm):
     p = await _setup(client)
     base = f"/api/v1/projects/{p['id']}"
     fake_llm.push(json.dumps(OUTLINE_JSON, ensure_ascii=False))
-    await client.post(f"{base}/wizard/outline")
+    await run_task(client, await client.post(f"{base}/wizard/outline"))
     created = (await client.post(f"{base}/chapters/from-outlines", json={})).json()
     ch_id = created[0]["id"]
     await client.patch(f"{base}/chapters/{ch_id}", json={"content": "已写正文"})
 
     fake_llm.push('[{"title": "唯一一章", "summary": "重写"}]')
-    events = parse_sse((await client.post(f"{base}/wizard/outline")).text)
+    _, events = await run_task(client, await client.post(f"{base}/wizard/outline"))
     assert events[-1][0] == "done"
     outlines = (await client.get(f"{base}/outlines")).json()
     assert [o["title"] for o in outlines] == ["唯一一章"]
@@ -114,9 +123,10 @@ async def test_wizard_characters_and_world(client, fake_llm):
     p = await _setup(client)
     base = f"/api/v1/projects/{p['id']}"
     fake_llm.push(json.dumps({"characters": CHARACTERS_JSON}, ensure_ascii=False))
-    events = parse_sse((await client.post(f"{base}/wizard/characters", json={"character_count": 3})).text)
+    _, events = await run_task(client, await client.post(f"{base}/wizard/characters", json={"character_count": 3}))
     assert events[-1][0] == "done"
-    items = events[-1][1]["items"]
+    assert events[-1][1]["result"]["kind"] == "characters"
+    items = events[-1][1]["result"]["items"]
     assert len(items) == 3
     assert items[1]["relations_text"] == "林舟的搭档；白夜的旧识"
     assert len((await client.get(f"{base}/characters")).json()) == 3
@@ -124,7 +134,7 @@ async def test_wizard_characters_and_world(client, fake_llm):
     fake_llm.push(
         '```json\n[{"title": "星际联邦", "content": "十二星系"}, {"title": "跃迁", "content": "超光速"}]\n```'
     )
-    events = parse_sse((await client.post(f"{base}/wizard/world")).text)
+    _, events = await run_task(client, await client.post(f"{base}/wizard/world"))
     assert events[-1][0] == "done"
     world = (await client.get(f"{base}/world")).json()
     assert [w["title"] for w in world] == ["星际联邦", "跃迁"]
@@ -137,9 +147,10 @@ async def test_wizard_parse_error(client, fake_llm):
     base = f"/api/v1/projects/{p['id']}"
     await client.post(f"{base}/world", json={"title": "原设定"})
     fake_llm.push("抱歉，我无法生成。")
-    events = parse_sse((await client.post(f"{base}/wizard/world")).text)
+    task, events = await run_task(client, await client.post(f"{base}/wizard/world"))
     assert events[-1][0] == "error"
     assert "解析失败" in events[-1][1]["detail"]
+    assert task["status"] == "failed" and "解析失败" in task["error"]
     # 解析失败不覆盖旧数据
     assert [w["title"] for w in (await client.get(f"{base}/world")).json()] == ["原设定"]
 

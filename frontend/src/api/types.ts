@@ -357,3 +357,55 @@ export interface RewriteApply {
   replacement: string
   log_id?: number | null
 }
+
+// ---------------- 后台任务（backend/app/schemas/task.py） ----------------
+
+export type TaskKind = 'chapter.generate' | 'chapter.polish' | 'wizard.outline' | 'wizard.characters' | 'wizard.world'
+
+export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+
+export interface Task {
+  id: number
+  kind: TaskKind
+  status: TaskStatus
+  /** 后端生成的展示标题，如「第 3 章 xx · AI 生成」「大纲向导」 */
+  title: string
+  project_id: number | null
+  chapter_id: number | null
+  /** 0–100 */
+  progress: number
+  stage: string
+  error: string
+  retry_of_id: number | null
+  /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
+  queue_position: number | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface TaskListQuery {
+  project_id?: number
+  chapter_id?: number
+  kind?: TaskKind
+  /** true = 排队 + 运行中；false = 已结束；省略 = 全部 */
+  active?: boolean
+  /** 默认 50，最大 200 */
+  limit?: number
+}
+
+export interface TaskOutput {
+  text: string
+}
+
+export interface TaskClearResult {
+  deleted: number
+}
+
+/** 订阅 progress 事件载荷 */
+export interface TaskProgress {
+  status: TaskStatus
+  progress: number
+  stage: string
+  queue_position?: number | null
+}

@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     ai_request_timeout: float = Field(default=300.0, gt=0)
     # 是否允许 AI Base URL 指向本地 / 内网地址（接入 Ollama 等本地模型时开启）；开放注册的公网部署请保持关闭
     allow_private_ai_endpoints: bool = False
+    # 后台任务：全局同时运行上限、每个用户同时运行上限（其余排队）
+    task_max_concurrency: int = Field(default=4, ge=1)
+    task_max_per_user: int = Field(default=2, ge=1)
     # 生产模式下挂载的前端构建产物目录；不存在则跳过
     frontend_dist_dir: str = str(_DEFAULT_FRONTEND_DIST)
     # 首个管理员引导（可选，须同时设置）：启动时账号不存在则创建，已存在则确保为启用中的管理员，不覆盖密码

@@ -1,6 +1,6 @@
 import { App, Button, Card, Result, Space, Spin, Statistic, Steps, Row, Col } from 'antd'
 import { useCallback, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { chapterApi } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
 import { characterApi, outlineApi, worldApi } from '../../api/story'
@@ -29,7 +29,18 @@ export default function WizardPage() {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
-  const [step, setStep] = useState(0)
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  // 任务面板「跳转」带 ?kind=world|characters|outline：直接打开对应步骤（生成器挂载后自动接上活动任务）
+  const kindStep = STEPS.findIndex((s) => s.kind === searchParams.get('kind'))
+  const [step, setStep] = useState(() => Math.max(0, kindStep))
+  // 页面已打开时再次跳转（含跳到同一 ?kind=）：每次导航（location.key 变化）都按 kind 切换步骤。
+  // 在渲染期调整状态（React 推荐写法），切换后旧生成器卸载只断开订阅，任务在后台继续
+  const [syncedKey, setSyncedKey] = useState(location.key)
+  if (syncedKey !== location.key) {
+    setSyncedKey(location.key)
+    if (kindStep >= 0) setStep(kindStep)
+  }
   const [running, setRunning] = useState(false)
   const [creating, setCreating] = useState(false)
 

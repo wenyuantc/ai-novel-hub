@@ -10,6 +10,7 @@ from app.core.errors import ForbiddenError, UnauthorizedError
 from app.core.security import ACCESS_TOKEN_COOKIE, SecretCipher, decode_access_token
 from app.models import User
 from app.services import auth_service
+from app.services.task_engine.engine import TaskEngine
 
 
 def get_settings_dep(request: Request) -> Settings:
@@ -33,11 +34,16 @@ def get_provider_factory(request: Request) -> ProviderFactory:
     return request.app.state.provider_factory
 
 
+def get_task_engine(request: Request) -> TaskEngine:
+    return request.app.state.task_engine
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 DbDep = Annotated[AsyncSession, Depends(get_db)]
 CipherDep = Annotated[SecretCipher, Depends(get_cipher)]
 FactoryDep = Annotated[ProviderFactory, Depends(get_provider_factory)]
 SessionmakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
+TaskEngineDep = Annotated[TaskEngine, Depends(get_task_engine)]
 
 
 def _extract_token(request: Request) -> str | None:

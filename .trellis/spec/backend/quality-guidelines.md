@@ -44,7 +44,7 @@ Pytest 配置：`asyncio_mode = "auto"`、`asyncio_default_fixture_loop_scope = 
   唯一出口是 `ai_config_service.build_provider(..., allow_private=...)`（SSRF 防护 + 重定向策略）。
 - **带有名为 `timeout` 参数的异步函数**（ruff `ASYNC109`，通过 `ASYNC` 启用）。
   通过构造函数传入超时（`LLMProvider(api_key, base_url, timeout)`），换一个名字
-  （`build_provider(..., request_timeout, ...)`、`prepare_chapter_job(..., ai_timeout=...)`），
+  （`build_provider(..., request_timeout, ...)`、`build_chapter_job(..., ai_timeout=...)`），
   或者像 `ai_config_service.test_config` 那样用 `asyncio.timeout(...)` 包裹调用。
 - **在事件循环上执行阻塞的 CPU 工作**：bcrypt 通过 `anyio.to_thread.run_sync` 运行
   （`auth_service.register` / `authenticate`）。任何新增的重型同步调用都应照此处理。
@@ -64,7 +64,7 @@ Pytest 配置：`asyncio_mode = "auto"`、`asyncio_default_fixture_loop_scope = 
   `make_settings(tmp_path, **overrides)`。
 - 两阶段流式端点（prepare 阶段抛出异常，run 阶段产出事件）—— 见 `error-handling.md`。
 - 迭代 provider 流时用 `contextlib.aclosing(...)` 包裹
-  （`run_chapter_job`、`run_wizard_job`、`test_config`）。
+  （`run_chapter_job`、`run_wizard_job`、`test_config`；引擎消费 runner 事件时同样如此）。
 - 在 `finally` 中关闭 SDK 客户端（openai_compat/anthropic 中的 `await client.close()`）。
 - 写入时去除用户字符串首尾空白（`data.title.strip()`），用 `_clean_base_url` 规范化 `base_url`
   （去掉末尾的 `/`，空值 → `None`）。
@@ -112,7 +112,8 @@ async def test_registration_disabled(client): ...
 `backend/tests/helpers.py` 中的 `FakeLLM` 通过 `create_app(settings, provider_factory=fake_llm.factory)` 注入。
 `push("text")` 会拆分成 7 个字符一块；`push([..., AIProviderError(...)])` 会在流中途抛出异常；
 `fake.calls` 记录 `provider/api_key/base_url/model/messages/max_tokens/thinking`，用于 prompt 和
-参数断言。队列为空时产出 `["ok"]`。`fake.models`（`{"id", "name"?}` 列表或一个
+参数断言。队列为空时产出 `["ok"]`。分片中可放 `Gate()`：流到达时置 `gate.reached`，`gate.release()` 后才继续，
+用于取消 / 并发 / 排队测试；`fake.aborted` 记录未产出完就被关闭的流数量。`fake.models`（`{"id", "name"?}` 列表或一个
 `AIProviderError`）驱动 `list_models()`；`fake.list_calls` 记录 `provider/api_key/base_url/timeout`。
 
 ### 不访问真实 DNS
@@ -195,7 +196,7 @@ async def list_models(db, cipher, factory, user_id, req: ModelListRequest, *, al
 | 端点 | 被拦截时的结果 |
 |----------|---------------------|
 | `POST /ai-configs/{id}/test` | **200** `{"ok": false, "message": "...ALLOW_PRIVATE_AI_ENDPOINTS..."}` |
-| `POST /chapters/{id}/generate|polish`、`POST /projects/{id}/wizard/{kind}` | **400** JSON `detail`（流开始前） |
+| `POST /chapters/{id}/generate|polish`、`POST /projects/{id}/wizard/{kind}` | **400** JSON `detail`（创建任务时，不建任务、不抢占章节） |
 
 两种情况下 provider factory 都不会被调用（`fake_llm.calls == []`）。
 
@@ -393,7 +394,8 @@ ai_config_service.context_char_budget(cfg, default) -> int        # 取代 CONTE
 - [ ] `app/api/v1/` 中没有 ORM 查询；新的 service 入口接收 `user_id` 并校验归属（他人资源返回 404）。
 - [ ] 新增的归属路由已加入 `test_cross_user_isolation`。
 - [ ] AI 调用经由 `build_provider(..., allow_private=settings.allow_private_ai_endpoints)`；新 provider 遵守 `follow_redirects`。
-- [ ] 流式：校验放在 `prepare_*` 中，请求 session 在 `sse_response` 之前关闭，事件仅限 `delta`/`continue`（仅整章生成）/`done`/`error`。
+- [ ] 后台任务：校验放在 `validate_and_claim` 中（不 commit），运行逻辑在 `build_job`/`run` 中使用独立 session；runner 事件仅限 `delta`/`continue`（仅整章生成）/`done`/`error`。同步 SSE（改写）：校验放在 `prepare_*`，请求 session 在 `sse_response` 之前关闭。
+- [ ] 测试中引擎真实运行：用 `Gate` 控制阻塞，`wait_task` / `stream_task` 等待结束，不用长 sleep。
 - [ ] AI 生成的字符串按列长度截断；内容变更时重新计算 `word_count`。
 - [ ] 错误为带中文 `detail` 的 `AppError` 子类；未经 `describe_error` 处理的 SDK 原始文本不得外露。
 - [ ] 响应和日志中没有密钥；已审查 Out schema。

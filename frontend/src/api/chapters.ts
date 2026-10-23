@@ -1,15 +1,14 @@
 import { api } from './client'
-import { runGeneration } from './sse'
 import type {
   Chapter,
   ChapterBrief,
   ChapterCreate,
   ChapterDone,
-  ContinueEvent,
   ChapterStatus,
   ChapterUpdate,
   GenerateChapterRequest,
   PolishChapterRequest,
+  Task,
 } from './types'
 
 export const chapterApi = {
@@ -23,36 +22,25 @@ export const chapterApi = {
   remove: (pid: number, cid: number) => api.del(`/projects/${pid}/chapters/${cid}`),
 }
 
-function isContinueEvent(data: unknown): data is ContinueEvent {
-  if (typeof data !== 'object' || data === null) return false
-  const d = data as Record<string, unknown>
-  return typeof d.round === 'number' && typeof d.words === 'number' && typeof d.target === 'number'
+/** 整章生成：创建后台任务（202），章节立即进入 generating；实时输出用 subscribeTask 订阅。 */
+export function generateChapter(cid: number, body: GenerateChapterRequest): Promise<Task> {
+  return api.post<Task>(`/chapters/${cid}/generate`, body)
 }
 
-/** 整章生成：返回 done 载荷（含可选 warning）；onContinue 在每轮自动续写开始前回调。 */
-export function generateChapter(
-  cid: number,
-  body: GenerateChapterRequest,
-  onDelta: (text: string) => void,
-  signal?: AbortSignal,
-  onContinue?: (e: ContinueEvent) => void,
-): Promise<ChapterDone> {
-  return runGeneration<ChapterDone>(`/chapters/${cid}/generate`, body, {
-    onDelta,
-    signal,
-    onEvent: (event, data) => {
-      if (event === 'continue' && isContinueEvent(data)) onContinue?.(data)
-    },
-  })
+/** 润色：同上。 */
+export function polishChapter(cid: number, body: PolishChapterRequest): Promise<Task> {
+  return api.post<Task>(`/chapters/${cid}/polish`, body)
 }
 
-export function polishChapter(
-  cid: number,
-  body: PolishChapterRequest,
-  onDelta: (text: string) => void,
-  signal?: AbortSignal,
-): Promise<Chapter> {
-  return runGeneration<ChapterDone>(`/chapters/${cid}/polish`, body, { onDelta, signal }).then((d) => d.chapter)
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/** 校验章节任务的 done.result：{chapter, warning?} */
+export function parseChapterDone(result: unknown): ChapterDone | null {
+  if (!isRecord(result) || !isRecord(result.chapter) || typeof result.chapter.id !== 'number') return null
+  const warning = typeof result.warning === 'string' && result.warning ? result.warning : undefined
+  return { chapter: result.chapter as unknown as Chapter, warning }
 }
 
 export const CHAPTER_STATUS: Record<ChapterStatus, { label: string; color: string }> = {

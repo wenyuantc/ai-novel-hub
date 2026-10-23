@@ -1,4 +1,4 @@
-"""AI 向导：流式生成大纲 / 角色 / 世界观，结束后解析 JSON 并覆盖落库。"""
+"""AI 向导（后台任务 wizard.*）：流式生成大纲 / 角色 / 世界观，结束后解析 JSON 并覆盖落库。"""
 
 import logging
 from collections.abc import AsyncIterator
@@ -36,20 +36,40 @@ class WizardJob:
     max_tokens: int | None = None
 
 
-async def prepare_wizard_job(
+async def validate_wizard(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    project_id: int,
+    req: WizardRequest,
+    cipher: SecretCipher,
+    factory: ProviderFactory,
+    ai_timeout: float,
+    allow_private: bool,
+) -> int:
+    """创建任务时同步校验归属、AI 配置与端点；返回解析出的 ai_config_id。不修改任何数据。"""
+    await get_owned_project(db, user_id, project_id)
+    cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
+    await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    return cfg.id
+
+
+async def build_wizard_job(
     db: AsyncSession,
     *,
     user_id: int,
     project_id: int,
     kind: WizardKind,
     req: WizardRequest,
+    ai_config_id: int | None,
     cipher: SecretCipher,
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
 ) -> WizardJob:
+    """任务开始运行时按项目最新的世界观 / 角色 / 大纲组装 messages。"""
     project = await get_owned_project(db, user_id, project_id)
-    cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
+    cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
 
     info = project_info(project)

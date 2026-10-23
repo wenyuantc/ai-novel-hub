@@ -4,9 +4,23 @@
 所有访问都经 service 层显式查询并按 user_id 过滤。
 """
 
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint, false, true
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+    text,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -19,6 +33,13 @@ VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "resto
 # 生成记录类型：整章生成、润色，以及局部改写的各个操作
 GENERATION_KINDS = ("generate", "polish", "rewrite", "expand", "condense", "deslop", "continue")
 GENERATION_STATUSES = ("success", "error", "cancelled")
+# 后台任务
+TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world")
+TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
+ACTIVE_TASK_STATUSES = ("queued", "running")
+FINISHED_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
+# 部分唯一索引条件：同一资源同时只能有一个排队 / 运行中的任务（PostgreSQL 与 SQLite 都支持）
+_ACTIVE_RESOURCE_WHERE = "status IN ('queued', 'running') AND resource_key IS NOT NULL"
 
 
 class User(TimestampMixin, Base):
@@ -142,6 +163,8 @@ class GenerationLog(TimestampMixin, Base):
     # 预留：现有 provider 流式接口拿不到 token 用量，暂时为空
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 产生该调用的后台任务；任务被清理后记录保留
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), index=True, nullable=True)
 
 
 class ChapterVersion(TimestampMixin, Base):
@@ -162,3 +185,49 @@ class ChapterVersion(TimestampMixin, Base):
     generation_log_id: Mapped[int | None] = mapped_column(
         ForeignKey("generation_logs.id", ondelete="SET NULL"), index=True, nullable=True
     )
+
+
+class Task(TimestampMixin, Base):
+    """持久化后台任务。tasks 表即队列：进程内调度器按 id 先进先出领取 queued 任务。"""
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        Index("ix_tasks_status_id", "status", "id"),
+        Index("ix_tasks_user_id_id", "user_id", "id"),
+        Index(
+            "uq_tasks_active_resource",
+            "resource_key",
+            unique=True,
+            postgresql_where=text(_ACTIVE_RESOURCE_WHERE),
+            sqlite_where=text(_ACTIVE_RESOURCE_WHERE),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # (user_id, id) 复合索引已覆盖按用户查询，不再单独建索引
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    chapter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 展示用中文标题（创建时生成，章节被删 / 改名后保持不变）
+    title: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    # chapter:{id} / wizard:{project_id}:{kind}；用于同资源互斥
+    resource_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    output_text: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    stage: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 多步任务断点（当前单步类型不用）
+    step_cursor: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    retry_of_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

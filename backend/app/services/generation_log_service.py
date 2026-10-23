@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import NotFoundError
-from app.models import AIConfig, Chapter, GenerationLog, Project
+from app.models import AIConfig, Chapter, GenerationLog, Project, Task
 from app.services.chapter_service import get_project_chapter
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,15 @@ async def write_log(
     error: str = "",
     output_chars: int = 0,
     duration_ms: int = 0,
+    task_id: int | None = None,
 ) -> GenerationLog:
-    """写入一条记录并裁剪（不 commit）。章节 / 配置在生成期间被删除时对应外键置空。"""
+    """写入一条记录并裁剪（不 commit）。章节 / 配置 / 任务在生成期间被删除时对应外键置空。"""
     if chapter_id is not None and await db.get(Chapter, chapter_id) is None:
         chapter_id = None
     if ai_config_id is not None and await db.get(AIConfig, ai_config_id) is None:
         ai_config_id = None
+    if task_id is not None and await db.get(Task, task_id) is None:
+        task_id = None
     log = GenerationLog(
         project_id=project_id,
         chapter_id=chapter_id,
@@ -49,6 +52,7 @@ async def write_log(
         error=error,
         output_chars=output_chars,
         duration_ms=duration_ms,
+        task_id=task_id,
     )
     db.add(log)
     await db.flush()

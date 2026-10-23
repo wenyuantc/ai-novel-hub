@@ -31,14 +31,15 @@ dayjs.locale('zh-cn')
 
 | 组件 | 契约（源自源码） |
 |-----------|------------------------|
-| `AppLayout` | 顶部 `Layout.Header` 带菜单（`我的项目` / `模型配置`；在 `/admin` 下不高亮任何菜单项），用户名下拉菜单：`用户管理`（仅当 `user.is_admin` 时显示）→ `/admin/users`，`修改密码` → `ChangePasswordModal`，退出登录调用 `useAuthStore().logout()` 后执行 `navigate('/login', { replace: true })`；渲染 `<Outlet/>`。 |
+| `AppLayout` | 顶部 `Layout.Header` 带菜单（`我的项目` / `模型配置`；在 `/admin` 下不高亮任何菜单项），用户名下拉菜单：`用户管理`（仅当 `user.is_admin` 时显示）→ `/admin/users`，`修改密码` → `ChangePasswordModal`，退出登录调用 `useAuthStore().logout()` 后执行 `navigate('/login', { replace: true })`；渲染 `<Outlet/>`，并在底部挂载 `<TaskPanel/>`（仅登录区可见）。 |
 | `RequireAuth` | 路由守卫：`status === 'unknown'` → `<FullPageSpin/>`；`'anonymous'` → `<Navigate to="/login" replace state={{ from: location.pathname + location.search }} />`。`LoginPage` 读取 `state.from`（默认 `/projects`）。 |
 | `RequireAdmin` | 包裹 `/admin/users`（位于 `RequireAuth` 内部）。判定逻辑是 `utils/adminUsers.ts` 中的纯函数 `adminGuard(status, user)`：`'loading'` → `<FullPageSpin/>`，`'login'` → `/login`，`'home'`（非管理员）→ `/`，`'allow'` → children。`is_admin` 只从 `/auth/me` 读取一次；被降级的管理员在刷新前仍会看到菜单，但 API 调用会返回 403 并显示提示信息。 |
 | `ChangePasswordModal` | `{ open; onClose }`。原密码 + 两次输入新密码（`utils/validation`）。成功 → `其他设备上的登录已失效`；后端会重新签发 cookie，因此当前标签页保持登录。400 `原密码不正确` 通过 `errorMessage(err)` 在表单内显示，不会触发全局登出。 |
 | `AIConfigSelect` | `{ value?: number \| null; onChange?: (v: number \| null) => void; disabled?: boolean }`。挂载时调用 `useAIConfigStore().load()`。空选择 = `null` = "使用默认配置"（placeholder 为 `默认：{name}（{model}）`）。加载完成且配置数为零时，渲染一个链接到 `/settings/ai` 的警告 `Alert` 以代替下拉框。 |
 | `StreamOutput` | `{ text; running; placeholder?; maxHeight? = 360 }`。`pre-wrap` 等宽文本框，`running` 时自动滚动到底部，运行中显示一个小的 `Spin`。 |
-| `WizardGenerator<K extends WizardKind>` | `{ projectId; kind: K; existingCount?; showResult?; onDone?(items: WizardItemMap[K][]); onRunningChange?(running) }`。运行中表单禁用；`useHasAIConfig() === false` 时开始按钮禁用；运行中显示接到 `task.stop` 的危险样式 `停止` 按钮。中止时显示 `已停止生成，原有数据未改变`。`existingCount > 0` 时显示"将会替换"的 `Alert`。 |
-| `WizardModal<K>` | 将 `WizardGenerator` 包在 `Modal` 中（`maskClosable={false}`、`destroyOnHidden`、`footer={null}`）。运行中拒绝关闭（`message.warning('正在生成，请先停止')`）。完成时：先 `onDone(items)` 再 `onClose()`。被 `WorldPanel`、`CharactersPanel`、`OutlinesPanel` 使用。 |
+| `WizardGenerator<K extends WizardKind>` | `{ projectId; kind: K; existingCount?; showResult?; onDone?(items: WizardItemMap[K][]); onRunningChange?(running) }`。走**后台任务**：`runWizard(...)` 返回 202 `Task` → `useTasksStore.track(task)` → `useTaskStream().follow(task)`；完成时用 `parseWizardDone(kind, result)` 取 items。**挂载时**按 `GET /tasks?project_id&kind=wizard.{kind}&active=true&limit=1` 查活动任务并自动接上（关闭页面 / 弹窗后再打开可继续看实时输出）。`running = 订阅中 \|\| 创建请求中`，表单禁用；`useHasAIConfig() === false` 时开始按钮禁用；运行中显示危险样式按钮（排队时为 `取消排队`，否则 `停止`），调用 `task.cancel()`（`POST /tasks/{id}/cancel`）。排队中显示 `queueLabel(task)` 的 info `Alert`，运行中显示进度条 + `stage`，断线重连时显示警告。取消时显示 `已停止生成，原有数据未改变`；失败 / 中断时 `生成失败` Alert。`onRunningChange` 通过 ref + `[running]` effect 上报。`existingCount > 0` 时显示"将会替换"的 `Alert`。`WizardPage` 的步骤初始取 `?kind=`，之后每次导航（`location.key` 变化，含跳到同一 `kind`）都在渲染期按 `kind` 切换步骤。 |
+| `WizardModal<K>` | 将 `WizardGenerator` 包在 `Modal` 中（`maskClosable={false}`、`destroyOnHidden`、`footer={null}`）。运行中拒绝关闭（`message.warning('正在生成，请等待完成或先停止')`）——任务本身不会因关闭而中断，但面板需要 `onDone` 回调来刷新列表；重新打开会自动接上。完成时：先 `onDone(items)` 再 `onClose()`。被 `WorldPanel`、`CharactersPanel`、`OutlinesPanel` 使用。 |
+| `TaskPanel` | 无 props，挂在 `AppLayout`。挂载时 `useTasksStore.startPolling()`（卸载时停止）。右下角 `FloatButton`（`badge.count = active.length`，tooltip `后台任务`）打开 `Drawer`（宽 520）：Tab「进行中（N）」= store 的 `active`；Tab「最近」= `taskApi.list({ active: false, limit: 50 })`，依赖 store 的 `version`（任务结束 / 本地操作后自动重载）。每行：标题、`TASK_STATUS` 标签、活动任务的 `Progress`、`queueLabel` 或 `stage`、创建 / 结束时间（`formatTime`）、已结束任务的 `error`。操作：`查看输出`（`TaskOutputModal`：活动任务用 `useTaskStream().follow` 实时显示，已结束读 `/tasks/{id}/output`）、`跳转`（`taskLink`：章节任务 → 编辑器；向导任务 → `/projects/{pid}/wizard?kind=…`）、活动任务 `取消`（Popconfirm → `track(返回的 TaskOut)`）、可重试状态 `重试`（→ `track(新任务)`）、已结束 `删除`（→ `bump()`）。抽屉顶部 `刷新`、`清理已结束`（Popconfirm → `DELETE /tasks?finished=true` → `已清理 N 个已结束任务`）。 |
 | `ExportModal` | `{ projectId; open; onClose }`。仅在 `open` 时渲染 `ExportModalInner`（使其 `useLoader` 每次打开都获取最新章节）。格式单选 `txt`/`md`；行选择会禁用 `generating` 状态的章节；不选则导出全部。调用 `exportProject` 并显示 `已导出：{filename}`。被 `OverviewPanel` 使用。 |
 | `StoryPreview` | 具名导出 `WorldPreview`、`CharacterPreview`、`OutlinePreview`（使用 `utils/outline.ts` 中的 `groupOutlines`/`volumeLabel`）。 |
 | `TextDiff` | `{ a; b; maxHeight? = 480 }`。逐字（按码点，`utils/textDiff.ts` 的 `computeDiff` → jsdiff `diffChars`，`timeout` 3 秒）对比 a → b：删除 `<del>` 标红加删除线，新增 `<ins>` 标绿；顶部显示 `+N 字 / -M 字`（非空白码点数）。超时返回 null 时显示警告 `两份文本差异过大，无法逐字对比`。 |
@@ -67,29 +68,33 @@ dayjs.locale('zh-cn')
 三层结构：`ChapterEditorPage`（解析 `:cid`，渲染 `<ChapterLoader key={chapterId} …/>`，使切换章节时重建全部状态）→ `ChapterLoader`（加载章节 + 同级章节列表）→ `ChapterEditor`。必须保留的行为：
 
 1. **脏状态跟踪**：`const dirty = content !== chapter.content || title !== chapter.title`；`applyServerChapter(c)` 根据服务端响应重置 `chapter`、`title`、`content`。
-2. **AI 生成/润色前自动保存**：
+2. **AI 生成/润色走后台任务，开始前自动保存**（`10-23-task-engine`）：
    ```ts
-   const runAI = async (mode: AIMode) => {
-     if (dirty) {
-       if (!(await save())) return
-       message.info('已自动保存当前修改')
-     }
-     const outcome = await task.start((onDelta, signal) => mode === 'generate' ? generateChapter(...) : polishChapter(...))
+   const runAI = async (mode: 'generate' | 'polish') => {
+     if (!(await ensureSaved())) return
+     setStarting(true)
+     const created = await (mode === 'generate' ? generateChapter(cid, body) : polishChapter(cid, body))  // 202 Task；失败 → message.error + reloadChapter
+     setStarting(false)
+     trackTask(created)                                   // useTasksStore.track：立即刷新、切到 3 秒轮询
+     setChapter((p) => ({ ...p, status: 'generating' })) // 创建即抢占
+     await followTask(created)                            // useTaskStream().follow
+   }
    ```
-   `done` 时 → `applyServerChapter(outcome.value)`（服务端已保存，状态为 `done`）。中止/出错时 → `reloadChapter()` 只同步服务端状态并保留本地文本。
-3. **流式期间只读**：运行中文本域显示 `task.text`（`displayContent = task.running ? task.text : content`），并设置 `readOnly={task.running}`；标题输入框、AI 表单、标签页和 `AIConfigSelect` 都设置 `disabled={task.running}`。
+   `followTask`：`succeeded` → `parseChapterDone(result)` → `replaceFromServer(chapter)`（解析失败时重新 GET 章节），`warning` 用 `message.warning`；`cancelled` → `已停止，正文保持原样` + `reloadChapter()`；`failed` / `interrupted` / `lost` → 错误 `Alert`（中断时标题为 `任务已中断`）+ `reloadChapter()`；`detached`（卸载 / 切换章节）→ 不做任何事。
+   **挂载时自动接上**：仅当初始章节 `status === 'generating'` 时查询 `GET /tasks?chapter_id&active=true`，找到 `chapter.*` 任务就切到对应 Tab 并 `followTask`（通过 ref 调用最新函数）；查询完成前 `attachChecked = false`，此时不显示「卡住」提示、生成/润色按钮禁用。**其他入口新建的任务**（任务面板重试、另一个标签页）：订阅 `useTasksStore.active`，`attachChecked && !aiRunning` 时出现本章且未订阅过（`followedIdsRef`）的 `chapter.*` 活动任务即接上（有未保存修改时 `message.warning` 提示将被覆盖）。局部改写面板在 `chapter.status === 'generating'`（含查询完成前）时禁用。
+3. **任务期间只读**：`aiRunning = aiTask.running || starting`（含排队）。排队中 / 尚无输出时文本域仍显示原正文，开始输出后显示 `aiTask.text`（`displayContent = aiStreaming ? aiTask.text : content`）；`readOnly={editorLocked}`；标题输入框、AI 表单、标签页和 `AIConfigSelect` 都按 `aiRunning`/`editorLocked` 禁用。排队中显示 `queueLabel(task)`（`排队中，前面还有 N 个任务`）的 info `Alert`；运行中显示 `Progress` + `stage`；断线重连时显示警告 `连接中断，正在重连…（任务仍在后台运行）`。停止按钮（排队时 `取消排队`，否则 `停止（已输出 N 字）`）调用 `aiTask.cancel()`，创建请求返回前禁用。
 4. **Ctrl/Cmd+S**：只注册一次 window `keydown` 监听器；它通过 ref 调用最新的 `handleSave`（在无依赖的 effect 中执行 `saveShortcutRef.current = handleSave`），因此监听器永远不会捕获过期状态。`handleSave` 在运行/保存中不做任何事，无改动时显示 `没有需要保存的修改`。
-5. **未保存离开守卫**：`const guard = dirty || task.running || rewriteLocked`（局部改写流式中或有待采纳结果也提示，见第 9 条）。浏览器卸载通过 `beforeunload` 监听器处理（仅在 `guard` 时挂载）；应用内导航通过 `useBlocker(({ currentLocation, nextLocation }) => guard && currentLocation.pathname !== nextLocation.pathname)` 处理，并弹出确认 `Modal`，其确定操作执行 `task.stop(); blocker.proceed?.()`。
-6. **卡在 `generating` 的章节**：`const stuck = chapter.status === 'generating' && !task.running` 会显示一个带 `复位` 操作的警告 `Alert` → `chapterApi.update(pid, chapter.id, { status: 'draft' })`。卡住期间，保存、标记完成和 AI 按钮都被禁用，因为后端会以 409 拒绝对生成中章节的正文/标题 PATCH（`backend/app/services/chapter_service.py` 中的 `ConflictError`），且生成/润色会返回 409 `该章节正在生成中，请稍候再试`。
+5. **未保存离开守卫**：`const guard = dirty || rewriteLocked`——**AI 任务进行中可以直接离开**，任务在后台继续，返回编辑器自动接上（第 2 条），也可在任务面板查看；只有未保存修改或局部改写流式中 / 有待采纳结果（第 9 条）才拦截。浏览器卸载通过 `beforeunload` 监听器处理（仅在 `guard` 时挂载）；应用内导航通过 `useBlocker(({ currentLocation, nextLocation }) => guard && currentLocation.pathname !== nextLocation.pathname)` 处理，并弹出确认 `Modal`，其确定操作执行 `blocker.proceed?.()`（卸载时 `useTaskStream` 只断开订阅，不取消任务）。
+6. **卡在 `generating` 的章节**：`const stuck = chapter.status === 'generating' && !aiRunning && attachChecked`（挂载时已查过且没有活动任务，例如另一窗口的任务刚创建、或后端异常）会显示一个带 `复位` 操作的警告 `Alert` → `chapterApi.update(pid, chapter.id, { status: 'draft' })`。卡住期间，保存、标记完成和 AI 按钮都被禁用，因为后端会以 409 拒绝对生成中章节的正文/标题 PATCH（`backend/app/services/chapter_service.py` 中的 `ConflictError`），且生成/润色会返回 409 `该章节正在生成中，请稍候再试`。
 7. **覆盖已有正文的重新生成**通过 `modal.confirm` 询问（`重新生成正文？`）；正文为空时禁用润色。
 8. 上一章/下一章导航按 `chapter_no` 再按 `id` 对同级章节排序。
 
 版本与局部改写（`10-23-chapter-versions`）在此基础上新增：
 
-9. **编辑锁**：`const editorLocked = task.running || rewriteLocked`（`rewriteLocked` 由 `RewritePanel.onLockChange` 上报：改写流式中或有待采纳结果）。正文 `readOnly`、标题、保存、`AIConfigSelect`、生成/润色 Tab 都按 `editorLocked` 禁用；`handleSave` 在 `editorLocked` 时不做任何事。离开守卫包含 `rewriteLocked`：确认离开时 `RewritePanel` 卸载，其 `useStreamTask` 自动中止请求，预览结果丢弃（正文不受影响），弹窗文案区分「正在生成 / 有未保存的修改 / 局部改写结果未采纳」。
+9. **编辑锁**：`const editorLocked = aiRunning || rewriteLocked`（`rewriteLocked` 由 `RewritePanel.onLockChange` 上报：改写流式中或有待采纳结果）。正文 `readOnly`、标题、保存、`AIConfigSelect`、生成/润色 Tab 都按 `editorLocked` 禁用；`handleSave` 在 `editorLocked` 时不做任何事。离开守卫包含 `rewriteLocked`：确认离开时 `RewritePanel` 卸载，其 `useStreamTask` 自动中止请求，预览结果丢弃（正文不受影响），弹窗文案区分「正在生成 / 有未保存的修改 / 局部改写结果未采纳」。
 10. **选区跟踪**：文本域 `onSelect/onKeyUp/onMouseUp/onChange` 调 `syncSelection(el)`，状态保存 UTF-16 偏移；只有在发请求时才换算为码点（`utils/textOffset.ts`）。服务端改写正文的路径（生成完成、采纳改写、回滚）统一走 `replaceFromServer(c)`：`applyServerChapter` + 把选区记录移到正文末尾；普通保存仍用 `applyServerChapter`，不重置选区。
 11. **自动保存**：`ensureSaved()`（无改动直接返回 true，否则 `save()` + `已自动保存当前修改`）被整章生成/润色、局部改写开始、回滚共用。
-12. **整章生成**：请求体显式带 `auto_continue: genOptions.autoContinue`（后端默认 false，开关默认开，`utils/preferences.ts` 记住选择）；`generateChapter(..., onContinue)` 收到 `continue` 事件时显示 `字数不足，自动续写第 n 轮` 的 info `Alert`；`done.warning` 存在时用 `message.warning` 提示（正文已保存）。重新生成确认文案提示「当前正文会自动存为历史版本」。
+12. **整章生成**：请求体显式带 `auto_continue: genOptions.autoContinue`（后端默认 false，开关默认开，`utils/preferences.ts` 记住选择）；订阅收到 `continue` 事件（`aiTask.continueInfo`）时显示 `字数不足，自动续写第 n 轮` 的 info `Alert`；`done.warning` 存在时用 `message.warning` 提示（正文已保存）。重新生成确认文案提示「当前正文会自动存为历史版本」。
 13. **版本历史**：标题栏「版本历史」按钮（任何时候都可打开查看）。`restoreDisabled = editorLocked || saving || stuck`。`handleRestore` = `ensureSaved` → `versionApi.restore` → `replaceFromServer` → `onChanged()` + `refreshProject()`。
 
 ### AI 配置页（`src/pages/AIConfigPage.tsx`）

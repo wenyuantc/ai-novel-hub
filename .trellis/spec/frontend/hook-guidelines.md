@@ -6,7 +6,7 @@
 
 ## 概述
 
-项目没有使用数据请求库（没有 React Query/SWR）。`src/hooks/` 中的四个小型自定义 hook 覆盖了全部场景：一次性异步加载（`useLoader`）、流式 AI 任务（`useStreamTask`）、路由参数解析（`useProjectId`）以及派生的 store 选择器（`useHasAIConfig`）。全局缓存数据存放在 Zustand store 中（见 [state-management.md](./state-management.md)）。
+项目没有使用数据请求库（没有 React Query/SWR）。`src/hooks/` 中的五个小型自定义 hook 覆盖了全部场景：一次性异步加载（`useLoader`）、同步流式请求（`useStreamTask`，目前只有局部改写）、后台任务订阅（`useTaskStream`，整章生成 / 润色 / 向导）、路由参数解析（`useProjectId`）以及派生的 store 选择器（`useHasAIConfig`）。全局缓存数据存放在 Zustand store 中（见 [state-management.md](./state-management.md)）。
 
 ---
 
@@ -36,6 +36,26 @@ export function useStreamTask(): {
   if (outcome.status === 'done') { … } else if (outcome.status === 'aborted') { message.info('已停止生成，原有数据未改变') }
   ```
   错误通过 `task.error` 渲染（`<Alert type="error" message="生成失败" description={task.error} />`）。
+
+### `useTaskStream` — `src/hooks/useTaskStream.ts`
+
+```ts
+export type TaskOutcome = TaskEnd | { status: 'detached' } | { status: 'lost'; message: string }
+export function useTaskStream(): {
+  task: Task | null; text: string; running: boolean; error: string | null
+  continueInfo: ContinueEvent | null; reconnecting: boolean
+  follow: (initial: Task) => Promise<TaskOutcome>
+  detach: () => void
+  cancel: () => Promise<void>
+  reset: () => void
+}
+```
+
+- 命令式（与 `useStreamTask` 同形），而不是 design 里的 `useTaskStream(taskId)`：调用方需要在同一个 async 流程里拿到终止结果（章节 `applyServerChapter`、向导 `onDone`）。只读场景（任务面板查看输出）在 effect 里 `follow(task)`。
+- `follow` 先中止上一个订阅，`task` 立即设为传入值（排队位置马上可见），清空 `text`/`error`/`continueInfo`，`running = true`；回调全部经 `subscribeTask`：`snapshot` 覆盖 `text` 并替换 `task`（为 null 时保留）、`delta` 追加、`continue` → `continueInfo`、`progress` 合并 `status/progress/stage/queue_position`（载荷不含 `queue_position` 且不再排队时置 null）、重连时 `reconnecting = true`。
+- 结束：`TaskEnd`（`succeeded` 带 `result`；`failed`/`cancelled`/`interrupted` 带 `detail`），`failed`/`interrupted` 写入 `error`，**取消不算错误**；本地中止（再次 follow、`detach`、卸载）→ `detached`；订阅 4xx / 重连耗尽 → `lost` 并写 `error`。从不抛出。
+- **卸载 / `detach` 只断开订阅，不取消任务**（D1：关闭页面不中断）。`cancel()` 调 `POST /tasks/{id}/cancel`，之后由订阅收到 `error(status=cancelled)` 结束 follow；409（已结束）静默，其他错误抛给调用方。
+- 所有 setState 都用 `controllerRef.current === controller` 守卫，过期订阅的回调被丢弃。
 
 ### `useLoader` — `src/hooks/useLoader.ts`
 
@@ -77,26 +97,37 @@ export function useHasAIConfig(): boolean | null  // store 尚未加载时为 nu
 
 - 读取：`useLoader` + `api/<resource>.ts` 中的函数。跨页面缓存的读取（当前用户、AI 配置、当前项目）改用 store。
 - 写入：在 `async` 处理函数中直接调用 API 函数，然后调用 `reload()` / `setProject()` / `refresh()`。
-- 流式：`useStreamTask().start(runner)`，其中 `runner` 调用 `generateChapter` / `polishChapter` / `runWizard`，它们都基于 `src/api/sse.ts` 中的 `runGeneration` 构建（见下方场景）。
+- 后台任务：`generateChapter` / `polishChapter` / `runWizard` 返回 202 `Task`（普通 JSON），随后 `useTasksStore.track(task)` + `useTaskStream().follow(task)`；订阅基于 `subscribeTask`（见下方场景）。
+- 同步流式：`useStreamTask().start(runner)`，目前只有 `rewriteChapter`（`runGeneration` POST SSE）。
 
 ---
 
 ## 场景：SSE 客户端解析器
 
 ### 1. 范围 / 触发条件
-任何对 `src/api/sse.ts`、流式端点（`POST /api/v1/chapters/{id}/generate`、`/chapters/{id}/polish`、`/projects/{pid}/wizard/{kind}`）或 `backend/app/api/sse.py` 中后端 SSE 帧格式的修改。后端端点是带 JSON body 的 POST，因此无法使用 `EventSource`（仅支持 GET，不能带 body）——流式通过 `fetch` + `ReadableStream` + 手写解析器实现。
+任何对 `src/api/sse.ts`、`src/api/tasks.ts` 的 `subscribeTask`、流式端点（同步：`POST /api/v1/chapters/{id}/rewrite`；任务订阅：`GET /api/v1/tasks/{id}/stream`）或 `backend/app/api/sse.py` 中后端 SSE 帧格式的修改。改写端点是带 JSON body 的 POST，无法使用 `EventSource`；任务订阅虽然是 GET，也走 `fetch`（`getSSE`）以复用帧解析、`ApiError` 归一化和 401 处理，并能用 `AbortSignal` 精确断开。generate / polish / wizard **不再是 SSE**，返回 202 `Task`。
 
 ### 2. 签名
 ```ts
 export interface SSEMessage { event: string; data: string }
 export class SSEParser { feed(chunk: string): SSEMessage[]; flush(): SSEMessage[] }
-export async function postSSE(path: string, body: unknown, handlers: { onMessage: (msg: SSEMessage) => void }, signal?: AbortSignal): Promise<void>
+export function postSSE(path: string, body: unknown, handlers: { onMessage: (msg: SSEMessage) => void }, signal?: AbortSignal): Promise<void>
+export function getSSE(path: string, handlers: { onMessage: (msg: SSEMessage) => void }, signal?: AbortSignal): Promise<void>  // 两者共用 readSSE
 export interface GenerationCallbacks<TDone> {
   onDelta: (text: string) => void; signal?: AbortSignal; parseDone?: (data: unknown) => TDone
   onEvent?: (event: string, data: unknown) => void   // delta/done/error 以外的事件（如 continue）
 }
-// src/api/chapters.ts
-export function generateChapter(cid, body, onDelta, signal?, onContinue?: (e: ContinueEvent) => void): Promise<ChapterDone>
+// src/api/chapters.ts / wizard.ts —— 创建任务（202）
+export function generateChapter(cid, body: GenerateChapterRequest): Promise<Task>
+export function polishChapter(cid, body: PolishChapterRequest): Promise<Task>
+export function runWizard(pid, kind, body: WizardRequest): Promise<Task>
+export function parseChapterDone(result: unknown): ChapterDone | null
+export function parseWizardDone<K>(kind: K, result: unknown): WizardItemMap[K][] | null
+// src/api/tasks.ts
+export type TaskEnd = { status: 'succeeded'; task: Task | null; result: unknown } | { status: 'failed' | 'cancelled' | 'interrupted'; task: Task | null; detail: string }
+export interface TaskStreamHandlers { onSnapshot?(task: Task | null, text); onDelta?(text); onContinue?(e: ContinueEvent); onProgress?(p: TaskProgress); onReconnect?(attempt, delayMs) }
+export function subscribeTask(taskId, handlers, signal?, options?: { maxRetries? = 8; baseDelayMs? = 1000; maxDelayMs? = 15000; stableMs? = 5000; sleep?; now? }): Promise<TaskEnd>
+export function reconnectDelay(attempt, base = 1000, max = 15000): number   // min(base·2^(n-1), max)
 // src/api/chapterVersions.ts
 export function rewriteChapter(cid, body: RewriteRequest, onDelta, signal?): Promise<RewriteDone>
 export async function runGeneration<TDone>(path: string, body: unknown, cb: GenerationCallbacks<TDone>): Promise<TDone>
@@ -109,12 +140,15 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 - 传输格式（后端 `format_sse`）：第一帧是注释 `: stream-start\n\n`，之后是 `event: <delta|done|error>\ndata: <JSON>\n\n`。data 始终是 JSON，因此正文中的换行绝不会破坏帧。
 - 事件 payload：
   - `delta` → `{ "text": string }` → `cb.onDelta(text)`（空文本跳过）。
-  - `done` → 章节：`{ "chapter": ChapterOut, "warning"?: string }`（`ChapterDone`；`generateChapter` 返回整个载荷，`polishChapter` 仍只返回 `Chapter`）；局部改写：`{ text, start, end, original, before, log_id }`（`RewriteDone`，偏移为码点）；向导：`{ "kind": K, "items": [...] }`。先暂存，流结束后返回。
+  - `done` → 局部改写：`{ text, start, end, original, before, log_id }`（`RewriteDone`，偏移为码点）。先暂存，流结束后返回。（章节 `{chapter, warning?}` 与向导 `{kind, items}` 现在是任务 `done.result`，见下方「任务订阅」。）
   - `error` → `{ "detail": string }` → 流结束后 `throw new StreamError(detail)`（兜底为 `生成失败`）。
-  - 其他事件（目前只有整章生成的 `continue` → `{ round, words, target }`，每轮自动续写开始前，round 从 1 起最多 2）→ `cb.onEvent?.(event, data)`；`generateChapter` 用类型守卫校验后转给 `onContinue`。续写轮首个分块前后端会先发一个 `delta {"text":"\n\n"}`，前端无需特殊处理。不认识的事件被忽略，所以新增事件对旧代码兼容。
+  - 其他事件 → `cb.onEvent?.(event, data)`（改写目前没有额外事件；整章生成的 `continue` → `{ round, words, target }` 现在经任务订阅到达，`subscribeTask` 用 `isContinueEvent` 校验后转给 `onContinue`，round 从 1 起最多 2）。续写轮首个分块前后端会先发一个 `delta {"text":"\n\n"}`，前端无需特殊处理。不认识的事件被忽略，所以新增事件对旧代码兼容。
 - `useStreamTask` 不感知额外事件：调用方在 runner 闭包里把自己的回调（如 `setContinueInfo`）传给 API 函数，并在 `start` 前后自行复位。
 - 解析规则：接受任意 chunk 切分；行尾可为 LF、CRLF 或单独的 CR；chunk 末尾的 `\r` 会保留到下一个 chunk（可能是 CRLF 的一半）；以 `:` 开头的行被忽略；`field: value` 去掉一个前导空格；多行 `data:` 以 `\n` 拼接；事件名为空时默认为 `message`；`flush()` 派发最后一个未以空行结尾的事件。`runGeneration` 会忽略非 JSON 的 `data`。
 - 解码器：`TextDecoder('utf-8')` 配合 `{ stream: true }`，使跨 chunk 拆分的多字节中文字符能正确解码；EOF 时执行最终的 `decoder.decode()` + `parser.flush()`；在 `finally` 中执行 `reader.releaseLock()`。
+
+- **任务订阅（`subscribeTask`）**：`GET /tasks/{id}/stream`，事件 `snapshot {task, text}`（每次（重）连接的首帧，**覆盖**本地文本，因此重连不重复不遗漏）/ `delta {text}` / `continue` / `progress {status, progress, stage, queue_position?}` / `done {task, result}` / `error {task, detail}`；`: ping` 心跳注释被解析器忽略。`done` → `{status: 'succeeded', result}`；`error` 按 `task.status` 区分 `cancelled` / `interrupted`，其余（含 `task` 为 null）为 `failed`。
+- **重连**：流结束但没有 `done`/`error`（`StreamError`）、网络错误（`ApiError(0)` / `TypeError`）、5xx、2xx 但非流式 → 按 `reconnectDelay` 退避后重连，触发 `onReconnect`；只有收到 `snapshot` **且**该连接存活满 `stableMs`（5 秒）后才断开，才把连续失败计数清零——「连上即断」反复循环时计数继续累计、退避加长并最终放弃，不会无限 ~1s 重连；连续失败超过 `maxRetries` 抛最后一次错误。4xx（401 / 404 `任务不存在`）不重连，直接抛 `ApiError`。中止（含等待重连期间）抛 `AbortError`，只断开订阅、不影响任务。
 
 ### 4. 校验与错误矩阵
 
@@ -133,6 +167,8 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 
 以上所有情况都通过 `errorMessage(err)`（`ApiError.detail` 或 `Error.message`）到达 UI。后端在中止/出错时会回滚章节状态，因此编辑器随后会调用 `reloadChapter()`。
 
+任务创建（generate / polish / wizard / retry）走普通 JSON：400（无配置 / 端点被拦截）、404、409（`该章节正在生成中，请稍候再试` / `已有任务在进行中，请等待其完成后再试`）都是 `ApiError`，由调用方 `message.error`。任务失败（`error` 事件）→ `TaskEnd.detail`（`useTaskStream.error`）；取消 → `status: 'cancelled'`，`detail = 任务已取消`，不当作错误；服务重启 → `interrupted`，`detail = 服务重启，任务已中断`。
+
 ### 5. 正例 / 基准 / 反例
 - 正例：`: stream-start\n\nevent: delta\ndata: {"text":"你好"}\n\nevent: done\ndata: {}\n\n` → `[{delta, '{"text":"你好"}'}, {done, '{}'}]`。
 - 基准：相同的帧每 3 个字符切分一次，或使用 `\r\n` 且 `\r` 与 `\n` 落在不同 chunk 中 → 得到完全相同的消息。
@@ -147,7 +183,9 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 - `流结束时 flush 未以空行结尾的事件` —— 未结束的 `done` 由 `flush()` 发出。
 - `runGeneration`（stub `fetch` 返回 `ReadableStream`）：delta 累积 + `continue` 走 `onEvent` + done 载荷含 `warning`，并断言 URL 前缀 / `credentials: 'include'` / 请求体；`generateChapter` 把 `continue` 转给 `onContinue`；`error` 事件与缺少 `done` → `StreamError`；409 → `ApiError(status, detail)`；已中止 signal → `isAbortError`。
 
-修改 `postSSE`/`runGeneration` 时，新增使用 stub `fetch`（返回 `ReadableStream`）的测试，断言：非 2xx → 带 `status`/`detail` 的 `ApiError`；`error` 事件 → `StreamError`；缺少 `done` → `StreamError`；已中止的 signal → `isAbortError(err) === true`。
+`src/api/tasks.test.ts`（`subscribeTask`）：GET + `credentials` + 事件分派与 `done.result`；断线（流无终止 + 网络错误）→ 退避 1s/2s 重连、snapshot 覆盖后文本无重复；`error` 按 `task.status` 区分且容忍 `task: null`；404 不重连；5xx 超过上限抛错；「连上即断」循环不清零计数并最终抛错、稳定连接（≥ `stableMs`）后断开才清零；等待重连时中止 → `AbortError`；`reconnectDelay` / `queueLabel` / `taskLink` / list 与 clearFinished 的查询串。
+
+修改 `postSSE`/`getSSE`/`runGeneration`/`subscribeTask` 时，新增使用 stub `fetch`（返回 `ReadableStream`）的测试，断言：非 2xx → 带 `status`/`detail` 的 `ApiError`；`error` 事件 → `StreamError`；缺少 `done` → `StreamError`；已中止的 signal → `isAbortError(err) === true`。
 
 ### 7. 错误写法 vs 正确写法
 ```ts

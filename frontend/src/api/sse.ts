@@ -1,4 +1,4 @@
-// 基于 fetch + ReadableStream 的 SSE 客户端（后端 SSE 接口均为 POST，无法使用 EventSource）
+// 基于 fetch + ReadableStream 的 SSE 客户端（局部改写为 POST + JSON body；任务订阅为 GET，同样走 fetch 以统一错误处理与 401）
 
 import { ApiError, buildUrl, handleErrorResponse } from './client'
 
@@ -84,24 +84,13 @@ export interface StreamHandlers {
 }
 
 /**
- * POST 一个 SSE 接口并逐条回调消息。
+ * 打开一个 SSE 响应并逐条回调消息（POST 与 GET 共用）。
  * 推流前的业务错误（400/404/409 等）以 ApiError 抛出；中止时抛出 AbortError。
  */
-export async function postSSE(
-  path: string,
-  body: unknown,
-  handlers: StreamHandlers,
-  signal?: AbortSignal,
-): Promise<void> {
+async function readSSE(path: string, init: RequestInit, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
   let resp: Response
   try {
-    resp = await fetch(buildUrl(path), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(body ?? {}),
-      credentials: 'include',
-      signal,
-    })
+    resp = await fetch(buildUrl(path), { ...init, credentials: 'include', signal })
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err
     throw new ApiError(0, '网络错误，无法连接服务器')
@@ -128,6 +117,25 @@ export async function postSSE(
   }
 }
 
+/** POST 一个 SSE 接口（局部改写预览）。 */
+export function postSSE(path: string, body: unknown, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
+  return readSSE(
+    path,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body ?? {}),
+    },
+    handlers,
+    signal,
+  )
+}
+
+/** GET 一个 SSE 接口（任务订阅 /tasks/{id}/stream）。 */
+export function getSSE(path: string, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
+  return readSSE(path, { method: 'GET', headers: { Accept: 'text/event-stream' } }, handlers, signal)
+}
+
 /** 业务流事件：delta 增量文本 / done 完成载荷 / error 流内错误；其余事件（如 continue）交给 onEvent。 */
 export interface GenerationCallbacks<TDone> {
   onDelta: (text: string) => void
@@ -145,7 +153,7 @@ export class StreamError extends Error {
   }
 }
 
-function readDetail(data: unknown): string {
+export function readDetail(data: unknown): string {
   if (typeof data === 'object' && data !== null && 'detail' in data) {
     const detail = (data as { detail: unknown }).detail
     if (typeof detail === 'string') return detail
@@ -153,7 +161,7 @@ function readDetail(data: unknown): string {
   return '生成失败'
 }
 
-function readText(data: unknown): string {
+export function readText(data: unknown): string {
   if (typeof data === 'object' && data !== null && 'text' in data) {
     const text = (data as { text: unknown }).text
     if (typeof text === 'string') return text

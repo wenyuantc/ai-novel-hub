@@ -6,7 +6,17 @@ from app.ai.providers import AIProviderError
 from app.models import Chapter, ChapterVersion, GenerationLog
 from app.schemas.chapter import GenerateChapterRequest
 from app.services import generation_log_service, generation_service, version_service
-from tests.helpers import create_ai_config, create_project, parse_sse, register
+from tests.helpers import (
+    Gate,
+    create_ai_config,
+    create_project,
+    final_event,
+    parse_sse,
+    register,
+    run_task,
+    stream_with_gate,
+    streamed_text,
+)
 
 
 async def _setup(client, *, ai: bool = True, content: str = ""):
@@ -133,9 +143,11 @@ async def test_generate_writes_baseline_and_generate_versions(app, client, fake_
     _, _, ch, url = await _setup(client)
     await _set_content_raw(app, ch["id"], "旧稿")
     fake_llm.push("新的正文内容")
-    events = parse_sse((await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 300})).text)
+    task, events = await run_task(
+        client, await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 300})
+    )
     assert events[-1][0] == "done"
-    assert "warning" not in events[-1][1]
+    assert "warning" not in events[-1][1]["result"]
 
     vs = await _versions(client, url)
     assert [(v["seq"], v["source"]) for v in vs] == [(2, "generate"), (1, "baseline")]
@@ -155,6 +167,8 @@ async def test_generate_writes_baseline_and_generate_versions(app, client, fake_
     assert log["output_chars"] == 6 and log["duration_ms"] >= 0
     assert log["params"]["target_words"] == 300 and log["params"]["continuation_rounds"] == 0
     assert log["prompt_tokens"] is None and "messages" not in log
+    # 生成记录关联到对应任务
+    assert log["task_id"] == task["id"]
     detail = (await client.get(f"{url}/generation-logs/{log['id']}")).json()
     assert detail["messages"] == fake_llm.calls[-1]["messages"]
 
@@ -162,7 +176,7 @@ async def test_generate_writes_baseline_and_generate_versions(app, client, fake_
 async def test_generate_skips_baseline_when_saved(client, fake_llm):
     _, _, ch, url = await _setup(client, content="已保存的旧稿")
     fake_llm.push("润色后")
-    events = parse_sse((await client.post(f"/api/v1/chapters/{ch['id']}/polish")).text)
+    _, events = await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/polish"))
     assert events[-1][0] == "done"
     vs = await _versions(client, url)
     assert [v["source"] for v in vs] == ["polish", "manual"]
@@ -173,35 +187,39 @@ async def test_generate_skips_baseline_when_saved(client, fake_llm):
 async def test_generate_error_keeps_versions_and_logs_error(client, fake_llm):
     _, _, ch, url = await _setup(client, content="旧稿")
     fake_llm.push(["部分", AIProviderError("模型调用失败：额度不足")])
-    events = parse_sse((await client.post(f"/api/v1/chapters/{ch['id']}/generate")).text)
-    assert events[-1] == ("error", {"detail": "模型调用失败：额度不足"})
+    task, events = await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate"))
+    assert final_event(events) == ("error", {"detail": "模型调用失败：额度不足"})
 
     assert [v["source"] for v in await _versions(client, url)] == ["manual"]
     assert (await client.get(url)).json()["content"] == "旧稿"
     logs = (await client.get(f"{url}/generation-logs")).json()
     assert [(lg["status"], lg["error"], lg["output_chars"]) for lg in logs] == [("error", "模型调用失败：额度不足", 2)]
+    assert logs[0]["task_id"] == task["id"]
 
 
 async def test_generate_cancelled_logs_cancelled(app, client, fake_llm):
     _, _, ch, url = await _setup(client, content="旧稿")
     me = (await client.get("/api/v1/auth/me")).json()
     fake_llm.push(["第一块", "第二块"])
+    common = {
+        "user_id": me["id"],
+        "chapter_id": ch["id"],
+        "mode": "generate",
+        "req": GenerateChapterRequest(),
+        "cipher": app.state.cipher,
+        "factory": app.state.provider_factory,
+        "ai_timeout": 30,
+        "allow_private": False,
+    }
     async with app.state.sessionmaker() as db:
-        job = await generation_service.prepare_chapter_job(
-            db,
-            user_id=me["id"],
-            chapter_id=ch["id"],
-            mode="generate",
-            req=GenerateChapterRequest(),
-            cipher=app.state.cipher,
-            factory=app.state.provider_factory,
-            ai_timeout=30,
-            allow_private=False,
-            context_budget=12000,
+        claim = await generation_service.validate_and_claim(db, **common)
+        await db.commit()
+        job = await generation_service.build_chapter_job(
+            db, **common, prev_status=claim.prev_status, ai_config_id=claim.ai_config_id, context_budget=12000
         )
     gen = generation_service.run_chapter_job(job, app.state.sessionmaker)
     assert await gen.__anext__() == ("delta", {"text": "第一块"})
-    await gen.aclose()  # 模拟客户端断开
+    await gen.aclose()  # 模拟 runner 被中途关闭（任务取消路径见 test_tasks）
 
     saved = (await client.get(url)).json()
     assert saved["status"] == "draft" and saved["content"] == "旧稿"
@@ -213,22 +231,28 @@ async def test_generate_cancelled_logs_cancelled(app, client, fake_llm):
 # ---------- 自动续写 ----------
 
 
-async def test_auto_continue_rounds_and_join(client, fake_llm):
+async def test_auto_continue_rounds_and_join(app, client, fake_llm):
     _, _, ch, url = await _setup(client)
     fake_llm.push("甲" * 400)
     fake_llm.push("乙" * 300)
     fake_llm.push("丙" * 300)
+    gate = Gate()
+    fake_llm.responses[0] = [gate, *fake_llm.responses[0]]
     resp = await client.post(
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000, "auto_continue": True}
     )
-    events = parse_sse(resp.text)
+    assert resp.status_code == 202
+    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
     assert [d for e, d in events if e == "continue"] == [
         {"round": 1, "words": 400, "target": 1000},
         {"round": 2, "words": 700, "target": 1000},
     ]
+    # 续写轮次同步到任务阶段文案
+    stages = [d["stage"] for e, d in events if e == "progress"]
+    assert "字数不足，自动续写第 1 轮" in stages and "字数不足，自动续写第 2 轮" in stages
     expected = "甲" * 400 + "\n\n" + "乙" * 300 + "\n\n" + "丙" * 300
     assert events[-1][0] == "done"
-    assert events[-1][1]["chapter"]["content"] == expected
+    assert events[-1][1]["result"]["chapter"]["content"] == expected
     assert "".join(d["text"] for e, d in events if e == "delta") == expected
     assert len(fake_llm.calls) == 3
     last = fake_llm.calls[-1]["messages"]
@@ -242,32 +266,39 @@ async def test_auto_continue_rounds_and_join(client, fake_llm):
     assert all("甲" * 400 not in m["content"] for m in detail["messages"])
 
 
-async def test_auto_continue_capped_at_two_rounds(client, fake_llm):
+async def test_auto_continue_capped_at_two_rounds(app, client, fake_llm):
     _, _, ch, _ = await _setup(client)
-    for _ in range(4):
+    gate = Gate()
+    fake_llm.push([gate, "短" * 100])
+    for _ in range(3):
         fake_llm.push("短" * 100)
     resp = await client.post(
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 3000, "auto_continue": True}
     )
-    events = parse_sse(resp.text)
+    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
     assert len([e for e, _ in events if e == "continue"]) == 2
     assert len(fake_llm.calls) == 3
-    assert events[-1][1]["chapter"]["word_count"] == 300
+    assert events[-1][1]["result"]["chapter"]["word_count"] == 300
+    assert streamed_text(events) == "\n\n".join(["短" * 100] * 3)
 
 
-async def test_auto_continue_disabled(client, fake_llm):
+async def test_auto_continue_disabled(app, client, fake_llm):
     _, _, ch, _ = await _setup(client)
-    fake_llm.push("甲" * 100)
+    gate = Gate()
+    fake_llm.push([gate, "甲" * 100])
     resp = await client.post(
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 3000, "auto_continue": False}
     )
-    events = parse_sse(resp.text)
+    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
     assert not [e for e, _ in events if e == "continue"]
-    assert len(fake_llm.calls) == 1
+    assert len(fake_llm.calls) == 1 and events[-1][1]["task"]["stage"] == "已完成"
     # 接口默认不续写（兼容旧客户端）
-    fake_llm.push("乙" * 100)
-    events = parse_sse((await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={})).text)
+    gate = Gate()
+    fake_llm.push([gate, "乙" * 100])
+    resp = await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={})
+    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
     assert not [e for e, _ in events if e == "continue"] and len(fake_llm.calls) == 2
+    assert events[-1][1]["result"]["chapter"]["content"] == "乙" * 100
 
 
 async def test_auto_continue_error_keeps_text_with_warning(client, fake_llm):
@@ -277,10 +308,10 @@ async def test_auto_continue_error_keeps_text_with_warning(client, fake_llm):
     resp = await client.post(
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000, "auto_continue": True}
     )
-    events = parse_sse(resp.text)
-    assert events[-1][0] == "done"
-    assert events[-1][1]["warning"] == "自动续写失败：模型调用失败：额度不足"
-    assert events[-1][1]["chapter"]["content"] == "甲" * 400
+    task, events = await run_task(client, resp)
+    assert events[-1][0] == "done" and task["status"] == "succeeded"
+    assert events[-1][1]["result"]["warning"] == "自动续写失败：模型调用失败：额度不足"
+    assert events[-1][1]["result"]["chapter"]["content"] == "甲" * 400
     saved = (await client.get(url)).json()
     assert saved["content"] == "甲" * 400 and saved["status"] == "done"
     log = (await client.get(f"{url}/generation-logs")).json()[0]
@@ -353,7 +384,7 @@ async def test_log_prune_per_project(app, client):
 async def test_versions_and_logs_cross_user_404(client, make_client, fake_llm):
     _, _, ch, url = await _setup(client, content="甲的正文")
     fake_llm.push("改写")
-    await client.post(f"/api/v1/chapters/{ch['id']}/generate")
+    await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate"))
     vid = (await _versions(client, url))[0]["id"]
     lid = (await client.get(f"{url}/generation-logs")).json()[0]["id"]
 

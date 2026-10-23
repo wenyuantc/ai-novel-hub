@@ -1,10 +1,10 @@
 """Server-Sent Events 输出。
 
 事件格式：
-    event: delta | done | error
+    event: <name>
     data: <JSON>
 
-data 一律 JSON 编码，避免正文中的换行破坏 SSE 帧。
+data 一律 JSON 编码，避免正文中的换行破坏 SSE 帧。事件名为空串表示心跳，渲染为注释帧 ": ping"。
 """
 
 import json
@@ -33,6 +33,6 @@ def sse_response(events: AsyncIterator[tuple[str, dict]]) -> StreamingResponse:
             # 先发一条注释帧，促使代理/浏览器尽早建立流
             yield ": stream-start\n\n"
             async for event, data in stream:
-                yield format_sse(event, data)
+                yield format_sse(event, data) if event else ": ping\n\n"
 
     return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)

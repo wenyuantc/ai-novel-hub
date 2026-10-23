@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { generateChapter } from './chapters'
 import { ApiError } from './client'
 import { isAbortError, runGeneration, SSEParser, StreamError, type SSEMessage } from './sse'
 
@@ -87,17 +86,6 @@ describe('runGeneration', () => {
     expect(url).toBe('/api/v1/chapters/1/generate')
     expect(init.credentials).toBe('include')
     expect(JSON.parse(String(init.body))).toEqual({ auto_continue: true })
-  })
-
-  it('generateChapter 把 continue 事件转给 onContinue', async () => {
-    vi.stubGlobal('fetch', async () =>
-      sseResponse([frame('continue', { round: 2, words: 2000, target: 3000 }), frame('done', { chapter: { id: 7 } })]),
-    )
-    const rounds: number[] = []
-    const done = await generateChapter(7, {}, () => {}, undefined, (e) => rounds.push(e.round))
-    expect(rounds).toEqual([2])
-    expect(done.chapter.id).toBe(7)
-    expect(done.warning).toBeUndefined()
   })
 
   it('error 事件抛 StreamError；缺少 done 也抛 StreamError', async () => {

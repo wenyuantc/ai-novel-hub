@@ -5,10 +5,11 @@ import { useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/auth'
 import ChangePasswordModal from './ChangePasswordModal'
+import TaskPanel from './TaskPanel'
 
 const { Header, Content } = Layout
 
-/** 顶层布局：顶栏（导航 + 用户菜单：修改密码 / 用户管理（仅管理员） / 登出）。 */
+/** 顶层布局：顶栏（导航 + 用户菜单：修改密码 / 用户管理（仅管理员） / 登出）+ 右下角后台任务面板。 */
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
@@ -67,6 +68,7 @@ export default function AppLayout() {
         <Outlet />
       </Content>
       <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
+      <TaskPanel />
     </Layout>
   )
 }

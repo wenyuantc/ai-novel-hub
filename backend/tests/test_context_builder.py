@@ -1,5 +1,5 @@
 from app.services.context_builder import PriorChapter, assemble_context
-from tests.helpers import create_ai_config, create_project, register
+from tests.helpers import create_ai_config, create_project, register, run_task
 
 
 def _chapters(n: int, size: int) -> list[PriorChapter]:
@@ -76,7 +76,7 @@ async def test_generate_uses_budgeted_context(app, client, fake_llm):
         await client.post(f"{base}/chapters", json={"title": f"章{i}", "content": f"内容{i}" + "文" * 600})
     target = (await client.post(f"{base}/chapters", json={"title": "新章"})).json()
     fake_llm.push("新章节正文")
-    await client.post(f"/api/v1/chapters/{target['id']}/generate")
+    await run_task(client, await client.post(f"/api/v1/chapters/{target['id']}/generate"))
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "内容5" in prompt
     assert "第1章 章1" not in prompt

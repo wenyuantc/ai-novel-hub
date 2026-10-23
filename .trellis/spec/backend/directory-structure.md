@@ -48,8 +48,9 @@ backend/
 │   │       ├── ai_configs.py # /ai-configs CRUD、/{id}/default、/{id}/test
 │   │       ├── projects.py   # /projects CRUD、/{id}/export
 │   │       ├── story.py      # /projects/{id}/world|characters|outlines（路由工厂）
-│   │       ├── chapters.py   # 章节 CRUD、/chapters/{id}/generate|polish（SSE）
-│   │       └── wizard.py     # /projects/{id}/wizard/{outline|characters|world}（SSE）
+│   │       ├── chapters.py   # 章节 CRUD、/chapters/{id}/generate|polish（创建后台任务，202）
+│   │       ├── tasks.py      # /tasks 列表 / 详情 / output / stream（SSE 订阅）/ cancel / retry / 删除 / 清理
+│   │       └── wizard.py     # /projects/{id}/wizard/{outline|characters|world}（创建后台任务，202）
 │   ├── core/
 │   │   ├── config.py         # Settings（pydantic-settings）、fail-fast 校验器
 │   │   ├── database.py       # create_engine()、create_sessionmaker()
@@ -65,8 +66,14 @@ backend/
 │   │   ├── auth_service.py        ai_config_service.py   project_service.py
 │   │   ├── story_service.py       chapter_service.py     export_service.py
 │   │   ├── context_builder.py     # 带字符预算的章节 prompt 上下文
-│   │   ├── generation_service.py  # 章节生成/润色任务（prepare + run）
-│   │   └── wizard_service.py      # 大纲/角色/世界观任务 + JSON 规范化
+│   │   ├── generation_service.py  # 章节生成/润色（validate_and_claim + build_chapter_job + run）
+│   │   ├── wizard_service.py      # 大纲/角色/世界观（validate + build + run）+ JSON 规范化
+│   │   ├── task_service.py        # 后台任务 API 入口：创建 / 列表 / 取消 / 重试 / 删除 / 清理 / 保留裁剪
+│   │   └── task_engine/           # 统一持久化后台任务引擎（单进程，数据库即队列）
+│   │       ├── engine.py          # TaskEngine：start/stop/recover、调度循环、_run/_finalize、取消、订阅
+│   │       ├── hub.py             # TaskHub：已输出文本缓冲 + 订阅者队列（快照与注册同一同步临界区）
+│   │       ├── registry.py        # TaskHandler 协议、TaskContext、TaskSpec、register/get_handler
+│   │       └── handlers/          # 导入即注册：chapter.py（chapter.*）、wizard.py（wizard.*）
 │   └── ai/
 │       ├── endpoint_guard.py # 针对用户提供的 Base URL 的 SSRF 防护
 │       ├── json_extract.py   # 从模型输出中容错提取 JSON
@@ -116,9 +123,11 @@ service 函数以 `db: AsyncSession` 和 `user_id: int` 作为前两个参数，
 5. 任何 LLM 调用都经由 `ai_config_service.resolve_config()` +
    `ai_config_service.build_provider()`；prompt 文本放在 `app/ai/prompts/` 中，绝不内联在 service 里。
 
-AI 流式端点拆分为 **prepare** 步骤（使用请求 session，可能抛出 `AppError`）
-和 **run** 异步生成器（使用从 sessionmaker 获取的独立 session）——
-见 `generation_service.py` / `wizard_service.py` 以及 `error-handling.md` 中的 SSE 契约。
+长耗时 AI 操作走**后台任务**：在 `task_engine/handlers/` 实现 `TaskHandler` 并 `register()`，
+`validate_and_claim` 在创建请求内同步校验（可能抛出 `AppError` → 4xx），`build_job` / `run` 在引擎中用
+sessionmaker 获取的独立 session 执行；路由只调用 `task_service.create_task` 返回 202。
+局部改写预览仍是同步 SSE 的 **prepare** + **run** 两阶段（`rewrite_service.py`）。
+见 `error-handling.md`「后台任务与 SSE 契约」与 `database-guidelines.md`「后台任务表」。
 
 重复性的 CRUD 由工厂生成，而非复制粘贴：
 `backend/app/api/v1/story.py` 中的 `_make_router(segment, kind, create_schema, update_schema, out_schema, tag)`，
@@ -145,6 +154,7 @@ AI 流式端点拆分为 **prepare** 步骤（使用请求 session，可能抛�
 
 - 轻薄路由 + service 拆分：`backend/app/api/v1/ai_configs.py` 搭配 `backend/app/services/ai_config_service.py`。
 - 通用 CRUD 工厂：`backend/app/api/v1/story.py` + `backend/app/services/story_service.py`。
-- 两阶段流式任务：`backend/app/services/generation_service.py`
-  （`prepare_chapter_job` / `run_chapter_job`）。
+- 后台任务类型：`backend/app/services/task_engine/handlers/chapter.py` 包装
+  `generation_service.validate_and_claim` / `build_chapter_job` / `run_chapter_job`。
+- 同步两阶段流式：`backend/app/services/rewrite_service.py`（`prepare_rewrite_job` / `run_rewrite_job`）。
 - Provider 抽象：`backend/app/ai/providers/base.py` 及其三个实现。

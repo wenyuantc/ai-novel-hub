@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SSE 契约：本任务把 generate/polish/wizard 改为任务订阅"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键、原子状态更新、版本写入规则（runner 复用）"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 task_engine 包的分层位置"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离、禁止模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "章节编辑器与向导现有行为，需按任务化调整"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useStreamTask 与 SSE 客户端契约，新增 useTaskStream"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "新增 tasks store 与登出清空约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像与 API 客户端契约"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/current-inventory.md", "reason": "现状与扩展挂点"}

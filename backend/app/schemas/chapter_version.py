@@ -49,6 +49,8 @@ class GenerationLogBrief(BaseModel):
     error: str
     output_chars: int
     duration_ms: int
+    # 产生该调用的后台任务（局部改写为同步调用，恒为空；任务被清理后置空）
+    task_id: int | None = None
     prompt_tokens: int | None
     completion_tokens: int | None
     created_at: datetime

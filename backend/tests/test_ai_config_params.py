@@ -6,7 +6,7 @@ from app.ai.providers.gemini import thinking_config
 from app.models import AIConfig
 from app.services import generation_service
 from app.services.ai_config_service import context_char_budget, max_output_tokens
-from tests.helpers import create_ai_config, register
+from tests.helpers import create_ai_config, register, run_task
 from tests.test_chapters import _setup
 
 
@@ -113,7 +113,8 @@ async def test_generation_passes_thinking_and_max_tokens(client, fake_llm):
     ch = (await client.post(f"{base}/chapters", json={"outline_id": o1["id"]})).json()
     fake_llm.push("正文内容")
     resp = await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000})
-    assert resp.status_code == 200
+    task, _ = await run_task(client, resp)
+    assert task["status"] == "succeeded"
     call = fake_llm.calls[-1]
     assert call["thinking"] == "medium"
     assert call["max_tokens"] == 16000
@@ -140,7 +141,7 @@ async def test_chapter_context_budget_from_config(client, fake_llm, monkeypatch)
 
     monkeypatch.setattr(generation_service, "build_chapter_context", _spy)
     fake_llm.push("正文")
-    await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000})
+    await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000}))
     assert seen == [(32 - 8) * 1000 - 4000]
 
 

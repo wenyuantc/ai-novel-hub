@@ -1,9 +1,12 @@
-import { Alert, App, Button, Col, Form, Input, InputNumber, Row, Space } from 'antd'
-import { useState } from 'react'
-import type { WizardItemMap, WizardKind, WizardRequest } from '../api/types'
-import { runWizard, WIZARD_KIND_LABELS } from '../api/wizard'
-import { useStreamTask } from '../hooks/useStreamTask'
+import { Alert, App, Button, Col, Form, Input, InputNumber, Progress, Row, Space, Typography } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { errorMessage } from '../api/client'
+import { queueLabel, taskApi, wizardTaskKind } from '../api/tasks'
+import type { Task, WizardItemMap, WizardKind, WizardRequest } from '../api/types'
+import { parseWizardDone, runWizard, WIZARD_KIND_LABELS } from '../api/wizard'
 import { useHasAIConfig } from '../hooks/useHasAIConfig'
+import { useTaskStream } from '../hooks/useTaskStream'
+import { useTasksStore } from '../stores/tasks'
 import AIConfigSelect from './AIConfigSelect'
 import StreamOutput from './StreamOutput'
 import { CharacterPreview, OutlinePreview, WorldPreview } from './StoryPreview'
@@ -32,7 +35,7 @@ const PLACEHOLDERS: Record<WizardKind, string> = {
   outline: '例如：前期节奏快，第一卷结尾安排一次重大反转',
 }
 
-/** AI 向导生成器（世界观 / 角色 / 大纲），流式展示原文，完成后回调结构化结果。 */
+/** AI 向导生成器（世界观 / 角色 / 大纲）：创建后台任务并订阅实时原文，挂载时自动接上进行中的同类任务，完成后回调结构化结果。 */
 export default function WizardGenerator<K extends WizardKind>({
   projectId,
   kind,
@@ -45,9 +48,61 @@ export default function WizardGenerator<K extends WizardKind>({
   const [form] = Form.useForm<FormValues>()
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   const [result, setResult] = useState<WizardItemMap[K][] | null>(null)
-  const task = useStreamTask()
+  const task = useTaskStream()
+  const [starting, setStarting] = useState(false)
+  const trackTask = useTasksStore((s) => s.track)
   const hasConfig = useHasAIConfig()
   const label = WIZARD_KIND_LABELS[kind]
+  const running = task.running || starting
+
+  // onRunningChange 用 ref 保存最新回调，避免父组件内联函数导致 effect 反复执行
+  const runningCbRef = useRef(onRunningChange)
+  useEffect(() => {
+    runningCbRef.current = onRunningChange
+  })
+  useEffect(() => {
+    runningCbRef.current?.(running)
+  }, [running])
+
+  const followTask = async (t: Task) => {
+    const outcome = await task.follow(t)
+    if (outcome.status === 'succeeded') {
+      const items = parseWizardDone(kind, outcome.result) ?? []
+      setResult(items)
+      message.success(`${label}生成完成，共 ${items.length} 条`)
+      onDone?.(items)
+    } else if (outcome.status === 'cancelled') {
+      message.info('已停止生成，原有数据未改变')
+    }
+  }
+  const followRef = useRef(followTask)
+  useEffect(() => {
+    followRef.current = followTask
+  })
+
+  // 挂载时接上同项目同类向导的活动任务（关闭页面 / 弹窗后重新打开）
+  useEffect(() => {
+    let alive = true
+    taskApi
+      .list({ project_id: projectId, kind: wizardTaskKind(kind), active: true, limit: 1 })
+      .then((list) => {
+        if (alive && list[0]) void followRef.current(list[0])
+      })
+      .catch(() => {
+        // 忽略：查询失败时按无活动任务处理
+      })
+    return () => {
+      alive = false
+    }
+  }, [projectId, kind])
+
+  const handleCancel = async () => {
+    try {
+      await task.cancel()
+    } catch (err) {
+      message.error(errorMessage(err))
+    }
+  }
 
   const handleGenerate = async () => {
     const values = await form.validateFields()
@@ -59,16 +114,18 @@ export default function WizardGenerator<K extends WizardKind>({
       body.character_count = values.character_count
     }
     setResult(null)
-    onRunningChange?.(true)
-    const outcome = await task.start((onDelta, signal) => runWizard(projectId, kind, body, onDelta, signal))
-    onRunningChange?.(false)
-    if (outcome.status === 'done') {
-      setResult(outcome.value)
-      message.success(`${label}生成完成，共 ${outcome.value.length} 条`)
-      onDone?.(outcome.value)
-    } else if (outcome.status === 'aborted') {
-      message.info('已停止生成，原有数据未改变')
+    setStarting(true)
+    let created: Task
+    try {
+      created = await runWizard(projectId, kind, body)
+    } catch (err) {
+      message.error(errorMessage(err))
+      setStarting(false)
+      return
     }
+    setStarting(false)
+    trackTask(created)
+    await followTask(created)
   }
 
   const renderResult = () => {
@@ -90,11 +147,11 @@ export default function WizardGenerator<K extends WizardKind>({
       <Form
         form={form}
         layout="vertical"
-        disabled={task.running}
+        disabled={running}
         initialValues={{ instruction: '', volume_count: 2, chapters_per_volume: 10, character_count: 5 }}
       >
         <Form.Item label="AI 配置">
-          <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={task.running} />
+          <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={running} />
         </Form.Item>
         {kind === 'outline' && (
           <Row gutter={16}>
@@ -124,9 +181,9 @@ export default function WizardGenerator<K extends WizardKind>({
         </Form.Item>
       </Form>
       <Space>
-        {task.running ? (
-          <Button danger onClick={task.stop}>
-            停止
+        {running ? (
+          <Button danger disabled={!task.running} onClick={() => void handleCancel()}>
+            {task.task?.status === 'queued' ? '取消排队' : '停止'}
           </Button>
         ) : (
           <Button type="primary" onClick={() => void handleGenerate()} disabled={hasConfig === false}>
@@ -134,7 +191,21 @@ export default function WizardGenerator<K extends WizardKind>({
           </Button>
         )}
       </Space>
-      {task.error && <Alert type="error" showIcon message="生成失败" description={task.error} />}
+      {task.running && task.task?.status === 'queued' && (
+        <Alert type="info" showIcon message={queueLabel(task.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
+      )}
+      {task.running && task.task?.status === 'running' && (
+        <div>
+          <Progress percent={task.task.progress} size="small" status="active" style={{ marginBottom: 0 }} />
+          {task.task.stage && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {task.task.stage}
+            </Typography.Text>
+          )}
+        </div>
+      )}
+      {task.reconnecting && <Alert type="warning" showIcon message="连接中断，正在重连…（任务仍在后台运行）" />}
+      {task.error && !running && <Alert type="error" showIcon message="生成失败" description={task.error} />}
       {(task.running || task.text) && <StreamOutput text={task.text} running={task.running} />}
       {showResult && renderResult()}
     </Space>

@@ -7,6 +7,7 @@ import { router } from './router'
 import { useAIConfigStore } from './stores/aiConfigs'
 import { useAuthStore } from './stores/auth'
 import { useProjectStore } from './stores/project'
+import { useTasksStore } from './stores/tasks'
 
 export default function App() {
   const init = useAuthStore((s) => s.init)
@@ -23,6 +24,7 @@ export default function App() {
   useEffect(() => {
     useAIConfigStore.getState().reset()
     useProjectStore.getState().reset()
+    useTasksStore.getState().reset()
   }, [userId])
 
   return (

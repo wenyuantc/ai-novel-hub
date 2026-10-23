@@ -1,0 +1,110 @@
+import { create } from 'zustand'
+import { isActiveTask, taskApi } from '../api/tasks'
+import type { Task } from '../api/types'
+
+/** 有活动任务时的轮询间隔 */
+export const POLL_ACTIVE_MS = 3000
+/** 没有活动任务时的轮询间隔 */
+export const POLL_IDLE_MS = 15000
+
+export function pollInterval(activeCount: number): number {
+  return activeCount > 0 ? POLL_ACTIVE_MS : POLL_IDLE_MS
+}
+
+/** 把一个任务合并进活动列表：已结束则移除，否则按 id 覆盖/插入；保持 id 倒序（与后端列表一致）。 */
+export function upsertActive(list: Task[], task: Task): Task[] {
+  const rest = list.filter((t) => t.id !== task.id)
+  if (!isActiveTask(task.status)) return rest
+  return [...rest, task].sort((a, b) => b.id - a.id)
+}
+
+/** 上一轮活动、本轮已不在活动列表中的任务数（即刚结束的任务数） */
+export function countFinished(prev: Task[], next: Task[]): number {
+  const ids = new Set(next.map((t) => t.id))
+  return prev.filter((t) => !ids.has(t.id)).length
+}
+
+interface TasksState {
+  /** 当前用户的排队 + 运行中任务（id 倒序） */
+  active: Task[]
+  loaded: boolean
+  /** 每当有活动任务结束（从列表中消失）或被本地删除/清理时递增，供「最近」列表重新加载 */
+  version: number
+  /** 拉取活动任务并按新节奏安排下一次轮询 */
+  refresh: () => Promise<void>
+  /** 本地创建 / 重试 / 取消任务后调用：立即合并并刷新（切到 3 秒节奏） */
+  track: (task: Task) => void
+  /** 本地删除 / 清理已结束任务后调用 */
+  bump: () => void
+  /** 开始轮询（引用计数），返回停止函数 */
+  startPolling: () => () => void
+  reset: () => void
+}
+
+let pollers = 0
+let timer: ReturnType<typeof setTimeout> | null = null
+// 每次请求 / reset 递增：丢弃过期响应（例如切换用户后到达的上一个用户的结果）
+let requestSeq = 0
+let epoch = 0
+
+export const useTasksStore = create<TasksState>((set, get) => {
+  const schedule = () => {
+    if (timer) clearTimeout(timer)
+    timer = null
+    if (pollers <= 0) return
+    timer = setTimeout(() => void get().refresh(), pollInterval(get().active.length))
+  }
+
+  return {
+    active: [],
+    loaded: false,
+    version: 0,
+
+    refresh: async () => {
+      const seq = ++requestSeq
+      const myEpoch = epoch
+      try {
+        const list = await taskApi.list({ active: true, limit: 200 })
+        if (seq !== requestSeq || myEpoch !== epoch) return
+        const prev = get().active
+        const finished = countFinished(prev, list)
+        set({ active: list, loaded: true, version: finished > 0 ? get().version + 1 : get().version })
+      } catch {
+        // 轮询失败静默（401 由全局处理器负责登出）
+      } finally {
+        if (seq === requestSeq && myEpoch === epoch) schedule()
+      }
+    },
+
+    track: (task) => {
+      set({ active: upsertActive(get().active, task), version: get().version + 1 })
+      void get().refresh()
+    },
+
+    bump: () => set({ version: get().version + 1 }),
+
+    startPolling: () => {
+      pollers += 1
+      void get().refresh()
+      let stopped = false
+      return () => {
+        if (stopped) return
+        stopped = true
+        pollers -= 1
+        if (pollers <= 0 && timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+      }
+    },
+
+    reset: () => {
+      epoch += 1
+      if (timer) clearTimeout(timer)
+      timer = null
+      set({ active: [], loaded: false, version: get().version + 1 })
+      // 仍有轮询者（例如登录后 AppLayout 先于 App 的重置 effect 挂载）：用新会话重新开始
+      if (pollers > 0) void get().refresh()
+    },
+  }
+})
