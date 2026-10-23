@@ -49,3 +49,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: P0-2 统一持久化后台任务引擎
+<!-- trellis-session: v=2 fp=543840001c50da40 -->
+
+**Date**: 2026-10-23
+**Task**: P0-2 统一持久化后台任务引擎
+**Branch**: `main`
+
+### Summary
+
+数据库即队列的任务引擎：并发上限与资源互斥、生成/润色/向导改为后台任务、SSE 快照+增量订阅与断线重连、取消、重启中断与重试、任务浮窗；浏览器冒烟验证 AC1-AC6
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9f94b81` | feat: 统一持久化后台任务引擎与任务面板 |
+
+### Status
+
+[OK] **Completed**
