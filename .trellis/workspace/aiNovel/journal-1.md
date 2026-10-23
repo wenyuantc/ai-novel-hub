@@ -71,3 +71,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: P0-3 结构化设定体系
+<!-- trellis-session: v=2 fp=def2956a9c8a3237 -->
+
+**Date**: 2026-10-23
+**Task**: P0-3 结构化设定体系
+**Branch**: `main`
+
+### Summary
+
+角色结构化与别名、组织嵌套与成员、关系类型正反称呼与历史、懒加载关系图谱、AI 生成角色/组织与旧关系解析任务、卡片跨项目导入导出、章节精准选角上下文；拆出 career-system；浏览器冒烟验证 AC3-AC8
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `18f9c77` | feat: 结构化设定体系（角色、组织、关系图谱、卡片导入导出、精准上下文） |
+
+### Status
+
+[OK] **Completed**
