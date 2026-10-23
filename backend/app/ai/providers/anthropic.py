@@ -17,9 +17,12 @@ DEFAULT_MAX_TOKENS = 8192
 
 # 4.5 及更早的模型不支持 adaptive thinking，只能用 budget_tokens
 _LEGACY_THINKING_MODEL = re.compile(r"claude-3|claude-(opus|sonnet|haiku)-4(-[0-5])?(-\d{8})?$")
-_LEGACY_THINKING_BUDGET = {"low": 2048, "medium": 8192, "high": 16384}
+# max 档受 Opus 4 / 4.1 输出上限 32000 约束：budget + 正文预留 ≤ 32000
+_LEGACY_THINKING_BUDGET = {"low": 2048, "medium": 8192, "high": 16384, "xhigh": 24576, "max": 27648}
 # budget_tokens 必须小于 max_tokens，额外留给正文的空间
 _LEGACY_ANSWER_RESERVE = 4096
+# xhigh 自 4.7 起才有，4.6 降为 high
+_NO_XHIGH_MODEL = re.compile(r"claude-(opus|sonnet|haiku)-4-6")
 
 
 def thinking_kwargs(model: str, thinking: ThinkingLevel, max_tokens: int) -> tuple[dict, int]:
@@ -32,7 +35,8 @@ def thinking_kwargs(model: str, thinking: ThinkingLevel, max_tokens: int) -> tup
             {"thinking": {"type": "enabled", "budget_tokens": budget}},
             max(max_tokens, budget + _LEGACY_ANSWER_RESERVE),
         )
-    return {"thinking": {"type": "adaptive"}, "output_config": {"effort": thinking}}, max_tokens
+    effort = "high" if thinking == "xhigh" and _NO_XHIGH_MODEL.search(model) else thinking
+    return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}, max_tokens
 
 
 class AnthropicProvider(LLMProvider):

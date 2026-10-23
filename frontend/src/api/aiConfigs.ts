@@ -28,7 +28,9 @@ export const PROVIDER_LABELS: Record<AIConfig['provider'], string> = {
 
 export const THINKING_LABELS: Record<ThinkingLevel, string> = {
   off: '关闭',
-  low: '低',
-  medium: '中',
-  high: '高',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
 }

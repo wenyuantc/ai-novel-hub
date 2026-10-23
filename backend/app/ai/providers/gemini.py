@@ -14,13 +14,16 @@ from app.ai.providers.base import (
     split_system,
 )
 
-# Gemini 1.x / 2.x 用 thinking_budget；3 及以后用 thinking_level
+# Gemini 1.x / 2.x 用 thinking_budget（-1 = 动态，由模型在自身上限内决定）；3 及以后用 thinking_level
 _BUDGET_MODEL = re.compile(r"gemini-[12](\.|-|$)")
-_THINKING_BUDGET = {"low": 2048, "medium": 8192, "high": 24576}
+_THINKING_BUDGET = {"low": 2048, "medium": 8192, "high": 16384, "xhigh": 24576, "max": -1}
+# Gemini 最高只有 HIGH，xhigh / max 统一取 HIGH
 _THINKING_LEVEL = {
     "low": types.ThinkingLevel.LOW,
     "medium": types.ThinkingLevel.MEDIUM,
     "high": types.ThinkingLevel.HIGH,
+    "xhigh": types.ThinkingLevel.HIGH,
+    "max": types.ThinkingLevel.HIGH,
 }
 
 

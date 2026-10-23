@@ -18,7 +18,7 @@ export interface Credentials {
 export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'
 
 /** off = 不发送思考参数 */
-export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface AIConfig {
   id: number

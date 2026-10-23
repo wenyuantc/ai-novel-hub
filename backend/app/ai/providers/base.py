@@ -9,7 +9,7 @@ class ChatMessage(TypedDict):
 
 
 # off = 不发送任何思考参数（默认会思考的模型按其默认行为）
-ThinkingLevel = Literal["off", "low", "medium", "high"]
+ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 
 class ModelInfo(TypedDict):

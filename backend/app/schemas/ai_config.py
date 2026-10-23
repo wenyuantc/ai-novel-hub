@@ -4,7 +4,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, model_validator
 
 ProviderName = Literal["openai_compat", "anthropic", "gemini"]
-ThinkingLevel = Literal["off", "low", "medium", "high"]
+ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 # 单位 K（×1000 tokens）
 ContextWindowK = Field(default=None, ge=1, le=2000)

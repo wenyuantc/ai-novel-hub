@@ -395,7 +395,7 @@ export default function AIConfigPage() {
           <Form.Item
             name="thinking_level"
             label="思考等级"
-            extra="关闭时不发送思考参数；部分模型默认即会思考，无法强制关闭"
+            extra="关闭时不发送思考参数（部分模型默认即会思考，无法强制关闭）。xhigh / max 并非所有模型都支持，不支持时请改用 high"
           >
             <Select options={THINKING_OPTIONS} />
           </Form.Item>

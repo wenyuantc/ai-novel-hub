@@ -352,7 +352,7 @@ Touching `ai_configs.thinking_level|context_window_k|max_output_k`, a provider's
 
 ### 2. Signatures
 ```python
-ThinkingLevel = Literal["off", "low", "medium", "high"]          # app/ai/providers/base.py
+ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]  # base.py + schemas (keep in sync)
 LLMProvider.generate_stream(messages, model, *, temperature=None, max_tokens=None, thinking="off")
 LLMProvider.list_models() -> list[ModelInfo]                      # ModelInfo = {id, name}
 ai_config_service.max_output_tokens(cfg) -> int | None           # max_output_k * 1000
@@ -363,9 +363,12 @@ ai_config_service.context_char_budget(cfg, default) -> int        # replaces CON
 - K = 1000 tokens (not 1024): vendor "64K output" caps are 64000.
 - `thinking="off"` sends **no** thinking parameter. Never send `{"type": "disabled"}` — newer Claude
   models (Opus 5.5, Sonnet 5.5, Fable) reject it with 400.
-- low/medium/high: OpenAI `reasoning_effort`; Claude 4.6+ `thinking={"type":"adaptive"}` +
-  `output_config={"effort":lvl}`; Claude ≤4.5 / 3.x `budget_tokens` 2048/8192/16384 with
-  `max_tokens ≥ budget+4096`; Gemini 1/2 `thinking_budget`, Gemini 3+ `thinking_level`.
+- low…max: OpenAI `reasoning_effort=lvl` (passed through; unsupported levels error upstream);
+  Claude 4.6+ `thinking={"type":"adaptive"}` + `output_config={"effort":lvl}` (4.6 has no `xhigh` →
+  sent as `high`); Claude ≤4.5 / 3.x `budget_tokens` 2048/8192/16384/24576/27648 with
+  `max_tokens ≥ budget+4096` (max capped so Opus 4.1's 32000 output limit holds);
+  Gemini 1/2 `thinking_budget` 2048/8192/16384/24576/-1(dynamic); Gemini 3+ `thinking_level`,
+  xhigh/max → HIGH.
 - Providers yield answer text only (Anthropic `text_stream`, Gemini `chunk.text` skip thoughts).
 - Connectivity test always `thinking="off", max_tokens=16`.
 - Context budget: `(context_window_k − (max_output_k or 8)) × 1000 − 4000`, 1 char ≈ 1 token, floor 1000;

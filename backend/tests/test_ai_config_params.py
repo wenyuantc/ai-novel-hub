@@ -32,7 +32,7 @@ async def test_defaults_and_roundtrip(client):
 @pytest.mark.parametrize(
     "extra",
     [
-        {"thinking_level": "max"},
+        {"thinking_level": "ultra"},
         {"context_window_k": 0},
         {"context_window_k": 2001},
         {"max_output_k": 257},
@@ -180,8 +180,27 @@ def test_anthropic_thinking_mapping(model, expected_type):
     assert thinking_kwargs(model, "off", 8192) == ({}, 8192)
 
 
+@pytest.mark.parametrize("level", ["low", "medium", "high", "xhigh", "max"])
+async def test_all_levels_accepted(client, level):
+    await register(client)
+    assert (await create_ai_config(client, thinking_level=level))["thinking_level"] == level
+
+
+def test_anthropic_xhigh_and_max():
+    assert thinking_kwargs("claude-opus-5-5", "max", 8192)[0]["output_config"] == {"effort": "max"}
+    assert thinking_kwargs("claude-opus-4-7", "xhigh", 8192)[0]["output_config"] == {"effort": "xhigh"}
+    # 4.6 没有 xhigh
+    assert thinking_kwargs("claude-sonnet-4-6", "xhigh", 8192)[0]["output_config"] == {"effort": "high"}
+    # 旧模型 max 档不超过 Opus 4.1 的 32000 输出上限
+    kwargs, limit = thinking_kwargs("claude-opus-4-1", "max", 8192)
+    assert kwargs["thinking"]["budget_tokens"] < limit <= 32000
+
+
 def test_gemini_thinking_mapping():
     assert thinking_config("gemini-2.5-pro", "off") is None
     assert thinking_config("gemini-2.5-flash", "low").thinking_budget == 2048
     cfg = thinking_config("gemini-3-pro-preview", "medium")
     assert cfg.thinking_budget is None and cfg.thinking_level.value == "MEDIUM"
+    assert thinking_config("gemini-3-pro-preview", "max").thinking_level.value == "HIGH"
+    assert thinking_config("gemini-2.5-pro", "xhigh").thinking_budget == 24576
+    assert thinking_config("gemini-2.5-pro", "max").thinking_budget == -1
