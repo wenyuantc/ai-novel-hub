@@ -27,3 +27,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: MuMu 对标规划与 P0-1 章节版本实现
+<!-- trellis-session: v=2 fp=6d0ead72fe320a30 -->
+
+**Date**: 2026-10-23
+**Task**: MuMu 对标规划与 P0-1 章节版本实现
+**Branch**: `main`
+
+### Summary
+
+调研 MuMuAINovel 四个功能域并盘点本项目，产出差距清单与 13 个子任务拆分；完成 chapter-versions：版本历史（固定 10 分钟合并、50 上限、标星）、对比回滚、局部改写预览采纳、自动续写、生成记录；浏览器冒烟验证通过
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2bf983f` | feat: 章节版本历史、局部改写与字数闭环 |
+
+### Status
+
+[OK] **Completed**
