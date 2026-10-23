@@ -1,0 +1,150 @@
+import json
+
+import pytest
+
+from app.ai.json_extract import JSONExtractError, extract_json
+from app.services.wizard_service import normalize_outline
+from tests.helpers import create_ai_config, create_project, parse_sse, register
+
+OUTLINE_JSON = {
+    "volumes": [
+        {
+            "volume_no": 1,
+            "volume_title": "启程",
+            "chapters": [
+                {"chapter_no": 1, "title": "出发", "summary": "离港"},
+                {"chapter_no": 2, "title": "异象", "summary": "遭遇异常信号"},
+            ],
+        },
+        {
+            "volume_no": 2,
+            "volume_title": "深空",
+            # 模型按卷重新编号，落库时统一为全书连续编号
+            "chapters": [{"chapter_no": 1, "title": "接触", "summary": "首次接触"}],
+        },
+    ]
+}
+
+CHARACTERS_JSON = [
+    {"name": "林舟", "role_type": "主角", "profile": "舰长", "relations_text": "与苏晚是搭档"},
+    {"name": "苏晚", "role_type": "女主", "profile": "科学家", "relations_text": ["林舟的搭档", "白夜的旧识"]},
+    {"name": "白夜", "role_type": "反派", "profile": "神秘人", "relations_text": "林舟的宿敌"},
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[{"a": 1}]',
+        '```json\n[{"a": 1}]\n```',
+        '好的，以下是结果：\n```json\n[{"a": 1}]\n```\n希望对你有帮助',
+        '前言 [{"a": 1}] 结尾说明',
+        '```json\n[{"a": 1}]',  # 未闭合围栏
+    ],
+)
+def test_extract_json_tolerant(text):
+    assert extract_json(text) == [{"a": 1}]
+
+
+def test_extract_json_object_first():
+    assert extract_json('结果：{"volumes": [1]} 完') == {"volumes": [1]}
+
+
+def test_extract_json_failure():
+    with pytest.raises(JSONExtractError):
+        extract_json("抱歉，我无法完成")
+
+
+def test_normalize_flat_outline():
+    rows = normalize_outline([{"title": "甲"}, {"title": "乙", "volume_no": 2}])
+    assert [(r["volume_no"], r["chapter_no"]) for r in rows] == [(1, 1), (2, 2)]
+
+
+async def _setup(client):
+    await register(client)
+    await create_ai_config(client)
+    return await create_project(client)
+
+
+async def test_wizard_outline_with_fence(client, fake_llm):
+    p = await _setup(client)
+    raw = "好的，这是大纲：\n```json\n" + json.dumps(OUTLINE_JSON, ensure_ascii=False) + "\n```"
+    fake_llm.push(raw)
+    resp = await client.post(f"/api/v1/projects/{p['id']}/wizard/outline", json={"volume_count": 2})
+    assert resp.status_code == 200
+    events = parse_sse(resp.text)
+    assert "".join(d["text"] for e, d in events if e == "delta") == raw
+    kind, data = events[-1]
+    assert kind == "done"
+    assert data["kind"] == "outline"
+    assert [(i["volume_no"], i["chapter_no"], i["title"]) for i in data["items"]] == [
+        (1, 1, "出发"),
+        (1, 2, "异象"),
+        (2, 3, "接触"),
+    ]
+    assert data["items"][2]["volume_title"] == "深空"
+
+    saved = (await client.get(f"/api/v1/projects/{p['id']}/outlines")).json()
+    assert len(saved) == 3
+    prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "星海纪元" in prompt and "共 2 卷" in prompt
+
+
+async def test_wizard_overwrites_and_keeps_chapters(client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    fake_llm.push(json.dumps(OUTLINE_JSON, ensure_ascii=False))
+    await client.post(f"{base}/wizard/outline")
+    created = (await client.post(f"{base}/chapters/from-outlines", json={})).json()
+    ch_id = created[0]["id"]
+    await client.patch(f"{base}/chapters/{ch_id}", json={"content": "已写正文"})
+
+    fake_llm.push('[{"title": "唯一一章", "summary": "重写"}]')
+    events = parse_sse((await client.post(f"{base}/wizard/outline")).text)
+    assert events[-1][0] == "done"
+    outlines = (await client.get(f"{base}/outlines")).json()
+    assert [o["title"] for o in outlines] == ["唯一一章"]
+
+    ch = (await client.get(f"{base}/chapters/{ch_id}")).json()
+    assert ch["content"] == "已写正文"
+    assert ch["outline_id"] is None  # 旧大纲删除后解除关联而非删除章节
+
+
+async def test_wizard_characters_and_world(client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    fake_llm.push(json.dumps({"characters": CHARACTERS_JSON}, ensure_ascii=False))
+    events = parse_sse((await client.post(f"{base}/wizard/characters", json={"character_count": 3})).text)
+    assert events[-1][0] == "done"
+    items = events[-1][1]["items"]
+    assert len(items) == 3
+    assert items[1]["relations_text"] == "林舟的搭档；白夜的旧识"
+    assert len((await client.get(f"{base}/characters")).json()) == 3
+
+    fake_llm.push(
+        '```json\n[{"title": "星际联邦", "content": "十二星系"}, {"title": "跃迁", "content": "超光速"}]\n```'
+    )
+    events = parse_sse((await client.post(f"{base}/wizard/world")).text)
+    assert events[-1][0] == "done"
+    world = (await client.get(f"{base}/world")).json()
+    assert [w["title"] for w in world] == ["星际联邦", "跃迁"]
+    # 世界观提示词带入已有角色
+    assert "林舟" in fake_llm.calls[-1]["messages"][-1]["content"]
+
+
+async def test_wizard_parse_error(client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    await client.post(f"{base}/world", json={"title": "原设定"})
+    fake_llm.push("抱歉，我无法生成。")
+    events = parse_sse((await client.post(f"{base}/wizard/world")).text)
+    assert events[-1][0] == "error"
+    assert "解析失败" in events[-1][1]["detail"]
+    # 解析失败不覆盖旧数据
+    assert [w["title"] for w in (await client.get(f"{base}/world")).json()] == ["原设定"]
+
+
+async def test_wizard_invalid_kind(client):
+    p = await _setup(client)
+    resp = await client.post(f"/api/v1/projects/{p['id']}/wizard/unknown")
+    assert resp.status_code == 422
