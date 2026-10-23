@@ -13,6 +13,7 @@ from app.schemas.story import (
     OutlineCreate,
     OutlineOut,
     OutlineUpdate,
+    WorldCategory,
     WorldSettingCreate,
     WorldSettingOut,
     WorldSettingUpdate,
@@ -30,9 +31,19 @@ def _make_router(
 ) -> APIRouter:
     router = APIRouter(prefix=f"/projects/{{project_id}}/{segment}", tags=[tag])
 
-    @router.get("", response_model=list[out_schema])  # type: ignore[valid-type]
-    async def list_items(project_id: int, user: CurrentUser, db: DbDep) -> Any:
-        return await svc.list_owned(db, kind, user.id, project_id)
+    if kind is svc.WORLD:
+
+        @router.get("", response_model=list[out_schema])  # type: ignore[valid-type]
+        async def list_world(
+            project_id: int, user: CurrentUser, db: DbDep, category: WorldCategory | None = None
+        ) -> Any:
+            return await svc.list_owned(db, kind, user.id, project_id, category=category)
+
+    else:
+
+        @router.get("", response_model=list[out_schema])  # type: ignore[valid-type]
+        async def list_items(project_id: int, user: CurrentUser, db: DbDep) -> Any:
+            return await svc.list_owned(db, kind, user.id, project_id)
 
     @router.post("", response_model=out_schema, status_code=status.HTTP_201_CREATED)
     async def create_item(project_id: int, body: create_schema, user: CurrentUser, db: DbDep) -> Any:  # type: ignore[valid-type]

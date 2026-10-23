@@ -50,6 +50,10 @@ backend/
 │   │       ├── story.py      # /projects/{id}/world|characters|outlines（路由工厂）
 │   │       ├── chapters.py   # 章节 CRUD、/chapters/{id}/generate|polish（创建后台任务，202）
 │   │       ├── tasks.py      # /tasks 列表 / 详情 / output / stream（SSE 订阅）/ cancel / retry / 删除 / 清理
+│   │       ├── character_actions.py # /projects/{id}/characters/with-relations|generate|{cid}/parse-relations（先于 story 注册）
+│   │       ├── organizations.py # /projects/{id}/organizations CRUD、with-members、generate、members、characters/{cid}/memberships
+│   │       ├── relationships.py # /projects/{id}/relationship-types、relationships（含 batch / history）、relationship-graph
+│   │       ├── cards.py      # /projects/{id}/cards/export|import/preview|import（JSON body）
 │   │       └── wizard.py     # /projects/{id}/wizard/{outline|characters|world}（创建后台任务，202）
 │   ├── core/
 │   │   ├── config.py         # Settings（pydantic-settings）、fail-fast 校验器
@@ -59,21 +63,28 @@ backend/
 │   │   └── security.py       # bcrypt、JWT、SecretCipher（Fernet）、mask_secret()
 │   ├── models/
 │   │   ├── base.py           # Base（命名约定）、TimestampMixin
-│   │   └── entities.py       # User、AIConfig、Project、WorldSetting、Character、Outline、Chapter
+│   │   └── entities.py       # User、AIConfig、Project、WorldSetting、Character、Outline、Chapter、Organization、
+│   │                         # OrganizationMember、RelationshipType、Relationship、RelationshipHistory、ChapterCharacter、Task …
 │   ├── schemas/              # 按领域划分的 Pydantic 请求/响应模型
 │   │   ├── auth.py  ai_config.py  project.py  story.py  chapter.py
+│   │   ├── organization.py  relationship.py  card.py  entity_ai.py   # 结构化设定
 │   ├── services/
 │   │   ├── auth_service.py        ai_config_service.py   project_service.py
 │   │   ├── story_service.py       chapter_service.py     export_service.py
-│   │   ├── context_builder.py     # 带字符预算的章节 prompt 上下文
+│   │   ├── context_builder.py     # 带字符预算的章节 prompt 上下文（选角 + 角色卡 / 关系 / 组织 / 名单，裁剪顺序见文件头）
 │   │   ├── generation_service.py  # 章节生成/润色（validate_and_claim + build_chapter_job + run）
 │   │   ├── wizard_service.py      # 大纲/角色/世界观（validate + build + run）+ JSON 规范化
 │   │   ├── task_service.py        # 后台任务 API 入口：创建 / 列表 / 取消 / 重试 / 删除 / 清理 / 保留裁剪
+│   │   ├── cast_service.py        # 主角判定、本章选角（名字 / 别名匹配）、章节出场角色读写
+│   │   ├── relationship_service.py # 关系类型、apply_change（唯一写入入口）、关系 CRUD / 历史 / 图谱、with-relations
+│   │   ├── organization_service.py # 组织 CRUD（循环检测）、成员、with-members
+│   │   ├── card_service.py        # 卡片导出 / 预览 / 单事务导入
+│   │   ├── entity_ai_service.py   # character.generate / organization.generate / relations.parse（只产出草稿）
 │   │   └── task_engine/           # 统一持久化后台任务引擎（单进程，数据库即队列）
 │   │       ├── engine.py          # TaskEngine：start/stop/recover、调度循环、_run/_finalize、取消、订阅
 │   │       ├── hub.py             # TaskHub：已输出文本缓冲 + 订阅者队列（快照与注册同一同步临界区）
 │   │       ├── registry.py        # TaskHandler 协议、TaskContext、TaskSpec、register/get_handler
-│   │       └── handlers/          # 导入即注册：chapter.py（chapter.*）、wizard.py（wizard.*）
+│   │       └── handlers/          # 导入即注册：chapter.py（chapter.*）、wizard.py（wizard.*）、entities.py（三个设定 kind）
 │   └── ai/
 │       ├── endpoint_guard.py # 针对用户提供的 Base URL 的 SSRF 防护
 │       ├── json_extract.py   # 从模型输出中容错提取 JSON
@@ -82,7 +93,7 @@ backend/
 │       │   ├── base.py       # LLMProvider 抽象基类、AIProviderError、describe_error()
 │       │   ├── openai_compat.py  anthropic.py  gemini.py
 │       └── prompts/
-│           ├── __init__.py   common.py   chapter.py   wizard.py
+│           ├── __init__.py   common.py   chapter.py   wizard.py   rewrite.py   entities.py
 └── tests/
     ├── conftest.py           # app/client fixture、autouse 的 fake_dns
     ├── helpers.py            # FakeLLM、make_settings、register、parse_sse
@@ -154,6 +165,9 @@ sessionmaker 获取的独立 session 执行；路由只调用 `task_service.crea
 
 - 轻薄路由 + service 拆分：`backend/app/api/v1/ai_configs.py` 搭配 `backend/app/services/ai_config_service.py`。
 - 通用 CRUD 工厂：`backend/app/api/v1/story.py` + `backend/app/services/story_service.py`。
+- 只产出草稿的任务类型：`backend/app/services/task_engine/handlers/entities.py` + `entity_ai_service.py`。
+- 单事务组合写入：`relationship_service.create_character_with_relations`、`organization_service.create_with_members`
+  （内部复用不 commit 的 `story_service.new_character` / `organization_service.new_org` / `new_member`）。
 - 后台任务类型：`backend/app/services/task_engine/handlers/chapter.py` 包装
   `generation_service.validate_and_claim` / `build_chapter_job` / `run_chapter_job`。
 - 同步两阶段流式：`backend/app/services/rewrite_service.py`（`prepare_rewrite_job` / `run_rewrite_job`）。

@@ -223,3 +223,107 @@ def test_0006_tasks(tmp_path):
             assert conn.execute(text("SELECT count(*) FROM generation_logs")).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_0007_story_entities(tmp_path):
+    """0007：存量角色 / 世界观原样保留并回填，写入预置关系类型；downgrade -1 删除新表新列且不影响存量数据。"""
+    from app.models.entities import PRESET_RELATIONSHIP_TYPES
+
+    db_file = tmp_path / "migrate0007.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0006")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, 'p', '', '', '', 'planning')"
+                )
+            )
+            insert_char = (
+                "INSERT INTO characters (project_id, name, role_type, profile, relations_text, sort) "
+                "VALUES (1, :name, :role, :profile, :rel, :sort)"
+            )
+            conn.execute(
+                text(insert_char), {"name": "林远", "role": "主角", "profile": "少年", "rel": "师父是张三", "sort": 1}
+            )
+            conn.execute(text(insert_char), {"name": "Lin", "role": "Protagonist", "profile": "", "rel": "", "sort": 2})
+            conn.execute(text(insert_char), {"name": "张三", "role": "导师", "profile": "老者", "rel": "", "sort": 3})
+            conn.execute(
+                text("INSERT INTO world_settings (project_id, title, content, sort) VALUES (1, '青云山', '仙山', 1)")
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0007")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        tables = set(insp.get_table_names())
+        assert {
+            "organizations",
+            "organization_members",
+            "relationship_types",
+            "relationships",
+            "relationship_history",
+            "chapter_characters",
+        } <= tables
+
+        def _fk_rules(table: str) -> dict:
+            return {fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys(table)}
+
+        assert _fk_rules("relationships") == {
+            "project_id": "CASCADE",
+            "a_id": "CASCADE",
+            "b_id": "CASCADE",
+            "type_id": None,
+        }
+        assert _fk_rules("organizations") == {"project_id": "CASCADE", "parent_id": "SET NULL"}
+        assert _fk_rules("organization_members") == {"organization_id": "CASCADE", "character_id": "CASCADE"}
+        assert _fk_rules("relationship_history") == {"relationship_id": "CASCADE"}
+        assert _fk_rules("chapter_characters") == {"chapter_id": "CASCADE", "character_id": "CASCADE"}
+        uqs = [u["column_names"] for u in insp.get_unique_constraints("relationships")]
+        assert ["pair_low", "pair_high"] in uqs
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT name, profile, relations_text, always_in_context, aliases, life_status "
+                    "FROM characters ORDER BY sort"
+                )
+            ).all()
+            # 简介与旧关系备注原样保留；主角回填始终注入
+            assert [tuple(r) for r in rows] == [
+                ("林远", "少年", "师父是张三", 1, "[]", "alive"),
+                ("Lin", "", "", 1, "[]", "alive"),
+                ("张三", "老者", "", 0, "[]", "alive"),
+            ]
+            assert conn.execute(text("SELECT category, content FROM world_settings")).one() == ("other", "仙山")
+            presets = conn.execute(
+                text("SELECT category, role_a, role_b FROM relationship_types WHERE project_id IS NULL ORDER BY sort")
+            ).all()
+            assert [tuple(p) for p in presets] == list(PRESET_RELATIONSHIP_TYPES)
+            assert len(presets) == 20
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert "relationships" not in insp.get_table_names()
+        assert "organizations" not in insp.get_table_names()
+        assert "aliases" not in {c["name"] for c in insp.get_columns("characters")}
+        assert "category" not in {c["name"] for c in insp.get_columns("world_settings")}
+        with engine.connect() as conn:
+            assert (
+                conn.execute(text("SELECT relations_text FROM characters WHERE name = '林远'")).scalar_one()
+                == "师父是张三"
+            )
+    finally:
+        engine.dispose()

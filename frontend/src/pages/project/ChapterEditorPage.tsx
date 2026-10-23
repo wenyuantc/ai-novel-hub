@@ -40,6 +40,7 @@ import { queueLabel, taskApi } from '../../api/tasks'
 import type { Chapter, ChapterBrief, ChapterVersionBrief, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
 import { GenerateForm, type GenerateOptions, PolishForm } from '../../components/chapter/ChapterAIForms'
+import CastSelect from '../../components/chapter/CastSelect'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
@@ -507,6 +508,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
+            <CastSelect pid={pid} chapterId={chapter.id} disabled={aiRunning} />
             <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
               <Input.TextArea
                 value={displayContent}

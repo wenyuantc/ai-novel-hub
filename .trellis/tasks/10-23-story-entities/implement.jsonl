@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键 CASCADE、归属 404、原子写入与回填约定"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 service/路由/handler 的分层位置"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务订阅契约与 AppError/中文错误约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离、禁止模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面模式、编辑器行为、TaskPanel、向导"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像与 API 客户端契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积上限与懒加载要求"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useTaskStream 订阅生成任务"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-story-settings.md", "reason": "MuMu 角色/组织/关系/卡片/世界观的功能与缺陷对照"}

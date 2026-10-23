@@ -29,11 +29,12 @@ async def test_world_character_outline_crud(client):
     base = f"/api/v1/projects/{p['id']}"
 
     w = (await client.post(f"{base}/world", json={"title": "星际联邦", "content": "由十二个星系组成"})).json()
-    assert w["sort"] == 1
+    assert w["sort"] == 1 and w["category"] == "other"
     w2 = (await client.post(f"{base}/world", json={"title": "跃迁技术"})).json()
     assert w2["sort"] == 2
-    resp = await client.patch(f"{base}/world/{w['id']}", json={"content": "改"})
-    assert resp.json()["content"] == "改"
+    resp = await client.patch(f"{base}/world/{w['id']}", json={"content": "改", "category": "faction"})
+    assert resp.json()["content"] == "改" and resp.json()["category"] == "faction"
+    assert (await client.patch(f"{base}/world/{w['id']}", json={"category": "planet"})).status_code == 422
     assert len((await client.get(f"{base}/world")).json()) == 2
     assert (await client.delete(f"{base}/world/{w2['id']}")).status_code == 204
 
@@ -62,6 +63,14 @@ async def test_cross_user_isolation(client, make_client):
     base = f"/api/v1/projects/{p['id']}"
     w = (await client.post(f"{base}/world", json={"title": "设定"})).json()
     ch = (await client.post(f"{base}/chapters", json={"title": "第一章", "content": "正文"})).json()
+    c1 = (await client.post(f"{base}/characters", json={"name": "甲", "relations_text": "乙的朋友"})).json()
+    c2 = (await client.post(f"{base}/characters", json={"name": "乙"})).json()
+    org = (await client.post(f"{base}/organizations", json={"name": "宗门"})).json()
+    member = (await client.post(f"{base}/organizations/{org['id']}/members", json={"character_id": c1["id"]})).json()
+    rel = (
+        await client.post(f"{base}/relationships", json={"a_id": c1["id"], "b_id": c2["id"], "role_a": "朋友"})
+    ).json()
+    custom_type = (await client.post(f"{base}/relationship-types", json={"role_a": "掌门", "role_b": "弟子"})).json()
 
     bob = make_client()
     await register(bob, "bob")
@@ -88,14 +97,64 @@ async def test_cross_user_isolation(client, make_client):
         ("POST", f"/api/v1/chapters/{ch['id']}/polish"),
         ("POST", f"{base}/wizard/outline"),
         ("GET", f"{base}/export?format=txt"),
+        ("GET", f"{base}/world?category=place"),
+        ("PATCH", f"{base}/characters/{c1['id']}"),
+        ("DELETE", f"{base}/characters/{c1['id']}"),
+        ("POST", f"{base}/characters/with-relations"),
+        ("POST", f"{base}/characters/generate"),
+        ("POST", f"{base}/characters/{c1['id']}/parse-relations"),
+        ("GET", f"{base}/characters/{c1['id']}/memberships"),
+        ("GET", f"{base}/organizations"),
+        ("POST", f"{base}/organizations"),
+        ("POST", f"{base}/organizations/with-members"),
+        ("POST", f"{base}/organizations/generate"),
+        ("GET", f"{base}/organizations/{org['id']}"),
+        ("PATCH", f"{base}/organizations/{org['id']}"),
+        ("DELETE", f"{base}/organizations/{org['id']}"),
+        ("GET", f"{base}/organizations/{org['id']}/members"),
+        ("POST", f"{base}/organizations/{org['id']}/members"),
+        ("PATCH", f"{base}/organizations/{org['id']}/members/{member['id']}"),
+        ("DELETE", f"{base}/organizations/{org['id']}/members/{member['id']}"),
+        ("GET", f"{base}/relationship-types"),
+        ("POST", f"{base}/relationship-types"),
+        ("DELETE", f"{base}/relationship-types/{custom_type['id']}"),
+        ("GET", f"{base}/relationships"),
+        ("POST", f"{base}/relationships"),
+        ("POST", f"{base}/relationships/batch"),
+        ("PATCH", f"{base}/relationships/{rel['id']}"),
+        ("DELETE", f"{base}/relationships/{rel['id']}"),
+        ("GET", f"{base}/relationships/{rel['id']}/history"),
+        ("GET", f"{base}/relationship-graph"),
+        ("GET", f"{base}/chapters/{ch['id']}/cast"),
+        ("PUT", f"{base}/chapters/{ch['id']}/cast"),
+        ("POST", f"{base}/cards/export"),
+        ("POST", f"{base}/cards/import/preview"),
+        ("POST", f"{base}/cards/import"),
     ]
+    # 请求体在路由层通过 422 校验，确保 404 来自归属校验
+    bodies = {
+        f"{base}/world": {"title": "x"},
+        f"{base}/characters/with-relations": {"character": {"name": "x"}},
+        f"{base}/organizations": {"name": "x"},
+        f"{base}/organizations/with-members": {"organization": {"name": "x"}},
+        f"{base}/organizations/{org['id']}/members": {"character_id": c1["id"]},
+        f"{base}/relationship-types": {"role_a": "x", "role_b": "y"},
+        f"{base}/relationships": {"a_id": c1["id"], "b_id": c2["id"], "role_a": "x"},
+        f"{base}/relationships/batch": {"items": [{"a_id": c1["id"], "b_id": c2["id"], "role_a": "x"}]},
+        f"{base}/chapters/{ch['id']}/cast": {"character_ids": []},
+        f"{base}/cards/import/preview": {"data": {}},
+        f"{base}/cards/import": {"data": {}},
+    }
     for method, url in checks:
         body = None
-        if method in ("POST", "PATCH"):
-            body = {"title": "x"} if url.endswith("/world") else {}
+        if method in ("POST", "PATCH", "PUT"):
+            body = bodies.get(url, {})
         resp = await bob.request(method, url, json=body)
         assert resp.status_code == 404, (method, url, resp.text)
 
     # bob 不能把 alice 的项目挂到自己名下的章节里，alice 数据保持不变
     assert (await client.get(f"{base}/chapters/{ch['id']}")).json()["content"] == "正文"
     assert len((await client.get(f"{base}/world")).json()) == 1
+    assert len((await client.get(f"{base}/characters")).json()) == 2
+    assert len((await client.get(f"{base}/relationships")).json()) == 1
+    assert len((await client.get(f"{base}/organizations/{org['id']}/members")).json()) == 1

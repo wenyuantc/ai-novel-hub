@@ -1,7 +1,9 @@
 import { Card, Collapse, Descriptions, Empty, List, Tag, Typography } from 'antd'
 import type { CSSProperties } from 'react'
+import { lifeStatusLabel, roleTypeColor } from '../api/characters'
 import type { Character, Outline, WorldSetting } from '../api/types'
 import { groupOutlines, volumeLabel } from '../utils/outline'
+import { asWorldCategory, WORLD_CATEGORY_LABELS } from '../utils/world'
 
 const pre: CSSProperties = { whiteSpace: 'pre-wrap', marginBottom: 0 }
 
@@ -13,7 +15,12 @@ export function WorldPreview({ items }: { items: WorldSetting[] }) {
       renderItem={(w) => (
         <List.Item>
           <List.Item.Meta
-            title={w.title}
+            title={
+              <span>
+                <Tag>{WORLD_CATEGORY_LABELS[asWorldCategory(w.category ?? 'other')]}</Tag>
+                {w.title}
+              </span>
+            }
             description={<Typography.Paragraph style={pre}>{w.content || '（无内容）'}</Typography.Paragraph>}
           />
         </List.Item>
@@ -22,33 +29,50 @@ export function WorldPreview({ items }: { items: WorldSetting[] }) {
   )
 }
 
+/** 角色向导结果：结构化字段（旧格式结果只有简介 / 旧关系备注，同样可展示） */
 export function CharacterPreview({ items }: { items: Character[] }) {
   if (items.length === 0) return <Empty description="暂无角色" />
   return (
     <List
       grid={{ gutter: 12, xs: 1, sm: 1, md: 2, lg: 2, xl: 3 }}
       dataSource={items}
-      renderItem={(c) => (
-        <List.Item>
-          <Card
-            size="small"
-            title={
-              <span>
-                {c.name} {c.role_type && <Tag color="purple">{c.role_type}</Tag>}
-              </span>
-            }
-          >
-            <Descriptions size="small" column={1}>
-              <Descriptions.Item label="简介">
-                <span style={{ whiteSpace: 'pre-wrap' }}>{c.profile || '-'}</span>
-              </Descriptions.Item>
-              <Descriptions.Item label="关系">
-                <span style={{ whiteSpace: 'pre-wrap' }}>{c.relations_text || '-'}</span>
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </List.Item>
-      )}
+      renderItem={(c) => {
+        const life = lifeStatusLabel(c.life_status ?? 'alive')
+        const rows: [string, string | undefined][] = [
+          ['别名', (c.aliases ?? []).join('、')],
+          ['年龄 / 性别', [c.age, c.gender].filter(Boolean).join(' / ')],
+          ['外貌', c.appearance],
+          ['性格', c.personality],
+          ['背景', c.background],
+          ['简介', c.profile],
+          ['旧关系备注', c.relations_text],
+        ]
+        return (
+          <List.Item>
+            <Card
+              size="small"
+              title={
+                <span>
+                  {c.name} {c.role_type && <Tag color={roleTypeColor(c.role_type)}>{c.role_type}</Tag>}
+                  {c.life_status && c.life_status !== 'alive' && <Tag color={life.color}>{life.label}</Tag>}
+                </span>
+              }
+            >
+              <Descriptions size="small" column={1}>
+                {rows
+                  .filter(([, v]) => !!v)
+                  .map(([label, v]) => (
+                    <Descriptions.Item key={label} label={label}>
+                      <Typography.Paragraph style={pre} ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}>
+                        {v}
+                      </Typography.Paragraph>
+                    </Descriptions.Item>
+                  ))}
+              </Descriptions>
+            </Card>
+          </List.Item>
+        )
+      }}
     />
   )
 }

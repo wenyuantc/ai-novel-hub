@@ -1,5 +1,6 @@
-import { api } from './client'
+import { api, request } from './client'
 import type {
+  ChapterCast,
   Character,
   CharacterInput,
   Outline,
@@ -21,3 +22,13 @@ function makeCrud<TItem, TInput>(segment: string) {
 export const worldApi = makeCrud<WorldSetting, WorldSettingInput>('world')
 export const characterApi = makeCrud<Character, CharacterInput>('characters')
 export const outlineApi = makeCrud<Outline, OutlineInput>('outlines')
+
+/** 章节出场角色（手动指定，可选）：GET 返回 id 列表，PUT 整体替换 */
+export const castApi = {
+  get: (pid: number, cid: number) => api.get<ChapterCast>(`/projects/${pid}/chapters/${cid}/cast`),
+  set: (pid: number, cid: number, characterIds: number[]) =>
+    request<ChapterCast>(`/projects/${pid}/chapters/${cid}/cast`, {
+      method: 'PUT',
+      body: { character_ids: characterIds },
+    }),
+}

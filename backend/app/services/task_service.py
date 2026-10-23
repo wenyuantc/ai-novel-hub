@@ -37,9 +37,18 @@ ACTIVE_CONFLICT = "已有任务在进行中，请等待其完成后再试"
 # ---------------- 序列化 ----------------
 
 
+def _subject_character_id(task: Task) -> int | None:
+    request = (task.input or {}).get("request") if isinstance(task.input, dict) else None
+    cid = request.get("character_id") if isinstance(request, dict) else None
+    return cid if isinstance(cid, int) and not isinstance(cid, bool) else None
+
+
 def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine | None" = None) -> TaskOut:
     out = TaskOut.model_validate(task)
-    update_fields: dict[str, Any] = {"queue_position": queue_position if task.status == "queued" else None}
+    update_fields: dict[str, Any] = {
+        "queue_position": queue_position if task.status == "queued" else None,
+        "character_id": _subject_character_id(task),
+    }
     hub = engine.hubs.get(task.id) if engine is not None else None
     if hub is not None and task.status in ACTIVE_TASK_STATUSES:
         # 进度 / 阶段以内存中的实时值为准（库里是节流刷新的）

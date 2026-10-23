@@ -159,3 +159,101 @@ async def test_wizard_invalid_kind(client):
     p = await _setup(client)
     resp = await client.post(f"/api/v1/projects/{p['id']}/wizard/unknown")
     assert resp.status_code == 422
+
+
+STRUCTURED_CHARACTERS = {
+    "characters": [
+        {
+            "name": "林远",
+            "aliases": ["小远"],
+            "role_type": "主角",
+            "age": "18",
+            "gender": "男",
+            "appearance": "清瘦",
+            "personality": "坚韧",
+            "background": "孤儿",
+            "profile": "少年剑客",
+        },
+        {"name": "张三", "role_type": "重要配角", "profile": "师父"},
+        {"name": "李四", "role_type": "反派"},
+    ],
+    "relationships": [
+        {
+            "a": "张三",
+            "b": "小远",
+            "role_a": "师父",
+            "role_b": "徒弟",
+            "category": "social",
+            "intimacy": 80,
+            "description": "授业",
+        },
+        {"a": "林远", "b": "李四", "role_a": "宿敌", "role_b": "宿敌", "category": "敌对", "intimacy": -90},
+        {"a": "李四", "b": "林远", "role_a": "朋友", "role_b": "朋友"},  # 同一对已有关系 → 忽略
+        {"a": "林远", "b": "王五", "role_a": "朋友"},  # 名字对不上 → 忽略
+        {"a": "林远", "b": "林远", "role_a": "朋友"},
+    ],
+}
+
+
+async def test_wizard_characters_structured_with_relations(client, fake_llm):
+    """AC9：角色向导输出结构化字段与关系并写入关系表；再次生成整体替换（旧关系随角色级联删除）。"""
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    fake_llm.push(json.dumps(STRUCTURED_CHARACTERS, ensure_ascii=False))
+    _, events = await run_task(client, await client.post(f"{base}/wizard/characters"))
+    result = events[-1][1]["result"]
+    hero = result["items"][0]
+    assert (hero["aliases"], hero["age"], hero["personality"], hero["always_in_context"]) == (
+        ["小远"],
+        "18",
+        "坚韧",
+        True,
+    )
+    assert result["items"][1]["always_in_context"] is False
+    assert [(r["a_name"], r["b_name"], r["role_a"], r["category"], r["intimacy"]) for r in result["relationships"]] == [
+        ("张三", "林远", "师父", "social", 80),
+        ("林远", "李四", "宿敌", "hostile", -90),
+    ]
+    view = (await client.get(f"{base}/relationships", params={"character_id": hero["id"]})).json()
+    assert sorted((r["other_name"], r["other_role"]) for r in view) == [("张三", "师父"), ("李四", "宿敌")]
+    hist = (await client.get(f"{base}/relationships/{view[0]['id']}/history")).json()
+    assert hist[0]["source"] == "wizard"
+    prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert '"relationships"' in prompt and "role_a" in prompt
+
+    fake_llm.push(json.dumps({"characters": CHARACTERS_JSON}, ensure_ascii=False))
+    _, events = await run_task(client, await client.post(f"{base}/wizard/characters"))
+    assert events[-1][1]["result"]["relationships"] == []
+    assert (await client.get(f"{base}/relationships")).json() == []
+    assert [c["name"] for c in (await client.get(f"{base}/characters")).json()] == ["林舟", "苏晚", "白夜"]
+
+
+async def test_wizard_world_categories(client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    fake_llm.push(
+        json.dumps(
+            [
+                {"title": "青云山", "category": "地点", "content": "仙山"},
+                {"title": "灵力", "category": "rule", "content": "修炼体系"},
+                {"title": "魔教", "category": "门派势力", "content": "反派"},
+                {"title": "上古之战", "category": "历史事件", "content": "千年前"},
+                {"title": "杂项", "category": "???", "content": ""},
+                {"title": "旧格式", "content": "无分类"},
+            ],
+            ensure_ascii=False,
+        )
+    )
+    _, events = await run_task(client, await client.post(f"{base}/wizard/world"))
+    cats = [(i["title"], i["category"]) for i in events[-1][1]["result"]["items"]]
+    assert cats == [
+        ("青云山", "place"),
+        ("灵力", "rule"),
+        ("魔教", "faction"),
+        ("上古之战", "history"),
+        ("杂项", "other"),
+        ("旧格式", "other"),
+    ]
+    places = (await client.get(f"{base}/world", params={"category": "place"})).json()
+    assert [w["title"] for w in places] == ["青云山"]
+    assert (await client.get(f"{base}/world", params={"category": "bad"})).status_code == 422

@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -162,7 +162,14 @@ def count_words(text: str) -> int:
 | `ai_configs.model` | String(200) |
 | `projects.title`、`world_settings.title`、`outlines.title`、`outlines.volume_title`、`chapters.title` | String(200) |
 | `projects.genre` | String(100) |
-| `characters.role_type` | String(50) |
+| `characters.role_type` | String(50)（下拉 + 兼容旧自由文本） |
+| `characters.aliases` | JSON 列表；单个 ≤50、最多 10 个（`schemas.story.clean_aliases`） |
+| `characters.age` / `gender` | String(50) / String(20) |
+| `organizations.name` / `org_type` / `location` | String(100) / String(50) / String(200)；`(project_id, name)` 唯一 |
+| `organization_members.position` | String(50) |
+| `relationship_types.role_a` / `role_b` | String(20) |
+| `relationship_history.note` | String(200) |
+| `world_settings.category` / `characters.life_status` / 各 `status` / `category` | String(16) |
 | `chapters.status` | String(16)；`projects.status` / `ai_configs.provider` String(32) |
 | 长文本（`content`、`summary`、`profile`、`premise`、`style`、`api_key_enc`） | Text |
 
@@ -182,7 +189,8 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
 
 状态/provider 值是普通字符串，允许的取值以元组形式定义在
 `entities.py` 中（`CHAPTER_STATUSES = ("draft", "generating", "done")`、
-`AI_PROVIDERS`、`PROJECT_STATUSES`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
+`AI_PROVIDERS`、`PROJECT_STATUSES`、`LIFE_STATUSES`、`WORLD_CATEGORIES`、`MEMBER_STATUSES`、`RELATION_CATEGORIES`、
+`RELATION_STATUSES`、`RELATION_SOURCES`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
 
 ---
 
@@ -198,7 +206,10 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   `generation_logs` 与 `chapter_versions` 两张表，不回填；`test_0005_chapter_versions` 断言外键规则与
   `(chapter_id, seq)` 唯一约束）、`0006_tasks.py`（`down_revision = '0005'`，新建 `tasks`，给 `generation_logs`
   加可空 `task_id`；`test_0006_tasks` 断言外键规则、部分唯一索引确实只约束活动任务、存量日志 `task_id` 为空，
-  `downgrade -1` 后存量日志保留）。
+  `downgrade -1` 后存量日志保留）、`0007_story_entities.py`（`down_revision = '0006'`，只改结构不调 AI：
+  `world_settings.category` 回填 `other`，`characters.always_in_context` 对 `role_type` 为「主角」/`protagonist`（trim + lower）回填 true，
+  插入 20 个全局预置关系类型；`test_0007_story_entities` 断言简介 / 旧关系备注原样保留、回填结果、预置类型与
+  `PRESET_RELATIONSHIP_TYPES` 一致、外键规则、`(pair_low, pair_high)` 唯一，`downgrade -1` 后存量数据保留）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -274,6 +285,17 @@ outline_id: Mapped[int | None] = mapped_column(
 
 ---
 
+`0007`：`organizations.project_id`、`organization_members.*`、`relationship_types.project_id`、`relationships.project_id/a_id/b_id`、
+`relationship_history.relationship_id`、`chapter_characters.*` 为 CASCADE（删角色自动清理关系、历史、成员、出场记录）；
+`organizations.parent_id` 为 SET NULL（删上级后下级变顶级）；`relationships.type_id` **不设 ondelete**（NO ACTION，语句结束时检查）——
+服务层先查引用返回 409，且删除项目时类型与关系在同一语句内级联删除，RESTRICT 会因触发顺序失败。
+角色向导整体替换角色（`delete(Character)`）会级联清掉旧关系 / 成员 / 出场记录，这是 R11 的预期语义。
+
+关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
+`relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
+
+---
+
 ## 场景：章节版本写入规则
 
 ### 1. 范围 / 触发条件
@@ -341,7 +363,8 @@ SSE / 订阅契约见 `error-handling.md`「后台任务与 SSE 契约」。
 
 ```python
 # backend/app/models/entities.py
-TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world")
+TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world",
+              "character.generate", "organization.generate", "relations.parse")
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running"); FINISHED_TASK_STATUSES = (其余四个)
 
@@ -359,7 +382,7 @@ class Task(TimestampMixin, Base):   # tasks
 - **单进程前提**：调度协程与 hub 都在进程内；`start()` 时把库里所有 `running` 任务视为上次进程遗留并置为
   `interrupted`。部署必须是单进程（`Dockerfile` 中 `uvicorn` 不带 `--workers`）。改为多实例前须把领取改成
   `SELECT ... FOR UPDATE SKIP LOCKED` 并引入心跳 / 租约，否则一个实例重启会把其他实例的运行中任务误判为中断。
-- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}` 或 `wizard:{project_id}:{kind}`。插入撞索引 →
+- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` 为空，允许并发）。插入撞索引 →
   回滚 → 409。章节类还会先原子抢占 `chapters.status='generating'`（与插入同一事务，失败时一起回滚）。
   新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。
 - **领取**：条件 `UPDATE ... SET status='running' WHERE id=? AND status='queued'`，影响行数为 1 才执行；
@@ -393,4 +416,6 @@ class Task(TimestampMixin, Base):   # tasks
 - 新增任务类型时在 `validate_and_claim` 里 commit：章节抢占与任务插入必须在同一事务，否则撞唯一索引时抢占无法回滚。
 - 部分唯一索引只写 `postgresql_where`：SQLite 测试会建成全表唯一索引，已结束任务也会阻止新任务。
 - 将某个会被向导批量替换的表的外键改为 CASCADE。
+- 直接改 `Relationship` 字段而不经 `apply_change`：没有历史、绕过角色对唯一与同项目校验。
+- 新增全局预置数据只写进迁移：测试的 `create_all` 不跑迁移，需同时提供 `after_create` 事件（参照 `RelationshipType`）。
 - 更新 `content` 时没有重新计算 `word_count`。

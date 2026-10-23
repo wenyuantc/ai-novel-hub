@@ -16,6 +16,7 @@ function task(over: Partial<Task> = {}): Task {
     stage: '生成中',
     error: '',
     retry_of_id: null,
+    character_id: null,
     queue_position: null,
     created_at: '2026-10-23T08:00:00',
     started_at: null,
@@ -225,6 +226,12 @@ describe('task helpers', () => {
     expect(taskLink(task({ chapter_id: null }))).toBeNull()
     expect(taskLink(task({ kind: 'wizard.characters', chapter_id: null }))).toBe('/projects/2/wizard?kind=characters')
     expect(taskLink(task({ project_id: null }))).toBeNull()
+  })
+
+  it('taskLink：设定类任务到角色 / 组织页', () => {
+    expect(taskLink(task({ kind: 'character.generate', chapter_id: null }))).toBe('/projects/2/characters')
+    expect(taskLink(task({ kind: 'relations.parse', chapter_id: null }))).toBe('/projects/2/characters')
+    expect(taskLink(task({ kind: 'organization.generate', chapter_id: null }))).toBe('/projects/2/organizations')
   })
 
   it('list / clearFinished 的查询参数', async () => {

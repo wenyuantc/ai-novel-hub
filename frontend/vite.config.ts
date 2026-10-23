@@ -26,6 +26,26 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1500,
+    rolldownOptions: {
+      output: {
+        // 给共享的第三方依赖起清晰的 chunk 名（Vite 8 / rolldown 中 manualChunks 已弃用，等价写法为 codeSplitting.groups）。
+        // 图谱库（@xyflow/react、@dagrejs/dagre 及其依赖）刻意不分组，留在懒加载的 RelationGraph chunk 中。
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor-react',
+              test: /node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom|@remix-run)[\\/]/,
+              priority: 20,
+            },
+            {
+              name: 'vendor-antd',
+              test: /node_modules[\\/](antd|@ant-design|@rc-component|rc-[^\\/]+|@emotion|stylis|dayjs|@babel[\\/]runtime|classnames|resize-observer-polyfill|throttle-debounce|compute-scroll-into-view|scroll-into-view-if-needed|json2mq|string-convert|toggle-selection|copy-to-clipboard)[\\/]/,
+              priority: 10,
+            },
+          ],
+        },
+      },
+    },
   },
   test: {
     environment: 'node',

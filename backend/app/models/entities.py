@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     false,
     text,
     true,
@@ -34,10 +36,51 @@ VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "resto
 GENERATION_KINDS = ("generate", "polish", "rewrite", "expand", "condense", "deslop", "continue")
 GENERATION_STATUSES = ("success", "error", "cancelled")
 # 后台任务
-TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world")
+TASK_KINDS = (
+    "chapter.generate",
+    "chapter.polish",
+    "wizard.outline",
+    "wizard.characters",
+    "wizard.world",
+    "character.generate",
+    "organization.generate",
+    "relations.parse",
+)
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running")
 FINISHED_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
+# 结构化设定
+LIFE_STATUSES = ("alive", "dead", "missing", "other")
+WORLD_CATEGORIES = ("place", "faction", "item", "rule", "history", "other")
+MEMBER_STATUSES = ("active", "left", "expelled", "dead")
+RELATION_CATEGORIES = ("family", "social", "hostile", "work", "other")
+RELATION_STATUSES = ("normal", "broken", "past", "complicated")
+# 关系历史来源：手动 / 角色向导 / AI 解析旧备注 / 卡片导入 / 章节分析（analysis-memory）
+RELATION_SOURCES = ("manual", "wizard", "ai_parse", "import", "analysis")
+# 全局预置关系类型 (category, role_a, role_b)：「a 是 b 的 role_a，b 是 a 的 role_b」。
+# 迁移 0007 内有同样的一份（迁移脚本冻结，不引用应用代码）；create_all 时由 after_create 事件写入
+PRESET_RELATIONSHIP_TYPES = (
+    ("family", "父亲", "子女"),
+    ("family", "母亲", "子女"),
+    ("family", "兄长", "弟妹"),
+    ("family", "姐姐", "弟妹"),
+    ("family", "配偶", "配偶"),
+    ("family", "亲属", "亲属"),
+    ("social", "师父", "徒弟"),
+    ("social", "朋友", "朋友"),
+    ("social", "知己", "知己"),
+    ("social", "恋人", "恋人"),
+    ("social", "同门", "同门"),
+    ("social", "恩人", "受恩者"),
+    ("hostile", "仇人", "仇人"),
+    ("hostile", "宿敌", "宿敌"),
+    ("hostile", "竞争对手", "竞争对手"),
+    ("work", "上司", "下属"),
+    ("work", "同僚", "同僚"),
+    ("work", "合作者", "合作者"),
+    ("work", "主人", "仆从"),
+    ("other", "相识", "相识"),
+)
 # 部分唯一索引条件：同一资源同时只能有一个排队 / 运行中的任务（PostgreSQL 与 SQLite 都支持）
 _ACTIVE_RESOURCE_WHERE = "status IN ('queued', 'running') AND resource_key IS NOT NULL"
 
@@ -93,6 +136,8 @@ class WorldSetting(TimestampMixin, Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # place / faction / item / rule / history / other
+    category: Mapped[str] = mapped_column(String(16), default="other", server_default="other", nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
@@ -102,10 +147,142 @@ class Character(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # 下拉选项（主角 / 重要配角 / 配角 / 反派 / 其他），兼容旧的自由文本值
     role_type: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    # 简介（存量自由文本，原样保留）
     profile: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 旧关系备注：只读保留，可经 relations.parse 解析为结构化关系
     relations_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    age: Mapped[str] = mapped_column(String(50), default="", server_default="", nullable=False)
+    gender: Mapped[str] = mapped_column(String(20), default="", server_default="", nullable=False)
+    appearance: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    personality: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    background: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 当前处境；以后由 analysis-memory 回写
+    current_state: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    life_status: Mapped[str] = mapped_column(String(16), default="alive", server_default="alive", nullable=False)
+    always_in_context: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class Organization(TimestampMixin, Base):
+    __tablename__ = "organizations"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    org_type: Mapped[str] = mapped_column(String(50), default="", server_default="", nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    location: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    # 0–100，可空
+    power_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 上级组织被删除时下级保留（变为顶级）
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class OrganizationMember(TimestampMixin, Base):
+    __tablename__ = "organization_members"
+    __table_args__ = (UniqueConstraint("organization_id", "character_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    position: Mapped[str] = mapped_column(String(50), default="", server_default="", nullable=False)
+    # active / left / expelled / dead
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+
+
+class RelationshipType(TimestampMixin, Base):
+    """关系类型：「a 是 b 的 role_a，b 是 a 的 role_b」；对称类型两边相同。project_id 为空 = 全局预置（只读）。"""
+
+    __tablename__ = "relationship_types"
+    __table_args__ = (UniqueConstraint("project_id", "role_a", "role_b"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    category: Mapped[str] = mapped_column(String(16), default="other", server_default="other", nullable=False)
+    role_a: Mapped[str] = mapped_column(String(20), nullable=False)
+    role_b: Mapped[str] = mapped_column(String(20), nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+@event.listens_for(RelationshipType.__table__, "after_create")
+def _seed_relationship_types(target, connection, **_kw) -> None:
+    """create_all（测试）建表后写入预置类型；生产环境由迁移 0007 写入。"""
+    connection.execute(
+        target.insert(),
+        [
+            {"project_id": None, "category": c, "role_a": a, "role_b": b, "sort": i}
+            for i, (c, a, b) in enumerate(PRESET_RELATIONSHIP_TYPES, start=1)
+        ],
+    )
+
+
+class Relationship(TimestampMixin, Base):
+    """一对角色只存一条无方向记录：a 是 b 的 type.role_a，b 是 a 的 type.role_b。
+
+    pair_low / pair_high = min / max(a_id, b_id)，由 relationship_service.apply_change 写入，保证按角色对唯一。
+    """
+
+    __tablename__ = "relationships"
+    __table_args__ = (
+        UniqueConstraint("pair_low", "pair_high"),
+        CheckConstraint("a_id <> b_id", name="distinct_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    a_id: Mapped[int] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), index=True, nullable=False)
+    b_id: Mapped[int] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), index=True, nullable=False)
+    pair_low: Mapped[int] = mapped_column(Integer, nullable=False)
+    pair_high: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 不设 ondelete（NO ACTION，语句结束时检查）：仍被引用的类型不能删除（服务层先查返回 409）；
+    # 不用 RESTRICT，避免删除项目时级联删除类型与关系的先后顺序导致失败
+    type_id: Mapped[int] = mapped_column(ForeignKey("relationship_types.id"), index=True, nullable=False)
+    # -100～100
+    intimacy: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # normal / broken / past / complicated
+    status: Mapped[str] = mapped_column(String(16), default="normal", server_default="normal", nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+
+
+class RelationshipHistory(TimestampMixin, Base):
+    """关系的每次变化（含新建）。changes = {字段: [旧, 新]}，类型 / 方向以名称记录，便于回看。"""
+
+    __tablename__ = "relationship_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    relationship_id: Mapped[int] = mapped_column(
+        ForeignKey("relationships.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    changes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+
+
+class ChapterCharacter(TimestampMixin, Base):
+    """章节手动指定的出场角色。"""
+
+    __tablename__ = "chapter_characters"
+
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), primary_key=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
 
 
 class Outline(TimestampMixin, Base):

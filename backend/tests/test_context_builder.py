@@ -1,4 +1,4 @@
-from app.services.context_builder import PriorChapter, assemble_context
+from app.services.context_builder import CastSection, PriorChapter, assemble_context
 from tests.helpers import create_ai_config, create_project, register, run_task
 
 
@@ -10,7 +10,7 @@ def _build(budget: int, chapters: list[PriorChapter], world: str = "世界观设
     return assemble_context(
         project_text="书名：《测试》",
         world_text=world,
-        characters_text=chars,
+        cast=CastSection(cards=[chars]),
         outline_text="第1卷\n  第1章 a：b",
         prior_chapters=chapters,
         budget=budget,
@@ -19,7 +19,7 @@ def _build(budget: int, chapters: list[PriorChapter], world: str = "世界观设
 
 def test_full_context_within_budget():
     ctx = _build(100_000, _chapters(5, 300))
-    assert "【世界观】" in ctx and "【主要角色】" in ctx and "【当前卷大纲】" in ctx
+    assert "【世界观】" in ctx and "【本章涉及角色】\n角色卡" in ctx and "【当前卷大纲】" in ctx
     # 最近 2 章全文
     assert "第5章 标题5\n第5章内容" + "字" * 300 in ctx
     assert "第4章 标题4\n第4章内容" in ctx

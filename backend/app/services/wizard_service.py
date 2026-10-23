@@ -1,4 +1,11 @@
-"""AI 向导（后台任务 wizard.*）：流式生成大纲 / 角色 / 世界观，结束后解析 JSON 并覆盖落库。"""
+"""AI 向导（后台任务 wizard.*）：流式生成大纲 / 角色 / 世界观，结束后解析 JSON 并覆盖落库。
+
+角色向导（R11）输出 {characters: [结构化字段],
+relationships: [{a, b, role_a, role_b, category, intimacy, description}]}，
+兼容旧格式（角色数组，只有 profile / relations_text）。写入顺序：先整体替换角色（级联清掉旧关系 / 成员 / 出场记录），
+再按名字（或别名）建立关系，经 relationship_service.apply_change(source="wizard") 写入；名字对不上的关系忽略。
+世界观向导输出 category，中英文映射到六个枚举值，映射不了的归为 other。
+"""
 
 import logging
 from collections.abc import AsyncIterator
@@ -14,9 +21,12 @@ from app.ai.prompts import build_characters_messages, build_outline_messages, bu
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.security import SecretCipher
 from app.models import Character, Outline, WorldSetting
+from app.models.entities import WORLD_CATEGORIES
 from app.schemas.chapter import WizardRequest
 from app.schemas.story import CharacterOut, OutlineOut, WorldSettingOut
-from app.services import ai_config_service, story_service
+from app.services import ai_config_service, relationship_service, story_service
+from app.services.cast_service import is_protagonist_role
+from app.services.entity_ai_service import normalize_aliases, normalize_category
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
 
@@ -193,12 +203,21 @@ def normalize_characters(obj: Any) -> list[dict]:
         name = _text(c.get("name"))[:100]
         if not name:
             continue
+        role_type = _text(c.get("role_type") or c.get("role"))[:50]
         rows.append(
             {
                 "name": name,
-                "role_type": _text(c.get("role_type") or c.get("role"))[:50],
+                "role_type": role_type,
                 "profile": _text(c.get("profile") or c.get("description")),
+                # 旧格式的自然语言关系保留为旧关系备注
                 "relations_text": _text(c.get("relations_text") or c.get("relations")),
+                "aliases": [a for a in normalize_aliases(c.get("aliases")) if a != name],
+                "age": _text(c.get("age"))[:50],
+                "gender": _text(c.get("gender"))[:20],
+                "appearance": _text(c.get("appearance")),
+                "personality": _text(c.get("personality")),
+                "background": _text(c.get("background")),
+                "always_in_context": is_protagonist_role(role_type),
             }
         )
     if not rows:
@@ -206,6 +225,56 @@ def normalize_characters(obj: Any) -> list[dict]:
     for i, r in enumerate(rows, start=1):
         r["sort"] = i
     return rows
+
+
+def normalize_character_relations(obj: Any) -> list[dict]:
+    """角色向导的 relationships（可选）：「a 是 b 的 role_a，b 是 a 的 role_b」。缺两端或称呼的丢弃。"""
+    items = obj.get("relationships") if isinstance(obj, dict) else None
+    if not isinstance(items, list):
+        return []
+    rows = []
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        a = _text(r.get("a") or r.get("a_name") or r.get("from"))[:100]
+        b = _text(r.get("b") or r.get("b_name") or r.get("to"))[:100]
+        role_a = _text(r.get("role_a"))[:20]
+        role_b = _text(r.get("role_b"))[:20] or role_a
+        role_a = role_a or role_b
+        if not a or not b or not role_a or a == b:
+            continue
+        rows.append(
+            {
+                "a": a,
+                "b": b,
+                "role_a": role_a,
+                "role_b": role_b,
+                "category": normalize_category(r.get("category")),
+                "intimacy": max(-100, min(100, _int(r.get("intimacy"), 0))),
+                "description": _text(r.get("description")),
+            }
+        )
+    return rows
+
+
+_WORLD_CATEGORY_ALIASES = (
+    ("place", ("地点", "地理", "地域", "地图", "场景", "城市", "区域", "location")),
+    ("faction", ("势力", "组织", "门派", "宗门", "国家", "阵营", "帮派", "种族")),
+    ("item", ("物品", "道具", "法宝", "装备", "神器", "宝物", "artifact")),
+    ("rule", ("规则", "体系", "力量", "法则", "科技", "制度", "修炼", "魔法", "system")),
+    ("history", ("历史", "事件", "传说", "往事", "纪元", "年表")),
+    ("other", ("其他",)),
+)
+
+
+def normalize_world_category(value: Any) -> str:
+    v = _text(value).lower()
+    if v in WORLD_CATEGORIES:
+        return v
+    for cat, keys in _WORLD_CATEGORY_ALIASES:
+        if any(k in v for k in keys):
+            return cat
+    return "other"
 
 
 def normalize_world(obj: Any) -> list[dict]:
@@ -217,12 +286,52 @@ def normalize_world(obj: Any) -> list[dict]:
         title = _text(w.get("title") or w.get("name"))[:200]
         if not title:
             continue
-        rows.append({"title": title, "content": _text(w.get("content") or w.get("description"))})
+        rows.append(
+            {
+                "title": title,
+                "content": _text(w.get("content") or w.get("description")),
+                "category": normalize_world_category(w.get("category") or w.get("type")),
+            }
+        )
     if not rows:
         raise JSONExtractError("未解析到任何世界观条目")
     for i, r in enumerate(rows, start=1):
         r["sort"] = i
     return rows
+
+
+async def _save_character_relations(
+    db: AsyncSession, project_id: int, entities: list[Character], rels: list[dict]
+) -> list[Any]:
+    """按名字（再按别名）匹配新建的角色并写入关系；对不上 / 指向自己 / 同一对已有关系的跳过。"""
+    lookup: dict[str, int] = {}
+    for c in entities:
+        lookup.setdefault(c.name, c.id)
+    for c in entities:
+        for a in c.aliases or []:
+            lookup.setdefault(a, c.id)
+    created = []
+    for r in rels:
+        a_id, b_id = lookup.get(r["a"]), lookup.get(r["b"])
+        if a_id is None or b_id is None or a_id == b_id:
+            continue
+        if await relationship_service.find_pair(db, a_id, b_id) is not None:
+            continue
+        created.append(
+            await relationship_service.create_relation(
+                db,
+                project_id,
+                a_id=a_id,
+                b_id=b_id,
+                role_a=r["role_a"],
+                role_b=r["role_b"],
+                category=r["category"],
+                intimacy=r["intimacy"],
+                description=r["description"],
+                source="wizard",
+            )
+        )
+    return created
 
 
 _KIND_SPEC = {
@@ -232,17 +341,26 @@ _KIND_SPEC = {
 }
 
 
-async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind, raw_text: str) -> list[dict]:
-    """解析模型输出并覆盖该类型旧数据，返回序列化后的实体列表。"""
+async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind, raw_text: str) -> dict[str, Any]:
+    """解析模型输出并覆盖该类型旧数据，返回 done 载荷 {items[, relationships]}。"""
     model, normalize, out_schema = _KIND_SPEC[kind]
-    rows = normalize(extract_json(raw_text))
+    obj = extract_json(raw_text)
+    rows = normalize(obj)
     await db.execute(delete(model).where(model.project_id == project_id))
     entities = [model(project_id=project_id, **row) for row in rows]
     db.add_all(entities)
+    await db.flush()
+    rels = []
+    if kind == "characters":
+        rels = await _save_character_relations(db, project_id, entities, normalize_character_relations(obj))
     await db.commit()
     for e in entities:
         await db.refresh(e)
-    return [out_schema.model_validate(e).model_dump(mode="json") for e in entities]
+    payload: dict[str, Any] = {"items": [out_schema.model_validate(e).model_dump(mode="json") for e in entities]}
+    if kind == "characters":
+        outs = await relationship_service.to_outs(db, rels)
+        payload["relationships"] = [o.model_dump(mode="json") for o in outs]
+    return payload
 
 
 async def run_wizard_job(job: WizardJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:
@@ -259,8 +377,8 @@ async def run_wizard_job(job: WizardJob, sessionmaker: async_sessionmaker[AsyncS
         if not raw.strip():
             raise AIProviderError("模型未返回任何内容")
         async with sessionmaker() as db:
-            items = await save_wizard_result(db, job.project_id, job.kind, raw)
-        yield "done", {"kind": job.kind, "items": items}
+            payload = await save_wizard_result(db, job.project_id, job.kind, raw)
+        yield "done", {"kind": job.kind, **payload}
     except JSONExtractError as exc:
         yield "error", {"detail": f"AI 输出解析失败：{exc}，请重新生成"}
     except AIProviderError as exc:

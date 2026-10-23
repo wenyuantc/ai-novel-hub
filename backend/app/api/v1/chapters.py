@@ -11,9 +11,10 @@ from app.schemas.chapter import (
     GenerateChapterRequest,
     PolishChapterRequest,
 )
+from app.schemas.story import ChapterCastOut, ChapterCastUpdate
 from app.schemas.task import TaskOut
+from app.services import cast_service, task_service
 from app.services import chapter_service as svc
-from app.services import task_service
 
 router = APIRouter(tags=["chapters"])
 
@@ -55,6 +56,19 @@ async def update_chapter(
 async def delete_chapter(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> Response:
     await svc.delete_chapter(db, user.id, project_id, chapter_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/projects/{project_id}/chapters/{chapter_id}/cast", response_model=ChapterCastOut)
+async def get_cast(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> ChapterCastOut:
+    return ChapterCastOut(character_ids=await cast_service.get_cast(db, user.id, project_id, chapter_id))
+
+
+@router.put("/projects/{project_id}/chapters/{chapter_id}/cast", response_model=ChapterCastOut)
+async def set_cast(
+    project_id: int, chapter_id: int, body: ChapterCastUpdate, user: CurrentUser, db: DbDep
+) -> ChapterCastOut:
+    ids = await cast_service.set_cast(db, user.id, project_id, chapter_id, body.character_ids)
+    return ChapterCastOut(character_ids=ids)
 
 
 @router.post("/chapters/{chapter_id}/generate", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)

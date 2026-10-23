@@ -88,7 +88,8 @@
 |---|---|---|---|
 | P0-1 | `chapter-versions` 章节版本与局部改写 | A13、A12、A17、A9、A15 | 无 |
 | P0-2 | `task-engine` 统一持久化后台任务与任务面板 | A16 | 无 |
-| P0-3 | `story-entities` 结构化设定：角色、组织、关系图谱、职业体系、卡片导入导出、世界观分类 | B1–B5、B9、B10 | 无 |
+| P0-3 | `story-entities` 结构化设定：角色、组织、关系图谱、卡片导入导出、世界观分类、上下文注入 | B1–B4、B9、B10 | task-engine |
+| P0-3b | `career-system` 职业等级体系（用户决定从 story-entities 拆出，紧接着做） | B5 | story-entities |
 | P0-4 | `analysis-memory` 章节分析、状态回写、伏笔、剧情记忆检索、按建议重写 | A10、A11、A7（摘要）、B6、B7 | chapter-versions、story-entities；分析任务用 task-engine |
 | P0-5 | `outline-pro` 大纲续写、一对多展开、导入导出、增量向导、批量生成 | A1、A2、A4、A5、A6、A8 | task-engine；批量写入依赖 chapter-versions |
 | P1-6 | `prompt-styles` 提示词模板、写作风格库、实例内工坊 | C1、C2、A14 | 无（最好在 P0-4、P0-5 之前，新提示词可直接走模板化） |

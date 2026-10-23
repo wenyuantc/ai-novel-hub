@@ -1,5 +1,7 @@
 import {
+  ApartmentOutlined,
   BookOutlined,
+  ClusterOutlined,
   DashboardOutlined,
   GlobalOutlined,
   OrderedListOutlined,
@@ -20,6 +22,8 @@ const NAV = [
   { key: 'wizard', icon: <RocketOutlined />, label: '创作向导' },
   { key: 'world', icon: <GlobalOutlined />, label: '世界观' },
   { key: 'characters', icon: <TeamOutlined />, label: '角色' },
+  { key: 'organizations', icon: <ClusterOutlined />, label: '组织' },
+  { key: 'relationships', icon: <ApartmentOutlined />, label: '关系' },
   { key: 'outlines', icon: <OrderedListOutlined />, label: '大纲' },
   { key: 'chapters', icon: <BookOutlined />, label: '章节' },
 ]

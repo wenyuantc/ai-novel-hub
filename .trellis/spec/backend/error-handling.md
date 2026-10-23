@@ -178,7 +178,9 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
 
 - **后台任务**（`10-23-task-engine`）：`POST /api/v1/chapters/{id}/generate`、`POST /api/v1/chapters/{id}/polish`、
   `POST /api/v1/projects/{id}/wizard/{outline|characters|world}` 都**返回 202 `TaskOut`**（普通 JSON），
-  实际执行在进程内任务引擎（`app/services/task_engine/`）中进行；实时输出通过
+  实际执行在进程内任务引擎（`app/services/task_engine/`）中进行；设定类任务 `POST /projects/{id}/characters/generate`、
+  `/organizations/generate`、`/characters/{cid}/parse-relations`（`character.generate` / `organization.generate` / `relations.parse`，
+  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；实时输出通过
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
 - **同步 SSE**：只剩 `POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎）。
 - 跨层：后端 `app/api/sse.py`、`task_engine/{engine,hub,registry}.py`、`handlers/{chapter,wizard}.py`、

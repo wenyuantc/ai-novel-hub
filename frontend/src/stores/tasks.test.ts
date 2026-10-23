@@ -14,6 +14,7 @@ function task(id: number, status: Task['status'] = 'running'): Task {
     stage: '',
     error: '',
     retry_of_id: null,
+    character_id: null,
     queue_position: null,
     created_at: '2026-10-23T08:00:00',
     started_at: null,

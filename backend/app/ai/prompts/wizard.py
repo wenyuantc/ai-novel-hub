@@ -57,21 +57,32 @@ def build_characters_messages(
     instruction: str = "",
 ) -> list[ChatMessage]:
     user = (
-        "请为以下小说设计主要角色卡。\n\n"
+        "请为以下小说设计主要角色卡，并给出角色之间的关系。\n\n"
         f"{format_project_info(info)}"
         f"{_reference_block('世界观', world_text)}"
         f"{_reference_block('大纲', outline_text)}"
         f"{_instruction_block(instruction)}\n\n"
         "【要求】\n"
         f"1. 设计 {character_count} 个角色（不少于 3 个），至少包含主角、重要配角与反派。\n"
-        "2. role_type 取值示例：主角、女主、配角、反派、导师、路人。\n"
-        "3. profile 描述外貌、性格、背景、能力与动机（100~300 字）。\n"
-        "4. relations_text 用自然语言描述该角色与其他角色的关系。\n"
+        "2. role_type 取值：主角、重要配角、配角、反派、其他。\n"
+        "3. aliases 为别名 / 称号列表（可为空）；appearance / personality / background 各 50~200 字；"
+        "profile 为 100 字以内的一句话简介。\n"
+        "4. relationships 描述角色两两之间的关系：a、b 必须是 characters 中的名字；"
+        "含义为「a 是 b 的 role_a，b 是 a 的 role_b」"
+        "（如 a=张三、role_a=师父、b=李四、role_b=徒弟；对称关系两者相同，如 朋友/朋友）。\n"
+        "   category 取值：family、social、hostile、work、other；intimacy 为 -100~100 的整数（敌对为负）。\n"
         f"5. {JSON_ONLY_RULE}\n\n"
         "【输出格式】\n"
-        "[\n"
-        '  {"name": "角色名", "role_type": "主角", "profile": "人物小传", "relations_text": "与某某是师徒……"}\n'
-        "]"
+        "{\n"
+        '  "characters": [\n'
+        '    {"name": "角色名", "aliases": ["别名"], "role_type": "主角", "age": "18", "gender": "男",\n'
+        '     "appearance": "外貌", "personality": "性格", "background": "背景", "profile": "简介"}\n'
+        "  ],\n"
+        '  "relationships": [\n'
+        '    {"a": "张三", "b": "李四", "role_a": "师父", "role_b": "徒弟", "category": "social",\n'
+        '     "intimacy": 60, "description": "关系描述"}\n'
+        "  ]\n"
+        "}"
     )
     return [{"role": "system", "content": NOVELIST_SYSTEM}, {"role": "user", "content": user}]
 
@@ -92,10 +103,12 @@ def build_world_messages(
         "【要求】\n"
         "1. 输出 5~10 个设定条目，覆盖时代背景、地理势力、力量/科技体系、社会规则、重要历史事件等与题材相关的方面。\n"
         "2. 每个条目 content 为 100~400 字，具体、自洽、可直接用于写作参考。\n"
-        f"3. {JSON_ONLY_RULE}\n\n"
+        "3. category 为条目分类，取值：place（地点）、faction（势力）、item（物品）、rule（规则 / 体系）、"
+        "history（历史）、other（其他）。\n"
+        f"4. {JSON_ONLY_RULE}\n\n"
         "【输出格式】\n"
         "[\n"
-        '  {"title": "条目名称", "content": "设定内容"}\n'
+        '  {"title": "条目名称", "category": "place", "content": "设定内容"}\n'
         "]"
     )
     return [{"role": "system", "content": NOVELIST_SYSTEM}, {"role": "user", "content": user}]

@@ -9,6 +9,8 @@ import { useLoader } from '../hooks/useLoader'
 import { useTaskStream } from '../hooks/useTaskStream'
 import { useTasksStore } from '../stores/tasks'
 import { formatTime } from '../utils/time'
+import { hasResultViewer } from './entities/taskResultViewers'
+import TaskResultModal from './entities/TaskResultModal'
 import StreamOutput from './StreamOutput'
 
 /** 右下角后台任务面板：活动任务数徽标 + 抽屉（进行中 / 最近），支持取消、重试、查看输出、跳转、删除、清理。 */
@@ -23,6 +25,7 @@ export default function TaskPanel() {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState('active')
   const [viewing, setViewing] = useState<Task | null>(null)
+  const [resultOf, setResultOf] = useState<Task | null>(null)
   const [clearing, setClearing] = useState(false)
 
   useEffect(() => startPolling(), [startPolling])
@@ -88,7 +91,7 @@ export default function TaskPanel() {
               key: 'active',
               label: `进行中（${active.length}）`,
               children: (
-                <TaskList tasks={active} onView={setViewing} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
+                <TaskList tasks={active} onView={setViewing} onViewResult={setResultOf} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
               ),
             },
             {
@@ -96,7 +99,7 @@ export default function TaskPanel() {
               label: '最近',
               children: (
                 <Spin spinning={recentLoading}>
-                  <TaskList tasks={recent} onView={setViewing} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
+                  <TaskList tasks={recent} onView={setViewing} onViewResult={setResultOf} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
                 </Spin>
               ),
             },
@@ -104,6 +107,7 @@ export default function TaskPanel() {
         />
       </Drawer>
       {viewing && <TaskOutputModal task={viewing} onClose={() => setViewing(null)} />}
+      {resultOf && <TaskResultModal task={resultOf} onClose={() => setResultOf(null)} />}
     </>
   )
 }
@@ -111,12 +115,14 @@ export default function TaskPanel() {
 interface ListProps {
   tasks: Task[]
   onView: (t: Task) => void
+  /** 已成功、且 kind 注册了结果查看组件的任务：打开可编辑预览 */
+  onViewResult: (t: Task) => void
   onTrack: (t: Task) => void
   onRemoved: () => void
   onNavigate: () => void
 }
 
-function TaskList({ tasks, onView, onTrack, onRemoved, onNavigate }: ListProps) {
+function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate }: ListProps) {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const [pending, setPending] = useState<number | null>(null)
@@ -146,6 +152,13 @@ function TaskList({ tasks, onView, onTrack, onRemoved, onNavigate }: ListProps) 
             查看输出
           </Button>,
         ]
+        if (t.status === 'succeeded' && hasResultViewer(t.kind)) {
+          actions.unshift(
+            <Button key="result" type="link" size="small" onClick={() => onViewResult(t)}>
+              查看结果
+            </Button>,
+          )
+        }
         if (link) {
           actions.push(
             <Button

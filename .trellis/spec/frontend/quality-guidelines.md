@@ -32,7 +32,7 @@ proxy.on('proxyRes', (proxyRes) => {
 
 ### 包体积
 
-`vite build` 目前产出一个约 1.37 MB 的单一 JS chunk（`dist/assets/index-*.js` ≈ 1,369 kB，gzip 后 ≈ 425 kB；含 `10-23-chapter-versions` 引入的 `diff` 与 `10-23-task-engine` 的任务面板），因为 AntD 和所有页面被打包在一起，且没有任何路由使用 `React.lazy` / 动态 `import()`。`build.chunkSizeWarningLimit` 已调高到 `1500`（kB），因此不会告警。如果 chunk 超过该上限，应在 `router.tsx` 中引入路由级懒加载（或 `manualChunks`），而不是再次调高上限。
+`10-23-story-entities` 之前 `vite build` 只产出一个约 1.37 MB 的单一 chunk；新增设定页面后升到 1,510 kB，超过 `build.chunkSizeWarningLimit = 1500`。按本规范改为**路由级懒加载**（`router.tsx` 的 `lazyPage`，React Router `lazy` 路由属性）：章节编辑器、组织页、关系页、模型配置页单独成 chunk；关系图谱再在 `RelationshipsPanel` 中用 `React.lazy` 拆出。第三方共享依赖在 `vite.config.ts` 的 `build.rolldownOptions.output.codeSplitting.groups` 中命名（Vite 8 / rolldown 下 `rollupOptions` 与 `manualChunks` 已弃用，这是等价的非弃用写法）：`vendor-react`（react / react-dom / scheduler / react-router）、`vendor-antd`（antd、`@ant-design/*`、`rc-*` / `@rc-component/*`、dayjs 及 antd 的工具依赖）；未分组的依赖由 rolldown 自动拆分。当前产物：入口 `index-*.js` ≈ 117 kB（gzip ≈ 35 kB），`vendor-antd-*.js` ≈ 1,123 kB（gzip ≈ 346 kB，最大的 chunk），`vendor-react-*.js` ≈ 204 kB（gzip ≈ 66 kB），`ChapterEditorPage-*.js` ≈ 38 kB，图谱 `RelationGraph-*.js` ≈ 226 kB（gzip ≈ 73 kB）+ `RelationGraph-*.css` ≈ 15 kB。**规则**：`@xyflow/react` / `@dagrejs/dagre` 只能在 `components/relations/RelationGraph.tsx` 中 import，且**不得**加入任何 `codeSplitting` 分组（否则会被并入同步加载的 vendor chunk；图谱筛选等纯逻辑放 `utils/graphFilter.ts`，不依赖图谱库）；新增分组只放所有页面共享的基础依赖，页面专用库（如 jsdiff）留给自动拆分。任何 chunk 超过 1500 kB 时继续拆路由或细分分组（例如把 `@ant-design/icons` 单独成组），**不得调高上限**。构建后检查输出里没有 `Some chunks are larger than 1500 kB`，并确认只有 `RelationGraph-*.js` 含图谱代码（`grep -l react-flow__ dist/assets/*.js`）。
 
 ---
 
@@ -64,7 +64,7 @@ proxy.on('proxyRes', (proxyRes) => {
 
 ## 测试要求
 
-- 纯逻辑（解析器、格式化函数、分组）需配套同目录的 `*.test.ts` Vitest 测试。现有测试套件包括 `src/api/sse.test.ts`（SSE 解析器 + `runGeneration` stub-fetch）、`src/api/tasks.test.ts`（`subscribeTask` 快照覆盖 / 重连退避 / done 与 error 分派 / 404 不重连 / 中止，以及 `queueLabel`、`taskLink`、查询串）、`src/stores/tasks.test.ts`（`pollInterval` 3s/15s、`upsertActive`、`countFinished`）、`src/utils/time.test.ts`（UTC 解析）、`src/utils/textOffset.test.ts`（UTF-16 ↔ 码点）、`src/utils/textDiff.test.ts`（逐字 diff 与增删字数）等，必须全部通过（`npm test`）。
+- 纯逻辑（解析器、格式化函数、分组）需配套同目录的 `*.test.ts` Vitest 测试。现有测试套件包括 `src/api/sse.test.ts`（SSE 解析器 + `runGeneration` stub-fetch）、`src/api/tasks.test.ts`（`subscribeTask` 快照覆盖 / 重连退避 / done 与 error 分派 / 404 不重连 / 中止，以及 `queueLabel`、`taskLink`、查询串）、`src/stores/tasks.test.ts`（`pollInterval` 3s/15s、`upsertActive`、`countFinished`）、`src/utils/time.test.ts`（UTC 解析）、`src/utils/textOffset.test.ts`（UTF-16 ↔ 码点）、`src/utils/textDiff.test.ts`（逐字 diff 与增删字数）、`src/api/relationships.test.ts`（视角称呼、类型选项、亲密度颜色）、`src/api/entityTasks.test.ts`（结果收窄、建议 → with-relations / batch 载荷）、`src/api/cards.test.ts`（大小 / JSON 校验、冲突默认跳过、重命名预览）、`src/api/characters.test.ts`（定位兼容旧值、主角判定、别名）、`src/utils/orgTree.test.ts`、`src/utils/world.test.ts`、`src/utils/graphFilter.test.ts` 等，必须全部通过（`npm test`）。
 - 测试环境是 `node`（没有 jsdom）；没有组件测试。需要 DOM/`fetch` 的代码通过 stub 全局对象来测试。
 - 修改 `sse.ts` 或 `client.ts` 时，必须遵循 [hook-guidelines.md](./hook-guidelines.md#场景sse-客户端解析器) 和 [type-safety.md](./type-safety.md#场景api-客户端契约) 中的「必需的测试」清单。
 - 测试名可以使用中文，与现有测试套件保持一致（`it('处理跨 chunk 截断', …)`）。
@@ -82,4 +82,4 @@ proxy.on('proxyRes', (proxyRes) => {
 - [ ] 章节编辑器的不变式保持完好：AI 操作前自动保存、Ctrl/Cmd+S、`useBlocker` + `beforeunload` 防护（仅未保存 / 改写待采纳）、卡在 `generating`（且无活动任务）时可复位且禁用保存。
 - [ ] 服务端时间戳使用 `formatTime` 渲染。
 - [ ] 任何新增的用户级全局状态在登出/401 时都会被重置。
-- [ ] 包体积仍低于 `chunkSizeWarningLimit`（检查 `vite build` 输出）。
+- [ ] 包体积仍低于 `chunkSizeWarningLimit`（检查 `vite build` 输出，`vendor-antd` 是最大的 chunk）；图谱库没有被主包或 vendor 分组引用（`RelationGraph-*.js` 单独存在）。

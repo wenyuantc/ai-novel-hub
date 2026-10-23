@@ -1,12 +1,32 @@
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
-import { App, Button, Card, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Space, Spin, Typography } from 'antd'
-import { useCallback, useState } from 'react'
+import {
+  App,
+  Button,
+  Card,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  List,
+  Modal,
+  Popconfirm,
+  Segmented,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+} from 'antd'
+import { useCallback, useMemo, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { worldApi } from '../../api/story'
 import type { WorldSetting, WorldSettingInput } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { asWorldCategory, groupWorld, WORLD_CATEGORIES, WORLD_CATEGORY_LABELS } from '../../utils/world'
+
+const CATEGORY_OPTIONS = WORLD_CATEGORIES.map((c) => ({ value: c, label: WORLD_CATEGORY_LABELS[c] }))
 
 export default function WorldPanel() {
   const pid = useProjectId()
@@ -18,16 +38,30 @@ export default function WorldPanel() {
   const [aiOpen, setAiOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm<WorldSettingInput>()
+  const [filter, setFilter] = useState<string>('all')
+  const groups = useMemo(
+    () => groupWorld(items).filter((g) => filter === 'all' || g.category === filter),
+    [items, filter],
+  )
 
   const openEdit = (item: WorldSetting | null) => {
     setEditing(item)
-    form.setFieldsValue(item ? { title: item.title, content: item.content, sort: item.sort } : { title: '', content: '', sort: null })
+    form.setFieldsValue(
+      item
+        ? { title: item.title, content: item.content, category: asWorldCategory(item.category), sort: item.sort }
+        : { title: '', content: '', category: filter === 'all' ? 'other' : asWorldCategory(filter), sort: null },
+    )
     setModalOpen(true)
   }
 
   const handleSave = async () => {
     const v = await form.validateFields()
-    const body: WorldSettingInput = { title: v.title.trim(), content: v.content ?? '', sort: v.sort ?? undefined }
+    const body: WorldSettingInput = {
+      title: v.title.trim(),
+      content: v.content ?? '',
+      category: v.category ?? 'other',
+      sort: v.sort ?? undefined,
+    }
     setSaving(true)
     try {
       if (editing) await worldApi.update(pid, editing.id, body)
@@ -70,42 +104,67 @@ export default function WorldPanel() {
         {items.length === 0 ? (
           <Empty description="暂无世界观设定，可手动新增或使用 AI 生成" />
         ) : (
-          <List
-            dataSource={items}
-            renderItem={(w) => (
-              <List.Item
-                actions={[
-                  <Button key="edit" type="link" size="small" onClick={() => openEdit(w)}>
-                    编辑
-                  </Button>,
-                  <Popconfirm
-                    key="del"
-                    title="删除该条目？"
-                    okText="删除"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
-                    onConfirm={() => handleDelete(w)}
-                  >
-                    <Button type="link" size="small" danger>
-                      删除
-                    </Button>
-                  </Popconfirm>,
-                ]}
-              >
-                <List.Item.Meta
-                  title={w.title}
-                  description={
-                    <Typography.Paragraph
-                      style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}
-                      ellipsis={{ rows: 4, expandable: true, symbol: '展开' }}
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Segmented
+              value={filter}
+              onChange={(v) => setFilter(String(v))}
+              options={[
+                { value: 'all', label: `全部（${items.length}）` },
+                ...groupWorld(items).map((g) => ({
+                  value: g.category,
+                  label: `${WORLD_CATEGORY_LABELS[g.category]}（${g.items.length}）`,
+                })),
+              ]}
+            />
+            {groups.map((g) => (
+              <div key={g.category}>
+                <Typography.Title level={5} style={{ marginTop: 8 }}>
+                  {WORLD_CATEGORY_LABELS[g.category]}
+                </Typography.Title>
+                <List
+                  dataSource={g.items}
+                  renderItem={(w) => (
+                    <List.Item
+                      actions={[
+                        <Button key="edit" type="link" size="small" onClick={() => openEdit(w)}>
+                          编辑
+                        </Button>,
+                        <Popconfirm
+                          key="del"
+                          title="删除该条目？"
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => handleDelete(w)}
+                        >
+                          <Button type="link" size="small" danger>
+                            删除
+                          </Button>
+                        </Popconfirm>,
+                      ]}
                     >
-                      {w.content || '（无内容）'}
-                    </Typography.Paragraph>
-                  }
+                      <List.Item.Meta
+                        title={
+                          <Space size={4}>
+                            <Tag>{WORLD_CATEGORY_LABELS[asWorldCategory(w.category)]}</Tag>
+                            {w.title}
+                          </Space>
+                        }
+                        description={
+                          <Typography.Paragraph
+                            style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}
+                            ellipsis={{ rows: 4, expandable: true, symbol: '展开' }}
+                          >
+                            {w.content || '（无内容）'}
+                          </Typography.Paragraph>
+                        }
+                      />
+                    </List.Item>
+                  )}
                 />
-              </List.Item>
-            )}
-          />
+              </div>
+            ))}
+          </Space>
         )}
       </Spin>
 
@@ -129,7 +188,10 @@ export default function WorldPanel() {
               { max: 200, message: '不超过 200 字' },
             ]}
           >
-            <Input placeholder="例如：力量体系 / 地理 / 势力" />
+            <Input placeholder="例如：力量体系 / 青云山 / 天机阁" />
+          </Form.Item>
+          <Form.Item name="category" label="分类">
+            <Select options={CATEGORY_OPTIONS} style={{ width: 200 }} />
           </Form.Item>
           <Form.Item name="content" label="内容">
             <Input.TextArea autoSize={{ minRows: 6, maxRows: 20 }} />

@@ -49,6 +49,9 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'wizard.outline': '大纲向导',
   'wizard.characters': '角色向导',
   'wizard.world': '世界观向导',
+  'character.generate': 'AI 生成角色',
+  'organization.generate': 'AI 生成组织',
+  'relations.parse': '解析旧关系',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -58,13 +61,25 @@ export function queueLabel(task: Pick<Task, 'status' | 'queue_position'>): strin
   return task.queue_position === 0 ? '排队中，下一个执行' : `排队中，前面还有 ${task.queue_position} 个任务`
 }
 
-/** 任务面板「跳转」目标：章节任务 → 章节编辑器；向导任务 → 向导页对应步骤。无法定位时为 null。 */
+/**
+ * 任务面板「跳转」目标：章节任务 → 章节编辑器；向导任务 → 向导页对应步骤；
+ * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页。无法定位时为 null。
+ */
 export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>): string | null {
   if (task.project_id === null) return null
-  if (task.kind === 'chapter.generate' || task.kind === 'chapter.polish') {
-    return task.chapter_id === null ? null : `/projects/${task.project_id}/chapters/${task.chapter_id}`
+  const base = `/projects/${task.project_id}`
+  switch (task.kind) {
+    case 'chapter.generate':
+    case 'chapter.polish':
+      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}`
+    case 'character.generate':
+    case 'relations.parse':
+      return `${base}/characters`
+    case 'organization.generate':
+      return `${base}/organizations`
+    default:
+      return `${base}/wizard?kind=${task.kind.slice('wizard.'.length)}`
   }
-  return `/projects/${task.project_id}/wizard?kind=${task.kind.slice('wizard.'.length)}`
 }
 
 /** 向导类型 → 任务 kind */

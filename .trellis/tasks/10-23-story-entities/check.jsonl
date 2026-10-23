@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对新表、关系语义、apply_change 契约与迁移"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试覆盖与禁止模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新页面与编辑器行为"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "实体跨 DB-服务-上下文-任务-前端多层"}

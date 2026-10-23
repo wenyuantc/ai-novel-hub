@@ -9,7 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models import Character, Outline, WorldSetting
+from app.services.cast_service import is_protagonist_role
 from app.services.project_service import get_owned_project
+
+WORLD_CATEGORY_LABELS = {
+    "place": "地点",
+    "faction": "势力",
+    "item": "物品",
+    "rule": "规则",
+    "history": "历史",
+    "other": "其他",
+}
 
 
 @dataclass(frozen=True)
@@ -24,14 +34,42 @@ CHARACTERS = StoryKind(Character, "角色不存在", (Character.sort, Character.
 OUTLINES = StoryKind(Outline, "大纲条目不存在", (Outline.volume_no, Outline.chapter_no, Outline.sort, Outline.id))
 
 
-async def list_items(db: AsyncSession, kind: StoryKind, project_id: int) -> list[Any]:
-    rows = await db.scalars(select(kind.model).where(kind.model.project_id == project_id).order_by(*kind.order_by))
+async def list_items(db: AsyncSession, kind: StoryKind, project_id: int, *, category: str | None = None) -> list[Any]:
+    stmt = select(kind.model).where(kind.model.project_id == project_id)
+    if category is not None and kind is WORLD:
+        stmt = stmt.where(WorldSetting.category == category)
+    rows = await db.scalars(stmt.order_by(*kind.order_by))
     return list(rows)
 
 
-async def list_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int) -> list[Any]:
+async def list_owned(
+    db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, *, category: str | None = None
+) -> list[Any]:
     await get_owned_project(db, user_id, project_id)
-    return await list_items(db, kind, project_id)
+    return await list_items(db, kind, project_id, category=category)
+
+
+async def next_sort(db: AsyncSession, model: Any, project_id: int) -> int:
+    max_sort = await db.scalar(select(func.max(model.sort)).where(model.project_id == project_id))
+    return (max_sort or 0) + 1
+
+
+def apply_character_defaults(values: dict[str, Any]) -> dict[str, Any]:
+    """新建角色：未指定「始终注入上下文」时按定位推断（主角默认开启）。"""
+    if values.get("always_in_context") is None:
+        values["always_in_context"] = is_protagonist_role(values.get("role_type"))
+    return values
+
+
+async def new_character(db: AsyncSession, project_id: int, values: dict[str, Any]) -> Character:
+    """新建角色并 flush（不 commit）；供 with-relations、卡片导入等单事务写入复用。"""
+    values = apply_character_defaults(dict(values))
+    if values.get("sort") is None:
+        values["sort"] = await next_sort(db, Character, project_id)
+    character = Character(project_id=project_id, **values)
+    db.add(character)
+    await db.flush()
+    return character
 
 
 async def get_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int) -> Any:
@@ -45,9 +83,10 @@ async def get_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id:
 async def create_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, data: BaseModel) -> Any:
     await get_owned_project(db, user_id, project_id)
     values = data.model_dump()
+    if kind is CHARACTERS:
+        apply_character_defaults(values)
     if values.get("sort") is None:
-        max_sort = await db.scalar(select(func.max(kind.model.sort)).where(kind.model.project_id == project_id))
-        values["sort"] = (max_sort or 0) + 1
+        values["sort"] = await next_sort(db, kind.model, project_id)
     item = kind.model(project_id=project_id, **values)
     db.add(item)
     await db.commit()
@@ -76,21 +115,53 @@ async def delete_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_
 # ---- 供提示词/上下文使用的文本格式化 ----
 
 
+def _world_entry(w: WorldSetting) -> str:
+    return f"■ {w.title}\n{w.content.strip()}"
+
+
 def format_world(items: list[WorldSetting]) -> str:
-    return "\n\n".join(f"■ {w.title}\n{w.content.strip()}" for w in items)
+    """按分类分组输出（地点 → 势力 → 物品 → 规则 → 历史 → 其他）；只有一个分类时不加分组标题。"""
+    groups: dict[str, list[WorldSetting]] = {}
+    for w in items:
+        cat = w.category if w.category in WORLD_CATEGORY_LABELS else "other"
+        groups.setdefault(cat, []).append(w)
+    if len(groups) <= 1:
+        return "\n\n".join(_world_entry(w) for w in items)
+    blocks = []
+    for cat, label in WORLD_CATEGORY_LABELS.items():
+        if cat in groups:
+            blocks.append(f"〔{label}〕\n" + "\n\n".join(_world_entry(w) for w in groups[cat]))
+    return "\n\n".join(blocks)
 
 
 def format_characters(items: list[Character]) -> str:
+    """向导参考用的角色摘要（简介 + 结构化描写 + 旧关系备注）。"""
     blocks = []
     for c in items:
         head = f"■ {c.name}" + (f"（{c.role_type}）" if c.role_type else "")
+        if c.aliases:
+            head += f" 别名：{'、'.join(c.aliases)}"
         lines = [head]
+        for label, value in (("性格", c.personality), ("背景", c.background)):
+            if value.strip():
+                lines.append(f"{label}：{value.strip()}")
         if c.profile.strip():
             lines.append(c.profile.strip())
         if c.relations_text.strip():
             lines.append(f"人物关系：{c.relations_text.strip()}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
+
+
+def format_roster(items: list[Character]) -> str:
+    """只列名字 / 定位 / 别名的简短名单（AI 单体生成时用于避免重名）。"""
+    lines = []
+    for c in items:
+        line = c.name + (f"（{c.role_type}）" if c.role_type else "")
+        if c.aliases:
+            line += f" 别名：{'、'.join(c.aliases)}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def format_outlines(items: list[Outline]) -> str:
