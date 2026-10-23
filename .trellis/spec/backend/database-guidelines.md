@@ -1,23 +1,23 @@
-# Database Guidelines
+# 数据库规范
 
-> Database patterns and conventions for this project.
+> 本项目的数据库模式与约定。
 
 ---
 
-## Overview
+## 概览
 
-- ORM: SQLAlchemy 2.x async (`sqlalchemy[asyncio]`), typed `Mapped[...]` / `mapped_column(...)`.
-- Driver: `asyncpg` on PostgreSQL in production
-  (default `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`);
-  `aiosqlite` in tests (dev dependency).
-- Migrations: Alembic, async `env.py`; revisions `0001` (initial) → `0002` (ai_configs model params) → `0003` (users `is_admin`/`is_active`/`token_version`, see [auth-admin.md](./auth-admin.md)). New revisions use `batch_alter_table` so SQLite tests can run them.
-- No ORM `relationship()` declarations. Cascades are done by database foreign keys;
-  all access goes through explicit `select()` in services
-  (docstring of `backend/app/models/entities.py`).
+- ORM：SQLAlchemy 2.x async（`sqlalchemy[asyncio]`），使用带类型的 `Mapped[...]` / `mapped_column(...)`。
+- 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
+  （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
+  测试中使用 `aiosqlite`（开发依赖）。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- 不声明 ORM `relationship()`。级联由数据库外键完成；
+  所有访问都通过 service 中显式的 `select()` 进行
+  （见 `backend/app/models/entities.py` 的 docstring）。
 
-### Engine and session setup
+### Engine 与 session 配置
 
-`backend/app/core/database.py`:
+`backend/app/core/database.py`：
 
 ```python
 def create_engine(database_url: str) -> AsyncEngine:
@@ -37,9 +37,8 @@ def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]
     return async_sessionmaker(engine, expire_on_commit=False)
 ```
 
-`create_app()` stores `engine` and `sessionmaker` on `app.state`; the engine is
-disposed in the lifespan. Per-request sessions come from `get_db` in
-`backend/app/core/deps.py`:
+`create_app()` 将 `engine` 和 `sessionmaker` 存放在 `app.state` 上；engine 在
+lifespan 中释放。每个请求的 session 来自 `backend/app/core/deps.py` 中的 `get_db`：
 
 ```python
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
@@ -47,27 +46,27 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 ```
 
-Streaming jobs must **not** reuse the request session: routes call
-`await db.close()` after the prepare step, and the SSE generator opens its own
-session with `async with sessionmaker() as db:` (`SessionmakerDep`).
+流式任务**不得**复用请求 session：路由在 prepare 步骤之后调用
+`await db.close()`，SSE 生成器通过 `async with sessionmaker() as db:`
+（`SessionmakerDep`）打开自己的 session。
 
-### Transactions
+### 事务
 
-There is no unit-of-work wrapper. Each mutating service function ends with an
-explicit `await db.commit()` followed by `await db.refresh(obj)` when the object
-is returned. Use `await db.flush()` when a later query in the same function
-must see the change (`ai_config_service.delete_config`).
+没有 unit-of-work 包装。每个有写操作的 service 函数都以显式的
+`await db.commit()` 结束，若需返回对象，则紧接着 `await db.refresh(obj)`。
+当同一函数中后续查询需要看到变更时，使用 `await db.flush()`
+（`ai_config_service.delete_config`）。
 
 ---
 
-## Query Patterns
+## 查询模式
 
-### user_id isolation (mandatory)
+### user_id 隔离（强制）
 
-Every service entry point first proves ownership. Foreign and non-existent rows
-both return **404** so existence is not leaked.
+每个 service 入口首先校验归属。他人的记录与不存在的记录
+都返回 **404**，以免泄露存在性。
 
-`backend/app/services/project_service.py`:
+`backend/app/services/project_service.py`：
 
 ```python
 async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
@@ -78,8 +77,8 @@ async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> 
     return project
 ```
 
-Tables without a `user_id` column are scoped by joining to the owner
-(`backend/app/services/chapter_service.py`):
+没有 `user_id` 列的表通过 join 到归属方来限定范围
+（`backend/app/services/chapter_service.py`）：
 
 ```python
 async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int) -> Chapter:
@@ -93,26 +92,26 @@ async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int) -> 
     return chapter
 ```
 
-Nested resources check the project first and then filter by **both** ids
-(`get_project_chapter`, `story_service.get_owned`):
+嵌套资源先校验项目，再按**两个** id 同时过滤
+（`get_project_chapter`、`story_service.get_owned`）：
 
 ```python
 await get_owned_project(db, user_id, project_id)
 chapter = await db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.project_id == project_id))
 ```
 
-Cross-references in request bodies must be validated against the same project
-(`chapter_service._get_outline` raises `BadRequestError("大纲条目不存在或不属于该项目")`).
-AI configs are filtered by `AIConfig.user_id == user_id` in every query
-(`ai_config_service.get_config`, `list_configs`, `_clear_default`, `resolve_config`).
+请求 body 中的交叉引用必须针对同一项目进行校验
+（`chapter_service._get_outline` 抛出 `BadRequestError("大纲条目不存在或不属于该项目")`）。
+AI 配置在每个查询中都按 `AIConfig.user_id == user_id` 过滤
+（`ai_config_service.get_config`、`list_configs`、`_clear_default`、`resolve_config`）。
 
-`backend/tests/test_projects_and_story.py::test_cross_user_isolation` asserts 404
-for every route of another user's project, including generate/polish/wizard/export.
+`backend/tests/test_projects_and_story.py::test_cross_user_isolation` 断言访问他人项目的
+每个路由都返回 404，包括 generate/polish/wizard/export。
 
-### Atomic state transitions
+### 原子状态迁移
 
-Concurrency-sensitive transitions are a conditional `UPDATE ... WHERE` and the
-row count is checked (`backend/app/services/generation_service.py`):
+对并发敏感的状态迁移使用条件 `UPDATE ... WHERE`，并检查
+受影响行数（`backend/app/services/generation_service.py`）：
 
 ```python
 result = await db.execute(
@@ -123,23 +122,23 @@ if result.rowcount != 1:
     raise ConflictError("该章节正在生成中，请稍候再试")
 ```
 
-The rollback uses the same guard: `... where(Chapter.id == chapter_id, Chapter.status == "generating")`.
+回退使用同样的守卫条件：`... where(Chapter.id == chapter_id, Chapter.status == "generating")`。
 
-### Aggregates
+### 聚合
 
-Counts/sums are done in SQL, not Python: `project_service._stats_subquery()` uses
-`func.count(Chapter.id)` and `func.coalesce(func.sum(Chapter.word_count), 0)` joined with `outerjoin`.
+计数/求和在 SQL 中完成，而不是在 Python 中：`project_service._stats_subquery()` 使用
+`func.count(Chapter.id)` 和 `func.coalesce(func.sum(Chapter.word_count), 0)`，并通过 `outerjoin` 关联。
 
-### Partial updates
+### 部分更新
 
-Update schemas use optional fields. Distinguish "omitted" from "explicit null"
-with `data.model_fields_set` for nullable columns
-(`"base_url" in fields`, `"outline_id" in fields`), and `model_dump(exclude_unset=True)`
-for generic updates (`project_service.update_project`).
+更新 schema 使用可选字段。对于可空列，使用 `data.model_fields_set`
+区分「未传」与「显式传 null」
+（`"base_url" in fields`、`"outline_id" in fields`）；通用更新则使用 `model_dump(exclude_unset=True)`
+（`project_service.update_project`）。
 
-### Word count rule
+### 字数规则
 
-`word_count` is always derived server-side via `chapter_service.count_words`:
+`word_count` 始终由服务端通过 `chapter_service.count_words` 计算：
 
 ```python
 def count_words(text: str) -> int:
@@ -147,28 +146,28 @@ def count_words(text: str) -> int:
     return len(_WS_RE.sub("", text or ""))
 ```
 
-Recompute it whenever `content` changes (create, update, generation `done`).
-Clients never send `word_count`.
+每当 `content` 变化（创建、更新、生成 `done`）时都要重新计算。
+客户端从不发送 `word_count`。
 
-### String length limits and AI output
+### 字符串长度限制与 AI 输出
 
-Column lengths (`backend/app/models/entities.py`) are mirrored in Pydantic
-`max_length` (`backend/app/schemas/*.py`):
+列长度（`backend/app/models/entities.py`）与 Pydantic 的
+`max_length`（`backend/app/schemas/*.py`）保持一致：
 
-| Column | Limit |
+| 列 | 限制 |
 |--------|-------|
-| `users.username` | String(64); schema 3..32 |
+| `users.username` | String(64)；schema 3..32 |
 | `ai_configs.name` / `characters.name` | String(100) |
 | `ai_configs.base_url` | String(500) |
 | `ai_configs.model` | String(200) |
-| `projects.title`, `world_settings.title`, `outlines.title`, `outlines.volume_title`, `chapters.title` | String(200) |
+| `projects.title`、`world_settings.title`、`outlines.title`、`outlines.volume_title`、`chapters.title` | String(200) |
 | `projects.genre` | String(100) |
 | `characters.role_type` | String(50) |
-| `chapters.status` | String(16); `projects.status` / `ai_configs.provider` String(32) |
-| long text (`content`, `summary`, `profile`, `premise`, `style`, `api_key_enc`) | Text |
+| `chapters.status` | String(16)；`projects.status` / `ai_configs.provider` String(32) |
+| 长文本（`content`、`summary`、`profile`、`premise`、`style`、`api_key_enc`） | Text |
 
-AI output bypasses Pydantic, so it **must** be truncated to the column length
-before insert (`backend/app/services/wizard_service.py`):
+AI 输出绕过了 Pydantic，因此插入前**必须**截断到列长度
+（`backend/app/services/wizard_service.py`）：
 
 ```python
 "title": _text(ch.get("title") or ch.get("name"))[:200],
@@ -176,46 +175,46 @@ name = _text(c.get("name"))[:100]
 "role_type": _text(c.get("role_type") or c.get("role"))[:50],
 ```
 
-PostgreSQL rejects over-long `VARCHAR` values (SQLite does not), so a missing
-slice only fails in production.
+PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截断
+只会在生产环境中失败。
 
-### Enumerated values
+### 枚举值
 
-Status/provider values are plain strings, with the allowed set as tuples in
-`entities.py` (`CHAPTER_STATUSES = ("draft", "generating", "done")`,
-`AI_PROVIDERS`, `PROJECT_STATUSES`) and `Literal[...]` types in schemas. There are no DB enums.
-
----
-
-## Migrations
-
-- Location: `backend/alembic/versions/`: `0001_initial_schema.py` (`down_revision = None`),
-  `0002_ai_config_model_params.py` (`down_revision = '0001'`, adds `thinking_level` with
-  `server_default='off'`, nullable `context_window_k` / `max_output_k`),
-  `0003_user_admin_fields.py` (`down_revision = '0002'`, adds `users.is_admin` / `is_active` /
-  `token_version` with `server_default` backfill; `test_0003_backfills_existing_users`).
-  `tests/test_migrations.py` asserts the new columns after `upgrade head`.
-- Apply: `cd backend && uv run alembic upgrade head`. The Docker image runs
-  `alembic upgrade head && uvicorn app.main:app ...` (`Dockerfile`).
-- Roll back: `uv run alembic downgrade -1` / `base`.
-- New revision: edit models, then
-  `uv run alembic revision --autogenerate -m "<message>"`, review the file, and keep
-  `ondelete=` and naming-convention names (`op.f('fk_...')`) intact.
-- `alembic/env.py` uses `render_as_batch=True` (SQLite-compatible ALTERs) and
-  resolves the URL in order: `sqlalchemy.url` set by the caller (tests) →
-  `DATABASE_URL` env → `get_settings().database_url`.
-- `alembic/versions` is excluded from ruff (`extend-exclude` in `pyproject.toml`).
-- `backend/tests/test_migrations.py::test_upgrade_and_downgrade` runs
-  `upgrade head` + `downgrade base` on a `tmp_path` SQLite file and asserts the
-  `chapters` FK `ondelete` values. Every new revision must keep this test passing.
+状态/provider 值是普通字符串，允许的取值以元组形式定义在
+`entities.py` 中（`CHAPTER_STATUSES = ("draft", "generating", "done")`、
+`AI_PROVIDERS`、`PROJECT_STATUSES`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
 
 ---
 
-## Naming Conventions
+## Migration
 
-- Tables: plural snake_case (`users`, `ai_configs`, `world_settings`, `chapters`).
-- PK: `id` integer. FK: `<singular>_id` with `index=True`.
-- Constraint names come from `NAMING_CONVENTION` in `backend/app/models/base.py`:
+- 位置：`backend/alembic/versions/`：`0001_initial_schema.py`（`down_revision = None`）、
+  `0002_ai_config_model_params.py`（`down_revision = '0001'`，新增 `thinking_level`，
+  `server_default='off'`，以及可空的 `context_window_k` / `max_output_k`）、
+  `0003_user_admin_fields.py`（`down_revision = '0002'`，新增 `users.is_admin` / `is_active` /
+  `token_version`，通过 `server_default` 回填；`test_0003_backfills_existing_users`）。
+  `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
+- 应用：`cd backend && uv run alembic upgrade head`。Docker 镜像运行
+  `alembic upgrade head && uvicorn app.main:app ...`（`Dockerfile`）。
+- 回滚：`uv run alembic downgrade -1` / `base`。
+- 新建版本：先修改模型，然后执行
+  `uv run alembic revision --autogenerate -m "<message>"`，审查生成的文件，并保持
+  `ondelete=` 和命名约定名称（`op.f('fk_...')`）不变。
+- `alembic/env.py` 使用 `render_as_batch=True`（兼容 SQLite 的 ALTER），并
+  按以下顺序解析 URL：调用方设置的 `sqlalchemy.url`（测试）→
+  `DATABASE_URL` 环境变量 → `get_settings().database_url`。
+- `alembic/versions` 被排除在 ruff 之外（`pyproject.toml` 中的 `extend-exclude`）。
+- `backend/tests/test_migrations.py::test_upgrade_and_downgrade` 在 `tmp_path` 下的 SQLite 文件上
+  执行 `upgrade head` + `downgrade base`，并断言 `chapters` 外键的 `ondelete` 值。
+  每个新版本都必须保持该测试通过。
+
+---
+
+## 命名约定
+
+- 表：复数 snake_case（`users`、`ai_configs`、`world_settings`、`chapters`）。
+- 主键：整数 `id`。外键：`<singular>_id`，并设置 `index=True`。
+- 约束名称来自 `backend/app/models/base.py` 中的 `NAMING_CONVENTION`：
 
 ```python
 NAMING_CONVENTION = {
@@ -227,7 +226,7 @@ NAMING_CONVENTION = {
 }
 ```
 
-- Timestamps: every model mixes in `TimestampMixin`:
+- 时间戳：每个模型都混入 `TimestampMixin`：
 
 ```python
 created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -236,13 +235,13 @@ updated_at: Mapped[datetime] = mapped_column(
 )
 ```
 
-  Always timezone-aware; never set them from Python.
-- Ordering columns are named `sort` (Integer, default 0).
+  始终带时区；永远不要在 Python 中设置它们。
+- 排序列命名为 `sort`（Integer，默认 0）。
 
-### Foreign key rules
+### 外键规则
 
-All FKs are `ON DELETE CASCADE` (user → ai_configs/projects; project →
-world_settings/characters/outlines/chapters), **except**:
+所有外键都是 `ON DELETE CASCADE`（user → ai_configs/projects；project →
+world_settings/characters/outlines/chapters），**例外**：
 
 ```python
 # 大纲被重新生成/删除时章节正文必须保留，因此用 SET NULL 而非 CASCADE
@@ -251,21 +250,21 @@ outline_id: Mapped[int | None] = mapped_column(
 )
 ```
 
-Why: the outline wizard replaces all outlines with
-`delete(Outline).where(Outline.project_id == project_id)`. With CASCADE that
-would silently delete written chapter text. Covered by
-`backend/tests/test_wizard.py::test_wizard_overwrites_and_keeps_chapters`
-(`assert ch["outline_id"] is None`, content preserved).
+原因：大纲向导通过
+`delete(Outline).where(Outline.project_id == project_id)` 替换全部大纲。若使用 CASCADE，
+会静默删除已写好的章节正文。由
+`backend/tests/test_wizard.py::test_wizard_overwrites_and_keeps_chapters` 覆盖
+（`assert ch["outline_id"] is None`，正文被保留）。
 
 ---
 
-## Common Mistakes
+## 常见错误
 
-- Querying by primary key only (`db.get(Chapter, id)`) inside a user-facing service:
-  this skips ownership. `db.get` is only used where ownership was already proven
-  (the SSE run phase uses `chapter_id` from a prepared job; `auth_service.get_user` by token subject).
-- Forgetting `PRAGMA foreign_keys=ON` for a hand-built SQLite engine — CASCADE/SET NULL tests silently pass wrong.
-- Inserting AI-produced strings into `String(n)` columns without slicing.
-- Reusing the request `AsyncSession` inside a `StreamingResponse` generator.
-- Changing an FK to CASCADE on a table that is bulk-replaced by the wizard.
-- Updating `content` without recomputing `word_count`.
+- 在面向用户的 service 中仅按主键查询（`db.get(Chapter, id)`）：
+  这会跳过归属校验。`db.get` 只在归属已被证明的地方使用
+  （SSE 运行阶段使用 prepare 好的任务中的 `chapter_id`；`auth_service.get_user` 按 token subject 查询）。
+- 手动构建 SQLite engine 时忘记 `PRAGMA foreign_keys=ON` —— CASCADE/SET NULL 测试会以错误的方式静默通过。
+- 将 AI 生成的字符串插入 `String(n)` 列时没有截断。
+- 在 `StreamingResponse` 生成器中复用请求的 `AsyncSession`。
+- 将某个会被向导批量替换的表的外键改为 CASCADE。
+- 更新 `content` 时没有重新计算 `word_count`。

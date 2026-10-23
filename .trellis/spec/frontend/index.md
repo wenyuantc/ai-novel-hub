@@ -1,31 +1,31 @@
-# Frontend Development Guidelines
+# 前端开发规范
 
-> Conventions for `frontend/` (Vite 8 + React 18 + TypeScript strict + Ant Design 5 + Zustand 5 + React Router 6 + Vitest).
-
----
-
-## Overview
-
-The frontend is a single-page app served by Vite in dev (`/api` proxied to the FastAPI backend) and built into one static bundle. All backend calls go through `src/api/` (fetch wrapper + SSE client); UI is Ant Design with the `zh_CN` locale; global state is three small Zustand stores; everything else is local component state. These documents describe what the code actually does today — read the relevant one before changing a layer.
+> `frontend/` 的约定（Vite 8 + React 18 + TypeScript strict + Ant Design 5 + Zustand 5 + React Router 6 + Vitest）。
 
 ---
 
-## Guidelines Index
+## 概述
 
-| Guide | Description | Status |
+前端是一个单页应用：开发时由 Vite 提供服务（`/api` 代理到 FastAPI 后端），构建后产出一个静态包。所有后端调用都经过 `src/api/`（fetch 封装 + SSE 客户端）；UI 使用 Ant Design 并启用 `zh_CN` 语言包；全局状态由三个小型 Zustand store 承担；其余一律是组件本地状态。这些文档描述的是代码当前的实际行为——修改某一层之前请先阅读对应文档。
+
+---
+
+## 规范索引
+
+| 规范 | 说明 | 状态 |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | `src/api`, `stores`, `hooks`, `components`, `pages/project`, `utils`, `router.tsx` layout and naming | Filled |
-| [Component Guidelines](./component-guidelines.md) | AntD/zh_CN setup, reusable components, page patterns, chapter editor behaviors, AI config page hint, admin users page / `RequireAdmin` | Filled |
-| [Hook Guidelines](./hook-guidelines.md) | `useStreamTask`, `useLoader`, `useProjectId`, `useHasAIConfig`; SSE client code-spec scenario | Filled |
-| [State Management](./state-management.md) | Zustand stores (auth / aiConfigs / project), global vs local, clearing on logout/401 | Filled |
-| [Quality Guidelines](./quality-guidelines.md) | lint/build/test gate, Vite proxy, bundle size, forbidden/required patterns, review checklist | Filled |
-| [Type Safety](./type-safety.md) | `types.ts` mirrors backend schemas, enums, PATCH semantics, UTC time parsing; API client code-spec scenario | Filled |
+| [目录结构](./directory-structure.md) | `src/api`、`stores`、`hooks`、`components`、`pages/project`、`utils`、`router.tsx` 的布局与命名 | 已填写 |
+| [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理员用户页 / `RequireAdmin` | 已填写 |
+| [Hook 规范](./hook-guidelines.md) | `useStreamTask`、`useLoader`、`useProjectId`、`useHasAIConfig`；SSE 客户端 code-spec 场景 | 已填写 |
+| [状态管理](./state-management.md) | Zustand store（auth / aiConfigs / project）、全局与本地状态、登出/401 时清空 | 已填写 |
+| [质量规范](./quality-guidelines.md) | lint/build/test 门禁、Vite 代理、包体积、禁止/必需模式、评审清单 | 已填写 |
+| [类型安全](./type-safety.md) | `types.ts` 镜像后端 schema、枚举、PATCH 语义、UTC 时间解析；API 客户端 code-spec 场景 | 已填写 |
 
-Code-spec scenarios (7-section format):
+Code-spec 场景（7 段式格式）：
 
-- API client contract (`src/api/client.ts`, `src/api/projects.ts` export) — in [Type Safety](./type-safety.md#scenario-api-client-contract).
-- SSE client parser (`src/api/sse.ts`, `src/api/sse.test.ts`) — in [Hook Guidelines](./hook-guidelines.md#scenario-sse-client-parser).
+- API 客户端契约（`src/api/client.ts`、`src/api/projects.ts` 导出）——见 [类型安全](./type-safety.md#场景api-客户端契约)。
+- SSE 客户端解析器（`src/api/sse.ts`、`src/api/sse.test.ts`）——见 [Hook 规范](./hook-guidelines.md#场景sse-客户端解析器)。
 
 ---
 
-**Language**: All documentation is written in **English**; Chinese appears only when quoting actual UI strings.
+**语言**：所有文档均使用**简体中文**编写；代码、标识符、路径与命令保持原样。

@@ -1,14 +1,14 @@
-# Directory Structure
+# 目录结构
 
-> How backend code is organized in this project.
+> 本项目后端代码的组织方式。
 
 ---
 
-## Overview
+## 概述
 
-The backend is a single FastAPI application under `backend/app/`, managed with `uv`
-(`backend/pyproject.toml`, `[tool.uv] package = false`, Python `>=3.12,<3.13`).
-It follows a strict layering:
+后端是位于 `backend/app/` 下的单个 FastAPI 应用，使用 `uv` 管理
+（`backend/pyproject.toml`，`[tool.uv] package = false`，Python `>=3.12,<3.13`）。
+它遵循严格的分层：
 
 ```
 HTTP route (app/api/v1)  ->  service (app/services)  ->  ORM model (app/models)
@@ -17,81 +17,81 @@ HTTP route (app/api/v1)  ->  service (app/services)  ->  ORM model (app/models)
    (app/schemas)
 ```
 
-- Routes are thin: parse input via Pydantic schemas, resolve dependencies from
-  `app/core/deps.py`, call **one** service function, return the result.
-- All business queries and all `user_id` isolation live in `app/services/`.
-- `app/ai/` knows nothing about HTTP or the DB; it exposes an `LLMProvider`
-  abstraction, prompt builders and the SSRF guard.
+- 路由保持轻薄：通过 Pydantic schema 解析输入，从 `app/core/deps.py` 解析依赖，
+  调用**一个** service 函数，然后返回结果。
+- 所有业务查询以及所有 `user_id` 隔离都放在 `app/services/` 中。
+- `app/ai/` 对 HTTP 和数据库一无所知；它对外提供 `LLMProvider` 抽象、
+  prompt 构建器以及 SSRF 防护。
 
-The app is created by a factory, `create_app(settings, provider_factory)` in
-`backend/app/main.py`, which stores shared objects on `app.state` (engine,
-sessionmaker, cipher, provider factory) so tests can inject a fake LLM.
+应用由工厂函数创建，即 `backend/app/main.py` 中的 `create_app(settings, provider_factory)`，
+它将共享对象（engine、sessionmaker、cipher、provider factory）存放在 `app.state` 上，
+以便测试注入假的 LLM。
 
 ---
 
-## Directory Layout
+## 目录布局
 
 ```
 backend/
-├── pyproject.toml            # deps, pytest + ruff config
+├── pyproject.toml            # 依赖、pytest + ruff 配置
 ├── alembic.ini
 ├── alembic/
-│   ├── env.py                # async migrations, render_as_batch=True
+│   ├── env.py                # 异步 migration，render_as_batch=True
 │   └── versions/0001_initial_schema.py
 ├── app/
-│   ├── main.py               # create_app(), error handlers, SPA fallback, /healthz
+│   ├── main.py               # create_app()、错误处理器、SPA 回退、/healthz
 │   ├── api/
-│   │   ├── sse.py            # format_sse(), sse_response() — SSE framing
+│   │   ├── sse.py            # format_sse()、sse_response() —— SSE 帧封装
 │   │   └── v1/
 │   │       ├── __init__.py   # api_router = APIRouter(prefix="/api/v1")
 │   │       ├── auth.py       # /auth/register|login|logout|me|config
-│   │       ├── ai_configs.py # /ai-configs CRUD, /{id}/default, /{id}/test
-│   │       ├── projects.py   # /projects CRUD, /{id}/export
-│   │       ├── story.py      # /projects/{id}/world|characters|outlines (router factory)
-│   │       ├── chapters.py   # chapters CRUD, /chapters/{id}/generate|polish (SSE)
-│   │       └── wizard.py     # /projects/{id}/wizard/{outline|characters|world} (SSE)
+│   │       ├── ai_configs.py # /ai-configs CRUD、/{id}/default、/{id}/test
+│   │       ├── projects.py   # /projects CRUD、/{id}/export
+│   │       ├── story.py      # /projects/{id}/world|characters|outlines（路由工厂）
+│   │       ├── chapters.py   # 章节 CRUD、/chapters/{id}/generate|polish（SSE）
+│   │       └── wizard.py     # /projects/{id}/wizard/{outline|characters|world}（SSE）
 │   ├── core/
-│   │   ├── config.py         # Settings (pydantic-settings), fail-fast validators
-│   │   ├── database.py       # create_engine(), create_sessionmaker()
-│   │   ├── deps.py           # DbDep, CurrentUser, CipherDep, FactoryDep, ...
-│   │   ├── errors.py         # AppError hierarchy + register_error_handlers()
-│   │   └── security.py       # bcrypt, JWT, SecretCipher (Fernet), mask_secret()
+│   │   ├── config.py         # Settings（pydantic-settings）、fail-fast 校验器
+│   │   ├── database.py       # create_engine()、create_sessionmaker()
+│   │   ├── deps.py           # DbDep、CurrentUser、CipherDep、FactoryDep、...
+│   │   ├── errors.py         # AppError 层级 + register_error_handlers()
+│   │   └── security.py       # bcrypt、JWT、SecretCipher（Fernet）、mask_secret()
 │   ├── models/
-│   │   ├── base.py           # Base (naming convention), TimestampMixin
-│   │   └── entities.py       # User, AIConfig, Project, WorldSetting, Character, Outline, Chapter
-│   ├── schemas/              # Pydantic request/response models per domain
+│   │   ├── base.py           # Base（命名约定）、TimestampMixin
+│   │   └── entities.py       # User、AIConfig、Project、WorldSetting、Character、Outline、Chapter
+│   ├── schemas/              # 按领域划分的 Pydantic 请求/响应模型
 │   │   ├── auth.py  ai_config.py  project.py  story.py  chapter.py
 │   ├── services/
 │   │   ├── auth_service.py        ai_config_service.py   project_service.py
 │   │   ├── story_service.py       chapter_service.py     export_service.py
-│   │   ├── context_builder.py     # chapter prompt context with char budget
-│   │   ├── generation_service.py  # chapter generate/polish jobs (prepare + run)
-│   │   └── wizard_service.py      # outline/characters/world jobs + JSON normalize
+│   │   ├── context_builder.py     # 带字符预算的章节 prompt 上下文
+│   │   ├── generation_service.py  # 章节生成/润色任务（prepare + run）
+│   │   └── wizard_service.py      # 大纲/角色/世界观任务 + JSON 规范化
 │   └── ai/
-│       ├── endpoint_guard.py # SSRF guard for user-supplied Base URLs
-│       ├── json_extract.py   # tolerant JSON extraction from model output
+│       ├── endpoint_guard.py # 针对用户提供的 Base URL 的 SSRF 防护
+│       ├── json_extract.py   # 从模型输出中容错提取 JSON
 │       ├── providers/
-│       │   ├── __init__.py   # create_provider(), ProviderFactory type
-│       │   ├── base.py       # LLMProvider ABC, AIProviderError, describe_error()
+│       │   ├── __init__.py   # create_provider()、ProviderFactory 类型
+│       │   ├── base.py       # LLMProvider 抽象基类、AIProviderError、describe_error()
 │       │   ├── openai_compat.py  anthropic.py  gemini.py
 │       └── prompts/
 │           ├── __init__.py   common.py   chapter.py   wizard.py
 └── tests/
-    ├── conftest.py           # app/client fixtures, autouse fake_dns
-    ├── helpers.py            # FakeLLM, make_settings, register, parse_sse
+    ├── conftest.py           # app/client fixture、autouse 的 fake_dns
+    ├── helpers.py            # FakeLLM、make_settings、register、parse_sse
     └── test_*.py
 ```
 
 ---
 
-## Module Organization
+## 模块组织
 
-**Rule: routes never run ORM queries; all business queries go through services.**
-Route modules import from `app.core.deps`, `app.schemas.*` and `app.services.*`.
-The only `app.models` imports in `app/api/v1/` are for return-type annotations
-(`User` in `auth.py`, `Chapter` in `chapters.py`) — no `select()` / `db.get()` in routes.
+**规则：路由绝不执行 ORM 查询；所有业务查询都经由 service。**
+路由模块从 `app.core.deps`、`app.schemas.*` 和 `app.services.*` 导入。
+`app/api/v1/` 中对 `app.models` 的导入仅用于返回类型注解
+（`auth.py` 中的 `User`、`chapters.py` 中的 `Chapter`）—— 路由中没有 `select()` / `db.get()`。
 
-Typical route (`backend/app/api/v1/chapters.py`):
+典型路由（`backend/app/api/v1/chapters.py`）：
 
 ```python
 @router.patch("/projects/{project_id}/chapters/{chapter_id}", response_model=ChapterOut)
@@ -101,51 +101,50 @@ async def update_chapter(
     return await svc.update_chapter(db, user.id, project_id, chapter_id, body)
 ```
 
-Service functions take `db: AsyncSession` and `user_id: int` as the first
-arguments and start with an ownership check (see `database-guidelines.md`).
+service 函数以 `db: AsyncSession` 和 `user_id: int` 作为前两个参数，
+并以归属校验开头（见 `database-guidelines.md`）。
 
-Adding a new feature:
+新增一个功能：
 
-1. Model in `app/models/entities.py` (no ORM `relationship()`), then an Alembic revision.
-2. Schemas in `app/schemas/<domain>.py` (`XxxCreate`, `XxxUpdate`, `XxxOut` with
-   `ConfigDict(from_attributes=True)`). Exception: when an Out schema must not mirror
-   the row (secrets), build it explicitly in the service — `AIConfigOut` is built by
-   `ai_config_service.to_out()` so only `api_key_masked` leaves the server.
-3. Service in `app/services/<domain>_service.py`, every entry point scoped by `user_id`.
-4. Router in `app/api/v1/<domain>.py`, registered in `app/api/v1/__init__.py`.
-5. Any LLM call goes through `ai_config_service.resolve_config()` +
-   `ai_config_service.build_provider()`; prompt text lives in `app/ai/prompts/`, never inline in services.
+1. 在 `app/models/entities.py` 中添加模型（不使用 ORM `relationship()`），然后添加一个 Alembic revision。
+2. 在 `app/schemas/<domain>.py` 中添加 schema（`XxxCreate`、`XxxUpdate`、带
+   `ConfigDict(from_attributes=True)` 的 `XxxOut`）。例外：当 Out schema 不能直接映射
+   数据行（涉及密钥）时，在 service 中显式构建 —— `AIConfigOut` 由
+   `ai_config_service.to_out()` 构建，确保只有 `api_key_masked` 离开服务器。
+3. 在 `app/services/<domain>_service.py` 中添加 service，每个入口都按 `user_id` 限定范围。
+4. 在 `app/api/v1/<domain>.py` 中添加路由，并在 `app/api/v1/__init__.py` 中注册。
+5. 任何 LLM 调用都经由 `ai_config_service.resolve_config()` +
+   `ai_config_service.build_provider()`；prompt 文本放在 `app/ai/prompts/` 中，绝不内联在 service 里。
 
-AI streaming endpoints are split into a **prepare** step (request session, may
-raise `AppError`) and a **run** async generator (own session from the
-sessionmaker) — see `generation_service.py` / `wizard_service.py` and the SSE
-contract in `error-handling.md`.
+AI 流式端点拆分为 **prepare** 步骤（使用请求 session，可能抛出 `AppError`）
+和 **run** 异步生成器（使用从 sessionmaker 获取的独立 session）——
+见 `generation_service.py` / `wizard_service.py` 以及 `error-handling.md` 中的 SSE 契约。
 
-Repetitive CRUD is generated by a factory instead of copy-paste:
-`backend/app/api/v1/story.py` `_make_router(segment, kind, create_schema, update_schema, out_schema, tag)`
-backed by the generic `StoryKind` dataclass in `backend/app/services/story_service.py`.
-
----
-
-## Naming Conventions
-
-- Files: `snake_case.py`. Services are `<domain>_service.py`; helpers that are not
-  domain services keep a descriptive name (`context_builder.py`, `json_extract.py`, `endpoint_guard.py`).
-- Routes import a service module as `svc`: `from app.services import chapter_service as svc`.
-- Router objects are named `router` (or `world_router` etc. when one module builds several).
-- Schemas: `<Entity>Create`, `<Entity>Update`, `<Entity>Out`, plus request DTOs like
-  `GenerateChapterRequest`, `WizardRequest`.
-- Ownership helpers: `get_owned_<entity>(db, user_id, id)`.
-- Dependency aliases in `deps.py` end with `Dep` (`DbDep`, `SettingsDep`, `CipherDep`,
-  `FactoryDep`, `SessionmakerDep`), except `CurrentUser`.
-- Code comments and docstrings are written in Chinese; user-facing error strings are Chinese.
+重复性的 CRUD 由工厂生成，而非复制粘贴：
+`backend/app/api/v1/story.py` 中的 `_make_router(segment, kind, create_schema, update_schema, out_schema, tag)`，
+其背后是 `backend/app/services/story_service.py` 中通用的 `StoryKind` dataclass。
 
 ---
 
-## Examples
+## 命名约定
 
-- Thin router + service split: `backend/app/api/v1/ai_configs.py` with `backend/app/services/ai_config_service.py`.
-- Generic CRUD factory: `backend/app/api/v1/story.py` + `backend/app/services/story_service.py`.
-- Two-phase streaming job: `backend/app/services/generation_service.py`
-  (`prepare_chapter_job` / `run_chapter_job`).
-- Provider abstraction: `backend/app/ai/providers/base.py` and the three implementations.
+- 文件：`snake_case.py`。service 命名为 `<domain>_service.py`；不属于领域 service 的
+  辅助模块保留描述性名称（`context_builder.py`、`json_extract.py`、`endpoint_guard.py`）。
+- 路由以 `svc` 名称导入 service 模块：`from app.services import chapter_service as svc`。
+- 路由对象命名为 `router`（当一个模块构建多个路由时命名为 `world_router` 等）。
+- Schema：`<Entity>Create`、`<Entity>Update`、`<Entity>Out`，以及诸如
+  `GenerateChapterRequest`、`WizardRequest` 之类的请求 DTO。
+- 归属校验辅助函数：`get_owned_<entity>(db, user_id, id)`。
+- `deps.py` 中的依赖别名以 `Dep` 结尾（`DbDep`、`SettingsDep`、`CipherDep`、
+  `FactoryDep`、`SessionmakerDep`），`CurrentUser` 除外。
+- 代码注释和 docstring 使用中文编写；面向用户的错误字符串使用中文。
+
+---
+
+## 示例
+
+- 轻薄路由 + service 拆分：`backend/app/api/v1/ai_configs.py` 搭配 `backend/app/services/ai_config_service.py`。
+- 通用 CRUD 工厂：`backend/app/api/v1/story.py` + `backend/app/services/story_service.py`。
+- 两阶段流式任务：`backend/app/services/generation_service.py`
+  （`prepare_chapter_job` / `run_chapter_job`）。
+- Provider 抽象：`backend/app/ai/providers/base.py` 及其三个实现。

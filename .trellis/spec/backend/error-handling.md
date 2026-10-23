@@ -1,25 +1,25 @@
-# Error Handling
+# 错误处理
 
-> How errors are handled in this project.
-
----
-
-## Overview
-
-- Business code raises typed `AppError` subclasses from `backend/app/core/errors.py`.
-  It never builds `JSONResponse` or raises `fastapi.HTTPException` itself.
-- `register_error_handlers(app)` (called in `create_app`) maps every error to the
-  same envelope: `{"detail": "<Chinese message>"}`.
-- Model/provider failures are `AIProviderError` (`backend/app/ai/providers/base.py`),
-  whose message is already safe, user-facing Chinese. Services convert them to
-  `BadRequestError` before streaming starts, or to an SSE `error` event after.
-- Unknown exceptions are logged with a stack trace and masked as 500 `服务器内部错误`.
+> 本项目中错误的处理方式。
 
 ---
 
-## Error Types
+## 概览
 
-`backend/app/core/errors.py` (subclasses condensed to one line each):
+- 业务代码抛出 `backend/app/core/errors.py` 中带类型的 `AppError` 子类，
+  从不自行构造 `JSONResponse` 或抛出 `fastapi.HTTPException`。
+- `register_error_handlers(app)`（在 `create_app` 中调用）将所有错误映射为
+  统一的响应结构：`{"detail": "<中文消息>"}`。
+- 模型/provider 失败为 `AIProviderError`（`backend/app/ai/providers/base.py`），
+  其 message 已是可安全展示给用户的中文。service 在流式开始前将其转换为
+  `BadRequestError`，开始后则转换为 SSE `error` 事件。
+- 未知异常会连同堆栈记录日志，并对外屏蔽为 500 `服务器内部错误`。
+
+---
+
+## 错误类型
+
+`backend/app/core/errors.py`（子类各压缩为一行）：
 
 ```python
 class AppError(Exception):
@@ -37,18 +37,18 @@ class NotFoundError(AppError):     status_code = 404
 class ConflictError(AppError):     status_code = 409
 ```
 
-When to use which (real call sites):
+各类型的适用场景（真实调用点）：
 
-| Error | Used for | Example |
+| 错误 | 用途 | 示例 |
 |-------|----------|---------|
-| `BadRequestError` | invalid business input, missing prerequisite, blocked AI endpoint | `"尚未配置 AI 模型，请先在「模型配置」中添加并设为默认"` (`ai_config_service.resolve_config`), `"章节正文为空，无法润色"` |
-| `UnauthorizedError` | no/invalid/expired JWT, wrong credentials | `"未登录或登录已过期"` (`deps.get_current_user`), `"用户名或密码错误"` |
-| `ForbiddenError` | feature disabled by config | `"注册已关闭，请联系管理员"` |
-| `NotFoundError` | missing **or foreign-owned** resource | `"项目不存在"`, `"章节不存在"`, `"模型配置不存在"` |
-| `ConflictError` | uniqueness / state conflict | `"用户名已存在"`, `"该章节正在生成中，请稍候再试"` |
+| `BadRequestError` | 业务输入非法、缺少前置条件、AI 端点被拦截 | `"尚未配置 AI 模型，请先在「模型配置」中添加并设为默认"`（`ai_config_service.resolve_config`）、`"章节正文为空，无法润色"` |
+| `UnauthorizedError` | 无 JWT / JWT 无效或过期、凭据错误 | `"未登录或登录已过期"`（`deps.get_current_user`）、`"用户名或密码错误"` |
+| `ForbiddenError` | 功能被配置关闭 | `"注册已关闭，请联系管理员"` |
+| `NotFoundError` | 资源不存在**或属于他人** | `"项目不存在"`、`"章节不存在"`、`"模型配置不存在"` |
+| `ConflictError` | 唯一性 / 状态冲突 | `"用户名已存在"`、`"该章节正在生成中，请稍候再试"` |
 
-`AIProviderError(Exception)` — "模型调用失败（网络、鉴权、配额等），message 为可直接展示给用户的中文说明".
-Providers wrap every SDK exception via `describe_error`, which truncates to 500 chars:
+`AIProviderError(Exception)` ——「模型调用失败（网络、鉴权、配额等），message 为可直接展示给用户的中文说明」。
+provider 通过 `describe_error` 包装所有 SDK 异常，并截断至 500 字符：
 
 ```python
 def describe_error(exc: Exception) -> str:
@@ -58,7 +58,7 @@ def describe_error(exc: Exception) -> str:
     return f"模型调用失败：{text}"
 ```
 
-Provider pattern (`backend/app/ai/providers/openai_compat.py`, same in anthropic/gemini):
+provider 模式（`backend/app/ai/providers/openai_compat.py`，anthropic/gemini 相同）：
 
 ```python
 try:
@@ -71,17 +71,17 @@ finally:
     await client.close()
 ```
 
-`JSONExtractError(ValueError)` (`backend/app/ai/json_extract.py`) signals unparsable
-wizard output; it is turned into an SSE error `"AI 输出解析失败：{exc}，请重新生成"`.
+`JSONExtractError(ValueError)`（`backend/app/ai/json_extract.py`）表示向导输出无法解析；
+它会被转换为 SSE 错误 `"AI 输出解析失败：{exc}，请重新生成"`。
 
 ---
 
-## Error Handling Patterns
+## 错误处理模式
 
-### Convert at the boundary that owns the meaning
+### 在掌握语义的边界处转换
 
-`ai_config_service.build_provider` is the single place that turns decrypt and
-endpoint-guard failures into HTTP errors:
+`ai_config_service.build_provider` 是唯一一处将解密失败和端点防护失败
+转换为 HTTP 错误的地方：
 
 ```python
 try:
@@ -96,11 +96,11 @@ except AIProviderError as exc:
     raise BadRequestError(str(exc)) from exc
 ```
 
-Always chain with `from exc`.
+始终使用 `from exc` 链接异常。
 
-### Unique-constraint races → 409
+### 唯一约束竞争 → 409
 
-Pre-check plus constraint fallback (`backend/app/services/auth_service.py`):
+预检查加约束兜底（`backend/app/services/auth_service.py`）：
 
 ```python
 db.add(user)
@@ -112,23 +112,23 @@ except IntegrityError as exc:
     raise ConflictError("用户名已存在") from exc
 ```
 
-### Result objects instead of errors
+### 用结果对象代替错误
 
-The connectivity test (`POST /ai-configs/{id}/test`) never fails with 4xx/5xx for
-provider problems: it returns `200` with `AIConfigTestResult(ok=False, message=..., latency_ms=...)`
-for blocked endpoints, timeouts (`asyncio.timeout(TEST_TIMEOUT_SECONDS)`, 30 s), provider errors
-and empty replies (`ai_config_service.test_config`). Only ownership (404) still raises.
+连通性测试（`POST /ai-configs/{id}/test`）不会因 provider 问题返回 4xx/5xx：
+对于端点被拦截、超时（`asyncio.timeout(TEST_TIMEOUT_SECONDS)`，30 秒）、provider 错误
+和空回复，它返回 `200` 及 `AIConfigTestResult(ok=False, message=..., latency_ms=...)`
+（`ai_config_service.test_config`）。只有归属校验（404）仍会抛出。
 
-### Degrade instead of crash when listing
+### 列表时降级而非崩溃
 
-`ai_config_service.to_out` catches decrypt failure and shows `"（解密失败）"` as the
-masked key rather than failing the whole list.
+`ai_config_service.to_out` 捕获解密失败，将 `"（解密失败）"` 作为脱敏后的 key 展示，
+而不是让整个列表失败。
 
 ---
 
-## API Error Responses
+## API 错误响应
 
-All handlers live in `register_error_handlers`:
+所有 handler 都位于 `register_error_handlers`：
 
 ```python
 @app.exception_handler(AppError)
@@ -136,7 +136,7 @@ async def _app_error(_: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 ```
 
-**422 validation** — keeps a Chinese summary in `detail` plus a sanitized `errors` list:
+**422 校验** —— 在 `detail` 中保留中文摘要，并附带经过清洗的 `errors` 列表：
 
 ```python
 @app.exception_handler(RequestValidationError)
@@ -150,18 +150,18 @@ async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResp
     )
 ```
 
-`_format_validation_errors` yields `"请求参数校验失败：username: 用户名不能包含空白字符"`
-(strips `body/query/path` from `loc` and the `"Value error, "` prefix).
-History: returning `exc.errors()` raw made custom `field_validator` errors return **500**
-(the `ctx` held a `ValueError` instance) and echoed the submitted `input`, including
-passwords. Regression test: `backend/tests/test_auth.py::test_custom_validator_error_is_422_without_echo`
-(`status == 422`, message present, `"secret123" not in resp.text`).
+`_format_validation_errors` 生成 `"请求参数校验失败：username: 用户名不能包含空白字符"`
+（去掉 `loc` 中的 `body/query/path` 以及 `"Value error, "` 前缀）。
+历史：直接返回原始 `exc.errors()` 会导致自定义 `field_validator` 错误返回 **500**
+（`ctx` 中含有 `ValueError` 实例），并回显提交的 `input`，包括密码。
+回归测试：`backend/tests/test_auth.py::test_custom_validator_error_is_422_without_echo`
+（`status == 422`、包含消息、`"secret123" not in resp.text`）。
 
-**Starlette HTTP errors** — default English details are replaced: 404 `资源不存在`,
-405 `请求方法不允许`. Unknown `/api/...` paths hit the SPA fallback and return
-`{"detail": "接口不存在"}` (`backend/app/main.py`).
+**Starlette HTTP 错误** —— 替换默认的英文 detail：404 `资源不存在`，
+405 `请求方法不允许`。未知的 `/api/...` 路径会命中 SPA 兜底路由并返回
+`{"detail": "接口不存在"}`（`backend/app/main.py`）。
 
-**500** — never leaks internals:
+**500** —— 绝不泄露内部细节：
 
 ```python
 @app.exception_handler(Exception)
@@ -172,17 +172,17 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
 
 ---
 
-## Scenario: SSE streaming contract (generate / polish / wizard)
+## 场景：SSE 流式契约 (generate / polish / wizard)
 
-### 1. Scope / Trigger
+### 1. 范围 / 触发条件
 
-Applies to `POST /api/v1/chapters/{id}/generate`, `POST /api/v1/chapters/{id}/polish`
-and `POST /api/v1/projects/{id}/wizard/{outline|characters|world}`. Cross-layer:
-backend `app/api/sse.py` + `generation_service.py` / `wizard_service.py`, frontend
-`frontend/src/api/sse.ts` (`postSSE`). Touch this contract when adding any streaming endpoint
-or changing event names/payloads.
+适用于 `POST /api/v1/chapters/{id}/generate`、`POST /api/v1/chapters/{id}/polish`
+以及 `POST /api/v1/projects/{id}/wizard/{outline|characters|world}`。跨层：
+后端 `app/api/sse.py` + `generation_service.py` / `wizard_service.py`，前端
+`frontend/src/api/sse.ts`（`postSSE`）。新增任何流式端点或修改事件名/payload 时，
+都需要遵循并更新此契约。
 
-### 2. Signatures
+### 2. 签名
 
 ```python
 # backend/app/api/sse.py
@@ -201,7 +201,7 @@ async def prepare_wizard_job(db, *, user_id, project_id, kind, req, cipher, fact
 async def run_wizard_job(job: WizardJob, sessionmaker) -> AsyncIterator[Event]
 ```
 
-Route shape (`backend/app/api/v1/chapters.py`):
+路由形态（`backend/app/api/v1/chapters.py`）：
 
 ```python
 job = await generation_service.prepare_chapter_job(db, user_id=user.id, ...)
@@ -209,29 +209,29 @@ await db.close()
 return sse_response(generation_service.run_chapter_job(job, sessionmaker))
 ```
 
-### 3. Contracts
+### 3. 契约
 
-- Transport: **POST only**, JSON body (optional; defaults `GenerateChapterRequest()` etc.).
-  The frontend uses `fetch` + `ReadableStream`, not `EventSource`
-  (`frontend/src/api/sse.ts`: "后端 SSE 接口均为 POST，无法使用 EventSource").
-- Response: `media_type="text/event-stream"`, headers
-  `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`, `X-Accel-Buffering: no`.
-- First chunk is a comment frame `": stream-start\n\n"`.
-- Each event frame: `event: <name>\ndata: <JSON>\n\n`, data via
-  `json.dumps(data, ensure_ascii=False)` (JSON keeps newlines in text from breaking frames).
-- Events:
+- 传输：**仅 POST**，JSON body（可选；默认 `GenerateChapterRequest()` 等）。
+  前端使用 `fetch` + `ReadableStream`，而非 `EventSource`
+  （`frontend/src/api/sse.ts`："后端 SSE 接口均为 POST，无法使用 EventSource"）。
+- 响应：`media_type="text/event-stream"`，响应头
+  `Cache-Control: no-cache, no-transform`、`Connection: keep-alive`、`X-Accel-Buffering: no`。
+- 第一个分块是注释帧 `": stream-start\n\n"`。
+- 每个事件帧：`event: <name>\ndata: <JSON>\n\n`，data 通过
+  `json.dumps(data, ensure_ascii=False)` 序列化（JSON 可避免文本中的换行破坏帧结构）。
+- 事件：
 
-| Event | Payload | When |
+| 事件 | Payload | 时机 |
 |-------|---------|------|
-| `delta` | `{"text": "<chunk>"}` | each provider chunk |
-| `done` (chapter) | `{"chapter": ChapterOut (mode="json")}` | content saved, status `done` |
-| `done` (wizard) | `{"kind": "outline"\|"characters"\|"world", "items": [Out...]}` | parsed and saved (old rows of that kind replaced) |
-| `error` | `{"detail": "<Chinese>"}` | in-stream failure; always the last event |
+| `delta` | `{"text": "<chunk>"}` | provider 每产出一个分块 |
+| `done`（章节） | `{"chapter": ChapterOut (mode="json")}` | 正文已保存，状态为 `done` |
+| `done`（向导） | `{"kind": "outline"\|"characters"\|"world", "items": [Out...]}` | 已解析并保存（该类型的旧记录被替换） |
+| `error` | `{"detail": "<Chinese>"}` | 流内失败；始终是最后一个事件 |
 
-- Chapter status lifecycle: `draft|done → generating` (atomic conditional UPDATE in prepare)
-  `→ done` on success; on **any** non-success exit (provider error, empty output,
-  exception, client disconnect) `run_chapter_job`'s `finally` restores `prev_status`
-  and leaves `content` untouched:
+- 章节状态生命周期：`draft|done → generating`（在 prepare 中执行原子条件 UPDATE）
+  成功时 `→ done`；在**任何**非成功退出（provider 错误、空输出、
+  异常、客户端断开）时，`run_chapter_job` 的 `finally` 恢复 `prev_status`，
+  且不改动 `content`：
 
 ```python
 finally:
@@ -241,68 +241,68 @@ finally:
             await _restore_status(sessionmaker, job.chapter_id, job.prev_status)
 ```
 
-  `sse_response` wraps the generator in `contextlib.aclosing` so that `finally` runs
-  deterministically on disconnect instead of at garbage collection.
-- Wizard jobs do not change any status; on parse failure nothing is deleted.
+  `sse_response` 用 `contextlib.aclosing` 包裹生成器，使 `finally` 在断开连接时
+  确定性地执行，而不是等到垃圾回收时。
+- 向导任务不修改任何状态；解析失败时不删除任何数据。
 
-### 4. Validation & Error Matrix
+### 4. 校验与错误矩阵
 
-| Condition | Phase | Result |
+| 条件 | 阶段 | 结果 |
 |-----------|-------|--------|
-| not logged in | pre-stream | 401 JSON `未登录或登录已过期` |
-| project/chapter missing or not owned | pre-stream | 404 JSON |
-| invalid wizard `kind` / body field | pre-stream | 422 JSON |
-| no AI config | pre-stream | 400 JSON `尚未配置 AI 模型...` |
-| blocked Base URL / key decrypt failure | pre-stream | 400 JSON (from `build_provider`) |
-| polish with empty content | pre-stream | 400 JSON `章节正文为空，无法润色` |
-| chapter already `generating` | pre-stream | 409 JSON `该章节正在生成中，请稍候再试` |
-| provider raises `AIProviderError` mid-stream | in-stream | `error {"detail": str(exc)}`, status restored |
-| model returns only whitespace | in-stream | `error {"detail": "模型未返回任何内容"}`, status restored |
-| chapter deleted during generation | in-stream | `error {"detail": "章节已被删除，生成结果未保存"}` |
-| wizard JSON unparsable | in-stream | `error {"detail": "AI 输出解析失败：...，请重新生成"}`, old data kept |
-| unexpected exception | in-stream | logged; `error {"detail": "生成失败：服务器内部错误"}` |
-| client disconnects | in-stream | no event; status restored via `aclosing` + shielded `finally` |
+| 未登录 | 流开始前 | 401 JSON `未登录或登录已过期` |
+| 项目/章节不存在或不属于当前用户 | 流开始前 | 404 JSON |
+| 向导 `kind` / body 字段非法 | 流开始前 | 422 JSON |
+| 没有 AI 配置 | 流开始前 | 400 JSON `尚未配置 AI 模型...` |
+| Base URL 被拦截 / key 解密失败 | 流开始前 | 400 JSON（来自 `build_provider`） |
+| 润色时正文为空 | 流开始前 | 400 JSON `章节正文为空，无法润色` |
+| 章节已处于 `generating` | 流开始前 | 409 JSON `该章节正在生成中，请稍候再试` |
+| provider 在流中途抛出 `AIProviderError` | 流内 | `error {"detail": str(exc)}`，状态已恢复 |
+| 模型只返回空白 | 流内 | `error {"detail": "模型未返回任何内容"}`，状态已恢复 |
+| 生成期间章节被删除 | 流内 | `error {"detail": "章节已被删除，生成结果未保存"}` |
+| 向导 JSON 无法解析 | 流内 | `error {"detail": "AI 输出解析失败：...，请重新生成"}`，保留旧数据 |
+| 意外异常 | 流内 | 记录日志；`error {"detail": "生成失败：服务器内部错误"}` |
+| 客户端断开 | 流内 | 无事件；通过 `aclosing` + 屏蔽取消的 `finally` 恢复状态 |
 
-Pre-stream errors are ordinary JSON (status != 200), so the frontend checks
-`resp.ok` before reading the stream. Once 200 is sent, errors can only be `error` events.
+流开始前的错误是普通 JSON（status != 200），因此前端在读取流之前先检查
+`resp.ok`。一旦发送了 200，错误就只能以 `error` 事件的形式出现。
 
-### 5. Good / Base / Bad Cases
+### 5. Good / Base / Bad 用例
 
-- Good: chunks `["夜色深沉，星舰缓缓", ...]` → N `delta` events, then `done` with
-  `chapter.status == "done"` and `word_count == count_words(text)`.
-- Base: `["部分", AIProviderError("模型调用失败：额度不足")]` → one `delta`, then
-  `("error", {"detail": "模型调用失败：额度不足"})`; DB row back to `draft`, content `旧稿`.
-- Bad: raising `BadRequestError` inside `run_*_job` — headers are already sent, so it becomes a
-  broken stream instead of a 400. All validation belongs in `prepare_*`.
+- Good：分块 `["夜色深沉，星舰缓缓", ...]` → N 个 `delta` 事件，然后是 `done`，且
+  `chapter.status == "done"`、`word_count == count_words(text)`。
+- Base：`["部分", AIProviderError("模型调用失败：额度不足")]` → 一个 `delta`，然后
+  `("error", {"detail": "模型调用失败：额度不足"})`；数据库记录恢复为 `draft`，正文为 `旧稿`。
+- Bad：在 `run_*_job` 内抛出 `BadRequestError` —— 响应头已发送，因此结果是
+  一个中断的流而不是 400。所有校验都应放在 `prepare_*` 中。
 
-### 6. Tests Required
+### 6. 必需的测试
 
-- `backend/tests/test_chapters.py::test_generate_chapter_sse_persists` — content-type starts with
-  `text/event-stream`, `x-accel-buffering == "no"`, `len(deltas) > 1`, `"".join(deltas) == text`,
-  last event `done`, persisted content/status.
-- `test_generate_error_restores_status` — last event equals the `error` tuple; row `status == "draft"`,
-  `content == "旧稿"`.
-- `test_generating_conflict` — 409 on generate; 409 on PATCH content while generating; 200 on PATCH `status` only.
-- `test_generate_requires_ai_config`, `test_polish` (400 on empty content).
-- `backend/tests/test_wizard.py::test_wizard_parse_error` (error + old data kept),
-  `test_wizard_invalid_kind` (422), `test_wizard_overwrites_and_keeps_chapters`.
-- Parse frames with `tests.helpers.parse_sse`, which skips the `: stream-start` comment.
-- Not yet automated: client-disconnect rollback. Any change to `sse_response` or the
-  `finally` block must be checked manually or covered by a new test.
+- `backend/tests/test_chapters.py::test_generate_chapter_sse_persists` —— content-type 以
+  `text/event-stream` 开头、`x-accel-buffering == "no"`、`len(deltas) > 1`、`"".join(deltas) == text`、
+  最后一个事件为 `done`、正文/状态已持久化。
+- `test_generate_error_restores_status` —— 最后一个事件等于 `error` 元组；记录 `status == "draft"`、
+  `content == "旧稿"`。
+- `test_generating_conflict` —— generate 返回 409；生成期间 PATCH content 返回 409；仅 PATCH `status` 返回 200。
+- `test_generate_requires_ai_config`、`test_polish`（正文为空时返回 400）。
+- `backend/tests/test_wizard.py::test_wizard_parse_error`（error + 保留旧数据）、
+  `test_wizard_invalid_kind`（422）、`test_wizard_overwrites_and_keeps_chapters`。
+- 使用 `tests.helpers.parse_sse` 解析帧，它会跳过 `: stream-start` 注释。
+- 尚未自动化：客户端断开时的回退。对 `sse_response` 或
+  `finally` 块的任何改动都必须手动验证，或补充新测试覆盖。
 
-### 7. Wrong vs Correct
+### 7. 错误写法 vs 正确写法
 
-Wrong — reusing the request session and no deterministic close:
+错误写法 —— 复用请求 session，且没有确定性的关闭：
 
 ```python
 async def gen():
     async for piece in provider.generate_stream(...):
-        yield f"data: {piece}\n\n"          # raw text: newlines break frames
-    chapter.content = ...; await db.commit()  # request session, already closed/expired
+        yield f"data: {piece}\n\n"          # 原始文本：换行会破坏帧结构
+    chapter.content = ...; await db.commit()  # 请求 session，已关闭/过期
 return StreamingResponse(gen(), media_type="text/event-stream")
 ```
 
-Correct — prepare in the request session, close it, stream with own session and `aclosing`:
+正确写法 —— 在请求 session 中 prepare，关闭它，再用独立 session 和 `aclosing` 进行流式输出：
 
 ```python
 job = await generation_service.prepare_chapter_job(db, ...)
@@ -312,12 +312,12 @@ return sse_response(generation_service.run_chapter_job(job, sessionmaker))
 
 ---
 
-## Common Mistakes
+## 常见错误
 
-- Returning `exc.errors()` directly in a 422 handler (500 on custom validators, echoes passwords).
-- Distinguishing "not yours" (403) from "not found" (404) — always 404.
-- Putting raw SDK exception text into responses without `describe_error` (unbounded length).
-- Raising business errors after a `StreamingResponse` has started.
-- Catching `Exception` in a provider without re-raising `AIProviderError` first (double wrapping).
-- Gaps in automated coverage today: IntegrityError race in `register`, `describe_error`
-  truncation and the generic 500 handler have no dedicated tests; add one when touching them.
+- 在 422 handler 中直接返回 `exc.errors()`（自定义校验器会导致 500，并回显密码）。
+- 区分「不属于你」（403）与「不存在」（404）—— 一律返回 404。
+- 未经 `describe_error` 就把原始 SDK 异常文本放入响应（长度无上限）。
+- 在 `StreamingResponse` 开始后抛出业务错误。
+- 在 provider 中捕获 `Exception` 前没有先重新抛出 `AIProviderError`（导致重复包装）。
+- 当前自动化覆盖的缺口：`register` 中的 IntegrityError 竞争、`describe_error`
+  截断以及通用 500 handler 都没有专门的测试；改动它们时请补充测试。

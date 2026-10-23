@@ -1,23 +1,23 @@
-# Admin Users & Session Invalidation
+# 管理员用户与会话失效
 
-> Extends the [auth and secrets scenario](./quality-guidelines.md#scenario-auth-and-secrets-environment-contract).
-> Where they differ, this file wins for: JWT payload (`ver`), `get_current_user` checks, login of disabled users.
+> 扩展自 [认证与密钥场景](./quality-guidelines.md#场景认证与密钥环境契约)。
+> 二者不一致时，以下内容以本文件为准：JWT payload（`ver`）、`get_current_user` 校验、已禁用用户的登录。
 
 ---
 
-## Scenario: Admin role, user management and token versioning
+## 场景：管理员角色、用户管理与 token 版本控制
 
-### 1. Scope / Trigger
+### 1. 范围 / 触发条件
 
-Admin bootstrap, `/admin/users` endpoints, self-service password change, and invalidating sessions
-via `users.token_version`. Trigger: changing `app/core/{security,deps,config}.py`,
-`app/services/{auth_service,admin_service}.py`, `app/api/v1/{auth,admin}.py`, the `users` table,
-or anything that changes a user's password / active state.
+管理员引导创建（bootstrap）、`/admin/users` 端点、用户自助修改密码，以及通过 `users.token_version`
+使会话失效。触发条件：修改 `app/core/{security,deps,config}.py`、
+`app/services/{auth_service,admin_service}.py`、`app/api/v1/{auth,admin}.py`、`users` 表，
+或任何会改变用户密码 / 启用状态的改动。
 
-### 2. Signatures
+### 2. 签名
 
 ```python
-# backend/app/models/entities.py — User (migration 0003_user_admin_fields, down_revision '0002')
+# backend/app/models/entities.py — User（migration 0003_user_admin_fields，down_revision '0002'）
 is_admin: bool       # server_default false
 is_active: bool      # server_default true
 token_version: int   # server_default 0
@@ -31,100 +31,100 @@ async def get_current_user(...) -> User          # CurrentUser
 async def get_admin_user(user: CurrentUser) -> User   # AdminUser
 
 # backend/app/core/config.py
-admin_username: str | None = None   # "" treated as None
+admin_username: str | None = None   # "" 视为 None
 admin_password: str | None = None
 @property admin_credentials -> Credentials | None
 
 # backend/app/services/auth_service.py
-async def create_user(db, creds: Credentials, *, is_admin: bool = False) -> User   # shared by register + admin create
+async def create_user(db, creds: Credentials, *, is_admin: bool = False) -> User   # 注册与管理员创建共用
 async def change_password(db, user: User, data: ChangePasswordRequest) -> User
-async def bootstrap_admin(sessionmaker, settings: Settings) -> None              # called in main.py lifespan
+async def bootstrap_admin(sessionmaker, settings: Settings) -> None              # 在 main.py 的 lifespan 中调用
 
 # backend/app/services/admin_service.py
 list_users(db, *, q, page, page_size) -> AdminUserList
 create_user(db, data) / update_user(db, actor, user_id, data) / reset_password(db, user_id, data) / delete_user(db, actor, user_id)
 ```
 
-### 3. Contracts
+### 3. 契约
 
-- JWT payload: `{"sub", "ver", "iat", "exp"}`. Missing `ver` (tokens issued before 0003) → `0`,
-  matching the backfilled default, so upgrading does not log anyone out. Non-int or bool `ver` → invalid.
-- `get_current_user`: user missing, `ver != user.token_version`, or `not user.is_active`
-  → 401 `未登录或登录已过期` (frontend already maps 401 → clear auth + redirect to login).
-- `token_version` is bumped (in SQL, see §7) by: admin reset-password, admin PATCH `is_active: true→false`,
-  self change-password. Not bumped by: role changes, re-enabling.
-- Env: `ADMIN_USERNAME` / `ADMIN_PASSWORD` optional, must be set together, validated with the
-  `Credentials` rules; passed through `docker-compose.yml`, `.env.example`, `backend/.env.example`.
-  Settings uses `hide_input_in_errors=True` so validation errors never echo secrets.
-- Bootstrap (lifespan, after `alembic upgrade head`): missing → create with `is_admin=True`;
-  existing → set `is_admin=True, is_active=True`, **never touch the password**; concurrent create
-  (IntegrityError) → promote the existing row. Logs only the username. Ignores `REGISTRATION_ENABLED`.
-- Endpoints (`/api/v1`):
+- JWT payload：`{"sub", "ver", "iat", "exp"}`。缺少 `ver`（0003 之前签发的 token）→ 视为 `0`，
+  与回填的默认值一致，因此升级不会让任何人掉线。`ver` 为非 int 或 bool → 无效。
+- `get_current_user`：用户不存在、`ver != user.token_version` 或 `not user.is_active`
+  → 401 `未登录或登录已过期`（前端已将 401 映射为清除认证状态 + 跳转登录页）。
+- 以下操作会递增 `token_version`（在 SQL 中递增，见 §7）：管理员重置密码、管理员 PATCH `is_active: true→false`、
+  用户自助修改密码。以下操作不递增：角色变更、重新启用。
+- 环境变量：`ADMIN_USERNAME` / `ADMIN_PASSWORD` 可选，必须同时设置，按 `Credentials` 规则校验；
+  通过 `docker-compose.yml`、`.env.example`、`backend/.env.example` 传入。
+  Settings 使用 `hide_input_in_errors=True`，确保校验错误绝不回显密钥。
+- Bootstrap（在 lifespan 中、`alembic upgrade head` 之后执行）：用户不存在 → 以 `is_admin=True` 创建；
+  已存在 → 设置 `is_admin=True, is_active=True`，**绝不改动密码**；并发创建
+  （IntegrityError）→ 提升已存在的那一行。日志只记录用户名。忽略 `REGISTRATION_ENABLED`。
+- 端点（`/api/v1`）：
 
-| Method & path | Body / query | Success |
+| 方法与路径 | Body / query | 成功响应 |
 |---|---|---|
-| `GET /auth/me` (also login/register) | — | `UserOut {id, username, is_admin, created_at}` |
-| `POST /auth/change-password` | `{old_password (1–200 chars), new_password (Password rules)}` | 204 + new `Set-Cookie` for the current session |
-| `GET /admin/users` | `q` (≤64, case-insensitive substring, `%`/`_` literal), `page ≥1`, `page_size 1–100` (default 20) | `{items: AdminUserOut[], total}` ordered by id |
+| `GET /auth/me`（login/register 同样） | — | `UserOut {id, username, is_admin, created_at}` |
+| `POST /auth/change-password` | `{old_password（1–200 字符）, new_password（Password 规则）}` | 204 + 为当前会话下发新的 `Set-Cookie` |
+| `GET /admin/users` | `q`（≤64，大小写不敏感的子串匹配，`%`/`_` 按字面量处理）、`page ≥1`、`page_size 1–100`（默认 20） | `{items: AdminUserOut[], total}`，按 id 排序 |
 | `POST /admin/users` | `{username, password, is_admin=false}` | 201 `AdminUserOut` |
 | `PATCH /admin/users/{id}` | `{is_admin?, is_active?}` | `AdminUserOut` |
 | `POST /admin/users/{id}/reset-password` | `{new_password}` | 204 |
-| `DELETE /admin/users/{id}` | — | 204 (projects/chapters/AI configs removed by FK CASCADE) |
+| `DELETE /admin/users/{id}` | — | 204（项目/章节/AI 配置通过外键 CASCADE 删除） |
 
-  `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`. Admins cannot read
-  other users' novel content — only the counts.
+  `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`。管理员无法读取
+  其他用户的小说内容——只能看到计数。
 
-### 4. Validation & Error Matrix
+### 4. 校验与错误矩阵
 
-| Condition | Result |
+| 条件 | 结果 |
 |---|---|
-| only one of `ADMIN_USERNAME`/`ADMIN_PASSWORD` set, or invalid format | `ValidationError` at startup, password not echoed |
-| login with correct password but `is_active=false` | 403 `账号已被禁用，请联系管理员` (wrong password stays 401, status not leaked) |
-| stale `ver` / disabled user on any authed request | 401 `未登录或登录已过期` |
-| non-admin calls `/admin/*` | 403 `需要管理员权限` |
-| target user not found | 404 `用户不存在` |
-| duplicate username on admin create | 409 `用户名已存在` |
-| actor disables / demotes / deletes self | 400 `不能对自己执行该操作` (no-op PATCH on self is allowed) |
-| operation would leave zero active admins | 409 `至少需要保留一名启用中的管理员` |
-| change-password with wrong old password | 400 `原密码不正确` |
-| out-of-range `page`/`page_size`/`q`, invalid password | 422 |
+| `ADMIN_USERNAME`/`ADMIN_PASSWORD` 只设置了其一，或格式无效 | 启动时抛出 `ValidationError`，不回显密码 |
+| 密码正确但 `is_active=false` 时登录 | 403 `账号已被禁用，请联系管理员`（密码错误仍为 401，不泄露账号状态） |
+| 任意需认证请求中 `ver` 过期 / 用户已禁用 | 401 `未登录或登录已过期` |
+| 非管理员调用 `/admin/*` | 403 `需要管理员权限` |
+| 目标用户不存在 | 404 `用户不存在` |
+| 管理员创建时用户名重复 | 409 `用户名已存在` |
+| 操作者禁用 / 降级 / 删除自己 | 400 `不能对自己执行该操作`（对自己的无变化 PATCH 允许） |
+| 操作会导致启用中的管理员为零 | 409 `至少需要保留一名启用中的管理员` |
+| 修改密码时原密码错误 | 400 `原密码不正确` |
+| `page`/`page_size`/`q` 越界、密码无效 | 422 |
 
-### 5. Good / Base / Bad Cases
+### 5. 正例 / 基准 / 反例
 
-- Good: admin resets Bob's password → Bob's old cookie gets 401 on the next request; new password logs in.
-- Base: user changes own password → current tab stays logged in (cookie re-issued with new `ver`), other browsers get 401.
-- Bad: restarting with `ADMIN_PASSWORD` changed in `.env` and expecting the password to change — bootstrap never overwrites; use the UI.
+- 正例：管理员重置 Bob 的密码 → Bob 的旧 cookie 在下一次请求时得到 401；新密码可以登录。
+- 基准：用户修改自己的密码 → 当前标签页保持登录（cookie 以新的 `ver` 重新签发），其他浏览器得到 401。
+- 反例：在 `.env` 中修改 `ADMIN_PASSWORD` 后重启并期望密码随之改变——bootstrap 从不覆盖密码；请使用 UI 修改。
 
-### 6. Tests Required
+### 6. 必需的测试
 
-- `backend/tests/test_admin.py` — bootstrap (create, idempotent, no password overwrite, promote existing,
-  pair validation, no-op when unset, lifespan calls it); 403/401/404; list paging/search/project_count;
-  create with registration disabled + login + is_admin + 409; reset → old session 401; disable → 401 and
-  login 403; enable → login ok; `test_legacy_token_without_ver_still_valid`; `test_token_with_bad_ver_rejected`;
-  self guardrails; last-admin guardrail (service-level — unreachable sequentially over HTTP because the
-  actor is always a remaining active admin); delete cascades; `test_change_password_keeps_current_session`.
-- `backend/tests/test_migrations.py::test_0003_backfills_existing_users` — rows from 0002 get
-  `is_admin=false, is_active=true, token_version=0`; `downgrade -1` returns to 0002.
+- `backend/tests/test_admin.py` —— bootstrap（创建、幂等、不覆盖密码、提升已有用户、
+  成对校验、未设置时不做任何事、lifespan 会调用它）；403/401/404；列表分页/搜索/project_count；
+  关闭注册时仍可创建 + 登录 + is_admin + 409；重置 → 旧会话 401；禁用 → 401 且
+  登录 403；启用 → 可登录；`test_legacy_token_without_ver_still_valid`；`test_token_with_bad_ver_rejected`；
+  自身防护规则；最后一名管理员防护（service 层测试——通过 HTTP 顺序调用无法触发，因为
+  操作者本身始终是剩余的启用中管理员）；删除级联；`test_change_password_keeps_current_session`。
+- `backend/tests/test_migrations.py::test_0003_backfills_existing_users` —— 来自 0002 的行得到
+  `is_admin=false, is_active=true, token_version=0`；`downgrade -1` 回到 0002。
 
-### 7. Wrong vs Correct
+### 7. 错误写法 vs 正确写法
 
-Wrong — read-modify-write in Python loses an increment when reset and disable race:
+错误——在 Python 中先读后改再写，重置与禁用并发时会丢失一次递增：
 
 ```python
 user.token_version += 1
 ```
 
-Correct — increment in SQL (`admin_service.py`, `auth_service.change_password`), then commit + refresh
-before re-signing the cookie:
+正确——在 SQL 中递增（`admin_service.py`、`auth_service.change_password`），然后 commit + refresh，
+再重新签发 cookie：
 
 ```python
 user.token_version = User.token_version + 1
 ```
 
-Wrong — checking "is there another admin" with a plain SELECT lets two admins demote each other concurrently.
+错误——用普通 SELECT 检查"是否还有其他管理员"，会让两名管理员并发地互相降级。
 
-Correct (`admin_service._ensure_other_active_admin`) — lock the active-admin set in the same transaction
-as the update (PostgreSQL re-evaluates after the lock wait; SQLite ignores it but serializes anyway):
+正确（`admin_service._ensure_other_active_admin`）——在与更新相同的事务中锁定启用中的管理员集合
+（PostgreSQL 在等待锁后会重新求值；SQLite 会忽略该锁，但本身就是串行执行）：
 
 ```python
 await db.scalars(select(User.id).where(User.is_admin.is_(True), User.is_active.is_(True)).with_for_update())

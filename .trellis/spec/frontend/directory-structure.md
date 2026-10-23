@@ -1,54 +1,54 @@
-# Directory Structure
+# 目录结构
 
-> How frontend code is organized in this project.
-
----
-
-## Overview
-
-All source lives in `frontend/src/`. The split is by technical layer, not by feature: HTTP/SSE code in `api/`, global state in `stores/`, reusable hooks in `hooks/`, reusable UI in `components/`, route screens in `pages/` (project workspace screens in `pages/project/`), pure helpers in `utils/`. There is no `assets/` folder; the only static asset is `frontend/public/favicon.svg`. Styling is AntD props plus inline `style` objects; `src/index.css` is the only stylesheet.
+> 本项目前端代码的组织方式。
 
 ---
 
-## Directory Layout
+## 概述
+
+所有源码位于 `frontend/src/`。按技术分层而非按功能划分：HTTP/SSE 代码在 `api/`，全局状态在 `stores/`，可复用 hook 在 `hooks/`，可复用 UI 在 `components/`，路由页面在 `pages/`（项目工作区页面在 `pages/project/`），纯函数辅助工具在 `utils/`。没有 `assets/` 目录；唯一的静态资源是 `frontend/public/favicon.svg`。样式使用 AntD props 加内联 `style` 对象；`src/index.css` 是唯一的样式表。
+
+---
+
+## 目录布局
 
 ```
 frontend/
-├── vite.config.ts          # dev proxy /api -> backend, chunkSizeWarningLimit, vitest config
-├── eslint.config.js        # typescript-eslint + react-hooks + react-refresh, no-explicit-any = error
-├── tsconfig.app.json       # strict, noUnusedLocals/Parameters, verbatimModuleSyntax
+├── vite.config.ts          # 开发代理 /api -> 后端、chunkSizeWarningLimit、vitest 配置
+├── eslint.config.js        # typescript-eslint + react-hooks + react-refresh，no-explicit-any = error
+├── tsconfig.app.json       # strict、noUnusedLocals/Parameters、verbatimModuleSyntax
 └── src/
-    ├── main.tsx            # dayjs.locale('zh-cn'), StrictMode, mounts <App/>
-    ├── App.tsx             # ConfigProvider(zh_CN) + AntApp + RouterProvider, 401 handler, store reset on user change
-    ├── router.tsx          # createBrowserRouter route table (data router -> useBlocker works)
+    ├── main.tsx            # dayjs.locale('zh-cn')、StrictMode，挂载 <App/>
+    ├── App.tsx             # ConfigProvider(zh_CN) + AntApp + RouterProvider、401 处理器、用户切换时重置 store
+    ├── router.tsx          # createBrowserRouter 路由表（data router -> 可使用 useBlocker）
     ├── index.css
     ├── api/
-    │   ├── client.ts       # fetch wrapper: API_BASE, ApiError, request/api.get/post/patch/del, 401 hook, errorMessage
-    │   ├── sse.ts          # SSEParser, postSSE, runGeneration, StreamError, isAbortError
-    │   ├── sse.test.ts     # parser unit tests
-    │   ├── types.ts        # TS mirrors of backend/app/schemas/*.py
+    │   ├── client.ts       # fetch 封装：API_BASE、ApiError、request/api.get/post/patch/del、401 hook、errorMessage
+    │   ├── sse.ts          # SSEParser、postSSE、runGeneration、StreamError、isAbortError
+    │   ├── sse.test.ts     # 解析器单元测试
+    │   ├── types.ts        # backend/app/schemas/*.py 的 TS 镜像
     │   ├── auth.ts         # authApi
-    │   ├── aiConfigs.ts    # aiConfigApi, PROVIDER_LABELS
-    │   ├── projects.ts     # projectApi, PROJECT_STATUS, exportProject, parseContentDispositionFilename
+    │   ├── aiConfigs.ts    # aiConfigApi、PROVIDER_LABELS
+    │   ├── projects.ts     # projectApi、PROJECT_STATUS、exportProject、parseContentDispositionFilename
     │   ├── story.ts        # makeCrud -> worldApi / characterApi / outlineApi
-    │   ├── chapters.ts     # chapterApi, generateChapter, polishChapter, CHAPTER_STATUS, countWords
-    │   └── wizard.ts       # runWizard, WIZARD_KIND_LABELS
-    ├── stores/             # auth.ts, aiConfigs.ts, project.ts (Zustand)
-    ├── hooks/              # useStreamTask.ts, useLoader.ts, useProjectId.ts, useHasAIConfig.ts
-    ├── components/         # AppLayout, RequireAuth, AIConfigSelect, StreamOutput, WizardGenerator,
-    │                       # WizardModal, ExportModal, StoryPreview
+    │   ├── chapters.ts     # chapterApi、generateChapter、polishChapter、CHAPTER_STATUS、countWords
+    │   └── wizard.ts       # runWizard、WIZARD_KIND_LABELS
+    ├── stores/             # auth.ts、aiConfigs.ts、project.ts（Zustand）
+    ├── hooks/              # useStreamTask.ts、useLoader.ts、useProjectId.ts、useHasAIConfig.ts
+    ├── components/         # AppLayout、RequireAuth、AIConfigSelect、StreamOutput、WizardGenerator、
+    │                       # WizardModal、ExportModal、StoryPreview
     ├── pages/
     │   ├── LoginPage.tsx, ProjectListPage.tsx, AIConfigPage.tsx, NotFoundPage.tsx
-    │   └── project/        # ProjectLayout + OverviewPanel, WizardPage, WorldPanel, CharactersPanel,
-    │                       # OutlinesPanel, ChaptersPanel, ChapterEditorPage
-    └── utils/              # time.ts (+ time.test.ts), outline.ts (groupOutlines, volumeLabel)
+    │   └── project/        # ProjectLayout + OverviewPanel、WizardPage、WorldPanel、CharactersPanel、
+    │                       # OutlinesPanel、ChaptersPanel、ChapterEditorPage
+    └── utils/              # time.ts（+ time.test.ts）、outline.ts（groupOutlines、volumeLabel）
 ```
 
 ---
 
-## Module Organization
+## 模块组织
 
-**`api/` — one module per backend resource.** Each module exports a plain object of thin functions over `api.*` from `client.ts`, plus UI label maps for that resource's enums. Streaming endpoints are free functions built on `runGeneration`:
+**`api/`——每个后端资源对应一个模块。** 每个模块导出一个普通对象，其中是基于 `client.ts` 中 `api.*` 的轻量函数，另外导出该资源枚举对应的 UI 标签映射。流式端点则是基于 `runGeneration` 构建的独立函数：
 
 ```ts
 // src/api/chapters.ts
@@ -64,7 +64,7 @@ export function generateChapter(cid: number, body: GenerateChapterRequest,
 }
 ```
 
-Resources with identical CRUD shape share a factory instead of copy-paste:
+CRUD 结构完全相同的资源共用一个工厂函数，而不是复制粘贴：
 
 ```ts
 // src/api/story.ts
@@ -73,28 +73,28 @@ export const characterApi = makeCrud<Character, CharacterInput>('characters')
 export const outlineApi = makeCrud<Outline, OutlineInput>('outlines')
 ```
 
-Paths passed to `api.*` are relative to `API_BASE = '/api/v1'`; never hard-code `/api/v1` in pages.
+传给 `api.*` 的路径是相对于 `API_BASE = '/api/v1'` 的；绝不要在页面中硬编码 `/api/v1`。
 
-**`router.tsx`** — single `createBrowserRouter` table. `/login` is public; everything else is nested under `<RequireAuth><AppLayout/></RequireAuth>`. The project workspace is `projects/:pid` with `ProjectLayout` and child panels (`overview`, `wizard`, `world`, `characters`, `outlines`, `chapters`, `chapters/:cid`). A data router is required because the chapter editor uses `useBlocker`.
+**`router.tsx`**——唯一的 `createBrowserRouter` 路由表。`/login` 是公开的；其余全部嵌套在 `<RequireAuth><AppLayout/></RequireAuth>` 之下。项目工作区是 `projects/:pid`，由 `ProjectLayout` 及其子面板组成（`overview`、`wizard`、`world`、`characters`、`outlines`、`chapters`、`chapters/:cid`）。必须使用 data router，因为章节编辑器用到了 `useBlocker`。
 
-**New feature checklist:** types in `api/types.ts` → resource functions in `api/<resource>.ts` → (only if cross-page) store in `stores/` → screen in `pages/` or `pages/project/` → route in `router.tsx`.
-
----
-
-## Naming Conventions
-
-- Components and pages: `PascalCase.tsx`, one default-exported component per file (`export default function WorldPanel()`); small helpers may be named exports in the same file (`FullPageSpin` in `RequireAuth.tsx`, `WorldPreview`/`CharacterPreview`/`OutlinePreview` in `StoryPreview.tsx`).
-- Project workspace sub-screens are `*Panel.tsx`; full screens are `*Page.tsx`.
-- Hooks: `useXxx.ts`, named export.
-- Stores: `stores/<domain>.ts` exporting `use<Domain>Store` (`useAuthStore`, `useAIConfigStore`, `useProjectStore`).
-- API modules: `api/<resource>.ts` exporting `<resource>Api` objects; label maps are `SCREAMING_CASE` (`PROJECT_STATUS`, `CHAPTER_STATUS`, `PROVIDER_LABELS`, `WIZARD_KIND_LABELS`).
-- Tests: co-located `*.test.ts` (Vitest `include: ['src/**/*.test.ts']`).
-- Wire fields keep backend `snake_case` (`ai_config_id`, `chapter_no`); local variables are `camelCase`.
+**新功能清单：** 在 `api/types.ts` 中定义类型 → 在 `api/<resource>.ts` 中编写资源函数 →（仅在跨页面时）在 `stores/` 中建 store → 在 `pages/` 或 `pages/project/` 中编写页面 → 在 `router.tsx` 中注册路由。
 
 ---
 
-## Examples
+## 命名约定
 
-- `src/api/story.ts` — generic CRUD factory for same-shaped resources.
-- `src/pages/project/WorldPanel.tsx` — canonical panel: `useProjectId` + `useLoader` + AntD `Card`/`List`/`Modal` form + `WizardModal`.
-- `src/pages/project/ChapterEditorPage.tsx` — route entry keyed by id (`<ChapterLoader key={chapterId} …/>`) to rebuild editor state when switching chapters.
+- 组件与页面：`PascalCase.tsx`，每个文件默认导出一个组件（`export default function WorldPanel()`）；小型辅助组件可在同一文件中具名导出（`RequireAuth.tsx` 中的 `FullPageSpin`，`StoryPreview.tsx` 中的 `WorldPreview`/`CharacterPreview`/`OutlinePreview`）。
+- 项目工作区子页面命名为 `*Panel.tsx`；完整页面命名为 `*Page.tsx`。
+- Hook：`useXxx.ts`，具名导出。
+- Store：`stores/<domain>.ts`，导出 `use<Domain>Store`（`useAuthStore`、`useAIConfigStore`、`useProjectStore`）。
+- API 模块：`api/<resource>.ts`，导出 `<resource>Api` 对象；标签映射使用 `SCREAMING_CASE`（`PROJECT_STATUS`、`CHAPTER_STATUS`、`PROVIDER_LABELS`、`WIZARD_KIND_LABELS`）。
+- 测试：与源码同目录放置的 `*.test.ts`（Vitest `include: ['src/**/*.test.ts']`）。
+- 传输字段保持后端的 `snake_case`（`ai_config_id`、`chapter_no`）；局部变量使用 `camelCase`。
+
+---
+
+## 示例
+
+- `src/api/story.ts`——面向同结构资源的通用 CRUD 工厂。
+- `src/pages/project/WorldPanel.tsx`——标准面板：`useProjectId` + `useLoader` + AntD `Card`/`List`/`Modal` 表单 + `WizardModal`。
+- `src/pages/project/ChapterEditorPage.tsx`——以 id 作为 key 的路由入口（`<ChapterLoader key={chapterId} …/>`），在切换章节时重建编辑器状态。

@@ -1,49 +1,49 @@
-# Backend Development Guidelines
+# 后端开发规范
 
-> Best practices for backend development in this project.
-
----
-
-## Overview
-
-Backend: FastAPI + async SQLAlchemy 2 + Alembic + PostgreSQL (asyncpg), managed with `uv`,
-tested with pytest (SQLite via aiosqlite). Source lives in `backend/`; intent is in
-`.trellis/tasks/10-22-ai-novel-platform/design.md`. These files document the conventions
-the code actually follows, with excerpts from real files.
-
-Quality gate: `cd backend && uv run ruff check . && uv run pytest`.
+> 本项目后端开发的最佳实践。
 
 ---
 
-## Guidelines Index
+## 概述
 
-| Guide | Description | Status |
+后端：FastAPI + 异步 SQLAlchemy 2 + Alembic + PostgreSQL（asyncpg），使用 `uv` 管理，
+使用 pytest 测试（通过 aiosqlite 使用 SQLite）。源码位于 `backend/`；设计意图见
+`.trellis/tasks/10-22-ai-novel-platform/design.md`。这些文件记录代码实际遵循的约定，
+并附有摘自真实文件的代码片段。
+
+质量门禁：`cd backend && uv run ruff check . && uv run pytest`。
+
+---
+
+## 规范索引
+
+| 规范 | 说明 | 状态 |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | `app/` layering (api/v1 → services → models, ai/providers, ai/prompts); routes never touch the ORM | Filled |
-| [Database Guidelines](./database-guidelines.md) | Async engine/session, Alembic `0001`, FK CASCADE vs `outline_id` SET NULL, user_id ownership → 404, length limits, word count | Filled |
-| [Error Handling](./error-handling.md) | `AppError` hierarchy, `{"detail": ...}` envelope, safe 422/500 handlers, SSE streaming contract scenario | Filled |
-| [Quality Guidelines](./quality-guidelines.md) | ruff + pytest, test isolation, FakeLLM/fake_dns, forbidden patterns, SSRF guard and auth/secrets scenarios | Filled |
-| [Admin & Sessions](./auth-admin.md) | Admin bootstrap env, `/admin/users`, guardrails, `token_version` session invalidation, change-password | Filled |
-| [Logging Guidelines](./logging-guidelines.md) | stdlib `logging`, `logger.exception` where errors are masked, never log secrets | Filled |
+| [目录结构](./directory-structure.md) | `app/` 分层（api/v1 → services → models、ai/providers、ai/prompts）；路由绝不直接接触 ORM | 已填写 |
+| [数据库规范](./database-guidelines.md) | 异步 engine/session、Alembic `0001`、外键 CASCADE 与 `outline_id` SET NULL、user_id 归属校验 → 404、长度限制、字数统计 | 已填写 |
+| [错误处理](./error-handling.md) | `AppError` 层级、`{"detail": ...}` 响应包、安全的 422/500 处理器、SSE 流式契约场景 | 已填写 |
+| [质量规范](./quality-guidelines.md) | ruff + pytest、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
+| [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码 | 已填写 |
+| [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
 
-### Code-spec scenarios (7-section contracts)
+### Code-spec 场景（7 段式契约）
 
-| Contract | Location |
+| 契约 | 位置 |
 |----------|----------|
-| SSE streaming (frames, events, status lifecycle, rollback) | [error-handling.md](./error-handling.md#scenario-sse-streaming-contract-generate--polish--wizard) |
-| SSRF endpoint guard (`ALLOW_PRIVATE_AI_ENDPOINTS`, `build_provider`) | [quality-guidelines.md](./quality-guidelines.md#scenario-ssrf-guard-for-user-supplied-ai-base-url) |
-| Auth and secrets env (cookie, JWT, Fernet, key masking) | [quality-guidelines.md](./quality-guidelines.md#scenario-auth-and-secrets-environment-contract) |
-| Admin role, user management, token versioning (`ver`, guardrails) | [auth-admin.md](./auth-admin.md#scenario-admin-role-user-management-and-token-versioning) |
+| SSE 流式（帧、事件、状态生命周期、回滚） | [error-handling.md](./error-handling.md#场景sse-流式契约-generate--polish--wizard) |
+| SSRF 端点防护（`ALLOW_PRIVATE_AI_ENDPOINTS`、`build_provider`） | [quality-guidelines.md](./quality-guidelines.md#场景用户提供的-ai-base-url-的-ssrf-防护) |
+| 认证与密钥环境（cookie、JWT、Fernet、密钥掩码） | [quality-guidelines.md](./quality-guidelines.md#场景认证与密钥环境契约) |
+| 管理员角色、用户管理、token 版本控制（`ver`、防护规则） | [auth-admin.md](./auth-admin.md#场景管理员角色用户管理与-token-版本控制) |
 
 ---
 
-## How to Maintain These Guidelines
+## 如何维护这些规范
 
-1. Document the project's **actual conventions** (not ideals); verify against code before editing.
-2. Include **code examples** copied from the codebase with file paths.
-3. List **forbidden patterns** and why.
-4. Add **common mistakes** the team has made (e.g. the 422 handler that returned 500 and echoed passwords).
+1. 记录项目的**实际约定**（而非理想状态）；编辑前先对照代码核实。
+2. 包含从代码库复制的**代码示例**，并注明文件路径。
+3. 列出**禁止模式**及其原因。
+4. 补充团队曾犯过的**常见错误**（例如返回 500 并回显密码的 422 处理器）。
 
 ---
 
-**Language**: All documentation should be written in **English** (user-facing strings quoted in Chinese as they appear in code).
+**语言**：所有文档均使用**简体中文**编写；代码、标识符、路径与命令保持原样。

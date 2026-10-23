@@ -1,22 +1,22 @@
-# Logging Guidelines
+# 日志规范
 
-> How logging is done in this project.
+> 本项目中日志的记录方式。
 
 ---
 
-## Overview
+## 概览
 
-- Library: the standard library `logging` module only. No structlog, no JSON formatter.
-- Each module that logs declares a module-level logger:
+- 库：仅使用标准库 `logging` 模块。不使用 structlog，也不使用 JSON formatter。
+- 每个需要记录日志的模块都声明一个模块级 logger：
 
 ```python
 logger = logging.getLogger(__name__)
 ```
 
-  (present in `backend/app/main.py`, `backend/app/core/errors.py`,
-  `backend/app/services/generation_service.py`, `backend/app/services/wizard_service.py`).
-- Configuration happens once, only when the default ASGI app is built
-  (`backend/app/main.py`):
+  （见于 `backend/app/main.py`、`backend/app/core/errors.py`、
+  `backend/app/services/generation_service.py`、`backend/app/services/wizard_service.py`）。
+- 配置只在构建默认 ASGI 应用时执行一次
+  （`backend/app/main.py`）：
 
 ```python
 def _build_default_app() -> FastAPI:
@@ -24,34 +24,34 @@ def _build_default_app() -> FastAPI:
     return create_app()
 ```
 
-  `create_app()` itself does not configure logging, so tests keep pytest's capture.
-- Alembic uses its own `fileConfig` from `backend/alembic.ini` (root WARNING,
-  `sqlalchemy.engine` WARNING, `alembic` INFO); `alembic/env.py` skips it when the
-  caller sets `config.attributes["configure_logger"] = False` (done in `tests/test_migrations.py`).
-- Log messages are written in Chinese, matching code comments.
+  `create_app()` 本身不配置日志，因此测试中能保留 pytest 的日志捕获。
+- Alembic 使用 `backend/alembic.ini` 中自己的 `fileConfig`（root WARNING、
+  `sqlalchemy.engine` WARNING、`alembic` INFO）；当调用方设置
+  `config.attributes["configure_logger"] = False` 时，`alembic/env.py` 会跳过它（在 `tests/test_migrations.py` 中如此设置）。
+- 日志消息使用中文书写，与代码注释保持一致。
 
 ---
 
-## Log Levels
+## 日志级别
 
-Only two levels are used in application code today:
+目前应用代码中只使用两个级别：
 
-| Level | Use | Real example |
+| 级别 | 用途 | 真实示例 |
 |-------|-----|--------------|
-| `info` | startup/environment facts an operator should see once | `logger.info("未找到前端构建产物 %s，跳过静态文件挂载", dist)` (`main.py`) |
-| `exception` (ERROR + traceback) | unexpected exceptions that are masked from the client | see below |
+| `info` | 运维人员需要看到一次的启动/环境信息 | `logger.info("未找到前端构建产物 %s，跳过静态文件挂载", dist)`（`main.py`） |
+| `exception`（ERROR + traceback） | 对客户端屏蔽的意外异常 | 见下文 |
 
-There is no `debug`/`warning` usage. Expected business failures (`AppError`,
-`AIProviderError`, `JSONExtractError`) are **not** logged — they are returned to the
-user and are part of normal operation.
+没有使用 `debug`/`warning`。预期内的业务失败（`AppError`、
+`AIProviderError`、`JSONExtractError`）**不**记录日志 —— 它们会返回给
+用户，属于正常运行的一部分。
 
 ---
 
-## Structured Logging
+## 结构化日志
 
-Plain-text lines in the `basicConfig` format
-`%(asctime)s %(levelname)s %(name)s: %(message)s`. Context is passed with
-`%`-style lazy arguments, never f-strings:
+采用 `basicConfig` 格式的纯文本行
+`%(asctime)s %(levelname)s %(name)s: %(message)s`。上下文通过
+`%` 风格的惰性参数传入，绝不使用 f-string：
 
 ```python
 logger.exception("章节 %s 生成失败", job.chapter_id)
@@ -59,36 +59,36 @@ logger.exception("向导生成失败 project=%s kind=%s", job.project_id, job.ki
 logger.exception("回退章节 %s 状态失败", chapter_id)
 ```
 
-Identify the object by numeric id (`chapter_id`, `project_id`) and the operation
-(`kind`); do not dump request bodies or model objects.
+用数字 id（`chapter_id`、`project_id`）标识对象，用（`kind`）标识操作；
+不要输出请求 body 或模型对象。
 
 ---
 
-## What to Log
+## 应记录的内容
 
-Every place where an exception is swallowed and replaced by a generic message
-must call `logger.exception(...)` so the traceback is kept server-side:
+凡是吞掉异常并替换为通用消息的地方，都必须调用
+`logger.exception(...)`，以便在服务端保留 traceback：
 
-- Global 500 handler (`backend/app/core/errors.py`): `logger.exception("未处理的异常", exc_info=exc)`
-  before returning `{"detail": "服务器内部错误"}`.
-- SSE run phase generic `except Exception` in `generation_service.run_chapter_job` and
-  `wizard_service.run_wizard_job`, before yielding `error {"detail": "生成失败：服务器内部错误"}`.
-- Best-effort cleanup that must not raise: `generation_service._restore_status`
-  wraps the status rollback in `try/except Exception` and logs.
+- 全局 500 handler（`backend/app/core/errors.py`）：在返回 `{"detail": "服务器内部错误"}` 之前
+  调用 `logger.exception("未处理的异常", exc_info=exc)`。
+- `generation_service.run_chapter_job` 和 `wizard_service.run_wizard_job` 中 SSE 运行阶段的
+  通用 `except Exception`，在 yield `error {"detail": "生成失败：服务器内部错误"}` 之前。
+- 不得抛出异常的尽力而为式清理：`generation_service._restore_status`
+  用 `try/except Exception` 包裹状态回退并记录日志。
 
 ---
 
-## What NOT to Log
+## 不应记录的内容
 
-- **Never log API keys** — plaintext or encrypted (`api_key_enc`). The key exists in
-  plaintext only inside `ai_config_service.build_provider` / the provider instance;
-  do not log `cfg`, the provider object, or SDK client kwargs.
-- Never log passwords, password hashes, JWTs or the `access_token` cookie, `JWT_SECRET`,
-  `ENCRYPTION_KEY`.
-- Do not log full prompts or generated chapter text (user content, potentially large).
-- Do not log `RequestValidationError.errors()` with `input` — it contains the raw request
-  (the 422 handler strips `input` for the same reason, see `error-handling.md`).
-- Do not add `logger.info` per SSE chunk.
+- **绝不记录 API key** —— 无论明文还是密文（`api_key_enc`）。key 仅在
+  `ai_config_service.build_provider` / provider 实例内部以明文存在；
+  不要记录 `cfg`、provider 对象或 SDK 客户端的 kwargs。
+- 绝不记录密码、密码哈希、JWT 或 `access_token` cookie、`JWT_SECRET`、
+  `ENCRYPTION_KEY`。
+- 不要记录完整的 prompt 或生成的章节正文（用户内容，可能很大）。
+- 不要记录带 `input` 的 `RequestValidationError.errors()` —— 它包含原始请求
+  （422 handler 出于同样原因去掉了 `input`，见 `error-handling.md`）。
+- 不要为每个 SSE 分块添加 `logger.info`。
 
-When something sensitive must be shown (UI only, not logs) use
-`app.core.security.mask_secret` (`sk-***1234`).
+当确实需要展示敏感信息时（仅限 UI，不用于日志），使用
+`app.core.security.mask_secret`（`sk-***1234`）。

@@ -1,16 +1,16 @@
-# Hook Guidelines
+# Hook 规范
 
-> How hooks are used in this project.
-
----
-
-## Overview
-
-There is no data-fetching library (no React Query/SWR). Four small custom hooks in `src/hooks/` cover everything: one-shot async loading (`useLoader`), streaming AI tasks (`useStreamTask`), route param parsing (`useProjectId`) and a derived store selector (`useHasAIConfig`). Global cached data lives in Zustand stores (see [state-management.md](./state-management.md)).
+> 本项目中 hook 的使用方式。
 
 ---
 
-## Custom Hook Patterns
+## 概述
+
+项目没有使用数据请求库（没有 React Query/SWR）。`src/hooks/` 中的四个小型自定义 hook 覆盖了全部场景：一次性异步加载（`useLoader`）、流式 AI 任务（`useStreamTask`）、路由参数解析（`useProjectId`）以及派生的 store 选择器（`useHasAIConfig`）。全局缓存数据存放在 Zustand store 中（见 [state-management.md](./state-management.md)）。
+
+---
+
+## 自定义 Hook 模式
 
 ### `useStreamTask` — `src/hooks/useStreamTask.ts`
 
@@ -25,17 +25,17 @@ export function useStreamTask(): {
 }
 ```
 
-- Owns one `AbortController` in a ref. `start` aborts any previous controller, creates a new one, clears `text`/`error`, sets `running`, and appends each delta (`setText((prev) => prev + delta)`).
-- Never throws: returns a discriminated `StreamOutcome`. Abort (`isAbortError(err) || controller.signal.aborted`) → `{ status: 'aborted' }` without setting `error`; other errors → `setError(errorMessage(err))` and `{ status: 'error', message }`.
-- `finally` only clears `running` if the controller is still the current one (a newer `start` wins the race).
-- Aborts on unmount: `useEffect(() => () => controllerRef.current?.abort(), [])`.
-- Usage — the runner receives the hook's `onDelta`/`signal` and passes them to the API function:
+- 在 ref 中持有一个 `AbortController`。`start` 会中止之前的 controller、创建新的 controller、清空 `text`/`error`、设置 `running`，并追加每段 delta（`setText((prev) => prev + delta)`）。
+- 从不抛出异常：返回可辨识联合类型 `StreamOutcome`。中止（`isAbortError(err) || controller.signal.aborted`）→ `{ status: 'aborted' }`，且不设置 `error`；其他错误 → `setError(errorMessage(err))` 并返回 `{ status: 'error', message }`。
+- `finally` 仅在该 controller 仍是当前 controller 时才清除 `running`（较新的 `start` 在竞争中胜出）。
+- 卸载时中止：`useEffect(() => () => controllerRef.current?.abort(), [])`。
+- 用法——runner 接收 hook 提供的 `onDelta`/`signal`，并将其传给 API 函数：
   ```ts
   // src/components/WizardGenerator.tsx
   const outcome = await task.start((onDelta, signal) => runWizard(projectId, kind, body, onDelta, signal))
   if (outcome.status === 'done') { … } else if (outcome.status === 'aborted') { message.info('已停止生成，原有数据未改变') }
   ```
-  Errors are rendered from `task.error` (`<Alert type="error" message="生成失败" description={task.error} />`).
+  错误通过 `task.error` 渲染（`<Alert type="error" message="生成失败" description={task.error} />`）。
 
 ### `useLoader` — `src/hooks/useLoader.ts`
 
@@ -47,10 +47,10 @@ export function useLoader<T>(fn: () => Promise<T>): {
 }
 ```
 
-- Runs `fn` in an effect keyed by `[fn, version]`; an `alive` flag drops results from stale runs.
-- `fn` **must** be memoized by the caller with `useCallback`, otherwise it refetches every render.
-- Errors are normalized with `errorMessage(err)`; on error the previous `data` is kept.
-- `reload()` sets `loading: true` and bumps `version`.
+- 在以 `[fn, version]` 为依赖的 effect 中运行 `fn`；`alive` 标志会丢弃过期运行的结果。
+- 调用方**必须**用 `useCallback` 对 `fn` 做 memo，否则每次渲染都会重新请求。
+- 错误通过 `errorMessage(err)` 统一规范化；出错时保留之前的 `data`。
+- `reload()` 会设置 `loading: true` 并递增 `version`。
   ```ts
   // src/pages/project/WorldPanel.tsx
   const loader = useCallback(() => worldApi.list(pid), [pid])
@@ -62,31 +62,31 @@ export function useLoader<T>(fn: () => Promise<T>): {
 ```ts
 export function useProjectId(): number { const { pid } = useParams(); return Number(pid) }
 ```
-Returns `NaN` for a bad param; callers check `Number.isFinite(pid)` (`ProjectLayout`).
+参数无效时返回 `NaN`；调用方用 `Number.isFinite(pid)` 检查（`ProjectLayout`）。
 
 ### `useHasAIConfig` — `src/hooks/useHasAIConfig.ts`
 
 ```ts
-export function useHasAIConfig(): boolean | null  // null while the store is not loaded
+export function useHasAIConfig(): boolean | null  // store 尚未加载时为 null
 ```
-Reads `useAIConfigStore()`; it does **not** trigger loading — `AIConfigSelect` (rendered next to every generate button) calls `load()`. Callers disable generate buttons only on an explicit `false` (`disabled={hasConfig === false || …}`), so the button is not blocked during loading.
+读取 `useAIConfigStore()`；它**不会**触发加载——由 `AIConfigSelect`（渲染在每个生成按钮旁边）调用 `load()`。调用方仅在明确为 `false` 时禁用生成按钮（`disabled={hasConfig === false || …}`），因此加载期间按钮不会被阻塞。
 
 ---
 
-## Data Fetching
+## 数据请求
 
-- Reads: `useLoader` + `api/<resource>.ts` functions. Cross-page cached reads (current user, AI configs, current project) use stores instead.
-- Writes: call the API function directly in an `async` handler, then `reload()` / `setProject()` / `refresh()`.
-- Streaming: `useStreamTask().start(runner)` where `runner` calls `generateChapter` / `polishChapter` / `runWizard`, all built on `runGeneration` in `src/api/sse.ts` (scenario below).
+- 读取：`useLoader` + `api/<resource>.ts` 中的函数。跨页面缓存的读取（当前用户、AI 配置、当前项目）改用 store。
+- 写入：在 `async` 处理函数中直接调用 API 函数，然后调用 `reload()` / `setProject()` / `refresh()`。
+- 流式：`useStreamTask().start(runner)`，其中 `runner` 调用 `generateChapter` / `polishChapter` / `runWizard`，它们都基于 `src/api/sse.ts` 中的 `runGeneration` 构建（见下方场景）。
 
 ---
 
-## Scenario: SSE client parser
+## 场景：SSE 客户端解析器
 
-### 1. Scope / Trigger
-Any change to `src/api/sse.ts`, to a streaming endpoint (`POST /api/v1/chapters/{id}/generate`, `/chapters/{id}/polish`, `/projects/{pid}/wizard/{kind}`), or to the backend SSE framing in `backend/app/api/sse.py`. The backend endpoints are POST with a JSON body, so `EventSource` (GET only, no body) cannot be used — streaming is `fetch` + `ReadableStream` + a hand-written parser.
+### 1. 范围 / 触发条件
+任何对 `src/api/sse.ts`、流式端点（`POST /api/v1/chapters/{id}/generate`、`/chapters/{id}/polish`、`/projects/{pid}/wizard/{kind}`）或 `backend/app/api/sse.py` 中后端 SSE 帧格式的修改。后端端点是带 JSON body 的 POST，因此无法使用 `EventSource`（仅支持 GET，不能带 body）——流式通过 `fetch` + `ReadableStream` + 手写解析器实现。
 
-### 2. Signatures
+### 2. 签名
 ```ts
 export interface SSEMessage { event: string; data: string }
 export class SSEParser { feed(chunk: string): SSEMessage[]; flush(): SSEMessage[] }
@@ -94,80 +94,80 @@ export async function postSSE(path: string, body: unknown, handlers: { onMessage
 export interface GenerationCallbacks<TDone> { onDelta: (text: string) => void; signal?: AbortSignal; parseDone?: (data: unknown) => TDone }
 export async function runGeneration<TDone>(path: string, body: unknown, cb: GenerationCallbacks<TDone>): Promise<TDone>
 export class StreamError extends Error {}           // name = 'StreamError'
-export function isAbortError(err: unknown): boolean // DOMException && name === 'AbortError'
+export function isAbortError(err: unknown): boolean // DOMException 且 name === 'AbortError'
 ```
 
-### 3. Contracts
-- Request: `fetch(buildUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(body ?? {}), credentials: 'include', signal })`.
-- Wire format (backend `format_sse`): first frame is the comment `: stream-start\n\n`, then `event: <delta|done|error>\ndata: <JSON>\n\n`. Data is always JSON so newlines in prose never break frames.
-- Event payloads:
-  - `delta` → `{ "text": string }` → `cb.onDelta(text)` (empty text skipped).
-  - `done` → chapter: `{ "chapter": ChapterOut }`; wizard: `{ "kind": K, "items": [...] }`. Stored, returned after the stream ends.
-  - `error` → `{ "detail": string }` → after the stream ends, `throw new StreamError(detail)` (fallback `生成失败`).
-- Parser rules: accepts arbitrary chunk splits; line endings LF, CRLF or lone CR; a trailing `\r` at chunk end is held until the next chunk (could be half of CRLF); lines starting with `:` are ignored; `field: value` strips one leading space; multiple `data:` lines join with `\n`; empty event name defaults to `message`; `flush()` dispatches a final event not terminated by a blank line. Non-JSON `data` is ignored by `runGeneration`.
-- Decoder: `TextDecoder('utf-8')` with `{ stream: true }` so multi-byte Chinese characters split across chunks decode correctly; final `decoder.decode()` + `parser.flush()` on EOF; `reader.releaseLock()` in `finally`.
+### 3. 契约
+- 请求：`fetch(buildUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(body ?? {}), credentials: 'include', signal })`。
+- 传输格式（后端 `format_sse`）：第一帧是注释 `: stream-start\n\n`，之后是 `event: <delta|done|error>\ndata: <JSON>\n\n`。data 始终是 JSON，因此正文中的换行绝不会破坏帧。
+- 事件 payload：
+  - `delta` → `{ "text": string }` → `cb.onDelta(text)`（空文本跳过）。
+  - `done` → 章节：`{ "chapter": ChapterOut }`；向导：`{ "kind": K, "items": [...] }`。先暂存，流结束后返回。
+  - `error` → `{ "detail": string }` → 流结束后 `throw new StreamError(detail)`（兜底为 `生成失败`）。
+- 解析规则：接受任意 chunk 切分；行尾可为 LF、CRLF 或单独的 CR；chunk 末尾的 `\r` 会保留到下一个 chunk（可能是 CRLF 的一半）；以 `:` 开头的行被忽略；`field: value` 去掉一个前导空格；多行 `data:` 以 `\n` 拼接；事件名为空时默认为 `message`；`flush()` 派发最后一个未以空行结尾的事件。`runGeneration` 会忽略非 JSON 的 `data`。
+- 解码器：`TextDecoder('utf-8')` 配合 `{ stream: true }`，使跨 chunk 拆分的多字节中文字符能正确解码；EOF 时执行最终的 `decoder.decode()` + `parser.flush()`；在 `finally` 中执行 `reader.releaseLock()`。
 
-### 4. Validation & Error Matrix
+### 4. 校验与错误矩阵
 
-| Situation | Where it surfaces | Frontend result |
+| 情况 | 暴露位置 | 前端结果 |
 |-----------|------------------|-----------------|
-| No AI config / bad config (backend `BadRequestError`, e.g. `尚未配置 AI 模型，请先在「模型配置」中添加并设为默认`) | HTTP 400 JSON before streaming | `ApiError(400, detail)` via `handleErrorResponse` |
-| Chapter already `generating` (`该章节正在生成中，请稍候再试`) | HTTP 409 JSON | `ApiError(409, detail)` |
-| Polish on empty content (`章节正文为空，无法润色`) | HTTP 400 JSON | `ApiError(400, detail)` |
-| Chapter/project not owned or missing | HTTP 404 JSON | `ApiError(404, detail)` |
-| Session expired | HTTP 401 JSON | `notifyUnauthorized()` then `ApiError(401, …)` |
-| Network failure before response | `fetch` rejects | `ApiError(0, '网络错误，无法连接服务器')` |
-| 2xx but not `text/event-stream` or no body | content-type check | `ApiError(status, '服务器未返回流式响应')` |
-| Model/provider error mid-stream | `event: error` | `StreamError(detail)` |
-| Stream ends without `done` | EOF | `StreamError('连接意外中断，生成未完成')` |
-| User stops / component unmounts | `AbortController.abort()` | `DOMException AbortError` rethrown → `useStreamTask` returns `{ status: 'aborted' }` |
+| 无 AI 配置 / 配置错误（后端 `BadRequestError`，如 `尚未配置 AI 模型，请先在「模型配置」中添加并设为默认`） | 流开始前的 HTTP 400 JSON | 经 `handleErrorResponse` 得到 `ApiError(400, detail)` |
+| 章节已处于 `generating`（`该章节正在生成中，请稍候再试`） | HTTP 409 JSON | `ApiError(409, detail)` |
+| 对空正文润色（`章节正文为空，无法润色`） | HTTP 400 JSON | `ApiError(400, detail)` |
+| 章节/项目不属于当前用户或不存在 | HTTP 404 JSON | `ApiError(404, detail)` |
+| 会话过期 | HTTP 401 JSON | 先 `notifyUnauthorized()`，再 `ApiError(401, …)` |
+| 收到响应前网络失败 | `fetch` reject | `ApiError(0, '网络错误，无法连接服务器')` |
+| 2xx 但不是 `text/event-stream` 或没有 body | content-type 检查 | `ApiError(status, '服务器未返回流式响应')` |
+| 流中途模型/提供商出错 | `event: error` | `StreamError(detail)` |
+| 流结束但没有 `done` | EOF | `StreamError('连接意外中断，生成未完成')` |
+| 用户停止 / 组件卸载 | `AbortController.abort()` | 重新抛出 `DOMException AbortError` → `useStreamTask` 返回 `{ status: 'aborted' }` |
 
-All of these reach the UI through `errorMessage(err)` (`ApiError.detail` or `Error.message`). Backend reverts chapter status on abort/error, so the editor calls `reloadChapter()` afterwards.
+以上所有情况都通过 `errorMessage(err)`（`ApiError.detail` 或 `Error.message`）到达 UI。后端在中止/出错时会回滚章节状态，因此编辑器随后会调用 `reloadChapter()`。
 
-### 5. Good / Base / Bad Cases
-- Good: `: stream-start\n\nevent: delta\ndata: {"text":"你好"}\n\nevent: done\ndata: {}\n\n` → `[{delta, '{"text":"你好"}'}, {done, '{}'}]`.
-- Base: the same frames split every 3 characters, or with `\r\n` where `\r` and `\n` land in different chunks → identical messages.
-- Bad: `event: error\ndata: {"detail":"x"}` → `runGeneration` throws `StreamError('x')`; stream with only deltas and no `done` → `StreamError('连接意外中断，生成未完成')`; HTTP 409 → `ApiError`, never a `StreamError`.
+### 5. 正例 / 基准 / 反例
+- 正例：`: stream-start\n\nevent: delta\ndata: {"text":"你好"}\n\nevent: done\ndata: {}\n\n` → `[{delta, '{"text":"你好"}'}, {done, '{}'}]`。
+- 基准：相同的帧每 3 个字符切分一次，或使用 `\r\n` 且 `\r` 与 `\n` 落在不同 chunk 中 → 得到完全相同的消息。
+- 反例：`event: error\ndata: {"detail":"x"}` → `runGeneration` 抛出 `StreamError('x')`；只有 delta 而没有 `done` 的流 → `StreamError('连接意外中断，生成未完成')`；HTTP 409 → `ApiError`，绝不会是 `StreamError`。
 
-### 6. Tests Required
-Existing (`src/api/sse.test.ts`, run with `npm test`):
-- `解析标准帧并忽略注释帧` — assert the comment produces no message and delta/done are returned in order.
-- `处理跨 chunk 截断` — 3-char chunks yield exactly the two original messages.
-- `处理 CRLF 且 \r 与 \n 被拆在两个 chunk` — assert a single `error` event with data `{"detail":"x"}` (no spurious empty-line dispatch).
-- `多行 data 以换行拼接，缺省事件名为 message` — `data: a\ndata: b` → `{ event: 'message', data: 'a\nb' }`.
-- `流结束时 flush 未以空行结尾的事件` — unterminated `done` is emitted by `flush()`.
+### 6. 必需的测试
+现有测试（`src/api/sse.test.ts`，用 `npm test` 运行）：
+- `解析标准帧并忽略注释帧` —— 断言注释不产生消息，且 delta/done 按顺序返回。
+- `处理跨 chunk 截断` —— 3 字符的 chunk 恰好产出原来的两条消息。
+- `处理 CRLF 且 \r 与 \n 被拆在两个 chunk` —— 断言只有一个 data 为 `{"detail":"x"}` 的 `error` 事件（没有因空行误派发的事件）。
+- `多行 data 以换行拼接，缺省事件名为 message` —— `data: a\ndata: b` → `{ event: 'message', data: 'a\nb' }`。
+- `流结束时 flush 未以空行结尾的事件` —— 未结束的 `done` 由 `flush()` 发出。
 
-When changing `postSSE`/`runGeneration`, add tests with a stubbed `fetch` returning a `ReadableStream`, asserting: non-2xx → `ApiError` with `status`/`detail`; `error` event → `StreamError`; missing `done` → `StreamError`; aborted signal → `isAbortError(err) === true`.
+修改 `postSSE`/`runGeneration` 时，新增使用 stub `fetch`（返回 `ReadableStream`）的测试，断言：非 2xx → 带 `status`/`detail` 的 `ApiError`；`error` 事件 → `StreamError`；缺少 `done` → `StreamError`；已中止的 signal → `isAbortError(err) === true`。
 
-### 7. Wrong vs Correct
+### 7. 错误写法 vs 正确写法
 ```ts
-// Wrong: EventSource is GET-only and cannot send the JSON request body the endpoints require
+// 错误：EventSource 仅支持 GET，无法发送端点所需的 JSON 请求体
 const es = new EventSource(`/api/v1/chapters/${cid}/generate`)
 
-// Wrong: splitting each chunk on '\n\n' loses frames cut across chunks and breaks on CRLF
+// 错误：对每个 chunk 按 '\n\n' 切分，会丢失跨 chunk 截断的帧，且遇到 CRLF 会出错
 chunk.split('\n\n').forEach(handleFrame)
 
-// Wrong: treating a pre-stream 409 as a stream error hides the status code from callers
+// 错误：把流开始前的 409 当作流错误处理，会向调用方隐藏状态码
 if (!resp.ok) throw new StreamError('生成失败')
 
-// Correct (src/api/sse.ts)
-if (!resp.ok) await handleErrorResponse(path, resp)        // ApiError with backend detail
+// 正确（src/api/sse.ts）
+if (!resp.ok) await handleErrorResponse(path, resp)        // 携带后端 detail 的 ApiError
 for (const msg of parser.feed(decoder.decode(value, { stream: true }))) handlers.onMessage(msg)
 ```
 
 ---
 
-## Naming Conventions
+## 命名约定
 
-- Files `useXxx.ts`, named exports, one hook per file.
-- Hooks return plain objects (`{ text, running, error, start, stop, reset }`, `{ data, loading, error, reload, setData }`), destructured by callers.
-- Outcome/result types are exported next to the hook (`StreamOutcome<T>`).
+- 文件名为 `useXxx.ts`，使用具名导出，每个文件一个 hook。
+- Hook 返回普通对象（`{ text, running, error, start, stop, reset }`、`{ data, loading, error, reload, setData }`），由调用方解构。
+- 结果类型与 hook 一同导出（`StreamOutcome<T>`）。
 
 ---
 
-## Common Mistakes
+## 常见错误
 
-- Passing an inline arrow to `useLoader` → infinite refetch loop. Wrap in `useCallback` with the right deps.
-- Using `task.error` for aborts — aborts are deliberately not errors; handle `outcome.status === 'aborted'` with an info message.
-- Forgetting to forward `signal` from the runner into the API function — Stop and unmount would no longer cancel the request (and the backend would keep generating).
-- Treating `useHasAIConfig() === null` as "no config" — it means "not loaded yet".
+- 给 `useLoader` 传内联箭头函数 → 无限重复请求。用 `useCallback` 包裹并写对依赖。
+- 用 `task.error` 处理中止——中止被刻意设计为不算错误；应处理 `outcome.status === 'aborted'` 并给出提示信息。
+- 忘记把 runner 中的 `signal` 传入 API 函数——停止和卸载将无法取消请求（后端也会继续生成）。
+- 把 `useHasAIConfig() === null` 当作"没有配置"——它的含义是"尚未加载"。

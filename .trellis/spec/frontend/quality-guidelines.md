@@ -1,24 +1,24 @@
-# Quality Guidelines
+# 质量规范
 
-> Code quality standards for frontend development.
+> 前端开发的代码质量标准。
 
 ---
 
-## Overview
+## 概述
 
-The quality gate is three npm scripts run from `frontend/`:
+质量门禁是在 `frontend/` 下运行的三个 npm 脚本：
 
 ```bash
 npm run lint && npm run build && npm test
 ```
 
-- `lint` → `eslint .` (flat config `eslint.config.js`: `@eslint/js` recommended, `typescript-eslint` recommended, `eslint-plugin-react-hooks` flat recommended, `react-refresh/only-export-components` warn with `allowConstantExport`, `@typescript-eslint/no-explicit-any: error`).
-- `build` → `tsc -b && vite build` (type-check is part of the build; strict tsconfig with unused locals/params as errors).
-- `test` → `vitest run` (`environment: 'node'`, `include: ['src/**/*.test.ts']`).
+- `lint` → `eslint .`（flat config `eslint.config.js`：`@eslint/js` recommended、`typescript-eslint` recommended、`eslint-plugin-react-hooks` flat recommended、`react-refresh/only-export-components` 设为 warn 并启用 `allowConstantExport`、`@typescript-eslint/no-explicit-any: error`）。
+- `build` → `tsc -b && vite build`（类型检查是构建的一部分；严格的 tsconfig 将未使用的局部变量/参数视为错误）。
+- `test` → `vitest run`（`environment: 'node'`、`include: ['src/**/*.test.ts']`）。
 
-### Dev server proxy (`vite.config.ts`)
+### 开发服务器代理（`vite.config.ts`）
 
-`/api` is proxied to `process.env.VITE_BACKEND_URL ?? 'http://localhost:8000'` with `changeOrigin: true`. For `text/event-stream` responses the proxy rewrites headers so nothing buffers or compresses the stream:
+`/api` 被代理到 `process.env.VITE_BACKEND_URL ?? 'http://localhost:8000'`，并设置 `changeOrigin: true`。对于 `text/event-stream` 响应，代理会改写响应头，确保流不会被缓冲或压缩：
 
 ```ts
 proxy.on('proxyRes', (proxyRes) => {
@@ -28,55 +28,55 @@ proxy.on('proxyRes', (proxyRes) => {
   }
 })
 ```
-The backend sends the same headers (`SSE_HEADERS` in `backend/app/api/sse.py`). Keep both sides in sync if the proxy or a reverse proxy is changed; otherwise generation text arrives in one burst at the end.
+后端发送同样的响应头（`backend/app/api/sse.py` 中的 `SSE_HEADERS`）。如果修改了该代理或反向代理，务必保持两端一致；否则生成的文本会在最后一次性全部到达。
 
-### Bundle size
+### 包体积
 
-`vite build` currently emits a single JS chunk of about 1.26 MB (`dist/assets/index-*.js` ≈ 1,260 kB, ≈ 393 kB gzip) because AntD and all pages are bundled together and no route uses `React.lazy` / dynamic `import()`. `build.chunkSizeWarningLimit` is raised to `1500` (kB) so this does not warn. If the chunk grows past the limit, introduce route-level lazy loading in `router.tsx` (or `manualChunks`) rather than raising the limit again.
-
----
-
-## Forbidden Patterns
-
-- `any` — lint error; use `unknown` and narrow.
-- Direct `fetch` in pages/components — use `src/api/*` (keeps `credentials: 'include'`, `ApiError`, 401 handling).
-- `EventSource` for AI streams — endpoints are POST; use `runGeneration`.
-- Static AntD `message` / `Modal.confirm` — use `App.useApp()`.
-- Raw `dayjs(serverTime)` / `new Date(serverTime)` — use `formatTime` / `parseServerTime`.
-- Inline (non-memoized) loader functions passed to `useLoader`.
-- Hard-coded `/api/v1` paths outside `client.ts`.
-- Silently swallowing errors in user actions — show `message.error(errorMessage(err))` (the only intentional silent catches are `useProjectStore.refresh()` and the editor's `reloadChapter()`).
+`vite build` 目前产出一个约 1.26 MB 的单一 JS chunk（`dist/assets/index-*.js` ≈ 1,260 kB，gzip 后 ≈ 393 kB），因为 AntD 和所有页面被打包在一起，且没有任何路由使用 `React.lazy` / 动态 `import()`。`build.chunkSizeWarningLimit` 已调高到 `1500`（kB），因此不会告警。如果 chunk 超过该上限，应在 `router.tsx` 中引入路由级懒加载（或 `manualChunks`），而不是再次调高上限。
 
 ---
 
-## Required Patterns
+## 禁止模式
 
-- Async handlers: `setX(true)` → `try { await …; message.success(…) } catch (err) { message.error(errorMessage(err)) } finally { setX(false) }` (see `WorldPanel.handleSave`, `ExportModalInner.handleExport`).
-- Fire-and-forget promises are marked with `void` (`void load()`, `void refreshProject()`, `onClick={() => void handleSave()}`).
-- Every streaming UI uses `useStreamTask` and forwards `signal`; provide a visible Stop button while `running`.
-- Disable conflicting controls while busy (`disabled={task.running}`, `loading={saving}`, `confirmLoading`).
-- User-visible strings are Simplified Chinese; code comments are Chinese JSDoc one-liners as in existing files.
-- New user-scoped stores reset on `userId` change in `App.tsx`.
-
----
-
-## Testing Requirements
-
-- Pure logic (parsers, formatters, grouping) gets co-located `*.test.ts` Vitest tests. Current suites: `src/api/sse.test.ts` (5 cases, SSE parser) and `src/utils/time.test.ts` (2 cases, UTC parsing) — 7 tests total, all must pass.
-- Test environment is `node` (no jsdom); there are no component tests. Code that needs DOM/`fetch` is tested by stubbing globals.
-- Changes to `sse.ts` or `client.ts` must follow the "Tests Required" lists in [hook-guidelines.md](./hook-guidelines.md#scenario-sse-client-parser) and [type-safety.md](./type-safety.md#scenario-api-client-contract).
-- Test names may be Chinese, matching existing suites (`it('处理跨 chunk 截断', …)`).
+- `any`——lint 报错；使用 `unknown` 并收窄类型。
+- 在页面/组件中直接调用 `fetch`——使用 `src/api/*`（保留 `credentials: 'include'`、`ApiError`、401 处理）。
+- 用 `EventSource` 处理 AI 流——这些端点是 POST；使用 `runGeneration`。
+- 静态的 AntD `message` / `Modal.confirm`——使用 `App.useApp()`。
+- 直接 `dayjs(serverTime)` / `new Date(serverTime)`——使用 `formatTime` / `parseServerTime`。
+- 向 `useLoader` 传入内联的（未 memo 化的）loader 函数。
+- 在 `client.ts` 之外硬编码 `/api/v1` 路径。
+- 在用户操作中静默吞掉错误——应显示 `message.error(errorMessage(err))`（仅有的有意静默捕获是 `useProjectStore.refresh()` 和编辑器的 `reloadChapter()`）。
 
 ---
 
-## Code Review Checklist
+## 必需模式
 
-- [ ] `npm run lint && npm run build && npm test` passes in `frontend/`.
-- [ ] New/changed wire types in `src/api/types.ts` match `backend/app/schemas/*.py` (field names, nullability, `Literal` enums), and label `Record`s cover every enum value.
-- [ ] PATCH bodies respect backend semantics (omit to keep; empty `api_key` keeps key; never `status: 'generating'`).
-- [ ] All network calls go through `src/api/`; errors shown via `errorMessage`.
-- [ ] Streaming: `signal` forwarded, Stop button present, abort handled as `aborted` not error, inputs read-only/disabled while running.
-- [ ] Chapter editor invariants intact: auto-save before AI, Ctrl/Cmd+S, `useBlocker` + `beforeunload` guard, stuck-`generating` reset with save disabled.
-- [ ] Server timestamps rendered with `formatTime`.
-- [ ] Any new user-scoped global state is reset on logout/401.
-- [ ] Bundle still under `chunkSizeWarningLimit` (check `vite build` output).
+- 异步处理函数：`setX(true)` → `try { await …; message.success(…) } catch (err) { message.error(errorMessage(err)) } finally { setX(false) }`（见 `WorldPanel.handleSave`、`ExportModalInner.handleExport`）。
+- 不等待结果的 promise 用 `void` 标记（`void load()`、`void refreshProject()`、`onClick={() => void handleSave()}`）。
+- 所有流式 UI 都使用 `useStreamTask` 并传递 `signal`；在 `running` 期间提供可见的停止按钮。
+- 忙碌时禁用会冲突的控件（`disabled={task.running}`、`loading={saving}`、`confirmLoading`）。
+- 用户可见的字符串使用简体中文；代码注释与现有文件一致，使用中文 JSDoc 单行注释。
+- 新增的用户级 store 要在 `App.tsx` 中随 `userId` 变化而重置。
+
+---
+
+## 测试要求
+
+- 纯逻辑（解析器、格式化函数、分组）需配套同目录的 `*.test.ts` Vitest 测试。现有测试套件：`src/api/sse.test.ts`（5 个用例，SSE 解析器）和 `src/utils/time.test.ts`（2 个用例，UTC 解析）——共 7 个测试，必须全部通过。
+- 测试环境是 `node`（没有 jsdom）；没有组件测试。需要 DOM/`fetch` 的代码通过 stub 全局对象来测试。
+- 修改 `sse.ts` 或 `client.ts` 时，必须遵循 [hook-guidelines.md](./hook-guidelines.md#场景sse-客户端解析器) 和 [type-safety.md](./type-safety.md#场景api-客户端契约) 中的「必需的测试」清单。
+- 测试名可以使用中文，与现有测试套件保持一致（`it('处理跨 chunk 截断', …)`）。
+
+---
+
+## 代码评审清单
+
+- [ ] 在 `frontend/` 中 `npm run lint && npm run build && npm test` 通过。
+- [ ] `src/api/types.ts` 中新增/修改的传输类型与 `backend/app/schemas/*.py` 一致（字段名、可空性、`Literal` 枚举），且标签 `Record` 覆盖所有枚举值。
+- [ ] PATCH 请求体遵循后端语义（省略即保持不变；空 `api_key` 保留原密钥；绝不发送 `status: 'generating'`）。
+- [ ] 所有网络调用都经过 `src/api/`；错误通过 `errorMessage` 显示。
+- [ ] 流式：传递了 `signal`、存在停止按钮、中止按 `aborted` 而非错误处理、运行期间输入框只读/禁用。
+- [ ] 章节编辑器的不变式保持完好：AI 操作前自动保存、Ctrl/Cmd+S、`useBlocker` + `beforeunload` 防护、卡在 `generating` 时可复位且禁用保存。
+- [ ] 服务端时间戳使用 `formatTime` 渲染。
+- [ ] 任何新增的用户级全局状态在登出/401 时都会被重置。
+- [ ] 包体积仍低于 `chunkSizeWarningLimit`（检查 `vite build` 输出）。

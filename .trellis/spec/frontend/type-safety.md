@@ -1,68 +1,68 @@
-# Type Safety
+# 类型安全
 
-> Type safety patterns in this project.
-
----
-
-## Overview
-
-TypeScript ~5.8 in strict mode (`frontend/tsconfig.app.json`: `strict`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`, `verbatimModuleSyntax`). ESLint enforces `'@typescript-eslint/no-explicit-any': 'error'`. There is no runtime validation library (no Zod/Yup): response bodies are trusted to match `src/api/types.ts`, which mirrors the backend Pydantic schemas. Untrusted shapes (error bodies, SSE payloads) are narrowed with `unknown` + type guards.
+> 本项目中的类型安全模式。
 
 ---
 
-## Type Organization
+## 概述
 
-- **All wire types live in `src/api/types.ts`** (header comment: `与后端 app/schemas/*.py 对齐的类型定义`). One TS interface per Pydantic model: `*Out` → plain name (`AIConfig`, `Project`, `Chapter`), `*Create`/`*Update`/`*Request` → same name.
-- Field names stay `snake_case` exactly as on the wire. `datetime` fields are `string`. Optional-with-default request fields are `?:`; nullable fields are `| null`.
-- Enums are string-literal unions copied from backend `Literal[...]`:
+TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`、`noUnusedLocals`、`noUnusedParameters`、`noFallthroughCasesInSwitch`、`verbatimModuleSyntax`）。ESLint 强制 `'@typescript-eslint/no-explicit-any': 'error'`。没有运行时校验库（不用 Zod/Yup）：默认信任响应体与 `src/api/types.ts` 一致，而该文件镜像后端的 Pydantic schema。不可信的数据结构（错误响应体、SSE 载荷）通过 `unknown` + 类型守卫进行收窄。
 
-  | TS type | Values | Backend source |
+---
+
+## 类型组织
+
+- **所有传输类型都放在 `src/api/types.ts`**（文件头注释：`与后端 app/schemas/*.py 对齐的类型定义`）。每个 Pydantic 模型对应一个 TS interface：`*Out` → 去后缀的名字（`AIConfig`、`Project`、`Chapter`），`*Create`/`*Update`/`*Request` → 同名。
+- 字段名保持与传输格式完全一致的 `snake_case`。`datetime` 字段为 `string`。带默认值的可选请求字段用 `?:`；可空字段用 `| null`。
+- 枚举是从后端 `Literal[...]` 复制而来的字符串字面量联合类型：
+
+  | TS 类型 | 取值 | 后端来源 |
   |---------|--------|----------------|
   | `ProviderName` | `'openai_compat' \| 'anthropic' \| 'gemini'` | `schemas/ai_config.py` |
   | `ChapterStatus` | `'draft' \| 'generating' \| 'done'` | `schemas/chapter.py` |
-  | `ChapterUpdate.status` | `'draft' \| 'done' \| null` (never `generating`) | `ChapterUpdate.status: Literal["draft", "done"] \| None` |
+  | `ChapterUpdate.status` | `'draft' \| 'done' \| null`（绝不为 `generating`） | `ChapterUpdate.status: Literal["draft", "done"] \| None` |
   | `ProjectStatus` | `'planning' \| 'writing' \| 'completed'` | `schemas/project.py` |
-  | `WizardKind` | `'outline' \| 'characters' \| 'world'` | wizard route `/projects/{pid}/wizard/{kind}` |
+  | `WizardKind` | `'outline' \| 'characters' \| 'world'` | 向导路由 `/projects/{pid}/wizard/{kind}` |
 
-- UI label maps are typed with `Record<Union, …>` so adding an enum value is a compile error until labelled: `PROJECT_STATUS: Record<ProjectStatus, { label; color }>`, `CHAPTER_STATUS: Record<ChapterStatus, …>`, `PROVIDER_LABELS: Record<AIConfig['provider'], string>`, `WIZARD_KIND_LABELS: Record<WizardKind, string>`.
-- Type-level maps tie generic parameters to payloads: `WizardItemMap { outline: Outline; characters: Character; world: WorldSetting }` → `runWizard<K>(…): Promise<WizardItemMap[K][]>`.
-- Component-local form shapes (`FormValues`) stay in the component file.
+- UI 标签映射使用 `Record<Union, …>` 类型，因此新增枚举值后在补上标签前会产生编译错误：`PROJECT_STATUS: Record<ProjectStatus, { label; color }>`、`CHAPTER_STATUS: Record<ChapterStatus, …>`、`PROVIDER_LABELS: Record<AIConfig['provider'], string>`、`WIZARD_KIND_LABELS: Record<WizardKind, string>`。
+- 类型级映射把泛型参数与载荷绑定：`WizardItemMap { outline: Outline; characters: Character; world: WorldSetting }` → `runWizard<K>(…): Promise<WizardItemMap[K][]>`。
+- 组件本地的表单结构（`FormValues`）保留在组件文件中。
 
-- Auth/admin types: `User.is_admin` mirrors `UserOut.is_admin`; `Page<T> = { items: T[]; total: number }` mirrors `AdminUserList`; `AdminUser` mirrors `AdminUserOut` (`id, username, is_admin, is_active, created_at, project_count`); `AdminUserCreate`, `AdminUserUpdate` (`is_admin?`, `is_active?`), `ResetPasswordRequest`, `ChangePasswordRequest`. Backend contract: `.trellis/spec/backend/auth-admin.md`.
-- Shared form rules live in `src/utils/validation.ts` (`usernameRules` 3–32 no whitespace, `passwordRules` 6–72, `confirmPasswordRules(field = 'password')`). Login/register, change-password, admin create and reset-password all import them — never re-declare the limits in a page.
+- 认证/管理员类型：`User.is_admin` 镜像 `UserOut.is_admin`；`Page<T> = { items: T[]; total: number }` 镜像 `AdminUserList`；`AdminUser` 镜像 `AdminUserOut`（`id, username, is_admin, is_active, created_at, project_count`）；`AdminUserCreate`、`AdminUserUpdate`（`is_admin?`、`is_active?`）、`ResetPasswordRequest`、`ChangePasswordRequest`。后端契约：`.trellis/spec/backend/auth-admin.md`。
+- 共享表单规则放在 `src/utils/validation.ts`（`usernameRules` 3–32 位且不含空白、`passwordRules` 6–72 位、`confirmPasswordRules(field = 'password')`）。登录/注册、修改密码、管理员创建用户和重置密码都导入它们——绝不在页面中重复声明这些限制。
 
-### PATCH semantics (must match backend services)
+### PATCH 语义（必须与后端 service 一致）
 
-| Resource | Rule | Backend evidence |
+| 资源 | 规则 | 后端依据 |
 |----------|------|------------------|
-| Project, world/characters/outlines | Omitted **or** `null` = unchanged | `model_dump(exclude_unset=True)` + `if value is None: continue` (`project_service.update_project`, `story_service.update_owned`) |
-| Chapter | Omitted/`null` = unchanged for `chapter_no`, `title`, `content`, `status`; `outline_id: null` sent explicitly **unlinks** the outline | `chapter_service.update_chapter` checks `"outline_id" in fields` |
-| Chapter while `generating` | PATCH with `title`/`content` and no `status` → 409; `{ status: 'draft' }` alone is the reset path | `ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")` |
-| Admin user | `is_admin` / `is_active` omitted = unchanged; disabling bumps `token_version` (target's sessions → 401) | `admin_service.update_user` |
-| AI config | `api_key` omitted or `''` keeps the stored key; `base_url` present (incl. `null`/`''`) is applied, `null` = provider default | `if data.api_key:` / `if "base_url" in fields:` in `ai_config_service.update_config` |
+| 项目、世界观/角色/大纲 | 省略**或** `null` = 不变 | `model_dump(exclude_unset=True)` + `if value is None: continue`（`project_service.update_project`、`story_service.update_owned`） |
+| 章节 | 对 `chapter_no`、`title`、`content`、`status` 而言省略/`null` = 不变；显式发送 `outline_id: null` 会**解除**与大纲的关联 | `chapter_service.update_chapter` 检查 `"outline_id" in fields` |
+| `generating` 中的章节 | PATCH 带 `title`/`content` 且不带 `status` → 409；仅发送 `{ status: 'draft' }` 是复位路径 | `ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")` |
+| 管理员用户 | 省略 `is_admin` / `is_active` = 不变；禁用会递增 `token_version`（目标用户的会话 → 401） | `admin_service.update_user` |
+| AI 配置 | 省略 `api_key` 或传 `''` 保留已存储的密钥；只要出现 `base_url`（包括 `null`/`''`）就会被应用，`null` = provider 默认值 | `ai_config_service.update_config` 中的 `if data.api_key:` / `if "base_url" in fields:` |
 
-Frontend consequence (`AIConfigPage.handleSave`): `base_url` is always sent (`v.base_url?.trim() ? v.base_url.trim() : null`), `api_key` only when non-empty. `AIConfigUpdate = Partial<AIConfigCreate>`.
+前端的相应做法（`AIConfigPage.handleSave`）：始终发送 `base_url`（`v.base_url?.trim() ? v.base_url.trim() : null`），`api_key` 仅在非空时发送。`AIConfigUpdate = Partial<AIConfigCreate>`。
 
-### Timestamps
+### 时间戳
 
-Backend datetimes may be serialized without a timezone suffix. Always parse via `src/utils/time.ts`:
+后端的 datetime 序列化时可能不带时区后缀。务必通过 `src/utils/time.ts` 解析：
 
 ```ts
 export function parseServerTime(value: string): dayjs.Dayjs {
   const hasZone = /(Z|[+-]\d{2}:?\d{2})$/i.test(value)
-  return dayjs(hasZone ? value : `${value}Z`)   // naive -> UTC
+  return dayjs(hasZone ? value : `${value}Z`)   // 无时区 -> UTC
 }
 export function formatTime(value: string | null | undefined, fmt = 'YYYY-MM-DD HH:mm'): string
 ```
-`time.test.ts` asserts `'2026-10-22T08:00:00'` → `'2026-10-22T08:00:00.000Z'` and that `+08:00` / `Z` inputs keep their zone. Never call `dayjs(value)` or `new Date(value)` on a server timestamp directly.
+`time.test.ts` 断言 `'2026-10-22T08:00:00'` → `'2026-10-22T08:00:00.000Z'`，并断言 `+08:00` / `Z` 输入保留其时区。绝不要直接对服务端时间戳调用 `dayjs(value)` 或 `new Date(value)`。
 
 ---
 
-## Validation
+## 校验
 
-- **Input**: AntD `Form` rules mirror backend `Field` limits (e.g. wizard `InputNumber min={1} max={20}` for `volume_count`, `min={3} max={30}` for `character_count`, editor `target_words` `min={300} max={20000}`, instruction `max: 2000`; login username 3–32, password 6–72). Strings are `.trim()`med before sending. The backend remains authoritative and returns `{detail}` (422 detail starts with `请求参数校验失败：`).
-- **Responses**: not validated at runtime; typed via `request<T>`.
-- **Untrusted JSON**: narrowed from `unknown`:
+- **输入**：AntD `Form` 规则与后端 `Field` 限制保持一致（例如向导中 `volume_count` 为 `InputNumber min={1} max={20}`，`character_count` 为 `min={3} max={30}`，编辑器 `target_words` 为 `min={300} max={20000}`，指令 `max: 2000`；登录用户名 3–32 位，密码 6–72 位）。字符串发送前先 `.trim()`。后端仍是最终权威，并返回 `{detail}`（422 的 detail 以 `请求参数校验失败：` 开头）。
+- **响应**：不做运行时校验；通过 `request<T>` 定类型。
+- **不可信 JSON**：从 `unknown` 收窄：
   ```ts
   // src/api/client.ts
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -71,25 +71,25 @@ export function formatTime(value: string | null | undefined, fmt = 'YYYY-MM-DD H
   const data: unknown = JSON.parse(text)
   if (isRecord(data) && typeof data.detail === 'string') return data.detail
   ```
-  `sse.ts` `readText`/`readDetail` do the same for SSE payloads; `runGeneration` accepts an optional `parseDone?: (data: unknown) => TDone` validator.
+  `sse.ts` 的 `readText`/`readDetail` 对 SSE 载荷做同样处理；`runGeneration` 接受一个可选的 `parseDone?: (data: unknown) => TDone` 校验函数。
 
 ---
 
-## Common Patterns
+## 常用模式
 
-- `catch (err)` / `(err: unknown)` everywhere, converted with `errorMessage(err)`.
-- Discriminated unions for results: `StreamOutcome<T>` (`status: 'done' | 'aborted' | 'error'`), `AuthStatus`.
-- Generic API helpers: `request<T>`, `api.get<T>`, `makeCrud<TItem, TInput>`, `runGeneration<TDone>`.
-- `import type { … }` for type-only imports (required by `verbatimModuleSyntax`).
+- 全部使用 `catch (err)` / `(err: unknown)`，并通过 `errorMessage(err)` 转换。
+- 结果使用可辨识联合类型：`StreamOutcome<T>`（`status: 'done' | 'aborted' | 'error'`）、`AuthStatus`。
+- 泛型 API 辅助函数：`request<T>`、`api.get<T>`、`makeCrud<TItem, TInput>`、`runGeneration<TDone>`。
+- 仅类型导入使用 `import type { … }`（`verbatimModuleSyntax` 要求）。
 
 ---
 
-## Scenario: API client contract
+## 场景：API 客户端契约
 
-### 1. Scope / Trigger
-Any change to `src/api/client.ts`, to `exportProject` / `parseContentDispositionFilename` in `src/api/projects.ts`, to backend error format (`backend/app/core/errors.py`), auth cookies, or the export endpoint (`GET /api/v1/projects/{id}/export`).
+### 1. 范围 / 触发条件
+任何对 `src/api/client.ts`、`src/api/projects.ts` 中 `exportProject` / `parseContentDispositionFilename`、后端错误格式（`backend/app/core/errors.py`）、认证 cookie 或导出端点（`GET /api/v1/projects/{id}/export`）的修改。
 
-### 2. Signatures
+### 2. 签名
 ```ts
 export const API_BASE = '/api/v1'
 export class ApiError extends Error { readonly status: number; readonly detail: string }
@@ -105,56 +105,56 @@ export function parseContentDispositionFilename(header: string | null): string |
 export async function exportProject(projectId: number, format: 'txt' | 'md', chapterIds?: number[]): Promise<string>
 ```
 
-### 3. Contracts
-- Every request uses `credentials: 'include'` (HttpOnly cookie session; no tokens in JS). Headers: `Accept: application/json`; `Content-Type: application/json` only when a body is given.
-- `buildUrl` skips `null`/`undefined` query values and repeats keys for arrays.
-- Non-2xx → `handleErrorResponse`: read body text, extract `detail` if it is a string (backend always sends `{"detail": "中文"}`), else fallback `请求失败（HTTP ${status}）`; on 401 call the registered handler unless the path starts with `/auth/login` or `/auth/me`; always throw `ApiError(status, detail)`.
-- Network failure → `ApiError(0, '网络错误，无法连接服务器')`; `AbortError` is rethrown untouched.
-- `request<T>`: 204 → `undefined`; empty body → `undefined`; otherwise `JSON.parse`.
-- `App.tsx` registers `() => useAuthStore.getState().clear()`; `RequireAuth` then redirects to `/login`.
-- Export: plain `fetch(buildUrl(path, { format, chapter_ids? }), { credentials: 'include' })` where `chapter_ids` is a comma-joined string (backend `export_service.parse_chapter_ids`). Response is a blob; filename from `Content-Disposition`, preferring RFC 5987 `filename*=UTF-8''<percent-encoded>` (backend sends `attachment; filename="novel.{ext}"; filename*=UTF-8''{quote(name)}`), falling back to plain `filename=`, then `novel.${format}`. Download via object URL + temporary `<a download>`, URL revoked after 1 s. Errors go through the same `handleErrorResponse`.
+### 3. 契约
+- 每个请求都使用 `credentials: 'include'`（HttpOnly cookie 会话；JS 中不持有 token）。请求头：`Accept: application/json`；仅在有请求体时设置 `Content-Type: application/json`。
+- `buildUrl` 跳过值为 `null`/`undefined` 的查询参数，数组则重复同一个 key。
+- 非 2xx → `handleErrorResponse`：读取响应体文本，若 `detail` 为字符串则提取它（后端总是发送 `{"detail": "中文"}`），否则回退为 `请求失败（HTTP ${status}）`；遇到 401 时调用已注册的处理器，除非路径以 `/auth/login` 或 `/auth/me` 开头；始终抛出 `ApiError(status, detail)`。
+- 网络失败 → `ApiError(0, '网络错误，无法连接服务器')`；`AbortError` 原样重新抛出。
+- `request<T>`：204 → `undefined`；空响应体 → `undefined`；否则 `JSON.parse`。
+- `App.tsx` 注册 `() => useAuthStore.getState().clear()`；随后 `RequireAuth` 重定向到 `/login`。
+- 导出：直接调用 `fetch(buildUrl(path, { format, chapter_ids? }), { credentials: 'include' })`，其中 `chapter_ids` 是逗号拼接的字符串（后端 `export_service.parse_chapter_ids`）。响应为 blob；文件名取自 `Content-Disposition`，优先使用 RFC 5987 的 `filename*=UTF-8''<percent-encoded>`（后端发送 `attachment; filename="novel.{ext}"; filename*=UTF-8''{quote(name)}`），其次回退到普通 `filename=`，最后为 `novel.${format}`。通过 object URL + 临时 `<a download>` 下载，1 秒后撤销 URL。错误同样经过 `handleErrorResponse`。
 
-### 4. Validation & Error Matrix
+### 4. 校验与错误矩阵
 
-| Input | Result |
+| 输入 | 结果 |
 |-------|--------|
-| 2xx JSON | parsed `T` |
-| 204 / empty body | `undefined` |
-| 4xx/5xx with `{"detail":"…"}` | `ApiError(status, detail)` |
-| 4xx/5xx with non-JSON or non-string `detail` | `ApiError(status, '请求失败（HTTP n）')` |
-| 401 on any path except `/auth/login*`, `/auth/me*` | handler → `clear()` → redirect to login; still throws `ApiError(401, …)` |
-| 401 on `/auth/login` (wrong password) or `/auth/me` (not logged in) | throws only; `LoginPage` shows detail, `init()` sets anonymous |
-| `fetch` rejects | `ApiError(0, '网络错误，无法连接服务器')` |
-| aborted signal | `DOMException` `AbortError` rethrown |
-| Export `filename*=UTF-8''%E5%B0%8F%E8%AF%B4.txt` | `小说.txt` |
-| Export header with malformed percent-encoding | falls back to plain `filename` |
-| Export header missing | `novel.txt` / `novel.md` |
+| 2xx JSON | 解析后的 `T` |
+| 204 / 空响应体 | `undefined` |
+| 4xx/5xx 且为 `{"detail":"…"}` | `ApiError(status, detail)` |
+| 4xx/5xx 且非 JSON 或 `detail` 非字符串 | `ApiError(status, '请求失败（HTTP n）')` |
+| 除 `/auth/login*`、`/auth/me*` 外任意路径的 401 | 处理器 → `clear()` → 重定向到登录页；仍然抛出 `ApiError(401, …)` |
+| `/auth/login`（密码错误）或 `/auth/me`（未登录）的 401 | 仅抛出；`LoginPage` 显示 detail，`init()` 设为匿名 |
+| `fetch` reject | `ApiError(0, '网络错误，无法连接服务器')` |
+| signal 已中止 | 重新抛出 `DOMException` `AbortError` |
+| 导出 `filename*=UTF-8''%E5%B0%8F%E8%AF%B4.txt` | `小说.txt` |
+| 导出响应头的百分号编码格式错误 | 回退到普通 `filename` |
+| 导出响应头缺失 | `novel.txt` / `novel.md` |
 
-### 5. Good / Base / Bad Cases
-- Good: `await chapterApi.update(pid, cid, { title, content })` resolves to `Chapter`; on failure `message.error(errorMessage(err))` shows the backend's Chinese detail.
-- Base: `api.del('/projects/1')` → 204 → resolves `undefined`.
-- Bad: PATCH content on a generating chapter → `ApiError(409, '该章节正在生成中，请等待完成或先复位状态后再编辑')`; any expired session → global logout instead of per-page handling.
+### 5. 正例 / 基准 / 反例
+- 正例：`await chapterApi.update(pid, cid, { title, content })` 解析为 `Chapter`；失败时 `message.error(errorMessage(err))` 显示后端的中文 detail。
+- 基准：`api.del('/projects/1')` → 204 → 解析为 `undefined`。
+- 反例：对生成中的章节 PATCH content → `ApiError(409, '该章节正在生成中，请等待完成或先复位状态后再编辑')`；任何会话过期 → 全局登出，而非各页面单独处理。
 
-### 6. Tests Required
-No unit tests cover `client.ts`/`projects.ts` yet. When modifying them, add Vitest tests (stub `globalThis.fetch`) asserting:
-- `fetch` was called with `credentials: 'include'` and URL prefixed by `/api/v1`.
-- Error body `{"detail":"x"}` with 400 → `ApiError` with `status === 400`, `detail === 'x'`; non-JSON body → fallback detail.
-- 401 on `/projects` invokes the registered handler once; 401 on `/auth/login` and `/auth/me` does not.
-- 204 resolves `undefined`.
-- `parseContentDispositionFilename`: `filename*=UTF-8''%E5%B0%8F%E8%AF%B4.txt` → `小说.txt`; only `filename="a.md"` → `a.md`; `null` → `null`.
+### 6. 必需的测试
+目前还没有覆盖 `client.ts`/`projects.ts` 的单元测试。修改它们时，需添加 Vitest 测试（stub `globalThis.fetch`），断言：
+- 调用 `fetch` 时带有 `credentials: 'include'`，且 URL 以 `/api/v1` 为前缀。
+- 400 且错误体为 `{"detail":"x"}` → `ApiError` 满足 `status === 400`、`detail === 'x'`；非 JSON 响应体 → 回退 detail。
+- `/projects` 返回 401 时调用已注册处理器一次；`/auth/login` 和 `/auth/me` 返回 401 时不调用。
+- 204 解析为 `undefined`。
+- `parseContentDispositionFilename`：`filename*=UTF-8''%E5%B0%8F%E8%AF%B4.txt` → `小说.txt`；仅有 `filename="a.md"` → `a.md`；`null` → `null`。
 
-### 7. Wrong vs Correct
+### 7. 错误写法 vs 正确写法
 ```ts
-// Wrong: bypasses cookie session, error normalization and the 401 hook
+// 错误：绕过了 cookie 会话、错误归一化和 401 hook
 const r = await fetch('/api/v1/projects'); const data = await r.json()
 
-// Wrong: shows "[object Object]" or English HTTP text instead of the backend detail
+// 错误：显示 "[object Object]" 或英文 HTTP 文本，而不是后端的 detail
 message.error(String(err))
 
-// Wrong: reads the ASCII fallback first, so Chinese titles always download as novel.txt
+// 错误：先读取 ASCII 回退值，导致中文标题总是被下载为 novel.txt
 /filename="?([^";]+)"?/.exec(header)
 
-// Correct
+// 正确
 const projects = await projectApi.list()
 message.error(errorMessage(err))
 parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? `novel.${format}`
@@ -162,11 +162,11 @@ parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? `nov
 
 ---
 
-## Forbidden Patterns
+## 禁止模式
 
-- `any` (lint error). Use `unknown` + narrowing.
-- Calling `fetch` directly outside `src/api/` — go through `api.*`, `postSSE`/`runGeneration`, or `exportProject`.
-- Redeclaring wire types inside components; extend `types.ts` instead.
-- Sending `status: 'generating'` in `ChapterUpdate` (type forbids it; backend rejects it).
-- Parsing server timestamps without `parseServerTime`/`formatTime`.
-- Broad `as` casts on server data. Existing narrow casts are accepted where the type system cannot follow: `undefined as T` / `JSON.parse(text) as T` in `request`, `result as WizardItemMap['world'][]` after a `kind` check in `WizardGenerator`, `e.target.value as ExportFormat` from a fixed radio group, and the `document.getElementById('root')!` non-null assertion in `main.tsx`.
+- `any`（lint 报错）。使用 `unknown` + 类型收窄。
+- 在 `src/api/` 之外直接调用 `fetch`——应通过 `api.*`、`postSSE`/`runGeneration` 或 `exportProject`。
+- 在组件内重新声明传输类型；应扩展 `types.ts`。
+- 在 `ChapterUpdate` 中发送 `status: 'generating'`（类型禁止；后端拒绝）。
+- 不通过 `parseServerTime`/`formatTime` 解析服务端时间戳。
+- 对服务端数据做宽泛的 `as` 断言。在类型系统无法推导的地方，以下现有的窄断言是可接受的：`request` 中的 `undefined as T` / `JSON.parse(text) as T`、`WizardGenerator` 中在 `kind` 检查后的 `result as WizardItemMap['world'][]`、来自固定单选组的 `e.target.value as ExportFormat`，以及 `main.tsx` 中的非空断言 `document.getElementById('root')!`。
