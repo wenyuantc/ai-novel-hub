@@ -1,6 +1,8 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
+import RequireAdmin from './components/RequireAdmin'
 import RequireAuth from './components/RequireAuth'
+import AdminUsersPage from './pages/AdminUsersPage'
 import AIConfigPage from './pages/AIConfigPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -27,6 +29,14 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/projects" replace /> },
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'settings/ai', element: <AIConfigPage /> },
+      {
+        path: 'admin/users',
+        element: (
+          <RequireAdmin>
+            <AdminUsersPage />
+          </RequireAdmin>
+        ),
+      },
       {
         path: 'projects/:pid',
         element: <ProjectLayout />,

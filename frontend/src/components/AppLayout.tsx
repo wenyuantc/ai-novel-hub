@@ -1,18 +1,30 @@
-import { BookOutlined, LogoutOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons'
+import { BookOutlined, KeyOutlined, LogoutOutlined, SettingOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { Button, Dropdown, Layout, Menu, Space } from 'antd'
+import type { MenuProps } from 'antd'
+import { useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/auth'
+import ChangePasswordModal from './ChangePasswordModal'
 
 const { Header, Content } = Layout
 
-/** 顶层布局：顶栏（导航 + 用户名 + 登出）。 */
+/** 顶层布局：顶栏（导航 + 用户菜单：修改密码 / 用户管理（仅管理员） / 登出）。 */
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const location = useLocation()
   const navigate = useNavigate()
+  const [passwordOpen, setPasswordOpen] = useState(false)
 
-  const selected = location.pathname.startsWith('/settings') ? 'settings' : 'projects'
+  const userMenuItems: MenuProps['items'] = [
+    ...(user?.is_admin ? [{ key: 'admin-users', icon: <TeamOutlined />, label: '用户管理' }] : []),
+    { key: 'change-password', icon: <KeyOutlined />, label: '修改密码' },
+    { type: 'divider' as const },
+    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
+  ]
+
+  const path = location.pathname
+  const selected = path.startsWith('/settings') ? ['settings'] : path.startsWith('/admin') ? [] : ['projects']
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -23,7 +35,7 @@ export default function AppLayout() {
         <Menu
           theme="dark"
           mode="horizontal"
-          selectedKeys={[selected]}
+          selectedKeys={selected}
           style={{ flex: 1, minWidth: 0 }}
           items={[
             { key: 'projects', icon: <BookOutlined />, label: <Link to="/projects">我的项目</Link> },
@@ -32,9 +44,11 @@ export default function AppLayout() {
         />
         <Dropdown
           menu={{
-            items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录' }],
+            items: userMenuItems,
             onClick: async ({ key }) => {
-              if (key === 'logout') {
+              if (key === 'admin-users') navigate('/admin/users')
+              else if (key === 'change-password') setPasswordOpen(true)
+              else if (key === 'logout') {
                 await logout()
                 navigate('/login', { replace: true })
               }
@@ -52,6 +66,7 @@ export default function AppLayout() {
       <Content>
         <Outlet />
       </Content>
+      <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
     </Layout>
   )
 }

@@ -3,6 +3,7 @@
 export interface User {
   id: number
   username: string
+  is_admin: boolean
   created_at: string
 }
 
@@ -13,6 +14,49 @@ export interface AuthConfig {
 export interface Credentials {
   username: string
   password: string
+}
+
+export interface ChangePasswordRequest {
+  old_password: string
+  new_password: string
+}
+
+/** 分页结果（后端 {items, total}） */
+export interface Page<T> {
+  items: T[]
+  total: number
+}
+
+/** 管理员视角的用户（不含任何小说内容） */
+export interface AdminUser {
+  id: number
+  username: string
+  is_admin: boolean
+  is_active: boolean
+  created_at: string
+  project_count: number
+}
+
+export interface AdminUserListQuery {
+  q?: string
+  page?: number
+  page_size?: number
+}
+
+export interface AdminUserCreate {
+  username: string
+  password: string
+  is_admin?: boolean
+}
+
+/** 省略的字段保持不变 */
+export interface AdminUserUpdate {
+  is_admin?: boolean
+  is_active?: boolean
+}
+
+export interface ResetPasswordRequest {
+  new_password: string
 }
 
 export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'

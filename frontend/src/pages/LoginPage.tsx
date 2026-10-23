@@ -6,6 +6,7 @@ import { errorMessage } from '../api/client'
 import type { Credentials } from '../api/types'
 import { FullPageSpin } from '../components/RequireAuth'
 import { useAuthStore } from '../stores/auth'
+import { confirmPasswordRules, passwordRules, usernameRules } from '../utils/validation'
 
 type Mode = 'login' | 'register'
 
@@ -41,16 +42,6 @@ export default function LoginPage() {
       setSubmitting(false)
     }
   }
-
-  const usernameRules = [
-    { required: true, message: '请输入用户名' },
-    { min: 3, max: 32, message: '用户名长度 3–32 个字符' },
-    { pattern: /^\S+$/, message: '用户名不能包含空白字符' },
-  ]
-  const passwordRules = [
-    { required: true, message: '请输入密码' },
-    { min: 6, max: 72, message: '密码长度 6–72 个字符' },
-  ]
 
   return (
     <div
@@ -114,15 +105,7 @@ export default function LoginPage() {
               name="confirm"
               label="确认密码"
               dependencies={['password']}
-              rules={[
-                { required: true, message: '请再次输入密码' },
-                ({ getFieldValue }) => ({
-                  validator: (_, value: string | undefined) =>
-                    !value || getFieldValue('password') === value
-                      ? Promise.resolve()
-                      : Promise.reject(new Error('两次输入的密码不一致')),
-                }),
-              ]}
+              rules={confirmPasswordRules()}
             >
               <Input.Password prefix={<LockOutlined />} autoComplete="new-password" placeholder="再次输入密码" />
             </Form.Item>

@@ -21,16 +21,25 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user_id: int, secret: str, expire_minutes: int) -> str:
+def create_access_token(user_id: int, token_version: int, secret: str, expire_minutes: int) -> str:
     now = datetime.now(UTC)
-    payload = {"sub": str(user_id), "iat": now, "exp": now + timedelta(minutes=expire_minutes)}
+    payload = {
+        "sub": str(user_id),
+        "ver": token_version,
+        "iat": now,
+        "exp": now + timedelta(minutes=expire_minutes),
+    }
     return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
-def decode_access_token(token: str, secret: str) -> int | None:
+def decode_access_token(token: str, secret: str) -> tuple[int, int] | None:
+    """返回 (user_id, token_version)；升级前签发的令牌不含 ver，按 0 处理（与迁移回填默认值一致）。"""
     try:
         payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
-        return int(payload["sub"])
+        ver = payload.get("ver", 0)
+        if not isinstance(ver, int) or isinstance(ver, bool):
+            return None
+        return int(payload["sub"]), ver
     except (jwt.PyJWTError, KeyError, ValueError, TypeError):
         return None
 

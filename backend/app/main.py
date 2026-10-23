@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
+from app.services import auth_service
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,9 @@ def create_app(settings: Settings | None = None, provider_factory: ProviderFacto
     engine = create_engine(settings.database_url)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    async def lifespan(app_: FastAPI):
+        # 表结构由 alembic upgrade head 先行建立（Docker 入口已保证）
+        await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
         yield
         await engine.dispose()
 

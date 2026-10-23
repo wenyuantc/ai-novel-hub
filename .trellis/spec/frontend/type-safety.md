@@ -28,6 +28,9 @@ TypeScript ~5.8 in strict mode (`frontend/tsconfig.app.json`: `strict`, `noUnuse
 - Type-level maps tie generic parameters to payloads: `WizardItemMap { outline: Outline; characters: Character; world: WorldSetting }` → `runWizard<K>(…): Promise<WizardItemMap[K][]>`.
 - Component-local form shapes (`FormValues`) stay in the component file.
 
+- Auth/admin types: `User.is_admin` mirrors `UserOut.is_admin`; `Page<T> = { items: T[]; total: number }` mirrors `AdminUserList`; `AdminUser` mirrors `AdminUserOut` (`id, username, is_admin, is_active, created_at, project_count`); `AdminUserCreate`, `AdminUserUpdate` (`is_admin?`, `is_active?`), `ResetPasswordRequest`, `ChangePasswordRequest`. Backend contract: `.trellis/spec/backend/auth-admin.md`.
+- Shared form rules live in `src/utils/validation.ts` (`usernameRules` 3–32 no whitespace, `passwordRules` 6–72, `confirmPasswordRules(field = 'password')`). Login/register, change-password, admin create and reset-password all import them — never re-declare the limits in a page.
+
 ### PATCH semantics (must match backend services)
 
 | Resource | Rule | Backend evidence |
@@ -35,6 +38,7 @@ TypeScript ~5.8 in strict mode (`frontend/tsconfig.app.json`: `strict`, `noUnuse
 | Project, world/characters/outlines | Omitted **or** `null` = unchanged | `model_dump(exclude_unset=True)` + `if value is None: continue` (`project_service.update_project`, `story_service.update_owned`) |
 | Chapter | Omitted/`null` = unchanged for `chapter_no`, `title`, `content`, `status`; `outline_id: null` sent explicitly **unlinks** the outline | `chapter_service.update_chapter` checks `"outline_id" in fields` |
 | Chapter while `generating` | PATCH with `title`/`content` and no `status` → 409; `{ status: 'draft' }` alone is the reset path | `ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")` |
+| Admin user | `is_admin` / `is_active` omitted = unchanged; disabling bumps `token_version` (target's sessions → 401) | `admin_service.update_user` |
 | AI config | `api_key` omitted or `''` keeps the stored key; `base_url` present (incl. `null`/`''`) is applied, `null` = provider default | `if data.api_key:` / `if "base_url" in fields:` in `ai_config_service.update_config` |
 
 Frontend consequence (`AIConfigPage.handleSave`): `base_url` is always sent (`v.base_url?.trim() ? v.base_url.trim() : null`), `api_key` only when non-empty. `AIConfigUpdate = Partial<AIConfigCreate>`.

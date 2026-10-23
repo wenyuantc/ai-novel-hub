@@ -15,7 +15,7 @@ The frontend is a single-page app served by Vite in dev (`/api` proxied to the F
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | `src/api`, `stores`, `hooks`, `components`, `pages/project`, `utils`, `router.tsx` layout and naming | Filled |
-| [Component Guidelines](./component-guidelines.md) | AntD/zh_CN setup, reusable components, page patterns, chapter editor behaviors, AI config page hint | Filled |
+| [Component Guidelines](./component-guidelines.md) | AntD/zh_CN setup, reusable components, page patterns, chapter editor behaviors, AI config page hint, admin users page / `RequireAdmin` | Filled |
 | [Hook Guidelines](./hook-guidelines.md) | `useStreamTask`, `useLoader`, `useProjectId`, `useHasAIConfig`; SSE client code-spec scenario | Filled |
 | [State Management](./state-management.md) | Zustand stores (auth / aiConfigs / project), global vs local, clearing on logout/401 | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | lint/build/test gate, Vite proxy, bundle size, forbidden/required patterns, review checklist | Filled |

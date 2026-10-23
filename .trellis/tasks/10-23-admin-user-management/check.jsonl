@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误码与中文提示一致性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与认证契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端契约与权限一致性核对"}

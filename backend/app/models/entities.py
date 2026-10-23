@@ -4,7 +4,7 @@
 所有访问都经 service 层显式查询并按 user_id 过滤。
 """
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, false, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -20,6 +20,10 @@ class User(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    # 会话版本号：重置密码 / 禁用 / 自助改密时递增，使旧令牌（payload.ver）立即失效
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
 class AIConfig(TimestampMixin, Base):

@@ -8,14 +8,19 @@ from functools import lru_cache
 from pathlib import Path
 
 from cryptography.fernet import Fernet
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.schemas.auth import Credentials
 
 _DEFAULT_FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # hide_input_in_errors：校验失败时不在错误信息里回显密钥 / 管理员密码原文
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True
+    )
 
     database_url: str = "postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel"
     jwt_secret: str = Field(min_length=16)
@@ -33,6 +38,9 @@ class Settings(BaseSettings):
     allow_private_ai_endpoints: bool = False
     # 生产模式下挂载的前端构建产物目录；不存在则跳过
     frontend_dist_dir: str = str(_DEFAULT_FRONTEND_DIST)
+    # 首个管理员引导（可选，须同时设置）：启动时账号不存在则创建，已存在则确保为启用中的管理员，不覆盖密码
+    admin_username: str | None = None
+    admin_password: str | None = None
 
     @field_validator("encryption_key")
     @classmethod
@@ -45,6 +53,33 @@ class Settings(BaseSettings):
                 '`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成'
             ) from exc
         return v
+
+    @field_validator("admin_username", "admin_password", mode="before")
+    @classmethod
+    def _empty_as_none(cls, v: object) -> object:
+        # compose 中未设置的变量会以空字符串传入
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @model_validator(mode="after")
+    def _validate_admin_bootstrap(self) -> "Settings":
+        if (self.admin_username is None) != (self.admin_password is None):
+            raise ValueError("ADMIN_USERNAME 与 ADMIN_PASSWORD 必须同时设置（或同时留空）")
+        if self.admin_username is not None:
+            try:
+                creds = Credentials(username=self.admin_username, password=self.admin_password)
+            except ValidationError as exc:
+                reasons = "；".join(str(e.get("msg", "")).removeprefix("Value error, ") for e in exc.errors())
+                raise ValueError(f"ADMIN_USERNAME / ADMIN_PASSWORD 不符合注册规则：{reasons}") from None
+            self.admin_username = creds.username
+        return self
+
+    @property
+    def admin_credentials(self) -> Credentials | None:
+        if self.admin_username is None or self.admin_password is None:
+            return None
+        return Credentials(username=self.admin_username, password=self.admin_password)
 
     @property
     def cors_origin_list(self) -> list[str]:

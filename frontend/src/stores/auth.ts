@@ -3,7 +3,7 @@ import { authApi } from '../api/auth'
 import { ApiError } from '../api/client'
 import type { Credentials, User } from '../api/types'
 
-type AuthStatus = 'unknown' | 'authenticated' | 'anonymous'
+export type AuthStatus = 'unknown' | 'authenticated' | 'anonymous'
 
 interface AuthState {
   status: AuthStatus

@@ -31,8 +31,10 @@ Function components with a default export, a local `interface Props`, and a one-
 
 | Component | Contract (from source) |
 |-----------|------------------------|
-| `AppLayout` | Top `Layout.Header` with menu (`我的项目` / `模型配置`), username dropdown; logout calls `useAuthStore().logout()` then `navigate('/login', { replace: true })`; renders `<Outlet/>`. |
+| `AppLayout` | Top `Layout.Header` with menu (`我的项目` / `模型配置`; no item highlighted under `/admin`), username dropdown: `用户管理` (only when `user.is_admin`) → `/admin/users`, `修改密码` → `ChangePasswordModal`, logout calls `useAuthStore().logout()` then `navigate('/login', { replace: true })`; renders `<Outlet/>`. |
 | `RequireAuth` | Route guard: `status === 'unknown'` → `<FullPageSpin/>`; `'anonymous'` → `<Navigate to="/login" replace state={{ from: location.pathname + location.search }} />`. `LoginPage` reads `state.from` (default `/projects`). |
+| `RequireAdmin` | Wraps `/admin/users` (inside `RequireAuth`). Decision is the pure `adminGuard(status, user)` in `utils/adminUsers.ts`: `'loading'` → `<FullPageSpin/>`, `'login'` → `/login`, `'home'` (not admin) → `/`, `'allow'` → children. `is_admin` is read once from `/auth/me`; a demoted admin keeps the menu until reload, but API calls return 403 and show the message. |
+| `ChangePasswordModal` | `{ open; onClose }`. Old password + new password twice (`utils/validation`). Success → `其他设备上的登录已失效`; backend re-issues the cookie so the current tab stays logged in. 400 `原密码不正确` is shown inline via `errorMessage(err)` and does not trigger global logout. |
 | `AIConfigSelect` | `{ value?: number \| null; onChange?: (v: number \| null) => void; disabled?: boolean }`. Calls `useAIConfigStore().load()` on mount. Empty selection = `null` = "use default config" (placeholder `默认：{name}（{model}）`). When loaded and zero configs, renders a warning `Alert` linking to `/settings/ai` instead of the select. |
 | `StreamOutput` | `{ text; running; placeholder?; maxHeight? = 360 }`. `pre-wrap` monospace box, auto-scrolls to bottom while `running`, shows a small `Spin` while running. |
 | `WizardGenerator<K extends WizardKind>` | `{ projectId; kind: K; existingCount?; showResult?; onDone?(items: WizardItemMap[K][]); onRunningChange?(running) }`. Form disabled while running; Start button disabled when `useHasAIConfig() === false`; running shows a danger `停止` button wired to `task.stop`. On abort shows `已停止生成，原有数据未改变`. `existingCount > 0` shows an "will replace" `Alert`. |
@@ -46,6 +48,14 @@ Function components with a default export, a local `interface Props`, and a one-
 - **Project-level numbers**: after mutations that change word/chapter counts, call `useProjectStore((s) => s.refresh)` (`ChaptersPanel`, `OutlinesPanel`, chapter editor). `OverviewPanel` writes the PATCH result back with `setProject(updated)`.
 - **Destructive confirms** use `modal.confirm` (project delete in `ProjectListPage`, regenerate-over-content in the editor) or `Popconfirm` (row deletes).
 - **Route params**: `useProjectId()` for `:pid`; guard invalid ids with `Number.isFinite` and render `<Result status="404" …/>`.
+
+### Admin users page (`src/pages/AdminUsersPage.tsx`)
+
+- AntD `Table` with server-side paging (`adminApi.list({ q, page, page_size })`, `q` trimmed and omitted when empty) and a username search box. Columns: username (own row tagged `我`), role, status, project count, `formatTime(created_at)`, actions.
+- `新建用户` modal: username, initial password twice, `设为管理员` checkbox. Reset-password modal: new password twice.
+- Enable/disable and grant/revoke admin go through `modal.confirm`. Delete opens a modal showing the user's project count; the OK button is enabled only when `canConfirmDelete(input, username)` (strict equality, no trim/case folding). Deleting the last row of a page steps back one page.
+- `rowActions(row, currentUserId)` disables **all** actions on the current user's own row (tooltip `不能对自己执行该操作`) — including reset-password, because bumping `token_version` would log the admin out; self password changes go through `修改密码`.
+- Tests are node-only (no jsdom): `utils/adminUsers.test.ts` (guard + row-action tables + delete match), `api/admin.test.ts` (URL/method/body/`credentials: 'include'`, 400/403/409 `detail` passthrough), `utils/validation.test.ts`.
 
 ### Chapter editor (`src/pages/project/ChapterEditorPage.tsx`)
 

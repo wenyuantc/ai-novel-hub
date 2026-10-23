@@ -10,7 +10,7 @@
 - Driver: `asyncpg` on PostgreSQL in production
   (default `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`);
   `aiosqlite` in tests (dev dependency).
-- Migrations: Alembic, async `env.py`; revisions `0001` (initial) → `0002` (ai_configs model params). New revisions use `batch_alter_table` so SQLite tests can run them.
+- Migrations: Alembic, async `env.py`; revisions `0001` (initial) → `0002` (ai_configs model params) → `0003` (users `is_admin`/`is_active`/`token_version`, see [auth-admin.md](./auth-admin.md)). New revisions use `batch_alter_table` so SQLite tests can run them.
 - No ORM `relationship()` declarations. Cascades are done by database foreign keys;
   all access goes through explicit `select()` in services
   (docstring of `backend/app/models/entities.py`).
@@ -191,7 +191,9 @@ Status/provider values are plain strings, with the allowed set as tuples in
 
 - Location: `backend/alembic/versions/`: `0001_initial_schema.py` (`down_revision = None`),
   `0002_ai_config_model_params.py` (`down_revision = '0001'`, adds `thinking_level` with
-  `server_default='off'`, nullable `context_window_k` / `max_output_k`).
+  `server_default='off'`, nullable `context_window_k` / `max_output_k`),
+  `0003_user_admin_fields.py` (`down_revision = '0002'`, adds `users.is_admin` / `is_active` /
+  `token_version` with `server_default` backfill; `test_0003_backfills_existing_users`).
   `tests/test_migrations.py` asserts the new columns after `upgrade head`.
 - Apply: `cd backend && uv run alembic upgrade head`. The Docker image runs
   `alembic upgrade head && uvicorn app.main:app ...` (`Dockerfile`).
