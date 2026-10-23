@@ -6,6 +6,7 @@ import type {
   AIConfigUpdate,
   ModelInfo,
   ModelListRequest,
+  ModelType,
   ThinkingLevel,
 } from './types'
 
@@ -24,6 +25,11 @@ export const PROVIDER_LABELS: Record<AIConfig['provider'], string> = {
   openai_compat: 'OpenAI 兼容',
   anthropic: 'Anthropic Claude',
   gemini: 'Google Gemini',
+}
+
+export const MODEL_TYPE_LABELS: Record<ModelType, string> = {
+  text: '文本模型',
+  image: '图片模型',
 }
 
 export const THINKING_LABELS: Record<ThinkingLevel, string> = {

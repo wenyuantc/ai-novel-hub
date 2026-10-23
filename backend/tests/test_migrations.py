@@ -24,7 +24,7 @@ def test_upgrade_and_downgrade(tmp_path):
         assert fks["projects"]["options"].get("ondelete") == "CASCADE"
         assert fks["outlines"]["options"].get("ondelete") == "SET NULL"
         ai_cols = {c["name"] for c in insp.get_columns("ai_configs")}
-        assert {"thinking_level", "context_window_k", "max_output_k"} <= ai_cols
+        assert {"thinking_level", "context_window_k", "max_output_k", "model_type"} <= ai_cols
         user_cols = {c["name"] for c in insp.get_columns("users")}
         assert {"is_admin", "is_active", "token_version"} <= user_cols
     finally:
@@ -54,7 +54,7 @@ def test_0003_backfills_existing_users(tmp_path):
     finally:
         engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0003")
     engine = create_engine(f"sqlite:///{db_file}")
     try:
         with engine.connect() as conn:
@@ -70,5 +70,44 @@ def test_0003_backfills_existing_users(tmp_path):
         assert not ({"is_admin", "is_active", "token_version"} & cols)
         with engine.connect() as conn:
             assert conn.execute(text("SELECT username FROM users")).scalar_one() == "old"
+    finally:
+        engine.dispose()
+
+
+def test_0004_backfills_model_type(tmp_path):
+    """0004 将存量配置回填为文本模型；downgrade -1 删除该列。"""
+    db_file = tmp_path / "migrate0004.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0003")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO ai_configs (user_id, name, provider, api_key_enc, model, is_default) "
+                    "VALUES (1, 'c', 'openai_compat', 'enc', 'm', 1)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT model_type FROM ai_configs")).scalar_one() == "text"
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols = {c["name"] for c in inspect(engine).get_columns("ai_configs")}
+        assert "model_type" not in cols
     finally:
         engine.dispose()

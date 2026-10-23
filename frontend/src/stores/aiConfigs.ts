@@ -10,6 +10,9 @@ interface AIConfigState {
   reset: () => void
 }
 
+/** 文本生成（向导、章节）只能使用文本模型 */
+export const selectTextConfigs = (s: AIConfigState) => s.configs.filter((c) => c.model_type === 'text')
+
 export const useAIConfigStore = create<AIConfigState>((set, get) => ({
   configs: [],
   loaded: false,

@@ -4,6 +4,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, model_validator
 
 ProviderName = Literal["openai_compat", "anthropic", "gemini"]
+ModelType = Literal["text", "image"]
 ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 # 单位 K（×1000 tokens）
@@ -23,6 +24,7 @@ class AIConfigCreate(BaseModel):
     # openai_compat 指向本地 LLM（Ollama 等）时可为空
     api_key: str = Field(default="", max_length=1000)
     model: str = Field(min_length=1, max_length=200)
+    model_type: ModelType = "text"
     is_default: bool = False
     thinking_level: ThinkingLevel = "off"
     context_window_k: int | None = ContextWindowK
@@ -41,6 +43,7 @@ class AIConfigUpdate(BaseModel):
     # 省略或空字符串 = 保持原 Key 不变
     api_key: str | None = Field(default=None, max_length=1000)
     model: str | None = Field(default=None, min_length=1, max_length=200)
+    model_type: ModelType | None = None
     is_default: bool | None = None
     thinking_level: ThinkingLevel | None = None
     # 显式传 null = 清空（恢复默认）；省略 = 不修改
@@ -54,6 +57,7 @@ class AIConfigOut(BaseModel):
     provider: ProviderName
     base_url: str | None
     model: str
+    model_type: ModelType
     api_key_masked: str
     is_default: bool
     thinking_level: ThinkingLevel

@@ -18,6 +18,7 @@ from app.schemas.ai_config import (
     ModelInfo,
     ModelListRequest,
     ModelListResult,
+    ModelType,
     check_output_within_context,
 )
 
@@ -44,6 +45,7 @@ def to_out(cfg: AIConfig, cipher: SecretCipher) -> AIConfigOut:
         provider=cfg.provider,  # type: ignore[arg-type]
         base_url=cfg.base_url,
         model=cfg.model,
+        model_type=cfg.model_type,  # type: ignore[arg-type]
         api_key_masked=masked,
         is_default=cfg.is_default,
         thinking_level=cfg.thinking_level,  # type: ignore[arg-type]
@@ -61,7 +63,9 @@ def _clean_base_url(url: str | None) -> str | None:
 
 async def list_configs(db: AsyncSession, user_id: int) -> list[AIConfig]:
     rows = await db.scalars(
-        select(AIConfig).where(AIConfig.user_id == user_id).order_by(AIConfig.is_default.desc(), AIConfig.id)
+        select(AIConfig)
+        .where(AIConfig.user_id == user_id)
+        .order_by(AIConfig.model_type.desc(), AIConfig.is_default.desc(), AIConfig.id)
     )
     return list(rows)
 
@@ -73,18 +77,23 @@ async def get_config(db: AsyncSession, user_id: int, config_id: int) -> AIConfig
     return cfg
 
 
-async def _clear_default(db: AsyncSession, user_id: int, except_id: int | None = None) -> None:
-    stmt = update(AIConfig).where(AIConfig.user_id == user_id, AIConfig.is_default.is_(True))
+async def _clear_default(db: AsyncSession, user_id: int, model_type: str, except_id: int | None = None) -> None:
+    """默认配置按模型类型各自唯一。"""
+    stmt = update(AIConfig).where(
+        AIConfig.user_id == user_id, AIConfig.model_type == model_type, AIConfig.is_default.is_(True)
+    )
     if except_id is not None:
         stmt = stmt.where(AIConfig.id != except_id)
     await db.execute(stmt.values(is_default=False))
 
 
 async def create_config(db: AsyncSession, cipher: SecretCipher, user_id: int, data: AIConfigCreate) -> AIConfig:
-    has_any = await db.scalar(select(AIConfig.id).where(AIConfig.user_id == user_id).limit(1))
-    is_default = data.is_default or has_any is None  # 第一条配置自动成为默认
+    has_any = await db.scalar(
+        select(AIConfig.id).where(AIConfig.user_id == user_id, AIConfig.model_type == data.model_type).limit(1)
+    )
+    is_default = data.is_default or has_any is None  # 该类型的第一条配置自动成为默认
     if is_default:
-        await _clear_default(db, user_id)
+        await _clear_default(db, user_id, data.model_type)
     cfg = AIConfig(
         user_id=user_id,
         name=data.name.strip(),
@@ -92,6 +101,7 @@ async def create_config(db: AsyncSession, cipher: SecretCipher, user_id: int, da
         base_url=_clean_base_url(data.base_url),
         api_key_enc=cipher.encrypt(data.api_key.strip()),
         model=data.model.strip(),
+        model_type=data.model_type,
         is_default=is_default,
         thinking_level=data.thinking_level,
         context_window_k=data.context_window_k,
@@ -108,6 +118,7 @@ async def update_config(
 ) -> AIConfig:
     cfg = await get_config(db, user_id, config_id)
     fields = data.model_fields_set
+    old_type = cfg.model_type
     if data.name is not None:
         cfg.name = data.name.strip()
     if data.provider is not None:
@@ -118,6 +129,8 @@ async def update_config(
         cfg.api_key_enc = cipher.encrypt(data.api_key.strip())
     if data.model is not None:
         cfg.model = data.model.strip()
+    if data.model_type is not None:
+        cfg.model_type = data.model_type
     if data.thinking_level is not None:
         cfg.thinking_level = data.thinking_level
     if "context_window_k" in fields:
@@ -128,11 +141,24 @@ async def update_config(
         check_output_within_context(cfg.context_window_k, cfg.max_output_k)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
+    type_changed = cfg.model_type != old_type
+    was_default = cfg.is_default
     if data.is_default is True:
-        await _clear_default(db, user_id, except_id=cfg.id)
+        await _clear_default(db, user_id, cfg.model_type, except_id=cfg.id)
         cfg.is_default = True
     elif data.is_default is False:
         cfg.is_default = False
+    elif type_changed:
+        # 换类型后不得抢占新类型已有的默认；新类型尚无配置时自动成为默认
+        has_other = await db.scalar(
+            select(AIConfig.id)
+            .where(AIConfig.user_id == user_id, AIConfig.model_type == cfg.model_type, AIConfig.id != cfg.id)
+            .limit(1)
+        )
+        cfg.is_default = has_other is None
+    if type_changed and was_default:
+        await db.flush()
+        await _promote_default(db, user_id, old_type)
     await db.commit()
     await db.refresh(cfg)
     return cfg
@@ -140,7 +166,7 @@ async def update_config(
 
 async def set_default(db: AsyncSession, user_id: int, config_id: int) -> AIConfig:
     cfg = await get_config(db, user_id, config_id)
-    await _clear_default(db, user_id, except_id=cfg.id)
+    await _clear_default(db, user_id, cfg.model_type, except_id=cfg.id)
     cfg.is_default = True
     await db.commit()
     await db.refresh(cfg)
@@ -150,27 +176,47 @@ async def set_default(db: AsyncSession, user_id: int, config_id: int) -> AIConfi
 async def delete_config(db: AsyncSession, user_id: int, config_id: int) -> None:
     cfg = await get_config(db, user_id, config_id)
     was_default = cfg.is_default
+    model_type = cfg.model_type
     await db.delete(cfg)
     await db.flush()
     if was_default:
-        nxt = await db.scalar(select(AIConfig).where(AIConfig.user_id == user_id).order_by(AIConfig.id.desc()).limit(1))
-        if nxt is not None:
-            nxt.is_default = True
+        await _promote_default(db, user_id, model_type)
     await db.commit()
 
 
-async def resolve_config(db: AsyncSession, user_id: int, config_id: int | None) -> AIConfig:
-    """取指定配置；未指定则取默认配置（无默认时取最新一条）。"""
+async def _promote_default(db: AsyncSession, user_id: int, model_type: str) -> None:
+    """该类型失去默认配置时，把最新一条提升为默认。"""
+    nxt = await db.scalar(
+        select(AIConfig)
+        .where(AIConfig.user_id == user_id, AIConfig.model_type == model_type)
+        .order_by(AIConfig.id.desc())
+        .limit(1)
+    )
+    if nxt is not None:
+        nxt.is_default = True
+
+
+MODEL_TYPE_LABELS = {"text": "文本", "image": "图片"}
+
+
+async def resolve_config(
+    db: AsyncSession, user_id: int, config_id: int | None, model_type: ModelType = "text"
+) -> AIConfig:
+    """取指定配置；未指定则取该类型的默认配置（无默认时取最新一条）。"""
+    label = MODEL_TYPE_LABELS[model_type]
     if config_id is not None:
-        return await get_config(db, user_id, config_id)
+        cfg = await get_config(db, user_id, config_id)
+        if cfg.model_type != model_type:
+            raise BadRequestError(f"所选配置不是{label}模型")
+        return cfg
     cfg = await db.scalar(
         select(AIConfig)
-        .where(AIConfig.user_id == user_id)
+        .where(AIConfig.user_id == user_id, AIConfig.model_type == model_type)
         .order_by(AIConfig.is_default.desc(), AIConfig.id.desc())
         .limit(1)
     )
     if cfg is None:
-        raise BadRequestError("尚未配置 AI 模型，请先在「模型配置」中添加并设为默认")
+        raise BadRequestError(f"尚未配置{label}模型，请先在「模型配置」中添加并设为默认")
     return cfg
 
 
@@ -219,6 +265,8 @@ async def test_config(
         provider = await build_provider(cfg, cipher, factory, TEST_TIMEOUT_SECONDS, allow_private=allow_private)
     except BadRequestError as exc:
         return AIConfigTestResult(ok=False, message=exc.detail, latency_ms=_elapsed(started))
+    if cfg.model_type == "image":
+        return await _test_image_config(provider, cfg.model, started)
     messages = [{"role": "user", "content": "这是一次连通性测试，请只回复：ok"}]
     received = ""
     try:
@@ -243,6 +291,24 @@ async def test_config(
     return AIConfigTestResult(
         ok=True, message=f"连接成功，模型回复：{received.strip()[:50]}", latency_ms=_elapsed(started)
     )
+
+
+async def _test_image_config(provider: LLMProvider, model: str, started: float) -> AIConfigTestResult:
+    """图片模型不发起生成（耗时且计费），改为拉取模型列表校验连通与鉴权。"""
+    try:
+        async with asyncio.timeout(TEST_TIMEOUT_SECONDS):
+            items = await provider.list_models()
+    except TimeoutError:
+        return AIConfigTestResult(
+            ok=False, message=f"连接超时（{TEST_TIMEOUT_SECONDS} 秒）", latency_ms=_elapsed(started)
+        )
+    except AIProviderError as exc:
+        return AIConfigTestResult(ok=False, message=str(exc), latency_ms=_elapsed(started))
+    if any(m["id"] == model for m in items):
+        message = f"连接成功，接口提供模型 {model}"
+    else:
+        message = f"连接成功，但模型列表中未找到 {model}，请确认模型名"
+    return AIConfigTestResult(ok=True, message=message, latency_ms=_elapsed(started))
 
 
 def _elapsed(started: float) -> int:

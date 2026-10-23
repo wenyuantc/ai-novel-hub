@@ -62,6 +62,8 @@ export interface ResetPasswordRequest {
 export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'
 
 /** off = 不发送思考参数 */
+export type ModelType = 'text' | 'image'
+
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface AIConfig {
@@ -70,6 +72,7 @@ export interface AIConfig {
   provider: ProviderName
   base_url: string | null
   model: string
+  model_type: ModelType
   api_key_masked: string
   is_default: boolean
   thinking_level: ThinkingLevel
@@ -86,6 +89,7 @@ export interface AIConfigCreate {
   base_url?: string | null
   api_key?: string
   model: string
+  model_type?: ModelType
   is_default?: boolean
   thinking_level?: ThinkingLevel
   context_window_k?: number | null

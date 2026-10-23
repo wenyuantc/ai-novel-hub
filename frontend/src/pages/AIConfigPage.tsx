@@ -11,6 +11,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Table,
@@ -18,13 +19,14 @@ import {
   Typography,
 } from 'antd'
 import { useEffect, useState } from 'react'
-import { aiConfigApi, PROVIDER_LABELS, THINKING_LABELS } from '../api/aiConfigs'
+import { aiConfigApi, MODEL_TYPE_LABELS, PROVIDER_LABELS, THINKING_LABELS } from '../api/aiConfigs'
 import { errorMessage } from '../api/client'
 import type {
   AIConfig,
   AIConfigCreate,
   AIConfigTestResult,
   ModelInfo,
+  ModelType,
   ProviderName,
   ThinkingLevel,
 } from '../api/types'
@@ -37,6 +39,7 @@ interface FormValues {
   base_url?: string
   api_key?: string
   model: string
+  model_type: ModelType
   is_default: boolean
   thinking_level: ThinkingLevel
   context_window_k?: number | null
@@ -50,14 +53,23 @@ const THINKING_OPTIONS = (Object.keys(THINKING_LABELS) as ThinkingLevel[]).map((
 
 /** 列表中的参数标签 */
 function paramTags(c: AIConfig): string[] {
+  // 思考与上下文参数仅作用于文本生成
+  if (c.model_type === 'image') return []
   const k = (v: number | null) => (v ? `${v}K` : '默认')
   return [`思考 ${THINKING_LABELS[c.thinking_level]}`, `上下文 ${k(c.context_window_k)}`, `输出 ${k(c.max_output_k)}`]
 }
 
-const MODEL_HINTS: Record<ProviderName, string> = {
-  openai_compat: '例如：gpt-4o-mini、deepseek-chat、qwen2.5:14b',
-  anthropic: '例如：claude-sonnet-4-5',
-  gemini: '例如：gemini-2.5-flash',
+const MODEL_HINTS: Record<ModelType, Record<ProviderName, string>> = {
+  text: {
+    openai_compat: '例如：gpt-4o-mini、deepseek-chat、qwen2.5:14b',
+    anthropic: '例如：claude-sonnet-4-5',
+    gemini: '例如：gemini-2.5-flash',
+  },
+  image: {
+    openai_compat: '例如：gpt-image-1、dall-e-3',
+    anthropic: '填写接口提供的图片模型名',
+    gemini: '例如：imagen-4.0-generate-001',
+  },
 }
 
 export default function AIConfigPage() {
@@ -70,6 +82,7 @@ export default function AIConfigPage() {
   const [testResults, setTestResults] = useState<Record<number, AIConfigTestResult>>({})
   const [form] = Form.useForm<FormValues>()
   const provider = Form.useWatch('provider', form)
+  const modelType = Form.useWatch('model_type', form) ?? 'text'
   const [models, setModels] = useState<ModelInfo[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
 
@@ -87,7 +100,8 @@ export default function AIConfigPage() {
       base_url: '',
       api_key: '',
       model: '',
-      is_default: configs.length === 0,
+      model_type: 'text',
+      is_default: !configs.some((c) => c.model_type === 'text'),
       thinking_level: 'off',
       context_window_k: null,
       max_output_k: null,
@@ -104,6 +118,7 @@ export default function AIConfigPage() {
       base_url: c.base_url ?? '',
       api_key: '',
       model: c.model,
+      model_type: c.model_type,
       is_default: c.is_default,
       thinking_level: c.thinking_level,
       context_window_k: c.context_window_k,
@@ -115,16 +130,19 @@ export default function AIConfigPage() {
 
   const handleSave = async () => {
     const v = await form.validateFields()
+    const isText = v.model_type === 'text'
     const body: AIConfigCreate = {
       name: v.name.trim(),
       provider: v.provider,
       base_url: v.base_url?.trim() ? v.base_url.trim() : null,
       model: v.model.trim(),
+      model_type: v.model_type,
       is_default: v.is_default,
-      thinking_level: v.thinking_level,
+      // 图片模型不使用思考与上下文参数，统一清空
+      thinking_level: isText ? v.thinking_level : 'off',
       // null = 清空恢复默认
-      context_window_k: v.context_window_k ?? null,
-      max_output_k: v.max_output_k ?? null,
+      context_window_k: isText ? (v.context_window_k ?? null) : null,
+      max_output_k: isText ? (v.max_output_k ?? null) : null,
     }
     const key = v.api_key?.trim() ?? ''
     setSaving(true)
@@ -204,7 +222,7 @@ export default function AIConfigPage() {
       >
         <Typography.Paragraph type="secondary">
           支持 OpenAI 兼容接口（含各类中转、DeepSeek、本地 Ollama 等）、Anthropic Claude 与 Google Gemini。API Key
-          在服务端加密存储，此处仅显示掩码。生成时未指定配置则使用「默认」配置。
+          在服务端加密存储，此处仅显示掩码。文本模型与图片模型各自可设一个「默认」，生成时未指定配置则使用对应类型的默认配置。
         </Typography.Paragraph>
         <Table<AIConfig>
           rowKey="id"
@@ -216,11 +234,18 @@ export default function AIConfigPage() {
             {
               title: '配置',
               key: 'name',
-              width: 200,
+              width: 240,
               render: (_, r) => (
                 <Space direction="vertical" size={2}>
                   <Space size={6}>
                     <Typography.Text strong>{r.name}</Typography.Text>
+                    <Tag
+                      color={r.model_type === 'image' ? 'purple' : 'green'}
+                      bordered={false}
+                      style={{ marginInlineEnd: 0 }}
+                    >
+                      {MODEL_TYPE_LABELS[r.model_type]}
+                    </Tag>
                     {r.is_default && (
                       <Tag color="blue" bordered={false} style={{ marginInlineEnd: 0 }}>
                         默认
@@ -350,6 +375,16 @@ export default function AIConfigPage() {
           <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, message: '请输入名称' }]}>
             <Input placeholder="例如：DeepSeek 主力" maxLength={100} />
           </Form.Item>
+          <Form.Item name="model_type" label="模型类型" rules={[{ required: true }]}>
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              options={(Object.keys(MODEL_TYPE_LABELS) as ModelType[]).map((t) => ({
+                value: t,
+                label: MODEL_TYPE_LABELS[t],
+              }))}
+            />
+          </Form.Item>
           <Form.Item name="provider" label="接口类型" rules={[{ required: true }]}>
             <Select
               onChange={() => setModels([])}
@@ -400,7 +435,7 @@ export default function AIConfigPage() {
               >
                 <AutoComplete
                   style={{ width: '100%' }}
-                  placeholder={MODEL_HINTS[provider ?? 'openai_compat']}
+                  placeholder={MODEL_HINTS[modelType][provider ?? 'openai_compat']}
                   maxLength={200}
                   options={models.map((m) => ({
                     value: m.id,
@@ -422,44 +457,60 @@ export default function AIConfigPage() {
               </Button>
             </Space.Compact>
           </Form.Item>
-          <Form.Item
-            name="thinking_level"
-            label="思考等级"
-            extra="关闭时不发送思考参数（部分模型默认即会思考，无法强制关闭）。xhigh / max 并非所有模型都支持，不支持时请改用 high"
-          >
-            <Select options={THINKING_OPTIONS} />
-          </Form.Item>
-          <Space size="middle" style={{ display: 'flex' }} align="start">
-            <Form.Item name="context_window_k" label="上下文大小" extra="留空使用系统默认；用于截断章节前文">
-              <InputNumber min={1} max={2000} precision={0} addonAfter="K" placeholder="如 128" style={{ width: 200 }} />
-            </Form.Item>
-            <Form.Item
-              name="max_output_k"
-              label="最大输出"
-              extra="留空使用接口默认"
-              dependencies={['context_window_k']}
-              rules={[
-                ({ getFieldValue }) => ({
-                  validator: (_, value?: number | null) => {
-                    const ctx = getFieldValue('context_window_k') as number | null | undefined
-                    if (value != null && ctx != null && value >= ctx) {
-                      return Promise.reject(new Error('需小于上下文大小'))
-                    }
-                    return Promise.resolve()
-                  },
-                }),
-              ]}
-            >
-              <InputNumber min={1} max={256} precision={0} addonAfter="K" placeholder="如 8" style={{ width: 200 }} />
-            </Form.Item>
-          </Space>
+          {modelType === 'text' && (
+            <>
+              <Form.Item
+                name="thinking_level"
+                label="思考等级"
+                extra="关闭时不发送思考参数（部分模型默认即会思考，无法强制关闭）。xhigh / max 并非所有模型都支持，不支持时请改用 high"
+              >
+                <Select options={THINKING_OPTIONS} />
+              </Form.Item>
+              <Space size="middle" style={{ display: 'flex' }} align="start">
+                <Form.Item name="context_window_k" label="上下文大小" extra="留空使用系统默认；用于截断章节前文">
+                  <InputNumber
+                    min={1}
+                    max={2000}
+                    precision={0}
+                    addonAfter="K"
+                    placeholder="如 128"
+                    style={{ width: 200 }}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="max_output_k"
+                  label="最大输出"
+                  extra="留空使用接口默认"
+                  dependencies={['context_window_k']}
+                  rules={[
+                    ({ getFieldValue }) => ({
+                      validator: (_, value?: number | null) => {
+                        const ctx = getFieldValue('context_window_k') as number | null | undefined
+                        if (value != null && ctx != null && value >= ctx) {
+                          return Promise.reject(new Error('需小于上下文大小'))
+                        }
+                        return Promise.resolve()
+                      },
+                    }),
+                  ]}
+                >
+                  <InputNumber
+                    min={1}
+                    max={256}
+                    precision={0}
+                    addonAfter="K"
+                    placeholder="如 8"
+                    style={{ width: 200 }}
+                  />
+                </Form.Item>
+              </Space>
+            </>
+          )}
           <Form.Item name="is_default" valuePropName="checked">
-            <Checkbox>设为默认配置</Checkbox>
+            <Checkbox>设为默认{MODEL_TYPE_LABELS[modelType]}</Checkbox>
           </Form.Item>
         </Form>
-        {editing && (
-          <Alert type="info" showIcon message="修改接口类型或 Base URL 后建议重新测试连通性" />
-        )}
+        {editing && <Alert type="info" showIcon message="修改接口类型或 Base URL 后建议重新测试连通性" />}
       </Modal>
     </div>
   )

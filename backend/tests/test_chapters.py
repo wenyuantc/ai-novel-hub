@@ -58,7 +58,7 @@ async def test_generate_requires_ai_config(client):
     ch = (await client.post(f"{base}/chapters", json={"outline_id": o1["id"]})).json()
     resp = await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={})
     assert resp.status_code == 400
-    assert "尚未配置 AI 模型" in resp.json()["detail"]
+    assert "尚未配置文本模型" in resp.json()["detail"]
 
 
 async def test_generate_chapter_sse_persists(app, client, fake_llm):

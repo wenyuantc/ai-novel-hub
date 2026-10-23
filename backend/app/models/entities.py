@@ -36,6 +36,8 @@ class AIConfig(TimestampMixin, Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
+    # text / image；默认配置按类型各自唯一
+    model_type: Mapped[str] = mapped_column(String(16), default="text", server_default="text", nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # off / low / medium / high；关闭 = 不发送任何思考参数
     thinking_level: Mapped[str] = mapped_column(String(16), default="off", server_default="off", nullable=False)
