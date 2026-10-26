@@ -115,3 +115,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: P0-4 章节分析与设定回写
+<!-- trellis-session: v=2 fp=55fa826aa4a23b66 -->
+
+**Date**: 2026-10-26
+**Task**: P0-4 章节分析与设定回写
+**Branch**: `main`
+
+### Summary
+
+章节分析任务与历史、过期判定、自动排队与同项目串行（serial_key）、回写分流与撤销、更晚章节优先、前情摘要、按建议重写与评分对比；拆出 foreshadows、B7 并入 knowledge-base；冒烟验证 AC1-AC7 并修复一键分析重复入队
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `97f699d` | feat: 章节分析与设定回写（摘要、评分建议、回写清单、按建议重写） |
+
+### Status
+
+[OK] **Completed**
