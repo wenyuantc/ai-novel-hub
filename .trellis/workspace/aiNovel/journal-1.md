@@ -253,3 +253,38 @@
 ### Next Steps
 
 - 继续规划 P1：inspiration / book-import / knowledge-base / project-io-reader
+
+
+## Session 11: inspiration 灵感模式与项目结构化字段
+<!-- trellis-session: v=2 fp=9a6e4852e7c50681 -->
+
+**Date**: 2026-10-26
+**Task**: inspiration 灵感模式与项目结构化字段
+**Branch**: `main`
+
+### Summary
+
+实现 P1-7：项目新增 6 个结构化字段并注入作品信息；服务端持久化的分步灵感会话（选项、编辑、带反馈换一批、补充想法、stale 标记、规模建议）、同步 SSE 生成与请求内重试、转为项目/应用到已有项目/从项目补全。
+
+### Main Changes
+
+- 迁移 0014：projects 新字段 + inspiration_sessions
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b5a115` | feat: 灵感模式与项目结构化字段（服务端会话、分步选项、补全与应用到已有项目） |
+| `4774bfb` | chore(task): archive 10-23-inspiration |
+
+### Testing
+
+- [OK] 后端 500 passed；前端 224 passed；浏览器冒烟覆盖重试、换一批、编辑后选、标签多选、stale、规模预填向导、补全与应用
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 继续规划 P1：book-import / knowledge-base / project-io-reader
