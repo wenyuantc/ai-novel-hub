@@ -64,6 +64,8 @@ CHANGES = {
 
 
 async def _analyze(client, fake_llm, chapter, **changes):
+    # 伏笔回写另见 test_foreshadow_analysis.py；这里只关注设定变化
+    changes.setdefault("foreshadows", [])
     fake_llm.push(analysis_json(**changes))
     task, _ = await run_task(client, await client.post(f"/api/v1/chapters/{chapter['id']}/analyze"))
     assert task["status"] == "succeeded", task

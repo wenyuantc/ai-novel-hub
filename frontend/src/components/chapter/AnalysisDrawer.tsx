@@ -43,6 +43,7 @@ import {
   scoreDelta,
 } from '../../api/analysis'
 import { errorMessage } from '../../api/client'
+import { candidateLabel, readCandidates } from '../../api/foreshadows'
 import { queueLabel } from '../../api/tasks'
 import type { Analysis, AnalysisBrief, AnalysisChange, AnalysisScores, ReviseChapterRequest } from '../../api/types'
 import type { ChapterAnalysis } from '../../hooks/useChapterAnalysis'
@@ -376,6 +377,7 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
   const [preserve, setPreserve] = useState<string[]>([])
   const [targetWords, setTargetWords] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const candidates = useMemo(() => readCandidates(detail.foreshadow_candidates), [detail.foreshadow_candidates])
 
   const handleRevise = async () => {
     const built = buildReviseRequest({
@@ -570,38 +572,48 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
           重写在后台运行，完成后覆盖正文，旧稿自动存为历史版本（来源「按建议重写」），并自动重新分析以对比评分。
         </Typography.Paragraph>
       </Card>
-      {(detail.warnings.length > 0 || detail.foreshadow_candidates.length > 0) && (
+      {candidates.length > 0 && (
+        <Card size="small" title={`本章识别的伏笔（${candidates.length}）`}>
+          <List
+            size="small"
+            dataSource={candidates}
+            renderItem={(c, i) => (
+              <List.Item key={i}>
+                <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+                  <Space size={4} wrap>
+                    <Tag color={c.action === 'resolve' ? 'green' : c.ref_id !== null ? 'blue' : 'gold'}>{candidateLabel(c)}</Tag>
+                    {c.keyword && <Typography.Text strong>{c.keyword}</Typography.Text>}
+                    {c.expected_resolve_chapter !== null && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        预计第 {c.expected_resolve_chapter} 章回收
+                      </Typography.Text>
+                    )}
+                  </Space>
+                  {c.text && <Typography.Text style={{ fontSize: 13 }}>{c.text}</Typography.Text>}
+                </Space>
+              </List.Item>
+            )}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            处理结果见「回写清单」：按编号匹配的自动写入，新伏笔需确认后创建。
+          </Typography.Text>
+        </Card>
+      )}
+      {detail.warnings.length > 0 && (
         <Collapse
           size="small"
           items={[
-            ...(detail.warnings.length > 0
-              ? [
-                  {
-                    key: 'warnings',
-                    label: `解析提示（${detail.warnings.length}）`,
-                    children: (
-                      <ul style={{ margin: 0, paddingLeft: 18 }}>
-                        {detail.warnings.map((w, i) => (
-                          <li key={i}>{w}</li>
-                        ))}
-                      </ul>
-                    ),
-                  },
-                ]
-              : []),
-            ...(detail.foreshadow_candidates.length > 0
-              ? [
-                  {
-                    key: 'foreshadows',
-                    label: `伏笔候选（${detail.foreshadow_candidates.length}，原始数据）`,
-                    children: (
-                      <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                        {JSON.stringify(detail.foreshadow_candidates, null, 2)}
-                      </pre>
-                    ),
-                  },
-                ]
-              : []),
+            {
+              key: 'warnings',
+              label: `解析提示（${detail.warnings.length}）`,
+              children: (
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {detail.warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              ),
+            },
           ]}
         />
       )}

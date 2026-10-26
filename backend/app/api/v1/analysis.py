@@ -12,6 +12,7 @@ from app.schemas.analysis import (
     ChapterAnalysisState,
 )
 from app.schemas.chapter import ReviseChapterRequest
+from app.schemas.foreshadow import ConfirmChangeRequest
 from app.schemas.task import TaskOut
 from app.services import analysis_service, task_service, writeback_service
 
@@ -67,8 +68,11 @@ async def revert_change(change_id: int, user: CurrentUser, db: DbDep) -> Analysi
 
 
 @router.post("/analysis-changes/{change_id}/confirm", response_model=AnalysisChangeOut)
-async def confirm_change(change_id: int, user: CurrentUser, db: DbDep) -> AnalysisChangeOut:
-    return await writeback_service.confirm_change(db, user.id, change_id)
+async def confirm_change(
+    change_id: int, user: CurrentUser, db: DbDep, body: ConfirmChangeRequest | None = None
+) -> AnalysisChangeOut:
+    overrides = body.overrides if body is not None else None
+    return await writeback_service.confirm_change(db, user.id, change_id, overrides)
 
 
 @router.post("/analysis-changes/{change_id}/reject", response_model=AnalysisChangeOut)

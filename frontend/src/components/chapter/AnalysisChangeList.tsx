@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { analysisApi, CHANGE_STATUS, describeChange, groupChanges } from '../../api/analysis'
 import { errorMessage } from '../../api/client'
 import type { AnalysisChange } from '../../api/types'
+import ForeshadowConfirmModal from '../foreshadows/ForeshadowConfirmModal'
 
 interface Props {
   changes: AnalysisChange[]
@@ -15,6 +16,8 @@ interface Props {
 export default function AnalysisChangeList({ changes, onChanged }: Props) {
   const { message } = App.useApp()
   const [pending, setPending] = useState<number | null>(null)
+  // foreshadow_new 确认时弹出可编辑表单（overrides）
+  const [confirmingFs, setConfirmingFs] = useState<AnalysisChange | null>(null)
   const groups = groupChanges(changes)
 
   const act = async (c: AnalysisChange, fn: (id: number) => Promise<AnalysisChange>, done: string) => {
@@ -36,7 +39,7 @@ export default function AnalysisChangeList({ changes, onChanged }: Props) {
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="middle">
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        常规变化已自动写入设定，可逐条撤销；角色死亡 / 失踪、新建关系需确认后才写入；名字对不上的只做提示。
+        常规变化与按编号匹配的伏笔埋设 / 回收已自动写入，可逐条撤销；角色死亡 / 失踪、新建关系、新识别的伏笔需确认后才写入（新伏笔确认时可修改标题等字段）；名字或伏笔编号对不上的只做提示。
       </Typography.Text>
       {groups.map((g) => (
         <div key={g.kind}>
@@ -55,7 +58,11 @@ export default function AnalysisChangeList({ changes, onChanged }: Props) {
                   <Popconfirm
                     key="revert"
                     title="撤销这条回写？"
-                    description="设定恢复为分析前的值；若已被后续修改则无法撤销。"
+                    description={
+                      c.kind === 'foreshadow_new'
+                        ? '将删除由这条确认创建的伏笔；若伏笔已被修改则无法撤销。'
+                        : '设定恢复为分析前的值；若已被后续修改则无法撤销。'
+                    }
                     okText="撤销"
                     cancelText="取消"
                     onConfirm={() => act(c, analysisApi.revert, '已撤销')}
@@ -72,9 +79,13 @@ export default function AnalysisChangeList({ changes, onChanged }: Props) {
                     type="link"
                     size="small"
                     loading={pending === c.id}
-                    onClick={() => void act(c, analysisApi.confirm, '已确认并写入')}
+                    onClick={() =>
+                      c.kind === 'foreshadow_new'
+                        ? setConfirmingFs(c)
+                        : void act(c, (id) => analysisApi.confirm(id), '已确认并写入')
+                    }
                   >
-                    确认
+                    {c.kind === 'foreshadow_new' ? '确认…' : '确认'}
                   </Button>,
                   <Button
                     key="reject"
@@ -113,6 +124,7 @@ export default function AnalysisChangeList({ changes, onChanged }: Props) {
           />
         </div>
       ))}
+      <ForeshadowConfirmModal change={confirmingFs} onClose={() => setConfirmingFs(null)} onConfirmed={onChanged} />
     </Space>
   )
 }

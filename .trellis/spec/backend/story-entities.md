@@ -1,6 +1,6 @@
 # 结构化设定：角色 / 组织 / 关系 / 卡片 / 章节上下文
 
-> 来源任务：`10-23-story-entities`；职业等级体系来自 `10-23-career-system`；章节分析与回写（文末）来自 `10-23-analysis-memory`。表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，
+> 来源任务：`10-23-story-entities`；职业等级体系来自 `10-23-career-system`；章节分析与回写来自 `10-23-analysis-memory`；伏笔管理（文末）来自 `10-26-foreshadows`。表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，
 > 任务契约见 [error-handling.md](./error-handling.md)「后台任务与 SSE 契约」。
 
 ---
@@ -161,13 +161,15 @@ def assemble_context(*, project_text, world_text, cast: CastSection | None, outl
 - 前情提要（更早章节，即最近 2 章全文之前的章节）：每章优先用**最近一次章节分析的 summary**（`context_builder.latest_summaries`，
   一条查询、子查询取每章 `max(id)`；正文已改、分析已过期照常使用；不截断），没有分析或摘要为空时退回正文前 200 字（`SUMMARY_CHARS`）。
   `PriorChapter.summary` 默认空串，`assemble_context` 签名不变。
-- 裁剪顺序（文件头注释为准）：更早章节摘要 → 最近正文开头 → 世界观尾部 → **名单（从尾部逐个）→ 关系描述（从尾部逐条去掉）→
+- `【伏笔提醒】`（`10-26-foreshadows`，见文末「伏笔管理」）位于【当前卷大纲】之后、【前情提要】之前；`assemble_context(..., foreshadows=ForeshadowSection | None)`
+  可选参数，没有可提醒的伏笔时整段不出现、上下文与之前逐字一致。
+- 裁剪顺序（文件头注释为准）：更早章节摘要 → 最近正文开头 → 世界观尾部 → **伏笔提醒整档去掉「长线」→ 再整档去掉「即将到期」** → **名单（从尾部逐个）→ 关系描述（从尾部逐条去掉）→
   关系（从尾部）→ 相关组织 → 涉及角色卡（尾部的角色先被截，主角在最前）** → 当前卷大纲 → 硬截断。
 
 ### 6. 必需的测试
 
 `tests/test_cast_context.py`（匹配规则含「林 / 林远 / 林远山」、30 角色端到端提示词、裁剪顺序）、`tests/test_context_builder.py`
-（原有预算用例改用 `CastSection`）。
+（原有预算用例改用 `CastSection`；伏笔提醒位置 / 五档顺序 / 裁剪顺序 / 无伏笔不变 / 端到端第 8 章提示词）。
 
 ### 7. 错误写法
 
@@ -322,7 +324,7 @@ async def revert_change / confirm_change / reject_change(db, user_id, change_id)
 - **排队**：`serial_key = analysis:{project_id}`、`resource_key = NULL`，同项目串行（按入队顺序回写），不同项目并行；分析失败只让本任务 failed。
   分析**不写生成记录**；`on_abort` 无需还原（只在成功时一次性落库）。
 - **提示词**（`ai/prompts/analysis.py`）：作品信息 + 本章涉及角色的当前状态（主角 ∪ 手动出场 ∪ 本章正文提及；存活、当前状态、组织职位、职业阶段）
-  + 他们之间的关系（亲密度、状态、描述）+ 项目组织名 + 相关职业阶梯 + 正文 + 评分标准（1–3 / 4–5 / 6–7 / 8–9 / 10）+ JSON 结构；
+  + 他们之间的关系（亲密度、状态、描述）+ 项目组织名 + 相关职业阶梯 +（有可引用伏笔时）【已有伏笔】清单 + 正文 + 评分标准（1–3 / 4–5 / 6–7 / 8–9 / 10）+ JSON 结构；
   要求只报告正文里发生的变化、给出**变化后的绝对值**、建议数量与分数挂钩。
 - **回写**（D3 / R4）：
   | kind | field_key | before / after | 处理 | 写入入口 |
@@ -333,6 +335,7 @@ async def revert_change / confirm_change / reject_change(db, user_id, change_id)
   | `relationship_create` | `relpair:{low}:{high}` | `null` / `{role_a, role_b, category, intimacy, status, description}` | **待确认** | 确认后 `create_relation`（after 补 `a_id/b_id/type_id`，target 补 `relationship_id`） |
   | `career_stage`（仅已挂接职业） | `career:{cid}:{career_id}` | `{stage_id, stage: "第N阶·名称"}` | 自动 | `apply_assignment(stage_id, source="analysis")` |
   | `org_membership` | `org:{org_id}:{cid}` | `null` 或 `{position, status}` | 自动 | `apply_membership` |
+  | `foreshadow_resolve` / `foreshadow_plant_planned` / `foreshadow_new` | 见文末「伏笔管理」 | | | `apply_foreshadow` |
   - 名字按「名字 → 别名」精确匹配（多个同名 / 同别名视为对不上）；组织 / 职业 / 阶段按名称精确匹配；对不上 → `skipped`，`field_key` 为空，
     reason 如 `未找到名为「X」的角色`、`「A」与「B」之间没有已有关系`、`「X」未挂接职业「Y」`、`职业「Y」没有名为「Z」的阶段`。
   - after == 当前值 → 不建条目（重复分析幂等）；同 `field_key` 已有**更晚章节**的 `applied` → `skipped`「已有第 N 章的更新」；
@@ -368,3 +371,113 @@ async def revert_change / confirm_change / reject_change(db, user_id, change_id)
 character.current_state = "重伤"; await db.commit()          # 没有回写条目，无法撤销，也不受「更晚章节优先」约束
 rel.type_id = enemy.id                                     # 自动回写改了关系类型（MuMu 的反例）
 ```
+
+
+---
+
+## 场景：伏笔管理（`10-26-foreshadows`，迁移 `0010`）
+
+### 1. 范围 / 触发条件
+
+任何写 `foreshadows` / `foreshadow_characters` / `foreshadow_history` 的代码：伏笔 CRUD、快捷操作、章节分析的三种伏笔回写条目
+（自动写入、确认、撤销），以及以后的项目备份导入。**只能经 `foreshadow_service.apply_foreshadow` 写入**。
+读取方：`context_builder`（【伏笔提醒】）、`analysis_service`（分析提示词里的伏笔清单）、编辑器「本章伏笔」。
+
+### 2. 签名
+
+```python
+# backend/app/services/foreshadow_service.py
+OPEN_STATUSES = ("planted", "partial"); CLOSED_STATUSES = ("resolved", "abandoned")
+TRACKED_FIELDS = ("title", "content", "plant_hint", "reveal_hint", "note", "status", "planned_plant_chapter",
+                  "actual_plant_chapter", "planned_resolve_chapter", "actual_resolve_chapter", "importance", "include_in_context")
+async def apply_foreshadow(db, fs, values, *, source, chapter_no=None, note="") -> ForeshadowHistory | None  # 不 commit
+def is_long_term(fs) -> bool; def overdue_by(fs, current_no) -> int        # 派生，不入库
+async def current_chapter(db, project_id) -> int                            # 已有正文（trim 后非空）的最大章节号，没有时 0
+def select_reminders(items, n) -> Reminders                                 # 纯函数：D2 五档与上限
+async def reminders(db, project_id, chapter_no) -> Reminders                # 上下文与 /foreshadow-reminders 同源
+def reminder_lines(rem) -> dict[str, list[str]]                             # 渲染（每条一行，带「◆ 档位：」前缀）
+async def analysis_candidates(db, project_id, chapter_no) -> list[Foreshadow]  # 分析清单，≤30
+def analysis_line(fs) -> str                                                # 「#ID 标题｜内容≤60｜状态｜计划回收第N章」
+def snapshot(fs, character_ids=None) -> dict                                # 撤销比对
+# context_builder
+@dataclass class ForeshadowSection: to_plant / must_resolve / overdue / upcoming / long_term: list[str]
+async def build_foreshadow_section(db, project_id, chapter_no) -> ForeshadowSection
+# ai/prompts/analysis.py
+build_analysis_messages(..., foreshadows_text: str = "")   # 为空时提示词与之前逐字一致
+```
+
+### 3. 契约
+
+- **数据**：章节字段（计划 / 实际 埋设、回收）存**章节号**、不做外键，可以指向尚未创建的章节，重排章节不受影响。
+  `status` ∈ `FORESHADOW_STATUSES`（pending / planted / resolved / partial / abandoned），`importance` 1–5（默认 3），
+  `include_in_context` 默认 true，`source` ∈ manual / analysis（确认分析识别的新伏笔时为 analysis）。
+  `foreshadow_characters` 复合主键 `(foreshadow_id, character_id)`，两端 CASCADE：删角色只删关联行，伏笔保留。
+- **`apply_foreshadow`**：`fs.id is None` 视为新建（须先设 `project_id`），未给的字段用默认值；`values` 只接受 `TRACKED_FIELDS` 与
+  `character_ids`（整体替换，须全部属于本项目，否则 400 `关联角色不存在或不属于该项目`）。文本 strip，标题为空 400 `伏笔标题不能为空`。
+  按**合并后**的值校验：`planted` 须有 `actual_plant_chapter`（400 `请填写实际埋设章节`）、`resolved` / `partial` 须有
+  `actual_resolve_chapter`（400 `请填写实际回收章节`）。状态流转不设硬性限制（R1 允许手动改回）。
+  有变化才写一条历史 `{字段: [旧, 新]}`（新建时旧值全为 null），关联角色以名字列表记在 `characters` 键；无变化返回 `None`。
+  `source` 不合法 → `ValueError`（编程错误）。
+- **派生**：`is_long_term` = 已埋 / 部分回收且没有计划回收章；`overdue_by(current_no)` = 已埋 / 部分回收、计划回收章 < current_no 时的差值，否则 0。
+  列表 / 统计 / 详情的 current_no = `current_chapter`；章节提醒以目标章节号为参照。
+- **API**（前缀 `/api/v1/projects/{pid}`，先校验项目归属，他人 / 不存在 404 `伏笔不存在`）：
+  `GET /foreshadows?status=&overdue=&long_term=&character_id=&sort=planned_resolve|importance`（默认按计划回收章升序、空值在后、id；
+  importance 为重要度降序再按计划回收章）、`POST /foreshadows`、`GET/PATCH/DELETE /foreshadows/{id}`、`POST /foreshadows/{id}/plant {chapter_no?}`、
+  `/resolve {chapter_no?, partial?}`、`/abandon`、`GET /foreshadows/{id}/history`（新的在前）、`GET /foreshadows/stats`
+  （`{pending, planted, resolved, partial, abandoned, overdue, long_term, current_chapter}`，固定路径先于 `/{id}` 注册）、
+  `GET /chapters/{cid}/foreshadow-reminders`（`{chapter_no, to_plant, must_resolve, overdue, upcoming, long_term}`，每项为 `ForeshadowOut`）。
+  PATCH：省略 = 不变，章节字段显式 `null` = 清空，`character_ids` 给出时整体替换；`chapter_no` / `history_note` 只写进本次历史
+  （伏笔自身有 `note` 字段，故历史备注叫 `history_note`）。快捷操作省略 `chapter_no` 时沿用已有实际章节，都没有 → 上述 400。
+- **提醒（D2）**：只取 `include_in_context=true` 且状态不是 resolved / abandoned 的伏笔。`to_plant` = pending 且计划埋设章 == N（全部，重要度降序）；
+  `must_resolve` = 已埋 / 部分回收且计划回收章 == N（全部）；`overdue` = 计划回收章 < N（最超期在前，≤3）；
+  `upcoming` = N < 计划回收章 ≤ N+3（≤3）；`long_term` = 没有计划回收章（重要度降序、id 正序，≤3）。渲染：
+  `◆ 本章计划埋设：#12 玉佩来历 —— 埋法：…`（没有要点时附内容前 60 字）、`◆ 本章必须回收：#5 … —— 回收：…`、
+  `◆ 超期未回收：#3 …（已超期 2 章）`、`◆ 即将到期（可适当铺垫）：#7 …（第 10 章）`、`◆ 长线伏笔：#2 …：内容前 60 字`；
+  有关联角色时每条末尾附 `（关联：林远、张三）`。裁剪见「章节上下文组装」。
+- **分析联动（D1 / R2）**：提示词清单 = 已埋 / 部分回收的全部 + 计划埋设章 ≤ 本章（或未定）的待埋，按重要度、计划回收章排序，≤30 条；
+  有清单时才加 `【已有伏笔】` 段、带 `ref_id` / `partial` 的 JSON 结构与第 8 条规则（引用编号）；清单为空时提示词逐字不变
+  （`test_prompt_without_foreshadows_is_unchanged` 冻结了 sha256）。规范化：`foreshadows → {action, ref_id, text, keyword,
+  expected_resolve_chapter, partial}`，`ref_id` 只保留正整数（也接受 `"5"` / `"#5"`），动作无法识别 → warning 丢弃；兼容没有 `ref_id` 的旧输出。
+- **回写条目**：
+  | kind | 条件 | field_key | target | before / after | 处理 |
+  |---|---|---|---|---|---|
+  | `foreshadow_resolve` | resolve + ref_id 指向本项目已埋 / 部分回收伏笔 | `fs:{id}:resolve` | `{foreshadow_id, title}` | `{status, actual_resolve_chapter}`；after 为 `resolved`（`partial=true` 时 `partial`）+ 本章 | 自动 |
+  | `foreshadow_plant_planned` | plant + ref_id 指向本项目待埋伏笔 | `fs:{id}:plant` | `{foreshadow_id, title}` | `{status, actual_plant_chapter}`；after 为 `planted` + 本章 | 自动 |
+  | `foreshadow_new` | plant 且没有 ref_id | `""` | `{title}`，确认后补 `foreshadow_id` | `null` / `{title, content, plant_hint, planned_resolve_chapter, importance: 3}`（title = keyword 或 text 前 20 字）；确认后 after 改为实际创建的快照 | **待确认** |
+  - 编号无效（不存在 / 他项目 / 状态不符）→ skipped `伏笔 #N 不存在或状态不符`；resolve 没有编号 → skipped `未引用伏笔编号，无法回收`。
+  - 当前值已等于 after（重复分析）→ 不建条目；同 field_key 已有更晚章节 applied → skipped `已有第 N 章的更新`（先于状态判断）。
+    本章已有同名（strip 后全等、同一 `actual_plant_chapter`）伏笔时不再建 `foreshadow_new`。
+  - 确认 `foreshadow_new`：`POST /analysis-changes/{id}/confirm` 可选 body `{overrides: {title?, content?, plant_hint?, reveal_hint?,
+    planned_resolve_chapter?, importance?, character_ids?}}`（只对该 kind 生效，其他 kind 忽略）；创建为 planted、实际埋设章 = 本章、
+    `source=analysis`，历史 note `确认第 N 章分析`；同项目同实际埋设章已有同名 → 409 `本章已有同名伏笔`；角色跨项目 → 400。
+    `field_key` 为空的条目不参与「更晚章节优先」（确认时也不查）。
+  - 撤销：自动条目当前 `{status, actual_*}` 仍等于 after 才经 `apply_foreshadow` 写回 before（note `撤销第 N 章分析`），否则 409
+    `该项已被后续修改，无法撤销`；已确认的 `foreshadow_new` 撤销 = 删除该伏笔，当前快照（含关联角色）≠ after → 同一 409。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 结果 |
+|---|---|
+| 关联角色不属于本项目 / 不存在 | 400 `关联角色不存在或不属于该项目` |
+| 已埋缺实际埋设章 / 已回收或部分回收缺实际回收章 | 400 `请填写实际埋设章节` / `请填写实际回收章节` |
+| 标题 strip 后为空 | 400 `伏笔标题不能为空` |
+| 重要度越界 / 状态非法 / 章节号 < 1 | 422 |
+| 确认新伏笔时本章已有同名 | 409 `本章已有同名伏笔` |
+| 路径中的伏笔不属于本项目或他人 | 404 `伏笔不存在` |
+
+### 5. Good / Base / Bad
+
+- Good：第 8 章分析 `{"action": "resolve", "ref_id": 5}` → `apply_foreshadow(fs, {"status": "resolved", "actual_resolve_chapter": 8},
+  source="analysis", chapter_no=8, note="第 8 章分析")`，条目 applied，可撤销。
+- Base：`{"action": "resolve", "text": "神秘人身份揭晓"}`（没有编号）→ skipped，只提示，伏笔不变。
+- Bad：`fs.status = "resolved"; await db.commit()` —— 没有历史、没有回写条目，无法撤销，也绕过必填校验。
+
+### 6. 必需的测试
+
+`tests/test_foreshadows.py`（AC1 CRUD / 历史 / 角色解除关联 / 跨项目 400、快捷操作必填校验与手动改回、派生属性、五档选取与上限、
+筛选排序统计与提醒接口）、`tests/test_foreshadow_analysis.py`（无伏笔提示词冻结 sha256、清单选取、规范化、AC2 回收 / 部分回收 / 撤销 /
+冲突 / 无效编号与无编号提示、更晚章节优先、AC3 计划埋设 / 新伏笔待确认 + overrides / 同名 409 / 撤销即删除 / 拒绝）、
+`tests/test_context_builder.py`（伏笔提醒位置、裁剪顺序、端到端）、`tests/test_migrations.py::test_0010_foreshadows`、
+`test_cross_user_isolation`（伏笔路由）与 `tests/test_analysis.py::test_analysis_cross_user_404`（confirm 带 overrides）。
+`tests/helpers.analysis_json` 默认含一条没有编号的 plant 伏笔：每次分析都会产生一条 `foreshadow_new` 待确认条目，
+只关注设定变化的测试（`test_writeback.py::_analyze`）显式传 `foreshadows=[]`。

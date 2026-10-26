@@ -18,7 +18,7 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { assignmentApi, careerBadges } from '../../api/careers'
 import { lifeStatusLabel, roleTypeColor } from '../../api/characters'
 import { errorMessage } from '../../api/client'
@@ -39,7 +39,10 @@ import { useProjectStore } from '../../stores/project'
 
 const ALL = '__all__'
 
-/** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业）。 */
+// 伏笔 Tab 只在打开角色抽屉并切到该 Tab 时才需要：按需加载，伏笔页的 API / 标签代码不进入口 chunk
+const CharacterForeshadowsTab = lazy(() => import('../../components/foreshadows/CharacterForeshadowsTab'))
+
+/** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业 / 伏笔）。 */
 export default function CharactersPanel() {
   const pid = useProjectId()
   const { message } = App.useApp()
@@ -271,6 +274,15 @@ export default function CharactersPanel() {
                       key: 'career',
                       label: '职业',
                       children: <CharacterCareersTab projectId={pid} character={editing} />,
+                    },
+                    {
+                      key: 'foreshadow',
+                      label: '伏笔',
+                      children: (
+                        <Suspense fallback={<Spin />}>
+                          <CharacterForeshadowsTab projectId={pid} character={editing} />
+                        </Suspense>
+                      ),
                     },
                   ]
                 : []),

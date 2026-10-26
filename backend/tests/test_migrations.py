@@ -492,3 +492,84 @@ def test_0009_chapter_analysis(tmp_path):
             assert conn.execute(text("SELECT COUNT(*) FROM projects")).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_0010_foreshadows(tmp_path):
+    """0010：伏笔三表（外键规则、复合主键）；删角色只解除关联，删伏笔级联历史；downgrade -1 删除三表且存量保留。"""
+    db_file = tmp_path / "migrate0010.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0009")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, 'p', '', '', '', 'planning')"
+                )
+            )
+            for name in ("甲", "乙"):
+                conn.execute(
+                    text(
+                        "INSERT INTO characters (project_id, name, role_type, profile, relations_text, sort) "
+                        f"VALUES (1, '{name}', '', '', '', 0)"
+                    )
+                )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0010")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert {"foreshadows", "foreshadow_characters", "foreshadow_history"} <= set(insp.get_table_names())
+
+        def _fk_rules(table: str) -> dict:
+            return {fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys(table)}
+
+        assert _fk_rules("foreshadows") == {"project_id": "CASCADE"}
+        assert _fk_rules("foreshadow_characters") == {"foreshadow_id": "CASCADE", "character_id": "CASCADE"}
+        assert _fk_rules("foreshadow_history") == {"foreshadow_id": "CASCADE"}
+        assert insp.get_pk_constraint("foreshadow_characters")["constrained_columns"] == [
+            "foreshadow_id",
+            "character_id",
+        ]
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO foreshadows (project_id, title) VALUES (1, '玉佩')"))
+            row = conn.execute(
+                text("SELECT status, importance, include_in_context, source, planned_resolve_chapter FROM foreshadows")
+            ).one()
+            assert tuple(row) == ("pending", 3, 1, "manual", None)
+            conn.execute(text("INSERT INTO foreshadow_characters (foreshadow_id, character_id) VALUES (1, 1), (1, 2)"))
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(text("INSERT INTO foreshadow_characters (foreshadow_id, character_id) VALUES (1, 1)"))
+            conn.execute(
+                text("INSERT INTO foreshadow_history (foreshadow_id, source, changes) VALUES (1, 'manual', '{}')")
+            )
+            # 删除角色：只解除关联，伏笔保留
+            conn.execute(text("DELETE FROM characters WHERE id = 1"))
+            assert conn.execute(text("SELECT character_id FROM foreshadow_characters")).scalars().all() == [2]
+            assert conn.execute(text("SELECT COUNT(*) FROM foreshadows")).scalar_one() == 1
+            # 删除伏笔：关联与历史级联删除
+            conn.execute(text("DELETE FROM foreshadows"))
+            for table in ("foreshadow_characters", "foreshadow_history"):
+                assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert not ({"foreshadows", "foreshadow_characters", "foreshadow_history"} & set(insp.get_table_names()))
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one() == 1
+    finally:
+        engine.dispose()

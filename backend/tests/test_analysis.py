@@ -118,7 +118,10 @@ async def test_analyze_chapter_structure_and_history(app, client, fake_llm):
     assert [s["id"] for s in detail["suggestions"]] == [1, 2, 3]
     assert detail["foreshadow_candidates"][0]["keyword"] == "玉佩"
     assert detail["metrics"]["paragraphs"] == 2 and detail["metrics"]["dialogue_ratio"] > 0
-    assert detail["changes"] == []
+    # 没有编号的新伏笔只进入待确认（foreshadows），不写入其他设定
+    assert [(c["kind"], c["status"], c["after"]["title"]) for c in detail["changes"]] == [
+        ("foreshadow_new", "pending", "玉佩")
+    ]
     # 分析不写生成记录
     async with app.state.sessionmaker() as db:
         assert await db.scalar(select(func.count(GenerationLog.id))) == 0
@@ -368,6 +371,7 @@ async def test_analysis_cross_user_404(app, client, make_client, fake_llm):
         ("GET", f"/api/v1/analyses/{analysis['id']}", None),
         ("POST", f"/api/v1/analysis-changes/{change['id']}/revert", None),
         ("POST", f"/api/v1/analysis-changes/{change['id']}/confirm", None),
+        ("POST", f"/api/v1/analysis-changes/{change['id']}/confirm", {"overrides": {"title": "x"}}),
         ("POST", f"/api/v1/analysis-changes/{change['id']}/reject", None),
         ("POST", f"/api/v1/chapters/{ch['id']}/revise", {"analysis_id": analysis["id"], "suggestion_ids": [1]}),
     ]

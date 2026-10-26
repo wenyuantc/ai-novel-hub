@@ -8,7 +8,15 @@ from pydantic import BaseModel, ConfigDict
 # none = 未分析；analyzing = 有排队 / 运行中的分析任务；analyzed = 最新分析与正文一致；stale = 正文已变化
 AnalysisStatus = Literal["none", "analyzing", "analyzed", "stale"]
 ChangeKind = Literal[
-    "character_state", "life_status", "relationship_update", "relationship_create", "career_stage", "org_membership"
+    "character_state",
+    "life_status",
+    "relationship_update",
+    "relationship_create",
+    "career_stage",
+    "org_membership",
+    "foreshadow_resolve",
+    "foreshadow_plant_planned",
+    "foreshadow_new",
 ]
 ChangeStatus = Literal["applied", "pending", "reverted", "rejected", "skipped", "failed"]
 

@@ -73,6 +73,7 @@ async def test_cross_user_isolation(client, make_client):
     custom_type = (await client.post(f"{base}/relationship-types", json={"role_a": "掌门", "role_b": "弟子"})).json()
     career = (await client.post(f"{base}/careers", json={"name": "剑修", "stages": [{"name": "练气"}]})).json()
     assignment = (await client.post(f"{base}/characters/{c1['id']}/careers", json={"career_id": career["id"]})).json()
+    fs = (await client.post(f"{base}/foreshadows", json={"title": "玉佩", "character_ids": [c1["id"]]})).json()
 
     bob = make_client()
     await register(bob, "bob")
@@ -153,6 +154,17 @@ async def test_cross_user_isolation(client, make_client):
         ("DELETE", f"{base}/characters/{c1['id']}/careers/{assignment['id']}"),
         ("GET", f"{base}/characters/{c1['id']}/career-history"),
         ("POST", f"{base}/wizard/careers"),
+        ("GET", f"{base}/foreshadows"),
+        ("POST", f"{base}/foreshadows"),
+        ("GET", f"{base}/foreshadows/stats"),
+        ("GET", f"{base}/foreshadows/{fs['id']}"),
+        ("PATCH", f"{base}/foreshadows/{fs['id']}"),
+        ("DELETE", f"{base}/foreshadows/{fs['id']}"),
+        ("POST", f"{base}/foreshadows/{fs['id']}/plant"),
+        ("POST", f"{base}/foreshadows/{fs['id']}/resolve"),
+        ("POST", f"{base}/foreshadows/{fs['id']}/abandon"),
+        ("GET", f"{base}/foreshadows/{fs['id']}/history"),
+        ("GET", f"{base}/chapters/{ch['id']}/foreshadow-reminders"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
@@ -171,6 +183,9 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/careers/batch": {"careers": [{"name": "x", "stages": [{"name": "一"}]}]},
         f"{base}/characters/{c1['id']}/careers": {"career_id": career["id"]},
         f"/api/v1/chapters/{ch['id']}/revise": {"analysis_id": 1, "instruction": "x"},
+        f"{base}/foreshadows": {"title": "x"},
+        f"{base}/foreshadows/{fs['id']}/plant": {"chapter_no": 1},
+        f"{base}/foreshadows/{fs['id']}/resolve": {"chapter_no": 1},
     }
     for method, url in checks:
         body = None

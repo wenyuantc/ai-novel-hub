@@ -1018,6 +1018,9 @@ export type ChangeKind =
   | 'relationship_create'
   | 'career_stage'
   | 'org_membership'
+  | 'foreshadow_resolve'
+  | 'foreshadow_plant_planned'
+  | 'foreshadow_new'
 
 export type ChangeStatus = 'applied' | 'pending' | 'reverted' | 'rejected' | 'skipped' | 'failed'
 
@@ -1131,7 +1134,7 @@ export interface Analysis extends AnalysisBrief {
   conflict: Partial<AnalysisConflict>
   emotion: Partial<AnalysisEmotion>
   changes_raw: Record<string, unknown>
-  /** 伏笔候选：原样保存，留给伏笔管理使用 */
+  /** 伏笔候选（规范化后为 ForeshadowCandidate；经 api/foreshadows.ts 的 readCandidates 收窄） */
   foreshadow_candidates: unknown[]
   suggestions: Suggestion[]
   warnings: string[]
@@ -1161,4 +1164,130 @@ export interface ReviseChapterRequest {
   /** 300–20000；省略 = 原文字数 */
   target_words?: number | null
   ai_config_id?: number | null
+}
+
+// ---------------- 伏笔（backend/app/schemas/foreshadow.py） ----------------
+
+/** pending 待埋 / planted 已埋 / resolved 已回收 / partial 部分回收 / abandoned 已废弃 */
+export type ForeshadowStatus = 'pending' | 'planted' | 'resolved' | 'partial' | 'abandoned'
+
+export type ForeshadowSort = 'planned_resolve' | 'importance'
+
+export interface Foreshadow {
+  id: number
+  project_id: number
+  title: string
+  content: string
+  /** 埋法要点 */
+  plant_hint: string
+  /** 回收要点 */
+  reveal_hint: string
+  status: ForeshadowStatus
+  /** 四个章节字段存章节号（可指向尚未创建的章节） */
+  planned_plant_chapter: number | null
+  actual_plant_chapter: number | null
+  planned_resolve_chapter: number | null
+  actual_resolve_chapter: number | null
+  /** 1–5 */
+  importance: number
+  include_in_context: boolean
+  note: string
+  /** manual | analysis */
+  source: string
+  /** 与 character_names 一一对应 */
+  character_ids: number[]
+  character_names: string[]
+  /** 派生：已埋 / 部分回收且没有计划回收章 */
+  is_long_term: boolean
+  /** 派生：超期章数，0 = 未超期（列表以项目当前章为参照，提醒以该章为参照） */
+  overdue_by: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ForeshadowInput {
+  title: string
+  content?: string
+  plant_hint?: string
+  reveal_hint?: string
+  status?: ForeshadowStatus
+  planned_plant_chapter?: number | null
+  actual_plant_chapter?: number | null
+  planned_resolve_chapter?: number | null
+  actual_resolve_chapter?: number | null
+  /** 1–5，默认 3 */
+  importance?: number
+  include_in_context?: boolean
+  note?: string
+  /** ≤50，须属于本项目 */
+  character_ids?: number[]
+}
+
+/** 省略 = 不变；章节字段显式 null = 清空；character_ids 给出时整体替换；chapter_no / history_note 只记入历史 */
+export interface ForeshadowUpdate extends Partial<ForeshadowInput> {
+  chapter_no?: number | null
+  /** ≤200 */
+  history_note?: string
+}
+
+export interface ForeshadowListQuery {
+  status?: ForeshadowStatus
+  overdue?: boolean
+  long_term?: boolean
+  character_id?: number
+  sort?: ForeshadowSort
+}
+
+export interface ForeshadowHistory {
+  id: number
+  foreshadow_id: number
+  source: string
+  chapter_no: number | null
+  /** {字段: [旧, 新]}；关联角色以名字列表记在 characters 键 */
+  changes: Record<string, unknown>
+  note: string
+  created_at: string
+}
+
+export interface ForeshadowStats {
+  pending: number
+  planted: number
+  resolved: number
+  partial: number
+  abandoned: number
+  overdue: number
+  long_term: number
+  /** 已有正文的最大章节号（没有时为 0），超期按它判断 */
+  current_chapter: number
+}
+
+/** 某一章的伏笔提醒（与章节上下文【伏笔提醒】同源，只含注入上下文开启的伏笔） */
+export interface ForeshadowReminders {
+  chapter_no: number
+  to_plant: Foreshadow[]
+  must_resolve: Foreshadow[]
+  overdue: Foreshadow[]
+  upcoming: Foreshadow[]
+  long_term: Foreshadow[]
+}
+
+/** 确认分析识别的新伏笔时可修改的字段（省略 = 用分析给出的值；planned_resolve_chapter 显式 null = 清空） */
+export interface ForeshadowOverrides {
+  title?: string
+  content?: string
+  plant_hint?: string
+  reveal_hint?: string
+  planned_resolve_chapter?: number | null
+  importance?: number
+  character_ids?: number[]
+}
+
+/** 分析详情 foreshadow_candidates 的规范化结构 */
+export interface ForeshadowCandidate {
+  action: 'plant' | 'resolve'
+  ref_id: number | null
+  text: string
+  keyword: string
+  expected_resolve_chapter: number | null
+  partial: boolean
 }

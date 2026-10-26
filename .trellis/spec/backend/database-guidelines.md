@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -173,6 +173,8 @@ def count_words(text: str) -> int:
 | `career_stages.name` | String(50)（职业内唯一由服务层保证） |
 | `character_careers.role` / `note` | String(8) / String(200)；`(character_id, career_id)` 唯一 |
 | `career_history.career_name` / `note` / `source` | String(100) / String(200) / String(16) |
+| `foreshadows.title` / `status` / `source` | String(200) / String(16) / String(12)；要点、内容、备注为 Text |
+| `foreshadow_history.note` / `source` | String(200) / String(16) |
 | `world_settings.category` / `characters.life_status` / 各 `status` / `category` | String(16) |
 | `chapters.status` | String(16)；`projects.status` / `ai_configs.provider` String(32) |
 | 长文本（`content`、`summary`、`profile`、`premise`、`style`、`api_key_enc`） | Text |
@@ -194,7 +196,8 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
 状态/provider 值是普通字符串，允许的取值以元组形式定义在
 `entities.py` 中（`CHAPTER_STATUSES = ("draft", "generating", "done")`、
 `AI_PROVIDERS`、`PROJECT_STATUSES`、`LIFE_STATUSES`、`WORLD_CATEGORIES`、`MEMBER_STATUSES`、`RELATION_CATEGORIES`、
-`RELATION_STATUSES`、`RELATION_SOURCES`、`CAREER_KINDS`、`CAREER_SOURCES`、`ANALYSIS_CHANGE_KINDS`、`ANALYSIS_CHANGE_STATUSES`；`VERSION_SOURCES` / `GENERATION_KINDS` 含 `revise`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
+`RELATION_STATUSES`、`RELATION_SOURCES`、`CAREER_KINDS`、`CAREER_SOURCES`、`ANALYSIS_CHANGE_KINDS`（含三个伏笔 kind）、`ANALYSIS_CHANGE_STATUSES`、
+`FORESHADOW_STATUSES`、`FORESHADOW_SOURCES`；`VERSION_SOURCES` / `GENERATION_KINDS` 含 `revise`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
 
 ---
 
@@ -218,7 +221,9 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   删除职业时阶段 / 挂接 / 历史在同一语句内级联删除，`downgrade -1` 删除四张表且存量角色保留）、
   `0009_chapter_analysis.py`（`down_revision = '0008'`，新建 `chapter_analyses` / `analysis_changes`，`projects.auto_analyze`
   `server_default=true` 回填，`tasks.serial_key` 可空 + 索引；`test_0009_chapter_analysis` 断言外键规则、回填、删章节级联、
-  删任务置空，`downgrade -1` 删除两表两列且存量项目保留）。
+  删任务置空，`downgrade -1` 删除两表两列且存量项目保留）、
+  `0010_foreshadows.py`（`down_revision = '0009'`，只新建三张表、不回填；`test_0010_foreshadows` 断言外键规则、复合主键、
+  删角色只解除关联、删伏笔级联历史，`downgrade -1` 删除三张表且存量角色保留）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -308,6 +313,10 @@ outline_id: Mapped[int | None] = mapped_column(
 `0009`：`chapter_analyses.project_id/chapter_id`、`analysis_changes.analysis_id/project_id` 为 CASCADE（删章节时分析与回写条目一并删除，
 已写入设定的变化仍留在各实体的历史里）；`chapter_analyses.task_id` 为 SET NULL（任务被清理 / 裁剪后分析保留）。
 `analysis_changes` 有 `(project_id, field_key)` 复合索引，供「更晚章节优先」查询。
+
+`0010`：`foreshadows.project_id`、`foreshadow_characters.foreshadow_id/character_id`、`foreshadow_history.foreshadow_id` 均为 CASCADE
+（删角色只删关联行、伏笔保留；删伏笔时关联与历史一并删除）。伏笔的四个章节字段存章节号、**不做外键**（可指向尚未创建的章节）。
+伏笔只能经 `foreshadow_service.apply_foreshadow` 写入（不 commit，写历史）。
 
 关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
 `relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
@@ -446,5 +455,6 @@ class Task(TimestampMixin, Base):   # tasks
 - 直接改 `CharacterCareer.stage_id` / `note` 而不经 `career_service.apply_assignment`：没有挂接历史，绕过主 1 副 3 与类别校验。
 - 新增全局预置数据只写进迁移：测试的 `create_all` 不跑迁移，需同时提供 `after_create` 事件（参照 `RelationshipType`）。
 - 更新 `content` 时没有重新计算 `word_count`。
+- 直接改 `Foreshadow` 字段而不经 `foreshadow_service.apply_foreshadow`：没有伏笔历史，绕过必填与关联角色校验，分析回写也无法撤销。
 - 章节分析回写绕过 `writeback_service` 直接改角色 / 关系 / 挂接 / 成员：没有回写条目，无法撤销，也不受「更晚章节优先」约束。
 - 用 `resource_key` 实现「同类排队串行」：它是冲突即拒绝（409）；需要排队等待用 `serial_key`。

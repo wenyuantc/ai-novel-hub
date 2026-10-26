@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "分析回写契约、写入入口模式、上下文组装与裁剪"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键、归属 404"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约与中文错误约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "分析面板回写清单、章节编辑器、角色抽屉"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-story-settings.md", "reason": "MuMu 伏笔功能与缺陷对照（§6）"}

@@ -83,6 +83,9 @@ describe('回写条目展示', () => {
       'relationship_create',
       'career_stage',
       'org_membership',
+      'foreshadow_resolve',
+      'foreshadow_plant_planned',
+      'foreshadow_new',
     ]
     expect(CHANGE_KINDS).toEqual(kinds)
     for (const k of kinds) expect(CHANGE_KIND_LABELS[k]).toBeTruthy()
@@ -176,6 +179,52 @@ describe('回写条目展示', () => {
     )
     expect(org.after).toBe('加入：长老')
     expect(describeChange(change({ kind: 'career_stage', target: { name: '林远', career_name: '剑修' }, before: null, after: { stage: '金丹' } })).after).toBe('金丹')
+  })
+
+  it('伏笔三类条目：回收 / 计划埋设 / 新伏笔 / 未匹配', () => {
+    expect(
+      describeChange(
+        change({
+          kind: 'foreshadow_resolve',
+          target: { foreshadow_id: 5, title: '师父的旧伤' },
+          field_key: 'fs:5:resolve',
+          before: { status: 'planted', actual_resolve_chapter: null },
+          after: { status: 'partial', actual_resolve_chapter: 8 },
+        }),
+      ),
+    ).toEqual({ subject: '#5 师父的旧伤', field: '回收', before: '已埋', after: '部分回收 · 第 8 章' })
+    expect(
+      describeChange(
+        change({
+          kind: 'foreshadow_plant_planned',
+          target: { foreshadow_id: 3, title: '玉佩' },
+          before: { status: 'pending', actual_plant_chapter: null },
+          after: { status: 'planted', actual_plant_chapter: 3 },
+        }),
+      ),
+    ).toEqual({ subject: '#3 玉佩', field: '埋设', before: '待埋', after: '已埋 · 第 3 章' })
+    expect(
+      describeChange(
+        change({
+          kind: 'foreshadow_new',
+          target: { title: '神秘信件' },
+          before: null,
+          after: { title: '神秘信件', content: '一封没有署名的信', plant_hint: '', planned_resolve_chapter: null, importance: 3 },
+          status: 'pending',
+        }),
+      ),
+    ).toEqual({ subject: '神秘信件', field: '新伏笔', before: '（无）', after: '一封没有署名的信 · 长线（未定回收章） · 重要度 3' })
+    const skipped = describeChange(
+      change({
+        kind: 'foreshadow_resolve',
+        target: { text: '揭开了旧伤的来历', keyword: '旧伤', foreshadow_id: 99 },
+        before: null,
+        after: { status: 'resolved', actual_resolve_chapter: 8 },
+        status: 'skipped',
+      }),
+    )
+    expect([skipped.subject, skipped.before, skipped.after]).toEqual(['#99 旧伤', '（无）', '已回收 · 第 8 章'])
+    expect(describeChange(change({ kind: 'foreshadow_resolve', target: { text: '某段回收', keyword: '' }, before: null, after: null })).subject).toBe('某段回收')
   })
 
   it('分组按固定顺序、计数待确认、替换条目', () => {
@@ -306,6 +355,7 @@ describe('接口路径', () => {
     await analysisApi.get(9)
     await analysisApi.revert(1)
     await analysisApi.confirm(1)
+    await analysisApi.confirm(2, { title: '新标题', planned_resolve_chapter: null })
     await analysisApi.reject(1)
     await reviseChapter(3, { analysis_id: 9, suggestion_ids: [1], instruction: '', preserve: [] })
     const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
@@ -318,8 +368,12 @@ describe('接口路径', () => {
       'GET /api/v1/analyses/9',
       'POST /api/v1/analysis-changes/1/revert',
       'POST /api/v1/analysis-changes/1/confirm',
+      'POST /api/v1/analysis-changes/2/confirm',
       'POST /api/v1/analysis-changes/1/reject',
       'POST /api/v1/chapters/3/revise',
     ])
+    // 不带 overrides 时没有请求体；带 overrides 时包一层 {overrides}
+    expect(calls[7][1].body).toBeUndefined()
+    expect(JSON.parse(String(calls[8][1].body))).toEqual({ overrides: { title: '新标题', planned_resolve_chapter: null } })
   })
 })

@@ -2,6 +2,7 @@
 
 import { lifeStatusLabel } from './characters'
 import { api } from './client'
+import { foreshadowStatusLabel } from './foreshadowLabels'
 import { memberStatusLabel } from './organizations'
 import { RELATION_CATEGORY, RELATION_STATUS } from './relationships'
 import type {
@@ -16,6 +17,7 @@ import type {
   ChangeKind,
   ChangeStatus,
   ChapterAnalysisState,
+  ForeshadowOverrides,
   RelationCategory,
   RelationStatus,
   ReviseChapterRequest,
@@ -35,7 +37,9 @@ export const analysisApi = {
   list: (cid: number) => api.get<AnalysisBrief[]>(`/chapters/${cid}/analyses`),
   get: (aid: number) => api.get<Analysis>(`/analyses/${aid}`),
   revert: (id: number) => api.post<AnalysisChange>(`/analysis-changes/${id}/revert`),
-  confirm: (id: number) => api.post<AnalysisChange>(`/analysis-changes/${id}/confirm`),
+  /** overrides 只对 foreshadow_new 生效（确认时修改字段），其他类型不传 */
+  confirm: (id: number, overrides?: ForeshadowOverrides) =>
+    api.post<AnalysisChange>(`/analysis-changes/${id}/confirm`, overrides ? { overrides } : undefined),
   reject: (id: number) => api.post<AnalysisChange>(`/analysis-changes/${id}/reject`),
 }
 
@@ -82,6 +86,9 @@ export const CHANGE_KINDS: ChangeKind[] = [
   'relationship_create',
   'career_stage',
   'org_membership',
+  'foreshadow_resolve',
+  'foreshadow_plant_planned',
+  'foreshadow_new',
 ]
 
 export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
@@ -91,6 +98,9 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
   relationship_create: '新建关系',
   career_stage: '境界',
   org_membership: '组织成员',
+  foreshadow_resolve: '伏笔回收',
+  foreshadow_plant_planned: '伏笔埋设',
+  foreshadow_new: '新伏笔',
 }
 
 export const CHANGE_STATUS: Record<ChangeStatus, { label: string; color: string }> = {
@@ -242,6 +252,35 @@ function relationSummary(value: unknown): string {
   return parts.length ? parts.join('，') : NONE
 }
 
+/** 伏笔状态快照 {status, actual_resolve_chapter | actual_plant_chapter} → 「已埋 · 第 3 章」 */
+function foreshadowStateText(value: unknown, chapterKey: 'actual_resolve_chapter' | 'actual_plant_chapter'): string {
+  if (!isRecord(value)) return NONE
+  const status = str(value.status)
+  const label = status ? foreshadowStatusLabel(status).label : ''
+  const ch = value[chapterKey]
+  const chText = typeof ch === 'number' ? `第 ${ch} 章` : ''
+  return [label, chText].filter(Boolean).join(' · ') || NONE
+}
+
+/** 新伏笔的 after：{title, planned_resolve_chapter, importance, ...} → 「计划第 8 章回收 · 重要度 3」 */
+function newForeshadowText(value: unknown): string {
+  if (!isRecord(value)) return NONE
+  const parts: string[] = []
+  const content = str(value.content).trim()
+  if (content) parts.push(content.length > 60 ? `${content.slice(0, 60)}…` : content)
+  const planned = value.planned_resolve_chapter
+  parts.push(typeof planned === 'number' ? `计划第 ${planned} 章回收` : '长线（未定回收章）')
+  if (typeof value.importance === 'number') parts.push(`重要度 ${value.importance}`)
+  return parts.join(' · ')
+}
+
+/** 伏笔条目的对象名：「#5 玉佩来历」；未匹配条目回退到原始关键词 / 文本 */
+function foreshadowSubject(t: Record<string, unknown>): string {
+  const id = typeof t.foreshadow_id === 'number' ? `#${t.foreshadow_id}` : ''
+  const title = str(t.title) || str(t.keyword) || (str(t.text).length > 20 ? `${str(t.text).slice(0, 20)}…` : str(t.text))
+  return [id, title].filter(Boolean).join(' ') || '?'
+}
+
 export interface ChangeView {
   /** 对象：角色名 / 「A ↔ B」/「角色 · 职业」/「角色 · 组织」 */
   subject: string
@@ -309,6 +348,22 @@ export function describeChange(change: Pick<AnalysisChange, 'kind' | 'target' | 
         after: membershipText(after),
       }
     }
+    case 'foreshadow_resolve':
+      return {
+        subject: foreshadowSubject(t),
+        field: '回收',
+        before: foreshadowStateText(change.before, 'actual_resolve_chapter'),
+        after: foreshadowStateText(change.after, 'actual_resolve_chapter'),
+      }
+    case 'foreshadow_plant_planned':
+      return {
+        subject: foreshadowSubject(t),
+        field: '埋设',
+        before: foreshadowStateText(change.before, 'actual_plant_chapter'),
+        after: foreshadowStateText(change.after, 'actual_plant_chapter'),
+      }
+    case 'foreshadow_new':
+      return { subject: foreshadowSubject(t), field: '新伏笔', before: NONE, after: newForeshadowText(change.after) }
     default:
       return { subject: name, field: '', before: textValue(change.before), after: textValue(change.after) }
   }

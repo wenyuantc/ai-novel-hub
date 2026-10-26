@@ -40,6 +40,7 @@ from app.services import (
     ai_config_service,
     career_service,
     cast_service,
+    foreshadow_service,
     organization_service,
     relationship_service,
     writeback_service,
@@ -74,6 +75,8 @@ _REL_STATUS_ALIASES = {"破裂": "broken", "决裂": "broken", "过去": "past",
 _MEMBER_STATUS_ALIASES = {"离开": "left", "退出": "left", "开除": "expelled", "逐出": "expelled", "阵亡": "dead"}
 _PRIORITY_ALIASES = {"高": "high", "中": "medium", "低": "low"}
 _ACTION_ALIASES = {"加入": "join", "离开": "leave", "退出": "leave", "变更": "update", "更新": "update"}
+_FS_ACTION_ALIASES = {"埋": "plant", "铺": "plant", "回收": "resolve", "揭": "resolve", "收": "resolve"}
+_REF_RE = re.compile(r"^#?\s*(\d+)$")
 _QUOTE_RE = re.compile(r"「([^」]*)」|『([^』]*)』|“([^”]*)”|\"([^\"]*)\"")
 _BLANK_LINE_RE = re.compile(r"\n\s*\n")
 _WS_RE = re.compile(r"\s+")
@@ -153,6 +156,44 @@ def _enum(value: Any, allowed: tuple[str, ...], aliases: dict[str, str]) -> str 
 
 def _dicts(value: Any) -> list[dict]:
     return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+
+def _ref_id(value: Any) -> int | None:
+    """只保留整数编号（也接受 "5" / "#5" 这样的纯编号字符串）；其他一律视为没有引用。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        m = _REF_RE.match(value.strip())
+        return int(m.group(1)) if m and int(m.group(1)) > 0 else None
+    return None
+
+
+def normalize_foreshadows(value: Any, warnings: list[str]) -> list[dict[str, Any]]:
+    """伏笔候选 → {action, ref_id, text, keyword, expected_resolve_chapter, partial}；兼容没有 ref_id 的旧输出。"""
+    items = []
+    for f in _dicts(value)[:MAX_FORESHADOWS]:
+        text = _text(f.get("text") or f.get("content"))
+        keyword = _text(f.get("keyword"), 100)
+        if not text and not keyword:
+            continue
+        action = _enum(f.get("action"), ("plant", "resolve"), _FS_ACTION_ALIASES)
+        if action is None:
+            warnings.append(f"伏笔「{keyword or text[:20]}」的动作「{_text(f.get('action'), 20)}」无法识别，已忽略")
+            continue
+        expected = _clamp_int(f.get("expected_resolve_chapter"), 1, 100000, None)
+        items.append(
+            {
+                "action": action,
+                "ref_id": _ref_id(f.get("ref_id")),
+                "text": text,
+                "keyword": keyword,
+                "expected_resolve_chapter": expected if expected and expected >= 1 else None,
+                "partial": f.get("partial") is True,
+            }
+        )
+    return items
 
 
 def normalize_scores(value: Any) -> dict[str, float | None]:
@@ -310,7 +351,7 @@ def normalize_analysis(obj: Any) -> tuple[dict[str, Any], list[str]]:
             "relationship_changes": relationship_changes,
             "career_changes": career_changes,
             "organization_changes": organization_changes,
-            "foreshadows": _dicts(obj.get("foreshadows"))[:MAX_FORESHADOWS],
+            "foreshadows": normalize_foreshadows(obj.get("foreshadows"), warnings),
             "scores": scores,
             "suggestions": suggestions,
         },
@@ -641,6 +682,7 @@ async def build_analysis_job(
     orgs = await db.scalars(
         select(Organization).where(Organization.project_id == project.id).order_by(Organization.sort, Organization.id)
     )
+    foreshadows = await foreshadow_service.analysis_candidates(db, project.id, chapter.chapter_no)
     messages = build_analysis_messages(
         project_info(project),
         chapter_no=chapter.chapter_no,
@@ -656,6 +698,7 @@ async def build_analysis_job(
             career_service.ladder_line(c, stages.get(c.id, []))
             for c in sorted(involved_careers.values(), key=lambda c: (c.sort, c.id))
         ),
+        foreshadows_text="\n".join(foreshadow_service.analysis_line(f) for f in foreshadows),
     )
     return AnalysisJob(
         project_id=project.id,

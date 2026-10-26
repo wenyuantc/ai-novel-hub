@@ -11,6 +11,12 @@
   成员 organization_service.apply_membership、角色状态 set_character_field（本模块）；来源 analysis，带章节号。
 - 撤销：当前值仍等于 after 才经同一入口写回 before（note「撤销第 N 章分析」），否则 409「该项已被后续修改，无法撤销」。
 - 确认 / 拒绝只作用于 pending；确认时按当前状态重新校验后写入。
+- 伏笔（foreshadows）：按编号 ref_id 匹配本项目伏笔。回收已埋 / 部分回收的伏笔（foreshadow_resolve，fs:{id}:resolve）与
+  计划中的待埋伏笔在本章埋下（foreshadow_plant_planned，fs:{id}:plant）自动写入；没有编号的新埋设（foreshadow_new，
+  field_key 为空）进入待确认，确认时可修改字段（overrides），
+  同项目同一实际埋设章已有同名伏笔 → 409「本章已有同名伏笔」；
+  撤销已确认的新伏笔 = 删除该伏笔（已被修改 → 409）。编号无效 / 状态不符 / 回收没有编号 → skipped，只做提示。
+  写入入口 foreshadow_service.apply_foreshadow。
 """
 
 import logging
@@ -29,20 +35,25 @@ from app.models import (
     ChapterAnalysis,
     Character,
     CharacterCareer,
+    Foreshadow,
     Organization,
     Project,
     Relationship,
 )
 from app.models.entities import LIFE_STATUSES
 from app.schemas.analysis import AnalysisChangeOut
-from app.services import career_service, organization_service, relationship_service
+from app.schemas.foreshadow import ForeshadowOverrides
+from app.services import career_service, foreshadow_service, organization_service, relationship_service
 
 logger = logging.getLogger(__name__)
 
 SOURCE = "analysis"
 CHARACTER_FIELDS = ("current_state", "life_status")
 REL_FIELDS = ("intimacy", "status", "description")
-PENDING_KINDS = ("life_status", "relationship_create")
+PENDING_KINDS = ("life_status", "relationship_create", "foreshadow_new")
+FORESHADOW_AUTO_KINDS = ("foreshadow_resolve", "foreshadow_plant_planned")
+FS_NEW_TITLE_CHARS = 20
+FS_DUPLICATE = "本章已有同名伏笔"
 REVERT_CONFLICT = "该项已被后续修改，无法撤销"
 CONFIRM_CHANGED = "该项对应的设定已被修改，无法确认"
 TARGET_GONE = "对应的设定已不存在"
@@ -318,8 +329,83 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
 
             await w.plan("org_membership", target, f"org:{org.id}:{cid}", before, after, _apply_org)
 
+    if data.get("foreshadows"):
+        await _plan_foreshadows(db, w, data["foreshadows"])
+
     await db.flush()
     return w.changes
+
+
+def _fs_state(fs: Foreshadow, kind: str) -> dict[str, Any]:
+    if kind == "foreshadow_resolve":
+        return {"status": fs.status, "actual_resolve_chapter": fs.actual_resolve_chapter}
+    return {"status": fs.status, "actual_plant_chapter": fs.actual_plant_chapter}
+
+
+def _fs_new_title(item: dict[str, Any]) -> str:
+    return (item.get("keyword") or item.get("text", "")[:FS_NEW_TITLE_CHARS]).strip()[:200]
+
+
+async def _same_title_exists(db: AsyncSession, project_id: int, chapter_no: int, title: str) -> bool:
+    rows = await db.scalars(
+        select(Foreshadow.title).where(
+            Foreshadow.project_id == project_id, Foreshadow.actual_plant_chapter == chapter_no
+        )
+    )
+    return any(t.strip() == title.strip() for t in rows)
+
+
+async def _plan_foreshadows(db: AsyncSession, w: _Writer, items: list[dict[str, Any]]) -> None:
+    pid = w.analysis.project_id
+    for item in items:
+        raw_target = {"text": item.get("text", ""), "keyword": item.get("keyword", "")}
+        ref_id = item.get("ref_id")
+        if item["action"] == "plant" and ref_id is None:
+            title = _fs_new_title(item)
+            if not title or await _same_title_exists(db, pid, w.no, title):
+                continue  # 本章已有同名伏笔（重复分析）：视为无变化
+            after = {
+                "title": title,
+                "content": item.get("text", ""),
+                "plant_hint": "",
+                "planned_resolve_chapter": item.get("expected_resolve_chapter"),
+                "importance": 3,
+            }
+            w._add("foreshadow_new", {"title": title}, "", None, after, "pending")
+            continue
+        kind = "foreshadow_resolve" if item["action"] == "resolve" else "foreshadow_plant_planned"
+        if ref_id is None:
+            w.skip(kind, raw_target, None, "未引用伏笔编号，无法回收")
+            continue
+        fs = await db.scalar(select(Foreshadow).where(Foreshadow.id == ref_id, Foreshadow.project_id == pid))
+        if kind == "foreshadow_resolve":
+            after = {"status": "partial" if item.get("partial") else "resolved", "actual_resolve_chapter": w.no}
+            allowed = foreshadow_service.OPEN_STATUSES
+        else:
+            after = {"status": "planted", "actual_plant_chapter": w.no}
+            allowed = ("pending",)
+        if fs is not None and _fs_state(fs, kind) == after:
+            continue  # 重复分析：已是该结果
+        suffix = "resolve" if kind == "foreshadow_resolve" else "plant"
+        field_key = f"fs:{ref_id}:{suffix}"
+        if fs is not None:
+            # 更晚章节优先：先于状态判断，已被更晚章节回收 / 埋下时给出更明确的原因
+            later = await _latest_applied_chapter(db, pid, field_key)
+            if later is not None and later > w.no:
+                target = {"foreshadow_id": fs.id, "title": fs.title}
+                w._add(kind, target, field_key, _fs_state(fs, kind), after, "skipped", f"已有第 {later} 章的更新")
+                continue
+        if fs is None or fs.status not in allowed:
+            w.skip(kind, {**raw_target, "foreshadow_id": ref_id}, after, f"伏笔 #{ref_id} 不存在或状态不符")
+            continue
+        target = {"foreshadow_id": fs.id, "title": fs.title}
+
+        async def _apply_fs(fid: int = fs.id, after: dict = after) -> None:
+            await foreshadow_service.apply_foreshadow(
+                db, await _fresh(db, Foreshadow, fid), after, source=SOURCE, chapter_no=w.no, note=w.note
+            )
+
+        await w.plan(kind, target, field_key, _fs_state(fs, kind), after, _apply_fs)
 
 
 def _stage_value(stage: CareerStage) -> dict[str, Any]:
@@ -371,6 +457,13 @@ async def _project_character(db: AsyncSession, project_id: int, character_id: An
         return None
     c = await db.get(Character, character_id)
     return c if c is not None and c.project_id == project_id else None
+
+
+async def _project_foreshadow(db: AsyncSession, project_id: int, foreshadow_id: Any) -> Foreshadow | None:
+    if not isinstance(foreshadow_id, int):
+        return None
+    fs = await db.get(Foreshadow, foreshadow_id)
+    return fs if fs is not None and fs.project_id == project_id else None
 
 
 async def _finish(db: AsyncSession, change: AnalysisChange) -> AnalysisChangeOut:
@@ -445,6 +538,22 @@ async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> Analy
         if current != change.after:
             raise ConflictError(REVERT_CONFLICT)
         await organization_service.apply_membership(db, org, character, change.before)
+    elif change.kind in FORESHADOW_AUTO_KINDS:
+        fs = await _project_foreshadow(db, pid, t.get("foreshadow_id"))
+        if fs is None or _fs_state(fs, change.kind) != change.after:
+            raise ConflictError(REVERT_CONFLICT)
+        await foreshadow_service.apply_foreshadow(
+            db, fs, dict(change.before or {}), source=SOURCE, chapter_no=change.chapter_no, note=note
+        )
+    elif change.kind == "foreshadow_new":
+        fs = await _project_foreshadow(db, pid, t.get("foreshadow_id"))
+        if fs is None:
+            raise ConflictError(REVERT_CONFLICT)
+        links = (await foreshadow_service.character_links(db, [fs.id])).get(fs.id, [])
+        if foreshadow_service.snapshot(fs, [c for c, _ in links]) != change.after:
+            raise ConflictError(REVERT_CONFLICT)
+        await db.delete(fs)
+        await db.flush()
     else:  # pragma: no cover - 未知类型属数据错误
         raise ConflictError(REVERT_CONFLICT)
     change.status = "reverted"
@@ -452,12 +561,16 @@ async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> Analy
     return await _finish(db, change)
 
 
-async def confirm_change(db: AsyncSession, user_id: int, change_id: int) -> AnalysisChangeOut:
+async def confirm_change(
+    db: AsyncSession, user_id: int, change_id: int, overrides: ForeshadowOverrides | None = None
+) -> AnalysisChangeOut:
+    """确认待确认条目。overrides 只对 foreshadow_new 生效（其他类型忽略）。"""
     change = await get_owned_change(db, user_id, change_id)
     if change.status != "pending":
         raise ConflictError("只能确认待确认的条目")
     pid, t = change.project_id, dict(change.target or {})
-    later = await _latest_applied_chapter(db, pid, change.field_key, exclude_id=change.id)
+    # field_key 为空（新伏笔）不参与「更晚章节优先」
+    later = await _latest_applied_chapter(db, pid, change.field_key, exclude_id=change.id) if change.field_key else None
     if later is not None and later > change.chapter_no:
         raise ConflictError(f"已有第 {later} 章的更新，无法确认")
     if change.kind == "life_status":
@@ -494,12 +607,42 @@ async def confirm_change(db: AsyncSession, user_id: int, change_id: int) -> Anal
         after.update(a_id=rel.a_id, b_id=rel.b_id, type_id=rel.type_id)
         change.after = after
         change.target = {**t, "relationship_id": rel.id}
+    elif change.kind == "foreshadow_new":
+        await _confirm_foreshadow(db, change, overrides)
     else:
         raise ConflictError("只能确认待确认的条目")
     change.status = "applied"
     change.applied_at = func.now()
     change.resolved_at = func.now()
     return await _finish(db, change)
+
+
+async def _confirm_foreshadow(db: AsyncSession, change: AnalysisChange, overrides: ForeshadowOverrides | None) -> None:
+    after = dict(change.after or {})
+    values: dict[str, Any] = {
+        "title": after.get("title") or "",
+        "content": after.get("content") or "",
+        "plant_hint": after.get("plant_hint") or "",
+        "planned_resolve_chapter": after.get("planned_resolve_chapter"),
+        "importance": after.get("importance") or 3,
+    }
+    if overrides is not None:
+        for key in overrides.model_fields_set:
+            value = getattr(overrides, key)
+            if value is None and key != "planned_resolve_chapter":
+                continue
+            values[key] = value
+    values.update(status="planted", actual_plant_chapter=change.chapter_no)
+    title = (values["title"] or "").strip()
+    if title and await _same_title_exists(db, change.project_id, change.chapter_no, title):
+        raise ConflictError(FS_DUPLICATE)
+    fs = Foreshadow(project_id=change.project_id, source=SOURCE)
+    await foreshadow_service.apply_foreshadow(
+        db, fs, values, source=SOURCE, chapter_no=change.chapter_no, note=f"确认第 {change.chapter_no} 章分析"
+    )
+    # 记录实际创建的值，供撤销比对（伏笔已被修改则不能撤销）
+    change.after = foreshadow_service.snapshot(fs, list(dict.fromkeys(values.get("character_ids") or [])))
+    change.target = {"title": fs.title, "foreshadow_id": fs.id}
 
 
 async def reject_change(db: AsyncSession, user_id: int, change_id: int) -> AnalysisChangeOut:

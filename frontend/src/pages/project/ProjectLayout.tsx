@@ -1,6 +1,7 @@
 import {
   ApartmentOutlined,
   BookOutlined,
+  BulbOutlined,
   ClusterOutlined,
   DashboardOutlined,
   GlobalOutlined,
@@ -28,6 +29,7 @@ const NAV = [
   { key: 'careers', icon: <TrophyOutlined />, label: '职业' },
   { key: 'outlines', icon: <OrderedListOutlined />, label: '大纲' },
   { key: 'chapters', icon: <BookOutlined />, label: '章节' },
+  { key: 'foreshadows', icon: <BulbOutlined />, label: '伏笔' },
 ]
 
 /** 项目工作区：左侧导航 + 右侧面板。 */

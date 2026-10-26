@@ -47,6 +47,7 @@ import { GenerateForm, type GenerateOptions, PolishForm } from '../../components
 import CastSelect from '../../components/chapter/CastSelect'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
+import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useLoader } from '../../hooks/useLoader'
@@ -562,6 +563,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                     分析
                   </Button>
                 </Badge>
+                <ChapterForeshadowButton projectId={pid} chapterId={chapter.id} />
                 <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
                   版本历史
                 </Button>

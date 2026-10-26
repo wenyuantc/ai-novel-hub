@@ -1,6 +1,6 @@
 """章节生成上下文组装（MVP 不依赖向量检索）。
 
-组成：作品信息 + 世界观（按分类分组）+ 角色部分 + 当前卷大纲 + 更早章节标题/摘要 + 最近 N 章全文。
+组成：作品信息 + 世界观（按分类分组）+ 角色部分 + 当前卷大纲 + 伏笔提醒 + 更早章节标题/摘要 + 最近 N 章全文。
 更早章节的摘要（前情提要）：优先用该章最近一次章节分析的 summary（批量一条查询取每章 max(id)；
 正文已变化、分析已过期时照常使用），没有分析时退回正文前 SUMMARY_CHARS 字。
 角色部分（D4，选角见 cast_service.select_cast）：
@@ -9,17 +9,21 @@
   - 相关组织：涉及角色所属组织的名称、类型、宗旨
   - 职业体系：涉及角色所挂职业的完整阶段阶梯（角色卡中有「职业：剑修·筑基（2/9，瓶颈期）」行）
   - 其他角色：只列「名字（定位）」名单
+伏笔提醒（foreshadow_service.reminders，只取注入上下文开启、未回收 / 未废弃的伏笔；项目没有可提醒的伏笔时整段不出现）：
+  本章计划埋设（全部）→ 本章必须回收（全部）→ 超期未回收（≤3，最超期在前）→ 即将到期（未来 3 章内，≤3）→
+  长线伏笔（没有计划回收章，按重要度 ≤3）；位于当前卷大纲之后、前情提要之前。
 超出字符预算时的裁剪顺序：
   1. 从最早开始丢弃「更早章节摘要」
   2. 从较早的一章开始，截掉最近章节正文的开头（保留结尾，利于衔接）
   3. 截断世界观尾部
-  4. 角色部分：先从尾部丢弃「其他角色」名单 → 再从尾部去掉关系描述（保留关系本身）→ 再从尾部丢弃关系 →
+  4. 伏笔提醒：先整档去掉「长线伏笔」→ 再整档去掉「即将到期」（其余三档只在最后的硬截断中处理）
+  5. 角色部分：先从尾部丢弃「其他角色」名单 → 再从尾部去掉关系描述（保留关系本身）→ 再从尾部丢弃关系 →
      截断职业体系 → 截断相关组织 → 最后截断涉及角色卡（排在后面的角色先被截；主角在最前）
-  5. 截断当前卷大纲尾部
-  6. 最终硬截断兜底，保证不超过预算
+  6. 截断当前卷大纲尾部
+  7. 最终硬截断兜底，保证不超过预算
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +41,14 @@ from app.models import (
     Outline,
     Project,
 )
-from app.services import career_service, cast_service, organization_service, relationship_service, story_service
+from app.services import (
+    career_service,
+    cast_service,
+    foreshadow_service,
+    organization_service,
+    relationship_service,
+    story_service,
+)
 from app.services.project_service import project_info
 
 RECENT_FULL_CHAPTERS = 2
@@ -77,6 +88,20 @@ class CastSection:
 
 
 @dataclass
+class ForeshadowSection:
+    """伏笔提醒五档（每项一行，已带「◆ 档位：」前缀）。"""
+
+    to_plant: list[str] = field(default_factory=list)
+    must_resolve: list[str] = field(default_factory=list)
+    overdue: list[str] = field(default_factory=list)
+    upcoming: list[str] = field(default_factory=list)
+    long_term: list[str] = field(default_factory=list)
+
+    def lines(self) -> list[str]:
+        return [*self.to_plant, *self.must_resolve, *self.overdue, *self.upcoming, *self.long_term]
+
+
+@dataclass
 class ContextParts:
     project_text: str
     world_text: str = ""
@@ -86,6 +111,7 @@ class ContextParts:
     careers_text: str = ""
     roster: list[str] = field(default_factory=list)
     outline_text: str = ""
+    foreshadows: ForeshadowSection = field(default_factory=ForeshadowSection)
     summaries: list[str] = field(default_factory=list)
     recent: list[str] = field(default_factory=list)
 
@@ -105,6 +131,9 @@ class ContextParts:
             sections.append("【其他角色（仅名单）】\n" + "，".join(self.roster))
         if self.outline_text:
             sections.append(f"【当前卷大纲】\n{self.outline_text}")
+        foreshadow_lines = self.foreshadows.lines()
+        if foreshadow_lines:
+            sections.append("【伏笔提醒】\n" + "\n".join(foreshadow_lines))
         if self.summaries:
             sections.append("【前情提要（更早章节）】\n" + "\n".join(self.summaries))
         if self.recent:
@@ -142,6 +171,7 @@ def assemble_context(
     budget: int,
     recent_count: int = RECENT_FULL_CHAPTERS,
     summary_chars: int = SUMMARY_CHARS,
+    foreshadows: ForeshadowSection | None = None,
 ) -> str:
     """纯函数：根据素材与字符预算组装上下文。prior_chapters 需按章节号升序。"""
     prior = [c for c in prior_chapters if c.content.strip()]
@@ -158,6 +188,8 @@ def assemble_context(
         careers_text="\n".join(c.strip() for c in cast.careers if c.strip()),
         roster=list(cast.roster),
         outline_text=outline_text.strip(),
+        # 裁剪只整档替换为空列表，浅拷贝即可避免改动调用方的对象
+        foreshadows=replace(foreshadows) if foreshadows else ForeshadowSection(),
         summaries=[_summary_line(c, summary_chars) for c in earlier],
     )
     recent_bodies = [c.content.strip() for c in recent_src]
@@ -200,7 +232,13 @@ def assemble_context(
     # 3. 截断世界观
     cut_attr("world_text")
 
-    # 4. 角色部分：名单 → 关系描述 → 关系 → 职业体系 → 相关组织 → 涉及角色卡
+    # 4. 伏笔提醒：先整档去掉长线伏笔，再整档去掉即将到期
+    for tier in ("long_term", "upcoming"):
+        if excess > 0 and getattr(parts.foreshadows, tier):
+            setattr(parts.foreshadows, tier, [])
+            excess = over()
+
+    # 5. 角色部分：名单 → 关系描述 → 关系 → 职业体系 → 相关组织 → 涉及角色卡
     while excess > 0 and parts.roster:
         parts.roster.pop()
         excess = over()
@@ -217,11 +255,11 @@ def assemble_context(
     cut_attr("organizations_text")
     cut_attr("cards_text")
 
-    # 5. 截断当前卷大纲
+    # 6. 截断当前卷大纲
     cut_attr("outline_text")
 
     rendered = parts.render()
-    # 6. 兜底
+    # 7. 兜底
     return _cut_tail(rendered, budget) if len(rendered) > budget else rendered
 
 
@@ -400,7 +438,15 @@ async def build_chapter_context(db: AsyncSession, project: Project, chapter: Cha
         outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
         prior_chapters=prior,
         budget=budget,
+        foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no),
     )
+
+
+async def build_foreshadow_section(db: AsyncSession, project_id: int, chapter_no: int) -> ForeshadowSection:
+    rem = await foreshadow_service.reminders(db, project_id, chapter_no)
+    if rem.empty():
+        return ForeshadowSection()
+    return ForeshadowSection(**foreshadow_service.reminder_lines(rem))
 
 
 async def latest_summaries(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> dict[int, str]:

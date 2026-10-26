@@ -73,8 +73,14 @@ ANALYSIS_CHANGE_KINDS = (
     "relationship_create",
     "career_stage",
     "org_membership",
+    "foreshadow_resolve",
+    "foreshadow_plant_planned",
+    "foreshadow_new",
 )
 ANALYSIS_CHANGE_STATUSES = ("applied", "pending", "reverted", "rejected", "skipped", "failed")
+# 伏笔：待埋 / 已埋 / 已回收 / 部分回收 / 已废弃；来源：手动 / 章节分析确认创建（foreshadows）
+FORESHADOW_STATUSES = ("pending", "planted", "resolved", "partial", "abandoned")
+FORESHADOW_SOURCES = ("manual", "analysis")
 # 全局预置关系类型 (category, role_a, role_b)：「a 是 b 的 role_a，b 是 a 的 role_b」。
 # 迁移 0007 内有同样的一份（迁移脚本冻结，不引用应用代码）；create_all 时由 after_create 事件写入
 PRESET_RELATIONSHIP_TYPES = (
@@ -565,3 +571,59 @@ class AnalysisChange(TimestampMixin, Base):
     reason: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Foreshadow(TimestampMixin, Base):
+    """伏笔。四个章节字段存章节号（不做外键）：可指向尚未创建的章节，重排章节也不受影响。
+
+    没有计划回收章的已埋 / 部分回收伏笔即长线伏笔（派生，不入库）。
+    只能经 foreshadow_service.apply_foreshadow 写入（写历史）。
+    """
+
+    __tablename__ = "foreshadows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 埋法要点 / 回收要点
+    plant_hint: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    reveal_hint: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # pending / planted / resolved / partial / abandoned
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", nullable=False)
+    planned_plant_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actual_plant_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    planned_resolve_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actual_resolve_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 1–5
+    importance: Mapped[int] = mapped_column(Integer, default=3, server_default="3", nullable=False)
+    include_in_context: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # manual / analysis（确认分析识别的新伏笔时创建）
+    source: Mapped[str] = mapped_column(String(12), default="manual", server_default="manual", nullable=False)
+
+
+class ForeshadowCharacter(TimestampMixin, Base):
+    """伏笔关联的角色。删除角色时只删除关联行，伏笔保留。"""
+
+    __tablename__ = "foreshadow_characters"
+
+    foreshadow_id: Mapped[int] = mapped_column(ForeignKey("foreshadows.id", ondelete="CASCADE"), primary_key=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+
+
+class ForeshadowHistory(TimestampMixin, Base):
+    """伏笔的每次变化（含新建）。changes = {字段: [旧, 新]}，关联角色以名字列表记录在 characters 键。"""
+
+    __tablename__ = "foreshadow_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    foreshadow_id: Mapped[int] = mapped_column(
+        ForeignKey("foreshadows.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    changes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)

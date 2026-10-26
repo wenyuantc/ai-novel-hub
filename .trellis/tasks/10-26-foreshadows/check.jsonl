@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "核对伏笔写入只经 apply_foreshadow、回写 kind 与提醒规则"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试覆盖"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新页面与编辑器行为"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "伏笔跨分析-回写-上下文-前端多层"}
