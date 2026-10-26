@@ -217,3 +217,39 @@
 ### Next Steps
 
 - 按父任务表开始规划 P1（prompt-styles 等）
+
+
+## Session 10: prompt-styles 提示词模板与写作风格库
+<!-- trellis-session: v=2 fp=c0bec1e381aff074 -->
+
+**Date**: 2026-10-26
+**Task**: prompt-styles 提示词模板与写作风格库
+**Branch**: `main`
+
+### Summary
+
+实现 P1-6：沙箱 Jinja2 模板化 19 个提示词（parity 逐字一致）、用户覆盖与默认更新提醒、结构化写作风格库与逐章风格解析；拆出 prompt-workshop（P2-14）。
+
+### Main Changes
+
+- 迁移 0013 prompt_overrides/prompt_override_versions/writing_styles，projects.default_style_id、chapters.style_id
+- 新增依赖 jinja2
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `46d72ba` | feat: 提示词模板与写作风格库（沙箱 Jinja2 模板、用户覆盖、结构化风格、逐章风格解析） |
+| `e83f50c` | chore(task): archive 10-23-prompt-styles |
+
+### Testing
+
+- [OK] 后端 472 passed；前端 196 passed；浏览器冒烟覆盖模板校验与覆盖、样文提取、试写、批量逐章风格、停用覆盖
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 继续规划 P1：inspiration / book-import / knowledge-base / project-io-reader
