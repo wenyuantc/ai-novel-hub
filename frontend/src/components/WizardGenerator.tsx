@@ -6,6 +6,7 @@ import type { OutlineMode, Task, WizardItemMap, WizardKind, WizardRequest } from
 import { parseWizardDone, parseWizardMode, parseWizardWarnings, runWizard, WIZARD_KIND_LABELS } from '../api/wizard'
 import { useHasAIConfig } from '../hooks/useHasAIConfig'
 import { useTaskStream } from '../hooks/useTaskStream'
+import { useProjectStore } from '../stores/project'
 import { useTasksStore } from '../stores/tasks'
 import AIConfigSelect from './AIConfigSelect'
 import StreamOutput from './StreamOutput'
@@ -58,6 +59,15 @@ export default function WizardGenerator<K extends WizardKind>({
   const trackTask = useTasksStore((s) => s.track)
   const hasConfig = useHasAIConfig()
   const label = WIZARD_KIND_LABELS[kind]
+  // 灵感模式转为项目时写入的向导参数建议（wizard_progress.params），有则优先作为初始值
+  const suggested = useProjectStore((s) => (s.project?.id === projectId ? (s.project.wizard_progress.params ?? null) : null))
+  const [initialValues] = useState(() => ({
+    instruction: '',
+    volume_count: suggested?.volume_count ?? 2,
+    chapters_per_volume: suggested?.chapters_per_volume ?? 10,
+    character_count: suggested?.character_count ?? 5,
+    career_count: 4,
+  }))
   const running = task.running || starting
 
   // onRunningChange 用 ref 保存最新回调，避免父组件内联函数导致 effect 反复执行
@@ -213,7 +223,7 @@ export default function WizardGenerator<K extends WizardKind>({
         form={form}
         layout="vertical"
         disabled={running}
-        initialValues={{ instruction: '', volume_count: 2, chapters_per_volume: 10, character_count: 5, career_count: 4 }}
+        initialValues={initialValues}
       >
         <Form.Item label="AI 配置">
           <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={running} />

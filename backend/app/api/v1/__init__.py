@@ -12,6 +12,7 @@ from app.api.v1 import (
     chapters,
     character_actions,
     foreshadows,
+    inspiration,
     organizations,
     outline_pro,
     projects,
@@ -48,3 +49,4 @@ api_router.include_router(wizard.router)
 api_router.include_router(tasks.router)
 api_router.include_router(prompt_templates.router)
 api_router.include_router(styles.router)
+api_router.include_router(inspiration.router)

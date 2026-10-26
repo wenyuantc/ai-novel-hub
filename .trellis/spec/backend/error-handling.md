@@ -190,6 +190,8 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
 - **同步 SSE**：`POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎），以及
   `POST /api/v1/styles/extract`、`POST /api/v1/styles/trial`（风格提取 / 试写：`delta` → `done` / `error`，不写生成记录、无项目归属，见 prompts-styles.md）。
+  `POST /api/v1/inspiration/sessions/{id}/steps/{step}/generate`（灵感模式生成选项：`delta` →（`retry` → `delta`）… → `done` / `error`，
+  请求内重试、断开不落库、同会话同步骤并发 409，见 [inspiration.md](./inspiration.md)）。
 - 跨层：后端 `app/api/sse.py`、`task_engine/{engine,hub,registry}.py`、`handlers/{chapter,wizard}.py`、
   `generation_service.py` / `wizard_service.py` / `rewrite_service.py`、`task_service.py`、`api/v1/tasks.py`；
   前端 `frontend/src/api/sse.ts` 与任务订阅。新增任务类型、修改订阅事件名 / payload、新增流式端点时都要遵循并更新此契约。

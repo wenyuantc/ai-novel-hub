@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板注册、锁定变量、同步 SSE、parity 约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键、归属 404"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误与 SSE 契约"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "wizard_progress 与向导续跑"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、Gate、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面、流式输出、向导组件"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-creation-core.md", "reason": "MuMu 灵感模式缺陷对照（§1）"}

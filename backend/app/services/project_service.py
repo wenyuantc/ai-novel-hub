@@ -19,7 +19,17 @@ async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> 
 async def project_info(db: AsyncSession, project: Project) -> ProjectInfo:
     """作品信息；「写作风格」取项目默认风格的一句话描述（projects.style 已不再读取）。"""
     style = await style_service.default_description(db, project)
-    return ProjectInfo(title=project.title, genre=project.genre, premise=project.premise, style=style)
+    return ProjectInfo(
+        title=project.title,
+        genre=project.genre,
+        premise=project.premise,
+        style=style,
+        synopsis=project.synopsis or "",
+        theme=project.theme or "",
+        tags=tuple(project.tags or ()),
+        selling_points=project.selling_points or "",
+        audience=project.audience or "",
+    )
 
 
 def _stats_subquery():
@@ -83,6 +93,12 @@ async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) ->
         premise=data.premise.strip(),
         status="planning",
         default_style_id=data.default_style_id,
+        synopsis=data.synopsis.strip(),
+        theme=data.theme.strip(),
+        tags=list(data.tags),
+        selling_points=data.selling_points.strip(),
+        audience=data.audience.strip(),
+        target_words=data.target_words,
     )
     db.add(project)
     notice = None
@@ -102,7 +118,10 @@ async def update_project(
     if "default_style_id" in fields:
         await style_service.ensure_assignable(db, user_id, data.default_style_id)
         project.default_style_id = data.default_style_id
-    for field, value in data.model_dump(exclude_unset=True, exclude={"style", "default_style_id"}).items():
+    if "target_words" in fields:
+        project.target_words = data.target_words
+    exclude = {"style", "default_style_id", "target_words"}
+    for field, value in data.model_dump(exclude_unset=True, exclude=exclude).items():
         if value is None:
             continue
         setattr(project, field, value.strip() if isinstance(value, str) else value)

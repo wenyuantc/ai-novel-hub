@@ -1,4 +1,4 @@
-"""提示词模板注册表：19 个模板 key 的元信息、变量声明与系统默认模板（templates/<key>.{system,user}.j2）。
+"""提示词模板注册表：25 个模板 key 的元信息、变量声明与系统默认模板（templates/<key>.{system,user}.j2）。
 
 - 数据块（参考资料、角色卡、作品信息等）由 build_*_messages 在 Python 里拼好后作为变量传入，模板只负责排布与措辞。
 - 锁定变量（json_rule / output_format / output_schema）的内容由代码提供，模板里必须原样出现一次（见 templating）。
@@ -24,6 +24,7 @@ CATEGORIES: dict[str, str] = {
     "entity": "设定生成",
     "outline": "大纲",
     "style": "写作风格",
+    "inspiration": "灵感模式",
 }
 
 
@@ -70,6 +71,25 @@ INSTRUCTION_VAR = T("instruction", "作者额外要求", sample="")
 def _out(sample: str) -> TemplateVar:
     """锁定的输出结构由各 build 函数按分支提供；这里的 sample 只用于预览。"""
     return L("output_format", "JSON 输出格式（锁定）", sample)
+
+
+def _inspiration(key: str, name: str, desc: str) -> tuple[str, str, str, str, tuple[TemplateVar, ...]]:
+    """灵感模式各步骤共用同一组变量；步骤约束（数量、字数）写在各自的模板里。"""
+    return (
+        f"inspiration.{key}",
+        f"灵感：{name}",
+        "inspiration",
+        desc,
+        (
+            T("idea", "创作想法", required=True, sample="一个能听见城市心跳的少女，在末日前夜寻找失踪的哥哥。"),
+            T("notes", "补充想法（每行一条）", sample="- 希望结局温暖一些"),
+            T("decided", "已经定下的内容", sample="题材：都市奇幻\n主题：在失去中学会告别"),
+            T("history", "本步之前各轮的选项与反馈", sample=""),
+            T("feedback", "这次的反馈", sample="再短一点，更有画面感"),
+            JSON_RULE_VAR,
+            _out(F.INSPIRATION_FORMAT),
+        ),
+    )
 
 
 _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
@@ -372,6 +392,12 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("words", "字数", "int", sample=500),
         ),
     ),
+    _inspiration("title", "书名", "根据创作想法给出 4~6 个书名候选。"),
+    _inspiration("synopsis", "简介", "根据创作想法与已定内容给出 4~6 个作品简介候选。"),
+    _inspiration("theme", "主题", "给出 4~6 个作品主题候选。"),
+    _inspiration("tags", "类型标签", "给出 6~10 个类型标签候选（可多选）。"),
+    _inspiration("selling_points", "核心卖点", "给出 4~6 个核心卖点候选。"),
+    _inspiration("audience", "目标读者", "给出 4~6 个目标读者候选。"),
 ]
 
 TEMPLATES: dict[str, PromptTemplate] = {

@@ -1,12 +1,14 @@
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Col, Empty, Form, Input, Modal, Row, Spin, Statistic, Tag, Typography } from 'antd'
+import { BulbOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
+import { Alert, App, Button, Card, Col, Collapse, Empty, Form, Input, Modal, Row, Space, Spin, Statistic, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
 import type { Project, ProjectCreate } from '../api/types'
+import ProjectInfoFields from '../components/ProjectInfoFields'
 import StyleSelect from '../components/styles/StyleSelect'
 import { useLoader } from '../hooks/useLoader'
+import { projectInfoBody, type ProjectInfoValues } from '../utils/projectFields'
 import { formatTime } from '../utils/time'
 
 export default function ProjectListPage() {
@@ -16,7 +18,7 @@ export default function ProjectListPage() {
   const { data: projects = [], loading, error, reload } = useLoader(loader)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [form] = Form.useForm<ProjectCreate>()
+  const [form] = Form.useForm<ProjectCreate & ProjectInfoValues>()
 
   const handleCreate = async () => {
     const values = await form.validateFields()
@@ -27,6 +29,8 @@ export default function ProjectListPage() {
         genre: values.genre?.trim() ?? '',
         premise: values.premise?.trim() ?? '',
         default_style_id: values.default_style_id ?? null,
+        // 「更多信息」未展开时这些字段不在表单里，按空值处理
+        ...projectInfoBody(values),
       })
       message.success('项目已创建，进入创作向导')
       setCreateOpen(false)
@@ -64,9 +68,14 @@ export default function ProjectListPage() {
         <Typography.Title level={3} style={{ margin: 0 }}>
           我的项目
         </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          新建项目
-        </Button>
+        <Space>
+          <Button icon={<BulbOutlined />} onClick={() => navigate('/inspiration')}>
+            灵感模式
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            新建项目
+          </Button>
+        </Space>
       </div>
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Spin spinning={loading}>
@@ -103,6 +112,11 @@ export default function ProjectListPage() {
                 >
                   <div style={{ marginBottom: 8 }}>
                     {p.genre ? <Tag>{p.genre}</Tag> : <Typography.Text type="secondary">未设置题材</Typography.Text>}
+                    {(p.tags ?? []).slice(0, 3).map((t) => (
+                      <Tag key={t} color="blue">
+                        {t}
+                      </Tag>
+                    ))}
                   </div>
                   <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ minHeight: 44 }}>
                     {p.premise || '暂无设定'}
@@ -155,6 +169,20 @@ export default function ProjectListPage() {
           <Form.Item name="default_style_id" label="默认写作风格" extra="可在风格库中新建或从样文提取风格，之后在项目概览里修改">
             <StyleSelect placeholder="不用风格" />
           </Form.Item>
+          <Collapse
+            ghost
+            size="small"
+            items={[
+              {
+                key: 'more',
+                label: '更多信息（简介、主题、类型标签、卖点、读者、目标字数，可稍后在项目概览里填写）',
+                children: <ProjectInfoFields />,
+              },
+            ]}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            只有一个模糊的想法？试试 <Typography.Link onClick={() => navigate('/inspiration')}>灵感模式</Typography.Link>，让 AI 帮你一步步定下书名、简介等立项信息。
+          </Typography.Text>
         </Form>
       </Modal>
     </div>

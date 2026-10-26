@@ -138,12 +138,30 @@ export interface Project {
   default_style: StyleBrief | null
   /** 兼容提示（例如请求里仍传了已废弃的 style 字段） */
   notice?: string | null
+  /** 立项结构化字段（inspiration）：非空时注入所有 AI 调用的【作品信息】；target_words 不进提示词 */
+  synopsis: string
+  theme: string
+  /** 类型标签：≤8 个、每个 ≤10 字（后端 normalize_tags 去空白、去重） */
+  tags: string[]
+  selling_points: string
+  audience: string
+  /** 目标总字数（1000–10,000,000）；null = 未设置 */
+  target_words: number | null
+}
+
+/** 向导参数建议（灵感模式转为项目时写入；向导页优先用它初始化参数） */
+export interface WizardParams {
+  volume_count: number
+  chapters_per_volume: number
+  character_count: number
 }
 
 export interface WizardProgress {
   done: string[]
   skipped: string[]
   current: string | null
+  /** 只由灵感模式「转为项目」写入；PATCH /wizard-progress 不修改它 */
+  params?: WizardParams | null
 }
 
 /** PATCH /projects/{pid}/wizard-progress：给出的字段整体替换，未给的不变；current 显式 null = 清空 */
@@ -159,6 +177,13 @@ export interface ProjectCreate {
   premise?: string
   /** 项目默认写作风格；已废弃的 style 自由文本前端不再发送 */
   default_style_id?: number | null
+  synopsis?: string
+  theme?: string
+  tags?: string[]
+  selling_points?: string
+  audience?: string
+  /** PATCH 时显式 null = 清空 */
+  target_words?: number | null
 }
 
 export interface ProjectUpdate extends Partial<ProjectCreate> {
@@ -1846,4 +1871,130 @@ export interface PromptImportItemResult {
 
 export interface PromptImportResult {
   items: PromptImportItemResult[]
+}
+
+// ---------------- 灵感模式（schemas/inspiration.py） ----------------
+
+/** AI 生成选项的固定步骤（顺序即 stale 传播顺序） */
+export type InspirationStepKey = 'title' | 'synopsis' | 'theme' | 'tags' | 'selling_points' | 'audience'
+/** 会话当前所在步骤：想法 idea 是第 0 步，规模 / 确认不调用 AI */
+export type InspirationCurrent = 'idea' | InspirationStepKey | 'scale' | 'confirm'
+export type InspirationStepStatus = 'pending' | 'decided' | 'skipped'
+/** project = 从项目预填（只由后端写入） */
+export type InspirationStepSource = 'ai' | 'edited' | 'manual' | 'project'
+export type InspirationSessionStatus = 'active' | 'converted'
+
+export interface InspirationRound {
+  options: string[]
+  feedback: string
+  /** ISO 时间（带时区） */
+  created_at: string
+}
+
+export interface InspirationStepState {
+  /** tags 步骤为 string[]，其余为 string；未定 / 跳过为 null */
+  value: string | string[] | null
+  status: InspirationStepStatus
+  /** 前面的步骤被修改后为 true（保留原值，提示「可能需要更新」） */
+  stale: boolean
+  source: InspirationStepSource | null
+  /** 最多保留最近 10 轮 */
+  rounds: InspirationRound[]
+}
+
+export interface InspirationScale {
+  target_words: number | null
+  volume_count: number
+  chapters_per_volume: number
+  character_count: number
+}
+
+export interface InspirationState {
+  idea: string
+  notes: string[]
+  /** 从已有项目发起时项目的题材 */
+  genre: string
+  steps: Record<InspirationStepKey, InspirationStepState>
+  scale: InspirationScale | null
+  current: InspirationCurrent
+}
+
+export interface InspirationSession {
+  id: number
+  title: string
+  status: InspirationSessionStatus
+  project_id: number | null
+  converted_project_id: number | null
+  state: InspirationState
+  created_at: string
+  updated_at: string
+}
+
+export interface InspirationSessionBrief {
+  id: number
+  title: string
+  status: InspirationSessionStatus
+  project_id: number | null
+  converted_project_id: number | null
+  /** 已定或已跳过的步骤数 / 步骤总数（6） */
+  done_steps: number
+  total_steps: number
+  stale_steps: number
+  current: InspirationCurrent
+  created_at: string
+  updated_at: string
+}
+
+/** PATCH /sessions/{id}：给出的字段才修改；修改 idea 时所有已定步骤标为 stale；scale 显式 null = 清空 */
+export interface InspirationSessionUpdate {
+  idea?: string
+  current?: InspirationCurrent
+  scale?: InspirationScale | null
+}
+
+/** decide：定下 value；skip：跳过；keep：保持不变（清除 stale）；clear：回到待定 */
+export interface InspirationStepUpdate {
+  action: 'decide' | 'skip' | 'keep' | 'clear'
+  value?: string | string[] | null
+  source?: 'ai' | 'edited' | 'manual'
+}
+
+export interface InspirationGenerateRequest {
+  /** ≤500 */
+  feedback?: string
+  ai_config_id?: number | null
+}
+
+/** 生成选项 done 载荷 */
+export interface InspirationGenerateDone {
+  round: InspirationRound
+  session: InspirationSession
+}
+
+/** 生成选项 retry 事件：输出不合格，清空已显示原文后重试 */
+export interface InspirationRetryEvent {
+  attempt: number
+  max: number
+  reason: string
+}
+
+export interface InspirationConvertRequest {
+  title_override?: string | null
+  scale?: InspirationScale | null
+}
+
+export type InspirationApplyField = InspirationStepKey | 'premise' | 'target_words'
+
+export interface InspirationApplyPreviewItem {
+  field: InspirationApplyField
+  label: string
+  current: string | string[] | number | null
+  proposed: string | string[] | number | null
+  /** 项目中该字段为空时默认勾选 */
+  default_checked: boolean
+}
+
+export interface InspirationApplyRequest {
+  project_id: number
+  fields: InspirationApplyField[]
 }

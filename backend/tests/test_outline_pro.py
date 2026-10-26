@@ -444,7 +444,7 @@ async def test_move_outline_only_changes_order(client):
 async def test_wizard_progress(client):
     await register(client)
     p = await create_project(client)
-    assert p["wizard_progress"] == {"done": [], "skipped": [], "current": None}
+    assert p["wizard_progress"] == {"done": [], "skipped": [], "current": None, "params": None}
     url = f"/api/v1/projects/{p['id']}/wizard-progress"
     resp = await client.patch(
         url, json={"done": ["world", "careers", "world"], "skipped": ["careers"], "current": "characters"}
@@ -454,10 +454,16 @@ async def test_wizard_progress(client):
         "done": ["world", "careers"],
         "skipped": ["careers"],
         "current": "characters",
+        "params": None,
     }
     # 只改 current，其余保持；显式 null 清空
     resp = await client.patch(url, json={"current": None})
-    assert resp.json()["wizard_progress"] == {"done": ["world", "careers"], "skipped": ["careers"], "current": None}
+    assert resp.json()["wizard_progress"] == {
+        "done": ["world", "careers"],
+        "skipped": ["careers"],
+        "current": None,
+        "params": None,
+    }
     got = (await client.get(f"/api/v1/projects/{p['id']}")).json()
     assert got["wizard_progress"]["done"] == ["world", "careers"]
     listed = (await client.get("/api/v1/projects")).json()

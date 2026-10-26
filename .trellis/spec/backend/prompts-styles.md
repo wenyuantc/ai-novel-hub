@@ -37,7 +37,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 ### 3. 契约
 
-**模板 key（19 个）**
+**模板 key（25 个）**
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
@@ -47,6 +47,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 | 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` | `json_rule`、`output_format` |
 | 大纲 | `outline.continue` / `outline.expand` | `json_rule`、`output_format` |
 | 风格 | `style.block`（风格段，只取 user 段并 strip）、`style.extract`（JSON）、`style.trial` | extract：`json_rule`、`output_format` |
+| 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
 
 - 引擎：`SandboxedEnvironment(undefined=StrictUndefined, trim_blocks, lstrip_blocks, keep_trailing_newline)`；`globals` 清空
   （无 `range` / `lipsum` / `cycler` / `joiner` / `namespace` / `dict`）；过滤器白名单 `join length count trim default d upper lower first last string`。
@@ -89,7 +90,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 ### 6. 必需的测试
 
 - `tests/test_prompt_parity.py`：**每个 key 的每个条件分支**新旧输出 `==`（对照实现 `tests/prompt_legacy.py` 是改造前代码的逐字复制）。
-  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` 没有对照。
+  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` 没有对照。
 - `tests/test_templating.py`：每种校验错误、沙箱逃逸、range 禁用、渲染上限、锁定兜底、全部默认模板合法且能用示例值渲染。
 - `tests/test_prompt_templates.py`：覆盖生效 / 停用 / 启用 / 恢复默认、位置信息、预览、outdated + ack（monkeypatch `registry.TEMPLATES`）、
   版本裁剪与回滚、导入导出、用户隔离。
@@ -122,6 +123,10 @@ def style_log(resolved) -> {id, name, block, source} | None # 生成记录 param
 - **优先级**：请求 `style`（整数）> `chapter.style_id` > `project.default_style_id` > 无；`"none"` 直接不用风格。风格段 = `style.block` 渲染结果，
   作为章节类模板的 `{{ style }}`；默认 `style.block` 在只有 `extra`（且 description 是 extra 的子串）时原样输出 extra，所以迁移来的「原风格」提示词与改造前逐字一致。
 - **向导 / 实体 / 分析 / 大纲**以及章节上下文的【作品信息】：`ProjectInfo.style` = 项目默认风格的 `description`（`project_service.project_info(db, project)`，异步）。
+- **【作品信息】的结构化字段**（`0014`）：`format_project_info` 依次输出 `书名`、`题材`、`一句话设定`、`写作风格`，之后按
+  `类型标签：A、B` → `主题` → `简介` → `核心卖点` → `目标读者` 追加；**每项去空白后非空才输出**，所以字段全空时与改造前逐字一致
+  （parity 测试照常通过，`tests/prompt_legacy.py` 不改）。`target_words` 不进提示词（只用于概览进度与向导参数建议）。
+  新增注入字段时同样「有内容才输出」，并在 `tests/test_inspiration.py::test_format_project_info_each_field` 补一行。
 - **批量**：`BatchGenerateRequest.style` 存在 `input.request`，逐章 `GenerateChapterRequest(style=...)` 解析（inherit 时各章按自己的覆盖），续跑 / 重试沿用；
   `validate_start` / `revalidate` 校验临时指定。
 - **生成记录** `params.style = {id, name, block, source: request|chapter|project} | null`，另有 `params.style_choice`。

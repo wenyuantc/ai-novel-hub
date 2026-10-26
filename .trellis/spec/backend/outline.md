@@ -159,7 +159,9 @@ AC4 生成提示词、排序、向导进度。
   `delete(Outline)` 后插入（章节经外键解除关联）。append：不删旧大纲；提示词附已有大纲末尾 10 条，要求从「最后一卷 + 1」卷、
   `next_chapter_no` 章接着写；写入时卷号按模型输出的不同卷依次接在最后一卷之后、章节号 / sort 接末尾。`done.result` 多 `mode`，
   append 时 `items` 只含新增条目。
-- `projects.wizard_progress` JSON（默认 `{}`），`ProjectOut.wizard_progress = {done: [], skipped: [], current: null}`。
+- `projects.wizard_progress` JSON（默认 `{}`），`ProjectOut.wizard_progress = {done: [], skipped: [], current: null, params: null}`。
+  `params = {volume_count, chapters_per_volume, character_count}`（`WizardParams`，范围同 `WizardRequest`）只由灵感模式「转为项目」写入
+  （见 [inspiration.md](./inspiration.md)），向导页优先用它初始化参数；`PATCH /wizard-progress` 不修改、也不会丢掉它。
   `PATCH /projects/{pid}/wizard-progress {done?, skipped?, current?}`：给出的字段整体替换（去空白、去重，单个 ≤32 字、最多 20 个），
   未给的不变，`current` 显式 null 清空；返回 `ProjectOut`。步骤名由前端定义，后端不校验取值。
 - 测试：`tests/test_wizard.py::test_wizard_outline_append_mode`、`test_wizard_outline_replace_saves_snapshot`、

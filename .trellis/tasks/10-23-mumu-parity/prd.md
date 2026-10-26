@@ -106,7 +106,7 @@
 
 ## 进度
 
-已归档 9/17（2026-10-26）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles。P0 全部完成，P1 进行中。
+已归档 10/17（2026-10-26）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration。P0 全部完成，P1 进行中。
 
 不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 

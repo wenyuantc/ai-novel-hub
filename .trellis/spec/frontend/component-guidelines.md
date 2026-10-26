@@ -266,3 +266,25 @@ dayjs.locale('zh-cn')
 - **接入**：`OverviewPanel` / 新建项目弹窗的「写作风格」文本框改为「默认写作风格」`StyleSelect`（发送 `default_style_id`，显式 null = 取消）+「去风格库管理」链接；PATCH 响应带 `notice` 时 `message.info`。前端**不再读写 `project.style`**。
 - 章节编辑器 AI 助手在「AI 配置」下方新增「本次写作风格」`StyleChoiceSelect`（一个 `styleChoice` 状态，`context = {chapterStyleId: chapter.style_id, projectDefault: project.default_style}`），生成 / 润色 / 局部改写（`RewritePanel.styleChoice`）/ 按建议重写（`AnalysisDrawer.reviseStyle` 渲染在重写表单里，同一状态）请求都带 `style`。
 - `BatchGenerateModal`：`style` 字段（默认 `inherit`，文案「按章节或项目默认（项目默认「X」）」/ 不用风格 / 指定）；不参与预览键。
+
+### 灵感模式与立项结构化字段（`10-23-inspiration`）
+
+后端契约见 [../backend/inspiration.md](../backend/inspiration.md)。入口：项目列表页「新建项目」左侧「灵感模式」按钮（新建项目弹窗底部也有链接）、项目概览「用灵感模式补全」（`POST /inspiration/sessions/from-project/{pid}`，同项目已有进行中的会话时打开它；`api/inspiration.ts` 在点击时 `import()`，不进入口 chunk）。两个页面都是 `router.tsx` 的 `lazyPage` 懒加载路由；`components/inspiration/*` 只被会话页引用。
+
+| 组件 | 契约 |
+|-----------|------------------------|
+| `pages/InspirationListPage` | `/inspiration`。`Table`：标题、状态（`SESSION_STATUS`）、进度（`done_steps/total_steps` + 当前步骤 + `N 步可能需要更新`）、项目链接（转为的项目 / 补全自项目）、更新时间、继续 / 删除（`modal.confirm`）。「新建」弹窗输入想法（≤2000）→ `POST /sessions` → 跳到会话页。 |
+| `pages/InspirationSessionPage` | `/inspiration/:sid`。加载后渲染 `SessionView key={id}`（会话放组件 state，所有子组件用响应里的最新会话 `onSession` 覆盖）。**当前步骤以本地 state 为准**，切换时 fire-and-forget `PATCH {current}`（避免其他请求的响应把它改回旧值）。左侧 `Steps`（`INSPIRATION_FLOW` 9 步，`stepDisplayStatus` → `STEP_DISPLAY` 标签：已定 / 已跳过 / 可能需要更新 / 待定）、中间当前步骤、右侧 `DraftSidebar`。生成中禁止切换步骤（`onRunningChange`）。 |
+| `inspiration/OptionStep` | 6 个 AI 步骤共用，`key={step}`（切换即卸载，`useStreamTask` 卸载时中止，后端不保存半截选项）。`generateOptions`（`runGeneration`，同步 SSE）：生成中 `StreamOutput` 显示原文，`retry` 事件 → `stream.reset()` + `输出格式不对，正在重试（第 n 次）`；done 用 `session` 覆盖本地并清空原文。按钮：`shouldSuggestGenerate`（待定且没生成过）时为主按钮「让 AI 给出选项」，否则「换一批」/「生成选项」——**补全场景已定的步骤不主动建议生成**，但手动换一批始终可用（后端不拦截）。意见输入（≤500，有轮次或已定时显示）。最新一轮为选项卡片（`OptionCard`：选这个 / 编辑后选，编辑后与原文不同时 `source=edited`），历史轮次 `Collapse`。类型标签：`CheckableTag` 多选 + `Select mode=tags`（自定义，`normalizeTags` / `tagsError`），`tagsSource` 推导来源。「自己填」（`source=manual`，长度 `STEP_VALUE_LIMITS`）、「跳过这一步」、已定时「改回待定」（clear）、stale 时 `staleText` +「保持不变」（keep）。decide / skip / keep 后 `nextFlowStep`（之后第一个待定或可能需要更新的步骤，都处理过进入规模）。 |
+| `inspiration/IdeaStep` | 想法（≤2000）；修改且已有已定步骤时 `modal.confirm`「已定的 N 个步骤会标为可能需要更新」→ `PATCH {idea}`。 |
+| `inspiration/ScaleFields` | 规模一步与确认一步共用的 Form 字段：目标总字数变化（400ms 防抖，挂载时的初始值不触发）→ `GET /scale-suggest` 覆盖卷数 / 每卷章数 / 角色数（失败退回本地 `suggestScale`）；`extra` 即时显示本地建议。范围同 `WizardRequest`（1–20 / 1–100 / 3–30）。初始值 `initialScaleValues(state.scale)`（没有时按 30 万字建议）。 |
+| `inspiration/ScaleStep` | `PATCH {scale: toScale(values)}` → 确认。 |
+| `inspiration/ConfirmStep` | 汇总（`draftSummary`，stale 带标签 + 顶部 `staleSummary` 警告，不阻止确认）；没定书名时显示书名输入（`title_override`）；向导参数 `ScaleFields`。「创建项目并进入向导」→ `POST /convert {title_override, scale}` → `navigate(/projects/{id}/wizard)`（已转换且项目仍在时后端 409，页面显示「已转为项目」提示与链接）。「应用到已有项目」先把确认页规模 `PATCH` 回会话（对比里的目标总字数取自会话）再打开 `ApplyToProjectModal`。 |
+| `inspiration/ApplyToProjectModal` | 仅 `open` 时挂载。选项目（默认会话来源项目 / 已转为的项目）→ `GET /apply-preview` → 表格：勾选、字段（值相同标「相同」并禁用勾选）、项目当前（`applyValueText`，空显示「（空）」）、灵感会话；默认勾选 `defaultApplyFields`（后端 `default_checked`，即项目该字段为空）→ `POST /apply {project_id, fields}`。 |
+| `inspiration/DraftSidebar` | 立项草稿（题材、6 个步骤的状态与值，点击标题跳到对应步骤，规模 `scaleText`）+ 补充想法列表 / 删除 / 添加（≤200、最多 20 条，不触发 stale）。 |
+| `ProjectInfoFields` | 6 个结构化字段的 Form.Item 组（项目概览「基本信息」与新建项目弹窗「更多信息」`Collapse` 共用）：类型标签 `Select mode=tags`（`open={false}`、`,，、` 分隔，`normalize` = `normalizeTags`，validator = `tagsError`）、主题 ≤200、简介 ≤2000、核心卖点 ≤500、目标读者 ≤100、目标总字数 `InputNumber` 1000–10,000,000。提交统一经 `projectInfoBody`（trim、标签规范化、目标字数缺省发 `null` = 清空）。新建弹窗里「更多信息」未展开时字段未挂载，按空值发送。 |
+
+- 项目概览「总字数」卡片：有 `target_words` 时后缀 `/ 30 万字`（`formatWordCount`）+ `Progress`（`wordsProgress`，取整、≤100），否则提示「设置目标总字数后显示写作进度」。项目列表卡片在题材后显示前 3 个类型标签。
+- `WizardGenerator`：表单初始值优先取 `project.wizard_progress.params`（store 中的当前项目，`useState` 初始化一次），没有时仍为 2 卷 × 10 章、5 个角色。
+- 纯函数在 `utils/inspiration.ts`（步骤顺序 / 标签、状态推导、stale 文案、`nextFlowStep`、`suggestScale`（`roundHalfEven` 对齐 Python `round`）、应用对比默认勾选与值展示）与 `utils/projectFields.ts`（入口可用：标签规范化、进度、请求体），测试 `utils/inspiration.test.ts`（规模建议与后端 `test_suggest_scale_boundaries` 同一组用例）、`utils/projectFields.test.ts`、`api/inspiration.test.ts`（路径、retry → done 事件顺序、error → `StreamError`）。
+- 包体积（本任务后）：入口 ≈ 143 kB（+≈4 kB：`ProjectInfoFields` 与 `utils/projectFields.ts`）；`InspirationSessionPage-*.js` ≈ 23 kB、`InspirationListPage-*.js` ≈ 4 kB、`inspiration-*.js`（`utils/inspiration.ts`，两页共享）≈ 4 kB、`api/inspiration.ts` ≈ 1.5 kB 按需加载。**规则**：入口 chunk 中的模块不得静态 import `api/inspiration.ts`、`utils/inspiration.ts` 或 `components/inspiration/*`。

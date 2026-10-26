@@ -810,3 +810,78 @@ def test_0013_prompt_styles(tmp_path):
         assert styles == [long_style, "", "凌厉"]
     finally:
         engine.dispose()
+
+
+def test_0014_inspiration(tmp_path):
+    """0014：projects 新增 6 列（存量项目取默认值）、新建 inspiration_sessions（外键规则）；
+    downgrade -1 删除新表新列且存量项目保留。"""
+    db_file = tmp_path / "migrate0014.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0013")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, '星海', '科幻', '设定', '', 'planning')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0014")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        cols = {c["name"] for c in insp.get_columns("projects")}
+        assert {"synopsis", "theme", "tags", "selling_points", "audience", "target_words"} <= cols
+        assert "inspiration_sessions" in insp.get_table_names()
+        fks = {fk["constrained_columns"][0]: fk for fk in insp.get_foreign_keys("inspiration_sessions")}
+        assert fks["user_id"]["options"].get("ondelete") == "CASCADE"
+        assert fks["project_id"]["options"].get("ondelete") == "SET NULL"
+        assert fks["converted_project_id"]["options"].get("ondelete") == "SET NULL"
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            row = conn.execute(
+                text("SELECT synopsis, theme, tags, selling_points, audience, target_words FROM projects")
+            ).one()
+            assert tuple(row) == ("", "", "[]", "", "", None)
+            conn.execute(
+                text(
+                    "INSERT INTO inspiration_sessions (user_id, project_id, converted_project_id, title) "
+                    "VALUES (1, 1, 1, '会话')"
+                )
+            )
+            status, state = conn.execute(text("SELECT status, state FROM inspiration_sessions")).one()
+            assert (status, state) == ("active", "{}")
+            # 删除项目：会话保留，两个项目引用置空
+            conn.execute(text("DELETE FROM projects"))
+            assert tuple(
+                conn.execute(text("SELECT project_id, converted_project_id FROM inspiration_sessions")).one()
+            ) == (None, None)
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, '留存', '', '', '', 'planning')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert "inspiration_sessions" not in insp.get_table_names()
+        cols = {c["name"] for c in insp.get_columns("projects")}
+        assert not ({"synopsis", "theme", "tags", "selling_points", "audience", "target_words"} & cols)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "留存"
+    finally:
+        engine.dispose()

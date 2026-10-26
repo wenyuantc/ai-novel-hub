@@ -150,3 +150,5 @@ STYLE_EXTRACT_FORMAT = (
     '  "extra": "其他值得模仿的特征"\n'
     "}"
 )
+
+INSPIRATION_FORMAT = '{\n  "options": ["选项1", "选项2", "选项3", "选项4"]\n}'

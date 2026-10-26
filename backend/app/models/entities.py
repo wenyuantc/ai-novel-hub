@@ -169,6 +169,13 @@ class Project(TimestampMixin, Base):
     auto_analyze: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
     # 向导进度 {done: [步骤], skipped: [步骤], current: 步骤 | null}；重新进入向导时从中断处继续
     wizard_progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    # 立项结构化字段（迁移 0014）：前五项非空时注入【作品信息】；target_words 只用于进度与向导参数建议
+    synopsis: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    theme: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    selling_points: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    audience: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
+    target_words: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class WorldSetting(TimestampMixin, Base):
@@ -756,4 +763,28 @@ def _seed_preset_styles(target, connection, **_kw) -> None:
     connection.execute(
         target.insert(),
         [{**p, "user_id": None, "sort": i} for i, p in enumerate(PRESET_STYLES, start=1)],
+    )
+
+
+INSPIRATION_STATUSES = ("active", "converted")
+
+
+class InspirationSession(TimestampMixin, Base):
+    """灵感会话：固定步骤的立项流程，整体状态存在 state（JSON，结构由 schemas.inspiration.SessionState 校验）。
+
+    project_id：从已有项目发起时的项目；converted_project_id：转为新项目后的项目。两者都 SET NULL。
+    """
+
+    __tablename__ = "inspiration_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", nullable=False)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    converted_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True
     )

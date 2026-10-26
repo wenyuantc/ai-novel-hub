@@ -78,6 +78,8 @@ async def test_cross_user_isolation(client, make_client):
     plan = (await client.put(f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"title": "细纲"}]})).json()[0]
     snap = (await client.post(f"{base}/outline-snapshots", json={})).json()
     style = (await client.post("/api/v1/styles", json={"name": "我的风格"})).json()
+    insp = (await client.post("/api/v1/inspiration/sessions", json={"idea": "想法"})).json()
+    insp_url = f"/api/v1/inspiration/sessions/{insp['id']}"
 
     bob = make_client()
     await register(bob, "bob")
@@ -197,6 +199,16 @@ async def test_cross_user_isolation(client, make_client):
         ("PATCH", f"/api/v1/styles/{style['id']}"),
         ("DELETE", f"/api/v1/styles/{style['id']}"),
         ("POST", f"/api/v1/styles/{style['id']}/copy"),
+        ("POST", f"/api/v1/inspiration/sessions/from-project/{p['id']}"),
+        ("GET", insp_url),
+        ("PATCH", insp_url),
+        ("DELETE", insp_url),
+        ("PATCH", f"{insp_url}/steps/title"),
+        ("POST", f"{insp_url}/notes"),
+        ("POST", f"{insp_url}/steps/title/generate"),
+        ("POST", f"{insp_url}/convert"),
+        ("GET", f"{insp_url}/apply-preview?project_id={p['id']}"),
+        ("POST", f"{insp_url}/apply"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
@@ -225,6 +237,9 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/outlines/append": {"items": [{"title": "x"}]},
         f"{base}/outlines/{outline['id']}/move": {"direction": "up"},
         f"{base}/outlines/{outline['id']}/plans": {"plans": []},
+        f"{insp_url}/steps/title": {"action": "skip"},
+        f"{insp_url}/notes": {"text": "x"},
+        f"{insp_url}/apply": {"project_id": p["id"], "fields": []},
     }
     for method, url in checks:
         body = None
