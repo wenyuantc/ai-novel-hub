@@ -1,4 +1,4 @@
-"""角色 / 组织卡片导入导出（R8，格式 ainovel.cards v1）。
+"""角色 / 组织卡片导入导出（R8，格式 ainovel.cards v2，兼容导入 v1）。
 
 - 卡片按名称关联，不含任何内部 ID；导入时不信任卡片里的任何 ID。
 - 导出：勾选的角色和组织 + 两端都在导出集合内的关系 + 成员角色在集合内的成员关系；
@@ -9,6 +9,10 @@
   关系类型按 (role_a, role_b) 匹配预置 / 本项目自定义类型（反向匹配时互换两端），匹配不上新建自定义类型；
   关系一律经 relationship_service.apply_change(source="import") 写入；同一对角色已有关系时跳过并记入 warnings。
   整个导入在一个事务内完成。
+- v2 职业（R9）：导出时角色带 careers: [{career_name, role, stage_name, note}]，顶层 careers 为所涉职业的完整定义
+  （含阶梯）。导入时职业按名称匹配目标项目：匹配上复用（卡片中多出的阶段追加到阶梯末尾），匹配不上新建；
+  挂接的阶段按名称匹配，匹配不上追加到末尾；挂接经 career_service.assign_new / apply_assignment(source="import")
+  写入，职业对不上、类别不符、超出上限或已挂的跳过并记入 warnings。v1 卡片没有职业，按原逻辑导入。
 """
 
 import json
@@ -19,24 +23,30 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import BadRequestError
-from app.models import Character, Organization, OrganizationMember, Relationship, RelationshipType
-from app.models.entities import LIFE_STATUSES, MEMBER_STATUSES, RELATION_STATUSES
+from app.core.errors import AppError, BadRequestError
+from app.models import Career, Character, Organization, OrganizationMember, Relationship, RelationshipType
+from app.models.entities import CAREER_KINDS, LIFE_STATUSES, MEMBER_STATUSES, RELATION_STATUSES
 from app.schemas.card import (
     CARD_FORMAT,
     CARD_VERSION,
     MAX_CARD_BYTES,
+    SUPPORTED_CARD_VERSIONS,
+    CardCareer,
+    CardCharacter,
     CardExportRequest,
     CardFile,
     CardImportRequest,
     CardImportResult,
     CardPreview,
+    ImportedCareer,
     ImportedItem,
+    PreviewCareer,
     PreviewItem,
     PreviewRelationship,
 )
+from app.schemas.career import CareerCreate, StageIn
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
-from app.services import relationship_service, story_service
+from app.services import career_service, relationship_service, story_service
 from app.services.cast_service import is_protagonist_role
 from app.services.organization_service import MAX_DEPTH
 from app.services.project_service import get_owned_project
@@ -109,6 +119,15 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
                     "description": r.description,
                 }
             )
+    # 职业挂接与所涉职业定义
+    assignments = await career_service.assignments_of(db, list(char_names))
+    used: dict[int, Career] = {}
+    char_careers: dict[int, list[tuple[Any, Career]]] = {}
+    for a, career in assignments:
+        used.setdefault(career.id, career)
+        char_careers.setdefault(a.character_id, []).append((a, career))
+    stages = await career_service.stages_of(db, list(used))
+    stage_names = {s.id: s.name for ss in stages.values() for s in ss}
     return {
         "format": CARD_FORMAT,
         "version": CARD_VERSION,
@@ -126,6 +145,15 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
                 "profile": c.profile,
                 "current_state": c.current_state,
                 "life_status": c.life_status,
+                "careers": [
+                    {
+                        "career_name": career.name,
+                        "role": a.role,
+                        "stage_name": stage_names.get(a.stage_id, ""),
+                        "note": a.note,
+                    }
+                    for a, career in char_careers.get(c.id, [])
+                ],
             }
             for c in chars
         ],
@@ -143,6 +171,18 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             for o in orgs
         ],
         "relationships": rels,
+        "careers": [
+            {
+                "name": career.name,
+                "kind": career.kind,
+                "description": career.description,
+                "requirements": career.requirements,
+                "abilities": career.abilities,
+                "rules": career.rules,
+                "stages": [{"name": st.name, "description": st.description} for st in stages[career.id]],
+            }
+            for career in sorted(used.values(), key=lambda x: (x.sort, x.id))
+        ],
     }
 
 
@@ -162,8 +202,10 @@ def parse_card(data: Any) -> CardFile:
         raise BadRequestError("卡片文件格式不正确：应为 JSON 对象")
     if data.get("format") != CARD_FORMAT:
         raise BadRequestError("不是有效的卡片文件（format 应为 ainovel.cards）")
-    if data.get("version") != CARD_VERSION:
-        raise BadRequestError(f"不支持的卡片版本：{data.get('version')}（当前支持 {CARD_VERSION}）")
+    version = data.get("version")
+    if isinstance(version, bool) or version not in SUPPORTED_CARD_VERSIONS:
+        supported = "、".join(str(v) for v in SUPPORTED_CARD_VERSIONS)
+        raise BadRequestError(f"不支持的卡片版本：{version}（当前支持 {supported}）")
     try:
         card = CardFile.model_validate(data)
     except ValidationError as exc:
@@ -256,12 +298,43 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
                 warnings.append(f"组织「{o.name}」的成员「{m.character_name}」无法关联，将被忽略")
         if o.parent_name and o.parent_name.strip() not in known_orgs:
             warnings.append(f"组织「{o.name}」的上级组织「{o.parent_name}」无法关联，将作为顶级组织导入")
+    careers = _dedupe_names(card.careers, "职业", warnings)
+    target = await _target_careers(db, project_id)
+    preview_careers = []
+    for cc in careers:
+        if cc.name in target:
+            have = {s.name for s in target[cc.name][1]}
+            added = [n for n in _stage_names(cc) if n not in have]
+            preview_careers.append(PreviewCareer(name=cc.name, status="reuse", stages_added=added))
+        else:
+            preview_careers.append(PreviewCareer(name=cc.name, status="new"))
+    known_careers = set(target) | {cc.name for cc in careers}
+    for c in chars:
+        for a in c.careers:
+            if a.career_name.strip() not in known_careers:
+                warnings.append(f"角色「{c.name}」的职业「{a.career_name}」无法关联，将被忽略")
     return CardPreview(
         characters=_preview_items([c.name for c in chars], existing_chars),
         organizations=_preview_items([o.name for o in orgs], existing_orgs),
         relationships=rels,
+        careers=preview_careers,
         warnings=warnings,
     )
+
+
+async def _target_careers(db: AsyncSession, project_id: int) -> dict[str, tuple[Career, list[Any]]]:
+    careers = await career_service.list_project_careers(db, project_id)
+    stages = await career_service.stages_of(db, [c.id for c in careers])
+    return {c.name: (c, stages[c.id]) for c in careers}
+
+
+def _stage_names(cc: CardCareer) -> list[str]:
+    out: list[str] = []
+    for st in cc.stages:
+        n = st.name.strip()[:50]
+        if n and n not in out:
+            out.append(n)
+    return out
 
 
 # ---------------- 导入 ----------------
@@ -427,6 +500,10 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             members_created += 1
             await db.flush()
 
+    # ---- 职业 ----
+    career_results, career_map = await _import_careers(db, project_id, card.careers, warnings)
+    careers_assigned = await _import_assignments(db, project_id, chars, char_map, career_map, career_results, warnings)
+
     # ---- 人物关系 ----
     rels_created = 0
     for r in card.relationships:
@@ -463,7 +540,100 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     return CardImportResult(
         characters=char_results,
         organizations=org_results,
+        careers=list(career_results.values()),
         relationships_created=rels_created,
         members_created=members_created,
+        careers_assigned=careers_assigned,
         warnings=warnings,
     )
+
+
+async def _import_careers(
+    db: AsyncSession, project_id: int, card_careers: list[CardCareer], warnings: list[str]
+) -> tuple[dict[str, ImportedCareer], dict[str, Career]]:
+    """职业按名称复用（补齐阶段到末尾）或新建；返回 (卡片职业名 → 结果, 名称 → 目标职业)。"""
+    target = await _target_careers(db, project_id)
+    career_map = {name: c for name, (c, _) in target.items()}
+    results: dict[str, ImportedCareer] = {}
+    for cc in _dedupe_names(card_careers, "职业", warnings):
+        names = _stage_names(cc)
+        if cc.name in target:
+            career, ladder = target[cc.name]
+            have = {s.name for s in ladder}
+            added = 0
+            for st in cc.stages:
+                n = st.name.strip()[:50]
+                if n and n not in have:
+                    await career_service.append_stage(db, career, n, st.description)
+                    have.add(n)
+                    added += 1
+            results[cc.name] = ImportedCareer(name=cc.name, id=career.id, action="reused", stages_added=added)
+            continue
+        if not names:
+            warnings.append(f"职业「{cc.name}」没有有效的阶段，已忽略")
+            continue
+        descs: dict[str, str] = {}
+        for st in cc.stages:
+            descs.setdefault(st.name.strip()[:50], st.description)
+        career = await career_service.new_career(
+            db,
+            project_id,
+            CareerCreate(
+                name=cc.name,
+                kind=cc.kind if cc.kind in CAREER_KINDS else "main",  # type: ignore[arg-type]
+                description=cc.description,
+                requirements=cc.requirements,
+                abilities=cc.abilities,
+                rules=cc.rules,
+                stages=[StageIn(name=n, description=descs.get(n, "")) for n in names],
+            ),
+        )
+        career_map[cc.name] = career
+        results[cc.name] = ImportedCareer(name=cc.name, id=career.id, action="created")
+    return results, career_map
+
+
+async def _import_assignments(
+    db: AsyncSession,
+    project_id: int,
+    chars: list[CardCharacter],
+    char_map: dict[str, int],
+    career_map: dict[str, Career],
+    career_results: dict[str, ImportedCareer],
+    warnings: list[str],
+) -> int:
+    """角色的职业挂接：阶段按名称匹配（对不上追加到末尾），经 assign_new(source="import") 写入。"""
+    assigned = 0
+    for c in chars:
+        if not c.careers or c.name not in char_map:
+            continue
+        character = await db.scalar(
+            select(Character).where(Character.id == char_map[c.name], Character.project_id == project_id)
+        )
+        if character is None:
+            continue
+        for a in c.careers:
+            cname = a.career_name.strip()
+            label = f"角色「{c.name}」的职业「{cname}」"
+            career = career_map.get(cname)
+            if career is None:
+                warnings.append(f"{label}无法关联，已忽略")
+                continue
+            ladder = (await career_service.stages_of(db, [career.id]))[career.id]
+            sname = a.stage_name.strip()[:50]
+            stage = next((s for s in ladder if s.name == sname), None) if sname else (ladder[0] if ladder else None)
+            if stage is None and sname:
+                stage = await career_service.append_stage(db, career, sname)
+                if cname in career_results:
+                    career_results[cname].stages_added += 1
+            if stage is None:
+                continue
+            role = a.role if a.role in CAREER_KINDS else None
+            try:
+                await career_service.assign_new(
+                    db, character, career, stage_id=stage.id, note=a.note, role=role, source="import"
+                )
+                assigned += 1
+            except AppError as exc:
+                warnings.append(f"{label}未能挂接：{exc.detail}，已跳过")
+    return assigned

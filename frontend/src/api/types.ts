@@ -282,7 +282,7 @@ export interface PolishChapterRequest {
   instruction?: string
 }
 
-export type WizardKind = 'outline' | 'characters' | 'world'
+export type WizardKind = 'outline' | 'characters' | 'world' | 'careers'
 
 export interface WizardRequest {
   ai_config_id?: number | null
@@ -290,12 +290,15 @@ export interface WizardRequest {
   volume_count?: number
   chapters_per_volume?: number
   character_count?: number
+  /** 仅 careers：1–12，默认 4 */
+  career_count?: number
 }
 
 export interface WizardItemMap {
   outline: Outline
   characters: Character
   world: WorldSetting
+  careers: Career
 }
 
 export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore'
@@ -398,6 +401,8 @@ export type TaskKind =
   | 'character.generate'
   | 'organization.generate'
   | 'relations.parse'
+  | 'career.generate'
+  | 'wizard.careers'
 
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
@@ -619,11 +624,14 @@ export interface RelationDraft extends TypeRef {
 export interface CharacterWithRelations {
   character: CharacterInput
   relations: RelationDraft[]
+  /** 勾选的职业挂接（最多 4 个：主 1 副 3），后端以 source=ai 写入 */
+  careers?: CareerAssignDraft[]
 }
 
 export interface CharacterWithRelationsOut {
   character: Character
   relationships: Relationship[]
+  careers: Assignment[]
 }
 
 export interface GraphNode {
@@ -691,10 +699,19 @@ export interface CardPreviewRelationship {
   status: 'ok' | 'unresolved'
 }
 
+/** v2：职业按名匹配目标项目；reuse 时 stages_added 为将追加到阶梯末尾的阶段名 */
+export interface CardPreviewCareer {
+  name: string
+  status: 'new' | 'reuse'
+  stages_added: string[]
+}
+
 export interface CardPreview {
   characters: CardPreviewItem[]
   organizations: CardPreviewItem[]
   relationships: CardPreviewRelationship[]
+  /** v1 卡片为空数组 */
+  careers: CardPreviewCareer[]
   warnings: string[]
 }
 
@@ -705,11 +722,21 @@ export interface CardImportedItem {
   action: 'created' | 'renamed' | 'skipped'
 }
 
+export interface CardImportedCareer {
+  name: string
+  id: number
+  action: 'created' | 'reused'
+  /** 追加到阶梯末尾的阶段数 */
+  stages_added: number
+}
+
 export interface CardImportResult {
   characters: CardImportedItem[]
   organizations: CardImportedItem[]
+  careers: CardImportedCareer[]
   relationships_created: number
   members_created: number
+  careers_assigned: number
   warnings: string[]
 }
 
@@ -761,9 +788,25 @@ export interface CharacterDraft {
   always_in_context: boolean
 }
 
+/** 职业挂接建议：resolved=false（职业对不上 / 超出主 1 副 3 / 没有阶段）不可勾选，reason 说明原因 */
+export interface CareerSuggestion {
+  career_name: string
+  career_id: number | null
+  career_kind: CareerKind | null
+  role: CareerKind | null
+  stage_name: string
+  stage_id: number | null
+  stage_position: number | null
+  note: string
+  resolved: boolean
+  reason: string
+}
+
 export interface CharacterGenerateResult {
   draft: CharacterDraft
   relation_suggestions: RelationSuggestion[]
+  /** 项目没有职业时为空数组 */
+  career_suggestions: CareerSuggestion[]
   warnings: string[]
 }
 
@@ -796,5 +839,154 @@ export interface RelationsParseResult {
   character_id: number
   character_name: string
   suggestions: RelationSuggestion[]
+  warnings: string[]
+}
+
+// ---------------- 职业等级体系（backend/app/schemas/career.py） ----------------
+
+/** main = 主修（只能挂成主职业），sub = 副修（只能挂成副职业） */
+export type CareerKind = 'main' | 'sub'
+
+export interface CareerStage {
+  id: number
+  /** 从 1 连续 */
+  position: number
+  name: string
+  description: string
+}
+
+/** 整体提交阶段：带 id = 更新，无 id = 新建，缺失 = 删除；数组顺序即新的 position */
+export interface StageInput {
+  id?: number | null
+  name: string
+  description?: string
+}
+
+export interface Career {
+  id: number
+  project_id: number
+  name: string
+  /** 后端为 str；正常取值为 CareerKind */
+  kind: string
+  description: string
+  requirements: string
+  abilities: string
+  rules: string
+  sort: number
+  stages: CareerStage[]
+  holder_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CareerInput {
+  name: string
+  kind?: CareerKind
+  description?: string
+  requirements?: string
+  abilities?: string
+  rules?: string
+  /** 至少 1 阶 */
+  stages: StageInput[]
+  sort?: number | null
+}
+
+/** PATCH：省略 = 不变；stages 给出时整体同步 */
+export type CareerUpdate = Partial<CareerInput>
+
+export interface CareerHolder {
+  id: number
+  character_id: number
+  character_name: string
+  role: string
+  stage_id: number
+  stage_name: string
+  stage_position: number
+  stage_total: number
+  note: string
+}
+
+/** 角色的职业挂接（主职业在前） */
+export interface Assignment {
+  id: number
+  character_id: number
+  career_id: number
+  career_name: string
+  career_kind: string
+  role: string
+  stage_id: number
+  stage_name: string
+  stage_position: number
+  stage_total: number
+  note: string
+  updated_at: string
+}
+
+export interface AssignmentInput {
+  career_id: number
+  /** 省略 = 第 1 阶 */
+  stage_id?: number | null
+  note?: string
+  /** 给出时必须等于职业类别 */
+  role?: CareerKind | null
+  chapter_no?: number | null
+  history_note?: string
+}
+
+/** 省略 = 不变；chapter_no / history_note 只记入历史 */
+export interface AssignmentUpdate {
+  stage_id?: number | null
+  note?: string | null
+  chapter_no?: number | null
+  history_note?: string
+}
+
+export interface CareerHistory {
+  id: number
+  character_id: number
+  career_id: number | null
+  career_name: string
+  source: string
+  chapter_no: number | null
+  /** {role|stage|note|removed: [旧, 新]}；阶段以「第N阶·名称」记录 */
+  changes: Record<string, unknown>
+  note: string
+  created_at: string
+}
+
+export interface CareerAssignDraft {
+  career_id: number
+  stage_id?: number | null
+  note?: string
+}
+
+export interface CareerGenerateRequest {
+  ai_config_id?: number | null
+  /** 1–5，默认 3 */
+  count?: number
+  /** 省略 = 由模型决定 */
+  kind?: CareerKind | null
+  instruction?: string
+}
+
+export interface CareerDraftStage {
+  name: string
+  description: string
+}
+
+export interface CareerDraft {
+  name: string
+  kind: CareerKind
+  description: string
+  requirements: string
+  abilities: string
+  rules: string
+  stages: CareerDraftStage[]
+  /** 与已有职业同名：需改名后才能保存 */
+  conflict: boolean
+}
+
+export interface CareerGenerateResult {
+  drafts: CareerDraft[]
   warnings: string[]
 }

@@ -1,4 +1,4 @@
-// 角色 / 组织卡片导入导出（ainovel.cards v1，JSON body）
+// 角色 / 组织卡片导入导出（ainovel.cards v2 导出，导入兼容 v1；JSON body）
 
 import { api } from './client'
 import type { CardExportRequest, CardImportResult, CardPreview, CardResolution, CardResolutions } from './types'

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  careerSuggestionLimitError,
+  careerSuggestionsToDrafts,
   parseCharacterGenerateResult,
   parseOrganizationGenerateResult,
   parseRelationsParseResult,
   suggestionsToBatch,
   suggestionsToDrafts,
   toEditable,
+  toEditableCareers,
 } from './entityTasks'
 import type { RelationSuggestion } from './types'
 
@@ -86,5 +89,55 @@ describe('建议 → 保存载荷', () => {
     expect(suggestionsToDrafts([{ ...s, checked: false }])).toEqual([])
     expect(suggestionsToDrafts([{ ...s, edit_self_role: ' ' }])).toEqual([])
     expect(suggestionsToDrafts([s])[0]).toMatchObject({ subject_is_a: true, role_a: '徒弟', role_b: '师父', category: 'other' })
+  })
+})
+
+describe('职业建议', () => {
+  const career = (over: Record<string, unknown> = {}) => ({
+    career_name: '剑修',
+    career_id: 1,
+    career_kind: 'main',
+    role: 'main',
+    stage_name: '筑基',
+    stage_id: 12,
+    stage_position: 2,
+    note: '瓶颈期',
+    resolved: true,
+    reason: '',
+    ...over,
+  })
+
+  it('收窄：缺 career_id / stage_id 视为未解析；旧结果没有 career_suggestions 为空数组', () => {
+    const r = parseCharacterGenerateResult({
+      draft: { name: '林远' },
+      career_suggestions: [career(), career({ career_id: null, career_kind: null, role: null, reason: '未找到' }), 'bad'],
+    })
+    expect(r?.career_suggestions).toHaveLength(2)
+    expect(r?.career_suggestions[0]).toMatchObject({ career_id: 1, role: 'main', stage_id: 12, resolved: true })
+    expect(r?.career_suggestions[1]).toMatchObject({ resolved: false, role: null, reason: '未找到' })
+    expect(parseCharacterGenerateResult({ draft: { name: '林远' } })?.career_suggestions).toEqual([])
+  })
+
+  it('勾选的建议 → with-relations careers；超出主 1 副 3 给出提示', () => {
+    const parsed = parseCharacterGenerateResult({
+      draft: { name: '林远' },
+      career_suggestions: [
+        career(),
+        career({ career_name: '丹师', career_id: 2, career_kind: 'sub', role: 'sub', stage_id: 21, note: '' }),
+        career({ career_name: '无名', career_id: null, resolved: false }),
+      ],
+    })!
+    const list = toEditableCareers(parsed.career_suggestions)
+    expect(list[2].checked).toBe(false)
+    expect(careerSuggestionsToDrafts(list)).toEqual([
+      { career_id: 1, stage_id: 12, note: '瓶颈期' },
+      { career_id: 2, stage_id: 21, note: '' },
+    ])
+    expect(careerSuggestionsToDrafts(list.map((c, i) => (i === 1 ? { ...c, checked: false } : c)))).toHaveLength(1)
+    expect(careerSuggestionLimitError(list)).toBeNull()
+    const twoMain = [...list, { ...list[0], key: 'x', career_id: 3 }]
+    expect(careerSuggestionLimitError(twoMain)).toBe('该角色已有主职业')
+    const subs = [1, 2, 3, 4].map((i) => ({ ...list[1], key: `s${i}`, career_id: 10 + i }))
+    expect(careerSuggestionLimitError(subs)).toBe('副职业最多 3 个')
   })
 })

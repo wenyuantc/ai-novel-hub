@@ -7,6 +7,7 @@ import {
   OrderedListOutlined,
   RocketOutlined,
   TeamOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons'
 import { Alert, Breadcrumb, Layout, Menu, Result, Spin, Tag } from 'antd'
 import { useEffect } from 'react'
@@ -24,6 +25,7 @@ const NAV = [
   { key: 'characters', icon: <TeamOutlined />, label: '角色' },
   { key: 'organizations', icon: <ClusterOutlined />, label: '组织' },
   { key: 'relationships', icon: <ApartmentOutlined />, label: '关系' },
+  { key: 'careers', icon: <TrophyOutlined />, label: '职业' },
   { key: 'outlines', icon: <OrderedListOutlined />, label: '大纲' },
   { key: 'chapters', icon: <BookOutlined />, label: '章节' },
 ]

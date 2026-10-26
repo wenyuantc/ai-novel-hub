@@ -45,6 +45,8 @@ TASK_KINDS = (
     "character.generate",
     "organization.generate",
     "relations.parse",
+    "career.generate",
+    "wizard.careers",
 )
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running")
@@ -57,6 +59,10 @@ RELATION_CATEGORIES = ("family", "social", "hostile", "work", "other")
 RELATION_STATUSES = ("normal", "broken", "past", "complicated")
 # 关系历史来源：手动 / 角色向导 / AI 解析旧备注 / 卡片导入 / 章节分析（analysis-memory）
 RELATION_SOURCES = ("manual", "wizard", "ai_parse", "import", "analysis")
+# 职业：主修（只能挂为主职业）/ 副修（只能挂为副职业）
+CAREER_KINDS = ("main", "sub")
+# 职业挂接历史来源：手动 / 向导 / AI 生成角色 / 卡片导入 / 章节分析（analysis-memory）
+CAREER_SOURCES = ("manual", "wizard", "ai", "import", "analysis")
 # 全局预置关系类型 (category, role_a, role_b)：「a 是 b 的 role_a，b 是 a 的 role_b」。
 # 迁移 0007 内有同样的一份（迁移脚本冻结，不引用应用代码）；create_all 时由 after_create 事件写入
 PRESET_RELATIONSHIP_TYPES = (
@@ -283,6 +289,84 @@ class ChapterCharacter(TimestampMixin, Base):
     character_id: Mapped[int] = mapped_column(
         ForeignKey("characters.id", ondelete="CASCADE"), primary_key=True, index=True
     )
+
+
+class Career(TimestampMixin, Base):
+    """职业定义。kind 决定只能挂为主职业（main）还是副职业（sub）。"""
+
+    __tablename__ = "careers"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # main / sub
+    kind: Mapped[str] = mapped_column(String(8), default="main", server_default="main", nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 获得条件
+    requirements: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 特殊能力
+    abilities: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 体系规则
+    rules: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class CareerStage(TimestampMixin, Base):
+    """职业阶段（有序阶梯）。position 由 career_service 维护为从 1 开始连续；不建唯一约束，便于整体重排。
+
+    id 稳定：重排只改 position，挂接引用 stage_id，因此角色所处的那一阶不随顺序变化。
+    """
+
+    __tablename__ = "career_stages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    career_id: Mapped[int] = mapped_column(ForeignKey("careers.id", ondelete="CASCADE"), index=True, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+
+
+class CharacterCareer(TimestampMixin, Base):
+    """角色挂接的职业与当前阶段。只能经 career_service.apply_assignment 写入（写历史）。"""
+
+    __tablename__ = "character_careers"
+    __table_args__ = (UniqueConstraint("character_id", "career_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    career_id: Mapped[int] = mapped_column(ForeignKey("careers.id", ondelete="CASCADE"), index=True, nullable=False)
+    # main / sub，恒等于职业的 kind
+    role: Mapped[str] = mapped_column(String(8), nullable=False)
+    # 不设 ondelete（NO ACTION）：仍被引用的阶段不能删除（服务层先查返回 409）；
+    # 删除职业时阶段与挂接在同一语句内级联删除，与 relationships.type_id 同理
+    stage_id: Mapped[int] = mapped_column(ForeignKey("career_stages.id"), index=True, nullable=False)
+    # 状态备注，如「半步金丹」「瓶颈期」
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+
+
+class CareerHistory(TimestampMixin, Base):
+    """挂接的每次变化（新挂 / 换阶 / 改备注 / 主副变化 / 卸下）。
+
+    changes = {字段: [旧, 新]}，阶段以「第N阶·名称」记录；career_name 冗余保存。删除职业时历史随之级联删除。
+    """
+
+    __tablename__ = "career_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    career_id: Mapped[int | None] = mapped_column(
+        ForeignKey("careers.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    career_name: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    changes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
 
 
 class Outline(TimestampMixin, Base):

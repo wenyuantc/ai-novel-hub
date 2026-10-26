@@ -10,6 +10,7 @@ const preview: CardPreview = {
   ],
   organizations: [{ name: '天机阁', status: 'new', rename_to: null }],
   relationships: [],
+  careers: [{ name: '剑修', status: 'reuse', stages_added: ['渡劫'] }],
   warnings: [],
 }
 

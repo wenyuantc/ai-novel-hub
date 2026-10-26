@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './client'
 import { isAbortError } from './sse'
-import { queueLabel, reconnectDelay, subscribeTask, taskApi, taskLink, type TaskStreamHandlers } from './tasks'
+import {
+  queueLabel,
+  reconnectDelay,
+  subscribeTask,
+  TASK_KIND_LABELS,
+  taskApi,
+  taskLink,
+  wizardTaskKind,
+  type TaskStreamHandlers,
+} from './tasks'
 import type { Task } from './types'
 
 function task(over: Partial<Task> = {}): Task {
@@ -232,6 +241,14 @@ describe('task helpers', () => {
     expect(taskLink(task({ kind: 'character.generate', chapter_id: null }))).toBe('/projects/2/characters')
     expect(taskLink(task({ kind: 'relations.parse', chapter_id: null }))).toBe('/projects/2/characters')
     expect(taskLink(task({ kind: 'organization.generate', chapter_id: null }))).toBe('/projects/2/organizations')
+  })
+
+  it('taskLink / 标签：职业生成到职业页，职业体系向导到向导页对应步骤', () => {
+    expect(taskLink(task({ kind: 'career.generate', chapter_id: null }))).toBe('/projects/2/careers')
+    expect(taskLink(task({ kind: 'wizard.careers', chapter_id: null }))).toBe('/projects/2/wizard?kind=careers')
+    expect(TASK_KIND_LABELS['career.generate']).toBe('AI 生成职业')
+    expect(TASK_KIND_LABELS['wizard.careers']).toBe('职业体系向导')
+    expect(wizardTaskKind('careers')).toBe('wizard.careers')
   })
 
   it('list / clearFinished 的查询参数', async () => {

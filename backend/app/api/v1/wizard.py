@@ -13,7 +13,7 @@ router = APIRouter(prefix="/projects/{project_id}/wizard", tags=["wizard"])
 @router.post("/{kind}", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def run_wizard(
     project_id: int,
-    kind: Literal["outline", "characters", "world"],
+    kind: Literal["outline", "characters", "world", "careers"],
     user: CurrentUser,
     db: DbDep,
     engine: TaskEngineDep,

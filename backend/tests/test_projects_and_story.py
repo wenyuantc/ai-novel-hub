@@ -71,6 +71,8 @@ async def test_cross_user_isolation(client, make_client):
         await client.post(f"{base}/relationships", json={"a_id": c1["id"], "b_id": c2["id"], "role_a": "朋友"})
     ).json()
     custom_type = (await client.post(f"{base}/relationship-types", json={"role_a": "掌门", "role_b": "弟子"})).json()
+    career = (await client.post(f"{base}/careers", json={"name": "剑修", "stages": [{"name": "练气"}]})).json()
+    assignment = (await client.post(f"{base}/characters/{c1['id']}/careers", json={"career_id": career["id"]})).json()
 
     bob = make_client()
     await register(bob, "bob")
@@ -130,6 +132,21 @@ async def test_cross_user_isolation(client, make_client):
         ("POST", f"{base}/cards/export"),
         ("POST", f"{base}/cards/import/preview"),
         ("POST", f"{base}/cards/import"),
+        ("GET", f"{base}/careers"),
+        ("POST", f"{base}/careers"),
+        ("POST", f"{base}/careers/batch"),
+        ("POST", f"{base}/careers/generate"),
+        ("GET", f"{base}/careers/{career['id']}"),
+        ("PATCH", f"{base}/careers/{career['id']}"),
+        ("DELETE", f"{base}/careers/{career['id']}"),
+        ("GET", f"{base}/careers/{career['id']}/holders"),
+        ("GET", f"{base}/character-careers"),
+        ("GET", f"{base}/characters/{c1['id']}/careers"),
+        ("POST", f"{base}/characters/{c1['id']}/careers"),
+        ("PATCH", f"{base}/characters/{c1['id']}/careers/{assignment['id']}"),
+        ("DELETE", f"{base}/characters/{c1['id']}/careers/{assignment['id']}"),
+        ("GET", f"{base}/characters/{c1['id']}/career-history"),
+        ("POST", f"{base}/wizard/careers"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
@@ -144,6 +161,9 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/chapters/{ch['id']}/cast": {"character_ids": []},
         f"{base}/cards/import/preview": {"data": {}},
         f"{base}/cards/import": {"data": {}},
+        f"{base}/careers": {"name": "x", "stages": [{"name": "一"}]},
+        f"{base}/careers/batch": {"careers": [{"name": "x", "stages": [{"name": "一"}]}]},
+        f"{base}/characters/{c1['id']}/careers": {"career_id": career["id"]},
     }
     for method, url in checks:
         body = None
@@ -158,3 +178,5 @@ async def test_cross_user_isolation(client, make_client):
     assert len((await client.get(f"{base}/characters")).json()) == 2
     assert len((await client.get(f"{base}/relationships")).json()) == 1
     assert len((await client.get(f"{base}/organizations/{org['id']}/members")).json()) == 1
+    assert len((await client.get(f"{base}/characters/{c1['id']}/careers")).json()) == 1
+    assert len((await client.get(f"{base}/characters/{c1['id']}/career-history")).json()) == 1

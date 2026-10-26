@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.career import AssignmentOut, CareerAssignDraft
 from app.schemas.story import CharacterCreate, CharacterOut
 
 RelationCategory = Literal["family", "social", "hostile", "work", "other"]
@@ -121,11 +122,14 @@ class RelationDraft(TypeRef):
 class CharacterWithRelations(BaseModel):
     character: CharacterCreate
     relations: list[RelationDraft] = Field(default_factory=list, max_length=100)
+    # 勾选的职业挂接（经 career_service.apply_assignment 写入，来源 ai）
+    careers: list[CareerAssignDraft] = Field(default_factory=list, max_length=4)
 
 
 class CharacterWithRelationsOut(BaseModel):
     character: CharacterOut
     relationships: list[RelationshipOut]
+    careers: list[AssignmentOut] = Field(default_factory=list)
 
 
 class GraphNode(BaseModel):

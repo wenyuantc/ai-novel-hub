@@ -5,6 +5,7 @@ from app.api.v1 import (
     ai_configs,
     auth,
     cards,
+    careers,
     chapter_versions,
     chapters,
     character_actions,
@@ -29,6 +30,7 @@ api_router.include_router(story.outlines_router)
 api_router.include_router(organizations.router)
 api_router.include_router(relationships.router)
 api_router.include_router(cards.router)
+api_router.include_router(careers.router)
 api_router.include_router(chapters.router)
 api_router.include_router(chapter_versions.router)
 api_router.include_router(wizard.router)

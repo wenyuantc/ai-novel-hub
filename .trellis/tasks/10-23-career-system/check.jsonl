@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "核对职业写入入口、上下文、卡片 v2 与 spec 一致"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试覆盖与禁止模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新页面、角色抽屉、向导步骤"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "职业跨 DB-服务-上下文-向导-卡片-前端多层"}

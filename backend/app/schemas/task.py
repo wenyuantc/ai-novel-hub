@@ -13,6 +13,8 @@ TaskKind = Literal[
     "character.generate",
     "organization.generate",
     "relations.parse",
+    "career.generate",
+    "wizard.careers",
 ]
 
 

@@ -327,3 +327,80 @@ def test_0007_story_entities(tmp_path):
             )
     finally:
         engine.dispose()
+
+
+def test_0008_careers(tmp_path):
+    """0008：新建职业四张表（外键规则、唯一约束），不改动存量数据；downgrade -1 删除四张表。"""
+    db_file = tmp_path / "migrate0008.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0007")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, 'p', '', '', '', 'planning')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO characters (project_id, name, role_type, profile, relations_text, sort) "
+                    "VALUES (1, '林远', '主角', '少年', '', 1)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0008")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert {"careers", "career_stages", "character_careers", "career_history"} <= set(insp.get_table_names())
+
+        def _fk_rules(table: str) -> dict:
+            return {fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys(table)}
+
+        assert _fk_rules("careers") == {"project_id": "CASCADE"}
+        assert _fk_rules("career_stages") == {"career_id": "CASCADE"}
+        assert _fk_rules("character_careers") == {"character_id": "CASCADE", "career_id": "CASCADE", "stage_id": None}
+        assert _fk_rules("career_history") == {"character_id": "CASCADE", "career_id": "CASCADE"}
+        assert ["project_id", "name"] in [u["column_names"] for u in insp.get_unique_constraints("careers")]
+        assert ["character_id", "career_id"] in [
+            u["column_names"] for u in insp.get_unique_constraints("character_careers")
+        ]
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO careers (project_id, name, sort) VALUES (1, '剑修', 1)"))
+            conn.execute(text("INSERT INTO career_stages (career_id, position, name) VALUES (1, 1, '练气')"))
+            conn.execute(
+                text("INSERT INTO character_careers (character_id, career_id, role, stage_id) VALUES (1, 1, 'main', 1)")
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO career_history (character_id, career_id, career_name, source, changes) "
+                    "VALUES (1, 1, '剑修', 'manual', '{}')"
+                )
+            )
+            # 删除职业：阶段、挂接、历史在同一语句内级联删除（stage_id 不设 ondelete 也不会阻塞）
+            conn.execute(text("DELETE FROM careers WHERE id = 1"))
+            for table in ("career_stages", "character_careers", "career_history"):
+                assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 0
+            assert conn.execute(text("SELECT profile FROM characters WHERE name = '林远'")).scalar_one() == "少年"
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert not ({"careers", "career_stages", "character_careers", "career_history"} & tables)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one() == 1
+    finally:
+        engine.dispose()

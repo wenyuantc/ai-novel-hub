@@ -5,6 +5,10 @@ relationships: [{a, b, role_a, role_b, category, intimacy, description}]}，
 兼容旧格式（角色数组，只有 profile / relations_text）。写入顺序：先整体替换角色（级联清掉旧关系 / 成员 / 出场记录），
 再按名字（或别名）建立关系，经 relationship_service.apply_change(source="wizard") 写入；名字对不上的关系忽略。
 世界观向导输出 category，中英文映射到六个枚举值，映射不了的归为 other。
+职业向导（wizard.careers）根据世界观生成职业与阶梯，整体覆盖（删除全部职业，级联清掉挂接与挂接历史）。
+项目已有职业时，角色向导要求每个角色输出 careers: [{name, stage, role, note}]，按职业名 / 阶段名精确匹配后经
+career_service.apply_assignment(source="wizard") 写入；职业对不上 / 超出上限的忽略并写入 done.result.warnings，
+阶段名对不上的挂在第 1 阶并给警告。项目没有职业时角色向导的提示词与写入行为不变。
 """
 
 import logging
@@ -17,22 +21,29 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.json_extract import JSONExtractError, extract_json
-from app.ai.prompts import build_characters_messages, build_outline_messages, build_world_messages
+from app.ai.prompts import (
+    build_careers_wizard_messages,
+    build_characters_messages,
+    build_outline_messages,
+    build_world_messages,
+)
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
+from app.core.errors import AppError
 from app.core.security import SecretCipher
-from app.models import Character, Outline, WorldSetting
+from app.models import Career, Character, CharacterCareer, Outline, WorldSetting
 from app.models.entities import WORLD_CATEGORIES
+from app.schemas.career import CareerCreate
 from app.schemas.chapter import WizardRequest
 from app.schemas.story import CharacterOut, OutlineOut, WorldSettingOut
-from app.services import ai_config_service, relationship_service, story_service
+from app.services import ai_config_service, career_service, relationship_service, story_service
 from app.services.cast_service import is_protagonist_role
-from app.services.entity_ai_service import normalize_aliases, normalize_category
+from app.services.entity_ai_service import normalize_aliases, normalize_career_assignments, normalize_category
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
 
 logger = logging.getLogger(__name__)
 
-WizardKind = Literal["outline", "characters", "world"]
+WizardKind = Literal["outline", "characters", "world", "careers"]
 
 
 @dataclass
@@ -105,6 +116,11 @@ async def build_wizard_job(
             world_text=world_text,
             outline_text=outline_text,
             instruction=req.instruction,
+            careers_text=await career_service.careers_reference(db, project_id),
+        )
+    elif kind == "careers":
+        messages = build_careers_wizard_messages(
+            info, career_count=req.career_count, world_text=world_text, instruction=req.instruction
         )
     else:
         messages = build_world_messages(
@@ -334,6 +350,82 @@ async def _save_character_relations(
     return created
 
 
+def normalize_character_careers(obj: Any) -> list[tuple[str, list[dict[str, Any]]]]:
+    """角色向导输出中每个角色的 careers → [(角色名, [{name, stage, role, note}])]。"""
+    try:
+        items = _unwrap_list(obj, ("characters", "roles", "items"))
+    except JSONExtractError:
+        return []
+    out = []
+    for c in items:
+        if not isinstance(c, dict):
+            continue
+        name = _text(c.get("name"))[:100]
+        careers = normalize_career_assignments({"careers": c.get("careers")})
+        if name and careers:
+            out.append((name, careers))
+    return out
+
+
+async def _save_character_careers(
+    db: AsyncSession, project_id: int, entities: list[Character], obj: Any
+) -> tuple[list[CharacterCareer], list[str]]:
+    """按职业名 / 阶段名匹配写入挂接；没有职业的项目直接跳过。返回 (挂接, 警告)。"""
+    careers = await career_service.list_project_careers(db, project_id)
+    if not careers:
+        return [], []
+    by_name = {c.name: c for c in careers}
+    stages = await career_service.stages_of(db, [c.id for c in careers])
+    lookup: dict[str, Character] = {}
+    for e in entities:
+        lookup.setdefault(e.name, e)
+    created: list[CharacterCareer] = []
+    warnings: list[str] = []
+    for char_name, items in normalize_character_careers(obj):
+        character = lookup.get(char_name)
+        if character is None:
+            continue
+        for r in items:
+            career = by_name.get(r["name"])
+            if career is None:
+                warnings.append(f"角色「{char_name}」的职业「{r['name']}」不存在，已忽略")
+                continue
+            ladder = stages.get(career.id, [])
+            stage = next((s for s in ladder if s.name == r["stage"]), ladder[0] if ladder else None)
+            if stage is None:
+                continue
+            if r["stage"] and stage.name != r["stage"]:
+                warnings.append(
+                    f"角色「{char_name}」的职业「{career.name}」没有名为「{r['stage']}」的阶段，"
+                    f"已设为第 1 阶「{stage.name}」"
+                )
+            try:
+                created.append(
+                    await career_service.assign_new(
+                        db, character, career, stage_id=stage.id, note=r["note"], source="wizard"
+                    )
+                )
+            except AppError as exc:
+                warnings.append(f"角色「{char_name}」的职业「{career.name}」未能挂接：{exc.detail}")
+    return created, warnings
+
+
+async def _save_careers(db: AsyncSession, project_id: int, obj: Any) -> dict[str, Any]:
+    drafts, warnings = career_service.normalize_career_drafts(obj)
+    if not drafts:
+        raise JSONExtractError("未解析到任何职业")
+    await db.execute(delete(Career).where(Career.project_id == project_id))
+    careers = [
+        await career_service.new_career(db, project_id, CareerCreate.model_validate({**d, "sort": i}))
+        for i, d in enumerate(drafts, start=1)
+    ]
+    await db.commit()
+    for c in careers:
+        await db.refresh(c)
+    outs = await career_service.career_outs(db, careers)
+    return {"items": [o.model_dump(mode="json") for o in outs], "warnings": warnings}
+
+
 _KIND_SPEC = {
     "outline": (Outline, normalize_outline, OutlineOut),
     "characters": (Character, normalize_characters, CharacterOut),
@@ -342,17 +434,22 @@ _KIND_SPEC = {
 
 
 async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind, raw_text: str) -> dict[str, Any]:
-    """解析模型输出并覆盖该类型旧数据，返回 done 载荷 {items[, relationships]}。"""
-    model, normalize, out_schema = _KIND_SPEC[kind]
+    """解析模型输出并覆盖该类型旧数据，返回 done 载荷 {items[, relationships, assignments], warnings?}。"""
     obj = extract_json(raw_text)
+    if kind == "careers":
+        return await _save_careers(db, project_id, obj)
+    model, normalize, out_schema = _KIND_SPEC[kind]
     rows = normalize(obj)
     await db.execute(delete(model).where(model.project_id == project_id))
     entities = [model(project_id=project_id, **row) for row in rows]
     db.add_all(entities)
     await db.flush()
     rels = []
+    assignments: list[CharacterCareer] = []
+    warnings: list[str] = []
     if kind == "characters":
         rels = await _save_character_relations(db, project_id, entities, normalize_character_relations(obj))
+        assignments, warnings = await _save_character_careers(db, project_id, entities, obj)
     await db.commit()
     for e in entities:
         await db.refresh(e)
@@ -360,6 +457,12 @@ async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind
     if kind == "characters":
         outs = await relationship_service.to_outs(db, rels)
         payload["relationships"] = [o.model_dump(mode="json") for o in outs]
+        for a in assignments:
+            await db.refresh(a)
+        payload["assignments"] = [
+            o.model_dump(mode="json") for o in await career_service.assignment_outs(db, assignments)
+        ]
+        payload["warnings"] = warnings
     return payload
 
 

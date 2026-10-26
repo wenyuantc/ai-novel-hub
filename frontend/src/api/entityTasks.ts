@@ -1,6 +1,9 @@
 // AI 单体生成 / 旧关系解析任务的结果收窄与保存载荷换算（纯函数）
 
 import type {
+  CareerAssignDraft,
+  CareerKind,
+  CareerSuggestion,
   CharacterDraft,
   CharacterGenerateResult,
   CharacterInput,
@@ -83,7 +86,59 @@ export function parseCharacterGenerateResult(result: unknown): CharacterGenerate
     life_status: str(d.life_status) || 'alive',
     always_in_context: d.always_in_context === true,
   }
-  return { draft, relation_suggestions: readSuggestions(result.relation_suggestions), warnings: strList(result.warnings) }
+  return {
+    draft,
+    relation_suggestions: readSuggestions(result.relation_suggestions),
+    career_suggestions: readCareerSuggestions(result.career_suggestions),
+    warnings: strList(result.warnings),
+  }
+}
+
+const kindOrNull = (v: unknown): CareerKind | null => (v === 'main' || v === 'sub' ? v : null)
+
+function readCareerSuggestions(v: unknown): CareerSuggestion[] {
+  if (!Array.isArray(v)) return []
+  return v.filter(isRecord).map((c) => {
+    const careerId = numOrNull(c.career_id)
+    const stageId = numOrNull(c.stage_id)
+    return {
+      career_name: str(c.career_name),
+      career_id: careerId,
+      career_kind: kindOrNull(c.career_kind),
+      role: kindOrNull(c.role),
+      stage_name: str(c.stage_name),
+      stage_id: stageId,
+      stage_position: numOrNull(c.stage_position),
+      note: str(c.note),
+      resolved: c.resolved === true && careerId !== null && stageId !== null,
+      reason: str(c.reason),
+    }
+  })
+}
+
+/** 预览中可编辑的职业建议（可改阶段与备注） */
+export interface EditableCareerSuggestion extends CareerSuggestion {
+  key: string
+  checked: boolean
+}
+
+export function toEditableCareers(list: CareerSuggestion[]): EditableCareerSuggestion[] {
+  return list.map((c, i) => ({ ...c, key: `${i}:${c.career_name}`, checked: c.resolved }))
+}
+
+/** 勾选的职业建议超出主 1 副 3 时的提示（null = 未超出）；后端仍会校验 */
+export function careerSuggestionLimitError(list: EditableCareerSuggestion[]): string | null {
+  const picked = list.filter((c) => c.checked && c.resolved)
+  if (picked.filter((c) => c.role === 'main').length > 1) return '该角色已有主职业'
+  if (picked.filter((c) => c.role === 'sub').length > 3) return '副职业最多 3 个'
+  return null
+}
+
+/** 勾选的职业建议 → with-relations 的 careers */
+export function careerSuggestionsToDrafts(list: EditableCareerSuggestion[]): CareerAssignDraft[] {
+  return list
+    .filter((c) => c.checked && c.resolved && c.career_id !== null)
+    .map((c) => ({ career_id: c.career_id as number, stage_id: c.stage_id, note: c.note.trim().slice(0, 200) }))
 }
 
 export function parseOrganizationGenerateResult(result: unknown): OrganizationGenerateResult | null {
@@ -233,4 +288,9 @@ export function suggestionsToBatch(subjectId: number, list: EditableSuggestion[]
 }
 
 /** 有结果查看组件的任务类型（任务面板据此显示「查看结果」） */
-export const ENTITY_TASK_KINDS: readonly TaskKind[] = ['character.generate', 'organization.generate', 'relations.parse']
+export const ENTITY_TASK_KINDS: readonly TaskKind[] = [
+  'character.generate',
+  'organization.generate',
+  'relations.parse',
+  'career.generate',
+]

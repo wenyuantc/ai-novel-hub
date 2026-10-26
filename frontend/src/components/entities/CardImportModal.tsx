@@ -12,7 +12,7 @@ interface Props {
   onImported: () => void
 }
 
-/** 卡片导入：本地读取 JSON → 预览（新增 / 同名冲突 / 无法关联）→ 冲突逐项选择跳过或重命名 → 导入（单事务）。 */
+/** 卡片导入：本地读取 JSON → 预览（新增 / 同名冲突 / 无法关联 / 职业新建或复用）→ 冲突逐项选择跳过或重命名 → 导入（单事务）。 */
 export default function CardImportModal(props: Props) {
   if (!props.open) return null
   return <Inner {...props} />
@@ -125,7 +125,7 @@ function Inner({ projectId, onClose, onImported }: Props) {
               <InboxOutlined />
             </p>
             <p>{fileName ? `已选择：${fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
-            <p style={{ color: '#999' }}>格式 ainovel.cards v1，上限 2MB</p>
+            <p style={{ color: '#999' }}>格式 ainovel.cards v1 / v2（v2 含职业），上限 2MB</p>
           </Upload.Dragger>
         )}
         {preview && !result && (
@@ -141,6 +141,40 @@ function Inner({ projectId, onClose, onImported }: Props) {
               组织（新建 {orgSum?.created}，重命名 {orgSum?.renamed}，跳过 {orgSum?.skipped}）
             </Typography.Text>
             {itemTable('organizations', preview.organizations)}
+            {(preview.careers ?? []).length > 0 && (
+              <>
+                <Typography.Text strong>
+                  职业（新建 {preview.careers.filter((c) => c.status === 'new').length}，复用{' '}
+                  {preview.careers.filter((c) => c.status === 'reuse').length}）
+                </Typography.Text>
+                <Table
+                  size="small"
+                  rowKey="name"
+                  pagination={false}
+                  dataSource={preview.careers}
+                  columns={[
+                    { title: '职业', dataIndex: 'name' },
+                    {
+                      title: '状态',
+                      width: 110,
+                      render: (_, c) =>
+                        c.status === 'new' ? <Tag color="green">新建</Tag> : <Tag color="blue">复用同名职业</Tag>,
+                    },
+                    {
+                      title: '阶段',
+                      render: (_, c) =>
+                        c.status === 'new' ? (
+                          <Typography.Text type="secondary">按卡片阶梯新建</Typography.Text>
+                        ) : c.stages_added.length > 0 ? (
+                          `追加到阶梯末尾：${c.stages_added.join('、')}`
+                        ) : (
+                          <Typography.Text type="secondary">阶段均已存在</Typography.Text>
+                        ),
+                    },
+                  ]}
+                />
+              </>
+            )}
             <Typography.Text strong>人物关系（{preview.relationships.length}）</Typography.Text>
             <Table
               size="small"
@@ -173,6 +207,17 @@ function Inner({ projectId, onClose, onImported }: Props) {
               <Descriptions.Item label="跳过组织">{result.organizations.filter((c) => c.action === 'skipped').length}</Descriptions.Item>
               <Descriptions.Item label="人物关系">{result.relationships_created}</Descriptions.Item>
               <Descriptions.Item label="组织成员">{result.members_created}</Descriptions.Item>
+              {(result.careers ?? []).length > 0 && (
+                <>
+                  <Descriptions.Item label="新建职业">{result.careers.filter((c) => c.action === 'created').length}</Descriptions.Item>
+                  <Descriptions.Item label="复用职业">
+                    {result.careers.filter((c) => c.action === 'reused').length}
+                    {result.careers.some((c) => c.stages_added > 0) &&
+                      `（追加 ${result.careers.reduce((n, c) => n + c.stages_added, 0)} 个阶段）`}
+                  </Descriptions.Item>
+                </>
+              )}
+              <Descriptions.Item label="职业挂接">{result.careers_assigned ?? 0}</Descriptions.Item>
             </Descriptions>
             {result.warnings.map((w) => (
               <Alert key={w} type="warning" showIcon message={w} />

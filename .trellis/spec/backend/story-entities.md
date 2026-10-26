@@ -1,6 +1,6 @@
 # 结构化设定：角色 / 组织 / 关系 / 卡片 / 章节上下文
 
-> 来源任务：`10-23-story-entities`。表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，
+> 来源任务：`10-23-story-entities`；职业等级体系（文末）来自 `10-23-career-system`。表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，
 > 任务契约见 [error-handling.md](./error-handling.md)「后台任务与 SSE 契约」。
 
 ---
@@ -93,6 +93,13 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
   关系类型走 `resolve_type`（反向匹配互换两端，匹配不上建自定义类型），写入走 `apply_change(source="import")`。
 - 新建组织的上级用内存中的上级链检测循环，成环 → warning 并置空。整个导入一个事务，最后 commit。
 - 测试：`tests/test_cards.py`（跨项目往返 + 重命名、skip 关联已有、无法关联与循环、格式 / 大小 400、`rename_for`）。
+- **v2（`10-23-career-system`）**：导出 `version: 2`；角色项增加 `careers: [{career_name, role, stage_name, note}]`，顶层增加
+  `careers: [{name, kind, description, requirements, abilities, rules, stages: [{name, description}]}]`（只含所导出角色挂接的职业）。
+  `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2)`，其他版本 400 `不支持的卡片版本：N（当前支持 1、2）`；v1 没有职业，按原逻辑导入。
+  导入：职业按名匹配目标项目，匹配上复用（卡片里多出的阶段追加到末尾）、匹配不上新建；挂接的阶段按名匹配，对不上追加到末尾，
+  阶段名为空取第 1 阶；经 `assign_new(source="import")` 写入，职业对不上 / 类别不符 / 超限 / 已挂 → warning 跳过。
+  预览增加 `careers: [{name, status: new|reuse, stages_added: [阶段名]}]`；结果增加 `careers: [{name, id, action: created|reused,
+  stages_added}]` 与 `careers_assigned`。
 
 ---
 
@@ -172,3 +179,93 @@ characters_text = story_service.format_characters(all_characters)   # 全部角�
   （`RelationshipOut` 列表，仅 characters）。`always_in_context` 按定位推断。
 - 世界观向导输出 `category`；`normalize_world_category` 把中英文映射到 `WORLD_CATEGORIES`，映射不了 → `other`。
 - 测试：`tests/test_wizard.py::test_wizard_characters_structured_with_relations`、`test_wizard_world_categories`，原有旧格式用例保留。
+
+---
+
+## 场景：职业等级体系（`10-23-career-system`，迁移 `0008`）
+
+### 1. 范围 / 触发条件
+
+任何写 `careers` / `career_stages` / `character_careers` / `career_history` 的代码：职业 CRUD、`careers/batch`、
+角色挂接接口、`characters/with-relations` 的 `careers`、`wizard.careers`、角色向导分配职业、卡片 v2 导入，
+以及以后 `analysis-memory` 的阶段回写。**挂接只能经 `career_service.apply_assignment`（新挂用 `assign_new`）写入**。
+
+### 2. 签名
+
+```python
+# backend/app/services/career_service.py
+MAX_MAIN_CAREERS = 1; MAX_SUB_CAREERS = 3; CAREER_SOURCES = ("manual", "wizard", "ai", "import", "analysis")
+async def apply_assignment(db, character, career, *, stage_id=None, note=None, role=None, remove=False,
+                           source, chapter_no=None, history_note="") -> CareerHistory | None      # 不 commit
+async def assign_new(db, character, career, *, stage_id=None, note="", role=None, source, ...) -> CharacterCareer  # 已挂 → 409
+async def sync_stages(db, career, items: list[StageIn]) -> list[CareerStage]   # 整体同步，不 commit
+async def append_stage(db, career, name, description="") -> CareerStage          # 追加到末尾（卡片导入）
+async def new_career(db, project_id, data: CareerCreate) -> Career               # 同名 409，flush
+async def assignments_of(db, character_ids) -> list[tuple[CharacterCareer, Career]]   # 上下文一次查询，主职业在前
+async def list_project_assignments(db, user_id, project_id) -> list[AssignmentOut]  # GET /character-careers，角色卡片汇总
+async def stages_of(db, career_ids) -> dict[int, list[CareerStage]]               # 按 position
+def normalize_career_drafts(obj, *, force_kind=None) -> tuple[list[dict], list[str]]  # career.generate / wizard.careers 共用
+async def careers_reference(db, project_id) -> str   # 「剑修（主修）：练气 → 筑基」，无职业时为空串
+```
+
+### 3. 契约
+
+- 职业 `(project_id, name)` 唯一（名称 strip 后比较）→ 409 `同名职业已存在`；`kind` ∈ `main`（主修）/ `sub`（副修）。
+- 阶段 id 稳定，`position` 由服务层维护为从 1 连续（不建唯一约束，便于整体重排）；同一职业内阶段名唯一（导入按名匹配的前提）。
+  POST / PATCH 的 `stages` 整体提交：带 id = 更新、无 id = 新建、缺失 = 删除；提交顺序即新 position。
+  缺失的阶段仍被挂接引用 → 409 `该阶段仍有角色处于其中，无法删除`（整个 PATCH 不生效）。
+- `character_careers.stage_id` **不设 ondelete**（同 `relationships.type_id`）；删职业时阶段、挂接、历史在同一语句内级联删除
+  （`career_history.career_id` 为 CASCADE，`career_name` 冗余仅用于展示）。
+- `apply_assignment`：校验职业与角色同项目（400 `职业不存在或不属于该项目`）、阶段属于该职业（400 `阶段不属于该职业`）、
+  `role`（给出时）等于职业 `kind`（400 `主修职业只能作为主职业` / `副修职业只能作为副职业`）、上限（409 `该角色已有主职业` /
+  `副职业最多 3 个`）。未挂 = 新挂（默认第 1 阶，`changes = {"role": [null, kind], "stage": [null, "第1阶·练气"], "note": [null, ""]}`）；
+  已挂 = 对比 `role`（职业类别被改时同步）/ `stage_id` / `note`，有变化才写一条历史（`{"stage": ["第2阶·筑基", "第4阶·金丹"]}`）；
+  `remove=True` 删除挂接并写 `{"removed": [职业名, null]}`。阶段以「第N阶·名称」记录（写入时的 position），阶段 / 职业改名后历史仍可读。
+- 修改职业 `kind`：对每个持有人调用 `apply_assignment` 同步主 / 副并写历史；会超出上限 → 409，整个 PATCH 不生效。
+- 上下文（D4 延伸）：涉及角色卡增加 `职业：剑修·筑基（2/9，瓶颈期）；副职业：丹师·一品（1/9）`；新段落 `【职业体系】`
+  （位于【相关组织】之后、【其他角色】之前）对涉及角色所挂的每个职业输出 `■ 剑修（主修）：练气 → 筑基 → …`，
+  规则非空时附 `规则：<前 200 字>……`；未被涉及角色挂接的职业不出现。裁剪：关系之后、**相关组织之前**截断职业体系。
+- AI：`career.generate`（见下表）只产出草稿，与已有职业同名的 `conflict=true`（同批内重名在规范化时去掉并给 warning，
+  没有阶段的职业丢弃）。`character.generate` 在项目有职业时提示词附职业阶梯，`done.result.career_suggestions`
+  = `[{career_name, career_id, career_kind, role, stage_name, stage_id, stage_position, note, resolved, reason}]`
+  （职业名精确匹配；`role` 取职业类别；阶段名对不上取第 1 阶并写 warning；超出主 1 副 3 → `resolved=false`）。
+  `characters/with-relations` 的 `careers: [{career_id, stage_id?, note}]` 经 `assign_new(source="ai")` 写入，失败整体回滚。
+- 向导：`wizard.careers`（`resource_key = wizard:{pid}:careers`）删除全部职业（级联清掉挂接与历史）后写入，
+  `done.result = {kind: "careers", items: CareerOut[], warnings}`；解析不到任何职业 → failed 且保留旧数据。
+  角色向导在项目已有职业时要求每个角色输出 `careers: [{name, stage, role, note}]`，按名匹配后 `assign_new(source="wizard")`；
+  职业对不上 / 超限 / 重复 → 忽略并写入 `done.result.warnings`，阶段对不上 → 第 1 阶 + warning；`done.result` 另含
+  `assignments: AssignmentOut[]`。项目没有职业时提示词与写入完全不变（AC6）。
+- 项目级挂接列表 `GET /projects/{pid}/character-careers` → `AssignmentOut[]`（按角色、主职业在前；先校验项目归属，他人 404），供角色卡片汇总主 / 副职业一次取回，前端不得按职业逐个请求 `holders` 拼装。
+- 卡片 v2：见下方「卡片导入导出」的 v2 补充。
+
+| kind | resource_key | 路由 | `done.result` |
+|---|---|---|---|
+| `career.generate` | 无 | `POST /projects/{pid}/careers/generate {ai_config_id?, count 1–5, kind?, instruction}` | `{drafts: [{name, kind, description, requirements, abilities, rules, stages: [{name, description}], conflict}], warnings}` |
+| `wizard.careers` | `wizard:{pid}:careers` | `POST /projects/{pid}/wizard/careers {career_count 1–12, ...}` | `{kind: "careers", items, warnings}` |
+
+### 4. 校验与错误矩阵
+
+| 条件 | 结果 |
+|---|---|
+| 同名职业（新建 / 改名 / 批量中任一条） | 409 `同名职业已存在`（批量全部回滚） |
+| `stages` 为空 | 400 `职业至少需要 1 个阶段` |
+| 阶段名重复 / 为空 | 400 `同一职业内阶段名称不能重复` / `阶段名称不能为空` |
+| `stages[].id` 不属于该职业（含他项目） | 400 `阶段不属于该职业` |
+| 删除仍被引用的阶段 | 409 `该阶段仍有角色处于其中，无法删除` |
+| 第 2 个主职业 / 第 4 个副职业 / 重复挂 | 409 `该角色已有主职业` / `副职业最多 3 个` / `该角色已挂该职业` |
+| 主副类别不符 | 400 `主修职业只能作为主职业` / `副修职业只能作为副职业` |
+| 请求体中的职业 id 不属于本项目 | 400 `职业不存在或不属于该项目` |
+| 路径中的职业 / 角色 / 挂接不属于本项目或他人 | 404 `职业不存在` / `角色不存在` / `职业挂接不存在` |
+
+### 5. Good / Base / Bad
+
+- Good：`apply_assignment(db, ch, sword, stage_id=jindan.id, source="analysis", chapter_no=12)` → 历史 `{"stage": ["第2阶·筑基", "第3阶·金丹"]}`。
+- Base：`apply_assignment(db, ch, sword, note="瓶颈期", source="manual")` → 只改备注也写历史；值相同返回 `None`。
+- Bad：`assignment.stage_id = jindan.id; await db.commit()` —— 没有历史、绕过上限与归属校验。
+
+### 6. 必需的测试
+
+`tests/test_careers.py`（AC1 阶段同步 / 重排 / 409、AC2 上限与类别、AC3 历史、类别变更同步、批量原子性、跨项目 400、级联清理）、
+`tests/test_career_tasks.py`（career.generate 草稿与 conflict、character.generate 职业建议 + with-relations、wizard.careers 覆盖、
+角色向导分配与 warnings、无职业时提示词不变、AC5 上下文、裁剪顺序）、`tests/test_cards.py::test_cards_v2_*`、
+`tests/test_migrations.py::test_0008_careers`、`tests/test_careers.py::test_project_assignments`、`test_cross_user_isolation`（职业相关路由均 404，含 `character-careers`）。

@@ -1,7 +1,10 @@
-"""AI 单体生成角色 / 组织、解析旧关系备注（后台任务 character.generate / organization.generate / relations.parse）。
+"""AI 单体生成角色 / 组织 / 职业、解析旧关系备注
+（后台任务 character.generate / organization.generate / career.generate / relations.parse）。
 
 任务只产出草稿，不写任何设定数据，也不写 generation_logs（与向导一致）。保存由前端预览确认后调用
-`characters/with-relations`、`organizations/with-members`、`relationships/batch` 完成。
+`characters/with-relations`、`organizations/with-members`、`careers/batch`、`relationships/batch` 完成。
+职业草稿与已有职业（或同批中更早的草稿）同名时标记 conflict=true，需改名后才能保存。
+生成角色时若项目已有职业，提示词附上职业阶梯，草稿带 career_suggestions（按职业名 / 阶段名精确匹配）。
 
 关系建议从「主体」（新角色 / 被解析的角色）视角给出：
 - self_role = 主体的身份，target_role = 对方的身份；
@@ -13,7 +16,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from sqlalchemy import select
@@ -21,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.ai.prompts import (
+    build_career_generate_messages,
     build_character_generate_messages,
     build_organization_generate_messages,
     build_relations_parse_messages,
@@ -31,14 +35,14 @@ from app.core.security import SecretCipher
 from app.models import Character, Organization
 from app.models.entities import RELATION_CATEGORIES
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
-from app.services import ai_config_service, relationship_service, story_service
+from app.services import ai_config_service, career_service, relationship_service, story_service
 from app.services.cast_service import is_protagonist_role
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
 
 logger = logging.getLogger(__name__)
 
-EntityKind = Literal["character.generate", "organization.generate", "relations.parse"]
+EntityKind = Literal["character.generate", "organization.generate", "career.generate", "relations.parse"]
 REFERENCE_WORLD_CHARS = 4000
 REFERENCE_ROSTER_CHARS = 3000
 
@@ -73,6 +77,8 @@ class EntityJob:
     max_tokens: int | None = None
     # relations.parse 的主体角色
     character_id: int | None = None
+    # career.generate 的请求参数（count / kind）
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------- 规范化（纯函数） ----------------
@@ -218,6 +224,35 @@ def normalize_org_draft(obj: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]
     return draft, members
 
 
+def normalize_career_assignments(obj: Any) -> list[dict[str, Any]]:
+    """角色草稿中的 careers → [{name, stage, role, note}]；缺职业名的丢弃。"""
+    if not isinstance(obj, dict):
+        return []
+    c = obj.get("character") if isinstance(obj.get("character"), dict) else {}
+    value = obj.get("careers") or c.get("careers")
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for r in value:
+        if isinstance(r, str):
+            r = {"name": r}
+        if not isinstance(r, dict):
+            continue
+        name = _text(r.get("name") or r.get("career") or r.get("career_name"))[:100]
+        if not name:
+            continue
+        role = _text(r.get("role")).lower()
+        rows.append(
+            {
+                "name": name,
+                "stage": _text(r.get("stage") or r.get("stage_name") or r.get("level"))[:50],
+                "role": role if role in ("main", "sub") else "",
+                "note": _text(r.get("note"))[:200],
+            }
+        )
+    return rows
+
+
 # ---------------- 名字解析 ----------------
 
 
@@ -283,6 +318,61 @@ async def relation_suggestions(
     return out
 
 
+async def career_suggestions(
+    db: AsyncSession, project_id: int, raw: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """职业建议：按职业名精确匹配；阶段名对不上时取第 1 阶并给警告；超出主 1 副 3 的标记 resolved=False。"""
+    careers = await career_service.list_project_careers(db, project_id)
+    if not careers:
+        return [], []
+    stages = await career_service.stages_of(db, [c.id for c in careers])
+    by_name = {c.name: c for c in careers}
+    counts = {"main": 0, "sub": 0}
+    limits = {"main": career_service.MAX_MAIN_CAREERS, "sub": career_service.MAX_SUB_CAREERS}
+    out: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen: set[int] = set()
+    for r in raw:
+        career = by_name.get(r["name"].strip())
+        item: dict[str, Any] = {
+            "career_name": r["name"],
+            "career_id": None,
+            "career_kind": None,
+            "role": r["role"] or None,
+            "stage_name": r["stage"],
+            "stage_id": None,
+            "stage_position": None,
+            "note": r["note"],
+            "resolved": False,
+            "reason": "",
+        }
+        if career is None:
+            item["reason"] = f"未找到名为「{r['name']}」的职业"
+            out.append(item)
+            continue
+        if career.id in seen:
+            continue
+        seen.add(career.id)
+        ladder = stages.get(career.id, [])
+        stage = next((s for s in ladder if s.name == r["stage"]), None)
+        if stage is None and ladder:
+            stage = ladder[0]
+            if r["stage"]:
+                warnings.append(f"职业「{career.name}」没有名为「{r['stage']}」的阶段，已改为第 1 阶「{stage.name}」")
+        item.update(career_id=career.id, career_kind=career.kind, role=career.kind)
+        if stage is not None:
+            item.update(stage_id=stage.id, stage_name=stage.name, stage_position=stage.position)
+        if stage is None:
+            item["reason"] = "该职业没有阶段"
+        elif counts[career.kind] >= limits[career.kind]:
+            item["reason"] = career_service.MAIN_LIMIT if career.kind == "main" else career_service.SUB_LIMIT
+        else:
+            counts[career.kind] += 1
+            item["resolved"] = True
+        out.append(item)
+    return out, warnings
+
+
 # ---------------- 校验 / 组装 ----------------
 
 
@@ -301,7 +391,11 @@ async def validate_entity_task(
 ) -> tuple[int, str]:
     """创建任务时同步校验归属、配置与端点；返回 (ai_config_id, 任务标题)。不修改任何数据。"""
     await get_owned_project(db, user_id, project_id)
-    title = {"character.generate": "AI 生成角色", "organization.generate": "AI 生成组织"}.get(kind, "")
+    title = {
+        "character.generate": "AI 生成角色",
+        "organization.generate": "AI 生成组织",
+        "career.generate": "AI 生成职业",
+    }.get(kind, "")
     if kind == "relations.parse":
         if character_id is None:
             raise BadRequestError("缺少角色")
@@ -344,7 +438,19 @@ async def build_entity_job(
     characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
     instruction = str(params.get("instruction") or "")
     character_id: int | None = None
-    if kind == "relations.parse":
+    options: dict[str, Any] = {}
+    if kind == "career.generate":
+        world = await story_service.list_items(db, story_service.WORLD, project_id)
+        options = {"count": int(params.get("count") or 3), "kind": params.get("kind")}
+        messages = build_career_generate_messages(
+            info,
+            count=options["count"],
+            kind=options["kind"],
+            world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
+            careers_text=_clip(await career_service.careers_reference(db, project_id), REFERENCE_ROSTER_CHARS),
+            instruction=instruction,
+        )
+    elif kind == "relations.parse":
         character_id = int(params["character_id"])
         subject = await story_service.get_owned(db, story_service.CHARACTERS, user_id, project_id, character_id)
         if not subject.relations_text.strip():
@@ -366,7 +472,12 @@ async def build_entity_job(
             "instruction": instruction,
         }
         if kind == "character.generate":
-            messages = build_character_generate_messages(info, role_type=str(params.get("role_type") or ""), **common)
+            messages = build_character_generate_messages(
+                info,
+                role_type=str(params.get("role_type") or ""),
+                careers_text=_clip(await career_service.careers_reference(db, project_id), REFERENCE_ROSTER_CHARS),
+                **common,
+            )
         else:
             messages = build_organization_generate_messages(info, **common)
     return EntityJob(
@@ -378,6 +489,7 @@ async def build_entity_job(
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
         character_id=character_id,
+        options=options,
     )
 
 
@@ -386,17 +498,30 @@ async def build_entity_job(
 
 async def build_result(db: AsyncSession, job: EntityJob, obj: Any) -> dict[str, Any]:
     """解析后的 JSON → 草稿 + 建议（只读查询，不写库）。"""
-    characters = await story_service.list_items(db, story_service.CHARACTERS, job.project_id)
     warnings: list[str] = []
+    if job.kind == "career.generate":
+        drafts, warnings = career_service.normalize_career_drafts(obj, force_kind=job.options.get("kind"))
+        if not drafts:
+            raise JSONExtractError("未解析到任何职业")
+        taken = {c.name for c in await career_service.list_project_careers(db, job.project_id)}
+        for d in drafts:
+            # 与已有职业重名的需改名后才能保存（同批内的重名已在规范化时去掉）
+            d["conflict"] = d["name"] in taken
+            if d["conflict"]:
+                warnings.append(f"已存在名为「{d['name']}」的职业，保存前请修改名称")
+        return {"drafts": drafts, "warnings": warnings}
+    characters = await story_service.list_items(db, story_service.CHARACTERS, job.project_id)
     if job.kind == "character.generate":
         draft, raw = normalize_character_draft(obj)
         taken = {c.name for c in characters} | {a for c in characters for a in (c.aliases or [])}
         if draft["name"] in taken:
             warnings.append(f"已存在名为「{draft['name']}」的角色或别名，保存前建议修改名字")
+        careers, career_warnings = await career_suggestions(db, job.project_id, normalize_career_assignments(obj))
         return {
             "draft": draft,
             "relation_suggestions": await relation_suggestions(db, job.project_id, raw, characters),
-            "warnings": warnings,
+            "career_suggestions": careers,
+            "warnings": warnings + career_warnings,
         }
     if job.kind == "organization.generate":
         draft, members = normalize_org_draft(obj)

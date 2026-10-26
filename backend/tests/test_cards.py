@@ -50,7 +50,9 @@ async def test_cards_roundtrip_with_rename(client):
     )
     assert resp.status_code == 200, resp.text
     card = resp.json()
-    assert (card["format"], card["version"]) == ("ainovel.cards", 1)
+    assert (card["format"], card["version"]) == ("ainovel.cards", 2)
+    # 没有挂职业：v2 的职业字段为空
+    assert card["careers"] == [] and all(c["careers"] == [] for c in card["characters"])
     assert [c["name"] for c in card["characters"]] == ["林远", "张三", "李四"]
     assert card["characters"][0]["aliases"] == ["小远"]
     # 成员 / 关系只含导出集合内的
@@ -186,7 +188,9 @@ async def test_import_rejects_bad_files(client):
     cases = [
         ([1, 2], "应为 JSON 对象"),
         ({"format": "other", "version": 1}, "不是有效的卡片文件"),
-        ({"format": "ainovel.cards", "version": 2}, "不支持的卡片版本"),
+        ({"format": "ainovel.cards", "version": 3}, "不支持的卡片版本"),
+        ({"format": "ainovel.cards", "version": True}, "不支持的卡片版本"),
+        ({"format": "ainovel.cards", "version": 2, "careers": [{"name": "剑修", "stages": []}]}, "卡片文件格式不正确"),
         ({"format": "ainovel.cards", "version": 1, "characters": [{"name": ""}]}, "卡片文件格式不正确"),
         ({"format": "ainovel.cards", "version": 1, "characters": "x"}, "卡片文件格式不正确"),
         (
@@ -210,3 +214,108 @@ def test_rename_for():
     long = "长" * 100
     renamed = rename_for(long, {long})
     assert len(renamed) == 100 and renamed.endswith("（导入）")
+
+
+async def _career(client, base, name, stages, kind="main", **kw):
+    resp = await client.post(
+        f"{base}/careers", json={"name": name, "kind": kind, "stages": [{"name": s} for s in stages], **kw}
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_cards_v2_careers_roundtrip(client):
+    """AC7：甲导出挂有职业的角色 → 乙：没有的职业新建，同名职业复用并补齐阶段；挂接来源 import。"""
+    await register(client)
+    p = await create_project(client, title="甲")
+    base = f"/api/v1/projects/{p['id']}"
+    sword = await _career(client, base, "剑修", ["练气", "筑基", "金丹"], rules="以剑入道")
+    dan = await _career(client, base, "丹师", ["一品", "二品"], kind="sub")
+    await _career(client, base, "未使用", ["一"])
+    lin = await _char(client, base, "林远")
+    zhang = await _char(client, base, "张三")
+    await client.post(
+        f"{base}/characters/{lin['id']}/careers",
+        json={"career_id": sword["id"], "stage_id": sword["stages"][2]["id"], "note": "初入"},
+    )
+    await client.post(f"{base}/characters/{lin['id']}/careers", json={"career_id": dan["id"]})
+    await client.post(f"{base}/characters/{zhang['id']}/careers", json={"career_id": dan["id"]})
+
+    card = (await client.post(f"{base}/cards/export", json={"character_ids": [lin["id"], zhang["id"]]})).json()
+    assert card["version"] == 2 and not _id_keys(card)
+    assert card["characters"][0]["careers"] == [
+        {"career_name": "剑修", "role": "main", "stage_name": "金丹", "note": "初入"},
+        {"career_name": "丹师", "role": "sub", "stage_name": "一品", "note": ""},
+    ]
+    assert [c["name"] for c in card["careers"]] == ["剑修", "丹师"]
+    assert card["careers"][0]["rules"] == "以剑入道"
+    assert [s["name"] for s in card["careers"][0]["stages"]] == ["练气", "筑基", "金丹"]
+
+    # 乙：已有同名「剑修」但只有两阶
+    p2 = await create_project(client, title="乙")
+    base2 = f"/api/v1/projects/{p2['id']}"
+    sword2 = await _career(client, base2, "剑修", ["练气", "筑基"])
+    pv = (await client.post(f"{base2}/cards/import/preview", json={"data": card})).json()
+    assert [(c["name"], c["status"], c["stages_added"]) for c in pv["careers"]] == [
+        ("剑修", "reuse", ["金丹"]),
+        ("丹师", "new", []),
+    ]
+
+    result = (await client.post(f"{base2}/cards/import", json={"data": card})).json()
+    assert [(c["name"], c["action"], c["stages_added"]) for c in result["careers"]] == [
+        ("剑修", "reused", 1),
+        ("丹师", "created", 0),
+    ]
+    assert result["careers_assigned"] == 3 and result["warnings"] == []
+    careers = {c["name"]: c for c in (await client.get(f"{base2}/careers")).json()}
+    assert careers["剑修"]["id"] == sword2["id"]
+    assert [s["name"] for s in careers["剑修"]["stages"]] == ["练气", "筑基", "金丹"]
+    assert careers["丹师"]["kind"] == "sub"
+    new_lin = next(c for c in (await client.get(f"{base2}/characters")).json() if c["name"] == "林远")
+    assigned = (await client.get(f"{base2}/characters/{new_lin['id']}/careers")).json()
+    assert [(a["career_name"], a["stage_name"], a["stage_position"], a["note"]) for a in assigned] == [
+        ("剑修", "金丹", 3, "初入"),
+        ("丹师", "一品", 1, ""),
+    ]
+    hist = (await client.get(f"{base2}/characters/{new_lin['id']}/career-history")).json()
+    assert {h["source"] for h in hist} == {"import"}
+
+    # 再导入一次（跳过同名角色 = 关联已有）：已挂的职业跳过并给警告
+    again = (await client.post(f"{base2}/cards/import", json={"data": card})).json()
+    assert again["careers_assigned"] == 0
+    assert sum("该角色已挂该职业" in w for w in again["warnings"]) == 3
+
+
+async def test_cards_v2_unresolved_careers(client):
+    """挂接指向未定义的职业、类别不符、阶段名对不上（追加到末尾）；v1 卡片照常导入。"""
+    await register(client)
+    p = await create_project(client)
+    base = f"/api/v1/projects/{p['id']}"
+    await _career(client, base, "剑修", ["练气"])
+    card = {
+        "format": "ainovel.cards",
+        "version": 2,
+        "characters": [
+            {
+                "name": "甲",
+                "careers": [
+                    {"career_name": "不存在", "stage_name": "一"},
+                    {"career_name": "剑修", "role": "sub", "stage_name": "练气"},
+                ],
+            },
+            {"name": "乙", "careers": [{"career_name": "剑修", "stage_name": "化神"}]},
+        ],
+    }
+    pv = (await client.post(f"{base}/cards/import/preview", json={"data": card})).json()
+    assert pv["careers"] == [] and any("不存在" in w for w in pv["warnings"])
+    result = (await client.post(f"{base}/cards/import", json={"data": card})).json()
+    assert result["careers_assigned"] == 1
+    assert any("「不存在」无法关联" in w for w in result["warnings"])
+    assert any("主修职业只能作为主职业" in w for w in result["warnings"])
+    career = (await client.get(f"{base}/careers")).json()[0]
+    assert [s["name"] for s in career["stages"]] == ["练气", "化神"]
+
+    v1 = {"format": "ainovel.cards", "version": 1, "characters": [{"name": "丙"}]}
+    result = (await client.post(f"{base}/cards/import", json={"data": v1})).json()
+    assert [c["action"] for c in result["characters"]] == ["created"]
+    assert (result["careers"], result["careers_assigned"]) == ([], 0)

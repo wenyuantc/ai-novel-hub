@@ -65,3 +65,5 @@ class WizardRequest(BaseModel):
     chapters_per_volume: int = Field(default=10, ge=1, le=100)
     # 仅 characters 使用
     character_count: int = Field(default=5, ge=3, le=30)
+    # 仅 careers 使用
+    career_count: int = Field(default=4, ge=1, le=12)

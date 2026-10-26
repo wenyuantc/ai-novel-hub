@@ -19,10 +19,12 @@ import {
   Typography,
 } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
+import { assignmentApi, careerBadges } from '../../api/careers'
 import { lifeStatusLabel, roleTypeColor } from '../../api/characters'
 import { errorMessage } from '../../api/client'
 import { characterApi } from '../../api/story'
 import type { Character } from '../../api/types'
+import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
 import { characterToForm, EMPTY_CHARACTER, formToCharacterInput, type CharacterFormValues } from '../../components/entities/characterForm'
@@ -37,13 +39,16 @@ import { useProjectStore } from '../../stores/project'
 
 const ALL = '__all__'
 
-/** 角色：卡片列表（按定位筛选、勾选导出）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织）。 */
+/** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业）。 */
 export default function CharactersPanel() {
   const pid = useProjectId()
   const { message } = App.useApp()
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => characterApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader)
+  // 卡片上的主职业·阶段：项目级挂接列表一次取回
+  const badgeLoader = useCallback(async () => careerBadges(await assignmentApi.listProject(pid)), [pid])
+  const { data: badges, reload: reloadBadges } = useLoader(badgeLoader)
   const [editing, setEditing] = useState<Character | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [tab, setTab] = useState('basic')
@@ -97,8 +102,9 @@ export default function CharactersPanel() {
   const handleDelete = async (item: Character) => {
     try {
       await characterApi.remove(pid, item.id)
-      message.success('已删除（相关关系与组织成员记录一并清理）')
+      message.success('已删除（相关关系、组织成员与职业挂接一并清理）')
       reload()
+      reloadBadges()
     } catch (err) {
       message.error(errorMessage(err))
     }
@@ -158,6 +164,7 @@ export default function CharactersPanel() {
             <Row gutter={[16, 16]}>
               {shown.map((c) => {
                 const life = lifeStatusLabel(c.life_status)
+                const badge = badges?.get(c.id)
                 return (
                   <Col key={c.id} xs={24} md={12} xl={8}>
                     <Card
@@ -178,7 +185,7 @@ export default function CharactersPanel() {
                           </Button>
                           <Popconfirm
                             title="删除该角色？"
-                            description="相关的人物关系、关系历史、组织成员记录会一并删除。"
+                            description="相关的人物关系、关系历史、组织成员记录、职业挂接与阶段历史会一并删除。"
                             okText="删除"
                             cancelText="取消"
                             okButtonProps={{ danger: true }}
@@ -192,6 +199,10 @@ export default function CharactersPanel() {
                       }
                     >
                       <Descriptions size="small" column={1}>
+                        {badge?.main && <Descriptions.Item label="主职业">{badge.main}</Descriptions.Item>}
+                        {badge && badge.subs.length > 0 && (
+                          <Descriptions.Item label="副职业">{badge.subs.join('；')}</Descriptions.Item>
+                        )}
                         {c.aliases.length > 0 && <Descriptions.Item label="别名">{c.aliases.join('、')}</Descriptions.Item>}
                         {(c.age || c.gender) && (
                           <Descriptions.Item label="年龄 / 性别">{[c.age, c.gender].filter(Boolean).join(' / ')}</Descriptions.Item>
@@ -224,7 +235,10 @@ export default function CharactersPanel() {
       <Drawer
         title={editing ? `编辑角色：${editing.name}` : '新增角色'}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          reloadBadges()
+        }}
         width={760}
         forceRender
         extra={
@@ -253,13 +267,18 @@ export default function CharactersPanel() {
                       label: '组织',
                       children: <CharacterMembershipsTab projectId={pid} character={editing} />,
                     },
+                    {
+                      key: 'career',
+                      label: '职业',
+                      children: <CharacterCareersTab projectId={pid} character={editing} />,
+                    },
                   ]
                 : []),
             ]}
           />
         </Form>
         {!editing && (
-          <Typography.Text type="secondary">保存后可在「关系」「组织」Tab 中设置人物关系与所属组织。</Typography.Text>
+          <Typography.Text type="secondary">保存后可在「关系」「组织」「职业」Tab 中设置人物关系、所属组织与职业阶段。</Typography.Text>
         )}
       </Drawer>
 
@@ -269,14 +288,20 @@ export default function CharactersPanel() {
         open={wizardOpen}
         existingCount={items.length}
         onClose={() => setWizardOpen(false)}
-        onDone={() => reload()}
+        onDone={() => {
+          reload()
+          reloadBadges()
+        }}
       />
       <EntityTaskModal
         projectId={pid}
         kind="character.generate"
         open={generateOpen}
         onClose={() => setGenerateOpen(false)}
-        onSaved={reload}
+        onSaved={() => {
+          reload()
+          reloadBadges()
+        }}
       />
       <CardExportModal
         projectId={pid}
@@ -286,7 +311,15 @@ export default function CharactersPanel() {
         initialCharacterIds={selectedIds}
         onClose={() => setExportOpen(false)}
       />
-      <CardImportModal projectId={pid} open={importOpen} onClose={() => setImportOpen(false)} onImported={reload} />
+      <CardImportModal
+        projectId={pid}
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          reload()
+          reloadBadges()
+        }}
+      />
     </Card>
   )
 }

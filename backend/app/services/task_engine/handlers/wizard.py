@@ -1,4 +1,4 @@
-"""wizard.outline / wizard.characters / wizard.world：包装 wizard_service。"""
+"""wizard.outline / wizard.characters / wizard.world / wizard.careers：包装 wizard_service。"""
 
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -10,7 +10,7 @@ from app.schemas.chapter import WizardRequest
 from app.services import wizard_service
 from app.services.task_engine.registry import Event, TaskContext, TaskSpec, register
 
-WIZARD_LABELS = {"outline": "大纲向导", "characters": "角色向导", "world": "世界观向导"}
+WIZARD_LABELS = {"outline": "大纲向导", "characters": "角色向导", "world": "世界观向导", "careers": "职业体系向导"}
 
 
 def _wizard_kind(kind: str) -> wizard_service.WizardKind:
@@ -18,7 +18,7 @@ def _wizard_kind(kind: str) -> wizard_service.WizardKind:
 
 
 class WizardHandler:
-    kinds = ("wizard.outline", "wizard.characters", "wizard.world")
+    kinds = ("wizard.outline", "wizard.characters", "wizard.world", "wizard.careers")
 
     async def validate_and_claim(
         self, db: AsyncSession, ctx: TaskContext, *, user_id: int, kind: str, params: dict[str, Any]

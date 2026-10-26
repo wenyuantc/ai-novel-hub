@@ -1,6 +1,7 @@
 """AI 向导：大纲 / 角色 / 世界观生成提示词。均要求 JSON 输出。"""
 
 from app.ai.prompts.common import JSON_ONLY_RULE, NOVELIST_SYSTEM, ProjectInfo, format_project_info
+from app.ai.prompts.entities import CAREER_ASSIGN_EXAMPLE, CAREER_ASSIGN_RULE
 from app.ai.providers.base import ChatMessage
 
 
@@ -55,12 +56,19 @@ def build_characters_messages(
     world_text: str = "",
     outline_text: str = "",
     instruction: str = "",
+    careers_text: str = "",
 ) -> list[ChatMessage]:
+    # 项目已有职业时要求为每个角色分配职业；没有职业时提示词与原来一致
+    has_careers = bool(careers_text.strip())
+    career_rule = f"5. {CAREER_ASSIGN_RULE}\n" if has_careers else ""
+    json_no = 6 if has_careers else 5
+    career_field = f',\n     "careers": {CAREER_ASSIGN_EXAMPLE}' if has_careers else ""
     user = (
         "请为以下小说设计主要角色卡，并给出角色之间的关系。\n\n"
         f"{format_project_info(info)}"
         f"{_reference_block('世界观', world_text)}"
         f"{_reference_block('大纲', outline_text)}"
+        f"{_reference_block('职业体系（名称 / 类别 / 阶梯）', careers_text)}"
         f"{_instruction_block(instruction)}\n\n"
         "【要求】\n"
         f"1. 设计 {character_count} 个角色（不少于 3 个），至少包含主角、重要配角与反派。\n"
@@ -71,12 +79,14 @@ def build_characters_messages(
         "含义为「a 是 b 的 role_a，b 是 a 的 role_b」"
         "（如 a=张三、role_a=师父、b=李四、role_b=徒弟；对称关系两者相同，如 朋友/朋友）。\n"
         "   category 取值：family、social、hostile、work、other；intimacy 为 -100~100 的整数（敌对为负）。\n"
-        f"5. {JSON_ONLY_RULE}\n\n"
+        f"{career_rule}"
+        f"{json_no}. {JSON_ONLY_RULE}\n\n"
         "【输出格式】\n"
         "{\n"
         '  "characters": [\n'
         '    {"name": "角色名", "aliases": ["别名"], "role_type": "主角", "age": "18", "gender": "男",\n'
-        '     "appearance": "外貌", "personality": "性格", "background": "背景", "profile": "简介"}\n'
+        '     "appearance": "外貌", "personality": "性格", "background": "背景", "profile": "简介"'
+        f"{career_field}}}\n"
         "  ],\n"
         '  "relationships": [\n'
         '    {"a": "张三", "b": "李四", "role_a": "师父", "role_b": "徒弟", "category": "social",\n'

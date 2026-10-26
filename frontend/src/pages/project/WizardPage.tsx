@@ -1,8 +1,9 @@
-import { App, Button, Card, Result, Space, Spin, Statistic, Steps, Row, Col } from 'antd'
+import { Alert, App, Button, Card, Result, Space, Spin, Statistic, Steps, Row, Col } from 'antd'
 import { useCallback, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { chapterApi } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
+import { careerApi } from '../../api/careers'
 import { characterApi, outlineApi, worldApi } from '../../api/story'
 import type { WizardKind } from '../../api/types'
 import WizardGenerator from '../../components/WizardGenerator'
@@ -12,18 +13,20 @@ import { useProjectId } from '../../hooks/useProjectId'
 
 const STEPS: { kind: WizardKind; title: string; description: string }[] = [
   { kind: 'world', title: '世界观', description: '时代背景、力量体系、势力与规则' },
+  { kind: 'careers', title: '职业体系', description: '职业与等级阶梯（可跳过）' },
   { kind: 'characters', title: '角色', description: '主要角色卡与人物关系' },
   { kind: 'outline', title: '大纲', description: '分卷分章的故事大纲' },
 ]
 
 interface Counts {
   world: number
+  careers: number
   characters: number
   outline: number
   chapters: number
 }
 
-/** 创作向导：世界观 → 角色 → 大纲 → 批量建章。 */
+/** 创作向导：世界观 → 职业体系（可跳过）→ 角色 → 大纲 → 批量建章。 */
 export default function WizardPage() {
   const pid = useProjectId()
   const { message } = App.useApp()
@@ -31,7 +34,7 @@ export default function WizardPage() {
   const refreshProject = useProjectStore((s) => s.refresh)
   const [searchParams] = useSearchParams()
   const location = useLocation()
-  // 任务面板「跳转」带 ?kind=world|characters|outline：直接打开对应步骤（生成器挂载后自动接上活动任务）
+  // 任务面板「跳转」带 ?kind=world|careers|characters|outline：直接打开对应步骤（生成器挂载后自动接上活动任务）
   const kindStep = STEPS.findIndex((s) => s.kind === searchParams.get('kind'))
   const [step, setStep] = useState(() => Math.max(0, kindStep))
   // 页面已打开时再次跳转（含跳到同一 ?kind=）：每次导航（location.key 变化）都按 kind 切换步骤。
@@ -45,13 +48,14 @@ export default function WizardPage() {
   const [creating, setCreating] = useState(false)
 
   const loader = useCallback(async (): Promise<Counts> => {
-    const [w, c, o, ch] = await Promise.all([
+    const [w, cr, c, o, ch] = await Promise.all([
       worldApi.list(pid),
+      careerApi.list(pid),
       characterApi.list(pid),
       outlineApi.list(pid),
       chapterApi.list(pid),
     ])
-    return { world: w.length, characters: c.length, outline: o.length, chapters: ch.length }
+    return { world: w.length, careers: cr.length, characters: c.length, outline: o.length, chapters: ch.length }
   }, [pid])
   const { data: counts, loading, reload } = useLoader(loader)
 
@@ -96,6 +100,9 @@ export default function WizardPage() {
                     <Statistic title="世界观条目" value={counts?.world ?? 0} />
                   </Col>
                   <Col>
+                    <Statistic title="职业" value={counts?.careers ?? 0} />
+                  </Col>
+                  <Col>
                     <Statistic title="角色" value={counts?.characters ?? 0} />
                   </Col>
                   <Col>
@@ -122,6 +129,13 @@ export default function WizardPage() {
           />
         ) : (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            {current.kind === 'characters' && (counts?.careers ?? 0) > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                message={`项目已有 ${counts?.careers} 个职业：生成的角色会按名称挂接主职业 / 副职业与当前阶段，对不上的会在结果中提示。`}
+              />
+            )}
             <WizardGenerator
               key={current.kind}
               projectId={pid}

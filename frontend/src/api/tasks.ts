@@ -11,6 +11,7 @@ import type {
   TaskOutput,
   TaskProgress,
   TaskStatus,
+  WizardKind,
 } from './types'
 
 export const taskApi = {
@@ -52,6 +53,8 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'character.generate': 'AI 生成角色',
   'organization.generate': 'AI 生成组织',
   'relations.parse': '解析旧关系',
+  'career.generate': 'AI 生成职业',
+  'wizard.careers': '职业体系向导',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -63,7 +66,7 @@ export function queueLabel(task: Pick<Task, 'status' | 'queue_position'>): strin
 
 /**
  * 任务面板「跳转」目标：章节任务 → 章节编辑器；向导任务 → 向导页对应步骤；
- * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页。无法定位时为 null。
+ * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页。无法定位时为 null。
  */
 export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>): string | null {
   if (task.project_id === null) return null
@@ -77,13 +80,15 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>)
       return `${base}/characters`
     case 'organization.generate':
       return `${base}/organizations`
+    case 'career.generate':
+      return `${base}/careers`
     default:
       return `${base}/wizard?kind=${task.kind.slice('wizard.'.length)}`
   }
 }
 
 /** 向导类型 → 任务 kind */
-export function wizardTaskKind(kind: 'outline' | 'characters' | 'world'): TaskKind {
+export function wizardTaskKind(kind: WizardKind): TaskKind {
   return `wizard.${kind}`
 }
 

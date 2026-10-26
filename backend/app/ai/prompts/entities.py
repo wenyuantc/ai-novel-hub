@@ -4,6 +4,13 @@ from app.ai.prompts.common import JSON_ONLY_RULE, NOVELIST_SYSTEM, ProjectInfo, 
 from app.ai.providers.base import ChatMessage
 
 RELATION_CATEGORY_HINT = "category 取值：family（家庭）、social（社交）、hostile（敌对）、work（职场）、other（其他）"
+# 有职业时追加的要求与输出字段（没有职业时提示词与原来一致）
+CAREER_ASSIGN_RULE = (
+    "careers 为该角色的职业（可为空数组）：name 必须是上面列出的已有职业名称，stage 必须是该职业阶梯中的阶段名称，"
+    "role 为 main（主职业，只能是主修职业，最多 1 个）或 sub（副职业，只能是副修职业，最多 3 个），"
+    "note 为状态备注（如「瓶颈期」，可为空）。"
+)
+CAREER_ASSIGN_EXAMPLE = '[{"name": "剑修", "stage": "筑基", "role": "main", "note": ""}]'
 
 
 def _block(title: str, text: str) -> str:
@@ -18,14 +25,20 @@ def build_character_generate_messages(
     organizations_text: str = "",
     role_type: str = "",
     instruction: str = "",
+    careers_text: str = "",
 ) -> list[ChatMessage]:
     want = f"定位为「{role_type.strip()}」的" if role_type.strip() else ""
+    has_careers = bool(careers_text.strip())
+    career_rule = f"5. {CAREER_ASSIGN_RULE}\n" if has_careers else ""
+    json_no = 6 if has_careers else 5
+    career_field = f',\n  "careers": {CAREER_ASSIGN_EXAMPLE}' if has_careers else ""
     user = (
         f"请为以下小说设计一个{want}新角色，并建议他与已有角色之间的关系。\n\n"
         f"{format_project_info(info)}"
         f"{_block('世界观', world_text)}"
         f"{_block('已有角色（名字 / 定位 / 别名）', roster_text)}"
         f"{_block('已有组织', organizations_text)}"
+        f"{_block('已有职业（名称 / 类别 / 阶梯）', careers_text)}"
         f"{_block('作者额外要求', instruction)}\n\n"
         "【要求】\n"
         "1. 新角色的名字和别名不能与已有角色的名字或别名重复。\n"
@@ -35,7 +48,8 @@ def build_character_generate_messages(
         "   self_role 是新角色在这段关系中的身份，target_role 是对方的身份（如 self_role=徒弟、target_role=师父；"
         "对称关系两者相同，如 朋友/朋友）。\n"
         f"   {RELATION_CATEGORY_HINT}；intimacy 为 -100~100 的整数（敌对为负）。\n"
-        f"5. {JSON_ONLY_RULE}\n\n"
+        f"{career_rule}"
+        f"{json_no}. {JSON_ONLY_RULE}\n\n"
         "【输出格式】\n"
         "{\n"
         '  "character": {"name": "角色名", "aliases": ["别名"], "role_type": "配角", "age": "18", "gender": "男",\n'
@@ -43,7 +57,7 @@ def build_character_generate_messages(
         '  "relationships": [\n'
         '    {"target": "已有角色名", "self_role": "徒弟", "target_role": "师父", "category": "social",\n'
         '     "intimacy": 60, "description": "关系描述"}\n'
-        "  ]\n"
+        f"  ]{career_field}\n"
         "}"
     )
     return [{"role": "system", "content": NOVELIST_SYSTEM}, {"role": "user", "content": user}]

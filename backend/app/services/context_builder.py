@@ -5,13 +5,14 @@
   - 本章涉及角色（主角 ∪ 手动指定出场 ∪ 梗概 / 上一章结尾提及）：完整角色卡，含所属组织与职位
   - 人物关系：只列涉及角色两两之间的关系
   - 相关组织：涉及角色所属组织的名称、类型、宗旨
+  - 职业体系：涉及角色所挂职业的完整阶段阶梯（角色卡中有「职业：剑修·筑基（2/9，瓶颈期）」行）
   - 其他角色：只列「名字（定位）」名单
 超出字符预算时的裁剪顺序：
   1. 从最早开始丢弃「更早章节摘要」
   2. 从较早的一章开始，截掉最近章节正文的开头（保留结尾，利于衔接）
   3. 截断世界观尾部
   4. 角色部分：先从尾部丢弃「其他角色」名单 → 再从尾部去掉关系描述（保留关系本身）→ 再从尾部丢弃关系 →
-     截断相关组织 → 最后截断涉及角色卡（排在后面的角色先被截；主角在最前）
+     截断职业体系 → 截断相关组织 → 最后截断涉及角色卡（排在后面的角色先被截；主角在最前）
   5. 截断当前卷大纲尾部
   6. 最终硬截断兜底，保证不超过预算
 """
@@ -22,13 +23,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import format_project_info
-from app.models import Chapter, Character, Organization, OrganizationMember, Outline, Project
-from app.services import cast_service, organization_service, relationship_service, story_service
+from app.models import (
+    Career,
+    CareerStage,
+    Chapter,
+    Character,
+    CharacterCareer,
+    Organization,
+    OrganizationMember,
+    Outline,
+    Project,
+)
+from app.services import career_service, cast_service, organization_service, relationship_service, story_service
 from app.services.project_service import project_info
 
 RECENT_FULL_CHAPTERS = 2
 SUMMARY_CHARS = 200
 ELLIPSIS = "……"
+CAREER_RULES_CHARS = 200
 
 
 @dataclass
@@ -55,6 +67,8 @@ class CastSection:
     relations: list[RelationLine] = field(default_factory=list)
     organizations: list[str] = field(default_factory=list)
     roster: list[str] = field(default_factory=list)
+    # 涉及角色所挂职业的阶梯（每项一个职业）
+    careers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -64,6 +78,7 @@ class ContextParts:
     cards_text: str = ""
     relations: list[RelationLine] = field(default_factory=list)
     organizations_text: str = ""
+    careers_text: str = ""
     roster: list[str] = field(default_factory=list)
     outline_text: str = ""
     summaries: list[str] = field(default_factory=list)
@@ -79,6 +94,8 @@ class ContextParts:
             sections.append("【人物关系】\n" + "\n".join(r.render() for r in self.relations))
         if self.organizations_text:
             sections.append(f"【相关组织】\n{self.organizations_text}")
+        if self.careers_text:
+            sections.append(f"【职业体系】\n{self.careers_text}")
         if self.roster:
             sections.append("【其他角色（仅名单）】\n" + "，".join(self.roster))
         if self.outline_text:
@@ -130,6 +147,7 @@ def assemble_context(
         cards_text="\n\n".join(c.strip() for c in cast.cards if c.strip()),
         relations=[RelationLine(r.head, r.description) for r in cast.relations],
         organizations_text="\n".join(o.strip() for o in cast.organizations if o.strip()),
+        careers_text="\n".join(c.strip() for c in cast.careers if c.strip()),
         roster=list(cast.roster),
         outline_text=outline_text.strip(),
         summaries=[_summary_line(c, summary_chars) for c in earlier],
@@ -174,7 +192,7 @@ def assemble_context(
     # 3. 截断世界观
     cut_attr("world_text")
 
-    # 4. 角色部分：名单 → 关系描述 → 关系 → 相关组织 → 涉及角色卡
+    # 4. 角色部分：名单 → 关系描述 → 关系 → 职业体系 → 相关组织 → 涉及角色卡
     while excess > 0 and parts.roster:
         parts.roster.pop()
         excess = over()
@@ -187,6 +205,7 @@ def assemble_context(
     while excess > 0 and parts.relations:
         parts.relations.pop()
         excess = over()
+    cut_attr("careers_text")
     cut_attr("organizations_text")
     cut_attr("cards_text")
 
@@ -222,6 +241,7 @@ def format_card(
     memberships: list[tuple[OrganizationMember, Organization]],
     *,
     include_legacy_relations: bool = False,
+    career_line: str = "",
 ) -> str:
     """涉及角色的完整角色卡。非存活状态在标题醒目标注。"""
     head = f"■ {c.name}"
@@ -250,6 +270,8 @@ def format_card(
             extra = [x for x in (m.position.strip(), MEMBER_STATUS_LABELS.get(m.status, "")) if x]
             orgs.append(o.name + (f"（{'，'.join(extra)}）" if extra else ""))
         lines.append(f"所属组织：{'、'.join(orgs)}")
+    if career_line:
+        lines.append(career_line)
     # 尚未结构化的旧关系备注仍作为参考（已有结构化关系时不再重复）
     if include_legacy_relations and c.relations_text.strip():
         lines.append(f"关系备注：{c.relations_text.strip()}")
@@ -259,6 +281,36 @@ def format_card(
 def format_organization(o: Organization) -> str:
     head = f"■ {o.name}" + (f"（{o.org_type}）" if o.org_type else "")
     return f"{head}：{o.purpose.strip()}" if o.purpose.strip() else head
+
+
+def _career_item(a: CharacterCareer, career: Career, stages: list[CareerStage]) -> str:
+    stage = next((s for s in stages if s.id == a.stage_id), None)
+    if stage is None:
+        return career.name
+    extra = f"{stage.position}/{len(stages)}" + (f"，{a.note.strip()}" if a.note.strip() else "")
+    return f"{career.name}·{stage.name}（{extra}）"
+
+
+def format_career_line(items: list[tuple[CharacterCareer, Career]], stages: dict[int, list[CareerStage]]) -> str:
+    """「职业：剑修·筑基（2/9，瓶颈期）；副职业：丹师·一品（1/9）」；没有挂接时为空串。"""
+    main = [_career_item(a, c, stages.get(c.id, [])) for a, c in items if a.role == "main"]
+    sub = [_career_item(a, c, stages.get(c.id, [])) for a, c in items if a.role != "main"]
+    parts = []
+    if main:
+        parts.append(f"职业：{'、'.join(main)}")
+    if sub:
+        parts.append(f"副职业：{'、'.join(sub)}")
+    return "；".join(parts)
+
+
+def format_career_ladder(career: Career, stages: list[CareerStage]) -> str:
+    """「■ 剑修（主修）：练气 → 筑基 → 金丹」，规则非空时附一行（前 200 字）。"""
+    text = f"■ {career_service.ladder_line(career, stages)}"
+    rules = " ".join(career.rules.split())
+    if rules:
+        clipped = rules[:CAREER_RULES_CHARS] + (ELLIPSIS if len(rules) > CAREER_RULES_CHARS else "")
+        text += f"\n规则：{clipped}"
+    return text
 
 
 def roster_item(c: Character) -> str:
@@ -274,6 +326,14 @@ async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapte
     for m, o in memberships:
         by_char.setdefault(m.character_id, []).append((m, o))
         orgs.setdefault(o.id, o)
+    # 职业挂接与阶梯：各一次查询，避免按角色逐个查询
+    assignments = await career_service.assignments_of(db, ids)
+    careers_by_char: dict[int, list[tuple[CharacterCareer, Career]]] = {}
+    involved_careers: dict[int, Career] = {}
+    for a, career in assignments:
+        careers_by_char.setdefault(a.character_id, []).append((a, career))
+        involved_careers.setdefault(career.id, career)
+    stages = await career_service.stages_of(db, list(involved_careers))
     rels = await relationship_service.relations_among(db, ids)
     names = {c.id: c.name for c in cast.involved}
     related = {r.a_id for r, _ in rels} | {r.b_id for r, _ in rels}
@@ -287,10 +347,20 @@ async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapte
     ]
     return CastSection(
         cards=[
-            format_card(c, by_char.get(c.id, []), include_legacy_relations=c.id not in related) for c in cast.involved
+            format_card(
+                c,
+                by_char.get(c.id, []),
+                include_legacy_relations=c.id not in related,
+                career_line=format_career_line(careers_by_char.get(c.id, []), stages),
+            )
+            for c in cast.involved
         ],
         relations=relation_lines,
         organizations=[format_organization(o) for o in orgs.values()],
+        careers=[
+            format_career_ladder(c, stages.get(c.id, []))
+            for c in sorted(involved_careers.values(), key=lambda c: (c.sort, c.id))
+        ],
         roster=[roster_item(c) for c in cast.others],
     )
 

@@ -1,5 +1,5 @@
 import { Alert, Modal, Spin } from 'antd'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import type { Task } from '../../api/types'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { TASK_RESULT_VIEWERS } from './taskResultViewers'
@@ -44,7 +44,15 @@ export default function TaskResultModal({ task, onClose }: Props) {
         </div>
       )}
       {result !== undefined && Viewer && task.project_id !== null && (
-        <Viewer projectId={task.project_id} result={result} />
+        <Suspense
+          fallback={
+            <div style={{ textAlign: 'center', padding: 32 }}>
+              <Spin />
+            </div>
+          }
+        >
+          <Viewer projectId={task.project_id} result={result} />
+        </Suspense>
       )}
     </Modal>
   )

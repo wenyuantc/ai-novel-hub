@@ -1,4 +1,7 @@
-"""character.generate / organization.generate / relations.parse：包装 entity_ai_service（只产出草稿，不写库）。"""
+"""character.generate / organization.generate / career.generate / relations.parse。
+
+包装 entity_ai_service：只产出草稿，不写库。
+"""
 
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -6,6 +9,7 @@ from typing import Any, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Task
+from app.schemas.career import CareerGenerateRequest
 from app.schemas.entity_ai import CharacterGenerateRequest, OrganizationGenerateRequest, RelationsParseRequest
 from app.services import entity_ai_service
 from app.services.task_engine.registry import Event, TaskContext, TaskSpec, register
@@ -13,12 +17,13 @@ from app.services.task_engine.registry import Event, TaskContext, TaskSpec, regi
 _REQUESTS = {
     "character.generate": CharacterGenerateRequest,
     "organization.generate": OrganizationGenerateRequest,
+    "career.generate": CareerGenerateRequest,
     "relations.parse": RelationsParseRequest,
 }
 
 
 class EntityHandler:
-    kinds = ("character.generate", "organization.generate", "relations.parse")
+    kinds = ("character.generate", "organization.generate", "career.generate", "relations.parse")
 
     async def validate_and_claim(
         self, db: AsyncSession, ctx: TaskContext, *, user_id: int, kind: str, params: dict[str, Any]
@@ -45,7 +50,7 @@ class EntityHandler:
         return TaskSpec(
             project_id=project_id,
             chapter_id=None,
-            # 生成角色 / 组织允许并发；同一角色的旧关系解析同时只能有一个
+            # 生成角色 / 组织 / 职业允许并发；同一角色的旧关系解析同时只能有一个
             resource_key=f"relparse:{character_id}" if kind == "relations.parse" else None,
             title=title,
             input={"request": request, "ai_config_id": ai_config_id},

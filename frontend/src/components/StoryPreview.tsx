@@ -1,7 +1,8 @@
 import { Card, Collapse, Descriptions, Empty, List, Tag, Typography } from 'antd'
 import type { CSSProperties } from 'react'
+import { careerKindLabel } from '../api/careers'
 import { lifeStatusLabel, roleTypeColor } from '../api/characters'
-import type { Character, Outline, WorldSetting } from '../api/types'
+import type { Career, Character, Outline, WorldSetting } from '../api/types'
 import { groupOutlines, volumeLabel } from '../utils/outline'
 import { asWorldCategory, WORLD_CATEGORY_LABELS } from '../utils/world'
 
@@ -58,6 +59,52 @@ export function CharacterPreview({ items }: { items: Character[] }) {
                 </span>
               }
             >
+              <Descriptions size="small" column={1}>
+                {rows
+                  .filter(([, v]) => !!v)
+                  .map(([label, v]) => (
+                    <Descriptions.Item key={label} label={label}>
+                      <Typography.Paragraph style={pre} ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}>
+                        {v}
+                      </Typography.Paragraph>
+                    </Descriptions.Item>
+                  ))}
+              </Descriptions>
+            </Card>
+          </List.Item>
+        )
+      }}
+    />
+  )
+}
+
+/** 职业体系向导结果：类别、阶梯与说明 */
+export function CareerPreview({ items }: { items: Career[] }) {
+  if (items.length === 0) return <Empty description="暂无职业" />
+  return (
+    <List
+      grid={{ gutter: 12, xs: 1, sm: 1, md: 2, lg: 2, xl: 3 }}
+      dataSource={items}
+      renderItem={(c) => {
+        const rows: [string, string][] = [
+          ['描述', c.description],
+          ['获得条件', c.requirements],
+          ['特殊能力', c.abilities],
+          ['体系规则', c.rules],
+        ]
+        return (
+          <List.Item>
+            <Card
+              size="small"
+              title={
+                <span>
+                  {c.name} <Tag color={c.kind === 'sub' ? 'blue' : 'gold'}>{careerKindLabel(c.kind)}</Tag>
+                </span>
+              }
+            >
+              <Typography.Paragraph style={{ marginBottom: 8 }}>
+                {(c.stages ?? []).map((s) => s.name).join(' → ')}
+              </Typography.Paragraph>
               <Descriptions size="small" column={1}>
                 {rows
                   .filter(([, v]) => !!v)

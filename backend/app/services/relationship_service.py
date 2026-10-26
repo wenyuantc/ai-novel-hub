@@ -31,7 +31,7 @@ from app.schemas.relationship import (
     RelationshipUpdate,
 )
 from app.schemas.story import CharacterOut
-from app.services import story_service
+from app.services import career_service, story_service
 from app.services.cast_service import is_protagonist
 from app.services.project_service import get_owned_project
 
@@ -472,7 +472,7 @@ async def list_history(db: AsyncSession, user_id: int, project_id: int, rel_id: 
 async def create_character_with_relations(
     db: AsyncSession, user_id: int, project_id: int, data: CharacterWithRelations
 ) -> dict[str, Any]:
-    """新建一个角色并同时建立勾选的关系（单事务）。subject_is_a 为真时新角色是 role_a 一方。"""
+    """新建一个角色并同时建立勾选的关系与职业挂接（单事务）。subject_is_a 为真时新角色是 role_a 一方。"""
     await get_owned_project(db, user_id, project_id)
     character = await story_service.new_character(db, project_id, data.character.model_dump())
     rels = []
@@ -494,11 +494,20 @@ async def create_character_with_relations(
                 source="manual",
             )
         )
+    assignments = []
+    for d in data.careers:
+        career = await career_service.get_project_career(db, project_id, d.career_id)
+        assignments.append(
+            await career_service.assign_new(db, character, career, stage_id=d.stage_id, note=d.note, source="ai")
+        )
     await _commit(db)
     await db.refresh(character)
+    for a in assignments:
+        await db.refresh(a)
     return {
         "character": CharacterOut.model_validate(character),
         "relationships": await _refreshed_outs(db, rels, character.id),
+        "careers": await career_service.assignment_outs(db, assignments),
     }
 
 

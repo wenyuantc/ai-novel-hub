@@ -1,10 +1,11 @@
-import { Alert, App, Button, Form, Input, Modal, Progress, Select, Space, Typography } from 'antd'
-import { useEffect, useRef, useState } from 'react'
+import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Select, Space, Spin, Typography } from 'antd'
+import { Suspense, useEffect, useRef, useState } from 'react'
+import { CAREER_KIND_LABELS, careerApi } from '../../api/careers'
 import { characterExtraApi, ROLE_TYPES } from '../../api/characters'
 import { errorMessage } from '../../api/client'
 import { organizationApi } from '../../api/organizations'
 import { queueLabel, TASK_KIND_LABELS, taskApi } from '../../api/tasks'
-import type { Task } from '../../api/types'
+import type { CareerKind, Task } from '../../api/types'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
@@ -12,7 +13,7 @@ import AIConfigSelect from '../AIConfigSelect'
 import StreamOutput from '../StreamOutput'
 import { TASK_RESULT_VIEWERS } from './taskResultViewers'
 
-export type EntityTaskKind = 'character.generate' | 'organization.generate' | 'relations.parse'
+export type EntityTaskKind = 'character.generate' | 'organization.generate' | 'relations.parse' | 'career.generate'
 
 interface Props {
   projectId: number
@@ -29,6 +30,15 @@ interface Props {
 interface FormValues {
   instruction: string
   role_type?: string
+  /** career.generate：1–5 */
+  count?: number
+  career_kind?: CareerKind
+}
+
+const PLACEHOLDERS: Record<Exclude<EntityTaskKind, 'relations.parse'>, string> = {
+  'character.generate': '例如：主角的师父，外冷内热，与反派有旧怨',
+  'organization.generate': '例如：主角所在城市的地下情报组织，与官府若即若离',
+  'career.generate': '例如：与炼丹相关的副修职业，阶段用「品」划分',
 }
 
 /**
@@ -97,6 +107,13 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
         })
       } else if (kind === 'organization.generate') {
         created = await organizationApi.generate(projectId, { ai_config_id: aiConfigId, instruction })
+      } else if (kind === 'career.generate') {
+        created = await careerApi.generate(projectId, {
+          ai_config_id: aiConfigId,
+          instruction,
+          count: v.count ?? 3,
+          kind: v.career_kind ?? null,
+        })
       } else {
         created = await characterExtraApi.parseRelations(projectId, characterId as number, { ai_config_id: aiConfigId })
       }
@@ -131,7 +148,7 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {showForm && (
           <>
-            <Form form={form} layout="vertical" disabled={running} initialValues={{ instruction: '', role_type: undefined }}>
+            <Form form={form} layout="vertical" disabled={running} initialValues={{ instruction: '', role_type: undefined, count: 3, career_kind: undefined }}>
               <Form.Item label="AI 配置">
                 <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={running} />
               </Form.Item>
@@ -140,15 +157,26 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
                   <Select allowClear options={ROLE_TYPES.map((r) => ({ value: r, label: r }))} style={{ width: 200 }} />
                 </Form.Item>
               )}
+              {kind === 'career.generate' && (
+                <Space size="large" wrap>
+                  <Form.Item name="count" label="数量" rules={[{ required: true, message: '请输入数量' }]}>
+                    <InputNumber min={1} max={5} style={{ width: 120 }} />
+                  </Form.Item>
+                  <Form.Item name="career_kind" label="类别（可选）">
+                    <Select
+                      allowClear
+                      placeholder="由 AI 决定"
+                      style={{ width: 160 }}
+                      options={(['main', 'sub'] as CareerKind[]).map((k) => ({ value: k, label: CAREER_KIND_LABELS[k] }))}
+                    />
+                  </Form.Item>
+                </Space>
+              )}
               {kind !== 'relations.parse' ? (
                 <Form.Item label="要求（可选）" name="instruction" rules={[{ max: 2000, message: '不超过 2000 字' }]}>
                   <Input.TextArea
                     autoSize={{ minRows: 2, maxRows: 6 }}
-                    placeholder={
-                      kind === 'character.generate'
-                        ? '例如：主角的师父，外冷内热，与反派有旧怨'
-                        : '例如：主角所在城市的地下情报组织，与官府若即若离'
-                    }
+                    placeholder={PLACEHOLDERS[kind]}
                   />
                 </Form.Item>
               ) : (
@@ -179,7 +207,9 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
         {showForm && (stream.running || stream.text) && <StreamOutput text={stream.text} running={stream.running} maxHeight={240} />}
         {!showForm && Viewer && (
           <>
-            <Viewer projectId={projectId} result={result} onSaved={onSaved} />
+            <Suspense fallback={<Spin />}>
+              <Viewer projectId={projectId} result={result} onSaved={onSaved} />
+            </Suspense>
             <Button onClick={() => setResult(undefined)}>返回重新生成</Button>
           </>
         )}
