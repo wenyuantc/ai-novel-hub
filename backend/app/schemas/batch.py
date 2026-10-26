@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.style import StyleChoice
+
 
 class BatchGenerateRequest(BaseModel):
     # 范围按章节号确定（两端都包含），发起时按 (chapter_no, id) 定下章节 id 列表
@@ -22,6 +24,9 @@ class BatchGenerateRequest(BaseModel):
     skip_on_fail: bool = False
     instruction: str = Field(default="", max_length=2000)
     ai_config_id: int | None = None
+    # 写作风格：inherit = 按章节覆盖或项目默认（逐章解析）；none = 不用风格；整数 = 全部章节使用该风格。
+    # 保存在 input.request 中，断点续跑 / 重试沿用同一个选择
+    style: StyleChoice = "inherit"
 
 
 class BatchPreviewItem(BaseModel):

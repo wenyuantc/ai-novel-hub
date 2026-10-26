@@ -1,0 +1,32 @@
+以下是创作参考资料：
+{{ context }}
+
+【本章任务】{{ heading }}
+{% if summary %}
+本章梗概：{{ summary }}
+{% endif %}
+{% if key_events %}
+关键事件：
+{% for event in key_events %}
+{{ loop.index }}. {{ event }}
+{% endfor %}
+{% endif %}
+{% if goal %}
+叙事目标：{{ goal }}
+{% endif %}
+{% if emotion %}
+情感基调：{{ emotion }}
+{% endif %}
+目标字数：约 {{ target_words }} 字。
+{% if style %}
+写作风格：{{ style }}
+{% endif %}
+{% if instruction %}
+作者额外要求：{{ instruction }}
+{% endif %}
+
+【写作要求】
+1. 与前文自然衔接，保持人物性格、设定与已发生事件一致，不要重复前文内容。
+2. 情节推进围绕本章梗概展开，多用场景描写、动作与对话，少用概括性叙述。
+3. 章末留有钩子，引出后续情节。
+4. 直接输出小说正文，不要输出章节标题、作者按语、总结或任何解释性文字；不要使用 Markdown 格式；段落之间用空行分隔。

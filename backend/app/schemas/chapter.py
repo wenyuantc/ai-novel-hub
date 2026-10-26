@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.style import StyleChoice
+
 ChapterStatus = Literal["draft", "generating", "done"]
 
 
@@ -15,6 +17,8 @@ class ChapterCreate(BaseModel):
 
 class ChapterUpdate(BaseModel):
     outline_id: int | None = None
+    # 本章写作风格覆盖；显式 null = 继承项目默认
+    style_id: int | None = None
     chapter_no: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
     content: str | None = None
@@ -35,6 +39,8 @@ class ChapterBrief(BaseModel):
     outline_id: int | None
     # 对应的细纲（outline-pro）；未按细纲建章时为空
     plan_id: int | None = None
+    # 本章写作风格覆盖（为空 = 继承项目默认）
+    style_id: int | None = None
     chapter_no: int
     title: str
     status: ChapterStatus
@@ -52,11 +58,15 @@ class GenerateChapterRequest(BaseModel):
     target_words: int = Field(default=3000, ge=300, le=20000)
     # 字数低于目标 85% 时自动续写（最多 2 轮）。接口默认关闭以兼容旧客户端，编辑器默认显式开启
     auto_continue: bool = False
+    # 写作风格：inherit = 章节覆盖 > 项目默认；none = 不用风格；整数 = 临时指定风格 id
+    style: StyleChoice = "inherit"
 
 
 class PolishChapterRequest(BaseModel):
     ai_config_id: int | None = None
     instruction: str = Field(default="", max_length=2000)
+    # 写作风格：inherit = 章节覆盖 > 项目默认；none = 不用风格；整数 = 临时指定风格 id
+    style: StyleChoice = "inherit"
 
 
 class WizardRequest(BaseModel):
@@ -83,3 +93,5 @@ class ReviseChapterRequest(BaseModel):
     # 为空 = 原文字数
     target_words: int | None = Field(default=None, ge=300, le=20000)
     ai_config_id: int | None = None
+    # 写作风格：inherit = 章节覆盖 > 项目默认；none = 不用风格；整数 = 临时指定风格 id
+    style: StyleChoice = "inherit"

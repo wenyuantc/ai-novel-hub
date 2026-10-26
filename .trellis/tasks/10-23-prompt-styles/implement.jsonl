@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SSE 预览模式、400 错误格式、任务契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键 SET NULL/CASCADE、归属 404"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "上下文组装与各类提示词的数据块"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "批量请求在 input.request 中保存、续跑沿用"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面与编辑器组件约定、diff 复用"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-prompts-agents.md", "reason": "MuMu 模板机制与缺陷对照（§1）"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-creation-core.md", "reason": "MuMu 写作风格缺陷对照（§10）"}

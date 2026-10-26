@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.style import StyleChoice
+
 VersionSource = Literal["manual", "baseline", "generate", "polish", "rewrite", "restore", "revise"]
 GenerationKind = Literal["generate", "polish", "rewrite", "expand", "condense", "deslop", "continue", "revise"]
 GenerationStatus = Literal["success", "error", "cancelled"]
@@ -67,6 +69,8 @@ class RewriteRequest(BaseModel):
     start: int = Field(ge=0)
     end: int = Field(ge=0)
     instruction: str = Field(default="", max_length=2000)
+    # 写作风格：inherit = 章节覆盖 > 项目默认；none = 不用风格；整数 = 临时指定风格 id
+    style: StyleChoice = "inherit"
 
 
 class RewriteApply(BaseModel):

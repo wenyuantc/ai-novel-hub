@@ -42,6 +42,7 @@ from app.services import (
     cast_service,
     foreshadow_service,
     organization_service,
+    prompt_service,
     relationship_service,
     writeback_service,
 )
@@ -684,7 +685,7 @@ async def build_analysis_job(
     )
     foreshadows = await foreshadow_service.analysis_candidates(db, project.id, chapter.chapter_no)
     messages = build_analysis_messages(
-        project_info(project),
+        await project_info(db, project),
         chapter_no=chapter.chapter_no,
         title=chapter.title,
         content=chapter.content,
@@ -699,6 +700,7 @@ async def build_analysis_job(
             for c in sorted(involved_careers.values(), key=lambda c: (c.sort, c.id))
         ),
         foreshadows_text="\n".join(foreshadow_service.analysis_line(f) for f in foreshadows),
+        override=await prompt_service.get_override(db, user_id, "analysis.chapter"),
     )
     return AnalysisJob(
         project_id=project.id,

@@ -22,6 +22,7 @@ import {
   Tag,
   Typography,
 } from 'antd'
+import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ANALYSIS_STATUS,
@@ -72,6 +73,8 @@ interface Props {
   /** 由编辑器创建并订阅重写任务（与整章生成同样的只读处理；ai_config_id 由编辑器覆盖），创建成功返回 true */
   onRevise: (body: ReviseChapterRequest) => Promise<boolean>
   compare: ReviseCompare | null
+  /** 重写表单中的写作风格选择（由编辑器提供，与 AI 助手的「本次风格」同一状态） */
+  reviseStyle?: ReactNode
 }
 
 /** 章节分析抽屉：状态与分析按钮、评分对比、分析结果（含建议与重写表单）、回写清单、历史与评分走势。 */
@@ -106,6 +109,7 @@ function AnalysisBody({
   reviseRunning,
   onRevise,
   compare,
+  reviseStyle,
 }: Omit<Props, 'open' | 'onClose'>) {
   const { message } = App.useApp()
   const { latest, version, patchChange } = analysis
@@ -263,6 +267,7 @@ function AnalysisBody({
                       reviseBlockedReason={reviseBlockedReason}
                       reviseRunning={reviseRunning}
                       onRevise={onRevise}
+                      reviseStyle={reviseStyle}
                     />
                   ) : (
                     !viewingOther && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={running ? '分析进行中…' : '加载中…'} />
@@ -365,10 +370,11 @@ interface ResultProps {
   reviseBlockedReason: string
   reviseRunning: boolean
   onRevise: Props['onRevise']
+  reviseStyle?: ReactNode
 }
 
 /** 单次分析结果：评分（与上次差值）、指标、摘要、情节点、钩子、冲突与情感、建议 + 按建议重写表单 */
-function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRunning, onRevise }: ResultProps) {
+function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRunning, onRevise, reviseStyle }: ResultProps) {
   const { message } = App.useApp()
   const delta = scoreDelta(detail.scores, previousScores)
   const m = detail.metrics
@@ -553,6 +559,11 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
               style={{ width: '100%' }}
             />
           </Form.Item>
+          {reviseStyle && (
+            <Form.Item label="写作风格" style={{ marginBottom: 8 }}>
+              {reviseStyle}
+            </Form.Item>
+          )}
         </Form>
         {reviseBlockedReason && !reviseRunning && (
           <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>

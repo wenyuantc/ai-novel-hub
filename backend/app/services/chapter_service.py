@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, ChapterPlan, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
-from app.services import version_service
+from app.services import style_service, version_service
 from app.services.project_service import get_owned_project
 
 _WS_RE = re.compile(r"\s+")
@@ -152,6 +152,10 @@ async def update_chapter(
                 plan.chapter_id = None
             chapter.plan_id = None
         chapter.outline_id = data.outline_id
+    if "style_id" in fields:
+        # 只能指向可见的风格（预设或本人所有）；null = 继承项目默认
+        await style_service.ensure_assignable(db, user_id, data.style_id)
+        chapter.style_id = data.style_id
     if data.chapter_no is not None:
         chapter.chapter_no = data.chapter_no
     if data.title is not None:

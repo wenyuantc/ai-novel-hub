@@ -3,8 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
 from app.core.errors import NotFoundError
-from app.models import Chapter, Project
+from app.models import Chapter, Project, WritingStyle
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgress, WizardProgressUpdate
+from app.services import style_service
 
 
 async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
@@ -15,8 +16,10 @@ async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> 
     return project
 
 
-def project_info(project: Project) -> ProjectInfo:
-    return ProjectInfo(title=project.title, genre=project.genre, premise=project.premise, style=project.style)
+async def project_info(db: AsyncSession, project: Project) -> ProjectInfo:
+    """作品信息；「写作风格」取项目默认风格的一句话描述（projects.style 已不再读取）。"""
+    style = await style_service.default_description(db, project)
+    return ProjectInfo(title=project.title, genre=project.genre, premise=project.premise, style=style)
 
 
 def _stats_subquery():
@@ -31,25 +34,34 @@ def _stats_subquery():
     )
 
 
-def _to_out(project: Project, chapter_count: int | None, total_words: int | None) -> ProjectOut:
+def _to_out(
+    project: Project,
+    chapter_count: int | None,
+    total_words: int | None,
+    style: WritingStyle | None = None,
+    notice: str | None = None,
+) -> ProjectOut:
     out = ProjectOut.model_validate(project)
     out.chapter_count = int(chapter_count or 0)
     out.total_words = int(total_words or 0)
+    out.default_style = style_service.to_brief(style) if style is not None else None
+    out.notice = notice
     return out
 
 
 async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
     stats = _stats_subquery()
     rows = await db.execute(
-        select(Project, stats.c.chapter_count, stats.c.total_words)
+        select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle)
         .outerjoin(stats, stats.c.project_id == Project.id)
+        .outerjoin(WritingStyle, WritingStyle.id == Project.default_style_id)
         .where(Project.user_id == user_id)
         .order_by(Project.updated_at.desc(), Project.id.desc())
     )
-    return [_to_out(p, cc, tw) for p, cc, tw in rows.all()]
+    return [_to_out(p, cc, tw, st) for p, cc, tw, st in rows.all()]
 
 
-async def project_out(db: AsyncSession, project: Project) -> ProjectOut:
+async def project_out(db: AsyncSession, project: Project, notice: str | None = None) -> ProjectOut:
     row = (
         await db.execute(
             select(func.count(Chapter.id), func.coalesce(func.sum(Chapter.word_count), 0)).where(
@@ -57,33 +69,49 @@ async def project_out(db: AsyncSession, project: Project) -> ProjectOut:
             )
         )
     ).one()
-    return _to_out(project, row[0], row[1])
+    style = await db.get(WritingStyle, project.default_style_id) if project.default_style_id else None
+    return _to_out(project, row[0], row[1], style, notice)
 
 
-async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) -> Project:
+async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) -> tuple[Project, str | None]:
+    """返回 (项目, 兼容提示)。传了已废弃的 style 自由文本时为项目创建「原风格」并设为默认。"""
+    await style_service.ensure_assignable(db, user_id, data.default_style_id)
     project = Project(
         user_id=user_id,
         title=data.title.strip(),
         genre=data.genre.strip(),
         premise=data.premise.strip(),
-        style=data.style.strip(),
         status="planning",
+        default_style_id=data.default_style_id,
     )
     db.add(project)
+    notice = None
+    if data.style.strip():
+        notice = await style_service.apply_legacy_style(db, project, data.style)
     await db.commit()
     await db.refresh(project)
-    return project
+    return project, notice
 
 
-async def update_project(db: AsyncSession, user_id: int, project_id: int, data: ProjectUpdate) -> Project:
+async def update_project(
+    db: AsyncSession, user_id: int, project_id: int, data: ProjectUpdate
+) -> tuple[Project, str | None]:
+    """返回 (项目, 兼容提示)。default_style_id 显式 null = 取消默认风格；style（已废弃）更新「原风格」。"""
     project = await get_owned_project(db, user_id, project_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    fields = data.model_fields_set
+    if "default_style_id" in fields:
+        await style_service.ensure_assignable(db, user_id, data.default_style_id)
+        project.default_style_id = data.default_style_id
+    for field, value in data.model_dump(exclude_unset=True, exclude={"style", "default_style_id"}).items():
         if value is None:
             continue
         setattr(project, field, value.strip() if isinstance(value, str) else value)
+    notice = None
+    if data.style is not None:
+        notice = await style_service.apply_legacy_style(db, project, data.style)
     await db.commit()
     await db.refresh(project)
-    return project
+    return project, notice
 
 
 async def delete_project(db: AsyncSession, user_id: int, project_id: int) -> None:

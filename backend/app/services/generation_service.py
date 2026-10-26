@@ -30,13 +30,15 @@ from app.ai.prompts import (
     build_polish_messages,
     build_revise_messages,
 )
+from app.ai.prompts.registry import prompt_meta
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
+from app.ai.templating import PromptOverride, TemplateRenderError
 from app.core.errors import BadRequestError, ConflictError
 from app.core.security import SecretCipher
 from app.models import Chapter, ChapterAnalysis, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
 from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
-from app.services import ai_config_service, generation_log_service, version_service
+from app.services import ai_config_service, generation_log_service, prompt_service, style_service, version_service
 from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.context_builder import build_chapter_context, chapter_task
 from app.services.project_service import get_owned_project
@@ -73,6 +75,8 @@ class ChapterJob:
     auto_continue: bool = False
     params: dict[str, Any] = field(default_factory=dict)
     task_id: int | None = None
+    # 自动续写指令的用户覆盖（组装 job 时取出）
+    continue_override: PromptOverride | None = None
 
 
 def elapsed_ms(started: float) -> int:
@@ -139,6 +143,7 @@ async def validate_and_claim(
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     # 只做校验（解密 + 端点防护），运行时再按最新配置重新构建
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    await style_service.validate_choice(db, user_id, req.style)
     if mode == "polish" and not chapter.content.strip():
         raise BadRequestError("章节正文为空，无法润色")
     if mode == "revise":
@@ -232,6 +237,14 @@ async def build_chapter_job(
         raise ConflictError("章节生成状态已被复位，任务未执行")
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    # 风格：临时指定 > 章节覆盖 > 项目默认 > 不用风格；风格段由 style.block 模板渲染
+    resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
+    style = resolved.block if resolved is not None else ""
+    template_key = {"generate": "chapter.generate", "revise": "chapter.revise"}.get(mode, "chapter.polish")
+    override = await prompt_service.get_override(db, user_id, template_key)
+    continue_override = (
+        await prompt_service.get_override(db, user_id, "chapter.continue") if mode == "generate" else None
+    )
 
     if mode == "generate":
         assert isinstance(req, GenerateChapterRequest)
@@ -249,11 +262,12 @@ async def build_chapter_job(
             title=chapter.title or task.title,
             summary=task.summary,
             target_words=req.target_words,
-            style=project.style,
+            style=style,
             instruction=req.instruction,
             key_events=task.key_events,
             goal=task.goal,
             emotion=task.emotion,
+            override=override,
         )
     elif mode == "revise":
         assert isinstance(req, ReviseChapterRequest)
@@ -276,15 +290,24 @@ async def build_chapter_job(
             content=chapter.content,
             suggestions=suggestions,
             target_words=target_words,
-            style=project.style,
+            style=style,
             instruction=req.instruction,
             preserve=req.preserve,
+            override=override,
         )
     else:
         if not chapter.content.strip():
             raise BadRequestError("章节正文为空，无法润色")
-        messages = build_polish_messages(content=chapter.content, style=project.style, instruction=req.instruction)
+        messages = build_polish_messages(
+            content=chapter.content, style=style, instruction=req.instruction, override=override
+        )
         params = {"instruction": req.instruction}
+    # 生成记录：提示词来源与所用风格（渲染后的风格段）
+    params["prompt"] = prompt_meta(template_key, override)
+    if mode == "generate":
+        params["continue_prompt"] = prompt_meta("chapter.continue", continue_override)
+    params["style_choice"] = req.style
+    params["style"] = style_service.style_log(resolved)
 
     return ChapterJob(
         chapter_id=chapter.id,
@@ -302,6 +325,7 @@ async def build_chapter_job(
         auto_continue=mode == "generate" and isinstance(req, GenerateChapterRequest) and req.auto_continue,
         params=params,
         task_id=task_id,
+        continue_override=continue_override,
     )
 
 
@@ -367,9 +391,18 @@ async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[Asyn
             rounds += 1
             words = count_words(text)
             yield "continue", {"round": rounds, "words": words, "target": job.target_words}
-            messages = build_continuation_messages(
-                messages=job.messages, generated=text, current_words=words, target_words=job.target_words
-            )
+            try:
+                messages = build_continuation_messages(
+                    messages=job.messages,
+                    generated=text,
+                    current_words=words,
+                    target_words=job.target_words,
+                    override=job.continue_override,
+                )
+            except TemplateRenderError as exc:
+                # 续写指令的用户覆盖渲染失败：与续写轮报错同样处理，已生成正文照常落库
+                warning = f"自动续写失败：{exc.detail}"
+                break
             # 生成记录不重复存已生成正文，只留占位与续写指令
             log_messages += [
                 {"role": "assistant", "content": f"（第 {rounds} 轮续写前已生成的正文，共 {words} 字，记录中省略）"},

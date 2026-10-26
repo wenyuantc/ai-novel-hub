@@ -439,7 +439,7 @@ async def build_chapter_context(db: AsyncSession, project: Project, chapter: Cha
         for cid, no, title, content in prior_rows
     ]
     return assemble_context(
-        project_text=format_project_info(project_info(project)),
+        project_text=format_project_info(await project_info(db, project)),
         world_text=story_service.format_world(world),
         cast=cast,
         outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),

@@ -720,3 +720,93 @@ def test_0012_batch_generate(tmp_path):
             assert rows[1][2] is not None
     finally:
         engine.dispose()
+
+
+def test_0013_prompt_styles(tmp_path):
+    """0013：插入 6 个预设；非空 projects.style 迁移为「《书名》原风格」并设为项目默认；
+    downgrade -1 把默认风格写回 style（原文无损），删除新表新列。"""
+    import importlib.util
+
+    from app.models.style_presets import PRESET_STYLES
+
+    db_file = tmp_path / "migrate0013.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    long_style = "冷峻克制，" + "长" * 4000 + "\n第二段"
+    command.upgrade(cfg, "0012")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            for title, style in (("星海", long_style), ("空白", "   "), ("短", "凌厉")):
+                conn.execute(
+                    text(
+                        "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                        "VALUES (1, :t, '', '', :s, 'planning')"
+                    ),
+                    {"t": title, "s": style},
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO chapters (project_id, chapter_no, title, content, status, word_count) "
+                    "VALUES (1, 1, '', '', 'draft', 0)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0013")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert {"writing_styles", "prompt_overrides", "prompt_override_versions"} <= set(insp.get_table_names())
+        fks = {fk["constrained_columns"][0]: fk for fk in insp.get_foreign_keys("projects")}
+        assert fks["default_style_id"]["options"].get("ondelete") == "SET NULL"
+        fks = {fk["constrained_columns"][0]: fk for fk in insp.get_foreign_keys("chapters")}
+        assert fks["style_id"]["options"].get("ondelete") == "SET NULL"
+        fks = {fk["constrained_columns"][0]: fk for fk in insp.get_foreign_keys("prompt_override_versions")}
+        assert fks["override_id"]["options"].get("ondelete") == "CASCADE"
+        with engine.begin() as conn:
+            presets = conn.execute(
+                text("SELECT preset_key, name FROM writing_styles WHERE user_id IS NULL ORDER BY sort")
+            ).all()
+            assert [tuple(r) for r in presets] == [(p["preset_key"], p["name"]) for p in PRESET_STYLES]
+            rows = conn.execute(
+                text(
+                    "SELECT p.title, s.user_id, s.name, s.description, s.extra FROM projects p "
+                    "LEFT JOIN writing_styles s ON s.id = p.default_style_id ORDER BY p.id"
+                )
+            ).all()
+            assert rows[0][1:] == (1, "《星海》原风格", long_style[:100], long_style)
+            assert rows[1][1:] == (None, None, None, None)
+            assert rows[2][1:] == (1, "《短》原风格", "凌厉", "凌厉")
+            assert conn.execute(text("SELECT style_id FROM chapters")).scalar_one() is None
+            # 用户覆盖 (user_id, key) 唯一
+            conn.execute(text("INSERT INTO prompt_overrides (user_id, key) VALUES (1, 'chapter.generate')"))
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(text("INSERT INTO prompt_overrides (user_id, key) VALUES (1, 'chapter.generate')"))
+    finally:
+        engine.dispose()
+
+    # 迁移内冻结的预设与应用代码一致
+    spec = importlib.util.spec_from_file_location("m0013", BACKEND_DIR / "alembic/versions/0013_prompt_styles.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert tuple(module.PRESET_STYLES) == PRESET_STYLES
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert not ({"writing_styles", "prompt_overrides", "prompt_override_versions"} & set(insp.get_table_names()))
+        assert "default_style_id" not in {c["name"] for c in insp.get_columns("projects")}
+        assert "style_id" not in {c["name"] for c in insp.get_columns("chapters")}
+        with engine.connect() as conn:
+            styles = [r[0] for r in conn.execute(text("SELECT style FROM projects ORDER BY id")).all()]
+        assert styles == [long_style, "", "凌厉"]
+    finally:
+        engine.dispose()

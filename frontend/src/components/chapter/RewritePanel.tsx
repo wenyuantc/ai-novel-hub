@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { applyRewrite, REWRITE_OP_LABELS, rewriteChapter } from '../../api/chapterVersions'
 import { countWords } from '../../api/chapters'
 import { ApiError, errorMessage } from '../../api/client'
-import type { Chapter, RewriteDone, RewriteOp, RewriteRequest } from '../../api/types'
+import type { Chapter, RewriteDone, RewriteOp, RewriteRequest, StyleChoice } from '../../api/types'
 import { useStreamTask } from '../../hooks/useStreamTask'
 import { codePointLength, utf16ToCodePoint } from '../../utils/textOffset'
 import StreamOutput from '../StreamOutput'
@@ -26,6 +26,8 @@ interface Props {
   content: string
   selection: TextSelection
   aiConfigId: number | null
+  /** 本次写作风格（由编辑器 AI 助手的「本次写作风格」提供） */
+  styleChoice: StyleChoice
   /** 编辑器其他任务进行中 / 章节卡在生成中 / 无 AI 配置 */
   disabled: boolean
   /** 有未保存修改时先保存；失败返回 false */
@@ -49,6 +51,7 @@ export default function RewritePanel({
   content,
   selection,
   aiConfigId,
+  styleChoice,
   disabled,
   ensureSaved,
   onLockChange,
@@ -97,6 +100,7 @@ export default function RewritePanel({
       start: cpStart,
       end: cpEnd,
       instruction: instruction.trim(),
+      style: styleChoice,
     })
   }
 

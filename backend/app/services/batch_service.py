@@ -29,7 +29,7 @@ from app.models import Chapter, ChapterPlan, Project, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.batch import BatchGenerateRequest, BatchPreview, BatchPreviewItem, BatchSkippedItem
 from app.schemas.chapter import GenerateChapterRequest
-from app.services import ai_config_service, analysis_service, generation_service
+from app.services import ai_config_service, analysis_service, generation_service, style_service
 from app.services.project_service import get_owned_project
 
 if TYPE_CHECKING:
@@ -227,6 +227,7 @@ async def validate_start(
     project = await get_owned_project(db, user_id, project_id)
     chapters, _, _ = await _range_chapters(db, project.id, req)
     ai_config_id = await _check_config(db, ctx, user_id, req.ai_config_id)
+    await style_service.validate_choice(db, user_id, req.style)
     if not any(req.include_written or not is_written(c) for c in chapters):
         raise BadRequestError(NOTHING_TO_GENERATE)
     await _check_not_generating(db, [c.id for c in chapters], include_written=req.include_written)
@@ -248,6 +249,7 @@ async def revalidate(db: AsyncSession, ctx: "TaskContext", task: Task) -> int:
     req = BatchGenerateRequest.model_validate(task.input.get("request") or {})
     project = await get_owned_project(db, task.user_id, int(task.project_id or 0))
     ai_config_id = await _check_config(db, ctx, task.user_id, req.ai_config_id)
+    await style_service.validate_choice(db, task.user_id, req.style)
     remaining = list(task.input.get("chapter_ids") or [])[task.step_cursor :]
     await _check_not_generating(db, remaining, include_written=req.include_written)
     if await open_batch(db, project.id, exclude_id=task.id) is not None:
@@ -419,6 +421,7 @@ async def _generate_chapter(
         instruction=job.req.instruction,
         target_words=item["target_words"],
         auto_continue=job.req.auto_continue,
+        style=job.req.style,
     )
     attempt = 0
     error = ""

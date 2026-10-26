@@ -5,12 +5,15 @@ export const API_BASE = '/api/v1'
 export class ApiError extends Error {
   readonly status: number
   readonly detail: string
+  /** 错误响应体（JSON 对象时）；后端 AppError.extra 的结构化字段（如模板校验 errors、删除风格 references）在这里 */
+  readonly body: Record<string, unknown> | null
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, body: Record<string, unknown> | null = null) {
     super(detail)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.body = body
   }
 }
 
@@ -48,18 +51,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/** 从错误响应体中提取 detail（后端统一为 {"detail": "中文"}）。 */
-export async function readErrorDetail(resp: Response): Promise<string> {
+/** 读取错误响应体：detail（后端统一为 {"detail": "中文"}）+ 整个 JSON 对象（含 extra 字段）。 */
+export async function readErrorBody(resp: Response): Promise<{ detail: string; body: Record<string, unknown> | null }> {
   const fallback = `请求失败（HTTP ${resp.status}）`
   try {
     const text = await resp.text()
-    if (!text) return fallback
+    if (!text) return { detail: fallback, body: null }
     const data: unknown = JSON.parse(text)
-    if (isRecord(data) && typeof data.detail === 'string') return data.detail
-    return fallback
+    if (!isRecord(data) || Array.isArray(data)) return { detail: fallback, body: null }
+    return { detail: typeof data.detail === 'string' ? data.detail : fallback, body: data }
   } catch {
-    return fallback
+    return { detail: fallback, body: null }
   }
+}
+
+/** 从错误响应体中提取 detail（后端统一为 {"detail": "中文"}）。 */
+export async function readErrorDetail(resp: Response): Promise<string> {
+  return (await readErrorBody(resp)).detail
 }
 
 /** 判断某路径的 401 是否应触发全局登出跳转（登录类接口自身的 401 由页面处理）。 */
@@ -68,9 +76,9 @@ function shouldRedirectOn401(path: string): boolean {
 }
 
 export async function handleErrorResponse(path: string, resp: Response): Promise<never> {
-  const detail = await readErrorDetail(resp)
+  const { detail, body } = await readErrorBody(resp)
   if (resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
-  throw new ApiError(resp.status, detail)
+  throw new ApiError(resp.status, detail, body)
 }
 
 export interface RequestOptions {
@@ -108,9 +116,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
 export const api = {
   get: <T>(path: string, query?: Record<string, QueryValue>) => request<T>(path, { query }),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>(path, { method: 'POST', body, signal }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body }),
-  del: (path: string) => request<void>(path, { method: 'DELETE' }),
+  put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body }),
+  del: (path: string, query?: Record<string, QueryValue>) => request<void>(path, { method: 'DELETE', query }),
 }
 
 /** 把任意错误转成适合展示的中文消息。 */

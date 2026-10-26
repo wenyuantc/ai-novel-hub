@@ -124,7 +124,6 @@ export interface Project {
   title: string
   genre: string
   premise: string
-  style: string
   status: ProjectStatus
   created_at: string
   updated_at: string
@@ -134,6 +133,11 @@ export interface Project {
   auto_analyze: boolean
   /** 向导进度（outline-pro）：步骤名由前端定义（WIZARD_STEP_KEYS），后端不校验取值 */
   wizard_progress: WizardProgress
+  /** 项目默认写作风格（prompt-styles）；null = 不用风格 */
+  default_style_id: number | null
+  default_style: StyleBrief | null
+  /** 兼容提示（例如请求里仍传了已废弃的 style 字段） */
+  notice?: string | null
 }
 
 export interface WizardProgress {
@@ -153,12 +157,15 @@ export interface ProjectCreate {
   title: string
   genre?: string
   premise?: string
-  style?: string
+  /** 项目默认写作风格；已废弃的 style 自由文本前端不再发送 */
+  default_style_id?: number | null
 }
 
 export interface ProjectUpdate extends Partial<ProjectCreate> {
   status?: ProjectStatus
   auto_analyze?: boolean
+  /** 显式 null = 取消项目默认风格 */
+  default_style_id?: number | null
 }
 
 export type WorldCategory = 'place' | 'faction' | 'item' | 'rule' | 'history' | 'other'
@@ -250,6 +257,8 @@ export interface ChapterBrief {
   outline_id: number | null
   /** 对应的细纲（outline-pro）；未按细纲建章时为 null */
   plan_id: number | null
+  /** 本章写作风格覆盖（null = 继承项目默认） */
+  style_id: number | null
   chapter_no: number
   title: string
   status: ChapterStatus
@@ -270,6 +279,8 @@ export interface ChapterCreate {
 
 export interface ChapterUpdate {
   outline_id?: number | null
+  /** 显式 null = 继承项目默认风格；省略 = 不变 */
+  style_id?: number | null
   chapter_no?: number | null
   title?: string | null
   content?: string | null
@@ -282,6 +293,7 @@ export interface GenerateChapterRequest {
   target_words?: number
   /** 后端默认 false；编辑器默认开启并显式传 true */
   auto_continue?: boolean
+  style?: StyleChoice
 }
 
 /** generate SSE 的 continue 事件：每轮自动续写开始前，round 从 1 起，最多 2 */
@@ -300,6 +312,7 @@ export interface ChapterDone {
 export interface PolishChapterRequest {
   ai_config_id?: number | null
   instruction?: string
+  style?: StyleChoice
 }
 
 export type WizardKind = 'outline' | 'characters' | 'world' | 'careers'
@@ -400,6 +413,7 @@ export interface RewriteRequest {
   start: number
   end: number
   instruction?: string
+  style?: StyleChoice
 }
 
 /** 局部改写 done 载荷：正文未改，需调用 apply 采纳 */
@@ -518,6 +532,8 @@ export interface BatchGenerateRequest {
   /** ≤2000 */
   instruction?: string
   ai_config_id?: number | null
+  /** inherit = 按章节覆盖或项目默认（逐章解析）；none = 不用风格；数字 = 全部章节使用该风格；续跑 / 重试沿用 */
+  style?: StyleChoice
 }
 
 export type BatchWordsSource = 'plan' | 'uniform'
@@ -1304,6 +1320,7 @@ export interface ReviseChapterRequest {
   /** 300–20000；省略 = 原文字数 */
   target_words?: number | null
   ai_config_id?: number | null
+  style?: StyleChoice
 }
 
 // ---------------- 伏笔（backend/app/schemas/foreshadow.py） ----------------
@@ -1617,4 +1634,216 @@ export interface OutlineExpandResult {
   drafts: OutlineExpandDraft[]
   existing: OutlineExpandExisting[]
   warnings: string[]
+}
+
+// ---------------- 写作风格库（backend/app/schemas/style.py） ----------------
+
+/** 生成时的风格选择：inherit = 章节覆盖 > 项目默认；none = 不用风格；数字 = 指定风格 id */
+export type StyleChoice = 'inherit' | 'none' | number
+
+/** 风格字段（全部选填）；长度与后端一致 */
+export interface StyleFields {
+  /** ≤200 */
+  description: string
+  /** 以下维度 ≤500 */
+  pov: string
+  rhythm: string
+  dialogue: string
+  description_density: string
+  tone: string
+  diction: string
+  /** ≤1000 */
+  taboos: string
+  /** ≤2000 */
+  sample: string
+  /** ≤5000 */
+  extra: string
+}
+
+export interface StyleReferences {
+  projects: number
+  chapters: number
+}
+
+export interface WritingStyle extends StyleFields {
+  id: number
+  name: string
+  preset_key: string | null
+  /** 预设：所有用户可见、只读，可复制 */
+  is_preset: boolean
+  sort: number
+  /** 只统计本人的项目 / 章节 */
+  references: StyleReferences
+  created_at: string
+  updated_at: string
+}
+
+export interface StyleBrief {
+  id: number
+  name: string
+  description: string
+  is_preset: boolean
+}
+
+export interface StyleCreate extends Partial<StyleFields> {
+  /** 1–100 */
+  name: string
+}
+
+/** 省略 = 不变 */
+export interface StyleUpdate extends Partial<StyleFields> {
+  name?: string
+  sort?: number
+}
+
+export interface StyleExtractRequest {
+  /** 200–10000 字 */
+  sample_text: string
+  ai_config_id?: number | null
+}
+
+/** 未保存的风格字段（提取结果 / 试写）；名称可空 */
+export interface StyleDraft extends StyleFields {
+  name: string
+}
+
+/** 提取的 done 载荷：草稿不落库 */
+export interface StyleExtractDone {
+  draft: StyleDraft
+  warnings: string[]
+}
+
+export interface StyleTrialRequest {
+  /** 二选一：已保存的风格 id，或未保存的风格字段 */
+  style_id?: number | null
+  style?: StyleDraft | null
+  /** 1–500 */
+  scene: string
+  /** 200–1000，默认 500 */
+  words?: number
+  ai_config_id?: number | null
+}
+
+export interface StyleTrialDone {
+  text: string
+}
+
+export interface StyleImportItem {
+  id: number
+  name: string
+  /** 同名改名时的原名 */
+  renamed_from: string | null
+}
+
+export interface StyleImportResult {
+  items: StyleImportItem[]
+  warnings: string[]
+}
+
+// ---------------- 提示词模板（backend/app/schemas/prompt.py） ----------------
+
+export type TemplatePart = 'system' | 'user'
+
+/** 模板校验问题：part / line 为空表示整体问题（如渲染失败） */
+export interface TemplateIssue {
+  part: TemplatePart | null
+  line: number | null
+  message: string
+}
+
+/** 变量类型：后端为 str，正常取值 text | int | bool | list */
+export interface TemplateVar {
+  name: string
+  label: string
+  kind: string
+  required: boolean
+  /** 锁定变量：内容由代码提供，必须以 {{ name }} 出现且只出现一次，不能放进 if / for */
+  locked: boolean
+  sample: unknown
+}
+
+export interface LockedBlock {
+  name: string
+  label: string
+  value: string
+}
+
+export interface PromptTemplateBrief {
+  key: string
+  name: string
+  category: string
+  category_label: string
+  description: string
+  overridden: boolean
+  enabled: boolean
+  /** 覆盖保存后系统默认已变化 */
+  outdated: boolean
+  updated_at: string | null
+}
+
+export interface PromptOverride {
+  system: string
+  user: string
+  enabled: boolean
+  base_fingerprint: string
+  /** 保存覆盖时的系统默认全文（三方对比的「旧默认」） */
+  base_system: string
+  base_user: string
+  updated_at: string
+}
+
+export interface PromptTemplateDetail extends PromptTemplateBrief {
+  default_system: string
+  default_user: string
+  default_fingerprint: string
+  variables: TemplateVar[]
+  locked: LockedBlock[]
+  override: PromptOverride | null
+}
+
+export interface PromptSave {
+  system?: string
+  user: string
+  /** ≤200 */
+  note?: string
+}
+
+export interface PromptPatch {
+  enabled?: boolean | null
+  /** 确认已阅新默认：内容不变，base 更新为当前系统默认 */
+  ack_default?: boolean
+}
+
+export interface PromptVersion {
+  id: number
+  system: string
+  user: string
+  note: string
+  created_at: string
+}
+
+export interface PromptPreviewRequest {
+  system?: string
+  user: string
+  /** 变量值；缺省用示例值（锁定变量始终用代码值） */
+  variables?: Record<string, unknown>
+}
+
+export interface PromptPreview {
+  messages: GenerationMessage[]
+  errors: TemplateIssue[]
+  locked: LockedBlock[]
+}
+
+export type PromptImportStatus = 'created' | 'updated' | 'unchanged' | 'default' | 'skipped' | 'invalid'
+
+export interface PromptImportItemResult {
+  key: string
+  status: PromptImportStatus
+  message: string
+  errors: TemplateIssue[]
+}
+
+export interface PromptImportResult {
+  items: PromptImportItemResult[]
 }

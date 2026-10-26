@@ -2,10 +2,12 @@ import { Alert, App, Checkbox, Form, Input, InputNumber, List, Modal, Select, Sp
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { previewBatch, startBatch } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
-import type { BatchGenerateRequest, BatchPreview, ChapterBrief, Task } from '../../api/types'
+import type { BatchGenerateRequest, BatchPreview, ChapterBrief, StyleChoice, Task } from '../../api/types'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { defaultBatchRange, endIdUpTo, formatEta, rangeChapters, sortChapters } from '../../utils/batch'
+import { useProjectStore } from '../../stores/project'
 import AIConfigSelect from '../AIConfigSelect'
+import StyleChoiceSelect from '../styles/StyleChoiceSelect'
 
 interface Props {
   projectId: number
@@ -26,6 +28,7 @@ interface FormValues {
   skip_on_fail: boolean
   instruction: string
   ai_config_id: number | null
+  style: StyleChoice
 }
 
 /** 参数变化后多久请求预览 */
@@ -46,6 +49,7 @@ function toRequest(v: Partial<FormValues>): BatchGenerateRequest | null {
     skip_on_fail: !!v.skip_on_fail,
     instruction: v.instruction?.trim() ?? '',
     ai_config_id: v.ai_config_id ?? null,
+    style: v.style ?? 'inherit',
   }
 }
 
@@ -54,6 +58,8 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const hasConfig = useHasAIConfig()
+  const projectDefaultStyle = useProjectStore((s) => (s.project?.id === projectId ? s.project.default_style : null))
+  const styleContext = useMemo(() => ({ projectDefault: projectDefaultStyle }), [projectDefaultStyle])
   const sorted = useMemo(() => sortChapters(chapters), [chapters])
   const range = useMemo(() => defaultBatchRange(chapters), [chapters])
   const values = Form.useWatch([], form) as Partial<FormValues> | undefined
@@ -157,6 +163,7 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
           skip_on_fail: false,
           instruction: '',
           ai_config_id: null,
+          style: 'inherit',
         }}
       >
         <Space size="middle" wrap align="start">
@@ -212,9 +219,22 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
         <Form.Item name="instruction" label="附加要求（可选，每章通用）" rules={[{ max: 2000, message: '不超过 2000 字' }]}>
           <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} placeholder="例如：保持紧凑节奏，多用对话推进" />
         </Form.Item>
-        <Form.Item name="ai_config_id" label="AI 配置">
-          <AIConfigSelect />
-        </Form.Item>
+        <Space size="large" wrap align="start" style={{ width: '100%' }}>
+          <Form.Item name="ai_config_id" label="AI 配置" style={{ minWidth: 300 }}>
+            <AIConfigSelect />
+          </Form.Item>
+          <Form.Item
+            name="style"
+            label="写作风格"
+            tooltip="按章节或项目默认：每章按自己的本章风格，未设置的用项目默认；也可以指定一个风格用于全部章节。续跑 / 重试沿用这次的选择"
+            style={{ minWidth: 300 }}
+          >
+            <StyleChoiceSelect
+              context={styleContext}
+              inheritLabel={`按章节或项目默认${projectDefaultStyle ? `（项目默认「${projectDefaultStyle.name}」）` : ''}`}
+            />
+          </Form.Item>
+        </Space>
       </Form>
       <Spin spinning={previewing}>
         {previewError && <Alert type="error" showIcon message={previewError} />}

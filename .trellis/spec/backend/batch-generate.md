@@ -19,7 +19,7 @@
 # backend/app/schemas/batch.py
 class BatchGenerateRequest:  # start_chapter_id, end_chapter_id, include_written=False, target_words=3000 (300–20000),
                              # use_plan_words=True, auto_continue=True, review_every=0 (0–50), skip_on_fail=False,
-                             # instruction ≤2000, ai_config_id?
+                             # instruction ≤2000, ai_config_id?, style: inherit|none|风格 id（逐章解析，续跑沿用，见 prompts-styles.md）
 class BatchPreview: total, items[{chapter_id, chapter_no, title, target_words, words_source: plan|uniform, written}],
                     skipped[{chapter_id, chapter_no, title, word_count}], analyze, estimated_minutes, warnings
 

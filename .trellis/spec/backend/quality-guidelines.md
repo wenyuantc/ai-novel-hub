@@ -50,7 +50,8 @@ Pytest 配置：`asyncio_mode = "auto"`、`asyncio_default_fixture_loop_scope = 
   （`auth_service.register` / `authenticate`）。任何新增的重型同步调用都应照此处理。
 - 在 service 中**直接使用 `HTTPException` / 手工构造错误 `JSONResponse`** —— 应抛出 `AppError` 子类。
 - **返回密钥**：绝不能把 `api_key` / `api_key_enc` / `password_hash` 放进 Out schema。
-- **在 service 中内联 prompt 文本** —— 它应放在 `app/ai/prompts/` 中。
+- **在 service 中内联 prompt 文本** —— 提示词文本放在 `app/ai/prompts/templates/*.j2` 默认模板中，
+  `build_*_messages` 只拼变量（见 [prompts-styles.md](./prompts-styles.md)；改默认模板要同步 `tests/prompt_legacy.py`）。
 - **访问真实 DNS、真实 LLM API 或共享固定路径的测试**（`/tmp/test.db`、共享的
   `.env`）。见“测试要求”。
 

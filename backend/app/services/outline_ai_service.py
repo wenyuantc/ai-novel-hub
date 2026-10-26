@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.ai.prompts import ProjectInfo, build_outline_continue_messages, build_outline_expand_messages
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
+from app.ai.templating import PromptOverride
 from app.core.errors import BadRequestError
 from app.core.security import SecretCipher
 from app.models import Chapter, Foreshadow, Outline
@@ -31,7 +32,14 @@ from app.schemas.outline import (
     OutlineExpandRequest,
     clean_key_events,
 )
-from app.services import ai_config_service, foreshadow_service, outline_service, plan_service, story_service
+from app.services import (
+    ai_config_service,
+    foreshadow_service,
+    outline_service,
+    plan_service,
+    prompt_service,
+    story_service,
+)
 from app.services.context_builder import latest_summaries
 from app.services.entity_ai_service import resolve_name
 from app.services.generation_service import Event
@@ -68,6 +76,8 @@ class OutlineJob:
     total: int = 0
     info: ProjectInfo | None = None
     prompt_parts: dict[str, str] = field(default_factory=dict)
+    # 组装 job 时取出的用户覆盖（任务运行中途修改模板不影响本次任务）
+    override: PromptOverride | None = None
 
 
 # ---------------- 规范化（纯函数） ----------------
@@ -298,7 +308,7 @@ async def build_outline_job(
     project = await get_owned_project(db, user_id, project_id)
     cfg = await ai_config_service.resolve_config(db, user_id, params.get("ai_config_id"))
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    info = project_info(project)
+    info = await project_info(db, project)
     outlines = await outline_service.list_outlines(db, project_id)
     job = OutlineJob(
         kind=kind,
@@ -307,6 +317,7 @@ async def build_outline_job(
         model=cfg.model,
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
+        override=await prompt_service.get_override(db, user_id, kind),
     )
     if kind == "outline.continue":
         req = OutlineContinueRequest.model_validate(params)
@@ -334,6 +345,7 @@ async def build_outline_job(
             story_so_far_text=_clip(await _story_so_far(db, project_id), REFERENCE_TEXT_CHARS),
             foreshadows_text=await _open_foreshadows(db, project_id, next_no),
             direction=req.direction,
+            override=job.override,
         )
         job.count = req.count
         job.new_volume = req.new_volume.model_dump() if req.new_volume is not None else None
@@ -376,6 +388,7 @@ def expand_messages(job: OutlineJob, count: int, previous_events: list[str]) -> 
         count=count,
         total=job.total,
         instruction=job.prompt_parts["instruction"],
+        override=job.override,
     )
 
 

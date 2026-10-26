@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
 import type { Project, ProjectCreate } from '../api/types'
+import StyleSelect from '../components/styles/StyleSelect'
 import { useLoader } from '../hooks/useLoader'
 import { formatTime } from '../utils/time'
 
@@ -25,7 +26,7 @@ export default function ProjectListPage() {
         title: values.title.trim(),
         genre: values.genre?.trim() ?? '',
         premise: values.premise?.trim() ?? '',
-        style: values.style?.trim() ?? '',
+        default_style_id: values.default_style_id ?? null,
       })
       message.success('项目已创建，进入创作向导')
       setCreateOpen(false)
@@ -151,8 +152,8 @@ export default function ProjectListPage() {
           <Form.Item name="premise" label="一句话设定" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
             <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} placeholder="故事的核心点子、主角与冲突" />
           </Form.Item>
-          <Form.Item name="style" label="写作风格" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
-            <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} placeholder="例如：轻松幽默、节奏明快、第一人称" />
+          <Form.Item name="default_style_id" label="默认写作风格" extra="可在风格库中新建或从样文提取风格，之后在项目概览里修改">
+            <StyleSelect placeholder="不用风格" />
           </Form.Item>
         </Form>
       </Modal>

@@ -16,7 +16,7 @@ import WorldPanel from './pages/project/WorldPanel'
 
 /**
  * 路由级懒加载（React Router `lazy`）：主包需低于 chunkSizeWarningLimit（1500 kB），
- * 较重或较少访问的页面单独成 chunk（章节编辑器含 diff、大纲 / 组织 / 关系 / 职业 / 伏笔页、模型配置）。
+ * 较重或较少访问的页面单独成 chunk（章节编辑器含 diff、大纲 / 组织 / 关系 / 职业 / 伏笔页、模型配置、提示词模板、写作风格库）。
  */
 const lazyPage = (load: () => Promise<{ default: ComponentType }>) => async () => ({ Component: (await load()).default })
 
@@ -33,6 +33,8 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/projects" replace /> },
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
+      { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },
+      { path: 'styles', lazy: lazyPage(() => import('./pages/StylesPage')) },
       {
         path: 'admin/users',
         element: (

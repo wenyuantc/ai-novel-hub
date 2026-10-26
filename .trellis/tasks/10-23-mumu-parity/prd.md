@@ -94,7 +94,7 @@
 | P0-4b | `foreshadows` 伏笔管理（用户决定从 analysis-memory 拆出，紧接着做） | B6 | analysis-memory |
 | P0-5 | `outline-pro` 大纲续写、一对多展开、导入导出、快照撤销、向导增量与续跑 | A1、A2、A4、A5、A6 | task-engine、chapter-versions |
 | P0-5b | `batch-generate` 批量顺序生成（用户决定从 outline-pro 拆出，紧接着做） | A8 | outline-pro、analysis-memory |
-| P1-6 | `prompt-styles` 提示词模板、写作风格库、实例内工坊 | C1、C2、A14 | 无（最好在 P0-4、P0-5 之前，新提示词可直接走模板化） |
+| P1-6 | `prompt-styles` 提示词模板、写作风格库（含文件导入导出） | C1、A14 | 无 |
 | P1-7 | `inspiration` 灵感模式与项目结构化字段 | A3 | 无 |
 | P1-8 | `book-import` 拆书 | C3 | task-engine、story-entities、outline-pro；文件上传复用封面任务的方案 |
 | P1-9 | `knowledge-base` 检索基建：知识库 + 向量剧情记忆（B7 由用户决定从 analysis-memory 并入） | B7、B8 | analysis-memory（摘要/情节点作为记忆来源） |
@@ -102,10 +102,11 @@
 | P2-11 | `project-agent` 项目智能体 | C4 | story-entities、chapter-versions |
 | P2-12 | `skills-mcp` Skill 和 MCP 插件 | C5、C6 | prompt-styles |
 | P2-13 | `oauth-announce` OAuth、邮箱登录、实例公告 | D2、D6 | 无 |
+| P2-14 | `prompt-workshop` 实例内工坊：共享写作风格与提示词模板、管理员审核（用户决定从 prompt-styles 拆出） | C2 | prompt-styles |
 
 ## 进度
 
-已归档 8/16（2026-10-26）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate。P0 全部完成，下一步从 P1 开始规划。
+已归档 9/17（2026-10-26）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles。P0 全部完成，P1 进行中。
 
 不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 

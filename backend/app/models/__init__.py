@@ -21,12 +21,15 @@ from app.models.entities import (
     Outline,
     OutlineSnapshot,
     Project,
+    PromptOverrideVersion,
+    PromptTemplateOverride,
     Relationship,
     RelationshipHistory,
     RelationshipType,
     Task,
     User,
     WorldSetting,
+    WritingStyle,
 )
 
 __all__ = [
@@ -52,10 +55,13 @@ __all__ = [
     "Outline",
     "OutlineSnapshot",
     "Project",
+    "PromptOverrideVersion",
+    "PromptTemplateOverride",
     "Relationship",
     "RelationshipHistory",
     "RelationshipType",
     "Task",
     "User",
     "WorldSetting",
+    "WritingStyle",
 ]

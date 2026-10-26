@@ -1,0 +1,27 @@
+请为以下小说构建世界观设定。
+
+{{ project_info }}
+{% if outline %}
+
+【已有大纲（请保持一致）】
+{{ outline }}
+{% endif %}
+{% if characters %}
+
+【已有角色（请保持一致）】
+{{ characters }}
+{% endif %}
+{% if instruction %}
+
+【作者额外要求】
+{{ instruction }}
+{% endif %}
+
+【要求】
+1. 输出 5~10 个设定条目，覆盖时代背景、地理势力、力量/科技体系、社会规则、重要历史事件等与题材相关的方面。
+2. 每个条目 content 为 100~400 字，具体、自洽、可直接用于写作参考。
+3. category 为条目分类，取值：place（地点）、faction（势力）、item（物品）、rule（规则 / 体系）、history（历史）、other（其他）。
+4. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

@@ -15,12 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.prompts import RewriteOp, build_rewrite_messages
+from app.ai.prompts.registry import prompt_meta
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import BadRequestError, ConflictError
 from app.core.security import SecretCipher
 from app.models import Chapter, GenerationLog
 from app.schemas.chapter_version import RewriteApply, RewriteRequest
-from app.services import ai_config_service, generation_log_service, version_service
+from app.services import ai_config_service, generation_log_service, prompt_service, style_service, version_service
 from app.services.chapter_service import commit_versioned, count_words, get_owned_chapter, get_project_chapter
 from app.services.context_builder import chapter_task
 from app.services.generation_service import Event, elapsed_ms, stream_pieces
@@ -89,6 +90,8 @@ async def prepare_rewrite_job(
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     task = await chapter_task(db, chapter)
+    resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
+    override = await prompt_service.get_override(db, user_id, "chapter.rewrite")
     original = content[start:end]
     if req.op == "continue":
         before, after = content[max(0, start - CONTINUE_BEFORE_CHARS) : start], ""
@@ -99,9 +102,10 @@ async def prepare_rewrite_job(
         selected=original,
         before=before,
         after=after,
-        style=project.style,
+        style=resolved.block if resolved is not None else "",
         summary=task.summary,
         instruction=req.instruction,
+        override=override,
     )
     return RewriteJob(
         project_id=project.id,
@@ -124,6 +128,9 @@ async def prepare_rewrite_job(
             "end": end,
             "selection_chars": end - start,
             "instruction": req.instruction,
+            "prompt": prompt_meta("chapter.rewrite", override),
+            "style_choice": req.style,
+            "style": style_service.style_log(resolved),
         },
     )
 

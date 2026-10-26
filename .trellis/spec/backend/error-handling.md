@@ -71,6 +71,10 @@ finally:
     await client.close()
 ```
 
+**结构化附加字段**：`AppError(detail, extra={...})` 的 `extra` 会合并进响应体（`detail` 始终存在）。目前用于
+模板校验 400 的 `errors: [{part, line, message}]` 与删除被引用风格 409 的 `references: {projects, chapters}`（见 [prompts-styles.md](./prompts-styles.md)）。
+`TemplateRenderError(BadRequestError)`：运行时渲染用户覆盖失败；请求内 → 400，任务内 → failed。
+
 `JSONExtractError(ValueError)`（`backend/app/ai/json_extract.py`）表示向导输出无法解析；
 它会被转换为 SSE 错误 `"AI 输出解析失败：{exc}，请重新生成"`。
 
@@ -184,7 +188,8 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   `/outlines/{oid}/expand`（`outline.continue` / `outline.expand`，只产出草稿，见 [outline.md](./outline.md)）同样返回 202；章节分析 `POST /chapters/{cid}/analyze`（`chapter.analyze`，同章已有排队中的分析时
   返回那条任务、状态码 200）、按建议重写 `POST /chapters/{cid}/revise`（`chapter.revise`）也走任务，见 story-entities.md「章节分析与回写」；实时输出通过
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
-- **同步 SSE**：只剩 `POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎）。
+- **同步 SSE**：`POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎），以及
+  `POST /api/v1/styles/extract`、`POST /api/v1/styles/trial`（风格提取 / 试写：`delta` → `done` / `error`，不写生成记录、无项目归属，见 prompts-styles.md）。
 - 跨层：后端 `app/api/sse.py`、`task_engine/{engine,hub,registry}.py`、`handlers/{chapter,wizard}.py`、
   `generation_service.py` / `wizard_service.py` / `rewrite_service.py`、`task_service.py`、`api/v1/tasks.py`；
   前端 `frontend/src/api/sse.ts` 与任务订阅。新增任务类型、修改订阅事件名 / payload、新增流式端点时都要遵循并更新此契约。
@@ -386,6 +391,8 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 | 用户取消 | 运行中 | cancelled `任务已取消`，生成记录 `cancelled` |
 | 服务停止 / 崩溃后重启 | 运行中 | interrupted `服务重启，任务已中断`，保留 `output_text` |
 | 改写：选区 / op 非法 | 流开始前 | 400 / 422 JSON（见 `rewrite_service`）；改写意外异常 → `error {"detail": "改写失败：服务器内部错误"}` |
+| 请求 `style` 指定了不可见的风格（generate / polish / revise / rewrite / batch） | 创建前 / 流开始前 | 400 `指定的写作风格不存在或不可用`（不建任务、不抢占） |
+| 用户覆盖的模板运行时渲染失败 | 运行开始 | failed `提示词模板「X」模板渲染失败：…，请检查或恢复默认` |
 
 ### 5. Good / Base / Bad 用例
 

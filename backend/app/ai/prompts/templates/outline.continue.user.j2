@@ -1,0 +1,37 @@
+请在已有大纲之后续写新的章纲。
+
+{{ project_info }}
+{% if world %}
+
+【世界观】
+{{ world }}
+{% endif %}
+{% if story_so_far %}
+
+【前文进展（每章摘要）】
+{{ story_so_far }}
+{% endif %}
+{% if recent_outlines %}
+
+【最近的章纲】
+{{ recent_outlines }}
+{% endif %}
+{% if foreshadows %}
+
+【尚未回收的伏笔】
+{{ foreshadows }}
+{% endif %}
+{% if direction %}
+
+【作者给的发展方向】
+{{ direction }}
+{% endif %}
+
+【要求】
+1. 续写 {{ count }} 章，从第 {{ next_chapter_no }} 章开始，紧接最近的章纲自然推进，不要重复已发生的情节。
+2. {{ volume_hint }}
+3. 每章有简短章节标题（不要带“第X章”前缀）和 50~150 字的情节梗概，体现冲突、转折；适时推进或回收未回收的伏笔。
+4. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

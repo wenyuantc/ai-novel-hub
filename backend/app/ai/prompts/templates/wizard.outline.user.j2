@@ -1,0 +1,40 @@
+{% if existing %}
+请在已有大纲之后继续设计新的分卷分章大纲。
+{% else %}
+请为以下小说设计分卷分章大纲。
+{% endif %}
+
+{{ project_info }}
+{% if world %}
+
+【已有世界观（请保持一致）】
+{{ world }}
+{% endif %}
+{% if characters %}
+
+【已有角色（请保持一致）】
+{{ characters }}
+{% endif %}
+{% if existing %}
+
+【已有大纲（末尾部分）】
+{{ existing }}
+{% endif %}
+{% if instruction %}
+
+【作者额外要求】
+{{ instruction }}
+{% endif %}
+
+【要求】
+{% if existing %}
+1. 新写 {{ volume_count }} 卷，每卷约 {{ chapters_per_volume }} 章；从第 {{ start_volume_no }} 卷、第 {{ start_chapter_no }} 章开始，卷号与章节号 chapter_no 接着已有大纲连续递增；情节紧接已有大纲的结尾，不要重复已有内容。
+{% else %}
+1. 共 {{ volume_count }} 卷，每卷约 {{ chapters_per_volume }} 章；章节号 chapter_no 在全书范围内从 1 开始连续递增。
+{% endif %}
+2. 每卷有卷名；每章有简短章节标题（不要带“第X章”前缀）和 50~150 字的情节梗概，体现冲突、转折与伏笔。
+3. 整体节奏张弛有度，主线清晰，卷末设置高潮或悬念。
+4. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

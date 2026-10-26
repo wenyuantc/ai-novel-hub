@@ -26,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
+from app.models.style_presets import PRESET_STYLES
 
 CHAPTER_STATUSES = ("draft", "generating", "done")
 AI_PROVIDERS = ("openai_compat", "anthropic", "gemini")
@@ -157,8 +158,13 @@ class Project(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     genre: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 旧的写作风格自由文本：迁移 0013 起不再读写（已迁移为项目的「原风格」），下一个大版本删除
     style: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="planning", nullable=False)
+    # 项目默认写作风格（删除风格时 SET NULL，即回落为不用风格）
+    default_style_id: Mapped[int | None] = mapped_column(
+        ForeignKey("writing_styles.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     # AI 整章生成 / 润色 / 按建议重写成功后自动排队分析本章
     auto_analyze: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
     # 向导进度 {done: [步骤], skipped: [步骤], current: 步骤 | null}；重新进入向导时从中断处继续
@@ -431,6 +437,10 @@ class Chapter(TimestampMixin, Base):
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("chapter_plans.id", ondelete="SET NULL", use_alter=True), index=True, nullable=True
     )
+    # 本章写作风格覆盖；为空 = 继承项目默认（删除风格时 SET NULL，即回落到项目默认）
+    style_id: Mapped[int | None] = mapped_column(
+        ForeignKey("writing_styles.id", ondelete="SET NULL"), index=True, nullable=True
+    )
 
 
 class ChapterPlan(TimestampMixin, Base):
@@ -682,3 +692,68 @@ class ForeshadowHistory(TimestampMixin, Base):
     chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     changes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+
+
+class PromptTemplateOverride(TimestampMixin, Base):
+    """用户对某个提示词模板 key 的覆盖：对该用户的全部项目生效；停用后运行时用系统默认，内容保留。
+
+    base_*：保存时系统默认的指纹与全文（系统默认升级后据此判断 outdated、展示三方差异）。
+    """
+
+    __tablename__ = "prompt_overrides"
+    __table_args__ = (UniqueConstraint("user_id", "key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    system: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    user: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    base_fingerprint: Mapped[str] = mapped_column(String(16), default="", nullable=False)
+    base_system: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    base_user: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+
+class PromptOverrideVersion(TimestampMixin, Base):
+    """覆盖的历史版本（每个覆盖保留最近 MAX_VERSIONS 个）。"""
+
+    __tablename__ = "prompt_override_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    override_id: Mapped[int] = mapped_column(
+        ForeignKey("prompt_overrides.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    system: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    user: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    note: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+
+
+class WritingStyle(TimestampMixin, Base):
+    """写作风格。user_id 为空 = 内置预设（preset_key 唯一，只读，所有用户可见）。"""
+
+    __tablename__ = "writing_styles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
+    preset_key: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    pov: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    rhythm: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    dialogue: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    description_density: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    tone: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    diction: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    taboos: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    sample: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    extra: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+@event.listens_for(WritingStyle.__table__, "after_create")
+def _seed_preset_styles(target, connection, **_kw) -> None:
+    """create_all（测试）建表后写入预设；生产环境由迁移 0013 写入、启动时 sync_presets 同步。"""
+    connection.execute(
+        target.insert(),
+        [{**p, "user_id": None, "sort": i} for i, p in enumerate(PRESET_STYLES, start=1)],
+    )

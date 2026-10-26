@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）→ `0013`（提示词模板与写作风格：`prompt_overrides` / `prompt_override_versions` / `writing_styles`、`projects.default_style_id`、`chapters.style_id`，`projects.style` 迁移为「原风格」，见 [prompts-styles.md](./prompts-styles.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -177,6 +177,9 @@ def count_words(text: str) -> int:
 | `foreshadow_history.note` / `source` | String(200) / String(16) |
 | `chapter_plans.title` / `emotion` | String(200) / String(100)；梗概、叙事目标为 Text；`key_events` / `character_ids` 为 JSON 列表；`chapter_id` 唯一 |
 | `outline_snapshots.reason` / `note` | String(32) / String(200)；`data` 为 JSON |
+| `writing_styles.name` / `description` / 维度字段（pov 等 6 个）/ `taboos` / `preset_key` | String(100) / String(200) / String(500) / String(1000) / String(32)；`sample`（≤2000，schema 限制）/ `extra`（≤5000）为 Text |
+| `prompt_overrides.key` / `base_fingerprint` | String(64) / String(16)；`system` / `user` / `base_*` 为 Text；`(user_id, key)` 唯一 |
+| `prompt_override_versions.note` | String(200) |
 | `world_settings.category` / `characters.life_status` / 各 `status` / `category` | String(16) |
 | `chapters.status` | String(16)；`projects.status` / `ai_configs.provider` String(32) |
 | 长文本（`content`、`summary`、`profile`、`premise`、`style`、`api_key_enc`） | Text |
@@ -228,7 +231,11 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   删角色只解除关联、删伏笔级联历史，`downgrade -1` 删除三张表且存量角色保留）、
   `0011_outline_pro.py`（`down_revision = '0010'`，新建 `chapter_plans` / `outline_snapshots`，`chapters` 加 `plan_id`（batch 建外键），
   `projects.wizard_progress` `server_default='{}'` 回填；`test_0011_outline_pro` 断言外键规则、`chapter_plans.chapter_id` 唯一、回填、
-  删大纲级联细纲且章节保留并解除关联，`downgrade -1` 删除两表两列且存量章节保留）。
+  删大纲级联细纲且章节保留并解除关联，`downgrade -1` 删除两表两列且存量章节保留）、
+  `0013_prompt_styles.py`（`down_revision = '0012'`，新建三张表与两列，插入 6 个预设风格（迁移内冻结副本），非空 `projects.style` →
+  所有者的「《书名》原风格」（description = 前 100 字、extra = 全文 ≤5000）并设为项目默认，`projects.style` 列保留不再读写；
+  downgrade 把默认风格的 extra（空则 description）写回 `projects.style`；`test_0013_prompt_styles` 断言外键规则、预设与代码一致、
+  迁移结果、`(user_id, key)` 唯一、往返后 style 原文无损）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -327,6 +334,10 @@ outline_id: Mapped[int | None] = mapped_column(
 `chapters.plan_id` 为 SET NULL（模型上 `use_alter=True`：两表互相引用，PostgreSQL 建表后再加外键，SQLite 内联）；`outline_snapshots.project_id` 为 CASCADE。
 细纲与章节的双向关联只经 `plan_service` 维护；在已有章节之前插入 / 删除章节必须经 `chapter_numbering.shift_chapter_numbers`
 平移全部章节号引用（登记表见 [outline.md](./outline.md)）。
+
+`0013`：`writing_styles.user_id`（为空 = 预设）、`prompt_overrides.user_id`、`prompt_override_versions.override_id` 为 CASCADE；
+`projects.default_style_id` / `chapters.style_id` 为 SET NULL（删除风格后引用处回落到上一层：章节 → 项目默认 → 无）。
+预设风格与 `RelationshipType` 一样：迁移写入 + `after_create` 事件（测试的 `create_all`），另外应用启动时 `style_service.sync_presets` 按 `preset_key` upsert。
 
 关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
 `relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
@@ -465,6 +476,7 @@ class Task(TimestampMixin, Base):   # tasks
 - 新增任务类型时在 `validate_and_claim` 里 commit：章节抢占与任务插入必须在同一事务，否则撞唯一索引时抢占无法回滚。
 - 部分唯一索引只写 `postgresql_where`：SQLite 测试会建成全表唯一索引，已结束任务也会阻止新任务。
 - 将某个会被向导批量替换的表的外键改为 CASCADE。
+- 重新读写 `projects.style`：它自 0013 起只为 downgrade 保留；写作风格走 `writing_styles` + `default_style_id`（见 prompts-styles.md）。
 - 直接改 `Relationship` 字段而不经 `apply_change`：没有历史、绕过角色对唯一与同项目校验。
 - 直接改 `CharacterCareer.stage_id` / `note` 而不经 `career_service.apply_assignment`：没有挂接历史，绕过主 1 副 3 与类别校验。
 - 新增全局预置数据只写进迁移：测试的 `create_all` 不跑迁移，需同时提供 `after_create` 事件（参照 `RelationshipType`）。

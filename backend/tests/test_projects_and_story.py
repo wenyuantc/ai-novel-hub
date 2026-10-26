@@ -77,6 +77,7 @@ async def test_cross_user_isolation(client, make_client):
     outline = (await client.post(f"{base}/outlines", json={"title": "大纲"})).json()
     plan = (await client.put(f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"title": "细纲"}]})).json()[0]
     snap = (await client.post(f"{base}/outline-snapshots", json={})).json()
+    style = (await client.post("/api/v1/styles", json={"name": "我的风格"})).json()
 
     bob = make_client()
     await register(bob, "bob")
@@ -192,6 +193,10 @@ async def test_cross_user_isolation(client, make_client):
         ("PATCH", f"{base}/wizard-progress"),
         ("POST", f"{base}/batch-generate/preview"),
         ("POST", f"{base}/batch-generate"),
+        ("GET", f"/api/v1/styles/{style['id']}"),
+        ("PATCH", f"/api/v1/styles/{style['id']}"),
+        ("DELETE", f"/api/v1/styles/{style['id']}"),
+        ("POST", f"/api/v1/styles/{style['id']}/copy"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {

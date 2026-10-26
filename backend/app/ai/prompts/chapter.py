@@ -1,11 +1,12 @@
-"""章节生成与润色提示词。"""
+"""章节生成 / 润色 / 按建议重写 / 自动续写的提示词：拼好变量后交给模板渲染（模板见 templates/chapter.*.j2）。"""
 
-from app.ai.prompts.common import NOVELIST_SYSTEM
+from app.ai.prompts.registry import render
 from app.ai.providers.base import ChatMessage
+from app.ai.templating import PromptOverride
 
-PROSE_RULES = (
-    "直接输出小说正文，不要输出章节标题、作者按语、总结或任何解释性文字；不要使用 Markdown 格式；段落之间用空行分隔。"
-)
+
+def chapter_heading(chapter_no: int, title: str) -> str:
+    return f"第{chapter_no}章 {title}".rstrip()
 
 
 def build_chapter_messages(
@@ -20,60 +21,36 @@ def build_chapter_messages(
     key_events: list[str] | None = None,
     goal: str = "",
     emotion: str = "",
+    override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """key_events / goal / emotion 来自细纲（没有细纲时为空，提示词与之前一致）。"""
-    parts = [
-        "以下是创作参考资料：",
-        context,
-        "",
-        f"【本章任务】第{chapter_no}章 {title}".rstrip(),
-    ]
-    if summary.strip():
-        parts.append(f"本章梗概：{summary.strip()}")
-    events = [e.strip() for e in key_events or [] if e.strip()]
-    if events:
-        parts.append("关键事件：")
-        parts += [f"{i}. {e}" for i, e in enumerate(events, start=1)]
-    if goal.strip():
-        parts.append(f"叙事目标：{goal.strip()}")
-    if emotion.strip():
-        parts.append(f"情感基调：{emotion.strip()}")
-    parts.append(f"目标字数：约 {target_words} 字。")
-    if style.strip():
-        parts.append(f"写作风格：{style.strip()}")
-    if instruction.strip():
-        parts.append(f"作者额外要求：{instruction.strip()}")
-    parts += [
-        "",
-        "【写作要求】",
-        "1. 与前文自然衔接，保持人物性格、设定与已发生事件一致，不要重复前文内容。",
-        "2. 情节推进围绕本章梗概展开，多用场景描写、动作与对话，少用概括性叙述。",
-        "3. 章末留有钩子，引出后续情节。",
-        f"4. {PROSE_RULES}",
-    ]
-    return [
-        {"role": "system", "content": NOVELIST_SYSTEM},
-        {"role": "user", "content": "\n".join(parts)},
-    ]
+    return render(
+        "chapter.generate",
+        override,
+        {
+            "context": context,
+            "chapter_no": chapter_no,
+            "title": title,
+            "heading": chapter_heading(chapter_no, title),
+            "summary": summary.strip(),
+            "key_events": [e.strip() for e in key_events or [] if e.strip()],
+            "goal": goal.strip(),
+            "emotion": emotion.strip(),
+            "target_words": target_words,
+            "style": style.strip(),
+            "instruction": instruction.strip(),
+        },
+    )
 
 
-def build_polish_messages(*, content: str, style: str = "", instruction: str = "") -> list[ChatMessage]:
-    parts = [
-        "请润色下面这一章小说正文。",
-        "【润色要求】",
-        "1. 保留原有情节、人物与信息点，不删减关键剧情，不新增与原文冲突的设定。",
-        "2. 优化语言流畅度、节奏与画面感，修正病句、错别字与重复表达。",
-        f"3. {PROSE_RULES}",
-    ]
-    if style.strip():
-        parts.append(f"写作风格：{style.strip()}")
-    if instruction.strip():
-        parts.append(f"作者额外要求：{instruction.strip()}")
-    parts += ["", "【原文】", content]
-    return [
-        {"role": "system", "content": NOVELIST_SYSTEM},
-        {"role": "user", "content": "\n".join(parts)},
-    ]
+def build_polish_messages(
+    *, content: str, style: str = "", instruction: str = "", override: PromptOverride | None = None
+) -> list[ChatMessage]:
+    return render(
+        "chapter.polish",
+        override,
+        {"content": content, "style": style.strip(), "instruction": instruction.strip()},
+    )
 
 
 def build_revise_messages(
@@ -87,57 +64,47 @@ def build_revise_messages(
     style: str = "",
     instruction: str = "",
     preserve: list[str] | None = None,
+    override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """按分析建议整章重写：参考资料 + 原文全文 + 勾选的建议 + 补充要求 + 需保留的要素。"""
-    parts = [
-        "以下是创作参考资料：",
-        context,
-        "",
-        f"【重写任务】请根据修改建议重写第{chapter_no}章 {title}".rstrip(),
-    ]
-    if suggestions:
-        parts.append("【修改建议】")
-        parts += [f"{i}. {s}" for i, s in enumerate(suggestions, start=1)]
-    if instruction.strip():
-        parts.append(f"【作者补充要求】{instruction.strip()}")
-    kept = [p.strip() for p in (preserve or []) if p.strip()]
-    if kept:
-        parts.append(f"【必须保留】{'；'.join(kept)}")
-    parts.append(f"目标字数：约 {target_words} 字。")
-    if style.strip():
-        parts.append(f"写作风格：{style.strip()}")
-    parts += [
-        "",
-        "【重写要求】",
-        "1. 逐条落实修改建议，同时保持与前文衔接，人物性格、设定与已发生事件保持一致。",
-        "2. 保留原文中仍然有效的情节与信息点，不新增与设定冲突的内容。",
-        f"3. {PROSE_RULES}",
-        "",
-        "【原文】",
-        content,
-    ]
-    return [
-        {"role": "system", "content": NOVELIST_SYSTEM},
-        {"role": "user", "content": "\n".join(parts)},
-    ]
+    return render(
+        "chapter.revise",
+        override,
+        {
+            "context": context,
+            "chapter_no": chapter_no,
+            "title": title,
+            "heading": chapter_heading(chapter_no, title),
+            "content": content,
+            "suggestions": list(suggestions),
+            "preserve": [p.strip() for p in (preserve or []) if p.strip()],
+            "target_words": target_words,
+            "style": style.strip(),
+            "instruction": instruction.strip(),
+        },
+    )
 
 
 def build_continuation_messages(
-    *, messages: list[ChatMessage], generated: str, current_words: int, target_words: int
+    *,
+    messages: list[ChatMessage],
+    generated: str,
+    current_words: int,
+    target_words: int,
+    override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
-    """整章生成字数不足时的续写：在原对话后追加已生成正文（assistant）与续写指令（user）。"""
+    """整章生成字数不足时的续写：在原对话后追加已生成正文（assistant）与续写指令（user）。
+
+    chapter.continue 只取渲染结果的 user 段（覆盖里写了 system 段也忽略）。
+    """
     remaining = max(target_words - current_words, 300)
-    instruction = "\n".join(
-        [
-            f"本章目前约 {current_words} 字，目标约 {target_words} 字，还差约 {remaining} 字。",
-            f"请紧接上文继续写本章后续内容，约 {remaining} 字：",
-            "1. 从新的段落开始，不要重复、复述或改写已写内容，不要另起新章节或输出章节标题。",
-            "2. 保持人物、设定与文风一致，情节自然推进，围绕本章梗概收束，章末留有钩子。",
-            f"3. {PROSE_RULES}",
-        ]
+    rendered = render(
+        "chapter.continue",
+        override,
+        {"current_words": current_words, "target_words": target_words, "remaining": remaining},
     )
     return [
         *messages,
         {"role": "assistant", "content": generated},
-        {"role": "user", "content": instruction},
+        {"role": "user", "content": rendered[-1]["content"]},
     ]

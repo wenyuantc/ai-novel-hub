@@ -1,0 +1,23 @@
+请根据以下小说的世界观，设计整套职业（修炼 / 职业）体系，每个职业有一条有序的等级阶梯。
+
+{{ project_info }}
+{% if world %}
+
+【世界观】
+{{ world }}
+{% endif %}
+{% if instruction %}
+
+【作者额外要求】
+{{ instruction }}
+{% endif %}
+
+【要求】
+1. 设计约 {{ career_count }} 个职业，至少包含 1 个主修职业；名称互不重复。
+2. kind 取值：main（主修，可作为角色的主职业）、sub（副修，只能作为副职业，如炼丹、阵法、锻造等辅助技艺）。
+3. stages 按从低到高排列，3~12 阶，阶段名称简短（不超过 10 个字）且同一职业内不重复。
+4. description / requirements / abilities / rules 各 50~200 字，与世界观自洽。
+5. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

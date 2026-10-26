@@ -1,0 +1,28 @@
+以下是创作参考资料：
+{{ context }}
+
+【重写任务】请根据修改建议重写{{ heading }}
+{% if suggestions %}
+【修改建议】
+{% for item in suggestions %}
+{{ loop.index }}. {{ item }}
+{% endfor %}
+{% endif %}
+{% if instruction %}
+【作者补充要求】{{ instruction }}
+{% endif %}
+{% if preserve %}
+【必须保留】{{ preserve | join("；") }}
+{% endif %}
+目标字数：约 {{ target_words }} 字。
+{% if style %}
+写作风格：{{ style }}
+{% endif %}
+
+【重写要求】
+1. 逐条落实修改建议，同时保持与前文衔接，人物性格、设定与已发生事件保持一致。
+2. 保留原文中仍然有效的情节与信息点，不新增与设定冲突的内容。
+3. 直接输出小说正文，不要输出章节标题、作者按语、总结或任何解释性文字；不要使用 Markdown 格式；段落之间用空行分隔。
+
+【原文】
+{{ content }}

@@ -13,7 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
-from app.services import auth_service
+from app.services import auth_service, style_service
 from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
 
@@ -54,6 +54,8 @@ def create_app(
     async def lifespan(app_: FastAPI):
         # 表结构由 alembic upgrade head 先行建立（Docker 入口已保证）
         await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
+        # 按 preset_key 同步内置写作风格（代码里改了预设，库里跟着更新）
+        await style_service.sync_presets(app_.state.sessionmaker)
         if start_task_engine:
             # 先恢复（遗留 running → interrupted），再开始调度 queued 任务
             await app_.state.task_engine.start()

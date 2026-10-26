@@ -7,6 +7,7 @@ import { router } from './router'
 import { useAIConfigStore } from './stores/aiConfigs'
 import { useAuthStore } from './stores/auth'
 import { useProjectStore } from './stores/project'
+import { useStyleStore } from './stores/styles'
 import { useTasksStore } from './stores/tasks'
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
     useAIConfigStore.getState().reset()
     useProjectStore.getState().reset()
     useTasksStore.getState().reset()
+    useStyleStore.getState().reset()
   }, [userId])
 
   return (

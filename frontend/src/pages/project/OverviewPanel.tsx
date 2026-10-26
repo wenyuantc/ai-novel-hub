@@ -1,12 +1,13 @@
 import { DownloadOutlined, ExperimentOutlined, RocketOutlined } from '@ant-design/icons'
 import { App, Button, Card, Col, Descriptions, Form, Input, Row, Select, Space, Statistic, Switch, Typography } from 'antd'
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { analysisApi } from '../../api/analysis'
 import { errorMessage } from '../../api/client'
 import { PROJECT_STATUS, projectApi } from '../../api/projects'
 import type { Project, ProjectStatus, ProjectUpdate } from '../../api/types'
 import ExportModal from '../../components/ExportModal'
+import StyleSelect from '../../components/styles/StyleSelect'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { formatTime } from '../../utils/time'
@@ -95,11 +96,13 @@ function OverviewInner({ project }: { project: Project }) {
         title: v.title?.trim(),
         genre: v.genre?.trim() ?? '',
         premise: v.premise?.trim() ?? '',
-        style: v.style?.trim() ?? '',
         status: v.status,
+        // 显式 null = 取消项目默认风格
+        default_style_id: v.default_style_id ?? null,
       })
       setProject(updated)
       message.success('已保存')
+      if (updated.notice) message.info(updated.notice)
     } catch (err) {
       message.error(errorMessage(err))
     } finally {
@@ -160,7 +163,7 @@ function OverviewInner({ project }: { project: Project }) {
             title: project.title,
             genre: project.genre,
             premise: project.premise,
-            style: project.style,
+            default_style_id: project.default_style_id,
             status: project.status,
           }}
           style={{ maxWidth: 760 }}
@@ -197,8 +200,17 @@ function OverviewInner({ project }: { project: Project }) {
           <Form.Item name="premise" label="一句话设定" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
             <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
           </Form.Item>
-          <Form.Item name="style" label="写作风格" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
-            <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
+          <Form.Item
+            name="default_style_id"
+            label="默认写作风格"
+            extra={
+              <span>
+                章节生成、润色、重写与局部改写默认使用该风格（章节可单独覆盖）；向导与设定生成只带它的一句话描述。
+                <Link to="/styles">去风格库管理</Link>
+              </span>
+            }
+          >
+            <StyleSelect placeholder="不用风格" />
           </Form.Item>
           <Space>
             <Button type="primary" loading={saving} onClick={() => void handleSave()}>

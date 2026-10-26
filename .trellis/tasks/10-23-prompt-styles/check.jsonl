@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误与 SSE 契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与外键"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试隔离与变异验证"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积"}

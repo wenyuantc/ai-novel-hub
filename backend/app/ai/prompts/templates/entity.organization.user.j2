@@ -1,0 +1,33 @@
+请为以下小说设计一个新的组织 / 势力，并建议哪些已有角色属于它。
+
+{{ project_info }}
+{% if world %}
+
+【世界观】
+{{ world }}
+{% endif %}
+{% if roster %}
+
+【已有角色（名字 / 定位 / 别名）】
+{{ roster }}
+{% endif %}
+{% if organizations %}
+
+【已有组织】
+{{ organizations }}
+{% endif %}
+{% if instruction %}
+
+【作者额外要求】
+{{ instruction }}
+{% endif %}
+
+【要求】
+1. 组织名称不能与已有组织重复。
+2. org_type 如宗门、帮派、王朝、公司、家族；power_level 为 0~100 的整数，表示势力强弱。
+3. parent 为上级组织名称，只能取已有组织的名称，没有则为空字符串。
+4. members 只能使用上面列出的已有角色的名字，position 为职位；没有合适的可以为空数组。
+5. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

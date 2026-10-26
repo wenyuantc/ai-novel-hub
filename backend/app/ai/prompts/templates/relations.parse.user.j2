@@ -1,0 +1,22 @@
+下面是小说角色「{{ character_name }}」的一段自然语言关系备注，请把它解析为结构化的人物关系。
+
+{{ project_info }}
+{% if roster %}
+
+【已有角色（名字 / 定位 / 别名）】
+{{ roster }}
+{% endif %}
+{% if relations_text %}
+
+【{{ character_name }} 的关系备注】
+{{ relations_text }}
+{% endif %}
+
+【要求】
+1. 每条关系一项；target 为对方名字，尽量使用已有角色列表中的名字，备注里没有明确对方名字的不要输出。
+2. self_role 是「{{ character_name }}」在这段关系中的身份，target_role 是对方的身份（如「师父是张三」→ self_role=徒弟、target_role=师父；对称关系两者相同）。
+3. category 取值：family（家庭）、social（社交）、hostile（敌对）、work（职场）、other（其他）；intimacy 为 -100~100 的整数（敌对为负）；description 简述关系。
+4. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

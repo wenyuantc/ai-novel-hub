@@ -15,8 +15,10 @@ from app.api.v1 import (
     organizations,
     outline_pro,
     projects,
+    prompt_templates,
     relationships,
     story,
+    styles,
     tasks,
     wizard,
 )
@@ -44,3 +46,5 @@ api_router.include_router(chapter_versions.router)
 api_router.include_router(analysis.router)
 api_router.include_router(wizard.router)
 api_router.include_router(tasks.router)
+api_router.include_router(prompt_templates.router)
+api_router.include_router(styles.router)

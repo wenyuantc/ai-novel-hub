@@ -1,0 +1,31 @@
+{% if description and description not in extra %}
+风格概述：{{ description }}
+{% endif %}
+{% if pov %}
+叙事视角：{{ pov }}
+{% endif %}
+{% if rhythm %}
+句式节奏：{{ rhythm }}
+{% endif %}
+{% if dialogue %}
+对白比例：{{ dialogue }}
+{% endif %}
+{% if description_density %}
+描写密度：{{ description_density }}
+{% endif %}
+{% if tone %}
+基调：{{ tone }}
+{% endif %}
+{% if diction %}
+用词偏好：{{ diction }}
+{% endif %}
+{% if taboos %}
+禁用表达：{{ taboos }}
+{% endif %}
+{% if sample %}
+示例段落（模仿它的语感与节奏，不要照抄内容）：
+{{ sample }}
+{% endif %}
+{% if extra %}
+{{ extra }}
+{% endif %}

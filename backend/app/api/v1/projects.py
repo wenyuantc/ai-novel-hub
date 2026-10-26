@@ -17,8 +17,8 @@ async def list_projects(user: CurrentUser, db: DbDep) -> list[ProjectOut]:
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(body: ProjectCreate, user: CurrentUser, db: DbDep) -> ProjectOut:
-    project = await svc.create_project(db, user.id, body)
-    return await svc.project_out(db, project)
+    project, notice = await svc.create_project(db, user.id, body)
+    return await svc.project_out(db, project, notice)
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -29,8 +29,8 @@ async def get_project(project_id: int, user: CurrentUser, db: DbDep) -> ProjectO
 
 @router.patch("/{project_id}", response_model=ProjectOut)
 async def update_project(project_id: int, body: ProjectUpdate, user: CurrentUser, db: DbDep) -> ProjectOut:
-    project = await svc.update_project(db, user.id, project_id, body)
-    return await svc.project_out(db, project)
+    project, notice = await svc.update_project(db, user.id, project_id, body)
+    return await svc.project_out(db, project, notice)
 
 
 @router.patch("/{project_id}/wizard-progress", response_model=ProjectOut)

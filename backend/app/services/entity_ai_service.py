@@ -35,7 +35,7 @@ from app.core.security import SecretCipher
 from app.models import Character, Organization, OrganizationMember
 from app.models.entities import RELATION_CATEGORIES
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
-from app.services import ai_config_service, career_service, relationship_service, story_service
+from app.services import ai_config_service, career_service, prompt_service, relationship_service, story_service
 from app.services.cast_service import is_protagonist_role
 from app.services.context_builder import MEMBER_STATUS_LABELS
 from app.services.generation_service import Event
@@ -471,7 +471,13 @@ async def build_entity_job(
     project = await get_owned_project(db, user_id, project_id)
     cfg = await ai_config_service.resolve_config(db, user_id, params.get("ai_config_id"))
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    info = project_info(project)
+    info = await project_info(db, project)
+    template_key = {
+        "career.generate": "entity.career",
+        "relations.parse": "relations.parse",
+        "character.generate": "entity.character",
+    }.get(kind, "entity.organization")
+    override = await prompt_service.get_override(db, user_id, template_key)
     characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
     instruction = str(params.get("instruction") or "")
     character_id: int | None = None
@@ -486,6 +492,7 @@ async def build_entity_job(
             world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
             careers_text=_clip(await career_service.careers_detail_reference(db, project_id), REFERENCE_CAREERS_CHARS),
             instruction=instruction,
+            override=override,
         )
     elif kind == "relations.parse":
         character_id = int(params["character_id"])
@@ -499,6 +506,7 @@ async def build_entity_job(
             roster_text=_clip(
                 story_service.format_roster([c for c in characters if c.id != subject.id]), REFERENCE_ROSTER_CHARS
             ),
+            override=override,
         )
     else:
         world = await story_service.list_items(db, story_service.WORLD, project_id)
@@ -507,6 +515,7 @@ async def build_entity_job(
             "roster_text": _clip(story_service.format_roster(characters), REFERENCE_ROSTER_CHARS),
             "organizations_text": _clip(await _orgs_text(db, project_id), REFERENCE_ORGS_CHARS),
             "instruction": instruction,
+            "override": override,
         }
         if kind == "character.generate":
             messages = build_character_generate_messages(

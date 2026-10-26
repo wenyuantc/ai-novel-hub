@@ -243,3 +243,26 @@ dayjs.locale('zh-cn')
 - `TaskPanel`：paused 行显示 `待审核` 标签与 `继续` / `结束` / `取消`（不显示删除 / 重试），`查看结果` 对 succeeded 或 paused 且已注册结果组件的任务显示；批量取消的确认文案为「已完成的章节保留，正在写的章节恢复原状态」。
 - 章节编辑器：批量任务没有 `chapter_id`，以 store 中活动批量的 `checkpoint.current.chapter_id === 本章` 识别「批量正在写本章」——显示提示、不显示复位（不算 stuck），批量离开本章后 `GET` 章节并 `replaceFromServer`。
 
+
+### 提示词模板与写作风格（`10-23-prompt-styles`）
+
+后端契约见 [../backend/prompts-styles.md](../backend/prompts-styles.md)。入口：顶栏菜单「提示词模板」「写作风格」（在「模型配置」之后）+ 用户下拉菜单同名两项；两页都是 `router.tsx` 的 `lazyPage` 懒加载路由。
+
+| 组件 | 契约 |
+|-----------|------------------------|
+| `pages/PromptTemplatesPage` | `/prompt-templates[?key=]`。左侧 `Menu`（`groupTemplates` 按分类分组，`templateBadges`：已覆盖 / 已停用 / 默认已更新），右侧 `PromptEditor key={key}`；编辑器有未保存修改时切换模板先 `modal.confirm`。工具栏 `导入`（`JsonImportButton`，1MB 紧凑口径）→ `PromptImportResultModal` 逐项结果（`PROMPT_IMPORT_STATUS` + `formatIssue` 出错位置）、`导出我的覆盖`（`downloadJson` + `datedFilename`）。 |
+| `prompts/PromptEditor` | `{ templateKey; onChanged; onDirtyChange }`。系统段 / 用户段两个等宽 `TextArea`（`id=prompt-part-{part}`；默认系统段为空且未填写时只显示用户段）；光标位置用 `onSelect/onKeyUp/onMouseUp` 记入 state（**不用 ref**：react-hooks/refs 规则禁止在渲染期函数里传 ref），变量表点击变量名插入 `{{ name }}` 到最近聚焦段的光标处。600ms 防抖 `POST /preview`（AbortController），返回的 `errors` 即校验问题；保存 400 用 `issuesFromError(err)` 读 `ApiError.body.errors`。问题按段列在编辑框下（`issuesForPart`），点击 → `lineRange` 选中该行。顶部：覆盖启停 `Switch`、`与系统默认对比`（`PromptDiffModal`）、`历史版本`（`PromptVersionDrawer`）、`恢复默认`（Popconfirm：删除覆盖及历史）。`outdated` 时 warning `Alert`：`查看三方对比`（`PromptThreeWayModal`：旧默认 = `override.base_*` / 新默认 / 编辑器内容，外加「默认的变化」「我的改动」两份 diff）+ `确认已阅`（`PATCH {ack_default}`）。保存 / 启停 / 确认不重置编辑框；回滚 / 恢复默认用服务端内容替换。 |
+| `prompts/PromptPreviewPane` | `{ preview; loading; error }`。逐条 message（角色 + 字数），内容经 `splitLocked(content, preview.locked)` 切分，锁定段灰底、`锁定：{label}` 标签，只读展示。 |
+| `prompts/PromptDiffModal` / `PromptThreeWayModal` / `PromptVersionDrawer` | diff 一律复用 `TextDiff`（jsdiff 逐字，按需加载）。版本抽屉：时间 / 备注 / `对比当前` / `回滚`（`modal.confirm`，回滚会重新校验）；`key = override.updated_at`，保存或回滚后重新拉取。 |
+| `pages/StylesPage` | `/styles`。`useStyles()`（`stores/styles.ts`）读列表，`groupStyles` 分「我的风格」「预设风格」两组卡片（描述 + 前 3 个非空维度、`使用中` 标签 tooltip 引用数）。预设：查看 / 复制 / 试写；我的：编辑 / 复制 / 试写 / 删除。删除：确认框显示 `referencesText(style.references)`，有引用时以 `force=true` 删除；仍收到 409 时用 `readStyleReferences` 按最新引用数再确认。工具栏：从样文提取、导入（`summarizeStyleImport` + 改名明细）、导出我的风格、新建。任何变更后 `useStyleStore.load(true)`。 |
+| `styles/StyleFormFields` | Form 内的字段组：名称、一句话描述（tooltip：向导与设定生成只带这一句）、6 个维度用 `AutoComplete`（`STYLE_DIMENSIONS` 常用选项 + 自由填写）、禁用表达、示例段落（`sampleLengthHint` 码点字数 / 2000）、自由补充；长度规则与 `STYLE_LIMITS` 一致。 |
+| `styles/StyleEditDrawer` | `{ open; style \| null; initialDraft?; onClose; onSaved; onCopy?; onTrial? }`。预设只读 + 复制按钮；被引用时提示影响范围；`试写一段` 用表单当前值（未保存也生效）打开试写。提交只用 `draftToStyleBody`。 |
+| `styles/StyleExtractModal` | 样文 200–10000 码点（本地预检）+ `AIConfigSelect` → `extractStyle`（同步 SSE，`useStreamTask`，可停止）→ warnings + 可编辑草稿 → `保存为新风格`（`styleApi.create`）。提取本身不落库。 |
+| `styles/StyleTrialDrawer` | `{ target: {kind:'saved', id, name} \| {kind:'draft', draft} \| null }`。场景 ≤500、字数 200–1000、模型 → `trialStyle` 流式输出（`StreamOutput`），停止按钮；不写入章节。 |
+| `styles/StyleSelect` | 设定项下拉（项目默认 / 本章风格）：`styleAssignOptions` 分「我的 / 预设」，清空 = `null`，`placeholder` 说明空值含义。 |
+| `styles/StyleChoiceSelect` | 生成时的临时选择：`styleChoiceOptions(styles, context, inheritLabel?)` = 继承（文案 `describeInherit`：本章风格「X」/ 项目默认「X」/ 不用风格）+ 不用风格 + 具体风格。 |
+| `chapter/ChapterStyleSetting` | 编辑器「出场角色」下方「本章风格」：`StyleSelect`（placeholder `继承项目默认（X）`），变更即 `PATCH {style_id}`，只把响应的 `style_id` 合并进章节状态（不回写正文、不影响 dirty）；AI 任务进行中禁用。 |
+
+- **接入**：`OverviewPanel` / 新建项目弹窗的「写作风格」文本框改为「默认写作风格」`StyleSelect`（发送 `default_style_id`，显式 null = 取消）+「去风格库管理」链接；PATCH 响应带 `notice` 时 `message.info`。前端**不再读写 `project.style`**。
+- 章节编辑器 AI 助手在「AI 配置」下方新增「本次写作风格」`StyleChoiceSelect`（一个 `styleChoice` 状态，`context = {chapterStyleId: chapter.style_id, projectDefault: project.default_style}`），生成 / 润色 / 局部改写（`RewritePanel.styleChoice`）/ 按建议重写（`AnalysisDrawer.reviseStyle` 渲染在重写表单里，同一状态）请求都带 `style`。
+- `BatchGenerateModal`：`style` 字段（默认 `inherit`，文案「按章节或项目默认（项目默认「X」）」/ 不用风格 / 指定）；不参与预览键。

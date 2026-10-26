@@ -43,6 +43,7 @@ from app.services import (
     career_service,
     outline_service,
     outline_snapshot_service,
+    prompt_service,
     relationship_service,
     story_service,
 )
@@ -107,7 +108,8 @@ async def build_wizard_job(
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
 
-    info = project_info(project)
+    info = await project_info(db, project)
+    override = await prompt_service.get_override(db, user_id, f"wizard.{kind}")
     world_text = story_service.format_world(await story_service.list_items(db, story_service.WORLD, project_id))
     characters_text = story_service.format_characters(
         await story_service.list_items(db, story_service.CHARACTERS, project_id)
@@ -131,6 +133,7 @@ async def build_wizard_job(
             world_text=world_text,
             characters_text=characters_text,
             instruction=req.instruction,
+            override=override,
             **append_kwargs,
         )
     elif kind == "characters":
@@ -141,14 +144,19 @@ async def build_wizard_job(
             outline_text=outline_text,
             instruction=req.instruction,
             careers_text=await career_service.careers_reference(db, project_id),
+            override=override,
         )
     elif kind == "careers":
         messages = build_careers_wizard_messages(
-            info, career_count=req.career_count, world_text=world_text, instruction=req.instruction
+            info, career_count=req.career_count, world_text=world_text, instruction=req.instruction, override=override
         )
     else:
         messages = build_world_messages(
-            info, outline_text=outline_text, characters_text=characters_text, instruction=req.instruction
+            info,
+            outline_text=outline_text,
+            characters_text=characters_text,
+            instruction=req.instruction,
+            override=override,
         )
     return WizardJob(
         project_id=project_id,

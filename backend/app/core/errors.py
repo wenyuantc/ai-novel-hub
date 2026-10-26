@@ -14,9 +14,11 @@ logger = logging.getLogger(__name__)
 class AppError(Exception):
     status_code = 400
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, *, extra: dict | None = None):
         super().__init__(detail)
         self.detail = detail
+        # 附加到响应体的结构化字段（例如模板校验的出错位置 errors、删除风格时的引用数 references）
+        self.extra = extra
 
 
 class BadRequestError(AppError):
@@ -59,7 +61,8 @@ def _format_validation_errors(exc: RequestValidationError) -> str:
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        content = {**(exc.extra or {}), "detail": exc.detail}
+        return JSONResponse(status_code=exc.status_code, content=jsonable_encoder(content))
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:

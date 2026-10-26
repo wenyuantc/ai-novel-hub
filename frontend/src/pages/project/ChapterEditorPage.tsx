@@ -41,14 +41,16 @@ import {
 import { errorMessage } from '../../api/client'
 import { outlineProApi } from '../../api/outlines'
 import { isActiveTask, isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
-import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, Task } from '../../api/types'
+import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, StyleChoice, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
 import AnalysisDrawer, { type ReviseCompare } from '../../components/chapter/AnalysisDrawer'
 import { GenerateForm, type GenerateOptions, PolishForm } from '../../components/chapter/ChapterAIForms'
 import CastSelect from '../../components/chapter/CastSelect'
+import ChapterStyleSetting from '../../components/chapter/ChapterStyleSetting'
 import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
+import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
@@ -124,6 +126,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const activeTasks = useTasksStore((s) => s.active)
   const hasConfig = useHasAIConfig()
   const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
+  const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [chapter, setChapter] = useState<Chapter>(initial)
@@ -133,6 +136,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [resetting, setResetting] = useState(false)
   const [aiMode, setAiMode] = useState<AIMode>('generate')
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
+  // 本次生成 / 润色 / 重写 / 局部改写临时使用的风格（inherit = 本章风格 > 项目默认）
+  const [styleChoice, setStyleChoice] = useState<StyleChoice>('inherit')
   const [genOptions, setGenOptions] = useState<GenerateOptions>(() => ({
     targetWords: 3000,
     instruction: '',
@@ -196,6 +201,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const busy = aiRunning || saving
   // AI 任务进行中（含排队）或局部改写预览中：正文只读，避免选区失效
   const editorLocked = aiRunning || rewriteLocked
+  // 「继承」解析为本章风格 > 项目默认（下拉里显示实际会用哪个风格）
+  const styleContext = useMemo(
+    () => ({ chapterStyleId: chapter.style_id, projectDefault: projectDefaultStyle }),
+    [chapter.style_id, projectDefaultStyle],
+  )
+  const styleSelect = (disabled: boolean) => (
+    <StyleChoiceSelect value={styleChoice} onChange={setStyleChoice} context={styleContext} disabled={disabled} />
+  )
   // 排队中 / 尚无输出时仍显示原正文；开始输出后显示实时文本
   const aiStreaming = aiTask.running && (aiTask.text !== '' || aiStatus === 'running')
   const displayContent = aiStreaming ? aiTask.text : content
@@ -421,8 +434,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               target_words: genOptions.targetWords,
               // 后端默认 false，必须显式传
               auto_continue: genOptions.autoContinue,
+              style: styleChoice,
             })
-          : await polishChapter(chapter.id, { ai_config_id: aiConfigId, instruction: polishInstruction.trim() })
+          : await polishChapter(chapter.id, {
+              ai_config_id: aiConfigId,
+              instruction: polishInstruction.trim(),
+              style: styleChoice,
+            })
     } catch (err) {
       message.error(errorMessage(err))
       setStarting(false)
@@ -442,7 +460,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     setStarting(true)
     let created: Task
     try {
-      created = await reviseChapter(chapter.id, { ...body, ai_config_id: aiConfigId })
+      created = await reviseChapter(chapter.id, { ...body, ai_config_id: aiConfigId, style: styleChoice })
     } catch (err) {
       message.error(errorMessage(err))
       setStarting(false)
@@ -668,6 +686,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
             <CastSelect pid={pid} chapterId={chapter.id} disabled={aiRunning} />
+            <ChapterStyleSetting
+              pid={pid}
+              chapterId={chapter.id}
+              value={chapter.style_id}
+              projectDefault={projectDefaultStyle}
+              disabled={aiRunning}
+              onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
+            />
             <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
               <Input.TextArea
                 value={displayContent}
@@ -695,6 +721,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               <div>
                 <Typography.Text type="secondary">AI 配置</Typography.Text>
                 <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
+              </div>
+              <div>
+                <Typography.Text type="secondary">本次写作风格</Typography.Text>
+                {styleSelect(editorLocked)}
               </div>
               <Tabs
                 activeKey={aiMode}
@@ -730,6 +760,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                         content={content}
                         selection={selection}
                         aiConfigId={aiConfigId}
+                        styleChoice={styleChoice}
                         // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
                         disabled={aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
                         ensureSaved={ensureSaved}
@@ -829,6 +860,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         reviseRunning={revising}
         onRevise={runRevise}
         compare={reviseCompare}
+        reviseStyle={styleSelect(aiRunning)}
       />
       <Modal
         open={blocker.state === 'blocked'}
