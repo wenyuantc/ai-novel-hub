@@ -93,3 +93,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: P0-3b 职业等级体系
+<!-- trellis-session: v=2 fp=92af299b94e7b917 -->
+
+**Date**: 2026-10-26
+**Task**: P0-3b 职业等级体系
+**Branch**: `main`
+
+### Summary
+
+职业与稳定 id 阶梯、角色 1 主 3 副挂接与 apply_assignment 历史、AI 增量生成职业、向导职业步骤与角色分配职业、上下文职业注入、卡片 v2；浏览器冒烟验证 AC1-AC7。遗留：卡片导入补阶段追加到末尾会打乱阶梯顺序
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d94a66c` | feat: 职业等级体系（职业阶梯、角色主副职业、向导职业步骤、卡片 v2） |
+
+### Status
+
+[OK] **Completed**
