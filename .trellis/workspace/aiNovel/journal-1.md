@@ -137,3 +137,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: P0-4b 伏笔管理
+<!-- trellis-session: v=2 fp=e4b240e7ca42dda2 -->
+
+**Date**: 2026-10-26
+**Task**: P0-4b 伏笔管理
+**Branch**: `main`
+
+### Summary
+
+伏笔 CRUD 与 apply_foreshadow 历史、分析联动三类回写（自动回收/自动标已埋/新伏笔待确认含 overrides）、上下文五档提醒与裁剪、伏笔页与 SVG 时间线；无伏笔时提示词与上下文逐字不变；冒烟验证 AC1-AC5
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1c823a7` | feat: 伏笔管理（分析联动、上下文五档提醒、伏笔页与时间线） |
+
+### Status
+
+[OK] **Completed**
