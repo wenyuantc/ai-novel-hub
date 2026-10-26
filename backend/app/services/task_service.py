@@ -37,10 +37,18 @@ ACTIVE_CONFLICT = "已有任务在进行中，请等待其完成后再试"
 # ---------------- 序列化 ----------------
 
 
-def _subject_character_id(task: Task) -> int | None:
+def _request_int(task: Task, key: str) -> int | None:
     request = (task.input or {}).get("request") if isinstance(task.input, dict) else None
-    cid = request.get("character_id") if isinstance(request, dict) else None
-    return cid if isinstance(cid, int) and not isinstance(cid, bool) else None
+    value = request.get(key) if isinstance(request, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _subject_character_id(task: Task) -> int | None:
+    return _request_int(task, "character_id")
+
+
+def _revise_analysis_id(task: Task) -> int | None:
+    return _request_int(task, "analysis_id") if task.kind == "chapter.revise" else None
 
 
 def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine | None" = None) -> TaskOut:
@@ -48,6 +56,7 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
     update_fields: dict[str, Any] = {
         "queue_position": queue_position if task.status == "queued" else None,
         "character_id": _subject_character_id(task),
+        "analysis_id": _revise_analysis_id(task),
     }
     hub = engine.hubs.get(task.id) if engine is not None else None
     if hub is not None and task.status in ACTIVE_TASK_STATUSES:
@@ -100,6 +109,7 @@ async def create_task(
         kind=kind,
         title=spec.title[:200],
         resource_key=spec.resource_key,
+        serial_key=spec.serial_key,
         status="queued",
         input=spec.input,
         stage=STAGE_LABELS["queued"],

@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约，新增 kind 与 serial_key/on_success 扩展"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键、原子更新、归属 404"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "apply_change/apply_assignment 写入入口、选角与上下文、组织成员"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离、禁止模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "章节编辑器、TaskPanel、项目概览"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-creation-core.md", "reason": "MuMu 分析与重写缺陷对照（§7-8）"}

@@ -1,6 +1,8 @@
 """章节生成上下文组装（MVP 不依赖向量检索）。
 
 组成：作品信息 + 世界观（按分类分组）+ 角色部分 + 当前卷大纲 + 更早章节标题/摘要 + 最近 N 章全文。
+更早章节的摘要（前情提要）：优先用该章最近一次章节分析的 summary（批量一条查询取每章 max(id)；
+正文已变化、分析已过期时照常使用），没有分析时退回正文前 SUMMARY_CHARS 字。
 角色部分（D4，选角见 cast_service.select_cast）：
   - 本章涉及角色（主角 ∪ 手动指定出场 ∪ 梗概 / 上一章结尾提及）：完整角色卡，含所属组织与职位
   - 人物关系：只列涉及角色两两之间的关系
@@ -19,7 +21,7 @@
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import format_project_info
@@ -27,6 +29,7 @@ from app.models import (
     Career,
     CareerStage,
     Chapter,
+    ChapterAnalysis,
     Character,
     CharacterCareer,
     Organization,
@@ -48,6 +51,8 @@ class PriorChapter:
     chapter_no: int
     title: str
     content: str
+    # 最近一次章节分析的摘要；为空时前情提要退回正文开头
+    summary: str = ""
 
 
 @dataclass
@@ -112,6 +117,9 @@ def _chapter_heading(no: int, title: str) -> str:
 
 
 def _summary_line(ch: PriorChapter, summary_chars: int) -> str:
+    summary = " ".join(ch.summary.split())
+    if summary:
+        return f"{_chapter_heading(ch.chapter_no, ch.title)}：{summary}"
     text = " ".join(ch.content.split())
     snippet = text[:summary_chars] + (ELLIPSIS if len(text) > summary_chars else "")
     return f"{_chapter_heading(ch.chapter_no, ch.title)}：{snippet}"
@@ -371,7 +379,7 @@ async def build_chapter_context(db: AsyncSession, project: Project, chapter: Cha
     outline = await find_chapter_outline(db, chapter)
     cast = await build_cast_section(db, project, chapter, outline.summary if outline else "")
     rows = await db.execute(
-        select(Chapter.chapter_no, Chapter.title, Chapter.content)
+        select(Chapter.id, Chapter.chapter_no, Chapter.title, Chapter.content)
         .where(
             Chapter.project_id == project.id,
             Chapter.id != chapter.id,
@@ -379,7 +387,12 @@ async def build_chapter_context(db: AsyncSession, project: Project, chapter: Cha
         )
         .order_by(Chapter.chapter_no, Chapter.id)
     )
-    prior = [PriorChapter(chapter_no=no, title=title, content=content) for no, title, content in rows.all()]
+    prior_rows = rows.all()
+    summaries = await latest_summaries(db, project.id, [r[0] for r in prior_rows])
+    prior = [
+        PriorChapter(chapter_no=no, title=title, content=content, summary=summaries.get(cid, ""))
+        for cid, no, title, content in prior_rows
+    ]
     return assemble_context(
         project_text=format_project_info(project_info(project)),
         world_text=story_service.format_world(world),
@@ -388,6 +401,21 @@ async def build_chapter_context(db: AsyncSession, project: Project, chapter: Cha
         prior_chapters=prior,
         budget=budget,
     )
+
+
+async def latest_summaries(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> dict[int, str]:
+    """每章最近一次分析的摘要（一条查询：子查询取每章 max(id)）。"""
+    if not chapter_ids:
+        return {}
+    latest = (
+        select(func.max(ChapterAnalysis.id))
+        .where(ChapterAnalysis.project_id == project_id, ChapterAnalysis.chapter_id.in_(chapter_ids))
+        .group_by(ChapterAnalysis.chapter_id)
+    )
+    rows = await db.execute(
+        select(ChapterAnalysis.chapter_id, ChapterAnalysis.summary).where(ChapterAnalysis.id.in_(latest))
+    )
+    return {cid: summary for cid, summary in rows.all() if (summary or "").strip()}
 
 
 async def find_chapter_outline(db: AsyncSession, chapter: Chapter) -> Outline | None:

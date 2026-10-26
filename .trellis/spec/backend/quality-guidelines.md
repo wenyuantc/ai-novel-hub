@@ -107,6 +107,9 @@ def make_settings(tmp_path, **overrides) -> Settings:
 async def test_registration_disabled(client): ...
 ```
 
+`make_settings` 默认 `auto_analyze_enabled=False`：否则 AI 生成 / 润色成功后会自动排队章节分析，额外消耗 FakeLLM 的预设输出、
+改变任务数与排队顺序。自动分析相关测试用 `@pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": True}])` 显式开启。
+
 ### 假 LLM
 
 `backend/tests/helpers.py` 中的 `FakeLLM` 通过 `create_app(settings, provider_factory=fake_llm.factory)` 注入。

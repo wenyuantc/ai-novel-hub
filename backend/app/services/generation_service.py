@@ -1,14 +1,16 @@
-"""章节 AI 生成 / 润色（作为后台任务 chapter.generate / chapter.polish 运行）。
+"""章节 AI 生成 / 润色 / 按建议重写（作为后台任务 chapter.generate / chapter.polish / chapter.revise 运行）。
 
 分三段：
 - validate_and_claim：创建任务的请求内同步执行鉴权、配置解析、SSRF 与参数校验，并原子地把章节置为 generating。
   任何业务错误（404/400/409）在此抛出，以普通 JSON 响应返回。
 - build_chapter_job：任务开始运行时按最新数据组装 provider、上下文与 messages。
 - run_chapter_job：流式阶段，使用独立会话落库；产出 (event, data) 事件，由任务引擎消费。
-  成功时在同一事务内：ensure_baseline → 覆盖正文 → 写生成记录 → 写 generate/polish 版本。
+  成功时在同一事务内：ensure_baseline → 覆盖正文 → 写生成记录 → 写 generate/polish/revise 版本。
   未正常完成（模型报错、客户端断开等）时把章节状态回退为原状态，正文与版本不变，只留一条失败/取消记录。
 - 整章生成可选自动续写：字数低于目标 CONTINUE_RATIO 时最多续写 MAX_CONTINUE_ROUNDS 轮，
   每轮开始前产出 continue 事件；续写轮报错时保留已生成正文照常落库，done 附带 warning。
+- 按建议重写（revise）：原文全文 + 勾选的分析建议 + 补充要求 + 需保留的要素 + 与整章生成相同的上下文；
+  analysis_id 须属于本章、suggestion_ids 须是该次分析里的建议；不自动续写；版本来源 / 生成记录类型均为 revise。
 """
 
 import logging
@@ -19,15 +21,20 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import anyio
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai.prompts import build_chapter_messages, build_continuation_messages, build_polish_messages
+from app.ai.prompts import (
+    build_chapter_messages,
+    build_continuation_messages,
+    build_polish_messages,
+    build_revise_messages,
+)
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import BadRequestError, ConflictError
 from app.core.security import SecretCipher
-from app.models import Chapter
-from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapterRequest
+from app.models import Chapter, ChapterAnalysis
+from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
 from app.services import ai_config_service, generation_log_service, version_service
 from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.context_builder import build_chapter_context, find_chapter_outline
@@ -36,6 +43,8 @@ from app.services.project_service import get_owned_project
 logger = logging.getLogger(__name__)
 
 Event = tuple[Literal["delta", "continue", "done", "error"], dict]
+Mode = Literal["generate", "polish", "revise"]
+ChapterRequest = GenerateChapterRequest | PolishChapterRequest | ReviseChapterRequest
 
 # 字数低于目标的该比例时自动续写
 CONTINUE_RATIO = 0.85
@@ -51,7 +60,7 @@ class ChapterJob:
     messages: list[ChatMessage]
     thinking: ThinkingLevel = "off"
     max_tokens: int | None = None
-    mode: Literal["generate", "polish"] = "generate"
+    mode: Mode = "generate"
     project_id: int = 0
     ai_config_id: int | None = None
     provider_name: str = ""
@@ -96,7 +105,7 @@ class ChapterClaim:
     ai_config_id: int
     chapter_no: int
     chapter_title: str
-    # 润色时原文字数（用于估算进度）
+    # 润色 / 重写时原文字数（用于估算进度）
     source_words: int = 0
 
 
@@ -105,8 +114,8 @@ async def validate_and_claim(
     *,
     user_id: int,
     chapter_id: int,
-    mode: Literal["generate", "polish"],
-    req: GenerateChapterRequest | PolishChapterRequest,
+    mode: Mode,
+    req: ChapterRequest,
     cipher: SecretCipher,
     factory: ProviderFactory,
     ai_timeout: float,
@@ -126,6 +135,9 @@ async def validate_and_claim(
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     if mode == "polish" and not chapter.content.strip():
         raise BadRequestError("章节正文为空，无法润色")
+    if mode == "revise":
+        assert isinstance(req, ReviseChapterRequest)
+        await resolve_revision(db, chapter, req)
 
     prev_status = chapter.status
     # 原子抢占：防止同一章节被并发生成
@@ -142,8 +154,27 @@ async def validate_and_claim(
         ai_config_id=cfg.id,
         chapter_no=chapter.chapter_no,
         chapter_title=chapter.title,
-        source_words=chapter.word_count if mode == "polish" else 0,
+        source_words=chapter.word_count if mode in ("polish", "revise") else 0,
     )
+
+
+async def resolve_revision(db: AsyncSession, chapter: Chapter, req: ReviseChapterRequest) -> list[str]:
+    """校验重写请求并返回勾选建议的文本（按勾选顺序）。"""
+    if not chapter.content.strip():
+        raise BadRequestError("章节正文为空，无法重写")
+    analysis = await db.scalar(
+        select(ChapterAnalysis).where(ChapterAnalysis.id == req.analysis_id, ChapterAnalysis.chapter_id == chapter.id)
+    )
+    if analysis is None:
+        raise BadRequestError("分析结果不存在或不属于该章节")
+    by_id = {s.get("id"): s for s in analysis.suggestions or [] if isinstance(s, dict)}
+    ids = list(dict.fromkeys(req.suggestion_ids))
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        raise BadRequestError(f"建议不存在：{'、'.join(str(i) for i in missing)}")
+    if not ids and not req.instruction.strip():
+        raise BadRequestError("请至少选择一条建议或填写修改要求")
+    return [str(by_id[i].get("text") or "") for i in ids]
 
 
 async def build_chapter_job(
@@ -151,8 +182,8 @@ async def build_chapter_job(
     *,
     user_id: int,
     chapter_id: int,
-    mode: Literal["generate", "polish"],
-    req: GenerateChapterRequest | PolishChapterRequest,
+    mode: Mode,
+    req: ChapterRequest,
     prev_status: str,
     ai_config_id: int | None,
     cipher: SecretCipher,
@@ -188,6 +219,31 @@ async def build_chapter_job(
             target_words=req.target_words,
             style=project.style,
             instruction=req.instruction,
+        )
+    elif mode == "revise":
+        assert isinstance(req, ReviseChapterRequest)
+        suggestions = await resolve_revision(db, chapter, req)
+        outline = await find_chapter_outline(db, chapter)
+        budget = ai_config_service.context_char_budget(cfg, context_budget)
+        context = await build_chapter_context(db, project, chapter, budget)
+        target_words = req.target_words or max(chapter.word_count, 300)
+        params = {
+            "analysis_id": req.analysis_id,
+            "suggestion_ids": req.suggestion_ids,
+            "instruction": req.instruction,
+            "preserve": req.preserve,
+            "target_words": target_words,
+        }
+        messages = build_revise_messages(
+            context=context,
+            chapter_no=chapter.chapter_no,
+            title=chapter.title or (outline.title if outline else ""),
+            content=chapter.content,
+            suggestions=suggestions,
+            target_words=target_words,
+            style=project.style,
+            instruction=req.instruction,
+            preserve=req.preserve,
         )
     else:
         if not chapter.content.strip():

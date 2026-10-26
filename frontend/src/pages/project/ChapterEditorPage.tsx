@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  ExperimentOutlined,
   HistoryOutlined,
   LeftOutlined,
   RightOutlined,
@@ -10,6 +11,7 @@ import {
 import {
   Alert,
   App,
+  Badge,
   Button,
   Card,
   Col,
@@ -25,7 +27,8 @@ import {
   Typography,
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useBlocker, useNavigate, useParams } from 'react-router-dom'
+import { useBlocker, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { ANALYSIS_STATUS, countPending, reviseChapter, reviseCompareFor } from '../../api/analysis'
 import { versionApi } from '../../api/chapterVersions'
 import {
   chapterApi,
@@ -36,13 +39,15 @@ import {
   polishChapter,
 } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
-import { queueLabel, taskApi } from '../../api/tasks'
-import type { Chapter, ChapterBrief, ChapterVersionBrief, Task } from '../../api/types'
+import { isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
+import type { Chapter, ChapterBrief, ChapterVersionBrief, ReviseChapterRequest, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
+import AnalysisDrawer, { type ReviseCompare } from '../../components/chapter/AnalysisDrawer'
 import { GenerateForm, type GenerateOptions, PolishForm } from '../../components/chapter/ChapterAIForms'
 import CastSelect from '../../components/chapter/CastSelect'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
+import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useLoader } from '../../hooks/useLoader'
 import { useTaskStream } from '../../hooks/useTaskStream'
@@ -51,6 +56,17 @@ import { useTasksStore } from '../../stores/tasks'
 import { readAutoContinue } from '../../utils/preferences'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
+
+const SUCCESS_MESSAGES: Partial<Record<Task['kind'], string>> = {
+  'chapter.generate': '生成完成，已保存',
+  'chapter.polish': '润色完成，已保存',
+  'chapter.revise': '按建议重写完成，已保存',
+}
+
+/** 接上章节任务时切换的 AI 助手标签：重写没有独立标签，放在「AI 生成」下显示进度与停止按钮 */
+function aiModeForTask(t: Task): 'generate' | 'polish' {
+  return t.kind === 'chapter.polish' ? 'polish' : 'generate'
+}
 
 /** 路由入口：以章节 id 为 key，切换章节时整体重建编辑器状态。 */
 export default function ChapterEditorPage() {
@@ -104,6 +120,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const trackTask = useTasksStore((s) => s.track)
   const activeTasks = useTasksStore((s) => s.active)
   const hasConfig = useHasAIConfig()
+  const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [chapter, setChapter] = useState<Chapter>(initial)
   const [title, setTitle] = useState(initial.title)
@@ -121,6 +139,16 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [selection, setSelection] = useState<TextSelection>({ start: 0, end: 0 })
   const [rewriteLocked, setRewriteLocked] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
+  const [analysisOpen, setAnalysisOpen] = useState(false)
+  // 按建议重写成功后的评分对比基准（由任务的 analysis_id 得出，任务面板重试 / 其他标签页发起的重写同样适用）
+  const [reviseCompare, setReviseCompare] = useState<ReviseCompare | null>(null)
+  const analysis = useChapterAnalysis(initial.id)
+  const refreshAnalysis = analysis.refresh
+  // 最新已知分析 id：followTask 可能经由旧闭包调用，用 ref 读取最新值
+  const latestAnalysisIdRef = useRef<number | null>(null)
+  useEffect(() => {
+    latestAnalysisIdRef.current = analysis.state?.latest_analysis_id ?? null
+  })
   // 整章生成 / 润色走后台任务；局部改写仍是 RewritePanel 内的同步流
   const aiTask = useTaskStream()
   // 正在创建任务（请求未返回）
@@ -175,6 +203,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       applyServerChapter(updated)
       onChanged()
       void refreshProject()
+      // 正文变化后分析可能变为「已过期」
+      void refreshAnalysis()
       return true
     } catch (err) {
       message.error(errorMessage(err))
@@ -182,7 +212,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     } finally {
       setSaving(false)
     }
-  }, [pid, chapter.id, title, content, applyServerChapter, onChanged, refreshProject, message])
+  }, [pid, chapter.id, title, content, applyServerChapter, onChanged, refreshProject, refreshAnalysis, message])
 
   const handleSave = useCallback(async () => {
     if (editorLocked || saving) return
@@ -265,9 +295,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         }
       }
       if (done?.warning) message.warning(`生成完成，已保存；${done.warning}`)
-      else message.success(t.kind === 'chapter.polish' ? '润色完成，已保存' : '生成完成，已保存')
+      else message.success(SUCCESS_MESSAGES[t.kind] ?? '生成完成，已保存')
+      const cmp = reviseCompareFor(outcome.task ?? t, latestAnalysisIdRef.current)
+      if (cmp) setReviseCompare(cmp)
       onChanged()
       void refreshProject()
+      // 成功后后端可能已自动排队分析本章：刷新状态以接上分析任务
+      void refreshAnalysis()
       return
     }
     if (outcome.status === 'cancelled') message.info('已停止，正文保持原样')
@@ -282,7 +316,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   /** 接上由其他入口（任务面板重试、另一个标签页）为本章创建的任务 */
   const attachExternal = (t: Task) => {
     if (dirty) message.warning('本章已有后台任务开始执行，当前未保存的修改将在任务完成后被覆盖')
-    setAiMode(t.kind === 'chapter.polish' ? 'polish' : 'generate')
+    setAiMode(aiModeForTask(t))
     setChapter((prev) => ({ ...prev, status: 'generating' }))
     void followTask(t)
   }
@@ -293,10 +327,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   useEffect(() => {
     if (!attachChecked || aiRunning) return
     const t = activeTasks.find(
-      (x) =>
-        x.chapter_id === chapter.id &&
-        (x.kind === 'chapter.generate' || x.kind === 'chapter.polish') &&
-        !followedIdsRef.current.has(x.id),
+      (x) => x.chapter_id === chapter.id && isChapterWriteKind(x.kind) && !followedIdsRef.current.has(x.id),
     )
     if (t) attachExternalRef.current(t)
   }, [activeTasks, attachChecked, aiRunning, chapter.id])
@@ -309,9 +340,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       .list({ chapter_id: initial.id, active: true, limit: 5 })
       .then((list) => {
         if (!alive) return
-        const t = list.find((x) => x.kind === 'chapter.generate' || x.kind === 'chapter.polish')
+        const t = list.find((x) => isChapterWriteKind(x.kind))
         if (t) {
-          setAiMode(t.kind === 'chapter.polish' ? 'polish' : 'generate')
+          setAiMode(aiModeForTask(t))
           void followRef.current(t)
         }
       })
@@ -354,6 +385,38 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     await followTask(created)
   }
 
+  /** 按建议重写：与整章生成同样走后台任务（创建即抢占、正文只读、可停止）；任务创建成功即返回 true */
+  const runRevise = async (body: ReviseChapterRequest): Promise<boolean> => {
+    if (!(await ensureSaved())) return false
+    setStarting(true)
+    let created: Task
+    try {
+      created = await reviseChapter(chapter.id, { ...body, ai_config_id: aiConfigId })
+    } catch (err) {
+      message.error(errorMessage(err))
+      setStarting(false)
+      await reloadChapter()
+      return false
+    }
+    setStarting(false)
+    trackTask(created)
+    setReviseCompare(null)
+    if (aiMode === 'rewrite') setAiMode('generate')
+    setChapter((prev) => ({ ...prev, status: 'generating' }))
+    void followTask(created)
+    return true
+  }
+
+  /** 手动分析：分析的是已保存的正文，先自动保存未保存的修改 */
+  const runAnalyze = async () => {
+    if (!(await ensureSaved())) return
+    try {
+      await analysis.start(aiConfigId)
+    } catch (err) {
+      message.error(errorMessage(err))
+    }
+  }
+
   const handleCancel = async () => {
     try {
       await aiTask.cancel()
@@ -386,6 +449,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       message.success(`已恢复到 v${v.seq}`)
       onChanged()
       void refreshProject()
+      void refreshAnalysis()
       return true
     } catch (err) {
       message.error(errorMessage(err))
@@ -397,6 +461,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     replaceFromServer(c)
     onChanged()
     void refreshProject()
+    void refreshAnalysis()
   }
 
   const handleResetStatus = async () => {
@@ -428,6 +493,29 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   const stuck = chapter.status === 'generating' && !aiRunning && attachChecked
   const status = aiRunning ? CHAPTER_STATUS.generating : CHAPTER_STATUS[chapter.status]
+  const revising = aiRunning && aiTask.task?.kind === 'chapter.revise'
+  const analysisStatus = ANALYSIS_STATUS[analysis.status]
+  const pendingChanges = countPending(analysis.latest?.changes)
+  // 任务面板「跳转」带 ?panel=analysis 时直接打开分析抽屉
+  const panelRequested = searchParams.get('panel') === 'analysis'
+  const closeAnalysis = () => {
+    setAnalysisOpen(false)
+    if (panelRequested) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('panel')
+      setSearchParams(next, { replace: true })
+    }
+  }
+  const reviseBlockedReason =
+    hasConfig === false
+      ? '尚未配置 AI 模型'
+      : !content.trim()
+        ? '章节正文为空，无法重写'
+        : aiRunning || stuck || chapter.status === 'generating' || !attachChecked
+          ? '本章正在生成中，请稍候'
+          : saving || rewriteLocked
+            ? '请先完成保存或局部改写'
+            : ''
 
   return (
     <>
@@ -447,6 +535,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 <Tag color={status.color}>{status.label}</Tag>
                 <Typography.Text type="secondary">{words} 字</Typography.Text>
                 {dirty && !aiRunning && <Tag color="orange">未保存</Tag>}
+                <Tag color={analysisStatus.color} style={{ cursor: 'pointer' }} onClick={() => setAnalysisOpen(true)}>
+                  {analysisStatus.label}
+                </Tag>
               </Space>
             }
             extra={
@@ -466,6 +557,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 >
                   下一章 <RightOutlined />
                 </Button>
+                <Badge count={pendingChanges} size="small" title={`${pendingChanges} 项设定变化待确认`}>
+                  <Button size="small" icon={<ExperimentOutlined />} onClick={() => setAnalysisOpen(true)}>
+                    分析
+                  </Button>
+                </Badge>
                 <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
                   版本历史
                 </Button>
@@ -576,6 +672,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   },
                 ]}
               />
+              {revising && (
+                <Alert type="info" showIcon message="正在按分析建议重写本章" description="完成后覆盖正文，旧稿自动存为历史版本。" />
+              )}
               {aiTask.running && aiStatus === 'queued' && aiTask.task && (
                 <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
               )}
@@ -649,6 +748,19 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         currentDirty={dirty}
         restoreDisabled={editorLocked || saving || stuck}
         onRestore={handleRestore}
+      />
+      <AnalysisDrawer
+        open={analysisOpen || panelRequested}
+        onClose={closeAnalysis}
+        chapterId={chapter.id}
+        analysis={analysis}
+        autoAnalyze={autoAnalyze}
+        analyzeDisabled={hasConfig === false || aiRunning || stuck || saving || !content.trim()}
+        onAnalyze={runAnalyze}
+        reviseBlockedReason={reviseBlockedReason}
+        reviseRunning={revising}
+        onRevise={runRevise}
+        compare={reviseCompare}
       />
       <Modal
         open={blocker.state === 'blocked'}

@@ -1,31 +1,38 @@
-"""chapter.generate / chapter.polish：包装 generation_service。"""
+"""chapter.generate / chapter.polish / chapter.revise：包装 generation_service。
+
+成功后（on_success）按项目开关自动排队分析本章（analysis_service.enqueue_auto）。
+"""
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chapter, Task
-from app.schemas.chapter import GenerateChapterRequest, PolishChapterRequest
-from app.services import generation_service
+from app.schemas.chapter import GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
+from app.services import analysis_service, generation_service
 from app.services.chapter_service import count_words
 from app.services.task_engine.registry import Event, TaskContext, TaskSpec, register
 
 logger = logging.getLogger(__name__)
 
-MODE_LABELS = {"generate": "AI 生成", "polish": "AI 润色"}
+MODE_LABELS = {"generate": "AI 生成", "polish": "AI 润色", "revise": "按建议重写", "analyze": "章节分析"}
+_MODES: dict[str, generation_service.Mode] = {
+    "chapter.generate": "generate",
+    "chapter.polish": "polish",
+    "chapter.revise": "revise",
+}
+_REQUESTS = {"generate": GenerateChapterRequest, "polish": PolishChapterRequest, "revise": ReviseChapterRequest}
 
 
-def _mode(kind: str) -> Literal["generate", "polish"]:
-    return "polish" if kind == "chapter.polish" else "generate"
+def _mode(kind: str) -> generation_service.Mode:
+    return _MODES[kind]
 
 
-def _request(kind: str, params: dict[str, Any]) -> GenerateChapterRequest | PolishChapterRequest:
-    if _mode(kind) == "generate":
-        return GenerateChapterRequest.model_validate(params)
-    return PolishChapterRequest.model_validate(params)
+def _request(kind: str, params: dict[str, Any]) -> generation_service.ChapterRequest:
+    return _REQUESTS[_mode(kind)].model_validate(params)
 
 
 def chapter_title(chapter_no: int, title: str, mode: str) -> str:
@@ -37,7 +44,7 @@ def chapter_title(chapter_no: int, title: str, mode: str) -> str:
 
 
 class ChapterHandler:
-    kinds = ("chapter.generate", "chapter.polish")
+    kinds = ("chapter.generate", "chapter.polish", "chapter.revise")
 
     async def validate_and_claim(
         self, db: AsyncSession, ctx: TaskContext, *, user_id: int, kind: str, params: dict[str, Any]
@@ -94,8 +101,12 @@ class ChapterHandler:
         return generation_service.run_chapter_job(job, ctx.sessionmaker)
 
     def progress(self, task: Task, text: str) -> int:
-        if _mode(task.kind) == "generate":
+        mode = _mode(task.kind)
+        if mode == "generate":
             target = int(task.input.get("request", {}).get("target_words") or 3000)
+        elif mode == "revise":
+            request = task.input.get("request", {})
+            target = int(request.get("target_words") or task.input.get("source_words") or 0) or 1000
         else:
             target = int(task.input.get("source_words") or 0) or 1000
         return max(1, min(95, count_words(text) * 100 // max(target, 1)))
@@ -115,6 +126,10 @@ class ChapterHandler:
                 await db.commit()
         except Exception:  # noqa: BLE001
             logger.exception("任务 %s 回退章节 %s 状态失败", task.id, chapter_id)
+
+    async def on_success(self, ctx: TaskContext, task: Task) -> None:
+        """正文已被 AI 覆盖：按项目开关自动排队分析本章（D2）。"""
+        await analysis_service.enqueue_auto(ctx, task.project_id, task.chapter_id)
 
 
 register(ChapterHandler())

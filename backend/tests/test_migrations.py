@@ -404,3 +404,91 @@ def test_0008_careers(tmp_path):
             assert conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_0009_chapter_analysis(tmp_path):
+    """0009：分析两表（外键规则）、auto_analyze 回填 true、tasks.serial_key；downgrade -1 删除且存量保留。"""
+    db_file = tmp_path / "migrate0009.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0008")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, 'p', '', '', '', 'planning')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapters (project_id, chapter_no, title, content, status, word_count) "
+                    "VALUES (1, 1, '第1章', '正文', 'draft', 2)"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO tasks (user_id, kind, status, input) VALUES (1, 'wizard.world', 'succeeded', '{}')")
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0009")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert {"chapter_analyses", "analysis_changes"} <= set(insp.get_table_names())
+        assert "serial_key" in {c["name"] for c in insp.get_columns("tasks")}
+        assert "ix_tasks_serial_key" in {i["name"] for i in insp.get_indexes("tasks")}
+
+        def _fk_rules(table: str) -> dict:
+            return {fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys(table)}
+
+        assert _fk_rules("chapter_analyses") == {
+            "project_id": "CASCADE",
+            "chapter_id": "CASCADE",
+            "task_id": "SET NULL",
+        }
+        assert _fk_rules("analysis_changes") == {"analysis_id": "CASCADE", "project_id": "CASCADE"}
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT auto_analyze FROM projects")).scalar_one() == 1
+            assert conn.execute(text("SELECT serial_key FROM tasks")).scalar_one() is None
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(
+                text(
+                    "INSERT INTO chapter_analyses (project_id, chapter_id, task_id, content_hash, chapter_no, summary, "
+                    "plot_points, hooks, conflict, emotion, changes_raw, foreshadow_candidates, scores, metrics, "
+                    "suggestions, warnings) VALUES (1, 1, 1, 'h', 1, 's', '[]', '[]', '{}', '{}', '{}', '[]', '{}', "
+                    "'{}', '[]', '[]')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO analysis_changes (analysis_id, project_id, chapter_no, kind, target, status) "
+                    "VALUES (1, 1, 1, 'character_state', '{}', 'applied')"
+                )
+            )
+            conn.execute(text("DELETE FROM tasks"))
+            assert conn.execute(text("SELECT task_id FROM chapter_analyses")).scalar_one() is None
+            # 删除章节：分析与回写条目级联删除
+            conn.execute(text("DELETE FROM chapters"))
+            for table in ("chapter_analyses", "analysis_changes"):
+                assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert not ({"chapter_analyses", "analysis_changes"} & set(insp.get_table_names()))
+        assert "auto_analyze" not in {c["name"] for c in insp.get_columns("projects")}
+        assert "serial_key" not in {c["name"] for c in insp.get_columns("tasks")}
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT COUNT(*) FROM projects")).scalar_one() == 1
+    finally:
+        engine.dispose()

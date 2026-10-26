@@ -30,10 +30,10 @@ from app.models.base import Base, TimestampMixin
 CHAPTER_STATUSES = ("draft", "generating", "done")
 AI_PROVIDERS = ("openai_compat", "anthropic", "gemini")
 PROJECT_STATUSES = ("planning", "writing", "completed")
-# 版本来源：手动保存 / AI 或回滚替换前补的快照 / 整章生成 / 润色 / 局部改写采纳 / 回滚
-VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore")
-# 生成记录类型：整章生成、润色，以及局部改写的各个操作
-GENERATION_KINDS = ("generate", "polish", "rewrite", "expand", "condense", "deslop", "continue")
+# 版本来源：手动保存 / AI 或回滚替换前补的快照 / 整章生成 / 润色 / 局部改写采纳 / 回滚 / 按建议重写
+VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore", "revise")
+# 生成记录类型：整章生成、润色、按建议重写，以及局部改写的各个操作
+GENERATION_KINDS = ("generate", "polish", "rewrite", "expand", "condense", "deslop", "continue", "revise")
 GENERATION_STATUSES = ("success", "error", "cancelled")
 # 后台任务
 TASK_KINDS = (
@@ -47,6 +47,8 @@ TASK_KINDS = (
     "relations.parse",
     "career.generate",
     "wizard.careers",
+    "chapter.analyze",
+    "chapter.revise",
 )
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running")
@@ -63,6 +65,16 @@ RELATION_SOURCES = ("manual", "wizard", "ai_parse", "import", "analysis")
 CAREER_KINDS = ("main", "sub")
 # 职业挂接历史来源：手动 / 向导 / AI 生成角色 / 卡片导入 / 章节分析（analysis-memory）
 CAREER_SOURCES = ("manual", "wizard", "ai", "import", "analysis")
+# 章节分析回写条目：类型与状态（analysis-memory）
+ANALYSIS_CHANGE_KINDS = (
+    "character_state",
+    "life_status",
+    "relationship_update",
+    "relationship_create",
+    "career_stage",
+    "org_membership",
+)
+ANALYSIS_CHANGE_STATUSES = ("applied", "pending", "reverted", "rejected", "skipped", "failed")
 # 全局预置关系类型 (category, role_a, role_b)：「a 是 b 的 role_a，b 是 a 的 role_b」。
 # 迁移 0007 内有同样的一份（迁移脚本冻结，不引用应用代码）；create_all 时由 after_create 事件写入
 PRESET_RELATIONSHIP_TYPES = (
@@ -133,6 +145,8 @@ class Project(TimestampMixin, Base):
     premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
     style: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="planning", nullable=False)
+    # AI 整章生成 / 润色 / 按建议重写成功后自动排队分析本章
+    auto_analyze: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
 
 
 class WorldSetting(TimestampMixin, Base):
@@ -478,6 +492,8 @@ class Task(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
     # chapter:{id} / wizard:{project_id}:{kind}；用于同资源互斥
     resource_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # 同键任务排队串行（不拒绝）：调度时同键已有运行中的任务则跳过，按 id 先进先出；如 analysis:{project_id}
+    serial_key: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
     input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -492,3 +508,60 @@ class Task(TimestampMixin, Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChapterAnalysis(TimestampMixin, Base):
+    """一次章节分析（每次一行，历史保留）。章节的最新分析 = max(id)；content_hash 与当前正文不同即已过期。"""
+
+    __tablename__ = "chapter_analyses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), index=True, nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), index=True, nullable=True)
+    # 分析时正文的 sha256
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 冗余：回写时比较章节先后
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    plot_points: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    hooks: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    conflict: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    emotion: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # 模型输出的原始变化（规范化后），便于排查
+    changes_raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # 原样保存，留给 foreshadows 使用
+    foreshadow_candidates: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    # {overall, pacing, engagement, coherence}；overall 由服务端对三项求平均
+    scores: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # 本地规则计算：{words, paragraphs, avg_paragraph_chars, dialogue_ratio}
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # [{id, category, priority, text}]
+    suggestions: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    # 规范化时丢弃 / 截断的提示
+    warnings: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    model: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+
+
+class AnalysisChange(TimestampMixin, Base):
+    """分析回写条目：一次分析识别出的一项设定变化及其处理结果（已写入 / 待确认 / 已撤销 / 已拒绝 / 已跳过 / 失败）。"""
+
+    __tablename__ = "analysis_changes"
+    __table_args__ = (Index("ix_analysis_changes_project_id_field_key", "project_id", "field_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("chapter_analyses.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    target: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # 规范化字段标识（char:12:current_state / rel:5:intimacy / career:12:3 / org:4:12 / relpair:3:7），名字对不上时为空
+    field_key: Mapped[str] = mapped_column(String(120), default="", server_default="", nullable=False)
+    before: Mapped[Any] = mapped_column(JSON, nullable=True)
+    after: Mapped[Any] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

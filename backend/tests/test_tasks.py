@@ -549,3 +549,140 @@ def test_chapter_title_skips_default_title():
     assert chapter_title(3, "第3章", "generate") == "第 3 章 · AI 生成"
     assert chapter_title(3, "", "polish") == "第 3 章 · AI 润色"
     assert chapter_title(3, "山门", "generate") == "第 3 章 山门 · AI 生成"
+
+
+# ---------- serial_key：同键串行、异键并行、与每用户上限共同生效 ----------
+
+
+async def _analysis_setup(client, n_projects: int):
+    """每个项目一个有正文的章节（分析任务 serial_key = analysis:{project_id}）。"""
+    chapters = []
+    for i in range(n_projects):
+        p = await create_project(client, title=f"项目{i}")
+        base = f"/api/v1/projects/{p['id']}"
+        chapters.append((await client.post(f"{base}/chapters", json={"title": "章", "content": "正文"})).json())
+    return chapters
+
+
+def _analyze(client, ch):
+    return client.post(f"/api/v1/chapters/{ch['id']}/analyze")
+
+
+@pytest.mark.parametrize("settings_overrides", [{"task_max_per_user": 2}])
+async def test_serial_key_same_key_serial_other_keys_parallel(app, client, fake_llm):
+    from tests.helpers import analysis_json
+
+    await register(client)
+    await create_ai_config(client)
+    a1, b1, c1 = await _analysis_setup(client, 3)
+    base_a = f"/api/v1/projects/{a1['project_id']}"
+    a2 = (await client.post(f"{base_a}/chapters", json={"title": "章2", "content": "正文2"})).json()
+    gate_a1, gate_b1, gate_a2 = Gate(), Gate(), Gate()
+    # 领取顺序：A1、B1（A2 与 A1 同键排队），A1 结束后是 A2（先于更晚入队的 C1）
+    fake_llm.push([gate_a1, analysis_json()])
+    fake_llm.push([gate_b1, analysis_json()])
+    fake_llm.push([gate_a2, analysis_json()])
+    fake_llm.push(analysis_json())
+    ta1 = (await _analyze(client, a1)).json()
+    ta2 = (await _analyze(client, a2)).json()
+    tb1 = (await _analyze(client, b1)).json()
+    tc1 = (await _analyze(client, c1)).json()
+    await gate_a1.wait_reached()
+    await gate_b1.wait_reached()
+    await asyncio.sleep(0.05)
+    status = {t["id"]: (await client.get(f"/api/v1/tasks/{t['id']}")).json()["status"] for t in (ta1, ta2, tb1, tc1)}
+    # A2 同键等待；C1 异键但已达每用户上限
+    assert status == {ta1["id"]: "running", ta2["id"]: "queued", tb1["id"]: "running", tc1["id"]: "queued"}
+    assert len(fake_llm.calls) == 2
+
+    gate_a1.release()
+    await gate_a2.wait_reached()  # 同键的下一个（先入队）开始执行
+    await asyncio.sleep(0.05)
+    assert (await client.get(f"/api/v1/tasks/{tc1['id']}")).json()["status"] == "queued"
+    gate_b1.release()
+    assert (await wait_task(client, tc1["id"]))["status"] == "succeeded"  # 名额空出后异键任务执行
+    gate_a2.release()
+    for t in (ta1, ta2, tb1):
+        assert (await wait_task(client, t["id"]))["status"] == "succeeded"
+    async with app.state.sessionmaker() as db:
+        rows = list(await db.scalars(select(Task).where(Task.kind == "chapter.analyze").order_by(Task.started_at)))
+    assert rows[0].serial_key == f"analysis:{a1['project_id']}"
+    assert {r.serial_key for r in rows} == {f"analysis:{c['project_id']}" for c in (a1, b1, c1)}
+
+
+@pytest.mark.parametrize("settings_overrides", [{"task_max_per_user": 1}])
+async def test_serial_key_keeps_fifo_when_user_limit_blocks(app, client, fake_llm):
+    """每用户上限为 1：生成任务与同项目的两个分析按入队顺序依次执行（同键内先进先出）。"""
+    from tests.helpers import analysis_json
+
+    await register(client)
+    await create_ai_config(client)
+    (a1,) = await _analysis_setup(client, 1)
+    a2 = (await client.post(f"/api/v1/projects/{a1['project_id']}/chapters", json={"content": "正文2"})).json()
+    engine = app.state.task_engine
+    await engine.stop()
+    gen = (await _generate(client, a1)).json()
+    t1 = (await _analyze(client, a2)).json()
+    t2 = (await _analyze(client, a1)).json()
+    fake_llm.push("生成的正文")
+    fake_llm.push(analysis_json(summary="第一"))
+    fake_llm.push(analysis_json(summary="第二"))
+    await engine.start()
+    for t in (gen, t1, t2):
+        assert (await wait_task(client, t["id"]))["status"] == "succeeded"
+    async with app.state.sessionmaker() as db:
+        started = list(await db.scalars(select(Task.id).order_by(Task.started_at, Task.id)))
+    assert started == [gen["id"], t1["id"], t2["id"]]
+
+
+async def test_serial_key_after_restart(app, client, fake_llm):
+    """重启：运行中的同键任务被中断并释放串行键，start 后排队中的同键任务照常执行。"""
+    from tests.helpers import analysis_json
+
+    await register(client)
+    await create_ai_config(client)
+    (a1,) = await _analysis_setup(client, 1)
+    a2 = (await client.post(f"/api/v1/projects/{a1['project_id']}/chapters", json={"content": "正文2"})).json()
+    gate = Gate()
+    fake_llm.push([gate, analysis_json()])
+    t1 = (await _analyze(client, a1)).json()
+    await gate.wait_reached()
+    t2 = (await _analyze(client, a2)).json()
+    await asyncio.sleep(0.05)
+    assert (await client.get(f"/api/v1/tasks/{t2['id']}")).json()["status"] == "queued"
+
+    engine = app.state.task_engine
+    await engine.stop()
+    assert (await client.get(f"/api/v1/tasks/{t1['id']}")).json()["status"] == "interrupted"
+    assert engine._running_serial == {}
+    fake_llm.push(analysis_json(summary="第二章"))
+    await engine.start()
+    assert (await wait_task(client, t2["id"]))["status"] == "succeeded"
+    # 中断的分析可重试，仍归入同一串行键
+    fake_llm.push(analysis_json())
+    retried, _ = await run_task(client, await client.post(f"/api/v1/tasks/{t1['id']}/retry"))
+    assert retried["status"] == "succeeded" and retried["retry_of_id"] == t1["id"]
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Task, retried["id"])
+    assert row.serial_key == f"analysis:{a1['project_id']}"
+
+
+async def test_on_success_failure_does_not_affect_task(app, client, fake_llm, monkeypatch):
+    from app.services import analysis_service
+
+    calls = []
+
+    async def boom(ctx, project_id, chapter_id):
+        calls.append((project_id, chapter_id))
+        raise RuntimeError("hook failed")
+
+    monkeypatch.setattr(analysis_service, "enqueue_auto", boom)
+    _, base, (ch,) = await _setup(client)
+    fake_llm.push("正文")
+    task, events = await run_task(client, await _generate(client, ch))
+    assert task["status"] == "succeeded" and events[-1][0] == "done"
+    assert calls == [(ch["project_id"], ch["id"])]
+    # 失败的任务不调用 on_success
+    fake_llm.push(AIProviderError("模型调用失败：额度不足"))
+    task, _ = await run_task(client, await _generate(client, ch))
+    assert task["status"] == "failed" and len(calls) == 1

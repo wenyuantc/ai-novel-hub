@@ -90,12 +90,13 @@
 | P0-2 | `task-engine` 统一持久化后台任务与任务面板 | A16 | 无 |
 | P0-3 | `story-entities` 结构化设定：角色、组织、关系图谱、卡片导入导出、世界观分类、上下文注入 | B1–B4、B9、B10 | task-engine |
 | P0-3b | `career-system` 职业等级体系（用户决定从 story-entities 拆出，紧接着做） | B5 | story-entities |
-| P0-4 | `analysis-memory` 章节分析、状态回写、伏笔、剧情记忆检索、按建议重写 | A10、A11、A7（摘要）、B6、B7 | chapter-versions、story-entities；分析任务用 task-engine |
+| P0-4 | `analysis-memory` 章节分析、摘要、回写设定、按建议重写 | A10、A11、A7（摘要） | chapter-versions、story-entities、career-system、task-engine |
+| P0-4b | `foreshadows` 伏笔管理（用户决定从 analysis-memory 拆出，紧接着做） | B6 | analysis-memory |
 | P0-5 | `outline-pro` 大纲续写、一对多展开、导入导出、增量向导、批量生成 | A1、A2、A4、A5、A6、A8 | task-engine；批量写入依赖 chapter-versions |
 | P1-6 | `prompt-styles` 提示词模板、写作风格库、实例内工坊 | C1、C2、A14 | 无（最好在 P0-4、P0-5 之前，新提示词可直接走模板化） |
 | P1-7 | `inspiration` 灵感模式与项目结构化字段 | A3 | 无 |
 | P1-8 | `book-import` 拆书 | C3 | task-engine、story-entities、outline-pro；文件上传复用封面任务的方案 |
-| P1-9 | `knowledge-base` 知识库 | B8 | 与 analysis-memory 共用向量方案 |
+| P1-9 | `knowledge-base` 检索基建：知识库 + 向量剧情记忆（B7 由用户决定从 analysis-memory 并入） | B7、B8 | analysis-memory（摘要/情节点作为记忆来源） |
 | P1-10 | `project-io-reader` 项目 JSON 备份、EPUB、阅读器、书架、暗色主题、移动端 | D3、D4、D5、A18 | 实体稳定后再做 JSON 格式，所以放在 P0 之后 |
 | P2-11 | `project-agent` 项目智能体 | C4 | story-entities、chapter-versions |
 | P2-12 | `skills-mcp` Skill 和 MCP 插件 | C5、C6 | prompt-styles |

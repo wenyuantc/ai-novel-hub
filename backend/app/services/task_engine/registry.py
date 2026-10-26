@@ -1,4 +1,4 @@
-"""任务类型注册表：kind → TaskHandler。后续子任务注册新类型只需实现 TaskHandler 协议。"""
+"""任务类型注册表：kind → TaskHandler。后续子任务注册新类型只需实现 TaskHandler 协议（on_success 可选）。"""
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -34,6 +34,8 @@ class TaskSpec:
     resource_key: str | None
     title: str
     input: dict[str, Any] = field(default_factory=dict)
+    # 同键任务排队串行（resource_key 冲突即拒绝；serial_key 冲突则等待前一个结束）
+    serial_key: str | None = None
 
 
 class TaskHandler(Protocol):
@@ -60,6 +62,9 @@ class TaskHandler(Protocol):
     async def on_abort(self, ctx: TaskContext, task: Task) -> None:
         """任务未成功结束（失败 / 取消 / 中断 / 排队中取消）时清理资源；须幂等，自身吞掉异常。"""
         ...
+
+    # 可选：async def on_success(self, ctx: TaskContext, task: Task) -> None
+    #   任务写入 succeeded 后、广播 done 之前调用（引擎用 getattr 探测）；异常只记日志，不影响任务状态。
 
 
 _HANDLERS: dict[str, TaskHandler] = {}

@@ -54,6 +54,7 @@ export const VERSION_SOURCE: Record<VersionSource, { label: string; color: strin
   polish: { label: 'AI 润色', color: 'cyan' },
   rewrite: { label: '局部改写', color: 'purple' },
   restore: { label: '回滚', color: 'magenta' },
+  revise: { label: '按建议重写', color: 'geekblue' },
 }
 
 export const GENERATION_KIND_LABELS: Record<GenerationKind, string> = {
@@ -64,6 +65,7 @@ export const GENERATION_KIND_LABELS: Record<GenerationKind, string> = {
   condense: '缩写',
   deslop: '去 AI 味',
   continue: '续写',
+  revise: '按建议重写',
 }
 
 export const GENERATION_STATUS: Record<GenerationStatus, { label: string; color: string }> = {

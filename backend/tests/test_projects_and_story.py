@@ -97,6 +97,12 @@ async def test_cross_user_isolation(client, make_client):
         ("DELETE", f"{base}/chapters/{ch['id']}"),
         ("POST", f"/api/v1/chapters/{ch['id']}/generate"),
         ("POST", f"/api/v1/chapters/{ch['id']}/polish"),
+        ("POST", f"/api/v1/chapters/{ch['id']}/analyze"),
+        ("POST", f"/api/v1/chapters/{ch['id']}/revise"),
+        ("GET", f"/api/v1/chapters/{ch['id']}/analyses"),
+        ("GET", f"/api/v1/chapters/{ch['id']}/analysis-status"),
+        ("POST", f"{base}/analysis/analyze-pending"),
+        ("GET", f"{base}/analysis/statuses"),
         ("POST", f"{base}/wizard/outline"),
         ("GET", f"{base}/export?format=txt"),
         ("GET", f"{base}/world?category=place"),
@@ -164,6 +170,7 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/careers": {"name": "x", "stages": [{"name": "一"}]},
         f"{base}/careers/batch": {"careers": [{"name": "x", "stages": [{"name": "一"}]}]},
         f"{base}/characters/{c1['id']}/careers": {"career_id": career["id"]},
+        f"/api/v1/chapters/{ch['id']}/revise": {"analysis_id": 1, "instruction": "x"},
     }
     for method, url in checks:
         body = None

@@ -4,6 +4,9 @@
   用条件 UPDATE（status='queued' → 'running'）领取，影响行数为 1 才算领到，然后 asyncio.create_task 执行。
 - 前提：单进程部署（Dockerfile 中 uvicorn 不带 --workers）。start() 时的恢复逻辑会把所有 running 任务
   标记为 interrupted；多实例部署会误伤其他进程的任务，届时需改为 FOR UPDATE SKIP LOCKED + 心跳租约。
+- serial_key：同键任务排队串行。调度时同键已有运行中（或本轮已登记）的任务就跳过，留到下一轮；
+  同键内按 id 先进先出（前一个同键任务因上限被跳过时，后面的同键任务也不越过它）。与全局 / 每用户上限同时生效。
+- on_success（可选）：任务写入 succeeded 后调用，异常只记日志（如章节任务成功后自动排队分析）。
 - 取消运行中任务：对 asyncio.Task 调用一次 cancel()；CancelledError 传入 runner 的 finally，
   由其回退章节状态并写 cancelled 生成记录；引擎随后把任务置为 cancelled（关停时为 interrupted）。
 """
@@ -50,6 +53,7 @@ class TaskEngine:
         self.hubs: dict[int, TaskHub] = {}
         self._running: dict[int, asyncio.Task[None]] = {}
         self._running_users: dict[int, int] = {}
+        self._running_serial: dict[int, str] = {}
         self._cancel_requested: set[int] = set()
         self._shutdown: set[int] = set()
         self._finalizing: set[int] = set()
@@ -167,17 +171,30 @@ class TaskEngine:
         settings = self.ctx.settings
         sm = self.ctx.sessionmaker
         async with sm() as db:
-            rows = await db.execute(select(Task.id, Task.user_id).where(Task.status == "queued").order_by(Task.id))
+            rows = await db.execute(
+                select(Task.id, Task.user_id, Task.serial_key).where(Task.status == "queued").order_by(Task.id)
+            )
             queued = list(rows.all())
         per_user = Counter(self._running_users.values())
-        for task_id, user_id in queued:
+        # 运行中占用的串行键；本轮被跳过的串行键也加入，保证同键内先进先出
+        busy_serial = set(self._running_serial.values())
+        for task_id, user_id, serial_key in queued:
             if self._stopping or len(self._running) >= settings.task_max_concurrency:
                 break
-            if task_id in self._running or per_user[user_id] >= settings.task_max_per_user:
+            if task_id in self._running:
+                continue
+            if serial_key is not None and serial_key in busy_serial:
+                continue
+            if per_user[user_id] >= settings.task_max_per_user:
+                if serial_key is not None:
+                    busy_serial.add(serial_key)
                 continue
             per_user[user_id] += 1
             # 先登记 asyncio.Task 再领取：库里出现 running 时内存里一定有可取消的执行体
             self._running_users[task_id] = user_id
+            if serial_key is not None:
+                busy_serial.add(serial_key)
+                self._running_serial[task_id] = serial_key
             t = asyncio.create_task(self._claim_and_run(task_id), name=f"task-{task_id}")
             self._running[task_id] = t
             t.add_done_callback(lambda _t, tid=task_id: self._on_done(tid))
@@ -198,6 +215,7 @@ class TaskEngine:
     def _on_done(self, task_id: int) -> None:
         self._running.pop(task_id, None)
         self._running_users.pop(task_id, None)
+        self._running_serial.pop(task_id, None)
         self._cancel_requested.discard(task_id)
         self.notify()
 
@@ -337,6 +355,8 @@ class TaskEngine:
                         await task_service.prune_finished(db, row.user_id)
             except Exception:  # noqa: BLE001
                 logger.exception("任务 %s 结束状态写入失败", task_id)
+            if status == "succeeded" and handler is not None and task is not None:
+                await self._on_success(handler, task)
         finally:
             if self.hubs.get(task_id) is hub:
                 self.hubs.pop(task_id, None)
@@ -345,6 +365,15 @@ class TaskEngine:
             else:
                 hub.close("error", {"task": out, "detail": error})
             self._finalizing.discard(task_id)
+
+    async def _on_success(self, handler: TaskHandler, task: Task) -> None:
+        hook = getattr(handler, "on_success", None)
+        if hook is None:
+            return
+        try:
+            await hook(self.ctx, task)
+        except Exception:  # noqa: BLE001
+            logger.exception("任务 %s 成功回调失败", task.id)
 
     # ---------------- 取消 ----------------
 

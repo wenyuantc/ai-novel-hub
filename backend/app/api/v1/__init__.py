@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     ai_configs,
+    analysis,
     auth,
     cards,
     careers,
@@ -33,5 +34,6 @@ api_router.include_router(cards.router)
 api_router.include_router(careers.router)
 api_router.include_router(chapters.router)
 api_router.include_router(chapter_versions.router)
+api_router.include_router(analysis.router)
 api_router.include_router(wizard.router)
 api_router.include_router(tasks.router)

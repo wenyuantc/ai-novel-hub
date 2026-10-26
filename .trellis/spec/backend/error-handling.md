@@ -180,7 +180,8 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   `POST /api/v1/projects/{id}/wizard/{outline|characters|world|careers}` 都**返回 202 `TaskOut`**（普通 JSON），
   实际执行在进程内任务引擎（`app/services/task_engine/`）中进行；设定类任务 `POST /projects/{id}/characters/generate`、
   `/organizations/generate`、`/characters/{cid}/parse-relations`、`/careers/generate`（`character.generate` / `organization.generate` / `relations.parse` / `career.generate`，
-  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；实时输出通过
+  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；章节分析 `POST /chapters/{cid}/analyze`（`chapter.analyze`，同章已有排队中的分析时
+  返回那条任务、状态码 200）、按建议重写 `POST /chapters/{cid}/revise`（`chapter.revise`）也走任务，见 story-entities.md「章节分析与回写」；实时输出通过
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
 - **同步 SSE**：只剩 `POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎）。
 - 跨层：后端 `app/api/sse.py`、`task_engine/{engine,hub,registry}.py`、`handlers/{chapter,wizard}.py`、
@@ -202,7 +203,9 @@ class TaskHandler(Protocol):
     def run(self, job, ctx) -> AsyncIterator[Event]              # delta / continue / done / error
     def progress(self, task: Task, text: str) -> int             # 0–95
     async def on_abort(self, ctx, task: Task) -> None            # 幂等，自身吞异常
-# TaskSpec(project_id, chapter_id, resource_key, title, input)；input 必须含原始请求 "request"（重试时原样复用）
+    # 可选：async def on_success(self, ctx, task: Task) -> None  # succeeded 写库后、广播 done 前；异常只记日志
+# TaskSpec(project_id, chapter_id, resource_key, title, input, serial_key=None)；input 必须含原始请求 "request"（重试时原样复用）
+# resource_key 冲突 → 409 拒绝；serial_key 冲突 → 排队等待（同键串行、按 id 先进先出，见 database-guidelines.md「后台任务表」）
 
 # backend/app/services/task_engine/engine.py
 class TaskEngine:  # app.state.task_engine；lifespan 中 start()/stop()
@@ -277,13 +280,15 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
   → 回滚（章节抢占随之撤销）→ 409 `已有任务在进行中，请等待其完成后再试`。
 - 章节类任务**创建即抢占**：排队期间章节就是 `generating`（编辑器只读）。`input.prev_status` 记录原状态。
 - 调度：按 id 升序扫描 queued；全局运行数 ≥ `TASK_MAX_CONCURRENCY`（默认 4）停止，用户运行数 ≥ `TASK_MAX_PER_USER`
-  （默认 2）跳过。先登记 `asyncio.Task` 再做条件 UPDATE（`status='queued'` → `'running'`），影响行数为 1 才执行。
+  （默认 2）跳过；`serial_key` 同键已有运行中的任务也跳过（同键内先进先出）。先登记 `asyncio.Task` 再做条件 UPDATE
+  （`status='queued'` → `'running'`），影响行数为 1 才执行。
 - 运行：`build_job` 按**运行时的最新数据**组装（章节上下文、向导的世界观/角色/大纲）；章节已不处于 `generating`
   （排队期间被复位）→ failed `章节生成状态已被复位，任务未执行`，不覆盖正文。之后用 `aclosing` 消费 runner 事件：
   `delta` 追加到 hub 并广播；`continue` 原样广播并把 stage 设为 `字数不足，自动续写第 n 轮`；`done` → succeeded（progress 100）；
   `error` → failed。`output_text` / progress / stage 每 `flush_interval`（2 秒）节流刷库一次，结束时再写一次。
 - 收尾：非成功先 `handler.on_abort`（章节：仍为 `generating` 时还原 `prev_status`），再写终态 + `finished_at`，
-  `prune_finished`，最后广播终止事件并释放 hub。`done` 已产出后才收到取消 → 仍记 succeeded。
+  `prune_finished`；成功时再调用可选的 `handler.on_success`（章节 generate / polish / revise → `analysis_service.enqueue_auto`，
+  异常只记日志），最后广播终止事件并释放 hub。`done` 已产出后才收到取消 → 仍记 succeeded。
 - 取消：queued → 条件 UPDATE 为 cancelled，**之后**再 `on_abort`（避免与领取竞争）；running → 对 `asyncio.Task`
   调用一次 `cancel()`，`CancelledError` 传入 runner 的 `finally`（屏蔽取消回退章节、写 `cancelled` 生成记录），
   引擎 `uncancel()` 后照常收尾为 cancelled；已结束 → 409 `任务已结束，无法取消`。
@@ -356,6 +361,10 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 | 自动续写轮报错 | 运行中 | succeeded，`result.warning` |
 | 向导 JSON 无法解析 | 运行中 | failed `AI 输出解析失败：...，请重新生成`，保留旧数据 |
 | 意外异常 | 运行中 | failed `生成失败：服务器内部错误`（runner 内）/ `任务执行失败：服务器内部错误`（引擎兜底） |
+| 分析：章节正文为空 | 创建前 / 运行开始 | 400 / failed `章节正文为空，无法分析` |
+| 分析：模型输出无法解析 | 运行中 | failed `AI 输出解析失败：...，请重新生成`，不保存分析、不回写 |
+| 分析：自动入队的任务运行时没有可用模型配置 | 运行开始 | failed（`resolve_config` 的 detail） |
+| 重写：未选建议也未填要求 / 建议 id 不存在 / 分析不属于本章 / 正文为空 | 创建前 | 400 `请至少选择一条建议或填写修改要求` / `建议不存在：N` / `分析结果不存在或不属于该章节` / `章节正文为空，无法重写` |
 | 用户取消 | 运行中 | cancelled `任务已取消`，生成记录 `cancelled` |
 | 服务停止 / 崩溃后重启 | 运行中 | interrupted `服务重启，任务已中断`，保留 `output_text` |
 | 改写：选区 / op 非法 | 流开始前 | 400 / 422 JSON（见 `rewrite_service`）；改写意外异常 → `error {"detail": "改写失败：服务器内部错误"}` |

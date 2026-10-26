@@ -1,12 +1,14 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { App, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag } from 'antd'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { ANALYSIS_STATUS, analysisApi, formatScore } from '../../api/analysis'
 import { chapterApi, CHAPTER_STATUS } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
-import type { ChapterBrief, ChapterStatus } from '../../api/types'
+import type { ChapterAnalysisState, ChapterBrief, ChapterStatus } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectStore } from '../../stores/project'
+import { useTasksStore } from '../../stores/tasks'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
 
@@ -16,7 +18,16 @@ export default function ChaptersPanel() {
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
   const loader = useCallback(() => chapterApi.list(pid), [pid])
-  const { data: chapters = [], loading, reload } = useLoader(loader)
+  const { data: chapterData, loading, reload } = useLoader(loader)
+  const chapters = useMemo(() => chapterData ?? [], [chapterData])
+  // 分析状态单独加载（章节列表重新加载、或有后台任务结束时刷新，如分析完成）：失败只影响「分析」列
+  const tasksVersion = useTasksStore((s) => s.version)
+  const statusLoader = useCallback(() => {
+    void tasksVersion // 仅作为重新加载的触发依赖
+    return chapterData ? analysisApi.statuses(pid) : Promise.resolve<ChapterAnalysisState[]>([])
+  }, [pid, chapterData, tasksVersion])
+  const { data: statuses = [] } = useLoader(statusLoader)
+  const statusById = useMemo(() => new Map(statuses.map((s) => [s.chapter_id, s])), [statuses])
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form] = Form.useForm<{ title: string }>()
@@ -83,6 +94,22 @@ export default function ChaptersPanel() {
             dataIndex: 'status',
             width: 100,
             render: (s: ChapterStatus) => <Tag color={CHAPTER_STATUS[s].color}>{CHAPTER_STATUS[s].label}</Tag>,
+          },
+          {
+            title: '分析',
+            key: 'analysis',
+            width: 130,
+            render: (_, c) => {
+              const st = statusById.get(c.id)
+              if (!st) return null
+              const label = ANALYSIS_STATUS[st.status]
+              return (
+                <Space size={4}>
+                  <Tag color={label.color}>{label.label}</Tag>
+                  {st.scores && <span title="整体评分">{formatScore(st.scores)}</span>}
+                </Space>
+              )
+            },
           },
           { title: '字数', dataIndex: 'word_count', width: 90 },
           { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (t: string) => formatTime(t) },

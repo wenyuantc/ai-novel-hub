@@ -7,6 +7,7 @@ import {
   subscribeTask,
   TASK_KIND_LABELS,
   taskApi,
+  isChapterWriteKind,
   taskLink,
   wizardTaskKind,
   type TaskStreamHandlers,
@@ -26,6 +27,7 @@ function task(over: Partial<Task> = {}): Task {
     error: '',
     retry_of_id: null,
     character_id: null,
+    analysis_id: null,
     queue_position: null,
     created_at: '2026-10-23T08:00:00',
     started_at: null,
@@ -249,6 +251,17 @@ describe('task helpers', () => {
     expect(TASK_KIND_LABELS['career.generate']).toBe('AI 生成职业')
     expect(TASK_KIND_LABELS['wizard.careers']).toBe('职业体系向导')
     expect(wizardTaskKind('careers')).toBe('wizard.careers')
+  })
+
+  it('taskLink / 标签：章节分析与按建议重写到编辑器并打开分析面板', () => {
+    expect(taskLink(task({ kind: 'chapter.analyze' }))).toBe('/projects/2/chapters/3?panel=analysis')
+    expect(taskLink(task({ kind: 'chapter.revise' }))).toBe('/projects/2/chapters/3?panel=analysis')
+    expect(taskLink(task({ kind: 'chapter.analyze', chapter_id: null }))).toBeNull()
+    expect(TASK_KIND_LABELS['chapter.analyze']).toBe('章节分析')
+    expect(TASK_KIND_LABELS['chapter.revise']).toBe('按建议重写')
+    expect(isChapterWriteKind('chapter.revise')).toBe(true)
+    expect(isChapterWriteKind('chapter.polish')).toBe(true)
+    expect(isChapterWriteKind('chapter.analyze')).toBe(false)
   })
 
   it('list / clearFinished 的查询参数', async () => {

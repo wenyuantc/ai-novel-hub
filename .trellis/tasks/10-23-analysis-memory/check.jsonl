@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对任务 kind、serial_key、on_success 与实现一致"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "核对回写只经统一入口、来源与章节号"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试覆盖"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "编辑器既有行为未回归"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "分析跨任务引擎-回写-上下文-前端多层"}

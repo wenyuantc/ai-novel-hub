@@ -130,6 +130,8 @@ export interface Project {
   updated_at: string
   chapter_count: number
   total_words: number
+  /** AI 生成 / 润色 / 按建议重写成功后自动排队分析本章（默认 true） */
+  auto_analyze: boolean
 }
 
 export interface ProjectCreate {
@@ -141,6 +143,7 @@ export interface ProjectCreate {
 
 export interface ProjectUpdate extends Partial<ProjectCreate> {
   status?: ProjectStatus
+  auto_analyze?: boolean
 }
 
 export type WorldCategory = 'place' | 'faction' | 'item' | 'rule' | 'history' | 'other'
@@ -301,7 +304,7 @@ export interface WizardItemMap {
   careers: Career
 }
 
-export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore'
+export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore' | 'revise'
 
 export interface ChapterVersionBrief {
   id: number
@@ -326,7 +329,15 @@ export interface ChapterVersionUpdate {
   note?: string | null
 }
 
-export type GenerationKind = 'generate' | 'polish' | 'rewrite' | 'expand' | 'condense' | 'deslop' | 'continue'
+export type GenerationKind =
+  | 'generate'
+  | 'polish'
+  | 'rewrite'
+  | 'expand'
+  | 'condense'
+  | 'deslop'
+  | 'continue'
+  | 'revise'
 
 export type GenerationStatus = 'success' | 'error' | 'cancelled'
 
@@ -403,6 +414,8 @@ export type TaskKind =
   | 'relations.parse'
   | 'career.generate'
   | 'wizard.careers'
+  | 'chapter.analyze'
+  | 'chapter.revise'
 
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
@@ -421,6 +434,8 @@ export interface Task {
   retry_of_id: number | null
   /** 任务针对的角色（目前仅 relations.parse 有值），用于按角色接上活动任务 */
   character_id: number | null
+  /** 按建议重写引用的分析（仅 chapter.revise 有值），用于重写前后评分对比 */
+  analysis_id: number | null
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
   queue_position: number | null
   created_at: string
@@ -989,4 +1004,161 @@ export interface CareerDraft {
 export interface CareerGenerateResult {
   drafts: CareerDraft[]
   warnings: string[]
+}
+
+// ---------------- 章节分析与回写（backend/app/schemas/analysis.py、chapter.py ReviseChapterRequest） ----------------
+
+/** none = 未分析；analyzing = 有排队 / 运行中的分析任务；analyzed = 最新分析与正文一致；stale = 正文已变化 */
+export type AnalysisStatus = 'none' | 'analyzing' | 'analyzed' | 'stale'
+
+export type ChangeKind =
+  | 'character_state'
+  | 'life_status'
+  | 'relationship_update'
+  | 'relationship_create'
+  | 'career_stage'
+  | 'org_membership'
+
+export type ChangeStatus = 'applied' | 'pending' | 'reverted' | 'rejected' | 'skipped' | 'failed'
+
+export type ScoreKey = 'overall' | 'pacing' | 'engagement' | 'coherence'
+
+/** 1.0–10.0，一位小数；模型没给出的项为 null；overall = 有值项的平均（服务端复算） */
+export type AnalysisScores = Partial<Record<ScoreKey, number | null>>
+
+/** 本地规则计算；dialogue_ratio 为 0–1 */
+export interface AnalysisMetrics {
+  words: number
+  paragraphs: number
+  avg_paragraph_chars: number
+  dialogue_ratio: number
+}
+
+export interface AnalyzeRequest {
+  ai_config_id?: number | null
+}
+
+export interface AnalyzePendingResult {
+  queued: number
+  task_ids: number[]
+}
+
+export interface ChapterAnalysisState {
+  chapter_id: number
+  status: AnalysisStatus
+  latest_analysis_id: number | null
+  scores: AnalysisScores | null
+  analyzed_at: string | null
+  /** 排队 / 运行中的分析任务（最新一个） */
+  active_task_id: number | null
+}
+
+export interface AnalysisBrief {
+  id: number
+  chapter_id: number
+  chapter_no: number
+  task_id: number | null
+  model: string
+  scores: AnalysisScores
+  /** 后端为 dict；正常结构为 AnalysisMetrics */
+  metrics: Partial<AnalysisMetrics>
+  /** 正文已变化（分析时的正文 hash ≠ 当前正文） */
+  stale: boolean
+  created_at: string
+}
+
+export interface PlotPoint {
+  text: string
+  /** 1–5 */
+  importance: number
+}
+
+export interface Hook {
+  /** 悬念 | 冲突 | 情感 | 反转 | 其他 */
+  type: string
+  /** 1–10 */
+  strength: number
+  text: string
+}
+
+export interface AnalysisConflict {
+  level: number | null
+  types: string[]
+}
+
+export interface AnalysisEmotion {
+  tone: string
+  start: string
+  middle: string
+  end: string
+}
+
+export type SuggestionPriority = 'high' | 'medium' | 'low'
+
+export interface Suggestion {
+  /** 本次分析内从 1 起 */
+  id: number
+  /** 节奏 | 对话 | 描写 | 冲突 | 人物 | 其他 */
+  category: string
+  priority: SuggestionPriority
+  text: string
+}
+
+/**
+ * 回写条目。target / before / after 的结构随 kind 变化（见 api/analysis.ts 的 describeChange）；
+ * 未匹配到对象的条目 target 只含原始名字、field_key 为空串、status = skipped、原因在 reason。
+ */
+export interface AnalysisChange {
+  id: number
+  analysis_id: number
+  chapter_no: number
+  kind: ChangeKind
+  target: Record<string, unknown>
+  field_key: string
+  before: unknown
+  after: unknown
+  status: ChangeStatus
+  reason: string
+  applied_at: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface Analysis extends AnalysisBrief {
+  summary: string
+  plot_points: PlotPoint[]
+  hooks: Hook[]
+  conflict: Partial<AnalysisConflict>
+  emotion: Partial<AnalysisEmotion>
+  changes_raw: Record<string, unknown>
+  /** 伏笔候选：原样保存，留给伏笔管理使用 */
+  foreshadow_candidates: unknown[]
+  suggestions: Suggestion[]
+  warnings: string[]
+  changes: AnalysisChange[]
+}
+
+/** chapter.analyze 的 done.result（经 parseAnalyzeDone 收窄） */
+export interface AnalyzeDone {
+  analysis_id: number
+  chapter_id: number
+  chapter_no: number
+  summary: string
+  scores: AnalysisScores
+  change_counts: Partial<Record<ChangeStatus, number>>
+  warnings: string[]
+}
+
+/** 按建议整章重写（chapter.revise）：至少勾选一条建议或填写 instruction */
+export interface ReviseChapterRequest {
+  analysis_id: number
+  /** 最多 20 条 */
+  suggestion_ids: number[]
+  /** ≤2000 字 */
+  instruction: string
+  /** 最多 10 项 */
+  preserve: string[]
+  /** 300–20000；省略 = 原文字数 */
+  target_words?: number | null
+  ai_config_id?: number | null
 }

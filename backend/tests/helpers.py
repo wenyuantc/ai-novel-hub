@@ -98,6 +98,8 @@ def make_settings(tmp_path, **overrides) -> Settings:
         "registration_enabled": True,
         "cookie_secure": False,
         "frontend_dist_dir": str(tmp_path / "no-dist"),
+        # 自动分析会额外排队任务并消耗 FakeLLM 的预设输出：默认关闭，自动分析相关测试显式开启
+        "auto_analyze_enabled": False,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[call-arg]
@@ -205,3 +207,27 @@ async def stream_with_gate(app, client: httpx.AsyncClient, task_id: int, gate: G
     await wait_until(lambda: (h := engine.hubs.get(task_id)) is not None and h.subscriber_count > 0)
     gate.release()
     return await asyncio.wait_for(pending, 10)
+
+
+def analysis_json(**overrides) -> str:
+    """章节分析的模型输出（JSON 文本），字段可覆盖。"""
+    data = {
+        "summary": "林远在山门试炼中击败对手，却身受重伤。",
+        "plot_points": [{"text": "山门试炼开始", "importance": 3}, {"text": "林远击败对手", "importance": 5}],
+        "hooks": [{"type": "悬念", "strength": 8, "text": "神秘人现身"}],
+        "conflict": {"level": 7, "types": ["人与人"]},
+        "emotion": {"tone": "紧张", "start": "平静", "middle": "激烈", "end": "悬疑"},
+        "character_changes": [],
+        "relationship_changes": [],
+        "career_changes": [],
+        "organization_changes": [],
+        "foreshadows": [{"action": "plant", "text": "神秘玉佩", "keyword": "玉佩", "expected_resolve_chapter": 10}],
+        "scores": {"pacing": 7, "engagement": 8, "coherence": 6},
+        "suggestions": [
+            {"category": "节奏", "priority": "high", "text": "开头铺垫过长，压缩到三段以内"},
+            {"category": "对话", "priority": "medium", "text": "对手的台词更有个性"},
+            {"category": "描写", "priority": "low", "text": "补充试炼场的环境描写"},
+        ],
+    }
+    data.update(overrides)
+    return json.dumps(data, ensure_ascii=False)

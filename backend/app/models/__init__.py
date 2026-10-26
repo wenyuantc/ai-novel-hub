@@ -1,10 +1,12 @@
 from app.models.base import Base
 from app.models.entities import (
     AIConfig,
+    AnalysisChange,
     Career,
     CareerHistory,
     CareerStage,
     Chapter,
+    ChapterAnalysis,
     ChapterCharacter,
     ChapterVersion,
     Character,
@@ -24,11 +26,13 @@ from app.models.entities import (
 
 __all__ = [
     "AIConfig",
+    "AnalysisChange",
     "Base",
     "Career",
     "CareerHistory",
     "CareerStage",
     "Chapter",
+    "ChapterAnalysis",
     "ChapterCharacter",
     "ChapterVersion",
     "Character",

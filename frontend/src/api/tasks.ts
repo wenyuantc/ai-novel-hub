@@ -30,6 +30,13 @@ export function isActiveTask(status: TaskStatus): boolean {
   return status === 'queued' || status === 'running'
 }
 
+/** 会改写章节正文、创建即抢占 generating 的任务（章节编辑器按同一方式接上并只读） */
+export const CHAPTER_WRITE_KINDS: readonly TaskKind[] = ['chapter.generate', 'chapter.polish', 'chapter.revise']
+
+export function isChapterWriteKind(kind: TaskKind): boolean {
+  return CHAPTER_WRITE_KINDS.includes(kind)
+}
+
 /** 只有失败、已取消、已中断的任务可以重试（与后端一致） */
 export function canRetryTask(status: TaskStatus): boolean {
   return status === 'failed' || status === 'cancelled' || status === 'interrupted'
@@ -55,6 +62,8 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'relations.parse': '解析旧关系',
   'career.generate': 'AI 生成职业',
   'wizard.careers': '职业体系向导',
+  'chapter.analyze': '章节分析',
+  'chapter.revise': '按建议重写',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -64,8 +73,11 @@ export function queueLabel(task: Pick<Task, 'status' | 'queue_position'>): strin
   return task.queue_position === 0 ? '排队中，下一个执行' : `排队中，前面还有 ${task.queue_position} 个任务`
 }
 
+/** 章节编辑器打开分析面板的查询串 */
+export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
+
 /**
- * 任务面板「跳转」目标：章节任务 → 章节编辑器；向导任务 → 向导页对应步骤；
+ * 任务面板「跳转」目标：章节任务 → 章节编辑器（分析 / 按建议重写 → 编辑器并打开分析面板）；向导任务 → 向导页对应步骤；
  * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页。无法定位时为 null。
  */
 export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>): string | null {
@@ -75,6 +87,9 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>)
     case 'chapter.generate':
     case 'chapter.polish':
       return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}`
+    case 'chapter.analyze':
+    case 'chapter.revise':
+      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}?${ANALYSIS_PANEL_QUERY}`
     case 'character.generate':
     case 'relations.parse':
       return `${base}/characters`

@@ -64,6 +64,52 @@ def build_polish_messages(*, content: str, style: str = "", instruction: str = "
     ]
 
 
+def build_revise_messages(
+    *,
+    context: str,
+    chapter_no: int,
+    title: str,
+    content: str,
+    suggestions: list[str],
+    target_words: int,
+    style: str = "",
+    instruction: str = "",
+    preserve: list[str] | None = None,
+) -> list[ChatMessage]:
+    """按分析建议整章重写：参考资料 + 原文全文 + 勾选的建议 + 补充要求 + 需保留的要素。"""
+    parts = [
+        "以下是创作参考资料：",
+        context,
+        "",
+        f"【重写任务】请根据修改建议重写第{chapter_no}章 {title}".rstrip(),
+    ]
+    if suggestions:
+        parts.append("【修改建议】")
+        parts += [f"{i}. {s}" for i, s in enumerate(suggestions, start=1)]
+    if instruction.strip():
+        parts.append(f"【作者补充要求】{instruction.strip()}")
+    kept = [p.strip() for p in (preserve or []) if p.strip()]
+    if kept:
+        parts.append(f"【必须保留】{'；'.join(kept)}")
+    parts.append(f"目标字数：约 {target_words} 字。")
+    if style.strip():
+        parts.append(f"写作风格：{style.strip()}")
+    parts += [
+        "",
+        "【重写要求】",
+        "1. 逐条落实修改建议，同时保持与前文衔接，人物性格、设定与已发生事件保持一致。",
+        "2. 保留原文中仍然有效的情节与信息点，不新增与设定冲突的内容。",
+        f"3. {PROSE_RULES}",
+        "",
+        "【原文】",
+        content,
+    ]
+    return [
+        {"role": "system", "content": NOVELIST_SYSTEM},
+        {"role": "user", "content": "\n".join(parts)},
+    ]
+
+
 def build_continuation_messages(
     *, messages: list[ChatMessage], generated: str, current_words: int, target_words: int
 ) -> list[ChatMessage]:

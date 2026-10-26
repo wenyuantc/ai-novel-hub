@@ -1,4 +1,8 @@
-"""组织与成员。组织可嵌套（parent_id），设置上级时沿上级链检测循环；成员按 (组织, 角色) 唯一。"""
+"""组织与成员。组织可嵌套（parent_id），设置上级时沿上级链检测循环；成员按 (组织, 角色) 唯一。
+
+apply_membership 是章节分析回写成员关系的入口：返回写入前的快照（{position, status} 或 None），
+调用方（writeback_service）据此记录前后值并支持撤销；不 commit。
+"""
 
 from typing import Any
 
@@ -8,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Character, Organization, OrganizationMember
+from app.models.entities import MEMBER_STATUSES
 from app.schemas.organization import (
     MemberCreate,
     MemberOut,
@@ -263,6 +268,50 @@ async def character_memberships(db: AsyncSession, user_id: int, project_id: int,
     if exists is None:
         raise NotFoundError("角色不存在")
     return await _member_outs(db, select(OrganizationMember).where(OrganizationMember.character_id == character_id))
+
+
+def membership_snapshot(member: OrganizationMember | None) -> dict[str, str] | None:
+    return None if member is None else {"position": member.position, "status": member.status}
+
+
+async def find_membership(db: AsyncSession, org_id: int, character_id: int) -> OrganizationMember | None:
+    return await db.scalar(
+        select(OrganizationMember).where(
+            OrganizationMember.organization_id == org_id, OrganizationMember.character_id == character_id
+        )
+    )
+
+
+async def apply_membership(
+    db: AsyncSession, org: Organization, character: Character, values: dict[str, Any] | None
+) -> dict[str, str] | None:
+    """把成员关系写成 values（{position?, status?}；None = 移除成员）。返回写入前的快照。不 commit。
+
+    校验：组织与角色同项目（400）、职位 ≤50、状态合法。未是成员时新建（默认 active）。
+    """
+    if org.project_id != character.project_id:
+        raise BadRequestError("角色不存在或不属于该项目")
+    member = await find_membership(db, org.id, character.id)
+    before = membership_snapshot(member)
+    if values is None:
+        if member is not None:
+            await db.delete(member)
+            await db.flush()
+        return before
+    default_position = member.position if member else ""
+    position = str(values["position"] if values.get("position") is not None else default_position)
+    status = str(values.get("status") or (member.status if member else "active"))
+    if len(position) > 50:
+        raise BadRequestError("职位最多 50 个字符")
+    if status not in MEMBER_STATUSES:
+        raise BadRequestError("成员状态不合法")
+    if member is None:
+        member = OrganizationMember(organization_id=org.id, character_id=character.id, position=position, status=status)
+        db.add(member)
+    else:
+        member.position, member.status = position, status
+    await db.flush()
+    return before
 
 
 async def memberships_of(db: AsyncSession, character_ids: list[int]) -> list[tuple[OrganizationMember, Organization]]:

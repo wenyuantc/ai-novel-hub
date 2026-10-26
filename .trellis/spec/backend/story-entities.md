@@ -1,6 +1,6 @@
 # 结构化设定：角色 / 组织 / 关系 / 卡片 / 章节上下文
 
-> 来源任务：`10-23-story-entities`；职业等级体系（文末）来自 `10-23-career-system`。表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，
+> 来源任务：`10-23-story-entities`；职业等级体系来自 `10-23-career-system`；章节分析与回写（文末）来自 `10-23-analysis-memory`。表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，
 > 任务契约见 [error-handling.md](./error-handling.md)「后台任务与 SSE 契约」。
 
 ---
@@ -75,6 +75,9 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
   `不能把组织自身或其下级组织设为上级`。PATCH 中 `parent_id` / `power_level` 显式 `null` = 清空（`model_fields_set`）。
 - 成员 `(organization_id, character_id)` 唯一 → 409 `该角色已是该组织成员`；角色须同项目 → 400。
 - `with-members`：组织 + 成员单事务（AI 生成组织预览后保存）。测试：`tests/test_organizations.py`。
+- 章节分析回写成员关系只经 `organization_service.apply_membership(db, org, character, values | None) -> before`：
+  `values = {position?, status?}`（未给的沿用原值，新成员默认 `active`），`None` = 移除；校验同项目 / 职位 ≤50 / 状态合法；
+  返回写入前快照 `{position, status}` 或 `None`，不 commit。手动成员接口不变。
 
 ---
 
@@ -155,6 +158,9 @@ def assemble_context(*, project_text, world_text, cast: CastSection | None, outl
   该角色在涉及角色间没有结构化关系时附 `关系备注：<relations_text>`）→ `【人物关系】`（仅涉及角色两两之间，
   `A 是 B 的师父（亲密度 80，正常）：描述`，对称为 `A 与 B 是朋友`）→ `【相关组织】`（`■ 名称（类型）：宗旨`）→
   `【其他角色（仅名单）】`（`名字（定位）`，中文逗号分隔）。世界观按分类分组（只有一个分类时不加 `〔分类〕` 标题）。
+- 前情提要（更早章节，即最近 2 章全文之前的章节）：每章优先用**最近一次章节分析的 summary**（`context_builder.latest_summaries`，
+  一条查询、子查询取每章 `max(id)`；正文已改、分析已过期照常使用；不截断），没有分析或摘要为空时退回正文前 200 字（`SUMMARY_CHARS`）。
+  `PriorChapter.summary` 默认空串，`assemble_context` 签名不变。
 - 裁剪顺序（文件头注释为准）：更早章节摘要 → 最近正文开头 → 世界观尾部 → **名单（从尾部逐个）→ 关系描述（从尾部逐条去掉）→
   关系（从尾部）→ 相关组织 → 涉及角色卡（尾部的角色先被截，主角在最前）** → 当前卷大纲 → 硬截断。
 
@@ -269,3 +275,96 @@ async def careers_reference(db, project_id) -> str   # 「剑修（主修）：�
 `tests/test_career_tasks.py`（career.generate 草稿与 conflict、character.generate 职业建议 + with-relations、wizard.careers 覆盖、
 角色向导分配与 warnings、无职业时提示词不变、AC5 上下文、裁剪顺序）、`tests/test_cards.py::test_cards_v2_*`、
 `tests/test_migrations.py::test_0008_careers`、`tests/test_careers.py::test_project_assignments`、`test_cross_user_isolation`（职业相关路由均 404，含 `character-careers`）。
+
+
+---
+
+## 场景：章节分析与回写（`10-23-analysis-memory`，迁移 `0009`）
+
+### 1. 范围 / 触发条件
+
+`analysis_service`（分析任务、状态、历史、排队）、`writeback_service`（回写条目的生成 / 应用 / 撤销 / 确认 / 拒绝）、
+`task_engine/handlers/analysis.py`、`chapter.revise`（`generation_service` 的 revise 模式）、`api/v1/analysis.py`。
+以后的 `foreshadows`（读 `foreshadow_candidates`）、`knowledge-base`（读 summary / plot_points）都基于这里的数据。
+
+### 2. 签名
+
+```python
+# analysis_service
+def content_hash(text) -> str                       # sha256(utf-8)
+def compute_metrics(content) -> {words, paragraphs, avg_paragraph_chars, dialogue_ratio}   # 纯函数
+def normalize_scores(value) -> {overall, pacing, engagement, coherence}  # 1–10 一位小数；overall = 有值项平均（服务端复算）
+def normalize_analysis(obj) -> (data, warnings)     # 纯函数；非 dict → JSONExtractError
+async def request_analyze(db, engine, user_id, chapter_id, req) -> (TaskOut, created: bool)
+async def analyze_pending(db, engine, user_id, project_id, req) -> AnalyzePendingResult(queued, task_ids)
+async def enqueue_auto(ctx, project_id, chapter_id) -> int | None
+async def project_states / chapter_state / list_analyses / get_analysis
+# writeback_service
+async def apply_analysis(db, analysis, data) -> list[AnalysisChange]   # 不 commit，与分析同一事务
+async def set_character_field(db, character, "current_state" | "life_status", value) -> before   # 角色状态的回写入口
+async def revert_change / confirm_change / reject_change(db, user_id, change_id) -> AnalysisChangeOut   # commit
+```
+
+### 3. 契约
+
+- **数据**：每次分析一行 `chapter_analyses`（历史保留，最新 = `max(id)`）：`content_hash`（分析时正文）、`chapter_no`（冗余，回写比较先后）、
+  summary（≤1000）、plot_points `[{text, importance 1–5}]`、hooks `[{type 悬念|冲突|情感|反转|其他, strength 1–10, text}]`、
+  conflict `{level, types}`、emotion `{tone, start, middle, end}`、changes_raw（规范化后的四类变化）、foreshadow_candidates（原样）、
+  scores、metrics、suggestions `[{id 从 1 起, category 节奏|对话|描写|冲突|人物|其他, priority high|medium|low, text}]`、warnings、model。
+- **状态**（`GET /projects/{pid}/analysis/statuses`、`GET /chapters/{cid}/analysis-status`）：有排队 / 运行中的 `chapter.analyze` → `analyzing`；
+  无分析 → `none`；最新分析 hash == 当前正文 hash → `analyzed`；否则 `stale`。手动编辑只会让状态变 `stale`，不触发分析。
+- **触发**（D2）：`ChapterHandler.on_success`（generate / polish / revise 成功）→ `enqueue_auto`：**部署开关 AND 项目开关**才自动分析——部署开关 `AUTO_ANALYZE_ENABLED`
+  （`.env.example` / `backend/.env.example` / `docker-compose.yml` 均已透传，默认 true；关闭后忽略项目开关，手动分析与一键分析不受影响）
+  （`Settings.auto_analyze_enabled`，默认 true；**测试的 `make_settings` 默认 false**，自动分析相关测试显式开启）与项目 `auto_analyze`
+  都为真、章节存在且正文非空、同章没有**排队中**的分析（运行中的不算）才入队；任务 `user_id` = 项目所有者，不做请求级配置校验，
+  `input = {request: {chapter_id}, chapter_id, auto: true}`。手动 `POST /chapters/{cid}/analyze`：同章已有排队中的分析 → 200 返回那条任务，
+  否则 202 新任务。一键 `POST /projects/{pid}/analysis/analyze-pending`：按 `chapter_no, id` 为 none / stale 且正文非空、无排队中或运行中分析的章节逐个入队（与 enqueue_auto 不同：一键分析不为运行中的章节再排一次）。
+- **排队**：`serial_key = analysis:{project_id}`、`resource_key = NULL`，同项目串行（按入队顺序回写），不同项目并行；分析失败只让本任务 failed。
+  分析**不写生成记录**；`on_abort` 无需还原（只在成功时一次性落库）。
+- **提示词**（`ai/prompts/analysis.py`）：作品信息 + 本章涉及角色的当前状态（主角 ∪ 手动出场 ∪ 本章正文提及；存活、当前状态、组织职位、职业阶段）
+  + 他们之间的关系（亲密度、状态、描述）+ 项目组织名 + 相关职业阶梯 + 正文 + 评分标准（1–3 / 4–5 / 6–7 / 8–9 / 10）+ JSON 结构；
+  要求只报告正文里发生的变化、给出**变化后的绝对值**、建议数量与分数挂钩。
+- **回写**（D3 / R4）：
+  | kind | field_key | before / after | 处理 | 写入入口 |
+  |---|---|---|---|---|
+  | `character_state` | `char:{cid}:current_state` | 文本 | 自动 | `set_character_field` |
+  | `life_status` | `char:{cid}:life_status` | `alive|dead|missing|other` | **待确认** | 确认后 `set_character_field` |
+  | `relationship_update`（每字段一条，`target.field`） | `rel:{rid}:{intimacy|status|description}` | 字段值 | 自动 | `apply_change(source="analysis", chapter_no, note="第 N 章分析")` |
+  | `relationship_create` | `relpair:{low}:{high}` | `null` / `{role_a, role_b, category, intimacy, status, description}` | **待确认** | 确认后 `create_relation`（after 补 `a_id/b_id/type_id`，target 补 `relationship_id`） |
+  | `career_stage`（仅已挂接职业） | `career:{cid}:{career_id}` | `{stage_id, stage: "第N阶·名称"}` | 自动 | `apply_assignment(stage_id, source="analysis")` |
+  | `org_membership` | `org:{org_id}:{cid}` | `null` 或 `{position, status}` | 自动 | `apply_membership` |
+  - 名字按「名字 → 别名」精确匹配（多个同名 / 同别名视为对不上）；组织 / 职业 / 阶段按名称精确匹配；对不上 → `skipped`，`field_key` 为空，
+    reason 如 `未找到名为「X」的角色`、`「A」与「B」之间没有已有关系`、`「X」未挂接职业「Y」`、`职业「Y」没有名为「Z」的阶段`。
+  - after == 当前值 → 不建条目（重复分析幂等）；同 `field_key` 已有**更晚章节**的 `applied` → `skipped`「已有第 N 章的更新」；
+    `life_status` / `relationship_create` → `pending`；其余在 `begin_nested()`（SAVEPOINT）中写入，`AppError` → `failed`（reason = detail），
+    意外异常 → `failed`「写入失败：服务器内部错误」，都不影响其他条目。已有关系的变化**只改亲密度 / 状态 / 描述**，不改类型。
+  - 组织动作：`join` → `{position（给出或原值或空）, status（给出或 active）}`；`leave` → 原职位 + `left|expelled|dead`（未是成员时不建条目）；
+    `update` 未是成员时按 join 处理。
+  - 撤销（仅 `applied`，否则 409 `只能撤销已写入的条目`）：当前值 == after 才经同一入口写回 before（关系 / 境界历史 note `撤销第 N 章分析`；
+    新建的关系整条删除），否则 409 `该项已被后续修改，无法撤销`；状态 → `reverted`。
+  - 确认（仅 `pending`，否则 409 `只能确认待确认的条目`）：重新校验——同 `field_key` 有更晚章节 applied → 409 `已有第 N 章的更新，无法确认`；
+    角色已删除 → 409 `对应的设定已不存在`；存活状态已不等于 before → 409 `该项对应的设定已被修改，无法确认`；关系已存在 → 409 `这两个角色之间已有关系`。
+    拒绝（仅 `pending`，否则 409 `只能拒绝待确认的条目`）→ `rejected`。均写 `resolved_at`（确认另写 `applied_at`）。
+- **按建议重写**（`chapter.revise`，`POST /chapters/{cid}/revise {analysis_id, suggestion_ids[], instruction, preserve[], target_words?, ai_config_id?}`）：
+  `resource_key = chapter:{id}`（与生成 / 润色互斥，创建即抢占 `generating`）；不自动续写；提示词 = 与整章生成相同的上下文 + 原文全文 +
+  勾选建议（按勾选顺序编号）+ 补充要求 + 必须保留 + 目标字数（未填 = 原文字数，下限 300）；成功同 polish：`ensure_baseline` → 覆盖正文 →
+  生成记录 `kind=revise` → 版本 `source=revise`；成功后同样 `enqueue_auto`。`TaskOut.analysis_id`：`task_service.to_out` 取自 `input.request.analysis_id`（仅 `chapter.revise` 有值，其余为 `null`），
+  前端据此用重写引用的分析与新分析对比评分（任务面板重试 / 其他标签页发起的重写同样适用）。
+- **归属**：所有入口先校验项目归属（分析 / 条目按 `project_id → projects.user_id`），他人 404（`分析结果不存在` / `回写条目不存在` / `章节不存在` / `项目不存在`）。
+
+### 4. 必需的测试
+
+`tests/test_analysis.py`（指标 / 规范化纯函数、AC1 结构与历史、空正文 / 解析失败、AC2 过期与项目 / 部署开关、AC3 一键分析串行顺序与去重、
+跨项目并行与失败不阻塞生成、`enqueue_auto` 去重（排队中不重复、运行中可再排、空正文 / 项目开关关闭不入队）、AC6 前情摘要、AC8 越权）、
+`tests/test_writeback.py`（AC4 分流与历史来源、确认 / 拒绝 / 重新校验（含确认时「更晚章节优先」409）、AC5 撤销与冲突（**每种 kind** 被手动修改后撤销 409）、
+更晚章节优先、对不上只提示、SAVEPOINT 单条失败与**部分写入后失败的回滚**）、`tests/test_revise.py`（AC7 版本 / 生成记录 / 自动重新分析、
+`TaskOut.analysis_id`、校验、互斥与失败复位）、`tests/test_tasks.py`（serial_key 同键串行 / 异键并行 / 与每用户上限共同生效 / 重启后释放并继续、on_success）。
+这些测试须对被测逻辑敏感：删掉「更晚章节优先」、撤销比对、确认重新校验或 `begin_nested()` 中任一处，至少一个用例失败、`tests/test_context_builder.py::test_summary_prefers_analysis_summary`、
+`tests/test_migrations.py::test_0009_chapter_analysis`、`test_cross_user_isolation`（新增分析路由）。
+
+### 5. 错误写法
+
+```python
+character.current_state = "重伤"; await db.commit()          # 没有回写条目，无法撤销，也不受「更晚章节优先」约束
+rel.type_id = enemy.id                                     # 自动回写改了关系类型（MuMu 的反例）
+```

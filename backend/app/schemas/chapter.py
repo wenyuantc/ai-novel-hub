@@ -67,3 +67,16 @@ class WizardRequest(BaseModel):
     character_count: int = Field(default=5, ge=3, le=30)
     # 仅 careers 使用
     career_count: int = Field(default=4, ge=1, le=12)
+
+
+class ReviseChapterRequest(BaseModel):
+    """按分析建议整章重写（chapter.revise）。至少勾选一条建议或填写 instruction。"""
+
+    analysis_id: int
+    suggestion_ids: list[int] = Field(default_factory=list, max_length=20)
+    instruction: str = Field(default="", max_length=2000)
+    # 需保留的要素：预置「保持整体结构 / 保持人物性格 / 保留关键对白」或自定义
+    preserve: list[str] = Field(default_factory=list, max_length=10)
+    # 为空 = 原文字数
+    target_words: int | None = Field(default=None, ge=300, le=20000)
+    ai_config_id: int | None = None

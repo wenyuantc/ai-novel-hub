@@ -19,6 +19,7 @@ class ProjectUpdate(BaseModel):
     premise: str | None = Field(default=None, max_length=5000)
     style: str | None = Field(default=None, max_length=5000)
     status: ProjectStatus | None = None
+    auto_analyze: bool | None = None
 
 
 class ProjectOut(BaseModel):
@@ -30,6 +31,7 @@ class ProjectOut(BaseModel):
     premise: str
     style: str
     status: ProjectStatus
+    auto_analyze: bool = True
     created_at: datetime
     updated_at: datetime
     chapter_count: int = 0

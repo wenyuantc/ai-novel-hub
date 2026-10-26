@@ -81,3 +81,14 @@ async def test_generate_uses_budgeted_context(app, client, fake_llm):
     assert "内容5" in prompt
     assert "第1章 章1" not in prompt
     assert "第6章 新章" in prompt
+
+
+def test_summary_prefers_analysis_summary():
+    """更早章节有分析摘要时用摘要（不截断为 200 字），没有时退回正文开头。"""
+    chapters = _chapters(4, 300)
+    chapters[0].summary = "第一章的分析摘要" + "要" * 250
+    ctx = _build(100_000, chapters)
+    summary_section = ctx.split("【前情提要（更早章节）】")[1].split("【最近章节正文】")[0]
+    assert "第1章 标题1：第一章的分析摘要" + "要" * 250 in summary_section
+    line2 = next(line for line in summary_section.splitlines() if line.startswith("第2章"))
+    assert line2.split("：", 1)[1].startswith("第2章内容") and len(line2.split("：", 1)[1]) == 200 + len("……")

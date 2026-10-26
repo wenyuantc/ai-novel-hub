@@ -33,6 +33,7 @@ services:
       AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-300}
       TASK_MAX_CONCURRENCY: ${TASK_MAX_CONCURRENCY:-4}
       TASK_MAX_PER_USER: ${TASK_MAX_PER_USER:-2}
+      AUTO_ANALYZE_ENABLED: ${AUTO_ANALYZE_ENABLED:-true}
       ALLOW_PRIVATE_AI_ENDPOINTS: ${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"

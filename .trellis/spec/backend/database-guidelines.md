@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -194,7 +194,7 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
 状态/provider 值是普通字符串，允许的取值以元组形式定义在
 `entities.py` 中（`CHAPTER_STATUSES = ("draft", "generating", "done")`、
 `AI_PROVIDERS`、`PROJECT_STATUSES`、`LIFE_STATUSES`、`WORLD_CATEGORIES`、`MEMBER_STATUSES`、`RELATION_CATEGORIES`、
-`RELATION_STATUSES`、`RELATION_SOURCES`、`CAREER_KINDS`、`CAREER_SOURCES`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
+`RELATION_STATUSES`、`RELATION_SOURCES`、`CAREER_KINDS`、`CAREER_SOURCES`、`ANALYSIS_CHANGE_KINDS`、`ANALYSIS_CHANGE_STATUSES`；`VERSION_SOURCES` / `GENERATION_KINDS` 含 `revise`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
 
 ---
 
@@ -215,7 +215,10 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   插入 20 个全局预置关系类型；`test_0007_story_entities` 断言简介 / 旧关系备注原样保留、回填结果、预置类型与
   `PRESET_RELATIONSHIP_TYPES` 一致、外键规则、`(pair_low, pair_high)` 唯一，`downgrade -1` 后存量数据保留）、
   `0008_careers.py`（`down_revision = '0007'`，只新建四张表、不回填；`test_0008_careers` 断言外键规则、两个唯一约束、
-  删除职业时阶段 / 挂接 / 历史在同一语句内级联删除，`downgrade -1` 删除四张表且存量角色保留）。
+  删除职业时阶段 / 挂接 / 历史在同一语句内级联删除，`downgrade -1` 删除四张表且存量角色保留）、
+  `0009_chapter_analysis.py`（`down_revision = '0008'`，新建 `chapter_analyses` / `analysis_changes`，`projects.auto_analyze`
+  `server_default=true` 回填，`tasks.serial_key` 可空 + 索引；`test_0009_chapter_analysis` 断言外键规则、回填、删章节级联、
+  删任务置空，`downgrade -1` 删除两表两列且存量项目保留）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -302,6 +305,10 @@ outline_id: Mapped[int | None] = mapped_column(
 `career_name` 冗余仅用于展示）；`character_careers.stage_id` **不设 ondelete**，与 `relationships.type_id` 同理（服务层先查引用返回 409）。
 挂接只能经 `career_service.apply_assignment` 写入（不 commit，写历史）。职业向导整体替换职业会级联清掉挂接与历史。
 
+`0009`：`chapter_analyses.project_id/chapter_id`、`analysis_changes.analysis_id/project_id` 为 CASCADE（删章节时分析与回写条目一并删除，
+已写入设定的变化仍留在各实体的历史里）；`chapter_analyses.task_id` 为 SET NULL（任务被清理 / 裁剪后分析保留）。
+`analysis_changes` 有 `(project_id, field_key)` 复合索引，供「更晚章节优先」查询。
+
 关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
 `relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
 
@@ -347,7 +354,7 @@ async def commit_versioned(db) -> None   # (chapter_id, seq) 唯一约束冲突 
   通过直接改写 `created_at`/`updated_at` 区分两种窗口，`_now` monkeypatch 无法区分，因为 `onupdate` 用的是数据库时间）。时间用服务端 UTC（SQLite 读出的
   naive 时间按 UTC 处理）。
 - AI 覆盖 / 改写采纳 / 回滚之前 `ensure_baseline`：当前正文非空且 ≠ 最新版本内容 → 写 `baseline`。
-  这些来源（`baseline`/`generate`/`polish`/`rewrite`/`restore`）永不参与合并。
+  这些来源（`baseline`/`generate`/`polish`/`rewrite`/`restore`/`revise`）永不参与合并。
 - `seq = max(seq)+1`（章节内）；最新版本禁止删除（400 `不能删除最新版本`），因此序号不会复用。
 - `prune`：保留最新 50 个未标星 + 全部标星；最新版本若未标星必在前 50，故永不被删。
 - 回滚：`ensure_baseline` → 正文改为目标版本 → `record("restore", note="恢复自 v{seq}")`；不改标题、不改状态；
@@ -375,12 +382,14 @@ SSE / 订阅契约见 `error-handling.md`「后台任务与 SSE 契约」。
 ```python
 # backend/app/models/entities.py
 TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world",
-              "character.generate", "organization.generate", "relations.parse", "career.generate", "wizard.careers")
+              "character.generate", "organization.generate", "relations.parse", "career.generate", "wizard.careers",
+              "chapter.analyze", "chapter.revise")
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running"); FINISHED_TASK_STATUSES = (其余四个)
 
 class Task(TimestampMixin, Base):   # tasks
     user_id, project_id?, chapter_id?, kind String(32), title String(200), resource_key String(100)?,
+    serial_key String(100)?（索引 ix_tasks_serial_key）,
     status String(16), input JSON, result JSON?, output_text Text, progress int, stage String(100),
     error Text, step_cursor int, retry_of_id?, started_at?, finished_at?
     # 索引：ix_tasks_status_id (status, id)、ix_tasks_user_id_id (user_id, id)，
@@ -395,7 +404,12 @@ class Task(TimestampMixin, Base):   # tasks
   `SELECT ... FOR UPDATE SKIP LOCKED` 并引入心跳 / 租约，否则一个实例重启会把其他实例的运行中任务误判为中断。
 - **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`）。插入撞索引 →
   回滚 → 409。章节类还会先原子抢占 `chapters.status='generating'`（与插入同一事务，失败时一起回滚）。
-  新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。
+  新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。`chapter.revise` 与生成 / 润色共用 `chapter:{id}`（互斥）。
+- **串行键** `serial_key`（`TaskSpec.serial_key`）：冲突时**排队等待**而不是拒绝。调度器扫描 queued 时，同键已有运行中（或本轮已登记）的任务
+  就跳过该条，留到下一轮；某个同键任务因每用户 / 全局上限被跳过时，本轮后续同键任务也不越过它（同键内按 id 先进先出）。
+  与全局 / 每用户上限同时生效，不同键之间并行。`chapter.analyze` 使用 `analysis:{project_id}`（同项目串行，保证回写顺序与入队顺序一致）。
+- **成功回调**（可选 `handler.on_success(ctx, task)`，引擎 `getattr` 探测）：在 succeeded 写库之后、广播 `done` 之前调用，异常只记日志、
+  不影响任务状态；失败 / 取消 / 中断不调用。它若新建任务（如自动分析）直接插入 queued 行即可，当前任务结束时引擎的完成回调会唤醒调度器。
 - **领取**：条件 `UPDATE ... SET status='running' WHERE id=? AND status='queued'`，影响行数为 1 才执行；
   排队取消同样用 `WHERE status='queued'` 守卫，二者竞争时只有一方成功。
 - `input` 必须可 JSON 序列化，且含原始请求 `request`（重试时原样重新走 `validate_and_claim`）；章节类另存
@@ -412,7 +426,8 @@ class Task(TimestampMixin, Base):   # tasks
 ### 4. 必需的测试
 
 `tests/test_migrations.py::test_0006_tasks`；`tests/test_tasks.py`（见 `error-handling.md` 第 6 节）中的
-`test_finished_tasks_pruned_to_limit`、`test_resource_conflicts`、`test_cancel_queued_task`、`test_start_recovers_crashed_running_task`。
+`test_finished_tasks_pruned_to_limit`、`test_resource_conflicts`、`test_cancel_queued_task`、`test_start_recovers_crashed_running_task`、
+`test_serial_key_same_key_serial_other_keys_parallel`、`test_serial_key_keeps_fifo_when_user_limit_blocks`、`test_on_success_failure_does_not_affect_task`。
 
 ---
 
@@ -431,3 +446,5 @@ class Task(TimestampMixin, Base):   # tasks
 - 直接改 `CharacterCareer.stage_id` / `note` 而不经 `career_service.apply_assignment`：没有挂接历史，绕过主 1 副 3 与类别校验。
 - 新增全局预置数据只写进迁移：测试的 `create_all` 不跑迁移，需同时提供 `after_create` 事件（参照 `RelationshipType`）。
 - 更新 `content` 时没有重新计算 `word_count`。
+- 章节分析回写绕过 `writeback_service` 直接改角色 / 关系 / 挂接 / 成员：没有回写条目，无法撤销，也不受「更晚章节优先」约束。
+- 用 `resource_key` 实现「同类排队串行」：它是冲突即拒绝（409）；需要排队等待用 `serial_key`。

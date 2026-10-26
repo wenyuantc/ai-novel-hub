@@ -3,8 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VersionSource = Literal["manual", "baseline", "generate", "polish", "rewrite", "restore"]
-GenerationKind = Literal["generate", "polish", "rewrite", "expand", "condense", "deslop", "continue"]
+VersionSource = Literal["manual", "baseline", "generate", "polish", "rewrite", "restore", "revise"]
+GenerationKind = Literal["generate", "polish", "rewrite", "expand", "condense", "deslop", "continue", "revise"]
 GenerationStatus = Literal["success", "error", "cancelled"]
 RewriteOp = Literal["rewrite", "expand", "condense", "deslop", "continue"]
 
