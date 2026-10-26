@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-10-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~161 | Active |
+| `journal-1.md` | ~183 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-10-26 | P0-5 大纲进阶 | `f38fab3` | `main` |
 | 7 | 2026-10-26 | P0-4b 伏笔管理 | `1c823a7` | `main` |
 | 6 | 2026-10-26 | P0-4 章节分析与设定回写 | `97f699d` | `main` |
 | 5 | 2026-10-26 | P0-3b 职业等级体系 | `d94a66c` | `main` |

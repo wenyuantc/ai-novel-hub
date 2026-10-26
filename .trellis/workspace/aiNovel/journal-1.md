@@ -159,3 +159,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: P0-5 大纲进阶
+<!-- trellis-session: v=2 fp=52fda5d7d7894cd9 -->
+
+**Date**: 2026-10-26
+**Task**: P0-5 大纲进阶
+**Branch**: `main`
+
+### Summary
+
+细纲与建章、全局章节号平移（登记表+反射测试）、续写/展开草稿预览、大纲导入导出、快照恢复（原 id、关联恢复、PG 序列只前移）、向导追加与续跑；拆出 batch-generate；冒烟验证 AC1-AC7
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f38fab3` | feat: 大纲进阶（续写、单条展开细纲、导入导出、快照恢复、向导追加与续跑） |
+
+### Status
+
+[OK] **Completed**
