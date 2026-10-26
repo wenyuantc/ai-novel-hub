@@ -33,7 +33,8 @@ from app.ai.prompts import (
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import BadRequestError, ConflictError
 from app.core.security import SecretCipher
-from app.models import Chapter, ChapterAnalysis
+from app.models import Chapter, ChapterAnalysis, Task
+from app.models.entities import ACTIVE_TASK_STATUSES
 from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
 from app.services import ai_config_service, generation_log_service, version_service
 from app.services.chapter_service import count_words, get_owned_chapter
@@ -45,6 +46,10 @@ logger = logging.getLogger(__name__)
 Event = tuple[Literal["delta", "continue", "done", "error"], dict]
 Mode = Literal["generate", "polish", "revise"]
 ChapterRequest = GenerateChapterRequest | PolishChapterRequest | ReviseChapterRequest
+
+GENERATING_CONFLICT = "该章节正在生成中，请稍候再试"
+BATCH_KIND = "chapter.batch"
+BATCH_RANGE_CONFLICT = "该章节在批量生成范围内，请等待批量完成或暂停后再操作"
 
 # 字数低于目标的该比例时自动续写
 CONTINUE_RATIO = 0.85
@@ -128,7 +133,8 @@ async def validate_and_claim(
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
     if chapter.status == "generating":
-        raise ConflictError("该章节正在生成中，请稍候再试")
+        raise ConflictError(GENERATING_CONFLICT)
+    await ensure_outside_batch(db, chapter)
 
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     # 只做校验（解密 + 端点防护），运行时再按最新配置重新构建
@@ -139,14 +145,7 @@ async def validate_and_claim(
         assert isinstance(req, ReviseChapterRequest)
         await resolve_revision(db, chapter, req)
 
-    prev_status = chapter.status
-    # 原子抢占：防止同一章节被并发生成
-    result = await db.execute(
-        update(Chapter).where(Chapter.id == chapter.id, Chapter.status != "generating").values(status="generating")
-    )
-    if result.rowcount != 1:
-        await db.rollback()
-        raise ConflictError("该章节正在生成中，请稍候再试")
+    prev_status = await claim_chapter(db, chapter)
     return ChapterClaim(
         chapter_id=chapter.id,
         project_id=project.id,
@@ -156,6 +155,39 @@ async def validate_and_claim(
         chapter_title=chapter.title,
         source_words=chapter.word_count if mode in ("polish", "revise") else 0,
     )
+
+
+async def claim_chapter(db: AsyncSession, chapter: Chapter) -> str:
+    """原子地把章节置为 generating（防止同一章节被并发生成），返回抢占前的状态。
+
+    不 commit（由调用方与后续写入同一事务提交）；已在生成中 → 回滚并 409。
+    """
+    prev_status = chapter.status
+    result = await db.execute(
+        update(Chapter).where(Chapter.id == chapter.id, Chapter.status != "generating").values(status="generating")
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise ConflictError(GENERATING_CONFLICT)
+    return prev_status
+
+
+async def ensure_outside_batch(db: AsyncSession, chapter: Chapter) -> None:
+    """范围锁：同项目排队中 / 运行中的批量生成尚未处理到本章（chapter_ids[step_cursor:]）→ 409。
+
+    读后判断、尽力而为；并发竞争由章节 generating 的原子抢占兜底。待审核（paused）的批量不锁范围。
+    """
+    rows = await db.execute(
+        select(Task.input, Task.step_cursor).where(
+            Task.project_id == chapter.project_id,
+            Task.kind == BATCH_KIND,
+            Task.status.in_(ACTIVE_TASK_STATUSES),
+        )
+    )
+    for task_input, cursor in rows.all():
+        ids = (task_input or {}).get("chapter_ids") or []
+        if chapter.id in ids[cursor:]:
+            raise ConflictError(BATCH_RANGE_CONFLICT)
 
 
 async def resolve_revision(db: AsyncSession, chapter: Chapter, req: ReviseChapterRequest) -> list[str]:

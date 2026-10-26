@@ -103,6 +103,10 @@
 | P2-12 | `skills-mcp` Skill 和 MCP 插件 | C5、C6 | prompt-styles |
 | P2-13 | `oauth-announce` OAuth、邮箱登录、实例公告 | D2、D6 | 无 |
 
+## 进度
+
+已归档 8/16（2026-10-26）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate。P0 全部完成，下一步从 P1 开始规划。
+
 不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 
 ## Acceptance Criteria（父任务）

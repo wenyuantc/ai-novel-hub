@@ -62,6 +62,16 @@ async def retry_task(task_id: int, user: CurrentUser, db: DbDep, engine: TaskEng
     return await svc.retry_task(db, engine, user.id, task_id)
 
 
+@router.post("/{task_id}/resume", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
+async def resume_task(task_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
+    return await svc.resume_task(db, engine, user.id, task_id)
+
+
+@router.post("/{task_id}/finish", response_model=TaskOut)
+async def finish_task(task_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
+    return await svc.finish_paused_task(db, engine, user.id, task_id)
+
+
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(task_id: int, user: CurrentUser, db: DbDep) -> Response:
     await svc.delete_task(db, user.id, task_id)

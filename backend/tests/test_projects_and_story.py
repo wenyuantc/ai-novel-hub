@@ -190,9 +190,13 @@ async def test_cross_user_isolation(client, make_client):
         ("POST", f"{base}/outline-snapshots/{snap['id']}/restore"),
         ("DELETE", f"{base}/outline-snapshots/{snap['id']}"),
         ("PATCH", f"{base}/wizard-progress"),
+        ("POST", f"{base}/batch-generate/preview"),
+        ("POST", f"{base}/batch-generate"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
+        f"{base}/batch-generate/preview": {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]},
+        f"{base}/batch-generate": {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]},
         f"{base}/world": {"title": "x"},
         f"{base}/characters/with-relations": {"character": {"name": "x"}},
         f"{base}/organizations": {"name": "x"},

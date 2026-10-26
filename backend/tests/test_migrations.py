@@ -671,3 +671,52 @@ def test_0011_outline_pro(tmp_path):
             assert conn.execute(text("SELECT content FROM chapters")).scalar_one() == "正文"
     finally:
         engine.dispose()
+
+
+def test_0012_batch_generate(tmp_path):
+    """0012：tasks.checkpoint 可空 JSON（存量任务为 NULL）；downgrade -1 先把 paused 改为 cancelled 再删列。"""
+    db_file = tmp_path / "migrate0012.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0011")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO tasks (user_id, kind, status, input) VALUES (1, 'chapter.generate', 'succeeded', '{}')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0012")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols = {c["name"]: c for c in inspect(engine).get_columns("tasks")}
+        assert cols["checkpoint"]["nullable"] is True
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT checkpoint FROM tasks")).scalar_one() is None
+            conn.execute(
+                text(
+                    "INSERT INTO tasks (user_id, kind, status, input, checkpoint, resource_key) "
+                    "VALUES (1, 'chapter.batch', 'paused', '{}', '{\"phase\": \"generate\"}', 'batch:1')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "checkpoint" not in {c["name"] for c in inspect(engine).get_columns("tasks")}
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT kind, status, finished_at FROM tasks ORDER BY id")).all()
+            assert [(r[0], r[1]) for r in rows] == [("chapter.generate", "succeeded"), ("chapter.batch", "cancelled")]
+            assert rows[1][2] is not None
+    finally:
+        engine.dispose()

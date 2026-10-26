@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, errorMessage } from '../api/client'
 import { isAbortError } from '../api/sse'
-import { subscribeTask, taskApi, type TaskEnd } from '../api/tasks'
+import { subscribeTask, taskApi, type TaskEnd, type TaskStreamHandlers } from '../api/tasks'
 import type { ContinueEvent, Task } from '../api/types'
 
 /**
  * follow 的结果：
  * - succeeded / failed / cancelled / interrupted：任务已结束（TaskEnd）
+ * - paused：多步任务到达审核点（待审核），订阅结束，任务可继续 / 结束
  * - detached：本地断开订阅（再次 follow / detach / 卸载），任务仍在后台继续
  * - lost：订阅失败（任务被删除 404、重连耗尽等），任务状态未知
  */
 export type TaskOutcome = TaskEnd | { status: 'detached' } | { status: 'lost'; message: string }
+
+/** follow 的附加回调（批量生成的章节事件等）；在 hook 自身处理之后调用，仅当前订阅有效时触发 */
+export type TaskFollowExtra = Pick<TaskStreamHandlers, 'onSnapshot' | 'onChapterStart' | 'onChapterEnd'>
 
 /**
  * 订阅一个后台任务：累积输出文本（snapshot 覆盖）、实时 task 状态 / 进度 / 排队位置、续写轮次。
@@ -28,7 +32,7 @@ export function useTaskStream() {
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 
-  const follow = useCallback(async (initial: Task): Promise<TaskOutcome> => {
+  const follow = useCallback(async (initial: Task, extra?: TaskFollowExtra): Promise<TaskOutcome> => {
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller
@@ -49,9 +53,24 @@ export function useTaskStream() {
             setReconnecting(false)
             setText(snapshotText)
             if (t) setTask(t)
+            extra?.onSnapshot?.(t, snapshotText)
           },
           onDelta: (delta) => {
             if (isCurrent()) setText((prev) => prev + delta)
+          },
+          onReset: () => {
+            if (!isCurrent()) return
+            setText('')
+            setContinueInfo(null)
+          },
+          onStage: (stage) => {
+            if (isCurrent()) setTask((prev) => (prev ? { ...prev, stage } : prev))
+          },
+          onChapterStart: (e) => {
+            if (isCurrent()) extra?.onChapterStart?.(e)
+          },
+          onChapterEnd: (e) => {
+            if (isCurrent()) extra?.onChapterEnd?.(e)
           },
           onContinue: (e) => {
             if (isCurrent()) setContinueInfo(e)

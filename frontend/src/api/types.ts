@@ -440,8 +440,10 @@ export type TaskKind =
   | 'chapter.revise'
   | 'outline.continue'
   | 'outline.expand'
+  | 'chapter.batch'
 
-export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+/** paused = 待审核（多步任务到达审核点）：不占并发名额，可继续 / 结束 / 取消，不能删除 / 重试 */
+export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
 export interface Task {
   id: number
@@ -462,6 +464,10 @@ export interface Task {
   analysis_id: number | null
   /** 展开的大纲（仅 outline.expand 有值），用于按大纲接上活动任务 */
   outline_id: number | null
+  /** 多步任务的断点（仅 chapter.batch 有值；首次运行前为 null） */
+  checkpoint: BatchCheckpoint | null
+  /** 断点：下一步要处理的章节在 checkpoint.items 中的下标（仅多步任务有意义） */
+  step_cursor: number
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
   queue_position: number | null
   created_at: string
@@ -473,7 +479,7 @@ export interface TaskListQuery {
   project_id?: number
   chapter_id?: number
   kind?: TaskKind
-  /** true = 排队 + 运行中；false = 已结束；省略 = 全部 */
+  /** true = 未结束（排队 + 运行中 + 待审核）；false = 已结束；省略 = 全部 */
   active?: boolean
   /** 默认 50，最大 200 */
   limit?: number
@@ -493,6 +499,114 @@ export interface TaskProgress {
   progress: number
   stage: string
   queue_position?: number | null
+}
+
+// ---------------- 批量顺序生成（backend/app/schemas/batch.py、services/batch_service.py） ----------------
+
+export interface BatchGenerateRequest {
+  start_chapter_id: number
+  end_chapter_id: number
+  include_written?: boolean
+  /** 300–20000，默认 3000 */
+  target_words?: number
+  /** 章节有细纲时用细纲 est_words（默认 true）；false = 统一字数覆盖全部章节 */
+  use_plan_words?: boolean
+  auto_continue?: boolean
+  /** 0 = 不暂停；1–50 = 每 N 章进入待审核 */
+  review_every?: number
+  skip_on_fail?: boolean
+  /** ≤2000 */
+  instruction?: string
+  ai_config_id?: number | null
+}
+
+export type BatchWordsSource = 'plan' | 'uniform'
+
+export interface BatchPreviewItem {
+  chapter_id: number
+  chapter_no: number
+  title: string
+  target_words: number
+  words_source: BatchWordsSource
+  /** 已写章节（勾选包含已写时会被重写） */
+  written: boolean
+}
+
+export interface BatchSkippedItem {
+  chapter_id: number
+  chapter_no: number
+  title: string
+  word_count: number
+}
+
+export interface BatchPreview {
+  /** 范围内章节总数 */
+  total: number
+  items: BatchPreviewItem[]
+  skipped: BatchSkippedItem[]
+  analyze: boolean
+  estimated_minutes: number
+  warnings: string[]
+}
+
+export type BatchItemState = 'pending' | 'done' | 'skipped_written' | 'skipped_missing' | 'failed'
+export type BatchAnalysisState = 'ok' | 'skipped' | 'failed'
+
+/** checkpoint.items 的一项（与 input.chapter_ids 一一对应） */
+export interface BatchItem {
+  chapter_id: number
+  chapter_no: number | null
+  title: string
+  state: BatchItemState
+  target_words: number
+  words_source?: BatchWordsSource
+  words: number
+  analysis: BatchAnalysisState | null
+  warning: string
+  error: string
+}
+
+export interface BatchCheckpoint {
+  /** cursor 所指章节的阶段：analyze = 正文已写好、还没分析 */
+  phase: 'generate' | 'analyze'
+  current: { chapter_id: number; prev_status: string } | null
+  since_review: number
+  items: BatchItem[]
+}
+
+export interface BatchChapterRef {
+  chapter_id: number
+  chapter_no: number | null
+  title: string
+}
+
+/** done.result / paused.result / 结束后的 result */
+export interface BatchSummary {
+  total: number
+  done: number
+  skipped_written: number
+  skipped_missing: number
+  failed: (BatchChapterRef & { error: string })[]
+  analysis_failed: (BatchChapterRef & { warning: string })[]
+  remaining: number
+  warnings: string[]
+  ended_early?: boolean
+}
+
+/** 订阅事件 chapter_start */
+export interface BatchChapterStart {
+  index: number
+  total: number
+  chapter_id: number
+  chapter_no: number | null
+  title: string
+  target_words: number
+}
+
+/** 订阅事件 chapter_end */
+export interface BatchChapterEnd {
+  index: number
+  item: BatchItem
 }
 
 // ---------------- 结构化设定（backend/app/schemas/{organization,relationship,card,entity_ai}.py） ----------------

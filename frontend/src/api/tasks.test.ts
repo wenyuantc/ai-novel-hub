@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './client'
 import { isAbortError } from './sse'
 import {
+  canRetryTask,
+  isActiveTask,
+  isOpenTask,
   queueLabel,
+  TASK_STATUS,
   reconnectDelay,
   subscribeTask,
   TASK_KIND_LABELS,
@@ -29,6 +33,8 @@ function task(over: Partial<Task> = {}): Task {
     character_id: null,
     outline_id: null,
     analysis_id: null,
+    checkpoint: null,
+    step_cursor: 0,
     queue_position: null,
     created_at: '2026-10-23T08:00:00',
     started_at: null,
@@ -152,6 +158,56 @@ describe('subscribeTask', () => {
     }
   })
 
+  it('批量事件：reset 清空文本、chapter_start / chapter_end / stage 回调，paused 作为终止事件返回 result', async () => {
+    const item = {
+      chapter_id: 11,
+      chapter_no: 5,
+      title: '风起',
+      state: 'done',
+      target_words: 3000,
+      words_source: 'plan',
+      words: 3100,
+      analysis: 'ok',
+      warning: '',
+      error: '',
+    }
+    const summary = { total: 2, done: 1, skipped_written: 0, skipped_missing: 0, failed: [], analysis_failed: [], remaining: 1, warnings: [] }
+    vi.stubGlobal('fetch', async () =>
+      sseResponse([
+        frame('snapshot', { task: task({ kind: 'chapter.batch', chapter_id: null }), text: '上一章残留' }),
+        frame('reset', {}),
+        frame('chapter_start', { index: 0, total: 2, chapter_id: 11, chapter_no: 5, title: '风起', target_words: 3000 }),
+        frame('stage', { stage: '第 1/2 章 · 生成中' }),
+        frame('delta', { text: '正文' }),
+        frame('chapter_end', { index: 0, item }),
+        frame('chapter_end', { index: 1 }),
+        frame('paused', { task: task({ kind: 'chapter.batch', status: 'paused', chapter_id: null }), result: summary }),
+        frame('delta', { text: '不应出现' }),
+      ]),
+    )
+    const r = recorder()
+    const log: string[] = []
+    let resets = 0
+    const end = await subscribeTask(1, {
+      ...r.handlers,
+      onReset: () => {
+        resets += 1
+        r.handlers.onSnapshot?.(null, '')
+      },
+      onStage: (st) => log.push(`stage:${st}`),
+      onChapterStart: (e) => log.push(`start:${e.index}:${e.chapter_no}`),
+      onChapterEnd: (e) => log.push(`end:${e.index}:${e.item.state}`),
+    })
+    expect(resets).toBe(1)
+    expect(r.text()).toBe('正文')
+    expect(log).toEqual(['start:0:5', 'stage:第 1/2 章 · 生成中', 'end:0:done'])
+    expect(end).toEqual({
+      status: 'paused',
+      task: task({ kind: 'chapter.batch', status: 'paused', chapter_id: null }),
+      result: summary,
+    })
+  })
+
   it('404 不重连，直接抛 ApiError', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ detail: '任务不存在' }), { status: 404 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -269,6 +325,29 @@ describe('task helpers', () => {
     expect(isChapterWriteKind('chapter.revise')).toBe(true)
     expect(isChapterWriteKind('chapter.polish')).toBe(true)
     expect(isChapterWriteKind('chapter.analyze')).toBe(false)
+  })
+
+  it('待审核：未结束但不活动，不能重试；批量生成跳到章节页', () => {
+    expect(isActiveTask('paused')).toBe(false)
+    expect(isOpenTask('paused')).toBe(true)
+    expect(isOpenTask('running')).toBe(true)
+    expect(isOpenTask('succeeded')).toBe(false)
+    expect(canRetryTask('paused')).toBe(false)
+    expect(TASK_STATUS.paused.label).toBe('待审核')
+    expect(TASK_KIND_LABELS['chapter.batch']).toBe('批量生成')
+    expect(taskLink(task({ kind: 'chapter.batch', chapter_id: null }))).toBe('/projects/2/chapters')
+  })
+
+  it('resume / finish 接口路径', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(task()), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await taskApi.resume(4)
+    await taskApi.finish(4)
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
+    expect(calls.map((c) => [c[0], c[1].method])).toEqual([
+      ['/api/v1/tasks/4/resume', 'POST'],
+      ['/api/v1/tasks/4/finish', 'POST'],
+    ])
   })
 
   it('list / clearFinished 的查询参数', async () => {

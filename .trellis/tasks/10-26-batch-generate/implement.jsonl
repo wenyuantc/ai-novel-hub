@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "后台任务与 SSE 契约：TaskHandler、resource_key/serial_key、事件、取消与重试"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "后台任务表、迁移列表、归属 404"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "上下文组装、分析回写（较晚章节优先）"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "细纲 est_words、章节与细纲的关联"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "TaskPanel、结果查看器注册表、章节列表"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像后端 schema"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积上限"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-creation-core.md", "reason": "MuMu 批量生成缺陷对照（§6）"}

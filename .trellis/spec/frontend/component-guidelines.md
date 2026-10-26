@@ -230,3 +230,16 @@ dayjs.locale('zh-cn')
 
 - `ForeshadowsPanel`（`/projects/:pid/foreshadows`，懒加载路由，NAV「伏笔」在「章节」之后）：顶部 `Statistic` 统计（待埋 / 已埋 / 部分回收 / 已回收 / 已废弃 / **超期（>0 时红色）** / 长线 / 当前章）；筛选栏（状态 `Select`、仅超期、仅长线、关联角色、排序 `Segmented` 按计划回收章 / 按重要度）全部作为查询参数交给后端；Tabs「列表」（`Table`：`#id 标题` + 超期 N 章红 Tag / 长线 / 不注入 / 分析来源、状态、`foreshadowChapterSummary`（超期时「收」红色）、重要度星、关联角色、操作）/「时间线」（同一份筛选结果）。操作下拉：`标记已埋…`（待埋 / 已废弃）、`标记回收…`（已埋 / 部分回收，可勾选部分回收）弹小表单选章节（默认值 `defaultPlantChapter` / `defaultResolveChapter`），`废弃`，`删除`（`Modal` 确认——Dropdown 菜单项里挂 Popconfirm 会随菜单关闭消失）。每次变更后同时 `reload` 列表与统计。URL `?character_id=` 预置角色筛选，`?id=` 打开该伏笔的编辑抽屉并从 URL 去掉 `id`。
 
+### 批量顺序生成（`10-26-batch-generate`）
+
+| 组件 | 契约 |
+|-----------|------------------------|
+| `batch/BatchGenerateModal` | `{ projectId; chapters: ChapterBrief[]; onClose; onStarted(task) }`，`ChaptersPanel` 用 `React.lazy` 且只在打开时挂载。范围：起止章 `Select`（默认 `defaultBatchRange`：第一个未写章节 → 最后一章）+「生成到第 N 章」（`endIdUpTo`）；选项：统一字数 300–20000、审核间隔 0–50、使用细纲字数、包含已写、自动续写、失败时跳过继续、附加要求 ≤2000、`AIConfigSelect`。范围 / 字数相关字段变化后 400ms 防抖 `POST /batch-generate/preview`（结果按请求键保存，键变化即失效，**不在 effect 里同步 setState**）：将生成 N 章、跳过已写数、`formatEta(estimated_minutes)`、是否分析、warnings、章节清单（目标字数与来源、`重写` 标签）。起始晚于结束 / 预览 0 章 / 没有模型配置时禁用确定。成功 → `track(task)`。 |
+| `batch/BatchBanner` | `{ task; onChaptersChanged; onDismiss }`，`ChaptersPanel` 懒加载、`key = task.id`。`batchBannerState`：running（排队 / 运行中）→ `useTaskStream().follow(task, {onSnapshot, onChapterStart, onChapterEnd})`，进度条、阶段 / 排队文案、当前章、`取消`（Popconfirm）；`chapter_start` / `chapter_end` 与结束时调用 `onChaptersChanged`（刷新章节列表与项目字数），结束后 `track(outcome.task)`；本地清单 `chapter_end` 时替换对应项，缺断点时 `GET /tasks/{id}` 补齐。paused → 「已处理 x/y」+ `继续`（resume）/ `结束`（finish）；failed / interrupted → `task.error` + `从第 N 章续跑`（retry；N 由 `batchResumeIndex` 推导）+ `关闭`（仅本页隐藏）。`展开章节清单` 懒加载 `BatchProgressView`。卸载只断开订阅。 |
+| `batch/BatchProgressView` | `{ items; current?: {index, phase}; text?; running?; summary? }`：汇总（`batchSummaryText` + warnings）或「已处理 x/y」、章节清单（`batchRowView`：状态 Tag、字数 / 目标、分析结果、失败原因或警告）、当前章实时输出（`StreamOutput`；分析阶段不输出）。 |
+| `batch/BatchResultView` | `chapter.batch` 结果组件（已在 `taskResultViewers` 注册）：`parseBatchSummary(result)` + `task.checkpoint.items`。`TaskResultViewerProps` 新增可选 `task`（`TaskResultModal` 传 `stream.task ?? task`），`TaskResultModal` 对 `paused` 也展示结果。 |
+
+- `ChaptersPanel`：工具栏 `批量生成`（无章节或已有未结束批量时禁用）；横幅任务 = store `active` 中本项目的 `chapter.batch`（含 paused），否则取 `GET /tasks?project_id&kind=chapter.batch&limit=1` 中 failed / interrupted 的那个（依赖 store `version` 重新加载）；状态列在 `queuedBatchChapterIds(openBatch)` 中且未生成中的行加 `排队批量` Tag。`ChaptersPanel` 在入口 chunk 中：只能静态 import `utils/batchState.ts`，横幅 / 弹窗 / 清单 / `utils/batch.ts` 都按需加载。
+- `TaskPanel`：paused 行显示 `待审核` 标签与 `继续` / `结束` / `取消`（不显示删除 / 重试），`查看结果` 对 succeeded 或 paused 且已注册结果组件的任务显示；批量取消的确认文案为「已完成的章节保留，正在写的章节恢复原状态」。
+- 章节编辑器：批量任务没有 `chapter_id`，以 store 中活动批量的 `checkpoint.current.chapter_id === 本章` 识别「批量正在写本章」——显示提示、不显示复位（不算 stuck），批量离开本章后 `GET` 章节并 `replaceFromServer`。
+

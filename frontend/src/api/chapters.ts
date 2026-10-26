@@ -1,5 +1,7 @@
 import { api } from './client'
 import type {
+  BatchGenerateRequest,
+  BatchPreview,
   Chapter,
   ChapterBrief,
   ChapterCreate,
@@ -30,6 +32,16 @@ export function generateChapter(cid: number, body: GenerateChapterRequest): Prom
 /** 润色：同上。 */
 export function polishChapter(cid: number, body: PolishChapterRequest): Promise<Task> {
   return api.post<Task>(`/chapters/${cid}/polish`, body)
+}
+
+/** 批量顺序生成预览：不建任务、不校验模型配置 */
+export function previewBatch(pid: number, body: BatchGenerateRequest): Promise<BatchPreview> {
+  return api.post<BatchPreview>(`/projects/${pid}/batch-generate/preview`, body)
+}
+
+/** 发起批量顺序生成：创建 chapter.batch 任务（202）；继续 / 结束 / 取消 / 重试走 taskApi */
+export function startBatch(pid: number, body: BatchGenerateRequest): Promise<Task> {
+  return api.post<Task>(`/projects/${pid}/batch-generate`, body)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

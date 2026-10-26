@@ -1,9 +1,9 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-TaskStatus = Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+TaskStatus = Literal["queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted"]
 TaskKind = Literal[
     "chapter.generate",
     "chapter.polish",
@@ -19,6 +19,7 @@ TaskKind = Literal[
     "chapter.revise",
     "outline.continue",
     "outline.expand",
+    "chapter.batch",
 ]
 
 
@@ -41,6 +42,10 @@ class TaskOut(BaseModel):
     analysis_id: int | None = None
     # 展开的大纲（取自 input.request.outline_id，仅 outline.expand 有值），前端据此按大纲接上活动任务
     outline_id: int | None = None
+    # 多步任务的结构化断点（仅 chapter.batch 有值：阶段、当前章、每章结果），前端据此渲染章节清单
+    checkpoint: dict[str, Any] | None = None
+    # 断点：下一步要处理的章节在 input.chapter_ids 中的下标（仅多步任务有意义），前端据此显示「从第 N 章续跑」
+    step_cursor: int = 0
     # 仅排队中的任务有值：前面还在排队的任务数（全局先进先出，0 = 下一个执行）
     queue_position: int | None = None
     created_at: datetime

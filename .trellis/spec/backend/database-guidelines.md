@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -402,15 +402,17 @@ SSE / 订阅契约见 `error-handling.md`「后台任务与 SSE 契约」。
 # backend/app/models/entities.py
 TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world",
               "character.generate", "organization.generate", "relations.parse", "career.generate", "wizard.careers",
-              "chapter.analyze", "chapter.revise", "outline.continue", "outline.expand")
-TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
-ACTIVE_TASK_STATUSES = ("queued", "running"); FINISHED_TASK_STATUSES = (其余四个)
+              "chapter.analyze", "chapter.revise", "outline.continue", "outline.expand", "chapter.batch")
+TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
+ACTIVE_TASK_STATUSES = ("queued", "running")            # 调度、占名额、占 resource_key 部分唯一索引
+OPEN_TASK_STATUSES = (*ACTIVE_TASK_STATUSES, "paused")  # 未结束：「进行中」列表、批量唯一性
+FINISHED_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")  # 可删除、参与裁剪；paused 不在其中
 
 class Task(TimestampMixin, Base):   # tasks
     user_id, project_id?, chapter_id?, kind String(32), title String(200), resource_key String(100)?,
     serial_key String(100)?（索引 ix_tasks_serial_key）,
     status String(16), input JSON, result JSON?, output_text Text, progress int, stage String(100),
-    error Text, step_cursor int, retry_of_id?, started_at?, finished_at?
+    error Text, step_cursor int, checkpoint JSON?, retry_of_id?, started_at?, finished_at?
     # 索引：ix_tasks_status_id (status, id)、ix_tasks_user_id_id (user_id, id)，
     # uq_tasks_active_resource：resource_key 上的部分唯一索引
     #   WHERE status IN ('queued', 'running') AND resource_key IS NOT NULL（postgresql_where + sqlite_where 同时写）
@@ -440,7 +442,9 @@ class Task(TimestampMixin, Base):   # tasks
 - `started_at` / `finished_at` 用 `func.now()`（数据库时间）写入，不在 Python 中取时间。
 - **保留**：每个用户最多保留 `MAX_FINISHED_PER_USER = 200` 个已结束任务（按 id），每次任务结束、排队取消后裁剪；
   活动任务不参与裁剪。`DELETE /tasks?finished=true[&project_id=]` 手动清理已结束任务。
-- `step_cursor`：多步任务的断点，重试时继承；当前单步类型恒为 0。
+- `step_cursor` / `checkpoint`：多步任务的断点（下一步下标 + 结构化状态），重试时由 `create_task` 从原任务复制、继续（paused → queued）时原样保留；
+  单步类型恒为 0 / NULL。目前只有 `chapter.batch` 使用（结构见 batch-generate.md）。`status` / `kind` 列没有 CHECK 约束，新增取值只改常量。
+- `0012` downgrade 先把 `paused` 任务改为 `cancelled`（旧代码不认识 paused）再删 `checkpoint` 列；`test_0012_batch_generate`。
 
 ### 4. 必需的测试
 

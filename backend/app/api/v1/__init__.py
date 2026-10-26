@@ -5,6 +5,7 @@ from app.api.v1 import (
     ai_configs,
     analysis,
     auth,
+    batch,
     cards,
     careers,
     chapter_versions,
@@ -38,6 +39,7 @@ api_router.include_router(cards.router)
 api_router.include_router(careers.router)
 api_router.include_router(foreshadows.router)
 api_router.include_router(chapters.router)
+api_router.include_router(batch.router)
 api_router.include_router(chapter_versions.router)
 api_router.include_router(analysis.router)
 api_router.include_router(wizard.router)

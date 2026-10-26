@@ -180,7 +180,7 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   `POST /api/v1/projects/{id}/wizard/{outline|characters|world|careers}` 都**返回 202 `TaskOut`**（普通 JSON），
   实际执行在进程内任务引擎（`app/services/task_engine/`）中进行；设定类任务 `POST /projects/{id}/characters/generate`、
   `/organizations/generate`、`/characters/{cid}/parse-relations`、`/careers/generate`（`character.generate` / `organization.generate` / `relations.parse` / `career.generate`，
-  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；大纲续写 / 展开 `POST /projects/{pid}/outlines/continue`、
+  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；批量顺序生成 `POST /projects/{pid}/batch-generate`（`chapter.batch`，多步 + 待审核，见 [batch-generate.md](./batch-generate.md)）同样返回 202；大纲续写 / 展开 `POST /projects/{pid}/outlines/continue`、
   `/outlines/{oid}/expand`（`outline.continue` / `outline.expand`，只产出草稿，见 [outline.md](./outline.md)）同样返回 202；章节分析 `POST /chapters/{cid}/analyze`（`chapter.analyze`，同章已有排队中的分析时
   返回那条任务、状态码 200）、按建议重写 `POST /chapters/{cid}/revise`（`chapter.revise`）也走任务，见 story-entities.md「章节分析与回写」；实时输出通过
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
@@ -272,9 +272,20 @@ create ──> queued ──claim──> running ──> succeeded
              │                  ├──> failed        (runner 产出 error、build_job 抛 AppError 或意外异常)
              │                  ├──> cancelled     (POST /tasks/{id}/cancel)
              │                  └──> interrupted   (engine.stop()，或进程崩溃后下次 start() 恢复)
+             │                  └──> paused        (多步任务产出 paused：审核点；见 batch-generate.md)
              └──cancel──> cancelled
-failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_id=原任务, step_cursor 继承)
+paused ──resume──> queued（同一任务，断点保留）；paused ──finish──> succeeded（ended_early）；paused ──cancel──> cancelled
+failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_id=原任务, step_cursor / checkpoint 继承)
 ```
+
+- **待审核（`paused`）**：不属于 ACTIVE（不被调度、不占并发名额、不占 `resource_key` 部分唯一索引），也不属于 FINISHED（不被裁剪、
+  不能删除 → 409 `任务待审核，无法删除，请先结束或取消`、不能重试）。收尾时**不调用** `on_abort` / `on_success`，写 `status=paused`、
+  `stage=待审核`、`result=paused 载荷`、`finished_at` 留空，hub 以 `paused` 事件关闭；取消落在 `paused` 产出之后仍按 paused 收尾。
+  `recover()` 只处理 running。`POST /tasks/{id}/resume`（202）：handler 可选 `revalidate_resume` → 条件 UPDATE `paused → queued`
+  （清 `result / error / finished_at`，`IntegrityError` → 409）→ 建 hub + notify；`POST /tasks/{id}/finish`：条件 UPDATE → succeeded，
+  `result` 取 handler 可选 `finish_result(task)`（默认原 result + `ended_early: true`）；`cancel` 支持 paused（条件 UPDATE 后 `on_abort`）。
+  `GET /tasks?active=true` 返回 `OPEN_TASK_STATUSES`（含 paused）。非 paused 时 resume / finish → 409 `只有待审核的任务可以继续` / `结束`。
+- **重试钩子**：handler 可选 `validate_retry(db, ctx, *, user_id, task) -> TaskSpec`，有则代替 `validate_and_claim`（多步任务沿用原范围）。
 
 - 创建：`validate_and_claim` 在请求 session 内完成鉴权、`resolve_config` + `build_provider`（SSRF / 解密校验）、参数校验，
   章节类再原子抢占 `generating`；与任务插入**同一事务** commit。撞部分唯一索引 `uq_tasks_active_resource`
@@ -309,11 +320,16 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 | `progress` | `{"status", "progress", "stage", "queue_position"?}` | 状态 / 进度 / 阶段变化；排队中时含 `queue_position`，位置变化也会推送 |
 | `done` | `{"task": TaskOut, "result": <runner done 载荷>}` | 成功；之后流结束 |
 | `error` | `{"task": TaskOut, "detail": "<中文>"}` | 失败 / 取消 / 中断；之后流结束 |
+| `paused` | `{"task": TaskOut, "result": <paused 载荷>}` | 多步任务到达审核点（待审核）；之后流结束 |
+| `reset` | `{}` | 清空实时输出（多步任务开始新的一步；客户端清空本地文本） |
+| 其他（如 `chapter_start` / `chapter_end`） | handler 自定义 | 原样广播（批量生成见 batch-generate.md） |
+
+- runner 的 `stage` 事件不直接转发，只更新 hub 的阶段文案（经 `progress` 事件推送）。
 
 - 章节 `result`：`{"chapter": ChapterOut, "warning"?: "自动续写失败：…"}`；向导 `result`：`{"kind", "items": [Out...]}`。
 - 不重复不遗漏：`TaskHub.subscribe()` 在同一同步临界区内复制缓冲区并注册订阅队列（中间没有 `await`），
   快照之后的第一个 delta 恰好接在快照末尾。
-- 已结束任务：快照取自库里的 `output_text`，紧接着 `done` / `error`，然后关闭。
+- 已结束 / 待审核任务：快照取自库里的 `output_text`，紧接着 `done` / `error` / `paused`，然后关闭。
 - 任务行已不存在（归属校验后被删除；或订阅中的排队任务随用户 / 项目被级联删除——在心跳间隔检查）：发
   `error {"task": null, "detail": "任务不存在"}` 后结束（前者没有 `snapshot`），并释放该任务的 hub。
 - 订阅队列上限 1000 帧；溢出时断开该订阅者（前端重连，用 `snapshot` 覆盖本地文本）。
@@ -350,6 +366,7 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 | 没有 AI 配置 / Base URL 被拦截 / key 解密失败 | 创建前 | 400 JSON（不建任务、不抢占） |
 | 润色时正文为空 | 创建前 | 400 JSON `章节正文为空，无法润色` |
 | 章节已处于 `generating`（含已有排队 / 运行中的章节任务） | 创建前 | 409 JSON `该章节正在生成中，请稍候再试` |
+| 章节在排队中 / 运行中批量的剩余范围内（generate / polish / revise） | 创建前 | 409 `该章节在批量生成范围内，请等待批量完成或暂停后再操作` |
 | 同项目同类向导已有活动任务（部分唯一索引） | 创建时 | 409 JSON `已有任务在进行中，请等待其完成后再试` |
 | 取消已结束任务 | 请求时 | 409 `任务已结束，无法取消` |
 | 重试非失败/取消/中断任务 | 请求时 | 409 `只有失败、已取消或已中断的任务可以重试` |

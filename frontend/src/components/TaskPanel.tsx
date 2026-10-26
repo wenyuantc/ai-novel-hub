@@ -146,13 +146,14 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
       renderItem={(t) => {
         const st = TASK_STATUS[t.status]
         const activeTask = isActiveTask(t.status)
+        const paused = t.status === 'paused'
         const link = taskLink(t)
         const actions = [
           <Button key="view" type="link" size="small" onClick={() => onView(t)}>
             查看输出
           </Button>,
         ]
-        if (t.status === 'succeeded' && hasResultViewer(t.kind)) {
+        if ((t.status === 'succeeded' || paused) && hasResultViewer(t.kind)) {
           actions.unshift(
             <Button key="result" type="link" size="small" onClick={() => onViewResult(t)}>
               查看结果
@@ -174,12 +175,68 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
             </Button>,
           )
         }
-        if (activeTask) {
+        if (paused) {
+          // 待审核：继续（同一任务从断点接着跑）/ 结束（以已完成收尾）/ 取消；不能删除、重试
+          actions.push(
+            <Button
+              key="resume"
+              type="link"
+              size="small"
+              loading={pending === t.id}
+              onClick={() =>
+                void act(t.id, async () => {
+                  onTrack(await taskApi.resume(t.id))
+                  message.success('已继续')
+                })
+              }
+            >
+              继续
+            </Button>,
+            <Popconfirm
+              key="finish"
+              title="结束该任务？"
+              description="已完成的内容保留，剩余部分不再处理。"
+              okText="结束"
+              cancelText="不结束"
+              onConfirm={() =>
+                act(t.id, async () => {
+                  onTrack(await taskApi.finish(t.id))
+                  message.success('已结束')
+                })
+              }
+            >
+              <Button type="link" size="small">
+                结束
+              </Button>
+            </Popconfirm>,
+            <Popconfirm
+              key="cancel"
+              title="取消该任务？"
+              description="已完成的内容保留，任务记为已取消。"
+              okText="取消任务"
+              cancelText="不取消"
+              onConfirm={() =>
+                act(t.id, async () => {
+                  onTrack(await taskApi.cancel(t.id))
+                  message.success('已取消')
+                })
+              }
+            >
+              <Button type="link" size="small" danger>
+                取消
+              </Button>
+            </Popconfirm>,
+          )
+        } else if (activeTask) {
           actions.push(
             <Popconfirm
               key="cancel"
               title="取消该任务？"
-              description="已输出的内容不会保存，章节保持原样。"
+              description={
+                t.kind === 'chapter.batch'
+                  ? '已完成的章节保留，正在写的章节恢复原状态。'
+                  : '已输出的内容不会保存，章节保持原样。'
+              }
               okText="取消任务"
               cancelText="不取消"
               onConfirm={() =>
@@ -250,7 +307,9 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 {t.status === 'queued' ? queueLabel(t) : t.stage}
                 {t.stage || t.status === 'queued' ? ' · ' : ''}
-                {activeTask ? `创建于 ${formatTime(t.created_at)}` : `结束于 ${formatTime(t.finished_at ?? t.created_at)}`}
+                {activeTask || paused
+                  ? `创建于 ${formatTime(t.created_at)}`
+                  : `结束于 ${formatTime(t.finished_at ?? t.created_at)}`}
               </Typography.Text>
               {t.error && !activeTask && (
                 <Typography.Text type={t.status === 'failed' ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>

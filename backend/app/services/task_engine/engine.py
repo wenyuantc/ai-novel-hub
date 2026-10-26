@@ -9,6 +9,10 @@
 - on_success（可选）：任务写入 succeeded 后调用，异常只记日志（如章节任务成功后自动排队分析）。
 - 取消运行中任务：对 asyncio.Task 调用一次 cancel()；CancelledError 传入 runner 的 finally，
   由其回退章节状态并写 cancelled 生成记录；引擎随后把任务置为 cancelled（关停时为 interrupted）。
+- 暂停（多步任务的审核点）：runner 产出 paused 后结束，任务写为 paused（待审核）——不调用 on_abort / on_success，
+  hub 以 paused 事件关闭。paused 不是活动状态：不被调度、不占并发名额与资源键；由 task_service.resume_task
+  改回 queued 后同一任务从断点继续。取消落在 paused 产出之后时仍按 paused 收尾（与 done 已产出时相同）。
+- 通用事件：reset 清空 hub 文本（多步任务每步只保留当前步的实时输出）；stage 只更新阶段文案。
 """
 
 import asyncio
@@ -263,15 +267,20 @@ class TaskEngine:
                 else:
                     error = await self._consume(task, handler, hub, job)
                     if not error:
-                        status, result = "succeeded", hub.result
+                        if hub.paused is not None:
+                            status, result = "paused", hub.paused
+                        else:
+                            status, result = "succeeded", hub.result
         except asyncio.CancelledError:
             # 只会被 cancel() 一次；吞掉取消让收尾正常执行（runner 的 finally 已回退状态并写 cancelled 记录）
             current = asyncio.current_task()
             if current is not None:
                 current.uncancel()
-            # done 已产出（结果已落库）后才收到取消：仍按成功处理
+            # done / paused 已产出（结果 / 断点已落库）后才收到取消：仍按成功 / 暂停处理
             if hub.result is not None:
                 status, result, error = "succeeded", hub.result, ""
+            elif hub.paused is not None:
+                status, result, error = "paused", hub.paused, ""
             elif task_id in self._shutdown:
                 status, error = "interrupted", INTERRUPTED_MESSAGE
             else:
@@ -280,6 +289,8 @@ class TaskEngine:
             logger.exception("任务 %s 执行失败", task_id)
             if hub.result is not None:
                 status, result, error = "succeeded", hub.result, ""
+            elif hub.paused is not None:
+                status, result, error = "paused", hub.paused, ""
             else:
                 status, error = "failed", "任务执行失败：服务器内部错误"
         await self._finalize(task_id, task, handler, hub, status=status, result=result, error=error)
@@ -298,6 +309,12 @@ class TaskEngine:
                     hub.set_progress(stage=f"字数不足，自动续写第 {data.get('round')} 轮")
                 elif event == "done":
                     hub.result = data
+                elif event == "paused":
+                    hub.paused = data
+                elif event == "reset":
+                    hub.reset()
+                elif event == "stage":
+                    hub.set_progress(stage=str(data.get("stage") or ""))
                 elif event == "error":
                     error = str(data.get("detail") or "生成失败")
                 else:
@@ -305,7 +322,7 @@ class TaskEngine:
                 if hub.dirty and time.monotonic() - last_flush >= self.flush_interval:
                     await self._flush(hub)
                     last_flush = time.monotonic()
-        if not error and hub.result is None:
+        if not error and hub.result is None and hub.paused is None:
             error = "任务意外结束，未产出结果"
         return error
 
@@ -336,7 +353,8 @@ class TaskEngine:
         self._finalizing.add(task_id)
         out: dict[str, Any] | None = None
         try:
-            if status != "succeeded" and handler is not None and task is not None:
+            # 暂停时资源已在当前步结束时释放，断点保留，不回退
+            if status not in ("succeeded", "paused") and handler is not None and task is not None:
                 await handler.on_abort(self.ctx, task)
             try:
                 async with self.ctx.sessionmaker() as db:
@@ -348,7 +366,8 @@ class TaskEngine:
                         row.output_text = hub.text
                         row.progress = 100 if status == "succeeded" else hub.progress
                         row.stage = task_service.STAGE_LABELS[status]
-                        row.finished_at = func.now()
+                        # 待审核不算结束（finished_at 留空，继续 / 结束时再写）
+                        row.finished_at = None if status == "paused" else func.now()
                         await db.commit()
                         await db.refresh(row)
                         out = task_service.out_json(row)
@@ -362,6 +381,8 @@ class TaskEngine:
                 self.hubs.pop(task_id, None)
             if status == "succeeded":
                 hub.close("done", {"task": out, "result": result})
+            elif status == "paused":
+                hub.close("paused", {"task": out, "result": result})
             else:
                 hub.close("error", {"task": out, "detail": error})
             self._finalizing.discard(task_id)
@@ -391,7 +412,7 @@ class TaskEngine:
     # ---------------- 订阅 ----------------
 
     async def subscribe(self, task_id: int) -> AsyncIterator[Event]:
-        """快照 + 增量；任务结束（done / error）后结束。断开只移除该订阅者，不影响任务执行。"""
+        """快照 + 增量；任务结束（done / error）或暂停（paused）后结束。断开只移除该订阅者，不影响任务执行。"""
         sm = self.ctx.sessionmaker
         hub = self.hubs.get(task_id)
         if hub is None:
@@ -422,6 +443,8 @@ class TaskEngine:
                 yield "snapshot", {"task": out, "text": row.output_text}
                 if row.status == "succeeded":
                     yield "done", {"task": out, "result": row.result}
+                elif row.status == "paused":
+                    yield "paused", {"task": out, "result": row.result}
                 else:
                     yield "error", {"task": out, "detail": row.error}
                 return
@@ -448,7 +471,7 @@ class TaskEngine:
                     yield HEARTBEAT_EVENT, {}
                     continue
                 yield event, data
-                if event in ("done", "error"):
+                if event in ("done", "error", "paused"):
                     return
         finally:
             hub.unsubscribe(sub)

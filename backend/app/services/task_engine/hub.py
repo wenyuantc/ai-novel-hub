@@ -31,6 +31,8 @@ class TaskHub:
         self.queue_position: int | None = None
         # runner 产出的 done 载荷（结果已落库）
         self.result: dict[str, Any] | None = None
+        # runner 产出的 paused 载荷（多步任务到达审核点，断点已落库）
+        self.paused: dict[str, Any] | None = None
         self.closed = False
         # 自上次刷库后是否有新的输出 / 进度
         self.dirty = False
@@ -64,6 +66,12 @@ class TaskHub:
         self.dirty = True
         self.publish("delta", {"text": text})
 
+    def reset(self) -> None:
+        """清空已输出文本并广播 reset（多步任务开始新的一步时，output 只保留当前步的实时文本）。"""
+        self.text = ""
+        self.dirty = True
+        self.publish("reset", {})
+
     def progress_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"status": self.status, "progress": self.progress, "stage": self.stage}
         if self.status == "queued":
@@ -90,7 +98,7 @@ class TaskHub:
                 self.publish("progress", self.progress_payload())
 
     def close(self, event: str, data: dict[str, Any]) -> None:
-        """广播终止事件（done / error）；之后不再接受订阅。"""
+        """广播终止事件（done / error / paused）；之后不再接受订阅。"""
         if self.closed:
             return
         self.closed = True

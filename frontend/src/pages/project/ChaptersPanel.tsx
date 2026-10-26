@@ -1,16 +1,22 @@
-import { PlusOutlined } from '@ant-design/icons'
-import { App, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag } from 'antd'
-import { useCallback, useMemo, useState } from 'react'
+import { PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { App, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Tooltip } from 'antd'
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ANALYSIS_STATUS, analysisApi, formatScore } from '../../api/analysis'
 import { chapterApi, CHAPTER_STATUS } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
-import type { ChapterAnalysisState, ChapterBrief, ChapterStatus } from '../../api/types'
+import { taskApi } from '../../api/tasks'
+import type { ChapterAnalysisState, ChapterBrief, ChapterStatus, Task } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
+import { batchBannerState, queuedBatchChapterIds } from '../../utils/batchState'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
+
+// 批量生成横幅 / 弹窗按需加载（章节页在入口 chunk 中）
+const BatchBanner = lazy(() => import('../../components/batch/BatchBanner'))
+const BatchGenerateModal = lazy(() => import('../../components/batch/BatchGenerateModal'))
 
 export default function ChaptersPanel() {
   const pid = useProjectId()
@@ -31,6 +37,22 @@ export default function ChaptersPanel() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form] = Form.useForm<{ title: string }>()
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [dismissedBatchId, setDismissedBatchId] = useState<number | null>(null)
+  const track = useTasksStore((s) => s.track)
+  // 本项目未结束的批量（排队 / 运行中 / 待审核）以轮询的 store 为准；失败 / 中断的取最近一个批量任务
+  const openBatch = useTasksStore((s) => s.active.find((t) => t.kind === 'chapter.batch' && t.project_id === pid))
+  const latestBatchLoader = useCallback(() => {
+    void tasksVersion // 有任务结束 / 本地操作时重新加载
+    return taskApi.list({ project_id: pid, kind: 'chapter.batch', limit: 1 }).then((list) => list[0] ?? null)
+  }, [pid, tasksVersion])
+  const { data: latestBatch = null } = useLoader(latestBatchLoader)
+  const batchTask: Task | null =
+    openBatch ??
+    (latestBatch && batchBannerState(latestBatch) === 'resumable' && latestBatch.id !== dismissedBatchId
+      ? latestBatch
+      : null)
+  const queuedIds = useMemo(() => queuedBatchChapterIds(openBatch), [openBatch])
 
   const totalWords = chapters.reduce((s, c) => s + c.word_count, 0)
 
@@ -66,6 +88,15 @@ export default function ChaptersPanel() {
       title={`章节（共 ${chapters.length} 章 · ${totalWords} 字）`}
       extra={
         <Space>
+          <Tooltip title={openBatch ? '已有进行中或待审核的批量生成' : undefined}>
+            <Button
+              icon={<ThunderboltOutlined />}
+              disabled={chapters.length === 0 || !!openBatch}
+              onClick={() => setBatchOpen(true)}
+            >
+              批量生成
+            </Button>
+          </Tooltip>
           <Button onClick={() => navigate(`/projects/${pid}/outlines`)}>从大纲创建</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             新建章节
@@ -73,6 +104,19 @@ export default function ChaptersPanel() {
         </Space>
       }
     >
+      {batchTask && (
+        <Suspense fallback={null}>
+          <BatchBanner
+            key={batchTask.id}
+            task={batchTask}
+            onChaptersChanged={() => {
+              reload()
+              void refreshProject()
+            }}
+            onDismiss={() => setDismissedBatchId(batchTask.id)}
+          />
+        </Suspense>
+      )}
       <Table<ChapterBrief>
         rowKey="id"
         loading={loading}
@@ -92,8 +136,13 @@ export default function ChaptersPanel() {
           {
             title: '状态',
             dataIndex: 'status',
-            width: 100,
-            render: (s: ChapterStatus) => <Tag color={CHAPTER_STATUS[s].color}>{CHAPTER_STATUS[s].label}</Tag>,
+            width: 150,
+            render: (s: ChapterStatus, c) => (
+              <Space size={4} wrap>
+                <Tag color={CHAPTER_STATUS[s].color}>{CHAPTER_STATUS[s].label}</Tag>
+                {s !== 'generating' && queuedIds.has(c.id) && <Tag color="blue">排队批量</Tag>}
+              </Space>
+            ),
           },
           {
             title: '分析',
@@ -139,6 +188,20 @@ export default function ChaptersPanel() {
           },
         ]}
       />
+      {batchOpen && (
+        <Suspense fallback={null}>
+          <BatchGenerateModal
+            projectId={pid}
+            chapters={chapters}
+            onClose={() => setBatchOpen(false)}
+            onStarted={(t) => {
+              setBatchOpen(false)
+              track(t)
+              reload()
+            }}
+          />
+        </Suspense>
+      )}
       <Modal
         title="新建章节"
         open={createOpen}

@@ -40,7 +40,7 @@ import {
 } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
 import { outlineProApi } from '../../api/outlines'
-import { isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
+import { isActiveTask, isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
 import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
 import AnalysisDrawer, { type ReviseCompare } from '../../components/chapter/AnalysisDrawer'
@@ -363,6 +363,26 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     if (t) attachExternalRef.current(t)
   }, [activeTasks, attachChecked, aiRunning, chapter.id])
 
+  // 批量生成正在写本章（批量任务没有 chapter_id，按断点里的当前章识别）：只读等待、不提供复位；写完后从服务端刷新正文
+  const batchWriting = activeTasks.some(
+    (x) => x.kind === 'chapter.batch' && isActiveTask(x.status) && x.checkpoint?.current?.chapter_id === chapter.id,
+  )
+  const wasBatchWritingRef = useRef(false)
+  useEffect(() => {
+    if (batchWriting) {
+      wasBatchWritingRef.current = true
+      return
+    }
+    if (!wasBatchWritingRef.current) return
+    wasBatchWritingRef.current = false
+    chapterApi
+      .get(pid, chapter.id)
+      .then((fresh) => replaceFromServer(fresh))
+      .catch(() => {
+        // 忽略：用户可手动刷新
+      })
+  }, [batchWriting, pid, chapter.id, replaceFromServer])
+
   // 章节处于 generating：查找它的活动任务（排队或运行中）并自动接上
   useEffect(() => {
     if (initial.status !== 'generating') return
@@ -522,7 +542,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const stuck = chapter.status === 'generating' && !aiRunning && attachChecked
+  const stuck = chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
+  // 批量正在写本章：正文 / 标题只读、不能保存（后端对生成中章节的正文 PATCH 返回 409，写完后会用服务端正文覆盖本地）
+  const batchLocked = batchWriting && chapter.status === 'generating'
   const status = aiRunning ? CHAPTER_STATUS.generating : CHAPTER_STATUS[chapter.status]
   const revising = aiRunning && aiTask.task?.kind === 'chapter.revise'
   const analysisStatus = ANALYSIS_STATUS[analysis.status]
@@ -597,7 +619,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
                   版本历史
                 </Button>
-                <Button size="small" disabled={busy || stuck || rewriteLocked} onClick={() => void handleToggleDone()}>
+                <Button size="small" disabled={busy || stuck || batchLocked || rewriteLocked} onClick={() => void handleToggleDone()}>
                   {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}
                 </Button>
                 <Button
@@ -605,7 +627,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   size="small"
                   icon={<SaveOutlined />}
                   loading={saving}
-                  disabled={editorLocked || stuck || !dirty}
+                  disabled={editorLocked || stuck || batchLocked || !dirty}
                   onClick={() => void handleSave()}
                 >
                   保存
@@ -613,6 +635,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               </Space>
             }
           >
+            {batchWriting && chapter.status === 'generating' && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="该章节正在批量生成中"
+                description="写完后自动刷新正文；进度见章节列表顶部或任务面板。"
+              />
+            )}
             {stuck && (
               <Alert
                 type="warning"
@@ -632,7 +663,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               onChange={(e) => setTitle(e.target.value)}
               placeholder="章节标题"
               maxLength={200}
-              disabled={editorLocked}
+              disabled={editorLocked || batchLocked}
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
@@ -647,7 +678,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 onSelect={(e) => syncSelection(e.currentTarget)}
                 onKeyUp={(e) => syncSelection(e.currentTarget)}
                 onMouseUp={(e) => syncSelection(e.currentTarget)}
-                readOnly={editorLocked}
+                readOnly={editorLocked || batchLocked}
                 autoSize={{ minRows: 20 }}
                 placeholder="在此书写正文，或使用右侧「AI 生成」"
                 style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}

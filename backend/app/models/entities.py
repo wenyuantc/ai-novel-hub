@@ -51,9 +51,13 @@ TASK_KINDS = (
     "chapter.revise",
     "outline.continue",
     "outline.expand",
+    "chapter.batch",
 )
-TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
+TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
+# 活动：占资源键（部分唯一索引）、由调度器领取
 ACTIVE_TASK_STATUSES = ("queued", "running")
+# 未结束：活动 + 待审核（paused 不占资源键与并发名额、不被调度，也不会被裁剪或删除）
+OPEN_TASK_STATUSES = (*ACTIVE_TASK_STATUSES, "paused")
 FINISHED_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
 # 结构化设定
 LIFE_STATUSES = ("alive", "dead", "missing", "other")
@@ -556,8 +560,10 @@ class Task(TimestampMixin, Base):
     progress: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     stage: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
     error: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
-    # 多步任务断点（当前单步类型不用）
+    # 多步任务断点：下一步的下标（如批量生成中下一章在 chapter_ids 中的位置）；单步类型恒为 0
     step_cursor: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # 多步任务的结构化断点（批量生成的阶段 / 当前章 / 每章结果）；重试与继续时连同 step_cursor 一起保留
+    checkpoint: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     retry_of_id: Mapped[int | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="SET NULL"), index=True, nullable=True
     )

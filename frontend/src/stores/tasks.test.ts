@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Task } from '../api/types'
-import { countFinished, POLL_ACTIVE_MS, POLL_IDLE_MS, pollInterval, upsertActive } from './tasks'
+import { countFinished, countRunning, POLL_ACTIVE_MS, POLL_IDLE_MS, pollInterval, upsertActive } from './tasks'
 
 function task(id: number, status: Task['status'] = 'running'): Task {
   return {
@@ -17,6 +17,8 @@ function task(id: number, status: Task['status'] = 'running'): Task {
     character_id: null,
     outline_id: null,
     analysis_id: null,
+    checkpoint: null,
+    step_cursor: 0,
     queue_position: null,
     created_at: '2026-10-23T08:00:00',
     started_at: null,
@@ -46,5 +48,15 @@ describe('tasks store 纯函数', () => {
   it('countFinished：上一轮存在、本轮消失的任务数', () => {
     expect(countFinished([task(1), task(2)], [task(2), task(3)])).toBe(1)
     expect(countFinished([], [task(1)])).toBe(0)
+  })
+
+  it('待审核：留在未结束列表，不计入快速轮询；从活动转为待审核算一次变化', () => {
+    const list = upsertActive([task(1)], task(2, 'paused'))
+    expect(list.map((t) => t.id)).toEqual([2, 1])
+    expect(countRunning(list)).toBe(1)
+    expect(countRunning([task(2, 'paused')])).toBe(0)
+    expect(countFinished([task(1)], [task(1, 'paused')])).toBe(1)
+    expect(countFinished([task(1, 'paused')], [task(1, 'paused')])).toBe(0)
+    expect(countFinished([task(1, 'paused')], [task(1, 'queued')])).toBe(0)
   })
 })

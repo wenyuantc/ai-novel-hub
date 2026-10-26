@@ -3,6 +3,8 @@
 import { ApiError, api, request, type QueryValue } from './client'
 import { getSSE, isAbortError, readDetail, readText, StreamError } from './sse'
 import type {
+  BatchChapterEnd,
+  BatchChapterStart,
   ContinueEvent,
   Task,
   TaskClearResult,
@@ -20,14 +22,24 @@ export const taskApi = {
   output: (id: number) => api.get<TaskOutput>(`/tasks/${id}/output`),
   cancel: (id: number) => api.post<Task>(`/tasks/${id}/cancel`),
   retry: (id: number) => api.post<Task>(`/tasks/${id}/retry`),
+  /** 待审核 → 排队（同一任务从断点继续，202） */
+  resume: (id: number) => api.post<Task>(`/tasks/${id}/resume`),
+  /** 待审核 → 已完成（result.ended_early = true） */
+  finish: (id: number) => api.post<Task>(`/tasks/${id}/finish`),
   remove: (id: number) => api.del(`/tasks/${id}`),
   /** 清理已结束任务（DELETE 带查询参数，api.del 不支持 query） */
   clearFinished: (projectId?: number) =>
     request<TaskClearResult>('/tasks', { method: 'DELETE', query: { finished: true, project_id: projectId } }),
 }
 
+/** 活动 = 排队 + 运行中（被调度、占并发名额、可实时订阅） */
 export function isActiveTask(status: TaskStatus): boolean {
   return status === 'queued' || status === 'running'
+}
+
+/** 未结束 = 活动 + 待审核（任务面板「进行中」、批量唯一性；与后端 OPEN_TASK_STATUSES 一致） */
+export function isOpenTask(status: TaskStatus): boolean {
+  return isActiveTask(status) || status === 'paused'
 }
 
 /** 会改写章节正文、创建即抢占 generating 的任务（章节编辑器按同一方式接上并只读） */
@@ -45,6 +57,7 @@ export function canRetryTask(status: TaskStatus): boolean {
 export const TASK_STATUS: Record<TaskStatus, { label: string; color: string }> = {
   queued: { label: '排队中', color: 'default' },
   running: { label: '运行中', color: 'processing' },
+  paused: { label: '待审核', color: 'gold' },
   succeeded: { label: '已完成', color: 'success' },
   failed: { label: '失败', color: 'error' },
   cancelled: { label: '已取消', color: 'warning' },
@@ -66,6 +79,7 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'chapter.revise': '按建议重写',
   'outline.continue': 'AI 续写大纲',
   'outline.expand': 'AI 展开细纲',
+  'chapter.batch': '批量生成',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -80,7 +94,7 @@ export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
 
 /**
  * 任务面板「跳转」目标：章节任务 → 章节编辑器（分析 / 按建议重写 → 编辑器并打开分析面板）；向导任务 → 向导页对应步骤；
- * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页；大纲续写 / 展开 → 大纲页。无法定位时为 null。
+ * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页；大纲续写 / 展开 → 大纲页；批量生成 → 章节页。无法定位时为 null。
  */
 export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>): string | null {
   if (task.project_id === null) return null
@@ -102,6 +116,8 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>)
     case 'outline.continue':
     case 'outline.expand':
       return `${base}/outlines`
+    case 'chapter.batch':
+      return `${base}/chapters`
     default:
       return `${base}/wizard?kind=${task.kind.slice('wizard.'.length)}`
   }
@@ -133,9 +149,27 @@ function isProgress(data: unknown): data is TaskProgress {
   return isRecord(data) && typeof data.status === 'string' && typeof data.progress === 'number'
 }
 
-/** 订阅终止结果：成功带 result（章节 {chapter, warning?}；向导 {kind, items}），否则带中文 detail */
+export function isBatchChapterStart(data: unknown): data is BatchChapterStart {
+  return isRecord(data) && typeof data.index === 'number' && typeof data.chapter_id === 'number'
+}
+
+export function isBatchChapterEnd(data: unknown): data is BatchChapterEnd {
+  return (
+    isRecord(data) &&
+    typeof data.index === 'number' &&
+    isRecord(data.item) &&
+    typeof data.item.chapter_id === 'number' &&
+    typeof data.item.state === 'string'
+  )
+}
+
+/**
+ * 订阅终止结果：成功带 result（章节 {chapter, warning?}；向导 {kind, items}）；待审核（多步任务到达审核点）带 paused 载荷；
+ * 否则带中文 detail
+ */
 export type TaskEnd =
   | { status: 'succeeded'; task: Task | null; result: unknown }
+  | { status: 'paused'; task: Task | null; result: unknown }
   | { status: 'failed' | 'cancelled' | 'interrupted'; task: Task | null; detail: string }
 
 export interface TaskStreamHandlers {
@@ -144,6 +178,13 @@ export interface TaskStreamHandlers {
   onDelta?: (text: string) => void
   onContinue?: (e: ContinueEvent) => void
   onProgress?: (p: TaskProgress) => void
+  /** 多步任务开始新的一步：清空本地已累积文本 */
+  onReset?: () => void
+  /** 阶段文案（引擎目前经 progress 推送；直接收到 stage 事件时也处理） */
+  onStage?: (stage: string) => void
+  /** 批量生成：某章开始 / 结束 */
+  onChapterStart?: (e: BatchChapterStart) => void
+  onChapterEnd?: (e: BatchChapterEnd) => void
   /** 连接断开、即将第 attempt 次重连 */
   onReconnect?: (attempt: number, delayMs: number) => void
 }
@@ -190,7 +231,7 @@ function isRetryable(err: unknown): boolean {
 }
 
 /**
- * 订阅任务直到结束（done / error）。断线按指数退避自动重连，重连后的 snapshot 覆盖本地文本。
+ * 订阅任务直到结束（done / error）或待审核（paused）。断线按指数退避自动重连，重连后的 snapshot 覆盖本地文本。
  * 中止（signal）抛 AbortError，只断开订阅，不影响任务；4xx 抛 ApiError；重连耗尽抛最后一次错误。
  */
 export async function subscribeTask(
@@ -239,6 +280,21 @@ export async function subscribeTask(
                 break
               case 'progress':
                 if (isProgress(data)) handlers.onProgress?.(data)
+                break
+              case 'reset':
+                handlers.onReset?.()
+                break
+              case 'stage':
+                if (isRecord(data) && typeof data.stage === 'string') handlers.onStage?.(data.stage)
+                break
+              case 'chapter_start':
+                if (isBatchChapterStart(data)) handlers.onChapterStart?.(data)
+                break
+              case 'chapter_end':
+                if (isBatchChapterEnd(data)) handlers.onChapterEnd?.(data)
+                break
+              case 'paused':
+                holder.end = { status: 'paused', task: readTask(data), result: isRecord(data) ? data.result : null }
                 break
               case 'done':
                 holder.end = { status: 'succeeded', task: readTask(data), result: isRecord(data) ? data.result : null }

@@ -10,7 +10,7 @@ interface Props {
 }
 
 /**
- * 任务面板「查看结果」：订阅已结束任务（快照 + done.result），按 kind 渲染注册表中的结果组件（可编辑预览 + 保存）。
+ * 任务面板「查看结果」：订阅已结束 / 待审核任务（快照 + done / paused 的 result），按 kind 渲染注册表中的结果组件（可编辑预览 + 保存）。
  * 关闭页面后再从任务面板打开，得到的是同一份预览。
  */
 export default function TaskResultModal({ task, onClose }: Props) {
@@ -24,7 +24,7 @@ export default function TaskResultModal({ task, onClose }: Props) {
     let alive = true
     void follow(task).then((outcome) => {
       if (!alive) return
-      if (outcome.status === 'succeeded') setResult(outcome.result)
+      if (outcome.status === 'succeeded' || outcome.status === 'paused') setResult(outcome.result)
       else if (outcome.status === 'lost') setDetail(outcome.message)
       else if (outcome.status !== 'detached') setDetail(outcome.detail || '任务未成功完成')
     })
@@ -51,7 +51,7 @@ export default function TaskResultModal({ task, onClose }: Props) {
             </div>
           }
         >
-          <Viewer projectId={task.project_id} result={result} />
+          <Viewer projectId={task.project_id} result={result} task={stream.task ?? task} />
         </Suspense>
       )}
     </Modal>
