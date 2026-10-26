@@ -1,4 +1,11 @@
-from app.services.context_builder import CastSection, ForeshadowSection, PriorChapter, assemble_context
+from app.models import Chapter
+from app.services.context_builder import (
+    CastSection,
+    ForeshadowSection,
+    PriorChapter,
+    assemble_context,
+    chapter_task,
+)
 from tests.helpers import create_ai_config, create_project, register, run_task
 
 
@@ -194,3 +201,34 @@ async def test_generate_prompt_has_foreshadow_reminders(app, client, fake_llm):
     ]
     for item in (hidden, done, gone):
         assert item["title"] not in prompt
+
+
+async def test_chapter_task_prefers_plan(app, client):
+    """本章任务：有细纲时用细纲（梗概为空退回大纲梗概），没有细纲用大纲，都没有为空。"""
+    await register(client)
+    p = await create_project(client)
+    base = f"/api/v1/projects/{p['id']}"
+    o = (await client.post(f"{base}/outlines", json={"title": "大纲标题", "summary": "大纲梗概"})).json()
+    await client.put(
+        f"{base}/outlines/{o['id']}/plans",
+        json={"plans": [{"title": "细一", "key_events": ["甲"], "goal": "目标", "est_words": 5000}, {"title": "细二"}]},
+    )
+    built = (await client.post(f"{base}/outlines/{o['id']}/plans/build")).json()
+    plain = (await client.post(f"{base}/chapters", json={"title": "散章"})).json()
+    linked = (await client.post(f"{base}/chapters", json={"outline_id": o["id"]})).json()
+    async with app.state.sessionmaker() as db:
+        first = await db.get(Chapter, built["chapters"][0]["id"])
+        task = await chapter_task(db, first)
+        assert (task.source, task.title, task.summary, task.key_events, task.goal, task.est_words) == (
+            "plan",
+            "细一",
+            "大纲梗概",
+            ["甲"],
+            "目标",
+            5000,
+        )
+        assert task.match_text() == "大纲梗概\n甲"
+        task = await chapter_task(db, await db.get(Chapter, linked["id"]))
+        assert (task.source, task.title, task.summary, task.key_events) == ("outline", "大纲标题", "大纲梗概", [])
+        task = await chapter_task(db, await db.get(Chapter, plain["id"]))
+        assert (task.source, task.summary) == ("", "")

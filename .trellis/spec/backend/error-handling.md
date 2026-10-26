@@ -180,7 +180,8 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   `POST /api/v1/projects/{id}/wizard/{outline|characters|world|careers}` 都**返回 202 `TaskOut`**（普通 JSON），
   实际执行在进程内任务引擎（`app/services/task_engine/`）中进行；设定类任务 `POST /projects/{id}/characters/generate`、
   `/organizations/generate`、`/characters/{cid}/parse-relations`、`/careers/generate`（`character.generate` / `organization.generate` / `relations.parse` / `career.generate`，
-  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；章节分析 `POST /chapters/{cid}/analyze`（`chapter.analyze`，同章已有排队中的分析时
+  只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；大纲续写 / 展开 `POST /projects/{pid}/outlines/continue`、
+  `/outlines/{oid}/expand`（`outline.continue` / `outline.expand`，只产出草稿，见 [outline.md](./outline.md)）同样返回 202；章节分析 `POST /chapters/{cid}/analyze`（`chapter.analyze`，同章已有排队中的分析时
   返回那条任务、状态码 200）、按建议重写 `POST /chapters/{cid}/revise`（`chapter.revise`）也走任务，见 story-entities.md「章节分析与回写」；实时输出通过
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
 - **同步 SSE**：只剩 `POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎）。

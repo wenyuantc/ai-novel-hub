@@ -64,6 +64,8 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'wizard.careers': '职业体系向导',
   'chapter.analyze': '章节分析',
   'chapter.revise': '按建议重写',
+  'outline.continue': 'AI 续写大纲',
+  'outline.expand': 'AI 展开细纲',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -78,7 +80,7 @@ export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
 
 /**
  * 任务面板「跳转」目标：章节任务 → 章节编辑器（分析 / 按建议重写 → 编辑器并打开分析面板）；向导任务 → 向导页对应步骤；
- * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页。无法定位时为 null。
+ * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页；大纲续写 / 展开 → 大纲页。无法定位时为 null。
  */
 export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>): string | null {
   if (task.project_id === null) return null
@@ -97,6 +99,9 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>)
       return `${base}/organizations`
     case 'career.generate':
       return `${base}/careers`
+    case 'outline.continue':
+    case 'outline.expand':
+      return `${base}/outlines`
     default:
       return `${base}/wizard?kind=${task.kind.slice('wizard.'.length)}`
   }

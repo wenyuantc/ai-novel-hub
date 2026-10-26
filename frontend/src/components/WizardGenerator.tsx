@@ -1,9 +1,9 @@
-import { Alert, App, Button, Col, Form, Input, InputNumber, Progress, Row, Space, Typography } from 'antd'
+import { Alert, App, Button, Col, Form, Input, InputNumber, Progress, Radio, Row, Space, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../api/client'
 import { queueLabel, taskApi, wizardTaskKind } from '../api/tasks'
-import type { Task, WizardItemMap, WizardKind, WizardRequest } from '../api/types'
-import { parseWizardDone, parseWizardWarnings, runWizard, WIZARD_KIND_LABELS } from '../api/wizard'
+import type { OutlineMode, Task, WizardItemMap, WizardKind, WizardRequest } from '../api/types'
+import { parseWizardDone, parseWizardMode, parseWizardWarnings, runWizard, WIZARD_KIND_LABELS } from '../api/wizard'
 import { useHasAIConfig } from '../hooks/useHasAIConfig'
 import { useTaskStream } from '../hooks/useTaskStream'
 import { useTasksStore } from '../stores/tasks'
@@ -50,6 +50,8 @@ export default function WizardGenerator<K extends WizardKind>({
   const [form] = Form.useForm<FormValues>()
   const [warnings, setWarnings] = useState<string[]>([])
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
+  // 仅大纲：已有大纲时可选覆盖（先自动存快照）或追加到末尾
+  const [outlineMode, setOutlineMode] = useState<OutlineMode>('replace')
   const [result, setResult] = useState<WizardItemMap[K][] | null>(null)
   const task = useTaskStream()
   const [starting, setStarting] = useState(false)
@@ -74,7 +76,11 @@ export default function WizardGenerator<K extends WizardKind>({
       const warns = parseWizardWarnings(outcome.result)
       setResult(items)
       setWarnings(warns)
-      message.success(`${label}生成完成，共 ${items.length} 条`)
+      message.success(
+        kind === 'outline' && parseWizardMode(outcome.result) === 'append'
+          ? `大纲已追加 ${items.length} 条`
+          : `${label}生成完成，共 ${items.length} 条`,
+      )
       // 弹窗模式（showResult=false）完成即关闭，警告用对话框展示，避免丢失
       if (warns.length > 0 && !showResult) {
         modal.warning({
@@ -128,6 +134,7 @@ export default function WizardGenerator<K extends WizardKind>({
     if (kind === 'outline') {
       body.volume_count = values.volume_count
       body.chapters_per_volume = values.chapters_per_volume
+      body.outline_mode = existingCount > 0 ? outlineMode : 'replace'
     } else if (kind === 'characters') {
       body.character_count = values.character_count
     } else if (kind === 'careers') {
@@ -159,7 +166,36 @@ export default function WizardGenerator<K extends WizardKind>({
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      {existingCount > 0 && (
+      {kind === 'outline' && existingCount > 0 && (
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Radio.Group
+            value={outlineMode}
+            disabled={running}
+            onChange={(e) => setOutlineMode(e.target.value as OutlineMode)}
+            optionType="button"
+            buttonStyle="solid"
+            options={[
+              { value: 'replace', label: '覆盖现有大纲' },
+              { value: 'append', label: '追加到末尾' },
+            ]}
+          />
+          <Alert
+            type="info"
+            showIcon
+            message={
+              outlineMode === 'append'
+                ? `当前已有 ${existingCount} 条大纲，新大纲将接在末尾（从下一卷、下一章继续），原有大纲保留。`
+                : `当前已有 ${existingCount} 条大纲，生成成功后将整体替换为新结果。`
+            }
+            description={
+              outlineMode === 'append'
+                ? undefined
+                : '覆盖前会自动保存大纲快照，可在大纲页「快照」中恢复；已写的章节不会删除，只解除与大纲的关联。'
+            }
+          />
+        </Space>
+      )}
+      {kind !== 'outline' && existingCount > 0 && (
         <Alert
           type="info"
           showIcon

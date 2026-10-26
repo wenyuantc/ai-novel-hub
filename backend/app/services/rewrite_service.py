@@ -22,7 +22,7 @@ from app.models import Chapter, GenerationLog
 from app.schemas.chapter_version import RewriteApply, RewriteRequest
 from app.services import ai_config_service, generation_log_service, version_service
 from app.services.chapter_service import commit_versioned, count_words, get_owned_chapter, get_project_chapter
-from app.services.context_builder import find_chapter_outline
+from app.services.context_builder import chapter_task
 from app.services.generation_service import Event, elapsed_ms, stream_pieces
 from app.services.project_service import get_owned_project
 
@@ -88,7 +88,7 @@ async def prepare_rewrite_job(
 
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    outline = await find_chapter_outline(db, chapter)
+    task = await chapter_task(db, chapter)
     original = content[start:end]
     if req.op == "continue":
         before, after = content[max(0, start - CONTINUE_BEFORE_CHARS) : start], ""
@@ -100,7 +100,7 @@ async def prepare_rewrite_job(
         before=before,
         after=after,
         style=project.style,
-        summary=outline.summary if outline else "",
+        summary=task.summary,
         instruction=req.instruction,
     )
     return RewriteJob(
@@ -164,14 +164,17 @@ async def run_rewrite_job(job: RewriteJob, sessionmaker: async_sessionmaker[Asyn
             raise AIProviderError("模型未返回任何内容")
         log_id = await generation_log_service.save_log(sessionmaker, **log_kwargs("success", "", text))
         finished = True
-        yield "done", {
-            "text": text,
-            "start": job.start,
-            "end": job.end,
-            "original": job.original,
-            "before": job.before,
-            "log_id": log_id,
-        }
+        yield (
+            "done",
+            {
+                "text": text,
+                "start": job.start,
+                "end": job.end,
+                "original": job.original,
+                "before": job.before,
+                "log_id": log_id,
+            },
+        )
     except AIProviderError as exc:
         fail_status, fail_error = "error", str(exc)
         yield "error", {"detail": fail_error}

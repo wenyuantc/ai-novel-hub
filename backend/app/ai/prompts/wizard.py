@@ -21,15 +21,34 @@ def build_outline_messages(
     world_text: str = "",
     characters_text: str = "",
     instruction: str = "",
+    existing_text: str = "",
+    start_volume_no: int = 1,
+    start_chapter_no: int = 1,
 ) -> list[ChatMessage]:
+    """existing_text 非空 = 追加模式：接在已有大纲之后，从第 start_volume_no 卷、第 start_chapter_no 章开始写。"""
+    if existing_text.strip():
+        head = "请在已有大纲之后继续设计新的分卷分章大纲。\n\n"
+        rule = (
+            f"1. 新写 {volume_count} 卷，每卷约 {chapters_per_volume} 章；从第 {start_volume_no} 卷、"
+            f"第 {start_chapter_no} 章开始，卷号与章节号 chapter_no 接着已有大纲连续递增；"
+            "情节紧接已有大纲的结尾，不要重复已有内容。\n"
+        )
+        existing = f"\n\n【已有大纲（末尾部分）】\n{existing_text.strip()}"
+    else:
+        head = "请为以下小说设计分卷分章大纲。\n\n"
+        rule = (
+            f"1. 共 {volume_count} 卷，每卷约 {chapters_per_volume} 章；"
+            "章节号 chapter_no 在全书范围内从 1 开始连续递增。\n"
+        )
+        existing = ""
     user = (
-        "请为以下小说设计分卷分章大纲。\n\n"
-        f"{format_project_info(info)}"
+        head + f"{format_project_info(info)}"
         f"{_reference_block('世界观', world_text)}"
         f"{_reference_block('角色', characters_text)}"
+        f"{existing}"
         f"{_instruction_block(instruction)}\n\n"
         "【要求】\n"
-        f"1. 共 {volume_count} 卷，每卷约 {chapters_per_volume} 章；章节号 chapter_no 在全书范围内从 1 开始连续递增。\n"
+        f"{rule}"
         "2. 每卷有卷名；每章有简短章节标题（不要带“第X章”前缀）和 50~150 字的情节梗概，体现冲突、转折与伏笔。\n"
         "3. 整体节奏张弛有度，主线清晰，卷末设置高潮或悬念。\n"
         f"4. {JSON_ONLY_RULE}\n\n"

@@ -257,3 +257,43 @@ async def test_wizard_world_categories(client, fake_llm):
     places = (await client.get(f"{base}/world", params={"category": "place"})).json()
     assert [w["title"] for w in places] == ["青云山"]
     assert (await client.get(f"{base}/world", params={"category": "bad"})).status_code == 422
+
+
+async def test_wizard_outline_append_mode(client, fake_llm):
+    """追加模式：原有大纲保留，新大纲接在末尾（卷号接最后一卷、章节号接全书最后一章），不存快照。"""
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    fake_llm.push(json.dumps(OUTLINE_JSON, ensure_ascii=False))
+    await run_task(client, await client.post(f"{base}/wizard/outline"))
+    old = (await client.get(f"{base}/outlines")).json()
+
+    fake_llm.push(json.dumps(OUTLINE_JSON, ensure_ascii=False))
+    _, events = await run_task(
+        client, await client.post(f"{base}/wizard/outline", json={"outline_mode": "append", "volume_count": 2})
+    )
+    result = events[-1][1]["result"]
+    assert result["mode"] == "append"
+    assert [(i["volume_no"], i["chapter_no"], i["title"]) for i in result["items"]] == [
+        (3, 4, "出发"),
+        (3, 5, "异象"),
+        (4, 6, "接触"),
+    ]
+    prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "【已有大纲（末尾部分）】" in prompt and "第 3 卷、第 4 章开始" in prompt and "第3章 接触" in prompt
+    outlines = (await client.get(f"{base}/outlines")).json()
+    assert [o["id"] for o in outlines[:3]] == [o["id"] for o in old] and len(outlines) == 6
+    assert (await client.get(f"{base}/outline-snapshots")).json() == []
+
+
+async def test_wizard_outline_replace_saves_snapshot(client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    fake_llm.push(json.dumps(OUTLINE_JSON, ensure_ascii=False))
+    _, events = await run_task(client, await client.post(f"{base}/wizard/outline"))
+    assert events[-1][1]["result"]["mode"] == "replace"
+    # 首次生成（没有旧大纲）：提示词不含已有大纲，也不存快照
+    assert "已有大纲" not in fake_llm.calls[-1]["messages"][-1]["content"]
+    fake_llm.push('[{"title": "唯一一章"}]')
+    await run_task(client, await client.post(f"{base}/wizard/outline", json={"outline_mode": "replace"}))
+    snaps = (await client.get(f"{base}/outline-snapshots")).json()
+    assert [(s["reason"], s["outline_count"]) for s in snaps] == [("wizard_replace", 3)]

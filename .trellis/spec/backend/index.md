@@ -24,6 +24,7 @@
 | [错误处理](./error-handling.md) | `AppError` 层级、`{"detail": ...}` 响应包、安全的 422/500 处理器、SSE 流式契约场景 | 已填写 |
 | [质量规范](./quality-guidelines.md) | ruff + pytest、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
 | [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v1 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
+| [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码 | 已填写 |
 | [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
 
@@ -36,6 +37,7 @@
 | 认证与密钥环境（cookie、JWT、Fernet、密钥掩码） | [quality-guidelines.md](./quality-guidelines.md#场景认证与密钥环境契约) |
 | 人物关系写入（`apply_change`、视角称呼、历史） | [story-entities.md](./story-entities.md#场景人物关系写入relationship_serviceapply_change) |
 | 章节上下文组装（选角 D4、裁剪顺序） | [story-entities.md](./story-entities.md#场景章节上下文组装选角与裁剪d4) |
+| 章节号平移（`CHAPTER_NO_REFS`）、细纲建章、快照恢复 | [outline.md](./outline.md) |
 | 管理员角色、用户管理、token 版本控制（`ver`、防护规则） | [auth-admin.md](./auth-admin.md#场景管理员角色用户管理与-token-版本控制) |
 
 ---

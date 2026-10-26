@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.prompts import ProjectInfo
 from app.core.errors import NotFoundError
 from app.models import Chapter, Project
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate
+from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgress, WizardProgressUpdate
 
 
 async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
@@ -90,3 +90,32 @@ async def delete_project(db: AsyncSession, user_id: int, project_id: int) -> Non
     project = await get_owned_project(db, user_id, project_id)
     await db.delete(project)
     await db.commit()
+
+
+def _clean_steps(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for v in values:
+        v = v.strip()[:32]
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+async def update_wizard_progress(
+    db: AsyncSession, user_id: int, project_id: int, data: WizardProgressUpdate
+) -> Project:
+    """给出的字段整体替换，未给的保持不变；current 显式 null 清空。"""
+    project = await get_owned_project(db, user_id, project_id)
+    current = WizardProgress.model_validate(project.wizard_progress or {})
+    fields = data.model_fields_set
+    if data.done is not None:
+        current.done = _clean_steps(data.done)
+    if data.skipped is not None:
+        current.skipped = _clean_steps(data.skipped)
+    if "current" in fields:
+        current.current = (data.current or "").strip() or None
+    # JSON 列需整体赋新值才会被识别为已修改
+    project.wizard_progress = current.model_dump()
+    await db.commit()
+    await db.refresh(project)
+    return project

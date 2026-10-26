@@ -12,6 +12,7 @@ from app.api.v1 import (
     character_actions,
     foreshadows,
     organizations,
+    outline_pro,
     projects,
     relationships,
     story,
@@ -26,6 +27,8 @@ api_router.include_router(ai_configs.router)
 api_router.include_router(projects.router)
 # 固定路径（with-relations / generate）先于通用 CRUD 的 /{item_id} 注册
 api_router.include_router(character_actions.router)
+# 大纲进阶的固定路径（/outlines/tree、/outlines/export ...）先于 /outlines/{item_id}
+api_router.include_router(outline_pro.router)
 api_router.include_router(story.world_router)
 api_router.include_router(story.characters_router)
 api_router.include_router(story.outlines_router)

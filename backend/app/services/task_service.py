@@ -57,6 +57,7 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
         "queue_position": queue_position if task.status == "queued" else None,
         "character_id": _subject_character_id(task),
         "analysis_id": _revise_analysis_id(task),
+        "outline_id": _request_int(task, "outline_id") if task.kind == "outline.expand" else None,
     }
     hub = engine.hubs.get(task.id) if engine is not None else None
     if hub is not None and task.status in ACTIVE_TASK_STATUSES:

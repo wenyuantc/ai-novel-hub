@@ -49,6 +49,8 @@ TASK_KINDS = (
     "wizard.careers",
     "chapter.analyze",
     "chapter.revise",
+    "outline.continue",
+    "outline.expand",
 )
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running")
@@ -81,6 +83,8 @@ ANALYSIS_CHANGE_STATUSES = ("applied", "pending", "reverted", "rejected", "skipp
 # 伏笔：待埋 / 已埋 / 已回收 / 部分回收 / 已废弃；来源：手动 / 章节分析确认创建（foreshadows）
 FORESHADOW_STATUSES = ("pending", "planted", "resolved", "partial", "abandoned")
 FORESHADOW_SOURCES = ("manual", "analysis")
+# 大纲快照原因：向导覆盖 / 导入替换 / 重新展开 / 手动保存 / 恢复前（outline-pro）
+OUTLINE_SNAPSHOT_REASONS = ("wizard_replace", "import_replace", "reexpand", "manual", "restore")
 # 全局预置关系类型 (category, role_a, role_b)：「a 是 b 的 role_a，b 是 a 的 role_b」。
 # 迁移 0007 内有同样的一份（迁移脚本冻结，不引用应用代码）；create_all 时由 after_create 事件写入
 PRESET_RELATIONSHIP_TYPES = (
@@ -153,6 +157,8 @@ class Project(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default="planning", nullable=False)
     # AI 整章生成 / 润色 / 按建议重写成功后自动排队分析本章
     auto_analyze: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    # 向导进度 {done: [步骤], skipped: [步骤], current: 步骤 | null}；重新进入向导时从中断处继续
+    wizard_progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
 
 
 class WorldSetting(TimestampMixin, Base):
@@ -416,6 +422,49 @@ class Chapter(TimestampMixin, Base):
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 对应的细纲；与 chapter_plans.chapter_id 双向冗余，由 plan_service 维护一致。
+    # use_alter：chapters 与 chapter_plans 互相引用，建表后再加外键
+    plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chapter_plans.id", ondelete="SET NULL", use_alter=True), index=True, nullable=True
+    )
+
+
+class ChapterPlan(TimestampMixin, Base):
+    """细纲：一条大纲展开成的多章规划（seq 从 1 开始）。已建章时 chapter_id 有值。
+
+    只经 plan_service 写入；chapter_id 与 chapters.plan_id 双向一致。大纲删除时细纲级联删除，章节保留（plan_id 置空）。
+    """
+
+    __tablename__ = "chapter_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    outline_id: Mapped[int] = mapped_column(ForeignKey("outlines.id", ondelete="CASCADE"), index=True, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    key_events: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    # 出场角色 id；读取时过滤已删除的角色，导出时转为名字
+    character_ids: Mapped[list[int]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    emotion: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
+    goal: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    est_words: Mapped[int] = mapped_column(Integer, default=3000, server_default="3000", nullable=False)
+    chapter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chapters.id", ondelete="SET NULL"), unique=True, nullable=True
+    )
+
+
+class OutlineSnapshot(TimestampMixin, Base):
+    """大纲快照：data = {outlines, plans, links}（原始 id）。每个项目保留最近 20 个。"""
+
+    __tablename__ = "outline_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    # wizard_replace / import_replace / reexpand / manual / restore
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class GenerationLog(TimestampMixin, Base):

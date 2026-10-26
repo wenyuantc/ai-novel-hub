@@ -10,6 +10,8 @@ export const TASK_RESULT_VIEWERS: Partial<Record<TaskKind, ComponentType<TaskRes
   'organization.generate': lazy(() => import('./OrganizationDraftResult')),
   'relations.parse': lazy(() => import('./RelationsParseResultView')),
   'career.generate': lazy(() => import('../careers/CareerDraftResult')),
+  'outline.continue': lazy(() => import('../outlines/ContinueDraftResult')),
+  'outline.expand': lazy(() => import('../outlines/ExpandDraftResult')),
 }
 
 export function hasResultViewer(kind: TaskKind): boolean {

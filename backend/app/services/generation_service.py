@@ -37,7 +37,7 @@ from app.models import Chapter, ChapterAnalysis
 from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
 from app.services import ai_config_service, generation_log_service, version_service
 from app.services.chapter_service import count_words, get_owned_chapter
-from app.services.context_builder import build_chapter_context, find_chapter_outline
+from app.services.context_builder import build_chapter_context, chapter_task
 from app.services.project_service import get_owned_project
 
 logger = logging.getLogger(__name__)
@@ -203,7 +203,7 @@ async def build_chapter_job(
 
     if mode == "generate":
         assert isinstance(req, GenerateChapterRequest)
-        outline = await find_chapter_outline(db, chapter)
+        task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
         context = await build_chapter_context(db, project, chapter, budget)
         params: dict[str, Any] = {
@@ -214,16 +214,19 @@ async def build_chapter_job(
         messages = build_chapter_messages(
             context=context,
             chapter_no=chapter.chapter_no,
-            title=chapter.title or (outline.title if outline else ""),
-            summary=outline.summary if outline else "",
+            title=chapter.title or task.title,
+            summary=task.summary,
             target_words=req.target_words,
             style=project.style,
             instruction=req.instruction,
+            key_events=task.key_events,
+            goal=task.goal,
+            emotion=task.emotion,
         )
     elif mode == "revise":
         assert isinstance(req, ReviseChapterRequest)
         suggestions = await resolve_revision(db, chapter, req)
-        outline = await find_chapter_outline(db, chapter)
+        task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
         context = await build_chapter_context(db, project, chapter, budget)
         target_words = req.target_words or max(chapter.word_count, 300)
@@ -237,7 +240,7 @@ async def build_chapter_job(
         messages = build_revise_messages(
             context=context,
             chapter_no=chapter.chapter_no,
-            title=chapter.title or (outline.title if outline else ""),
+            title=chapter.title or task.title,
             content=chapter.content,
             suggestions=suggestions,
             target_words=target_words,

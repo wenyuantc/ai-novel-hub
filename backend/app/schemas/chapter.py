@@ -33,6 +33,8 @@ class ChapterBrief(BaseModel):
     id: int
     project_id: int
     outline_id: int | None
+    # 对应的细纲（outline-pro）；未按细纲建章时为空
+    plan_id: int | None = None
     chapter_no: int
     title: str
     status: ChapterStatus
@@ -60,7 +62,8 @@ class PolishChapterRequest(BaseModel):
 class WizardRequest(BaseModel):
     ai_config_id: int | None = None
     instruction: str = Field(default="", max_length=2000)
-    # 仅 outline 使用
+    # 仅 outline 使用：replace = 覆盖（覆盖前自动存快照）；append = 追加到末尾（从下一卷、下一章接着写）
+    outline_mode: Literal["replace", "append"] = "replace"
     volume_count: int = Field(default=2, ge=1, le=20)
     chapters_per_volume: int = Field(default=10, ge=1, le=100)
     # 仅 characters 使用

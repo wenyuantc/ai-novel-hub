@@ -4,8 +4,10 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { chapterApi } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
 import { careerApi } from '../../api/careers'
+import { projectApi } from '../../api/projects'
 import { characterApi, outlineApi, worldApi } from '../../api/story'
-import type { WizardKind } from '../../api/types'
+import type { WizardKind, WizardProgressUpdate } from '../../api/types'
+import { markWizardStep, resumeWizardStep, WIZARD_FINISH_STEP } from '../../api/wizard'
 import WizardGenerator from '../../components/WizardGenerator'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectStore } from '../../stores/project'
@@ -17,6 +19,12 @@ const STEPS: { kind: WizardKind; title: string; description: string }[] = [
   { kind: 'characters', title: '角色', description: '主要角色卡与人物关系' },
   { kind: 'outline', title: '大纲', description: '分卷分章的故事大纲' },
 ]
+const STEP_KEYS = STEPS.map((s) => s.kind)
+
+/** 步骤下标 → wizard_progress.current（完成页为 finish） */
+function stepKey(step: number): string {
+  return step >= STEPS.length ? WIZARD_FINISH_STEP : STEPS[Math.max(0, step)].kind
+}
 
 interface Counts {
   world: number
@@ -26,17 +34,24 @@ interface Counts {
   chapters: number
 }
 
-/** 创作向导：世界观 → 职业体系（可跳过）→ 角色 → 大纲 → 批量建章。 */
+/**
+ * 创作向导：世界观 → 职业体系（可跳过）→ 角色 → 大纲 → 批量建章。
+ * 进度按项目持久化（wizard_progress）：完成 / 跳过 / 切换步骤时 PATCH，重新进入时从中断处继续。
+ */
 export default function WizardPage() {
   const pid = useProjectId()
   const { message } = App.useApp()
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
+  const project = useProjectStore((s) => s.project)
+  const setProject = useProjectStore((s) => s.setProject)
+  // ProjectLayout 只在项目加载完成后渲染子路由，这里可直接读取进度
+  const progress = project?.id === pid ? project.wizard_progress : null
   const [searchParams] = useSearchParams()
   const location = useLocation()
   // 任务面板「跳转」带 ?kind=world|careers|characters|outline：直接打开对应步骤（生成器挂载后自动接上活动任务）
   const kindStep = STEPS.findIndex((s) => s.kind === searchParams.get('kind'))
-  const [step, setStep] = useState(() => Math.max(0, kindStep))
+  const [step, setStep] = useState(() => (kindStep >= 0 ? kindStep : resumeWizardStep(progress, STEP_KEYS)))
   // 页面已打开时再次跳转（含跳到同一 ?kind=）：每次导航（location.key 变化）都按 kind 切换步骤。
   // 在渲染期调整状态（React 推荐写法），切换后旧生成器卸载只断开订阅，任务在后台继续
   const [syncedKey, setSyncedKey] = useState(location.key)
@@ -46,6 +61,35 @@ export default function WizardPage() {
   }
   const [running, setRunning] = useState(false)
   const [creating, setCreating] = useState(false)
+
+  const saveProgress = async (update: WizardProgressUpdate) => {
+    try {
+      const updated = await projectApi.updateWizardProgress(pid, update)
+      const current = useProjectStore.getState().project
+      if (current?.id === updated.id) setProject({ ...current, wizard_progress: updated.wizard_progress })
+    } catch (err) {
+      message.error(`向导进度保存失败：${errorMessage(err)}`)
+    }
+  }
+
+  /** 读取最新进度（回调可能来自旧闭包，例如生成完成时） */
+  const latestProgress = () => {
+    const p = useProjectStore.getState().project
+    return p?.id === pid ? p.wizard_progress : null
+  }
+
+  /** 切换到某一步（上一步 / 点击步骤条）：只记录当前步骤 */
+  const goTo = (target: number) => {
+    setStep(target)
+    void saveProgress({ current: stepKey(target) })
+  }
+
+  /** 完成（下一步）或跳过当前步骤 */
+  const advance = (action: 'done' | 'skip') => {
+    const kind = STEPS[step].kind
+    setStep(step + 1)
+    void saveProgress(markWizardStep(latestProgress(), kind, action, stepKey(step + 1)))
+  }
 
   const loader = useCallback(async (): Promise<Counts> => {
     const [w, cr, c, o, ch] = await Promise.all([
@@ -80,7 +124,7 @@ export default function WizardPage() {
     <Card title="创作向导">
       <Steps
         current={step}
-        onChange={(s) => !running && setStep(s)}
+        onChange={(s) => !running && goTo(s)}
         style={{ marginBottom: 24 }}
         items={[
           ...STEPS.map((s) => ({ title: s.title, description: s.description, disabled: running })),
@@ -113,7 +157,7 @@ export default function WizardPage() {
                   </Col>
                 </Row>
                 <Space>
-                  <Button onClick={() => setStep(STEPS.length - 1)}>上一步</Button>
+                  <Button onClick={() => goTo(STEPS.length - 1)}>上一步</Button>
                   <Button
                     type="primary"
                     loading={creating}
@@ -143,21 +187,26 @@ export default function WizardPage() {
               existingCount={counts?.[current.kind] ?? 0}
               showResult
               onRunningChange={setRunning}
-              onDone={() => reload()}
+              onDone={() => {
+                reload()
+                // 生成成功即记为完成（不改当前步骤）
+                const { done, skipped } = markWizardStep(latestProgress(), current.kind, 'done', null)
+                void saveProgress({ done, skipped })
+              }}
             />
             <Space>
               {step > 0 && (
-                <Button disabled={running} onClick={() => setStep(step - 1)}>
+                <Button disabled={running} onClick={() => goTo(step - 1)}>
                   上一步
                 </Button>
               )}
-              <Button disabled={running} onClick={() => setStep(step + 1)}>
+              <Button disabled={running} onClick={() => advance('skip')}>
                 跳过
               </Button>
               <Button
                 type="primary"
                 disabled={running || (counts?.[current.kind] ?? 0) === 0}
-                onClick={() => setStep(step + 1)}
+                onClick={() => advance('done')}
               >
                 下一步
               </Button>

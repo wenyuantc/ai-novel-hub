@@ -14,6 +14,7 @@ from app.ai.prompts.entities import (
     build_organization_generate_messages,
     build_relations_parse_messages,
 )
+from app.ai.prompts.outline_pro import build_outline_continue_messages, build_outline_expand_messages
 from app.ai.prompts.rewrite import OP_LABELS, RewriteOp, build_rewrite_messages
 from app.ai.prompts.wizard import (
     build_characters_messages,
@@ -33,6 +34,8 @@ __all__ = [
     "build_characters_messages",
     "build_continuation_messages",
     "build_organization_generate_messages",
+    "build_outline_continue_messages",
+    "build_outline_expand_messages",
     "build_outline_messages",
     "build_polish_messages",
     "build_relations_parse_messages",

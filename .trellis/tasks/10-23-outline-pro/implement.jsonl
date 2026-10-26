@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "上下文组装、实体 AI 草稿任务模式、伏笔与分析的章节号引用"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键 SET NULL/CASCADE、归属 404"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约与中文错误约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "向导、TaskPanel 结果注册表、章节编辑器"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-creation-core.md", "reason": "MuMu 大纲/展开缺陷对照（§3-4）"}

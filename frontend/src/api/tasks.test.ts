@@ -27,6 +27,7 @@ function task(over: Partial<Task> = {}): Task {
     error: '',
     retry_of_id: null,
     character_id: null,
+    outline_id: null,
     analysis_id: null,
     queue_position: null,
     created_at: '2026-10-23T08:00:00',
@@ -237,6 +238,12 @@ describe('task helpers', () => {
     expect(taskLink(task({ chapter_id: null }))).toBeNull()
     expect(taskLink(task({ kind: 'wizard.characters', chapter_id: null }))).toBe('/projects/2/wizard?kind=characters')
     expect(taskLink(task({ project_id: null }))).toBeNull()
+  })
+
+  it('taskLink：大纲续写 / 展开到大纲页', () => {
+    expect(taskLink(task({ kind: 'outline.continue', chapter_id: null }))).toBe('/projects/2/outlines')
+    expect(taskLink(task({ kind: 'outline.expand', chapter_id: null, outline_id: 5 }))).toBe('/projects/2/outlines')
+    expect(TASK_KIND_LABELS['outline.expand']).toBe('AI 展开细纲')
   })
 
   it('taskLink：设定类任务到角色 / 组织页', () => {

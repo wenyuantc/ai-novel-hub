@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -175,6 +175,8 @@ def count_words(text: str) -> int:
 | `career_history.career_name` / `note` / `source` | String(100) / String(200) / String(16) |
 | `foreshadows.title` / `status` / `source` | String(200) / String(16) / String(12)；要点、内容、备注为 Text |
 | `foreshadow_history.note` / `source` | String(200) / String(16) |
+| `chapter_plans.title` / `emotion` | String(200) / String(100)；梗概、叙事目标为 Text；`key_events` / `character_ids` 为 JSON 列表；`chapter_id` 唯一 |
+| `outline_snapshots.reason` / `note` | String(32) / String(200)；`data` 为 JSON |
 | `world_settings.category` / `characters.life_status` / 各 `status` / `category` | String(16) |
 | `chapters.status` | String(16)；`projects.status` / `ai_configs.provider` String(32) |
 | 长文本（`content`、`summary`、`profile`、`premise`、`style`、`api_key_enc`） | Text |
@@ -197,7 +199,7 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
 `entities.py` 中（`CHAPTER_STATUSES = ("draft", "generating", "done")`、
 `AI_PROVIDERS`、`PROJECT_STATUSES`、`LIFE_STATUSES`、`WORLD_CATEGORIES`、`MEMBER_STATUSES`、`RELATION_CATEGORIES`、
 `RELATION_STATUSES`、`RELATION_SOURCES`、`CAREER_KINDS`、`CAREER_SOURCES`、`ANALYSIS_CHANGE_KINDS`（含三个伏笔 kind）、`ANALYSIS_CHANGE_STATUSES`、
-`FORESHADOW_STATUSES`、`FORESHADOW_SOURCES`；`VERSION_SOURCES` / `GENERATION_KINDS` 含 `revise`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
+`FORESHADOW_STATUSES`、`FORESHADOW_SOURCES`、`OUTLINE_SNAPSHOT_REASONS`；`VERSION_SOURCES` / `GENERATION_KINDS` 含 `revise`），schema 中使用 `Literal[...]` 类型。不使用数据库枚举。
 
 ---
 
@@ -223,7 +225,10 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   `server_default=true` 回填，`tasks.serial_key` 可空 + 索引；`test_0009_chapter_analysis` 断言外键规则、回填、删章节级联、
   删任务置空，`downgrade -1` 删除两表两列且存量项目保留）、
   `0010_foreshadows.py`（`down_revision = '0009'`，只新建三张表、不回填；`test_0010_foreshadows` 断言外键规则、复合主键、
-  删角色只解除关联、删伏笔级联历史，`downgrade -1` 删除三张表且存量角色保留）。
+  删角色只解除关联、删伏笔级联历史，`downgrade -1` 删除三张表且存量角色保留）、
+  `0011_outline_pro.py`（`down_revision = '0010'`，新建 `chapter_plans` / `outline_snapshots`，`chapters` 加 `plan_id`（batch 建外键），
+  `projects.wizard_progress` `server_default='{}'` 回填；`test_0011_outline_pro` 断言外键规则、`chapter_plans.chapter_id` 唯一、回填、
+  删大纲级联细纲且章节保留并解除关联，`downgrade -1` 删除两表两列且存量章节保留）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -318,6 +323,11 @@ outline_id: Mapped[int | None] = mapped_column(
 （删角色只删关联行、伏笔保留；删伏笔时关联与历史一并删除）。伏笔的四个章节字段存章节号、**不做外键**（可指向尚未创建的章节）。
 伏笔只能经 `foreshadow_service.apply_foreshadow` 写入（不 commit，写历史）。
 
+`0011`：`chapter_plans.project_id` / `outline_id` 为 CASCADE（删大纲时细纲一并删除）、`chapter_plans.chapter_id` 为 SET NULL（unique）；
+`chapters.plan_id` 为 SET NULL（模型上 `use_alter=True`：两表互相引用，PostgreSQL 建表后再加外键，SQLite 内联）；`outline_snapshots.project_id` 为 CASCADE。
+细纲与章节的双向关联只经 `plan_service` 维护；在已有章节之前插入 / 删除章节必须经 `chapter_numbering.shift_chapter_numbers`
+平移全部章节号引用（登记表见 [outline.md](./outline.md)）。
+
 关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
 `relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
 
@@ -392,7 +402,7 @@ SSE / 订阅契约见 `error-handling.md`「后台任务与 SSE 契约」。
 # backend/app/models/entities.py
 TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world",
               "character.generate", "organization.generate", "relations.parse", "career.generate", "wizard.careers",
-              "chapter.analyze", "chapter.revise")
+              "chapter.analyze", "chapter.revise", "outline.continue", "outline.expand")
 TASK_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running"); FINISHED_TASK_STATUSES = (其余四个)
 
@@ -411,7 +421,7 @@ class Task(TimestampMixin, Base):   # tasks
 - **单进程前提**：调度协程与 hub 都在进程内；`start()` 时把库里所有 `running` 任务视为上次进程遗留并置为
   `interrupted`。部署必须是单进程（`Dockerfile` 中 `uvicorn` 不带 `--workers`）。改为多实例前须把领取改成
   `SELECT ... FOR UPDATE SKIP LOCKED` 并引入心跳 / 租约，否则一个实例重启会把其他实例的运行中任务误判为中断。
-- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`）。插入撞索引 →
+- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`；`outline.continue` 为 `outline:{project_id}`、`outline.expand` 为 `expand:{outline_id}`）。插入撞索引 →
   回滚 → 409。章节类还会先原子抢占 `chapters.status='generating'`（与插入同一事务，失败时一起回滚）。
   新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。`chapter.revise` 与生成 / 润色共用 `chapter:{id}`（互斥）。
 - **串行键** `serial_key`（`TaskSpec.serial_key`）：冲突时**排队等待**而不是拒绝。调度器扫描 queued 时，同键已有运行中（或本轮已登记）的任务
@@ -457,4 +467,6 @@ class Task(TimestampMixin, Base):   # tasks
 - 更新 `content` 时没有重新计算 `word_count`。
 - 直接改 `Foreshadow` 字段而不经 `foreshadow_service.apply_foreshadow`：没有伏笔历史，绕过必填与关联角色校验，分析回写也无法撤销。
 - 章节分析回写绕过 `writeback_service` 直接改角色 / 关系 / 挂接 / 成员：没有回写条目，无法撤销，也不受「更晚章节优先」约束。
+- 新增存章节号的列却没有登记到 `chapter_numbering.CHAPTER_NO_REFS`：建章插入章节后该列不随之平移，先后判断错位（反射测试会失败）。
+- 直接改 `ChapterPlan.chapter_id` / `Chapter.plan_id` 的一侧：双向冗余不一致；只经 `plan_service`。
 - 用 `resource_key` 实现「同类排队串行」：它是冲突即拒绝（409）；需要排队等待用 `serial_key`。

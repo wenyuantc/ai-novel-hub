@@ -92,7 +92,8 @@
 | P0-3b | `career-system` 职业等级体系（用户决定从 story-entities 拆出，紧接着做） | B5 | story-entities |
 | P0-4 | `analysis-memory` 章节分析、摘要、回写设定、按建议重写 | A10、A11、A7（摘要） | chapter-versions、story-entities、career-system、task-engine |
 | P0-4b | `foreshadows` 伏笔管理（用户决定从 analysis-memory 拆出，紧接着做） | B6 | analysis-memory |
-| P0-5 | `outline-pro` 大纲续写、一对多展开、导入导出、增量向导、批量生成 | A1、A2、A4、A5、A6、A8 | task-engine；批量写入依赖 chapter-versions |
+| P0-5 | `outline-pro` 大纲续写、一对多展开、导入导出、快照撤销、向导增量与续跑 | A1、A2、A4、A5、A6 | task-engine、chapter-versions |
+| P0-5b | `batch-generate` 批量顺序生成（用户决定从 outline-pro 拆出，紧接着做） | A8 | outline-pro、analysis-memory |
 | P1-6 | `prompt-styles` 提示词模板、写作风格库、实例内工坊 | C1、C2、A14 | 无（最好在 P0-4、P0-5 之前，新提示词可直接走模板化） |
 | P1-7 | `inspiration` 灵感模式与项目结构化字段 | A3 | 无 |
 | P1-8 | `book-import` 拆书 | C3 | task-engine、story-entities、outline-pro；文件上传复用封面任务的方案 |

@@ -180,6 +180,7 @@ def test_0006_tasks(tmp_path):
     try:
         insp = inspect(engine)
         assert "tasks" in insp.get_table_names()
+
         def _fk_rules(table: str) -> dict:
             return {fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys(table)}
 
@@ -571,5 +572,102 @@ def test_0010_foreshadows(tmp_path):
         assert not ({"foreshadows", "foreshadow_characters", "foreshadow_history"} & set(insp.get_table_names()))
         with engine.connect() as conn:
             assert conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
+def test_0011_outline_pro(tmp_path):
+    """0011：细纲 / 快照两表（外键规则、chapter_id 唯一）、chapters.plan_id、projects.wizard_progress 回填 {}；
+    删大纲级联细纲且章节保留、plan_id 置空；downgrade -1 删除两表两列且存量保留。"""
+    db_file = tmp_path / "migrate0011.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0010")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, 'p', '', '', '', 'planning')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO outlines (project_id, volume_no, volume_title, chapter_no, title, summary, sort) "
+                    "VALUES (1, 1, '', 1, '纲', '', 1)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapters (project_id, outline_id, chapter_no, title, content, status, word_count) "
+                    "VALUES (1, 1, 1, '一', '正文', 'draft', 2)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0011")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert {"chapter_plans", "outline_snapshots"} <= set(insp.get_table_names())
+
+        def _fk_rules(table: str) -> dict:
+            return {fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in insp.get_foreign_keys(table)}
+
+        assert _fk_rules("chapter_plans") == {
+            "project_id": "CASCADE",
+            "outline_id": "CASCADE",
+            "chapter_id": "SET NULL",
+        }
+        assert _fk_rules("outline_snapshots") == {"project_id": "CASCADE"}
+        assert _fk_rules("chapters")["plan_id"] == "SET NULL"
+        assert _fk_rules("chapters")["outline_id"] == "SET NULL"
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            assert conn.execute(text("SELECT wizard_progress FROM projects")).scalar_one() == "{}"
+            conn.execute(
+                text(
+                    "INSERT INTO chapter_plans (project_id, outline_id, seq, title, chapter_id) "
+                    "VALUES (1, 1, 1, '细', 1)"
+                )
+            )
+            row = conn.execute(text("SELECT key_events, character_ids, est_words, emotion FROM chapter_plans")).one()
+            assert tuple(row) == ("[]", "[]", 3000, "")
+            conn.execute(text("UPDATE chapters SET plan_id = 1"))
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(
+                        text(
+                            "INSERT INTO chapter_plans (project_id, outline_id, seq, title, chapter_id) "
+                            "VALUES (1, 1, 2, '细2', 1)"
+                        )
+                    )
+            conn.execute(text("INSERT INTO outline_snapshots (project_id, reason, data) VALUES (1, 'manual', '{}')"))
+            # 删除大纲：细纲级联删除，章节保留且解除关联
+            conn.execute(text("DELETE FROM outlines"))
+            assert conn.execute(text("SELECT COUNT(*) FROM chapter_plans")).scalar_one() == 0
+            assert tuple(conn.execute(text("SELECT outline_id, plan_id, content FROM chapters")).one()) == (
+                None,
+                None,
+                "正文",
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert not ({"chapter_plans", "outline_snapshots"} & set(insp.get_table_names()))
+        assert "plan_id" not in {c["name"] for c in insp.get_columns("chapters")}
+        assert "wizard_progress" not in {c["name"] for c in insp.get_columns("projects")}
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT content FROM chapters")).scalar_one() == "正文"
     finally:
         engine.dispose()

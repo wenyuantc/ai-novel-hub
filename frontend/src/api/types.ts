@@ -132,6 +132,21 @@ export interface Project {
   total_words: number
   /** AI 生成 / 润色 / 按建议重写成功后自动排队分析本章（默认 true） */
   auto_analyze: boolean
+  /** 向导进度（outline-pro）：步骤名由前端定义（WIZARD_STEP_KEYS），后端不校验取值 */
+  wizard_progress: WizardProgress
+}
+
+export interface WizardProgress {
+  done: string[]
+  skipped: string[]
+  current: string | null
+}
+
+/** PATCH /projects/{pid}/wizard-progress：给出的字段整体替换，未给的不变；current 显式 null = 清空 */
+export interface WizardProgressUpdate {
+  done?: string[]
+  skipped?: string[]
+  current?: string | null
 }
 
 export interface ProjectCreate {
@@ -233,6 +248,8 @@ export interface ChapterBrief {
   id: number
   project_id: number
   outline_id: number | null
+  /** 对应的细纲（outline-pro）；未按细纲建章时为 null */
+  plan_id: number | null
   chapter_no: number
   title: string
   status: ChapterStatus
@@ -287,9 +304,14 @@ export interface PolishChapterRequest {
 
 export type WizardKind = 'outline' | 'characters' | 'world' | 'careers'
 
+/** 大纲向导 / 大纲导入的写入模式：replace = 覆盖（先自动存快照）；append = 追加到末尾 */
+export type OutlineMode = 'replace' | 'append'
+
 export interface WizardRequest {
   ai_config_id?: number | null
   instruction?: string
+  /** 仅 outline：默认 replace */
+  outline_mode?: OutlineMode
   volume_count?: number
   chapters_per_volume?: number
   character_count?: number
@@ -416,6 +438,8 @@ export type TaskKind =
   | 'wizard.careers'
   | 'chapter.analyze'
   | 'chapter.revise'
+  | 'outline.continue'
+  | 'outline.expand'
 
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
@@ -436,6 +460,8 @@ export interface Task {
   character_id: number | null
   /** 按建议重写引用的分析（仅 chapter.revise 有值），用于重写前后评分对比 */
   analysis_id: number | null
+  /** 展开的大纲（仅 outline.expand 有值），用于按大纲接上活动任务 */
+  outline_id: number | null
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
   queue_position: number | null
   created_at: string
@@ -1290,4 +1316,191 @@ export interface ForeshadowCandidate {
   keyword: string
   expected_resolve_chapter: number | null
   partial: boolean
+}
+
+// ---------------- 大纲进阶（backend/app/schemas/outline.py，outline-pro） ----------------
+
+/** 细纲（chapter_plans） */
+export interface Plan {
+  id: number
+  project_id: number
+  outline_id: number
+  /** 大纲内顺序，从 1 起 */
+  seq: number
+  title: string
+  summary: string
+  key_events: string[]
+  /** 已过滤掉被删除的角色 */
+  character_ids: number[]
+  emotion: string
+  goal: string
+  /** 300–20000 */
+  est_words: number
+  /** 已建章时有值 */
+  chapter_id: number | null
+  chapter_no: number | null
+  /** 已建章且章节有正文：不能删除 */
+  has_content: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PlanFields {
+  title: string
+  summary?: string
+  key_events?: string[]
+  character_ids?: number[]
+  emotion?: string
+  goal?: string
+  est_words?: number
+}
+
+/** 整体同步的一条：带 id = 更新已有细纲，无 id = 新建 */
+export interface PlanInput extends PlanFields {
+  id?: number | null
+}
+
+/** PUT /outlines/{oid}/plans：缺失的细纲被删除，顺序即 seq */
+export interface PlansSync {
+  plans: PlanInput[]
+}
+
+/** PATCH /outlines/{oid}/plans/{id}：省略 = 不变 */
+export type PlanUpdate = Partial<PlanFields>
+
+export interface PlanBuildResult {
+  chapters: ChapterBrief[]
+  plans: Plan[]
+}
+
+/** GET /outlines/tree 的一行 */
+export interface OutlineDetail extends Outline {
+  /** 「1 纲 1 章」关联的章节（未展开时）；已展开时为 null，章节见 plans[].chapter_id */
+  chapter_id: number | null
+  plans: Plan[]
+  plan_count: number
+  built_count: number
+}
+
+export interface OutlineAppendItem {
+  volume_no: number
+  volume_title: string
+  title: string
+  summary: string
+}
+
+export type OutlineMoveDirection = 'up' | 'down'
+
+export type SnapshotReason = 'wizard_replace' | 'import_replace' | 'reexpand' | 'manual' | 'restore'
+
+export interface OutlineSnapshot {
+  id: number
+  reason: SnapshotReason
+  note: string
+  created_at: string
+  outline_count: number
+  plan_count: number
+  link_count: number
+}
+
+export interface SnapshotOutlineBrief {
+  volume_no: number
+  volume_title: string
+  chapter_no: number
+  title: string
+  plan_count: number
+}
+
+export interface OutlineSnapshotDetail extends OutlineSnapshot {
+  outlines: SnapshotOutlineBrief[]
+  /** 恢复前的提示（如快照保存后章节号发生过平移） */
+  warnings: string[]
+}
+
+export interface SnapshotRestoreResult {
+  /** 恢复前为当前状态自动保存的快照：再恢复它即可撤销本次恢复 */
+  backup: OutlineSnapshot
+  outlines: number
+  plans: number
+  links_restored: number
+  warnings: string[]
+}
+
+export interface OutlineImportPreview {
+  volumes: number
+  outlines: number
+  plans: number
+  unresolved_characters: string[]
+  warnings: string[]
+}
+
+export interface OutlineImportResult extends OutlineImportPreview {
+  mode: OutlineMode
+  /** replace 时替换前自动保存的快照 */
+  snapshot_id: number | null
+  items: Outline[]
+}
+
+export interface OutlineContinueRequest {
+  ai_config_id?: number | null
+  /** 1–20，默认 5 */
+  count?: number
+  direction?: string
+  /** 给出 = 开新卷；省略 / null = 接在当前最后一卷之后 */
+  new_volume?: { title: string } | null
+}
+
+export interface OutlineExpandRequest {
+  ai_config_id?: number | null
+  /** 展开后的总章数（含保留的有正文细纲），2–10 */
+  count?: number
+  instruction?: string
+}
+
+export interface OutlineContinueDraft {
+  volume_no: number
+  volume_title: string
+  chapter_no: number
+  title: string
+  summary: string
+}
+
+/** outline.continue 的 done.result */
+export interface OutlineContinueResult {
+  drafts: OutlineContinueDraft[]
+  warnings: string[]
+}
+
+export interface ExpandDraftCharacter {
+  name: string
+  character_id: number | null
+  resolved: boolean
+}
+
+export interface OutlineExpandDraft {
+  title: string
+  summary: string
+  key_events: string[]
+  characters: ExpandDraftCharacter[]
+  emotion: string
+  goal: string
+  est_words: number
+}
+
+export interface OutlineExpandExisting {
+  id: number
+  seq: number
+  title: string
+  summary: string
+  chapter_id: number | null
+  chapter_no: number | null
+  has_content: boolean
+}
+
+/** outline.expand 的 done.result */
+export interface OutlineExpandResult {
+  outline_id: number
+  drafts: OutlineExpandDraft[]
+  existing: OutlineExpandExisting[]
+  warnings: string[]
 }

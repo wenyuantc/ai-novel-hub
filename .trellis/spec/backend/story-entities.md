@@ -151,7 +151,9 @@ def assemble_context(*, project_text, world_text, cast: CastSection | None, outl
 
 ### 3. 契约
 
-- 涉及角色 = 主角 ∪ `chapter_characters` 手动指定 ∪ 自动匹配（本章大纲梗概 + 上一章正文最后 1500 字），顺序按此分组、组内按角色排序。
+- 涉及角色 = 主角 ∪ `chapter_characters` 手动指定 ∪ 自动匹配（本章任务梗概 + 关键事件 + 上一章正文最后 1500 字），顺序按此分组、组内按角色排序。
+- 本章任务（`10-23-outline-pro`）：`context_builder.chapter_task` 优先取章节细纲（梗概、关键事件、叙事目标、情感基调），否则取大纲梗概；
+  见 [outline.md](./outline.md)「本章任务优先细纲」。
 - 自动匹配：名字与别名长度 < 2 跳过；按长度降序匹配，较短词只在未被较长词占用的位置出现才算命中（「林远山」不触发「林远」）；
   同一词属于多个角色时都命中。
 - 输出段落：`【本章涉及角色】`（完整卡：别名、定位、非存活醒目标注【已死亡】、年龄性别、外貌、性格、背景、简介、当前状态、所属组织与职位；
@@ -185,6 +187,7 @@ characters_text = story_service.format_characters(all_characters)   # 全部角�
   旧格式（数组 + `profile` / `relations_text`）照常解析，`relations_text` 保留为旧备注。先整体替换角色（级联清掉旧关系 / 成员 / 出场），
   再按名字或别名建关系（`apply_change(source="wizard")`），对不上 / 自指 / 同对已有的忽略。`done.result` 多一个 `relationships`
   （`RelationshipOut` 列表，仅 characters）。`always_in_context` 按定位推断。
+- 大纲向导：`outline_mode` replace（默认，已有大纲时先存快照）/ append（接在末尾），见 [outline.md](./outline.md)「向导的大纲模式与进度」。
 - 世界观向导输出 `category`；`normalize_world_category` 把中英文映射到 `WORLD_CATEGORIES`，映射不了 → `other`。
 - 测试：`tests/test_wizard.py::test_wizard_characters_structured_with_relations`、`test_wizard_world_categories`，原有旧格式用例保留。
 

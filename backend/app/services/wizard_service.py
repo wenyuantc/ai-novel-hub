@@ -9,6 +9,9 @@ relationships: [{a, b, role_a, role_b, category, intimacy, description}]}，
 项目已有职业时，角色向导要求每个角色输出 careers: [{name, stage, role, note}]，按职业名 / 阶段名精确匹配后经
 career_service.apply_assignment(source="wizard") 写入；职业对不上 / 超出上限的忽略并写入 done.result.warnings，
 阶段名对不上的挂在第 1 阶并给警告。项目没有职业时角色向导的提示词与写入行为不变。
+大纲向导（outline-pro）：outline_mode = replace（默认）覆盖前先存大纲快照（wizard_replace），
+章节经外键解除关联、不删除；
+append 不删旧大纲，提示词附上已有大纲末尾 10 条，写入时卷号接最后一卷、章节号接全书最后一章、sort 接末尾。
 """
 
 import logging
@@ -35,7 +38,14 @@ from app.models.entities import WORLD_CATEGORIES
 from app.schemas.career import CareerCreate
 from app.schemas.chapter import WizardRequest
 from app.schemas.story import CharacterOut, OutlineOut, WorldSettingOut
-from app.services import ai_config_service, career_service, relationship_service, story_service
+from app.services import (
+    ai_config_service,
+    career_service,
+    outline_service,
+    outline_snapshot_service,
+    relationship_service,
+    story_service,
+)
 from app.services.cast_service import is_protagonist_role
 from app.services.entity_ai_service import normalize_aliases, normalize_career_assignments, normalize_category
 from app.services.generation_service import Event
@@ -44,6 +54,8 @@ from app.services.project_service import get_owned_project, project_info
 logger = logging.getLogger(__name__)
 
 WizardKind = Literal["outline", "characters", "world", "careers"]
+# 追加模式下提示词附上的已有大纲条数（末尾）
+APPEND_CONTEXT_OUTLINES = 10
 
 
 @dataclass
@@ -55,6 +67,8 @@ class WizardJob:
     messages: list[ChatMessage]
     thinking: ThinkingLevel = "off"
     max_tokens: int | None = None
+    # 仅 outline：replace = 覆盖（先存快照）；append = 追加到末尾
+    outline_mode: str = "replace"
 
 
 async def validate_wizard(
@@ -101,6 +115,15 @@ async def build_wizard_job(
     outline_text = story_service.format_outlines(await story_service.list_items(db, story_service.OUTLINES, project_id))
 
     if kind == "outline":
+        append_kwargs: dict[str, Any] = {}
+        if req.outline_mode == "append":
+            outlines = await story_service.list_items(db, story_service.OUTLINES, project_id)
+            if outlines:
+                append_kwargs = {
+                    "existing_text": story_service.format_outlines(outlines[-APPEND_CONTEXT_OUTLINES:]),
+                    "start_volume_no": (await outline_service.last_volume(db, project_id))[0] + 1,
+                    "start_chapter_no": await outline_service.next_chapter_no(db, project_id),
+                }
         messages = build_outline_messages(
             info,
             volume_count=req.volume_count,
@@ -108,6 +131,7 @@ async def build_wizard_job(
             world_text=world_text,
             characters_text=characters_text,
             instruction=req.instruction,
+            **append_kwargs,
         )
     elif kind == "characters":
         messages = build_characters_messages(
@@ -134,6 +158,7 @@ async def build_wizard_job(
         messages=messages,
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
+        outline_mode=req.outline_mode,
     )
 
 
@@ -433,14 +458,41 @@ _KIND_SPEC = {
 }
 
 
-async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind, raw_text: str) -> dict[str, Any]:
-    """解析模型输出并覆盖该类型旧数据，返回 done 载荷 {items[, relationships, assignments], warnings?}。"""
+async def _prepare_outline_rows(db: AsyncSession, project_id: int, rows: list[dict], outline_mode: str) -> None:
+    """大纲写入前：覆盖模式先存快照（已有大纲时）并删除旧大纲；追加模式把卷号 / 章节号 / 排序接到末尾。"""
+    if outline_mode != "append":
+        existing = await story_service.list_items(db, story_service.OUTLINES, project_id)
+        if existing:
+            await outline_snapshot_service.save_snapshot(db, project_id, "wizard_replace", "大纲向导覆盖前")
+        await db.execute(delete(Outline).where(Outline.project_id == project_id))
+        return
+    last_volume = (await outline_service.last_volume(db, project_id))[0]
+    start_no = await outline_service.next_chapter_no(db, project_id)
+    start_sort = await story_service.next_sort(db, Outline, project_id)
+    volumes: dict[int, int] = {}
+    for i, r in enumerate(rows):
+        volumes.setdefault(r["volume_no"], last_volume + len(volumes) + 1)
+        r["volume_no"] = volumes[r["volume_no"]]
+        r["chapter_no"] = start_no + i
+        r["sort"] = start_sort + i
+
+
+async def save_wizard_result(
+    db: AsyncSession, project_id: int, kind: WizardKind, raw_text: str, *, outline_mode: str = "replace"
+) -> dict[str, Any]:
+    """解析模型输出并写入，返回 done 载荷 {items[, relationships, assignments], warnings?}。
+
+    大纲覆盖模式（默认）与其他类型一样覆盖旧数据（覆盖前存大纲快照）；大纲追加模式不删旧数据，items 只含新增条目。
+    """
     obj = extract_json(raw_text)
     if kind == "careers":
         return await _save_careers(db, project_id, obj)
     model, normalize, out_schema = _KIND_SPEC[kind]
     rows = normalize(obj)
-    await db.execute(delete(model).where(model.project_id == project_id))
+    if kind == "outline":
+        await _prepare_outline_rows(db, project_id, rows, outline_mode)
+    else:
+        await db.execute(delete(model).where(model.project_id == project_id))
     entities = [model(project_id=project_id, **row) for row in rows]
     db.add_all(entities)
     await db.flush()
@@ -454,6 +506,8 @@ async def save_wizard_result(db: AsyncSession, project_id: int, kind: WizardKind
     for e in entities:
         await db.refresh(e)
     payload: dict[str, Any] = {"items": [out_schema.model_validate(e).model_dump(mode="json") for e in entities]}
+    if kind == "outline":
+        payload["mode"] = outline_mode
     if kind == "characters":
         outs = await relationship_service.to_outs(db, rels)
         payload["relationships"] = [o.model_dump(mode="json") for o in outs]
@@ -480,7 +534,7 @@ async def run_wizard_job(job: WizardJob, sessionmaker: async_sessionmaker[AsyncS
         if not raw.strip():
             raise AIProviderError("模型未返回任何内容")
         async with sessionmaker() as db:
-            payload = await save_wizard_result(db, job.project_id, job.kind, raw)
+            payload = await save_wizard_result(db, job.project_id, job.kind, raw, outline_mode=job.outline_mode)
         yield "done", {"kind": job.kind, **payload}
     except JSONExtractError as exc:
         yield "error", {"detail": f"AI 输出解析失败：{exc}，请重新生成"}

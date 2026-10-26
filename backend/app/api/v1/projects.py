@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate
+from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgressUpdate
 from app.services import export_service
 from app.services import project_service as svc
 
@@ -30,6 +30,14 @@ async def get_project(project_id: int, user: CurrentUser, db: DbDep) -> ProjectO
 @router.patch("/{project_id}", response_model=ProjectOut)
 async def update_project(project_id: int, body: ProjectUpdate, user: CurrentUser, db: DbDep) -> ProjectOut:
     project = await svc.update_project(db, user.id, project_id, body)
+    return await svc.project_out(db, project)
+
+
+@router.patch("/{project_id}/wizard-progress", response_model=ProjectOut)
+async def update_wizard_progress(
+    project_id: int, body: WizardProgressUpdate, user: CurrentUser, db: DbDep
+) -> ProjectOut:
+    project = await svc.update_wizard_progress(db, user.id, project_id, body)
     return await svc.project_out(db, project)
 
 

@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Chapter, Outline, Project
+from app.models import Chapter, ChapterPlan, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
 from app.services import version_service
 from app.services.project_service import get_owned_project
@@ -97,7 +97,7 @@ async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: 
 async def create_from_outlines(
     db: AsyncSession, user_id: int, project_id: int, data: ChaptersFromOutlines
 ) -> list[Chapter]:
-    """为大纲条目批量创建章节占位；已关联章节的大纲条目跳过。"""
+    """为大纲条目批量创建章节占位（1 纲 1 章）；已关联章节的、已展开为细纲的大纲条目跳过（后者按细纲建章）。"""
     await get_owned_project(db, user_id, project_id)
     stmt = select(Outline).where(Outline.project_id == project_id)
     if data.outline_ids is not None:
@@ -110,9 +110,12 @@ async def create_from_outlines(
             select(Chapter.outline_id).where(Chapter.project_id == project_id, Chapter.outline_id.is_not(None))
         )
     )
+    expanded = set(
+        await db.scalars(select(ChapterPlan.outline_id).where(ChapterPlan.project_id == project_id).distinct())
+    )
     created = []
     for o in outlines:
-        if o.id in linked:
+        if o.id in linked or o.id in expanded:
             continue
         chapter = Chapter(
             project_id=project_id,
@@ -142,6 +145,12 @@ async def update_chapter(
     if "outline_id" in fields:
         if data.outline_id is not None:
             await _get_outline(db, project_id, data.outline_id)
+        if data.outline_id != chapter.outline_id and chapter.plan_id is not None:
+            # 改挂到别的大纲：解除与原细纲的绑定（细纲回到未建章状态），保持双向一致
+            plan = await db.scalar(select(ChapterPlan).where(ChapterPlan.id == chapter.plan_id))
+            if plan is not None:
+                plan.chapter_id = None
+            chapter.plan_id = None
         chapter.outline_id = data.outline_id
     if data.chapter_no is not None:
         chapter.chapter_no = data.chapter_no

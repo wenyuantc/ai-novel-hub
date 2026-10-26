@@ -1,5 +1,5 @@
 import { api, buildUrl, handleErrorResponse, ApiError } from './client'
-import type { Project, ProjectCreate, ProjectStatus, ProjectUpdate } from './types'
+import type { Project, ProjectCreate, ProjectStatus, ProjectUpdate, WizardProgressUpdate } from './types'
 
 export const projectApi = {
   list: () => api.get<Project[]>('/projects'),
@@ -7,6 +7,9 @@ export const projectApi = {
   create: (body: ProjectCreate) => api.post<Project>('/projects', body),
   update: (id: number, body: ProjectUpdate) => api.patch<Project>(`/projects/${id}`, body),
   remove: (id: number) => api.del(`/projects/${id}`),
+  /** 向导进度：给出的字段整体替换，返回最新 Project */
+  updateWizardProgress: (id: number, body: WizardProgressUpdate) =>
+    api.patch<Project>(`/projects/${id}/wizard-progress`, body),
 }
 
 export const PROJECT_STATUS: Record<ProjectStatus, { label: string; color: string }> = {

@@ -39,12 +39,14 @@ import {
   polishChapter,
 } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
+import { outlineProApi } from '../../api/outlines'
 import { isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
-import type { Chapter, ChapterBrief, ChapterVersionBrief, ReviseChapterRequest, Task } from '../../api/types'
+import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
 import AnalysisDrawer, { type ReviseCompare } from '../../components/chapter/AnalysisDrawer'
 import { GenerateForm, type GenerateOptions, PolishForm } from '../../components/chapter/ChapterAIForms'
 import CastSelect from '../../components/chapter/CastSelect'
+import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
@@ -137,6 +139,16 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     autoContinue: readAutoContinue(),
   }))
   const [polishInstruction, setPolishInstruction] = useState('')
+  // 本章细纲（按细纲建章的章节）：展示要点，目标字数预填 est_words
+  const [plan, setPlan] = useState<Plan | null>(null)
+  // 用户是否已手动改过目标字数：细纲加载完成前改过的不被 est_words 覆盖
+  const targetWordsTouchedRef = useRef(false)
+  const changeGenOptions = useCallback((next: GenerateOptions) => {
+    setGenOptions((prev) => {
+      if (next.targetWords !== prev.targetWords) targetWordsTouchedRef.current = true
+      return next
+    })
+  }, [])
   const [selection, setSelection] = useState<TextSelection>({ start: 0, end: 0 })
   const [rewriteLocked, setRewriteLocked] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
@@ -159,6 +171,24 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // 已经订阅过的任务 id：避免任务结束后轮询列表尚未更新时被重复接上
   const followedIdsRef = useRef(new Set<number>())
+
+  useEffect(() => {
+    if (initial.plan_id === null) return
+    let alive = true
+    outlineProApi
+      .chapterPlan(pid, initial.id)
+      .then((p) => {
+        if (!alive || !p) return
+        setPlan(p)
+        if (!targetWordsTouchedRef.current) setGenOptions((o) => ({ ...o, targetWords: p.est_words }))
+      })
+      .catch(() => {
+        // 细纲只是辅助信息，读取失败不影响编辑
+      })
+    return () => {
+      alive = false
+    }
+  }, [pid, initial.id, initial.plan_id])
 
   const dirty = content !== chapter.content || title !== chapter.title
   const aiRunning = aiTask.running || starting
@@ -643,7 +673,12 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                     key: 'generate',
                     label: 'AI 生成',
                     disabled: editorLocked,
-                    children: <GenerateForm value={genOptions} onChange={setGenOptions} disabled={aiRunning} />,
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        {plan && <ChapterPlanCard plan={plan} />}
+                        <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
+                      </Space>
+                    ),
                   },
                   {
                     key: 'polish',

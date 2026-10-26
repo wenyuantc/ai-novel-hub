@@ -31,7 +31,8 @@ class StoryKind:
 
 WORLD = StoryKind(WorldSetting, "世界观条目不存在", (WorldSetting.sort, WorldSetting.id))
 CHARACTERS = StoryKind(Character, "角色不存在", (Character.sort, Character.id))
-OUTLINES = StoryKind(Outline, "大纲条目不存在", (Outline.volume_no, Outline.chapter_no, Outline.sort, Outline.id))
+# 卷内按 sort 排列（大纲页上移 / 下移只改 sort，不改章节号）；sort 相同时按章节号
+OUTLINES = StoryKind(Outline, "大纲条目不存在", (Outline.volume_no, Outline.sort, Outline.chapter_no, Outline.id))
 
 
 async def list_items(db: AsyncSession, kind: StoryKind, project_id: int, *, category: str | None = None) -> list[Any]:

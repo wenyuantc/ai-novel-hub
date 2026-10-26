@@ -1,5 +1,11 @@
 """章节生成上下文组装（MVP 不依赖向量检索）。
 
+本章任务（chapter_task，供提示词【本章任务】与选角匹配使用）按优先级取：
+  1. 章节对应的细纲（chapters.plan_id）：标题、梗概（细纲梗概为空时退回大纲梗概）、关键事件、叙事目标、
+     情感基调、预估字数；
+  2. 章节关联的大纲：标题与梗概（与引入细纲前的行为一致）。
+  生成请求的目标字数仍由请求决定（前端打开生成面板时用细纲的预估字数预填），后端不改变请求语义。
+
 组成：作品信息 + 世界观（按分类分组）+ 角色部分 + 当前卷大纲 + 伏笔提醒 + 更早章节标题/摘要 + 最近 N 章全文。
 更早章节的摘要（前情提要）：优先用该章最近一次章节分析的 summary（批量一条查询取每章 max(id)；
 正文已变化、分析已过期时照常使用），没有分析时退回正文前 SUMMARY_CHARS 字。
@@ -46,6 +52,7 @@ from app.services import (
     cast_service,
     foreshadow_service,
     organization_service,
+    plan_service,
     relationship_service,
     story_service,
 )
@@ -414,8 +421,8 @@ async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapte
 async def build_chapter_context(db: AsyncSession, project: Project, chapter: Chapter, budget: int) -> str:
     world = await story_service.list_items(db, story_service.WORLD, project.id)
     outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
-    outline = await find_chapter_outline(db, chapter)
-    cast = await build_cast_section(db, project, chapter, outline.summary if outline else "")
+    task = await chapter_task(db, chapter)
+    cast = await build_cast_section(db, project, chapter, task.match_text())
     rows = await db.execute(
         select(Chapter.id, Chapter.chapter_no, Chapter.title, Chapter.content)
         .where(
@@ -470,3 +477,38 @@ async def find_chapter_outline(db: AsyncSession, chapter: Chapter) -> Outline | 
     return await db.scalar(
         select(Outline).where(Outline.id == chapter.outline_id, Outline.project_id == chapter.project_id)
     )
+
+
+@dataclass
+class ChapterTask:
+    """【本章任务】素材：来自细纲（source="plan"）或大纲（source="outline"），都没有时为空。"""
+
+    title: str = ""
+    summary: str = ""
+    key_events: list[str] = field(default_factory=list)
+    goal: str = ""
+    emotion: str = ""
+    est_words: int | None = None
+    source: str = ""
+
+    def match_text(self) -> str:
+        """选角自动匹配用的文本：梗概 + 关键事件。"""
+        return "\n".join([self.summary, *self.key_events])
+
+
+async def chapter_task(db: AsyncSession, chapter: Chapter) -> ChapterTask:
+    outline = await find_chapter_outline(db, chapter)
+    plan = await plan_service.get_chapter_plan(db, chapter)
+    if plan is not None:
+        return ChapterTask(
+            title=plan.title,
+            summary=plan.summary.strip() or (outline.summary if outline else ""),
+            key_events=list(plan.key_events or []),
+            goal=plan.goal,
+            emotion=plan.emotion,
+            est_words=plan.est_words,
+            source="plan",
+        )
+    if outline is not None:
+        return ChapterTask(title=outline.title, summary=outline.summary, source="outline")
+    return ChapterTask()

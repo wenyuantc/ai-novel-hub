@@ -74,6 +74,9 @@ async def test_cross_user_isolation(client, make_client):
     career = (await client.post(f"{base}/careers", json={"name": "剑修", "stages": [{"name": "练气"}]})).json()
     assignment = (await client.post(f"{base}/characters/{c1['id']}/careers", json={"career_id": career["id"]})).json()
     fs = (await client.post(f"{base}/foreshadows", json={"title": "玉佩", "character_ids": [c1["id"]]})).json()
+    outline = (await client.post(f"{base}/outlines", json={"title": "大纲"})).json()
+    plan = (await client.put(f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"title": "细纲"}]})).json()[0]
+    snap = (await client.post(f"{base}/outline-snapshots", json={})).json()
 
     bob = make_client()
     await register(bob, "bob")
@@ -165,6 +168,28 @@ async def test_cross_user_isolation(client, make_client):
         ("POST", f"{base}/foreshadows/{fs['id']}/abandon"),
         ("GET", f"{base}/foreshadows/{fs['id']}/history"),
         ("GET", f"{base}/chapters/{ch['id']}/foreshadow-reminders"),
+        ("GET", f"{base}/outlines/tree"),
+        ("GET", f"{base}/outlines/export"),
+        ("POST", f"{base}/outlines/import/preview"),
+        ("POST", f"{base}/outlines/import"),
+        ("POST", f"{base}/outlines/append"),
+        ("POST", f"{base}/outlines/continue"),
+        ("GET", f"{base}/outlines/{outline['id']}"),
+        ("PATCH", f"{base}/outlines/{outline['id']}"),
+        ("DELETE", f"{base}/outlines/{outline['id']}"),
+        ("POST", f"{base}/outlines/{outline['id']}/move"),
+        ("POST", f"{base}/outlines/{outline['id']}/expand"),
+        ("GET", f"{base}/outlines/{outline['id']}/plans"),
+        ("PUT", f"{base}/outlines/{outline['id']}/plans"),
+        ("PATCH", f"{base}/outlines/{outline['id']}/plans/{plan['id']}"),
+        ("POST", f"{base}/outlines/{outline['id']}/plans/build"),
+        ("GET", f"{base}/chapters/{ch['id']}/plan"),
+        ("GET", f"{base}/outline-snapshots"),
+        ("POST", f"{base}/outline-snapshots"),
+        ("GET", f"{base}/outline-snapshots/{snap['id']}"),
+        ("POST", f"{base}/outline-snapshots/{snap['id']}/restore"),
+        ("DELETE", f"{base}/outline-snapshots/{snap['id']}"),
+        ("PATCH", f"{base}/wizard-progress"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
@@ -186,6 +211,11 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/foreshadows": {"title": "x"},
         f"{base}/foreshadows/{fs['id']}/plant": {"chapter_no": 1},
         f"{base}/foreshadows/{fs['id']}/resolve": {"chapter_no": 1},
+        f"{base}/outlines/import/preview": {"data": {}},
+        f"{base}/outlines/import": {"data": {}},
+        f"{base}/outlines/append": {"items": [{"title": "x"}]},
+        f"{base}/outlines/{outline['id']}/move": {"direction": "up"},
+        f"{base}/outlines/{outline['id']}/plans": {"plans": []},
     }
     for method, url in checks:
         body = None
@@ -202,3 +232,5 @@ async def test_cross_user_isolation(client, make_client):
     assert len((await client.get(f"{base}/organizations/{org['id']}/members")).json()) == 1
     assert len((await client.get(f"{base}/characters/{c1['id']}/careers")).json()) == 1
     assert len((await client.get(f"{base}/characters/{c1['id']}/career-history")).json()) == 1
+    assert len((await client.get(f"{base}/outlines/{outline['id']}/plans")).json()) == 1
+    assert len((await client.get(f"{base}/outline-snapshots")).json()) == 1

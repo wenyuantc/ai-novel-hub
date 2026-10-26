@@ -17,7 +17,11 @@ def build_chapter_messages(
     target_words: int,
     style: str = "",
     instruction: str = "",
+    key_events: list[str] | None = None,
+    goal: str = "",
+    emotion: str = "",
 ) -> list[ChatMessage]:
+    """key_events / goal / emotion 来自细纲（没有细纲时为空，提示词与之前一致）。"""
     parts = [
         "以下是创作参考资料：",
         context,
@@ -26,6 +30,14 @@ def build_chapter_messages(
     ]
     if summary.strip():
         parts.append(f"本章梗概：{summary.strip()}")
+    events = [e.strip() for e in key_events or [] if e.strip()]
+    if events:
+        parts.append("关键事件：")
+        parts += [f"{i}. {e}" for i, e in enumerate(events, start=1)]
+    if goal.strip():
+        parts.append(f"叙事目标：{goal.strip()}")
+    if emotion.strip():
+        parts.append(f"情感基调：{emotion.strip()}")
     parts.append(f"目标字数：约 {target_words} 字。")
     if style.strip():
         parts.append(f"写作风格：{style.strip()}")
