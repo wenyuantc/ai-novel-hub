@@ -46,7 +46,17 @@ GENERATED = {
 async def test_career_generate_draft_only(app, client, fake_llm):
     """AC4：生成职业以任务运行，只产出草稿；与已有职业同名的标记 conflict；确认后批量保存勾选项。"""
     base = await _setup(client)
-    await _career(client, base, "丹师", ["一品"], kind="sub")
+    await _career(
+        client,
+        base,
+        "丹师",
+        ["一品"],
+        kind="sub",
+        description="炼丹为业",
+        abilities="控火" + "炼" * 120,
+        rules="丹毒累积",
+        requirements="需火灵根",
+    )
     await client.post(f"{base}/world", json={"title": "灵气", "content": "天地灵气复苏", "category": "rule"})
     fake_llm.push("```json\n" + json.dumps(GENERATED, ensure_ascii=False) + "\n```")
 
@@ -71,6 +81,8 @@ async def test_career_generate_draft_only(app, client, fake_llm):
 
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "3 个职业" in prompt and "丹师（副修）：一品" in prompt and "天地灵气复苏" in prompt and "偏东方" in prompt
+    assert "- 丹师（副修）：一品\n  描述：炼丹为业\n  特殊能力：控火" in prompt and "……\n  体系规则：丹毒累积" in prompt
+    assert "需火灵根" not in prompt  # 获得条件不进提示词
     # 不写库、不写生成记录
     assert await _count(app, Career) == 1
     assert await _count(app, GenerationLog) == 0

@@ -703,3 +703,28 @@ async def careers_reference(db: AsyncSession, project_id: int) -> str:
         return ""
     stages = await stages_of(db, [c.id for c in careers])
     return "\n".join(ladder_line(c, stages[c.id]) for c in careers)
+
+
+# 详细参考里每个字段的截断长度：够 AI 看清定位 / 能力 / 规则，又不至于让十几个职业撑爆上下文
+DETAIL_FIELD_CHARS = 100
+
+
+async def careers_detail_reference(db: AsyncSession, project_id: int) -> str:
+    """生成新职业用的详细参考：阶梯摘要 + 描述 / 特殊能力 / 体系规则（各截断）。
+
+    不含获得条件与阶段描述——对「保持体系一致、避免能力重叠」帮助有限却最占篇幅。
+    """
+    careers = await list_project_careers(db, project_id)
+    if not careers:
+        return ""
+    stages = await stages_of(db, [c.id for c in careers])
+    blocks: list[str] = []
+    for c in careers:
+        lines = ["- " + ladder_line(c, stages[c.id])]
+        for label, text in (("描述", c.description), ("特殊能力", c.abilities), ("体系规则", c.rules)):
+            text = text.strip()
+            if text:
+                clipped = text if len(text) <= DETAIL_FIELD_CHARS else text[:DETAIL_FIELD_CHARS] + "……"
+                lines.append(f"  {label}：{clipped}")
+        blocks.append("\n".join(lines))
+    return "\n".join(blocks)

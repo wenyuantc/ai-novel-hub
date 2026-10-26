@@ -47,6 +47,7 @@ EntityKind = Literal["character.generate", "organization.generate", "career.gene
 REFERENCE_WORLD_CHARS = 4000
 REFERENCE_ROSTER_CHARS = 3000
 REFERENCE_ORGS_CHARS = 6000
+REFERENCE_CAREERS_CHARS = 6000
 
 _CATEGORY_ALIASES = {
     "家庭": "family",
@@ -483,7 +484,7 @@ async def build_entity_job(
             count=options["count"],
             kind=options["kind"],
             world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
-            careers_text=_clip(await career_service.careers_reference(db, project_id), REFERENCE_ROSTER_CHARS),
+            careers_text=_clip(await career_service.careers_detail_reference(db, project_id), REFERENCE_CAREERS_CHARS),
             instruction=instruction,
         )
     elif kind == "relations.parse":
