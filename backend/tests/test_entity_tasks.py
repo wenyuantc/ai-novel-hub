@@ -110,7 +110,22 @@ async def test_character_generate_preview_then_save(app, client, fake_llm):
 async def test_organization_generate(app, client, fake_llm):
     base = await _setup(client)
     a = (await client.post(f"{base}/characters", json={"name": "甲"})).json()
-    parent = (await client.post(f"{base}/organizations", json={"name": "天道盟"})).json()
+    parent = (
+        await client.post(
+            f"{base}/organizations",
+            json={
+                "name": "天道盟",
+                "org_type": "联盟",
+                "purpose": "维护正道",
+                "location": "中州",
+                "power_level": 90,
+                "description": "正道魁首",
+            },
+        )
+    ).json()
+    await client.post(
+        f"{base}/organizations/{parent['id']}/members", json={"character_id": a["id"], "position": "盟主"}
+    )
     fake_llm.push(
         json.dumps(
             {
@@ -122,6 +137,9 @@ async def test_organization_generate(app, client, fake_llm):
     )
     task, events = await run_task(client, await client.post(f"{base}/organizations/generate", json={}))
     assert task["status"] == "succeeded" and task["title"] == "AI 生成组织"
+    prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "- 天道盟（联盟）｜势力 90｜所在地：中州" in prompt
+    assert "宗旨：维护正道" in prompt and "描述：正道魁首" in prompt and "成员：甲（盟主）" in prompt
     result = events[-1][1]["result"]
     assert result["draft"]["power_level"] == 60 and result["draft"]["parent_id"] == parent["id"]
     assert [(m["character_name"], m["character_id"], m["resolved"]) for m in result["member_suggestions"]] == [

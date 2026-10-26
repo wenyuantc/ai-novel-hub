@@ -32,11 +32,12 @@ from app.ai.prompts import (
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import BadRequestError
 from app.core.security import SecretCipher
-from app.models import Character, Organization
+from app.models import Character, Organization, OrganizationMember
 from app.models.entities import RELATION_CATEGORIES
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
 from app.services import ai_config_service, career_service, relationship_service, story_service
 from app.services.cast_service import is_protagonist_role
+from app.services.context_builder import MEMBER_STATUS_LABELS
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
 
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 EntityKind = Literal["character.generate", "organization.generate", "career.generate", "relations.parse"]
 REFERENCE_WORLD_CHARS = 4000
 REFERENCE_ROSTER_CHARS = 3000
+REFERENCE_ORGS_CHARS = 6000
 
 _CATEGORY_ALIASES = {
     "家庭": "family",
@@ -413,10 +415,44 @@ def _clip(text: str, limit: int) -> str:
 
 
 async def _orgs_text(db: AsyncSession, project_id: int) -> str:
-    rows = await db.scalars(
-        select(Organization).where(Organization.project_id == project_id).order_by(Organization.sort, Organization.id)
+    """已有组织的完整资料（类型 / 势力 / 上级 / 所在地 / 宗旨 / 描述 / 成员），供 AI 生成角色与组织时参考。"""
+    orgs = list(
+        await db.scalars(
+            select(Organization)
+            .where(Organization.project_id == project_id)
+            .order_by(Organization.sort, Organization.id)
+        )
     )
-    return "\n".join(o.name + (f"（{o.org_type}）" if o.org_type else "") for o in rows)
+    if not orgs:
+        return ""
+    names = {o.id: o.name for o in orgs}
+    members: dict[int, list[str]] = {}
+    rows = await db.execute(
+        select(OrganizationMember, Character.name)
+        .join(Character, Character.id == OrganizationMember.character_id)
+        .where(OrganizationMember.organization_id.in_(names))
+        .order_by(OrganizationMember.id)
+    )
+    for m, char_name in rows:
+        extra = [x for x in (m.position.strip(), MEMBER_STATUS_LABELS.get(m.status, "")) if x]
+        members.setdefault(m.organization_id, []).append(char_name + (f"（{'，'.join(extra)}）" if extra else ""))
+    blocks: list[str] = []
+    for o in orgs:
+        head = [o.name + (f"（{o.org_type}）" if o.org_type else "")]
+        if o.power_level is not None:
+            head.append(f"势力 {o.power_level}")
+        if o.parent_id in names:
+            head.append(f"上级：{names[o.parent_id]}")
+        if o.location.strip():
+            head.append(f"所在地：{o.location.strip()}")
+        lines = ["- " + "｜".join(head)]
+        for label, text in (("宗旨", o.purpose), ("描述", o.description)):
+            if text.strip():
+                lines.append(f"  {label}：{text.strip()}")
+        if members.get(o.id):
+            lines.append(f"  成员：{'、'.join(members[o.id])}")
+        blocks.append("\n".join(lines))
+    return "\n".join(blocks)
 
 
 async def build_entity_job(
@@ -468,7 +504,7 @@ async def build_entity_job(
         common = {
             "world_text": _clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
             "roster_text": _clip(story_service.format_roster(characters), REFERENCE_ROSTER_CHARS),
-            "organizations_text": await _orgs_text(db, project_id),
+            "organizations_text": _clip(await _orgs_text(db, project_id), REFERENCE_ORGS_CHARS),
             "instruction": instruction,
         }
         if kind == "character.generate":
