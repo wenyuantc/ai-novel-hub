@@ -181,3 +181,39 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: batch-generate 批量顺序生成
+<!-- trellis-session: v=2 fp=a62b666502295b26 -->
+
+**Date**: 2026-10-26
+**Task**: batch-generate 批量顺序生成
+**Branch**: `main`
+
+### Summary
+
+实现 P0-5b 批量顺序生成：单任务逐章生成+任务内分析回写、断点续跑、失败重试与跳过、待审核暂停（引擎新增 paused 状态）、范围锁、发起预览；前端弹窗/横幅/任务面板。
+
+### Main Changes
+
+- 迁移 0012 tasks.checkpoint；TaskOut 增加 checkpoint/step_cursor
+- 引擎 paused 状态与 resume/finish 接口
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47c7941` | feat: 批量顺序生成（跳过已写、任务内分析回写、失败续跑、待审核暂停） |
+| `b5415e6` | chore(task): archive 10-26-batch-generate |
+
+### Testing
+
+- [OK] 后端 356 passed；前端 164 passed；浏览器冒烟覆盖审核点、失败续跑、重启中断补分析
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按父任务表开始规划 P1（prompt-styles 等）
