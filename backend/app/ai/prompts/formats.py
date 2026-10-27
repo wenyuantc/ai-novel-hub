@@ -152,3 +152,23 @@ STYLE_EXTRACT_FORMAT = (
 )
 
 INSPIRATION_FORMAT = '{\n  "options": ["选项1", "选项2", "选项3", "选项4"]\n}'
+
+_BOOK_ENTITIES = (
+    '  "characters": [{"name": "姓名", "aliases": ["别名"], "role_type": "主角", "profile": "身份与在故事中的作用",\n'
+    '                  "personality": "性格", "appearance": "外貌"}],\n'
+    '  "organizations": [{"name": "组织名", "org_type": "宗门", "description": "描述",\n'
+    '                     "members": [{"name": "角色姓名", "position": "职位"}]}],\n'
+    '  "world": [{"title": "条目名称", "category": "place", "content": "设定内容"}],\n'
+    '  "careers": [{"name": "剑修", "kind": "main", "description": "体系描述",\n'
+    '               "stages": [{"name": "练气", "description": "该阶段的特征"}]}],\n'
+    '  "relationships": [{"a": "张三", "b": "李四", "role_a": "师父", "role_b": "徒弟", "category": "social",\n'
+    '                     "description": "关系描述"}]\n'
+)
+
+BOOK_DIGEST_FORMAT = '{\n  "chapters": [{"chapter_no": 12, "summary": "本章 1~2 句摘要"}],\n' + _BOOK_ENTITIES + "}"
+
+BOOK_SYNTHESIZE_FORMAT = (
+    "{\n"
+    '  "project": {"synopsis": "作品简介", "theme": "主题", "tags": ["类型标签"], "selling_points": "核心卖点",\n'
+    '              "audience": "目标读者", "genre": "主题材"},\n' + _BOOK_ENTITIES + "}"
+)

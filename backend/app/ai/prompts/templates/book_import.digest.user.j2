@@ -1,0 +1,24 @@
+请通读下面这批小说章节，给出每章的摘要，并提取本批出现的设定信息。
+
+{{ project_info }}
+{% if known_characters %}
+
+【已知角色（前文已出现；同一人物请沿用这里的姓名，新出现的称呼写进 aliases）】
+{{ known_characters }}
+{% endif %}
+
+【本批章节】
+{{ chapters_text }}
+
+【要求】
+1. chapters：本批每一章（分段的章节按段）给出 1~2 句摘要，交代关键事件与结果；chapter_no 取【第N章】中的 N。
+2. characters：本批出现的有名有姓的角色。role_type 取值：主角、重要配角、配角、反派、其他；profile 写身份与在故事中的作用；personality、appearance 各 50 字以内；原文没有交代的字段留空字符串。
+3. organizations：本批出现的组织、门派、势力及其成员，members.name 必须是角色姓名。
+4. world：地点、势力、物品、规则、历史等世界观条目；category 取值：place、faction、item、rule、history、other。
+5. careers：职业或修炼境界体系，stages 按由低到高排列。
+6. relationships：角色两两之间的关系，含义为「a 是 b 的 role_a，b 是 a 的 role_b」（对称关系两者相同，如 朋友/朋友）；category 取值：family、social、hostile、work、other。
+7. 只依据本批原文，不要编造；某一类没有内容时输出空数组。
+8. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

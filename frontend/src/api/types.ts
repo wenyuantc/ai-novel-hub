@@ -396,7 +396,8 @@ export interface WizardItemMap {
   careers: Career
 }
 
-export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore' | 'revise'
+/** import = 拆书导入时为每章建的初始版本 */
+export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore' | 'revise' | 'import'
 
 export interface ChapterVersionBrief {
   id: number
@@ -430,6 +431,9 @@ export type GenerationKind =
   | 'deslop'
   | 'continue'
   | 'revise'
+  | 'book_import.digest'
+  | 'book_import.synthesize'
+  | 'book_import.style'
 
 export type GenerationStatus = 'success' | 'error' | 'cancelled'
 
@@ -513,6 +517,7 @@ export type TaskKind =
   | 'outline.expand'
   | 'chapter.batch'
   | 'kb.index'
+  | 'book.import'
 
 /** paused = 待审核（多步任务到达审核点）：不占并发名额，可继续 / 结束 / 取消，不能删除 / 重试 */
 export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
@@ -536,8 +541,11 @@ export interface Task {
   analysis_id: number | null
   /** 展开的大纲（仅 outline.expand 有值），用于按大纲接上活动任务 */
   outline_id: number | null
-  /** 多步任务的断点（仅 chapter.batch 有值；首次运行前为 null） */
-  checkpoint: BatchCheckpoint | null
+  /**
+   * 多步任务的断点（首次运行前为 null）：chapter.batch 为 BatchCheckpoint；book.import 为断点摘要 BookImportSummary。
+   * 按 kind 收窄：批量用 utils/batchState.ts 的 batchCheckpoint，拆书用 utils/bookImport.ts 的 bookImportSummary（任务面板只用 bookImportState.ts 的轻量读取）
+   */
+  checkpoint: BatchCheckpoint | BookImportSummary | null
   /** 断点：下一步要处理的章节在 checkpoint.items 中的下标（仅多步任务有意义） */
   step_cursor: number
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
@@ -681,6 +689,175 @@ export interface BatchChapterStart {
 export interface BatchChapterEnd {
   index: number
   item: BatchItem
+}
+
+// ---------------- 拆书导入（backend/app/schemas/book_import.py、services/book_import/reverse.py） ----------------
+
+export type BookKind = 'txt' | 'md' | 'docx' | 'epub'
+export type BookSplitMode = 'auto' | 'regex'
+/** short < 300 字、long > 2 万字、dup_title 标题重复、gap 序号断档 */
+export type BookChapterWarning = 'short' | 'long' | 'dup_title' | 'gap'
+export type BookOp = 'rename' | 'merge_next' | 'split' | 'delete' | 'start_volume' | 'rename_volume' | 'clear_volume'
+/** [起, 止]：章节序号从 1 起、两端包含 */
+export type BookRange = [number, number]
+
+export interface BookImportBrief {
+  id: number
+  filename: string
+  book_title: string
+  chapter_count: number
+  total_chars: number
+  expires_at: string
+  updated_at: string
+}
+
+export interface BookChapterView {
+  /** 从 1 起 */
+  index: number
+  title: string
+  /** 0 = 不归属任何卷（排在第一个卷之前）；没有任何分卷时全部为 1、卷名为空 */
+  volume_no: number
+  volume_title: string
+  /** 从标题解析出的原始序号（只用于序号断档提示） */
+  source_no: number | null
+  chars: number
+  /** 开头一行（≤60 字） */
+  first_line: string
+  warnings: BookChapterWarning[]
+}
+
+export type BookWarningCounts = Record<BookChapterWarning, number>
+
+export interface BookImport {
+  id: number
+  filename: string
+  kind: BookKind
+  size: number
+  book_title: string
+  split_mode: BookSplitMode
+  split_pattern: string | null
+  /** 修订号：每次校正 / 重切都要带上，过期 → 409 */
+  revision: number
+  notices: string[]
+  chapters: BookChapterView[]
+  warning_counts: BookWarningCounts
+  chapter_count: number
+  total_chars: number
+  /** 章节数超过 max_import_chapters：导入范围必须缩小 */
+  too_many: boolean
+  max_import_chapters: number
+  expires_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface BookChapterText {
+  index: number
+  title: string
+  /** 正文按行切分：行号 = 下标 + 1（拆分时传这个行号，不能是第 1 行） */
+  lines: string[]
+}
+
+export interface BookResplitRequest {
+  mode: BookSplitMode
+  /** regex 模式必填，≤100 字 */
+  pattern?: string | null
+  revision: number
+}
+
+export interface BookOpRequest {
+  op: BookOp
+  index: number
+  /** rename / start_volume / rename_volume 必填（1–200 字） */
+  title?: string | null
+  /** split 必填：章内行号（从 1 起，不能是第 1 行） */
+  line?: number | null
+  revision: number
+}
+
+export interface BookEstimateRequest {
+  import_range: BookRange
+  reverse_range: BookRange
+  extract_style?: boolean
+  deep_analyze?: boolean
+}
+
+/** 预估的 AI 输入字数（单位：字符） */
+export interface BookEstimate {
+  import_chapters: number
+  import_chars: number
+  reverse_chars: number
+  batches: number
+  digest_input: number
+  synthesize_input: number
+  style_input: number
+  analyze_input: number
+  total_input: number
+}
+
+export interface BookStartRequest {
+  revision: number
+  /** 1–200 字 */
+  title: string
+  /** ≤100 字 */
+  genre?: string
+  import_range: BookRange
+  reverse_range: BookRange
+  extract_style?: boolean
+  deep_analyze?: boolean
+  ai_config_id?: number | null
+}
+
+export interface BookStartResult {
+  project_id: number
+  task: Task
+}
+
+export type BookImportPhase = 'digest' | 'synthesize' | 'apply' | 'style' | 'analyze' | 'done'
+
+export interface BookImportStats {
+  summaries: number
+  characters: number
+  organizations: number
+  world: number
+  careers: number
+  relations: number
+  analyses_queued: number
+  style_id: number | null
+  /** 写入的项目字段名（简介、主题等，后端字段名） */
+  project_fields: string[]
+}
+
+export type BookImportSkipped =
+  | { stage: 'digest'; batch_index: number; chapter_nos: number[] }
+  | { stage: 'synthesize'; chapter_nos: number[] }
+
+export interface BookImportPauseReason {
+  reason: 'failed'
+  phase: 'digest' | 'synthesize'
+  batch_index: number | null
+  error: string
+}
+
+/** book.import 的 TaskOut.checkpoint / done.result / paused.result（同一结构；/finish 之后 result 另有 ended_early） */
+export interface BookImportSummary {
+  phase: BookImportPhase
+  batches_total: number
+  batches_done: number
+  batches_skipped: number
+  stats: BookImportStats
+  skipped: BookImportSkipped[]
+  warnings: string[]
+  pause_reason: BookImportPauseReason | null
+  ended_early?: boolean
+}
+
+/** 订阅事件 batch_end（book.import 通读每批结束） */
+export interface BookBatchEnd {
+  /** 从 0 起 */
+  index: number
+  total: number
+  state: 'done'
 }
 
 // ---------------- 结构化设定（backend/app/schemas/{organization,relationship,card,entity_ai}.py） ----------------

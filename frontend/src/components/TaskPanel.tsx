@@ -8,6 +8,7 @@ import type { Task } from '../api/types'
 import { useLoader } from '../hooks/useLoader'
 import { useTaskStream } from '../hooks/useTaskStream'
 import { useTasksStore } from '../stores/tasks'
+import { bookImportBatches, bookImportPause, bookImportPauseText, canSkipBookImport } from '../utils/bookImportState'
 import { formatTime } from '../utils/time'
 import { hasResultViewer } from './entities/taskResultViewers'
 import TaskResultModal from './entities/TaskResultModal'
@@ -144,7 +145,10 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
     <List
       dataSource={tasks}
       renderItem={(t) => {
-        const st = TASK_STATUS[t.status]
+        // 拆书反推因 AI 失败暂停不是「待审核」：状态与阶段都显示为「已暂停」（失败原因在下方单独一行）
+        const failedPause = canSkipBookImport(t)
+        const st = failedPause ? { label: '已暂停', color: 'gold' } : TASK_STATUS[t.status]
+        const stage = failedPause ? '已暂停' : t.stage
         const activeTask = isActiveTask(t.status)
         const paused = t.status === 'paused'
         const link = taskLink(t)
@@ -176,7 +180,29 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
           )
         }
         if (paused) {
-          // 待审核：继续（同一任务从断点接着跑）/ 结束（以已完成收尾）/ 取消；不能删除、重试
+          // 待审核：继续（同一任务从断点接着跑）/ 结束（以已完成收尾）/ 取消；不能删除、重试。
+          // 拆书反推因 AI 失败暂停时另有「跳过本批」（通读批次不写摘要 / 汇总改用代码合并结果）
+          if (canSkipBookImport(t)) {
+            actions.push(
+              <Popconfirm
+                key="skip"
+                title="跳过当前步骤？"
+                description="通读批次被跳过时这些章节不写摘要；汇总被跳过时直接使用各批结果的代码合并。"
+                okText="跳过"
+                cancelText="不跳过"
+                onConfirm={() =>
+                  act(t.id, async () => {
+                    onTrack(await taskApi.skipBookImport(t.id))
+                    message.success('已跳过，任务继续')
+                  })
+                }
+              >
+                <Button type="link" size="small">
+                  跳过本批
+                </Button>
+              </Popconfirm>,
+            )
+          }
           actions.push(
             <Button
               key="resume"
@@ -235,7 +261,9 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               description={
                 t.kind === 'chapter.batch'
                   ? '已完成的章节保留，正在写的章节恢复原状态。'
-                  : '已输出的内容不会保存，章节保持原样。'
+                  : t.kind === 'book.import'
+                    ? '已导入的项目、章节和已写入的设定都会保留。'
+                    : '已输出的内容不会保存，章节保持原样。'
               }
               okText="取消任务"
               cancelText="不取消"
@@ -305,12 +333,13 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
                 />
               )}
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                {t.status === 'queued' ? queueLabel(t) : t.stage}
-                {t.stage || t.status === 'queued' ? ' · ' : ''}
+                {t.status === 'queued' ? queueLabel(t) : stage}
+                {stage || t.status === 'queued' ? ' · ' : ''}
                 {activeTask || paused
                   ? `创建于 ${formatTime(t.created_at)}`
                   : `结束于 ${formatTime(t.finished_at ?? t.created_at)}`}
               </Typography.Text>
+              {paused && t.kind === 'book.import' && <BookImportPauseLine task={t} />}
               {t.error && !activeTask && (
                 <Typography.Text type={t.status === 'failed' ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
                   {t.error}
@@ -324,6 +353,17 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
   )
 }
 
+/** 拆书反推待处理时的暂停原因（取自断点摘要） */
+function BookImportPauseLine({ task }: { task: Task }) {
+  const r = bookImportPause(task.checkpoint)
+  if (!r) return null
+  return (
+    <Typography.Text type="danger" style={{ fontSize: 12, display: 'block' }}>
+      {bookImportPauseText(r)}
+    </Typography.Text>
+  )
+}
+
 /** 查看任务输出：进行中实时订阅，已结束读取 /output。 */
 function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => void }) {
   const live = isActiveTask(task.status)
@@ -334,9 +374,14 @@ function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => void })
     [live, task.id],
   )
   const { data: finishedText = '', loading, error } = useLoader(loader)
+  // 拆书反推：通读批次进度（初值取断点摘要，batch_end 事件推进）
+  const [batches, setBatches] = useState(() => (task.kind === 'book.import' ? bookImportBatches(task.checkpoint) : null))
 
   useEffect(() => {
-    if (live) void follow(task)
+    if (live)
+      void follow(task, {
+        onBatchEnd: (e) => setBatches((prev) => ({ done: Math.max(prev?.done ?? 0, e.index + 1), total: e.total })),
+      })
     // task 对象每次轮询都会变化，只按 id 订阅一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, task.id, follow])
@@ -350,6 +395,11 @@ function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => void })
           <Tag color={TASK_STATUS[current.status].color}>{TASK_STATUS[current.status].label}</Tag>
           {current.status === 'queued' && <Typography.Text type="secondary">{queueLabel(current)}</Typography.Text>}
           {current.stage && current.status !== 'queued' && <Typography.Text type="secondary">{current.stage}</Typography.Text>}
+          {batches && (
+            <Typography.Text type="secondary">
+              通读 {batches.done}/{batches.total} 批
+            </Typography.Text>
+          )}
           {stream.reconnecting && <Typography.Text type="warning">连接中断，正在重连…</Typography.Text>}
         </Space>
         {(error || stream.error) && <Typography.Text type="danger">{error ?? stream.error}</Typography.Text>}

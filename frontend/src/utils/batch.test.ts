@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BatchCheckpoint, BatchItem, Task } from '../api/types'
 import {
   batchBannerState,
+  batchCheckpoint,
   batchCounts,
   batchCurrentPhase,
   batchResumeIndex,
@@ -176,5 +177,26 @@ describe('清单行与文案', () => {
     })
     expect(s).toMatchObject({ skipped_missing: 0, warnings: ['第 2 章：分析失败'], ended_early: true })
     expect(batchSummaryText(s!)).toBe('共 5 章 · 已生成 2 章 · 跳过已写 1 章 · 失败 1 章 · 剩余 1 章（提前结束）')
+  })
+})
+
+describe('断点按类型收窄', () => {
+  it('只有含 items 的断点才是批量断点；拆书摘要不会被当成批量断点', () => {
+    const cp: BatchCheckpoint = { phase: 'generate', current: null, since_review: 0, items: [item(1, 1)] }
+    expect(batchCheckpoint(cp)).toBe(cp)
+    expect(batchCheckpoint(null)).toBeNull()
+    expect(batchCheckpoint(undefined)).toBeNull()
+    const summary = {
+      phase: 'digest' as const,
+      batches_total: 3,
+      batches_done: 1,
+      batches_skipped: 0,
+      stats: { summaries: 0, characters: 0, organizations: 0, world: 0, careers: 0, relations: 0, analyses_queued: 0, style_id: null, project_fields: [] },
+      skipped: [],
+      warnings: [],
+      pause_reason: null,
+    }
+    expect(batchCheckpoint(summary)).toBeNull()
+    expect(batchResumeIndex({ checkpoint: summary, step_cursor: 1 })).toBeNull()
   })
 })

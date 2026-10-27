@@ -1,6 +1,11 @@
 // 批量生成横幅状态 / 续跑位置 / 排队标签（章节页在入口 chunk 中使用，保持精简；其余纯函数在 batch.ts）。
 
-import type { Task, TaskStatus } from '../api/types'
+import type { BatchCheckpoint, Task, TaskStatus } from '../api/types'
+
+/** Task.checkpoint 收窄为批量断点（含 items 的才是；拆书反推的断点摘要等其他类型为 null） */
+export function batchCheckpoint(checkpoint: Task['checkpoint'] | undefined): BatchCheckpoint | null {
+  return checkpoint && 'items' in checkpoint && Array.isArray(checkpoint.items) ? checkpoint : null
+}
 
 export type BatchBannerState = 'running' | 'paused' | 'resumable' | 'none'
 
@@ -19,7 +24,7 @@ export function batchBannerState(task: Pick<Task, 'kind' | 'status'> | null | un
 
 /** 断点所指的下一章下标（后端 step_cursor）；没有断点或已全部处理完时为 null */
 export function batchResumeIndex(task: Pick<Task, 'checkpoint' | 'step_cursor'>): number | null {
-  const total = task.checkpoint?.items.length ?? 0
+  const total = batchCheckpoint(task.checkpoint)?.items.length ?? 0
   if (total === 0) return null
   return task.step_cursor < total ? task.step_cursor : null
 }
@@ -31,7 +36,7 @@ export function queuedBatchChapterIds(task: Pick<Task, 'kind' | 'status' | 'chec
   if (task.status !== 'queued' && task.status !== 'running' && task.status !== 'paused') return ids
   const from = batchResumeIndex(task)
   if (from === null) return ids
-  for (const it of task.checkpoint?.items.slice(from) ?? []) {
+  for (const it of batchCheckpoint(task.checkpoint)?.items.slice(from) ?? []) {
     // 断点处失败停下的章节在重试后会重新生成，也算排队
     if (it.state === 'pending' || it.state === 'failed') ids.add(it.chapter_id)
   }

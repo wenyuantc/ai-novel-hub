@@ -2,6 +2,7 @@ from app.models.base import Base
 from app.models.entities import (
     AIConfig,
     AnalysisChange,
+    BookImport,
     Career,
     CareerHistory,
     CareerStage,
@@ -42,6 +43,7 @@ __all__ = [
     "AIConfig",
     "AnalysisChange",
     "Base",
+    "BookImport",
     "Career",
     "CareerHistory",
     "CareerStage",

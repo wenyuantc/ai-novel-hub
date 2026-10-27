@@ -6,6 +6,7 @@ from app.api.v1 import (
     analysis,
     auth,
     batch,
+    book_imports,
     cards,
     careers,
     chapter_versions,
@@ -59,3 +60,4 @@ api_router.include_router(styles.router)
 api_router.include_router(inspiration.router)
 api_router.include_router(kb.router)
 api_router.include_router(memories.router)
+api_router.include_router(book_imports.router)

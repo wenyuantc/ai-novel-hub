@@ -1021,3 +1021,93 @@ def test_0016_reading_progress(tmp_path):
             assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "星海"
     finally:
         engine.dispose()
+
+
+def test_0017_book_imports(tmp_path):
+    """0017：新建 book_imports（user_id CASCADE）、generation_logs.kind 放宽到 32；downgrade -1 删表、删掉拆书的
+    生成记录与任务、导入版本改记为 baseline，存量数据保留。"""
+    db_file = tmp_path / "migrate0017.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    def log_sql(kind: str) -> str:
+        return (
+            "INSERT INTO generation_logs (project_id, kind, provider, model, params, messages, status, error, "
+            f"output_chars, duration_ms) VALUES (1, '{kind}', '', '', '{{}}', '[]', 'success', '', 0, 0)"
+        )
+
+    command.upgrade(cfg, "0016")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, '星海', '科幻', '设定', '', 'planning')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapters (project_id, chapter_no, title, content, status, word_count) "
+                    "VALUES (1, 1, '第一章', '正文', 'done', 2)"
+                )
+            )
+            conn.execute(text(log_sql("generate")))
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0017")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        fks = {fk["referred_table"]: fk for fk in insp.get_foreign_keys("book_imports")}
+        assert fks["users"]["options"].get("ondelete") == "CASCADE"
+        kind = next(c for c in insp.get_columns("generation_logs") if c["name"] == "kind")
+        assert kind["type"].length == 32
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (2, 'tmp', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO book_imports (user_id, filename, kind, text, chapters, expires_at) "
+                    "VALUES (2, 'a.txt', 'txt', '正文', '[]', '2099-01-01 00:00:00')"
+                )
+            )
+            row = conn.execute(text("SELECT size, split_mode, notices, doc_spans, revision FROM book_imports")).one()
+            assert tuple(row) == (0, "auto", "[]", "[]", 0)
+            conn.execute(text("DELETE FROM users WHERE id = 2"))
+            assert conn.execute(text("SELECT count(*) FROM book_imports")).scalar_one() == 0
+            conn.execute(text(log_sql("book_import.synthesize")))
+            conn.execute(
+                text(
+                    "INSERT INTO tasks (user_id, project_id, kind, title, status, input, output_text, progress, "
+                    "stage, error, step_cursor) VALUES (1, 1, 'book.import', '拆书', 'succeeded', '{}', '', 100, "
+                    "'', '', 0)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapter_versions (chapter_id, seq, source, content, word_count) "
+                    "VALUES (1, 1, 'import', '正文', 2)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert "book_imports" not in insp.get_table_names()
+        kind = next(c for c in insp.get_columns("generation_logs") if c["name"] == "kind")
+        assert kind["type"].length == 16
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT kind FROM generation_logs")).scalars().all() == ["generate"]
+            assert conn.execute(text("SELECT count(*) FROM tasks")).scalar_one() == 0
+            assert conn.execute(text("SELECT source FROM chapter_versions")).scalar_one() == "baseline"
+            assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "星海"
+    finally:
+        engine.dispose()

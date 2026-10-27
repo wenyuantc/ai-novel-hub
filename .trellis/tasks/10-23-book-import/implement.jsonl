@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "断点、paused、续跑、重试契约（book.import 照此实现）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约与错误格式"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "kb_parser、上传限制中间件"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板注册、锁定变量、用户覆盖、风格提取"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "实体写入与检索单元维护"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "大纲 / 章节号约定"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "新表需登记表规则（反射测试）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键、归属 404"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面、上传、任务面板、响应式、禁 100vw"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-prompts-agents.md", "reason": "MuMu 拆书流程与缺陷对照（§6）"}

@@ -55,6 +55,7 @@ export const VERSION_SOURCE: Record<VersionSource, { label: string; color: strin
   rewrite: { label: '局部改写', color: 'purple' },
   restore: { label: '回滚', color: 'magenta' },
   revise: { label: '按建议重写', color: 'geekblue' },
+  import: { label: '导入', color: 'green' },
 }
 
 export const GENERATION_KIND_LABELS: Record<GenerationKind, string> = {
@@ -66,6 +67,9 @@ export const GENERATION_KIND_LABELS: Record<GenerationKind, string> = {
   deslop: '去 AI 味',
   continue: '续写',
   revise: '按建议重写',
+  'book_import.digest': '拆书通读',
+  'book_import.synthesize': '拆书汇总',
+  'book_import.style': '拆书风格提取',
 }
 
 export const GENERATION_STATUS: Record<GenerationStatus, { label: string; color: string }> = {

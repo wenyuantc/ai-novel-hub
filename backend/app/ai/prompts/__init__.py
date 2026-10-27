@@ -4,6 +4,7 @@
 """
 
 from app.ai.prompts.analysis import build_analysis_messages
+from app.ai.prompts.book_import import build_book_digest_messages, build_book_synthesize_messages
 from app.ai.prompts.careers import build_career_generate_messages, build_careers_wizard_messages
 from app.ai.prompts.chapter import (
     build_chapter_messages,
@@ -33,6 +34,8 @@ __all__ = [
     "ProjectInfo",
     "RewriteOp",
     "build_analysis_messages",
+    "build_book_digest_messages",
+    "build_book_synthesize_messages",
     "build_career_generate_messages",
     "build_careers_wizard_messages",
     "build_chapter_messages",

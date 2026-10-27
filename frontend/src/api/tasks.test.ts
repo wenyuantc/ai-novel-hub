@@ -208,6 +208,25 @@ describe('subscribeTask', () => {
     })
   })
 
+  it('拆书事件：batch_end 回调（结构不符的忽略），stage 照常分派', async () => {
+    vi.stubGlobal('fetch', async () =>
+      sseResponse([
+        frame('snapshot', { task: task({ kind: 'book.import', chapter_id: null }), text: '' }),
+        frame('stage', { stage: '通读 1/3' }),
+        frame('batch_end', { index: 0, total: 3, state: 'done' }),
+        frame('batch_end', { index: 'x' }),
+        frame('done', { task: task({ kind: 'book.import', status: 'succeeded', chapter_id: null }), result: { phase: 'done' } }),
+      ]),
+    )
+    const log: string[] = []
+    const end = await subscribeTask(1, {
+      onStage: (st) => log.push(`stage:${st}`),
+      onBatchEnd: (e) => log.push(`batch:${e.index}/${e.total}:${e.state}`),
+    })
+    expect(log).toEqual(['stage:通读 1/3', 'batch:0/3:done'])
+    expect(end.status).toBe('succeeded')
+  })
+
   it('404 不重连，直接抛 ApiError', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ detail: '任务不存在' }), { status: 404 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -294,6 +313,19 @@ describe('task helpers', () => {
     expect(taskLink(task({ chapter_id: null }))).toBeNull()
     expect(taskLink(task({ kind: 'wizard.characters', chapter_id: null }))).toBe('/projects/2/wizard?kind=characters')
     expect(taskLink(task({ project_id: null }))).toBeNull()
+  })
+
+  it('taskLink / 标签：拆书反推到项目概览；跳过接口路径', async () => {
+    expect(taskLink(task({ kind: 'book.import', chapter_id: null }))).toBe('/projects/2/overview')
+    expect(TASK_KIND_LABELS['book.import']).toBe('拆书反推')
+    const calls: string[] = []
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push(`${init.method} ${url}`)
+      return new Response(JSON.stringify(task({ kind: 'book.import', status: 'queued' })), { status: 202 })
+    })
+    const t = await taskApi.skipBookImport(7)
+    expect(t.status).toBe('queued')
+    expect(calls).toEqual(['POST /api/v1/book-imports/tasks/7/skip'])
   })
 
   it('taskLink：建索引到知识库页', () => {

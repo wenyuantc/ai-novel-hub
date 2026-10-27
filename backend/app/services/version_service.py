@@ -106,3 +106,23 @@ async def record_manual(db: AsyncSession, chapter: Chapter) -> ChapterVersion | 
         await db.flush()
         return latest
     return await record(db, chapter, "manual")
+
+
+def add_initial(db: AsyncSession, chapters: list[Chapter], source: str, *, note: str = "") -> None:
+    """给刚创建、还没有任何版本的章节批量写入第 1 个版本（如拆书导入）；正文为空的跳过。不 flush、不 commit。
+
+    新章节没有历史版本，不需要逐章查询 seq 与裁剪，因此批量 add（导入可达 3000 章）。
+    """
+    db.add_all(
+        ChapterVersion(
+            chapter_id=c.id,
+            seq=1,
+            source=source,
+            content=c.content,
+            word_count=c.word_count,
+            starred=False,
+            note=note[:200],
+        )
+        for c in chapters
+        if c.content.strip()
+    )

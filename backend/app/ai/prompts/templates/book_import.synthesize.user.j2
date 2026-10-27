@@ -1,0 +1,44 @@
+下面是一部小说通读后整理出的章节摘要与设定草稿（由多批阅读结果合并而来，可能有重复、遗漏或称呼不一）。请据此给出这部作品的作品信息与最终设定。
+
+{{ project_info }}
+{% if summaries %}
+
+【章节摘要】
+{{ summaries }}
+{% endif %}
+{% if characters %}
+
+【角色草稿（姓名｜别名｜定位｜简介）】
+{{ characters }}
+{% endif %}
+{% if organizations %}
+
+【组织草稿】
+{{ organizations }}
+{% endif %}
+{% if world %}
+
+【世界观草稿】
+{{ world }}
+{% endif %}
+{% if careers %}
+
+【职业 / 境界体系草稿】
+{{ careers }}
+{% endif %}
+{% if relations %}
+
+【人物关系草稿】
+{{ relations }}
+{% endif %}
+
+【要求】
+1. project：synopsis 为 300 字以内的作品简介；theme 为一句话主题；tags 为 3~8 个类型标签（每个不超过 10 字）；selling_points 为 200 字以内的核心卖点；audience 为 50 字以内的目标读者；genre 为主题材（如 玄幻、都市、科幻）。
+2. characters：合并同一人物（以最常用的姓名为准，其他称呼写进 aliases），保留对故事有作用的角色，最多 60 个；role_type 取值：主角、重要配角、配角、反派、其他。
+3. organizations、world、careers：去掉重复、合并相近的条目，内容写完整。
+4. relationships：只保留主要角色之间的关系，a、b 必须是 characters 中的姓名；含义为「a 是 b 的 role_a，b 是 a 的 role_b」。
+5. 只依据上面的材料，不要编造。
+6. {{ json_rule }}
+
+【输出格式】
+{{ output_format }}

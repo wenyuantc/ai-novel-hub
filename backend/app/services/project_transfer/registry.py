@@ -57,7 +57,8 @@ from app.services.project_transfer import remap
 Option = Literal["versions", "snapshots", "generation_logs", "inspiration"]
 OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "inspiration")
 
-# 与项目相关、但不导出的表（理由见值）
+# 与项目相关、但不导出的表（理由见值）。
+# book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
     "tasks": "后台任务是运行时状态，导入后没有意义；导入后按需重新排队建索引",
     "kb_chunks": "由知识库文档的 text 重新分块得到，导入时在同一事务里重新生成",

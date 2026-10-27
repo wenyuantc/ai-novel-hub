@@ -65,6 +65,7 @@ import { useLoader } from '../../hooks/useLoader'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
+import { batchCheckpoint } from '../../utils/batchState'
 import { readAutoContinue } from '../../utils/preferences'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
@@ -390,7 +391,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   // 批量生成正在写本章（批量任务没有 chapter_id，按断点里的当前章识别）：只读等待、不提供复位；写完后从服务端刷新正文
   const batchWriting = activeTasks.some(
-    (x) => x.kind === 'chapter.batch' && isActiveTask(x.status) && x.checkpoint?.current?.chapter_id === chapter.id,
+    (x) => x.kind === 'chapter.batch' && isActiveTask(x.status) && batchCheckpoint(x.checkpoint)?.current?.chapter_id === chapter.id,
   )
   const wasBatchWritingRef = useRef(false)
   useEffect(() => {

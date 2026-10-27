@@ -1,4 +1,4 @@
-"""提示词模板注册表：25 个模板 key 的元信息、变量声明与系统默认模板（templates/<key>.{system,user}.j2）。
+"""提示词模板注册表：28 个模板 key 的元信息、变量声明与系统默认模板（templates/<key>.{system,user}.j2）。
 
 - 数据块（参考资料、角色卡、作品信息等）由 build_*_messages 在 Python 里拼好后作为变量传入，模板只负责排布与措辞。
 - 锁定变量（json_rule / output_format / output_schema）的内容由代码提供，模板里必须原样出现一次（见 templating）。
@@ -25,6 +25,7 @@ CATEGORIES: dict[str, str] = {
     "outline": "大纲",
     "style": "写作风格",
     "inspiration": "灵感模式",
+    "book_import": "拆书",
 }
 
 
@@ -422,6 +423,41 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
     _inspiration("tags", "类型标签", "给出 6~10 个类型标签候选（可多选）。"),
     _inspiration("selling_points", "核心卖点", "给出 4~6 个核心卖点候选。"),
     _inspiration("audience", "目标读者", "给出 4~6 个目标读者候选。"),
+    (
+        "book_import.digest",
+        "拆书：通读",
+        "book_import",
+        "拆书导入时按批通读章节：每章摘要，以及本批出现的角色、组织、世界观、职业体系与人物关系。",
+        (
+            PROJECT_INFO_VAR,
+            T("known_characters", "已知角色名单（之前批次累计的姓名与别名）", sample="林远（小林、林师兄）"),
+            T(
+                "chapters_text",
+                "本批章节正文（每段以【第N章 标题】开头）",
+                required=True,
+                sample="【第1章 雨夜】\n林远推开舱门，冷风扑面而来。",
+            ),
+            JSON_RULE_VAR,
+            _out(F.BOOK_DIGEST_FORMAT),
+        ),
+    ),
+    (
+        "book_import.synthesize",
+        "拆书：汇总",
+        "book_import",
+        "拆书导入时汇总各批通读结果：作品信息，以及精选后的角色、组织、世界观、职业体系与人物关系。",
+        (
+            PROJECT_INFO_VAR,
+            T("summaries", "章节摘要（按章号，可能抽样）", sample="第1章 雨夜：林远登上远征舰。"),
+            T("characters", "角色草稿", sample="林远｜小林｜主角｜远征舰见习舰员"),
+            T("organizations", "组织草稿", sample=""),
+            T("world", "世界观草稿", sample=""),
+            T("careers", "职业 / 境界体系草稿", sample=""),
+            T("relations", "人物关系草稿", sample=""),
+            JSON_RULE_VAR,
+            _out(F.BOOK_SYNTHESIZE_FORMAT),
+        ),
+    ),
 ]
 
 TEMPLATES: dict[str, PromptTemplate] = {

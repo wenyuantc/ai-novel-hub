@@ -33,10 +33,22 @@ from app.models.style_presets import PRESET_STYLES
 CHAPTER_STATUSES = ("draft", "generating", "done")
 AI_PROVIDERS = ("openai_compat", "anthropic", "gemini")
 PROJECT_STATUSES = ("planning", "writing", "completed")
-# 版本来源：手动保存 / AI 或回滚替换前补的快照 / 整章生成 / 润色 / 局部改写采纳 / 回滚 / 按建议重写
-VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore", "revise")
-# 生成记录类型：整章生成、润色、按建议重写，以及局部改写的各个操作
-GENERATION_KINDS = ("generate", "polish", "rewrite", "expand", "condense", "deslop", "continue", "revise")
+# 版本来源：手动保存 / AI 或回滚替换前补的快照 / 整章生成 / 润色 / 局部改写采纳 / 回滚 / 按建议重写 / 拆书导入的初始版本
+VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore", "revise", "import")
+# 生成记录类型：整章生成、润色、按建议重写，局部改写的各个操作，以及拆书反推的通读 / 汇总 / 风格提取
+GENERATION_KINDS = (
+    "generate",
+    "polish",
+    "rewrite",
+    "expand",
+    "condense",
+    "deslop",
+    "continue",
+    "revise",
+    "book_import.digest",
+    "book_import.synthesize",
+    "book_import.style",
+)
 GENERATION_STATUSES = ("success", "error", "cancelled")
 # 后台任务
 TASK_KINDS = (
@@ -56,6 +68,7 @@ TASK_KINDS = (
     "outline.expand",
     "chapter.batch",
     "kb.index",
+    "book.import",
 )
 TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
 # 活动：占资源键（部分唯一索引）、由调度器领取
@@ -505,7 +518,8 @@ class GenerationLog(TimestampMixin, Base):
     chapter_id: Mapped[int | None] = mapped_column(
         ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 迁移 0017 起 32（拆书反推的 kind 如 book_import.synthesize 超过 16 字符）
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
     ai_config_id: Mapped[int | None] = mapped_column(
         ForeignKey("ai_configs.id", ondelete="SET NULL"), index=True, nullable=True
     )
@@ -920,3 +934,39 @@ class RetrievalChunk(TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+
+
+# 拆书导入（迁移 0017）
+BOOK_IMPORT_KINDS = ("txt", "md", "docx", "epub")
+BOOK_SPLIT_MODES = ("auto", "regex")
+
+
+class BookImport(TimestampMixin, Base):
+    """拆书导入的解析记录：清洗后的全文 + 切章结果（可人工校正），开始导入时删除；创建满 7 天未导入的自动清理。
+
+    与项目无关（只属于用户），不进项目备份。chapters 每项 {title, segments: [[start, end], ...], volume_no,
+    volume_title, source_no}：segments 是指向 text 的半开区间，不重复保存正文。revision 每次校正 +1（乐观并发）。
+    """
+
+    __tablename__ = "book_imports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # txt / md / docx / epub
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), default="", server_default="", nullable=False)
+    # 默认书名：epub 元数据或去掉扩展名的文件名
+    book_title: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # auto / regex
+    split_mode: Mapped[str] = mapped_column(String(8), default="auto", server_default="auto", nullable=False)
+    split_pattern: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    chapters: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    # 切章提示（如「已去除目录区 12 行」）
+    notices: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    # 仅 epub：书脊中每个文档在 text 中的区间（自动重切时按文档切）
+    doc_spans: Mapped[list[Any]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)

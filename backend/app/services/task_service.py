@@ -4,7 +4,8 @@
 handler 可选钩子（getattr 探测）：
 - validate_retry(db, ctx, *, user_id, task) -> TaskSpec：重试时代替 validate_and_claim（多步任务沿用原范围与断点）；
 - revalidate_resume(db, ctx, task)：待审核任务继续前重新校验，业务错误抛 AppError；
-- finish_result(task) -> dict：待审核任务被结束时的最终 result。
+- finish_result(task) -> dict：待审核任务被结束时的最终 result；
+- checkpoint_out(task) -> dict | None：TaskOut.checkpoint 的取值（默认原样返回断点；断点体积大的类型只给摘要）。
 """
 
 import bisect
@@ -64,6 +65,9 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
         "analysis_id": _revise_analysis_id(task),
         "outline_id": _request_int(task, "outline_id") if task.kind == "outline.expand" else None,
     }
+    checkpoint_out = getattr(get_handler(task.kind), "checkpoint_out", None)
+    if checkpoint_out is not None:
+        update_fields["checkpoint"] = checkpoint_out(task)
     hub = engine.hubs.get(task.id) if engine is not None else None
     if hub is not None and task.status in ACTIVE_TASK_STATUSES:
         # 进度 / 阶段以内存中的实时值为准（库里是节流刷新的）

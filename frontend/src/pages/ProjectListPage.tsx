@@ -6,6 +6,7 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  FileTextOutlined,
   ImportOutlined,
   MoreOutlined,
   PlusOutlined,
@@ -188,6 +189,7 @@ export default function ProjectListPage() {
               onCreate={() => setCreateOpen(true)}
               onInspire={() => navigate('/inspiration')}
               onImport={() => setImportOpen(true)}
+              onBookImport={() => navigate('/book-import')}
             />
           </Col>
           {visible.map((p) => (
@@ -281,8 +283,15 @@ export default function ProjectListPage() {
   )
 }
 
-/** 第一张固定的「新建」卡：新建项目 / 灵感模式 / 导入备份。 */
-function NewBookCard({ onCreate, onInspire, onImport }: { onCreate: () => void; onInspire: () => void; onImport: () => void }) {
+interface NewBookCardProps {
+  onCreate: () => void
+  onInspire: () => void
+  onImport: () => void
+  onBookImport: () => void
+}
+
+/** 第一张固定的「新建」卡：新建项目 / 灵感模式 / 拆书导入（上传已有小说，/book-import）/ 导入备份。 */
+function NewBookCard({ onCreate, onInspire, onImport, onBookImport }: NewBookCardProps) {
   const { token } = theme.useToken()
   return (
     <div>
@@ -304,6 +313,9 @@ function NewBookCard({ onCreate, onInspire, onImport }: { onCreate: () => void; 
         </Button>
         <Button icon={<BulbOutlined />} block onClick={onInspire}>
           灵感模式
+        </Button>
+        <Button icon={<FileTextOutlined />} block onClick={onBookImport}>
+          拆书导入
         </Button>
         <Button icon={<ImportOutlined />} block onClick={onImport}>
           导入备份

@@ -506,17 +506,8 @@ async def request_analyze(
     return await task_service.create_task(db, engine, user_id, KIND, params), True
 
 
-async def analyze_pending(
-    db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, req: AnalyzeRequest
-) -> AnalyzePendingResult:
-    """一键分析：按 chapter_no 顺序为未分析 / 已过期且正文非空的章节入队。
-
-    跳过已有排队中或运行中分析的章节（状态为「分析中」，不属于未分析 / 已过期），避免重复点击时重复消耗。
-    与 enqueue_auto 不同：自动分析允许在运行中再排一次，因为触发它的生成刚改过正文。
-    """
-    from app.services import task_service
-
-    await get_owned_project(db, user_id, project_id)
+async def pending_chapter_ids(db: AsyncSession, project_id: int) -> list[int]:
+    """按 chapter_no 顺序：正文非空、未分析或已过期、且没有排队中 / 运行中分析的章节 id。"""
     chapters = list(
         await db.scalars(
             select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_no, Chapter.id)
@@ -537,11 +528,56 @@ async def analyze_pending(
         a = latest.get(c.id)
         if a is None or a.content_hash != content_hash(c.content):
             targets.append(c.id)
+    return targets
+
+
+async def analyze_pending(
+    db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, req: AnalyzeRequest
+) -> AnalyzePendingResult:
+    """一键分析：按 chapter_no 顺序为未分析 / 已过期且正文非空的章节入队。
+
+    跳过已有排队中或运行中分析的章节（状态为「分析中」，不属于未分析 / 已过期），避免重复点击时重复消耗。
+    与 enqueue_auto 不同：自动分析允许在运行中再排一次，因为触发它的生成刚改过正文。
+    """
+    from app.services import task_service
+
+    await get_owned_project(db, user_id, project_id)
     task_ids: list[int] = []
-    for cid in targets:
+    for cid in await pending_chapter_ids(db, project_id):
         params = {"chapter_id": cid, **req.model_dump(mode="json")}
         task_ids.append((await task_service.create_task(db, engine, user_id, KIND, params)).id)
     return AnalyzePendingResult(queued=len(task_ids), task_ids=task_ids)
+
+
+async def enqueue_pending(db: AsyncSession, project: Project, *, ai_config_id: int | None) -> list[int]:
+    """在后台任务里为 pending_chapter_ids 的章节排队分析（拆书导入的深度分析）；返回新任务 id。
+
+    任务上下文里没有引擎与请求：不逐章重走 validate_and_claim（调用方已校验过 AI 配置），直接插入 queued 行，
+    同项目串行；当前任务结束时引擎的完成回调会唤醒调度器。不 commit。
+    """
+    from app.services import task_service
+
+    ids = await pending_chapter_ids(db, project.id)
+    if not ids:
+        return []
+    chapters = {c.id: c for c in await db.scalars(select(Chapter).where(Chapter.id.in_(ids)))}
+    tasks = [
+        Task(
+            user_id=project.user_id,
+            project_id=project.id,
+            chapter_id=cid,
+            kind=KIND,
+            title=task_title(chapters[cid])[:200],
+            serial_key=serial_key(project.id),
+            status="queued",
+            input={"request": {"chapter_id": cid, "ai_config_id": ai_config_id}, "chapter_id": cid},
+            stage=task_service.STAGE_LABELS["queued"],
+        )
+        for cid in ids
+    ]
+    db.add_all(tasks)
+    await db.flush()
+    return [t.id for t in tasks]
 
 
 async def enqueue_auto(ctx: "TaskContext", project_id: int | None, chapter_id: int | None) -> int | None:

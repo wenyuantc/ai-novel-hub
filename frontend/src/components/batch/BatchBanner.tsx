@@ -5,7 +5,7 @@ import { queueLabel, TASK_STATUS, taskApi } from '../../api/tasks'
 import type { BatchChapterStart, BatchItem, Task } from '../../api/types'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
-import { batchBannerState, batchCounts, batchCurrentPhase, batchResumeIndex, batchStageIndex } from '../../utils/batch'
+import { batchBannerState, batchCheckpoint, batchCounts, batchCurrentPhase, batchResumeIndex, batchStageIndex } from '../../utils/batch'
 
 // 清单 / 实时输出只在展开时加载（章节页在入口 chunk 中）
 const BatchProgressView = lazy(() => import('./BatchProgressView'))
@@ -55,7 +55,8 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
       taskApi
         .get(task.id)
         .then((t) => {
-          if (alive && t.checkpoint) setLiveItems(t.checkpoint.items)
+          const cp = batchCheckpoint(t.checkpoint)
+          if (alive && cp) setLiveItems(cp.items)
         })
         .catch(() => {
           // 取断点失败：清单沿用轮询数据
@@ -63,7 +64,8 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
     }
     void follow(task, {
       onSnapshot: (t) => {
-        if (t?.checkpoint) setLiveItems(t.checkpoint.items)
+        const cp = batchCheckpoint(t?.checkpoint)
+        if (cp) setLiveItems(cp.items)
       },
       onChapterStart: (e) => {
         setCurrent(e)
@@ -116,7 +118,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
   if (state === 'none') return null
 
   const view = live && stream.task?.id === task.id ? stream.task : task
-  const items = liveItems ?? view.checkpoint?.items ?? task.checkpoint?.items ?? []
+  const items = liveItems ?? batchCheckpoint(view.checkpoint)?.items ?? batchCheckpoint(task.checkpoint)?.items ?? []
   const counts = batchCounts(items)
   const resumeIndex = state === 'resumable' ? batchResumeIndex(task) : null
   const resumeNo = resumeIndex !== null ? items[resumeIndex]?.chapter_no : null

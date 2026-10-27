@@ -9,7 +9,7 @@ import type {
   ChapterBrief,
 } from '../api/types'
 
-export { batchBannerState, batchResumeIndex, queuedBatchChapterIds, type BatchBannerState } from './batchState'
+export { batchBannerState, batchCheckpoint, batchResumeIndex, queuedBatchChapterIds, type BatchBannerState } from './batchState'
 
 /** 与后端一致：按 (chapter_no, id) 排序 */
 export function sortChapters<T extends Pick<ChapterBrief, 'id' | 'chapter_no'>>(chapters: readonly T[]): T[] {

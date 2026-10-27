@@ -120,7 +120,10 @@ def detect_kind(filename: str, data: bytes) -> str:
 # ---------------- 解析 ----------------
 
 
-def parse(filename: str, data: bytes) -> ParsedDoc:
+def parse(filename: str, data: bytes, *, max_chars: int | None = None, truncate: bool = True) -> ParsedDoc:
+    """解析为类 Markdown 文本。超过 max_chars（默认 MAX_TEXT_CHARS）：truncate=True 截断并给 warning（知识库），
+    否则 400（拆书导入）。"""
+    max_chars = MAX_TEXT_CHARS if max_chars is None else max_chars
     if len(data) > MAX_FILE_BYTES:
         raise BadRequestError(TOO_LARGE)
     if not data:
@@ -132,14 +135,20 @@ def parse(filename: str, data: bytes) -> ParsedDoc:
         raise
     except Exception as exc:  # noqa: BLE001
         raise BadRequestError(f"文件解析失败：{_describe(exc)}") from exc
-    text = _clean(text)
+    text = clean_text(text)
     warnings: list[str] = []
-    if len(text) > MAX_TEXT_CHARS:
-        text = text[:MAX_TEXT_CHARS]
-        warnings.append(f"解析出的文本超过 {MAX_TEXT_CHARS // 10000} 万字，已截断")
+    if len(text) > max_chars:
+        if not truncate:
+            raise BadRequestError(text_too_long(max_chars))
+        text = text[:max_chars]
+        warnings.append(f"解析出的文本超过 {max_chars // 10000} 万字，已截断")
     if not text.strip():
         raise BadRequestError("文件中没有可用的文字内容")
     return ParsedDoc(kind=kind, text=text, warnings=warnings)
+
+
+def text_too_long(max_chars: int) -> str:
+    return f"解析出的文本超过 {max_chars // 10000} 万字，无法导入"
 
 
 def _describe(exc: Exception) -> str:
@@ -147,21 +156,43 @@ def _describe(exc: Exception) -> str:
     return text[:200]
 
 
-def _clean(text: str) -> str:
+def clean_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
     lines = [ln.rstrip() for ln in text.split("\n")]
     return _BLANK_RE.sub("\n\n", "\n".join(lines)).strip()
 
 
+# 常用汉字（简繁两种写法都列入）：GB18030 与 Big5 都能解码同一段字节时，按命中率判断哪种是对的
+_COMMON_HAN = set(
+    "的一是不了人我在有他这這个個们們中来來上大为為和国國地到以说說时時要就出会會可也你对對生能而子那得于於"
+    "着著下自之年过過发發后後作里裡用道行所然家种種事成方多经經么麼去法学學如都同现現当當没沒动動面起看定天分"
+    "还還进進好小部其些主样樣理心她本前开開但因只从從想实實日军軍者意无無力它与與长長把机機十民第公此已工使"
+)
+
+
+def _han_score(text: str) -> float:
+    han = [c for c in text[:20000] if "\u4e00" <= c <= "\u9fff"]
+    return sum(c in _COMMON_HAN for c in han) / len(han) if han else 0.0
+
+
 def decode_text(data: bytes) -> str:
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return data.decode("utf-16")
-    for enc in ("utf-8-sig", "utf-8", "gb18030"):
+    for enc in ("utf-8-sig", "utf-8"):
         try:
             return data.decode(enc)
         except UnicodeDecodeError:
             continue
-    raise BadRequestError("无法识别文本编码（支持 UTF-8 与 GB18030）")
+    candidates: list[str] = []
+    # Big5 的双字节编码区几乎都落在 GB18030 的合法范围内（解码成功但是乱码），所以两种都能解时比较常用字命中率
+    for enc in ("gb18030", "big5"):
+        try:
+            candidates.append(data.decode(enc))
+        except UnicodeDecodeError:
+            continue
+    if not candidates:
+        raise BadRequestError("无法识别文本编码（支持 UTF-8、GB18030 与 Big5）")
+    return max(candidates, key=_han_score) if len(candidates) > 1 else candidates[0]
 
 
 def _parse_txt(data: bytes) -> str:
@@ -388,7 +419,8 @@ class _XhtmlText(HTMLParser):
         return "\n\n".join(self.out)
 
 
-def _parse_epub(data: bytes) -> str:
+def epub_documents(data: bytes) -> tuple[str | None, list[str]]:
+    """按 OPF spine 顺序读出每个文档的文字（类 Markdown，可能为空串），以及 OPF 里的 dc:title（没有为 None）。"""
     zf = _open_zip(data)
     container = _xml(_read(zf, "META-INF/container.xml"))
     rootfile = next((el for el in container.iter() if el.tag.endswith("rootfile")), None)
@@ -396,12 +428,14 @@ def _parse_epub(data: bytes) -> str:
     if not opf_path:
         raise BadRequestError("EPUB 结构不完整：找不到 OPF 文件")
     opf = _xml(_read(zf, opf_path))
+    title_el = next((el for el in opf.iter() if el.tag.endswith("}title") or el.tag == "title"), None)
+    title = " ".join((title_el.text or "").split()) if title_el is not None else ""
     base = posixpath.dirname(opf_path)
     manifest = {
         el.get("id"): el.get("href") for el in opf.iter() if el.tag.endswith("item") and el.get("id") and el.get("href")
     }
     spine = [el.get("idref") for el in opf.iter() if el.tag.endswith("itemref") and el.get("idref")]
-    parts: list[str] = []
+    docs: list[str] = []
     names = set(zf.namelist())
     for idref in spine:
         href = manifest.get(idref)
@@ -412,10 +446,12 @@ def _parse_epub(data: bytes) -> str:
             continue
         parser = _XhtmlText()
         parser.feed(decode_text(_read(zf, path)))
-        text = parser.text()
-        if text.strip():
-            parts.append(text)
-    return "\n\n".join(parts)
+        docs.append(parser.text())
+    return title or None, docs
+
+
+def _parse_epub(data: bytes) -> str:
+    return "\n\n".join(t for t in epub_documents(data)[1] if t.strip())
 
 
 def _parse_pdf(data: bytes) -> str:

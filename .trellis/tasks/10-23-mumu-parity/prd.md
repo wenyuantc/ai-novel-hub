@@ -107,7 +107,7 @@
 
 ## 进度
 
-已归档 13/18（2026-10-27）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui。P0 全部完成，P1 剩 book-import；P2 待做 project-agent、skills-mcp、oauth-announce、prompt-workshop。
+已归档 14/18（2026-10-27）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import。P0、P1 全部完成；P2 待做 project-agent、skills-mcp、oauth-announce、prompt-workshop。
 
 不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 

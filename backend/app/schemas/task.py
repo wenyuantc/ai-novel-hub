@@ -21,6 +21,7 @@ TaskKind = Literal[
     "outline.expand",
     "chapter.batch",
     "kb.index",
+    "book.import",
 ]
 
 
@@ -43,7 +44,8 @@ class TaskOut(BaseModel):
     analysis_id: int | None = None
     # 展开的大纲（取自 input.request.outline_id，仅 outline.expand 有值），前端据此按大纲接上活动任务
     outline_id: int | None = None
-    # 多步任务的结构化断点（仅 chapter.batch 有值：阶段、当前章、每章结果），前端据此渲染章节清单
+    # 多步任务的结构化断点（chapter.batch：阶段、当前章、每章结果，前端据此渲染章节清单；
+    # book.import：断点摘要，见 book_import.reverse.summarize，不含体积较大的中间结果）
     checkpoint: dict[str, Any] | None = None
     # 断点：下一步要处理的章节在 input.chapter_ids 中的下标（仅多步任务有意义），前端据此显示「从第 N 章续跑」
     step_cursor: int = 0

@@ -31,6 +31,7 @@
 | [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v1 格式、表规则注册表（新增项目相关表必须登记，反射测试）、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、风格 / 全局关系类型对应、EPUB 3 + NCX 结构与分卷规则 | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
+| [拆书导入](./book-import.md) | `book_imports` 解析记录（切章强规则、序章 / 目录区 / 兜底、docx / epub、子进程正则）、7 种校正与提示、修订号 409 `code = stale_revision`、单事务开始导入、`book.import` 断点 / 暂停 / 跳过 / 只写空字段 | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码 | 已填写 |
 | [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
 
@@ -45,6 +46,7 @@
 | 章节上下文组装（选角 D4、裁剪顺序） | [story-entities.md](./story-entities.md#场景章节上下文组装选角与裁剪d4) |
 | 章节号平移（`CHAPTER_NO_REFS`）、细纲建章、快照恢复 | [outline.md](./outline.md) |
 | 批量顺序生成（断点、待审核、范围锁、任务内分析） | [batch-generate.md](./batch-generate.md) |
+| 拆书导入（切章与校正、修订号乐观并发、开始导入事务、反推断点 / 暂停 / 跳过、只写空字段） | [book-import.md](./book-import.md) |
 | 检索打分与缓存、知识库建索引、剧情记忆同步与召回 | [retrieval.md](./retrieval.md) |
 | 项目备份注册表 / 导入映射、EPUB 结构 | [project-transfer.md](./project-transfer.md) |
 | 提示词模板（校验 / 渲染 / 覆盖）与写作风格解析 | [prompts-styles.md](./prompts-styles.md) |

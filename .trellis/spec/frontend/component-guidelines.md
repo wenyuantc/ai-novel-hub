@@ -241,7 +241,7 @@ dayjs.locale('zh-cn')
 | `batch/BatchGenerateModal` | `{ projectId; chapters: ChapterBrief[]; onClose; onStarted(task) }`，`ChaptersPanel` 用 `React.lazy` 且只在打开时挂载。范围：起止章 `Select`（默认 `defaultBatchRange`：第一个未写章节 → 最后一章）+「生成到第 N 章」（`endIdUpTo`）；选项：统一字数 300–20000、审核间隔 0–50、使用细纲字数、包含已写、自动续写、失败时跳过继续、附加要求 ≤2000、`AIConfigSelect`。范围 / 字数相关字段变化后 400ms 防抖 `POST /batch-generate/preview`（结果按请求键保存，键变化即失效，**不在 effect 里同步 setState**）：将生成 N 章、跳过已写数、`formatEta(estimated_minutes)`、是否分析、warnings、章节清单（目标字数与来源、`重写` 标签）。起始晚于结束 / 预览 0 章 / 没有模型配置时禁用确定。成功 → `track(task)`。 |
 | `batch/BatchBanner` | `{ task; onChaptersChanged; onDismiss }`，`ChaptersPanel` 懒加载、`key = task.id`。`batchBannerState`：running（排队 / 运行中）→ `useTaskStream().follow(task, {onSnapshot, onChapterStart, onChapterEnd})`，进度条、阶段 / 排队文案、当前章、`取消`（Popconfirm）；`chapter_start` / `chapter_end` 与结束时调用 `onChaptersChanged`（刷新章节列表与项目字数），结束后 `track(outcome.task)`；本地清单 `chapter_end` 时替换对应项，缺断点时 `GET /tasks/{id}` 补齐。paused → 「已处理 x/y」+ `继续`（resume）/ `结束`（finish）；failed / interrupted → `task.error` + `从第 N 章续跑`（retry；N 由 `batchResumeIndex` 推导）+ `关闭`（仅本页隐藏）。`展开章节清单` 懒加载 `BatchProgressView`。卸载只断开订阅。 |
 | `batch/BatchProgressView` | `{ items; current?: {index, phase}; text?; running?; summary? }`：汇总（`batchSummaryText` + warnings）或「已处理 x/y」、章节清单（`batchRowView`：状态 Tag、字数 / 目标、分析结果、失败原因或警告）、当前章实时输出（`StreamOutput`；分析阶段不输出）。 |
-| `batch/BatchResultView` | `chapter.batch` 结果组件（已在 `taskResultViewers` 注册）：`parseBatchSummary(result)` + `task.checkpoint.items`。`TaskResultViewerProps` 新增可选 `task`（`TaskResultModal` 传 `stream.task ?? task`），`TaskResultModal` 对 `paused` 也展示结果。 |
+| `batch/BatchResultView` | `chapter.batch` 结果组件（已在 `taskResultViewers` 注册）：`parseBatchSummary(result)` + `batchCheckpoint(task.checkpoint)?.items`（`Task.checkpoint` 按 kind 区分，读批量断点一律经 `batchCheckpoint` 收窄）。`TaskResultViewerProps` 新增可选 `task`（`TaskResultModal` 传 `stream.task ?? task`），`TaskResultModal` 对 `paused` 也展示结果。 |
 
 - `ChaptersPanel`：工具栏 `批量生成`（无章节或已有未结束批量时禁用）；横幅任务 = store `active` 中本项目的 `chapter.batch`（含 paused），否则取 `GET /tasks?project_id&kind=chapter.batch&limit=1` 中 failed / interrupted 的那个（依赖 store `version` 重新加载）；状态列在 `queuedBatchChapterIds(openBatch)` 中且未生成中的行加 `排队批量` Tag。`ChaptersPanel` 在入口 chunk 中：只能静态 import `utils/batchState.ts`，横幅 / 弹窗 / 清单 / `utils/batch.ts` 都按需加载。
 - `TaskPanel`：paused 行显示 `待审核` 标签与 `继续` / `结束` / `取消`（不显示删除 / 重试），`查看结果` 对 succeeded 或 paused 且已注册结果组件的任务显示；批量取消的确认文案为「已完成的章节保留，正在写的章节恢复原状态」。
@@ -348,10 +348,29 @@ dayjs.locale('zh-cn')
 - 完整适配的页面：书架（每行两列）、概览（表单 / 统计单列，`Descriptions column={{ xs: 1, sm: 2 }}`）、章节列表（移动端改为 `List` 卡片：章号 + 标题、状态 / 排队 / 分析标签、字数与时间，「⋮」菜单内编辑 / 阅读 / 删除（`modal.confirm`））、章节编辑器（工具栏只在 `xxl` 放进卡片标题栏，其余宽度放正文上方；移动端 AI 助手卡片收进底部 `Drawer`（85vh，`forceRender`，关闭不丢局部改写状态），由 `FloatButton`（`RobotOutlined`，在任务面板按钮上方，任务运行中带红点）打开）、阅读器、灵感会话（移动端单栏：步骤条横向滚动 `responsive={false}`，「立项草稿与补充想法」按钮打开底部抽屉，抽屉内跳步骤会关闭抽屉）。其余页面只保证无页面级横向溢出。
 - 验收：Playwright 在 375px 下对一级页面断言 `document.documentElement.scrollWidth <= clientWidth`。
 
+### 拆书导入（`pages/BookImportPage.tsx`，`10-23-book-import`）
+
+- 路由 `/book-import`（`AppLayout` 下，`lazyPage` 懒加载，不进入口 chunk）；入口是书架「新建」卡的「拆书导入」按钮。当前解析 id 存在查询串 `?id=`，刷新后自动加载并进入校正；记录不存在 / 他人 → 错误 Alert 并清掉 id。
+- 四步（AntD `Steps`，`responsive={false}`，外层 `overflowX: auto` + 步骤条 `minWidth: 360`，手机上横向滚动而不是撑出页面）：上传 → 校正 → 选项与预估 → 开始。能否进入某一步只用 `utils/bookImport.ts` 的 `canEnterStep` / `resolveStep`（前置条件不满足时退回能到的一步，不在 effect 里同步 setState）。
+- `bookImport/UploadStep`：`Upload.Dragger`（`beforeUpload` 返回 false，`precheckBookFile` 先查扩展名 / 空文件 / 20MB / 5 个上限，后端仍是最终权威）+「未完成的解析」列表（继续 / 删除 Popconfirm / 剩余天数 `remainingDays`）。
+- `bookImport/CorrectionStep`：notices `Alert`、超过 3000 章的 warning、提示汇总 Tag（点 Tag 即按该类筛选）+ 筛选 `Select`（`filterOptions`，数量为 0 的类别禁用）、「自定义正则重切」折叠面板（示例 Tag 点选、`maxLength = REGEX_MAX_LEN`、`Popconfirm` 提示会清空手工校正；「恢复自动切章」同样确认）。
+  - **章节列表是虚拟列表**：AntD `Table virtual`，`scroll.y` 必须是数字（桌面 560 / 移动 480），`scroll.x` 不传（传非数字会告警），`pagination={false}`，`rowKey="index"`；单元格文字一律单行 `ellipsis`，保证行高稳定。3000 行不分页、不用 `List` 全量渲染。
+    **虚拟表格里不要用 `Typography` 的 `ellipsis` + `editable` 组合**：行重渲染时省略测量会把宽度量成 0，标题只剩「...」；
+    可编辑的单元格用 CSS 省略（`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`，`title` 属性给全文）+ 编辑图标按钮打开弹窗。
+  - 桌面：列 序号 / 分卷（卷首章蓝色 Tag，其余次要文字）/ 标题（`Typography.Text editable`，`onChange` 时去空白、与原标题不同才发 `rename`；外层 `stopPropagation`，编辑时不打开抽屉）/ 字数 / 开头一行 / 提示 Tag / 操作（`ChapterOpsMenu`）；点击行打开全文抽屉。
+  - 移动端：`showHeader={false}`，单列渲染 `bookImport/ChapterCard`（序号 + 标题、卷首章卷名 Tag、字数 · 开头一行、提示 Tag），操作收进「⋮」菜单（含查看全文）；卡片不写固定宽度、`minWidth: 0` + 单行省略。
+  - 操作可用性只用 `availableOps(ch, total)`（与后端 400 条件一致）；需要名称的操作（改标题 / 新开一卷 / 改卷名）走 `Modal` + `Form`（1–200 字）；删除走 `modal.confirm`。
+  - `bookImport/ChapterTextDrawer`：`width = isMobile ? '100%' : 640`、`destroyOnHidden`，按 `importId + index + revision` 重新取 `chapters/{index}` 的 `lines`，带行号（`tabular-nums`）；可拆分行（`canSplitAt`：非第 1 行、非空行）悬停显示剪刀，点击后 `modal.confirm` 再发 `split`。悬停背景 / 行号颜色取 `theme.useToken()`，不写死颜色。
+- **修订号**：所有带 `revision` 的写操作（ops / resplit / start）经 `withStaleRefresh` 执行；只在 `isStaleRevision(err)`（409 且 `err.body.code === 'stale_revision'`）时重新 `GET` 记录、替换本地数据并 `message.warning`，开始导入遇到它还会退回校正步骤；其他 409（已有拆书任务、解析满 5 个）按普通错误 `message.error`。**不要**匹配 detail 文案。
+- `bookImport/OptionsStep`：书名（默认 `defaultOptions`：解析出的书名 → 去扩展名文件名）、主题材、导入范围 / 反推范围（`Slider range` + 两个 `InputNumber`，宽 90；`withImportRange` 让反推范围跟随 / 收进导入范围；用户没动过深度分析时按 `defaultDeepAnalyze`（≤ 100 章勾选）重算）、提取风格、深度分析、`AIConfigSelect`；`optionsError` 与后端 400 一致。预估卡片：选项合法且在第 3 步时 500ms 防抖调 `estimate`（`AbortController`，被中止的请求不写错误），说明「预估输入字数」，不换算费用。
+- 开始：确认卡片（`Descriptions column={{ xs: 1, sm: 2 }}`）→ `start` → `useTasksStore.track(task)` → 跳到 `/projects/:pid/overview`。
+- 任务面板：`book.import` 暂停时 `canSkipBookImport(task)`（kind 为 `book.import`、`status === 'paused'`、断点摘要 `pause_reason.reason === 'failed'`）才显示「跳过本批」（Popconfirm → `taskApi.skipBookImport` → `track`），与「继续」「结束」并列，并在行内显示 `bookImportPauseText`；取消确认文案说明已写入的内容保留。`TaskOutputModal` 对 `book.import` 显示「通读 x/y 批」（初值 `bookImportBatches(checkpoint)`，`batch_end` 事件推进）。`TaskPanel` 在入口 chunk：只能静态 import `utils/bookImportState.ts`（轻量读取），完整收窄 `bookImportSummary` 与结果组件 `bookImport/BookImportResultView`（已在 `taskResultViewers` 懒加载注册：写入统计 `statRows`、跳过项 `skippedText`、警告）都在懒加载 chunk 里。
+- 测试（node 环境）：`utils/bookImport.test.ts`（上传前检查、提示筛选、操作可用性、步骤流转、深度分析默认值按 100 章、范围校验、409 只认 `code`、摘要收窄与「跳过本批」条件含 kind）、`api/bookImport.test.ts`（路径 / 方法 / 请求体、stale 409 后重新拉取、无标记的 409 原样抛出）、`components/bookImport/mobile.test.ts`（`react-dom/server` 渲染：移动端卡片、无表头、操作在菜单里）。
+
 ### 书架（`pages/ProjectListPage.tsx`，`10-27-reader-ui`）
 
 - 顶部「我的书架」+ 统计（作品数 / 连载中（`status = writing`）/ 总字数，`shelfStats`）；工具栏：搜索（书名 + 标签，大小写不敏感）、排序（最近更新 / 创建时间 / 书名 `localeCompare zh` / 字数）、状态筛选，三者存 localStorage `ainovel.shelf`（`readShelfPrefs` / `writeShelfPrefs`，`parseShelfPrefs` 容错）。纯函数都在 `utils/shelf.ts`。
-- 网格 `Col xs=12 sm=8 md=6 xl=4`（手机两列）；第一张固定「新建」卡（新建项目 / 灵感模式 / 导入备份）。
+- 网格 `Col xs=12 sm=8 md=6 xl=4`（手机两列）；第一张固定「新建」卡（新建项目 / 灵感模式 / 拆书导入 / 导入备份）。
 - `components/shelf/BookCover`：2:3 文字封面，`coverColor(title, resolved)` = FNV-1a 哈希 → 12 色相，浅 / 暗主题明度不同，浅色文字，对比度 < 4.5 时逐步压暗底色；左侧加深书脊；书名衬线体最多 3 行、题材在底部；`coverUrl` 有值时直接显示图片（封面任务接入点）。
 - 卡片：书名、状态标签、前 3 个类型标签、`wordsProgress` 进度条（没有目标只显示字数）、「N 章 · 相对时间更新」（`utils/time.formatRelative`）。按钮：「继续写作」→ `continueTarget`（`last_edited_chapter_id` 的编辑器，否则概览）；「阅读」→ `readTarget`（有 `reading` 到该章，否则 `/projects/:id/read` 自动定位），文案 `readingLabel`（「读到第 N 章」/「开始阅读」），`canRead` 为假（没有已写章节）时禁用；「⋮」菜单：概览 / 导出（`ExportModal`）/ 备份（`BackupModal`，lazy）/ 删除（`modal.confirm`）。
 

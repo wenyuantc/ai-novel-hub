@@ -5,8 +5,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.style import StyleChoice
 
-VersionSource = Literal["manual", "baseline", "generate", "polish", "rewrite", "restore", "revise"]
-GenerationKind = Literal["generate", "polish", "rewrite", "expand", "condense", "deslop", "continue", "revise"]
+VersionSource = Literal["manual", "baseline", "generate", "polish", "rewrite", "restore", "revise", "import"]
+GenerationKind = Literal[
+    "generate",
+    "polish",
+    "rewrite",
+    "expand",
+    "condense",
+    "deslop",
+    "continue",
+    "revise",
+    "book_import.digest",
+    "book_import.synthesize",
+    "book_import.style",
+]
 GenerationStatus = Literal["success", "error", "cancelled"]
 RewriteOp = Literal["rewrite", "expand", "condense", "deslop", "continue"]
 
