@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-10-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~414 | Active |
+| `journal-1.md` | ~451 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-10-27 | book-import 拆书导入 | `35e0d3a`, `a09f39c` | `main` |
 | 15 | 2026-10-27 | reader-ui 阅读器、书架、暗色主题、移动端 | `9a1aadb`, `22cb9f7` | `main` |
 | 14 | 2026-10-27 | project-io-reader 项目 JSON 备份导入与 EPUB 导出 | `f718918`, `950735a` | `main` |
 | 13 | 2026-10-27 | 向导失败后从中断处继续 | `4065aad` | `main` |

@@ -412,3 +412,40 @@
 ### Next Steps
 
 - 规划 P1-8 book-import（拆书），之后进入 P2
+
+
+## Session 16: book-import 拆书导入
+<!-- trellis-session: v=2 fp=734ab637140d8de2 -->
+
+**Date**: 2026-10-27
+**Task**: book-import 拆书导入
+**Branch**: `main`
+
+### Summary
+
+实现 P1-8：txt/md/docx/epub 上传与强规则切章（分卷、目录区、序章、兜底、自定义正则子进程）、服务端校正与修订号 409、单事务建项目导入、book.import 分批通读反推（断点续跑、失败暂停可继续/跳过/结束）、风格提取与深度分析入队、前端四步拆书页；冒烟修复目录后引言切错、虚拟表格标题只剩省略号、汇总丢失别名。
+
+### Main Changes
+
+- 迁移 0017：book_imports 表、generation_logs.kind 放宽到 32、版本来源 import
+- book_import 服务（splitter/merge/reverse/service）、2 个提示词模板、/book-imports API 与 skip 接口
+- 前端 BookImportPage、任务面板跳过本批与已暂停文案、结果视图
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `35e0d3a` | feat: 拆书导入（切章校正与 AI 反推设定） |
+| `a09f39c` | chore(task): archive 10-23-book-import |
+
+### Testing
+
+- [OK] 后端 680 passed；前端 333 passed；冒烟覆盖 GBK 目录区与序章、拆分/改名/合并/新开分卷、正则重切、409 标记、失败暂停跳过、反推写入、别名补回、375px 无溢出
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- P2：project-agent、skills-mcp、oauth-announce、prompt-workshop；或先做父任务集成验收
