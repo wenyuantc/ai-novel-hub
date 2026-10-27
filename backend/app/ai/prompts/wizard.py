@@ -99,3 +99,21 @@ def build_world_messages(
             "output_format": WORLD_FORMAT,
         },
     )
+
+
+def build_wizard_continue_messages(
+    *,
+    messages: list[ChatMessage],
+    generated: str,
+    override: PromptOverride | None = None,
+) -> list[ChatMessage]:
+    """向导生成中断后的续写：在原对话后追加已输出内容（assistant）与续写指令（user）。
+
+    wizard.continue 只取渲染结果的 user 段（覆盖里写了 system 段也忽略）。
+    """
+    rendered = render("wizard.continue", override, {"generated_chars": len(generated)})
+    return [
+        *messages,
+        {"role": "assistant", "content": generated},
+        {"role": "user", "content": rendered[-1]["content"]},
+    ]

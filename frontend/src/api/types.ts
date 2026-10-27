@@ -356,6 +356,8 @@ export interface WizardRequest {
   character_count?: number
   /** 仅 careers：1–12，默认 4 */
   career_count?: number
+  /** 从中断处继续：同项目同类型、失败 / 已取消 / 已中断且有部分输出的向导任务；生成参数沿用该任务（只有 AI 配置可换） */
+  continue_from_task_id?: number
 }
 
 export interface WizardItemMap {

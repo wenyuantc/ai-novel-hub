@@ -3,7 +3,14 @@ import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../api/client'
 import { queueLabel, taskApi, wizardTaskKind } from '../api/tasks'
 import type { OutlineMode, Task, WizardItemMap, WizardKind, WizardRequest } from '../api/types'
-import { parseWizardDone, parseWizardMode, parseWizardWarnings, runWizard, WIZARD_KIND_LABELS } from '../api/wizard'
+import {
+  canResumeWizard,
+  parseWizardDone,
+  parseWizardMode,
+  parseWizardWarnings,
+  runWizard,
+  WIZARD_KIND_LABELS,
+} from '../api/wizard'
 import { useHasAIConfig } from '../hooks/useHasAIConfig'
 import { useTaskStream } from '../hooks/useTaskStream'
 import { useProjectStore } from '../stores/project'
@@ -69,6 +76,7 @@ export default function WizardGenerator<K extends WizardKind>({
     career_count: 4,
   }))
   const running = task.running || starting
+  const resumable = !running && canResumeWizard(task.task, task.text)
 
   // onRunningChange 用 ref 保存最新回调，避免父组件内联函数导致 effect 反复执行
   const runningCbRef = useRef(onRunningChange)
@@ -114,13 +122,18 @@ export default function WizardGenerator<K extends WizardKind>({
     followRef.current = followTask
   })
 
-  // 挂载时接上同项目同类向导的活动任务（关闭页面 / 弹窗后重新打开）
+  // 挂载时接上同项目同类向导的最近任务（关闭页面 / 弹窗后重新打开）：进行中 → 继续订阅；
+  // 失败 / 中断且有部分输出 → 恢复错误与已输出内容，可从中断处继续
   useEffect(() => {
     let alive = true
     taskApi
-      .list({ project_id: projectId, kind: wizardTaskKind(kind), active: true, limit: 1 })
+      .list({ project_id: projectId, kind: wizardTaskKind(kind), limit: 1 })
       .then((list) => {
-        if (alive && list[0]) void followRef.current(list[0])
+        const latest = list[0]
+        if (!alive || !latest) return
+        if (['queued', 'running', 'paused', 'failed', 'interrupted'].includes(latest.status)) {
+          void followRef.current(latest)
+        }
       })
       .catch(() => {
         // 忽略：查询失败时按无活动任务处理
@@ -150,6 +163,16 @@ export default function WizardGenerator<K extends WizardKind>({
     } else if (kind === 'careers') {
       body.career_count = values.career_count
     }
+    await startTask(body)
+  }
+
+  // 从中断处继续：生成参数沿用失败任务的原请求，只传本次选择的 AI 配置
+  const handleResume = async () => {
+    if (!task.task) return
+    await startTask({ ai_config_id: aiConfigId, continue_from_task_id: task.task.id })
+  }
+
+  const startTask = async (body: WizardRequest) => {
     setResult(null)
     setWarnings([])
     setStarting(true)
@@ -266,9 +289,20 @@ export default function WizardGenerator<K extends WizardKind>({
             {task.task?.status === 'queued' ? '取消排队' : '停止'}
           </Button>
         ) : (
-          <Button type="primary" onClick={() => void handleGenerate()} disabled={hasConfig === false}>
-            {result || task.text ? `重新生成${label}` : `AI 生成${label}`}
-          </Button>
+          <>
+            {resumable && (
+              <Button type="primary" onClick={() => void handleResume()} disabled={hasConfig === false}>
+                从中断处继续
+              </Button>
+            )}
+            <Button
+              type={resumable ? 'default' : 'primary'}
+              onClick={() => void handleGenerate()}
+              disabled={hasConfig === false}
+            >
+              {result || task.text ? `重新生成${label}` : `AI 生成${label}`}
+            </Button>
+          </>
         )}
       </Space>
       {task.running && task.task?.status === 'queued' && (
@@ -285,7 +319,24 @@ export default function WizardGenerator<K extends WizardKind>({
         </div>
       )}
       {task.reconnecting && <Alert type="warning" showIcon message="连接中断，正在重连…（任务仍在后台运行）" />}
-      {task.error && !running && <Alert type="error" showIcon message="生成失败" description={task.error} />}
+      {task.error && !running && (
+        <Alert
+          type="error"
+          showIcon
+          message="生成失败"
+          description={
+            resumable ? (
+              <>
+                {task.error}
+                <br />
+                已保留 {task.text.length} 字符的部分输出，可「从中断处继续」（沿用原生成参数），或重新生成。
+              </>
+            ) : (
+              task.error
+            )
+          }
+        />
+      )}
       {(task.running || task.text) && <StreamOutput text={task.text} running={task.running} />}
       {showResult && warnings.length > 0 && (
         <Alert

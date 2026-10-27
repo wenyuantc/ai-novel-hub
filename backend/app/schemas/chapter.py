@@ -80,6 +80,9 @@ class WizardRequest(BaseModel):
     character_count: int = Field(default=5, ge=3, le=30)
     # 仅 careers 使用
     career_count: int = Field(default=4, ge=1, le=12)
+    # 从中断处继续：引用同项目同类型、失败 / 已取消 / 已中断且有部分输出的向导任务；
+    # 生成参数沿用该任务的原请求（只有 ai_config_id 可以换）
+    continue_from_task_id: int | None = None
 
 
 class ReviseChapterRequest(BaseModel):

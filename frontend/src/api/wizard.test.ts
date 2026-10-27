@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type { Task } from './types'
 import {
+  canResumeWizard,
   markWizardStep,
   parseWizardDone,
   parseWizardMode,
@@ -62,5 +64,18 @@ describe('向导进度', () => {
     expect(parseWizardMode({ kind: 'outline', items: [], mode: 'append' })).toBe('append')
     expect(parseWizardMode({ kind: 'outline', items: [] })).toBe('replace')
     expect(parseWizardMode(null)).toBe('replace')
+  })
+})
+
+describe('从中断处继续', () => {
+  const task = (status: Task['status']) => ({ id: 1, status }) as Task
+
+  it('失败 / 取消 / 中断且部分输出有完整对象时可继续', () => {
+    const text = '{"volumes": [{"chapters": [{"title": "出发"}, {"title": "异'
+    for (const s of ['failed', 'cancelled', 'interrupted'] as const) expect(canResumeWizard(task(s), text)).toBe(true)
+    expect(canResumeWizard(task('succeeded'), text)).toBe(false)
+    expect(canResumeWizard(task('running'), text)).toBe(false)
+    expect(canResumeWizard(task('failed'), '{"volumes": [{"vo')).toBe(false)
+    expect(canResumeWizard(null, text)).toBe(false)
   })
 })

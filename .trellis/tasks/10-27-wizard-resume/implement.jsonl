@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务与 SSE 契约、wizard 服务签名"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "提示词模板注册与覆盖"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量要求"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "前端组件规范"}

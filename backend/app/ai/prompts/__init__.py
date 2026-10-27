@@ -24,6 +24,7 @@ from app.ai.prompts.style import build_style_block, build_style_extract_messages
 from app.ai.prompts.wizard import (
     build_characters_messages,
     build_outline_messages,
+    build_wizard_continue_messages,
     build_world_messages,
 )
 
@@ -50,6 +51,7 @@ __all__ = [
     "build_style_block",
     "build_style_extract_messages",
     "build_style_trial_messages",
+    "build_wizard_continue_messages",
     "build_world_messages",
     "format_project_info",
 ]

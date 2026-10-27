@@ -36,6 +36,8 @@ class TaskSpec:
     input: dict[str, Any] = field(default_factory=dict)
     # 同键任务排队串行（resource_key 冲突即拒绝；serial_key 冲突则等待前一个结束）
     serial_key: str | None = None
+    # 非重试接口创建、但承接自某个旧任务（如向导从中断处继续）时记入 tasks.retry_of_id
+    retry_of_id: int | None = None
 
 
 class TaskHandler(Protocol):

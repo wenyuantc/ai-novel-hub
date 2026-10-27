@@ -262,6 +262,13 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         ),
     ),
     (
+        "wizard.continue",
+        "向导：从中断处继续",
+        "wizard",
+        "向导生成中断后续写的指令（接在原对话与已输出内容之后，只有 user 段）。",
+        (T("generated_chars", "已输出的字符数", "int", sample=3200),),
+    ),
+    (
         "entity.character",
         "AI 生成角色",
         "entity",

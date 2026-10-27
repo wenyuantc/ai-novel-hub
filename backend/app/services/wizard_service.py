@@ -12,9 +12,14 @@ career_service.apply_assignment(source="wizard") 写入；职业对不上 / 超�
 大纲向导（outline-pro）：outline_mode = replace（默认）覆盖前先存大纲快照（wizard_replace），
 章节经外键解除关联、不删除；
 append 不删旧大纲，提示词附上已有大纲末尾 10 条，写入时卷号接最后一卷、章节号接全书最后一章、sort 接末尾。
+从中断处继续（continue_from_task_id）：旧任务的部分输出截到最后一个完整对象（最后一个 `}`）作为前缀，
+原对话后追加 assistant（前缀）+ user（wizard.continue 续写指令）；运行时先把前缀作为 delta 输出（新任务 output_text
+即完整累积文本，再失败可继续接），续写开头缓冲一段做清洗（去代码块标记、去与前缀末尾的重复、补逗号），
+拼接后照常解析落库；模型无视指令从头输出完整 JSON 时只用续写部分。
 """
 
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -28,13 +33,14 @@ from app.ai.prompts import (
     build_careers_wizard_messages,
     build_characters_messages,
     build_outline_messages,
+    build_wizard_continue_messages,
     build_world_messages,
     format_project_info,
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
-from app.core.errors import AppError
+from app.core.errors import AppError, BadRequestError
 from app.core.security import SecretCipher
-from app.models import Career, Character, CharacterCareer, Outline, WorldSetting
+from app.models import Career, Character, CharacterCareer, Outline, Task, WorldSetting
 from app.models.entities import WORLD_CATEGORIES
 from app.schemas.career import CareerCreate
 from app.schemas.chapter import WizardRequest
@@ -59,6 +65,14 @@ logger = logging.getLogger(__name__)
 WizardKind = Literal["outline", "characters", "world", "careers"]
 # 追加模式下提示词附上的已有大纲条数（末尾）
 APPEND_CONTEXT_OUTLINES = 10
+# 可以从中断处继续的任务状态
+RESUMABLE_STATUSES = ("failed", "cancelled", "interrupted")
+# 续写开头先缓冲这么多字符再清洗输出（覆盖模型重复上一两个条目的情况）
+CONTINUE_HEAD_CHARS = 600
+# 续写开头与前缀末尾的重复至少这么长才去掉（避免误删一两个合法的括号）
+MIN_OVERLAP = 8
+_FENCE_RE = re.compile(r"^\s*```[A-Za-z]*\s*")
+_WS_RE = re.compile(r"\s+")
 
 
 @dataclass
@@ -72,6 +86,66 @@ class WizardJob:
     max_tokens: int | None = None
     # 仅 outline：replace = 覆盖（先存快照）；append = 追加到末尾
     outline_mode: str = "replace"
+    # 从中断处继续：旧任务截断后的部分输出；空串 = 正常生成
+    prefix: str = ""
+
+
+# ---------------- 从中断处继续 ----------------
+
+
+def trim_to_resume_point(text: str) -> str:
+    """部分输出截到最后一个 `}`（丢掉写了一半的条目）；没有完整对象时返回空串。"""
+    idx = text.rfind("}")
+    return text[: idx + 1] if idx >= 0 else ""
+
+
+def _json_head(text: str) -> str:
+    """去掉代码块标记与全部空白后的开头，用来判断续写是否从头重来。"""
+    return _WS_RE.sub("", _FENCE_RE.sub("", text, count=1))[:16]
+
+
+def clean_continuation_head(prefix: str, head: str) -> tuple[str, bool]:
+    """清洗续写开头：返回 (接在前缀后面的文本, 是否从头重来)。
+
+    去掉代码块标记；模型从头输出完整 JSON → (原样, True)；去掉与前缀末尾重复的部分；
+    前缀以 `}` 结尾而续写以 `{` 开头时补逗号。
+    """
+    body = _FENCE_RE.sub("", head, count=1)
+    start = _json_head(prefix)
+    if len(start) >= 2 and _WS_RE.sub("", body).startswith(start):
+        return body, True
+    body = body.lstrip()
+    for k in range(len(body), MIN_OVERLAP - 1, -1):
+        if prefix.endswith(body[:k]):
+            body = body[k:].lstrip()
+            break
+    if body.startswith("{") and prefix.rstrip().endswith("}"):
+        body = "," + body
+    return body, False
+
+
+async def load_resume_source(
+    db: AsyncSession, *, user_id: int, project_id: int, kind: WizardKind, task_id: int
+) -> Task:
+    """取要继续的旧向导任务：同用户、同项目、同类型，已失败 / 取消 / 中断且有可续写的部分输出。"""
+    task = await db.get(Task, task_id)
+    if task is None or task.user_id != user_id or task.project_id != project_id or task.kind != f"wizard.{kind}":
+        raise BadRequestError("要继续的向导任务不存在")
+    if task.status not in RESUMABLE_STATUSES:
+        raise BadRequestError("只有失败、已取消或已中断的向导任务可以从中断处继续")
+    if not trim_to_resume_point(task.output_text or ""):
+        raise BadRequestError("该任务没有可续写的部分输出，请重新生成")
+    return task
+
+
+def resume_request(source: Task, req: WizardRequest) -> WizardRequest:
+    """续写沿用旧任务的原请求（卷数、章数、模式、补充指令等）；AI 配置以本次选择为准。"""
+    params = dict(source.input.get("request") or {})
+    params.pop("project_id", None)
+    if req.ai_config_id is not None:
+        params["ai_config_id"] = req.ai_config_id
+    params["continue_from_task_id"] = source.id
+    return WizardRequest.model_validate(params)
 
 
 async def validate_wizard(
@@ -179,6 +253,17 @@ async def build_wizard_job(
             knowledge=knowledge,
             override=override,
         )
+    prefix = ""
+    if req.continue_from_task_id is not None:
+        source = await load_resume_source(
+            db, user_id=user_id, project_id=project_id, kind=kind, task_id=req.continue_from_task_id
+        )
+        prefix = trim_to_resume_point(source.output_text or "")
+        messages = build_wizard_continue_messages(
+            messages=messages,
+            generated=prefix,
+            override=await prompt_service.get_override(db, user_id, "wizard.continue"),
+        )
     return WizardJob(
         project_id=project_id,
         kind=kind,
@@ -188,6 +273,7 @@ async def build_wizard_job(
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
         outline_mode=req.outline_mode,
+        prefix=prefix,
     )
 
 
@@ -551,17 +637,38 @@ async def save_wizard_result(
 
 async def run_wizard_job(job: WizardJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:
     pieces: list[str] = []
+    # 续写：开头先缓冲，清洗后再输出；正常生成直接输出
+    pending: str | None = "" if job.prefix else None
+    restarted = False
     try:
+        if job.prefix:
+            yield "stage", {"stage": "从中断处继续"}
+            yield "delta", {"text": job.prefix}
         stream_iter = job.provider.generate_stream(
             job.messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking
         )
         async with aclosing(stream_iter) as stream:
             async for piece in stream:
-                pieces.append(piece)
-                yield "delta", {"text": piece}
-        raw = "".join(pieces)
-        if not raw.strip():
+                if pending is None:
+                    pieces.append(piece)
+                    yield "delta", {"text": piece}
+                    continue
+                pending += piece
+                if len(pending) >= CONTINUE_HEAD_CHARS:
+                    text, restarted = clean_continuation_head(job.prefix, pending)
+                    pending = None
+                    if text:
+                        pieces.append(text)
+                        yield "delta", {"text": text}
+        if pending:
+            text, restarted = clean_continuation_head(job.prefix, pending)
+            if text:
+                pieces.append(text)
+                yield "delta", {"text": text}
+        generated = "".join(pieces)
+        if not generated.strip():
             raise AIProviderError("模型未返回任何内容")
+        raw = generated if restarted or not job.prefix else job.prefix + generated
         async with sessionmaker() as db:
             payload = await save_wizard_result(db, job.project_id, job.kind, raw, outline_mode=job.outline_mode)
         yield "done", {"kind": job.kind, **payload}

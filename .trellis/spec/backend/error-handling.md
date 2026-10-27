@@ -197,6 +197,14 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   `generation_service.py` / `wizard_service.py` / `rewrite_service.py`、`task_service.py`、`api/v1/tasks.py`；
   前端 `frontend/src/api/sse.ts` 与任务订阅。新增任务类型、修改订阅事件名 / payload、新增流式端点时都要遵循并更新此契约。
 
+- **向导从中断处继续**（`10-27-wizard-resume`）：`WizardRequest.continue_from_task_id` 引用同用户、同项目、同 kind、
+  状态 failed / cancelled / interrupted 且 `output_text` 含完整对象（`}`）的向导任务，否则 400（`要继续的向导任务不存在` /
+  `只有失败、已取消或已中断的向导任务可以从中断处继续` / `该任务没有可续写的部分输出，请重新生成`）。新任务参数取旧任务
+  `input.request`（只有 `ai_config_id` 用本次值），`TaskSpec.retry_of_id` → `tasks.retry_of_id` 指向旧任务。运行时：`stage`「从中断处继续」→
+  先把截断后的前缀作为 `delta` 输出（新任务 `output_text` 是完整累积文本，再失败可链式继续）→ 续写开头缓冲 600 字符后清洗
+  （去 ``` 标记、去与前缀末尾 ≥8 字符的重复、`}` 后接 `{` 补逗号；模型从头重来则只用续写部分）→ 拼接后照常 `extract_json` 落库。
+  前端 `WizardGenerator` 挂载时取同 kind 最近一条任务：进行中继续订阅，failed / interrupted 则恢复错误与部分输出并显示「从中断处继续」。
+
 ### 2. 签名
 
 ```python
@@ -243,6 +251,11 @@ async def validate_wizard(db, *, user_id, project_id, req, cipher, factory, ai_t
 async def build_wizard_job(db, *, user_id, project_id, kind, req, ai_config_id, cipher, factory, ai_timeout,
                            allow_private) -> WizardJob
 async def run_wizard_job(job: WizardJob, sessionmaker) -> AsyncIterator[Event]
+# 从中断处继续（WizardRequest.continue_from_task_id）
+async def load_resume_source(db, *, user_id, project_id, kind, task_id) -> Task  # 不合法 → 400
+def resume_request(source: Task, req: WizardRequest) -> WizardRequest  # 沿用原请求，仅 ai_config_id 可换
+def trim_to_resume_point(text: str) -> str  # 截到最后一个 `}`；空串 = 不可续写
+def clean_continuation_head(prefix: str, head: str) -> tuple[str, bool]  # (接续文本, 模型是否从头重来)
 
 # backend/app/services/rewrite_service.py（同步 SSE，不变）
 async def prepare_rewrite_job(db, *, user_id, chapter_id, req: RewriteRequest, cipher, factory,

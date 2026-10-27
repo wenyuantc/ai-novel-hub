@@ -26,6 +26,13 @@ class WizardHandler:
         wkind = _wizard_kind(kind)
         project_id = int(params["project_id"])
         req = WizardRequest.model_validate(params)
+        retry_of_id: int | None = None
+        if req.continue_from_task_id is not None:
+            source = await wizard_service.load_resume_source(
+                db, user_id=user_id, project_id=project_id, kind=wkind, task_id=req.continue_from_task_id
+            )
+            req = wizard_service.resume_request(source, req)
+            retry_of_id = source.id
         ai_config_id = await wizard_service.validate_wizard(
             db,
             user_id=user_id,
@@ -45,6 +52,7 @@ class WizardHandler:
                 "request": {"project_id": project_id, **req.model_dump(mode="json")},
                 "ai_config_id": ai_config_id,
             },
+            retry_of_id=retry_of_id,
         )
 
     async def build_job(self, ctx: TaskContext, task: Task) -> wizard_service.WizardJob:

@@ -123,7 +123,7 @@ async def create_task(
         status="queued",
         input=spec.input,
         stage=STAGE_LABELS["queued"],
-        retry_of_id=retry_of.id if retry_of is not None else None,
+        retry_of_id=retry_of.id if retry_of is not None else spec.retry_of_id,
         step_cursor=retry_of.step_cursor if retry_of is not None else 0,
         checkpoint=retry_of.checkpoint if retry_of is not None else None,
     )

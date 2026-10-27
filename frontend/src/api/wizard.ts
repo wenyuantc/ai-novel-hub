@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { OutlineMode, Task, WizardItemMap, WizardKind, WizardProgress, WizardProgressUpdate, WizardRequest } from './types'
+import type { OutlineMode, Task, TaskStatus, WizardItemMap, WizardKind, WizardProgress, WizardProgressUpdate, WizardRequest } from './types'
 
 /** 向导：创建后台任务（202）；结果在任务 done.result = {kind, items} 中。 */
 export function runWizard(projectId: number, kind: WizardKind, body: WizardRequest): Promise<Task> {
@@ -19,6 +19,14 @@ export function parseWizardWarnings(result: unknown): string[] {
   if (typeof result !== 'object' || result === null) return []
   const w = (result as { warnings?: unknown }).warnings
   return Array.isArray(w) ? w.filter((x): x is string => typeof x === 'string') : []
+}
+
+/** 可以从中断处继续的向导任务状态 */
+const RESUMABLE_STATUSES: readonly TaskStatus[] = ['failed', 'cancelled', 'interrupted']
+
+/** 向导任务能否从中断处继续：已失败 / 取消 / 中断，且部分输出里至少有一个完整对象（与后端截断规则一致） */
+export function canResumeWizard(task: Task | null, text: string): boolean {
+  return task !== null && RESUMABLE_STATUSES.includes(task.status) && text.includes('}')
 }
 
 export const WIZARD_KIND_LABELS: Record<WizardKind, string> = {
