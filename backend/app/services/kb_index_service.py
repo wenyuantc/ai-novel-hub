@@ -53,6 +53,11 @@ class IndexJob:
     embedder: Embedder | None
     task_id: int | None = None
     warnings: list[str] = field(default_factory=list)
+    # 配置了向量模型但不可用（端点被拦截、密钥无法解密）时的原因；没有配置时为 None
+    embedder_error: str | None = None
+
+    def no_embedding_warning(self) -> str:
+        return f"向量模型不可用：{self.embedder_error}；仅使用关键词检索" if self.embedder_error else NO_EMBEDDING
 
 
 # ---------------- 创建 ----------------
@@ -157,12 +162,19 @@ async def build_index_job(
         )
         if doc is None:
             raise NotFoundError("文档不存在")
-    embedder = await retrieval_service.get_embedder(
+    embedder, embedder_error = await retrieval_service.resolve_embedder(
         db, task.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
     )
     if mode == "rebuild" and embedder is None:
-        raise BadRequestError(NO_EMBEDDING_REBUILD)
-    return IndexJob(mode=mode, project_id=project_id, document_id=document_id, embedder=embedder, task_id=task.id)
+        raise BadRequestError(f"向量模型不可用：{embedder_error}" if embedder_error else NO_EMBEDDING_REBUILD)
+    return IndexJob(
+        mode=mode,
+        project_id=project_id,
+        document_id=document_id,
+        embedder=embedder,
+        task_id=task.id,
+        embedder_error=embedder_error,
+    )
 
 
 async def _ensure_chunks(db: AsyncSession, doc: KbDocument) -> int:
@@ -288,7 +300,7 @@ async def _run_document(job: IndexJob, sessionmaker) -> AsyncIterator[tuple[str,
         warnings.append("文档没有可分块的正文")
     elif job.embedder is None:
         status = "ready_keyword_only"
-        job.warnings.append(NO_EMBEDDING)
+        job.warnings.append(job.no_embedding_warning())
     else:
         async with sessionmaker() as db:
             ref_ids = list(await db.scalars(select(KbChunk.id).where(KbChunk.document_id == job.document_id)))
@@ -324,7 +336,7 @@ async def _run_vectors(job: IndexJob, sessionmaker) -> AsyncIterator[tuple[str, 
     source: retrieval_service.Source | None = "memory" if job.mode == "memory" else None
     embedded = 0
     if job.embedder is None:
-        job.warnings.append(NO_EMBEDDING)
+        job.warnings.append(job.no_embedding_warning())
     else:
         try:
             total = await _count_stale(sessionmaker, job, source, None)

@@ -25,6 +25,8 @@ def make_embedding_key(model_key, dim) -> "provider:model:dim"; key_matches_mode
 @dataclass class Embedder: provider, provider_name, model; model_key; key; async embed(texts) -> list[np.ndarray]
 @dataclass(frozen=True) class EmbedEnv: cipher, factory, ai_timeout, allow_private; async embedder(db, user_id)
 async def get_embedder(db, user_id, *, cipher, factory, ai_timeout, allow_private) -> Embedder | None
+# 需要区分「没有配置」与「配置了但不可用（端点被拦截、解密失败）」时用它：前者 (None, None)，后者 (None, "「配置名」原因")
+async def resolve_embedder(db, user_id, *, cipher, factory, ai_timeout, allow_private) -> tuple[Embedder | None, str | None]
 async def default_embedding_config(db, user_id) -> AIConfig | None
 async def upsert_many(db, project_id, source, items: list[ChunkInput]) -> None      # 不 commit
 async def set_flags(db, source, ref_ids, *, enabled=None, pinned=None, chapter_no=None)
@@ -110,9 +112,9 @@ async def search(db, project_id, source, query, *, top_k, min_score, embedder=No
 - **任务** `kb.index`（`serial_key = index:{pid}`；文档 `resource_key = kbdoc:{id}`，重建 `kbrebuild:{pid}`，记忆为空）：
   | 模式 | 内容 |
   |---|---|
-  | document | 未分块则分块（写 `kb_chunks` + 检索单元，提交）→ 分批（32 条 / 批，每批提交）为 stale 分块生成向量 → `ready`；没有向量模型或生成失败 → `ready_keyword_only` + warning（任务仍 succeeded） |
+  | document | 未分块则分块（写 `kb_chunks` + 检索单元，提交）→ 分批（32 条 / 批，每批提交）为 stale 分块生成向量 → `ready`；没有向量模型或生成失败 → `ready_keyword_only` + warning（任务仍 succeeded）；配置了但不可用时 warning 为 `向量模型不可用：「配置名」原因；仅使用关键词检索`，不得说成「未配置」 |
   | memory | 项目里 stale 的记忆检索单元生成向量；分析成功（`AnalysisHandler.on_success`）、手动记忆增改后由 `kb_index_service.enqueue_memory` 排队（需有向量模型且有 stale 记忆，已有排队中的不重复） |
-  | rebuild | 全部 stale 检索单元生成向量，结束后刷新文档状态（分块全有当前向量 → ready）；创建时没有向量模型 → 400 `尚未配置向量模型，请先在「模型配置」中添加向量模型` |
+  | rebuild | 全部 stale 检索单元生成向量，结束后刷新文档状态（分块全有当前向量 → ready）；创建时没有向量模型 → 400 `尚未配置向量模型，请先在「模型配置」中添加向量模型`；有配置但运行时不可用 → 任务失败，error 为 `向量模型不可用：「配置名」原因` |
   中断 / 重试：已分块的不再分块，已有当前 key 的块跳过。文档任务失败 / 取消 / 中断 → `on_abort` 把仍在 pending / indexing 的文档置 `failed`；
   可重试任务或 `POST /documents/{id}/reindex`（删分块与检索单元后重新排队；有活动任务 → 409）。进度 = 输出最后一行 `生成向量 x/y`。
 - **注入开关** `PATCH /documents/{id} {inject}` → 同步 `retrieval_chunks.enabled`；**删除**先删检索单元再删文档（分块级联；有活动任务 → 409）。

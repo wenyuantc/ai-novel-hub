@@ -438,6 +438,20 @@ async def test_embedding_failure_keyword_only_with_warning(client, fake_llm):
     assert (await _doc(client, base, body["document"]["id"]))["status"] == "ready"
 
 
+async def test_blocked_embedding_endpoint_reports_reason(client):
+    # 向量模型指向内网（默认禁止私网）：提示「不可用」及原因，而不是「未配置」
+    _, base = await _setup(client)
+    await create_ai_config(
+        client, name="内网向量", model_type="embedding", model="emb", base_url="http://127.0.0.1:9/v1"
+    )
+    body = await _upload(client, base)
+    doc = await _doc(client, base, body["document"]["id"])
+    assert doc["status"] == "ready_keyword_only"
+    assert any("向量模型不可用" in w and "内网" in w and "未配置" not in w for w in doc["warnings"])
+    task = await wait_task(client, (await client.post(f"{base}/rebuild")).json()["id"])
+    assert task["status"] == "failed" and "向量模型不可用" in task["error"] and "尚未配置" not in task["error"]
+
+
 async def test_embedding_config_rejects_anthropic(client):
     await register(client)
     resp = await client.post(

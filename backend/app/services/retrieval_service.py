@@ -173,6 +173,32 @@ async def current_model_key(db: AsyncSession, user_id: int) -> str | None:
     return config_model_key(cfg) if cfg is not None else None
 
 
+async def resolve_embedder(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    cipher: SecretCipher,
+    factory: ProviderFactory,
+    ai_timeout: float,
+    allow_private: bool,
+) -> tuple[Embedder | None, str | None]:
+    """构建默认向量模型，返回 (向量模型, 不可用原因)。
+
+    没有配置 → (None, None)；配置了但不可用（解密失败、端点被拦截）→ (None, 原因)，供提示区分两种情况。
+    """
+    from app.services import ai_config_service
+
+    cfg = await default_embedding_config(db, user_id)
+    if cfg is None:
+        return None, None
+    try:
+        provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    except BadRequestError as exc:
+        logger.warning("向量模型配置 %s 不可用：%s", cfg.id, exc.detail)
+        return None, f"「{cfg.name}」{exc.detail}"
+    return Embedder(provider=provider, provider_name=cfg.provider, model=cfg.model, config_name=cfg.name), None
+
+
 async def get_embedder(
     db: AsyncSession,
     user_id: int,
@@ -182,18 +208,11 @@ async def get_embedder(
     ai_timeout: float,
     allow_private: bool,
 ) -> Embedder | None:
-    """构建默认向量模型；没有配置或配置不可用（解密失败、端点被拦截）时返回 None（调用方退回关键词检索）。"""
-    from app.services import ai_config_service
-
-    cfg = await default_embedding_config(db, user_id)
-    if cfg is None:
-        return None
-    try:
-        provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    except BadRequestError as exc:
-        logger.warning("向量模型配置 %s 不可用：%s", cfg.id, exc.detail)
-        return None
-    return Embedder(provider=provider, provider_name=cfg.provider, model=cfg.model, config_name=cfg.name)
+    """构建默认向量模型；没有配置或配置不可用时返回 None（调用方退回关键词检索）。"""
+    embedder, _ = await resolve_embedder(
+        db, user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+    )
+    return embedder
 
 
 @dataclass(frozen=True)
