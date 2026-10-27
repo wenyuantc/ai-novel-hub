@@ -460,14 +460,14 @@ export default function AIConfigPage() {
             <Input.Password placeholder={editing ? '留空不修改' : 'sk-...'} autoComplete="new-password" />
           </Form.Item>
           <Form.Item label="模型" required extra={models.length ? `可选 ${models.length} 个模型，也可手动输入` : undefined}>
-            <Space.Compact style={{ width: '100%' }}>
+            <Space.Compact style={{ width: '100%', display: 'flex' }}>
               <Form.Item
                 name="model"
                 noStyle
                 rules={[{ required: true, whitespace: true, message: '请输入模型名' }]}
               >
                 <AutoComplete
-                  style={{ width: '100%' }}
+                  style={{ flex: 1, minWidth: 0 }}
                   placeholder={MODEL_HINTS[modelType][provider ?? 'openai_compat']}
                   maxLength={200}
                   options={models.map((m) => ({
