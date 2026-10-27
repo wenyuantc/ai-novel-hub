@@ -1,6 +1,6 @@
-import { BulbOutlined, DownloadOutlined, ExperimentOutlined, RocketOutlined } from '@ant-design/icons'
+import { BulbOutlined, CloudDownloadOutlined, DownloadOutlined, ExperimentOutlined, RocketOutlined } from '@ant-design/icons'
 import { App, Button, Card, Col, Descriptions, Form, Input, Progress, Row, Select, Space, Statistic, Switch, Typography } from 'antd'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { analysisApi } from '../../api/analysis'
 import { errorMessage } from '../../api/client'
@@ -13,6 +13,9 @@ import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { formatWordCount, projectInfoBody, wordsProgress, type ProjectInfoValues } from '../../utils/projectFields'
 import { formatTime } from '../../utils/time'
+
+// 备份弹窗（含 api/transfer.ts、utils/transfer.ts）按需加载，不进入口 chunk
+const BackupModal = lazy(() => import('../../components/transfer/BackupModal'))
 
 export default function OverviewPanel() {
   const project = useProjectStore((s) => s.project)
@@ -89,6 +92,7 @@ function OverviewInner({ project }: { project: Project }) {
   const [form] = Form.useForm<ProjectUpdate & ProjectInfoValues>()
   const [saving, setSaving] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [backupOpen, setBackupOpen] = useState(false)
   const [inspiring, setInspiring] = useState(false)
   const progress = wordsProgress(project.total_words, project.target_words)
 
@@ -190,7 +194,10 @@ function OverviewInner({ project }: { project: Project }) {
                 用灵感模式补全
               </Button>
               <Button type="primary" icon={<DownloadOutlined />} onClick={() => setExportOpen(true)}>
-                导出 TXT / Markdown
+                导出 TXT / Markdown / EPUB
+              </Button>
+              <Button icon={<CloudDownloadOutlined />} onClick={() => setBackupOpen(true)}>
+                备份项目
               </Button>
             </Space>
           </Card>
@@ -275,6 +282,11 @@ function OverviewInner({ project }: { project: Project }) {
         </Descriptions>
       </Card>
       <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />
+      {backupOpen && (
+        <Suspense fallback={null}>
+          <BackupModal projectId={project.id} onClose={() => setBackupOpen(false)} />
+        </Suspense>
+      )}
     </Space>
   )
 }

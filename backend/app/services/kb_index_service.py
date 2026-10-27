@@ -197,6 +197,11 @@ async def _ensure_chunks(db: AsyncSession, doc: KbDocument) -> int:
     return len(rows)
 
 
+async def chunk_document(db: AsyncSession, doc: KbDocument) -> int:
+    """从文档全文分块并写入关键词检索单元（不 commit）。项目备份导入时在同一事务里调用。"""
+    return await _ensure_chunks(db, doc)
+
+
 async def _embed_stale(
     sessionmaker: async_sessionmaker[AsyncSession],
     job: IndexJob,

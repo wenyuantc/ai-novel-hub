@@ -16,6 +16,7 @@ from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
 from app.services import auth_service, kb_parser, style_service
+from app.services.project_transfer import importer as transfer_importer
 from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
 
@@ -90,9 +91,11 @@ def create_app(
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            # 跨域部署时前端需要读取下载文件名与导出提示（如 EPUB 跳过的空章节）
+            expose_headers=["Content-Disposition", "X-Export-Warnings"],
         )
 
-    # 知识库上传：在 multipart 解析（写临时文件）之前拦截超大请求体
+    # 知识库上传 / 项目备份导入：在 multipart 解析（写临时文件）之前拦截超大请求体
     app.add_middleware(
         UploadLimitMiddleware,
         rules=[
@@ -101,7 +104,14 @@ def create_app(
                 re.compile(r"/api/v1/projects/\d+/kb/documents"),
                 kb_parser.MAX_FILE_BYTES + MULTIPART_OVERHEAD,
                 kb_parser.TOO_LARGE,
-            )
+            ),
+            # 项目备份导入（预览 / 直接上传导入）
+            (
+                "POST",
+                re.compile(r"/api/v1/projects/import(/preview)?"),
+                transfer_importer.MAX_BYTES + MULTIPART_OVERHEAD,
+                transfer_importer.TOO_LARGE,
+            ),
         ],
     )
 

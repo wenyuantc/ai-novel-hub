@@ -52,13 +52,23 @@ async def export_project(
     project_id: int,
     user: CurrentUser,
     db: DbDep,
-    format: Annotated[Literal["txt", "md"], Query()] = "txt",  # noqa: A002
+    format: Annotated[Literal["txt", "md", "epub"], Query()] = "txt",  # noqa: A002
     chapter_ids: Annotated[list[str] | None, Query()] = None,
+    author: Annotated[str | None, Query(max_length=export_service.AUTHOR_LIMIT)] = None,
+    include_synopsis: Annotated[bool, Query()] = True,
 ) -> Response:
+    """EPUB：author 默认取用户名；include_synopsis 控制是否生成简介页。跳过的空章节经 X-Export-Warnings 返回。"""
     ids = export_service.parse_chapter_ids(chapter_ids)
-    file = await export_service.export_project(db, user.id, project_id, format, ids)
-    return Response(
-        content=file.content.encode("utf-8"),
-        media_type=file.media_type,
-        headers={"Content-Disposition": file.content_disposition},
+    file = await export_service.export_project(
+        db,
+        user.id,
+        project_id,
+        format,
+        ids,
+        author=user.username if author is None else author,
+        include_synopsis=include_synopsis,
     )
+    headers = {"Content-Disposition": file.content_disposition}
+    if file.warnings_header:
+        headers["X-Export-Warnings"] = file.warnings_header
+    return Response(content=file.body, media_type=file.media_type, headers=headers)

@@ -23,6 +23,7 @@ from app.api.v1 import (
     story,
     styles,
     tasks,
+    transfer,
     wizard,
 )
 
@@ -30,6 +31,8 @@ api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(ai_configs.router)
+# 固定路径 /projects/import... 先于 /projects/{project_id}
+api_router.include_router(transfer.router)
 api_router.include_router(projects.router)
 # 固定路径（with-relations / generate）先于通用 CRUD 的 /{item_id} 注册
 api_router.include_router(character_actions.router)

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "外键与归属"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "导入后的索引一致性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试隔离与变异验证"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}

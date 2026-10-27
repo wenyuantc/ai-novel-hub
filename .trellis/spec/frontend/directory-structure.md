@@ -29,7 +29,7 @@ frontend/
     │   ├── types.ts        # backend/app/schemas/*.py 的 TS 镜像
     │   ├── auth.ts         # authApi
     │   ├── aiConfigs.ts    # aiConfigApi、PROVIDER_LABELS
-    │   ├── projects.ts     # projectApi、PROJECT_STATUS、exportProject、parseContentDispositionFilename
+    │   ├── projects.ts     # projectApi、PROJECT_STATUS、exportProject、downloadAttachment、parseContentDispositionFilename、decodeExportWarnings
     │   ├── story.ts        # makeCrud -> worldApi / characterApi / outlineApi
     │   ├── chapters.ts     # chapterApi、generateChapter、polishChapter、CHAPTER_STATUS、countWords
     │   └── wizard.ts       # runWizard、WIZARD_KIND_LABELS

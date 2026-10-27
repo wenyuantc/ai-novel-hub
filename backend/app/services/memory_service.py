@@ -199,6 +199,11 @@ async def sync_from_analysis(db: AsyncSession, chapter: Chapter, analysis: Chapt
     return kept
 
 
+async def index_memories(db: AsyncSession, project_id: int, memories: list[StoryMemory]) -> None:
+    """为已落库的记忆写入检索单元（关键词部分；钉住 / 屏蔽同步）。不 commit。项目备份导入时调用。"""
+    await retrieval_service.upsert_many(db, project_id, "memory", [_chunk(m) for m in memories])
+
+
 async def on_chapters_deleted(db: AsyncSession, chapter_ids: list[int]) -> None:
     """删除章节前调用：删除这些章节的自动记忆与检索单元。手动记忆保留（chapter_id 由外键置空，章号不变）。不 commit。"""
     if not chapter_ids:

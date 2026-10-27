@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "外键、迁移、归属 404"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "快照结构、CHAPTER_NO_REFS 反射测试写法"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "知识库分块、记忆写入点、上传中间件"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "实体与关系、卡片格式"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "风格表与预设"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误格式"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "弹窗、下载工具"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-platform.md", "reason": "MuMu 导入导出缺陷对照（§5.3、§5.6）"}

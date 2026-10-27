@@ -128,7 +128,7 @@ export function formatTime(value: string | null | undefined, fmt = 'YYYY-MM-DD H
 ## 场景：API 客户端契约
 
 ### 1. 范围 / 触发条件
-任何对 `src/api/client.ts`、`src/api/projects.ts` 中 `exportProject` / `parseContentDispositionFilename`、后端错误格式（`backend/app/core/errors.py`）、认证 cookie 或导出端点（`GET /api/v1/projects/{id}/export`）的修改。
+任何对 `src/api/client.ts`、`src/api/projects.ts` 中 `exportProject` / `downloadAttachment` / `parseContentDispositionFilename` / `decodeExportWarnings`、`src/api/transfer.ts`、后端错误格式（`backend/app/core/errors.py`）、认证 cookie 或导出端点（`GET /api/v1/projects/{id}/export`）的修改。
 
 ### 2. 签名
 ```ts
@@ -144,7 +144,14 @@ export async function request<T>(path: string, options?: RequestOptions): Promis
 export const api: { get<T>(path, query?); post<T>(path, body?, signal?); patch<T>(path, body); put<T>(path, body); del(path, query?): Promise<void>; upload<T>(path, form: FormData, signal?) }
 export function errorMessage(err: unknown): string
 export function parseContentDispositionFilename(header: string | null): string | null
-export async function exportProject(projectId: number, format: 'txt' | 'md', chapterIds?: number[]): Promise<string>
+export type ExportFormat = 'txt' | 'md' | 'epub'
+export function decodeExportWarnings(header: string | null): string[]   // decodeURIComponent 后按「；」切分，非法编码按原文
+export async function downloadAttachment(path, query, fallbackName): Promise<{ filename: string; headers: Headers }>
+export function exportQuery(format, { chapterIds?, author?, includeSynopsis? }): Record<string, string>   // EPUB 才带 author / include_synopsis
+export async function exportProject(projectId, format, options?: ExportOptions): Promise<{ filename: string; warnings: string[] }>
+// src/api/transfer.ts（只被懒加载的备份 / 导入弹窗引用）
+export function backupQuery(options: BackupOptions): Record<string, boolean>   // generation_logs → logs
+export const transferApi: { estimate(pid); download(pid, options): Promise<string>; preview(file, signal?): Promise<ImportPreview>; importBackup({token, title?}): Promise<ImportResult> }
 ```
 
 ### 3. 契约
@@ -154,7 +161,8 @@ export async function exportProject(projectId: number, format: 'txt' | 'md', cha
 - 网络失败 → `ApiError(0, '网络错误，无法连接服务器')`；`AbortError` 原样重新抛出。
 - `request<T>`：204 → `undefined`；空响应体 → `undefined`；否则 `JSON.parse`。
 - `App.tsx` 注册 `() => useAuthStore.getState().clear()`；随后 `RequireAuth` 重定向到 `/login`。
-- 导出：直接调用 `fetch(buildUrl(path, { format, chapter_ids? }), { credentials: 'include' })`，其中 `chapter_ids` 是逗号拼接的字符串（后端 `export_service.parse_chapter_ids`）。响应为 blob；文件名取自 `Content-Disposition`，优先使用 RFC 5987 的 `filename*=UTF-8''<percent-encoded>`（后端发送 `attachment; filename="novel.{ext}"; filename*=UTF-8''{quote(name)}`），其次回退到普通 `filename=`，最后为 `novel.${format}`。通过 object URL + 临时 `<a download>` 下载，1 秒后撤销 URL。错误同样经过 `handleErrorResponse`。
+- 导出 / 备份下载：`downloadAttachment` 直接调用 `fetch(buildUrl(path, query), { credentials: 'include' })`（导出 query = `exportQuery`：`{ format, chapter_ids?, author?, include_synopsis? }`；备份 query = `backupQuery`），其中 `chapter_ids` 是逗号拼接的字符串（后端 `export_service.parse_chapter_ids`）。响应为 blob；文件名取自 `Content-Disposition`，优先使用 RFC 5987 的 `filename*=UTF-8''<percent-encoded>`（后端发送 `attachment; filename="novel.{ext}"; filename*=UTF-8''{quote(name)}`），其次回退到普通 `filename=`，最后为 `novel.${format}`。通过 object URL + 临时 `<a download>` 下载，1 秒后撤销 URL。错误同样经过 `handleErrorResponse`。`X-Export-Warnings`（EPUB 跳过的空章节等）是 UTF-8 百分号编码、多条以「；」分隔，后端 CORS 已 `expose_headers`；`exportProject` 用 `decodeExportWarnings` 解码后返回 `warnings`。
+- 备份类型（`types.ts`）：`BackupOptions` / `BackupEstimate` / `ImportPreview` / `ImportStyleBrief`（`action: preset|reuse|create|copy`）/ `ImportRequest` / `ImportResult` 镜像 `backend/app/schemas/transfer.py`。预览成功体**没有** `errors`：文件不合法时为 400，问题列表在 `ApiError.body.errors`，只能经 `utils/transfer.ts` 的 `importFileErrors` 收窄读取。导入用 JSON `{token, title?}`（后端也接受 multipart 直接导入，前端不用）。
 
 ### 4. 校验与错误矩阵
 
@@ -178,7 +186,7 @@ export async function exportProject(projectId: number, format: 'txt' | 'md', cha
 - 反例：对生成中的章节 PATCH content → `ApiError(409, '该章节正在生成中，请等待完成或先复位状态后再编辑')`；任何会话过期 → 全局登出，而非各页面单独处理。
 
 ### 6. 必需的测试
-`src/api/client.test.ts`（`10-23-knowledge-base` 新增）覆盖 `client.ts` 的前四条与 FormData 上传；`projects.ts` 的导出仍没有单元测试。修改它们时，需添加 / 更新 Vitest 测试（stub `globalThis.fetch`），断言：
+`src/api/client.test.ts`（`10-23-knowledge-base` 新增）覆盖 `client.ts` 的前四条与 FormData 上传；`src/api/projects.test.ts`（`10-23-project-io-reader` 新增）覆盖 `parseContentDispositionFilename`、`decodeExportWarnings`、`exportQuery`、`backupQuery`（下载本身仍没有单元测试）。修改它们时，需添加 / 更新 Vitest 测试（stub `globalThis.fetch`），断言：
 - 调用 `fetch` 时带有 `credentials: 'include'`，且 URL 以 `/api/v1` 为前缀。
 - 400 且错误体为 `{"detail":"x"}` → `ApiError` 满足 `status === 400`、`detail === 'x'`；非 JSON 响应体 → 回退 detail。
 - `/projects` 返回 401 时调用已注册处理器一次；`/auth/login` 和 `/auth/me` 返回 401 时不调用。
@@ -211,4 +219,4 @@ parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? `nov
 - 在组件内重新声明传输类型；应扩展 `types.ts`。
 - 在 `ChapterUpdate` 中发送 `status: 'generating'`（类型禁止；后端拒绝）。
 - 不通过 `parseServerTime`/`formatTime` 解析服务端时间戳。
-- 对服务端数据做宽泛的 `as` 断言。在类型系统无法推导的地方，以下现有的窄断言是可接受的：`request` 中的 `undefined as T` / `JSON.parse(text) as T`、`WizardGenerator` 中在 `kind` 检查后的 `result as WizardItemMap['world'][]`、来自固定单选组的 `e.target.value as ExportFormat`，以及 `main.tsx` 中的非空断言 `document.getElementById('root')!`。
+- 对服务端数据做宽泛的 `as` 断言。在类型系统无法推导的地方，以下现有的窄断言是可接受的：`request` 中的 `undefined as T` / `JSON.parse(text) as T`、`WizardGenerator` 中在 `kind` 检查后的 `result as WizardItemMap['world'][]`、来自固定单选组的 `e.target.value as ExportFormat`、`utils/transfer.ts` 中对后端 `action: str` 的 `action as ImportStyleAction`（查表失败有回退），以及 `main.tsx` 中的非空断言 `document.getElementById('root')!`。

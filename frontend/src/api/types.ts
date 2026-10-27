@@ -2198,3 +2198,72 @@ export interface ContextPreview {
   knowledge: string
   memories: string
 }
+
+// ---- 项目备份与导入（ainovel.project，见 backend/app/schemas/transfer.py） ----
+
+/** 备份可选项（核心数据始终包含）；查询参数里 generation_logs 写作 logs */
+export interface BackupOptions {
+  versions: boolean
+  snapshots: boolean
+  generation_logs: boolean
+  inspiration: boolean
+}
+
+export type BackupOptionKey = keyof BackupOptions
+
+export interface EstimateGroup {
+  rows: number
+  chars: number
+  /** 粗估的文件字节数（chars × 3 + rows × 150） */
+  bytes: number
+}
+
+/** GET /projects/{pid}/backup/estimate */
+export interface BackupEstimate {
+  core: EstimateGroup
+  versions: EstimateGroup
+  snapshots: EstimateGroup
+  generation_logs: EstimateGroup
+  inspiration: EstimateGroup
+}
+
+/** preset = 对应到预设；reuse = 复用同名同内容；create = 新建（name 为导入后的名称）；copy = 预设缺失，复制为自定义风格 */
+export type ImportStyleAction = 'preset' | 'reuse' | 'create' | 'copy'
+
+export interface ImportStyleBrief {
+  name: string
+  preset_key: string | null
+  action: ImportStyleAction
+}
+
+/** POST /projects/import/preview（multipart file）；文件不合法 → 400，ApiError.body.errors 为前 20 条问题 */
+export interface ImportPreview {
+  token: string
+  title: string
+  /** 实际导入时使用的书名（重名时加「（导入）」） */
+  final_title: string
+  version: number
+  exported_at: string | null
+  app_schema: string | null
+  options: BackupOptions
+  /** 表名 → 行数（只含非空的表） */
+  counts: Record<string, number>
+  styles: ImportStyleBrief[]
+  warnings: string[]
+  /** 令牌有效期（秒） */
+  expires_in: number
+}
+
+export interface ImportRequest {
+  token: string
+  title?: string | null
+}
+
+/** POST /projects/import → 201 */
+export interface ImportResult {
+  project: Project
+  counts: Record<string, number>
+  warnings: string[]
+  /** 有向量模型时排队的重建索引任务 */
+  task_id: number | null
+}

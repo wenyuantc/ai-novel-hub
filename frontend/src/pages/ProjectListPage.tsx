@@ -1,6 +1,6 @@
-import { BulbOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
+import { BulbOutlined, DeleteOutlined, ImportOutlined, PlusOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Col, Collapse, Empty, Form, Input, Modal, Row, Space, Spin, Statistic, Tag, Typography } from 'antd'
-import { useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
@@ -11,6 +11,9 @@ import { useLoader } from '../hooks/useLoader'
 import { projectInfoBody, type ProjectInfoValues } from '../utils/projectFields'
 import { formatTime } from '../utils/time'
 
+// 导入备份弹窗（含 api/transfer.ts、utils/transfer.ts）按需加载，不进入口 chunk
+const ImportBackupModal = lazy(() => import('../components/transfer/ImportBackupModal'))
+
 export default function ProjectListPage() {
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
@@ -18,6 +21,7 @@ export default function ProjectListPage() {
   const { data: projects = [], loading, error, reload } = useLoader(loader)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [form] = Form.useForm<ProjectCreate & ProjectInfoValues>()
 
   const handleCreate = async () => {
@@ -69,6 +73,9 @@ export default function ProjectListPage() {
           我的项目
         </Typography.Title>
         <Space>
+          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
+            导入备份
+          </Button>
           <Button icon={<BulbOutlined />} onClick={() => navigate('/inspiration')}>
             灵感模式
           </Button>
@@ -139,6 +146,17 @@ export default function ProjectListPage() {
         )}
       </Spin>
 
+      {importOpen && (
+        <Suspense fallback={null}>
+          <ImportBackupModal
+            onClose={() => setImportOpen(false)}
+            onImported={(p) => {
+              setImportOpen(false)
+              navigate(`/projects/${p.id}`)
+            }}
+          />
+        </Suspense>
+      )}
       <Modal
         title="新建项目"
         open={createOpen}

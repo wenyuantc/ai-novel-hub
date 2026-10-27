@@ -259,6 +259,10 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
 - `backend/tests/test_migrations.py::test_upgrade_and_downgrade` 在 `tmp_path` 下的 SQLite 文件上
   执行 `upgrade head` + `downgrade base`，并断言 `chapters` 外键的 `ondelete` 值。
   每个新版本都必须保持该测试通过。
+- **新增与项目相关的表（直接或经外键间接引用 `projects`）、或给已登记表新增外键列 / JSON 列时，必须登记到项目备份的
+  表规则注册表** `app/services/project_transfer/registry.py`（或写进 `NOT_EXPORTED` 并说明理由；JSON 里存 id 的要写重映射函数），
+  并同步更新 `exporter.APP_SCHEMA`；格式有不兼容变化时提升 `exporter.VERSION` 并在 `importer.migrate` 补升级步骤。
+  反射测试 `tests/test_project_transfer.py::test_registry_*` 会在漏登记时失败。见 [project-transfer.md](./project-transfer.md)。
 
 ---
 
@@ -504,3 +508,4 @@ class Task(TimestampMixin, Base):   # tasks
 - 新增存章节号的列却没有登记到 `chapter_numbering.CHAPTER_NO_REFS`：建章插入章节后该列不随之平移，先后判断错位（反射测试会失败）。
 - 直接改 `ChapterPlan.chapter_id` / `Chapter.plan_id` 的一侧：双向冗余不一致；只经 `plan_service`。
 - 用 `resource_key` 实现「同类排队串行」：它是冲突即拒绝（409）；需要排队等待用 `serial_key`。
+- 新增与项目相关的表却没有登记到 `project_transfer/registry.py`：项目备份会静默丢掉这张表的数据（反射测试会失败）。

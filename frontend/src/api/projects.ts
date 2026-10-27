@@ -1,4 +1,4 @@
-import { api, buildUrl, handleErrorResponse, ApiError } from './client'
+import { api, buildUrl, handleErrorResponse, ApiError, type QueryValue } from './client'
 import type { Project, ProjectCreate, ProjectStatus, ProjectUpdate, WizardProgressUpdate } from './types'
 
 export const projectApi = {
@@ -18,7 +18,7 @@ export const PROJECT_STATUS: Record<ProjectStatus, { label: string; color: strin
   completed: { label: '已完结', color: 'gold' },
 }
 
-export type ExportFormat = 'txt' | 'md'
+export type ExportFormat = 'txt' | 'md' | 'epub'
 
 /** 从 Content-Disposition 中解析文件名，优先 RFC 5987 的 filename*=UTF-8''。 */
 export function parseContentDispositionFilename(header: string | null): string | null {
@@ -35,11 +35,32 @@ export function parseContentDispositionFilename(header: string | null): string |
   return plain ? plain[1].trim() : null
 }
 
-/** 导出并触发浏览器下载。 */
-export async function exportProject(projectId: number, format: ExportFormat, chapterIds?: number[]): Promise<string> {
-  const path = `/projects/${projectId}/export`
-  const query: Record<string, string> = { format }
-  if (chapterIds && chapterIds.length > 0) query.chapter_ids = chapterIds.join(',')
+/** X-Export-Warnings：UTF-8 百分号编码，多条以「；」分隔；解码失败时按原文处理。 */
+export function decodeExportWarnings(header: string | null): string[] {
+  if (!header) return []
+  let text = header
+  try {
+    text = decodeURIComponent(header)
+  } catch {
+    // 不是合法的百分号编码：原样展示
+  }
+  return text
+    .split('；')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+export interface DownloadResult {
+  filename: string
+  headers: Headers
+}
+
+/** GET 附件并触发浏览器下载（blob），文件名取 Content-Disposition，没有时用 fallbackName。 */
+export async function downloadAttachment(
+  path: string,
+  query: Record<string, QueryValue>,
+  fallbackName: string,
+): Promise<DownloadResult> {
   let resp: Response
   try {
     resp = await fetch(buildUrl(path, query), { credentials: 'include' })
@@ -48,7 +69,7 @@ export async function exportProject(projectId: number, format: ExportFormat, cha
   }
   if (!resp.ok) await handleErrorResponse(path, resp)
   const blob = await resp.blob()
-  const filename = parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? `novel.${format}`
+  const filename = parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? fallbackName
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -57,5 +78,39 @@ export async function exportProject(projectId: number, format: ExportFormat, cha
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
-  return filename
+  return { filename, headers: resp.headers }
+}
+
+export interface ExportOptions {
+  /** 为空则导出全部章节（生成中的除外） */
+  chapterIds?: number[]
+  /** 仅 EPUB：作者名（≤100 字）；不传时后端取用户名 */
+  author?: string
+  /** 仅 EPUB：是否生成简介页（默认 true） */
+  includeSynopsis?: boolean
+}
+
+/** 导出查询参数（纯函数）：txt / md 不带 EPUB 专属参数。 */
+export function exportQuery(format: ExportFormat, options: ExportOptions = {}): Record<string, string> {
+  const query: Record<string, string> = { format }
+  if (options.chapterIds && options.chapterIds.length > 0) query.chapter_ids = options.chapterIds.join(',')
+  if (format === 'epub') {
+    if (options.author !== undefined) query.author = options.author
+    query.include_synopsis = String(options.includeSynopsis ?? true)
+  }
+  return query
+}
+
+/** 导出并触发浏览器下载；warnings 来自 X-Export-Warnings（如跳过的空章节）。 */
+export async function exportProject(
+  projectId: number,
+  format: ExportFormat,
+  options: ExportOptions = {},
+): Promise<{ filename: string; warnings: string[] }> {
+  const { filename, headers } = await downloadAttachment(
+    `/projects/${projectId}/export`,
+    exportQuery(format, options),
+    `novel.${format}`,
+  )
+  return { filename, warnings: decodeExportWarnings(headers.get('x-export-warnings')) }
 }

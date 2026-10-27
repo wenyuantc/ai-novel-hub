@@ -98,7 +98,8 @@
 | P1-7 | `inspiration` 灵感模式与项目结构化字段 | A3 | 无 |
 | P1-8 | `book-import` 拆书 | C3 | task-engine、story-entities、outline-pro；文件上传复用封面任务的方案 |
 | P1-9 | `knowledge-base` 检索基建：知识库 + 向量剧情记忆（B7 由用户决定从 analysis-memory 并入） | B7、B8 | analysis-memory（摘要/情节点作为记忆来源） |
-| P1-10 | `project-io-reader` 项目 JSON 备份、EPUB、阅读器、书架、暗色主题、移动端 | D3、D4、D5、A18 | 实体稳定后再做 JSON 格式，所以放在 P0 之后 |
+| P1-10 | `project-io-reader` 项目 JSON 备份与导入、EPUB 导出 | D3、D4 | 实体稳定后再做 JSON 格式，所以放在 P0 之后 |
+| P1-10b | `reader-ui` 阅读器、书架、暗色主题、移动端（用户决定从 project-io-reader 拆出，紧接着做） | D5、A18 | 无（书架可接入 project-io-reader 的导出入口） |
 | P2-11 | `project-agent` 项目智能体 | C4 | story-entities、chapter-versions |
 | P2-12 | `skills-mcp` Skill 和 MCP 插件 | C5、C6 | prompt-styles |
 | P2-13 | `oauth-announce` OAuth、邮箱登录、实例公告 | D2、D6 | 无 |
@@ -106,7 +107,7 @@
 
 ## 进度
 
-已归档 11/17（2026-10-27）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base。P0 全部完成，P1 剩 book-import、project-io-reader。
+已归档 12/18（2026-10-27）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader。P0 全部完成，P1 剩 book-import、reader-ui。
 
 不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 
