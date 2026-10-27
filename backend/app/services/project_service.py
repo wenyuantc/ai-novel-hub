@@ -1,10 +1,20 @@
-from sqlalchemy import func, select
+import math
+from typing import Any
+
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
 from app.core.errors import NotFoundError
 from app.models import Chapter, Project, WritingStyle
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgress, WizardProgressUpdate
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectOut,
+    ProjectUpdate,
+    ReadingOut,
+    WizardProgress,
+    WizardProgressUpdate,
+)
 from app.services import style_service
 
 
@@ -44,31 +54,113 @@ def _stats_subquery():
     )
 
 
+# 「已写章节」：正文有非空白字符（word_count 由服务端按非空白字符计算）
+WRITTEN = Chapter.word_count > 0
+
+
+def parse_progress(raw: Any) -> tuple[int | None, int | None, float]:
+    """projects.reading_progress → (chapter_id, chapter_no, ratio)；结构不对的部分按缺失处理，ratio 限制在 [0, 1]。"""
+    if not isinstance(raw, dict):
+        return None, None, 0.0
+
+    def _int(v: Any) -> int | None:
+        return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+    ratio = raw.get("ratio")
+    ok = isinstance(ratio, int | float) and not isinstance(ratio, bool) and math.isfinite(ratio)
+    return _int(raw.get("chapter_id")), _int(raw.get("chapter_no")), min(max(float(ratio), 0.0), 1.0) if ok else 0.0
+
+
+async def _last_edited(db: AsyncSession, project_ids: list[int]) -> dict[int, int]:
+    """每个项目正文非空、updated_at 最大（同时间取 id 大）的章节；一次查询。"""
+    if not project_ids:
+        return {}
+    rn = (
+        func.row_number()
+        .over(partition_by=Chapter.project_id, order_by=(Chapter.updated_at.desc(), Chapter.id.desc()))
+        .label("rn")
+    )
+    sub = select(Chapter.project_id, Chapter.id, rn).where(Chapter.project_id.in_(project_ids), WRITTEN).subquery()
+    rows = await db.execute(select(sub.c.project_id, sub.c.id).where(sub.c.rn == 1))
+    return {pid: cid for pid, cid in rows.all()}
+
+
+async def _reading(db: AsyncSession, projects: list[Project]) -> dict[int, ReadingOut]:
+    """阅读进度（批量，至多两次查询）。进度指向的章节已删除 / 不属于本项目 / 正文为空时，退回（章号, id）
+    排在它前面的最近一个已写章节，ratio 置 0；删除的章节按进度里记录的 chapter_no 定位，没有记录则视为无进度。"""
+    refs = {}
+    for p in projects:
+        cid, no, ratio = parse_progress(p.reading_progress)
+        if cid is not None:
+            refs[p.id] = (cid, no, ratio)
+    if not refs:
+        return {}
+    rows = await db.execute(
+        select(Chapter.id, Chapter.project_id, Chapter.chapter_no, Chapter.word_count).where(
+            Chapter.id.in_([r[0] for r in refs.values()])
+        )
+    )
+    found = {row.id: row for row in rows.all()}
+    out: dict[int, ReadingOut] = {}
+    fallback: dict[int, tuple[int, int]] = {}
+    for pid, (cid, no, ratio) in refs.items():
+        chap = found.get(cid)
+        if chap is not None and chap.project_id != pid:
+            chap = None
+        if chap is not None and chap.word_count > 0:
+            out[pid] = ReadingOut(chapter_id=cid, chapter_no=chap.chapter_no, ratio=ratio)
+        elif chap is not None:
+            fallback[pid] = (chap.chapter_no, chap.id)
+        elif no is not None:
+            fallback[pid] = (no, cid)
+    if fallback:
+        cond = or_(*(and_(Chapter.project_id == pid, Chapter.chapter_no <= key[0]) for pid, key in fallback.items()))
+        rows = await db.execute(select(Chapter.project_id, Chapter.id, Chapter.chapter_no).where(WRITTEN, cond))
+        best: dict[int, tuple[int, int]] = {}
+        for pid, cid, no in rows.all():
+            key = (no, cid)
+            if key < fallback[pid] and (pid not in best or key > best[pid]):
+                best[pid] = key
+        for pid, (no, cid) in best.items():
+            out[pid] = ReadingOut(chapter_id=cid, chapter_no=no, ratio=0.0)
+    return out
+
+
 def _to_out(
     project: Project,
     chapter_count: int | None,
     total_words: int | None,
     style: WritingStyle | None = None,
     notice: str | None = None,
+    last_edited: int | None = None,
+    reading: ReadingOut | None = None,
 ) -> ProjectOut:
     out = ProjectOut.model_validate(project)
     out.chapter_count = int(chapter_count or 0)
     out.total_words = int(total_words or 0)
     out.default_style = style_service.to_brief(style) if style is not None else None
     out.notice = notice
+    out.last_edited_chapter_id = last_edited
+    out.reading = reading
     return out
 
 
 async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
+    """固定次数的查询（项目 + 统计 + 风格一次，最近编辑一次，阅读进度至多两次），不随项目数增长。"""
     stats = _stats_subquery()
-    rows = await db.execute(
-        select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle)
-        .outerjoin(stats, stats.c.project_id == Project.id)
-        .outerjoin(WritingStyle, WritingStyle.id == Project.default_style_id)
-        .where(Project.user_id == user_id)
-        .order_by(Project.updated_at.desc(), Project.id.desc())
-    )
-    return [_to_out(p, cc, tw, st) for p, cc, tw, st in rows.all()]
+    rows = (
+        await db.execute(
+            select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle)
+            .outerjoin(stats, stats.c.project_id == Project.id)
+            .outerjoin(WritingStyle, WritingStyle.id == Project.default_style_id)
+            .where(Project.user_id == user_id)
+            .order_by(Project.updated_at.desc(), Project.id.desc())
+        )
+    ).all()
+    projects = [r[0] for r in rows]
+    last = await _last_edited(db, [p.id for p in projects])
+    reading = await _reading(db, projects)
+    return [_to_out(p, cc, tw, st, None, last.get(p.id), reading.get(p.id)) for p, cc, tw, st in rows]
 
 
 async def project_out(db: AsyncSession, project: Project, notice: str | None = None) -> ProjectOut:
@@ -80,7 +172,9 @@ async def project_out(db: AsyncSession, project: Project, notice: str | None = N
         )
     ).one()
     style = await db.get(WritingStyle, project.default_style_id) if project.default_style_id else None
-    return _to_out(project, row[0], row[1], style, notice)
+    last = await _last_edited(db, [project.id])
+    reading = await _reading(db, [project])
+    return _to_out(project, row[0], row[1], style, notice, last.get(project.id), reading.get(project.id))
 
 
 async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) -> tuple[Project, str | None]:

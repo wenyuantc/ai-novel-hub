@@ -1,14 +1,8 @@
-import { Button, Empty, Space, Table, Tag, Typography } from 'antd'
+import { Button, Empty, Space, Table, Tag, theme, Typography } from 'antd'
 import { formatScore, SCORE_KEYS, SCORE_LABELS, trendSegments } from '../../api/analysis'
 import type { AnalysisBrief, ScoreKey } from '../../api/types'
+import { usePalette } from '../../theme/usePalette'
 import { formatTime } from '../../utils/time'
-
-const COLORS: Record<ScoreKey, string> = {
-  overall: '#1677ff',
-  pacing: '#13c2c2',
-  engagement: '#fa8c16',
-  coherence: '#722ed1',
-}
 
 const WIDTH = 480
 const HEIGHT = 140
@@ -22,6 +16,8 @@ function scoreValue(a: AnalysisBrief, key: ScoreKey): number | null {
 function ScoreTrend({ items }: { items: AnalysisBrief[] }) {
   // items 新在前 → 按时间正序绘制
   const ordered = [...items].reverse()
+  const COLORS: Record<ScoreKey, string> = usePalette().series
+  const { token } = theme.useToken()
   return (
     <div>
       <svg
@@ -30,14 +26,14 @@ function ScoreTrend({ items }: { items: AnalysisBrief[] }) {
         height={HEIGHT}
         role="img"
         aria-label="评分走势"
-        style={{ background: '#fafafa', borderRadius: 6 }}
+        style={{ background: token.colorFillQuaternary, borderRadius: 6 }}
       >
         {[2, 4, 6, 8, 10].map((v) => {
           const y = 6 + ((HEIGHT - 12) * (10 - v)) / 9
           return (
             <g key={v}>
-              <line x1={0} x2={WIDTH} y1={y} y2={y} stroke="#eee" />
-              <text x={2} y={y - 2} fontSize={9} fill="#bbb">
+              <line x1={0} x2={WIDTH} y1={y} y2={y} stroke={token.colorBorderSecondary} />
+              <text x={2} y={y - 2} fontSize={9} fill={token.colorTextQuaternary}>
                 {v}
               </text>
             </g>

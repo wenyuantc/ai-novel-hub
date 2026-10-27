@@ -16,6 +16,9 @@ import '@xyflow/react/dist/style.css'
 import { useEffect, useMemo } from 'react'
 import { intimacyColor } from '../../api/relationships'
 import type { GraphEdge, GraphNode } from '../../api/types'
+import { theme } from 'antd'
+import { usePalette } from '../../theme/usePalette'
+import { useResolvedTheme } from '../../theme/themeStore'
 import { nodeColor } from '../../utils/graphFilter'
 
 interface Props {
@@ -45,10 +48,13 @@ function layoutGraph(nodes: GraphNode[], edges: GraphEdge[]): Map<number, { x: n
 
 /** 节点按定位着色，边标注称呼并按亲密度红 → 灰 → 绿着色；点击节点回调角色 id。 */
 export default function RelationGraph({ nodes, edges, onNodeClick, height = 600 }: Props) {
+  const palette = usePalette()
+  const resolved = useResolvedTheme()
+  const { token } = theme.useToken()
   const { flowNodes, flowEdges } = useMemo(() => {
     const pos = layoutGraph(nodes, edges)
     const flowNodes: Node[] = nodes.map((n) => {
-      const color = nodeColor(n)
+      const color = nodeColor(n, palette)
       const alive = n.life_status === 'alive'
       return {
         id: String(n.id),
@@ -58,8 +64,8 @@ export default function RelationGraph({ nodes, edges, onNodeClick, height = 600 
           width: NODE_W,
           border: `2px solid ${color}`,
           borderRadius: 8,
-          background: alive ? '#fff' : '#f5f5f5',
-          color: alive ? '#262626' : '#8c8c8c',
+          background: alive ? palette.nodeBg : palette.nodeBgMuted,
+          color: alive ? palette.text : palette.textSecondary,
           fontWeight: n.is_protagonist ? 700 : 400,
           borderStyle: alive ? 'solid' : 'dashed',
           fontSize: 13,
@@ -81,7 +87,7 @@ export default function RelationGraph({ nodes, edges, onNodeClick, height = 600 
       }
     })
     return { flowNodes, flowEdges }
-  }, [nodes, edges])
+  }, [nodes, edges, palette])
   // 节点可拖动：本地状态，筛选 / 数据变化时重置为新的布局
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(flowNodes)
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(flowEdges)
@@ -91,13 +97,14 @@ export default function RelationGraph({ nodes, edges, onNodeClick, height = 600 
   }, [flowNodes, flowEdges, setRfNodes, setRfEdges])
 
   return (
-    <div style={{ height, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+    <div style={{ height, border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 8 }}>
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         fitView
+        colorMode={resolved}
         nodesConnectable={false}
         onNodeClick={(_, node) => onNodeClick?.(Number(node.id))}
       >

@@ -1,4 +1,19 @@
-import { Alert, App, Checkbox, Form, Input, InputNumber, List, Modal, Select, Space, Spin, Tag, Typography } from 'antd'
+import {
+  Alert,
+  App,
+  Checkbox,
+  Form,
+  Input,
+  InputNumber,
+  List,
+  Modal,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  theme,
+  Typography,
+} from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { previewBatch, startBatch } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
@@ -55,6 +70,7 @@ function toRequest(v: Partial<FormValues>): BatchGenerateRequest | null {
 
 /** 批量顺序生成发起弹窗：选择范围与选项，参数变化时防抖预览（将生成的章节、跳过数、预计耗时、警告），确认后创建任务。 */
 export default function BatchGenerateModal({ projectId, chapters, onClose, onStarted }: Props) {
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const hasConfig = useHasAIConfig()
@@ -264,7 +280,7 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
               />
             )}
             {preview.items.length > 0 && (
-              <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 6 }}>
+              <div style={{ maxHeight: 220, overflow: 'auto', border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 6 }}>
                 <List
                   size="small"
                   dataSource={preview.items}

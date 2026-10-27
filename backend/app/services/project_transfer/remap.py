@@ -8,6 +8,8 @@
   对应不上的置为 null；field_key（char:{cid}:x、rel:{rid}:x、relpair:{low}:{high}、career:{cid}:{career_id}、
   org:{org_id}:{cid}、fs:{fid}:x）按同样的映射改写，对应不上时置空串。
 - chapter_analyses.foreshadow_candidates：每项的 ref_id 是伏笔 id。
+- projects.reading_progress：chapter_id 是章节 id，对应不上时整个进度清空（{}）；项目先于章节插入，
+  所以 importer 在全部表插入后才处理这一列。
 - outline_snapshots.data：outlines / plans 的 id、plans 的 outline_id 与 character_ids、links 的 chapter_id /
   outline_id / plan_id；快照里引用的大纲 / 细纲在当前数据里已不存在时，分配一个不与现有行冲突的新 id（synthetic），
   保证快照内部自洽；links 指向已不存在的章节时去掉该条（恢复时本来也会跳过）。
@@ -16,6 +18,7 @@
 只统计 missing，不改写数值。
 """
 
+import math
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -154,6 +157,25 @@ def foreshadow_candidates(value: Any, ctx: RemapContext) -> Any:
             new = ctx.ref("foreshadows", item["ref_id"], "分析伏笔候选")
             item = {**item, "ref_id": item["ref_id"] if ctx.identity and new is not None else new}
         out.append(item)
+    return out
+
+
+def reading_progress(value: Any, ctx: RemapContext) -> dict[str, Any]:
+    """projects.reading_progress：改写 chapter_id；对应不上（或结构不对）时清空为 {}。其余字段规范化后保留。"""
+    if not isinstance(value, dict) or value.get("chapter_id") is None:
+        return {}
+    new = ctx.ref("chapters", value.get("chapter_id"), "阅读进度")
+    if new is None:
+        return {}
+    out: dict[str, Any] = {"chapter_id": value["chapter_id"] if ctx.identity else new}
+    no = value.get("chapter_no")
+    if isinstance(no, int) and not isinstance(no, bool):
+        out["chapter_no"] = no
+    ratio = value.get("ratio")
+    ok = isinstance(ratio, int | float) and not isinstance(ratio, bool) and math.isfinite(ratio)
+    out["ratio"] = min(max(float(ratio), 0.0), 1.0) if ok else 0.0
+    if isinstance(value.get("updated_at"), str):
+        out["updated_at"] = value["updated_at"]
     return out
 
 

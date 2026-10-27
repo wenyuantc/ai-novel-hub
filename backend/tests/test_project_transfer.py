@@ -359,6 +359,14 @@ async def _seed(app, project_id: int) -> dict:
         session.title = "灵感"
         session.state = {"idea": "修仙"}
         db.add(session)
+        # 阅读进度（JSON 内含章节 id）
+        project = await db.get(Project, project_id)
+        project.reading_progress = {
+            "chapter_id": ch2.id,
+            "chapter_no": 2,
+            "ratio": 0.5,
+            "updated_at": "2026-10-27T00:00:00Z",
+        }
         await db.commit()
         return {
             "characters": [c1.id, c2.id, c3.id],
@@ -448,7 +456,8 @@ async def test_round_trip_all_entities(client, app):
         assert len(dst["tables"][table]) == len(src["tables"][table]), table
     assert _canonical(dst) == _canonical(src)
     assert dst["styles"] == src["styles"]
-    strip = {"id", "title", "updated_at"}
+    strip = {"id", "title", "updated_at", "reading_progress"}
+    assert src["project"]["reading_progress"]["chapter_id"] == ids["chapters"][1]
     assert {k: v for k, v in dst["project"].items() if k not in strip} == {
         k: v for k, v in src["project"].items() if k not in strip
     }
@@ -462,6 +471,13 @@ async def test_round_trip_all_entities(client, app):
         chapters = list(await db.scalars(select(Chapter).where(Chapter.project_id == pid).order_by(Chapter.id)))
         assert [c.title for c in chapters] == ["重逢", "重逢", "下山"]
         ch1, ch2, _ = chapters
+        # 阅读进度的章节 id 改写到新章节，其余字段原样
+        assert (await db.get(Project, pid)).reading_progress == {
+            "chapter_id": ch2.id,
+            "chapter_no": 2,
+            "ratio": 0.5,
+            "updated_at": "2026-10-27T00:00:00Z",
+        }
         # 风格：预设对应到同一个预设，自定义风格同名同内容复用
         assert ch1.style_id == ids["lean"]
         assert new["default_style_id"] == p["default_style_id"]

@@ -177,8 +177,8 @@ dayjs.locale('zh-cn')
 ## 样式模式
 
 - AntD 布局原语（`Layout`、带 `xs`/`xl` 断点的 `Row/Col`、`Space direction="vertical"`、`Card size="small"`）加上内联 `style={{ … }}` 对象。不使用 CSS modules、Tailwind 或 styled-components。
-- 共享的内联样式常量定义在模块级：`const pre: CSSProperties = { whiteSpace: 'pre-wrap', marginBottom: 0 }`（`StoryPreview.tsx`）。
-- 主题定制只通过 `ConfigProvider theme.token`（`colorPrimary: '#1677ff'`）。
+- 共享的内联样式常量定义在模块级：`const pre: CSSProperties = { whiteSpace: 'pre-wrap', marginBottom: 0 }`（`StoryPreview.tsx`）。模块级常量只放与主题无关的属性；背景 / 边框 / 文字颜色在组件内用 token 合并（`style={{ ...pre, background: token.colorFillQuaternary }}`）。
+- 主题定制只通过 `ConfigProvider theme`（`algorithm` 随明暗切换 + `token.colorPrimary = BRAND_PRIMARY`）；**颜色一律取 `theme.useToken()` 或 `theme/palette.ts`，不得写死**，见下文「主题与配色」。
 - 状态颜色来自标签映射（`CHAPTER_STATUS[s].color`、`PROJECT_STATUS[status].color`），以 `<Tag>` 渲染。
 
 ---
@@ -197,6 +197,9 @@ dayjs.locale('zh-cn')
 - 在只注册一次的 `keydown` 监听器中直接捕获 `handleSave`——会形成过期闭包；使用 ref 模式。
 - 在流式过程中关闭 `WizardModal`——这是刻意禁止的；不要添加 `maskClosable` 或页脚关闭按钮。
 - 在关闭状态下渲染 `ExportModalInner`——它只会加载一次章节并显示过期数据。
+- 写死颜色（`'#fafafa'`、`'#f0f0f0'`、`rgba(...)`）——暗色主题下会留下浅色块；`noHardcodedColors.test.ts` 会失败。
+- 用 `window.innerWidth` 判断移动端——不随窗口缩放更新；一律用 `useIsMobile()`。
+- 给控件写固定的大 `minWidth`（如 `minWidth: 320`）——375px 下会撑出横向滚动；用 `min(320px, calc(100vw - 130px))` 之类的上限。
 
 ### 章节分析（`10-23-analysis-memory`）
 
@@ -321,3 +324,44 @@ dayjs.locale('zh-cn')
 
 - 纯函数在 `utils/transfer.ts`（表标签 `TRANSFER_TABLE_LABELS` 与后端 `importer.TABLE_LABELS` 一致、`countRows`、`formatBytes`、估算与提示、可选项、上传前检查、`importFileErrors` / `isTokenExpired` / `tokenExpiredLocally`、风格处理标签），测试 `utils/transfer.test.ts`；`exportQuery` / `decodeExportWarnings` / `parseContentDispositionFilename` / `backupQuery` 在 `api/projects.test.ts`。
 - 包体积（本任务后）：入口 ≈ 140 kB（只多了 EPUB 选项与 `downloadAttachment` / `decodeExportWarnings`）；`BackupModal-*.js` ≈ 2 kB、`ImportBackupModal-*.js` ≈ 5 kB、共享的 `transfer-*.js`（`api/transfer.ts` + `utils/transfer.ts`）≈ 3.5 kB 按需加载。**规则**：入口 chunk 中的模块（`OverviewPanel`、`ProjectListPage`）不得静态 import `api/transfer.ts`、`utils/transfer.ts` 或 `components/transfer/*`。
+
+### 主题与配色（`10-27-reader-ui`）
+
+- **主题 store** `theme/themeStore.ts` → `useThemeStore`：`mode: 'light' | 'dark' | 'system'`（localStorage `ainovel.theme`，缺失 / 非法 = `system`）、`systemDark`（`matchMedia('(prefers-color-scheme: dark)')`）；
+  `watchSystemTheme()` 由 `App` 挂载时调用并监听 `change`，跟随系统时实时切换；`useResolvedTheme()` = `resolveTheme(mode, systemDark)`。设备级偏好，**不随登录用户重置**。
+- `App.tsx`：`ConfigProvider theme={{ algorithm: resolved === 'dark' ? darkAlgorithm : defaultAlgorithm, token: { colorPrimary: BRAND_PRIMARY } }}`；
+  `theme/ThemeSync` 把 `data-theme`、`color-scheme`（原生滚动条 / 表单控件）以及 `--app-bg` / `--app-text`（取自 token）写到 `<html>`，`index.css` 只用这些变量。
+- 切换：`theme/ThemeSwitch`（浅色 / 暗色 / 跟随系统三段 `Segmented`）。顶栏用 `compact onDarkBar`（只显示图标、局部暗色算法）；移动端在顶栏抽屉里显示带文字的一行。不做切换动画。
+- **取色规则**：
+  - antd 组件与普通 DOM：`const { token } = theme.useToken()`，常用 `colorBgContainer`、`colorFillQuaternary`（浅灰底）、`colorBorderSecondary`（分隔线）、`colorText*`、`colorPrimary` / `colorSuccess` / `colorError` / `colorWarning`、`colorSuccessBg` / `colorErrorBg`（TextDiff 增删底色）、`colorTextLightSolid`（深色顶栏上的白字）。
+  - 非 antd 绘制（关系图、伏笔时间线、评分走势）：`theme/usePalette()` → `chartPalette(resolved)`，浅 / 暗两套（`roles` 节点色、`series` 评分线、`grid`、`muted` 等）。`utils/graphFilter.nodeColor(n, palette)` 第二个参数缺省为浅色调色板；`RelationGraph` 另传 `colorMode={resolved}` 给 React Flow。`api/analysis.deltaColor(delta, token)` 由调用方传入 `colorSuccess` / `colorError`。
+  - 书封（`utils/shelf.coverColor`）与阅读背景（`READER_TONES`）的具体色值也集中在 `palette.ts`。
+- **防回归**：`theme/noHardcodedColors.test.ts` 用 `import.meta.glob(?raw)` 扫描 `src/**/*.{ts,tsx,css}`（不含测试），匹配 `#hex`（3–8 位）、`rgb(a)(`、`hsl(a)(`。白名单只有 `theme/palette.ts`，以及行内带 `// theme-allow` 注释的行（需说明理由）。新增颜色先加到 palette 或改用 token。
+
+### 响应式（`10-27-reader-ui`）
+
+- 文档流里的元素不要用 `100vw` 算宽度：`100vw` 包含竖向滚动条，在有占位滚动条的浏览器（Windows、macOS 设为「始终显示滚动条」）上会横向溢出约 15px；用 `100%` 或让元素独占一行。只有 fixed 定位的 Modal / Drawer 可以用 `100vw`（打开时页面滚动已锁定）。
+
+- 断点 768px：`hooks/useIsMobile()`（`Grid.useBreakpoint()`，`screens.md === false` 即移动端；首帧断点未算出时按桌面），窗口缩放实时更新。**禁止**直接读 `window.innerWidth`。`useModalWidth(desired)`：移动端返回 `calc(100vw - 24px)`。
+- 全局兜底（`index.css`）：`body { overflow-x: hidden }`；`.ant-table-content { overflow-x: auto }`（所有表格内容超宽时表内横向滚动）；≤767px 时表头 `white-space: nowrap`（列被挤窄时整表横向滚动而不是逐字换行）、`.ant-drawer-content-wrapper { max-width: 100vw }`、非 confirm 的 `.ant-modal` 宽 `calc(100vw - 24px)`。因此一般弹窗 / 抽屉无需逐个改宽度；新写的需要精确宽度的弹窗可用 `useModalWidth`。
+- `AppLayout`：移动端顶栏只留 logo、用户菜单、汉堡按钮（`aria-label="打开菜单"`），导航菜单与主题切换在右侧 `Drawer`。`ProjectLayout`：移动端不渲染 `Sider`，内容区顶部「项目菜单 · 当前页」按钮打开左侧抽屉，选中菜单项后关闭；内边距 12。
+- 完整适配的页面：书架（每行两列）、概览（表单 / 统计单列，`Descriptions column={{ xs: 1, sm: 2 }}`）、章节列表（移动端改为 `List` 卡片：章号 + 标题、状态 / 排队 / 分析标签、字数与时间，「⋮」菜单内编辑 / 阅读 / 删除（`modal.confirm`））、章节编辑器（工具栏只在 `xxl` 放进卡片标题栏，其余宽度放正文上方；移动端 AI 助手卡片收进底部 `Drawer`（85vh，`forceRender`，关闭不丢局部改写状态），由 `FloatButton`（`RobotOutlined`，在任务面板按钮上方，任务运行中带红点）打开）、阅读器、灵感会话（移动端单栏：步骤条横向滚动 `responsive={false}`，「立项草稿与补充想法」按钮打开底部抽屉，抽屉内跳步骤会关闭抽屉）。其余页面只保证无页面级横向溢出。
+- 验收：Playwright 在 375px 下对一级页面断言 `document.documentElement.scrollWidth <= clientWidth`。
+
+### 书架（`pages/ProjectListPage.tsx`，`10-27-reader-ui`）
+
+- 顶部「我的书架」+ 统计（作品数 / 连载中（`status = writing`）/ 总字数，`shelfStats`）；工具栏：搜索（书名 + 标签，大小写不敏感）、排序（最近更新 / 创建时间 / 书名 `localeCompare zh` / 字数）、状态筛选，三者存 localStorage `ainovel.shelf`（`readShelfPrefs` / `writeShelfPrefs`，`parseShelfPrefs` 容错）。纯函数都在 `utils/shelf.ts`。
+- 网格 `Col xs=12 sm=8 md=6 xl=4`（手机两列）；第一张固定「新建」卡（新建项目 / 灵感模式 / 导入备份）。
+- `components/shelf/BookCover`：2:3 文字封面，`coverColor(title, resolved)` = FNV-1a 哈希 → 12 色相，浅 / 暗主题明度不同，浅色文字，对比度 < 4.5 时逐步压暗底色；左侧加深书脊；书名衬线体最多 3 行、题材在底部；`coverUrl` 有值时直接显示图片（封面任务接入点）。
+- 卡片：书名、状态标签、前 3 个类型标签、`wordsProgress` 进度条（没有目标只显示字数）、「N 章 · 相对时间更新」（`utils/time.formatRelative`）。按钮：「继续写作」→ `continueTarget`（`last_edited_chapter_id` 的编辑器，否则概览）；「阅读」→ `readTarget`（有 `reading` 到该章，否则 `/projects/:id/read` 自动定位），文案 `readingLabel`（「读到第 N 章」/「开始阅读」），`canRead` 为假（没有已写章节）时禁用；「⋮」菜单：概览 / 导出（`ExportModal`）/ 备份（`BackupModal`，lazy）/ 删除（`modal.confirm`）。
+
+### 阅读器（`pages/ReaderPage.tsx`，`10-27-reader-ui`）
+
+- 路由 `/projects/:pid/read` 与 `/projects/:pid/read/:cid`：**不在 AppLayout / ProjectLayout 内**（全屏），外层 `RequireAuth` + `<Outlet/>`，两条子路由都 `lazyPage` 懒加载同一模块（`ReaderPage-*.js` ≈ 16 kB）。不带 `:cid` 时 `startChapterId(toc, reading)` 定位（进度章在目录中 → 该章；否则第一个已写章节；都没有 → 提示「还没有写好正文的章节」）。
+- 数据：`projectApi.get`（`reading`）+ `readerApi.toc`（只含已写章节，`volume_no` / `volume_title` 可为 null）一起加载；正文用 `chapterApi.get`；`ReaderView` 以章节 id 为 key 重建。
+- 设置 `utils/reader.ts`：localStorage `ainovel.reader`（全局，`normalizeReaderSettings` 校验：字号 14–24 取整、行距 1.5/1.8/2.0/2.2、版心 560/680/800、背景 跟随全局 / 浅色 / 护眼 / 暗色、字体 宋体 / 黑体栈）。背景经 `readerTone(background, resolved)` 取 `READER_TONES`；暗色背景时整个阅读器包一层 `ConfigProvider darkAlgorithm`，抽屉等组件同步变暗。
+- 正文 `splitParagraphs`（按行切段、去空行），每段 `<p>` 首行缩进 2em；章末「上一章 / 目录 / 下一章」，`tocNeighbors(toc, chapter_no)` 按章节号找相邻**已写**章节（跳过空章，当前章不在目录中也能定位）。←/→ 切章（`arrowDirection`：焦点在输入控件 / 可编辑区、按修饰键、任一抽屉打开时不响应）。切章用 `navigate(..., { replace: true, state })`，不堆积历史；返回按钮回 `location.state.from`（入口传入），没有则回书架。
+- 进度：用窗口滚动。进入章节后 `restoreRatio`（只有该章就是上次读到的章节才恢复，否则回顶部）→ `scrollTopForRatio` 滚动，并登记一次进度；滚动时 rAF 节流计算 `scrollRatio`，停 2 秒后 `readerApi.saveProgress`（PUT 204，失败静默）；`visibilitychange → hidden`、`pagehide`、卸载（含切章）时若有未上报的进度用 `saveProgressKeepalive`（`fetch keepalive`，不走 api 客户端、不触发 401 处理）。空章不记进度。本页上报后更新内存中的 `reading`，切回读过的章节据此恢复。
+- 顶栏（sticky）：返回、书名 / 章节标题、目录（左抽屉，`groupToc` 按卷分组、当前章高亮并滚动到可见处）、本章分析（右抽屉、无遮罩：`components/reader/ReaderAnalysisPanel`，取 `analysisApi.list` 第一条再 `get`，显示摘要 / 情节点 / 钩子 / 伏笔候选（`readCandidates` + `candidateLabel`），过期标签；没有分析时「本章还没有分析」+「去分析」→ 编辑器 `?panel=analysis`）、阅读设置（右抽屉）、编辑本章。移动端三个抽屉都改为底部抽屉（72vh，设置为自适应高度）。
+- 入口：书架「阅读」、章节列表每行「阅读」（正文为空禁用）、编辑器工具栏「阅读模式」（有未保存修改时由离开守卫拦截），都带 `state.from`。
+- 包体积（本任务后）：入口 `index-*.js` ≈ 154 kB（由 140 kB 增加：书架重写 + `utils/shelf.ts`、主题 store / 切换、移动端抽屉与章节卡片列表；阅读器、分析侧栏、`api/foreshadows.ts` 不在入口）。

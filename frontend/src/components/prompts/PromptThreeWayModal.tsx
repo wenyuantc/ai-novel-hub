@@ -1,4 +1,4 @@
-import { Col, Modal, Row, Tabs, Typography } from 'antd'
+import { Col, Modal, Row, Tabs, theme, Typography } from 'antd'
 import type { CSSProperties } from 'react'
 import TextDiff from '../TextDiff'
 
@@ -23,8 +23,6 @@ const pre: CSSProperties = {
   lineHeight: 1.6,
   maxHeight: 320,
   overflow: 'auto',
-  background: '#fafafa',
-  border: '1px solid #f0f0f0',
   borderRadius: 6,
   padding: 8,
   margin: 0,
@@ -32,6 +30,7 @@ const pre: CSSProperties = {
 
 /** 默认已更新时的三方对比：旧默认（保存覆盖时）/ 新默认 / 我的版本，并给出「默认的变化」与「我的改动」两份 diff。 */
 export default function PromptThreeWayModal({ open, parts, onClose }: Props) {
+  const { token } = theme.useToken()
   return (
     <Modal open={open} title="三方对比：旧默认 / 新默认 / 我的版本" onCancel={onClose} footer={null} width={1100} destroyOnHidden>
       <Tabs
@@ -50,7 +49,7 @@ export default function PromptThreeWayModal({ open, parts, onClose }: Props) {
                 ).map(([title, text]) => (
                   <Col span={8} key={title}>
                     <Typography.Text strong>{title}</Typography.Text>
-                    <pre style={pre}>{text || '（空）'}</pre>
+                    <pre style={{ ...pre, background: token.colorFillQuaternary, border: `1px solid ${token.colorBorderSecondary}` }}>{text || '（空）'}</pre>
                   </Col>
                 ))}
               </Row>

@@ -1,5 +1,5 @@
 import { LockOutlined, UserOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Form, Input, Tabs, Typography } from 'antd'
+import { Alert, Button, Card, Form, Input, Tabs, theme, Typography } from 'antd'
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
@@ -15,6 +15,7 @@ interface RegisterValues extends Credentials {
 }
 
 export default function LoginPage() {
+  const { token } = theme.useToken()
   const { status, registrationEnabled, login, register } = useAuthStore()
   const [mode, setMode] = useState<Mode>('login')
   const [submitting, setSubmitting] = useState(false)
@@ -50,7 +51,7 @@ export default function LoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #e6f4ff 0%, #f9f0ff 100%)',
+        background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorBgLayout} 100%)`,
         padding: 16,
       }}
     >

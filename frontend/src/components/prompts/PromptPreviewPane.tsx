@@ -1,5 +1,5 @@
 import { LockOutlined } from '@ant-design/icons'
-import { Alert, Card, Empty, Space, Spin, Tag, Typography } from 'antd'
+import { Alert, Card, Empty, Space, Spin, Tag, theme, Typography } from 'antd'
 import type { CSSProperties } from 'react'
 import type { PromptPreview } from '../../api/types'
 import { formatIssue, splitLocked } from '../../utils/prompts'
@@ -23,9 +23,6 @@ const box: CSSProperties = {
 }
 const lockedStyle: CSSProperties = {
   display: 'block',
-  background: '#f5f5f5',
-  color: '#8c8c8c',
-  borderLeft: '3px solid #d9d9d9',
   padding: '2px 8px',
   margin: '2px 0',
   userSelect: 'text',
@@ -35,6 +32,7 @@ const ROLE_LABELS: Record<string, string> = { system: '系统消息', user: '用
 
 /** 用示例数据渲染的 messages；锁定的输出结构 / 规则段灰底只读展示。 */
 export default function PromptPreviewPane({ preview, loading, error }: Props) {
+  const { token } = theme.useToken()
   return (
     <Card
       size="small"
@@ -74,7 +72,7 @@ export default function PromptPreviewPane({ preview, loading, error }: Props) {
               <pre style={box}>
                 {splitLocked(m.content, preview.locked).map((seg, j) =>
                   seg.locked ? (
-                    <span key={j} style={lockedStyle} title="锁定内容由系统提供，不能修改">
+                    <span key={j} style={{ ...lockedStyle, background: token.colorFillTertiary, color: token.colorTextSecondary, borderLeft: `3px solid ${token.colorBorder}` }} title="锁定内容由系统提供，不能修改">
                       <Tag icon={<LockOutlined />} style={{ marginBottom: 2 }}>
                         锁定：{seg.locked}
                       </Tag>

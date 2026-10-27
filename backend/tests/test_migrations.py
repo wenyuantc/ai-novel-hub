@@ -978,3 +978,46 @@ def test_0015_knowledge_base(tmp_path):
             assert conn.execute(text("SELECT title FROM projects")).scalar() == "星海"
     finally:
         engine.dispose()
+
+
+def test_0016_reading_progress(tmp_path):
+    """0016：projects 新增 reading_progress（存量项目取 {}）；downgrade -1 删除该列且存量项目保留。"""
+    db_file = tmp_path / "migrate0016.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0015")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, '星海', '科幻', '设定', '', 'planning')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0016")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols = {c["name"] for c in inspect(engine).get_columns("projects")}
+        assert "reading_progress" in cols
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT reading_progress FROM projects")).scalar_one() == "{}"
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols = {c["name"] for c in inspect(engine).get_columns("projects")}
+        assert "reading_progress" not in cols
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "星海"
+    finally:
+        engine.dispose()

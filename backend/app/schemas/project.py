@@ -103,6 +103,14 @@ class ProjectUpdate(BaseModel):
         return normalize_tags(v) if v is not None else None
 
 
+class ReadingOut(BaseModel):
+    """阅读进度（读取时已兜底：进度指向的章节被删除或正文为空时退回前面最近的已写章节，ratio 置 0）。"""
+
+    chapter_id: int
+    chapter_no: int
+    ratio: float
+
+
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -125,5 +133,9 @@ class ProjectOut(BaseModel):
     total_words: int = 0
     default_style_id: int | None = None
     default_style: StyleBrief | None = None
+    # 正文非空、updated_at 最大的章节（书架「继续写作」）
+    last_edited_chapter_id: int | None = None
+    # 阅读进度；没有进度或兜底后没有已写章节时为 null
+    reading: ReadingOut | None = None
     # 兼容提示（例如请求里仍传了已废弃的 style 字段）
     notice: str | None = None

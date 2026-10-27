@@ -1,4 +1,4 @@
-import { Alert, List, Space, Tag, Typography } from 'antd'
+import { Alert, List, Space, Tag, theme, Typography } from 'antd'
 import type { BatchItem, BatchSummary } from '../../api/types'
 import { batchCounts, batchRowView, batchSummaryText } from '../../utils/batch'
 import StreamOutput from '../StreamOutput'
@@ -20,6 +20,7 @@ interface Props {
  * 章节页横幅展开与任务面板「查看结果」（BatchResultView）共用。
  */
 export default function BatchProgressView({ items, current = null, text, running = false, summary = null }: Props) {
+  const { token } = theme.useToken()
   const counts = batchCounts(items)
   const currentItem = current ? items[current.index] : undefined
   return (
@@ -49,7 +50,7 @@ export default function BatchProgressView({ items, current = null, text, running
       {items.length === 0 ? (
         <Typography.Text type="secondary">任务开始运行后显示章节清单</Typography.Text>
       ) : (
-        <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 6 }}>
+        <div style={{ maxHeight: 320, overflow: 'auto', border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 6 }}>
           <List
             size="small"
             dataSource={items}

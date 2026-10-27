@@ -56,7 +56,7 @@ export default function CastSelect({ pid, chapterId, disabled }: Props) {
         showSearch
         optionFilterProp="label"
         placeholder="可选：手动指定本章出场角色"
-        style={{ minWidth: 320 }}
+        style={{ minWidth: 'min(320px, calc(100vw - 130px))' }}
         value={value}
         loading={loading || saving}
         disabled={disabled || loading}

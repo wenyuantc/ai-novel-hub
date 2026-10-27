@@ -48,7 +48,7 @@ export default function ChapterStyleSetting({ pid, chapterId, value, projectDefa
         onChange={(v) => void handleChange(v)}
         disabled={disabled || saving}
         placeholder={inherit}
-        style={{ minWidth: 320 }}
+        style={{ minWidth: 'min(320px, calc(100vw - 130px))' }}
       />
     </Space>
   )

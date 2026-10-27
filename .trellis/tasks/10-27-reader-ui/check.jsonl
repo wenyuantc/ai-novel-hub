@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "注册表与往返"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与测试"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}

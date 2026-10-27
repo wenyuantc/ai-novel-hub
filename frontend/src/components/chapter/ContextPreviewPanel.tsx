@@ -1,5 +1,5 @@
 import { ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Collapse, Space, Spin, Typography } from 'antd'
+import { Alert, Button, Collapse, Space, Spin, theme, Typography } from 'antd'
 import type { CSSProperties } from 'react'
 import { useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -15,7 +15,6 @@ const pre: CSSProperties = {
   fontSize: 12,
   maxHeight: 240,
   overflow: 'auto',
-  background: '#fafafa',
   padding: 8,
   borderRadius: 4,
   marginBottom: 0,
@@ -23,6 +22,7 @@ const pre: CSSProperties = {
 
 /** 「AI 生成」Tab 内的折叠面板：展开时读取本次生成会注入的【参考资料】与【相关旧情节】（裁剪前；为空表示不注入）。 */
 export default function ContextPreviewPanel({ chapterId }: Props) {
+  const { token } = theme.useToken()
   const [data, setData] = useState<ContextPreview | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -71,8 +71,8 @@ export default function ContextPreviewPanel({ chapterId }: Props) {
                     本次不会注入旧情节或参考资料（没有命中、没有更早的记忆，或已关闭知识库自动注入）。
                   </Typography.Text>
                 )}
-                {data?.memories && <pre style={pre}>{data.memories}</pre>}
-                {data?.knowledge && <pre style={pre}>{data.knowledge}</pre>}
+                {data?.memories && <pre style={{ ...pre, background: token.colorFillQuaternary }}>{data.memories}</pre>}
+                {data?.knowledge && <pre style={{ ...pre, background: token.colorFillQuaternary }}>{data.knowledge}</pre>}
                 {data && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     按当前保存的章节内容检索；实际生成时若上下文超出预算，会先裁掉参考资料尾部与未钉住的旧情节。

@@ -1,5 +1,5 @@
 import { StarFilled, StarOutlined } from '@ant-design/icons'
-import { App, Button, Drawer, Modal, Popconfirm, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { App, Button, Drawer, Modal, Popconfirm, Space, Table, Tabs, Tag, theme, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useRef, useState } from 'react'
 import { versionApi, VERSION_SOURCE } from '../../api/chapterVersions'
@@ -61,6 +61,7 @@ function VersionList({
   restoreDisabled,
   onRestore,
 }: Omit<Props, 'open' | 'onClose'>) {
+  const { token } = theme.useToken()
   const { message, modal } = App.useApp()
   const loader = useCallback(() => versionApi.list(pid, chapterId), [pid, chapterId])
   const { data: items = [], loading, reload, setData } = useLoader(loader)
@@ -161,7 +162,7 @@ function VersionList({
               type="text"
               size="small"
               aria-label={v.starred ? '取消标星' : '标星'}
-              icon={v.starred ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined />}
+              icon={v.starred ? <StarFilled style={{ color: token.colorWarning }} /> : <StarOutlined />}
               onClick={() => void toggleStar(v)}
             />
           </Tooltip>

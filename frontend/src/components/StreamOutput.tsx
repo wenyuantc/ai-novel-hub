@@ -1,4 +1,4 @@
-import { Spin, Typography } from 'antd'
+import { Spin, theme, Typography } from 'antd'
 import { useEffect, useRef } from 'react'
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
 /** 流式输出展示框：增量追加并自动滚动到底部。 */
 export default function StreamOutput({ text, running, placeholder = '生成内容将在这里实时显示…', maxHeight = 360 }: Props) {
   const ref = useRef<HTMLDivElement>(null)
+  const { token } = theme.useToken()
 
   useEffect(() => {
     const el = ref.current
@@ -30,8 +31,8 @@ export default function StreamOutput({ text, running, placeholder = '生成内�
         fontSize: 13,
         lineHeight: 1.6,
         padding: 12,
-        background: '#fafafa',
-        border: '1px solid #f0f0f0',
+        background: token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 6,
       }}
     >

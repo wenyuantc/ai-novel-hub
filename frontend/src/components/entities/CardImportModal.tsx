@@ -1,5 +1,5 @@
 import { InboxOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Descriptions, Modal, Radio, Space, Table, Tag, Typography, Upload } from 'antd'
+import { Alert, App, Button, Descriptions, Modal, Radio, Space, Table, Tag, theme, Typography, Upload } from 'antd'
 import { useState } from 'react'
 import { cardApi, defaultResolutions, importedName, MAX_CARD_FILE_BYTES, parseCardText, summarizeImport } from '../../api/cards'
 import { errorMessage } from '../../api/client'
@@ -19,6 +19,7 @@ export default function CardImportModal(props: Props) {
 }
 
 function Inner({ projectId, onClose, onImported }: Props) {
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const [data, setData] = useState<unknown>(null)
   const [fileName, setFileName] = useState('')
@@ -125,7 +126,7 @@ function Inner({ projectId, onClose, onImported }: Props) {
               <InboxOutlined />
             </p>
             <p>{fileName ? `已选择：${fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
-            <p style={{ color: '#999' }}>格式 ainovel.cards v1 / v2（v2 含职业），上限 2MB</p>
+            <p style={{ color: token.colorTextTertiary }}>格式 ainovel.cards v1 / v2（v2 含职业），上限 2MB</p>
           </Upload.Dragger>
         )}
         {preview && !result && (

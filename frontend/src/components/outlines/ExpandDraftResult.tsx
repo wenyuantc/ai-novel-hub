@@ -1,5 +1,5 @@
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Checkbox, Empty, Space, Spin, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Checkbox, Empty, Space, Spin, Tag, theme, Typography } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
 import { moveItem } from '../../api/careers'
 import { errorMessage } from '../../api/client'
@@ -32,6 +32,7 @@ export default function ExpandDraftResult({ projectId, result, onSaved }: TaskRe
 }
 
 function Editor({ projectId, parsed, onSaved }: { projectId: number; parsed: OutlineExpandResult; onSaved?: () => void }) {
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const oid = parsed.outline_id
   const loader = useCallback(
@@ -120,7 +121,7 @@ function Editor({ projectId, parsed, onSaved }: { projectId: number; parsed: Out
         <Card
           key={`kept-${p.id}`}
           size="small"
-          style={{ background: '#fafafa' }}
+          style={{ background: token.colorFillQuaternary }}
           title={
             <Space wrap>
               <Tag>第 {i + 1} 章</Tag>

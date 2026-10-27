@@ -148,6 +148,35 @@ export interface Project {
   audience: string
   /** 目标总字数（1000–10,000,000）；null = 未设置 */
   target_words: number | null
+  /** 最近编辑的章节（reader-ui）：正文非空、updated_at 最大；没有已写章节时为 null */
+  last_edited_chapter_id: number | null
+  /** 阅读进度（reader-ui）；从未阅读为 null。进度指向的章节已删除时后端退回之前最近的已写章节 */
+  reading: ReadingPosition | null
+}
+
+/** ProjectOut.reading */
+export interface ReadingPosition {
+  chapter_id: number
+  chapter_no: number
+  /** 章内位置 0–1 */
+  ratio: number
+}
+
+/** PUT /projects/{pid}/reading-progress（204） */
+export interface ReadingProgressUpdate {
+  chapter_id: number
+  ratio: number
+}
+
+/** GET /projects/{pid}/reader/toc：只含已写章节，按章节号升序；卷信息经 outline_id 取大纲 */
+export interface ReaderTocItem {
+  id: number
+  chapter_no: number
+  title: string
+  word_count: number
+  /** 没有关联大纲的章节两者都为 null */
+  volume_no: number | null
+  volume_title: string | null
 }
 
 /** 向导参数建议（灵感模式转为项目时写入；向导页优先用它初始化参数） */

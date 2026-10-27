@@ -1,4 +1,4 @@
-import { Alert, Space, Typography } from 'antd'
+import { Alert, Space, theme, Typography } from 'antd'
 import type { CSSProperties } from 'react'
 import { useMemo } from 'react'
 import { computeDiff } from '../utils/textDiff'
@@ -18,16 +18,16 @@ const box: CSSProperties = {
   fontSize: 14,
   lineHeight: 1.8,
   padding: 12,
-  background: '#fafafa',
-  border: '1px solid #f0f0f0',
   borderRadius: 6,
 }
-const removedStyle: CSSProperties = { background: '#fff1f0', color: '#cf1322', textDecoration: 'line-through' }
-const addedStyle: CSSProperties = { background: '#f6ffed', color: '#389e0d' }
 
 /** 逐字差异对比：删除标红加删除线，新增标绿，并统计增删字数。 */
 export default function TextDiff({ a, b, maxHeight = 480 }: Props) {
   const result = useMemo(() => computeDiff(a, b), [a, b])
+  const { token } = theme.useToken()
+  // 增删底色用 success / error 的浅底 token，暗色主题下自动变为深底
+  const removedStyle: CSSProperties = { background: token.colorErrorBg, color: token.colorErrorText, textDecoration: 'line-through' }
+  const addedStyle: CSSProperties = { background: token.colorSuccessBg, color: token.colorSuccessText }
 
   if (!result) {
     return <Alert type="warning" showIcon message="两份文本差异过大，无法逐字对比" />
@@ -36,11 +36,11 @@ export default function TextDiff({ a, b, maxHeight = 480 }: Props) {
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Space size="large">
-        <Typography.Text style={{ color: '#389e0d' }}>+{result.added} 字</Typography.Text>
-        <Typography.Text style={{ color: '#cf1322' }}>-{result.removed} 字</Typography.Text>
+        <Typography.Text style={{ color: token.colorSuccessText }}>+{result.added} 字</Typography.Text>
+        <Typography.Text style={{ color: token.colorErrorText }}>-{result.removed} 字</Typography.Text>
         {same && <Typography.Text type="secondary">内容相同</Typography.Text>}
       </Space>
-      <div style={{ ...box, maxHeight }}>
+      <div style={{ ...box, maxHeight, background: token.colorFillQuaternary, border: `1px solid ${token.colorBorderSecondary}` }}>
         {result.parts.length === 0 ? (
           <Typography.Text type="secondary">（空）</Typography.Text>
         ) : (

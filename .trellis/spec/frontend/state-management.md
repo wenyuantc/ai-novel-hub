@@ -18,6 +18,8 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 | 用户级缓存（全局） | `stores/aiConfigs.ts` → `useAIConfigStore` | `configs`、`loaded`、`loading`；`load(force = false)`、`reset()` |
 | 活动任务（全局） | `stores/tasks.ts` → `useTasksStore` | `active`（排队 + 运行中，id 倒序）、`loaded`、`version`；`refresh()`、`track(task)`、`bump()`、`startPolling()`、`reset()` |
 | 当前项目（全局） | `stores/project.ts` → `useProjectStore` | `project`、`loading`、`error`；`load(id)`、`refresh()`、`setProject(p)`、`reset()` |
+| 主题（全局，设备级） | `theme/themeStore.ts` → `useThemeStore` | `mode`（`light` / `dark` / `system`，localStorage `ainovel.theme`）、`systemDark`；`setMode`、`setSystemDark`；`useResolvedTheme()`、`watchSystemTheme()` |
+| 本地偏好（localStorage，非 store） | `utils/preferences.ts`、`utils/shelf.ts`、`utils/reader.ts` | `ainovel.autoContinue`；书架 `ainovel.shelf`（`{query, sort, status}`）；阅读设置 `ainovel.reader`（`{fontSize, lineHeight, width, background, font}`）。读写都包 try/catch，读出后经 `parse*` / `normalize*` 校验 |
 | 页面数据（本地） | 页面中的 `useLoader` | 世界观/角色/大纲/章节列表、当前打开的章节、导出用章节列表；组织 / 成员 / 关系 / 关系类型 / 图谱 / 章节出场角色（各面板与抽屉 Tab 各自加载，未做全局缓存，保存后各自 `reload()`） |
 | 表单 / UI 状态（本地） | `useState`、`Form.useForm` | 弹窗打开标志、`editing`、`saving`、编辑器 `title`/`content`、`aiConfigId`、AI 配置页上的测试结果 |
 | 流式状态（本地） | `useStreamTask`（局部改写）/ `useTaskStream`（任务订阅） | `text`、`running`、`error`、abort controller；任务另有 `task`、`continueInfo`、`reconnecting` |
@@ -39,6 +41,9 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
   - 过期响应防护：模块级 `requestSeq`（只采用最新一次请求）+ `epoch`（`reset()` 递增，丢弃上一个用户的响应）。`reset()` 时若仍有轮询者（登录后 `AppLayout` 的 effect 先于 `App` 的重置 effect 执行）会立即用新会话重新 `refresh()`。
   - 轮询失败静默（401 由全局处理器登出）。
   - 单个任务的实时输出 / 进度不进 store，由 `useTaskStream` 本地订阅；store 只是列表 + 徽标。
+
+- `useThemeStore`——由 `App`（`ConfigProvider` 算法、`ThemeSync`）、`ThemeSwitch`、`usePalette`、书封、阅读器读取。是**设备偏好**而非用户数据，因此**不**加入 `userId` 变化时的重置 effect；系统主题监听在 `App` 挂载时 `watchSystemTheme()` 注册、卸载时移除。
+- 书架偏好与阅读设置只在各自页面里 `useState(read*)` + `useEffect(write*)`，不进 store（只有一个页面使用）。阅读进度在服务端（`ProjectOut.reading`），阅读器内存里只保留最近一次上报的位置。
 
 其余状态一律保持本地。不要把章节或大纲之类的列表放进 store。
 

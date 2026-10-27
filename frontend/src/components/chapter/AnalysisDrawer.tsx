@@ -20,6 +20,7 @@ import {
   Statistic,
   Tabs,
   Tag,
+  theme,
   Typography,
 } from 'antd'
 import type { ReactNode } from 'react'
@@ -323,6 +324,7 @@ function CompareCard({
   autoAnalyze: boolean
   reviseRunning: boolean
 }) {
+  const { token } = theme.useToken()
   if (reviseRunning) {
     return <Alert type="info" showIcon message="正在按建议重写，完成后正文自动覆盖并重新分析。" />
   }
@@ -355,7 +357,7 @@ function CompareCard({
             </Typography.Text>
             <div>
               {formatScore(base.scores, key)} → <Typography.Text strong>{formatScore(after.scores, key)}</Typography.Text>{' '}
-              <span style={{ color: deltaColor(delta[key]), fontSize: 12 }}>{formatDelta(delta[key])}</span>
+              <span style={{ color: deltaColor(delta[key], token), fontSize: 12 }}>{formatDelta(delta[key])}</span>
             </div>
           </div>
         ))}
@@ -375,6 +377,7 @@ interface ResultProps {
 
 /** 单次分析结果：评分（与上次差值）、指标、摘要、情节点、钩子、冲突与情感、建议 + 按建议重写表单 */
 function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRunning, onRevise, reviseStyle }: ResultProps) {
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const delta = scoreDelta(detail.scores, previousScores)
   const m = detail.metrics
@@ -423,10 +426,10 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
               key={key}
               title={SCORE_LABELS[key]}
               value={formatScore(detail.scores, key)}
-              valueStyle={key === 'overall' ? { color: '#1677ff' } : undefined}
+              valueStyle={key === 'overall' ? { color: token.colorPrimary } : undefined}
               suffix={
                 delta[key] !== null ? (
-                  <span style={{ fontSize: 12, color: deltaColor(delta[key]) }} title="与上一次分析相比">
+                  <span style={{ fontSize: 12, color: deltaColor(delta[key], token) }} title="与上一次分析相比">
                     {formatDelta(delta[key])}
                   </span>
                 ) : undefined

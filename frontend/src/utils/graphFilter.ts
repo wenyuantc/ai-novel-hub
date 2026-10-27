@@ -2,6 +2,7 @@
 
 import type { GraphEdge, GraphNode, RelationshipGraph } from '../api/types'
 import { descendantIds } from './orgTree'
+import { chartPalette, type ChartPalette } from '../theme/palette'
 
 export interface GraphFilter {
   /** 只看该组织（含下级组织）的成员；null = 全部 */
@@ -32,17 +33,21 @@ export function filterGraph(graph: RelationshipGraph, f: GraphFilter): { nodes: 
   return { nodes, edges }
 }
 
-/** 节点颜色：主角金色、反派红色、重要配角蓝色，其余灰蓝；非存活降低饱和度由组件处理 */
-export function nodeColor(n: Pick<GraphNode, 'role_type' | 'is_protagonist'>): string {
-  if (n.is_protagonist) return '#faad14'
+/** 节点颜色：主角金色、反派红色、重要配角蓝色、配角青色，其余灰；颜色取自主题调色板（默认浅色），非存活降低饱和度由组件处理 */
+export function nodeColor(
+  n: Pick<GraphNode, 'role_type' | 'is_protagonist'>,
+  palette: Pick<ChartPalette, 'roles'> = chartPalette('light'),
+): string {
+  const r = palette.roles
+  if (n.is_protagonist) return r.protagonist
   switch (n.role_type.trim()) {
     case '反派':
-      return '#f5222d'
+      return r.villain
     case '重要配角':
-      return '#1677ff'
+      return r.important
     case '配角':
-      return '#13c2c2'
+      return r.supporting
     default:
-      return '#8c8c8c'
+      return r.other
   }
 }

@@ -1,5 +1,7 @@
 import {
   ArrowLeftOutlined,
+  BookOutlined,
+  RobotOutlined,
   ExperimentOutlined,
   HistoryOutlined,
   LeftOutlined,
@@ -15,6 +17,9 @@ import {
   Button,
   Card,
   Col,
+  Drawer,
+  FloatButton,
+  Grid,
   Input,
   Modal,
   Progress,
@@ -55,6 +60,7 @@ import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useProjectStore } from '../../stores/project'
@@ -120,6 +126,11 @@ interface EditorProps {
 type AIMode = 'generate' | 'polish' | 'rewrite'
 
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
+  const isMobile = useIsMobile()
+  // 工具栏按钮较多：只在超宽屏放进卡片标题栏，其余宽度放在正文上方，避免标题被挤压
+  const toolbarInHeader = Grid.useBreakpoint().xxl === true
+  // 移动端 AI 助手面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
@@ -589,10 +600,185 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             ? '请先完成保存或局部改写'
             : ''
 
+  const toolbar = (
+    <Space wrap>
+      <Button
+        size="small"
+        icon={<LeftOutlined />}
+        disabled={!prev}
+        onClick={() => prev && navigate(`/projects/${pid}/chapters/${prev.id}`)}
+      >
+        上一章
+      </Button>
+      <Button
+        size="small"
+        disabled={!next}
+        onClick={() => next && navigate(`/projects/${pid}/chapters/${next.id}`)}
+      >
+        下一章 <RightOutlined />
+      </Button>
+      <Button
+        size="small"
+        icon={<BookOutlined />}
+        onClick={() =>
+          navigate(`/projects/${pid}/read/${chapter.id}`, { state: { from: `/projects/${pid}/chapters/${chapter.id}` } })
+        }
+      >
+        阅读模式
+      </Button>
+      <Badge count={pendingChanges} size="small" title={`${pendingChanges} 项设定变化待确认`}>
+        <Button size="small" icon={<ExperimentOutlined />} onClick={() => setAnalysisOpen(true)}>
+          分析
+        </Button>
+      </Badge>
+      <ChapterForeshadowButton projectId={pid} chapterId={chapter.id} />
+      <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
+        版本历史
+      </Button>
+      <Button size="small" disabled={busy || stuck || batchLocked || rewriteLocked} onClick={() => void handleToggleDone()}>
+        {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}
+      </Button>
+      <Button
+        type="primary"
+        size="small"
+        icon={<SaveOutlined />}
+        loading={saving}
+        disabled={editorLocked || stuck || batchLocked || !dirty}
+        onClick={() => void handleSave()}
+      >
+        保存
+      </Button>
+    </Space>
+  )
+
+  const aiPanel = (
+    <Card size="small" title="AI 助手">
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <div>
+          <Typography.Text type="secondary">AI 配置</Typography.Text>
+          <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
+        </div>
+        <div>
+          <Typography.Text type="secondary">本次写作风格</Typography.Text>
+          {styleSelect(editorLocked)}
+        </div>
+        <Tabs
+          activeKey={aiMode}
+          onChange={(k) => setAiMode(k as AIMode)}
+          items={[
+            {
+              key: 'generate',
+              label: 'AI 生成',
+              disabled: editorLocked,
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {plan && <ChapterPlanCard plan={plan} />}
+                  <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
+                  <ContextPreviewPanel chapterId={chapter.id} />
+                </Space>
+              ),
+            },
+            {
+              key: 'polish',
+              label: 'AI 润色',
+              disabled: editorLocked,
+              children: (
+                <PolishForm value={polishInstruction} onChange={setPolishInstruction} disabled={aiRunning} />
+              ),
+            },
+            {
+              key: 'rewrite',
+              label: '局部改写',
+              disabled: aiRunning,
+              children: (
+                <RewritePanel
+                  pid={pid}
+                  chapterId={chapter.id}
+                  content={content}
+                  selection={selection}
+                  aiConfigId={aiConfigId}
+                  styleChoice={styleChoice}
+                  // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
+                  disabled={aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
+                  ensureSaved={ensureSaved}
+                  onLockChange={setRewriteLocked}
+                  onApplied={handleRewriteApplied}
+                />
+              ),
+            },
+          ]}
+        />
+        {revising && (
+          <Alert type="info" showIcon message="正在按分析建议重写本章" description="完成后覆盖正文，旧稿自动存为历史版本。" />
+        )}
+        {aiTask.running && aiStatus === 'queued' && aiTask.task && (
+          <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
+        )}
+        {aiTask.running && aiStatus === 'running' && aiTask.task && (
+          <div>
+            <Progress percent={aiTask.task.progress} size="small" status="active" style={{ marginBottom: 0 }} />
+            {aiTask.task.stage && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {aiTask.task.stage}
+              </Typography.Text>
+            )}
+          </div>
+        )}
+        {aiTask.reconnecting && <Alert type="warning" showIcon message="连接中断，正在重连…（任务仍在后台运行）" />}
+        {aiTask.running && aiTask.continueInfo && (
+          <Alert
+            type="info"
+            showIcon
+            message={`字数不足，自动续写第 ${aiTask.continueInfo.round} 轮`}
+            description={`首轮 ${aiTask.continueInfo.words} 字 / 目标 ${aiTask.continueInfo.target} 字`}
+          />
+        )}
+        {aiMode === 'rewrite' ? null : aiRunning ? (
+          <Button danger block icon={<StopOutlined />} disabled={!aiTask.running} onClick={() => void handleCancel()}>
+            {aiStatus === 'queued' ? '取消排队' : `停止（已输出 ${countWords(aiTask.text)} 字）`}
+          </Button>
+        ) : aiMode === 'generate' ? (
+          <Button
+            type="primary"
+            block
+            icon={<ThunderboltOutlined />}
+            disabled={hasConfig === false || stuck || saving || !attachChecked}
+            onClick={confirmGenerate}
+          >
+            {content.trim() ? '重新生成本章' : '生成本章正文'}
+          </Button>
+        ) : (
+          <Button
+            type="primary"
+            block
+            icon={<ThunderboltOutlined />}
+            disabled={hasConfig === false || stuck || saving || !attachChecked || !content.trim()}
+            onClick={() => void runAI('polish')}
+          >
+            润色本章
+          </Button>
+        )}
+        {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
+          <Alert
+            type="error"
+            showIcon
+            message={aiStatus === 'interrupted' ? '任务已中断' : '生成失败'}
+            description={aiTask.error}
+          />
+        )}
+        {aiMode !== 'rewrite' && (
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+            生成会自动带入世界观、角色、本卷大纲与前文；完成后自动保存，被覆盖的旧稿自动存为历史版本。任务在后台运行，可离开本页，返回后自动接上；生成中不可编辑，可随时停止，停止后正文保持原样。
+          </Typography.Paragraph>
+        )}
+      </Space>
+    </Card>
+  )
+
   return (
     <>
-      <Row gutter={16}>
-        <Col xs={24} xl={17}>
+      <Row gutter={isMobile ? 0 : 16}>
+        <Col xs={24} xl={isMobile ? 24 : 17}>
           <Card
             size="small"
             title={
@@ -612,48 +798,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 </Tag>
               </Space>
             }
-            extra={
-              <Space wrap>
-                <Button
-                  size="small"
-                  icon={<LeftOutlined />}
-                  disabled={!prev}
-                  onClick={() => prev && navigate(`/projects/${pid}/chapters/${prev.id}`)}
-                >
-                  上一章
-                </Button>
-                <Button
-                  size="small"
-                  disabled={!next}
-                  onClick={() => next && navigate(`/projects/${pid}/chapters/${next.id}`)}
-                >
-                  下一章 <RightOutlined />
-                </Button>
-                <Badge count={pendingChanges} size="small" title={`${pendingChanges} 项设定变化待确认`}>
-                  <Button size="small" icon={<ExperimentOutlined />} onClick={() => setAnalysisOpen(true)}>
-                    分析
-                  </Button>
-                </Badge>
-                <ChapterForeshadowButton projectId={pid} chapterId={chapter.id} />
-                <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
-                  版本历史
-                </Button>
-                <Button size="small" disabled={busy || stuck || batchLocked || rewriteLocked} onClick={() => void handleToggleDone()}>
-                  {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}
-                </Button>
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<SaveOutlined />}
-                  loading={saving}
-                  disabled={editorLocked || stuck || batchLocked || !dirty}
-                  onClick={() => void handleSave()}
-                >
-                  保存
-                </Button>
-              </Space>
-            }
+            extra={toolbarInHeader ? toolbar : undefined}
           >
+            {!toolbarInHeader && <div style={{ marginBottom: 12 }}>{toolbar}</div>}
             {batchWriting && chapter.status === 'generating' && (
               <Alert
                 type="info"
@@ -716,130 +863,35 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             </Typography.Text>
           </Card>
         </Col>
-        <Col xs={24} xl={7}>
-          <Card size="small" title="AI 助手">
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <div>
-                <Typography.Text type="secondary">AI 配置</Typography.Text>
-                <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
-              </div>
-              <div>
-                <Typography.Text type="secondary">本次写作风格</Typography.Text>
-                {styleSelect(editorLocked)}
-              </div>
-              <Tabs
-                activeKey={aiMode}
-                onChange={(k) => setAiMode(k as AIMode)}
-                items={[
-                  {
-                    key: 'generate',
-                    label: 'AI 生成',
-                    disabled: editorLocked,
-                    children: (
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        {plan && <ChapterPlanCard plan={plan} />}
-                        <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
-                        <ContextPreviewPanel chapterId={chapter.id} />
-                      </Space>
-                    ),
-                  },
-                  {
-                    key: 'polish',
-                    label: 'AI 润色',
-                    disabled: editorLocked,
-                    children: (
-                      <PolishForm value={polishInstruction} onChange={setPolishInstruction} disabled={aiRunning} />
-                    ),
-                  },
-                  {
-                    key: 'rewrite',
-                    label: '局部改写',
-                    disabled: aiRunning,
-                    children: (
-                      <RewritePanel
-                        pid={pid}
-                        chapterId={chapter.id}
-                        content={content}
-                        selection={selection}
-                        aiConfigId={aiConfigId}
-                        styleChoice={styleChoice}
-                        // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
-                        disabled={aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
-                        ensureSaved={ensureSaved}
-                        onLockChange={setRewriteLocked}
-                        onApplied={handleRewriteApplied}
-                      />
-                    ),
-                  },
-                ]}
-              />
-              {revising && (
-                <Alert type="info" showIcon message="正在按分析建议重写本章" description="完成后覆盖正文，旧稿自动存为历史版本。" />
-              )}
-              {aiTask.running && aiStatus === 'queued' && aiTask.task && (
-                <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
-              )}
-              {aiTask.running && aiStatus === 'running' && aiTask.task && (
-                <div>
-                  <Progress percent={aiTask.task.progress} size="small" status="active" style={{ marginBottom: 0 }} />
-                  {aiTask.task.stage && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {aiTask.task.stage}
-                    </Typography.Text>
-                  )}
-                </div>
-              )}
-              {aiTask.reconnecting && <Alert type="warning" showIcon message="连接中断，正在重连…（任务仍在后台运行）" />}
-              {aiTask.running && aiTask.continueInfo && (
-                <Alert
-                  type="info"
-                  showIcon
-                  message={`字数不足，自动续写第 ${aiTask.continueInfo.round} 轮`}
-                  description={`首轮 ${aiTask.continueInfo.words} 字 / 目标 ${aiTask.continueInfo.target} 字`}
-                />
-              )}
-              {aiMode === 'rewrite' ? null : aiRunning ? (
-                <Button danger block icon={<StopOutlined />} disabled={!aiTask.running} onClick={() => void handleCancel()}>
-                  {aiStatus === 'queued' ? '取消排队' : `停止（已输出 ${countWords(aiTask.text)} 字）`}
-                </Button>
-              ) : aiMode === 'generate' ? (
-                <Button
-                  type="primary"
-                  block
-                  icon={<ThunderboltOutlined />}
-                  disabled={hasConfig === false || stuck || saving || !attachChecked}
-                  onClick={confirmGenerate}
-                >
-                  {content.trim() ? '重新生成本章' : '生成本章正文'}
-                </Button>
-              ) : (
-                <Button
-                  type="primary"
-                  block
-                  icon={<ThunderboltOutlined />}
-                  disabled={hasConfig === false || stuck || saving || !attachChecked || !content.trim()}
-                  onClick={() => void runAI('polish')}
-                >
-                  润色本章
-                </Button>
-              )}
-              {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
-                <Alert
-                  type="error"
-                  showIcon
-                  message={aiStatus === 'interrupted' ? '任务已中断' : '生成失败'}
-                  description={aiTask.error}
-                />
-              )}
-              {aiMode !== 'rewrite' && (
-                <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
-                  生成会自动带入世界观、角色、本卷大纲与前文；完成后自动保存，被覆盖的旧稿自动存为历史版本。任务在后台运行，可离开本页，返回后自动接上；生成中不可编辑，可随时停止，停止后正文保持原样。
-                </Typography.Paragraph>
-              )}
-            </Space>
-          </Card>
-        </Col>
+        {!isMobile && (
+          <Col xs={24} xl={7}>
+            {aiPanel}
+          </Col>
+        )}
       </Row>
+      {isMobile && (
+        <>
+          <FloatButton
+            type="primary"
+            icon={<RobotOutlined />}
+            tooltip="AI 助手"
+            badge={aiRunning ? { dot: true } : undefined}
+            style={{ insetInlineEnd: 24, bottom: 104 }}
+            onClick={() => setAiPanelOpen(true)}
+          />
+          <Drawer
+            title="AI 助手"
+            placement="bottom"
+            height="85vh"
+            open={aiPanelOpen}
+            forceRender
+            onClose={() => setAiPanelOpen(false)}
+            styles={{ body: { padding: 8 } }}
+          >
+            {aiPanel}
+          </Drawer>
+        </>
+      )}
       <VersionDrawer
         pid={pid}
         chapterId={chapter.id}

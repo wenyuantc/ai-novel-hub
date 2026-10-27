@@ -1,5 +1,5 @@
 import { InboxOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Descriptions, Modal, Radio, Space, Typography, Upload } from 'antd'
+import { Alert, App, Button, Descriptions, Modal, Radio, Space, theme, Typography, Upload } from 'antd'
 import { useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { MAX_OUTLINE_FILE_BYTES, outlineProApi, parseOutlineFileText } from '../../api/outlines'
@@ -21,6 +21,7 @@ export default function OutlineImportModal(props: Props) {
 }
 
 function Inner({ projectId, existingCount, onClose, onImported }: Props) {
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const [data, setData] = useState<unknown>(null)
   const [fileName, setFileName] = useState('')
@@ -84,7 +85,7 @@ function Inner({ projectId, existingCount, onClose, onImported }: Props) {
               <InboxOutlined />
             </p>
             <p>{fileName ? `已选择：${fileName}（点击重新选择）` : '点击或拖拽大纲 JSON 文件到这里'}</p>
-            <p style={{ color: '#999' }}>格式 ainovel.outline v1（含卷、章纲与细纲），上限 2MB</p>
+            <p style={{ color: token.colorTextTertiary }}>格式 ainovel.outline v1（含卷、章纲与细纲），上限 2MB</p>
           </Upload.Dragger>
         )}
         {preview && !result && (

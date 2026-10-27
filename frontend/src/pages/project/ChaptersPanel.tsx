@@ -1,5 +1,5 @@
-import { PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { App, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Tooltip } from 'antd'
+import { MoreOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { App, Button, Card, Dropdown, Form, Input, List, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ANALYSIS_STATUS, analysisApi, formatScore } from '../../api/analysis'
@@ -7,6 +7,7 @@ import { chapterApi, CHAPTER_STATUS } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
 import { taskApi } from '../../api/tasks'
 import type { ChapterAnalysisState, ChapterBrief, ChapterStatus, Task } from '../../api/types'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
@@ -20,8 +21,10 @@ const BatchGenerateModal = lazy(() => import('../../components/batch/BatchGenera
 
 export default function ChaptersPanel() {
   const pid = useProjectId()
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
+  const readChapter = (c: ChapterBrief) => navigate(`/projects/${pid}/read/${c.id}`, { state: { from: `/projects/${pid}/chapters` } })
   const refreshProject = useProjectStore((s) => s.refresh)
   const loader = useCallback(() => chapterApi.list(pid), [pid])
   const { data: chapterData, loading, reload } = useLoader(loader)
@@ -86,8 +89,9 @@ export default function ChaptersPanel() {
   return (
     <Card
       title={`章节（共 ${chapters.length} 章 · ${totalWords} 字）`}
+      styles={isMobile ? { header: { flexWrap: 'wrap', paddingBlock: 8, gap: 8 }, body: { padding: 8 } } : undefined}
       extra={
-        <Space>
+        <Space wrap>
           <Tooltip title={openBatch ? '已有进行中或待审核的批量生成' : undefined}>
             <Button
               icon={<ThunderboltOutlined />}
@@ -117,77 +121,141 @@ export default function ChaptersPanel() {
           />
         </Suspense>
       )}
-      <Table<ChapterBrief>
-        rowKey="id"
-        loading={loading}
-        dataSource={chapters}
-        pagination={{ pageSize: 50, hideOnSinglePage: true }}
-        onRow={(c) => ({ onDoubleClick: () => navigate(`/projects/${pid}/chapters/${c.id}`) })}
-        locale={{ emptyText: '暂无章节，可在「大纲」中按条目批量创建' }}
-        columns={[
-          { title: '章', dataIndex: 'chapter_no', width: 70 },
-          {
-            title: '标题',
-            dataIndex: 'title',
-            render: (t: string, c) => (
-              <Link to={`/projects/${pid}/chapters/${c.id}`}>{t || '（未命名）'}</Link>
-            ),
-          },
-          {
-            title: '状态',
-            dataIndex: 'status',
-            width: 150,
-            render: (s: ChapterStatus, c) => (
-              <Space size={4} wrap>
-                <Tag color={CHAPTER_STATUS[s].color}>{CHAPTER_STATUS[s].label}</Tag>
-                {s !== 'generating' && queuedIds.has(c.id) && <Tag color="blue">排队批量</Tag>}
-              </Space>
-            ),
-          },
-          {
-            title: '分析',
-            key: 'analysis',
-            width: 130,
-            render: (_, c) => {
-              const st = statusById.get(c.id)
-              if (!st) return null
-              const label = ANALYSIS_STATUS[st.status]
-              return (
-                <Space size={4}>
-                  <Tag color={label.color}>{label.label}</Tag>
-                  {st.scores && <span title="整体评分">{formatScore(st.scores)}</span>}
-                </Space>
-              )
+      {isMobile ? (
+        <List<ChapterBrief>
+          loading={loading}
+          dataSource={chapters}
+          pagination={chapters.length > 50 ? { pageSize: 50, size: 'small' } : false}
+          locale={{ emptyText: '暂无章节，可在「大纲」中按条目批量创建' }}
+          renderItem={(c) => {
+            const st = statusById.get(c.id)
+            return (
+              <List.Item
+                style={{ paddingInline: 4 }}
+                actions={[
+                  <Dropdown
+                    key="more"
+                    trigger={['click']}
+                    menu={{
+                      items: [
+                        { key: 'edit', label: '编辑' },
+                        { key: 'read', label: '阅读', disabled: c.word_count === 0 },
+                        { type: 'divider' },
+                        { key: 'delete', label: '删除', danger: true, disabled: c.status === 'generating' },
+                      ],
+                      onClick: ({ key }) => {
+                        if (key === 'edit') navigate(`/projects/${pid}/chapters/${c.id}`)
+                        else if (key === 'read') readChapter(c)
+                        else if (key === 'delete')
+                          modal.confirm({
+                            title: '删除该章节？',
+                            content: '正文将被永久删除',
+                            okText: '删除',
+                            okButtonProps: { danger: true },
+                            cancelText: '取消',
+                            onOk: () => handleDelete(c),
+                          })
+                      },
+                    }}
+                  >
+                    <Button type="text" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+                  </Dropdown>,
+                ]}
+              >
+                <div style={{ minWidth: 0, flex: 1 }} onClick={() => navigate(`/projects/${pid}/chapters/${c.id}`)}>
+                  <Typography.Text strong ellipsis style={{ display: 'block' }}>
+                    第 {c.chapter_no} 章 {c.title || '（未命名）'}
+                  </Typography.Text>
+                  <Space size={4} wrap style={{ marginTop: 4 }}>
+                    <Tag color={CHAPTER_STATUS[c.status].color}>{CHAPTER_STATUS[c.status].label}</Tag>
+                    {c.status !== 'generating' && queuedIds.has(c.id) && <Tag color="blue">排队批量</Tag>}
+                    {st && <Tag color={ANALYSIS_STATUS[st.status].color}>{ANALYSIS_STATUS[st.status].label}</Tag>}
+                    {st?.scores && <Typography.Text type="secondary">{formatScore(st.scores)} 分</Typography.Text>}
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {c.word_count} 字 · {formatTime(c.updated_at)}
+                    </Typography.Text>
+                  </Space>
+                </div>
+              </List.Item>
+            )
+          }}
+        />
+      ) : (
+        <Table<ChapterBrief>
+          rowKey="id"
+          loading={loading}
+          dataSource={chapters}
+          pagination={{ pageSize: 50, hideOnSinglePage: true }}
+          onRow={(c) => ({ onDoubleClick: () => navigate(`/projects/${pid}/chapters/${c.id}`) })}
+          locale={{ emptyText: '暂无章节，可在「大纲」中按条目批量创建' }}
+          columns={[
+            { title: '章', dataIndex: 'chapter_no', width: 70 },
+            {
+              title: '标题',
+              dataIndex: 'title',
+              render: (t: string, c) => (
+                <Link to={`/projects/${pid}/chapters/${c.id}`}>{t || '（未命名）'}</Link>
+              ),
             },
-          },
-          { title: '字数', dataIndex: 'word_count', width: 90 },
-          { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (t: string) => formatTime(t) },
-          {
-            title: '操作',
-            key: 'actions',
-            width: 140,
-            render: (_, c) => (
-              <Space size={0}>
-                <Button type="link" size="small" onClick={() => navigate(`/projects/${pid}/chapters/${c.id}`)}>
-                  编辑
-                </Button>
-                <Popconfirm
-                  title="删除该章节？"
-                  description="正文将被永久删除"
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => handleDelete(c)}
-                >
-                  <Button type="link" size="small" danger disabled={c.status === 'generating'}>
-                    删除
+            {
+              title: '状态',
+              dataIndex: 'status',
+              width: 150,
+              render: (s: ChapterStatus, c) => (
+                <Space size={4} wrap>
+                  <Tag color={CHAPTER_STATUS[s].color}>{CHAPTER_STATUS[s].label}</Tag>
+                  {s !== 'generating' && queuedIds.has(c.id) && <Tag color="blue">排队批量</Tag>}
+                </Space>
+              ),
+            },
+            {
+              title: '分析',
+              key: 'analysis',
+              width: 130,
+              render: (_, c) => {
+                const st = statusById.get(c.id)
+                if (!st) return null
+                const label = ANALYSIS_STATUS[st.status]
+                return (
+                  <Space size={4}>
+                    <Tag color={label.color}>{label.label}</Tag>
+                    {st.scores && <span title="整体评分">{formatScore(st.scores)}</span>}
+                  </Space>
+                )
+              },
+            },
+            { title: '字数', dataIndex: 'word_count', width: 90 },
+            { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (t: string) => formatTime(t) },
+            {
+              title: '操作',
+              key: 'actions',
+              width: 180,
+              render: (_, c) => (
+                <Space size={0}>
+                  <Button type="link" size="small" onClick={() => navigate(`/projects/${pid}/chapters/${c.id}`)}>
+                    编辑
                   </Button>
-                </Popconfirm>
-              </Space>
-            ),
-          },
-        ]}
-      />
+                  <Button type="link" size="small" disabled={c.word_count === 0} onClick={() => readChapter(c)}>
+                    阅读
+                  </Button>
+                  <Popconfirm
+                    title="删除该章节？"
+                    description="正文将被永久删除"
+                    okText="删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => handleDelete(c)}
+                  >
+                    <Button type="link" size="small" danger disabled={c.status === 'generating'}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      )}
       {batchOpen && (
         <Suspense fallback={null}>
           <BatchGenerateModal

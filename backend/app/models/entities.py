@@ -179,6 +179,9 @@ class Project(TimestampMixin, Base):
     selling_points: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     audience: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
     target_words: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 阅读进度（迁移 0016）{chapter_id, chapter_no, ratio: 0–1, updated_at}；
+    # chapter_no 用于章节被删除后读取时退回前一已写章节
+    reading_progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
 
 
 class WorldSetting(TimestampMixin, Base):

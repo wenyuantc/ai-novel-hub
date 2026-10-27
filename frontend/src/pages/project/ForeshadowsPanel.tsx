@@ -17,6 +17,7 @@ import {
   Table,
   Tabs,
   Tag,
+  theme,
   Tooltip,
   Typography,
 } from 'antd'
@@ -55,6 +56,7 @@ function positiveInt(v: string | null): number | undefined {
 
 /** 伏笔：统计卡 + 筛选排序 + 列表（快捷操作：标已埋 / 标回收 / 废弃）/ 时间线，编辑抽屉含历史。URL `?character_id=` 预置角色筛选，`?id=` 打开该伏笔。 */
 export default function ForeshadowsPanel() {
+  const { token } = theme.useToken()
   const pid = useProjectId()
   const { message } = App.useApp()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -231,7 +233,7 @@ export default function ForeshadowsPanel() {
         return (
           <Space direction="vertical" size={0} style={{ fontSize: 12 }}>
             <span>埋：{c.plant}</span>
-            <span style={{ color: f.overdue_by > 0 ? '#cf1322' : undefined }}>收：{c.resolve}</span>
+            <span style={{ color: f.overdue_by > 0 ? token.colorError : undefined }}>收：{c.resolve}</span>
           </Space>
         )
       },
@@ -269,7 +271,7 @@ export default function ForeshadowsPanel() {
         { key: 'partial', label: '部分回收', value: stats.partial },
         { key: 'resolved', label: '已回收', value: stats.resolved },
         { key: 'abandoned', label: '已废弃', value: stats.abandoned },
-        { key: 'overdue', label: '超期', value: stats.overdue, color: stats.overdue > 0 ? '#cf1322' : undefined },
+        { key: 'overdue', label: '超期', value: stats.overdue, color: stats.overdue > 0 ? token.colorError : undefined },
         { key: 'long_term', label: '长线', value: stats.long_term },
       ]
     : []

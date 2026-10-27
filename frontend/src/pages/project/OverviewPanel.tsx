@@ -156,13 +156,13 @@ function OverviewInner({ project }: { project: Project }) {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Row gutter={16}>
-        <Col xs={12} md={6}>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic title="章节数" value={project.chapter_count} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic
               title="总字数"
@@ -235,12 +235,12 @@ function OverviewInner({ project }: { project: Project }) {
                 <Input />
               </Form.Item>
             </Col>
-            <Col xs={12} md={6}>
+            <Col xs={24} sm={12} md={6}>
               <Form.Item name="genre" label="题材" rules={[{ max: 100, message: '不超过 100 字' }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col xs={12} md={6}>
+            <Col xs={24} sm={12} md={6}>
               <Form.Item name="status" label="状态">
                 <Select<ProjectStatus>
                   options={(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map((s) => ({
@@ -276,7 +276,7 @@ function OverviewInner({ project }: { project: Project }) {
             </Button>
           </Space>
         </Form>
-        <Descriptions size="small" style={{ marginTop: 24 }} column={2}>
+        <Descriptions size="small" style={{ marginTop: 24 }} column={{ xs: 1, sm: 2 }}>
           <Descriptions.Item label="创建时间">{formatTime(project.created_at)}</Descriptions.Item>
           <Descriptions.Item label="更新时间">{formatTime(project.updated_at)}</Descriptions.Item>
         </Descriptions>

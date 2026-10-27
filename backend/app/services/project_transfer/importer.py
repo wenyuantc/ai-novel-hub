@@ -12,7 +12,8 @@ format / version（更新的版本 400，migrate 逐级升级，目前只有 v1�
    自定义风格在导入者库里有同名且字段全同的 → 复用，否则新建（同名不同内容加「（导入）」）。
 2. 新建项目（重名时书名加「（导入）」「（导入2）」…），按注册表顺序逐表插入：由数据库分配新 id，
    外键按「旧 id → 新 id」映射改写，
-   JSON / 字符串列内的 id 经 remap 改写；deferred 列（chapters.plan_id、organizations.parent_id）全部插入后回填。
+   JSON / 字符串列内的 id 经 remap 改写；deferred 列（chapters.plan_id、organizations.parent_id）全部插入后回填，
+   项目的 reading_progress（含章节 id）也在全部表插入后改写。
    全局关系类型按 (role_a, role_b) 对应，找不到 → 建为项目自定义类型 + 警告。
 3. 知识库文档从 text 重新分块并写关键词检索单元（kb_index_service.chunk_document），记忆写检索单元
    （memory_service.index_memories，保留钉住 / 屏蔽）；向量留空。
@@ -548,6 +549,9 @@ def _missing_warnings(missing: Counter[str]) -> list[str]:
 def _dry_run_missing(backup: Backup) -> Counter[str]:
     ids = _id_sets(backup.project, backup.tables)
     ctx = RemapContext({t: {i: i for i in s} for t, s in ids.items()}, identity=True)
+    for col, fn in PROJECT_RULE.json_refs.items():
+        if col in backup.project:
+            fn(backup.project[col], ctx)
     for rule in RULES:
         if not (rule.json_refs or rule.str_refs):
             continue
@@ -677,7 +681,9 @@ class _Importer:
         self.warnings += _style_warnings(plans)
 
     async def _project(self, title: str | None) -> Project:
-        values, _ = self._values(PROJECT_RULE, self.backup.project)
+        # 项目先于其他表插入：含 id 的 JSON 列（reading_progress）留到全部表插入后由 _project_refs 改写
+        row = {k: v for k, v in self.backup.project.items() if k not in PROJECT_RULE.json_refs}
+        values, _ = self._values(PROJECT_RULE, row)
         values.pop("user_id", None)
         if values.get("status") not in PROJECT_STATUSES:
             values["status"] = "planning"
@@ -764,6 +770,21 @@ class _Importer:
                     self.deferred.append((rule, obj.id, col, old, updated_at))
         self.objects[rule.table] = objs
 
+    async def _project_refs(self) -> None:
+        values = {
+            col: fn(self.backup.project[col], self.ctx)
+            for col, fn in PROJECT_RULE.json_refs.items()
+            if col in self.backup.project
+        }
+        if values:
+            # 显式写回原更新时间，避免 onupdate 改成导入时间
+            await self.db.execute(
+                update(Project)
+                .where(Project.id == self.project_id)
+                .values(**values, updated_at=Project.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+
     async def _backfill(self) -> None:
         for rule, new_id, col, old, updated_at in self.deferred:
             target = self.maps[rule.fk[col]].get(old)
@@ -805,6 +826,7 @@ class _Importer:
                 continue
             await self._table(rule, rows)
         await self._backfill()
+        await self._project_refs()
         await self._retrieval()
         await self.db.flush()
         self.warnings += _missing_warnings(self.ctx.missing)

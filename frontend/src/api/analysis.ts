@@ -153,10 +153,13 @@ export function formatDelta(delta: number | null): string {
   return '持平'
 }
 
-/** 差值颜色：升绿、降红、持平灰 */
-export function deltaColor(delta: number | null): string | undefined {
+/** 差值颜色：升绿、降红、持平灰（颜色由调用方传入主题 token：colorSuccess / colorError） */
+export function deltaColor(
+  delta: number | null,
+  colors: { colorSuccess: string; colorError: string },
+): string | undefined {
   if (delta === null || delta === 0) return undefined
-  return delta > 0 ? '#389e0d' : '#cf1322'
+  return delta > 0 ? colors.colorSuccess : colors.colorError
 }
 
 /** 对白占比 0–1 → 「35%」 */

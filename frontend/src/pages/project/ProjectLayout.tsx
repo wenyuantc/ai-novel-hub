@@ -7,15 +7,17 @@ import {
   DatabaseOutlined,
   HistoryOutlined,
   GlobalOutlined,
+  MenuOutlined,
   OrderedListOutlined,
   RocketOutlined,
   TeamOutlined,
   TrophyOutlined,
 } from '@ant-design/icons'
-import { Alert, Breadcrumb, Layout, Menu, Result, Spin, Tag } from 'antd'
-import { useEffect } from 'react'
+import { Alert, Breadcrumb, Button, Drawer, Layout, Menu, Result, Spin, Tag, theme } from 'antd'
+import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { PROJECT_STATUS } from '../../api/projects'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectStore } from '../../stores/project'
 
@@ -36,11 +38,17 @@ const NAV = [
   { key: 'memories', icon: <HistoryOutlined />, label: '剧情记忆' },
 ]
 
-/** 项目工作区：左侧导航 + 右侧面板。 */
+/** 项目工作区：左侧导航 + 右侧面板；移动端不渲染侧栏，改为顶部「项目菜单」按钮打开左侧抽屉（选中后自动关闭）。 */
 export default function ProjectLayout() {
   const pid = useProjectId()
   const location = useLocation()
   const { project, loading, error, load } = useProjectStore()
+  const isMobile = useIsMobile()
+  // 抽屉打开时记下当时的路径：导航（含浏览器后退）或切到桌面布局后自动视为关闭
+  const [navOpenAt, setNavOpenAt] = useState<string | null>(null)
+  const navOpen = isMobile && navOpenAt === location.pathname
+  const setNavOpen = (open: boolean) => setNavOpenAt(open ? location.pathname : null)
+  const { token } = theme.useToken()
 
   useEffect(() => {
     if (Number.isFinite(pid)) void load(pid)
@@ -69,21 +77,40 @@ export default function ProjectLayout() {
     )
   }
 
+  const menu = (
+    <Menu
+      mode="inline"
+      selectedKeys={[selected]}
+      style={{ borderInlineEnd: 0, paddingTop: 8 }}
+      onClick={() => setNavOpen(false)}
+      items={NAV.map((n) => ({
+        key: n.key,
+        icon: n.icon,
+        label: <Link to={`/projects/${pid}/${n.key}`}>{n.label}</Link>,
+      }))}
+    />
+  )
+  const current = NAV.find((n) => n.key === selected)
+
   return (
     <Layout style={{ minHeight: 'calc(100vh - 64px)' }}>
-      <Sider width={200} theme="light" breakpoint="lg" collapsedWidth={56} style={{ borderRight: '1px solid #f0f0f0' }}>
-        <Menu
-          mode="inline"
-          selectedKeys={[selected]}
-          style={{ borderRight: 0, paddingTop: 8 }}
-          items={NAV.map((n) => ({
-            key: n.key,
-            icon: n.icon,
-            label: <Link to={`/projects/${pid}/${n.key}`}>{n.label}</Link>,
-          }))}
-        />
-      </Sider>
-      <Content style={{ padding: '16px 24px', minWidth: 0 }}>
+      {!isMobile && (
+        <Sider
+          width={200}
+          theme="light"
+          breakpoint="lg"
+          collapsedWidth={56}
+          style={{ borderRight: `1px solid ${token.colorBorderSecondary}` }}
+        >
+          {menu}
+        </Sider>
+      )}
+      <Content style={{ padding: isMobile ? 12 : '16px 24px', minWidth: 0 }}>
+        {isMobile && (
+          <Button icon={<MenuOutlined />} style={{ marginBottom: 8 }} onClick={() => setNavOpen(true)}>
+            项目菜单{current ? ` · ${current.label}` : ''}
+          </Button>
+        )}
         <Breadcrumb
           style={{ marginBottom: 12 }}
           items={[
@@ -100,6 +127,18 @@ export default function ProjectLayout() {
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
         <Outlet />
       </Content>
+      {isMobile && (
+        <Drawer
+          title={project.title}
+          placement="left"
+          width={240}
+          open={navOpen}
+          onClose={() => setNavOpen(false)}
+          styles={{ body: { padding: 0 } }}
+        >
+          {menu}
+        </Drawer>
+      )}
     </Layout>
   )
 }

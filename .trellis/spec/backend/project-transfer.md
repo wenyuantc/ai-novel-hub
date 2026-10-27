@@ -49,6 +49,7 @@ NOT_EXPORTED = {"tasks": 理由, "kb_chunks": 理由, "retrieval_chunks": 理由
   | `analysis_changes.target / before / after` | 递归改写 `ANALYSIS_ID_KEYS`（`character_id` / `a_id` / `b_id` → 角色、`relationship_id`、`type_id`、`career_id`、`stage_id`、`organization_id`、`foreshadow_id`）与 `character_ids` 列表；以 `writeback_service` 实际写入的键为准 |
   | `analysis_changes.field_key` | `char:{cid}:x`、`rel:{rid}:x`、`relpair:{low}:{high}`（改写后重新取 min/max）、`career:{cid}:{career_id}`、`org:{org_id}:{cid}`、`fs:{fid}:x`；对应不上 → 空串 |
   | `chapter_analyses.foreshadow_candidates` | 每项 `ref_id`（伏笔 id） |
+  | `projects.reading_progress` | `chapter_id` → 章节；对应不上 / 结构不对 → 整个进度清空为 `{}`（计入警告「阅读进度…」），`ratio` 限制在 [0, 1]。项目先于章节插入，所以 importer 的 `_project` 先跳过 `PROJECT_RULE.json_refs` 的列，全部表插入并回填后由 `_project_refs` 改写（显式写回 `updated_at`）；预览的 `_dry_run_missing` 也会检查项目行 |
   | `outline_snapshots.data` | outlines / plans 的 `id`、plans 的 `outline_id` / `character_ids`、links 的三个 id；快照里已不存在的大纲 / 细纲分配**大于导入时该表最大 id** 的新 id（同一旧 id 得到同一新 id），指向已不存在章节的 link 去掉 |
 - 历史表的 `changes`（关系 / 职业 / 伏笔）、`changes_raw`、记忆的 `characters` 等都按**名称**记录，不含 id（`json_plain`）。
   以后若在这些 JSON 里存 id，必须把它移到 `json_refs` 并写重映射函数。
@@ -73,7 +74,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0015"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0016"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。

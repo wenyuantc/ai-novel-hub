@@ -112,6 +112,8 @@ PROJECT_RULE = TableRule(
     # 旧的写作风格自由文本：迁移 0013 起不再读写
     exclude=("style",),
     json_plain=("wizard_progress", "tags"),
+    # 含章节 id；项目先于章节插入，importer 在全部表插入后再改写这一列
+    json_refs={"reading_progress": remap.reading_progress},
 )
 
 # 导入顺序：被引用的表在前（自引用 / 互相引用的列放在 deferred 里回填）

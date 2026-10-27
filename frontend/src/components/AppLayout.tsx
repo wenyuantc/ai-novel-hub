@@ -4,27 +4,40 @@ import {
   FileTextOutlined,
   KeyOutlined,
   LogoutOutlined,
+  MenuOutlined,
   SettingOutlined,
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { Button, Dropdown, Layout, Menu, Space } from 'antd'
+import { Button, Drawer, Dropdown, Layout, Menu, Space, theme, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import { useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { useAuthStore } from '../stores/auth'
+import ThemeSwitch from '../theme/ThemeSwitch'
 import ChangePasswordModal from './ChangePasswordModal'
 import TaskPanel from './TaskPanel'
 
 const { Header, Content } = Layout
 
-/** 顶层布局：顶栏（导航：我的项目 / 模型配置 / 提示词模板 / 写作风格；用户菜单：提示词模板 / 写作风格库 / 用户管理（仅管理员）/ 修改密码 / 登出）+ 右下角后台任务面板。 */
+/**
+ * 顶层布局：顶栏（导航：我的项目 / 模型配置 / 提示词模板 / 写作风格；主题切换；用户菜单：提示词模板 / 写作风格库 / 用户管理（仅管理员）/ 修改密码 / 登出）
+ * + 右下角后台任务面板。移动端顶栏只留 logo、汉堡按钮与用户菜单，导航与主题切换收进右侧抽屉。
+ */
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const location = useLocation()
   const navigate = useNavigate()
   const [passwordOpen, setPasswordOpen] = useState(false)
+  // 抽屉打开时记下当时的路径：导航（含浏览器后退）或切到桌面布局后自动视为关闭
+  const [navOpenAt, setNavOpenAt] = useState<string | null>(null)
+  const isMobile = useIsMobile()
+  const navOpen = isMobile && navOpenAt === location.pathname
+  const setNavOpen = (open: boolean) => setNavOpenAt(open ? location.pathname : null)
+  const { token } = theme.useToken()
+  const onBar = token.colorTextLightSolid
 
   const userMenuItems: MenuProps['items'] = [
     { key: 'prompt-templates', icon: <FileTextOutlined />, label: '提示词模板' },
@@ -47,24 +60,29 @@ export default function AppLayout() {
           ? []
           : ['projects']
 
+  const navItems = [
+    { key: 'projects', icon: <BookOutlined />, label: <Link to="/projects">我的项目</Link> },
+    { key: 'settings', icon: <SettingOutlined />, label: <Link to="/settings/ai">模型配置</Link> },
+    { key: 'prompts', icon: <FileTextOutlined />, label: <Link to="/prompt-templates">提示词模板</Link> },
+    { key: 'styles', icon: <BgColorsOutlined />, label: <Link to="/styles">写作风格</Link> },
+  ]
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ display: 'flex', alignItems: 'center', gap: 24, paddingInline: 24 }}>
-        <Link to="/projects" style={{ color: '#fff', fontSize: 18, fontWeight: 600, whiteSpace: 'nowrap' }}>
+      <Header
+        style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 24, paddingInline: isMobile ? 12 : 24 }}
+      >
+        <Link to="/projects" style={{ color: onBar, fontSize: isMobile ? 16 : 18, fontWeight: 600, whiteSpace: 'nowrap' }}>
           AI 小说平台
         </Link>
-        <Menu
-          theme="dark"
-          mode="horizontal"
-          selectedKeys={selected}
-          style={{ flex: 1, minWidth: 0 }}
-          items={[
-            { key: 'projects', icon: <BookOutlined />, label: <Link to="/projects">我的项目</Link> },
-            { key: 'settings', icon: <SettingOutlined />, label: <Link to="/settings/ai">模型配置</Link> },
-            { key: 'prompts', icon: <FileTextOutlined />, label: <Link to="/prompt-templates">提示词模板</Link> },
-            { key: 'styles', icon: <BgColorsOutlined />, label: <Link to="/styles">写作风格</Link> },
-          ]}
-        />
+        {isMobile ? (
+          <div style={{ flex: 1 }} />
+        ) : (
+          <>
+            <Menu theme="dark" mode="horizontal" selectedKeys={selected} style={{ flex: 1, minWidth: 0 }} items={navItems} />
+            <ThemeSwitch compact onDarkBar />
+          </>
+        )}
         <Dropdown
           menu={{
             items: userMenuItems,
@@ -80,17 +98,37 @@ export default function AppLayout() {
             },
           }}
         >
-          <Button type="text" style={{ color: '#fff' }}>
+          <Button type="text" style={{ color: onBar, paddingInline: isMobile ? 6 : undefined }}>
             <Space>
               <UserOutlined />
-              {user?.username}
+              {!isMobile && user?.username}
             </Space>
           </Button>
         </Dropdown>
+        {isMobile && (
+          <Button type="text" aria-label="打开菜单" icon={<MenuOutlined />} style={{ color: onBar }} onClick={() => setNavOpen(true)} />
+        )}
       </Header>
-      <Content>
+      <Content style={{ minWidth: 0 }}>
         <Outlet />
       </Content>
+      {isMobile && (
+        <Drawer title={user?.username ?? '菜单'} placement="right" width={260} open={navOpen} onClose={() => setNavOpen(false)}>
+          <Menu
+            mode="inline"
+            selectedKeys={selected}
+            style={{ borderInlineEnd: 0 }}
+            items={navItems}
+            onClick={() => setNavOpen(false)}
+          />
+          <div style={{ marginTop: 16 }}>
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+              主题
+            </Typography.Text>
+            <ThemeSwitch />
+          </div>
+        </Drawer>
+      )}
       <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
       <TaskPanel />
     </Layout>

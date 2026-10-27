@@ -1,5 +1,5 @@
 import { CheckOutlined, EditOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Collapse, Empty, Form, Input, Select, Space, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Collapse, Empty, Form, Input, Select, Space, Tag, theme, Typography } from 'antd'
 import { useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { generateOptions, inspirationApi, retryText } from '../../api/inspiration'
@@ -38,6 +38,7 @@ interface Props {
  * 历史轮次、自己填、跳过、可能需要更新时的「保持不变」。卸载时中止进行中的生成（后端不保存半截选项）。
  */
 export default function OptionStep({ session, step, onSession, onAdvance, onPrev, onRunningChange }: Props) {
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const entry = stepOf(session.state, step)
   const label = FLOW_LABELS[step]
@@ -131,7 +132,7 @@ export default function OptionStep({ session, step, onSession, onAdvance, onPrev
               key={opt}
               checked={selectedTags.includes(opt)}
               onChange={(c) => toggleTag(opt, c)}
-              style={{ fontSize: 14, padding: '4px 12px', border: '1px solid #d9d9d9' }}
+              style={{ fontSize: 14, padding: '4px 12px', border: `1px solid ${token.colorBorder}` }}
             >
               {opt}
             </Tag.CheckableTag>
@@ -360,10 +361,11 @@ function OptionCard({
   limit: number
   onPick: (text: string, edited: boolean) => void
 }) {
+  const { token } = theme.useToken()
   const [draft, setDraft] = useState<string | null>(null)
   if (draft !== null) {
     return (
-      <Card size="small" style={{ borderColor: '#1677ff' }}>
+      <Card size="small" style={{ borderColor: token.colorPrimary }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input.TextArea value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={limit} showCount autoSize={{ minRows: 1, maxRows: 10 }} />
           <Space>
@@ -387,7 +389,7 @@ function OptionCard({
     )
   }
   return (
-    <Card size="small" style={chosen ? { borderColor: '#52c41a', background: '#f6ffed' } : undefined}>
+    <Card size="small" style={chosen ? { borderColor: token.colorSuccess, background: token.colorSuccessBg } : undefined}>
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <Typography.Paragraph style={{ flex: 1, marginBottom: 0, whiteSpace: 'pre-wrap' }}>{text}</Typography.Paragraph>
         <Space direction="vertical" size={4}>

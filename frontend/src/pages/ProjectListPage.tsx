@@ -1,28 +1,93 @@
-import { BulbOutlined, DeleteOutlined, ImportOutlined, PlusOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Col, Collapse, Empty, Form, Input, Modal, Row, Space, Spin, Statistic, Tag, Typography } from 'antd'
-import { lazy, Suspense, useCallback, useState } from 'react'
+import {
+  BookOutlined,
+  BulbOutlined,
+  CloudDownloadOutlined,
+  DashboardOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  ImportOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  SearchOutlined,
+} from '@ant-design/icons'
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Col,
+  Collapse,
+  Dropdown,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Progress,
+  Row,
+  Select,
+  Space,
+  Spin,
+  Statistic,
+  Tag,
+  theme,
+  Typography,
+} from 'antd'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
-import type { Project, ProjectCreate } from '../api/types'
+import type { Project, ProjectCreate, ProjectStatus } from '../api/types'
+import ExportModal from '../components/ExportModal'
 import ProjectInfoFields from '../components/ProjectInfoFields'
+import BookCover from '../components/shelf/BookCover'
 import StyleSelect from '../components/styles/StyleSelect'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { useLoader } from '../hooks/useLoader'
-import { projectInfoBody, type ProjectInfoValues } from '../utils/projectFields'
-import { formatTime } from '../utils/time'
+import { formatWordCount, projectInfoBody, wordsProgress, type ProjectInfoValues } from '../utils/projectFields'
+import {
+  canRead,
+  continueTarget,
+  filterAndSort,
+  readingLabel,
+  readShelfPrefs,
+  readTarget,
+  SHELF_SORT_OPTIONS,
+  shelfStats,
+  writeShelfPrefs,
+  type ShelfPrefs,
+  type ShelfStatusFilter,
+} from '../utils/shelf'
+import { formatRelative, formatTime } from '../utils/time'
 
-// 导入备份弹窗（含 api/transfer.ts、utils/transfer.ts）按需加载，不进入口 chunk
+// 导入备份 / 备份弹窗（含 api/transfer.ts、utils/transfer.ts）按需加载，不进入口 chunk
 const ImportBackupModal = lazy(() => import('../components/transfer/ImportBackupModal'))
+const BackupModal = lazy(() => import('../components/transfer/BackupModal'))
 
+const STATUS_FILTERS: { value: ShelfStatusFilter; label: string }[] = [
+  { value: 'all', label: '全部状态' },
+  ...(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map((s) => ({ value: s, label: PROJECT_STATUS[s].label })),
+]
+
+/** 书架（/projects）：统计、搜索 / 排序 / 状态筛选（记在 localStorage）、新建卡 + 书本式项目卡片。 */
 export default function ProjectListPage() {
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
   const loader = useCallback(() => projectApi.list(), [])
   const { data: projects = [], loading, error, reload } = useLoader(loader)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [exportId, setExportId] = useState<number | null>(null)
+  const [backupId, setBackupId] = useState<number | null>(null)
+  const [prefs, setPrefs] = useState<ShelfPrefs>(readShelfPrefs)
   const [form] = Form.useForm<ProjectCreate & ProjectInfoValues>()
+
+  useEffect(() => writeShelfPrefs(prefs), [prefs])
+  const visible = useMemo(() => filterAndSort(projects, prefs), [projects, prefs])
+  const stats = useMemo(() => shelfStats(projects), [projects])
+  const filtering = prefs.query.trim() !== '' || prefs.status !== 'all'
 
   const handleCreate = async () => {
     const values = await form.validateFields()
@@ -66,86 +131,95 @@ export default function ProjectListPage() {
     })
   }
 
+  const searchInput = (
+    <Input
+      allowClear
+      prefix={<SearchOutlined />}
+      placeholder="搜索书名或标签"
+      value={prefs.query}
+      onChange={(e) => setPrefs((p) => ({ ...p, query: e.target.value }))}
+      style={{ width: isMobile ? '100%' : 240 }}
+    />
+  )
+
   return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? 12 : 24 }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}
+      >
         <Typography.Title level={3} style={{ margin: 0 }}>
-          我的项目
+          我的书架
         </Typography.Title>
-        <Space>
-          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
-            导入备份
-          </Button>
-          <Button icon={<BulbOutlined />} onClick={() => navigate('/inspiration')}>
-            灵感模式
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-            新建项目
-          </Button>
+        <Space size={isMobile ? 'middle' : 'large'} wrap>
+          <Statistic title="作品" value={stats.count} valueStyle={{ fontSize: 20 }} />
+          <Statistic title="连载中" value={stats.writing} valueStyle={{ fontSize: 20 }} />
+          <Statistic title="总字数" value={stats.words} valueStyle={{ fontSize: 20 }} />
         </Space>
       </div>
+      {/* 小屏下搜索框独占一行、宽度 100%（不用 100vw：它包含滚动条宽度，会造成横向溢出） */}
+      {isMobile && <div style={{ marginBottom: 8 }}>{searchInput}</div>}
+      <Space wrap style={{ marginBottom: 16, width: '100%' }}>
+        {!isMobile && searchInput}
+        <Select
+          value={prefs.sort}
+          onChange={(sort) => setPrefs((p) => ({ ...p, sort }))}
+          options={SHELF_SORT_OPTIONS}
+          style={{ width: 120 }}
+          aria-label="排序"
+        />
+        <Select
+          value={prefs.status}
+          onChange={(status) => setPrefs((p) => ({ ...p, status }))}
+          options={STATUS_FILTERS}
+          style={{ width: 120 }}
+          aria-label="状态筛选"
+        />
+        {filtering && (
+          <Typography.Text type="secondary">
+            显示 {visible.length} / {projects.length}
+          </Typography.Text>
+        )}
+      </Space>
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Spin spinning={loading}>
-        {projects.length === 0 && !loading ? (
-          <Empty description="还没有项目，新建一个开始创作吧" style={{ padding: 48 }}>
-            <Button type="primary" onClick={() => setCreateOpen(true)}>
-              新建项目
-            </Button>
-          </Empty>
-        ) : (
-          <Row gutter={[16, 16]}>
-            {projects.map((p) => (
-              <Col key={p.id} xs={24} sm={12} lg={8}>
-                <Card
-                  hoverable
-                  onClick={() => navigate(`/projects/${p.id}`)}
-                  title={<span title={p.title}>{p.title}</span>}
-                  extra={<Tag color={PROJECT_STATUS[p.status].color}>{PROJECT_STATUS[p.status].label}</Tag>}
-                  actions={[
-                    <Button
-                      key="del"
-                      type="text"
-                      danger
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDelete(p)
-                      }}
-                    >
-                      删除
-                    </Button>,
-                  ]}
-                >
-                  <div style={{ marginBottom: 8 }}>
-                    {p.genre ? <Tag>{p.genre}</Tag> : <Typography.Text type="secondary">未设置题材</Typography.Text>}
-                    {(p.tags ?? []).slice(0, 3).map((t) => (
-                      <Tag key={t} color="blue">
-                        {t}
-                      </Tag>
-                    ))}
-                  </div>
-                  <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ minHeight: 44 }}>
-                    {p.premise || '暂无设定'}
-                  </Typography.Paragraph>
-                  <Row>
-                    <Col span={12}>
-                      <Statistic title="章节数" value={p.chapter_count} valueStyle={{ fontSize: 20 }} />
-                    </Col>
-                    <Col span={12}>
-                      <Statistic title="总字数" value={p.total_words} valueStyle={{ fontSize: 20 }} />
-                    </Col>
-                  </Row>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    更新于 {formatTime(p.updated_at)}
-                  </Typography.Text>
-                </Card>
-              </Col>
-            ))}
-          </Row>
+        <Row gutter={[isMobile ? 12 : 20, isMobile ? 16 : 24]}>
+          <Col xs={12} sm={8} md={6} xl={4}>
+            <NewBookCard
+              onCreate={() => setCreateOpen(true)}
+              onInspire={() => navigate('/inspiration')}
+              onImport={() => setImportOpen(true)}
+            />
+          </Col>
+          {visible.map((p) => (
+            <Col key={p.id} xs={12} sm={8} md={6} xl={4}>
+              <BookCard
+                project={p}
+                onOpen={() => navigate(`/projects/${p.id}/overview`)}
+                onContinue={() => navigate(continueTarget(p))}
+                onRead={() => navigate(readTarget(p), { state: { from: '/projects' } })}
+                onExport={() => setExportId(p.id)}
+                onBackup={() => setBackupId(p.id)}
+                onDelete={() => handleDelete(p)}
+              />
+            </Col>
+          ))}
+        </Row>
+        {!loading && projects.length > 0 && visible.length === 0 && (
+          <Empty description="没有符合条件的作品" style={{ padding: 32 }} />
+        )}
+        {!loading && projects.length === 0 && (
+          <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>
+            还没有作品：新建一个项目，或用灵感模式从一个模糊的想法开始。
+          </Typography.Paragraph>
         )}
       </Spin>
 
+      {exportId !== null && <ExportModal projectId={exportId} open onClose={() => setExportId(null)} />}
+      {backupId !== null && (
+        <Suspense fallback={null}>
+          <BackupModal projectId={backupId} onClose={() => setBackupId(null)} />
+        </Suspense>
+      )}
       {importOpen && (
         <Suspense fallback={null}>
           <ImportBackupModal
@@ -204,5 +278,121 @@ export default function ProjectListPage() {
         </Form>
       </Modal>
     </div>
+  )
+}
+
+/** 第一张固定的「新建」卡：新建项目 / 灵感模式 / 导入备份。 */
+function NewBookCard({ onCreate, onInspire, onImport }: { onCreate: () => void; onInspire: () => void; onImport: () => void }) {
+  const { token } = theme.useToken()
+  return (
+    <div>
+      <div
+        style={{
+          aspectRatio: '2 / 3',
+          border: `1px dashed ${token.colorBorder}`,
+          borderRadius: 6,
+          background: token.colorFillQuaternary,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          gap: 8,
+          padding: '0 10%',
+        }}
+      >
+        <Button type="primary" icon={<PlusOutlined />} block onClick={onCreate}>
+          新建项目
+        </Button>
+        <Button icon={<BulbOutlined />} block onClick={onInspire}>
+          灵感模式
+        </Button>
+        <Button icon={<ImportOutlined />} block onClick={onImport}>
+          导入备份
+        </Button>
+      </div>
+      <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+        开始一部新作品
+      </Typography.Text>
+    </div>
+  )
+}
+
+interface BookCardProps {
+  project: Project
+  onOpen: () => void
+  onContinue: () => void
+  onRead: () => void
+  onExport: () => void
+  onBackup: () => void
+  onDelete: () => void
+}
+
+/** 书本卡片：封面 + 书名 / 状态 / 前 3 个类型标签 / 字数进度 / 章节数与更新时间 + 继续写作 / 阅读 / 更多。 */
+function BookCard({ project: p, onOpen, onContinue, onRead, onExport, onBackup, onDelete }: BookCardProps) {
+  const progress = wordsProgress(p.total_words, p.target_words)
+  const status = PROJECT_STATUS[p.status]
+  return (
+    <Card size="small" styles={{ body: { padding: 0 } }} variant="borderless" style={{ background: 'transparent', boxShadow: 'none' }}>
+      <BookCover title={p.title} genre={p.genre} onClick={onOpen} />
+      <div style={{ marginTop: 8 }}>
+        <Typography.Text strong ellipsis={{ tooltip: p.title }} style={{ display: 'block', cursor: 'pointer' }} onClick={onOpen}>
+          {p.title}
+        </Typography.Text>
+        <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          <Tag color={status.color} style={{ marginInlineEnd: 0 }}>
+            {status.label}
+          </Tag>
+          {(p.tags ?? []).slice(0, 3).map((t) => (
+            <Tag key={t} style={{ marginInlineEnd: 0 }}>
+              {t}
+            </Tag>
+          ))}
+        </div>
+        {progress !== null ? (
+          <Progress
+            percent={progress}
+            size="small"
+            style={{ margin: '4px 0 0' }}
+            format={() => `${formatWordCount(p.total_words)}`}
+          />
+        ) : (
+          <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+            {formatWordCount(p.total_words)}
+          </Typography.Text>
+        )}
+        <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }} title={formatTime(p.updated_at)}>
+          {p.chapter_count} 章 · {formatRelative(p.updated_at)}更新
+        </Typography.Text>
+        <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 8 }}>
+          <Button type="primary" size="small" block icon={<EditOutlined />} onClick={onContinue}>
+            继续写作
+          </Button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <Button size="small" icon={<BookOutlined />} disabled={!canRead(p)} onClick={onRead} style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{readingLabel(p.reading)}</span>
+            </Button>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'overview', icon: <DashboardOutlined />, label: '概览' },
+                  { key: 'export', icon: <DownloadOutlined />, label: '导出' },
+                  { key: 'backup', icon: <CloudDownloadOutlined />, label: '备份' },
+                  { type: 'divider' },
+                  { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'overview') onOpen()
+                  else if (key === 'export') onExport()
+                  else if (key === 'backup') onBackup()
+                  else if (key === 'delete') onDelete()
+                },
+              }}
+            >
+              <Button size="small" icon={<MoreOutlined />} aria-label="更多" />
+            </Dropdown>
+          </div>
+        </Space>
+      </div>
+    </Card>
   )
 }

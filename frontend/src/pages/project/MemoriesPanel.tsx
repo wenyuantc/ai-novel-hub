@@ -15,6 +15,7 @@ import {
   Switch,
   Table,
   Tag,
+  theme,
   Tooltip,
   Typography,
 } from 'antd'
@@ -49,6 +50,7 @@ function triBool(v: TriState): boolean | undefined {
 
 /** 剧情记忆：筛选（章号范围 / 类型 / 来源 / 钉住 / 屏蔽 / 关键字）、行内钉住与屏蔽、手动记忆增删改、召回设置、检索调试、重建横幅。 */
 export default function MemoriesPanel() {
+  const { token } = theme.useToken()
   const pid = useProjectId()
   const { message } = App.useApp()
 
@@ -189,7 +191,7 @@ export default function MemoriesPanel() {
             size="small"
             aria-label={m.pinned ? '取消钉住' : '钉住'}
             loading={acting === m.id}
-            icon={m.pinned ? <PushpinFilled style={{ color: '#faad14' }} /> : <PushpinOutlined />}
+            icon={m.pinned ? <PushpinFilled style={{ color: token.colorWarning }} /> : <PushpinOutlined />}
             onClick={() => void patch(m, { pinned: !m.pinned })}
           />
         </Tooltip>

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "新增 JSON 列需登记传输注册表"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与归属 404"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "布局、弹窗、编辑器组件约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "zustand store 与持久化"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载、测试约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-platform.md", "reason": "MuMu 书架、主题、移动端对照（§5.5、§8、§9）"}

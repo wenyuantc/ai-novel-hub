@@ -1,5 +1,21 @@
 import { InboxOutlined, WarningOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Col, Popconfirm, Row, Space, Switch, Table, Tag, Tooltip, Typography, Upload } from 'antd'
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Col,
+  Popconfirm,
+  Row,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  theme,
+  Tooltip,
+  Typography,
+  Upload,
+} from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -26,6 +42,7 @@ import { formatTime } from '../../utils/time'
 
 /** 知识库：拖拽上传、文档表格（状态 / 块数 / 注入开关 / 重建索引 / 分块 / 删除）、注入设置、检索调试、重建横幅。 */
 export default function KnowledgePanel() {
+  const { token } = theme.useToken()
   const pid = useProjectId()
   const { message } = App.useApp()
   const track = useTasksStore((s) => s.track)
@@ -126,7 +143,7 @@ export default function KnowledgePanel() {
             </Typography.Text>
             {d.warnings.length > 0 && (
               <Tooltip title={d.warnings.join('；')}>
-                <WarningOutlined style={{ color: '#faad14' }} aria-label="解析提示" />
+                <WarningOutlined style={{ color: token.colorWarning }} aria-label="解析提示" />
               </Tooltip>
             )}
           </Space>

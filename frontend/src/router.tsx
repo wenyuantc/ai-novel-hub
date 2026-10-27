@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import RequireAdmin from './components/RequireAdmin'
 import RequireAuth from './components/RequireAuth'
@@ -16,12 +16,25 @@ import WorldPanel from './pages/project/WorldPanel'
 
 /**
  * 路由级懒加载（React Router `lazy`）：主包需低于 chunkSizeWarningLimit（1500 kB），
- * 较重或较少访问的页面单独成 chunk（章节编辑器含 diff、大纲 / 组织 / 关系 / 职业 / 伏笔 / 知识库 / 剧情记忆页、模型配置、提示词模板、写作风格库、灵感模式）。
+ * 较重或较少访问的页面单独成 chunk（章节编辑器含 diff、阅读器、大纲 / 组织 / 关系 / 职业 / 伏笔 / 知识库 / 剧情记忆页、模型配置、提示词模板、写作风格库、灵感模式）。
  */
 const lazyPage = (load: () => Promise<{ default: ComponentType }>) => async () => ({ Component: (await load()).default })
 
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
+  // 阅读器：全屏，不在 AppLayout / ProjectLayout 内；不带 :cid 时按阅读进度定位
+  {
+    path: '/projects/:pid/read',
+    element: (
+      <RequireAuth>
+        <Outlet />
+      </RequireAuth>
+    ),
+    children: [
+      { index: true, lazy: lazyPage(() => import('./pages/ReaderPage')) },
+      { path: ':cid', lazy: lazyPage(() => import('./pages/ReaderPage')) },
+    ],
+  },
   {
     path: '/',
     element: (
