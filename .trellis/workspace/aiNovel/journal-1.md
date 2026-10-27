@@ -346,3 +346,34 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: project-io-reader 项目 JSON 备份导入与 EPUB 导出
+<!-- trellis-session: v=2 fp=0136b37a1bc9e7f3 -->
+
+**Date**: 2026-10-27
+**Task**: project-io-reader 项目 JSON 备份导入与 EPUB 导出
+**Branch**: `main`
+
+### Summary
+
+实现 P1-10：ainovel.project v1 备份（按 id 重映射、表规则注册表+反射测试、JSON 内 id 重映射、延后回填）、导入预览与单事务导入、风格/关系类型/知识库/记忆处理；EPUB 3 导出；拆出 reader-ui（P1-10b）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f718918` | feat: 项目 JSON 备份导入与 EPUB 导出（按 id 重映射、反射测试防漏、导入预览） |
+| `950735a` | chore(task): archive 10-23-project-io-reader |
+
+### Testing
+
+- [OK] 后端 598 passed（PostgreSQL 临时容器 582/583，失败为既有 SQLite 专用测试）；前端 276 passed；浏览器冒烟覆盖备份往返与 EPUB 结构
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 规划 P1-10b reader-ui（阅读器、书架、暗色主题、移动端）
