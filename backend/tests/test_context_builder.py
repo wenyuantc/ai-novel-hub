@@ -1,10 +1,15 @@
 from app.models import Chapter
 from app.services.context_builder import (
+    KNOWLEDGE_HEADER,
+    MEMORY_HEADER,
     CastSection,
     ForeshadowSection,
+    MemoryLine,
+    MemorySection,
     PriorChapter,
     assemble_context,
     chapter_task,
+    prior_coverage,
 )
 from tests.helpers import create_ai_config, create_project, register, run_task
 
@@ -232,3 +237,81 @@ async def test_chapter_task_prefers_plan(app, client):
         assert (task.source, task.title, task.summary, task.key_events) == ("outline", "大纲标题", "大纲梗概", [])
         task = await chapter_task(db, await db.get(Chapter, plain["id"]))
         assert (task.source, task.summary) == ("", "")
+
+
+# ---------------- 检索块（knowledge-base） ----------------
+
+
+def _build_kb(budget: int, *, knowledge: str = "", memories: MemorySection | None = None) -> str:
+    return assemble_context(
+        project_text="书名：《测试》",
+        world_text="世界观设定",
+        cast=CastSection(cards=["角色卡"]),
+        outline_text="第1卷\n  第1章 a：b",
+        prior_chapters=_chapters(6, 300),
+        budget=budget,
+        knowledge=knowledge,
+        memories=memories,
+    )
+
+
+MEMS = MemorySection(
+    [
+        MemoryLine("- 第1章（情节）：玉佩发光", rank=2),
+        MemoryLine("- 第2章（钩子）：钉住的请柬", pinned=True, rank=-1),
+        MemoryLine("- 第3章（情节）：玉佩碎裂", rank=0),
+        MemoryLine("- 第3章（人物）：林远受伤", rank=1),
+    ]
+)
+
+
+def test_empty_retrieval_blocks_context_unchanged():
+    assert _build_kb(100_000) == _build(100_000, _chapters(6, 300))
+    assert _build_kb(100_000, knowledge="  ", memories=MemorySection([MemoryLine("  ")])) == _build_kb(100_000)
+    assert KNOWLEDGE_HEADER not in _build_kb(100_000) and MEMORY_HEADER not in _build_kb(100_000)
+
+
+def test_retrieval_blocks_position():
+    ctx = _build_kb(100_000, knowledge="- 《设定》门派：天剑宗", memories=MEMS)
+    assert ctx.index("【世界观】") < ctx.index(KNOWLEDGE_HEADER) < ctx.index("【本章涉及角色】")
+    assert ctx.index("【前情提要（更早章节）】") < ctx.index(MEMORY_HEADER) < ctx.index("【最近章节正文】")
+    block = ctx.split(MEMORY_HEADER + "\n", 1)[1].split("\n\n", 1)[0]
+    assert block.splitlines() == [m.text for m in MEMS.lines]
+
+
+def test_retrieval_blocks_trim_first():
+    knowledge = "- 《设定》门派：" + "天剑宗" * 100
+    full = _build_kb(1_000_000, knowledge=knowledge, memories=MEMS)
+    summaries = full.split("【前情提要（更早章节）】\n", 1)[1].split("\n\n", 1)[0]
+
+    # 1. 先截断参考资料尾部，其他不动
+    ctx = _build_kb(len(full) - 100, knowledge=knowledge, memories=MEMS)
+    assert len(ctx) <= len(full) - 100
+    assert KNOWLEDGE_HEADER in ctx and "……" in ctx.split(KNOWLEDGE_HEADER)[1].split("\n\n")[0]
+    assert all(m.text in ctx for m in MEMS.lines) and summaries in ctx
+
+    # 2. 参考资料整段去掉后，从最不相关的开始丢弃未钉住的旧情节（rank 大的先丢），前情提要不动
+    no_kb = len(_build_kb(1_000_000, memories=MEMS))
+    ctx = _build_kb(no_kb - 5, knowledge=knowledge, memories=MEMS)
+    assert KNOWLEDGE_HEADER not in ctx
+    assert "玉佩发光" not in ctx and "林远受伤" in ctx and "玉佩碎裂" in ctx and "钉住的请柬" in ctx
+    assert summaries in ctx
+
+    # 3. 未钉住的都丢弃后才开始丢前情摘要；钉住的保留
+    pinned_only = len(_build_kb(1_000_000, memories=MemorySection([MEMS.lines[1]])))
+    ctx = _build_kb(pinned_only - 5, knowledge=knowledge, memories=MEMS)
+    block = ctx.split(MEMORY_HEADER + "\n", 1)[1].split("\n\n", 1)[0]
+    assert block == "- 第2章（钩子）：钉住的请柬"
+    assert "第1章 标题1：" not in ctx and "第4章 标题4：" in ctx
+
+
+def test_prior_coverage():
+    prior = [
+        PriorChapter(1, "a", "正文", summary="摘要一"),
+        PriorChapter(2, "b", "正文", summary=""),
+        PriorChapter(3, "c", "", summary="摘要三"),
+        PriorChapter(4, "d", "正文", summary="摘要四"),
+        PriorChapter(5, "e", "正文", summary="摘要五"),
+    ]
+    full, summarized = prior_coverage(prior)
+    assert full == {4, 5} and summarized == {1}

@@ -38,7 +38,14 @@ from app.core.security import SecretCipher
 from app.models import Chapter, ChapterAnalysis, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
 from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
-from app.services import ai_config_service, generation_log_service, prompt_service, style_service, version_service
+from app.services import (
+    ai_config_service,
+    generation_log_service,
+    prompt_service,
+    retrieval_service,
+    style_service,
+    version_service,
+)
 from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.context_builder import build_chapter_context, chapter_task
 from app.services.project_service import get_owned_project
@@ -245,12 +252,20 @@ async def build_chapter_job(
     continue_override = (
         await prompt_service.get_override(db, user_id, "chapter.continue") if mode == "generate" else None
     )
+    # 知识库 / 剧情记忆检索用的向量模型（未配置或不可用时为 None，只用关键词检索）
+    embedder = (
+        await retrieval_service.get_embedder(
+            db, user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+        )
+        if mode in ("generate", "revise")
+        else None
+    )
 
     if mode == "generate":
         assert isinstance(req, GenerateChapterRequest)
         task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
-        context = await build_chapter_context(db, project, chapter, budget)
+        context = await build_chapter_context(db, project, chapter, budget, embedder=embedder)
         params: dict[str, Any] = {
             "target_words": req.target_words,
             "instruction": req.instruction,
@@ -274,7 +289,7 @@ async def build_chapter_job(
         suggestions = await resolve_revision(db, chapter, req)
         task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
-        context = await build_chapter_context(db, project, chapter, budget)
+        context = await build_chapter_context(db, project, chapter, budget, embedder=embedder)
         target_words = req.target_words or max(chapter.word_count, 300)
         params = {
             "analysis_id": req.analysis_id,

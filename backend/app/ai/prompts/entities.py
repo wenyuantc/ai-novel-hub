@@ -28,6 +28,7 @@ def build_character_generate_messages(
     role_type: str = "",
     instruction: str = "",
     careers_text: str = "",
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     careers = careers_text.strip()
@@ -42,6 +43,7 @@ def build_character_generate_messages(
             "organizations": organizations_text.strip(),
             "careers": careers,
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": character_generate_format(bool(careers)),
         },
@@ -55,6 +57,7 @@ def build_organization_generate_messages(
     roster_text: str = "",
     organizations_text: str = "",
     instruction: str = "",
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -66,6 +69,7 @@ def build_organization_generate_messages(
             "roster": roster_text.strip(),
             "organizations": organizations_text.strip(),
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": ORGANIZATION_FORMAT,
         },

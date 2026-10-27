@@ -62,7 +62,8 @@ export interface ResetPasswordRequest {
 export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'
 
 /** off = 不发送思考参数 */
-export type ModelType = 'text' | 'image'
+/** embedding = 向量模型（知识库与剧情记忆的语义检索；Anthropic 不支持） */
+export type ModelType = 'text' | 'image' | 'embedding'
 
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -480,6 +481,7 @@ export type TaskKind =
   | 'outline.continue'
   | 'outline.expand'
   | 'chapter.batch'
+  | 'kb.index'
 
 /** paused = 待审核（多步任务到达审核点）：不占并发名额，可继续 / 结束 / 取消，不能删除 / 重试 */
 export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
@@ -1997,4 +1999,200 @@ export interface InspirationApplyPreviewItem {
 export interface InspirationApplyRequest {
   project_id: number
   fields: InspirationApplyField[]
+}
+
+// ---------------- 知识库（backend/app/schemas/kb.py） ----------------
+
+/** parsing 目前不使用（解析在上传请求内同步完成）；ready_keyword_only = 已分块但缺少当前向量模型的向量 */
+export type KbDocumentStatus = 'pending' | 'parsing' | 'indexing' | 'ready' | 'ready_keyword_only' | 'failed'
+/** hybrid = 向量 + 关键词混合；keyword = 只用关键词 */
+export type SearchMode = 'hybrid' | 'keyword'
+
+export interface KbSettings {
+  auto_inject: boolean
+  /** 1–20 */
+  top_k: number
+  /** 0–1 */
+  min_score: number
+  /** 500–8000 */
+  max_chars: number
+  /** 1–20 */
+  memory_top_k: number
+  /** 300–6000 */
+  memory_max_chars: number
+  /** 0–1 */
+  memory_min_score: number
+}
+
+/** 省略 = 不变 */
+export type KbSettingsUpdate = Partial<KbSettings>
+
+export interface KbDocument {
+  id: number
+  project_id: number
+  filename: string
+  mime: string
+  size: number
+  sha256: string
+  status: KbDocumentStatus
+  error: string
+  warnings: string[]
+  char_count: number
+  chunk_count: number
+  inject: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface KbUploadResult {
+  document: KbDocument
+  task: Task
+}
+
+export interface KbChunk {
+  id: number
+  seq: number
+  heading_path: string
+  content: string
+  start_offset: number
+  end_offset: number
+}
+
+export interface KbChunkPage {
+  items: KbChunk[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface KbSearchRequest {
+  query: string
+  /** 1–50，省略 = 项目设置 */
+  top_k?: number | null
+  /** 0–1，省略 = 项目设置 */
+  min_score?: number | null
+}
+
+export interface KbSearchHit {
+  chunk_id: number
+  document_id: number
+  filename: string
+  heading_path: string
+  content: string
+  score: number
+  /** 只用关键词时为 null */
+  vector_score: number | null
+  keyword_score: number
+}
+
+export interface KbSearchResult {
+  hits: KbSearchHit[]
+  mode: SearchMode
+  warnings: string[]
+  candidates: number
+}
+
+export interface IndexStatus {
+  /** 当前默认向量模型（配置名 · 模型名）；未配置时为 null（只用关键词检索） */
+  embedding_model: string | null
+  /** 存在缺少当前向量模型向量的检索单元 */
+  needs_rebuild: boolean
+  stale_count: number
+  stale: { kb: number; memory: number }
+  /** 项目有排队 / 运行中的建索引任务 */
+  indexing: boolean
+}
+
+// ---------------- 剧情记忆（backend/app/schemas/memory.py） ----------------
+
+export type MemoryKind = 'summary' | 'plot_point' | 'hook' | 'character' | 'foreshadow' | 'manual'
+export type MemoryOrigin = 'auto' | 'manual'
+
+export interface Memory {
+  id: number
+  project_id: number
+  chapter_id: number | null
+  chapter_no: number
+  kind: MemoryKind
+  content: string
+  characters: string[]
+  /** 1–5 */
+  importance: number
+  origin: MemoryOrigin
+  analysis_id: number | null
+  pinned: boolean
+  muted: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface MemoryPage {
+  items: Memory[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface MemoryListQuery {
+  kind?: MemoryKind
+  origin?: MemoryOrigin
+  chapter_from?: number
+  chapter_to?: number
+  pinned?: boolean
+  muted?: boolean
+  /** ≤200 */
+  q?: string
+  page?: number
+  /** 1–200，默认 50 */
+  page_size?: number
+}
+
+export interface MemoryCreate {
+  chapter_no: number
+  /** ≤1000 */
+  content: string
+  /** ≤20 个 */
+  characters?: string[]
+  /** 1–5，默认 3 */
+  importance?: number
+  pinned?: boolean
+}
+
+/** 省略 = 不变；chapter_no / content / characters / importance 只有手动记忆可以修改 */
+export interface MemoryUpdate {
+  pinned?: boolean
+  muted?: boolean
+  chapter_no?: number
+  content?: string
+  characters?: string[]
+  importance?: number
+}
+
+export interface MemorySearchRequest {
+  query: string
+  /** 按第 N 章召回：只在第 N 章之前的记忆中检索 */
+  before_chapter_no?: number | null
+  top_k?: number | null
+  min_score?: number | null
+  include_muted?: boolean
+}
+
+export interface MemorySearchHit {
+  memory: Memory
+  score: number
+  vector_score: number | null
+  keyword_score: number
+}
+
+export interface MemorySearchResult {
+  hits: MemorySearchHit[]
+  mode: SearchMode
+  warnings: string[]
+  candidates: number
+}
+
+/** GET /chapters/{cid}/context-preview：本次生成会注入的两块（带标题行、裁剪前；空串 = 不注入） */
+export interface ContextPreview {
+  knowledge: string
+  memories: string
 }

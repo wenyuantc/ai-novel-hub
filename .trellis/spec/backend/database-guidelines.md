@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）→ `0013`（提示词模板与写作风格：`prompt_overrides` / `prompt_override_versions` / `writing_styles`、`projects.default_style_id`、`chapters.style_id`，`projects.style` 迁移为「原风格」，见 [prompts-styles.md](./prompts-styles.md)）→ `0014`（灵感模式：`projects` 结构化字段 `synopsis` / `theme` / `tags` / `selling_points` / `audience` / `target_words`、`inspiration_sessions`，见 [inspiration.md](./inspiration.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）→ `0013`（提示词模板与写作风格：`prompt_overrides` / `prompt_override_versions` / `writing_styles`、`projects.default_style_id`、`chapters.style_id`，`projects.style` 迁移为「原风格」，见 [prompts-styles.md](./prompts-styles.md)）→ `0014`（灵感模式：`projects` 结构化字段 `synopsis` / `theme` / `tags` / `selling_points` / `audience` / `target_words`、`inspiration_sessions`，见 [inspiration.md](./inspiration.md)）→ `0015`（知识库与剧情记忆：`kb_settings` / `kb_documents` / `kb_chunks` / `story_memories` / `retrieval_chunks`，见 [retrieval.md](./retrieval.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -239,7 +239,10 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   downgrade 把默认风格的 extra（空则 description）写回 `projects.style`；`test_0013_prompt_styles` 断言外键规则、预设与代码一致、
   迁移结果、`(user_id, key)` 唯一、往返后 style 原文无损）、
   `0014_inspiration.py`（`down_revision = '0013'`，`projects` 加 6 列（带 server_default，`target_words` 可空，不回填）、新建
-  `inspiration_sessions`；`test_0014_inspiration` 断言存量项目取默认值、外键规则、删项目后会话保留且引用置空，`downgrade -1` 删除新表新列且存量项目保留）。
+  `inspiration_sessions`；`test_0014_inspiration` 断言存量项目取默认值、外键规则、删项目后会话保留且引用置空，`downgrade -1` 删除新表新列且存量项目保留）、
+  `0015_knowledge_base.py`（`down_revision = '0014'`，只新建五张表、不回填；`ai_configs.model_type` 新增取值 `embedding` 不改表；
+  `retrieval_chunks` 建表带 `sqlite_autoincrement`；`test_0015_knowledge_base` 断言外键规则、两个唯一约束、设置默认值、删章节后手动记忆保留且
+  `chapter_id` 置空、删文档级联分块，`downgrade -1` 删除五张表且存量项目保留）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -346,6 +349,14 @@ outline_id: Mapped[int | None] = mapped_column(
 `0014`：`inspiration_sessions.user_id` 为 CASCADE；`project_id`（从已有项目发起）/ `converted_project_id`（转为的新项目）为 SET NULL
 （删项目后会话保留，可以再次转为项目）。
 
+`0015`：`kb_settings.project_id`（主键）、`kb_documents.project_id`、`kb_chunks.document_id`、`story_memories.project_id`、
+`retrieval_chunks.project_id` 为 CASCADE；`story_memories.chapter_id` / `analysis_id` 为 SET NULL（删章节前服务层先删该章自动记忆，
+手动记忆保留、章号不变）。`retrieval_chunks.ref_id` 指向 `kb_chunks.id` 或 `story_memories.id`，**不做外键**（按 source 区分），
+由业务写入点经 `retrieval_service` 同步删除；`(source, ref_id)` 唯一、`(project_id, source, enabled)` 索引；
+`kb_documents (project_id, sha256)` 唯一（重复上传 409）。列长度：`kb_documents.filename` String(255) / `status` String(24) / `mime` String(100) /
+`warnings` JSON；`kb_chunks.heading_path` String(500)；`story_memories.kind` String(16) / `origin` String(8) / `content_key` String(16)、
+`content` ≤1000（schema）；`retrieval_chunks.source` String(8) / `embedding` LargeBinary（归一化 float32）/ `embedding_key` String(200) / `version` Integer。
+
 关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
 `relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
 
@@ -420,7 +431,7 @@ SSE / 订阅契约见 `error-handling.md`「后台任务与 SSE 契约」。
 # backend/app/models/entities.py
 TASK_KINDS = ("chapter.generate", "chapter.polish", "wizard.outline", "wizard.characters", "wizard.world",
               "character.generate", "organization.generate", "relations.parse", "career.generate", "wizard.careers",
-              "chapter.analyze", "chapter.revise", "outline.continue", "outline.expand", "chapter.batch")
+              "chapter.analyze", "chapter.revise", "outline.continue", "outline.expand", "chapter.batch", "kb.index")
 TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
 ACTIVE_TASK_STATUSES = ("queued", "running")            # 调度、占名额、占 resource_key 部分唯一索引
 OPEN_TASK_STATUSES = (*ACTIVE_TASK_STATUSES, "paused")  # 未结束：「进行中」列表、批量唯一性
@@ -441,7 +452,7 @@ class Task(TimestampMixin, Base):   # tasks
 - **单进程前提**：调度协程与 hub 都在进程内；`start()` 时把库里所有 `running` 任务视为上次进程遗留并置为
   `interrupted`。部署必须是单进程（`Dockerfile` 中 `uvicorn` 不带 `--workers`）。改为多实例前须把领取改成
   `SELECT ... FOR UPDATE SKIP LOCKED` 并引入心跳 / 租约，否则一个实例重启会把其他实例的运行中任务误判为中断。
-- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`；`outline.continue` 为 `outline:{project_id}`、`outline.expand` 为 `expand:{outline_id}`）。插入撞索引 →
+- **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`；`outline.continue` 为 `outline:{project_id}`、`outline.expand` 为 `expand:{outline_id}`；`kb.index` 文档模式为 `kbdoc:{document_id}`、重建为 `kbrebuild:{project_id}`、记忆模式为空，`serial_key = index:{project_id}`）。插入撞索引 →
   回滚 → 409。章节类还会先原子抢占 `chapters.status='generating'`（与插入同一事务，失败时一起回滚）。
   新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。`chapter.revise` 与生成 / 润色共用 `chapter:{id}`（互斥）。
 - **串行键** `serial_key`（`TaskSpec.serial_key`）：冲突时**排队等待**而不是拒绝。调度器扫描 queued 时，同键已有运行中（或本轮已登记）的任务

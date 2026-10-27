@@ -27,6 +27,7 @@
 | [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
 | [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（25 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、写作风格库与解析优先级、风格段注入 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
+| [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码 | 已填写 |
 | [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
@@ -42,6 +43,7 @@
 | 章节上下文组装（选角 D4、裁剪顺序） | [story-entities.md](./story-entities.md#场景章节上下文组装选角与裁剪d4) |
 | 章节号平移（`CHAPTER_NO_REFS`）、细纲建章、快照恢复 | [outline.md](./outline.md) |
 | 批量顺序生成（断点、待审核、范围锁、任务内分析） | [batch-generate.md](./batch-generate.md) |
+| 检索打分与缓存、知识库建索引、剧情记忆同步与召回 | [retrieval.md](./retrieval.md) |
 | 提示词模板（校验 / 渲染 / 覆盖）与写作风格解析 | [prompts-styles.md](./prompts-styles.md) |
 | 管理员角色、用户管理、token 版本控制（`ver`、防护规则） | [auth-admin.md](./auth-admin.md#场景管理员角色用户管理与-token-版本控制) |
 

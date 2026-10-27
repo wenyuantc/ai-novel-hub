@@ -159,6 +159,7 @@ dayjs.locale('zh-cn')
 - 挂载时及每次变更后用 `load(true)`（强制）加载。
 - 编辑表单的 `api_key` 始终为空；保存时仅在非空时才发送该 key（`key ? { ...body, api_key: key } : body`）——参见 [type-safety.md](./type-safety.md) 中的 PATCH 语义。
 - 创建时 API key 为必填，`openai_compat`（本地 LLM）除外。
+- 模型类型（`10-23-knowledge-base`）：文本 / 图片 / **向量模型**（`embedding`），选项由 `modelTypesFor(provider)` 给出——Anthropic 不显示向量模型，切换到 Anthropic 时若已选向量模型自动退回文本模型；选中向量模型时说明 `EMBEDDING_HELP`「用于知识库与剧情记忆的语义检索，不配置时使用关键词检索」。向量 / 图片模型不显示思考与上下文参数（保存时清空）；类型 Tag 颜色 `MODEL_TYPE_COLORS`（向量 cyan）。连通性测试对向量模型的 message 为「连接成功，向量维度 N」，列表以 `embeddingDimension(message)` 额外显示「维度 N」标签。
 - `openai_compat` 的 Base URL 提示说明了 Docker + 宿主机 Ollama 的用法：`http://host.docker.internal:11434/v1（Docker 部署下的本机 Ollama，需部署方开启 ALLOW_PRIVATE_AI_ENDPOINTS）`。未开启该开关时，后端端点防护会拦截私有/回环地址；此时 `POST /ai-configs/{id}/test` 返回 HTTP 200，带 `ok: false` 和后端消息（`backend/app/services/ai_config_service.py` 将 `BadRequestError` 转换为 `AIConfigTestResult(ok=False, message=exc.detail, …)`）。页面显示 `message.error(\`连通失败：${r.message}\`)`，并在连通性列中显示一个带该消息的红色 `失败 · {latency_ms} ms` 标签。
 
 ---
@@ -288,3 +289,23 @@ dayjs.locale('zh-cn')
 - `WizardGenerator`：表单初始值优先取 `project.wizard_progress.params`（store 中的当前项目，`useState` 初始化一次），没有时仍为 2 卷 × 10 章、5 个角色。
 - 纯函数在 `utils/inspiration.ts`（步骤顺序 / 标签、状态推导、stale 文案、`nextFlowStep`、`suggestScale`（`roundHalfEven` 对齐 Python `round`）、应用对比默认勾选与值展示）与 `utils/projectFields.ts`（入口可用：标签规范化、进度、请求体），测试 `utils/inspiration.test.ts`（规模建议与后端 `test_suggest_scale_boundaries` 同一组用例）、`utils/projectFields.test.ts`、`api/inspiration.test.ts`（路径、retry → done 事件顺序、error → `StreamError`）。
 - 包体积（本任务后）：入口 ≈ 143 kB（+≈4 kB：`ProjectInfoFields` 与 `utils/projectFields.ts`）；`InspirationSessionPage-*.js` ≈ 23 kB、`InspirationListPage-*.js` ≈ 4 kB、`inspiration-*.js`（`utils/inspiration.ts`，两页共享）≈ 4 kB、`api/inspiration.ts` ≈ 1.5 kB 按需加载。**规则**：入口 chunk 中的模块不得静态 import `api/inspiration.ts`、`utils/inspiration.ts` 或 `components/inspiration/*`。
+
+### 知识库与剧情记忆（`10-23-knowledge-base`）
+
+后端契约见 [../backend/retrieval.md](../backend/retrieval.md)。入口：项目侧边栏 NAV「知识库」「剧情记忆」（在「伏笔」之后），两页都是 `router.tsx` 的 `lazyPage` 懒加载路由（`/projects/:pid/knowledge`、`/projects/:pid/memories`）；`components/kb/*`、`api/kb.ts`、`api/memories.ts`、`utils/kb.ts`、`hooks/useIndexStatus.ts` 只被这两页（与编辑器的注入预览）引用，不进入口 chunk。
+
+| 组件 | 契约 |
+|-----------|------------------------|
+| `pages/project/KnowledgePanel` | 左：`Upload.Dragger`（`multiple`、`accept = KB_ACCEPT`、`beforeUpload` 返回 false）逐个 `precheckUpload(file, 已有数 + 本批已接受数)`（扩展名 / ≤20MB / 非空 / <200 个，文案与后端一致）→ `kbApi.upload`（multipart）→ `track(result.task)`；**解析在上传请求内同步完成**，格式错误 / 扫描版 PDF 直接 400 `message.error`；重复上传 409 用 `message.warning`（`duplicateDocumentId(err)` 可读出已有文档 id）。文档表：文件名 + 解析 warnings 图标（tooltip）、大小 / 字数、状态 Tag（`KB_DOC_STATUS`：排队中 / 解析中（未使用）/ 建索引中 / 就绪 / **仅关键词** / 失败，tooltip `docStatusHint`，失败显示后端 error）、块数、「参与注入」`Switch`（`PATCH {inject}`，用响应替换该行）、上传时间、`查看分块`（`KbChunksDrawer`）/ `重建索引`（Popconfirm → `reindex` → `track`）/ `删除`（Popconfirm）——处理中的文档禁用重建与删除（后端也会 409）。右：`RetrievalSettingsCard scope="kb"` + `KbSearchDebug`。顶部 `IndexStatusBanner scope="kb"`；关闭自动注入时另有 info 提示。**轮询**：`useIndexStatus(pid, {busy: 有处理中的文档, onTick: 静默刷新文档})`；文档列表在 store `version` 变化（任务结束）后静默刷新（`setData`，不闪 loading）。 |
+| `pages/project/MemoriesPanel` | 筛选（章号起止 `normalizeChapterRange`、类型、来源、钉住 / 屏蔽三态、关键字 `Input.Search`）全部作为查询参数交给后端，改筛选回到第 1 页；服务端分页 50 条。列：章、类型 Tag（`MEMORY_KIND_LABELS` / `MEMORY_KIND_COLORS`）+ 来源、内容（屏蔽的删除线）+ 相关角色、重要度、钉住图标按钮（`aria-label`）、屏蔽 `Switch`（都是 `PATCH` 后替换该行）、操作（`memoryEditable`：手动记忆编辑 / 删除；自动记忆只显示「自动生成」说明）。`新增手动记忆` → `MemoryEditModal`。右：`RetrievalSettingsCard scope="memory"` + `MemorySearchDebug`；顶部 `IndexStatusBanner scope="memory"`。 |
+| `kb/IndexStatusBanner` | `{ projectId; status; scope; onChanged }`。`indexBanner(status, scope)`：**建索引中**（`indexing`，info，不显示按钮）优先于**需要重建**（`needs_rebuild`，warning，带模型名与本类 / 另一类缺向量数量，按钮「重建索引」→ `kbApi.rebuild` → `track`）；没有向量模型时 info「只用关键词检索」+ 去模型配置链接；都正常时不渲染。 |
+| `kb/RetrievalSettingsCard` | `{ projectId; settings; scope: 'kb' \| 'memory'; onSaved }`。同一份项目设置（`/kb/settings`），按 scope **只提交本组字段**：知识库 = 自动注入 / 召回条数 1–20 / 最低分数 0–1 / 注入字数上限 500–8000；记忆 = 召回条数 1–20 / 最低分数 / 注入字数上限 300–6000。附打分与召回范围说明。 |
+| `kb/KbSearchDebug` / `kb/MemorySearchDebug` | 查询 ≤2000 + 可选临时条数 / 最低分（留空 = 按设置）；记忆另有「按第 N 章召回」（`before_chapter_no`）与「包含已屏蔽」（`include_muted`）。结果顶部 `SearchResultSummary`（`searchSummary`：混合 / 仅关键词 + 候选与命中数，后端 warnings 逐条 warning `Alert`——**候选里有块缺少当前模型向量时整次查询只用关键词**，后端以 warning 说明）；每条命中：文件名 + 标题路径（记忆为章号 + 类型 + 钉住 / 屏蔽标签）+ `ScoreTags`（总分着色、向量分（null 显示「—」）、关键词分，`formatScore` 两位小数）+ 内容。 |
+| `kb/KbChunksDrawer` | `{ projectId; document \| null; onClose }`（宽 720，`destroyOnHidden`，内部 `key = document.id`）。文档 warnings、分块列表（`#seq`、标题路径、偏移、字数、内容可展开），服务端分页 20 条。 |
+| `kb/MemoryEditModal` | 新增 / 编辑手动记忆：章号、内容 ≤1000、相关角色 `Select mode=tags`（项目角色名作选项，≤20）、重要度 `Rate`、钉住。自动记忆不进入此弹窗。 |
+| `hooks/useIndexStatus` | `useIndexStatus(pid, {busy?, onTick?}) → {status, refresh, polling, version}`。读取放在 effect 的 promise 回调里（`refresh` 只递增 tick，满足 `react-hooks/set-state-in-effect`）；store `version` 变化时重新读取；本项目有活动 `kb.index` 任务、`status.indexing` 或 `busy` 时每 3 秒刷新并调用 `onTick`。读取失败静默（只影响横幅）。 |
+| `chapter/ContextPreviewPanel` | 章节编辑器「AI 生成」Tab 内（`GenerateForm` 下方）折叠面板「本次注入的旧情节和参考资料」：**首次展开时**才 `GET /chapters/{cid}/context-preview`，标题栏刷新按钮重新读取；两块原样等宽展示（已带【相关旧情节】/【参考资料…】标题行），都为空时说明不会注入。 |
+
+- `TaskPanel`：`kb.index` 标签「建索引」，`taskLink` → `/projects/{pid}/knowledge`（文档 / 重建 / 记忆向量三种模式都跳知识库页）。
+- 包体积（本任务后）：入口 ≈ 138 kB（只多了 `kb.index` 的任务标签 / 跳转与 `api/aiConfigs.ts` 的向量模型标签）；`KnowledgePanel-*.js` ≈ 8 kB、`MemoriesPanel-*.js` ≈ 11 kB、两页共享的 `useIndexStatus-*.js`（横幅、设置卡、分数标签、`api/kb.ts`、`utils/kb.ts`）≈ 9 kB、`memories-*.js`（`api/memories.ts`，记忆页与编辑器共享）≈ 0.5 kB；`ChapterEditorPage-*.js` ≈ 56 kB。**规则**：入口 chunk 中的模块不得静态 import `api/kb.ts`、`api/memories.ts`、`utils/kb.ts` 或 `components/kb/*`。
+- 纯函数在 `utils/kb.ts`（状态文案与轮询判定、上传前检查、分数 / 大小 / 检索说明、索引横幅、记忆类型标签与可编辑判定、章号范围），测试 `utils/kb.test.ts`；接口路径与 multipart 上传、409 `document_id`、记忆查询参数、`modelTypesFor` / `embeddingDimension` 在 `api/kb.test.ts`；`client.ts` 契约（含 FormData）在 `api/client.test.ts`。

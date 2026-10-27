@@ -1,4 +1,4 @@
-from tests.helpers import create_project, register
+from tests.helpers import create_project, register, wait_task
 
 
 async def test_project_crud(client):
@@ -80,6 +80,12 @@ async def test_cross_user_isolation(client, make_client):
     style = (await client.post("/api/v1/styles", json={"name": "我的风格"})).json()
     insp = (await client.post("/api/v1/inspiration/sessions", json={"idea": "想法"})).json()
     insp_url = f"/api/v1/inspiration/sessions/{insp['id']}"
+    upload = await client.post(
+        f"{base}/kb/documents", files={"file": ("设定.md", "# 门派\n\n天剑宗".encode(), "text/markdown")}
+    )
+    doc = upload.json()["document"]
+    await wait_task(client, upload.json()["task"]["id"])
+    mem = (await client.post(f"{base}/memories", json={"chapter_no": 1, "content": "备忘"})).json()
 
     bob = make_client()
     await register(bob, "bob")
@@ -209,6 +215,22 @@ async def test_cross_user_isolation(client, make_client):
         ("POST", f"{insp_url}/convert"),
         ("GET", f"{insp_url}/apply-preview?project_id={p['id']}"),
         ("POST", f"{insp_url}/apply"),
+        ("GET", f"{base}/kb/settings"),
+        ("PATCH", f"{base}/kb/settings"),
+        ("GET", f"{base}/kb/documents"),
+        ("PATCH", f"{base}/kb/documents/{doc['id']}"),
+        ("DELETE", f"{base}/kb/documents/{doc['id']}"),
+        ("POST", f"{base}/kb/documents/{doc['id']}/reindex"),
+        ("GET", f"{base}/kb/documents/{doc['id']}/chunks"),
+        ("POST", f"{base}/kb/search"),
+        ("GET", f"{base}/kb/index-status"),
+        ("POST", f"{base}/kb/rebuild"),
+        ("GET", f"{base}/memories"),
+        ("POST", f"{base}/memories"),
+        ("POST", f"{base}/memories/search"),
+        ("PATCH", f"{base}/memories/{mem['id']}"),
+        ("DELETE", f"{base}/memories/{mem['id']}"),
+        ("GET", f"/api/v1/chapters/{ch['id']}/context-preview"),
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
@@ -240,6 +262,10 @@ async def test_cross_user_isolation(client, make_client):
         f"{insp_url}/steps/title": {"action": "skip"},
         f"{insp_url}/notes": {"text": "x"},
         f"{insp_url}/apply": {"project_id": p["id"], "fields": []},
+        f"{base}/kb/documents/{doc['id']}": {"inject": False},
+        f"{base}/kb/search": {"query": "天剑宗"},
+        f"{base}/memories": {"chapter_no": 1, "content": "x"},
+        f"{base}/memories/search": {"query": "备忘"},
     }
     for method, url in checks:
         body = None
@@ -258,3 +284,5 @@ async def test_cross_user_isolation(client, make_client):
     assert len((await client.get(f"{base}/characters/{c1['id']}/career-history")).json()) == 1
     assert len((await client.get(f"{base}/outlines/{outline['id']}/plans")).json()) == 1
     assert len((await client.get(f"{base}/outline-snapshots")).json()) == 1
+    assert [d["inject"] for d in (await client.get(f"{base}/kb/documents")).json()] == [True]
+    assert (await client.get(f"{base}/memories")).json()["total"] == 1

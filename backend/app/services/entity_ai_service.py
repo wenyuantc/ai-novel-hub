@@ -28,6 +28,7 @@ from app.ai.prompts import (
     build_character_generate_messages,
     build_organization_generate_messages,
     build_relations_parse_messages,
+    format_project_info,
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import BadRequestError
@@ -35,7 +36,14 @@ from app.core.security import SecretCipher
 from app.models import Character, Organization, OrganizationMember
 from app.models.entities import RELATION_CATEGORIES
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
-from app.services import ai_config_service, career_service, prompt_service, relationship_service, story_service
+from app.services import (
+    ai_config_service,
+    career_service,
+    kb_service,
+    prompt_service,
+    relationship_service,
+    story_service,
+)
 from app.services.cast_service import is_protagonist_role
 from app.services.context_builder import MEMBER_STATUS_LABELS
 from app.services.generation_service import Event
@@ -482,6 +490,19 @@ async def build_entity_job(
     instruction = str(params.get("instruction") or "")
     character_id: int | None = None
     options: dict[str, Any] = {}
+    knowledge = ""
+    if kind != "relations.parse":
+        # 知识库参考资料：查询 = 生成请求中的描述 + 作品信息
+        knowledge = await kb_service.knowledge_for_project(
+            db,
+            project,
+            "\n".join([instruction, str(params.get("role_type") or ""), format_project_info(info)]),
+            cipher=cipher,
+            factory=factory,
+            ai_timeout=ai_timeout,
+            allow_private=allow_private,
+            purpose=kind,
+        )
     if kind == "career.generate":
         world = await story_service.list_items(db, story_service.WORLD, project_id)
         options = {"count": int(params.get("count") or 3), "kind": params.get("kind")}
@@ -492,6 +513,7 @@ async def build_entity_job(
             world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
             careers_text=_clip(await career_service.careers_detail_reference(db, project_id), REFERENCE_CAREERS_CHARS),
             instruction=instruction,
+            knowledge=knowledge,
             override=override,
         )
     elif kind == "relations.parse":
@@ -515,6 +537,7 @@ async def build_entity_job(
             "roster_text": _clip(story_service.format_roster(characters), REFERENCE_ROSTER_CHARS),
             "organizations_text": _clip(await _orgs_text(db, project_id), REFERENCE_ORGS_CHARS),
             "instruction": instruction,
+            "knowledge": knowledge,
             "override": override,
         }
         if kind == "character.generate":

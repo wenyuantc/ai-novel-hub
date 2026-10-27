@@ -47,7 +47,15 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 | 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` | `json_rule`、`output_format` |
 | 大纲 | `outline.continue` / `outline.expand` | `json_rule`、`output_format` |
 | 风格 | `style.block`（风格段，只取 user 段并 strip）、`style.extract`（JSON）、`style.trial` | extract：`json_rule`、`output_format` |
-| 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
+| 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback / knowledge`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
+
+- **检索块变量**（`10-23-knowledge-base`，见 [retrieval.md](./retrieval.md)）：`knowledge`（知识库参考资料正文，`KNOWLEDGE_VAR`）声明在
+  `wizard.*`（4 个）、`entity.character` / `entity.organization` / `entity.career`、`outline.continue` / `outline.expand`、`inspiration.*`（6 个）；
+  `memories`（相关旧情节，`MEMORIES_VAR`）声明在 `outline.continue` / `outline.expand`。默认模板写
+  `{% if knowledge %}\n\n【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】\n{{ knowledge }}\n{% endif %}`（一般放在
+  「作者额外要求」之前；续写放在「发展方向」之前，`memories` 放在「前文进展」之后 / 展开放在「相邻章纲」之后），**变量为空时整段不输出，parity 不变**。
+  build 函数新增关键字参数 `knowledge: str = ""`（大纲另有 `memories: str = ""`）。章节类模板不加变量：检索块由 `context_builder` 拼进 `{{ context }}`。
+  新增这些变量会改变默认模板指纹，已覆盖的用户会看到「默认已更新」；覆盖里没有引用变量时不注入。
 
 - 引擎：`SandboxedEnvironment(undefined=StrictUndefined, trim_blocks, lstrip_blocks, keep_trailing_newline)`；`globals` 清空
   （无 `range` / `lipsum` / `cycler` / `joiner` / `namespace` / `dict`）；过滤器白名单 `join length count trim default d upper lower first last string`。

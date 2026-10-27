@@ -26,6 +26,8 @@ from app.models import (
     Outline,
     Relationship,
     RelationshipHistory,
+    RetrievalChunk,
+    StoryMemory,
 )
 
 
@@ -71,6 +73,9 @@ CHAPTER_NO_REFS: tuple[ChapterNoRef, ...] = (
     ChapterNoRef(Foreshadow, "actual_plant_chapter", _direct(Foreshadow)),
     ChapterNoRef(Foreshadow, "planned_resolve_chapter", _direct(Foreshadow)),
     ChapterNoRef(Foreshadow, "actual_resolve_chapter", _direct(Foreshadow)),
+    # 剧情记忆与其检索单元（knowledge-base）：召回「本章之前」依赖章节号
+    ChapterNoRef(StoryMemory, "chapter_no", _direct(StoryMemory)),
+    ChapterNoRef(RetrievalChunk, "chapter_no", _direct(RetrievalChunk)),
 )
 
 

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, ChapterPlan, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
-from app.services import style_service, version_service
+from app.services import memory_service, style_service, version_service
 from app.services.project_service import get_owned_project
 
 _WS_RE = re.compile(r"\s+")
@@ -157,6 +157,9 @@ async def update_chapter(
         await style_service.ensure_assignable(db, user_id, data.style_id)
         chapter.style_id = data.style_id
     if data.chapter_no is not None:
+        if data.chapter_no != chapter.chapter_no:
+            # 剧情记忆按章号召回：该章的记忆跟随
+            await memory_service.on_chapter_renumbered(db, chapter.id, data.chapter_no)
         chapter.chapter_no = data.chapter_no
     if data.title is not None:
         chapter.title = data.title.strip()
@@ -176,5 +179,7 @@ async def update_chapter(
 
 async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> None:
     chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    # 先删该章的自动记忆与检索单元（手动记忆保留，chapter_id 由外键置空）
+    await memory_service.on_chapters_deleted(db, [chapter.id])
     await db.delete(chapter)
     await db.commit()

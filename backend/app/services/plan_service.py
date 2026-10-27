@@ -30,7 +30,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline
 from app.schemas.chapter import ChapterBrief
 from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
-from app.services import outline_snapshot_service
+from app.services import memory_service, outline_snapshot_service
 from app.services.chapter_numbering import shift_chapter_numbers
 from app.services.project_service import get_owned_project
 
@@ -187,6 +187,7 @@ async def sync_plans(
     await db.flush()
     # 空章节随细纲删除：从后往前删，其后的章节号整体 -1
     ordered = sorted(removed_chapters, key=lambda c: (c.chapter_no, c.id), reverse=True)
+    await memory_service.on_chapters_deleted(db, [c.id for c in ordered])
     for i, ch in enumerate(ordered):
         no = ch.chapter_no
         await db.delete(ch)

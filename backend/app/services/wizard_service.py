@@ -29,6 +29,7 @@ from app.ai.prompts import (
     build_characters_messages,
     build_outline_messages,
     build_world_messages,
+    format_project_info,
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import AppError
@@ -41,6 +42,7 @@ from app.schemas.story import CharacterOut, OutlineOut, WorldSettingOut
 from app.services import (
     ai_config_service,
     career_service,
+    kb_service,
     outline_service,
     outline_snapshot_service,
     prompt_service,
@@ -110,6 +112,17 @@ async def build_wizard_job(
 
     info = await project_info(db, project)
     override = await prompt_service.get_override(db, user_id, f"wizard.{kind}")
+    # 知识库参考资料：查询 = 作品信息 + 本步骤的额外要求
+    knowledge = await kb_service.knowledge_for_project(
+        db,
+        project,
+        "\n".join([format_project_info(info), req.instruction]),
+        cipher=cipher,
+        factory=factory,
+        ai_timeout=ai_timeout,
+        allow_private=allow_private,
+        purpose=f"向导：{kind}",
+    )
     world_text = story_service.format_world(await story_service.list_items(db, story_service.WORLD, project_id))
     characters_text = story_service.format_characters(
         await story_service.list_items(db, story_service.CHARACTERS, project_id)
@@ -133,6 +146,7 @@ async def build_wizard_job(
             world_text=world_text,
             characters_text=characters_text,
             instruction=req.instruction,
+            knowledge=knowledge,
             override=override,
             **append_kwargs,
         )
@@ -144,11 +158,17 @@ async def build_wizard_job(
             outline_text=outline_text,
             instruction=req.instruction,
             careers_text=await career_service.careers_reference(db, project_id),
+            knowledge=knowledge,
             override=override,
         )
     elif kind == "careers":
         messages = build_careers_wizard_messages(
-            info, career_count=req.career_count, world_text=world_text, instruction=req.instruction, override=override
+            info,
+            career_count=req.career_count,
+            world_text=world_text,
+            instruction=req.instruction,
+            knowledge=knowledge,
+            override=override,
         )
     else:
         messages = build_world_messages(
@@ -156,6 +176,7 @@ async def build_wizard_job(
             outline_text=outline_text,
             characters_text=characters_text,
             instruction=req.instruction,
+            knowledge=knowledge,
             override=override,
         )
     return WizardJob(

@@ -6,7 +6,8 @@
 - 排队：分析任务 serial_key = analysis:{project_id}，同项目串行、按入队顺序执行，不同项目并行；不写生成记录。
   enqueue_auto（AI 生成 / 润色 / 重写成功后的 on_success）以项目所有者为 user_id 直接入队，不做 AI 配置的请求级校验，
   配置在运行时解析；同章已有排队中的分析则不再入队（运行中的不算，便于分析最新正文）。
-- 设定回写见 writeback_service（与分析结果同一事务落库）。
+- 设定回写见 writeback_service（与分析结果同一事务落库）；剧情记忆见 memory_service.sync_from_analysis（同一事务），
+  任务成功后有向量模型时排队 kb.index 记忆任务生成向量（AnalysisHandler.on_success）。
 - 评分 overall 由服务端对 pacing / engagement / coherence 三项求平均后复算；metrics 由本地规则计算，不依赖模型。
 """
 
@@ -41,6 +42,7 @@ from app.services import (
     career_service,
     cast_service,
     foreshadow_service,
+    memory_service,
     organization_service,
     prompt_service,
     relationship_service,
@@ -733,7 +735,8 @@ async def run_analysis_job(job: AnalysisJob, sessionmaker: async_sessionmaker[As
             raise AIProviderError("模型未返回任何内容")
         data, warnings = normalize_analysis(extract_json(raw))
         async with sessionmaker() as db:
-            if await db.get(Chapter, job.chapter_id) is None:
+            chapter = await db.get(Chapter, job.chapter_id)
+            if chapter is None:
                 yield "error", {"detail": "章节已被删除，分析结果未保存"}
                 return
             task_id = job.task_id if job.task_id is not None and await db.get(Task, job.task_id) else None
@@ -762,6 +765,8 @@ async def run_analysis_job(job: AnalysisJob, sessionmaker: async_sessionmaker[As
             db.add(analysis)
             await db.flush()
             changes = await writeback_service.apply_analysis(db, analysis, data)
+            # 剧情记忆：替换本章自动记忆（按类型 + 内容继承钉住 / 屏蔽），与分析同一事务
+            await memory_service.sync_from_analysis(db, chapter, analysis)
             await db.commit()
             counts: dict[str, int] = {}
             for c in changes:

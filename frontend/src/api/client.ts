@@ -91,8 +91,11 @@ export interface RequestOptions {
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<Response> {
   const { method = 'GET', body, query, signal } = options
   const headers: Record<string, string> = { Accept: 'application/json' }
-  let payload: string | undefined
-  if (body !== undefined) {
+  let payload: string | FormData | undefined
+  if (body instanceof FormData) {
+    // multipart：不设 Content-Type，由浏览器带上 boundary
+    payload = body
+  } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
     payload = JSON.stringify(body)
   }
@@ -120,6 +123,9 @@ export const api = {
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body }),
   del: (path: string, query?: Record<string, QueryValue>) => request<void>(path, { method: 'DELETE', query }),
+  /** multipart/form-data 上传（POST，body 为 FormData） */
+  upload: <T>(path: string, form: FormData, signal?: AbortSignal) =>
+    request<T>(path, { method: 'POST', body: form, signal }),
 }
 
 /** 把任意错误转成适合展示的中文消息。 */

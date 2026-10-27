@@ -94,3 +94,17 @@ class GeminiProvider(LLMProvider):
             return result
         except Exception as exc:  # noqa: BLE001
             raise AIProviderError(describe_error(exc)) from exc
+
+    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+        """多条文本一次请求（Gemini API 走 batchEmbedContents）。"""
+        try:
+            client = self._client()
+            resp = await client.aio.models.embed_content(model=model, contents=list(texts))
+            vectors = [list(e.values or []) for e in (resp.embeddings or [])]
+        except AIProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise AIProviderError(describe_error(exc)) from exc
+        if len(vectors) != len(texts):
+            raise AIProviderError(f"模型调用失败：向量数量不符（请求 {len(texts)} 条，返回 {len(vectors)} 条）")
+        return vectors

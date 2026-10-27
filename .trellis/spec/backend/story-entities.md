@@ -165,13 +165,20 @@ def assemble_context(*, project_text, world_text, cast: CastSection | None, outl
   `PriorChapter.summary` 默认空串，`assemble_context` 签名不变。
 - `【伏笔提醒】`（`10-26-foreshadows`，见文末「伏笔管理」）位于【当前卷大纲】之后、【前情提要】之前；`assemble_context(..., foreshadows=ForeshadowSection | None)`
   可选参数，没有可提醒的伏笔时整段不出现、上下文与之前逐字一致。
-- 裁剪顺序（文件头注释为准）：更早章节摘要 → 最近正文开头 → 世界观尾部 → **伏笔提醒整档去掉「长线」→ 再整档去掉「即将到期」** → **名单（从尾部逐个）→ 关系描述（从尾部逐条去掉）→
+- 检索块（`10-23-knowledge-base`，见 [retrieval.md](./retrieval.md)）：`build_chapter_context(..., *, embedder=None)`（可选关键字参数，
+  generate / revise / 批量传入当前用户的向量模型）；`assemble_context(..., knowledge: str = "", memories: MemorySection | None = None)`。
+  `【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】` 位于【世界观】之后；`【相关旧情节】` 位于【前情提要】之后、【最近章节正文】之前，
+  条目已按章号排列（`MemoryLine(text, pinned, rank)`）。查询 = 章节标题 + 梗概 + 关键事件 + 涉及角色名（`CastSection.names`，不进上下文；
+  记忆另加叙事目标）。`prior_coverage(prior)` 给出（全文章节号, 有分析摘要的更早章节号），按裁剪前划分传给 `memory_service.recall`。
+  两块都为空时上下文与之前逐字一致；检索出错时对应块为空、不阻断生成。
+- 裁剪顺序（文件头注释为准）：**参考资料尾部 → 相关旧情节中未钉住的条目（rank 大 = 最不相关的先丢）** → 更早章节摘要 → 最近正文开头 → 世界观尾部 → **伏笔提醒整档去掉「长线」→ 再整档去掉「即将到期」** → **名单（从尾部逐个）→ 关系描述（从尾部逐条去掉）→
   关系（从尾部）→ 相关组织 → 涉及角色卡（尾部的角色先被截，主角在最前）** → 当前卷大纲 → 硬截断。
 
 ### 6. 必需的测试
 
 `tests/test_cast_context.py`（匹配规则含「林 / 林远 / 林远山」、30 角色端到端提示词、裁剪顺序）、`tests/test_context_builder.py`
-（原有预算用例改用 `CastSection`；伏笔提醒位置 / 五档顺序 / 裁剪顺序 / 无伏笔不变 / 端到端第 8 章提示词）。
+（原有预算用例改用 `CastSection`；伏笔提醒位置 / 五档顺序 / 裁剪顺序 / 无伏笔不变 / 端到端第 8 章提示词；检索块为空不变 / 位置 /
+先裁参考资料再丢未钉住旧情节 / `prior_coverage`）、`tests/test_memories.py`（端到端召回范围与位置）。
 
 ### 7. 错误写法
 
@@ -308,6 +315,8 @@ async def project_states / chapter_state / list_analyses / get_analysis
 async def apply_analysis(db, analysis, data) -> list[AnalysisChange]   # 不 commit，与分析同一事务
 async def set_character_field(db, character, "current_state" | "life_status", value) -> before   # 角色状态的回写入口
 async def revert_change / confirm_change / reject_change(db, user_id, change_id) -> AnalysisChangeOut   # commit
+# memory_service（knowledge-base，见 retrieval.md「剧情记忆」）
+async def sync_from_analysis(db, chapter, analysis) -> list[StoryMemory]   # 不 commit：apply_analysis 之后、同一事务
 ```
 
 ### 3. 契约

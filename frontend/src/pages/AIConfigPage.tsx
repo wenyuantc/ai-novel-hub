@@ -19,7 +19,15 @@ import {
   Typography,
 } from 'antd'
 import { useEffect, useState } from 'react'
-import { aiConfigApi, MODEL_TYPE_LABELS, PROVIDER_LABELS, THINKING_LABELS } from '../api/aiConfigs'
+import {
+  aiConfigApi,
+  EMBEDDING_HELP,
+  embeddingDimension,
+  MODEL_TYPE_LABELS,
+  modelTypesFor,
+  PROVIDER_LABELS,
+  THINKING_LABELS,
+} from '../api/aiConfigs'
 import { errorMessage } from '../api/client'
 import type {
   AIConfig,
@@ -54,7 +62,7 @@ const THINKING_OPTIONS = (Object.keys(THINKING_LABELS) as ThinkingLevel[]).map((
 /** 列表中的参数标签 */
 function paramTags(c: AIConfig): string[] {
   // 思考与上下文参数仅作用于文本生成
-  if (c.model_type === 'image') return []
+  if (c.model_type !== 'text') return []
   const k = (v: number | null) => (v ? `${v}K` : '默认')
   return [`思考 ${THINKING_LABELS[c.thinking_level]}`, `上下文 ${k(c.context_window_k)}`, `输出 ${k(c.max_output_k)}`]
 }
@@ -70,7 +78,14 @@ const MODEL_HINTS: Record<ModelType, Record<ProviderName, string>> = {
     anthropic: '填写接口提供的图片模型名',
     gemini: '例如：imagen-4.0-generate-001',
   },
+  embedding: {
+    openai_compat: '例如：text-embedding-3-small、bge-m3、nomic-embed-text',
+    anthropic: 'Anthropic 不提供向量模型',
+    gemini: '例如：gemini-embedding-001、text-embedding-004',
+  },
 }
+
+const MODEL_TYPE_COLORS: Record<ModelType, string> = { text: 'green', image: 'purple', embedding: 'cyan' }
 
 export default function AIConfigPage() {
   const { message } = App.useApp()
@@ -138,7 +153,7 @@ export default function AIConfigPage() {
       model: v.model.trim(),
       model_type: v.model_type,
       is_default: v.is_default,
-      // 图片模型不使用思考与上下文参数，统一清空
+      // 图片 / 向量模型不使用思考与上下文参数，统一清空
       thinking_level: isText ? v.thinking_level : 'off',
       // null = 清空恢复默认
       context_window_k: isText ? (v.context_window_k ?? null) : null,
@@ -222,7 +237,7 @@ export default function AIConfigPage() {
       >
         <Typography.Paragraph type="secondary">
           支持 OpenAI 兼容接口（含各类中转、DeepSeek、本地 Ollama 等）、Anthropic Claude 与 Google Gemini。API Key
-          在服务端加密存储，此处仅显示掩码。文本模型与图片模型各自可设一个「默认」，生成时未指定配置则使用对应类型的默认配置。
+          在服务端加密存储，此处仅显示掩码。文本模型、图片模型与向量模型各自可设一个「默认」，生成时未指定配置则使用对应类型的默认配置。向量模型{EMBEDDING_HELP}（Anthropic 不提供）。
         </Typography.Paragraph>
         <Table<AIConfig>
           rowKey="id"
@@ -240,7 +255,7 @@ export default function AIConfigPage() {
                   <Space size={6}>
                     <Typography.Text strong>{r.name}</Typography.Text>
                     <Tag
-                      color={r.model_type === 'image' ? 'purple' : 'green'}
+                      color={MODEL_TYPE_COLORS[r.model_type]}
                       bordered={false}
                       style={{ marginInlineEnd: 0 }}
                     >
@@ -310,9 +325,16 @@ export default function AIConfigPage() {
                 if (!t) return <Typography.Text type="secondary">未测试</Typography.Text>
                 return (
                   <Space direction="vertical" size={0}>
-                    <Tag color={t.ok ? 'success' : 'error'}>
-                      {t.ok ? '正常' : '失败'} · {t.latency_ms} ms
-                    </Tag>
+                    <Space size={4} wrap>
+                      <Tag color={t.ok ? 'success' : 'error'} style={{ marginInlineEnd: 0 }}>
+                        {t.ok ? '正常' : '失败'} · {t.latency_ms} ms
+                      </Tag>
+                      {t.ok && r.model_type === 'embedding' && embeddingDimension(t.message) !== null && (
+                        <Tag color="cyan" bordered={false} style={{ marginInlineEnd: 0 }}>
+                          维度 {embeddingDimension(t.message)}
+                        </Tag>
+                      )}
+                    </Space>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: t.message }}>
                       {t.message}
                     </Typography.Text>
@@ -375,11 +397,16 @@ export default function AIConfigPage() {
           <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, message: '请输入名称' }]}>
             <Input placeholder="例如：DeepSeek 主力" maxLength={100} />
           </Form.Item>
-          <Form.Item name="model_type" label="模型类型" rules={[{ required: true }]}>
+          <Form.Item
+            name="model_type"
+            label="模型类型"
+            rules={[{ required: true }]}
+            extra={modelType === 'embedding' ? EMBEDDING_HELP : undefined}
+          >
             <Radio.Group
               optionType="button"
               buttonStyle="solid"
-              options={(Object.keys(MODEL_TYPE_LABELS) as ModelType[]).map((t) => ({
+              options={modelTypesFor(provider).map((t) => ({
                 value: t,
                 label: MODEL_TYPE_LABELS[t],
               }))}
@@ -387,7 +414,13 @@ export default function AIConfigPage() {
           </Form.Item>
           <Form.Item name="provider" label="接口类型" rules={[{ required: true }]}>
             <Select
-              onChange={() => setModels([])}
+              onChange={(p: ProviderName) => {
+                setModels([])
+                // Anthropic 不提供向量模型：切换过去时退回文本模型
+                if (!modelTypesFor(p).includes(form.getFieldValue('model_type') as ModelType)) {
+                  form.setFieldValue('model_type', 'text')
+                }
+              }}
               options={(Object.keys(PROVIDER_LABELS) as ProviderName[]).map((p) => ({
                 value: p,
                 label: PROVIDER_LABELS[p],

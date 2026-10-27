@@ -118,7 +118,9 @@ async def test_registration_disabled(client): ...
 `fake.calls` 记录 `provider/api_key/base_url/model/messages/max_tokens/thinking`，用于 prompt 和
 参数断言。队列为空时产出 `["ok"]`。分片中可放 `Gate()`：流到达时置 `gate.reached`，`gate.release()` 后才继续，
 用于取消 / 并发 / 排队测试；`fake.aborted` 记录未产出完就被关闭的流数量。`fake.models`（`{"id", "name"?}` 列表或一个
-`AIProviderError`）驱动 `list_models()`；`fake.list_calls` 记录 `provider/api_key/base_url/timeout`。
+`AIProviderError`）驱动 `list_models()`；`fake.list_calls` 记录 `provider/api_key/base_url/timeout`。`embed(texts, model)` 返回 `fake_vector(text, fake.embed_dim)`（按字符二元组哈希的确定性向量，默认 64 维），
+`fake.embed_calls` 记录 `provider/model/texts`，`fake.embed_error` 抛出一次（`embed_error_sticky=True` 时持续抛出）。知识库样例文件由
+`tests/kb_fixtures.py` 现场生成（docx / epub 用 zipfile，pdf 用 pypdf），不提交二进制文件。
 
 ### 不访问真实 DNS
 

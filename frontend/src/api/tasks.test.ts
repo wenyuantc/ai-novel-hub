@@ -296,6 +296,10 @@ describe('task helpers', () => {
     expect(taskLink(task({ project_id: null }))).toBeNull()
   })
 
+  it('taskLink：建索引到知识库页', () => {
+    expect(taskLink(task({ kind: 'kb.index', chapter_id: null }))).toBe('/projects/2/knowledge')
+  })
+
   it('taskLink：大纲续写 / 展开到大纲页', () => {
     expect(taskLink(task({ kind: 'outline.continue', chapter_id: null }))).toBe('/projects/2/outlines')
     expect(taskLink(task({ kind: 'outline.expand', chapter_id: null, outline_id: 5 }))).toBe('/projects/2/outlines')

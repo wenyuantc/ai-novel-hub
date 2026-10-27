@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Task
 from app.schemas.analysis import AnalyzeRequest
-from app.services import analysis_service
+from app.services import analysis_service, kb_index_service
 from app.services.task_engine.registry import Event, TaskContext, TaskSpec, register
 
 
@@ -66,6 +66,10 @@ class AnalysisHandler:
     async def on_abort(self, ctx: TaskContext, task: Task) -> None:
         # 分析只在成功时一次性落库，失败 / 取消没有需要还原的状态
         return None
+
+    async def on_success(self, ctx: TaskContext, task: Task) -> None:
+        # 本章记忆已与分析同一事务写入（关键词即可检索）；有向量模型时排队生成向量
+        await kb_index_service.enqueue_memory(ctx.sessionmaker, task.project_id)
 
 
 register(AnalysisHandler())

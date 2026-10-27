@@ -11,6 +11,11 @@
 【前文进展（每章摘要）】
 {{ story_so_far }}
 {% endif %}
+{% if memories %}
+
+【相关旧情节】
+{{ memories }}
+{% endif %}
 {% if recent_outlines %}
 
 【最近的章纲】
@@ -20,6 +25,11 @@
 
 【尚未回收的伏笔】
 {{ foreshadows }}
+{% endif %}
+{% if knowledge %}
+
+【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】
+{{ knowledge }}
 {% endif %}
 {% if direction %}
 

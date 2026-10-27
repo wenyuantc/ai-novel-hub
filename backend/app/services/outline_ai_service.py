@@ -35,9 +35,12 @@ from app.schemas.outline import (
 from app.services import (
     ai_config_service,
     foreshadow_service,
+    kb_service,
+    memory_service,
     outline_service,
     plan_service,
     prompt_service,
+    retrieval_service,
     story_service,
 )
 from app.services.context_builder import latest_summaries
@@ -242,8 +245,8 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "……"
 
 
-async def _story_so_far(db: AsyncSession, project_id: int) -> str:
-    """最近 10 章（有分析摘要的）的摘要。"""
+async def _story_so_far(db: AsyncSession, project_id: int) -> tuple[str, set[int]]:
+    """最近 10 章（有分析摘要的）的摘要，以及这些章节的章节号（召回旧情节时不再重复它们的摘要）。"""
     rows = (
         await db.execute(
             select(Chapter.id, Chapter.chapter_no, Chapter.title)
@@ -253,7 +256,8 @@ async def _story_so_far(db: AsyncSession, project_id: int) -> str:
     ).all()
     summaries = await latest_summaries(db, project_id, [r[0] for r in rows])
     picked = [(no, title, summaries[cid]) for cid, no, title in rows if cid in summaries][:RECENT_SUMMARIES]
-    return "\n".join(f"第{no}章 {title}：{' '.join(s.split())}" for no, title, s in reversed(picked))
+    text = "\n".join(f"第{no}章 {title}：{' '.join(s.split())}" for no, title, s in reversed(picked))
+    return text, {no for no, _, _ in picked}
 
 
 async def _open_foreshadows(db: AsyncSession, project_id: int, next_no: int) -> str:
@@ -333,6 +337,12 @@ async def build_outline_job(
         else:
             volume_hint = "这是全书的第 1 卷。"
         world = await story_service.list_items(db, story_service.WORLD, project_id)
+        story_so_far, summarized = await _story_so_far(db, project_id)
+        # 检索：查询 = 作者给的方向 + 最近的章纲标题；旧情节只召回续写起点之前的
+        query = "\n".join([req.direction, *(o.title for o in outlines[-RECENT_OUTLINES:])])
+        knowledge, memories = await _retrieval(
+            db, project, next_no, query, summarized, cipher, factory, ai_timeout, allow_private, "大纲续写"
+        )
         job.messages = build_outline_continue_messages(
             info,
             count=req.count,
@@ -342,9 +352,11 @@ async def build_outline_job(
             recent_outlines_text=_clip(
                 story_service.format_outlines(outlines[-RECENT_OUTLINES:]), REFERENCE_TEXT_CHARS
             ),
-            story_so_far_text=_clip(await _story_so_far(db, project_id), REFERENCE_TEXT_CHARS),
+            story_so_far_text=_clip(story_so_far, REFERENCE_TEXT_CHARS),
             foreshadows_text=await _open_foreshadows(db, project_id, next_no),
             direction=req.direction,
+            knowledge=knowledge,
+            memories=memories,
             override=job.override,
         )
         job.count = req.count
@@ -361,6 +373,19 @@ async def build_outline_job(
     after = outlines[idx + 1 : idx + 1 + NEIGHBORS]
     neighbors = [f"（前）{_outline_line(o)}" for o in before] + [f"（后）{_outline_line(o)}" for o in after]
     characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
+    # 检索：查询 = 要展开的章纲；旧情节只召回这条章纲之前的
+    knowledge, memories = await _retrieval(
+        db,
+        project,
+        outline.chapter_no,
+        "\n".join([outline.title, outline.summary, req_e.instruction]),
+        set(),
+        cipher,
+        factory,
+        ai_timeout,
+        allow_private,
+        "大纲展开",
+    )
     job.outline_id = outline_id
     job.total = req_e.count
     job.count = req_e.count - len(kept)
@@ -372,8 +397,33 @@ async def build_outline_job(
         "roster_text": _clip(story_service.format_roster(characters), REFERENCE_ROSTER_CHARS),
         "kept_text": "\n".join(_kept_line(p) for p in kept),
         "instruction": req_e.instruction,
+        "knowledge": knowledge,
+        "memories": memories,
     }
     return job
+
+
+async def _retrieval(
+    db: AsyncSession,
+    project: Any,
+    chapter_no: int,
+    query: str,
+    summarized: set[int],
+    cipher: SecretCipher,
+    factory: ProviderFactory,
+    ai_timeout: float,
+    allow_private: bool,
+    purpose: str,
+) -> tuple[str, str]:
+    """(参考资料正文, 相关旧情节)；检索出错或没有内容时为空串。"""
+    embedder = await retrieval_service.get_embedder(
+        db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+    )
+    knowledge = await kb_service.knowledge_text(db, project, query, embedder=embedder, purpose=purpose)
+    recalled = await memory_service.recall(
+        db, project, chapter_no, query, embedder=embedder, summary_chapter_nos=summarized
+    )
+    return knowledge, memory_service.format_lines(recalled)
 
 
 def expand_messages(job: OutlineJob, count: int, previous_events: list[str]) -> list[ChatMessage]:
@@ -388,6 +438,8 @@ def expand_messages(job: OutlineJob, count: int, previous_events: list[str]) -> 
         count=count,
         total=job.total,
         instruction=job.prompt_parts["instruction"],
+        knowledge=job.prompt_parts.get("knowledge", ""),
+        memories=job.prompt_parts.get("memories", ""),
         override=job.override,
     )
 

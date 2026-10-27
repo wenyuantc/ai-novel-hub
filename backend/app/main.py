@@ -1,4 +1,5 @@
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,7 +14,8 @@ from app.core.config import Settings, get_settings
 from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
-from app.services import auth_service, style_service
+from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
+from app.services import auth_service, kb_parser, style_service
 from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
 
@@ -89,6 +91,19 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # 知识库上传：在 multipart 解析（写临时文件）之前拦截超大请求体
+    app.add_middleware(
+        UploadLimitMiddleware,
+        rules=[
+            (
+                "POST",
+                re.compile(r"/api/v1/projects/\d+/kb/documents"),
+                kb_parser.MAX_FILE_BYTES + MULTIPART_OVERHEAD,
+                kb_parser.TOO_LARGE,
+            )
+        ],
+    )
 
     register_error_handlers(app)
 

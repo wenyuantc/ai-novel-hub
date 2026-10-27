@@ -16,6 +16,8 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    RetrievalChunk,
+    StoryMemory,
     User,
 )
 from app.services.chapter_numbering import CHAPTER_NO_REFS, shift_chapter_numbers
@@ -32,7 +34,7 @@ def test_all_chapter_no_columns_registered():
     registered = {ref.key for ref in CHAPTER_NO_REFS}
     assert found - registered == set()
     assert registered - found == set()
-    assert len(registered) == 11
+    assert len(registered) == 13
 
 
 async def _seed(db, user_id: int, title: str, nos: tuple[int, ...]) -> dict:
@@ -50,7 +52,9 @@ async def _seed(db, user_id: int, title: str, nos: tuple[int, ...]) -> dict:
     )
     db.add(rel)
     await db.flush()
-    ids: dict[str, list[int]] = {k: [] for k in ("chapter", "outline", "analysis", "change", "rh", "ch", "fh", "fs")}
+    ids: dict[str, list[int]] = {
+        k: [] for k in ("chapter", "outline", "analysis", "change", "rh", "ch", "fh", "fs", "mem", "rc")
+    }
     fs_null = Foreshadow(project_id=p.id, title="空")
     db.add(fs_null)
     for no in nos:
@@ -77,7 +81,11 @@ async def _seed(db, user_id: int, title: str, nos: tuple[int, ...]) -> dict:
         db.add_all([change, rh, chh, fs])
         await db.flush()
         fh = ForeshadowHistory(foreshadow_id=fs.id, source="manual", chapter_no=no, changes={})
-        db.add(fh)
+        mem = StoryMemory(project_id=p.id, chapter_id=ch.id, chapter_no=no, kind="summary", content=f"m{no}")
+        db.add_all([fh, mem])
+        await db.flush()
+        rc = RetrievalChunk(project_id=p.id, source="memory", ref_id=mem.id, text=f"m{no}", tokens={}, chapter_no=no)
+        db.add(rc)
         await db.flush()
         for key, obj in (
             ("chapter", ch),
@@ -88,6 +96,8 @@ async def _seed(db, user_id: int, title: str, nos: tuple[int, ...]) -> dict:
             ("ch", chh),
             ("fh", fh),
             ("fs", fs),
+            ("mem", mem),
+            ("rc", rc),
         ):
             ids[key].append(obj.id)
     await db.flush()
@@ -107,6 +117,8 @@ async def _values(db, seeded: dict) -> dict[str, list]:
         "relationship_history": await col(RelationshipHistory, "chapter_no", "rh"),
         "career_history": await col(CareerHistory, "chapter_no", "ch"),
         "foreshadow_history": await col(ForeshadowHistory, "chapter_no", "fh"),
+        "story_memories": await col(StoryMemory, "chapter_no", "mem"),
+        "retrieval_chunks": await col(RetrievalChunk, "chapter_no", "rc"),
     }
     for f in ("planned_plant_chapter", "actual_plant_chapter", "planned_resolve_chapter", "actual_resolve_chapter"):
         out[f] = await col(Foreshadow, f, "fs")

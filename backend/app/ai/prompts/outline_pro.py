@@ -18,6 +18,8 @@ def build_outline_continue_messages(
     story_so_far_text: str = "",
     foreshadows_text: str = "",
     direction: str = "",
+    knowledge: str = "",
+    memories: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -33,6 +35,8 @@ def build_outline_continue_messages(
             "recent_outlines": recent_outlines_text.strip(),
             "foreshadows": foreshadows_text.strip(),
             "direction": direction.strip(),
+            "knowledge": knowledge.strip(),
+            "memories": memories.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": OUTLINE_CONTINUE_FORMAT,
         },
@@ -50,6 +54,8 @@ def build_outline_expand_messages(
     count: int,
     total: int,
     instruction: str = "",
+    knowledge: str = "",
+    memories: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """kept_text：已写正文、需保留的细纲；previous_events_text：本次已生成（前几批）细纲的关键事件。"""
@@ -66,6 +72,8 @@ def build_outline_expand_messages(
             "count": count,
             "total": total,
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
+            "memories": memories.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": OUTLINE_EXPAND_FORMAT,
         },

@@ -885,3 +885,96 @@ def test_0014_inspiration(tmp_path):
             assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "留存"
     finally:
         engine.dispose()
+
+
+def test_0015_knowledge_base(tmp_path):
+    """0015：新建知识库 / 记忆 / 检索单元五张表（外键规则、唯一约束、删章节只解除手动记忆关联）；
+    downgrade -1 删除五张表且存量项目保留。"""
+    db_file = tmp_path / "migrate0015.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+
+    command.upgrade(cfg, "0014")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('old', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, '星海', '科幻', '设定', '', 'planning')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapters (project_id, chapter_no, title, content, status, word_count) "
+                    "VALUES (1, 1, '一', '正文', 'draft', 2)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0015")
+    engine = create_engine(f"sqlite:///{db_file}")
+    tables = {"kb_settings", "kb_documents", "kb_chunks", "story_memories", "retrieval_chunks"}
+    try:
+        insp = inspect(engine)
+        assert tables <= set(insp.get_table_names())
+        fks = {fk["constrained_columns"][0]: fk for fk in insp.get_foreign_keys("story_memories")}
+        assert fks["project_id"]["options"].get("ondelete") == "CASCADE"
+        assert fks["chapter_id"]["options"].get("ondelete") == "SET NULL"
+        assert fks["analysis_id"]["options"].get("ondelete") == "SET NULL"
+        fks = {fk["constrained_columns"][0]: fk for fk in insp.get_foreign_keys("kb_chunks")}
+        assert fks["document_id"]["options"].get("ondelete") == "CASCADE"
+        for table in ("kb_settings", "kb_documents", "retrieval_chunks"):
+            fk = insp.get_foreign_keys(table)[0]
+            assert fk["referred_table"] == "projects" and fk["options"].get("ondelete") == "CASCADE"
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO kb_settings (project_id) VALUES (1)"))
+            row = conn.execute(text("SELECT auto_inject, top_k, min_score, max_chars FROM kb_settings")).one()
+            assert tuple(row) == (1, 6, 0.35, 3000)
+            conn.execute(text("INSERT INTO kb_documents (project_id, filename, sha256) VALUES (1, 'a.md', 'h')"))
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(text("INSERT INTO kb_documents (project_id, filename, sha256) VALUES (1, 'b', 'h')"))
+            conn.execute(text("INSERT INTO kb_chunks (document_id, seq, content) VALUES (1, 1, '块')"))
+            conn.execute(
+                text(
+                    "INSERT INTO retrieval_chunks (project_id, source, ref_id, text, tokens) "
+                    "VALUES (1, 'kb', 1, 't', '{}')"
+                )
+            )
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(
+                        text(
+                            "INSERT INTO retrieval_chunks (project_id, source, ref_id, text, tokens) "
+                            "VALUES (1, 'kb', 1, 't', '{}')"
+                        )
+                    )
+            conn.execute(
+                text(
+                    "INSERT INTO story_memories (project_id, chapter_id, chapter_no, kind, content, origin) "
+                    "VALUES (1, 1, 1, 'manual', '手动', 'manual')"
+                )
+            )
+            # 删章节：手动记忆保留、chapter_id 置空、章号不变
+            conn.execute(text("DELETE FROM chapters"))
+            assert tuple(conn.execute(text("SELECT chapter_id, chapter_no FROM story_memories")).one()) == (None, 1)
+            # 删文档级联分块
+            conn.execute(text("DELETE FROM kb_documents"))
+            assert conn.execute(text("SELECT count(*) FROM kb_chunks")).scalar() == 0
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert not (tables & set(inspect(engine).get_table_names()))
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT title FROM projects")).scalar() == "星海"
+    finally:
+        engine.dispose()

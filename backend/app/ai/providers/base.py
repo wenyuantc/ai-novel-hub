@@ -46,6 +46,10 @@ class LLMProvider(ABC):
         """列出接口可用模型。失败时抛 AIProviderError。"""
         raise AIProviderError("该接口类型不支持获取模型列表")
 
+    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+        """对每条文本求向量（顺序与输入一致）。调用方负责分批与截断。失败时抛 AIProviderError。"""
+        raise AIProviderError("该提供方不支持向量模型")
+
 
 def split_system(messages: list[ChatMessage]) -> tuple[str, list[ChatMessage]]:
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")

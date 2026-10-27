@@ -60,7 +60,7 @@ from app.schemas.project import (
     WizardProgress,
     normalize_tags,
 )
-from app.services import ai_config_service, project_service, prompt_service
+from app.services import ai_config_service, kb_service, project_service, prompt_service
 
 logger = logging.getLogger(__name__)
 
@@ -444,13 +444,29 @@ async def prepare_generate(
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     override = await prompt_service.get_override(db, user_id, f"inspiration.{step}")
+    decided = build_decided(state, step)
+    knowledge = ""
+    project = await db.get(Project, session.project_id) if session.project_id is not None else None
+    if project is not None and project.user_id == user_id:
+        # 从已有项目发起：用该项目的知识库，查询 = 想法 + 补充想法 + 已定内容
+        knowledge = await kb_service.knowledge_for_project(
+            db,
+            project,
+            "\n".join([state.idea, *state.notes, decided]),
+            cipher=cipher,
+            factory=factory,
+            ai_timeout=ai_timeout,
+            allow_private=allow_private,
+            purpose=f"灵感：{step}",
+        )
     messages = build_inspiration_messages(
         step,
         idea=state.idea,
         notes=state.notes,
-        decided=build_decided(state, step),
+        decided=decided,
         history=build_history(state, step),
         feedback=req.feedback,
+        knowledge=knowledge,
         override=override,
     )
     key = (session.id, step)

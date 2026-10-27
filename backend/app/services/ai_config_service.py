@@ -19,6 +19,7 @@ from app.schemas.ai_config import (
     ModelListRequest,
     ModelListResult,
     ModelType,
+    check_embedding_provider,
     check_output_within_context,
 )
 
@@ -139,6 +140,7 @@ async def update_config(
         cfg.max_output_k = data.max_output_k
     try:
         check_output_within_context(cfg.context_window_k, cfg.max_output_k)
+        check_embedding_provider(cfg.provider, cfg.model_type)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
     type_changed = cfg.model_type != old_type
@@ -196,7 +198,7 @@ async def _promote_default(db: AsyncSession, user_id: int, model_type: str) -> N
         nxt.is_default = True
 
 
-MODEL_TYPE_LABELS = {"text": "文本", "image": "图片"}
+MODEL_TYPE_LABELS = {"text": "文本", "image": "图片", "embedding": "向量"}
 
 
 async def resolve_config(
@@ -267,6 +269,8 @@ async def test_config(
         return AIConfigTestResult(ok=False, message=exc.detail, latency_ms=_elapsed(started))
     if cfg.model_type == "image":
         return await _test_image_config(provider, cfg.model, started)
+    if cfg.model_type == "embedding":
+        return await _test_embedding_config(provider, cfg.model, started)
     messages = [{"role": "user", "content": "这是一次连通性测试，请只回复：ok"}]
     received = ""
     try:
@@ -309,6 +313,22 @@ async def _test_image_config(provider: LLMProvider, model: str, started: float) 
     else:
         message = f"连接成功，但模型列表中未找到 {model}，请确认模型名"
     return AIConfigTestResult(ok=True, message=message, latency_ms=_elapsed(started))
+
+
+async def _test_embedding_config(provider: LLMProvider, model: str, started: float) -> AIConfigTestResult:
+    """向量模型：对一条短文本求向量，报告维度。"""
+    try:
+        async with asyncio.timeout(TEST_TIMEOUT_SECONDS):
+            vectors = await provider.embed(["连通性测试"], model)
+    except TimeoutError:
+        return AIConfigTestResult(
+            ok=False, message=f"连接超时（{TEST_TIMEOUT_SECONDS} 秒）", latency_ms=_elapsed(started)
+        )
+    except AIProviderError as exc:
+        return AIConfigTestResult(ok=False, message=str(exc), latency_ms=_elapsed(started))
+    if not vectors or not vectors[0]:
+        return AIConfigTestResult(ok=False, message="模型未返回向量", latency_ms=_elapsed(started))
+    return AIConfigTestResult(ok=True, message=f"连接成功，向量维度 {len(vectors[0])}", latency_ms=_elapsed(started))
 
 
 def _elapsed(started: float) -> int:

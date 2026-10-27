@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "上下文组装"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板与 parity"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与外键"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试隔离与变异验证"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}

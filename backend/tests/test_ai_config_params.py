@@ -135,9 +135,9 @@ async def test_chapter_context_budget_from_config(client, fake_llm, monkeypatch)
     seen = []
     original = generation_service.build_chapter_context
 
-    async def _spy(db, project, chapter, budget):
+    async def _spy(db, project, chapter, budget, **kw):
         seen.append(budget)
-        return await original(db, project, chapter, budget)
+        return await original(db, project, chapter, budget, **kw)
 
     monkeypatch.setattr(generation_service, "build_chapter_context", _spy)
     fake_llm.push("正文")

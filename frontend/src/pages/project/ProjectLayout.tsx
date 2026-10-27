@@ -4,6 +4,8 @@ import {
   BulbOutlined,
   ClusterOutlined,
   DashboardOutlined,
+  DatabaseOutlined,
+  HistoryOutlined,
   GlobalOutlined,
   OrderedListOutlined,
   RocketOutlined,
@@ -30,6 +32,8 @@ const NAV = [
   { key: 'outlines', icon: <OrderedListOutlined />, label: '大纲' },
   { key: 'chapters', icon: <BookOutlined />, label: '章节' },
   { key: 'foreshadows', icon: <BulbOutlined />, label: '伏笔' },
+  { key: 'knowledge', icon: <DatabaseOutlined />, label: '知识库' },
+  { key: 'memories', icon: <HistoryOutlined />, label: '剧情记忆' },
 ]
 
 /** 项目工作区：左侧导航 + 右侧面板。 */

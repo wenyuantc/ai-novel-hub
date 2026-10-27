@@ -20,6 +20,7 @@ TaskKind = Literal[
     "outline.continue",
     "outline.expand",
     "chapter.batch",
+    "kb.index",
 ]
 
 

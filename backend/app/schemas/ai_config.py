@@ -4,7 +4,8 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, model_validator
 
 ProviderName = Literal["openai_compat", "anthropic", "gemini"]
-ModelType = Literal["text", "image"]
+# embedding = 向量模型（知识库与剧情记忆的语义检索），Anthropic 不提供
+ModelType = Literal["text", "image", "embedding"]
 ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 # 单位 K（×1000 tokens）
@@ -15,6 +16,15 @@ MaxOutputK = Field(default=None, ge=1, le=256)
 def check_output_within_context(context_window_k: int | None, max_output_k: int | None) -> None:
     if context_window_k is not None and max_output_k is not None and max_output_k >= context_window_k:
         raise ValueError("最大输出必须小于上下文大小")
+
+
+EMBEDDING_UNSUPPORTED_PROVIDERS = ("anthropic",)
+EMBEDDING_UNSUPPORTED = "该提供方不支持向量模型"
+
+
+def check_embedding_provider(provider: str | None, model_type: str | None) -> None:
+    if model_type == "embedding" and provider in EMBEDDING_UNSUPPORTED_PROVIDERS:
+        raise ValueError(EMBEDDING_UNSUPPORTED)
 
 
 class AIConfigCreate(BaseModel):
@@ -33,6 +43,7 @@ class AIConfigCreate(BaseModel):
     @model_validator(mode="after")
     def _check_limits(self) -> Self:
         check_output_within_context(self.context_window_k, self.max_output_k)
+        check_embedding_provider(self.provider, self.model_type)
         return self
 
 

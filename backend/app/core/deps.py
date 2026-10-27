@@ -10,6 +10,7 @@ from app.core.errors import ForbiddenError, UnauthorizedError
 from app.core.security import ACCESS_TOKEN_COOKIE, SecretCipher, decode_access_token
 from app.models import User
 from app.services import auth_service
+from app.services.retrieval_service import EmbedEnv
 from app.services.task_engine.engine import TaskEngine
 
 
@@ -38,12 +39,23 @@ def get_task_engine(request: Request) -> TaskEngine:
     return request.app.state.task_engine
 
 
+def get_embed_env(request: Request) -> EmbedEnv:
+    settings: Settings = request.app.state.settings
+    return EmbedEnv(
+        cipher=request.app.state.cipher,
+        factory=request.app.state.provider_factory,
+        ai_timeout=settings.ai_request_timeout,
+        allow_private=settings.allow_private_ai_endpoints,
+    )
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 DbDep = Annotated[AsyncSession, Depends(get_db)]
 CipherDep = Annotated[SecretCipher, Depends(get_cipher)]
 FactoryDep = Annotated[ProviderFactory, Depends(get_provider_factory)]
 SessionmakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 TaskEngineDep = Annotated[TaskEngine, Depends(get_task_engine)]
+EmbedEnvDep = Annotated[EmbedEnv, Depends(get_embed_env)]
 
 
 def _extract_token(request: Request) -> str | None:

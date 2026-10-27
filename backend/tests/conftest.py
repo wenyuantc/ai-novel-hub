@@ -15,6 +15,7 @@ import pytest  # noqa: E402
 from app.ai import endpoint_guard  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import Base  # noqa: E402
+from app.services import retrieval_service  # noqa: E402
 from tests.helpers import FakeLLM, make_settings  # noqa: E402
 
 FAKE_DNS = {
@@ -49,6 +50,9 @@ def settings_overrides() -> dict:
 @pytest.fixture
 async def app(tmp_path, fake_llm, settings_overrides):
     settings = make_settings(tmp_path, **settings_overrides)
+    # 检索矩阵缓存是进程级的、按 (project_id, source) 区分：每个测试是新库、项目 id 从 1 重新开始，
+    # 签名可能与上一个测试的缓存相同，所以每个测试前后都清空
+    retrieval_service.invalidate()
     application = create_app(settings, provider_factory=fake_llm.factory, start_task_engine=False)
     async with application.state.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -60,6 +64,7 @@ async def app(tmp_path, fake_llm, settings_overrides):
     finally:
         await task_engine.stop()
         await application.state.engine.dispose()
+        retrieval_service.invalidate()
 
 
 def _new_client(app) -> httpx.AsyncClient:

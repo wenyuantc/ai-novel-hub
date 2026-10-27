@@ -48,6 +48,7 @@ import { GenerateForm, type GenerateOptions, PolishForm } from '../../components
 import CastSelect from '../../components/chapter/CastSelect'
 import ChapterStyleSetting from '../../components/chapter/ChapterStyleSetting'
 import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
+import ContextPreviewPanel from '../../components/chapter/ContextPreviewPanel'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
 import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
@@ -738,6 +739,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                       <Space direction="vertical" style={{ width: '100%' }}>
                         {plan && <ChapterPlanCard plan={plan} />}
                         <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
+                        <ContextPreviewPanel chapterId={chapter.id} />
                       </Space>
                     ),
                   },

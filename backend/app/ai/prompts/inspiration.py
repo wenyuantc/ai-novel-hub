@@ -15,6 +15,7 @@ def build_inspiration_messages(
     decided: str,
     history: str,
     feedback: str,
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -26,6 +27,7 @@ def build_inspiration_messages(
             "decided": decided.strip(),
             "history": history.strip(),
             "feedback": feedback.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": INSPIRATION_FORMAT,
         },

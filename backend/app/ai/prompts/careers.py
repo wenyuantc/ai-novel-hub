@@ -18,6 +18,7 @@ def build_career_generate_messages(
     world_text: str = "",
     careers_text: str = "",
     instruction: str = "",
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -30,6 +31,7 @@ def build_career_generate_messages(
             "world": world_text.strip(),
             "careers": careers_text.strip(),
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": CAREER_FORMAT,
         },
@@ -42,6 +44,7 @@ def build_careers_wizard_messages(
     career_count: int,
     world_text: str = "",
     instruction: str = "",
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -52,6 +55,7 @@ def build_careers_wizard_messages(
             "career_count": career_count,
             "world": world_text.strip(),
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": CAREER_FORMAT,
         },

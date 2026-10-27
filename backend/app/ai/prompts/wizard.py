@@ -23,6 +23,7 @@ def build_outline_messages(
     existing_text: str = "",
     start_volume_no: int = 1,
     start_chapter_no: int = 1,
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """existing_text 非空 = 追加模式：接在已有大纲之后，从第 start_volume_no 卷、第 start_chapter_no 章开始写。"""
@@ -39,6 +40,7 @@ def build_outline_messages(
             "start_volume_no": start_volume_no,
             "start_chapter_no": start_chapter_no,
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": OUTLINE_FORMAT,
         },
@@ -53,6 +55,7 @@ def build_characters_messages(
     outline_text: str = "",
     instruction: str = "",
     careers_text: str = "",
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     # 项目已有职业时要求为每个角色分配职业；没有职业时提示词与原来一致
@@ -67,6 +70,7 @@ def build_characters_messages(
             "outline": _ref(outline_text),
             "careers": careers,
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": characters_wizard_format(bool(careers)),
         },
@@ -79,6 +83,7 @@ def build_world_messages(
     outline_text: str = "",
     characters_text: str = "",
     instruction: str = "",
+    knowledge: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -89,6 +94,7 @@ def build_world_messages(
             "outline": _ref(outline_text),
             "characters": _ref(characters_text),
             "instruction": instruction.strip(),
+            "knowledge": knowledge.strip(),
             "json_rule": JSON_ONLY_RULE,
             "output_format": WORLD_FORMAT,
         },

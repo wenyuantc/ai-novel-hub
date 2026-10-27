@@ -29,7 +29,7 @@ from app.models import Chapter, ChapterPlan, Project, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.batch import BatchGenerateRequest, BatchPreview, BatchPreviewItem, BatchSkippedItem
 from app.schemas.chapter import GenerateChapterRequest
-from app.services import ai_config_service, analysis_service, generation_service, style_service
+from app.services import ai_config_service, analysis_service, generation_service, kb_index_service, style_service
 from app.services.project_service import get_owned_project
 
 if TYPE_CHECKING:
@@ -535,6 +535,8 @@ async def _analyze_chapter(
         item["warning"] = f"{item['warning']}；{note}" if item.get("warning") else note
     else:
         item["analysis"] = "ok"
+        # 本章记忆已随分析写入；有向量模型时排队生成向量（与独立分析任务的 on_success 一致）
+        await kb_index_service.enqueue_memory(ctx.sessionmaker, job.project_id)
 
 
 async def run_batch_job(job: BatchJob, ctx: "TaskContext") -> AsyncIterator["Event"]:

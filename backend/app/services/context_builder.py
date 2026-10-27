@@ -1,4 +1,4 @@
-"""章节生成上下文组装（MVP 不依赖向量检索）。
+"""章节生成上下文组装。
 
 本章任务（chapter_task，供提示词【本章任务】与选角匹配使用）按优先级取：
   1. 章节对应的细纲（chapters.plan_id）：标题、梗概（细纲梗概为空时退回大纲梗概）、关键事件、叙事目标、
@@ -6,7 +6,14 @@
   2. 章节关联的大纲：标题与梗概（与引入细纲前的行为一致）。
   生成请求的目标字数仍由请求决定（前端打开生成面板时用细纲的预估字数预填），后端不改变请求语义。
 
-组成：作品信息 + 世界观（按分类分组）+ 角色部分 + 当前卷大纲 + 伏笔提醒 + 更早章节标题/摘要 + 最近 N 章全文。
+组成：作品信息 + 世界观（按分类分组）+ 参考资料（知识库）+ 角色部分 + 当前卷大纲 + 伏笔提醒 + 更早章节标题/摘要
++ 相关旧情节（剧情记忆）+ 最近 N 章全文。
+检索块（knowledge-base，见 retrieval_service / kb_service / memory_service；都为空时上下文与之前逐字一致）：
+  - 【参考资料（来自知识库…）】：查询 = 本章任务标题 + 梗概 + 关键事件 + 涉及角色名；
+    项目总开关关闭、没有命中、检索出错时不出现，字数受 kb_settings.max_chars 限制；位于世界观之后。
+  - 【相关旧情节】：查询 = 上述 + 叙事目标；只召回本章之前、且不在「最近 N 章全文」中的章节，
+    前情提要里已有摘要的章节不再召回摘要类记忆；钉住的优先，按章号排列，字数受 memory_max_chars 限制；
+    位于前情提要之后、最近章节正文之前。
 更早章节的摘要（前情提要）：优先用该章最近一次章节分析的 summary（批量一条查询取每章 max(id)；
 正文已变化、分析已过期时照常使用），没有分析时退回正文前 SUMMARY_CHARS 字。
 角色部分（D4，选角见 cast_service.select_cast）：
@@ -19,6 +26,8 @@
   本章计划埋设（全部）→ 本章必须回收（全部）→ 超期未回收（≤3，最超期在前）→ 即将到期（未来 3 章内，≤3）→
   长线伏笔（没有计划回收章，按重要度 ≤3）；位于当前卷大纲之后、前情提要之前。
 超出字符预算时的裁剪顺序：
+  0a. 从尾部截断【参考资料】
+  0b. 从最不相关的一条开始丢弃【相关旧情节】中未钉住的条目（钉住的只在最后的硬截断中处理）
   1. 从最早开始丢弃「更早章节摘要」
   2. 从较早的一章开始，截掉最近章节正文的开头（保留结尾，利于衔接）
   3. 截断世界观尾部
@@ -51,17 +60,22 @@ from app.services import (
     career_service,
     cast_service,
     foreshadow_service,
+    kb_service,
+    memory_service,
     organization_service,
     plan_service,
     relationship_service,
     story_service,
 )
 from app.services.project_service import project_info
+from app.services.retrieval_service import Embedder, EmbedEnv
 
 RECENT_FULL_CHAPTERS = 2
 SUMMARY_CHARS = 200
 ELLIPSIS = "……"
 CAREER_RULES_CHARS = 200
+KNOWLEDGE_HEADER = "【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】"
+MEMORY_HEADER = "【相关旧情节】"
 
 
 @dataclass
@@ -92,6 +106,8 @@ class CastSection:
     roster: list[str] = field(default_factory=list)
     # 涉及角色所挂职业的阶梯（每项一个职业）
     careers: list[str] = field(default_factory=list)
+    # 涉及角色的名字（组成检索查询用，不进上下文）
+    names: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -109,6 +125,20 @@ class ForeshadowSection:
 
 
 @dataclass
+class MemoryLine:
+    """【相关旧情节】的一行。rank：相关度名次（越大越不相关，裁剪时先丢）；钉住的不参与裁剪。"""
+
+    text: str
+    pinned: bool = False
+    rank: int = 0
+
+
+@dataclass
+class MemorySection:
+    lines: list[MemoryLine] = field(default_factory=list)
+
+
+@dataclass
 class ContextParts:
     project_text: str
     world_text: str = ""
@@ -121,11 +151,15 @@ class ContextParts:
     foreshadows: ForeshadowSection = field(default_factory=ForeshadowSection)
     summaries: list[str] = field(default_factory=list)
     recent: list[str] = field(default_factory=list)
+    knowledge_text: str = ""
+    memories: list[MemoryLine] = field(default_factory=list)
 
     def render(self) -> str:
         sections = [f"【作品信息】\n{self.project_text}"]
         if self.world_text:
             sections.append(f"【世界观】\n{self.world_text}")
+        if self.knowledge_text:
+            sections.append(f"{KNOWLEDGE_HEADER}\n{self.knowledge_text}")
         if self.cards_text:
             sections.append(f"【本章涉及角色】\n{self.cards_text}")
         if self.relations:
@@ -143,6 +177,8 @@ class ContextParts:
             sections.append("【伏笔提醒】\n" + "\n".join(foreshadow_lines))
         if self.summaries:
             sections.append("【前情提要（更早章节）】\n" + "\n".join(self.summaries))
+        if self.memories:
+            sections.append(MEMORY_HEADER + "\n" + "\n".join(m.text for m in self.memories))
         if self.recent:
             sections.append("【最近章节正文】\n" + "\n\n".join(self.recent))
         return "\n\n".join(sections)
@@ -179,8 +215,13 @@ def assemble_context(
     recent_count: int = RECENT_FULL_CHAPTERS,
     summary_chars: int = SUMMARY_CHARS,
     foreshadows: ForeshadowSection | None = None,
+    knowledge: str = "",
+    memories: MemorySection | None = None,
 ) -> str:
-    """纯函数：根据素材与字符预算组装上下文。prior_chapters 需按章节号升序。"""
+    """纯函数：根据素材与字符预算组装上下文。prior_chapters 需按章节号升序。
+
+    knowledge：参考资料正文（不含标题行）；memories：相关旧情节（已按章号排列）。都为空时与不传完全一致。
+    """
     prior = [c for c in prior_chapters if c.content.strip()]
     recent_src = prior[-recent_count:] if recent_count > 0 else []
     earlier = prior[: len(prior) - len(recent_src)]
@@ -198,6 +239,8 @@ def assemble_context(
         # 裁剪只整档替换为空列表，浅拷贝即可避免改动调用方的对象
         foreshadows=replace(foreshadows) if foreshadows else ForeshadowSection(),
         summaries=[_summary_line(c, summary_chars) for c in earlier],
+        knowledge_text=knowledge.strip(),
+        memories=[MemoryLine(m.text, m.pinned, m.rank) for m in (memories.lines if memories else []) if m.text.strip()],
     )
     recent_bodies = [c.content.strip() for c in recent_src]
     recent_heads = [_chapter_heading(c.chapter_no, c.title) for c in recent_src]
@@ -210,8 +253,22 @@ def assemble_context(
     def over() -> int:
         return len(parts.render()) - budget
 
-    # 1. 丢弃最早的章节摘要
     excess = over()
+
+    # 0a. 截断参考资料尾部
+    if excess > 0 and parts.knowledge_text:
+        keep = len(parts.knowledge_text) - excess
+        parts.knowledge_text = _cut_tail(parts.knowledge_text, keep) if keep > len(ELLIPSIS) else ""
+        excess = over()
+
+    # 0b. 从最不相关的开始丢弃未钉住的旧情节
+    for victim in sorted((m for m in parts.memories if not m.pinned), key=lambda m: m.rank, reverse=True):
+        if excess <= 0:
+            break
+        parts.memories.remove(victim)
+        excess = over()
+
+    # 1. 丢弃最早的章节摘要
     while excess > 0 and parts.summaries:
         excess -= len(parts.summaries.pop(0)) + 1
         if not parts.summaries:
@@ -415,14 +472,34 @@ async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapte
             for c in sorted(involved_careers.values(), key=lambda c: (c.sort, c.id))
         ],
         roster=[roster_item(c) for c in cast.others],
+        names=[c.name for c in cast.involved],
     )
 
 
-async def build_chapter_context(db: AsyncSession, project: Project, chapter: Chapter, budget: int) -> str:
+async def build_chapter_context(
+    db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, embedder: Embedder | None = None
+) -> str:
+    """embedder：当前用户的向量模型（None = 检索只用关键词）。"""
     world = await story_service.list_items(db, story_service.WORLD, project.id)
     outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
     task = await chapter_task(db, chapter)
     cast = await build_cast_section(db, project, chapter, task.match_text())
+    prior = await prior_chapters(db, project, chapter)
+    knowledge, memories = await retrieval_blocks(db, project, chapter, task, cast.names, prior, embedder=embedder)
+    return assemble_context(
+        project_text=format_project_info(await project_info(db, project)),
+        world_text=story_service.format_world(world),
+        cast=cast,
+        outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
+        prior_chapters=prior,
+        budget=budget,
+        foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no),
+        knowledge=knowledge,
+        memories=memories,
+    )
+
+
+async def prior_chapters(db: AsyncSession, project: Project, chapter: Chapter) -> list[PriorChapter]:
     rows = await db.execute(
         select(Chapter.id, Chapter.chapter_no, Chapter.title, Chapter.content)
         .where(
@@ -434,18 +511,72 @@ async def build_chapter_context(db: AsyncSession, project: Project, chapter: Cha
     )
     prior_rows = rows.all()
     summaries = await latest_summaries(db, project.id, [r[0] for r in prior_rows])
-    prior = [
+    return [
         PriorChapter(chapter_no=no, title=title, content=content, summary=summaries.get(cid, ""))
         for cid, no, title, content in prior_rows
     ]
-    return assemble_context(
-        project_text=format_project_info(await project_info(db, project)),
-        world_text=story_service.format_world(world),
-        cast=cast,
-        outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
-        prior_chapters=prior,
-        budget=budget,
-        foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no),
+
+
+def prior_coverage(prior: list[PriorChapter], recent_count: int = RECENT_FULL_CHAPTERS) -> tuple[set[int], set[int]]:
+    """(前情给了全文的章节号, 前情给了分析摘要的章节号)，与 assemble_context 的划分一致（裁剪前）。"""
+    nonempty = [c for c in prior if c.content.strip()]
+    recent = nonempty[-recent_count:] if recent_count > 0 else []
+    earlier = nonempty[: len(nonempty) - len(recent)]
+    return {c.chapter_no for c in recent}, {c.chapter_no for c in earlier if " ".join(c.summary.split())}
+
+
+def retrieval_query(task: "ChapterTask", names: list[str], *, title: str = "", with_goal: bool = False) -> str:
+    parts = [title or task.title, task.summary, *task.key_events]
+    if with_goal:
+        parts.append(task.goal)
+    parts.append(" ".join(names))
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
+async def retrieval_blocks(
+    db: AsyncSession,
+    project: Project,
+    chapter: Chapter,
+    task: "ChapterTask",
+    names: list[str],
+    prior: list[PriorChapter],
+    *,
+    embedder: Embedder | None,
+) -> tuple[str, MemorySection]:
+    """【参考资料】正文与【相关旧情节】条目（裁剪前）。检索出错时对应块为空，不抛错。"""
+    full_nos, summary_nos = prior_coverage(prior)
+    knowledge = await kb_service.knowledge_text(
+        db, project, retrieval_query(task, names, title=chapter.title), embedder=embedder, purpose="章节生成"
+    )
+    recalled = await memory_service.recall(
+        db,
+        project,
+        chapter.chapter_no,
+        retrieval_query(task, names, title=chapter.title, with_goal=True),
+        embedder=embedder,
+        excluded_chapter_nos=full_nos,
+        summary_chapter_nos=summary_nos,
+    )
+    return knowledge, MemorySection([MemoryLine(r.line, r.pinned, r.rank) for r in recalled])
+
+
+async def retrieval_preview(db: AsyncSession, user_id: int, chapter_id: int, *, env: EmbedEnv) -> tuple[str, str]:
+    """GET /chapters/{id}/context-preview：本次生成会注入的参考资料与相关旧情节（带标题行，裁剪前；不注入为空串）。"""
+    from app.services.chapter_service import get_owned_chapter
+    from app.services.project_service import get_owned_project
+
+    chapter = await get_owned_chapter(db, user_id, chapter_id)
+    project = await get_owned_project(db, user_id, chapter.project_id)
+    embedder = await env.embedder(db, user_id)
+    task = await chapter_task(db, chapter)
+    cast = await cast_service.select_cast(db, project, chapter, task.match_text())
+    prior = await prior_chapters(db, project, chapter)
+    knowledge, memories = await retrieval_blocks(
+        db, project, chapter, task, [c.name for c in cast.involved], prior, embedder=embedder
+    )
+    return (
+        f"{KNOWLEDGE_HEADER}\n{knowledge}" if knowledge.strip() else "",
+        MEMORY_HEADER + "\n" + "\n".join(m.text for m in memories.lines) if memories.lines else "",
     )
 
 

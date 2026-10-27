@@ -66,6 +66,11 @@ PROJECT_INFO_VAR = T(
     "project_info", "作品信息（书名 / 题材 / 设定 / 风格概述）", required=True, sample=SAMPLE_PROJECT_INFO
 )
 INSTRUCTION_VAR = T("instruction", "作者额外要求", sample="")
+# 检索块（knowledge-base）：为空时模板不输出对应段落
+KNOWLEDGE_VAR = T(
+    "knowledge", "知识库参考资料（自动检索，可能为空）", sample="- 《设定集》门派 > 天剑宗：天剑宗位于北境雪山。"
+)
+MEMORIES_VAR = T("memories", "相关旧情节（剧情记忆召回，可能为空）", sample="- 第3章（情节）：林远拜入天剑宗。")
 
 
 def _out(sample: str) -> TemplateVar:
@@ -86,6 +91,7 @@ def _inspiration(key: str, name: str, desc: str) -> tuple[str, str, str, str, tu
             T("decided", "已经定下的内容", sample="题材：都市奇幻\n主题：在失去中学会告别"),
             T("history", "本步之前各轮的选项与反馈", sample=""),
             T("feedback", "这次的反馈", sample="再短一点，更有画面感"),
+            KNOWLEDGE_VAR,
             JSON_RULE_VAR,
             _out(F.INSPIRATION_FORMAT),
         ),
@@ -197,6 +203,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             PROJECT_INFO_VAR,
             T("outline", "已有大纲", sample=""),
             T("characters", "已有角色", sample=""),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.WORLD_FORMAT),
@@ -213,6 +220,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("world", "已有世界观", sample=""),
             T("outline", "已有大纲", sample=""),
             T("careers", "已有职业体系（有内容时要求分配职业）", sample=""),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.characters_wizard_format(False)),
@@ -232,6 +240,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("existing", "已有大纲末尾（追加模式）", sample=""),
             T("start_volume_no", "起始卷号（追加模式）", "int", sample=1),
             T("start_chapter_no", "起始章节号（追加模式）", "int", sample=1),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.OUTLINE_FORMAT),
@@ -246,6 +255,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             PROJECT_INFO_VAR,
             T("career_count", "职业数量", "int", sample=4),
             T("world", "世界观", sample=""),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.CAREER_FORMAT),
@@ -263,6 +273,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("roster", "已有角色名单", sample="林远 / 主角"),
             T("organizations", "已有组织", sample=""),
             T("careers", "已有职业（有内容时要求分配职业）", sample=""),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.character_generate_format(False)),
@@ -278,6 +289,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("world", "世界观", sample=""),
             T("roster", "已有角色名单", sample="林远 / 主角"),
             T("organizations", "已有组织", sample=""),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.ORGANIZATION_FORMAT),
@@ -294,6 +306,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("kind", "职业类别：main / sub / 空（不限）", sample=""),
             T("world", "世界观", sample=""),
             T("careers", "已有职业", sample=""),
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.CAREER_FORMAT),
@@ -327,6 +340,8 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("story_so_far", "前文进展（每章摘要）", sample=""),
             T("recent_outlines", "最近的章纲", sample=""),
             T("foreshadows", "尚未回收的伏笔", sample=""),
+            KNOWLEDGE_VAR,
+            MEMORIES_VAR,
             T("direction", "作者给的发展方向", sample=""),
             JSON_RULE_VAR,
             _out(F.OUTLINE_CONTINUE_FORMAT),
@@ -346,6 +361,8 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("previous_events", "本次已生成的细纲关键事件", sample=""),
             T("count", "本次输出章数", "int", sample=3),
             T("total", "共展开章数", "int", sample=3),
+            MEMORIES_VAR,
+            KNOWLEDGE_VAR,
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.OUTLINE_EXPAND_FORMAT),

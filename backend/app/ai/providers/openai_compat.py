@@ -66,3 +66,21 @@ class OpenAICompatProvider(LLMProvider):
             raise AIProviderError(describe_error(exc)) from exc
         finally:
             await client.close()
+
+    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+        """POST {base}/embeddings {model, input: [...]}；按返回的 index 还原顺序。"""
+        client = self._client()
+        try:
+            # float：部分兼容接口不支持 SDK 默认的 base64 编码
+            resp = await client.embeddings.create(model=model, input=texts, encoding_format="float")
+            items = sorted(resp.data, key=lambda d: d.index)
+            vectors = [list(d.embedding) for d in items]
+        except AIProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise AIProviderError(describe_error(exc)) from exc
+        finally:
+            await client.close()
+        if len(vectors) != len(texts):
+            raise AIProviderError(f"模型调用失败：向量数量不符（请求 {len(texts)} 条，返回 {len(vectors)} 条）")
+        return vectors

@@ -12,9 +12,11 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -53,6 +55,7 @@ TASK_KINDS = (
     "outline.continue",
     "outline.expand",
     "chapter.batch",
+    "kb.index",
 )
 TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
 # 活动：占资源键（部分唯一索引）、由调度器领取
@@ -788,3 +791,129 @@ class InspirationSession(TimestampMixin, Base):
     converted_project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True
     )
+
+
+# 知识库与剧情记忆（迁移 0015）
+KB_DOCUMENT_STATUSES = ("pending", "parsing", "indexing", "ready", "ready_keyword_only", "failed")
+RETRIEVAL_SOURCES = ("kb", "memory")
+MEMORY_KINDS = ("summary", "plot_point", "hook", "character", "foreshadow", "manual")
+MEMORY_ORIGINS = ("auto", "manual")
+
+
+class KbSettings(TimestampMixin, Base):
+    """项目的检索设置（每个项目一行，首次修改时创建；读取时没有行即用默认值）。记忆的召回参数也放在这里。"""
+
+    __tablename__ = "kb_settings"
+
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    auto_inject: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    top_k: Mapped[int] = mapped_column(Integer, default=6, server_default="6", nullable=False)
+    min_score: Mapped[float] = mapped_column(Float, default=0.35, server_default="0.35", nullable=False)
+    max_chars: Mapped[int] = mapped_column(Integer, default=3000, server_default="3000", nullable=False)
+    memory_top_k: Mapped[int] = mapped_column(Integer, default=8, server_default="8", nullable=False)
+    memory_max_chars: Mapped[int] = mapped_column(Integer, default=1500, server_default="1500", nullable=False)
+    memory_min_score: Mapped[float] = mapped_column(Float, default=0.35, server_default="0.35", nullable=False)
+
+
+class KbDocument(TimestampMixin, Base):
+    """知识库文档：只保存解析出的全文（text），不保存原始文件；重建索引时从 text 重新分块。"""
+
+    __tablename__ = "kb_documents"
+    __table_args__ = (UniqueConstraint("project_id", "sha256"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)
+    size: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # 原始文件的 sha256（同项目内去重）
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # pending / parsing / indexing / ready / ready_keyword_only / failed
+    status: Mapped[str] = mapped_column(String(24), default="pending", server_default="pending", nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 解析 / 建索引的提示（如全文超长被截断、只能关键词检索）
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # 参与注入：关闭后该文档的检索单元 enabled=false，不再被召回
+    inject: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+
+
+class KbChunk(TimestampMixin, Base):
+    """知识库分块（seq 从 1 起）。heading_path 如「第一卷 > 门派 > 天剑宗」。"""
+
+    __tablename__ = "kb_chunks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("kb_documents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    heading_path: Mapped[str] = mapped_column(String(500), default="", server_default="", nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+
+
+class StoryMemory(TimestampMixin, Base):
+    """剧情记忆。auto = 从章节分析规则抽取（重新分析时替换，按 content_key 继承钉住 / 屏蔽）；manual = 手动添加。
+
+    章节删除时其自动记忆先被删除（memory_service.on_chapters_deleted）；手动记忆保留，chapter_id 由外键置空、章号不变。
+    """
+
+    __tablename__ = "story_memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    chapter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    # summary / plot_point / hook / character / foreshadow / manual
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 相关角色名
+    characters: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, default=3, server_default="3", nullable=False)
+    # auto / manual
+    origin: Mapped[str] = mapped_column(String(8), default="auto", server_default="auto", nullable=False)
+    analysis_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chapter_analyses.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    muted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    # sha1(kind + 规范化内容) 前 16 位：重新分析时据此继承钉住 / 屏蔽标记
+    content_key: Mapped[str] = mapped_column(String(16), default="", server_default="", nullable=False)
+
+
+class RetrievalChunk(TimestampMixin, Base):
+    """统一的检索单元：知识库分块（source=kb，ref_id=kb_chunks.id）与剧情记忆（source=memory，ref_id=story_memories.id）。
+
+    只保存检索所需的冗余字段，由业务写入点经 retrieval_service.upsert / delete 维护。
+    embedding 为归一化后的 float32 字节串；embedding_key = provider:model:dim。version 每次更新 +1（缓存失效标记）。
+    """
+
+    __tablename__ = "retrieval_chunks"
+    __table_args__ = (
+        UniqueConstraint("source", "ref_id"),
+        Index("ix_retrieval_chunks_project_source_enabled", "project_id", "source", "enabled"),
+        # id 不复用（SQLite 默认会复用被删除的最大 rowid）：检索缓存以 max(id) 判断是否有新行
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)
+    ref_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 二字组 / 英文数字词的词频 {词: 次数}（BM25）
+    tokens: Mapped[dict[str, int]] = mapped_column(JSON, default=dict, nullable=False)
+    length: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    embedding_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 仅记忆有：所属章节号（参与章节号平移）
+    chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
