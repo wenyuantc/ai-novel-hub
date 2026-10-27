@@ -324,3 +324,25 @@
 ### Next Steps
 
 - 继续规划 P1：project-io-reader（book-import 依赖封面任务的上传方案）
+
+
+## Session 13: 向导失败后从中断处继续
+<!-- trellis-session: v=2 fp=c3fddc93095af2b3 -->
+
+**Date**: 2026-10-27
+**Task**: 向导失败后从中断处继续
+**Branch**: `main`
+
+### Summary
+
+向导（世界观/职业/角色/大纲）失败或中断后，基于旧任务部分输出续写：WizardRequest.continue_from_task_id、截断到完整对象+assistant/续写指令（新模板 wizard.continue）、续写开头清洗拼接、可链式继续；前端恢复最近失败任务并新增「从中断处继续」按钮。后端 574 测试、ruff、前端 tsc/eslint/vitest 通过；未做真实断流手测。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4065aad` | feat: 向导生成失败后可从中断处继续 |
+
+### Status
+
+[OK] **Completed**
