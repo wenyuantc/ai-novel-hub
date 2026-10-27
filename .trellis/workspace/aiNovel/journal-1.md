@@ -377,3 +377,38 @@
 ### Next Steps
 
 - 规划 P1-10b reader-ui（阅读器、书架、暗色主题、移动端）
+
+
+## Session 15: reader-ui 阅读器、书架、暗色主题、移动端
+<!-- trellis-session: v=2 fp=c5c1c197652e9c52 -->
+
+**Date**: 2026-10-27
+**Task**: reader-ui 阅读器、书架、暗色主题、移动端
+**Branch**: `main`
+
+### Summary
+
+实现 P1-10b：服务端阅读进度与阅读器、书本式书架、全站暗色主题（写死颜色迁移+防回归测试）、移动端抽屉与重点页适配；冒烟修复书架搜索框 100vw 溢出。
+
+### Main Changes
+
+- 迁移 0016：projects.reading_progress（登记传输注册表）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9a1aadb` | feat: 阅读器、书架、暗色主题与移动端适配 |
+| `22cb9f7` | chore(task): archive 10-27-reader-ui |
+
+### Testing
+
+- [OK] 后端 606 passed；前端 307 passed；Playwright 375px 有滚动条时 14 页无横向溢出，暗色与跟随系统验证
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 规划 P1-8 book-import（拆书），之后进入 P2
