@@ -288,3 +288,39 @@
 ### Next Steps
 
 - 继续规划 P1：book-import / knowledge-base / project-io-reader
+
+
+## Session 12: knowledge-base 知识库与向量剧情记忆
+<!-- trellis-session: v=2 fp=a689624fcb49736d -->
+
+**Date**: 2026-10-27
+**Task**: knowledge-base 知识库与向量剧情记忆
+**Branch**: `main`
+
+### Summary
+
+实现 P1-9：embedding 模型类型、统一检索表（库内向量 + numpy 余弦 + 二元组 BM25 混合）、知识库六种格式解析分块与 kb.index 任务、剧情记忆规则抽取与钉住/屏蔽、上下文两块注入（为空时逐字不变）；上传安全加固。
+
+### Main Changes
+
+- 迁移 0015：kb_settings/kb_documents/kb_chunks/story_memories/retrieval_chunks
+- 新增依赖 numpy、pypdf、python-multipart
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b00e9d` | feat: 知识库与向量剧情记忆（统一检索基建、混合检索、记忆钉住/屏蔽、上下文注入） |
+| `2e80b01` | chore(task): archive 10-23-knowledge-base |
+
+### Testing
+
+- [OK] 后端 565 passed（PostgreSQL 临时容器迁移往返通过）；前端 257 passed；浏览器冒烟覆盖上传、仅关键词、重建后混合检索、钉住、注入与总开关
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 继续规划 P1：project-io-reader（book-import 依赖封面任务的上传方案）
