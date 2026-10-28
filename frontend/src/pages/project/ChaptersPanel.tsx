@@ -27,7 +27,7 @@ export default function ChaptersPanel() {
   const readChapter = (c: ChapterBrief) => navigate(`/projects/${pid}/read/${c.id}`, { state: { from: `/projects/${pid}/chapters` } })
   const refreshProject = useProjectStore((s) => s.refresh)
   const loader = useCallback(() => chapterApi.list(pid), [pid])
-  const { data: chapterData, loading, reload } = useLoader(loader)
+  const { data: chapterData, loading, reload } = useLoader(loader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const chapters = useMemo(() => chapterData ?? [], [chapterData])
   // 分析状态单独加载（章节列表重新加载、或有后台任务结束时刷新，如分析完成）：失败只影响「分析」列
   const tasksVersion = useTasksStore((s) => s.version)
@@ -35,7 +35,7 @@ export default function ChaptersPanel() {
     void tasksVersion // 仅作为重新加载的触发依赖
     return chapterData ? analysisApi.statuses(pid) : Promise.resolve<ChapterAnalysisState[]>([])
   }, [pid, chapterData, tasksVersion])
-  const { data: statuses = [] } = useLoader(statusLoader)
+  const { data: statuses = [] } = useLoader(statusLoader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const statusById = useMemo(() => new Map(statuses.map((s) => [s.chapter_id, s])), [statuses])
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -49,7 +49,7 @@ export default function ChaptersPanel() {
     void tasksVersion // 有任务结束 / 本地操作时重新加载
     return taskApi.list({ project_id: pid, kind: 'chapter.batch', limit: 1 }).then((list) => list[0] ?? null)
   }, [pid, tasksVersion])
-  const { data: latestBatch = null } = useLoader(latestBatchLoader)
+  const { data: latestBatch = null } = useLoader(latestBatchLoader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const batchTask: Task | null =
     openBatch ??
     (latestBatch && batchBannerState(latestBatch) === 'resumable' && latestBatch.id !== dismissedBatchId

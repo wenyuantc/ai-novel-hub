@@ -60,6 +60,9 @@ OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "insp
 # 与项目相关、但不导出的表（理由见值）。
 # book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
+    "agent_conversations": "智能体会话属于运行时数据，不跨实例迁移",
+    "agent_messages": "智能体消息属于运行时数据，不跨实例迁移",
+    "agent_changes": "智能体提案和效果属于运行时数据，不跨实例迁移",
     "tasks": "后台任务是运行时状态，导入后没有意义；导入后按需重新排队建索引",
     "kb_chunks": "由知识库文档的 text 重新分块得到，导入时在同一事务里重新生成",
     "retrieval_chunks": "检索单元（关键词 / 向量）是派生数据，导入时经业务写入点重建关键词部分，向量由重建任务生成",

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 TaskStatus = Literal["queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted"]
 TaskKind = Literal[
+    "agent.turn",
     "chapter.generate",
     "chapter.polish",
     "wizard.outline",

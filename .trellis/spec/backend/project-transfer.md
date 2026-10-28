@@ -29,11 +29,14 @@ class TableRule:
     json_plain: tuple[str, ...]               # 不含 id 的 JSON 列
     str_refs: dict[str, Callable]             # 含 id 的字符串列（analysis_changes.field_key）
 PROJECT_RULE: TableRule; RULES: tuple[TableRule, ...]   # RULES 的顺序就是导入顺序
-NOT_EXPORTED = {"tasks": 理由, "kb_chunks": 理由, "retrieval_chunks": 理由}
+NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_changes": 理由,
+                "tasks": 理由, "kb_chunks": 理由, "retrieval_chunks": 理由}   # 智能体三张表是运行时数据，不跨实例迁移
 ```
 
 ### 3. 契约
 
+- **注册表还被智能体撤销复用**（`app/services/agent/effects.py`，见 [agent.md](./agent.md)「效果快照与撤销」）：`scope` 用于差异快照，`RULES` 的顺序是撤销时重新插入的顺序、
+  逆序是删除顺序，`deferred` 列先插 null 再回填。调整 RULES 顺序或 deferred 时要同时跑 `tests/test_agent_effects.py`。
 - 列的处理方式互斥并覆盖整张表：`id`（导出原值，导入由数据库分配新 id）/ fill / fk / custom / exclude / 其余原样。
 - 当前登记：`world_settings`、`characters`、`organizations`（`parent_id` deferred）、`organization_members`、`relationship_types`
   （本项目自定义 + 本项目关系用到的全局预置，后者带 `global: true`）、`relationships`（`pair_low/high` 由 a/b 重算）、`relationship_history`、
@@ -74,7 +77,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0016"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0018"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。

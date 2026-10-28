@@ -34,7 +34,7 @@ CHAPTER_STATUSES = ("draft", "generating", "done")
 AI_PROVIDERS = ("openai_compat", "anthropic", "gemini")
 PROJECT_STATUSES = ("planning", "writing", "completed")
 # 版本来源：手动保存 / AI 或回滚替换前补的快照 / 整章生成 / 润色 / 局部改写采纳 / 回滚 / 按建议重写 / 拆书导入的初始版本
-VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore", "revise", "import")
+VERSION_SOURCES = ("manual", "baseline", "generate", "polish", "rewrite", "restore", "revise", "import", "agent")
 # 生成记录类型：整章生成、润色、按建议重写，局部改写的各个操作，以及拆书反推的通读 / 汇总 / 风格提取
 GENERATION_KINDS = (
     "generate",
@@ -48,6 +48,7 @@ GENERATION_KINDS = (
     "book_import.digest",
     "book_import.synthesize",
     "book_import.style",
+    "agent.turn",
 )
 GENERATION_STATUSES = ("success", "error", "cancelled")
 # 后台任务
@@ -69,6 +70,7 @@ TASK_KINDS = (
     "chapter.batch",
     "kb.index",
     "book.import",
+    "agent.turn",
 )
 TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
 # 活动：占资源键（部分唯一索引）、由调度器领取

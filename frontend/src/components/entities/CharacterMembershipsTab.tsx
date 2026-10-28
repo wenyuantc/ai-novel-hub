@@ -25,9 +25,9 @@ const STATUS_OPTIONS = (Object.keys(MEMBER_STATUS) as MemberStatus[]).map((k) =>
 export default function CharacterMembershipsTab({ projectId, character }: Props) {
   const { message } = App.useApp()
   const loader = useCallback(() => characterExtraApi.memberships(projectId, character.id), [projectId, character.id])
-  const { data: rows = [], loading, reload } = useLoader(loader)
+  const { data: rows = [], loading, reload } = useLoader(loader, { projectId, resources: ['characters', 'organizations'] })
   const orgLoader = useCallback(() => organizationApi.list(projectId), [projectId])
-  const { data: orgs = [] } = useLoader(orgLoader)
+  const { data: orgs = [] } = useLoader(orgLoader, { projectId, resources: ['characters', 'organizations'] })
   const [editing, setEditing] = useState<Member | null>(null)
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)

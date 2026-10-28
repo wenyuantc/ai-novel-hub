@@ -61,6 +61,8 @@ import ChapterForeshadowButton from '../../components/foreshadows/ChapterForesha
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
+import { useProjectRefresh } from '../../hooks/useProjectRefresh'
 import { useLoader } from '../../hooks/useLoader'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useProjectStore } from '../../stores/project'
@@ -168,6 +170,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     })
   }, [])
   const [selection, setSelection] = useState<TextSelection>({ start: 0, end: 0 })
+  usePublishAgentContext(pid, { chapter_id: initial.id, outline_id: initial.outline_id ?? undefined, selection: content.slice(selection.start, selection.end) })
+  const [externalChapter, setExternalChapter] = useState<Chapter | null>(null)
   const [rewriteLocked, setRewriteLocked] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [analysisOpen, setAnalysisOpen] = useState(false)
@@ -247,6 +251,16 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     },
     [applyServerChapter],
   )
+
+  useProjectRefresh(pid, ['chapters', 'outlines', 'characters', 'memories'], () => {
+    onChanged()
+    void refreshAnalysis()
+    void chapterApi.get(pid, chapter.id).then((next) => {
+      if (next.content === chapter.content && next.title === chapter.title) return
+      if (dirty || editorLocked || saving) setExternalChapter(next)
+      else replaceFromServer(next)
+    }).catch((err: unknown) => message.error(errorMessage(err)))
+  })
 
   const syncSelection = (el: HTMLTextAreaElement) => {
     const { selectionStart: start, selectionEnd: end } = el
@@ -778,6 +792,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   return (
     <>
+      {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="智能体已更新此章节，当前本地草稿已保留" description="加载最新版本会替换编辑器中尚未保存的内容。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => modal.confirm({ title: '加载最新章节？', content: '编辑器中尚未保存的修改会被替换。', onOk: async () => { const latest = await chapterApi.get(pid, chapter.id); replaceFromServer(latest); setExternalChapter(null) } })}>加载最新版本</Button>} />}
       <Row gutter={isMobile ? 0 : 16}>
         <Col xs={24} xl={isMobile ? 24 : 17}>
           <Card

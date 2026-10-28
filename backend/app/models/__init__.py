@@ -1,3 +1,4 @@
+from app.models.agent import AgentChange, AgentConversation, AgentMessage
 from app.models.base import Base
 from app.models.entities import (
     AIConfig,
@@ -40,6 +41,9 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AgentChange",
+    "AgentConversation",
+    "AgentMessage",
     "AIConfig",
     "AnalysisChange",
     "Base",

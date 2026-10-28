@@ -9,7 +9,28 @@ from app.ai.providers.base import (
     ModelInfo,
     ThinkingLevel,
     describe_error,
+    describe_tools_error,
 )
+from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec
+
+
+def _tool_messages(messages: list[AgentMessage]) -> list[dict]:
+    result = []
+    for message in messages:
+        item: dict = {"role": message["role"], "content": message.get("content", "")}
+        if message["role"] == "assistant" and message.get("tool_calls"):
+            item["tool_calls"] = [
+                {
+                    "id": call["id"],
+                    "type": "function",
+                    "function": {"name": call["name"], "arguments": call["arguments"]},
+                }
+                for call in message["tool_calls"]
+            ]
+        elif message["role"] == "tool":
+            item["tool_call_id"] = message["tool_call_id"]
+        result.append(item)
+    return result
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -66,6 +87,89 @@ class OpenAICompatProvider(LLMProvider):
             raise AIProviderError(describe_error(exc)) from exc
         finally:
             await client.close()
+
+    async def chat_tools_stream(
+        self,
+        messages: list[AgentMessage],
+        model: str,
+        tools: list[ToolSpec],
+        *,
+        tool_choice: ToolChoice = "auto",
+        max_tokens: int | None = None,
+        thinking: ThinkingLevel = "off",
+        temperature: float | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        client = None
+        stream = None
+        kwargs: dict = {"stream_options": {"include_usage": True}}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        if thinking != "off":
+            kwargs["reasoning_effort"] = thinking
+        try:
+            client = self._client()
+            request = {
+                "model": model,
+                "messages": _tool_messages(messages),
+                "tools": [{"type": "function", "function": tool} for tool in tools],
+                "tool_choice": tool_choice,
+                "stream": True,
+            }
+            try:
+                stream = await client.chat.completions.create(**request, **kwargs)
+            except Exception as exc:
+                # 仅请求开始前兼容重试；流中途失败不能重放已经发出的文本/工具。
+                if getattr(exc, "status_code", None) != 400 or "stream_options" not in str(exc).lower():
+                    raise
+                kwargs.pop("stream_options")
+                stream = await client.chat.completions.create(**request, **kwargs)
+            calls: dict[int, ToolCall] = {}
+            reason = None
+            async for chunk in stream:
+                if chunk.usage is not None:
+                    yield (
+                        "usage",
+                        {
+                            "input_tokens": chunk.usage.prompt_tokens,
+                            "output_tokens": chunk.usage.completion_tokens,
+                        },
+                    )
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                if delta.content:
+                    yield "text", {"text": delta.content}
+                for piece in delta.tool_calls or []:
+                    call = calls.setdefault(piece.index, ToolCall(id="", name="", arguments=""))
+                    call["id"] += piece.id or ""
+                    if piece.function:
+                        call["name"] += piece.function.name or ""
+                        call["arguments"] += piece.function.arguments or ""
+                if choice.finish_reason:
+                    reason = choice.finish_reason
+            if reason is None:
+                raise AIProviderError("模型工具调用流意外中断，请重试")
+            if calls and reason not in ("tool_calls", "stop"):
+                raise AIProviderError("模型工具调用未完整生成，请提高最大输出长度后重试")
+            for _, call in sorted(calls.items()):
+                if not call["id"] or not call["name"]:
+                    raise AIProviderError("模型返回的工具调用缺少标识或名称，请重试")
+                yield "tool_call", call
+            yield "finish", {"reason": reason}
+        except AIProviderError:
+            raise
+        except Exception as exc:
+            raise AIProviderError(describe_tools_error(exc)) from exc
+        finally:
+            try:
+                if stream is not None:
+                    await stream.close()
+            finally:
+                if client is not None:
+                    await client.close()
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         """POST {base}/embeddings {model, input: [...]}；按返回的 index 还原顺序。"""

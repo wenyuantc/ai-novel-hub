@@ -48,9 +48,9 @@ export default function KnowledgePanel() {
   const track = useTasksStore((s) => s.track)
 
   const docsLoader = useCallback(() => kbApi.listDocuments(pid), [pid])
-  const { data: docs = [], loading, error, setData: setDocs } = useLoader(docsLoader)
+  const { data: docs = [], loading, error, setData: setDocs } = useLoader(docsLoader, { projectId: pid, resources: ['knowledge'] })
   const settingsLoader = useCallback(() => kbApi.getSettings(pid), [pid])
-  const { data: settings, setData: setSettings } = useLoader(settingsLoader)
+  const { data: settings, setData: setSettings } = useLoader(settingsLoader, { projectId: pid, resources: ['knowledge'] })
 
   const [viewing, setViewing] = useState<KbDocument | null>(null)
   const [uploading, setUploading] = useState(0)

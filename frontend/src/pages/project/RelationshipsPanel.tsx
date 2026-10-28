@@ -53,11 +53,11 @@ export default function RelationshipsPanel() {
   const { message } = App.useApp()
   const [tab, setTab] = useState('list')
   const loader = useCallback(() => relationshipApi.list(pid), [pid])
-  const { data: rels = [], loading, reload } = useLoader(loader)
+  const { data: rels = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['relationships', 'characters', 'organizations'] })
   const charLoader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: characters = [] } = useLoader(charLoader)
+  const { data: characters = [] } = useLoader(charLoader, { projectId: pid, resources: ['relationships', 'characters', 'organizations'] })
   const typeLoader = useCallback(() => relationshipTypeApi.list(pid), [pid])
-  const { data: types = [], reload: reloadTypes } = useLoader(typeLoader)
+  const { data: types = [], reload: reloadTypes } = useLoader(typeLoader, { projectId: pid, resources: ['relationships', 'characters', 'organizations'] })
   const [charFilter, setCharFilter] = useState<number | null>(null)
   const [catFilter, setCatFilter] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
@@ -240,7 +240,7 @@ interface GraphTabProps {
 /** Tabs 设置了 destroyOnHidden：每次切到「图谱」都重新挂载并拉取最新数据 */
 function GraphTab({ projectId, characters }: GraphTabProps) {
   const loader = useCallback(() => relationshipApi.graph(projectId), [projectId])
-  const { data: graph, loading, error } = useLoader(loader)
+  const { data: graph, loading, error } = useLoader(loader, { projectId, resources: ['relationships', 'characters', 'organizations'] })
   const [filter, setFilter] = useState<GraphFilter>(DEFAULT_GRAPH_FILTER)
   const [cardId, setCardId] = useState<number | null>(null)
   const view = useMemo(() => (graph ? filterGraph(graph, filter) : { nodes: [], edges: [] }), [graph, filter])

@@ -56,9 +56,11 @@ export const VERSION_SOURCE: Record<VersionSource, { label: string; color: strin
   restore: { label: '回滚', color: 'magenta' },
   revise: { label: '按建议重写', color: 'geekblue' },
   import: { label: '导入', color: 'green' },
+  agent: { label: '智能体修改', color: 'cyan' },
 }
 
 export const GENERATION_KIND_LABELS: Record<GenerationKind, string> = {
+  'agent.turn': '项目智能体',
   generate: '整章生成',
   polish: '润色',
   rewrite: '改写',

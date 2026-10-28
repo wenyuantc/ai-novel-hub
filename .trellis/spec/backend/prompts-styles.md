@@ -37,7 +37,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 ### 3. 契约
 
-**模板 key（26 个）**
+**模板 key（30 个）**
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
@@ -48,6 +48,8 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 | 大纲 | `outline.continue` / `outline.expand` | `json_rule`、`output_format` |
 | 风格 | `style.block`（风格段，只取 user 段并 strip）、`style.extract`（JSON）、`style.trial` | extract：`json_rule`、`output_format` |
 | 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback / knowledge`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
+| 拆书 | `book_import.digest` / `book_import.synthesize`（见 [book-import.md](./book-import.md)） | `json_rule`、`output_format` |
+| 项目智能体 | `agent.system`（只有 system 段；变量 `safety_rules` / `project_info` / `page_hint`，后两者由服务端用【不可信数据】标记包裹）、`agent.summarize`（压缩较早对话；变量 `summary` / `history`（必需），输出纯文本摘要） | `agent.system`：`safety_rules`（= `app/ai/prompts/agent.py::SAFETY_RULES`）；`agent.summarize` 无 |
 
 - **检索块变量**（`10-23-knowledge-base`，见 [retrieval.md](./retrieval.md)）：`knowledge`（知识库参考资料正文，`KNOWLEDGE_VAR`）声明在
   `wizard.*`（4 个）、`entity.character` / `entity.organization` / `entity.career`、`outline.continue` / `outline.expand`、`inspiration.*`（6 个）；
@@ -75,6 +77,9 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 - **运行时**：各服务在组装 job 时 `get_override` 并传给 build 函数（任务运行中途改模板不影响已组装的 job）；章节生成另取 `chapter.continue`
   存进 `ChapterJob.continue_override`；大纲展开存进 `OutlineJob.override`。生成记录 `params.prompt = prompt_meta(key, override)`
   （整章生成另有 `params.continue_prompt`）。
+- **智能体模板**（`10-23-project-agent`，见 [agent.md](./agent.md)「安全规则」）：`agent.system` / `agent.summarize` 在**每次模型请求**组装消息时
+  `get_override`（不是在 job 组装时），生成记录 `params.prompt` 同样是 `prompt_meta`。`safety_rules` 锁定保证覆盖里原样出现一次；即使旧的损坏覆盖让通用兜底把
+  锁定内容追加到 user 段，`context.build_messages` 也会把它提升回第一条 system 消息。改 `SAFETY_RULES` 文案会改变默认指纹，已覆盖的用户看到「默认已更新」。
 - **预览**：不落库；变量缺省用 `sample`，锁定变量始终用代码值（请求体不能改写）；返回 `{messages, errors, locked: [{name, label, value}]}`。
 - **导入导出**：`ainovel.prompts` v1 `{format, version, items: [{key, system, user, enabled, base_fingerprint}]}`；上限 1MB（紧凑 UTF-8）；
   逐项结果 `created | updated | unchanged | default（与系统默认相同，不建覆盖）| skipped（未知 key / 重复 / 格式）| invalid（带 errors）`；整个导入一个事务。
@@ -98,7 +103,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 ### 6. 必需的测试
 
 - `tests/test_prompt_parity.py`：**每个 key 的每个条件分支**新旧输出 `==`（对照实现 `tests/prompt_legacy.py` 是改造前代码的逐字复制）。
-  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` 没有对照。
+  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` / `book_import.*` / `agent.*` / `wizard.continue` 没有对照。
 - `tests/test_templating.py`：每种校验错误、沙箱逃逸、range 禁用、渲染上限、锁定兜底、全部默认模板合法且能用示例值渲染。
 - `tests/test_prompt_templates.py`：覆盖生效 / 停用 / 启用 / 恢复默认、位置信息、预览、outdated + ack（monkeypatch `registry.TEMPLATES`）、
   版本裁剪与回滚、导入导出、用户隔离。

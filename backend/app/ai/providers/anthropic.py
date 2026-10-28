@@ -1,3 +1,4 @@
+import json
 import re
 from collections.abc import AsyncIterator
 
@@ -10,8 +11,10 @@ from app.ai.providers.base import (
     ModelInfo,
     ThinkingLevel,
     describe_error,
+    describe_tools_error,
     split_system,
 )
+from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec, history_arguments, native_metadata
 
 DEFAULT_MAX_TOKENS = 8192
 
@@ -37,6 +40,39 @@ def thinking_kwargs(model: str, thinking: ThinkingLevel, max_tokens: int) -> tup
         )
     effort = "high" if thinking == "xhigh" and _NO_XHIGH_MODEL.search(model) else thinking
     return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}, max_tokens
+
+
+def _tool_messages(messages: list[AgentMessage]) -> tuple[str, list[dict]]:
+    system = "\n\n".join(m.get("content", "") for m in messages if m["role"] == "system")
+    result: list[dict] = []
+    for message in messages:
+        if message["role"] == "system":
+            continue
+        role = "user" if message["role"] == "tool" else message["role"]
+        blocks: list[dict] = []
+        if message["role"] == "tool":
+            blocks.append(
+                {"type": "tool_result", "tool_use_id": message["tool_call_id"], "content": message.get("content", "")}
+            )
+        elif metadata := native_metadata(message, "anthropic"):
+            blocks = metadata["content"]
+        else:
+            if message.get("content"):
+                blocks.append({"type": "text", "text": message["content"]})
+            blocks.extend(
+                {
+                    "type": "tool_use",
+                    "id": call["id"],
+                    "name": call["name"],
+                    "input": history_arguments(call["arguments"]),
+                }
+                for call in message.get("tool_calls", [])
+            )
+        if result and result[-1]["role"] == role:
+            result[-1]["content"].extend(blocks)
+        else:
+            result.append({"role": role, "content": list(blocks)})
+    return system, result
 
 
 class AnthropicProvider(LLMProvider):
@@ -95,3 +131,86 @@ class AnthropicProvider(LLMProvider):
             raise AIProviderError(describe_error(exc)) from exc
         finally:
             await client.close()
+
+    async def chat_tools_stream(
+        self,
+        messages: list[AgentMessage],
+        model: str,
+        tools: list[ToolSpec],
+        *,
+        tool_choice: ToolChoice = "auto",
+        max_tokens: int | None = None,
+        thinking: ThinkingLevel = "off",
+        temperature: float | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        client = None
+        try:
+            client = self._client()
+            system, rest = _tool_messages(messages)
+            kwargs, limit = thinking_kwargs(model, thinking, max_tokens or DEFAULT_MAX_TOKENS)
+            if system:
+                kwargs["system"] = system
+            if temperature is not None and thinking == "off":
+                kwargs["temperature"] = temperature
+            calls: dict[int, ToolCall] = {}
+            initial_inputs: dict[int, dict] = {}
+            completed: set[int] = set()
+            stopped = False
+            async with client.messages.stream(
+                model=model,
+                max_tokens=limit,
+                messages=rest,
+                tools=[
+                    {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools
+                ],
+                tool_choice={"type": tool_choice},
+                **kwargs,
+            ) as stream:
+                async for event in stream:
+                    if event.type == "content_block_start":
+                        block = event.content_block
+                        if block.type == "tool_use":
+                            calls[event.index] = ToolCall(id=block.id, name=block.name, arguments="")
+                            initial_inputs[event.index] = block.input
+                        elif block.type == "text" and block.text:
+                            yield "text", {"text": block.text}
+                    elif event.type == "content_block_delta":
+                        if event.delta.type == "text_delta":
+                            yield "text", {"text": event.delta.text}
+                        elif event.delta.type == "input_json_delta" and event.index in calls:
+                            calls[event.index]["arguments"] += event.delta.partial_json
+                    elif event.type == "content_block_stop":
+                        completed.add(event.index)
+                    elif event.type == "message_stop":
+                        stopped = True
+                if not stopped or not calls.keys() <= completed:
+                    raise AIProviderError("模型工具调用流意外中断，请重试")
+                final = await stream.get_final_message()
+            if calls and final.stop_reason not in ("tool_use", "end_turn"):
+                raise AIProviderError("模型工具调用未完整生成，请提高最大输出长度后重试")
+            yield (
+                "usage",
+                {
+                    "input_tokens": final.usage.input_tokens
+                    + (final.usage.cache_creation_input_tokens or 0)
+                    + (final.usage.cache_read_input_tokens or 0),
+                    "output_tokens": final.usage.output_tokens,
+                },
+            )
+            for index, call in sorted(calls.items()):
+                if not call["arguments"]:
+                    call["arguments"] = json.dumps(initial_inputs[index], ensure_ascii=False)
+                if index == min(calls):
+                    call["provider_metadata"] = {
+                        "provider": "anthropic",
+                        "content": [block.model_dump(mode="json", exclude_none=True) for block in final.content],
+                    }
+                yield "tool_call", call
+            yield "finish", {"reason": final.stop_reason or "end_turn"}
+        except AIProviderError:
+            raise
+        except Exception as exc:
+            raise AIProviderError(describe_tools_error(exc)) from exc
+        finally:
+            if client is not None:
+                await client.close()

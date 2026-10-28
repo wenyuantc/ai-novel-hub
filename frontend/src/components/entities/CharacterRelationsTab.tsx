@@ -19,9 +19,9 @@ interface Props {
 export default function CharacterRelationsTab({ projectId, character, characters }: Props) {
   const { message } = App.useApp()
   const loader = useCallback(() => relationshipApi.list(projectId, character.id), [projectId, character.id])
-  const { data: rels = [], loading, reload } = useLoader(loader)
+  const { data: rels = [], loading, reload } = useLoader(loader, { projectId, resources: ['relationships', 'characters'] })
   const typeLoader = useCallback(() => relationshipTypeApi.list(projectId), [projectId])
-  const { data: types = [] } = useLoader(typeLoader)
+  const { data: types = [] } = useLoader(typeLoader, { projectId, resources: ['relationships', 'characters'] })
   const [editing, setEditing] = useState<Relationship | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [history, setHistory] = useState<Relationship | null>(null)

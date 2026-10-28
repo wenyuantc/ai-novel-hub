@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin,
+    agent,
     ai_configs,
     analysis,
     auth,
@@ -31,6 +32,7 @@ from app.api.v1 import (
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(agent.router)
 api_router.include_router(admin.router)
 api_router.include_router(ai_configs.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}

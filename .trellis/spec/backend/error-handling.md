@@ -187,7 +187,9 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
   只产出草稿，见 [story-entities.md](./story-entities.md)）同样返回 202；批量顺序生成 `POST /projects/{pid}/batch-generate`（`chapter.batch`，多步 + 待审核，见 [batch-generate.md](./batch-generate.md)）同样返回 202；大纲续写 / 展开 `POST /projects/{pid}/outlines/continue`、
   `/outlines/{oid}/expand`（`outline.continue` / `outline.expand`，只产出草稿，见 [outline.md](./outline.md)）同样返回 202；知识库上传 / 重建 `POST /projects/{pid}/kb/documents`、`/kb/documents/{id}/reindex`、`/kb/rebuild`（`kb.index`，
 同项目串行、没有向量模型时仍成功并带 warning，见 [retrieval.md](./retrieval.md)）同样返回 202；章节分析 `POST /chapters/{cid}/analyze`（`chapter.analyze`，同章已有排队中的分析时
-  返回那条任务、状态码 200）、按建议重写 `POST /chapters/{cid}/revise`（`chapter.revise`）也走任务，见 story-entities.md「章节分析与回写」；实时输出通过
+  返回那条任务、状态码 200）、按建议重写 `POST /chapters/{cid}/revise`（`chapter.revise`）也走任务，见 story-entities.md「章节分析与回写」；拆书导入（`book.import`，见 [book-import.md](./book-import.md)）同样走任务；项目智能体发送消息
+  `POST /projects/{pid}/agent/conversations/{cid}/messages`（`agent.turn`，202 `{message, task}`；工具调用循环、待确认时 `paused`、确认后自动续跑，
+  自定义事件 `tool_start` / `tool_end` / `proposal` / `executed`，见 [agent.md](./agent.md)）也走任务；实时输出通过
   `GET /api/v1/tasks/{id}/stream`（GET SSE）订阅。关闭页面 / 断开订阅**不会**中断任务。
 - **同步 SSE**：`POST /api/v1/chapters/{id}/rewrite`（局部改写预览，D1：不进任务引擎），以及
   `POST /api/v1/styles/extract`、`POST /api/v1/styles/trial`（风格提取 / 试写：`delta` → `done` / `error`，不写生成记录、无项目归属，见 prompts-styles.md）。
@@ -304,7 +306,7 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
   `stage=待审核`、`result=paused 载荷`、`finished_at` 留空，hub 以 `paused` 事件关闭；取消落在 `paused` 产出之后仍按 paused 收尾。
   `recover()` 只处理 running。`POST /tasks/{id}/resume`（202）：handler 可选 `revalidate_resume` → 条件 UPDATE `paused → queued`
   （清 `result / error / finished_at`，`IntegrityError` → 409）→ 建 hub + notify；`POST /tasks/{id}/finish`：条件 UPDATE → succeeded，
-  `result` 取 handler 可选 `finish_result(task)`（默认原 result + `ended_early: true`）；`cancel` 支持 paused（条件 UPDATE 后 `on_abort`）。
+  `result` 取 handler 可选 `finish_result(task)`（默认原 result + `ended_early: true`；`finish_result` 可抛 `AppError` 拒绝结束，如 `agent.turn` → 409）；`cancel` 支持 paused（条件 UPDATE 后 `on_abort`）。
   `GET /tasks?active=true` 返回 `OPEN_TASK_STATUSES`（含 paused）。非 paused 时 resume / finish → 409 `只有待审核的任务可以继续` / `结束`。
 - **重试钩子**：handler 可选 `validate_retry(db, ctx, *, user_id, task) -> TaskSpec`，有则代替 `validate_and_claim`（多步任务沿用原范围）。
 
@@ -343,7 +345,7 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 | `error` | `{"task": TaskOut, "detail": "<中文>"}` | 失败 / 取消 / 中断；之后流结束 |
 | `paused` | `{"task": TaskOut, "result": <paused 载荷>}` | 多步任务到达审核点（待审核）；之后流结束 |
 | `reset` | `{}` | 清空实时输出（多步任务开始新的一步；客户端清空本地文本） |
-| 其他（如 `chapter_start` / `chapter_end`） | handler 自定义 | 原样广播（批量生成见 batch-generate.md） |
+| 其他（如 `chapter_start` / `chapter_end`、`tool_start` / `tool_end` / `proposal` / `executed`） | handler 自定义 | 原样广播（批量生成见 batch-generate.md，智能体见 agent.md） |
 
 - runner 的 `stage` 事件不直接转发，只更新 hub 的阶段文案（经 `progress` 事件推送）。
 

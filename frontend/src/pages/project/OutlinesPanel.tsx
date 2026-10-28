@@ -45,6 +45,7 @@ import OutlineSnapshotDrawer from '../../components/outlines/OutlineSnapshotDraw
 import OutlineTaskModal, { type OutlineTaskKind } from '../../components/outlines/OutlineTaskModal'
 import PlanList from '../../components/outlines/PlanList'
 import WizardModal from '../../components/WizardModal'
+import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectStore } from '../../stores/project'
@@ -61,7 +62,7 @@ export default function OutlinesPanel() {
   const refreshProject = useProjectStore((s) => s.refresh)
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => Promise.all([outlineProApi.tree(pid), characterApi.list(pid)]), [pid])
-  const { data, loading, reload } = useLoader(loader)
+  const { data, loading, reload } = useLoader(loader, { projectId: pid, resources: ['outlines', 'characters', 'chapters'] })
   const outlines = useMemo(() => data?.[0] ?? [], [data])
   const characters = useMemo(() => data?.[1] ?? [], [data])
   const groups = useMemo(() => groupOutlines(outlines), [outlines])
@@ -82,6 +83,7 @@ export default function OutlinesPanel() {
   const [exporting, setExporting] = useState(false)
   const [pending, setPending] = useState<number | null>(null)
   const [form] = Form.useForm<OutlineInput>()
+  usePublishAgentContext(pid, { outline_id: modalOpen ? editing?.id : expandedKeys.at(-1) })
 
   const pendingCount = outlines.filter(canCreateSingleChapter).length
 

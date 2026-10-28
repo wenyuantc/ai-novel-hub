@@ -1111,3 +1111,61 @@ def test_0017_book_imports(tmp_path):
             assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "星海"
     finally:
         engine.dispose()
+
+
+def test_0018_agent_foreign_keys_and_downgrade(tmp_path):
+    db_file = tmp_path / "migrate0018.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0018")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspector = inspect(engine)
+        assert {"agent_conversations", "agent_messages", "agent_changes"} <= set(inspector.get_table_names())
+        for table in ("agent_messages", "agent_changes"):
+            fks = {
+                fk["constrained_columns"][0]: fk["options"].get("ondelete") for fk in inspector.get_foreign_keys(table)
+            }
+            assert fks["conversation_id"] == "CASCADE" and fks["turn_task_id"] == "SET NULL"
+            assert any(
+                c["column_names"] == ["conversation_id", "turn_task_id", "tool_call_id"]
+                for c in inspector.get_unique_constraints(table)
+            )
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('agent-test', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO projects (user_id, title, genre, premise, style, status) "
+                    "VALUES (1, '书', '', '', '', 'planning')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapters (project_id, chapter_no, title, content, status, word_count) "
+                    "VALUES (1, 1, '一', '正文', 'done', 2)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chapter_versions (chapter_id, seq, source, content, word_count) "
+                    "VALUES (1, 1, 'agent', '正文', 2)"
+                )
+            )
+            conn.execute(text("INSERT INTO agent_conversations (user_id, project_id, title) VALUES (1, 1, '会话')"))
+            conn.execute(text("INSERT INTO agent_messages (conversation_id, role, content) VALUES (1, 'user', '问题')"))
+            assert conn.execute(text("SELECT auto_execute FROM agent_conversations")).scalar() == 0
+            conn.execute(text("DELETE FROM agent_conversations"))
+            assert conn.execute(text("SELECT count(*) FROM agent_messages")).scalar() == 0
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0017")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "agent_conversations" not in inspect(engine).get_table_names()
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT source FROM chapter_versions")).scalar() == "manual"
+    finally:
+        engine.dispose()

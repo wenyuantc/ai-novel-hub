@@ -83,11 +83,11 @@ export default function MemoriesPanel() {
   }, [chapterFrom, chapterTo, kind, origin, pinned, muted, q, page])
 
   const loader = useCallback(() => memoryApi.list(pid, query), [pid, query])
-  const { data, loading, error, reload, setData } = useLoader(loader)
+  const { data, loading, error, reload, setData } = useLoader(loader, { projectId: pid, resources: ['memories', 'characters'] })
   const settingsLoader = useCallback(() => kbApi.getSettings(pid), [pid])
-  const { data: settings, setData: setSettings } = useLoader(settingsLoader)
+  const { data: settings, setData: setSettings } = useLoader(settingsLoader, { projectId: pid, resources: ['memories', 'characters'] })
   const charLoader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: characters } = useLoader(charLoader)
+  const { data: characters } = useLoader(charLoader, { projectId: pid, resources: ['memories', 'characters'] })
   const characterNames = useMemo(() => (characters ?? []).map((c) => c.name), [characters])
 
   const { status, refresh: refreshStatus } = useIndexStatus(pid)
