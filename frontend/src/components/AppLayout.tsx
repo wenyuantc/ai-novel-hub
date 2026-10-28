@@ -1,5 +1,7 @@
 import {
+  ApiOutlined,
   BgColorsOutlined,
+  BulbOutlined,
   BookOutlined,
   FileTextOutlined,
   KeyOutlined,
@@ -22,12 +24,13 @@ import TaskPanel from './TaskPanel'
 const { Header, Content } = Layout
 
 /**
- * 顶层布局：顶栏（导航：我的项目 / 模型配置 / 提示词模板 / 写作风格；主题切换；用户菜单：提示词模板 / 写作风格库 / 用户管理（仅管理员）/ 修改密码 / 登出）
+ * 顶层布局：顶栏（导航：我的项目 / 模型配置 / 提示词模板 / 写作风格 / Skill / MCP 插件（部署关闭 MCP 时隐藏）；主题切换；用户菜单：提示词模板 / 写作风格库 / 用户管理（仅管理员）/ 修改密码 / 登出）
  * + 右下角后台任务面板。移动端顶栏只留 logo、汉堡按钮与用户菜单，导航与主题切换收进右侧抽屉。
  */
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
+  const mcpEnabled = useAuthStore((s) => s.mcpEnabled)
   const location = useLocation()
   const navigate = useNavigate()
   const [passwordOpen, setPasswordOpen] = useState(false)
@@ -56,15 +59,22 @@ export default function AppLayout() {
       ? ['prompts']
       : path.startsWith('/styles')
         ? ['styles']
-        : path.startsWith('/admin')
-          ? []
-          : ['projects']
+        : path.startsWith('/skills')
+          ? ['skills']
+          : path.startsWith('/mcp-plugins')
+            ? ['mcp']
+            : path.startsWith('/admin')
+              ? []
+              : ['projects']
 
   const navItems = [
     { key: 'projects', icon: <BookOutlined />, label: <Link to="/projects">我的项目</Link> },
     { key: 'settings', icon: <SettingOutlined />, label: <Link to="/settings/ai">模型配置</Link> },
     { key: 'prompts', icon: <FileTextOutlined />, label: <Link to="/prompt-templates">提示词模板</Link> },
     { key: 'styles', icon: <BgColorsOutlined />, label: <Link to="/styles">写作风格</Link> },
+    { key: 'skills', icon: <BulbOutlined />, label: <Link to="/skills">Skill</Link> },
+    // 部署关闭 MCP（/auth/config mcp_enabled = false）时隐藏入口
+    ...(mcpEnabled ? [{ key: 'mcp', icon: <ApiOutlined />, label: <Link to="/mcp-plugins">MCP 插件</Link> }] : []),
   ]
 
   return (

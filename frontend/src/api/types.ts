@@ -9,6 +9,8 @@ export interface User {
 
 export interface AuthConfig {
   registration_enabled: boolean
+  /** 部署是否开启 MCP 插件（关闭时隐藏入口）；旧后端没有该字段时按开启处理 */
+  mcp_enabled?: boolean
 }
 
 export interface Credentials {
@@ -349,6 +351,8 @@ export interface GenerateChapterRequest {
   /** 后端默认 false；编辑器默认开启并显式传 true */
   auto_continue?: boolean
   style?: StyleChoice
+  /** 选用的 Skill（本人或全局）作为补充工作流；任务创建时快照 */
+  skill_id?: number | null
 }
 
 /** generate SSE 的 continue 事件：每轮自动续写开始前，round 从 1 起，最多 2 */
@@ -368,6 +372,7 @@ export interface PolishChapterRequest {
   ai_config_id?: number | null
   instruction?: string
   style?: StyleChoice
+  skill_id?: number | null
 }
 
 export type WizardKind = 'outline' | 'characters' | 'world' | 'careers'
@@ -476,6 +481,7 @@ export interface RewriteRequest {
   end: number
   instruction?: string
   style?: StyleChoice
+  skill_id?: number | null
 }
 
 /** 局部改写 done 载荷：正文未改，需调用 apply 采纳 */
@@ -543,6 +549,8 @@ export interface Task {
   analysis_id: number | null
   /** 展开的大纲（仅 outline.expand 有值），用于按大纲接上活动任务 */
   outline_id: number | null
+  /** 生成类任务选用的 Skill（创建时的快照，只含 id 与名称） */
+  skill?: SkillRef | null
   /**
    * 多步任务的断点（首次运行前为 null）：chapter.batch 为 BatchCheckpoint；book.import 为断点摘要 BookImportSummary。
    * 按 kind 收窄：批量用 utils/batchState.ts 的 batchCheckpoint，拆书用 utils/bookImport.ts 的 bookImportSummary（任务面板只用 bookImportState.ts 的轻量读取）
@@ -602,6 +610,8 @@ export interface BatchGenerateRequest {
   ai_config_id?: number | null
   /** inherit = 按章节覆盖或项目默认（逐章解析）；none = 不用风格；数字 = 全部章节使用该风格；续跑 / 重试沿用 */
   style?: StyleChoice
+  /** 全部章节使用的 Skill；创建时快照，续跑 / 重试沿用 */
+  skill_id?: number | null
 }
 
 export type BatchWordsSource = 'plan' | 'uniform'
@@ -1558,6 +1568,7 @@ export interface ReviseChapterRequest {
   target_words?: number | null
   ai_config_id?: number | null
   style?: StyleChoice
+  skill_id?: number | null
 }
 
 // ---------------- 伏笔（backend/app/schemas/foreshadow.py） ----------------
@@ -2501,9 +2512,12 @@ export interface AgentConversation {
   summary: string
   summarized_until: number | null
   last_message_at: string | null
+  /** 本会话启用的 MCP 插件 id（[] = 不启用） */
+  mcp_plugin_ids: number[]
   created_at: string
   updated_at: string
 }
+export interface AgentConversationUpdate { title?: string; auto_execute?: boolean; mcp_plugin_ids?: number[] }
 export interface AgentMessage {
   id: number
   conversation_id: number
@@ -2515,6 +2529,9 @@ export interface AgentMessage {
   tool_name: string | null
   page_context: AgentPageContext | null
   usage: Record<string, unknown> | null
+  /** 本轮强制启用的 Skill（快照） */
+  skill_id?: number | null
+  skill?: SkillRef | null
   created_at: string
   updated_at: string
 }
@@ -2524,7 +2541,18 @@ export interface AgentPreview {
   target: unknown
   diff: { field: string; label: string; before: unknown; after: unknown }[]
   warnings: string[]
+  /** 仅 kind = external：外部插件调用（插件、工具与完整参数） */
+  external?: AgentExternalCall
 }
+export interface AgentExternalCall {
+  plugin: { id: number; slug: string; name: string }
+  tool: string
+  arguments: Record<string, unknown>
+  /** MCP readOnlyHint：只作提示，不代表免确认 */
+  read_only_hint: boolean | null
+}
+/** external = MCP 插件调用：不可撤销、不参与自动执行 */
+export type AgentChangeKind = 'small' | 'delete' | 'task' | 'text' | 'external'
 export interface AgentEffect {
   table: string
   pk: unknown
@@ -2539,7 +2567,7 @@ export interface AgentChange {
   tool_call_id: string
   tool_name: string
   arguments: Record<string, unknown>
-  kind: 'small' | 'delete' | 'task' | 'text'
+  kind: AgentChangeKind
   preview: AgentPreview
   status: AgentChangeStatus
   result: Record<string, unknown> | null
@@ -2556,8 +2584,96 @@ export interface AgentConversationDetail extends AgentConversation {
   changes: AgentChange[]
   active_task: Task | null
 }
-export interface AgentSendRequest { content: string; page_context?: AgentPageContext; ai_config_id?: number | null }
+export interface AgentSendRequest { content: string; page_context?: AgentPageContext; ai_config_id?: number | null; skill_id?: number | null }
 export interface AgentSendResult { message: AgentMessage; task: Task }
-export interface AgentTurnResult { changes: AgentChange[]; task: Task | null; error?: string | null }
+export interface AgentTurnResult { changes: AgentChange[]; task: Task | null; error?: string | null; notice?: string | null }
 export interface AgentToolStart { call_id: string; name: string; label: string }
 export interface AgentToolEnd { call_id: string; ok: boolean; summary: string }
+
+// ---------------- Skill（backend/app/schemas/skill.py） ----------------
+
+/** mine = 我的；global = 管理员发布的全局 Skill（普通用户只读，可复制） */
+export type SkillScope = 'mine' | 'global'
+export interface SkillRef { id: number; name: string }
+export interface SkillReference { id: number; title: string; sort: number; content: string }
+export interface SkillReferenceInput { title: string; content: string }
+/** 列表项：不含正文与参考资料内容 */
+export interface SkillBrief {
+  id: number
+  scope: SkillScope
+  slug: string
+  name: string
+  description: string
+  category: string
+  /** 不带 / */
+  triggers: string[]
+  builtin_key: string | null
+  source_skill_id: number | null
+  /** 当前用户能否修改 / 删除（全局 Skill 仅管理员） */
+  editable: boolean
+  body_chars: number
+  reference_titles: string[]
+  created_at: string
+  updated_at: string
+}
+export interface Skill extends SkillBrief {
+  body: string
+  references: SkillReference[]
+}
+export interface SkillCreate {
+  scope?: SkillScope
+  slug: string
+  name: string
+  description?: string
+  category?: string
+  triggers?: string[]
+  body?: string
+  references?: SkillReferenceInput[]
+}
+export type SkillUpdate = Partial<Pick<SkillCreate, 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body'>>
+
+// ---------------- MCP 插件（backend/app/schemas/mcp.py） ----------------
+
+export type McpTransport = 'streamable_http' | 'sse'
+export interface McpTool {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+  read_only_hint: boolean | null
+  schema_hash: string
+  enabled: boolean
+  auto_confirm: boolean
+}
+export interface McpPlugin {
+  id: number
+  slug: string
+  name: string
+  transport: McpTransport
+  url: string
+  enabled: boolean
+  /** 只回显请求头名称；取值加密存储，任何接口都不返回 */
+  header_names: string[]
+  has_headers: boolean
+  tools: McpTool[]
+  tools_refreshed_at: string | null
+  last_tested_at: string | null
+  last_error: string
+  created_at: string
+  updated_at: string
+}
+export interface McpPluginCreate {
+  name: string
+  slug?: string | null
+  transport: McpTransport
+  url: string
+  headers?: Record<string, string> | null
+  enabled?: boolean
+}
+/** headers：不提交 = 保持原值；提交（含 {}）= 整体替换 */
+export type McpPluginUpdate = Partial<McpPluginCreate>
+export interface McpImportItem { name: string; status: 'created' | 'error'; detail: string; plugin: McpPlugin | null }
+export interface McpImportResult { items: McpImportItem[] }
+export interface McpToolPrefUpdate { enabled?: boolean; auto_confirm?: boolean }
+/** PATCH /mcp-plugins/{id}/tools 的请求体：工具名在 body 里 */
+export interface McpToolPrefRequest extends McpToolPrefUpdate { tool: string }
+export interface McpCallResult { text: string; is_error: boolean; truncated: boolean }

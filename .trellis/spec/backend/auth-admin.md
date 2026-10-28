@@ -74,6 +74,16 @@ create_user(db, data) / update_user(db, actor, user_id, data) / reset_password(d
   `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`。管理员无法读取
   其他用户的小说内容——只能看到计数。
 
+- **管理员的其他权限**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
+  - **全局 Skill**：`skills.owner_user_id` 为空的 Skill 只有 `is_admin` 用户可以新建（`POST /skills` 或导入时 `scope=global`）、修改、删除、
+    `PUT /references` 与 `POST /{id}/restore-builtin`；普通用户可见但写操作 403（文案提示复制为自己的副本），他人私有 Skill 对管理员同样 404——
+    管理员**不能**读取其他用户的私有 Skill。权限按当前请求的 `user.is_admin` 判断，降级后立即失去写权限，不需要 `token_version` 递增。
+  - **`MCP_ENABLED`**（`Settings.mcp_enabled: bool = True`）：部署级开关，不是用户级。关闭后 `/api/v1/mcp-plugins/*` 全部 403 `管理员已关闭 MCP`，
+    智能体不再暴露任何 MCP 工具（运行中途关闭时，待处理的调用返回「工具不存在或已变更」）；已保存的插件保留。`GET /auth/config` 返回
+    `{registration_enabled, mcp_enabled}`，前端据此隐藏入口。与 `REGISTRATION_ENABLED` 一样只经环境变量设置，目前没有写进 `.env.example` /
+    `docker-compose.yml`，需要时手动加。
+  - 删除用户时其私有 Skill、MCP 插件经外键 CASCADE 删除；全局 Skill 不属于任何用户，不受影响。
+
 ### 4. 校验与错误矩阵
 
 | 条件 | 结果 |
@@ -82,6 +92,8 @@ create_user(db, data) / update_user(db, actor, user_id, data) / reset_password(d
 | 密码正确但 `is_active=false` 时登录 | 403 `账号已被禁用，请联系管理员`（密码错误仍为 401，不泄露账号状态） |
 | 任意需认证请求中 `ver` 过期 / 用户已禁用 | 401 `未登录或登录已过期` |
 | 非管理员调用 `/admin/*` | 403 `需要管理员权限` |
+| 非管理员写全局 Skill / 恢复内置 Skill | 403 |
+| `MCP_ENABLED=false` 时调用 `/mcp-plugins/*` | 403 `管理员已关闭 MCP` |
 | 目标用户不存在 | 404 `用户不存在` |
 | 管理员创建时用户名重复 | 409 `用户名已存在` |
 | 操作者禁用 / 降级 / 删除自己 | 400 `不能对自己执行该操作`（对自己的无变化 PATCH 允许） |

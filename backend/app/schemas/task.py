@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.skill import SkillRef
+
 TaskStatus = Literal["queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted"]
 TaskKind = Literal[
     "agent.turn",
@@ -45,6 +47,8 @@ class TaskOut(BaseModel):
     analysis_id: int | None = None
     # 展开的大纲（取自 input.request.outline_id，仅 outline.expand 有值），前端据此按大纲接上活动任务
     outline_id: int | None = None
+    # 生成类任务选用的 Skill（取自 input.skill 快照，只返回 id 与名称）
+    skill: SkillRef | None = None
     # 多步任务的结构化断点（chapter.batch：阶段、当前章、每章结果，前端据此渲染章节清单；
     # book.import：断点摘要，见 book_import.reverse.summarize，不含体积较大的中间结果）
     checkpoint: dict[str, Any] | None = None

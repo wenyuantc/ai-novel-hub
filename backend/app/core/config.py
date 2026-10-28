@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     task_max_per_user: int = Field(default=2, ge=1)
     # 部署级自动分析开关：关闭后忽略项目的 auto_analyze，AI 生成 / 润色 / 重写成功后不自动排队分析（手动分析不受影响）
     auto_analyze_enabled: bool = True
+    # 部署级 MCP 插件开关：关闭后 /mcp-plugins 接口返回 403，智能体不再暴露任何 MCP 工具
+    mcp_enabled: bool = True
     # 生产模式下挂载的前端构建产物目录；不存在则跳过
     frontend_dist_dir: str = str(_DEFAULT_FRONTEND_DIST)
     # 首个管理员引导（可选，须同时设置）：启动时账号不存在则创建，已存在则确保为启用中的管理员，不覆盖密码

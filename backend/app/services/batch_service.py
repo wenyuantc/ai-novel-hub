@@ -29,7 +29,14 @@ from app.models import Chapter, ChapterPlan, Project, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.batch import BatchGenerateRequest, BatchPreview, BatchPreviewItem, BatchSkippedItem
 from app.schemas.chapter import GenerateChapterRequest
-from app.services import ai_config_service, analysis_service, generation_service, kb_index_service, style_service
+from app.services import (
+    ai_config_service,
+    analysis_service,
+    generation_service,
+    kb_index_service,
+    skill_service,
+    style_service,
+)
 from app.services.project_service import get_owned_project
 
 if TYPE_CHECKING:
@@ -228,6 +235,8 @@ async def validate_start(
     chapters, _, _ = await _range_chapters(db, project.id, req)
     ai_config_id = await _check_config(db, ctx, user_id, req.ai_config_id)
     await style_service.validate_choice(db, user_id, req.style)
+    # Skill 快照：之后编辑 Skill 不影响续跑与重试（重试复制 input）
+    skill = await skill_service.snapshot(db, user_id, req.skill_id)
     if not any(req.include_written or not is_written(c) for c in chapters):
         raise BadRequestError(NOTHING_TO_GENERATE)
     await _check_not_generating(db, [c.id for c in chapters], include_written=req.include_written)
@@ -240,6 +249,7 @@ async def validate_start(
             "request": {"project_id": project.id, **req.model_dump(mode="json")},
             "chapter_ids": [c.id for c in chapters],
             "ai_config_id": ai_config_id,
+            "skill": skill,
         },
     }
 
@@ -324,6 +334,8 @@ class BatchJob:
     target: int = 3000
     last_progress: int = 0
     warnings: list[str] = field(default_factory=list)
+    # 创建任务时的 Skill 快照（tasks.input.skill）
+    skill: dict[str, Any] | None = None
 
     @property
     def total(self) -> int:
@@ -353,6 +365,7 @@ async def build_batch_job(ctx: "TaskContext", task: Task) -> BatchJob:
         cursor=min(task.step_cursor, len(chapter_ids)),
         checkpoint=checkpoint,
         position=task.step_cursor,
+        skill=task.input.get("skill"),
     )
 
 
@@ -462,6 +475,7 @@ async def _generate_chapter(
                         allow_private=settings.allow_private_ai_endpoints,
                         context_budget=settings.context_char_budget,
                         task_id=job.task_id,
+                        skill=job.skill,
                     )
             except AppError:
                 # 配置被删 / 章节被复位等：不重试；章节仍是本任务抢占的 generating，还原

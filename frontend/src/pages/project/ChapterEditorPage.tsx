@@ -53,6 +53,7 @@ import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
 import ContextPreviewPanel from '../../components/chapter/ContextPreviewPanel'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
+import SkillSelect from '../../components/skills/SkillSelect'
 import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
@@ -157,6 +158,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   // 本次生成 / 润色 / 重写 / 局部改写临时使用的风格（inherit = 本章风格 > 项目默认）
   const [styleChoice, setStyleChoice] = useState<StyleChoice>('inherit')
+  // 本次生成 / 润色 / 重写 / 局部改写选用的 Skill（补充工作流，任务创建时快照）
+  const [skillId, setSkillId] = useState<number | null>(null)
   const [genOptions, setGenOptions] = useState<GenerateOptions>(() => ({
     targetWords: 3000,
     instruction: '',
@@ -230,6 +233,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const styleSelect = (disabled: boolean) => (
     <StyleChoiceSelect value={styleChoice} onChange={setStyleChoice} context={styleContext} disabled={disabled} />
   )
+  const skillSelect = (disabled: boolean) => <SkillSelect value={skillId} onChange={setSkillId} disabled={disabled} />
   // 排队中 / 尚无输出时仍显示原正文；开始输出后显示实时文本
   const aiStreaming = aiTask.running && (aiTask.text !== '' || aiStatus === 'running')
   const displayContent = aiStreaming ? aiTask.text : content
@@ -466,11 +470,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               // 后端默认 false，必须显式传
               auto_continue: genOptions.autoContinue,
               style: styleChoice,
+              skill_id: skillId,
             })
           : await polishChapter(chapter.id, {
               ai_config_id: aiConfigId,
               instruction: polishInstruction.trim(),
               style: styleChoice,
+              skill_id: skillId,
             })
     } catch (err) {
       message.error(errorMessage(err))
@@ -491,7 +497,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     setStarting(true)
     let created: Task
     try {
-      created = await reviseChapter(chapter.id, { ...body, ai_config_id: aiConfigId, style: styleChoice })
+      created = await reviseChapter(chapter.id, { ...body, ai_config_id: aiConfigId, style: styleChoice, skill_id: skillId })
     } catch (err) {
       message.error(errorMessage(err))
       setStarting(false)
@@ -681,6 +687,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           <Typography.Text type="secondary">本次写作风格</Typography.Text>
           {styleSelect(editorLocked)}
         </div>
+        <div>
+          <Typography.Text type="secondary">Skill（可选）</Typography.Text>
+          {skillSelect(editorLocked)}
+        </div>
         <Tabs
           activeKey={aiMode}
           onChange={(k) => setAiMode(k as AIMode)}
@@ -717,6 +727,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   selection={selection}
                   aiConfigId={aiConfigId}
                   styleChoice={styleChoice}
+                  skillId={skillId}
                   // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
                   disabled={aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
                   ensureSaved={ensureSaved}
@@ -931,6 +942,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         onRevise={runRevise}
         compare={reviseCompare}
         reviseStyle={styleSelect(aiRunning)}
+        reviseSkill={skillSelect(aiRunning)}
       />
       <Modal
         open={blocker.state === 'blocked'}

@@ -15,6 +15,12 @@ from app.models import Task
 Event = tuple[str, dict[str, Any]]
 
 
+def _default_mcp_connector() -> Any:
+    from app.services.mcp.client import connect
+
+    return connect
+
+
 @dataclass
 class TaskContext:
     """引擎与创建请求共享的依赖。settings 每次使用时读取（测试会在运行中修改）。"""
@@ -23,6 +29,8 @@ class TaskContext:
     settings: Settings
     cipher: SecretCipher
     factory: ProviderFactory
+    # MCP 连接工厂 connector(McpTarget, *, allow_private) -> async context manager；测试替换为假实现
+    mcp_connector: Any = field(default_factory=_default_mcp_connector)
 
 
 @dataclass

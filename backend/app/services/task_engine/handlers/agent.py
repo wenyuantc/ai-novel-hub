@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from app.core.errors import ConflictError
 from app.models import AgentChange, AgentConversation, AgentMessage, Task
 from app.schemas.agent import SendMessage
-from app.services import ai_config_service
+from app.services import ai_config_service, skill_service
 from app.services.agent import context, service
 from app.services.agent.runner import AgentJob, run_agent
 from app.services.task_engine.registry import TaskSpec, register
@@ -32,7 +32,20 @@ class AgentHandler:
             allow_private=ctx.settings.allow_private_ai_endpoints,
         )
         page = await context.validate_page_context(db, pid, req.page_context.model_dump() if req.page_context else None)
-        message = AgentMessage(conversation_id=cid, role="user", content=req.content, page_context=page)
+        # 强制启用的 Skill：显式 skill_id（不可见 → 404）或消息开头的 /触发词；快照随消息保存，本轮续跑沿用
+        skill = (
+            await skill_service.get_visible_skill(db, user_id, req.skill_id)
+            if req.skill_id is not None
+            else await skill_service.match_trigger(db, user_id, req.content)
+        )
+        message = AgentMessage(
+            conversation_id=cid,
+            role="user",
+            content=req.content,
+            page_context=page,
+            skill_id=skill.id if skill else None,
+            skill_snapshot=skill_service.snapshot_of(skill) if skill else None,
+        )
         db.add(message)
         conversation.last_message_at = datetime.now(UTC)
         if not conversation.title:

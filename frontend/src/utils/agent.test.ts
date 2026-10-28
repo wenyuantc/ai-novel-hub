@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import type { AgentChange, AgentMessage } from '../api/types'
-import { buildAgentTimeline, canUndoChange, changedResources, changeTaskId, mergeToolStep, upsertAgentChange } from './agent'
+import { buildAgentTimeline, canUndoChange, changedResources, changeTaskId, externalCall, externalResult, mergeToolStep, toolLabel, upsertAgentChange } from './agent'
 import { clampAgentWidth, readAgentPreferences, writeAgentPreferences } from './agentPreferences'
 import { invalidateProject, subscribeProjectRefresh } from './projectRefresh'
 
@@ -39,6 +39,16 @@ describe('智能体时间线与变更', () => {
     expect(canUndoChange(task)).toBe(false)
     expect(changeTaskId(task)).toBe(9)
     expect(changeTaskId(changeFixture())).toBeNull()
+  })
+  it('外部调用（external）不可撤销；解析插件 / 工具 / 参数与结果；MCP 与 Skill 工具名有中文标签', () => {
+    const ext = changeFixture({ kind: 'external', status: 'executed', arguments: { q: 1 }, result: { text: '结果' }, preview: { title: 't', target: 'p', diff: [], warnings: [], external: { plugin: { id: 5, slug: 'dict', name: '词典' }, tool: 'lookup', arguments: { q: 2 }, read_only_hint: null } } })
+    expect(canUndoChange(ext)).toBe(false)
+    expect(externalCall(ext)).toEqual({ plugin: { id: 5, slug: 'dict', name: '词典' }, tool: 'lookup', arguments: { q: 2 }, read_only_hint: null })
+    expect(externalCall(changeFixture())).toBeNull()
+    expect(externalResult(ext)).toEqual({ text: '结果', error: false })
+    expect(externalResult({ ...ext, result: { error: '超时' } })).toEqual({ text: '超时', error: true })
+    expect(toolLabel('mcp__dict__look_up')).toBe('外部插件 dict · look_up')
+    expect(toolLabel('load_skill')).toBe('加载 Skill')
   })
   it('级联 effects 使相关资源刷新；撤销正文同步章节与记忆', () => {
     expect(changedResources([changeFixture({ tool_name: 'delete_character', effects: [{ table: 'relationships', pk: 1, before: {}, after: null }, { table: 'organization_members', pk: 2, before: {}, after: null }] })])).toEqual(expect.arrayContaining(['project', 'characters', 'relationships', 'organizations']))

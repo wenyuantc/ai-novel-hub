@@ -327,6 +327,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               <Space wrap size={4}>
                 <Typography.Text strong>{t.title}</Typography.Text>
                 <Tag color={st.color}>{st.label}</Tag>
+                {t.skill && <Tag title="本任务使用的 Skill（创建时的快照）">Skill：{t.skill.name}</Tag>}
               </Space>
               {activeTask && (
                 <Progress
@@ -397,6 +398,7 @@ export function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => 
       <Space direction="vertical" style={{ width: '100%' }}>
         <Space wrap>
           <Tag color={TASK_STATUS[current.status].color}>{TASK_STATUS[current.status].label}</Tag>
+          {task.skill && <Tag>Skill：{task.skill.name}</Tag>}
           {current.status === 'queued' && <Typography.Text type="secondary">{queueLabel(current)}</Typography.Text>}
           {current.stage && current.status !== 'queued' && <Typography.Text type="secondary">{current.stage}</Typography.Text>}
           {batches && (

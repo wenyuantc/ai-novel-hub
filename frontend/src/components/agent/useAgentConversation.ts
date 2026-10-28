@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { agentApi, withAgentRefresh } from '../../api/agent'
 import { errorMessage } from '../../api/client'
 import { isActiveTask, taskApi } from '../../api/tasks'
-import type { AgentChange, AgentConversationDetail, AgentSendRequest, Task } from '../../api/types'
+import type { AgentChange, AgentConversationDetail, AgentConversationUpdate, AgentSendRequest, Task } from '../../api/types'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
@@ -15,6 +15,8 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
   const [detail, setDetail] = useState<AgentConversationDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // 正在确认 / 拒绝 / 撤销的提案：只有这张卡片显示加载状态（外部调用确认最长约 30 秒）
+  const [actingId, setActingId] = useState<number | null>(null)
   const [lastTask, setLastTask] = useState<Task | null>(null)
   const [steps, setSteps] = useState<AgentToolStep[]>([])
   const stream = useTaskStream()
@@ -107,21 +109,28 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     setSteps([])
     stream.reset()
   })
-  const change = (item: AgentChange, action: 'confirm' | 'reject' | 'undo') => act(async () => {
-    updateChange(await agentApi.change(pid, item.id, action))
-  }, action === 'undo' ? '已撤销修改' : undefined)
+  const change = async (item: AgentChange, action: 'confirm' | 'reject' | 'undo') => {
+    if (busy) return false
+    setActingId(item.id)
+    try {
+      return await act(async () => {
+        updateChange(await agentApi.change(pid, item.id, action))
+      }, action === 'undo' ? '已撤销修改' : undefined)
+    } finally { if (alive.current) setActingId(null) }
+  }
   const turn = (id: number, action: 'confirm-all' | 'reject-all' | 'undo') => act(async () => {
     const result = await agentApi.turn(pid, id, action)
     result.changes.forEach(updateChange)
     if (result.task) track(result.task)
     if (result.error) message.warning(result.error)
+    if (result.notice) message.info(result.notice)
   })
   const cancel = () => act(async () => {
     const task = detail?.active_task
     if (task) track(await taskApi.cancel(task.id))
   }, '已取消本轮对话')
   const retry = (task: Task) => act(async () => { track(await taskApi.retry(task.id)) })
-  const update = (body: { title?: string; auto_execute?: boolean }) => act(async () => { await agentApi.update(pid, cid, body) })
+  const update = (body: AgentConversationUpdate) => act(async () => { await agentApi.update(pid, cid, body) })
 
-  return { detail, error, busy, steps, stream, lastTask: stream.task ?? lastTask, refresh: refreshSafe, send, change, turn, cancel, retry, update }
+  return { detail, error, busy, actingId, steps, stream, lastTask: stream.task ?? lastTask, refresh: refreshSafe, send, change, turn, cancel, retry, update }
 }

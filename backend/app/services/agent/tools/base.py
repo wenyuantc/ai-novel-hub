@@ -15,7 +15,7 @@ from app.core.errors import AppError, BadRequestError, NotFoundError
 from app.models import Base, Project
 from app.services.task_engine.registry import TaskContext
 
-ToolKind = Literal["read", "small", "delete", "task", "text"]
+ToolKind = Literal["read", "small", "delete", "task", "text", "external"]
 Preview = dict[str, Any]
 
 
@@ -260,6 +260,7 @@ FIELD_LABELS = {
     "ai_config_id": "模型配置",
     "instruction": "补充要求",
     "style": "写作风格",
+    "skill_id": "Skill",
     "auto_continue": "自动续写",
     "analysis_id": "分析结果",
     "suggestion_ids": "选择的建议",

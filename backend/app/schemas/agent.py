@@ -3,6 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
+from app.schemas.skill import SkillRef
 from app.schemas.task import TaskOut
 
 
@@ -21,12 +22,16 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     auto_execute: bool | None = None
+    # 本会话启用的 MCP 插件（每个 id 须属于本人，否则 404）；[] = 不启用
+    mcp_plugin_ids: list[int] | None = Field(default=None, max_length=10)
 
 
 class SendMessage(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     page_context: PageContext | None = None
     ai_config_id: int | None = Field(default=None, gt=0)
+    # 为本轮强制启用的 Skill（本人或全局）；不填时服务端也会识别消息开头的 /触发词
+    skill_id: int | None = Field(default=None, gt=0)
 
     @field_validator("content")
     @classmethod
@@ -47,8 +52,14 @@ class ConversationOut(BaseModel):
     summary: str
     summarized_until: int | None
     last_message_at: datetime | None
+    mcp_plugin_ids: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("mcp_plugin_ids", mode="before")
+    @classmethod
+    def _plugin_ids(cls, value: Any) -> list[int]:
+        return list(value or [])
 
 
 class MessageOut(BaseModel):
@@ -63,6 +74,10 @@ class MessageOut(BaseModel):
     tool_name: str | None
     page_context: dict[str, Any] | None
     usage: dict[str, Any] | None
+    skill_id: int | None = None
+    # 本轮强制启用的 Skill（快照，只返回 id 与名称）
+    # SkillRef 忽略快照里的 body 等字段，正文不返回面板
+    skill: SkillRef | None = Field(default=None, validation_alias="skill_snapshot")
     created_at: datetime
     updated_at: datetime
 
@@ -81,7 +96,7 @@ class ChangeOut(BaseModel):
     tool_call_id: str
     tool_name: str
     arguments: dict[str, Any]
-    kind: Literal["small", "delete", "task", "text"]
+    kind: Literal["small", "delete", "task", "text", "external"]
     preview: dict[str, Any]
     status: Literal["proposed", "executing", "executed", "rejected", "failed", "undone"]
     result: dict[str, Any] | None
@@ -109,3 +124,5 @@ class TurnChangesOut(BaseModel):
     changes: list[ChangeOut]
     task: TaskOut | None = None
     error: str | None = None
+    # 整轮撤销时跳过的外部操作等提示
+    notice: str | None = None

@@ -69,6 +69,8 @@ PROJECT_INFO_VAR = T(
     "project_info", "作品信息（书名 / 题材 / 设定 / 风格概述）", required=True, sample=SAMPLE_PROJECT_INFO
 )
 INSTRUCTION_VAR = T("instruction", "作者额外要求", sample="")
+# 生成任务选用的 Skill 正文（任务创建时快照）；为空时模板不输出补充工作流段
+SKILL_GUIDE_VAR = T("skill_guide", "补充工作流（选用的 Skill 正文，可能为空）", sample="")
 # 检索块（knowledge-base）：为空时模板不输出对应段落
 KNOWLEDGE_VAR = T(
     "knowledge", "知识库参考资料（自动检索，可能为空）", sample="- 《设定集》门派 > 天剑宗：天剑宗位于北境雪山。"
@@ -111,6 +113,11 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             L("safety_rules", "安全规则（锁定）", SAFETY_RULES),
             PROJECT_INFO_VAR,
             T("page_hint", "当前页面（已经校验项目归属）", sample="角色列表"),
+            T(
+                "skills_catalog",
+                "可用 Skill 清单（名称与说明，由服务端用不可信标记包裹）",
+                sample="【不可信数据开始】\ndeslop｜去 AI 味润色｜删除套话｜/去ai味\n【不可信数据结束】",
+            ),
         ),
     ),
     (
@@ -140,6 +147,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("target_words", "目标字数", "int", sample=3000),
             T("style", "写作风格段（由风格库渲染）", sample=SAMPLE_STYLE),
             INSTRUCTION_VAR,
+            SKILL_GUIDE_VAR,
         ),
     ),
     (
@@ -162,6 +170,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("content", "章节原文", required=True, sample="林远推开舱门，冷风扑面而来。"),
             T("style", "写作风格段（由风格库渲染）", sample=SAMPLE_STYLE),
             INSTRUCTION_VAR,
+            SKILL_GUIDE_VAR,
         ),
     ),
     (
@@ -180,6 +189,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("target_words", "目标字数", "int", sample=3000),
             T("style", "写作风格段（由风格库渲染）", sample=SAMPLE_STYLE),
             INSTRUCTION_VAR,
+            SKILL_GUIDE_VAR,
         ),
     ),
     (
@@ -196,6 +206,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("summary", "本章梗概", sample=""),
             T("style", "写作风格段（由风格库渲染）", sample=SAMPLE_STYLE),
             INSTRUCTION_VAR,
+            SKILL_GUIDE_VAR,
         ),
     ),
     (

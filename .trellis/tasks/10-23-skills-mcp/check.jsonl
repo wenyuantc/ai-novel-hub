@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/agent.md", "reason": "工具层与确认契约"}
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "全局资源权限"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板变量与锁定"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "NOT_EXPORTED 与反射测试"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与外键"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "SSRF、密钥回显、变异验证"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件与响应式"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}

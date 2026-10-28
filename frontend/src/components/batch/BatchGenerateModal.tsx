@@ -22,6 +22,7 @@ import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { defaultBatchRange, endIdUpTo, formatEta, rangeChapters, sortChapters } from '../../utils/batch'
 import { useProjectStore } from '../../stores/project'
 import AIConfigSelect from '../AIConfigSelect'
+import SkillSelect from '../skills/SkillSelect'
 import StyleChoiceSelect from '../styles/StyleChoiceSelect'
 
 interface Props {
@@ -44,6 +45,7 @@ interface FormValues {
   instruction: string
   ai_config_id: number | null
   style: StyleChoice
+  skill_id: number | null
 }
 
 /** 参数变化后多久请求预览 */
@@ -65,6 +67,7 @@ function toRequest(v: Partial<FormValues>): BatchGenerateRequest | null {
     instruction: v.instruction?.trim() ?? '',
     ai_config_id: v.ai_config_id ?? null,
     style: v.style ?? 'inherit',
+    skill_id: v.skill_id ?? null,
   }
 }
 
@@ -180,6 +183,7 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
           instruction: '',
           ai_config_id: null,
           style: 'inherit',
+          skill_id: null,
         }}
       >
         <Space size="middle" wrap align="start">
@@ -249,6 +253,14 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
               context={styleContext}
               inheritLabel={`按章节或项目默认${projectDefaultStyle ? `（项目默认「${projectDefaultStyle.name}」）` : ''}`}
             />
+          </Form.Item>
+          <Form.Item
+            name="skill_id"
+            label="Skill（可选）"
+            tooltip="全部章节使用同一个 Skill 作为补充工作流；创建任务时保存当时的内容，续跑 / 重试沿用"
+            style={{ minWidth: 'min(300px, 100%)' }}
+          >
+            <SkillSelect />
           </Form.Item>
         </Space>
       </Form>

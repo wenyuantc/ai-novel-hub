@@ -10,7 +10,7 @@
 - 驱动：生产环境在 PostgreSQL 上使用 `asyncpg`
   （默认 `DATABASE_URL=postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel`）；
   测试中使用 `aiosqlite`（开发依赖）。
-- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）→ `0013`（提示词模板与写作风格：`prompt_overrides` / `prompt_override_versions` / `writing_styles`、`projects.default_style_id`、`chapters.style_id`，`projects.style` 迁移为「原风格」，见 [prompts-styles.md](./prompts-styles.md)）→ `0014`（灵感模式：`projects` 结构化字段 `synopsis` / `theme` / `tags` / `selling_points` / `audience` / `target_words`、`inspiration_sessions`，见 [inspiration.md](./inspiration.md)）→ `0015`（知识库与剧情记忆：`kb_settings` / `kb_documents` / `kb_chunks` / `story_memories` / `retrieval_chunks`，见 [retrieval.md](./retrieval.md)）→ `0016`（阅读进度：`projects.reading_progress`，见 [reader.md](./reader.md)）→ `0017`（拆书导入：`book_imports`（`user_id` CASCADE、`expires_at` 索引，与项目无关、不进备份注册表）、`generation_logs.kind` 放宽到 String(32)，任务新增 `book.import` 类型、版本来源新增 `import`，见 [book-import.md](./book-import.md)）→ `0018`（项目智能体：`agent_conversations`（`user_id` / `project_id` CASCADE）/ `agent_messages`（`conversation_id` CASCADE、`turn_task_id` → tasks SET NULL）/ `agent_changes`（`conversation_id` / `project_id` CASCADE、`turn_task_id` SET NULL），后两张表 `(conversation_id, turn_task_id, tool_call_id)` 唯一；任务新增 `agent.turn` 类型、生成记录新增 `agent.turn` kind、版本来源新增 `agent`；三张表登记为备份 `NOT_EXPORTED`；downgrade 删表并把 `agent` 版本改记为 `manual`、删除 `agent.turn` 生成记录与任务，见 [agent.md](./agent.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
+- Migration：Alembic，异步 `env.py`；版本 `0001`（初始）→ `0002`（ai_configs 模型参数）→ `0003`（users `is_admin`/`is_active`/`token_version`，见 [auth-admin.md](./auth-admin.md)）→ `0004`（ai_configs `model_type`）→ `0005`（`chapter_versions` + `generation_logs`）→ `0006`（`tasks` + `generation_logs.task_id`）→ `0007`（结构化设定：角色新列、世界观分类、组织 / 成员、关系类型 / 关系 / 关系历史、章节出场角色，见 [story-entities.md](./story-entities.md)）→ `0008`（职业等级体系：`careers` / `career_stages` / `character_careers` / `career_history`，见 story-entities.md「职业等级体系」）→ `0009`（章节分析：`chapter_analyses` / `analysis_changes`、`projects.auto_analyze`、`tasks.serial_key`，见 story-entities.md「章节分析与回写」）→ `0010`（伏笔：`foreshadows` / `foreshadow_characters` / `foreshadow_history`，见 story-entities.md「伏笔管理」）→ `0011`（大纲进阶：`chapter_plans` / `outline_snapshots`、`chapters.plan_id`、`projects.wizard_progress`，见 [outline.md](./outline.md)）→ `0012`（批量生成：`tasks.checkpoint`，任务新增 `paused` 状态与 `chapter.batch` 类型，见 [batch-generate.md](./batch-generate.md)）→ `0013`（提示词模板与写作风格：`prompt_overrides` / `prompt_override_versions` / `writing_styles`、`projects.default_style_id`、`chapters.style_id`，`projects.style` 迁移为「原风格」，见 [prompts-styles.md](./prompts-styles.md)）→ `0014`（灵感模式：`projects` 结构化字段 `synopsis` / `theme` / `tags` / `selling_points` / `audience` / `target_words`、`inspiration_sessions`，见 [inspiration.md](./inspiration.md)）→ `0015`（知识库与剧情记忆：`kb_settings` / `kb_documents` / `kb_chunks` / `story_memories` / `retrieval_chunks`，见 [retrieval.md](./retrieval.md)）→ `0016`（阅读进度：`projects.reading_progress`，见 [reader.md](./reader.md)）→ `0017`（拆书导入：`book_imports`（`user_id` CASCADE、`expires_at` 索引，与项目无关、不进备份注册表）、`generation_logs.kind` 放宽到 String(32)，任务新增 `book.import` 类型、版本来源新增 `import`，见 [book-import.md](./book-import.md)）→ `0018`（项目智能体：`agent_conversations`（`user_id` / `project_id` CASCADE）/ `agent_messages`（`conversation_id` CASCADE、`turn_task_id` → tasks SET NULL）/ `agent_changes`（`conversation_id` / `project_id` CASCADE、`turn_task_id` SET NULL），后两张表 `(conversation_id, turn_task_id, tool_call_id)` 唯一；任务新增 `agent.turn` 类型、生成记录新增 `agent.turn` kind、版本来源新增 `agent`；三张表登记为备份 `NOT_EXPORTED`；downgrade 删表并把 `agent` 版本改记为 `manual`、删除 `agent.turn` 生成记录与任务，见 [agent.md](./agent.md)）→ `0019`（Skill 与 MCP 插件：`skills`（`owner_user_id` 为空 = 全局，CASCADE；`source_skill_id` 自引用 SET NULL；`builtin_key` 唯一）/ `skill_references`（`skill_id` CASCADE）/ `mcp_plugins`（`user_id` CASCADE）、`agent_conversations.mcp_plugin_ids`（JSON，可空）、`agent_messages.skill_id`（SET NULL）/ `skill_snapshot`（JSON）；写入 4 个内置全局 Skill；三张新表是用户级数据、与项目无关，不登记备份注册表，见 [skills-mcp.md](./skills-mcp.md)）。新版本使用 `batch_alter_table`，以便 SQLite 测试能够执行。
 - 不声明 ORM `relationship()`。级联由数据库外键完成；
   所有访问都通过 service 中显式的 `select()` 进行
   （见 `backend/app/models/entities.py` 的 docstring）。
@@ -244,7 +244,11 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
   `retrieval_chunks` 建表带 `sqlite_autoincrement`；`test_0015_knowledge_base` 断言外键规则、两个唯一约束、设置默认值、删章节后手动记忆保留且
   `chapter_id` 置空、删文档级联分块，`downgrade -1` 删除五张表且存量项目保留）、
   `0016_reading_progress.py`（`down_revision = '0015'`，`projects` 加 `reading_progress` JSON `server_default='{}'`，不回填；
-  `test_0016_reading_progress` 断言存量项目取 `{}`，`downgrade -1` 删除该列且存量项目保留）。
+  `test_0016_reading_progress` 断言存量项目取 `{}`，`downgrade -1` 删除该列且存量项目保留）、
+  `0019_skills_mcp.py`（`down_revision = '0018'`，新建三张表与三列；`agent_messages` 的外键与索引在 `batch_alter_table` 内创建（显式命名
+  `fk_agent_messages_skill_id_skills`，downgrade 先删约束再删列）；内置 Skill 用 `op.bulk_insert` 写入，正文读自 `app/skills/builtin/*.md`；
+  `test_0019_skills_mcp` 断言三张表、内置 Skill 的 `builtin_key` 顺序、全局 slug 部分唯一索引在 SQLite 上生效且私有 Skill 可与全局同名、
+  `(owner_user_id, slug)` 唯一、`skill_id` 为 SET NULL、删 Skill 级联参考资料、删用户级联插件，`downgrade -1` 删除三表三列）。
   `tests/test_migrations.py` 在 `upgrade head` 之后断言新列存在。
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
@@ -362,6 +366,13 @@ outline_id: Mapped[int | None] = mapped_column(
 `kb_documents (project_id, sha256)` 唯一（重复上传 409）。列长度：`kb_documents.filename` String(255) / `status` String(24) / `mime` String(100) /
 `warnings` JSON；`kb_chunks.heading_path` String(500)；`story_memories.kind` String(16) / `origin` String(8) / `content_key` String(16)、
 `content` ≤1000（schema）；`retrieval_chunks.source` String(8) / `embedding` LargeBinary（归一化 float32）/ `embedding_key` String(200) / `version` Integer。
+
+`0019`：`skills.owner_user_id`、`skill_references.skill_id`、`mcp_plugins.user_id` 为 CASCADE（删用户时其私有 Skill 与插件随之删除，全局 Skill 不受影响）；
+`skills.source_skill_id`（复制来源）、`agent_messages.skill_id`（强制启用的 Skill，正文另有 `skill_snapshot`）为 SET NULL。
+**唯一性**：`(owner_user_id, slug)` 唯一约束不约束 NULL，全局 Skill 的 slug 另用部分唯一索引
+`uq_skills_global_slug`（`Index(..., unique=True, postgresql_where=text("owner_user_id IS NULL"), sqlite_where=text("owner_user_id IS NULL"))`，
+模型与迁移都要写两种方言）；`mcp_plugins (user_id, slug)` 唯一。`mcp_plugins.headers_encrypted` 是 Fernet 密文（Text，可空），`tools` / `tool_prefs` 为 JSON。
+内置 Skill 与预置风格同理：迁移写入 + `after_create` 事件（测试的 `create_all`）。
 
 关系、组织、卡片与章节上下文的写入契约见 [story-entities.md](./story-entities.md)；要点：关系只能经
 `relationship_service.apply_change` 写入（不 commit，写历史），一对角色一条（`pair_low/pair_high` 唯一）。
@@ -499,7 +510,8 @@ class Task(TimestampMixin, Base):   # tasks
 - 将 AI 生成的字符串插入 `String(n)` 列时没有截断。
 - 在 `StreamingResponse` 生成器或后台任务中复用请求的 `AsyncSession`。
 - 新增任务类型时在 `validate_and_claim` 里 commit：章节抢占与任务插入必须在同一事务，否则撞唯一索引时抢占无法回滚。
-- 部分唯一索引只写 `postgresql_where`：SQLite 测试会建成全表唯一索引，已结束任务也会阻止新任务。
+- 部分唯一索引只写 `postgresql_where`：SQLite 测试会建成全表唯一索引，已结束任务也会阻止新任务（`uq_skills_global_slug` 同理：只写 PG 条件时，SQLite 上所有 Skill 的 slug 都变成全表唯一，私有 Skill 不能再与全局或他人的 Skill 同名）。
+- 以为普通唯一约束能约束可空列为 NULL 的行：`(owner_user_id, slug)` 对全局 Skill（owner 为 NULL）不生效，需要额外的部分唯一索引。
 - 将某个会被向导批量替换的表的外键改为 CASCADE。
 - 重新读写 `projects.style`：它自 0013 起只为 downgrade 保留；写作风格走 `writing_styles` + `default_style_id`（见 prompts-styles.md）。
 - 直接改 `Relationship` 字段而不经 `apply_change`：没有历史、绕过角色对唯一与同项目校验。

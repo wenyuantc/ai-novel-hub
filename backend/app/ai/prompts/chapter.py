@@ -21,6 +21,7 @@ def build_chapter_messages(
     key_events: list[str] | None = None,
     goal: str = "",
     emotion: str = "",
+    skill_guide: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """key_events / goal / emotion 来自细纲（没有细纲时为空，提示词与之前一致）。"""
@@ -39,17 +40,28 @@ def build_chapter_messages(
             "target_words": target_words,
             "style": style.strip(),
             "instruction": instruction.strip(),
+            "skill_guide": skill_guide.strip(),
         },
     )
 
 
 def build_polish_messages(
-    *, content: str, style: str = "", instruction: str = "", override: PromptOverride | None = None
+    *,
+    content: str,
+    style: str = "",
+    instruction: str = "",
+    skill_guide: str = "",
+    override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
         "chapter.polish",
         override,
-        {"content": content, "style": style.strip(), "instruction": instruction.strip()},
+        {
+            "content": content,
+            "style": style.strip(),
+            "instruction": instruction.strip(),
+            "skill_guide": skill_guide.strip(),
+        },
     )
 
 
@@ -64,6 +76,7 @@ def build_revise_messages(
     style: str = "",
     instruction: str = "",
     preserve: list[str] | None = None,
+    skill_guide: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """按分析建议整章重写：参考资料 + 原文全文 + 勾选的建议 + 补充要求 + 需保留的要素。"""
@@ -81,6 +94,7 @@ def build_revise_messages(
             "target_words": target_words,
             "style": style.strip(),
             "instruction": instruction.strip(),
+            "skill_guide": skill_guide.strip(),
         },
     )
 

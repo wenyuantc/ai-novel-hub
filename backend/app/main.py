@@ -15,7 +15,7 @@ from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
-from app.services import auth_service, kb_parser, style_service
+from app.services import auth_service, kb_parser, skill_service, style_service
 from app.services.book_import import service as book_import_service
 from app.services.project_transfer import importer as transfer_importer
 from app.services.task_engine.engine import TaskEngine
@@ -114,6 +114,13 @@ def create_app(
                 re.compile(r"/api/v1/book-imports"),
                 kb_parser.MAX_FILE_BYTES + MULTIPART_OVERHEAD,
                 kb_parser.TOO_LARGE,
+            ),
+            # Skill 导入（SKILL.md / zip）
+            (
+                "POST",
+                re.compile(r"/api/v1/skills/import"),
+                skill_service.MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD,
+                skill_service.TOO_LARGE,
             ),
             # 项目备份导入（预览 / 直接上传导入）
             (

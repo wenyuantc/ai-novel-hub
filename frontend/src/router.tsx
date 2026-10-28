@@ -16,7 +16,7 @@ import WorldPanel from './pages/project/WorldPanel'
 
 /**
  * 路由级懒加载（React Router `lazy`）：主包需低于 chunkSizeWarningLimit（1500 kB），
- * 较重或较少访问的页面单独成 chunk（章节编辑器含 diff、阅读器、大纲 / 组织 / 关系 / 职业 / 伏笔 / 知识库 / 剧情记忆页、模型配置、提示词模板、写作风格库、灵感模式、拆书导入）。
+ * 较重或较少访问的页面单独成 chunk（章节编辑器含 diff、阅读器、大纲 / 组织 / 关系 / 职业 / 伏笔 / 知识库 / 剧情记忆页、模型配置、提示词模板、写作风格库、Skill、MCP 插件、灵感模式、拆书导入）。
  */
 const lazyPage = (load: () => Promise<{ default: ComponentType }>) => async () => ({ Component: (await load()).default })
 
@@ -48,6 +48,8 @@ export const router = createBrowserRouter([
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },
       { path: 'styles', lazy: lazyPage(() => import('./pages/StylesPage')) },
+      { path: 'skills', lazy: lazyPage(() => import('./pages/SkillsPage')) },
+      { path: 'mcp-plugins', lazy: lazyPage(() => import('./pages/McpPluginsPage')) },
       { path: 'inspiration', lazy: lazyPage(() => import('./pages/InspirationListPage')) },
       { path: 'inspiration/:sid', lazy: lazyPage(() => import('./pages/InspirationSessionPage')) },
       { path: 'book-import', lazy: lazyPage(() => import('./pages/BookImportPage')) },

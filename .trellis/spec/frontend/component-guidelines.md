@@ -402,8 +402,13 @@ dayjs.locale('zh-cn')
 - **手机**：`AgentDock` 改为全宽 `Drawer`（`width="100%"`、`destroyOnHidden`，body 无内边距），由同一个按钮打开，没有拖拽条。
 - **面板结构**（`AgentPanel` → `AgentConversationView` → `AgentTimeline` / `AgentChangeCard`）：
   - 顶部 `Space.Compact`：会话 `Select`、新建、重命名（`Modal` + `Form`，1–200 字）、删除（`modal.confirm`，说明已写入项目的内容会保留）。没有会话时显示空状态，带「开始新会话」按钮。
-  - 「自动执行小修改」`Switch` 通过 PATCH `auto_execute` 存在服务端，本轮未结束时禁用。下方文案说明规则：每轮首次不超过 3 项小修改直接执行，删除、后续修改和启动任务仍需确认。
-  - 输入区：`AIConfigSelect`；`TextArea` 最多 8000 字（按码点计）。Enter 发送，Shift+Enter 换行，输入法组合中（`isComposing`）不发送。`busy`、有未结束轮次或流在运行时禁止发送。输入框上方显示当前附带的页面上下文（章节、大纲、角色，以及选区字数）。
+  - 「自动执行小修改」`Switch` 通过 PATCH `auto_execute` 存在服务端，本轮未结束时禁用。下方文案说明规则：每轮首次不超过 3 项小修改直接执行，删除、后续修改、启动任务和外部插件调用仍需确认。
+  - 会话插件多选 `AgentPluginSelect`（`10-23-skills-mcp`）：只在 `useAuthStore` 的 `mcpEnabled` 为真时渲染；`useLoader(mcpApi.list)` 读插件列表，读取失败（如 403）或没有插件且会话也没启用时不显示；
+    已停用的插件标「（已停用）」，未被选中的不可再选；变更即 PATCH `mcp_plugin_ids`，本轮未结束或 `busy` 时禁用。下方提示「插件工具的调用默认需要确认，且无法撤销」。
+  - 输入区：`AIConfigSelect`；`SkillSelect`（本轮强制启用的 Skill，可清空，发送成功后清空，优先于触发词）；`TextArea` 包在 `AutoComplete` 里做 `/` 补全（被 AutoComplete 包裹的 TextArea 不能传 `maxLength`，否则每次渲染都会出现 BaseSelect 受控警告；长度上限在 `onChange` 里截断）
+    （`utils/skills.ts::triggerOptions`：只在输入框内容是 `/前缀` 且还没有空白时出候选，前缀匹配、大小写不敏感，同一触发词只保留优先级最高的「我的」）；
+    命中（`matchTrigger`，与后端同规则：开头 `/词` 后接空白或结束）或已选 Skill 时在下方提示「本轮将启用 Skill「X」」。最多 8000 字（按码点计）。
+    Enter 发送，Shift+Enter 换行，输入法组合中（`isComposing`）不发送；**补全列表展开时 Enter 用于选择候选，不发送**。`busy`、有未结束轮次或流在运行时禁止发送。输入框上方显示当前附带的页面上下文（章节、大纲、角色，以及选区字数）。
   - 轮次控制：有未结束轮次时显示阶段文案（`paused` 时为「请确认或拒绝修改，随后继续对话」），以及「停止」（Popconfirm → `taskApi.cancel`）。最近一轮可重试（`canRetryTask`）且没有未结束轮次时，显示「重试本轮」。
 - **事件归并时间线**（`utils/agent.ts` 的 `buildAgentTimeline(messages, changes, liveSteps)`）：
   - 按持久化消息顺序展开：user 消息、assistant 文本，再接 assistant 的每个 `tool_call`。
@@ -415,7 +420,12 @@ dayjs.locale('zh-cn')
 - **助手文本渲染**：`AgentMarkdown` 是自写的极简解析器，支持标题、列表、粗体、行内代码、代码块和链接。它只生成 React 节点：原始 HTML 一律当作文本，链接只允许 `http(s)`，并加 `target="_blank" rel="noopener noreferrer"`。**不得**使用 `dangerouslySetInnerHTML`，也不得引入完整的 markdown 库。
 - **提案卡片按钮的显示条件**（`AgentChangeCard`，状态标签取 `AGENT_CHANGE_STATUS`）：
   - `proposed`：显示「确认」「拒绝」。只有本轮任务处于 `paused`（`confirmationReady`）时才可点；运行中的轮次里新出现的提案先只读显示。
-  - 「撤销」只在 `canUndoChange` 为真时显示，即 `status === 'executed' && kind !== 'task'`；点击前先 Popconfirm，说明之后被修改过会提示冲突。
+  - 「撤销」只在 `canUndoChange` 为真时显示，即 `status === 'executed' && kind !== 'task' && kind !== 'external'`；点击前先 Popconfirm，说明之后被修改过会提示冲突。
+  - `kind === 'external'`（MCP 调用，`10-23-skills-mcp`）：`externalCall(change)` 从 `preview.external` 收窄出插件、工具、参数（结构不完整时回落到 `change.arguments`）；
+    卡片显示橙色 Tag「外部操作，无法撤销」、插件声明只读时另显示「插件声明只读」（tooltip 说明只是插件自己的提示）、插件名与标识、工具名（`code`）、
+    完整参数 JSON（`pre`，`overflowWrap: anywhere`、限高可滚动）。确认按钮文案为「确认调用」。确认请求内同步调用外部服务，最长约 30 秒：
+    `useAgentConversation` 记录 `actingId`，只有正在处理的那张卡片 `loading`（并显示「正在调用外部插件，最长约 30 秒…」），其他卡片只禁用。
+    执行后经 `externalResult(change)` 显示折叠的「调用结果」或「调用失败」文本，**永远不显示撤销**。卡片自带「外部操作，无法撤销」标签，所以 `preview.warnings` 中含「无法撤销」的那条对 external 不再渲染，避免重复；其余警告（如刷新后的「继续确认会失败」）照常显示。整轮撤销返回 `notice`（跳过的外部操作）时 `message.info`。
   - `kind === 'task'` 且已执行（`changeTaskId` 能从 `result.task_id` 或 `result.task.id` 取到 id）：显示任务状态 Tag 和「查看任务」（`TaskOutputModal`）。任务未结束（`isOpenTask`）时再显示「取消任务」，**不显示撤销**。
   - `executing` / `rejected` / `failed` / `undone`：没有操作按钮。`failed` 显示 `error` Alert。
   - 字段对比是表格（`tableLayout: fixed`、`overflowWrap: anywhere`），值经 `agentValue` 格式化。`kind === 'text'`，或前后合计超过 500 字的字符串字段，额外提供折叠的 `TextDiff` 逐字对比。
@@ -433,4 +443,44 @@ dayjs.locale('zh-cn')
 - 测试（node 环境）：
   - `utils/agent.test.ts`：历史与实时事件合并，提案只出现一次；跨轮次重用 call id；重连时按 id 更新卡片；撤销条件与任务 id 提取；级联 effects 推导刷新范围；宽度收敛到 320–720；存储损坏。
   - `api/agent.test.ts`：路径与方法；409 先刷新、不重发；流事件顺序交付，非法载荷不进入 UI，经 `api/agentEvents.ts` 收窄。
-  - `components/agent/agentUI.test.ts`：用 `react-dom/server` 渲染，覆盖各状态下的按钮、安全的 markdown、移动端全宽抽屉、桌面键盘调宽，以及折叠时不挂载面板。
+  - `components/agent/agentUI.test.ts`：用 `react-dom/server` 渲染，覆盖各状态下的按钮、安全的 markdown、移动端全宽抽屉、桌面键盘调宽，以及折叠时不挂载面板；
+    external 卡片（插件 / 工具 / 完整参数 /「无法撤销」、确认中只有当前卡片转圈、执行后显示结果且没有撤销、失败显示原因）。
+  - `utils/agent.test.ts` 另覆盖 external 不可撤销、`externalCall` / `externalResult` 收窄、MCP 与 Skill 工具名的中文标签（`toolLabel`：`mcp__标识__工具` → 「外部插件 标识 · 工具」）。
+
+### Skill 与 MCP 插件页（`10-23-skills-mcp`）
+
+后端契约见 [../backend/skills-mcp.md](../backend/skills-mcp.md)。
+
+- **入口与懒加载**：顶栏 `navItems` 在「写作风格」之后加「Skill」（`/skills`）与「MCP 插件」（`/mcp-plugins`），两页都是 `router.tsx` 的 `lazyPage` 路由，
+  代码不进入口 chunk。**MCP 关闭时隐藏入口**：`useAuthStore.mcpEnabled` 取自 `GET /auth/config` 的 `mcp_enabled`（读取失败按开启处理），为 false 时顶栏与
+  智能体面板都不渲染 MCP 相关控件；直接访问 `/mcp-plugins` 时列表请求 403，页面显示错误 `Alert` 并禁用「添加插件」。
+- **`pages/SkillsPage`**：`useSkills()` 读 store；Tabs「我的（N）」/「全局（N）」，卡片网格（`Row` / `Col xs=24`，375 宽度无固定宽度）。普通用户在全局 Tab 看到说明
+  「全局 Skill 由管理员维护，只读；复制为我的之后可以修改」，且全局 Tab 上不显示新建 / 导入按钮；管理员在全局 Tab 新建 / 导入的归入全局，其余归入「我的」。
+  导入用 `Upload`（`showUploadList={false}`，`beforeUpload` 里调 `skillApi.import`，返回 false 阻止自动上传）。任何变更后 `useSkillStore.load(true)`。
+- **`skills/SkillCard`**：按 `skill.editable` 决定操作——不可写（全局 + 普通用户）只有「查看 / 复制为我的 / 导出」；可写的有「编辑 / 导出 / 删除」；
+  内置 Skill 且管理员时另有「恢复内置内容」（Popconfirm）。前端**不自己判断归属**，只看服务端给的 `editable`。
+- **`skills/SkillEditDrawer`**：`useModalWidth(760)`；新建时 `SkillForm`，编辑时先 `skillApi.get` 再以 `key = updated_at` 挂载表单。字段：归属（仅新建且管理员可选）、
+  标识（`suggestSlug` 由名称给建议）、名称、说明、分类、触发词（`Select mode=tags`，提交前 `normalizeTriggers`）、正文 Tabs「编辑 / 预览」（预览复用
+  `agent/AgentMarkdown`，不引入 markdown 库）、参考资料列表（增删、上下移动）。保存 = PATCH 基本字段 + 参考资料有变化（`refsKey` 比较）时
+  `PUT /references` 整体替换。不可写时整个表单只读，底部给「复制为我的」。
+- **`skills/SkillSelect`**（复用点；选项标签为「名称（slug）」，因为副本和全局 Skill 常同名）：`{ value?: number | null; onChange?; disabled?; placeholder? = '不使用 Skill'; style?; 'aria-label'? }`，`useSkills()` 加载，
+  `skillSelectOptions` 分「我的」「全局」两组，可清空（= null = 不使用 Skill）、可搜索。用于：章节编辑器 AI 助手（一个 `skillId` 状态，生成 / 润色 / 局部改写
+  `RewritePanel.skillId` / 按建议重写都带 `skill_id`）、`BatchGenerateModal`（表单字段 `skill_id`）、智能体输入区。新增「可选 Skill」的入口一律复用它，不另写下拉。
+- **生成记录与任务**：`GenerationLogList` 用 `skillRef(params.skill)` 收窄后显示所用 Skill；`TaskPanel` 行与 `TaskOutputModal` 在 `task.skill` 存在时显示「Skill：名称」Tag（创建时的快照）。
+- **`pages/McpPluginsPage`**：卡片网格（`Col xs=24 md=12 xl=8`），达到 `MAX_MCP_PLUGINS`（10）时禁用添加；刷新失败时 `message.error` 后再 `GET` 一次插件以显示最新 `last_error`。
+- **`mcp/McpPluginCard`**：名称、传输类型、地址（长地址 `overflowWrap: anywhere`）、`pluginStatus`（连接失败 > 已连接 > 未测试）、工具数量、启用 `Switch`；
+  有请求头时只显示「请求头 N 个」，**不显示取值**（名称在编辑弹窗里以 `名称: ••••` 显示）。
+- **`mcp/McpPluginFormModal`**：Tabs「填写表单」/「粘贴 JSON」。JSON 先经 `utils/mcp.ts::parseMcpServersJson` 本地解析（也接受不带外层 `mcpServers` 的映射，
+  ≤ 20 项），stdio（`command` / `args` / `type=stdio`）在本地识别、跳过并用 `stdioNotice` 提示，只把远程服务原样交给 `POST /import`，逐项结果用 `List` 显示。
+- **请求头编辑语义**（`mcp/HeadersEditor` + `HeadersState`）：`{mode: 'keep'}` = 保持已保存的值，只显示 `名称: ••••`（`MASK`），**不渲染输入框**，PATCH
+  **不带** `headers` 字段；「重新设置」进入 `{mode: 'edit', rows}`，取值用 `Input.Password`（`autoComplete="new-password"`），需要重新填写全部取值，保存时
+  整体替换；「清空请求头」= `edit` 且没有行 → 提交 `{}`；「取消，保持原值」回到 keep。`pluginUpdateBody` 只提交变化的字段，`pluginCreateBody` 没有请求头时不提交。
+  本地校验与后端一致（名称 token、保留头、重复、缺取值、换行、≤ 20 个）。编辑行 `flexWrap: wrap`，窄屏换行。
+- **`mcp/McpPluginDrawer`**：`useModalWidth(720)`；刷新 / 测试按钮、停用与最近错误 `Alert`、工具列表、试用。**工具列表用 `List`，不用 `Table`**——每项纵向排列名称（`code`）、
+  只读提示 Tag（`read_only_hint` 为 true「只读提示」/ false「可能有副作用」）、两行省略的说明、启用与免确认两个 `Switch`、「查看参数」（`Modal` 显示 JSON schema），
+  375 宽度不出现横向滚动。说明文字强调「只读」只是插件声明、不代表免确认，外部调用无法撤销。切换偏好调 `mcpApi.updateTool(id, tool, body)`——**工具名放在请求体里**。
+  试用：选择工具后 `argumentsTemplate(schema)` 生成参数骨架，`parseToolArguments` 解析，400 的参数错误经 `callErrors(ApiError.body)` 列出，结果纯文本显示（`truncated` 时注明）。
+- 颜色一律取 token（`colorFillQuaternary` 等），`noHardcodedColors.test.ts` 显式断言覆盖 `SkillsPage`、`McpPluginsPage`、`McpPluginDrawer`、`SkillEditDrawer`。
+- 测试：`components/skills/skillsMcpUI.test.ts`（全局 Skill 对普通用户只读、管理员可编辑与恢复、请求头 keep 只显示名称与掩码、重新设置用密码框、375 宽度渲染无固定宽度）、
+  `utils/skills.test.ts`（`/` 补全与匹配规则、分组、触发词规范化、`skillRef`）、`utils/mcp.test.ts`（JSON 导入与 stdio 提示、请求头 keep 时不提交、整体替换与清空、
+  本地校验、试用参数、状态）、`api/mcp.test.ts`（工具名在请求体里，含 `/` 也不进路径；导入原样提交）。

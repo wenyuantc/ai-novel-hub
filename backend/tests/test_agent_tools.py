@@ -69,7 +69,9 @@ async def new_chapter(ctx, content="山风穿过竹林。林远握紧长剑。")
 
 def test_registry_has_only_explicit_tools():
     names = {tool.name for tool in list_tools()}
-    assert len(names) == 48
+    assert len(names) == 51
+    assert {"list_skills", "load_skill", "read_skill_reference"} <= names
+    assert not any(name.startswith("mcp__") for name in names)
     assert get_tool("delete_project") is None
     assert get_tool("__import__") is None
     for tool in list_tools():
@@ -181,8 +183,12 @@ async def test_read_tools_and_chapter_pagination(ctx):
         "get_chapter_analysis": {"chapter_id": ch.id},
         "search_memories": {"query": "竹林"},
         "search_knowledge": {"query": "竹林"},
+        "load_skill": {"slug": "deslop"},
+        "read_skill_reference": {"slug": "deslop", "index": 1},
     }
     for tool in list_tools():
+        if tool.name == "read_skill_reference":
+            continue  # 内置 Skill 没有参考资料，见 test_agent_mcp_skills
         if tool.kind == "read":
             result = await tool.run(ctx, args_by_name.get(tool.name, {}))
             assert "error" not in result, (tool.name, result)

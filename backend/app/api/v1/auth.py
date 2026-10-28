@@ -25,7 +25,7 @@ def _set_auth_cookie(response: Response, user: User, settings: Settings) -> None
 
 @router.get("/config", response_model=AuthConfigOut)
 async def auth_config(settings: SettingsDep) -> AuthConfigOut:
-    return AuthConfigOut(registration_enabled=settings.registration_enabled)
+    return AuthConfigOut(registration_enabled=settings.registration_enabled, mcp_enabled=settings.mcp_enabled)
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)

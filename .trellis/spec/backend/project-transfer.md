@@ -45,6 +45,11 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   `task_id` 不导出）、`chapter_versions`（可选）、`chapter_analyses`（`task_id` 不导出）、`analysis_changes`、`story_memories`、`kb_settings`、
   `kb_documents`（`status` / `chunk_count` 重算）、`outline_snapshots`（可选）、`inspiration_sessions`（可选；`project_id` / `converted_project_id`
   指向本项目的改写为新项目，指向其他项目的置空）。
+- **用户级表不登记、也不写进 `NOT_EXPORTED`**（`skills`、`skill_references`、`mcp_plugins`，迁移 `0019`，见 [skills-mcp.md](./skills-mcp.md)；
+  同类的还有 `ai_configs`、`prompt_overrides`、`book_imports`）：反射测试只沿「引用方 → 被引用方」方向从 `projects` 扩散，这三张表只引用 `users` /
+  `skills`，不在「与项目相关」的集合里；`test_registry_covers_all_project_tables` 同时断言 `NOT_EXPORTED ⊆ 与项目相关的表`，把它们写进去测试会直接失败。
+  反过来 `agent_messages.skill_id` 指向 `skills`，但 `agent_messages` 本身已在 `NOT_EXPORTED` 中，备份不含 Skill 引用；`agent_conversations.mcp_plugin_ids`
+  同样随会话不导出。Skill / 插件属于用户而非作品，跨实例迁移走 Skill 的 SKILL.md / zip 导出与 `mcpServers` JSON 导入。
 - **JSON 内的 id**（`remap.py`，对应不上的置 null / 去掉，计数后汇总为一条警告）：
   | 列 | 处理 |
   |---|---|
@@ -77,7 +82,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0018"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0019"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。

@@ -39,6 +39,7 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 
 __all__ = [
     "AgentChange",
@@ -66,6 +67,7 @@ __all__ = [
     "KbChunk",
     "KbDocument",
     "KbSettings",
+    "McpPlugin",
     "Organization",
     "OrganizationMember",
     "Outline",
@@ -77,6 +79,8 @@ __all__ = [
     "RelationshipHistory",
     "RelationshipType",
     "RetrievalChunk",
+    "Skill",
+    "SkillReference",
     "StoryMemory",
     "Task",
     "User",

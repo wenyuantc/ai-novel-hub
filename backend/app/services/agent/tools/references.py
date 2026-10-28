@@ -20,6 +20,7 @@ from app.models import (
     Outline,
     Relationship,
     RelationshipType,
+    Skill,
     Task,
     WorldSetting,
     WritingStyle,
@@ -53,6 +54,8 @@ _MODELS = {
     "ai_config_id": AIConfig,
     "style_id": WritingStyle,
     "default_style_id": WritingStyle,
+    # 用户级：本人或全局 Skill
+    "skill_id": Skill,
 }
 
 
@@ -64,6 +67,8 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
         stmt = stmt.where(or_(WritingStyle.user_id.is_(None), WritingStyle.user_id == ctx.user_id))
     elif model is AIConfig:
         stmt = stmt.where(AIConfig.user_id == ctx.user_id)
+    elif model is Skill:
+        stmt = stmt.where(or_(Skill.owner_user_id.is_(None), Skill.owner_user_id == ctx.user_id))
     elif model is RelationshipType:
         stmt = stmt.where(or_(RelationshipType.project_id.is_(None), RelationshipType.project_id == ctx.project_id))
     elif model is CareerStage:

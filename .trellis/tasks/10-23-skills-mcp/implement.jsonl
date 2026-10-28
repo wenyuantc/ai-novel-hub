@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/backend/agent.md", "reason": "工具层约定、kind 分级、提案确认、不可信包装、checkpoint 续跑（MCP 动态工具接入点）"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板变量（skills_catalog、skill_guide）、锁定段落、parity 计数"}
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "require_admin 与全局资源权限（403/404 区分）"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "批量任务参数快照与续跑"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约、错误映射"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "NOT_EXPORTED 登记与反射测试"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、部分唯一索引、外键、归属 404"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "SSRF、加密回显、测试隔离、FakeLLM"}
+{"file": ".trellis/spec/backend/book-import.md", "reason": "上传文件安全校验（大小、解析）参照"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "智能体面板、提案卡片、响应式与主题 token"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 与 projectRefresh"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "镜像类型、联合类型收窄"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "懒加载与包体积"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-prompts-agents.md", "reason": "MuMu Skill（§3）与 MCP（§5）行为及缺陷对照"}

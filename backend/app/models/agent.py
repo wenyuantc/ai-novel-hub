@@ -20,6 +20,8 @@ class AgentConversation(TimestampMixin, Base):
     summary: Mapped[str] = mapped_column(Text, default="", server_default="")
     summarized_until: Mapped[int | None] = mapped_column(Integer)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 本会话启用的 MCP 插件 id（NULL = 不启用）；运行时再按归属与启用状态过滤
+    mcp_plugin_ids: Mapped[list[int] | None] = mapped_column(JSON)
 
 
 class AgentMessage(TimestampMixin, Base):
@@ -36,6 +38,9 @@ class AgentMessage(TimestampMixin, Base):
     tool_name: Mapped[str | None] = mapped_column(String(100))
     page_context: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # 用户消息强制启用的 Skill 与其快照 {id, name, body}；本轮续跑 / 重试沿用快照
+    skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id", ondelete="SET NULL"), index=True)
+    skill_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class AgentChange(TimestampMixin, Base):

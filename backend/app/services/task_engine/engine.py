@@ -134,6 +134,12 @@ class TaskEngine:
             hub = self.hubs.pop(task.id, None)
             if hub is not None:
                 hub.close("error", {"task": out, "detail": INTERRUPTED_MESSAGE})
+        # 上次进程在确认外部（MCP）调用期间退出：提案停在 executing，结果未知，判为失败（不重新调用）
+        from app.services.agent.service import recover_external
+
+        async with sm() as db:
+            if await recover_external(db, stale_only=False):
+                await db.commit()
 
     # ---------------- hub ----------------
 

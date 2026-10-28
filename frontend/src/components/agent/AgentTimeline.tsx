@@ -1,4 +1,4 @@
-import { Button, Empty, Popconfirm, Space, Spin, Typography, theme } from 'antd'
+import { Button, Empty, Popconfirm, Space, Spin, Tag, Typography, theme } from 'antd'
 import { useEffect, useMemo, useRef } from 'react'
 import type { AgentChange, AgentMessage } from '../../api/types'
 import { buildAgentTimeline, canUndoChange, type AgentToolStep } from '../../utils/agent'
@@ -12,11 +12,13 @@ interface Props {
   text: string
   running: boolean
   busy: boolean
+  /** 正在处理的提案 id */
+  actingId?: number | null
   confirmationReady: boolean
   onAction: (change: AgentChange, action: 'confirm' | 'reject' | 'undo') => void
   onTurn: (id: number, action: 'confirm-all' | 'reject-all' | 'undo') => void
 }
-export default function AgentTimeline({ messages, changes, steps, text, running, busy, confirmationReady, onAction, onTurn }: Props) {
+export default function AgentTimeline({ messages, changes, steps, text, running, busy, actingId, confirmationReady, onAction, onTurn }: Props) {
   const { token } = theme.useToken()
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
@@ -34,14 +36,17 @@ export default function AgentTimeline({ messages, changes, steps, text, running,
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {items.map((item) => <div key={item.key}>
         {item.type === 'message' && <div style={{ padding: item.message.role === 'user' ? 12 : 0, background: item.message.role === 'user' ? token.colorFillQuaternary : undefined, borderRadius: token.borderRadius }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{item.message.role === 'user' ? '你' : item.message.role === 'tool' ? '操作记录' : '项目智能体'}</Typography.Text>
+          <Space size={4} wrap>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{item.message.role === 'user' ? '你' : item.message.role === 'tool' ? '操作记录' : '项目智能体'}</Typography.Text>
+            {item.message.role === 'user' && item.message.skill && <Tag style={{ marginInlineEnd: 0 }} title="本轮强制启用的 Skill">Skill：{item.message.skill.name}</Tag>}
+          </Space>
           {item.message.role === 'assistant' ? <AgentMarkdown text={item.message.content} /> : <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.message.content}</div>}
         </div>}
         {item.type === 'tool' && <details style={{ background: token.colorFillQuaternary, borderRadius: token.borderRadius, padding: 8 }}>
           <summary style={{ cursor: 'pointer', overflowWrap: 'anywhere' }}>{item.step.label} · {item.step.ok === undefined ? '处理中' : item.step.ok ? '完成' : '未完成'}</summary>
           <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 200, overflowY: 'auto', fontSize: 12 }}>{item.step.summary || '正在读取或准备修改…'}</pre>
         </details>}
-        {item.type === 'change' && <AgentChangeCard change={item.change} busy={busy} confirmationReady={confirmationReady} onAction={onAction} />}
+        {item.type === 'change' && <AgentChangeCard change={item.change} busy={busy} acting={actingId === undefined ? undefined : busy && actingId === item.change.id} confirmationReady={confirmationReady} onAction={onAction} />}
       </div>)}
       {running && <div><Typography.Text type="secondary">项目智能体 <Spin size="small" /></Typography.Text>{text && <AgentMarkdown text={text} />}</div>}
       {turns.map((id) => {

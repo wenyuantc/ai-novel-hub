@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
@@ -26,7 +26,7 @@ from app.schemas.agent import (
 )
 from app.schemas.chapter_version import GenerationLogOut
 from app.services import project_service, task_service
-from app.services.agent import effects, transactions
+from app.services.agent import effects, mcp_tools, transactions
 from app.services.agent.tools import get_tool
 from app.services.agent.tools.base import ToolCtx
 from app.services.task_engine.registry import TaskContext
@@ -36,6 +36,46 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
+
+
+# 外部（MCP）调用先提交 executing 再发起网络请求；进程在调用期间崩溃或请求被取消时提案会停在 executing。
+# 单次调用最长约 CALL_TIMEOUT + CONNECT_TIMEOUT（45 秒）加关闭连接的 5 秒，超过 2 分钟仍是 executing 的视为中断。
+EXTERNAL_STALE_AFTER = timedelta(minutes=2)
+EXTERNAL_INTERRUPTED = "执行中断，结果未知，请检查外部系统"
+
+
+def _aware(value: datetime) -> datetime:
+    # SQLite 读出的是 naive UTC
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+async def recover_external(db: AsyncSession, *, task_id: int | None = None, stale_only: bool = True) -> int:
+    """把中断的外部调用（kind=external、仍为 executing）标为 failed，返回处理的条数；不 commit。
+
+    只改状态、不重新调用外部服务（结果未知，重放可能重复执行发送类操作）。stale_only=False 用于进程启动：
+    单进程部署下启动时不可能有正在进行的确认请求。
+    """
+    stmt = select(AgentChange.id, AgentChange.executed_at, AgentChange.updated_at).where(
+        AgentChange.kind == "external", AgentChange.status == "executing"
+    )
+    if task_id is not None:
+        stmt = stmt.where(AgentChange.turn_task_id == task_id)
+    cutoff = datetime.now(UTC) - EXTERNAL_STALE_AFTER
+    ids = [
+        row.id
+        for row in await db.execute(stmt)
+        if not stale_only or _aware(row.executed_at or row.updated_at) <= cutoff
+    ]
+    if not ids:
+        return 0
+    result = await db.execute(
+        update(AgentChange)
+        .where(AgentChange.id.in_(ids), AgentChange.status == "executing")
+        .values(status="failed", error=EXTERNAL_INTERRUPTED, result={"error": EXTERNAL_INTERRUPTED})
+    )
+    if result.rowcount:
+        logger.warning("已将 %s 项中断的外部调用标记为失败：%s", result.rowcount, ids)
+    return result.rowcount or 0
 
 
 def conversation_lock(conversation_id: int) -> asyncio.Lock:
@@ -144,6 +184,14 @@ async def update_conversation(
         row.title = req.title.strip()
     if req.auto_execute is not None:
         row.auto_execute = req.auto_execute
+    if req.mcp_plugin_ids is not None:
+        from app.models import McpPlugin
+
+        ids = list(dict.fromkeys(req.mcp_plugin_ids))
+        owned = set(await db.scalars(select(McpPlugin.id).where(McpPlugin.id.in_(ids), McpPlugin.user_id == user_id)))
+        if len(owned) != len(ids):
+            raise NotFoundError("插件不存在")
+        row.mcp_plugin_ids = ids or None
     await db.commit()
     await db.refresh(row)
     return ConversationOut.model_validate(row)
@@ -247,6 +295,8 @@ async def execute_change(
     """调用方负责会话互斥与提交；savepoint 保证返回 error 的工具也不会留下部分修改。"""
     if change.status != "proposed":
         return change
+    if change.kind == "external":
+        return await _execute_external(db, task_context, change, user_id=user_id, compare_preview=compare_preview)
     project = await project_service.get_owned_project(db, user_id, change.project_id)
     tool = get_tool(change.tool_name)
     if tool is None:
@@ -323,9 +373,84 @@ async def execute_change(
     return change
 
 
+def _preview_changed(change: AgentChange) -> ConflictError:
+    return ConflictError(
+        "数据已经变化，请检查最新预览后重新确认",
+        extra={"code": "preview_changed", "change": ChangeOut.model_validate(change).model_dump(mode="json")},
+    )
+
+
+async def _execute_external(
+    db: AsyncSession, task_context: TaskContext, change: AgentChange, *, user_id: int, compare_preview: bool
+) -> AgentChange:
+    """外部（MCP）调用：重新读取插件配置生成预览比较；一致才在本请求内调用（单独连接，30 秒超时）。
+
+    先提交 executing 再发起网络调用，避免在调用期间持有数据库写锁；结果由调用方提交。
+    """
+    task = await db.get(Task, change.turn_task_id) if change.turn_task_id else None
+    tool_map = ((task.checkpoint or {}) if task is not None else {}).get("mcp_tool_map") or {}
+    entry = tool_map.get(change.tool_name)
+    if entry is None:
+        change.status, change.error, change.result = "failed", mcp_tools.CHANGED, {"error": mcp_tools.CHANGED}
+        await db.flush()
+        return change
+    settings = task_context.settings
+    resolved = await mcp_tools.resolve(db, settings, user_id, change.conversation_id, tool_map, change.tool_name)
+    fresh = mcp_tools.preview(entry, resolved, change.arguments)
+    if compare_preview and fresh != change.preview:
+        change.preview = fresh
+        await db.commit()
+        await db.refresh(change)
+        raise _preview_changed(change)
+    failure = None
+    if resolved is None:
+        failure = mcp_tools.CHANGED
+    elif (invalid := mcp_tools.validate(resolved, change.arguments)) is not None:
+        failure = invalid["error"]
+    if failure:
+        change.status, change.error, change.result = "failed", failure, {"error": failure}
+        await db.flush()
+        return change
+    # executing 期间 executed_at 记录开始调用的时间（完成时改为完成时间），供 recover_external 判断是否中断；
+    # 不用 updated_at：重试时把提案移到新任务的 UPDATE 会刷新它
+    claimed = await db.execute(
+        update(AgentChange)
+        .where(AgentChange.id == change.id, AgentChange.status == "proposed")
+        .values(status="executing", executed_at=func.now())
+    )
+    if claimed.rowcount != 1:
+        raise ConflictError("修改正在处理中，请刷新后重试")
+    await db.commit()
+    sessions = mcp_tools.McpSessions(
+        task_context.mcp_connector, task_context.cipher, settings.allow_private_ai_endpoints
+    )
+    try:
+        data = await mcp_tools.call_data(sessions, resolved, change.arguments)
+    except Exception:  # noqa: BLE001
+        # 不知道外部服务是否已执行：按中断处理，不重试
+        logger.exception("外部调用提案 %s 执行失败", change.id)
+        data = {"error": EXTERNAL_INTERRUPTED}
+    finally:
+        await sessions.aclose()
+    change = await db.get(AgentChange, change.id, populate_existing=True)
+    if change.status != "executing":
+        # 调用期间已被 recover_external 判为中断（只会发生在调用异常地超过时限时）：保留已告知模型的状态
+        logger.warning("外部调用提案 %s 完成时已不是 executing（%s），结果不再写入", change.id, change.status)
+        return change
+    if "error" in data:
+        change.status, change.error, change.result = "failed", str(data["error"]), data
+    else:
+        change.status, change.error, change.result, change.effects = "executed", "", data, []
+        change.executed_at = datetime.now(UTC)
+    await db.flush()
+    return change
+
+
 async def maybe_resume(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int | None) -> None:
     if task_id is None:
         return
+    if await recover_external(db, task_id=task_id):
+        await db.commit()
     remaining = await db.scalar(
         select(func.count(AgentChange.id)).where(
             AgentChange.turn_task_id == task_id, AgentChange.status.in_(("proposed", "executing"))
@@ -347,9 +472,12 @@ async def decide_change(
     resume: bool = True,
 ) -> ChangeOut:
     initial = await owned_change(db, user_id, project_id, change_id)
-    cid = initial.conversation_id
+    cid, turn_id = initial.conversation_id, initial.turn_task_id
     await db.rollback()  # 在等待进程锁前释放只读事务和旧快照。
     async with conversation_lock(cid):
+        # 中断的外部调用（进程崩溃 / 请求被取消时停在 executing）先判为失败，否则本轮永远无法继续
+        if turn_id is not None and await recover_external(db, task_id=turn_id):
+            await db.commit()
         change = await owned_change(db, user_id, project_id, change_id)
         await db.execute(select(AgentConversation.id).where(AgentConversation.id == cid).with_for_update())
         if change.status == "executing":
@@ -405,6 +533,8 @@ async def decide_turn(
 async def _undo_changes(
     db: AsyncSession, user_id: int, project_id: int, rows: list[AgentChange], engine: "TaskEngine | None" = None
 ) -> list[ChangeOut]:
+    if any(row.kind == "external" for row in rows):
+        raise BadRequestError("外部操作无法撤销")
     if any(row.kind == "task" for row in rows):
         raise ConflictError("已启动的任务不能撤销，请在任务面板取消")
     memory_changed = False
@@ -470,10 +600,21 @@ async def undo_turn(
                 .where(
                     AgentChange.turn_task_id == task_id,
                     AgentChange.status == "executed",
-                    AgentChange.kind != "task",
+                    AgentChange.kind.not_in(("task", "external")),
                 )
                 .order_by(AgentChange.seq.desc(), AgentChange.id.desc())
             )
         )
+        skipped = await db.scalar(
+            select(func.count(AgentChange.id)).where(
+                AgentChange.turn_task_id == task_id,
+                AgentChange.status == "executed",
+                AgentChange.kind == "external",
+            )
+        )
         changes = await _undo_changes(db, user_id, project_id, rows, engine)
-    return TurnChangesOut(changes=changes, task=await task_service.get_task(db, engine, user_id, task_id))
+    return TurnChangesOut(
+        changes=changes,
+        task=await task_service.get_task(db, engine, user_id, task_id),
+        notice=f"已跳过 {skipped} 项外部操作（无法撤销）" if skipped else None,
+    )

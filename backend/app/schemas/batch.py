@@ -27,6 +27,8 @@ class BatchGenerateRequest(BaseModel):
     # 写作风格：inherit = 按章节覆盖或项目默认（逐章解析）；none = 不用风格；整数 = 全部章节使用该风格。
     # 保存在 input.request 中，断点续跑 / 重试沿用同一个选择
     style: StyleChoice = "inherit"
+    # 选用的 Skill（本人或全局）作为补充工作流；任务创建时快照正文，之后编辑 Skill 不影响重试
+    skill_id: int | None = Field(default=None, gt=0)
 
 
 class BatchPreviewItem(BaseModel):

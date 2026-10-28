@@ -15,7 +15,7 @@ from app.core.errors import AppError, ConflictError
 from app.models import AgentChange, AgentConversation, AgentMessage, AIConfig, Task
 from app.schemas.agent import ChangeOut
 from app.services import project_service
-from app.services.agent import context, transactions
+from app.services.agent import context, mcp_tools, transactions
 from app.services.agent.tools import get_tool, list_tools
 from app.services.agent.tools.base import ToolCtx
 from app.services.task_engine.registry import Event, TaskContext
@@ -69,6 +69,9 @@ def _out(change: AgentChange) -> dict:
 
 
 def _can_auto_execute(change: AgentChange) -> bool:
+    # 外部插件调用不可撤销，一律需要确认（免确认工具在 runner 中直接调用，不生成提案）。
+    if change.kind == "external":
+        return False
     # 整体同步可能修改或删除多条子记录，即使顶层只有一个 small 提案也必须确认。
     if change.tool_name == "update_chapter_plans":
         return False
@@ -77,10 +80,67 @@ def _can_auto_execute(change: AgentChange) -> bool:
     return change.kind in ("small", "text")
 
 
-async def _process_calls(job: AgentJob, ctx: TaskContext, checkpoint: dict) -> AsyncIterator[Event]:
+async def _external_call(
+    job: AgentJob,
+    db,
+    call: dict,
+    args: dict,
+    external: "mcp_tools.Resolved | None",
+    sessions: mcp_tools.McpSessions,
+    batch: list[AgentChange],
+) -> AsyncIterator[Event]:
+    """MCP 工具：先按 inputSchema 校验；免确认工具直接调用，其余生成 external 提案（不可撤销）。"""
+    if external is None:
+        await _result(db, job, call, {"error": mcp_tools.CHANGED})
+        return
+    yield "stage", {"stage": f"调用工具：{external.label}"}
+    yield "tool_start", {"call_id": call["id"], "name": call["name"], "label": external.label}
+    invalid = mcp_tools.validate(external, args)
+    if invalid is not None:
+        await _result(db, job, call, invalid)
+        yield "tool_end", {"call_id": call["id"], "ok": False, "summary": invalid["error"]}
+        return
+    if external.auto_confirm:
+        value = await mcp_tools.call_data(sessions, external, args)
+        await _result(db, job, call, value)
+        yield (
+            "tool_end",
+            {"call_id": call["id"], "ok": "error" not in value, "summary": str(value.get("error") or "调用完成")},
+        )
+        return
+    count = await db.scalar(select(func.count(AgentChange.id)).where(AgentChange.turn_task_id == job.task_id))
+    if (count or 0) >= MAX_WRITE_PROPOSALS:
+        await _result(db, job, call, {"error": "单轮最多 50 项写操作，请分批进行"})
+        return
+    change = AgentChange(
+        conversation_id=job.conversation_id,
+        project_id=job.project_id,
+        turn_task_id=job.task_id,
+        tool_call_id=call["id"],
+        tool_name=call["name"],
+        arguments=args,
+        kind="external",
+        preview=mcp_tools.preview(external.entry, external, args),
+        seq=(count or 0) + 1,
+    )
+    db.add(change)
+    await db.commit()
+    await db.refresh(change)
+    batch.append(change)
+    yield "proposal", {"change": _out(change)}
+
+
+async def _process_calls(
+    job: AgentJob, ctx: TaskContext, checkpoint: dict, sessions: mcp_tools.McpSessions
+) -> AsyncIterator[Event]:
     from app.services.agent import service
 
+    tool_map = checkpoint.get("mcp_tool_map") or {}
+
     async with transactions.session(ctx.sessionmaker) as db:
+        # 重试 / 续跑时，停在 executing 的中断外部调用判为失败（不重新调用），否则这一轮会一直等待确认
+        if await service.recover_external(db, task_id=job.task_id):
+            await db.commit()
         assistant = await db.get(AgentMessage, checkpoint["assistant_message_id"])
         calls = assistant.tool_calls or []
         project = await project_service.get_owned_project(db, job.user_id, job.project_id)
@@ -116,6 +176,13 @@ async def _process_calls(job: AgentJob, ctx: TaskContext, checkpoint: dict) -> A
                     raise ValueError("参数必须是对象")
             except (ValueError, TypeError):
                 await _result(db, job, call, {"error": "工具参数必须是合法的 JSON 对象"})
+                continue
+            if tool is None and call["name"] in tool_map:
+                external = await mcp_tools.resolve(
+                    db, ctx.settings, job.user_id, job.conversation_id, tool_map, call["name"]
+                )
+                async for event in _external_call(job, db, call, args, external, sessions, batch):
+                    yield event
                 continue
             if tool is None:
                 await _result(db, job, call, {"error": "工具不存在"})
@@ -259,9 +326,25 @@ async def _save_log(
 
 
 async def _run_agent(job: AgentJob, ctx: TaskContext) -> AsyncIterator[Event]:
+    """一次运行内复用 MCP 连接；运行结束、暂停或异常时统一关闭。"""
+    sessions = mcp_tools.McpSessions(ctx.mcp_connector, ctx.cipher, ctx.settings.allow_private_ai_endpoints)
+    try:
+        async with aclosing(_turn(job, ctx, sessions)) as events:
+            async for event in events:
+                yield event
+    finally:
+        await sessions.aclose()
+
+
+async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions) -> AsyncIterator[Event]:
     async with transactions.session(ctx.sessionmaker) as db:
         task = await db.get(Task, job.task_id)
         checkpoint = dict(task.checkpoint or {})
+        if "mcp_tool_map" not in checkpoint:
+            # 本轮 MCP 映射表：续跑 / 重试沿用，确认期间修改配置不会让名称漂移
+            conversation = await db.get(AgentConversation, job.conversation_id)
+            checkpoint["mcp_tool_map"] = await mcp_tools.build_tool_map(db, ctx.settings, job.user_id, conversation)
+            await _checkpoint(db, job.task_id, checkpoint)
         history_text = "".join(
             await db.scalars(
                 select(AgentMessage.content)
@@ -281,7 +364,7 @@ async def _run_agent(job: AgentJob, ctx: TaskContext) -> AsyncIterator[Event]:
     while True:
         if checkpoint.get("assistant_message_id") != checkpoint.get("processed_assistant_id"):
             paused = False
-            async with aclosing(_process_calls(job, ctx, checkpoint)) as events:
+            async with aclosing(_process_calls(job, ctx, checkpoint, sessions)) as events:
                 async for event in events:
                     if event[0] == "paused":
                         paused = True
@@ -299,7 +382,16 @@ async def _run_agent(job: AgentJob, ctx: TaskContext) -> AsyncIterator[Event]:
             except (AppError, AIProviderError) as exc:
                 yield "error", {"detail": str(exc)}
                 return
+            external_specs = await mcp_tools.tool_specs(
+                db,
+                ctx.settings,
+                job.user_id,
+                job.conversation_id,
+                checkpoint.get("mcp_tool_map") or {},
+                job.config.provider,
+            )
         tools = [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in list_tools()]
+        tools.extend(external_specs)
         used = checkpoint.get("tool_calls_used", 0)
         choice = "none" if used >= MAX_TOOL_CALLS else "auto"
         round_no = checkpoint.get("round", 0) + 1

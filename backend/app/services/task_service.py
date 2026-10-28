@@ -11,6 +11,7 @@ handler 可选钩子（getattr 探测）：
 import bisect
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Task
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
+from app.schemas.skill import SkillRef
 from app.schemas.task import TaskOut
 from app.services.task_engine.registry import get_handler
 
@@ -57,6 +59,17 @@ def _revise_analysis_id(task: Task) -> int | None:
     return _request_int(task, "analysis_id") if task.kind == "chapter.revise" else None
 
 
+def _skill_ref(task: Task) -> SkillRef | None:
+    snap = (task.input or {}).get("skill") if isinstance(task.input, dict) else None
+    if not isinstance(snap, dict):
+        return None
+    # model_copy(update=) 不做校验：这里先构造成 SkillRef，结构不对的旧数据直接不返回
+    try:
+        return SkillRef.model_validate(snap)
+    except ValidationError:
+        return None
+
+
 def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine | None" = None) -> TaskOut:
     out = TaskOut.model_validate(task)
     update_fields: dict[str, Any] = {
@@ -64,6 +77,7 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
         "character_id": _subject_character_id(task),
         "analysis_id": _revise_analysis_id(task),
         "outline_id": _request_int(task, "outline_id") if task.kind == "outline.expand" else None,
+        "skill": _skill_ref(task),
     }
     checkpoint_out = getattr(get_handler(task.kind), "checkpoint_out", None)
     if checkpoint_out is not None:

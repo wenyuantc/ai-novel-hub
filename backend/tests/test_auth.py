@@ -82,7 +82,7 @@ async def test_invalid_token_rejected(client):
 
 async def test_auth_config(client):
     resp = await client.get("/api/v1/auth/config")
-    assert resp.json() == {"registration_enabled": True}
+    assert resp.json() == {"registration_enabled": True, "mcp_enabled": True}
 
 
 @pytest.mark.parametrize("settings_overrides", [{"registration_enabled": False}])
@@ -90,7 +90,7 @@ async def test_registration_disabled(client):
     resp = await client.post("/api/v1/auth/register", json={"username": "alice", "password": "secret123"})
     assert resp.status_code == 403
     assert resp.json()["detail"] == "注册已关闭，请联系管理员"
-    assert (await client.get("/api/v1/auth/config")).json() == {"registration_enabled": False}
+    assert (await client.get("/api/v1/auth/config")).json() == {"registration_enabled": False, "mcp_enabled": True}
 
 
 @pytest.mark.parametrize("settings_overrides", [{"cookie_secure": True}])

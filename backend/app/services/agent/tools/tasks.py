@@ -1,5 +1,6 @@
 """仅允许项目内已有任务。预览调用真实 handler，启动任务留在调用方事务内。"""
 
+import hashlib
 from typing import Literal
 
 from pydantic import ConfigDict, Field, create_model
@@ -147,7 +148,16 @@ async def preview(ctx: ToolCtx, args: StartArgs) -> dict:
         "warnings": ["会消耗 AI 调用；已启动的任务只能取消，不能撤销"],
         "chapter_state": chapter_state,
         "ai_config_id": spec.input.get("ai_config_id"),
+        # Skill 快照的指纹：提案后 Skill 被修改时确认会刷新预览
+        "skill": _skill_guard(spec.input.get("skill")),
     }
+
+
+def _skill_guard(skill: dict | None) -> dict | None:
+    if not skill:
+        return None
+    digest = hashlib.sha256(str(skill.get("body") or "").encode()).hexdigest()
+    return {"id": skill.get("id"), "name": skill.get("name"), "hash": digest}
 
 
 async def execute(ctx: ToolCtx, args: StartArgs) -> dict:

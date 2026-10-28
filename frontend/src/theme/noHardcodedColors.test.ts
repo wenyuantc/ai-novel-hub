@@ -28,6 +28,9 @@ describe('禁止写死颜色', () => {
     expect(Object.keys(sources).length).toBeGreaterThan(50)
     expect(Object.keys(sources)).toContain('../App.tsx')
     expect(Object.keys(sources)).toContain('../index.css')
+    // Skill / MCP 页面与组件同样受检
+    for (const file of ['../pages/SkillsPage.tsx', '../pages/McpPluginsPage.tsx', '../components/mcp/McpPluginDrawer.tsx', '../components/skills/SkillEditDrawer.tsx'])
+      expect(Object.keys(sources)).toContain(file)
   })
 
   it('除白名单外没有写死的颜色值', () => {

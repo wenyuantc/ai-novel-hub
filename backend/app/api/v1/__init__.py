@@ -16,6 +16,7 @@ from app.api.v1 import (
     foreshadows,
     inspiration,
     kb,
+    mcp_plugins,
     memories,
     organizations,
     outline_pro,
@@ -23,6 +24,7 @@ from app.api.v1 import (
     prompt_templates,
     reader,
     relationships,
+    skills,
     story,
     styles,
     tasks,
@@ -59,6 +61,8 @@ api_router.include_router(wizard.router)
 api_router.include_router(tasks.router)
 api_router.include_router(prompt_templates.router)
 api_router.include_router(styles.router)
+api_router.include_router(skills.router)
+api_router.include_router(mcp_plugins.router)
 api_router.include_router(inspiration.router)
 api_router.include_router(kb.router)
 api_router.include_router(memories.router)

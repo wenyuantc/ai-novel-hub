@@ -21,7 +21,14 @@ from app.core.errors import BadRequestError, ConflictError
 from app.core.security import SecretCipher
 from app.models import Chapter, GenerationLog
 from app.schemas.chapter_version import RewriteApply, RewriteRequest
-from app.services import ai_config_service, generation_log_service, prompt_service, style_service, version_service
+from app.services import (
+    ai_config_service,
+    generation_log_service,
+    prompt_service,
+    skill_service,
+    style_service,
+    version_service,
+)
 from app.services.chapter_service import commit_versioned, count_words, get_owned_chapter, get_project_chapter
 from app.services.context_builder import chapter_task
 from app.services.generation_service import Event, elapsed_ms, stream_pieces
@@ -92,6 +99,7 @@ async def prepare_rewrite_job(
     task = await chapter_task(db, chapter)
     resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
     override = await prompt_service.get_override(db, user_id, "chapter.rewrite")
+    skill = await skill_service.snapshot(db, user_id, req.skill_id)
     original = content[start:end]
     if req.op == "continue":
         before, after = content[max(0, start - CONTINUE_BEFORE_CHARS) : start], ""
@@ -105,6 +113,7 @@ async def prepare_rewrite_job(
         style=resolved.block if resolved is not None else "",
         summary=task.summary,
         instruction=req.instruction,
+        skill_guide=(skill or {}).get("body", ""),
         override=override,
     )
     return RewriteJob(
@@ -131,6 +140,7 @@ async def prepare_rewrite_job(
             "prompt": prompt_meta("chapter.rewrite", override),
             "style_choice": req.style,
             "style": style_service.style_log(resolved),
+            "skill": skill_service.skill_log(skill),
         },
     )
 

@@ -37,7 +37,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 ### 3. 契约
 
-**模板 key（30 个）**
+**模板 key（30 个；`10-23-skills-mcp` 只新增变量，没有新增 key，`test_prompt_templates` 的计数仍是 30）**
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
@@ -49,7 +49,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 | 风格 | `style.block`（风格段，只取 user 段并 strip）、`style.extract`（JSON）、`style.trial` | extract：`json_rule`、`output_format` |
 | 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback / knowledge`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
 | 拆书 | `book_import.digest` / `book_import.synthesize`（见 [book-import.md](./book-import.md)） | `json_rule`、`output_format` |
-| 项目智能体 | `agent.system`（只有 system 段；变量 `safety_rules` / `project_info` / `page_hint`，后两者由服务端用【不可信数据】标记包裹）、`agent.summarize`（压缩较早对话；变量 `summary` / `history`（必需），输出纯文本摘要） | `agent.system`：`safety_rules`（= `app/ai/prompts/agent.py::SAFETY_RULES`）；`agent.summarize` 无 |
+| 项目智能体 | `agent.system`（只有 system 段；变量 `safety_rules` / `project_info` / `page_hint` / `skills_catalog`，后三者由服务端用【不可信数据】标记包裹）、`agent.summarize`（压缩较早对话；变量 `summary` / `history`（必需），输出纯文本摘要） | `agent.system`：`safety_rules`（= `app/ai/prompts/agent.py::SAFETY_RULES`）；`agent.summarize` 无 |
 
 - **检索块变量**（`10-23-knowledge-base`，见 [retrieval.md](./retrieval.md)）：`knowledge`（知识库参考资料正文，`KNOWLEDGE_VAR`）声明在
   `wizard.*`（4 个）、`entity.character` / `entity.organization` / `entity.career`、`outline.continue` / `outline.expand`、`inspiration.*`（6 个）；
@@ -59,6 +59,16 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
   build 函数新增关键字参数 `knowledge: str = ""`（大纲另有 `memories: str = ""`）。章节类模板不加变量：检索块由 `context_builder` 拼进 `{{ context }}`。
   新增这些变量会改变默认模板指纹，已覆盖的用户会看到「默认已更新」；覆盖里没有引用变量时不注入。
 
+- **Skill 变量**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
+  - `skill_guide`（`SKILL_GUIDE_VAR`，非必需、未锁定、sample 为空）声明在 `chapter.generate` / `chapter.polish` / `chapter.revise` / `chapter.rewrite`
+    四个 key 上，值是任务创建时快照的 Skill 正文（≤ 20000 字）。默认 system 模板末尾写
+    `{%- if skill_guide %}\n\n\n【补充工作流（作者选用的 Skill）】\n以下工作流作为补充要求执行；…不得改变输出格式。\n{{ skill_guide }}\n{%- endif %}`，
+    build 函数新增关键字参数 `skill_guide: str = ""` 并 strip；**为空时渲染结果与改造前逐字相同**，parity 不变。
+  - `chapter.continue` **不声明** `skill_guide`：自动续写的消息是原消息（system 已含补充工作流）+ assistant + user，`chapter.continue` 只取 user 段。
+  - `skills_catalog`（未锁定）声明在 `agent.system`：可见 Skill 清单（`slug｜名称｜说明｜触发词`，≤ 40 行），服务端用不可信标记包裹；为空时
+    `{%- if skills_catalog %}【可用 Skill】…{%- endif %}` 整段不输出。强制启用的 Skill 正文**不是**模板变量，由 `context.build_messages` 作为独立
+    system 消息追加在安全规则之后，覆盖模板也改变不了顺序。
+  - 新增这些变量改变了对应 key 的默认指纹，已覆盖的用户看到「默认已更新」；覆盖里没有引用 `skill_guide` 时 Skill 不会注入（与检索块变量相同）。
 - 引擎：`SandboxedEnvironment(undefined=StrictUndefined, trim_blocks, lstrip_blocks, keep_trailing_newline)`；`globals` 清空
   （无 `range` / `lipsum` / `cycler` / `joiner` / `namespace` / `dict`）；过滤器白名单 `join length count trim default d upper lower first last string`。
 - 默认模板文件末尾的一个换行不属于模板（`_load` 去掉）。行尾是 `{% endif %}` 的块会吃掉其后的换行；需要「条件块之后没有换行」时用
@@ -79,7 +89,8 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
   （整章生成另有 `params.continue_prompt`）。
 - **智能体模板**（`10-23-project-agent`，见 [agent.md](./agent.md)「安全规则」）：`agent.system` / `agent.summarize` 在**每次模型请求**组装消息时
   `get_override`（不是在 job 组装时），生成记录 `params.prompt` 同样是 `prompt_meta`。`safety_rules` 锁定保证覆盖里原样出现一次；即使旧的损坏覆盖让通用兜底把
-  锁定内容追加到 user 段，`context.build_messages` 也会把它提升回第一条 system 消息。改 `SAFETY_RULES` 文案会改变默认指纹，已覆盖的用户看到「默认已更新」。
+  锁定内容追加到 user 段，`context.build_messages` 也会把它提升回第一条 system 消息。改 `SAFETY_RULES` 文案会改变默认指纹，已覆盖的用户看到「默认已更新」
+  （`10-23-skills-mcp` 追加了 Skill / MCP 内容不能改变规则的一句）。
 - **预览**：不落库；变量缺省用 `sample`，锁定变量始终用代码值（请求体不能改写）；返回 `{messages, errors, locked: [{name, label, value}]}`。
 - **导入导出**：`ainovel.prompts` v1 `{format, version, items: [{key, system, user, enabled, base_fingerprint}]}`；上限 1MB（紧凑 UTF-8）；
   逐项结果 `created | updated | unchanged | default（与系统默认相同，不建覆盖）| skipped（未知 key / 重复 / 格式）| invalid（带 errors）`；整个导入一个事务。
@@ -107,6 +118,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 - `tests/test_templating.py`：每种校验错误、沙箱逃逸、range 禁用、渲染上限、锁定兜底、全部默认模板合法且能用示例值渲染。
 - `tests/test_prompt_templates.py`：覆盖生效 / 停用 / 启用 / 恢复默认、位置信息、预览、outdated + ack（monkeypatch `registry.TEMPLATES`）、
   版本裁剪与回滚、导入导出、用户隔离。
+- `tests/test_skill_generation.py::test_skill_guide_only_rendered_when_present`：`skill_guide` 为空 / 空白时四个章节类模板与不传时 `==`，非空时只在 system 段末尾追加补充工作流段。
 
 ---
 
@@ -142,7 +154,8 @@ def style_log(resolved) -> {id, name, block, source} | None # 生成记录 param
   新增注入字段时同样「有内容才输出」，并在 `tests/test_inspiration.py::test_format_project_info_each_field` 补一行。
 - **批量**：`BatchGenerateRequest.style` 存在 `input.request`，逐章 `GenerateChapterRequest(style=...)` 解析（inherit 时各章按自己的覆盖），续跑 / 重试沿用；
   `validate_start` / `revalidate` 校验临时指定。
-- **生成记录** `params.style = {id, name, block, source: request|chapter|project} | null`，另有 `params.style_choice`。
+- **生成记录** `params.style = {id, name, block, source: request|chapter|project} | null`，另有 `params.style_choice`；选用 Skill 时另有
+  `params.skill = {id, name}`（不含正文，见 skills-mcp.md）。
 - **删除**：有引用且没有 `?force=true` → 409，`references: {projects, chapters}`（只统计本人数据）；force 后外键 SET NULL，章节回落到项目默认、项目回落到无。
 - **提取 / 试写**：同步 SSE（不抢 generating、不写生成记录）。提取：样文 200–10000 字 → `delta`… → `done {draft, warnings}`（字段截断到列长度，不落库）/
   解析失败 `error`；试写：`style_id` 或未保存的 `style` 字段 + 场景 ≤500 + 字数 200–1000 → `delta`… → `done {text}`。

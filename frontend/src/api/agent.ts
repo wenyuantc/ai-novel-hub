@@ -1,12 +1,13 @@
 import { api, ApiError } from './client'
-import type { AgentChange, AgentConversation, AgentConversationDetail, AgentSendRequest, AgentSendResult, AgentTurnResult } from './types'
+import type { AgentChange, AgentConversation, AgentConversationDetail, AgentConversationUpdate, AgentSendRequest, AgentSendResult, AgentTurnResult } from './types'
 
 const base = (pid: number) => `/projects/${pid}/agent`
 export const agentApi = {
   list: (pid: number) => api.get<AgentConversation[]>(`${base(pid)}/conversations`),
   create: (pid: number, title?: string) => api.post<AgentConversation>(`${base(pid)}/conversations`, { title }),
   get: (pid: number, cid: number) => api.get<AgentConversationDetail>(`${base(pid)}/conversations/${cid}`),
-  update: (pid: number, cid: number, body: { title?: string; auto_execute?: boolean }) =>
+  /** mcp_plugin_ids：每个 id 须属于本人，否则 404 */
+  update: (pid: number, cid: number, body: AgentConversationUpdate) =>
     api.patch<AgentConversation>(`${base(pid)}/conversations/${cid}`, body),
   remove: (pid: number, cid: number) => api.del(`${base(pid)}/conversations/${cid}`),
   send: (pid: number, cid: number, body: AgentSendRequest) =>

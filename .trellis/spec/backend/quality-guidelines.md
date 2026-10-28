@@ -213,6 +213,9 @@ async def list_models(db, cipher, factory, user_id, req: ModelListRequest, *, al
   （提示文本为 `PRIVATE_BLOCKED_HINT`）。
 - 错误：公网主机 302 重定向到 `169.254.169.254` —— 之所以被拦截，仅仅是因为禁用了重定向；
   新增的 provider 如果忘记处理 `follow_redirects`，就会重新打开 SSRF 漏洞。
+- 另一个出口：MCP 插件（`app/services/mcp/client.py`）复用 `ensure_endpoint_allowed` 与同一个 `ALLOW_PRIVATE_AI_ENDPOINTS` 开关，但规则更严：保存时校验、
+  连接前校验、每个 HTTP 请求前（httpx `event_hooks`）再校验，并且**任何模式下都不跟随重定向**（`follow_redirects=False` + `max_redirects=0`，
+  因为 MCP SDK 自己按 `max_redirects` 跟随同源重定向）。见 [skills-mcp.md](./skills-mcp.md)。
 
 ### 6. 必需测试（`backend/tests/test_endpoint_guard.py`）
 
@@ -289,7 +292,7 @@ response.set_cookie(
 - 认证解析（`deps._extract_token`）：优先读取 cookie，其次读取 `Authorization: Bearer <token>`。
   任何解码失败 → `None` → 401 `未登录或登录已过期`。
 - JWT payload 为 `{"sub": str(user_id), "iat", "exp"}`，HS256。
-- `GET /auth/config` → `{"registration_enabled": bool}`；注册关闭时注册 → 403 `注册已关闭，请联系管理员`。
+- `GET /auth/config` → `{"registration_enabled": bool, "mcp_enabled": bool}`（`mcp_enabled` 见 [auth-admin.md](./auth-admin.md)）；注册关闭时注册 → 403 `注册已关闭，请联系管理员`。
 - API key：仅以 `api_key_enc = cipher.encrypt(api_key.strip())` 的形式存储；响应中携带
   由 `mask_secret` 生成的 `api_key_masked`：
 

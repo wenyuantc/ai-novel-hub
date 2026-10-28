@@ -28,6 +28,8 @@ interface Props {
   aiConfigId: number | null
   /** 本次写作风格（由编辑器 AI 助手的「本次写作风格」提供） */
   styleChoice: StyleChoice
+  /** 本次选用的 Skill（由 AI 助手的「Skill（可选）」提供） */
+  skillId: number | null
   /** 编辑器其他任务进行中 / 章节卡在生成中 / 无 AI 配置 */
   disabled: boolean
   /** 有未保存修改时先保存；失败返回 false */
@@ -52,6 +54,7 @@ export default function RewritePanel({
   selection,
   aiConfigId,
   styleChoice,
+  skillId,
   disabled,
   ensureSaved,
   onLockChange,
@@ -101,6 +104,7 @@ export default function RewritePanel({
       end: cpEnd,
       instruction: instruction.trim(),
       style: styleChoice,
+      skill_id: skillId,
     })
   }
 

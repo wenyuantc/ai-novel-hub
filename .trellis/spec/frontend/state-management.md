@@ -14,8 +14,9 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 
 | 类别 | 位置 | 示例 |
 |----------|-------|----------|
-| 会话（全局） | `stores/auth.ts` → `useAuthStore` | `status: 'unknown' \| 'authenticated' \| 'anonymous'`、`user`、`registrationEnabled`；actions `init`、`login`、`register`、`logout`、`clear` |
+| 会话（全局） | `stores/auth.ts` → `useAuthStore` | `status: 'unknown' \| 'authenticated' \| 'anonymous'`、`user`、`registrationEnabled`、`mcpEnabled`（`/auth/config`，读取失败按 true）；actions `init`、`login`、`register`、`logout`、`clear` |
 | 用户级缓存（全局） | `stores/aiConfigs.ts` → `useAIConfigStore` | `configs`、`loaded`、`loading`；`load(force = false)`、`reset()` |
+| 可见 Skill（全局，按需加载） | `stores/skills.ts` → `useSkillStore` / `useSkills()` | `skills`（我的 + 全局的 `SkillBrief`）、`loaded`、`loading`、`error`；`load(force = false)`、`reset()` |
 | 活动任务（全局） | `stores/tasks.ts` → `useTasksStore` | `active`（排队 + 运行中，id 倒序）、`loaded`、`version`；`refresh()`、`track(task)`、`bump()`、`startPolling()`、`reset()` |
 | 当前项目（全局） | `stores/project.ts` → `useProjectStore` | `project`、`loading`、`error`；`load(id)`、`refresh()`、`setProject(p)`、`reset()` |
 | 主题（全局，设备级） | `theme/themeStore.ts` → `useThemeStore` | `mode`（`light` / `dark` / `system`，localStorage `ainovel.theme`）、`systemDark`；`setMode`、`setSystemDark`；`useResolvedTheme()`、`watchSystemTheme()` |
@@ -42,6 +43,12 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
   - 轮询失败静默（401 由全局处理器登出）。
   - 单个任务的实时输出 / 进度不进 store，由 `useTaskStream` 本地订阅；store 只是列表 + 徽标。
 
+- `useSkillStore`（`10-23-skills-mcp`）——由 `SkillSelect`（章节编辑器 AI 助手、批量弹窗、智能体输入区）、智能体的 `/` 补全、`SkillsPage` 读取。
+  - **按需加载**：store 本身因 `App` 的重置 effect 在入口 chunk 里，但 `load()` 内部 `await import('../api/skills')`，接口模块和常量不随入口加载；
+    挂载 `useSkills()` 的组件才触发请求，未打开相关界面时不发请求。
+  - `load()` 与 `useAIConfigStore` 一样幂等（`loading || (loaded && !force)` 直接返回）；`SkillsPage` 每次增删改、复制、导入、恢复后 `load(true)`，其他地方的下拉框随之更新。
+  - 只缓存列表（`SkillBrief`，不含正文）；编辑抽屉的详情用 `skillApi.get` 本地加载。随 `userId` 重置。
+- `useAuthStore.mcpEnabled` 是部署配置而不是用户数据：`init()` 时与 `registrationEnabled` 一起读取，用于隐藏顶栏「MCP 插件」入口与智能体面板的插件选择。
 - `useThemeStore`——由 `App`（`ConfigProvider` 算法、`ThemeSync`）、`ThemeSwitch`、`usePalette`、书封、阅读器读取。是**设备偏好**而非用户数据，因此**不**加入 `userId` 变化时的重置 effect；系统主题监听在 `App` 挂载时 `watchSystemTheme()` 注册、卸载时移除。
 - 书架偏好与阅读设置只在各自页面里 `useState(read*)` + `useEffect(write*)`，不进 store（只有一个页面使用）。阅读进度在服务端（`ProjectOut.reading`），阅读器内存里只保留最近一次上报的位置。
 
@@ -63,6 +70,8 @@ useEffect(() => {
   useAIConfigStore.getState().reset()
   useProjectStore.getState().reset()
   useTasksStore.getState().reset()
+  useStyleStore.getState().reset()
+  useSkillStore.getState().reset()
 }, [userId])   // userId = useAuthStore((s) => s.user?.id)
 ```
 

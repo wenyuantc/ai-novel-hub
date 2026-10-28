@@ -49,6 +49,23 @@ class ChapterHandler:
     async def validate_and_claim(
         self, db: AsyncSession, ctx: TaskContext, *, user_id: int, kind: str, params: dict[str, Any]
     ) -> TaskSpec:
+        return await self._claim(db, ctx, user_id=user_id, kind=kind, params=params)
+
+    async def validate_retry(self, db: AsyncSession, ctx: TaskContext, *, user_id: int, task: Task) -> TaskSpec:
+        """重试：重新校验与抢占，但沿用原任务的 Skill 快照（之后编辑 Skill 不影响重试）。"""
+        params = dict(task.input.get("request") or {})
+        return await self._claim(db, ctx, user_id=user_id, kind=task.kind, params=params, skill=task.input.get("skill"))
+
+    async def _claim(
+        self,
+        db: AsyncSession,
+        ctx: TaskContext,
+        *,
+        user_id: int,
+        kind: str,
+        params: dict[str, Any],
+        skill: dict[str, Any] | None = None,
+    ) -> TaskSpec:
         mode = _mode(kind)
         req = _request(kind, params)
         chapter_id = int(params["chapter_id"])
@@ -62,6 +79,7 @@ class ChapterHandler:
             factory=ctx.factory,
             ai_timeout=ctx.settings.ai_request_timeout,
             allow_private=ctx.settings.allow_private_ai_endpoints,
+            skill_snapshot=skill,
         )
         return TaskSpec(
             project_id=claim.project_id,
@@ -74,6 +92,7 @@ class ChapterHandler:
                 "prev_status": claim.prev_status,
                 "ai_config_id": claim.ai_config_id,
                 "source_words": claim.source_words,
+                "skill": claim.skill,
             },
         )
 
@@ -95,6 +114,7 @@ class ChapterHandler:
                 allow_private=ctx.settings.allow_private_ai_endpoints,
                 context_budget=ctx.settings.context_char_budget,
                 task_id=task.id,
+                skill=task.input.get("skill"),
             )
 
     def run(self, job: generation_service.ChapterJob, ctx: TaskContext) -> AsyncIterator[Event]:

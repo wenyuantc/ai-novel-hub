@@ -15,9 +15,9 @@
 | 规范 | 说明 | 状态 |
 |-------|-------------|--------|
 | [目录结构](./directory-structure.md) | `src/api`、`stores`、`hooks`、`components`、`pages/project`、`utils`、`router.tsx` 的布局与命名 | 已填写 |
-| [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理员用户页 / `RequireAdmin` | 已填写 |
+| [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理员用户页 / `RequireAdmin`、项目智能体面板与 external 提案卡片、Skill / MCP 插件页（`SkillSelect` 复用、请求头编辑语义） | 已填写 |
 | [Hook 规范](./hook-guidelines.md) | `useStreamTask`、`useLoader`、`useProjectId`、`useHasAIConfig`；SSE 客户端 code-spec 场景 | 已填写 |
-| [状态管理](./state-management.md) | Zustand store（auth / aiConfigs / project）、全局与本地状态、登出/401 时清空 | 已填写 |
+| [状态管理](./state-management.md) | Zustand store（auth / aiConfigs / project / tasks / styles / skills）、全局与本地状态、登出/401 时清空 | 已填写 |
 | [质量规范](./quality-guidelines.md) | lint/build/test 门禁、Vite 代理、包体积、禁止/必需模式、评审清单 | 已填写 |
 | [类型安全](./type-safety.md) | `types.ts` 镜像后端 schema、枚举、PATCH 语义、UTC 时间解析；API 客户端 code-spec 场景 | 已填写 |
 

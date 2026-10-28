@@ -84,6 +84,8 @@ class RewriteRequest(BaseModel):
     instruction: str = Field(default="", max_length=2000)
     # 写作风格：inherit = 章节覆盖 > 项目默认；none = 不用风格；整数 = 临时指定风格 id
     style: StyleChoice = "inherit"
+    # 选用的 Skill（本人或全局）作为补充工作流；任务创建时快照正文，之后编辑 Skill 不影响重试
+    skill_id: int | None = Field(default=None, gt=0)
 
 
 class RewriteApply(BaseModel):

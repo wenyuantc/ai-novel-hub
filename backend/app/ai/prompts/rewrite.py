@@ -29,6 +29,7 @@ def build_rewrite_messages(
     style: str = "",
     summary: str = "",
     instruction: str = "",
+    skill_guide: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -43,5 +44,6 @@ def build_rewrite_messages(
             "summary": summary.strip(),
             "style": style.strip(),
             "instruction": instruction.strip(),
+            "skill_guide": skill_guide.strip(),
         },
     )

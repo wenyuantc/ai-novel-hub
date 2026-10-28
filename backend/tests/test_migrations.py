@@ -1169,3 +1169,67 @@ def test_0018_agent_foreign_keys_and_downgrade(tmp_path):
             assert conn.execute(text("SELECT source FROM chapter_versions")).scalar() == "manual"
     finally:
         engine.dispose()
+
+
+def test_0019_skills_mcp(tmp_path):
+    """0019：skills / skill_references / mcp_plugins 三张表、4 个内置全局 Skill、全局 slug 的部分唯一索引；
+    agent_conversations.mcp_plugin_ids、agent_messages.skill_id（SET NULL）/ skill_snapshot；downgrade -1 全部删除。"""
+    db_file = tmp_path / "migrate0019.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0019")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspector = inspect(engine)
+        assert {"skills", "skill_references", "mcp_plugins"} <= set(inspector.get_table_names())
+        assert "mcp_plugin_ids" in {c["name"] for c in inspector.get_columns("agent_conversations")}
+        fks = {
+            fk["constrained_columns"][0]: fk["options"].get("ondelete")
+            for fk in inspector.get_foreign_keys("agent_messages")
+        }
+        assert fks["skill_id"] == "SET NULL" and fks["conversation_id"] == "CASCADE"
+        assert any(
+            c["column_names"] == ["conversation_id", "turn_task_id", "tool_call_id"]
+            for c in inspector.get_unique_constraints("agent_messages")
+        )
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            builtin = (
+                conn.execute(text("SELECT builtin_key FROM skills WHERE owner_user_id IS NULL ORDER BY id"))
+                .scalars()
+                .all()
+            )
+            assert builtin == ["long-continue", "deslop", "chapter-diagnose", "foreshadow-check"]
+            # 全局 slug 部分唯一索引在 SQLite 上生效；用户私有 Skill 可与全局同名
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(text("INSERT INTO skills (owner_user_id, slug, name) VALUES (NULL, 'deslop', 'x')"))
+            conn.execute(text("INSERT INTO users (username, password_hash) VALUES ('u', 'x')"))
+            conn.execute(text("INSERT INTO skills (owner_user_id, slug, name) VALUES (1, 'deslop', '我的')"))
+            with pytest.raises(IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(text("INSERT INTO skills (owner_user_id, slug, name) VALUES (1, 'deslop', '重复')"))
+            sid = conn.execute(text("SELECT id FROM skills WHERE owner_user_id = 1")).scalar_one()
+            conn.execute(
+                text(f"INSERT INTO skill_references (skill_id, title, content) VALUES ({sid}, '资料', '内容')")
+            )
+            conn.execute(
+                text("INSERT INTO mcp_plugins (user_id, slug, name, transport, url) VALUES (1, 'p', 'P', 'sse', 'x')")
+            )
+            conn.execute(text("DELETE FROM skills WHERE id = :sid"), {"sid": sid})
+            assert conn.execute(text("SELECT count(*) FROM skill_references")).scalar() == 0
+            conn.execute(text("DELETE FROM users"))
+            assert conn.execute(text("SELECT count(*) FROM mcp_plugins")).scalar() == 0
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "-1")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspector = inspect(engine)
+        assert not ({"skills", "skill_references", "mcp_plugins"} & set(inspector.get_table_names()))
+        assert "skill_id" not in {c["name"] for c in inspector.get_columns("agent_messages")}
+        assert "mcp_plugin_ids" not in {c["name"] for c in inspector.get_columns("agent_conversations")}
+    finally:
+        engine.dispose()

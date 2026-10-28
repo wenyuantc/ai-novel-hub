@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import format_project_info
-from app.ai.prompts.agent import SAFETY_RULES
+from app.ai.prompts.agent import FORCED_SKILL_HEADER, SAFETY_RULES, SKILLS_CATALOG_LIMIT, SKILLS_CATALOG_MORE
 from app.ai.prompts.registry import prompt_meta, render
 from app.ai.providers import LLMProvider
 from app.core.errors import BadRequestError
@@ -25,7 +25,7 @@ from app.models import (
     Outline,
     Project,
 )
-from app.services import project_service, prompt_service
+from app.services import project_service, prompt_service, skill_service
 
 RESULT_LIMIT = 8000
 TRUNCATED = "内容过长已截断，请用分页参数读取"
@@ -52,6 +52,34 @@ def tool_result(data: Any) -> str:
         else:
             hi = mid - 1
     return json.dumps({"untrusted": True, "data": raw[:lo], "warning": TRUNCATED}, ensure_ascii=False)
+
+
+async def skills_catalog(db: AsyncSession, user_id: int) -> str:
+    """可见 Skill 清单（本人优先）；说明可能由他人编写，整体作为不可信数据。"""
+    rows = await skill_service.visible_skills(db, user_id)
+    if not rows:
+        return ""
+    lines = [
+        "｜".join(
+            [
+                s.slug,
+                s.name,
+                s.description.replace("\n", " "),
+                " ".join(f"/{t}" for t in s.triggers or []) or "-",
+            ]
+        )
+        for s in rows[:SKILLS_CATALOG_LIMIT]
+    ]
+    if len(rows) > SKILLS_CATALOG_LIMIT:
+        lines.append(SKILLS_CATALOG_MORE.format(count=len(rows) - SKILLS_CATALOG_LIMIT))
+    return untrusted_text("\n".join(lines))
+
+
+def forced_skill_message(snapshot: dict | None) -> dict | None:
+    if not snapshot or not snapshot.get("body"):
+        return None
+    header = FORCED_SKILL_HEADER.format(name=snapshot.get("name", ""))
+    return {"role": "system", "content": f"{header}\n\n{snapshot['body'][: skill_service.SNAPSHOT_LIMIT]}"}
 
 
 async def validate_page_context(db: AsyncSession, project_id: int, raw: dict | None) -> dict:
@@ -280,6 +308,7 @@ async def build_messages(
             "safety_rules": SAFETY_RULES,
             "project_info": untrusted_text(info),
             "page_hint": untrusted_text(json.dumps(safe_page, ensure_ascii=False)),
+            "skills_catalog": await skills_catalog(db, conversation.user_id),
         },
     )
     # 兼容旧的损坏覆盖：通用模板兜底把缺失锁定段补到 user，此处提升回 system 权限。
@@ -288,6 +317,10 @@ async def build_messages(
             {**m, "content": m["content"].replace(SAFETY_RULES, "")} for m in system
         ]
     messages = list(system)
+    # 强制启用的 Skill 正文排在全部 system（含锁定安全规则）之后，覆盖模板也无法把它放到安全规则之前
+    forced = forced_skill_message(latest_user.skill_snapshot if latest_user is not None else None)
+    if forced is not None:
+        messages.append(forced)
     if summary_message:
         messages.append(summary_message)
     messages.extend(selected_messages)

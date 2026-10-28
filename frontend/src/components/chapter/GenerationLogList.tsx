@@ -6,6 +6,7 @@ import { GENERATION_KIND_LABELS, GENERATION_STATUS, generationLogApi } from '../
 import { errorMessage } from '../../api/client'
 import type { GenerationLog, GenerationLogBrief } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
+import { skillRef } from '../../utils/skills'
 import { formatTime } from '../../utils/time'
 
 interface Props {
@@ -51,7 +52,24 @@ export default function GenerationLogList({ pid, chapterId }: Props) {
 
   const columns: ColumnsType<GenerationLogBrief> = [
     { title: '时间', dataIndex: 'created_at', width: 140, render: (t: string) => formatTime(t) },
-    { title: '类型', dataIndex: 'kind', width: 90, render: (k: GenerationLogBrief['kind']) => GENERATION_KIND_LABELS[k] },
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      width: 110,
+      render: (k: GenerationLogBrief['kind'], r) => {
+        const skill = skillRef(r.params.skill)
+        return (
+          <Space size={2} wrap>
+            {GENERATION_KIND_LABELS[k]}
+            {skill && (
+              <Tooltip title={`Skill：${skill.name}`}>
+                <Tag style={{ marginInlineEnd: 0 }}>Skill</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        )
+      },
+    },
     {
       title: '模型',
       dataIndex: 'model',
@@ -117,6 +135,9 @@ export default function GenerationLogList({ pid, chapterId }: Props) {
                 {detail.provider} / {detail.model}
               </Descriptions.Item>
               <Descriptions.Item label="时间">{formatTime(detail.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+              <Descriptions.Item label="Skill" span={2}>
+                {skillRef(detail.params.skill)?.name ?? '未使用'}
+              </Descriptions.Item>
               <Descriptions.Item label="产出字数">{detail.output_chars}</Descriptions.Item>
               <Descriptions.Item label="耗时">{formatDuration(detail.duration_ms)}</Descriptions.Item>
               <Descriptions.Item label="Token（输入 / 输出）" span={2}>

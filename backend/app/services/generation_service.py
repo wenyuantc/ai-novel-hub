@@ -43,6 +43,7 @@ from app.services import (
     generation_log_service,
     prompt_service,
     retrieval_service,
+    skill_service,
     style_service,
     version_service,
 )
@@ -123,6 +124,8 @@ class ChapterClaim:
     chapter_title: str
     # 润色 / 重写时原文字数（用于估算进度）
     source_words: int = 0
+    # 选用的 Skill 快照 {id, name, body}（存进 tasks.input.skill；重试沿用）
+    skill: dict[str, Any] | None = None
 
 
 async def validate_and_claim(
@@ -136,6 +139,7 @@ async def validate_and_claim(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    skill_snapshot: dict[str, Any] | None = None,
 ) -> ChapterClaim:
     """鉴权、配置解析、SSRF 校验与参数校验，并原子地把章节置为 generating。
 
@@ -151,6 +155,8 @@ async def validate_and_claim(
     # 只做校验（解密 + 端点防护），运行时再按最新配置重新构建
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     await style_service.validate_choice(db, user_id, req.style)
+    # 重试沿用原任务的快照（Skill 之后被修改或删除都不影响）
+    skill = skill_snapshot or await skill_service.snapshot(db, user_id, req.skill_id)
     if mode == "polish" and not chapter.content.strip():
         raise BadRequestError("章节正文为空，无法润色")
     if mode == "revise":
@@ -166,6 +172,7 @@ async def validate_and_claim(
         chapter_no=chapter.chapter_no,
         chapter_title=chapter.title,
         source_words=chapter.word_count if mode in ("polish", "revise") else 0,
+        skill=skill,
     )
 
 
@@ -236,6 +243,7 @@ async def build_chapter_job(
     allow_private: bool,
     context_budget: int,
     task_id: int | None = None,
+    skill: dict[str, Any] | None = None,
 ) -> ChapterJob:
     """任务开始运行时按最新数据组装 provider、上下文与 messages；章节须仍处于 generating。"""
     chapter = await get_owned_chapter(db, user_id, chapter_id)
@@ -247,6 +255,8 @@ async def build_chapter_job(
     # 风格：临时指定 > 章节覆盖 > 项目默认 > 不用风格；风格段由 style.block 模板渲染
     resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
     style = resolved.block if resolved is not None else ""
+    # Skill 快照（创建任务时写入 tasks.input.skill）作为补充工作流
+    skill_guide = str((skill or {}).get("body") or "")
     template_key = {"generate": "chapter.generate", "revise": "chapter.revise"}.get(mode, "chapter.polish")
     override = await prompt_service.get_override(db, user_id, template_key)
     continue_override = (
@@ -282,6 +292,7 @@ async def build_chapter_job(
             key_events=task.key_events,
             goal=task.goal,
             emotion=task.emotion,
+            skill_guide=skill_guide,
             override=override,
         )
     elif mode == "revise":
@@ -308,13 +319,18 @@ async def build_chapter_job(
             style=style,
             instruction=req.instruction,
             preserve=req.preserve,
+            skill_guide=skill_guide,
             override=override,
         )
     else:
         if not chapter.content.strip():
             raise BadRequestError("章节正文为空，无法润色")
         messages = build_polish_messages(
-            content=chapter.content, style=style, instruction=req.instruction, override=override
+            content=chapter.content,
+            style=style,
+            instruction=req.instruction,
+            skill_guide=skill_guide,
+            override=override,
         )
         params = {"instruction": req.instruction}
     # 生成记录：提示词来源与所用风格（渲染后的风格段）
@@ -323,6 +339,7 @@ async def build_chapter_job(
         params["continue_prompt"] = prompt_meta("chapter.continue", continue_override)
     params["style_choice"] = req.style
     params["style"] = style_service.style_log(resolved)
+    params["skill"] = skill_service.skill_log(skill)
 
     return ChapterJob(
         chapter_id=chapter.id,

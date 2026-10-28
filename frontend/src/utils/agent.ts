@@ -1,4 +1,4 @@
-import type { AgentChange, AgentChangeStatus, AgentMessage, AgentToolEnd, AgentToolStart } from '../api/types'
+import type { AgentChange, AgentChangeStatus, AgentExternalCall, AgentMessage, AgentToolEnd, AgentToolStart } from '../api/types'
 import type { ProjectResource } from './projectRefresh'
 
 export const AGENT_CHANGE_STATUS: Record<AgentChangeStatus, { label: string; color: string }> = {
@@ -15,7 +15,22 @@ export function mergeToolStep(steps: AgentToolStep[], event: (AgentToolStart | A
 export function upsertAgentChange(changes: AgentChange[], change: AgentChange): AgentChange[] {
   return [...changes.filter((c) => c.id !== change.id), change].sort((a, b) => a.seq - b.seq || a.id - b.id)
 }
-export function canUndoChange(change: AgentChange): boolean { return change.status === 'executed' && change.kind !== 'task' }
+/** 任务只能取消；外部插件调用（external）无法撤销 */
+export function canUndoChange(change: AgentChange): boolean { return change.status === 'executed' && change.kind !== 'task' && change.kind !== 'external' }
+/** external 提案的插件、工具与参数（预览结构不完整时返回 null） */
+export function externalCall(change: AgentChange): AgentExternalCall | null {
+  const ext = change.kind === 'external' ? change.preview.external : undefined
+  if (!ext || typeof ext !== 'object' || typeof ext.tool !== 'string' || typeof ext.plugin !== 'object' || ext.plugin === null) return null
+  return { plugin: { id: Number(ext.plugin.id), slug: String(ext.plugin.slug ?? ''), name: String(ext.plugin.name ?? '') }, tool: ext.tool, arguments: ext.arguments && typeof ext.arguments === 'object' ? ext.arguments : change.arguments, read_only_hint: typeof ext.read_only_hint === 'boolean' ? ext.read_only_hint : null }
+}
+/** 外部调用执行后的文本结果（result.text）或错误 */
+export function externalResult(change: AgentChange): { text: string; error: boolean } | null {
+  const r = change.result
+  if (!r) return null
+  if (typeof r.error === 'string') return { text: r.error, error: true }
+  if (typeof r.text === 'string') return { text: r.text, error: false }
+  return null
+}
 export function changeTaskId(change: AgentChange): number | null {
   if (change.kind !== 'task' || change.status !== 'executed') return null
   if (typeof change.result?.task_id === 'number') return change.result.task_id
@@ -29,7 +44,10 @@ export function agentValue(value: unknown): string {
   return JSON.stringify(value, null, 2)
 }
 export function toolLabel(name: string): string {
-  const direct: Record<string, string> = { get_project_overview: '读取项目概览', update_project: '修改项目', replace_chapter_text: '替换章节正文', update_chapter_meta: '修改章节标题', update_chapter_plans: '修改细纲', start_task: '启动后台任务', read_chapter: '阅读章节', get_outline_tree: '读取大纲树', search_memories: '检索剧情记忆', search_knowledge: '检索知识库', list_active_tasks: '查看进行中的任务', get_chapter_analysis: '读取章节分析', set_org_member: '设置组织成员', remove_org_member: '移除组织成员', assign_career: '设置角色职业', remove_career_assignment: '移除角色职业' }
+  // MCP 工具：mcp__插件标识__工具名（实时事件里的 label 由服务端给出插件名）
+  const mcp = /^mcp__([a-z0-9-]+)__(.+)$/.exec(name)
+  if (mcp) return `外部插件 ${mcp[1]} · ${mcp[2]}`
+  const direct: Record<string, string> = { get_project_overview: '读取项目概览', update_project: '修改项目', replace_chapter_text: '替换章节正文', update_chapter_meta: '修改章节标题', update_chapter_plans: '修改细纲', start_task: '启动后台任务', read_chapter: '阅读章节', get_outline_tree: '读取大纲树', search_memories: '检索剧情记忆', search_knowledge: '检索知识库', list_active_tasks: '查看进行中的任务', get_chapter_analysis: '读取章节分析', list_skills: '查看 Skill 列表', load_skill: '加载 Skill', read_skill_reference: '读取 Skill 参考资料', set_org_member: '设置组织成员', remove_org_member: '移除组织成员', assign_career: '设置角色职业', remove_career_assignment: '移除角色职业' }
   if (direct[name]) return direct[name]
   const verbs: Record<string, string> = { list: '查看', get: '读取', create: '新建', update: '修改', delete: '删除' }
   const nouns: Record<string, string> = { character: '角色', characters: '角色', organization: '组织', organizations: '组织', relationship: '关系', relationships: '关系', career: '职业', careers: '职业', world_setting: '世界观', world_settings: '世界观', outline: '大纲', chapter: '章节', chapters: '章节', foreshadow: '伏笔', foreshadows: '伏笔', writing_styles: '写作风格' }

@@ -7,6 +7,7 @@ import { router } from './router'
 import { useAIConfigStore } from './stores/aiConfigs'
 import { useAuthStore } from './stores/auth'
 import { useProjectStore } from './stores/project'
+import { useSkillStore } from './stores/skills'
 import { useStyleStore } from './stores/styles'
 import { useTasksStore } from './stores/tasks'
 import { BRAND_PRIMARY } from './theme/palette'
@@ -34,6 +35,7 @@ export default function App() {
     useProjectStore.getState().reset()
     useTasksStore.getState().reset()
     useStyleStore.getState().reset()
+    useSkillStore.getState().reset()
   }, [userId])
 
   return (
