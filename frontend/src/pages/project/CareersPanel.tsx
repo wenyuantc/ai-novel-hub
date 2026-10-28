@@ -1,9 +1,10 @@
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
-import { App, Button, Card, Col, Empty, Popconfirm, Row, Space, Spin, Tag, Tooltip, Typography } from 'antd'
-import { useCallback, useState } from 'react'
+import { App, Button, Card, Empty, Popconfirm, Space, Spin, Tag, Tooltip, Typography } from 'antd'
+import { useCallback, useState, type CSSProperties } from 'react'
 import { CAREER_KIND_LABELS, careerApi } from '../../api/careers'
 import { errorMessage } from '../../api/client'
 import type { Career, CareerKind } from '../../api/types'
+import AutoGrid from '../../components/AutoGrid'
 import CareerEditDrawer from '../../components/careers/CareerEditDrawer'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import WizardModal from '../../components/WizardModal'
@@ -11,6 +12,9 @@ import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 
 const GROUPS: CareerKind[] = ['main', 'sub']
+
+/** 卡片标题允许换行：窄卡片里名字 + 标签放不下时折行，而不是被省略号截断。 */
+const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 
 /** 职业：按主修 / 副修分组的卡片（阶梯 + 持有人数），编辑抽屉维护阶段与查看持有人；AI 生成职业 / 职业体系向导。 */
 export default function CareersPanel() {
@@ -39,11 +43,12 @@ export default function CareersPanel() {
   }
 
   const renderCard = (c: Career) => (
-    <Col key={c.id} xs={24} md={12} xl={8}>
       <Card
+        key={c.id}
         size="small"
+        styles={{ title: cardTitleWrap }}
         title={
-          <Space size={4}>
+          <Space size={4} wrap>
             {c.name}
             <Tag color={c.kind === 'main' ? 'gold' : 'blue'}>{c.kind === 'sub' ? '副修' : '主修'}</Tag>
           </Space>
@@ -91,7 +96,6 @@ export default function CareersPanel() {
           </Typography.Text>
         </Space>
       </Card>
-    </Col>
   )
 
   return (
@@ -125,7 +129,7 @@ export default function CareersPanel() {
                       {g === 'main' ? '每个角色最多 1 个主职业' : '每个角色最多 3 个副职业'}
                     </Typography.Text>
                   </Typography.Title>
-                  <Row gutter={[16, 16]}>{list.map(renderCard)}</Row>
+                  <AutoGrid>{list.map(renderCard)}</AutoGrid>
                 </div>
               )
             })}

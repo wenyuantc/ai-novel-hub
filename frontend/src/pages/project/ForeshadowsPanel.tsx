@@ -4,12 +4,10 @@ import {
   Button,
   Card,
   Checkbox,
-  Col,
   Dropdown,
   InputNumber,
   Modal,
   Rate,
-  Row,
   Segmented,
   Select,
   Space,
@@ -35,6 +33,7 @@ import {
 } from '../../api/foreshadows'
 import { characterApi } from '../../api/story'
 import type { Foreshadow, ForeshadowListQuery, ForeshadowSort, ForeshadowStatus } from '../../api/types'
+import AutoGrid from '../../components/AutoGrid'
 import ForeshadowEditDrawer from '../../components/foreshadows/ForeshadowEditDrawer'
 import ForeshadowTimeline from '../../components/foreshadows/ForeshadowTimeline'
 import { useLoader } from '../../hooks/useLoader'
@@ -320,25 +319,21 @@ export default function ForeshadowsPanel() {
         </Button>
       }
     >
-      <Row gutter={[16, 12]} style={{ marginBottom: 16 }}>
+      <AutoGrid minItemWidth={96} gap="12px 16px" mobileColumns={3} style={{ marginBottom: 16 }}>
         {statItems.map((s) => (
-          <Col key={s.key} xs={8} sm={6} md={3}>
-            <Statistic title={s.label} value={s.value} valueStyle={s.color ? { color: s.color } : undefined} />
-          </Col>
+          <Statistic key={s.key} title={s.label} value={s.value} valueStyle={s.color ? { color: s.color } : undefined} />
         ))}
         {stats && (
-          <Col xs={8} sm={6} md={3}>
-            <Statistic
-              title={
-                <Tooltip title="已有正文的最大章节号，超期按它判断">
-                  <span>当前章</span>
-                </Tooltip>
-              }
-              value={stats.current_chapter || '-'}
-            />
-          </Col>
+          <Statistic
+            title={
+              <Tooltip title="已有正文的最大章节号，超期按它判断">
+                <span>当前章</span>
+              </Tooltip>
+            }
+            value={stats.current_chapter || '-'}
+          />
         )}
-      </Row>
+      </AutoGrid>
       {filters}
       <Tabs
         activeKey={tab}

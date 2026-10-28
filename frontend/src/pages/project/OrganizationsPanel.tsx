@@ -21,7 +21,7 @@ import {
   Typography,
 } from 'antd'
 import type { DataNode } from 'antd/es/tree'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { errorMessage } from '../../api/client'
 import { MEMBER_STATUS, memberApi, memberStatusLabel, organizationApi } from '../../api/organizations'
 import { characterApi } from '../../api/story'
@@ -48,6 +48,11 @@ interface MemberFormValues {
   status: MemberStatus
   note: string
 }
+
+/** 组织树 / 详情按容器宽度排布：放得下两栏（约 1:2）就并排，内容区变窄（如右侧停靠面板打开、手机）时上下堆叠。 */
+const splitRow: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 16 }
+const treePane: CSSProperties = { flex: '1 1 240px', minWidth: 0 }
+const detailPane: CSSProperties = { flex: '2 1 420px', minWidth: 0 }
 
 const STATUS_OPTIONS = (Object.keys(MEMBER_STATUS) as MemberStatus[]).map((k) => ({ value: k, label: MEMBER_STATUS[k].label }))
 
@@ -174,8 +179,8 @@ export default function OrganizationsPanel() {
         {orgs.length === 0 ? (
           <Empty description="暂无组织，可手动新增或使用 AI 生成" />
         ) : (
-          <Row gutter={16}>
-            <Col xs={24} md={8}>
+          <div style={splitRow}>
+            <div style={treePane}>
               <Card size="small" title="组织树">
                 <Tree
                   treeData={tree}
@@ -185,8 +190,8 @@ export default function OrganizationsPanel() {
                   onSelect={(keys) => setSelectedId(keys.length > 0 ? Number(keys[0]) : null)}
                 />
               </Card>
-            </Col>
-            <Col xs={24} md={16}>
+            </div>
+            <div style={detailPane}>
               {selected ? (
                 <OrgDetail
                   key={selected.id}
@@ -199,10 +204,10 @@ export default function OrganizationsPanel() {
                   onMembersChanged={reload}
                 />
               ) : (
-                <Empty description="在左侧选择一个组织查看详情与成员" />
+                <Empty description="在组织树中选择一个组织查看详情与成员" />
               )}
-            </Col>
-          </Row>
+            </div>
+          </div>
         )}
       </Spin>
 

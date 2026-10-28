@@ -4,13 +4,11 @@ import {
   Button,
   Card,
   Checkbox,
-  Col,
   Descriptions,
   Drawer,
   Empty,
   Form,
   Popconfirm,
-  Row,
   Segmented,
   Space,
   Spin,
@@ -18,12 +16,13 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { assignmentApi, careerBadges } from '../../api/careers'
 import { lifeStatusLabel, roleTypeColor } from '../../api/characters'
 import { errorMessage } from '../../api/client'
 import { characterApi } from '../../api/story'
 import type { Character } from '../../api/types'
+import AutoGrid from '../../components/AutoGrid'
 import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
@@ -41,6 +40,9 @@ const ALL = '__all__'
 
 // 伏笔 Tab 只在打开角色抽屉并切到该 Tab 时才需要：按需加载，伏笔页的 API / 标签代码不进入口 chunk
 const CharacterForeshadowsTab = lazy(() => import('../../components/foreshadows/CharacterForeshadowsTab'))
+
+/** 卡片标题允许换行：窄卡片里名字 + 标签放不下时折行，而不是被省略号截断。 */
+const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 
 /** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业 / 伏笔）。 */
 export default function CharactersPanel() {
@@ -164,14 +166,15 @@ export default function CharactersPanel() {
                 全选当前
               </Checkbox>
             </Space>
-            <Row gutter={[16, 16]}>
+            <AutoGrid>
               {shown.map((c) => {
                 const life = lifeStatusLabel(c.life_status)
                 const badge = badges?.get(c.id)
                 return (
-                  <Col key={c.id} xs={24} md={12} xl={8}>
-                    <Card
+                  <Card
+                      key={c.id}
                       size="small"
+                      styles={{ title: cardTitleWrap }}
                       title={
                         <Space size={4} wrap>
                           <Checkbox checked={selectedIds.includes(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} />
@@ -227,10 +230,9 @@ export default function CharactersPanel() {
                         )}
                       </Descriptions>
                     </Card>
-                  </Col>
                 )
               })}
-            </Row>
+            </AutoGrid>
           </Space>
         )}
       </Spin>
