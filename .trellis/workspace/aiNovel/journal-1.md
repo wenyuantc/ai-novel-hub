@@ -489,3 +489,41 @@
 
 - 设定页卡片栅格适配面板宽度（已拆为独立会话）
 - P2-12 skills-mcp 规划
+
+
+## Session 18: P2-12 Skill 与 MCP 插件：规划、实现、检查、冒烟与归档
+<!-- trellis-session: v=2 fp=4856e220b5119108 -->
+
+**Date**: 2026-10-28
+**Task**: P2-12 Skill 与 MCP 插件：规划、实现、检查、冒烟与归档
+**Branch**: `main`
+
+### Summary
+
+完成 skills-mcp：Skill 两级权限与导入导出、智能体按需加载与强制启用、生成任务 Skill 快照；MCP 远程插件（加密请求头、SSRF、禁止重定向）接入智能体为 external 提案；check 修复中断回收、工具名路由、YAML 别名炸弹等；冒烟后修复同名选项、maxLength 警告、取消文案、重复警告与 409 原因提示。
+
+### Main Changes
+
+- 迁移 0019：skills、skill_references、mcp_plugins；会话 mcp_plugin_ids、消息 skill 快照
+- external 提案：默认确认、不可撤销、不自动执行、recover_external 中断回收
+- 新增 spec backend/skills-mcp.md，同步 11 份 spec；MCP_ENABLED 写入配置样例
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3c5cea8` | feat: Skill 与 MCP 插件 |
+
+### Testing
+
+- [OK] 后端 924 passed；前端 lint、394 passed、build 通过；46 个变异全部被抓住
+- [OK] 浏览器冒烟：Skill 复制/导入导出/生成注入；插件表单与 JSON 导入、测试、试用；智能体强制 Skill、免确认工具、外部提案确认与 409；375 无溢出
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- P2 剩余：prompt-workshop、oauth-announce
+- 全部完成后做父任务剩余验收（Skill/MCP/共享提示词安全约束、链路复跑、未复制检查）
