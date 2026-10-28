@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "表规则与反射测试"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板与锁定变量"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与外键"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试隔离、SSRF、变异验证"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件与响应式"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}

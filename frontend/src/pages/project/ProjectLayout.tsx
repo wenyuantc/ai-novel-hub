@@ -10,12 +10,15 @@ import {
   MenuOutlined,
   OrderedListOutlined,
   RocketOutlined,
+  RobotOutlined,
   TeamOutlined,
   TrophyOutlined,
 } from '@ant-design/icons'
 import { Alert, Breadcrumb, Button, Drawer, Layout, Menu, Result, Spin, Tag, theme } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
+import AgentDock from '../../components/agent/AgentDock'
+import { readAgentPreferences, writeAgentPreferences } from '../../utils/agentPreferences'
 import { PROJECT_STATUS } from '../../api/projects'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useProjectId } from '../../hooks/useProjectId'
@@ -44,6 +47,11 @@ export default function ProjectLayout() {
   const location = useLocation()
   const { project, loading, error, load } = useProjectStore()
   const isMobile = useIsMobile()
+  const [agentPrefs, setAgentPrefs] = useState(readAgentPreferences)
+  const agentRequested = new URLSearchParams(location.search).get('agent') === 'open'
+  const [dismissedAgentRequest, setDismissedAgentRequest] = useState<string | null>(null)
+  const agentOpen = agentPrefs.open || (agentRequested && dismissedAgentRequest !== location.key)
+  useEffect(() => writeAgentPreferences(agentPrefs), [agentPrefs])
   // 抽屉打开时记下当时的路径：导航（含浏览器后退）或切到桌面布局后自动视为关闭
   const [navOpenAt, setNavOpenAt] = useState<string | null>(null)
   const navOpen = isMobile && navOpenAt === location.pathname
@@ -111,6 +119,7 @@ export default function ProjectLayout() {
             项目菜单{current ? ` · ${current.label}` : ''}
           </Button>
         )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
         <Breadcrumb
           style={{ marginBottom: 12 }}
           items={[
@@ -124,9 +133,12 @@ export default function ProjectLayout() {
             },
           ]}
         />
+        <Button icon={<RobotOutlined />} aria-expanded={agentOpen} onClick={() => { setAgentPrefs((prev) => ({ ...prev, open: !agentOpen })); if (agentOpen) setDismissedAgentRequest(location.key) }}>项目智能体</Button>
+        </div>
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
         <Outlet />
       </Content>
+      <AgentDock projectId={pid} open={agentOpen} mobile={isMobile} width={agentPrefs.width} onWidth={(width) => setAgentPrefs((prev) => ({ ...prev, width }))} onClose={() => { setAgentPrefs((prev) => ({ ...prev, open: false })); setDismissedAgentRequest(location.key) }} />
       {isMobile && (
         <Drawer
           title={project.title}

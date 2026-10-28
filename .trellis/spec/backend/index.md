@@ -25,13 +25,14 @@
 | [质量规范](./quality-guidelines.md) | ruff + pytest、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
 | [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v1 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
 | [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
-| [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（25 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、写作风格库与解析优先级、风格段注入 | 已填写 |
+| [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（30 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、写作风格库与解析优先级、风格段注入 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
 | [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v1 格式、表规则注册表（新增项目相关表必须登记，反射测试）、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、风格 / 全局关系类型对应、EPUB 3 + NCX 结构与分卷规则 | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
 | [拆书导入](./book-import.md) | `book_imports` 解析记录（切章强规则、序章 / 目录区 / 兜底、docx / epub、子进程正则）、7 种校正与提示、修订号 409 `code = stale_revision`、单事务开始导入、`book.import` 断点 / 暂停 / 跳过 / 只写空字段 | 已填写 |
+| [项目智能体](./agent.md) | Provider 工具调用协议（`chat_tools_stream`、`TOOLS_UNSUPPORTED`、三家差异、`provider_metadata` 重放）、工具层与新增工具检查清单（kind 分级、`validate_references`、`id_model`）、提案 / 自动执行（首批 ≤3 项）/ 确认时预览比较 409、效果快照与撤销（`EFFECT_TABLES`、冲突检测、外键顺序）、`agent.turn` 断点续跑、安全规则 | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码 | 已填写 |
 | [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
 
@@ -47,6 +48,7 @@
 | 章节号平移（`CHAPTER_NO_REFS`）、细纲建章、快照恢复 | [outline.md](./outline.md) |
 | 批量顺序生成（断点、待审核、范围锁、任务内分析） | [batch-generate.md](./batch-generate.md) |
 | 拆书导入（切章与校正、修订号乐观并发、开始导入事务、反推断点 / 暂停 / 跳过、只写空字段） | [book-import.md](./book-import.md) |
+| 项目智能体（工具调用协议、提案确认、效果快照与撤销、续跑） | [agent.md](./agent.md) |
 | 检索打分与缓存、知识库建索引、剧情记忆同步与召回 | [retrieval.md](./retrieval.md) |
 | 项目备份注册表 / 导入映射、EPUB 结构 | [project-transfer.md](./project-transfer.md) |
 | 提示词模板（校验 / 渲染 / 覆盖）与写作风格解析 | [prompts-styles.md](./prompts-styles.md) |

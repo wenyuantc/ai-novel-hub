@@ -397,7 +397,7 @@ export interface WizardItemMap {
 }
 
 /** import = 拆书导入时为每章建的初始版本 */
-export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore' | 'revise' | 'import'
+export type VersionSource = 'manual' | 'baseline' | 'generate' | 'polish' | 'rewrite' | 'restore' | 'revise' | 'import' | 'agent'
 
 export interface ChapterVersionBrief {
   id: number
@@ -434,6 +434,7 @@ export type GenerationKind =
   | 'book_import.digest'
   | 'book_import.synthesize'
   | 'book_import.style'
+  | 'agent.turn'
 
 export type GenerationStatus = 'success' | 'error' | 'cancelled'
 
@@ -518,6 +519,7 @@ export type TaskKind =
   | 'chapter.batch'
   | 'kb.index'
   | 'book.import'
+  | 'agent.turn'
 
 /** paused = 待审核（多步任务到达审核点）：不占并发名额，可继续 / 结束 / 取消，不能删除 / 重试 */
 export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
@@ -545,7 +547,7 @@ export interface Task {
    * 多步任务的断点（首次运行前为 null）：chapter.batch 为 BatchCheckpoint；book.import 为断点摘要 BookImportSummary。
    * 按 kind 收窄：批量用 utils/batchState.ts 的 batchCheckpoint，拆书用 utils/bookImport.ts 的 bookImportSummary（任务面板只用 bookImportState.ts 的轻量读取）
    */
-  checkpoint: BatchCheckpoint | BookImportSummary | null
+  checkpoint: BatchCheckpoint | BookImportSummary | AgentCheckpoint | null
   /** 断点：下一步要处理的章节在 checkpoint.items 中的下标（仅多步任务有意义） */
   step_cursor: number
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
@@ -2473,3 +2475,89 @@ export interface ImportResult {
   /** 有向量模型时排队的重建索引任务 */
   task_id: number | null
 }
+
+// ---------------- 项目智能体（backend/app/schemas/agent.py） ----------------
+
+export interface AgentPageContext {
+  route: string
+  chapter_id?: number
+  outline_id?: number
+  character_id?: number
+  selection?: string
+}
+
+export interface AgentToolCall { id: string; name: string; arguments: string }
+export interface AgentCheckpoint {
+  tool_calls_used: number
+  pending_change_ids: number[]
+  assistant_message_id: number | null
+}
+export interface AgentConversation {
+  id: number
+  user_id: number
+  project_id: number
+  title: string
+  auto_execute: boolean
+  summary: string
+  summarized_until: number | null
+  last_message_at: string | null
+  created_at: string
+  updated_at: string
+}
+export interface AgentMessage {
+  id: number
+  conversation_id: number
+  turn_task_id: number | null
+  role: 'user' | 'assistant' | 'tool'
+  content: string
+  tool_calls: AgentToolCall[] | null
+  tool_call_id: string | null
+  tool_name: string | null
+  page_context: AgentPageContext | null
+  usage: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+export type AgentChangeStatus = 'proposed' | 'executing' | 'executed' | 'rejected' | 'failed' | 'undone'
+export interface AgentPreview {
+  title: string
+  target: unknown
+  diff: { field: string; label: string; before: unknown; after: unknown }[]
+  warnings: string[]
+}
+export interface AgentEffect {
+  table: string
+  pk: unknown
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+}
+export interface AgentChange {
+  id: number
+  conversation_id: number
+  project_id: number
+  turn_task_id: number | null
+  tool_call_id: string
+  tool_name: string
+  arguments: Record<string, unknown>
+  kind: 'small' | 'delete' | 'task' | 'text'
+  preview: AgentPreview
+  status: AgentChangeStatus
+  result: Record<string, unknown> | null
+  effects: AgentEffect[]
+  error: string
+  executed_at: string | null
+  undone_at: string | null
+  seq: number
+  created_at: string
+  updated_at: string
+}
+export interface AgentConversationDetail extends AgentConversation {
+  messages: AgentMessage[]
+  changes: AgentChange[]
+  active_task: Task | null
+}
+export interface AgentSendRequest { content: string; page_context?: AgentPageContext; ai_config_id?: number | null }
+export interface AgentSendResult { message: AgentMessage; task: Task }
+export interface AgentTurnResult { changes: AgentChange[]; task: Task | null; error?: string | null }
+export interface AgentToolStart { call_id: string; name: string; label: string }
+export interface AgentToolEnd { call_id: string; ok: boolean; summary: string }

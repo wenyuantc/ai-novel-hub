@@ -2,12 +2,14 @@ import asyncio
 import hashlib
 import json
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 import httpx
 from cryptography.fernet import Fernet
 
 from app.ai.providers import LLMProvider
+from app.ai.tools import AgentEvent
 from app.core.config import Settings
 
 TEST_FERNET_KEY = Fernet.generate_key().decode()
@@ -44,16 +46,61 @@ class FakeLLM:
     embed_error: Exception | None = None
     embed_error_sticky: bool = False
     embed_dim: int = 64
+    # 每次 chat_tools_stream 消费一项；可在事件之间插入异常/Gate 验证中断与取消。
+    tool_script: list[list[AgentEvent | Exception | Gate] | Exception] = field(default_factory=list)
+    tool_calls: list[dict] = field(default_factory=list)
 
     def push(self, item: "str | list[str | Exception | Gate] | Exception") -> None:
         if isinstance(item, str):
             item = [item[i : i + 7] for i in range(0, len(item), 7)]
         self.responses.append(item)
 
+    def push_tools(self, events: list[AgentEvent | Exception | Gate] | Exception) -> None:
+        self.tool_script.append(events)
+
     def factory(self, provider: str, api_key: str, base_url: str | None, timeout: float) -> LLMProvider:
         fake = self
 
         class _Provider(LLMProvider):
+            async def chat_tools_stream(
+                self, messages, model, tools, *, tool_choice="auto", max_tokens=None, thinking="off", temperature=None
+            ):
+                call = {
+                    "provider": provider,
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "model": model,
+                    "messages": deepcopy(messages),
+                    "tools": deepcopy(tools),
+                    "tool_choice": tool_choice,
+                    "max_tokens": max_tokens,
+                    "thinking": thinking,
+                    "temperature": temperature,
+                }
+                fake.calls.append(call)
+                fake.tool_calls.append(call)
+                item = fake.tool_script.pop(0) if fake.tool_script else [("text", {"text": "ok"})]
+                if isinstance(item, Exception):
+                    raise item
+                completed = False
+                has_finish = False
+                try:
+                    for event in item:
+                        if isinstance(event, Gate):
+                            event.reached.set()
+                            await event.released.wait()
+                            continue
+                        if isinstance(event, Exception):
+                            raise event
+                        has_finish |= event[0] == "finish"
+                        yield deepcopy(event)
+                    if not has_finish:
+                        yield "finish", {"reason": "stop"}
+                    completed = True
+                finally:
+                    if not completed:
+                        fake.aborted += 1
+
             async def list_models(self):
                 fake.list_calls.append(
                     {"provider": provider, "api_key": api_key, "base_url": base_url, "timeout": timeout}

@@ -14,7 +14,7 @@ import type { ContinueEvent, Task } from '../api/types'
 export type TaskOutcome = TaskEnd | { status: 'detached' } | { status: 'lost'; message: string }
 
 /** follow 的附加回调（批量生成的章节事件等）；在 hook 自身处理之后调用，仅当前订阅有效时触发 */
-export type TaskFollowExtra = Pick<TaskStreamHandlers, 'onSnapshot' | 'onChapterStart' | 'onChapterEnd' | 'onBatchEnd'>
+export type TaskFollowExtra = Pick<TaskStreamHandlers, 'onSnapshot' | 'onChapterStart' | 'onChapterEnd' | 'onBatchEnd' | 'onToolStart' | 'onToolEnd' | 'onProposal' | 'onExecuted'>
 
 /**
  * 订阅一个后台任务：累积输出文本（snapshot 覆盖）、实时 task 状态 / 进度 / 排队位置、续写轮次。
@@ -75,6 +75,10 @@ export function useTaskStream() {
           onBatchEnd: (e) => {
             if (isCurrent()) extra?.onBatchEnd?.(e)
           },
+          onToolStart: (e) => { if (isCurrent()) extra?.onToolStart?.(e) },
+          onToolEnd: (e) => { if (isCurrent()) extra?.onToolEnd?.(e) },
+          onProposal: (e) => { if (isCurrent()) extra?.onProposal?.(e) },
+          onExecuted: (e) => { if (isCurrent()) extra?.onExecuted?.(e) },
           onContinue: (e) => {
             if (isCurrent()) setContinueInfo(e)
           },

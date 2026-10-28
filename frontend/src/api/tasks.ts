@@ -1,8 +1,12 @@
 // 后台任务：CRUD + 订阅（GET /tasks/{id}/stream，断线自动重连，snapshot 覆盖本地文本）
 
+import { isAgentToolStart, isAgentToolEnd, readAgentChange } from './agentEvents'
 import { ApiError, api, request, type QueryValue } from './client'
 import { getSSE, isAbortError, readDetail, readText, StreamError } from './sse'
 import type {
+  AgentToolStart,
+  AgentToolEnd,
+  AgentChange,
   BatchChapterEnd,
   BookBatchEnd,
   BatchChapterStart,
@@ -88,6 +92,7 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'chapter.batch': '批量生成',
   'kb.index': '建索引',
   'book.import': '拆书反推',
+  'agent.turn': '项目智能体',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -129,6 +134,8 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>)
       return `${base}/chapters`
     case 'kb.index':
       return `${base}/knowledge`
+    case 'agent.turn':
+      return `${base}/overview?agent=open`
     case 'book.import':
       return `${base}/overview`
     default:
@@ -204,6 +211,11 @@ export interface TaskStreamHandlers {
   onChapterEnd?: (e: BatchChapterEnd) => void
   /** 拆书反推：通读某批结束 */
   onBatchEnd?: (e: BookBatchEnd) => void
+  /** 项目智能体工具步骤与提案（不可信载荷先收窄） */
+  onToolStart?: (e: AgentToolStart) => void
+  onToolEnd?: (e: AgentToolEnd) => void
+  onProposal?: (change: AgentChange) => void
+  onExecuted?: (change: AgentChange) => void
   /** 连接断开、即将第 attempt 次重连 */
   onReconnect?: (attempt: number, delayMs: number) => void
 }
@@ -315,6 +327,21 @@ export async function subscribeTask(
               case 'batch_end':
                 if (isBookBatchEnd(data)) handlers.onBatchEnd?.(data)
                 break
+              case 'tool_start':
+                if (isAgentToolStart(data)) handlers.onToolStart?.(data)
+                break
+              case 'tool_end':
+                if (isAgentToolEnd(data)) handlers.onToolEnd?.(data)
+                break
+              case 'proposal':
+              case 'executed': {
+                const change = readAgentChange(data)
+                if (change) {
+                  if (msg.event === 'proposal') handlers.onProposal?.(change)
+                  else handlers.onExecuted?.(change)
+                }
+                break
+              }
               case 'paused':
                 holder.end = { status: 'paused', task: readTask(data), result: isRecord(data) ? data.result : null }
                 break

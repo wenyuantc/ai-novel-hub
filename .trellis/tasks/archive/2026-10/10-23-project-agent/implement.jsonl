@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "任务契约、paused/resume"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "断点续跑与暂停写法"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板注册、锁定变量、覆盖"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "实体服务与上下文组装"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "大纲 / 章节号平移"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "表规则（差异快照复用）与 NOT_EXPORTED"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "检索读工具与派生数据维护"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键、归属 404"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "SSRF、FakeLLM、测试隔离"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "面板、响应式、主题 token"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 刷新与任务订阅"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像、checkpoint 收窄"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "包体积与懒加载"}
+{"file": ".trellis/tasks/10-23-mumu-parity/research/mumu-prompts-agents.md", "reason": "MuMu 智能体行为与缺陷对照（§4）"}

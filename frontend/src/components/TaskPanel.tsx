@@ -13,6 +13,7 @@ import { formatTime } from '../utils/time'
 import { hasResultViewer } from './entities/taskResultViewers'
 import TaskResultModal from './entities/TaskResultModal'
 import StreamOutput from './StreamOutput'
+import { AGENT_DOCK_WIDTH_VAR } from '../utils/agentPreferences'
 
 /** 右下角后台任务面板：活动任务数徽标 + 抽屉（进行中 / 最近），支持取消、重试、查看输出、跳转、删除、清理。 */
 export default function TaskPanel() {
@@ -58,6 +59,7 @@ export default function TaskPanel() {
         tooltip="后台任务"
         badge={{ count: active.length, color: 'blue' }}
         onClick={() => setOpen(true)}
+        style={{ insetInlineEnd: `calc(24px + var(${AGENT_DOCK_WIDTH_VAR}, 0px))` }}
       />
       <Drawer
         title="后台任务"
@@ -204,7 +206,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
             )
           }
           actions.push(
-            <Button
+            ...(t.kind === 'agent.turn' ? [] : [<Button
               key="resume"
               type="link"
               size="small"
@@ -234,7 +236,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               <Button type="link" size="small">
                 结束
               </Button>
-            </Popconfirm>,
+            </Popconfirm>]),
             <Popconfirm
               key="cancel"
               title="取消该任务？"
@@ -263,7 +265,9 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
                   ? '已完成的章节保留，正在写的章节恢复原状态。'
                   : t.kind === 'book.import'
                     ? '已导入的项目、章节和已写入的设定都会保留。'
-                    : '已输出的内容不会保存，章节保持原样。'
+                    : t.kind === 'agent.turn'
+                      ? '已执行的修改保留，可在会话中撤销。'
+                      : '已输出的内容不会保存，章节保持原样。'
               }
               okText="取消任务"
               cancelText="不取消"
@@ -365,7 +369,7 @@ function BookImportPauseLine({ task }: { task: Task }) {
 }
 
 /** 查看任务输出：进行中实时订阅，已结束读取 /output。 */
-function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => void }) {
+export function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => void }) {
   const live = isActiveTask(task.status)
   const stream = useTaskStream()
   const { follow } = stream

@@ -21,7 +21,7 @@ export default function CareersPanel() {
   const pid = useProjectId()
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
-  const { data: items = [], loading, reload } = useLoader(loader)
+  const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
   const [editing, setEditing] = useState<Career | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)

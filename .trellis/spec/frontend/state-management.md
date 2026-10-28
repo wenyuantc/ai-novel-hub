@@ -80,6 +80,11 @@ useEffect(() => {
 - 变更成功后，重新获取受影响的列表（`reload()`），或把服务端响应写回（`applyServerChapter(updated)`、`setProject(updated)`）。绝不在服务端响应之前乐观地修改本地状态。
 - 服务端响应是派生字段（`word_count`、`status`、`updated_at`）的唯一可信来源；编辑器仅在实时输入/流式输出时显示客户端的 `countWords`，保存后用服务端返回的章节替换。
 - 生成失败或被中止后，`reloadChapter()` 只同步服务端的 `status`（后端会将其回退），并保留本地文本。
+- **跨组件的项目数据失效**（`10-23-project-agent`）：`utils/projectRefresh.ts` 是唯一的广播点，`invalidateProject(projectId, resources)`；
+  `ProjectResource` = `project | characters | organizations | relationships | careers | world | outlines | chapters | foreshadows | memories | knowledge`。
+  它只通知「哪些资源变了」，不缓存数据；订阅方用 `useLoader(fn, { projectId, resources })`（命中即 `reload()`）或 `useProjectRefresh(pid, resources, refresh)`。
+  目前由智能体面板在修改执行 / 撤销后触发（见 component-guidelines「项目智能体面板」）；以后其他会在别处改动项目数据的功能（后台任务结束等）也用它，而不是在各页面之间互相传回调。
+  有本地未保存编辑的页面（章节编辑器）收到失效时不能直接覆盖，先比较并提示。
 
 ---
 

@@ -449,3 +449,43 @@
 ### Next Steps
 
 - P2：project-agent、skills-mcp、oauth-announce、prompt-workshop；或先做父任务集成验收
+
+
+## Session 17: P2-11 项目智能体：审计、修复、冒烟与归档
+<!-- trellis-session: v=2 fp=7d6d0515551fe66f -->
+
+**Date**: 2026-10-28
+**Task**: P2-11 项目智能体：审计、修复、冒烟与归档
+**Branch**: `codex/project-agent`
+
+### Summary
+
+接手外部完成的 project-agent 实现，完成 trellis-check 审计与变异验证、spec 补写、浏览器冒烟，修复跨 Provider 非法参数、撤销后 created_at 丢失（及随之引入的预览 409 时序问题）、任务悬浮按钮遮挡面板输入框，提交并归档。
+
+### Main Changes
+
+- Provider 三家 chat_tools_stream；history_arguments 容忍非法参数
+- effects 快照保留 created_at，preview_diff 跳过 created_at
+- TaskPanel 悬浮按钮通过 --agent-dock-width 避让智能体面板
+- 新增 spec backend/agent.md，同步 7 份 spec
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9155d38` | feat: 项目智能体（原生工具调用、修改提案确认与撤销） |
+| `3d150bf` | chore(task): archive 10-23-project-agent |
+
+### Testing
+
+- [OK] 后端 841 passed；前端 lint、360 passed、build 通过
+- [OK] 浏览器冒烟：确认/撤销、同轮续跑拿到新 id、级联删除撤销、正文替换撤销、启动任务后取消、自动执行首批、刷新恢复、375 抽屉
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 设定页卡片栅格适配面板宽度（已拆为独立会话）
+- P2-12 skills-mcp 规划

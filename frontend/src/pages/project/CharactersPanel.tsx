@@ -32,6 +32,7 @@ import CharacterMembershipsTab from '../../components/entities/CharacterMembersh
 import CharacterRelationsTab from '../../components/entities/CharacterRelationsTab'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import WizardModal from '../../components/WizardModal'
+import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectStore } from '../../stores/project'
@@ -50,10 +51,10 @@ export default function CharactersPanel() {
   const { message } = App.useApp()
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: items = [], loading, reload } = useLoader(loader)
+  const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['characters', 'careers'] })
   // 卡片上的主职业·阶段：项目级挂接列表一次取回
   const badgeLoader = useCallback(async () => careerBadges(await assignmentApi.listProject(pid)), [pid])
-  const { data: badges, reload: reloadBadges } = useLoader(badgeLoader)
+  const { data: badges, reload: reloadBadges } = useLoader(badgeLoader, { projectId: pid, resources: ['characters', 'careers'] })
   const [editing, setEditing] = useState<Character | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [tab, setTab] = useState('basic')
@@ -65,6 +66,7 @@ export default function CharactersPanel() {
   const [filter, setFilter] = useState<string>(ALL)
   const [selected, setSelected] = useState<number[]>([])
   const [form] = Form.useForm<CharacterFormValues>()
+  usePublishAgentContext(pid, { character_id: drawerOpen ? editing?.id : undefined })
 
   const roleTypes = useMemo(() => {
     const set = new Set(items.map((c) => c.role_type.trim() || '未设定'))

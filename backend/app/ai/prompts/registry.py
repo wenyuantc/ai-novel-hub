@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.ai.prompts import formats as F
+from app.ai.prompts.agent import SAFETY_RULES
 from app.ai.prompts.common import JSON_ONLY_RULE
 from app.ai.providers.base import ChatMessage
 from app.ai.templating import PromptOverride, TemplateRenderError, TemplateVar, VarKind, render_messages
@@ -18,6 +19,7 @@ from app.ai.templating import PromptOverride, TemplateRenderError, TemplateVar, 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 CATEGORIES: dict[str, str] = {
+    "agent": "项目智能体",
     "chapter": "章节",
     "analysis": "分析",
     "wizard": "向导",
@@ -100,6 +102,27 @@ def _inspiration(key: str, name: str, desc: str) -> tuple[str, str, str, str, tu
 
 
 _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
+    (
+        "agent.system",
+        "项目智能体",
+        "agent",
+        "项目对话助手的系统提示词，安全规则不可覆盖。",
+        (
+            L("safety_rules", "安全规则（锁定）", SAFETY_RULES),
+            PROJECT_INFO_VAR,
+            T("page_hint", "当前页面（已经校验项目归属）", sample="角色列表"),
+        ),
+    ),
+    (
+        "agent.summarize",
+        "智能体历史摘要",
+        "agent",
+        "压缩较早的对话，保留目标、资源 id 和执行结果。",
+        (
+            T("summary", "已有摘要", sample=""),
+            T("history", "待压缩历史", required=True, sample="用户希望调整角色性格。"),
+        ),
+    ),
     (
         "chapter.generate",
         "整章生成",

@@ -83,11 +83,11 @@ export default function ForeshadowsPanel() {
     [status, overdueOnly, longTermOnly, characterId, sort],
   )
   const listLoader = useCallback(() => foreshadowApi.list(pid, query), [pid, query])
-  const { data: items = [], loading, reload } = useLoader(listLoader)
+  const { data: items = [], loading, reload } = useLoader(listLoader, { projectId: pid, resources: ['foreshadows', 'characters', 'chapters'] })
   const statsLoader = useCallback(() => foreshadowApi.stats(pid), [pid])
-  const { data: stats, reload: reloadStats } = useLoader(statsLoader)
+  const { data: stats, reload: reloadStats } = useLoader(statsLoader, { projectId: pid, resources: ['foreshadows', 'characters', 'chapters'] })
   const charLoader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: characters = [] } = useLoader(charLoader)
+  const { data: characters = [] } = useLoader(charLoader, { projectId: pid, resources: ['foreshadows', 'characters', 'chapters'] })
   const currentChapter = stats?.current_chapter ?? 0
 
   const refresh = useCallback(() => {

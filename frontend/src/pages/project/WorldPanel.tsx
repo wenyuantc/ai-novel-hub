@@ -32,7 +32,7 @@ export default function WorldPanel() {
   const pid = useProjectId()
   const { message } = App.useApp()
   const loader = useCallback(() => worldApi.list(pid), [pid])
-  const { data: items = [], loading, reload } = useLoader(loader)
+  const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
   const [editing, setEditing] = useState<WorldSetting | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)

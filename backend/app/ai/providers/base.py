@@ -2,6 +2,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Literal, TypedDict
 
+from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
+
+TOOLS_UNSUPPORTED = "当前模型或接口不支持工具调用，请在「模型配置」中换用支持工具调用（function calling）的模型"
+
 
 class ChatMessage(TypedDict):
     role: Literal["system", "user", "assistant"]
@@ -46,6 +50,21 @@ class LLMProvider(ABC):
         """列出接口可用模型。失败时抛 AIProviderError。"""
         raise AIProviderError("该接口类型不支持获取模型列表")
 
+    async def chat_tools_stream(
+        self,
+        messages: list[AgentMessage],
+        model: str,
+        tools: list[ToolSpec],
+        *,
+        tool_choice: ToolChoice = "auto",
+        max_tokens: int | None = None,
+        thinking: ThinkingLevel = "off",
+        temperature: float | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """完整调用参数才产出 tool_call；默认不支持，绝不退化成文本模拟工具。"""
+        raise AIProviderError(TOOLS_UNSUPPORTED)
+        yield  # 维持 async generator 协议；异常在开始消费时抛出
+
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         """对每条文本求向量（顺序与输入一致）。调用方负责分批与截断。失败时抛 AIProviderError。"""
         raise AIProviderError("该提供方不支持向量模型")
@@ -62,3 +81,25 @@ def describe_error(exc: Exception) -> str:
     if len(text) > 500:
         text = text[:500] + "…"
     return f"模型调用失败：{text}"
+
+
+def describe_tools_error(exc: Exception) -> str:
+    """工具能力拒绝给出换模型提示；参数、历史协议及其他失败保留具体原因。"""
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    text = str(exc).lower()
+    mentions_tools = "tool" in text or "function" in text
+    capability_rejected = any(
+        word in text
+        for word in (
+            "unsupported",
+            "not support",
+            "not available",
+            "not implemented",
+            "unrecognized request argument",
+            "unknown parameter",
+        )
+    )
+    invalid_payload = any(word in text for word in ("schema", "tool_call_id", "tool_use_id", "tool_result"))
+    if mentions_tools and capability_rejected and not invalid_payload and status in (None, 400, 404, 422):
+        return TOOLS_UNSUPPORTED
+    return describe_error(exc)

@@ -386,3 +386,46 @@ dayjs.locale('zh-cn')
 - 顶栏（sticky）：返回、书名 / 章节标题、目录（左抽屉，`groupToc` 按卷分组、当前章高亮并滚动到可见处）、本章分析（右抽屉、无遮罩：`components/reader/ReaderAnalysisPanel`，取 `analysisApi.list` 第一条再 `get`，显示摘要 / 情节点 / 钩子 / 伏笔候选（`readCandidates` + `candidateLabel`），过期标签；没有分析时「本章还没有分析」+「去分析」→ 编辑器 `?panel=analysis`）、阅读设置（右抽屉）、编辑本章。移动端三个抽屉都改为底部抽屉（72vh，设置为自适应高度）。
 - 入口：书架「阅读」、章节列表每行「阅读」（正文为空禁用）、编辑器工具栏「阅读模式」（有未保存修改时由离开守卫拦截），都带 `state.from`。
 - 包体积（本任务后）：入口 `index-*.js` ≈ 154 kB（由 140 kB 增加：书架重写 + `utils/shelf.ts`、主题 store / 切换、移动端抽屉与章节卡片列表；阅读器、分析侧栏、`api/foreshadows.ts` 不在入口）。
+
+### 项目智能体面板（`components/agent/`，`10-23-project-agent`）
+
+后端契约见 `backend/agent.md`。
+
+- **挂载与懒加载**：`ProjectLayout` 静态引入轻量的 `AgentDock`，它用 `React.lazy(() => import('./AgentPanel'))` 加载面板（`Suspense` 的 fallback 是 `Skeleton`）。**面板关闭时不挂载 `AgentPanel`**，会话、时间线、markdown 和 diff 都不进入口 chunk。`AgentPanel` 以 `key={projectId}` 挂载，切换项目时重建。
+- **打开、收起与宽度**：内容区面包屑一行右侧的「项目智能体」按钮负责开关（`aria-expanded`）。偏好存在 localStorage `ainovel.agentPanel` `{open, width}`，经 `utils/agentPreferences.ts` 的 `readAgentPreferences` / `writeAgentPreferences` 读写，损坏或禁止存储时退回 `{open: false, width: 400}`。宽度一律经 `clampAgentWidth` 限制在 `AGENT_MIN_WIDTH` 320 到 `AGENT_MAX_WIDTH` 720 之间。查询串 `?agent=open`（任务面板里 `agent.turn` 的链接 `taskLink` → `/projects/:pid/overview?agent=open`）也会打开面板；用户在这次导航（`location.key`）里关掉后，就不再因这个参数重新打开。
+- **桌面**：右侧 `<aside aria-label="项目智能体">`，`position: sticky; top: 64`，高 `calc(100dvh - 64px)`，`maxWidth: calc(100% - 240px)`。左边缘是 `role="separator"` 拖拽条：指针拖动时 `setPointerCapture`；可聚焦，←/→ 每次 ±20，Home/End 跳到 320/720；带 `aria-valuemin/max/now`。
+- **手机**：`AgentDock` 改为全宽 `Drawer`（`width="100%"`、`destroyOnHidden`，body 无内边距），由同一个按钮打开，没有拖拽条。
+- **面板结构**（`AgentPanel` → `AgentConversationView` → `AgentTimeline` / `AgentChangeCard`）：
+  - 顶部 `Space.Compact`：会话 `Select`、新建、重命名（`Modal` + `Form`，1–200 字）、删除（`modal.confirm`，说明已写入项目的内容会保留）。没有会话时显示空状态，带「开始新会话」按钮。
+  - 「自动执行小修改」`Switch` 通过 PATCH `auto_execute` 存在服务端，本轮未结束时禁用。下方文案说明规则：每轮首次不超过 3 项小修改直接执行，删除、后续修改和启动任务仍需确认。
+  - 输入区：`AIConfigSelect`；`TextArea` 最多 8000 字（按码点计）。Enter 发送，Shift+Enter 换行，输入法组合中（`isComposing`）不发送。`busy`、有未结束轮次或流在运行时禁止发送。输入框上方显示当前附带的页面上下文（章节、大纲、角色，以及选区字数）。
+  - 轮次控制：有未结束轮次时显示阶段文案（`paused` 时为「请确认或拒绝修改，随后继续对话」），以及「停止」（Popconfirm → `taskApi.cancel`）。最近一轮可重试（`canRetryTask`）且没有未结束轮次时，显示「重试本轮」。
+- **事件归并时间线**（`utils/agent.ts` 的 `buildAgentTimeline(messages, changes, liveSteps)`）：
+  - 按持久化消息顺序展开：user 消息、assistant 文本，再接 assistant 的每个 `tool_call`。
+  - 工具步骤以 `${turn_task_id}:${call_id}` 去重，不同轮次重用同一个 call id 时互不覆盖。持久化的 tool 结果和实时 `tool_start` / `tool_end`（`mergeToolStep`）合并到同一位置。对应的提案卡片紧跟在该工具步骤之后，且只出现一次。
+  - 没有 `tool_call_id` 的 tool 消息是撤销备注，显示为「操作记录」。没挂到任何工具上的提案追加在末尾。
+  - `proposal` / `executed` 事件经 `upsertAgentChange` 按 id 替换卡片，按 `seq, id` 排序，重连后不会追加重复卡片。
+  - 实时文本等于 `stream.text` 去掉本轮已持久化的 assistant 文本前缀（runner 每次运行先 `reset` 再重放已落库文本）。
+  - 自动滚动只在用户停留在底部（距底 < 80px）时跟随。
+- **助手文本渲染**：`AgentMarkdown` 是自写的极简解析器，支持标题、列表、粗体、行内代码、代码块和链接。它只生成 React 节点：原始 HTML 一律当作文本，链接只允许 `http(s)`，并加 `target="_blank" rel="noopener noreferrer"`。**不得**使用 `dangerouslySetInnerHTML`，也不得引入完整的 markdown 库。
+- **提案卡片按钮的显示条件**（`AgentChangeCard`，状态标签取 `AGENT_CHANGE_STATUS`）：
+  - `proposed`：显示「确认」「拒绝」。只有本轮任务处于 `paused`（`confirmationReady`）时才可点；运行中的轮次里新出现的提案先只读显示。
+  - 「撤销」只在 `canUndoChange` 为真时显示，即 `status === 'executed' && kind !== 'task'`；点击前先 Popconfirm，说明之后被修改过会提示冲突。
+  - `kind === 'task'` 且已执行（`changeTaskId` 能从 `result.task_id` 或 `result.task.id` 取到 id）：显示任务状态 Tag 和「查看任务」（`TaskOutputModal`）。任务未结束（`isOpenTask`）时再显示「取消任务」，**不显示撤销**。
+  - `executing` / `rejected` / `failed` / `undone`：没有操作按钮。`failed` 显示 `error` Alert。
+  - 字段对比是表格（`tableLayout: fixed`、`overflowWrap: anywhere`），值经 `agentValue` 格式化。`kind === 'text'`，或前后合计超过 500 字的字符串字段，额外提供折叠的 `TextDiff` 逐字对比。
+  - 轮次级按钮（`AgentTimeline`）：本轮待确认超过 1 项时，显示「全部确认（N）」「全部拒绝」；可撤销超过 1 项时，显示「撤销整轮」（Popconfirm，说明后台任务需要单独取消、任一项冲突时整轮都不撤销；运行中禁用）。
+- **冲突（409）**：确认、拒绝、撤销和轮次操作都经 `api/agent.ts` 的 `withAgentRefresh` 执行。遇到 409 先重新 `GET` 会话详情，把服务端最新的预览或状态写回卡片，再把错误交给 `message.error`。**绝不自动重发确认**：`preview_changed` 之后，用户必须对新预览再确认一次。
+- **改动后的数据刷新**（`utils/projectRefresh.ts`）：
+  - `invalidateProject(pid, resources)` 只广播失效范围，不缓存业务数据。`changedResources(changes)` 由 `effects[].table`（`TABLE_RESOURCES` 映射）和工具名推导受影响的资源，并始终包含 `project`。
+  - 触发时机有三个：收到 `executed` 事件、一轮结束（取本轮已执行的提案），以及每次面板操作之后（取已执行和已撤销的提案）。每次还会刷新 `useProjectStore` 与 `useTasksStore`。
+  - 页面订阅有两种方式。一是给 `useLoader(loader, { projectId, resources })` 传第二个参数，命中时自动 `reload()`。二是直接用 `hooks/useProjectRefresh(pid, resources, refresh)`，例如编辑器：有未保存修改、生成中或保存中时把新章节放进 `externalChapter` 提示，否则直接替换为服务端内容。
+  - 新增项目子页面时，要为它的 loader 声明 resources；新增可被智能体改动的表时，要补 `TABLE_RESOURCES`。
+- **跨设备与重连**：有未结束轮次时每 5 秒，以及页面重新可见（`visibilitychange`）时，都会重新拉取会话详情，因为待确认的轮次可能在另一台设备上被处理。流断开时显示「连接中断，正在恢复对话…」。
+- **页面上下文**：`hooks/useAgentPageContext.ts` 由页面调用 `usePublishAgentContext(pid, {chapter_id?, outline_id?, character_id?, selection?})` 发布（当前用于角色抽屉、大纲、章节编辑器）。选区截到 2000 个码点，只保存在内存里，页面卸载即清除。面板通过 `useAgentPageContext(pid, pathname)` 读取，并补上 `route` 和路由里的章节 id，发送时附带。服务端会再校验一遍是否属于当前项目。
+- **任务面板**：`agent.turn` 不显示「继续」（待确认时由面板确认后自动续跑），取消确认的文案是「已执行的修改保留，可在会话中撤销」。
+- 颜色一律取 `theme.useToken()`（`colorBgContainer` / `colorBorderSecondary` / `colorFillQuaternary`），`noHardcodedColors.test.ts` 覆盖本目录。
+- 测试（node 环境）：
+  - `utils/agent.test.ts`：历史与实时事件合并，提案只出现一次；跨轮次重用 call id；重连时按 id 更新卡片；撤销条件与任务 id 提取；级联 effects 推导刷新范围；宽度收敛到 320–720；存储损坏。
+  - `api/agent.test.ts`：路径与方法；409 先刷新、不重发；流事件顺序交付，非法载荷不进入 UI，经 `api/agentEvents.ts` 收窄。
+  - `components/agent/agentUI.test.ts`：用 `react-dom/server` 渲染，覆盖各状态下的按钮、安全的 markdown、移动端全宽抽屉、桌面键盘调宽，以及折叠时不挂载面板。
