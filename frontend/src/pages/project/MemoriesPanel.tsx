@@ -4,12 +4,10 @@ import {
   App,
   Button,
   Card,
-  Col,
   Input,
   InputNumber,
   Popconfirm,
   Rate,
-  Row,
   Select,
   Space,
   Switch,
@@ -40,6 +38,7 @@ import {
   memoryEditable,
   normalizeChapterRange,
 } from '../../utils/kb'
+import { splitPane, splitRow } from '../../utils/layout'
 
 const PAGE_SIZE = 50
 type TriState = 'all' | 'yes' | 'no'
@@ -254,8 +253,8 @@ export default function MemoriesPanel() {
   return (
     <>
       <IndexStatusBanner projectId={pid} status={status} scope="memory" onChanged={() => refreshStatus()} />
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={16}>
+      <div style={splitRow}>
+        <div style={splitPane(600)}>
           <Card
             size="small"
             title={`剧情记忆（${data?.total ?? 0}）`}
@@ -365,8 +364,8 @@ export default function MemoriesPanel() {
               }}
             />
           </Card>
-        </Col>
-        <Col xs={24} xl={8}>
+        </div>
+        <div style={splitPane(300)}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <RetrievalSettingsCard
               projectId={pid}
@@ -376,8 +375,8 @@ export default function MemoriesPanel() {
             />
             <MemorySearchDebug projectId={pid} />
           </Space>
-        </Col>
-      </Row>
+        </div>
+      </div>
       <MemoryEditModal
         projectId={pid}
         open={modalOpen}

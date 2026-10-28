@@ -16,15 +16,12 @@ import {
   Badge,
   Button,
   Card,
-  Col,
   Drawer,
   FloatButton,
-  Grid,
   Input,
   Modal,
   Progress,
   Result,
-  Row,
   Space,
   Spin,
   Tabs,
@@ -60,6 +57,7 @@ import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
+import { useElementWidth } from '../../hooks/useElementWidth'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
 import { useProjectRefresh } from '../../hooks/useProjectRefresh'
@@ -69,6 +67,7 @@ import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { batchCheckpoint } from '../../utils/batchState'
 import { readAutoContinue } from '../../utils/preferences'
+import { splitPane, splitRow } from '../../utils/layout'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
 
@@ -128,10 +127,15 @@ interface EditorProps {
 
 type AIMode = 'generate' | 'polish' | 'rewrite'
 
+/** 正文卡片宽度达到它时工具栏放进卡片标题栏（≈ 1600px 视口、停靠面板关闭时正文栏的宽度，含竖向滚动条时约 935）。 */
+const TOOLBAR_IN_HEADER_MIN_WIDTH = 920
+
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const isMobile = useIsMobile()
-  // 工具栏按钮较多：只在超宽屏放进卡片标题栏，其余宽度放在正文上方，避免标题被挤压
-  const toolbarInHeader = Grid.useBreakpoint().xxl === true
+  // 工具栏按钮较多：只在正文卡片足够宽（约等于原 xxl 视口、停靠面板关闭时的宽度）时放进卡片标题栏，
+  // 其余宽度放在正文上方，避免标题被挤压；按卡片实际宽度判断，右侧停靠面板打开时同样生效
+  const [editorPaneRef, editorPaneWidth] = useElementWidth<HTMLDivElement>()
+  const toolbarInHeader = editorPaneWidth >= TOOLBAR_IN_HEADER_MIN_WIDTH
   // 移动端 AI 助手面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
@@ -793,8 +797,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   return (
     <>
       {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="智能体已更新此章节，当前本地草稿已保留" description="加载最新版本会替换编辑器中尚未保存的内容。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => modal.confirm({ title: '加载最新章节？', content: '编辑器中尚未保存的修改会被替换。', onOk: async () => { const latest = await chapterApi.get(pid, chapter.id); replaceFromServer(latest); setExternalChapter(null) } })}>加载最新版本</Button>} />}
-      <Row gutter={isMobile ? 0 : 16}>
-        <Col xs={24} xl={isMobile ? 24 : 17}>
+      <div style={splitRow}>
+        <div ref={editorPaneRef} style={splitPane(640)}>
           <Card
             size="small"
             title={
@@ -878,13 +882,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               最后更新：{formatTime(chapter.updated_at)} · Ctrl/⌘ + S 保存
             </Typography.Text>
           </Card>
-        </Col>
-        {!isMobile && (
-          <Col xs={24} xl={7}>
-            {aiPanel}
-          </Col>
-        )}
-      </Row>
+        </div>
+        {!isMobile && <div style={splitPane(264)}>{aiPanel}</div>}
+      </div>
       {isMobile && (
         <>
           <FloatButton

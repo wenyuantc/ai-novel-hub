@@ -21,7 +21,7 @@ import {
   Typography,
 } from 'antd'
 import type { DataNode } from 'antd/es/tree'
-import { useCallback, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { MEMBER_STATUS, memberApi, memberStatusLabel, organizationApi } from '../../api/organizations'
 import { characterApi } from '../../api/story'
@@ -29,6 +29,7 @@ import type { Member, MemberStatus, Organization, OrganizationInput } from '../.
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { splitPane, splitRow } from '../../utils/layout'
 import { buildOrgTree, descendantIds, orgPath, type OrgTreeNode } from '../../utils/orgTree'
 
 interface OrgFormValues {
@@ -48,11 +49,6 @@ interface MemberFormValues {
   status: MemberStatus
   note: string
 }
-
-/** 组织树 / 详情按容器宽度排布：放得下两栏（约 1:2）就并排，内容区变窄（如右侧停靠面板打开、手机）时上下堆叠。 */
-const splitRow: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 16 }
-const treePane: CSSProperties = { flex: '1 1 240px', minWidth: 0 }
-const detailPane: CSSProperties = { flex: '2 1 420px', minWidth: 0 }
 
 const STATUS_OPTIONS = (Object.keys(MEMBER_STATUS) as MemberStatus[]).map((k) => ({ value: k, label: MEMBER_STATUS[k].label }))
 
@@ -180,7 +176,7 @@ export default function OrganizationsPanel() {
           <Empty description="暂无组织，可手动新增或使用 AI 生成" />
         ) : (
           <div style={splitRow}>
-            <div style={treePane}>
+            <div style={splitPane(240)}>
               <Card size="small" title="组织树">
                 <Tree
                   treeData={tree}
@@ -191,7 +187,7 @@ export default function OrganizationsPanel() {
                 />
               </Card>
             </div>
-            <div style={detailPane}>
+            <div style={splitPane(480)}>
               {selected ? (
                 <OrgDetail
                   key={selected.id}

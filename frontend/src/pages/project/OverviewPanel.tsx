@@ -1,6 +1,6 @@
 import { BulbOutlined, CloudDownloadOutlined, DownloadOutlined, ExperimentOutlined, RocketOutlined } from '@ant-design/icons'
-import { App, Button, Card, Col, Descriptions, Form, Input, Progress, Row, Select, Space, Statistic, Switch, Typography } from 'antd'
-import { lazy, Suspense, useState } from 'react'
+import { App, Button, Card, Descriptions, Form, Input, Progress, Select, Space, Statistic, Switch, Typography } from 'antd'
+import { lazy, Suspense, useState, type CSSProperties } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { analysisApi } from '../../api/analysis'
 import { errorMessage } from '../../api/client'
@@ -12,10 +12,14 @@ import StyleSelect from '../../components/styles/StyleSelect'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { formatWordCount, projectInfoBody, wordsProgress, type ProjectInfoValues } from '../../utils/projectFields'
+import { splitPane, splitRow } from '../../utils/layout'
 import { formatTime } from '../../utils/time'
 
 // 备份弹窗（含 api/transfer.ts、utils/transfer.ts）按需加载，不进入口 chunk
 const BackupModal = lazy(() => import('../../components/transfer/BackupModal'))
+
+/** 表单内的分栏：行距交给 Form.Item 自身的下边距。 */
+const formRow: CSSProperties = { ...splitRow, rowGap: 0 }
 
 export default function OverviewPanel() {
   const project = useProjectStore((s) => s.project)
@@ -156,13 +160,13 @@ function OverviewInner({ project }: { project: Project }) {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} md={6}>
+      <div style={splitRow}>
+        <div style={splitPane(200)}>
           <Card>
             <Statistic title="章节数" value={project.chapter_count} />
           </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
+        </div>
+        <div style={splitPane(200)}>
           <Card>
             <Statistic
               title="总字数"
@@ -183,8 +187,8 @@ function OverviewInner({ project }: { project: Project }) {
               </Typography.Text>
             )}
           </Card>
-        </Col>
-        <Col xs={24} md={12}>
+        </div>
+        <div style={splitPane(400)}>
           <Card>
             <Space wrap>
               <Button icon={<RocketOutlined />} onClick={() => navigate(`/projects/${project.id}/wizard`)}>
@@ -201,8 +205,8 @@ function OverviewInner({ project }: { project: Project }) {
               </Button>
             </Space>
           </Card>
-        </Col>
-      </Row>
+        </div>
+      </div>
       <Card title="基本信息">
         <Form
           form={form}
@@ -222,8 +226,8 @@ function OverviewInner({ project }: { project: Project }) {
           }}
           style={{ maxWidth: 760 }}
         >
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
+          <div style={formRow}>
+            <div style={splitPane(360)}>
               <Form.Item
                 name="title"
                 label="书名"
@@ -234,23 +238,25 @@ function OverviewInner({ project }: { project: Project }) {
               >
                 <Input />
               </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item name="genre" label="题材" rules={[{ max: 100, message: '不超过 100 字' }]}>
-                <Input />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item name="status" label="状态">
-                <Select<ProjectStatus>
-                  options={(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map((s) => ({
-                    value: s,
-                    label: PROJECT_STATUS[s].label,
-                  }))}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
+            </div>
+            <div style={{ ...splitPane(360), ...formRow }}>
+              <div style={splitPane(172)}>
+                <Form.Item name="genre" label="题材" rules={[{ max: 100, message: '不超过 100 字' }]}>
+                  <Input />
+                </Form.Item>
+              </div>
+              <div style={splitPane(172)}>
+                <Form.Item name="status" label="状态">
+                  <Select<ProjectStatus>
+                    options={(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map((s) => ({
+                      value: s,
+                      label: PROJECT_STATUS[s].label,
+                    }))}
+                  />
+                </Form.Item>
+              </div>
+            </div>
+          </div>
           <Form.Item name="premise" label="一句话设定" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
             <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
           </Form.Item>

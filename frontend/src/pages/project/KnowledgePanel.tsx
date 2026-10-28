@@ -4,9 +4,7 @@ import {
   App,
   Button,
   Card,
-  Col,
   Popconfirm,
-  Row,
   Space,
   Switch,
   Table,
@@ -39,6 +37,7 @@ import {
   precheckUpload,
 } from '../../utils/kb'
 import { formatTime } from '../../utils/time'
+import { splitPane, splitRow } from '../../utils/layout'
 
 /** 知识库：拖拽上传、文档表格（状态 / 块数 / 注入开关 / 重建索引 / 分块 / 删除）、注入设置、检索调试、重建横幅。 */
 export default function KnowledgePanel() {
@@ -232,8 +231,8 @@ export default function KnowledgePanel() {
           message="已关闭自动注入：生成时不会使用知识库（检索调试仍可用）"
         />
       )}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={16}>
+      <div style={splitRow}>
+        <div style={splitPane(600)}>
           <Card
             size="small"
             title={`文档（${docs.length} / ${KB_MAX_DOCUMENTS}）`}
@@ -270,8 +269,8 @@ export default function KnowledgePanel() {
               locale={{ emptyText: '还没有上传参考资料' }}
             />
           </Card>
-        </Col>
-        <Col xs={24} xl={8}>
+        </div>
+        <div style={splitPane(300)}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <RetrievalSettingsCard
               projectId={pid}
@@ -281,8 +280,8 @@ export default function KnowledgePanel() {
             />
             <KbSearchDebug projectId={pid} />
           </Space>
-        </Col>
-      </Row>
+        </div>
+      </div>
       <KbChunksDrawer projectId={pid} document={viewing} onClose={() => setViewing(null)} />
     </>
   )
