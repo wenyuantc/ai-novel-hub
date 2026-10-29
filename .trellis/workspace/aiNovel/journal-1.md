@@ -644,3 +644,43 @@
 ### Next Steps
 
 - 本任务已完成归档，无待办；本轮仅本地提交，未推送远程。
+
+
+## Session 22: MuMu 对标父任务最终验收与归档
+<!-- trellis-session: v=2 fp=a017c4fc86c8d88c -->
+
+**Date**: 2026-10-29
+**Task**: MuMu 对标父任务最终验收与归档
+**Branch**: `main`
+
+### Summary
+
+完成最后一个未归档父任务 10-23-mumu-parity 的最终验收：17 个子任务、44 项功能覆盖核对完成；后端 975 项、前端 417 项及 lint/build 通过；同一项目创作主链路与 P2 安全通过，父任务已归档，活动任务归零。本轮无新产品代码，所列提交为本轮复核的既有 P2 功能提交；仅自动提交任务资料与会话日志，未推送。
+
+### Main Changes
+
+- 新增最终覆盖与验收记录，注明已取消范围、已批准取舍、文本相似度复查与验证限制；核对现有 spec 后确认无需新增契约规则。
+- 父任务已归档至 .trellis/tasks/archive/2026-10/10-23-mumu-parity；保留原有未跟踪 pelican-bicycle.html。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9155d38` | feat: 项目智能体（原生工具调用、修改提案确认与撤销） |
+| `3c5cea8` | feat: Skill 与 MCP 插件 |
+| `4820409` | feat(backend): 新增实例内提示词工坊 |
+| `b372a3e` | feat(frontend): 新增提示词工坊分享审核页面 |
+
+### Testing
+
+- [OK] 后端 Ruff + 975 passed（322.20 秒，1 条 Gemini SDK 弃用警告）；前端 lint/build + 54 文件 417 passed；git diff --check 通过。
+- [OK] 隔离 HTTP 主链路 57 请求/123 断言/8 任务全部成功；27 表（20 非空）JSON 往返内容与关联一致，两章正文 SHA-256 一致，EPUB 结构通过。
+- [OK] P2 安全相关 144 项及逐请求 SSRF 补充 6 项通过：智能体确认/撤销、跨用户隔离、Skill 快照、MCP 脱敏和默认确认、工坊审核导入恢复。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 当前无活动任务；真实模型质量、PostgreSQL 真实行锁及已有 SDK 弃用警告等限制已记录在最终验收文档。
