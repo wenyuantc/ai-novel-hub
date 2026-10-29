@@ -1,5 +1,5 @@
 import { DesktopOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
-import { ConfigProvider, Segmented, theme } from 'antd'
+import { Button, ConfigProvider, Dropdown, Segmented, theme } from 'antd'
 import type { ReactNode } from 'react'
 import { useThemeStore, type ThemeMode } from './themeStore'
 
@@ -20,6 +20,15 @@ interface Props {
 export default function ThemeSwitch({ compact = false, onDarkBar = false }: Props) {
   const mode = useThemeStore((s) => s.mode)
   const setMode = useThemeStore((s) => s.setMode)
+  if (compact && !onDarkBar) return (
+    <Dropdown trigger={['click']} menu={{
+      selectedKeys: [mode],
+      items: OPTIONS.map((o) => ({ key: o.value, icon: o.icon, label: o.label })),
+      onClick: ({ key }) => { const option = OPTIONS.find((o) => o.value === key); if (option) setMode(option.value) },
+    }}>
+      <Button type="text" size="small" aria-label={`主题设置：${OPTIONS.find((o) => o.value === mode)?.label}`} icon={OPTIONS.find((o) => o.value === mode)?.icon} />
+    </Dropdown>
+  )
   const control = (
     <Segmented<ThemeMode>
       size={compact ? 'small' : 'middle'}

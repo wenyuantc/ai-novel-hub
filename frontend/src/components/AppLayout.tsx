@@ -1,152 +1,115 @@
-import {
-  ApiOutlined,
-  BgColorsOutlined,
-  BulbOutlined,
-  BookOutlined,
-  FileTextOutlined,
-  KeyOutlined,
-  LogoutOutlined,
-  MenuOutlined,
-  SettingOutlined,
-  ShopOutlined,
-  TeamOutlined,
-  UserOutlined,
-} from '@ant-design/icons'
-import { Button, Drawer, Dropdown, Layout, Menu, Space, theme, Typography } from 'antd'
+import { ArrowLeftOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
+import { Button, Drawer, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useAuthStore } from '../stores/auth'
+import { useProjectStore } from '../stores/project'
+import { useTasksStore } from '../stores/tasks'
 import ThemeSwitch from '../theme/ThemeSwitch'
 import ChangePasswordModal from './ChangePasswordModal'
+import { navigationItem, studioNavigation } from './StudioNavigation'
+import { StudioBrand } from './StudioUI'
 import TaskPanel from './TaskPanel'
+import './AppLayout.css'
 
-const { Header, Content } = Layout
-
-/**
- * 顶层布局：顶栏（导航：我的项目 / 模型配置 / 提示词模板 / 写作风格 / Skill / MCP 插件（部署关闭 MCP 时隐藏）；主题切换；用户菜单：提示词模板 / 写作风格库 / 用户管理（仅管理员）/ 修改密码 / 登出）
- * + 右下角后台任务面板。移动端顶栏只留 logo、汉堡按钮与用户菜单，导航与主题切换收进右侧抽屉。
- */
+/** 纸上书房外壳：216px 分组导航、56px 顶栏，真实账户与后台任务，移动端复用同一份导航。 */
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const mcpEnabled = useAuthStore((s) => s.mcpEnabled)
+  const cachedProject = useProjectStore((s) => s.project)
+  const activeCount = useTasksStore((s) => s.active.length)
+  const tasksLoaded = useTasksStore((s) => s.loaded)
   const location = useLocation()
   const navigate = useNavigate()
-  const [passwordOpen, setPasswordOpen] = useState(false)
-  // 抽屉打开时记下当时的路径：导航（含浏览器后退）或切到桌面布局后自动视为关闭
-  const [navOpenAt, setNavOpenAt] = useState<string | null>(null)
   const isMobile = useIsMobile()
-  const navOpen = isMobile && navOpenAt === location.pathname
-  const setNavOpen = (open: boolean) => setNavOpenAt(open ? location.pathname : null)
-  const { token } = theme.useToken()
-  const onBar = token.colorTextLightSolid
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [navOpenAt, setNavOpenAt] = useState<string | null>(null)
+  const navOpen = isMobile && navOpenAt === location.key
+  const match = /^\/projects\/(\d+)(?:\/|$)/.exec(location.pathname)
+  const projectId = match ? Number(match[1]) : null
+  const project = cachedProject?.id === projectId ? cachedProject : null
+  const groups = studioNavigation(projectId, mcpEnabled)
+  const current = navigationItem(groups, location.pathname)
+  const pageName = location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
-  const userMenuItems: MenuProps['items'] = [
-    { key: 'prompt-templates', icon: <FileTextOutlined />, label: '提示词模板' },
-    { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
-    { key: 'styles', icon: <BgColorsOutlined />, label: '写作风格库' },
-    { type: 'divider' as const },
-    ...(user?.is_admin ? [{ key: 'admin-users', icon: <TeamOutlined />, label: '用户管理' }] : []),
-    { key: 'change-password', icon: <KeyOutlined />, label: '修改密码' },
-    { type: 'divider' as const },
-    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
-  ]
+  const accountMenu: MenuProps = {
+    items: [
+      { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
+      ...(user?.is_admin ? [{ key: 'admin', icon: <TeamOutlined />, label: '用户管理' }] : []),
+      { type: 'divider' },
+      { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
+      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
+    ],
+    onClick: async ({ key }) => {
+      setNavOpenAt(null)
+      if (key === 'admin') navigate('/admin/users')
+      else if (key === 'workshop') navigate('/workshop')
+      else if (key === 'password') setPasswordOpen(true)
+      else if (key === 'logout') { await logout(); navigate('/login', { replace: true }) }
+    },
+  }
+  const account = (compact = false) => (
+    <Dropdown menu={accountMenu} trigger={['click']}>
+      <button type="button" className="studio-account" aria-label={`账户设置：${user?.username ?? '当前账户'}`}>
+        <span className="studio-avatar">{initial}</span>
+        {!compact && <span className="studio-account-name">{user?.username}</span>}
+      </button>
+    </Dropdown>
+  )
 
-  const path = location.pathname
-  const selected = path.startsWith('/settings')
-    ? ['settings']
-    : path.startsWith('/prompt-templates')
-      ? ['prompts']
-      : path.startsWith('/workshop')
-        ? ['workshop']
-      : path.startsWith('/styles')
-        ? ['styles']
-        : path.startsWith('/skills')
-          ? ['skills']
-          : path.startsWith('/mcp-plugins')
-            ? ['mcp']
-            : path.startsWith('/admin')
-              ? []
-              : ['projects']
-
-  const navItems = [
-    { key: 'projects', icon: <BookOutlined />, label: <Link to="/projects">我的项目</Link> },
-    { key: 'settings', icon: <SettingOutlined />, label: <Link to="/settings/ai">模型配置</Link> },
-    { key: 'prompts', icon: <FileTextOutlined />, label: <Link to="/prompt-templates">提示词模板</Link> },
-    { key: 'styles', icon: <BgColorsOutlined />, label: <Link to="/styles">写作风格</Link> },
-    { key: 'workshop', icon: <ShopOutlined />, label: <Link to="/workshop">提示词工坊</Link> },
-    { key: 'skills', icon: <BulbOutlined />, label: <Link to="/skills">Skill</Link> },
-    // 部署关闭 MCP（/auth/config mcp_enabled = false）时隐藏入口
-    ...(mcpEnabled ? [{ key: 'mcp', icon: <ApiOutlined />, label: <Link to="/mcp-plugins">MCP 插件</Link> }] : []),
-  ]
+  const sidebar = (
+    <>
+      <StudioBrand onClick={() => setNavOpenAt(null)} />
+      {projectId !== null ? (
+        <div className="studio-project-switch">
+          <Link to="/projects" onClick={() => setNavOpenAt(null)}><ArrowLeftOutlined /> 全部作品</Link>
+          <Link to={`/projects/${projectId}/overview`} onClick={() => setNavOpenAt(null)} title={project?.title}>{project?.title ?? '正在载入作品…'}</Link>
+        </div>
+      ) : <Button type="primary" className="studio-new-project" icon={<PlusOutlined />} onClick={() => { setNavOpenAt(null); navigate('/projects?create=1') }}>新建作品</Button>}
+      <nav className="studio-navigation" aria-label={projectId !== null ? '作品功能目录' : '全局功能导航'}>
+        {groups.map((group) => (
+          <div className="studio-nav-group" key={group.title}>
+            <p>{group.title}</p>
+            {group.items.map((item) => (
+              <Link key={item.to} to={item.to} aria-current={current?.to === item.to ? 'page' : undefined} onClick={() => setNavOpenAt(null)}>
+                {item.icon}<span>{item.label}</span>
+              </Link>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <div className="studio-sidebar-footer">
+        {projectId !== null && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
+        <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpen(true) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>
+        {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/users" aria-current={location.pathname.startsWith('/admin/users') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><TeamOutlined />用户管理</Link>}
+        <div className="studio-sidebar-account">{account()}<ThemeSwitch compact /></div>
+      </div>
+    </>
+  )
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Header
-        style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 24, paddingInline: isMobile ? 12 : 24 }}
-      >
-        <Link to="/projects" style={{ color: onBar, fontSize: isMobile ? 16 : 18, fontWeight: 600, whiteSpace: 'nowrap' }}>
-          AI 小说平台
-        </Link>
-        {isMobile ? (
-          <div style={{ flex: 1 }} />
-        ) : (
-          <>
-            <Menu theme="dark" mode="horizontal" selectedKeys={selected} style={{ flex: 1, minWidth: 0 }} items={navItems} />
-            <ThemeSwitch compact onDarkBar />
-          </>
-        )}
-        <Dropdown
-          menu={{
-            items: userMenuItems,
-            onClick: async ({ key }) => {
-              if (key === 'admin-users') navigate('/admin/users')
-              else if (key === 'prompt-templates') navigate('/prompt-templates')
-              else if (key === 'workshop') navigate('/workshop')
-              else if (key === 'styles') navigate('/styles')
-              else if (key === 'change-password') setPasswordOpen(true)
-              else if (key === 'logout') {
-                await logout()
-                navigate('/login', { replace: true })
-              }
-            },
-          }}
-        >
-          <Button type="text" style={{ color: onBar, paddingInline: isMobile ? 6 : undefined }}>
-            <Space>
-              <UserOutlined />
-              {!isMobile && user?.username}
-            </Space>
-          </Button>
-        </Dropdown>
-        {isMobile && (
-          <Button type="text" aria-label="打开菜单" icon={<MenuOutlined />} style={{ color: onBar }} onClick={() => setNavOpen(true)} />
-        )}
-      </Header>
-      <Content style={{ minWidth: 0 }}>
-        <Outlet />
-      </Content>
-      {isMobile && (
-        <Drawer title={user?.username ?? '菜单'} placement="right" width={260} open={navOpen} onClose={() => setNavOpen(false)}>
-          <Menu
-            mode="inline"
-            selectedKeys={selected}
-            style={{ borderInlineEnd: 0 }}
-            items={navItems}
-            onClick={() => setNavOpen(false)}
-          />
-          <div style={{ marginTop: 16 }}>
-            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-              主题
-            </Typography.Text>
-            <ThemeSwitch />
-          </div>
-        </Drawer>
-      )}
+    <div className="studio-shell">
+      {!isMobile && <aside className="studio-sidebar">{sidebar}</aside>}
+      <div className="studio-workspace">
+        <header className="studio-topbar">
+          {isMobile && <Button type="text" aria-label="打开菜单" icon={<MenuOutlined />} onClick={() => setNavOpenAt(location.key)} />}
+          <nav className="studio-breadcrumb" aria-label="面包屑导航">
+            <Link to="/projects">我的作品</Link><RightOutlined />
+            {project && <><Link to={`/projects/${project.id}/overview`} title={project.title}>{project.title}</Link><RightOutlined /></>}
+            <span aria-current="page">{pageName}</span>
+          </nav>
+          <div className="studio-topbar-account"><span className="studio-tagline">把想象，写成一页页故事。</span>{account(true)}</div>
+        </header>
+        <div className="studio-content"><Outlet /></div>
+      </div>
+      {isMobile && <Drawer placement="left" width={280} open={navOpen} onClose={() => setNavOpenAt(null)} className="studio-mobile-drawer" styles={{ body: { padding: 0 } }} aria-label="创作导航"><aside className="studio-sidebar studio-sidebar-mobile">{sidebar}</aside></Drawer>}
       <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
-      <TaskPanel />
-    </Layout>
+      <TaskPanel open={tasksOpen} onOpenChange={setTasksOpen} hideTrigger />
+    </div>
   )
 }

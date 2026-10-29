@@ -21,6 +21,7 @@ import WorldPanel from './pages/project/WorldPanel'
 const lazyPage = (load: () => Promise<{ default: ComponentType }>) => async () => ({ Component: (await load()).default })
 
 export const router = createBrowserRouter([
+  { path: '/', lazy: lazyPage(() => import('./pages/HomePage')) },
   { path: '/login', element: <LoginPage /> },
   // 阅读器：全屏，不在 AppLayout / ProjectLayout 内；不带 :cid 时按阅读进度定位
   {
@@ -36,14 +37,12 @@ export const router = createBrowserRouter([
     ],
   },
   {
-    path: '/',
     element: (
       <RequireAuth>
         <AppLayout />
       </RequireAuth>
     ),
     children: [
-      { index: true, element: <Navigate to="/projects" replace /> },
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },

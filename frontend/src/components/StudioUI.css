@@ -1,0 +1,6 @@
+.studio-brand { display: flex; align-items: center; gap: 12px; padding: 0 8px; min-height: 32px; color: var(--color-surface-foreground); white-space: nowrap; }
+.studio-brand:hover, .studio-brand:focus { color: var(--color-surface-foreground); }
+.studio-brand:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.studio-brand > .anticon { color: var(--color-primary); font-size: 30px; }
+.studio-brand > span:last-child { font-family: var(--font-display); font-size: 23px; letter-spacing: .04em; }
+.studio-brand small { margin-left: 6px; font-family: var(--font-sans); font-size: 14px; color: var(--color-muted); }

@@ -1,85 +1,33 @@
 import type { CSSProperties } from 'react'
+import { useState } from 'react'
 import { useResolvedTheme } from '../../theme/themeStore'
-import { coverColor } from '../../utils/shelf'
+import { coverColor, hashString } from '../../utils/shelf'
+import './BookCover.css'
 
 interface Props {
   title: string
   genre?: string
-  /** 封面图（封面任务接入后传入）：有图时直接显示图片 */
+  author?: string
   coverUrl?: string | null
   onClick?: () => void
+  /** 书库沿用设计的横向装帧；概览的封面管理保留原竖版比例。 */
+  compact?: boolean
 }
 
-/** 书本式文字封面（2:3）：按书名哈希取色、左侧加深书脊，书名最多 3 行，题材在底部。 */
-export default function BookCover({ title, genre, coverUrl, onClick }: Props) {
+/** 真实封面完整展示；无图或图片失效时使用书名文字装帧，不引入示例作品素材。 */
+export default function BookCover({ title, genre, author, coverUrl, onClick, compact = false }: Props) {
   const resolved = useResolvedTheme()
   const c = coverColor(title, resolved)
-  const frame: CSSProperties = {
-    position: 'relative',
-    aspectRatio: '2 / 3',
-    width: '100%',
-    borderRadius: '2px 6px 6px 2px',
-    overflow: 'hidden',
-    cursor: onClick ? 'pointer' : undefined,
-    background: c.bg,
-    color: c.text,
-    boxShadow: `inset 0 0 0 1px ${c.spine}`,
-  }
-  if (coverUrl) {
-    return (
-      <div style={frame} onClick={onClick} role="img" aria-label={`《${title}》封面`}>
-        <img src={coverUrl} alt={title} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-      </div>
-    )
-  }
-  return (
-    <div style={frame} onClick={onClick} role="img" aria-label={`《${title}》封面`}>
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '8%', background: c.spine }} />
-      <div style={{ position: 'absolute', left: '8%', top: 0, bottom: 0, width: 2, background: c.text, opacity: 0.25 }} />
-      <div
-        style={{
-          position: 'absolute',
-          inset: '14% 10% 18% 18%',
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'center',
-        }}
-      >
-        <div
-          style={{
-            fontFamily: "'Songti SC', 'STSong', 'SimSun', 'Noto Serif SC', serif",
-            fontWeight: 700,
-            fontSize: 'clamp(14px, 1.6vw + 6px, 22px)',
-            lineHeight: 1.35,
-            textAlign: 'center',
-            wordBreak: 'break-all',
-            display: '-webkit-box',
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}
-        >
-          {title}
-        </div>
-      </div>
-      {genre && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '18%',
-            right: '10%',
-            bottom: '7%',
-            fontSize: 12,
-            textAlign: 'center',
-            opacity: 0.85,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {genre}
-        </div>
-      )}
-    </div>
-  )
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const hasImage = !!coverUrl && failedUrl !== coverUrl
+  const variant = ['sage', 'night', 'sand'][hashString(title.trim()) % 3]
+  const style: CSSProperties | undefined = compact ? undefined : { background: c.bg, color: c.text, boxShadow: `inset 0 0 0 1px ${c.spine}` }
+  const content = <>
+    {hasImage ? <img src={coverUrl} alt={`《${title}》封面`} loading="lazy" onError={() => setFailedUrl(coverUrl)} /> : <>
+      {compact && <div className="book-cover-ornament" aria-hidden="true"><span /><i /></div>}
+      <div className="book-cover-caption"><span className="book-cover-title">{title}</span>{(genre || author) && <span className="book-cover-meta">{[genre, author ? `${author} 著` : null].filter(Boolean).join(' · ')}</span>}</div>
+    </>}
+  </>
+  const className = `book-cover ${compact ? `book-cover-compact book-cover-${variant}` : 'book-cover-portrait'}${hasImage ? ' book-cover-image' : ''}`
+  return onClick ? <button type="button" className={className} style={style} onClick={onClick} aria-label={`打开《${title}》`}>{content}</button> : <div className={className} style={style}>{content}</div>
 }

@@ -8,6 +8,7 @@ import {
   COVER_HUES,
   DEFAULT_SHELF_PREFS,
   filterAndSort,
+  latestWritingProject,
   parseShelfPrefs,
   readingLabel,
   readTarget,
@@ -76,12 +77,30 @@ describe('书架筛选排序', () => {
   it('偏好解析容错', () => {
     expect(parseShelfPrefs(null)).toEqual(DEFAULT_SHELF_PREFS)
     expect(parseShelfPrefs('not json')).toEqual(DEFAULT_SHELF_PREFS)
-    expect(parseShelfPrefs('{"query":"a","sort":"words","status":"writing"}')).toEqual({ query: 'a', sort: 'words', status: 'writing' })
+    expect(parseShelfPrefs('{"query":"a","sort":"words","status":"writing"}')).toEqual({ ...DEFAULT_SHELF_PREFS, query: 'a', sort: 'words', status: 'writing' })
     expect(parseShelfPrefs('{"sort":"x","status":"y","query":3}')).toEqual(DEFAULT_SHELF_PREFS)
+  })
+
+  it('搜索题材并与状态筛选组合，保留标签匹配', () => {
+    const projects = [p({ id: 1, title: '故事', genre: 'Science Fiction', status: 'writing' }), p({ id: 2, genre: 'Science Fiction' })]
+    expect(filterAndSort(projects, { ...DEFAULT_SHELF_PREFS, query: ' science ', status: 'writing' }).map((x) => x.id)).toEqual([1])
+  })
+
+  it('旧偏好补全书架视图，保存列表视图，非法视图回落', () => {
+    expect(parseShelfPrefs('{"view":"list"}').view).toBe('list')
+    expect(parseShelfPrefs('{"view":"bad"}').view).toBe('shelf')
+    expect(parseShelfPrefs('{}').view).toBe('shelf')
   })
 })
 
 describe('书架统计与入口', () => {
+  it('继续写作条取最近更新且确有正文的作品，不改变传入列表', () => {
+    const projects = [p({ id: 1, updated_at: '2026-03-01T00:00:00Z', last_edited_chapter_id: 11 }), p({ id: 2, updated_at: '2026-05-01T00:00:00Z' }), p({ id: 3, updated_at: '2026-04-01T00:00:00Z', last_edited_chapter_id: 31 })]
+    expect(latestWritingProject(projects)?.id).toBe(3)
+    expect(projects.map((x) => x.id)).toEqual([1, 2, 3])
+    expect(latestWritingProject([p({})])).toBeNull()
+    expect(latestWritingProject([])).toBeNull()
+  })
   it('统计作品数、连载中数、总字数', () => {
     expect(shelfStats(list)).toEqual({ count: 3, writing: 1, words: 95100 })
     expect(shelfStats([])).toEqual({ count: 0, writing: 0, words: 0 })

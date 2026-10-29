@@ -1,4 +1,15 @@
-/* 颜色一律用 CSS 变量（由 theme/ThemeSync 按 antd token 写到 <html> 上），不要写死颜色值 */
+@import '@fontsource-variable/fraunces';
+@import '@fontsource-variable/geist';
+
+/* 颜色由 theme/palette.ts → ThemeSync 同步，保持 CSS 与 Ant Design 一致。 */
+:root {
+  --font-display: 'Fraunces Variable', 'Songti SC', 'SimSun', serif;
+  --font-sans: 'Geist Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --radius-card: 10px;
+  --radius-control: 7px;
+}
+
+* { box-sizing: border-box; }
 html,
 body,
 #root {
@@ -7,14 +18,25 @@ body,
 }
 
 body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue',
-    Arial, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
   background: var(--app-bg);
   color: var(--app-text);
   /* 页面级横向溢出兜底（真正的溢出仍需修好） */
   overflow-x: hidden;
 }
+
+button, input, textarea, select { font: inherit; }
+a { color: inherit; text-decoration: none; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+::selection { background: var(--color-active); }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 8px; }
 
 /* 表格统一可横向滚动（未设置 scroll 的表格，内容超宽时在表格内滚动，不撑破页面） */
 .ant-table-content {

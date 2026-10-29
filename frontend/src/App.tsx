@@ -10,7 +10,7 @@ import { useProjectStore } from './stores/project'
 import { useSkillStore } from './stores/skills'
 import { useStyleStore } from './stores/styles'
 import { useTasksStore } from './stores/tasks'
-import { BRAND_PRIMARY } from './theme/palette'
+import { studioPalette } from './theme/palette'
 import ThemeSync from './theme/ThemeSync'
 import { useResolvedTheme, watchSystemTheme } from './theme/themeStore'
 
@@ -18,6 +18,7 @@ export default function App() {
   const init = useAuthStore((s) => s.init)
   const userId = useAuthStore((s) => s.user?.id)
   const resolved = useResolvedTheme()
+  const colors = studioPalette(resolved)
 
   useEffect(() => {
     // 任意接口返回 401：清空会话，RequireAuth 会跳转到登录页
@@ -43,7 +44,33 @@ export default function App() {
       locale={zhCN}
       theme={{
         algorithm: resolved === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        token: { colorPrimary: BRAND_PRIMARY },
+        token: {
+          colorPrimary: colors.primary,
+          colorInfo: colors.primary,
+          colorSuccess: colors.success,
+          colorWarning: colors.warning,
+          colorError: colors.danger,
+          colorBgLayout: colors.surface,
+          colorBgContainer: colors['surface-raised'],
+          colorBgElevated: colors['surface-raised'],
+          colorText: colors['surface-foreground'],
+          colorTextSecondary: colors.muted,
+          colorTextPlaceholder: colors.muted,
+          colorTextLightSolid: colors['primary-foreground'],
+          colorBorder: colors.border,
+          colorBorderSecondary: colors.border,
+          colorLink: colors.primary,
+          colorFillAlter: colors.panel,
+          fontFamily: '"Geist Variable", "PingFang SC", "Microsoft YaHei", sans-serif',
+          fontSize: 14,
+          borderRadius: 7,
+          borderRadiusLG: 10,
+          controlHeight: 36,
+        },
+        components: {
+          Button: { primaryColor: colors['primary-foreground'], primaryShadow: 'none', defaultShadow: 'none' },
+          Menu: { itemBg: 'transparent', itemSelectedBg: colors.active, itemSelectedColor: colors['surface-foreground'] },
+        },
       }}
     >
       <ThemeSync resolved={resolved} />

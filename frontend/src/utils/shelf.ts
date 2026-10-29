@@ -10,10 +10,11 @@ export interface ShelfPrefs {
   query: string
   sort: ShelfSort
   status: ShelfStatusFilter
+  view: 'shelf' | 'list'
 }
 
 export const SHELF_STORAGE_KEY = 'ainovel.shelf'
-export const DEFAULT_SHELF_PREFS: ShelfPrefs = { query: '', sort: 'updated', status: 'all' }
+export const DEFAULT_SHELF_PREFS: ShelfPrefs = { query: '', sort: 'updated', status: 'all', view: 'shelf' }
 
 export const SHELF_SORT_OPTIONS: { value: ShelfSort; label: string }[] = [
   { value: 'updated', label: '最近更新' },
@@ -36,6 +37,7 @@ export function parseShelfPrefs(raw: string | null): ShelfPrefs {
       query: typeof o.query === 'string' ? o.query.slice(0, 100) : '',
       sort: SORTS.includes(o.sort as ShelfSort) ? (o.sort as ShelfSort) : DEFAULT_SHELF_PREFS.sort,
       status: STATUSES.includes(o.status as ShelfStatusFilter) ? (o.status as ShelfStatusFilter) : 'all',
+      view: o.view === 'list' ? 'list' : 'shelf',
     }
   } catch {
     return { ...DEFAULT_SHELF_PREFS }
@@ -58,15 +60,15 @@ export function writeShelfPrefs(prefs: ShelfPrefs): void {
   }
 }
 
-type ShelfProject = Pick<Project, 'id' | 'title' | 'tags' | 'status' | 'updated_at' | 'created_at' | 'total_words'>
+type ShelfProject = Pick<Project, 'id' | 'title' | 'tags' | 'status' | 'updated_at' | 'created_at' | 'total_words'> & { genre?: string }
 
-/** 搜索（书名 + 标签，大小写不敏感）→ 状态筛选 → 排序；不修改入参。 */
+/** 搜索（书名 + 题材 + 标签，大小写不敏感）→ 状态筛选 → 排序；不修改入参。 */
 export function filterAndSort<T extends ShelfProject>(projects: T[], prefs: ShelfPrefs): T[] {
   const q = prefs.query.trim().toLowerCase()
   const list = projects.filter((p) => {
     if (prefs.status !== 'all' && p.status !== prefs.status) return false
     if (!q) return true
-    return p.title.toLowerCase().includes(q) || (p.tags ?? []).some((t) => t.toLowerCase().includes(q))
+    return p.title.toLowerCase().includes(q) || (p.genre ?? '').toLowerCase().includes(q) || (p.tags ?? []).some((t) => t.toLowerCase().includes(q))
   })
   const byTime = (a: string, b: string) => parseServerTime(b).valueOf() - parseServerTime(a).valueOf() // 新在前
   list.sort((a, b) => {
@@ -82,6 +84,11 @@ export function filterAndSort<T extends ShelfProject>(projects: T[], prefs: Shel
     }
   })
   return list
+}
+
+/** 继续写作条：只选择有真实已写章节的作品，按现有项目更新时间排序。 */
+export function latestWritingProject<T extends Pick<Project, 'id' | 'updated_at' | 'last_edited_chapter_id'>>(projects: T[]): T | null {
+  return projects.filter((p) => p.last_edited_chapter_id !== null).sort((a, b) => parseServerTime(b.updated_at).valueOf() - parseServerTime(a.updated_at).valueOf() || b.id - a.id)[0] ?? null
 }
 
 export interface ShelfStats {

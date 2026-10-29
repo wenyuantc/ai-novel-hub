@@ -4,7 +4,63 @@
 export type ResolvedTheme = 'light' | 'dark'
 
 /** 品牌主色（ConfigProvider colorPrimary） */
-export const BRAND_PRIMARY = '#1677ff'
+export const BRAND_PRIMARY = '#285548'
+
+/** 知页设计 token 的唯一颜色来源；CSS 与 Ant Design 使用同一套明暗值。 */
+const STUDIO_LIGHT = {
+  primary: BRAND_PRIMARY,
+  'primary-foreground': '#fffef9',
+  surface: '#f7f6f0',
+  'surface-raised': '#fffefb',
+  'surface-foreground': '#283b33',
+  panel: '#eeeee5',
+  active: '#e4e7dd',
+  muted: '#647067',
+  border: '#d9ddd3',
+  success: '#346653',
+  warning: '#90642b',
+  danger: '#ac493e',
+  paper: '#fffefa',
+  ink: '#32433b',
+  cover: '#dce3cf',
+  accent: 'oklch(48% 0.075 75)',
+  subtle: 'oklch(49% 0.015 145)',
+  sidebar: 'oklch(94.5% 0.018 100)',
+  hero: 'oklch(29% 0.048 160)',
+  'hero-foreground': 'oklch(96% 0.018 90)',
+  'hero-muted': 'oklch(83% 0.022 130)',
+  'hero-accent': 'oklch(81% 0.085 85)',
+  'hero-detail': 'oklch(40% 0.048 160)',
+  'jacket-sage': 'oklch(80% 0.042 132)',
+  'jacket-sage-ink': 'oklch(32% 0.05 154)',
+  'jacket-night': 'oklch(38% 0.035 180)',
+  'jacket-night-ink': 'oklch(92% 0.035 92)',
+  'jacket-sand': 'oklch(81% 0.073 78)',
+  'jacket-sand-ink': 'oklch(36% 0.04 70)',
+}
+
+const STUDIO_DARK: typeof STUDIO_LIGHT = {
+  ...STUDIO_LIGHT,
+  primary: '#a9c6af',
+  'primary-foreground': '#1f3028',
+  surface: '#202823',
+  'surface-raised': '#29322c',
+  'surface-foreground': '#e5eadf',
+  panel: '#303b33',
+  active: '#3e4c40',
+  muted: '#b2bdb0',
+  border: '#475346',
+  success: '#b5d1b7',
+  warning: '#dbbd88',
+  danger: '#edb3a5',
+  paper: '#28302a',
+  ink: '#e5eadf',
+  cover: '#3e4c40',
+}
+
+export function studioPalette(resolved: ResolvedTheme) {
+  return resolved === 'dark' ? STUDIO_DARK : STUDIO_LIGHT
+}
 
 export interface ChartPalette {
   primary: string

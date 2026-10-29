@@ -16,7 +16,7 @@ import StreamOutput from './StreamOutput'
 import { AGENT_DOCK_WIDTH_VAR } from '../utils/agentPreferences'
 
 /** 右下角后台任务面板：活动任务数徽标 + 抽屉（进行中 / 最近），支持取消、重试、查看输出、跳转、删除、清理。 */
-export default function TaskPanel() {
+export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrigger = false }: { open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean }) {
   const { message } = App.useApp()
   const active = useTasksStore((s) => s.active)
   const version = useTasksStore((s) => s.version)
@@ -24,7 +24,9 @@ export default function TaskPanel() {
   const track = useTasksStore((s) => s.track)
   const bump = useTasksStore((s) => s.bump)
   const refresh = useTasksStore((s) => s.refresh)
-  const [open, setOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = onOpenChange ?? setInternalOpen
   const [tab, setTab] = useState('active')
   const [viewing, setViewing] = useState<Task | null>(null)
   const [resultOf, setResultOf] = useState<Task | null>(null)
@@ -54,13 +56,13 @@ export default function TaskPanel() {
 
   return (
     <>
-      <FloatButton
+      {!hideTrigger && <FloatButton
         icon={<UnorderedListOutlined />}
         tooltip="后台任务"
         badge={{ count: active.length, color: 'blue' }}
         onClick={() => setOpen(true)}
         style={{ insetInlineEnd: `calc(24px + var(${AGENT_DOCK_WIDTH_VAR}, 0px))` }}
-      />
+      />}
       <Drawer
         title="后台任务"
         open={open}
