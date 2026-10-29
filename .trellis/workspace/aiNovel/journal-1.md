@@ -605,3 +605,42 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: 知页官网、认证与书库 UI 落地及归档
+<!-- trellis-session: v=2 fp=27617a2933223ab8 -->
+
+**Date**: 2026-10-29
+**Task**: 知页官网、认证与书库 UI 落地及归档
+**Branch**: `main`
+
+### Summary
+
+完成知页公开官网、首页认证弹窗、登录注册页、创作外壳与真实数据书库；质量与浏览器验收通过，按用户授权提交并归档，未推送远程。
+
+### Main Changes
+
+- 迁移颜色/字体/圆角 token，安装本地 Fraunces/Geist，统一 CSS 与 AntD 的深浅/系统主题。
+- 实现公开官网与欢迎弹窗、双栏登录注册页，保留真实认证、注册开关、字段校验和受保护目标回跳。
+- 统一侧栏/移动导航、账号与后台任务入口；书库接真实统计、封面、最近章节，保留筛选排序、视图、新建、阅读、导出与备份恢复。
+- 同步前端契约和设计差异；任务已归档到 .trellis/tasks/archive/2026-10/10-29-zhiye-library-ui，pelican-bicycle.html 为原有未改动文件，未纳入提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `afd0eacdbb098d9b62b2648d6ffce8f4a9d9dccd` | feat(frontend): 实现知页官网认证、布局与真实数据书库 |
+| `dd62b0f9bc9dec5ebd20c5e286f626143211a5ad` | docs(frontend): 同步知页界面契约与验收记录 |
+
+### Testing
+
+- [OK] 最终全范围独立审查通过；npm run lint、npm run build、npm test 全部通过，54 文件 417 项；git diff --check 通过。
+- [OK] 使用隔离真实后端验收 320/375/768/1024/1440px、深浅主题、空/错/加载、真实作品操作、认证错误、关闭注册及 Modal 焦点/关闭；未修改用户原数据库。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 本任务已完成归档，无待办；本轮仅本地提交，未推送远程。
