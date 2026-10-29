@@ -581,3 +581,27 @@
 ### Next Steps
 
 - 用户提供远端仓库 URL 后检查远端历史并推送 main
+
+
+## Session 20: 项目封面：上传、AI 生成与备份导出
+<!-- trellis-session: v=2 fp=fd3050c0923f0579 -->
+
+**Date**: 2026-10-29
+**Task**: 项目封面：上传、AI 生成与备份导出
+**Branch**: `main`
+
+### Summary
+
+完成项目封面上传、AI预览确认、书架展示、备份恢复与EPUB封面；修复提示词计数遮挡按钮。后端975项与前端414项、lint/build及独立复核通过，浏览器与实际HTTP验收通过。已创建3个工作提交、归档10-23-project-cover并快进合并到本地main；未推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `54bf4c4` | feat(backend): 支持项目封面上传、生成及备份导出 |
+| `ed75db7` | feat(frontend): 接入项目封面管理与书架展示 |
+| `0b7a95b` | docs: 记录项目封面契约与验收结果 |
+
+### Status
+
+[OK] **Completed**
