@@ -92,6 +92,11 @@ async def test_cross_user_isolation(client, make_client):
     assert (await bob.get("/api/v1/projects")).json() == []
 
     checks = [
+        ("GET", f"{base}/cover"),
+        ("PUT", f"{base}/cover"),
+        ("DELETE", f"{base}/cover"),
+        ("GET", f"{base}/cover/prompt"),
+        ("POST", f"{base}/cover/generate"),
         ("GET", base),
         ("PATCH", base),
         ("DELETE", base),
@@ -271,9 +276,15 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/memories/search": {"query": "备忘"},
     }
     for method, url in checks:
+        if method == "PUT" and url == f"{base}/cover":
+            from tests.cover_fixtures import PNG
+
+            resp = await bob.put(url, files={"file": ("cover.png", PNG)})
+            assert resp.status_code == 404, (method, url, resp.text)
+            continue
         body = None
         if method in ("POST", "PATCH", "PUT"):
-            body = bodies.get(url, {})
+            body = {"prompt": "封面"} if url == f"{base}/cover/generate" else bodies.get(url, {})
         resp = await bob.request(method, url, json=body)
         assert resp.status_code == 404, (method, url, resp.text)
 

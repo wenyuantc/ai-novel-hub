@@ -199,6 +199,14 @@ class Project(TimestampMixin, Base):
     reading_progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
 
 
+class ProjectCover(TimestampMixin, Base):
+    __tablename__ = "project_covers"
+
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+
 class WorldSetting(TimestampMixin, Base):
     __tablename__ = "world_settings"
 

@@ -9,6 +9,7 @@ import httpx
 from cryptography.fernet import Fernet
 
 from app.ai.providers import LLMProvider
+from app.ai.providers.base import AIProviderError, GeneratedImage
 from app.ai.tools import AgentEvent
 from app.core.config import Settings
 
@@ -49,6 +50,8 @@ class FakeLLM:
     # 每次 chat_tools_stream 消费一项；可在事件之间插入异常/Gate 验证中断与取消。
     tool_script: list[list[AgentEvent | Exception | Gate] | Exception] = field(default_factory=list)
     tool_calls: list[dict] = field(default_factory=list)
+    images: list[GeneratedImage | Exception] = field(default_factory=list)
+    image_calls: list[dict] = field(default_factory=list)
 
     def push(self, item: "str | list[str | Exception | Gate] | Exception") -> None:
         if isinstance(item, str):
@@ -62,6 +65,15 @@ class FakeLLM:
         fake = self
 
         class _Provider(LLMProvider):
+            async def generate_image(self, prompt, model):
+                fake.image_calls.append({"provider": provider, "model": model, "prompt": prompt})
+                if provider == "anthropic":
+                    return await super().generate_image(prompt, model)
+                item = fake.images.pop(0) if fake.images else AIProviderError("未设置测试图片")
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
             async def chat_tools_stream(
                 self, messages, model, tools, *, tool_choice="auto", max_tokens=None, thinking="off", temperature=None
             ):

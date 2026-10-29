@@ -20,6 +20,7 @@ from app.api.v1 import (
     memories,
     organizations,
     outline_pro,
+    project_cover,
     projects,
     prompt_templates,
     reader,
@@ -41,6 +42,7 @@ api_router.include_router(ai_configs.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}
 api_router.include_router(transfer.router)
 api_router.include_router(projects.router)
+api_router.include_router(project_cover.router)
 api_router.include_router(reader.router)
 # 固定路径（with-relations / generate）先于通用 CRUD 的 /{item_id} 注册
 api_router.include_router(character_actions.router)

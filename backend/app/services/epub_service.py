@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from xml.sax.saxutils import escape, quoteattr
 
+from app.ai.images import IMAGE_EXTENSIONS
 from app.models import Chapter, Outline, Project
 from app.services.export_service import chapter_heading
 
@@ -100,6 +101,11 @@ class EpubBook:
     volumes: list[EpubVolume]
     identifier: str
     modified: str
+    cover: tuple[bytes, str] | None = None
+
+    @property
+    def cover_file(self) -> str | None:
+        return f"cover.{IMAGE_EXTENSIONS[self.cover[1]]}" if self.cover is not None else None
 
 
 def paragraphs(content: str) -> list[str]:
@@ -263,7 +269,7 @@ def _ncx(book: EpubBook) -> str:
 
 
 def _spine_files(book: EpubBook) -> list[str]:
-    files = ["title.xhtml"]
+    files = (["cover.xhtml"] if book.cover is not None else []) + ["title.xhtml"]
     if book.include_synopsis:
         files.append("synopsis.xhtml")
     for vol in book.volumes:
@@ -281,6 +287,10 @@ def _opf(book: EpubBook) -> str:
         '<item id="css" href="style.css" media-type="text/css"/>',
     ]
     manifest += [f'<item id="{_item_id(f)}" href="{f}" media-type="application/xhtml+xml"/>' for f in spine]
+    if book.cover is not None:
+        manifest.append(
+            f'<item id="cover-image" href="{book.cover_file}" media-type="{book.cover[1]}" properties="cover-image"/>'
+        )
     meta = [
         f'<dc:identifier id="bookid">{x(book.identifier)}</dc:identifier>',
         f"<dc:title>{x(book.title)}</dc:title>",
@@ -292,6 +302,8 @@ def _opf(book: EpubBook) -> str:
     meta += [f"<dc:subject>{x(t)}</dc:subject>" for t in book.tags]
     if book.synopsis:
         meta.append(f"<dc:description>{x(book.synopsis)}</dc:description>")
+    if book.cover is not None:
+        meta.append('<meta name="cover" content="cover-image"/>')
     return (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="zh-CN">\n'
@@ -330,6 +342,13 @@ def render(book: EpubBook) -> bytes:
         put("OEBPS/toc.ncx", _ncx(book))
         put("OEBPS/style.css", CSS)
         put("OEBPS/title.xhtml", _title_page(book))
+        if book.cover is not None:
+            zf.writestr(f"OEBPS/{book.cover_file}", book.cover[0], compress_type=zipfile.ZIP_DEFLATED)
+            body = (
+                f'<div style="text-align:center"><img src="{book.cover_file}" '
+                'alt="封面" style="max-width:100%;max-height:100vh"/></div>'
+            )
+            put("OEBPS/cover.xhtml", _xhtml("封面", body))
         if book.include_synopsis:
             put("OEBPS/synopsis.xhtml", _synopsis_page(book))
         for vol in book.volumes:
@@ -348,6 +367,8 @@ def build_epub(
     author: str,
     include_synopsis: bool,
     now: datetime | None = None,
+    cover: tuple[bytes, str] | None = None,
 ) -> bytes:
     book = build_book(project, chapters, outlines, author=author, include_synopsis=include_synopsis, now=now)
+    book.cover = cover
     return render(book)

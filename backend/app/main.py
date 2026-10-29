@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.ai.images import MAX_COVER_BYTES
+from app.ai.images import TOO_LARGE as COVER_TOO_LARGE
 from app.ai.providers import ProviderFactory, create_provider
 from app.api.v1 import api_router
 from app.core.config import Settings, get_settings
@@ -102,6 +104,10 @@ def create_app(
     app.add_middleware(
         UploadLimitMiddleware,
         rules=[
+            (
+                "PUT", re.compile(r"/api/v1/projects/\d+/cover"),
+                MAX_COVER_BYTES + MULTIPART_OVERHEAD, COVER_TOO_LARGE,
+            ),
             ("POST", re.compile(r"/api/v1/workshop/(submissions|admin/items)"),
              1024 * 1024, "提交内容过大，上限为 1MB"),
             (

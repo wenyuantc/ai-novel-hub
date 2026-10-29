@@ -8,6 +8,7 @@ from urllib.parse import quote, unquote
 from xml.etree import ElementTree as ET
 
 from app.services import epub_service
+from tests.cover_fixtures import JPEG, PNG, WEBP
 from tests.helpers import create_project, register
 
 NS = {
@@ -21,6 +22,33 @@ NS = {
 
 def _open(data: bytes) -> zipfile.ZipFile:
     return zipfile.ZipFile(io.BytesIO(data))
+
+
+async def test_epub_project_cover_image_and_first_page(client):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    chapter = await client.post(f"{base}/chapters", json={"title": "第一章", "chapter_no": 1, "content": "正文"})
+    assert chapter.status_code == 201
+    images = ((PNG, "image/png", "png"), (JPEG, "image/jpeg", "jpg"), (WEBP, "image/webp", "webp"))
+    for image, mime, extension in images:
+        assert (await client.put(f"{base}/cover", files={"file": ("cover", image)})).status_code == 200
+        response = await client.get(f"{base}/export", params={"format": "epub"})
+        assert response.status_code == 200, response.text
+        with _open(response.content) as zf:
+            opf, spine = _check_structure(zf)
+            assert spine[0] == "cover.xhtml" and spine[1] == "title.xhtml"
+            item = opf.find("opf:manifest/opf:item[@id='cover-image']", NS)
+            assert item.get("properties") == "cover-image" and item.get("media-type") == mime
+            assert item.get("href") == f"cover.{extension}"
+            assert zf.read(f"OEBPS/cover.{extension}") == image
+            cover_page = ET.fromstring(zf.read("OEBPS/cover.xhtml"))
+            assert cover_page.find(".//x:img", NS).get("src") == item.get("href")
+            assert opf.find("opf:metadata/opf:meta[@name='cover']", NS).get("content") == "cover-image"
+    await client.delete(f"{base}/cover")
+    with _open((await client.get(f"{base}/export", params={"format": "epub"})).content) as zf:
+        _, spine = _check_structure(zf)
+        assert spine[0] == "title.xhtml" and "OEBPS/cover.xhtml" not in zf.namelist()
 
 
 def _check_structure(zf: zipfile.ZipFile) -> tuple[ET.Element, list[str]]:

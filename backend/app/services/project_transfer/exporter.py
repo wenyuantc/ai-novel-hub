@@ -9,6 +9,7 @@
 - 全局预置关系类型带 global=true（导入时按 role_a / role_b 对应）。
 """
 
+import base64
 import json
 import re
 from collections.abc import AsyncIterator
@@ -20,7 +21,7 @@ from urllib.parse import quote
 from sqlalchemy import JSON, String, Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import Chapter, InspirationSession, Project, WritingStyle
+from app.models import Chapter, InspirationSession, Project, ProjectCover, WritingStyle
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
 from app.services.project_service import get_owned_project
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
@@ -29,7 +30,7 @@ from app.services.style_service import FIELD_LIMITS
 FORMAT = "ainovel.project"
 VERSION = 1
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0019"
+APP_SCHEMA = "0021"
 BATCH = 500
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 STYLE_FIELDS = ("name", *FIELD_LIMITS)
@@ -136,6 +137,7 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             yield b"{}"
             return
         styles, refs = await _styles(db, project)
+        cover = await db.get(ProjectCover, project.id)
         head = {
             "format": FORMAT,
             "version": VERSION,
@@ -143,6 +145,8 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             "app_schema": APP_SCHEMA,
             "options": plan.options.model_dump(),
             "styles": styles,
+            "cover": {"mime_type": cover.mime_type, "data": base64.b64encode(cover.data).decode("ascii")}
+            if cover is not None else None,
         }
         project_row = (await db.execute(select(Project.__table__).where(Project.id == project.id))).mappings().one()
         project_data = _row(PROJECT_RULE, project_row, included)
@@ -197,4 +201,7 @@ async def estimate(db: AsyncSession, user_id: int, project_id: int) -> BackupEst
         g.chars += chars
     for g in groups.values():
         g.bytes = g.chars * 3 + g.rows * 150
+    cover_size = await db.scalar(select(func.length(ProjectCover.data)).where(ProjectCover.project_id == project_id))
+    if cover_size is not None:
+        groups["core"].bytes += 4 * ((cover_size + 2) // 3)
     return BackupEstimate(**groups)

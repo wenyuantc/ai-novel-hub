@@ -40,8 +40,9 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.images import IMAGE_MIMES, decode_image, validate_image
 from app.core.errors import AppError, BadRequestError
-from app.models import KbDocument, Project, RelationshipType, StoryMemory, WritingStyle
+from app.models import KbDocument, Project, ProjectCover, RelationshipType, StoryMemory, WritingStyle
 from app.models import entities as E
 from app.models.entities import PROJECT_STATUSES
 from app.schemas.project import WizardProgress
@@ -135,6 +136,7 @@ class Backup:
     styles: list[dict[str, Any]]
     project: dict[str, Any]
     warnings: list[str] = field(default_factory=list)
+    cover: tuple[bytes, str] | None = None
 
     @property
     def counts(self) -> dict[str, int]:
@@ -351,6 +353,29 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"不支持的数值 {name}")
 
 
+def _check_cover(raw: Any, errors: _Errors) -> tuple[bytes, str] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        errors.add("封面 cover 应为对象或 null")
+        return None
+    mime_type = raw.get("mime_type")
+    if not isinstance(mime_type, str) or mime_type not in IMAGE_MIMES:
+        errors.add("封面 mime_type 仅支持 JPG、PNG 或 WebP")
+        return None
+    value = raw.get("data")
+    if not isinstance(value, str):
+        errors.add("封面 data 应为 base64 字符串")
+        return None
+    try:
+        data = decode_image(value)
+        validate_image(data, mime_type)
+    except ValueError as exc:
+        errors.add(str(exc))
+        return None
+    return data, mime_type
+
+
 def parse_backup(raw: bytes) -> Backup:
     """解析并校验备份文件（不访问数据库）。不合法 → BadRequestError。"""
     if len(raw) > MAX_BYTES:
@@ -392,6 +417,7 @@ def parse_backup(raw: bytes) -> Backup:
         except ValidationError:
             errors.add("项目字段 wizard_progress 结构不正确")
     styles = _check_styles(data.get("styles"), errors)
+    cover = _check_cover(data.get("cover"), errors)
     warnings: list[str] = []
     unknown = sorted(k for k in tables if k not in RULES_BY_TABLE)
     if unknown:
@@ -409,7 +435,9 @@ def parse_backup(raw: bytes) -> Backup:
             if isinstance(row, dict) and not isinstance(row.get("global", False), bool):
                 errors.add(f"关系类型第 {i} 行的 global 应为布尔值")
     errors.raise_if_any()
-    backup = Backup(data=data, version=version, tables=clean, styles=styles, project=project, warnings=warnings)
+    backup = Backup(
+        data=data, version=version, tables=clean, styles=styles, project=project, warnings=warnings, cover=cover
+    )
     _check_refs(backup, errors)
     errors.raise_if_any()
     return backup
@@ -819,6 +847,9 @@ class _Importer:
     async def run(self, title: str | None) -> Project:
         await self._styles()
         project = await self._project(title)
+        if self.backup.cover is not None:
+            data, mime_type = self.backup.cover
+            self.db.add(ProjectCover(project_id=project.id, data=data, mime_type=mime_type))
         for rule in RULES:
             rows = self.backup.tables.get(rule.table) or []
             if rule.table == "relationship_types":

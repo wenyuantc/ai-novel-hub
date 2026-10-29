@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -6,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
 from app.core.errors import NotFoundError
-from app.models import Chapter, Project, WritingStyle
+from app.models import Chapter, Project, ProjectCover, WritingStyle
 from app.schemas.project import (
     ProjectCreate,
     ProjectOut,
@@ -134,6 +135,7 @@ def _to_out(
     notice: str | None = None,
     last_edited: int | None = None,
     reading: ReadingOut | None = None,
+    cover_updated_at: datetime | None = None,
 ) -> ProjectOut:
     out = ProjectOut.model_validate(project)
     out.chapter_count = int(chapter_count or 0)
@@ -142,6 +144,7 @@ def _to_out(
     out.notice = notice
     out.last_edited_chapter_id = last_edited
     out.reading = reading
+    out.cover_updated_at = cover_updated_at
     return out
 
 
@@ -150,9 +153,10 @@ async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
     stats = _stats_subquery()
     rows = (
         await db.execute(
-            select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle)
+            select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle, ProjectCover.updated_at)
             .outerjoin(stats, stats.c.project_id == Project.id)
             .outerjoin(WritingStyle, WritingStyle.id == Project.default_style_id)
+            .outerjoin(ProjectCover, ProjectCover.project_id == Project.id)
             .where(Project.user_id == user_id)
             .order_by(Project.updated_at.desc(), Project.id.desc())
         )
@@ -160,7 +164,7 @@ async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
     projects = [r[0] for r in rows]
     last = await _last_edited(db, [p.id for p in projects])
     reading = await _reading(db, projects)
-    return [_to_out(p, cc, tw, st, None, last.get(p.id), reading.get(p.id)) for p, cc, tw, st in rows]
+    return [_to_out(p, cc, tw, st, None, last.get(p.id), reading.get(p.id), cover) for p, cc, tw, st, cover in rows]
 
 
 async def project_out(db: AsyncSession, project: Project, notice: str | None = None) -> ProjectOut:
@@ -174,7 +178,8 @@ async def project_out(db: AsyncSession, project: Project, notice: str | None = N
     style = await db.get(WritingStyle, project.default_style_id) if project.default_style_id else None
     last = await _last_edited(db, [project.id])
     reading = await _reading(db, [project])
-    return _to_out(project, row[0], row[1], style, notice, last.get(project.id), reading.get(project.id))
+    cover = await db.scalar(select(ProjectCover.updated_at).where(ProjectCover.project_id == project.id))
+    return _to_out(project, row[0], row[1], style, notice, last.get(project.id), reading.get(project.id), cover)
 
 
 async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) -> tuple[Project, str | None]:

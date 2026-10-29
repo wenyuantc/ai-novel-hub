@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError
-from app.models import Chapter, Outline, Project
+from app.models import Chapter, Outline, Project, ProjectCover
 from app.services.project_service import get_owned_project
 
 ExportFormat = Literal["txt", "md", "epub"]
@@ -123,8 +123,10 @@ async def export_project(
         )
         skipped = [chapter_heading(c) for c in selected if not c.content.strip()]
         warnings = [f"已跳过正文为空的章节：{'、'.join(skipped)}"] if skipped else []
+        cover = await db.get(ProjectCover, project.id)
         data = epub_service.build_epub(
-            project, chapters, outlines, author=author.strip()[:AUTHOR_LIMIT], include_synopsis=include_synopsis
+            project, chapters, outlines, author=author.strip()[:AUTHOR_LIMIT], include_synopsis=include_synopsis,
+            cover=(cover.data, cover.mime_type) if cover is not None else None,
         )
         return ExportFile(f"{base}.epub", data, "application/epub+zip", warnings)
     if fmt == "md":

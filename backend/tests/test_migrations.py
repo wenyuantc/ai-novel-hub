@@ -40,6 +40,44 @@ def test_upgrade_and_downgrade(tmp_path):
         engine.dispose()
 
 
+def test_0021_project_cover_storage_and_cascade(tmp_path):
+    db_file = tmp_path / "migrate0021.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0020")
+    command.upgrade(cfg, "0021")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert insp.get_pk_constraint("project_covers")["constrained_columns"] == ["project_id"]
+        assert insp.get_foreign_keys("project_covers")[0]["options"]["ondelete"] == "CASCADE"
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (1, 'cover-user', 'x')"))
+            conn.execute(text(
+                "INSERT INTO projects (id, user_id, title, genre, premise, style, status) "
+                "VALUES (1, 1, '封面项目', '', '', '', 'planning')"
+            ))
+            conn.execute(text(
+                "INSERT INTO project_covers (project_id, mime_type, data) VALUES (1, 'image/png', :data)"
+            ), {"data": b"image bytes"})
+            assert conn.execute(text("SELECT data FROM project_covers")).scalar_one() == b"image bytes"
+            conn.execute(text("DELETE FROM projects WHERE id=1"))
+            assert conn.execute(text("SELECT count(*) FROM project_covers")).scalar_one() == 0
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0020")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "project_covers" not in inspect(engine).get_table_names()
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM users")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
 def test_0003_backfills_existing_users(tmp_path):
     """0003 为存量用户回填：启用中的普通用户、令牌版本 0；downgrade -1 删除三列。"""
     db_file = tmp_path / "migrate0003.db"

@@ -129,6 +129,7 @@ class ProjectOut(BaseModel):
     wizard_progress: WizardProgress = Field(default_factory=WizardProgress)
     created_at: datetime
     updated_at: datetime
+    cover_updated_at: datetime | None = None
     chapter_count: int = 0
     total_words: int = 0
     default_style_id: int | None = None

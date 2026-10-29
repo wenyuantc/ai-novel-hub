@@ -210,7 +210,7 @@ async def test_agent_versions_and_success_error_logs_survive_backup(client, fake
     assert any(v["source"] == "agent" for v in backup["tables"]["chapter_versions"])
     imported = await _import(client, backup)
     copied = await _backup(client, imported["project"]["id"], versions="1", logs="1")
-    assert copied["app_schema"] == "0019"
+    assert copied["app_schema"] == "0021"
     assert {log["status"] for log in copied["tables"]["generation_logs"]} == {"success", "error"}
     assert all(log["kind"] == "agent.turn" for log in copied["tables"]["generation_logs"])
 

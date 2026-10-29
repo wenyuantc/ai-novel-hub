@@ -1,10 +1,14 @@
 from collections.abc import AsyncIterator
 
+from httpx import AsyncClient
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
+from app.ai.endpoint_guard import ensure_endpoint_allowed
+from app.ai.images import MAX_COVER_BYTES, TOO_LARGE, decode_image, validate_image
 from app.ai.providers.base import (
     AIProviderError,
     ChatMessage,
+    GeneratedImage,
     LLMProvider,
     ModelInfo,
     ThinkingLevel,
@@ -84,6 +88,49 @@ class OpenAICompatProvider(LLMProvider):
         try:
             return [ModelInfo(id=m.id, name=None) async for m in client.models.list() if m.id]
         except Exception as exc:  # noqa: BLE001
+            raise AIProviderError(describe_error(exc)) from exc
+        finally:
+            await client.close()
+
+    async def _download_image(self, url: str) -> bytes:
+        if not self.follow_redirects:
+            await ensure_endpoint_allowed(url)
+        async with AsyncClient(timeout=self.timeout, follow_redirects=self.follow_redirects) as client:
+            async with client.stream("GET", url) as response:
+                # 即使允许私网也不把重定向响应体当成图片；关闭重定向时尤其不能跨过检查。
+                if response.is_redirect:
+                    raise AIProviderError("图片下载地址发生重定向，请更换图片接口后重试")
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(body) + len(chunk) > MAX_COVER_BYTES:
+                        raise AIProviderError(TOO_LARGE)
+                    body.extend(chunk)
+                return bytes(body)
+
+    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+        client = self._client()
+        try:
+            try:
+                result = await client.images.generate(model=model, prompt=prompt, n=1, size="1024x1536")
+            except Exception as exc:
+                # 只有明确的尺寸参数拒绝才重试，避免配额/鉴权失败被重复计费。
+                if getattr(exc, "status_code", None) != 400 or "size" not in str(exc).lower():
+                    raise
+                result = await client.images.generate(model=model, prompt=prompt, n=1)
+            if not result.data:
+                raise AIProviderError("图片模型未返回图片，请调整提示词或更换模型")
+            image = result.data[0]
+            if image.b64_json:
+                data = decode_image(image.b64_json)
+            elif image.url:
+                data = await self._download_image(image.url)
+            else:
+                raise AIProviderError("图片模型未返回可读取的图片数据")
+            return GeneratedImage(data=data, mime_type=validate_image(data))
+        except AIProviderError:
+            raise
+        except Exception as exc:
             raise AIProviderError(describe_error(exc)) from exc
         finally:
             await client.close()

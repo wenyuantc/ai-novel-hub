@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Literal, TypedDict
 
 from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
@@ -23,6 +24,12 @@ class ModelInfo(TypedDict):
 
 class AIProviderError(Exception):
     """模型调用失败（网络、鉴权、配额等），message 为可直接展示给用户的中文说明。"""
+
+
+@dataclass(frozen=True)
+class GeneratedImage:
+    data: bytes
+    mime_type: str
 
 
 class LLMProvider(ABC):
@@ -49,6 +56,11 @@ class LLMProvider(ABC):
     async def list_models(self) -> list[ModelInfo]:
         """列出接口可用模型。失败时抛 AIProviderError。"""
         raise AIProviderError("该接口类型不支持获取模型列表")
+
+    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+        raise AIProviderError(
+            "该接口类型不支持图片生成，请在「模型配置」中换用 OpenAI 兼容或 Gemini 的图片模型"
+        )
 
     async def chat_tools_stream(
         self,

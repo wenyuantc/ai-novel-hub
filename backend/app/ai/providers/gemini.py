@@ -7,9 +7,11 @@ from uuid import uuid4
 from google import genai
 from google.genai import types
 
+from app.ai.images import validate_image
 from app.ai.providers.base import (
     AIProviderError,
     ChatMessage,
+    GeneratedImage,
     LLMProvider,
     ModelInfo,
     ThinkingLevel,
@@ -139,6 +141,46 @@ class GeminiProvider(LLMProvider):
             async_client_args={"follow_redirects": self.follow_redirects},
         )
         return genai.Client(api_key=self.api_key, http_options=http_options)
+
+    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+        client = None
+        try:
+            client = self._client()
+            if "imagen" in model.lower():
+                try:
+                    result = await client.aio.models.generate_images(
+                        model=model,
+                        prompt=prompt,
+                        config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio="3:4"),
+                    )
+                except ValueError as exc:
+                    if "not in gemini developer api mode" not in str(exc).lower():
+                        raise
+                    raise AIProviderError(
+                        "当前接口或 SDK 不支持 Imagen 图片生成，请在「模型配置」中换用 Gemini 原生生图模型"
+                    ) from exc
+                images = result.generated_images or []
+                if images and images[0].image is not None and images[0].image.image_bytes:
+                    data = images[0].image.image_bytes
+                    return GeneratedImage(data=data, mime_type=validate_image(data))
+            else:
+                result = await client.aio.models.generate_content(
+                    model=model, contents=prompt,
+                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                )
+                for candidate in result.candidates or []:
+                    for part in candidate.content.parts if candidate.content and candidate.content.parts else []:
+                        if part.inline_data is not None and part.inline_data.data:
+                            data = part.inline_data.data
+                            return GeneratedImage(data=data, mime_type=validate_image(data))
+            raise AIProviderError("图片模型未返回图片，可能被内容策略拦截，请调整提示词或更换模型")
+        except AIProviderError:
+            raise
+        except Exception as exc:
+            raise AIProviderError(describe_error(exc)) from exc
+        finally:
+            if client is not None:
+                await client.aio.aclose()
 
     async def generate_stream(
         self,
