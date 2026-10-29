@@ -178,7 +178,7 @@ async def get_style(db: AsyncSession, user_id: int, style_id: int) -> StyleOut:
 # ---------------------------------------------------------------- 增删改
 
 
-def _clean(values: dict[str, Any]) -> dict[str, Any]:
+def clean_fields(values: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in values.items():
         if key == "name":
@@ -191,7 +191,7 @@ def _clean(values: dict[str, Any]) -> dict[str, Any]:
 
 
 async def create_style(db: AsyncSession, user_id: int, data: StyleCreate) -> StyleOut:
-    values = _clean(data.model_dump())
+    values = clean_fields(data.model_dump())
     if not values["name"]:
         raise BadRequestError("风格名称不能为空")
     style = WritingStyle(user_id=user_id, **values)
@@ -203,7 +203,7 @@ async def create_style(db: AsyncSession, user_id: int, data: StyleCreate) -> Sty
 
 async def update_style(db: AsyncSession, user_id: int, style_id: int, data: StyleUpdate) -> StyleOut:
     style = await _get_editable(db, user_id, style_id)
-    values = _clean({k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None})
+    values = clean_fields({k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None})
     if "name" in values and not values["name"]:
         raise BadRequestError("风格名称不能为空")
     for key, value in values.items():
@@ -229,7 +229,7 @@ async def _my_names(db: AsyncSession, user_id: int) -> set[str]:
     return set((await db.scalars(select(WritingStyle.name).where(WritingStyle.user_id == user_id))).all())
 
 
-def _unique_name(name: str, taken: set[str], suffix: str) -> str:
+def unique_name(name: str, taken: set[str], suffix: str) -> str:
     if name not in taken:
         return name
     n = 1
@@ -250,7 +250,7 @@ async def copy_style(db: AsyncSession, user_id: int, style_id: int) -> StyleOut:
     values = _fields(src)
     taken = await _my_names(db, user_id)
     # 「名称（副本）」已被占用时依次尝试「名称（副本2）」……
-    values["name"] = _unique_name(src.name, taken | {src.name}, COPY_SUFFIX)
+    values["name"] = unique_name(src.name, taken | {src.name}, COPY_SUFFIX)
     style = WritingStyle(user_id=user_id, **values)
     db.add(style)
     await db.commit()
@@ -293,9 +293,9 @@ async def import_styles(db: AsyncSession, user_id: int, data: Any) -> StyleImpor
         if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
             warnings.append(f"第 {i} 项缺少名称，已跳过")
             continue
-        values = _clean({k: raw.get(k, "") for k in ("name", *FIELD_LIMITS) if isinstance(raw.get(k, ""), str)})
+        values = clean_fields({k: raw.get(k, "") for k in ("name", *FIELD_LIMITS) if isinstance(raw.get(k, ""), str)})
         original = values["name"]
-        values["name"] = _unique_name(original, taken, IMPORT_SUFFIX)
+        values["name"] = unique_name(original, taken, IMPORT_SUFFIX)
         taken.add(values["name"])
         style = WritingStyle(user_id=user_id, **values)
         db.add(style)
@@ -419,7 +419,7 @@ async def apply_legacy_style(db: AsyncSession, project: Project, text: str) -> s
         return "style 字段已废弃：已更新项目的「原风格」，请改用写作风格库与 default_style_id"
     style = WritingStyle(
         user_id=project.user_id,
-        name=_unique_name(legacy_style_name(project.title), await _my_names(db, project.user_id), "（2）"),
+        name=unique_name(legacy_style_name(project.title), await _my_names(db, project.user_id), "（2）"),
         description=text[:100],
         extra=text[:5000],
     )

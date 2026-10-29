@@ -50,7 +50,7 @@ from app.services import kb_index_service, memory_service, project_service, retr
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
-from app.services.style_service import FIELD_LIMITS, IMPORT_SUFFIX, NAME_LIMIT, _unique_name
+from app.services.style_service import FIELD_LIMITS, IMPORT_SUFFIX, NAME_LIMIT, unique_name
 
 MAX_BYTES = 100 * 1024 * 1024
 TOO_LARGE = "备份文件过大，上限为 100MB"
@@ -503,7 +503,7 @@ async def _plan_styles(db: AsyncSession, user_id: int, styles: list[dict[str, An
             if preset is not None:
                 plans.append(_StylePlan(item["ref"], "preset", preset.name, key, preset.id, values))
                 continue
-            values["name"] = _unique_name(values["name"], taken, IMPORT_SUFFIX)
+            values["name"] = unique_name(values["name"], taken, IMPORT_SUFFIX)
             taken.add(values["name"])
             plans.append(_StylePlan(item["ref"], "copy", values["name"], key, None, values))
             continue
@@ -511,7 +511,7 @@ async def _plan_styles(db: AsyncSession, user_id: int, styles: list[dict[str, An
         if same is not None:
             plans.append(_StylePlan(item["ref"], "reuse", same.name, None, same.id, values))
             continue
-        values["name"] = _unique_name(values["name"], taken, IMPORT_SUFFIX)
+        values["name"] = unique_name(values["name"], taken, IMPORT_SUFFIX)
         taken.add(values["name"])
         plans.append(_StylePlan(item["ref"], "create", values["name"], None, None, values))
     return plans

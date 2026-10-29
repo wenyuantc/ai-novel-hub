@@ -141,8 +141,15 @@ async def get_template(db: AsyncSession, user_id: int, key: str) -> PromptTempla
     return _detail(tpl, await _get_row(db, user_id, key))
 
 
-async def _apply_save(
-    db: AsyncSession, user_id: int, tpl: PromptTemplate, system: str, user: str, note: str
+async def apply_save(
+    db: AsyncSession,
+    user_id: int,
+    tpl: PromptTemplate,
+    system: str,
+    user: str,
+    note: str,
+    *,
+    force_version: bool = False,
 ) -> tuple[PromptTemplateOverride, bool]:
     """upsert 覆盖（不 commit）；返回 (覆盖, 内容是否有变化)。调用方已校验。"""
     row = await _get_row(db, user_id, tpl.key)
@@ -155,11 +162,24 @@ async def _apply_save(
     row.base_fingerprint = default_fingerprint(tpl.key)
     row.base_system, row.base_user = tpl.system, tpl.user
     await db.flush()
-    if changed:
+    if changed or force_version:
         db.add(PromptOverrideVersion(override_id=row.id, system=system, user=user, note=note.strip()[:200]))
         await db.flush()
         await _prune_versions(db, row.id)
     return row, changed
+
+
+async def ensure_current_version(db: AsyncSession, row: PromptTemplateOverride) -> None:
+    """补齐旧数据未记录的当前正文（不提交），供覆盖前恢复。"""
+    latest = await db.scalar(
+        select(PromptOverrideVersion)
+        .where(PromptOverrideVersion.override_id == row.id)
+        .order_by(PromptOverrideVersion.id.desc())
+        .limit(1)
+    )
+    if latest is None or (latest.system, latest.user) != (row.system, row.user):
+        db.add(PromptOverrideVersion(override_id=row.id, system=row.system, user=row.user, note="工坊导入前的覆盖"))
+        await db.flush()
 
 
 async def _prune_versions(db: AsyncSession, override_id: int) -> None:
@@ -188,7 +208,7 @@ async def _commit(db: AsyncSession) -> None:
 async def save_override(db: AsyncSession, user_id: int, key: str, data: PromptSave) -> PromptTemplateDetail:
     tpl = get_registered(key)
     ensure_valid(tpl, data.system, data.user)
-    row, _ = await _apply_save(db, user_id, tpl, data.system, data.user, data.note)
+    row, _ = await apply_save(db, user_id, tpl, data.system, data.user, data.note)
     await _commit(db)
     await db.refresh(row)
     return _detail(tpl, row)
@@ -240,7 +260,7 @@ async def restore_version(db: AsyncSession, user_id: int, key: str, version_id: 
     if version is None:
         raise NotFoundError("历史版本不存在")
     ensure_valid(tpl, version.system, version.user)
-    row, _ = await _apply_save(db, user_id, tpl, version.system, version.user, f"回滚到版本 #{version.id}")
+    row, _ = await apply_save(db, user_id, tpl, version.system, version.user, f"回滚到版本 #{version.id}")
     await db.commit()
     await db.refresh(row)
     return _detail(tpl, row)
@@ -369,7 +389,7 @@ async def import_overrides(db: AsyncSession, user_id: int, data: Any) -> PromptI
             results.append(PromptImportItemResult(key=key, status="default", message="与系统默认相同，未创建覆盖"))
             continue
         existed = await _get_row(db, user_id, key) is not None
-        row, changed = await _apply_save(db, user_id, tpl, system, user, "从文件导入")
+        row, changed = await apply_save(db, user_id, tpl, system, user, "从文件导入")
         if isinstance(raw.get("enabled"), bool):
             row.enabled = raw["enabled"]
         status = "unchanged" if not changed else ("updated" if existed else "created")
