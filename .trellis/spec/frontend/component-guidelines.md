@@ -1,5 +1,15 @@
 # 组件规范
 
+## 提示词工坊
+
+- 用户级懒加载路由 `/workshop`（`pages/WorkshopPage.tsx`），顶栏与用户菜单有入口。Tab 为「浏览」「我的分享」「审核」，审核和官方发布仅管理员可见；数量来自待审核列表的 `total`。
+- `components/workshop/ShareToWorkshopModal` 在写作风格库的本人风格、模板页已保存的覆盖上预填分享数据，也用于条目更新与官方发布；分类、标签复用 `WorkshopMetadataFields`。模板 key 在分享已有模板和更新时锁定。
+- `WorkshopItemDrawer` 展示署名、计数、正文与操作；以服务端 `is_mine` 判归属，使用 `author_name ?? '匿名'`，不得推导或显示匿名作者 id。`WorkshopItemControls` 依条目状态及 `hidden_by` 控制上架 / 下架操作，管理员可改分类标签，正文仅作者提交更新。
+- 模板导入前复用 `PromptDiffModal`，`utils/workshop.ts::workshopImportPairs` 对照当前生效内容：覆盖启用才取覆盖，否则取系统默认；确认后调用导入。导入结果提示覆盖已启用且可从历史恢复；风格导入后强制刷新 styles store，刷新失败也需显示错误。
+- `ReviewPanel` 展示审核快照和真实管理员署名，管理员只能调整分类和标签，通过审核不要求驳回原因；驳回必须填原因。作者可撤回 pending、修改被驳回 / 撤回提交并重交。
+- 列表与详情加载沿用 `useLoader` 过期响应保护；异步写操作期间禁用冲突控件，错误以 Alert / `errorMessage` 呈现。详情渲染必须从 `item.status` 明确定义状态，不能依赖隐含全局变量。
+- 契约、状态、404/403、导入版本和测试断言见 [工坊规范](../backend/workshop.md)。
+
 > 本项目中组件的构建方式。
 
 ---

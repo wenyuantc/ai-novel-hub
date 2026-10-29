@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "导入模板必须重新校验、可从历史恢复"}
+{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "权限 404/403 区分"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "外键与迁移"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/test 门禁与评审清单"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像"}
+{"file": ".trellis/spec/backend/workshop.md", "reason": "工坊跨层契约、审核锁顺序、匿名与删号署名、模板导入恢复与计数"}
