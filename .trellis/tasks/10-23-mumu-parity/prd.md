@@ -102,14 +102,14 @@
 | P1-10b | `reader-ui` 阅读器、书架、暗色主题、移动端（用户决定从 project-io-reader 拆出，紧接着做） | D5、A18 | 无（书架可接入 project-io-reader 的导出入口） |
 | P2-11 | `project-agent` 项目智能体 | C4 | story-entities、chapter-versions |
 | P2-12 | `skills-mcp` Skill 和 MCP 插件 | C5、C6 | prompt-styles |
-| P2-13 | `oauth-announce` OAuth、邮箱登录、实例公告 | D2、D6 | 无 |
+| P2-13 | ~~`oauth-announce` OAuth、邮箱登录、实例公告~~（2026-10-29 用户决定取消，任务已删除） | D2、D6 | 无 |
 | P2-14 | `prompt-workshop` 实例内工坊：共享写作风格与提示词模板、管理员审核（用户决定从 prompt-styles 拆出） | C2 | prompt-styles |
 
 ## 进度
 
-已归档 17/18（2026-10-29）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import、project-agent、skills-mcp、prompt-workshop。P0、P1 全部完成；P2 已完成 project-agent、skills-mcp、prompt-workshop；待做 oauth-announce。
+已归档 17/17（2026-10-29，oauth-announce 已取消）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import、project-agent、skills-mcp、prompt-workshop。P0、P1 全部完成；P2 已完成 project-agent、skills-mcp、prompt-workshop。全部子任务完成，待父任务集成验收。
 
-不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
+不做：D2 OAuth/邮箱登录、D6 实例公告（oauth-announce 已取消）；D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 
 ## Acceptance Criteria（父任务）
 
