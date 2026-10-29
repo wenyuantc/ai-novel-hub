@@ -50,6 +50,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   `skills`，不在「与项目相关」的集合里；`test_registry_covers_all_project_tables` 同时断言 `NOT_EXPORTED ⊆ 与项目相关的表`，把它们写进去测试会直接失败。
   反过来 `agent_messages.skill_id` 指向 `skills`，但 `agent_messages` 本身已在 `NOT_EXPORTED` 中，备份不含 Skill 引用；`agent_conversations.mcp_plugin_ids`
   同样随会话不导出。Skill / 插件属于用户而非作品，跨实例迁移走 Skill 的 SKILL.md / zip 导出与 `mcpServers` JSON 导入。
+- `project_covers` 属于项目表，但登记在 `NOT_EXPORTED`：图片二进制通过顶层可选 `cover` 字段导出导入，见 [项目封面](./project-cover.md)。
 - **JSON 内的 id**（`remap.py`，对应不上的置 null / 去掉，计数后汇总为一条警告）：
   | 列 | 处理 |
   |---|---|
@@ -82,9 +83,10 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0019"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0021"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
+- 可选顶层 `cover: {mime_type, data: base64} | null`；无封面字段的 v1 旧备份正常导入。封面只占核心组估算字节，计入 base64 编码后的大小。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。
 - 流式：路由校验归属后 `db.close()`，生成器用自己的 session，按注册表逐表查询，有 id 的表按 id 键集分页（每批 500 行）。
 - 估算 `GET /projects/{pid}/backup/estimate` → `{core, versions, snapshots, generation_logs, inspiration}`，每项 `{rows, chars, bytes}`
@@ -132,6 +134,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - 失败：插入阶段数据库报错 → 回滚，400 `导入失败：组织（organizations）第 a–b 行附近出错：…`，响应体带 `table` / `row_start` / `row_end`
   （每批 500 行 flush，行号精确到批）。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。
+  例外：封面不进入通用表注册表，而是新增可选顶层字段，保持 v1；不能用此例外跳过其他新增表的格式迁移评估。
 
 ### 必需的测试
 

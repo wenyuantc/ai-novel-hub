@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新表 project_covers 与 Alembic 迁移规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "BadRequestError / 404 与 AIProviderError 中文报错约定"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 cover 路由/服务/schema 的放置位置"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份新增顶层 cover 字段、NOT_EXPORTED 登记"}
+{"file": ".trellis/spec/backend/book-import.md", "reason": "上传 + UploadLimitMiddleware + 魔数校验的既有做法"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ruff / pytest 要求"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "封面卡片、AI 生成弹窗组件规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Project 类型新增 cover_updated_at"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端契约：封面 URL 版本参数、预览确认流程"}
+{"file": ".trellis/spec/backend/project-cover.md", "reason": "已实现封面跨层契约：上传、生成预览、微秒版本、备份与 EPUB"}

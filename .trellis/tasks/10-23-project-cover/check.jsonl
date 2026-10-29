@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查项"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份往返与注册表覆盖测试"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误码与中文提示一致性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint / build / test"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约一致性"}
+{"file": ".trellis/spec/backend/project-cover.md", "reason": "封面上传与生成的校验、错误矩阵、备份及 EPUB 断言"}
