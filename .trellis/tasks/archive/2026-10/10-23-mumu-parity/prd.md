@@ -14,6 +14,8 @@
 
 ## 功能差距清单
 
+本节保留 2026-10-23 的立项基线；最终功能归属、已批准取舍和取消范围见 `research/final-coverage.md`，最终验收见 `research/final-acceptance.md`。
+
 图例：✅ 本项目已具备　🟡 部分具备　❌ 缺失　⏬ 不打算照搬（理由见备注）
 
 ### A. 创作核心
@@ -80,7 +82,7 @@
 | D7 | 赞助页 | ⏬ | 不做 |
 | D8 | SQLite / PostgreSQL 双库 | 🟡 测试用 SQLite | 不维护双迁移目录 |
 
-## 子任务拆分（建议，待确认）
+## 子任务拆分（最终范围）
 
 按依赖和价值排序。每个子任务都单独规划、实现、验收、归档。依赖关系写进子任务自己的 PRD。
 
@@ -107,18 +109,18 @@
 
 ## 进度
 
-已归档 17/17（2026-10-29，oauth-announce 已取消）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import、project-agent、skills-mcp、prompt-workshop。P0、P1 全部完成；P2 已完成 project-agent、skills-mcp、prompt-workshop。全部子任务完成，待父任务集成验收。
+已归档 17/17（2026-10-29，oauth-announce 已取消）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import、project-agent、skills-mcp、prompt-workshop。P0、P1、保留的 P2 全部完成；最终创作链路、P2 安全及全量质量门禁已通过，父任务完成验收。
 
 不做：D2 OAuth/邮箱登录、D6 实例公告（oauth-announce 已取消）；D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 
 ## Acceptance Criteria（父任务）
 
-- [ ] 上表每个子任务都已创建，并挂在本父任务下，各自的 PRD 写清依赖和验收标准。
-- [ ] 差距清单里每一项标 ❌ / 🟡 的功能，都能对应到某个子任务；或者在"不做"里写明原因。
-- [x] （P0/P1 已验收，2026-10-27，见 `research/integration-acceptance.md`；P2 完成后再补一次）所有子任务归档后做一次集成验收，完整走通这条链路：新建项目 → 灵感或向导生成设定 → 大纲展开 → 批量生成章节 → 自动分析回写 → 按建议重写，并能对比版本、回滚 → 导出 EPUB 和 JSON 备份 → 把备份导入新项目，数据完整。
-- [ ] （P0/P1 范围已通过；Skill、MCP、共享提示词待 P2 完成后验收）集成验收时检查以下安全约束：多用户之间互相访问一律返回 404；API Key 不在任何接口里明文返回；AI 和 MCP 的外部地址都经过 SSRF 防护；全局资源（Skill、共享提示词）只有管理员能改。
-- [x] 仓库里没有从 MuMu 复制的源码或提示词原文。（2026-10-27 文本比对，P2 完成后复查）
+- [x] 上表保留的 17 个子任务都已创建、挂在本父任务下并归档，各自 PRD 有前置能力和验收标准；依赖统一核对见 `research/final-coverage.md`。oauth-announce 按用户决定取消。
+- [x] 差距清单里每一项标 ❌ / 🟡 的功能，都能对应到某个子任务；或者在“不做”里写明原因。最终覆盖表包含 A1–A18、B1–B10、C1–C8、D1–D8 全部 44 项。
+- [x] 所有子任务归档后，于 2026-10-29 完整复跑：新建项目 → 四步向导生成设定 → 大纲展开 → 批量生成与审核继续 → 自动分析回写 → 按建议重写 / 重新分析 → 对比版本 / 回滚 → EPUB 和 JSON 备份 → 导入新项目。57 个 HTTP 请求、123 条断言通过，27 表往返一致，详见 `research/final-acceptance.md`。
+- [x] 最终安全验收通过：私有资源跨用户 404；可见全局资源不可写与管理员路由无权限为 403；AI Key / MCP 请求头不明文返回，外部地址经过 SSRF 防护；全局 Skill、工坊审核和官方条目管理限管理员。工坊作者管理自己的分享沿用已批准子任务范围。相关 144 项及逐请求 SSRF 补充 6 项通过。
+- [x] 仓库里没有从 MuMu 复制的源码或提示词原文。2026-10-29 复查 520 / 286 文件：无非平凡文件全文一致、无中文 18 字窗口命中；60 个三行短片段逐项核对为通用框架写法，详见最终覆盖记录。
 
 ## Open Questions
 
-- 子任务拆分和优先级是否认可，从哪个子任务开始规划（当前提问）。
+- 无。已批准范围全部完成并验收；真实模型质量、PostgreSQL 真实行锁和已有 SDK 弃用警告等验证限制已写入最终验收记录。

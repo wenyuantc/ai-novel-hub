@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端门禁、测试隔离与密钥 / SSRF 约束"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint / build / 全量测试门禁"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "向导、大纲展开与章节归属"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "批量生成、分析、审核与续跑"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "JSON 备份恢复与 EPUB 结构"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "智能体提案确认、撤销及 external 工具"}
+{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "Skill 权限与生成快照、MCP 脱敏与 SSRF"}
+{"file": ".trellis/spec/backend/workshop.md", "reason": "工坊作者 / 管理员权限、导入恢复"}

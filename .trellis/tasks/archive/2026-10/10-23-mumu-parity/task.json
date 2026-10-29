@@ -3,7 +3,7 @@
   "name": "mumu-parity",
   "title": "对标 MuMuAINovel 功能补齐",
   "description": "参考 MuMuAINovel 自行实现其全部功能并做得更完善；本父任务负责功能差距清单、子任务拆分与集成验收",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,8 +11,8 @@
   "creator": "aiNovel",
   "assignee": "aiNovel",
   "createdAt": "2026-10-23",
-  "completedAt": null,
-  "branch": null,
+  "completedAt": "2026-10-29",
+  "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -39,6 +39,6 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "2026-10-29：17 个子任务全部完成，父任务最终验收通过。后端 Ruff + 975 项、前端 lint/build + 417 项通过；同一项目主链路 57 个 HTTP 请求/123 条断言/8 个任务成功；P2 安全 144 项与逐请求 SSRF 补充 6 项通过；覆盖和文本复查完成。仅更新验收与任务资料，无产品代码变更。父任务未使用独立功能分支，收尾在本地 main 进行，归档使用 --skip-branch-validation；未推送。",
   "meta": {}
 }

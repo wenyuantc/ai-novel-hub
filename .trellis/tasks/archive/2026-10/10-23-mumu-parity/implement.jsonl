@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "最终集成验收的隔离、FakeLLM、fake DNS 与全量门禁"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "P2 智能体确认、撤销及 external 工具边界"}
+{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "Skill 归属、生成快照、MCP 脱敏与 SSRF"}
+{"file": ".trellis/spec/backend/workshop.md", "reason": "工坊分享审核、导入恢复与权限"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "最终备份恢复与 EPUB 验收"}
