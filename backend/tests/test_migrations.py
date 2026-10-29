@@ -1233,3 +1233,63 @@ def test_0019_skills_mcp(tmp_path):
         assert "mcp_plugin_ids" not in {c["name"] for c in inspector.get_columns("agent_conversations")}
     finally:
         engine.dispose()
+
+
+def test_0020_workshop_constraints_and_downgrade(tmp_path):
+    """工坊迁移保留已发布内容、级联提交与互动，pending 更新由部分唯一索引保护。"""
+    db_file = tmp_path / "migrate0020.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0019")
+    command.upgrade(cfg, "0020")
+    engine = create_engine(f"sqlite:///{db_file}")
+    tables = {"workshop_items", "workshop_submissions", "workshop_likes", "workshop_imports"}
+    try:
+        insp = inspect(engine)
+        assert tables <= set(insp.get_table_names())
+        assert any(
+            i["name"] == "uq_workshop_pending_item" and i["unique"] for i in insp.get_indexes("workshop_submissions")
+        )
+        author_fk = next(
+            f for f in insp.get_foreign_keys("workshop_items") if f["constrained_columns"] == ["author_id"]
+        )
+        assert author_fk["options"]["ondelete"] == "SET NULL"
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users(id, username, password_hash) VALUES (1, 'author', 'x')"))
+            conn.execute(
+                text(
+                    "INSERT INTO workshop_items(id, kind, name, category, content, author_id, like_count) "
+                    "VALUES (1, 'style', 'shared', 'general', '{}', 1, 3)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO workshop_submissions(item_id, submitter_id, kind, name, category, content) "
+                    "VALUES (1, 1, 'style', 'update', 'general', '{}')"
+                )
+            )
+            conn.execute(text("INSERT INTO workshop_likes VALUES (1, 1)"))
+            conn.execute(text("INSERT INTO workshop_imports VALUES (1, 1)"))
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO workshop_submissions(item_id, submitter_id, kind, name, category, content) "
+                    "VALUES (1, 1, 'style', 'duplicate', 'general', '{}')"
+                )
+            )
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = 1"))
+            assert conn.execute(text("SELECT author_id, like_count FROM workshop_items")).one() == (None, 3)
+            for table in tables - {"workshop_items"}:
+                assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 0
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0019")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert not tables & set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()

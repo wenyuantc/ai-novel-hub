@@ -30,6 +30,7 @@ from app.api.v1 import (
     tasks,
     transfer,
     wizard,
+    workshop,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -67,3 +68,5 @@ api_router.include_router(inspiration.router)
 api_router.include_router(kb.router)
 api_router.include_router(memories.router)
 api_router.include_router(book_imports.router)
+
+api_router.include_router(workshop.router)

@@ -102,6 +102,8 @@ def create_app(
     app.add_middleware(
         UploadLimitMiddleware,
         rules=[
+            ("POST", re.compile(r"/api/v1/workshop/(submissions|admin/items)"),
+             1024 * 1024, "提交内容过大，上限为 1MB"),
             (
                 "POST",
                 re.compile(r"/api/v1/projects/\d+/kb/documents"),

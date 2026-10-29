@@ -40,6 +40,7 @@ from app.models.entities import (
     WritingStyle,
 )
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
+from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 
 __all__ = [
     "AgentChange",
@@ -86,4 +87,8 @@ __all__ = [
     "User",
     "WorldSetting",
     "WritingStyle",
+    "WorkshopImport",
+    "WorkshopItem",
+    "WorkshopLike",
+    "WorkshopSubmission",
 ]
