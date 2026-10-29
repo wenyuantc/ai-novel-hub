@@ -59,7 +59,7 @@
 | # | MuMu 功能 | 本项目 | 超越方向 |
 |---|---|---|---|
 | C1 | 提示词模板：约 40 个，用户可覆盖、恢复默认、导入导出 | ❌ 提示词硬编码在 `backend/app/ai/prompts/` | 带变量校验，可预览渲染结果，可做版本对比 |
-| C2 | 提示词工坊（社区分享） | ✅ | 实例内风格 / 单 key 模板共享、管理员审核、匿名署名、点赞与导入；2026-10-29 验收通过，待提交归档。中央云端部分不做，文件导入导出沿用 prompt-styles |
+| C2 | 提示词工坊（社区分享） | ✅ | 实例内风格 / 单 key 模板共享、管理员审核、匿名署名、点赞与导入；2026-10-29 验收通过并归档、合并本地 main。中央云端部分不做，文件导入导出沿用 prompt-styles |
 | C3 | 拆书：TXT 导入、识别编码、切章、AI 反推设定和大纲 | ❌ | MuMu 的任务只在内存里；我们走持久化任务，切章结果可人工校正 |
 | C4 | 项目智能体：预览后确认写操作，保存快照 | ❌ | 用模型原生的工具调用协议，可撤销 |
 | C5 | Skill（文件形式，按触发词匹配） | ❌ | MuMu 允许任何用户增删全局 Skill；我们区分用户级和管理员级 |
@@ -107,7 +107,7 @@
 
 ## 进度
 
-已归档 16/18（2026-10-28）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import、project-agent、skills-mcp。P0、P1 全部完成；P2 已完成 project-agent、skills-mcp，prompt-workshop 已于 2026-10-29 实现并通过验收，待提交归档；待做 oauth-announce。
+已归档 17/18（2026-10-29）：chapter-versions、task-engine、story-entities、career-system、analysis-memory、foreshadows、outline-pro、batch-generate、prompt-styles、inspiration、knowledge-base、project-io-reader、reader-ui、book-import、project-agent、skills-mcp、prompt-workshop。P0、P1 全部完成；P2 已完成 project-agent、skills-mcp、prompt-workshop；待做 oauth-announce。
 
 不做：D7 赞助页；C2 里依赖中央云端的部分；D6 里指向上游作者服务器的部分；D8 双迁移目录。
 
