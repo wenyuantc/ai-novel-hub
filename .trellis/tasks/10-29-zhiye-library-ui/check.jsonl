@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范索引"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件、主题、书架、响应式和项目布局契约"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "现有 auth/tasks/project/主题状态边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/test 和无颜色硬编码等门禁"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "API 类型与 UTC 时间"}
+{"file": ".trellis/spec/backend/project-cover.md", "reason": "真实封面与版本 URL"}
+{"file": ".trellis/spec/guides/index.md", "reason": "共享思考索引"}
+{"file": ".trellis/tasks/10-29-zhiye-library-ui/research/design-reference.md", "reason": "视觉参考与真实路由映射"}
+{"file": ".trellis/tasks/10-29-zhiye-library-ui/verification.md", "reason": "真实接口/浏览器验收证据、设计差异与提交状态"}
+{"file": ".trellis/tasks/10-29-zhiye-library-ui/research/auth-design-reference.md", "reason": "新增认证视觉/入口弹窗、注册开关与鉴权回跳复核依据"}

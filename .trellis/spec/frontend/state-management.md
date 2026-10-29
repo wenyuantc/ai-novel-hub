@@ -20,7 +20,7 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 | 活动任务（全局） | `stores/tasks.ts` → `useTasksStore` | `active`（排队 + 运行中，id 倒序）、`loaded`、`version`；`refresh()`、`track(task)`、`bump()`、`startPolling()`、`reset()` |
 | 当前项目（全局） | `stores/project.ts` → `useProjectStore` | `project`、`loading`、`error`；`load(id)`、`refresh()`、`setProject(p)`、`reset()` |
 | 主题（全局，设备级） | `theme/themeStore.ts` → `useThemeStore` | `mode`（`light` / `dark` / `system`，localStorage `ainovel.theme`）、`systemDark`；`setMode`、`setSystemDark`；`useResolvedTheme()`、`watchSystemTheme()` |
-| 本地偏好（localStorage，非 store） | `utils/preferences.ts`、`utils/shelf.ts`、`utils/reader.ts` | `ainovel.autoContinue`；书架 `ainovel.shelf`（`{query, sort, status}`）；阅读设置 `ainovel.reader`（`{fontSize, lineHeight, width, background, font}`）。读写都包 try/catch，读出后经 `parse*` / `normalize*` 校验 |
+| 本地偏好（localStorage，非 store） | `utils/preferences.ts`、`utils/shelf.ts`、`utils/reader.ts` | `ainovel.autoContinue`；书库 `ainovel.shelf`（`{query, sort, status, view: 'shelf' \| 'list'}`；旧值缺 view 默认 shelf）；阅读设置 `ainovel.reader`（`{fontSize, lineHeight, width, background, font}`）。读写都包 try/catch，读出后经 `parse*` / `normalize*` 校验 |
 | 页面数据（本地） | 页面中的 `useLoader` | 世界观/角色/大纲/章节列表、当前打开的章节、导出用章节列表；组织 / 成员 / 关系 / 关系类型 / 图谱 / 章节出场角色（各面板与抽屉 Tab 各自加载，未做全局缓存，保存后各自 `reload()`） |
 | 表单 / UI 状态（本地） | `useState`、`Form.useForm` | 弹窗打开标志、`editing`、`saving`、编辑器 `title`/`content`、`aiConfigId`、AI 配置页上的测试结果 |
 | 流式状态（本地） | `useStreamTask`（局部改写）/ `useTaskStream`（任务订阅） | `text`、`running`、`error`、abort controller；任务另有 `task`、`continueInfo`、`reconnecting` |
@@ -31,7 +31,7 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 
 仅当两个或以上不相关的页面需要同一份数据，**并且**该数据是用户级的：
 
-- `useAuthStore`——由 `RequireAuth`、`LoginPage`、`AppLayout`、`App` 读取。
+- `useAuthStore`——由 `RequireAuth`、`LoginPage`、`AppLayout`、`App`、公开 `HomePage` 和 `HomeEntryDialog` 读取。首页只依据认证状态与 `registrationEnabled` 选择入口，不请求私有作品；能力/创作方向/FAQ及欢迎弹窗mode均为页面本地 state，次入口关闭后的焦点意图为组件ref。登录/注册标签由查询串派生，关闭注册时强制登录；切标签保留路由 `state.from`，提交时禁止模式切换。
 - `useAIConfigStore`——由 `AIConfigSelect`（所有生成类 UI）、`useHasAIConfig`、`AIConfigPage` 读取。`load()` 是幂等的：`if (get().loading || (get().loaded && !force)) return`。`AIConfigPage` 在每次变更后调用 `load(true)`，让其他地方的下拉框能看到变化。
 - `useProjectStore`——由 `ProjectLayout` 加载（`load(pid)`），显示在面包屑/概览中；各面板在修改章节后调用 `refresh()`（静默，吞掉错误），以更新 `chapter_count`/`total_words`；`OverviewPanel` 在 PATCH 后调用 `setProject(updated)`。`load(id)` 只有在 `get().project?.id === id` 时才保留当前项目，因此切换项目时绝不会闪现旧项目（`ProjectLayout` 在 `project.id !== pid` 时也会渲染加载动画）。
 
@@ -48,7 +48,7 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
     挂载 `useSkills()` 的组件才触发请求，未打开相关界面时不发请求。
   - `load()` 与 `useAIConfigStore` 一样幂等（`loading || (loaded && !force)` 直接返回）；`SkillsPage` 每次增删改、复制、导入、恢复后 `load(true)`，其他地方的下拉框随之更新。
   - 只缓存列表（`SkillBrief`，不含正文）；编辑抽屉的详情用 `skillApi.get` 本地加载。随 `userId` 重置。
-- `useAuthStore.mcpEnabled` 是部署配置而不是用户数据：`init()` 时与 `registrationEnabled` 一起读取，用于隐藏顶栏「MCP 插件」入口与智能体面板的插件选择。
+- `useAuthStore.mcpEnabled` 是部署配置而不是用户数据：`init()` 时与 `registrationEnabled` 一起读取，用于隐藏 `StudioNavigation` 共用侧栏/移动导航中的「MCP 插件」入口与智能体面板的插件选择。
 - `useThemeStore`——由 `App`（`ConfigProvider` 算法、`ThemeSync`）、`ThemeSwitch`、`usePalette`、书封、阅读器读取。是**设备偏好**而非用户数据，因此**不**加入 `userId` 变化时的重置 effect；系统主题监听在 `App` 挂载时 `watchSystemTheme()` 注册、卸载时移除。
 - 书架偏好与阅读设置只在各自页面里 `useState(read*)` + `useEffect(write*)`，不进 store（只有一个页面使用）。阅读进度在服务端（`ProjectOut.reading`），阅读器内存里只保留最近一次上报的位置。
 

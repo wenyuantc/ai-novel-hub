@@ -2,7 +2,7 @@
 
 ## 提示词工坊
 
-- 用户级懒加载路由 `/workshop`（`pages/WorkshopPage.tsx`），顶栏与用户菜单有入口。Tab 为「浏览」「我的分享」「审核」，审核和官方发布仅管理员可见；数量来自待审核列表的 `total`。
+- 用户级懒加载路由 `/workshop`（`pages/WorkshopPage.tsx`），`StudioNavigation` 的创作资源分组与用户菜单有入口。Tab 为「浏览」「我的分享」「审核」，审核和官方发布仅管理员可见；数量来自待审核列表的 `total`。
 - `components/workshop/ShareToWorkshopModal` 在写作风格库的本人风格、模板页已保存的覆盖上预填分享数据，也用于条目更新与官方发布；分类、标签复用 `WorkshopMetadataFields`。模板 key 在分享已有模板和更新时锁定。
 - `WorkshopItemDrawer` 展示署名、计数、正文与操作；以服务端 `is_mine` 判归属，使用 `author_name ?? '匿名'`，不得推导或显示匿名作者 id。`WorkshopItemControls` 依条目状态及 `hidden_by` 控制上架 / 下架操作，管理员可改分类标签，正文仅作者提交更新。
 - 模板导入前复用 `PromptDiffModal`，`utils/workshop.ts::workshopImportPairs` 对照当前生效内容：覆盖启用才取覆盖，否则取系统默认；确认后调用导入。导入结果提示覆盖已启用且可从历史恢复；风格导入后强制刷新 styles store，刷新失败也需显示错误。
@@ -16,11 +16,12 @@
 
 ## 概述
 
-所有 UI 元素都是 Ant Design 5 组件。语言环境为中文：`App.tsx` 中使用 AntD `zh_CN`，`main.tsx` 中使用 dayjs `zh-cn`。反馈（`message`、`modal`）始终来自 `App.useApp()`，以继承 `ConfigProvider` 的主题/语言环境——绝不使用静态导入的 `message.success(...)`。
+表单、按钮、菜单与浮层沿用 Ant Design 5；知页公开首页、外壳和书库的布局、导航链接、状态筛选与装帧使用语义 DOM 和有作用域的 CSS，基础页面组件在 `StudioUI.tsx`。语言环境为中文：`App.tsx` 中使用 AntD `zh_CN`，`main.tsx` 中使用 dayjs `zh-cn`。反馈（`message`、`modal`）始终来自 `App.useApp()`，以继承 `ConfigProvider` 的主题/语言环境——绝不使用静态导入的 `message.success(...)`。
 
 ```tsx
 // src/App.tsx
-<ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#1677ff' } }}>
+const colors = studioPalette(resolved)
+<ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: colors.primary } }}>
   <AntApp>
     <RouterProvider router={router} />
   </AntApp>
@@ -41,7 +42,8 @@ dayjs.locale('zh-cn')
 
 | 组件 | 契约（源自源码） |
 |-----------|------------------------|
-| `AppLayout` | 顶部 `Layout.Header` 带菜单（`我的项目` / `模型配置`；在 `/admin` 下不高亮任何菜单项），用户名下拉菜单：`用户管理`（仅当 `user.is_admin` 时显示）→ `/admin/users`，`修改密码` → `ChangePasswordModal`，退出登录调用 `useAuthStore().logout()` 后执行 `navigate('/login', { replace: true })`；渲染 `<Outlet/>`，并在底部挂载 `<TaskPanel/>`（仅登录区可见）。 |
+| `AppLayout` | 知页外壳：216px 浅侧栏、56px 顶栏、面包屑与 `<Outlet/>`。`StudioNavigation` 按 `/projects/:pid` 切换全局/项目分组，桌面与移动抽屉共用一份定义，MCP 入口遵循 `mcpEnabled`；项目名称只读 `cachedProject.id === pid` 的缓存。侧栏新建跳 `/projects?create=1`；真实账号菜单保留改密/退出，管理员才显示用户管理。任务计数取 `useTasksStore.active.length`，只在 loaded 后显示，侧栏控制始终挂载的 `<TaskPanel open onOpenChange hideTrigger/>`。移动导航按 `location.key` 关闭，避免在导航 effect 中同步 setState。 |
+| `StudioUI` | `StudioBrand({onClick?})` 在官网页头/页脚与工作区共用，始终链接公开 `/`；hover/focus 显式保持主题前景色，避免 AntD 全局链接悬停色降低暗色可读性，focus-visible 保留主色轮廓。`StudioPage({title, hint?, action?, children})` 提供 `<main>`、h1 与页面边距；`StudioPanel({children})` 为无阴影纸面；`StudioEmpty({title, text, action?})` 提供空态与下一步操作；`ProjectBadge({status})` 使用既有 `PROJECT_STATUS` 枚举标签。 |
 | `RequireAuth` | 路由守卫：`status === 'unknown'` → `<FullPageSpin/>`；`'anonymous'` → `<Navigate to="/login" replace state={{ from: location.pathname + location.search }} />`。`LoginPage` 读取 `state.from`（默认 `/projects`）。 |
 | `RequireAdmin` | 包裹 `/admin/users`（位于 `RequireAuth` 内部）。判定逻辑是 `utils/adminUsers.ts` 中的纯函数 `adminGuard(status, user)`：`'loading'` → `<FullPageSpin/>`，`'login'` → `/login`，`'home'`（非管理员）→ `/`，`'allow'` → children。`is_admin` 只从 `/auth/me` 读取一次；被降级的管理员在刷新前仍会看到菜单，但 API 调用会返回 403 并显示提示信息。 |
 | `ChangePasswordModal` | `{ open; onClose }`。原密码 + 两次输入新密码（`utils/validation`）。成功 → `其他设备上的登录已失效`；后端会重新签发 cookie，因此当前标签页保持登录。400 `原密码不正确` 通过 `errorMessage(err)` 在表单内显示，不会触发全局登出。 |
@@ -49,7 +51,7 @@ dayjs.locale('zh-cn')
 | `StreamOutput` | `{ text; running; placeholder?; maxHeight? = 360 }`。`pre-wrap` 等宽文本框，`running` 时自动滚动到底部，运行中显示一个小的 `Spin`。 |
 | `WizardGenerator<K extends WizardKind>` | `{ projectId; kind: K; existingCount?; showResult?; onDone?(items: WizardItemMap[K][]); onRunningChange?(running) }`。走**后台任务**：`runWizard(...)` 返回 202 `Task` → `useTasksStore.track(task)` → `useTaskStream().follow(task)`；完成时用 `parseWizardDone(kind, result)` 取 items。**挂载时**按 `GET /tasks?project_id&kind=wizard.{kind}&active=true&limit=1` 查活动任务并自动接上（关闭页面 / 弹窗后再打开可继续看实时输出）。`running = 订阅中 \|\| 创建请求中`，表单禁用；`useHasAIConfig() === false` 时开始按钮禁用；运行中显示危险样式按钮（排队时为 `取消排队`，否则 `停止`），调用 `task.cancel()`（`POST /tasks/{id}/cancel`）。排队中显示 `queueLabel(task)` 的 info `Alert`，运行中显示进度条 + `stage`，断线重连时显示警告。取消时显示 `已停止生成，原有数据未改变`；失败 / 中断时 `生成失败` Alert。`onRunningChange` 通过 ref + `[running]` effect 上报。`existingCount > 0` 时显示"将会替换"的 `Alert`。`WizardPage` 的步骤初始取 `?kind=`（没有时按 `resumeWizardStep(project.wizard_progress)` 定位），之后每次导航（`location.key` 变化，含跳到同一 `kind`）都在渲染期按 `kind` 切换步骤。大纲步骤在已有大纲时显示「覆盖现有大纲 / 追加到末尾」切换（`outline_mode`，覆盖提示会先自动存快照、章节只解除关联；追加提示从下一卷下一章继续），追加成功文案 `大纲已追加 N 条`。 |
 | `WizardModal<K>` | 将 `WizardGenerator` 包在 `Modal` 中（`maskClosable={false}`、`destroyOnHidden`、`footer={null}`）。运行中拒绝关闭（`message.warning('正在生成，请等待完成或先停止')`）——任务本身不会因关闭而中断，但面板需要 `onDone` 回调来刷新列表；重新打开会自动接上。完成时：先 `onDone(items)` 再 `onClose()`。被 `WorldPanel`、`CharactersPanel`、`OutlinesPanel` 使用。 |
-| `TaskPanel` | 无 props，挂在 `AppLayout`。挂载时 `useTasksStore.startPolling()`（卸载时停止）。右下角 `FloatButton`（`badge.count = active.length`，tooltip `后台任务`）打开 `Drawer`（宽 520）：Tab「进行中（N）」= store 的 `active`；Tab「最近」= `taskApi.list({ active: false, limit: 50 })`，依赖 store 的 `version`（任务结束 / 本地操作后自动重载）。每行：标题、`TASK_STATUS` 标签、活动任务的 `Progress`、`queueLabel` 或 `stage`、创建 / 结束时间（`formatTime`）、已结束任务的 `error`。操作：成功且 kind 在 `components/entities/taskResultViewers.ts` 注册了结果组件时显示 `查看结果`（`TaskResultModal`，见下方「设定类组件」）；`查看输出`（`TaskOutputModal`：活动任务用 `useTaskStream().follow` 实时显示，已结束读 `/tasks/{id}/output`）、`跳转`（`taskLink`：章节任务 → 编辑器（`chapter.analyze` / `chapter.revise` 带 `?panel=analysis` 打开分析抽屉）；向导任务 → `/projects/{pid}/wizard?kind=…`；`character.generate` / `relations.parse` → 角色页；`organization.generate` → 组织页；`career.generate` → 职业页；`outline.continue` / `outline.expand` → 大纲页；`wizard.careers` → 向导职业步骤）、活动任务 `取消`（Popconfirm → `track(返回的 TaskOut)`）、可重试状态 `重试`（→ `track(新任务)`）、已结束 `删除`（→ `bump()`）。抽屉顶部 `刷新`、`清理已结束`（Popconfirm → `DELETE /tasks?finished=true` → `已清理 N 个已结束任务`）。 |
+| `TaskPanel` | `{ open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean }`。受控时同时传 open/onOpenChange；未传时保留内部开关。`hideTrigger` 只隐藏原 FloatButton，不卸载轮询。挂载时 `useTasksStore.startPolling()`（卸载时停止）；AppLayout 通过侧栏打开 `Drawer`（宽 520）：Tab「进行中（N）」= store 的 `active`；Tab「最近」= `taskApi.list({ active: false, limit: 50 })`，依赖 store 的 `version`（任务结束 / 本地操作后自动重载）。每行：标题、`TASK_STATUS` 标签、活动任务的 `Progress`、`queueLabel` 或 `stage`、创建 / 结束时间（`formatTime`）、已结束任务的 `error`。操作：成功且 kind 在 `components/entities/taskResultViewers.ts` 注册了结果组件时显示 `查看结果`（`TaskResultModal`，见下方「设定类组件」）；`查看输出`（`TaskOutputModal`：活动任务用 `useTaskStream().follow` 实时显示，已结束读 `/tasks/{id}/output`）、`跳转`（`taskLink`：章节任务 → 编辑器（`chapter.analyze` / `chapter.revise` 带 `?panel=analysis` 打开分析抽屉）；向导任务 → `/projects/{pid}/wizard?kind=…`；`character.generate` / `relations.parse` → 角色页；`organization.generate` → 组织页；`career.generate` → 职业页；`outline.continue` / `outline.expand` → 大纲页；`wizard.careers` → 向导职业步骤）、活动任务 `取消`（Popconfirm → `track(返回的 TaskOut)`）、可重试状态 `重试`（→ `track(新任务)`）、已结束 `删除`（→ `bump()`）。抽屉顶部 `刷新`、`清理已结束`（Popconfirm → `DELETE /tasks?finished=true` → `已清理 N 个已结束任务`）。 |
 | `ExportModal` | `{ projectId; open; onClose }`。仅在 `open` 时渲染 `ExportModalInner`（使其 `useLoader` 每次打开都获取最新章节）。格式单选 `txt`/`md`/`epub`；选 EPUB 时显示作者名（默认当前用户名，≤100，留空 = 不署名）与「包含简介页」（默认勾选）；行选择会禁用 `generating` 状态的章节；不选则导出全部。调用 `exportProject(pid, format, {chapterIds, author, includeSynopsis})` 并显示 `已导出：{filename}`；返回的 `warnings`（`X-Export-Warnings`，如跳过的空章节）用 `message.warning` 显示。被 `OverviewPanel` 使用。 |
 | `AutoGrid` | `{ children; minItemWidth? = 260; gap? = 16; mobileColumns? = 1; style? }`。按**容器宽度**自适应列数的 CSS grid：桌面 `repeat(auto-fill, minmax(min(<minItemWidth>px, 100%), 1fr))`，容器比最小宽度还窄时收缩到 100% 不溢出；移动端（`useIsMobile`）固定 `mobileColumns` 列。用于项目页里的卡片 / 统计网格（角色、职业卡片；伏笔统计 `minItemWidth={96} mobileColumns={3}`）。 |
 | `StoryPreview` | 具名导出 `WorldPreview`、`CharacterPreview`、`OutlinePreview`（使用 `utils/outline.ts` 中的 `groupOutlines`/`volumeLabel`）。 |
@@ -88,7 +90,7 @@ dayjs.locale('zh-cn')
 - `OrganizationsPanel`（`/projects/:pid/organizations`，懒加载路由）：左 `Tree`（`buildOrgTree`，标题含类型与成员数），右 `OrgDetail`（`key=org.id`，详情 + 成员表 CRUD）。编辑上级时排除自身与下级（`descendantIds`），路径用 `orgPath`；`parent_id` / `power_level` 清空时显式发 `null`。
 - `RelationshipsPanel`（`/projects/:pid/relationships`，懒加载路由）：Tab「列表」（按角色 / 类别 / 状态筛选、`describeRelation`、编辑 / 历史 / 删除）与「图谱」（`destroyOnHidden`，每次切入重新拉 `/relationship-graph`；按组织（含下级）/ 类别多选 / 隐藏孤立角色筛选（`utils/graphFilter.ts` 的 `filterGraph`），点击节点弹出角色卡）；工具栏 `关系类型`、`新增关系`。
 - `WorldPanel`：`Segmented` 按分类筛选（全部 + 有条目的分类），列表按 `groupWorld` 固定顺序分组；表单新增分类下拉，新建时默认取当前筛选分类。
-- `ProjectLayout.NAV`：在「角色」后新增「组织」「关系」「职业」。`StoryPreview.CharacterPreview` 展示结构化字段（只显示非空行），`WorldPreview` 带分类标签。
+- `StudioNavigation.PROJECT_GROUPS`：在「角色」后新增「组织」「关系」「职业」。`StoryPreview.CharacterPreview` 展示结构化字段（只显示非空行），`WorldPreview` 带分类标签。
 
 ### 职业等级体系（`10-23-career-system`）
 
@@ -189,7 +191,7 @@ dayjs.locale('zh-cn')
 
 - AntD 布局原语（`Layout`、带 `xs`/`xl` 断点的 `Row/Col`、`Space direction="vertical"`、`Card size="small"`）加上内联 `style={{ … }}` 对象。不使用 CSS modules、Tailwind 或 styled-components。
 - 共享的内联样式常量定义在模块级：`const pre: CSSProperties = { whiteSpace: 'pre-wrap', marginBottom: 0 }`（`StoryPreview.tsx`）。模块级常量只放与主题无关的属性；背景 / 边框 / 文字颜色在组件内用 token 合并（`style={{ ...pre, background: token.colorFillQuaternary }}`）。
-- 主题定制只通过 `ConfigProvider theme`（`algorithm` 随明暗切换 + `token.colorPrimary = BRAND_PRIMARY`）；**颜色一律取 `theme.useToken()` 或 `theme/palette.ts`，不得写死**，见下文「主题与配色」。
+- 主题定制通过 `studioPalette(resolved)` 同步 `ConfigProvider theme` 和 CSS 变量（`algorithm` 随明暗切换）；**颜色一律取 `theme.useToken()` 或 `theme/palette.ts`，不得写死**，见下文「主题与配色」。
 - 状态颜色来自标签映射（`CHAPTER_STATUS[s].color`、`PROJECT_STATUS[status].color`），以 `<Tag>` 渲染。
 
 ---
@@ -261,7 +263,7 @@ dayjs.locale('zh-cn')
 
 ### 提示词模板与写作风格（`10-23-prompt-styles`）
 
-后端契约见 [../backend/prompts-styles.md](../backend/prompts-styles.md)。入口：顶栏菜单「提示词模板」「写作风格」（在「模型配置」之后）+ 用户下拉菜单同名两项；两页都是 `router.tsx` 的 `lazyPage` 懒加载路由。
+后端契约见 [../backend/prompts-styles.md](../backend/prompts-styles.md)。入口：`StudioNavigation` 创作资源分组中的「提示词模板」「写作风格」（在「模型配置」之后），桌面侧栏与移动抽屉共用；两页都是 `router.tsx` 的 `lazyPage` 懒加载路由。
 
 | 组件 | 契约 |
 |-----------|------------------------|
@@ -340,9 +342,10 @@ dayjs.locale('zh-cn')
 
 - **主题 store** `theme/themeStore.ts` → `useThemeStore`：`mode: 'light' | 'dark' | 'system'`（localStorage `ainovel.theme`，缺失 / 非法 = `system`）、`systemDark`（`matchMedia('(prefers-color-scheme: dark)')`）；
   `watchSystemTheme()` 由 `App` 挂载时调用并监听 `change`，跟随系统时实时切换；`useResolvedTheme()` = `resolveTheme(mode, systemDark)`。设备级偏好，**不随登录用户重置**。
-- `App.tsx`：`ConfigProvider theme={{ algorithm: resolved === 'dark' ? darkAlgorithm : defaultAlgorithm, token: { colorPrimary: BRAND_PRIMARY } }}`；
-  `theme/ThemeSync` 把 `data-theme`、`color-scheme`（原生滚动条 / 表单控件）以及 `--app-bg` / `--app-text`（取自 token）写到 `<html>`，`index.css` 只用这些变量。
-- 切换：`theme/ThemeSwitch`（浅色 / 暗色 / 跟随系统三段 `Segmented`）。顶栏用 `compact onDarkBar`（只显示图标、局部暗色算法）；移动端在顶栏抽屉里显示带文字的一行。不做切换动画。
+- `theme/palette.ts::studioPalette(resolved)` 是知页颜色 token 的唯一字面量来源（浅/暗两套）。`App.tsx` 由此同步 AntD 的主色、语义色、背景、文字、边框与链接；按钮高 36、控件圆角 7、面板圆角 10，主按钮无静态阴影。图表与阅读器原有独立调色板保留。
+- `ThemeSync` 将所有颜色逐项映射为 `--color-<name>`，并同步 `<html data-theme>`、`color-scheme` 和兼容变量 `--app-bg` / `--app-text`。CSS 与 AntD 共同读取 palette，不从 AntD 派生另一套纸面颜色；本项目不用 Tailwind。
+- `index.css` 本地导入 `@fontsource-variable/fraunces` / `@fontsource-variable/geist`；`--font-display` 为 Fraunces/中文宋体，`--font-sans` 为 Geist/苹方，`--radius-card=10px` / `--radius-control=7px`。正文 14px，桌面标题 30px。
+- `ThemeSwitch compact` 在侧栏账号旁显示当前模式图标，点击打开浅色/暗色/跟随系统菜单；非 compact 继续使用三段 `Segmented`。保留 `ainovel.theme` 设备偏好、系统监听及单独导出的主题纯函数，不随账号重置。
 - **取色规则**：
   - antd 组件与普通 DOM：`const { token } = theme.useToken()`，常用 `colorBgContainer`、`colorFillQuaternary`（浅灰底）、`colorBorderSecondary`（分隔线）、`colorText*`、`colorPrimary` / `colorSuccess` / `colorError` / `colorWarning`、`colorSuccessBg` / `colorErrorBg`（TextDiff 增删底色）、`colorTextLightSolid`（深色顶栏上的白字）。
   - 非 antd 绘制（关系图、伏笔时间线、评分走势）：`theme/usePalette()` → `chartPalette(resolved)`，浅 / 暗两套（`roles` 节点色、`series` 评分线、`grid`、`muted` 等）。`utils/graphFilter.nodeColor(n, palette)` 第二个参数缺省为浅色调色板；`RelationGraph` 另传 `colorMode={resolved}` 给 React Flow。`api/analysis.deltaColor(delta, token)` 由调用方传入 `colorSuccess` / `colorError`。
@@ -355,8 +358,8 @@ dayjs.locale('zh-cn')
 
 - 断点 768px：`hooks/useIsMobile()`（`Grid.useBreakpoint()`，`screens.md === false` 即移动端；首帧断点未算出时按桌面），窗口缩放实时更新。**禁止**直接读 `window.innerWidth`。`useModalWidth(desired)`：移动端返回 `calc(100vw - 24px)`。
 - 全局兜底（`index.css`）：`body { overflow-x: hidden }`；`.ant-table-content { overflow-x: auto }`（所有表格内容超宽时表内横向滚动）；≤767px 时表头 `white-space: nowrap`（列被挤窄时整表横向滚动而不是逐字换行）、`.ant-drawer-content-wrapper { max-width: 100vw }`、非 confirm 的 `.ant-modal` 宽 `calc(100vw - 24px)`。因此一般弹窗 / 抽屉无需逐个改宽度；新写的需要精确宽度的弹窗可用 `useModalWidth`。
-- `AppLayout`：移动端顶栏只留 logo、用户菜单、汉堡按钮（`aria-label="打开菜单"`），导航菜单与主题切换在右侧 `Drawer`。`ProjectLayout`：移动端不渲染 `Sider`，内容区顶部「项目菜单 · 当前页」按钮打开左侧抽屉，选中菜单项后关闭；内边距 12。
-- 完整适配的页面：书架（每行两列）、概览（表单 / 统计单列，`Descriptions column={{ xs: 1, sm: 2 }}`）、章节列表（移动端改为 `List` 卡片：章号 + 标题、状态 / 排队 / 分析标签、字数与时间，「⋮」菜单内编辑 / 阅读 / 删除（`modal.confirm`））、章节编辑器（工具栏只在正文卡片宽度 ≥ `TOOLBAR_IN_HEADER_MIN_WIDTH`（920px，`useElementWidth` 实测，≈ 原 `xxl` 且停靠面板关闭）时放进卡片标题栏，其余宽度放正文上方；移动端 AI 助手卡片收进底部 `Drawer`（85vh，`forceRender`，关闭不丢局部改写状态），由 `FloatButton`（`RobotOutlined`，在任务面板按钮上方，任务运行中带红点）打开）、阅读器、灵感会话（移动端单栏：步骤条横向滚动 `responsive={false}`，「立项草稿与补充想法」按钮打开底部抽屉，抽屉内跳步骤会关闭抽屉）。其余页面只保证无页面级横向溢出。
+- `AppLayout`：移动端顶栏为汉堡按钮（`aria-label="打开菜单"`）、面包屑和账号；全局/项目导航与主题设置均复用左侧 Drawer。`ProjectLayout` 仅负责项目加载、内容与 AgentDock，不再渲染第二个 Sider 或项目菜单；移动内容内边距 12。外壳高 `100dvh`，56px 顶栏以下滚动；AgentDock 桌面高度为 `calc(100dvh - 56px)`。
+- 完整适配的页面：书库（≤539px 单列，540–1099px 两列，1100–1279px 三列，≥1280px 四列）、概览（表单 / 统计单列，`Descriptions column={{ xs: 1, sm: 2 }}`）、章节列表（移动端改为 `List` 卡片：章号 + 标题、状态 / 排队 / 分析标签、字数与时间，「⋮」菜单内编辑 / 阅读 / 删除（`modal.confirm`））、章节编辑器（工具栏只在正文卡片宽度 ≥ `TOOLBAR_IN_HEADER_MIN_WIDTH`（920px，`useElementWidth` 实测，≈ 原 `xxl` 且停靠面板关闭）时放进卡片标题栏，其余宽度放正文上方；移动端 AI 助手卡片收进底部 `Drawer`（85vh，`forceRender`，关闭不丢局部改写状态），由 `FloatButton`（`RobotOutlined`，在任务面板按钮上方，任务运行中带红点）打开）、阅读器、灵感会话（移动端单栏：步骤条横向滚动 `responsive={false}`，「立项草稿与补充想法」按钮打开底部抽屉，抽屉内跳步骤会关闭抽屉）。其余页面只保证无页面级横向溢出。
 - **项目页内容区宽度 ≠ 视口宽度**：右侧停靠面板（默认 400px，可调 320–720）打开时内容区会变窄，所以 `ProjectLayout` 下的页面**不要**用 `<Col xs md xl>` / `Grid.useBreakpoint()` 这类按视口断点的分列或判断：
   - 卡片 / 统计网格用 `AutoGrid`。
   - 两栏 / 多栏用 `utils/layout.ts`：`splitRow`（flex 换行、`gap: 16`）+ `splitPane(basis)`（`flex: basis 1 basis px`，`minWidth: 0`，剩余空间按基准宽度等比分配，比例与原 `Col` 一致），各栏基准之和放不下就上下堆叠。现用：组织树 / 详情 240 / 480，记忆与知识库 600 / 300，章节编辑器正文 / AI 助手 640 / 264，概览统计 200 / 200 / 400；概览表单行用 `{ ...splitRow, rowGap: 0 }`，题材 + 状态作为一组（360，内含 172 / 172），窄时书名独占一行、二者并排。
@@ -384,12 +387,34 @@ dayjs.locale('zh-cn')
 - 任务面板：`book.import` 暂停时 `canSkipBookImport(task)`（kind 为 `book.import`、`status === 'paused'`、断点摘要 `pause_reason.reason === 'failed'`）才显示「跳过本批」（Popconfirm → `taskApi.skipBookImport` → `track`），与「继续」「结束」并列，并在行内显示 `bookImportPauseText`；取消确认文案说明已写入的内容保留。`TaskOutputModal` 对 `book.import` 显示「通读 x/y 批」（初值 `bookImportBatches(checkpoint)`，`batch_end` 事件推进）。`TaskPanel` 在入口 chunk：只能静态 import `utils/bookImportState.ts`（轻量读取），完整收窄 `bookImportSummary` 与结果组件 `bookImport/BookImportResultView`（已在 `taskResultViewers` 懒加载注册：写入统计 `statRows`、跳过项 `skippedText`、警告）都在懒加载 chunk 里。
 - 测试（node 环境）：`utils/bookImport.test.ts`（上传前检查、提示筛选、操作可用性、步骤流转、深度分析默认值按 100 章、范围校验、409 只认 `code`、摘要收窄与「跳过本批」条件含 kind）、`api/bookImport.test.ts`（路径 / 方法 / 请求体、stale 409 后重新拉取、无标记的 409 原样抛出）、`components/bookImport/mobile.test.ts`（`react-dom/server` 渲染：移动端卡片、无表头、操作在菜单里）。
 
-### 书架（`pages/ProjectListPage.tsx`，`10-27-reader-ui`）
+### 公开官网首页（`pages/HomePage.tsx`，`10-29-zhiye-library-ui`）
 
-- 顶部「我的书架」+ 统计（作品数 / 连载中（`status = writing`）/ 总字数，`shelfStats`）；工具栏：搜索（书名 + 标签，大小写不敏感）、排序（最近更新 / 创建时间 / 书名 `localeCompare zh` / 字数）、状态筛选，三者存 localStorage `ainovel.shelf`（`readShelfPrefs` / `writeShelfPrefs`，`parseShelfPrefs` 容错）。纯函数都在 `utils/shelf.ts`。
-- 网格 `Col xs=12 sm=8 md=6 xl=4`（手机两列）；第一张固定「新建」卡（新建项目 / 灵感模式 / 拆书导入 / 导入备份）。
-- `components/shelf/BookCover`：2:3 文字封面，`coverColor(title, resolved)` = FNV-1a 哈希 → 12 色相，浅 / 暗主题明度不同，浅色文字，对比度 < 4.5 时逐步压暗底色；左侧加深书脊；书名衬线体最多 3 行、题材在底部；`coverUrl` 有值时直接显示图片（封面任务接入点）。
-- 卡片：书名、状态标签、前 3 个类型标签、`wordsProgress` 进度条（没有目标只显示字数）、「N 章 · 相对时间更新」（`utils/time.formatRelative`）。按钮：「继续写作」→ `continueTarget`（`last_edited_chapter_id` 的编辑器，否则概览）；「阅读」→ `readTarget`（有 `reading` 到该章，否则 `/projects/:id/read` 自动定位），文案 `readingLabel`（「读到第 N 章」/「开始阅读」），`canRead` 为假（没有已写章节）时禁用；「⋮」菜单：概览 / 导出（`ExportModal`）/ 备份（`BackupModal`，lazy）/ 删除（`modal.confirm`）。
+- `/` 是独立 `lazyPage` 公开路由，不包在 `RequireAuth` 或 `AppLayout` 中；原业务仍由无 path 的 `RequireAuth + AppLayout` 路由组保护，阅读器继续使用独立的受保护全屏组，管理员守卫不变。
+- 首页只读取现有 `useAuthStore.status/registrationEnabled`，不加载私有作品或后台任务。公开文案与 CSS 书本/稿纸插画标明「功能示意」「创作方向示例」，不引入原型作品 id、作者、统计或体验账号。
+- `CreationEntry`：认证状态 unknown 时禁用；已登录链接 `/projects?create=1` 共用立项表单；匿名且开放注册时打开 register 欢迎弹窗；关闭注册时显示「登录开始创作」并打开 login 欢迎弹窗。页头匿名「登录」也先打开 login 欢迎弹窗；已登录「进入空间」直达 `/projects`。「看看创作台」仍走 `/projects`，由原守卫记录返回目标。
+- `components/auth/HomeEntryDialog({mode, onClose})` 用AntD Modal呈现460px纸面欢迎入口，桌面top112px；≤767px时top24px、两边16px缩进、内容限高并可滚动。AntD负责Escape/遮罩关闭、焦点限制及回到触发按钮；次入口用ref记录意图，在 `afterClose`（触发焦点还原之后）聚焦 `#stories[tabIndex=-1]` 并滚动，尊重减少动画偏好。欢迎面板是通用产品说明，不显示体验账号/私人作品。主CTA按注册开关去 `/login` 或 `/login?tab=register`；unknown禁用，已认证不显示弹窗。
+- `LoginPage` 的查询串契约保留：`?tab=register` 选择注册；`registrationEnabled === false` 时强制登录模式且隐藏注册标签，不能通过参数绕过部署开关。切标签使用 `setSearchParams(..., {replace: true, state: location.state})` 保留 `state.from`；认证成功仍回原目标，缺省为 `/projects`。
+- 创作能力与方向示例使用本地 state，选项卡有 ARIA 关联、单一 Tab 焦点和方向键/Home/End；FAQ 用 button 的 `aria-expanded/aria-controls` 与答案 hidden 联动。区段锚点和页脚回顶部可用，`prefers-reduced-motion` 时关闭平滑滚动/过渡。
+- 1440px 桌面画板总高2400px；≤767px 导航换行、插画/能力/流程/FAQ纵排，窄屏自然高度。必须检查320/375/768/1024/1440px文档和区段横向溢出；装饰插画允许在自身 overflow:hidden 容器内裁切，不能裁切主要内容来掩盖溢出。
+
+### 登录与注册（`pages/LoginPage.tsx`，`10-29-zhiye-library-ui`）
+
+- 独立 `/login` 认证页无工作区侧栏。桌面1.05fr/1fr：左侧panel色品牌、倾斜242×340px书册、标语与页脚，右侧paper色、最大380px表单。≤767px纵排，隐藏装饰书册和侧栏页脚，保留品牌/标语；所有颜色跟随现有主题token。
+- `assets/auth-mountain-story.jpg` 是设计提供的静态装饰，仅在认证页的 `aria-hidden` 装帧使用；配文「故事初章/装帧示意」，不当作真实项目封面、不带假作者或项目id。
+- Form 继续调用 `useAuthStore.login/register`，共享 `usernameRules/passwordRules/confirmPasswordRules`；保留用户名trim、autoComplete、确认密码依赖、`errorMessage`与可访问Alert。提交中禁用字段、按钮及标签，onChange/submit也有忙碌guard，避免切模式与请求竞态。
+- 注册帮助准确描述至少6个字符且UTF-8最多72字节；前端保留共享字符校验，字节上限仍由后端Password校验，422原样经API错误映射展示。不新增重置密码接口，帮助文案指向实例管理员。
+- 验收：公开欢迎弹窗的去登录/创建账户目标、注册开关、Escape/遮罩/焦点/次入口；独立登录/注册截图、必填和确认密码校验、真实401/重复账号错误、登录回原章节、暗色及320/375/768/1024/1440px无横向溢出。不得用假成功提示替代真实认证，也不为样式写镜像测试。
+
+### 书库（`pages/ProjectListPage.tsx`，`10-29-zhiye-library-ui`）
+
+- 路由仍为 `/projects`；真实数据来自 `projectApi.list` → `useLoader`。标题「我的作品」+ 作品数/总字数（`shelfStats`），不引入设计稿的 data.ts、示例封面、固定作者或任务数。
+- `ShelfPrefs = {query, sort, status, view: 'shelf' | 'list'}` 存 `ainovel.shelf`。`parseShelfPrefs` 容错，旧对象缺 view 默认 shelf；搜索覆盖书名/题材/标签，大小写不敏感；保留最近更新/创建时间/书名/字数排序。状态按钮显示既有后端标签「连载中/构思中/已完结」，用 `aria-pressed` 标示选择；卡片按设计显示简介，标签仍可搜索。
+- `latestWritingProject(projects)` 只选 `last_edited_chapter_id !== null` 的作品，按已有 `updated_at` 倒序（同刻 id 倒序）；不伪称拥有独立的全局章节编辑时间字段。`ContinueWriting` 只读取该作品的 `chapterApi.list` 摘要，按 id 匹配真实章号/标题，失败时显示作品名且保留 `continueTarget`。无已写章节不显示继续条，不构造卷名或章节；200位无空格书名必须单行省略，title 保留全文，不能依赖外壳裁切。
+- CSS grid 桌面四列、24px 列间距；`LibraryBookCard` 复用于书架/列表。新建按钮在侧栏及页头；页尾为灵感立项、拆书导入与恢复备份。加载显示 Skeleton 与 `aria-busy`；失败显示错误和重试；空库和无匹配分别提供新建/清除筛选，不能把请求失败显示成空库。
+- `BookCover({title, genre?, author?, coverUrl?, onClick?, compact?})`：默认仍为概览封面管理的 2:3 装帧（原 `coverColor` 与对比度测试保留）；compact 为书库174px高横版，书脊/纸页及 sage/night/sand 配色来自 palette，缺图为几何纹样+文字。真实图以 contain 完整显示，URL 保留 `coverUrl` 的微秒版本参数；加载失败回退文字，URL 更新后重新显示图片。署名沿用导出约定取当前账户名，不复制原型作者。
+- 卡片显示状态、两行简介（synopsis → premise → 构思提示）、章数/字数/更新时间、可选目标进度与继续/开始创作。更多菜单保留阅读（`readingLabel/readTarget/canRead`）、概览、导出、备份、确认删除；阅读仍传 `{state: {from: '/projects'}}`，无已写章节时禁用。
+- `CreateProjectModal({open, onClose, onCreated})` 由 `?create=1` 共用打开，关闭只清除此参数；保留书名/题材/设定/风格及 `ProjectInfoFields`，创建期间禁用冲突操作。提交仍经 `projectInfoBody` + `projectApi.create`，成功进入 `/projects/:id/wizard`。导出/备份/恢复沿用原组件与接口，备份弹窗保持懒加载。
+- 必需验证：`utils/shelf.test.ts` 覆盖题材/标签搜索、旧偏好及非法 view、近期作品选择；保留原封面微秒 URL / 配色对比度测试。浏览器检查真实 API、新建高级字段、导出、菜单、空/错误重试、主题持久化和320/375/768/1024/1440px溢出；样式不写镜像测试。
 
 ### 阅读器（`pages/ReaderPage.tsx`，`10-27-reader-ui`）
 
@@ -461,8 +486,8 @@ dayjs.locale('zh-cn')
 
 后端契约见 [../backend/skills-mcp.md](../backend/skills-mcp.md)。
 
-- **入口与懒加载**：顶栏 `navItems` 在「写作风格」之后加「Skill」（`/skills`）与「MCP 插件」（`/mcp-plugins`），两页都是 `router.tsx` 的 `lazyPage` 路由，
-  代码不进入口 chunk。**MCP 关闭时隐藏入口**：`useAuthStore.mcpEnabled` 取自 `GET /auth/config` 的 `mcp_enabled`（读取失败按开启处理），为 false 时顶栏与
+- **入口与懒加载**：`StudioNavigation` 创作资源分组提供「写作技能」（`/skills`）与「MCP 插件」（`/mcp-plugins`），桌面侧栏与移动抽屉共用，两页都是 `router.tsx` 的 `lazyPage` 路由，
+  代码不进入口 chunk。**MCP 关闭时隐藏入口**：`useAuthStore.mcpEnabled` 取自 `GET /auth/config` 的 `mcp_enabled`（读取失败按开启处理），为 false 时共用导航与
   智能体面板都不渲染 MCP 相关控件；直接访问 `/mcp-plugins` 时列表请求 403，页面显示错误 `Alert` 并禁用「添加插件」。
 - **`pages/SkillsPage`**：`useSkills()` 读 store；Tabs「我的（N）」/「全局（N）」，卡片网格（`Row` / `Col xs=24`，375 宽度无固定宽度）。普通用户在全局 Tab 看到说明
   「全局 Skill 由管理员维护，只读；复制为我的之后可以修改」，且全局 Tab 上不显示新建 / 导入按钮；管理员在全局 Tab 新建 / 导入的归入全局，其余归入「我的」。
