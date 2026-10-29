@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   MenuOutlined,
   SettingOutlined,
+  ShopOutlined,
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons'
@@ -44,6 +45,7 @@ export default function AppLayout() {
 
   const userMenuItems: MenuProps['items'] = [
     { key: 'prompt-templates', icon: <FileTextOutlined />, label: '提示词模板' },
+    { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
     { key: 'styles', icon: <BgColorsOutlined />, label: '写作风格库' },
     { type: 'divider' as const },
     ...(user?.is_admin ? [{ key: 'admin-users', icon: <TeamOutlined />, label: '用户管理' }] : []),
@@ -57,6 +59,8 @@ export default function AppLayout() {
     ? ['settings']
     : path.startsWith('/prompt-templates')
       ? ['prompts']
+      : path.startsWith('/workshop')
+        ? ['workshop']
       : path.startsWith('/styles')
         ? ['styles']
         : path.startsWith('/skills')
@@ -72,6 +76,7 @@ export default function AppLayout() {
     { key: 'settings', icon: <SettingOutlined />, label: <Link to="/settings/ai">模型配置</Link> },
     { key: 'prompts', icon: <FileTextOutlined />, label: <Link to="/prompt-templates">提示词模板</Link> },
     { key: 'styles', icon: <BgColorsOutlined />, label: <Link to="/styles">写作风格</Link> },
+    { key: 'workshop', icon: <ShopOutlined />, label: <Link to="/workshop">提示词工坊</Link> },
     { key: 'skills', icon: <BulbOutlined />, label: <Link to="/skills">Skill</Link> },
     // 部署关闭 MCP（/auth/config mcp_enabled = false）时隐藏入口
     ...(mcpEnabled ? [{ key: 'mcp', icon: <ApiOutlined />, label: <Link to="/mcp-plugins">MCP 插件</Link> }] : []),
@@ -99,6 +104,7 @@ export default function AppLayout() {
             onClick: async ({ key }) => {
               if (key === 'admin-users') navigate('/admin/users')
               else if (key === 'prompt-templates') navigate('/prompt-templates')
+              else if (key === 'workshop') navigate('/workshop')
               else if (key === 'styles') navigate('/styles')
               else if (key === 'change-password') setPasswordOpen(true)
               else if (key === 'logout') {

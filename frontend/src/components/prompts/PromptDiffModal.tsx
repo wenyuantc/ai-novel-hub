@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Modal, Space, Typography } from 'antd'
 import TextDiff from '../TextDiff'
 
@@ -13,13 +14,14 @@ interface Props {
   /** 说明 a / b 分别是什么 */
   hint?: string
   pairs: DiffPair[]
+  footer?: ReactNode
   onClose: () => void
 }
 
 /** 模板差异对比（系统段 / 用户段各一份逐字 diff），复用章节版本的 TextDiff。 */
-export default function PromptDiffModal({ open, title, hint, pairs, onClose }: Props) {
+export default function PromptDiffModal({ open, title, hint, pairs, footer = null, onClose }: Props) {
   return (
-    <Modal open={open} title={title} onCancel={onClose} footer={null} width={900} destroyOnHidden>
+    <Modal open={open} title={title} onCancel={onClose} footer={footer} width={900} destroyOnHidden>
       <Space direction="vertical" style={{ width: '100%' }}>
         {hint && <Typography.Text type="secondary">{hint}</Typography.Text>}
         {pairs.map((p) => (

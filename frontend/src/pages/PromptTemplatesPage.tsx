@@ -1,11 +1,13 @@
-import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ReloadOutlined, ShareAltOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Col, Empty, Menu, Row, Space, Spin, Tag, Typography } from 'antd'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { downloadJson } from '../api/cards'
 import { errorMessage } from '../api/client'
 import { MAX_PROMPT_IMPORT_BYTES, promptApi } from '../api/prompts'
-import type { PromptImportResult } from '../api/types'
+import type { PromptImportResult, WorkshopSubmit } from '../api/types'
+import ShareToWorkshopModal from '../components/workshop/ShareToWorkshopModal'
+import { promptShare } from '../utils/workshop'
 import JsonImportButton from '../components/JsonImportButton'
 import PromptEditor from '../components/prompts/PromptEditor'
 import PromptImportResultModal from '../components/prompts/PromptImportResultModal'
@@ -23,6 +25,8 @@ export default function PromptTemplatesPage() {
   const names = useMemo(() => Object.fromEntries(list.map((t) => [t.key, t.name])), [list])
   const selected = searchParams.get('key') ?? list[0]?.key ?? null
   const dirtyRef = useRef(false)
+  const [sharing, setSharing] = useState(false)
+  const [share, setShare] = useState<WorkshopSubmit | null>(null)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [importResult, setImportResult] = useState<PromptImportResult | null>(null)
@@ -42,6 +46,16 @@ export default function PromptTemplatesPage() {
       cancelText: '继续编辑',
       onOk: go,
     })
+  }
+
+  const handleShare = async () => {
+    if (!selected) return
+    setSharing(true)
+    try {
+      const initial = promptShare(await promptApi.get(selected))
+      if (initial) setShare(initial)
+      else message.warning('请先保存自己的模板覆盖，再分享到工坊')
+    } catch (err) { message.error(errorMessage(err)) } finally { setSharing(false) }
   }
 
   const handleExport = async () => {
@@ -81,7 +95,10 @@ export default function PromptTemplatesPage() {
             每个 AI 功能一个模板。修改并保存后成为我的覆盖，对我的全部项目生效；JSON 输出结构等锁定内容由系统提供，只能调整位置。
           </Typography.Text>
         </div>
-        <Space>
+        <Space wrap>
+          <Button icon={<ShareAltOutlined />} loading={sharing} disabled={!list.find((t) => t.key === selected)?.overridden} onClick={() => void handleShare()}>
+            分享到工坊
+          </Button>
           <Button icon={<ReloadOutlined />} onClick={reload}>
             刷新
           </Button>
@@ -142,6 +159,7 @@ export default function PromptTemplatesPage() {
           )}
         </Col>
       </Row>
+      {share && <ShareToWorkshopModal initial={share} onClose={() => setShare(null)} />}
       <PromptImportResultModal result={importResult} names={names} onClose={() => setImportResult(null)} />
     </div>
   )

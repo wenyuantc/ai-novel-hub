@@ -2677,3 +2677,74 @@ export interface McpToolPrefUpdate { enabled?: boolean; auto_confirm?: boolean }
 /** PATCH /mcp-plugins/{id}/tools 的请求体：工具名在 body 里 */
 export interface McpToolPrefRequest extends McpToolPrefUpdate { tool: string }
 export interface McpCallResult { text: string; is_error: boolean; truncated: boolean }
+
+// ---------------- 实例内提示词工坊（backend/app/schemas/workshop.py） ----------------
+
+export type WorkshopKind = 'style' | 'prompt'
+export type WorkshopCategory = 'general' | 'xuanhuan' | 'wuxia' | 'romance' | 'scifi' | 'suspense' | 'history' | 'urban' | 'other'
+export type WorkshopSubmissionStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
+
+export interface WorkshopMetadata {
+  category: WorkshopCategory
+  tags: string[]
+}
+
+export interface WorkshopSubmit extends WorkshopMetadata {
+  kind: WorkshopKind
+  item_id?: number | null
+  prompt_key?: string | null
+  name: string
+  description: string
+  content: Record<string, string>
+  is_anonymous: boolean
+}
+
+export interface WorkshopItem extends WorkshopMetadata {
+  id: number
+  kind: WorkshopKind
+  prompt_key: string | null
+  name: string
+  description: string
+  content: Record<string, string>
+  author_name: string | null
+  author_username: string | null
+  is_mine: boolean
+  is_anonymous: boolean
+  is_official: boolean
+  status: 'active' | 'hidden'
+  hidden_by: 'author' | 'admin' | null
+  like_count: number
+  download_count: number
+  liked: boolean
+  imported: boolean
+  published_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkshopSubmission extends WorkshopMetadata {
+  id: number
+  item_id: number | null
+  kind: WorkshopKind
+  prompt_key: string | null
+  name: string
+  description: string
+  content: Record<string, string>
+  is_anonymous: boolean
+  author_name: string | null
+  author_username: string | null
+  status: WorkshopSubmissionStatus
+  review_note: string
+  reviewed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkshopItemList { items: WorkshopItem[]; total: number }
+export interface WorkshopSubmissionList { items: WorkshopSubmission[]; total: number }
+export interface WorkshopImportResult {
+  style_id: number | null
+  prompt_key: string | null
+  download_count: number
+  imported: boolean
+}

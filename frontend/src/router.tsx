@@ -47,6 +47,7 @@ export const router = createBrowserRouter([
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },
+      { path: 'workshop', lazy: lazyPage(() => import('./pages/WorkshopPage')) },
       { path: 'styles', lazy: lazyPage(() => import('./pages/StylesPage')) },
       { path: 'skills', lazy: lazyPage(() => import('./pages/SkillsPage')) },
       { path: 'mcp-plugins', lazy: lazyPage(() => import('./pages/McpPluginsPage')) },

@@ -7,14 +7,17 @@ import {
   EyeOutlined,
   FileSearchOutlined,
   PlusOutlined,
+  ShareAltOutlined,
 } from '@ant-design/icons'
 import { Alert, App, Button, Card, Col, Empty, Row, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useMemo, useState } from 'react'
 import { downloadJson } from '../api/cards'
 import { errorMessage } from '../api/client'
 import { MAX_STYLE_IMPORT_BYTES, styleApi } from '../api/styles'
-import type { StyleDraft, WritingStyle } from '../api/types'
+import type { StyleDraft, WorkshopSubmit, WritingStyle } from '../api/types'
 import JsonImportButton from '../components/JsonImportButton'
+import ShareToWorkshopModal from '../components/workshop/ShareToWorkshopModal'
+import { styleShare } from '../utils/workshop'
 import StyleEditDrawer from '../components/styles/StyleEditDrawer'
 import StyleExtractModal from '../components/styles/StyleExtractModal'
 import type { TrialTarget } from '../components/styles/StyleTrialDrawer'
@@ -35,6 +38,7 @@ export default function StylesPage() {
   const [editing, setEditing] = useState<Editing>(null)
   const [extractOpen, setExtractOpen] = useState(false)
   const [trial, setTrial] = useState<TrialTarget | null>(null)
+  const [share, setShare] = useState<WorkshopSubmit | null>(null)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
 
@@ -167,6 +171,9 @@ export default function StylesPage() {
           >
             试写
           </Button>,
+          <Button key="share" type="link" size="small" icon={<ShareAltOutlined />} onClick={() => setShare(styleShare(s))}>
+            分享到工坊
+          </Button>,
           <Button key="del" type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDelete(s)}>
             删除
           </Button>,
@@ -190,6 +197,7 @@ export default function StylesPage() {
           }
           actions={actions}
           style={{ height: '100%' }}
+          styles={{ actions: { flexWrap: 'wrap' } }}
         >
           <Typography.Paragraph type={s.description ? undefined : 'secondary'} ellipsis={{ rows: 2 }}>
             {s.description || '（没有一句话描述）'}
@@ -276,6 +284,7 @@ export default function StylesPage() {
           setEditing({ style: s })
         }}
       />
+      {share && <ShareToWorkshopModal initial={share} onClose={() => setShare(null)} />}
       <StyleTrialDrawer target={trial} onClose={() => setTrial(null)} />
     </div>
   )
