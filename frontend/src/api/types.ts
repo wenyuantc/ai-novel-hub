@@ -132,6 +132,8 @@ export interface Project {
   updated_at: string
   chapter_count: number
   total_words: number
+  /** 封面版本；null = 无封面，图片通过独立接口读取 */
+  cover_updated_at: string | null
   /** AI 生成 / 润色 / 按建议重写成功后自动排队分析本章（默认 true） */
   auto_analyze: boolean
   /** 向导进度（outline-pro）：步骤名由前端定义（WIZARD_STEP_KEYS），后端不校验取值 */
@@ -154,6 +156,17 @@ export interface Project {
   last_edited_chapter_id: number | null
   /** 阅读进度（reader-ui）；从未阅读为 null。进度指向的章节已删除时后端退回之前最近的已写章节 */
   reading: ReadingPosition | null
+}
+
+/** POST /projects/{pid}/cover/generate：仅返回预览，确认时再上传。 */
+export interface CoverPreview {
+  image_base64: string
+  mime_type: string
+}
+
+export interface CoverGenerateRequest {
+  prompt: string
+  config_id?: number
 }
 
 /** ProjectOut.reading */

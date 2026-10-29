@@ -1,5 +1,5 @@
-import { api, buildUrl, handleErrorResponse, ApiError, type QueryValue } from './client'
-import type { Project, ProjectCreate, ProjectStatus, ProjectUpdate, WizardProgressUpdate } from './types'
+import { api, buildUrl, handleErrorResponse, ApiError, request, type QueryValue } from './client'
+import type { CoverGenerateRequest, CoverPreview, Project, ProjectCreate, ProjectStatus, ProjectUpdate, WizardProgressUpdate } from './types'
 
 export const projectApi = {
   list: () => api.get<Project[]>('/projects'),
@@ -11,6 +11,23 @@ export const projectApi = {
   updateWizardProgress: (id: number, body: WizardProgressUpdate) =>
     api.patch<Project>(`/projects/${id}/wizard-progress`, body),
 }
+
+/** 直接保留服务端时间戳精度作版本参数，替换封面后不会命中旧图缓存。 */
+export function coverUrl(project: Pick<Project, 'id' | 'cover_updated_at'>): string | null {
+  return project.cover_updated_at ? buildUrl(`/projects/${project.id}/cover`, { v: project.cover_updated_at }) : null
+}
+
+/** 手动上传与 AI 确认共用唯一的封面写入接口。 */
+export function uploadCover(id: number, file: Blob): Promise<Project> {
+  const form = new FormData()
+  form.append('file', file, file instanceof File ? file.name : 'cover')
+  return request<Project>(`/projects/${id}/cover`, { method: 'PUT', body: form })
+}
+
+export const deleteCover = (id: number) => request<Project>(`/projects/${id}/cover`, { method: 'DELETE' })
+export const coverPrompt = (id: number) => api.get<{ prompt: string }>(`/projects/${id}/cover/prompt`)
+export const generateCover = (id: number, body: CoverGenerateRequest, signal?: AbortSignal) =>
+  api.post<CoverPreview>(`/projects/${id}/cover/generate`, body, signal)
 
 export const PROJECT_STATUS: Record<ProjectStatus, { label: string; color: string }> = {
   planning: { label: '构思中', color: 'blue' },

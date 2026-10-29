@@ -8,6 +8,7 @@ import { PROJECT_STATUS, projectApi } from '../../api/projects'
 import type { Project, ProjectStatus, ProjectUpdate } from '../../api/types'
 import ExportModal from '../../components/ExportModal'
 import ProjectInfoFields from '../../components/ProjectInfoFields'
+import CoverPanel from '../../components/project/CoverPanel'
 import StyleSelect from '../../components/styles/StyleSelect'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
@@ -208,84 +209,91 @@ function OverviewInner({ project }: { project: Project }) {
         </div>
       </div>
       <Card title="基本信息">
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{
-            title: project.title,
-            genre: project.genre,
-            premise: project.premise,
-            default_style_id: project.default_style_id,
-            status: project.status,
-            synopsis: project.synopsis,
-            theme: project.theme,
-            tags: project.tags,
-            selling_points: project.selling_points,
-            audience: project.audience,
-            target_words: project.target_words,
-          }}
-          style={{ maxWidth: 760 }}
-        >
-          <div style={formRow}>
-            <div style={splitPane(360)}>
-              <Form.Item
-                name="title"
-                label="书名"
-                rules={[
-                  { required: true, whitespace: true, message: '请输入书名' },
-                  { max: 200, message: '不超过 200 字' },
-                ]}
-              >
-                <Input />
-              </Form.Item>
-            </div>
-            <div style={{ ...splitPane(360), ...formRow }}>
-              <div style={splitPane(172)}>
-                <Form.Item name="genre" label="题材" rules={[{ max: 100, message: '不超过 100 字' }]}>
-                  <Input />
-                </Form.Item>
-              </div>
-              <div style={splitPane(172)}>
-                <Form.Item name="status" label="状态">
-                  <Select<ProjectStatus>
-                    options={(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map((s) => ({
-                      value: s,
-                      label: PROJECT_STATUS[s].label,
-                    }))}
-                  />
-                </Form.Item>
-              </div>
-            </div>
+        <div style={splitRow}>
+          <div style={{ flex: '0 0 180px', maxWidth: '100%' }}>
+            <CoverPanel project={project} />
           </div>
-          <Form.Item name="premise" label="一句话设定" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
-            <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
-          </Form.Item>
-          <ProjectInfoFields />
-          <Form.Item
-            name="default_style_id"
-            label="默认写作风格"
-            extra={
-              <span>
-                章节生成、润色、重写与局部改写默认使用该风格（章节可单独覆盖）；向导与设定生成只带它的一句话描述。
-                <Link to="/styles">去风格库管理</Link>
-              </span>
-            }
-          >
-            <StyleSelect placeholder="不用风格" />
-          </Form.Item>
-          <Space>
-            <Button type="primary" loading={saving} onClick={() => void handleSave()}>
-              保存
-            </Button>
-            <Button danger onClick={handleDelete}>
-              删除项目
-            </Button>
-          </Space>
-        </Form>
-        <Descriptions size="small" style={{ marginTop: 24 }} column={{ xs: 1, sm: 2 }}>
-          <Descriptions.Item label="创建时间">{formatTime(project.created_at)}</Descriptions.Item>
-          <Descriptions.Item label="更新时间">{formatTime(project.updated_at)}</Descriptions.Item>
-        </Descriptions>
+          <div style={splitPane(360)}>
+            <Form
+              form={form}
+              layout="vertical"
+              initialValues={{
+                title: project.title,
+                genre: project.genre,
+                premise: project.premise,
+                default_style_id: project.default_style_id,
+                status: project.status,
+                synopsis: project.synopsis,
+                theme: project.theme,
+                tags: project.tags,
+                selling_points: project.selling_points,
+                audience: project.audience,
+                target_words: project.target_words,
+              }}
+              style={{ maxWidth: 760 }}
+            >
+              <div style={formRow}>
+                <div style={splitPane(360)}>
+                  <Form.Item
+                    name="title"
+                    label="书名"
+                    rules={[
+                      { required: true, whitespace: true, message: '请输入书名' },
+                      { max: 200, message: '不超过 200 字' },
+                    ]}
+                  >
+                    <Input />
+                  </Form.Item>
+                </div>
+                <div style={{ ...splitPane(360), ...formRow }}>
+                  <div style={splitPane(172)}>
+                    <Form.Item name="genre" label="题材" rules={[{ max: 100, message: '不超过 100 字' }]}>
+                      <Input />
+                    </Form.Item>
+                  </div>
+                  <div style={splitPane(172)}>
+                    <Form.Item name="status" label="状态">
+                      <Select<ProjectStatus>
+                        options={(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map((s) => ({
+                          value: s,
+                          label: PROJECT_STATUS[s].label,
+                        }))}
+                      />
+                    </Form.Item>
+                  </div>
+                </div>
+              </div>
+              <Form.Item name="premise" label="一句话设定" rules={[{ max: 5000, message: '不超过 5000 字' }]}>
+                <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
+              </Form.Item>
+              <ProjectInfoFields />
+              <Form.Item
+                name="default_style_id"
+                label="默认写作风格"
+                extra={
+                  <span>
+                    章节生成、润色、重写与局部改写默认使用该风格（章节可单独覆盖）；向导与设定生成只带它的一句话描述。
+                    <Link to="/styles">去风格库管理</Link>
+                  </span>
+                }
+              >
+                <StyleSelect placeholder="不用风格" />
+              </Form.Item>
+              <Space>
+                <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+                  保存
+                </Button>
+                <Button danger onClick={handleDelete}>
+                  删除项目
+                </Button>
+              </Space>
+            </Form>
+            <Descriptions size="small" style={{ marginTop: 24 }} column={{ xs: 1, sm: 2 }}>
+              <Descriptions.Item label="创建时间">{formatTime(project.created_at)}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{formatTime(project.updated_at)}</Descriptions.Item>
+            </Descriptions>
+          </div>
+        </div>
       </Card>
       <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />
       {backupOpen && (

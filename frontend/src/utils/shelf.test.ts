@@ -37,6 +37,7 @@ function p(over: Partial<Project>): Project {
     target_words: null,
     last_edited_chapter_id: null,
     reading: null,
+    cover_updated_at: null,
     ...over,
   }
 }

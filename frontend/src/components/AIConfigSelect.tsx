@@ -1,34 +1,40 @@
-import { Alert, Select, Space, Typography } from 'antd'
+import { Alert, App, Select, Space, Typography } from 'antd'
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { PROVIDER_LABELS } from '../api/aiConfigs'
+import { errorMessage } from '../api/client'
+import type { ModelType } from '../api/types'
 import { useShallow } from 'zustand/react/shallow'
-import { selectTextConfigs, useAIConfigStore } from '../stores/aiConfigs'
+import { useAIConfigStore } from '../stores/aiConfigs'
 
 interface Props {
+  id?: string
   value?: number | null
   onChange?: (value: number | null) => void
   disabled?: boolean
+  modelType?: ModelType
 }
 
-/** 选择生成所用的文本模型配置；留空表示使用默认配置。无配置时引导去配置页。 */
-export default function AIConfigSelect({ value, onChange, disabled }: Props) {
+/** 按模型类型选择配置；留空表示使用该类型默认配置。无配置时引导去配置页。 */
+export default function AIConfigSelect({ id, value, onChange, disabled, modelType = 'text' }: Props) {
+  const { message } = App.useApp()
   const { loaded, loading, load } = useAIConfigStore()
-  const configs = useAIConfigStore(useShallow(selectTextConfigs))
+  const configs = useAIConfigStore(useShallow((s) => s.configs.filter((c) => c.model_type === modelType)))
+  const typeLabel = modelType === 'image' ? '图片' : modelType === 'embedding' ? '向量' : '文本'
 
   useEffect(() => {
-    void load()
-  }, [load])
+    void load().catch((err: unknown) => message.error(errorMessage(err)))
+  }, [load, message])
 
   if (loaded && configs.length === 0) {
     return (
       <Alert
         type="warning"
         showIcon
-        message="尚未配置文本模型"
+        message={`尚未配置${typeLabel}模型`}
         description={
           <span>
-            请先前往 <Link to="/settings/ai">模型配置</Link> 添加一个文本模型后再生成。
+            请先前往 <Link to="/settings/ai">模型配置</Link> 添加一个{typeLabel}模型后再生成。
           </span>
         }
       />
@@ -38,6 +44,7 @@ export default function AIConfigSelect({ value, onChange, disabled }: Props) {
   const defaultConfig = configs.find((c) => c.is_default)
   return (
     <Select<number>
+      id={id}
       style={{ width: '100%' }}
       allowClear
       loading={loading}

@@ -37,7 +37,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
-import { PROJECT_STATUS, projectApi } from '../api/projects'
+import { coverUrl, PROJECT_STATUS, projectApi } from '../api/projects'
 import type { Project, ProjectCreate, ProjectStatus } from '../api/types'
 import ExportModal from '../components/ExportModal'
 import ProjectInfoFields from '../components/ProjectInfoFields'
@@ -344,7 +344,7 @@ function BookCard({ project: p, onOpen, onContinue, onRead, onExport, onBackup, 
   const status = PROJECT_STATUS[p.status]
   return (
     <Card size="small" styles={{ body: { padding: 0 } }} variant="borderless" style={{ background: 'transparent', boxShadow: 'none' }}>
-      <BookCover title={p.title} genre={p.genre} onClick={onOpen} />
+      <BookCover title={p.title} genre={p.genre} coverUrl={coverUrl(p)} onClick={onOpen} />
       <div style={{ marginTop: 8 }}>
         <Typography.Text strong ellipsis={{ tooltip: p.title }} style={{ display: 'block', cursor: 'pointer' }} onClick={onOpen}>
           {p.title}
