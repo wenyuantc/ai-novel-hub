@@ -10,7 +10,7 @@ interface Props {
   author?: string
   coverUrl?: string | null
   onClick?: () => void
-  /** 书库沿用设计的横向装帧；概览的封面管理保留原竖版比例。 */
+  /** 可选横版装帧；默认 2:3 竖版供书库与概览复用。 */
   compact?: boolean
 }
 

@@ -19,7 +19,7 @@ const ImportBackupModal = lazy(() => import('../components/transfer/ImportBackup
 const BackupModal = lazy(() => import('../components/transfer/BackupModal'))
 const STATUS_FILTERS: { value: ShelfStatusFilter; label: string }[] = [{ value: 'all', label: '全部作品' }, { value: 'writing', label: PROJECT_STATUS.writing.label }, { value: 'planning', label: PROJECT_STATUS.planning.label }, { value: 'completed', label: PROJECT_STATUS.completed.label }]
 
-/** 真实作品书库：设计稿的纸面书架，沿用作品 API、阅读进度及全部原有作品操作。 */
+/** 真实作品书库：横向作品卡片，沿用作品 API、阅读进度及全部原有作品操作。 */
 export default function ProjectListPage() {
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
@@ -66,7 +66,15 @@ export default function ProjectListPage() {
       {filtering && !loading && <p className="library-filter-count" role="status">显示 {visible.length} / {projects.length} 部作品</p>}
       {error && <Alert className="library-error" type="error" showIcon message={error} action={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={reload}>重试</Button>} />}
       <section aria-label="作品书库" aria-busy={loading}>
-        {loading && !projects.length ? <div className="library-grid library-loading" role="status" aria-label="正在加载作品">{[0, 1, 2, 3].map((i) => <div key={i}><Skeleton.Node active style={{ width: '100%', height: 174 }} /><Skeleton active title paragraph={{ rows: 3 }} /></div>)}</div> : !error || projects.length > 0 ? (
+        {loading && !projects.length ? <div className={`${prefs.view === 'shelf' ? 'library-grid' : 'library-list'} library-loading`} role="status" aria-label="正在加载作品">{[0, 1, 2, 3].map((i) => (
+          <div className="library-book" key={i} aria-hidden="true">
+            <div className="library-book-main">
+              <div className="library-book-cover"><Skeleton.Node active className="library-book-cover-skeleton" /></div>
+              <div className="library-book-details"><Skeleton active title={{ width: '40%' }} paragraph={{ rows: 3, width: ['80%', '100%', '70%'] }} /></div>
+            </div>
+            <div className="library-book-footer"><div className="library-book-summary"><Skeleton.Input active size="small" className="library-book-meta-skeleton" /><Skeleton.Button active className="library-book-action-skeleton" /></div></div>
+          </div>
+        ))}</div> : !error || projects.length > 0 ? (
           visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} author={author} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => remove(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' }))}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
         ) : null}
       </section>

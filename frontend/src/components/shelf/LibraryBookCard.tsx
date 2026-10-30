@@ -17,34 +17,42 @@ export default function LibraryBookCard({ project: p, author, onExport, onBackup
   const overview = `/projects/${p.id}/overview`
   const progress = wordsProgress(p.total_words, p.target_words)
   return (
-    <article className="library-book">
-      <Link className="library-book-cover" to={overview} aria-label={`打开《${p.title}》`}><BookCover title={p.title} genre={p.genre} author={author} coverUrl={coverUrl(p)} compact /></Link>
-      <div className="library-book-details">
-        <div className="library-book-heading"><Link to={overview} title={p.title}>{p.title}</Link><ProjectBadge status={p.status} /></div>
-        <p className="library-book-description" title={p.synopsis || p.premise}>{p.synopsis || p.premise || '故事尚在构思，写下第一段简介，让这个世界慢慢清晰。'}</p>
-        <div className="library-book-meta"><span>{p.chapter_count} 章 · {p.total_words.toLocaleString()} 字</span><time dateTime={p.updated_at} title={formatTime(p.updated_at)}>{formatRelative(p.updated_at)}</time></div>
-        {progress !== null && <div className="library-book-progress" title={`目标 ${p.target_words?.toLocaleString()} 字`}><Progress percent={progress} showInfo={false} size="small" /></div>}
-        <div className="library-book-actions">
-          <Link className="library-write-button" to={continueTarget(p)}><EditOutlined />{p.last_edited_chapter_id !== null ? '继续创作' : '开始创作'}</Link>
-          <Dropdown trigger={['click']} menu={{
-            items: [
-              { key: 'read', icon: <BookOutlined />, label: readingLabel(p.reading), disabled: !canRead(p) },
-              { key: 'overview', icon: <DashboardOutlined />, label: '作品概览' },
-              { key: 'export', icon: <DownloadOutlined />, label: '导出作品' },
-              { key: 'backup', icon: <CloudDownloadOutlined />, label: '备份作品' },
-              { type: 'divider' },
-              { key: 'delete', icon: <DeleteOutlined />, label: '删除作品', danger: true },
-            ],
-            onClick: ({ key }) => {
-              if (key === 'read') navigate(readTarget(p), { state: { from: '/projects' } })
-              else if (key === 'overview') navigate(overview)
-              else if (key === 'export') onExport()
-              else if (key === 'backup') onBackup()
-              else if (key === 'delete') onDelete()
-            },
-          }}><Button type="text" icon={<MoreOutlined />} aria-label={`《${p.title}》的更多操作`} /></Dropdown>
+    <article className="library-book" aria-labelledby={`library-book-title-${p.id}`}>
+      <div className="library-book-main">
+        <Link className="library-book-cover" to={overview} aria-label={`打开《${p.title}》`}><BookCover title={p.title} genre={p.genre} author={author} coverUrl={coverUrl(p)} /></Link>
+        <div className="library-book-details">
+          <div className="library-book-status"><ProjectBadge status={p.status} /></div>
+          <h2 className="library-book-heading" id={`library-book-title-${p.id}`}><Link to={overview} title={p.title}>{p.title}</Link></h2>
+          <p className="library-book-description" title={p.synopsis || p.premise}>{p.synopsis || p.premise || '故事尚在构思，写下第一段简介，让这个世界慢慢清晰。'}</p>
+          <time className="library-book-updated" dateTime={p.updated_at} title={formatTime(p.updated_at)}>更新于 {formatRelative(p.updated_at)}</time>
         </div>
       </div>
+      {progress !== null && <div className="library-book-progress" title={`目标 ${p.target_words?.toLocaleString()} 字`}><Progress percent={progress} showInfo={false} size="small" /></div>}
+      <footer className="library-book-footer">
+        <div className="library-book-summary">
+          <div className="library-book-meta"><span>{p.chapter_count} 章</span><span>{p.total_words.toLocaleString()} 字</span></div>
+          <div className="library-book-actions">
+            <Link className="library-write-button" to={continueTarget(p)}><EditOutlined />{p.last_edited_chapter_id !== null ? '继续创作' : '开始创作'}</Link>
+            <Dropdown trigger={['click']} menu={{
+              items: [
+                { key: 'read', icon: <BookOutlined />, label: readingLabel(p.reading), disabled: !canRead(p) },
+                { key: 'overview', icon: <DashboardOutlined />, label: '作品概览' },
+                { key: 'export', icon: <DownloadOutlined />, label: '导出作品' },
+                { key: 'backup', icon: <CloudDownloadOutlined />, label: '备份作品' },
+                { type: 'divider' },
+                { key: 'delete', icon: <DeleteOutlined />, label: '删除作品', danger: true },
+              ],
+              onClick: ({ key }) => {
+                if (key === 'read') navigate(readTarget(p), { state: { from: '/projects' } })
+                else if (key === 'overview') navigate(overview)
+                else if (key === 'export') onExport()
+                else if (key === 'backup') onBackup()
+                else if (key === 'delete') onDelete()
+              },
+            }}><Button type="text" icon={<MoreOutlined />} aria-label={`《${p.title}》的更多操作`} /></Dropdown>
+          </div>
+        </div>
+      </footer>
     </article>
   )
 }
