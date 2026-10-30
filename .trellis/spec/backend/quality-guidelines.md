@@ -33,6 +33,8 @@ Pytest 配置：`asyncio_mode = "auto"`、`asyncio_default_fixture_loop_scope = 
 `pythonpath = ["."]`、`testpaths = ["tests"]`。异步测试直接写成 `async def test_...`，
 无需标记（marker）。
 
+macOS 终端若使用 `LC_ALL=C`，Alembic/ConfigParser 的显式 `encoding="locale"` 会以 ASCII 读取带中文注释的 alembic.ini，导致迁移测试在执行迁移前 UnicodeDecodeError。先核对 locale；可在本次命令使用 `env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest`。不要因此修改迁移、删除中文配置、过滤失败或跳过测试；Python UTF-8 模式不等同于显式 locale 编码已正确。
+
 ---
 
 ## 禁止模式

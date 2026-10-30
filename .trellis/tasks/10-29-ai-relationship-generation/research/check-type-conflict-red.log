@@ -1,0 +1,1137 @@
+FF.FFFF                                                                  [100%]
+=================================== FAILURES ===================================
+_________ test_concurrent_custom_type_returns_conflict_and_rolls_back __________
+tests/test_relationships.py:101: in test_concurrent_custom_type_returns_conflict_and_rolls_back
+    assert all(not isinstance(r, BaseException) for r in responses), responses
+E   AssertionError: [<Response [201 Created]>, IntegrityError('(sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b')]
+E   assert False
+E    +  where False = all(<generator object test_concurrent_custom_type_returns_conflict_and_rolls_back.<locals>.<genexpr> at 0x11caa6500>)
+---------------------------- Captured stderr setup -----------------------------
+2026-10-29 21:38:18,073 INFO app.main: 未找到前端构建产物 /private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-732/test_concurrent_custom_type_re0/no-dist，跳过静态文件挂载
+------------------------------ Captured log setup ------------------------------
+INFO     app.main:main.py:33 未找到前端构建产物 /private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-732/test_concurrent_custom_type_re0/no-dist，跳过静态文件挂载
+----------------------------- Captured stderr call -----------------------------
+2026-10-29 21:38:18,401 INFO httpx: HTTP Request: POST http://testserver/api/v1/auth/register "HTTP/1.1 201 Created"
+2026-10-29 21:38:18,427 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects "HTTP/1.1 201 Created"
+2026-10-29 21:38:18,522 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+2026-10-29 21:38:18,525 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+2026-10-29 21:38:18,768 INFO httpx: HTTP Request: POST http://testserver/api/v1/auth/login "HTTP/1.1 200 OK"
+2026-10-29 21:38:18,794 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/relationships/batch "HTTP/1.1 201 Created"
+2026-10-29 21:38:18,797 ERROR app.core.errors: 未处理的异常
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlite3.IntegrityError: UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/core/upload_limit.py", line 42, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2813, in app
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1852, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1867, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1330, in handle
+    await effective_context.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 167, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 153, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 746, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 373, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/api/v1/relationships.py", line 60, in create_relationships
+    return await svc.create_relationships(db, user.id, project_id, body)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 468, in create_relationships
+    rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 324, in create_relation
+    t, flipped = await resolve_type(db, project_id, type_id=type_id, role_a=role_a, role_b=role_b, category=category)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 131, in resolve_type
+    await db.flush()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1030, in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 212, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4543, in flush
+    self._flush(objects)
+  File "<sqlalchemy generated warned() wrapper for sqlalchemy.orm.session.Session._flush>", line 2, in _flush
+    return target(fn, self, objects=objects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/deprecations.py", line 281, in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4686, in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 166, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4647, in _flush
+    flush_context.execute()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 467, in execute
+    rec.execute(self)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 643, in execute
+    util.preloaded.orm_persistence._save_obj(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 92, in _save_obj
+    _emit_insert_statements(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1237, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1463, in execute
+    return meth(
+           ^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 533, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1683, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1837, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1977, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2347, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+[SQL: INSERT INTO relationship_types (project_id, category, role_a, role_b, sort) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, updated_at]
+[parameters: (1, 'other', '引路人', '同行者', 1)]
+(Background on this error at: https://sqlalche.me/e/21/gkpj)
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/auth/register "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/auth/login "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/relationships/batch "HTTP/1.1 201 Created"
+ERROR    app.core.errors:errors.py:86 未处理的异常
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlite3.IntegrityError: UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/core/upload_limit.py", line 42, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2813, in app
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1852, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1867, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1330, in handle
+    await effective_context.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 167, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 153, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 746, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 373, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/api/v1/relationships.py", line 60, in create_relationships
+    return await svc.create_relationships(db, user.id, project_id, body)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 468, in create_relationships
+    rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 324, in create_relation
+    t, flipped = await resolve_type(db, project_id, type_id=type_id, role_a=role_a, role_b=role_b, category=category)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 131, in resolve_type
+    await db.flush()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1030, in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 212, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4543, in flush
+    self._flush(objects)
+  File "<sqlalchemy generated warned() wrapper for sqlalchemy.orm.session.Session._flush>", line 2, in _flush
+    return target(fn, self, objects=objects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/deprecations.py", line 281, in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4686, in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 166, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4647, in _flush
+    flush_context.execute()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 467, in execute
+    rec.execute(self)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 643, in execute
+    util.preloaded.orm_persistence._save_obj(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 92, in _save_obj
+    _emit_insert_statements(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1237, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1463, in execute
+    return meth(
+           ^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 533, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1683, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1837, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1977, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2347, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+[SQL: INSERT INTO relationship_types (project_id, category, role_a, role_b, sort) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, updated_at]
+[parameters: (1, 'other', '引路人', '同行者', 1)]
+(Background on this error at: https://sqlalche.me/e/21/gkpj)
+____________ test_type_flush_conflict_rolls_back_entire_mixed_batch ____________
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1958: in _exec_single_context
+    self.dialect.do_execute(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:1192: in do_execute
+    cursor.execute(statement, parameters)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:258: in execute
+    self._adapt_connection._handle_exception(error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:412: in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:237: in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:409: in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:256: in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:167: in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:205: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:279: in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:63: in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+E   sqlite3.IntegrityError: UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+
+The above exception was the direct cause of the following exception:
+tests/test_relationships.py:125: in test_type_flush_conflict_rolls_back_entire_mixed_batch
+    response = await client.post(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1859: in post
+    return await self.request(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1540: in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_client.py:1629: in send
+    response = await self._send_handling_auth(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1657: in _send_handling_auth
+    response = await self._send_handling_redirects(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1694: in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_client.py:1730: in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_transports/asgi.py:170: in handle_async_request
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+app/core/upload_limit.py:42: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:678: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:2813: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:1841: in handle
+    await self.original_router.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:2896: in handle
+    await included_router._handle_selected(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:1852: in _handle_selected
+    await route.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:1841: in handle
+    await self.original_router.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:2896: in handle
+    await included_router._handle_selected(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:1867: in _handle_selected
+    await original_route.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:1330: in handle
+    await effective_context.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:167: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:153: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/fastapi/routing.py:746: in app
+    raw_response = await run_endpoint_function(
+.venv/lib/python3.12/site-packages/fastapi/routing.py:373: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/api/v1/relationships.py:60: in create_relationships
+    return await svc.create_relationships(db, user.id, project_id, body)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/services/relationship_service.py:468: in create_relationships
+    rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/services/relationship_service.py:324: in create_relation
+    t, flipped = await resolve_type(db, project_id, type_id=type_id, role_a=role_a, role_b=role_b, category=category)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/services/relationship_service.py:131: in resolve_type
+    await db.flush()
+.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py:1030: in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:212: in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py:4543: in flush
+    self._flush(objects)
+<sqlalchemy generated warned() wrapper for sqlalchemy.orm.session.Session._flush>:2: in _flush
+    return target(fn, self, objects=objects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/deprecations.py:281: in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py:4686: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:166: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py:4647: in _flush
+    flush_context.execute()
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py:467: in execute
+    rec.execute(self)
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py:643: in execute
+    util.preloaded.orm_persistence._save_obj(
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py:92: in _save_obj
+    _emit_insert_statements(
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py:1237: in _emit_insert_statements
+    result = connection.execute(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1463: in execute
+    return meth(
+.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py:533: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1683: in _execute_clauseelement
+    ret = self._execute_context(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1837: in _execute_context
+    return self._exec_single_context(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1977: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2347: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1958: in _exec_single_context
+    self.dialect.do_execute(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:1192: in do_execute
+    cursor.execute(statement, parameters)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:258: in execute
+    self._adapt_connection._handle_exception(error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:412: in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:237: in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:409: in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:256: in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:167: in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:205: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:279: in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:63: in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+E   sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+E   [SQL: INSERT INTO relationship_types (project_id, category, role_a, role_b, sort) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, updated_at]
+E   [parameters: (1, 'other', '引路人', '同行者', 3)]
+E   (Background on this error at: https://sqlalche.me/e/21/gkpj)
+---------------------------- Captured stderr setup -----------------------------
+2026-10-29 21:38:18,991 INFO app.main: 未找到前端构建产物 /private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-732/test_type_flush_conflict_rolls0/no-dist，跳过静态文件挂载
+------------------------------ Captured log setup ------------------------------
+INFO     app.main:main.py:33 未找到前端构建产物 /private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-732/test_type_flush_conflict_rolls0/no-dist，跳过静态文件挂载
+----------------------------- Captured stderr call -----------------------------
+2026-10-29 21:38:19,294 INFO httpx: HTTP Request: POST http://testserver/api/v1/auth/register "HTTP/1.1 201 Created"
+2026-10-29 21:38:19,317 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects "HTTP/1.1 201 Created"
+2026-10-29 21:38:19,338 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+2026-10-29 21:38:19,341 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+2026-10-29 21:38:19,345 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+2026-10-29 21:38:19,362 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/relationship-types "HTTP/1.1 201 Created"
+2026-10-29 21:38:19,370 ERROR app.core.errors: 未处理的异常
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlite3.IntegrityError: UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/core/upload_limit.py", line 42, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2813, in app
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1852, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1867, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1330, in handle
+    await effective_context.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 167, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 153, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 746, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 373, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/api/v1/relationships.py", line 60, in create_relationships
+    return await svc.create_relationships(db, user.id, project_id, body)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 468, in create_relationships
+    rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 324, in create_relation
+    t, flipped = await resolve_type(db, project_id, type_id=type_id, role_a=role_a, role_b=role_b, category=category)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 131, in resolve_type
+    await db.flush()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1030, in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 212, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4543, in flush
+    self._flush(objects)
+  File "<sqlalchemy generated warned() wrapper for sqlalchemy.orm.session.Session._flush>", line 2, in _flush
+    return target(fn, self, objects=objects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/deprecations.py", line 281, in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4686, in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 166, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4647, in _flush
+    flush_context.execute()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 467, in execute
+    rec.execute(self)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 643, in execute
+    util.preloaded.orm_persistence._save_obj(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 92, in _save_obj
+    _emit_insert_statements(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1237, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1463, in execute
+    return meth(
+           ^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 533, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1683, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1837, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1977, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2347, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+[SQL: INSERT INTO relationship_types (project_id, category, role_a, role_b, sort) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, updated_at]
+[parameters: (1, 'other', '引路人', '同行者', 3)]
+(Background on this error at: https://sqlalche.me/e/21/gkpj)
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/auth/register "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/characters "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/relationship-types "HTTP/1.1 201 Created"
+ERROR    app.core.errors:errors.py:86 未处理的异常
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlite3.IntegrityError: UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/core/upload_limit.py", line 42, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2813, in app
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1852, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1841, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2896, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1867, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1330, in handle
+    await effective_context.app(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 167, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 153, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 746, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 373, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/api/v1/relationships.py", line 60, in create_relationships
+    return await svc.create_relationships(db, user.id, project_id, body)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 468, in create_relationships
+    rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 324, in create_relation
+    t, flipped = await resolve_type(db, project_id, type_id=type_id, role_a=role_a, role_b=role_b, category=category)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/services/relationship_service.py", line 131, in resolve_type
+    await db.flush()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1030, in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 212, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4543, in flush
+    self._flush(objects)
+  File "<sqlalchemy generated warned() wrapper for sqlalchemy.orm.session.Session._flush>", line 2, in _flush
+    return target(fn, self, objects=objects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/deprecations.py", line 281, in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4686, in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 166, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4647, in _flush
+    flush_context.execute()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 467, in execute
+    rec.execute(self)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 643, in execute
+    util.preloaded.orm_persistence._save_obj(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 92, in _save_obj
+    _emit_insert_statements(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1237, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1463, in execute
+    return meth(
+           ^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 533, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1683, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1837, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1977, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2347, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1958, in _exec_single_context
+    self.dialect.do_execute(
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 1192, in do_execute
+    cursor.execute(statement, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 258, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 412, in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 237, in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 409, in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 256, in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 167, in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py", line 205, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 279, in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+[SQL: INSERT INTO relationship_types (project_id, category, role_a, role_b, sort) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, updated_at]
+[parameters: (1, 'other', '引路人', '同行者', 3)]
+(Background on this error at: https://sqlalche.me/e/21/gkpj)
+_________ test_type_flush_conflict_preserves_callers_outer_transaction _________
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1958: in _exec_single_context
+    self.dialect.do_execute(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:1192: in do_execute
+    cursor.execute(statement, parameters)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:258: in execute
+    self._adapt_connection._handle_exception(error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:412: in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:237: in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:409: in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:256: in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:167: in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:205: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:279: in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:63: in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+E   sqlite3.IntegrityError: UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+
+The above exception was the direct cause of the following exception:
+tests/test_relationships.py:168: in test_type_flush_conflict_preserves_callers_outer_transaction
+    await svc.resolve_type(db, project.id, role_a="引路人", role_b="同行者")
+app/services/relationship_service.py:131: in resolve_type
+    await db.flush()
+.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py:1030: in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:212: in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py:4543: in flush
+    self._flush(objects)
+<sqlalchemy generated warned() wrapper for sqlalchemy.orm.session.Session._flush>:2: in _flush
+    return target(fn, self, objects=objects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/deprecations.py:281: in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py:4686: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:166: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py:4647: in _flush
+    flush_context.execute()
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py:467: in execute
+    rec.execute(self)
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py:643: in execute
+    util.preloaded.orm_persistence._save_obj(
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py:92: in _save_obj
+    _emit_insert_statements(
+.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py:1237: in _emit_insert_statements
+    result = connection.execute(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1463: in execute
+    return meth(
+.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py:533: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1683: in _execute_clauseelement
+    ret = self._execute_context(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1837: in _execute_context
+    return self._exec_single_context(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1977: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2347: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1958: in _exec_single_context
+    self.dialect.do_execute(
+.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:1192: in do_execute
+    cursor.execute(statement, parameters)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:258: in execute
+    self._adapt_connection._handle_exception(error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:412: in _handle_exception
+    self._handle_exception_no_connection(self.dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:237: in _handle_exception_no_connection
+    super()._handle_exception_no_connection(dbapi, error)
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:409: in _handle_exception_no_connection
+    raise error.with_traceback(exc_info[2])
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:256: in execute
+    return await_(self._execute_async(operation, parameters))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:167: in await_
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:205: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py:279: in _execute_async
+    result = await self._cursor.execute(operation, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+.venv/lib/python3.12/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/aiosqlite/core.py:63: in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+E   sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: relationship_types.project_id, relationship_types.role_a, relationship_types.role_b
+E   [SQL: INSERT INTO relationship_types (project_id, category, role_a, role_b, sort) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, updated_at]
+E   [parameters: (1, 'other', '引路人', '同行者', 2)]
+E   (Background on this error at: https://sqlalche.me/e/21/gkpj)
+---------------------------- Captured stderr setup -----------------------------
+2026-10-29 21:38:19,815 INFO app.main: 未找到前端构建产物 /private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-732/test_type_flush_conflict_prese0/no-dist，跳过静态文件挂载
+------------------------------ Captured log setup ------------------------------
+INFO     app.main:main.py:33 未找到前端构建产物 /private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-732/test_type_flush_conflict_prese0/no-dist，跳过静态文件挂载
+----------------------------- Captured stderr call -----------------------------
+2026-10-29 21:38:20,123 INFO httpx: HTTP Request: POST http://testserver/api/v1/auth/register "HTTP/1.1 201 Created"
+2026-10-29 21:38:20,146 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects "HTTP/1.1 201 Created"
+2026-10-29 21:38:20,176 INFO httpx: HTTP Request: POST http://testserver/api/v1/projects/1/relationship-types "HTTP/1.1 201 Created"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/auth/register "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects "HTTP/1.1 201 Created"
+INFO     httpx:_client.py:1740 HTTP Request: POST http://testserver/api/v1/projects/1/relationship-types "HTTP/1.1 201 Created"
+_ test_postgres_type_conflict_uses_exact_unique_constraint[uq_relationship_types_project_id-23505-True] _
+tests/test_relationships.py:193: in test_postgres_type_conflict_uses_exact_unique_constraint
+    assert svc._is_type_conflict(IntegrityError("INSERT", {}, wrapped)) is matches
+           ^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'app.services.relationship_service' has no attribute '_is_type_conflict'. Did you mean: '_is_pair_conflict'?
+_ test_postgres_type_conflict_uses_exact_unique_constraint[uq_relationships_pair_low-23505-False] _
+tests/test_relationships.py:193: in test_postgres_type_conflict_uses_exact_unique_constraint
+    assert svc._is_type_conflict(IntegrityError("INSERT", {}, wrapped)) is matches
+           ^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'app.services.relationship_service' has no attribute '_is_type_conflict'. Did you mean: '_is_pair_conflict'?
+_ test_postgres_type_conflict_uses_exact_unique_constraint[uq_relationship_types_project_id-23503-False] _
+tests/test_relationships.py:193: in test_postgres_type_conflict_uses_exact_unique_constraint
+    assert svc._is_type_conflict(IntegrityError("INSERT", {}, wrapped)) is matches
+           ^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'app.services.relationship_service' has no attribute '_is_type_conflict'. Did you mean: '_is_pair_conflict'?
+=========================== short test summary info ============================
+FAILED tests/test_relationships.py::test_concurrent_custom_type_returns_conflict_and_rolls_back
+FAILED tests/test_relationships.py::test_type_flush_conflict_rolls_back_entire_mixed_batch
+FAILED tests/test_relationships.py::test_type_flush_conflict_preserves_callers_outer_transaction
+FAILED tests/test_relationships.py::test_postgres_type_conflict_uses_exact_unique_constraint[uq_relationship_types_project_id-23505-True]
+FAILED tests/test_relationships.py::test_postgres_type_conflict_uses_exact_unique_constraint[uq_relationships_pair_low-23505-False]
+FAILED tests/test_relationships.py::test_postgres_type_conflict_uses_exact_unique_constraint[uq_relationship_types_project_id-23503-False]
+6 failed, 1 passed, 10 deselected in 2.76s

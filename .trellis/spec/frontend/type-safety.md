@@ -27,7 +27,7 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
   | `GenerationKind` | `'generate' \| 'polish' \| 'rewrite' \| 'expand' \| 'condense' \| 'deslop' \| 'continue' \| 'revise'` | 同上 |
   | `GenerationStatus` | `'success' \| 'error' \| 'cancelled'` | 同上 |
   | `RewriteOp` | `'rewrite' \| 'expand' \| 'condense' \| 'deslop' \| 'continue'` | 同上 |
-  | `TaskKind` | `'chapter.generate' \| 'chapter.polish' \| 'wizard.outline' \| 'wizard.characters' \| 'wizard.world' \| 'character.generate' \| 'organization.generate' \| 'relations.parse' \| 'career.generate' \| 'wizard.careers' \| 'chapter.analyze' \| 'chapter.revise' \| 'outline.continue' \| 'outline.expand' \| 'chapter.batch' \| 'kb.index'` | `schemas/task.py` |
+  | `TaskKind` | `'agent.turn' \| 'chapter.generate' \| 'chapter.polish' \| 'wizard.outline' \| 'wizard.characters' \| 'wizard.world' \| 'character.generate' \| 'organization.generate' \| 'relations.parse' \| 'relations.generate' \| 'career.generate' \| 'wizard.careers' \| 'chapter.analyze' \| 'chapter.revise' \| 'outline.continue' \| 'outline.expand' \| 'chapter.batch' \| 'kb.index' \| 'book.import'` | `schemas/task.py` |
   | `ModelType` | `'text' \| 'image' \| 'embedding'` | `schemas/ai_config.py`（embedding = 向量模型，Anthropic 不支持） |
   | `KbDocumentStatus` | `'pending' \| 'parsing' \| 'indexing' \| 'ready' \| 'ready_keyword_only' \| 'failed'` | `schemas/kb.py`（`parsing` 目前不使用：解析在上传请求内同步完成） |
   | `SearchMode` | `'hybrid' \| 'keyword'` | 同上 |
@@ -120,6 +120,12 @@ export function formatTime(value: string | null | undefined, fmt = 'YYYY-MM-DD H
 `time.test.ts` 断言 `'2026-10-22T08:00:00'` → `'2026-10-22T08:00:00.000Z'`，并断言 `+08:00` / `Z` 输入保留其时区。绝不要直接对服务端时间戳调用 `dayjs(value)` 或 `new Date(value)`。
 
 ---
+
+### AI 批量关系生成
+
+`RelationsGenerateRequest` 镜像 `schemas/entity_ai.py`；`GeneratedRelationSuggestion` / `RelationsGenerateResult` 对应 `entity_ai_service.py` 构造的任务结果。`RelationshipCreate.source` 新增 `ai_generate`，标签为「AI 生成」。请求中 `character_ids` 为 2–20 个不同正整数、count 为 1–50、instruction 最多 2000 字。选择保存在任务请求中，不能借用单角色的 `Task.character_id`。
+
+结果是 unknown，统一经 `api/entityTasks.ts` 的 `parseRelationsGenerateResult` 收窄；ID、称呼、类别、状态、亲密度的非法原始类型不可被默认值恢复成可保存建议。`generatedSuggestionsToBatch` 只提交所选范围内、勾选、有效且无序去重的条目，称呼编辑后清 type_id；旧解析的默认来源 ai_parse 保留。签名、任务恢复、409 与刷新规则见 [relationship-generation.md](../backend/relationship-generation.md)。
 
 ## 校验
 

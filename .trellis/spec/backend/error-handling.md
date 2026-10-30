@@ -116,6 +116,8 @@ except IntegrityError as exc:
     raise ConflictError("用户名已存在") from exc
 ```
 
+关系写入还有前置 flush，不能只包 commit，也不能把所有 IntegrityError 翻译成同一种冲突。`relationship_service` 分别精确识别角色对唯一键和类型唯一键；低层只翻译，HTTP请求或既有外层SAVEPOINT负责回滚。类型首次创建竞争给可重试的独立409，不加入可能破坏SQLite整批回滚的裸SAVEPOINT。签名、矩阵与回归见[AI关系生成契约](./relationship-generation.md)。
+
 ### 用结果对象代替错误
 
 连通性测试（`POST /ai-configs/{id}/test`）不会因 provider 问题返回 4xx/5xx：

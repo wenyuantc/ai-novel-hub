@@ -1,0 +1,11 @@
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/relationship-contracts.md","reason":"story-entities 原文摘录：检查统一写入、方向、唯一对、历史与只读草稿，避免注入截断"}
+{"file":".trellis/spec/backend/prompts-styles.md","reason":"检查新 key、锁定规则和既有模板兼容，禁止放宽 parity"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/task-error-contracts.md","reason":"error-handling 原文摘录：检查中文错误、任务失败/取消和订阅结果，避免注入截断"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核对正常流、跨用户隔离、FakeLLM 与 ruff/pytest 证据"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/transport-contracts.md","reason":"type-safety 原文摘录：核对传输类型、unknown 校验与 API 契约，避免注入截断"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"核对关闭只断订阅、活动任务恢复与异常分支"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/ui-contracts.md","reason":"component-guidelines 原文摘录：核对复用预览、任务面板、主题和响应式，避免注入截断"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"核对 lint/build/test、主题、375px 与包体积"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/integration-map.md","reason":"按已核实契约审查草稿无写入、并发冲突、同名角色、重复保存"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/runtime-verification.md","reason":"主会话真实 TCP/SSE 验收、并发竞争缺口及浏览器能力限制，检查最终修复和实际证据"}
+{"file":".trellis/spec/backend/relationship-generation.md","reason":"最终规范文字核对：任务与结果签名、上下文预算、只读草稿、来源、类型/角色对竞争、外层事务与刷新"}

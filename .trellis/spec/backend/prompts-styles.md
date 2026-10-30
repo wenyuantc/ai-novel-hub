@@ -37,14 +37,14 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 ### 3. 契约
 
-**模板 key（30 个；`10-23-skills-mcp` 只新增变量，没有新增 key，`test_prompt_templates` 的计数仍是 30）**
+**模板 key（31 个；批量关系生成新增 `relations.generate`，`test_prompt_templates` 的计数同步为 31）**
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
 | 章节 | `chapter.generate`、`chapter.continue`（只有 user 段，结果只取 user）、`chapter.polish`、`chapter.revise`、`chapter.rewrite`（`op` 在模板里 if 分支） | — |
 | 分析 | `analysis.chapter` | `output_schema`（有伏笔清单时是带 ref_id 的结构）、`json_rule` |
 | 向导 | `wizard.world` / `wizard.characters` / `wizard.outline` / `wizard.careers`；`wizard.continue`（从中断处继续的续写指令，只有 user 段，变量 `generated_chars`，接在原对话 + assistant 已输出内容之后） | `json_rule`、`output_format`（`wizard.continue` 无） |
-| 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` | `json_rule`、`output_format` |
+| 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` / `relations.generate` | `json_rule`、`output_format` |
 | 大纲 | `outline.continue` / `outline.expand` | `json_rule`、`output_format` |
 | 风格 | `style.block`（风格段，只取 user 段并 strip）、`style.extract`（JSON）、`style.trial` | extract：`json_rule`、`output_format` |
 | 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback / knowledge`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
@@ -52,7 +52,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 | 项目智能体 | `agent.system`（只有 system 段；变量 `safety_rules` / `project_info` / `page_hint` / `skills_catalog`，后三者由服务端用【不可信数据】标记包裹）、`agent.summarize`（压缩较早对话；变量 `summary` / `history`（必需），输出纯文本摘要） | `agent.system`：`safety_rules`（= `app/ai/prompts/agent.py::SAFETY_RULES`）；`agent.summarize` 无 |
 
 - **检索块变量**（`10-23-knowledge-base`，见 [retrieval.md](./retrieval.md)）：`knowledge`（知识库参考资料正文，`KNOWLEDGE_VAR`）声明在
-  `wizard.*`（4 个）、`entity.character` / `entity.organization` / `entity.career`、`outline.continue` / `outline.expand`、`inspiration.*`（6 个）；
+  `wizard.*`（4 个）、`entity.character` / `entity.organization` / `entity.career`、`relations.generate`、`outline.continue` / `outline.expand`、`inspiration.*`（6 个）；
   `memories`（相关旧情节，`MEMORIES_VAR`）声明在 `outline.continue` / `outline.expand`。默认模板写
   `{% if knowledge %}\n\n【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】\n{{ knowledge }}\n{% endif %}`（一般放在
   「作者额外要求」之前；续写放在「发展方向」之前，`memories` 放在「前文进展」之后 / 展开放在「相邻章纲」之后），**变量为空时整段不输出，parity 不变**。

@@ -1,0 +1,953 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.7.0
+rootdir: /Users/wenyuantc/IdeaProjects/my/aiNovel/backend
+configfile: pyproject.toml
+testpaths: tests
+plugins: asyncio-1.4.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 1010 items
+
+tests/test_admin.py .............................                        [  2%]
+tests/test_agent_api.py ...........                                      [  3%]
+tests/test_agent_context.py .......                                      [  4%]
+tests/test_agent_effects.py .............................                [  7%]
+tests/test_agent_mcp_skills.py .........................                 [ 10%]
+tests/test_agent_providers.py .......................................... [ 14%]
+..........                                                               [ 15%]
+tests/test_agent_runtime.py ....................                         [ 17%]
+tests/test_agent_tools.py ........................................       [ 21%]
+tests/test_ai_config_model_type.py .....                                 [ 21%]
+tests/test_ai_config_params.py .............................             [ 24%]
+tests/test_ai_configs.py .....                                           [ 24%]
+tests/test_analysis.py ............                                      [ 26%]
+tests/test_auth.py ............                                          [ 27%]
+tests/test_batch_generate.py .........................                   [ 29%]
+tests/test_book_import.py .........................                      [ 32%]
+tests/test_book_import_split.py ........................................ [ 36%]
+........                                                                 [ 37%]
+tests/test_cards.py .......                                              [ 37%]
+tests/test_career_tasks.py ...........                                   [ 38%]
+tests/test_careers.py .......                                            [ 39%]
+tests/test_cast_context.py ....                                          [ 39%]
+tests/test_chapter_numbering.py ..                                       [ 40%]
+tests/test_chapter_versions.py ................                          [ 41%]
+tests/test_chapters.py .........                                         [ 42%]
+tests/test_config_security.py .........                                  [ 43%]
+tests/test_context_builder.py ................                           [ 45%]
+tests/test_endpoint_guard.py ................................            [ 48%]
+tests/test_entity_tasks.py ......                                        [ 48%]
+tests/test_epub.py ......                                                [ 49%]
+tests/test_export.py ...                                                 [ 49%]
+tests/test_foreshadow_analysis.py ........                               [ 50%]
+tests/test_foreshadows.py .....                                          [ 50%]
+tests/test_image_providers.py .......................                    [ 53%]
+tests/test_inspiration.py ...........................                    [ 55%]
+tests/test_kb.py .................................                       [ 59%]
+tests/test_mcp_plugins.py .....................                          [ 61%]
+tests/test_memories.py ...............                                   [ 62%]
+tests/test_migrations.py FFFFFFFFFFFFFFFFFFFF                            [ 64%]
+tests/test_organizations.py ...                                          [ 65%]
+tests/test_outline_pro.py ..............                                 [ 66%]
+tests/test_outline_snapshots.py ....                                     [ 66%]
+tests/test_outline_transfer.py .......                                   [ 67%]
+tests/test_project_cover.py ...........                                  [ 68%]
+tests/test_project_transfer.py ...................                       [ 70%]
+tests/test_projects_and_story.py ....                                    [ 70%]
+tests/test_prompt_parity.py ............................................ [ 75%]
+......                                                                   [ 75%]
+tests/test_prompt_templates.py ................                          [ 77%]
+tests/test_reader.py .......                                             [ 78%]
+tests/test_relations_generate.py ..............................          [ 81%]
+tests/test_relationships.py ..........                                   [ 82%]
+tests/test_retrieval.py .............                                    [ 83%]
+tests/test_revise.py ...                                                 [ 83%]
+tests/test_rewrite.py .......                                            [ 84%]
+tests/test_skill_generation.py ........                                  [ 85%]
+tests/test_skills.py ............................                        [ 87%]
+tests/test_spa.py .                                                      [ 88%]
+tests/test_styles.py ...............                                     [ 89%]
+tests/test_tasks.py .......................                              [ 91%]
+tests/test_templating.py ..................................              [ 95%]
+tests/test_wizard.py .................                                   [ 96%]
+tests/test_wizard_resume.py .........                                    [ 97%]
+tests/test_workshop.py ..............                                    [ 99%]
+tests/test_writeback.py .........                                        [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_upgrade_and_downgrade __________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_upgrade_and_downgrade0')
+
+    def test_upgrade_and_downgrade(tmp_path):
+        db_file = tmp_path / "migrate.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:16:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x161113d70>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+_________________ test_0021_project_cover_storage_and_cascade __________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0021_project_cover_storag0')
+
+    def test_0021_project_cover_storage_and_cascade(tmp_path):
+        db_file = tmp_path / "migrate0021.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:46:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16bd44110>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+______________________ test_0003_backfills_existing_users ______________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0003_backfills_existing_u0')
+
+    def test_0003_backfills_existing_users(tmp_path):
+        """0003 为存量用户回填：启用中的普通用户、令牌版本 0；downgrade -1 删除三列。"""
+        db_file = tmp_path / "migrate0003.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:85:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16c008800>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+________________________ test_0004_backfills_model_type ________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0004_backfills_model_type0')
+
+    def test_0004_backfills_model_type(tmp_path):
+        """0004 将存量配置回填为文本模型；downgrade -1 删除该列。"""
+        db_file = tmp_path / "migrate0004.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:121:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16f947b00>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+__________________________ test_0005_chapter_versions __________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0005_chapter_versions0')
+
+    def test_0005_chapter_versions(tmp_path):
+        """0005 新建 chapter_versions / generation_logs（外键规则正确）；downgrade -1 删除两表且不影响章节。"""
+        db_file = tmp_path / "migrate0005.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:160:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x166d14380>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+_______________________________ test_0006_tasks ________________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0006_tasks0')
+
+    def test_0006_tasks(tmp_path):
+        """0006 新建 tasks（外键规则、部分唯一索引）并给 generation_logs 加 task_id；downgrade -1 还原。"""
+        db_file = tmp_path / "migrate0006.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:192:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16c216b70>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+___________________________ test_0007_story_entities ___________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0007_story_entities0')
+
+    def test_0007_story_entities(tmp_path):
+        """0007：存量角色 / 世界观原样保留并回填，写入预置关系类型；downgrade -1 删除新表新列且不影响存量数据。"""
+        from app.models.entities import PRESET_RELATIONSHIP_TYPES
+
+        db_file = tmp_path / "migrate0007.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:273:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16c6474a0>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+______________________________ test_0008_careers _______________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0008_careers0')
+
+    def test_0008_careers(tmp_path):
+        """0008：新建职业四张表（外键规则、唯一约束），不改动存量数据；downgrade -1 删除四张表。"""
+        db_file = tmp_path / "migrate0008.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:375:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1656aa090>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+__________________________ test_0009_chapter_analysis __________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0009_chapter_analysis0')
+
+    def test_0009_chapter_analysis(tmp_path):
+        """0009：分析两表（外键规则）、auto_analyze 回填 true、tasks.serial_key；downgrade -1 删除且存量保留。"""
+        db_file = tmp_path / "migrate0009.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:452:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16694ea50>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+____________________________ test_0010_foreshadows _____________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0010_foreshadows0')
+
+    def test_0010_foreshadows(tmp_path):
+        """0010：伏笔三表（外键规则、复合主键）；删角色只解除关联，删伏笔级联历史；downgrade -1 删除三表且存量保留。"""
+        db_file = tmp_path / "migrate0010.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:540:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1651f4860>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+____________________________ test_0011_outline_pro _____________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0011_outline_pro0')
+
+    def test_0011_outline_pro(tmp_path):
+        """0011：细纲 / 快照两表（外键规则、chapter_id 唯一）、chapters.plan_id、projects.wizard_progress 回填 {}；
+        删大纲级联细纲且章节保留、plan_id 置空；downgrade -1 删除两表两列且存量保留。"""
+        db_file = tmp_path / "migrate0011.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:622:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1656a95b0>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+___________________________ test_0012_batch_generate ___________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0012_batch_generate0')
+
+    def test_0012_batch_generate(tmp_path):
+        """0012：tasks.checkpoint 可空 JSON（存量任务为 NULL）；downgrade -1 先把 paused 改为 cancelled 再删列。"""
+        db_file = tmp_path / "migrate0012.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:718:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1627d3c50>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+___________________________ test_0013_prompt_styles ____________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0013_prompt_styles0')
+
+    def test_0013_prompt_styles(tmp_path):
+        """0013：插入 6 个预设；非空 projects.style 迁移为「《书名》原风格」并设为项目默认；
+        downgrade -1 把默认风格写回 style（原文无损），删除新表新列。"""
+        import importlib.util
+
+        from app.models.style_presets import PRESET_STYLES
+
+        db_file = tmp_path / "migrate0013.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:772:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x16402af90>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+____________________________ test_0014_inspiration _____________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0014_inspiration0')
+
+    def test_0014_inspiration(tmp_path):
+        """0014：projects 新增 6 列（存量项目取默认值）、新建 inspiration_sessions（外键规则）；
+        downgrade -1 删除新表新列且存量项目保留。"""
+        db_file = tmp_path / "migrate0014.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:858:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x165681070>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+___________________________ test_0015_knowledge_base ___________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0015_knowledge_base0')
+
+    def test_0015_knowledge_base(tmp_path):
+        """0015：新建知识库 / 记忆 / 检索单元五张表（外键规则、唯一约束、删章节只解除手动记忆关联）；
+        downgrade -1 删除五张表且存量项目保留。"""
+        db_file = tmp_path / "migrate0015.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:933:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1656824b0>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+__________________________ test_0016_reading_progress __________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0016_reading_progress0')
+
+    def test_0016_reading_progress(tmp_path):
+        """0016：projects 新增 reading_progress（存量项目取 {}）；downgrade -1 删除该列且存量项目保留。"""
+        db_file = tmp_path / "migrate0016.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:1025:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1656812e0>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+____________________________ test_0017_book_imports ____________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0017_book_imports0')
+
+    def test_0017_book_imports(tmp_path):
+        """0017：新建 book_imports（user_id CASCADE）、generation_logs.kind 放宽到 32；downgrade -1 删表、删掉拆书的
+        生成记录与任务、导入版本改记为 baseline，存量数据保留。"""
+        db_file = tmp_path / "migrate0017.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:1069:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x166f54b00>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+__________________ test_0018_agent_foreign_keys_and_downgrade __________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0018_agent_foreign_keys_a0')
+
+    def test_0018_agent_foreign_keys_and_downgrade(tmp_path):
+        db_file = tmp_path / "migrate0018.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:1157:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x166f56fc0>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+_____________________________ test_0019_skills_mcp _____________________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0019_skills_mcp0')
+
+    def test_0019_skills_mcp(tmp_path):
+        """0019：skills / skill_references / mcp_plugins 三张表、4 个内置全局 Skill、全局 slug 的部分唯一索引；
+        agent_conversations.mcp_plugin_ids、agent_messages.skill_id（SET NULL）/ skill_snapshot；downgrade -1 全部删除。"""
+        db_file = tmp_path / "migrate0019.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:1217:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x1661e5850>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+_________________ test_0020_workshop_constraints_and_downgrade _________________
+
+tmp_path = PosixPath('/private/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/pytest-of-wenyuantc/pytest-726/test_0020_workshop_constraints0')
+
+    def test_0020_workshop_constraints_and_downgrade(tmp_path):
+        """工坊迁移保留已发布内容、级联提交与互动，pending 更新由部分唯一索引保护。"""
+        db_file = tmp_path / "migrate0020.db"
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+>       cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+tests/test_migrations.py:1280:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv/lib/python3.12/site-packages/alembic/config.py:354: in set_main_option
+    self.set_section_option(self.config_ini_section, name, value)
+.venv/lib/python3.12/site-packages/alembic/config.py:385: in set_section_option
+    if not self.file_config.has_section(section):
+           ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py:1343: in __get__
+    obj.__dict__[self.__name__] = result = self.fget(obj)
+                                           ^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/alembic/config.py:250: in file_config
+    compat.read_config_parser(file_config, [self._config_file_path])
+.venv/lib/python3.12/site-packages/alembic/util/compat.py:130: in read_config_parser
+    return file_config.read(file_argument, encoding="locale")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:684: in read
+    self._read(fp, filename)
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/configparser.py:999: in _read
+    for lineno, line in enumerate(fp, start=1):
+                        ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <encodings.ascii.IncrementalDecoder object at 0x166f56420>
+input = b'[alembic]\nscript_location = %(here)s/alembic\nprepend_sys_path = .\npath_separator = os\n# \xe6\x95\xb0\xe6\x8d\xae...T\nformatter = generic\n\n[formatter_generic]\nformat = %(levelname)-5.5s [%(name)s] %(message)s\ndatefmt = %H:%M:%S\n'
+final = False
+
+    def decode(self, input, final=False):
+>       return codecs.ascii_decode(input, self.errors)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       UnicodeDecodeError: 'ascii' codec can't decode byte 0xe6 in position 88: ordinal not in range(128)
+
+../../../../.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/encodings/ascii.py:26: UnicodeDecodeError
+=============================== warnings summary ===============================
+tests/test_image_providers.py::test_gemini_current_sdk_imagen_unavailable_is_chinese
+  /Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/ai/providers/gemini.py:151: ExperimentalWarning: The generate_images method is deprecated and will be removed in the next major release (not before Jan. 1 2027). Please use the generate_content method with image models instead. See https://ai.google.dev/gemini-api/docs/deprecations#imagen-models and https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/image-generation#generate-images
+    result = await client.aio.models.generate_images(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_migrations.py::test_upgrade_and_downgrade - UnicodeDecodeEr...
+FAILED tests/test_migrations.py::test_0021_project_cover_storage_and_cascade
+FAILED tests/test_migrations.py::test_0003_backfills_existing_users - Unicode...
+FAILED tests/test_migrations.py::test_0004_backfills_model_type - UnicodeDeco...
+FAILED tests/test_migrations.py::test_0005_chapter_versions - UnicodeDecodeEr...
+FAILED tests/test_migrations.py::test_0006_tasks - UnicodeDecodeError: 'ascii...
+FAILED tests/test_migrations.py::test_0007_story_entities - UnicodeDecodeErro...
+FAILED tests/test_migrations.py::test_0008_careers - UnicodeDecodeError: 'asc...
+FAILED tests/test_migrations.py::test_0009_chapter_analysis - UnicodeDecodeEr...
+FAILED tests/test_migrations.py::test_0010_foreshadows - UnicodeDecodeError: ...
+FAILED tests/test_migrations.py::test_0011_outline_pro - UnicodeDecodeError: ...
+FAILED tests/test_migrations.py::test_0012_batch_generate - UnicodeDecodeErro...
+FAILED tests/test_migrations.py::test_0013_prompt_styles - UnicodeDecodeError...
+FAILED tests/test_migrations.py::test_0014_inspiration - UnicodeDecodeError: ...
+FAILED tests/test_migrations.py::test_0015_knowledge_base - UnicodeDecodeErro...
+FAILED tests/test_migrations.py::test_0016_reading_progress - UnicodeDecodeEr...
+FAILED tests/test_migrations.py::test_0017_book_imports - UnicodeDecodeError:...
+FAILED tests/test_migrations.py::test_0018_agent_foreign_keys_and_downgrade
+FAILED tests/test_migrations.py::test_0019_skills_mcp - UnicodeDecodeError: '...
+FAILED tests/test_migrations.py::test_0020_workshop_constraints_and_downgrade
+============ 20 failed, 990 passed, 1 warning in 344.34s (0:05:44) =============

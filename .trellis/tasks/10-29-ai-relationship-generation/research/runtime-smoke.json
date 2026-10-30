@@ -1,0 +1,90 @@
+{
+  "timestamp_utc": "2026-10-29T13:41:32.978791+00:00",
+  "environment": "isolated SQLite and FakeLLM over TCP",
+  "rejected_inputs": [
+    {
+      "case": "不足两名角色",
+      "status": 422
+    },
+    {
+      "case": "重复角色ID",
+      "status": 422
+    },
+    {
+      "case": "非正ID",
+      "status": 422
+    },
+    {
+      "case": "未归属ID",
+      "status": 404
+    },
+    {
+      "case": "条数下界",
+      "status": 422
+    },
+    {
+      "case": "条数上界",
+      "status": 422
+    },
+    {
+      "case": "要求超限",
+      "status": 422
+    },
+    {
+      "case": "无缺失关系",
+      "status": 400
+    }
+  ],
+  "unauthenticated_and_cross_user": [
+    401,
+    404
+  ],
+  "task_and_save": {
+    "task_id": 1,
+    "detach_keeps_running": true,
+    "reattach_receives_done": true,
+    "draft_has_no_writes": true,
+    "valid_suggestions": 3,
+    "saved_selected_items": 2,
+    "edited_description_saved": true,
+    "perspective": [
+      "徒弟",
+      "师父"
+    ],
+    "source": "ai_generate",
+    "existing_relationship_preserved": true,
+    "graph_edges": 3,
+    "repeat_save": 409
+  },
+  "simultaneous_identical_batch_statuses": [
+    201,
+    409
+  ],
+  "mixed_batch_rolls_back_relation_type_and_history": true,
+  "custom_roles_save": true,
+  "final_counts": {
+    "Character": 6,
+    "Relationship": 8,
+    "RelationshipType": 23,
+    "RelationshipHistory": 8,
+    "GenerationLog": 0
+  },
+  "simultaneous_new_custom_type": {
+    "statuses": [
+      201,
+      409
+    ],
+    "detail": "关系类型已被其他请求创建，请重试保存",
+    "one_relation_one_type_one_history": true
+  },
+  "different_pairs_share_new_type": {
+    "initial_statuses": [
+      201,
+      409
+    ],
+    "retried_successfully": [
+      1
+    ],
+    "one_type_two_relations": true
+  }
+}

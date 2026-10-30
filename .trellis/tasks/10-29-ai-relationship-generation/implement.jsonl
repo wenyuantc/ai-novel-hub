@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"遵守轻薄路由、service 归属校验与后台任务分层"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/relationship-contracts.md","reason":"story-entities 相关章节原文摘录，避免全文注入截断；统一写入、方向、去重、历史与草稿任务"}
+{"file":".trellis/spec/backend/prompts-styles.md","reason":"新增模板 key、锁定变量、覆盖与 legacy parity 兼容"}
+{"file":".trellis/spec/backend/retrieval.md","reason":"沿用知识库参考注入、上下文预算与检索降级"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/task-error-contracts.md","reason":"error-handling 相关章节原文摘录，覆盖中文错误、任务与订阅契约，避免注入截断"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"FakeLLM、隔离与后端验证门禁"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/ui-contracts.md","reason":"component-guidelines 的设定组件、主题与响应式原文摘录，避免全文注入截断"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/transport-contracts.md","reason":"type-safety 的类型组织、unknown 校验和 API 契约原文摘录，避免注入截断"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"useTaskStream 生命周期、重接、取消和 loader 约定"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端验证、主题、响应式和包体积门禁"}
+{"file":".trellis/tasks/10-29-ai-relationship-generation/research/integration-map.md","reason":"已核实接入点、易漏枚举、重复保存与刷新约束"}
+{"file":".trellis/spec/backend/relationship-generation.md","reason":"实施和独立检查后形成的最终跨层契约：生成只读、所选ID、确认保存、刷新与精确并发冲突"}

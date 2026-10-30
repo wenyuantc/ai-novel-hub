@@ -1,0 +1,82 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.7.0
+rootdir: /Users/wenyuantc/IdeaProjects/my/aiNovel/backend
+configfile: pyproject.toml
+testpaths: tests
+plugins: asyncio-1.4.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 1019 items
+
+tests/test_admin.py .............................                        [  2%]
+tests/test_agent_api.py ...........                                      [  3%]
+tests/test_agent_context.py .......                                      [  4%]
+tests/test_agent_effects.py .............................                [  7%]
+tests/test_agent_mcp_skills.py .........................                 [  9%]
+tests/test_agent_providers.py .......................................... [ 14%]
+..........                                                               [ 15%]
+tests/test_agent_runtime.py ....................                         [ 16%]
+tests/test_agent_tools.py ........................................       [ 20%]
+tests/test_ai_config_model_type.py .....                                 [ 21%]
+tests/test_ai_config_params.py .............................             [ 24%]
+tests/test_ai_configs.py .....                                           [ 24%]
+tests/test_analysis.py ............                                      [ 25%]
+tests/test_auth.py ............                                          [ 27%]
+tests/test_batch_generate.py .........................                   [ 29%]
+tests/test_book_import.py .........................                      [ 31%]
+tests/test_book_import_split.py ........................................ [ 35%]
+........                                                                 [ 36%]
+tests/test_cards.py .......                                              [ 37%]
+tests/test_career_tasks.py ...........                                   [ 38%]
+tests/test_careers.py .......                                            [ 39%]
+tests/test_cast_context.py ....                                          [ 39%]
+tests/test_chapter_numbering.py ..                                       [ 39%]
+tests/test_chapter_versions.py ................                          [ 41%]
+tests/test_chapters.py .........                                         [ 42%]
+tests/test_config_security.py .........                                  [ 43%]
+tests/test_context_builder.py ................                           [ 44%]
+tests/test_endpoint_guard.py ................................            [ 47%]
+tests/test_entity_tasks.py ......                                        [ 48%]
+tests/test_epub.py ......                                                [ 48%]
+tests/test_export.py ...                                                 [ 49%]
+tests/test_foreshadow_analysis.py ........                               [ 50%]
+tests/test_foreshadows.py .....                                          [ 50%]
+tests/test_image_providers.py .......................                    [ 52%]
+tests/test_inspiration.py ...........................                    [ 55%]
+tests/test_kb.py .................................                       [ 58%]
+tests/test_mcp_plugins.py .....................                          [ 60%]
+tests/test_memories.py ...............                                   [ 62%]
+tests/test_migrations.py ....................                            [ 64%]
+tests/test_organizations.py ...                                          [ 64%]
+tests/test_outline_pro.py ..............                                 [ 65%]
+tests/test_outline_snapshots.py ....                                     [ 66%]
+tests/test_outline_transfer.py .......                                   [ 66%]
+tests/test_project_cover.py ...........                                  [ 68%]
+tests/test_project_transfer.py ...................                       [ 69%]
+tests/test_projects_and_story.py ....                                    [ 70%]
+tests/test_prompt_parity.py ............................................ [ 74%]
+......                                                                   [ 75%]
+tests/test_prompt_templates.py ................                          [ 76%]
+tests/test_reader.py .......                                             [ 77%]
+tests/test_relations_generate.py ...............................         [ 80%]
+tests/test_relationships.py ..................                           [ 82%]
+tests/test_retrieval.py .............                                    [ 83%]
+tests/test_revise.py ...                                                 [ 83%]
+tests/test_rewrite.py .......                                            [ 84%]
+tests/test_skill_generation.py ........                                  [ 85%]
+tests/test_skills.py ............................                        [ 88%]
+tests/test_spa.py .                                                      [ 88%]
+tests/test_styles.py ...............                                     [ 89%]
+tests/test_tasks.py .......................                              [ 91%]
+tests/test_templating.py ..................................              [ 95%]
+tests/test_wizard.py .................                                   [ 96%]
+tests/test_wizard_resume.py .........                                    [ 97%]
+tests/test_workshop.py ..............                                    [ 99%]
+tests/test_writeback.py .........                                        [100%]
+
+=============================== warnings summary ===============================
+tests/test_image_providers.py::test_gemini_current_sdk_imagen_unavailable_is_chinese
+  /Users/wenyuantc/IdeaProjects/my/aiNovel/backend/app/ai/providers/gemini.py:151: ExperimentalWarning: The generate_images method is deprecated and will be removed in the next major release (not before Jan. 1 2027). Please use the generate_content method with image models instead. See https://ai.google.dev/gemini-api/docs/deprecations#imagen-models and https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/image-generation#generate-images
+    result = await client.aio.models.generate_images(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================= 1019 passed, 1 warning in 335.12s (0:05:35) ==================

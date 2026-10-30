@@ -1,0 +1,17 @@
+
+> ainovel-frontend@0.1.0 test
+> vitest run
+
+
+ RUN  v5.0.5 /Users/wenyuantc/IdeaProjects/my/aiNovel/frontend
+
+(node:95815) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ Test Files  54 passed (54)
+      Tests  428 passed (428)
+   Start at  21:13:22
+   Duration  4.16s (import 69%, transform 18%, tests 11%, worker 2%)
+
+    Isolate  54 workers spawned · ~208ms startup each (spawn + environment, per file)
+             at least ~1.04s faster with isolate: false — reuses workers across files instead of one per file

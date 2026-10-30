@@ -32,6 +32,7 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 - 语义：「a 是 b 的 `role_a`，b 是 a 的 `role_b`」。a 视角对方显示 `role_b`，b 视角对方显示 `role_a`
   （`RelationshipOut.other_role / self_role / other_name / other_id`，仅 `?character_id=` 查询时有值）。
 - 一对角色一条：`pair_low/pair_high = min/max(a_id, b_id)`，唯一约束兜底；`apply_change` 先查重 → 409 `这两个角色之间已有关系`。
+- 约束竞争可能在 flush 而非 commit 抛出：`apply_change` 只精确翻译角色对冲突、不主动 rollback；`resolve_type` 的类型首次创建竞争给独立中文409重试提示。HTTP请求或原有外层SAVEPOINT负责回滚，不误报无关完整性错误。详见[批量关系生成](./relationship-generation.md)。
 - `apply_change(rel)`：`rel.id is None` 视为新建（须先设 `project_id`），未给的字段用默认值（0 / normal / ""）。
   校验两端是本项目的不同角色（400 `角色不存在或不属于该项目` / `不能与自己建立关系`）、类型对本项目可见（预置或本项目自定义）、
   亲密度 -100～100、状态 ∈ `RELATION_STATUSES`、`source` ∈ `RELATION_SOURCES`（否则 `ValueError`，属编程错误）。
@@ -113,10 +114,12 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 | `character.generate` | 无 | `POST /projects/{pid}/characters/generate {ai_config_id?, instruction, role_type}` | `{draft, relation_suggestions, warnings}` |
 | `organization.generate` | 无 | `POST /projects/{pid}/organizations/generate {ai_config_id?, instruction}` | `{draft, member_suggestions, warnings}` |
 | `relations.parse` | `relparse:{character_id}` | `POST /projects/{pid}/characters/{cid}/parse-relations {ai_config_id?}` | `{character_id, character_name, suggestions, warnings}` |
+| `relations.generate` | 无 | `POST /projects/{pid}/relationships/generate {character_ids, count?, instruction?, ai_config_id?}` | `{character_ids, suggestions, warnings}` |
 
 - 实现：`entity_ai_service.py`（validate / build / run / normalize）+ `task_engine/handlers/entities.py`。**只产出草稿，不写设定数据，
   不写 generation_logs**；`on_abort` 无需还原。保存由前端调 `characters/with-relations`、`organizations/with-members`、
-  `relationships/batch`（`source="ai_parse"`）。
+  `relationships/batch`（旧解析 `source="ai_parse"`；批量生成 `source="ai_generate"`）。
+- `relations.generate` 只在所选已有角色间补充缺失关系，按 ID 关联；其请求/上下文/结果、只读草稿、并发与前端恢复详见[完整跨层契约](./relationship-generation.md)，不使用下文旧解析的名字匹配。
 - 关系建议（主体视角）：`{target_name, target_id, resolved, reason, existing_relationship_id, self_role, target_role,
   subject_is_a, type: {type_id|null, role_a, role_b, category}, intimacy, status, description}`。`subject_is_a` 为真时主体是 role_a 一方；
   `type_id` 为空表示保存时新建自定义类型。名字按「名字 → 别名」精确匹配；对不上 / 歧义 / 指向自己 / 已有关系 → `resolved=false` + `reason`。
