@@ -684,3 +684,43 @@
 ### Next Steps
 
 - 当前无活动任务；真实模型质量、PostgreSQL 真实行锁及已有 SDK 弃用警告等限制已记录在最终验收文档。
+
+
+## Session 23: AI 生成人物关系：实现、验收与归档
+<!-- trellis-session: v=2 fp=bfbf196228a3c189 -->
+
+**Date**: 2026-10-30
+**Task**: AI 生成人物关系：实现、验收与归档
+**Branch**: `feature/ai-relationship-generation`
+
+### Summary
+
+实现选定已有角色间缺失关系的 AI 草稿生成、编辑勾选与确认保存；完成三批工作提交，并按用户“提交归档”指令归档任务。
+
+### Main Changes
+
+- 新增 relations.generate 后台任务与只读草稿，支持 2–20 个已有角色、上下文预算、身份 ID 校验、取消和结果恢复。
+- 接入关系页入口、lazy 结果预览与批量确认，保存来源 ai_generate；结果重开屏蔽已存关系，保存后自行广播刷新。
+- 修复角色对及首次自定义类型的并发唯一冲突，精确返回中文 409，保留整批回滚和外层事务所有权；同步跨层规范与证据。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6a98227eb60f3618b1a3c689d79bf498bbd023af` | feat(relationships): 增加 AI 批量关系草稿生成 |
+| `c5c61e33a75d8194e8f5b5d0d6e6edbeae8c3eea` | feat(frontend): 接入 AI 关系生成与预览保存 |
+| `036af7a5e4a76b32b3041ac870998cd76339ad1a` | docs(relationships): 记录生成契约与验收结果 |
+
+### Testing
+
+- [OK] 上轮最终后端完整测试 1019 项、前端 428 项通过；Ruff、ESLint、TypeScript 和 Vite 构建通过，证据随任务归档。
+- [OK] 隔离 SQLite/FakeLLM 的真实 TCP/SSE 验证草稿无写入、断开重接、选择 2/3、方向、来源、两类并发 201/409、重试及批次回滚。
+- [OK] 本轮仅提交与归档，核对三批精确暂存范围及 diff 空白检查；清理研究资料行尾空白，未改产品代码、未重跑产品测试。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Work 设置禁用本地浏览器，真实交互、浅暗主题和 375px 尚未验证；真实 PostgreSQL 并发及真实模型创作质量仍未验证。保留这些限制，不将归档等同于验收通过。
