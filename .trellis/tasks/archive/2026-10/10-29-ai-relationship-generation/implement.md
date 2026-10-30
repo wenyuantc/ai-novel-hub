@@ -86,7 +86,7 @@ npm test
 - [x] 检查后更新 backend/story-entities.md、prompts-styles.md 与索引；同步前端组件、类型/任务契约中的实际行为。新增 backend/relationship-generation.md 记录跨层和并发事务契约。
 - [x] 不降低阈值、不跳过测试、不扩大 legacy 豁免；独立检查已核对。
 - [x] 提交前检查授权 diff；初始有未追踪 pelican-bicycle.html，不修改、不暂存、不提交。
-- [ ] 按项目 Git 工作流整理验证后的功能，再按 finish-work 记录。
+- [x] 按批准三批清单完成工作提交：6a98227（后端）、c5c61e3（前端）、036af7a（规范与验收）；按用户“提交归档”指令进入 finish-work 归档和会话记录，保留未验证项。
 - [ ] 无迁移，以功能提交回滚；先处理在途任务，保留已确认关系及新来源读取兼容性。
 
 ## 规划审核状态
