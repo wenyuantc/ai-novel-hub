@@ -398,6 +398,15 @@ dayjs.locale('zh-cn')
 - 创作能力与方向示例使用本地 state，选项卡有 ARIA 关联、单一 Tab 焦点和方向键/Home/End；FAQ 用 button 的 `aria-expanded/aria-controls` 与答案 hidden 联动。区段锚点和页脚回顶部可用，`prefers-reduced-motion` 时关闭平滑滚动/过渡。
 - 1440px 桌面画板总高2400px；≤767px 导航换行、插画/能力/流程/FAQ纵排，窄屏自然高度。必须检查320/375/768/1024/1440px文档和区段横向溢出；装饰插画允许在自身 overflow:hidden 容器内裁切，不能裁切主要内容来掩盖溢出。
 
+### 公开开发文档（`pages/DeveloperDocsPage.tsx`，`10-30-openapi-api-keys`）
+
+- `/developers` 与首页同为独立公开懒加载路由，放在 `RequireAuth` / `AppLayout` 之外；匿名直接访问与刷新都能阅读。首页顶部“常见问题”之后是“开发文档”入口。
+- 复用 `StudioBrand`、首页纸面 / 墨绿色 / 衬线标题视觉与现有主题 token。文档正文、目录和代码区域使用有作用域的语义 DOM / CSS，保持正确标题层次、可见键盘焦点、reduced-motion 与各断点可用。
+- 内容为公开接入说明和占位示例，不加载用户作品或密钥，不增加 Key 输入和业务请求表单。`/settings/api-keys` 仍由现有登录守卫保护并记录返回目标。
+- API 路径、字段、分页、时间、限流和错误以实际后端开放路由 / schema 为准；文档必须区分小说 id、章节 id 与章节号，不能承诺完整增量同步或按阅读章数恢复设定。
+- Swagger `/api/open/v1/docs` 负责详细字段及在线调试，`/api/open/v1/openapi.json` 负责机器描述下载。公开代码示例可以复制，受限时应给出可选代码与明确反馈；不能在示例中收集 / 注入真实 Key。
+- 检查首页第五个导航项与长端点 / 代码块在320/375/768/1024/1440px下的布局；长内容只允许在其自身容器滚动，不裁切页面主要内容掩盖溢出。不为纯文案或样式写镜像测试。
+
 ### 登录与注册（`pages/LoginPage.tsx`，`10-29-zhiye-library-ui`）
 
 - 独立 `/login` 认证页无工作区侧栏。桌面1.05fr/1fr：左侧panel色品牌、倾斜242×340px书册、标语与页脚，右侧paper色、最大380px表单。≤767px纵排，隐藏装饰书册和侧栏页脚，保留品牌/标语；所有颜色跟随现有主题token。

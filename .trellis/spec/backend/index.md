@@ -38,6 +38,7 @@
 | [项目智能体](./agent.md) | Provider 工具调用协议（`chat_tools_stream`、`TOOLS_UNSUPPORTED`、三家差异、`provider_metadata` 重放）、工具层与新增工具检查清单（kind 分级、`validate_references`、`id_model`）、提案 / 自动执行（首批 ≤3 项）/ 确认时预览比较 409、效果快照与撤销（`EFFECT_TABLES`、冲突检测、外键顺序）、`agent.turn` 断点续跑、安全规则；`external` kind、动态 MCP 工具、Skill 读工具与强制启用 | 已填写 |
 | [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码、全局 Skill 的管理员权限、`MCP_ENABLED` | 已填写 |
+| [平台 API Key 与开放读取](./open-api.md) | 可再次查看 / 复制的密钥、小说授权、独立 X-API-Key、数据库原子分钟额度、20 个只读接口、专属 OpenAPI / Swagger UI、前端显隐与复制 | 已填写 |
 | [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
 
 ### Code-spec 场景（7 段式契约）

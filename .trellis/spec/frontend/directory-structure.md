@@ -6,7 +6,7 @@
 
 ## 概述
 
-所有源码位于 `frontend/src/`。按技术分层而非按功能划分：HTTP/SSE 代码在 `api/`，全局状态在 `stores/`，可复用 hook 在 `hooks/`，可复用 UI 在 `components/`，路由页面在 `pages/`（项目工作区页面在 `pages/project/`），纯函数辅助工具在 `utils/`。没有 `assets/` 目录；唯一的静态资源是 `frontend/public/favicon.svg`。样式使用 AntD props 加内联 `style` 对象；`src/index.css` 是唯一的样式表。
+所有源码位于 `frontend/src/`。按技术分层而非按功能划分：HTTP/SSE 代码在 `api/`，全局状态在 `stores/`，可复用 hook 在 `hooks/`，可复用 UI 在 `components/`，路由页面在 `pages/`（项目工作区页面在 `pages/project/`），纯函数辅助工具在 `utils/`。样式使用 AntD props 和主题 token；`src/index.css` 提供全局基础样式，公开首页、开发文档和其他独立页面使用相邻的有作用域 CSS，不能通过页面样式重置全站。
 
 ---
 
@@ -38,6 +38,8 @@ frontend/
     ├── components/         # AppLayout、RequireAuth、AIConfigSelect、StreamOutput、WizardGenerator、
     │                       # WizardModal、ExportModal、StoryPreview
     ├── pages/
+    │   ├── HomePage.tsx, DeveloperDocsPage.tsx  # 公开懒加载页面，各自有作用域样式表
+    │   ├── ApiKeysPage.tsx                    # 受保护的用户级密钥管理页
     │   ├── LoginPage.tsx, ProjectListPage.tsx, AIConfigPage.tsx, NotFoundPage.tsx
     │   └── project/        # ProjectLayout + OverviewPanel、WizardPage、WorldPanel、CharactersPanel、
     │                       # OutlinesPanel、ChaptersPanel、ChapterEditorPage
@@ -75,7 +77,9 @@ export const outlineApi = makeCrud<Outline, OutlineInput>('outlines')
 
 传给 `api.*` 的路径是相对于 `API_BASE = '/api/v1'` 的；绝不要在页面中硬编码 `/api/v1`。
 
-**`router.tsx`**——唯一的 `createBrowserRouter` 路由表。`/login` 是公开的；其余全部嵌套在 `<RequireAuth><AppLayout/></RequireAuth>` 之下。项目工作区是 `projects/:pid`，由 `ProjectLayout` 及其子面板组成（`overview`、`wizard`、`world`、`characters`、`outlines`、`chapters`、`chapters/:cid`）。必须使用 data router，因为章节编辑器用到了 `useBlocker`。
+**`router.tsx`**——唯一的 `createBrowserRouter` 路由表。`/`、`/developers`、`/login` 为公开路由；首页和客户开发文档独立懒加载，不包工作区外壳。业务页面通过 `<RequireAuth><AppLayout/></RequireAuth>` 保护；全屏阅读器有单独的 RequireAuth 路由组。项目工作区是 `projects/:pid`，由 `ProjectLayout` 及其子面板组成（`overview`、`wizard`、`world`、`characters`、`outlines`、`chapters`、`chapters/:cid`）。必须使用 data router，因为章节编辑器用到了 `useBlocker`。
+
+公开首页与开发文档采用页面级有作用域 CSS 和现有主题 token，品牌复用 StudioBrand。公开说明不经过私有作品 / 密钥 API；受保护的 `/settings/api-keys` 保持原认证守卫。
 
 **新功能清单：** 在 `api/types.ts` 中定义类型 → 在 `api/<resource>.ts` 中编写资源函数 →（仅在跨页面时）在 `stores/` 中建 store → 在 `pages/` 或 `pages/project/` 中编写页面 → 在 `router.tsx` 中注册路由。
 

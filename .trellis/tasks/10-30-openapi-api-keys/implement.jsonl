@@ -1,0 +1,19 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"遵循 API → service → ORM 分层和模型模块导出约定"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-database.md","reason":"原数据库规范的相关逐字摘录：新增表、迁移、归属、分页、原子更新；避免注入截断"}
+{"file":".trellis/spec/backend/auth-admin.md","reason":"保持网页登录会话兼容，检查账号启用和禁用语义"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"密钥保护、HTTP 隔离测试、独立测试数据库及后端质量门禁"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-errors.md","reason":"原错误规范的相关逐字摘录：中文 detail、脱敏和 headers；避免注入截断"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-entities.md","reason":"原实体规范的关系与组织逐字摘录，其他字段结合 read-contracts 研究；避免注入截断"}
+{"file":".trellis/spec/backend/outline.md","reason":"大纲排序、分卷、细纲引用和已建章节语义"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"授权关系表排除备份、正文和 EPUB 下载复用"}
+{"file":".trellis/spec/backend/project-cover.md","reason":"复用封面拥有权、MIME 和版本信息"}
+{"file":".trellis/spec/backend/reader.md","reason":"保持分卷目录和章节读取与现有业务一致"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"API 模块、类型、懒加载页面和导航结构"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-components.md","reason":"原组件规范的页面、可访问、主题与响应式逐字摘录；避免注入截断"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-types.md","reason":"原类型规范的 schema、PATCH、UTC 和 API client 逐字摘录；避免注入截断"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint/build/test、包体积及真实页面检查"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/current-inventory.md","reason":"小说和章节接口现状、时间戳和同步边界"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/read-contracts.md","reason":"创作设定字段白名单、归属校验、排序和复用入口"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/key-auth-docs.md","reason":"可再次查看的加密密钥、独立鉴权和专属文档的证据"}
+{"file": ".trellis/tasks/10-30-openapi-api-keys/research/implementation-contracts.md", "reason": "代理间接口字段和文件所有权，避免并行实现冲突"}
+{"file": ".trellis/tasks/10-30-openapi-api-keys/research/public-developer-docs.md", "reason": "用户追加公开客户开发文档：首页导航位置、视觉一致性、实际 API 内容契约与切片边界"}

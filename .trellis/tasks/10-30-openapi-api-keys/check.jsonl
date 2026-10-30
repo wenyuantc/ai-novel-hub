@@ -1,0 +1,16 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核对密钥不泄露、真实 HTTP 测试和后端门禁"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-database.md","reason":"逐字数据库规范摘录，检查迁移、归属、级联、SQL 分页和原子额度；避免注入截断"}
+{"file":".trellis/spec/backend/auth-admin.md","reason":"验证账号状态与原会话兼容，Key 不扩大管理员权限"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-errors.md","reason":"逐字错误规范摘录，核对中文 detail、脱敏、HTTP 错误与 Retry-After"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-entities.md","reason":"逐字关系与组织规范摘录，结合 read-contracts 验证领域读取正确性"}
+{"file":".trellis/spec/backend/outline.md","reason":"验证分卷顺序和细纲失效人物引用清理"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"确保授权不入项目备份且导出兼容"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"检查 lint/build/test、移动端、主题和包体积"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-types.md","reason":"逐字类型规范摘录，核对管理请求、schema 对齐、UTC 与统一 API client"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/spec-components.md","reason":"逐字组件规范摘录，检查页面、可访问标签、主题和响应式"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/current-inventory.md","reason":"检查只读范围和更新时间边界，防止内部接口被整体开放"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/read-contracts.md","reason":"逐实体核对字段、跨小说限制、分页与领域派生信息"}
+{"file":".trellis/tasks/10-30-openapi-api-keys/research/key-auth-docs.md","reason":"核对可恢复密钥、专属 OpenAPI 安全定义和实际鉴权的一致性"}
+{"file": ".trellis/tasks/10-30-openapi-api-keys/research/implementation-contracts.md", "reason": "核对前后端管理接口与独立鉴权依赖契约"}
+{"file": ".trellis/spec/backend/open-api.md", "reason": "核对本任务已实现的平台密钥、开放读取与文档跨层契约"}
+{"file": ".trellis/tasks/10-30-openapi-api-keys/research/public-developer-docs.md", "reason": "用户追加公开客户开发文档：首页导航位置、视觉一致性、实际 API 内容契约与切片边界"}

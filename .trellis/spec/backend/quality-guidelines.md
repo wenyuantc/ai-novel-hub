@@ -50,8 +50,8 @@ macOS 终端若使用 `LC_ALL=C`，Alembic/ConfigParser 的显式 `encoding="loc
   或者像 `ai_config_service.test_config` 那样用 `asyncio.timeout(...)` 包裹调用。
 - **在事件循环上执行阻塞的 CPU 工作**：bcrypt 通过 `anyio.to_thread.run_sync` 运行
   （`auth_service.register` / `authenticate`）。任何新增的重型同步调用都应照此处理。
-- 在 service 中**直接使用 `HTTPException` / 手工构造错误 `JSONResponse`** —— 应抛出 `AppError` 子类。
-- **返回密钥**：绝不能把 `api_key` / `api_key_enc` / `password_hash` 放进 Out schema。
+- 在 service 中**直接使用 `HTTPException` / 手工构造错误 `JSONResponse`** —— 应抛出 `AppError` 子类。窄例外：`api_key_service.authenticate_key` 的 429 使用携带 `Retry-After` 的 HTTPException，复用现有保留 headers 的处理器；详见 [平台开放接口](./open-api.md)，不扩大为普通业务异常的默认模式。
+- **返回模型供应商凭据或默认暴露访问密钥**：绝不能把 `api_key` / `api_key_enc` / `password_hash` 放进普通 Out schema。平台签发 Key 的本人创建 / 主动 reveal 是用户明确要求的专用响应例外，必须 no-store、只读本人的密钥；列表 / 编辑 / 开放读取都不返回完整 Key，日志始终不记录密钥，见 [平台密钥契约](./open-api.md)。
 - **在 service 中内联 prompt 文本** —— 提示词文本放在 `app/ai/prompts/templates/*.j2` 默认模板中，
   `build_*_messages` 只拼变量（见 [prompts-styles.md](./prompts-styles.md)；改默认模板要同步 `tests/prompt_legacy.py`）。
 - **访问真实 DNS、真实 LLM API 或共享固定路径的测试**（`/tmp/test.db`、共享的
@@ -295,7 +295,7 @@ response.set_cookie(
   任何解码失败 → `None` → 401 `未登录或登录已过期`。
 - JWT payload 为 `{"sub": str(user_id), "iat", "exp"}`，HS256。
 - `GET /auth/config` → `{"registration_enabled": bool, "mcp_enabled": bool}`（`mcp_enabled` 见 [auth-admin.md](./auth-admin.md)）；注册关闭时注册 → 403 `注册已关闭，请联系管理员`。
-- API key：仅以 `api_key_enc = cipher.encrypt(api_key.strip())` 的形式存储；响应中携带
+- 以下 API key 加密与掩码规则针对 **AI 模型供应商配置**。平台签发的访问 Key 另有“加密密文 + 摘要索引、本人主动再次显示”的 [独立契约](./open-api.md)。供应商 API key 仅以 `api_key_enc = cipher.encrypt(api_key.strip())` 的形式存储；响应中携带
   由 `mask_secret` 生成的 `api_key_masked`：
 
 ```python
@@ -409,6 +409,6 @@ ai_config_service.context_char_budget(cfg, default) -> int        # 取代 CONTE
 - [ ] 测试中引擎真实运行：用 `Gate` 控制阻塞，`wait_task` / `stream_task` 等待结束，不用长 sleep。
 - [ ] AI 生成的字符串按列长度截断；内容变更时重新计算 `word_count`。
 - [ ] 错误为带中文 `detail` 的 `AppError` 子类；未经 `describe_error` 处理的 SDK 原始文本不得外露。
-- [ ] 响应和日志中没有密钥；已审查 Out schema。
+- [ ] 普通响应和日志中没有密钥；已审查 Out schema。平台 Key 的本人创建 / reveal 专用响应遵守 open-api.md，列表、编辑及对外读取仍不得含完整 Key。
 - [ ] 模型变更附带 Alembic revision；`test_migrations.py` 通过。
 - [ ] 测试使用 `tmp_path`、`FakeLLM` 和 `fake_dns`；不访问网络，不使用固定临时路径。

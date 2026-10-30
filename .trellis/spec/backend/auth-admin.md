@@ -3,6 +3,8 @@
 > 扩展自 [认证与密钥场景](./quality-guidelines.md#场景认证与密钥环境契约)。
 > 二者不一致时，以下内容以本文件为准：JWT payload（`ver`）、`get_current_user` 校验、已禁用用户的登录。
 
+平台签发的 API Key 使用独立的 X-API-Key 认证，与 token_version 会话失效机制分离；禁用账号同样阻止其 Key 使用。密钥的再次查看、授权、撤销及开放接口见 [平台 API Key 与开放读取](./open-api.md)。
+
 ---
 
 ## 场景：管理员角色、用户管理与 token 版本控制
