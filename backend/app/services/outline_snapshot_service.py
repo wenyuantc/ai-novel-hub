@@ -28,7 +28,7 @@ from app.schemas.outline import (
     SnapshotOutlineBrief,
     SnapshotRestoreResult,
 )
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project
 
 MAX_SNAPSHOTS = 20
 NOT_FOUND = "快照不存在"
@@ -116,7 +116,7 @@ def to_out(snap: OutlineSnapshot) -> SnapshotOut:
 
 
 async def _get(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int) -> OutlineSnapshot:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     snap = await db.scalar(
         select(OutlineSnapshot).where(OutlineSnapshot.id == snapshot_id, OutlineSnapshot.project_id == project_id)
     )
@@ -126,7 +126,7 @@ async def _get(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int
 
 
 async def list_snapshots(db: AsyncSession, user_id: int, project_id: int) -> list[SnapshotOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rows = await db.scalars(
         select(OutlineSnapshot).where(OutlineSnapshot.project_id == project_id).order_by(OutlineSnapshot.id.desc())
     )
@@ -134,7 +134,7 @@ async def list_snapshots(db: AsyncSession, user_id: int, project_id: int) -> lis
 
 
 async def create_manual(db: AsyncSession, user_id: int, project_id: int, note: str) -> SnapshotOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     snap = await save_snapshot(db, project_id, "manual", note)
     await db.commit()
     await db.refresh(snap)

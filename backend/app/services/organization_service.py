@@ -23,7 +23,7 @@ from app.schemas.organization import (
     OrganizationWithMembers,
 )
 from app.services import story_service
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project
 
 MAX_DEPTH = 50
 NAME_CONFLICT = "同名组织已存在"
@@ -31,7 +31,7 @@ MEMBER_CONFLICT = "该角色已是该组织成员"
 
 
 async def get_owned_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> Organization:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     org = await db.scalar(select(Organization).where(Organization.id == org_id, Organization.project_id == project_id))
     if org is None:
         raise NotFoundError("组织不存在")
@@ -112,7 +112,7 @@ async def new_org(db: AsyncSession, project_id: int, data: OrganizationCreate) -
 
 
 async def list_orgs(db: AsyncSession, user_id: int, project_id: int) -> list[OrganizationOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     orgs = list(
         await db.scalars(
             select(Organization)
@@ -128,7 +128,7 @@ async def get_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) 
 
 
 async def create_org(db: AsyncSession, user_id: int, project_id: int, data: OrganizationCreate) -> OrganizationOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     org = await new_org(db, project_id, data)
     await _commit(db, NAME_CONFLICT)
     await db.refresh(org)
@@ -261,7 +261,7 @@ async def remove_member(db: AsyncSession, user_id: int, project_id: int, org_id:
 
 
 async def character_memberships(db: AsyncSession, user_id: int, project_id: int, character_id: int) -> list[MemberOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     exists = await db.scalar(
         select(Character.id).where(Character.id == character_id, Character.project_id == project_id)
     )
@@ -331,7 +331,7 @@ async def create_with_members(
     db: AsyncSession, user_id: int, project_id: int, data: OrganizationWithMembers
 ) -> dict[str, Any]:
     """AI 生成组织预览确认后一次保存：组织 + 勾选的成员（单事务）。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     org = await new_org(db, project_id, data.organization)
     members = [await new_member(db, org, m) for m in data.members]
     await _commit(db, NAME_CONFLICT)

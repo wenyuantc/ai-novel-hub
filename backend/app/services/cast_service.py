@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError
 from app.models import Chapter, ChapterCharacter, Character, Project
-from app.services.chapter_service import get_project_chapter
+from app.services.chapter_service import get_manageable_chapter
 
 PROTAGONIST_ROLES = frozenset({"主角", "protagonist"})
 PREV_TAIL_CHARS = 1500
@@ -139,13 +139,13 @@ async def select_cast(
 
 
 async def get_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> list[int]:
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
     return await cast_ids(db, chapter.id)
 
 
 async def set_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: int, ids: list[int]) -> list[int]:
     """整体替换本章出场角色；所有 id 必须属于本项目。"""
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
     wanted = list(dict.fromkeys(ids))
     if wanted:
         found = set(

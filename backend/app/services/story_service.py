@@ -1,4 +1,4 @@
-"""世界观 / 角色 / 大纲 的通用 CRUD。所有入口先校验项目归属（user_id）。"""
+"""世界观 / 角色 / 大纲 CRUD；人工路由显式启用管理权限，AI / 工具默认保持严格归属。"""
 
 from dataclasses import dataclass
 from typing import Any
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models import Character, Outline, WorldSetting
 from app.services.cast_service import is_protagonist_role
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project, get_owned_project
 
 WORLD_CATEGORY_LABELS = {
     "place": "地点",
@@ -44,9 +44,15 @@ async def list_items(db: AsyncSession, kind: StoryKind, project_id: int, *, cate
 
 
 async def list_owned(
-    db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, *, category: str | None = None
+    db: AsyncSession,
+    kind: StoryKind,
+    user_id: int,
+    project_id: int,
+    *,
+    category: str | None = None,
+    manage: bool = False,
 ) -> list[Any]:
-    await get_owned_project(db, user_id, project_id)
+    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id)
     return await list_items(db, kind, project_id, category=category)
 
 
@@ -75,14 +81,25 @@ async def new_character(db: AsyncSession, project_id: int, values: dict[str, Any
 
 async def get_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int) -> Any:
     await get_owned_project(db, user_id, project_id)
+    return await _get_item(db, kind, project_id, item_id)
+
+
+async def get_manageable(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int) -> Any:
+    await get_manageable_project(db, user_id, project_id)
+    return await _get_item(db, kind, project_id, item_id)
+
+
+async def _get_item(db: AsyncSession, kind: StoryKind, project_id: int, item_id: int) -> Any:
     item = await db.scalar(select(kind.model).where(kind.model.id == item_id, kind.model.project_id == project_id))
     if item is None:
         raise NotFoundError(kind.not_found)
     return item
 
 
-async def create_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, data: BaseModel) -> Any:
-    await get_owned_project(db, user_id, project_id)
+async def create_owned(
+    db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, data: BaseModel, *, manage: bool = False
+) -> Any:
+    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id)
     values = data.model_dump()
     if kind is CHARACTERS:
         apply_character_defaults(values)
@@ -96,9 +113,16 @@ async def create_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_
 
 
 async def update_owned(
-    db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int, data: BaseModel
+    db: AsyncSession,
+    kind: StoryKind,
+    user_id: int,
+    project_id: int,
+    item_id: int,
+    data: BaseModel,
+    *,
+    manage: bool = False,
 ) -> Any:
-    item = await get_owned(db, kind, user_id, project_id, item_id)
+    item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     for field, value in data.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(item, field, value)
@@ -107,8 +131,10 @@ async def update_owned(
     return item
 
 
-async def delete_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int) -> None:
-    item = await get_owned(db, kind, user_id, project_id, item_id)
+async def delete_owned(
+    db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int, *, manage: bool = False
+) -> None:
+    item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     await db.delete(item)
     await db.commit()
 

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models import Chapter, Outline, Project
 from app.schemas.reader import ReadingProgressIn, TocItem
-from app.services.project_service import WRITTEN, get_owned_project
+from app.services.project_service import WRITTEN, get_manageable_project, get_owned_project
 
 
 async def save_progress(db: AsyncSession, user_id: int, project_id: int, data: ReadingProgressIn) -> None:
@@ -36,7 +36,7 @@ async def save_progress(db: AsyncSession, user_id: int, project_id: int, data: R
 
 async def toc(db: AsyncSession, user_id: int, project_id: int) -> list[TocItem]:
     """已写章节，按 (chapter_no, id) 排序；卷信息经 outline_id 取大纲的 volume_no / volume_title。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rows = await db.execute(
         select(
             Chapter.id,

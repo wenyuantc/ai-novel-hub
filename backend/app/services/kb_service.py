@@ -33,7 +33,7 @@ from app.schemas.kb import (
     StaleCounts,
 )
 from app.services import kb_parser, retrieval_service
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project, get_owned_project
 from app.services.retrieval_service import Embedder
 
 logger = logging.getLogger(__name__)
@@ -66,12 +66,12 @@ async def load_settings(db: AsyncSession, project_id: int) -> KbSettings:
 
 
 async def get_settings(db: AsyncSession, user_id: int, project_id: int) -> KbSettingsOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     return KbSettingsOut.model_validate(await load_settings(db, project_id))
 
 
 async def update_settings(db: AsyncSession, user_id: int, project_id: int, data: KbSettingsUpdate) -> KbSettingsOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     row = await db.get(KbSettings, project_id)
     if row is None:
         row = default_settings(project_id)
@@ -88,7 +88,7 @@ async def update_settings(db: AsyncSession, user_id: int, project_id: int, data:
 
 
 async def get_project_document(db: AsyncSession, user_id: int, project_id: int, document_id: int) -> KbDocument:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     doc = await db.scalar(select(KbDocument).where(KbDocument.id == document_id, KbDocument.project_id == project_id))
     if doc is None:
         raise NotFoundError("文档不存在")
@@ -96,7 +96,7 @@ async def get_project_document(db: AsyncSession, user_id: int, project_id: int, 
 
 
 async def list_documents(db: AsyncSession, user_id: int, project_id: int) -> list[KbDocumentOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rows = await db.scalars(
         select(KbDocument).where(KbDocument.project_id == project_id).order_by(KbDocument.id.desc())
     )
@@ -197,6 +197,7 @@ async def delete_document(db: AsyncSession, user_id: int, project_id: int, docum
 async def reindex_document(db: AsyncSession, engine, user_id: int, project_id: int, document_id: int):
     from app.services import task_service
 
+    await get_owned_project(db, user_id, project_id)
     doc = await get_project_document(db, user_id, project_id, document_id)
     if await _active_doc_task(db, doc.id) is not None:
         raise ConflictError("该文档正在建索引，请稍候再试")

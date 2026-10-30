@@ -32,7 +32,7 @@ from app.schemas.chapter import ChapterBrief
 from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
 from app.services import memory_service, outline_snapshot_service
 from app.services.chapter_numbering import shift_chapter_numbers
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project
 
 OUTLINE_NOT_FOUND = "大纲条目不存在"
 PLAN_NOT_FOUND = "细纲不存在"
@@ -42,7 +42,7 @@ PLAN_EDIT_FIELDS = ("title", "summary", "key_events", "character_ids", "emotion"
 
 
 async def get_project_outline(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> Outline:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
     if outline is None:
         raise NotFoundError(OUTLINE_NOT_FOUND)
@@ -134,9 +134,9 @@ async def get_chapter_plan(db: AsyncSession, chapter: Chapter) -> ChapterPlan | 
 
 
 async def chapter_plan_out(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> PlanOut | None:
-    from app.services.chapter_service import get_project_chapter
+    from app.services.chapter_service import get_manageable_chapter
 
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
     plan = await get_chapter_plan(db, chapter)
     return (await plan_outs(db, project_id, [plan]))[0] if plan is not None else None
 

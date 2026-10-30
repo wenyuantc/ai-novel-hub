@@ -27,8 +27,8 @@ from app.schemas.foreshadow import (
     PlantRequest,
     ResolveRequest,
 )
-from app.services.chapter_service import get_project_chapter
-from app.services.project_service import get_owned_project
+from app.services.chapter_service import get_manageable_chapter
+from app.services.project_service import get_manageable_project
 
 NOT_FOUND = "伏笔不存在"
 CHARACTER_INVALID = "关联角色不存在或不属于该项目"
@@ -272,7 +272,7 @@ async def _out(db: AsyncSession, fs: Foreshadow) -> ForeshadowOut:
 
 
 async def get_owned_foreshadow(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> Foreshadow:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     fs = await db.scalar(select(Foreshadow).where(Foreshadow.id == foreshadow_id, Foreshadow.project_id == project_id))
     if fs is None:
         raise NotFoundError(NOT_FOUND)
@@ -299,7 +299,7 @@ async def list_foreshadows(
     sort: str = "planned_resolve",
 ) -> list[ForeshadowOut]:
     """筛选：状态、仅超期、仅长线、关联角色；排序：计划回收章（空值在后）或重要度（高在前）。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     stmt = select(Foreshadow).where(Foreshadow.project_id == project_id)
     if status is not None:
         stmt = stmt.where(Foreshadow.status == status)
@@ -328,7 +328,7 @@ async def get_foreshadow(db: AsyncSession, user_id: int, project_id: int, foresh
 
 
 async def create_foreshadow(db: AsyncSession, user_id: int, project_id: int, data: ForeshadowCreate) -> ForeshadowOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     fs = Foreshadow(project_id=project_id, source="manual")
     await apply_foreshadow(db, fs, data.model_dump(), source="manual")
     await db.commit()
@@ -415,7 +415,7 @@ async def list_history(
 
 
 async def stats(db: AsyncSession, user_id: int, project_id: int) -> ForeshadowStats:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     items = await project_foreshadows(db, project_id)
     current_no = await current_chapter(db, project_id)
     result = ForeshadowStats(current_chapter=current_no)
@@ -544,7 +544,7 @@ def reminder_lines(rem: Reminders) -> dict[str, list[str]]:
 
 
 async def chapter_reminders(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> ForeshadowReminders:
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
     rem = await reminders(db, project_id, chapter.chapter_no)
     n = chapter.chapter_no
 

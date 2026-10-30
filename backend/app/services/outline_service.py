@@ -11,7 +11,7 @@ from app.models import Chapter, Outline
 from app.schemas.outline import OutlineAppendRequest, OutlineDetail, OutlineMoveRequest
 from app.schemas.story import OutlineOut
 from app.services import plan_service, story_service
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project
 
 
 async def list_outlines(db: AsyncSession, project_id: int) -> list[Outline]:
@@ -39,7 +39,7 @@ async def last_volume(db: AsyncSession, project_id: int) -> tuple[int, str]:
 
 
 async def outline_tree(db: AsyncSession, user_id: int, project_id: int) -> list[OutlineDetail]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     outlines = await list_outlines(db, project_id)
     plans = await plan_service.plans_of(db, [o.id for o in outlines])
     all_plans = [p for items in plans.values() for p in items]
@@ -69,7 +69,7 @@ async def outline_tree(db: AsyncSession, user_id: int, project_id: int) -> list[
 
 async def append_outlines(db: AsyncSession, user_id: int, project_id: int, data: OutlineAppendRequest) -> list[Outline]:
     """采纳续写结果：追加到末尾，章节号从当前最后一章之后顺延。单事务。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     start = await next_chapter_no(db, project_id)
     sort = await story_service.next_sort(db, Outline, project_id)
     created = []

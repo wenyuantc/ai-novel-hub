@@ -36,7 +36,7 @@ from app.schemas.relationship import (
 from app.schemas.story import CharacterOut
 from app.services import career_service, story_service
 from app.services.cast_service import is_protagonist
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project
 
 STATUS_LABELS = {"normal": "正常", "broken": "破裂", "past": "过去式", "complicated": "复杂"}
 CATEGORY_LABELS = {"family": "家庭", "social": "社交", "hostile": "敌对", "work": "职场", "other": "其他"}
@@ -159,7 +159,7 @@ async def resolve_type(
 
 
 async def list_types(db: AsyncSession, user_id: int, project_id: int) -> list[RelationshipTypeOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rows = await db.scalars(
         select(RelationshipType)
         .where(_visible_types(project_id))
@@ -171,7 +171,7 @@ async def list_types(db: AsyncSession, user_id: int, project_id: int) -> list[Re
 async def create_type(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipTypeCreate
 ) -> RelationshipTypeOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     ra, rb = data.role_a.strip(), data.role_b.strip()
     if not ra or not rb:
         raise BadRequestError("称呼不能为空")
@@ -189,7 +189,7 @@ async def create_type(
 
 
 async def delete_type(db: AsyncSession, user_id: int, project_id: int, type_id: int) -> None:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     t = await db.scalar(select(RelationshipType).where(RelationshipType.id == type_id, _visible_types(project_id)))
     if t is None:
         raise NotFoundError("关系类型不存在")
@@ -432,7 +432,7 @@ async def _refreshed_outs(db: AsyncSession, rels: list[Relationship], viewer_id:
 
 
 async def get_owned_relationship(db: AsyncSession, user_id: int, project_id: int, rel_id: int) -> Relationship:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rel = await db.scalar(select(Relationship).where(Relationship.id == rel_id, Relationship.project_id == project_id))
     if rel is None:
         raise NotFoundError("关系不存在")
@@ -442,7 +442,7 @@ async def get_owned_relationship(db: AsyncSession, user_id: int, project_id: int
 async def list_relationships(
     db: AsyncSession, user_id: int, project_id: int, *, character_id: int | None = None
 ) -> list[RelationshipOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     stmt = select(Relationship).where(Relationship.project_id == project_id)
     if character_id is not None:
         exists = await db.scalar(
@@ -475,7 +475,7 @@ def _create_kwargs(data: RelationshipCreate) -> dict[str, Any]:
 async def create_relationship(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipCreate
 ) -> RelationshipOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     try:
         rel = await create_relation(db, project_id, **_create_kwargs(data))
     except ConflictError:
@@ -489,7 +489,7 @@ async def create_relationships(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipBatchCreate
 ) -> list[RelationshipOut]:
     """批量新建（AI 关系建议预览确认后保存），单事务：任一条失败则全部不写入。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     try:
         rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
     except ConflictError:
@@ -538,7 +538,7 @@ async def create_character_with_relations(
     db: AsyncSession, user_id: int, project_id: int, data: CharacterWithRelations
 ) -> dict[str, Any]:
     """新建一个角色并同时建立勾选的关系与职业挂接（单事务）。subject_is_a 为真时新角色是 role_a 一方。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     character = await story_service.new_character(db, project_id, data.character.model_dump())
     rels = []
     for d in data.relations:
@@ -590,7 +590,7 @@ async def relations_among(db: AsyncSession, character_ids: list[int]) -> list[tu
 
 
 async def graph(db: AsyncSession, user_id: int, project_id: int) -> RelationshipGraph:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
     orgs = list(
         await db.scalars(

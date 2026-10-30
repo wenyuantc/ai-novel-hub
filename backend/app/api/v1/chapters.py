@@ -42,7 +42,7 @@ async def create_from_outlines(
 
 @router.get("/projects/{project_id}/chapters/{chapter_id}", response_model=ChapterOut)
 async def get_chapter(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> Chapter:
-    return await svc.get_project_chapter(db, user.id, project_id, chapter_id)
+    return await svc.get_manageable_chapter(db, user.id, project_id, chapter_id)
 
 
 @router.patch("/projects/{project_id}/chapters/{chapter_id}", response_model=ChapterOut)

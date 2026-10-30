@@ -23,14 +23,14 @@ async def create_project(body: ProjectCreate, user: CurrentUser, db: DbDep) -> P
 
 @router.get("/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: int, user: CurrentUser, db: DbDep) -> ProjectOut:
-    project = await svc.get_owned_project(db, user.id, project_id)
-    return await svc.project_out(db, project)
+    project = await svc.get_manageable_project(db, user.id, project_id)
+    return await svc.project_out(db, project, actor_user_id=user.id)
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)
 async def update_project(project_id: int, body: ProjectUpdate, user: CurrentUser, db: DbDep) -> ProjectOut:
     project, notice = await svc.update_project(db, user.id, project_id, body)
-    return await svc.project_out(db, project, notice)
+    return await svc.project_out(db, project, notice, actor_user_id=user.id)
 
 
 @router.patch("/{project_id}/wizard-progress", response_model=ProjectOut)

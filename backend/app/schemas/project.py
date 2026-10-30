@@ -111,10 +111,16 @@ class ReadingOut(BaseModel):
     ratio: float
 
 
+class ProjectOwner(BaseModel):
+    id: int
+    username: str
+
+
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    owner: ProjectOwner | None = None
     title: str
     genre: str
     premise: str

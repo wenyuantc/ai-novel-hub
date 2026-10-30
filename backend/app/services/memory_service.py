@@ -40,7 +40,7 @@ from app.schemas.memory import (
     MemoryUpdate,
 )
 from app.services import cast_service, retrieval_service
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project, get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder, SearchFilter
 
 logger = logging.getLogger(__name__)
@@ -233,8 +233,14 @@ async def on_chapter_renumbered(db: AsyncSession, chapter_id: int, chapter_no: i
 # ---------------- 手动管理 ----------------
 
 
+async def may_enqueue_vectors(db: AsyncSession, user_id: int, project_id: int) -> bool:
+    """跨用户人工维护不使用项目所有者的 embedding 配置。"""
+    project = await get_manageable_project(db, user_id, project_id)
+    return project.user_id == user_id
+
+
 async def get_project_memory(db: AsyncSession, user_id: int, project_id: int, memory_id: int) -> StoryMemory:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     m = await db.scalar(select(StoryMemory).where(StoryMemory.id == memory_id, StoryMemory.project_id == project_id))
     if m is None:
         raise NotFoundError("记忆不存在")
@@ -256,7 +262,7 @@ async def list_memories(
     page: int = 1,
     page_size: int = 50,
 ) -> MemoryPage:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     conds = [StoryMemory.project_id == project_id]
     if kind:
         conds.append(StoryMemory.kind == kind)
@@ -293,7 +299,7 @@ async def _chapter_id_for(db: AsyncSession, project_id: int, chapter_no: int) ->
 
 
 async def create_memory(db: AsyncSession, user_id: int, project_id: int, data: MemoryCreate) -> MemoryOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     m = StoryMemory(
         project_id=project_id,
         chapter_id=await _chapter_id_for(db, project_id, data.chapter_no),

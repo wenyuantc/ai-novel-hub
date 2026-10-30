@@ -3,6 +3,25 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.schemas.auth import Credentials, Password
+from app.schemas.project import ProjectStatus
+
+
+class AdminProjectOut(BaseModel):
+    id: int
+    title: str
+    genre: str
+    status: ProjectStatus
+    owner_user_id: int
+    owner_username: str
+    chapter_count: int
+    total_words: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminProjectList(BaseModel):
+    items: list[AdminProjectOut]
+    total: int
 
 
 class AdminUserOut(BaseModel):

@@ -6,11 +6,12 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
-from app.core.errors import NotFoundError
-from app.models import Chapter, Project, ProjectCover, WritingStyle
+from app.core.errors import ForbiddenError, NotFoundError
+from app.models import Chapter, Project, ProjectCover, User, WritingStyle
 from app.schemas.project import (
     ProjectCreate,
     ProjectOut,
+    ProjectOwner,
     ProjectUpdate,
     ReadingOut,
     WizardProgress,
@@ -25,6 +26,20 @@ async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> 
     if project is None:
         raise NotFoundError("项目不存在")
     return project
+
+
+async def get_manageable_project(db: AsyncSession, actor_user_id: int, project_id: int) -> Project:
+    """人工内容权限：所有者或当前启用管理员；不用于 AI、任务或账户私有资源。"""
+    project = await db.get(Project, project_id)
+    if project is not None:
+        if project.user_id == actor_user_id:
+            return project
+        admin = await db.scalar(
+            select(User.id).where(User.id == actor_user_id, User.is_admin.is_(True), User.is_active.is_(True))
+        )
+        if admin is not None:
+            return project
+    raise NotFoundError("项目不存在")
 
 
 async def project_info(db: AsyncSession, project: Project) -> ProjectInfo:
@@ -43,7 +58,7 @@ async def project_info(db: AsyncSession, project: Project) -> ProjectInfo:
     )
 
 
-def _stats_subquery():
+def chapter_stats_subquery():
     return (
         select(
             Chapter.project_id.label("project_id"),
@@ -150,7 +165,7 @@ def _to_out(
 
 async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
     """固定次数的查询（项目 + 统计 + 风格一次，最近编辑一次，阅读进度至多两次），不随项目数增长。"""
-    stats = _stats_subquery()
+    stats = chapter_stats_subquery()
     rows = (
         await db.execute(
             select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle, ProjectCover.updated_at)
@@ -167,7 +182,9 @@ async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
     return [_to_out(p, cc, tw, st, None, last.get(p.id), reading.get(p.id), cover) for p, cc, tw, st, cover in rows]
 
 
-async def project_out(db: AsyncSession, project: Project, notice: str | None = None) -> ProjectOut:
+async def project_out(
+    db: AsyncSession, project: Project, notice: str | None = None, *, actor_user_id: int | None = None
+) -> ProjectOut:
     row = (
         await db.execute(
             select(func.count(Chapter.id), func.coalesce(func.sum(Chapter.word_count), 0)).where(
@@ -177,9 +194,13 @@ async def project_out(db: AsyncSession, project: Project, notice: str | None = N
     ).one()
     style = await db.get(WritingStyle, project.default_style_id) if project.default_style_id else None
     last = await _last_edited(db, [project.id])
-    reading = await _reading(db, [project])
+    reading = await _reading(db, [project]) if actor_user_id in (None, project.user_id) else {}
     cover = await db.scalar(select(ProjectCover.updated_at).where(ProjectCover.project_id == project.id))
-    return _to_out(project, row[0], row[1], style, notice, last.get(project.id), reading.get(project.id), cover)
+    out = _to_out(project, row[0], row[1], style, notice, last.get(project.id), reading.get(project.id), cover)
+    owner = await db.get(User, project.user_id)
+    if owner is not None:
+        out.owner = ProjectOwner(id=owner.id, username=owner.username)
+    return out
 
 
 async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) -> tuple[Project, str | None]:
@@ -212,8 +233,10 @@ async def update_project(
     db: AsyncSession, user_id: int, project_id: int, data: ProjectUpdate
 ) -> tuple[Project, str | None]:
     """返回 (项目, 兼容提示)。default_style_id 显式 null = 取消默认风格；style（已废弃）更新「原风格」。"""
-    project = await get_owned_project(db, user_id, project_id)
+    project = await get_manageable_project(db, user_id, project_id)
     fields = data.model_fields_set
+    if project.user_id != user_id and fields.intersection({"style", "default_style_id", "auto_analyze"}):
+        raise ForbiddenError("管理他人项目时不能修改私有风格绑定或 AI 设置")
     if "default_style_id" in fields:
         await style_service.ensure_assignable(db, user_id, data.default_style_id)
         project.default_style_id = data.default_style_id
@@ -233,7 +256,7 @@ async def update_project(
 
 
 async def delete_project(db: AsyncSession, user_id: int, project_id: int) -> None:
-    project = await get_owned_project(db, user_id, project_id)
+    project = await get_manageable_project(db, user_id, project_id)
     await db.delete(project)
     await db.commit()
 

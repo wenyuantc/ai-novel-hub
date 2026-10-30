@@ -37,21 +37,21 @@ def _make_router(
         async def list_world(
             project_id: int, user: CurrentUser, db: DbDep, category: WorldCategory | None = None
         ) -> Any:
-            return await svc.list_owned(db, kind, user.id, project_id, category=category)
+            return await svc.list_owned(db, kind, user.id, project_id, category=category, manage=True)
 
     else:
 
         @router.get("", response_model=list[out_schema])  # type: ignore[valid-type]
         async def list_items(project_id: int, user: CurrentUser, db: DbDep) -> Any:
-            return await svc.list_owned(db, kind, user.id, project_id)
+            return await svc.list_owned(db, kind, user.id, project_id, manage=True)
 
     @router.post("", response_model=out_schema, status_code=status.HTTP_201_CREATED)
     async def create_item(project_id: int, body: create_schema, user: CurrentUser, db: DbDep) -> Any:  # type: ignore[valid-type]
-        return await svc.create_owned(db, kind, user.id, project_id, body)
+        return await svc.create_owned(db, kind, user.id, project_id, body, manage=True)
 
     @router.get("/{item_id}", response_model=out_schema)
     async def get_item(project_id: int, item_id: int, user: CurrentUser, db: DbDep) -> Any:
-        return await svc.get_owned(db, kind, user.id, project_id, item_id)
+        return await svc.get_manageable(db, kind, user.id, project_id, item_id)
 
     @router.patch("/{item_id}", response_model=out_schema)
     async def update_item(
@@ -61,11 +61,11 @@ def _make_router(
         user: CurrentUser,
         db: DbDep,
     ) -> Any:
-        return await svc.update_owned(db, kind, user.id, project_id, item_id, body)
+        return await svc.update_owned(db, kind, user.id, project_id, item_id, body, manage=True)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_item(project_id: int, item_id: int, user: CurrentUser, db: DbDep) -> Response:
-        await svc.delete_owned(db, kind, user.id, project_id, item_id)
+        await svc.delete_owned(db, kind, user.id, project_id, item_id, manage=True)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

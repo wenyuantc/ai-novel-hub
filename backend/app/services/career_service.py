@@ -31,7 +31,7 @@ from app.schemas.career import (
     StageOut,
 )
 from app.services import story_service
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project
 
 MAX_MAIN_CAREERS = 1
 MAX_SUB_CAREERS = 3
@@ -137,7 +137,7 @@ async def _refreshed_outs(db: AsyncSession, careers: list[Career]) -> list[Caree
 
 
 async def get_owned_career(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> Career:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     career = await db.scalar(select(Career).where(Career.id == career_id, Career.project_id == project_id))
     if career is None:
         raise NotFoundError("职业不存在")
@@ -243,7 +243,7 @@ async def new_career(db: AsyncSession, project_id: int, data: CareerCreate) -> C
 
 
 async def list_careers(db: AsyncSession, user_id: int, project_id: int) -> list[CareerOut]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     return await career_outs(db, await list_project_careers(db, project_id))
 
 
@@ -252,7 +252,7 @@ async def get_career(db: AsyncSession, user_id: int, project_id: int, career_id:
 
 
 async def create_career(db: AsyncSession, user_id: int, project_id: int, data: CareerCreate) -> CareerOut:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     career = await new_career(db, project_id, data)
     await _commit(db, NAME_CONFLICT)
     return (await _refreshed_outs(db, [career]))[0]
@@ -260,7 +260,7 @@ async def create_career(db: AsyncSession, user_id: int, project_id: int, data: C
 
 async def create_careers(db: AsyncSession, user_id: int, project_id: int, data: CareerBatchCreate) -> list[CareerOut]:
     """批量新建（AI 生成预览确认后保存），单事务：任一条失败则全部不写入。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     careers = [await new_career(db, project_id, item) for item in data.careers]
     await _commit(db, NAME_CONFLICT)
     return await _refreshed_outs(db, careers)
@@ -523,7 +523,7 @@ async def _refreshed_assignments(db: AsyncSession, rows: list[CharacterCareer]) 
 
 
 async def _owned_character(db: AsyncSession, user_id: int, project_id: int, character_id: int) -> Character:
-    return await story_service.get_owned(db, story_service.CHARACTERS, user_id, project_id, character_id)
+    return await story_service.get_manageable(db, story_service.CHARACTERS, user_id, project_id, character_id)
 
 
 async def _owned_assignment(
@@ -549,7 +549,7 @@ async def list_assignments(db: AsyncSession, user_id: int, project_id: int, char
 
 async def list_project_assignments(db: AsyncSession, user_id: int, project_id: int) -> list[AssignmentOut]:
     """项目内全部角色的挂接（角色卡片汇总用，一次请求）：按角色、主职业在前。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rows = await db.scalars(
         select(CharacterCareer)
         .join(Career, Career.id == CharacterCareer.career_id)

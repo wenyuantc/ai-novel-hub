@@ -1,4 +1,4 @@
-"""剧情记忆：列表筛选、手动记忆增删改、钉住 / 屏蔽、检索调试；章节的注入预览。他人资源一律 404。"""
+"""剧情记忆：人工维护允许管理员；检索和上下文预览保持归属，跨用户保存不创建向量任务。"""
 
 from typing import Annotated
 
@@ -54,7 +54,9 @@ async def list_memories(
     )
 
 
-async def _enqueue_vectors(engine, project_id: int) -> None:
+async def _enqueue_vectors(engine, db, user_id: int, project_id: int) -> None:
+    if not await svc.may_enqueue_vectors(db, user_id, project_id):
+        return
     # 有向量模型时为新增 / 修改的记忆排队生成向量（关键词检索立即可用）
     if await kb_index_service.enqueue_memory(engine.ctx.sessionmaker, project_id) is not None:
         engine.notify()
@@ -65,7 +67,7 @@ async def create_memory(
     project_id: int, body: MemoryCreate, user: CurrentUser, db: DbDep, engine: TaskEngineDep
 ) -> MemoryOut:
     out = await svc.create_memory(db, user.id, project_id, body)
-    await _enqueue_vectors(engine, project_id)
+    await _enqueue_vectors(engine, db, user.id, project_id)
     return out
 
 
@@ -81,7 +83,7 @@ async def update_memory(
     project_id: int, memory_id: int, body: MemoryUpdate, user: CurrentUser, db: DbDep, engine: TaskEngineDep
 ) -> MemoryOut:
     out = await svc.update_memory(db, user.id, project_id, memory_id, body)
-    await _enqueue_vectors(engine, project_id)
+    await _enqueue_vectors(engine, db, user.id, project_id)
     return out
 
 

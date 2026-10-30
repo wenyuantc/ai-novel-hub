@@ -18,7 +18,7 @@ from app.services import ai_config_service, project_service
 
 
 async def get_cover(db: AsyncSession, user_id: int, project_id: int) -> ProjectCover:
-    await project_service.get_owned_project(db, user_id, project_id)
+    await project_service.get_manageable_project(db, user_id, project_id)
     cover = await db.get(ProjectCover, project_id)
     if cover is None:
         raise NotFoundError("项目尚未设置封面")
@@ -26,7 +26,7 @@ async def get_cover(db: AsyncSession, user_id: int, project_id: int) -> ProjectC
 
 
 async def _lock_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
-    project = await project_service.get_owned_project(db, user_id, project_id)
+    project = await project_service.get_manageable_project(db, user_id, project_id)
     # 锁父项目也涵盖首次上传（此时封面行不存在），串行化同一项目的上传和删除。
     await db.execute(select(Project.id).where(Project.id == project.id).with_for_update())
     return project
@@ -49,7 +49,7 @@ async def put_cover(db: AsyncSession, user_id: int, project_id: int, data: bytes
         # SQLite 的 func.now() 只有秒精度；显式微秒版本保证快速连续替换也更新 URL。
         cover.updated_at = max(now, previous + timedelta(microseconds=1))
     await db.commit()
-    return await project_service.project_out(db, project)
+    return await project_service.project_out(db, project, actor_user_id=user_id)
 
 
 async def delete_cover(db: AsyncSession, user_id: int, project_id: int) -> ProjectOut:
@@ -58,7 +58,7 @@ async def delete_cover(db: AsyncSession, user_id: int, project_id: int) -> Proje
     if cover is not None:
         await db.delete(cover)
     await db.commit()
-    return await project_service.project_out(db, project)
+    return await project_service.project_out(db, project, actor_user_id=user_id)
 
 
 async def default_prompt(db: AsyncSession, user_id: int, project_id: int) -> CoverPromptOut:

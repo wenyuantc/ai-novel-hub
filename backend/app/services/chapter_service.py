@@ -4,11 +4,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import BadRequestError, ConflictError, NotFoundError
+from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import Chapter, ChapterPlan, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
 from app.services import memory_service, style_service, version_service
-from app.services.project_service import get_owned_project
+from app.services.project_service import get_manageable_project, get_owned_project
 
 _WS_RE = re.compile(r"\s+")
 
@@ -40,6 +40,15 @@ async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int) -> 
 
 async def get_project_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> Chapter:
     await get_owned_project(db, user_id, project_id)
+    return await _chapter_in_project(db, project_id, chapter_id)
+
+
+async def get_manageable_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> Chapter:
+    await get_manageable_project(db, user_id, project_id)
+    return await _chapter_in_project(db, project_id, chapter_id)
+
+
+async def _chapter_in_project(db: AsyncSession, project_id: int, chapter_id: int) -> Chapter:
     chapter = await db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.project_id == project_id))
     if chapter is None:
         raise NotFoundError("章节不存在")
@@ -47,7 +56,7 @@ async def get_project_chapter(db: AsyncSession, user_id: int, project_id: int, c
 
 
 async def list_chapters(db: AsyncSession, user_id: int, project_id: int) -> list[Chapter]:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     rows = await db.scalars(
         select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_no, Chapter.id)
     )
@@ -67,7 +76,7 @@ async def _next_chapter_no(db: AsyncSession, project_id: int) -> int:
 
 
 async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: ChapterCreate) -> Chapter:
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     title = (data.title or "").strip()
     chapter_no = data.chapter_no
     if data.outline_id is not None:
@@ -98,7 +107,7 @@ async def create_from_outlines(
     db: AsyncSession, user_id: int, project_id: int, data: ChaptersFromOutlines
 ) -> list[Chapter]:
     """为大纲条目批量创建章节占位（1 纲 1 章）；已关联章节的、已展开为细纲的大纲条目跳过（后者按细纲建章）。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id)
     stmt = select(Outline).where(Outline.project_id == project_id)
     if data.outline_ids is not None:
         stmt = stmt.where(Outline.id.in_(data.outline_ids))
@@ -137,8 +146,14 @@ async def create_from_outlines(
 async def update_chapter(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: ChapterUpdate
 ) -> Chapter:
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+    project = await get_manageable_project(db, user_id, project_id)
     fields = data.model_fields_set
+    if project.user_id != user_id:
+        if "style_id" in fields:
+            raise ForbiddenError("管理他人项目时不能修改私有风格绑定")
+        if chapter.status == "generating":
+            raise ConflictError("该章节正在生成中，请等待完成后再编辑")
     # 生成中修改正文/标题会在生成完成时被静默覆盖；只允许单独复位状态
     if chapter.status == "generating" and data.status is None and (data.content is not None or data.title is not None):
         raise ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")
@@ -178,7 +193,7 @@ async def update_chapter(
 
 
 async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> None:
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
     # 先删该章的自动记忆与检索单元（手动记忆保留，chapter_id 由外键置空）
     await memory_service.on_chapters_deleted(db, [chapter.id])
     await db.delete(chapter)
