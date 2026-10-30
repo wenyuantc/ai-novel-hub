@@ -8,6 +8,7 @@ import { useLoader } from '../../hooks/useLoader'
 import RelationEditModal from '../relations/RelationEditModal'
 import RelationHistoryModal from '../relations/RelationHistoryModal'
 import EntityTaskModal from './EntityTaskModal'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 interface Props {
   projectId: number
@@ -17,6 +18,7 @@ interface Props {
 
 /** 角色抽屉「关系」Tab：该角色视角的关系列表（增删改、历史）+ 旧关系备注只读块与「AI 解析为关系」。 */
 export default function CharacterRelationsTab({ projectId, character, characters }: Props) {
+  const { canUseAI } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const loader = useCallback(() => relationshipApi.list(projectId, character.id), [projectId, character.id])
   const { data: rels = [], loading, reload } = useLoader(loader, { projectId, resources: ['relationships', 'characters'] })
@@ -116,11 +118,11 @@ export default function CharacterRelationsTab({ projectId, character, characters
         <Card
           size="small"
           title="旧关系备注（只读）"
-          extra={
+          extra={canUseAI && (
             <Button size="small" icon={<RobotOutlined />} onClick={() => setParseOpen(true)}>
               AI 解析为关系
             </Button>
-          }
+          )}
         >
           <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{character.relations_text}</Typography.Paragraph>
         </Card>
@@ -139,7 +141,7 @@ export default function CharacterRelationsTab({ projectId, character, characters
         }}
       />
       {history && <RelationHistoryModal projectId={projectId} relationship={history} onClose={() => setHistory(null)} />}
-      <EntityTaskModal
+      {canUseAI && (<EntityTaskModal
         projectId={projectId}
         kind="relations.parse"
         open={parseOpen}
@@ -147,7 +149,7 @@ export default function CharacterRelationsTab({ projectId, character, characters
         characterName={character.name}
         onClose={() => setParseOpen(false)}
         onSaved={reload}
-      />
+      />)}
     </Space>
   )
 }

@@ -11,7 +11,7 @@ export const INDEX_POLL_MS = 3000
  * 项目索引状态（知识库页 / 记忆页共用）：挂载时加载；任务结束（store `version` 变化）后刷新；
  * 本项目有活动 `kb.index` 任务、后端报告 `indexing` 或调用方报告 `busy`（如有文档在处理）时每 3 秒刷新，并调用 `onTick`。
  */
-export function useIndexStatus(pid: number, { busy = false, onTick }: { busy?: boolean; onTick?: () => void } = {}) {
+export function useIndexStatus(pid: number, { busy = false, onTick, enabled = true }: { busy?: boolean; onTick?: () => void; enabled?: boolean } = {}) {
   const [status, setStatus] = useState<IndexStatus>()
   const version = useTasksStore((s) => s.version)
   const kbActive = useTasksStore((s) =>
@@ -20,9 +20,10 @@ export function useIndexStatus(pid: number, { busy = false, onTick }: { busy?: b
 
   // 递增即重新读取（刷新 / 轮询）；读取放在 effect 的回调里，避免在 effect 中同步 setState
   const [tick, setTick] = useState(0)
-  const refresh = useCallback(() => setTick((t) => t + 1), [])
+  const refresh = useCallback(() => { if (enabled) setTick((t) => t + 1) }, [enabled])
 
   useEffect(() => {
+    if (!enabled) return
     let alive = true
     kbApi.indexStatus(pid).then(
       (s) => {
@@ -35,9 +36,9 @@ export function useIndexStatus(pid: number, { busy = false, onTick }: { busy?: b
     return () => {
       alive = false
     }
-  }, [pid, version, tick])
+  }, [pid, version, tick, enabled])
 
-  const polling = busy || kbActive || Boolean(status?.indexing)
+  const polling = enabled && (busy || kbActive || Boolean(status?.indexing))
   useEffect(() => {
     if (!polling) return
     const timer = setInterval(() => {

@@ -6,6 +6,7 @@ import { versionApi, VERSION_SOURCE } from '../../api/chapterVersions'
 import { errorMessage } from '../../api/client'
 import type { ChapterVersionBrief } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { formatTime } from '../../utils/time'
 import TextDiff from '../TextDiff'
 import GenerationLogList from './GenerationLogList'
@@ -26,16 +27,17 @@ interface Props {
 
 /** 章节版本历史抽屉：版本列表（查看 / 对比 / 恢复 / 标星 / 备注 / 删除）+ 生成记录。 */
 export default function VersionDrawer({ open, onClose, ...rest }: Props) {
+  const { canUseAI } = useProjectAccess(rest.pid)
   return (
     <Drawer title="版本历史" width={820} open={open} onClose={onClose} destroyOnHidden>
       <Tabs
         items={[
           { key: 'versions', label: '版本', children: <VersionList {...rest} /> },
-          {
+          ...(canUseAI ? [{
             key: 'logs',
             label: '生成记录',
             children: <GenerationLogList pid={rest.pid} chapterId={rest.chapterId} />,
-          },
+          }] : []),
         ]}
       />
     </Drawer>

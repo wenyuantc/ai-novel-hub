@@ -26,6 +26,7 @@ import RetrievalSettingsCard from '../../components/kb/RetrievalSettingsCard'
 import { useIndexStatus } from '../../hooks/useIndexStatus'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useTasksStore } from '../../stores/tasks'
 import {
   docStatusHint,
@@ -43,6 +44,7 @@ import { splitPane, splitRow } from '../../utils/layout'
 export default function KnowledgePanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const track = useTasksStore((s) => s.track)
 
@@ -68,7 +70,7 @@ export default function KnowledgePanel() {
   }, [pid, setDocs])
 
   const busy = docs.some((d) => isDocBusy(d.status))
-  const { status, refresh: refreshStatus, version } = useIndexStatus(pid, { busy, onTick: refreshDocs })
+  const { status, refresh: refreshStatus, version } = useIndexStatus(pid, { busy, onTick: refreshDocs, enabled: canUseAI })
 
   // 任务结束（store version 变化）后刷新文档状态
   useEffect(() => {
@@ -94,6 +96,7 @@ export default function KnowledgePanel() {
   }
 
   const beforeUpload = (file: File) => {
+    if (!canUseAI) return false
     const problem = precheckUpload(file, docs.length + acceptedRef.current)
     if (problem) {
       message.error(problem)
@@ -186,7 +189,7 @@ export default function KnowledgePanel() {
           <Button type="link" size="small" onClick={() => setViewing(d)}>
             查看分块
           </Button>
-          <Popconfirm
+          {canUseAI && <Popconfirm
             title="重新建索引？"
             description="会删除现有分块，按保存的文本重新分块并生成向量"
             okText="重建"
@@ -202,7 +205,7 @@ export default function KnowledgePanel() {
             <Button type="link" size="small" disabled={isDocBusy(d.status)}>
               重建索引
             </Button>
-          </Popconfirm>
+          </Popconfirm>}
           <Popconfirm
             title="删除该文档？"
             description="分块与索引会一并删除"
@@ -222,13 +225,13 @@ export default function KnowledgePanel() {
 
   return (
     <>
-      <IndexStatusBanner projectId={pid} status={status} scope="kb" onChanged={() => refreshStatus()} />
+      {canUseAI && <IndexStatusBanner projectId={pid} status={status} scope="kb" onChanged={() => refreshStatus()} />}
       {settings && !settings.auto_inject && (
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="已关闭自动注入：生成时不会使用知识库（检索调试仍可用）"
+          message={canUseAI ? '已关闭自动注入：生成时不会使用知识库（检索调试仍可用）' : '已关闭自动注入'}
         />
       )}
       <div style={splitRow}>
@@ -242,7 +245,7 @@ export default function KnowledgePanel() {
               </Button>
             }
           >
-            <Upload.Dragger
+            {canUseAI && <Upload.Dragger
               multiple
               accept={KB_ACCEPT}
               showUploadList={false}
@@ -256,7 +259,7 @@ export default function KnowledgePanel() {
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 支持 txt、md、json、docx、epub、pdf（只取文字层，不支持扫描件），单个文件 ≤ 20MB。只保存解析出的文本
               </Typography.Text>
-            </Upload.Dragger>
+            </Upload.Dragger>}
             {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
             <Table<KbDocument>
               rowKey="id"
@@ -278,7 +281,7 @@ export default function KnowledgePanel() {
               scope="kb"
               onSaved={(s: KbSettings) => setSettings(() => s)}
             />
-            <KbSearchDebug projectId={pid} />
+            {canUseAI && <KbSearchDebug projectId={pid} />}
           </Space>
         </div>
       </div>

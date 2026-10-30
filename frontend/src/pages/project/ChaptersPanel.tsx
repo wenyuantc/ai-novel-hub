@@ -14,6 +14,7 @@ import { useTasksStore } from '../../stores/tasks'
 import { batchBannerState, queuedBatchChapterIds } from '../../utils/batchState'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 // 批量生成横幅 / 弹窗按需加载（章节页在入口 chunk 中）
 const BatchBanner = lazy(() => import('../../components/batch/BatchBanner'))
@@ -21,6 +22,7 @@ const BatchGenerateModal = lazy(() => import('../../components/batch/BatchGenera
 
 export default function ChaptersPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
   const isMobile = useIsMobile()
@@ -33,8 +35,8 @@ export default function ChaptersPanel() {
   const tasksVersion = useTasksStore((s) => s.version)
   const statusLoader = useCallback(() => {
     void tasksVersion // 仅作为重新加载的触发依赖
-    return chapterData ? analysisApi.statuses(pid) : Promise.resolve<ChapterAnalysisState[]>([])
-  }, [pid, chapterData, tasksVersion])
+    return canUseAI && chapterData ? analysisApi.statuses(pid) : Promise.resolve<ChapterAnalysisState[]>([])
+  }, [pid, chapterData, tasksVersion, canUseAI])
   const { data: statuses = [] } = useLoader(statusLoader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const statusById = useMemo(() => new Map(statuses.map((s) => [s.chapter_id, s])), [statuses])
   const [createOpen, setCreateOpen] = useState(false)
@@ -47,11 +49,11 @@ export default function ChaptersPanel() {
   const openBatch = useTasksStore((s) => s.active.find((t) => t.kind === 'chapter.batch' && t.project_id === pid))
   const latestBatchLoader = useCallback(() => {
     void tasksVersion // 有任务结束 / 本地操作时重新加载
-    return taskApi.list({ project_id: pid, kind: 'chapter.batch', limit: 1 }).then((list) => list[0] ?? null)
-  }, [pid, tasksVersion])
+    return canUseAI ? taskApi.list({ project_id: pid, kind: 'chapter.batch', limit: 1 }).then((list) => list[0] ?? null) : Promise.resolve(null)
+  }, [pid, tasksVersion, canUseAI])
   const { data: latestBatch = null } = useLoader(latestBatchLoader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const batchTask: Task | null =
-    openBatch ??
+    !canUseAI ? null : openBatch ??
     (latestBatch && batchBannerState(latestBatch) === 'resumable' && latestBatch.id !== dismissedBatchId
       ? latestBatch
       : null)
@@ -92,7 +94,7 @@ export default function ChaptersPanel() {
       styles={isMobile ? { header: { flexWrap: 'wrap', paddingBlock: 8, gap: 8 }, body: { padding: 8 } } : undefined}
       extra={
         <Space wrap>
-          <Tooltip title={openBatch ? '已有进行中或待审核的批量生成' : undefined}>
+          {canUseAI && <Tooltip title={openBatch ? '已有进行中或待审核的批量生成' : undefined}>
             <Button
               icon={<ThunderboltOutlined />}
               disabled={chapters.length === 0 || !!openBatch}
@@ -100,7 +102,7 @@ export default function ChaptersPanel() {
             >
               批量生成
             </Button>
-          </Tooltip>
+          </Tooltip>}
           <Button onClick={() => navigate(`/projects/${pid}/outlines`)}>从大纲创建</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             新建章节
@@ -256,7 +258,7 @@ export default function ChaptersPanel() {
           ]}
         />
       )}
-      {batchOpen && (
+      {canUseAI && batchOpen && (
         <Suspense fallback={null}>
           <BatchGenerateModal
             projectId={pid}

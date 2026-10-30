@@ -15,6 +15,9 @@ import { projectApi } from '../api/projects'
 import { readerApi, saveProgressKeepalive } from '../api/reader'
 import type { Chapter, Project, ReaderTocItem, ReadingPosition } from '../api/types'
 import ReaderAnalysisPanel from '../components/reader/ReaderAnalysisPanel'
+import ProjectManagementNotice from '../components/project/ProjectManagementNotice'
+import { useAuthStore } from '../stores/auth'
+import { projectAccess } from '../utils/projectAccess'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useLoader } from '../hooks/useLoader'
 import { READER_TONES, type ReaderTone } from '../theme/palette'
@@ -60,6 +63,7 @@ export default function ReaderPage() {
   const cid = params.cid === undefined ? null : Number(params.cid)
   const navigate = useNavigate()
   const location = useLocation()
+  const user = useAuthStore((s) => s.user)
   const resolved = useResolvedTheme()
   const [settings, setSettings] = useState<ReaderSettings>(readReaderSettings)
   const tone = readerTone(settings.background, resolved)
@@ -71,13 +75,14 @@ export default function ReaderPage() {
   const readingRef = useRef<ReadingPosition | null>(null)
   const loader = useCallback(async (): Promise<ReaderData> => {
     const [project, toc] = await Promise.all([projectApi.get(pid), readerApi.toc(pid)])
-    readingRef.current = project.reading
+    readingRef.current = projectAccess(project, user, pid).managingOther ? null : project.reading
     return { project, toc }
-  }, [pid])
+  }, [pid, user])
   const { data, loading, error } = useLoader(loader)
 
-  // 没有指定章节：按进度定位
-  const start = data ? startChapterId(data.toc, data.project.reading) : null
+  const currentData = data?.project.id === pid ? data : undefined
+  // 管理员阅读他人项目不使用所有者的阅读进度。
+  const start = currentData ? startChapterId(currentData.toc, projectAccess(currentData.project, user, pid).managingOther ? null : currentData.project.reading) : null
   useEffect(() => {
     if (cid === null && start !== null) navigate(`/projects/${pid}/read/${start}`, { replace: true, state: location.state })
   }, [cid, start, pid, navigate, location.state])
@@ -94,7 +99,7 @@ export default function ReaderPage() {
   if (error) {
     return wrap(<Result status="warning" title="无法打开阅读器" subTitle={error} extra={<Link to="/projects">返回书架</Link>} />)
   }
-  if (!data || loading) {
+  if (!currentData || loading) {
     return wrap(
       <div style={{ padding: 64, textAlign: 'center' }}>
         <Spin />
@@ -119,8 +124,8 @@ export default function ReaderPage() {
   return wrap(
     <ReaderView
       key={cid}
-      project={data.project}
-      toc={data.toc}
+      project={currentData.project}
+      toc={currentData.toc}
       chapterId={cid}
       settings={settings}
       onSettings={setSettings}
@@ -142,6 +147,8 @@ interface ViewProps {
 
 function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readingRef }: ViewProps) {
   const pid = project.id
+  const user = useAuthStore((s) => s.user)
+  const { managingOther, canUseAI } = projectAccess(project, user, pid)
   const navigate = useNavigate()
   const location = useLocation()
   const isMobile = useIsMobile()
@@ -171,6 +178,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const timerRef = useRef<number | null>(null)
   const report = useCallback(
     (keepalive: boolean) => {
+      if (!canUseAI) return
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current)
         timerRef.current = null
@@ -185,31 +193,32 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
         // 进度上报失败不打扰阅读；下次滚动会再报
       })
     },
-    [chapter, pid, readingRef],
+    [chapter, pid, readingRef, canUseAI],
   )
   const schedule = useCallback(
     (ratio: number) => {
+      if (!canUseAI) return
       pendingRef.current = { ratio, dirty: true }
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
       timerRef.current = window.setTimeout(() => report(false), REPORT_DELAY_MS)
     },
-    [report],
+    [report, canUseAI],
   )
 
   // 正文渲染后：只有这一章就是上次读到的章节才恢复位置，否则回到顶部；空章不记进度
   useEffect(() => {
     if (!chapter) return
-    const ratio = written ? restoreRatio(chapter.id, readingRef.current) : 0
+    const ratio = canUseAI && written ? restoreRatio(chapter.id, readingRef.current) : 0
     const raf = window.requestAnimationFrame(() => {
       const el = document.documentElement
       window.scrollTo(0, scrollTopForRatio(ratio, el.scrollHeight, window.innerHeight))
       if (written) schedule(ratio)
     })
     return () => window.cancelAnimationFrame(raf)
-  }, [chapter, written, schedule, readingRef])
+  }, [chapter, written, schedule, readingRef, canUseAI])
 
   useEffect(() => {
-    if (!written) return
+    if (!written || !canUseAI) return
     let frame = 0
     const onScroll = () => {
       if (frame) return
@@ -233,7 +242,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
       window.removeEventListener('pagehide', onPageHide)
       report(true) // 切章 / 离开阅读器
     }
-  }, [written, schedule, report])
+  }, [written, schedule, report, canUseAI])
 
   // ←/→ 切章（抽屉打开、焦点在输入控件时不响应）
   const anyDrawer = tocOpen || panelOpen || settingsOpen
@@ -284,7 +293,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
     <>
       <div style={barStyle}>
         <Tooltip title="返回">
-          <Button type="text" icon={<ArrowLeftOutlined />} aria-label="返回" onClick={() => navigate(from ?? '/projects')} />
+          <Button type="text" icon={<ArrowLeftOutlined />} aria-label="返回" onClick={() => navigate(from ?? (managingOther ? '/admin/projects' : '/projects'))} />
         </Tooltip>
         <div style={{ flex: 1, minWidth: 0, lineHeight: 1.3 }}>
           <Typography.Text strong ellipsis style={{ display: 'block', color: colors.text }}>
@@ -299,9 +308,9 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
         <Tooltip title="目录">
           <Button type="text" icon={<UnorderedListOutlined />} aria-label="目录" onClick={() => setTocOpen(true)} />
         </Tooltip>
-        <Tooltip title="本章分析">
+        {canUseAI && <Tooltip title="本章分析">
           <Button type="text" icon={<ProfileOutlined />} aria-label="本章分析" onClick={() => setPanelOpen(true)} />
-        </Tooltip>
+        </Tooltip>}
         <Tooltip title="阅读设置">
           <Button type="text" icon={<SettingOutlined />} aria-label="阅读设置" onClick={() => setSettingsOpen(true)} />
         </Tooltip>
@@ -317,6 +326,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
         </Tooltip>
       </div>
 
+      {managingOther && project.owner && <div style={{ padding: '12px 16px 0' }}><ProjectManagementNotice owner={project.owner} /></div>}
       <article style={articleStyle}>
         {loading && !chapter ? (
           <div style={{ padding: 48, textAlign: 'center' }}>
@@ -371,9 +381,9 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
           if (id !== chapterId) goChapter(id)
         }} />
       </Drawer>
-      <Drawer title="本章分析" open={panelOpen} onClose={() => setPanelOpen(false)} mask={isMobile} destroyOnHidden {...sideDrawer('right')}>
+      {canUseAI && <Drawer title="本章分析" open={panelOpen} onClose={() => setPanelOpen(false)} mask={isMobile} destroyOnHidden {...sideDrawer('right')}>
         <ReaderAnalysisPanel projectId={pid} chapterId={chapterId} />
-      </Drawer>
+      </Drawer>}
       <Drawer title="阅读设置" open={settingsOpen} onClose={() => setSettingsOpen(false)} {...sideDrawer('right')} height={isMobile ? 'auto' : undefined}>
         <SettingsForm value={settings} onChange={onSettings} />
       </Drawer>

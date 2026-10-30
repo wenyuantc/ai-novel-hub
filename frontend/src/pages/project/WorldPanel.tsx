@@ -24,12 +24,14 @@ import type { WorldSetting, WorldSettingInput } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { asWorldCategory, groupWorld, WORLD_CATEGORIES, WORLD_CATEGORY_LABELS } from '../../utils/world'
 
 const CATEGORY_OPTIONS = WORLD_CATEGORIES.map((c) => ({ value: c, label: WORLD_CATEGORY_LABELS[c] }))
 
 export default function WorldPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => worldApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
@@ -91,9 +93,9 @@ export default function WorldPanel() {
       title="世界观设定"
       extra={
         <Space>
-          <Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
+          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
             AI 重新生成
-          </Button>
+          </Button>)}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
             新增条目
           </Button>
@@ -102,7 +104,7 @@ export default function WorldPanel() {
     >
       <Spin spinning={loading}>
         {items.length === 0 ? (
-          <Empty description="暂无世界观设定，可手动新增或使用 AI 生成" />
+          <Empty description={canUseAI ? '暂无世界观设定，可手动新增或使用 AI 生成' : '暂无世界观设定，可手动新增'} />
         ) : (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Segmented
@@ -202,14 +204,14 @@ export default function WorldPanel() {
         </Form>
       </Modal>
 
-      <WizardModal
+      {canUseAI && (<WizardModal
         projectId={pid}
         kind="world"
         open={aiOpen}
         existingCount={items.length}
         onClose={() => setAiOpen(false)}
         onDone={() => reload()}
-      />
+      />)}
     </Card>
   )
 }

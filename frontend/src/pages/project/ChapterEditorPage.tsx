@@ -71,6 +71,7 @@ import { readAutoContinue } from '../../utils/preferences'
 import { splitPane, splitRow } from '../../utils/layout'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 const SUCCESS_MESSAGES: Partial<Record<Task['kind'], string>> = {
   'chapter.generate': '生成完成，已保存',
@@ -132,6 +133,7 @@ type AIMode = 'generate' | 'polish' | 'rewrite'
 const TOOLBAR_IN_HEADER_MIN_WIDTH = 920
 
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
+  const { canUseAI, managingOther } = useProjectAccess(pid)
   const isMobile = useIsMobile()
   // 工具栏按钮较多：只在正文卡片足够宽（约等于原 xxl 视口、停靠面板关闭时的宽度）时放进卡片标题栏，
   // 其余宽度放在正文上方，避免标题被挤压；按卡片实际宽度判断，右侧停靠面板打开时同样生效
@@ -184,7 +186,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [analysisOpen, setAnalysisOpen] = useState(false)
   // 按建议重写成功后的评分对比基准（由任务的 analysis_id 得出，任务面板重试 / 其他标签页发起的重写同样适用）
   const [reviseCompare, setReviseCompare] = useState<ReviseCompare | null>(null)
-  const analysis = useChapterAnalysis(initial.id)
+  const analysis = useChapterAnalysis(initial.id, canUseAI)
   const refreshAnalysis = analysis.refresh
   // 最新已知分析 id：followTask 可能经由旧闭包调用，用 ref 读取最新值
   const latestAnalysisIdRef = useRef<number | null>(null)
@@ -224,7 +226,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const aiStatus = aiTask.task?.status
   const busy = aiRunning || saving
   // AI 任务进行中（含排队）或局部改写预览中：正文只读，避免选区失效
-  const editorLocked = aiRunning || rewriteLocked
+  const managedGenerating = !canUseAI && chapter.status === 'generating'
+  const editorLocked = aiRunning || rewriteLocked || managedGenerating
   // 「继承」解析为本章风格 > 项目默认（下拉里显示实际会用哪个风格）
   const styleContext = useMemo(
     () => ({ chapterStyleId: chapter.style_id, projectDefault: projectDefaultStyle }),
@@ -404,15 +407,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     attachExternalRef.current = attachExternal
   })
   useEffect(() => {
-    if (!attachChecked || aiRunning) return
+    if (!canUseAI || !attachChecked || aiRunning) return
     const t = activeTasks.find(
       (x) => x.chapter_id === chapter.id && isChapterWriteKind(x.kind) && !followedIdsRef.current.has(x.id),
     )
     if (t) attachExternalRef.current(t)
-  }, [activeTasks, attachChecked, aiRunning, chapter.id])
+  }, [activeTasks, attachChecked, aiRunning, chapter.id, canUseAI])
 
   // 批量生成正在写本章（批量任务没有 chapter_id，按断点里的当前章识别）：只读等待、不提供复位；写完后从服务端刷新正文
-  const batchWriting = activeTasks.some(
+  const batchWriting = canUseAI && activeTasks.some(
     (x) => x.kind === 'chapter.batch' && isActiveTask(x.status) && batchCheckpoint(x.checkpoint)?.current?.chapter_id === chapter.id,
   )
   const wasBatchWritingRef = useRef(false)
@@ -433,7 +436,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   // 章节处于 generating：查找它的活动任务（排队或运行中）并自动接上
   useEffect(() => {
-    if (initial.status !== 'generating') return
+    if (!canUseAI || initial.status !== 'generating') return
     let alive = true
     taskApi
       .list({ chapter_id: initial.id, active: true, limit: 5 })
@@ -454,9 +457,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     return () => {
       alive = false
     }
-  }, [initial.id, initial.status])
+  }, [initial.id, initial.status, canUseAI])
 
   const runAI = async (mode: 'generate' | 'polish') => {
+    if (!canUseAI) return
     if (!(await ensureSaved())) return
     setStarting(true)
     let created: Task
@@ -493,6 +497,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   /** 按建议重写：与整章生成同样走后台任务（创建即抢占、正文只读、可停止）；任务创建成功即返回 true */
   const runRevise = async (body: ReviseChapterRequest): Promise<boolean> => {
+    if (!canUseAI) return false
     if (!(await ensureSaved())) return false
     setStarting(true)
     let created: Task
@@ -515,6 +520,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   /** 手动分析：分析的是已保存的正文，先自动保存未保存的修改 */
   const runAnalyze = async () => {
+    if (!canUseAI) return
     if (!(await ensureSaved())) return
     try {
       await analysis.start(aiConfigId)
@@ -571,6 +577,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const handleResetStatus = async () => {
+    if (!canUseAI) return
     setResetting(true)
     try {
       const updated = await chapterApi.update(pid, chapter.id, { status: 'draft' })
@@ -585,6 +592,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const handleToggleDone = async () => {
+    if (editorLocked || saving) return
     if (dirty && !(await save())) return
     try {
       const updated = await chapterApi.update(pid, chapter.id, {
@@ -597,7 +605,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const stuck = chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
+  const stuck = canUseAI && chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
   // 批量正在写本章：正文 / 标题只读、不能保存（后端对生成中章节的正文 PATCH 返回 409，写完后会用服务端正文覆盖本地）
   const batchLocked = batchWriting && chapter.status === 'generating'
   const status = aiRunning ? CHAPTER_STATUS.generating : CHAPTER_STATUS[chapter.status]
@@ -651,16 +659,16 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       >
         阅读模式
       </Button>
-      <Badge count={pendingChanges} size="small" title={`${pendingChanges} 项设定变化待确认`}>
+      {canUseAI && <Badge count={pendingChanges} size="small" title={`${pendingChanges} 项设定变化待确认`}>
         <Button size="small" icon={<ExperimentOutlined />} onClick={() => setAnalysisOpen(true)}>
           分析
         </Button>
-      </Badge>
+      </Badge>}
       <ChapterForeshadowButton projectId={pid} chapterId={chapter.id} />
       <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
         版本历史
       </Button>
-      <Button size="small" disabled={busy || stuck || batchLocked || rewriteLocked} onClick={() => void handleToggleDone()}>
+      <Button size="small" disabled={busy || editorLocked || stuck || batchLocked} onClick={() => void handleToggleDone()}>
         {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}
       </Button>
       <Button
@@ -824,9 +832,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 <Tag color={status.color}>{status.label}</Tag>
                 <Typography.Text type="secondary">{words} 字</Typography.Text>
                 {dirty && !aiRunning && <Tag color="orange">未保存</Tag>}
-                <Tag color={analysisStatus.color} style={{ cursor: 'pointer' }} onClick={() => setAnalysisOpen(true)}>
+                {canUseAI && <Tag color={analysisStatus.color} style={{ cursor: 'pointer' }} onClick={() => setAnalysisOpen(true)}>
                   {analysisStatus.label}
-                </Tag>
+                </Tag>}
               </Space>
             }
             extra={toolbarInHeader ? toolbar : undefined}
@@ -841,6 +849,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 description="写完后自动刷新正文；进度见章节列表顶部或任务面板。"
               />
             )}
+            {managedGenerating && <Alert type="info" showIcon style={{ marginBottom: 12 }} message="项目所有者正在生成此章节，完成后可刷新并继续编辑。" />}
             {stuck && (
               <Alert
                 type="warning"
@@ -864,13 +873,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
-            <CastSelect pid={pid} chapterId={chapter.id} disabled={aiRunning} />
+            <CastSelect pid={pid} chapterId={chapter.id} disabled={editorLocked} />
             <ChapterStyleSetting
               pid={pid}
               chapterId={chapter.id}
               value={chapter.style_id}
               projectDefault={projectDefaultStyle}
-              disabled={aiRunning}
+              readOnly={managingOther}
+              disabled={editorLocked}
               onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
             />
             <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
@@ -885,7 +895,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 onMouseUp={(e) => syncSelection(e.currentTarget)}
                 readOnly={editorLocked || batchLocked}
                 autoSize={{ minRows: 20 }}
-                placeholder="在此书写正文，或使用右侧「AI 生成」"
+                placeholder={managingOther ? '在此编辑正文' : '在此书写正文，或使用右侧「AI 生成」'}
                 style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}
               />
             </div>
@@ -894,9 +904,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             </Typography.Text>
           </Card>
         </div>
-        {!isMobile && <div style={splitPane(264)}>{aiPanel}</div>}
+        {canUseAI && !isMobile && <div style={splitPane(264)}>{aiPanel}</div>}
       </div>
-      {isMobile && (
+      {canUseAI && isMobile && (
         <>
           <FloatButton
             type="primary"
@@ -929,7 +939,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         restoreDisabled={editorLocked || saving || stuck}
         onRestore={handleRestore}
       />
-      <AnalysisDrawer
+      {canUseAI && <AnalysisDrawer
         open={analysisOpen || panelRequested}
         onClose={closeAnalysis}
         chapterId={chapter.id}
@@ -943,7 +953,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         compare={reviseCompare}
         reviseStyle={styleSelect(aiRunning)}
         reviseSkill={skillSelect(aiRunning)}
-      />
+      />}
       <Modal
         open={blocker.state === 'blocked'}
         title={dirty ? '有未保存的修改' : '局部改写结果未采纳'}

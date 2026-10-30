@@ -31,6 +31,7 @@ import RetrievalSettingsCard from '../../components/kb/RetrievalSettingsCard'
 import { useIndexStatus } from '../../hooks/useIndexStatus'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import {
   MEMORY_KIND_COLORS,
   MEMORY_KIND_LABELS,
@@ -51,6 +52,7 @@ function triBool(v: TriState): boolean | undefined {
 export default function MemoriesPanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
 
   const [chapterFrom, setChapterFrom] = useState<number | null>(null)
@@ -89,7 +91,7 @@ export default function MemoriesPanel() {
   const { data: characters } = useLoader(charLoader, { projectId: pid, resources: ['memories', 'characters'] })
   const characterNames = useMemo(() => (characters ?? []).map((c) => c.name), [characters])
 
-  const { status, refresh: refreshStatus } = useIndexStatus(pid)
+  const { status, refresh: refreshStatus } = useIndexStatus(pid, { enabled: canUseAI })
 
   /** 改筛选条件时回到第 1 页 */
   const filter = <T,>(set: (v: T) => void) => (v: T) => {
@@ -252,7 +254,7 @@ export default function MemoriesPanel() {
 
   return (
     <>
-      <IndexStatusBanner projectId={pid} status={status} scope="memory" onChanged={() => refreshStatus()} />
+      {canUseAI && <IndexStatusBanner projectId={pid} status={status} scope="memory" onChanged={() => refreshStatus()} />}
       <div style={splitRow}>
         <div style={splitPane(600)}>
           <Card
@@ -373,7 +375,7 @@ export default function MemoriesPanel() {
               scope="memory"
               onSaved={(s: KbSettings) => setSettings(() => s)}
             />
-            <MemorySearchDebug projectId={pid} />
+            {canUseAI && <MemorySearchDebug projectId={pid} />}
           </Space>
         </div>
       </div>

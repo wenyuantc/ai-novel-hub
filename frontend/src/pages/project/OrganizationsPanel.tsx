@@ -29,6 +29,7 @@ import type { Member, MemberStatus, Organization, OrganizationInput } from '../.
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { splitPane, splitRow } from '../../utils/layout'
 import { buildOrgTree, descendantIds, orgPath, type OrgTreeNode } from '../../utils/orgTree'
 
@@ -72,6 +73,7 @@ function toTreeData(nodes: OrgTreeNode<Organization>[]): DataNode[] {
 /** 组织：左侧组织树（按上级嵌套），右侧详情 + 成员表；支持 AI 生成组织。 */
 export default function OrganizationsPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
   const { data: orgs = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
@@ -162,9 +164,9 @@ export default function OrganizationsPanel() {
       title="组织"
       extra={
         <Space>
-          <Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
+          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
             AI 生成组织
-          </Button>
+          </Button>)}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openOrg(null)}>
             新增组织
           </Button>
@@ -173,7 +175,7 @@ export default function OrganizationsPanel() {
     >
       <Spin spinning={loading}>
         {orgs.length === 0 ? (
-          <Empty description="暂无组织，可手动新增或使用 AI 生成" />
+          <Empty description={canUseAI ? '暂无组织，可手动新增或使用 AI 生成' : '暂无组织，可手动新增'} />
         ) : (
           <div style={splitRow}>
             <div style={splitPane(240)}>
@@ -267,7 +269,7 @@ export default function OrganizationsPanel() {
         </Form>
       </Modal>
 
-      <EntityTaskModal projectId={pid} kind="organization.generate" open={aiOpen} onClose={() => setAiOpen(false)} onSaved={reload} />
+      {canUseAI && (<EntityTaskModal projectId={pid} kind="organization.generate" open={aiOpen} onClose={() => setAiOpen(false)} onSaved={reload} />)}
     </Card>
   )
 }

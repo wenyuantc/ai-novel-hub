@@ -48,6 +48,7 @@ import WizardModal from '../../components/WizardModal'
 import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectStore } from '../../stores/project'
 import { groupOutlines, volumeLabel } from '../../utils/outline'
 
@@ -57,6 +58,7 @@ import { groupOutlines, volumeLabel } from '../../utils/outline'
  */
 export default function OutlinesPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
@@ -220,19 +222,19 @@ export default function OutlinesPanel() {
       title="大纲"
       extra={
         <Space wrap>
-          <Button icon={<RobotOutlined />} onClick={() => setTaskKind('outline.continue')}>
+          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setTaskKind('outline.continue')}>
             AI 续写
-          </Button>
-          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+          </Button>)}
+          {canUseAI && (<Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
             导入
-          </Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} disabled={outlines.length === 0} onClick={() => void handleExport()}>
+          </Button>)}
+          {canUseAI && (<Button icon={<DownloadOutlined />} loading={exporting} disabled={outlines.length === 0} onClick={() => void handleExport()}>
             导出
-          </Button>
+          </Button>)}
           <Button icon={<HistoryOutlined />} onClick={() => setSnapshotsOpen(true)}>
             快照
           </Button>
-          <Button onClick={() => setWizardOpen(true)}>AI 重新生成</Button>
+          {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成</Button>)}
           <Button icon={<PlusOutlined />} onClick={() => openEdit(null)}>
             新增大纲
           </Button>
@@ -258,7 +260,7 @@ export default function OutlinesPanel() {
         </Space>
         <Spin spinning={loading}>
           {outlines.length === 0 ? (
-            <Empty description="暂无大纲，可手动新增、导入或使用 AI 生成" />
+            <Empty description={canUseAI ? '暂无大纲，可手动新增、导入或使用 AI 生成' : '暂无大纲，可手动新增'} />
           ) : (
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
               {groups.map((g) => (
@@ -344,9 +346,9 @@ export default function OutlinesPanel() {
                             <Button type="link" size="small" onClick={() => openEdit(o)}>
                               编辑
                             </Button>
-                            <Button type="link" size="small" onClick={() => openExpand(o)}>
+                            {canUseAI && (<Button type="link" size="small" onClick={() => openExpand(o)}>
                               {o.plan_count > 0 ? '重新展开' : '展开'}
-                            </Button>
+                            </Button>)}
                             {canBuild(o) && (
                               <Button type="link" size="small" loading={pending === o.id} onClick={() => void handleBuild(o)}>
                                 建章
@@ -439,7 +441,7 @@ export default function OutlinesPanel() {
         </Form>
       </Modal>
 
-      <WizardModal
+      {canUseAI && (<WizardModal
         projectId={pid}
         kind="outline"
         open={wizardOpen}
@@ -449,8 +451,8 @@ export default function OutlinesPanel() {
           setSelected([])
           reload()
         }}
-      />
-      <OutlineTaskModal
+      />)}
+      {canUseAI && (<OutlineTaskModal
         projectId={pid}
         kind={taskKind ?? 'outline.continue'}
         open={taskKind !== null}
@@ -466,8 +468,8 @@ export default function OutlinesPanel() {
           }
           afterChange()
         }}
-      />
-      <OutlineImportModal
+      />)}
+      {canUseAI && (<OutlineImportModal
         projectId={pid}
         open={importOpen}
         existingCount={outlines.length}
@@ -476,7 +478,7 @@ export default function OutlinesPanel() {
           setSelected([])
           afterChange()
         }}
-      />
+      />)}
       <OutlineSnapshotDrawer
         projectId={pid}
         open={snapshotsOpen}

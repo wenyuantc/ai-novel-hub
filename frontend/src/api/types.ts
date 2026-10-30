@@ -158,8 +158,36 @@ export interface AIConfigTestResult {
 
 export type ProjectStatus = 'planning' | 'writing' | 'completed'
 
+export interface ProjectOwner {
+  id: number
+  username: string
+}
+
+export interface AdminProject {
+  id: number
+  title: string
+  genre: string
+  status: ProjectStatus
+  owner_user_id: number
+  owner_username: string
+  chapter_count: number
+  total_words: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AdminProjectListQuery {
+  q?: string
+  owner_user_id?: number
+  status?: ProjectStatus
+  page?: number
+  page_size?: number
+}
+
 export interface Project {
   id: number
+  /** 服务端确认的项目归属；旧的自有项目响应可省略。 */
+  owner?: ProjectOwner | null
   title: string
   genre: string
   premise: string

@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, BookOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { Button, Drawer, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { useState } from 'react'
@@ -8,6 +8,7 @@ import { useAuthStore } from '../stores/auth'
 import { useProjectStore } from '../stores/project'
 import { useTasksStore } from '../stores/tasks'
 import ThemeSwitch from '../theme/ThemeSwitch'
+import { projectAccess } from '../utils/projectAccess'
 import ChangePasswordModal from './ChangePasswordModal'
 import { navigationItem, studioNavigation } from './StudioNavigation'
 import { StudioBrand } from './StudioUI'
@@ -32,15 +33,17 @@ export default function AppLayout() {
   const match = /^\/projects\/(\d+)(?:\/|$)/.exec(location.pathname)
   const projectId = match ? Number(match[1]) : null
   const project = cachedProject?.id === projectId ? cachedProject : null
-  const groups = studioNavigation(projectId, mcpEnabled)
+  const { managingOther, canUseAI } = projectAccess(project, user, projectId ?? NaN)
+  const groups = studioNavigation(projectId, mcpEnabled, canUseAI)
   const current = navigationItem(groups, location.pathname)
-  const pageName = location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const pageName = location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
     items: [
       { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
       ...(user?.is_admin ? [{ key: 'admin', icon: <TeamOutlined />, label: '用户管理' }] : []),
+      ...(user?.is_admin ? [{ key: 'admin-projects', icon: <BookOutlined />, label: '作品管理' }] : []),
       { type: 'divider' },
       { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
@@ -48,6 +51,7 @@ export default function AppLayout() {
     onClick: async ({ key }) => {
       setNavOpenAt(null)
       if (key === 'admin') navigate('/admin/users')
+      else if (key === 'admin-projects') navigate('/admin/projects')
       else if (key === 'workshop') navigate('/workshop')
       else if (key === 'password') setPasswordOpen(true)
       else if (key === 'logout') { await logout(); navigate('/login', { replace: true }) }
@@ -67,7 +71,7 @@ export default function AppLayout() {
       <StudioBrand onClick={() => setNavOpenAt(null)} />
       {projectId !== null ? (
         <div className="studio-project-switch">
-          <Link to="/projects" onClick={() => setNavOpenAt(null)}><ArrowLeftOutlined /> 全部作品</Link>
+          <Link to={managingOther ? '/admin/projects' : '/projects'} onClick={() => setNavOpenAt(null)}><ArrowLeftOutlined /> {managingOther ? '作品管理' : '全部作品'}</Link>
           <Link to={`/projects/${projectId}/overview`} onClick={() => setNavOpenAt(null)} title={project?.title}>{project?.title ?? '正在载入作品…'}</Link>
         </div>
       ) : <Button type="primary" className="studio-new-project" icon={<PlusOutlined />} onClick={() => { setNavOpenAt(null); navigate('/projects?create=1') }}>新建作品</Button>}
@@ -84,9 +88,10 @@ export default function AppLayout() {
         ))}
       </nav>
       <div className="studio-sidebar-footer">
-        {projectId !== null && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
+        {projectId !== null && !managingOther && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
         <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpen(true) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/users" aria-current={location.pathname.startsWith('/admin/users') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><TeamOutlined />用户管理</Link>}
+        {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/projects" aria-current={location.pathname.startsWith('/admin/projects') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><BookOutlined />作品管理</Link>}
         <div className="studio-sidebar-account">{account()}<ThemeSwitch compact /></div>
       </div>
     </>
@@ -99,7 +104,7 @@ export default function AppLayout() {
         <header className="studio-topbar">
           {isMobile && <Button type="text" aria-label="打开菜单" icon={<MenuOutlined />} onClick={() => setNavOpenAt(location.key)} />}
           <nav className="studio-breadcrumb" aria-label="面包屑导航">
-            <Link to="/projects">我的作品</Link><RightOutlined />
+            <Link to={managingOther || location.pathname.startsWith('/admin/') ? '/admin/projects' : '/projects'}>{managingOther || location.pathname.startsWith('/admin/') ? '作品管理' : '我的作品'}</Link><RightOutlined />
             {project && <><Link to={`/projects/${project.id}/overview`} title={project.title}>{project.title}</Link><RightOutlined /></>}
             <span aria-current="page">{pageName}</span>
           </nav>

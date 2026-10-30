@@ -13,11 +13,12 @@ interface Props {
   value: number | null
   projectDefault: StyleBrief | null
   disabled?: boolean
+  readOnly?: boolean
   onChanged: (styleId: number | null) => void
 }
 
 /** 本章写作风格（继承项目默认或指定）：变更即 PATCH style_id，与正文保存分开、不影响 dirty。 */
-export default function ChapterStyleSetting({ pid, chapterId, value, projectDefault, disabled, onChanged }: Props) {
+export default function ChapterStyleSetting({ pid, chapterId, value, projectDefault, disabled, readOnly, onChanged }: Props) {
   const { message } = App.useApp()
   const [saving, setSaving] = useState(false)
 
@@ -36,6 +37,7 @@ export default function ChapterStyleSetting({ pid, chapterId, value, projectDefa
   }
 
   const inherit = projectDefault ? `继承项目默认（${projectDefault.name}）` : '继承项目默认（不用风格）'
+  if (readOnly) return <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>本章风格：{value === null ? inherit : `风格 #${value}`}（保留当前绑定）</Typography.Paragraph>
   return (
     <Space size={8} style={{ width: '100%', marginBottom: 8 }} align="center">
       <Tooltip title={<span>生成、润色、重写与局部改写默认使用本章风格；未设置时继承项目默认。<Link to="/styles">管理风格库</Link></span>}>

@@ -4,6 +4,7 @@ import { lazy, Suspense, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { coverUrl, deleteCover, uploadCover } from '../../api/projects'
 import type { Project } from '../../api/types'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectStore } from '../../stores/project'
 import { COVER_ACCEPT, precheckCoverUpload } from '../../utils/projectCover'
 import BookCover from '../shelf/BookCover'
@@ -16,6 +17,7 @@ interface Props {
 
 /** 项目封面展示与管理：上传立即替换，AI 生成需预览确认。 */
 export default function CoverPanel({ project }: Props) {
+  const { canUseAI } = useProjectAccess(project.id)
   const { message } = App.useApp()
   const [mutating, setMutating] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
@@ -77,7 +79,7 @@ export default function CoverPanel({ project }: Props) {
         >
           <Button icon={<UploadOutlined />} loading={mutating} disabled={generateOpen}>上传</Button>
         </Upload>
-        <Button icon={<PictureOutlined />} disabled={mutating} onClick={() => setGenerateOpen(true)}>AI 生成</Button>
+        {canUseAI && <Button icon={<PictureOutlined />} disabled={mutating} onClick={() => setGenerateOpen(true)}>AI 生成</Button>}
         {imageUrl && (
           <Popconfirm
             title="删除当前封面？"
@@ -95,7 +97,7 @@ export default function CoverPanel({ project }: Props) {
         )}
       </Space>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>JPG / PNG / WebP，最大 10MB</Typography.Text>
-      {generateOpen && (
+      {canUseAI && generateOpen && (
         <Suspense fallback={null}>
           <CoverGenerateModal
             projectId={project.id}

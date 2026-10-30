@@ -35,6 +35,7 @@ import WizardModal from '../../components/WizardModal'
 import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectStore } from '../../stores/project'
 
 const ALL = '__all__'
@@ -48,6 +49,7 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 /** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业 / 伏笔）。 */
 export default function CharactersPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => characterApi.list(pid), [pid])
@@ -125,16 +127,16 @@ export default function CharactersPanel() {
       title="角色"
       extra={
         <Space wrap>
-          <Button icon={<RobotOutlined />} onClick={() => setGenerateOpen(true)}>
+          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setGenerateOpen(true)}>
             AI 生成角色
-          </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)} disabled={items.length === 0}>
+          </Button>)}
+          {canUseAI && (<Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)} disabled={items.length === 0}>
             导出卡片{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
-          </Button>
-          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+          </Button>)}
+          {canUseAI && (<Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
             导入卡片
-          </Button>
-          <Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>
+          </Button>)}
+          {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>)}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
             新增角色
           </Button>
@@ -143,7 +145,7 @@ export default function CharactersPanel() {
     >
       <Spin spinning={loading}>
         {items.length === 0 ? (
-          <Empty description="暂无角色，可手动新增、导入卡片或使用 AI 生成" />
+          <Empty description={canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} />
         ) : (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Space wrap>
@@ -155,7 +157,7 @@ export default function CharactersPanel() {
                   ...roleTypes.map((r) => ({ value: r, label: r })),
                 ]}
               />
-              <Checkbox
+              {canUseAI && <Checkbox
                 checked={shown.length > 0 && shown.every((c) => selectedIds.includes(c.id))}
                 indeterminate={shown.some((c) => selectedIds.includes(c.id)) && !shown.every((c) => selectedIds.includes(c.id))}
                 onChange={(e) => {
@@ -166,7 +168,7 @@ export default function CharactersPanel() {
                 }}
               >
                 全选当前
-              </Checkbox>
+              </Checkbox>}
             </Space>
             <AutoGrid>
               {shown.map((c) => {
@@ -179,7 +181,7 @@ export default function CharactersPanel() {
                       styles={{ title: cardTitleWrap }}
                       title={
                         <Space size={4} wrap>
-                          <Checkbox checked={selectedIds.includes(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} />
+                          {canUseAI && <Checkbox checked={selectedIds.includes(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} />}
                           {c.name}
                           {c.role_type && <Tag color={roleTypeColor(c.role_type)}>{c.role_type}</Tag>}
                           {c.life_status !== 'alive' && <Tag color={life.color}>{life.label}</Tag>}
@@ -298,7 +300,7 @@ export default function CharactersPanel() {
         )}
       </Drawer>
 
-      <WizardModal
+      {canUseAI && (<WizardModal
         projectId={pid}
         kind="characters"
         open={wizardOpen}
@@ -308,8 +310,8 @@ export default function CharactersPanel() {
           reload()
           reloadBadges()
         }}
-      />
-      <EntityTaskModal
+      />)}
+      {canUseAI && (<EntityTaskModal
         projectId={pid}
         kind="character.generate"
         open={generateOpen}
@@ -318,16 +320,16 @@ export default function CharactersPanel() {
           reload()
           reloadBadges()
         }}
-      />
-      <CardExportModal
+      />)}
+      {canUseAI && (<CardExportModal
         projectId={pid}
         projectTitle={projectTitle}
         open={exportOpen}
         characters={items}
         initialCharacterIds={selectedIds}
         onClose={() => setExportOpen(false)}
-      />
-      <CardImportModal
+      />)}
+      {canUseAI && (<CardImportModal
         projectId={pid}
         open={importOpen}
         onClose={() => setImportOpen(false)}
@@ -335,7 +337,7 @@ export default function CharactersPanel() {
           reload()
           reloadBadges()
         }}
-      />
+      />)}
     </Card>
   )
 }

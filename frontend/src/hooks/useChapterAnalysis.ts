@@ -10,7 +10,7 @@ import { useTaskStream, type TaskOutcome } from './useTaskStream'
  * 章节编辑器的分析状态：分析状态 + 最新一次分析详情 + 正在进行的 chapter.analyze 订阅。
  * 挂载后自动接上本章的活动分析任务（含生成 / 润色 / 重写成功后自动排队的）；卸载只断开订阅。
  */
-export function useChapterAnalysis(chapterId: number) {
+export function useChapterAnalysis(chapterId: number, enabled = true) {
   const { message } = App.useApp()
   const activeTasks = useTasksStore((s) => s.active)
   const trackTask = useTasksStore((s) => s.track)
@@ -25,6 +25,7 @@ export function useChapterAnalysis(chapterId: number) {
   const latestId = state?.latest_analysis_id ?? null
 
   const refresh = useCallback(async (): Promise<ChapterAnalysisState | null> => {
+    if (!enabled) return null
     try {
       const s = await analysisApi.status(chapterId)
       setState(s)
@@ -34,9 +35,10 @@ export function useChapterAnalysis(chapterId: number) {
       // 状态查询失败时保持原状态（不打断编辑）
       return null
     }
-  }, [chapterId])
+  }, [chapterId, enabled])
 
   useEffect(() => {
+    if (!enabled) return
     let alive = true
     analysisApi
       .status(chapterId)
@@ -51,11 +53,11 @@ export function useChapterAnalysis(chapterId: number) {
     return () => {
       alive = false
     }
-  }, [chapterId])
+  }, [chapterId, enabled])
 
   // 最新分析变化 / 刷新后重新加载详情（回写条目可能被其他入口修改）
   useEffect(() => {
-    if (latestId === null) return
+    if (!enabled || latestId === null) return
     let alive = true
     analysisApi
       .get(latestId)
@@ -68,10 +70,11 @@ export function useChapterAnalysis(chapterId: number) {
     return () => {
       alive = false
     }
-  }, [latestId, version])
+  }, [latestId, version, enabled])
 
   const followAnalysis = useCallback(
     async (t: Task): Promise<TaskOutcome> => {
+      if (!enabled) return { status: 'detached' }
       followedRef.current.add(t.id)
       const outcome = await follow(t)
       if (outcome.status === 'detached') return outcome
@@ -85,7 +88,7 @@ export function useChapterAnalysis(chapterId: number) {
       await refresh()
       return outcome
     },
-    [follow, refresh, message],
+    [follow, refresh, message, enabled],
   )
 
   // 接上活动分析任务：状态接口给出的 active_task_id，或任务列表里本章的 chapter.analyze
@@ -95,7 +98,7 @@ export function useChapterAnalysis(chapterId: number) {
   })
   const activeTaskId = state?.active_task_id ?? null
   useEffect(() => {
-    if (stream.running) return
+    if (!enabled || stream.running) return
     const fromList = activeTasks.find(
       (t) => t.kind === 'chapter.analyze' && t.chapter_id === chapterId && !followedRef.current.has(t.id),
     )
@@ -117,16 +120,17 @@ export function useChapterAnalysis(chapterId: number) {
     return () => {
       alive = false
     }
-  }, [activeTasks, activeTaskId, chapterId, stream.running])
+  }, [activeTasks, activeTaskId, chapterId, stream.running, enabled])
 
   /** 手动分析：同章已排队时后端返回那条任务（200） */
   const start = useCallback(
     async (aiConfigId: number | null): Promise<void> => {
+      if (!enabled) return
       const t = await analysisApi.analyze(chapterId, { ai_config_id: aiConfigId })
       trackTask(t)
       void followAnalysis(t)
     },
-    [chapterId, trackTask, followAnalysis],
+    [chapterId, trackTask, followAnalysis, enabled],
   )
 
   /** 回写条目操作后用服务端返回的条目更新最新分析 */

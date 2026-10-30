@@ -13,30 +13,48 @@ interface ProjectState {
   reset: () => void
 }
 
+let requestSeq = 0
+let refreshSeq = 0
+let targetId: number | null = null
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   project: null,
   loading: false,
   error: null,
   load: async (id) => {
+    const seq = ++requestSeq
+    targetId = id
     set({ loading: true, error: null, project: get().project?.id === id ? get().project : null })
     try {
       const project = await projectApi.get(id)
-      set({ project })
+      if (seq === requestSeq) set({ project })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : '加载项目失败' })
+      if (seq === requestSeq) set({ error: err instanceof Error ? err.message : '加载项目失败' })
     } finally {
-      set({ loading: false })
+      if (seq === requestSeq) set({ loading: false })
     }
   },
   refresh: async () => {
     const current = get().project
     if (!current) return
+    const seq = requestSeq
+    const refresh = ++refreshSeq
     try {
-      set({ project: await projectApi.get(current.id) })
+      const project = await projectApi.get(current.id)
+      if (seq === requestSeq && refresh === refreshSeq && get().project?.id === current.id) set({ project })
     } catch {
       // 静默失败
     }
   },
-  setProject: (project) => set({ project }),
-  reset: () => set({ project: null, error: null }),
+  setProject: (project) => {
+    if (targetId !== project.id || get().project?.id !== project.id) return
+    ++requestSeq
+    targetId = project.id
+    set({ project, loading: false })
+  },
+  reset: () => {
+    ++requestSeq
+    targetId = null
+    set({ project: null, loading: false, error: null })
+  },
 }))

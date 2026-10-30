@@ -47,8 +47,8 @@ const PROJECT_GROUPS = [
 ]
 
 /** 桌面与移动导航共用定义；只映射项目已经存在的路由。 */
-export function studioNavigation(projectId: number | null, mcpEnabled: boolean): NavGroup[] {
-  if (projectId !== null) return PROJECT_GROUPS.map((group) => ({ title: group.title, items: group.items.map(({ key, ...item }) => ({ ...item, to: `/projects/${projectId}/${key}` })) }))
+export function studioNavigation(projectId: number | null, mcpEnabled: boolean, canUseAI = true): NavGroup[] {
+  if (projectId !== null) return PROJECT_GROUPS.map((group) => ({ title: group.title, items: group.items.filter((item) => canUseAI || item.key !== 'wizard').map(({ key, ...item }) => ({ ...item, to: `/projects/${projectId}/${key}` })) }))
   return GLOBAL_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => mcpEnabled || item.to !== '/mcp-plugins') }))
 }
 

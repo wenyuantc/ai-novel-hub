@@ -3,9 +3,11 @@ import { Alert, Button, Result, Spin } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import AgentDock from '../../components/agent/AgentDock'
+import ProjectManagementNotice from '../../components/project/ProjectManagementNotice'
 import { readAgentPreferences, writeAgentPreferences } from '../../utils/agentPreferences'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectStore } from '../../stores/project'
 
 /** 项目内容区：导航与面包屑由共享外壳渲染，保留项目加载、错误提示及原有智能体状态。 */
@@ -13,6 +15,7 @@ export default function ProjectLayout() {
   const pid = useProjectId()
   const location = useLocation()
   const { project, loading, error, load } = useProjectStore()
+  const { managingOther, canUseAI } = useProjectAccess(pid)
   const isMobile = useIsMobile()
   const [agentPrefs, setAgentPrefs] = useState(readAgentPreferences)
   const agentRequested = new URLSearchParams(location.search).get('agent') === 'open'
@@ -28,13 +31,14 @@ export default function ProjectLayout() {
   return (
     <div className="studio-project-workspace">
       <div className="studio-project-content">
-        <div className="studio-project-tools">
+        {canUseAI && <div className="studio-project-tools">
           <Button icon={<RobotOutlined />} aria-expanded={agentOpen} onClick={() => { setAgentPrefs((prev) => ({ ...prev, open: !agentOpen })); if (agentOpen) setDismissedAgentRequest(location.key) }}>项目智能体</Button>
-        </div>
+        </div>}
+        {managingOther && project.owner && <ProjectManagementNotice owner={project.owner} />}
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
-        <Outlet />
+        {managingOther && location.pathname.endsWith('/wizard') ? <Result status="info" title="当前为人工内容管理" extra={<Link to={`/projects/${pid}/overview`}>返回项目概览</Link>} /> : <Outlet />}
       </div>
-      <AgentDock projectId={pid} open={agentOpen} mobile={isMobile} width={agentPrefs.width} onWidth={(width) => setAgentPrefs((prev) => ({ ...prev, width }))} onClose={() => { setAgentPrefs((prev) => ({ ...prev, open: false })); setDismissedAgentRequest(location.key) }} />
+      {canUseAI && <AgentDock projectId={pid} open={agentOpen} mobile={isMobile} width={agentPrefs.width} onWidth={(width) => setAgentPrefs((prev) => ({ ...prev, width }))} onClose={() => { setAgentPrefs((prev) => ({ ...prev, open: false })); setDismissedAgentRequest(location.key) }} />}
     </div>
   )
 }

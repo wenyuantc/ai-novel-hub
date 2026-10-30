@@ -1,7 +1,9 @@
 import { api } from './client'
-import type { AdminUser, AdminUserCreate, AdminUserListQuery, AdminUserUpdate, Page, ResetPasswordRequest } from './types'
+import type { AdminProject, AdminProjectListQuery, AdminUser, AdminUserCreate, AdminUserListQuery, AdminUserUpdate, Page, ResetPasswordRequest } from './types'
 
 export const adminApi = {
+  listProjects: ({ q, owner_user_id, status, page, page_size }: AdminProjectListQuery = {}) =>
+    api.get<Page<AdminProject>>('/admin/projects', { q: q?.trim() || undefined, owner_user_id, status, page, page_size }),
   listUsers: ({ q, page, page_size }: AdminUserListQuery = {}) =>
     api.get<Page<AdminUser>>('/admin/users', { q: q?.trim() || undefined, page, page_size }),
   createUser: (body: AdminUserCreate) => api.post<AdminUser>('/admin/users', body),

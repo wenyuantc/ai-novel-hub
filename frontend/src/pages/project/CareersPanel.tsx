@@ -10,6 +10,7 @@ import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import WizardModal from '../../components/WizardModal'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 const GROUPS: CareerKind[] = ['main', 'sub']
 
@@ -19,6 +20,7 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 /** 职业：按主修 / 副修分组的卡片（阶梯 + 持有人数），编辑抽屉维护阶段与查看持有人；AI 生成职业 / 职业体系向导。 */
 export default function CareersPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
@@ -103,10 +105,10 @@ export default function CareersPanel() {
       title="职业"
       extra={
         <Space wrap>
-          <Button icon={<RobotOutlined />} onClick={() => setGenerateOpen(true)}>
+          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setGenerateOpen(true)}>
             AI 生成职业
-          </Button>
-          <Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>
+          </Button>)}
+          {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>)}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
             新增职业
           </Button>
@@ -147,15 +149,15 @@ export default function CareersPanel() {
           reload()
         }}
       />
-      <EntityTaskModal projectId={pid} kind="career.generate" open={generateOpen} onClose={() => setGenerateOpen(false)} onSaved={reload} />
-      <WizardModal
+      {canUseAI && (<EntityTaskModal projectId={pid} kind="career.generate" open={generateOpen} onClose={() => setGenerateOpen(false)} onSaved={reload} />)}
+      {canUseAI && (<WizardModal
         projectId={pid}
         kind="careers"
         open={wizardOpen}
         existingCount={items.length}
         onClose={() => setWizardOpen(false)}
         onDone={() => reload()}
-      />
+      />)}
     </Card>
   )
 }

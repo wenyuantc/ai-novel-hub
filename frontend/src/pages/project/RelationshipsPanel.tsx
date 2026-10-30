@@ -37,6 +37,7 @@ import RelationHistoryModal from '../../components/relations/RelationHistoryModa
 import RelationTypeManager from '../../components/relations/RelationTypeManager'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { DEFAULT_GRAPH_FILTER, filterGraph, type GraphFilter } from '../../utils/graphFilter'
 
 // 图谱依赖 @xyflow/react + @dagrejs/dagre，单独打包，只在打开「图谱」Tab 时加载
@@ -51,6 +52,7 @@ const STATUS_OPTIONS = (Object.keys(RELATION_STATUS) as RelationStatus[]).map((k
 /** 人物关系：列表（筛选 / 增删改 / 历史 / 类型管理）+ 懒加载的关系图谱。 */
 export default function RelationshipsPanel() {
   const pid = useProjectId()
+  const { canUseAI } = useProjectAccess(pid)
   const { message } = App.useApp()
   const [tab, setTab] = useState('list')
   const loader = useCallback(() => relationshipApi.list(pid), [pid])
@@ -181,9 +183,9 @@ export default function RelationshipsPanel() {
       styles={{ header: { flexWrap: 'wrap', gap: 12, paddingBlock: 12 }, extra: { marginInlineStart: 0, maxWidth: '100%' } }}
       extra={
         <Space wrap>
-          <Button icon={<RobotOutlined />} disabled={characters.length < 2} title={characters.length < 2 ? '至少需要两名已有角色' : undefined} onClick={() => setGenerateOpen(true)}>
+          {canUseAI && (<Button icon={<RobotOutlined />} disabled={characters.length < 2} title={characters.length < 2 ? '至少需要两名已有角色' : undefined} onClick={() => setGenerateOpen(true)}>
             AI 生成关系
-          </Button>
+          </Button>)}
           <Button icon={<SettingOutlined />} onClick={() => setTypesOpen(true)}>
             关系类型
           </Button>
@@ -226,14 +228,14 @@ export default function RelationshipsPanel() {
           reload()
         }}
       />
-      <EntityTaskModal
+      {canUseAI && (<EntityTaskModal
         projectId={pid}
         kind="relations.generate"
         open={generateOpen}
         characters={characters}
         relationships={rels}
         onClose={() => setGenerateOpen(false)}
-      />
+      />)}
       {history && <RelationHistoryModal projectId={pid} relationship={history} onClose={() => setHistory(null)} />}
       <RelationTypeManager
         projectId={pid}

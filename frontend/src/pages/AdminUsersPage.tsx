@@ -206,14 +206,14 @@ export default function AdminUsersPage() {
                         u,
                         { is_admin: false },
                         `取消「${u.username}」的管理员身份？`,
-                        '对方将无法再访问用户管理。',
+                        '对方将无法再访问用户管理和作品管理。',
                         '取消管理员',
                       )
                     : confirmUpdate(
                         u,
                         { is_admin: true },
                         `将「${u.username}」设为管理员？`,
-                        '对方将获得用户管理的全部权限。',
+                        '对方将获得用户管理和作品管理的全部权限。',
                         '设为管理员',
                       )
                 }

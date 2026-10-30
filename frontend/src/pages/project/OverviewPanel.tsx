@@ -9,6 +9,8 @@ import type { Project, ProjectStatus, ProjectUpdate } from '../../api/types'
 import ExportModal from '../../components/ExportModal'
 import ProjectInfoFields from '../../components/ProjectInfoFields'
 import CoverPanel from '../../components/project/CoverPanel'
+import DeleteProjectModal from '../../components/project/DeleteProjectModal'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import StyleSelect from '../../components/styles/StyleSelect'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
@@ -24,12 +26,13 @@ const formRow: CSSProperties = { ...splitRow, rowGap: 0 }
 
 export default function OverviewPanel() {
   const project = useProjectStore((s) => s.project)
+  const { canUseAI } = useProjectAccess(project?.id ?? NaN)
   if (!project) return null
   // 以项目 id + 更新时间为 key，保存后表单以最新数据重建；分析设置不放在其中，切换开关不会重置未保存的表单
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <OverviewInner key={`${project.id}-${project.updated_at}`} project={project} />
-      <AnalysisSettingsCard project={project} />
+      {canUseAI && <AnalysisSettingsCard project={project} />}
     </Space>
   )
 }
@@ -91,7 +94,9 @@ function AnalysisSettingsCard({ project }: { project: Project }) {
 }
 
 function OverviewInner({ project }: { project: Project }) {
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
+  const { managingOther, canUseAI } = useProjectAccess(project.id)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const navigate = useNavigate()
   const setProject = useProjectStore((s) => s.setProject)
   const [form] = Form.useForm<ProjectUpdate & ProjectInfoValues>()
@@ -126,7 +131,7 @@ function OverviewInner({ project }: { project: Project }) {
         premise: v.premise?.trim() ?? '',
         status: v.status,
         // 显式 null = 取消项目默认风格
-        default_style_id: v.default_style_id ?? null,
+        ...(!managingOther ? { default_style_id: v.default_style_id ?? null } : {}),
         // 目标总字数清空时显式发送 null
         ...projectInfoBody(v),
       })
@@ -140,24 +145,6 @@ function OverviewInner({ project }: { project: Project }) {
     }
   }
 
-  const handleDelete = () => {
-    modal.confirm({
-      title: `删除《${project.title}》？`,
-      content: '项目下的世界观、角色、大纲和全部章节都将被删除，且无法恢复。',
-      okText: '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        try {
-          await projectApi.remove(project.id)
-          message.success('已删除')
-          navigate('/projects', { replace: true })
-        } catch (err) {
-          message.error(errorMessage(err))
-        }
-      },
-    })
-  }
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -189,7 +176,7 @@ function OverviewInner({ project }: { project: Project }) {
             )}
           </Card>
         </div>
-        <div style={splitPane(400)}>
+        {canUseAI && <div style={splitPane(400)}>
           <Card>
             <Space wrap>
               <Button icon={<RocketOutlined />} onClick={() => navigate(`/projects/${project.id}/wizard`)}>
@@ -206,7 +193,7 @@ function OverviewInner({ project }: { project: Project }) {
               </Button>
             </Space>
           </Card>
-        </div>
+        </div>}
       </div>
       <Card title="基本信息">
         <div style={splitRow}>
@@ -267,7 +254,7 @@ function OverviewInner({ project }: { project: Project }) {
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
               </Form.Item>
               <ProjectInfoFields />
-              <Form.Item
+              {!managingOther ? <Form.Item
                 name="default_style_id"
                 label="默认写作风格"
                 extra={
@@ -278,12 +265,12 @@ function OverviewInner({ project }: { project: Project }) {
                 }
               >
                 <StyleSelect placeholder="不用风格" />
-              </Form.Item>
+              </Form.Item> : <Form.Item label="默认写作风格"><Typography.Text>{project.default_style?.name ?? (project.default_style_id ? `风格 #${project.default_style_id}` : '不用风格')}</Typography.Text><Typography.Text type="secondary">（保留当前绑定）</Typography.Text></Form.Item>}
               <Space>
                 <Button type="primary" loading={saving} onClick={() => void handleSave()}>
                   保存
                 </Button>
-                <Button danger onClick={handleDelete}>
+                <Button danger onClick={() => setDeleteOpen(true)}>
                   删除项目
                 </Button>
               </Space>
@@ -295,8 +282,9 @@ function OverviewInner({ project }: { project: Project }) {
           </div>
         </div>
       </Card>
-      <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />
-      {backupOpen && (
+      {canUseAI && <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />}
+      {deleteOpen && <DeleteProjectModal project={{ id: project.id, title: project.title, owner_username: project.owner?.username }} onClose={() => setDeleteOpen(false)} onDeleted={() => navigate(managingOther ? '/admin/projects' : '/projects', { replace: true })} />}
+      {canUseAI && backupOpen && (
         <Suspense fallback={null}>
           <BackupModal projectId={project.id} onClose={() => setBackupOpen(false)} />
         </Suspense>

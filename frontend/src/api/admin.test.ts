@@ -24,6 +24,17 @@ afterEach(() => {
 })
 
 describe('adminApi', () => {
+  it('跨用户项目列表组合筛选与分页，查询词作为普通文本编码', async () => {
+    const calls = stubFetch(200, { items: [], total: 0 })
+    await expect(adminApi.listProjects({ q: '  书%_ ', owner_user_id: 7, status: 'writing', page: 2, page_size: 50 })).resolves.toEqual({ items: [], total: 0 })
+    const url = new URL(calls[0].url, 'http://test')
+    expect(url.pathname).toBe('/api/v1/admin/projects')
+    expect(Object.fromEntries(url.searchParams)).toEqual({ q: '书%_', owner_user_id: '7', status: 'writing', page: '2', page_size: '50' })
+    expect(calls[0].init.credentials).toBe('include')
+    await adminApi.listProjects({ q: '  ' })
+    expect(calls[1].url).toBe('/api/v1/admin/projects')
+  })
+
   it('列表：分页与搜索参数，空搜索词不发送', async () => {
     const calls = stubFetch(200, { items: [], total: 0 })
     await expect(adminApi.listUsers({ q: '  ali ', page: 2, page_size: 20 })).resolves.toEqual({ items: [], total: 0 })
