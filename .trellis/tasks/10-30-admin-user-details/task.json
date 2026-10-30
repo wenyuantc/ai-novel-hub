@@ -1,0 +1,30 @@
+{
+  "id": "admin-user-details",
+  "name": "admin-user-details",
+  "title": "管理员用户详情",
+  "description": "为用户管理增加最近登录、资源使用统计和所属作品列表，打通用户到作品的管理路径。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-10-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_stage": "backlog",
+    "source": "admin-feature-inventory",
+    "implementation_approved": "false"
+  }
+}

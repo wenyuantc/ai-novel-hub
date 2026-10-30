@@ -1,0 +1,30 @@
+{
+  "id": "admin-task-monitoring",
+  "name": "admin-task-monitoring",
+  "title": "管理员全站任务监控",
+  "description": "集中查询各用户任务的排队、运行和失败情况，定位异常并在明确授权范围内取消任务。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-10-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_stage": "backlog",
+    "source": "admin-feature-inventory",
+    "implementation_approved": "false"
+  }
+}

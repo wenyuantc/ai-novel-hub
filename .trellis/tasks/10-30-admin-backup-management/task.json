@@ -1,0 +1,30 @@
+{
+  "id": "admin-backup-management",
+  "name": "admin-backup-management",
+  "title": "管理员备份管理",
+  "description": "管理定时备份、备份执行记录和失败提醒，衔接已有作品备份与数据库恢复操作。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-10-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_stage": "backlog",
+    "source": "admin-feature-inventory",
+    "implementation_approved": "false"
+  }
+}

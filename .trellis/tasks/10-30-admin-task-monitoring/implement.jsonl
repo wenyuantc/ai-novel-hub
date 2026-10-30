@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/spec/backend/admin-projects.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}

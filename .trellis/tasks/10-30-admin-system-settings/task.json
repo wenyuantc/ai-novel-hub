@@ -1,0 +1,30 @@
+{
+  "id": "admin-system-settings",
+  "name": "admin-system-settings",
+  "title": "管理员系统设置",
+  "description": "在管理后台查看和调整注册开关、任务并发、MCP 等运行设置，明确配置来源与生效方式。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-10-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_stage": "backlog",
+    "source": "admin-feature-inventory",
+    "implementation_approved": "false"
+  }
+}

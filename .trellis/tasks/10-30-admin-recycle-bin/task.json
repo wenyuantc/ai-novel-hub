@@ -1,0 +1,30 @@
+{
+  "id": "admin-recycle-bin",
+  "name": "admin-recycle-bin",
+  "title": "作品回收站与误删恢复",
+  "description": "为作品提供删除保留、回收站查询、恢复和彻底删除能力，并明确删号时关联作品的处理策略。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-10-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_stage": "backlog",
+    "source": "admin-feature-inventory",
+    "implementation_approved": "false"
+  }
+}

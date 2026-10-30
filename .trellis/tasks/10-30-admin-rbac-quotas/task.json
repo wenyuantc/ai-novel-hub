@@ -1,0 +1,30 @@
+{
+  "id": "admin-rbac-quotas",
+  "name": "admin-rbac-quotas",
+  "title": "管理员权限分级与用户配额",
+  "description": "区分超级管理员、内容管理员和审核员等职责，并提供按用户配置资源限额的能力。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-10-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_stage": "backlog",
+    "source": "admin-feature-inventory",
+    "implementation_approved": "false"
+  }
+}
