@@ -1,4 +1,4 @@
-"""提示词模板注册表：28 个模板 key 的元信息、变量声明与系统默认模板（templates/<key>.{system,user}.j2）。
+"""提示词模板注册表：模板 key 的元信息、变量声明与系统默认模板（templates/<key>.{system,user}.j2）。
 
 - 数据块（参考资料、角色卡、作品信息等）由 build_*_messages 在 Python 里拼好后作为变量传入，模板只负责排布与措辞。
 - 锁定变量（json_rule / output_format / output_schema）的内容由代码提供，模板里必须原样出现一次（见 templating）。
@@ -352,6 +352,26 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.CAREER_FORMAT),
+        ),
+    ),
+    (
+        "relations.generate",
+        "AI 生成关系",
+        "entity",
+        "依据所选角色的设定，构思他们之间尚未建立的关系，预览确认后保存。",
+        (
+            PROJECT_INFO_VAR,
+            T("identities", "所选角色身份（ID / 名字 / 别名）", required=True, sample="ID=11｜林远\nID=12｜张三"),
+            T("characters", "所选角色资料", required=True, sample="ID=11：林远，重情义\nID=12：张三，严厉"),
+            T("existing_pairs", "不可重复的已有角色对 ID", sample="无"),
+            T("count", "本次最多建议条数", "int", required=True, sample=1),
+            T("world", "世界观", sample=""),
+            T("relationships", "已有关系详情", sample=""),
+            T("types", "可见关系类型参考", sample="师父 / 徒弟（social）"),
+            KNOWLEDGE_VAR,
+            INSTRUCTION_VAR,
+            JSON_RULE_VAR,
+            _out(F.RELATIONS_GENERATE_FORMAT),
         ),
     ),
     (

@@ -1,5 +1,4 @@
-"""AI 单体生成角色 / 组织 / 职业、解析旧关系备注
-（后台任务 character.generate / organization.generate / career.generate / relations.parse）。
+"""AI 单体生成角色 / 组织 / 职业、构思人物关系与解析旧关系备注。
 
 任务只产出草稿，不写任何设定数据，也不写 generation_logs（与向导一致）。保存由前端预览确认后调用
 `characters/with-relations`、`organizations/with-members`、`careers/batch`、`relationships/batch` 完成。
@@ -11,6 +10,7 @@
 - 按 (self_role, target_role) 匹配已有类型：正向匹配 subject_is_a = True（主体是 role_a 一方），
   反向匹配 subject_is_a = False；匹配不上 type.type_id = None（保存时新建自定义类型），subject_is_a = True。
 - 名字按「名字 → 别名」精确匹配已有角色；匹配不上 / 有歧义 / 指向自己 / 两人已有关系 → resolved = False，附 reason。
+批量关系构思单独按所选 ID 校验双方，不使用名字推断身份。
 """
 
 import logging
@@ -27,35 +27,42 @@ from app.ai.prompts import (
     build_career_generate_messages,
     build_character_generate_messages,
     build_organization_generate_messages,
+    build_relations_generate_messages,
     build_relations_parse_messages,
     format_project_info,
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
-from app.core.errors import BadRequestError
+from app.core.errors import BadRequestError, NotFoundError
 from app.core.security import SecretCipher
-from app.models import Character, Organization, OrganizationMember
-from app.models.entities import RELATION_CATEGORIES
+from app.models import Character, Organization, OrganizationMember, Relationship, RelationshipType
+from app.models.entities import RELATION_CATEGORIES, RELATION_STATUSES
+from app.schemas.entity_ai import RelationsGenerateRequest
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
 from app.services import (
     ai_config_service,
     career_service,
     kb_service,
+    organization_service,
     prompt_service,
     relationship_service,
     story_service,
 )
 from app.services.cast_service import is_protagonist_role
-from app.services.context_builder import MEMBER_STATUS_LABELS
+from app.services.context_builder import MEMBER_STATUS_LABELS, format_card
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
 
 logger = logging.getLogger(__name__)
 
-EntityKind = Literal["character.generate", "organization.generate", "career.generate", "relations.parse"]
+EntityKind = Literal[
+    "character.generate", "organization.generate", "career.generate", "relations.parse", "relations.generate"
+]
 REFERENCE_WORLD_CHARS = 4000
 REFERENCE_ROSTER_CHARS = 3000
 REFERENCE_ORGS_CHARS = 6000
 REFERENCE_CAREERS_CHARS = 6000
+REFERENCE_CARD_CHARS = 800
+REFERENCE_RELATIONS_CHARS = 6000
 
 _CATEGORY_ALIASES = {
     "家庭": "family",
@@ -88,7 +95,7 @@ class EntityJob:
     max_tokens: int | None = None
     # relations.parse 的主体角色
     character_id: int | None = None
-    # career.generate 的请求参数（count / kind）
+    # career.generate 的 count / kind；relations.generate 的原选择、身份快照与有效 count
     options: dict[str, Any] = field(default_factory=dict)
 
 
@@ -300,16 +307,7 @@ async def relation_suggestions(
             existing = await relationship_service.find_pair(db, subject_id, target_id)
             if existing is not None:
                 existing_id, reason = existing.id, "两人之间已有关系"
-        t, flipped = await relationship_service.find_type(db, project_id, r["self_role"], r["target_role"])
-        if t is not None:
-            type_ref = {"type_id": t.id, "role_a": t.role_a, "role_b": t.role_b, "category": t.category}
-        else:
-            type_ref = {
-                "type_id": None,
-                "role_a": r["self_role"],
-                "role_b": r["target_role"],
-                "category": r["category"],
-            }
+        type_ref, subject_is_a = await _suggestion_type(db, project_id, r["self_role"], r["target_role"], r["category"])
         out.append(
             {
                 "target_name": r["target"],
@@ -319,7 +317,7 @@ async def relation_suggestions(
                 "existing_relationship_id": existing_id,
                 "self_role": r["self_role"],
                 "target_role": r["target_role"],
-                "subject_is_a": not flipped,
+                "subject_is_a": subject_is_a,
                 "type": type_ref,
                 "intimacy": r["intimacy"],
                 "status": "normal",
@@ -327,6 +325,114 @@ async def relation_suggestions(
             }
         )
     return out
+
+
+async def _suggestion_type(
+    db: AsyncSession, project_id: int, self_role: str, target_role: str, category: str
+) -> tuple[dict[str, Any], bool]:
+    """草稿只查找类型；返回引用与方向，保存前不创建类型。"""
+    t, flipped = await relationship_service.find_type(db, project_id, self_role, target_role)
+    if t is not None:
+        return {"type_id": t.id, "role_a": t.role_a, "role_b": t.role_b, "category": t.category}, not flipped
+    return {"type_id": None, "role_a": self_role, "role_b": target_role, "category": category}, True
+
+
+async def generated_relation_suggestions(
+    db: AsyncSession, job: EntityJob, obj: Any, characters: list[Character]
+) -> dict[str, Any]:
+    """按原选择与当前项目双重校验 ID；正反向重复、过期身份和非法字段均不能保存。"""
+    if not isinstance(obj, dict) or not isinstance(obj.get("relationships"), list):
+        raise JSONExtractError("JSON 结构不符合预期：缺少 relationships 数组")
+    selected = set(job.options["character_ids"])
+    current = {c.id: c for c in characters if c.id in selected}
+    snapshots = job.options["character_names"]
+    existing = {
+        (min(r.a_id, r.b_id), max(r.a_id, r.b_id)): r.id
+        for r, _ in await relationship_service.relations_among(db, list(current))
+    }
+    seen: set[tuple[int, int]] = set()
+    suggestions: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    valid_count = 0
+    omitted = 0
+    for raw in obj["relationships"]:
+        if not isinstance(raw, dict):
+            warnings.append("已忽略格式不正确的关系建议")
+            continue
+        a = raw.get("a_id")
+        b = raw.get("b_id")
+        a = a if type(a) is int and a > 0 else None
+        b = b if type(b) is int and b > 0 else None
+        self_role, target_role = _text(raw.get("role_a")), _text(raw.get("role_b"))
+        category = _text(raw.get("category"))
+        intimacy, status = raw.get("intimacy"), _text(raw.get("status"))
+        pair = (min(a, b), max(a, b)) if a is not None and b is not None else None
+        existing_id = existing.get(pair) if pair else None
+        reason = ""
+        if a not in selected or b not in selected:
+            reason = "关系双方必须是本次所选角色 ID"
+        elif a == b:
+            reason = "不能与自己建立关系"
+        elif a not in current or b not in current:
+            reason = "角色已被删除或不属于该项目"
+        elif existing_id is not None:
+            reason = "两人之间已有关系"
+        elif pair in seen:
+            reason = "同一角色对重复建议（含反向）"
+        elif any(not isinstance(raw.get(field), str) for field in ("role_a", "role_b", "category", "status")):
+            reason = "关系称呼、类别和状态必须是文本"
+        elif not self_role or not target_role or len(self_role) > 20 or len(target_role) > 20:
+            reason = "双方称呼不能为空且不能超过 20 字"
+        elif category not in RELATION_CATEGORIES:
+            reason = "关系类别无效"
+        elif type(intimacy) is not int or not -100 <= intimacy <= 100:
+            reason = "亲密度必须是 -100～100 的整数"
+        elif status not in RELATION_STATUSES:
+            reason = "关系状态无效"
+        if pair is not None:
+            seen.add(pair)
+        if not reason and valid_count >= job.options["count"]:
+            omitted += 1
+            continue
+        if len(suggestions) >= 50:
+            omitted += 1
+            continue
+        if not reason:
+            valid_count += 1
+        type_ref, subject_is_a = await _suggestion_type(
+            db, job.project_id, self_role[:20], target_role[:20], normalize_category(category)
+        )
+
+        def display_name(cid: int | None) -> str:
+            if cid in current:
+                return current[cid].name
+            return snapshots.get(cid, f"未选角色（ID={cid}）" if cid is not None else "无效角色 ID")
+
+        suggestions.append(
+            {
+                "subject_id": a,
+                "subject_name": display_name(a),
+                "target_id": b,
+                "target_name": display_name(b),
+                "resolved": not reason,
+                "reason": reason,
+                "existing_relationship_id": existing_id,
+                "self_role": self_role[:20],
+                "target_role": target_role[:20],
+                "subject_is_a": subject_is_a,
+                "type": type_ref,
+                "intimacy": intimacy if type(intimacy) is int and -100 <= intimacy <= 100 else 0,
+                "status": status if status in RELATION_STATUSES else "normal",
+                "description": _text(raw.get("description")),
+            }
+        )
+    if omitted:
+        warnings.append(f"已忽略 {omitted} 条超出本次数量或预览上限的建议")
+    return {
+        "character_ids": job.options["character_ids"],
+        "suggestions": suggestions,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
 
 
 async def career_suggestions(
@@ -399,6 +505,7 @@ async def validate_entity_task(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    character_ids: list[int] | None = None,
 ) -> tuple[int, str]:
     """创建任务时同步校验归属、配置与端点；返回 (ai_config_id, 任务标题)。不修改任何数据。"""
     await get_owned_project(db, user_id, project_id)
@@ -406,6 +513,7 @@ async def validate_entity_task(
         "character.generate": "AI 生成角色",
         "organization.generate": "AI 生成组织",
         "career.generate": "AI 生成职业",
+        "relations.generate": "AI 生成关系",
     }.get(kind, "")
     if kind == "relations.parse":
         if character_id is None:
@@ -414,6 +522,8 @@ async def validate_entity_task(
         if not character.relations_text.strip():
             raise BadRequestError("该角色没有旧关系备注，无需解析")
         title = f"解析旧关系 · {character.name}"
+    elif kind == "relations.generate":
+        await _selected_for_generation(db, project_id, character_ids or [])
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     return cfg.id, title[:200]
@@ -421,6 +531,64 @@ async def validate_entity_task(
 
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "……"
+
+
+async def _selected_for_generation(
+    db: AsyncSession, project_id: int, character_ids: list[int]
+) -> tuple[list[Character], list[tuple[Relationship, RelationshipType]], int]:
+    """创建与运行共用选择校验，身份查询始终限定当前项目。"""
+    characters = list(
+        await db.scalars(select(Character).where(Character.project_id == project_id, Character.id.in_(character_ids)))
+    )
+    by_id = {c.id: c for c in characters}
+    if len(character_ids) < 2 or len(by_id) != len(character_ids):
+        raise NotFoundError("所选角色不存在或不属于该项目")
+    existing = await relationship_service.relations_among(db, character_ids)
+    missing = len(character_ids) * (len(character_ids) - 1) // 2 - len(existing)
+    if missing <= 0:
+        raise BadRequestError("所选角色之间已无缺失关系，无需生成")
+    return [by_id[cid] for cid in character_ids], existing, missing
+
+
+async def _relations_generate_context(
+    db: AsyncSession,
+    project_id: int,
+    characters: list[Character],
+    existing: list[tuple[Relationship, RelationshipType]],
+) -> dict[str, str]:
+    """身份与占用对独立保留，详细资料逐角色裁剪，避免长卡片吞掉后面的角色。"""
+    memberships = await organization_service.memberships_of(db, [c.id for c in characters])
+    identities = "\n".join(
+        f"ID={c.id}｜{c.name}｜定位：{c.role_type or '未设定'}｜别名：{'、'.join(c.aliases or []) or '无'}"
+        for c in characters
+    )
+    cards = "\n\n".join(
+        f"ID={c.id}\n"
+        + _clip(format_card(c, [(m, o) for m, o in memberships if m.character_id == c.id]), REFERENCE_CARD_CHARS)
+        for c in characters
+    )
+    names = {c.id: c.name for c in characters}
+    pairs = "\n".join(f"ID={min(r.a_id, r.b_id)} ↔ ID={max(r.a_id, r.b_id)}" for r, _ in existing) or "无"
+    relations = "\n".join(
+        f"ID={r.a_id} → ID={r.b_id}：{relationship_service.describe_relation(names[r.a_id], names[r.b_id], t)}"
+        f"；亲密度 {r.intimacy}；状态 {r.status}；{_clip(r.description, 100)}"
+        for r, t in existing
+    )
+    # 类型可见范围与 find_type 相同；不调用 resolve_type，避免草稿创建类型。
+    visible = list(
+        await db.scalars(
+            select(RelationshipType)
+            .where((RelationshipType.project_id.is_(None)) | (RelationshipType.project_id == project_id))
+            .order_by(RelationshipType.project_id.is_not(None), RelationshipType.sort, RelationshipType.id)
+        )
+    )
+    return {
+        "identities": identities,
+        "characters_text": cards,
+        "existing_pairs": pairs,
+        "relationships_text": _clip(relations, REFERENCE_RELATIONS_CHARS),
+        "types_text": _clip("\n".join(f"{t.role_a} / {t.role_b}（{t.category}）" for t in visible), 3000),
+    }
 
 
 async def _orgs_text(db: AsyncSession, project_id: int) -> str:
@@ -477,6 +645,17 @@ async def build_entity_job(
     allow_private: bool,
 ) -> EntityJob:
     project = await get_owned_project(db, user_id, project_id)
+    selected: list[Character] = []
+    existing: list[tuple[Relationship, RelationshipType]] = []
+    options: dict[str, Any] = {}
+    if kind == "relations.generate":
+        request = RelationsGenerateRequest.model_validate(params)
+        selected, existing, missing = await _selected_for_generation(db, project_id, request.character_ids)
+        options = {
+            "character_ids": request.character_ids,
+            "character_names": {c.id: c.name for c in selected},
+            "count": min(request.count, missing),
+        }
     cfg = await ai_config_service.resolve_config(db, user_id, params.get("ai_config_id"))
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     info = await project_info(db, project)
@@ -484,26 +663,49 @@ async def build_entity_job(
         "career.generate": "entity.career",
         "relations.parse": "relations.parse",
         "character.generate": "entity.character",
-    }.get(kind, "entity.organization")
+        "organization.generate": "entity.organization",
+        "relations.generate": "relations.generate",
+    }[kind]
     override = await prompt_service.get_override(db, user_id, template_key)
-    characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
+    characters = (
+        selected
+        if kind == "relations.generate"
+        else await story_service.list_items(db, story_service.CHARACTERS, project_id)
+    )
     instruction = str(params.get("instruction") or "")
     character_id: int | None = None
-    options: dict[str, Any] = {}
     knowledge = ""
     if kind != "relations.parse":
         # 知识库参考资料：查询 = 生成请求中的描述 + 作品信息
         knowledge = await kb_service.knowledge_for_project(
             db,
             project,
-            "\n".join([instruction, str(params.get("role_type") or ""), format_project_info(info)]),
+            "\n".join(
+                [
+                    instruction,
+                    str(params.get("role_type") or ""),
+                    "、".join(c.name for c in selected),
+                    format_project_info(info),
+                ]
+            ),
             cipher=cipher,
             factory=factory,
             ai_timeout=ai_timeout,
             allow_private=allow_private,
             purpose=kind,
         )
-    if kind == "career.generate":
+    if kind == "relations.generate":
+        world = await story_service.list_items(db, story_service.WORLD, project_id)
+        messages = build_relations_generate_messages(
+            info,
+            **await _relations_generate_context(db, project_id, selected, existing),
+            count=options["count"],
+            world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
+            instruction=instruction,
+            knowledge=knowledge,
+            override=override,
+        )
+    elif kind == "career.generate":
         world = await story_service.list_items(db, story_service.WORLD, project_id)
         options = {"count": int(params.get("count") or 3), "kind": params.get("kind")}
         messages = build_career_generate_messages(
@@ -580,6 +782,8 @@ async def build_result(db: AsyncSession, job: EntityJob, obj: Any) -> dict[str, 
                 warnings.append(f"已存在名为「{d['name']}」的职业，保存前请修改名称")
         return {"drafts": drafts, "warnings": warnings}
     characters = await story_service.list_items(db, story_service.CHARACTERS, job.project_id)
+    if job.kind == "relations.generate":
+        return await generated_relation_suggestions(db, job, obj, characters)
     if job.kind == "character.generate":
         draft, raw = normalize_character_draft(obj)
         taken = {c.name for c in characters} | {a for c in characters for a in (c.aliases or [])}

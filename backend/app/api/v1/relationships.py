@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, Response, status
 
-from app.core.deps import CurrentUser, DbDep
+from app.core.deps import CurrentUser, DbDep, TaskEngineDep
+from app.schemas.entity_ai import RelationsGenerateRequest
 from app.schemas.relationship import (
     RelationshipBatchCreate,
     RelationshipCreate,
@@ -13,7 +14,9 @@ from app.schemas.relationship import (
     RelationshipTypeOut,
     RelationshipUpdate,
 )
+from app.schemas.task import TaskOut
 from app.services import relationship_service as svc
+from app.services import task_service
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["relationships"])
 
@@ -55,6 +58,14 @@ async def create_relationships(
     project_id: int, body: RelationshipBatchCreate, user: CurrentUser, db: DbDep
 ) -> list[RelationshipOut]:
     return await svc.create_relationships(db, user.id, project_id, body)
+
+
+@router.post("/relationships/generate", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
+async def generate_relationships(
+    project_id: int, body: RelationsGenerateRequest, user: CurrentUser, db: DbDep, engine: TaskEngineDep
+) -> TaskOut:
+    params = {"project_id": project_id, **body.model_dump(mode="json")}
+    return await task_service.create_task(db, engine, user.id, "relations.generate", params)
 
 
 @router.patch("/relationships/{rel_id}", response_model=RelationshipOut)

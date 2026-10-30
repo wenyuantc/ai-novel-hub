@@ -61,6 +61,7 @@ TASK_KINDS = (
     "character.generate",
     "organization.generate",
     "relations.parse",
+    "relations.generate",
     "career.generate",
     "wizard.careers",
     "chapter.analyze",
@@ -84,8 +85,8 @@ WORLD_CATEGORIES = ("place", "faction", "item", "rule", "history", "other")
 MEMBER_STATUSES = ("active", "left", "expelled", "dead")
 RELATION_CATEGORIES = ("family", "social", "hostile", "work", "other")
 RELATION_STATUSES = ("normal", "broken", "past", "complicated")
-# 关系历史来源：手动 / 角色向导 / AI 解析旧备注 / 卡片导入 / 章节分析（analysis-memory）
-RELATION_SOURCES = ("manual", "wizard", "ai_parse", "import", "analysis")
+# 关系历史来源：手动 / 角色向导 / AI 解析旧备注 / AI 生成 / 卡片导入 / 章节分析（analysis-memory）
+RELATION_SOURCES = ("manual", "wizard", "ai_parse", "ai_generate", "import", "analysis")
 # 职业：主修（只能挂为主职业）/ 副修（只能挂为副职业）
 CAREER_KINDS = ("main", "sub")
 # 职业挂接历史来源：手动 / 向导 / AI 生成角色 / 卡片导入 / 章节分析（analysis-memory）

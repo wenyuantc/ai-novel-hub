@@ -7,6 +7,9 @@
   手动编辑、卡片导入、AI 解析、向导，以及以后的 analysis-memory，都经由它写入。
 """
 
+import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -38,6 +41,7 @@ from app.services.project_service import get_owned_project
 STATUS_LABELS = {"normal": "正常", "broken": "破裂", "past": "过去式", "complicated": "复杂"}
 CATEGORY_LABELS = {"family": "家庭", "social": "社交", "hostile": "敌对", "work": "职场", "other": "其他"}
 PAIR_CONFLICT = "这两个角色之间已有关系"
+TYPE_CREATE_CONFLICT = "关系类型已被其他请求创建，请重试保存"
 TRACKED_FIELDS = ("a_id", "b_id", "type_id", "intimacy", "status", "description")
 _NEW_DEFAULTS: dict[str, Any] = {"intimacy": 0, "status": "normal", "description": ""}
 
@@ -97,6 +101,25 @@ async def find_type(
     return None, False
 
 
+def _is_type_conflict(exc: IntegrityError) -> bool:
+    """只识别同项目、同称呼的类型唯一约束，其他完整性错误保留原异常。"""
+    original = exc.orig
+    if (
+        getattr(original, "sqlite_errorcode", None) == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+        and str(original)
+        == (
+            "UNIQUE constraint failed: relationship_types.project_id, "
+            "relationship_types.role_a, relationship_types.role_b"
+        )
+    ):
+        return True
+    return any(
+        getattr(error, "sqlstate", None) == "23505"
+        and getattr(error, "constraint_name", None) == "uq_relationship_types_project_id"
+        for error in (original, getattr(original, "__cause__", None))
+    )
+
+
 async def resolve_type(
     db: AsyncSession,
     project_id: int,
@@ -125,7 +148,13 @@ async def resolve_type(
         sort=(max_sort or 0) + 1,
     )
     db.add(t)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        if _is_type_conflict(exc):
+            # 不回滚调用方的事务；HTTP 请求或外层 SAVEPOINT 统一撤销本批改动。
+            raise ConflictError(TYPE_CREATE_CONFLICT) from exc
+        raise
     return t, False
 
 
@@ -183,6 +212,33 @@ async def delete_type(db: AsyncSession, user_id: int, project_id: int, type_id: 
 async def find_pair(db: AsyncSession, a_id: int, b_id: int) -> Relationship | None:
     low, high = min(a_id, b_id), max(a_id, b_id)
     return await db.scalar(select(Relationship).where(Relationship.pair_low == low, Relationship.pair_high == high))
+
+
+def _is_pair_conflict(exc: IntegrityError) -> bool:
+    """只识别角色对唯一约束；外键、类型唯一性等错误保留原异常。"""
+    original = exc.orig
+    if (
+        getattr(original, "sqlite_errorcode", None) == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+        and str(original) == "UNIQUE constraint failed: relationships.pair_low, relationships.pair_high"
+    ):
+        return True
+    # asyncpg 原异常通过 SQLAlchemy 适配器的 cause 保留约束名。
+    return any(
+        getattr(error, "sqlstate", None) == "23505"
+        and getattr(error, "constraint_name", None) == "uq_relationships_pair_low"
+        for error in (original, getattr(original, "__cause__", None))
+    )
+
+
+@asynccontextmanager
+async def _pair_conflict_guard() -> AsyncIterator[None]:
+    """统一识别 flush / commit 的角色对冲突；事务由调用方或外层 SAVEPOINT 回滚。"""
+    try:
+        yield
+    except IntegrityError as exc:
+        if _is_pair_conflict(exc):
+            raise ConflictError(PAIR_CONFLICT) from exc
+        raise
 
 
 async def apply_change(
@@ -263,12 +319,13 @@ async def apply_change(
     rel.description = description
     if is_new:
         db.add(rel)
-    await db.flush()
-    history = RelationshipHistory(
-        relationship_id=rel.id, chapter_no=chapter_no, source=source, changes=changes, note=(note or "")[:200]
-    )
-    db.add(history)
-    await db.flush()
+    async with _pair_conflict_guard():
+        await db.flush()
+        history = RelationshipHistory(
+            relationship_id=rel.id, chapter_no=chapter_no, source=source, changes=changes, note=(note or "")[:200]
+        )
+        db.add(history)
+        await db.flush()
     return history
 
 
@@ -314,11 +371,11 @@ async def create_relation(
 
 async def _commit(db: AsyncSession) -> None:
     try:
-        await db.commit()
-    except IntegrityError as exc:
-        # 并发写入同一对角色时由 (pair_low, pair_high) 唯一约束兜底
+        async with _pair_conflict_guard():
+            await db.commit()
+    except (ConflictError, IntegrityError):
         await db.rollback()
-        raise ConflictError(PAIR_CONFLICT) from exc
+        raise
 
 
 # ---------------- 序列化 ----------------
@@ -419,7 +476,11 @@ async def create_relationship(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipCreate
 ) -> RelationshipOut:
     await get_owned_project(db, user_id, project_id)
-    rel = await create_relation(db, project_id, **_create_kwargs(data))
+    try:
+        rel = await create_relation(db, project_id, **_create_kwargs(data))
+    except ConflictError:
+        await db.rollback()
+        raise
     await _commit(db)
     return (await _refreshed_outs(db, [rel]))[0]
 
@@ -427,9 +488,13 @@ async def create_relationship(
 async def create_relationships(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipBatchCreate
 ) -> list[RelationshipOut]:
-    """批量新建（AI 解析预览确认后保存），单事务：任一条失败则全部不写入。"""
+    """批量新建（AI 关系建议预览确认后保存），单事务：任一条失败则全部不写入。"""
     await get_owned_project(db, user_id, project_id)
-    rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+    try:
+        rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
+    except ConflictError:
+        await db.rollback()
+        raise
     await _commit(db)
     return await _refreshed_outs(db, rels)
 

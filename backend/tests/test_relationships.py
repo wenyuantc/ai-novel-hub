@@ -1,14 +1,251 @@
+import asyncio
+import sqlite3
+from unittest.mock import AsyncMock
+
+import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.models import (
     ChapterCharacter,
     Organization,
     OrganizationMember,
+    Project,
     Relationship,
     RelationshipHistory,
     RelationshipType,
 )
 from tests.helpers import create_project, register
+
+
+async def test_concurrent_pair_creation_returns_conflict_and_rolls_back(app, client, make_client, monkeypatch):
+    """两个请求都通过查重后竞争 flush：数据库唯一约束也必须返回中文 409。"""
+    from app.services import relationship_service as svc
+
+    base = await _setup(client)
+    a, b = await _char(client, base, "甲"), await _char(client, base, "乙")
+    type_id = await _type_id(client, base, "朋友", "朋友")
+    second = make_client()
+    login = await second.post("/api/v1/auth/login", json={"username": "alice", "password": "secret123"})
+    assert login.status_code == 200
+    original = svc.find_pair
+    arrived = 0
+    ready = asyncio.Event()
+
+    async def simultaneous_find_pair(db, a_id, b_id):
+        nonlocal arrived
+        found = await original(db, a_id, b_id)
+        if found is None:
+            arrived += 1
+            if arrived == 2:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 5)
+        return found
+
+    monkeypatch.setattr(svc, "find_pair", simultaneous_find_pair)
+    body = {"items": [{"a_id": a["id"], "b_id": b["id"], "type_id": type_id, "source": "ai_generate"}]}
+    responses = await asyncio.gather(
+        client.post(f"{base}/relationships/batch", json=body),
+        second.post(f"{base}/relationships/batch", json=body),
+        return_exceptions=True,
+    )
+    assert all(not isinstance(r, BaseException) for r in responses), responses
+    assert sorted(r.status_code for r in responses) == [201, 409]
+    conflict = next(r for r in responses if r.status_code == 409)
+    assert conflict.json()["detail"] == "这两个角色之间已有关系"
+    assert await _count(app, Relationship) == 1
+    assert await _count(app, RelationshipHistory) == 1
+
+
+async def test_relationship_commit_preserves_unrelated_integrity_errors():
+    from app.services import relationship_service as svc
+
+    foreign_key_error = IntegrityError("INSERT", {}, sqlite3.IntegrityError("FOREIGN KEY constraint failed"))
+    db = AsyncMock()
+    db.commit.side_effect = foreign_key_error
+    with pytest.raises(IntegrityError) as caught:
+        await svc._commit(db)
+    assert caught.value is foreign_key_error
+
+
+@pytest.mark.parametrize("same_pair", [True, False])
+async def test_concurrent_custom_type_returns_conflict_and_rolls_back(app, client, make_client, monkeypatch, same_pair):
+    """首次保存相同自定义称呼时，类型唯一约束先于角色对约束发生竞争。"""
+    from app.services import relationship_service as svc
+
+    base = await _setup(client)
+    a, b, c = [await _char(client, base, name) for name in ("甲", "乙", "丙")]
+    second = make_client()
+    login = await second.post("/api/v1/auth/login", json={"username": "alice", "password": "secret123"})
+    assert login.status_code == 200
+    original = svc.find_type
+    arrived = 0
+    ready = asyncio.Event()
+
+    async def simultaneous_find_type(db, project_id, role_a, role_b):
+        nonlocal arrived
+        found = await original(db, project_id, role_a, role_b)
+        if found[0] is None:
+            arrived += 1
+            if arrived == 2:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 5)
+        return found
+
+    monkeypatch.setattr(svc, "find_type", simultaneous_find_type)
+    body = {
+        "items": [{"a_id": a["id"], "b_id": b["id"], "role_a": "引路人", "role_b": "同行者", "source": "ai_generate"}]
+    }
+    second_body = {"items": [{**body["items"][0], "b_id": b["id"] if same_pair else c["id"]}]}
+    responses = await asyncio.gather(
+        client.post(f"{base}/relationships/batch", json=body),
+        second.post(f"{base}/relationships/batch", json=second_body),
+        return_exceptions=True,
+    )
+    assert all(not isinstance(r, BaseException) for r in responses), responses
+    assert sorted(r.status_code for r in responses) == [201, 409]
+    conflict = next(r for r in responses if r.status_code == 409)
+    assert conflict.json()["detail"] == "关系类型已被其他请求创建，请重试保存"
+    assert await _count(app, Relationship) == 1
+    assert await _count(app, RelationshipHistory) == 1
+    assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
+    if not same_pair:
+        retry_body = body if responses[0].status_code == 409 else second_body
+        retry = await client.post(f"{base}/relationships/batch", json=retry_body)
+        assert retry.status_code == 201, retry.text
+        assert await _count(app, Relationship) == 2
+        assert await _count(app, RelationshipHistory) == 2
+        assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
+
+
+async def test_type_flush_conflict_rolls_back_entire_mixed_batch(app, client, monkeypatch):
+    from app.services import relationship_service as svc
+
+    base = await _setup(client)
+    a, b, c = [await _char(client, base, name) for name in ("甲", "乙", "丙")]
+    created = await client.post(f"{base}/relationship-types", json={"role_a": "引路人", "role_b": "同行者"})
+    assert created.status_code == 201
+    original = svc.find_type
+
+    async def stale_find_type(db, project_id, role_a, role_b):
+        if (role_a, role_b) == ("引路人", "同行者"):
+            return None, False
+        return await original(db, project_id, role_a, role_b)
+
+    monkeypatch.setattr(svc, "find_type", stale_find_type)
+    response = await client.post(
+        f"{base}/relationships/batch",
+        json={"items": [
+            {"a_id": a["id"], "b_id": b["id"], "role_a": "守望者", "role_b": "被守望者", "source": "ai_generate"},
+            {"a_id": a["id"], "b_id": c["id"], "role_a": "引路人", "role_b": "同行者", "source": "ai_generate"},
+        ]},
+    )
+    assert response.status_code == 409 and response.json()["detail"] == "关系类型已被其他请求创建，请重试保存"
+    assert await _count(app, Relationship) == 0
+    assert await _count(app, RelationshipHistory) == 0
+    assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
+
+
+async def test_resolve_type_preserves_unrelated_integrity_errors(monkeypatch):
+    from app.services import relationship_service as svc
+
+    monkeypatch.setattr(svc, "find_type", AsyncMock(return_value=(None, False)))
+    foreign_key_error = IntegrityError("INSERT", {}, sqlite3.IntegrityError("FOREIGN KEY constraint failed"))
+    db = AsyncMock()
+    db.add = lambda _: None
+    db.scalar.return_value = 0
+    db.flush.side_effect = foreign_key_error
+    with pytest.raises(IntegrityError) as caught:
+        await svc.resolve_type(db, 1, role_a="引路人", role_b="同行者")
+    assert caught.value is foreign_key_error
+    db.rollback.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+async def test_type_flush_conflict_preserves_callers_outer_transaction(app, client, monkeypatch):
+    from app.core.errors import ConflictError
+    from app.services import relationship_service as svc
+
+    base = await _setup(client)
+    created = await client.post(f"{base}/relationship-types", json={"role_a": "引路人", "role_b": "同行者"})
+    assert created.status_code == 201
+    monkeypatch.setattr(svc, "find_type", AsyncMock(return_value=(None, False)))
+    async with app.state.sessionmaker() as db:
+        project = await db.get(Project, 1)
+        project.title = "外层事务中的编辑"
+        await db.flush()
+        with pytest.raises(ConflictError, match="关系类型已被其他请求创建，请重试保存"):
+            async with db.begin_nested():
+                await svc.resolve_type(db, project.id, role_a="引路人", role_b="同行者")
+        await db.commit()
+    assert (await client.get(base)).json()["title"] == "外层事务中的编辑"
+    assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
+
+
+@pytest.mark.parametrize(
+    ("constraint", "sqlstate", "matches"),
+    [
+        ("uq_relationship_types_project_id", "23505", True),
+        ("uq_relationships_pair_low", "23505", False),
+        ("uq_relationship_types_project_id", "23503", False),
+    ],
+)
+def test_postgres_type_conflict_uses_exact_unique_constraint(constraint, sqlstate, matches):
+    from app.services import relationship_service as svc
+
+    class PostgresError(Exception):
+        pass
+
+    original = PostgresError()
+    original.sqlstate = sqlstate
+    original.constraint_name = constraint
+    wrapped = Exception("适配后的 asyncpg 错误")
+    wrapped.__cause__ = original
+    for error in (original, wrapped):
+        assert svc._is_type_conflict(IntegrityError("INSERT", {}, error)) is matches
+
+
+async def test_pair_flush_conflict_preserves_callers_outer_transaction(app, client, monkeypatch):
+    """嵌套调用由 SAVEPOINT 回滚；统一入口不能撤掉外层已完成的其他改动。"""
+    from app.core.errors import ConflictError
+    from app.services import relationship_service as svc
+
+    base = await _setup(client)
+    a, b = await _char(client, base, "甲"), await _char(client, base, "乙")
+    tid = await _type_id(client, base, "朋友", "朋友")
+    assert (
+        await client.post(f"{base}/relationships", json={"a_id": a["id"], "b_id": b["id"], "type_id": tid})
+    ).status_code == 201
+
+    async def missing_pair(db, a_id, b_id):
+        return None
+
+    monkeypatch.setattr(svc, "find_pair", missing_pair)
+    async with app.state.sessionmaker() as db:
+        project = await db.get(Project, 1)
+        project.title = "外层事务中的编辑"
+        await db.flush()
+        with pytest.raises(ConflictError, match="这两个角色之间已有关系"):
+            async with db.begin_nested():
+                await svc.create_relation(db, project.id, a_id=a["id"], b_id=b["id"], type_id=tid, source="ai_generate")
+        await db.commit()
+    assert (await client.get(base)).json()["title"] == "外层事务中的编辑"
+    assert await _count(app, Relationship) == 1
+
+
+@pytest.mark.parametrize(
+    ("constraint", "matches"), [("uq_relationships_pair_low", True), ("uq_relationship_types_project_id", False)]
+)
+def test_postgres_pair_conflict_uses_exact_unique_constraint(constraint, matches):
+    from app.services import relationship_service as svc
+
+    class PostgresUniqueError(Exception):
+        sqlstate = "23505"
+        constraint_name = constraint
+
+    wrapped = Exception("适配后的 asyncpg 错误")
+    wrapped.__cause__ = PostgresUniqueError()
+    assert svc._is_pair_conflict(IntegrityError("INSERT", {}, wrapped)) is matches
 
 
 async def _setup(client):

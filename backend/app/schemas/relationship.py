@@ -14,7 +14,7 @@ from app.schemas.story import CharacterCreate, CharacterOut
 RelationCategory = Literal["family", "social", "hostile", "work", "other"]
 RelationStatus = Literal["normal", "broken", "past", "complicated"]
 # 接口可写入的来源（wizard / import / analysis 只由服务端内部写入）
-ApiRelationSource = Literal["manual", "ai_parse"]
+ApiRelationSource = Literal["manual", "ai_parse", "ai_generate"]
 
 
 class RelationshipTypeCreate(BaseModel):

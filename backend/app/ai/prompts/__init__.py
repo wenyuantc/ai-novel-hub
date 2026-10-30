@@ -16,6 +16,7 @@ from app.ai.prompts.common import ProjectInfo, format_project_info
 from app.ai.prompts.entities import (
     build_character_generate_messages,
     build_organization_generate_messages,
+    build_relations_generate_messages,
     build_relations_parse_messages,
 )
 from app.ai.prompts.inspiration import build_inspiration_messages
@@ -49,6 +50,7 @@ __all__ = [
     "build_outline_messages",
     "build_polish_messages",
     "build_relations_parse_messages",
+    "build_relations_generate_messages",
     "build_revise_messages",
     "build_rewrite_messages",
     "build_style_block",

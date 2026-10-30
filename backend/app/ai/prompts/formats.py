@@ -111,6 +111,15 @@ RELATIONS_PARSE_FORMAT = (
     "}"
 )
 
+RELATIONS_GENERATE_FORMAT = (
+    "{\n"
+    '  "relationships": [\n'
+    '    {"a_id": 11, "b_id": 12, "role_a": "徒弟", "role_b": "师父", "category": "social",\n'
+    '     "intimacy": 60, "status": "normal", "description": "关系构思及其设定依据"}\n'
+    "  ]\n"
+    "}"
+)
+
 OUTLINE_CONTINUE_FORMAT = (
     "{\n"
     '  "volume_title": "（仅开新卷且未指定卷名时填写）",\n'

@@ -1,0 +1,54 @@
+请根据以下设定，构思最多 {{ count }} 条合理的人物关系；依据不足时 MAY 少于期望条数，或返回空 relationships 数组。
+
+【作品信息】
+{{ project_info }}
+
+【所选角色身份（身份以 ID 为准，同名角色仍为不同人物）】
+{{ identities }}
+
+【所选角色资料】
+{{ characters }}
+
+【已有角色对 ID（两个方向均不可再次建议）】
+{{ existing_pairs }}
+{% if world %}
+
+【世界观】
+{{ world }}
+{% endif %}
+{% if relationships %}
+
+【已有关系（仅作参考）】
+{{ relationships }}
+{% endif %}
+{% if types %}
+
+【关系类型参考】
+{{ types }}
+{% endif %}
+{% if knowledge %}
+
+【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】
+{{ knowledge }}
+{% endif %}
+{% if instruction %}
+
+【作者额外要求】
+{{ instruction }}
+{% endif %}
+
+【输出契约】
+- a_id / b_id MUST 是所选身份清单中的整数 ID。名字与别名仅供识别，NEVER 作为 ID。
+- a 是 b 的 role_a，b 是 a 的 role_b；例如 a 为徒弟、b 为师父时，role_a=徒弟、role_b=师父。
+- role_a / role_b MUST 非空且各不超过 20 字；对称关系两者相同。
+- category MUST 为 family / social / hostile / work / other。
+- intimacy MUST 为 -100～100 的整数；status MUST 为 normal / broken / past / complicated。
+- description SHOULD 说明这段关系与性格、背景或作者要求的联系。
+- {{ json_rule }}
+
+【输出格式（示例 ID MUST 替换为所选 ID）】
+{{ output_format }}
+
+<critical>
+你 MUST 只补充所选角色间的缺失关系；NEVER 输出自指、已有或重复角色对。
+</critical>

@@ -44,7 +44,7 @@ async def _last_log(client, base, ch):
 async def test_list_and_detail(client):
     await register(client)
     items = (await client.get(API)).json()
-    assert [i["key"] for i in items] == list(registry.TEMPLATE_KEYS) and len(items) == 30
+    assert [i["key"] for i in items] == list(registry.TEMPLATE_KEYS) and len(items) == 31
     assert not any(i["overridden"] for i in items)
     detail = (await client.get(f"{API}/analysis.chapter")).json()
     system, user = _default("analysis.chapter")

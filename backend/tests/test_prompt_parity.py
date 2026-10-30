@@ -328,5 +328,6 @@ def test_every_legacy_key_is_covered():
     assert covered == {
         k
         for k in TEMPLATE_KEYS
-        if not k.startswith(("style.", "inspiration.", "book_import.", "agent.")) and k != "wizard.continue"
+        if not k.startswith(("style.", "inspiration.", "book_import.", "agent."))
+        and k not in {"wizard.continue", "relations.generate"}
     }
