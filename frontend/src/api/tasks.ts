@@ -83,6 +83,7 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'character.generate': 'AI 生成角色',
   'organization.generate': 'AI 生成组织',
   'relations.parse': '解析旧关系',
+  'relations.generate': 'AI 生成关系',
   'career.generate': 'AI 生成职业',
   'wizard.careers': '职业体系向导',
   'chapter.analyze': '章节分析',
@@ -123,6 +124,8 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>)
     case 'character.generate':
     case 'relations.parse':
       return `${base}/characters`
+    case 'relations.generate':
+      return `${base}/relationships`
     case 'organization.generate':
       return `${base}/organizations`
     case 'career.generate':

@@ -529,6 +529,7 @@ export type TaskKind =
   | 'character.generate'
   | 'organization.generate'
   | 'relations.parse'
+  | 'relations.generate'
   | 'career.generate'
   | 'wizard.careers'
   | 'chapter.analyze'
@@ -991,7 +992,7 @@ export interface RelationshipCreate extends TypeRef {
   intimacy?: number
   status?: RelationStatus
   description?: string
-  source?: 'manual' | 'ai_parse'
+  source?: 'manual' | 'ai_parse' | 'ai_generate'
   chapter_no?: number | null
   note?: string
 }
@@ -1188,6 +1189,13 @@ export interface RelationsParseRequest {
   ai_config_id?: number | null
 }
 
+export interface RelationsGenerateRequest {
+  character_ids: number[]
+  count?: number
+  instruction?: string
+  ai_config_id?: number | null
+}
+
 /** 主体视角的关系建议；resolved=false 不可保存，reason 说明原因 */
 export interface RelationSuggestion {
   target_name: string
@@ -1270,6 +1278,17 @@ export interface RelationsParseResult {
   character_id: number
   character_name: string
   suggestions: RelationSuggestion[]
+  warnings: string[]
+}
+
+export interface GeneratedRelationSuggestion extends RelationSuggestion {
+  subject_id: number | null
+  subject_name: string
+}
+
+export interface RelationsGenerateResult {
+  character_ids: number[]
+  suggestions: GeneratedRelationSuggestion[]
   warnings: string[]
 }
 

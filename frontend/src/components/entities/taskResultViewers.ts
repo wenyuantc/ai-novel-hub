@@ -9,6 +9,7 @@ export const TASK_RESULT_VIEWERS: Partial<Record<TaskKind, ComponentType<TaskRes
   'character.generate': lazy(() => import('./CharacterDraftResult')),
   'organization.generate': lazy(() => import('./OrganizationDraftResult')),
   'relations.parse': lazy(() => import('./RelationsParseResultView')),
+  'relations.generate': lazy(() => import('./RelationsGenerateResultView')),
   'career.generate': lazy(() => import('../careers/CareerDraftResult')),
   'outline.continue': lazy(() => import('../outlines/ContinueDraftResult')),
   'outline.expand': lazy(() => import('../outlines/ExpandDraftResult')),

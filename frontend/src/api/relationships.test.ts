@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   describeRelation,
   formatChangeValue,
@@ -7,6 +7,8 @@ import {
   perspective,
   typeOptions,
   typeOptionValue,
+  relationshipApi,
+  RELATION_SOURCE_LABELS,
 } from './relationships'
 import type { RelationshipType } from './types'
 
@@ -21,6 +23,18 @@ const t = (id: number, role_a: string, role_b: string, category = 'social'): Rel
 })
 
 const rel = { a_id: 1, b_id: 2, a_name: 'A', b_name: 'B', role_a: '师父', role_b: '徒弟' }
+
+afterEach(() => { vi.unstubAllGlobals() })
+
+it('生成接口携带所选 ID / 条数 / 配置与要求，返回新 kind 任务；AI 生成来源有中文标签', async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ id: 27, kind: 'relations.generate' }), { status: 202 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const body = { character_ids: [3, 5], count: 1, instruction: '成长与信任', ai_config_id: 4 }
+  expect(await relationshipApi.generate(8, body)).toMatchObject({ id: 27, kind: 'relations.generate' })
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/projects/8/relationships/generate')
+  expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', credentials: 'include', body: JSON.stringify(body) })
+  expect(RELATION_SOURCE_LABELS.ai_generate).toBe('AI 生成')
+})
 
 describe('关系视角', () => {
   it('a 视角对方是 role_b，b 视角对方是 role_a', () => {

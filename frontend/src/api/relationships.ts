@@ -11,6 +11,8 @@ import type {
   RelationshipUpdate,
   RelationCategory,
   RelationStatus,
+  RelationsGenerateRequest,
+  Task,
 } from './types'
 
 const p = (pid: number) => `/projects/${pid}`
@@ -23,6 +25,8 @@ export const relationshipTypeApi = {
 }
 
 export const relationshipApi = {
+  /** 生成关系草稿（202 后台任务），不直接写入关系 */
+  generate: (pid: number, body: RelationsGenerateRequest) => api.post<Task>(`${p(pid)}/relationships/generate`, body),
   /** 传 characterId 时返回该角色视角字段（other_* / self_role） */
   list: (pid: number, characterId?: number) =>
     api.get<Relationship[]>(`${p(pid)}/relationships`, { character_id: characterId }),
@@ -56,6 +60,7 @@ export const RELATION_SOURCE_LABELS: Record<string, string> = {
   manual: '手动',
   wizard: '向导',
   ai_parse: 'AI 解析',
+  ai_generate: 'AI 生成',
   import: '导入',
   analysis: '章节分析',
 }

@@ -342,6 +342,8 @@ describe('task helpers', () => {
     expect(taskLink(task({ kind: 'character.generate', chapter_id: null }))).toBe('/projects/2/characters')
     expect(taskLink(task({ kind: 'relations.parse', chapter_id: null }))).toBe('/projects/2/characters')
     expect(taskLink(task({ kind: 'organization.generate', chapter_id: null }))).toBe('/projects/2/organizations')
+    expect(taskLink(task({ kind: 'relations.generate', chapter_id: null }))).toBe('/projects/2/relationships')
+    expect(TASK_KIND_LABELS['relations.generate']).toBe('AI 生成关系')
   })
 
   it('taskLink / 标签：职业生成到职业页，职业体系向导到向导页对应步骤', () => {

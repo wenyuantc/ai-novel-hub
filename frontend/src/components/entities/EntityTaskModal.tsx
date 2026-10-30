@@ -3,9 +3,11 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import { CAREER_KIND_LABELS, careerApi } from '../../api/careers'
 import { characterExtraApi, ROLE_TYPES } from '../../api/characters'
 import { errorMessage } from '../../api/client'
+import { missingRelationPairCount } from '../../api/entityTasks'
 import { organizationApi } from '../../api/organizations'
+import { relationshipApi } from '../../api/relationships'
 import { queueLabel, TASK_KIND_LABELS, taskApi } from '../../api/tasks'
-import type { CareerKind, Task } from '../../api/types'
+import type { CareerKind, Character, Relationship, Task } from '../../api/types'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
@@ -13,7 +15,7 @@ import AIConfigSelect from '../AIConfigSelect'
 import StreamOutput from '../StreamOutput'
 import { TASK_RESULT_VIEWERS } from './taskResultViewers'
 
-export type EntityTaskKind = 'character.generate' | 'organization.generate' | 'relations.parse' | 'career.generate'
+export type EntityTaskKind = 'character.generate' | 'organization.generate' | 'relations.parse' | 'relations.generate' | 'career.generate'
 
 interface Props {
   projectId: number
@@ -23,6 +25,9 @@ interface Props {
   /** relations.parse 的主体角色 */
   characterId?: number
   characterName?: string
+  /** relations.generate 的可选角色与已有关系 */
+  characters?: Character[]
+  relationships?: Relationship[]
   /** 保存成功（写入了数据）后回调 */
   onSaved?: () => void
 }
@@ -30,8 +35,9 @@ interface Props {
 interface FormValues {
   instruction: string
   role_type?: string
-  /** career.generate：1–5 */
+  /** career.generate：1–5；relations.generate：1–50 */
   count?: number
+  character_ids?: number[]
   career_kind?: CareerKind
 }
 
@@ -39,6 +45,7 @@ const PLACEHOLDERS: Record<Exclude<EntityTaskKind, 'relations.parse'>, string> =
   'character.generate': '例如：主角的师父，外冷内热，与反派有旧怨',
   'organization.generate': '例如：主角所在城市的地下情报组织，与官府若即若离',
   'career.generate': '例如：与炼丹相关的副修职业，阶段用「品」划分',
+  'relations.generate': '例如：围绕主角的成长，建立亦师亦友的关系，保留门派间的隔阂',
 }
 
 /**
@@ -51,16 +58,22 @@ export default function EntityTaskModal(props: Props) {
   return <Inner {...props} />
 }
 
-function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }: Props) {
+function Inner({ projectId, kind, onClose, characterId, characterName, characters = [], relationships = [], onSaved }: Props) {
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   const [starting, setStarting] = useState(false)
+  const startingRef = useRef(false)
+  const [recovering, setRecovering] = useState(true)
   const [result, setResult] = useState<unknown>(undefined)
   const stream = useTaskStream()
   const trackTask = useTasksStore((s) => s.track)
   const hasConfig = useHasAIConfig()
   const running = stream.running || starting
+  const busy = running || recovering
+  const selectedIds: number[] = Form.useWatch('character_ids', form) ?? []
+  const missingPairs = missingRelationPairCount(selectedIds, relationships)
+  const noMissingPairs = kind === 'relations.generate' && selectedIds.length >= 2 && missingPairs === 0
   const Viewer = TASK_RESULT_VIEWERS[kind]
   const label = TASK_KIND_LABELS[kind]
 
@@ -88,13 +101,22 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
       .catch(() => {
         // 查询失败按无活动任务处理
       })
+      .finally(() => { if (alive) setRecovering(false) })
     return () => {
       alive = false
     }
   }, [projectId, kind, characterId])
 
   const handleStart = async () => {
-    const v = await form.validateFields()
+    if (startingRef.current || stream.running || recovering || noMissingPairs) return
+    startingRef.current = true
+    let v: FormValues
+    try {
+      v = await form.validateFields()
+    } catch {
+      startingRef.current = false
+      return
+    }
     setStarting(true)
     let created: Task
     try {
@@ -114,15 +136,24 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
           count: v.count ?? 3,
           kind: v.career_kind ?? null,
         })
+      } else if (kind === 'relations.generate') {
+        created = await relationshipApi.generate(projectId, {
+          character_ids: v.character_ids ?? [],
+          count: v.count ?? 10,
+          instruction,
+          ai_config_id: aiConfigId,
+        })
       } else {
         created = await characterExtraApi.parseRelations(projectId, characterId as number, { ai_config_id: aiConfigId })
       }
     } catch (err) {
       message.error(errorMessage(err))
       setStarting(false)
+      startingRef.current = false
       return
     }
     setStarting(false)
+    startingRef.current = false
     trackTask(created)
     await followTask(created)
   }
@@ -148,14 +179,41 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {showForm && (
           <>
-            <Form form={form} layout="vertical" disabled={running} initialValues={{ instruction: '', role_type: undefined, count: 3, career_kind: undefined }}>
+            <Form form={form} layout="vertical" disabled={busy} initialValues={{ instruction: '', role_type: undefined, count: kind === 'relations.generate' ? 10 : 3, career_kind: undefined, character_ids: [] }}>
               <Form.Item label="AI 配置">
-                <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={running} />
+                <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={busy} />
               </Form.Item>
               {kind === 'character.generate' && (
                 <Form.Item name="role_type" label="期望定位（可选）">
                   <Select allowClear options={ROLE_TYPES.map((r) => ({ value: r, label: r }))} style={{ width: 200 }} />
                 </Form.Item>
+              )}
+              {kind === 'relations.generate' && (
+                <>
+                  <Form.Item name="character_ids" label="选择角色（2–20 名）" rules={[{ required: true, type: 'array', min: 2, max: 20, message: '请选择 2–20 名角色' }]}>
+                    <Select
+                      mode="multiple"
+                      showSearch
+                      allowClear
+                      maxCount={20}
+                      maxTagCount="responsive"
+                      optionFilterProp="label"
+                      placeholder="按名字、定位或别名查找角色"
+                      options={characters.map((c) => ({
+                        value: c.id,
+                        label: `${c.name} · ${c.role_type || '未设定'}${c.aliases.length ? ` · ${c.aliases.join('、')}` : ''}（ID=${c.id}）`,
+                      }))}
+                    />
+                  </Form.Item>
+                  <Form.Item name="count" label="期望条数" rules={[{ required: true, type: 'number', min: 1, max: 50, message: '请输入 1–50 的整数' }]}>
+                    <InputNumber min={1} max={50} precision={0} style={{ width: 120 }} />
+                  </Form.Item>
+                  <Typography.Paragraph type="secondary">
+                    只补充所选角色之间的缺失关系，生成后可预览、编辑和勾选，再确认保存。
+                    {selectedIds.length >= 2 && `目前可补充 ${missingPairs} 个角色对；实际建议条数不超过缺失对数。`}
+                  </Typography.Paragraph>
+                  {noMissingPairs && <Alert type="info" showIcon message="所选角色之间已无缺失关系，无需生成" style={{ marginBottom: 16 }} />}
+                </>
               )}
               {kind === 'career.generate' && (
                 <Space size="large" wrap>
@@ -191,7 +249,7 @@ function Inner({ projectId, kind, onClose, characterId, characterName, onSaved }
                   {stream.task?.status === 'queued' ? '取消排队' : '停止'}
                 </Button>
               ) : (
-                <Button type="primary" onClick={() => void handleStart()} disabled={hasConfig === false}>
+                <Button type="primary" loading={recovering} onClick={() => void handleStart()} disabled={hasConfig === false || recovering || noMissingPairs}>
                   {stream.text ? '重新开始' : '开始'}
                 </Button>
               )}

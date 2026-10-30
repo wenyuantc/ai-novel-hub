@@ -1,4 +1,4 @@
-import { PlusOutlined, SettingOutlined } from '@ant-design/icons'
+import { PlusOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons'
 import {
   App,
   Button,
@@ -31,6 +31,7 @@ import {
 } from '../../api/relationships'
 import { characterApi } from '../../api/story'
 import type { Character, RelationCategory, Relationship, RelationStatus } from '../../api/types'
+import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import RelationEditModal from '../../components/relations/RelationEditModal'
 import RelationHistoryModal from '../../components/relations/RelationHistoryModal'
 import RelationTypeManager from '../../components/relations/RelationTypeManager'
@@ -65,6 +66,7 @@ export default function RelationshipsPanel() {
   const [editOpen, setEditOpen] = useState(false)
   const [history, setHistory] = useState<Relationship | null>(null)
   const [typesOpen, setTypesOpen] = useState(false)
+  const [generateOpen, setGenerateOpen] = useState(false)
 
   const shown = rels.filter(
     (r) =>
@@ -176,8 +178,12 @@ export default function RelationshipsPanel() {
   return (
     <Card
       title="人物关系"
+      styles={{ header: { flexWrap: 'wrap', gap: 12, paddingBlock: 12 }, extra: { marginInlineStart: 0, maxWidth: '100%' } }}
       extra={
-        <Space>
+        <Space wrap>
+          <Button icon={<RobotOutlined />} disabled={characters.length < 2} title={characters.length < 2 ? '至少需要两名已有角色' : undefined} onClick={() => setGenerateOpen(true)}>
+            AI 生成关系
+          </Button>
           <Button icon={<SettingOutlined />} onClick={() => setTypesOpen(true)}>
             关系类型
           </Button>
@@ -219,6 +225,14 @@ export default function RelationshipsPanel() {
           setEditOpen(false)
           reload()
         }}
+      />
+      <EntityTaskModal
+        projectId={pid}
+        kind="relations.generate"
+        open={generateOpen}
+        characters={characters}
+        relationships={rels}
+        onClose={() => setGenerateOpen(false)}
       />
       {history && <RelationHistoryModal projectId={pid} relationship={history} onClose={() => setHistory(null)} />}
       <RelationTypeManager

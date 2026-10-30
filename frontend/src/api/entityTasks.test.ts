@@ -5,12 +5,16 @@ import {
   parseCharacterGenerateResult,
   parseOrganizationGenerateResult,
   parseRelationsParseResult,
+  parseRelationsGenerateResult,
+  generatedSuggestionsToBatch,
+  filterExistingGeneratedSuggestions,
+  missingRelationPairCount,
   suggestionsToBatch,
   suggestionsToDrafts,
   toEditable,
   toEditableCareers,
 } from './entityTasks'
-import type { RelationSuggestion } from './types'
+import type { GeneratedRelationSuggestion, RelationSuggestion } from './types'
 
 const sug = (over: Partial<RelationSuggestion> = {}): RelationSuggestion => ({
   target_name: '张三',
@@ -89,6 +93,76 @@ describe('建议 → 保存载荷', () => {
     expect(suggestionsToDrafts([{ ...s, checked: false }])).toEqual([])
     expect(suggestionsToDrafts([{ ...s, edit_self_role: ' ' }])).toEqual([])
     expect(suggestionsToDrafts([s])[0]).toMatchObject({ subject_is_a: true, role_a: '徒弟', role_b: '师父', category: 'other' })
+  })
+})
+
+const generated = (over: Partial<GeneratedRelationSuggestion> = {}): GeneratedRelationSuggestion => ({
+  ...sug(), subject_id: 3, subject_name: '林远', ...over,
+})
+
+describe('批量关系生成', () => {
+  it('按所选 ID 收窄；缺失结构被拒绝，空结果合法，同名角色不串线', () => {
+    expect(parseRelationsGenerateResult({ character_ids: [3, 5], suggestions: [] })?.suggestions).toEqual([])
+    expect(parseRelationsGenerateResult({ character_ids: [3, 3], suggestions: [] })).toBeNull()
+    expect(parseRelationsGenerateResult({ character_ids: [3, 5] })).toBeNull()
+    const parsed = parseRelationsGenerateResult({ character_ids: [3, 5], suggestions: [generated({ target_name: '林远' })] })
+    expect(parsed?.suggestions[0]).toMatchObject({ subject_id: 3, target_id: 5, resolved: true, target_name: '林远' })
+  })
+
+  it('自指、未选/无效 ID、已有关系、反向重复与非法字段不可保存', () => {
+    const parsed = parseRelationsGenerateResult({ character_ids: [3, 5, 6], suggestions: [
+      generated(),
+      generated({ subject_id: 5, target_id: 3 }),
+      generated({ subject_id: 3, target_id: 3 }),
+      generated({ subject_id: 6, target_id: 99 }),
+      generated({ subject_id: null, target_id: 6 }),
+      generated({ subject_id: 3.5, target_id: 6 }),
+      generated({ subject_id: 3, target_id: 6, status: 'invalid' }),
+      generated({ subject_id: 5, target_id: 6, existing_relationship_id: 70 }),
+    ] })!
+    expect(parsed.suggestions.map((s) => s.resolved)).toEqual([true, false, false, false, false, false, false, false])
+    expect(parsed.suggestions.slice(1).every((s) => !!s.reason)).toBe(true)
+    expect(generatedSuggestionsToBatch(toEditable(parsed.suggestions), parsed.character_ids)).toHaveLength(1)
+  })
+
+  it.each([
+    { status: undefined },
+    { type: undefined },
+    { subject_is_a: 'false' },
+    { intimacy: 200 },
+    { intimacy: Number.NaN },
+    { self_role: '称呼'.repeat(11) },
+  ])('生成建议的非法原始字段不会被默认值变成有效结果：%j', (invalid) => {
+    const result = parseRelationsGenerateResult({ character_ids: [3, 5], suggestions: [{ ...generated(), ...invalid }] })!
+    expect(result.suggestions[0].resolved).toBe(false)
+    expect(generatedSuggestionsToBatch(toEditable(result.suggestions), result.character_ids)).toEqual([])
+  })
+
+  it('勾选有效项按方向保存、反向去重并传 ai_generate；编辑称呼重新匹配类型', () => {
+    const list = toEditable([
+      generated(),
+      generated({ subject_id: 5, target_id: 3 }),
+      generated({ subject_id: 3, target_id: 6 }),
+      generated({ subject_id: 5, target_id: 6 }),
+    ])
+    list[2].checked = false
+    list[3].edit_self_role = '义子'
+    list[3].edit_target_role = '义父'
+    const items = generatedSuggestionsToBatch(list, [3, 5, 6])
+    expect(items).toHaveLength(2)
+    expect(items[0]).toMatchObject({ a_id: 5, b_id: 3, type_id: 9, source: 'ai_generate' })
+    expect(items[1]).toMatchObject({ a_id: 5, b_id: 6, type_id: null, role_a: '义子', role_b: '义父', source: 'ai_generate' })
+  })
+
+  it('重开结果按无序对过滤已保存条目；不修改原草稿，缺失对计数正确', () => {
+    const list = toEditable([generated(), generated({ target_id: 6 })])
+    const existing = [{ id: 70, a_id: 5, b_id: 3 }]
+    const filtered = filterExistingGeneratedSuggestions(list, existing)
+    expect(filtered[0]).toMatchObject({ resolved: false, checked: false, existing_relationship_id: 70 })
+    expect(filtered[1].resolved).toBe(true)
+    expect(list[0].resolved).toBe(true)
+    expect(missingRelationPairCount([3, 5, 6], existing)).toBe(2)
+    expect(generatedSuggestionsToBatch(filtered, [3, 5, 6])).toHaveLength(1)
   })
 })
 

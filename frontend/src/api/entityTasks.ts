@@ -7,6 +7,7 @@ import type {
   CharacterDraft,
   CharacterGenerateResult,
   CharacterInput,
+  GeneratedRelationSuggestion,
   LifeStatus,
   MemberSuggestion,
   OrganizationDraft,
@@ -14,9 +15,11 @@ import type {
   RelationCategory,
   RelationDraft,
   RelationshipCreate,
+  Relationship,
   RelationStatus,
   RelationSuggestion,
   RelationsParseResult,
+  RelationsGenerateResult,
   TaskKind,
 } from './types'
 
@@ -179,6 +182,56 @@ export function parseRelationsParseResult(result: unknown): RelationsParseResult
   }
 }
 
+const positiveId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
+const pairKey = (a: number, b: number): string => `${Math.min(a, b)}:${Math.max(a, b)}`
+
+/** 生成结果的身份和字段契约在 API 边界收窄，组件只消费已标明有效性的建议。 */
+export function parseRelationsGenerateResult(result: unknown): RelationsGenerateResult | null {
+  if (!isRecord(result) || !Array.isArray(result.character_ids) || !Array.isArray(result.suggestions)) return null
+  const ids = result.character_ids
+  if (ids.length < 2 || ids.length > 20 || !ids.every(positiveId) || new Set(ids).size !== ids.length) return null
+  const selected = new Set(ids)
+  const seen = new Set<string>()
+  const suggestions: GeneratedRelationSuggestion[] = []
+  for (const raw of result.suggestions) {
+    const s = readSuggestion(raw)
+    if (!s || !isRecord(raw)) continue
+    const subjectId = positiveId(raw.subject_id) ? raw.subject_id : null
+    const targetId = positiveId(raw.target_id) ? raw.target_id : null
+    const pair = subjectId !== null && targetId !== null ? pairKey(subjectId, targetId) : null
+    let reason = s.reason
+    if (subjectId === null || targetId === null || !selected.has(subjectId) || !selected.has(targetId)) {
+      reason = '关系双方必须是本次所选角色 ID'
+    } else if (subjectId === targetId) reason = '不能与自己建立关系'
+    else if (s.existing_relationship_id !== null) reason = '两人之间已有关系'
+    else if (pair !== null && seen.has(pair)) reason = '同一角色对重复建议（含反向）'
+    else if (!isRecord(raw.type) || typeof raw.type.category !== 'string' || !CATEGORIES.includes(raw.type.category)
+      || typeof raw.status !== 'string' || !STATUSES.includes(raw.status) || typeof raw.subject_is_a !== 'boolean'
+      || !validSuggestionFields(s) || !Number.isInteger(raw.intimacy) || raw.intimacy !== s.intimacy) {
+      reason = '关系字段无效，无法保存'
+    }
+    if (pair !== null) seen.add(pair)
+    suggestions.push({
+      ...s,
+      subject_id: subjectId,
+      subject_name: str(raw.subject_name),
+      target_id: targetId,
+      resolved: s.resolved && !reason,
+      reason: reason || (s.resolved ? '' : '无法保存该建议'),
+    })
+  }
+  return { character_ids: ids, suggestions, warnings: strList(result.warnings) }
+}
+
+type ExistingPair = Pick<Relationship, 'id' | 'a_id' | 'b_id'>
+
+/** 可补充的无序角色对数量，已有关系的两个方向都算已占用。 */
+export function missingRelationPairCount(ids: readonly number[], relationships: readonly ExistingPair[]): number {
+  const selected = new Set(ids)
+  const existing = new Set(relationships.filter((r) => selected.has(r.a_id) && selected.has(r.b_id)).map((r) => pairKey(r.a_id, r.b_id)))
+  return Math.max(0, selected.size * (selected.size - 1) / 2 - existing.size)
+}
+
 /** 角色草稿 → 创建请求体（可编辑预览后提交） */
 export function draftToCharacterInput(d: CharacterDraft): CharacterInput {
   return {
@@ -209,7 +262,7 @@ export interface EditableSuggestion extends RelationSuggestion {
   edit_target_role: string
 }
 
-export function toEditable(list: RelationSuggestion[]): EditableSuggestion[] {
+export function toEditable<T extends RelationSuggestion>(list: T[]): (T & EditableSuggestion)[] {
   return list.map((s, i) => ({
     ...s,
     key: `${i}:${s.target_name}`,
@@ -246,7 +299,16 @@ export function suggestionTypeRef(s: EditableSuggestion): {
 
 /** 是否可以保存：已解析、已勾选、称呼非空 */
 export function isSavable(s: EditableSuggestion): boolean {
-  return s.resolved && s.checked && s.target_id !== null && !!s.edit_self_role.trim() && !!s.edit_target_role.trim()
+  return s.resolved && s.checked && s.target_id !== null && validSuggestionFields({
+    ...s, self_role: s.edit_self_role.trim(), target_role: s.edit_target_role.trim(),
+    type: { ...s.type, category: asCategory(s.type.category) }, status: asRelationStatus(s.status),
+  })
+}
+
+function validSuggestionFields(s: RelationSuggestion): boolean {
+  return !!s.self_role.trim() && !!s.target_role.trim() && s.self_role.trim().length <= 20 && s.target_role.trim().length <= 20
+    && Number.isInteger(s.intimacy) && s.intimacy >= -100 && s.intimacy <= 100
+    && CATEGORIES.includes(s.type.category) && STATUSES.includes(s.status)
 }
 
 /** 新角色一起保存的关系（with-relations） */
@@ -268,7 +330,11 @@ export function suggestionsToDrafts(list: EditableSuggestion[]): RelationDraft[]
 }
 
 /** 已有角色的关系建议 → relationships/batch 条目：a_id = subject_is_a ? 主体 : 目标 */
-export function suggestionsToBatch(subjectId: number, list: EditableSuggestion[]): RelationshipCreate[] {
+export function suggestionsToBatch(
+  subjectId: number,
+  list: EditableSuggestion[],
+  source: RelationshipCreate['source'] = 'ai_parse',
+): RelationshipCreate[] {
   return list.filter(isSavable).map((s) => {
     const t = suggestionTypeRef(s)
     const target = s.target_id as number
@@ -282,8 +348,36 @@ export function suggestionsToBatch(subjectId: number, list: EditableSuggestion[]
       intimacy: s.intimacy,
       status: asRelationStatus(s.status),
       description: s.description,
-      source: 'ai_parse',
+      source,
     }
+  })
+}
+
+export type EditableGeneratedSuggestion = EditableSuggestion & Pick<GeneratedRelationSuggestion, 'subject_id' | 'subject_name'>
+
+/** 预览重开时排除已经确认保存的角色对；保留未保存的编辑和勾选。 */
+export function filterExistingGeneratedSuggestions(
+  list: EditableGeneratedSuggestion[],
+  relationships: readonly ExistingPair[],
+): EditableGeneratedSuggestion[] {
+  const existing = new Map(relationships.map((r) => [pairKey(r.a_id, r.b_id), r.id]))
+  return list.map((s) => {
+    const id = s.subject_id !== null && s.target_id !== null ? existing.get(pairKey(s.subject_id, s.target_id)) : undefined
+    return id === undefined ? s : { ...s, resolved: false, checked: false, existing_relationship_id: id, reason: '两人之间已有关系' }
+  })
+}
+
+/** 只提交所选、勾选且字段有效的缺失对，再按无序对去重。 */
+export function generatedSuggestionsToBatch(list: EditableGeneratedSuggestion[], ids: readonly number[]): RelationshipCreate[] {
+  const selected = new Set(ids)
+  const seen = new Set<string>()
+  return list.flatMap((s) => {
+    if (s.subject_id === null || s.target_id === null || s.subject_id === s.target_id
+      || !selected.has(s.subject_id) || !selected.has(s.target_id) || !validSuggestionFields(s) || !isSavable(s)) return []
+    const pair = pairKey(s.subject_id, s.target_id)
+    if (seen.has(pair)) return []
+    seen.add(pair)
+    return suggestionsToBatch(s.subject_id, [s], 'ai_generate')
   })
 }
 
@@ -292,5 +386,6 @@ export const ENTITY_TASK_KINDS: readonly TaskKind[] = [
   'character.generate',
   'organization.generate',
   'relations.parse',
+  'relations.generate',
   'career.generate',
 ]
