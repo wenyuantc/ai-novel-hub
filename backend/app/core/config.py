@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     registration_enabled: bool = True
     cookie_secure: bool = False
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, gt=0)
+    # 平台开放读取接口：每把 API Key 每个 UTC 分钟的请求上限，不影响网页登录接口。
+    open_api_rate_limit_per_minute: int = Field(default=120, gt=0)
     # 逗号分隔，例如 http://localhost:5173,http://127.0.0.1:5173；为空表示不启用 CORS
     cors_origins: str = ""
     # 章节生成上下文的字符预算

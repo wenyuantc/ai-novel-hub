@@ -10,6 +10,71 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 EXPECTED_TABLES = {"users", "ai_configs", "projects", "world_settings", "characters", "outlines", "chapters"}
 
 
+def test_0022_api_key_storage_grants_and_downgrade(tmp_path):
+    """凭据升级保留原用户，授权级联不扩大范围，降级只删除新增凭据表。"""
+    db_file = tmp_path / "migrate0022.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0021")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (1, 'key-owner', 'x')"))
+            conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (2, 'untouched', 'x')"))
+            for project_id in (1, 2):
+                conn.execute(text(
+                    "INSERT INTO projects (id, user_id, title, genre, premise, style, status) "
+                    "VALUES (:id, :id, '原有小说', '', '', '', 'planning')"
+                ), {"id": project_id})
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0022")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspection = inspect(engine)
+        assert {"api_keys", "api_key_projects"} <= set(inspection.get_table_names())
+        indexes = {index["name"]: index for index in inspection.get_indexes("api_keys")}
+        assert indexes["ix_api_keys_key_hash"]["unique"]
+        grant_fks = inspection.get_foreign_keys("api_key_projects")
+        assert {fk["referred_table"] for fk in grant_fks} == {"api_keys", "projects"}
+        assert all(fk["options"]["ondelete"] == "CASCADE" for fk in grant_fks)
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text(
+                "INSERT INTO api_keys (id, user_id, name, key_hash, key_enc, key_masked) "
+                "VALUES (1, 1, '测试密钥', :digest, 'ciphertext', 'anv***1234')"
+            ), {"digest": "a" * 64})
+            conn.execute(text("INSERT INTO api_key_projects VALUES (1, 1)"))
+            assert conn.execute(text("SELECT all_projects FROM api_keys")).scalar_one() == 0
+            conn.execute(text("DELETE FROM projects WHERE id=1"))
+            assert conn.execute(text("SELECT count(*) FROM api_key_projects")).scalar_one() == 0
+            assert conn.execute(text("SELECT all_projects FROM api_keys")).scalar_one() == 0
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO api_keys (user_id, name, key_hash, key_masked) "
+                "VALUES (1, '重复摘要', :digest, 'anv***1234')"
+            ), {"digest": "a" * 64})
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("DELETE FROM users WHERE id=1"))
+            assert conn.execute(text("SELECT count(*) FROM api_keys")).scalar_one() == 0
+            assert conn.execute(text("SELECT count(*) FROM users WHERE id=2")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0021")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert not ({"api_keys", "api_key_projects"} & set(inspect(engine).get_table_names()))
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT title FROM projects WHERE id=2")).scalar_one() == "原有小说"
+    finally:
+        engine.dispose()
+
+
 def test_upgrade_and_downgrade(tmp_path):
     db_file = tmp_path / "migrate.db"
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))

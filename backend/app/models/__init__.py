@@ -1,4 +1,5 @@
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
+from app.models.api_key import ApiKey, ApiKeyProject
 from app.models.base import Base
 from app.models.entities import (
     AIConfig,
@@ -49,6 +50,8 @@ __all__ = [
     "AgentMessage",
     "AIConfig",
     "AnalysisChange",
+    "ApiKey",
+    "ApiKeyProject",
     "Base",
     "BookImport",
     "Career",

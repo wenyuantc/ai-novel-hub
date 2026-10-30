@@ -5,6 +5,7 @@ from app.api.v1 import (
     agent,
     ai_configs,
     analysis,
+    api_keys,
     auth,
     batch,
     book_imports,
@@ -39,6 +40,7 @@ api_router.include_router(auth.router)
 api_router.include_router(agent.router)
 api_router.include_router(admin.router)
 api_router.include_router(ai_configs.router)
+api_router.include_router(api_keys.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}
 api_router.include_router(transfer.router)
 api_router.include_router(projects.router)
