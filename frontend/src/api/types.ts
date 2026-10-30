@@ -61,6 +61,42 @@ export interface ResetPasswordRequest {
   new_password: string
 }
 
+export type ApiKeyStatus = 'active' | 'expired' | 'revoked'
+
+/** 平台访问密钥的默认响应；不包含完整 Key、摘要或密文。 */
+export interface ApiKey {
+  id: number
+  name: string
+  key_masked: string
+  all_projects: boolean
+  project_ids: number[]
+  status: ApiKeyStatus
+  expires_at: string | null
+  revoked_at: string | null
+  last_used_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiKeyCreate {
+  name: string
+  all_projects?: boolean
+  project_ids?: number[]
+  /** 省略默认 90 天，显式 null 表示不过期。 */
+  expires_at?: string | null
+}
+
+export type ApiKeyUpdate = Partial<ApiKeyCreate>
+
+/** 创建响应含完整 Key，不能直接存入默认列表状态。 */
+export interface ApiKeyCreated extends ApiKey {
+  key: string
+}
+
+export interface ApiKeyRevealed {
+  key: string
+}
+
 export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'
 
 /** off = 不发送思考参数 */

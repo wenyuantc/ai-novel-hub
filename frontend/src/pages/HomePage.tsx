@@ -108,7 +108,7 @@ export default function HomePage() {
   const status = useAuthStore((s) => s.status)
   const [entry, setEntry] = useState<'login' | 'register' | null>(null)
   return <div className="public-home" id="home-top">
-    <header className="home-header home-section"><StudioBrand /><nav className="home-navigation" aria-label="官网导航"><a href="#features">创作能力</a><a href="#steps">如何开始</a><a href="#stories">故事示例</a><a href="#questions">常见问题</a></nav><div className="home-header-entry">{status === 'authenticated' ? <Link className="home-login-link" to="/projects">进入空间</Link> : <button type="button" className="home-login-link" disabled={status === 'unknown'} onClick={() => setEntry('login')}>登录</button>}<CreationEntry className="home-button home-header-create" signedInLabel="新建作品" onEnter={setEntry}>开始创作</CreationEntry></div></header>
+    <header className="home-header home-section"><StudioBrand /><nav className="home-navigation" aria-label="官网导航"><a href="#features">创作能力</a><a href="#steps">如何开始</a><a href="#stories">故事示例</a><a href="#questions">常见问题</a><Link to="/developers">开发文档</Link></nav><div className="home-header-entry">{status === 'authenticated' ? <Link className="home-login-link" to="/projects">进入空间</Link> : <button type="button" className="home-login-link" disabled={status === 'unknown'} onClick={() => setEntry('login')}>登录</button>}<CreationEntry className="home-button home-header-create" signedInLabel="新建作品" onEnter={setEntry}>开始创作</CreationEntry></div></header>
     <main>
       <section className="home-hero home-section" aria-labelledby="home-title"><div className="home-hero-copy"><p className="home-eyebrow"><EditOutlined />为每一个想写故事的人</p><h1 id="home-title">你的下一部小说，<br /><span>从这里开始。</span></h1><p className="home-hero-description">从一闪而过的灵感，到一个完整的世界。<br />知页陪你理清大纲、塑造角色、写下章节，<br />让脑海中的故事，慢慢拥有自己的模样。</p><div className="home-hero-actions"><CreationEntry className="home-button home-hero-create" signedInLabel="开始一个新故事" onEnter={setEntry}>开始我的第一个故事</CreationEntry><Link className="home-workspace-link" to="/projects"><PlayCircleOutlined />看看创作台</Link></div><ul className="home-promises">{['故事由你主导', '灵感随时记录', '专注每一章'].map((item) => <li key={item}><CheckOutlined />{item}</li>)}</ul></div><HeroIllustration /></section>
       <div className="home-capability-band home-section"><p>给想象一方书桌，给故事一个开始。</p><ul>{['灵感构思', '故事大纲', '人物设定', '正文协作'].map((item) => <li key={item}>{item}</li>)}</ul></div>
@@ -117,7 +117,7 @@ export default function HomePage() {
       <StoryDirections />
       <Questions onEnter={setEntry} />
     </main>
-    <footer className="home-footer home-section"><StudioBrand /><p>知页小说 · 为热爱故事的人而作</p><div><a href="#home-top">回到首页顶部</a><Link to="/projects">进入创作空间<ArrowUpOutlined rotate={45} /></Link></div></footer>
+    <footer className="home-footer home-section"><StudioBrand /><p>知页小说 · 为热爱故事的人而作</p><div><a href="#home-top">回到首页顶部</a><Link to="/developers">开发文档</Link><Link to="/projects">进入创作空间<ArrowUpOutlined rotate={45} /></Link></div></footer>
     <HomeEntryDialog mode={entry} onClose={() => setEntry(null)} />
   </div>
 }

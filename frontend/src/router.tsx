@@ -22,6 +22,7 @@ const lazyPage = (load: () => Promise<{ default: ComponentType }>) => async () =
 
 export const router = createBrowserRouter([
   { path: '/', lazy: lazyPage(() => import('./pages/HomePage')) },
+  { path: '/developers', lazy: lazyPage(() => import('./pages/DeveloperDocsPage')) },
   { path: '/login', element: <LoginPage /> },
   // 阅读器：全屏，不在 AppLayout / ProjectLayout 内；不带 :cid 时按阅读进度定位
   {
@@ -45,6 +46,7 @@ export const router = createBrowserRouter([
     children: [
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
+      { path: 'settings/api-keys', lazy: lazyPage(() => import('./pages/ApiKeysPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },
       { path: 'workshop', lazy: lazyPage(() => import('./pages/WorkshopPage')) },
       { path: 'styles', lazy: lazyPage(() => import('./pages/StylesPage')) },
