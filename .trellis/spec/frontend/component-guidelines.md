@@ -119,6 +119,8 @@ dayjs.locale('zh-cn')
 
 ### 用户管理页（`src/pages/AdminUsersPage.tsx`）
 
+同级的 `AdminProjectsPage` 提供管理员全量项目列表；从列表进入现有编辑区，归属提示、人工管理能力与自动任务/Reader进度隔离遵守[管理员作品管理跨层契约](../backend/admin-projects.md)。不得通过切换认证用户复用页面。
+
 - AntD `Table`，服务端分页（`adminApi.list({ q, page, page_size })`，`q` 会 trim，为空时省略）并带用户名搜索框。列：用户名（自己那一行标记 `我`）、角色、状态、项目数、`formatTime(created_at)`、操作。
 - `新建用户` 弹窗：用户名、两次输入初始密码、`设为管理员` 复选框。重置密码弹窗：两次输入新密码。
 - 启用/禁用与授予/撤销管理员都经过 `modal.confirm`。删除会打开一个显示该用户项目数的弹窗；仅当 `canConfirmDelete(input, username)` 时确定按钮才可用（严格相等，不做 trim/大小写折叠）。删除某页的最后一行时回退一页。
@@ -360,7 +362,7 @@ dayjs.locale('zh-cn')
 - 断点 768px：`hooks/useIsMobile()`（`Grid.useBreakpoint()`，`screens.md === false` 即移动端；首帧断点未算出时按桌面），窗口缩放实时更新。**禁止**直接读 `window.innerWidth`。`useModalWidth(desired)`：移动端返回 `calc(100vw - 24px)`。
 - 全局兜底（`index.css`）：`body { overflow-x: hidden }`；`.ant-table-content { overflow-x: auto }`（所有表格内容超宽时表内横向滚动）；≤767px 时表头 `white-space: nowrap`（列被挤窄时整表横向滚动而不是逐字换行）、`.ant-drawer-content-wrapper { max-width: 100vw }`、非 confirm 的 `.ant-modal` 宽 `calc(100vw - 24px)`。因此一般弹窗 / 抽屉无需逐个改宽度；新写的需要精确宽度的弹窗可用 `useModalWidth`。
 - `AppLayout`：移动端顶栏为汉堡按钮（`aria-label="打开菜单"`）、面包屑和账号；全局/项目导航与主题设置均复用左侧 Drawer。`ProjectLayout` 仅负责项目加载、内容与 AgentDock，不再渲染第二个 Sider 或项目菜单；移动内容内边距 12。外壳高 `100dvh`，56px 顶栏以下滚动；AgentDock 桌面高度为 `calc(100dvh - 56px)`。
-- 完整适配的页面：书库（≤539px 单列，540–1099px 两列，1100–1279px 三列，≥1280px 四列）、概览（表单 / 统计单列，`Descriptions column={{ xs: 1, sm: 2 }}`）、章节列表（移动端改为 `List` 卡片：章号 + 标题、状态 / 排队 / 分析标签、字数与时间，「⋮」菜单内编辑 / 阅读 / 删除（`modal.confirm`））、章节编辑器（工具栏只在正文卡片宽度 ≥ `TOOLBAR_IN_HEADER_MIN_WIDTH`（920px，`useElementWidth` 实测，≈ 原 `xxl` 且停靠面板关闭）时放进卡片标题栏，其余宽度放正文上方；移动端 AI 助手卡片收进底部 `Drawer`（85vh，`forceRender`，关闭不丢局部改写状态），由 `FloatButton`（`RobotOutlined`，在任务面板按钮上方，任务运行中带红点）打开）、阅读器、灵感会话（移动端单栏：步骤条横向滚动 `responsive={false}`，「立项草稿与补充想法」按钮打开底部抽屉，抽屉内跳步骤会关闭抽屉）。其余页面只保证无页面级横向溢出。
+- 完整适配的页面：书库（按内容区以 360px 最小列宽自适应，窄屏保持左书封右信息）、概览（表单 / 统计单列，`Descriptions column={{ xs: 1, sm: 2 }}`）、章节列表（移动端改为 `List` 卡片：章号 + 标题、状态 / 排队 / 分析标签、字数与时间，「⋮」菜单内编辑 / 阅读 / 删除（`modal.confirm`））、章节编辑器（工具栏只在正文卡片宽度 ≥ `TOOLBAR_IN_HEADER_MIN_WIDTH`（920px，`useElementWidth` 实测，≈ 原 `xxl` 且停靠面板关闭）时放进卡片标题栏，其余宽度放正文上方；移动端 AI 助手卡片收进底部 `Drawer`（85vh，`forceRender`，关闭不丢局部改写状态），由 `FloatButton`（`RobotOutlined`，在任务面板按钮上方，任务运行中带红点）打开）、阅读器、灵感会话（移动端单栏：步骤条横向滚动 `responsive={false}`，「立项草稿与补充想法」按钮打开底部抽屉，抽屉内跳步骤会关闭抽屉）。其余页面只保证无页面级横向溢出。
 - **项目页内容区宽度 ≠ 视口宽度**：右侧停靠面板（默认 400px，可调 320–720）打开时内容区会变窄，所以 `ProjectLayout` 下的页面**不要**用 `<Col xs md xl>` / `Grid.useBreakpoint()` 这类按视口断点的分列或判断：
   - 卡片 / 统计网格用 `AutoGrid`。
   - 两栏 / 多栏用 `utils/layout.ts`：`splitRow`（flex 换行、`gap: 16`）+ `splitPane(basis)`（`flex: basis 1 basis px`，`minWidth: 0`，剩余空间按基准宽度等比分配，比例与原 `Col` 一致），各栏基准之和放不下就上下堆叠。现用：组织树 / 详情 240 / 480，记忆与知识库 600 / 300，章节编辑器正文 / AI 助手 640 / 264，概览统计 200 / 200 / 400；概览表单行用 `{ ...splitRow, rowGap: 0 }`，题材 + 状态作为一组（360，内含 172 / 172），窄时书名独占一行、二者并排。
@@ -420,8 +422,8 @@ dayjs.locale('zh-cn')
 - 路由仍为 `/projects`；真实数据来自 `projectApi.list` → `useLoader`。标题「我的作品」+ 作品数/总字数（`shelfStats`），不引入设计稿的 data.ts、示例封面、固定作者或任务数。
 - `ShelfPrefs = {query, sort, status, view: 'shelf' | 'list'}` 存 `ainovel.shelf`。`parseShelfPrefs` 容错，旧对象缺 view 默认 shelf；搜索覆盖书名/题材/标签，大小写不敏感；保留最近更新/创建时间/书名/字数排序。状态按钮显示既有后端标签「连载中/构思中/已完结」，用 `aria-pressed` 标示选择；卡片按设计显示简介，标签仍可搜索。
 - `latestWritingProject(projects)` 只选 `last_edited_chapter_id !== null` 的作品，按已有 `updated_at` 倒序（同刻 id 倒序）；不伪称拥有独立的全局章节编辑时间字段。`ContinueWriting` 只读取该作品的 `chapterApi.list` 摘要，按 id 匹配真实章号/标题，失败时显示作品名且保留 `continueTarget`。无已写章节不显示继续条，不构造卷名或章节；200位无空格书名必须单行省略，title 保留全文，不能依赖外壳裁切。
-- CSS grid 桌面四列、24px 列间距；`LibraryBookCard` 复用于书架/列表。新建按钮在侧栏及页头；页尾为灵感立项、拆书导入与恢复备份。加载显示 Skeleton 与 `aria-busy`；失败显示错误和重试；空库和无匹配分别提供新建/清除筛选，不能把请求失败显示成空库。
-- `BookCover({title, genre?, author?, coverUrl?, onClick?, compact?})`：默认仍为概览封面管理的 2:3 装帧（原 `coverColor` 与对比度测试保留）；compact 为书库174px高横版，书脊/纸页及 sage/night/sand 配色来自 palette，缺图为几何纹样+文字。真实图以 contain 完整显示，URL 保留 `coverUrl` 的微秒版本参数；加载失败回退文字，URL 更新后重新显示图片。署名沿用导出约定取当前账户名，不复制原型作者。
+- 书库网格采用 `repeat(auto-fit, minmax(min(100%, 360px), 1fr))`，少量作品自动铺满可用列宽；列间距 24px、≤767.98px 为 16px。`LibraryBookCard` 复用于横向卡片网格和整行列表：左侧 2:3 竖封面（桌面 96px、≤539.98px 为 80px），右侧状态、两行书名/简介和更新时间；底栏只含统计与操作，可选真实目标进度位于底栏外，保证同排分隔线和操作行对齐。新建按钮在侧栏及页头；页尾为灵感立项、拆书导入与恢复备份。加载显示与当前卡片/列表结构一致的横向 Skeleton 与 `aria-busy`；失败显示错误和重试；空库和无匹配分别提供新建/清除筛选，不能把请求失败显示成空库。
+- `BookCover({title, genre?, author?, coverUrl?, onClick?, compact?})`：默认 2:3 装帧供书库与概览封面管理复用（原 `coverColor` 与对比度测试保留）；可选 compact 为 174px 高横版装帧，书库不再传入该选项，书脊/纸页及 sage/night/sand 配色来自 palette，缺图为几何纹样+文字。真实图以 contain 完整显示，URL 保留 `coverUrl` 的微秒版本参数；加载失败回退文字，URL 更新后重新显示图片。署名沿用导出约定取当前账户名，不复制原型作者。
 - 卡片显示状态、两行简介（synopsis → premise → 构思提示）、章数/字数/更新时间、可选目标进度与继续/开始创作。更多菜单保留阅读（`readingLabel/readTarget/canRead`）、概览、导出、备份、确认删除；阅读仍传 `{state: {from: '/projects'}}`，无已写章节时禁用。
 - `CreateProjectModal({open, onClose, onCreated})` 由 `?create=1` 共用打开，关闭只清除此参数；保留书名/题材/设定/风格及 `ProjectInfoFields`，创建期间禁用冲突操作。提交仍经 `projectInfoBody` + `projectApi.create`，成功进入 `/projects/:id/wizard`。导出/备份/恢复沿用原组件与接口，备份弹窗保持懒加载。
 - 必需验证：`utils/shelf.test.ts` 覆盖题材/标签搜索、旧偏好及非法 view、近期作品选择；保留原封面微秒 URL / 配色对比度测试。浏览器检查真实 API、新建高级字段、导出、菜单、空/错误重试、主题持久化和320/375/768/1024/1440px溢出；样式不写镜像测试。

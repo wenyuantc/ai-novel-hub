@@ -73,8 +73,9 @@ create_user(db, data) / update_user(db, actor, user_id, data) / reset_password(d
 | `POST /admin/users/{id}/reset-password` | `{new_password}` | 204 |
 | `DELETE /admin/users/{id}` | — | 204（项目/章节/AI 配置通过外键 CASCADE 删除） |
 
-  `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`。管理员无法读取
-  其他用户的小说内容——只能看到计数。
+  `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`。用户管理接口只返回
+  账号信息与计数；管理员另可通过[作品管理](./admin-projects.md)维护他人的小说内容。
+  这不授予所有者模型凭据、平台密钥、私有资源或后台任务的额外访问权限。
 
 - **管理员的其他权限**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
   - **全局 Skill**：`skills.owner_user_id` 为空的 Skill 只有 `is_admin` 用户可以新建（`POST /skills` 或导入时 `scope=global`）、修改、删除、

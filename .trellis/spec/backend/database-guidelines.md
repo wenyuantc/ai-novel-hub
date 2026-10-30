@@ -68,6 +68,9 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 每个 service 入口首先校验归属。他人的记录与不存在的记录
 都返回 **404**，以免泄露存在性。
 
+人工项目内容管理允许当前启用管理员使用 `get_manageable_project`；AI、任务和账户资源仍用严格
+`get_owned_project`，不能全局改义。例外范围与子资源规则见[管理员作品管理](./admin-projects.md)。
+
 `backend/app/services/project_service.py`：
 
 ```python
@@ -128,7 +131,7 @@ if result.rowcount != 1:
 
 ### 聚合
 
-计数/求和在 SQL 中完成，而不是在 Python 中：`project_service._stats_subquery()` 使用
+计数/求和在 SQL 中完成，而不是在 Python 中：`project_service.chapter_stats_subquery()` 使用
 `func.count(Chapter.id)` 和 `func.coalesce(func.sum(Chapter.word_count), 0)`，并通过 `outerjoin` 关联。
 
 ### 部分更新

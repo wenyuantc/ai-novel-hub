@@ -34,6 +34,8 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 - `useAuthStore`——由 `RequireAuth`、`LoginPage`、`AppLayout`、`App`、公开 `HomePage` 和 `HomeEntryDialog` 读取。首页只依据认证状态与 `registrationEnabled` 选择入口，不请求私有作品；能力/创作方向/FAQ及欢迎弹窗mode均为页面本地 state，次入口关闭后的焦点意图为组件ref。登录/注册标签由查询串派生，关闭注册时强制登录；切标签保留路由 `state.from`，提交时禁止模式切换。
 - `useAIConfigStore`——由 `AIConfigSelect`（所有生成类 UI）、`useHasAIConfig`、`AIConfigPage` 读取。`load()` 是幂等的：`if (get().loading || (get().loaded && !force)) return`。`AIConfigPage` 在每次变更后调用 `load(true)`，让其他地方的下拉框能看到变化。
 - `useProjectStore`——由 `ProjectLayout` 加载（`load(pid)`），显示在面包屑/概览中；各面板在修改章节后调用 `refresh()`（静默，吞掉错误），以更新 `chapter_count`/`total_words`；`OverviewPanel` 在 PATCH 后调用 `setProject(updated)`。`load(id)` 只有在 `get().project?.id === id` 时才保留当前项目，因此切换项目时绝不会闪现旧项目（`ProjectLayout` 在 `project.id !== pid` 时也会渲染加载动画）。
+  - `requestSeq` / `refreshSeq` 只接受当前请求；`reset()` 同时使旧请求失效并清空 `targetId`。保存回调 `setProject` 必须同时匹配目标 ID 和**实际已加载**的 `project.id`，不能仅凭 targetId：退出后新会话可能再次加载同一 pid，旧保存响应不得在新加载完成前回填内容或关闭 loading。回归见 `stores/project.test.ts`。
+  - 项目 `owner` 与路由 pid、真实账户派生管理员人工管理能力，禁止另存一个可切换认证身份的“当前所有者”。自动副作用和阅读进度边界见[管理员作品管理](../backend/admin-projects.md)。
 
 - `useTasksStore`——由 `TaskPanel`（徽标 + 进行中列表）读取；章节编辑器 / `WizardGenerator` / 任务面板在创建、重试、取消任务后调用 `track(task)`。
   - **轮询节奏**（纯函数 `pollInterval(activeCount)`）：有活动任务 `POLL_ACTIVE_MS = 3000`，否则 `POLL_IDLE_MS = 15000`。`refresh()` 拉 `GET /tasks?active=true&limit=200`，完成后按新数量安排下一次（单个模块级 timer）；`track()` 先用 `upsertActive` 合并（已结束则移除，保持 id 倒序）再立即 `refresh()`，从而马上切到 3 秒节奏。

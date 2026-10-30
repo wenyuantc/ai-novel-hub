@@ -21,6 +21,7 @@
 | [工坊跨层契约](../backend/workshop.md) | `/workshop` 浏览 / 我的分享 / 审核、匿名署名、分享与导入、模板差异及历史恢复 | 已填写 |
 | [Hook 规范](./hook-guidelines.md) | `useStreamTask`、`useLoader`、`useProjectId`、`useHasAIConfig`；SSE 客户端 code-spec 场景 | 已填写 |
 | [状态管理](./state-management.md) | Zustand store（auth / aiConfigs / project / tasks / styles / skills）、全局与本地状态、登出/401 时清空 | 已填写 |
+| [管理员作品管理跨层契约](../backend/admin-projects.md) | 管理列表、owner归属、复用人工编辑区、自动任务与私有资源隔离、Reader不写他人进度 | 已填写 |
 | [质量规范](./quality-guidelines.md) | lint/build/test 门禁、Vite 代理、包体积、禁止/必需模式、评审清单 | 已填写 |
 | [类型安全](./type-safety.md) | `types.ts` 镜像后端 schema、枚举、PATCH 语义、UTC 时间解析；API 客户端 code-spec 场景 | 已填写 |
 | [平台 API Key 跨层契约](../backend/open-api.md) | 密钥管理页、主动显隐 / 复制、异步失效、有效期与小说范围、公开客户开发指南及 Swagger 文档入口 | 已填写 |

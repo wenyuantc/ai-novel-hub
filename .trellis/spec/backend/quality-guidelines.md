@@ -403,6 +403,7 @@ ai_config_service.context_char_budget(cfg, default) -> int        # 取代 CONTE
 
 - [ ] 在 `backend/` 中 `uv run ruff check .` 和 `uv run pytest` 均通过。
 - [ ] `app/api/v1/` 中没有 ORM 查询；新的 service 入口接收 `user_id` 并校验归属（他人资源返回 404）。
+- [ ] 人工项目管理员例外仅通过 `get_manageable_project` 及明确的人工子资源入口；AI/任务/日志/私有配置继续严格归属，跨用户记忆保存不排队所有者向量任务，见 [admin-projects.md](./admin-projects.md)。
 - [ ] 新增的归属路由已加入 `test_cross_user_isolation`。
 - [ ] AI 调用经由 `build_provider(..., allow_private=settings.allow_private_ai_endpoints)`；新 provider 遵守 `follow_redirects`。
 - [ ] 后台任务：校验放在 `validate_and_claim` 中（不 commit），运行逻辑在 `build_job`/`run` 中使用独立 session；runner 事件仅限 `delta`/`continue`（仅整章生成）/`done`/`error`。同步 SSE（改写）：校验放在 `prepare_*`，请求 session 在 `sse_response` 之前关闭。
