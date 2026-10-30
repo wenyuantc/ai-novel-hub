@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from app.ai.images import MAX_COVER_BYTES
 from app.ai.images import TOO_LARGE as COVER_TOO_LARGE
 from app.ai.providers import ProviderFactory, create_provider
+from app.api.open import router as open_api_router
+from app.api.open.docs import install_docs as install_open_api_docs
 from app.api.v1 import api_router
 from app.core.config import Settings, get_settings
 from app.core.database import create_engine, create_sessionmaker
@@ -96,8 +98,8 @@ def create_app(
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
-            # 跨域部署时前端需要读取下载文件名与导出提示（如 EPUB 跳过的空章节）
-            expose_headers=["Content-Disposition", "X-Export-Warnings"],
+            # 已允许的跨域调用方需要读取下载信息、导出提示和开放接口的限流等待时间。
+            expose_headers=["Content-Disposition", "X-Export-Warnings", "Retry-After"],
         )
 
     # 知识库上传 / 项目备份导入 / 拆书导入：在 multipart 解析（写临时文件）之前拦截超大请求体
@@ -147,6 +149,8 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(api_router)
+    app.include_router(open_api_router)
+    install_open_api_docs(app)
     _mount_frontend(app, settings.frontend_dist_dir)
     return app
 
