@@ -6,13 +6,13 @@
 {"file": ".trellis/spec/backend/admin-audit.md", "reason": "受理审计同事务、本人管理采集、局部原因自由文本扩展及安全失败边界。"}
 {"file": ".trellis/spec/backend/admin-dashboard.md", "reason": "Task UUID执行身份、原子保存、真实统计/现存明细口径及旧请求隔离。"}
 {"file": ".trellis/spec/backend/recycle-bin.md", "reason": "项目真实执行链排空、父行屏障、取消收尾、清理/删号与超时兼容。"}
-{"file": ".trellis/tasks/10-30-admin-task-monitoring/research/spec-database-excerpts.md", "reason": "异步事务与迁移、SQLite父表/外键、Task资源唯一索引和统计提交。 原文件 .trellis/spec/backend/database-guidelines.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
-{"file": ".trellis/tasks/10-30-admin-task-monitoring/research/spec-errors-excerpts.md", "reason": "AppError、安全422/500、SSE和任务状态生命周期；管理投影不能直接透传原错误。 原文件 .trellis/spec/backend/error-handling.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
+{"file": ".trellis/tasks/archive/2026-11/10-30-admin-task-monitoring/research/spec-database-excerpts.md", "reason": "异步事务与迁移、SQLite父表/外键、Task资源唯一索引和统计提交。 原文件 .trellis/spec/backend/database-guidelines.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
+{"file": ".trellis/tasks/archive/2026-11/10-30-admin-task-monitoring/research/spec-errors-excerpts.md", "reason": "AppError、安全422/500、SSE和任务状态生命周期；管理投影不能直接透传原错误。 原文件 .trellis/spec/backend/error-handling.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
 {"file": ".trellis/spec/frontend/state-management.md", "reason": "页面局部状态、账号切换/401清空，不向个人任务store注入他人任务。"}
-{"file": ".trellis/tasks/10-30-admin-task-monitoring/research/spec-types-excerpts.md", "reason": "types.ts镜像、安全窄化、API客户端与UTC时间解析。 原文件 .trellis/spec/frontend/type-safety.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
-{"file": ".trellis/tasks/10-30-admin-task-monitoring/research/spec-components-excerpts.md", "reason": "StudioPage、RequireAdmin、移动卡片、既有组件和懒加载约定。 原文件 .trellis/spec/frontend/component-guidelines.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
-{"file": ".trellis/tasks/10-30-admin-task-monitoring/research/monitoring-contracts.md", "reason": "已核实安全投影、原始任务标题/阶段隐私、可靠排队时间、查询及前端失效机制。"}
-{"file": ".trellis/tasks/10-30-admin-task-monitoring/research/cancellation-audit.md", "reason": "核心取消受理/跨事务/资源代次竞态研究，必须实现的不变量与阻断验收矩阵。"}
+{"file": ".trellis/tasks/archive/2026-11/10-30-admin-task-monitoring/research/spec-types-excerpts.md", "reason": "types.ts镜像、安全窄化、API客户端与UTC时间解析。 原文件 .trellis/spec/frontend/type-safety.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
+{"file": ".trellis/tasks/archive/2026-11/10-30-admin-task-monitoring/research/spec-components-excerpts.md", "reason": "StudioPage、RequireAdmin、移动卡片、既有组件和懒加载约定。 原文件 .trellis/spec/frontend/component-guidelines.md 超过注入上限，使用注明源路径/行号/SHA256的原文摘录，写前核实源文件。"}
+{"file": ".trellis/tasks/archive/2026-11/10-30-admin-task-monitoring/research/monitoring-contracts.md", "reason": "已核实安全投影、原始任务标题/阶段隐私、可靠排队时间、查询及前端失效机制。"}
+{"file": ".trellis/tasks/archive/2026-11/10-30-admin-task-monitoring/research/cancellation-audit.md", "reason": "核心取消受理/跨事务/资源代次竞态研究，必须实现的不变量与阻断验收矩阵。"}
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FakeLLM、独立tmp_path数据库、UTF-8迁移、真实事件/数据库屏障及后端质量门禁。"}
 {"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/Vitest及真实浏览器、包边界和反模式检查。"}
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "贯穿API/DTO/事务/异步执行/页面所有权的完整数据流复核。"}

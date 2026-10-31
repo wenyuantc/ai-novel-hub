@@ -107,3 +107,10 @@
 - /Users/wenyuan/IdeaProjects/my/ai-novel-hub/.gitignore
 
 代码/测试与规范先提交；归档、开发日志仅按后续finish-work流程另行处理，不交错入工作提交。不修改或自动包括排除项；用户本轮明确授权正常推送origin/main，禁止force。
+
+## 工作提交与归档结果
+
+- 功能：5247751af0927dea529aedb1488cc89eb795d088
+- 规范：a530e7b5b9716811e259cb1da8cbf51d07cd6187
+- 当前任务归档目录：/Users/wenyuan/IdeaProjects/my/ai-novel-hub/.trellis/tasks/archive/2026-11/10-30-admin-task-monitoring
+- 上述逐文件清单记录工作提交时的源路径；任务资料现位于归档目录。随后独立记录会话、合并main并按授权推送。
