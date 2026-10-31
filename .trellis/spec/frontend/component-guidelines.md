@@ -1,5 +1,9 @@
 # 组件规范
 
+## 管理员全站任务监控
+
+`/admin/tasks`在RequireAdmin下懒加载，使用页级AdminTasksController、安全详情Drawer和原因输入→再次核对/勾选确认的两阶段取消；不复用个人TaskPanel/输出/SSE。默认5秒可关轮询、hidden暂停、旧响应失效；桌面操作列固定右侧，375px页头操作上下排列、排序移入正文与任务卡片。安全标题/错误、UUID大小写、受理/真实终态及现存与累计入口差异见[任务监控跨层契约](../backend/admin-task-monitoring.md)。
+
 ## 管理员首页
 
 `/admin/dashboard` 在 RequireAdmin 下懒加载，三块请求独立加载/重试，保留旧值时标过期；7/30/90日、北京时间、60秒可关闭轮询及hidden暂停。趋势图必须按容器实测宽度计算SVG画布，375px轴文字不能随大viewBox缩到不可读，并提供历史数据表。入口、缺口/null、累计任务和工坊审核深链接见[管理员首页跨层契约](../backend/admin-dashboard.md)。

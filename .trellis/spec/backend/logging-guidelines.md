@@ -84,6 +84,8 @@ logger.exception("回退章节 %s 状态失败", chapter_id)
 
 该例外不取消其他模块现有traceback规则。回归 `test_audit_system_database_error_does_not_reach_raw_exception_logger` 同时检查响应、审计行和caplog；不能仅脱敏数据库记录而遗漏运维日志。完整契约见[管理员操作审计](./admin-audit.md)。
 
+管理员取消受理及异步drain/状态提交属于同一安全边界；共用的章节/批量/KB任务on_abort也可能从此链触发，失败只输出固定中文及任务/操作标识，不用原始traceback/SQL参数泄露断点或上游信息，也不把未知异常再次送全局logger.exception。不能因复用普通helper而在内层先泄露、外层再宣称安全。此局部例外不扩散到无关provider/SSE逻辑，具体入口与caplog回归见[任务监控](./admin-task-monitoring.md)。
+
 ## 不应记录的内容
 
 - **绝不记录 API key** —— 无论明文还是密文（`api_key_enc`）。key 仅在

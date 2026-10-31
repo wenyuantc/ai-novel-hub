@@ -39,6 +39,7 @@
 | [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码、全局 Skill 的管理员权限、`MCP_ENABLED` | 已填写 |
 | [管理员首页与全站统计](./admin-dashboard.md) | 含回收站的总量、北京时间日快照、独立任务累计、UUID执行身份、24h异常、历史缺口及刷新 | 已填写 |
+| [管理员全站任务监控](./admin-task-monitoring.md) | 现存安全元数据、单SQL筛选计数、本轮时间、持久取消受理/审计、资源屏障与轮次CAS、5秒刷新 | 已填写 |
 | [管理员操作审计](./admin-audit.md) | 真实 actor、同事务摘要与失败、版本关联、组合查询、日期预览/nonce/高水位清理与不可清理留痕 | 已填写 |
 | [管理员作品管理](./admin-projects.md) | `/admin/projects` 查询与聚合、人工内容管理员例外、严格 owner helper、归属投影、私有资源/模型副作用/阅读进度边界 | 已填写 |
 | [作品回收站](./recycle-bin.md) | 30天软删除、管理员恢复/彻删、任务执行链排空、父行事务屏障、到期清理、RESTRICT删号与系统审计 | 已填写 |

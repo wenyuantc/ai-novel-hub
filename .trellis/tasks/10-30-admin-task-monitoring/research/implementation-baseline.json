@@ -1,0 +1,13 @@
+{
+  "approved_on": "2026-10-31",
+  "approval": "用户在最终规划摘要后回复“开始”",
+  "head": "e6ba17c8d4e9ccd69d924bcfdba53fe080c0f4e3",
+  "branch": "codex/admin-task-monitoring",
+  "excluded_sha256": {
+    ".codex/config.toml": "e7be6020435e28864179736b623e85db0894d8aa2fde4889f1d3aee19697b994",
+    ".gitignore": "b401c94dfc1295101b37d8b71eb83f5144cee9f6489473b019943f61d65f6c0f",
+    ".agents/skills/source-command-trellis-continue/SKILL.md": "440b97d411beb1b4542db1eaf55855c06c24dc26c7c2ad0a1650ec906814010a",
+    ".agents/skills/source-command-trellis-finish-work/SKILL.md": "07f6348c220b16fd1f0fc28113135856d7e1d242ec4d7e7917f08b6f19df84e5"
+  },
+  "product_baseline": "工作区原有变更仅为列明排除项及本任务规划文件；未有其他产品代码变更。"
+}

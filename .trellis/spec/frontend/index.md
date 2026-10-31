@@ -23,6 +23,7 @@
 | [状态管理](./state-management.md) | Zustand store（auth / aiConfigs / project / tasks / styles / skills）、全局与本地状态、登出/401 时清空 | 已填写 |
 | [管理员操作审计跨层契约](../backend/admin-audit.md) | 管理员筛选分页/只读详情、历史 actor、版本可变提示、日期预览确认及旧响应失效、移动卡片 | 已填写 |
 | [管理员首页与全站统计跨层契约](../backend/admin-dashboard.md) | 含回收站总量、独立任务累计、7/30/90日趋势、缺口/null、60秒刷新、可读SVG与数据表 | 已填写 |
+| [管理员全站任务监控跨层契约](../backend/admin-task-monitoring.md) | 安全列表/详情、现存筛选计数、UUID深链、5秒刷新/失效、二阶段取消及受理审计语义 | 已填写 |
 | [管理员作品管理跨层契约](../backend/admin-projects.md) | 管理列表、owner归属、复用人工编辑区、自动任务与私有资源隔离、Reader不写他人进度 | 已填写 |
 | [作品回收站跨层契约](../backend/recycle-bin.md) | 管理员列表/恢复/名称确认彻删、原始删除代次、30天边界、删号保护与目标级状态失效 | 已填写 |
 | [质量规范](./quality-guidelines.md) | lint/build/test 门禁、Vite 代理、包体积、禁止/必需模式、评审清单 | 已填写 |

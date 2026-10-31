@@ -5,6 +5,8 @@
 
 平台签发的 API Key 使用独立的 X-API-Key 认证，与 token_version 会话失效机制分离；禁用账号同样阻止其 Key 使用。密钥的再次查看、授权、撤销及开放接口见 [平台 API Key 与开放读取](./open-api.md)。
 
+管理员全站任务权限仅通过独立[任务监控](./admin-task-monitoring.md)入口提供安全元数据及取消请求受理；每请求复核AdminUser，写前以真实actor/owner用户锁复核启用/角色/token版本。普通/tasks、output/stream/retry/resume/finish仍严格owner隔离，不能通过冒用owner复用权限；无作品但尚有pending取消意图的用户也不能被删号CASCADE掉恢复依据。
+
 ---
 
 ## 场景：管理员角色、用户管理与 token 版本控制
