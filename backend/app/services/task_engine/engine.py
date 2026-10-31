@@ -20,14 +20,15 @@ import logging
 import time
 from collections import Counter
 from collections.abc import AsyncIterator
-from contextlib import aclosing, suppress
+from contextlib import aclosing, contextmanager, suppress
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任务类型
 from app.core.errors import AppError
-from app.models import Task
+from app.models import Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
 from app.services import task_service
 from app.services.task_engine.hub import TaskHub
@@ -54,8 +55,12 @@ class TaskEngine:
 
     def __init__(self, ctx: TaskContext):
         self.ctx = ctx
+        self.ctx.task_engine = self
         self.hubs: dict[int, TaskHub] = {}
         self._running: dict[int, asyncio.Task[None]] = {}
+        self._running_projects: dict[int, int | None] = {}
+        self._cleanup_work: dict[int, dict[asyncio.Task, int]] = {}
+        self._abort_failures: set[int] = set()
         self._running_users: dict[int, int] = {}
         self._running_serial: dict[int, str] = {}
         self._cancel_requested: set[int] = set()
@@ -182,13 +187,16 @@ class TaskEngine:
         sm = self.ctx.sessionmaker
         async with sm() as db:
             rows = await db.execute(
-                select(Task.id, Task.user_id, Task.serial_key).where(Task.status == "queued").order_by(Task.id)
+                select(Task.id, Task.user_id, Task.serial_key, Task.project_id)
+                .outerjoin(Project, Project.id == Task.project_id)
+                .where(Task.status == "queued", task_service.visible_project_condition())
+                .order_by(Task.id)
             )
             queued = list(rows.all())
         per_user = Counter(self._running_users.values())
         # 运行中占用的串行键；本轮被跳过的串行键也加入，保证同键内先进先出
         busy_serial = set(self._running_serial.values())
-        for task_id, user_id, serial_key in queued:
+        for task_id, user_id, serial_key, project_id in queued:
             if self._stopping or len(self._running) >= settings.task_max_concurrency:
                 break
             if task_id in self._running:
@@ -201,6 +209,7 @@ class TaskEngine:
                 continue
             per_user[user_id] += 1
             # 先登记 asyncio.Task 再领取：库里出现 running 时内存里一定有可取消的执行体
+            self._running_projects[task_id] = project_id
             self._running_users[task_id] = user_id
             if serial_key is not None:
                 busy_serial.add(serial_key)
@@ -223,7 +232,12 @@ class TaskEngine:
                 hub.set_queue_position(position)
 
     def _on_done(self, task_id: int) -> None:
-        self._running.pop(task_id, None)
+        task = self._running.pop(task_id, None)
+        project_id = self._running_projects.pop(task_id, None)
+        if task is not None and not task.cancelled() and task.exception() is not None:
+            if project_id is not None:
+                self._abort_failures.add(project_id)
+            logger.error("任务执行体异常结束 task=%s", task_id)
         self._running_users.pop(task_id, None)
         self._running_serial.pop(task_id, None)
         self._cancel_requested.discard(task_id)
@@ -239,7 +253,7 @@ class TaskEngine:
         async with self.ctx.sessionmaker() as db:
             result = await db.execute(
                 update(Task)
-                .where(Task.id == task_id, Task.status == "queued")
+                .where(Task.id == task_id, Task.status == "queued", task_service.visible_task_project_exists())
                 .values(status="running", started_at=func.now(), stage=running_stage)
             )
             await db.commit()
@@ -361,7 +375,13 @@ class TaskEngine:
         try:
             # 暂停时资源已在当前步结束时释放，断点保留，不回退
             if status not in ("succeeded", "paused") and handler is not None and task is not None:
-                await handler.on_abort(self.ctx, task)
+                try:
+                    await handler.on_abort(self.ctx, task)
+                except Exception:
+                    if task.project_id is not None:
+                        self._abort_failures.add(task.project_id)
+                    error = "任务收尾失败，请稍后重试"
+                    logger.error("任务取消收尾失败 task=%s", task_id)
             try:
                 async with self.ctx.sessionmaker() as db:
                     row = await db.get(Task, task_id)
@@ -379,6 +399,8 @@ class TaskEngine:
                         out = task_service.out_json(row)
                         await task_service.prune_finished(db, row.user_id)
             except Exception:  # noqa: BLE001
+                if task is not None and task.project_id is not None:
+                    self._abort_failures.add(task.project_id)
                 logger.exception("任务 %s 结束状态写入失败", task_id)
             if status == "succeeded" and handler is not None and task is not None:
                 await self._on_success(handler, task)
@@ -415,6 +437,35 @@ class TaskEngine:
             t.cancel()
         await asyncio.wait({t}, timeout=self.cancel_wait_seconds)
 
+    @contextmanager
+    def cleanup_scope(self, task: Task):
+        """登记请求侧 queued/paused 取消清理，即使 Task 已先提交终态也必须等待。"""
+        current = asyncio.current_task()
+        project_id = task.project_id
+        if current is None or project_id is None:
+            yield
+            return
+        work = self._cleanup_work.setdefault(project_id, {})
+        work[current] = work.get(current, 0) + 1
+        try:
+            yield
+        finally:
+            work[current] -= 1
+            if not work[current]:
+                work.pop(current)
+            if not work:
+                self._cleanup_work.pop(project_id, None)
+
+    def project_work(self, project_id: int) -> set[asyncio.Task]:
+        current = asyncio.current_task()
+        running = {t for tid, t in self._running.items() if self._running_projects.get(tid) == project_id}
+        cleanup = set(self._cleanup_work.get(project_id, {}))
+        return {t for t in running | cleanup if t is not current and not t.done()}
+
+    def forget_project_hubs(self, task_ids: list[int]) -> None:
+        for task_id in task_ids:
+            self.close_hub(task_id, "error", {"task": None, "detail": TASK_GONE_MESSAGE})
+
     # ---------------- 订阅 ----------------
 
     async def subscribe(self, task_id: int) -> AsyncIterator[Event]:
@@ -423,7 +474,7 @@ class TaskEngine:
         hub = self.hubs.get(task_id)
         if hub is None:
             async with sm() as db:
-                row = await db.get(Task, task_id)
+                row = await self._visible_task(db, task_id)
             if row is None:
                 yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
                 return
@@ -434,7 +485,7 @@ class TaskEngine:
                 if created:
                     # 防止读库与建 hub 之间任务恰好结束：复查，已结束则丢弃刚建的 hub
                     async with sm() as db:
-                        row = await db.get(Task, task_id)
+                        row = await self._visible_task(db, task_id)
                     if row is None or row.status not in ACTIVE_TASK_STATUSES:
                         if self.hubs.get(task_id) is hub and task_id not in self._running:
                             self.hubs.pop(task_id, None)
@@ -458,8 +509,11 @@ class TaskEngine:
         text, sub = hub.subscribe()
         try:
             async with sm() as db:
-                row = await db.get(Task, task_id)
+                row = await self._visible_task(db, task_id)
                 out = await task_service.out_json_live(db, self, row) if row is not None else None
+            if row is None:
+                yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
+                return
             yield "snapshot", {"task": out, "text": text}
             while True:
                 if sub.overflowed and sub.queue.empty():
@@ -482,10 +536,15 @@ class TaskEngine:
         finally:
             hub.unsubscribe(sub)
 
+    async def _visible_task(self, db: AsyncSession, task_id: int) -> Task | None:
+        return await db.scalar(select(Task).where(
+            Task.id == task_id, task_service.visible_task_project_exists()
+        ))
+
     async def _task_gone(self, task_id: int) -> bool:
         try:
             async with self.ctx.sessionmaker() as db:
-                return await db.scalar(select(Task.id).where(Task.id == task_id)) is None
+                return await self._visible_task(db, task_id) is None
         except Exception:  # noqa: BLE001
             logger.exception("任务 %s 存在性检查失败", task_id)
             return False

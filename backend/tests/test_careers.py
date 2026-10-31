@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 
 from app.models import Career, CareerHistory, CareerStage, CharacterCareer
-from tests.helpers import create_project, register
+from tests.helpers import create_project, purge_trashed_project, register
 
 SWORD_STAGES = ["练气", "筑基", "金丹", "元婴", "化神", "炼虚", "合体", "大乘", "渡劫"]
 
@@ -243,8 +243,8 @@ async def test_career_batch_atomic(app, client):
     assert [(c["name"], c["kind"], len(c["stages"])) for c in resp.json()] == [("法修", "main", 1), ("丹师", "sub", 1)]
 
 
-async def test_cross_project_ids_rejected(app, client):
-    """AC8：其他项目的职业 / 阶段 id 返回 400；删除项目时职业、阶段、挂接一并清理。"""
+async def test_cross_project_ids_rejected(app, client, recycle_admin):
+    """其他项目ID仍隔离；软删保留职业/挂接，显式purge才级联清理。"""
     base = await _setup(client)
     p2 = await create_project(client, title="乙")
     base2 = f"/api/v1/projects/{p2['id']}"
@@ -270,6 +270,10 @@ async def test_cross_project_ids_rejected(app, client):
 
     assert (await client.post(url, json={"career_id": own["id"]})).status_code == 201
     assert (await client.delete(base)).status_code == 204
+    assert (await client.get(f"{base}/careers/{own['id']}")).status_code == 404
+    assert await _count(app, CharacterCareer) == 1
+    assert await _count(app, Career) == 2
+    await purge_trashed_project(recycle_admin, int(base.rsplit("/", 1)[1]))
     assert await _count(app, CharacterCareer) == 0
     assert await _count(app, Career) == 1
 

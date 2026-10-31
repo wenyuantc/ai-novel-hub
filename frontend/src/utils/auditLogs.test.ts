@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuditCleanupPreview, AuditSummary } from '../api/types'
-import { auditDateRange, auditFilterQuery, auditRangeLabel, auditSummaryRows, auditTargetLabel, auditValidPage, cleanupPreviewUsable, createAuditRequestGate } from './auditLogs'
+import { auditActorLabel, auditDateRange, auditFilterQuery, auditRangeLabel, auditSummaryRows, auditTargetLabel, auditValidPage, cleanupPreviewUsable, createAuditRequestGate } from './auditLogs'
 
 const range = { from_at: '2026-10-29T16:00:00.000Z', to_at: '2026-10-31T16:00:00.000Z' }
 const preview: AuditCleanupPreview = { ...range, count: 3, protected_count: 2, expires_at: '2026-10-31T01:10:00Z', preview_token: 'secret-preview' }
@@ -64,6 +64,14 @@ describe('清理确认与过期异步隔离', () => {
 })
 
 describe('只读审计摘要', () => {
+  it('系统actor不伪造用户ID，生命周期摘要按明确字段展示', () => {
+    expect(auditActorLabel({ actor_username: '系统自动清理', actor_user_id: null })).toBe('系统自动清理（系统）')
+    expect(auditActorLabel({ actor_username: '历史管理员', actor_user_id: 7 })).toBe('历史管理员 · #7')
+    const summary: AuditSummary = { changed_fields: [], changes: [], word_count_before: null, word_count_after: null, body_chars_before: null, body_chars_after: null, reference_count_before: null, reference_count_after: null, affected_count: null, affected_ids: [], ids_truncated: false, chapter_count: null, version_count: null, from_at: null, to_at: null, expected_count: null, deleted_count: null, high_water_id: null, lifecycle_action: 'soft_delete', retention_days: 30, cancelled_task_count: 0 }
+    expect(auditSummaryRows(summary)).toContainEqual({ label: '作品生命周期动作', value: '移入回收站' })
+    expect(auditSummaryRows(summary)).toContainEqual({ label: '保留期限', value: '30 天' })
+    expect(auditSummaryRows(summary)).toContainEqual({ label: '取消任务数', value: '0' })
+  })
   it('已删除目标仍由快照标识；创建失败允许没有目标 ID', () => {
     expect(auditTargetLabel({ target_type: 'chapter', target_id: 8, target_label: '旧标题' })).toBe('章节 #8 · 旧标题')
     expect(auditTargetLabel({ target_type: 'user', target_id: null, target_label: null })).toBe('用户')

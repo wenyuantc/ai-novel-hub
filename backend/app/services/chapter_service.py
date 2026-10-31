@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import Chapter, ChapterPlan, ChapterVersion, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
-from app.services import memory_service, style_service, version_service
+from app.services import memory_service, project_lifecycle, style_service, version_service
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import get_manageable_project, get_owned_project
 
@@ -34,24 +34,30 @@ async def commit_versioned(db: AsyncSession) -> None:
         raise ConflictError("正文同时被其他操作修改，请刷新后重试") from exc
 
 
-async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int) -> Chapter:
+async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int, *, lock: bool = False) -> Chapter:
     chapter = await db.scalar(
         select(Chapter)
         .join(Project, Project.id == Chapter.project_id)
-        .where(Chapter.id == chapter_id, Project.user_id == user_id)
+        .where(Chapter.id == chapter_id, Project.user_id == user_id, *project_lifecycle.active_conditions())
     )
     if chapter is None:
         raise NotFoundError("章节不存在")
+    if lock:
+        await get_owned_project(db, user_id, chapter.project_id, lock=True)
     return chapter
 
 
-async def get_project_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> Chapter:
-    await get_owned_project(db, user_id, project_id)
+async def get_project_chapter(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, lock: bool = False
+) -> Chapter:
+    await get_owned_project(db, user_id, project_id, lock=lock)
     return await _chapter_in_project(db, project_id, chapter_id)
 
 
-async def get_manageable_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> Chapter:
-    await get_manageable_project(db, user_id, project_id)
+async def get_manageable_chapter(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, lock: bool = False
+) -> Chapter:
+    await get_manageable_project(db, user_id, project_id, lock=lock)
     return await _chapter_in_project(db, project_id, chapter_id)
 
 
@@ -84,7 +90,7 @@ async def _next_chapter_no(db: AsyncSession, project_id: int) -> int:
 
 async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: ChapterCreate) -> Chapter:
     async with AuditOperation(db, user_id, "chapter.create", "chapter", None, project_id=project_id) as audit:
-        await get_manageable_project(db, user_id, project_id)
+        await get_manageable_project(db, user_id, project_id, lock=True)
         title = (data.title or "").strip()
         chapter_no = data.chapter_no
         if data.outline_id is not None:
@@ -123,7 +129,7 @@ async def create_from_outlines(
     async with AuditOperation(
         db, user_id, "chapter.create_from_outlines", "project", None, project_id=project_id
     ) as audit:
-        project = await get_manageable_project(db, user_id, project_id)
+        project = await get_manageable_project(db, user_id, project_id, lock=True)
         audit.target(project)
         stmt = select(Outline).where(Outline.project_id == project_id)
         if data.outline_ids is not None:
@@ -166,9 +172,9 @@ async def update_chapter(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: ChapterUpdate
 ) -> Chapter:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
         audit.target(chapter)
-        project = await get_manageable_project(db, user_id, project_id)
+        project = await get_manageable_project(db, user_id, project_id, lock=True)
         audit.track(chapter, data.model_fields_set)
         fields = data.model_fields_set
         if project.user_id != user_id:
@@ -221,7 +227,7 @@ async def update_chapter(
 
 async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> None:
     async with AuditOperation(db, user_id, "chapter.delete", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
         audit.target(chapter)
         audit.summary.word_count_before = chapter.word_count
         if audit.enabled:

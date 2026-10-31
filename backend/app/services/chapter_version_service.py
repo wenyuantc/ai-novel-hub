@@ -41,7 +41,7 @@ async def update_version(
     async with AuditOperation(
         db, user_id, "chapter_version.update", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
         version = await _get_version(db, chapter_id, version_id)
         audit.target(version, label=f"v{version.seq}")
         audit.version(version, project_id)
@@ -59,7 +59,7 @@ async def delete_version(db: AsyncSession, user_id: int, project_id: int, chapte
     async with AuditOperation(
         db, user_id, "chapter_version.delete", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
         version = await _get_version(db, chapter_id, version_id)
         audit.target(version, label=f"v{version.seq}")
         audit.version(version, project_id)
@@ -75,7 +75,7 @@ async def restore_version(db: AsyncSession, user_id: int, project_id: int, chapt
     async with AuditOperation(
         db, user_id, "chapter_version.restore", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
         audit.track(chapter, ["content"])
         audit.values["chapter_id"] = chapter_id
         if chapter.status == "generating":

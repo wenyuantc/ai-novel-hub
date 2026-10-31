@@ -9,7 +9,7 @@ from app.ai.images import MAX_COVER_BYTES, TOO_LARGE
 from app.ai.providers.base import AIProviderError, GeneratedImage
 from app.models import ProjectCover
 from tests.cover_fixtures import JPEG, PNG, WEBP
-from tests.helpers import create_ai_config, create_project, register
+from tests.helpers import create_ai_config, create_project, purge_trashed_project, register
 
 
 @pytest.mark.parametrize(("data", "mime"), [(PNG, "image/png"), (JPEG, "image/jpeg"), (WEBP, "image/webp")])
@@ -177,11 +177,15 @@ async def test_cover_generate_timeout_cancels_provider_and_preserves_cover(clien
     assert (await client.get(f"/api/v1/projects/{project['id']}")).json()["cover_updated_at"] == original_version
 
 
-async def test_project_delete_cascades_cover(client, app):
+async def test_project_delete_preserves_cover_until_explicit_purge(client, app, recycle_admin):
     await register(client)
     project = await create_project(client)
     await client.put(f"/api/v1/projects/{project['id']}/cover", files={"file": ("a.png", PNG)})
     assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 204
+    assert (await client.get(f"/api/v1/projects/{project['id']}/cover")).status_code == 404
+    async with app.state.sessionmaker() as db:
+        assert (await db.get(ProjectCover, project["id"])).data == PNG
+    await purge_trashed_project(recycle_admin, project["id"])
     async with app.state.sessionmaker() as db:
         assert await db.get(ProjectCover, project["id"]) is None
 
@@ -195,7 +199,7 @@ async def test_cover_backup_roundtrip_legacy_and_corruption(client):
     estimate_after = (await client.get(f"/api/v1/projects/{project['id']}/backup/estimate")).json()
     assert estimate_after["core"]["bytes"] - estimate_before["core"]["bytes"] == 4 * ((len(PNG) + 2) // 3)
     backup = (await client.get(f"/api/v1/projects/{project['id']}/backup")).json()
-    assert backup["version"] == 1 and backup["app_schema"] == "0021"
+    assert backup["version"] == 1 and backup["app_schema"] == "0024"
     assert backup["cover"] == {"mime_type": "image/png", "data": base64.b64encode(PNG).decode()}
 
     async def restore(data):

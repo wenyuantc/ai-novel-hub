@@ -447,7 +447,8 @@ async def prepare_generate(
     decided = build_decided(state, step)
     knowledge = ""
     project = await db.get(Project, session.project_id) if session.project_id is not None else None
-    if project is not None and project.user_id == user_id:
+    if (project is not None and project.user_id == user_id
+            and project.deleted_at is None and project.deletion_started_at is None):
         # 从已有项目发起：用该项目的知识库，查询 = 想法 + 补充想法 + 已定内容
         knowledge = await kb_service.knowledge_for_project(
             db,
@@ -644,7 +645,7 @@ async def apply_preview(db: AsyncSession, user_id: int, session_id: int, project
 async def apply(db: AsyncSession, user_id: int, session_id: int, data: ApplyRequest) -> ProjectOut:
     """只写勾选的字段；会话状态不变，可以反复应用。"""
     session = await get_owned_session(db, user_id, session_id)
-    project = await project_service.get_owned_project(db, user_id, data.project_id)
+    project = await project_service.get_owned_project(db, user_id, data.project_id, lock=True)
     proposed = _proposals(load_state(session))
     for field in dict.fromkeys(data.fields):
         if field not in proposed:
@@ -659,7 +660,7 @@ async def apply(db: AsyncSession, user_id: int, session_id: int, data: ApplyRequ
 
 async def from_project(db: AsyncSession, user_id: int, project_id: int) -> SessionOut:
     """用项目已有字段预填（非空的步骤为已定、source=project）；同一项目已有进行中的会话时直接返回它。"""
-    project = await project_service.get_owned_project(db, user_id, project_id)
+    project = await project_service.get_owned_project(db, user_id, project_id, lock=True)
     existing = await db.scalar(
         select(InspirationSession)
         .where(

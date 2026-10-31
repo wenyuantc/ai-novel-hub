@@ -64,7 +64,8 @@ export interface ResetPasswordRequest {
 // 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
 export type AuditAction =
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
-  | 'project.update' | 'project.delete' | 'chapter.create' | 'chapter.create_from_outlines'
+  | 'project.update' | 'project.delete' | 'project.restore' | 'project.purge' | 'project.expire'
+  | 'chapter.create' | 'chapter.create_from_outlines'
   | 'chapter.update' | 'chapter.delete' | 'chapter.cast.update' | 'chapter_version.update'
   | 'chapter_version.delete' | 'chapter_version.restore' | 'workshop.publish' | 'workshop.approve'
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
@@ -105,6 +106,9 @@ export interface AuditSummary {
   expected_count: number | null
   deleted_count: number | null
   high_water_id: number | null
+  lifecycle_action?: 'soft_delete' | 'restore' | 'purge' | 'expire' | null
+  retention_days?: 30 | null
+  cancelled_task_count?: number | null
 }
 
 export interface AuditVersionRef {
@@ -119,7 +123,7 @@ export interface AuditLogBrief {
   id: number
   operation_id: string
   occurred_at: string
-  actor_user_id: number
+  actor_user_id: number | null
   actor_username: string
   action: AuditAction
   result: AuditResult
@@ -297,6 +301,39 @@ export interface AdminProjectListQuery {
   status?: ProjectStatus
   page?: number
   page_size?: number
+}
+
+/** 管理员回收站元数据；删除时间原样回传，不能截断微秒后作为操作代次。 */
+export interface RecycleProject {
+  id: number
+  title: string
+  genre: string
+  status: ProjectStatus
+  owner_user_id: number
+  owner_username: string
+  deleted_by_user_id: number | null
+  deleted_by_username: string | null
+  deleted_at: string
+  expires_at: string
+  restorable: boolean
+  chapter_count: number
+  total_words: number
+}
+
+export interface RecycleProjectListQuery {
+  q?: string
+  owner_user_id?: number
+  page?: number
+  page_size?: number
+}
+
+export interface RecycleRestoreRequest {
+  deleted_at: string
+  confirm: true
+}
+
+export interface RecyclePurgeRequest extends RecycleRestoreRequest {
+  title: string
 }
 
 export interface Project {

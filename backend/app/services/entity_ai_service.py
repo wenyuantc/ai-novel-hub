@@ -508,7 +508,7 @@ async def validate_entity_task(
     character_ids: list[int] | None = None,
 ) -> tuple[int, str]:
     """创建任务时同步校验归属、配置与端点；返回 (ai_config_id, 任务标题)。不修改任何数据。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     title = {
         "character.generate": "AI 生成角色",
         "organization.generate": "AI 生成组织",

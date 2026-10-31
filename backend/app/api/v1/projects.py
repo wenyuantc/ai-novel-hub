@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.core.deps import CurrentUser, DbDep
+from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgressUpdate
 from app.services import export_service
 from app.services import project_service as svc
@@ -42,8 +42,8 @@ async def update_wizard_progress(
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_project(project_id: int, user: CurrentUser, db: DbDep) -> Response:
-    await svc.delete_project(db, user.id, project_id)
+async def delete_project(project_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> Response:
+    await svc.delete_project(db, user.id, project_id, engine=engine)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

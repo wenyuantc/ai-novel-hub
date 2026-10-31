@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.ai.prompts import build_analysis_messages
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
-from app.core.errors import AppError, BadRequestError, NotFoundError
+from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
 from app.models import Chapter, ChapterAnalysis, Character, Organization, Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES, LIFE_STATUSES, MEMBER_STATUSES, RELATION_STATUSES
@@ -44,6 +44,7 @@ from app.services import (
     foreshadow_service,
     memory_service,
     organization_service,
+    project_lifecycle,
     prompt_service,
     relationship_service,
     writeback_service,
@@ -446,7 +447,7 @@ async def get_owned_analysis(db: AsyncSession, user_id: int, analysis_id: int) -
     analysis = await db.scalar(
         select(ChapterAnalysis)
         .join(Project, Project.id == ChapterAnalysis.project_id)
-        .where(ChapterAnalysis.id == analysis_id, Project.user_id == user_id)
+        .where(ChapterAnalysis.id == analysis_id, Project.user_id == user_id, *project_lifecycle.active_conditions())
     )
     if analysis is None:
         raise NotFoundError("分析结果不存在")
@@ -498,7 +499,7 @@ async def request_analyze(
     """手动分析：同章已有排队中的分析 → 返回那条任务（created=False）；否则创建任务。"""
     from app.services import task_service
 
-    chapter = await get_owned_chapter(db, user_id, chapter_id)
+    chapter = await get_owned_chapter(db, user_id, chapter_id, lock=True)
     existing = await queued_analysis(db, chapter.id)
     if existing is not None:
         return await task_service.task_out(db, engine, existing), False
@@ -541,7 +542,7 @@ async def analyze_pending(
     """
     from app.services import task_service
 
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     task_ids: list[int] = []
     for cid in await pending_chapter_ids(db, project_id):
         params = {"chapter_id": cid, **req.model_dump(mode="json")}
@@ -557,6 +558,7 @@ async def enqueue_pending(db: AsyncSession, project: Project, *, ai_config_id: i
     """
     from app.services import task_service
 
+    await project_lifecycle.lock_active(db, project.id)
     ids = await pending_chapter_ids(db, project.id)
     if not ids:
         return []
@@ -592,7 +594,12 @@ async def enqueue_auto(ctx: "TaskContext", project_id: int | None, chapter_id: i
         return None
     async with ctx.sessionmaker() as db:
         project = await db.get(Project, project_id)
-        if project is None or not project.auto_analyze:
+        if (project is None or not project.auto_analyze
+                or project.deleted_at is not None or project.deletion_started_at is not None):
+            return None
+        try:
+            await project_lifecycle.lock_active(db, project.id)
+        except (ConflictError, NotFoundError):
             return None
         chapter = await db.get(Chapter, chapter_id)
         if chapter is None or chapter.project_id != project.id or not chapter.content.strip():
@@ -645,7 +652,7 @@ async def validate_analyze(
     allow_private: bool,
 ) -> tuple[Chapter, int]:
     """创建任务时同步校验归属、正文与 AI 配置；返回 (章节, ai_config_id)。不修改数据。"""
-    chapter = await get_owned_chapter(db, user_id, chapter_id)
+    chapter = await get_owned_chapter(db, user_id, chapter_id, lock=True)
     if not chapter.content.strip():
         raise BadRequestError(EMPTY_CONTENT)
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)

@@ -354,7 +354,7 @@ def _clamp(value: int, low: int, high: int) -> int:
 
 
 async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: CardImportRequest) -> CardImportResult:
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     card = parse_card(req.data)
     warnings: list[str] = []
     chars = _dedupe_names(card.characters, "角色", warnings)

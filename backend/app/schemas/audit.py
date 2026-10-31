@@ -12,6 +12,9 @@ AuditAction = Literal[
     "user.delete",
     "project.update",
     "project.delete",
+    "project.restore",
+    "project.purge",
+    "project.expire",
     "chapter.create",
     "chapter.create_from_outlines",
     "chapter.update",
@@ -125,6 +128,9 @@ class AuditValueChange(BaseModel):
 
 class AuditSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    lifecycle_action: Literal["soft_delete", "restore", "purge", "expire"] | None = None
+    retention_days: Literal[30] | None = None
+    cancelled_task_count: int | None = Field(default=None, ge=0)
     changed_fields: list[AuditField] = Field(default_factory=list, max_length=50)
     changes: list[AuditValueChange] = Field(default_factory=list, max_length=20)
     word_count_before: int | None = Field(default=None, ge=0)
@@ -158,7 +164,7 @@ class AuditLogBrief(BaseModel):
     id: int
     operation_id: str
     occurred_at: datetime
-    actor_user_id: int
+    actor_user_id: int | None
     actor_username: str
     action: AuditAction
     result: AuditResult

@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, AuditOutlined, BookOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, AuditOutlined, BookOutlined, DeleteOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { Button, Drawer, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { useState } from 'react'
@@ -36,7 +36,7 @@ export default function AppLayout() {
   const { managingOther, canUseAI } = projectAccess(project, user, projectId ?? NaN)
   const groups = studioNavigation(projectId, mcpEnabled, canUseAI)
   const current = navigationItem(groups, location.pathname)
-  const pageName = location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const pageName = location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
@@ -44,6 +44,7 @@ export default function AppLayout() {
       { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
       ...(user?.is_admin ? [{ key: 'admin', icon: <TeamOutlined />, label: '用户管理' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-projects', icon: <BookOutlined />, label: '作品管理' }] : []),
+      ...(user?.is_admin ? [{ key: 'admin-recycle-bin', icon: <DeleteOutlined />, label: '作品回收站' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-audit-logs', icon: <AuditOutlined />, label: '操作日志' }] : []),
       { type: 'divider' },
       { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
@@ -53,6 +54,7 @@ export default function AppLayout() {
       setNavOpenAt(null)
       if (key === 'admin') navigate('/admin/users')
       else if (key === 'admin-projects') navigate('/admin/projects')
+      else if (key === 'admin-recycle-bin') navigate('/admin/recycle-bin')
       else if (key === 'admin-audit-logs') navigate('/admin/audit-logs')
       else if (key === 'workshop') navigate('/workshop')
       else if (key === 'password') setPasswordOpen(true)
@@ -94,6 +96,7 @@ export default function AppLayout() {
         <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpen(true) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/users" aria-current={location.pathname.startsWith('/admin/users') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><TeamOutlined />用户管理</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/projects" aria-current={location.pathname.startsWith('/admin/projects') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><BookOutlined />作品管理</Link>}
+        {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/recycle-bin" aria-current={location.pathname.startsWith('/admin/recycle-bin') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DeleteOutlined />作品回收站</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/audit-logs" aria-current={location.pathname.startsWith('/admin/audit-logs') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><AuditOutlined />操作日志</Link>}
         <div className="studio-sidebar-account">{account()}<ThemeSwitch compact /></div>
       </div>

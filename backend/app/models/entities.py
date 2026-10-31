@@ -171,12 +171,27 @@ class AIConfig(TimestampMixin, Base):
 
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
+    __table_args__ = (
+        Index("ix_projects_deleted_at_id", "deleted_at", "id"),
+        CheckConstraint("deleted_at IS NULL OR deletion_started_at IS NULL", name="deletion_state"),
+        CheckConstraint(
+            "(deletion_started_at IS NULL) = (deletion_token IS NULL)", name="deletion_intent"
+        ),
+        {"sqlite_autoincrement": True},
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     genre: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 删除代次高水位：恢复时保留，时钟冻结或回拨也不重复使用旧 deleted_at。
+    last_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deleted_by_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deletion_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deletion_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # 旧的写作风格自由文本：迁移 0013 起不再读写（已迁移为项目的「原风格」），下一个大版本删除
     style: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="planning", nullable=False)

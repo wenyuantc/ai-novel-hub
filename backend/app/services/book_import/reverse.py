@@ -454,7 +454,7 @@ async def validate_start(
     db: AsyncSession, ctx: "TaskContext", *, user_id: int, params: dict[str, Any]
 ) -> dict[str, Any]:
     """创建任务前同步校验；返回 TaskSpec 所需字段。不修改数据。"""
-    project = await get_owned_project(db, user_id, int(params["project_id"]))
+    project = await get_owned_project(db, user_id, int(params["project_id"]), lock=True)
     request = {
         "project_id": project.id,
         "reverse_chapter_nos": _reverse_range(params.get("reverse_chapter_nos")),

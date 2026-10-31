@@ -211,7 +211,7 @@ async def apply_rewrite(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: RewriteApply
 ) -> Chapter:
     """采纳改写：选区原文（及可选的选区前原文）与预览时一致才替换（乐观并发），并写 rewrite 版本。"""
-    chapter = await get_project_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_project_chapter(db, user_id, project_id, chapter_id, lock=True)
     if chapter.status == "generating":
         raise ConflictError("该章节正在生成中，请稍候再试")
     content = chapter.content

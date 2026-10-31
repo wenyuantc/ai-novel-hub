@@ -138,6 +138,12 @@ async def test_project_chapter_two_actors_versions_and_deleted_snapshots(admin, 
     assert len(await rows(app)) == count
     assert (await admin.delete(base)).status_code == 204
     assert (await detail(admin, first_event))["version_status"] == "missing"
+    assert (await admin.delete(f"{USERS}/{owner['id']}")).status_code == 409
+    recycled = (await admin.get("/api/v1/admin/recycle-bin/projects")).json()["items"][0]
+    assert (await admin.post(
+        f"/api/v1/admin/recycle-bin/projects/{p['id']}/purge",
+        json={"deleted_at": recycled["deleted_at"], "title": recycled["title"], "confirm": True},
+    )).status_code == 204
     assert (await admin.delete(f"{USERS}/{owner['id']}")).status_code == 204
     assert (await admin.delete(f"{USERS}/{second_data['id']}")).status_code == 204
     d = await detail(admin, events[1])

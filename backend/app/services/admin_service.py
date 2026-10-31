@@ -6,6 +6,7 @@
 
 from anyio import to_thread
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
@@ -128,7 +129,7 @@ async def reset_password(db: AsyncSession, actor: User, user_id: int, data: Rese
 
 
 async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
-    """永久删除用户；项目、章节、AI 配置等由外键 ON DELETE CASCADE 一并删除。"""
+    """只允许删除已无任何作品的用户；私人配置沿既有外键级联清理。"""
     async with AuditOperation(db, actor, "user.delete", "user", user_id) as audit:
         user = await _get_user(db, user_id)
         audit.target(user)
@@ -136,5 +137,33 @@ async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
             raise BadRequestError(SELF_FORBIDDEN)
         if user.is_admin and user.is_active:
             await _ensure_other_active_admin(db, user.id)
+        await db.scalar(select(User.id).where(User.id == user_id).with_for_update())
+        count = int(await db.scalar(select(func.count(Project.id)).where(Project.user_id == user_id)) or 0)
+        if count:
+            raise ConflictError(
+                "该用户名下仍有作品（含回收站），请先禁用账号或彻底清理作品后再删除用户",
+                extra={"code": "user_has_projects", "project_count": count},
+            )
         await db.delete(user)
-        await audit.commit()
+        await audit.commit(flush_fn=_flush_user_delete)
+
+
+async def _flush_user_delete(db: AsyncSession) -> None:
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        original = exc.orig
+        cause = getattr(original, "__cause__", None)
+        name = getattr(getattr(cause, "diag", None), "constraint_name", None) or getattr(cause, "constraint_name", None)
+        # SQLite 的 RESTRICT 由内部触发器实现，可能使用 1811 而不是普通外键错误 787。
+        # 不把其他用户自定义 trigger / IntegrityError 笼统翻译成有作品冲突。
+        sqlite_code = getattr(original, "sqlite_errorcode", None)
+        sqlite_fk = sqlite_code == 787 or (
+            sqlite_code == 1811 and str(original) == "FOREIGN KEY constraint failed"
+        )
+        if name == "fk_projects_user_id_users" or sqlite_fk:
+            raise ConflictError(
+                "该用户名下仍有作品（含回收站），请先彻底清理作品后再删除用户",
+                extra={"code": "user_has_projects"},
+            ) from exc
+        raise

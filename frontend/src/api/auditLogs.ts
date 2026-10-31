@@ -14,6 +14,7 @@ export const auditLogApi = {
 export const AUDIT_ACTION: Record<AuditAction, string> = {
   'user.create': '创建用户', 'user.update': '修改用户角色 / 状态', 'user.reset_password': '重置密码', 'user.delete': '删除用户',
   'project.update': '修改作品', 'project.delete': '删除作品',
+  'project.restore': '恢复回收站作品', 'project.purge': '彻底删除作品', 'project.expire': '到期自动清理作品',
   'chapter.create': '创建章节', 'chapter.create_from_outlines': '从大纲批量建章', 'chapter.update': '修改章节', 'chapter.delete': '删除章节', 'chapter.cast.update': '调整章节选角',
   'chapter_version.update': '修改版本标星 / 备注', 'chapter_version.delete': '删除章节版本', 'chapter_version.restore': '恢复章节版本',
   'workshop.publish': '发布工坊资源', 'workshop.approve': '通过工坊审核', 'workshop.reject': '驳回工坊审核', 'workshop.update': '修改工坊元数据', 'workshop.hide': '下架工坊资源', 'workshop.unhide': '恢复工坊资源', 'workshop.delete': '删除工坊资源',

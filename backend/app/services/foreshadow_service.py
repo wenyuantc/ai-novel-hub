@@ -328,7 +328,7 @@ async def get_foreshadow(db: AsyncSession, user_id: int, project_id: int, foresh
 
 
 async def create_foreshadow(db: AsyncSession, user_id: int, project_id: int, data: ForeshadowCreate) -> ForeshadowOut:
-    await get_manageable_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id, lock=True)
     fs = Foreshadow(project_id=project_id, source="manual")
     await apply_foreshadow(db, fs, data.model_dump(), source="manual")
     await db.commit()
@@ -338,6 +338,7 @@ async def create_foreshadow(db: AsyncSession, user_id: int, project_id: int, dat
 async def update_foreshadow(
     db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: ForeshadowUpdate
 ) -> ForeshadowOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
     fields = data.model_fields_set
     values: dict[str, Any] = {}
@@ -357,6 +358,7 @@ async def update_foreshadow(
 
 
 async def delete_foreshadow(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> None:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
     await db.delete(fs)
     await db.commit()
@@ -365,6 +367,7 @@ async def delete_foreshadow(db: AsyncSession, user_id: int, project_id: int, for
 async def plant(
     db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: PlantRequest
 ) -> ForeshadowOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
     values: dict[str, Any] = {"status": "planted"}
     if data.chapter_no is not None:
@@ -377,6 +380,7 @@ async def plant(
 async def resolve(
     db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: ResolveRequest
 ) -> ForeshadowOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
     values: dict[str, Any] = {"status": "partial" if data.partial else "resolved"}
     if data.chapter_no is not None:
@@ -387,6 +391,7 @@ async def resolve(
 
 
 async def abandon(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> ForeshadowOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
     await apply_foreshadow(db, fs, {"status": "abandoned"}, source="manual")
     await db.commit()

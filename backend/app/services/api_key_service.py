@@ -14,6 +14,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError, Unaut
 from app.core.security import SecretCipher, mask_secret
 from app.models import ApiKey, ApiKeyProject, Project, User
 from app.schemas.api_key import ApiKeyCreate, ApiKeyCreateOut, ApiKeyOut, ApiKeyUpdate
+from app.services import project_lifecycle
 
 INVALID_KEY = "API Key 无效或已失效"
 
@@ -62,7 +63,8 @@ async def _project_ids(db: AsyncSession, key_ids: list[int]) -> dict[int, list[i
         return {}
     rows = await db.execute(
         select(ApiKeyProject.api_key_id, ApiKeyProject.project_id)
-        .where(ApiKeyProject.api_key_id.in_(key_ids))
+        .join(Project, Project.id == ApiKeyProject.project_id)
+        .where(ApiKeyProject.api_key_id.in_(key_ids), *project_lifecycle.active_conditions())
         .order_by(ApiKeyProject.project_id)
     )
     out: dict[int, list[int]] = {}
@@ -89,7 +91,9 @@ async def _validate_projects(
     ids = sorted(set(project_ids))
     if not ids:
         raise BadRequestError("请至少选择一部授权小说，或选择全部自己的小说")
-    found = set(await db.scalars(select(Project.id).where(Project.user_id == user_id, Project.id.in_(ids))))
+    found = set(await db.scalars(select(Project.id).where(
+        Project.user_id == user_id, Project.id.in_(ids), *project_lifecycle.active_conditions()
+    )))
     if found != set(ids):
         raise NotFoundError("部分授权小说不存在")
     return ids
@@ -256,7 +260,9 @@ async def authenticate_key(db: AsyncSession, raw_key: str | None, limit_per_minu
 
 
 async def get_authorized_project(db: AsyncSession, principal: ApiKeyPrincipal, project_id: int) -> Project:
-    project = await db.scalar(select(Project).where(Project.id == project_id, Project.user_id == principal.user_id))
+    project = await db.scalar(select(Project).where(
+        Project.id == project_id, Project.user_id == principal.user_id, *project_lifecycle.active_conditions()
+    ))
     if project is None or (not principal.all_projects and project_id not in principal.project_ids):
         raise NotFoundError("小说不存在")
     return project

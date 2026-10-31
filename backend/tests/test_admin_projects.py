@@ -276,5 +276,14 @@ async def test_admin_subresources_stay_in_project_and_delete_only_target(app, ad
     assert (await bob.get(second_base)).status_code == 200
     async with app.state.sessionmaker() as db:
         assert await db.get(User, alice["id"]) is not None
+        assert (await db.get(Project, first["id"])).deleted_at is not None
+        assert await db.get(Chapter, chapter["id"]) is not None
+    item = (await admin_client.get("/api/v1/admin/recycle-bin/projects")).json()["items"][0]
+    assert (await admin_client.post(
+        f"/api/v1/admin/recycle-bin/projects/{first['id']}/purge",
+        json={"deleted_at": item["deleted_at"], "title": item["title"], "confirm": True},
+    )).status_code == 204
+    async with app.state.sessionmaker() as db:
         assert await db.get(Project, first["id"]) is None
         assert await db.get(Chapter, chapter["id"]) is None
+        assert await db.get(Project, second["id"]) is not None

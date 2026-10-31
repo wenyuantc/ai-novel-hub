@@ -145,8 +145,8 @@ async def validate_and_claim(
 
     不 commit：由调用方与任务插入放在同一事务内提交（插入失败时抢占随回滚撤销）。
     """
-    chapter = await get_owned_chapter(db, user_id, chapter_id)
-    project = await get_owned_project(db, user_id, chapter.project_id)
+    chapter = await get_owned_chapter(db, user_id, chapter_id, lock=True)
+    project = await get_owned_project(db, user_id, chapter.project_id, lock=True)
     if chapter.status == "generating":
         raise ConflictError(GENERATING_CONFLICT)
     await ensure_outside_batch(db, chapter)

@@ -11,7 +11,7 @@ from app.models import Chapter, Outline, Project, ProjectCover
 from app.schemas import open_api as out
 from app.schemas.chapter import ChapterStatus
 from app.schemas.project import ProjectStatus
-from app.services import chapter_service, cover_service, export_service
+from app.services import chapter_service, cover_service, export_service, project_lifecycle
 from app.services.api_key_service import ApiKeyPrincipal, get_authorized_project
 from app.services.open_api.common import contains_literal, page_models
 
@@ -78,7 +78,7 @@ async def list_novels(
     status: ProjectStatus | None = None,
     url_prefix: str = PREFIX,
 ) -> out.Page[out.Novel]:
-    stmt = select(Project).where(Project.user_id == principal.user_id)
+    stmt = select(Project).where(Project.user_id == principal.user_id, *project_lifecycle.active_conditions())
     if not principal.all_projects:
         stmt = stmt.where(Project.id.in_(principal.project_ids))
     if q:

@@ -4,7 +4,7 @@ import { apiKeyApi } from '../../api/apiKeys'
 import { errorMessage } from '../../api/client'
 import type { ApiKey, Project } from '../../api/types'
 import { useModalWidth } from '../../hooks/useIsMobile'
-import { buildApiKeyInput, type ApiKeyFormValues } from '../../utils/apiKeys'
+import { buildApiKeyInput, buildApiKeyUpdate, hasApiKeyScopeChanged, type ApiKeyFormValues } from '../../utils/apiKeys'
 import { formatTime, parseServerTime } from '../../utils/time'
 
 interface Props {
@@ -22,6 +22,8 @@ export default function ApiKeyFormModal({ item, projects, projectsLoading, onClo
   const [form] = Form.useForm<ApiKeyFormValues>()
   const [saving, setSaving] = useState(false)
   const allProjects = Form.useWatch('all_projects', form) ?? item?.all_projects ?? false
+  const projectIds = Form.useWatch('project_ids', form) ?? item?.project_ids ?? []
+  const scopeChanged = item === null || hasApiKeyScopeChanged({ all_projects: allProjects, project_ids: projectIds }, item)
   const expiry = Form.useWatch('expiry', form) ?? (item ? 'keep' : '90')
 
   const submit = async () => {
@@ -33,9 +35,8 @@ export default function ApiKeyFormModal({ item, projects, projectsLoading, onClo
     }
     setSaving(true)
     try {
-      const body = buildApiKeyInput(values)
-      if (item) await apiKeyApi.update(item.id, body)
-      else await apiKeyApi.create(body)
+      if (item) await apiKeyApi.update(item.id, buildApiKeyUpdate(values, item))
+      else await apiKeyApi.create(buildApiKeyInput(values))
       // 创建响应的完整 Key 不放入列表；之后由所有者主动查看。
       message.success(item ? '密钥配置已保存' : '密钥已创建，可点击眼睛图标查看或复制')
       onSaved()
@@ -94,7 +95,7 @@ export default function ApiKeyFormModal({ item, projects, projectsLoading, onClo
         <Form.Item name="name" label="密钥名称" rules={[{ required: true, whitespace: true, message: '请输入密钥名称' }, { max: 100 }]}>
           <Input maxLength={100} placeholder="例如：个人阅读器、内容同步工具" autoComplete="off" />
         </Form.Item>
-        <Form.Item name="all_projects" label="授权小说">
+        <Form.Item name="all_projects" label="授权小说" extra={item ? '未调整范围保留原授权（含暂不可见作品）；更改范围按当前选择替换。' : undefined}>
           <Radio.Group>
             <Radio value={false}>指定小说</Radio>
             <Radio value>全部自己的小说</Radio>
@@ -103,7 +104,7 @@ export default function ApiKeyFormModal({ item, projects, projectsLoading, onClo
         {allProjects ? (
           <Alert type="warning" showIcon message="此密钥也可读取之后新建的小说。" style={{ marginTop: -8, marginBottom: 20 }} />
         ) : (
-          <Form.Item name="project_ids" label="选择小说" rules={[{ required: true, type: 'array', min: 1, message: '至少选择一部小说' }]}>
+          <Form.Item name="project_ids" label="选择小说" rules={scopeChanged ? [{ required: true, type: 'array', min: 1, message: '至少选择一部小说' }] : []}>
             <Select
               mode="multiple"
               loading={projectsLoading}

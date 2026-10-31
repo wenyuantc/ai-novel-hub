@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Project, User
 from app.schemas.admin import AdminProjectList, AdminProjectOut
 from app.schemas.project import ProjectStatus
+from app.services import project_lifecycle
 from app.services.admin_service import _escape_like
 from app.services.project_service import chapter_stats_subquery
 
@@ -19,7 +20,7 @@ async def list_projects(
     page: int,
     page_size: int,
 ) -> AdminProjectList:
-    conditions = []
+    conditions = list(project_lifecycle.active_conditions())
     keyword = (q or "").strip()
     if keyword:
         pattern = f"%{_escape_like(keyword)}%"

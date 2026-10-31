@@ -21,8 +21,10 @@ from urllib.parse import quote
 from sqlalchemy import JSON, String, Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.errors import NotFoundError
 from app.models import Chapter, InspirationSession, Project, ProjectCover, WritingStyle
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
+from app.services import project_lifecycle
 from app.services.project_service import get_owned_project
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
 from app.services.style_service import FIELD_LIMITS
@@ -30,7 +32,7 @@ from app.services.style_service import FIELD_LIMITS
 FORMAT = "ainovel.project"
 VERSION = 1
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0021"
+APP_SCHEMA = "0024"
 BATCH = 500
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 STYLE_FIELDS = ("name", *FIELD_LIMITS)
@@ -92,15 +94,25 @@ def _scope(rule: TableRule, plan: ExportPlan):
     return cond
 
 
+async def _assert_export_active(db: AsyncSession, plan: ExportPlan) -> None:
+    if await db.scalar(select(Project.id).where(
+        Project.id == plan.project_id, *project_lifecycle.active_conditions()
+    )) is None:
+        # 已发送的片段无法撤回，剩余文件必须中止，而不是生成貌似有效的空备份。
+        raise NotFoundError("项目不存在，备份导出已中止")
+
+
 async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> AsyncIterator[Any]:
     table = rule.model.__table__
     base = select(table).where(_scope(rule, plan))
     if not rule.has_id:
+        await _assert_export_active(db, plan)
         for row in (await db.execute(base.order_by(*table.primary_key.columns))).mappings():
             yield row
         return
     last = 0
     while True:
+        await _assert_export_active(db, plan)
         rows = (await db.execute(base.where(table.c.id > last).order_by(table.c.id).limit(BATCH))).mappings().all()
         for row in rows:
             yield row
@@ -131,7 +143,9 @@ async def _styles(db: AsyncSession, project: Project) -> tuple[list[dict[str, An
 async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: ExportPlan) -> AsyncIterator[bytes]:
     included = included_tables(plan.options)
     async with sessionmaker() as db:
-        project = await db.get(Project, plan.project_id)
+        project = await db.scalar(
+            select(Project).where(Project.id == plan.project_id, *project_lifecycle.active_conditions())
+        )
         if project is None:
             # 校验归属之后、开始写出之前项目被删除：输出一个无法导入的空文件
             yield b"{}"
@@ -148,11 +162,13 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             "cover": {"mime_type": cover.mime_type, "data": base64.b64encode(cover.data).decode("ascii")}
             if cover is not None else None,
         }
+        await _assert_export_active(db, plan)
         project_row = (await db.execute(select(Project.__table__).where(Project.id == project.id))).mappings().one()
         project_data = _row(PROJECT_RULE, project_row, included)
         project_data["default_style_ref"] = refs.get(project.default_style_id) if project.default_style_id else None
         yield (_dumps(head)[:-1] + ',"project":' + _dumps(project_data) + ',"tables":{').encode("utf-8")
         for t_index, rule in enumerate(r for r in RULES if r.table in included):
+            await _assert_export_active(db, plan)
             prefix = "," if t_index else ""
             yield f'{prefix}"{rule.table}":['.encode()
             first = True

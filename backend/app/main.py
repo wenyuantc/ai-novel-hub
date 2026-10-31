@@ -19,7 +19,7 @@ from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
-from app.services import auth_service, kb_parser, skill_service, style_service
+from app.services import auth_service, kb_parser, recycle_bin_service, skill_service, style_service
 from app.services.book_import import service as book_import_service
 from app.services.project_transfer import importer as transfer_importer
 from app.services.task_engine.engine import TaskEngine
@@ -66,12 +66,15 @@ def create_app(
         await style_service.sync_presets(app_.state.sessionmaker)
         # 清理创建满 7 天仍未导入的拆书解析记录
         await book_import_service.purge_expired_all(app_.state.sessionmaker)
+        await recycle_bin_service.recover_pending_deletions(app_.state.sessionmaker)
         if start_task_engine:
             # 先恢复（遗留 running → interrupted），再开始调度 queued 任务
             await app_.state.task_engine.start()
+        await app_.state.recycle_bin_cleaner.start()
         try:
             yield
         finally:
+            await app_.state.recycle_bin_cleaner.stop()
             if start_task_engine:
                 await app_.state.task_engine.stop()
             await engine.dispose()
@@ -90,6 +93,8 @@ def create_app(
             factory=app.state.provider_factory,
         )
     )
+
+    app.state.recycle_bin_cleaner = recycle_bin_service.RecycleBinCleaner(app.state.task_engine)
 
     if settings.cors_origin_list:
         app.add_middleware(

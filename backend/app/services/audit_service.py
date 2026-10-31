@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
-from app.models import AdminAuditLog, Chapter, ChapterVersion, User
+from app.models import AdminAuditLog, Chapter, ChapterVersion, Project, User
 from app.schemas.audit import (
     AuditCleanupOut,
     AuditCleanupPreview,
@@ -23,6 +23,7 @@ from app.schemas.audit import (
     AuditSummary,
     AuditVersionRef,
 )
+from app.services import project_lifecycle
 from app.services.audit_writer import AuditOperation, content_hash
 
 PREVIEW_PURPOSE = "admin_audit_cleanup"
@@ -80,10 +81,12 @@ async def get_log(db: AsyncSession, log_id: int) -> AuditLogDetail:
         version = await db.scalar(
             select(ChapterVersion)
             .join(Chapter, Chapter.id == ChapterVersion.chapter_id)
+            .join(Project, Project.id == Chapter.project_id)
             .where(
                 ChapterVersion.id == ref.version_id,
                 Chapter.id == ref.chapter_id,
                 Chapter.project_id == ref.project_id,
+                *project_lifecycle.active_conditions(),
             )
         )
         status = (

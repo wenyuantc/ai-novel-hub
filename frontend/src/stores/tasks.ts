@@ -45,6 +45,8 @@ interface TasksState {
   track: (task: Task) => void
   /** 本地删除 / 清理已结束任务后调用 */
   bump: () => void
+  /** 目标作品删除/恢复后清理本地旧任务，并使已发出的轮询失效。 */
+  discardProject: (projectId: number) => void
   /** 开始轮询（引用计数），返回停止函数 */
   startPolling: () => () => void
   reset: () => void
@@ -55,6 +57,7 @@ let timer: ReturnType<typeof setTimeout> | null = null
 // 每次请求 / reset 递增：丢弃过期响应（例如切换用户后到达的上一个用户的结果）
 let requestSeq = 0
 let epoch = 0
+const discardedProjects = new Set<number>()
 
 export const useTasksStore = create<TasksState>((set, get) => {
   const schedule = () => {
@@ -75,6 +78,8 @@ export const useTasksStore = create<TasksState>((set, get) => {
       try {
         const list = await taskApi.list({ active: true, limit: 200 })
         if (seq !== requestSeq || myEpoch !== epoch) return
+        // 后端新响应是恢复后新任务的权威来源；迟到的本地 track 不能自行重新挂回旧任务。
+        for (const task of list) if (task.project_id !== null) discardedProjects.delete(task.project_id)
         const prev = get().active
         const finished = countFinished(prev, list)
         set({ active: list, loaded: true, version: finished > 0 ? get().version + 1 : get().version })
@@ -86,11 +91,19 @@ export const useTasksStore = create<TasksState>((set, get) => {
     },
 
     track: (task) => {
+      if (task.project_id !== null && discardedProjects.has(task.project_id)) { void get().refresh(); return }
       set({ active: upsertActive(get().active, task), version: get().version + 1 })
       void get().refresh()
     },
 
     bump: () => set({ version: get().version + 1 }),
+
+    discardProject: (projectId) => {
+      ++requestSeq
+      discardedProjects.add(projectId)
+      set({ active: get().active.filter((task) => task.project_id !== projectId), version: get().version + 1 })
+      void get().refresh()
+    },
 
     startPolling: () => {
       pollers += 1
@@ -109,6 +122,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
 
     reset: () => {
       epoch += 1
+      discardedProjects.clear()
       if (timer) clearTimeout(timer)
       timer = null
       set({ active: [], loaded: false, version: get().version + 1 })

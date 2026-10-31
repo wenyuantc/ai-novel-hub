@@ -7,7 +7,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import NotFoundError
-from app.models import AIConfig, Chapter, GenerationLog, Project, Task
+from app.models import AIConfig, Chapter, GenerationLog, Task
+from app.services import project_lifecycle
 from app.services.chapter_service import get_project_chapter
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,8 @@ async def save_log(sessionmaker: async_sessionmaker[AsyncSession], **kwargs: Any
     """在独立会话中写一条记录并提交（失败 / 取消路径使用）；出错只记日志，不向上抛。"""
     try:
         async with sessionmaker() as db:
-            if await db.get(Project, kwargs["project_id"]) is None:
+            project = await project_lifecycle.lock_record(db, kwargs["project_id"])
+            if project.deleted_at is not None:
                 return None
             log = await write_log(db, **kwargs)
             await db.commit()

@@ -43,7 +43,13 @@ from app.models import (
 from app.models.entities import LIFE_STATUSES
 from app.schemas.analysis import AnalysisChangeOut
 from app.schemas.foreshadow import ForeshadowOverrides
-from app.services import career_service, foreshadow_service, organization_service, relationship_service
+from app.services import (
+    career_service,
+    foreshadow_service,
+    organization_service,
+    project_lifecycle,
+    relationship_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -441,14 +447,16 @@ async def list_changes(db: AsyncSession, analysis_id: int) -> list[AnalysisChang
     return list(rows)
 
 
-async def get_owned_change(db: AsyncSession, user_id: int, change_id: int) -> AnalysisChange:
+async def get_owned_change(db: AsyncSession, user_id: int, change_id: int, *, lock: bool = False) -> AnalysisChange:
     change = await db.scalar(
         select(AnalysisChange)
         .join(Project, Project.id == AnalysisChange.project_id)
-        .where(AnalysisChange.id == change_id, Project.user_id == user_id)
+        .where(AnalysisChange.id == change_id, Project.user_id == user_id, *project_lifecycle.active_conditions())
     )
     if change is None:
         raise NotFoundError("回写条目不存在")
+    if lock:
+        await project_lifecycle.lock_active(db, change.project_id)
     return change
 
 
@@ -473,7 +481,7 @@ async def _finish(db: AsyncSession, change: AnalysisChange) -> AnalysisChangeOut
 
 
 async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> AnalysisChangeOut:
-    change = await get_owned_change(db, user_id, change_id)
+    change = await get_owned_change(db, user_id, change_id, lock=True)
     if change.status != "applied":
         raise ConflictError("只能撤销已写入的条目")
     pid, t = change.project_id, change.target or {}
@@ -565,7 +573,7 @@ async def confirm_change(
     db: AsyncSession, user_id: int, change_id: int, overrides: ForeshadowOverrides | None = None
 ) -> AnalysisChangeOut:
     """确认待确认条目。overrides 只对 foreshadow_new 生效（其他类型忽略）。"""
-    change = await get_owned_change(db, user_id, change_id)
+    change = await get_owned_change(db, user_id, change_id, lock=True)
     if change.status != "pending":
         raise ConflictError("只能确认待确认的条目")
     pid, t = change.project_id, dict(change.target or {})
@@ -646,7 +654,7 @@ async def _confirm_foreshadow(db: AsyncSession, change: AnalysisChange, override
 
 
 async def reject_change(db: AsyncSession, user_id: int, change_id: int) -> AnalysisChangeOut:
-    change = await get_owned_change(db, user_id, change_id)
+    change = await get_owned_change(db, user_id, change_id, lock=True)
     if change.status != "pending":
         raise ConflictError("只能拒绝待确认的条目")
     change.status = "rejected"

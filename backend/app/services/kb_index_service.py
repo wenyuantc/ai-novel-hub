@@ -24,10 +24,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.providers import AIProviderError, ProviderFactory
-from app.core.errors import BadRequestError, NotFoundError
+from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
 from app.models import KbChunk, KbDocument, Project, RetrievalChunk, Task
-from app.services import kb_parser, retrieval_service
+from app.services import kb_parser, project_lifecycle, retrieval_service
 from app.services.project_service import get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder
 
@@ -71,7 +71,7 @@ async def validate_index_task(db: AsyncSession, *, user_id: int, params: dict[st
     if mode not in MODES:
         raise BadRequestError("建索引模式不正确")
     project_id = int(params["project_id"])
-    project = await get_owned_project(db, user_id, project_id)
+    project = await get_owned_project(db, user_id, project_id, lock=True)
     request: dict[str, Any] = {"project_id": project_id, "mode": mode}
     if mode == "document":
         doc = await kb_service.get_project_document(db, user_id, project_id, int(params["document_id"]))
@@ -103,7 +103,11 @@ async def enqueue_memory(sessionmaker: async_sessionmaker[AsyncSession], project
         return None
     async with sessionmaker() as db:
         project = await db.get(Project, project_id)
-        if project is None:
+        if project is None or project.deleted_at is not None or project.deletion_started_at is not None:
+            return None
+        try:
+            await project_lifecycle.lock_active(db, project_id)
+        except (ConflictError, NotFoundError):
             return None
         cfg = await retrieval_service.default_embedding_config(db, project.user_id)
         if cfg is None:
@@ -151,7 +155,7 @@ async def build_index_job(
 ) -> IndexJob:
     request = dict((task.input or {}).get("request") or {})
     project_id = int(request["project_id"])
-    project = await db.get(Project, project_id)
+    project = await db.scalar(select(Project).where(Project.id == project_id, *project_lifecycle.active_conditions()))
     if project is None or project.user_id != task.user_id:
         raise NotFoundError("项目不存在")
     mode: Mode = request.get("mode", "document")
@@ -397,3 +401,4 @@ async def on_abort(sessionmaker: async_sessionmaker[AsyncSession], task: Task) -
             await db.commit()
     except Exception:  # noqa: BLE001
         logger.exception("建索引任务 %s 回退文档状态失败", task.id)
+        raise

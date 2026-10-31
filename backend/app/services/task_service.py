@@ -8,20 +8,23 @@ handler 可选钩子（getattr 探测）：
 - checkpoint_out(task) -> dict | None：TaskOut.checkpoint 的取值（默认原样返回断点；断点体积大的类型只给摘要）。
 """
 
+import asyncio
 import bisect
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任务类型
 from app.core.errors import ConflictError, NotFoundError
-from app.models import Task
+from app.models import Chapter, Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
 from app.schemas.skill import SkillRef
 from app.schemas.task import TaskOut
+from app.services import project_lifecycle
+from app.services.project_service import get_owned_project
 from app.services.task_engine.registry import get_handler
 
 if TYPE_CHECKING:
@@ -40,6 +43,19 @@ STAGE_LABELS = {
     "interrupted": "已中断",
 }
 ACTIVE_CONFLICT = "已有任务在进行中，请等待其完成后再试"
+
+
+def visible_project_condition():
+    return or_(
+        Task.project_id.is_(None),
+        Project.id.is_not(None) & Project.deleted_at.is_(None) & Project.deletion_started_at.is_(None),
+    )
+
+
+def visible_task_project_exists():
+    return or_(Task.project_id.is_(None), exists(
+        select(Project.id).where(Project.id == Task.project_id, *project_lifecycle.active_conditions())
+    ))
 
 
 # ---------------- 序列化 ----------------
@@ -130,6 +146,8 @@ async def create_task(
         spec = await validate_retry(db, engine.ctx, user_id=user_id, task=retry_of)
     else:
         spec = await handler.validate_and_claim(db, engine.ctx, user_id=user_id, kind=kind, params=params)
+    if spec.project_id is not None:
+        await get_owned_project(db, user_id, spec.project_id, lock=True)
     task = Task(
         user_id=user_id,
         project_id=spec.project_id,
@@ -169,6 +187,8 @@ async def retry_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_
 async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
     """待审核 → 排队：同一任务（id、断点不变）从下一步继续；下一步的上下文在运行时按最新数据重新组装。"""
     task = await get_owned_task(db, user_id, task_id)
+    if task.project_id is not None:
+        await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status != "paused":
         raise ConflictError("只有待审核的任务可以继续")
     hook = getattr(get_handler(task.kind), "revalidate_resume", None)
@@ -196,6 +216,8 @@ async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
 async def finish_paused_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
     """待审核 → 已完成（提前结束）：剩余步骤不再执行。"""
     task = await get_owned_task(db, user_id, task_id)
+    if task.project_id is not None:
+        await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status != "paused":
         raise ConflictError("只有待审核的任务可以结束")
     hook = getattr(get_handler(task.kind), "finish_result", None)
@@ -217,7 +239,9 @@ async def finish_paused_task(db: AsyncSession, engine: "TaskEngine", user_id: in
 
 
 async def get_owned_task(db: AsyncSession, user_id: int, task_id: int) -> Task:
-    task = await db.scalar(select(Task).where(Task.id == task_id, Task.user_id == user_id))
+    task = await db.scalar(select(Task).where(
+        Task.id == task_id, Task.user_id == user_id, visible_task_project_exists()
+    ))
     if task is None:
         raise NotFoundError("任务不存在")
     return task
@@ -246,7 +270,7 @@ async def list_tasks(
     active: bool | None = None,
     limit: int = 50,
 ) -> list[TaskOut]:
-    stmt = select(Task).where(Task.user_id == user_id)
+    stmt = select(Task).where(Task.user_id == user_id, visible_task_project_exists())
     if project_id is not None:
         stmt = stmt.where(Task.project_id == project_id)
     if chapter_id is not None:
@@ -271,6 +295,16 @@ async def list_tasks(
 
 async def cancel_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
     task = await get_owned_task(db, user_id, task_id)
+    return await _cancel_loaded_task(db, engine, task)
+
+
+async def _cancel_loaded_task(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
+    """调用者已核实归属或删除项目范围；只共享取消，不伪装成目标 owner。"""
+    with engine.cleanup_scope(task):
+        return await _cancel_loaded_impl(db, engine, task)
+
+
+async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
     if task.status == "queued":
         result = await db.execute(
             update(Task)
@@ -280,9 +314,9 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
         await db.commit()
         if result.rowcount == 1:
             # 先把任务置为终态再还原资源：避免与调度器的领取竞争（领取成功则下面走运行中取消）
-            await get_handler(task.kind).on_abort(engine.ctx, task)
+            await _abort_loaded_task(engine, task)
             await db.refresh(task)
-            await prune_finished(db, user_id)
+            await prune_finished(db, task.user_id)
             engine.close_hub(task.id, "error", {"task": out_json(task), "detail": task.error})
             engine.notify()
             return to_out(task)
@@ -296,15 +330,26 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
         await db.commit()
         if result.rowcount == 1:
             # 待审核时没有执行体，资源也已释放；on_abort 幂等，照常调用
-            await get_handler(task.kind).on_abort(engine.ctx, task)
+            await _abort_loaded_task(engine, task)
             await db.refresh(task)
-            await prune_finished(db, user_id)
+            await prune_finished(db, task.user_id)
             return to_out(task)
         await db.refresh(task)
         if task.status == "queued":
             # 与继续竞争：已重新排队，按排队中取消
-            return await cancel_task(db, engine, user_id, task_id)
+            return await _cancel_loaded_task(db, engine, task)
     if task.status == "running":
+        execution = engine._running.get(task.id)
+        if execution is None or execution.done():
+            # 结束状态落库曾失败的孤立 running；单进程中已无执行体，可重试幂等收尾。
+            await _abort_loaded_task(engine, task)
+            await db.execute(update(Task).where(Task.id == task.id, Task.status == "running").values(
+                status="cancelled", error="任务已取消", stage=STAGE_LABELS["cancelled"], finished_at=func.now()
+            ))
+            await db.commit()
+            await db.refresh(task)
+            engine.close_hub(task.id, "error", {"task": out_json(task), "detail": task.error})
+            return to_out(task)
         await engine.cancel_running(task.id)
         await db.refresh(task)
         return await task_out(db, engine, task)
@@ -313,6 +358,8 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
 
 async def delete_task(db: AsyncSession, user_id: int, task_id: int) -> None:
     task = await get_owned_task(db, user_id, task_id)
+    if task.project_id is not None:
+        await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status == "paused":
         raise ConflictError("任务待审核，无法删除，请先结束或取消")
     if task.status not in FINISHED_TASK_STATUSES:
@@ -321,25 +368,114 @@ async def delete_task(db: AsyncSession, user_id: int, task_id: int) -> None:
     await db.commit()
 
 
+async def _lock_history_projects(db: AsyncSession, user_id: int, project_ids: set[int]) -> set[int]:
+    locked = set()
+    for project_id in sorted(project_ids):
+        try:
+            await get_owned_project(db, user_id, project_id, lock=True)
+        except (NotFoundError, ConflictError):
+            # 查询候选行后可能刚建立删除屏障；跳过该项目而不是破坏回收站历史。
+            continue
+        locked.add(project_id)
+    return locked
+
+
 async def clear_finished(db: AsyncSession, user_id: int, *, project_id: int | None = None) -> int:
-    stmt = delete(Task).where(Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES))
+    statement = select(Task.project_id).where(
+        Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists()
+    )
     if project_id is not None:
-        stmt = stmt.where(Task.project_id == project_id)
-    result = await db.execute(stmt)
+        statement = statement.where(Task.project_id == project_id)
+    candidates = set(await db.scalars(statement))
+    locked = await _lock_history_projects(db, user_id, candidates - {None})
+    allowed = or_(Task.project_id.in_(locked), Task.project_id.is_(None) if None in candidates else False)
+    statement = delete(Task).where(
+        Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists(), allowed
+    )
+    result = await db.execute(statement)
     await db.commit()
     return result.rowcount or 0
 
 
 async def prune_finished(db: AsyncSession, user_id: int) -> None:
-    """每个用户只保留最近 MAX_FINISHED_PER_USER 个已结束任务（按 id）。"""
-    stale = list(
-        await db.scalars(
-            select(Task.id)
-            .where(Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES))
-            .order_by(Task.id.desc())
-            .offset(MAX_FINISHED_PER_USER)
-        )
-    )
-    if stale:
-        await db.execute(delete(Task).where(Task.id.in_(stale)))
+    """回收站历史不参与普通用户已结束任务裁剪；锁住将被裁剪的父项目直到提交。"""
+    stale = (await db.execute(
+        select(Task.id, Task.project_id)
+        .where(Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists())
+        .order_by(Task.id.desc()).offset(MAX_FINISHED_PER_USER)
+    )).all()
+    if not stale:
+        return
+    locked = await _lock_history_projects(db, user_id, {pid for _, pid in stale if pid is not None})
+    ids = [tid for tid, pid in stale if pid is None or pid in locked]
+    if ids:
+        await db.execute(delete(Task).where(Task.id.in_(ids), visible_task_project_exists()))
         await db.commit()
+
+
+async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id: int) -> int:
+    """准入已冻结后排空整个项目执行链；统一超时但不二次 cancel 引擎执行体。"""
+    stopped: set[int] = set()
+    retry_abort = project_id in engine._abort_failures
+    engine._abort_failures.discard(project_id)
+    try:
+        async with asyncio.timeout(engine.cancel_wait_seconds):
+            if retry_abort:
+                aborted = list(await db.scalars(select(Task).where(
+                    Task.project_id == project_id, Task.status.in_(("cancelled", "failed", "interrupted"))
+                )))
+                for task in aborted:
+                    with engine.cleanup_scope(task):
+                        await _abort_loaded_task(engine, task)
+            while True:
+                tasks = list(await db.scalars(select(Task).where(
+                    Task.project_id == project_id, Task.status.in_(OPEN_TASK_STATUSES)
+                ).execution_options(populate_existing=True)))
+                for task in tasks:
+                    try:
+                        await _cancel_loaded_task(db, engine, task)
+                        stopped.add(task.id)
+                    except ConflictError:
+                        # 状态可能刚被其他取消/正常完成改变；下一轮重新检查。
+                        await db.rollback()
+                work = engine.project_work(project_id)
+                if work:
+                    await db.rollback()
+                    await asyncio.wait(work)
+                    continue
+                remaining = await db.scalar(select(Task.id).where(
+                    Task.project_id == project_id, Task.status.in_(OPEN_TASK_STATUSES)
+                ).limit(1))
+                if remaining is None:
+                    break
+                await db.rollback()
+                await asyncio.sleep(0)
+            if project_id in engine._abort_failures:
+                raise ConflictError("任务收尾失败，作品未删除", extra={"code": "project_tasks_not_stopped"})
+            generating = await db.scalar(select(Chapter.id).where(
+                Chapter.project_id == project_id, Chapter.status == "generating"
+            ).limit(1))
+            if generating is not None:
+                raise ConflictError("章节生成状态尚未安全收尾，作品未删除", extra={"code": "project_tasks_not_stopped"})
+    except TimeoutError as exc:
+        raise ConflictError(
+            "等待任务停止超时，作品未删除；已取消任务不会自动恢复，请稍后重试",
+            extra={"code": "project_tasks_not_stopped"},
+        ) from exc
+    except ConflictError:
+        raise
+    except Exception:
+        raise ConflictError(
+            "任务收尾失败，作品未删除；已取消任务不会自动恢复",
+            extra={"code": "project_tasks_not_stopped"},
+        ) from None
+    return len(stopped)
+
+
+async def _abort_loaded_task(engine: "TaskEngine", task: Task) -> None:
+    try:
+        await get_handler(task.kind).on_abort(engine.ctx, task)
+    except Exception:
+        if task.project_id is not None:
+            engine._abort_failures.add(task.project_id)
+        raise

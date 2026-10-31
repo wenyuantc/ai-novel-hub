@@ -403,6 +403,14 @@ async def test_delete_user_cascades(app, admin_client, client):
     await create_ai_config(client)
     uid = (await find_user(admin_client, "alice"))["id"]
 
+    assert (await admin_client.delete(f"{USERS}/{uid}")).status_code == 409
+    assert (await client.delete(f"/api/v1/projects/{p['id']}")).status_code == 204
+    assert (await admin_client.delete(f"{USERS}/{uid}")).status_code == 409
+    recycled = (await admin_client.get("/api/v1/admin/recycle-bin/projects")).json()["items"][0]
+    assert (await admin_client.post(
+        f"/api/v1/admin/recycle-bin/projects/{p['id']}/purge",
+        json={"deleted_at": recycled["deleted_at"], "title": recycled["title"], "confirm": True},
+    )).status_code == 204
     assert (await admin_client.delete(f"{USERS}/{uid}")).status_code == 204
     assert (await client.get("/api/v1/auth/me")).status_code == 401
     async with app.state.sessionmaker() as db:

@@ -13,7 +13,7 @@ from app.services.project_service import WRITTEN, get_manageable_project, get_ow
 
 async def save_progress(db: AsyncSession, user_id: int, project_id: int, data: ReadingProgressIn) -> None:
     """整体替换进度；章节必须属于该项目（否则 404）。不改项目的 updated_at（书架「最近更新」不因阅读而变化）。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     chapter_no = await db.scalar(
         select(Chapter.chapter_no).where(Chapter.id == data.chapter_id, Chapter.project_id == project_id)
     )

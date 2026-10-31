@@ -14,7 +14,7 @@ import pytest  # noqa: E402
 
 from app.ai import endpoint_guard  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.models import Base  # noqa: E402
+from app.models import Base, User  # noqa: E402
 from app.services import retrieval_service  # noqa: E402
 from tests.helpers import FakeLLM, make_settings  # noqa: E402
 
@@ -90,3 +90,15 @@ async def make_client(app):
     yield _make
     for c in clients:
         await c.aclose()
+
+
+@pytest.fixture
+async def recycle_admin(app, make_client):
+    from tests.helpers import register
+
+    client = make_client()
+    user = await register(client, "recycle_manager")
+    async with app.state.sessionmaker() as db:
+        (await db.get(User, user["id"])).is_admin = True
+        await db.commit()
+    return client

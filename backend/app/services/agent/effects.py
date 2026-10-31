@@ -28,7 +28,7 @@ from app.models import (
     StoryMemory,
     Task,
 )
-from app.services import memory_service, retrieval_service, version_service
+from app.services import memory_service, project_lifecycle, retrieval_service, version_service
 from app.services.chapter_service import count_words
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
 
@@ -125,7 +125,8 @@ def _columns(rule: TableRule):
     table = rule.model.__table__
     if rule.table in _LINK_ONLY:
         return [table.c[name] for name in ("id", "project_id", "chapter_id")]
-    return [col for col in table.columns if col.name not in _IGNORED and col.name != "word_count"]
+    ignored = _IGNORED | project_lifecycle.LIFECYCLE_FIELDS if rule.model is Project else _IGNORED
+    return [col for col in table.columns if col.name not in ignored and col.name != "word_count"]
 
 
 def _row(rule: TableRule, mapping) -> dict:

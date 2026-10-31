@@ -143,7 +143,7 @@ async def preview_import(db: AsyncSession, user_id: int, project_id: int, data: 
 async def import_outline(
     db: AsyncSession, user_id: int, project_id: int, req: OutlineImportRequest
 ) -> OutlineImportResult:
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     parsed = parse_outline_file(req.data)
     characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
     mapping, unresolved, warnings = _resolve_characters(parsed, characters)

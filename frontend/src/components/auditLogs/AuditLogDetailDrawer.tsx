@@ -7,7 +7,7 @@ import type { AuditLogDetail, ChapterVersion } from '../../api/types'
 import { useModalWidth } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
 import { useAuthStore } from '../../stores/auth'
-import { auditSummaryRows, auditTargetLabel, createAuditRequestGate } from '../../utils/auditLogs'
+import { auditActorLabel, auditSummaryRows, auditTargetLabel, createAuditRequestGate } from '../../utils/auditLogs'
 import { formatTime } from '../../utils/time'
 
 interface Props {
@@ -33,7 +33,7 @@ export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, vers
     <Descriptions size="small" column={1} bordered>
       <Descriptions.Item label="日志 ID">#{log.id}</Descriptions.Item>
       <Descriptions.Item label="发生时间">{formatTime(log.occurred_at, 'YYYY-MM-DD HH:mm:ss.SSS [UTC]Z')}</Descriptions.Item>
-      <Descriptions.Item label="真实操作人">{log.actor_username} · #{log.actor_user_id}</Descriptions.Item>
+      <Descriptions.Item label="真实操作人">{auditActorLabel(log)}</Descriptions.Item>
       <Descriptions.Item label="动作">{AUDIT_ACTION[log.action]}<br /><Typography.Text type="secondary">{log.action}</Typography.Text></Descriptions.Item>
       <Descriptions.Item label="结果"><Tag color={result.color}>{result.label}</Tag>{log.action === 'audit.cleanup' && <Tag>受保护，不可清除</Tag>}</Descriptions.Item>
       <Descriptions.Item label="目标快照">{auditTargetLabel(log)}</Descriptions.Item>

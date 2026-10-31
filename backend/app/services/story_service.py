@@ -99,7 +99,7 @@ async def _get_item(db: AsyncSession, kind: StoryKind, project_id: int, item_id:
 async def create_owned(
     db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, data: BaseModel, *, manage: bool = False
 ) -> Any:
-    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id)
+    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id, lock=True)
     values = data.model_dump()
     if kind is CHARACTERS:
         apply_character_defaults(values)
@@ -122,6 +122,7 @@ async def update_owned(
     *,
     manage: bool = False,
 ) -> Any:
+    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id, lock=True)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     for field, value in data.model_dump(exclude_unset=True).items():
         if value is not None:
@@ -134,6 +135,7 @@ async def update_owned(
 async def delete_owned(
     db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int, *, manage: bool = False
 ) -> None:
+    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id, lock=True)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     await db.delete(item)
     await db.commit()

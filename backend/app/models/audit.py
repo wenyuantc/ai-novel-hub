@@ -20,7 +20,7 @@ class AdminAuditLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     operation_id: Mapped[str] = mapped_column(String(36), unique=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    actor_user_id: Mapped[int] = mapped_column(Integer)
+    actor_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor_username: Mapped[str] = mapped_column(String(64))
     action: Mapped[str] = mapped_column(String(64))
     result: Mapped[str] = mapped_column(String(8))

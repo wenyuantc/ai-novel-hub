@@ -15,11 +15,29 @@ from app.models import (
     RelationshipHistory,
     RelationshipType,
 )
-from tests.helpers import create_project, register
+from tests.helpers import create_project, purge_trashed_project, register
+
+
+def _synchronize_write_admission(monkeypatch, service):
+    """父项目锁会串行化同项目写入，双请求屏障必须放在取锁前。"""
+    original = service.get_manageable_project
+    arrived = 0
+    ready = asyncio.Event()
+
+    async def admitted(db, user_id, project_id, **kwargs):
+        nonlocal arrived
+        if kwargs.get("lock"):
+            arrived += 1
+            if arrived == 2:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 5)
+        return await original(db, user_id, project_id, **kwargs)
+
+    monkeypatch.setattr(service, "get_manageable_project", admitted)
 
 
 async def test_concurrent_pair_creation_returns_conflict_and_rolls_back(app, client, make_client, monkeypatch):
-    """两个请求都通过查重后竞争 flush：数据库唯一约束也必须返回中文 409。"""
+    """并发准入与陈旧查重结合：父锁不能死锁，唯一约束仍返回中文409且不留部分历史。"""
     from app.services import relationship_service as svc
 
     base = await _setup(client)
@@ -28,21 +46,9 @@ async def test_concurrent_pair_creation_returns_conflict_and_rolls_back(app, cli
     second = make_client()
     login = await second.post("/api/v1/auth/login", json={"username": "alice", "password": "secret123"})
     assert login.status_code == 200
-    original = svc.find_pair
-    arrived = 0
-    ready = asyncio.Event()
-
-    async def simultaneous_find_pair(db, a_id, b_id):
-        nonlocal arrived
-        found = await original(db, a_id, b_id)
-        if found is None:
-            arrived += 1
-            if arrived == 2:
-                ready.set()
-            await asyncio.wait_for(ready.wait(), 5)
-        return found
-
-    monkeypatch.setattr(svc, "find_pair", simultaneous_find_pair)
+    _synchronize_write_admission(monkeypatch, svc)
+    # 正常查重已被父锁串行化；显式陈旧查询继续覆盖数据库唯一约束兜底。
+    monkeypatch.setattr(svc, "find_pair", AsyncMock(return_value=None))
     body = {"items": [{"a_id": a["id"], "b_id": b["id"], "type_id": type_id, "source": "ai_generate"}]}
     responses = await asyncio.gather(
         client.post(f"{base}/relationships/batch", json=body),
@@ -70,7 +76,7 @@ async def test_relationship_commit_preserves_unrelated_integrity_errors():
 
 @pytest.mark.parametrize("same_pair", [True, False])
 async def test_concurrent_custom_type_returns_conflict_and_rolls_back(app, client, make_client, monkeypatch, same_pair):
-    """首次保存相同自定义称呼时，类型唯一约束先于角色对约束发生竞争。"""
+    """并发请求准入后模拟陈旧类型查重，仍验证类型唯一冲突的409和整批回滚。"""
     from app.services import relationship_service as svc
 
     base = await _setup(client)
@@ -79,20 +85,8 @@ async def test_concurrent_custom_type_returns_conflict_and_rolls_back(app, clien
     login = await second.post("/api/v1/auth/login", json={"username": "alice", "password": "secret123"})
     assert login.status_code == 200
     original = svc.find_type
-    arrived = 0
-    ready = asyncio.Event()
-
-    async def simultaneous_find_type(db, project_id, role_a, role_b):
-        nonlocal arrived
-        found = await original(db, project_id, role_a, role_b)
-        if found[0] is None:
-            arrived += 1
-            if arrived == 2:
-                ready.set()
-            await asyncio.wait_for(ready.wait(), 5)
-        return found
-
-    monkeypatch.setattr(svc, "find_type", simultaneous_find_type)
+    _synchronize_write_admission(monkeypatch, svc)
+    monkeypatch.setattr(svc, "find_type", AsyncMock(return_value=(None, False)))
     body = {
         "items": [{"a_id": a["id"], "b_id": b["id"], "role_a": "引路人", "role_b": "同行者", "source": "ai_generate"}]
     }
@@ -110,6 +104,7 @@ async def test_concurrent_custom_type_returns_conflict_and_rolls_back(app, clien
     assert await _count(app, RelationshipHistory) == 1
     assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
     if not same_pair:
+        monkeypatch.setattr(svc, "find_type", original)
         retry_body = body if responses[0].status_code == 409 else second_body
         retry = await client.post(f"{base}/relationships/batch", json=retry_body)
         assert retry.status_code == 201, retry.text
@@ -363,7 +358,7 @@ async def test_relationship_perspective_unique_history_and_cascade(app, client):
     assert await _count(app, ChapterCharacter) == 0
 
 
-async def test_relationship_types(app, client):
+async def test_relationship_types(app, client, recycle_admin):
     base = await _setup(client)
     types = (await client.get(f"{base}/relationship-types")).json()
     assert len(types) == 20 and all(t["builtin"] for t in types)
@@ -404,12 +399,17 @@ async def test_relationship_types(app, client):
     resp = await client.post(f"{obase}/relationships", json={"a_id": x["id"], "b_id": a["id"], "type_id": preset})
     assert resp.status_code == 400
 
-    # 使用中的自定义类型不妨碍删除整个项目；项目下的类型、关系、历史、组织、成员、出场记录一并清理
+    # 软删保留关联图；只有显式purge才清理类型、关系、历史、组织、成员、出场记录。
     org = (await client.post(f"{base}/organizations", json={"name": "宗门"})).json()
     await client.post(f"{base}/organizations/{org['id']}/members", json={"character_id": a["id"]})
     ch = (await client.post(f"{base}/chapters", json={"title": "一"})).json()
     await client.put(f"{base}/chapters/{ch['id']}/cast", json={"character_ids": [a["id"], b["id"]]})
     assert (await client.delete(base)).status_code == 204
+    assert (await client.get(f"{base}/relationships")).status_code == 404
+    assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
+    assert await _count(app, Relationship) == 1
+    assert await _count(app, OrganizationMember) == 1
+    await purge_trashed_project(recycle_admin, int(base.rsplit("/", 1)[1]))
     assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 0
     assert await _count(app, RelationshipType) == 20
     assert await _count(app, Relationship) == 0

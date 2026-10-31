@@ -8,12 +8,13 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import Query
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 
 from app.core.security import SecretCipher
 from app.models import ApiKey, ApiKeyProject, User
-from tests.helpers import create_project, register
+from tests.helpers import create_project, purge_trashed_project, register
 
 KEYS = "/api/v1/api-keys"
 PROBE = "/_test/api-key"
@@ -166,7 +167,7 @@ async def test_only_x_api_key_authenticates_open_api_and_not_internal_api(client
 
 
 async def test_novel_authorization_and_deleted_selection_do_not_expand_access(
-    client, make_client, open_api_probe
+    app, client, make_client, open_api_probe, recycle_admin
 ):
     await register(client)
     allowed = await create_project(client)
@@ -184,9 +185,29 @@ async def test_novel_authorization_and_deleted_selection_do_not_expand_access(
         assert result.json()["detail"] == "小说不存在"
     assert (await client.delete(f"/api/v1/projects/{allowed['id']}")).status_code == 204
     assert (await anonymous.get(PROBE, headers=headers)).json()["project_ids"] == []
+    assert (await anonymous.get(f"{PROBE}/projects/{allowed['id']}", headers=headers)).status_code == 404
     assert (await anonymous.get(f"{PROBE}/projects/{denied['id']}", headers=headers)).status_code == 404
     listing = (await client.get(KEYS)).json()[0]
     assert listing["all_projects"] is False and listing["project_ids"] == []
+    # 仅投影隐藏，不撤销真实授权；改名也不能丢掉隐藏授权，恢复后自动重新可用。
+    assert (await client.patch(f"{KEYS}/{created['id']}", json={"name": "改名保留授权"})).json()["project_ids"] == []
+    async with app.state.sessionmaker() as db:
+        retained = await db.scalar(
+            select(ApiKeyProject.project_id).where(ApiKeyProject.api_key_id == created["id"])
+        )
+        assert retained == allowed["id"]
+    row = next(
+        item for item in (await recycle_admin.get("/api/v1/admin/recycle-bin/projects")).json()["items"]
+        if item["id"] == allowed["id"]
+    )
+    assert (await recycle_admin.post(
+        f"/api/v1/admin/recycle-bin/projects/{allowed['id']}/restore",
+        json={"deleted_at": row["deleted_at"], "confirm": True},
+    )).status_code == 204
+    assert (await anonymous.get(PROBE, headers=headers)).json()["project_ids"] == [allowed["id"]]
+    assert (await anonymous.get(f"{PROBE}/projects/{allowed['id']}", headers=headers)).status_code == 200
+    assert (await client.get(KEYS)).json()[0]["project_ids"] == [allowed["id"]]
+    assert (await anonymous.get(f"{PROBE}/projects/{denied['id']}", headers=headers)).status_code == 404
 
 
 async def test_expired_keys_can_be_revealed_and_extended_but_revocation_erases_ciphertext(
@@ -372,10 +393,21 @@ async def test_encryption_key_change_keeps_mask_and_auth_but_prevents_reveal(
     assert (await anonymous.get(PROBE, headers={"X-API-Key": created["key"]})).status_code == 200
 
 
-async def test_user_deletion_cascades_keys_and_grants(client, app, make_client, open_api_probe):
+async def test_user_deletion_cascades_keys_only_after_projects_are_purged(
+    client, app, make_client, open_api_probe, recycle_admin
+):
     user = await register(client)
     novel = await create_project(client)
     created = await create_key(client, all_projects=False, project_ids=[novel["id"]])
+    async with app.state.sessionmaker() as db:
+        await db.delete(await db.get(User, user["id"]))
+        with pytest.raises(IntegrityError):
+            await db.commit()
+        await db.rollback()
+        assert await db.get(ApiKey, created["id"]) is not None
+        assert await db.scalar(select(func.count()).select_from(ApiKeyProject)) == 1
+    assert (await client.delete(f"/api/v1/projects/{novel['id']}")).status_code == 204
+    await purge_trashed_project(recycle_admin, novel["id"])
     async with app.state.sessionmaker() as db:
         saved_user = await db.get(User, user["id"])
         await db.delete(saved_user)

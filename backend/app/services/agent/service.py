@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
@@ -25,7 +26,7 @@ from app.schemas.agent import (
     TurnChangesOut,
 )
 from app.schemas.chapter_version import GenerationLogOut
-from app.services import project_service, task_service
+from app.services import project_lifecycle, project_service, task_service
 from app.services.agent import effects, mcp_tools, transactions
 from app.services.agent.tools import get_tool
 from app.services.agent.tools.base import ToolCtx
@@ -88,9 +89,9 @@ def conversation_lock(conversation_id: int) -> asyncio.Lock:
 
 
 async def owned_conversation(
-    db: AsyncSession, user_id: int, project_id: int, conversation_id: int
+    db: AsyncSession, user_id: int, project_id: int, conversation_id: int, *, lock: bool = False
 ) -> AgentConversation:
-    await project_service.get_owned_project(db, user_id, project_id)
+    await project_service.get_owned_project(db, user_id, project_id, lock=lock)
     row = await db.scalar(
         select(AgentConversation)
         .where(
@@ -133,7 +134,7 @@ async def list_conversations(db: AsyncSession, user_id: int, project_id: int) ->
 async def create_conversation(
     db: AsyncSession, user_id: int, project_id: int, req: ConversationCreate
 ) -> ConversationOut:
-    await project_service.get_owned_project(db, user_id, project_id)
+    await project_service.get_owned_project(db, user_id, project_id, lock=True)
     previous = await db.scalar(
         select(AgentConversation)
         .where(
@@ -177,7 +178,7 @@ async def get_conversation(
 async def update_conversation(
     db: AsyncSession, user_id: int, project_id: int, conversation_id: int, req: ConversationUpdate
 ) -> ConversationOut:
-    row = await owned_conversation(db, user_id, project_id, conversation_id)
+    row = await owned_conversation(db, user_id, project_id, conversation_id, lock=True)
     if req.title is not None:
         if not req.title.strip():
             raise BadRequestError("会话标题不能为空")
@@ -231,7 +232,7 @@ async def list_generation_logs(
 
 async def delete_conversation(db: AsyncSession, user_id: int, project_id: int, conversation_id: int) -> None:
     async with conversation_lock(conversation_id):
-        row = await owned_conversation(db, user_id, project_id, conversation_id)
+        row = await owned_conversation(db, user_id, project_id, conversation_id, lock=True)
         if await active_turn(db, row.id):
             raise ConflictError("会话有进行中或待确认的轮次，无法删除")
         await db.delete(row)
@@ -242,7 +243,7 @@ async def send_message(
     db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, conversation_id: int, req: SendMessage
 ) -> MessageAccepted:
     async with conversation_lock(conversation_id):
-        row = await owned_conversation(db, user_id, project_id, conversation_id)
+        row = await owned_conversation(db, user_id, project_id, conversation_id, lock=True)
         # handler 内再次持锁校验，避免其他创建入口绕过约束。
         if await active_turn(db, row.id):
             raise ConflictError("当前会话已有进行中或待确认的轮次")
@@ -257,6 +258,7 @@ async def send_message(
                 "conversation_id": conversation_id,
             },
         )
+        await project_service.get_owned_project(db, user_id, project_id, lock=True)
         stored = await db.get(Task, task.id)
         message = await db.get(AgentMessage, stored.input["message_id"])
         message.turn_task_id = task.id
@@ -265,8 +267,10 @@ async def send_message(
         return MessageAccepted(message=MessageOut.model_validate(message), task=task)
 
 
-async def owned_change(db: AsyncSession, user_id: int, project_id: int, change_id: int) -> AgentChange:
-    await project_service.get_owned_project(db, user_id, project_id)
+async def owned_change(
+    db: AsyncSession, user_id: int, project_id: int, change_id: int, *, lock: bool = False
+) -> AgentChange:
+    await project_service.get_owned_project(db, user_id, project_id, lock=lock)
     change = await db.scalar(
         select(AgentChange)
         .join(
@@ -281,8 +285,8 @@ async def owned_change(db: AsyncSession, user_id: int, project_id: int, change_i
     return change
 
 
-async def _turn(db: AsyncSession, user_id: int, project_id: int, task_id: int) -> Task:
-    await project_service.get_owned_project(db, user_id, project_id)
+async def _turn(db: AsyncSession, user_id: int, project_id: int, task_id: int, *, lock: bool = False) -> Task:
+    await project_service.get_owned_project(db, user_id, project_id, lock=lock)
     task = await task_service.get_owned_task(db, user_id, task_id)
     if task.kind != "agent.turn" or task.project_id != project_id:
         raise NotFoundError("智能体轮次不存在")
@@ -295,9 +299,10 @@ async def execute_change(
     """调用方负责会话互斥与提交；savepoint 保证返回 error 的工具也不会留下部分修改。"""
     if change.status != "proposed":
         return change
+    await project_service.get_owned_project(db, user_id, change.project_id, lock=True)
     if change.kind == "external":
         return await _execute_external(db, task_context, change, user_id=user_id, compare_preview=compare_preview)
-    project = await project_service.get_owned_project(db, user_id, change.project_id)
+    project = await project_service.get_owned_project(db, user_id, change.project_id, lock=True)
     tool = get_tool(change.tool_name)
     if tool is None:
         raise BadRequestError("工具不存在")
@@ -380,7 +385,17 @@ def _preview_changed(change: AgentChange) -> ConflictError:
     )
 
 
-async def _execute_external(
+async def _execute_external(db, task_context, change, *, user_id, compare_preview):
+    task = await db.get(Task, change.turn_task_id) if change.turn_task_id else None
+    engine = task_context.task_engine
+    scope = engine.cleanup_scope(task) if engine is not None and task is not None else nullcontext()
+    with scope:
+        return await _execute_external_impl(
+            db, task_context, change, user_id=user_id, compare_preview=compare_preview
+        )
+
+
+async def _execute_external_impl(
     db: AsyncSession, task_context: TaskContext, change: AgentChange, *, user_id: int, compare_preview: bool
 ) -> AgentChange:
     """外部（MCP）调用：重新读取插件配置生成预览比较；一致才在本请求内调用（单独连接，30 秒超时）。
@@ -432,7 +447,23 @@ async def _execute_external(
         data = {"error": EXTERNAL_INTERRUPTED}
     finally:
         await sessions.aclose()
-    change = await db.get(AgentChange, change.id, populate_existing=True)
+    project_id, change_id = change.project_id, change.id
+    try:
+        await project_service.get_owned_project(db, user_id, project_id, lock=True)
+    except (ConflictError, NotFoundError):
+        # 远端已可能执行，不可撤回；在删除协调等待的请求收尾内保存“结果未知”，不续跑。
+        await db.rollback()
+        try:
+            parent = await project_lifecycle.lock_record(db, project_id)
+        except NotFoundError:
+            raise ConflictError("作品已不可访问，外部调用结果不再写入") from None
+        if parent.deleted_at is None:
+            row = await db.get(AgentChange, change_id, populate_existing=True)
+            if row is not None and row.status == "executing":
+                row.status, row.error, row.result = "failed", EXTERNAL_INTERRUPTED, {"error": EXTERNAL_INTERRUPTED}
+                await db.commit()
+        raise ConflictError("作品正在删除，外部调用结果不再应用") from None
+    change = await db.get(AgentChange, change_id, populate_existing=True)
     if change.status != "executing":
         # 调用期间已被 recover_external 判为中断（只会发生在调用异常地超过时限时）：保留已告知模型的状态
         logger.warning("外部调用提案 %s 完成时已不是 executing（%s），结果不再写入", change.id, change.status)
@@ -449,6 +480,9 @@ async def _execute_external(
 async def maybe_resume(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int | None) -> None:
     if task_id is None:
         return
+    linked = await db.get(Task, task_id)
+    if linked is not None and linked.project_id is not None:
+        await project_service.get_owned_project(db, user_id, linked.project_id, lock=True)
     if await recover_external(db, task_id=task_id):
         await db.commit()
     remaining = await db.scalar(
@@ -471,14 +505,15 @@ async def decide_change(
     confirm: bool,
     resume: bool = True,
 ) -> ChangeOut:
-    initial = await owned_change(db, user_id, project_id, change_id)
+    initial = await owned_change(db, user_id, project_id, change_id, lock=True)
     cid, turn_id = initial.conversation_id, initial.turn_task_id
     await db.rollback()  # 在等待进程锁前释放只读事务和旧快照。
     async with conversation_lock(cid):
+        await owned_change(db, user_id, project_id, change_id, lock=True)
         # 中断的外部调用（进程崩溃 / 请求被取消时停在 executing）先判为失败，否则本轮永远无法继续
         if turn_id is not None and await recover_external(db, task_id=turn_id):
             await db.commit()
-        change = await owned_change(db, user_id, project_id, change_id)
+        change = await owned_change(db, user_id, project_id, change_id, lock=True)
         await db.execute(select(AgentConversation.id).where(AgentConversation.id == cid).with_for_update())
         if change.status == "executing":
             raise ConflictError("修改正在处理中，请刷新后重试")
@@ -502,7 +537,7 @@ async def decide_change(
 async def decide_turn(
     db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, task_id: int, *, confirm: bool
 ) -> TurnChangesOut:
-    await _turn(db, user_id, project_id, task_id)
+    await _turn(db, user_id, project_id, task_id, lock=True)
     ids = list(
         await db.scalars(
             select(AgentChange.id)
@@ -519,7 +554,7 @@ async def decide_turn(
             change = await decide_change(db, engine, user_id, project_id, change_id, confirm=confirm, resume=False)
         except AppError as exc:
             error = exc.detail
-            changes.append(ChangeOut.model_validate(await owned_change(db, user_id, project_id, change_id)))
+            changes.append(ChangeOut.model_validate(await owned_change(db, user_id, project_id, change_id, lock=True)))
             break
         changes.append(change)
         if change.status == "failed":
@@ -533,6 +568,7 @@ async def decide_turn(
 async def _undo_changes(
     db: AsyncSession, user_id: int, project_id: int, rows: list[AgentChange], engine: "TaskEngine | None" = None
 ) -> list[ChangeOut]:
+    await project_service.get_owned_project(db, user_id, project_id, lock=True)
     if any(row.kind == "external" for row in rows):
         raise BadRequestError("外部操作无法撤销")
     if any(row.kind == "task" for row in rows):
@@ -570,11 +606,11 @@ async def _undo_changes(
 async def undo_change(
     db: AsyncSession, user_id: int, project_id: int, change_id: int, *, engine: "TaskEngine | None" = None
 ) -> ChangeOut:
-    initial = await owned_change(db, user_id, project_id, change_id)
+    initial = await owned_change(db, user_id, project_id, change_id, lock=True)
     cid = initial.conversation_id
     await db.rollback()
     async with conversation_lock(cid):
-        row = await owned_change(db, user_id, project_id, change_id)
+        row = await owned_change(db, user_id, project_id, change_id, lock=True)
         if row.status == "undone":
             return ChangeOut.model_validate(row)
         task = await active_turn(db, cid)
@@ -586,11 +622,11 @@ async def undo_change(
 async def undo_turn(
     db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, task_id: int
 ) -> TurnChangesOut:
-    task = await _turn(db, user_id, project_id, task_id)
+    task = await _turn(db, user_id, project_id, task_id, lock=True)
     cid = task.input["request"]["conversation_id"]
     await db.rollback()
     async with conversation_lock(cid):
-        await _turn(db, user_id, project_id, task_id)
+        await _turn(db, user_id, project_id, task_id, lock=True)
         active = await active_turn(db, cid)
         if active and active.status != "paused":
             raise ConflictError("请等待智能体暂停或结束后撤销")

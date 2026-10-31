@@ -206,6 +206,18 @@ async def create_project(client: httpx.AsyncClient, **kw) -> dict:
     return resp.json()
 
 
+async def purge_trashed_project(admin: httpx.AsyncClient, project_id: int) -> None:
+    """仅清理测试中已明确软删除的作品，走真实管理员精确确认接口。"""
+    listing = await admin.get("/api/v1/admin/recycle-bin/projects", params={"page_size": 100})
+    assert listing.status_code == 200, listing.text
+    row = next(item for item in listing.json()["items"] if item["id"] == project_id)
+    response = await admin.post(
+        f"/api/v1/admin/recycle-bin/projects/{project_id}/purge",
+        json={"deleted_at": row["deleted_at"], "title": row["title"], "confirm": True},
+    )
+    assert response.status_code == 204, response.text
+
+
 async def create_ai_config(client: httpx.AsyncClient, **kw) -> dict:
     body = {
         "name": "测试模型",

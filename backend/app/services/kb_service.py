@@ -71,7 +71,7 @@ async def get_settings(db: AsyncSession, user_id: int, project_id: int) -> KbSet
 
 
 async def update_settings(db: AsyncSession, user_id: int, project_id: int, data: KbSettingsUpdate) -> KbSettingsOut:
-    await get_manageable_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id, lock=True)
     row = await db.get(KbSettings, project_id)
     if row is None:
         row = default_settings(project_id)
@@ -113,7 +113,7 @@ async def upload_document(
 ) -> KbUploadResult:
     from app.services import task_service
 
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     if len(data) > kb_parser.MAX_FILE_BYTES:
         raise BadRequestError(kb_parser.TOO_LARGE)
     filename = _clean_filename(filename)
@@ -156,6 +156,7 @@ async def chunk_ids_of(db: AsyncSession, document_id: int) -> list[int]:
 
 
 async def set_inject(db: AsyncSession, user_id: int, project_id: int, document_id: int, inject: bool) -> KbDocumentOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     doc = await get_project_document(db, user_id, project_id, document_id)
     if doc.inject != inject:
         doc.inject = inject
@@ -186,6 +187,7 @@ def doc_resource_key(document_id: int) -> str:
 
 
 async def delete_document(db: AsyncSession, user_id: int, project_id: int, document_id: int) -> None:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     doc = await get_project_document(db, user_id, project_id, document_id)
     if await _active_doc_task(db, doc.id) is not None:
         raise ConflictError("该文档正在建索引，请等待完成或取消任务后再删除")
@@ -197,7 +199,7 @@ async def delete_document(db: AsyncSession, user_id: int, project_id: int, docum
 async def reindex_document(db: AsyncSession, engine, user_id: int, project_id: int, document_id: int):
     from app.services import task_service
 
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     doc = await get_project_document(db, user_id, project_id, document_id)
     if await _active_doc_task(db, doc.id) is not None:
         raise ConflictError("该文档正在建索引，请稍候再试")
@@ -378,6 +380,7 @@ async def index_status(db: AsyncSession, user_id: int, project_id: int) -> Index
 
 
 async def start_rebuild(db: AsyncSession, engine, user_id: int, project_id: int):
+    await get_owned_project(db, user_id, project_id, lock=True)
     from app.services import task_service
 
     return await task_service.create_task(

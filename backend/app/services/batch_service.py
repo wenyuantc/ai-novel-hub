@@ -231,7 +231,7 @@ async def validate_start(
     db: AsyncSession, ctx: "TaskContext", *, user_id: int, project_id: int, req: BatchGenerateRequest
 ) -> dict[str, Any]:
     """发起前同步校验；返回 TaskSpec 所需字段。不修改数据。"""
-    project = await get_owned_project(db, user_id, project_id)
+    project = await get_owned_project(db, user_id, project_id, lock=True)
     chapters, _, _ = await _range_chapters(db, project.id, req)
     ai_config_id = await _check_config(db, ctx, user_id, req.ai_config_id)
     await style_service.validate_choice(db, user_id, req.style)

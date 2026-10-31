@@ -223,7 +223,7 @@ async def validate_outline_task(
     allow_private: bool,
 ) -> tuple[int, str, str]:
     """创建任务时同步校验；返回 (ai_config_id, 标题, resource_key)。不修改任何数据。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     if kind == "outline.expand":
         req = OutlineExpandRequest.model_validate(params)
         outline_id = int(params["outline_id"])

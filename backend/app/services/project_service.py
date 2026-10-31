@@ -1,13 +1,13 @@
 import math
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
 from app.core.errors import ForbiddenError, NotFoundError
-from app.models import Chapter, ChapterVersion, Project, ProjectCover, User, WritingStyle
+from app.models import Chapter, Project, ProjectCover, User, WritingStyle
 from app.schemas.project import (
     ProjectCreate,
     ProjectOut,
@@ -17,29 +17,38 @@ from app.schemas.project import (
     WizardProgress,
     WizardProgressUpdate,
 )
-from app.services import style_service
+from app.services import project_lifecycle, style_service
+
+if TYPE_CHECKING:
+    from app.services.task_engine.engine import TaskEngine
 from app.services.audit_writer import AuditOperation
 
 
-async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
-    """按 user_id 校验归属；他人项目与不存在统一返回 404，避免泄露存在性。"""
-    project = await db.scalar(select(Project).where(Project.id == project_id, Project.user_id == user_id))
-    if project is None:
+async def get_owned_project(
+    db: AsyncSession, user_id: int, project_id: int, *, lock: bool = False
+) -> Project:
+    """严格拥有权；读生命周期时刷新 identity map，修改入口显式请求父行锁。"""
+    project = await project_lifecycle.load_record(db, project_id)
+    if project is None or project.user_id != user_id:
         raise NotFoundError("项目不存在")
-    return project
+    project_lifecycle.ensure_active(project)
+    return await project_lifecycle.lock_active(db, project_id) if lock else project
 
 
-async def get_manageable_project(db: AsyncSession, actor_user_id: int, project_id: int) -> Project:
+async def get_manageable_project(
+    db: AsyncSession, actor_user_id: int, project_id: int, *, lock: bool = False
+) -> Project:
     """人工内容权限：所有者或当前启用管理员；不用于 AI、任务或账户私有资源。"""
-    project = await db.get(Project, project_id)
+    project = await project_lifecycle.load_record(db, project_id)
     if project is not None:
-        if project.user_id == actor_user_id:
-            return project
-        admin = await db.scalar(
-            select(User.id).where(User.id == actor_user_id, User.is_admin.is_(True), User.is_active.is_(True))
-        )
-        if admin is not None:
-            return project
+        admin = None
+        if project.user_id != actor_user_id:
+            admin = await db.scalar(
+                select(User.id).where(User.id == actor_user_id, User.is_admin.is_(True), User.is_active.is_(True))
+            )
+        if project.user_id == actor_user_id or admin is not None:
+            project_lifecycle.ensure_active(project)
+            return await project_lifecycle.lock_active(db, project_id) if lock else project
     raise NotFoundError("项目不存在")
 
 
@@ -173,7 +182,7 @@ async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
             .outerjoin(stats, stats.c.project_id == Project.id)
             .outerjoin(WritingStyle, WritingStyle.id == Project.default_style_id)
             .outerjoin(ProjectCover, ProjectCover.project_id == Project.id)
-            .where(Project.user_id == user_id)
+            .where(Project.user_id == user_id, *project_lifecycle.active_conditions())
             .order_by(Project.updated_at.desc(), Project.id.desc())
         )
     ).all()
@@ -235,7 +244,7 @@ async def update_project(
 ) -> tuple[Project, str | None]:
     """返回 (项目, 兼容提示)。default_style_id 显式 null = 取消默认风格；style（已废弃）更新「原风格」。"""
     async with AuditOperation(db, user_id, "project.update", "project", project_id, project_id=project_id) as audit:
-        project = await get_manageable_project(db, user_id, project_id)
+        project = await get_manageable_project(db, user_id, project_id, lock=True)
         audit.target(project)
         audit.track(project, data.model_fields_set)
         fields = data.model_fields_set
@@ -259,24 +268,12 @@ async def update_project(
         return project, notice
 
 
-async def delete_project(db: AsyncSession, user_id: int, project_id: int) -> None:
-    async with AuditOperation(db, user_id, "project.delete", "project", project_id, project_id=project_id) as audit:
-        project = await get_manageable_project(db, user_id, project_id)
-        audit.target(project)
-        if audit.enabled:
-            audit.summary.chapter_count = int(
-                await db.scalar(select(func.count(Chapter.id)).where(Chapter.project_id == project_id)) or 0
-            )
-            audit.summary.version_count = int(
-                await db.scalar(
-                    select(func.count(ChapterVersion.id))
-                    .join(Chapter, Chapter.id == ChapterVersion.chapter_id)
-                    .where(Chapter.project_id == project_id)
-                )
-                or 0
-            )
-        await db.delete(project)
-        await audit.commit()
+async def delete_project(
+    db: AsyncSession, user_id: int, project_id: int, *, engine: "TaskEngine"
+) -> None:
+    from app.services.recycle_bin_service import move_to_recycle_bin
+
+    await move_to_recycle_bin(db, engine, user_id, project_id)
 
 
 def _clean_steps(values: list[str]) -> list[str]:
@@ -292,7 +289,7 @@ async def update_wizard_progress(
     db: AsyncSession, user_id: int, project_id: int, data: WizardProgressUpdate
 ) -> Project:
     """给出的字段整体替换，未给的保持不变；current 显式 null 清空。"""
-    project = await get_owned_project(db, user_id, project_id)
+    project = await get_owned_project(db, user_id, project_id, lock=True)
     current = WizardProgress.model_validate(project.wizard_progress or {})
     fields = data.model_fields_set
     if data.done is not None:

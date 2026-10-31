@@ -2,7 +2,6 @@ import asyncio
 import base64
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.images import validate_image
@@ -26,10 +25,7 @@ async def get_cover(db: AsyncSession, user_id: int, project_id: int) -> ProjectC
 
 
 async def _lock_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
-    project = await project_service.get_manageable_project(db, user_id, project_id)
-    # 锁父项目也涵盖首次上传（此时封面行不存在），串行化同一项目的上传和删除。
-    await db.execute(select(Project.id).where(Project.id == project.id).with_for_update())
-    return project
+    return await project_service.get_manageable_project(db, user_id, project_id, lock=True)
 
 
 async def put_cover(db: AsyncSession, user_id: int, project_id: int, data: bytes) -> ProjectOut:

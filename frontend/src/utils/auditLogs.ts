@@ -33,6 +33,11 @@ export function auditTargetLabel(log: { target_type: keyof typeof AUDIT_TARGET; 
   return `${AUDIT_TARGET[log.target_type]}${log.target_id === null ? '' : ` #${log.target_id}`}${log.target_label ? ` · ${log.target_label}` : ''}`
 }
 
+/** 系统清理没有用户 ID；不能展示 #null 或把它伪装成历史管理员。 */
+export function auditActorLabel(log: { actor_username: string; actor_user_id: number | null }): string {
+  return log.actor_user_id === null ? `${log.actor_username}（系统）` : `${log.actor_username} · #${log.actor_user_id}`
+}
+
 /** 清理后当前页失效时回退最后有效页，保留筛选和每页条数。 */
 export function auditValidPage(page: number, total: number, pageSize: number): number {
   return Math.max(1, Math.min(page, Math.ceil(total / pageSize)))
@@ -60,6 +65,10 @@ export interface AuditSummaryRow { label: string; value: string }
 /** 审计摘要的唯一展示投影，不把摘要误称为全文差异，也不读取任意 JSON 字段。 */
 export function auditSummaryRows(summary: AuditSummary): AuditSummaryRow[] {
   const rows: AuditSummaryRow[] = [{ label: '变更字段', value: summary.changed_fields.map((field) => AUDIT_FIELD[field]).join('、') || '无字段变更 / 不适用' }]
+  const lifecycleLabels = { soft_delete: '移入回收站', restore: '恢复作品', purge: '手动彻底删除', expire: '到期自动清理' } as const
+  if (summary.lifecycle_action) rows.push({ label: '作品生命周期动作', value: lifecycleLabels[summary.lifecycle_action] })
+  if (summary.retention_days != null) rows.push({ label: '保留期限', value: `${summary.retention_days} 天` })
+  if (summary.cancelled_task_count != null) rows.push({ label: '取消任务数', value: String(summary.cancelled_task_count) })
   const scalar = (value: boolean | number | AuditSafeState | null) => value === null ? '无' : typeof value === 'boolean' ? (value ? '是' : '否') : typeof value === 'string' ? AUDIT_STATE[value] : String(value)
   for (const change of summary.changes) rows.push({ label: AUDIT_FIELD[change.field], value: `${scalar(change.before)} → ${scalar(change.after)}` })
   for (const [label, before, after] of [

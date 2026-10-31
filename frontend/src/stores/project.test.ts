@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { projectApi } from '../api/projects'
+import { ApiError } from '../api/client'
 import type { Project } from '../api/types'
 import { useProjectStore } from './project'
 
@@ -16,6 +17,41 @@ function deferred<T>() {
 afterEach(() => { useProjectStore.getState().reset(); vi.restoreAllMocks() })
 
 describe('当前项目归属隔离', () => {
+  it('重新读取或刷新明确404时撤下旧项目，迟到保存不能复活已删除内容', async () => {
+    const get = vi.spyOn(projectApi, 'get').mockResolvedValueOnce(project(1)).mockRejectedValueOnce(new ApiError(404, '项目不存在'))
+    await useProjectStore.getState().load(1)
+    await useProjectStore.getState().load(1)
+    expect(useProjectStore.getState().project).toBeNull()
+    useProjectStore.getState().setProject(project(1))
+    expect(useProjectStore.getState().project).toBeNull()
+    get.mockResolvedValueOnce(project(1)).mockRejectedValueOnce(new ApiError(404, '项目不存在'))
+    await useProjectStore.getState().load(1)
+    await useProjectStore.getState().refresh()
+    expect(useProjectStore.getState().project).toBeNull()
+    useProjectStore.getState().setProject(project(1))
+    expect(useProjectStore.getState().project).toBeNull()
+  })
+
+  it('临时网络刷新失败仍保留当前作品与未保存页面状态', async () => {
+    vi.spyOn(projectApi, 'get').mockResolvedValueOnce(project(1)).mockRejectedValueOnce(new ApiError(0, '网络错误'))
+    await useProjectStore.getState().load(1)
+    await useProjectStore.getState().refresh()
+    expect(useProjectStore.getState().project).toEqual(project(1))
+  })
+  it('删除只作废目标项目，并丢弃其迟到加载与保存响应', async () => {
+    const slow = deferred<Project>()
+    vi.spyOn(projectApi, 'get').mockResolvedValueOnce(project(2)).mockReturnValueOnce(slow.promise)
+    await useProjectStore.getState().load(2)
+    useProjectStore.getState().discard(1)
+    expect(useProjectStore.getState().project?.id).toBe(2)
+    const loading = useProjectStore.getState().load(1)
+    useProjectStore.getState().discard(1)
+    slow.resolve(project(1))
+    await loading
+    useProjectStore.getState().setProject(project(1))
+    expect(useProjectStore.getState().project).toBeNull()
+    expect(useProjectStore.getState().loading).toBe(false)
+  })
   it('先打开的慢请求不能覆盖后来打开项目的内容和归属', async () => {
     const slow = deferred<Project>()
     vi.spyOn(projectApi, 'get').mockImplementation((id) => id === 1 ? slow.promise : Promise.resolve(project(2)))

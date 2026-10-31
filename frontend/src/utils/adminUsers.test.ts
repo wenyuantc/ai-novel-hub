@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { AdminUser, User } from '../api/types'
 import { adminGuard, canConfirmDelete, rowActions } from './adminUsers'
+import { userDeleteBlockReason, userProjectCountFromError } from './adminUsers'
+import { ApiError } from '../api/client'
 
 const admin: User = { id: 1, username: 'root', is_admin: true, created_at: '2026-10-23T00:00:00' }
 const normal: User = { ...admin, id: 2, username: 'alice', is_admin: false }
@@ -44,6 +46,19 @@ describe('rowActions', () => {
     const a = rowActions(row({ is_active: false }), 1)
     expect(a.isSelf).toBe(false)
     expect([a.canResetPassword, a.canToggleActive, a.canToggleAdmin, a.canDelete]).toEqual([true, true, true, true])
+  })
+  it('含回收站在内还有作品时不可删号，但仍可禁用账号', () => {
+    const value = row({ project_count: 3 })
+    expect(rowActions(value, 1).canDelete).toBe(false)
+    expect(rowActions(value, 1).canToggleActive).toBe(true)
+    expect(userDeleteBlockReason(value)).toContain('3 部作品（含回收站及待清理作品）')
+    expect(userDeleteBlockReason(row())).toBeNull()
+  })
+  it('并发删号冲突只读取安全的非负整数计数', () => {
+    expect(userProjectCountFromError(new ApiError(409, '仍有作品', { code: 'user_has_projects', project_count: 2 }))).toBe(2)
+    for (const count of [-1, 1.5, '2', true, null, Number.NaN, Number.POSITIVE_INFINITY]) expect(userProjectCountFromError(new ApiError(409, '冲突', { project_count: count }))).toBeNull()
+    expect(userProjectCountFromError(new ApiError(500, '故障', { project_count: 2 }))).toBeNull()
+    expect(userProjectCountFromError(new Error('网络错误'))).toBeNull()
   })
 })
 

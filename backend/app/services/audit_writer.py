@@ -53,7 +53,7 @@ class AuditOperation:
     def __init__(
         self,
         db: AsyncSession,
-        actor: User | int,
+        actor: User | int | None,
         action: AuditAction,
         target_type: AuditTargetType,
         target_id: int | None = None,
@@ -61,9 +61,15 @@ class AuditOperation:
         project_id: int | None = None,
         enabled: bool = True,
         operation_id: str | None = None,
+        include_own_project: bool = False,
+        system_expiry: bool = False,
     ):
         self.db = db
-        self.actor_id = actor if isinstance(actor, int) else actor.id
+        if system_expiry and (actor is not None or action != "project.expire"):
+            raise ValueError("系统身份仅允许内部到期清理")
+        self.system_expiry = system_expiry
+        self.include_own_project = include_own_project
+        self.actor_id = actor if isinstance(actor, int) or actor is None else actor.id
         self.enabled = enabled
         self.committed = False
         self.operation_id = operation_id or str(uuid4())
@@ -76,17 +82,19 @@ class AuditOperation:
     async def __aenter__(self):
         if not self.enabled:
             return self
-        actor = await self.db.get(User, self.actor_id)
-        self.enabled = bool(actor and actor.is_admin and actor.is_active)
+        actor = await self.db.get(User, self.actor_id) if self.actor_id is not None else None
+        self.enabled = self.system_expiry or bool(actor and actor.is_admin and actor.is_active)
         if not self.enabled:
             return self
-        self.values.update(actor_user_id=actor.id, actor_username=actor.username)
+        self.values.update(
+            actor_user_id=actor.id if actor is not None else None,
+            actor_username=actor.username if actor is not None else "系统自动清理",
+        )
         project_id = self.values.get("project_id")
         if project_id is not None:
-            # 仅已核实启用管理员可读这些项目；普通用户不做额外查询。
             project = await self.db.get(Project, project_id)
             if project is not None:
-                if project.user_id == actor.id:
+                if actor is not None and project.user_id == actor.id and not self.include_own_project:
                     self.enabled = False
                 else:
                     self.values.update(project_title=project.title, owner_user_id=project.user_id)
@@ -188,7 +196,7 @@ class AuditOperation:
         self.committed = True  # 必须在任何 refresh/输出投影之前设置。
 
     def _propagate(self, exc):
-        if isinstance(exc, AppError):
+        if isinstance(exc, AppError) or not isinstance(exc, Exception):
             return False
         # 不把原始 SQLAlchemy 异常（其中可能有正文/密码 SQL 参数）交给全局 traceback logger。
         logger.error("管理员操作发生系统错误 operation=%s committed=%s", self.operation_id, self.committed)

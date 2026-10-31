@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
-from sqlalchemy import inspect, update
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError, NotFoundError
@@ -54,14 +54,9 @@ async def lock_project(db: AsyncSession, project_id: int, user_id: int) -> None:
 
     显式保留 updated_at，防止 SQLAlchemy onupdate 将无值变化的行锁变成项目编辑。
     """
-    result = await db.execute(
-        update(Project)
-        .where(Project.id == project_id, Project.user_id == user_id)
-        .values(id=Project.id, updated_at=Project.updated_at)
-        .execution_options(synchronize_session=False)
-    )
-    if result.rowcount != 1:
-        raise NotFoundError("不存在")
+    from app.services.project_service import get_owned_project
+
+    await get_owned_project(db, user_id, project_id, lock=True)
 
 
 class EmptyArgs(BaseModel):

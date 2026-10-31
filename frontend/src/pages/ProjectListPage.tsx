@@ -1,8 +1,7 @@
 import { AppstoreOutlined, BulbOutlined, CloudUploadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Input, Select, Skeleton, Spin } from 'antd'
+import { Alert, Button, Input, Select, Skeleton, Spin } from 'antd'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { errorMessage } from '../api/client'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
 import type { Project } from '../api/types'
 import ExportModal from '../components/ExportModal'
@@ -10,6 +9,7 @@ import { StudioEmpty, StudioPage, StudioPanel } from '../components/StudioUI'
 import ContinueWriting from '../components/shelf/ContinueWriting'
 import CreateProjectModal from '../components/shelf/CreateProjectModal'
 import LibraryBookCard from '../components/shelf/LibraryBookCard'
+import DeleteProjectModal from '../components/project/DeleteProjectModal'
 import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
 import { DEFAULT_SHELF_PREFS, filterAndSort, latestWritingProject, readShelfPrefs, SHELF_SORT_OPTIONS, shelfStats, writeShelfPrefs, type ShelfPrefs, type ShelfStatusFilter } from '../utils/shelf'
@@ -21,7 +21,6 @@ const STATUS_FILTERS: { value: ShelfStatusFilter; label: string }[] = [{ value: 
 
 /** 真实作品书库：横向作品卡片，沿用作品 API、阅读进度及全部原有作品操作。 */
 export default function ProjectListPage() {
-  const { message, modal } = App.useApp()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const author = useAuthStore((s) => s.user?.username)
@@ -30,6 +29,7 @@ export default function ProjectListPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [exportId, setExportId] = useState<number | null>(null)
   const [backupId, setBackupId] = useState<number | null>(null)
+  const [deleting, setDeleting] = useState<Project | null>(null)
   const [prefs, setPrefs] = useState<ShelfPrefs>(readShelfPrefs)
   useEffect(() => writeShelfPrefs(prefs), [prefs])
   const visible = useMemo(() => filterAndSort(projects, prefs), [projects, prefs])
@@ -43,13 +43,6 @@ export default function ProjectListPage() {
     else next.delete('create')
     setSearchParams(next, { replace: !open })
   }
-  const remove = (project: Project) => modal.confirm({
-    title: `删除《${project.title}》？`, content: '作品下的世界观、角色、大纲和全部章节都将被删除，且无法恢复。请先保存需要的备份。', okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
-    onOk: async () => {
-      try { await projectApi.remove(project.id); message.success('已删除'); reload() }
-      catch (err) { message.error(errorMessage(err)); throw err }
-    },
-  })
   const hint = loading && !projects.length ? '正在载入你的作品…' : error && !projects.length ? '暂时无法读取作品，请重试。' : `${stats.count} 部作品 · ${stats.words.toLocaleString()} 字，每个世界都在这里。`
 
   return (
@@ -75,7 +68,7 @@ export default function ProjectListPage() {
             <div className="library-book-footer"><div className="library-book-summary"><Skeleton.Input active size="small" className="library-book-meta-skeleton" /><Skeleton.Button active className="library-book-action-skeleton" /></div></div>
           </div>
         ))}</div> : !error || projects.length > 0 ? (
-          visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} author={author} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => remove(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' }))}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
+          visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} author={author} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => setDeleting(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' }))}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
         ) : null}
       </section>
       <footer className="library-footer">
@@ -86,6 +79,7 @@ export default function ProjectListPage() {
       {exportId !== null && <ExportModal projectId={exportId} open onClose={() => setExportId(null)} />}
       {backupId !== null && <Suspense fallback={null}><BackupModal projectId={backupId} onClose={() => setBackupId(null)} /></Suspense>}
       {importOpen && <Suspense fallback={null}><ImportBackupModal onClose={() => setImportOpen(false)} onImported={(project) => { setImportOpen(false); navigate(`/projects/${project.id}`) }} /></Suspense>}
+      {deleting && <DeleteProjectModal key={deleting.id} project={deleting} onClose={() => setDeleting(null)} onDeleted={() => { setDeleting(null); reload() }} />}
       <CreateProjectModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={(id) => navigate(`/projects/${id}/wizard`)} />
     </StudioPage>
   )

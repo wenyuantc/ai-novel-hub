@@ -464,7 +464,7 @@ async def test_tasks_cross_user_404(app, client, make_client, fake_llm):
 
 @pytest.mark.parametrize("settings_overrides", [{"task_max_per_user": 1}])
 async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm):
-    """订阅中的排队任务随项目被级联删除：订阅收到 error {task: null, detail: 任务不存在} 后结束，hub 被释放。"""
+    """作品软删除先取消排队任务并关闭订阅，保留行但不能经新订阅读取。"""
     _, _, (ch1,) = await _setup(client)
     p2 = await create_project(client, title="另一个项目")
     ch2 = (await client.post(f"/api/v1/projects/{p2['id']}/chapters", json={"title": "章"})).json()
@@ -483,7 +483,9 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm):
 
     events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
     assert events[0][0] == "snapshot"
-    assert events[-1] == ("error", {"task": None, "detail": "任务不存在"})
+    assert events[-1][0] == "error" and events[-1][1]["detail"] == "任务已取消"
+    assert events[-1][1]["task"]["status"] == "cancelled"
+    assert (await client.get(f"/api/v1/tasks/{t2['id']}")).status_code == 404
     assert t2["id"] not in engine.hubs
 
     # 订阅一个刚被删除的任务（越过归属校验后才消失）：同样以 error 结束而不是空流

@@ -2,7 +2,7 @@ import { DeleteOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useCallback, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { adminApi } from '../api/admin'
 import { PROJECT_STATUS } from '../api/projects'
 import type { AdminProject, ProjectStatus } from '../api/types'
@@ -12,8 +12,10 @@ import { formatTime } from '../utils/time'
 
 /** 实例内项目目录；自己的书架仍只查询当前账户。 */
 export default function AdminProjectsPage() {
+  const [searchParams] = useSearchParams()
+  const initialOwner = Number(searchParams.get('owner_user_id'))
   const [query, setQuery] = useState('')
-  const [ownerId, setOwnerId] = useState<number>()
+  const [ownerId, setOwnerId] = useState<number | undefined>(Number.isSafeInteger(initialOwner) && initialOwner > 0 ? initialOwner : undefined)
   const [ownerSearch, setOwnerSearch] = useState('')
   const [status, setStatus] = useState<ProjectStatus>()
   const [page, setPage] = useState(1)
@@ -36,7 +38,7 @@ export default function AdminProjectsPage() {
   ]
   return <div style={{ maxWidth: 1500, minWidth: 0, margin: '0 auto', padding: 24 }}>
     <Typography.Title level={3} style={{ marginTop: 0 }}>作品管理</Typography.Title>
-    <Typography.Paragraph type="secondary">查看实例内的全部项目，进入项目维护资料、正文和设定。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">查看正常作品，维护资料、正文和设定。删除后保留 30 天，可在<Link to="/admin/recycle-bin">作品回收站</Link>统一恢复或彻底删除。</Typography.Paragraph>
     <Card styles={{ body: { padding: 16, minWidth: 0 } }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
         <Input.Search aria-label="搜索项目或用户" allowClear placeholder="搜索项目名称或用户名" maxLength={200} style={{ width: 280, maxWidth: '100%' }} onSearch={(v) => { setQuery(v.trim()); setPage(1) }} />

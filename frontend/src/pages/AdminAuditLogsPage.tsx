@@ -10,7 +10,7 @@ import AuditLogDetailDrawer from '../components/auditLogs/AuditLogDetailDrawer'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
-import { auditFilterQuery, auditTargetLabel, auditValidPage } from '../utils/auditLogs'
+import { auditActorLabel, auditFilterQuery, auditTargetLabel, auditValidPage } from '../utils/auditLogs'
 import type { AuditFilterValues } from '../utils/auditLogs'
 import { formatTime } from '../utils/time'
 
@@ -29,7 +29,7 @@ export function AuditLogResults({ items, loading, mobile, onDetail }: ResultsPro
   </Space>
   const columns: TableColumnsType<AuditLogBrief> = [
     { title: '时间 / ID', key: 'time', width: 190, render: (_, log) => <>{formatTime(log.occurred_at, 'YYYY-MM-DD HH:mm:ss')}<br /><Typography.Text type="secondary">#{log.id}</Typography.Text></> },
-    { title: '真实操作人', key: 'actor', width: 150, render: (_, log) => <>{log.actor_username}<br /><Typography.Text type="secondary">用户 #{log.actor_user_id}</Typography.Text></> },
+    { title: '真实操作人', key: 'actor', width: 150, render: (_, log) => <span style={{ overflowWrap: 'anywhere' }}>{auditActorLabel(log)}</span> },
     { title: '动作', dataIndex: 'action', width: 180, render: (action: AuditAction) => AUDIT_ACTION[action] },
     { title: '目标快照', key: 'target', width: 260, render: (_, log) => <span style={{ overflowWrap: 'anywhere' }}>{auditTargetLabel(log)}</span> },
     { title: '所属用户 / 作品', key: 'owner', width: 210, render: (_, log) => <span style={{ overflowWrap: 'anywhere' }}>{log.owner_user_id === null ? '不适用 / 未知' : `${log.owner_username ?? '历史用户'} · #${log.owner_user_id}`}<br /><Typography.Text type="secondary">{log.project_id === null ? '—' : `${log.project_title ?? '历史作品'} · #${log.project_id}`}</Typography.Text></span> },
@@ -40,7 +40,7 @@ export function AuditLogResults({ items, loading, mobile, onDetail }: ResultsPro
   return <List loading={loading} dataSource={items} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的审计日志" /> }} renderItem={(log) => <List.Item style={{ display: 'block', overflowWrap: 'anywhere' }}>
     <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}><Typography.Text strong>{AUDIT_ACTION[log.action]}</Typography.Text>{resultTag(log)}</div>
     <Typography.Paragraph style={{ margin: '8px 0 4px' }}>{auditTargetLabel(log)}</Typography.Paragraph>
-    <Typography.Text>操作人：{log.actor_username} · #{log.actor_user_id}</Typography.Text><br />
+    <Typography.Text>操作人：{auditActorLabel(log)}</Typography.Text><br />
     <Typography.Text type="secondary">{formatTime(log.occurred_at, 'YYYY-MM-DD HH:mm:ss')} · 日志 #{log.id}</Typography.Text>
     <div style={{ textAlign: 'right' }}><Button size="small" onClick={() => onDetail(log.id)}>查看详情</Button></div>
   </List.Item>} />
@@ -82,7 +82,7 @@ function AuditLogs({ actorId }: { actorId: number }) {
   const fieldStyle = { flex: '1 1 150px', minWidth: 0, marginBottom: 0 }
   return <div style={{ maxWidth: 1500, minWidth: 0, margin: '0 auto', padding: mobile ? 12 : 24 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
-      <div><Typography.Title level={3} style={{ margin: '0 0 8px' }}>操作日志</Typography.Title><Typography.Text type="secondary">追溯真实管理员、操作对象与结果。长期保留；仅含安全摘要，无正文全文差异。所有时间按浏览器本地时区显示。</Typography.Text></div>
+      <div><Typography.Title level={3} style={{ margin: '0 0 8px' }}>操作日志</Typography.Title><Typography.Text type="secondary">追溯真实管理员或系统清理、操作对象与结果。长期保留；仅含安全摘要，无正文全文差异。所有时间按浏览器本地时区显示。</Typography.Text></div>
       <Space wrap><Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button><Button danger icon={<DeleteOutlined />} onClick={() => setCleanupOpen(true)}>按日期清理</Button></Space>
     </div>
     <Card styles={{ body: { padding: mobile ? 12 : 16, minWidth: 0 } }}>

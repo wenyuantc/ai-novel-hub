@@ -252,7 +252,7 @@ async def get_career(db: AsyncSession, user_id: int, project_id: int, career_id:
 
 
 async def create_career(db: AsyncSession, user_id: int, project_id: int, data: CareerCreate) -> CareerOut:
-    await get_manageable_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id, lock=True)
     career = await new_career(db, project_id, data)
     await _commit(db, NAME_CONFLICT)
     return (await _refreshed_outs(db, [career]))[0]
@@ -260,7 +260,7 @@ async def create_career(db: AsyncSession, user_id: int, project_id: int, data: C
 
 async def create_careers(db: AsyncSession, user_id: int, project_id: int, data: CareerBatchCreate) -> list[CareerOut]:
     """批量新建（AI 生成预览确认后保存），单事务：任一条失败则全部不写入。"""
-    await get_manageable_project(db, user_id, project_id)
+    await get_manageable_project(db, user_id, project_id, lock=True)
     careers = [await new_career(db, project_id, item) for item in data.careers]
     await _commit(db, NAME_CONFLICT)
     return await _refreshed_outs(db, careers)
@@ -269,6 +269,7 @@ async def create_careers(db: AsyncSession, user_id: int, project_id: int, data: 
 async def update_career(
     db: AsyncSession, user_id: int, project_id: int, career_id: int, data: CareerUpdate
 ) -> CareerOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     career = await get_owned_career(db, user_id, project_id, career_id)
     if data.name is not None:
         name = data.name.strip()
@@ -301,6 +302,7 @@ async def update_career(
 
 async def delete_career(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> None:
     """删除职业：阶段、挂接与挂接历史随之级联删除。"""
+    await get_manageable_project(db, user_id, project_id, lock=True)
     career = await get_owned_career(db, user_id, project_id, career_id)
     await db.delete(career)
     await db.commit()
@@ -562,6 +564,7 @@ async def list_project_assignments(db: AsyncSession, user_id: int, project_id: i
 async def assign(
     db: AsyncSession, user_id: int, project_id: int, character_id: int, data: AssignmentCreate
 ) -> AssignmentOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     character = await _owned_character(db, user_id, project_id, character_id)
     career = await get_project_career(db, project_id, data.career_id)
     row = await assign_new(
@@ -582,6 +585,7 @@ async def assign(
 async def update_assignment(
     db: AsyncSession, user_id: int, project_id: int, character_id: int, assignment_id: int, data: AssignmentUpdate
 ) -> AssignmentOut:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     character, row, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
     await apply_assignment(
         db,
@@ -600,6 +604,7 @@ async def update_assignment(
 async def remove_assignment(
     db: AsyncSession, user_id: int, project_id: int, character_id: int, assignment_id: int
 ) -> None:
+    await get_manageable_project(db, user_id, project_id, lock=True)
     character, _, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
     await apply_assignment(db, character, career, remove=True, source="manual")
     await db.commit()

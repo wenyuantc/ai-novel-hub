@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     admin_audit,
+    admin_recycle_bin,
     agent,
     ai_configs,
     analysis,
@@ -41,6 +42,7 @@ api_router.include_router(auth.router)
 api_router.include_router(agent.router)
 api_router.include_router(admin.router)
 api_router.include_router(admin_audit.router)
+api_router.include_router(admin_recycle_bin.router)
 api_router.include_router(ai_configs.router)
 api_router.include_router(api_keys.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}

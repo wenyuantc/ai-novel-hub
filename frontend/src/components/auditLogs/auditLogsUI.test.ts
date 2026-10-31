@@ -32,6 +32,17 @@ afterEach(() => { state.mobile = true; state.admin = true; state.items = []; sta
 
 describe('审计详情只读语义', () => {
   const detail = (value: AuditLogDetail) => render(createElement(AuditLogDetailContent, { log: value, version: null, versionError: null, versionLoading: false, onLoadVersion: noop }))
+  it('到期自动清理明确标识系统而不是 #null，动作与保留摘要可读', () => {
+    const value = log({ action: 'project.expire', actor_user_id: null, actor_username: '系统自动清理', version_ref: null, version_status: null })
+    value.summary.lifecycle_action = 'expire'
+    value.summary.retention_days = 30
+    const html = detail(value)
+    for (const text of ['系统自动清理（系统）', '到期自动清理作品', '30 天']) expect(html).toContain(text)
+    expect(html).not.toContain('#null')
+    const mobile = render(createElement(AuditLogResults, { items: [value], loading: false, mobile: true, onDetail: noop }))
+    expect(mobile).toContain('系统自动清理（系统）')
+    expect(mobile).not.toContain('#null')
+  })
   it('显示真实操作人与历史归属，不把正文或版本备注当成审计全文差异', () => {
     const html = detail(log())
     for (const text of ['已注销的管理员', '原所有者', '旧作品名', '已删除的旧标题', '20 → 28', '不保存正文全文', '不是审计全文快照', '查看关联版本当前正文']) expect(html).toContain(text)

@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Task } from '../api/types'
-import { countFinished, countRunning, POLL_ACTIVE_MS, POLL_IDLE_MS, pollInterval, upsertActive } from './tasks'
+import { countFinished, countRunning, POLL_ACTIVE_MS, POLL_IDLE_MS, pollInterval, upsertActive, useTasksStore } from './tasks'
+import { taskApi } from '../api/tasks'
+
+afterEach(() => { useTasksStore.getState().reset(); vi.restoreAllMocks() })
 
 function task(id: number, status: Task['status'] = 'running'): Task {
   return {
@@ -27,6 +30,25 @@ function task(id: number, status: Task['status'] = 'running'): Task {
 }
 
 describe('tasks store 纯函数', () => {
+  it('作品删除只移除目标任务，旧轮询/迟到track不能重新挂回，恢复后权威新响应可用', async () => {
+    let resolveOld!: (tasks: Task[]) => void
+    const oldResponse = new Promise<Task[]>((resolve) => { resolveOld = resolve })
+    const other = { ...task(2), project_id: 2 }
+    const list = vi.spyOn(taskApi, 'list').mockReturnValueOnce(oldResponse).mockResolvedValue([other])
+    useTasksStore.setState({ active: [task(1), other] })
+    const old = useTasksStore.getState().refresh()
+    useTasksStore.getState().discardProject(1)
+    expect(useTasksStore.getState().active).toEqual([other])
+    useTasksStore.getState().track(task(3))
+    expect(useTasksStore.getState().active).toEqual([other])
+    resolveOld([task(1), other])
+    await old
+    await Promise.resolve()
+    expect(useTasksStore.getState().active).toEqual([other])
+    list.mockResolvedValue([task(4), other])
+    await useTasksStore.getState().refresh()
+    expect(useTasksStore.getState().active).toEqual([task(4), other])
+  })
   it('轮询节奏：有活动任务 3 秒，否则 15 秒', () => {
     expect(POLL_ACTIVE_MS).toBe(3000)
     expect(POLL_IDLE_MS).toBe(15000)

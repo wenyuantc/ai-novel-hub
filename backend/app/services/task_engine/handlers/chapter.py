@@ -146,6 +146,7 @@ class ChapterHandler:
                 await db.commit()
         except Exception:  # noqa: BLE001
             logger.exception("任务 %s 回退章节 %s 状态失败", task.id, chapter_id)
+            raise
 
     async def on_success(self, ctx: TaskContext, task: Task) -> None:
         """正文已被 AI 覆盖：按项目开关自动排队分析本章（D2）。"""

@@ -31,6 +31,7 @@ class TaskContext:
     factory: ProviderFactory
     # MCP 连接工厂 connector(McpTarget, *, allow_private) -> async context manager；测试替换为假实现
     mcp_connector: Any = field(default_factory=_default_mcp_connector)
+    task_engine: Any = field(default=None, repr=False)
 
 
 @dataclass
@@ -70,7 +71,7 @@ class TaskHandler(Protocol):
         ...
 
     async def on_abort(self, ctx: TaskContext, task: Task) -> None:
-        """任务未成功结束（失败 / 取消 / 中断 / 排队中取消）时清理资源；须幂等，自身吞掉异常。"""
+        """任务失败/取消/中断时幂等清理资源，失败须抛出供引擎/删除协调器登记。"""
         ...
 
     # 可选：async def on_success(self, ctx: TaskContext, task: Task) -> None

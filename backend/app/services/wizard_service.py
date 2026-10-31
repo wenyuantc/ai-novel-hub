@@ -160,7 +160,7 @@ async def validate_wizard(
     allow_private: bool,
 ) -> int:
     """创建任务时同步校验归属、AI 配置与端点；返回解析出的 ai_config_id。不修改任何数据。"""
-    await get_owned_project(db, user_id, project_id)
+    await get_owned_project(db, user_id, project_id, lock=True)
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     return cfg.id
