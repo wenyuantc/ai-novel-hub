@@ -834,3 +834,45 @@
 ### Next Steps
 
 - 未推送、未合并；部署前升级目标库至0023，并按部署需要补PostgreSQL并发实测。
+
+
+## Session 27: 作品回收站实施、验收与归档
+<!-- trellis-session: v=2 fp=465e65746f9738bc -->
+
+**Date**: 2026-10-31
+**Task**: 作品回收站实施、验收与归档
+**Branch**: `codex/admin-recycle-bin`
+
+### Summary
+
+完成管理员专用作品回收站、30天保留、安全任务排空及有作品禁删号；本地门禁通过，工作变更已提交、当前任务已归档，用户追加授权合并main并推送。
+
+### Main Changes
+
+- 软删除与30天清理、管理员恢复/精确名称彻删、真实系统审计；0024迁移保留父子数据并保护破坏性降级。
+- 持久删除意图与父项目准入屏障，等待真实任务执行及回调退出；last_deleted_at单调高水位与SQLite不复用项目ID共同防旧请求误删。
+- 所有普通入口隔离回收站，RESTRICT及友好冲突阻止有作品删号；Key可见投影不丢隐藏授权，统一管理页与移动端提示。
+- 新增回收站规范并同步跨层契约；仅归档当前任务，其他6项规划不动；4项原有无关改动保持基线且均未提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `10b23cae2c6280dd8b04e8eada65be153d8cc608` | feat(admin): 新增作品回收站与安全恢复 |
+| `24807922aff358bd8fdc62e133f7e01e6b3fc49c` | docs(admin): 固化回收站契约与验收记录 |
+
+### Testing
+
+- [OK] 后端最终完整套件1143 passed（含21项loopback MCP测试），前端67个文件520 tests passed，最终测试后代码未修改。
+- [OK] Ruff、ESLint、等价TypeScript/Vite生产构建及git diff --check通过；隔离HTTP和真实浏览器验收通过，零真实模型调用，临时服务均停止。
+- [OK] 归档JSONL上下文引用验证通过；工作提交与归档提交暂存范围已精确核验。真实PostgreSQL未实测，标准npm run build仍受原有root-owned生成目录权限阻止，不宣称这两项通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按用户明确授权快进合并到main并正常推送origin/main；本日志为归档后、合并推送前快照，实际结果以最终Git状态核实，不强制推送。
+- 发布前在独立真实PostgreSQL补验带数据迁移、RESTRICT、父行屏障和恢复/清理并发；数据库先备份，新旧版本不混跑。
+- 由环境所有者修复frontend生成目录写权限，再运行原标准构建命令；代码入库不等同于生产发布。
