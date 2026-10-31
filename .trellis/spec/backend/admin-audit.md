@@ -4,7 +4,7 @@
 
 适用于 `admin_audit_logs`、`audit_writer`、`audit_service`、`/admin/audit-logs` 及前端审计页。修改范围内管理写入口或增加动作时，必须同步审计、传输类型、标签及覆盖测试。
 
-首批包括：用户创建/角色状态/重置密码/删除；跨用户作品资料与删除、章节 CRUD/从大纲建章/选角/版本维护；工坊发布/审核/元数据/上下架/删除；全局 Skill 创建/导入/修改/参考资料/内置恢复/删除；审计清理。其他设定子模块、本人日常创作、普通用户行为、AI/任务、私人资源及平台 Key 不自动采集。
+首批包括：用户创建/角色状态/重置密码/删除；跨用户作品资料与删除、章节 CRUD/从大纲建章/选角/版本维护；工坊发布/审核/元数据/上下架/删除；全局 Skill 创建/导入/修改/参考资料/内置恢复/删除；审计清理。0024增加管理员回收站恢复/彻底删除及系统到期清理（见[回收站](./recycle-bin.md)）；其他设定子模块、本人日常创作、普通用户行为、AI/任务、私人资源及平台 Key 不自动采集。
 
 权限沿用 [管理员会话](./auth-admin.md)、[人工作品管理](./admin-projects.md)、[工坊](./workshop.md)、[Skill](./skills-mcp.md)，不扩大读取或管理权限。普通用户和未登录/参数校验失败不记管理员操作。
 
@@ -13,10 +13,11 @@
 ```python
 # backend/app/services/audit_writer.py
 class AuditOperation:
-    def __init__(self, db, actor: User | int, action: AuditAction,
+    def __init__(self, db, actor: User | int | None, action: AuditAction,
                  target_type: AuditTargetType, target_id: int | None = None,
                  *, project_id: int | None = None, enabled: bool = True,
-                 operation_id: str | None = None)
+                 operation_id: str | None = None,
+                 include_own_project: bool = False, system_expiry: bool = False)
     def target(self, obj, *, label: str | None = None)
     def track(self, obj, fields)
     def version(self, version: ChapterVersion | None, project_id: int)
@@ -44,12 +45,14 @@ async def flush_versioned(db) -> None
 
 保留 primitive 快照字段：actor ID/用户名、target 类型/ID/名称、owner ID/用户名、project ID/标题、chapter ID、UTC occurred_at、action/result、summary、version_ref、安全 error_code/error_message。删除业务对象、用户或版本不会级联删审计，也不会抹掉原始标识。
 
+0024允许 `actor_user_id=null` 表示内部 `project.expire` 的「系统自动清理」。前端不得显示 #null 或假管理员ID；原人工历史ID仍保持。只有 `system_expiry=True` 且actor为空、action为project.expire才允许系统身份，客户端不能设置该选项。
+
 ## 3. 契约
 
 ### 写入与结果
 
 - 服务层显式接入，不使用 middleware/ORM 全局监听，也不 monkey-patch session.commit。必须保留真实 actor，不能用 owner 代替。
-- `AuditOperation.__aenter__` 核实当前启用管理员；project_id 指向本人作品时关闭采集。已确认私有 Skill 不采集，且不为审计越过原可见性 helper。
+- `AuditOperation.__aenter__` 核实当前启用管理员；project_id 指向本人作品时默认关闭采集。管理员restore/purge通过局部 `include_own_project=True` 也记录自己的作品，系统expire走专用内部选项；不能因此全局开放本人日常创作采集。已确认私有 Skill 不采集，且不为审计越过原可见性 helper。
 - 业务变更和成功审计共用一次事务。通常通过 audit.commit 设置 committed，再 refresh/构造响应；非审计路径仍按原规则提交。工坊 approve 保留既有例外：在条目/审核锁释放前先 flush/refresh 并生成 output，再 audit.commit。不能为了统一文案把其响应投影移至提交后；提交前投影失败仍整体回滚。
 - 业务 flush 在成功审计入库前完成；调用者传已有业务错误翻译的 flush_fn。章节使用 version_service.flush_versioned，Skill 使用 _flush_unique，审计表自身错误不能被误译成业务唯一键 409。
 - 失败先 rollback，再使用提前保存的安全快照写失败记录。不能在 rollback 后读过期 ORM 属性，不能把未提交的 after 值当作事实。
@@ -63,7 +66,7 @@ async def flush_versioned(db) -> None
 
 `schemas/audit.py` 是唯一后端传输定义；TS 镜像在 `frontend/src/api/types.ts`，标签的唯一来源为 `api/auditLogs.ts`，日期/请求失效工具在 `utils/auditLogs.ts`。
 
-summary 拒绝未知键：changed_fields、受限状态/布尔/数值 changes、正文前后字数、Skill 正文字符数、参考资料数量、affected_count/affected_ids（最多100，ids_truncated）、删除章节/版本数、清理范围/预计/实际条数和高水位。
+summary 拒绝未知键：changed_fields、受限状态/布尔/数值 changes、正文前后字数、Skill 正文字符数、参考资料数量、affected_count/affected_ids（最多100，ids_truncated）、删除章节/版本数、清理范围/预计/实际条数和高水位；0024增加受限 `lifecycle_action`（soft_delete/restore/purge/expire）、`retention_days` 和 `cancelled_task_count`。新project.delete标明软删，既有永久删除历史不重写。
 
 禁止保存密码及哈希/长度、模型与平台 Key 明密文、JWT/Cookie、请求/异常原文、正文全文或 diff、版本备注全文、Skill/工坊正文。target_label 和用户名只作有长度限制的身份快照。
 

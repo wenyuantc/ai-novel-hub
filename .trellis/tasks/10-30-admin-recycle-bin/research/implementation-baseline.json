@@ -1,0 +1,10 @@
+{
+  "head": "d61cfd6b05b44d2c3f33c110f53f3a4680d4849c",
+  "excluded_hashes": {
+    ".codex/config.toml": "e7be6020435e28864179736b623e85db0894d8aa2fde4889f1d3aee19697b994",
+    ".gitignore": "b401c94dfc1295101b37d8b71eb83f5144cee9f6489473b019943f61d65f6c0f",
+    ".agents/skills/source-command-trellis-continue/SKILL.md": "440b97d411beb1b4542db1eaf55855c06c24dc26c7c2ad0a1650ec906814010a",
+    ".agents/skills/source-command-trellis-finish-work/SKILL.md": "07f6348c220b16fd1f0fc28113135856d7e1d242ec4d7e7917f08b6f19df84e5"
+  },
+  "initial_status": " M .codex/config.toml\n M .gitignore\n M .trellis/tasks/10-30-admin-recycle-bin/check.jsonl\n M .trellis/tasks/10-30-admin-recycle-bin/implement.jsonl\n M .trellis/tasks/10-30-admin-recycle-bin/prd.md\n M .trellis/tasks/10-30-admin-recycle-bin/task.json\n?? .agents/skills/source-command-trellis-continue/\n?? .agents/skills/source-command-trellis-finish-work/\n?? .trellis/tasks/10-30-admin-recycle-bin/design.md\n?? .trellis/tasks/10-30-admin-recycle-bin/implement.md\n?? .trellis/tasks/10-30-admin-recycle-bin/research/\n"
+}

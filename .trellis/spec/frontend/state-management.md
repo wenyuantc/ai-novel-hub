@@ -17,8 +17,8 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 | 会话（全局） | `stores/auth.ts` → `useAuthStore` | `status: 'unknown' \| 'authenticated' \| 'anonymous'`、`user`、`registrationEnabled`、`mcpEnabled`（`/auth/config`，读取失败按 true）；actions `init`、`login`、`register`、`logout`、`clear` |
 | 用户级缓存（全局） | `stores/aiConfigs.ts` → `useAIConfigStore` | `configs`、`loaded`、`loading`；`load(force = false)`、`reset()` |
 | 可见 Skill（全局，按需加载） | `stores/skills.ts` → `useSkillStore` / `useSkills()` | `skills`（我的 + 全局的 `SkillBrief`）、`loaded`、`loading`、`error`；`load(force = false)`、`reset()` |
-| 活动任务（全局） | `stores/tasks.ts` → `useTasksStore` | `active`（排队 + 运行中，id 倒序）、`loaded`、`version`；`refresh()`、`track(task)`、`bump()`、`startPolling()`、`reset()` |
-| 当前项目（全局） | `stores/project.ts` → `useProjectStore` | `project`、`loading`、`error`；`load(id)`、`refresh()`、`setProject(p)`、`reset()` |
+| 活动任务（全局） | `stores/tasks.ts` → `useTasksStore` | `active`（排队 + 运行中/待审核，id 倒序）、`loaded`、`version`；`refresh()`、`track(task)`、`bump()`、`discardProject(id)`、`startPolling()`、`reset()` |
+| 当前项目（全局） | `stores/project.ts` → `useProjectStore` | `project`、`loading`、`error`；`load(id)`、`refresh()`、`setProject(p)`、`discard(id)`、`reset()` |
 | 主题（全局，设备级） | `theme/themeStore.ts` → `useThemeStore` | `mode`（`light` / `dark` / `system`，localStorage `ainovel.theme`）、`systemDark`；`setMode`、`setSystemDark`；`useResolvedTheme()`、`watchSystemTheme()` |
 | 本地偏好（localStorage，非 store） | `utils/preferences.ts`、`utils/shelf.ts`、`utils/reader.ts` | `ainovel.autoContinue`；书库 `ainovel.shelf`（`{query, sort, status, view: 'shelf' \| 'list'}`；旧值缺 view 默认 shelf）；阅读设置 `ainovel.reader`（`{fontSize, lineHeight, width, background, font}`）。读写都包 try/catch，读出后经 `parse*` / `normalize*` 校验 |
 | 页面数据（本地） | 页面中的 `useLoader` | 世界观/角色/大纲/章节列表、当前打开的章节、导出用章节列表；组织 / 成员 / 关系 / 关系类型 / 图谱 / 章节出场角色（各面板与抽屉 Tab 各自加载，未做全局缓存，保存后各自 `reload()`） |
@@ -33,9 +33,10 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 
 - `useAuthStore`——由 `RequireAuth`、`LoginPage`、`AppLayout`、`App`、公开 `HomePage` 和 `HomeEntryDialog` 读取。首页只依据认证状态与 `registrationEnabled` 选择入口，不请求私有作品；能力/创作方向/FAQ及欢迎弹窗mode均为页面本地 state，次入口关闭后的焦点意图为组件ref。登录/注册标签由查询串派生，关闭注册时强制登录；切标签保留路由 `state.from`，提交时禁止模式切换。
 - `useAIConfigStore`——由 `AIConfigSelect`（所有生成类 UI）、`useHasAIConfig`、`AIConfigPage` 读取。`load()` 是幂等的：`if (get().loading || (get().loaded && !force)) return`。`AIConfigPage` 在每次变更后调用 `load(true)`，让其他地方的下拉框能看到变化。
-- `useProjectStore`——由 `ProjectLayout` 加载（`load(pid)`），显示在面包屑/概览中；各面板在修改章节后调用 `refresh()`（静默，吞掉错误），以更新 `chapter_count`/`total_words`；`OverviewPanel` 在 PATCH 后调用 `setProject(updated)`。`load(id)` 只有在 `get().project?.id === id` 时才保留当前项目，因此切换项目时绝不会闪现旧项目（`ProjectLayout` 在 `project.id !== pid` 时也会渲染加载动画）。
+- `useProjectStore`——由 `ProjectLayout` 加载（`load(pid)`），显示在面包屑/概览中；各面板在修改章节后调用 `refresh()`，以更新 `chapter_count`/`total_words`；临时网络失败仍静默保留，明确404则清空目标/项目并使旧响应失效，避免继续挂载不可访问作品的编辑和任务副作用。`OverviewPanel` 在 PATCH 后调用 `setProject(updated)`。`load(id)` 只有在 `get().project?.id === id` 时才保留当前项目，因此切换项目时绝不会闪现旧项目（`ProjectLayout` 在 `project.id !== pid` 时也会渲染加载动画）。
   - `requestSeq` / `refreshSeq` 只接受当前请求；`reset()` 同时使旧请求失效并清空 `targetId`。保存回调 `setProject` 必须同时匹配目标 ID 和**实际已加载**的 `project.id`，不能仅凭 targetId：退出后新会话可能再次加载同一 pid，旧保存响应不得在新加载完成前回填内容或关闭 loading。回归见 `stores/project.test.ts`。
   - 项目 `owner` 与路由 pid、真实账户派生管理员人工管理能力，禁止另存一个可切换认证身份的“当前所有者”。自动副作用和阅读进度边界见[管理员作品管理](../backend/admin-projects.md)。
+  - 删除/恢复/purge 成功调用 `discard(projectId)`，仅匹配当前目标或已加载 ID 时递增请求代次并清空；不能重置另一个作品的未保存内容。明确404/同ID迟到保存与目标级失效回归见 `stores/project.test.ts`。
 
 - `useTasksStore`——由 `TaskPanel`（徽标 + 进行中列表）读取；章节编辑器 / `WizardGenerator` / 任务面板在创建、重试、取消任务后调用 `track(task)`。
   - **轮询节奏**（纯函数 `pollInterval(activeCount)`）：有活动任务 `POLL_ACTIVE_MS = 3000`，否则 `POLL_IDLE_MS = 15000`。`refresh()` 拉 `GET /tasks?active=true&limit=200`，完成后按新数量安排下一次（单个模块级 timer）；`track()` 先用 `upsertActive` 合并（已结束则移除，保持 id 倒序）再立即 `refresh()`，从而马上切到 3 秒节奏。
@@ -43,6 +44,7 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
   - `version`：本轮有任务从活动列表消失（`countFinished(prev, next) > 0`）、`track`、`bump`（本地删除 / 清理）时递增，「最近」列表的 loader 依赖它重载。
   - 过期响应防护：模块级 `requestSeq`（只采用最新一次请求）+ `epoch`（`reset()` 递增，丢弃上一个用户的响应）。`reset()` 时若仍有轮询者（登录后 `AppLayout` 的 effect 先于 `App` 的重置 effect 执行）会立即用新会话重新 `refresh()`。
   - 轮询失败静默（401 由全局处理器登出）。
+  - 删除/回收站操作用 `discardProject(id)` 使旧轮询失效并移除目标任务；本地迟到 `track` 不能重新挂回旧任务，恢复后真正的新任务以服务器新列表为准。`reset()` 同时清空丢弃集合，不能把一个账户的失效状态带给另一个账户。
   - 单个任务的实时输出 / 进度不进 store，由 `useTaskStream` 本地订阅；store 只是列表 + 徽标。
 
 - `useSkillStore`（`10-23-skills-mcp`）——由 `SkillSelect`（章节编辑器 AI 助手、批量弹窗、智能体输入区）、智能体的 `/` 补全、`SkillsPage` 读取。

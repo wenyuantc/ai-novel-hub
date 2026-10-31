@@ -19,6 +19,10 @@ async def get_authorized_project(db, principal: ApiKeyPrincipal, project_id: int
 
 `ApiKeyPrincipal` 仅含 key_id、name、user_id、username、all_projects、project_ids、expires_at，不携带完整 Key、密文或摘要。开放路由位于 `app/api/open/`，业务查询与序列化位于 `app/services/open_api/`，字段白名单位于 `app/schemas/open_api.py`。
 
+0024回收站接入后，KeyInfo/ApiKeyPrincipal及密钥列表的project_ids仅投影正常作品；软删除不销毁底层api_key_projects授权，纯改名也不撤销隐藏授权，恢复后按原权限重新可用。列表/正文/封面/下载仍需独立生命周期校验，不能只靠保留的grant放行。详见[作品回收站](./recycle-bin.md)。
+
+前端 `buildApiKeyInput` 仍负责创建（指定范围至少1部），编辑使用 `buildApiKeyUpdate` / `hasApiKeyScopeChanged`：按all_projects及规范化ID集合比较可见范围，未变时PATCH只提交元数据，省略all_projects/project_ids，投影为空也可改名/有效期；明确修改范围才完整替换。不能继续编辑整表必传scope，否则只含回收站的Key无法改名、混合Key会丢隐藏授权。表单说明“未调整范围保留原授权（含暂不可见作品）；更改范围按当前选择替换”，测试覆盖空/混合投影、顺序/重复ID和创建校验。
+
 迁移 `0022_api_keys`（前驱 `0021`）：
 
 - `api_keys`：user_id CASCADE、name、key_hash（唯一 SHA-256）、key_enc（Fernet，可空）、key_masked、all_projects、expires_at、revoked_at、last_used_at、rate_window、rate_count、时间戳。

@@ -119,13 +119,22 @@ dayjs.locale('zh-cn')
 
 ### 用户管理页（`src/pages/AdminUsersPage.tsx`）
 
-同级的 `AdminProjectsPage` 提供管理员全量项目列表；从列表进入现有编辑区，归属提示、人工管理能力与自动任务/Reader进度隔离遵守[管理员作品管理跨层契约](../backend/admin-projects.md)。不得通过切换认证用户复用页面。
+同级的 `AdminProjectsPage` 提供管理员正常项目列表，`AdminRecycleBinPage` 管理已删除作品；从正常列表进入现有编辑区，归属提示、人工管理能力与自动任务/Reader进度隔离遵守[管理员作品管理跨层契约](../backend/admin-projects.md)。不得通过切换认证用户复用页面。
 
-- AntD `Table`，服务端分页（`adminApi.list({ q, page, page_size })`，`q` 会 trim，为空时省略）并带用户名搜索框。列：用户名（自己那一行标记 `我`）、角色、状态、项目数、`formatTime(created_at)`、操作。
+- AntD `Table`，服务端分页（`adminApi.listUsers({ q, page, page_size })`，`q` 会 trim，为空时省略）并带用户名搜索框。列：用户名（自己那一行标记 `我`）、角色、状态、作品数（含回收站）、`formatTime(created_at)`、操作。作品数非零时提供按 owner 筛选的正常作品/回收站链接。
 - `新建用户` 弹窗：用户名、两次输入初始密码、`设为管理员` 复选框。重置密码弹窗：两次输入新密码。
-- 启用/禁用与授予/撤销管理员都经过 `modal.confirm`。删除会打开一个显示该用户项目数的弹窗；仅当 `canConfirmDelete(input, username)` 时确定按钮才可用（严格相等，不做 trim/大小写折叠）。删除某页的最后一行时回退一页。
+- 启用/禁用与授予/撤销管理员都经过 `modal.confirm`。名下有任何作品（含回收站/待清理）时 `rowActions.canDelete=false`，提示可以先禁用或先清理作品；服务器的 409 仍是最终保护。只有零作品用户才能打开删号弹窗，且 `canConfirmDelete(input, username)` 严格相等（不 trim/大小写折叠）才可确认。并发冲突中的 `project_count` 仅经 `userProjectCountFromError` 收窄读取，更新旧弹窗并禁用确认；删掉某页最后一行时回退一页。
 - `rowActions(row, currentUserId)` 会禁用当前用户自己那一行的**所有**操作（tooltip 为 `不能对自己执行该操作`）——包括重置密码，因为递增 `token_version` 会让管理员自己被登出；自己改密码应通过 `修改密码`。
 - 测试仅在 node 环境运行（无 jsdom）：`utils/adminUsers.test.ts`（守卫 + 行操作表 + 删除匹配）、`api/admin.test.ts`（URL/method/body/`credentials: 'include'`、400/403/409 的 `detail` 透传）、`utils/validation.test.ts`。
+
+### 管理员作品回收站（`src/pages/AdminRecycleBinPage.tsx`）
+
+- `/admin/recycle-bin` 是 `RequireAdmin` 保护的 lazy 路由；桌面/移动导航、账户菜单和页名一起维护。传输与生命周期完整契约见[作品回收站](../backend/recycle-bin.md)。
+- `recycleBinApi` 独占列表/恢复/purge 请求；搜索、owner 筛选、分页与末页回退沿用 `useLoader`。桌面表格允许内部横滚，375px 使用卡片，均不展示正文或私人配置。
+- `RecycleProjectModal` 普通恢复确认不自动续跑；purge 要求完整名称逐字相等并明确不可恢复。`deleted_at` 原始微秒字符串直接回传，不能经 Date/格式化时间重建；后端再次判断期限、代次和权限。
+- 忙碌期间同步 ref 防重复提交并禁用关闭/取消；组件卸载、目标代次变化、管理员身份变化使旧响应失效，成功后才刷新列表并目标级 `discard` / `discardProject`。
+- 所有普通作品删除入口共用 `DeleteProjectModal`，统一引用 `PROJECT_DELETE_NOTICE`：移入回收站、保留30天、管理员恢复、自动取消任务并等待、超时作品未删除且已取消任务不自动复原。不能继续把普通删除描述为“永久删除”。
+- 前端仅用 `restorable` 和本地时钟提前禁用明显到期的恢复按钮，最终以后端 UTC 时间为准。测试覆盖精确名称、旧响应/会话失效、到期边界、API请求体与分页；静态UI测试不能代替真实浏览器取消/恢复和移动布局验收。
 
 ### 章节编辑器（`src/pages/project/ChapterEditorPage.tsx`）
 

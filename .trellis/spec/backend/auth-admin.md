@@ -74,11 +74,13 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
 | `POST /admin/users` | `{username, password, is_admin=false}` | 201 `AdminUserOut` |
 | `PATCH /admin/users/{id}` | `{is_admin?, is_active?}` | `AdminUserOut` |
 | `POST /admin/users/{id}/reset-password` | `{new_password}` | 204 |
-| `DELETE /admin/users/{id}` | — | 204（项目/章节/AI 配置通过外键 CASCADE 删除） |
+| `DELETE /admin/users/{id}` | — | 名下无任何作品时204，清理账号及其用户级私有配置；有作品（含回收站/待清理）时409 |
 
   `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`。用户管理接口只返回
   账号信息与计数；管理员另可通过[作品管理](./admin-projects.md)维护他人的小说内容。
   这不授予所有者模型凭据、平台密钥、私有资源或后台任务的额外访问权限。
+
+  `project_count` 包含全部未物理删除作品，不能复用正常目录的生命周期过滤。删号先锁目标User并检查全部Project；非零返回 `code=user_has_projects`（通常带安全 `project_count`），可先禁用账号。0024起 Project→User 为RESTRICT，兜底并发/漏查，不能再依靠删号级联作品。恢复/彻底删除作品见[回收站契约](./recycle-bin.md)。
 
 - **管理员的其他权限**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
   - **全局 Skill**：`skills.owner_user_id` 为空的 Skill 只有 `is_admin` 用户可以新建（`POST /skills` 或导入时 `scope=global`）、修改、删除、
@@ -104,6 +106,7 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
 | 管理员创建时用户名重复 | 409 `用户名已存在` |
 | 操作者禁用 / 降级 / 删除自己 | 400 `不能对自己执行该操作`（对自己的无变化 PATCH 允许） |
 | 操作会导致启用中的管理员为零 | 409 `至少需要保留一名启用中的管理员` |
+| 删号时仍有作品，包括回收站或过期待清理作品 | 409 `user_has_projects`，账号/作品保留，可先禁用 |
 | 修改密码时原密码错误 | 400 `原密码不正确` |
 | `page`/`page_size`/`q` 越界、密码无效 | 422 |
 
@@ -120,7 +123,7 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
   关闭注册时仍可创建 + 登录 + is_admin + 409；重置 → 旧会话 401；禁用 → 401 且
   登录 403；启用 → 可登录；`test_legacy_token_without_ver_still_valid`；`test_token_with_bad_ver_rejected`；
   自身防护规则；最后一名管理员防护（service 层测试——通过 HTTP 顺序调用无法触发，因为
-  操作者本身始终是剩余的启用中管理员）；删除级联；`test_change_password_keeps_current_session`。
+  操作者本身始终是剩余的启用中管理员）；有作品删号拒绝、明确purge后无作品才可删号及用户私有资源级联；`test_change_password_keeps_current_session`。
 - `backend/tests/test_migrations.py::test_0003_backfills_existing_users` —— 来自 0002 的行得到
   `is_admin=false, is_active=true, token_version=0`；`downgrade -1` 回到 0002。
 

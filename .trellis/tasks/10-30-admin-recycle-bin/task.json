@@ -3,8 +3,8 @@
   "name": "admin-recycle-bin",
   "title": "作品回收站与误删恢复",
   "description": "为作品提供删除保留、回收站查询、恢复和彻底删除能力，并明确删号时关联作品的处理策略。",
-  "status": "planning",
-  "dev_type": null,
+  "status": "in_progress",
+  "dev_type": "fullstack",
   "scope": null,
   "package": null,
   "priority": "P0",
@@ -12,7 +12,7 @@
   "assignee": "aiNovel",
   "createdAt": "2026-10-30",
   "completedAt": null,
-  "branch": null,
+  "branch": "codex/admin-recycle-bin",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -21,10 +21,15 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "本地完整检查通过：后端1143测试、前端520测试、lint及等价TS/Vite；真实PG与原build目录权限未解决。用户已确认提交收尾，并要求合并main后推送；按提交计划执行中。",
   "meta": {
-    "planning_stage": "backlog",
+    "planning_stage": "verified",
     "source": "admin-feature-inventory",
-    "implementation_approved": "false"
+    "implementation_approved": "true",
+    "next_step": "commit_archive_journal_merge_main_push_then_postgresql_validation",
+    "local_quality_gate": "passed",
+    "commit_approved": "true",
+    "merge_main_approved": "true",
+    "push_approved": "true"
   }
 }

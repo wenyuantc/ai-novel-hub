@@ -8,6 +8,8 @@
 
 新增迁移 `0023_admin_audit_logs`（父0022）创建实例级 `admin_audit_logs`，无业务外键、快照ID保留、operation_id唯一、SQLite AUTOINCREMENT；不进项目备份。事务与受保护日期清理见[管理员操作审计](./admin-audit.md)。
 
+新增迁移 `0024_project_recycle_bin`（父0023）：Project生命周期/删除者快照/协调token、到期查询索引与状态约束，Project→User从CASCADE改为RESTRICT；审计actor ID允许系统空值。普通DELETE改为保留30天的软删除，写入口显式锁父项目，完整契约见[作品回收站](./recycle-bin.md)。SQLite重建父表须验证存量子行、PRAGMA foreign_key_check和审计AUTOINCREMENT高水位；有回收站/删除中数据或新增生命周期审计时禁止无损假象的downgrade。
+
 ## 概览
 
 - ORM：SQLAlchemy 2.x async（`sqlalchemy[asyncio]`），使用带类型的 `Mapped[...]` / `mapped_column(...)`。
@@ -83,8 +85,10 @@ async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> 
     project = await db.scalar(select(Project).where(Project.id == project_id, Project.user_id == user_id))
     if project is None:
         raise NotFoundError("项目不存在")
-    return project
+    return project_lifecycle.ensure_active(project)
 ```
+
+上例为只读简化形式；实际helper还刷新identity map，并支持 `lock=True` 的写事务屏障。所有修改入口必须在同一事务内获取该父项目锁；不能只在读时过滤deleted_at，然后允许旧请求晚提交。重复锁刷新数据库生命周期时必须保留已持锁事务内尚未flush的非生命周期标量/JSON修改，回归见 `test_project_lifecycle.py`。
 
 没有 `user_id` 列的表通过 join 到归属方来限定范围
 （`backend/app/services/chapter_service.py`）：
@@ -94,7 +98,7 @@ async def get_owned_chapter(db: AsyncSession, user_id: int, chapter_id: int) -> 
     chapter = await db.scalar(
         select(Chapter)
         .join(Project, Project.id == Chapter.project_id)
-        .where(Chapter.id == chapter_id, Project.user_id == user_id)
+        .where(Chapter.id == chapter_id, Project.user_id == user_id, *project_lifecycle.active_conditions())
     )
     if chapter is None:
         raise NotFoundError("章节不存在")

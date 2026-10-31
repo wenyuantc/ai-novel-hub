@@ -83,9 +83,10 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0021"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0024"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
+- 0024新增的Project生命周期/删除者/协调字段全部在PROJECT_RULE.exclude，导出不携带、导入总是正常作品；不因排除运行状态而提升备份格式v1。备份独立流会话必须重新检查项目生命周期，不能因软删行仍存在就继续导出回收站正文；恶意备份注入删除/协调状态需回归测试。
 - 可选顶层 `cover: {mime_type, data: base64} | null`；无封面字段的 v1 旧备份正常导入。封面只占核心组估算字节，计入 base64 编码后的大小。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。
 - 流式：路由校验归属后 `db.close()`，生成器用自己的 session，按注册表逐表查询，有 id 的表按 id 键集分页（每批 500 行）。

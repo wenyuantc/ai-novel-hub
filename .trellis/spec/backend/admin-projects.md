@@ -10,8 +10,8 @@
 
 ```python
 # backend/app/services/project_service.py
-async def get_owned_project(db, user_id: int, project_id: int) -> Project
-async def get_manageable_project(db, actor_user_id: int, project_id: int) -> Project
+async def get_owned_project(db, user_id: int, project_id: int, *, lock: bool = False) -> Project
+async def get_manageable_project(db, actor_user_id: int, project_id: int, *, lock: bool = False) -> Project
 async def project_out(db, project, notice=None, *, actor_user_id: int | None = None) -> ProjectOut
 
 # backend/app/services/chapter_service.py
@@ -39,6 +39,8 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 
 `ProjectOut.owner` 为可空 `{id, username}`。跨用户详情和 PATCH 响应提供 owner；调用 `project_out(..., actor_user_id=user.id)` 使跨用户 `reading=null`，不查询所有者阅读进度。个人 `GET /projects` 继续只返回当前账户自己的书架，平台密钥授权也不因此获得全量项目。
 
+0024起个人书架、此正常管理目录及count均排除回收站/删除中作品；已删除作品只在管理员[回收站](./recycle-bin.md)中展示。Task、直接章节/回写ID、开放API、备份独立流会话也要检查生命周期，不能把行仍存在当作可访问。
+
 ### 人工操作与严格拥有权
 
 - `get_owned_project` / `get_owned_chapter` 保持严格语义。`get_manageable_project` 仅对所有者或数据库中当前启用管理员放行；任意子资源仍验证 `project_id`，不能跨路径混用 ID。
@@ -47,7 +49,7 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 - AI、智能体、任务、生成日志提示词、私人风格/模板/Skill/MCP、模型配置、平台 Key、阅读进度、导入导出/备份、知识库上传/重建/向量检索保持原有归属限制。
 - 跨用户项目 PATCH 不接受 `style`、`default_style_id`、`auto_analyze`；章节 PATCH 不接受 `style_id`。普通人工保存省略这些字段，保留已有引用，不绑定管理员的私人资源。
 - 剧情记忆 API 的 `_enqueue_vectors` 调用前检查 `memory_service.may_enqueue_vectors`：管理他人内容时不创建所有者向量任务。业务 service 仍更新关键词检索块、失效旧向量；自动记忆不可直接编辑正文/删除的原规则继续生效。
-- 章节修改/恢复仍遵守生成中状态、字数、版本和关联编号规则。删除只级联目标项目数据，不删除用户级配置；已发出的外部模型请求不能通过删除数据撤回。
+- 章节修改/恢复仍遵守生成中状态、字数、版本和关联编号规则。写入口显式请求父项目生命周期锁，不能仅凭先前读取授权后无锁提交。普通作品DELETE改为停止目标任务执行链后移入回收站，保留30天；只有管理员purge或系统到期清理才物理级联目标数据，不删除用户级配置。已发出的外部模型请求不能通过删除撤回，管理员不因此获得通用他人任务操作权。
 
 ### 前端工作区
 
@@ -56,6 +58,8 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 跨用户模式必须同时关闭按钮和自动行为：AgentDock、批量任务查询、编辑器任务接续、useChapterAnalysis 请求与订阅、生成日志、向导、私人风格选择及模型型知识库操作。Reader 不采用 owner reading，不发送普通或 keepalive/unload 阅读进度。自己的项目保留原功能。
 
 项目 store 的加载/刷新响应按请求序列失效；`reset()` 还要清除目标。`setProject` 的保存回调只能更新目标 ID 与实际已加载 ID 都一致的项目，不能在 reset 后仅因新会话再次开始加载相同 pid 就接纳旧保存响应。对应退出/同 pid 重载回归在 `stores/project.test.ts`。
+
+删除/恢复/purge成功只作废目标项目和任务缓存；明确404刷新会撤下已不可访问项目，临时网络失败仍静默保留。普通删除的书架/管理目录/工作区共用确认组件，不得再提示立即永久删除。
 
 ## 4. 校验与错误矩阵
 
@@ -79,7 +83,7 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 
 ## 6. 必需测试
 
-- `backend/tests/test_admin_projects.py`：列表身份、组合查询/分页/字面搜索/统计；跨用户人工模块读写；所有者可见与第三人隔离；跨项目 ID；降级即时撤权；删除级联与其他资源保留；风格/AI/日志/进度拒绝；记忆更新和 FakeLLM 零调用。
+- `backend/tests/test_admin_projects.py`：列表身份、组合查询/分页/字面搜索/统计；跨用户人工模块读写；所有者可见与第三人隔离；跨项目 ID；降级即时撤权；软删保留/普通访问拒绝及明确purge后目标级联；风格/AI/日志/进度拒绝；记忆更新和 FakeLLM 零调用。
 - `backend/tests/test_projects_and_story.py::test_cross_user_isolation` 原断言保留；不得通过放宽断言或删除端点检查实现通过。
 - 前端 `api/admin.test.ts`、`utils/projectAccess.test.ts` 及相关管理页面/能力测试：参数、Cookie、owner/pid/user 派生、严格名称确认、个人功能保留。
 - 实际浏览器验证管理资料/正文/设定、保存后所有者读取、刷新归属、无任务/阅读进度请求、取消/确认删除和桌面/375px明暗主题。

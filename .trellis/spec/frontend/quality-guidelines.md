@@ -47,7 +47,7 @@ proxy.on('proxyRes', (proxyRes) => {
 - 直接 `dayjs(serverTime)` / `new Date(serverTime)`——使用 `formatTime` / `parseServerTime`。
 - 向 `useLoader` 传入内联的（未 memo 化的）loader 函数。
 - 在 `client.ts` 之外硬编码 `/api/v1` 路径。
-- 在用户操作中静默吞掉错误——应显示 `message.error(errorMessage(err))`（仅有的有意静默捕获是 `useProjectStore.refresh()` 和编辑器的 `reloadChapter()`）。
+- 在用户操作中静默吞掉错误——应显示 `message.error(errorMessage(err))`（有意静默捕获包括 `useProjectStore.refresh()` 的临时网络失败和编辑器的 `reloadChapter()`；项目刷新得到明确404时必须撤下旧项目，不能继续保留不可访问内容）。
 
 ---
 
