@@ -38,16 +38,19 @@ admin_password: str | None = None
 @property admin_credentials -> Credentials | None
 
 # backend/app/services/auth_service.py
-async def create_user(db, creds: Credentials, *, is_admin: bool = False) -> User   # 注册与管理员创建共用
+async def create_user_uncommitted(db, creds: Credentials, *, is_admin: bool = False) -> User  # 创建/flush，不提交
+async def create_user(db, creds: Credentials, *, is_admin: bool = False) -> User   # 原包装提交；注册/bootstrap保持旧行为
 async def change_password(db, user: User, data: ChangePasswordRequest) -> User
 async def bootstrap_admin(sessionmaker, settings: Settings) -> None              # 在 main.py 的 lifespan 中调用
 
 # backend/app/services/admin_service.py
 list_users(db, *, q, page, page_size) -> AdminUserList
-create_user(db, data) / update_user(db, actor, user_id, data) / reset_password(db, user_id, data) / delete_user(db, actor, user_id)
+create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_password(db, actor, user_id, data) / delete_user(db, actor, user_id)
 ```
 
 ### 3. 契约
+
+- 管理员用户写入接入[统一操作审计](./admin-audit.md)：创建/重置密码同样传真实 actor；业务与成功审计同事务。创建走 create_user_uncommitted，由审计边界提交；普通注册/bootstrap 的 create_user 包装不变，密码/哈希不进入审计。
 
 - JWT payload：`{"sub", "ver", "iat", "exp"}`。缺少 `ver`（0003 之前签发的 token）→ 视为 `0`，
   与回填的默认值一致，因此升级不会让任何人掉线。`ver` 为非 int 或 bool → 无效。

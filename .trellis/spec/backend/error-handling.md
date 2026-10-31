@@ -82,6 +82,8 @@ finally:
 
 ## 错误处理模式
 
+管理员审计写边界新增 `app/services/audit_writer.py::AuditOperationError(AppError)`，status_code=500、固定中文detail；其未知系统异常先安全转换再交AppError handler，不让可能含正文/密码SQL参数的原异常进入全局 `logger.exception`。提交后的投影异常同样安全500但不追加业务失败；业务版本flush须保留精确409。仅此敏感边界采用安全运维日志例外，其他全局错误契约不变；详见[管理员操作审计](./admin-audit.md)。
+
 ### 在掌握语义的边界处转换
 
 `ai_config_service.build_provider` 是唯一一处将解密失败和端点防护失败

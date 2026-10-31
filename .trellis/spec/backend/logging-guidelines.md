@@ -34,16 +34,17 @@ def _build_default_app() -> FastAPI:
 
 ## 日志级别
 
-目前应用代码中只使用两个级别：
+目前主要使用以下级别；审计敏感边界有明确的安全例外：
 
 | 级别 | 用途 | 真实示例 |
 |-------|-----|--------------|
 | `info` | 运维人员需要看到一次的启动/环境信息 | `logger.info("未找到前端构建产物 %s，跳过静态文件挂载", dist)`（`main.py`） |
-| `exception`（ERROR + traceback） | 对客户端屏蔽的意外异常 | 见下文 |
+| `exception`（ERROR + traceback） | 一般对客户端屏蔽的意外异常 | 见下文 |
+| `error`（不带原始 traceback） | 审计敏感边界未知故障/失败审计不可写 | 只输出 operation_id 与 committed，不输出 SQL 参数或原异常 |
 
 没有使用 `debug`/`warning`。预期内的业务失败（`AppError`、
 `AIProviderError`、`JSONExtractError`）**不**记录日志 —— 它们会返回给
-用户，属于正常运行的一部分。
+用户，属于正常运行的一部分。范围内管理员业务失败仍会写持久审计，这与逐次输出运维日志不同。
 
 ---
 
@@ -66,8 +67,7 @@ logger.exception("回退章节 %s 状态失败", chapter_id)
 
 ## 应记录的内容
 
-凡是吞掉异常并替换为通用消息的地方，都必须调用
-`logger.exception(...)`，以便在服务端保留 traceback：
+一般吞掉异常并替换为通用消息时使用 `logger.exception(...)` 保留 traceback；下列审计敏感边界例外优先，不能为了遵循一般规则重新泄露 SQL 参数：
 
 - 全局 500 handler（`backend/app/core/errors.py`）：在返回 `{"detail": "服务器内部错误"}` 之前
   调用 `logger.exception("未处理的异常", exc_info=exc)`。
@@ -77,6 +77,12 @@ logger.exception("回退章节 %s 状态失败", chapter_id)
   用 `try/except Exception` 包裹状态回退并记录日志。
 
 ---
+
+## 审计敏感边界（强制例外）
+
+`app/services/audit_writer.py::AuditOperation` 持有业务事务，SQLAlchemy异常可能包含章节正文、密码哈希等SQL参数；禁止直接logger.exception或继续向全局未知异常handler传播。只用`logger.error`输出固定中文消息、operation_id/committed，然后`raise AuditOperationError("服务器内部错误") from None`，由AppError handler返回固定500。失败审计不可写时同样只记安全标识，不递归审计。已提交业务的响应投影失败也不补写业务失败。
+
+该例外不取消其他模块现有traceback规则。回归 `test_audit_system_database_error_does_not_reach_raw_exception_logger` 同时检查响应、审计行和caplog；不能仅脱敏数据库记录而遗漏运维日志。完整契约见[管理员操作审计](./admin-audit.md)。
 
 ## 不应记录的内容
 

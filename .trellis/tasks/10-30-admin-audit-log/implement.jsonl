@@ -1,4 +1,18 @@
-{"file": ".trellis/spec/backend/auth-admin.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/admin-projects.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/tasks/10-30-admin-audit-log/research/current-contracts.md", "reason": "当前服务事务、版本合并、接入清单与真实源码证据。"}
+{"file": ".trellis/spec/backend/admin-audit.md", "reason": "已实现的管理员审计跨层契约、事务例外、安全日志及日期清理保护。"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端分层与规范入口。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "显式事务、迁移、SQLite/PostgreSQL 和隔离约定。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError/422/500 与安全错误输出。"}
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "管理员权限、用户防护与会话失效，不改变原契约。"}
+{"file": ".trellis/spec/backend/admin-projects.md", "reason": "真实 actor 与人工管理权限边界，不放宽 owned helper。"}
+{"file": ".trellis/spec/backend/workshop.md", "reason": "审核/发布复用入口、锁顺序与权限。"}
+{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "全局与私有 Skill、导入/参考资料/内置恢复规则。"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "敏感数据禁记和安全运维日志边界。"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端目录与跨层规范入口。"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "管理页、AntD、响应式与异步操作模式。"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "传输类型镜像、时间与 API 客户端约定。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "本地状态、账号变化和过期响应隔离。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "pytest/ruff、隔离和敏感信息回归。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/Vitest、包体积与禁止模式。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "事件类型和边界单一所有者。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有权限、时间工具，禁止全局式过度抽象。"}

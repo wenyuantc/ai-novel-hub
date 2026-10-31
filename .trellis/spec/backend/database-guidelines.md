@@ -6,6 +6,8 @@
 
 ---
 
+新增迁移 `0023_admin_audit_logs`（父0022）创建实例级 `admin_audit_logs`，无业务外键、快照ID保留、operation_id唯一、SQLite AUTOINCREMENT；不进项目备份。事务与受保护日期清理见[管理员操作审计](./admin-audit.md)。
+
 ## 概览
 
 - ORM：SQLAlchemy 2.x async（`sqlalchemy[asyncio]`），使用带类型的 `Mapped[...]` / `mapped_column(...)`。
@@ -53,6 +55,8 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 （`SessionmakerDep`）打开自己的 session。
 
 ### 事务
+
+范围内管理员写入使用 `AuditOperation.commit` 把业务与成功审计同事务提交；它在审计 flush 前先做业务 flush。章节必须传 `flush_fn=version_service.flush_versioned` 保持原版本409，Skill传 `_flush_unique`；审计错误不能误译为业务唯一键冲突。失败先整体回滚再写安全失败，通常提交后再refresh；工坊approve为保留原锁契约，先flush/refresh并生成output，再audit.commit，不得移动其既有投影时机。不得以HTTP响应成功后补写替代同事务契约，详见[审计规范](./admin-audit.md)。
 
 没有 unit-of-work 包装。每个有写操作的 service 函数都以显式的
 `await db.commit()` 结束，若需返回对象，则紧接着 `await db.refresh(obj)`。
