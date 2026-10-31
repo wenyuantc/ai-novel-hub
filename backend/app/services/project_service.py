@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
 from app.core.errors import ForbiddenError, NotFoundError
-from app.models import Chapter, Project, ProjectCover, User, WritingStyle
+from app.models import Chapter, ChapterVersion, Project, ProjectCover, User, WritingStyle
 from app.schemas.project import (
     ProjectCreate,
     ProjectOut,
@@ -18,6 +18,7 @@ from app.schemas.project import (
     WizardProgressUpdate,
 )
 from app.services import style_service
+from app.services.audit_writer import AuditOperation
 
 
 async def get_owned_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
@@ -233,32 +234,49 @@ async def update_project(
     db: AsyncSession, user_id: int, project_id: int, data: ProjectUpdate
 ) -> tuple[Project, str | None]:
     """返回 (项目, 兼容提示)。default_style_id 显式 null = 取消默认风格；style（已废弃）更新「原风格」。"""
-    project = await get_manageable_project(db, user_id, project_id)
-    fields = data.model_fields_set
-    if project.user_id != user_id and fields.intersection({"style", "default_style_id", "auto_analyze"}):
-        raise ForbiddenError("管理他人项目时不能修改私有风格绑定或 AI 设置")
-    if "default_style_id" in fields:
-        await style_service.ensure_assignable(db, user_id, data.default_style_id)
-        project.default_style_id = data.default_style_id
-    if "target_words" in fields:
-        project.target_words = data.target_words
-    exclude = {"style", "default_style_id", "target_words"}
-    for field, value in data.model_dump(exclude_unset=True, exclude=exclude).items():
-        if value is None:
-            continue
-        setattr(project, field, value.strip() if isinstance(value, str) else value)
-    notice = None
-    if data.style is not None:
-        notice = await style_service.apply_legacy_style(db, project, data.style)
-    await db.commit()
-    await db.refresh(project)
-    return project, notice
+    async with AuditOperation(db, user_id, "project.update", "project", project_id, project_id=project_id) as audit:
+        project = await get_manageable_project(db, user_id, project_id)
+        audit.target(project)
+        audit.track(project, data.model_fields_set)
+        fields = data.model_fields_set
+        if project.user_id != user_id and fields.intersection({"style", "default_style_id", "auto_analyze"}):
+            raise ForbiddenError("管理他人项目时不能修改私有风格绑定或 AI 设置")
+        if "default_style_id" in fields:
+            await style_service.ensure_assignable(db, user_id, data.default_style_id)
+            project.default_style_id = data.default_style_id
+        if "target_words" in fields:
+            project.target_words = data.target_words
+        exclude = {"style", "default_style_id", "target_words"}
+        for field, value in data.model_dump(exclude_unset=True, exclude=exclude).items():
+            if value is None:
+                continue
+            setattr(project, field, value.strip() if isinstance(value, str) else value)
+        notice = None
+        if data.style is not None:
+            notice = await style_service.apply_legacy_style(db, project, data.style)
+        await audit.commit()
+        await db.refresh(project)
+        return project, notice
 
 
 async def delete_project(db: AsyncSession, user_id: int, project_id: int) -> None:
-    project = await get_manageable_project(db, user_id, project_id)
-    await db.delete(project)
-    await db.commit()
+    async with AuditOperation(db, user_id, "project.delete", "project", project_id, project_id=project_id) as audit:
+        project = await get_manageable_project(db, user_id, project_id)
+        audit.target(project)
+        if audit.enabled:
+            audit.summary.chapter_count = int(
+                await db.scalar(select(func.count(Chapter.id)).where(Chapter.project_id == project_id)) or 0
+            )
+            audit.summary.version_count = int(
+                await db.scalar(
+                    select(func.count(ChapterVersion.id))
+                    .join(Chapter, Chapter.id == ChapterVersion.chapter_id)
+                    .where(Chapter.project_id == project_id)
+                )
+                or 0
+            )
+        await db.delete(project)
+        await audit.commit()
 
 
 def _clean_steps(values: list[str]) -> list[str]:

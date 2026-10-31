@@ -1396,3 +1396,49 @@ def test_0020_workshop_constraints_and_downgrade(tmp_path):
         assert not tables & set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
+
+
+def test_0023_admin_audit_snapshots_no_cascade_no_reused_ids(tmp_path):
+    db_file = tmp_path / "migrate0023.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0022")
+    engine = create_engine(f"sqlite:///{db_file}")
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (1, 'historical', 'x')"))
+    engine.dispose()
+    command.upgrade(cfg, "0023")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        assert insp.get_foreign_keys("admin_audit_logs") == []
+        assert {i["name"] for i in insp.get_indexes("admin_audit_logs")} == {
+            "ix_admin_audit_time", "ix_admin_audit_actor_time", "ix_admin_audit_target_time",
+        }
+        insert = text(
+            "INSERT INTO admin_audit_logs "
+            "(operation_id,occurred_at,actor_user_id,actor_username,action,result,target_type,target_id,summary) "
+            "VALUES (:operation,'2026-01-01 00:00:00',1,'historical','user.delete','success','user',1,'{}')"
+        )
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(insert, {"operation": "first"})
+            conn.execute(text("DELETE FROM users WHERE id=1"))
+            assert conn.execute(text("SELECT actor_username FROM admin_audit_logs")).scalar_one() == "historical"
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(insert, {"operation": "first"})
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM admin_audit_logs"))
+            conn.execute(insert, {"operation": "second"})
+            assert conn.execute(text("SELECT id FROM admin_audit_logs")).scalar_one() == 2
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0022")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "admin_audit_logs" not in inspect(engine).get_table_names()
+        assert EXPECTED_TABLES <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()

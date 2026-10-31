@@ -46,7 +46,7 @@ async def list_users(
 
 @router.post("/users", response_model=AdminUserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(body: AdminUserCreate, admin: AdminUser, db: DbDep) -> AdminUserOut:
-    return await svc.create_user(db, body)
+    return await svc.create_user(db, admin, body)
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserOut)
@@ -56,7 +56,7 @@ async def update_user(user_id: int, body: AdminUserUpdate, admin: AdminUser, db:
 
 @router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_password(user_id: int, body: ResetPasswordRequest, admin: AdminUser, db: DbDep) -> Response:
-    await svc.reset_password(db, user_id, body)
+    await svc.reset_password(db, admin, user_id, body)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

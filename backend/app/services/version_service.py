@@ -13,8 +13,10 @@
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ConflictError
 from app.models import Chapter, ChapterVersion
 
 MANUAL_MERGE_WINDOW = timedelta(minutes=10)
@@ -29,6 +31,27 @@ def _now() -> datetime:
 def _aware(dt: datetime) -> datetime:
     # SQLite 读出的时间不带时区（CURRENT_TIMESTAMP 为 UTC）
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def is_version_conflict(exc: IntegrityError) -> bool:
+    original = exc.orig
+    if str(original) == "UNIQUE constraint failed: chapter_versions.chapter_id, chapter_versions.seq":
+        return True
+    return any(
+        getattr(error, "sqlstate", None) == "23505"
+        and getattr(error, "constraint_name", None) == "uq_chapter_versions_chapter_id"
+        for error in (original, getattr(original, "__cause__", None))
+    )
+
+
+async def flush_versioned(db: AsyncSession) -> None:
+    """只翻译业务版本唯一竞争；事务回滚仍由外层 HTTP/审计边界负责。"""
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        if not is_version_conflict(exc):
+            raise
+        raise ConflictError("正文同时被其他操作修改，请刷新后重试") from exc
 
 
 async def get_latest(db: AsyncSession, chapter_id: int) -> ChapterVersion | None:
@@ -74,7 +97,7 @@ async def record(
         generation_log_id=log_id,
     )
     db.add(version)
-    await db.flush()
+    await flush_versioned(db)
     await prune(db, chapter.id)
     return version
 
@@ -103,7 +126,7 @@ async def record_manual(db: AsyncSession, chapter: Chapter) -> ChapterVersion | 
     ):
         latest.content = chapter.content
         latest.word_count = chapter.word_count
-        await db.flush()
+        await flush_versioned(db)
         return latest
     return await record(db, chapter, "manual")
 

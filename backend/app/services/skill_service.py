@@ -29,6 +29,7 @@ from app.schemas.skill import (
     SkillScope,
     SkillUpdate,
 )
+from app.services.audit_writer import AuditOperation
 from app.skills import SkillFormatError, builtin_fields, dump_skill_md, parse_skill_md
 
 MAX_SKILLS_PER_OWNER = 100
@@ -151,11 +152,37 @@ def _owner_for(user: User, scope: SkillScope) -> int | None:
     return user.id
 
 
+def _is_slug_conflict(exc: IntegrityError) -> bool:
+    original = exc.orig
+    if str(original) in {
+        "UNIQUE constraint failed: skills.slug",
+        "UNIQUE constraint failed: skills.owner_user_id, skills.slug",
+    }:
+        return True
+    return any(
+        getattr(error, "sqlstate", None) == "23505"
+        and getattr(error, "constraint_name", None) in {"uq_skills_owner_user_id", "uq_skills_global_slug"}
+        for error in (original, getattr(original, "__cause__", None))
+    )
+
+
+async def _flush_unique(db: AsyncSession) -> None:
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        if not _is_slug_conflict(exc):
+            raise
+        raise ConflictError("标识已被使用，请换一个") from exc
+
+
 async def _commit_unique(db: AsyncSession) -> None:
     try:
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
+        if not _is_slug_conflict(exc):
+            raise
         raise ConflictError("标识已被使用，请换一个") from exc
 
 
@@ -164,7 +191,8 @@ def _set_references(db: AsyncSession, skill_id: int, refs: list[SkillReferenceIn
         db.add(SkillReference(skill_id=skill_id, title=ref.title, content=ref.content, sort=index))
 
 
-async def create_skill(db: AsyncSession, user: User, req: SkillCreate) -> SkillOut:
+async def _create_skill(db: AsyncSession, user: User, req: SkillCreate, audit: AuditOperation) -> SkillOut:
+    audit.values["target_label"] = req.name
     owner = _owner_for(user, req.scope)
     await _check_quota(db, owner)
     skill = Skill(
@@ -177,47 +205,59 @@ async def create_skill(db: AsyncSession, user: User, req: SkillCreate) -> SkillO
         body=req.body,
     )
     db.add(skill)
-    try:
-        await db.flush()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise ConflictError("标识已被使用，请换一个") from exc
+    await _flush_unique(db)
     _set_references(db, skill.id, req.references)
-    await _commit_unique(db)
+    audit.target(skill)
+    audit.summary.changed_fields = ["slug", "name", "body", "references"]
+    audit.summary.body_chars_after = len(skill.body)
+    audit.summary.reference_count_after = len(req.references)
+    await audit.commit(_commit_unique, flush_fn=_flush_unique)
     await db.refresh(skill)
     return await to_out(db, user, skill)
 
 
 async def update_skill(db: AsyncSession, user: User, skill_id: int, req: SkillUpdate) -> SkillOut:
-    skill = await get_writable_skill(db, user, skill_id)
-    for key, value in req.model_dump(exclude_unset=True).items():
-        if value is None:
-            continue
-        if key == "name":
-            value = value.strip()
-            if not value:
-                raise BadRequestError("名称不能为空")
-        setattr(skill, key, value)
-    await _commit_unique(db)
-    await db.refresh(skill)
-    return await to_out(db, user, skill)
+    async with AuditOperation(db, user, "skill.update", "skill", skill_id) as audit:
+        skill = await get_writable_skill(db, user, skill_id)
+        audit.target(skill)
+        audit.track(skill, req.model_fields_set)
+        for key, value in req.model_dump(exclude_unset=True).items():
+            if value is None:
+                continue
+            if key == "name":
+                value = value.strip()
+                if not value:
+                    raise BadRequestError("名称不能为空")
+            setattr(skill, key, value)
+        await audit.commit(_commit_unique, flush_fn=_flush_unique)
+        await db.refresh(skill)
+        return await to_out(db, user, skill)
 
 
 async def replace_references(db: AsyncSession, user: User, skill_id: int, refs: list[SkillReferenceIn]) -> SkillOut:
-    skill = await get_writable_skill(db, user, skill_id)
-    await db.execute(delete(SkillReference).where(SkillReference.skill_id == skill.id))
-    _set_references(db, skill.id, refs)
-    # 参考资料变化也算 Skill 更新（前端据此显示最近修改时间）
-    skill.updated_at = func.now()
-    await db.commit()
-    await db.refresh(skill)
-    return await to_out(db, user, skill)
+    async with AuditOperation(db, user, "skill.references.replace", "skill", skill_id) as audit:
+        skill = await get_writable_skill(db, user, skill_id)
+        audit.target(skill)
+        if audit.enabled:
+            audit.summary.reference_count_before = len(await _references(db, skill.id))
+            audit.summary.reference_count_after = len(refs)
+            if audit.summary.reference_count_before or audit.summary.reference_count_after:
+                audit.summary.changed_fields = ["references"]
+        await db.execute(delete(SkillReference).where(SkillReference.skill_id == skill.id))
+        _set_references(db, skill.id, refs)
+        # 参考资料变化也算 Skill 更新（前端据此显示最近修改时间）
+        skill.updated_at = func.now()
+        await audit.commit()
+        await db.refresh(skill)
+        return await to_out(db, user, skill)
 
 
 async def delete_skill(db: AsyncSession, user: User, skill_id: int) -> None:
-    skill = await get_writable_skill(db, user, skill_id)
-    await db.delete(skill)
-    await db.commit()
+    async with AuditOperation(db, user, "skill.delete", "skill", skill_id) as audit:
+        skill = await get_writable_skill(db, user, skill_id)
+        audit.target(skill)
+        await db.delete(skill)
+        await audit.commit()
 
 
 async def _free_slug(db: AsyncSession, owner_id: int | None, base: str) -> str:
@@ -262,18 +302,26 @@ async def copy_skill(db: AsyncSession, user: User, skill_id: int) -> SkillOut:
 
 
 async def restore_builtin(db: AsyncSession, user: User, skill_id: int) -> SkillOut:
-    skill = await get_visible_skill(db, user.id, skill_id)
-    if not user.is_admin:
-        raise ForbiddenError("只有管理员可以恢复内置 Skill")
-    if not skill.builtin_key:
-        raise BadRequestError("该 Skill 不是内置 Skill")
-    fields = builtin_fields(skill.builtin_key)
-    for key in ("slug", "name", "description", "category", "triggers", "body"):
-        setattr(skill, key, fields[key])
-    await db.execute(delete(SkillReference).where(SkillReference.skill_id == skill.id))
-    await _commit_unique(db)
-    await db.refresh(skill)
-    return await to_out(db, user, skill)
+    async with AuditOperation(db, user, "skill.restore_builtin", "skill", skill_id) as audit:
+        skill = await get_visible_skill(db, user.id, skill_id)
+        audit.target(skill)
+        if not user.is_admin:
+            raise ForbiddenError("只有管理员可以恢复内置 Skill")
+        if not skill.builtin_key:
+            raise BadRequestError("该 Skill 不是内置 Skill")
+        audit.track(skill, ["slug", "name", "description", "category", "triggers", "body"])
+        fields = builtin_fields(skill.builtin_key)
+        for key in ("slug", "name", "description", "category", "triggers", "body"):
+            setattr(skill, key, fields[key])
+        if audit.enabled:
+            audit.summary.reference_count_before = len(await _references(db, skill.id))
+            audit.summary.reference_count_after = 0
+            if audit.summary.reference_count_before or audit.summary.reference_count_after:
+                audit.summary.changed_fields = ["references"]
+        await db.execute(delete(SkillReference).where(SkillReference.skill_id == skill.id))
+        await audit.commit(_commit_unique, flush_fn=_flush_unique)
+        await db.refresh(skill)
+        return await to_out(db, user, skill)
 
 
 # ---------------- 导入 / 导出 ----------------
@@ -392,8 +440,9 @@ def parse_upload(filename: str, data: bytes) -> SkillCreate:
 
 
 async def import_skill(db: AsyncSession, user: User, filename: str, data: bytes, scope: SkillScope) -> SkillOut:
-    req = parse_upload(filename, data)
-    return await create_skill(db, user, req.model_copy(update={"scope": scope}))
+    async with AuditOperation(db, user, "skill.import", "skill", enabled=scope == "global") as audit:
+        req = parse_upload(filename, data)
+        return await _create_skill(db, user, req.model_copy(update={"scope": scope}), audit)
 
 
 async def export_skill(db: AsyncSession, user: User, skill_id: int) -> tuple[str, str, bytes]:
@@ -457,3 +506,14 @@ async def snapshot(db: AsyncSession, user_id: int, skill_id: int | None) -> dict
 def skill_log(snap: dict[str, Any] | None) -> dict[str, Any] | None:
     """生成记录 params.skill：只记 id 与名称。"""
     return {"id": snap["id"], "name": snap["name"]} if snap else None
+
+
+async def create_skill(db: AsyncSession, user: User, req: SkillCreate) -> SkillOut:
+    async with AuditOperation(db, user, "skill.create", "skill", enabled=req.scope == "global") as audit:
+        return await _create_skill(db, user, req, audit)
+
+
+async def reject_oversized_import(db: AsyncSession, user: User, scope: SkillScope) -> None:
+    """保留路由的 2MB 守卫，仅对管理员的全局导入记录安全拒绝。"""
+    async with AuditOperation(db, user, "skill.import", "skill", enabled=scope == "global"):
+        raise BadRequestError(TOO_LARGE)

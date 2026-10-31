@@ -6,7 +6,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 
 from app.core.deps import CurrentUser, DbDep
-from app.core.errors import BadRequestError
 from app.schemas.skill import SkillBrief, SkillCreate, SkillOut, SkillReferencesUpdate, SkillScope, SkillUpdate
 from app.services import skill_service as svc
 
@@ -34,7 +33,7 @@ async def import_skill(
 ) -> SkillOut:
     data = await file.read(svc.MAX_UPLOAD_BYTES + 1)
     if len(data) > svc.MAX_UPLOAD_BYTES:
-        raise BadRequestError(svc.TOO_LARGE)
+        await svc.reject_oversized_import(db, user, scope)
     return await svc.import_skill(db, user, file.filename or "", data, scope)
 
 

@@ -14,8 +14,8 @@ from app.schemas.auth import ChangePasswordRequest, Credentials
 logger = logging.getLogger(__name__)
 
 
-async def create_user(db: AsyncSession, creds: Credentials, *, is_admin: bool = False) -> User:
-    """注册与管理员创建用户共用：重名检查、bcrypt、唯一约束兜底。注册开关只在 register 中检查。"""
+async def create_user_uncommitted(db: AsyncSession, creds: Credentials, *, is_admin: bool = False) -> User:
+    """共用的不提交原语：重名检查、bcrypt、flush 唯一约束兜底。"""
     exists = await db.scalar(select(User.id).where(User.username == creds.username))
     if exists is not None:
         raise ConflictError("用户名已存在")
@@ -23,11 +23,17 @@ async def create_user(db: AsyncSession, creds: Credentials, *, is_admin: bool = 
     user = User(username=creds.username, password_hash=password_hash, is_admin=is_admin, is_active=True)
     db.add(user)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         # 并发创建同名用户时由唯一约束兜底
         await db.rollback()
         raise ConflictError("用户名已存在") from exc
+    return user
+
+
+async def create_user(db: AsyncSession, creds: Credentials, *, is_admin: bool = False) -> User:
+    user = await create_user_uncommitted(db, creds, is_admin=is_admin)
+    await db.commit()
     await db.refresh(user)
     return user
 

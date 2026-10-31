@@ -56,6 +56,11 @@ export const router = createBrowserRouter([
       { path: 'inspiration/:sid', lazy: lazyPage(() => import('./pages/InspirationSessionPage')) },
       { path: 'book-import', lazy: lazyPage(() => import('./pages/BookImportPage')) },
       {
+        path: 'admin/audit-logs',
+        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminAuditLogsPage')) }],
+      },
+      {
         path: 'admin/projects',
         element: <RequireAdmin><Outlet /></RequireAdmin>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminProjectsPage')) }],

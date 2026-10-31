@@ -33,6 +33,7 @@ from app.schemas.workshop import (
     WorkshopSubmit,
 )
 from app.services import prompt_service, style_service
+from app.services.audit_writer import AuditOperation
 
 CONTENT_FIELDS = ("kind", "prompt_key", "name", "description", "category", "tags", "content", "is_anonymous")
 MAX_PENDING = 20
@@ -264,41 +265,53 @@ def _clean_content(data: WorkshopSubmit) -> dict[str, str]:
 
 
 async def submit(db: AsyncSession, viewer: User, data: WorkshopSubmit) -> WorkshopSubmissionOut:
-    values = data.model_dump(exclude={"item_id"})
-    values["content"] = _clean_content(data)
-    values["description"] = data.description.strip()
-    # 同一用户串行校验待审核上限；pending item 唯一索引另兜底并发更新。
-    await db.scalar(select(User.id).where(User.id == viewer.id).with_for_update())
-    if data.item_id is not None:
-        item = await _get_item(db, viewer, data.item_id, owned=True, lock=True)
-        if (item.kind, item.prompt_key) != (data.kind, data.prompt_key):
-            raise BadRequestError("更新不能改变条目类型或模板 key")
-        pending = await db.scalar(
-            select(WorkshopSubmission.id).where(
-                WorkshopSubmission.item_id == item.id, WorkshopSubmission.status == "pending"
+    async with AuditOperation(db, viewer, "workshop.publish", "workshop_submission", None) as audit:
+        audit.values["target_label"] = data.name
+        values = data.model_dump(exclude={"item_id"})
+        values["content"] = _clean_content(data)
+        values["description"] = data.description.strip()
+        # 同一用户串行校验待审核上限；pending item 唯一索引另兜底并发更新。
+        await db.scalar(select(User.id).where(User.id == viewer.id).with_for_update())
+        if data.item_id is not None:
+            item = await _get_item(db, viewer, data.item_id, owned=True, lock=True)
+            if (item.kind, item.prompt_key) != (data.kind, data.prompt_key):
+                raise BadRequestError("更新不能改变条目类型或模板 key")
+            pending = await db.scalar(
+                select(WorkshopSubmission.id).where(
+                    WorkshopSubmission.item_id == item.id, WorkshopSubmission.status == "pending"
+                )
+            )
+            if pending is not None:
+                raise ConflictError("该条目已有待审核更新")
+        count = await db.scalar(
+            select(func.count(WorkshopSubmission.id)).where(
+                WorkshopSubmission.submitter_id == viewer.id, WorkshopSubmission.status == "pending"
             )
         )
-        if pending is not None:
-            raise ConflictError("该条目已有待审核更新")
-    count = await db.scalar(
-        select(func.count(WorkshopSubmission.id)).where(
-            WorkshopSubmission.submitter_id == viewer.id, WorkshopSubmission.status == "pending"
-        )
-    )
-    if count >= MAX_PENDING and not viewer.is_admin:
-        raise BadRequestError(f"待审核提交最多 {MAX_PENDING} 条")
-    row = WorkshopSubmission(**values, item_id=data.item_id, submitter_id=viewer.id)
-    db.add(row)
-    try:
-        await db.flush()
-        if viewer.is_admin:
-            await _approve(db, viewer, row, WorkshopApprove(), official=True)
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise ConflictError("该条目已有待审核更新，请刷新后重试") from exc
-    await db.refresh(row)
-    return (await _submission_outputs(db, viewer, [row]))[0]
+        if count >= MAX_PENDING and not viewer.is_admin:
+            raise BadRequestError(f"待审核提交最多 {MAX_PENDING} 条")
+        row = WorkshopSubmission(**values, item_id=data.item_id, submitter_id=viewer.id)
+        db.add(row)
+        try:
+            await db.flush()
+            if viewer.is_admin:
+                audit.track(row, ["status"])
+                await _approve(db, viewer, row, WorkshopApprove(), official=True, audit=audit)
+            audit.target(row)
+            await audit.owner(row.submitter_id)
+            audit.summary.changed_fields = ["name", "description", "category", "tags", "content"]
+            await audit.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            reason = str(exc.orig)
+            if (
+                "uq_workshop_pending_item" not in reason
+                and "UNIQUE constraint failed: workshop_submissions.item_id" not in reason
+            ):
+                raise
+            raise ConflictError("该条目已有待审核更新，请刷新后重试") from exc
+        await db.refresh(row)
+        return (await _submission_outputs(db, viewer, [row]))[0]
 
 
 async def _transition(db: AsyncSession, viewer: User, row: WorkshopSubmission, status: str, note: str = "") -> None:
@@ -317,7 +330,13 @@ async def _transition(db: AsyncSession, viewer: User, row: WorkshopSubmission, s
 
 
 async def _approve(
-    db: AsyncSession, viewer: User, row: WorkshopSubmission, data: WorkshopApprove, *, official: bool = False
+    db: AsyncSession,
+    viewer: User,
+    row: WorkshopSubmission,
+    data: WorkshopApprove,
+    *,
+    official: bool = False,
+    audit: AuditOperation | None = None,
 ) -> WorkshopItem:
     # 删除条目会在 item 锁下级联删除提交；更新审核也必须先 item 后 submission，避免 PG 锁顺序反转。
     item = await _get_item(db, viewer, row.item_id, lock=True) if row.item_id is not None else None
@@ -328,6 +347,11 @@ async def _approve(
     if data.tags is not None:
         values["tags"] = data.tags
     row.category, row.tags = values["category"], values["tags"]
+    if audit is not None and audit.enabled:
+        audit.summary.body_chars_before = sum(len(value) for value in item.content.values()) if item else 0
+        audit.summary.body_chars_after = sum(len(value) for value in values["content"].values())
+        if item is None or item.content != values["content"]:
+            audit.summary.changed_fields.append("content")
     if item is None:
         item = WorkshopItem(**values, author_id=row.submitter_id, is_official=official)
         db.add(item)
@@ -343,22 +367,30 @@ async def _approve(
 
 
 async def approve(db: AsyncSession, viewer: User, submission_id: int, data: WorkshopApprove) -> WorkshopSubmissionOut:
-    row = await _get_submission(db, viewer, submission_id, admin=True)
-    await _approve(db, viewer, row, data)
-    await db.flush()
-    await db.refresh(row)
-    output = (await _submission_outputs(db, viewer, [row]))[0]
-    # 锁释放前生成响应，避免提交后管理员删除条目使 refresh 命中已级联删除的提交。
-    await db.commit()
-    return output
+    async with AuditOperation(db, viewer, "workshop.approve", "workshop_submission", submission_id) as audit:
+        row = await _get_submission(db, viewer, submission_id, admin=True)
+        audit.target(row)
+        await audit.owner(row.submitter_id)
+        audit.track(row, ["status", "category", "tags"])
+        await _approve(db, viewer, row, data, audit=audit)
+        await db.flush()
+        await db.refresh(row)
+        output = (await _submission_outputs(db, viewer, [row]))[0]
+        # 锁释放前生成响应，避免提交后管理员删除条目使 refresh 命中已级联删除的提交。
+        await audit.commit()
+        return output
 
 
 async def reject(db: AsyncSession, viewer: User, submission_id: int, note: str) -> WorkshopSubmissionOut:
-    row = await _get_submission(db, viewer, submission_id, admin=True)
-    await _transition(db, viewer, row, "rejected", note)
-    await db.commit()
-    await db.refresh(row)
-    return (await _submission_outputs(db, viewer, [row]))[0]
+    async with AuditOperation(db, viewer, "workshop.reject", "workshop_submission", submission_id) as audit:
+        row = await _get_submission(db, viewer, submission_id, admin=True)
+        audit.target(row)
+        await audit.owner(row.submitter_id)
+        audit.track(row, ["status"])
+        await _transition(db, viewer, row, "rejected", note)
+        await audit.commit()
+        await db.refresh(row)
+        return (await _submission_outputs(db, viewer, [row]))[0]
 
 
 async def withdraw(db: AsyncSession, viewer: User, submission_id: int) -> WorkshopSubmissionOut:
@@ -370,36 +402,49 @@ async def withdraw(db: AsyncSession, viewer: User, submission_id: int) -> Worksh
 
 
 async def set_visibility(db: AsyncSession, viewer: User, item_id: int, *, hidden: bool) -> WorkshopItemOut:
-    item = await _get_item(db, viewer, item_id, owned=not viewer.is_admin, lock=True)
-    if not hidden and item.hidden_by == "admin" and not viewer.is_admin:
-        raise ForbiddenError("该条目已被管理员下架")
-    # 作者不能把管理员下架改标为作者下架，借此绕过恢复权限。
-    if hidden:
-        item.status = "hidden"
-        if viewer.is_admin or item.hidden_by != "admin":
-            item.hidden_by = "admin" if viewer.is_admin else "author"
-    else:
-        item.status, item.hidden_by = "active", None
-    await db.commit()
-    await db.refresh(item)
-    return (await _item_outputs(db, viewer, [item]))[0]
+    async with AuditOperation(
+        db, viewer, "workshop.hide" if hidden else "workshop.unhide", "workshop_item", item_id
+    ) as audit:
+        item = await _get_item(db, viewer, item_id, owned=not viewer.is_admin, lock=True)
+        audit.target(item)
+        await audit.owner(item.author_id)
+        audit.track(item, ["status", "hidden_by"])
+        if not hidden and item.hidden_by == "admin" and not viewer.is_admin:
+            raise ForbiddenError("该条目已被管理员下架")
+        # 作者不能把管理员下架改标为作者下架，借此绕过恢复权限。
+        if hidden:
+            item.status = "hidden"
+            if viewer.is_admin or item.hidden_by != "admin":
+                item.hidden_by = "admin" if viewer.is_admin else "author"
+        else:
+            item.status, item.hidden_by = "active", None
+        await audit.commit()
+        await db.refresh(item)
+        return (await _item_outputs(db, viewer, [item]))[0]
 
 
 async def patch_metadata(db: AsyncSession, viewer: User, item_id: int, data: WorkshopApprove) -> WorkshopItemOut:
-    item = await _get_item(db, viewer, item_id, lock=True)
-    if data.category is not None:
-        item.category = data.category
-    if data.tags is not None:
-        item.tags = data.tags
-    await db.commit()
-    await db.refresh(item)
-    return (await _item_outputs(db, viewer, [item]))[0]
+    async with AuditOperation(db, viewer, "workshop.update", "workshop_item", item_id) as audit:
+        item = await _get_item(db, viewer, item_id, lock=True)
+        audit.target(item)
+        await audit.owner(item.author_id)
+        audit.track(item, ["category", "tags"])
+        if data.category is not None:
+            item.category = data.category
+        if data.tags is not None:
+            item.tags = data.tags
+        await audit.commit()
+        await db.refresh(item)
+        return (await _item_outputs(db, viewer, [item]))[0]
 
 
 async def delete_item(db: AsyncSession, viewer: User, item_id: int) -> None:
-    item = await _get_item(db, viewer, item_id, lock=True)
-    await db.delete(item)
-    await db.commit()
+    async with AuditOperation(db, viewer, "workshop.delete", "workshop_item", item_id) as audit:
+        item = await _get_item(db, viewer, item_id, lock=True)
+        audit.target(item)
+        await audit.owner(item.author_id)
+        await db.delete(item)
+        await audit.commit()
 
 
 async def _insert_once(

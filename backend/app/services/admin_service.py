@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.models import Project, User
 from app.schemas.admin import AdminUserCreate, AdminUserList, AdminUserOut, AdminUserUpdate, ResetPasswordRequest
 from app.services import auth_service
+from app.services.audit_writer import AuditOperation
 
 SELF_FORBIDDEN = "不能对自己执行该操作"
 LAST_ADMIN = "至少需要保留一名启用中的管理员"
@@ -84,43 +85,56 @@ async def _ensure_other_active_admin(db: AsyncSession, target_id: int) -> None:
         raise ConflictError(LAST_ADMIN)
 
 
-async def create_user(db: AsyncSession, data: AdminUserCreate) -> AdminUserOut:
-    user = await auth_service.create_user(db, data, is_admin=data.is_admin)
-    return _to_out(user, 0)
+async def create_user(db: AsyncSession, actor: User, data: AdminUserCreate) -> AdminUserOut:
+    async with AuditOperation(db, actor, "user.create", "user") as audit:
+        audit.values["target_label"] = data.username
+        user = await auth_service.create_user_uncommitted(db, data, is_admin=data.is_admin)
+        audit.target(user)
+        audit.summary.changed_fields = ["username", "is_admin", "is_active"]
+        await audit.commit()
+        await db.refresh(user)
+        return _to_out(user, 0)
 
 
 async def update_user(db: AsyncSession, actor: User, user_id: int, data: AdminUserUpdate) -> AdminUserOut:
-    user = await _get_user(db, user_id)
-    new_admin = user.is_admin if data.is_admin is None else data.is_admin
-    new_active = user.is_active if data.is_active is None else data.is_active
-    if user.id == actor.id and (not new_admin or not new_active):
-        raise BadRequestError(SELF_FORBIDDEN)
-    if user.is_admin and user.is_active and not (new_admin and new_active):
-        await _ensure_other_active_admin(db, user.id)
-    if user.is_active and not new_active:
-        # 禁用：已登录会话立即失效（SQL 端自增，避免与并发的重置密码互相覆盖）
+    async with AuditOperation(db, actor, "user.update", "user", user_id) as audit:
+        user = await _get_user(db, user_id)
+        audit.target(user)
+        audit.track(user, ["is_admin", "is_active"])
+        new_admin = user.is_admin if data.is_admin is None else data.is_admin
+        new_active = user.is_active if data.is_active is None else data.is_active
+        if user.id == actor.id and (not new_admin or not new_active):
+            raise BadRequestError(SELF_FORBIDDEN)
+        if user.is_admin and user.is_active and not (new_admin and new_active):
+            await _ensure_other_active_admin(db, user.id)
+        if user.is_active and not new_active:
+            # 禁用：已登录会话立即失效（SQL 端自增，避免与并发的重置密码互相覆盖）
+            user.token_version = User.token_version + 1
+        user.is_admin = new_admin
+        user.is_active = new_active
+        await audit.commit()
+        await db.refresh(user)
+        return await _user_out(db, user)
+
+
+async def reset_password(db: AsyncSession, actor: User, user_id: int, data: ResetPasswordRequest) -> None:
+    async with AuditOperation(db, actor, "user.reset_password", "user", user_id) as audit:
+        user = await _get_user(db, user_id)
+        audit.target(user)
+        user.password_hash = await to_thread.run_sync(hash_password, data.new_password)
+        # SQL 端自增，避免并发的禁用 / 改密基于旧值写回同一版本号
         user.token_version = User.token_version + 1
-    user.is_admin = new_admin
-    user.is_active = new_active
-    await db.commit()
-    await db.refresh(user)
-    return await _user_out(db, user)
-
-
-async def reset_password(db: AsyncSession, user_id: int, data: ResetPasswordRequest) -> None:
-    user = await _get_user(db, user_id)
-    user.password_hash = await to_thread.run_sync(hash_password, data.new_password)
-    # SQL 端自增，避免并发的禁用 / 改密基于旧值写回同一版本号
-    user.token_version = User.token_version + 1
-    await db.commit()
+        await audit.commit()
 
 
 async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
     """永久删除用户；项目、章节、AI 配置等由外键 ON DELETE CASCADE 一并删除。"""
-    user = await _get_user(db, user_id)
-    if user.id == actor.id:
-        raise BadRequestError(SELF_FORBIDDEN)
-    if user.is_admin and user.is_active:
-        await _ensure_other_active_admin(db, user.id)
-    await db.delete(user)
-    await db.commit()
+    async with AuditOperation(db, actor, "user.delete", "user", user_id) as audit:
+        user = await _get_user(db, user_id)
+        audit.target(user)
+        if user.id == actor.id:
+            raise BadRequestError(SELF_FORBIDDEN)
+        if user.is_admin and user.is_active:
+            await _ensure_other_active_admin(db, user.id)
+        await db.delete(user)
+        await audit.commit()

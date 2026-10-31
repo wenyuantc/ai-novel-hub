@@ -61,6 +61,121 @@ export interface ResetPasswordRequest {
   new_password: string
 }
 
+// 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
+export type AuditAction =
+  | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
+  | 'project.update' | 'project.delete' | 'chapter.create' | 'chapter.create_from_outlines'
+  | 'chapter.update' | 'chapter.delete' | 'chapter.cast.update' | 'chapter_version.update'
+  | 'chapter_version.delete' | 'chapter_version.restore' | 'workshop.publish' | 'workshop.approve'
+  | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
+  | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
+  | 'skill.restore_builtin' | 'audit.cleanup'
+export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit'
+export type AuditResult = 'success' | 'failure'
+export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
+export type AuditField =
+  | 'username' | 'is_admin' | 'is_active' | 'title' | 'genre' | 'premise' | 'synopsis' | 'theme' | 'tags'
+  | 'selling_points' | 'audience' | 'target_words' | 'status' | 'style' | 'default_style_id' | 'auto_analyze'
+  | 'chapter_no' | 'outline_id' | 'plan_id' | 'style_id' | 'content' | 'starred' | 'note' | 'cast'
+  | 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body' | 'references' | 'builtin_key' | 'hidden_by'
+export type AuditSafeState = 'draft' | 'planning' | 'writing' | 'completed' | 'archived' | 'generating' | 'done' | 'active' | 'hidden' | 'admin' | 'author' | 'pending' | 'approved' | 'rejected' | 'cancelled'
+
+export interface AuditValueChange {
+  field: 'is_admin' | 'is_active' | 'target_words' | 'status' | 'chapter_no' | 'outline_id' | 'plan_id' | 'style_id' | 'starred' | 'hidden_by' | 'auto_analyze' | 'default_style_id'
+  before: boolean | number | AuditSafeState | null
+  after: boolean | number | AuditSafeState | null
+}
+
+export interface AuditSummary {
+  changed_fields: AuditField[]
+  changes: AuditValueChange[]
+  word_count_before: number | null
+  word_count_after: number | null
+  body_chars_before: number | null
+  body_chars_after: number | null
+  reference_count_before: number | null
+  reference_count_after: number | null
+  affected_count: number | null
+  affected_ids: number[]
+  ids_truncated: boolean
+  chapter_count: number | null
+  version_count: number | null
+  from_at: string | null
+  to_at: string | null
+  expected_count: number | null
+  deleted_count: number | null
+  high_water_id: number | null
+}
+
+export interface AuditVersionRef {
+  project_id: number
+  chapter_id: number
+  version_id: number
+  seq: number
+  content_sha256: string
+}
+
+export interface AuditLogBrief {
+  id: number
+  operation_id: string
+  occurred_at: string
+  actor_user_id: number
+  actor_username: string
+  action: AuditAction
+  result: AuditResult
+  target_type: AuditTargetType
+  target_id: number | null
+  target_label: string | null
+  owner_user_id: number | null
+  owner_username: string | null
+  project_id: number | null
+  project_title: string | null
+  chapter_id: number | null
+  error_code: AuditErrorCode | null
+  error_message: string | null
+}
+
+export interface AuditLogDetail extends AuditLogBrief {
+  summary: AuditSummary
+  version_ref: AuditVersionRef | null
+  version_status: 'available' | 'changed' | 'missing' | null
+}
+
+export interface AuditLogListQuery {
+  actor_user_id?: number
+  actor_q?: string
+  target_type?: AuditTargetType
+  target_id?: number
+  action?: AuditAction
+  result?: AuditResult
+  from_at?: string
+  to_at?: string
+  page?: number
+  page_size?: number
+}
+
+export interface AuditDateRange {
+  from_at: string
+  to_at: string
+}
+
+export interface AuditCleanupPreview extends AuditDateRange {
+  count: number
+  protected_count: number
+  expires_at: string
+  preview_token: string
+}
+
+export interface AuditCleanupRequest {
+  preview_token: string
+  confirm: true
+}
+
+export interface AuditCleanupResult {
+  deleted_count: number
+  audit_log_id: number
+}
+
 export type ApiKeyStatus = 'active' | 'expired' | 'revoked'
 
 /** 平台访问密钥的默认响应；不包含完整 Key、摘要或密文。 */

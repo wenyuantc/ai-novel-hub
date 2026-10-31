@@ -1,5 +1,6 @@
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
 from app.models.api_key import ApiKey, ApiKeyProject
+from app.models.audit import AdminAuditLog
 from app.models.base import Base
 from app.models.entities import (
     AIConfig,
@@ -45,6 +46,7 @@ from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 
 __all__ = [
+    "AdminAuditLog",
     "AgentChange",
     "AgentConversation",
     "AgentMessage",

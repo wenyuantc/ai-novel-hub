@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError
 from app.models import Chapter, ChapterCharacter, Character, Project
+from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import get_manageable_chapter
 
 PROTAGONIST_ROLES = frozenset({"主角", "protagonist"})
@@ -145,15 +146,25 @@ async def get_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: 
 
 async def set_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: int, ids: list[int]) -> list[int]:
     """整体替换本章出场角色；所有 id 必须属于本项目。"""
-    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
-    wanted = list(dict.fromkeys(ids))
-    if wanted:
-        found = set(
-            await db.scalars(select(Character.id).where(Character.id.in_(wanted), Character.project_id == project_id))
-        )
-        if len(found) != len(wanted):
-            raise BadRequestError("部分角色不存在或不属于该项目")
-    await db.execute(delete(ChapterCharacter).where(ChapterCharacter.chapter_id == chapter.id))
-    db.add_all(ChapterCharacter(chapter_id=chapter.id, character_id=cid) for cid in wanted)
-    await db.commit()
-    return await cast_ids(db, chapter.id)
+    async with AuditOperation(
+        db, user_id, "chapter.cast.update", "chapter", chapter_id, project_id=project_id
+    ) as audit:
+        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        audit.target(chapter)
+        previous_ids = await cast_ids(db, chapter.id) if audit.enabled else []
+        wanted = list(dict.fromkeys(ids))
+        if wanted:
+            found = set(
+                await db.scalars(
+                    select(Character.id).where(Character.id.in_(wanted), Character.project_id == project_id)
+                )
+            )
+            if len(found) != len(wanted):
+                raise BadRequestError("部分角色不存在或不属于该项目")
+        await db.execute(delete(ChapterCharacter).where(ChapterCharacter.chapter_id == chapter.id))
+        db.add_all(ChapterCharacter(chapter_id=chapter.id, character_id=cid) for cid in wanted)
+        audit.affected(wanted)
+        if set(previous_ids) != set(wanted):
+            audit.summary.changed_fields = ["cast"]
+        await audit.commit()
+        return await cast_ids(db, chapter.id)
