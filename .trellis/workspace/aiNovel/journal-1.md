@@ -919,3 +919,39 @@
 - 部署前备份并应用0025迁移；历史从首次初始化开始积累，不回填上线前数据。
 - 补充PostgreSQL真实迁移与并发验证。
 - 处理既有frontend/dist和node_modules/.tmp目录权限后验证标准npm run build。
+
+
+## Session 29: 管理员全站任务监控交付与收尾
+<!-- trellis-session: v=2 fp=ba84ced88b0f4096 -->
+
+**Date**: 2026-11-01
+**Task**: 管理员全站任务监控交付与收尾
+**Branch**: `codex/admin-task-monitoring`
+
+### Summary
+
+完成管理员现存任务安全监控、持久取消受理与审计；后端1292/前端594测试通过，已归档，按用户授权合并main并推送。
+
+### Main Changes
+
+- 安全列表/详情、组合筛选、轮次时长与5秒刷新
+- 持久取消受理、真实actor审计、资源/CAS/生命周期保护与0026迁移
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5247751af0927dea529aedb1488cc89eb795d088` | feat(admin): 新增全站任务监控与审计取消 |
+| `a530e7b5b9716811e259cb1da8cbf51d07cd6187` | docs(admin): 固化任务监控与安全取消契约 |
+
+### Testing
+
+- [OK] 后端1292 passed、前端594 passed，lint/类型/等价生产构建/真实浏览器通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 在可用PostgreSQL环境补真实行锁/并发及迁移实测；保留当前已说明的环境边界
