@@ -1,4 +1,4 @@
-{"file": ".trellis/tasks/10-30-admin-audit-log/research/current-contracts.md", "reason": "当前服务事务、版本合并、接入清单与真实源码证据。"}
+{"file": ".trellis/tasks/archive/2026-10/10-30-admin-audit-log/research/current-contracts.md", "reason": "当前服务事务、版本合并、接入清单与真实源码证据。"}
 {"file": ".trellis/spec/backend/admin-audit.md", "reason": "已实现的管理员审计跨层契约、事务例外、安全日志及日期清理保护。"}
 {"file": ".trellis/spec/backend/index.md", "reason": "后端分层与规范入口。"}
 {"file": ".trellis/spec/backend/database-guidelines.md", "reason": "显式事务、迁移、SQLite/PostgreSQL 和隔离约定。"}

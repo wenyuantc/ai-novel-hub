@@ -1,4 +1,4 @@
-{"file": ".trellis/tasks/10-30-admin-audit-log/research/current-contracts.md", "reason": "当前服务事务、版本合并、接入清单与真实源码证据。"}
+{"file": ".trellis/tasks/archive/2026-10/10-30-admin-audit-log/research/current-contracts.md", "reason": "当前服务事务、版本合并、接入清单与真实源码证据。"}
 {"file": ".trellis/spec/backend/admin-audit.md", "reason": "已实现的管理员审计跨层契约、事务例外、安全日志及日期清理保护。"}
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "pytest/ruff、隔离和敏感信息回归。"}
 {"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/Vitest、包体积与禁止模式。"}

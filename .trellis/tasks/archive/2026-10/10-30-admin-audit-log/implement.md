@@ -101,6 +101,6 @@ frontend：
 ## 6. 规格、提交与回滚
 
 - [x] 通过质量门禁后按 trellis-update-spec 固化新 admin-audit 契约，并在 backend/frontend index 挂接；只记录实际已实现行为。
-- [ ] 走 Phase 3 提交评审，使用中文 Conventional Commits，仅暂存本任务文件；不自动把启动前的配置或 skill 改动混进提交。
+- [x] 走 Phase 3 提交评审，使用中文 Conventional Commits，仅暂存本任务文件；不自动把启动前的配置或 skill 改动混进提交。
 - [x] 明确应用回滚可保留新审计表；显式迁移降级会删除审计，必须单独备份和确认。
 - [x] 最终实施和独立提交批准均已获得，按两笔工作提交→归档→会话日志的顺序执行，不推送。
