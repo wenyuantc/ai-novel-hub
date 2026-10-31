@@ -3,8 +3,8 @@
   "name": "admin-dashboard",
   "title": "管理员首页与全站统计",
   "description": "汇总用户、作品、章节、字数、待审核投稿和任务状态，提供管理员首页及对应管理入口。",
-  "status": "planning",
-  "dev_type": null,
+  "status": "in_progress",
+  "dev_type": "fullstack",
   "scope": null,
   "package": null,
   "priority": "P1",
@@ -12,10 +12,10 @@
   "assignee": "aiNovel",
   "createdAt": "2026-10-30",
   "completedAt": null,
-  "branch": null,
+  "branch": "codex/admin-dashboard",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "415fc45e280fce00dc45ad2e792fffbab58ed49b",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -23,8 +23,14 @@
   "relatedFiles": [],
   "notes": "",
   "meta": {
-    "planning_stage": "backlog",
+    "planning_stage": "committing",
     "source": "admin-feature-inventory",
-    "implementation_approved": "false"
+    "implementation_approved": "true",
+    "quality_gate": "passed",
+    "postgres_runtime_verified": "false",
+    "frontend_standard_build": "permission_blocked_equivalent_passed",
+    "commit_approved": "true",
+    "merge_target": "main",
+    "push_requested": "true"
   }
 }

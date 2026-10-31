@@ -1,5 +1,9 @@
 # 组件规范
 
+## 管理员首页
+
+`/admin/dashboard` 在 RequireAdmin 下懒加载，三块请求独立加载/重试，保留旧值时标过期；7/30/90日、北京时间、60秒可关闭轮询及hidden暂停。趋势图必须按容器实测宽度计算SVG画布，375px轴文字不能随大viewBox缩到不可读，并提供历史数据表。入口、缺口/null、累计任务和工坊审核深链接见[管理员首页跨层契约](../backend/admin-dashboard.md)。
+
 ## 提示词工坊
 
 - 用户级懒加载路由 `/workshop`（`pages/WorkshopPage.tsx`），`StudioNavigation` 的创作资源分组与用户菜单有入口。Tab 为「浏览」「我的分享」「审核」，审核和官方发布仅管理员可见；数量来自待审核列表的 `total`。
