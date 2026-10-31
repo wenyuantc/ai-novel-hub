@@ -34,7 +34,7 @@
 - [x] `.trellis/spec/backend/admin-dashboard.md`：统一统计/执行身份、原UUID刷新、捕获集合删除、Hub/输出保护。
 - [x] `.trellis/spec/guides/cross-layer-thinking-guide.md`：跨事务/异步对象不可复用身份检查。
 - [x] `test_task_statistics_identity.py`：真实复现与竞争防回归。
-- [ ] 规范随本任务文档提交，遵守最终提交计划的一次性用户确认；本项目无Trellis源码模板目录，不创建无关模板副本。
+- [x] 规范已随本任务文档提交，已取得最终提交计划的一次性用户确认；本项目无Trellis源码模板目录，不创建无关模板副本。
 
 # Bug Analysis：移动图表文字随固定画布缩小
 

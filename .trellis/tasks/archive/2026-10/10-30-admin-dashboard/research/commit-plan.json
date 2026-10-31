@@ -93,9 +93,16 @@
     ".codex/config.toml",
     ".gitignore"
   ],
-  "quality_report": ".trellis/tasks/10-30-admin-dashboard/research/check-report.md",
+  "quality_report": ".trellis/tasks/archive/2026-10/10-30-admin-dashboard/research/check-report.md",
   "approval": "用户已批准按计划提交及收尾，随后明确要求合并到main并推送",
   "push_requested": true,
   "merge_target": "main",
-  "executed_code_commit": "415fc45e280fce00dc45ad2e792fffbab58ed49b"
+  "executed_code_commit": "415fc45e280fce00dc45ad2e792fffbab58ed49b",
+  "execution_status": "work_commits_completed_and_merged",
+  "executed_work_commits": [
+    "415fc45e280fce00dc45ad2e792fffbab58ed49b",
+    "f3de499b775332e9e0ef7354eba42cd0ef2ac9c7"
+  ],
+  "archive_path": ".trellis/tasks/archive/2026-10/10-30-admin-dashboard",
+  "paths_are_historical": true
 }
