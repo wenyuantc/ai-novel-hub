@@ -463,8 +463,9 @@ async def test_tasks_cross_user_404(app, client, make_client, fake_llm):
 
 
 @pytest.mark.parametrize("settings_overrides", [{"task_max_per_user": 1}])
-async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm):
-    """作品软删除先取消排队任务并关闭订阅，保留行但不能经新订阅读取。"""
+@pytest.mark.parametrize("first", ["cancel", "lifecycle"])
+async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, monkeypatch, first):
+    """取消关闭与生命周期心跳是两个既存赢家；都终止旧流且不开放新的订阅。"""
     _, _, (ch1,) = await _setup(client)
     p2 = await create_project(client, title="另一个项目")
     ch2 = (await client.post(f"/api/v1/projects/{p2['id']}/chapters", json={"title": "章"})).json()
@@ -476,16 +477,52 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm):
     assert t2["status"] == "queued"
 
     engine = app.state.task_engine
-    engine.heartbeat_seconds = 0.05
+    # cancel分支让真正close_hub先到；lifecycle分支在已提交删除意图后阻塞取消，
+    # 明确让心跳可见性检查获胜，不靠偶然的50ms调度先后。
+    engine.heartbeat_seconds = 60 if first == "cancel" else 0.01
+    deleting, release_cancel = asyncio.Event(), asyncio.Event()
+    actual_stop = task_service.stop_project_tasks
+
+    async def stop_after_intent(*args):
+        deleting.set()
+        await release_cancel.wait()
+        return await actual_stop(*args)
+
+    if first == "lifecycle":
+        monkeypatch.setattr(task_service, "stop_project_tasks", stop_after_intent)
+    async with app.state.sessionmaker() as db:
+        original_key = (await db.get(Task, t2["id"])).statistics_key
     subscriber = asyncio.ensure_future(client.get(f"/api/v1/tasks/{t2['id']}/stream"))
     await wait_until(lambda: engine.hubs[t2["id"]].subscriber_count == 1)
-    assert (await client.delete(f"/api/v1/projects/{p2['id']}")).status_code == 204
-
-    events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
+    deletion = asyncio.create_task(client.delete(f"/api/v1/projects/{p2['id']}"))
+    try:
+        if first == "lifecycle":
+            await asyncio.wait_for(deleting.wait(), 3)
+            events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
+            assert not deletion.done()
+            release_cancel.set()
+        else:
+            events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
+        assert (await asyncio.wait_for(deletion, 5)).status_code == 204
+    finally:
+        release_cancel.set()
+        await asyncio.gather(deletion, subscriber, return_exceptions=True)
     assert events[0][0] == "snapshot"
-    assert events[-1][0] == "error" and events[-1][1]["detail"] == "任务已取消"
-    assert events[-1][1]["task"]["status"] == "cancelled"
+    assert events[-1][0] == "error"
+    if first == "cancel":
+        assert events[-1][1]["detail"] == "任务已取消"
+        assert events[-1][1]["task"]["id"] == t2["id"]
+        assert events[-1][1]["task"]["status"] == "cancelled"
+    else:
+        assert events[-1] == ("error", {"task": None, "detail": "任务不存在"})
+    assert not any(event == "delta" for event, _ in events)
+    assert not any(event in ("done", "error", "paused") for event, _ in events[:-1])
+    async with app.state.sessionmaker() as db:
+        saved = await db.get(Task, t2["id"])
+        assert saved.statistics_key == original_key and saved.status == "cancelled"
+        assert (await db.get(Chapter, ch2["id"])).status == "draft"
     assert (await client.get(f"/api/v1/tasks/{t2['id']}")).status_code == 404
+    assert (await client.get(f"/api/v1/tasks/{t2['id']}/stream")).status_code == 404
     assert t2["id"] not in engine.hubs
 
     # 订阅一个刚被删除的任务（越过归属校验后才消失）：同样以 error 结束而不是空流

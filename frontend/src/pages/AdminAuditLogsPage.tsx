@@ -2,7 +2,7 @@ import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Empty, Form, Input, InputNumber, List, Pagination, Result, Select, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useCallback, useState } from 'react'
-import { AUDIT_ACTION, AUDIT_RESULT, AUDIT_TARGET, auditLogApi } from '../api/auditLogs'
+import { AUDIT_ACTION, AUDIT_RESULT, AUDIT_TARGET, auditLogApi, auditResult } from '../api/auditLogs'
 import { errorMessage } from '../api/client'
 import type { AuditAction, AuditLogBrief, AuditLogListQuery, AuditResult, AuditTargetType } from '../api/types'
 import AuditCleanupModal from '../components/auditLogs/AuditCleanupModal'
@@ -24,7 +24,7 @@ interface ResultsProps {
 /** 桌面密集表格、移动端可换行列表，均只有只读详情入口。 */
 export function AuditLogResults({ items, loading, mobile, onDetail }: ResultsProps) {
   const resultTag = (log: AuditLogBrief) => <Space size={[4, 4]} wrap>
-    <Tag color={AUDIT_RESULT[log.result].color}>{AUDIT_RESULT[log.result].label}</Tag>
+    <Tag color={auditResult(log).color}>{auditResult(log).label}</Tag>
     {log.action === 'audit.cleanup' && <Tag>受保护</Tag>}
   </Space>
   const columns: TableColumnsType<AuditLogBrief> = [

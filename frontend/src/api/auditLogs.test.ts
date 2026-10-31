@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { auditLogApi } from './auditLogs'
+import { AUDIT_RESULT, auditLogApi, auditResult } from './auditLogs'
 import { ApiError, setUnauthorizedHandler } from './client'
 
 function stubFetch(status = 200, body: unknown = { items: [], total: 0 }) {
@@ -14,6 +14,12 @@ function stubFetch(status = 200, body: unknown = { items: [], total: 0 }) {
 afterEach(() => { vi.unstubAllGlobals(); setUnauthorizedHandler(null) })
 
 describe('管理员审计 API', () => {
+  it('只有task.cancel_request成功局部标为已受理，全局success仍为成功', () => {
+    expect(auditResult({ action: 'task.cancel_request', result: 'success' }).label).toBe('已受理')
+    expect(auditResult({ action: 'chapter.update', result: 'success' }).label).toBe('成功')
+    expect(auditResult({ action: 'task.cancel_request', result: 'failure' }).label).toBe('失败')
+    expect(AUDIT_RESULT.success.label).toBe('成功')
+  })
   it('组合筛选、稳定分页参数与历史用户名普通文本编码', async () => {
     const calls = stubFetch()
     await expect(auditLogApi.list({ actor_user_id: 7, actor_q: '  已注销%_\\用户  ', target_type: 'chapter', target_id: 19, action: 'chapter.update', result: 'failure', from_at: '2026-10-29T16:00:00.000Z', to_at: '2026-10-31T16:00:00.000Z', page: 2, page_size: 50 })).resolves.toEqual({ items: [], total: 0 })

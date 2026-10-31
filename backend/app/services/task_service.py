@@ -10,6 +10,7 @@ handler 可选钩子（getattr 探测）：
 
 import asyncio
 import bisect
+from datetime import UTC, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -43,6 +44,15 @@ STAGE_LABELS = {
     "interrupted": "已中断",
 }
 ACTIVE_CONFLICT = "已有任务在进行中，请等待其完成后再试"
+
+
+def _next_queued_at(task: Task):
+    stamp = task_statistics_service.now_utc()
+    previous = task.queued_at
+    if previous is not None:
+        previous = previous.replace(tzinfo=UTC) if previous.tzinfo is None else previous.astimezone(UTC)
+        stamp = max(stamp, previous + timedelta(microseconds=1))
+    return stamp
 
 
 def visible_project_condition():
@@ -184,6 +194,8 @@ async def create_task(
 
 async def retry_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
     task = await get_owned_task(db, user_id, task_id)
+    if task.admin_cancel_operation_id is not None:
+        raise ConflictError("取消请求正在安全收尾，不能重试")
     if task.status not in RETRYABLE_STATUSES:
         raise ConflictError("只有失败、已取消或已中断的任务可以重试")
     params = dict(task.input.get("request") or {})
@@ -194,6 +206,8 @@ async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
     """待审核 → 排队：同一任务（id、断点不变）从下一步继续；下一步的上下文在运行时按最新数据重新组装。"""
     task = await get_owned_task(db, user_id, task_id)
     await refresh_same_task(db, task)
+    if task.admin_cancel_operation_id is not None:
+        raise ConflictError("取消请求正在安全收尾，不能继续")
     if task.project_id is not None:
         await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status != "paused":
@@ -204,8 +218,10 @@ async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
     try:
         result = await db.execute(
             update(Task)
-            .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused")
-            .values(status="queued", error="", result=None, finished_at=None, stage=STAGE_LABELS["queued"])
+            .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
+                   Task.admin_cancel_operation_id.is_(None))
+            .values(status="queued", error="", result=None, finished_at=None, stage=STAGE_LABELS["queued"],
+                    queued_at=_next_queued_at(task))
         )
         if result.rowcount == 1:
             await task_statistics_service.record_state_change(db, task, "queued")
@@ -228,6 +244,8 @@ async def finish_paused_task(db: AsyncSession, engine: "TaskEngine", user_id: in
     """待审核 → 已完成（提前结束）：剩余步骤不再执行。"""
     task = await get_owned_task(db, user_id, task_id)
     await refresh_same_task(db, task)
+    if task.admin_cancel_operation_id is not None:
+        raise ConflictError("取消请求正在安全收尾，不能提前结束")
     if task.project_id is not None:
         await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status != "paused":
@@ -237,7 +255,8 @@ async def finish_paused_task(db: AsyncSession, engine: "TaskEngine", user_id: in
     stamp = task_statistics_service.now_utc()
     result = await db.execute(
         update(Task)
-        .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused")
+        .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
+               Task.admin_cancel_operation_id.is_(None))
         .values(status="succeeded", result=final, progress=100, stage=STAGE_LABELS["succeeded"], finished_at=stamp)
     )
     if result.rowcount == 1:
@@ -336,11 +355,14 @@ async def _cancel_loaded_task(db: AsyncSession, engine: "TaskEngine", task: Task
 
 async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
     await refresh_same_task(db, task)
+    if task.admin_cancel_operation_id is not None:
+        return await _wait_admin_cancel(db, engine, task)
     if task.status == "queued":
         stamp = task_statistics_service.now_utc()
         result = await db.execute(
             update(Task)
-            .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "queued")
+            .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "queued",
+                   Task.admin_cancel_operation_id.is_(None))
             .values(status="cancelled", error="任务已取消", stage=STAGE_LABELS["cancelled"], finished_at=stamp)
         )
         if result.rowcount == 1:
@@ -357,11 +379,14 @@ async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task
             engine.notify()
             return to_out(task)
         await refresh_same_task(db, task)
+        if task.admin_cancel_operation_id is not None:
+            return await _wait_admin_cancel(db, engine, task)
     if task.status == "paused":
         stamp = task_statistics_service.now_utc()
         result = await db.execute(
             update(Task)
-            .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused")
+            .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
+                   Task.admin_cancel_operation_id.is_(None))
             .values(status="cancelled", error="任务已取消", stage=STAGE_LABELS["cancelled"], finished_at=stamp)
         )
         if result.rowcount == 1:
@@ -374,6 +399,8 @@ async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task
             await prune_finished(db, task.user_id)
             return to_out(task)
         await refresh_same_task(db, task)
+        if task.admin_cancel_operation_id is not None:
+            return await _wait_admin_cancel(db, engine, task)
         if task.status == "queued":
             # 与继续竞争：已重新排队，按排队中取消
             return await _cancel_loaded_task(db, engine, task)
@@ -386,7 +413,8 @@ async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task
             await _abort_loaded_task(engine, task)
             stamp = task_statistics_service.now_utc()
             result = await db.execute(update(Task).where(
-                Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "running"
+                Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "running",
+                Task.admin_cancel_operation_id.is_(None),
             ).values(
                 status="cancelled", error="任务已取消", stage=STAGE_LABELS["cancelled"], finished_at=stamp
             ))
@@ -394,6 +422,8 @@ async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task
                 await task_statistics_service.record_state_change(db, task, "cancelled", finished_at=stamp)
             await db.commit()
             await refresh_same_task(db, task)
+            if task.admin_cancel_operation_id is not None:
+                return await _wait_admin_cancel(db, engine, task)
             engine.close_hub(
                 task.id, "error", {"task": out_json(task), "detail": task.error}, statistics_key=task.statistics_key
             )
@@ -404,9 +434,28 @@ async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task
     raise ConflictError("任务已结束，无法取消")
 
 
+async def _wait_admin_cancel(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
+    task_id, key, operation_id = task.id, task.statistics_key, task.admin_cancel_operation_id
+    await db.rollback()
+    if key is None or operation_id is None:
+        raise ConflictError("任务取消状态已变化，请刷新后重试")
+    engine.request_admin_cancel(key, operation_id)
+    work = engine.admin_cancellations.work.get((key, operation_id))
+    if work is not None:
+        await asyncio.wait({work}, timeout=engine.cancel_wait_seconds)
+    task = await db.scalar(select(Task).where(Task.id == task_id, Task.statistics_key == key).execution_options(
+        populate_existing=True
+    ))
+    if task is None:
+        raise NotFoundError("任务不存在")
+    return await task_out(db, engine, task)
+
+
 async def delete_task(db: AsyncSession, user_id: int, task_id: int) -> None:
     task = await get_owned_task(db, user_id, task_id)
     await refresh_same_task(db, task)
+    if task.admin_cancel_operation_id is not None:
+        raise ConflictError("取消请求正在安全收尾，不能删除任务")
     if task.project_id is not None:
         await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status == "paused":
@@ -417,7 +466,7 @@ async def delete_task(db: AsyncSession, user_id: int, task_id: int) -> None:
         db, Task.id == task.id, Task.statistics_key == task.statistics_key
     )
     result = await db.execute(delete(Task).where(
-        Task.id == task.id, Task.statistics_key == task.statistics_key
+        Task.id == task.id, Task.statistics_key == task.statistics_key, Task.admin_cancel_operation_id.is_(None)
     ))
     if result.rowcount != 1:
         raise NotFoundError("任务不存在")
@@ -438,7 +487,8 @@ async def _lock_history_projects(db: AsyncSession, user_id: int, project_ids: se
 
 async def clear_finished(db: AsyncSession, user_id: int, *, project_id: int | None = None) -> int:
     statement = select(Task.project_id).where(
-        Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists()
+        Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists(),
+        Task.admin_cancel_operation_id.is_(None),
     )
     if project_id is not None:
         statement = statement.where(Task.project_id == project_id)
@@ -446,7 +496,8 @@ async def clear_finished(db: AsyncSession, user_id: int, *, project_id: int | No
     locked = await _lock_history_projects(db, user_id, candidates - {None})
     allowed = or_(Task.project_id.in_(locked), Task.project_id.is_(None) if None in candidates else False)
     conditions = (
-        Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists(), allowed
+        Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists(), allowed,
+        Task.admin_cancel_operation_id.is_(None),
     )
     keys = await task_statistics_service.mark_removed(db, *conditions)
     statement = delete(Task).where(*conditions, Task.statistics_key.in_(keys))
@@ -459,7 +510,8 @@ async def prune_finished(db: AsyncSession, user_id: int) -> None:
     """回收站历史不参与普通用户已结束任务裁剪；锁住将被裁剪的父项目直到提交。"""
     stale = (await db.execute(
         select(Task.id, Task.statistics_key, Task.project_id)
-        .where(Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists())
+        .where(Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists(),
+               Task.admin_cancel_operation_id.is_(None))
         .order_by(Task.id.desc()).offset(MAX_FINISHED_PER_USER)
     )).all()
     if not stale:
@@ -471,7 +523,8 @@ async def prune_finished(db: AsyncSession, user_id: int) -> None:
             Task.statistics_key.in_([key for _, key in eligible if key is not None]),
             and_(Task.id.in_([tid for tid, key in eligible if key is None]), Task.statistics_key.is_(None)),
         )
-        conditions = (Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists())
+        conditions = (Task.user_id == user_id, Task.status.in_(FINISHED_TASK_STATUSES), visible_task_project_exists(),
+                      Task.admin_cancel_operation_id.is_(None))
         keys = await task_statistics_service.mark_removed(db, identities, *conditions)
         await db.execute(delete(Task).where(Task.statistics_key.in_(keys), *conditions))
         await db.commit()
@@ -486,14 +539,18 @@ async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id:
         async with asyncio.timeout(engine.cancel_wait_seconds):
             if retry_abort:
                 aborted = list(await db.scalars(select(Task).where(
-                    Task.project_id == project_id, Task.status.in_(("cancelled", "failed", "interrupted"))
+                    Task.project_id == project_id, Task.status.in_(("cancelled", "failed", "interrupted")),
+                    Task.admin_cancel_operation_id.is_(None),
                 )))
                 for task in aborted:
+                    if engine.admin_cancellations.completed_round(task):
+                        continue
                     with engine.cleanup_scope(task):
                         await _abort_loaded_task(engine, task)
             while True:
                 tasks = list(await db.scalars(select(Task).where(
-                    Task.project_id == project_id, Task.status.in_(OPEN_TASK_STATUSES)
+                    Task.project_id == project_id,
+                    or_(Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None)),
                 ).execution_options(populate_existing=True)))
                 for task in tasks:
                     try:
@@ -508,7 +565,8 @@ async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id:
                     await asyncio.wait(work)
                     continue
                 remaining = await db.scalar(select(Task.id).where(
-                    Task.project_id == project_id, Task.status.in_(OPEN_TASK_STATUSES)
+                    Task.project_id == project_id,
+                    or_(Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None)),
                 ).limit(1))
                 if remaining is None:
                     break

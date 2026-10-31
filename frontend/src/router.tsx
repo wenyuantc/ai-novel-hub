@@ -61,6 +61,11 @@ export const router = createBrowserRouter([
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminDashboardPage')) }],
       },
       {
+        path: 'admin/tasks',
+        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminTasksPage')) }],
+      },
+      {
         path: 'admin/recycle-bin',
         element: <RequireAdmin><Outlet /></RequireAdmin>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminRecycleBinPage')) }],

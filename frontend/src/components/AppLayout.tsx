@@ -37,13 +37,14 @@ export default function AppLayout() {
   const groups = studioNavigation(projectId, mcpEnabled, canUseAI)
   const current = navigationItem(groups, location.pathname)
   const adminSection = location.pathname.startsWith('/admin/')
-  const pageName = location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const pageName = location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
     items: [
       { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
       ...(user?.is_admin ? [{ key: 'admin-dashboard', icon: <DashboardOutlined />, label: '管理员首页' }] : []),
+      ...(user?.is_admin ? [{ key: 'admin-tasks', icon: <UnorderedListOutlined />, label: '全站任务监控' }] : []),
       ...(user?.is_admin ? [{ key: 'admin', icon: <TeamOutlined />, label: '用户管理' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-projects', icon: <BookOutlined />, label: '作品管理' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-recycle-bin', icon: <DeleteOutlined />, label: '作品回收站' }] : []),
@@ -55,6 +56,7 @@ export default function AppLayout() {
     onClick: async ({ key }) => {
       setNavOpenAt(null)
       if (key === 'admin-dashboard') navigate('/admin/dashboard')
+      else if (key === 'admin-tasks') navigate('/admin/tasks')
       else if (key === 'admin') navigate('/admin/users')
       else if (key === 'admin-projects') navigate('/admin/projects')
       else if (key === 'admin-recycle-bin') navigate('/admin/recycle-bin')
@@ -98,6 +100,7 @@ export default function AppLayout() {
         {projectId !== null && !managingOther && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
         <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpen(true) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/dashboard" aria-current={location.pathname.startsWith('/admin/dashboard') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DashboardOutlined />管理员首页</Link>}
+        {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/tasks" aria-current={location.pathname.startsWith('/admin/tasks') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><UnorderedListOutlined />全站任务监控</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/users" aria-current={location.pathname.startsWith('/admin/users') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><TeamOutlined />用户管理</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/projects" aria-current={location.pathname.startsWith('/admin/projects') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><BookOutlined />作品管理</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/recycle-bin" aria-current={location.pathname.startsWith('/admin/recycle-bin') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DeleteOutlined />作品回收站</Link>}

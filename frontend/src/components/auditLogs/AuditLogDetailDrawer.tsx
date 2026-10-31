@@ -1,6 +1,6 @@
 import { Alert, Button, Descriptions, Drawer, Space, Spin, Tag, Typography, theme } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AUDIT_ACTION, AUDIT_RESULT, auditLogApi } from '../../api/auditLogs'
+import { AUDIT_ACTION, auditLogApi, auditResult } from '../../api/auditLogs'
 import { ApiError, errorMessage } from '../../api/client'
 import { versionApi } from '../../api/chapterVersions'
 import type { AuditLogDetail, ChapterVersion } from '../../api/types'
@@ -27,7 +27,7 @@ interface ContentProps {
 /** 仅展示安全快照与摘要；绝不复用包含恢复、标星等写操作的版本抽屉。 */
 export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, version, versionError }: ContentProps) {
   const { token } = theme.useToken()
-  const result = AUDIT_RESULT[log.result]
+  const result = auditResult(log)
   const ref = log.version_ref
   return <Space direction="vertical" size={16} style={{ width: '100%', overflowWrap: 'anywhere' }}>
     <Descriptions size="small" column={1} bordered>
@@ -46,8 +46,8 @@ export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, vers
     </Descriptions>
     <div>
       <Typography.Title level={5} style={{ marginTop: 0 }}>变更摘要</Typography.Title>
-      <Typography.Paragraph type="secondary">仅保存字段、状态及数量，不保存正文全文、完整差异或版本备注内容。名称、操作人及归属均为操作时快照。</Typography.Paragraph>
-      <Descriptions size="small" column={1} bordered items={auditSummaryRows(log.summary).map((row, i) => ({ key: i, label: row.label, children: row.value }))} />
+      <Typography.Paragraph type="secondary">仅保存安全摘要，不保存正文全文、完整差异或版本备注内容。任务取消受理另含管理员主动填写的原因，不代表任务原文。名称、操作人及归属均为操作时快照。</Typography.Paragraph>
+      <Descriptions size="small" column={1} bordered items={auditSummaryRows(log.summary, log.action).map((row, i) => ({ key: i, label: row.label, children: row.value }))} />
     </div>
     <div>
       <Typography.Title level={5} style={{ marginTop: 0 }}>已有业务版本关联</Typography.Title>

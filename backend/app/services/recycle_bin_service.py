@@ -118,7 +118,9 @@ async def _ensure_idle(db: AsyncSession, engine: "TaskEngine", project_id: int) 
         raise ConflictError("任务尚未安全收尾，作品未删除", extra={"code": "project_tasks_not_stopped"})
     if (
         await db.scalar(
-            select(Task.id).where(Task.project_id == project_id, Task.status.in_(OPEN_TASK_STATUSES)).limit(1)
+            select(Task.id).where(Task.project_id == project_id, or_(
+                Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None)
+            )).limit(1)
         )
         is not None
     ):

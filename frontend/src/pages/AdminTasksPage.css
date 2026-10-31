@@ -1,0 +1,23 @@
+.admin-tasks { min-width: 0; }
+.admin-tasks .ant-card-body { min-width: 0; }
+.admin-task-wrap { overflow-wrap: anywhere; word-break: break-word; }
+.admin-task-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-bottom: 12px; }
+.admin-task-filters .ant-form-item { min-width: 0; margin-bottom: 0; }
+.admin-task-filters .ant-input-number { width: 100%; }
+.admin-task-filters input[type="date"] { min-width: 0; width: 100%; }
+.admin-task-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.admin-task-summary > span { white-space: nowrap; }
+.admin-task-card-heading, .admin-task-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.admin-task-mobile-item { display: block !important; overflow-wrap: anywhere; min-width: 0; padding: 16px 0 !important; }
+.admin-task-pagination { margin-top: 16px; }
+.admin-tasks .ant-table-wrapper { min-width: 0; }
+@media (max-width: 767px) {
+  .admin-tasks .ant-card-body { padding: 12px; }
+  .admin-task-filters { grid-template-columns: minmax(0, 1fr); }
+  .admin-task-pagination { align-items: flex-start; }
+}
+@media (max-width: 767px) {
+  .admin-tasks .studio-page-heading { flex-direction: column; align-items: stretch; }
+  .admin-tasks .studio-page-heading > div { width: 100%; min-width: 0; }
+  .admin-tasks .studio-page-action { justify-content: flex-start; }
+}

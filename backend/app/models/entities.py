@@ -4,7 +4,7 @@
 所有访问都经 service 层显式查询并按 user_id 过滤。
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -637,6 +637,13 @@ class Task(TimestampMixin, Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 当前一轮入队起点；旧数据保持 null，不能使用 updated_at 猜测。
+    queued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=True
+    )
+    # 受理与成功审计同事务；真实收尾的状态提交原子清空，不代表已取消。
+    admin_cancel_operation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    admin_cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ChapterAnalysis(TimestampMixin, Base):

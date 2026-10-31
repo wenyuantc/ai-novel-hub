@@ -5,6 +5,7 @@ from app.api.v1 import (
     admin_audit,
     admin_dashboard,
     admin_recycle_bin,
+    admin_tasks,
     agent,
     ai_configs,
     analysis,
@@ -45,6 +46,7 @@ api_router.include_router(admin.router)
 api_router.include_router(admin_audit.router)
 api_router.include_router(admin_dashboard.router)
 api_router.include_router(admin_recycle_bin.router)
+api_router.include_router(admin_tasks.router)
 api_router.include_router(ai_configs.router)
 api_router.include_router(api_keys.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}

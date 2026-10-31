@@ -4,8 +4,9 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, insert, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models import AgentChange, AnalysisChange, Chapter, ChapterAnalysis, OrganizationMember, Project, User
@@ -73,10 +74,21 @@ async def test_database_restrict_prevents_raw_user_cascade(app, client):
 async def test_concurrent_project_creation_after_empty_count_blocks_user_deletion(
     app, client, recycle_admin, monkeypatch
 ):
-    """SQLite的User行锁不生效时，count之后并发创建仍由RESTRICT兜底，不级联新作品。"""
+    """故障注入遗漏父User屏障时，count后并发创建仍由RESTRICT兜底，不级联新作品。"""
     owner = await register(client)
     counted, release = asyncio.Event(), asyncio.Event()
     original = admin_service._flush_user_delete
+    actual_execute = AsyncSession.execute
+    deletion = None
+    bypassed = []
+
+    async def omit_parent_barrier(db, statement, *args, **kwargs):
+        if (asyncio.current_task() is deletion and getattr(statement, "is_update", False)
+                and statement.table.name == User.__tablename__):
+            # 仅本例绕过新增真实写锁，保留原RESTRICT末层防御的全部断言。
+            bypassed.append(True)
+            return await actual_execute(db, select(User.id).where(User.id == owner["id"]))
+        return await actual_execute(db, statement, *args, **kwargs)
 
     async def before_flush(db):
         counted.set()
@@ -84,6 +96,7 @@ async def test_concurrent_project_creation_after_empty_count_blocks_user_deletio
         await original(db)
 
     monkeypatch.setattr(admin_service, "_flush_user_delete", before_flush)
+    monkeypatch.setattr(AsyncSession, "execute", omit_parent_barrier)
     deletion = asyncio.create_task(recycle_admin.delete(f"/api/v1/admin/users/{owner['id']}"))
     try:
         await asyncio.wait_for(counted.wait(), 3)
@@ -91,11 +104,61 @@ async def test_concurrent_project_creation_after_empty_count_blocks_user_deletio
     finally:
         release.set()
     result = await asyncio.wait_for(deletion, 5)
+    assert bypassed == [True]
     assert result.status_code == 409 and result.json()["code"] == "user_has_projects"
     assert (await client.get(f"/api/v1/projects/{project['id']}")).status_code == 200
     async with app.state.sessionmaker() as db:
         assert await db.get(User, owner["id"]) is not None
         assert await db.get(Project, project["id"]) is not None
+
+
+async def test_user_delete_real_parent_barrier_serializes_concurrent_project_insert(
+    app, client, recycle_admin, monkeypatch
+):
+    """真实User写屏障先赢时，插入等待删除提交，再由FK拒绝，不生成孤儿作品。"""
+    owner = await register(client)
+    counted, release, inserting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = admin_service._flush_user_delete
+
+    async def before_flush(db):
+        counted.set()
+        await release.wait()
+        await original(db)
+
+    async def create_after_count():
+        async with app.state.sessionmaker() as db:
+            try:
+                await db.execute(insert(Project).values(user_id=owner["id"], title="父屏障后的并发插入"))
+                await db.commit()
+            except IntegrityError as exc:
+                await db.rollback()
+                assert str(exc.orig) == "FOREIGN KEY constraint failed"
+                return "foreign_key_rejected"
+            raise AssertionError("User删除已获真实写屏障，不能在删除提交后生成孤儿作品")
+
+    def observe_insert(conn, cursor, statement, parameters, context, many):
+        if statement.startswith("INSERT INTO projects"):
+            inserting.set()
+
+    monkeypatch.setattr(admin_service, "_flush_user_delete", before_flush)
+    deletion = asyncio.create_task(recycle_admin.delete(f"/api/v1/admin/users/{owner['id']}"))
+    creator = None
+    event.listen(app.state.engine.sync_engine, "before_cursor_execute", observe_insert)
+    try:
+        await asyncio.wait_for(counted.wait(), 3)
+        creator = asyncio.create_task(create_after_count())
+        await asyncio.wait_for(inserting.wait(), 3)
+        assert not creator.done()
+        release.set()
+        assert (await asyncio.wait_for(deletion, 5)).status_code == 204
+        assert await asyncio.wait_for(creator, 5) == "foreign_key_rejected"
+        async with app.state.sessionmaker() as db:
+            assert await db.get(User, owner["id"]) is None
+            assert await db.scalar(select(Project.id).where(Project.user_id == owner["id"])) is None
+    finally:
+        event.remove(app.state.engine.sync_engine, "before_cursor_execute", observe_insert)
+        release.set()
+        await asyncio.gather(deletion, *([creator] if creator is not None else []), return_exceptions=True)
 
 
 async def test_user_delete_does_not_translate_unrelated_sqlite_trigger_failures():

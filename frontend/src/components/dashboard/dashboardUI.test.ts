@@ -48,7 +48,7 @@ function render(element: ReactElement, path = '/admin/dashboard') {
 afterEach(() => { view = initialView(); chartMeasure.width = 0; useAuthStore.setState({ user: null, status: 'anonymous' }) })
 
 describe('管理员首页渲染与权限入口', () => {
-  it('完整展示已确认统计口径和真实管理入口，不制造任务监控死链', () => {
+  it('完整展示已确认统计口径和真实管理入口，区分累计统计与现存监控入口', () => {
     const html = render(createElement(AdminDashboardPage))
     expect(html).toContain('所有账号，含管理员与禁用账号')
     expect(html).toContain('作品总数（含回收站）')
@@ -56,7 +56,10 @@ describe('管理员首页渲染与权限入口', () => {
     expect(html).toContain('初始化存量 10 个')
     expect(html).toContain('最近 24 小时失败')
     for (const path of ['/admin/users', '/admin/projects', '/admin/recycle-bin', '/admin/audit-logs', '/workshop?tab=review']) expect(html).toContain(`href="${path}"`)
-    expect(html).not.toContain('href="/admin/tasks"')
+    expect(html).toContain('href="/admin/tasks"')
+    expect(html).toContain('href="/admin/tasks?status=failed"')
+    expect(html).toContain('href="/admin/tasks?status=interrupted"')
+    expect(html).toContain('现存列表数量不保证与累计结果')
     expect(html).toContain('历史统计时间范围')
     expect(html).toContain('每60秒自动刷新')
   })

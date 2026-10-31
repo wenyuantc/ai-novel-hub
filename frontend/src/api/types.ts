@@ -63,6 +63,7 @@ export interface ResetPasswordRequest {
 
 // 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
 export type AuditAction =
+  | 'task.cancel_request'
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
   | 'project.update' | 'project.delete' | 'project.restore' | 'project.purge' | 'project.expire'
   | 'chapter.create' | 'chapter.create_from_outlines'
@@ -71,7 +72,7 @@ export type AuditAction =
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
   | 'skill.restore_builtin' | 'audit.cleanup'
-export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit'
+export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task'
 export type AuditResult = 'success' | 'failure'
 export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
 export type AuditField =
@@ -109,6 +110,10 @@ export interface AuditSummary {
   lifecycle_action?: 'soft_delete' | 'restore' | 'purge' | 'expire' | null
   retention_days?: 30 | null
   cancelled_task_count?: number | null
+  task_key?: string | null
+  task_kind?: TaskKind | 'unknown' | null
+  accepted_from_status?: 'queued' | 'running' | 'paused' | null
+  cancel_reason?: string | null
 }
 
 export interface AuditVersionRef {
@@ -3055,3 +3060,57 @@ export interface AdminDashboardHistory extends AdminDashboardMeta {
   points: AdminDashboardHistoryPoint[]
   comparison: AdminDashboardComparison
 }
+
+// 管理员现存任务安全投影；不能用个人 Task 替代，详情与取消按不可复用 UUID 定位。
+export type AdminTaskSort = 'created_desc' | 'queue_longest' | 'running_longest'
+export type AdminTaskError = 'execution_failed' | 'cancelled' | 'interrupted' | 'cleanup_pending'
+export type AdminTaskStatus = TaskStatus | 'unknown'
+export interface AdminTaskBrief {
+  id: number
+  task_key: string | null
+  kind: TaskKind | 'unknown'
+  title: string
+  status: AdminTaskStatus
+  progress: number
+  owner_user_id: number
+  owner_username: string
+  project_id: number | null
+  project_title: string | null
+  project_lifecycle: 'active' | 'deleting' | 'recycled' | 'none'
+  chapter_id: number | null
+  stage: string
+  error_code: AdminTaskError | null
+  error_message: string | null
+  created_at: string
+  queued_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  queued_seconds: number | null
+  running_seconds: number | null
+  cancellation_pending: boolean
+  cancel_requested_at: string | null
+  can_cancel: boolean
+}
+export interface AdminTaskDetail extends AdminTaskBrief { as_of: string }
+export type AdminTaskCounts = Record<AdminTaskStatus, number>
+export interface AdminTaskList {
+  items: AdminTaskBrief[]
+  total: number
+  counts: AdminTaskCounts
+  as_of: string
+}
+export interface AdminTaskListQuery {
+  q?: string
+  owner_user_id?: number
+  project_id?: number
+  task_id?: number
+  kind?: TaskKind
+  status?: TaskStatus[]
+  from_at?: string
+  to_at?: string
+  sort?: AdminTaskSort
+  page?: number
+  page_size?: number
+}
+export interface AdminTaskCancelRequest { confirm: true; reason: string }
+export interface AdminTaskCancelOut { operation_id: string; audit_log_id: number | null }

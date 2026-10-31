@@ -71,10 +71,11 @@ function Tasks({ data }: { data: AdminDashboardTasks }) {
         <Typography.Text>最近 24 小时中断：<strong style={{ color: data.interrupted_24h ? token.colorWarning : token.colorText }}>{dashboardCount(data.interrupted_24h)}</strong></Typography.Text>
       </Space>
     </div>
+    <Space wrap><Link to="/admin/tasks">查看现存任务</Link><Link to="/admin/tasks?status=queued">查看现存排队任务</Link><Link to="/admin/tasks?status=running">查看现存运行任务</Link><Link to="/admin/tasks?status=paused">查看现存待审核任务</Link><Link to="/admin/tasks?status=failed">查看现存失败任务</Link><Link to="/admin/tasks?status=interrupted">查看现存中断任务</Link></Space>
     <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
       开始跟踪：{dashboardTime(data.tracking_since)}。初始化存量 {dashboardCount(data.baseline_tasks)} 个，不冒充上线后新建量或完整历史。
       累计结果独立保存，不随任务清理或作品彻删减少；未结束即移除 {dashboardCount(data.removed_unfinished)} 个，不计为成功或失败。
-      全站任务监控将在独立模块交付，此处不提供任务处置入口。
+      任务监控仅查询现存明细，不能恢复已移除任务；现存列表数量不保证与累计结果或最近 24 小时统计相等。
     </Typography.Paragraph>
   </>
 }

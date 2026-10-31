@@ -1131,7 +1131,10 @@ async def skip_paused(db: AsyncSession, engine: Any, user_id: int, task_id: int)
     cp = copy.deepcopy(task.checkpoint)
     cursor = apply_skip(cp, task.step_cursor)
     result = await db.execute(
-        update(Task).where(Task.id == task.id, Task.status == "paused").values(checkpoint=cp, step_cursor=cursor)
+        update(Task).where(
+            Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
+            Task.admin_cancel_operation_id.is_(None),
+        ).values(checkpoint=cp, step_cursor=cursor)
     )
     await db.commit()
     if result.rowcount != 1:

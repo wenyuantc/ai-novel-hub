@@ -168,6 +168,10 @@ class AuditOperation:
     def _event(self, result, *, code=None):
         # 完整再校验，防止后续服务直接赋值绕过有界 JSON 白名单。
         summary = AuditSummary.model_validate(self.summary.model_dump()).model_dump(mode="json")
+        if self.values["action"] != "task.cancel_request" and any(
+            summary[key] is not None for key in ("task_key", "task_kind", "accepted_from_status", "cancel_reason")
+        ):
+            raise ValueError("取消摘要仅允许用于任务取消受理")
         return AdminAuditLog(
             operation_id=self.operation_id,
             **self.values,
@@ -227,6 +231,10 @@ class AuditOperation:
                             for key in ("from_at", "to_at", "high_water_id", "expected_count")
                         }
                     )
+                elif self.values["action"] == "task.cancel_request":
+                    self.summary = AuditSummary(**{
+                        key: getattr(self.summary, key) for key in ("task_key", "task_kind", "cancel_reason")
+                    })
                 else:
                     self.summary = AuditSummary()
                 self.version_ref = None

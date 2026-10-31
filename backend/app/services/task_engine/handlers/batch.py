@@ -81,7 +81,7 @@ class BatchHandler:
         try:
             await batch_service.restore_current(ctx, task.id)
         except Exception:  # noqa: BLE001
-            logger.exception("任务 %s 回退当前章节状态失败", task.id)
+            logger.error("任务回退当前章节状态失败 task=%s", task.id)
             raise
 
 

@@ -5,7 +5,7 @@
 """
 
 from anyio import to_thread
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -137,12 +137,19 @@ async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
             raise BadRequestError(SELF_FORBIDDEN)
         if user.is_admin and user.is_active:
             await _ensure_other_active_admin(db, user.id)
-        await db.scalar(select(User.id).where(User.id == user_id).with_for_update())
+        # 与任务取消受理采用同一父用户真实写屏障，SQLite同样生效。
+        await db.execute(update(User).where(User.id == user_id).values(id=User.id))
         count = int(await db.scalar(select(func.count(Project.id)).where(Project.user_id == user_id)) or 0)
         if count:
             raise ConflictError(
                 "该用户名下仍有作品（含回收站），请先禁用账号或彻底清理作品后再删除用户",
                 extra={"code": "user_has_projects", "project_count": count},
+            )
+        if await db.scalar(select(Task.id).where(
+            Task.user_id == user_id, Task.admin_cancel_operation_id.is_not(None)
+        ).limit(1)) is not None:
+            raise ConflictError(
+                "该用户仍有取消请求尚未安全收尾，暂不能删除账号", extra={"code": "user_has_pending_tasks"}
             )
         await task_statistics_service.mark_removed(db, Task.user_id == user_id)
         await db.delete(user)

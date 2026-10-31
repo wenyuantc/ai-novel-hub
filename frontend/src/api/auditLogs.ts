@@ -12,6 +12,7 @@ export const auditLogApi = {
 }
 
 export const AUDIT_ACTION: Record<AuditAction, string> = {
+  'task.cancel_request': '受理任务取消请求',
   'user.create': '创建用户', 'user.update': '修改用户角色 / 状态', 'user.reset_password': '重置密码', 'user.delete': '删除用户',
   'project.update': '修改作品', 'project.delete': '删除作品',
   'project.restore': '恢复回收站作品', 'project.purge': '彻底删除作品', 'project.expire': '到期自动清理作品',
@@ -23,11 +24,17 @@ export const AUDIT_ACTION: Record<AuditAction, string> = {
 }
 
 export const AUDIT_TARGET: Record<AuditTargetType, string> = {
-  user: '用户', project: '作品', chapter: '章节', chapter_version: '章节版本', workshop_item: '工坊资源', workshop_submission: '工坊投稿', skill: '全局 Skill', audit: '审计日志',
+  user: '用户', project: '作品', chapter: '章节', chapter_version: '章节版本', workshop_item: '工坊资源', workshop_submission: '工坊投稿', skill: '全局 Skill', audit: '审计日志', task: '任务',
 }
 
 export const AUDIT_RESULT: Record<AuditResult, { label: string; color: string }> = {
   success: { label: '成功', color: 'success' }, failure: { label: '失败', color: 'error' },
+}
+
+/** 仅管理取消动作的成功表示受理，不改变其他操作的“成功”标签。 */
+export function auditResult(log: Pick<AuditLogBrief, 'action' | 'result'>) {
+  return log.action === 'task.cancel_request' && log.result === 'success'
+    ? { ...AUDIT_RESULT.success, label: '已受理' } : AUDIT_RESULT[log.result]
 }
 
 export const AUDIT_STATE: Record<AuditSafeState, string> = {

@@ -1,6 +1,7 @@
 import dayjs from 'dayjs'
-import type { AuditCleanupPreview, AuditDateRange, AuditLogListQuery, AuditSafeState, AuditSummary } from '../api/types'
+import type { AuditAction, AuditCleanupPreview, AuditDateRange, AuditLogListQuery, AuditSafeState, AuditSummary } from '../api/types'
 import { AUDIT_FIELD, AUDIT_STATE, AUDIT_TARGET } from '../api/auditLogs'
+import { TASK_KIND_LABELS } from '../api/tasks'
 import { formatTime, parseServerTime } from './time'
 
 export interface AuditFilterValues extends Omit<AuditLogListQuery, 'from_at' | 'to_at' | 'page' | 'page_size'> {
@@ -63,8 +64,16 @@ export function createAuditRequestGate() {
 export interface AuditSummaryRow { label: string; value: string }
 
 /** 审计摘要的唯一展示投影，不把摘要误称为全文差异，也不读取任意 JSON 字段。 */
-export function auditSummaryRows(summary: AuditSummary): AuditSummaryRow[] {
+export function auditSummaryRows(summary: AuditSummary, action?: AuditAction): AuditSummaryRow[] {
   const rows: AuditSummaryRow[] = [{ label: '变更字段', value: summary.changed_fields.map((field) => AUDIT_FIELD[field]).join('、') || '无字段变更 / 不适用' }]
+  if (action === 'task.cancel_request') {
+    if (summary.task_key) rows.push({ label: '任务执行标识', value: summary.task_key })
+    if (summary.task_kind) rows.push({ label: '任务类型', value: summary.task_kind !== 'unknown' && Object.hasOwn(TASK_KIND_LABELS, summary.task_kind) ? TASK_KIND_LABELS[summary.task_kind] : '其他任务' })
+    const statuses = { queued: '排队中', running: '运行中', paused: '待审核' } as const
+    if (summary.accepted_from_status) rows.push({ label: '受理时状态', value: statuses[summary.accepted_from_status] ?? '未知状态' })
+    if (summary.cancel_reason) rows.push({ label: '管理员取消原因', value: summary.cancel_reason })
+    rows.push({ label: '受理语义', value: '仅表示取消请求受理，实际终态以任务安全收尾为准；已提交内容和已执行效果不撤销。' })
+  }
   const lifecycleLabels = { soft_delete: '移入回收站', restore: '恢复作品', purge: '手动彻底删除', expire: '到期自动清理' } as const
   if (summary.lifecycle_action) rows.push({ label: '作品生命周期动作', value: lifecycleLabels[summary.lifecycle_action] })
   if (summary.retention_days != null) rows.push({ label: '保留期限', value: `${summary.retention_days} 天` })

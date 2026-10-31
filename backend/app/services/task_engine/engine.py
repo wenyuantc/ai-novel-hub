@@ -31,6 +31,7 @@ from app.core.errors import AppError
 from app.models import Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
 from app.services import task_service, task_statistics_service
+from app.services.task_engine.cancellation import AdminCancellationDrain
 from app.services.task_engine.hub import TaskHub
 from app.services.task_engine.registry import Event, TaskContext, TaskHandler, get_handler
 
@@ -70,6 +71,7 @@ class TaskEngine:
         self._wake: asyncio.Event | None = None
         self._loop_task: asyncio.Task[None] | None = None
         self._stopping = False
+        self.admin_cancellations = AdminCancellationDrain(self)
 
     # ---------------- 生命周期 ----------------
 
@@ -84,6 +86,7 @@ class TaskEngine:
         self._stopping = False
         await task_statistics_service.initialize_tracking(self.ctx.sessionmaker)
         await self.recover()
+        await self.scan_admin_cancellations()
         self._loop_task = asyncio.create_task(self._scheduler(), name="task-engine-scheduler")
         self.notify()
 
@@ -107,6 +110,11 @@ class TaskEngine:
                 t.cancel()
         if running:
             await asyncio.gather(*(t for _, t in running), return_exceptions=True)
+        # 不cancel独立清理或SQLite活游标；真正退出后才允许lifespan dispose数据库。
+        await self.wait_admin_cancellations()
+        cleanup = {work for scope in self._cleanup_work.values() for work in scope if not work.done()}
+        if cleanup:
+            await asyncio.gather(*cleanup, return_exceptions=True)
         self._shutdown.clear()
 
     def notify(self) -> None:
@@ -121,27 +129,27 @@ class TaskEngine:
         for task in stale:
             if task.id in self._running:
                 continue
+            if task.statistics_key is not None:
+                self.admin_cancellations.recovering.add(task.statistics_key)
             handler = _try_handler(task.kind)
+            abort_ok = handler is not None
             if handler is not None:
-                await handler.on_abort(self.ctx, task)
-            async with sm() as db:
-                stamp = task_statistics_service.now_utc()
-                result = await db.execute(
-                    update(Task)
-                    .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "running")
-                    .values(
-                        status="interrupted",
-                        error=INTERRUPTED_MESSAGE,
-                        stage=task_service.STAGE_LABELS["interrupted"],
-                        finished_at=stamp,
-                    )
+                try:
+                    await handler.on_abort(self.ctx, task)
+                except Exception:
+                    abort_ok = False
+            try:
+                row, committed = await self.complete_state(
+                    task, expected_status="running", status="interrupted", result=None, error=INTERRUPTED_MESSAGE,
+                    text=task.output_text, progress=task.progress, abort_ok=abort_ok,
                 )
-                row = None
-                if result.rowcount == 1:
-                    row = await db.get(Task, task.id)
-                    await task_statistics_service.record_state_change(db, row, "interrupted", finished_at=stamp)
-                await db.commit()
-                out = task_service.out_json(row) if row is not None else None
+            except Exception:
+                # 意图仍持久存在，后续scan可重试；日志不输出带任务输入的SQL异常参数。
+                logger.error("任务启动恢复尚未完成 task_key=%s", task.statistics_key)
+                continue
+            if committed and task.statistics_key is not None:
+                self.admin_cancellations.recovering.discard(task.statistics_key)
+            out = task_service.out_json(row) if row is not None and handler is not None else None
             self.close_hub(
                 task.id, "error", {"task": out, "detail": INTERRUPTED_MESSAGE}, statistics_key=task.statistics_key
             )
@@ -192,6 +200,7 @@ class TaskEngine:
             if self._stopping:
                 return
             try:
+                await self.scan_admin_cancellations()
                 await self._dispatch()
             except asyncio.CancelledError:
                 raise
@@ -205,7 +214,8 @@ class TaskEngine:
             rows = await db.execute(
                 select(Task.id, Task.statistics_key, Task.user_id, Task.serial_key, Task.project_id)
                 .outerjoin(Project, Project.id == Task.project_id)
-                .where(Task.status == "queued", task_service.visible_project_condition())
+                .where(Task.status == "queued", Task.admin_cancel_operation_id.is_(None),
+                       task_service.visible_project_condition())
                 .order_by(Task.id)
             )
             queued = list(rows.all())
@@ -276,6 +286,7 @@ class TaskEngine:
                 .where(
                     Task.id == task_id, Task.statistics_key == statistics_key,
                     Task.status == "queued", task_service.visible_task_project_exists(),
+                    Task.admin_cancel_operation_id.is_(None),
                 )
                 .values(status="running", started_at=func.now(), stage=running_stage)
             )
@@ -410,53 +421,61 @@ class TaskEngine:
         self._finalizing.add(task_id)
         out: dict[str, Any] | None = None
         committed = False
+        abort_ok = status in ("succeeded", "paused") or (handler is not None and task is not None)
         try:
             # 暂停时资源已在当前步结束时释放，断点保留，不回退
             if status not in ("succeeded", "paused") and handler is not None and task is not None:
                 try:
                     await handler.on_abort(self.ctx, task)
                 except Exception:
+                    abort_ok = False
                     if task.project_id is not None:
                         self._abort_failures.add(task.project_id)
                     error = "任务收尾失败，请稍后重试"
                     logger.error("任务取消收尾失败 task=%s", task_id)
             try:
-                async with self.ctx.sessionmaker() as db:
-                    row = await db.get(Task, task_id)
-                    if (
-                        row is not None and task is not None and task.statistics_key is not None
-                        and row.statistics_key == task.statistics_key
-                    ):
-                        stamp = None if status == "paused" else task_statistics_service.now_utc()
-                        changed = await db.execute(
-                            update(Task)
-                            .where(
-                                Task.id == task_id,
-                                Task.statistics_key == task.statistics_key,
-                                Task.status == "running",
-                            )
-                            .values(
-                                status=status, result=result, error=error, output_text=hub.text,
-                                progress=100 if status == "succeeded" else hub.progress,
-                                stage=task_service.STAGE_LABELS[status], finished_at=stamp,
-                            )
-                        )
-                        if changed.rowcount == 1:
-                            await task_statistics_service.record_state_change(db, row, status, finished_at=stamp)
-                        await db.commit()
-                        committed = changed.rowcount == 1
-                        await task_service.refresh_same_task(db, row)
-                        out = task_service.out_json(row)
-                        # 竞争已由另一个真实终态赢得时，回放事实，不再执行旧回调。
-                        status, result, error = row.status, row.result, row.error
+                key = task.statistics_key if task is not None else None
+                if key is not None and status in ("succeeded", "paused"):
+                    self.admin_cancellations.winners[key] = (
+                        task.queued_at.replace(tzinfo=None) if task.queued_at is not None else None,
+                        dict(status=status, result=result, error=error, text=hub.text, progress=hub.progress),
+                    )
+                row, committed = await self.complete_state(
+                    task, expected_status="running", status=status, result=result, error=error,
+                    text=hub.text, progress=hub.progress, abort_ok=abort_ok,
+                )
+                if row is not None:
+                    if key is not None and row.status != "running":
+                        self.admin_cancellations.winners.pop(key, None)
+                    out = task_service.out_json(row)
+                    status, result, error = row.status, row.result, row.error
+                    async with self.ctx.sessionmaker() as db:
                         await task_service.prune_finished(db, row.user_id)
-                    else:
-                        status, result, error = "interrupted", None, TASK_GONE_MESSAGE
+                else:
+                    if key is not None:
+                        self.admin_cancellations.winners.pop(key, None)
+                    status, result, error = "interrupted", None, TASK_GONE_MESSAGE
             except Exception:  # noqa: BLE001
-                if task is not None and task.project_id is not None:
-                    self._abort_failures.add(task.project_id)
-                logger.exception("任务 %s 结束状态写入失败", task_id)
+                logger.error("任务结束状态写入失败 task=%s", task_id)
+                # commit可能已提交而确认丢失；只重读原UUID，不把真实赢家变成待abort的孤立running。
+                fact = None
+                if task is not None and task.statistics_key is not None:
+                    try:
+                        async with self.ctx.sessionmaker() as db:
+                            fact = await db.scalar(select(Task).where(
+                                Task.id == task_id, Task.statistics_key == task.statistics_key
+                            ))
+                        if fact is not None and fact.status != "running" and fact.admin_cancel_operation_id is None:
+                            status, result, error = fact.status, fact.result, fact.error
+                            out = task_service.out_json(fact)
+                            committed = True
+                            self.admin_cancellations.winners.pop(task.statistics_key, None)
+                            self.admin_cancellations.remember_completed(task)
+                    except Exception:
+                        logger.error("任务结束事实尚无法确认 task_key=%s", task.statistics_key)
                 if not committed:
+                    if task is not None and task.project_id is not None:
+                        self._abort_failures.add(task.project_id)
                     status, result, error = "failed", None, "任务结束状态保存失败，请稍后重试"
             if committed and status == "succeeded" and handler is not None and task is not None:
                 await self._on_success(handler, task)
@@ -471,6 +490,58 @@ class TaskEngine:
                 hub.close("error", {"task": out, "detail": error})
             self._finalizing.discard(task_id)
 
+    async def complete_state(
+        self, task: Task | None, *, expected_status: str, status: str, result: dict[str, Any] | None,
+        error: str, text: str, progress: int, abort_ok: bool, operation_id: str | None = None,
+    ) -> tuple[Task | None, bool]:
+        """状态/统计/清标记同一次CAS提交；接受夹在读写之间时重读同UUID，而不是忽略新意图。"""
+        if task is None or task.statistics_key is None:
+            return None, False
+        async with self.ctx.sessionmaker() as db:
+            while True:
+                row = await db.scalar(select(Task).where(
+                    Task.id == task.id, Task.statistics_key == task.statistics_key
+                ).execution_options(populate_existing=True))
+                if row is None or row.status != expected_status:
+                    return row, False
+                observed = row.admin_cancel_operation_id
+                if operation_id is not None and observed != operation_id:
+                    return row, False
+                if observed is not None and not abort_ok:
+                    # 收尾失败绝不释放管理员意图持有的资源屏障。
+                    return row, False
+                stamp = None if status == "paused" else task_statistics_service.now_utc()
+                changed = await db.execute(update(Task).where(
+                    Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == expected_status,
+                    Task.admin_cancel_operation_id == observed if observed is not None else (
+                        Task.admin_cancel_operation_id.is_(None)
+                    ),
+                ).values(status=status, result=result, error=error, output_text=text,
+                         progress=100 if status == "succeeded" else progress,
+                         stage=task_service.STAGE_LABELS[status], finished_at=stamp,
+                         admin_cancel_operation_id=None, admin_cancel_requested_at=None))
+                if changed.rowcount != 1:
+                    await db.rollback()
+                    continue
+                await task_statistics_service.record_state_change(db, row, status, finished_at=stamp)
+                try:
+                    await db.commit()
+                except Exception:
+                    # finalize/recover/drain共用这一提交边界。确认丢失时只回放原UUID、
+                    # 原入队轮次已落库的目标状态，不能漏登记完成代次或留下未关闭的Hub。
+                    await db.rollback()
+                    async with self.ctx.sessionmaker() as proof_db:
+                        fact = await proof_db.scalar(select(Task).where(
+                            Task.id == task.id, Task.statistics_key == task.statistics_key
+                        ))
+                    if (fact is None or fact.status != status or fact.admin_cancel_operation_id is not None
+                            or self.admin_cancellations.round_at(fact) != self.admin_cancellations.round_at(task)):
+                        raise
+                    row = fact
+                if observed is not None:
+                    self.admin_cancellations.remember_completed(task)
+                return row, True
+
     async def _on_success(self, handler: TaskHandler, task: Task) -> None:
         hook = getattr(handler, "on_success", None)
         if hook is None:
@@ -481,6 +552,15 @@ class TaskEngine:
             logger.exception("任务 %s 成功回调失败", task.id)
 
     # ---------------- 取消 ----------------
+
+    def request_admin_cancel(self, task_key: str, operation_id: str) -> None:
+        self.admin_cancellations.request(task_key, operation_id)
+
+    async def scan_admin_cancellations(self) -> None:
+        await self.admin_cancellations.scan()
+
+    async def wait_admin_cancellations(self) -> None:
+        await self.admin_cancellations.wait()
 
     async def cancel_running(self, task_id: int, *, statistics_key: str | None = None) -> None:
         """取消运行中的任务并等待其收尾（最多 cancel_wait_seconds 秒）。"""

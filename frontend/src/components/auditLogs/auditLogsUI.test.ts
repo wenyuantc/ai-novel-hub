@@ -32,6 +32,20 @@ afterEach(() => { state.mobile = true; state.admin = true; state.items = []; sta
 
 describe('审计详情只读语义', () => {
   const detail = (value: AuditLogDetail) => render(createElement(AuditLogDetailContent, { log: value, version: null, versionError: null, versionLoading: false, onLoadVersion: noop }))
+  it('取消原因只投影task.cancel_request，标签明确仅受理且真实actor不被替换', () => {
+    const value = log({ action: 'task.cancel_request', target_type: 'task', target_label: '项目智能体 #42', version_ref: null, version_status: null })
+    value.summary.task_key = '00000000-0000-4000-8000-000000000001'
+    value.summary.task_kind = 'agent.turn'
+    value.summary.accepted_from_status = 'running'
+    value.summary.cancel_reason = '管理员主动填写的排查说明 <script>仅普通文本</script>'
+    const html = detail(value)
+    for (const expected of ['已受理', '管理员取消原因', '管理员主动填写的排查说明', '项目智能体', '受理时状态', '运行中', '仅表示取消请求受理', '已注销的管理员', '原所有者', '&lt;script&gt;']) expect(html).toContain(expected)
+    expect(html).not.toContain('<script>')
+    expect(html).not.toContain('任务已取消')
+    expect(detail({ ...value, action: 'chapter.update' })).not.toContain('管理员主动填写的排查说明')
+    const result = render(createElement(AuditLogResults, { items: [value], loading: false, mobile: true, onDetail: noop }))
+    expect(result).toContain('已受理')
+  })
   it('到期自动清理明确标识系统而不是 #null，动作与保留摘要可读', () => {
     const value = log({ action: 'project.expire', actor_user_id: null, actor_username: '系统自动清理', version_ref: null, version_status: null })
     value.summary.lifecycle_action = 'expire'

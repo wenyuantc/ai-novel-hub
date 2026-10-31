@@ -145,7 +145,8 @@ class ChapterHandler:
                 )
                 await db.commit()
         except Exception:  # noqa: BLE001
-            logger.exception("任务 %s 回退章节 %s 状态失败", task.id, chapter_id)
+            # 该收尾同样由管理员drain触发，原始SQL参数可能包含旧断点数据。
+            logger.error("任务回退章节状态失败 task=%s", task.id)
             raise
 
     async def on_success(self, ctx: TaskContext, task: Task) -> None:

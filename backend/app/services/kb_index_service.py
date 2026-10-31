@@ -401,5 +401,5 @@ async def on_abort(sessionmaker: async_sessionmaker[AsyncSession], task: Task) -
             )
             await db.commit()
     except Exception:  # noqa: BLE001
-        logger.exception("建索引任务 %s 回退文档状态失败", task.id)
+        logger.error("建索引任务回退文档状态失败 task=%s", task.id)
         raise

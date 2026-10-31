@@ -1,9 +1,13 @@
-"""管理员审计的唯一传输契约；摘要拒绝未知键及自由文本值。"""
+"""管理员审计传输契约；摘要拒绝未知键，仅任务取消原因允许局部有界自由文本。"""
 
 from datetime import UTC, datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.admin_task import validate_cancel_reason
+from app.schemas.task import TaskKind
 
 AuditAction = Literal[
     "user.create",
@@ -37,9 +41,10 @@ AuditAction = Literal[
     "skill.delete",
     "skill.restore_builtin",
     "audit.cleanup",
+    "task.cancel_request",
 ]
 AuditTargetType = Literal[
-    "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit"
+    "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task"
 ]
 AuditResult = Literal["success", "failure"]
 AuditErrorCode = Literal[
@@ -128,6 +133,11 @@ class AuditValueChange(BaseModel):
 
 class AuditSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    task_key: UUID | None = None
+    task_kind: TaskKind | Literal["unknown"] | None = None
+    accepted_from_status: Literal["queued", "running", "paused"] | None = None
+    # 唯一的局部自由文本例外；writer 限定为 task.cancel_request 动作。
+    cancel_reason: str | None = None
     lifecycle_action: Literal["soft_delete", "restore", "purge", "expire"] | None = None
     retention_days: Literal[30] | None = None
     cancelled_task_count: int | None = Field(default=None, ge=0)
@@ -149,6 +159,11 @@ class AuditSummary(BaseModel):
     expected_count: int | None = Field(default=None, ge=0)
     deleted_count: int | None = Field(default=None, ge=0)
     high_water_id: int | None = Field(default=None, ge=0)
+
+    @field_validator("cancel_reason")
+    @classmethod
+    def plain_reason(cls, value: str | None) -> str | None:
+        return validate_cancel_reason(value) if value is not None else None
 
 
 class AuditVersionRef(BaseModel):
