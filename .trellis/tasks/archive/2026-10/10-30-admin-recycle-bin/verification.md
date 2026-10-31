@@ -2,7 +2,7 @@
 
 日期：2026-10-31（Asia/Shanghai）。分支：`codex/admin-recycle-bin`。
 
-状态：功能已实施且可执行的本地质量门禁全部通过：后端1143测试、前端520测试。真实PostgreSQL与原构建目录权限仍为明确的环境/发布门禁缺口，不宣称它们通过。用户已要求提交收尾，并在提交计划后明确要求合并到 main、推送；正在执行，最终结果另记于收尾记录。
+状态：功能已实施且可执行的本地质量门禁全部通过：后端1143测试、前端520测试。真实PostgreSQL与原构建目录权限仍为明确的环境/发布门禁缺口，不宣称它们通过。两笔工作提交已完成，当前任务已移入归档；用户授权的会话记录、main 合并及推送在归档提交后继续，结果由后续 Git 历史核实。
 
 ## 实际交付
 
@@ -52,3 +52,11 @@
 ## 规范沉淀
 
 新增 `.trellis/spec/backend/recycle-bin.md` 七段式契约，并同步backend/frontend索引及auth-admin、admin-projects、database、admin-audit、project-transfer、open-api、frontend component/state/quality。记录重复锁保留dirty数据、终态不等于收尾退出、单调删除代次/不复用ID、SQLite1811和隐藏Key授权PATCH的防复发规则。
+
+## 收尾记录（归档提交时快照）
+
+- 代码工作提交：`10b23cae2c6280dd8b04e8eada65be153d8cc608`，`feat(admin): 新增作品回收站与安全恢复`。
+- 规范及验收提交：`24807922aff358bd8fdc62e133f7e01e6b3fc49c`，`docs(admin): 固化回收站契约与验收记录`。
+- 任务已移入 `.trellis/tasks/archive/2026-10/10-30-admin-recycle-bin/`，JSONL 自身上下文引用已改为归档路径；原始 scope/baseline 和提交计划的工作文件清单保留为历史快照。
+- 归档前确认工作区仅剩原有 4 项无关改动，内容 SHA256 与实施前基线一致，均未纳入上述工作提交。
+- 只归档本任务，其余 6 个规划任务保持原状；journal、main 快进合并和 origin/main 普通推送随后按序执行，不把授权或计划记作已执行结果。
