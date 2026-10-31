@@ -56,6 +56,11 @@ export const router = createBrowserRouter([
       { path: 'inspiration/:sid', lazy: lazyPage(() => import('./pages/InspirationSessionPage')) },
       { path: 'book-import', lazy: lazyPage(() => import('./pages/BookImportPage')) },
       {
+        path: 'admin/dashboard',
+        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminDashboardPage')) }],
+      },
+      {
         path: 'admin/recycle-bin',
         element: <RequireAdmin><Outlet /></RequireAdmin>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminRecycleBinPage')) }],

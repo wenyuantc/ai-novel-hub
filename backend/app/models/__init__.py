@@ -2,6 +2,7 @@ from app.models.agent import AgentChange, AgentConversation, AgentMessage
 from app.models.api_key import ApiKey, ApiKeyProject
 from app.models.audit import AdminAuditLog
 from app.models.base import Base
+from app.models.dashboard import DashboardDailySnapshot, DashboardTracking, TaskStatistic
 from app.models.entities import (
     AIConfig,
     AnalysisChange,
@@ -66,6 +67,8 @@ __all__ = [
     "ChapterVersion",
     "Character",
     "CharacterCareer",
+    "DashboardDailySnapshot",
+    "DashboardTracking",
     "Foreshadow",
     "ForeshadowCharacter",
     "ForeshadowHistory",
@@ -91,6 +94,7 @@ __all__ = [
     "SkillReference",
     "StoryMemory",
     "Task",
+    "TaskStatistic",
     "User",
     "WorldSetting",
     "WritingStyle",

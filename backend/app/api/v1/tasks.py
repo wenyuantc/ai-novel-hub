@@ -46,10 +46,11 @@ async def get_output(task_id: int, user: CurrentUser, db: DbDep, engine: TaskEng
 
 @router.get("/{task_id}/stream", response_class=StreamingResponse)
 async def stream_task(task_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> StreamingResponse:
-    await svc.get_owned_task(db, user.id, task_id)
+    task = await svc.get_owned_task(db, user.id, task_id)
+    statistics_key = task.statistics_key
     # 订阅可能持续很久：先释放请求会话
     await db.close()
-    return sse_response(engine.subscribe(task_id))
+    return sse_response(engine.subscribe(task_id, statistics_key=statistics_key))
 
 
 @router.post("/{task_id}/cancel", response_model=TaskOut)

@@ -6,6 +6,7 @@
 
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -601,6 +602,10 @@ class Task(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # 不随整数任务 ID 复用，实例统计在任务/作品/账号清理后仍独立保存。
+    statistics_key: Mapped[str | None] = mapped_column(
+        String(36), default=lambda: str(uuid4()), unique=True, index=True, nullable=True
+    )
     # (user_id, id) 复合索引已覆盖按用户查询，不再单独建索引
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     project_id: Mapped[int | None] = mapped_column(

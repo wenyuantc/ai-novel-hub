@@ -47,6 +47,7 @@ from app.services import (
     project_lifecycle,
     prompt_service,
     relationship_service,
+    task_statistics_service,
     writeback_service,
 )
 from app.services.chapter_service import count_words, get_owned_chapter
@@ -579,6 +580,8 @@ async def enqueue_pending(db: AsyncSession, project: Project, *, ai_config_id: i
     ]
     db.add_all(tasks)
     await db.flush()
+    for task in tasks:
+        await task_statistics_service.record_created(db, task)
     return [t.id for t in tasks]
 
 
@@ -618,6 +621,7 @@ async def enqueue_auto(ctx: "TaskContext", project_id: int | None, chapter_id: i
             stage=task_service.STAGE_LABELS["queued"],
         )
         db.add(task)
+        await task_statistics_service.record_created(db, task)
         await db.commit()
         return task.id
 

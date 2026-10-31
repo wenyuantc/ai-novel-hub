@@ -30,7 +30,7 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import AppError
 from app.models import Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
-from app.services import task_service
+from app.services import task_service, task_statistics_service
 from app.services.task_engine.hub import TaskHub
 from app.services.task_engine.registry import Event, TaskContext, TaskHandler, get_handler
 
@@ -58,6 +58,7 @@ class TaskEngine:
         self.ctx.task_engine = self
         self.hubs: dict[int, TaskHub] = {}
         self._running: dict[int, asyncio.Task[None]] = {}
+        self._running_statistics_keys: dict[int, str | None] = {}
         self._running_projects: dict[int, int | None] = {}
         self._cleanup_work: dict[int, dict[asyncio.Task, int]] = {}
         self._abort_failures: set[int] = set()
@@ -81,6 +82,7 @@ class TaskEngine:
             return
         self._wake = asyncio.Event()
         self._stopping = False
+        await task_statistics_service.initialize_tracking(self.ctx.sessionmaker)
         await self.recover()
         self._loop_task = asyncio.create_task(self._scheduler(), name="task-engine-scheduler")
         self.notify()
@@ -123,22 +125,26 @@ class TaskEngine:
             if handler is not None:
                 await handler.on_abort(self.ctx, task)
             async with sm() as db:
-                await db.execute(
+                stamp = task_statistics_service.now_utc()
+                result = await db.execute(
                     update(Task)
-                    .where(Task.id == task.id, Task.status == "running")
+                    .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "running")
                     .values(
                         status="interrupted",
                         error=INTERRUPTED_MESSAGE,
                         stage=task_service.STAGE_LABELS["interrupted"],
-                        finished_at=func.now(),
+                        finished_at=stamp,
                     )
                 )
+                row = None
+                if result.rowcount == 1:
+                    row = await db.get(Task, task.id)
+                    await task_statistics_service.record_state_change(db, row, "interrupted", finished_at=stamp)
                 await db.commit()
-                row = await db.get(Task, task.id)
                 out = task_service.out_json(row) if row is not None else None
-            hub = self.hubs.pop(task.id, None)
-            if hub is not None:
-                hub.close("error", {"task": out, "detail": INTERRUPTED_MESSAGE})
+            self.close_hub(
+                task.id, "error", {"task": out, "detail": INTERRUPTED_MESSAGE}, statistics_key=task.statistics_key
+            )
         # 上次进程在确认外部（MCP）调用期间退出：提案停在 executing，结果未知，判为失败（不重新调用）
         from app.services.agent.service import recover_external
 
@@ -149,19 +155,29 @@ class TaskEngine:
     # ---------------- hub ----------------
 
     def ensure_hub(
-        self, task_id: int, *, status: str = "queued", text: str = "", progress: int = 0, stage: str = ""
+        self, task_id: int, *, statistics_key: str | None = None,
+        status: str = "queued", text: str = "", progress: int = 0, stage: str = ""
     ) -> tuple[TaskHub, bool]:
         """返回 (hub, created)。"""
         hub = self.hubs.get(task_id)
+        if hub is not None and statistics_key is not None and hub.statistics_key != statistics_key:
+            self.hubs.pop(task_id, None)
+            hub.close("error", {"task": None, "detail": TASK_GONE_MESSAGE})
+            hub = None
         if hub is not None:
             return hub, False
-        hub = TaskHub(task_id, status=status, text=text, progress=progress, stage=stage)
+        hub = TaskHub(
+            task_id, statistics_key=statistics_key, status=status, text=text, progress=progress, stage=stage
+        )
         self.hubs[task_id] = hub
         return hub, True
 
-    def close_hub(self, task_id: int, event: str, data: dict[str, Any]) -> None:
-        hub = self.hubs.pop(task_id, None)
-        if hub is not None:
+    def close_hub(
+        self, task_id: int, event: str, data: dict[str, Any], *, statistics_key: str | None = None
+    ) -> None:
+        hub = self.hubs.get(task_id)
+        if hub is not None and hub.statistics_key == statistics_key:
+            self.hubs.pop(task_id, None)
             hub.close(event, data)
 
     # ---------------- 调度 ----------------
@@ -187,7 +203,7 @@ class TaskEngine:
         sm = self.ctx.sessionmaker
         async with sm() as db:
             rows = await db.execute(
-                select(Task.id, Task.user_id, Task.serial_key, Task.project_id)
+                select(Task.id, Task.statistics_key, Task.user_id, Task.serial_key, Task.project_id)
                 .outerjoin(Project, Project.id == Task.project_id)
                 .where(Task.status == "queued", task_service.visible_project_condition())
                 .order_by(Task.id)
@@ -196,7 +212,7 @@ class TaskEngine:
         per_user = Counter(self._running_users.values())
         # 运行中占用的串行键；本轮被跳过的串行键也加入，保证同键内先进先出
         busy_serial = set(self._running_serial.values())
-        for task_id, user_id, serial_key, project_id in queued:
+        for task_id, statistics_key, user_id, serial_key, project_id in queued:
             if self._stopping or len(self._running) >= settings.task_max_concurrency:
                 break
             if task_id in self._running:
@@ -211,10 +227,11 @@ class TaskEngine:
             # 先登记 asyncio.Task 再领取：库里出现 running 时内存里一定有可取消的执行体
             self._running_projects[task_id] = project_id
             self._running_users[task_id] = user_id
+            self._running_statistics_keys[task_id] = statistics_key
             if serial_key is not None:
                 busy_serial.add(serial_key)
                 self._running_serial[task_id] = serial_key
-            t = asyncio.create_task(self._claim_and_run(task_id), name=f"task-{task_id}")
+            t = asyncio.create_task(self._claim_and_run(task_id, statistics_key), name=f"task-{task_id}")
             self._running[task_id] = t
             t.add_done_callback(lambda _t, tid=task_id: self._on_done(tid))
         await self._broadcast_queue_positions()
@@ -223,12 +240,14 @@ class TaskEngine:
         if not any(h.status == "queued" for h in self.hubs.values()):
             return
         async with self.ctx.sessionmaker() as db:
-            ids = list(await db.scalars(select(Task.id).where(Task.status == "queued").order_by(Task.id)))
+            rows = list((await db.execute(
+                select(Task.id, Task.statistics_key).where(Task.status == "queued").order_by(Task.id)
+            )).all())
         # 已登记、正在领取的任务不算排队
-        ids = [i for i in ids if i not in self._running]
-        for position, task_id in enumerate(ids):
+        rows = [(task_id, key) for task_id, key in rows if task_id not in self._running]
+        for position, (task_id, key) in enumerate(rows):
             hub = self.hubs.get(task_id)
-            if hub is not None and hub.status == "queued":
+            if hub is not None and hub.statistics_key == key and hub.status == "queued":
                 hub.set_queue_position(position)
 
     def _on_done(self, task_id: int) -> None:
@@ -239,13 +258,14 @@ class TaskEngine:
                 self._abort_failures.add(project_id)
             logger.error("任务执行体异常结束 task=%s", task_id)
         self._running_users.pop(task_id, None)
+        self._running_statistics_keys.pop(task_id, None)
         self._running_serial.pop(task_id, None)
         self._cancel_requested.discard(task_id)
         self.notify()
 
     # ---------------- 执行 ----------------
 
-    async def _claim_and_run(self, task_id: int) -> None:
+    async def _claim_and_run(self, task_id: int, statistics_key: str | None) -> None:
         """条件 UPDATE 领取（queued → running），影响行数为 1 才执行；否则（已被取消）静默退出。"""
         if task_id in self._cancel_requested:
             return
@@ -253,13 +273,21 @@ class TaskEngine:
         async with self.ctx.sessionmaker() as db:
             result = await db.execute(
                 update(Task)
-                .where(Task.id == task_id, Task.status == "queued", task_service.visible_task_project_exists())
+                .where(
+                    Task.id == task_id, Task.statistics_key == statistics_key,
+                    Task.status == "queued", task_service.visible_task_project_exists(),
+                )
                 .values(status="running", started_at=func.now(), stage=running_stage)
             )
+            if result.rowcount == 1:
+                row = await db.get(Task, task_id)
+                await task_statistics_service.record_state_change(db, row, "running")
+                statistics_key = row.statistics_key
+                self._running_statistics_keys[task_id] = statistics_key
             await db.commit()
         if result.rowcount != 1:
             return
-        hub, _ = self.ensure_hub(task_id, status="running")
+        hub, _ = self.ensure_hub(task_id, statistics_key=statistics_key, status="running")
         hub.set_queue_position(None)
         hub.set_progress(status="running", stage=running_stage)
         await self._run(task_id, hub)
@@ -269,11 +297,16 @@ class TaskEngine:
         task: Task | None = None
         handler: TaskHandler | None = None
         try:
-            async with self.ctx.sessionmaker() as db:
-                task = await db.get(Task, task_id)
+            if hub.statistics_key is not None:
+                async with self.ctx.sessionmaker() as db:
+                    task = await db.scalar(select(Task).where(
+                        Task.id == task_id, Task.statistics_key == hub.statistics_key
+                    ))
             if task is None:
                 # 任务行已随用户 / 项目删除
-                self.close_hub(task_id, "error", {"task": None, "detail": TASK_GONE_MESSAGE})
+                if self.hubs.get(task_id) is hub:
+                    self.hubs.pop(task_id, None)
+                hub.close("error", {"task": None, "detail": TASK_GONE_MESSAGE})
                 return
             handler = get_handler(task.kind)
             if task_id in self._cancel_requested:
@@ -348,11 +381,15 @@ class TaskEngine:
 
     async def _flush(self, hub: TaskHub) -> None:
         hub.dirty = False
+        if hub.statistics_key is None:
+            return
         try:
             async with self.ctx.sessionmaker() as db:
                 await db.execute(
                     update(Task)
-                    .where(Task.id == hub.task_id)
+                    .where(
+                        Task.id == hub.task_id, Task.statistics_key == hub.statistics_key, Task.status == "running"
+                    )
                     .values(output_text=hub.text, progress=hub.progress, stage=hub.stage[:100])
                 )
                 await db.commit()
@@ -372,6 +409,7 @@ class TaskEngine:
     ) -> None:
         self._finalizing.add(task_id)
         out: dict[str, Any] | None = None
+        committed = False
         try:
             # 暂停时资源已在当前步结束时释放，断点保留，不回退
             if status not in ("succeeded", "paused") and handler is not None and task is not None:
@@ -385,24 +423,42 @@ class TaskEngine:
             try:
                 async with self.ctx.sessionmaker() as db:
                     row = await db.get(Task, task_id)
-                    if row is not None:
-                        row.status = status
-                        row.result = result
-                        row.error = error
-                        row.output_text = hub.text
-                        row.progress = 100 if status == "succeeded" else hub.progress
-                        row.stage = task_service.STAGE_LABELS[status]
-                        # 待审核不算结束（finished_at 留空，继续 / 结束时再写）
-                        row.finished_at = None if status == "paused" else func.now()
+                    if (
+                        row is not None and task is not None and task.statistics_key is not None
+                        and row.statistics_key == task.statistics_key
+                    ):
+                        stamp = None if status == "paused" else task_statistics_service.now_utc()
+                        changed = await db.execute(
+                            update(Task)
+                            .where(
+                                Task.id == task_id,
+                                Task.statistics_key == task.statistics_key,
+                                Task.status == "running",
+                            )
+                            .values(
+                                status=status, result=result, error=error, output_text=hub.text,
+                                progress=100 if status == "succeeded" else hub.progress,
+                                stage=task_service.STAGE_LABELS[status], finished_at=stamp,
+                            )
+                        )
+                        if changed.rowcount == 1:
+                            await task_statistics_service.record_state_change(db, row, status, finished_at=stamp)
                         await db.commit()
-                        await db.refresh(row)
+                        committed = changed.rowcount == 1
+                        await task_service.refresh_same_task(db, row)
                         out = task_service.out_json(row)
+                        # 竞争已由另一个真实终态赢得时，回放事实，不再执行旧回调。
+                        status, result, error = row.status, row.result, row.error
                         await task_service.prune_finished(db, row.user_id)
+                    else:
+                        status, result, error = "interrupted", None, TASK_GONE_MESSAGE
             except Exception:  # noqa: BLE001
                 if task is not None and task.project_id is not None:
                     self._abort_failures.add(task.project_id)
                 logger.exception("任务 %s 结束状态写入失败", task_id)
-            if status == "succeeded" and handler is not None and task is not None:
+                if not committed:
+                    status, result, error = "failed", None, "任务结束状态保存失败，请稍后重试"
+            if committed and status == "succeeded" and handler is not None and task is not None:
                 await self._on_success(handler, task)
         finally:
             if self.hubs.get(task_id) is hub:
@@ -426,8 +482,10 @@ class TaskEngine:
 
     # ---------------- 取消 ----------------
 
-    async def cancel_running(self, task_id: int) -> None:
+    async def cancel_running(self, task_id: int, *, statistics_key: str | None = None) -> None:
         """取消运行中的任务并等待其收尾（最多 cancel_wait_seconds 秒）。"""
+        if self._running_statistics_keys.get(task_id) != statistics_key:
+            return
         t = self._running.get(task_id)
         if t is None:
             # 已经收尾完毕（库里的 running 是读取时的旧值）
@@ -462,30 +520,36 @@ class TaskEngine:
         cleanup = set(self._cleanup_work.get(project_id, {}))
         return {t for t in running | cleanup if t is not current and not t.done()}
 
-    def forget_project_hubs(self, task_ids: list[int]) -> None:
+    def forget_project_hubs(
+        self, task_ids: list[int], *, statistics_keys: dict[int, str | None] | None = None
+    ) -> None:
         for task_id in task_ids:
-            self.close_hub(task_id, "error", {"task": None, "detail": TASK_GONE_MESSAGE})
+            key = statistics_keys.get(task_id) if statistics_keys is not None else None
+            self.close_hub(task_id, "error", {"task": None, "detail": TASK_GONE_MESSAGE}, statistics_key=key)
 
     # ---------------- 订阅 ----------------
 
-    async def subscribe(self, task_id: int) -> AsyncIterator[Event]:
+    async def subscribe(self, task_id: int, *, statistics_key: str | None = None) -> AsyncIterator[Event]:
         """快照 + 增量；任务结束（done / error）或暂停（paused）后结束。断开只移除该订阅者，不影响任务执行。"""
         sm = self.ctx.sessionmaker
+        # HTTP入口传入鉴权时捕获的UUID；内部直接调用则在首次读库时绑定。
+        async with sm() as db:
+            row = await self._visible_task(db, task_id, statistics_key=statistics_key)
+        if row is None or row.statistics_key is None:
+            yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
+            return
+        statistics_key = row.statistics_key
         hub = self.hubs.get(task_id)
-        if hub is None:
-            async with sm() as db:
-                row = await self._visible_task(db, task_id)
-            if row is None:
-                yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
-                return
+        if hub is None or hub.statistics_key != statistics_key:
             if row.status in ACTIVE_TASK_STATUSES:
                 hub, created = self.ensure_hub(
-                    task_id, status=row.status, text=row.output_text, progress=row.progress, stage=row.stage
+                    task_id, statistics_key=statistics_key,
+                    status=row.status, text=row.output_text, progress=row.progress, stage=row.stage,
                 )
                 if created:
                     # 防止读库与建 hub 之间任务恰好结束：复查，已结束则丢弃刚建的 hub
                     async with sm() as db:
-                        row = await self._visible_task(db, task_id)
+                        row = await self._visible_task(db, task_id, statistics_key=statistics_key)
                     if row is None or row.status not in ACTIVE_TASK_STATUSES:
                         if self.hubs.get(task_id) is hub and task_id not in self._running:
                             self.hubs.pop(task_id, None)
@@ -509,7 +573,7 @@ class TaskEngine:
         text, sub = hub.subscribe()
         try:
             async with sm() as db:
-                row = await self._visible_task(db, task_id)
+                row = await self._visible_task(db, task_id, statistics_key=statistics_key)
                 out = await task_service.out_json_live(db, self, row) if row is not None else None
             if row is None:
                 yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
@@ -522,10 +586,13 @@ class TaskEngine:
                     async with asyncio.timeout(self.heartbeat_seconds):
                         event, data = await sub.queue.get()
                 except TimeoutError:
-                    if await self._task_gone(task_id):
+                    if await self._task_gone(task_id, statistics_key=statistics_key):
                         # 排队中的任务随用户 / 项目被级联删除：没有执行体会再关闭 hub，这里代为收尾
-                        if task_id not in self._running:
-                            self.close_hub(task_id, "error", {"task": None, "detail": TASK_GONE_MESSAGE})
+                        if task_id not in self._running and self.hubs.get(task_id) is hub:
+                            self.close_hub(
+                                task_id, "error", {"task": None, "detail": TASK_GONE_MESSAGE},
+                                statistics_key=statistics_key,
+                            )
                         yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
                         return
                     yield HEARTBEAT_EVENT, {}
@@ -536,15 +603,20 @@ class TaskEngine:
         finally:
             hub.unsubscribe(sub)
 
-    async def _visible_task(self, db: AsyncSession, task_id: int) -> Task | None:
-        return await db.scalar(select(Task).where(
+    async def _visible_task(
+        self, db: AsyncSession, task_id: int, *, statistics_key: str | None = None
+    ) -> Task | None:
+        statement = select(Task).where(
             Task.id == task_id, task_service.visible_task_project_exists()
-        ))
+        )
+        if statistics_key is not None:
+            statement = statement.where(Task.statistics_key == statistics_key)
+        return await db.scalar(statement)
 
-    async def _task_gone(self, task_id: int) -> bool:
+    async def _task_gone(self, task_id: int, *, statistics_key: str | None = None) -> bool:
         try:
             async with self.ctx.sessionmaker() as db:
-                return await self._visible_task(db, task_id) is None
+                return await self._visible_task(db, task_id, statistics_key=statistics_key) is None
         except Exception:  # noqa: BLE001
             logger.exception("任务 %s 存在性检查失败", task_id)
             return False

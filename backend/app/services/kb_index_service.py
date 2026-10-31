@@ -27,7 +27,7 @@ from app.ai.providers import AIProviderError, ProviderFactory
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
 from app.models import KbChunk, KbDocument, Project, RetrievalChunk, Task
-from app.services import kb_parser, project_lifecycle, retrieval_service
+from app.services import kb_parser, project_lifecycle, retrieval_service, task_statistics_service
 from app.services.project_service import get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder
 
@@ -137,6 +137,7 @@ async def enqueue_memory(sessionmaker: async_sessionmaker[AsyncSession], project
             stage=task_service.STAGE_LABELS["queued"],
         )
         db.add(task)
+        await task_statistics_service.record_created(db, task)
         await db.commit()
         return task.id
 

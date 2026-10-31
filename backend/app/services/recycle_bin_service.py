@@ -13,7 +13,7 @@ from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotF
 from app.models import Chapter, ChapterVersion, Project, Task, User
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.recycle_bin import RecycleProjectList, RecycleProjectOut
-from app.services import project_lifecycle, retrieval_service, task_service
+from app.services import project_lifecycle, retrieval_service, task_service, task_statistics_service
 from app.services.admin_service import _escape_like
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import chapter_stats_subquery, get_manageable_project
@@ -240,10 +240,13 @@ async def purge(
         audit.summary.lifecycle_action = "expire" if system else "purge"
         audit.summary.retention_days = project_lifecycle.RETENTION_DAYS
         await _counts(db, audit, project_id)
-        task_ids = list(await db.scalars(select(Task.id).where(Task.project_id == project_id)))
+        await task_statistics_service.mark_removed(db, Task.project_id == project_id)
+        task_keys = dict((await db.execute(
+            select(Task.id, Task.statistics_key).where(Task.project_id == project_id)
+        )).all())
         await db.delete(project)
         await audit.commit()
-        engine.forget_project_hubs(task_ids)
+        engine.forget_project_hubs(list(task_keys), statistics_keys=task_keys)
         engine._abort_failures.discard(project_id)
         retrieval_service.invalidate(project_id)
 

@@ -22,8 +22,12 @@ class Subscriber:
 
 
 class TaskHub:
-    def __init__(self, task_id: int, *, status: str = "queued", text: str = "", progress: int = 0, stage: str = ""):
+    def __init__(
+        self, task_id: int, *, statistics_key: str | None = None,
+        status: str = "queued", text: str = "", progress: int = 0, stage: str = ""
+    ):
         self.task_id = task_id
+        self.statistics_key = statistics_key
         self.status = status
         self.text = text
         self.progress = progress

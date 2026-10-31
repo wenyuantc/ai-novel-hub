@@ -19,7 +19,15 @@ from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
-from app.services import auth_service, kb_parser, recycle_bin_service, skill_service, style_service
+from app.services import (
+    admin_dashboard_service,
+    auth_service,
+    kb_parser,
+    recycle_bin_service,
+    skill_service,
+    style_service,
+    task_statistics_service,
+)
 from app.services.book_import import service as book_import_service
 from app.services.project_transfer import importer as transfer_importer
 from app.services.task_engine.engine import TaskEngine
@@ -67,13 +75,17 @@ def create_app(
         # 清理创建满 7 天仍未导入的拆书解析记录
         await book_import_service.purge_expired_all(app_.state.sessionmaker)
         await recycle_bin_service.recover_pending_deletions(app_.state.sessionmaker)
+        # 统计起点与存量先于恢复建立，遗留 running 的中断结果才不会遗漏。
+        await task_statistics_service.initialize_tracking(app_.state.sessionmaker)
         if start_task_engine:
             # 先恢复（遗留 running → interrupted），再开始调度 queued 任务
             await app_.state.task_engine.start()
         await app_.state.recycle_bin_cleaner.start()
+        await app_.state.dashboard_sampler.start()
         try:
             yield
         finally:
+            await app_.state.dashboard_sampler.stop()
             await app_.state.recycle_bin_cleaner.stop()
             if start_task_engine:
                 await app_.state.task_engine.stop()
@@ -95,6 +107,7 @@ def create_app(
     )
 
     app.state.recycle_bin_cleaner = recycle_bin_service.RecycleBinCleaner(app.state.task_engine)
+    app.state.dashboard_sampler = admin_dashboard_service.DashboardSampler(app.state.sessionmaker)
 
     if settings.cors_origin_list:
         app.add_middleware(

@@ -2996,3 +2996,62 @@ export interface WorkshopImportResult {
   download_count: number
   imported: boolean
 }
+
+// 管理员全站首页：日日期由后端按北京时间计算，null 表示未观测而不是真实的零。
+export type AdminDashboardDays = 7 | 30 | 90
+export interface AdminDashboardTotals {
+  users: number
+  projects: number
+  chapters: number
+  total_words: number
+  pending_submissions: number
+}
+export interface AdminDashboardMeta {
+  as_of: string
+  tracking_since: string
+  timezone: 'Asia/Shanghai'
+}
+export interface AdminDashboardOverview extends AdminDashboardMeta, AdminDashboardTotals {}
+export interface AdminDashboardTasks extends AdminDashboardMeta {
+  baseline_tasks: number
+  new_tasks: number
+  queued: number
+  running: number
+  paused: number
+  succeeded: number
+  failed: number
+  cancelled: number
+  interrupted: number
+  failed_24h: number
+  interrupted_24h: number
+  removed_unfinished: number
+}
+export interface AdminDashboardTaskDay {
+  created: number
+  succeeded: number
+  failed: number
+  cancelled: number
+  interrupted: number
+}
+export interface AdminDashboardHistoryPoint {
+  day: string
+  captured_at: string | null
+  totals: AdminDashboardTotals | null
+  tasks: AdminDashboardTaskDay | null
+  partial: boolean
+}
+export interface AdminDashboardComparison {
+  from_day: string
+  to_day: string
+  users: number | null
+  projects: number | null
+  chapters: number | null
+  total_words: number | null
+}
+export interface AdminDashboardHistory extends AdminDashboardMeta {
+  days: AdminDashboardDays
+  start_date: string
+  end_date: string
+  points: AdminDashboardHistoryPoint[]
+  comparison: AdminDashboardComparison
+}

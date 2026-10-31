@@ -13,6 +13,7 @@
   analysis_id 须属于本章、suggestion_ids 须是该次分析里的建议；不自动续写；版本来源 / 生成记录类型均为 revise。
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -376,6 +377,51 @@ def _below_target(text: str, target_words: int) -> bool:
     return count_words(text) < CONTINUE_RATIO * target_words
 
 
+async def _save_chapter_result(
+    job: ChapterJob,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    text: str,
+    log_values: dict[str, Any],
+) -> ChapterOut | None:
+    """只保护有界的原子保存；取消必须等连接确定提交或回滚后才能清理。
+
+    不能在执行中的 INSERT ... RETURNING 上直接取消：SQLite 关闭仍有活游标的
+    连接后可能继续持写锁，随后独立的回退 / 终态事务将无法落库。
+    提交前收到取消则回滚；提交已开始则以保存结果为准，不声称撤销已提交正文。
+    """
+    cancelled = asyncio.Event()
+
+    async def save() -> ChapterOut | None:
+        async with sessionmaker() as db:
+            chapter = await db.get(Chapter, job.chapter_id)
+            if chapter is None:
+                return None
+            await version_service.ensure_baseline(db, chapter)
+            chapter.content = text
+            chapter.word_count = count_words(text)
+            chapter.status = "done"
+            log = await generation_log_service.write_log(db, **log_values)
+            await version_service.record(db, chapter, job.mode, log_id=log.id)
+            if cancelled.is_set():
+                # 不取消任何进行中的数据库await，让会话退出完整回滚、关闭游标。
+                raise asyncio.CancelledError
+            await db.commit()
+            await db.refresh(chapter)
+            return ChapterOut.model_validate(chapter)
+
+    saving = asyncio.create_task(save())
+    try:
+        return await asyncio.shield(saving)
+    except asyncio.CancelledError:
+        cancelled.set()
+        out = await saving
+        # 已进入提交的极晚取消：保存获胜，继续产出done供引擎记录唯一成功终态。
+        current = asyncio.current_task()
+        if current is not None:
+            current.uncancel()
+        return out
+
+
 async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:
     started = time.monotonic()
     finished = False
@@ -468,21 +514,13 @@ async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[Asyn
                 break
             text = f"{text}\n\n{piece}"
 
-        async with sessionmaker() as db:
-            chapter = await db.get(Chapter, job.chapter_id)
-            if chapter is None:
-                fail_status, fail_error = "error", "章节已被删除，生成结果未保存"
-                yield "error", {"detail": fail_error}
-                return
-            await version_service.ensure_baseline(db, chapter)
-            chapter.content = text
-            chapter.word_count = count_words(text)
-            chapter.status = "done"
-            log = await generation_log_service.write_log(db, **log_kwargs("success", warning or "", chapter.word_count))
-            await version_service.record(db, chapter, job.mode, log_id=log.id)
-            await db.commit()
-            await db.refresh(chapter)
-            out = ChapterOut.model_validate(chapter)
+        out = await _save_chapter_result(
+            job, sessionmaker, text, log_kwargs("success", warning or "", count_words(text))
+        )
+        if out is None:
+            fail_status, fail_error = "error", "章节已被删除，生成结果未保存"
+            yield "error", {"detail": fail_error}
+            return
         finished = True
         payload: dict[str, Any] = {"chapter": out.model_dump(mode="json")}
         if warning:

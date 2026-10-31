@@ -12,6 +12,13 @@ export const SUBMISSION_STATUS: Record<WorkshopSubmissionStatus, { label: string
 }
 export const workshopCategoryOptions = Object.entries(WORKSHOP_CATEGORIES).map(([value, label]) => ({ value, label }))
 
+/** 查询串只决定已授权的页签，不能授予普通用户审核入口。 */
+export function workshopTab(value: string | null, isAdmin: boolean): 'browse' | 'mine' | 'review' {
+  if (value === 'mine') return 'mine'
+  if (value === 'review' && isAdmin) return 'review'
+  return 'browse'
+}
+
 export function normalizeWorkshopTags(tags: string[]): string[] {
   return [...new Set(tags.map((t) => t.trim()).filter(Boolean))]
 }

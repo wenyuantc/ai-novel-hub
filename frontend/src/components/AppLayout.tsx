@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, AuditOutlined, BookOutlined, DeleteOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, AuditOutlined, BookOutlined, DashboardOutlined, DeleteOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { Button, Drawer, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { useState } from 'react'
@@ -36,12 +36,14 @@ export default function AppLayout() {
   const { managingOther, canUseAI } = projectAccess(project, user, projectId ?? NaN)
   const groups = studioNavigation(projectId, mcpEnabled, canUseAI)
   const current = navigationItem(groups, location.pathname)
-  const pageName = location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const adminSection = location.pathname.startsWith('/admin/')
+  const pageName = location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
     items: [
       { key: 'workshop', icon: <ShopOutlined />, label: '提示词工坊' },
+      ...(user?.is_admin ? [{ key: 'admin-dashboard', icon: <DashboardOutlined />, label: '管理员首页' }] : []),
       ...(user?.is_admin ? [{ key: 'admin', icon: <TeamOutlined />, label: '用户管理' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-projects', icon: <BookOutlined />, label: '作品管理' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-recycle-bin', icon: <DeleteOutlined />, label: '作品回收站' }] : []),
@@ -52,7 +54,8 @@ export default function AppLayout() {
     ],
     onClick: async ({ key }) => {
       setNavOpenAt(null)
-      if (key === 'admin') navigate('/admin/users')
+      if (key === 'admin-dashboard') navigate('/admin/dashboard')
+      else if (key === 'admin') navigate('/admin/users')
       else if (key === 'admin-projects') navigate('/admin/projects')
       else if (key === 'admin-recycle-bin') navigate('/admin/recycle-bin')
       else if (key === 'admin-audit-logs') navigate('/admin/audit-logs')
@@ -94,6 +97,7 @@ export default function AppLayout() {
       <div className="studio-sidebar-footer">
         {projectId !== null && !managingOther && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
         <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpen(true) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>
+        {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/dashboard" aria-current={location.pathname.startsWith('/admin/dashboard') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DashboardOutlined />管理员首页</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/users" aria-current={location.pathname.startsWith('/admin/users') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><TeamOutlined />用户管理</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/projects" aria-current={location.pathname.startsWith('/admin/projects') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><BookOutlined />作品管理</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/recycle-bin" aria-current={location.pathname.startsWith('/admin/recycle-bin') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DeleteOutlined />作品回收站</Link>}
@@ -110,7 +114,7 @@ export default function AppLayout() {
         <header className="studio-topbar">
           {isMobile && <Button type="text" aria-label="打开菜单" icon={<MenuOutlined />} onClick={() => setNavOpenAt(location.key)} />}
           <nav className="studio-breadcrumb" aria-label="面包屑导航">
-            <Link to={managingOther || location.pathname.startsWith('/admin/') ? '/admin/projects' : '/projects'}>{managingOther || location.pathname.startsWith('/admin/') ? '作品管理' : '我的作品'}</Link><RightOutlined />
+            <Link to={managingOther ? '/admin/projects' : adminSection ? '/admin/dashboard' : '/projects'}>{managingOther ? '作品管理' : adminSection ? '管理后台' : '我的作品'}</Link><RightOutlined />
             {project && <><Link to={`/projects/${project.id}/overview`} title={project.title}>{project.title}</Link><RightOutlined /></>}
             <span aria-current="page">{pageName}</span>
           </nav>

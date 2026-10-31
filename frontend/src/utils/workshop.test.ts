@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PromptTemplateDetail, WorkshopItem, WorkshopSubmission, WritingStyle } from '../api/types'
 import { emptyStyleDraft } from '../api/styles'
-import { canRestoreWorkshopItem, normalizeWorkshopTags, promptShare, styleShare, updateShare, workshopImportPairs, workshopSubmissionKindLabel, workshopTagsError } from './workshop'
+import { canRestoreWorkshopItem, normalizeWorkshopTags, promptShare, styleShare, updateShare, workshopImportPairs, workshopSubmissionKindLabel, workshopTab, workshopTagsError } from './workshop'
 
 const template = (enabled = true): PromptTemplateDetail => ({
   key: 'chapter.generate', name: '写章节', category: 'chapter', category_label: '章节', description: '写作', overridden: true, enabled,
@@ -16,6 +16,13 @@ export const workshopItemFixture = (overrides: Partial<WorkshopItem> = {}): Work
 })
 
 describe('工坊分享与导入', () => {
+  it('审核深链接只允许管理员；非法页签和普通用户审核请求回退浏览', () => {
+    expect(workshopTab('review', true)).toBe('review')
+    expect(workshopTab('review', false)).toBe('browse')
+    expect(workshopTab('mine', false)).toBe('mine')
+    expect(workshopTab('unknown', true)).toBe('browse')
+    expect(workshopTab(null, true)).toBe('browse')
+  })
   it('只分享当前保存的覆盖，停用覆盖也可分享；导入对比取当前生效内容', () => {
     const content = { system: '工坊系统', user: '工坊用户' }
     expect(workshopImportPairs(template(), content).map((p) => p.a)).toEqual(['我的系统', '我的用户'])

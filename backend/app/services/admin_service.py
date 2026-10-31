@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import hash_password
-from app.models import Project, User
+from app.models import Project, Task, User
 from app.schemas.admin import AdminUserCreate, AdminUserList, AdminUserOut, AdminUserUpdate, ResetPasswordRequest
-from app.services import auth_service
+from app.services import auth_service, task_statistics_service
 from app.services.audit_writer import AuditOperation
 
 SELF_FORBIDDEN = "不能对自己执行该操作"
@@ -144,6 +144,7 @@ async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
                 "该用户名下仍有作品（含回收站），请先禁用账号或彻底清理作品后再删除用户",
                 extra={"code": "user_has_projects", "project_count": count},
             )
+        await task_statistics_service.mark_removed(db, Task.user_id == user_id)
         await db.delete(user)
         await audit.commit(flush_fn=_flush_user_delete)
 

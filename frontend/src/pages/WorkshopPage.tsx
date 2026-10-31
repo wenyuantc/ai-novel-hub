@@ -1,7 +1,7 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Badge, Button, Col, Empty, Input, List, Pagination, Row, Select, Space, Spin, Tabs, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { workshopApi } from '../api/workshop'
 import type { SubmissionQuery, WorkshopQuery } from '../api/workshop'
 import type { WorkshopItem, WorkshopSubmissionStatus, WorkshopSubmit } from '../api/types'
@@ -12,14 +12,21 @@ import WorkshopItemDrawer from '../components/workshop/WorkshopItemDrawer'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
-import { SUBMISSION_STATUS, emptyWorkshopShare, updateShare, workshopCategoryOptions, workshopSubmissionKindLabel, WORKSHOP_KINDS } from '../utils/workshop'
+import { SUBMISSION_STATUS, emptyWorkshopShare, updateShare, workshopCategoryOptions, workshopSubmissionKindLabel, workshopTab, WORKSHOP_KINDS } from '../utils/workshop'
 import { formatTime } from '../utils/time'
 
 /** 实例内共享：浏览、本人条目与提交记录、管理员审核。 */
 export default function WorkshopPage() {
   const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false)
   const isMobile = useIsMobile()
-  const [tab, setTab] = useState('browse')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = workshopTab(searchParams.get('tab'), isAdmin)
+  const setTab = (value: string) => setSearchParams((previous) => {
+    const next = new URLSearchParams(previous)
+    if (value === 'browse') next.delete('tab')
+    else next.set('tab', workshopTab(value, isAdmin))
+    return next
+  })
   const [version, setVersion] = useState(0)
   const [itemId, setItemId] = useState<number | null>(null)
   const [submission, setSubmission] = useState<{ id: number; review: boolean } | null>(null)
