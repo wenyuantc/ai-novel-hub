@@ -3,7 +3,7 @@
   "name": "admin-rbac-quotas",
   "title": "管理员权限分级与用户配额",
   "description": "区分超级管理员、内容管理员和审核员等职责，并提供按用户配置资源限额的能力。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "aiNovel",
   "assignee": "aiNovel",
   "createdAt": "2026-10-30",
-  "completedAt": null,
+  "completedAt": "2026-11-02",
   "branch": "codex/admin-rbac-quotas",
   "base_branch": "main",
   "worktree_path": null,
@@ -28,9 +28,10 @@
     "implementation_approved": "true",
     "quality_gate": "passed",
     "postgresql_verification": "deferred_by_user",
-    "execution_stage": "documentation_commit_pending",
+    "execution_stage": "archived_pending_main_integration",
     "commit_approved": "true",
     "merge_push_approved": "true",
-    "style_commit": "39133fa591a5202c5339d7d53221d638ab42b5c6"
+    "style_commit": "39133fa591a5202c5339d7d53221d638ab42b5c6",
+    "documentation_commit": "2f2da1b"
   }
 }

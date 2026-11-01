@@ -61,3 +61,7 @@
 暂存新增文件后，git diff --cached --check发现quotas.ts/roles.ts各多1个EOF换行；原未暂存diff --check没有包含这两个当时未跟踪文件。独立checker仅删除这两个LF，逐字节断言其余内容完全不变，两文件ESLint及diff空白门禁通过，单独style提交39133fa（不amend）。原173文件快照保留为全套测试/浏览器时的历史证据，当前仅此两处纯空白偏差；其余171文件hash不变，未宣称又重跑1399/693全套或重建浏览器产物。质量规范已补“新增文件需暂存或no-index空白检查”。
 
 归档的5份旧前端日志另仅去除末尾空白行，完整原始字节副本保留于/private/tmp/admin-rbac-closeout-raw-logs；未改动命令/计数/错误内容。类型规范摘录同样仅规范化文档末尾换行。
+
+## 归档截点
+
+2026-11-02工作提交c9e4045、39133fa、2f2da1b均完成，task.py archive已将任务归档为completed并清除本会话活动指针。紧随的journal记录及main正常合并/推送按用户授权执行；该截点不预填尚未完成的远端结果。

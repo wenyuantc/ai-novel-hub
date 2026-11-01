@@ -1,5 +1,5 @@
 {
-  "status": "approved_by_user",
+  "status": "work_commits_completed",
   "branch": "codex/admin-rbac-quotas",
   "base_head": "991b0a3e643fdeb4d2ff3bb59377bb75f560ab3b",
   "commits": [
@@ -251,7 +251,8 @@
         ".trellis/tasks/10-30-admin-rbac-quotas/research/spec-read-map.md",
         ".trellis/tasks/10-30-admin-rbac-quotas/task.json",
         ".trellis/tasks/10-30-admin-rbac-quotas/verification.md"
-      ]
+      ],
+      "commit": "2f2da1b"
     }
   ],
   "excluded": [
@@ -268,5 +269,6 @@
   "postcheck_whitespace_adjustment": {
     "frontend/src/utils/quotas.ts": "c0be35d31f9273ce3b749441fee3db034e3ca24d24d420ea58f37726b50beab5",
     "frontend/src/utils/roles.ts": "c0de7e572304395679acc0d53e2e06993de5f2770ca7d1bd27c7ac07b40f612f"
-  }
+  },
+  "archive_path": ".trellis/tasks/archive/2026-11/10-30-admin-rbac-quotas"
 }
