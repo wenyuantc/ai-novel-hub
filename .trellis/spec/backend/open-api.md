@@ -65,6 +65,8 @@ ApiKeyOut 包含 id、name、key_masked、all_projects、project_ids、status（
 
 ### 限流与时间
 
+每请求通过SettingsDep取得当前有效 `open_api_rate_limit_per_minute`；管理员可在[系统设置](./system-settings.md)持久覆盖部署基线。提高/降低阈值只影响后续认证，不能清空当前rate_count/rate_window；后台覆盖优先于环境OPEN_API_RATE_LIMIT_PER_MINUTE，不影响网页登录接口。
+
 - `OPEN_API_RATE_LIMIT_PER_MINUTE` 默认 120、正整数；只影响新增开放业务接口。
 - 数据库条件 UPDATE 原子完成有效性检查、固定 UTC 分钟窗口计数和 last_used_at，随后短提交再读取业务；禁止 Python 先读后加或进程内计数。调用统计不更新 Key 配置的 updated_at。
 - 已存窗口只能前进：仅在 rate_window 小于本次窗口时重置计数；迟到的旧分钟请求按已存的新窗口扣额度，不能用 `rate_window != window` 把窗口倒退并绕过上限。last_used_at 取非递减值；429 根据实际受限窗口和提交后的当前时间计算 Retry-After。

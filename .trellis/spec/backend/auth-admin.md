@@ -88,10 +88,7 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
   - **全局 Skill**：`skills.owner_user_id` 为空的 Skill 只有 `is_admin` 用户可以新建（`POST /skills` 或导入时 `scope=global`）、修改、删除、
     `PUT /references` 与 `POST /{id}/restore-builtin`；普通用户可见但写操作 403（文案提示复制为自己的副本），他人私有 Skill 对管理员同样 404——
     管理员**不能**读取其他用户的私有 Skill。权限按当前请求的 `user.is_admin` 判断，降级后立即失去写权限，不需要 `token_version` 递增。
-  - **`MCP_ENABLED`**（`Settings.mcp_enabled: bool = True`）：部署级开关，不是用户级。关闭后 `/api/v1/mcp-plugins/*` 全部 403 `管理员已关闭 MCP`，
-    智能体不再暴露任何 MCP 工具（运行中途关闭时，待处理的调用返回「工具不存在或已变更」）；已保存的插件保留。`GET /auth/config` 返回
-    `{registration_enabled, mcp_enabled}`，前端据此隐藏入口。与 `REGISTRATION_ENABLED` 一样只经环境变量设置，目前没有写进 `.env.example` /
-    `docker-compose.yml`，需要时手动加。
+  - **MCP有效开关**（部署基线 `MCP_ENABLED`，不是用户级）：管理员可通过[系统设置](./system-settings.md)持久覆盖，后台覆盖优先；关闭后 `/api/v1/mcp-plugins/*` 全部 403 `管理员已关闭 MCP`，智能体不暴露MCP工具，连接/排队后尚未发出的调用也受约束；已发调用可结束、插件保留。`GET /auth/config` no-store返回 `{registration_enabled, mcp_enabled}`，前端可见时30秒/回前台同步。注册开关同样可后台覆盖；未覆盖沿用环境/.env/代码默认，Compose已转发两变量。
   - 删除用户时其私有 Skill、MCP 插件经外键 CASCADE 删除；全局 Skill 不属于任何用户，不受影响。
 
 ### 4. 校验与错误矩阵

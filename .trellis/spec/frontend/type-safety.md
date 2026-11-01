@@ -1,5 +1,7 @@
 # 类型安全
 
+管理员系统设置镜像 `SystemSettingsOut/SystemSettingsUpdate` 与bool/int区分式items；该PATCH的null明确表示取消后台覆盖，不是忽略。审计settings_changes仅六项受限值，公开配置请求代次独立于登录态；详见[系统设置](../backend/system-settings.md)。
+
 管理员任务的AdminTaskBrief/Detail/List/Counts、AdminTaskListQuery及AdminTaskCancelRequest/Out独立镜像schemas/admin_task.py，不能把普通Task通过强转复用；未知kind/status为unknown、旧入队时间/本轮时长为null。UUID深链比较规范化，原因按Unicode字符计数及控制字符规则校验；task.cancel_request审计新增专用有界字段，其成功只表示受理。详见[任务监控](../backend/admin-task-monitoring.md)。
 
 > 本项目中的类型安全模式。

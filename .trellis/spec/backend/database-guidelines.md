@@ -1,5 +1,7 @@
 # 数据库规范
 
+实例级运行配置新增 `0027_system_settings`：单行revision/稀疏覆盖、无业务外键、不进项目备份；设置/审计同事务、确认后共享对象发布及提交不确定协调见[系统设置](./system-settings.md)。不要因新增实例表向仅容纳项目相关表的NOT_EXPORTED登记无关项。
+
 新增迁移 `0026_admin_task_monitoring`（父0025）：Task原位增加可空queued_at、admin_cancel_operation_id/admin_cancel_requested_at及标记索引，旧时钟不回填猜测值，不重建SQLite tasks父表；有pending时拒绝降级。状态/统计/清标记共享条件事务、单SQL管理筛选计数及资源屏障见[任务监控](./admin-task-monitoring.md)。
 
 新增迁移 `0025_admin_dashboard`（父0024）：实例级跟踪起点、每日规模快照和不随任务裁剪/业务级联删除的独立任务统计；Task增加唯一UUID统计身份。升级不重建SQLite tasks父表，已有统计时拒绝破坏性降级。统计表不进入项目备份，完整事务、身份与时间边界见[管理员首页与全站统计](./admin-dashboard.md)。

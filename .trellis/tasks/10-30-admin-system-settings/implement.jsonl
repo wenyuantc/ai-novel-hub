@@ -1,4 +1,11 @@
-{"file": ".trellis/spec/backend/auth-admin.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/open-api.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/spec/backend/system-settings.md", "reason": "本任务已落地的完整七段跨层契约，优先于研究中实施前的历史摘录；检查运行时/持久化/审计/前端是否一致。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层传输/持久化/发布/消费方一致性；只按已确认白名单交付。"}
+{"file": ".trellis/tasks/10-30-admin-system-settings/research/current-contracts.md", "reason": "现有共享Settings、MCP执行竞态、调度、审计和公开配置证据。"}
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "管理员鉴权、注册开关与引导用户兼容。"}
+{"file": ".trellis/spec/backend/admin-audit.md", "reason": "同事务真实actor与安全失败/不确定提交；设置摘要只能窄扩展。"}
+{"file": ".trellis/tasks/10-30-admin-system-settings/research/backend-skills-mcp-excerpts.md", "reason": "远程连接/外部提案/运行中开关及安全回收。（权威规范.trellis/spec/backend/skills-mcp.md的任务相关完整段落，避免注入截断。）"}
+{"file": ".trellis/spec/backend/open-api.md", "reason": "固定分钟原子额度，阈值修改不能重置计数。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "DI、独立临时数据库、FakeLLM/Gate与ruff/pytest。"}
+{"file": ".trellis/tasks/10-30-admin-system-settings/research/frontend-type-safety-excerpts.md", "reason": "snake_case镜像、null/省略语义及API封装。（权威规范.trellis/spec/frontend/type-safety.md的任务相关完整段落，避免注入截断。）"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "node Vitest、lint/build、懒加载/主题/用户反馈。"}
+{"file": ".trellis/tasks/10-30-admin-system-settings/research/frontend-component-guidelines-excerpts.md", "reason": "复用既有Studio/AntD后台及权限/移动体验。（权威规范.trellis/spec/frontend/component-guidelines.md的任务相关完整段落，避免注入截断。）"}

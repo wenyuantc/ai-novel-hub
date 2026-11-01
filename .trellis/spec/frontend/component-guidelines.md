@@ -1,5 +1,9 @@
 # 组件规范
 
+## 管理员系统设置
+
+`AdminSystemSettingsPage` 的六项表单/来源、逐项恢复待保存、版本冲突/dirty保护、StrictMode及本页确认框清理、公开配置30秒同步，遵守[系统设置跨层契约](../backend/system-settings.md)。不得用定期auth.init代替公开配置刷新，也不能让过期响应/离页确认框复活。
+
 ## 管理员全站任务监控
 
 `/admin/tasks`在RequireAdmin下懒加载，使用页级AdminTasksController、安全详情Drawer和原因输入→再次核对/勾选确认的两阶段取消；不复用个人TaskPanel/输出/SSE。默认5秒可关轮询、hidden暂停、旧响应失效；桌面操作列固定右侧，375px页头操作上下排列、排序移入正文与任务卡片。安全标题/错误、UUID大小写、受理/真实终态及现存与累计入口差异见[任务监控跨层契约](../backend/admin-task-monitoring.md)。

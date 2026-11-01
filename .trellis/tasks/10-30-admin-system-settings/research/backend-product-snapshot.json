@@ -1,0 +1,25 @@
+{
+  "base_head": "97193269c4bfcf896163e49236866da7a9f83ca9",
+  "files": {
+    "backend/alembic/versions/0027_system_settings.py": "512f7e38cfdc8ca21bd77c7e60cae99d81945135391af033c11f42252152a32a",
+    "backend/app/api/v1/__init__.py": "8d53a6f2fd665401e67670a22f1412c4f4eab9bb021b783de689f7918af83d65",
+    "backend/app/api/v1/admin_system_settings.py": "94bb5bf5d24cef636a14e7e7b45294ac3d2ff559a48d067b7abbef1845ed7994",
+    "backend/app/api/v1/auth.py": "e43f3a630a3a65432c473a72221f94528c8112783aaa9aeebca4fcb54b98ff6b",
+    "backend/app/core/config.py": "c08e01c4397d055f80495da82503b69e328237b751bef3e0c49a4ce45610e1fc",
+    "backend/app/core/deps.py": "fb5ea273d53c985af4d2de1effc23982c22528b28d48da4c9b2cf7ee1e927fb5",
+    "backend/app/main.py": "7f2d3765c82b560c8dca616b391deb3d9146ddeb05578a983e76d6067bd84d81",
+    "backend/app/models/__init__.py": "834c9193a393f3d54395f077f44ce9d8486a705d7351c1cef2d21d5fcc336c5b",
+    "backend/app/models/system_settings.py": "ff0d62743f36ce7d3a2f92d1b8f31a4a08e773ccbc54bf56d9dfc1b6af516a81",
+    "backend/app/schemas/audit.py": "6b28277c11f1e61589fa86f11be1ed4d8530a0f450ce2b4a8cadca88a31c5375",
+    "backend/app/schemas/system_settings.py": "5f62ebd15bb3459368832ae36f314861bb093f60d4d9a77543944a58ec6d3997",
+    "backend/app/services/agent/mcp_tools.py": "4d28b364435730f7e0a67507c978b0da78977dfd590cd535165fe2ac4897d019",
+    "backend/app/services/agent/runner.py": "4f4e8855438284188e9d9a682ef3d2889d63ef2dc8b7d5075d510d4d7c710327",
+    "backend/app/services/agent/service.py": "124ec1fc97afa4a5bab93470fb9a2fe92b2b6d8cf328c95c9418cb7e830090c7",
+    "backend/app/services/audit_writer.py": "70e13d1a1e44bb735620ade9677fdb1b688f53f57e4b2101ce5457a3f0d4e306",
+    "backend/app/services/mcp/service.py": "2e794c6de6cece85ae72aa6e40d747011b5881b1021a9197ed01495c93fa872a",
+    "backend/app/services/system_settings_service.py": "4c03c531fd9c9d1668788bd33bbbb02f079242aff2dad85590bf46b90f9b45f4"
+  },
+  "test_only_changes_after_collection": [
+    "backend/tests/test_system_settings_runtime.py"
+  ]
+}

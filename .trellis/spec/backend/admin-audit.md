@@ -49,6 +49,8 @@ async def flush_versioned(db) -> None
 
 ## 3. 契约
 
+0027接入 `system_settings.update` / target_type=`system_settings`，变更与持久覆盖同事务；settings_changes为最多六项的局部类型化摘要（key、覆盖前后、有效前后、来源），只该动作可携带。不得记录完整Settings或任意JSON；失败不保留未提交after。运行时发布/提交确认协调见[系统设置](./system-settings.md)。
+
 ### 写入与结果
 
 - `task.cancel_request` / target_type=`task` 是异步取消的**受理动作**，成功只表示Task持久意图与受理审计同事务提交，不表示执行体已取消。本人作品也通过局部include_own_project=True采集；后续signal/abort/finalize按任务监控契约执行，不能用外层AuditOperation掩盖旧取消helper内部提交。

@@ -296,8 +296,7 @@ def tool_pref(plugin, name) -> (enabled, auto_confirm)   # 缺省 (True, False)
 
 ### 2. 契约
 
-- **管理员开关**：路由级依赖 `require_mcp`，`MCP_ENABLED=false` 时**所有** `/mcp-plugins` 接口 403 `管理员已关闭 MCP`；`GET /auth/config` 返回
-  `mcp_enabled` 供前端隐藏入口；智能体侧 `build_tool_map` 返回空映射、`resolve` 返回 None（运行中途关闭时，待处理的调用得到「工具不存在或已变更」）。
+- **管理员开关**：有效mcp_enabled关闭时，路由级require_mcp使所有 `/mcp-plugins` 接口403。部署MCP_ENABLED可被[系统设置](./system-settings.md)持久覆盖；公开auth/config no-store，前端可见30秒/回前台同步。build_tool_map/resolve之外，refresh_tools/call_once在连接前与连接建立后实际调用前、智能体Worker在出队call_tool前均重查共享Settings；不捕获旧bool。关闭阻断未发调用，已发调用不主动取消；不改变插件持久数据/SSRF/回收规则。
 - **归属**：插件按用户私有，他人一律 404 `插件不存在`；每人最多 10 个（400）。`(user_id, slug)` 唯一，冲突 409 `插件标识已被使用，请换一个`。
   slug 为空时由名称生成（只保留小写字母数字，其余转连字符，≤ 24），生成不出来 → 400 要求改用英文名称或填写标识。
 - **地址**：必须是 `http(s)://` 且有主机名；**不能带用户名密码**（凭据只能放加密的请求头）；保存时（新建、PATCH 改 url）做 SSRF 校验，失败 400；
