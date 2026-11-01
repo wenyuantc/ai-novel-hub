@@ -15,7 +15,8 @@
 | 规范 | 说明 | 状态 |
 |-------|-------------|--------|
 | [目录结构](./directory-structure.md) | `src/api`、`stores`、`hooks`、`components`、`pages/project`、`utils`、`router.tsx` 的布局与命名 | 已填写 |
-| [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理员用户页 / `RequireAdmin`、项目智能体面板与 external 提案卡片、Skill / MCP 插件页（`SkillSelect` 复用、请求头编辑语义） | 已填写 |
+| [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理页 / `RequirePermission`、项目智能体面板与 external 提案卡片、Skill / MCP 插件页（`SkillSelect` 复用、请求头编辑语义） | 已填写 |
+| [角色、授权与配额跨层契约](../backend/rbac-quotas.md) | required能力快照、角色/分配/配额三态、逐动作路由、同actor撤权与旧响应隔离、完整人工只读面 | 已填写 |
 | [项目封面跨层契约](../backend/project-cover.md) | 概览/书架图片、上传与预览确认弹窗、微秒版本 URL、只合并封面状态以保留未保存表单 | 已填写 |
 | [AI 人物关系跨层契约](../backend/relationship-generation.md) | 多选角色生成缺失关系、结果守卫与勾选、重开防重复、任务面板保存刷新、409 重试 | 已填写 |
 | [工坊跨层契约](../backend/workshop.md) | `/workshop` 浏览 / 我的分享 / 审核、匿名署名、分享与导入、模板差异及历史恢复 | 已填写 |

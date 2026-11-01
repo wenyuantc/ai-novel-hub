@@ -6,7 +6,7 @@
 
 首批包括：用户创建/角色状态/重置密码/删除；跨用户作品资料与删除、章节 CRUD/从大纲建章/选角/版本维护；工坊发布/审核/元数据/上下架/删除；全局 Skill 创建/导入/修改/参考资料/内置恢复/删除；审计清理。0024增加管理员回收站恢复/彻底删除及系统到期清理（见[回收站](./recycle-bin.md)）；0026增加显式管理员任务取消受理（见[任务监控](./admin-task-monitoring.md)）。其他设定子模块、本人日常创作、普通用户行为、普通AI/任务、私人资源及平台 Key 不自动采集。
 
-权限沿用 [管理员会话](./auth-admin.md)、[人工作品管理](./admin-projects.md)、[工坊](./workshop.md)、[Skill](./skills-mcp.md)，不扩大读取或管理权限。普通用户和未登录/参数校验失败不记管理员操作。
+权限按[RBAC](./rbac-quotas.md)拆分：读取audit.read，预览/执行清理audit.cleanup。自定义角色执行既有明确采集动作不能因is_admin=false漏审；不扩大全量人工子模块。新增role.create/update/delete、user.roles.update/bootstrap、user.quotas.update与有界类型化rbac_change（角色ID/允许权限/两项配额前后值）。其他权限沿用 [管理员会话](./auth-admin.md)、[人工作品管理](./admin-projects.md)、[工坊](./workshop.md)、[Skill](./skills-mcp.md)，不扩大读取或管理权限。普通用户和未登录/参数校验失败不记管理员操作。
 
 ## 2. 签名
 
@@ -17,7 +17,8 @@ class AuditOperation:
                  target_type: AuditTargetType, target_id: int | None = None,
                  *, project_id: int | None = None, enabled: bool = True,
                  operation_id: str | None = None,
-                 include_own_project: bool = False, system_expiry: bool = False)
+                 include_own_project: bool = False, system_expiry: bool = False,
+                 bootstrap: bool = False)
     def target(self, obj, *, label: str | None = None)
     def track(self, obj, fields)
     def version(self, version: ChapterVersion | None, project_id: int)
@@ -45,7 +46,7 @@ async def flush_versioned(db) -> None
 
 保留 primitive 快照字段：actor ID/用户名、target 类型/ID/名称、owner ID/用户名、project ID/标题、chapter ID、UTC occurred_at、action/result、summary、version_ref、安全 error_code/error_message。删除业务对象、用户或版本不会级联删审计，也不会抹掉原始标识。
 
-0024允许 `actor_user_id=null` 表示内部 `project.expire` 的「系统自动清理」。前端不得显示 #null 或假管理员ID；原人工历史ID仍保持。只有 `system_expiry=True` 且actor为空、action为project.expire才允许系统身份，客户端不能设置该选项。
+0024允许 `actor_user_id=null` 表示内部 `project.expire` 的「系统自动清理」。前端不得显示 #null 或假管理员ID；原人工历史ID仍保持。到期系统身份只允许system_expiry=True、空actor及project.expire。0029另允许内部bootstrap=True、空actor、user.roles.bootstrap，显示“管理员引导”；客户端不能设置这两个选项。
 
 ## 3. 契约
 
@@ -56,7 +57,7 @@ async def flush_versioned(db) -> None
 - `task.cancel_request` / target_type=`task` 是异步取消的**受理动作**，成功只表示Task持久意图与受理审计同事务提交，不表示执行体已取消。本人作品也通过局部include_own_project=True采集；后续signal/abort/finalize按任务监控契约执行，不能用外层AuditOperation掩盖旧取消helper内部提交。
 
 - 服务层显式接入，不使用 middleware/ORM 全局监听，也不 monkey-patch session.commit。必须保留真实 actor，不能用 owner 代替。
-- `AuditOperation.__aenter__` 核实当前启用管理员；project_id 指向本人作品时默认关闭采集。管理员restore/purge通过局部 `include_own_project=True` 也记录自己的作品，系统expire走专用内部选项；不能因此全局开放本人日常创作采集。已确认私有 Skill 不采集，且不为审计越过原可见性 helper。
+- `AuditOperation.__aenter__` 以当前授权快照核实启用管理账号（超管或有效权限非空），不只检查is_admin；动作授权仍由业务显式校验，enabled=False不是通行证；project_id 指向本人作品时默认关闭采集。管理员restore/purge通过局部 `include_own_project=True` 也记录自己的作品，系统expire走专用内部选项；不能因此全局开放本人日常创作采集。已确认私有 Skill 不采集，且不为审计越过原可见性 helper。
 - 业务变更和成功审计共用一次事务。通常通过 audit.commit 设置 committed，再 refresh/构造响应；非审计路径仍按原规则提交。工坊 approve 保留既有例外：在条目/审核锁释放前先 flush/refresh 并生成 output，再 audit.commit。不能为了统一文案把其响应投影移至提交后；提交前投影失败仍整体回滚。
 - 业务 flush 在成功审计入库前完成；调用者传已有业务错误翻译的 flush_fn。章节使用 version_service.flush_versioned，Skill 使用 _flush_unique，审计表自身错误不能被误译成业务唯一键 409。
 - 失败先 rollback，再使用提前保存的安全快照写失败记录。不能在 rollback 后读过期 ORM 属性，不能把未提交的 after 值当作事实。
@@ -80,7 +81,7 @@ version_ref 仅为 project/chapter/version ID、seq、content_sha256；详情比
 
 ### API 与日期清理
 
-所有端点均使用 AdminUser，前缀 `/api/v1/admin/audit-logs`：
+端点按audit.read/cleanup分别授权，前缀 `/api/v1/admin/audit-logs`：
 
 | 方法/路径 | 请求 | 响应 |
 |---|---|---|
@@ -97,7 +98,7 @@ brief 包括身份/目标/归属快照、动作/结果/时间和安全错误，�
 
 执行再次验管理员/签名/purpose/有效期/actor，先以 nonce 唯一 operation_id 占位；DELETE 条件必须同时有日期、id≤预览高水位及 action != audit.cleanup。删除和成功清理事件同事务；成功/失败清理事件一律受保护。重放409，失败后重新预览。高水位不是物化快照，实际数量可能不同，但不包含之后新分配 ID 的记录。
 
-前端 `/admin/audit-logs` 使用 RequireAdmin+懒路由；AppLayout 提供桌面/移动入口。列表有组合筛选、分页、空/错态和重试；详情只读。清理日期/账号/弹窗关闭会使旧预览失效；请求序列+当前 actor 验证阻止旧响应复活，busy 禁重复提交；结果不确定提示先刷新清理留痕。移动端用卡片而非撑宽整页的表格。
+前端 `/admin/audit-logs` 使用RequirePermission(audit.read)+懒路由，清理另需audit.cleanup，关联版本主动读取另需projects.read或真实owner，不能凭audit.read读正文；AppLayout 提供桌面/移动入口。列表有组合筛选、分页、空/错态和重试；详情只读。清理日期/账号/弹窗关闭会使旧预览失效；请求序列+当前 actor 验证阻止旧响应复活，busy 禁重复提交；结果不确定提示先刷新清理留痕。移动端用卡片而非撑宽整页的表格。
 
 ## 4. 校验与错误矩阵
 

@@ -1,20 +1,28 @@
 # 组件规范
 
+## RBAC、角色与配额
+
+管理路由统一RequirePermission(permission)/superOnly，菜单、移动导航、账户及面包屑逐域能力一致；旧RequireAdmin不用于新管理路由。实际字段、33动作、撤权、配额三态与错误见[RBAC跨层契约](../backend/rbac-quotas.md)。
+
+AdminRolesPage仅超管，桌面Table/375px List卡片共享操作；名称100/说明500与后端一致，内置可复制不可改删，在用角色不可删；编辑影响全部成员，revision冲突保留草稿不重发。UserRolesButton在列表/详情整体替换多角色，清空仍有个人能力。UserQuotaPanel展示全部生命周期作品占用/真正执行并发、继承来源/有效上限/全站顶，limited0不可转为null；非超管不能改任何管理账号额度。
+
+以下人工编辑组件契约均受projectAccess.canEdit约束，不只隐藏顶层按钮：Form外StageListEditor、挂接职业卸下/阶段变更、加入组织、伏笔及移动章节菜单、正文/标题/选角、Meta-S、版本恢复/删除均须禁用且提交前实时复核。本人功能不锁；canUseAI=false时不挂载模型/私人配置/生成日志/任务接续/阅读进度副作用。
+
 ## 管理员系统设置
 
 `AdminSystemSettingsPage` 的六项表单/来源、逐项恢复待保存、版本冲突/dirty保护、StrictMode及本页确认框清理、公开配置30秒同步，遵守[系统设置跨层契约](../backend/system-settings.md)。不得用定期auth.init代替公开配置刷新，也不能让过期响应/离页确认框复活。
 
 ## 管理员全站任务监控
 
-`/admin/tasks`在RequireAdmin下懒加载，使用页级AdminTasksController、安全详情Drawer和原因输入→再次核对/勾选确认的两阶段取消；不复用个人TaskPanel/输出/SSE。默认5秒可关轮询、hidden暂停、旧响应失效；桌面操作列固定右侧，375px页头操作上下排列、排序移入正文与任务卡片。安全标题/错误、UUID大小写、受理/真实终态及现存与累计入口差异见[任务监控跨层契约](../backend/admin-task-monitoring.md)。
+`/admin/tasks`在RequirePermission(tasks.read)下懒加载，取消另需tasks.cancel，使用页级AdminTasksController、安全详情Drawer和原因输入→再次核对/勾选确认的两阶段取消；不复用个人TaskPanel/输出/SSE。默认5秒可关轮询、hidden暂停、旧响应失效；桌面操作列固定右侧，375px页头操作上下排列、排序移入正文与任务卡片。安全标题/错误、UUID大小写、受理/真实终态及现存与累计入口差异见[任务监控跨层契约](../backend/admin-task-monitoring.md)。
 
 ## 管理员首页
 
-`/admin/dashboard` 在 RequireAdmin 下懒加载，三块请求独立加载/重试，保留旧值时标过期；7/30/90日、北京时间、60秒可关闭轮询及hidden暂停。趋势图必须按容器实测宽度计算SVG画布，375px轴文字不能随大viewBox缩到不可读，并提供历史数据表。入口、缺口/null、累计任务和工坊审核深链接见[管理员首页跨层契约](../backend/admin-dashboard.md)。
+`/admin/dashboard` 在RequirePermission(dashboard.read)下懒加载，三块请求独立加载/重试，保留旧值时标过期；7/30/90日、北京时间、60秒可关闭轮询及hidden暂停。趋势图必须按容器实测宽度计算SVG画布，375px轴文字不能随大viewBox缩到不可读，并提供历史数据表。入口、缺口/null、累计任务和工坊审核深链接见[管理员首页跨层契约](../backend/admin-dashboard.md)。
 
 ## 提示词工坊
 
-- 用户级懒加载路由 `/workshop`（`pages/WorkshopPage.tsx`），`StudioNavigation` 的创作资源分组与用户菜单有入口。Tab 为「浏览」「我的分享」「审核」，审核和官方发布仅管理员可见；数量来自待审核列表的 `total`。
+- 用户级懒加载路由 `/workshop`（`pages/WorkshopPage.tsx`），`StudioNavigation` 的创作资源分组与用户菜单有入口。Tab 为「浏览」「我的分享」「审核」，审核入口需workshop.read，官方发布另需workshop.publish，审核通过/拒绝/上下架/元数据/删除分别授权；数量来自待审核列表的 `total`。
 - `components/workshop/ShareToWorkshopModal` 在写作风格库的本人风格、模板页已保存的覆盖上预填分享数据，也用于条目更新与官方发布；分类、标签复用 `WorkshopMetadataFields`。模板 key 在分享已有模板和更新时锁定。
 - `WorkshopItemDrawer` 展示署名、计数、正文与操作；以服务端 `is_mine` 判归属，使用 `author_name ?? '匿名'`，不得推导或显示匿名作者 id。`WorkshopItemControls` 依条目状态及 `hidden_by` 控制上架 / 下架操作，管理员可改分类标签，正文仅作者提交更新。
 - 模板导入前复用 `PromptDiffModal`，`utils/workshop.ts::workshopImportPairs` 对照当前生效内容：覆盖启用才取覆盖，否则取系统默认；确认后调用导入。导入结果提示覆盖已启用且可从历史恢复；风格导入后强制刷新 styles store，刷新失败也需显示错误。
@@ -54,10 +62,10 @@ dayjs.locale('zh-cn')
 
 | 组件 | 契约（源自源码） |
 |-----------|------------------------|
-| `AppLayout` | 知页外壳：216px 浅侧栏、56px 顶栏、面包屑与 `<Outlet/>`。`StudioNavigation` 按 `/projects/:pid` 切换全局/项目分组，桌面与移动抽屉共用一份定义，MCP 入口遵循 `mcpEnabled`；项目名称只读 `cachedProject.id === pid` 的缓存。侧栏新建跳 `/projects?create=1`；真实账号菜单保留改密/退出，管理员才显示用户管理。任务计数取 `useTasksStore.active.length`，只在 loaded 后显示，侧栏控制始终挂载的 `<TaskPanel open onOpenChange hideTrigger/>`。移动导航按 `location.key` 关闭，避免在导航 effect 中同步 setState。 |
+| `AppLayout` | 知页外壳：216px 浅侧栏、56px 顶栏、面包屑与 `<Outlet/>`。`StudioNavigation` 按 `/projects/:pid` 切换全局/项目分组，桌面与移动抽屉共用一份定义，MCP 入口遵循 `mcpEnabled`；项目名称只读 `cachedProject.id === pid` 的缓存。侧栏新建跳 `/projects?create=1`；真实账号菜单保留改密/退出，具有users.read才显示用户管理，其他管理入口分别判read，角色入口仅超管。任务计数取 `useTasksStore.active.length`，只在 loaded 后显示，侧栏控制始终挂载的 `<TaskPanel open onOpenChange hideTrigger/>`。移动导航按 `location.key` 关闭，避免在导航 effect 中同步 setState。 |
 | `StudioUI` | `StudioBrand({onClick?})` 在官网页头/页脚与工作区共用，始终链接公开 `/`；hover/focus 显式保持主题前景色，避免 AntD 全局链接悬停色降低暗色可读性，focus-visible 保留主色轮廓。`StudioPage({title, hint?, action?, children})` 提供 `<main>`、h1 与页面边距；`StudioPanel({children})` 为无阴影纸面；`StudioEmpty({title, text, action?})` 提供空态与下一步操作；`ProjectBadge({status})` 使用既有 `PROJECT_STATUS` 枚举标签。 |
 | `RequireAuth` | 路由守卫：`status === 'unknown'` → `<FullPageSpin/>`；`'anonymous'` → `<Navigate to="/login" replace state={{ from: location.pathname + location.search }} />`。`LoginPage` 读取 `state.from`（默认 `/projects`）。 |
-| `RequireAdmin` | 包裹 `/admin/users`（位于 `RequireAuth` 内部）。判定逻辑是 `utils/adminUsers.ts` 中的纯函数 `adminGuard(status, user)`：`'loading'` → `<FullPageSpin/>`，`'login'` → `/login`，`'home'`（非管理员）→ `/`，`'allow'` → children。`is_admin` 只从 `/auth/me` 读取一次；被降级的管理员在刷新前仍会看到菜单，但 API 调用会返回 403 并显示提示信息。 |
+| `RequirePermission` | 管理路由位于RequireAuth内，按permission具体能力或superOnly判断；unknown加载、匿名保留原路径跳login、已登录无权显示警告不登出。进入管理路由刷新私有授权；状态依赖actor/path而非user对象或revision，防循环。 |
 | `ChangePasswordModal` | `{ open; onClose }`。原密码 + 两次输入新密码（`utils/validation`）。成功 → `其他设备上的登录已失效`；后端会重新签发 cookie，因此当前标签页保持登录。400 `原密码不正确` 通过 `errorMessage(err)` 在表单内显示，不会触发全局登出。 |
 | `AIConfigSelect` | `{ value?: number \| null; onChange?: (v: number \| null) => void; disabled?: boolean }`。挂载时调用 `useAIConfigStore().load()`。空选择 = `null` = "使用默认配置"（placeholder 为 `默认：{name}（{model}）`）。加载完成且配置数为零时，渲染一个链接到 `/settings/ai` 的警告 `Alert` 以代替下拉框。 |
 | `StreamOutput` | `{ text; running; placeholder?; maxHeight? = 360 }`。`pre-wrap` 等宽文本框，`running` 时自动滚动到底部，运行中显示一个小的 `Spin`。 |
@@ -134,16 +142,16 @@ dayjs.locale('zh-cn')
 同级的 `AdminProjectsPage` 提供管理员正常项目列表，`AdminRecycleBinPage` 管理已删除作品；从正常列表进入现有编辑区，归属提示、人工管理能力与自动任务/Reader进度隔离遵守[管理员作品管理跨层契约](../backend/admin-projects.md)。不得通过切换认证用户复用页面。
 
 - AntD `Table`，服务端分页（`adminApi.listUsers({ q, page, page_size })`，`q` 会 trim，为空时省略）并带用户名搜索框。列：用户名（自己那一行标记 `我`）、角色、状态、作品数（含回收站）、`formatTime(created_at)`、操作。作品数非零时提供按 owner 筛选的正常作品/回收站链接。
-- `新建用户` 弹窗：用户名、两次输入初始密码、`设为管理员` 复选框。重置密码弹窗：两次输入新密码。
+- `新建用户`弹窗仅用户名、两次初始密码，需users.create；不发送is_admin，角色分配单独走超管专用多选接口。重置密码弹窗：两次输入新密码。
 - 列表与详情共用 `components/adminUsers` 的页级 controller/hook、动作按钮与声明式 `AdminUserActionDialog`；启停和角色仍明确确认，重置/删号同样绑定受控目标，不创建离页后遗留的 imperative confirm。名下有任何作品（含删除中/回收站/待清理）时 `rowActions.canDelete=false`，提示先禁用或清理作品；服务器409仍是最终保护。零作品删号的 `canConfirmDelete(input, username)` 严格相等（不trim/大小写折叠）。冲突计数仅经 `userProjectCountFromError` 收窄，更新弹窗并禁用确认；列表删末项回退一页，详情删号replace回列表。
-- `rowActions(row, currentUserId)` 会禁用当前用户自己那一行的**所有**操作（tooltip 为 `不能对自己执行该操作`）——包括重置密码，因为递增 `token_version` 会让管理员自己被登出；自己改密码应通过 `修改密码`。
+- `rowActions(row, currentUserId, actor)` 仅负责状态/重置密码/删除三类账号危险动作；逐项检查users.*、自身和管理目标保护，不负责角色/配额的全部操作。自己重置会递增token_version而退出，应通过自助“修改密码”；角色分配/配额分别走专用组件及保护规则。
 - 用户名与“详情”链接进入懒加载 `/admin/users/:userId`；详情按真实actor和目标key重建，显示账号信息、最近登录、正常/回收站基础统计和非零删除中提示。正常作品固定owner分页，两个目录深链同owner；相关目录也按当前owner重建。null登录显示“暂无记录”，不推算历史。完整接口/生命周期/异步动作规则见[管理员用户详情与登录契约](../backend/auth-admin.md)。
 - `AdminUserActionsController` 同步busy防双击；异步表单验证及响应交付均复核actor/目标/代次，deactivate清理且可重新activate，支持StrictMode。离页/退出/切身份时Modal自然撤下，迟到回调不toast/reload/导航；不要用全局destroyAll。新建账号仍在列表，不扩展成通用CRUD框架。
 - 测试仅在node环境（无jsdom）：既有 `utils/adminUsers.test.ts`、`api/admin.test.ts`、`utils/validation.test.ts`；新增 `components/adminUsers/adminUserActionsController.test.ts` 直接验证实际异步提交路径，`adminUserDetailsUI.test.ts` 验证展示/路由/空值/失败/owner，`utils/adminUserDetails.test.ts` 验证正十进制安全ID。
 
 ### 管理员作品回收站（`src/pages/AdminRecycleBinPage.tsx`）
 
-- `/admin/recycle-bin` 是 `RequireAdmin` 保护的 lazy 路由；桌面/移动导航、账户菜单和页名一起维护。传输与生命周期完整契约见[作品回收站](../backend/recycle-bin.md)。
+- `/admin/recycle-bin` 是RequirePermission(recycle_bin.read)保护的lazy路由，恢复/purge分别检查动作；桌面/移动导航、账户菜单和页名一起维护。传输与生命周期完整契约见[作品回收站](../backend/recycle-bin.md)。
 - `recycleBinApi` 独占列表/恢复/purge 请求；搜索、owner 筛选、分页与末页回退沿用 `useLoader`。桌面表格允许内部横滚，375px 使用卡片，均不展示正文或私人配置。
 - `RecycleProjectModal` 普通恢复确认不自动续跑；purge 要求完整名称逐字相等并明确不可恢复。`deleted_at` 原始微秒字符串直接回传，不能经 Date/格式化时间重建；后端再次判断期限、代次和权限。
 - 忙碌期间同步 ref 防重复提交并禁用关闭/取消；组件卸载、目标代次变化、管理员身份变化使旧响应失效，成功后才刷新列表并目标级 `discard` / `discardProject`。
@@ -527,9 +535,8 @@ dayjs.locale('zh-cn')
 - **`pages/SkillsPage`**：`useSkills()` 读 store；Tabs「我的（N）」/「全局（N）」，卡片网格（`Row` / `Col xs=24`，375 宽度无固定宽度）。普通用户在全局 Tab 看到说明
   「全局 Skill 由管理员维护，只读；复制为我的之后可以修改」，且全局 Tab 上不显示新建 / 导入按钮；管理员在全局 Tab 新建 / 导入的归入全局，其余归入「我的」。
   导入用 `Upload`（`showUploadList={false}`，`beforeUpload` 里调 `skillApi.import`，返回 false 阻止自动上传）。任何变更后 `useSkillStore.load(true)`。
-- **`skills/SkillCard`**：按 `skill.editable` 决定操作——不可写（全局 + 普通用户）只有「查看 / 复制为我的 / 导出」；可写的有「编辑 / 导出 / 删除」；
-  内置 Skill 且管理员时另有「恢复内置内容」（Popconfirm）。前端**不自己判断归属**，只看服务端给的 `editable`。
-- **`skills/SkillEditDrawer`**：`useModalWidth(760)`；新建时 `SkillForm`，编辑时先 `skillApi.get` 再以 `key = updated_at` 挂载表单。字段：归属（仅新建且管理员可选）、
+- **`skills/SkillCard`**：私人Skill依服务端editable；全局Skill编辑/删除/恢复分别检查global_skills.update/delete/restore_builtin，参考资料另需references。不可写仍可查看/复制/导出，不能把editable当作全操作授权。
+- **`skills/SkillEditDrawer`**：`useModalWidth(760)`；新建时 `SkillForm`，编辑时先 `skillApi.get` 再以 `key = updated_at` 挂载表单。字段：归属（仅新建且有global_skills.create可选）、
   标识（`suggestSlug` 由名称给建议）、名称、说明、分类、触发词（`Select mode=tags`，提交前 `normalizeTriggers`）、正文 Tabs「编辑 / 预览」（预览复用
   `agent/AgentMarkdown`，不引入 markdown 库）、参考资料列表（增删、上下移动）。保存 = PATCH 基本字段 + 参考资料有变化（`refsKey` 比较）时
   `PUT /references` 整体替换。不可写时整个表单只读，底部给「复制为我的」。

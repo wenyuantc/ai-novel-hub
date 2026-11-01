@@ -32,9 +32,9 @@ SkillOut(SkillBrief) + body, references[{id, title, sort, content}]; SkillRef{id
 
 # app/services/skill_service.py
 MAX_SKILLS_PER_OWNER = 100; SNAPSHOT_LIMIT = 20000
-def visible_clause(user_id); def editable(user, skill) -> bool
+def visible_clause(user_id); def editable(user, skill, *, global_update: bool = False) -> bool
 async def get_visible_skill(db, user_id, skill_id) -> Skill      # 不可见 → 404「Skill 不存在」
-async def get_writable_skill(db, user, skill_id) -> Skill        # 可见但不可写 → 403
+async def get_writable_skill(db, user, skill_id, *, permission="global_skills.update") -> Skill        # 可见但不可写 → 403
 async def visible_skills(db, user_id) -> list[Skill]             # 本人的在前（按 id），全局在后
 async def create_skill / update_skill / replace_references / delete_skill / copy_skill / restore_builtin
 async def by_slug(db, user_id, slug) -> Skill                    # 本人优先
@@ -58,10 +58,9 @@ async def by_slug(db, user_id, slug) -> Skill                    # 本人优先
 - **两级归属**：`owner_user_id` 为空 = 全局 Skill；`builtin_key` 标识内置 Skill（`long-continue` / `deslop` / `chapter-diagnose` / `foreshadow-check`，
   正文为本项目自行编写，放在 `app/skills/builtin/*.md`）。内置 Skill 由迁移 0019 写入，测试的 `create_all` 由 `Skill.__table__` 的 `after_create` 写入（两处都读 `load_builtin()`）。
 - **可见 = 本人的 + 全局**。所有按 id 的读取都经 `get_visible_skill`；他人的私有 Skill 一律 **404**，不区分「不存在」与「无权限」。
-- **写权限**：本人的 Skill 本人可写；全局 Skill 只有管理员可写。**403 只用于「可见但不可写」**（全局 Skill + 普通用户，文案
-  `全局 Skill 只有管理员可以修改，可以复制为自己的副本后修改`）。顺序固定为先 `get_visible_skill` 再判断可写，保证不可见的先得到 404。
-  `SkillBrief.editable` 给前端用，规则与 `editable()` 相同。
-- **新建全局**：`scope=global` 且非管理员 → 403 `只有管理员可以创建全局 Skill`（导入同样适用）。
+- **写权限**：本人的 Skill 本人可写；全局Skill按[RBAC](./rbac-quotas.md)的global_skills.create/update/references/delete/restore_builtin逐动作授权，写前共用runtime/gate/User屏障。**403只用于“可见但无所需操作权限”**：code=permission_denied，detail由统一authz.require生成，不再承诺旧固定Skill文案。顺序固定为先 `get_visible_skill` 再判断可写，保证不可见的先得到 404。
+  `SkillBrief.editable` 只表达本人可写或global_skills.update，不是删除/参考资料/恢复的全部授权；前端须分别检查。
+- **新建全局**：scope=global需global_skills.create，缺失403 permission_denied（导入同样适用）。
 - **复制**：任何可见的 Skill（全局或自己的）都可复制到本人名下，带上参考资料，`source_skill_id` 指向来源（来源删除后 SET NULL）。
   slug 冲突时追加 `-2`、`-3`…，先截断原 slug 保证总长 ≤ 48。
 - **上限**：按所有者计数，每个用户最多 100 个，全局 Skill 合计最多 100 个；超出 400 `最多保存 100 个 Skill`（新建、导入、复制都检查）。
@@ -69,7 +68,7 @@ async def by_slug(db, user_id, slug) -> Skill                    # 本人优先
   `postgresql_where` 与 `sqlite_where` **都要写**）。用户私有 Skill 可以与全局 Skill 同 slug，解析时本人的优先。冲突 → 409 `标识已被使用，请换一个`。
 - **字段规则**：触发词去掉开头的 `/` 和空白，每项 ≤ 30 字、不含空白，大小写不敏感去重，最多 10 个（原始列表 ≤ 50 项）；参考资料标题非空、
   不含 `/ \` 与控制字符、不以 `.` 开头（标题就是导出时的文件名）。PATCH 中值为 `null` 的字段视为不变。
-- **恢复内置**：先按可见性取，非管理员 → 403，不是内置 → 400；用 `builtin_fields(key)` 覆盖 slug / 名称 / 说明 / 分类 / 触发词 / 正文，并删掉全部参考资料。
+- **恢复内置**：先按可见性取，再验global_skills.restore_builtin；缺失403，不是内置400；用 `builtin_fields(key)` 覆盖 slug / 名称 / 说明 / 分类 / 触发词 / 正文，并删掉全部参考资料。
 - 删除用户时其 Skill 级联删除，全局 Skill 不受影响；删除 Skill 时参考资料级联删除，`agent_messages.skill_id` SET NULL（快照仍保留）。
 
 ### 4. 校验与错误矩阵

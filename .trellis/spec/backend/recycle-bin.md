@@ -23,7 +23,7 @@
 ```python
 # app/services/project_service.py
 async def get_owned_project(db, user_id, project_id, *, lock: bool = False) -> Project
-async def get_manageable_project(db, actor_user_id, project_id, *, lock: bool = False) -> Project
+async def get_manageable_project(db, actor_user_id, project_id, *, lock: bool = False, permission="projects.read") -> Project
 
 # app/services/project_lifecycle.py
 RETENTION_DAYS = 30
@@ -46,7 +46,7 @@ class RecycleBinCleaner:  # start()/stop()，默认 interval=3600 秒
 async def stop_project_tasks(db, engine, project_id) -> int
 ```
 
-所有回收站接口前缀 `/api/v1/admin/recycle-bin/projects`，使用 `AdminUser`：
+所有回收站接口前缀 `/api/v1/admin/recycle-bin/projects`，GET需recycle_bin.read，restore/purge分别需recycle_bin.restore/purge；共同授权屏障见[RBAC](./rbac-quotas.md)：
 
 | 方法/路径 | 输入 | 响应 |
 |---|---|---|
@@ -54,7 +54,7 @@ async def stop_project_tasks(db, engine, project_id) -> int
 | POST /{id}/restore | `{deleted_at: 带时区时间, confirm:true}` | 204 |
 | POST /{id}/purge | 同上，加 `title: string(1–200)` | 204 |
 
-普通 `DELETE /projects/{id}` 仍是 `CurrentUser`、204；路由显式传入 TaskEngine，内部校验 owner 或人工管理员权限。
+普通 `DELETE /projects/{id}` 仍是 `CurrentUser`、204；路由显式传入 TaskEngine，内部校验owner或projects.recycle；意图与最终软删两阶段分别重验，等待drain不持授权gate。
 
 ## 3. 契约
 
@@ -98,7 +98,7 @@ async def stop_project_tasks(db, engine, project_id) -> int
 
 ### 前端与兼容
 
-`/admin/recycle-bin` 是 RequireAdmin lazy 路由，移动端卡片、桌面表格；精确名称 purge、忙碌防重复、旧响应/会话失效和末页回退。所有普通删除入口说明30天、管理员恢复及任务停止失败。具体组件/状态约定见前端 component/state-management 规范。
+`/admin/recycle-bin` 是RequirePermission(recycle_bin.read) lazy路由，恢复/彻删分别检查对应动作，移动端卡片、桌面表格；精确名称 purge、忙碌防重复、旧响应/会话失效和末页回退。所有普通删除入口说明30天、管理员恢复及任务停止失败。具体组件/状态约定见前端 component/state-management 规范。
 
 迁移必须验证带存量子数据的 SQLite 父表重建、外键完整性及审计 AUTOINCREMENT 高水位，不只测空库。downgrade 在有回收站/删除中作品或新增生命周期审计动作/摘要时拒绝，不能复活作品、删除审计或伪造系统 actor；上线前先备份，异常先停清理/停写再前滚修复。
 
@@ -150,7 +150,7 @@ await db.commit()  # 删除可能已经在读取后完成
 正确：在同一写事务中持有集中生命周期屏障，删除协调先提交准入意图、等真实执行链退出后再软删。
 
 ```python
-project = await get_manageable_project(db, actor_id, pid, lock=True)
+project = await get_manageable_project(db, actor_id, pid, lock=True, permission="projects.edit")
 # 校验同项目子资源，修改并按既有业务/审计出口提交。
 await audit.commit(flush_fn=version_service.flush_versioned)
 ```

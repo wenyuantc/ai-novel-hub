@@ -1,0 +1,6 @@
+
+> ainovel-frontend@0.1.0 build
+> tsc -b && vite build
+
+error TS5033: Could not write file '/Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/.tmp/tsconfig.app.tsbuildinfo': EACCES: permission denied, open '/Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/.tmp/tsconfig.app.tsbuildinfo'.
+error TS5033: Could not write file '/Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/.tmp/tsconfig.node.tsbuildinfo': EACCES: permission denied, open '/Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/.tmp/tsconfig.node.tsbuildinfo'.

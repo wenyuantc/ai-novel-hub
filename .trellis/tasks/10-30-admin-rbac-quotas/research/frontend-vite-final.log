@@ -1,0 +1,131 @@
+vite v8.3.5 building client environment for production...
+transforming...
+✓ 3489 modules transformed.
+rendering chunks...
+computing gzip size...
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/index.html                                                 1.82 kB │ gzip:   0.59 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/geist-cyrillic-ext-wght-normal-DjL33-gN.woff2       7.42 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/geist-vietnamese-wght-normal-6IgcOCM7.woff2         8.00 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/fraunces-vietnamese-wght-normal-CnvboYUG.woff2     11.57 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/auth-mountain-story-BSM8jcBM.jpg                   12.10 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/geist-cyrillic-wght-normal-BEAKL7Jp.woff2          15.08 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/geist-latin-ext-wght-normal-DC-KSUi6.woff2         16.51 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/geist-latin-wght-normal-BgDaEnEv.woff2             29.40 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/fraunces-latin-ext-wght-normal-Ca2vKHc0.woff2      33.58 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/fraunces-latin-wght-normal-ukD16Tqj.woff2          36.62 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminTasksPage-CzM56RBW.css                         1.20 kB │ gzip:   0.48 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminSystemSettingsPage-DWSk8mkD.css                1.64 kB │ gzip:   0.58 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminDashboardPage-CoMWSAoJ.css                     1.90 kB │ gzip:   0.61 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ApiKeysPage-deTzboe7.css                            2.62 kB │ gzip:   0.81 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/DeveloperDocsPage-Bu0TDM88.css                     11.28 kB │ gzip:   2.54 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/RelationGraph-DLioOiRN.css                         15.41 kB │ gzip:   2.56 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/HomePage-Chiiz65_.css                              21.91 kB │ gzip:   4.35 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/index-Cy733X8d.css                                 23.51 kB │ gzip:   4.91 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/usePalette-DRu8XCQW.js                              0.09 kB │ gzip:   0.10 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/adminUserDetails-cesJGJ0n.js                        0.12 kB │ gzip:   0.12 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BatchResultView-Dqn-Wr_5.js                         0.30 kB │ gzip:   0.23 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/projectAccess-DMGSVnzY.js                           0.36 kB │ gzip:   0.25 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/useElementWidth-DJrnx5Mr.js                         0.36 kB │ gzip:   0.27 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/useAuthorizationCleanup-BHspYXsd.js                 0.38 kB │ gzip:   0.26 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/apiKeys-Bp8F4LaW.js                                 0.46 kB │ gzip:   0.30 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/memories-Ds4shGqR.js                                0.49 kB │ gzip:   0.30 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/mcp-D_sb_yJ9.js                                     0.55 kB │ gzip:   0.30 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/StyleChoiceSelect-MJtx-Ozy.js                       0.56 kB │ gzip:   0.37 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/admin-D7E66hHo.js                                   0.59 kB │ gzip:   0.30 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/PromptDiffModal-BnbeoA0M.js                         0.59 kB │ gzip:   0.37 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/time-Bz_QYd5j.js                                    0.60 kB │ gzip:   0.40 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/roles-C5kuMWPb.js                                   0.65 kB │ gzip:   0.29 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/react-V5DVOv_2.js                                   0.67 kB │ gzip:   0.42 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/useAuthorizationScope-BFNNJQK-.js                   0.69 kB │ gzip:   0.44 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/SkillSelect-DF_N6YBA.js                             0.70 kB │ gzip:   0.50 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/rolldown-runtime-XKyaHtl9.js                        0.72 kB │ gzip:   0.42 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/useStreamTask-ouQTq37r.js                           0.83 kB │ gzip:   0.46 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/skills-B2MtBXrA.js                                  0.85 kB │ gzip:   0.48 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/JsonImportButton-cDVaNyZS.js                        0.91 kB │ gzip:   0.57 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/orgTree-lq_XbMoI.js                                 0.93 kB │ gzip:   0.45 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/permissions-DJPFTCqu.js                             1.16 kB │ gzip:   0.56 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/aiConfigs-BpL0BUdi.js                               1.29 kB │ gzip:   0.81 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/skills-BYAoCSEH.js                                  1.37 kB │ gzip:   0.69 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AgentMarkdown-CCyzCJkK.js                           1.41 kB │ gzip:   0.77 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/CharacterForeshadowsTab-BIC5fzQB.js                 1.48 kB │ gzip:   0.86 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/preload-helper-BLdHbfdN.js                          1.51 kB │ gzip:   0.79 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/RelationsParseResultView-B-0xBqkZ.js                1.52 kB │ gzip:   0.94 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/inspiration-Da61T0XT.js                             1.55 kB │ gzip:   0.81 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/project-BrwekAa6.js                                 1.56 kB │ gzip:   0.73 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/chapterVersions-J0Smtz7o.js                         1.61 kB │ gzip:   0.78 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BookImportResultView-DzbYLqRX.js                    1.72 kB │ gzip:   0.94 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/systemSettings-BsnvV9-9.js                          1.75 kB │ gzip:   1.04 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/PlanFieldsEditor-DBoDgrXI.js                        1.91 kB │ gzip:   0.83 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/StageListEditor-CD4acCwR.js                         1.92 kB │ gzip:   1.01 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BackupModal-DAy7ScgO.js                             1.94 kB │ gzip:   1.25 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BatchProgressView-DfzWpw4z.js                       2.00 kB │ gzip:   1.07 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/client-D-1WYdPu.js                                  2.04 kB │ gzip:   1.07 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/projects-mrOa_i39.js                                2.09 kB │ gzip:   1.14 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AIConfigSelect-Cfk28Frv.js                          2.10 kB │ gzip:   1.20 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/dashboardController-DORjP7No.js                     2.30 kB │ gzip:   0.92 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/sse-Df9LigCG.js                                     2.61 kB │ gzip:   1.32 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/RelationsGenerateResultView-BVINvH_-.js             2.73 kB │ gzip:   1.57 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/RelationSuggestionList-2W7tzH0h.js                  2.88 kB │ gzip:   1.30 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/batch-DMp5YJxK.js                                   2.97 kB │ gzip:   1.28 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/auth-DZ6omkmf.js                                    3.06 kB │ gzip:   1.26 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ContinueDraftResult-sGfkrmhe.js                     3.21 kB │ gzip:   1.59 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/CareerDraftResult-Da7X8Rpr.js                       3.35 kB │ gzip:   1.76 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/transfer-DLEEshWS.js                                3.50 kB │ gzip:   1.98 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/inspiration-B6-JlJJE.js                             3.86 kB │ gzip:   1.88 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/CoverGenerateModal-BATjo-zz.js                      4.09 kB │ gzip:   1.95 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/CharacterDraftResult-D_TDadI7.js                    4.19 kB │ gzip:   2.03 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/styles-B0Hx3NeS.js                                  4.24 kB │ gzip:   2.04 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/OrganizationDraftResult-BrC-jOCY.js                 4.28 kB │ gzip:   2.00 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminProjectsPage-BZj3kSrz.js                       4.28 kB │ gzip:   2.14 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/InspirationListPage-DDwMLy3I.js                     4.45 kB │ gzip:   2.33 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ExpandDraftResult-ZMfD_7ib.js                       4.92 kB │ gzip:   2.33 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ImportBackupModal-8xeEuSTf.js                       4.93 kB │ gzip:   2.48 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminUsersPage-B0fQp36D.js                          5.12 kB │ gzip:   2.52 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BatchBanner-DeamUSqP.js                             5.37 kB │ gzip:   2.47 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/outlines-DP2H3tTn.js                                6.05 kB │ gzip:   2.23 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/tasks-CAKgMEYD.js                                   6.39 kB │ gzip:   2.59 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminRolesPage-CIedtpua.js                          6.68 kB │ gzip:   3.11 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/bookImport-t_4-9_MQ.js                              6.72 kB │ gzip:   3.36 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/CareersPanel-Bk1liDqu.js                            7.43 kB │ gzip:   3.25 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BatchGenerateModal-DYKEM-kI.js                      8.00 kB │ gzip:   3.44 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/foreshadows-88k7XRFs.js                             8.13 kB │ gzip:   2.96 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/auditLogs-BW2b2zc-.js                               8.32 kB │ gzip:   3.86 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/KnowledgePanel-GQY8K6ao.js                          8.67 kB │ gzip:   3.72 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/useIndexStatus-ChCQbKrO.js                          9.24 kB │ gzip:   4.16 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/OrganizationsPanel-Ckhpf2EP.js                      9.30 kB │ gzip:   3.44 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/TextDiff-B1YY-Pv1.js                                9.94 kB │ gzip:   3.89 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ShareToWorkshopModal-DMeMnuDC.js                   10.06 kB │ gzip:   4.55 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/UserRolesButton-Bu_CYBxy.js                        10.35 kB │ gzip:   4.43 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminRecycleBinPage-Bonjswdf.js                    10.40 kB │ gzip:   4.39 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/RelationshipsPanel-CG91o2BL.js                     10.57 kB │ gzip:   4.18 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AIConfigPage-C6oGwtd5.js                           10.57 kB │ gzip:   4.37 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/MemoriesPanel-CzU5CVaQ.js                          11.28 kB │ gzip:   4.41 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminSystemSettingsPage-B7h_QdMg.js                11.97 kB │ gzip:   4.65 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ApiKeysPage-BGk24R0Q.js                            12.40 kB │ gzip:   5.15 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminUserDetailsPage-Bm5KQZs6.js                   12.67 kB │ gzip:   5.04 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/StylesPage-DZkQaWYK.js                             13.87 kB │ gzip:   5.21 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/SkillsPage-DLmHVEIp.js                             14.05 kB │ gzip:   5.58 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminDashboardPage-B_qSmUmI.js                     15.79 kB │ gzip:   5.89 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/HomePage-BkspdqGJ.js                               15.81 kB │ gzip:   5.80 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ReaderPage-ByvV6iDi.js                             16.01 kB │ gzip:   6.05 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ForeshadowsPanel-DpnFUEBd.js                       16.21 kB │ gzip:   6.44 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/PromptTemplatesPage-Bl4kl2uk.js                    17.94 kB │ gzip:   6.80 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminAuditLogsPage-DYi6aazd.js                     18.10 kB │ gzip:   6.47 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/McpPluginsPage-Dsg-2Mj7.js                         20.21 kB │ gzip:   7.56 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/WorkshopPage-CQeroNsx.js                           21.29 kB │ gzip:   7.06 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/BookImportPage-AW5E_bwn.js                         22.86 kB │ gzip:   9.07 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/InspirationSessionPage-ha6Rqlz8.js                 23.57 kB │ gzip:   8.15 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AgentPanel-BLeTNYn9.js                             25.45 kB │ gzip:   9.29 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/OutlinesPanel-Cu1bgG97.js                          25.88 kB │ gzip:   8.87 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/DeveloperDocsPage-yWS6JIS9.js                      26.60 kB │ gzip:   8.20 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/AdminTasksPage-D4asdqIM.js                         30.42 kB │ gzip:  10.44 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/ChapterEditorPage-0Gtssgy-.js                      58.85 kB │ gzip:  20.11 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/index-DwUp2Ll5.js                                 181.25 kB │ gzip:  56.86 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/vendor-react-NxOxv_v8.js                          204.06 kB │ gzip:  66.36 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/RelationGraph-BqIlloMI.js                         225.96 kB │ gzip:  73.58 kB
+../../../../../../private/tmp/admin-rbac-quotas-frontend-final-dist/assets/vendor-antd-T58VspVB.js                         1,147.01 kB │ gzip: 352.80 kB
+
+✓ built in 612ms
+
+(!) outDir /private/tmp/admin-rbac-quotas-frontend-final-dist is not inside project root and will not be emptied.
+Use --emptyOutDir to override.

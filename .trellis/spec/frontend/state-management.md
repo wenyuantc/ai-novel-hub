@@ -1,5 +1,11 @@
 # 状态管理
 
+## 私有权限快照与撤权
+
+User的required is_super_admin/roles/effective_permissions/authorization_revision来自服务端；禁止is_admin授权fallback。refreshAuthorization与init/公开config分离，可见轮询/回前台/管理路由进入/权限403刷新，single-flight+epoch+AbortSignal隔离旧账号。权限403不登出、不重发业务；401才clear。详情见[RBAC跨层契约](../backend/rbac-quotas.md)。
+
+账号动作controller与useAuthorizationScope/cleanup拥有本页目标及弹窗；失写保留合法只读、失读立即移除内容。工坊Browse按actor ID+workshop.read布尔重挂，否则reload失败会留下匿名真名/隐藏条目；个人区只按actor重建，无关revision不清草稿。项目store/私人AI、风格、Skill缓存均须阻止切账号后迟到响应回填；同actor撤权还须使管理保存回调失效。
+
 > 本项目中状态的管理方式。
 
 ---
@@ -22,7 +28,7 @@ Zustand 5（`create<State>((set, get) => ({ … }))`）只用于最小集合的�
 | 主题（全局，设备级） | `theme/themeStore.ts` → `useThemeStore` | `mode`（`light` / `dark` / `system`，localStorage `ainovel.theme`）、`systemDark`；`setMode`、`setSystemDark`；`useResolvedTheme()`、`watchSystemTheme()` |
 | 本地偏好（localStorage，非 store） | `utils/preferences.ts`、`utils/shelf.ts`、`utils/reader.ts` | `ainovel.autoContinue`；书库 `ainovel.shelf`（`{query, sort, status, view: 'shelf' \| 'list'}`；旧值缺 view 默认 shelf）；阅读设置 `ainovel.reader`（`{fontSize, lineHeight, width, background, font}`）。读写都包 try/catch，读出后经 `parse*` / `normalize*` 校验 |
 | 页面数据（本地） | 页面中的 `useLoader` | 世界观/角色/大纲/章节列表、当前打开的章节、导出用章节列表；组织 / 成员 / 关系 / 关系类型 / 图谱 / 章节出场角色（各面板与抽屉 Tab 各自加载，未做全局缓存，保存后各自 `reload()`） |
-| 管理员任务监控（页面实例） | `components/adminTasks/adminTasksController.ts` | 按actor ID拥有列表/详情/取消目标请求代次；5秒可见性轮询、慢请求去重、401/403/账号/卸载清空，不把他人任务注入个人useTasksStore；见[跨层契约](../backend/admin-task-monitoring.md) |
+| 管理员任务监控（页面实例） | `components/adminTasks/adminTasksController.ts` | 按actor ID拥有列表/详情/取消目标请求代次；5秒可见性轮询、慢请求去重，失读/401/账号/卸载清空，单独失cancel只关取消目标并保留列表，不把他人任务注入个人useTasksStore；见[跨层契约](../backend/admin-task-monitoring.md) |
 | 表单 / UI 状态（本地） | `useState`、`Form.useForm` | 弹窗打开标志、`editing`、`saving`、编辑器 `title`/`content`、`aiConfigId`、AI 配置页上的测试结果 |
 | 流式状态（本地） | `useStreamTask`（局部改写）/ `useTaskStream`（任务订阅） | `text`、`running`、`error`、abort controller；任务另有 `task`、`continueInfo`、`reconnecting` |
 
@@ -80,8 +86,8 @@ useEffect(() => {
 }, [userId])   // userId = useAuthStore((s) => s.user?.id)
 ```
 
-- 任意 API 调用返回 401（`/auth/login*` 与 `/auth/me*` 除外，见 `client.ts` 中的 `shouldRedirectOn401`）→ `clear()` → `status: 'anonymous'` → `RequireAuth` 携带 `state.from` 重定向到 `/login`。
-- `logout()` 调用 API，并在 `finally` 中设置为 `anonymous`，即使请求失败也是如此。
+- 当前请求代次的API返回401（`/auth/login*` 与 `/auth/me*` 除外，见 `client.ts` 中的 `shouldRedirectOn401`）→ `clear()` → `status: 'anonymous'` → `RequireAuth` 携带 `state.from` 重定向到 `/login`。
+- `logout()` 调用API，finally仅在自身epoch仍有效时clear；旧logout不能清新login。AppLayout菜单await后也仅在当前status仍anonymous时navigate，防旧UI回调干扰新账号页面。
 - `user?.id` 的任何变化（登出、401、以其他用户登录）都会重置 AI 配置和项目 store。新增的用户级 store **必须**把它的 `reset()` 加入这个 effect。
 - `init()` 使用 `Promise.allSettled` 执行 `/auth/me` 与 `/auth/config`；`/auth/me` 失败即视为匿名（401 与网络错误不记录日志）。
 

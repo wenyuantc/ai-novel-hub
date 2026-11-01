@@ -1,0 +1,24 @@
+{
+  "result": "passed",
+  "from": "0028",
+  "to": "0029",
+  "users": [
+    "active-super",
+    "disabled-super",
+    "ordinary"
+  ],
+  "preserved_tables": [
+    "users",
+    "projects",
+    "chapters",
+    "ai_configs"
+  ],
+  "preserved_fields": [
+    "all user columns including password_hash/token_version/last_login_at",
+    "private chapter content",
+    "private AI encrypted key"
+  ],
+  "foreign_key_check": [],
+  "database": "temporary isolated SQLite, removed after test",
+  "postgresql_tested": false
+}

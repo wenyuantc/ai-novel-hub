@@ -34,7 +34,7 @@ def forget_project_hubs(task_ids, *, statistics_keys=None) -> None: ...
 
 除初始化拥有独立会话外，helper仅flush/执行SQL，不擅自commit。采样方为 `admin_dashboard_service.collect_snapshot(sessionmaker, *, captured_at=None)` 及 `DashboardSampler.start()/stop()`。
 
-每个GET独立使用 `AdminUser`，公共前缀 `/api/v1/admin/dashboard`：
+每个GET独立检查dashboard.read，公共前缀 `/api/v1/admin/dashboard`；[RBAC](./rbac-quotas.md)不因首页权限授予tasks.read/users.read/workshop.read：
 
 | 路径 | 响应 |
 | --- | --- |
@@ -82,7 +82,7 @@ def forget_project_hubs(task_ids, *, statistics_keys=None) -> None: ...
 
 ### 前端
 
-- RequireAdmin下懒加载 `/admin/dashboard`，同步侧栏/账户菜单/面包屑；普通用户默认个人作品入口不变。
+- RequirePermission(dashboard.read)下懒加载 `/admin/dashboard`，同步侧栏/账户菜单/面包屑；跨域深链接分别检查对应读取权限，无首页权限的管理账号不强制跳本页，普通用户仍进入个人作品。
 - 三块请求独立加载/重试，失败保留旧值时标过期及上次成功时间；无数据不可用`?? 0`假装成功。
 - 7/30/90默认30；手动及60秒自动刷新，可关闭，hidden暂停、visible恢复。切换范围、卸载、登出、403等令旧请求失效并清理轮询。
 - 图表缺口断线、轴文字在375px保持可读；SVG viewBox跟随实测容器宽度，不能把固定大画布等比缩到不可读。提供分页HTML历史表，不只靠颜色/鼠标悬浮。

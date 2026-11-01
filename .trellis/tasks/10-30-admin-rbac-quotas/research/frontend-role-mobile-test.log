@@ -1,0 +1,12 @@
+
+> ainovel-frontend@0.1.0 test
+> vitest run src/pages/AdminRolesPage.test.ts --configLoader runner --no-cache --fsModuleCachePath /private/tmp/admin-rbac-vitest-cache
+
+
+ RUN  v5.0.5 /Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend
+
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  00:52:37
+   Duration  2.76s (import 92%, tests 4%, transform 3%)

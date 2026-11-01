@@ -13,7 +13,8 @@
 ```python
 # backend/app/services/project_service.py
 async def get_owned_project(db, user_id: int, project_id: int, *, lock: bool = False) -> Project
-async def get_manageable_project(db, actor_user_id: int, project_id: int, *, lock: bool = False) -> Project
+async def get_manageable_project(db, actor_user_id: int, project_id: int, *, lock: bool = False,
+                                permission: str = "projects.read") -> Project
 async def project_out(db, project, notice=None, *, actor_user_id: int | None = None) -> ProjectOut
 
 # backend/app/services/chapter_service.py
@@ -24,7 +25,7 @@ async def get_manageable_chapter(db, user_id: int, project_id: int, chapter_id: 
 async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> AdminProjectList
 ```
 
-`GET /api/v1/admin/projects` 使用 `AdminUser`，内容接口继续使用真实 `CurrentUser`。
+`GET /api/v1/admin/projects` 使用projects.read，内容接口继续使用真实CurrentUser；read/edit/recycle分别授权，写前共同屏障与完整只读UI见[RBAC跨层契约](./rbac-quotas.md)。
 
 ## 3. 契约
 
@@ -45,7 +46,7 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 
 ### 人工操作与严格拥有权
 
-- `get_owned_project` / `get_owned_chapter` 保持严格语义。`get_manageable_project` 仅对所有者或数据库中当前启用管理员放行；任意子资源仍验证 `project_id`，不能跨路径混用 ID。
+- `get_owned_project` / `get_owned_chapter` 保持严格语义。`get_manageable_project` 仅对所有者或具有所需projects.read/edit/recycle能力的启用账号放行；写前在资源锁之前取得共同runtime/gate/User屏障；任意子资源仍验证 `project_id`，不能跨路径混用 ID。
 - 人工项目资料/状态/删除、世界观/人物/组织/成员/关系/类型/职业/分配/伏笔、大纲/细纲/建章/快照、章节/选角/版本内容与恢复、手工封面、已有知识库文档/分块/人工设置、剧情记忆维护、阅读目录与正文可使用管理权限。
 - 共享的 `story_service` 入口默认严格，仅人工路由显式选择 `manage=True`；不能让 AI 等调用者随人工 CRUD 一起获得访问权限。
 - AI、智能体、任务、生成日志提示词、私人风格/模板/Skill/MCP、模型配置、平台 Key、阅读进度、导入导出/备份、知识库上传/重建/向量检索保持原有归属限制。
@@ -55,7 +56,7 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 
 ### 前端工作区
 
-`utils/projectAccess.ts` 按当前 pid、服务器 owner 和真实用户派生 `ready/managingOther/canUseAI`，只控制 UI。管理列表由 RequireAdmin 保护；ProjectLayout 和独立 Reader 显示归属与返回入口。未加载正确项目时不得先挂载 AI/任务副作用。
+`utils/projectAccess.ts` 按当前 pid、服务器 owner 和真实用户派生 `ready/managingOther/canRead/canEdit/canRecycle/canUseAI`，只控制 UI。管理列表由RequirePermission(projects.read)保护；无edit时正文/标题/选角/Meta-S、版本恢复、Form外阶段编辑器、成员/职业卸下/伏笔及移动章节动作均只读，事件提交前再查实时能力；ProjectLayout 和独立 Reader 显示归属与返回入口。未加载正确项目时不得先挂载 AI/任务副作用。
 
 跨用户模式必须同时关闭按钮和自动行为：AgentDock、批量任务查询、编辑器任务接续、useChapterAnalysis 请求与订阅、生成日志、向导、私人风格选择及模型型知识库操作。Reader 不采用 owner reading，不发送普通或 keepalive/unload 阅读进度。自己的项目保留原功能。
 
@@ -103,7 +104,7 @@ await content_service.update(db, project.user_id, project.id, body)
 
 ```python
 # 保留真实 actor，只为人工内容入口授予管理员例外。
-project = await get_manageable_project(db, actor_user_id, project_id)
+project = await get_manageable_project(db, actor_user_id, project_id, lock=True, permission="projects.edit")
 # 项目内资源查询继续限定 project.id；AI/账户接口仍调用严格 owner helper。
 ```
 

@@ -1,0 +1,23 @@
+
+> ainovel-frontend@0.1.0 test
+> vitest run
+
+failed to load config from /Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/vite.config.ts
+
+⎯⎯⎯⎯⎯⎯⎯ Startup Error ⎯⎯⎯⎯⎯⎯⎯⎯
+Error: EACCES: permission denied, open '/Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/.vite-temp/vite.config.ts.timestamp-1793549870489-f35087909b6b.mjs'
+    at async open (node:internal/fs/promises:636:25)
+    at async Object.writeFile (node:internal/fs/promises:1205:14)
+    at async loadConfigFromBundledFile (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vite/dist/node/chunks/node.js:38258:3)
+    at async bundleAndLoadConfigFile (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vite/dist/node/chunks/node.js:38106:21)
+    at async loadConfigFromFile (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vite/dist/node/chunks/node.js:38066:42)
+    at async resolveConfig (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vite/dist/node/chunks/node.js:37668:22)
+    at async resolveConfig (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vitest/dist/chunks/index.1TqnEahn.js:9269:25)
+    at async createVitest (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vitest/dist/chunks/cli-api.De07GUeT.js:13392:17)
+    at async prepareVitest (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vitest/dist/chunks/cli-api.De07GUeT.js:13787:14)
+    at async startVitest (file:///Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/vitest/dist/chunks/cli-api.De07GUeT.js:13705:14) {
+  errno: -13,
+  code: 'EACCES',
+  syscall: 'open',
+  path: '/Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend/node_modules/.vite-temp/vite.config.ts.timestamp-1793549870489-f35087909b6b.mjs'
+}

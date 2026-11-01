@@ -43,12 +43,12 @@
 - 分类：`general | xuanhuan | wuxia | romance | scifi | suspense | history | urban | other`。
 - 标签最多 5 个，每个 trim 后 1–12 字并去重；禁止引号、反斜线和换行，筛选时仍需转义 SQL LIKE 通配符。
 - 浏览参数：`kind/category/tag/prompt_key/q/sort/page/page_size`；`sort=newest|likes|downloads`，`page_size≤50`；分页统一 `{items, total}`。
-- 条目响应不提供真实作者 id；`is_mine` 表示归属。`author_name` 匿名时对其他普通用户为 null；管理员另得 `author_username`，作者本人可见自己署名；账号删除后显示「已注销用户」。
+- 条目响应不提供真实作者 id；`is_mine` 表示归属。`author_name` 匿名时对其他普通用户为 null；具有workshop.read的当前账号另得author_username（其他管理权限不授予实名/隐藏内容读取），作者本人可见自己署名；账号删除后显示「已注销用户」。
 - 管理员改元数据只接受 `category/tags`；驳回请求为 `{note}`，trim 后非空、≤500 字。
 
 审核单状态：`pending | approved | rejected | cancelled`；已发布条目状态：`active | hidden`，`hidden_by=author|admin|null`。
 更新只写提交快照，审核通过前旧内容继续在架。通过时替换正文、名称、说明、分类、标签和匿名选择，保留计数及原下架状态。
-管理员提交自动通过，新条目标为官方；管理员不能通过审核接口改别人的正文。
+仅具有workshop.publish的提交自动通过并标官方；仅workshop.read或其他无关管理权仍走普通投稿审核；管理员不能通过审核接口改别人的正文。
 
 导入风格每次都生成当前用户的新副本，重名通过现有命名工具处理。
 导入模板先按当前 `TEMPLATES[key]` 重新校验，失败时用户覆盖和导入记录均不改变。
@@ -58,7 +58,7 @@
 点赞记录增删与 `like_count` 原子更新在同一事务；首次导入记录插入与 `download_count + 1` 同事务。
 重复导入仍执行复制或覆盖，计数只按用户加一次。删号级联清理行为记录，但历史计数不回退。
 
-并发锁顺序：提交 / 导入先锁当前用户再锁已有条目；审核已有条目更新时先锁条目再执行提交状态迁移。
+管理动作先按[RBAC](./rbac-quotas.md)共同runtime/gate/User屏障重验workshop.approve/reject/publish/update/hide/unhide/delete，各依赖workshop.read；普通作者/导入能力不扩大。其后领域锁顺序：提交 / 导入先锁当前用户再锁已有条目；审核已有条目更新时先锁条目再执行提交状态迁移。
 删除先锁条目再级联删除提交，所以审核不能反过来先锁提交、再等条目，否则 PostgreSQL 上会形成锁顺序反转。
 
 ## 4. 校验与错误矩阵
@@ -103,5 +103,7 @@ if inserted:
         download_count=WorkshopItem.download_count + 1,
     ))
 ```
+
+前端Browse按actor ID+workshop.read布尔重建：撤read时即使刷新500也立即撤下隐藏条目/匿名真名，不能仅reload保留旧data；个人分享区只按actor隔离，无关revision不清草稿。
 
 禁止为了分享模板绕过现有沙箱校验，禁止在前端拼装真实作者署名，禁止在审核通过前覆盖已发布正文。

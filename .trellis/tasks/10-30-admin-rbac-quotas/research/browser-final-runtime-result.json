@@ -1,0 +1,334 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "rbac_super",
+      "is_admin": 1,
+      "is_active": 1
+    },
+    {
+      "id": 2,
+      "username": "rbac_owner",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 3,
+      "username": "rbac_empty",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 4,
+      "username": "rbac_reader",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 5,
+      "username": "rbac_editor",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 6,
+      "username": "rbac_reviewer",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 7,
+      "username": "rbac_task_reader",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 8,
+      "username": "rbac_task_operator",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 9,
+      "username": "rbac_accounts",
+      "is_admin": 0,
+      "is_active": 1
+    },
+    {
+      "id": 10,
+      "username": "rbac_audit",
+      "is_admin": 0,
+      "is_active": 1
+    }
+  ],
+  "audit": [
+    {
+      "action": "user.roles.bootstrap",
+      "result": "success",
+      "actor_username": "管理员引导",
+      "target_id": 1
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 2
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 3
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 4
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 5
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 6
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 7
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 8
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 9
+    },
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 10
+    },
+    {
+      "action": "role.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 5
+    },
+    {
+      "action": "role.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 6
+    },
+    {
+      "action": "role.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 7
+    },
+    {
+      "action": "role.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 8
+    },
+    {
+      "action": "role.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 9
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 4
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 5
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 6
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 7
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 8
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 9
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 10
+    },
+    {
+      "action": "user.quotas.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 2
+    },
+    {
+      "action": "workshop.approve",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 1
+    },
+    {
+      "action": "workshop.approve",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 2
+    },
+    {
+      "action": "workshop.hide",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 2
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 6
+    },
+    {
+      "action": "role.create",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 10
+    },
+    {
+      "action": "user.quotas.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 2
+    },
+    {
+      "action": "user.roles.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 3
+    },
+    {
+      "action": "role.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 7
+    },
+    {
+      "action": "role.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 7
+    },
+    {
+      "action": "task.cancel_request",
+      "result": "success",
+      "actor_username": "rbac_task_operator",
+      "target_id": 1
+    },
+    {
+      "action": "role.update",
+      "result": "success",
+      "actor_username": "rbac_super",
+      "target_id": 7
+    },
+    {
+      "action": "chapter.update",
+      "result": "success",
+      "actor_username": "rbac_editor",
+      "target_id": 1
+    }
+  ],
+  "fake_model_calls": 2,
+  "fake_tool_calls": 0,
+  "fake_embedding_calls": 0,
+  "runtime": {
+    "url": "http://127.0.0.1:8781",
+    "pid": 22749,
+    "dist": "/private/tmp/admin-rbac-check-frontend-dist",
+    "index_sha256": "ebf6c1235c98c12ab685fbc1be9d481e26074bbd099827834e3b7aee41aa4924",
+    "seeded_at": "2026-11-01T16:59:21.345847+00:00"
+  },
+  "tasks": [
+    {
+      "id": 1,
+      "status": "cancelled",
+      "admin_cancel_operation_id": null
+    },
+    {
+      "id": 2,
+      "status": "succeeded",
+      "admin_cancel_operation_id": null
+    }
+  ],
+  "projects": [
+    {
+      "id": 1,
+      "user_id": 2,
+      "deleted_at": null,
+      "deletion_started_at": null,
+      "reading_progress": "{}"
+    },
+    {
+      "id": 2,
+      "user_id": 2,
+      "deleted_at": "2026-10-30 16:59:20.475469",
+      "deletion_started_at": null,
+      "reading_progress": "{}"
+    },
+    {
+      "id": 3,
+      "user_id": 2,
+      "deleted_at": null,
+      "deletion_started_at": "2026-11-01 16:59:20.475582",
+      "reading_progress": "{}"
+    }
+  ],
+  "copied_super_role": {
+    "id": 10,
+    "system_key": null,
+    "permissions_count": 33
+  },
+  "assigned_to_empty": [
+    {
+      "role_id": 3
+    },
+    {
+      "role_id": 10
+    }
+  ]
+}

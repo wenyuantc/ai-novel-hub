@@ -1,5 +1,7 @@
 # 数据库规范
 
+新增迁移0029（父0028）创建roles/user_roles/authorization_state/user_quotas，不重建users/projects；唯一超管仍是User.is_admin，角色AUTOINCREMENT与FK RESTRICT、两项mode/value约束、同快照投影、共同授权锁序、四创建入口与真实占用见[RBAC与配额](./rbac-quotas.md)。新实例/用户级表不登记项目备份；有新语义数据时拒绝有损downgrade。
+
 新增迁移 `0028_user_last_login`（父0027）：User增加可空UTC `last_login_at`，存量不回填，原位ADD/DROP COLUMN不重建users父表；只在密码登录/注册自动登录的条件认证事务记录，保留核验版本快照与账号updated_at。三种生命周期的用户资源单SQL聚合、Cookie与持久化故障边界见[管理员用户详情与登录契约](./auth-admin.md)。
 
 实例级运行配置新增 `0027_system_settings`：单行revision/稀疏覆盖、无业务外键、不进项目备份；设置/审计同事务、确认后共享对象发布及提交不确定协调见[系统设置](./system-settings.md)。不要因新增实例表向仅容纳项目相关表的NOT_EXPORTED登记无关项。
@@ -48,7 +50,7 @@ def create_engine(database_url: str) -> AsyncEngine:
 
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # expire_on_commit=False：提交后仍可读取属性，避免流式响应期间触发隐式查询
-    return async_sessionmaker(engine, expire_on_commit=False)
+    return async_sessionmaker(engine, expire_on_commit=False, info={"authorization_runtime": AuthorizationRuntime()})
 ```
 
 `create_app()` 将 `engine` 和 `sessionmaker` 存放在 `app.state` 上；engine 在
@@ -82,7 +84,7 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 每个 service 入口首先校验归属。他人的记录与不存在的记录
 都返回 **404**，以免泄露存在性。
 
-人工项目内容管理允许当前启用管理员使用 `get_manageable_project`；AI、任务和账户资源仍用严格
+人工项目内容管理允许当前具有所需projects.read/edit/recycle能力的启用账号使用get_manageable_project；写前共同gate/User屏障必须先于资源锁；AI、任务和账户资源仍用严格
 `get_owned_project`，不能全局改义。例外范围与子资源规则见[管理员作品管理](./admin-projects.md)。
 
 `backend/app/services/project_service.py`：
@@ -537,7 +539,7 @@ class Task(TimestampMixin, Base):   # tasks
 - 重新读写 `projects.style`：它自 0013 起只为 downgrade 保留；写作风格走 `writing_styles` + `default_style_id`（见 prompts-styles.md）。
 - 直接改 `Relationship` 字段而不经 `apply_change`：没有历史、绕过角色对唯一与同项目校验。
 - 直接改 `CharacterCareer.stage_id` / `note` 而不经 `career_service.apply_assignment`：没有挂接历史，绕过主 1 副 3 与类别校验。
-- 新增全局预置数据只写进迁移：测试的 `create_all` 不跑迁移，需同时提供 `after_create` 事件（参照 `RelationshipType`）。
+- 新增全局预置数据只写进迁移：测试create_all不跑迁移。既有RelationshipType用after_create；RBAC四角色与单行授权状态由authorization_service.initialize显式初始化，测试fixture和lifespan都必须接入。
 - 更新 `content` 时没有重新计算 `word_count`。
 - 直接改 `Foreshadow` 字段而不经 `foreshadow_service.apply_foreshadow`：没有伏笔历史，绕过必填与关联角色校验，分析回写也无法撤销。
 - 章节分析回写绕过 `writeback_service` 直接改角色 / 关系 / 挂接 / 成员：没有回写条目，无法撤销，也不受「更晚章节优先」约束。

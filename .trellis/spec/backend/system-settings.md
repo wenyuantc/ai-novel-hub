@@ -19,7 +19,7 @@ SystemSettingsUpdate(revision: int, changes: SystemSettingsChanges)
 
 `app.state.system_settings` 管理应用注入的**同一Settings对象**。`0027_system_settings`（父0026）新增实例级 `system_settings`：固定id=1、revision≥1、overrides JSON、last_operation_id、UTC updated_at；无行表示revision=0/无覆盖。无业务FK，不随小说导入导出，也不加入仅容纳项目相关表的NOT_EXPORTED。
 
-所有管理端点使用AdminUser、响应no-store，前缀 `/api/v1/admin/system-settings`：
+GET需settings.read、PATCH需settings.update，响应no-store，前缀 `/api/v1/admin/system-settings`：
 
 | 方法 | 请求 / 响应 |
 | --- | --- |
@@ -34,22 +34,22 @@ bool键为registration_enabled/auto_analyze_enabled/mcp_enabled；正整数键�
 
 - 后台稀疏覆盖 > 启动时捕获的部署基线 > Settings代码默认；来源在发布前按原始model_fields_set捕获，显式应用注入也属于deployment。只保存六项，不序列化完整Settings。
 - PATCH两层extra=forbid；省略保持、false明确关闭、null删除覆盖恢复部署值，changes不能为空。严格布尔/整数，拒绝布尔冒充整数及字符串/浮点；正整数最小1；开放API限额还须≤2_147_483_647（数据库Integer计数边界，部署基线同样fail-fast），不可存入超大值再让后续认证溢出500。不要求单用户≤全局，两级约束共同生效。
-- 管理写用应用锁、自有会话及revision条件UPDATE（首次唯一INSERT），真实管理员和成功审计同事务。先确认commit，后无await同步发布六字段，再notify调度；不先发布再存库。
-- 正常失败回滚不发布。提交确认丢失重读持久状态，保留既有审计的真实结果，不盲重发旧候选。自有shield写工作不因HTTP调用者取消被拆断，关停close等待写任务；无法确认时安全报错/后台重读，禁止继续覆盖，不回退默认或宣称离线一致。
+- 管理写锁序为既有_lock→共享AuthorizationRuntime→auth DB gate→User升序→设置资源，自有会话及revision条件UPDATE（首次唯一INSERT），真实管理员和成功审计同事务。先确认commit，后无await同步发布六字段，再notify调度；不先发布再存库。
+- 正常失败回滚不发布。提交确认丢失重读持久状态，保留既有审计的真实结果，不盲重发旧候选。自有shield写工作不因HTTP调用者取消被拆断，关停close等待写任务；无法确认时settings_confirmed=False暂停新准入，dispatch直接返回避免热循环；即时重读仍须处于同runtime，后台恢复确认后再开放。load/reload/recovery所有发布路径共用runtime，禁止继续覆盖，不回退默认或宣称离线一致。
 - 应用启动在bootstrap/任务恢复前load；持久值非法或读库失败不静默忽略。create_all测试不运行lifespan，fixture显式load/close。
 - 审计action=system_settings.update、target_type=system_settings、固定目标。settings_changes最多6项，仅本动作可用；key/before_override/after_override/before_effective/after_effective/before_source/after_source均类型受限，失败不保留未提交after。禁止带入密钥、原始请求或异常。
 
 ### 真实消费
 
 - 注册关闭不影响登录、管理员创建用户或bootstrap。
-- 两级并发由同一ctx.settings读取；降低只停止不符合新限额的后续调度，不取消运行任务，提高notify；原FIFO/资源互斥/取消不变。
+- 全站硬顶由同一ctx.settings读取；用户上限由[用户配额](./rbac-quotas.md)统一解析，inherit才取task_max_per_user，limited0禁止新准入、unlimited仍受全站硬顶；降低只停止不符合新限额的后续调度，不取消运行任务，提高notify；原FIFO/资源互斥/取消不变。
 - enqueue_auto及batch后续分析阶段使用最新开关，已排队/运行/手动分析不取消；项目auto_analyze仍需同时开启。
 - MCP路由require_mcp并非唯一边界：试用/工具发现连接前、连接建立后实际调用前，及智能体Worker出队实际call_tool前均读共享Settings；已发出的call_tool不强杀。不能将一次性bool传入Worker替代实时引用。
 - API Key认证每请求使用最新限额，不清空rate_count/rate_window，UTC分钟/429/Retry-After保持原契约。
 
 ### 前端
 
-`/admin/system-settings` 使用RequireAdmin+懒路由；AppLayout桌面/移动/账户/面包屑同步入口。表单编辑暂存，逐项恢复确认后也是待保存，点击保存才发PATCH。显示来源/部署/默认/无需重启及不打断边界。dirty刷新不覆盖编辑，409/网络结果未知保留草稿并要求先刷新核实，不自动重发；账号/权限/卸载使旧响应失效，撤下管理数据及本页拥有的确认框。
+`/admin/system-settings` 使用RequirePermission(settings.read)+懒路由，保存另需settings.update；AppLayout桌面/移动/账户/面包屑同步入口。表单编辑暂存，逐项恢复确认后也是待保存，点击保存才发PATCH。显示来源/部署/默认/无需重启及不打断边界。dirty刷新不覆盖编辑，409/网络结果未知保留草稿并要求先刷新核实，不自动重发；账号/权限/卸载使旧响应失效，撤下管理数据及本页拥有的确认框。
 
 `utils/publicConfig.ts::PublicConfigController` 独立刷新公开配置，不重复init/me或改变登录态。App安装可见30秒轮询、回前台立即刷新，focus/visibility短间隔去重；慢请求single-flight、失败保持最后成功值。保存成功apply使更早响应失效，不能倒退新值。`utils/visiblePolling.ts`仅负责调度；dashboard包装保留60秒、任务监控保留5秒。StrictMode effect setup→cleanup→setup不得遗留busy/永久Skeleton。
 

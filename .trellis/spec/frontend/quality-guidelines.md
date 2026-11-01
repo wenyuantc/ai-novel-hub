@@ -16,6 +16,10 @@ npm run lint && npm run build && npm test
 - `build` → `tsc -b && vite build`（类型检查是构建的一部分；严格的 tsconfig 将未使用的局部变量/参数视为错误）。
 - `test` → `vitest run`（`environment: 'node'`、`include: ['src/**/*.test.ts']`）。
 
+### 新增文件的空白门禁
+
+`git diff --check`仅覆盖已跟踪的未暂存差异，不能当作新增/未跟踪文件已验。提交前按已批准文件清单暂存后，必须运行`git diff --cached --check`并确认退出0；尚不能暂存时对新增文件使用no-index检查。不能因普通diff为空而跳过EOF空白检查，也不能把该门禁与commit放在不检查退出码的连续执行中。
+
 ### 开发服务器代理（`vite.config.ts`）
 
 `/api` 被代理到 `process.env.VITE_BACKEND_URL ?? 'http://localhost:8000'`，并设置 `changeOrigin: true`。对于 `text/event-stream` 响应，代理会改写响应头，确保流不会被缓冲或压缩：

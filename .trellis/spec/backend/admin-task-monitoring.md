@@ -16,7 +16,7 @@
 
 升级不重建 SQLite tasks 父表，不为旧记录伪造入队起点；有 pending 意图时拒绝 downgrade。仍不支持新旧调度器并行运行。
 
-每个路由使用当前 `AdminUser`，前缀 `/api/v1/admin/tasks`：
+GET需tasks.read，取消POST需tasks.cancel，均使用真实当前actor；共同授权屏障见[RBAC](./rbac-quotas.md)，前缀 `/api/v1/admin/tasks`：
 
 | 方法/路径 | 参数 | 成功响应 |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ async def wait_admin_cancellations(self) -> None: ...
 
 ### 可靠受理，不是假“原子取消”
 
-1. 写前按User ID稳定顺序取得真实actor/owner父用户写屏障，复核启用管理员及token版本，防降权/无作品删号竞态。不能让AuditOperation的enabled=False放行未审计取消。
+1. 写前按runtime→auth DB gate→User ID升序取得真实actor/owner屏障，复核启用、tasks.cancel及原已认证token版本，防降权/无作品删号竞态。不能让AuditOperation的enabled=False放行未审计取消。
 2. 按UUID核实Task与真实OPEN状态；目标标签固定，不复制Task.title。相同任务已有pending时回同一operation_id，不重复受理/信号/abort；审计被显式清理时audit_log_id可空。
 3. 条件写绑定`id + statistics_key + 真实原状态 + marker IS NULL`，写入两列意图；与`task.cancel_request`成功受理审计共用audit.commit事务。
 4. 只有确认受理提交后才唤醒独立drain。202仅是已受理，客户端重新读取真实状态，不固定提示“任务已取消”。提交确认丢失时若已提交成功，不能补相反失败审计；持久marker由周期/启动扫描处理。
@@ -100,9 +100,9 @@ AuditAction=`task.cancel_request`，AuditTargetType=`task`。AuditSummary只增�
 
 ### 前端
 
-- RequireAdmin下懒加载/admin/tasks，桌面紧凑表格固定右侧操作，375px卡片/可折叠筛选、页头与操作上下排；同步导航、账户菜单、面包屑及首页“现存任务”链接。
+- RequirePermission(tasks.read)下懒加载/admin/tasks，取消另需tasks.cancel，桌面紧凑表格固定右侧操作，375px卡片/可折叠筛选、页头与操作上下排；同步导航、账户菜单、面包屑及首页“现存任务”链接。
 - 5秒可关闭轮询，hidden暂停/visible更新；慢请求不重叠、不每tick无限abort。失败保留旧值并显式过期/上次成功时间，不补假零。
-- actor/过滤/页码/目标代次及AbortSignal保障旧响应失效；401/403/登出/卸载清空安全详情及取消弹窗并停请求。
+- actor/过滤/页码/目标代次及AbortSignal保障旧响应失效；401/登出/卸载或失去tasks.read时清空安全详情/取消弹窗并停请求；只失去tasks.cancel时关失效取消弹窗，保留仍合法的只读列表，不登出。
 - UUID深链可接受合法大写，比较/请求规范化为同一UUID，不能因服务端标准小写就误判目标变更。
 - 原因输入→再次核对用户/作品/任务/原因→勾选明确确认才提交；busy禁重复、焦点可用，网络不确定先刷新不自动重发。受理、取消中、真实终态分开反馈。
 - 不复用个人TaskPanel/TaskOutput/SSE接口，不向个人useTasksStore注入他人任务。首页累计含已删除统计，入口注明现存列表不保证与累计条数一致。
@@ -112,7 +112,7 @@ AuditAction=`task.cancel_request`，AuditTargetType=`task`。AuditSummary只增�
 | 条件 | 结果 |
 | --- | --- |
 | 未登录/会话失效/禁用 | 401，沿用全局认证清理 |
-| 非当前管理员/受理写前已降权 | 403，无取消副作用；页面清空停轮询 |
+| 缺对应read/cancel或受理写前已失权 | 403，无取消副作用；按实际失去读/写权分别清理 |
 | 非法UUID/分页/枚举/时间对/确认/原因 | 422，不回显请求秘密，不受理 |
 | UUID不存在/已移除 | 404，不改同整数ID新Task |
 | 任务已结束 | 409，安全拒绝，不伪造取消 |

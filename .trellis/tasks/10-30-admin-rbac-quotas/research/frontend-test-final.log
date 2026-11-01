@@ -1,0 +1,15 @@
+
+> ainovel-frontend@0.1.0 test
+> vitest run --configLoader runner --no-cache --fsModuleCachePath /private/tmp/admin-rbac-vitest-cache
+
+
+ RUN  v5.0.5 /Users/wenyuan/IdeaProjects/my/ai-novel-hub/frontend
+
+
+ Test Files  87 passed (87)
+      Tests  682 passed (682)
+   Start at  00:39:19
+   Duration  10.36s (import 81%, tests 14%, transform 4%, worker 1%)
+
+    Isolate  87 workers spawned · ~139ms startup each (spawn + environment, per file)
+             at least ~1.58s faster with isolate: false — reuses workers across files instead of one per file

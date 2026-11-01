@@ -3,9 +3,11 @@
 > 扩展自 [认证与密钥场景](./quality-guidelines.md#场景认证与密钥环境契约)。
 > 二者不一致时，以下内容以本文件为准：JWT payload（`ver`）、`get_current_user` 校验、已禁用用户的登录。
 
+角色/权限/配额现以[RBAC跨层契约](./rbac-quotas.md)为准：`is_admin` 仅兼容超管事实，不能据此判断所有管理能力。`AdminUser` 依赖现在仅限超管；普通管理路由使用 `require_permission(code)`。
+
 平台签发的 API Key 使用独立的 X-API-Key 认证，与 token_version 会话失效机制分离；禁用账号同样阻止其 Key 使用。密钥的再次查看、授权、撤销及开放接口见 [平台 API Key 与开放读取](./open-api.md)。
 
-管理员全站任务权限仅通过独立[任务监控](./admin-task-monitoring.md)入口提供安全元数据及取消请求受理；每请求复核AdminUser，写前以真实actor/owner用户锁复核启用/角色/token版本。普通/tasks、output/stream/retry/resume/finish仍严格owner隔离，不能通过冒用owner复用权限；无作品但尚有pending取消意图的用户也不能被删号CASCADE掉恢复依据。
+全站任务仅通过独立[任务监控](./admin-task-monitoring.md)入口按tasks.read/cancel提供安全元数据及取消受理；写前按共同runtime/gate及真实actor/owner升序User锁复核启用/具体能力/原token版本。普通/tasks、output/stream/retry/resume/finish仍严格owner隔离；无作品但尚有pending取消意图的用户也不能被删号CASCADE掉恢复依据。
 
 ---
 
@@ -32,7 +34,8 @@ def decode_access_token(token: str, secret: str) -> tuple[int, int] | None   # (
 
 # backend/app/core/deps.py
 async def get_current_user(...) -> User          # CurrentUser
-async def get_admin_user(user: CurrentUser) -> User   # AdminUser
+async def get_admin_user(user: CurrentUser, db, response) -> User   # AdminUser，仅超管
+def require_permission(permission: str)  # 具体动作依赖
 
 # backend/app/core/config.py
 admin_username: str | None = None   # "" 视为 None
@@ -41,7 +44,7 @@ admin_password: str | None = None
 
 # backend/app/services/auth_service.py
 async def create_user_uncommitted(db, creds: Credentials, *, is_admin: bool = False) -> User  # 创建/flush，不提交
-async def create_user(db, creds: Credentials, *, is_admin: bool = False) -> User   # 保留bootstrap等非登录创建的提交包装；register另走登录记录边界
+async def create_user(db, creds: Credentials, *, is_admin: bool = False) -> User   # 内部非登录创建包装；bootstrap/register各走专用提交边界
 async def change_password(db, user: User, data: ChangePasswordRequest) -> User
 async def bootstrap_admin(sessionmaker, settings: Settings) -> None              # 在 main.py 的 lifespan 中调用
 
@@ -52,7 +55,7 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
 
 ### 3. 契约
 
-- 管理员用户写入接入[统一操作审计](./admin-audit.md)：创建/重置密码同样传真实 actor；业务与成功审计同事务。创建走 create_user_uncommitted，由审计边界提交；bootstrap 保留 create_user 提交包装，普通注册另走创建原语与成功登录记录的同一提交边界（见下方用户详情场景）。密码/哈希不进入审计。
+- 管理员用户写入接入[统一操作审计](./admin-audit.md)：创建/重置密码同样传真实 actor；业务与成功审计同事务。创建走 create_user_uncommitted，由审计边界提交；bootstrap改走create_user_uncommitted与内部user.roles.bootstrap审计边界，普通注册另走创建原语与成功登录记录的同一提交边界（见下方用户详情场景）。密码/哈希不进入审计。
 
 - JWT payload：`{"sub", "ver", "iat", "exp"}`。缺少 `ver`（0003 之前签发的 token）→ 视为 `0`，
   与回填的默认值一致，因此升级不会让任何人掉线。`ver` 为非 int 或 bool → 无效。
@@ -70,25 +73,23 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
 
 | 方法与路径 | Body / query | 成功响应 |
 |---|---|---|
-| `GET /auth/me`（login/register 同样） | — | `UserOut {id, username, is_admin, created_at}` |
+| `GET /auth/me`（login/register 同样） | — | 原UserOut安全字段 + is_super_admin/roles/effective_permissions/authorization_revision |
 | `POST /auth/change-password` | `{old_password（1–200 字符）, new_password（Password 规则）}` | 204 + 为当前会话下发新的 `Set-Cookie` |
 | `GET /admin/users` | `q`（≤64，大小写不敏感的子串匹配，`%`/`_` 按字面量处理）、`page ≥1`、`page_size 1–100`（默认 20） | `{items: AdminUserOut[], total}`，按 id 排序 |
 | `GET /admin/users/{id}` | — | `AdminUserDetail`：原安全账号字段、last_login_at、三组基础资源用量，见下方场景 |
-| `POST /admin/users` | `{username, password, is_admin=false}` | 201 `AdminUserOut` |
-| `PATCH /admin/users/{id}` | `{is_admin?, is_active?}` | `AdminUserOut` |
+| `POST /admin/users` | `{username, password}`，users.create | 201 `AdminUserOut` |
+| `PATCH /admin/users/{id}` | `{is_active?}`，users.status | `AdminUserOut` |
 | `POST /admin/users/{id}/reset-password` | `{new_password}` | 204 |
 | `DELETE /admin/users/{id}` | — | 名下无任何作品时204，清理账号及其用户级私有配置；有作品（含回收站/待清理）时409 |
 
-  `AdminUserOut = {id, username, is_admin, is_active, created_at, project_count}`。列表/写入响应保持这些字段，详情另提供最近登录与分组统计。用户管理接口只返回
+  `AdminUserOut` 保留 `{id, username, is_admin, is_active, created_at, project_count}`，必含 `is_super_admin,is_management_account,roles,authorization_revision`，不含目标完整权限。列表/写入响应保持这些字段，详情另提供最近登录与分组统计。用户管理接口只返回
   账号信息与计数；管理员另可通过[作品管理](./admin-projects.md)维护他人的小说内容。
   这不授予所有者模型凭据、平台密钥、私有资源或后台任务的额外访问权限。
 
   `project_count` 包含全部未物理删除作品，不能复用正常目录的生命周期过滤。删号先锁目标User并检查全部Project；非零返回 `code=user_has_projects`（通常带安全 `project_count`），可先禁用账号。0024起 Project→User 为RESTRICT，兜底并发/漏查，不能再依靠删号级联作品。恢复/彻底删除作品见[回收站契约](./recycle-bin.md)。
 
 - **管理员的其他权限**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
-  - **全局 Skill**：`skills.owner_user_id` 为空的 Skill 只有 `is_admin` 用户可以新建（`POST /skills` 或导入时 `scope=global`）、修改、删除、
-    `PUT /references` 与 `POST /{id}/restore-builtin`；普通用户可见但写操作 403（文案提示复制为自己的副本），他人私有 Skill 对管理员同样 404——
-    管理员**不能**读取其他用户的私有 Skill。权限按当前请求的 `user.is_admin` 判断，降级后立即失去写权限，不需要 `token_version` 递增。
+  - **全局 Skill**：新建/导入、修改、删除、参考资料、恢复分别检查 `global_skills.create/update/delete/references/restore_builtin`。普通用户可见但无相应动作则403；他人私有 Skill 对所有管理角色同样404，不能用editable推导全部动作。撤权不需要递增token_version。
   - **MCP有效开关**（部署基线 `MCP_ENABLED`，不是用户级）：管理员可通过[系统设置](./system-settings.md)持久覆盖，后台覆盖优先；关闭后 `/api/v1/mcp-plugins/*` 全部 403 `管理员已关闭 MCP`，智能体不暴露MCP工具，连接/排队后尚未发出的调用也受约束；已发调用可结束、插件保留。`GET /auth/config` no-store返回 `{registration_enabled, mcp_enabled}`，前端可见时30秒/回前台同步。注册开关同样可后台覆盖；未覆盖沿用环境/.env/代码默认，Compose已转发两变量。
   - 删除用户时其私有 Skill、MCP 插件经外键 CASCADE 删除；全局 Skill 不属于任何用户，不受影响。
 
@@ -99,7 +100,8 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
 | `ADMIN_USERNAME`/`ADMIN_PASSWORD` 只设置了其一，或格式无效 | 启动时抛出 `ValidationError`，不回显密码 |
 | 密码正确但 `is_active=false` 时登录 | 403 `账号已被禁用，请联系管理员`（密码错误仍为 401，不泄露账号状态） |
 | 任意需认证请求中 `ver` 过期 / 用户已禁用 | 401 `未登录或登录已过期` |
-| 非管理员调用 `/admin/*` | 403 `需要管理员权限` |
+| 缺具体动作能力或非超管调用角色管理 | 403 `code=permission_denied` |
+| 非超管维护有管理权限的目标账号 | 403 `code=management_account_protected` |
 | 非管理员写全局 Skill / 恢复内置 Skill | 403 |
 | `MCP_ENABLED=false` 时调用 `/mcp-plugins/*` | 403 `管理员已关闭 MCP` |
 | 目标用户不存在 | 404 `用户不存在` |
@@ -142,13 +144,13 @@ user.token_version += 1
 user.token_version = User.token_version + 1
 ```
 
-错误——用普通 SELECT 检查"是否还有其他管理员"，会让两名管理员并发地互相降级。
+错误——检查最后超管时，在已经锁定actor/target后又无序锁全体User，会破坏统一锁序。
 
-正确（`admin_service._ensure_other_active_admin`）——在与更新相同的事务中锁定启用中的管理员集合
-（PostgreSQL 在等待锁后会重新求值；SQLite 会忽略该锁，但本身就是串行执行）：
+正确（`admin_service._ensure_other_active_admin`）——共同授权gate已经串行化超管变更，在同事务、已持gate下查询其他启用超管是否存在：
 
 ```python
-await db.scalars(select(User.id).where(User.is_admin.is_(True), User.is_active.is_(True)).with_for_update())
+await authz.require(db, actor, write=True, targets=(target_id,))
+# gate → User升序已完成；此后只做exists和原业务写，不再反向取锁。
 ```
 
 
@@ -171,7 +173,7 @@ async def _record_successful_login(db: AsyncSession, user: User) -> User
 class AuthenticationPersistenceError(AppError):
     status_code = 500
 
-# services/admin_service.py；api/v1/admin.py 使用 AdminUser
+# services/admin_service.py；api/v1/admin.py 使用 users.read
 async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail
 # GET /api/v1/admin/users/{user_id}
 ```
@@ -183,7 +185,7 @@ async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail
 **登录与事务**
 
 - 只有成功密码登录和注册后的自动登录记录时间；管理员创建/bootstrap、日常请求、改密续签、API Key 使用、失败/禁用登录不更新。
-- register 调用 create_user_uncommitted，再通过 _record_successful_login 提交；管理员创建仍由 AuditOperation 提交，bootstrap 仍用 create_user。不能在共用创建函数或 _set_auth_cookie 中通用记录，否则会误算未登录账号或续签。
+- register 调用 create_user_uncommitted，再通过 _record_successful_login 提交；管理员创建仍由 AuditOperation 提交，bootstrap使用内部user.roles.bootstrap同事务边界。不能在共用创建函数或 _set_auth_cookie 中通用记录，否则会误算未登录账号或续签。
 - bcrypt 后的条件 UPDATE 同时核对用户ID、is_active、已验 password_hash、token_version；SQL CASE 保持 last_login_at 不倒退，显式 updated_at=User.updated_at，不把登录算作账号资料编辑。
 - UPDATE RETURNING(User) 的已验证快照提交后直接返回，不再 refresh 成并发重置后的新版本。并发禁用/重置若发生在该事务之后，只使旧快照 Cookie 失效，不能让旧密码签出新版本。
 - 记录持久化成功才由原路由签 Cookie。注册 flush、登录写入/commit 故障回滚，返回固定安全500，不发成功Cookie；只记录异常类型，不让含SQL/哈希参数的原异常进入全局堆栈日志。
@@ -203,7 +205,7 @@ async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail
 
 **页面与动作**
 
-- `/admin/users` 与 `/admin/users/:userId` 同在 RequireAdmin 下懒加载；用户名与详情链接进入详情，菜单仍选用户管理。parseAdminUserId 仅接收正十进制安全整数，拒绝指数、小数和越界ID。
+- `/admin/users` 与 `/admin/users/:userId` 同在 RequirePermission(users.read) 下懒加载；用户名与详情链接进入详情，菜单仍选用户管理。parseAdminUserId 仅接收正十进制安全整数，拒绝指数、小数和越界ID。详情的正常作品、回收站、配额分别检查projects.read/recycle_bin.read/quotas.read，不因users.read扩权。
 - 内部详情以 actorId:targetId 为key，加载/失败/404不展示旧用户和危险动作。所属正常作品始终请求 owner_user_id=目标ID，分页不影响总统计；正常目录/回收站深链带同一owner，两个管理目录按当前owner key重建以响应同路由查询串切换。
 - 账号动作共用页级 AdminUserActionsController、useAdminUserActions、AdminUserActionButtons、声明式 AdminUserActionDialog；新建仍留列表。不创建全局控制器/通用CRUD框架，不使用全局destroyAll。
 - activate/deactivate 支持StrictMode；失效清目标并递增gate。提交前、异步表单校验后、响应交付前均核对真实actor、权限、目标对象及代次；busy同步生效防双击。卸载/退出/换目标后旧响应不toast、不刷新、不导航；声明式Modal自然撤下。
@@ -215,7 +217,7 @@ async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail
 | 条件 | 结果 |
 |---|---|
 | 未登录/禁用/已撤销会话 | 401，统一前端清会话 |
-| 当前非管理员读详情 | 403 需要管理员权限；不因目标存在与否泄露详情 |
+| 无users.read读详情 | 403 permission_denied；不因目标存在与否泄露详情 |
 | 目标用户不存在 | 404 用户不存在 |
 | 前端ID不是正十进制安全整数 | 无效用户ID提示，不发详情请求；后端非int路径仍为标准422 |
 | 密码错误/不存在，或验密后凭据/版本失配 | 401 用户名或密码错误，时间不更新、无成功Cookie |

@@ -1,5 +1,7 @@
 # 类型安全
 
+RBAC传输镜像app/schemas/rbac.py：User必含is_super_admin/roles/effective_permissions:PermissionCode[]/authorization_revision，AdminUser必含is_super_admin/is_management_account/roles/authorization_revision但不含目标完整权限；不能将新字段改optional迁就旧fixture，或用is_admin fallback。[完整角色/配额API与错误契约](../backend/rbac-quotas.md)。QuotaConfig为inherit/unlimited/limited(value)判别联合，limited严格整数0..2147483647；revision（对象）与authorization_revision（全局）不能混用。
+
 管理员系统设置镜像 `SystemSettingsOut/SystemSettingsUpdate` 与bool/int区分式items；该PATCH的null明确表示取消后台覆盖，不是忽略。审计settings_changes仅六项受限值，公开配置请求代次独立于登录态；详见[系统设置](../backend/system-settings.md)。
 
 管理员任务的AdminTaskBrief/Detail/List/Counts、AdminTaskListQuery及AdminTaskCancelRequest/Out独立镜像schemas/admin_task.py，不能把普通Task通过强转复用；未知kind/status为unknown、旧入队时间/本轮时长为null。UUID深链比较规范化，原因按Unicode字符计数及控制字符规则校验；task.cancel_request审计新增专用有界字段，其成功只表示受理。详见[任务监控](../backend/admin-task-monitoring.md)。
@@ -60,7 +62,7 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
 - 类型级映射把泛型参数与载荷绑定：`WizardItemMap { outline: Outline; characters: Character; world: WorldSetting; careers: Career }` → `runWizard<K>(…): Promise<WizardItemMap[K][]>`。
 - 组件本地的表单结构（`FormValues`）保留在组件文件中。
 
-- 认证/管理员类型：`User.is_admin` 镜像 `UserOut.is_admin`；`Page<T> = { items: T[]; total: number }` 镜像 `AdminUserList`；`AdminUser` 镜像 `AdminUserOut`（`id, username, is_admin, is_active, created_at, project_count`）；`AdminUserCreate`、`AdminUserUpdate`（`is_admin?`、`is_active?`）、`ResetPasswordRequest`、`ChangePasswordRequest`。后端契约：`.trellis/spec/backend/auth-admin.md`。
+- 认证/管理员类型：`User.is_admin` 镜像 `UserOut.is_admin`；`Page<T> = { items: T[]; total: number }` 镜像 `AdminUserList`；`AdminUser` 镜像 `AdminUserOut`（`id, username, is_admin, is_active, created_at, project_count`）；`AdminUserCreate`（username/password）、`AdminUserUpdate`（仅is_active?；is_admin会被后端422拒绝）、`ResetPasswordRequest`、`ChangePasswordRequest`。后端契约：`.trellis/spec/backend/auth-admin.md`。
 - 用户详情专用 `AdminUserDetail extends AdminUser`，增加 `last_login_at: string|null` 与usage三组对象；active/recycled/deleting均为 `AdminResourceUsage {project_count,chapter_count,total_words}`（后端三组容器名为AdminUserUsage，TS直接内联对象，不另造命名类型）。顶层project_count仍为三组合计，不能改成正常数；原列表/写响应不增加字段。`adminApi.getUser(id, signal?)`沿统一客户端。`parseAdminUserId`仅接受正十进制安全整数，拒绝1e2、小数、负数和越界值；null登录单独显示“暂无记录”，非空时间用formatTime。
 - 章节版本 / 生成记录 / 局部改写类型（`10-23-chapter-versions`）：`ChapterVersionBrief`（`id, chapter_id, seq, source, word_count, starred, note, generation_log_id, created_at, updated_at`）、`ChapterVersion`（另加 `content`）、`ChapterVersionUpdate`（`starred?`、`note?` ≤200，省略或 null = 不变）、`GenerationLogBrief`（`params: Record<string, unknown>`、`prompt_tokens`/`completion_tokens` 恒为 null）、`GenerationLog`（另加 `messages: GenerationMessage[]`）、`RewriteRequest`、`RewriteDone`（含 `before`：选区前 ≤200 码点原文）、`RewriteApply`（`before?` 原样回传做乐观校验）、`ContinueEvent`、`ChapterDone`；`GenerateChapterRequest.auto_continue?`（后端默认 false）。标签映射在 `api/chapterVersions.ts`：`VERSION_SOURCE`、`GENERATION_KIND_LABELS`、`GENERATION_STATUS`、`REWRITE_OP_LABELS`（均为 `Record<Union, …>`）。
 - 后台任务类型（`10-23-task-engine`）：`Task` 镜像 `TaskOut`（`id, kind, status, title, project_id, chapter_id, progress 0–100, stage, error, retry_of_id, character_id`（取自 `input.request.character_id`，目前仅 `relations.parse` 有值）`, analysis_id`（取自 `input.request.analysis_id`，仅 `chapter.revise` 有值，用于重写前后评分对比）`, queue_position`（仅 queued 有值，0 = 下一个）`, created_at, started_at, finished_at`）；`TaskListQuery`（`project_id? chapter_id? kind? active? limit?`）、`TaskOutput {text}`、`TaskClearResult {deleted}`、`TaskProgress`（订阅 `progress` 载荷，`queue_position?`）。标签映射在 `api/tasks.ts`：`TASK_STATUS: Record<TaskStatus, {label, color}>`、`TASK_KIND_LABELS: Record<TaskKind, string>`；判定函数 `isActiveTask`、`canRetryTask`（`failed|cancelled|interrupted`，与后端 409 规则一致）。`generateChapter` / `polishChapter` / `runWizard` 返回 `Task`；`done.result` 是 `unknown`，必须经 `parseChapterDone` / `parseWizardDone(kind, …)` 收窄（结构不符返回 null，调用方回退为重新拉取 / 空列表）；订阅事件里的 `task` 用 `readTask`（`id: number` + `status: string`）收窄，可能为 null。
@@ -106,7 +108,7 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
 | 项目、世界观/角色/大纲 | 省略**或** `null` = 不变 | `model_dump(exclude_unset=True)` + `if value is None: continue`（`project_service.update_project`、`story_service.update_owned`） |
 | 章节 | 对 `chapter_no`、`title`、`content`、`status` 而言省略/`null` = 不变；显式发送 `outline_id: null` 会**解除**与大纲的关联 | `chapter_service.update_chapter` 检查 `"outline_id" in fields` |
 | `generating` 中的章节 | PATCH 带 `title`/`content` 且不带 `status` → 409；仅发送 `{ status: 'draft' }` 是复位路径 | `ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")` |
-| 管理员用户 | 省略 `is_admin` / `is_active` = 不变；禁用会递增 `token_version`（目标用户的会话 → 401） | `admin_service.update_user` |
+| 管理员用户 | 省略is_active=不变；角色整体替换走专用PUT并带authorization_revision，旧is_admin字段禁止；禁用会递增 `token_version`（目标用户的会话 → 401） | `admin_service.update_user` |
 | AI 配置 | 省略 `api_key` 或传 `''` 保留已存储的密钥；只要出现 `base_url`（包括 `null`/`''`）就会被应用，`null` = provider 默认值 | `ai_config_service.update_config` 中的 `if data.api_key:` / `if "base_url" in fields:` |
 
 前端的相应做法（`AIConfigPage.handleSave`）：始终发送 `base_url`（`v.base_url?.trim() ? v.base_url.trim() : null`），`api_key` 仅在非空时发送。`AIConfigUpdate = Partial<AIConfigCreate>`。
@@ -190,7 +192,7 @@ export const transferApi: { estimate(pid); download(pid, options): Promise<strin
 ### 3. 契约
 - 每个请求都使用 `credentials: 'include'`（HttpOnly cookie 会话；JS 中不持有 token）。请求头：`Accept: application/json`；仅在有 JSON 请求体时设置 `Content-Type: application/json`；请求体为 `FormData`（`api.upload`，知识库上传）时原样发送、**不设置** `Content-Type`（由浏览器带 multipart boundary）。
 - `buildUrl` 跳过值为 `null`/`undefined` 的查询参数，数组则重复同一个 key。
-- 非 2xx → `handleErrorResponse`：读取响应体文本，若 `detail` 为字符串则提取它（后端总是发送 `{"detail": "中文"}`），否则回退为 `请求失败（HTTP ${status}）`；响应体是 JSON 对象时整体保存在 `ApiError.body`（后端 `AppError.extra` 的结构化字段：模板校验 400 的 `errors`、删除被引用风格 409 的 `references`），只能经 `utils/prompts.ts` 的 `issuesFromError` / `utils/styles.ts` 的 `readStyleReferences` 收窄读取，非 JSON 时为 null；遇到 401 时调用已注册的处理器，除非路径以 `/auth/login` 或 `/auth/me` 开头；始终抛出 `ApiError(status, detail)`。
+- 非 2xx → `handleErrorResponse`：读取响应体文本，若 `detail` 为字符串则提取它（后端总是发送 `{"detail": "中文"}`），否则回退为 `请求失败（HTTP ${status}）`；响应体是 JSON 对象时整体保存在 `ApiError.body`（后端 `AppError.extra` 的结构化字段：模板校验 400 的 `errors`、删除被引用风格 409 的 `references`），只能经 `utils/prompts.ts` 的 `issuesFromError` / `utils/styles.ts` 的 `readStyleReferences` 收窄读取，非 JSON 时为 null；仅当前认证请求代次的401调用已注册处理器，除非路径以 `/auth/login` 或 `/auth/me` 开头；始终抛出 `ApiError(status, detail)`。
 - 网络失败 → `ApiError(0, '网络错误，无法连接服务器')`；`AbortError` 原样重新抛出。
 - `request<T>`：204 → `undefined`；空响应体 → `undefined`；否则 `JSON.parse`。
 - `App.tsx` 注册 `() => useAuthStore.getState().clear()`；随后 `RequireAuth` 重定向到 `/login`。
