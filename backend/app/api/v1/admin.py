@@ -6,6 +6,7 @@ from app.core.deps import AdminUser, DbDep
 from app.schemas.admin import (
     AdminProjectList,
     AdminUserCreate,
+    AdminUserDetail,
     AdminUserList,
     AdminUserOut,
     AdminUserUpdate,
@@ -47,6 +48,11 @@ async def list_users(
 @router.post("/users", response_model=AdminUserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(body: AdminUserCreate, admin: AdminUser, db: DbDep) -> AdminUserOut:
     return await svc.create_user(db, admin, body)
+
+
+@router.get("/users/{user_id}", response_model=AdminUserDetail)
+async def get_user_detail(user_id: int, admin: AdminUser, db: DbDep) -> AdminUserDetail:
+    return await svc.get_user_detail(db, user_id)
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserOut)

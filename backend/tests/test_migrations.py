@@ -10,6 +10,69 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 EXPECTED_TABLES = {"users", "ai_configs", "projects", "world_settings", "characters", "outlines", "chapters"}
 
 
+def test_0028_nullable_login_time_preserves_users_and_children(tmp_path):
+    """原位修改 users，不回填历史，也不重建父表触发子行 CASCADE/RESTRICT。"""
+    db_file = tmp_path / "migrate0028.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0027")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users(id,username,password_hash) VALUES (1,'historical','preserved-hash')"))
+            conn.execute(text("INSERT INTO users(id,username,password_hash) VALUES (2,'empty','other-hash')"))
+            conn.execute(text(
+                "INSERT INTO projects(id,user_id,title,genre,premise,style,status) "
+                "VALUES (1,1,'原作品','','','','planning')"
+            ))
+            conn.execute(text(
+                "INSERT INTO chapters(id,project_id,chapter_no,title,content,status,word_count) "
+                "VALUES (1,1,1,'原章节','保留正文','draft',4)"
+            ))
+            conn.execute(text(
+                "INSERT INTO ai_configs(id,user_id,name,provider,api_key_enc,model,is_default) "
+                "VALUES (1,1,'原私有配置','openai_compat','preserved-ciphertext','test',0)"
+            ))
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0028")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        column = next(col for col in inspect(engine).get_columns("users") if col["name"] == "last_login_at")
+        assert column["nullable"] and column["default"] is None
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            assert conn.execute(text("SELECT last_login_at FROM users ORDER BY id")).scalars().all() == [None, None]
+            assert conn.execute(text("SELECT password_hash FROM users WHERE id=1")).scalar_one() == "preserved-hash"
+            assert conn.execute(text("SELECT content FROM chapters")).scalar_one() == "保留正文"
+            assert conn.execute(text("SELECT api_key_enc FROM ai_configs")).scalar_one() == "preserved-ciphertext"
+            assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+            conn.execute(text("UPDATE users SET last_login_at='2026-11-01 01:00:00' WHERE id=1"))
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0027")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "last_login_at" not in {col["name"] for col in inspect(engine).get_columns("users")}
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            assert conn.execute(text("SELECT count(*) FROM users")).scalar_one() == 2
+            assert conn.execute(text("SELECT title FROM projects")).scalar_one() == "原作品"
+            assert conn.execute(text("SELECT content FROM chapters")).scalar_one() == "保留正文"
+            assert conn.execute(text("SELECT api_key_enc FROM ai_configs")).scalar_one() == "preserved-ciphertext"
+            assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("DELETE FROM users WHERE id=1"))
+    finally:
+        engine.dispose()
+
+
 def test_0022_api_key_storage_grants_and_downgrade(tmp_path):
     """凭据升级保留原用户，授权级联不扩大范围，降级只删除新增凭据表。"""
     db_file = tmp_path / "migrate0022.db"

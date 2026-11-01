@@ -24,6 +24,29 @@ afterEach(() => {
 })
 
 describe('adminApi', () => {
+  it('用户详情使用独立读取路径、Cookie 和可中止信号，null 登录及零用量不改写', async () => {
+    const usage = { project_count: 0, chapter_count: 0, total_words: 0 }
+    const body = { id: 7, username: 'alice', is_admin: false, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 0, last_login_at: null, usage: { active: usage, recycled: usage, deleting: usage } }
+    const calls = stubFetch(200, body)
+    const controller = new AbortController()
+    await expect(adminApi.getUser(7, controller.signal)).resolves.toEqual(body)
+    expect(calls[0].url).toBe('/api/v1/admin/users/7')
+    expect(calls[0].init.credentials).toBe('include')
+    expect(calls[0].init.signal).toBe(controller.signal)
+  })
+
+  it('用户详情的 404/403 安全错误透传，401 沿用全局会话失效', async () => {
+    for (const [status, detail] of [[404, '用户不存在'], [403, '需要管理员权限']] as const) {
+      stubFetch(status, { detail })
+      await expect(adminApi.getUser(7)).rejects.toMatchObject({ status, detail })
+    }
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+    stubFetch(401, { detail: '未登录或登录已过期' })
+    await expect(adminApi.getUser(7)).rejects.toMatchObject({ status: 401 })
+    expect(handler).toHaveBeenCalledOnce()
+  })
+
   it('跨用户项目列表组合筛选与分页，查询词作为普通文本编码', async () => {
     const calls = stubFetch(200, { items: [], total: 0 })
     await expect(adminApi.listProjects({ q: '  书%_ ', owner_user_id: 7, status: 'writing', page: 2, page_size: 50 })).resolves.toEqual({ items: [], total: 0 })

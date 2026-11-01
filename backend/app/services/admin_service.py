@@ -1,20 +1,30 @@
 """管理员用户管理。
 
-本模块只返回账号元数据（用户名、角色、状态、项目数）；项目内容权限由项目管理服务提供。
+本模块只返回账号元数据和基础资源计数；项目内容权限由项目管理服务提供。
 护栏：不能对自己禁用 / 取消管理员 / 删除；任何操作后必须至少保留一名启用中的管理员。
 """
 
 from anyio import to_thread
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import hash_password
 from app.models import Project, Task, User
-from app.schemas.admin import AdminUserCreate, AdminUserList, AdminUserOut, AdminUserUpdate, ResetPasswordRequest
-from app.services import auth_service, task_statistics_service
+from app.schemas.admin import (
+    AdminResourceUsage,
+    AdminUserCreate,
+    AdminUserDetail,
+    AdminUserList,
+    AdminUserOut,
+    AdminUserUpdate,
+    AdminUserUsage,
+    ResetPasswordRequest,
+)
+from app.services import auth_service, project_lifecycle, task_statistics_service
 from app.services.audit_writer import AuditOperation
+from app.services.project_service import chapter_stats_subquery
 
 SELF_FORBIDDEN = "不能对自己执行该操作"
 LAST_ADMIN = "至少需要保留一名启用中的管理员"
@@ -64,6 +74,56 @@ async def list_users(db: AsyncSession, *, q: str | None, page: int, page_size: i
         .limit(page_size)
     )
     return AdminUserList(items=[_to_out(u, int(c)) for u, c in rows.all()], total=int(total or 0))
+
+
+async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail:
+    """单快照安全投影；章节先按作品聚合，避免作品数被章数放大。"""
+    chapters = chapter_stats_subquery()
+    groups = {
+        "active": and_(*project_lifecycle.active_conditions()),
+        "recycled": Project.deleted_at.is_not(None),
+        "deleting": and_(Project.deleted_at.is_(None), Project.deletion_started_at.is_not(None)),
+    }
+    metrics = {
+        "project_count": 1,
+        "chapter_count": func.coalesce(chapters.c.chapter_count, 0),
+        "total_words": func.coalesce(chapters.c.total_words, 0),
+    }
+    names = [f"{group}_{metric}" for group in groups for metric in metrics]
+    counts = (
+        select(
+            Project.user_id,
+            func.count(Project.id).label("project_count"),
+            *(
+                func.sum(case((condition, value), else_=0)).label(f"{group}_{metric}")
+                for group, condition in groups.items() for metric, value in metrics.items()
+            ),
+        )
+        .outerjoin(chapters, chapters.c.project_id == Project.id)
+        .where(Project.user_id == user_id)
+        .group_by(Project.user_id)
+        .subquery()
+    )
+    row = (await db.execute(
+        select(
+            User.id, User.username, User.is_admin, User.is_active, User.created_at, User.last_login_at,
+            func.coalesce(counts.c.project_count, 0).label("project_count"),
+            *(func.coalesce(counts.c[name], 0).label(name) for name in names),
+        )
+        .outerjoin(counts, counts.c.user_id == User.id)
+        .where(User.id == user_id)
+    )).mappings().one_or_none()
+    if row is None:
+        raise NotFoundError("用户不存在")
+    usage = {
+        group: AdminResourceUsage(**{metric: int(row[f"{group}_{metric}"]) for metric in metrics})
+        for group in groups
+    }
+    return AdminUserDetail(
+        id=row["id"], username=row["username"], is_admin=row["is_admin"], is_active=row["is_active"],
+        created_at=row["created_at"], project_count=int(row["project_count"]), last_login_at=row["last_login_at"],
+        usage=AdminUserUsage(**usage),
+    )
 
 
 async def _get_user(db: AsyncSession, user_id: int) -> User:

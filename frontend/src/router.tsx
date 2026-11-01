@@ -3,7 +3,6 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import RequireAdmin from './components/RequireAdmin'
 import RequireAuth from './components/RequireAuth'
-import AdminUsersPage from './pages/AdminUsersPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 import ProjectListPage from './pages/ProjectListPage'
@@ -87,11 +86,11 @@ export const router = createBrowserRouter([
       },
       {
         path: 'admin/users',
-        element: (
-          <RequireAdmin>
-            <AdminUsersPage />
-          </RequireAdmin>
-        ),
+        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        children: [
+          { index: true, lazy: lazyPage(() => import('./pages/AdminUsersPage')) },
+          { path: ':userId', lazy: lazyPage(() => import('./pages/AdminUserDetailsPage')) },
+        ],
       },
       {
         path: 'projects/:pid',

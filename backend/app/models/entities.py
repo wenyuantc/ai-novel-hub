@@ -148,6 +148,8 @@ class User(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
     # 会话版本号：重置密码 / 禁用 / 自助改密时递增，使旧令牌（payload.ver）立即失效
     token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # 仅成功密码登录 / 注册自动登录记录；旧账号不推算历史。
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AIConfig(TimestampMixin, Base):

@@ -1,11 +1,12 @@
 import { api, request } from './client'
-import type { AdminProject, AdminProjectListQuery, AdminUser, AdminUserCreate, AdminUserListQuery, AdminUserUpdate, Page, ResetPasswordRequest } from './types'
+import type { AdminProject, AdminProjectListQuery, AdminUser, AdminUserCreate, AdminUserDetail, AdminUserListQuery, AdminUserUpdate, Page, ResetPasswordRequest } from './types'
 
 export const adminApi = {
   listProjects: ({ q, owner_user_id, status, page, page_size }: AdminProjectListQuery = {}) =>
     api.get<Page<AdminProject>>('/admin/projects', { q: q?.trim() || undefined, owner_user_id, status, page, page_size }),
   listUsers: ({ q, page, page_size }: AdminUserListQuery = {}, signal?: AbortSignal) =>
     request<Page<AdminUser>>('/admin/users', { query: { q: q?.trim() || undefined, page, page_size }, signal }),
+  getUser: (id: number, signal?: AbortSignal) => request<AdminUserDetail>(`/admin/users/${id}`, { signal }),
   createUser: (body: AdminUserCreate) => api.post<AdminUser>('/admin/users', body),
   updateUser: (id: number, body: AdminUserUpdate) => api.patch<AdminUser>(`/admin/users/${id}`, body),
   /** 该用户所有已登录会话立即失效 */

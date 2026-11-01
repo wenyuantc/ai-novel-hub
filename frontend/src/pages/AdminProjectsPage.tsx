@@ -9,13 +9,12 @@ import type { AdminProject, ProjectStatus } from '../api/types'
 import DeleteProjectModal from '../components/project/DeleteProjectModal'
 import { useLoader } from '../hooks/useLoader'
 import { formatTime } from '../utils/time'
+import { parseAdminUserId } from '../utils/adminUserDetails'
 
 /** 实例内项目目录；自己的书架仍只查询当前账户。 */
-export default function AdminProjectsPage() {
-  const [searchParams] = useSearchParams()
-  const initialOwner = Number(searchParams.get('owner_user_id'))
+function AdminProjects({ initialOwner }: { initialOwner: number | undefined }) {
   const [query, setQuery] = useState('')
-  const [ownerId, setOwnerId] = useState<number | undefined>(Number.isSafeInteger(initialOwner) && initialOwner > 0 ? initialOwner : undefined)
+  const [ownerId, setOwnerId] = useState<number | undefined>(initialOwner)
   const [ownerSearch, setOwnerSearch] = useState('')
   const [status, setStatus] = useState<ProjectStatus>()
   const [page, setPage] = useState(1)
@@ -50,4 +49,11 @@ export default function AdminProjectsPage() {
     </Card>
     {deleting && <DeleteProjectModal key={deleting.id} project={deleting} onClose={() => setDeleting(null)} onDeleted={() => { setDeleting(null); if (data?.items.length === 1 && page > 1) setPage(page - 1); else reload() }} />}
   </div>
+}
+
+/** owner 深链变化时重建本页筛选/分页，不保留上一个详情目标。 */
+export default function AdminProjectsPage() {
+  const [searchParams] = useSearchParams()
+  const owner = parseAdminUserId(searchParams.get('owner_user_id'))
+  return <AdminProjects key={owner ?? 'all'} initialOwner={owner ?? undefined} />
 }

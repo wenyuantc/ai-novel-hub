@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.auth import Credentials, Password
 from app.schemas.project import ProjectStatus
@@ -36,6 +36,23 @@ class AdminUserOut(BaseModel):
 class AdminUserList(BaseModel):
     items: list[AdminUserOut]
     total: int
+
+
+class AdminResourceUsage(BaseModel):
+    project_count: int = Field(ge=0)
+    chapter_count: int = Field(ge=0)
+    total_words: int = Field(ge=0)
+
+
+class AdminUserUsage(BaseModel):
+    active: AdminResourceUsage
+    recycled: AdminResourceUsage
+    deleting: AdminResourceUsage
+
+
+class AdminUserDetail(AdminUserOut):
+    last_login_at: datetime | None
+    usage: AdminUserUsage
 
 
 class AdminUserCreate(Credentials):

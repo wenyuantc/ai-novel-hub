@@ -13,6 +13,7 @@ import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
 import { canRestoreProject, recycleValidPage } from '../utils/recycleBin'
 import { formatTime } from '../utils/time'
+import { parseAdminUserId } from '../utils/adminUserDetails'
 
 interface ResultsProps {
   items: RecycleProject[]
@@ -47,12 +48,10 @@ export function RecycleProjectResults({ items, mobile, loading, disabled, now, o
   </List.Item>} />
 }
 
-function RecycleBin({ actorId }: { actorId: number }) {
+function RecycleBin({ actorId, initialOwner }: { actorId: number; initialOwner: number | undefined }) {
   const mobile = useIsMobile()
-  const [searchParams] = useSearchParams()
-  const initialOwner = Number(searchParams.get('owner_user_id'))
   const [query, setQuery] = useState('')
-  const [ownerId, setOwnerId] = useState<number | undefined>(Number.isSafeInteger(initialOwner) && initialOwner > 0 ? initialOwner : undefined)
+  const [ownerId, setOwnerId] = useState<number | undefined>(initialOwner)
   const [ownerSearch, setOwnerSearch] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -94,5 +93,7 @@ function RecycleBin({ actorId }: { actorId: number }) {
 /** 按真实管理员重建数据和待确认记录，旧会话响应不会操作新会话。 */
 export default function AdminRecycleBinPage() {
   const user = useAuthStore((state) => state.user)
-  return user?.is_admin ? <RecycleBin key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
+  const [searchParams] = useSearchParams()
+  const owner = parseAdminUserId(searchParams.get('owner_user_id'))
+  return user?.is_admin ? <RecycleBin key={`${user.id}:${owner ?? 'all'}`} actorId={user.id} initialOwner={owner ?? undefined} /> : <Result status="403" title="需要管理员权限" />
 }

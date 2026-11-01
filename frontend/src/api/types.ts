@@ -98,6 +98,22 @@ export interface AdminUser {
   project_count: number
 }
 
+export interface AdminResourceUsage {
+  project_count: number
+  chapter_count: number
+  total_words: number
+}
+
+/** 安全账号详情；全部作品数包括正常、回收站及删除中。 */
+export interface AdminUserDetail extends AdminUser {
+  last_login_at: string | null
+  usage: {
+    active: AdminResourceUsage
+    recycled: AdminResourceUsage
+    deleting: AdminResourceUsage
+  }
+}
+
 export interface AdminUserListQuery {
   q?: string
   page?: number
