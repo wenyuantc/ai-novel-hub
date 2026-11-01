@@ -1,4 +1,4 @@
-"""应用配置：全部来自环境变量 / .env。
+"""应用部署配置：环境变量 / .env 为基线，六项业务设置可由后台持久覆盖。
 
 关键密钥（JWT_SECRET、ENCRYPTION_KEY）缺失或非法时实例化即抛错，实现启动 fail-fast，
 避免 API Key 以明文或弱密钥落库。
@@ -12,6 +12,7 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.schemas.auth import Credentials
+from app.schemas.system_settings import MAX_OPEN_API_RATE_LIMIT_PER_MINUTE
 
 _DEFAULT_FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
@@ -25,11 +26,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel"
     jwt_secret: str = Field(min_length=16)
     encryption_key: str
+    # 以下六项业务设置由 SystemSettingsManager 在启动/管理保存后发布有效值；其余字段仍仅部署配置。
     registration_enabled: bool = True
     cookie_secure: bool = False
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, gt=0)
-    # 平台开放读取接口：每把 API Key 每个 UTC 分钟的请求上限，不影响网页登录接口。
-    open_api_rate_limit_per_minute: int = Field(default=120, gt=0)
+    # 开放API可运行时覆盖的每Key/UTC分钟上限；不影响网页登录，不重置当前分钟计数。
+    open_api_rate_limit_per_minute: int = Field(default=120, gt=0, le=MAX_OPEN_API_RATE_LIMIT_PER_MINUTE)
     # 逗号分隔，例如 http://localhost:5173,http://127.0.0.1:5173；为空表示不启用 CORS
     cors_origins: str = ""
     # 章节生成上下文的字符预算
@@ -38,12 +40,12 @@ class Settings(BaseSettings):
     ai_request_timeout: float = Field(default=300.0, gt=0)
     # 是否允许 AI Base URL 指向本地 / 内网地址（接入 Ollama 等本地模型时开启）；开放注册的公网部署请保持关闭
     allow_private_ai_endpoints: bool = False
-    # 后台任务：全局同时运行上限、每个用户同时运行上限（其余排队）
+    # 后台任务运行时上限：全局/每用户，其余排队；降低不取消已运行任务。
     task_max_concurrency: int = Field(default=4, ge=1)
     task_max_per_user: int = Field(default=2, ge=1)
-    # 部署级自动分析开关：关闭后忽略项目的 auto_analyze，AI 生成 / 润色 / 重写成功后不自动排队分析（手动分析不受影响）
+    # 实例级自动分析有效开关：关闭后不触发后续自动分析，手动/已排队分析不受影响。
     auto_analyze_enabled: bool = True
-    # 部署级 MCP 插件开关：关闭后 /mcp-plugins 接口返回 403，智能体不再暴露任何 MCP 工具
+    # 实例级MCP有效开关：关闭后插件接口403，智能体禁止后续调用，已发调用允许结束。
     mcp_enabled: bool = True
     # 生产模式下挂载的前端构建产物目录；不存在则跳过
     frontend_dist_dir: str = str(_DEFAULT_FRONTEND_DIST)

@@ -24,7 +24,8 @@ def _set_auth_cookie(response: Response, user: User, settings: Settings) -> None
 
 
 @router.get("/config", response_model=AuthConfigOut)
-async def auth_config(settings: SettingsDep) -> AuthConfigOut:
+async def auth_config(settings: SettingsDep, response: Response) -> AuthConfigOut:
+    response.headers["Cache-Control"] = "no-store"
     return AuthConfigOut(registration_enabled=settings.registration_enabled, mcp_enabled=settings.mcp_enabled)
 
 

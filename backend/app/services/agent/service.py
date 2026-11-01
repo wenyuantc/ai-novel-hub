@@ -437,7 +437,7 @@ async def _execute_external_impl(
         raise ConflictError("修改正在处理中，请刷新后重试")
     await db.commit()
     sessions = mcp_tools.McpSessions(
-        task_context.mcp_connector, task_context.cipher, settings.allow_private_ai_endpoints
+        task_context.mcp_connector, task_context.cipher, settings.allow_private_ai_endpoints, settings=settings,
     )
     try:
         data = await mcp_tools.call_data(sessions, resolved, change.arguments)

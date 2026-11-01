@@ -206,13 +206,16 @@ def preview(entry: dict[str, Any], resolved: Resolved | None, arguments: dict[st
 class _Worker:
     """在独立任务中持有一个 MCP 连接，串行处理调用。"""
 
-    def __init__(self, connector: Any, target: Any, allow_private: bool):
+    def __init__(self, connector: Any, target: Any, allow_private: bool, settings: Settings):
+        self._settings = settings
         self._queue: asyncio.Queue = asyncio.Queue()
         self._error: McpError | None = None
         self._task = asyncio.create_task(self._main(connector, target, allow_private))
 
     async def _main(self, connector: Any, target: Any, allow_private: bool) -> None:
         try:
+            if not self._settings.mcp_enabled:
+                raise McpError(mcp_service.DISABLED)
             async with connector(target, allow_private=allow_private) as conn:
                 while True:
                     item = await self._queue.get()
@@ -223,6 +226,8 @@ class _Worker:
                         continue
                     try:
                         async with asyncio.timeout(mcp_client.CALL_TIMEOUT):
+                            if not self._settings.mcp_enabled:
+                                raise McpError(mcp_service.DISABLED)
                             value = await conn.call_tool(tool, arguments)
                     except TimeoutError:
                         value = McpError(f"MCP 工具调用超时（{mcp_client.CALL_TIMEOUT:g} 秒）")
@@ -276,17 +281,20 @@ class _Worker:
 class McpSessions:
     """一次 agent.turn 运行内的 MCP 连接复用：同一插件只连接一次。"""
 
-    def __init__(self, connector: Any, cipher: SecretCipher, allow_private: bool):
+    def __init__(self, connector: Any, cipher: SecretCipher, allow_private: bool, *, settings: Settings):
         self._connector = connector
         self._cipher = cipher
         self._allow_private = allow_private
+        self._settings = settings
         self._workers: dict[int, _Worker] = {}
 
     async def call(self, plugin: McpPlugin, tool: str, arguments: dict[str, Any]) -> McpResult:
         worker = self._workers.get(plugin.id)
         if worker is None:
             target = mcp_service.target_of(self._cipher, plugin)
-            worker = self._workers[plugin.id] = _Worker(self._connector, target, self._allow_private)
+            worker = self._workers[plugin.id] = _Worker(
+                self._connector, target, self._allow_private, self._settings,
+            )
         return await worker.call(tool, arguments)
 
     async def aclose(self) -> None:

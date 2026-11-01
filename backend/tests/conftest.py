@@ -58,10 +58,12 @@ async def app(tmp_path, fake_llm, settings_overrides):
         await conn.run_sync(Base.metadata.create_all)
     # 测试不触发 lifespan：显式启停任务引擎，结束前 stop，避免任务泄漏到下一个测试
     task_engine = application.state.task_engine
+    await application.state.system_settings.load()
     await task_engine.start()
     try:
         yield application
     finally:
+        await application.state.system_settings.close()
         await task_engine.stop()
         await application.state.engine.dispose()
         retrieval_service.invalidate()
@@ -101,4 +103,22 @@ async def recycle_admin(app, make_client):
     async with app.state.sessionmaker() as db:
         (await db.get(User, user["id"])).is_admin = True
         await db.commit()
+    return client
+
+
+@pytest.fixture
+async def system_admin(app, make_client):
+    """独立系统设置管理员，不依赖自主注册开关。"""
+    from app.schemas.auth import Credentials
+    from app.services import auth_service
+
+    async with app.state.sessionmaker() as db:
+        await auth_service.create_user(
+            db, Credentials(username="settings_admin", password="secret123"), is_admin=True,
+        )
+    client = make_client()
+    result = await client.post(
+        "/api/v1/auth/login", json={"username": "settings_admin", "password": "secret123"},
+    )
+    assert result.status_code == 200, result.text
     return client

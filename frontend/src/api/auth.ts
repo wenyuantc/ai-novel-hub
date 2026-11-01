@@ -1,8 +1,8 @@
-import { api } from './client'
+import { api, request } from './client'
 import type { AuthConfig, ChangePasswordRequest, Credentials, User } from './types'
 
 export const authApi = {
-  config: () => api.get<AuthConfig>('/auth/config'),
+  config: (signal?: AbortSignal) => request<AuthConfig>('/auth/config', { signal }),
   me: () => api.get<User>('/auth/me'),
   login: (body: Credentials) => api.post<User>('/auth/login', body),
   register: (body: Credentials) => api.post<User>('/auth/register', body),

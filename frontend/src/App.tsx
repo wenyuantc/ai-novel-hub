@@ -13,6 +13,7 @@ import { useTasksStore } from './stores/tasks'
 import { studioPalette } from './theme/palette'
 import ThemeSync from './theme/ThemeSync'
 import { useResolvedTheme, watchSystemTheme } from './theme/themeStore'
+import { startPublicConfigPolling } from './utils/publicConfig'
 
 export default function App() {
   const init = useAuthStore((s) => s.init)
@@ -26,6 +27,11 @@ export default function App() {
     void init()
     return () => setUnauthorizedHandler(null)
   }, [init])
+
+  useEffect(() => {
+    const stop = startPublicConfigPolling(() => { void useAuthStore.getState().refreshConfig() }, document, window)
+    return () => { stop(); useAuthStore.getState().cancelConfig() }
+  }, [])
 
   // 跟随系统：监听 prefers-color-scheme 变化
   useEffect(() => watchSystemTheme(), [])

@@ -327,7 +327,9 @@ async def _save_log(
 
 async def _run_agent(job: AgentJob, ctx: TaskContext) -> AsyncIterator[Event]:
     """一次运行内复用 MCP 连接；运行结束、暂停或异常时统一关闭。"""
-    sessions = mcp_tools.McpSessions(ctx.mcp_connector, ctx.cipher, ctx.settings.allow_private_ai_endpoints)
+    sessions = mcp_tools.McpSessions(
+        ctx.mcp_connector, ctx.cipher, ctx.settings.allow_private_ai_endpoints, settings=ctx.settings,
+    )
     try:
         async with aclosing(_turn(job, ctx, sessions)) as events:
             async for event in events:

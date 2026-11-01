@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.admin_task import validate_cancel_reason
+from app.schemas.system_settings import SystemSettingAuditChange
 from app.schemas.task import TaskKind
 
 AuditAction = Literal[
@@ -42,9 +43,11 @@ AuditAction = Literal[
     "skill.restore_builtin",
     "audit.cleanup",
     "task.cancel_request",
+    "system_settings.update",
 ]
 AuditTargetType = Literal[
-    "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task"
+    "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task",
+    "system_settings",
 ]
 AuditResult = Literal["success", "failure"]
 AuditErrorCode = Literal[
@@ -133,6 +136,7 @@ class AuditValueChange(BaseModel):
 
 class AuditSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    settings_changes: list[SystemSettingAuditChange] = Field(default_factory=list, max_length=6)
     task_key: UUID | None = None
     task_kind: TaskKind | Literal["unknown"] | None = None
     accepted_from_status: Literal["queued", "running", "paused"] | None = None

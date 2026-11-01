@@ -37,7 +37,7 @@ export default function AppLayout() {
   const groups = studioNavigation(projectId, mcpEnabled, canUseAI)
   const current = navigationItem(groups, location.pathname)
   const adminSection = location.pathname.startsWith('/admin/')
-  const pageName = location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const pageName = location.pathname.startsWith('/admin/system-settings') ? '系统设置' : location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
@@ -49,6 +49,7 @@ export default function AppLayout() {
       ...(user?.is_admin ? [{ key: 'admin-projects', icon: <BookOutlined />, label: '作品管理' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-recycle-bin', icon: <DeleteOutlined />, label: '作品回收站' }] : []),
       ...(user?.is_admin ? [{ key: 'admin-audit-logs', icon: <AuditOutlined />, label: '操作日志' }] : []),
+      ...(user?.is_admin ? [{ key: 'admin-system-settings', icon: <SettingOutlined />, label: '系统设置' }] : []),
       { type: 'divider' },
       { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
@@ -61,6 +62,7 @@ export default function AppLayout() {
       else if (key === 'admin-projects') navigate('/admin/projects')
       else if (key === 'admin-recycle-bin') navigate('/admin/recycle-bin')
       else if (key === 'admin-audit-logs') navigate('/admin/audit-logs')
+      else if (key === 'admin-system-settings') navigate('/admin/system-settings')
       else if (key === 'workshop') navigate('/workshop')
       else if (key === 'password') setPasswordOpen(true)
       else if (key === 'logout') { await logout(); navigate('/login', { replace: true }) }
@@ -105,6 +107,7 @@ export default function AppLayout() {
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/projects" aria-current={location.pathname.startsWith('/admin/projects') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><BookOutlined />作品管理</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/recycle-bin" aria-current={location.pathname.startsWith('/admin/recycle-bin') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DeleteOutlined />作品回收站</Link>}
         {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/audit-logs" aria-current={location.pathname.startsWith('/admin/audit-logs') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><AuditOutlined />操作日志</Link>}
+        {user?.is_admin && projectId === null && <Link className="studio-nav-action" to="/admin/system-settings" aria-current={location.pathname.startsWith('/admin/system-settings') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><SettingOutlined />系统设置</Link>}
         <div className="studio-sidebar-account">{account()}<ThemeSwitch compact /></div>
       </div>
     </>

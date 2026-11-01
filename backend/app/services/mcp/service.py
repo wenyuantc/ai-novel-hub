@@ -293,7 +293,9 @@ async def refresh_tools(
     infos: list[Any] = []
     try:
         async with asyncio.timeout(CALL_TIMEOUT * 2):
+            ensure_enabled(settings)
             async with connector(target, allow_private=settings.allow_private_ai_endpoints) as conn:
+                ensure_enabled(settings)
                 infos = await conn.list_tools()
     except McpError as exc:
         error = exc.detail
@@ -334,12 +336,14 @@ async def update_tool_pref(
 
 
 async def call_once(
-    connector: McpConnector, target: McpTarget, tool: str, arguments: dict[str, Any], *, allow_private: bool
+    connector: McpConnector, target: McpTarget, tool: str, arguments: dict[str, Any], *, settings: Settings
 ) -> Any:
     """单独连接、调用一次、关闭；超时与连接失败统一为 McpError。"""
     try:
         async with asyncio.timeout(CALL_TIMEOUT * 2):
-            async with connector(target, allow_private=allow_private) as conn:
+            ensure_enabled(settings)
+            async with connector(target, allow_private=settings.allow_private_ai_endpoints) as conn:
+                ensure_enabled(settings)
                 return await conn.call_tool(tool, arguments)
     except TimeoutError as exc:
         raise McpError(f"MCP 工具调用超时（{CALL_TIMEOUT:g} 秒）") from exc
@@ -367,7 +371,7 @@ async def call_tool(
     await db.close()
     try:
         result = await call_once(
-            connector, target, tool_name, arguments, allow_private=settings.allow_private_ai_endpoints
+            connector, target, tool_name, arguments, settings=settings
         )
     except McpError as exc:
         raise BadRequestError(exc.detail) from exc

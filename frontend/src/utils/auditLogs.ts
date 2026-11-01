@@ -1,8 +1,9 @@
 import dayjs from 'dayjs'
 import type { AuditAction, AuditCleanupPreview, AuditDateRange, AuditLogListQuery, AuditSafeState, AuditSummary } from '../api/types'
-import { AUDIT_FIELD, AUDIT_STATE, AUDIT_TARGET } from '../api/auditLogs'
+import { AUDIT_FIELD, AUDIT_STATE, AUDIT_SYSTEM_SETTING, AUDIT_TARGET } from '../api/auditLogs'
 import { TASK_KIND_LABELS } from '../api/tasks'
 import { formatTime, parseServerTime } from './time'
+import { settingValue, SYSTEM_SETTING_SOURCE } from './systemSettings'
 
 export interface AuditFilterValues extends Omit<AuditLogListQuery, 'from_at' | 'to_at' | 'page' | 'page_size'> {
   fromDate?: string
@@ -66,6 +67,10 @@ export interface AuditSummaryRow { label: string; value: string }
 /** 审计摘要的唯一展示投影，不把摘要误称为全文差异，也不读取任意 JSON 字段。 */
 export function auditSummaryRows(summary: AuditSummary, action?: AuditAction): AuditSummaryRow[] {
   const rows: AuditSummaryRow[] = [{ label: '变更字段', value: summary.changed_fields.map((field) => AUDIT_FIELD[field]).join('、') || '无字段变更 / 不适用' }]
+  if (action === 'system_settings.update') {
+    for (const change of summary.settings_changes ?? []) rows.push({ label: AUDIT_SYSTEM_SETTING[change.key], value: `有效值：${settingValue(change.before_effective)}（${SYSTEM_SETTING_SOURCE[change.before_source]}） → ${settingValue(change.after_effective)}（${SYSTEM_SETTING_SOURCE[change.after_source]}）；后台覆盖：${settingValue(change.before_override)} → ${settingValue(change.after_override)}` })
+    rows.push({ label: '设置生效规则', value: '保存后即时生效，无需重启；沿用部署值表示取消对应后台覆盖，不会修改环境变量或 .env。' })
+  }
   if (action === 'task.cancel_request') {
     if (summary.task_key) rows.push({ label: '任务执行标识', value: summary.task_key })
     if (summary.task_kind) rows.push({ label: '任务类型', value: summary.task_kind !== 'unknown' && Object.hasOwn(TASK_KIND_LABELS, summary.task_kind) ? TASK_KIND_LABELS[summary.task_kind] : '其他任务' })

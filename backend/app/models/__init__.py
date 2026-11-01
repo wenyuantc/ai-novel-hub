@@ -44,6 +44,7 @@ from app.models.entities import (
     WritingStyle,
 )
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
+from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 
 __all__ = [
@@ -93,6 +94,7 @@ __all__ = [
     "Skill",
     "SkillReference",
     "StoryMemory",
+    "SystemSettings",
     "Task",
     "TaskStatistic",
     "User",

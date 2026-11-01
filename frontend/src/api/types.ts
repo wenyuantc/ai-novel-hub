@@ -13,6 +13,65 @@ export interface AuthConfig {
   mcp_enabled?: boolean
 }
 
+export type SystemSettingBoolKey = 'registration_enabled' | 'auto_analyze_enabled' | 'mcp_enabled'
+export type SystemSettingIntKey = 'task_max_concurrency' | 'task_max_per_user' | 'open_api_rate_limit_per_minute'
+export type SystemSettingKey = SystemSettingBoolKey | SystemSettingIntKey
+export type SystemSettingSource = 'admin' | 'deployment' | 'default'
+
+interface SystemSettingItemBase {
+  source: SystemSettingSource
+  deployment_source: 'deployment' | 'default'
+  overridden: boolean
+  requires_restart: false
+}
+
+export interface SystemSettingBoolItem extends SystemSettingItemBase {
+  key: SystemSettingBoolKey
+  value: boolean
+  deployment_value: boolean
+  default_value: boolean
+}
+
+export interface SystemSettingIntItem extends SystemSettingItemBase {
+  key: SystemSettingIntKey
+  value: number
+  deployment_value: number
+  default_value: number
+}
+
+export type SystemSettingItem = SystemSettingBoolItem | SystemSettingIntItem
+
+export interface SystemSettings {
+  revision: number
+  updated_at: string | null
+  items: SystemSettingItem[]
+}
+
+/** 省略保持，null取消后台覆盖；false是明确关闭，不是恢复部署。 */
+export interface SystemSettingChanges {
+  registration_enabled?: boolean | null
+  task_max_concurrency?: number | null
+  task_max_per_user?: number | null
+  auto_analyze_enabled?: boolean | null
+  mcp_enabled?: boolean | null
+  open_api_rate_limit_per_minute?: number | null
+}
+
+export interface SystemSettingsUpdate {
+  revision: number
+  changes: SystemSettingChanges
+}
+
+export interface SystemSettingAuditChange {
+  key: SystemSettingKey
+  before_override: boolean | number | null
+  after_override: boolean | number | null
+  before_effective: boolean | number
+  after_effective: boolean | number
+  before_source: SystemSettingSource
+  after_source: SystemSettingSource
+}
+
 export interface Credentials {
   username: string
   password: string
@@ -64,6 +123,7 @@ export interface ResetPasswordRequest {
 // 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
 export type AuditAction =
   | 'task.cancel_request'
+  | 'system_settings.update'
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
   | 'project.update' | 'project.delete' | 'project.restore' | 'project.purge' | 'project.expire'
   | 'chapter.create' | 'chapter.create_from_outlines'
@@ -72,7 +132,7 @@ export type AuditAction =
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
   | 'skill.restore_builtin' | 'audit.cleanup'
-export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task'
+export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings'
 export type AuditResult = 'success' | 'failure'
 export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
 export type AuditField =
@@ -89,6 +149,7 @@ export interface AuditValueChange {
 }
 
 export interface AuditSummary {
+  settings_changes?: SystemSettingAuditChange[]
   changed_fields: AuditField[]
   changes: AuditValueChange[]
   word_count_before: number | null

@@ -30,6 +30,7 @@ from app.services import (
 )
 from app.services.book_import import service as book_import_service
 from app.services.project_transfer import importer as transfer_importer
+from app.services.system_settings_service import SystemSettingsManager
 from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
 
@@ -69,6 +70,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app_: FastAPI):
         # 表结构由 alembic upgrade head 先行建立（Docker 入口已保证）
+        await app_.state.system_settings.load()
         await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
         # 按 preset_key 同步内置写作风格（代码里改了预设，库里跟着更新）
         await style_service.sync_presets(app_.state.sessionmaker)
@@ -85,6 +87,7 @@ def create_app(
         try:
             yield
         finally:
+            await app_.state.system_settings.close()
             await app_.state.dashboard_sampler.stop()
             await app_.state.recycle_bin_cleaner.stop()
             if start_task_engine:
@@ -97,6 +100,9 @@ def create_app(
     app.state.sessionmaker = create_sessionmaker(engine)
     app.state.cipher = SecretCipher(settings.encryption_key)
     app.state.provider_factory = provider_factory or create_provider
+    app.state.system_settings = SystemSettingsManager(
+        settings, app.state.sessionmaker, lambda: app.state.task_engine.notify(),
+    )
     app.state.task_engine = TaskEngine(
         TaskContext(
             sessionmaker=app.state.sessionmaker,

@@ -1,6 +1,7 @@
 import { adminDashboardApi } from '../../api/adminDashboard'
 import { ApiError, errorMessage } from '../../api/client'
 import type { AdminDashboardDays, AdminDashboardHistory, AdminDashboardOverview, AdminDashboardTasks } from '../../api/types'
+import { startVisiblePolling, type PollingVisibility } from '../../utils/visiblePolling'
 
 interface DashboardData {
   overview: AdminDashboardOverview
@@ -128,25 +129,7 @@ export class DashboardController {
   }
 }
 
-interface DashboardVisibility {
-  readonly visibilityState: DocumentVisibilityState
-  addEventListener(type: 'visibilitychange', listener: () => void): void
-  removeEventListener(type: 'visibilitychange', listener: () => void): void
-}
-
 /** 只调度可见页面；关闭开关/卸载调用返回值即可彻底移除计时器与监听。 */
-export function startDashboardPolling(refresh: () => void, visibility: DashboardVisibility, interval = 60_000) {
-  let timer: ReturnType<typeof setInterval> | undefined
-  const stopTimer = () => { if (timer !== undefined) clearInterval(timer); timer = undefined }
-  const schedule = () => {
-    stopTimer()
-    if (visibility.visibilityState === 'visible') timer = setInterval(refresh, interval)
-  }
-  const onVisibility = () => {
-    if (visibility.visibilityState === 'visible') refresh()
-    schedule()
-  }
-  schedule()
-  visibility.addEventListener('visibilitychange', onVisibility)
-  return () => { stopTimer(); visibility.removeEventListener('visibilitychange', onVisibility) }
+export function startDashboardPolling(refresh: () => void, visibility: PollingVisibility, interval = 60_000) {
+  return startVisiblePolling(refresh, visibility, interval)
 }

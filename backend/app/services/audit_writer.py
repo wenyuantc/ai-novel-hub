@@ -168,6 +168,8 @@ class AuditOperation:
     def _event(self, result, *, code=None):
         # 完整再校验，防止后续服务直接赋值绕过有界 JSON 白名单。
         summary = AuditSummary.model_validate(self.summary.model_dump()).model_dump(mode="json")
+        if summary["settings_changes"] and self.values["action"] != "system_settings.update":
+            raise ValueError("设置变更摘要仅允许用于系统设置修改")
         if self.values["action"] != "task.cancel_request" and any(
             summary[key] is not None for key in ("task_key", "task_kind", "accepted_from_status", "cancel_reason")
         ):
