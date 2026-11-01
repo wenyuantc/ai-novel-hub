@@ -83,7 +83,7 @@ async def get_owned_import(db: AsyncSession, user_id: int, import_id: int, *, lo
     if lock:
         # PostgreSQL 行锁防止并发开始导入；SQLite 忽略 FOR UPDATE
         stmt = stmt.with_for_update()
-    record = await db.scalar(stmt)
+    record = await db.scalar(stmt.execution_options(populate_existing=True))
     if record is None:
         raise NotFoundError(NOT_FOUND)
     return record
@@ -290,7 +290,9 @@ async def estimate(db: AsyncSession, user_id: int, import_id: int, req: Estimate
 
 
 async def start(db: AsyncSession, engine: "TaskEngine", user_id: int, import_id: int, req: StartRequest) -> StartResult:
-    record = await get_owned_import(db, user_id, import_id, lock=True)
+    from app.services.quota_service import check_project_creation
+
+    record = await get_owned_import(db, user_id, import_id)
     if record.revision != req.revision:
         raise _stale()
     a, b, c, d = _ranges(len(record.chapters), req.import_range, req.reverse_range)
@@ -311,6 +313,10 @@ async def start(db: AsyncSession, engine: "TaskEngine", user_id: int, import_id:
 
     # 3000 章 / 500 万字的正文拼接与字数统计放到线程里
     contents = await anyio.to_thread.run_sync(bodies)
+    await check_project_creation(db, user_id)
+    record = await get_owned_import(db, user_id, import_id, lock=True)
+    if record.revision != req.revision:
+        raise _stale()
     try:
         project = Project(
             user_id=user_id,

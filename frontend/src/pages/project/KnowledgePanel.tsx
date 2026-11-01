@@ -44,7 +44,7 @@ import { splitPane, splitRow } from '../../utils/layout'
 export default function KnowledgePanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const track = useTasksStore((s) => s.track)
 
@@ -108,11 +108,15 @@ export default function KnowledgePanel() {
   }
 
   const act = async (id: number, fn: () => Promise<unknown>, ok: string) => {
+    if (!canEditNow()) return
     setActing(id)
     try {
+      if (!canEditNow()) return
       await fn()
+      if (!canEditNow()) return
       message.success(ok)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setActing(null)
@@ -122,11 +126,15 @@ export default function KnowledgePanel() {
   }
 
   const toggleInject = async (doc: KbDocument, inject: boolean) => {
+    if (!canEditNow()) return
     setActing(doc.id)
     try {
+      if (!canEditNow()) return
       const updated = await kbApi.setInject(pid, doc.id, inject)
+      if (!canEditNow()) return
       setDocs((prev) => (prev ?? []).map((d) => (d.id === updated.id ? updated : d)))
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setActing(null)
@@ -175,7 +183,7 @@ export default function KnowledgePanel() {
           size="small"
           checked={d.inject}
           loading={acting === d.id}
-          onChange={(v) => void toggleInject(d, v)}
+          onChange={(v) => void toggleInject(d, v)} disabled={!canEdit}
         />
       ),
     },
@@ -214,7 +222,7 @@ export default function KnowledgePanel() {
             okButtonProps={{ danger: true }}
             onConfirm={() => act(d.id, () => kbApi.remove(pid, d.id), '已删除')}
           >
-            <Button type="link" size="small" danger disabled={isDocBusy(d.status)}>
+            <Button type="link" size="small" danger disabled={!canEdit || (isDocBusy(d.status))}>
               删除
             </Button>
           </Popconfirm>

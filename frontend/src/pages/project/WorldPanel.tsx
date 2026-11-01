@@ -31,7 +31,7 @@ const CATEGORY_OPTIONS = WORLD_CATEGORIES.map((c) => ({ value: c, label: WORLD_C
 
 export default function WorldPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => worldApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
@@ -57,7 +57,9 @@ export default function WorldPanel() {
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     const body: WorldSettingInput = {
       title: v.title.trim(),
       content: v.content ?? '',
@@ -66,12 +68,15 @@ export default function WorldPanel() {
     }
     setSaving(true)
     try {
+      if (!canEditNow()) return
       if (editing) await worldApi.update(pid, editing.id, body)
       else await worldApi.create(pid, body)
+      if (!canEditNow()) return
       message.success('已保存')
       setModalOpen(false)
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -79,11 +84,15 @@ export default function WorldPanel() {
   }
 
   const handleDelete = async (item: WorldSetting) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await worldApi.remove(pid, item.id)
+      if (!canEditNow()) return
       message.success('已删除')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -96,7 +105,7 @@ export default function WorldPanel() {
           {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
             AI 重新生成
           </Button>)}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
             新增条目
           </Button>
         </Space>
@@ -129,17 +138,16 @@ export default function WorldPanel() {
                     <List.Item
                       actions={[
                         <Button key="edit" type="link" size="small" onClick={() => openEdit(w)}>
-                          编辑
-                        </Button>,
+                          {canEdit ? '编辑' : '查看'}</Button>,
                         <Popconfirm
                           key="del"
                           title="删除该条目？"
                           okText="删除"
                           cancelText="取消"
-                          okButtonProps={{ danger: true }}
+                          okButtonProps={{ danger: true, disabled: !canEdit }}
                           onConfirm={() => handleDelete(w)}
                         >
-                          <Button type="link" size="small" danger>
+                          <Button type="link" size="small" danger disabled={!canEdit}>
                             删除
                           </Button>
                         </Popconfirm>,
@@ -171,6 +179,7 @@ export default function WorldPanel() {
       </Spin>
 
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title={editing ? '编辑世界观条目' : '新增世界观条目'}
         open={modalOpen}
         onOk={() => void handleSave()}
@@ -181,7 +190,7 @@ export default function WorldPanel() {
         width={720}
         forceRender
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" disabled={!canEdit}>
           <Form.Item
             name="title"
             label="标题"

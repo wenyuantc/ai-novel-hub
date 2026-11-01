@@ -13,6 +13,7 @@ from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotF
 from app.models import Chapter, ChapterVersion, Project, Task, User
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.recycle_bin import RecycleProjectList, RecycleProjectOut
+from app.services import authorization_service as authz
 from app.services import project_lifecycle, retrieval_service, task_service, task_statistics_service
 from app.services.admin_service import _escape_like
 from app.services.audit_writer import AuditOperation
@@ -26,12 +27,12 @@ CLEANUP_INTERVAL = 3600.0
 CLEANUP_BATCH = 100
 
 
-async def _actor(db: AsyncSession, actor_id: int, *, admin: bool = False) -> User:
+async def _actor(db: AsyncSession, actor_id: int, *, admin: bool = False, permission: str | None = None) -> User:
     actor = await db.scalar(select(User).where(User.id == actor_id).execution_options(populate_existing=True))
     if actor is None or not actor.is_active:
         raise UnauthorizedError("未登录或登录已过期")
-    if admin and not actor.is_admin:
-        raise ForbiddenError("需要管理员权限")
+    if admin:
+        await authz.require(db, actor_id, permission)
     return actor
 
 
@@ -56,21 +57,24 @@ async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: 
         async with AuditOperation(
             db, actor_id, "project.delete", "project", project_id, project_id=project_id
         ) as audit:
-            project = await get_manageable_project(db, actor_id, project_id, lock=True)
+            project = await get_manageable_project(db, actor_id, project_id, lock=True, permission="projects.recycle")
             await _actor(db, actor_id)
             audit.target(project)
             project.deletion_started_at = project_lifecycle.now_utc()
             project.deletion_token = token
             started = True
+            owner_id = project.user_id
             await db.commit()
             cancelled = await task_service.stop_project_tasks(db, engine, project_id)
             await db.rollback()
+            if owner_id != actor_id:
+                await authz.require(db, actor_id, "projects.recycle", write=True, targets=(owner_id,))
             project = await project_lifecycle.lock_record(db, project_id)
             if project.deletion_token != token or project.deleted_at is not None:
                 raise ConflictError("作品状态已变化，请刷新后重试")
             actor = await _actor(db, actor_id)
-            if project.user_id != actor.id and not actor.is_admin:
-                raise ForbiddenError("需要管理员权限")
+            if project.user_id != actor.id:
+                await authz.require(db, actor_id, "projects.recycle")
             await _ensure_idle(db, engine, project_id)
             stamp = project_lifecycle.now_utc()
             if project.last_deleted_at is not None:
@@ -182,7 +186,10 @@ def _check_record(project: Project, deleted_at: datetime) -> None:
 
 
 async def restore(db: AsyncSession, actor_id: int, project_id: int, deleted_at: datetime) -> None:
-    await _actor(db, actor_id, admin=True)
+    record = await project_lifecycle.load_record(db, project_id)
+    if record is None:
+        raise NotFoundError("项目不存在")
+    await authz.require(db, actor_id, "recycle_bin.restore", write=True, targets=(record.user_id,))
     async with AuditOperation(
         db, actor_id, "project.restore", "project", project_id, project_id=project_id, include_own_project=True
     ) as audit:
@@ -192,7 +199,7 @@ async def restore(db: AsyncSession, actor_id: int, project_id: int, deleted_at: 
             raise ConflictError("作品已超过 30 天保留期，无法恢复", extra={"code": "recycle_expired"})
         if await db.get(User, project.user_id) is None:
             raise ConflictError("所属用户不存在，无法恢复作品")
-        await _actor(db, actor_id, admin=True)
+        await _actor(db, actor_id, admin=True, permission="recycle_bin.restore")
         audit.target(project)
         audit.summary.lifecycle_action = "restore"
         project.deleted_at = None
@@ -216,7 +223,10 @@ async def purge(
     if not system:
         if actor_id is None:
             raise ForbiddenError("需要管理员权限")
-        await _actor(db, actor_id, admin=True)
+        record = await project_lifecycle.load_record(db, project_id)
+        if record is None:
+            raise NotFoundError("项目不存在")
+        await authz.require(db, actor_id, "recycle_bin.purge", write=True, targets=(record.user_id,))
     action = "project.expire" if system else "project.purge"
     async with AuditOperation(
         db,
@@ -234,7 +244,7 @@ async def purge(
             if project_lifecycle.expires_at(project.deleted_at) > cutoff:
                 raise ConflictError("作品尚未到期")
         else:
-            await _actor(db, actor_id, admin=True)
+            await _actor(db, actor_id, admin=True, permission="recycle_bin.purge")
             if title != project.title:
                 raise BadRequestError("确认名称与作品名称不一致")
         await _ensure_idle(db, engine, project_id)

@@ -2,10 +2,11 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BeforeValidator
 
-from app.core.deps import AdminUser, DbDep
+from app.core.deps import DbDep, require_permission
+from app.models import User
 from app.schemas.admin_dashboard import (
     AdminDashboardHistory,
     AdminDashboardOverview,
@@ -14,21 +15,23 @@ from app.schemas.admin_dashboard import (
 )
 from app.services import admin_dashboard_service as svc
 
+PermissionDashboardRead = Annotated[User, Depends(require_permission("dashboard.read"))]
+
 router = APIRouter(prefix="/admin/dashboard", tags=["admin"])
 
 
 @router.get("/overview", response_model=AdminDashboardOverview)
-async def overview(admin: AdminUser, db: DbDep) -> AdminDashboardOverview:
+async def overview(admin: PermissionDashboardRead, db: DbDep) -> AdminDashboardOverview:
     return await svc.overview(db)
 
 
 @router.get("/tasks", response_model=AdminDashboardTasks)
-async def tasks(admin: AdminUser, db: DbDep) -> AdminDashboardTasks:
+async def tasks(admin: PermissionDashboardRead, db: DbDep) -> AdminDashboardTasks:
     return await svc.tasks(db)
 
 
 @router.get("/history", response_model=AdminDashboardHistory)
 async def history(
-    admin: AdminUser, db: DbDep, days: Annotated[DashboardDays, BeforeValidator(int), Query()] = 30
+    admin: PermissionDashboardRead, db: DbDep, days: Annotated[DashboardDays, BeforeValidator(int), Query()] = 30
 ) -> AdminDashboardHistory:
     return await svc.history(db, days)

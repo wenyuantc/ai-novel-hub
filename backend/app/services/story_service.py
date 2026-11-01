@@ -99,7 +99,7 @@ async def _get_item(db: AsyncSession, kind: StoryKind, project_id: int, item_id:
 async def create_owned(
     db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, data: BaseModel, *, manage: bool = False
 ) -> Any:
-    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id, lock=True)
+    await _write_project(db, user_id, project_id, manage=manage)
     values = data.model_dump()
     if kind is CHARACTERS:
         apply_character_defaults(values)
@@ -122,7 +122,7 @@ async def update_owned(
     *,
     manage: bool = False,
 ) -> Any:
-    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id, lock=True)
+    await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     for field, value in data.model_dump(exclude_unset=True).items():
         if value is not None:
@@ -135,7 +135,7 @@ async def update_owned(
 async def delete_owned(
     db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int, *, manage: bool = False
 ) -> None:
-    await (get_manageable_project if manage else get_owned_project)(db, user_id, project_id, lock=True)
+    await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     await db.delete(item)
     await db.commit()
@@ -202,3 +202,9 @@ def format_outlines(items: list[Outline]) -> str:
             lines.append(f"第{o.volume_no}卷" + (f" {o.volume_title}" if o.volume_title else ""))
         lines.append(f"  第{o.chapter_no}章 {o.title}：{o.summary.strip()}")
     return "\n".join(lines)
+
+
+async def _write_project(db: AsyncSession, user_id: int, project_id: int, *, manage: bool):
+    if manage:
+        return await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    return await get_owned_project(db, user_id, project_id, lock=True)

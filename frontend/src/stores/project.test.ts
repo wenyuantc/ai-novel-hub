@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { projectApi } from '../api/projects'
 import { ApiError } from '../api/client'
 import type { Project } from '../api/types'
 import { useProjectStore } from './project'
+import { useAuthStore } from './auth'
+beforeEach(() => useAuthStore.setState({status: 'authenticated', user: {id: 1,username: 'root',created_at: '',is_admin: true,is_super_admin: true,effective_permissions: [],roles: [],authorization_revision: 1}}))
 
 function project(id: number): Project {
   return { id, owner: { id, username: `user${id}` }, title: `书${id}`, genre: '', premise: '', status: 'planning', created_at: '', updated_at: '', chapter_count: 0, total_words: 0, cover_updated_at: null, auto_analyze: true, wizard_progress: { done: [], skipped: [], current: null }, default_style_id: null, default_style: null, synopsis: '', theme: '', tags: [], selling_points: '', audience: '', target_words: null, last_edited_chapter_id: null, reading: null }
@@ -17,6 +19,32 @@ function deferred<T>() {
 afterEach(() => { useProjectStore.getState().reset(); vi.restoreAllMocks() })
 
 describe('当前项目归属隔离', () => {
+  it('同actor撤写保留合法只读内容，撤读立即清空，迟到刷新不能复活', async () => {
+    const foreign = project(2)
+    const slow = deferred<Project>()
+    vi.spyOn(projectApi, 'get').mockResolvedValueOnce(foreign).mockReturnValueOnce(slow.promise)
+    const actor = useAuthStore.getState().user!
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, effective_permissions: ['projects.read', 'projects.edit'] } })
+    await useProjectStore.getState().load(2)
+    const refresh = useProjectStore.getState().refresh()
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, authorization_revision: 2, effective_permissions: ['projects.read'] } })
+    expect(useProjectStore.getState().project).toEqual(foreign)
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, authorization_revision: 3, effective_permissions: [] } })
+    expect(useProjectStore.getState().project).toBeNull()
+    slow.resolve(foreign)
+    await refresh
+    useProjectStore.getState().setProject(foreign)
+    expect(useProjectStore.getState().project).toBeNull()
+  })
+  it('未知归属的初次加载在撤读后返回，也不能交付他人内容', async () => {
+    const slow = deferred<Project>()
+    vi.spyOn(projectApi, 'get').mockReturnValueOnce(slow.promise)
+    const pending = useProjectStore.getState().load(2)
+    const actor = useAuthStore.getState().user!
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, effective_permissions: [], authorization_revision: 2 } })
+    slow.resolve(project(2)); await pending
+    expect(useProjectStore.getState()).toMatchObject({ project: null, loading: false, error: '没有读取此作品的权限' })
+  })
   it('重新读取或刷新明确404时撤下旧项目，迟到保存不能复活已删除内容', async () => {
     const get = vi.spyOn(projectApi, 'get').mockResolvedValueOnce(project(1)).mockRejectedValueOnce(new ApiError(404, '项目不存在'))
     await useProjectStore.getState().load(1)

@@ -57,6 +57,7 @@ async def test_details_permissions_missing_target_and_zero_resources(app, client
     body = response.json()
     assert set(body) == {
         "id", "username", "is_admin", "is_active", "created_at", "project_count", "last_login_at", "usage",
+        "is_super_admin", "is_management_account", "roles", "authorization_revision",
     }
     assert body["username"] == "never_logged_in" and body["last_login_at"] is None
     assert body["project_count"] == 0
@@ -165,7 +166,10 @@ async def test_successful_registration_and_login_are_the_only_login_time_updates
     user = await register(client)
     first = await stored_user(app, user["id"])
     assert utc(first.last_login_at) == T0
-    assert set(user) == {"id", "username", "is_admin", "created_at"}
+    assert set(user) == {
+        "id", "username", "is_admin", "created_at", "is_super_admin", "roles",
+        "effective_permissions", "authorization_revision",
+    }
     clock(monkeypatch, T1)
     assert (await client.get("/api/v1/auth/me")).status_code == 200
     changed = await client.post(

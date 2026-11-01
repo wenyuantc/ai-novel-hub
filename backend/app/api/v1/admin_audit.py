@@ -1,8 +1,9 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 
-from app.core.deps import AdminUser, DbDep, SettingsDep
+from app.core.deps import DbDep, SettingsDep, require_permission
+from app.models import User
 from app.schemas.audit import (
     AuditCleanupOut,
     AuditCleanupPreview,
@@ -14,18 +15,23 @@ from app.schemas.audit import (
 )
 from app.services import audit_service as svc
 
+PermissionAuditRead = Annotated[User, Depends(require_permission("audit.read"))]
+PermissionAuditCleanup = Annotated[User, Depends(require_permission("audit.cleanup"))]
+
 router = APIRouter(prefix="/admin/audit-logs", tags=["admin"])
 
 
 @router.get("", response_model=AuditLogList)
-async def list_logs(admin: AdminUser, db: DbDep, filters: Annotated[AuditLogFilters, Query()]) -> AuditLogList:
+async def list_logs(
+    admin: PermissionAuditRead, db: DbDep, filters: Annotated[AuditLogFilters, Query()]
+) -> AuditLogList:
     return await svc.list_logs(db, filters)
 
 
 @router.post("/cleanup-preview", response_model=AuditCleanupPreview)
 async def preview_cleanup(
     body: AuditDateRange,
-    admin: AdminUser,
+    admin: PermissionAuditCleanup,
     db: DbDep,
     settings: SettingsDep,
 ) -> AuditCleanupPreview:
@@ -35,7 +41,7 @@ async def preview_cleanup(
 @router.post("/cleanup", response_model=AuditCleanupOut)
 async def cleanup(
     body: AuditCleanupRequest,
-    admin: AdminUser,
+    admin: PermissionAuditCleanup,
     db: DbDep,
     settings: SettingsDep,
 ) -> AuditCleanupOut:
@@ -43,5 +49,5 @@ async def cleanup(
 
 
 @router.get("/{log_id}", response_model=AuditLogDetail)
-async def get_log(log_id: Annotated[int, Path(gt=0)], admin: AdminUser, db: DbDep) -> AuditLogDetail:
+async def get_log(log_id: Annotated[int, Path(gt=0)], admin: PermissionAuditRead, db: DbDep) -> AuditLogDetail:
     return await svc.get_log(db, log_id)

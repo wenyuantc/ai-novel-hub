@@ -55,9 +55,10 @@ async def get_project_chapter(
 
 
 async def get_manageable_chapter(
-    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, lock: bool = False
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, lock: bool = False,
+    permission: str = "projects.read",
 ) -> Chapter:
-    await get_manageable_project(db, user_id, project_id, lock=lock)
+    await get_manageable_project(db, user_id, project_id, lock=lock, permission=permission)
     return await _chapter_in_project(db, project_id, chapter_id)
 
 
@@ -90,7 +91,7 @@ async def _next_chapter_no(db: AsyncSession, project_id: int) -> int:
 
 async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: ChapterCreate) -> Chapter:
     async with AuditOperation(db, user_id, "chapter.create", "chapter", None, project_id=project_id) as audit:
-        await get_manageable_project(db, user_id, project_id, lock=True)
+        await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
         title = (data.title or "").strip()
         chapter_no = data.chapter_no
         if data.outline_id is not None:
@@ -129,7 +130,7 @@ async def create_from_outlines(
     async with AuditOperation(
         db, user_id, "chapter.create_from_outlines", "project", None, project_id=project_id
     ) as audit:
-        project = await get_manageable_project(db, user_id, project_id, lock=True)
+        project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
         audit.target(project)
         stmt = select(Outline).where(Outline.project_id == project_id)
         if data.outline_ids is not None:
@@ -172,9 +173,11 @@ async def update_chapter(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: ChapterUpdate
 ) -> Chapter:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
+        chapter = await get_manageable_chapter(
+            db, user_id, project_id, chapter_id, lock=True, permission="projects.edit"
+        )
         audit.target(chapter)
-        project = await get_manageable_project(db, user_id, project_id, lock=True)
+        project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
         audit.track(chapter, data.model_fields_set)
         fields = data.model_fields_set
         if project.user_id != user_id:
@@ -227,7 +230,9 @@ async def update_chapter(
 
 async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> None:
     async with AuditOperation(db, user_id, "chapter.delete", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
+        chapter = await get_manageable_chapter(
+            db, user_id, project_id, chapter_id, lock=True, permission="projects.edit"
+        )
         audit.target(chapter)
         audit.summary.word_count_before = chapter.word_count
         if audit.enabled:

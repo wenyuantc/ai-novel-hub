@@ -137,30 +137,44 @@ async def change_password(db: AsyncSession, user: User, data: ChangePasswordRequ
 
 
 async def bootstrap_admin(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings) -> None:
-    """按 ADMIN_USERNAME / ADMIN_PASSWORD 引导管理员。
+    """显式部署引导：启用超管而不覆盖密码，真实变更写窄内部系统审计。"""
+    from app.schemas.audit import RbacAuditChange
+    from app.services import authorization_service as authz
+    from app.services.audit_writer import AuditOperation
 
-    账号不存在则创建为管理员；已存在则确保为启用中的管理员，**不覆盖密码**。
-    不受 REGISTRATION_ENABLED 影响。日志只记录用户名。
-    """
     creds = settings.admin_credentials
     if creds is None:
         return
-    async with sessionmaker() as db:
-        user = await db.scalar(select(User).where(User.username == creds.username))
-        if user is None:
-            try:
-                await create_user(db, creds, is_admin=True)
-                logger.info("已创建引导管理员账号：%s", creds.username)
+    await authz.initialize(sessionmaker)
+    # 与自主注册的同名竞争只重读已确认的唯一键结果，不重放成功业务。
+    for attempt in range(2):
+        async with sessionmaker() as db:
+            await authz.gate(db)
+            user = await db.scalar(select(User).where(User.username == creds.username))
+            if user is not None and user.is_admin and user.is_active:
+                logger.info("引导管理员账号已存在：%s（不修改密码）", creds.username)
                 return
+            try:
+                async with AuditOperation(db, None, "user.roles.bootstrap", "user", bootstrap=True) as audit:
+                    before = []
+                    if user is None:
+                        user = await create_user_uncommitted(db, creds, is_admin=True)
+                    else:
+                        await authz.lock_users(db, user.id)
+                        before = [role.id for role in (await authz.snapshot(db, user.id)).roles]
+                        user.is_admin = True
+                        user.is_active = True
+                    await db.flush()
+                    after = [role.id for role in (await authz.snapshot(db, user.id)).roles]
+                    audit.target(user)
+                    audit.summary.rbac_change = RbacAuditChange(
+                        role_ids_before=before[:100], role_ids_after=after[:100],
+                        ids_truncated=len(before) > 100 or len(after) > 100,
+                    )
+                    await authz.advance(db)
+                    await audit.commit()
+                    logger.info("已将账号 %s 设为启用中的超级管理员（不修改已有密码）", creds.username)
+                    return
             except ConflictError:
-                # 多实例同时启动时可能被其他进程抢先创建，转为提升已有账号
-                user = await db.scalar(select(User).where(User.username == creds.username))
-                if user is None:
+                if attempt:
                     raise
-        if user.is_admin and user.is_active:
-            logger.info("引导管理员账号已存在：%s（不修改密码）", creds.username)
-            return
-        user.is_admin = True
-        user.is_active = True
-        await db.commit()
-        logger.info("已将账号 %s 设为启用中的管理员（不修改密码）", creds.username)

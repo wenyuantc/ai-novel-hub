@@ -171,7 +171,7 @@ async def list_types(db: AsyncSession, user_id: int, project_id: int) -> list[Re
 async def create_type(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipTypeCreate
 ) -> RelationshipTypeOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     ra, rb = data.role_a.strip(), data.role_b.strip()
     if not ra or not rb:
         raise BadRequestError("称呼不能为空")
@@ -189,7 +189,7 @@ async def create_type(
 
 
 async def delete_type(db: AsyncSession, user_id: int, project_id: int, type_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     t = await db.scalar(select(RelationshipType).where(RelationshipType.id == type_id, _visible_types(project_id)))
     if t is None:
         raise NotFoundError("关系类型不存在")
@@ -475,7 +475,7 @@ def _create_kwargs(data: RelationshipCreate) -> dict[str, Any]:
 async def create_relationship(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipCreate
 ) -> RelationshipOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     try:
         rel = await create_relation(db, project_id, **_create_kwargs(data))
     except ConflictError:
@@ -489,7 +489,7 @@ async def create_relationships(
     db: AsyncSession, user_id: int, project_id: int, data: RelationshipBatchCreate
 ) -> list[RelationshipOut]:
     """批量新建（AI 关系建议预览确认后保存），单事务：任一条失败则全部不写入。"""
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     try:
         rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
     except ConflictError:
@@ -502,7 +502,7 @@ async def create_relationships(
 async def update_relationship(
     db: AsyncSession, user_id: int, project_id: int, rel_id: int, data: RelationshipUpdate
 ) -> RelationshipOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     rel = await get_owned_relationship(db, user_id, project_id, rel_id)
     values: dict[str, Any] = {}
     if data.a_id is not None:
@@ -520,7 +520,7 @@ async def update_relationship(
 
 
 async def delete_relationship(db: AsyncSession, user_id: int, project_id: int, rel_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     rel = await get_owned_relationship(db, user_id, project_id, rel_id)
     await db.delete(rel)
     await db.commit()
@@ -540,7 +540,7 @@ async def create_character_with_relations(
     db: AsyncSession, user_id: int, project_id: int, data: CharacterWithRelations
 ) -> dict[str, Any]:
     """新建一个角色并同时建立勾选的关系与职业挂接（单事务）。subject_is_a 为真时新角色是 role_a 一方。"""
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     character = await story_service.new_character(db, project_id, data.character.model_dump())
     rels = []
     for d in data.relations:

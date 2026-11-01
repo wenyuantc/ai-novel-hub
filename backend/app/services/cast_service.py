@@ -149,7 +149,9 @@ async def set_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: 
     async with AuditOperation(
         db, user_id, "chapter.cast.update", "chapter", chapter_id, project_id=project_id
     ) as audit:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True)
+        chapter = await get_manageable_chapter(
+            db, user_id, project_id, chapter_id, lock=True, permission="projects.edit"
+        )
         audit.target(chapter)
         previous_ids = await cast_ids(db, chapter.id) if audit.enabled else []
         wanted = list(dict.fromkeys(ids))

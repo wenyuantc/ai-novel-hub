@@ -43,11 +43,16 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 
 __all__ = [
+    "AuthorizationState",
+    "Role",
+    "UserQuota",
+    "UserRole",
     "AdminAuditLog",
     "AgentChange",
     "AgentConversation",

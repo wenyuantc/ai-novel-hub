@@ -865,8 +865,11 @@ class _Importer:
 
 
 async def import_backup(db: AsyncSession, engine, user_id: int, backup: Backup, title: str | None) -> ImportResult:
+    from app.services.quota_service import check_project_creation
+
     importer = _Importer(db, user_id, backup)
     try:
+        await check_project_creation(db, user_id)
         project = await importer.run(title)
         await db.commit()
     except _RowError as exc:

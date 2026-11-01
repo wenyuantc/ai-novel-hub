@@ -8,7 +8,7 @@ import type { RecycleProject } from '../../api/types'
 const state = vi.hoisted(() => ({ mobile: true, admin: true, loading: false, error: null as string | null, items: [] as import('../../api/types').RecycleProject[] }))
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => state.mobile, useModalWidth: (width: number | string) => state.mobile ? 'calc(100vw - 24px)' : width }))
 vi.mock('../../hooks/useLoader', () => ({ useLoader: () => ({ data: { items: state.items, total: state.items.length, page: 1 }, loading: state.loading, error: state.error, reload: () => {} }) }))
-vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (value: unknown) => unknown) => select({ status: 'authenticated', user: { id: 1, username: '管理员', is_admin: state.admin }, mcpEnabled: false, logout: async () => {} }) }))
+vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (value: unknown) => unknown) => select({ status: 'authenticated', user: { id: 1, username: '管理员', is_admin: state.admin, is_super_admin: state.admin, effective_permissions: [], authorization_revision: 1, roles: [] }, mcpEnabled: false, logout: async () => {} }) }))
 vi.mock('../../stores/project', () => ({ useProjectStore: (select: (value: unknown) => unknown) => select({ project: null }) }))
 vi.mock('../../stores/tasks', () => ({ useTasksStore: (select: (value: unknown) => unknown) => select({ active: [], loaded: true }) }))
 vi.mock('../TaskPanel', () => ({ default: () => null }))

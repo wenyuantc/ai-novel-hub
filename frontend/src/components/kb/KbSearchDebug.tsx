@@ -5,6 +5,7 @@ import { kbApi } from '../../api/kb'
 import type { KbSearchResult } from '../../api/types'
 import ScoreTags from './ScoreTags'
 import SearchResultSummary from './SearchResultSummary'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 interface Props {
   projectId: number
@@ -13,6 +14,7 @@ interface Props {
 /** 知识库检索调试：输入查询（可临时覆盖条数与最低分），列出命中的文件、标题路径、内容与三项分数。 */
 export default function KbSearchDebug({ projectId }: Props) {
   const { message } = App.useApp()
+  const { canReadNow } = useProjectAccess(projectId)
   const [query, setQuery] = useState('')
   const [topK, setTopK] = useState<number | null>(null)
   const [minScore, setMinScore] = useState<number | null>(null)
@@ -20,6 +22,7 @@ export default function KbSearchDebug({ projectId }: Props) {
   const [result, setResult] = useState<KbSearchResult | null>(null)
 
   const run = async () => {
+    if (!canReadNow()) return
     const q = query.trim()
     if (!q) {
       message.warning('请输入检索内容')
@@ -27,11 +30,12 @@ export default function KbSearchDebug({ projectId }: Props) {
     }
     setLoading(true)
     try {
-      setResult(await kbApi.search(projectId, { query: q, top_k: topK, min_score: minScore }))
+      const result = await kbApi.search(projectId, { query: q, top_k: topK, min_score: minScore })
+      if (canReadNow()) setResult(result)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (canReadNow()) message.error(errorMessage(err))
     } finally {
-      setLoading(false)
+      if (canReadNow()) setLoading(false)
     }
   }
 

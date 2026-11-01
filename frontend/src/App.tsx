@@ -2,7 +2,7 @@ import { App as AntApp, ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { useEffect } from 'react'
 import { RouterProvider } from 'react-router-dom'
-import { setUnauthorizedHandler } from './api/client'
+import { setUnauthorizedHandler, setPermissionDeniedHandler } from './api/client'
 import { router } from './router'
 import { useAIConfigStore } from './stores/aiConfigs'
 import { useAuthStore } from './stores/auth'
@@ -24,8 +24,9 @@ export default function App() {
   useEffect(() => {
     // 任意接口返回 401：清空会话，RequireAuth 会跳转到登录页
     setUnauthorizedHandler(() => useAuthStore.getState().clear())
+    setPermissionDeniedHandler(() => { void useAuthStore.getState().refreshAuthorization() })
     void init()
-    return () => setUnauthorizedHandler(null)
+    return () => { setUnauthorizedHandler(null); setPermissionDeniedHandler(null) }
   }, [init])
 
   useEffect(() => {
@@ -33,17 +34,31 @@ export default function App() {
     return () => { stop(); useAuthStore.getState().cancelConfig() }
   }, [])
 
+  useEffect(() => {
+    if (userId === undefined) return
+    const stop = startPublicConfigPolling(() => { void useAuthStore.getState().refreshAuthorization() }, document, window)
+    return () => { stop(); useAuthStore.getState().cancelAuthorization() }
+  }, [userId])
+
   // 跟随系统：监听 prefers-color-scheme 变化
   useEffect(() => watchSystemTheme(), [])
 
-  // 切换/退出账户时清空与用户相关的缓存
+  // 在账号变更的同一通知中清空缓存，不能在新页面load之后再由父effect作废它。
   useEffect(() => {
-    useAIConfigStore.getState().reset()
-    useProjectStore.getState().reset()
-    useTasksStore.getState().reset()
-    useStyleStore.getState().reset()
-    useSkillStore.getState().reset()
-  }, [userId])
+    const reset = () => {
+      useAIConfigStore.getState().reset()
+      useProjectStore.getState().reset()
+      useTasksStore.getState().reset()
+      useStyleStore.getState().reset()
+      useSkillStore.getState().reset()
+    }
+    reset()
+    let owner = useAuthStore.getState().user?.id
+    return useAuthStore.subscribe((auth) => {
+      const next = auth.user?.id
+      if (next !== owner) { owner = next; reset() }
+    })
+  }, [])
 
   return (
     <ConfigProvider

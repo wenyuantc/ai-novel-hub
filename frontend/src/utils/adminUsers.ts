@@ -1,6 +1,7 @@
 import type { AdminUser, User } from '../api/types'
 import type { AuthStatus } from '../stores/auth'
 import { ApiError } from '../api/client'
+import { can, hasManagementAccess, isSuperAdmin } from './permissions'
 
 /** RequireAdmin 的判定：加载中 / 去登录 / 回首页 / 放行。 */
 export type AdminGuardResult = 'loading' | 'login' | 'home' | 'allow'
@@ -8,14 +9,13 @@ export type AdminGuardResult = 'loading' | 'login' | 'home' | 'allow'
 export function adminGuard(status: AuthStatus, user: User | null): AdminGuardResult {
   if (status === 'unknown') return 'loading'
   if (status === 'anonymous' || !user) return 'login'
-  return user.is_admin ? 'allow' : 'home'
+  return hasManagementAccess(user) ? 'allow' : 'home'
 }
 
 export interface RowActions {
   isSelf: boolean
   canResetPassword: boolean
   canToggleActive: boolean
-  canToggleAdmin: boolean
   canDelete: boolean
 }
 
@@ -23,14 +23,14 @@ export interface RowActions {
  * 行操作可用性：对当前登录用户自己的行禁用危险操作（后端同样拒绝）。
  * 重置自己的密码会让当前会话失效，因此自己的行也不提供，改走「修改密码」。
  */
-export function rowActions(row: AdminUser, currentUserId: number | undefined): RowActions {
+export function rowActions(row: AdminUser, currentUserId: number | undefined, actor: User | null): RowActions {
   const isSelf = row.id === currentUserId
+  const targetAllowed = !!actor && (isSuperAdmin(actor) || !row.is_management_account)
   return {
     isSelf,
-    canResetPassword: !isSelf,
-    canToggleActive: !isSelf,
-    canToggleAdmin: !isSelf,
-    canDelete: !isSelf && row.project_count === 0,
+    canResetPassword: !isSelf && targetAllowed && (can(actor, 'users.reset_password')),
+    canToggleActive: !isSelf && targetAllowed && (can(actor, 'users.status')),
+    canDelete: !isSelf && targetAllowed && row.project_count === 0 && (can(actor, 'users.delete')),
   }
 }
 

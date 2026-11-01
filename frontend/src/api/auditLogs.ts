@@ -13,6 +13,8 @@ export const auditLogApi = {
 }
 
 export const AUDIT_ACTION: Record<AuditAction, string> = {
+  'role.create': '创建角色', 'role.update': '修改角色', 'role.delete': '删除角色',
+  'user.roles.update': '分配用户角色', 'user.roles.bootstrap': '引导超级管理员', 'user.quotas.update': '修改用户配额',
   'system_settings.update': '修改系统设置',
   'task.cancel_request': '受理任务取消请求',
   'user.create': '创建用户', 'user.update': '修改用户角色 / 状态', 'user.reset_password': '重置密码', 'user.delete': '删除用户',
@@ -26,6 +28,7 @@ export const AUDIT_ACTION: Record<AuditAction, string> = {
 }
 
 export const AUDIT_TARGET: Record<AuditTargetType, string> = {
+  role: '角色',
   user: '用户', project: '作品', chapter: '章节', chapter_version: '章节版本', workshop_item: '工坊资源', workshop_submission: '工坊投稿', skill: '全局 Skill', audit: '审计日志', task: '任务', system_settings: '系统设置',
 }
 

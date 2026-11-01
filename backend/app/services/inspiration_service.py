@@ -568,7 +568,11 @@ def _decided(state: SessionState, step: str) -> Any:
 
 
 async def convert(db: AsyncSession, user_id: int, session_id: int, data: ConvertRequest) -> ProjectOut:
+    from app.services.quota_service import check_project_creation
+
+    await check_project_creation(db, user_id)
     session = await get_owned_session(db, user_id, session_id)
+    await db.refresh(session)
     state = load_state(session)
     if session.status == "converted" and session.converted_project_id is not None:
         raise ConflictError("该会话已转为项目，可以改用「应用到已有项目」")

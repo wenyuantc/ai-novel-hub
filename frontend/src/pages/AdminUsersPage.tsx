@@ -1,7 +1,7 @@
 import { LockOutlined, PlusOutlined, UserOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Checkbox, Form, Input, Modal, Result, Space, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Form, Input, Modal, Result, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adminApi } from '../api/admin'
 import { errorMessage } from '../api/client'
@@ -11,6 +11,11 @@ import { useAuthStore } from '../stores/auth'
 import AdminUserActionButtons from '../components/adminUsers/AdminUserActionButtons'
 import AdminUserActionDialog from '../components/adminUsers/AdminUserActionDialog'
 import { useAdminUserActions } from '../components/adminUsers/useAdminUserActions'
+import RoleTags from '../components/adminUsers/RoleTags'
+import UserRolesButton from '../components/adminUsers/UserRolesButton'
+import { can } from '../utils/permissions'
+import { useAuthorizationScope } from '../hooks/useAuthorizationScope'
+import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
 import { formatTime } from '../utils/time'
 import { confirmPasswordRules, passwordRules, usernameRules } from '../utils/validation'
 
@@ -18,12 +23,12 @@ interface CreateValues {
   username: string
   password: string
   confirm: string
-  is_admin: boolean
 }
 
 /** 用户管理（仅管理员）：只展示账号信息与项目数，不涉及任何小说内容。 */
 function AdminUsers({ actorId }: { actorId: number }) {
   const { message } = App.useApp()
+  const actor = useAuthStore((state) => state.user)
   const currentUserId = actorId
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(1)
@@ -39,6 +44,9 @@ function AdminUsers({ actorId }: { actorId: number }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createForm] = Form.useForm<CreateValues>()
+  const createScope = useAuthorizationScope('users.create')
+  const pending = useRef(false)
+  useAuthorizationCleanup(() => { setCreateOpen(false); setCreating(false); pending.current = false })
 
   const handleDeleted = useCallback(() => {
     if (users.length === 1 && page > 1) setPage(page - 1)
@@ -47,17 +55,23 @@ function AdminUsers({ actorId }: { actorId: number }) {
   const { state: actionState, controller: actionController } = useAdminUserActions({ actorId, onChanged: reload, onDeleted: handleDeleted })
 
   const handleCreate = async () => {
-    const v = await createForm.validateFields()
+    if (pending.current || !createScope.allowed()) return
+    pending.current = true
+    const ticket = createScope.begin()
+    const valid = () => createScope.current(ticket)
     setCreating(true)
     try {
-      const u = await adminApi.createUser({ username: v.username.trim(), password: v.password, is_admin: !!v.is_admin })
+      const v = await createForm.validateFields()
+      if (!valid()) return
+      const u = await adminApi.createUser({ username: v.username.trim(), password: v.password })
+      if (!valid()) return
       message.success(`已创建用户「${u.username}」`)
       setCreateOpen(false)
       reload()
     } catch (err) {
-      message.error(errorMessage(err))
+      if (valid() && err instanceof Error) message.error(errorMessage(err))
     } finally {
-      setCreating(false)
+      if (valid()) { pending.current = false; setCreating(false) }
     }
   }
 
@@ -74,9 +88,9 @@ function AdminUsers({ actorId }: { actorId: number }) {
     },
     {
       title: '角色',
-      dataIndex: 'is_admin',
-      width: 110,
-      render: (v: boolean) => (v ? <Tag color="gold">管理员</Tag> : <Tag>普通用户</Tag>),
+      key: 'roles',
+      width: 180,
+      render: (_, row) => <RoleTags user={row} />,
     },
     {
       title: '状态',
@@ -84,13 +98,13 @@ function AdminUsers({ actorId }: { actorId: number }) {
       width: 100,
       render: (v: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag color="red">已禁用</Tag>),
     },
-    { title: '作品数（含回收站）', dataIndex: 'project_count', width: 190, render: (count: number, user) => <Space direction="vertical" size={0}><Typography.Text>{count}</Typography.Text>{count > 0 && <Space size={8}><Link to={`/admin/projects?owner_user_id=${user.id}`}>正常作品</Link><Link to={`/admin/recycle-bin?owner_user_id=${user.id}`}>回收站</Link></Space>}</Space> },
+    { title: '作品数（含回收站）', dataIndex: 'project_count', width: 190, render: (count: number, user) => <Space direction="vertical" size={0}><Typography.Text>{count}</Typography.Text>{count > 0 && <Space size={8}>{can(actor, 'projects.read') && <Link to={`/admin/projects?owner_user_id=${user.id}`}>正常作品</Link>}{can(actor, 'recycle_bin.read') && <Link to={`/admin/recycle-bin?owner_user_id=${user.id}`}>回收站</Link>}</Space>}</Space> },
     { title: '注册时间', dataIndex: 'created_at', width: 170, render: (v: string) => formatTime(v) },
     {
       title: '操作',
       key: 'actions',
       width: 400,
-      render: (_, u) => <Space size={4} wrap><Link to={`/admin/users/${u.id}`}>详情</Link><AdminUserActionButtons user={u} actorId={actorId} disabled={loading || actionState.target !== null} onAction={actionController.open} /></Space>,
+      render: (_, u) => <Space size={4} wrap><Link to={`/admin/users/${u.id}`}>详情</Link><UserRolesButton user={u} onChanged={reload} disabled={loading} /><AdminUserActionButtons user={u} actorId={actorId} disabled={loading || actionState.target !== null} onAction={actionController.open} /></Space>,
     },
   ]
 
@@ -113,6 +127,7 @@ function AdminUsers({ actorId }: { actorId: number }) {
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={!can(actor, 'users.create')}
             onClick={() => setCreateOpen(true)}
           >
             新建用户
@@ -146,15 +161,17 @@ function AdminUsers({ actorId }: { actorId: number }) {
 
       <Modal
         title="新建用户"
-        open={createOpen}
+        open={createOpen && can(actor, 'users.create')}
         onOk={() => void handleCreate()}
         confirmLoading={creating}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={creating ? undefined : () => setCreateOpen(false)}
+        closable={!creating}
+        maskClosable={!creating}
         okText="创建"
         cancelText="取消"
         destroyOnHidden
       >
-        <Form form={createForm} layout="vertical" preserve={false} disabled={creating} initialValues={{ is_admin: false }}>
+        <Form form={createForm} layout="vertical" preserve={false} disabled={creating}>
           <Form.Item name="username" label="用户名" rules={usernameRules}>
             <Input prefix={<UserOutlined />} autoComplete="off" placeholder="3–32 个字符" />
           </Form.Item>
@@ -164,9 +181,7 @@ function AdminUsers({ actorId }: { actorId: number }) {
           <Form.Item name="confirm" label="确认密码" dependencies={['password']} rules={confirmPasswordRules()}>
             <Input.Password prefix={<LockOutlined />} autoComplete="new-password" placeholder="再次输入密码" />
           </Form.Item>
-          <Form.Item name="is_admin" valuePropName="checked" style={{ marginBottom: 0 }}>
-            <Checkbox>设为管理员</Checkbox>
-          </Form.Item>
+          <Alert type="info" message="新账号默认为普通用户；创建后由超管通过分配角色授权。" />
         </Form>
       </Modal>
 
@@ -178,5 +193,5 @@ function AdminUsers({ actorId }: { actorId: number }) {
 /** 管理员身份变化时丢弃旧页面和危险操作目标。 */
 export default function AdminUsersPage() {
   const user = useAuthStore((state) => state.user)
-  return user?.is_admin ? <AdminUsers key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
+  return user && can(user, 'users.read') ? <AdminUsers key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
 }

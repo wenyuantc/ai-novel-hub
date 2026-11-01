@@ -1,11 +1,19 @@
 import type { Project, User } from '../api/types'
+import { can } from './permissions'
 
 /** 只控制界面能力；真实内容权限仍由服务器按每次请求校验。 */
-export function projectAccess(project: Pick<Project, 'id' | 'owner'> | null | undefined, user: Pick<User, 'id' | 'is_admin'> | null, projectId: number) {
+export function projectAccess(project: Pick<Project, 'id' | 'owner'> | null | undefined, user: Pick<User, 'id' | 'is_super_admin' | 'effective_permissions'> | null, projectId: number) {
   const ready = Boolean(project && project.id === projectId && user)
   const otherOwner = ready && project?.owner != null && project.owner.id !== user?.id
-  const managingOther = Boolean(otherOwner && user?.is_admin)
-  return { ready, managingOther, canUseAI: ready && !otherOwner }
+  const managingOther = Boolean(otherOwner)
+  return {
+    ready,
+    managingOther,
+    canRead: ready && (!otherOwner || can(user, 'projects.read')),
+    canEdit: ready && (!otherOwner || can(user, 'projects.edit')),
+    canRecycle: ready && (!otherOwner || can(user, 'projects.recycle')),
+    canUseAI: ready && !otherOwner,
+  }
 }
 
 /** 危险操作必须输入完整名称，空输入和首尾多余空白均不算确认。 */

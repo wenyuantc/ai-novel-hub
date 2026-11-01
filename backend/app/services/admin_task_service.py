@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import case, func, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, ForbiddenError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.models import AdminAuditLog, Project, Task, User
 from app.models.entities import ACTIVE_TASK_STATUSES, OPEN_TASK_STATUSES, TASK_KINDS, TASK_STATUSES
 from app.schemas.admin_task import (
@@ -184,18 +184,9 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", actor: User, task_
                       data: AdminTaskCancelRequest) -> AdminTaskCancelOut:
     # 真实写锁复核当前身份；不能让 AuditOperation 的 enabled=False 放行未审计业务。
     owner_id = await db.scalar(select(Task.user_id).where(Task.statistics_key == task_key))
-    # 两个管理员互相处置任务时也按用户ID排序锁定，避免actor→owner反向取锁。
-    for user_id in sorted({actor.id, owner_id} - {None}):
-        conditions = [User.id == user_id]
-        if user_id == actor.id:
-            conditions.extend((User.is_admin.is_(True), User.is_active.is_(True),
-                               User.token_version == actor.token_version))
-        permission = await db.execute(update(User).where(*conditions).values(id=User.id).execution_options(
-            synchronize_session=False
-        ))
-        if user_id == actor.id and permission.rowcount != 1:
-            await db.rollback()
-            raise ForbiddenError("需要管理员权限")
+    from app.services import authorization_service as authz
+
+    await authz.require(db, actor, "tasks.cancel", write=True, targets=(owner_id,) if owner_id is not None else ())
     async with AuditOperation(db, actor, "task.cancel_request", "task", include_own_project=True) as audit:
         task = await db.scalar(select(Task).where(Task.statistics_key == task_key).execution_options(
             populate_existing=True

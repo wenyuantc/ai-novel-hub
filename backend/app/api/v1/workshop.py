@@ -2,9 +2,10 @@
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
-from app.core.deps import AdminUser, CurrentUser, DbDep
+from app.core.deps import CurrentUser, DbDep, require_permission
+from app.models import User
 from app.schemas.workshop import (
     SubmissionStatus,
     WorkshopApprove,
@@ -19,6 +20,13 @@ from app.schemas.workshop import (
     WorkshopSubmit,
 )
 from app.services import workshop_service as svc
+
+PermissionWorkshopRead = Annotated[User, Depends(require_permission("workshop.read"))]
+PermissionWorkshopApprove = Annotated[User, Depends(require_permission("workshop.approve"))]
+PermissionWorkshopReject = Annotated[User, Depends(require_permission("workshop.reject"))]
+PermissionWorkshopPublish = Annotated[User, Depends(require_permission("workshop.publish"))]
+PermissionWorkshopUpdate = Annotated[User, Depends(require_permission("workshop.update"))]
+PermissionWorkshopDelete = Annotated[User, Depends(require_permission("workshop.delete"))]
 
 router = APIRouter(prefix="/workshop", tags=["workshop"])
 Page = Annotated[int, Query(ge=1)]
@@ -81,36 +89,46 @@ async def withdraw(submission_id: int, user: CurrentUser, db: DbDep) -> Workshop
 
 @router.get("/admin/submissions", response_model=WorkshopSubmissionList)
 async def review_list(
-    admin: AdminUser, db: DbDep, status: SubmissionStatus | None = "pending", page: Page = 1, page_size: PageSize = 20
+    admin: PermissionWorkshopRead,
+    db: DbDep,
+    status: SubmissionStatus | None = "pending",
+    page: Page = 1,
+    page_size: PageSize = 20,
 ) -> WorkshopSubmissionList:
     return await svc.list_submissions(db, admin, admin=True, status=status, page=page, page_size=page_size)
 
 
 @router.post("/admin/submissions/{submission_id}/approve", response_model=WorkshopSubmissionOut)
-async def approve(submission_id: int, body: WorkshopApprove, admin: AdminUser, db: DbDep) -> WorkshopSubmissionOut:
+async def approve(
+    submission_id: int, body: WorkshopApprove, admin: PermissionWorkshopApprove, db: DbDep
+) -> WorkshopSubmissionOut:
     return await svc.approve(db, admin, submission_id, body)
 
 
 @router.post("/admin/submissions/{submission_id}/reject", response_model=WorkshopSubmissionOut)
-async def reject(submission_id: int, body: WorkshopReject, admin: AdminUser, db: DbDep) -> WorkshopSubmissionOut:
+async def reject(
+    submission_id: int, body: WorkshopReject, admin: PermissionWorkshopReject, db: DbDep
+) -> WorkshopSubmissionOut:
     return await svc.reject(db, admin, submission_id, body.note)
 
 
 @router.post("/admin/items", response_model=WorkshopItemOut, status_code=status.HTTP_201_CREATED)
-async def publish(body: WorkshopSubmit, admin: AdminUser, db: DbDep) -> WorkshopItemOut:
-    submission = await svc.submit(db, admin, body)
+async def publish(body: WorkshopSubmit, admin: PermissionWorkshopPublish, db: DbDep) -> WorkshopItemOut:
+    submission = await svc.submit(db, admin, body, official=True)
     return await svc.get_item(db, admin, submission.item_id)
 
 
 @router.patch("/admin/items/{item_id}", response_model=WorkshopItemOut)
-async def patch_metadata(item_id: int, body: WorkshopApprove, admin: AdminUser, db: DbDep) -> WorkshopItemOut:
+async def patch_metadata(
+    item_id: int, body: WorkshopApprove, admin: PermissionWorkshopUpdate, db: DbDep
+) -> WorkshopItemOut:
     return await svc.patch_metadata(db, admin, item_id, body)
 
 
 @router.delete("/admin/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_item(item_id: int, admin: AdminUser, db: DbDep) -> Response:
+async def delete_item(item_id: int, admin: PermissionWorkshopDelete, db: DbDep) -> Response:
     await svc.delete_item(db, admin, item_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/items/{item_id}", response_model=WorkshopItemOut)

@@ -1,3 +1,4 @@
+import { can, authorizationKey } from '../../utils/permissions'
 import { Alert, App, Input, Modal, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -10,7 +11,7 @@ import { useTasksStore } from '../../stores/tasks'
 import { useModalWidth } from '../../hooks/useIsMobile'
 
 interface Props {
-  project: { id: number; title: string; owner_username?: string }
+  project: { id: number; title: string; owner_username?: string; owner_user_id?: number; owner?: { id: number } | null }
   onClose: () => void
   onDeleted: () => void
 }
@@ -29,14 +30,19 @@ export default function DeleteProjectModal({ project, onClose, onDeleted }: Prop
   const pending = useRef(false)
   const [gate] = useState(createRecycleRequestGate)
   useEffect(() => () => gate.invalidate(), [gate])
-  const allowed = canConfirmProjectDelete(input, project.title)
+  const actor = useAuthStore((state) => state.user)
+  const [ownerActorId] = useState(() => useAuthStore.getState().user?.id)
+  const [identity] = useState(() => authorizationKey(useAuthStore.getState().user))
+  const otherOwner = project.owner_user_id !== undefined ? project.owner_user_id !== actor?.id : project.owner ? project.owner.id !== actor?.id : project.owner_username !== undefined && project.owner_username !== actor?.username
+  const permitted = () => useAuthStore.getState().status === 'authenticated' && useAuthStore.getState().user?.id === ownerActorId && (!otherOwner || (can(useAuthStore.getState().user, 'projects.recycle') && authorizationKey(useAuthStore.getState().user) === identity))
+  const allowed = canConfirmProjectDelete(input, project.title) && permitted()
   const remove = async () => {
-    if (!allowed || pending.current) return
+    if (!allowed || !permitted() || pending.current) return
     const actorId = useAuthStore.getState().user?.id
     if (actorId === undefined) return
     pending.current = true
     const ticket = gate.begin()
-    const isCurrent = () => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId
+    const isCurrent = () => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && permitted()
     setDeleting(true)
     try {
       await projectApi.remove(project.id)

@@ -1,3 +1,5 @@
+import { can } from '../../utils/permissions'
+import { useAuthorizationScope } from '../../hooks/useAuthorizationScope'
 import { Alert, App, Form, Input, Modal, Select, Switch } from 'antd'
 import { useCallback, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -28,7 +30,8 @@ const styleLimit = (key: string) => key === 'description' ? STYLE_LIMITS.descrip
 /** 仅打开时挂载，以 initial 为初值；更新的类型与模板 key 不可改变。 */
 export default function ShareToWorkshopModal({ initial, direct = false, onClose, onSaved }: Props) {
   const { message } = App.useApp()
-  const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false)
+  const isAdmin = useAuthStore((s) => can(s.user, 'workshop.publish'))
+  const scope = useAuthorizationScope(direct ? 'workshop.publish' : undefined, false, direct)
   const [form] = Form.useForm<WorkshopSubmit>()
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -36,22 +39,26 @@ export default function ShareToWorkshopModal({ initial, direct = false, onClose,
   const loader = useCallback(() => initial.kind === 'prompt' ? promptApi.list() : Promise.resolve([]), [initial.kind])
   const { data: templates = [], error: loadError } = useLoader(loader)
   const save = async () => {
+    if (!scope.allowed()) return
+    const ticket = scope.begin()
     let values: WorkshopSubmit
     try { values = await form.validateFields() } catch { return }
+    if (!scope.current(ticket)) return
     setSaving(true)
     setError(null)
     try {
       const body: WorkshopSubmit = { ...initial, ...values, name: values.name.trim(), description: values.description.trim(), content: { ...initial.content, ...values.content } }
-      if (direct) await workshopApi.publish(body)
-      else await workshopApi.submit(body)
-      message.success(isAdmin ? '已发布到工坊，标记为官方' : '已提交，等待管理员审核')
+      const result = direct ? await workshopApi.publish(body) : await workshopApi.submit(body)
+      if (!scope.current(ticket)) return
+      message.success(result.status === 'active' || result.status === 'approved' ? '已发布到工坊，标记为官方' : '已提交，等待管理员审核')
       onSaved?.()
       onClose()
     } catch (err) {
+      if (!scope.current(ticket)) return
       const issues = issuesFromError(err)
       setError([errorMessage(err), ...issues.map(formatIssue)].join('\n'))
     } finally {
-      setSaving(false)
+      if (scope.current(ticket)) setSaving(false)
     }
   }
   return <Modal open title={direct ? '直接发布官方内容' : initial.item_id ? '提交更新' : '分享到工坊'} width={width}

@@ -1,6 +1,9 @@
+import { useAuthorizationScope } from '../hooks/useAuthorizationScope'
+import { can, authorizationKey } from '../utils/permissions'
+import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
 import { PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Col, Empty, Row, Space, Spin, Tabs, Typography, Upload } from 'antd'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage } from '../api/client'
 import { SKILL_LIMITS, skillApi } from '../api/skills'
 import type { Skill, SkillBrief, SkillScope } from '../api/types'
@@ -17,36 +20,60 @@ type Editing = { id: number | null; scope: SkillScope } | null
 export default function SkillsPage() {
   const { message, modal } = App.useApp()
   const isMobile = useIsMobile()
-  const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false)
+  const actor = useAuthStore((s) => s.user)
+  const personal = useAuthorizationScope(undefined, false, false)
+  const management = useAuthorizationScope()
+  const isAdmin = can(actor, 'global_skills.create')
+  const confirmation = useRef<{ destroy: () => void; global: boolean } | null>(null)
   const { skills, loading, error } = useSkills()
   const reload = useSkillStore((s) => s.load)
   const { mine, global } = useMemo(() => splitSkills(skills), [skills])
   const [tab, setTab] = useState<SkillScope>('mine')
   const [editing, setEditing] = useState<Editing>(null)
+  useAuthorizationCleanup(() => {
+    if (useAuthStore.getState().user?.id !== actor?.id || editing?.scope === 'global') setEditing(null)
+    if (confirmation.current?.global || useAuthStore.getState().user?.id !== actor?.id) { confirmation.current?.destroy(); confirmation.current = null }
+  })
+  useEffect(() => () => { confirmation.current?.destroy() }, [])
   const [busy, setBusy] = useState(false)
   const [importing, setImporting] = useState(false)
+  const pending = useRef(false)
+  const importPending = useRef(false)
+  const globalOperation = useRef(false)
+  const globalImport = useRef(false)
+  useAuthorizationCleanup(() => {
+    if (globalOperation.current || useAuthStore.getState().user?.id !== actor?.id) { pending.current = false; setBusy(false) }
+    if (globalImport.current || useAuthStore.getState().user?.id !== actor?.id) { importPending.current = false; setImporting(false) }
+  })
   // 全局 Tab 上，管理员新建 / 导入的 Skill 归入全局
   const targetScope: SkillScope = tab === 'global' && isAdmin ? 'global' : 'mine'
   const canCreate = tab === 'mine' || isAdmin
 
   const refresh = () => reload(true)
 
-  const run = async (operation: () => Promise<void>) => {
+  const run = async (operation: (current: () => boolean) => Promise<void>, permission?: Parameters<typeof can>[1]) => {
+    const scope = permission ? management : personal
+    const current = () => scope.allowed() && (!permission || can(useAuthStore.getState().user, permission))
+    if (!current() || pending.current) return
+    pending.current = true
+    globalOperation.current = !!permission
     setBusy(true)
     try {
-      await operation()
+      await operation(current)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (current()) message.error(errorMessage(err))
     } finally {
-      setBusy(false)
+      if (current()) { pending.current = false; setBusy(false) }
     }
   }
 
   const copy = (s: Pick<SkillBrief, 'id'>) =>
-    run(async () => {
+    run(async (current) => {
       const copied = await skillApi.copy(s.id)
+      if (!current()) return
       message.success(`已复制为「${copied.name}」`)
       await refresh()
+      if (!current()) return
       setTab('mine')
       setEditing({ id: copied.id, scope: 'mine' })
     })
@@ -55,50 +82,65 @@ export default function SkillsPage() {
     if (action === 'open') setEditing({ id: s.id, scope: s.scope })
     else if (action === 'copy') void copy(s)
     else if (action === 'export')
-      void run(async () => {
+      void run(async (current) => {
         const filename = await skillApi.export(s.id)
+        if (!current()) return
         message.success(`已导出 ${filename}`)
       })
-    else if (action === 'restore')
-      void run(async () => {
+    else if (action === 'restore' && can(useAuthStore.getState().user, 'global_skills.restore_builtin'))
+      void run(async (current) => {
         await skillApi.restoreBuiltin(s.id)
+        if (!current()) return
         message.success('已恢复内置内容')
         await refresh()
-      })
-    else if (action === 'delete')
-      modal.confirm({
+      }, 'global_skills.restore_builtin')
+    else if (action === 'delete' && (s.scope !== 'global' || can(useAuthStore.getState().user, 'global_skills.delete'))) {
+      const identity = `${actor?.id}:${s.scope === 'global' ? authorizationKey(actor) : ''}`
+      const current = () => personal.allowed() && `${useAuthStore.getState().user?.id}:${s.scope === 'global' ? authorizationKey(useAuthStore.getState().user) : ''}` === identity && (s.scope !== 'global' || can(useAuthStore.getState().user, 'global_skills.delete'))
+      confirmation.current?.destroy()
+      confirmation.current = { global: s.scope === 'global', ...modal.confirm({
         title: `删除 Skill「${s.name}」？`,
         content: s.scope === 'global' ? '这是全局 Skill，删除后所有用户都无法再使用。' : '删除后无法恢复。已经创建的任务仍使用当时的快照。',
         okText: '删除',
         okButtonProps: { danger: true },
         onOk: async () => {
+          if (!current()) return
           try {
             await skillApi.remove(s.id)
+            if (!current()) return
             message.success('已删除')
             void refresh()
           } catch (err) {
-            message.error(errorMessage(err))
+            if (current()) message.error(errorMessage(err))
             throw err
           }
         },
-      })
+      }) }
+    }
   }
 
   const importFile = async (file: File) => {
+    const scope = targetScope === 'global' ? management : personal
+    const current = () => scope.allowed() && (targetScope !== 'global' || can(useAuthStore.getState().user, 'global_skills.create'))
+    if (importPending.current || !current()) return
     if (file.size > SKILL_LIMITS.uploadBytes) {
       message.error('Skill 文件过大，上限为 2MB')
       return
     }
+    importPending.current = true
+    globalImport.current = targetScope === 'global'
     setImporting(true)
     try {
       const created: Skill = await skillApi.import(file, targetScope)
+      if (!current()) return
       message.success(`已导入「${created.name}」`)
       await refresh()
+      if (!current()) return
       setEditing({ id: created.id, scope: created.scope })
     } catch (err) {
-      message.error(errorMessage(err))
+      if (current()) message.error(errorMessage(err))
     } finally {
-      setImporting(false)
+      if (current()) { importPending.current = false; setImporting(false) }
     }
   }
 
@@ -107,7 +149,7 @@ export default function SkillsPage() {
       <Row gutter={[16, 16]}>
         {list.map((s) => (
           <Col xs={24} md={12} xl={8} key={s.id}>
-            <SkillCard skill={s} isAdmin={isAdmin} busy={busy} onAction={onAction} />
+            <SkillCard skill={s} authorization={actor} busy={busy} onAction={onAction} />
           </Col>
         ))}
       </Row>

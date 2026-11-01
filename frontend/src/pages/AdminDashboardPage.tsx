@@ -1,3 +1,5 @@
+import { can } from '../utils/permissions'
+import { useAuthStore } from '../stores/auth'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Empty, Select, Skeleton, Space, Statistic, Switch, Typography, theme } from 'antd'
 import type { ReactNode } from 'react'
@@ -33,21 +35,23 @@ function ResourcePanel<T extends { as_of: string }>({ title, resource, onReload,
 }
 
 function Overview({ data }: { data: AdminDashboardOverview }) {
+  const actor = useAuthStore((state) => state.user)
   return <>
     <AutoGrid minItemWidth={180} gap={20} mobileColumns={2}>
-      <div><Statistic title="用户总数" value={data.users} /><Typography.Text type="secondary">所有账号，含管理员与禁用账号</Typography.Text><div><Link to="/admin/users">用户管理</Link></div></div>
-      <div><Statistic title="作品总数（含回收站）" value={data.projects} /><Space wrap><Link to="/admin/projects">正常作品管理</Link><Link to="/admin/recycle-bin">回收站</Link></Space></div>
+      <div><Statistic title="用户总数" value={data.users} /><Typography.Text type="secondary">所有账号，含管理员与禁用账号</Typography.Text><div>{can(actor, 'users.read') ? <Link to="/admin/users">用户管理</Link> : <span>用户管理</span>}</div></div>
+      <div><Statistic title="作品总数（含回收站）" value={data.projects} /><Space wrap>{can(actor, 'projects.read') ? <Link to="/admin/projects">正常作品管理</Link> : <span>正常作品管理</span>}{can(actor, 'recycle_bin.read') ? <Link to="/admin/recycle-bin">回收站</Link> : <span>回收站</span>}</Space></div>
       <div><Statistic title="章节总数（含回收站）" value={data.chapters} /><Typography.Text type="secondary">当前章节记录，不重复计版本</Typography.Text></div>
       <div><Statistic title="正文总字数（含回收站）" value={data.total_words} /><Typography.Text type="secondary">非空白字符，沿用服务端字数</Typography.Text></div>
     </AutoGrid>
     <div className="admin-dashboard-todos">
-      <Space wrap><Typography.Text strong>待办</Typography.Text><Link to="/workshop?tab=review">工坊待审核投稿：{dashboardCount(data.pending_submissions)}</Link></Space>
-      <Link to="/admin/audit-logs">查看操作日志</Link>
+      <Space wrap><Typography.Text strong>待办</Typography.Text>{can(actor, 'workshop.read') ? <Link to="/workshop?tab=review">工坊待审核投稿：{dashboardCount(data.pending_submissions)}</Link> : <span>工坊待审核投稿：{dashboardCount(data.pending_submissions)}</span>}</Space>
+      {can(actor, 'audit.read') ? <Link to="/admin/audit-logs">查看操作日志</Link> : <span>查看操作日志</span>}
     </div>
   </>
 }
 
 function Tasks({ data }: { data: AdminDashboardTasks }) {
+  const actor = useAuthStore((state) => state.user)
   const { token } = theme.useToken()
   return <>
     <AutoGrid minItemWidth={150} gap={16} mobileColumns={2}>
@@ -71,7 +75,7 @@ function Tasks({ data }: { data: AdminDashboardTasks }) {
         <Typography.Text>最近 24 小时中断：<strong style={{ color: data.interrupted_24h ? token.colorWarning : token.colorText }}>{dashboardCount(data.interrupted_24h)}</strong></Typography.Text>
       </Space>
     </div>
-    <Space wrap><Link to="/admin/tasks">查看现存任务</Link><Link to="/admin/tasks?status=queued">查看现存排队任务</Link><Link to="/admin/tasks?status=running">查看现存运行任务</Link><Link to="/admin/tasks?status=paused">查看现存待审核任务</Link><Link to="/admin/tasks?status=failed">查看现存失败任务</Link><Link to="/admin/tasks?status=interrupted">查看现存中断任务</Link></Space>
+    <Space wrap>{can(actor, 'tasks.read') ? <Link to="/admin/tasks">查看现存任务</Link> : <span>查看现存任务</span>}{can(actor, 'tasks.read') ? <Link to="/admin/tasks?status=queued">查看现存排队任务</Link> : <span>查看现存排队任务</span>}{can(actor, 'tasks.read') ? <Link to="/admin/tasks?status=running">查看现存运行任务</Link> : <span>查看现存运行任务</span>}{can(actor, 'tasks.read') ? <Link to="/admin/tasks?status=paused">查看现存待审核任务</Link> : <span>查看现存待审核任务</span>}{can(actor, 'tasks.read') ? <Link to="/admin/tasks?status=failed">查看现存失败任务</Link> : <span>查看现存失败任务</span>}{can(actor, 'tasks.read') ? <Link to="/admin/tasks?status=interrupted">查看现存中断任务</Link> : <span>查看现存中断任务</span>}</Space>
     <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
       开始跟踪：{dashboardTime(data.tracking_since)}。初始化存量 {dashboardCount(data.baseline_tasks)} 个，不冒充上线后新建量或完整历史。
       累计结果独立保存，不随任务清理或作品彻删减少；未结束即移除 {dashboardCount(data.removed_unfinished)} 个，不计为成功或失败。

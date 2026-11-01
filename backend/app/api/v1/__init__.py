@@ -4,7 +4,9 @@ from app.api.v1 import (
     admin,
     admin_audit,
     admin_dashboard,
+    admin_quotas,
     admin_recycle_bin,
+    admin_roles,
     admin_system_settings,
     admin_tasks,
     agent,
@@ -44,6 +46,8 @@ api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
 api_router.include_router(agent.router)
 api_router.include_router(admin.router)
+api_router.include_router(admin_roles.router)
+api_router.include_router(admin_quotas.router)
 api_router.include_router(admin_audit.router)
 api_router.include_router(admin_dashboard.router)
 api_router.include_router(admin_recycle_bin.router)

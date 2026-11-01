@@ -29,6 +29,7 @@ from app.schemas.skill import (
     SkillScope,
     SkillUpdate,
 )
+from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation
 from app.skills import SkillFormatError, builtin_fields, dump_skill_md, parse_skill_md
 
@@ -52,8 +53,8 @@ def _scope(skill: Skill) -> SkillScope:
     return "global" if skill.owner_user_id is None else "mine"
 
 
-def editable(user: User, skill: Skill) -> bool:
-    return skill.owner_user_id == user.id or (skill.owner_user_id is None and user.is_admin)
+def editable(user: User, skill: Skill, *, global_update: bool = False) -> bool:
+    return skill.owner_user_id == user.id or (skill.owner_user_id is None and global_update)
 
 
 async def _references(db: AsyncSession, skill_id: int) -> list[SkillReference]:
@@ -66,7 +67,7 @@ async def _references(db: AsyncSession, skill_id: int) -> list[SkillReference]:
     )
 
 
-def _brief(user: User, skill: Skill, refs: list[SkillReference]) -> dict[str, Any]:
+def _brief(user: User, skill: Skill, refs: list[SkillReference], *, global_update: bool = False) -> dict[str, Any]:
     return {
         "id": skill.id,
         "scope": _scope(skill),
@@ -77,7 +78,7 @@ def _brief(user: User, skill: Skill, refs: list[SkillReference]) -> dict[str, An
         "triggers": list(skill.triggers or []),
         "builtin_key": skill.builtin_key,
         "source_skill_id": skill.source_skill_id,
-        "editable": editable(user, skill),
+        "editable": editable(user, skill, global_update=global_update),
         "body_chars": len(skill.body),
         "reference_titles": [r.title for r in refs],
         "created_at": skill.created_at,
@@ -88,7 +89,7 @@ def _brief(user: User, skill: Skill, refs: list[SkillReference]) -> dict[str, An
 async def to_out(db: AsyncSession, user: User, skill: Skill) -> SkillOut:
     refs = await _references(db, skill.id)
     return SkillOut(
-        **_brief(user, skill, refs),
+        **_brief(user, skill, refs, global_update=await authz.allows(db, user, "global_skills.update")),
         body=skill.body,
         references=[SkillReferenceOut.model_validate(r) for r in refs],
     )
@@ -117,19 +118,28 @@ async def list_skills(db: AsyncSession, user: User, scope: str = "all") -> list[
             .order_by(SkillReference.sort, SkillReference.id)
         ):
             titles.setdefault(ref.skill_id, []).append(ref.title)
-    return [SkillBrief(**{**_brief(user, s, []), "reference_titles": titles.get(s.id, [])}) for s in rows]
+    global_update = await authz.allows(db, user, "global_skills.update")
+    return [SkillBrief(**{**_brief(user, s, [], global_update=global_update),
+                         "reference_titles": titles.get(s.id, [])}) for s in rows]
 
 
 async def get_visible_skill(db: AsyncSession, user_id: int, skill_id: int) -> Skill:
-    skill = await db.scalar(select(Skill).where(Skill.id == skill_id, visible_clause(user_id)))
+    skill = await db.scalar(
+        select(Skill).where(Skill.id == skill_id, visible_clause(user_id)).execution_options(populate_existing=True)
+    )
     if skill is None:
         raise NotFoundError(NOT_FOUND)
     return skill
 
 
-async def get_writable_skill(db: AsyncSession, user: User, skill_id: int) -> Skill:
+async def get_writable_skill(
+    db: AsyncSession, user: User, skill_id: int, *, permission: str = "global_skills.update",
+) -> Skill:
     skill = await get_visible_skill(db, user.id, skill_id)
-    if not editable(user, skill):
+    if skill.owner_user_id is None:
+        await authz.require(db, user, permission, write=True)
+        skill = await get_visible_skill(db, user.id, skill_id)
+    elif skill.owner_user_id != user.id:
         raise ForbiddenError(GLOBAL_READONLY)
     return skill
 
@@ -144,10 +154,9 @@ async def _check_quota(db: AsyncSession, owner_id: int | None) -> None:
         raise BadRequestError(f"最多保存 {MAX_SKILLS_PER_OWNER} 个 Skill")
 
 
-def _owner_for(user: User, scope: SkillScope) -> int | None:
+async def _owner_for(db: AsyncSession, user: User, scope: SkillScope) -> int | None:
     if scope == "global":
-        if not user.is_admin:
-            raise ForbiddenError("只有管理员可以创建全局 Skill")
+        await authz.require(db, user, "global_skills.create", write=True)
         return None
     return user.id
 
@@ -193,7 +202,7 @@ def _set_references(db: AsyncSession, skill_id: int, refs: list[SkillReferenceIn
 
 async def _create_skill(db: AsyncSession, user: User, req: SkillCreate, audit: AuditOperation) -> SkillOut:
     audit.values["target_label"] = req.name
-    owner = _owner_for(user, req.scope)
+    owner = await _owner_for(db, user, req.scope)
     await _check_quota(db, owner)
     skill = Skill(
         owner_user_id=owner,
@@ -236,7 +245,7 @@ async def update_skill(db: AsyncSession, user: User, skill_id: int, req: SkillUp
 
 async def replace_references(db: AsyncSession, user: User, skill_id: int, refs: list[SkillReferenceIn]) -> SkillOut:
     async with AuditOperation(db, user, "skill.references.replace", "skill", skill_id) as audit:
-        skill = await get_writable_skill(db, user, skill_id)
+        skill = await get_writable_skill(db, user, skill_id, permission="global_skills.references")
         audit.target(skill)
         if audit.enabled:
             audit.summary.reference_count_before = len(await _references(db, skill.id))
@@ -254,7 +263,7 @@ async def replace_references(db: AsyncSession, user: User, skill_id: int, refs: 
 
 async def delete_skill(db: AsyncSession, user: User, skill_id: int) -> None:
     async with AuditOperation(db, user, "skill.delete", "skill", skill_id) as audit:
-        skill = await get_writable_skill(db, user, skill_id)
+        skill = await get_writable_skill(db, user, skill_id, permission="global_skills.delete")
         audit.target(skill)
         await db.delete(skill)
         await audit.commit()
@@ -305,8 +314,7 @@ async def restore_builtin(db: AsyncSession, user: User, skill_id: int) -> SkillO
     async with AuditOperation(db, user, "skill.restore_builtin", "skill", skill_id) as audit:
         skill = await get_visible_skill(db, user.id, skill_id)
         audit.target(skill)
-        if not user.is_admin:
-            raise ForbiddenError("只有管理员可以恢复内置 Skill")
+        await authz.require(db, user, "global_skills.restore_builtin", write=True)
         if not skill.builtin_key:
             raise BadRequestError("该 Skill 不是内置 Skill")
         audit.track(skill, ["slug", "name", "description", "category", "triggers", "body"])

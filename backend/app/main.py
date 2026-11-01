@@ -22,6 +22,7 @@ from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
 from app.services import (
     admin_dashboard_service,
     auth_service,
+    authorization_service,
     kb_parser,
     recycle_bin_service,
     skill_service,
@@ -70,6 +71,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app_: FastAPI):
         # 表结构由 alembic upgrade head 先行建立（Docker 入口已保证）
+        await authorization_service.initialize(app_.state.sessionmaker)
         await app_.state.system_settings.load()
         await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
         # 按 preset_key 同步内置写作风格（代码里改了预设，库里跟着更新）

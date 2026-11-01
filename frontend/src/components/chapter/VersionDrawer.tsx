@@ -1,3 +1,4 @@
+import { useAuthorizationCleanup } from '../../hooks/useAuthorizationCleanup'
 import { StarFilled, StarOutlined } from '@ant-design/icons'
 import { App, Button, Drawer, Modal, Popconfirm, Space, Table, Tabs, Tag, theme, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -10,6 +11,7 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { formatTime } from '../../utils/time'
 import TextDiff from '../TextDiff'
 import GenerationLogList from './GenerationLogList'
+import { useSettingsConfirmation } from '../systemSettings/useSettingsConfirmation'
 
 interface Props {
   pid: number
@@ -65,12 +67,15 @@ function VersionList({
 }: Omit<Props, 'open' | 'onClose'>) {
   const { token } = theme.useToken()
   const { message, modal } = App.useApp()
+  const { canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
+  const confirm = useSettingsConfirmation(modal, !canEdit)
   const loader = useCallback(() => versionApi.list(pid, chapterId), [pid, chapterId])
   const { data: items = [], loading, reload, setData } = useLoader(loader)
   const [selected, setSelected] = useState<number[]>([])
   const [diff, setDiff] = useState<DiffView | null>(null)
   const [view, setView] = useState<ContentView | null>(null)
   const [pending, setPending] = useState(false)
+  useAuthorizationCleanup(() => setPending(false))
   // 版本正文缓存；updated_at 变化（手动保存合并）时失效
   const cache = useRef(new Map<number, { stamp: string; content: string }>())
   const latestId = items[0]?.id
@@ -79,18 +84,19 @@ function VersionList({
     const hit = cache.current.get(v.id)
     if (hit && hit.stamp === v.updated_at) return hit.content
     const full = await versionApi.get(pid, chapterId, v.id)
-    cache.current.set(v.id, { stamp: v.updated_at, content: full.content })
+    if (canReadNow()) cache.current.set(v.id, { stamp: v.updated_at, content: full.content })
     return full.content
   }
 
-  const withPending = async (fn: () => Promise<void>) => {
+  const withPending = async (fn: () => Promise<void>, write = false) => {
+    if (!(write ? canEditNow() : canReadNow())) return
     setPending(true)
     try {
       await fn()
     } catch (err) {
-      message.error(errorMessage(err))
+      if (write ? canEditNow() : canReadNow()) message.error(errorMessage(err))
     } finally {
-      setPending(false)
+      if (write ? canEditNow() : canReadNow()) setPending(false)
     }
   }
 
@@ -99,33 +105,38 @@ function VersionList({
 
   const toggleStar = (v: ChapterVersionBrief) =>
     withPending(async () => {
-      replaceItem(await versionApi.update(pid, chapterId, v.id, { starred: !v.starred }))
-    })
+      const updated = await versionApi.update(pid, chapterId, v.id, { starred: !v.starred })
+      if (canEditNow()) replaceItem(updated)
+    }, true)
 
   const saveNote = (v: ChapterVersionBrief, note: string) => {
     const trimmed = note.trim()
     if (trimmed === v.note) return
     void withPending(async () => {
-      replaceItem(await versionApi.update(pid, chapterId, v.id, { note: trimmed }))
-    })
+      const updated = await versionApi.update(pid, chapterId, v.id, { note: trimmed })
+      if (canEditNow()) replaceItem(updated)
+    }, true)
   }
 
   const remove = (v: ChapterVersionBrief) =>
     withPending(async () => {
       await versionApi.remove(pid, chapterId, v.id)
+      if (!canEditNow()) return
       setSelected((s) => s.filter((id) => id !== v.id))
       message.success(`已删除 v${v.seq}`)
       reload()
-    })
+    }, true)
 
   const showView = (v: ChapterVersionBrief) =>
     withPending(async () => {
-      setView({ version: v, content: await fetchContent(v) })
+      const content = await fetchContent(v)
+      if (canReadNow()) setView({ version: v, content })
     })
 
   const compareWithCurrent = (v: ChapterVersionBrief) =>
     withPending(async () => {
       const a = await fetchContent(v)
+      if (!canReadNow()) return
       setDiff({ title: `v${v.seq} → 当前正文${currentDirty ? '（含未保存修改）' : ''}`, a, b: currentContent })
     })
 
@@ -134,17 +145,20 @@ function VersionList({
       const [x, y] = items.filter((v) => selected.includes(v.id)).sort((p, q) => p.seq - q.seq)
       if (!x || !y) return
       const [a, b] = await Promise.all([fetchContent(x), fetchContent(y)])
+      if (!canReadNow()) return
       setDiff({ title: `v${x.seq} → v${y.seq}`, a, b })
     })
 
   const confirmRestore = (v: ChapterVersionBrief) => {
-    modal.confirm({
+    if (!canEditNow()) return
+    confirm({
       title: `恢复到 v${v.seq}？`,
       content: `当前正文会先存为版本，恢复本身也会生成新版本，可随时撤销。${currentDirty ? '未保存的修改将先自动保存。' : ''}`,
       okText: '恢复',
       cancelText: '取消',
       onOk: async () => {
-        if (await onRestore(v)) {
+        if (!canEditNow()) return
+        if (await onRestore(v) && canEditNow()) {
           setView(null)
           reload()
         }
@@ -164,6 +178,7 @@ function VersionList({
               type="text"
               size="small"
               aria-label={v.starred ? '取消标星' : '标星'}
+              disabled={!canEdit}
               icon={v.starred ? <StarFilled style={{ color: token.colorWarning }} /> : <StarOutlined />}
               onClick={() => void toggleStar(v)}
             />
@@ -187,7 +202,7 @@ function VersionList({
       render: (note: string, v) => (
         <Typography.Text
           type={note ? undefined : 'secondary'}
-          editable={{ text: note, maxLength: 200, onChange: (val) => saveNote(v, val), tooltip: '编辑备注' }}
+          editable={canEdit ? { text: note, maxLength: 200, onChange: (val) => saveNote(v, val), tooltip: '编辑备注' } : false}
         >
           {note || '—'}
         </Typography.Text>
@@ -205,7 +220,7 @@ function VersionList({
           <Button type="link" size="small" onClick={() => void compareWithCurrent(v)}>
             对比当前
           </Button>
-          <Button type="link" size="small" disabled={restoreDisabled} onClick={() => confirmRestore(v)}>
+          <Button type="link" size="small" disabled={!canEdit || restoreDisabled} onClick={() => confirmRestore(v)}>
             恢复
           </Button>
           {v.id === latestId ? (
@@ -216,7 +231,7 @@ function VersionList({
             </Tooltip>
           ) : (
             <Popconfirm title={`删除 v${v.seq}？`} okText="删除" cancelText="取消" onConfirm={() => remove(v)}>
-              <Button type="link" size="small" danger>
+              <Button type="link" size="small" danger disabled={!canEdit}>
                 删除
               </Button>
             </Popconfirm>
@@ -263,7 +278,7 @@ function VersionList({
           view && (
             <Space>
               <Button onClick={() => void compareWithCurrent(view.version)}>与当前对比</Button>
-              <Button type="primary" disabled={restoreDisabled} onClick={() => confirmRestore(view.version)}>
+              <Button type="primary" disabled={!canEdit || restoreDisabled} onClick={() => confirmRestore(view.version)}>
                 恢复此版本
               </Button>
             </Space>

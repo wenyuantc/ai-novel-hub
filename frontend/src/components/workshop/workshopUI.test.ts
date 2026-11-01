@@ -7,7 +7,9 @@ import type { PromptTemplateDetail, WorkshopItem } from '../../api/types'
 import { WorkshopItemDetail } from './WorkshopItemDrawer'
 
 const viewer = vi.hoisted(() => ({ isAdmin: false }))
-const controls = vi.hoisted(() => ({ onImport: null as (() => void) | null }))
+const controls = vi.hoisted(() => ({ onImport: null as (() => void) | null, mounted: true }))
+// SSR不执行effect；这里显式模拟已挂载的动作scope，保留真实点击后的API链。
+vi.mock('../../hooks/useAuthorizationScope', () => ({ useAuthorizationScope: () => { let generation = 0; return { allowed: () => controls.mounted, begin: () => ++generation, current: (ticket: number) => controls.mounted && ticket === generation } } }))
 vi.mock('./WorkshopItemControls', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./WorkshopItemControls')>()
   return { default: (props: Parameters<typeof actual.default>[0]) => {
@@ -16,7 +18,7 @@ vi.mock('./WorkshopItemControls', async (importOriginal) => {
   } }
 })
 vi.mock('../../stores/auth', () => ({
-  useAuthStore: (select: (state: { user: { is_admin: boolean } }) => unknown) => select({ user: { is_admin: viewer.isAdmin } }),
+  useAuthStore: (select: (state: { user: import('../../api/types').User }) => unknown) => select({ user: { id: 1, username: '作者', created_at: '', is_admin: viewer.isAdmin, is_super_admin: viewer.isAdmin, effective_permissions: [], authorization_revision: 1, roles: [] } }),
 }))
 vi.mock('react-router-dom', () => ({
   Link: ({ to, children }: { to: string; children: ReactNode }) => createElement('a', { href: to }, children),

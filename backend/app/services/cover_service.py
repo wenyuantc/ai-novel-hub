@@ -25,7 +25,7 @@ async def get_cover(db: AsyncSession, user_id: int, project_id: int) -> ProjectC
 
 
 async def _lock_project(db: AsyncSession, user_id: int, project_id: int) -> Project:
-    return await project_service.get_manageable_project(db, user_id, project_id, lock=True)
+    return await project_service.get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
 
 
 async def put_cover(db: AsyncSession, user_id: int, project_id: int, data: bytes) -> ProjectOut:

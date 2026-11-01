@@ -30,7 +30,8 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import AppError
 from app.models import Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
-from app.services import task_service, task_statistics_service
+from app.services import authorization_service as authz
+from app.services import quota_service, task_service, task_statistics_service
 from app.services.task_engine.cancellation import AdminCancellationDrain
 from app.services.task_engine.hub import TaskHub
 from app.services.task_engine.registry import Event, TaskContext, TaskHandler, get_handler
@@ -64,6 +65,10 @@ class TaskEngine:
         self._cleanup_work: dict[int, dict[asyncio.Task, int]] = {}
         self._abort_failures: set[int] = set()
         self._running_users: dict[int, int] = {}
+        self._running_rounds: dict[int, Any] = {}
+        self._admitted: dict[int, tuple[str | None, Any, int]] = {}
+        self._claiming: set[int] = set()
+        self.runtime = authz.runtime_for_factory(ctx.sessionmaker)
         self._running_serial: dict[int, str] = {}
         self._cancel_requested: set[int] = set()
         self._shutdown: set[int] = set()
@@ -106,7 +111,8 @@ class TaskEngine:
         running = list(self._running.items())
         for task_id, t in running:
             self._shutdown.add(task_id)
-            if task_id not in self._cancel_requested and task_id not in self._finalizing:
+            if (task_id not in self._cancel_requested and task_id not in self._finalizing
+                    and task_id not in self._claiming):
                 t.cancel()
         if running:
             await asyncio.gather(*(t for _, t in running), return_exceptions=True)
@@ -208,28 +214,32 @@ class TaskEngine:
                 logger.exception("任务调度失败")
 
     async def _dispatch(self) -> None:
+        if not self.runtime.settings_confirmed:
+            return
         settings = self.ctx.settings
         sm = self.ctx.sessionmaker
         async with sm() as db:
             rows = await db.execute(
-                select(Task.id, Task.statistics_key, Task.user_id, Task.serial_key, Task.project_id)
+                select(Task.id, Task.statistics_key, Task.user_id, Task.serial_key, Task.project_id, Task.queued_at)
                 .outerjoin(Project, Project.id == Task.project_id)
                 .where(Task.status == "queued", Task.admin_cancel_operation_id.is_(None),
                        task_service.visible_project_condition())
                 .order_by(Task.id)
             )
             queued = list(rows.all())
+            limits = await quota_service.task_limits(db, (row.user_id for row in queued), settings)
         per_user = Counter(self._running_users.values())
         # 运行中占用的串行键；本轮被跳过的串行键也加入，保证同键内先进先出
         busy_serial = set(self._running_serial.values())
-        for task_id, statistics_key, user_id, serial_key, project_id in queued:
+        for task_id, statistics_key, user_id, serial_key, project_id, queued_at in queued:
             if self._stopping or len(self._running) >= settings.task_max_concurrency:
                 break
             if task_id in self._running:
                 continue
             if serial_key is not None and serial_key in busy_serial:
                 continue
-            if per_user[user_id] >= settings.task_max_per_user:
+            limit = limits[user_id]
+            if limit is not None and per_user[user_id] >= limit:
                 if serial_key is not None:
                     busy_serial.add(serial_key)
                 continue
@@ -237,6 +247,7 @@ class TaskEngine:
             # 先登记 asyncio.Task 再领取：库里出现 running 时内存里一定有可取消的执行体
             self._running_projects[task_id] = project_id
             self._running_users[task_id] = user_id
+            self._running_rounds[task_id] = queued_at
             self._running_statistics_keys[task_id] = statistics_key
             if serial_key is not None:
                 busy_serial.add(serial_key)
@@ -268,6 +279,9 @@ class TaskEngine:
                 self._abort_failures.add(project_id)
             logger.error("任务执行体异常结束 task=%s", task_id)
         self._running_users.pop(task_id, None)
+        self._running_rounds.pop(task_id, None)
+        self._admitted.pop(task_id, None)
+        self._claiming.discard(task_id)
         self._running_statistics_keys.pop(task_id, None)
         self._running_serial.pop(task_id, None)
         self._cancel_requested.discard(task_id)
@@ -275,29 +289,73 @@ class TaskEngine:
 
     # ---------------- 执行 ----------------
 
+    def admitted_count(self, user_id: int | None = None) -> int:
+        return sum(1 for _key, _round, owner in self._admitted.values() if user_id is None or owner == user_id)
+
     async def _claim_and_run(self, task_id: int, statistics_key: str | None) -> None:
-        """条件 UPDATE 领取（queued → running），影响行数为 1 才执行；否则（已被取消）静默退出。"""
+        """真正领取在共享发布临界段复核额度；候选登记不算admitted。"""
         if task_id in self._cancel_requested:
             return
         running_stage = task_service.STAGE_LABELS["running"]
-        async with self.ctx.sessionmaker() as db:
-            result = await db.execute(
-                update(Task)
-                .where(
-                    Task.id == task_id, Task.statistics_key == statistics_key,
-                    Task.status == "queued", task_service.visible_task_project_exists(),
-                    Task.admin_cancel_operation_id.is_(None),
+        try:
+            async with self.runtime.hold(), self.ctx.sessionmaker() as db:
+                if not self.runtime.settings_confirmed:
+                    return
+                await authz.gate(db)
+                candidate = (await db.execute(select(Task.user_id, Task.queued_at).where(
+                    Task.id == task_id, Task.statistics_key == statistics_key, Task.status == "queued",
+                ))).first()
+                if candidate is None:
+                    return
+                expected_round = self._running_rounds.get(task_id, candidate.queued_at)
+                if candidate.queued_at != expected_round:
+                    return
+                await authz.lock_users(db, candidate.user_id)
+                limit = (await quota_service.task_limits(db, [candidate.user_id], self.ctx.settings))[candidate.user_id]
+                if self._stopping or self.admitted_count() >= self.ctx.settings.task_max_concurrency or (
+                    limit is not None and self.admitted_count(candidate.user_id) >= limit
+                ) or task_id in self._cancel_requested:
+                    return
+                # 活驱动CAS/提交确认期间只登记取消意图，不cancel游标。
+                self._claiming.add(task_id)
+                result = await db.execute(
+                    update(Task)
+                    .where(
+                        Task.id == task_id, Task.statistics_key == statistics_key, Task.queued_at == expected_round,
+                        Task.status == "queued", task_service.visible_task_project_exists(),
+                        Task.admin_cancel_operation_id.is_(None),
+                    )
+                    .values(status="running", started_at=func.now(), stage=running_stage)
                 )
-                .values(status="running", started_at=func.now(), stage=running_stage)
-            )
-            if result.rowcount == 1:
+                if result.rowcount != 1:
+                    return
                 row = await db.get(Task, task_id)
                 await task_statistics_service.record_state_change(db, row, "running")
-                statistics_key = row.statistics_key
-                self._running_statistics_keys[task_id] = statistics_key
-            await db.commit()
-        if result.rowcount != 1:
-            return
+                self._running_statistics_keys[task_id] = row.statistics_key
+                try:
+                    await db.commit()
+                except Exception:
+                    # 提交确认丢失：不重放CAS，不在事实不明时开始外部执行。
+                    await db.rollback()
+                    while True:
+                        try:
+                            async with self.ctx.sessionmaker() as verify:
+                                persisted = (await verify.execute(select(Task.status).where(
+                                    Task.id == task_id, Task.statistics_key == statistics_key,
+                                    Task.queued_at == expected_round,
+                                ))).scalar_one_or_none()
+                            break
+                        except Exception:
+                            if self._stopping:
+                                return
+                            await asyncio.sleep(0.1)
+                    if persisted != "running":
+                        return
+                # 外层runtime尚未释放，覆盖DB已提交但commit await尚未返回的窗口。
+                self._admitted[task_id] = (statistics_key, expected_round, candidate.user_id)
+        finally:
+            # 会话退出也可能await；取消保护须无缝延续到_run的收尾try。
+            self._claiming.discard(task_id)
         hub, _ = self.ensure_hub(task_id, statistics_key=statistics_key, status="running")
         hub.set_queue_position(None)
         hub.set_progress(status="running", stage=running_stage)
@@ -320,7 +378,9 @@ class TaskEngine:
                 hub.close("error", {"task": None, "detail": TASK_GONE_MESSAGE})
                 return
             handler = get_handler(task.kind)
-            if task_id in self._cancel_requested:
+            if task_id in self._shutdown:
+                status, error = "interrupted", INTERRUPTED_MESSAGE
+            elif task_id in self._cancel_requested:
                 # 领取与取消请求几乎同时发生：不再执行
                 status, error = "cancelled", CANCELLED_MESSAGE
             else:
@@ -572,7 +632,8 @@ class TaskEngine:
             return
         if task_id not in self._cancel_requested and task_id not in self._finalizing:
             self._cancel_requested.add(task_id)
-            t.cancel()
+            if task_id not in self._claiming:
+                t.cancel()
         await asyncio.wait({t}, timeout=self.cancel_wait_seconds)
 
     @contextmanager

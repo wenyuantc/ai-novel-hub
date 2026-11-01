@@ -15,7 +15,7 @@ export default function ProjectLayout() {
   const pid = useProjectId()
   const location = useLocation()
   const { project, loading, error, load } = useProjectStore()
-  const { managingOther, canUseAI } = useProjectAccess(pid)
+  const { managingOther, canUseAI, canRead, canEdit } = useProjectAccess(pid)
   const isMobile = useIsMobile()
   const [agentPrefs, setAgentPrefs] = useState(readAgentPreferences)
   const agentRequested = new URLSearchParams(location.search).get('agent') === 'open'
@@ -28,6 +28,8 @@ export default function ProjectLayout() {
   if (error && (!project || project.id !== pid)) return <Result status="warning" title="无法打开项目" subTitle={error} extra={<Link to="/projects">返回作品书库</Link>} />
   if (!project || project.id !== pid) return <div style={{ padding: 48, textAlign: 'center' }}><Spin spinning={loading} /></div>
 
+  if (!canRead) return <Result status="403" title="没有读取此作品的权限" />
+
   return (
     <div className="studio-project-workspace">
       <div className="studio-project-content">
@@ -35,8 +37,9 @@ export default function ProjectLayout() {
           <Button icon={<RobotOutlined />} aria-expanded={agentOpen} onClick={() => { setAgentPrefs((prev) => ({ ...prev, open: !agentOpen })); if (agentOpen) setDismissedAgentRequest(location.key) }}>项目智能体</Button>
         </div>}
         {managingOther && project.owner && <ProjectManagementNotice owner={project.owner} />}
+        {managingOther && !canEdit && <Alert type="info" showIcon message="当前为只读内容管理，不能修改此作品" style={{ marginBottom: 12 }} />}
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
-        {managingOther && location.pathname.endsWith('/wizard') ? <Result status="info" title="当前为人工内容管理" extra={<Link to={`/projects/${pid}/overview`}>返回项目概览</Link>} /> : <Outlet />}
+        {managingOther && location.pathname.endsWith('/wizard') ? <Result status="info" title="当前为人工内容管理" extra={<Link to={`/projects/${pid}/overview`}>返回项目概览</Link>} /> : <div key={`${pid}:${managingOther ? String(canEdit) : 'owner'}`}><Outlet /></div>}
       </div>
       {canUseAI && <AgentDock projectId={pid} open={agentOpen} mobile={isMobile} width={agentPrefs.width} onWidth={(width) => setAgentPrefs((prev) => ({ ...prev, width }))} onClose={() => { setAgentPrefs((prev) => ({ ...prev, open: false })); setDismissedAgentRequest(location.key) }} />}
     </div>

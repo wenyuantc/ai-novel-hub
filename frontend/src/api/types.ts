@@ -4,6 +4,10 @@ export interface User {
   id: number
   username: string
   is_admin: boolean
+  is_super_admin: boolean
+  effective_permissions: PermissionCode[]
+  authorization_revision: number
+  roles: RoleBrief[]
   created_at: string
 }
 
@@ -96,6 +100,10 @@ export interface AdminUser {
   is_active: boolean
   created_at: string
   project_count: number
+  is_super_admin: boolean
+  is_management_account: boolean
+  authorization_revision: number
+  roles: RoleBrief[]
 }
 
 export interface AdminResourceUsage {
@@ -123,12 +131,10 @@ export interface AdminUserListQuery {
 export interface AdminUserCreate {
   username: string
   password: string
-  is_admin?: boolean
 }
 
 /** 省略的字段保持不变 */
 export interface AdminUserUpdate {
-  is_admin?: boolean
   is_active?: boolean
 }
 
@@ -138,6 +144,7 @@ export interface ResetPasswordRequest {
 
 // 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
 export type AuditAction =
+  | 'role.create' | 'role.update' | 'role.delete' | 'user.roles.update' | 'user.roles.bootstrap' | 'user.quotas.update'
   | 'task.cancel_request'
   | 'system_settings.update'
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
@@ -148,7 +155,7 @@ export type AuditAction =
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
   | 'skill.restore_builtin' | 'audit.cleanup'
-export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings'
+export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'role'
 export type AuditResult = 'success' | 'failure'
 export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
 export type AuditField =
@@ -165,6 +172,7 @@ export interface AuditValueChange {
 }
 
 export interface AuditSummary {
+  rbac_change?: { source_role_id: number | null; role_ids_before: number[]; role_ids_after: number[]; permissions_before: PermissionCode[]; permissions_after: PermissionCode[]; quotas: { metric: 'project_count' | 'task_concurrency'; before: QuotaConfig; after: QuotaConfig }[]; ids_truncated: boolean } | null
   settings_changes?: SystemSettingAuditChange[]
   changed_fields: AuditField[]
   changes: AuditValueChange[]
@@ -3191,3 +3199,25 @@ export interface AdminTaskListQuery {
 }
 export interface AdminTaskCancelRequest { confirm: true; reason: string }
 export interface AdminTaskCancelOut { operation_id: string; audit_log_id: number | null }
+
+// 账号管理权限与角色；权限代码由服务端目录校验。
+export interface RoleBrief { id: number; name: string; system_key: string | null; is_builtin: boolean }
+export interface PermissionDefinition { code: PermissionCode; label: string; group: string; dangerous: boolean; requires: PermissionCode[] }
+export interface Role extends RoleBrief { description: string; permissions: PermissionCode[]; revision: number; member_count: number; created_at: string; updated_at: string; authorization_revision: number }
+export interface RoleList extends Page<Role> { authorization_revision: number }
+export interface RoleCreate { name: string; description?: string; permissions?: PermissionCode[]; source_role_id?: number; source_revision?: number }
+export interface RoleUpdate { authorization_revision: number; revision: number; name?: string; description?: string; permissions?: PermissionCode[] }
+export type QuotaConfig = { mode: 'inherit' } | { mode: 'unlimited' } | { mode: 'limited'; value: number }
+export interface QuotaItem { config: QuotaConfig; effective_limit: number | null; source: 'user' | 'system' | 'default'; used: number }
+export interface UserQuota { user_id: number; username: string; is_management_account: boolean; revision: number; authorization_revision: number; global_task_limit: number; project_count: QuotaItem; task_concurrency: QuotaItem }
+export interface UserQuotaUpdate { authorization_revision: number; revision: number; changes: { project_count?: QuotaConfig; task_concurrency?: QuotaConfig } }
+export type PermissionCode =
+  | 'dashboard.read'
+  | 'users.read' | 'users.create' | 'users.status' | 'users.reset_password' | 'users.delete'
+  | 'quotas.read' | 'quotas.update'
+  | 'projects.read' | 'projects.edit' | 'projects.recycle'
+  | 'recycle_bin.read' | 'recycle_bin.restore' | 'recycle_bin.purge'
+  | 'tasks.read' | 'tasks.cancel' | 'audit.read' | 'audit.cleanup'
+  | 'settings.read' | 'settings.update'
+  | 'workshop.read' | 'workshop.approve' | 'workshop.reject' | 'workshop.publish' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
+  | 'global_skills.create' | 'global_skills.update' | 'global_skills.references' | 'global_skills.delete' | 'global_skills.restore_builtin'

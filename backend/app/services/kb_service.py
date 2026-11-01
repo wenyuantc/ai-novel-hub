@@ -71,7 +71,7 @@ async def get_settings(db: AsyncSession, user_id: int, project_id: int) -> KbSet
 
 
 async def update_settings(db: AsyncSession, user_id: int, project_id: int, data: KbSettingsUpdate) -> KbSettingsOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     row = await db.get(KbSettings, project_id)
     if row is None:
         row = default_settings(project_id)
@@ -156,7 +156,7 @@ async def chunk_ids_of(db: AsyncSession, document_id: int) -> list[int]:
 
 
 async def set_inject(db: AsyncSession, user_id: int, project_id: int, document_id: int, inject: bool) -> KbDocumentOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     doc = await get_project_document(db, user_id, project_id, document_id)
     if doc.inject != inject:
         doc.inject = inject
@@ -187,7 +187,7 @@ def doc_resource_key(document_id: int) -> str:
 
 
 async def delete_document(db: AsyncSession, user_id: int, project_id: int, document_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     doc = await get_project_document(db, user_id, project_id, document_id)
     if await _active_doc_task(db, doc.id) is not None:
         raise ConflictError("该文档正在建索引，请等待完成或取消任务后再删除")

@@ -4,14 +4,14 @@ import { adminGuard, canConfirmDelete, rowActions } from './adminUsers'
 import { userDeleteBlockReason, userProjectCountFromError } from './adminUsers'
 import { ApiError } from '../api/client'
 
-const admin: User = { id: 1, username: 'root', is_admin: true, created_at: '2026-10-23T00:00:00' }
-const normal: User = { ...admin, id: 2, username: 'alice', is_admin: false }
+const admin: User = { id: 1, username: 'root', is_admin: true, is_super_admin: true, effective_permissions: [], authorization_revision: 1, roles: [], created_at: '2026-10-23T00:00:00' }
+const normal: User = { ...admin, id: 2, username: 'alice', is_admin: false, is_super_admin: false }
 
 function row(overrides: Partial<AdminUser> = {}): AdminUser {
   return {
     id: 2,
     username: 'alice',
-    is_admin: false,
+    is_admin: false, is_super_admin: false, is_management_account: false, roles: [], authorization_revision: 1,
     is_active: true,
     created_at: '2026-10-23T00:00:00',
     project_count: 0,
@@ -34,23 +34,22 @@ describe('adminGuard', () => {
 
 describe('rowActions', () => {
   it('自己的行禁用全部危险操作', () => {
-    expect(rowActions(row({ id: 1, is_admin: true }), 1)).toEqual({
+    expect(rowActions(row({ id: 1, is_admin: true, is_super_admin: true, is_management_account: true }), 1, admin)).toEqual({
       isSelf: true,
       canResetPassword: false,
       canToggleActive: false,
-      canToggleAdmin: false,
-      canDelete: false,
+            canDelete: false,
     })
   })
   it('他人的行全部可操作', () => {
-    const a = rowActions(row({ is_active: false }), 1)
+    const a = rowActions(row({ is_active: false }), 1, admin)
     expect(a.isSelf).toBe(false)
-    expect([a.canResetPassword, a.canToggleActive, a.canToggleAdmin, a.canDelete]).toEqual([true, true, true, true])
+    expect([a.canResetPassword, a.canToggleActive, a.canDelete]).toEqual([true, true, true])
   })
   it('含回收站在内还有作品时不可删号，但仍可禁用账号', () => {
     const value = row({ project_count: 3 })
-    expect(rowActions(value, 1).canDelete).toBe(false)
-    expect(rowActions(value, 1).canToggleActive).toBe(true)
+    expect(rowActions(value, 1, admin).canDelete).toBe(false)
+    expect(rowActions(value, 1, admin).canToggleActive).toBe(true)
     expect(userDeleteBlockReason(value)).toContain('3 部作品（含回收站及待清理作品）')
     expect(userDeleteBlockReason(row())).toBeNull()
   })

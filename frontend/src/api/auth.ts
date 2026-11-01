@@ -3,7 +3,7 @@ import type { AuthConfig, ChangePasswordRequest, Credentials, User } from './typ
 
 export const authApi = {
   config: (signal?: AbortSignal) => request<AuthConfig>('/auth/config', { signal }),
-  me: () => api.get<User>('/auth/me'),
+  me: (signal?: AbortSignal) => request<User>('/auth/me', { signal }),
   login: (body: Credentials) => api.post<User>('/auth/login', body),
   register: (body: Credentials) => api.post<User>('/auth/register', body),
   logout: () => api.post<void>('/auth/logout'),

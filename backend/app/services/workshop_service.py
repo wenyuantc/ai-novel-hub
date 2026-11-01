@@ -32,6 +32,7 @@ from app.schemas.workshop import (
     WorkshopSubmissionOut,
     WorkshopSubmit,
 )
+from app.services import authorization_service as authz
 from app.services import prompt_service, style_service
 from app.services.audit_writer import AuditOperation
 
@@ -40,15 +41,18 @@ MAX_PENDING = 20
 MAX_BODY_BYTES = 1024 * 1024
 
 
-def _author(author_id: int | None, username: str | None, anonymous: bool, viewer: User) -> str | None:
+def _author(
+    author_id: int | None, username: str | None, anonymous: bool, viewer: User, *, moderator: bool = False,
+) -> str | None:
     if author_id is None:
         return "已注销用户"
-    if anonymous and not viewer.is_admin and viewer.id != author_id:
+    if anonymous and not moderator and viewer.id != author_id:
         return None
     return username
 
 
 async def _item_outputs(db: AsyncSession, viewer: User, items: list[WorkshopItem]) -> list[WorkshopItemOut]:
+    moderator = await authz.allows(db, viewer, "workshop.read")
     ids = [i.id for i in items]
     author_ids = {i.author_id for i in items if i.author_id is not None}
     names = dict((await db.execute(select(User.id, User.username).where(User.id.in_(author_ids)))).all())
@@ -72,8 +76,10 @@ async def _item_outputs(db: AsyncSession, viewer: User, items: list[WorkshopItem
         WorkshopItemOut(
             **{f: getattr(item, f) for f in CONTENT_FIELDS},
             id=item.id,
-            author_name=_author(item.author_id, names.get(item.author_id), item.is_anonymous, viewer),
-            author_username=names.get(item.author_id) if viewer.is_admin else None,
+            author_name=_author(
+                item.author_id, names.get(item.author_id), item.is_anonymous, viewer, moderator=moderator
+            ),
+            author_username=names.get(item.author_id) if moderator else None,
             is_mine=item.author_id == viewer.id,
             is_official=item.is_official,
             status=item.status,
@@ -93,6 +99,7 @@ async def _item_outputs(db: AsyncSession, viewer: User, items: list[WorkshopItem
 async def _submission_outputs(
     db: AsyncSession, viewer: User, rows: list[WorkshopSubmission]
 ) -> list[WorkshopSubmissionOut]:
+    moderator = await authz.allows(db, viewer, "workshop.read")
     names = dict(
         (await db.execute(select(User.id, User.username).where(User.id.in_({s.submitter_id for s in rows})))).all()
     )
@@ -101,8 +108,8 @@ async def _submission_outputs(
             **{f: getattr(s, f) for f in CONTENT_FIELDS},
             id=s.id,
             item_id=s.item_id,
-            author_name=_author(s.submitter_id, names.get(s.submitter_id), s.is_anonymous, viewer),
-            author_username=names.get(s.submitter_id) if viewer.is_admin else None,
+            author_name=_author(s.submitter_id, names.get(s.submitter_id), s.is_anonymous, viewer, moderator=moderator),
+            author_username=names.get(s.submitter_id) if moderator else None,
             status=s.status,
             review_note=s.review_note,
             reviewed_at=s.reviewed_at,
@@ -119,7 +126,7 @@ async def _get_item(
     stmt = select(WorkshopItem).where(WorkshopItem.id == item_id)
     if owned:
         stmt = stmt.where(WorkshopItem.author_id == viewer.id)
-    elif not viewer.is_admin:
+    elif not await authz.allows(db, viewer, "workshop.read"):
         stmt = stmt.where(or_(WorkshopItem.status == "active", WorkshopItem.author_id == viewer.id))
     if lock:
         stmt = stmt.with_for_update()
@@ -152,7 +159,7 @@ async def list_items(
     page_size: int = 20,
 ) -> WorkshopItemList:
     filters = [WorkshopItem.author_id == viewer.id] if mine else []
-    if not mine and not viewer.is_admin:
+    if not mine and not await authz.allows(db, viewer, "workshop.read"):
         filters.append(WorkshopItem.status == "active")
     for column, value in (
         (WorkshopItem.kind, kind),
@@ -203,7 +210,7 @@ async def _get_submission(
 
 
 async def get_submission(db: AsyncSession, viewer: User, submission_id: int) -> WorkshopSubmissionOut:
-    row = await _get_submission(db, viewer, submission_id, admin=viewer.is_admin)
+    row = await _get_submission(db, viewer, submission_id, admin=await authz.allows(db, viewer, "workshop.read"))
     return (await _submission_outputs(db, viewer, [row]))[0]
 
 
@@ -216,6 +223,8 @@ async def list_submissions(
     page: int = 1,
     page_size: int = 20,
 ) -> WorkshopSubmissionList:
+    if admin:
+        await authz.require(db, viewer, "workshop.read")
     filters = [] if admin else [WorkshopSubmission.submitter_id == viewer.id]
     if status:
         filters.append(WorkshopSubmission.status == status)
@@ -264,8 +273,13 @@ def _clean_content(data: WorkshopSubmit) -> dict[str, str]:
     return values
 
 
-async def submit(db: AsyncSession, viewer: User, data: WorkshopSubmit) -> WorkshopSubmissionOut:
-    async with AuditOperation(db, viewer, "workshop.publish", "workshop_submission", None) as audit:
+async def submit(
+    db: AsyncSession, viewer: User, data: WorkshopSubmit, *, official: bool = False,
+) -> WorkshopSubmissionOut:
+    publishing = official or await authz.allows(db, viewer, "workshop.publish")
+    if publishing:
+        await authz.require(db, viewer, "workshop.publish", write=True)
+    async with AuditOperation(db, viewer, "workshop.publish", "workshop_submission", None, enabled=publishing) as audit:
         audit.values["target_label"] = data.name
         values = data.model_dump(exclude={"item_id"})
         values["content"] = _clean_content(data)
@@ -288,13 +302,13 @@ async def submit(db: AsyncSession, viewer: User, data: WorkshopSubmit) -> Worksh
                 WorkshopSubmission.submitter_id == viewer.id, WorkshopSubmission.status == "pending"
             )
         )
-        if count >= MAX_PENDING and not viewer.is_admin:
+        if count >= MAX_PENDING and not publishing:
             raise BadRequestError(f"待审核提交最多 {MAX_PENDING} 条")
         row = WorkshopSubmission(**values, item_id=data.item_id, submitter_id=viewer.id)
         db.add(row)
         try:
             await db.flush()
-            if viewer.is_admin:
+            if publishing:
                 audit.track(row, ["status"])
                 await _approve(db, viewer, row, WorkshopApprove(), official=True, audit=audit)
             audit.target(row)
@@ -367,6 +381,7 @@ async def _approve(
 
 
 async def approve(db: AsyncSession, viewer: User, submission_id: int, data: WorkshopApprove) -> WorkshopSubmissionOut:
+    await authz.require(db, viewer, "workshop.approve", write=True)
     async with AuditOperation(db, viewer, "workshop.approve", "workshop_submission", submission_id) as audit:
         row = await _get_submission(db, viewer, submission_id, admin=True)
         audit.target(row)
@@ -382,6 +397,7 @@ async def approve(db: AsyncSession, viewer: User, submission_id: int, data: Work
 
 
 async def reject(db: AsyncSession, viewer: User, submission_id: int, note: str) -> WorkshopSubmissionOut:
+    await authz.require(db, viewer, "workshop.reject", write=True)
     async with AuditOperation(db, viewer, "workshop.reject", "workshop_submission", submission_id) as audit:
         row = await _get_submission(db, viewer, submission_id, admin=True)
         audit.target(row)
@@ -402,20 +418,23 @@ async def withdraw(db: AsyncSession, viewer: User, submission_id: int) -> Worksh
 
 
 async def set_visibility(db: AsyncSession, viewer: User, item_id: int, *, hidden: bool) -> WorkshopItemOut:
+    permission = "workshop.hide" if hidden else "workshop.unhide"
+    moderator = await authz.allows(db, viewer, permission)
+    if moderator:
+        await authz.require(db, viewer, permission, write=True)
     async with AuditOperation(
-        db, viewer, "workshop.hide" if hidden else "workshop.unhide", "workshop_item", item_id
+        db, viewer, permission, "workshop_item", item_id, enabled=moderator,
     ) as audit:
-        item = await _get_item(db, viewer, item_id, owned=not viewer.is_admin, lock=True)
+        item = await _get_item(db, viewer, item_id, owned=not moderator, lock=True)
         audit.target(item)
         await audit.owner(item.author_id)
         audit.track(item, ["status", "hidden_by"])
-        if not hidden and item.hidden_by == "admin" and not viewer.is_admin:
+        if not hidden and item.hidden_by == "admin" and not moderator:
             raise ForbiddenError("该条目已被管理员下架")
-        # 作者不能把管理员下架改标为作者下架，借此绕过恢复权限。
         if hidden:
             item.status = "hidden"
-            if viewer.is_admin or item.hidden_by != "admin":
-                item.hidden_by = "admin" if viewer.is_admin else "author"
+            if moderator or item.hidden_by != "admin":
+                item.hidden_by = "admin" if moderator else "author"
         else:
             item.status, item.hidden_by = "active", None
         await audit.commit()
@@ -424,6 +443,7 @@ async def set_visibility(db: AsyncSession, viewer: User, item_id: int, *, hidden
 
 
 async def patch_metadata(db: AsyncSession, viewer: User, item_id: int, data: WorkshopApprove) -> WorkshopItemOut:
+    await authz.require(db, viewer, "workshop.update", write=True)
     async with AuditOperation(db, viewer, "workshop.update", "workshop_item", item_id) as audit:
         item = await _get_item(db, viewer, item_id, lock=True)
         audit.target(item)
@@ -439,6 +459,7 @@ async def patch_metadata(db: AsyncSession, viewer: User, item_id: int, data: Wor
 
 
 async def delete_item(db: AsyncSession, viewer: User, item_id: int) -> None:
+    await authz.require(db, viewer, "workshop.delete", write=True)
     async with AuditOperation(db, viewer, "workshop.delete", "workshop_item", item_id) as audit:
         item = await _get_item(db, viewer, item_id, lock=True)
         audit.target(item)

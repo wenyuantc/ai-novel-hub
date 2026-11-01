@@ -8,12 +8,13 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from app.core.config import Settings
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, UnauthorizedError
 from app.core.security import JWT_ALGORITHM, decode_access_token, verify_password
 from app.models import AIConfig, Chapter, Project, User
-from app.schemas.admin import AdminUserUpdate
 from app.services import admin_service, auth_service
+from app.services import authorization_service as authz
 from tests.helpers import TEST_FERNET_KEY, TEST_JWT_SECRET, create_ai_config, create_project, register
+from tests.rbac_helpers import assign_roles, authorization_revision
 
 ADMIN = {"admin_username": "root", "admin_password": "rootpass123"}
 USERS = "/api/v1/admin/users"
@@ -45,6 +46,15 @@ async def admin_client(app, make_client):
 async def find_user(admin_client, username: str) -> dict:
     items = (await admin_client.get(USERS, params={"q": username})).json()["items"]
     return next(u for u in items if u["username"] == username)
+
+
+async def super_role_id(client) -> int:
+    roles = (await client.get("/api/v1/admin/roles")).json()["items"]
+    return next(role["id"] for role in roles if role["system_key"] == "super_admin")
+
+
+async def promote(client, user_id: int):
+    return await assign_roles(client, user_id, [await super_role_id(client)])
 
 
 # ---------- 引导 ----------
@@ -157,7 +167,7 @@ async def test_admin_routes_require_login(client):
 @pytest.mark.parametrize("settings_overrides", [ADMIN])
 async def test_unknown_user_404(admin_client):
     for method, url, body in [
-        ("PATCH", f"{USERS}/9999", {"is_admin": True}),
+        ("PATCH", f"{USERS}/9999", {"is_active": False}),
         ("POST", f"{USERS}/9999/reset-password", {"new_password": "newpass123"}),
         ("DELETE", f"{USERS}/9999", None),
     ]:
@@ -181,7 +191,10 @@ async def test_list_search_paginate_project_count(admin_client, make_client):
     body = (await admin_client.get(USERS)).json()
     assert body["total"] == 4
     assert [u["username"] for u in body["items"]] == ["root", "alice", "alfred", "bob"]
-    assert set(body["items"][0]) == {"id", "username", "is_admin", "is_active", "created_at", "project_count"}
+    assert set(body["items"][0]) == {
+        "id", "username", "is_admin", "is_active", "created_at", "project_count",
+        "is_super_admin", "is_management_account", "roles", "authorization_revision",
+    }
     counts = {u["username"]: u["project_count"] for u in body["items"]}
     assert counts == {"root": 0, "alice": 2, "alfred": 0, "bob": 0}
 
@@ -212,8 +225,9 @@ async def test_admin_creates_users_when_registration_disabled(admin_client, make
     resp = await login(c, "carol", "carolpass1")
     assert resp.status_code == 200 and resp.json()["is_admin"] is False
 
-    resp = await admin_client.post(USERS, json={"username": "dave", "password": "davepass1", "is_admin": True})
-    assert resp.status_code == 201 and resp.json()["is_admin"] is True
+    resp = await admin_client.post(USERS, json={"username": "dave", "password": "davepass1"})
+    assert resp.status_code == 201
+    assert (await promote(admin_client, resp.json()["id"]))["is_admin"] is True
     d = make_client()
     await login(d, "dave", "davepass1")
     assert (await d.get("/api/v1/auth/me")).json()["is_admin"] is True
@@ -305,14 +319,12 @@ def test_token_with_bad_ver_rejected():
 async def test_promote_and_demote(admin_client, client):
     await register(client, "alice")
     uid = (await find_user(admin_client, "alice"))["id"]
-    resp = await admin_client.patch(f"{USERS}/{uid}", json={"is_admin": True})
-    assert resp.status_code == 200 and resp.json()["is_admin"] is True
+    assert (await promote(admin_client, uid))["is_admin"] is True
     # 设为管理员不影响现有会话
     assert (await client.get("/api/v1/auth/me")).json()["is_admin"] is True
     assert (await client.get(USERS)).status_code == 200
 
-    resp = await admin_client.patch(f"{USERS}/{uid}", json={"is_admin": False})
-    assert resp.status_code == 200 and resp.json()["is_admin"] is False
+    assert (await assign_roles(admin_client, uid, []))["is_admin"] is False
     assert (await client.get(USERS)).status_code == 403
 
 
@@ -324,14 +336,18 @@ async def test_cannot_act_on_self(admin_client):
     me = (await admin_client.get("/api/v1/auth/me")).json()
     for method, url, body in [
         ("PATCH", f"{USERS}/{me['id']}", {"is_active": False}),
-        ("PATCH", f"{USERS}/{me['id']}", {"is_admin": False}),
+
         ("DELETE", f"{USERS}/{me['id']}", None),
     ]:
         resp = await admin_client.request(method, url, json=body)
         assert resp.status_code == 400, (method, body)
         assert resp.json()["detail"] == "不能对自己执行该操作"
-    # 无实际变更的 PATCH 允许
-    resp = await admin_client.patch(f"{USERS}/{me['id']}", json={"is_admin": True, "is_active": True})
+    resp = await admin_client.put(f"{USERS}/{me['id']}/roles", json={
+        "authorization_revision": await authorization_revision(admin_client), "role_ids": [],
+    })
+    assert resp.status_code == 400
+    # 无实际状态变更的 PATCH 允许；角色变更仅走专用接口。
+    resp = await admin_client.patch(f"{USERS}/{me['id']}", json={"is_active": True})
     assert resp.status_code == 200
     root = (await admin_client.get("/api/v1/auth/me")).json()
     assert root["is_admin"] is True
@@ -340,8 +356,9 @@ async def test_cannot_act_on_self(admin_client):
 @pytest.mark.parametrize("settings_overrides", [ADMIN])
 async def test_last_active_admin_protected(app, admin_client, make_client):
     # 另一名管理员 bob；root 被禁用后 bob 成为唯一启用中的管理员
-    resp = await admin_client.post(USERS, json={"username": "bob", "password": "bobpass123", "is_admin": True})
+    resp = await admin_client.post(USERS, json={"username": "bob", "password": "bobpass123"})
     bob_id = resp.json()["id"]
+    await promote(admin_client, bob_id)
     root_id = (await admin_client.get("/api/v1/auth/me")).json()["id"]
     bob = make_client()
     await login(bob, "bob", "bobpass123")
@@ -349,17 +366,14 @@ async def test_last_active_admin_protected(app, admin_client, make_client):
     resp = await bob.patch(f"{USERS}/{root_id}", json={"is_active": False})
     assert resp.status_code == 200
 
-    # 此时 bob 是唯一启用中的管理员：由 bob 自己操作命中自我护栏，
-    # 直接在 service 层以第三方身份校验最后管理员护栏
-    for op in ("demote", "disable", "delete"):
-        async with app.state.sessionmaker() as db:
-            actor = await db.get(User, root_id)
-            with pytest.raises(ConflictError, match="至少需要保留一名启用中的管理员"):
-                if op == "delete":
-                    await admin_service.delete_user(db, actor, bob_id)
-                else:
-                    data = AdminUserUpdate(is_admin=False) if op == "demote" else AdminUserUpdate(is_active=False)
-                    await admin_service.update_user(db, actor, bob_id, data)
+    # 最后一名启用超管约束仍在底层；禁用 actor 无法绕过写前认证。
+    async with app.state.sessionmaker() as db:
+        await authz.gate(db)
+        with pytest.raises(ConflictError, match="至少需要保留一名启用中的管理员"):
+            await admin_service._ensure_other_active_admin(db, bob_id)
+        actor = await db.get(User, root_id)
+        with pytest.raises(UnauthorizedError):
+            await admin_service.delete_user(db, actor, bob_id)
     bob_row = await get_db_user(app, "bob")
     assert (bob_row.is_admin, bob_row.is_active) == (True, True)
 
@@ -368,27 +382,32 @@ async def test_last_active_admin_protected(app, admin_client, make_client):
     assert resp.status_code == 200
     root2 = make_client()
     await login(root2, "root", "rootpass123")
-    resp = await root2.patch(f"{USERS}/{bob_id}", json={"is_admin": False})
-    assert resp.status_code == 200
+    assert (await assign_roles(root2, bob_id, []))["is_admin"] is False
 
 
 @pytest.mark.parametrize("settings_overrides", [ADMIN])
 async def test_multi_admin_flow_via_http(app, admin_client, make_client):
     """HTTP 层面：操作者本身是启用中的管理员且不能操作自己，因此最后一名管理员只能由自我护栏兜住。"""
-    resp = await admin_client.post(USERS, json={"username": "bob", "password": "bobpass123", "is_admin": True})
+    resp = await admin_client.post(USERS, json={"username": "bob", "password": "bobpass123"})
     bob_id = resp.json()["id"]
-    resp = await admin_client.post(USERS, json={"username": "carl", "password": "carlpass1", "is_admin": True})
+    await promote(admin_client, bob_id)
+    resp = await admin_client.post(USERS, json={"username": "carl", "password": "carlpass1"})
     carl_id = resp.json()["id"]
+    await promote(admin_client, carl_id)
     carl = make_client()
     await login(carl, "carl", "carlpass1")
     # 还有其他管理员时可以降级 / 删除别的管理员
     root_id = (await admin_client.get("/api/v1/auth/me")).json()["id"]
-    assert (await carl.patch(f"{USERS}/{root_id}", json={"is_admin": False})).status_code == 200
+    assert (await assign_roles(carl, root_id, []))["is_admin"] is False
     # carl 删除 bob 后仍有 carl 一名管理员，允许
     assert (await carl.delete(f"{USERS}/{bob_id}")).status_code == 204
     # 现在 carl 是唯一启用中的管理员，root 已无管理员权限
-    assert (await admin_client.patch(f"{USERS}/{carl_id}", json={"is_admin": False})).status_code == 403
-    resp = await carl.patch(f"{USERS}/{carl_id}", json={"is_admin": False})
+    assert (await admin_client.put(f"{USERS}/{carl_id}/roles", json={
+        "authorization_revision": await authorization_revision(carl), "role_ids": [],
+    })).status_code == 403
+    resp = await carl.put(f"{USERS}/{carl_id}/roles", json={
+        "authorization_revision": await authorization_revision(carl), "role_ids": [],
+    })
     assert resp.status_code == 400
 
 

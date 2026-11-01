@@ -3,6 +3,8 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.rbac import AuthorizationOut
+
 
 def _check_password_bytes(v: str) -> str:
     # bcrypt 只接受不超过 72 字节的密码
@@ -30,7 +32,7 @@ class Credentials(BaseModel):
         return v
 
 
-class UserOut(BaseModel):
+class UserOut(AuthorizationOut):
     model_config = ConfigDict(from_attributes=True)
 
     id: int

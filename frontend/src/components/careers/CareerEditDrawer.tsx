@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, Col, Drawer, Empty, Form, Input, Row, Select, Table, Tag, Typography } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
 import {
@@ -52,6 +53,7 @@ export default function CareerEditDrawer(props: Props) {
 }
 
 function Inner({ projectId, career, onSaved }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const [stages, setStages] = useState<StageRow[]>(() =>
@@ -71,10 +73,14 @@ function Inner({ projectId, career, onSaved }: Props) {
   const lockedIds = useMemo(() => new Set(holders.map((h) => h.stage_id)), [holders])
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     let v: FormValues
     try {
+      if (!canEditNow()) return
       v = await form.validateFields()
+      if (!canEditNow()) return
     } catch {
+      if (!canEditNow()) return
       return
     }
     if (stageError) {
@@ -92,12 +98,15 @@ function Inner({ projectId, career, onSaved }: Props) {
     }
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const saved = current ? await careerApi.update(projectId, current.id, body) : await careerApi.create(projectId, body)
+      if (!canEditNow()) return
       message.success('已保存')
       setCurrent(saved)
       setStages(stagesToRows(saved.stages))
       onSaved(saved)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -109,7 +118,7 @@ function Inner({ projectId, career, onSaved }: Props) {
       <Form
         form={form}
         layout="vertical"
-        disabled={saving}
+        disabled={!canEdit || (saving)}
         initialValues={{
           name: career?.name ?? '',
           kind: (career?.kind as CareerKind | undefined) ?? 'main',
@@ -162,9 +171,9 @@ function Inner({ projectId, career, onSaved }: Props) {
         </Form.Item>
       </Form>
       <Typography.Title level={5}>阶段阶梯（{stages.length} 阶）</Typography.Title>
-      <StageListEditor value={stages} onChange={setStages} disabled={saving} lockedIds={lockedIds} error={stageError} />
+      <StageListEditor value={stages} onChange={setStages} disabled={!canEdit || saving} lockedIds={lockedIds} error={stageError} />
       <div style={{ margin: '16px 0' }}>
-        <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+        <Button type="primary" loading={saving} onClick={() => void handleSave()} disabled={!canEdit}>
           保存
         </Button>
       </div>

@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { AdminUser } from '../../api/types'
 import { AdminUserActionsController } from './adminUserActionsController'
 import type { AdminUserAction, AdminUserActionTarget } from './adminUserActionsController'
 
-const user: AdminUser = { id: 2, username: 'alice', is_admin: false, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 0 }
+import { useAuthStore } from '../../stores/auth'
+beforeEach(() => useAuthStore.setState({ status: 'authenticated', user: {id: 1,username: 'root',created_at: '',is_admin: true,is_super_admin: true,effective_permissions: [],authorization_revision: 1,roles: []} }))
+
+const user: AdminUser = { id: 2, username: 'alice', is_admin: false, is_super_admin: false, authorization_revision: 1, roles: [], is_management_account: false, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 0 }
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej }); return { promise, resolve, reject } }
 function setup() {
   const callbacks = { changed: vi.fn(), deleted: vi.fn(), success: vi.fn() }
@@ -17,7 +20,36 @@ function setup() {
 function target(controller: AdminUserActionsController): AdminUserActionTarget { const result = controller.getSnapshot().target; if (!result) throw new Error('缺少待确认目标'); return result }
 
 describe('账号动作真实提交路径', () => {
-  it.each<AdminUserAction>(['reset', 'active', 'admin', 'delete'])('%s 使用原 API，确认后才产生动作及成功回调', async (action) => {
+  it('已授危险权限仍不能操作管理账号；同actor撤写期间不提交校验后的旧请求', async () => {
+    const actor = useAuthStore.getState().user!
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, effective_permissions: ['users.read', 'users.reset_password', 'users.status', 'users.delete'] } })
+    const { controller, api, callbacks } = setup()
+    controller.open({ ...user, is_management_account: true }, 'active')
+    expect(controller.getSnapshot().target).toBeNull()
+    controller.open(user, 'reset')
+    const validation = deferred<{new_password: string}>()
+    const pending = controller.submit(target(controller), () => validation.promise)
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, effective_permissions: ['users.read'], authorization_revision: 2 } })
+    validation.resolve({new_password: 'old12345'})
+    await expect(pending).resolves.toBe(false)
+    expect(api.resetPassword).not.toHaveBeenCalled()
+    expect(callbacks.success).not.toHaveBeenCalled()
+  })
+  it('请求已发后同actor仅撤写，迟到响应不toast、不刷新、不导航', async () => {
+    const { controller, api, callbacks } = setup()
+    const slow = deferred<AdminUser>()
+    api.updateUser.mockReturnValueOnce(slow.promise)
+    controller.open(user, 'active')
+    const pending = controller.submit(target(controller))
+    const actor = useAuthStore.getState().user!
+    useAuthStore.setState({ user: { ...actor, is_admin: false, is_super_admin: false, effective_permissions: ['users.read'], authorization_revision: 2 } })
+    slow.resolve(user)
+    await expect(pending).resolves.toBe(false)
+    expect(callbacks.success).not.toHaveBeenCalled()
+    expect(callbacks.changed).not.toHaveBeenCalled()
+    expect(callbacks.deleted).not.toHaveBeenCalled()
+  })
+  it.each<AdminUserAction>(['reset', 'active', 'delete'])('%s 使用原 API，确认后才产生动作及成功回调', async (action) => {
     const { controller, callbacks, api } = setup()
     controller.open(user, action)
     expect(api.updateUser).not.toHaveBeenCalled()
@@ -27,7 +59,6 @@ describe('账号动作真实提交路径', () => {
     await expect(controller.submit(target(controller), async () => ({ new_password: 'secret123' }))).resolves.toBe(true)
     if (action === 'reset') expect(api.resetPassword).toHaveBeenCalledWith(2, { new_password: 'secret123' })
     else if (action === 'active') expect(api.updateUser).toHaveBeenCalledWith(2, { is_active: false })
-    else if (action === 'admin') expect(api.updateUser).toHaveBeenCalledWith(2, { is_admin: true })
     else expect(api.deleteUser).toHaveBeenCalledWith(2)
     expect(callbacks.success).toHaveBeenCalledOnce()
     expect(action === 'delete' ? callbacks.deleted : callbacks.changed).toHaveBeenCalledOnce()
@@ -36,7 +67,7 @@ describe('账号动作真实提交路径', () => {
 
   it('本人所有动作、有任何作品的删号均不可打开；其他动作保留', () => {
     const { controller } = setup()
-    for (const action of ['reset', 'active', 'admin', 'delete'] as const) {
+    for (const action of ['reset', 'active', 'delete'] as const) {
       controller.open({ ...user, id: 1 }, action)
       expect(controller.getSnapshot().target).toBeNull()
     }
@@ -102,7 +133,7 @@ describe('账号动作真实提交路径', () => {
     const old = controller.submit(target(controller))
     controller.deactivate()
     controller.activate()
-    controller.open({ ...user, id: 3 }, 'admin')
+    controller.open({ ...user, id: 3 }, 'active')
     if (failing) request.reject(new ApiError(409, '旧错误'))
     else request.resolve(user)
     await expect(old).resolves.toBe(false)

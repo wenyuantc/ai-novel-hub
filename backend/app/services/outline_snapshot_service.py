@@ -134,7 +134,7 @@ async def list_snapshots(db: AsyncSession, user_id: int, project_id: int) -> lis
 
 
 async def create_manual(db: AsyncSession, user_id: int, project_id: int, note: str) -> SnapshotOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     snap = await save_snapshot(db, project_id, "manual", note)
     await db.commit()
     await db.refresh(snap)
@@ -142,7 +142,7 @@ async def create_manual(db: AsyncSession, user_id: int, project_id: int, note: s
 
 
 async def delete_snapshot(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     snap = await _get(db, user_id, project_id, snapshot_id)
     await db.delete(snap)
     await db.commit()
@@ -295,7 +295,7 @@ async def restore_data(db: AsyncSession, project_id: int, data: dict[str, Any]) 
 
 
 async def restore_snapshot(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int) -> SnapshotRestoreResult:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     snap = await _get(db, user_id, project_id, snapshot_id)
     data = dict(snap.data or {})
     warnings = await _link_warnings(db, project_id, data.get("links") or [])

@@ -23,7 +23,7 @@ export class SystemSettingsController {
   private generation = 0
   private request: AbortController | null = null
 
-  constructor(private readonly loaders = systemSettingsApi, private readonly allowed: () => boolean = () => true, private readonly applyPublic: (config: AuthConfig) => void = () => {}) {}
+  constructor(private readonly loaders = systemSettingsApi, private readonly allowed: () => boolean = () => true, private readonly applyPublic: (config: AuthConfig) => void = () => {}, private readonly writable: () => boolean = () => true) {}
 
   getSnapshot = () => this.state
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
@@ -35,6 +35,7 @@ export class SystemSettingsController {
     this.update({ loading: false, saving: false, ...(saving ? { reviewRequired: true, error: '保存结果尚不能确认，请先刷新核实当前状态，不要重复提交。' } : {}) })
   }
   revoke = () => { this.active = false; this.cancel(); this.update({ data: null, changes: {}, invalidNumbers: [], denied: true, loading: false, saving: false, error: null, notice: null }) }
+  revokeWrites = () => { this.cancel(); this.update({ changes: {}, invalidNumbers: [], loading: false, saving: false, reviewRequired: false, error: null, notice: '修改权限已撤销，当前为只读视图。' }) }
 
   private update(patch: Partial<SystemSettingsState>) { this.state = { ...this.state, ...patch }; this.listeners.forEach((listener) => listener()) }
   private cancel() { this.generation += 1; this.request?.abort(); this.request = null }
@@ -70,7 +71,7 @@ export class SystemSettingsController {
   }
 
   edit<K extends SystemSettingKey>(key: K, value: SystemSettingChanges[K]) {
-    if (!this.canUse() || this.state.saving || this.state.reviewRequired || !this.state.data) return
+    if (!this.canUse() || !this.writable() || this.state.saving || this.state.reviewRequired || !this.state.data) return
     const item = this.state.data.items.find((entry) => entry.key === key)
     if (!item) return
     const changes = { ...this.state.changes }
@@ -80,14 +81,14 @@ export class SystemSettingsController {
   }
 
   editNumber(key: SystemSettingIntKey, value: number | null) {
-    if (!this.canUse() || this.state.saving || this.state.reviewRequired) return
+    if (!this.canUse() || !this.writable() || this.state.saving || this.state.reviewRequired) return
     if (value === null || !Number.isSafeInteger(value) || value < 1 || value > settingIntegerMaximum(key)) {
       this.update({ invalidNumbers: [...new Set([...this.state.invalidNumbers, key])], notice: null })
     } else this.edit(key, value)
   }
 
   restore(key: SystemSettingKey) {
-    if (!this.canUse() || this.state.saving || this.state.reviewRequired || !this.state.data) return
+    if (!this.canUse() || !this.writable() || this.state.saving || this.state.reviewRequired || !this.state.data) return
     const item = this.state.data.items.find((entry) => entry.key === key)
     if (!item) return
     const changes = { ...this.state.changes }
@@ -104,7 +105,7 @@ export class SystemSettingsController {
   }
 
   save = async () => {
-    if (!this.canUse() || !this.state.data || this.state.loading || this.state.saving || this.state.reviewRequired || this.state.invalidNumbers.length || !Object.keys(this.state.changes).length) return
+    if (!this.canUse() || !this.writable() || !this.state.data || this.state.loading || this.state.saving || this.state.reviewRequired || this.state.invalidNumbers.length || !Object.keys(this.state.changes).length) return
     this.cancel()
     const controller = new AbortController()
     const generation = ++this.generation
@@ -113,12 +114,13 @@ export class SystemSettingsController {
     this.update({ saving: true, error: null, notice: null })
     try {
       const data = await this.loaders.update(body, controller.signal)
-      if (!this.valid(generation, controller)) return
+      if (!this.valid(generation, controller) || !this.writable()) return
       this.applyPublic(publicConfigFromSettings(data))
       this.update({ data, changes: {}, invalidNumbers: [], saving: false, reviewRequired: false, notice: '设置已保存并立即生效，无需重启。运行中的任务和已发出的外部调用不会被强制中断。' })
     } catch (err) {
       if (!this.valid(generation, controller)) return
-      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) this.revoke()
+      if (err instanceof ApiError && err.status === 401) this.revoke()
+      else if (err instanceof ApiError && err.status === 403) this.revokeWrites()
       else {
         const conflict = err instanceof ApiError && err.status === 409
         const uncertain = !(err instanceof ApiError) || err.status === 0 || err.status >= 500

@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.core.errors import ConflictError, ForbiddenError
+from app.core.errors import ConflictError
 from app.models import SystemSettings, User
 from app.schemas.system_settings import (
     SYSTEM_SETTING_KEYS,
@@ -22,6 +22,7 @@ from app.schemas.system_settings import (
     SystemSettingsOut,
     SystemSettingsUpdate,
 )
+from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation, AuditOperationError
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class SystemSettingsManager:
     def __init__(self, settings: Settings, sessionmaker: async_sessionmaker[AsyncSession], notify: Callable[[], None]):
         self.settings = settings
         self.sessionmaker = sessionmaker
+        self.runtime = authz.runtime_for_factory(sessionmaker)
         self.notify = notify
         self._deployment = {key: getattr(settings, key) for key in SYSTEM_SETTING_KEYS}
         self._defaults = {key: Settings.model_fields[key].default for key in SYSTEM_SETTING_KEYS}
@@ -58,6 +60,7 @@ class SystemSettingsManager:
             setattr(self.settings, key, effective[key])
         self._revision, self._overrides, self._updated_at = revision, dict(overrides), updated_at
         self._uncertain = False
+        self.runtime.settings_confirmed = True
         self.notify()
         return self._output()
 
@@ -84,10 +87,11 @@ class SystemSettingsManager:
         return row.revision, changes, row.updated_at
 
     async def _reload(self) -> SystemSettingsOut:
-        async with self.sessionmaker() as db:
-            row = await db.get(SystemSettings, 1)
-            values = self._validated(row)
-        return self._publish(*values)
+        async with self.runtime.hold():
+            async with self.sessionmaker() as db:
+                row = await db.get(SystemSettings, 1)
+                values = self._validated(row)
+            return self._publish(*values)
 
     async def load(self) -> SystemSettingsOut:
         async with self._lock:
@@ -133,60 +137,63 @@ class SystemSettingsManager:
                     candidate[key] = value
             now = datetime.now(UTC)
             revision = self._revision + 1
-            try:
-                async with self.sessionmaker() as db:
-                    actor = await db.get(User, actor_id)
-                    if actor is None or not actor.is_active or not actor.is_admin:
-                        raise ForbiddenError("需要管理员权限")
-                    async with AuditOperation(
-                        db, actor, "system_settings.update", "system_settings", 1, operation_id=operation_id,
-                    ) as audit:
-                        audit.values["target_label"] = "系统设置"
-                        if request.revision != self._revision:
-                            raise ConflictError(CONFLICT)
-                        before = self._overrides
-                        audit.summary.settings_changes = [
-                            SystemSettingAuditChange(
-                                key=key, before_override=before.get(key), after_override=candidate.get(key),
-                                before_effective=before.get(key, self._deployment[key]),
-                                after_effective=candidate.get(key, self._deployment[key]),
-                                before_source=self._source(key, before), after_source=self._source(key, candidate),
-                            ) for key in changes
-                            if (key in before) != (key in candidate) or before.get(key) != candidate.get(key)
-                        ]
-                        if self._revision == 0:
-                            db.add(SystemSettings(
-                                id=1, revision=revision, overrides=candidate,
-                                last_operation_id=operation_id, updated_at=now,
-                            ))
-                            try:
-                                await db.flush()
-                            except IntegrityError as exc:
-                                raise ConflictError(CONFLICT) from exc
-                        else:
-                            result = await db.execute(
-                                update(SystemSettings)
-                                .where(SystemSettings.id == 1, SystemSettings.revision == self._revision)
-                                .values(revision=revision, overrides=candidate,
-                                        last_operation_id=operation_id, updated_at=now)
-                                .returning(SystemSettings.id)
-                            )
-                            if result.scalar_one_or_none() is None:
-                                raise ConflictError(CONFLICT)
-                        await audit.commit()
-                        # commit返回与发布之间没有await，HTTP取消由外层shield隔离。
-                        return self._publish(revision, candidate, now)
-            except BaseException:
-                # 包括commit已落盘但确认抛错；读取当前持久事实，不重试旧候选。
-                self._uncertain = True
+            # 包括提交未知后的即时重读，不能释放后让领取看见旧Settings。
+            async with self.runtime.hold():
                 try:
-                    await self._reload()
-                except Exception:
-                    self._schedule_recovery()
-                raise
+                    async with self.sessionmaker() as db:
+                        access = await authz.require(db, actor_id, "settings.update", write=True)
+                        actor = await db.get(User, access.id, populate_existing=True)
+                        async with AuditOperation(
+                            db, actor, "system_settings.update", "system_settings", 1, operation_id=operation_id,
+                        ) as audit:
+                            audit.values["target_label"] = "系统设置"
+                            if request.revision != self._revision:
+                                raise ConflictError(CONFLICT)
+                            before = self._overrides
+                            audit.summary.settings_changes = [
+                                SystemSettingAuditChange(
+                                    key=key, before_override=before.get(key), after_override=candidate.get(key),
+                                    before_effective=before.get(key, self._deployment[key]),
+                                    after_effective=candidate.get(key, self._deployment[key]),
+                                    before_source=self._source(key, before), after_source=self._source(key, candidate),
+                                ) for key in changes
+                                if (key in before) != (key in candidate) or before.get(key) != candidate.get(key)
+                            ]
+                            if self._revision == 0:
+                                db.add(SystemSettings(
+                                    id=1, revision=revision, overrides=candidate,
+                                    last_operation_id=operation_id, updated_at=now,
+                                ))
+                                try:
+                                    await db.flush()
+                                except IntegrityError as exc:
+                                    raise ConflictError(CONFLICT) from exc
+                            else:
+                                result = await db.execute(
+                                    update(SystemSettings)
+                                    .where(SystemSettings.id == 1, SystemSettings.revision == self._revision)
+                                    .values(revision=revision, overrides=candidate,
+                                            last_operation_id=operation_id, updated_at=now)
+                                    .returning(SystemSettings.id)
+                                )
+                                if result.scalar_one_or_none() is None:
+                                    raise ConflictError(CONFLICT)
+                            await audit.commit()
+                            # commit返回与发布之间没有await，HTTP取消由外层shield隔离。
+                            return self._publish(revision, candidate, now)
+                except BaseException:
+                    # 包括commit已落盘但确认抛错；读取当前持久事实，不重试旧候选。
+                    self._uncertain = True
+                    self.runtime.settings_confirmed = False
+                    try:
+                        await self._reload()
+                    except Exception:
+                        self._schedule_recovery()
+                    raise
 
     def _schedule_recovery(self) -> None:
         self._uncertain = True
+        self.runtime.settings_confirmed = False
         if not self._closing and (self._recovery is None or self._recovery.done()):
             self._recovery = asyncio.create_task(self._recover(), name="system-settings-recovery")
 

@@ -105,7 +105,7 @@ async def update_plan(
     db: AsyncSession, user_id: int, project_id: int, outline_id: int, plan_id: int, data: PlanUpdate
 ) -> PlanOut:
     """单条细纲的行内编辑（不影响建章状态）。"""
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     await get_project_outline(db, user_id, project_id, outline_id)
     plan = await db.scalar(select(ChapterPlan).where(ChapterPlan.id == plan_id, ChapterPlan.outline_id == outline_id))
     if plan is None:
@@ -145,7 +145,7 @@ async def chapter_plan_out(db: AsyncSession, user_id: int, project_id: int, chap
 async def sync_plans(
     db: AsyncSession, user_id: int, project_id: int, outline_id: int, data: PlansSync
 ) -> list[PlanOut]:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     outline = await get_project_outline(db, user_id, project_id, outline_id)
     existing = await _outline_plans(db, outline_id)
     by_id = {p.id: p for p in existing}
@@ -230,7 +230,7 @@ async def _add_cast(db: AsyncSession, chapter_id: int, character_ids: list[int])
 
 
 async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> PlanBuildResult:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     outline = await get_project_outline(db, user_id, project_id, outline_id)
     plans = await _outline_plans(db, outline_id)
     if not plans:

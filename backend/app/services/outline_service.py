@@ -69,7 +69,7 @@ async def outline_tree(db: AsyncSession, user_id: int, project_id: int) -> list[
 
 async def append_outlines(db: AsyncSession, user_id: int, project_id: int, data: OutlineAppendRequest) -> list[Outline]:
     """采纳续写结果：追加到末尾，章节号从当前最后一章之后顺延。单事务。"""
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     start = await next_chapter_no(db, project_id)
     sort = await story_service.next_sort(db, Outline, project_id)
     created = []
@@ -98,7 +98,7 @@ async def move_outline(
     db: AsyncSession, user_id: int, project_id: int, outline_id: int, data: OutlineMoveRequest
 ) -> list[Outline]:
     """卷内上移 / 下移：先把该卷的 sort 规整为 1..n（按当前顺序），再与相邻一条交换。已在边界时不变。返回该卷的大纲。"""
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     outline = await plan_service.get_project_outline(db, user_id, project_id, outline_id)
     volume = [o for o in await list_outlines(db, project_id) if o.volume_no == outline.volume_no]
     idx = next(i for i, o in enumerate(volume) if o.id == outline.id)

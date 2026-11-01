@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -74,7 +75,7 @@ async def test_database_restrict_prevents_raw_user_cascade(app, client):
 async def test_concurrent_project_creation_after_empty_count_blocks_user_deletion(
     app, client, recycle_admin, monkeypatch
 ):
-    """故障注入遗漏父User屏障时，count后并发创建仍由RESTRICT兜底，不级联新作品。"""
+    """故障注入同时遗漏授权gate/User写屏障时，RESTRICT仍不级联计数后新作品。"""
     owner = await register(client)
     counted, release = asyncio.Event(), asyncio.Event()
     original = admin_service._flush_user_delete
@@ -84,10 +85,11 @@ async def test_concurrent_project_creation_after_empty_count_blocks_user_deletio
 
     async def omit_parent_barrier(db, statement, *args, **kwargs):
         if (asyncio.current_task() is deletion and getattr(statement, "is_update", False)
-                and statement.table.name == User.__tablename__):
-            # 仅本例绕过新增真实写锁，保留原RESTRICT末层防御的全部断言。
-            bypassed.append(True)
-            return await actual_execute(db, select(User.id).where(User.id == owner["id"]))
+                and statement.table.name in (User.__tablename__, "authorization_state")):
+            # 新授权gate和升序User屏障都会序列化SQLite写事务。本例显式故障注入跳过
+            # 全部真实UPDATE，单独证明FK末层防御；下一例保留真实屏障证明正常串行。
+            bypassed.append(statement.table.name)
+            return SimpleNamespace(rowcount=1)
         return await actual_execute(db, statement, *args, **kwargs)
 
     async def before_flush(db):
@@ -104,7 +106,7 @@ async def test_concurrent_project_creation_after_empty_count_blocks_user_deletio
     finally:
         release.set()
     result = await asyncio.wait_for(deletion, 5)
-    assert bypassed == [True]
+    assert bypassed == ["authorization_state", "users", "users", "users", "authorization_state"]
     assert result.status_code == 409 and result.json()["code"] == "user_has_projects"
     assert (await client.get(f"/api/v1/projects/{project['id']}")).status_code == 200
     async with app.state.sessionmaker() as db:

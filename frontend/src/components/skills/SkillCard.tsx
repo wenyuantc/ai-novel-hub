@@ -1,12 +1,14 @@
 import { CopyOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, RollbackOutlined } from '@ant-design/icons'
 import { Button, Card, Popconfirm, Space, Tag, Typography } from 'antd'
 import type { SkillBrief } from '../../api/types'
+import { can } from '../../utils/permissions'
+import type { AuthorizationSubject } from '../../utils/permissions'
 
 export type SkillAction = 'open' | 'copy' | 'export' | 'delete' | 'restore'
 
 interface Props {
   skill: SkillBrief
-  isAdmin: boolean
+  authorization: AuthorizationSubject | null
   busy?: boolean
   onAction: (skill: SkillBrief, action: SkillAction) => void
 }
@@ -15,8 +17,9 @@ interface Props {
  * Skill 卡片：可写（editable，我的或管理员看全局）显示编辑 / 删除；
  * 只读的全局 Skill 只能查看、复制为我的、导出。内置 Skill 对管理员另有「恢复内置内容」。
  */
-export default function SkillCard({ skill, isAdmin, busy, onAction }: Props) {
-  const readOnly = !skill.editable
+export default function SkillCard({ skill, authorization, busy, onAction }: Props) {
+  const allowed = (permission: Parameters<typeof can>[1]) => skill.scope !== 'global' || can(authorization, permission)
+  const readOnly = skill.scope === 'global' ? !allowed('global_skills.update') : !skill.editable
   const actions = [
     <Button
       key="open"
@@ -34,7 +37,7 @@ export default function SkillCard({ skill, isAdmin, busy, onAction }: Props) {
       导出
     </Button>,
   ]
-  if (skill.editable && skill.builtin_key && isAdmin)
+  if (skill.scope === 'global' && skill.builtin_key && allowed('global_skills.restore_builtin'))
     actions.push(
       <Popconfirm
         key="restore"
@@ -47,7 +50,7 @@ export default function SkillCard({ skill, isAdmin, busy, onAction }: Props) {
         </Button>
       </Popconfirm>,
     )
-  if (skill.editable)
+  if (allowed('global_skills.delete') && (skill.scope === 'global' || skill.editable))
     actions.push(
       <Button key="delete" type="link" size="small" danger icon={<DeleteOutlined />} disabled={busy} onClick={() => onAction(skill, 'delete')}>
         删除

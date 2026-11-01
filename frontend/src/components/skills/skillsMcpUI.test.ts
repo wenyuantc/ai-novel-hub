@@ -19,7 +19,7 @@ vi.mock('../../stores/skills', () => ({
   useSkills: () => ({ skills: seeded.skills, loading: false, error: null }),
   useSkillStore: (select: (s: { load: () => Promise<void> }) => unknown) => select({ load: async () => {} }),
 }))
-vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (s: { user: { is_admin: boolean } }) => unknown) => select({ user: { is_admin: false } }) }))
+vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (s: { user: import('../../api/types').User }) => unknown) => select({ user: { id: 1, username: '作者', created_at: '', is_admin: false, is_super_admin: false, effective_permissions: [], authorization_revision: 1, roles: [] } }) }))
 
 const { default: SkillCard } = await import('./SkillCard')
 const { default: SkillsPage } = await import('../../pages/SkillsPage')
@@ -43,7 +43,7 @@ function expectNoFixedWidth(html: string) {
 
 describe('Skill 卡片权限', () => {
   it('全局 Skill 对普通用户只读：查看 / 复制为我的 / 导出，没有编辑、删除、恢复内置', () => {
-    const html = render(createElement(SkillCard, { skill: skillFixture({ scope: 'global', editable: false, builtin_key: 'deslop', name: '去 AI 味' }), isAdmin: false, onAction: noop }))
+    const html = render(createElement(SkillCard, { skill: skillFixture({ scope: 'global', editable: false, builtin_key: 'deslop', name: '去 AI 味' }), authorization: { is_super_admin: false, effective_permissions: [] }, onAction: noop }))
     expect(html).toContain('只读')
     expect(html).toContain('查看')
     expect(html).toContain('复制为我的')
@@ -53,12 +53,12 @@ describe('Skill 卡片权限', () => {
     expect(html).not.toContain('恢复内置')
   })
   it('管理员可编辑全局内置 Skill 并恢复内置内容；我的 Skill 可编辑删除', () => {
-    const admin = render(createElement(SkillCard, { skill: skillFixture({ scope: 'global', editable: true, builtin_key: 'deslop' }), isAdmin: true, onAction: noop }))
+    const admin = render(createElement(SkillCard, { skill: skillFixture({ scope: 'global', editable: true, builtin_key: 'deslop' }), authorization: { is_super_admin: true, effective_permissions: [] }, onAction: noop }))
     expect(admin).toContain('编辑')
     expect(admin).toContain('删除')
     expect(admin).toContain('恢复内置')
     expect(admin).not.toContain('只读')
-    const mine = render(createElement(SkillCard, { skill: skillFixture(), isAdmin: false, onAction: noop }))
+    const mine = render(createElement(SkillCard, { skill: skillFixture(), authorization: { is_super_admin: false, effective_permissions: [] }, onAction: noop }))
     expect(mine).toContain('编辑')
     expect(mine).toContain('删除')
     expect(mine).toContain('/续写')

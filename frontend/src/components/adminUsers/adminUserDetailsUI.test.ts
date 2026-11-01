@@ -8,8 +8,9 @@ import type { AdminProject, AdminUserDetail } from '../../api/types'
 const state = vi.hoisted(() => ({ mobile: true, admin: true, loading: false, data: undefined as { user: import('../../api/types').AdminUserDetail | null; failure: { status: number; message: string } | null } | { items: import('../../api/types').AdminUserDetail[]; total: number } | undefined, loaders: [] as (() => Promise<unknown>)[] }))
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => state.mobile, useModalWidth: (width: number | string) => state.mobile ? 'calc(100vw - 24px)' : width }))
 vi.mock('../../hooks/useLoader', () => ({ useLoader: (loader: () => Promise<unknown>) => { state.loaders.push(loader); return { data: state.data, loading: state.loading, error: null, reload: () => {} } } }))
-vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (value: unknown) => unknown) => select({ user: { id: 1, username: '管理员', is_admin: state.admin } }) }))
+vi.mock('../../stores/auth', () => { const snapshot = () => ({ status: 'authenticated', user: { id: 1, username: '管理员', created_at: '', is_admin: state.admin, is_super_admin: state.admin, effective_permissions: [], authorization_revision: 1, roles: [] } }); return { useAuthStore: Object.assign((select: (value: ReturnType<typeof snapshot>) => unknown) => select(snapshot()), { getState: snapshot, subscribe: () => () => {} }) } })
 vi.mock('../../api/admin', () => ({ adminApi: { getUser: vi.fn(), listProjects: vi.fn(async () => ({ items: [], total: 0 })), listUsers: vi.fn(async () => ({ items: [], total: 0 })) } }))
+vi.mock('./UserQuotaPanel', () => ({ default: () => null }))
 vi.mock('../../api/recycleBin', () => ({ recycleBinApi: { list: vi.fn(async () => ({ items: [], total: 0 })) } }))
 
 const { default: AdminUserDetailsPage, AdminUserSummary, AdminUserProjectResults } = await import('../../pages/AdminUserDetailsPage')
@@ -20,7 +21,7 @@ const { default: AdminRecycleBinPage } = await import('../../pages/AdminRecycleB
 const { adminApi } = await import('../../api/admin')
 const { recycleBinApi } = await import('../../api/recycleBin')
 
-const user = (overrides: Partial<AdminUserDetail> = {}): AdminUserDetail => ({ id: 2, username: 'alice', is_admin: false, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 4, last_login_at: null, usage: { active: { project_count: 2, chapter_count: 3, total_words: 3200 }, recycled: { project_count: 1, chapter_count: 2, total_words: 4500 }, deleting: { project_count: 1, chapter_count: 1, total_words: 600 } }, ...overrides })
+const user = (overrides: Partial<AdminUserDetail> = {}): AdminUserDetail => ({ id: 2, username: 'alice', is_admin: false, is_super_admin: false, is_management_account: false, roles: [], authorization_revision: 1, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 4, last_login_at: null, usage: { active: { project_count: 2, chapter_count: 3, total_words: 3200 }, recycled: { project_count: 1, chapter_count: 2, total_words: 4500 }, deleting: { project_count: 1, chapter_count: 1, total_words: 600 } }, ...overrides })
 const project: AdminProject = { id: 9, title: '星河', genre: '科幻', status: 'writing', owner_user_id: 2, owner_username: 'alice', chapter_count: 2, total_words: 3200, created_at: '2026-10-30T00:00:00Z', updated_at: '2026-11-01T00:00:00Z' }
 const render = (element: ReactElement, path = '/') => renderToString(createElement(App, null, createElement(MemoryRouter, { initialEntries: [path] }, element))).replaceAll('<!-- -->', '')
 const page = (path = '/admin/users/2') => render(createElement(Routes, null, createElement(Route, { path: '/admin/users/:userId', element: createElement(AdminUserDetailsPage) })), path)
@@ -62,10 +63,10 @@ describe('账号信息与资源分组', () => {
 
   it('共享按钮保留本人全部禁用及含回收站作品的删号保护', () => {
     const self = render(createElement(AdminUserActionButtons, { user: user({ id: 1, project_count: 0 }), actorId: 1, disabled: false, onAction: () => {} }))
-    expect([...self.matchAll(/<button\b[^>]*disabled=""/g)]).toHaveLength(4)
+    expect([...self.matchAll(/<button\b[^>]*disabled=""/g)]).toHaveLength(3)
     const owner = render(createElement(AdminUserActionButtons, { user: user(), actorId: 1, disabled: false, onAction: () => {} }))
     expect([...owner.matchAll(/<button\b[^>]*disabled=""/g)]).toHaveLength(1)
-    for (const text of ['重置密码', '禁用', '设为管理员', '删除']) expect(owner).toContain(text)
+    for (const text of ['重置密码', '禁用', '删除']) expect(owner).toContain(text)
   })
 })
 

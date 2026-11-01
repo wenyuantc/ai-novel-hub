@@ -1,3 +1,4 @@
+import { authorizationKey, can } from '../../utils/permissions'
 import { Alert, Button, Checkbox, Descriptions, Form, Input, Modal, Space, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { auditLogApi } from '../../api/auditLogs'
@@ -33,6 +34,7 @@ export function AuditCleanupPreviewContent({ preview }: { preview: AuditCleanupP
 export default function AuditCleanupModal({ actorId, onClose, onCleaned }: Props) {
   const width = useModalWidth(640)
   const [gate] = useState(createAuditRequestGate)
+  const [identity] = useState(() => authorizationKey(useAuthStore.getState().user))
   const pending = useRef(false)
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -45,7 +47,7 @@ export default function AuditCleanupModal({ actorId, onClose, onCleaned }: Props
   let range: AuditDateRange | null = null
   try { range = auditDateRange(fromDate, toDate) } catch { /* 未完成选择时只禁用预览，提交时显示明确错误。 */ }
   const usable = cleanupPreviewUsable(preview, range)
-  const isCurrent = (ticket: number) => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && useAuthStore.getState().user?.is_admin === true
+  const isCurrent = (ticket: number) => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && authorizationKey(useAuthStore.getState().user) === identity && can(useAuthStore.getState().user, 'audit.cleanup')
 
   useEffect(() => () => gate.invalidate(), [gate])
   useEffect(() => {
@@ -71,7 +73,7 @@ export default function AuditCleanupModal({ actorId, onClose, onCleaned }: Props
   }
   const close = () => { gate.invalidate(); onClose() }
   const handlePreview = async () => {
-    if (pending.current) return
+    if (pending.current || useAuthStore.getState().user?.id !== actorId || !can(useAuthStore.getState().user, 'audit.cleanup') || authorizationKey(useAuthStore.getState().user) !== identity) return
     let requested: AuditDateRange
     try { requested = auditDateRange(fromDate, toDate) }
     catch (err) { setError(errorMessage(err)); return }
@@ -92,7 +94,7 @@ export default function AuditCleanupModal({ actorId, onClose, onCleaned }: Props
     }
   }
   const handleCleanup = async () => {
-    if (pending.current || !confirmed || !preview) return
+    if (pending.current || useAuthStore.getState().user?.id !== actorId || !can(useAuthStore.getState().user, 'audit.cleanup') || authorizationKey(useAuthStore.getState().user) !== identity || !confirmed || !preview) return
     if (!cleanupPreviewUsable(preview, range)) {
       resetPreview()
       setError('清理预览已过期或日期范围变化，请重新预览后确认。')

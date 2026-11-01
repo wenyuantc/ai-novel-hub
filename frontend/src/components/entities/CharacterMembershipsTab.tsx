@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { PlusOutlined } from '@ant-design/icons'
 import { App, Button, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd'
 import { useCallback, useState } from 'react'
@@ -23,6 +24,7 @@ const STATUS_OPTIONS = (Object.keys(MEMBER_STATUS) as MemberStatus[]).map((k) =>
 
 /** 角色抽屉「组织」Tab：所属组织与职位（加入 / 修改 / 移除）。 */
 export default function CharacterMembershipsTab({ projectId, character }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const loader = useCallback(() => characterExtraApi.memberships(projectId, character.id), [projectId, character.id])
   const { data: rows = [], loading, reload } = useLoader(loader, { projectId, resources: ['characters', 'organizations'] })
@@ -44,27 +46,34 @@ export default function CharacterMembershipsTab({ projectId, character }: Props)
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setSaving(true)
     try {
       if (editing) {
+        if (!canEditNow()) return
         await memberApi.update(projectId, editing.organization_id, editing.id, {
           position: v.position?.trim() ?? '',
           status: v.status,
           note: v.note ?? '',
         })
+        if (!canEditNow()) return
       } else {
+        if (!canEditNow()) return
         await memberApi.create(projectId, v.organization_id, {
           character_id: character.id,
           position: v.position?.trim() ?? '',
           status: v.status,
           note: v.note ?? '',
         })
+        if (!canEditNow()) return
       }
       message.success('已保存')
       setOpen(false)
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -72,11 +81,15 @@ export default function CharacterMembershipsTab({ projectId, character }: Props)
   }
 
   const handleDelete = async (m: Member) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await memberApi.remove(projectId, m.organization_id, m.id)
+      if (!canEditNow()) return
       message.success('已移除')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -84,7 +97,7 @@ export default function CharacterMembershipsTab({ projectId, character }: Props)
   const joined = new Set(rows.map((r) => r.organization_id))
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
-      <Button icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={orgs.length === 0}>
+      <Button icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit || orgs.length === 0}>
         加入组织
       </Button>
       <Table<Member>
@@ -109,10 +122,9 @@ export default function CharacterMembershipsTab({ projectId, character }: Props)
             render: (_, m) => (
               <Space size={0}>
                 <Button type="link" size="small" onClick={() => openEdit(m)}>
-                  编辑
-                </Button>
+                  {canEdit ? '编辑' : '查看'}</Button>
                 <Popconfirm title="移出该组织？" okText="移除" cancelText="取消" onConfirm={() => handleDelete(m)}>
-                  <Button type="link" size="small" danger>
+                  <Button type="link" size="small" danger disabled={!canEdit}>
                     移除
                   </Button>
                 </Popconfirm>
@@ -122,6 +134,7 @@ export default function CharacterMembershipsTab({ projectId, character }: Props)
         ]}
       />
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title={editing ? '编辑成员信息' : '加入组织'}
         open={open}
         onOk={() => void handleSave()}
@@ -131,7 +144,7 @@ export default function CharacterMembershipsTab({ projectId, character }: Props)
         cancelText="取消"
         forceRender
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" disabled={!canEdit}>
           <Form.Item name="organization_id" label="组织" rules={[{ required: true, message: '请选择组织' }]}>
             <Select
               disabled={!!editing}

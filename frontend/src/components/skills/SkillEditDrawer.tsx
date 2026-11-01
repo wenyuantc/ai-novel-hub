@@ -1,3 +1,6 @@
+import { can } from '../../utils/permissions'
+import { useAuthStore } from '../../stores/auth'
+import { useAuthorizationScope } from '../../hooks/useAuthorizationScope'
 import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Drawer, Form, Input, Radio, Select, Skeleton, Space, Tabs, Typography } from 'antd'
 import { useCallback, useRef, useState } from 'react'
@@ -59,7 +62,12 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
   const [form] = Form.useForm<FormValues>()
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<'edit' | 'preview'>('edit')
-  const readOnly = skill !== null && !skill.editable
+  const actor = useAuthStore((state) => state.user)
+  const selectedScope = Form.useWatch('scope', form) as SkillScope | undefined
+  const global = (skill?.scope ?? selectedScope ?? scope) === 'global'
+  const operation = useAuthorizationScope(undefined, false, global)
+  const readOnly = skill !== null ? global ? !can(actor, 'global_skills.update') : !skill.editable : global && !can(actor, 'global_skills.create')
+  const canReferences = skill ? !global || can(actor, 'global_skills.references') : !readOnly
   const body = Form.useWatch('body', form) ?? ''
   const initial: FormValues = skill
     ? {
@@ -75,14 +83,20 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
     : { scope, slug: '', name: '', description: '', category: '', triggers: [], body: '', references: [] }
   // 上次保存的参考资料：没变化时不调用整体替换接口
   const savedRefs = useRef(refsKey(initial.references))
+  const pending = useRef(false)
 
   const handleSave = async () => {
+    if ((readOnly && !canReferences) || pending.current || !operation.allowed()) return
+    pending.current = true
+    const ticket = operation.begin()
     let v: FormValues
     try {
       v = await form.validateFields()
     } catch {
+      if (operation.current(ticket)) pending.current = false
       return
     }
+    if (!operation.current(ticket) || (!skill && v.scope === 'global' && !can(useAuthStore.getState().user, 'global_skills.create'))) return
     const fields = {
       slug: v.slug.trim(),
       name: v.name.trim(),
@@ -98,16 +112,20 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
       if (!skill) {
         saved = await skillApi.create({ ...fields, scope: v.scope, references })
       } else {
-        saved = await skillApi.update(skill.id, fields)
-        if (refsKey(references) !== savedRefs.current) saved = await skillApi.replaceReferences(skill.id, references)
+        saved = readOnly ? skill : await skillApi.update(skill.id, fields)
+        if (refsKey(references) !== savedRefs.current) {
+          if (!canReferences || !operation.current(ticket)) return
+          saved = await skillApi.replaceReferences(skill.id, references)
+        }
       }
+      if (!operation.current(ticket)) return
       savedRefs.current = refsKey(references)
       message.success('已保存')
       onSaved(saved)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (operation.current(ticket)) message.error(errorMessage(err))
     } finally {
-      setSaving(false)
+      if (operation.current(ticket)) { pending.current = false; setSaving(false) }
     }
   }
 
@@ -126,7 +144,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
           }
         />
       )}
-      <Form form={form} layout="vertical" initialValues={initial} disabled={readOnly}>
+      <Form form={form} layout="vertical" initialValues={initial}>
         {!skill && isAdmin && (
           <Form.Item name="scope" label="归属">
             <Radio.Group
@@ -142,7 +160,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
           label="名称"
           rules={[{ required: true, whitespace: true, message: '请输入名称' }]}
         >
-          <Input
+          <Input disabled={readOnly}
             maxLength={SKILL_LIMITS.name}
             onBlur={(e) => {
               if (!skill && !form.getFieldValue('slug')) form.setFieldValue('slug', suggestSlug(e.target.value))
@@ -158,13 +176,13 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
             { pattern: SKILL_SLUG_RE, message: '只能使用小写字母、数字和连字符，以字母或数字开头，不超过 48 个字符' },
           ]}
         >
-          <Input maxLength={48} placeholder="例如 long-continue" />
+          <Input disabled={readOnly} maxLength={48} placeholder="例如 long-continue" />
         </Form.Item>
         <Form.Item name="description" label="说明" tooltip="展示在智能体的 Skill 清单里，帮助模型判断何时使用">
-          <Input.TextArea maxLength={SKILL_LIMITS.description} autoSize={{ minRows: 2, maxRows: 4 }} showCount />
+          <Input.TextArea disabled={readOnly} maxLength={SKILL_LIMITS.description} autoSize={{ minRows: 2, maxRows: 4 }} showCount />
         </Form.Item>
         <Form.Item name="category" label="分类">
-          <Input maxLength={SKILL_LIMITS.category} placeholder="例如 续写、润色、诊断" />
+          <Input disabled={readOnly} maxLength={SKILL_LIMITS.category} placeholder="例如 续写、润色、诊断" />
         </Form.Item>
         <Form.Item
           name="triggers"
@@ -182,7 +200,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
             },
           ]}
         >
-          <Select mode="tags" tokenSeparators={[' ', ',', '，']} open={false} placeholder="输入后回车，例如 续写" />
+          <Select disabled={readOnly} mode="tags" tokenSeparators={[' ', ',', '，']} open={false} placeholder="输入后回车，例如 续写" />
         </Form.Item>
         <Form.Item label="工作流正文（Markdown）">
           <Tabs
@@ -195,7 +213,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
                 label: '编辑',
                 children: (
                   <Form.Item name="body" noStyle>
-                    <Input.TextArea maxLength={SKILL_LIMITS.body} autoSize={{ minRows: 8, maxRows: 24 }} showCount />
+                    <Input.TextArea disabled={readOnly} maxLength={SKILL_LIMITS.body} autoSize={{ minRows: 8, maxRows: 24 }} showCount />
                   </Form.Item>
                 ),
               },
@@ -211,7 +229,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           智能体按需逐篇读取，不会一次全部放进提示词。标题即导出时的文件名。
         </Typography.Paragraph>
-        <Form.List name="references">
+        <fieldset disabled={!canReferences} style={{ border: 0, padding: 0, minWidth: 0 }}><Form.List name="references">
           {(fields, { add, remove, move }) => (
             <Space direction="vertical" style={{ width: '100%' }}>
               {fields.map((field, index) => (
@@ -220,7 +238,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
                   size="small"
                   title={`第 ${index + 1} 篇`}
                   extra={
-                    !readOnly && (
+                    canReferences && (
                       <Space size={0}>
                         <Button type="text" size="small" aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, index - 1)} />
                         <Button type="text" size="small" aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === fields.length - 1} onClick={() => move(index, index + 1)} />
@@ -244,7 +262,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
                   </Form.Item>
                 </Card>
               ))}
-              {!readOnly && (
+              {canReferences && (
                 <Button
                   icon={<PlusOutlined />}
                   disabled={fields.length >= SKILL_LIMITS.references}
@@ -255,9 +273,9 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
               )}
             </Space>
           )}
-        </Form.List>
+        </Form.List></fieldset>
       </Form>
-      {!readOnly && (
+      {(!readOnly || canReferences) && (
         <Button type="primary" loading={saving} onClick={() => void handleSave()}>
           保存
         </Button>

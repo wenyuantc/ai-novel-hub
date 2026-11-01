@@ -52,7 +52,7 @@ const STATUS_OPTIONS = (Object.keys(RELATION_STATUS) as RelationStatus[]).map((k
 /** 人物关系：列表（筛选 / 增删改 / 历史 / 类型管理）+ 懒加载的关系图谱。 */
 export default function RelationshipsPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const [tab, setTab] = useState('list')
   const loader = useCallback(() => relationshipApi.list(pid), [pid])
@@ -78,11 +78,15 @@ export default function RelationshipsPanel() {
   )
 
   const handleDelete = async (r: Relationship) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await relationshipApi.remove(pid, r.id)
+      if (!canEditNow()) return
       message.success('已删除')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -159,13 +163,12 @@ export default function RelationshipsPanel() {
                     setEditOpen(true)
                   }}
                 >
-                  编辑
-                </Button>
+                  {canEdit ? '编辑' : '查看'}</Button>
                 <Button type="link" size="small" onClick={() => setHistory(r)}>
                   历史
                 </Button>
                 <Popconfirm title="删除该关系？" okText="删除" cancelText="取消" onConfirm={() => handleDelete(r)}>
-                  <Button type="link" size="small" danger>
+                  <Button type="link" size="small" danger disabled={!canEdit}>
                     删除
                   </Button>
                 </Popconfirm>
@@ -192,7 +195,7 @@ export default function RelationshipsPanel() {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            disabled={characters.length < 2}
+            disabled={!canEdit || (characters.length < 2)}
             onClick={() => {
               setEditing(null)
               setEditOpen(true)

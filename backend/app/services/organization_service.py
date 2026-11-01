@@ -128,7 +128,7 @@ async def get_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) 
 
 
 async def create_org(db: AsyncSession, user_id: int, project_id: int, data: OrganizationCreate) -> OrganizationOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await new_org(db, project_id, data)
     await _commit(db, NAME_CONFLICT)
     await db.refresh(org)
@@ -138,7 +138,7 @@ async def create_org(db: AsyncSession, user_id: int, project_id: int, data: Orga
 async def update_org(
     db: AsyncSession, user_id: int, project_id: int, org_id: int, data: OrganizationUpdate
 ) -> OrganizationOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
     fields = data.model_fields_set
     values: dict[str, Any] = {}
@@ -165,7 +165,7 @@ async def update_org(
 
 
 async def delete_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
     await db.delete(org)
     await db.commit()
@@ -226,7 +226,7 @@ async def list_members(db: AsyncSession, user_id: int, project_id: int, org_id: 
 
 
 async def add_member(db: AsyncSession, user_id: int, project_id: int, org_id: int, data: MemberCreate) -> MemberOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
     member = await new_member(db, org, data)
     await _commit(db, MEMBER_CONFLICT)
@@ -247,7 +247,7 @@ async def _get_member(db: AsyncSession, org: Organization, member_id: int) -> Or
 async def update_member(
     db: AsyncSession, user_id: int, project_id: int, org_id: int, member_id: int, data: MemberUpdate
 ) -> MemberOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
     member = await _get_member(db, org, member_id)
     for f, v in data.model_dump(exclude_unset=True).items():
@@ -258,7 +258,7 @@ async def update_member(
 
 
 async def remove_member(db: AsyncSession, user_id: int, project_id: int, org_id: int, member_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
     member = await _get_member(db, org, member_id)
     await db.delete(member)
@@ -336,7 +336,7 @@ async def create_with_members(
     db: AsyncSession, user_id: int, project_id: int, data: OrganizationWithMembers
 ) -> dict[str, Any]:
     """AI 生成组织预览确认后一次保存：组织 + 勾选的成员（单事务）。"""
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await new_org(db, project_id, data.organization)
     members = [await new_member(db, org, m) for m in data.members]
     await _commit(db, NAME_CONFLICT)

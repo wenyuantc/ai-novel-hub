@@ -17,6 +17,7 @@ from app.schemas.project import (
     WizardProgress,
     WizardProgressUpdate,
 )
+from app.services import authorization_service as authz
 from app.services import project_lifecycle, style_service
 
 if TYPE_CHECKING:
@@ -36,20 +37,27 @@ async def get_owned_project(
 
 
 async def get_manageable_project(
-    db: AsyncSession, actor_user_id: int, project_id: int, *, lock: bool = False
+    db: AsyncSession, actor_user_id: int, project_id: int, *, lock: bool = False,
+    permission: str = "projects.read",
 ) -> Project:
-    """人工内容权限：所有者或当前启用管理员；不用于 AI、任务或账户私有资源。"""
+    """人工内容的明确read/edit/recycle；严格owner能力绝不由此开放。"""
     project = await project_lifecycle.load_record(db, project_id)
-    if project is not None:
-        admin = None
-        if project.user_id != actor_user_id:
-            admin = await db.scalar(
-                select(User.id).where(User.id == actor_user_id, User.is_admin.is_(True), User.is_active.is_(True))
-            )
-        if project.user_id == actor_user_id or admin is not None:
-            project_lifecycle.ensure_active(project)
-            return await project_lifecycle.lock_active(db, project_id) if lock else project
-    raise NotFoundError("项目不存在")
+    if project is None:
+        raise NotFoundError("项目不存在")
+    if project.user_id != actor_user_id:
+        if not await authz.allows(db, actor_user_id, "projects.read"):
+            raise NotFoundError("项目不存在")
+        if lock and permission == "projects.read":
+            raise ValueError("人工写入口必须显式声明操作权限")
+        if lock:
+            await authz.require(db, actor_user_id, permission, write=True, targets=(project.user_id,))
+            project = await project_lifecycle.load_record(db, project_id)
+            if project is None:
+                raise NotFoundError("项目不存在")
+        elif not await authz.allows(db, actor_user_id, permission):
+            raise NotFoundError("项目不存在")
+    project_lifecycle.ensure_active(project)
+    return await project_lifecycle.lock_active(db, project_id) if lock else project
 
 
 async def project_info(db: AsyncSession, project: Project) -> ProjectInfo:
@@ -215,6 +223,9 @@ async def project_out(
 
 async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) -> tuple[Project, str | None]:
     """返回 (项目, 兼容提示)。传了已废弃的 style 自由文本时为项目创建「原风格」并设为默认。"""
+    from app.services.quota_service import check_project_creation
+
+    await check_project_creation(db, user_id)
     await style_service.ensure_assignable(db, user_id, data.default_style_id)
     project = Project(
         user_id=user_id,
@@ -244,7 +255,7 @@ async def update_project(
 ) -> tuple[Project, str | None]:
     """返回 (项目, 兼容提示)。default_style_id 显式 null = 取消默认风格；style（已废弃）更新「原风格」。"""
     async with AuditOperation(db, user_id, "project.update", "project", project_id, project_id=project_id) as audit:
-        project = await get_manageable_project(db, user_id, project_id, lock=True)
+        project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
         audit.target(project)
         audit.track(project, data.model_fields_set)
         fields = data.model_fields_set

@@ -23,7 +23,7 @@ vi.mock('../../stores/auth', async (original) => {
   const hook = (selector: (state: ReturnType<typeof actual.useAuthStore.getState>) => unknown) => selector(actual.useAuthStore.getState())
   return { ...actual, useAuthStore: Object.assign(hook, actual.useAuthStore) }
 })
-const admin: User = { id: 1, username: '管理员', is_admin: true, created_at: '' }
+const admin: User = { id: 1, username: '管理员', is_admin: true, is_super_admin: true, effective_permissions: [], authorization_revision: 1, roles: [], created_at: '' }
 function initialView(): ReturnType<typeof useSystemSettings> {
   const controller = new SystemSettingsController()
   return { controller, state: { ...controller.getSnapshot(), data: settings() } }
@@ -61,7 +61,7 @@ describe('系统设置页面与安全投影', () => {
     expect(html).toContain('系统设置访问已停止')
     expect(html).not.toContain('配置版本')
     expect(html).not.toContain('system-setting-row')
-    useAuthStore.setState({ user: { ...admin, is_admin: false } })
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false } })
     expect(render(createElement(AdminSystemSettingsPage))).toContain('需要管理员权限')
   })
   it('管理导航/面包屑/懒路由齐备，公开根只引入小轮询工具', () => {
@@ -70,14 +70,14 @@ describe('系统设置页面与安全投影', () => {
     expect(html).toContain('href="/admin/system-settings"')
     expect(html).toContain('系统设置')
     expect(html).toContain('管理后台')
-    expect(routerSource).toMatch(/path: 'admin\/system-settings',[\s\S]*?RequireAdmin[\s\S]*?import\('\.\/pages\/AdminSystemSettingsPage'\)/)
+    expect(routerSource).toMatch(/path: 'admin\/system-settings',[\s\S]*?RequirePermission permission="settings.read"[\s\S]*?import\('\.\/pages\/AdminSystemSettingsPage'\)/)
     expect(appSource).toContain('startPublicConfigPolling')
     expect(appSource).not.toContain('dashboardController')
     expect(pageSource).toContain('放弃未保存修改并重新载入')
     expect(pageSource).toContain('加入待恢复修改')
-    expect(pageSource).toContain('useSettingsConfirmation(modal, state.denied)')
+    expect(pageSource).toContain('useSettingsConfirmation(modal, state.denied || !writable)')
     expect(pageSource).not.toContain('modal.confirm(')
-    useAuthStore.setState({ user: { ...admin, is_admin: false } })
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false } })
     expect(render(createElement(AppLayout))).not.toContain('href="/admin/system-settings"')
   })
   it('只从管理投影提取公开bool，不泄露版本/并发/来源', () => {

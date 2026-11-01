@@ -158,12 +158,12 @@ describe('管理员任务目标与权限所有权', () => {
     expect(api.list).toHaveBeenCalledTimes(count)
     expect(c.getSnapshot().cancelTarget).toBeNull()
   })
-  it('POST降权也清空，不借失败回调重新恢复确认或notice', async () => {
+  it('取消动作403关闭写确认但保留合法任务读取', async () => {
     const api = loaders(); api.cancel.mockRejectedValueOnce(new ApiError(403, '已降权'))
     const c = new AdminTasksController(1, {}, api)
     c.activate(); c.openCancellation(task()); await settled()
     c.submitCancellation('人工排查'); await settled()
-    expect(c.getSnapshot()).toMatchObject({ denied: true, cancelTarget: null, notice: null, list: { data: null } })
+    expect(c.getSnapshot()).toMatchObject({ denied: false, cancelTarget: null, notice: { type: 'warning' } })
   })
   it('实时授权变化立即revoke，已加载与迟到响应均不保留', async () => {
     const api = loaders()
@@ -187,18 +187,18 @@ describe('管理员任务目标与权限所有权', () => {
     expect(another.getSnapshot().denied).toBe(false)
     another.deactivate()
   })
-  it('所属用户选择支持中止与过期响应保护，用户请求403同样停止监控', async () => {
+  it('所属用户选择支持中止与过期响应保护，用户请求403不影响任务读取', async () => {
     const api = loaders()
     const old = deferred<Page<AdminUser>>()
     api.owners.mockReturnValueOnce(old.promise)
     const c = new AdminTasksController(1, {}, api)
     c.activate(); c.searchOwners('旧用户'); c.searchOwners('新用户')
     expect(api.owners.mock.calls[0][1]?.aborted).toBe(true)
-    old.resolve({ items: [{ id: 999, username: '旧用户', is_admin: false, is_active: true, project_count: 0, created_at: '' }], total: 1 }); await settled()
+    old.resolve({ items: [{ id: 999, username: '旧用户', is_admin: false, is_super_admin: false, authorization_revision: 1, roles: [], is_management_account: false, is_active: true, project_count: 0, created_at: '' }], total: 1 }); await settled()
     expect(c.getSnapshot().owners.data?.items).toEqual([])
     api.owners.mockRejectedValueOnce(new ApiError(403, '需要管理员'))
     c.searchOwners(); await settled()
-    expect(c.getSnapshot().denied).toBe(true)
+    expect(c.getSnapshot().denied).toBe(false)
   })
 })
 

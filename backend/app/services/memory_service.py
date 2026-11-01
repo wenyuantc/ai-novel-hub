@@ -299,7 +299,7 @@ async def _chapter_id_for(db: AsyncSession, project_id: int, chapter_no: int) ->
 
 
 async def create_memory(db: AsyncSession, user_id: int, project_id: int, data: MemoryCreate) -> MemoryOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     m = StoryMemory(
         project_id=project_id,
         chapter_id=await _chapter_id_for(db, project_id, data.chapter_no),
@@ -324,7 +324,7 @@ async def create_memory(db: AsyncSession, user_id: int, project_id: int, data: M
 async def update_memory(
     db: AsyncSession, user_id: int, project_id: int, memory_id: int, data: MemoryUpdate
 ) -> MemoryOut:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     m = await get_project_memory(db, user_id, project_id, memory_id)
     fields = data.model_dump(exclude_unset=True)
     edits = {k: v for k, v in fields.items() if k in AUTO_ONLY_FIELDS and v is not None}
@@ -351,7 +351,7 @@ async def update_memory(
 
 
 async def delete_memory(db: AsyncSession, user_id: int, project_id: int, memory_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True)
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     m = await get_project_memory(db, user_id, project_id, memory_id)
     if m.origin != "manual":
         raise BadRequestError("自动记忆不能删除，可以屏蔽它")

@@ -21,7 +21,7 @@ vi.mock('../../stores/auth', async (original) => {
   return { ...actual, useAuthStore: Object.assign(hook, actual.useAuthStore) }
 })
 
-const admin: User = { id: 1, username: 'root', is_admin: true, created_at: '' }
+const admin: User = { id: 1, username: 'root', is_admin: true, is_super_admin: true, effective_permissions: [], authorization_revision: 1, roles: [], created_at: '' }
 const meta = { as_of: '2026-10-31T10:00:00Z', tracking_since: '2026-10-28T08:00:00Z', timezone: 'Asia/Shanghai' as const }
 const overview: AdminDashboardOverview = { ...meta, users: 12, projects: 7, chapters: 30, total_words: 500, pending_submissions: 2 }
 const tasks: AdminDashboardTasks = { ...meta, baseline_tasks: 10, new_tasks: 5, queued: 0, running: 1, paused: 0, succeeded: 2, failed: 1, cancelled: 0, interrupted: 0, failed_24h: 1, interrupted_24h: 0, removed_unfinished: 1 }
@@ -49,6 +49,7 @@ afterEach(() => { view = initialView(); chartMeasure.width = 0; useAuthStore.set
 
 describe('管理员首页渲染与权限入口', () => {
   it('完整展示已确认统计口径和真实管理入口，区分累计统计与现存监控入口', () => {
+    useAuthStore.setState({ user: admin, status: 'authenticated' })
     const html = render(createElement(AdminDashboardPage))
     expect(html).toContain('所有账号，含管理员与禁用账号')
     expect(html).toContain('作品总数（含回收站）')
@@ -62,6 +63,14 @@ describe('管理员首页渲染与权限入口', () => {
     expect(html).toContain('现存列表数量不保证与累计结果')
     expect(html).toContain('历史统计时间范围')
     expect(html).toContain('每60秒自动刷新')
+  })
+
+  it('只有首页读取时保留统计，不暗中放行用户/作品/任务/工坊/审计跨域导航', () => {
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false, effective_permissions: ['dashboard.read'] }, status: 'authenticated' })
+    const html = render(createElement(AdminDashboardPage))
+    expect(html).toContain('用户总数')
+    expect(html).toContain('工坊待审核投稿：2')
+    for (const path of ['/admin/users', '/admin/projects', '/admin/recycle-bin', '/admin/tasks', '/admin/audit-logs', '/workshop?tab=review']) expect(html).not.toContain(`href="${path}"`)
   })
 
   it('区块首次失败不显示假的零，刷新失败明确标记旧数据', () => {
@@ -85,7 +94,7 @@ describe('管理员首页渲染与权限入口', () => {
     useAuthStore.setState({ user: admin, status: 'authenticated' })
     expect(render(createElement(AppLayout), '/projects')).toContain('href="/admin/dashboard"')
     expect(render(createElement(AppLayout))).toContain('管理后台')
-    useAuthStore.setState({ user: { ...admin, is_admin: false } })
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false } })
     expect(render(createElement(AppLayout), '/projects')).not.toContain('href="/admin/dashboard"')
   })
 
@@ -115,7 +124,7 @@ describe('管理员首页渲染与权限入口', () => {
     useAuthStore.setState({ user: admin, status: 'authenticated' })
     expect(render(createElement(WorkshopPage), '/workshop?tab=review')).toContain('审核提交')
     expect(render(createElement(WorkshopPage), '/workshop?tab=unknown')).not.toContain('审核提交')
-    useAuthStore.setState({ user: { ...admin, is_admin: false } })
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false } })
     expect(render(createElement(WorkshopPage), '/workshop?tab=review')).not.toContain('审核提交')
   })
 })

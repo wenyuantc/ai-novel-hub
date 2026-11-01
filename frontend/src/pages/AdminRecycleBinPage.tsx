@@ -1,5 +1,7 @@
+import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
+import { can } from '../utils/permissions'
 import { DeleteOutlined, ReloadOutlined, UndoOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Empty, Input, List, Pagination, Result, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Empty, Input, InputNumber, List, Pagination, Result, Select, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -26,8 +28,9 @@ interface ResultsProps {
 
 /** 不展示正文与私人资源；桌面表格和移动卡片共用相同动作与到期判断。 */
 export function RecycleProjectResults({ items, mobile, loading, disabled, now, onAction }: ResultsProps) {
+  const actor = useAuthStore((state) => state.user)
   const status = (project: RecycleProject) => canRestoreProject(project, now) ? <Tag color="green">可恢复</Tag> : <Tag color="default">已到期，待清理</Tag>
-  const actions = (project: RecycleProject) => <Space wrap size={4}><Button size="small" icon={<UndoOutlined />} disabled={disabled || !canRestoreProject(project, now)} onClick={() => onAction(project, 'restore')}>恢复</Button><Button size="small" danger icon={<DeleteOutlined />} disabled={disabled} onClick={() => onAction(project, 'purge')}>彻底删除</Button></Space>
+  const actions = (project: RecycleProject) => <Space wrap size={4}><Button size="small" icon={<UndoOutlined />} disabled={disabled || !can(actor, 'recycle_bin.restore') || !canRestoreProject(project, now)} onClick={() => onAction(project, 'restore')}>恢复</Button><Button size="small" danger icon={<DeleteOutlined />} disabled={disabled || !can(actor, 'recycle_bin.purge')} onClick={() => onAction(project, 'purge')}>彻底删除</Button></Space>
   const empty = <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="回收站中没有匹配的作品" />
   const columns: TableColumnsType<RecycleProject> = [
     { title: '作品名称', key: 'title', width: 230, render: (_, project) => <span style={{ overflowWrap: 'anywhere' }}><Typography.Text strong>{project.title}</Typography.Text><br /><Typography.Text type="secondary">#{project.id}</Typography.Text></span> },
@@ -50,12 +53,15 @@ export function RecycleProjectResults({ items, mobile, loading, disabled, now, o
 
 function RecycleBin({ actorId, initialOwner }: { actorId: number; initialOwner: number | undefined }) {
   const mobile = useIsMobile()
+  const actor = useAuthStore((state) => state.user)
+  const canReadUsers = can(actor, 'users.read')
   const [query, setQuery] = useState('')
   const [ownerId, setOwnerId] = useState<number | undefined>(initialOwner)
   const [ownerSearch, setOwnerSearch] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [target, setTarget] = useState<{ project: RecycleProject; action: RecycleAction } | null>(null)
+  useAuthorizationCleanup(() => { setTarget(null) })
   const [now, setNow] = useState(Date.now)
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const loader = useCallback(async () => {
@@ -65,19 +71,19 @@ function RecycleBin({ actorId, initialOwner }: { actorId: number; initialOwner: 
   }, [query, ownerId, page, pageSize])
   const { data, loading, error, reload } = useLoader(loader)
   const currentPage = data?.page ?? page
-  const ownerLoader = useCallback(() => adminApi.listUsers({ q: ownerSearch, page_size: 20 }), [ownerSearch])
+  const ownerLoader = useCallback(() => canReadUsers ? adminApi.listUsers({ q: ownerSearch, page_size: 20 }) : Promise.resolve({ items: [], total: 0 }), [ownerSearch, canReadUsers])
   const owners = useLoader(ownerLoader)
-  const ownerOptions = (owners.data?.items ?? []).map((user) => ({ value: user.id, label: user.username }))
+  const ownerOptions = (canReadUsers ? owners.data?.items ?? [] : []).map((user) => ({ value: user.id, label: user.username }))
   if (ownerId && !ownerOptions.some((option) => option.value === ownerId)) ownerOptions.unshift({ value: ownerId, label: `用户 #${ownerId}` })
   return <div style={{ maxWidth: 1500, minWidth: 0, margin: '0 auto', padding: mobile ? 12 : 24 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', marginBottom: 16 }}>
       <div><Typography.Title level={3} style={{ margin: '0 0 8px' }}>作品回收站</Typography.Title><Typography.Text type="secondary">仅管理员可恢复或彻底删除。作品保留 30 天，到期后自动清理；恢复不会自动续跑任务。时间按浏览器本地时区显示。</Typography.Text></div>
-      <Space wrap><Link to="/admin/projects">返回作品管理</Link><Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button></Space>
+      <Space wrap>{can(actor, 'projects.read') && <Link to="/admin/projects">返回作品管理</Link>}<Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button></Space>
     </div>
     <Card styles={{ body: { padding: mobile ? 12 : 16, minWidth: 0 } }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
         <Input.Search aria-label="搜索回收站作品或用户" placeholder="搜索作品名称或用户名" allowClear maxLength={200} style={{ width: 280, maxWidth: '100%' }} onSearch={(value) => { setQuery(value.trim()); setPage(1); reload() }} />
-        <Select<number> aria-label="回收站所属用户筛选" allowClear showSearch filterOption={false} placeholder="所属用户" value={ownerId} loading={owners.loading} onSearch={(value) => setOwnerSearch(value.slice(0, 64))} onChange={(value) => { setOwnerId(value); setPage(1); reload() }} options={ownerOptions} style={{ width: 200, maxWidth: '100%' }} notFoundContent={owners.error ?? '没有匹配的用户'} />
+        {canReadUsers ? <Select<number> aria-label="回收站所属用户筛选" allowClear showSearch={canReadUsers} filterOption={false} placeholder="所属用户" value={ownerId} loading={owners.loading} onSearch={(value) => setOwnerSearch(value.slice(0, 64))} onChange={(value) => { setOwnerId(value); setPage(1); reload() }} options={ownerOptions} style={{ width: 200, maxWidth: '100%' }} notFoundContent={owners.error ?? '没有匹配的用户'} /> : <InputNumber aria-label="回收站所属用户ID筛选" min={1} precision={0} placeholder="所属用户 ID" value={ownerId} onChange={(value) => { setOwnerId(value ?? undefined); setPage(1); reload() }} style={{ width: 200 }} />}
       </div>
       {error && <Alert showIcon type="error" message={error} action={<Button size="small" onClick={reload}>重试</Button>} style={{ marginBottom: 16 }} />}
       <RecycleProjectResults items={data?.items ?? []} mobile={mobile} loading={loading} disabled={target !== null || loading} now={now} onAction={(project, action) => setTarget({ project, action })} />
@@ -86,7 +92,7 @@ function RecycleBin({ actorId, initialOwner }: { actorId: number; initialOwner: 
         <Pagination current={currentPage} pageSize={pageSize} total={data?.total ?? 0} simple={mobile} showSizeChanger={!mobile} pageSizeOptions={[20, 50, 100]} onChange={(next, size) => { setPage(size !== pageSize ? 1 : next); setPageSize(size); reload() }} />
       </div>
     </Card>
-    {target && <RecycleProjectModal key={`${actorId}:${target.project.id}:${target.project.deleted_at}:${target.action}`} actorId={actorId} project={target.project} action={target.action} now={now} onClose={() => setTarget(null)} onChanged={() => { setTarget(null); setPage(currentPage); reload() }} />}
+    {target && can(actor, target.action === 'restore' ? 'recycle_bin.restore' : 'recycle_bin.purge') && <RecycleProjectModal key={`${actorId}:${target.project.id}:${target.project.deleted_at}:${target.action}`} actorId={actorId} project={target.project} action={target.action} now={now} onClose={() => setTarget(null)} onChanged={() => { setTarget(null); setPage(currentPage); reload() }} />}
   </div>
 }
 
@@ -95,5 +101,5 @@ export default function AdminRecycleBinPage() {
   const user = useAuthStore((state) => state.user)
   const [searchParams] = useSearchParams()
   const owner = parseAdminUserId(searchParams.get('owner_user_id'))
-  return user?.is_admin ? <RecycleBin key={`${user.id}:${owner ?? 'all'}`} actorId={user.id} initialOwner={owner ?? undefined} /> : <Result status="403" title="需要管理员权限" />
+  return user && can(user, 'recycle_bin.read') ? <RecycleBin key={`${user.id}:${owner ?? 'all'}`} actorId={user.id} initialOwner={owner ?? undefined} /> : <Result status="403" title="需要管理员权限" />
 }

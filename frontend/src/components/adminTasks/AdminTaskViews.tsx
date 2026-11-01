@@ -16,12 +16,12 @@ export function AdminTaskProject({ task }: { task: AdminTaskBrief }) {
 function TaskProgress({ task }: { task: AdminTaskBrief }) {
   return <div><AdminTaskStatusTags task={task} /><Progress size="small" percent={Math.max(0, Math.min(100, task.progress))} status={task.status === 'failed' ? 'exception' : task.status === 'succeeded' ? 'success' : 'normal'} style={{ marginBottom: 0 }} /></div>
 }
-export function AdminTaskResults({ items, loading, mobile, onDetail, onCancel, blockedCancelKey }: {
-  items: AdminTaskBrief[]; loading: boolean; mobile: boolean; onDetail: (key: string) => void; onCancel: (task: AdminTaskBrief) => void; blockedCancelKey?: string
+export function AdminTaskResults({ items, loading, mobile, onDetail, onCancel, blockedCancelKey, canCancel = true }: {
+  items: AdminTaskBrief[]; loading: boolean; mobile: boolean; onDetail: (key: string) => void; onCancel: (task: AdminTaskBrief) => void; blockedCancelKey?: string; canCancel?: boolean
 }) {
   const actions = (task: AdminTaskBrief) => <Space size={4} wrap>
     <Button size="small" onClick={() => { if (task.task_key) onDetail(task.task_key) }} disabled={!task.task_key} aria-label={`查看任务 #${task.id} 详情`}>详情</Button>
-    {task.can_cancel && !task.cancellation_pending && <Button size="small" danger disabled={!task.task_key || task.task_key === blockedCancelKey} onClick={() => onCancel(task)} aria-label={`申请取消任务 #${task.id}`}>{task.task_key === blockedCancelKey ? '核对中' : '取消'}</Button>}
+    {canCancel && task.can_cancel && !task.cancellation_pending && <Button size="small" danger disabled={!task.task_key || task.task_key === blockedCancelKey} onClick={() => onCancel(task)} aria-label={`申请取消任务 #${task.id}`}>{task.task_key === blockedCancelKey ? '核对中' : '取消'}</Button>}
     {!task.task_key && <Typography.Text type="secondary">未记录执行标识</Typography.Text>}
   </Space>
   const empty = <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的现存任务" />

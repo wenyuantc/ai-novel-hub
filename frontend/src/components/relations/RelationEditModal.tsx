@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Col, Form, Input, InputNumber, Modal, Row, Select, Slider, Switch } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -56,6 +57,7 @@ const CATEGORY_OPTIONS = (Object.keys(RELATION_CATEGORY) as RelationCategory[]).
  * 新建时可改用自定义称呼（后端匹配预置 / 自定义类型，匹配不上新建）。编辑时可调换方向与类型，变化会写入历史。
  */
 export default function RelationEditModal({ projectId, open, characters, types, viewerId, editing, onClose, onSaved }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const [saving, setSaving] = useState(false)
@@ -103,7 +105,9 @@ export default function RelationEditModal({ projectId, open, characters, types, 
   }, [open, editing, viewerId, form])
 
   const handleOk = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setSaving(true)
     try {
       let saved: Relationship
@@ -118,14 +122,17 @@ export default function RelationEditModal({ projectId, open, characters, types, 
         const opt = parseTypeOptionValue(v.type_option ?? '')
         if (!opt) throw new Error('请选择关系类型')
         const chosen = types.find((t) => t.id === opt.typeId)
+        if (!canEditNow()) return
         saved = await relationshipApi.update(projectId, editing.id, {
           ...common,
           type_id: opt.typeId,
           // 对称类型不调换方向，避免写入无意义的「方向」历史
           ...(chosen && isSymmetric(chosen) ? {} : { a_id: opt.viewerIsA ? v.self_id : v.other_id }),
         })
+        if (!canEditNow()) return
       } else if (v.custom) {
         // 自定义称呼：self 是 role_a 一方
+        if (!canEditNow()) return
         saved = await relationshipApi.create(projectId, {
           ...common,
           a_id: v.self_id,
@@ -135,9 +142,11 @@ export default function RelationEditModal({ projectId, open, characters, types, 
           category: v.category,
           source: 'manual',
         })
+        if (!canEditNow()) return
       } else {
         const opt = parseTypeOptionValue(v.type_option ?? '')
         if (!opt) throw new Error('请选择关系类型')
+        if (!canEditNow()) return
         saved = await relationshipApi.create(projectId, {
           ...common,
           a_id: opt.viewerIsA ? v.self_id : v.other_id,
@@ -145,10 +154,12 @@ export default function RelationEditModal({ projectId, open, characters, types, 
           type_id: opt.typeId,
           source: 'manual',
         })
+        if (!canEditNow()) return
       }
       message.success('已保存')
       onSaved(saved)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -160,6 +171,7 @@ export default function RelationEditModal({ projectId, open, characters, types, 
 
   return (
     <Modal
+        okButtonProps={{ disabled: !canEdit }}
       title={editing ? '编辑关系' : '新增关系'}
       open={open}
       onOk={() => void handleOk()}
@@ -170,7 +182,7 @@ export default function RelationEditModal({ projectId, open, characters, types, 
       width={640}
       forceRender
     >
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" disabled={!canEdit}>
         <Row gutter={16}>
           <Col span={12}>
             <Form.Item name="self_id" label="角色" rules={[{ required: true, message: '请选择角色' }]} hidden={viewerId !== undefined}>

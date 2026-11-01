@@ -1,3 +1,6 @@
+import { useAuthorizationCleanup } from '../../hooks/useAuthorizationCleanup'
+import { useSettingsConfirmation } from '../systemSettings/useSettingsConfirmation'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Alert, Button, Drawer, Empty, Input, List, Popconfirm, Space, Spin, Table, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -28,22 +31,29 @@ export default function OutlineSnapshotDrawer({ projectId, open, onClose, onRest
 }
 
 function Inner({ projectId, onRestored }: { projectId: number; onRestored: () => void }) {
+  const { canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
   const { message, modal } = App.useApp()
+  const confirm = useSettingsConfirmation(modal, !canEdit)
   const loader = useCallback(() => snapshotApi.list(projectId), [projectId])
   const { data: items = [], loading, reload } = useLoader(loader)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [pending, setPending] = useState<number | null>(null)
+  useAuthorizationCleanup(() => setPending(null))
   const [detail, setDetail] = useState<OutlineSnapshotDetail | null>(null)
 
   const handleCreate = async () => {
+    if (!canEditNow()) return
     setSaving(true)
     try {
+      if (!canEditNow()) return
       await snapshotApi.create(projectId, note.trim())
+      if (!canEditNow()) return
       message.success('已保存快照')
       setNote('')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -51,20 +61,25 @@ function Inner({ projectId, onRestored }: { projectId: number; onRestored: () =>
   }
 
   const showDetail = async (s: OutlineSnapshot) => {
+    if (!canReadNow()) return
     setPending(s.id)
     try {
-      setDetail(await snapshotApi.get(projectId, s.id))
+      const detail = await snapshotApi.get(projectId, s.id)
+      if (canReadNow()) setDetail(detail)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (canReadNow()) message.error(errorMessage(err))
     } finally {
-      setPending(null)
+      if (canReadNow()) setPending(null)
     }
   }
 
   const doRestore = async (s: OutlineSnapshot) => {
+    if (!canEditNow()) return
     setPending(s.id)
     try {
+      if (!canEditNow()) return
       const r = await snapshotApi.restore(projectId, s.id)
+      if (!canEditNow()) return
       modal.success({
         title: '已恢复大纲',
         content: (
@@ -85,6 +100,7 @@ function Inner({ projectId, onRestored }: { projectId: number; onRestored: () =>
       reload()
       onRestored()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setPending(null)
@@ -92,15 +108,19 @@ function Inner({ projectId, onRestored }: { projectId: number; onRestored: () =>
   }
 
   const confirmRestore = async (s: OutlineSnapshot) => {
+    if (!canEditNow()) return
     // 先取详情拿到恢复提示（如快照后发生过章节号平移）
     let warnings: string[]
     try {
+      if (!canEditNow()) return
       warnings = (await snapshotApi.get(projectId, s.id)).warnings
+      if (!canEditNow()) return
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
       return
     }
-    modal.confirm({
+    confirm({
       title: `恢复到快照 #${s.id}？`,
       content: (
         <Space direction="vertical">
@@ -120,13 +140,17 @@ function Inner({ projectId, onRestored }: { projectId: number; onRestored: () =>
   }
 
   const handleDelete = async (s: OutlineSnapshot) => {
+    if (!canEditNow()) return
     setPending(s.id)
     try {
+      if (!canEditNow()) return
       await snapshotApi.remove(projectId, s.id)
+      if (!canEditNow()) return
       message.success('已删除快照')
       if (detail?.id === s.id) setDetail(null)
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setPending(null)
@@ -143,7 +167,7 @@ function Inner({ projectId, onRestored }: { projectId: number; onRestored: () =>
           onChange={(e) => setNote(e.target.value)}
           onPressEnter={() => void handleCreate()}
         />
-        <Button type="primary" loading={saving} onClick={() => void handleCreate()}>
+        <Button type="primary" loading={saving} onClick={() => void handleCreate()} disabled={!canEdit}>
           保存当前大纲为快照
         </Button>
       </Space.Compact>
@@ -165,11 +189,11 @@ function Inner({ projectId, onRestored }: { projectId: number; onRestored: () =>
                     <Button key="view" type="link" size="small" loading={pending === s.id && detail?.id !== s.id} onClick={() => void showDetail(s)}>
                       详情
                     </Button>,
-                    <Button key="restore" type="link" size="small" disabled={pending !== null} onClick={() => void confirmRestore(s)}>
+                    <Button key="restore" type="link" size="small" disabled={!canEdit || (pending !== null)} onClick={() => void confirmRestore(s)}>
                       恢复
                     </Button>,
                     <Popconfirm key="del" title="删除该快照？" okText="删除" cancelText="取消" onConfirm={() => handleDelete(s)}>
-                      <Button type="link" size="small" danger>
+                      <Button type="link" size="small" danger disabled={!canEdit}>
                         删除
                       </Button>
                     </Popconfirm>,

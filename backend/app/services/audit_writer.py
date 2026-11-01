@@ -63,10 +63,14 @@ class AuditOperation:
         operation_id: str | None = None,
         include_own_project: bool = False,
         system_expiry: bool = False,
+        bootstrap: bool = False,
     ):
         self.db = db
         if system_expiry and (actor is not None or action != "project.expire"):
             raise ValueError("系统身份仅允许内部到期清理")
+        if bootstrap and (actor is not None or action != "user.roles.bootstrap"):
+            raise ValueError("引导系统身份仅允许内部启动角色变更")
+        self.bootstrap = bootstrap
         self.system_expiry = system_expiry
         self.include_own_project = include_own_project
         self.actor_id = actor if isinstance(actor, int) or actor is None else actor.id
@@ -83,12 +87,17 @@ class AuditOperation:
         if not self.enabled:
             return self
         actor = await self.db.get(User, self.actor_id) if self.actor_id is not None else None
-        self.enabled = self.system_expiry or bool(actor and actor.is_admin and actor.is_active)
+        from app.services.authorization_service import snapshot
+
+        management = await snapshot(self.db, actor.id) if actor is not None else None
+        self.enabled = self.system_expiry or self.bootstrap or bool(
+            management and management.is_active and management.is_management_account
+        )
         if not self.enabled:
             return self
         self.values.update(
             actor_user_id=actor.id if actor is not None else None,
-            actor_username=actor.username if actor is not None else "系统自动清理",
+            actor_username=actor.username if actor is not None else "管理员引导" if self.bootstrap else "系统自动清理",
         )
         project_id = self.values.get("project_id")
         if project_id is not None:
@@ -174,6 +183,11 @@ class AuditOperation:
             summary[key] is not None for key in ("task_key", "task_kind", "accepted_from_status", "cancel_reason")
         ):
             raise ValueError("取消摘要仅允许用于任务取消受理")
+        if summary["rbac_change"] is not None and self.values["action"] not in {
+            "role.create", "role.update", "role.delete",
+            "user.roles.update", "user.roles.bootstrap", "user.quotas.update",
+        }:
+            raise ValueError("角色配额摘要仅允许用于对应管理动作")
         return AdminAuditLog(
             operation_id=self.operation_id,
             **self.values,

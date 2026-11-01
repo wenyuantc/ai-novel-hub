@@ -20,7 +20,7 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 /** 职业：按主修 / 副修分组的卡片（阶梯 + 持有人数），编辑抽屉维护阶段与查看持有人；AI 生成职业 / 职业体系向导。 */
 export default function CareersPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
@@ -35,11 +35,15 @@ export default function CareersPanel() {
   }
 
   const handleDelete = async (c: Career) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await careerApi.remove(pid, c.id)
+      if (!canEditNow()) return
       message.success('已删除（角色的挂接与阶段历史一并清理）')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -58,8 +62,7 @@ export default function CareersPanel() {
         extra={
           <Space size={0}>
             <Button type="link" size="small" onClick={() => openEdit(c)}>
-              编辑
-            </Button>
+              {canEdit ? '编辑' : '查看'}</Button>
             <Popconfirm
               title="删除该职业？"
               description={c.holder_count > 0 ? `${c.holder_count} 个角色的挂接与阶段历史会一并删除。` : undefined}
@@ -68,7 +71,7 @@ export default function CareersPanel() {
               okButtonProps={{ danger: true }}
               onConfirm={() => handleDelete(c)}
             >
-              <Button type="link" size="small" danger>
+              <Button type="link" size="small" danger disabled={!canEdit}>
                 删除
               </Button>
             </Popconfirm>
@@ -109,7 +112,7 @@ export default function CareersPanel() {
             AI 生成职业
           </Button>)}
           {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>)}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
             新增职业
           </Button>
         </Space>

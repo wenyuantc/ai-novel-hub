@@ -1,3 +1,4 @@
+import { useSettingsConfirmation } from '../../components/systemSettings/useSettingsConfirmation'
 import { MoreOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { App, Button, Card, Dropdown, Form, Input, List, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
@@ -22,8 +23,9 @@ const BatchGenerateModal = lazy(() => import('../../components/batch/BatchGenera
 
 export default function ChaptersPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message, modal } = App.useApp()
+  const confirm = useSettingsConfirmation(modal, !canEdit)
   const navigate = useNavigate()
   const isMobile = useIsMobile()
   const readChapter = (c: ChapterBrief) => navigate(`/projects/${pid}/read/${c.id}`, { state: { from: `/projects/${pid}/chapters` } })
@@ -62,15 +64,20 @@ export default function ChaptersPanel() {
   const totalWords = chapters.reduce((s, c) => s + c.word_count, 0)
 
   const handleCreate = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setCreating(true)
     try {
+      if (!canEditNow()) return
       const c = await chapterApi.create(pid, { title: v.title?.trim() || null })
+      if (!canEditNow()) return
       setCreateOpen(false)
       form.resetFields()
       void refreshProject()
       navigate(`/projects/${pid}/chapters/${c.id}`)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setCreating(false)
@@ -78,12 +85,16 @@ export default function ChaptersPanel() {
   }
 
   const handleDelete = async (c: ChapterBrief) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await chapterApi.remove(pid, c.id)
+      if (!canEditNow()) return
       message.success('已删除')
       reload()
       void refreshProject()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -104,7 +115,7 @@ export default function ChaptersPanel() {
             </Button>
           </Tooltip>}
           <Button onClick={() => navigate(`/projects/${pid}/outlines`)}>从大纲创建</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} disabled={!canEdit}>
             新建章节
           </Button>
         </Space>
@@ -140,16 +151,16 @@ export default function ChaptersPanel() {
                     trigger={['click']}
                     menu={{
                       items: [
-                        { key: 'edit', label: '编辑' },
+                        { key: 'edit', label: canEdit ? '编辑' : '查看' },
                         { key: 'read', label: '阅读', disabled: c.word_count === 0 },
                         { type: 'divider' },
-                        { key: 'delete', label: '删除', danger: true, disabled: c.status === 'generating' },
+                        { key: 'delete', label: '删除', danger: true, disabled: !canEdit || c.status === 'generating' },
                       ],
                       onClick: ({ key }) => {
                         if (key === 'edit') navigate(`/projects/${pid}/chapters/${c.id}`)
                         else if (key === 'read') readChapter(c)
                         else if (key === 'delete')
-                          modal.confirm({
+                          confirm({
                             title: '删除该章节？',
                             content: '正文将被永久删除',
                             okText: '删除',
@@ -235,8 +246,7 @@ export default function ChaptersPanel() {
               render: (_, c) => (
                 <Space size={0}>
                   <Button type="link" size="small" onClick={() => navigate(`/projects/${pid}/chapters/${c.id}`)}>
-                    编辑
-                  </Button>
+                    {canEdit ? '编辑' : '查看'}</Button>
                   <Button type="link" size="small" disabled={c.word_count === 0} onClick={() => readChapter(c)}>
                     阅读
                   </Button>
@@ -245,10 +255,10 @@ export default function ChaptersPanel() {
                     description="正文将被永久删除"
                     okText="删除"
                     cancelText="取消"
-                    okButtonProps={{ danger: true }}
+                    okButtonProps={{ danger: true, disabled: !canEdit }}
                     onConfirm={() => handleDelete(c)}
                   >
-                    <Button type="link" size="small" danger disabled={c.status === 'generating'}>
+                    <Button type="link" size="small" danger disabled={!canEdit || (c.status === 'generating')}>
                       删除
                     </Button>
                   </Popconfirm>
@@ -273,6 +283,7 @@ export default function ChaptersPanel() {
         </Suspense>
       )}
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title="新建章节"
         open={createOpen}
         onOk={() => void handleCreate()}
@@ -282,7 +293,7 @@ export default function ChaptersPanel() {
         cancelText="取消"
         destroyOnHidden
       >
-        <Form form={form} layout="vertical" preserve={false}>
+        <Form form={form} layout="vertical" preserve={false} disabled={!canEdit}>
           <Form.Item name="title" label="章节标题（可留空）" rules={[{ max: 200, message: '不超过 200 字' }]}>
             <Input placeholder="例如：风起青萍" />
           </Form.Item>

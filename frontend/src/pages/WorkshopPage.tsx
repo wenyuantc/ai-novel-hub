@@ -1,3 +1,5 @@
+import { can } from '../utils/permissions'
+import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Badge, Button, Col, Empty, Input, List, Pagination, Row, Select, Space, Spin, Tabs, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
@@ -17,7 +19,8 @@ import { formatTime } from '../utils/time'
 
 /** 实例内共享：浏览、本人条目与提交记录、管理员审核。 */
 export default function WorkshopPage() {
-  const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false)
+  const actor = useAuthStore((s) => s.user)
+  const isAdmin = can(actor, 'workshop.read')
   const isMobile = useIsMobile()
   const [searchParams, setSearchParams] = useSearchParams()
   const tab = workshopTab(searchParams.get('tab'), isAdmin)
@@ -32,6 +35,7 @@ export default function WorkshopPage() {
   const [submission, setSubmission] = useState<{ id: number; review: boolean } | null>(null)
   const [share, setShare] = useState<{ initial: WorkshopSubmit; direct: boolean } | null>(null)
   const refresh = () => setVersion((v) => v + 1)
+  useAuthorizationCleanup(() => { setItemId(null); if (submission?.review) setSubmission(null); if (share?.direct) setShare(null); refresh() })
   const pendingLoader = useCallback(() => {
     void version // 变更成功后刷新数量，同时保留当前筛选与分页。
     return isAdmin ? workshopApi.pending({ status: 'pending', page: 1, page_size: 1 }) : Promise.resolve(null)
@@ -44,16 +48,16 @@ export default function WorkshopPage() {
     <Space wrap style={{ justifyContent: 'space-between', width: '100%', marginBottom: 16 }}>
       <div><Typography.Title level={3} style={{ margin: 0 }}>提示词工坊</Typography.Title><Typography.Text type="secondary">浏览本实例的写作风格与提示词模板，导入后用于自己的创作。</Typography.Text></div>
       <Space wrap><Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-        {isAdmin && <><Button icon={<PlusOutlined />} onClick={() => setShare({ initial: emptyWorkshopShare('style'), direct: true })}>发布官方风格</Button><Button icon={<PlusOutlined />} onClick={() => setShare({ initial: emptyWorkshopShare('prompt'), direct: true })}>发布官方模板</Button></>}
+        {can(actor, 'workshop.publish') && <><Button icon={<PlusOutlined />} onClick={() => setShare({ initial: emptyWorkshopShare('style'), direct: true })}>发布官方风格</Button><Button icon={<PlusOutlined />} onClick={() => setShare({ initial: emptyWorkshopShare('prompt'), direct: true })}>发布官方模板</Button></>}
       </Space>
     </Space>
     {pending.error && <Alert type="error" showIcon message={`待审核数量加载失败：${pending.error}`} style={{ marginBottom: 12 }} />}
     <Tabs activeKey={tab} onChange={setTab} destroyOnHidden items={[
-      { key: 'browse', label: '浏览', children: <Browse version={version} onOpen={openItem} /> },
+      { key: 'browse', label: '浏览', children: <Browse key={`${actor?.id}:${isAdmin}`} version={version} onOpen={openItem} /> },
       { key: 'mine', label: '我的分享', children: <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Alert type="info" showIcon message={<Space wrap><span>从自己的内容开始分享：</span><Link to="/styles">打开写作风格库</Link><Link to="/prompt-templates">打开提示词模板</Link></Space>} />
-        <MyItems version={version} onOpen={openItem} />
-        <Submissions version={version} review={false} onOpen={(id) => openSubmission(id, false)} />
+        <MyItems key={actor?.id} version={version} onOpen={openItem} />
+        <Submissions key={actor?.id} version={version} review={false} onOpen={(id) => openSubmission(id, false)} />
       </Space> },
       ...(isAdmin ? [reviewTab] : []),
     ]} />

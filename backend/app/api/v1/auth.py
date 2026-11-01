@@ -5,7 +5,7 @@ from app.core.deps import CurrentUser, DbDep, SettingsDep
 from app.core.security import ACCESS_TOKEN_COOKIE, create_access_token
 from app.models import User
 from app.schemas.auth import AuthConfigOut, ChangePasswordRequest, Credentials, UserOut
-from app.services import auth_service
+from app.services import auth_service, authorization_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,15 +32,17 @@ async def auth_config(settings: SettingsDep, response: Response) -> AuthConfigOu
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def register(body: Credentials, response: Response, db: DbDep, settings: SettingsDep) -> User:
     user = await auth_service.register(db, body, registration_enabled=settings.registration_enabled)
+    output = await _user_out(db, user)
     _set_auth_cookie(response, user, settings)
-    return user
+    return output
 
 
 @router.post("/login", response_model=UserOut)
 async def login(body: Credentials, response: Response, db: DbDep, settings: SettingsDep) -> User:
     user = await auth_service.authenticate(db, body)
+    output = await _user_out(db, user)
     _set_auth_cookie(response, user, settings)
-    return user
+    return output
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -51,8 +53,9 @@ async def logout(settings: SettingsDep) -> Response:
 
 
 @router.get("/me", response_model=UserOut)
-async def me(user: CurrentUser) -> User:
-    return user
+async def me(user: CurrentUser, db: DbDep, response: Response) -> UserOut:
+    response.headers["Cache-Control"] = "no-store"
+    return await _user_out(db, user)
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -62,3 +65,9 @@ async def change_password(body: ChangePasswordRequest, user: CurrentUser, db: Db
     # 其他会话因 token_version 递增而失效；为当前会话签发新令牌以保持登录
     _set_auth_cookie(response, user, settings)
     return response
+
+
+async def _user_out(db, user: User) -> UserOut:
+    access = await authorization_service.snapshot(db, user.id)
+    return UserOut(id=access.id, username=access.username, is_admin=access.is_super_admin,
+                   created_at=access.created_at, **access.public())

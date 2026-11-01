@@ -2,6 +2,7 @@ import { App } from 'antd'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { AdminUserActionsController } from './adminUserActionsController'
+import { authorizationKey, can } from '../../utils/permissions'
 
 interface Options { actorId: number; onChanged: () => void; onDeleted: () => void }
 
@@ -10,7 +11,7 @@ export function useAdminUserActions({ actorId, onChanged, onDeleted }: Options) 
   const { message } = App.useApp()
   const [controller] = useState(() => new AdminUserActionsController(actorId, () => {
     const auth = useAuthStore.getState()
-    return auth.status === 'authenticated' && auth.user?.id === actorId && auth.user.is_admin
+    return auth.status === 'authenticated' && auth.user?.id === actorId && can(auth.user, 'users.read')
   }, {
     changed: onChanged,
     deleted: onDeleted,
@@ -22,8 +23,12 @@ export function useAdminUserActions({ actorId, onChanged, onDeleted }: Options) 
   }, [controller, onChanged, onDeleted, message])
   useEffect(() => {
     controller.activate()
+    let previous = authorizationKey(useAuthStore.getState().user)
     const unsubscribe = useAuthStore.subscribe((auth) => {
-      if (auth.status !== 'authenticated' || auth.user?.id !== actorId || !auth.user.is_admin) controller.deactivate()
+      const next = authorizationKey(auth.user)
+      if (next !== previous) { controller.deactivate(); previous = next }
+      if (auth.status !== 'authenticated' || auth.user?.id !== actorId || !can(auth.user, 'users.read')) controller.deactivate()
+      else controller.activate()
     })
     return () => { unsubscribe(); controller.deactivate() }
   }, [actorId, controller])

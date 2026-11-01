@@ -19,6 +19,16 @@ export class ApiError extends Error {
 
 type UnauthorizedHandler = () => void
 let unauthorizedHandler: UnauthorizedHandler | null = null
+let permissionDeniedHandler: (() => void) | null = null
+let requestGeneration = 0
+
+/** 会话代次改变后，旧请求的401/403不能登出或刷新后来登录的账号。 */
+export function invalidateRequestGeneration(): void { requestGeneration += 1 }
+
+/** RBAC403只请求刷新能力，不撤销有效登录，也不重放原业务。 */
+export function setPermissionDeniedHandler(handler: (() => void) | null): void {
+  permissionDeniedHandler = handler
+}
 
 /** 注册 401 处理器（由 auth store 注入，用于清空会话并跳转登录页）。 */
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
@@ -75,9 +85,10 @@ function shouldRedirectOn401(path: string): boolean {
   return !path.startsWith('/auth/login') && !path.startsWith('/auth/me')
 }
 
-export async function handleErrorResponse(path: string, resp: Response): Promise<never> {
+export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration): Promise<never> {
   const { detail, body } = await readErrorBody(resp)
-  if (resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
+  if (generation === requestGeneration && resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
+  if (generation === requestGeneration && resp.status === 403 && body?.code === 'permission_denied' && !path.startsWith('/auth/me')) permissionDeniedHandler?.()
   throw new ApiError(resp.status, detail, body)
 }
 
@@ -89,6 +100,7 @@ export interface RequestOptions {
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<Response> {
+  const generation = requestGeneration
   const { method = 'GET', body, query, signal } = options
   const headers: Record<string, string> = { Accept: 'application/json' }
   let payload: string | FormData | undefined
@@ -106,7 +118,7 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
     if (err instanceof DOMException && err.name === 'AbortError') throw err
     throw new ApiError(0, '网络错误，无法连接服务器')
   }
-  if (!resp.ok) await handleErrorResponse(path, resp)
+  if (!resp.ok) await handleErrorResponse(path, resp, generation)
   return resp
 }
 

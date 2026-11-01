@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.auth import Credentials, Password
 from app.schemas.project import ProjectStatus
+from app.schemas.rbac import RoleBrief
 
 
 class AdminProjectOut(BaseModel):
@@ -25,6 +26,10 @@ class AdminProjectList(BaseModel):
 
 
 class AdminUserOut(BaseModel):
+    is_super_admin: bool
+    is_management_account: bool
+    roles: list[RoleBrief]
+    authorization_revision: int
     id: int
     username: str
     is_admin: bool
@@ -56,11 +61,11 @@ class AdminUserDetail(AdminUserOut):
 
 
 class AdminUserCreate(Credentials):
-    is_admin: bool = False
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class AdminUserUpdate(BaseModel):
-    is_admin: bool | None = None
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     is_active: bool | None = None
 
 

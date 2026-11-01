@@ -73,7 +73,7 @@ function toTreeData(nodes: OrgTreeNode<Organization>[]): DataNode[] {
 /** 组织：左侧组织树（按上级嵌套），右侧详情 + 成员表；支持 AI 生成组织。 */
 export default function OrganizationsPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
   const { data: orgs = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
@@ -122,7 +122,9 @@ export default function OrganizationsPanel() {
   }
 
   const handleSaveOrg = async () => {
+    if (!canEditNow()) return
     const v = await orgForm.validateFields()
+    if (!canEditNow()) return
     const body: OrganizationInput = {
       name: v.name.trim(),
       org_type: v.org_type?.trim() ?? '',
@@ -136,12 +138,15 @@ export default function OrganizationsPanel() {
     }
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const saved = editing ? await organizationApi.update(pid, editing.id, body) : await organizationApi.create(pid, body)
+      if (!canEditNow()) return
       message.success('已保存')
       setOrgOpen(false)
       setSelectedId(saved.id)
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -149,12 +154,16 @@ export default function OrganizationsPanel() {
   }
 
   const handleDeleteOrg = async (o: Organization) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await organizationApi.remove(pid, o.id)
+      if (!canEditNow()) return
       message.success('已删除（下级组织变为顶级）')
       setSelectedId(null)
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -167,7 +176,7 @@ export default function OrganizationsPanel() {
           {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
             AI 生成组织
           </Button>)}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openOrg(null)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openOrg(null)} disabled={!canEdit}>
             新增组织
           </Button>
         </Space>
@@ -210,6 +219,7 @@ export default function OrganizationsPanel() {
       </Spin>
 
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title={editing ? '编辑组织' : '新增组织'}
         open={orgOpen}
         onOk={() => void handleSaveOrg()}
@@ -220,7 +230,7 @@ export default function OrganizationsPanel() {
         width={720}
         forceRender
       >
-        <Form form={orgForm} layout="vertical">
+        <Form form={orgForm} layout="vertical" disabled={!canEdit}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item
@@ -285,6 +295,7 @@ interface DetailProps {
 }
 
 function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembersChanged }: DetailProps) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const loader = useCallback(() => memberApi.list(projectId, org.id), [projectId, org.id])
   const { data: members = [], loading, reload } = useLoader(loader, { projectId, resources: ['organizations', 'characters'] })
@@ -310,16 +321,21 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setSaving(true)
     try {
       const body = { position: v.position?.trim() ?? '', status: v.status, note: v.note ?? '' }
+      if (!canEditNow()) return
       if (editing) await memberApi.update(projectId, org.id, editing.id, body)
       else await memberApi.create(projectId, org.id, { character_id: v.character_id, ...body })
+      if (!canEditNow()) return
       message.success('已保存')
       setOpen(false)
       changed()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -327,11 +343,15 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
   }
 
   const handleRemove = async (m: Member) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await memberApi.remove(projectId, org.id, m.id)
+      if (!canEditNow()) return
       message.success('已移除')
       changed()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -345,17 +365,16 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
         extra={
           <Space size={0}>
             <Button type="link" size="small" onClick={onEdit}>
-              编辑
-            </Button>
+              {canEdit ? '编辑' : '查看'}</Button>
             <Popconfirm
               title="删除该组织？"
               description="成员记录一并删除，下级组织变为顶级。"
               okText="删除"
               cancelText="取消"
-              okButtonProps={{ danger: true }}
+              okButtonProps={{ danger: true, disabled: !canEdit }}
               onConfirm={onDelete}
             >
-              <Button type="link" size="small" danger>
+              <Button type="link" size="small" danger disabled={!canEdit}>
                 删除
               </Button>
             </Popconfirm>
@@ -381,7 +400,7 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
         size="small"
         title={`成员（${members.length}）`}
         extra={
-          <Button size="small" icon={<PlusOutlined />} onClick={() => openMember(null)} disabled={characters.length === 0}>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => openMember(null)} disabled={!canEdit || (characters.length === 0)}>
             添加成员
           </Button>
         }
@@ -407,10 +426,9 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
               render: (_, m) => (
                 <Space size={0}>
                   <Button type="link" size="small" onClick={() => openMember(m)}>
-                    编辑
-                  </Button>
+                    {canEdit ? '编辑' : '查看'}</Button>
                   <Popconfirm title="移出该组织？" okText="移除" cancelText="取消" onConfirm={() => handleRemove(m)}>
-                    <Button type="link" size="small" danger>
+                    <Button type="link" size="small" danger disabled={!canEdit}>
                       移除
                     </Button>
                   </Popconfirm>
@@ -421,6 +439,7 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
         />
       </Card>
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title={editing ? '编辑成员' : '添加成员'}
         open={open}
         onOk={() => void handleSave()}
@@ -430,7 +449,7 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
         cancelText="取消"
         forceRender
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" disabled={!canEdit}>
           <Form.Item name="character_id" label="角色" rules={[{ required: true, message: '请选择角色' }]}>
             <Select
               disabled={!!editing}

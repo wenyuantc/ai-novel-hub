@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, Col, Drawer, Empty, Form, Input, InputNumber, List, Rate, Row, Select, Space, Switch, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -76,6 +77,7 @@ export function ForeshadowHistoryList({ items }: { items: ForeshadowHistory[] })
 }
 
 function Inner({ projectId, foreshadow, characters, onSaved }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<ForeshadowFormValues>()
   const [saving, setSaving] = useState(false)
@@ -91,10 +93,14 @@ function Inner({ projectId, foreshadow, characters, onSaved }: Props) {
   const status = Form.useWatch('status', form)
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     let v: ForeshadowFormValues
     try {
+      if (!canEditNow()) return
       v = await form.validateFields()
+      if (!canEditNow()) return
     } catch {
+      if (!canEditNow()) return
       return
     }
     const error = foreshadowFormError(v)
@@ -105,11 +111,14 @@ function Inner({ projectId, foreshadow, characters, onSaved }: Props) {
     const body = formToForeshadowInput(v)
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const saved = current ? await foreshadowApi.update(projectId, current.id, body) : await foreshadowApi.create(projectId, body)
+      if (!canEditNow()) return
       message.success('已保存')
       setCurrent(saved)
       onSaved(saved)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -125,7 +134,7 @@ function Inner({ projectId, foreshadow, characters, onSaved }: Props) {
       <Form
         form={form}
         layout="vertical"
-        disabled={saving}
+        disabled={!canEdit || (saving)}
         initialValues={foreshadow ? foreshadowToForm(foreshadow) : EMPTY_FORESHADOW_FORM}
       >
         <Row gutter={16}>
@@ -224,7 +233,7 @@ function Inner({ projectId, foreshadow, characters, onSaved }: Props) {
         <Form.Item name="note" label="备注">
           <Input.TextArea autoSize={{ minRows: 1, maxRows: 4 }} />
         </Form.Item>
-        <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+        <Button type="primary" loading={saving} onClick={() => void handleSave()} disabled={!canEdit}>
           保存
         </Button>
         {current?.source === 'analysis' && (

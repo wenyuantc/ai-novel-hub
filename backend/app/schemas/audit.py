@@ -6,11 +6,19 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.permissions import PERMISSION_CODES
 from app.schemas.admin_task import validate_cancel_reason
+from app.schemas.rbac import QuotaConfig
 from app.schemas.system_settings import SystemSettingAuditChange
 from app.schemas.task import TaskKind
 
 AuditAction = Literal[
+    "role.create",
+    "role.update",
+    "role.delete",
+    "user.roles.update",
+    "user.roles.bootstrap",
+    "user.quotas.update",
     "user.create",
     "user.update",
     "user.reset_password",
@@ -47,7 +55,7 @@ AuditAction = Literal[
 ]
 AuditTargetType = Literal[
     "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task",
-    "system_settings",
+    "system_settings", "role",
 ]
 AuditResult = Literal["success", "failure"]
 AuditErrorCode = Literal[
@@ -134,7 +142,33 @@ class AuditValueChange(BaseModel):
     after: bool | int | SafeState | None
 
 
+class QuotaAuditChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: Literal["project_count", "task_concurrency"]
+    before: QuotaConfig
+    after: QuotaConfig
+
+
+class RbacAuditChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_role_id: int | None = Field(default=None, gt=0)
+    role_ids_before: list[int] = Field(default_factory=list, max_length=100)
+    role_ids_after: list[int] = Field(default_factory=list, max_length=100)
+    permissions_before: list[str] = Field(default_factory=list, max_length=len(PERMISSION_CODES))
+    permissions_after: list[str] = Field(default_factory=list, max_length=len(PERMISSION_CODES))
+    quotas: list[QuotaAuditChange] = Field(default_factory=list, max_length=2)
+    ids_truncated: bool = False
+
+    @field_validator("permissions_before", "permissions_after")
+    @classmethod
+    def known_codes(cls, value):
+        if len(value) != len(set(value)) or any(code not in PERMISSION_CODES for code in value):
+            raise ValueError("审计权限代码无效")
+        return value
+
+
 class AuditSummary(BaseModel):
+    rbac_change: RbacAuditChange | None = None
     model_config = ConfigDict(extra="forbid")
     settings_changes: list[SystemSettingAuditChange] = Field(default_factory=list, max_length=6)
     task_key: UUID | None = None

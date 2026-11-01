@@ -14,17 +14,22 @@ import { useIsMobile } from '../hooks/useIsMobile'
 import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
 import { parseAdminUserId } from '../utils/adminUserDetails'
+import RoleTags from '../components/adminUsers/RoleTags'
+import UserRolesButton from '../components/adminUsers/UserRolesButton'
+import UserQuotaPanel from '../components/adminUsers/UserQuotaPanel'
+import { can } from '../utils/permissions'
 import { formatTime } from '../utils/time'
 
 interface SummaryProps { user: AdminUserDetail; actorId: number; mobile: boolean }
 
 /** 仅展示账号元数据及当前正文计数，不读取或渲染私人配置和正文。 */
 export function AdminUserSummary({ user, actorId, mobile }: SummaryProps) {
+  const actor = useAuthStore((state) => state.user)
   return <Space direction="vertical" size={16} style={{ width: '100%', minWidth: 0 }}>
     <Descriptions title="账号信息" bordered size="small" column={mobile ? 1 : 3}>
       <Descriptions.Item label="用户 ID">#{user.id}</Descriptions.Item>
       <Descriptions.Item label="用户名">{user.username} {user.id === actorId && <Tag color="blue">我</Tag>}</Descriptions.Item>
-      <Descriptions.Item label="角色">{user.is_admin ? <Tag color="gold">管理员</Tag> : <Tag>普通用户</Tag>}</Descriptions.Item>
+      <Descriptions.Item label="角色"><RoleTags user={user} /></Descriptions.Item>
       <Descriptions.Item label="状态">{user.is_active ? <Tag color="green">启用</Tag> : <Tag color="red">已禁用</Tag>}</Descriptions.Item>
       <Descriptions.Item label="注册时间">{formatTime(user.created_at)}</Descriptions.Item>
       <Descriptions.Item label="最近登录">{user.last_login_at === null ? '暂无记录' : formatTime(user.last_login_at)}</Descriptions.Item>
@@ -33,7 +38,7 @@ export function AdminUserSummary({ user, actorId, mobile }: SummaryProps) {
     <section aria-label="基础资源统计">
       <Typography.Title level={4} style={{ marginTop: 0 }}>基础资源统计</Typography.Title>
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-        {([{ key: 'active', label: '正常作品', href: `/admin/projects?owner_user_id=${user.id}` }, { key: 'recycled', label: '回收站', href: `/admin/recycle-bin?owner_user_id=${user.id}` }] as const).map(({ key, label, href }) => <Card key={key} size="small" title={label} extra={<Link to={href}>查看全部</Link>} styles={{ body: { padding: 12 } }}>
+        {([{ key: 'active', label: '正常作品', href: `/admin/projects?owner_user_id=${user.id}` }, { key: 'recycled', label: '回收站', href: `/admin/recycle-bin?owner_user_id=${user.id}` }] as const).map(({ key, label, href }) => <Card key={key} size="small" title={label} extra={can(actor, key === 'active' ? 'projects.read' : 'recycle_bin.read') ? <Link to={href}>查看全部</Link> : undefined} styles={{ body: { padding: 12 } }}>
           <Descriptions size="small" layout="vertical" column={3}>
             <Descriptions.Item label="作品数">{user.usage[key].project_count.toLocaleString('zh-CN')}</Descriptions.Item>
             <Descriptions.Item label="章节数">{user.usage[key].chapter_count.toLocaleString('zh-CN')}</Descriptions.Item>
@@ -88,14 +93,16 @@ function UserProjects({ userId }: { userId: number }) {
 interface ContentProps extends SummaryProps { loading: boolean; refreshVersion: number; onRefresh: () => void; onDeleted: () => void }
 
 function UserContent({ user, actorId, mobile, loading, refreshVersion, onRefresh, onDeleted }: ContentProps) {
+  const actor = useAuthStore((state) => state.user)
   const { state, controller } = useAdminUserActions({ actorId, onChanged: onRefresh, onDeleted })
   return <Space direction="vertical" size={20} style={{ width: '100%', minWidth: 0 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
       <Typography.Title level={3} style={{ margin: 0, overflowWrap: 'anywhere' }}>{user.username} 的用户详情</Typography.Title>
-      <AdminUserActionButtons user={user} actorId={actorId} disabled={loading || state.target !== null} onAction={controller.open} />
+      <Space wrap><UserRolesButton user={user} onChanged={onRefresh} disabled={loading} /><AdminUserActionButtons user={user} actorId={actorId} disabled={loading || state.target !== null} onAction={controller.open} /></Space>
     </div>
     <AdminUserSummary user={user} actorId={actorId} mobile={mobile} />
-    <UserProjects key={`${user.id}:${refreshVersion}`} userId={user.id} />
+    <UserQuotaPanel userId={user.id} />
+    {can(actor, 'projects.read') && <UserProjects key={`${user.id}:${refreshVersion}`} userId={user.id} />}
     <AdminUserActionDialog state={state} controller={controller} />
   </Space>
 }
@@ -127,7 +134,7 @@ export default function AdminUserDetailsPage() {
   const user = useAuthStore((state) => state.user)
   const { userId } = useParams()
   const targetId = parseAdminUserId(userId)
-  if (!user?.is_admin) return <Result status="403" title="需要管理员权限" />
+  if (!user || !can(user, 'users.read')) return <Result status="403" title="需要管理员权限" />
   if (targetId === null) return <Result status="404" title="无效的用户 ID" extra={<Link to="/admin/users">返回用户列表</Link>} />
   return <Details key={`${user.id}:${targetId}`} actorId={user.id} targetId={targetId} />
 }

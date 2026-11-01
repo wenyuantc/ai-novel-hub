@@ -1,3 +1,4 @@
+import { useSettingsConfirmation } from '../../components/systemSettings/useSettingsConfirmation'
 import {
   ArrowLeftOutlined,
   BookOutlined,
@@ -133,7 +134,7 @@ type AIMode = 'generate' | 'polish' | 'rewrite'
 const TOOLBAR_IN_HEADER_MIN_WIDTH = 920
 
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
-  const { canUseAI, managingOther } = useProjectAccess(pid)
+  const { canUseAI, managingOther, canEdit, canEditNow } = useProjectAccess(pid)
   const isMobile = useIsMobile()
   // 工具栏按钮较多：只在正文卡片足够宽（约等于原 xxl 视口、停靠面板关闭时的宽度）时放进卡片标题栏，
   // 其余宽度放在正文上方，避免标题被挤压；按卡片实际宽度判断，右侧停靠面板打开时同样生效
@@ -142,6 +143,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   // 移动端 AI 助手面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
+  const confirm = useSettingsConfirmation(modal, !canEdit)
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
   const trackTask = useTasksStore((s) => s.track)
@@ -279,9 +281,12 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const save = useCallback(async (): Promise<boolean> => {
+    if (!canEditNow()) return false
     setSaving(true)
     try {
+      if (!canEditNow()) return false
       const updated = await chapterApi.update(pid, chapter.id, { title, content })
+      if (!canEditNow()) return false
       applyServerChapter(updated)
       onChanged()
       void refreshProject()
@@ -289,21 +294,25 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       void refreshAnalysis()
       return true
     } catch (err) {
+      if (!canEditNow()) return false
       message.error(errorMessage(err))
       return false
     } finally {
       setSaving(false)
     }
-  }, [pid, chapter.id, title, content, applyServerChapter, onChanged, refreshProject, refreshAnalysis, message])
+  }, [pid, chapter.id, title, content, applyServerChapter, onChanged, refreshProject, refreshAnalysis, message, canEditNow])
 
   const handleSave = useCallback(async () => {
+    if (!canEditNow()) return
     if (editorLocked || saving) return
     if (!dirty) {
       message.info('没有需要保存的修改')
       return
     }
+    if (!canEditNow()) return
     if (await save()) message.success('已保存')
-  }, [editorLocked, saving, dirty, save, message])
+    if (!canEditNow()) return
+  }, [editorLocked, saving, dirty, save, message, canEditNow])
 
   // Ctrl/Cmd + S 保存
   const saveShortcutRef = useRef(handleSave)
@@ -539,7 +548,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   const confirmGenerate = () => {
     if (content.trim()) {
-      modal.confirm({
+      confirm({
         title: '重新生成正文？',
         content: '当前正文会自动存为历史版本，可在「版本历史」中对比或恢复。生成完成后覆盖正文，中途停止则保持原样。',
         okText: '生成',
@@ -554,9 +563,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const handleRestore = async (v: ChapterVersionBrief): Promise<boolean> => {
+    if (!canEditNow()) return false
     if (!(await ensureSaved())) return false
+    if (!canEditNow()) return false
     try {
+      if (!canEditNow()) return false
       const updated = await versionApi.restore(pid, chapter.id, v.id)
+      if (!canEditNow()) return false
       replaceFromServer(updated)
       message.success(`已恢复到 v${v.seq}`)
       onChanged()
@@ -564,6 +577,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       void refreshAnalysis()
       return true
     } catch (err) {
+      if (!canEditNow()) return false
       message.error(errorMessage(err))
       return false
     }
@@ -577,14 +591,18 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const handleResetStatus = async () => {
+    if (!canEditNow()) return
     if (!canUseAI) return
     setResetting(true)
     try {
+      if (!canEditNow()) return
       const updated = await chapterApi.update(pid, chapter.id, { status: 'draft' })
+      if (!canEditNow()) return
       setChapter(updated)
       message.success('已复位为草稿')
       onChanged()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setResetting(false)
@@ -592,15 +610,21 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const handleToggleDone = async () => {
+    if (!canEditNow()) return
     if (editorLocked || saving) return
+    if (!canEditNow()) return
     if (dirty && !(await save())) return
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       const updated = await chapterApi.update(pid, chapter.id, {
         status: chapter.status === 'done' ? 'draft' : 'done',
       })
+      if (!canEditNow()) return
       setChapter(updated)
       onChanged()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -668,7 +692,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
         版本历史
       </Button>
-      <Button size="small" disabled={busy || editorLocked || stuck || batchLocked} onClick={() => void handleToggleDone()}>
+      <Button size="small" disabled={!canEdit || (busy || editorLocked || stuck || batchLocked)} onClick={() => void handleToggleDone()}>
         {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}
       </Button>
       <Button
@@ -676,7 +700,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         size="small"
         icon={<SaveOutlined />}
         loading={saving}
-        disabled={editorLocked || stuck || batchLocked || !dirty}
+        disabled={!canEdit || (editorLocked || stuck || batchLocked || !dirty)}
         onClick={() => void handleSave()}
       >
         保存
@@ -815,7 +839,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   return (
     <>
-      {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="智能体已更新此章节，当前本地草稿已保留" description="加载最新版本会替换编辑器中尚未保存的内容。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => modal.confirm({ title: '加载最新章节？', content: '编辑器中尚未保存的修改会被替换。', onOk: async () => { const latest = await chapterApi.get(pid, chapter.id); replaceFromServer(latest); setExternalChapter(null) } })}>加载最新版本</Button>} />}
+      {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="智能体已更新此章节，当前本地草稿已保留" description="加载最新版本会替换编辑器中尚未保存的内容。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => confirm({ title: '加载最新章节？', content: '编辑器中尚未保存的修改会被替换。', onOk: async () => { if (!canEditNow()) return; const latest = await chapterApi.get(pid, chapter.id); if (!canEditNow()) return; replaceFromServer(latest); setExternalChapter(null) } })}>加载最新版本</Button>} />}
       <div style={splitRow}>
         <div ref={editorPaneRef} style={splitPane(640)}>
           <Card
@@ -858,7 +882,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 message="该章节处于「生成中」状态"
                 description="未找到进行中的 AI 任务；如果确认生成已中断，可复位为草稿后继续编辑。"
                 action={
-                  <Button size="small" loading={resetting} onClick={() => void handleResetStatus()}>
+                  <Button size="small" loading={resetting} onClick={() => void handleResetStatus()} disabled={!canEdit}>
                     复位
                   </Button>
                 }
@@ -869,7 +893,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               onChange={(e) => setTitle(e.target.value)}
               placeholder="章节标题"
               maxLength={200}
-              disabled={editorLocked || batchLocked}
+              disabled={!canEdit || editorLocked || batchLocked}
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
@@ -893,7 +917,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 onSelect={(e) => syncSelection(e.currentTarget)}
                 onKeyUp={(e) => syncSelection(e.currentTarget)}
                 onMouseUp={(e) => syncSelection(e.currentTarget)}
-                readOnly={editorLocked || batchLocked}
+                readOnly={!canEdit || editorLocked || batchLocked}
                 autoSize={{ minRows: 20 }}
                 placeholder={managingOther ? '在此编辑正文' : '在此书写正文，或使用右侧「AI 生成」'}
                 style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}

@@ -26,7 +26,7 @@ afterEach(() => {
 describe('adminApi', () => {
   it('用户详情使用独立读取路径、Cookie 和可中止信号，null 登录及零用量不改写', async () => {
     const usage = { project_count: 0, chapter_count: 0, total_words: 0 }
-    const body = { id: 7, username: 'alice', is_admin: false, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 0, last_login_at: null, usage: { active: usage, recycled: usage, deleting: usage } }
+    const body = { id: 7, username: 'alice', is_admin: false, is_super_admin: false, authorization_revision: 1, roles: [], is_management_account: false, is_active: true, created_at: '2026-10-30T00:00:00Z', project_count: 0, last_login_at: null, usage: { active: usage, recycled: usage, deleting: usage } }
     const calls = stubFetch(200, body)
     const controller = new AbortController()
     await expect(adminApi.getUser(7, controller.signal)).resolves.toEqual(body)
@@ -69,12 +69,12 @@ describe('adminApi', () => {
 
   it('创建 / 更新 / 重置密码 / 删除的路径、方法与请求体', async () => {
     const calls = stubFetch(204)
-    await adminApi.createUser({ username: 'bob', password: 'secret1', is_admin: true })
+    await adminApi.createUser({ username: 'bob', password: 'secret1' })
     await adminApi.updateUser(5, { is_active: false })
     await adminApi.resetPassword(5, { new_password: 'secret2' })
     await adminApi.deleteUser(5)
     expect(calls.map((c) => [c.init.method, c.url, c.init.body])).toEqual([
-      ['POST', '/api/v1/admin/users', JSON.stringify({ username: 'bob', password: 'secret1', is_admin: true })],
+      ['POST', '/api/v1/admin/users', JSON.stringify({ username: 'bob', password: 'secret1' })],
       ['PATCH', '/api/v1/admin/users/5', JSON.stringify({ is_active: false })],
       ['POST', '/api/v1/admin/users/5/reset-password', JSON.stringify({ new_password: 'secret2' })],
       ['DELETE', '/api/v1/admin/users/5', undefined],

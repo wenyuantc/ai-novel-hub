@@ -162,6 +162,9 @@ def _decode_preview(token: str, secret: str) -> _PreviewClaims:
 
 
 async def cleanup(db: AsyncSession, actor: User, req: AuditCleanupRequest, secret: str) -> AuditCleanupOut:
+    from app.services import authorization_service as authz
+
+    await authz.require(db, actor, "audit.cleanup", write=True)
     async with AuditOperation(db, actor, "audit.cleanup", "audit") as audit:
         if not audit.enabled:
             raise ForbiddenError("需要管理员权限")

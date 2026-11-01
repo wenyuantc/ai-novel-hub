@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, Card, Form, InputNumber, Space, Switch, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -17,6 +18,7 @@ type MemoryValues = Pick<KbSettings, 'memory_top_k' | 'memory_max_chars' | 'memo
 
 /** 检索设置表单：知识库（自动注入、条数、最低分、字数上限）或剧情记忆（条数、字数上限、最低分）。 */
 export default function RetrievalSettingsCard({ projectId, settings, scope, onSaved }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<KbValues & MemoryValues>()
   const [saving, setSaving] = useState(false)
@@ -26,17 +28,22 @@ export default function RetrievalSettingsCard({ projectId, settings, scope, onSa
   }, [settings, form])
 
   const save = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     const body: KbSettingsUpdate =
       scope === 'kb'
         ? { auto_inject: v.auto_inject, top_k: v.top_k, min_score: v.min_score, max_chars: v.max_chars }
         : { memory_top_k: v.memory_top_k, memory_max_chars: v.memory_max_chars, memory_min_score: v.memory_min_score }
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const out = await kbApi.updateSettings(projectId, body)
+      if (!canEditNow()) return
       onSaved(out)
       message.success('设置已保存')
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -48,12 +55,12 @@ export default function RetrievalSettingsCard({ projectId, settings, scope, onSa
       size="small"
       title={scope === 'kb' ? '注入设置' : '召回设置'}
       extra={
-        <Button size="small" type="primary" loading={saving} disabled={!settings} onClick={() => void save()}>
+        <Button size="small" type="primary" loading={saving} disabled={!canEdit || (!settings)} onClick={() => void save()}>
           保存
         </Button>
       }
     >
-      <Form form={form} layout="vertical" disabled={!settings}>
+      <Form form={form} layout="vertical" disabled={!canEdit || (!settings)}>
         {scope === 'kb' ? (
           <>
             <Form.Item

@@ -58,7 +58,7 @@ import { groupOutlines, volumeLabel } from '../../utils/outline'
  */
 export default function OutlinesPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
@@ -124,7 +124,9 @@ export default function OutlinesPanel() {
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     const body: OutlineInput = {
       volume_no: v.volume_no,
       volume_title: v.volume_title?.trim() ?? '',
@@ -134,12 +136,15 @@ export default function OutlinesPanel() {
     }
     setSaving(true)
     try {
+      if (!canEditNow()) return
       if (editing) await outlineApi.update(pid, editing.id, body)
       else await outlineApi.create(pid, body)
+      if (!canEditNow()) return
       message.success('已保存')
       setModalOpen(false)
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -147,22 +152,30 @@ export default function OutlinesPanel() {
   }
 
   const handleDelete = async (item: OutlineDetail) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await outlineApi.remove(pid, item.id)
+      if (!canEditNow()) return
       setSelected((s) => s.filter((id) => id !== item.id))
       message.success('已删除')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
 
   const handleMove = async (item: OutlineDetail, direction: OutlineMoveDirection) => {
+    if (!canEditNow()) return
     setPending(item.id)
     try {
+      if (!canEditNow()) return
       await outlineProApi.move(pid, item.id, direction)
+      if (!canEditNow()) return
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setPending(null)
@@ -170,13 +183,17 @@ export default function OutlinesPanel() {
   }
 
   const handleBuild = async (item: OutlineDetail) => {
+    if (!canEditNow()) return
     setPending(item.id)
     try {
+      if (!canEditNow()) return
       const r = await outlineProApi.build(pid, item.id)
+      if (!canEditNow()) return
       message.success(`已为细纲建章 ${r.chapters.length} 个，后续章节号已顺延`)
       setExpandedKeys((keys) => (keys.includes(item.id) ? keys : [...keys, item.id]))
       afterChange()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setPending(null)
@@ -184,14 +201,18 @@ export default function OutlinesPanel() {
   }
 
   const createChapters = async (ids: number[] | null) => {
+    if (!canEditNow()) return
     setCreatingChapters(true)
     try {
+      if (!canEditNow()) return
       const created = await chapterApi.fromOutlines(pid, ids)
+      if (!canEditNow()) return
       message.success(created.length > 0 ? `已创建 ${created.length} 个章节` : '所选大纲均已建章或已展开，无需创建')
       setSelected([])
       afterChange()
       if (created.length > 0) navigate(`/projects/${pid}/chapters`)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setCreatingChapters(false)
@@ -235,7 +256,7 @@ export default function OutlinesPanel() {
             快照
           </Button>
           {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成</Button>)}
-          <Button icon={<PlusOutlined />} onClick={() => openEdit(null)}>
+          <Button icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
             新增大纲
           </Button>
         </Space>
@@ -245,13 +266,13 @@ export default function OutlinesPanel() {
         <Space wrap>
           <Button
             type="primary"
-            disabled={selected.length === 0}
+            disabled={!canEdit || (selected.length === 0)}
             loading={creatingChapters}
             onClick={() => void createChapters(selected)}
           >
             为选中条目创建章节{selected.length > 0 ? `（${selected.length}）` : ''}
           </Button>
-          <Button disabled={pendingCount === 0} loading={creatingChapters} onClick={() => void createChapters(null)}>
+          <Button disabled={!canEdit || (pendingCount === 0)} loading={creatingChapters} onClick={() => void createChapters(null)}>
             全部未建章条目创建章节
           </Button>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -270,7 +291,7 @@ export default function OutlinesPanel() {
                   type="inner"
                   title={`${volumeLabel(g)}（${g.items.length} 条章纲）`}
                   extra={
-                    <Button type="link" size="small" onClick={() => openEdit(null, g.volumeNo)}>
+                    <Button type="link" size="small" onClick={() => openEdit(null, g.volumeNo)} disabled={!canEdit}>
                       本卷新增
                     </Button>
                   }
@@ -344,13 +365,12 @@ export default function OutlinesPanel() {
                         render: (_, o, index) => (
                           <Space size={0} wrap>
                             <Button type="link" size="small" onClick={() => openEdit(o)}>
-                              编辑
-                            </Button>
+                              {canEdit ? '编辑' : '查看'}</Button>
                             {canUseAI && (<Button type="link" size="small" onClick={() => openExpand(o)}>
                               {o.plan_count > 0 ? '重新展开' : '展开'}
                             </Button>)}
                             {canBuild(o) && (
-                              <Button type="link" size="small" loading={pending === o.id} onClick={() => void handleBuild(o)}>
+                              <Button type="link" size="small" loading={pending === o.id} onClick={() => void handleBuild(o)} disabled={!canEdit}>
                                 建章
                               </Button>
                             )}
@@ -359,7 +379,7 @@ export default function OutlinesPanel() {
                               size="small"
                               title="上移"
                               icon={<ArrowUpOutlined />}
-                              disabled={index === 0 || pending !== null}
+                              disabled={!canEdit || (index === 0 || pending !== null)}
                               onClick={() => void handleMove(o, 'up')}
                             />
                             <Button
@@ -367,7 +387,7 @@ export default function OutlinesPanel() {
                               size="small"
                               title="下移"
                               icon={<ArrowDownOutlined />}
-                              disabled={index === g.items.length - 1 || pending !== null}
+                              disabled={!canEdit || (index === g.items.length - 1 || pending !== null)}
                               onClick={() => void handleMove(o, 'down')}
                             />
                             <Popconfirm
@@ -377,10 +397,10 @@ export default function OutlinesPanel() {
                               }
                               okText="删除"
                               cancelText="取消"
-                              okButtonProps={{ danger: true }}
+                              okButtonProps={{ danger: true, disabled: !canEdit }}
                               onConfirm={() => handleDelete(o)}
                             >
-                              <Button type="link" size="small" danger>
+                              <Button type="link" size="small" danger disabled={!canEdit}>
                                 删除
                               </Button>
                             </Popconfirm>
@@ -397,6 +417,7 @@ export default function OutlinesPanel() {
       </Space>
 
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title={editing ? '编辑大纲条目' : '新增大纲条目'}
         open={modalOpen}
         onOk={() => void handleSave()}
@@ -407,7 +428,7 @@ export default function OutlinesPanel() {
         width={720}
         forceRender
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" disabled={!canEdit}>
           <Row gutter={16}>
             <Col span={6}>
               <Form.Item name="volume_no" label="卷号" rules={[{ required: true, message: '请输入卷号' }]}>

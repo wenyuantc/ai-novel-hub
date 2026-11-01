@@ -49,7 +49,7 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 /** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业 / 伏笔）。 */
 export default function CharactersPanel() {
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => characterApi.list(pid), [pid])
@@ -86,22 +86,29 @@ export default function CharactersPanel() {
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     let v: CharacterFormValues
     try {
+      if (!canEditNow()) return
       v = await form.validateFields()
+      if (!canEditNow()) return
     } catch {
+      if (!canEditNow()) return
       message.warning('请检查表单中的必填项')
       return
     }
     const body = formToCharacterInput(v)
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const saved = editing ? await characterApi.update(pid, editing.id, body) : await characterApi.create(pid, body)
+      if (!canEditNow()) return
       message.success('已保存')
       setEditing(saved)
       form.setFieldsValue(characterToForm(saved))
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -109,12 +116,16 @@ export default function CharactersPanel() {
   }
 
   const handleDelete = async (item: Character) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await characterApi.remove(pid, item.id)
+      if (!canEditNow()) return
       message.success('已删除（相关关系、组织成员与职业挂接一并清理）')
       reload()
       reloadBadges()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -137,7 +148,7 @@ export default function CharactersPanel() {
             导入卡片
           </Button>)}
           {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>)}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
             新增角色
           </Button>
         </Space>
@@ -191,8 +202,7 @@ export default function CharactersPanel() {
                       extra={
                         <Space size={0}>
                           <Button type="link" size="small" onClick={() => openEdit(c)}>
-                            编辑
-                          </Button>
+                            {canEdit ? '编辑' : '查看'}</Button>
                           <Popconfirm
                             title="删除该角色？"
                             description="相关的人物关系、关系历史、组织成员记录、职业挂接与阶段历史会一并删除。"
@@ -201,7 +211,7 @@ export default function CharactersPanel() {
                             okButtonProps={{ danger: true }}
                             onConfirm={() => handleDelete(c)}
                           >
-                            <Button type="link" size="small" danger>
+                            <Button type="link" size="small" danger disabled={!canEdit}>
                               删除
                             </Button>
                           </Popconfirm>
@@ -251,12 +261,12 @@ export default function CharactersPanel() {
         width={760}
         forceRender
         extra={
-          <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+          <Button type="primary" loading={saving} onClick={() => void handleSave()} disabled={!canEdit}>
             保存
           </Button>
         }
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" disabled={!canEdit}>
           <Tabs
             activeKey={tab}
             onChange={setTab}

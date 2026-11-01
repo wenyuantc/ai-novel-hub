@@ -18,7 +18,7 @@ interface Props {
 
 /** 角色抽屉「关系」Tab：该角色视角的关系列表（增删改、历史）+ 旧关系备注只读块与「AI 解析为关系」。 */
 export default function CharacterRelationsTab({ projectId, character, characters }: Props) {
-  const { canUseAI } = useProjectAccess(projectId)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const loader = useCallback(() => relationshipApi.list(projectId, character.id), [projectId, character.id])
   const { data: rels = [], loading, reload } = useLoader(loader, { projectId, resources: ['relationships', 'characters'] })
@@ -30,11 +30,15 @@ export default function CharacterRelationsTab({ projectId, character, characters
   const [parseOpen, setParseOpen] = useState(false)
 
   const handleDelete = async (r: Relationship) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await relationshipApi.remove(projectId, r.id)
+      if (!canEditNow()) return
       message.success('已删除')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -47,7 +51,7 @@ export default function CharacterRelationsTab({ projectId, character, characters
           onClick={() => {
             setEditing(null)
             setEditOpen(true)
-          }}
+          }} disabled={!canEdit}
         >
           新增关系
         </Button>
@@ -99,13 +103,12 @@ export default function CharacterRelationsTab({ projectId, character, characters
                     setEditOpen(true)
                   }}
                 >
-                  编辑
-                </Button>
+                  {canEdit ? '编辑' : '查看'}</Button>
                 <Button type="link" size="small" onClick={() => setHistory(r)}>
                   历史
                 </Button>
                 <Popconfirm title="删除该关系？" okText="删除" cancelText="取消" onConfirm={() => handleDelete(r)}>
-                  <Button type="link" size="small" danger>
+                  <Button type="link" size="small" danger disabled={!canEdit}>
                     删除
                   </Button>
                 </Popconfirm>

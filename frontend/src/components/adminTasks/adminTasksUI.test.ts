@@ -23,7 +23,7 @@ vi.mock('../../stores/auth', async (original) => {
   const hook = (selector: (state: ReturnType<typeof actual.useAuthStore.getState>) => unknown) => selector(actual.useAuthStore.getState())
   return { ...actual, useAuthStore: Object.assign(hook, actual.useAuthStore) }
 })
-const admin: User = { id: 1, username: '当前管理员', is_admin: true, created_at: '' }
+const admin: User = { id: 1, username: '当前管理员', is_admin: true, is_super_admin: true, effective_permissions: [], authorization_revision: 1, roles: [], created_at: '' }
 function initialView(): ReturnType<typeof useAdminTasks> {
   const controller = new AdminTasksController(1)
   return { controller, state: { ...controller.getSnapshot(), list: { data: list(), loading: false, error: null } } }
@@ -108,7 +108,7 @@ describe('管理员监控页面口径和入口', () => {
     expect(html).not.toMatch(/(?:min-)?width:\s*\d{3,}px/)
     expect(pageSource).toContain('extra={!mobile && sortSelect}')
   })
-  it('降权隐藏全部明细与弹窗，管理员菜单和面包屑同一入口，路由RequireAdmin懒加载', () => {
+  it('降权隐藏全部明细与弹窗，管理员菜单和面包屑同一入口，路由RequirePermission懒加载', () => {
     useAuthStore.setState({ user: admin, status: 'authenticated' })
     view.state.denied = true
     const denied = render(createElement(AdminTasksPage))
@@ -119,10 +119,10 @@ describe('管理员监控页面口径和入口', () => {
     expect(layout).toContain('href="/admin/tasks"')
     expect(layout).toContain('全站任务监控')
     expect(layout).toContain('管理后台')
-    useAuthStore.setState({ user: { ...admin, is_admin: false } })
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false } })
     expect(render(createElement(AdminTasksPage))).toContain('需要管理员权限')
     expect(render(createElement(AppLayout))).not.toContain('href="/admin/tasks"')
-    expect(routerSource).toMatch(/path: 'admin\/tasks',[\s\S]*?element: <RequireAdmin><Outlet \/><\/RequireAdmin>,[\s\S]*?import\('\.\/pages\/AdminTasksPage'\)/)
+    expect(routerSource).toMatch(/path: 'admin\/tasks',[\s\S]*?element: <RequirePermission permission="tasks.read"><Outlet \/><\/RequirePermission>,[\s\S]*?import\('\.\/pages\/AdminTasksPage'\)/)
   })
   it('非法详情深链接不退回整数定位；页面不引用个人任务store或输出组件', () => {
     useAuthStore.setState({ user: admin, status: 'authenticated' })

@@ -67,6 +67,16 @@ export interface AuditSummaryRow { label: string; value: string }
 /** 审计摘要的唯一展示投影，不把摘要误称为全文差异，也不读取任意 JSON 字段。 */
 export function auditSummaryRows(summary: AuditSummary, action?: AuditAction): AuditSummaryRow[] {
   const rows: AuditSummaryRow[] = [{ label: '变更字段', value: summary.changed_fields.map((field) => AUDIT_FIELD[field]).join('、') || '无字段变更 / 不适用' }]
+  const rbac = summary.rbac_change
+  if (rbac && (action?.startsWith('role.') || action === 'user.roles.update' || action === 'user.roles.bootstrap' || action === 'user.quotas.update')) {
+    if (rbac.source_role_id !== null) rows.push({ label: '复制来源角色', value: `#${rbac.source_role_id}` })
+    if (action !== 'user.quotas.update') {
+      rows.push({ label: '角色 ID 变更', value: `${rbac.role_ids_before.join('、') || '无'} → ${rbac.role_ids_after.join('、') || '无'}${rbac.ids_truncated ? '（有界摘要，部分省略）' : ''}` })
+      rows.push({ label: '权限代码变更', value: `${rbac.permissions_before.join('、') || '无'} → ${rbac.permissions_after.join('、') || '无'}` })
+    }
+    const quota = (config: typeof rbac.quotas[number]['before']) => config.mode === 'inherit' ? '继承系统默认' : config.mode === 'unlimited' ? '不限额' : String(config.value)
+    for (const change of rbac.quotas) rows.push({ label: change.metric === 'project_count' ? '作品总数配额' : '后台任务并发配额', value: `${quota(change.before)} → ${quota(change.after)}` })
+  }
   if (action === 'system_settings.update') {
     for (const change of summary.settings_changes ?? []) rows.push({ label: AUDIT_SYSTEM_SETTING[change.key], value: `有效值：${settingValue(change.before_effective)}（${SYSTEM_SETTING_SOURCE[change.before_source]}） → ${settingValue(change.after_effective)}（${SYSTEM_SETTING_SOURCE[change.after_source]}）；后台覆盖：${settingValue(change.before_override)} → ${settingValue(change.after_override)}` })
     rows.push({ label: '设置生效规则', value: '保存后即时生效，无需重启；沿用部署值表示取消对应后台覆盖，不会修改环境变量或 .env。' })

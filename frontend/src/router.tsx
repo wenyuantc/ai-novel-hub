@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
-import RequireAdmin from './components/RequireAdmin'
+import RequirePermission from './components/RequirePermission'
 import RequireAuth from './components/RequireAuth'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -56,42 +56,43 @@ export const router = createBrowserRouter([
       { path: 'book-import', lazy: lazyPage(() => import('./pages/BookImportPage')) },
       {
         path: 'admin/system-settings',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="settings.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminSystemSettingsPage')) }],
       },
       {
         path: 'admin/dashboard',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="dashboard.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminDashboardPage')) }],
       },
       {
         path: 'admin/tasks',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="tasks.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminTasksPage')) }],
       },
       {
         path: 'admin/recycle-bin',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="recycle_bin.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminRecycleBinPage')) }],
       },
       {
         path: 'admin/audit-logs',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="audit.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminAuditLogsPage')) }],
       },
       {
         path: 'admin/projects',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="projects.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminProjectsPage')) }],
       },
       {
         path: 'admin/users',
-        element: <RequireAdmin><Outlet /></RequireAdmin>,
+        element: <RequirePermission permission="users.read"><Outlet /></RequirePermission>,
         children: [
           { index: true, lazy: lazyPage(() => import('./pages/AdminUsersPage')) },
           { path: ':userId', lazy: lazyPage(() => import('./pages/AdminUserDetailsPage')) },
         ],
       },
+      { path: 'admin/roles', element: <RequirePermission superOnly><Outlet /></RequirePermission>, children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminRolesPage')) }] },
       {
         path: 'projects/:pid',
         element: <ProjectLayout />,

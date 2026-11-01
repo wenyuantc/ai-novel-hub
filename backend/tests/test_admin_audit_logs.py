@@ -70,7 +70,7 @@ async def test_user_success_failure_credentials_and_noop(admin, client, app):
     r = await admin.post(USERS, json={"username": "new-user", "password": "audit-secret123"})
     assert r.status_code == 201, r.text
     uid = r.json()["id"]
-    assert (await admin.patch(f"{USERS}/{uid}", json={"is_admin": True, "is_active": False})).status_code == 200
+    assert (await admin.patch(f"{USERS}/{uid}", json={"is_active": False})).status_code == 200
     assert (
         await admin.post(f"{USERS}/{uid}/reset-password", json={"new_password": "new-audit-secret"})
     ).status_code == 204
@@ -636,7 +636,7 @@ async def test_registered_action_failures_keep_safe_identity_without_false_succe
     chapter = (await client.post(f"{base}/chapters", json={"title": "存在章节"})).json()
     chapter_path = f"{base}/chapters/{chapter['id']}"
     checks = [
-        ("user.update", "PATCH", f"{USERS}/99999", {"is_admin": True}, 404),
+        ("user.update", "PATCH", f"{USERS}/99999", {"is_active": False}, 404),
         ("user.reset_password", "POST", f"{USERS}/99999/reset-password", {"new_password": "private-secret"}, 404),
         ("user.delete", "DELETE", f"{USERS}/99999", None, 404),
         ("project.update", "PATCH", "/api/v1/projects/99999", {"title": "未保存"}, 404),

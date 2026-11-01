@@ -1,3 +1,4 @@
+import { authorizationKey, can } from '../../utils/permissions'
 import { Alert, App, Input, Modal, Space, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -51,16 +52,18 @@ export default function RecycleProjectModal({ project, action, actorId, now, onC
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [gate] = useState(createRecycleRequestGate)
+  const [identity] = useState(() => authorizationKey(useAuthStore.getState().user))
   const pending = useRef(false)
   useEffect(() => () => gate.invalidate(), [gate])
   const restoring = action === 'restore'
   const allowed = restoring ? canRestoreProject(project, now) : canPurgeProject(input, project.title)
-  const isCurrent = (ticket: number) => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && useAuthStore.getState().user?.is_admin === true
+  const permission = restoring ? 'recycle_bin.restore' : 'recycle_bin.purge'
+  const isCurrent = (ticket: number) => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && authorizationKey(useAuthStore.getState().user) === identity && can(useAuthStore.getState().user, permission)
   const close = () => { if (!pending.current) { gate.invalidate(); onClose() } }
   const submit = async () => {
     if (pending.current || !allowed || (restoring && !canRestoreProject(project))) return
     const user = useAuthStore.getState().user
-    if (user?.id !== actorId || !user.is_admin) return
+    if (user?.id !== actorId || !can(user, permission) || authorizationKey(user) !== identity) return
     pending.current = true
     const ticket = gate.begin()
     setBusy(true)

@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Select, Space, Tooltip, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { isProtagonist } from '../../api/characters'
@@ -16,6 +17,7 @@ interface Props {
  * 生成时与主角、自动匹配（梗概 + 上一章结尾）取并集注入完整角色卡。
  */
 export default function CastSelect({ pid, chapterId, disabled }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const charLoader = useCallback(() => characterApi.list(pid), [pid])
   const { data: characters = [] } = useLoader(charLoader)
@@ -25,13 +27,17 @@ export default function CastSelect({ pid, chapterId, disabled }: Props) {
   const value = cast?.character_ids ?? []
 
   const handleChange = async (ids: number[]) => {
+    if (!canEditNow()) return
     const prev = value
     setData(() => ({ character_ids: ids }))
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const saved = await castApi.set(pid, chapterId, ids)
+      if (!canEditNow()) return
       setData(() => saved)
     } catch (err) {
+      if (!canEditNow()) return
       setData(() => ({ character_ids: prev }))
       message.error(errorMessage(err))
     } finally {
@@ -59,7 +65,7 @@ export default function CastSelect({ pid, chapterId, disabled }: Props) {
         style={{ minWidth: 'min(320px, calc(100vw - 130px))' }}
         value={value}
         loading={loading || saving}
-        disabled={disabled || loading}
+        disabled={!canEdit || (disabled || loading)}
         onChange={(ids: number[]) => void handleChange(ids)}
         options={characters.map((c) => ({ value: c.id, label: c.name }))}
         maxTagCount="responsive"

@@ -15,7 +15,7 @@ import pytest  # noqa: E402
 from app.ai import endpoint_guard  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import Base, User  # noqa: E402
-from app.services import retrieval_service  # noqa: E402
+from app.services import authorization_service, retrieval_service  # noqa: E402
 from tests.helpers import FakeLLM, make_settings  # noqa: E402
 
 FAKE_DNS = {
@@ -58,6 +58,7 @@ async def app(tmp_path, fake_llm, settings_overrides):
         await conn.run_sync(Base.metadata.create_all)
     # 测试不触发 lifespan：显式启停任务引擎，结束前 stop，避免任务泄漏到下一个测试
     task_engine = application.state.task_engine
+    await authorization_service.initialize(application.state.sessionmaker)
     await application.state.system_settings.load()
     await task_engine.start()
     try:

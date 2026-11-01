@@ -1,6 +1,8 @@
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.authorization_runtime import AuthorizationRuntime
+
 
 def create_engine(database_url: str) -> AsyncEngine:
     kwargs: dict = {"pool_pre_ping": True}
@@ -18,4 +20,4 @@ def create_engine(database_url: str) -> AsyncEngine:
 
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # expire_on_commit=False：提交后仍可读取属性，避免流式响应期间触发隐式查询
-    return async_sessionmaker(engine, expire_on_commit=False)
+    return async_sessionmaker(engine, expire_on_commit=False, info={"authorization_runtime": AuthorizationRuntime()})

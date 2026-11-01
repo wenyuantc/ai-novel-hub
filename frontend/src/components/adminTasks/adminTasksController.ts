@@ -51,7 +51,7 @@ export class AdminTasksController {
 
   constructor(readonly owner: number, query: AdminTaskListQuery = {}, private loaders: Loaders = {
     ...adminTasksApi, owners: adminApi.listUsers,
-  }, private authorized: () => boolean = () => true) {
+  }, private authorized: () => boolean = () => true, private canCancel: () => boolean = () => true, private canReadOwners: () => boolean = () => true) {
     this.state = {
       query: { sort: 'created_desc', page: 1, page_size: 20, ...query }, list: empty(), detailKey: null, detail: empty(), owners: empty(),
       cancelTarget: null, cancelLoading: false, submitting: false, cancelError: null, notice: null, autoRefresh: true, denied: false,
@@ -61,6 +61,8 @@ export class AdminTasksController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   activate() { if (!this.state.denied && this.authorized()) this.active = true }
   revoke() { this.deny() }
+  revokeWrites() { this.closeCancellation() }
+  revokeOwners() { this.invalidate('owners'); this.update({ owners: empty() }) }
   deactivate() {
     this.active = false
     channels.forEach((channel) => this.invalidate(channel))
@@ -118,7 +120,7 @@ export class AdminTasksController {
       })
   }
   searchOwners = (q = '') => {
-    if (!this.usable()) return
+    if (!this.usable() || !this.canReadOwners()) return
     this.invalidate('owners')
     this.run('owners', (signal) => this.loaders.owners({ q: q.slice(0, 64), page_size: 20 }, signal),
       () => this.update({ owners: { ...this.state.owners, loading: true } }),
@@ -126,7 +128,7 @@ export class AdminTasksController {
       (err) => this.update({ owners: { ...this.state.owners, loading: false, error: errorMessage(err) } }))
   }
   openCancellation = (task: AdminTaskBrief) => {
-    if (!this.usable() || this.state.submitting || (this.state.notice?.taskKey === task.task_key && this.state.notice.checking) || !task.can_cancel || task.cancellation_pending || !isAdminTaskKey(task.task_key)) return
+    if (!this.usable() || !this.canCancel() || this.state.submitting || (this.state.notice?.taskKey === task.task_key && this.state.notice.checking) || !task.can_cancel || task.cancellation_pending || !isAdminTaskKey(task.task_key)) return
     this.closeCancellation()
     this.update({ cancelTarget: task, cancelLoading: true, cancelError: null })
     this.run('confirmation', (signal) => this.getExact(task.task_key!, signal), () => {},
@@ -140,7 +142,7 @@ export class AdminTasksController {
   }
   submitCancellation(reasonValue: string) {
     const target = this.state.cancelTarget
-    if (!this.usable() || this.state.submitting || this.state.cancelLoading || !target?.can_cancel || target.cancellation_pending || !isAdminTaskKey(target.task_key)) return
+    if (!this.usable() || !this.canCancel() || this.state.submitting || this.state.cancelLoading || !target?.can_cancel || target.cancellation_pending || !isAdminTaskKey(target.task_key)) return
     let reason: string
     try { reason = adminTaskCancelReason(reasonValue) }
     catch (err) { this.update({ cancelError: errorMessage(err) }); return }
@@ -215,13 +217,13 @@ export class AdminTasksController {
     const generation = (this.generations.get(channel) ?? 0) + 1
     this.generations.set(channel, generation)
     this.flights.set(channel, controller)
-    const valid = () => this.usable() && !controller.signal.aborted && this.generations.get(channel) === generation
+    const valid = () => this.usable() && !controller.signal.aborted && this.generations.get(channel) === generation && (channel === 'owners' ? this.canReadOwners() : channel === 'mutation' || channel === 'confirmation' ? this.canCancel() : true)
     loading()
     void (async () => {
       try { const data = await loader(controller.signal); if (valid()) success(data) }
       catch (err: unknown) {
         // 同一仍有效actor的旧目标403也是权限撤销；账号已换/卸载则不能干扰新会话。
-        if (this.usable() && err instanceof ApiError && (err.status === 401 || err.status === 403)) this.deny()
+        if (this.usable() && err instanceof ApiError && (err.status === 401 || err.status === 403) && !['owners', 'mutation', 'confirmation'].includes(channel)) this.deny()
         else if (!valid()) return
         else failure(err)
       } finally { if (this.flights.get(channel) === controller) this.flights.delete(channel) }

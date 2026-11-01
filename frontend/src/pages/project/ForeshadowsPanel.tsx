@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   App,
@@ -57,6 +58,7 @@ function positiveInt(v: string | null): number | undefined {
 export default function ForeshadowsPanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
+  const { canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const [searchParams, setSearchParams] = useSearchParams()
   const [status, setStatus] = useState<ForeshadowStatus | typeof ALL>(ALL)
@@ -107,14 +109,17 @@ export default function ForeshadowsPanel() {
       },
       { replace: true },
     )
+    let alive = true
     foreshadowApi.get(pid, openId).then(
       (f) => {
+        if (!alive || !canReadNow()) return
         setEditing(f)
         setDrawerOpen(true)
       },
-      (err: unknown) => message.error(errorMessage(err)),
+      (err: unknown) => { if (alive && canReadNow()) message.error(errorMessage(err)) },
     )
-  }, [openId, pid, message, setSearchParams])
+    return () => { alive = false }
+  }, [openId, pid, message, setSearchParams, canReadNow])
 
   const openEdit = (f: Foreshadow | null) => {
     setEditing(f)
@@ -122,13 +127,17 @@ export default function ForeshadowsPanel() {
   }
 
   const run = async (fn: () => Promise<unknown>, done: string) => {
+    if (!canEditNow()) return
     setActing(true)
     try {
+      if (!canEditNow()) return
       await fn()
+      if (!canEditNow()) return
       message.success(done)
       refresh()
       return true
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
       return false
     } finally {
@@ -137,12 +146,14 @@ export default function ForeshadowsPanel() {
   }
 
   const handleQuickOk = async () => {
+    if (!canEditNow()) return
     if (!quick) return
     if (quick.chapter === null) {
       message.warning(quick.mode === 'plant' ? '请填写实际埋设章节' : '请填写实际回收章节')
       return
     }
     const { foreshadow: f, chapter } = quick
+    if (!canEditNow()) return
     const ok =
       quick.mode === 'plant'
         ? await run(() => foreshadowApi.plant(pid, f.id, chapter), '已标记为已埋')
@@ -150,6 +161,7 @@ export default function ForeshadowsPanel() {
             () => foreshadowApi.resolve(pid, f.id, chapter, quick.partial),
             quick.partial ? '已标记为部分回收' : '已标记为已回收',
           )
+    if (!canEditNow()) return
     if (ok) setQuick(null)
   }
 
@@ -166,9 +178,9 @@ export default function ForeshadowsPanel() {
     return (
       <Space size={0}>
         <Button type="link" size="small" onClick={() => openEdit(f)}>
-          编辑
-        </Button>
+          {canEdit ? '编辑' : '查看'}</Button>
         <Dropdown
+          disabled={!canEdit}
           trigger={['click']}
           menu={{
             items: menu,
@@ -182,7 +194,7 @@ export default function ForeshadowsPanel() {
             },
           }}
         >
-          <Button type="link" size="small" disabled={acting}>
+          <Button type="link" size="small" disabled={!canEdit || acting}>
             操作
           </Button>
         </Dropdown>
@@ -314,7 +326,7 @@ export default function ForeshadowsPanel() {
     <Card
       title="伏笔"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
           新增伏笔
         </Button>
       }
@@ -376,6 +388,7 @@ export default function ForeshadowsPanel() {
         }}
       />
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         open={quick !== null}
         title={quick ? `${quick.mode === 'plant' ? '标记已埋' : '标记回收'}：#${quick.foreshadow.id} ${quick.foreshadow.title}` : ''}
         okText="确定"
@@ -412,7 +425,7 @@ export default function ForeshadowsPanel() {
         title="删除该伏笔？"
         okText="删除"
         cancelText="取消"
-        okButtonProps={{ danger: true }}
+        okButtonProps={{ danger: true, disabled: !canEdit }}
         confirmLoading={acting}
         onCancel={() => setDeleting(null)}
         onOk={() => {

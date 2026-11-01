@@ -1,15 +1,15 @@
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.providers import ProviderFactory
 from app.core.config import Settings
-from app.core.errors import ForbiddenError, UnauthorizedError
+from app.core.errors import UnauthorizedError
 from app.core.security import ACCESS_TOKEN_COOKIE, SecretCipher, decode_access_token
 from app.models import User
-from app.services import auth_service
+from app.services import auth_service, authorization_service
 from app.services.retrieval_service import EmbedEnv
 from app.services.system_settings_service import SystemSettingsManager
 from app.services.task_engine.engine import TaskEngine
@@ -81,16 +81,25 @@ async def get_current_user(request: Request, db: DbDep, settings: SettingsDep) -
     # 令牌版本不一致（已重置密码 / 已禁用 / 已改密）或账号被禁用：一律按未登录处理，前端统一跳转登录页
     if user is None or decoded is None or decoded[1] != user.token_version or not user.is_active:
         raise UnauthorizedError("未登录或登录已过期")
+    db.info["authenticated_actor"] = authorization_service.AuthenticatedActor(user.id, decoded[1])
     return user
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-async def get_admin_user(user: CurrentUser) -> User:
-    if not user.is_admin:
-        raise ForbiddenError("需要管理员权限")
+async def get_admin_user(user: CurrentUser, db: DbDep, response: Response) -> User:
+    response.headers["Cache-Control"] = "no-store"
+    await authorization_service.require(db, user)
     return user
 
 
 AdminUser = Annotated[User, Depends(get_admin_user)]
+
+
+def require_permission(permission: str):
+    async def dependency(user: CurrentUser, db: DbDep, response: Response) -> User:
+        response.headers["Cache-Control"] = "no-store"
+        await authorization_service.require(db, user, permission)
+        return user
+    return dependency

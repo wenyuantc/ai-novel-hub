@@ -3,8 +3,9 @@ import { adminApi } from '../../api/admin'
 import type { AdminUser, ResetPasswordRequest } from '../../api/types'
 import { canConfirmDelete, rowActions, userProjectCountFromError } from '../../utils/adminUsers'
 import { createRecycleRequestGate } from '../../utils/recycleBin'
+import { useAuthStore } from '../../stores/auth'
 
-export type AdminUserAction = 'reset' | 'active' | 'admin' | 'delete'
+export type AdminUserAction = 'reset' | 'active' | 'delete'
 export interface AdminUserActionTarget { user: AdminUser; action: AdminUserAction }
 export interface AdminUserActionsState {
   target: AdminUserActionTarget | null
@@ -19,8 +20,8 @@ interface Callbacks {
 }
 
 function permitted(target: AdminUserActionTarget, actorId: number) {
-  const actions = rowActions(target.user, actorId)
-  return { reset: actions.canResetPassword, active: actions.canToggleActive, admin: actions.canToggleAdmin, delete: actions.canDelete }[target.action]
+  const actions = rowActions(target.user, actorId, useAuthStore.getState().user)
+  return { reset: actions.canResetPassword, active: actions.canToggleActive, delete: actions.canDelete }[target.action]
 }
 
 /** 只拥有当前页的目标账号动作；失效不撤回已发请求，但绝不交付旧响应。 */
@@ -39,7 +40,7 @@ export class AdminUserActionsController {
   activate() { this.active = true }
   deactivate() { this.active = false; this.gate.invalidate(); this.update({ target: null, busy: false, confirmation: '', error: null }) }
   private canUse() { if (!this.allowed()) { this.deactivate(); return false }; return this.active }
-  private current(ticket: number, target: AdminUserActionTarget) { return this.canUse() && this.gate.isCurrent(ticket) && this.state.target === target }
+  private current(ticket: number, target: AdminUserActionTarget) { return this.canUse() && this.gate.isCurrent(ticket) && this.state.target === target && permitted(target, this.actorId) }
 
   open = (user: AdminUser, action: AdminUserAction) => {
     const target = { user: { ...user }, action }
@@ -65,7 +66,6 @@ export class AdminUserActionsController {
       const { user, action } = target
       if (action === 'reset' && password) await this.api.resetPassword(user.id, password)
       else if (action === 'active') await this.api.updateUser(user.id, { is_active: !user.is_active })
-      else if (action === 'admin') await this.api.updateUser(user.id, { is_admin: !user.is_admin })
       else if (action === 'delete') await this.api.deleteUser(user.id)
       if (!this.current(ticket, target)) return false
       this.update({ target: null, busy: false, confirmation: '', error: null })

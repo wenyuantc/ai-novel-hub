@@ -52,7 +52,7 @@ function triBool(v: TriState): boolean | undefined {
 export default function MemoriesPanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
-  const { canUseAI } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
 
   const [chapterFrom, setChapterFrom] = useState<number | null>(null)
@@ -100,15 +100,19 @@ export default function MemoriesPanel() {
   }
 
   const patch = async (m: Memory, body: { pinned?: boolean; muted?: boolean }) => {
+    if (!canEditNow()) return
     setActing(m.id)
     try {
+      if (!canEditNow()) return
       const updated = await memoryApi.update(pid, m.id, body)
+      if (!canEditNow()) return
       setData((prev) => {
         const base = prev ?? { items: [], total: 0, page: 1, page_size: PAGE_SIZE }
         return { ...base, items: base.items.map((x) => (x.id === updated.id ? updated : x)) }
       })
       refreshStatus()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setActing(null)
@@ -116,12 +120,16 @@ export default function MemoriesPanel() {
   }
 
   const remove = async (m: Memory) => {
+    if (!canEditNow()) return
     setActing(m.id)
     try {
+      if (!canEditNow()) return
       await memoryApi.remove(pid, m.id)
+      if (!canEditNow()) return
       message.success('已删除')
       reload()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setActing(null)
@@ -193,7 +201,7 @@ export default function MemoriesPanel() {
             aria-label={m.pinned ? '取消钉住' : '钉住'}
             loading={acting === m.id}
             icon={m.pinned ? <PushpinFilled style={{ color: token.colorWarning }} /> : <PushpinOutlined />}
-            onClick={() => void patch(m, { pinned: !m.pinned })}
+            onClick={() => void patch(m, { pinned: !m.pinned })} disabled={!canEdit}
           />
         </Tooltip>
       ),
@@ -207,7 +215,7 @@ export default function MemoriesPanel() {
           <Switch
             size="small"
             checked={m.muted}
-            disabled={acting === m.id}
+            disabled={!canEdit || (acting === m.id)}
             onChange={(v) => void patch(m, { muted: v })}
           />
         </Tooltip>
@@ -228,8 +236,7 @@ export default function MemoriesPanel() {
                 setModalOpen(true)
               }}
             >
-              编辑
-            </Button>
+              {canEdit ? '编辑' : '查看'}</Button>
             <Popconfirm
               title="删除该手动记忆？"
               okText="删除"
@@ -237,7 +244,7 @@ export default function MemoriesPanel() {
               okButtonProps={{ danger: true }}
               onConfirm={() => remove(m)}
             >
-              <Button type="link" size="small" danger>
+              <Button type="link" size="small" danger disabled={!canEdit}>
                 删除
               </Button>
             </Popconfirm>
@@ -268,7 +275,7 @@ export default function MemoriesPanel() {
                 onClick={() => {
                   setEditing(null)
                   setModalOpen(true)
-                }}
+                }} disabled={!canEdit}
               >
                 新增手动记忆
               </Button>

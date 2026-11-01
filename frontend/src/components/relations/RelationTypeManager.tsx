@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd'
 import { useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -19,19 +20,25 @@ const CATEGORY_OPTIONS = (Object.keys(RELATION_CATEGORY) as RelationCategory[]).
 
 /** 关系类型管理：预置类型只读；自定义类型可新增 / 删除（被引用时后端 409）。 */
 export default function RelationTypeManager({ projectId, open, types, onClose, onChanged }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<RelationshipTypeInput>()
   const [saving, setSaving] = useState(false)
 
   const handleAdd = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setSaving(true)
     try {
+      if (!canEditNow()) return
       await relationshipTypeApi.create(projectId, { category: v.category, role_a: v.role_a.trim(), role_b: v.role_b.trim() })
+      if (!canEditNow()) return
       message.success('已添加')
       form.resetFields()
       onChanged()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -39,18 +46,22 @@ export default function RelationTypeManager({ projectId, open, types, onClose, o
   }
 
   const handleDelete = async (t: RelationshipType) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await relationshipTypeApi.remove(projectId, t.id)
+      if (!canEditNow()) return
       message.success('已删除')
       onChanged()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
 
   return (
     <Modal open={open} title="关系类型" footer={null} width={640} onCancel={onClose}>
-      <Form form={form} layout="inline" initialValues={{ category: 'other' }} style={{ marginBottom: 12, rowGap: 8 }}>
+      <Form form={form} layout="inline" initialValues={{ category: 'other' }} style={{ marginBottom: 12, rowGap: 8 }} disabled={!canEdit}>
         <Form.Item name="category">
           <Select options={CATEGORY_OPTIONS} style={{ width: 90 }} />
         </Form.Item>
@@ -60,7 +71,7 @@ export default function RelationTypeManager({ projectId, open, types, onClose, o
         <Form.Item name="role_b" rules={[{ required: true, whitespace: true, message: '必填' }, { max: 20, message: '≤20 字' }]}>
           <Input placeholder="乙的身份，如：徒弟" style={{ width: 140 }} />
         </Form.Item>
-        <Button type="primary" loading={saving} onClick={() => void handleAdd()}>
+        <Button type="primary" loading={saving} onClick={() => void handleAdd()} disabled={!canEdit}>
           添加
         </Button>
       </Form>
@@ -81,7 +92,7 @@ export default function RelationTypeManager({ projectId, open, types, onClose, o
               ) : (
                 <Space>
                   <Popconfirm title="删除该自定义类型？" okText="删除" cancelText="取消" onConfirm={() => handleDelete(t)}>
-                    <Button type="link" size="small" danger>
+                    <Button type="link" size="small" danger disabled={!canEdit}>
                       删除
                     </Button>
                   </Popconfirm>

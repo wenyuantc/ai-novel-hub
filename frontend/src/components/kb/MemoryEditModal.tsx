@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Checkbox, Form, Input, InputNumber, Modal, Rate, Select } from 'antd'
 import { useEffect, useState } from 'react'
 import { errorMessage } from '../../api/client'
@@ -24,6 +25,7 @@ interface FormValues {
 
 /** 手动记忆新增 / 编辑：章号、内容 ≤1000、相关角色（≤20，可自由填写）、重要度、钉住。 */
 export default function MemoryEditModal({ projectId, open, memory, characterNames, onClose, onSaved }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const [saving, setSaving] = useState(false)
@@ -44,7 +46,9 @@ export default function MemoryEditModal({ projectId, open, memory, characterName
   }, [open, memory, form])
 
   const save = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     const body = {
       chapter_no: v.chapter_no,
       content: v.content.trim(),
@@ -54,10 +58,13 @@ export default function MemoryEditModal({ projectId, open, memory, characterName
     }
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const saved = memory ? await memoryApi.update(projectId, memory.id, body) : await memoryApi.create(projectId, body)
+      if (!canEditNow()) return
       message.success(memory ? '已保存' : '已添加')
       onSaved(saved)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -66,6 +73,7 @@ export default function MemoryEditModal({ projectId, open, memory, characterName
 
   return (
     <Modal
+        okButtonProps={{ disabled: !canEdit }}
       title={memory ? '编辑手动记忆' : '新增手动记忆'}
       open={open}
       onOk={() => void save()}
@@ -75,7 +83,7 @@ export default function MemoryEditModal({ projectId, open, memory, characterName
       cancelText="取消"
       forceRender
     >
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" disabled={!canEdit}>
         <Form.Item
           name="chapter_no"
           label="章号"

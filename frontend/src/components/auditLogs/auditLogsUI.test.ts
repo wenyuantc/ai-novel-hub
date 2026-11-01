@@ -8,7 +8,7 @@ import type { AuditCleanupPreview, AuditLogDetail } from '../../api/types'
 const state = vi.hoisted(() => ({ mobile: true, admin: true, loading: false, error: null as string | null, items: [] as import('../../api/types').AuditLogBrief[] }))
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => state.mobile, useModalWidth: (width: number | string) => state.mobile ? 'calc(100vw - 24px)' : width }))
 vi.mock('../../hooks/useLoader', () => ({ useLoader: () => ({ data: { items: state.items, total: state.items.length, page: 1 }, loading: state.loading, error: state.error, reload: () => {} }) }))
-vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (s: unknown) => unknown) => select({ status: 'authenticated', user: { id: 7, username: '真实管理员', is_admin: state.admin }, mcpEnabled: false, logout: async () => {} }) }))
+vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (s: unknown) => unknown) => select({ status: 'authenticated', user: { id: 7, username: '真实管理员', is_admin: state.admin, is_super_admin: state.admin, effective_permissions: [], authorization_revision: 1, roles: [] }, mcpEnabled: false, logout: async () => {} }) }))
 vi.mock('../../stores/project', () => ({ useProjectStore: (select: (s: unknown) => unknown) => select({ project: null }) }))
 vi.mock('../../stores/tasks', () => ({ useTasksStore: (select: (s: unknown) => unknown) => select({ active: [], loaded: true }) }))
 vi.mock('../TaskPanel', () => ({ default: () => null }))
@@ -31,7 +31,7 @@ const log = (over: Partial<AuditLogDetail> = {}): AuditLogDetail => ({
 afterEach(() => { state.mobile = true; state.admin = true; state.items = []; state.loading = false; state.error = null })
 
 describe('审计详情只读语义', () => {
-  const detail = (value: AuditLogDetail) => render(createElement(AuditLogDetailContent, { log: value, version: null, versionError: null, versionLoading: false, onLoadVersion: noop }))
+  const detail = (value: AuditLogDetail) => render(createElement(AuditLogDetailContent, { canReadVersion: true, log: value, version: null, versionError: null, versionLoading: false, onLoadVersion: noop }))
   it('取消原因只投影task.cancel_request，标签明确仅受理且真实actor不被替换', () => {
     const value = log({ action: 'task.cancel_request', target_type: 'task', target_label: '项目智能体 #42', version_ref: null, version_status: null })
     value.summary.task_key = '00000000-0000-4000-8000-000000000001'
@@ -86,7 +86,7 @@ describe('审计详情只读语义', () => {
     expect(detail(log({ version_ref: null, version_status: null }))).toContain('本次操作没有关联业务版本')
   })
   it('主动读取的版本只展示为当前正文，不能视为操作时刻全文', () => {
-    const html = render(createElement(AuditLogDetailContent, { log: log({ version_status: 'changed' }), version: { id: 4, chapter_id: 12, seq: 2, source: 'manual', content: '这是独立 API 返回的当前正文', word_count: 16, starred: false, note: '', generation_log_id: null, created_at: '2026-10-31T01:00:00Z', updated_at: '2026-10-31T01:01:00Z' }, versionError: null, versionLoading: false, onLoadVersion: noop }))
+    const html = render(createElement(AuditLogDetailContent, { canReadVersion: true, log: log({ version_status: 'changed' }), version: { id: 4, chapter_id: 12, seq: 2, source: 'manual', content: '这是独立 API 返回的当前正文', word_count: 16, starred: false, note: '', generation_log_id: null, created_at: '2026-10-31T01:00:00Z', updated_at: '2026-10-31T01:01:00Z' }, versionError: null, versionLoading: false, onLoadVersion: noop }))
     expect(html).toContain('这是独立 API 返回的当前正文')
     expect(html).toContain('以下不是审计保存的正文')
     expect(html).toContain('不能视为本次操作时刻的确定全文')

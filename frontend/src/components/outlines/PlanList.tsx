@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, List, Popconfirm, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -29,6 +30,7 @@ function toValues(p: Plan): PlanFieldValues {
 
 /** 大纲页展开行：某条大纲的细纲列表，行内编辑（PATCH 单条）与删除（PUT 整体同步去掉该条；有正文的不能删）。 */
 export default function PlanList({ projectId, outline, characterOptions, characterNames, onChanged }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const navigate = useNavigate()
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -42,6 +44,7 @@ export default function PlanList({ projectId, outline, characterOptions, charact
   }
 
   const handleSave = async (p: Plan) => {
+    if (!canEditNow()) return
     if (!draft) return
     const err = planDraftError(draft)
     if (err) {
@@ -50,6 +53,7 @@ export default function PlanList({ projectId, outline, characterOptions, charact
     }
     setPending(p.id)
     try {
+      if (!canEditNow()) return
       await outlineProApi.updatePlan(projectId, outline.id, p.id, {
         title: draft.title.trim(),
         summary: draft.summary.trim(),
@@ -59,11 +63,13 @@ export default function PlanList({ projectId, outline, characterOptions, charact
         goal: draft.goal.trim(),
         est_words: draft.est_words,
       })
+      if (!canEditNow()) return
       message.success('细纲已保存')
       setEditingId(null)
       setDraft(null)
       onChanged()
     } catch (e) {
+      if (!canEditNow()) return
       message.error(errorMessage(e))
     } finally {
       setPending(null)
@@ -71,12 +77,16 @@ export default function PlanList({ projectId, outline, characterOptions, charact
   }
 
   const handleDelete = async (p: Plan) => {
+    if (!canEditNow()) return
     setPending(p.id)
     try {
+      if (!canEditNow()) return
       await outlineProApi.syncPlans(projectId, outline.id, removePlanSync(plans, p.id))
+      if (!canEditNow()) return
       message.success(p.chapter_id !== null ? '已删除细纲及其空章节' : '已删除细纲')
       onChanged()
     } catch (e) {
+      if (!canEditNow()) return
       message.error(errorMessage(e))
     } finally {
       setPending(null)
@@ -96,16 +106,16 @@ export default function PlanList({ projectId, outline, characterOptions, charact
                 <PlanFieldsEditor
                   value={draft}
                   characterOptions={characterOptions}
-                  disabled={pending === p.id}
+                  disabled={!canEdit || pending === p.id}
                   onChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))}
                 />
                 <Space>
-                  <Button type="primary" size="small" loading={pending === p.id} onClick={() => void handleSave(p)}>
+                  <Button type="primary" size="small" loading={pending === p.id} onClick={() => void handleSave(p)} disabled={!canEdit}>
                     保存
                   </Button>
                   <Button
                     size="small"
-                    disabled={pending === p.id}
+                    disabled={!canEdit || pending === p.id}
                     onClick={() => {
                       setEditingId(null)
                       setDraft(null)
@@ -123,9 +133,8 @@ export default function PlanList({ projectId, outline, characterOptions, charact
           <List.Item
             key={p.id}
             actions={[
-              <Button key="edit" type="link" size="small" disabled={editingId !== null} onClick={() => startEdit(p)}>
-                编辑
-              </Button>,
+              <Button key="edit" type="link" size="small" disabled={!canEdit || editingId !== null} onClick={() => startEdit(p)}>
+                {canEdit ? '编辑' : '查看'}</Button>,
               <Popconfirm
                 key="del"
                 title="删除这条细纲？"
@@ -142,7 +151,7 @@ export default function PlanList({ projectId, outline, characterOptions, charact
                   type="link"
                   size="small"
                   danger
-                  disabled={p.has_content || editingId !== null}
+                  disabled={!canEdit || (p.has_content || editingId !== null)}
                   loading={pending === p.id}
                   title={p.has_content ? '已有正文的细纲不能删除' : undefined}
                 >

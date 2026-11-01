@@ -116,12 +116,12 @@ describe('保存与权限竞态', () => {
     await save
     expect(controller.getSnapshot()).toMatchObject({ reviewRequired: false, data: { revision: 0 }, changes: { mcp_enabled: false }, error: '校验失败' })
   })
-  it.each([401, 403])('%s清空数据与草稿', async (status) => {
+  it.each([401, 403])('%s按读取与写入能力分别撤销', async (status) => {
     const { api, controller } = setup()
     await controller.refresh(); controller.edit('mcp_enabled', false)
     api.update.mockRejectedValueOnce(new ApiError(status, '无权'))
     await controller.save()
-    expect(controller.getSnapshot()).toMatchObject({ denied: true, data: null, changes: {}, loading: false, saving: false })
+    expect(controller.getSnapshot()).toMatchObject({ denied: status === 401, data: status === 401 ? null : expect.objectContaining({revision: 0}), changes: {}, loading: false, saving: false })
   })
   it('卸载、换账号或降权后的旧保存响应不能应用公开配置/复活数据', async () => {
     const { api, apply, controller, deny } = setup()

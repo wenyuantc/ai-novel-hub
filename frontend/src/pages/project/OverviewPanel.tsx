@@ -95,7 +95,7 @@ function AnalysisSettingsCard({ project }: { project: Project }) {
 
 function OverviewInner({ project }: { project: Project }) {
   const { message } = App.useApp()
-  const { managingOther, canUseAI } = useProjectAccess(project.id)
+  const { managingOther, canUseAI, canEdit, canEditNow, canRecycle } = useProjectAccess(project.id)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const navigate = useNavigate()
   const setProject = useProjectStore((s) => s.setProject)
@@ -122,9 +122,12 @@ function OverviewInner({ project }: { project: Project }) {
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setSaving(true)
     try {
+      if (!canEditNow()) return
       const updated = await projectApi.update(project.id, {
         title: v.title?.trim(),
         genre: v.genre?.trim() ?? '',
@@ -135,10 +138,12 @@ function OverviewInner({ project }: { project: Project }) {
         // 目标总字数清空时显式发送 null
         ...projectInfoBody(v),
       })
+      if (!canEditNow()) return
       setProject(updated)
       message.success('已保存')
       if (updated.notice) message.info(updated.notice)
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -217,7 +222,7 @@ function OverviewInner({ project }: { project: Project }) {
                 audience: project.audience,
                 target_words: project.target_words,
               }}
-              style={{ maxWidth: 760 }}
+              style={{ maxWidth: 760 }} disabled={!canEdit}
             >
               <div style={formRow}>
                 <div style={splitPane(360)}>
@@ -267,10 +272,10 @@ function OverviewInner({ project }: { project: Project }) {
                 <StyleSelect placeholder="不用风格" />
               </Form.Item> : <Form.Item label="默认写作风格"><Typography.Text>{project.default_style?.name ?? (project.default_style_id ? `风格 #${project.default_style_id}` : '不用风格')}</Typography.Text><Typography.Text type="secondary">（保留当前绑定）</Typography.Text></Form.Item>}
               <Space>
-                <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+                <Button type="primary" loading={saving} onClick={() => void handleSave()} disabled={!canEdit}>
                   保存
                 </Button>
-                <Button danger onClick={() => setDeleteOpen(true)}>
+                <Button danger onClick={() => setDeleteOpen(true)} disabled={!canRecycle}>
                   删除项目
                 </Button>
               </Space>
@@ -283,7 +288,7 @@ function OverviewInner({ project }: { project: Project }) {
         </div>
       </Card>
       {canUseAI && <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />}
-      {deleteOpen && <DeleteProjectModal project={{ id: project.id, title: project.title, owner_username: project.owner?.username }} onClose={() => setDeleteOpen(false)} onDeleted={() => navigate(managingOther ? '/admin/projects' : '/projects', { replace: true })} />}
+      {deleteOpen && canRecycle && <DeleteProjectModal project={{ id: project.id, title: project.title, owner: project.owner, owner_username: project.owner?.username }} onClose={() => setDeleteOpen(false)} onDeleted={() => navigate(managingOther ? '/admin/projects' : '/projects', { replace: true })} />}
       {canUseAI && backupOpen && (
         <Suspense fallback={null}>
           <BackupModal projectId={project.id} onClose={() => setBackupOpen(false)} />

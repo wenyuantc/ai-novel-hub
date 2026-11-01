@@ -8,6 +8,9 @@ import type { Project, User } from '../../api/types'
 import AppLayout from '../AppLayout'
 import ProjectLayout from '../../pages/project/ProjectLayout'
 import WorldPanel from '../../pages/project/WorldPanel'
+import CoverPanel from './CoverPanel'
+import CastSelect from '../chapter/CastSelect'
+import RetrievalSettingsCard from '../kb/RetrievalSettingsCard'
 import { useAuthStore } from '../../stores/auth'
 import { useProjectStore } from '../../stores/project'
 
@@ -23,7 +26,7 @@ vi.mock('../../stores/project', async (original) => {
   return { ...actual, useProjectStore: Object.assign(hook, actual.useProjectStore) }
 })
 
-const admin: User = { id: 1, username: 'root', is_admin: true, created_at: '' }
+const admin: User = { id: 1, username: 'root', is_admin: true, is_super_admin: true, effective_permissions: [], authorization_revision: 1, roles: [], created_at: '' }
 const project: Project = { id: 9, owner: { id: 2, username: 'alice' }, title: '星河', genre: '', premise: '', status: 'writing', created_at: '', updated_at: '', chapter_count: 0, total_words: 0, cover_updated_at: null, auto_analyze: true, wizard_progress: { done: [], skipped: [], current: null }, default_style_id: null, default_style: null, synopsis: '', theme: '', tags: [], selling_points: '', audience: '', target_words: null, last_edited_chapter_id: null, reading: null }
 
 function render(element: ReactElement, path = '/projects/9/world') {
@@ -36,6 +39,20 @@ afterEach(() => {
 })
 
 describe('管理员项目界面', () => {
+  it('项目只读角色仍显示内容工作区，人工新增/封面上传/选角/检索设置全部禁写且不提供AI', () => {
+    useAuthStore.setState({ user: { ...admin, is_admin: false, is_super_admin: false, effective_permissions: ['projects.read'] }, status: 'authenticated' })
+    useProjectStore.setState({ project })
+    expect(render(createElement(ProjectLayout))).toContain('当前为只读内容管理')
+    const world = render(createElement(WorldPanel))
+    expect(world).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?新增条目/)
+    expect(world).not.toContain('AI 重新生成')
+    const cover = render(createElement(CoverPanel, { project }))
+    expect(cover).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?上传/)
+    expect(cover).not.toContain('AI 生成')
+    expect(render(createElement(CastSelect, { pid: 9, chapterId: 3 }))).toContain('ant-select-disabled')
+    const settings = render(createElement(RetrievalSettingsCard, { projectId: 9, settings: {auto_inject: true, top_k: 3, min_score: 0, max_chars: 2000, memory_top_k: 3, memory_max_chars: 2000, memory_min_score: 0}, scope: 'kb', onSaved: () => {} }))
+    expect(settings).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?保\s*存/)
+  })
   it('他人项目持续显示归属和返回管理入口，人工世界观仍可新增，AI入口不挂载', () => {
     useAuthStore.setState({ user: admin, status: 'authenticated' })
     useProjectStore.setState({ project })
@@ -59,7 +76,7 @@ describe('管理员项目界面', () => {
     const global = () => renderToString(createElement(App, null, createElement(StaticRouter, { location: '/projects' }, createElement(AppLayout))))
     useAuthStore.setState({ user: admin, status: 'authenticated' })
     expect(global()).toContain('href="/admin/projects"')
-    useAuthStore.setState({ user: { ...admin, id: 2, is_admin: false } })
+    useAuthStore.setState({ user: { ...admin, id: 2, is_admin: false, is_super_admin: false } })
     expect(global()).not.toContain('href="/admin/projects"')
   })
 })

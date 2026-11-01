@@ -1,3 +1,4 @@
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { PlusOutlined } from '@ant-design/icons'
 import { App, Button, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
@@ -67,6 +68,7 @@ function HistoryList({ items }: { items: CareerHistory[] }) {
 
 /** 角色抽屉「职业」Tab：挂接 / 换阶 / 改备注 / 卸下（每次变化写历史），每条可展开查看该职业的历史。 */
 export default function CharacterCareersTab({ projectId, character, onChanged }: Props) {
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const loader = useCallback(() => assignmentApi.list(projectId, character.id), [projectId, character.id])
   const { data: rows = [], loading, reload } = useLoader(loader, { projectId, resources: ['careers', 'characters'] })
@@ -99,19 +101,26 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
   }
 
   const handleSave = async () => {
+    if (!canEditNow()) return
     const v = await form.validateFields()
+    if (!canEditNow()) return
     setSaving(true)
     try {
       const common = { note: v.note?.trim() ?? '', chapter_no: v.chapter_no ?? null, history_note: v.history_note?.trim() ?? '' }
       if (editing) {
+        if (!canEditNow()) return
         await assignmentApi.update(projectId, character.id, editing.id, { stage_id: v.stage_id, ...common })
+        if (!canEditNow()) return
       } else {
+        if (!canEditNow()) return
         await assignmentApi.create(projectId, character.id, { career_id: v.career_id, stage_id: v.stage_id ?? null, ...common })
+        if (!canEditNow()) return
       }
       message.success('已保存')
       setOpen(false)
       refresh()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -119,21 +128,29 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
   }
 
   const changeStage = async (a: Assignment, stageId: number) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await assignmentApi.update(projectId, character.id, a.id, { stage_id: stageId })
+      if (!canEditNow()) return
       message.success('已换阶')
       refresh()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
 
   const handleRemove = async (a: Assignment) => {
+    if (!canEditNow()) return
     try {
+      if (!canEditNow()) return
       await assignmentApi.remove(projectId, character.id, a.id)
+      if (!canEditNow()) return
       message.success('已卸下')
       refresh()
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     }
   }
@@ -141,7 +158,7 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Space>
-        <Button icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={careers.length === 0}>
+        <Button icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit || careers.length === 0}>
           挂接职业
         </Button>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -189,7 +206,7 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
                   value={a.stage_id}
                   labelRender={() => stageLabel(a.stage_name, a.stage_position, a.stage_total)}
                   options={(c?.stages ?? []).map((s) => ({ value: s.id, label: `${s.position}·${s.name}` }))}
-                  onChange={(v: number) => v !== a.stage_id && void changeStage(a, v)}
+                  onChange={(v: number) => v !== a.stage_id && void changeStage(a, v)} disabled={!canEdit}
                 />
               )
             },
@@ -201,10 +218,9 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
             render: (_, a) => (
               <Space size={0}>
                 <Button type="link" size="small" onClick={() => openEdit(a)}>
-                  编辑
-                </Button>
+                  {canEdit ? '编辑' : '查看'}</Button>
                 <Popconfirm title="卸下该职业？" description="会记入历史。" okText="卸下" cancelText="取消" onConfirm={() => handleRemove(a)}>
-                  <Button type="link" size="small" danger>
+                  <Button type="link" size="small" danger disabled={!canEdit}>
                     卸下
                   </Button>
                 </Popconfirm>
@@ -219,6 +235,7 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
       {showAll && <HistoryList items={history} />}
 
       <Modal
+        okButtonProps={{ disabled: !canEdit }}
         title={editing ? `编辑：${editing.career_name}` : '挂接职业'}
         open={open}
         onOk={() => void handleSave()}
@@ -228,7 +245,7 @@ export default function CharacterCareersTab({ projectId, character, onChanged }:
         cancelText="取消"
         forceRender
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" disabled={!canEdit}>
           <Form.Item name="career_id" label="职业" rules={[{ required: true, message: '请选择职业' }]}>
             <Select
               disabled={!!editing}

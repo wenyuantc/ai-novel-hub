@@ -17,7 +17,7 @@ interface Props {
 
 /** 项目封面展示与管理：上传立即替换，AI 生成需预览确认。 */
 export default function CoverPanel({ project }: Props) {
-  const { canUseAI } = useProjectAccess(project.id)
+  const { canUseAI, canEdit, canEditNow } = useProjectAccess(project.id)
   const { message } = App.useApp()
   const [mutating, setMutating] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
@@ -33,15 +33,20 @@ export default function CoverPanel({ project }: Props) {
   }
 
   const handleUpload = async (file: File) => {
+    if (!canEditNow()) return
     if (busy.current) return
     const error = precheckCoverUpload(file)
     if (error) return void message.error(error)
     busy.current = true
     setMutating(true)
     try {
-      applyCover(await uploadCover(project.id, file))
+      if (!canEditNow()) return
+      const updated = await uploadCover(project.id, file)
+      if (!canEditNow()) return
+      applyCover(updated)
       message.success('封面已更新')
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       busy.current = false
@@ -50,13 +55,18 @@ export default function CoverPanel({ project }: Props) {
   }
 
   const handleDelete = async () => {
+    if (!canEditNow()) return
     if (busy.current) return
     busy.current = true
     setMutating(true)
     try {
-      applyCover(await deleteCover(project.id))
+      if (!canEditNow()) return
+      const updated = await deleteCover(project.id)
+      if (!canEditNow()) return
+      applyCover(updated)
       message.success('封面已删除')
     } catch (err) {
+      if (!canEditNow()) return
       message.error(errorMessage(err))
     } finally {
       busy.current = false
@@ -71,13 +81,13 @@ export default function CoverPanel({ project }: Props) {
         <Upload
           accept={COVER_ACCEPT}
           showUploadList={false}
-          disabled={mutating || generateOpen}
+          disabled={!canEdit || mutating || generateOpen}
           beforeUpload={(file) => {
             void handleUpload(file)
             return Upload.LIST_IGNORE
           }}
         >
-          <Button icon={<UploadOutlined />} loading={mutating} disabled={generateOpen}>上传</Button>
+          <Button icon={<UploadOutlined />} loading={mutating} disabled={!canEdit || generateOpen}>上传</Button>
         </Upload>
         {canUseAI && <Button icon={<PictureOutlined />} disabled={mutating} onClick={() => setGenerateOpen(true)}>AI 生成</Button>}
         {imageUrl && (
@@ -88,9 +98,9 @@ export default function CoverPanel({ project }: Props) {
             cancelText="取消"
             okButtonProps={{ danger: true }}
             onConfirm={handleDelete}
-            disabled={mutating || generateOpen}
+            disabled={!canEdit || mutating || generateOpen}
           >
-            <Button danger size="small" type="text" icon={<DeleteOutlined />} disabled={mutating || generateOpen}>
+            <Button danger size="small" type="text" icon={<DeleteOutlined />} disabled={!canEdit || (mutating || generateOpen)}>
               删除封面
             </Button>
           </Popconfirm>

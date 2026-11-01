@@ -1,3 +1,4 @@
+import { can } from '../utils/permissions'
 import { ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons'
 import { Alert, App, Button, InputNumber, Result, Skeleton, Space, Switch, Tag, Typography } from 'antd'
 import { Link } from 'react-router-dom'
@@ -40,11 +41,13 @@ export function SystemSettingRow({ item, changes, invalid, disabled, onBoolean, 
 }
 
 function Settings({ actorId }: { actorId: number }) {
+  const actor = useAuthStore((state) => state.user)
+  const writable = can(actor, 'settings.update')
   const { state, controller } = useSystemSettings(actorId)
   const { modal } = App.useApp()
-  const confirm = useSettingsConfirmation(modal, state.denied)
+  const confirm = useSettingsConfirmation(modal, state.denied || !writable)
   const dirty = Object.keys(state.changes).length > 0 || state.invalidNumbers.length > 0
-  const blocked = state.saving || state.loading || state.denied || state.reviewRequired
+  const blocked = !writable || state.saving || state.loading || state.denied || state.reviewRequired
   const resetDraft = () => {
     if (!dirty) { void controller.reload(); return }
     confirm({ title: '放弃未保存修改并重新载入？', content: '当前草稿将被丢弃，重新读取最新有效配置。此操作不会修改服务器设置。', okText: '放弃修改并重新载入', cancelText: '保留草稿', onOk: () => controller.reload() })
@@ -71,7 +74,7 @@ function Settings({ actorId }: { actorId: number }) {
         </section>)}
         <div className="system-settings-savebar">
           <Space wrap><Button type="primary" icon={<SaveOutlined />} loading={state.saving} disabled={blocked || !Object.keys(state.changes).length || state.invalidNumbers.length > 0} onClick={() => void controller.save()}>保存设置</Button><Button disabled={!dirty || state.saving || state.loading} onClick={resetDraft}>放弃修改</Button><Typography.Text type="secondary">{dirty ? '有未保存修改；关闭页面会丢弃草稿。' : '当前没有未保存修改。'}</Typography.Text></Space>
-          <Link to="/admin/audit-logs">查看操作日志</Link>
+          {can(actor, 'audit.read') && <Link to="/admin/audit-logs">查看操作日志</Link>}
         </div>
       </>}
     </Space>}
@@ -80,5 +83,5 @@ function Settings({ actorId }: { actorId: number }) {
 
 export default function AdminSystemSettingsPage() {
   const user = useAuthStore((state) => state.user)
-  return user?.is_admin ? <Settings key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
+  return user && can(user, 'settings.read') ? <Settings key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
 }

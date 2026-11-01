@@ -1,3 +1,5 @@
+import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
+import { can } from '../utils/permissions'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Empty, Form, Input, InputNumber, List, Pagination, Result, Select, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
@@ -47,6 +49,7 @@ export function AuditLogResults({ items, loading, mobile, onDetail }: ResultsPro
 }
 
 function AuditLogs({ actorId }: { actorId: number }) {
+  const actor = useAuthStore((state) => state.user)
   const mobile = useIsMobile()
   const [form] = Form.useForm<AuditFilterValues>()
   const [query, setQuery] = useState<AuditLogListQuery>({})
@@ -55,6 +58,7 @@ function AuditLogs({ actorId }: { actorId: number }) {
   const [pageSize, setPageSize] = useState(20)
   const [detailId, setDetailId] = useState<number | null>(null)
   const [cleanupOpen, setCleanupOpen] = useState(false)
+  useAuthorizationCleanup(() => { setDetailId(null); setCleanupOpen(false) })
   const loader = useCallback(async () => {
     const result = await auditLogApi.list({ ...query, page, page_size: pageSize })
     const validPage = auditValidPage(page, result.total, pageSize)
@@ -83,7 +87,7 @@ function AuditLogs({ actorId }: { actorId: number }) {
   return <div style={{ maxWidth: 1500, minWidth: 0, margin: '0 auto', padding: mobile ? 12 : 24 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
       <div><Typography.Title level={3} style={{ margin: '0 0 8px' }}>操作日志</Typography.Title><Typography.Text type="secondary">追溯真实管理员或系统清理、操作对象与结果。长期保留；仅含安全摘要，无正文全文差异。所有时间按浏览器本地时区显示。</Typography.Text></div>
-      <Space wrap><Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button><Button danger icon={<DeleteOutlined />} onClick={() => setCleanupOpen(true)}>按日期清理</Button></Space>
+      <Space wrap><Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button><Button danger icon={<DeleteOutlined />} disabled={!can(actor, 'audit.cleanup')} onClick={() => setCleanupOpen(true)}>按日期清理</Button></Space>
     </div>
     <Card styles={{ body: { padding: mobile ? 12 : 16, minWidth: 0 } }}>
       <Form form={form} layout="vertical" onFinish={applyFilters}>
@@ -108,12 +112,12 @@ function AuditLogs({ actorId }: { actorId: number }) {
       </div>
     </Card>
     {detailId !== null && <AuditLogDetailDrawer key={`${actorId}:${detailId}`} id={detailId} actorId={actorId} onClose={() => setDetailId(null)} />}
-    {cleanupOpen && <AuditCleanupModal key={actorId} actorId={actorId} onClose={() => setCleanupOpen(false)} onCleaned={() => { setDetailId(null); setPage(currentPage); reload() }} />}
+    {cleanupOpen && can(actor, 'audit.cleanup') && <AuditCleanupModal key={actorId} actorId={actorId} onClose={() => setCleanupOpen(false)} onCleaned={() => { setDetailId(null); setPage(currentPage); reload() }} />}
   </div>
 }
 
 /** 路由仍由 RequireAdmin 保护；按真实账号重建所有本地数据和待确认令牌。 */
 export default function AdminAuditLogsPage() {
   const user = useAuthStore((s) => s.user)
-  return user?.is_admin ? <AuditLogs key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
+  return user && can(user, 'audit.read') ? <AuditLogs key={user.id} actorId={user.id} /> : <Result status="403" title="需要管理员权限" />
 }

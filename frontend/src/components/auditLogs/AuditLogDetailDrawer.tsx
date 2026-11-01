@@ -1,3 +1,4 @@
+import { authorizationKey, can } from '../../utils/permissions'
 import { Alert, Button, Descriptions, Drawer, Space, Spin, Tag, Typography, theme } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AUDIT_ACTION, auditLogApi, auditResult } from '../../api/auditLogs'
@@ -22,10 +23,11 @@ interface ContentProps {
   versionLoading: boolean
   version: ChapterVersion | null
   versionError: string | null
+  canReadVersion: boolean
 }
 
 /** 仅展示安全快照与摘要；绝不复用包含恢复、标星等写操作的版本抽屉。 */
-export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, version, versionError }: ContentProps) {
+export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, version, versionError, canReadVersion }: ContentProps) {
   const { token } = theme.useToken()
   const result = auditResult(log)
   const ref = log.version_ref
@@ -56,9 +58,9 @@ export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, vers
         <Alert showIcon type={log.version_status === 'available' ? 'info' : 'warning'}
           message={log.version_status === 'missing' ? '关联版本已不可用' : log.version_status === 'changed' ? '关联版本内容已变化' : '业务版本可变，不是审计全文快照'}
           description="业务版本可能合并、裁剪或删除。主动查看的是该版本当前正文，不能视为本次操作时刻的确定全文；关联失效不影响审计摘要。" />
-        {log.version_status !== 'missing' && <Button loading={versionLoading} disabled={versionLoading} onClick={onLoadVersion}>查看关联版本当前正文</Button>}
-        {versionError && <Alert showIcon type="warning" message={versionError} action={<Button size="small" disabled={versionLoading} onClick={onLoadVersion}>重试</Button>} />}
-        {version && <div>
+        {canReadVersion && log.version_status !== 'missing' && <Button loading={versionLoading} disabled={versionLoading} onClick={onLoadVersion}>查看关联版本当前正文</Button>}
+        {canReadVersion && versionError && <Alert showIcon type="warning" message={versionError} action={<Button size="small" disabled={versionLoading} onClick={onLoadVersion}>重试</Button>} />}
+        {canReadVersion && version && <div>
           <Typography.Paragraph type="secondary">独立读取的业务版本 · 当前第 {version.seq} 版 · {version.word_count} 字 · 更新于 {formatTime(version.updated_at)}。以下不是审计保存的正文。</Typography.Paragraph>
           <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 420, overflowY: 'auto', padding: 12, margin: 0, borderRadius: token.borderRadius, background: token.colorFillQuaternary, fontFamily: 'inherit' }}>{version.content || '（空正文）'}</pre>
         </div>}
@@ -68,7 +70,9 @@ export function AuditLogDetailContent({ log, onLoadVersion, versionLoading, vers
 }
 
 export default function AuditLogDetailDrawer({ id, actorId, onClose }: Props) {
+  const actor = useAuthStore((state) => state.user)
   const width = useModalWidth(740)
+  const [identity] = useState(() => authorizationKey(useAuthStore.getState().user))
   const [gate] = useState(createAuditRequestGate)
   const pending = useRef(false)
   const [version, setVersion] = useState<ChapterVersion | null>(null)
@@ -83,11 +87,11 @@ export default function AuditLogDetailDrawer({ id, actorId, onClose }: Props) {
   }, [id])
   const { data, error, loading, reload } = useLoader(loader)
   useEffect(() => () => gate.invalidate(), [gate])
-  const isCurrent = (ticket: number) => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && useAuthStore.getState().user?.is_admin === true
+  const isCurrent = (ticket: number) => gate.isCurrent(ticket) && useAuthStore.getState().user?.id === actorId && authorizationKey(useAuthStore.getState().user) === identity && can(useAuthStore.getState().user, 'audit.read') && can(useAuthStore.getState().user, 'projects.read')
   const close = () => { gate.invalidate(); onClose() }
   const loadVersion = async () => {
     const ref = data?.version_ref
-    if (!ref || pending.current) return
+    if (!ref || pending.current || useAuthStore.getState().user?.id !== actorId || !can(useAuthStore.getState().user, 'projects.read')) return
     pending.current = true
     const ticket = gate.begin()
     setVersionLoading(true)
@@ -107,6 +111,6 @@ export default function AuditLogDetailDrawer({ id, actorId, onClose }: Props) {
   return <Drawer open title="审计详情（只读）" width={width} onClose={close}>
     {error && <Alert showIcon type="error" message={error} action={<Button onClick={reload} size="small">重试</Button>} style={{ marginBottom: 16 }} />}
     {loading && !data && <div style={{ padding: 32, textAlign: 'center' }}><Spin tip="正在加载审计详情…"><div style={{ minHeight: 40 }} /></Spin></div>}
-    {data && <AuditLogDetailContent log={data} onLoadVersion={() => void loadVersion()} version={version} versionLoading={versionLoading} versionError={versionError} />}
+    {data && <AuditLogDetailContent canReadVersion={can(actor, 'projects.read')} log={data} onLoadVersion={() => void loadVersion()} version={version} versionLoading={versionLoading} versionError={versionError} />}
   </Drawer>
 }
