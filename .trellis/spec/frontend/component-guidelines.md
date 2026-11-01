@@ -135,9 +135,11 @@ dayjs.locale('zh-cn')
 
 - AntD `Table`，服务端分页（`adminApi.listUsers({ q, page, page_size })`，`q` 会 trim，为空时省略）并带用户名搜索框。列：用户名（自己那一行标记 `我`）、角色、状态、作品数（含回收站）、`formatTime(created_at)`、操作。作品数非零时提供按 owner 筛选的正常作品/回收站链接。
 - `新建用户` 弹窗：用户名、两次输入初始密码、`设为管理员` 复选框。重置密码弹窗：两次输入新密码。
-- 启用/禁用与授予/撤销管理员都经过 `modal.confirm`。名下有任何作品（含回收站/待清理）时 `rowActions.canDelete=false`，提示可以先禁用或先清理作品；服务器的 409 仍是最终保护。只有零作品用户才能打开删号弹窗，且 `canConfirmDelete(input, username)` 严格相等（不 trim/大小写折叠）才可确认。并发冲突中的 `project_count` 仅经 `userProjectCountFromError` 收窄读取，更新旧弹窗并禁用确认；删掉某页最后一行时回退一页。
+- 列表与详情共用 `components/adminUsers` 的页级 controller/hook、动作按钮与声明式 `AdminUserActionDialog`；启停和角色仍明确确认，重置/删号同样绑定受控目标，不创建离页后遗留的 imperative confirm。名下有任何作品（含删除中/回收站/待清理）时 `rowActions.canDelete=false`，提示先禁用或清理作品；服务器409仍是最终保护。零作品删号的 `canConfirmDelete(input, username)` 严格相等（不trim/大小写折叠）。冲突计数仅经 `userProjectCountFromError` 收窄，更新弹窗并禁用确认；列表删末项回退一页，详情删号replace回列表。
 - `rowActions(row, currentUserId)` 会禁用当前用户自己那一行的**所有**操作（tooltip 为 `不能对自己执行该操作`）——包括重置密码，因为递增 `token_version` 会让管理员自己被登出；自己改密码应通过 `修改密码`。
-- 测试仅在 node 环境运行（无 jsdom）：`utils/adminUsers.test.ts`（守卫 + 行操作表 + 删除匹配）、`api/admin.test.ts`（URL/method/body/`credentials: 'include'`、400/403/409 的 `detail` 透传）、`utils/validation.test.ts`。
+- 用户名与“详情”链接进入懒加载 `/admin/users/:userId`；详情按真实actor和目标key重建，显示账号信息、最近登录、正常/回收站基础统计和非零删除中提示。正常作品固定owner分页，两个目录深链同owner；相关目录也按当前owner重建。null登录显示“暂无记录”，不推算历史。完整接口/生命周期/异步动作规则见[管理员用户详情与登录契约](../backend/auth-admin.md)。
+- `AdminUserActionsController` 同步busy防双击；异步表单验证及响应交付均复核actor/目标/代次，deactivate清理且可重新activate，支持StrictMode。离页/退出/切身份时Modal自然撤下，迟到回调不toast/reload/导航；不要用全局destroyAll。新建账号仍在列表，不扩展成通用CRUD框架。
+- 测试仅在node环境（无jsdom）：既有 `utils/adminUsers.test.ts`、`api/admin.test.ts`、`utils/validation.test.ts`；新增 `components/adminUsers/adminUserActionsController.test.ts` 直接验证实际异步提交路径，`adminUserDetailsUI.test.ts` 验证展示/路由/空值/失败/owner，`utils/adminUserDetails.test.ts` 验证正十进制安全ID。
 
 ### 管理员作品回收站（`src/pages/AdminRecycleBinPage.tsx`）
 

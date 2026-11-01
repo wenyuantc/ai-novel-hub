@@ -1,0 +1,131 @@
+# 本任务相关规范摘录：frontend/component-guidelines.md
+
+来源：`.trellis/spec/frontend/component-guidelines.md`
+
+规划时 SHA-256：`6fc8b34401f2cf74f2d1f187c57ccccd58195fb202a93d876843a866f67c3f47`
+
+仅按原文摘录相关段落，完整规范是权威来源。源文件有变化时请重读相应段落；不得把摘录当作新增规范。
+
+## 原文 L29–L58
+
+## 概述
+
+表单、按钮、菜单与浮层沿用 Ant Design 5；知页公开首页、外壳和书库的布局、导航链接、状态筛选与装帧使用语义 DOM 和有作用域的 CSS，基础页面组件在 `StudioUI.tsx`。语言环境为中文：`App.tsx` 中使用 AntD `zh_CN`，`main.tsx` 中使用 dayjs `zh-cn`。反馈（`message`、`modal`）始终来自 `App.useApp()`，以继承 `ConfigProvider` 的主题/语言环境——绝不使用静态导入的 `message.success(...)`。
+
+```tsx
+// src/App.tsx
+const colors = studioPalette(resolved)
+<ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: colors.primary } }}>
+  <AntApp>
+    <RouterProvider router={router} />
+  </AntApp>
+</ConfigProvider>
+
+// src/main.tsx
+import 'dayjs/locale/zh-cn'
+dayjs.locale('zh-cn')
+```
+
+---
+
+## 组件结构
+
+函数组件使用 default export、本地 `interface Props`，以及一行描述用途的中文 JSDoc。数据加载使用 `useLoader` 配合经 `useCallback` memo 的 loader；变更操作是带 `try/catch/finally` 的 `async` 处理函数，出错时显示 `message.error(errorMessage(err))`。
+
+### 可复用组件（`src/components/`）
+
+| 组件 | 契约（源自源码） |
+|-----------|------------------------|
+| `AppLayout` | 知页外壳：216px 浅侧栏、56px 顶栏、面包屑与 `<Outlet/>`。`StudioNavigation` 按 `/projects/:pid` 切换全局/项目分组，桌面与移动抽屉共用一份定义，MCP 入口遵循 `mcpEnabled`；项目名称只读 `cachedProject.id === pid` 的缓存。侧栏新建跳 `/projects?create=1`；真实账号菜单保留改密/退出，管理员才显示用户管理。任务计数取 `useTasksStore.active.length`，只在 loaded 后显示，侧栏控制始终挂载的 `<TaskPanel open onOpenChange hideTrigger/>`。移动导航按 `location.key` 关闭，避免在导航 effect 中同步 setState。 |
+| `StudioUI` | `StudioBrand({onClick?})` 在官网页头/页脚与工作区共用，始终链接公开 `/`；hover/focus 显式保持主题前景色，避免 AntD 全局链接悬停色降低暗色可读性，focus-visible 保留主色轮廓。`StudioPage({title, hint?, action?, children})` 提供 `<main>`、h1 与页面边距；`StudioPanel({children})` 为无阴影纸面；`StudioEmpty({title, text, action?})` 提供空态与下一步操作；`ProjectBadge({status})` 使用既有 `PROJECT_STATUS` 枚举标签。 |
+
+## 原文 L125–L149
+
+### 页面模式
+
+- **面板 CRUD**（`WorldPanel`、`CharactersPanel`、`OutlinesPanel`、`ChaptersPanel`）：`const pid = useProjectId()`；`const loader = useCallback(() => worldApi.list(pid), [pid])`；`const { data: items = [], loading, reload } = useLoader(loader)`；在 `Modal` 中使用 AntD `Form.useForm` 进行创建/编辑；用 `Popconfirm` 删除；每次变更成功后调用 `reload()`。
+- **项目级数值**：在会改变字数/章节数的变更之后，调用 `useProjectStore((s) => s.refresh)`（`ChaptersPanel`、`OutlinesPanel`、章节编辑器）。`OverviewPanel` 通过 `setProject(updated)` 回写 PATCH 结果。
+- **破坏性确认**使用 `modal.confirm`（`ProjectListPage` 中的项目删除、编辑器中覆盖已有正文的重新生成）或 `Popconfirm`（行删除）。
+- **路由参数**：`:pid` 使用 `useProjectId()`；用 `Number.isFinite` 拦截无效 id，并渲染 `<Result status="404" …/>`。
+
+### 用户管理页（`src/pages/AdminUsersPage.tsx`）
+
+同级的 `AdminProjectsPage` 提供管理员正常项目列表，`AdminRecycleBinPage` 管理已删除作品；从正常列表进入现有编辑区，归属提示、人工管理能力与自动任务/Reader进度隔离遵守[管理员作品管理跨层契约](../backend/admin-projects.md)。不得通过切换认证用户复用页面。
+
+- AntD `Table`，服务端分页（`adminApi.listUsers({ q, page, page_size })`，`q` 会 trim，为空时省略）并带用户名搜索框。列：用户名（自己那一行标记 `我`）、角色、状态、作品数（含回收站）、`formatTime(created_at)`、操作。作品数非零时提供按 owner 筛选的正常作品/回收站链接。
+- `新建用户` 弹窗：用户名、两次输入初始密码、`设为管理员` 复选框。重置密码弹窗：两次输入新密码。
+- 启用/禁用与授予/撤销管理员都经过 `modal.confirm`。名下有任何作品（含回收站/待清理）时 `rowActions.canDelete=false`，提示可以先禁用或先清理作品；服务器的 409 仍是最终保护。只有零作品用户才能打开删号弹窗，且 `canConfirmDelete(input, username)` 严格相等（不 trim/大小写折叠）才可确认。并发冲突中的 `project_count` 仅经 `userProjectCountFromError` 收窄读取，更新旧弹窗并禁用确认；删掉某页最后一行时回退一页。
+- `rowActions(row, currentUserId)` 会禁用当前用户自己那一行的**所有**操作（tooltip 为 `不能对自己执行该操作`）——包括重置密码，因为递增 `token_version` 会让管理员自己被登出；自己改密码应通过 `修改密码`。
+- 测试仅在 node 环境运行（无 jsdom）：`utils/adminUsers.test.ts`（守卫 + 行操作表 + 删除匹配）、`api/admin.test.ts`（URL/method/body/`credentials: 'include'`、400/403/409 的 `detail` 透传）、`utils/validation.test.ts`。
+
+### 管理员作品回收站（`src/pages/AdminRecycleBinPage.tsx`）
+
+- `/admin/recycle-bin` 是 `RequireAdmin` 保护的 lazy 路由；桌面/移动导航、账户菜单和页名一起维护。传输与生命周期完整契约见[作品回收站](../backend/recycle-bin.md)。
+- `recycleBinApi` 独占列表/恢复/purge 请求；搜索、owner 筛选、分页与末页回退沿用 `useLoader`。桌面表格允许内部横滚，375px 使用卡片，均不展示正文或私人配置。
+- `RecycleProjectModal` 普通恢复确认不自动续跑；purge 要求完整名称逐字相等并明确不可恢复。`deleted_at` 原始微秒字符串直接回传，不能经 Date/格式化时间重建；后端再次判断期限、代次和权限。
+- 忙碌期间同步 ref 防重复提交并禁用关闭/取消；组件卸载、目标代次变化、管理员身份变化使旧响应失效，成功后才刷新列表并目标级 `discard` / `discardProject`。
+- 所有普通作品删除入口共用 `DeleteProjectModal`，统一引用 `PROJECT_DELETE_NOTICE`：移入回收站、保留30天、管理员恢复、自动取消任务并等待、超时作品未删除且已取消任务不自动复原。不能继续把普通删除描述为“永久删除”。
+- 前端仅用 `restorable` 和本地时钟提前禁用明显到期的恢复按钮，最终以后端 UTC 时间为准。测试覆盖精确名称、旧响应/会话失效、到期边界、API请求体与分页；静态UI测试不能代替真实浏览器取消/恢复和移动布局验收。
+
+## 原文 L204–L239
+
+## Props 约定
+
+- Props 是本地 `interface Props`（不导出），在函数签名中解构，默认值内联写出（`existingCount = 0`、`maxHeight = 360`）。
+- 受控值组件遵循 AntD 的 `value` / `onChange` 形式，以便在 `Form.Item` 中使用（`AIConfigSelect`）。
+- 泛型组件以类型参数携带向导类型，使 `onDone` 按类型区分：`WizardGenerator<K extends WizardKind>` → `onDone?: (items: WizardItemMap[K][]) => void`。
+- 回调是可选的（`onDone?.(…)`、`onRunningChange?.(…)`），除非父组件必须响应（`WizardModal` 要求 `onClose`/`onDone`）。
+- 派生类型使用 `Omit<Props, 'open'>`，而不是重复定义接口（`ExportModalInner`）。
+
+---
+
+## 样式模式
+
+- AntD 布局原语（`Layout`、带 `xs`/`xl` 断点的 `Row/Col`、`Space direction="vertical"`、`Card size="small"`）加上内联 `style={{ … }}` 对象。不使用 CSS modules、Tailwind 或 styled-components。
+- 共享的内联样式常量定义在模块级：`const pre: CSSProperties = { whiteSpace: 'pre-wrap', marginBottom: 0 }`（`StoryPreview.tsx`）。模块级常量只放与主题无关的属性；背景 / 边框 / 文字颜色在组件内用 token 合并（`style={{ ...pre, background: token.colorFillQuaternary }}`）。
+- 主题定制通过 `studioPalette(resolved)` 同步 `ConfigProvider theme` 和 CSS 变量（`algorithm` 随明暗切换）；**颜色一律取 `theme.useToken()` 或 `theme/palette.ts`，不得写死**，见下文「主题与配色」。
+- 状态颜色来自标签映射（`CHAPTER_STATUS[s].color`、`PROJECT_STATUS[status].color`），以 `<Tag>` 渲染。
+
+---
+
+## 无障碍
+
+项目依赖 AntD 内置的语义（带标签的 `Form.Item`、可键盘操作的 `Button`/`Menu`/`Modal`）。几乎所有按钮都使用可见的文字标签。已知缺口：编辑器的返回按钮只有图标（`<Button type="text" size="small" icon={<ArrowLeftOutlined />} …/>`），没有 `aria-label`；新增纯图标按钮时，请添加 `aria-label` 或 `title`。
+
+---
+
+## 常见错误
+
+- 使用 `antd` 的静态 `message`/`Modal` 而不是 `App.useApp()`——会丢失语言环境/主题上下文。
+- 允许用户编辑或保存状态为 `generating` 的章节——后端会返回 409；保留 `stuck` 的禁用逻辑。
+- 带着未保存的编辑开始 AI 生成——生成读取的是服务端内容；务必像 `runAI` 那样先 `save()`。
+- 在只注册一次的 `keydown` 监听器中直接捕获 `handleSave`——会形成过期闭包；使用 ref 模式。
+- 在流式过程中关闭 `WizardModal`——这是刻意禁止的；不要添加 `maskClosable` 或页脚关闭按钮。
+- 在关闭状态下渲染 `ExportModalInner`——它只会加载一次章节并显示过期数据。
+- 写死颜色（`'#fafafa'`、`'#f0f0f0'`、`rgba(...)`）——暗色主题下会留下浅色块；`noHardcodedColors.test.ts` 会失败。
+- 用 `window.innerWidth` 判断移动端——不随窗口缩放更新；一律用 `useIsMobile()`。
+- 给控件写固定的大 `minWidth`（如 `minWidth: 320`）——375px 下会撑出横向滚动；用 `min(320px, calc(100vw - 130px))` 之类的上限。
+
+## 原文 L365–L385
+
+### 主题与配色（`10-27-reader-ui`）
+
+- **主题 store** `theme/themeStore.ts` → `useThemeStore`：`mode: 'light' | 'dark' | 'system'`（localStorage `ainovel.theme`，缺失 / 非法 = `system`）、`systemDark`（`matchMedia('(prefers-color-scheme: dark)')`）；
+  `watchSystemTheme()` 由 `App` 挂载时调用并监听 `change`，跟随系统时实时切换；`useResolvedTheme()` = `resolveTheme(mode, systemDark)`。设备级偏好，**不随登录用户重置**。
+- `theme/palette.ts::studioPalette(resolved)` 是知页颜色 token 的唯一字面量来源（浅/暗两套）。`App.tsx` 由此同步 AntD 的主色、语义色、背景、文字、边框与链接；按钮高 36、控件圆角 7、面板圆角 10，主按钮无静态阴影。图表与阅读器原有独立调色板保留。
+- `ThemeSync` 将所有颜色逐项映射为 `--color-<name>`，并同步 `<html data-theme>`、`color-scheme` 和兼容变量 `--app-bg` / `--app-text`。CSS 与 AntD 共同读取 palette，不从 AntD 派生另一套纸面颜色；本项目不用 Tailwind。
+- `index.css` 本地导入 `@fontsource-variable/fraunces` / `@fontsource-variable/geist`；`--font-display` 为 Fraunces/中文宋体，`--font-sans` 为 Geist/苹方，`--radius-card=10px` / `--radius-control=7px`。正文 14px，桌面标题 30px。
+- `ThemeSwitch compact` 在侧栏账号旁显示当前模式图标，点击打开浅色/暗色/跟随系统菜单；非 compact 继续使用三段 `Segmented`。保留 `ainovel.theme` 设备偏好、系统监听及单独导出的主题纯函数，不随账号重置。
+- **取色规则**：
+  - antd 组件与普通 DOM：`const { token } = theme.useToken()`，常用 `colorBgContainer`、`colorFillQuaternary`（浅灰底）、`colorBorderSecondary`（分隔线）、`colorText*`、`colorPrimary` / `colorSuccess` / `colorError` / `colorWarning`、`colorSuccessBg` / `colorErrorBg`（TextDiff 增删底色）、`colorTextLightSolid`（深色顶栏上的白字）。
+  - 非 antd 绘制（关系图、伏笔时间线、评分走势）：`theme/usePalette()` → `chartPalette(resolved)`，浅 / 暗两套（`roles` 节点色、`series` 评分线、`grid`、`muted` 等）。`utils/graphFilter.nodeColor(n, palette)` 第二个参数缺省为浅色调色板；`RelationGraph` 另传 `colorMode={resolved}` 给 React Flow。`api/analysis.deltaColor(delta, token)` 由调用方传入 `colorSuccess` / `colorError`。
+  - 书封（`utils/shelf.coverColor`）与阅读背景（`READER_TONES`）的具体色值也集中在 `palette.ts`。
+- **防回归**：`theme/noHardcodedColors.test.ts` 用 `import.meta.glob(?raw)` 扫描 `src/**/*.{ts,tsx,css}`（不含测试），匹配 `#hex`（3–8 位）、`rgb(a)(`、`hsl(a)(`。白名单只有 `theme/palette.ts`，以及行内带 `// theme-allow` 注释的行（需说明理由）。新增颜色先加到 palette 或改用 token。
+
+### 响应式（`10-27-reader-ui`）
+
+- 文档流里的元素不要用 `100vw` 算宽度：`100vw` 包含竖向滚动条，在有占位滚动条的浏览器（Windows、macOS 设为「始终显示滚动条」）上会横向溢出约 15px；用 `100%` 或让元素独占一行。只有 fixed 定位的 Modal / Drawer 可以用 `100vw`（打开时页面滚动已锁定）。
+
+- 断点 768px：`hooks/useIsMobile()`（`Grid.useBreakpoint()`，`screens.md === false` 即移动端；首帧断点未算出时按桌面），窗口缩放实时更新。**禁止**直接读 `window.innerWidth`。`useModalWidth(desired)`：移动端返回 `calc(100vw - 24px)`。
+- 全局兜底（`index.css`）：`body { overflow-x: hidden }`；`.ant-table-content { overflow-x: auto }`（所有表格内容超宽时表内横向滚动）；≤767px 时表头 `white-space: nowrap`（列被挤窄时整表横向滚动而不是逐字换行）、`.ant-drawer-content-wrapper { max-width: 100vw }`、非 confirm 的 `.ant-modal` 宽 `calc(100vw - 24px)`。因此一般弹窗 / 抽屉无需逐个改宽度；新写的需要精确宽度的弹窗可用 `useModalWidth`。
+- `AppLayout`：移动端顶栏为汉堡按钮（`aria-label="打开菜单"`）、面包屑和账号；全局/项目导航与主题设置均复用左侧 Drawer。`ProjectLayout` 仅负责项目加载、内容与 AgentDock，不再渲染第二个 Sider 或项目菜单；移动内容内边距 12。外壳高 `100dvh`，56px 顶栏以下滚动；AgentDock 桌面高度为 `calc(100dvh - 56px)`。

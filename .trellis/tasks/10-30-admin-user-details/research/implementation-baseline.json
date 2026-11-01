@@ -1,0 +1,23 @@
+{
+  "head": "bd45ae0186d632eab3e7ae8a2ea0fede273a84b1",
+  "branch": "codex/admin-user-details",
+  "status": [
+    " M .codex/config.toml",
+    " M .gitignore",
+    " M .trellis/tasks/10-30-admin-user-details/check.jsonl",
+    " M .trellis/tasks/10-30-admin-user-details/implement.jsonl",
+    " M .trellis/tasks/10-30-admin-user-details/prd.md",
+    " M .trellis/tasks/10-30-admin-user-details/task.json",
+    "?? .agents/skills/source-command-trellis-continue/",
+    "?? .agents/skills/source-command-trellis-finish-work/",
+    "?? .trellis/tasks/10-30-admin-user-details/design.md",
+    "?? .trellis/tasks/10-30-admin-user-details/implement.md",
+    "?? .trellis/tasks/10-30-admin-user-details/research/"
+  ],
+  "protected": {
+    ".codex/config.toml": "e7be6020435e28864179736b623e85db0894d8aa2fde4889f1d3aee19697b994",
+    ".gitignore": "b401c94dfc1295101b37d8b71eb83f5144cee9f6489473b019943f61d65f6c0f",
+    ".agents/skills/source-command-trellis-continue/SKILL.md": "440b97d411beb1b4542db1eaf55855c06c24dc26c7c2ad0a1650ec906814010a",
+    ".agents/skills/source-command-trellis-finish-work/SKILL.md": "07f6348c220b16fd1f0fc28113135856d7e1d242ec4d7e7917f08b6f19df84e5"
+  }
+}

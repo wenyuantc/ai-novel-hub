@@ -1,4 +1,9 @@
-{"file": ".trellis/spec/backend/auth-admin.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/admin-projects.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "核对原用户写操作、审计、最后管理员与token_version规则未退化，专用详情不扩展凭据权限。"}
+{"file": ".trellis/spec/backend/admin-projects.md", "reason": "复核固定owner、工作区归属、普通用户404和AI/私有资源/Reader隔离。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/backend-database-excerpts.md", "reason": "复核SQL单快照聚合、零资源、当前正文计数和users父表迁移不丢子行。 使用.trellis/spec/backend/database-guidelines.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/backend-quality-excerpts.md", "reason": "必须通过ruff与pytest全套，使用隔离tmp_path/FakeLLM，遵守locale与禁止凭据披露规则。 使用.trellis/spec/backend/quality-guidelines.md的本任务相关原文摘录。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/frontend-component-excerpts.md", "reason": "检查账号动作复用、确认框/异步清理、375px明暗主题与懒加载。 使用.trellis/spec/frontend/component-guidelines.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/frontend-type-excerpts.md", "reason": "检查新API/type精确镜像、Cookie与错误透传、null登录和UTC时间解析。 使用.trellis/spec/frontend/type-safety.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/frontend-quality-excerpts.md", "reason": "必须通过Vitest/lint/build，核对包体积与行为测试，不以静态源码断言代替关键流程。 使用.trellis/spec/frontend/quality-guidelines.md的本任务相关原文摘录。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/auth-contracts.md", "reason": "对抗检查登录并发禁用/重置、已核验版本快照、时间不倒退和持久化失败不发成功会话。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/current-contracts.md", "reason": "对照真实生命周期和UI旧薄弱点，检查计数分组、确认框失效与owner深链。 包含recycle-bin.md与state-management.md相关生命周期/身份重置约束的源码核实。"}

@@ -1,0 +1,92 @@
+# 本任务相关规范摘录：frontend/quality-guidelines.md
+
+来源：`.trellis/spec/frontend/quality-guidelines.md`
+
+规划时 SHA-256：`720fff57ce5b159a645497e6c4de7ab1479bf65166d1e71fd12ffe5c04f00a30`
+
+仅摘录相关原文，完整规范是权威来源；源文件变化时重读相应段落。本摘录不是新增规范。
+
+## 原文 L1–L31
+
+# 质量规范
+
+> 前端开发的代码质量标准。
+
+---
+
+## 概述
+
+质量门禁是在 `frontend/` 下运行的三个 npm 脚本：
+
+```bash
+npm run lint && npm run build && npm test
+```
+
+- `lint` → `eslint .`（flat config `eslint.config.js`：`@eslint/js` recommended、`typescript-eslint` recommended、`eslint-plugin-react-hooks` flat recommended、`react-refresh/only-export-components` 设为 warn 并启用 `allowConstantExport`、`@typescript-eslint/no-explicit-any: error`）。
+- `build` → `tsc -b && vite build`（类型检查是构建的一部分；严格的 tsconfig 将未使用的局部变量/参数视为错误）。
+- `test` → `vitest run`（`environment: 'node'`、`include: ['src/**/*.test.ts']`）。
+
+### 开发服务器代理（`vite.config.ts`）
+
+`/api` 被代理到 `process.env.VITE_BACKEND_URL ?? 'http://localhost:8000'`，并设置 `changeOrigin: true`。对于 `text/event-stream` 响应，代理会改写响应头，确保流不会被缓冲或压缩：
+
+```ts
+proxy.on('proxyRes', (proxyRes) => {
+  if (String(proxyRes.headers['content-type'] ?? '').startsWith('text/event-stream')) {
+    proxyRes.headers['cache-control'] = 'no-cache, no-transform'
+    proxyRes.headers['x-accel-buffering'] = 'no'
+  }
+})
+```
+后端发送同样的响应头（`backend/app/api/sse.py` 中的 `SSE_HEADERS`）。如果修改了该代理或反向代理，务必保持两端一致；否则生成的文本会在最后一次性全部到达。
+
+## 原文 L39–L86
+
+## 禁止模式
+
+- `any`——lint 报错；使用 `unknown` 并收窄类型。
+- 在页面/组件中直接调用 `fetch`——使用 `src/api/*`（保留 `credentials: 'include'`、`ApiError`、401 处理）。
+- 用 `EventSource` 处理 AI 流——改写是 POST，任务订阅虽是 GET 也必须走 `subscribeTask`（`getSSE`：统一 `ApiError` / 401 / 中止 / 重连）。
+- 在页面里直接对 generate / polish / wizard 做流式请求——它们返回 202 `Task`，实时输出只能订阅 `/tasks/{id}/stream`。
+- 在组件卸载 / 离开页面时取消后台任务——卸载只 `detach`，取消必须是用户显式操作（`cancel()`）。
+- 静态的 AntD `message` / `Modal.confirm`——使用 `App.useApp()`。
+- 直接 `dayjs(serverTime)` / `new Date(serverTime)`——使用 `formatTime` / `parseServerTime`。
+- 向 `useLoader` 传入内联的（未 memo 化的）loader 函数。
+- 在 `client.ts` 之外硬编码 `/api/v1` 路径。
+- 在用户操作中静默吞掉错误——应显示 `message.error(errorMessage(err))`（有意静默捕获包括 `useProjectStore.refresh()` 的临时网络失败和编辑器的 `reloadChapter()`；项目刷新得到明确404时必须撤下旧项目，不能继续保留不可访问内容）。
+
+---
+
+## 必需模式
+
+- 异步处理函数：`setX(true)` → `try { await …; message.success(…) } catch (err) { message.error(errorMessage(err)) } finally { setX(false) }`（见 `WorldPanel.handleSave`、`ExportModalInner.handleExport`）。
+- 不等待结果的 promise 用 `void` 标记（`void load()`、`void refreshProject()`、`onClick={() => void handleSave()}`）。
+- 同步流式 UI（局部改写）使用 `useStreamTask` 并传递 `signal`；后台任务 UI 使用 `useTaskStream`，挂载时按资源（`chapter_id` / `project_id + kind`）查询活动任务并自动接上，创建 / 重试 / 取消后调用 `useTasksStore.track(task)`。两者在运行期间都要提供可见的停止（取消）按钮。
+- 忙碌时禁用会冲突的控件（`disabled={task.running}`、`loading={saving}`、`confirmLoading`）。
+- 用户可见的字符串使用简体中文；代码注释与现有文件一致，使用中文 JSDoc 单行注释。
+- 新增的用户级 store 要在 `App.tsx` 中随 `userId` 变化而重置。
+
+---
+
+## 测试要求
+
+- 纯逻辑（解析器、格式化函数、分组）需配套同目录的 `*.test.ts` Vitest 测试。现有测试套件包括 `src/api/sse.test.ts`（SSE 解析器 + `runGeneration` stub-fetch）、`src/api/tasks.test.ts`（`subscribeTask` 快照覆盖 / 重连退避 / done 与 error 分派 / 404 不重连 / 中止，以及 `queueLabel`、`taskLink`、查询串）、`src/stores/tasks.test.ts`（`pollInterval` 3s/15s、`upsertActive`、`countFinished`）、`src/utils/time.test.ts`（UTC 解析）、`src/utils/textOffset.test.ts`（UTF-16 ↔ 码点）、`src/utils/textDiff.test.ts`（逐字 diff 与增删字数）、`src/api/relationships.test.ts`（视角称呼、类型选项、亲密度颜色）、`src/api/entityTasks.test.ts`（结果收窄、建议 → with-relations / batch 载荷）、`src/api/cards.test.ts`（大小 / JSON 校验、冲突默认跳过、重命名预览）、`src/api/characters.test.ts`（定位兼容旧值、主角判定、别名）、`src/utils/orgTree.test.ts`、`src/utils/world.test.ts`、`src/utils/graphFilter.test.ts`、`src/api/analysis.test.ts`（分析状态标签、评分差值 / 走势折线、回写条目「前 → 后」（含三个伏笔 kind）、分组与待确认计数、重写请求构造与校验、`parseAnalyzeDone`、接口路径与 confirm overrides 请求体）、`src/api/outlines.test.ts`（展开状态 / 章节号范围 / 可建章、续写预览删改后追加与预计章节号（AC1）、展开结果收窄与保留项全字段同步（AC3）、单条删除、细纲校验、文件解析 2MB、导出文件名、接口路径）、`src/utils/outline.test.ts`（卷内按 sort 分组）、`src/utils/batch.test.ts`（默认范围 / 生成到第 N 章、横幅状态、续跑位置、排队批量标签、清单行文案、耗时文案、汇总收窄；`api/tasks.test.ts` 覆盖 paused 终止 / reset / 章节事件、`stores/tasks.test.ts` 覆盖待审核留在列表与轮询节奏）、`src/api/wizard.test.ts`（向导进度定位与完成 / 跳过（AC7）、大纲向导 mode）、`src/utils/styles.test.ts`（风格解析优先级四种情况、继承展示文案、下拉分组、引用数与 409 读取、导入汇总、表单 trim、示例字数）、`src/utils/prompts.test.ts`（校验错误格式化 / 读取 / 按段排序 / 行定位、分类分组、徽标、锁定段切分、导入结果汇总）、`src/utils/jsonFile.test.ts`、`src/api/styles.test.ts`（风格 / 模板接口路径、`ApiError.body` 保留 `references` / `errors`、提取与试写的 SSE 收窄）、`src/api/foreshadows.test.ts`（超期 / 长线判定、章节说明、历史值、表单预检与请求体、快捷操作默认章节、确认 overrides 只发改动字段、候选规范化、提醒五档与徽标、时间线线段 / 标记 / 范围 / 刻度、接口路径）、`src/utils/kb.test.ts`（文档状态文案与轮询判定、上传前检查（类型 / 20MB / 200 个）、分数格式化、索引横幅（建索引中优先 / 需要重建 / 无向量模型）、记忆类型标签）、`src/api/kb.test.ts`（知识库 / 记忆接口路径、multipart 上传、409 `document_id`、`modelTypesFor` / `embeddingDimension`）、`src/api/client.test.ts`（credentials、错误 detail、204、401 处理器、FormData 不设 Content-Type）、`src/theme/noHardcodedColors.test.ts`（禁止写死颜色，见 component-guidelines「主题与配色」）、`src/theme/themeStore.test.ts`（模式解析、system 跟随 matchMedia 变化）、`src/utils/shelf.test.ts`（书架搜索 / 筛选 / 四种排序、偏好容错、统计、继续写作 / 阅读入口、书封颜色稳定且 12 色相两种主题对比度 ≥ 4.5）、`src/utils/reader.test.ts`（阅读设置默认值与合法范围、ratio 计算与恢复、起始章节、目录分卷、相邻章节、方向键）等，必须全部通过（`npm test`）。
+- 测试环境是 `node`（没有 jsdom）；没有组件测试。需要 DOM/`fetch` 的代码通过 stub 全局对象来测试。
+- 修改 `sse.ts` 或 `client.ts` 时，必须遵循 [hook-guidelines.md](./hook-guidelines.md#场景sse-客户端解析器) 和 [type-safety.md](./type-safety.md#场景api-客户端契约) 中的「必需的测试」清单。
+- 测试名可以使用中文，与现有测试套件保持一致（`it('处理跨 chunk 截断', …)`）。
+
+---
+
+## 代码评审清单
+
+- [ ] 在 `frontend/` 中 `npm run lint && npm run build && npm test` 通过。
+- [ ] `src/api/types.ts` 中新增/修改的传输类型与 `backend/app/schemas/*.py` 一致（字段名、可空性、`Literal` 枚举），且标签 `Record` 覆盖所有枚举值。
+- [ ] PATCH 请求体遵循后端语义（省略即保持不变；空 `api_key` 保留原密钥；绝不发送 `status: 'generating'`）。
+- [ ] 所有网络调用都经过 `src/api/`；错误通过 `errorMessage` 显示。
+- [ ] 流式：传递了 `signal`、存在停止按钮、中止按 `aborted` 而非错误处理、运行期间输入框只读/禁用。
+- [ ] 后台任务：卸载只断开订阅；挂载自动接上活动任务；取消 / 失败 / 中断 / `detached` 各分支都处理；`snapshot` 覆盖文本；离开守卫不因任务运行而拦截。
+- [ ] 章节编辑器的不变式保持完好：AI 操作前自动保存、Ctrl/Cmd+S、`useBlocker` + `beforeunload` 防护（仅未保存 / 改写待采纳）、卡在 `generating`（且无活动任务）时可复位且禁用保存。
+- [ ] 服务端时间戳使用 `formatTime` 渲染。
+- [ ] 任何新增的用户级全局状态在登出/401 时都会被重置。
+- [ ] 没有写死的颜色（`noHardcodedColors.test.ts` 通过）；暗色主题下新增界面没有浅色块；375px 下没有页面级横向溢出。
+- [ ] 包体积仍低于 `chunkSizeWarningLimit`（检查 `vite build` 输出，`vendor-antd` 是最大的 chunk）；图谱库没有被主包或 vendor 分组引用（`RelationGraph-*.js` 单独存在）。

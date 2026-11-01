@@ -1,0 +1,86 @@
+{
+  "status": "approved_executing",
+  "commits": [
+    {
+      "message": "feat(admin): 新增用户详情与最近登录统计",
+      "files": [
+        "backend/alembic/versions/0028_user_last_login.py",
+        "backend/app/api/v1/admin.py",
+        "backend/app/models/entities.py",
+        "backend/app/schemas/admin.py",
+        "backend/app/services/admin_service.py",
+        "backend/app/services/auth_service.py",
+        "backend/tests/test_admin_user_details.py",
+        "backend/tests/test_migrations.py",
+        "frontend/src/api/admin.test.ts",
+        "frontend/src/api/admin.ts",
+        "frontend/src/api/types.ts",
+        "frontend/src/components/adminUsers/AdminUserActionButtons.tsx",
+        "frontend/src/components/adminUsers/AdminUserActionDialog.tsx",
+        "frontend/src/components/adminUsers/adminUserActionsController.test.ts",
+        "frontend/src/components/adminUsers/adminUserActionsController.ts",
+        "frontend/src/components/adminUsers/adminUserDetailsUI.test.ts",
+        "frontend/src/components/adminUsers/useAdminUserActions.ts",
+        "frontend/src/pages/AdminProjectsPage.tsx",
+        "frontend/src/pages/AdminRecycleBinPage.tsx",
+        "frontend/src/pages/AdminUserDetailsPage.tsx",
+        "frontend/src/pages/AdminUsersPage.tsx",
+        "frontend/src/router.tsx",
+        "frontend/src/utils/adminUserDetails.test.ts",
+        "frontend/src/utils/adminUserDetails.ts"
+      ]
+    },
+    {
+      "message": "docs(admin): 固化用户详情契约与验收记录",
+      "files": [
+        ".trellis/spec/backend/auth-admin.md",
+        ".trellis/spec/backend/database-guidelines.md",
+        ".trellis/spec/backend/index.md",
+        ".trellis/spec/frontend/component-guidelines.md",
+        ".trellis/spec/frontend/index.md",
+        ".trellis/spec/frontend/type-safety.md",
+        ".trellis/tasks/10-30-admin-user-details/check.jsonl",
+        ".trellis/tasks/10-30-admin-user-details/commit-plan.md",
+        ".trellis/tasks/10-30-admin-user-details/design.md",
+        ".trellis/tasks/10-30-admin-user-details/implement.jsonl",
+        ".trellis/tasks/10-30-admin-user-details/implement.md",
+        ".trellis/tasks/10-30-admin-user-details/prd.md",
+        ".trellis/tasks/10-30-admin-user-details/research/auth-contracts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/backend-checks.md",
+        ".trellis/tasks/10-30-admin-user-details/research/backend-database-excerpts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/backend-error-excerpts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/backend-implementation.md",
+        ".trellis/tasks/10-30-admin-user-details/research/backend-quality-excerpts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/browser-runtime-final.json",
+        ".trellis/tasks/10-30-admin-user-details/research/browser-verification.md",
+        ".trellis/tasks/10-30-admin-user-details/research/commit-plan.json",
+        ".trellis/tasks/10-30-admin-user-details/research/current-contracts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/environment-checks.md",
+        ".trellis/tasks/10-30-admin-user-details/research/frontend-checks.md",
+        ".trellis/tasks/10-30-admin-user-details/research/frontend-component-excerpts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/frontend-implementation.md",
+        ".trellis/tasks/10-30-admin-user-details/research/frontend-quality-excerpts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/frontend-type-excerpts.md",
+        ".trellis/tasks/10-30-admin-user-details/research/full-scope-check.md",
+        ".trellis/tasks/10-30-admin-user-details/research/implementation-baseline.json",
+        ".trellis/tasks/10-30-admin-user-details/task.json",
+        ".trellis/tasks/10-30-admin-user-details/verification.md"
+      ]
+    }
+  ],
+  "excluded_preexisting": [
+    ".codex/config.toml",
+    ".gitignore",
+    ".agents/skills/source-command-trellis-continue/",
+    ".agents/skills/source-command-trellis-finish-work/"
+  ],
+  "push": false,
+  "archive_and_journal": "仅在工作提交经用户一次确认并完成后，按finish-work另做归档/会话记账提交。",
+  "approval": "用户确认，按计划提交和收尾",
+  "executed_work_commits": [
+    {
+      "message": "feat(admin): 新增用户详情与最近登录统计",
+      "commit": "84688d7c4c7324a85270bb451492867442011b24"
+    }
+  ]
+}

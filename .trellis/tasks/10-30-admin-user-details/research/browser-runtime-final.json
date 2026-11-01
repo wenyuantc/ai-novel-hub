@@ -1,0 +1,70 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "details_manager",
+      "last_login_at": "2026-11-01 11:36:53.434099",
+      "is_active": 1,
+      "is_admin": 1
+    },
+    {
+      "id": 2,
+      "username": "details_alice",
+      "last_login_at": "2026-11-01 11:19:59.660798",
+      "is_active": 1,
+      "is_admin": 0
+    },
+    {
+      "id": 3,
+      "username": "details_bob",
+      "last_login_at": "2026-11-01 11:36:23.333771",
+      "is_active": 1,
+      "is_admin": 0
+    }
+  ],
+  "audit": [
+    {
+      "action": "user.create",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    },
+    {
+      "action": "user.update",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    },
+    {
+      "action": "user.update",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    },
+    {
+      "action": "user.update",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    },
+    {
+      "action": "user.update",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    },
+    {
+      "action": "user.reset_password",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    },
+    {
+      "action": "user.delete",
+      "result": "success",
+      "actor_username": "details_manager",
+      "target_id": 4
+    }
+  ],
+  "fake_model_calls": 0
+}

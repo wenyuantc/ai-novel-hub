@@ -37,7 +37,7 @@
 | [拆书导入](./book-import.md) | `book_imports` 解析记录（切章强规则、序章 / 目录区 / 兜底、docx / epub、子进程正则）、7 种校正与提示、修订号 409 `code = stale_revision`、单事务开始导入、`book.import` 断点 / 暂停 / 跳过 / 只写空字段 | 已填写 |
 | [项目智能体](./agent.md) | Provider 工具调用协议（`chat_tools_stream`、`TOOLS_UNSUPPORTED`、三家差异、`provider_metadata` 重放）、工具层与新增工具检查清单（kind 分级、`validate_references`、`id_model`）、提案 / 自动执行（首批 ≤3 项）/ 确认时预览比较 409、效果快照与撤销（`EFFECT_TABLES`、冲突检测、外键顺序）、`agent.turn` 断点续跑、安全规则；`external` kind、动态 MCP 工具、Skill 读工具与强制启用 | 已填写 |
 | [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
-| [管理员与会话](./auth-admin.md) | 管理员初始化环境变量、`/admin/users`、防护规则、`token_version` 会话失效、修改密码、全局 Skill 的管理员权限、`MCP_ENABLED` | 已填写 |
+| [管理员与会话](./auth-admin.md) | 管理员初始化、用户列表/详情、最近成功登录与三组资源计数、账号防护/会话版本、共享操作异步边界、全局Skill权限与MCP开关 | 已填写 |
 | [管理员系统设置](./system-settings.md) | 六项白名单、持久覆盖优先级、revision与原子审计发布、MCP真实调用边界、30秒公开同步及逐项恢复 | 已填写 |
 | [管理员首页与全站统计](./admin-dashboard.md) | 含回收站的总量、北京时间日快照、独立任务累计、UUID执行身份、24h异常、历史缺口及刷新 | 已填写 |
 | [管理员全站任务监控](./admin-task-monitoring.md) | 现存安全元数据、单SQL筛选计数、本轮时间、持久取消受理/审计、资源屏障与轮次CAS、5秒刷新 | 已填写 |

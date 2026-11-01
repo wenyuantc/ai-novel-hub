@@ -1,4 +1,8 @@
-{"file": ".trellis/spec/backend/auth-admin.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/admin-projects.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "后续规划及实现时遵守该功能相关的现有契约；建档阶段尚未收敛技术设计。"}
+{"file": ".trellis/spec/backend/auth-admin.md", "reason": "保留真实管理员权限、自身/最后管理员/删号保护、会话版本及原账号操作审计契约。"}
+{"file": ".trellis/spec/backend/admin-projects.md", "reason": "复用按owner的作品列表、章节聚合与管理工作区；不得放开他人模型/私有配置/任务输出/阅读进度。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/backend-database-excerpts.md", "reason": "SQL聚合、UTC、事务所有权、字数字段及迁移父表/外键完整性。 使用.trellis/spec/backend/database-guidelines.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/backend-error-excerpts.md", "reason": "沿用AppError和安全中文detail；不回显SQL、密码和私人字段。 使用.trellis/spec/backend/error-handling.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/frontend-component-excerpts.md", "reason": "沿用AntD、路由懒加载、账号弹窗、主题/窄屏规范；窄共享操作而非复制整页。 使用.trellis/spec/frontend/component-guidelines.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/frontend-type-excerpts.md", "reason": "详情schema类型镜像、Cookie API、错误收窄、无时区时间按UTC解析及原字段兼容。 使用.trellis/spec/frontend/type-safety.md相关原文摘录，避免超过单文件注入上限。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/auth-contracts.md", "reason": "登录标记的精确入口、并发认证快照、原位迁移及注册/管理员创建区别的本任务调研。"}
+{"file": ".trellis/tasks/10-30-admin-user-details/research/current-contracts.md", "reason": "生命周期、聚合、窄账号动作复用、目标请求失效及owner深链的真实源码证据。 包含recycle-bin.md与state-management.md相关生命周期/身份重置约束的源码核实。"}
