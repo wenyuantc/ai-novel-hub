@@ -1,5 +1,5 @@
 {
-  "status": "work_commits_completed",
+  "status": "work_commits_and_closeout_completed",
   "commits": [
     {
       "message": "feat(admin): 新增用户详情与最近登录统计",
@@ -88,5 +88,6 @@
     }
   ],
   "publish_to": "main",
-  "additional_approval": "用户在工作提交与归档过程中明确要求：合并到main并推送"
+  "additional_approval": "用户在工作提交与归档过程中明确要求：合并到main并推送",
+  "archive_commit": "113ade53c768a0e3a47d9a257b77b6b5d7922c47"
 }

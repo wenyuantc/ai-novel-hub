@@ -27,11 +27,12 @@
     "source": "admin-feature-inventory",
     "implementation_approved": "true",
     "quality_gate": "passed",
-    "delivery_stage": "archived_pending_journal",
+    "delivery_stage": "finished",
     "commit_approved": "true",
     "work_commits": [
       "84688d7c4c7324a85270bb451492867442011b24",
       "ee6480433c17939fcb7ffdaad0dc7aebbbbe3ebd"
-    ]
+    ],
+    "archive_commit": "113ade53c768a0e3a47d9a257b77b6b5d7922c47"
   }
 }
