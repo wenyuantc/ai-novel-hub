@@ -1,5 +1,5 @@
 {
-  "status": "approved_executing",
+  "status": "work_commits_completed",
   "commits": [
     {
       "message": "feat(admin): 新增用户详情与最近登录统计",
@@ -74,13 +74,19 @@
     ".agents/skills/source-command-trellis-continue/",
     ".agents/skills/source-command-trellis-finish-work/"
   ],
-  "push": false,
+  "push": true,
   "archive_and_journal": "仅在工作提交经用户一次确认并完成后，按finish-work另做归档/会话记账提交。",
   "approval": "用户确认，按计划提交和收尾",
   "executed_work_commits": [
     {
       "message": "feat(admin): 新增用户详情与最近登录统计",
       "commit": "84688d7c4c7324a85270bb451492867442011b24"
+    },
+    {
+      "message": "docs(admin): 固化用户详情契约与验收记录",
+      "commit": "ee6480433c17939fcb7ffdaad0dc7aebbbbe3ebd"
     }
-  ]
+  ],
+  "publish_to": "main",
+  "additional_approval": "用户在工作提交与归档过程中明确要求：合并到main并推送"
 }

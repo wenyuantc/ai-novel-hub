@@ -1,6 +1,6 @@
 # 用户详情提交计划
 
-状态：最终完整质量门禁及规范同步已通过；用户明确确认“按计划提交和收尾”，本轮执行两批工作提交，再分开归档与记录会话。
+状态：最终完整质量门禁及规范同步已通过；用户明确确认“按计划提交和收尾”，两批工作提交已完成（84688d7、ee64804），随后独立归档与记录会话。
 
 ## 1. feat(admin): 新增用户详情与最近登录统计
 
@@ -71,4 +71,4 @@
 - `/Users/wenyuan/IdeaProjects/my/ai-novel-hub/.agents/skills/source-command-trellis-continue`
 - `/Users/wenyuan/IdeaProjects/my/ai-novel-hub/.agents/skills/source-command-trellis-finish-work`
 
-不amend、不push；工作提交完成后再单独归档与记录会话，不与工作提交交错。
+不amend；原计划不push，用户随后明确追加“合并到main并推送”，收尾提交完成后按此授权执行普通非强制推送。工作提交后单独归档与记录会话，不与工作提交交错。
