@@ -88,7 +88,8 @@
         ".trellis/tasks/10-30-admin-system-settings/research/implementation-baseline.json",
         ".trellis/tasks/10-30-admin-system-settings/task.json",
         ".trellis/tasks/10-30-admin-system-settings/verification.md"
-      ]
+      ],
+      "commit": "78ed9ba8458a346a546198cf062181b1e514f03a"
     }
   ],
   "excluded": [

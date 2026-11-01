@@ -170,4 +170,3 @@ async def recover_external(db, *, task_id: int | None = None, stale_only: bool =
 `test_executing_external_failed_on_engine_restart`、`test_stale_executing_external_failed_on_retry`。
 
 ---
-

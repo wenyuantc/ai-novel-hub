@@ -3,7 +3,7 @@
   "name": "admin-system-settings",
   "title": "管理员系统设置",
   "description": "在管理后台查看和调整注册开关、任务并发、MCP 等运行设置，明确配置来源与生效方式。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "fullstack",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "aiNovel",
   "assignee": "aiNovel",
   "createdAt": "2026-10-30",
-  "completedAt": null,
+  "completedAt": "2026-11-01",
   "branch": "codex/admin-system-settings",
   "base_branch": "main",
   "worktree_path": null,
@@ -23,7 +23,7 @@
   "relatedFiles": [],
   "notes": "",
   "meta": {
-    "planning_stage": "work_committed",
+    "planning_stage": "completed",
     "source": "admin-feature-inventory",
     "implementation_approved": "true",
     "planning_review_status": "approved_by_explicit_direct_start",
@@ -36,12 +36,12 @@
     "postgres_runtime_verified": "false",
     "spec_updated": "true",
     "commit_approved": "true",
-    "verification_report": ".trellis/tasks/10-30-admin-system-settings/verification.md",
+    "verification_report": ".trellis/tasks/archive/2026-11/10-30-admin-system-settings/verification.md",
     "backend_tests": "1332 passed, 1 warning, exit 0; final focused 40 passed",
     "full_scope_check": "passed",
     "closeout_approved": "true",
     "merge_target": "main",
     "push_requested": "true",
-    "work_commits": "5a8a1bc6c37f077d6d0db2169dd91d8f8c0f45bc"
+    "work_commits": "5a8a1bc6c37f077d6d0db2169dd91d8f8c0f45bc,78ed9ba8458a346a546198cf062181b1e514f03a"
   }
 }
