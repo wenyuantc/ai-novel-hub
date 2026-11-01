@@ -955,3 +955,38 @@
 ### Next Steps
 
 - 在可用PostgreSQL环境补真实行锁/并发及迁移实测；保留当前已说明的环境边界
+
+
+## Session 30: 管理员系统设置交付与分支收口
+<!-- trellis-session: v=2 fp=17be5abaf052e17e -->
+
+**Date**: 2026-11-01
+**Task**: 管理员系统设置交付与分支收口
+**Branch**: `codex/admin-system-settings`
+
+### Summary
+
+完成系统设置六项持久热覆盖与安全审计，验证通过并归档，按用户授权合并main推送。
+
+### Main Changes
+
+- 六项设置、原子审计发布、公开开关同步与逐项恢复
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5a8a1bc6c37f077d6d0db2169dd91d8f8c0f45bc` | feat(admin): 新增系统设置与运行时配置覆盖 |
+| `78ed9ba8458a346a546198cf062181b1e514f03a` | docs(admin): 固化系统设置契约与验收记录 |
+
+### Testing
+
+- [OK] 后端1332及最终定向40通过，前端634及浏览器通过；PG未实测
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 快进合并main并推送origin/main，保留用户原有无关修改
