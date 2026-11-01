@@ -10,4 +10,3 @@ export function quotaDescription(item: QuotaItem): string {
   const value = item.effective_limit === null ? '不限额' : String(item.effective_limit)
   return item.config.mode === 'inherit' ? `继承默认：${value}` : item.config.mode === 'unlimited' ? '用户指定：不限额' : `用户指定：${value}`
 }
-

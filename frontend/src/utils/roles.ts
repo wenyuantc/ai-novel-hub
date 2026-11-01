@@ -11,4 +11,3 @@ export function permissionSelection(codes: PermissionCode[], definitions: Permis
   for (const code of codes) visit(code)
   return definitions.filter((item) => selected.has(item.code)).map((item) => item.code)
 }
-
