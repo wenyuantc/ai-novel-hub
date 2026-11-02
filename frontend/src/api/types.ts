@@ -147,6 +147,7 @@ export type AuditAction =
   | 'role.create' | 'role.update' | 'role.delete' | 'user.roles.update' | 'user.roles.bootstrap' | 'user.quotas.update'
   | 'task.cancel_request'
   | 'system_settings.update'
+  | 'backup.settings.update' | 'backup.run.accept' | 'backup.download.authorize'
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
   | 'project.update' | 'project.delete' | 'project.restore' | 'project.purge' | 'project.expire'
   | 'chapter.create' | 'chapter.create_from_outlines'
@@ -155,7 +156,7 @@ export type AuditAction =
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
   | 'skill.restore_builtin' | 'audit.cleanup'
-export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'role'
+export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'role' | 'backup_settings' | 'backup_run'
 export type AuditResult = 'success' | 'failure'
 export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
 export type AuditField =
@@ -172,6 +173,7 @@ export interface AuditValueChange {
 }
 
 export interface AuditSummary {
+  backup_change?: BackupAuditChange | null
   rbac_change?: { source_role_id: number | null; role_ids_before: number[]; role_ids_after: number[]; permissions_before: PermissionCode[]; permissions_after: PermissionCode[]; quotas: { metric: 'project_count' | 'task_concurrency'; before: QuotaConfig; after: QuotaConfig }[]; ids_truncated: boolean } | null
   settings_changes?: SystemSettingAuditChange[]
   changed_fields: AuditField[]
@@ -3219,5 +3221,106 @@ export type PermissionCode =
   | 'recycle_bin.read' | 'recycle_bin.restore' | 'recycle_bin.purge'
   | 'tasks.read' | 'tasks.cancel' | 'audit.read' | 'audit.cleanup'
   | 'settings.read' | 'settings.update'
+  | 'backups.read' | 'backups.configure' | 'backups.run' | 'backups.download'
   | 'workshop.read' | 'workshop.approve' | 'workshop.reject' | 'workshop.publish' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'global_skills.create' | 'global_skills.update' | 'global_skills.references' | 'global_skills.delete' | 'global_skills.restore_builtin'
+
+
+// 实例级整库备份；不与个人作品 JSON BackupOptions 混用。
+export type BackupDestination = 'local' | 's3'
+export type BackupSource = 'manual' | 'scheduled'
+export type BackupRunStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted'
+export type BackupArtifactStatus = 'pending' | 'ready' | 'failed' | 'unknown' | 'deleting' | 'deleted' | 'missing'
+export type BackupNotificationStatus = 'not_configured' | 'pending' | 'sending' | 'sent' | 'failed' | 'unknown'
+export type BackupCleanupStatus = 'not_required' | 'pending' | 'succeeded' | 'failed' | 'unknown'
+export interface BackupConfiguration {
+  schedule_enabled: boolean
+  schedule_time: string
+  local_enabled: boolean
+  s3_enabled: boolean
+  local_keep: number
+  s3_keep: number
+  encryption_enabled: boolean
+  s3_endpoint: string
+  s3_region: string
+  s3_bucket: string
+  s3_prefix: string
+  smtp_host: string
+  smtp_port: number
+  smtp_security: 'ssl' | 'starttls'
+  smtp_from_address: string
+  smtp_recipients: string[]
+}
+export type BackupSettingKey = keyof BackupConfiguration | BackupSecretKey
+export interface BackupAuditChange { fields: BackupSettingKey[]; settings_revision: number; execution_key: string | null; destination: BackupDestination | null; encrypted: boolean | null }
+export type BackupSecretKey = 'backup_password' | 's3_access_key' | 's3_secret_key' | 'smtp_username' | 'smtp_password'
+/** 秘密省略保持、非空替换、null显式清除；普通配置不接受null。 */
+export type BackupSettingsChanges = Partial<BackupConfiguration> & Partial<Record<BackupSecretKey, string | null>>
+export interface BackupSettingsOut extends BackupConfiguration {
+  revision: number
+  updated_at: string | null
+  timezone: 'Asia/Shanghai'
+  backup_password_configured: boolean
+  s3_access_key_configured: boolean
+  s3_secret_key_configured: boolean
+  smtp_username_configured: boolean
+  smtp_password_configured: boolean
+}
+export interface BackupSettingsUpdate { revision: number; changes: BackupSettingsChanges }
+export interface BackupManualRequest { request_id: string; settings_revision: number }
+export interface BackupArtifactOut {
+  id: number
+  destination: BackupDestination
+  status: BackupArtifactStatus
+  filename: string | null
+  size_bytes: number | null
+  checksum_sha256: string | null
+  error_code: string | null
+  error_message: string | null
+  downloadable: boolean
+  deleted_at: string | null
+}
+export interface BackupRunOut {
+  id: number
+  execution_key: string
+  source: BackupSource
+  actor_user_id: number | null
+  actor_username: string | null
+  settings_revision: number
+  database_engine: 'postgresql' | 'sqlite'
+  schema_revision: string | null
+  encrypted: boolean
+  file_format: string
+  status: BackupRunStatus
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  error_code: string | null
+  error_message: string | null
+  notification_status: BackupNotificationStatus
+  notification_error: string | null
+  cleanup_status: BackupCleanupStatus
+  cleanup_error: string | null
+  artifacts: BackupArtifactOut[]
+}
+export interface BackupRunList { items: BackupRunOut[]; total: number }
+export interface BackupRunFilters { status?: BackupRunStatus; source?: BackupSource; page?: number; page_size?: number }
+export interface BackupOverview {
+  revision: number
+  schedule_enabled: boolean
+  schedule_time: string
+  timezone: 'Asia/Shanghai'
+  local_enabled: boolean
+  s3_enabled: boolean
+  local_keep: number
+  s3_keep: number
+  encryption_enabled: boolean
+  ready: boolean
+  readiness_errors: string[]
+  notification_ready: boolean
+  next_scheduled_at: string | null
+  active_run: BackupRunOut | null
+  last_success: BackupRunOut | null
+  last_failure: BackupRunOut | null
+  last_available: BackupRunOut | null
+}

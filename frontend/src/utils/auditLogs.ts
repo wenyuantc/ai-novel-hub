@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import type { AuditAction, AuditCleanupPreview, AuditDateRange, AuditLogListQuery, AuditSafeState, AuditSummary } from '../api/types'
-import { AUDIT_FIELD, AUDIT_STATE, AUDIT_SYSTEM_SETTING, AUDIT_TARGET } from '../api/auditLogs'
+import { AUDIT_BACKUP_FIELD, AUDIT_FIELD, AUDIT_STATE, AUDIT_SYSTEM_SETTING, AUDIT_TARGET } from '../api/auditLogs'
 import { TASK_KIND_LABELS } from '../api/tasks'
 import { formatTime, parseServerTime } from './time'
 import { settingValue, SYSTEM_SETTING_SOURCE } from './systemSettings'
@@ -76,6 +76,15 @@ export function auditSummaryRows(summary: AuditSummary, action?: AuditAction): A
     }
     const quota = (config: typeof rbac.quotas[number]['before']) => config.mode === 'inherit' ? '继承系统默认' : config.mode === 'unlimited' ? '不限额' : String(config.value)
     for (const change of rbac.quotas) rows.push({ label: change.metric === 'project_count' ? '作品总数配额' : '后台任务并发配额', value: `${quota(change.before)} → ${quota(change.after)}` })
+  }
+  const backup = summary.backup_change
+  if (backup && action?.startsWith('backup.')) {
+    rows.push({ label: '备份配置版本', value: `#${backup.settings_revision}` })
+    if (backup.fields.length) rows.push({ label: '备份配置变更字段', value: backup.fields.map((field) => AUDIT_BACKUP_FIELD[field]).join('、') })
+    if (backup.execution_key) rows.push({ label: '备份执行标识', value: backup.execution_key })
+    if (backup.destination) rows.push({ label: '下载副本', value: backup.destination === 'local' ? '本地' : 'S3' })
+    if (backup.encrypted !== null) rows.push({ label: '文件加密', value: backup.encrypted ? '已加密' : '未加密' })
+    rows.push({ label: '备份审计语义', value: action === 'backup.run.accept' ? '仅表示整库备份已受理，执行结果以备份记录为准。' : action === 'backup.download.authorize' ? '仅表示已授权下载，不代表文件已送达客户端。' : '配置已保存，对之后受理的备份生效；不记录连接参数或凭据内容。' })
   }
   if (action === 'system_settings.update') {
     for (const change of summary.settings_changes ?? []) rows.push({ label: AUDIT_SYSTEM_SETTING[change.key], value: `有效值：${settingValue(change.before_effective)}（${SYSTEM_SETTING_SOURCE[change.before_source]}） → ${settingValue(change.after_effective)}（${SYSTEM_SETTING_SOURCE[change.after_source]}）；后台覆盖：${settingValue(change.before_override)} → ${settingValue(change.after_override)}` })

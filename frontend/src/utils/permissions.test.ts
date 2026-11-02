@@ -24,6 +24,17 @@ describe('明确操作权限，不由布尔管理员或跨域读取推导授权'
     expect(authorizationKey(actor)).not.toBe(authorizationKey({ ...actor, authorization_revision: 2 }))
     expect(authorizationKey(actor)).toBe(authorizationKey({ ...actor, effective_permissions: [...actor.effective_permissions].reverse() }))
   })
+  it('整库备份四项动作独立，导航只依赖read，角色写显式补齐读取', () => {
+    const reader = user(['backups.read'])
+    expect(adminDestinations(reader).map((item) => item.path)).toEqual(['/admin/backups'])
+    for (const permission of ['backups.configure', 'backups.run', 'backups.download'] as const) expect(can(reader, permission)).toBe(false)
+    expect(adminDestinations(user(['backups.download']))).toEqual([])
+    const definitions: PermissionDefinition[] = [
+      { code: 'backups.read', label: '查看备份', group: '备份', dangerous: false, requires: [] },
+      { code: 'backups.download', label: '下载备份', group: '备份', dangerous: true, requires: ['backups.read'] },
+    ]
+    expect(permissionSelection(['backups.download'], definitions)).toEqual(['backups.read', 'backups.download'])
+  })
   it('角色编辑显式补齐配额用户读取依赖，但不添加别的跨域read', () => {
     const definitions: PermissionDefinition[] = [
       { code: 'users.read', label: '查看用户', group: '用户', dangerous: false, requires: [] },

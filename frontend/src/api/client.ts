@@ -85,15 +85,16 @@ function shouldRedirectOn401(path: string): boolean {
   return !path.startsWith('/auth/login') && !path.startsWith('/auth/me')
 }
 
-export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration): Promise<never> {
+export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration, method: RequestOptions['method'] = 'GET'): Promise<never> {
   const { detail, body } = await readErrorBody(resp)
   if (generation === requestGeneration && resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
-  if (generation === requestGeneration && resp.status === 403 && body?.code === 'permission_denied' && !path.startsWith('/auth/me')) permissionDeniedHandler?.()
+  // HEAD按HTTP语义没有正文，无法依赖JSON中的permission_denied；仍只刷新同一会话，不重放业务。
+  if (generation === requestGeneration && resp.status === 403 && (method === 'HEAD' || body?.code === 'permission_denied') && !path.startsWith('/auth/me')) permissionDeniedHandler?.()
   throw new ApiError(resp.status, detail, body)
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
+  method?: 'GET' | 'HEAD' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   body?: unknown
   query?: Record<string, QueryValue>
   signal?: AbortSignal
@@ -118,7 +119,7 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
     if (err instanceof DOMException && err.name === 'AbortError') throw err
     throw new ApiError(0, '网络错误，无法连接服务器')
   }
-  if (!resp.ok) await handleErrorResponse(path, resp, generation)
+  if (!resp.ok) await handleErrorResponse(path, resp, generation, method)
   return resp
 }
 

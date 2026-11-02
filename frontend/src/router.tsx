@@ -55,6 +55,11 @@ export const router = createBrowserRouter([
       { path: 'inspiration/:sid', lazy: lazyPage(() => import('./pages/InspirationSessionPage')) },
       { path: 'book-import', lazy: lazyPage(() => import('./pages/BookImportPage')) },
       {
+        path: 'admin/backups',
+        element: <RequirePermission permission="backups.read"><Outlet /></RequirePermission>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminBackupsPage')) }],
+      },
+      {
         path: 'admin/system-settings',
         element: <RequirePermission permission="settings.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminSystemSettingsPage')) }],

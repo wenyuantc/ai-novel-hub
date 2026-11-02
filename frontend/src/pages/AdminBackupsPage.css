@@ -1,0 +1,13 @@
+.admin-backups .studio-panel { padding: 20px; min-width: 0; }
+.admin-backups .backup-settings-form { max-width: 900px; }
+.admin-backups .backup-settings-form section + section { border-top: 1px solid var(--color-border); margin-top: 24px; padding-top: 24px; }
+.admin-backups h2 { font-size: 18px; margin: 0 0 16px; }
+.admin-backups .backup-pagination { display: flex; justify-content: flex-end; }
+.admin-backups .ant-descriptions-item-content { overflow-wrap: anywhere; }
+.admin-backups .ant-alert-message, .admin-backups .ant-alert-description { overflow-wrap: anywhere; }
+.admin-backups .ant-select, .admin-backups .ant-input-affix-wrapper { max-width: 100%; }
+@media (max-width: 767px) {
+  .admin-backups .studio-panel { padding: 12px; }
+  .admin-backups .backup-pagination { justify-content: flex-start; }
+  .admin-backups .ant-pagination { display: flex; flex-wrap: wrap; row-gap: 8px; }
+}
