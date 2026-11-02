@@ -187,7 +187,11 @@ async def create_task(
             raise ConflictError(ACTIVE_CONFLICT) from exc
         raise
     await refresh_same_task(db, task)
-    engine.ensure_hub(task.id, statistics_key=task.statistics_key, status="queued", stage=STAGE_LABELS["queued"])
+    if task.status in ACTIVE_TASK_STATUSES:
+        engine.ensure_hub(
+            task.id, statistics_key=task.statistics_key, status=task.status,
+            text=task.output_text, progress=task.progress, stage=task.stage,
+        )
     engine.notify()
     return await task_out(db, engine, task)
 
@@ -235,7 +239,11 @@ async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
     if result.rowcount != 1:
         raise ConflictError("任务状态已变化，请刷新后重试")
     await refresh_same_task(db, task)
-    engine.ensure_hub(task.id, statistics_key=task.statistics_key, status="queued", stage=STAGE_LABELS["queued"])
+    if task.status in ACTIVE_TASK_STATUSES:
+        engine.ensure_hub(
+            task.id, statistics_key=task.statistics_key, status=task.status,
+            text=task.output_text, progress=task.progress, stage=task.stage,
+        )
     engine.notify()
     return await task_out(db, engine, task)
 

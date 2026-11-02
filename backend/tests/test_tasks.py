@@ -93,6 +93,99 @@ async def test_subscribe_mid_stream_two_subscribers(app, client, fake_llm):
     assert events[0][1]["task"]["status"] == "succeeded"
 
 
+@pytest.mark.parametrize(
+    ("status", "terminal_event"),
+    [("succeeded", "done"), ("paused", "paused"), ("failed", "error"),
+     ("cancelled", "error"), ("interrupted", "error")],
+)
+async def test_subscribe_finished_task_ignores_stale_hub(app, client, fake_llm, status, terminal_event):
+    """数据库已结束时，残留的 queued hub 不能遮住持久化输出与终态结果。"""
+    _, _, (ch,) = await _setup(client)
+    fake_llm.push("完整正文")
+    task, events = await run_task(client, await _generate(client, ch))
+    engine = app.state.task_engine
+    await wait_until(lambda: task["id"] not in engine._running)
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Task, task["id"])
+        row.status = status
+        row.error = "已结束的错误说明" if terminal_event == "error" else ""
+        await db.commit()
+        key = row.statistics_key
+    engine.ensure_hub(task["id"], statistics_key=key, status="queued")
+    subscription = engine.subscribe(task["id"])
+    try:
+        first = await anext(subscription)
+        assert first[0] == "snapshot"
+        assert first[1]["task"]["status"] == status
+        assert first[1]["text"] == "完整正文"
+        end = await asyncio.wait_for(anext(subscription), 1)
+        assert end[0] == terminal_event
+        if terminal_event == "error":
+            assert end[1]["detail"] == "已结束的错误说明"
+        else:
+            assert end[1]["result"] == events[-1][1]["result"]
+        with pytest.raises(StopAsyncIteration):
+            await anext(subscription)
+    finally:
+        await subscription.aclose()
+
+
+async def test_subscribe_task_finishes_before_snapshot(app, client, fake_llm, monkeypatch):
+    """读库与注册订阅之间结束：即使没有收到 hub 终态广播，也必须回放持久化结果。"""
+    _, _, (ch,) = await _setup(client)
+    fake_llm.push("已保存的正文")
+    task, events = await run_task(client, await _generate(client, ch))
+    engine = app.state.task_engine
+    await wait_until(lambda: task["id"] not in engine._running)
+    read_task = engine._visible_task
+    reads = 0
+
+    async def stale_until_subscribed(db, task_id, **kwargs):
+        nonlocal reads
+        row = await read_task(db, task_id, **kwargs)
+        reads += 1
+        if reads <= 2:
+            # 模拟前两次读取在完成提交之前取得的活动状态，不写回数据库。
+            row.status = "running"
+        return row
+
+    monkeypatch.setattr(engine, "_visible_task", stale_until_subscribed)
+    engine.heartbeat_seconds = 0.01
+    subscription = engine.subscribe(task["id"])
+    try:
+        first = await anext(subscription)
+        assert first[0] == "snapshot" and first[1]["task"]["status"] == "succeeded"
+        end = await asyncio.wait_for(anext(subscription), 1)
+        assert end[0] == "done"
+        assert end[1]["result"] == events[-1][1]["result"]
+        with pytest.raises(StopAsyncIteration):
+            await anext(subscription)
+    finally:
+        await subscription.aclose()
+
+
+async def test_create_does_not_recreate_finished_hub(app, client, monkeypatch):
+    """创建请求的提交后刷新若已读到终态，不能再创建一个空的 queued hub。"""
+    _, _, (ch,) = await _setup(client)
+    engine = app.state.task_engine
+    await engine.stop()
+    refresh = task_service.refresh_same_task
+
+    async def finish_before_refresh(db, task):
+        await db.execute(update(Task).where(Task.id == task.id).values(
+            status="succeeded", stage="已完成", progress=100, output_text="已保存的正文",
+        ))
+        await db.commit()
+        return await refresh(db, task)
+
+    monkeypatch.setattr(task_service, "refresh_same_task", finish_before_refresh)
+    response = await _generate(client, ch)
+    assert response.status_code == 202
+    task = response.json()
+    assert task["status"] == "succeeded"
+    assert task["id"] not in engine.hubs
+
+
 async def test_disconnect_does_not_stop_task(app, client, fake_llm):
     """关闭页面 = 订阅断开：任务照常完成并落库（章节与向导）。"""
     p, base, (ch,) = await _setup(client)

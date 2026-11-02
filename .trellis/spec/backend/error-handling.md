@@ -358,7 +358,7 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 - 章节 `result`：`{"chapter": ChapterOut, "warning"?: "自动续写失败：…"}`；向导 `result`：`{"kind", "items": [Out...]}`。
 - 不重复不遗漏：`TaskHub.subscribe()` 在同一同步临界区内复制缓冲区并注册订阅队列（中间没有 `await`），
   快照之后的第一个 delta 恰好接在快照末尾。
-- 已结束 / 待审核任务：快照取自库里的 `output_text`，紧接着 `done` / `error` / `paused`，然后关闭。
+- 已结束 / 待审核任务：数据库状态优先，即使同 UUID 的内存 hub 仍为 queued / running，快照也必须取自库里的 `output_text`，紧接着回放带持久化 `result` / `error` 的 `done` / `error` / `paused`，然后关闭。订阅注册后的复查若已看到终态，也走相同回放路径，不能发出 succeeded 快照后只等心跳。创建 / 继续请求提交后刷新到终态时，不得重新建立空 queued hub；活动状态建 hub 时沿用实际 status / text / progress / stage。
 - 任务行已不存在或因作品生命周期不可见（归属校验后被删除；或订阅中的任务随作品进入deletion_started_at/deleted_at，或随用户/项目级联删除——在心跳间隔检查）：发
   `error {"task": null, "detail": "任务不存在"}` 后结束（前者没有 `snapshot`），并释放该任务的 hub。
 - 排队任务的软删除回归场景中，取消关闭Hub与生命周期心跳有两个既存合法赢家：取消帧先到则携同UUID的cancelled Task；心跳先观测生命周期不可见则task=null/任务不存在并结束，不能为取得cancelled摘要越过可见性过滤。该排队场景无论订阅反馈哪个先赢，DELETE成功后真实Task必须安全cancelled、资源释放，新订阅仍404；终止帧之后不继续输出。用事件屏障分别验证，不把测试绑死在一次偶然排程顺序。不能把此排队断言扩为所有运行任务：运行中原子保存已提交时，仍保留真实succeeded赢家。
@@ -440,7 +440,7 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 - `tests/test_chapter_versions.py`：baseline + generate 版本与日志（`task_id`）关联、失败不写版本只写 error 记录、
   `test_generate_cancelled_logs_cancelled`（直接驱动 `validate_and_claim` + `build_chapter_job` + `run_chapter_job` 后 `aclose()`）、
   自动续写（`continue` payload、stage 文案、拼接、最多 2 轮、默认关闭、续写失败 warning）。
-- `tests/test_tasks.py`：hub 快照无缝、两个订阅者 + 已结束快照、心跳、断开不影响任务（章节 + 向导）、取消运行中（<1 秒、流中断、
+- `tests/test_tasks.py`：hub 快照无缝、两个订阅者 + 已结束快照、五种非活动状态绕过残留 hub 并回放真实输出 / 终态结果、订阅注册期间完成仍回放 done、创建请求刷新到终态不重建 hub、心跳、断开不影响任务（章节 + 向导）、取消运行中（<1 秒、流中断、
   状态复位、记录 cancelled）/ 排队中（不再执行）、stop → interrupted 且 queued 继续 + 重试关联原任务、崩溃恢复、排队期间复位、
   每用户上限 + queue_position、全局上限 + 位置前移、资源互斥 409、列表过滤 / 删除 / 清理、越权 404、保留裁剪 200、订阅中任务被删（`error {task: null}`）。
 - `tests/test_rewrite.py`（同步 SSE，不变）；`tests.helpers.parse_sse` 会跳过注释帧（含 `: ping`）。

@@ -14,6 +14,7 @@ import {
   isChapterWriteKind,
   taskLink,
   wizardTaskKind,
+  type TaskEnd,
   type TaskStreamHandlers,
 } from './tasks'
 import type { Task } from './types'
@@ -58,6 +59,26 @@ function frame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
+function openSSEResponse(frames: string[] = []) {
+  const encoder = new TextEncoder()
+  let source: ReadableStreamDefaultController<Uint8Array>
+  let closed = false
+  const cancelled = vi.fn(() => { closed = true })
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      source = controller
+      for (const f of frames) controller.enqueue(encoder.encode(f))
+    },
+    cancel: cancelled,
+  })
+  return {
+    response: new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
+    push: (text: string) => source.enqueue(encoder.encode(text)),
+    close: () => { if (!closed) { closed = true; source.close() } },
+    cancelled,
+  }
+}
+
 /** 记录所有回调，模拟 useTaskStream 的文本累积（snapshot 覆盖、delta 追加） */
 function recorder() {
   const log: string[] = []
@@ -80,7 +101,118 @@ function recorder() {
 const noSleep = async () => {}
 
 describe('subscribeTask', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it.each(['done', 'error', 'paused'])('收到 %s 后立即结束订阅，不等待服务器关闭连接', async (event) => {
+    vi.useFakeTimers()
+    const status = event === 'done' ? 'succeeded' : event === 'paused' ? 'paused' : 'failed'
+    const stream = openSSEResponse([
+      frame('snapshot', { task: task(), text: '生成内容' }),
+      frame(event, { task: task({ status }), result: { kind: 'careers', items: [] }, detail: '模型调用失败' }),
+    ])
+    vi.stubGlobal('fetch', async () => stream.response)
+    let end: TaskEnd | undefined
+    const pending = subscribeTask(1, {}).then((outcome) => { end = outcome })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(end?.status).toBe(status)
+      expect(stream.cancelled).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      stream.close()
+      await pending
+    }
+  })
+
+  it('请求响应头一直挂起时自动断开重连，取回已完成任务', async () => {
+    vi.useFakeTimers()
+    const stalled: { signal: AbortSignal | null } = { signal: null }
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        stalled.signal = init.signal ?? null
+        return new Promise<Response>(() => {})
+      }
+      return Promise.resolve(sseResponse([frame('done', { task: task({ status: 'succeeded' }), result: {} })]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const reconnect = vi.fn()
+    let end: TaskEnd | undefined
+    void subscribeTask(1, { onReconnect: reconnect }, undefined, { sleep: noSleep })
+      .then((outcome) => { end = outcome })
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(stalled.signal?.aborted).toBe(true)
+    expect(reconnect).toHaveBeenCalledOnce()
+    expect(end?.status).toBe('succeeded')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('流读取挂起时重连，完成快照覆盖部分输出且释放旧连接', async () => {
+    vi.useFakeTimers()
+    const stream = openSSEResponse([frame('snapshot', { task: task(), text: '部分' })])
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(stream.response)
+      .mockResolvedValueOnce(sseResponse([
+        frame('snapshot', { task: task({ status: 'succeeded' }), text: '部分及后续内容' }),
+        frame('done', { task: task({ status: 'succeeded' }), result: { items: [] } }),
+      ]))
+    vi.stubGlobal('fetch', fetchMock)
+    const r = recorder()
+    let end: TaskEnd | undefined
+    void subscribeTask(1, r.handlers, undefined, { sleep: noSleep }).then((outcome) => { end = outcome })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(r.text()).toBe('部分')
+      await vi.advanceTimersByTimeAsync(45_000)
+      expect(end?.status).toBe('succeeded')
+      expect(r.text()).toBe('部分及后续内容')
+      expect(stream.cancelled).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      stream.close()
+    }
+  })
+
+  it('仅收到心跳也保持连接，长时间等待模型不会触发空闲超时', async () => {
+    vi.useFakeTimers()
+    const stream = openSSEResponse([frame('snapshot', { task: task(), text: '' })])
+    const fetchMock = vi.fn(async () => stream.response)
+    vi.stubGlobal('fetch', fetchMock)
+    const reconnect = vi.fn()
+    const pending = subscribeTask(1, { onReconnect: reconnect })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      for (let i = 0; i < 4; i++) {
+        await vi.advanceTimersByTimeAsync(15_000)
+        stream.push(': ping\n\n')
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      stream.push(frame('done', { task: task({ status: 'succeeded' }), result: {} }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reconnect).not.toHaveBeenCalled()
+      expect(fetchMock).toHaveBeenCalledOnce()
+    } finally {
+      stream.close()
+      await pending
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('本地中止挂起请求立即退出，不重连且清理超时定时器', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', () => new Promise<Response>(() => {}))
+    const controller = new AbortController()
+    const reconnect = vi.fn()
+    let error: unknown
+    void subscribeTask(1, { onReconnect: reconnect }, controller.signal).catch((err: unknown) => { error = err })
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(isAbortError(error)).toBe(true)
+    expect(reconnect).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
   it('GET 订阅：snapshot + delta + continue + progress，done 返回 result', async () => {
     const fetchMock = vi.fn(async () =>

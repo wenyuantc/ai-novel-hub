@@ -80,14 +80,21 @@ export class SSEParser {
 }
 
 export interface StreamHandlers {
-  onMessage: (msg: SSEMessage) => void
+  /** 返回 false 时立即结束读取并释放连接。 */
+  onMessage: (msg: SSEMessage) => void | false
 }
 
 /**
  * 打开一个 SSE 响应并逐条回调消息（POST 与 GET 共用）。
  * 推流前的业务错误（400/404/409 等）以 ApiError 抛出；中止时抛出 AbortError。
  */
-async function readSSE(path: string, init: RequestInit, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
+async function readSSE(
+  path: string,
+  init: RequestInit,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+  onActivity?: () => void,
+): Promise<void> {
   let resp: Response
   try {
     resp = await fetch(buildUrl(path), { ...init, credentials: 'include', signal })
@@ -104,15 +111,29 @@ async function readSSE(path: string, init: RequestInit, handlers: StreamHandlers
   const reader = resp.body.getReader()
   const decoder = new TextDecoder('utf-8')
   const parser = new SSEParser()
+  const cancelReader = () => { void reader.cancel().catch(() => {}) }
+  signal?.addEventListener('abort', cancelReader, { once: true })
   try {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
     for (;;) {
       const { value, done } = await reader.read()
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
       if (done) break
-      for (const msg of parser.feed(decoder.decode(value, { stream: true }))) handlers.onMessage(msg)
+      // 注释心跳也算活动，避免模型长时间没有正文时误判连接失活。
+      onActivity?.()
+      for (const msg of parser.feed(decoder.decode(value, { stream: true }))) {
+        if (handlers.onMessage(msg) === false) return
+      }
     }
-    for (const msg of parser.feed(decoder.decode())) handlers.onMessage(msg)
-    for (const msg of parser.flush()) handlers.onMessage(msg)
+    for (const msg of parser.feed(decoder.decode())) {
+      if (handlers.onMessage(msg) === false) return
+    }
+    for (const msg of parser.flush()) {
+      if (handlers.onMessage(msg) === false) return
+    }
   } finally {
+    signal?.removeEventListener('abort', cancelReader)
+    cancelReader()
     reader.releaseLock()
   }
 }
@@ -131,9 +152,34 @@ export function postSSE(path: string, body: unknown, handlers: StreamHandlers, s
   )
 }
 
-/** GET 一个 SSE 接口（任务订阅 /tasks/{id}/stream）。 */
-export function getSSE(path: string, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
-  return readSSE(path, { method: 'GET', headers: { Accept: 'text/event-stream' } }, handlers, signal)
+// 后端每 15 秒发送一次心跳，允许连续缺失三次后重连。
+const STREAM_IDLE_TIMEOUT_MS = 45_000
+
+/** GET 任务订阅：响应头或正文持续无数据时断开，由 subscribeTask 按原退避策略重连。 */
+export async function getSSE(path: string, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const interrupted = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
+  })
+  const abort = () => controller.abort()
+  const resetTimeout = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => controller.abort(new StreamError('流式连接长时间无响应')), STREAM_IDLE_TIMEOUT_MS)
+  }
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    if (signal?.aborted) abort()
+    else resetTimeout()
+    await Promise.race([
+      readSSE(path, { method: 'GET', headers: { Accept: 'text/event-stream' } }, handlers, controller.signal, resetTimeout),
+      interrupted,
+    ])
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
+    controller.abort()
+  }
 }
 
 /** 业务流事件：delta 增量文本 / done 完成载荷 / error 流内错误；其余事件（如 continue）交给 onEvent。 */

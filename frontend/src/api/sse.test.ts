@@ -113,4 +113,22 @@ describe('runGeneration', () => {
     const err = await runGeneration('/x', {}, { onDelta: () => {}, signal: controller.signal }).catch((e: unknown) => e)
     expect(isAbortError(err)).toBe(true)
   })
+
+  it('读取中本地中止会释放连接并抛 AbortError', async () => {
+    const cancelled = vi.fn()
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(frame('delta', { text: '部分输出' })))
+      },
+      cancel: cancelled,
+    })
+    vi.stubGlobal('fetch', async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }))
+    const controller = new AbortController()
+    const err = await runGeneration('/x', {}, {
+      onDelta: () => controller.abort(),
+      signal: controller.signal,
+    }).catch((error: unknown) => error)
+    expect(isAbortError(err)).toBe(true)
+    expect(cancelled).toHaveBeenCalledOnce()
+  })
 })

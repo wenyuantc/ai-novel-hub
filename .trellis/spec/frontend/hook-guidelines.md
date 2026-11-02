@@ -110,9 +110,10 @@ export function useHasAIConfig(): boolean | null  // store 尚未加载时为 nu
 ### 2. 签名
 ```ts
 export interface SSEMessage { event: string; data: string }
+export interface StreamHandlers { onMessage: (msg: SSEMessage) => void | false } // false = 立即结束并释放连接
 export class SSEParser { feed(chunk: string): SSEMessage[]; flush(): SSEMessage[] }
-export function postSSE(path: string, body: unknown, handlers: { onMessage: (msg: SSEMessage) => void }, signal?: AbortSignal): Promise<void>
-export function getSSE(path: string, handlers: { onMessage: (msg: SSEMessage) => void }, signal?: AbortSignal): Promise<void>  // 两者共用 readSSE
+export function postSSE(path: string, body: unknown, handlers: StreamHandlers, signal?: AbortSignal): Promise<void>
+export function getSSE(path: string, handlers: StreamHandlers, signal?: AbortSignal): Promise<void>  // 两者共用 readSSE
 export interface GenerationCallbacks<TDone> {
   onDelta: (text: string) => void; signal?: AbortSignal; parseDone?: (data: unknown) => TDone
   onEvent?: (event: string, data: unknown) => void   // delta/done/error 以外的事件（如 continue）
@@ -145,9 +146,10 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
   - 其他事件 → `cb.onEvent?.(event, data)`（改写目前没有额外事件；整章生成的 `continue` → `{ round, words, target }` 现在经任务订阅到达，`subscribeTask` 用 `isContinueEvent` 校验后转给 `onContinue`，round 从 1 起最多 2）。续写轮首个分块前后端会先发一个 `delta {"text":"\n\n"}`，前端无需特殊处理。不认识的事件被忽略，所以新增事件对旧代码兼容。
 - `useStreamTask` 不感知额外事件：调用方在 runner 闭包里把自己的回调（如 `setContinueInfo`）传给 API 函数，并在 `start` 前后自行复位。
 - 解析规则：接受任意 chunk 切分；行尾可为 LF、CRLF 或单独的 CR；chunk 末尾的 `\r` 会保留到下一个 chunk（可能是 CRLF 的一半）；以 `:` 开头的行被忽略；`field: value` 去掉一个前导空格；多行 `data:` 以 `\n` 拼接；事件名为空时默认为 `message`；`flush()` 派发最后一个未以空行结尾的事件。`runGeneration` 会忽略非 JSON 的 `data`。
-- 解码器：`TextDecoder('utf-8')` 配合 `{ stream: true }`，使跨 chunk 拆分的多字节中文字符能正确解码；EOF 时执行最终的 `decoder.decode()` + `parser.flush()`；在 `finally` 中执行 `reader.releaseLock()`。
+- 解码器：`TextDecoder('utf-8')` 配合 `{ stream: true }`，使跨 chunk 拆分的多字节中文字符能正确解码；EOF 时执行最终的 `decoder.decode()` + `parser.flush()`；`onMessage` 返回 `false` 时立即结束读取，后续帧不再分派。中止时主动取消 reader，仍抛 `AbortError`；在 `finally` 中取消 reader 并执行 `reader.releaseLock()`，不能只释放锁而留下占用连接的响应体。
 
 - **任务订阅（`subscribeTask`）**：`GET /tasks/{id}/stream`，事件 `snapshot {task, text}`（每次（重）连接的首帧，**覆盖**本地文本，因此重连不重复不遗漏）/ `delta {text}` / `continue` / `progress {status, progress, stage, queue_position?}` / `done {task, result}` / `error {task, detail}`；`: ping` 心跳注释被解析器忽略。`done` → `{status: 'succeeded', result}`；`error` 按 `task.status` 区分 `cancelled` / `interrupted`，其余（含 `task` 为 null）为 `failed`。
+- **终态与空闲超时**：收到 `done` / `error` / `paused` 后立即结束订阅并释放连接，不等待 HTTP EOF。`getSSE` 从请求发起开始计时，连续 45 秒没有原始字节（覆盖响应头挂起与正文读取挂起）则以 `StreamError` 中止本次连接并交回 `subscribeTask` 重连；`: ping` 虽不产生业务事件，仍重置计时，后端 15 秒心跳足以维持模型等待。外部 signal 中止必须返回 `AbortError`、不重连，所有退出路径清理超时定时器和监听器。同步 POST 生成不启用此超时，避免重复提交生成请求。
 - **重连**：流结束但没有 `done`/`error`（`StreamError`）、网络错误（`ApiError(0)` / `TypeError`）、5xx、2xx 但非流式 → 按 `reconnectDelay` 退避后重连，触发 `onReconnect`；只有收到 `snapshot` **且**该连接存活满 `stableMs`（5 秒）后才断开，才把连续失败计数清零——「连上即断」反复循环时计数继续累计、退避加长并最终放弃，不会无限 ~1s 重连；连续失败超过 `maxRetries` 抛最后一次错误。4xx（401 / 404 `任务不存在`）不重连，直接抛 `ApiError`。中止（含等待重连期间）抛 `AbortError`，只断开订阅、不影响任务。
 
 ### 4. 校验与错误矩阵
@@ -184,6 +186,8 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 - `runGeneration`（stub `fetch` 返回 `ReadableStream`）：delta 累积 + `continue` 走 `onEvent` + done 载荷含 `warning`，并断言 URL 前缀 / `credentials: 'include'` / 请求体；`generateChapter` 把 `continue` 转给 `onContinue`；`error` 事件与缺少 `done` → `StreamError`；409 → `ApiError(status, detail)`；已中止 signal → `isAbortError`。
 
 `src/api/tasks.test.ts`（`subscribeTask`）：GET + `credentials` + 事件分派与 `done.result`；断线（流无终止 + 网络错误）→ 退避 1s/2s 重连、snapshot 覆盖后文本无重复；`error` 按 `task.status` 区分且容忍 `task: null`；404 不重连；5xx 超过上限抛错；「连上即断」循环不清零计数并最终抛错、稳定连接（≥ `stableMs`）后断开才清零；等待重连时中止 → `AbortError`；`reconnectDelay` / `queueLabel` / `taskLink` / list 与 clearFinished 的查询串。
+
+连接生命周期回归：终态帧到达后服务器不关闭仍立即返回，并取消 reader；响应头 / 正文永久挂起 45 秒后重连并恢复已完成快照；只有注释心跳的连接超过 45 秒仍保持订阅；中止挂起请求立即退出、不重连且没有残留 timer。`src/api/sse.test.ts` 另覆盖同步 POST 读取中止仍抛 `AbortError` 并释放 reader。
 
 修改 `postSSE`/`getSSE`/`runGeneration`/`subscribeTask` 时，新增使用 stub `fetch`（返回 `ReadableStream`）的测试，断言：非 2xx → 带 `status`/`detail` 的 `ApiError`；`error` 事件 → `StreamError`；缺少 `done` → `StreamError`；已中止的 signal → `isAbortError(err) === true`。
 

@@ -681,7 +681,8 @@ class TaskEngine:
             return
         statistics_key = row.statistics_key
         hub = self.hubs.get(task_id)
-        if hub is None or hub.statistics_key != statistics_key:
+        # 数据库终态优先：即使内存残留排队 hub，也必须回放结果，不能只发送心跳。
+        if row.status not in ACTIVE_TASK_STATUSES or hub is None or hub.statistics_key != statistics_key:
             if row.status in ACTIVE_TASK_STATUSES:
                 hub, created = self.ensure_hub(
                     task_id, statistics_key=statistics_key,
@@ -701,14 +702,8 @@ class TaskEngine:
                 if row is None:
                     yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
                     return
-                out = task_service.out_json(row)
-                yield "snapshot", {"task": out, "text": row.output_text}
-                if row.status == "succeeded":
-                    yield "done", {"task": out, "result": row.result}
-                elif row.status == "paused":
-                    yield "paused", {"task": out, "result": row.result}
-                else:
-                    yield "error", {"task": out, "detail": row.error}
+                for event in _finished_events(row):
+                    yield event
                 return
 
         text, sub = hub.subscribe()
@@ -718,6 +713,11 @@ class TaskEngine:
                 out = await task_service.out_json_live(db, self, row) if row is not None else None
             if row is None:
                 yield "error", {"task": None, "detail": TASK_GONE_MESSAGE}
+                return
+            # 注册订阅前后可能恰好完成；以复查的持久化状态收尾，不再等待已错过的广播。
+            if row.status not in ACTIVE_TASK_STATUSES:
+                for event in _finished_events(row):
+                    yield event
                 return
             yield "snapshot", {"task": out, "text": text}
             while True:
@@ -761,6 +761,18 @@ class TaskEngine:
         except Exception:  # noqa: BLE001
             logger.exception("任务 %s 存在性检查失败", task_id)
             return False
+
+
+def _finished_events(task: Task) -> tuple[Event, Event]:
+    """从持久化状态回放完整快照与终止事件，不受残留 hub 影响。"""
+    out = task_service.out_json(task)
+    if task.status == "succeeded":
+        end = "done", {"task": out, "result": task.result}
+    elif task.status == "paused":
+        end = "paused", {"task": out, "result": task.result}
+    else:
+        end = "error", {"task": out, "detail": task.error}
+    return ("snapshot", {"task": out, "text": task.output_text}), end
 
 
 def _try_handler(kind: str) -> TaskHandler | None:

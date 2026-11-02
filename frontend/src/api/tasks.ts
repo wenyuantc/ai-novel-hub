@@ -359,6 +359,8 @@ export async function subscribeTask(
                 break
               }
             }
+            // 终态已经齐备，无需等待 HTTP 连接关闭（部分浏览器 / 代理可能保持连接）。
+            if (holder.end) return false
           },
         },
         signal,
