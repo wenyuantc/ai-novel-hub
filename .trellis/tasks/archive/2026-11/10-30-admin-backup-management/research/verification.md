@@ -24,10 +24,12 @@ acceptance/history.jsonl保留失败与修复记录，不能将早期失败隐�
 
 真实GPG长路径失败、SMTP累计超时/取消、首块前下载断开、请求Task身份、未知存储结果、终态临时明文回收、HEAD403授权刷新、前端时间/旧响应竞态均已增加针对性回归，核心约定见 .trellis/spec/backend/admin-backups.md。历史0029权限常量保持33项，0030迁移当前37项目录；作品JSON格式仍v1，只更新APP_SCHEMA元数据。
 
-## 待收口
+## 收口记录
 
-最终门禁、32项真实all、最终镜像smoke和浏览器均已通过；AC1–AC14及实施清单已核对。用户已批准research/commit-plan.md的三批提交，并要求收尾、合并main和推送；正在按白名单执行。保留用户原.lithe/run/local.json及其暂存状态，后续提交不得混入它。
+最终门禁、32项真实all、最终镜像smoke和浏览器均已通过；AC1–AC14及实施清单已核对。用户已批准research/commit-plan.md的三批提交，并要求收尾、合并main和推送；三批118文件工作提交已按白名单完成；任务按Trellis归档和会话流程收尾，随后按授权合并main并推送。保留用户原.lithe/run/local.json及其暂存状态，后续提交不得混入它。
 
 最终镜像仅在af56完整矩阵源码基础上修复GET/HEAD的OpenAPI唯一编号，HTTP行为和前端未变；最终0c40461镜像定向冒烟验证该差异。未重新执行不受影响的昂贵恢复矩阵。所有验收归属资源的只读复核见acceptance/cleanup.json。
 
 最终全量基线有2项警告：旧GET/HEAD重复编号已由最终源码和增量/smoke消除；Gemini既有弃用警告保留。全范围检查无新增未修产品缺陷；DNS检查到实际连接仍有已记录窗口，按README部署出站限制。
+
+工作提交：f3028c406b9d4a962ec5029ea6e9b9784e97bcbf, 71087fb3b7d3b3d1a3e23e45e1c2cfa43a8365a5, 4f395f96868affd28ffaac6ceb4727e5723e90b5。归档及会话记录使用独立后续提交，不混入工作提交。

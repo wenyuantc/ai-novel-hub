@@ -3,7 +3,7 @@
   "name": "admin-backup-management",
   "title": "管理员备份管理",
   "description": "提供 PostgreSQL/SQLite 整库备份、可配置本地/S3、SMTP 失败提醒、可选加密和分项授权。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "fullstack",
   "scope": "admin-backups",
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "aiNovel",
   "assignee": "aiNovel",
   "createdAt": "2026-10-30",
-  "completedAt": null,
+  "completedAt": "2026-11-02",
   "branch": "codex/admin-backup-management",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "4f395f96868affd28ffaac6ceb4727e5723e90b5",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -55,9 +55,14 @@
     "backup_password_management": "admin_ui_encrypted_and_offline_copy",
     "source": "admin-feature-inventory",
     "implementation_approved": "true",
-    "implementation_stage": "committing",
+    "implementation_stage": "completed",
     "quality_gate": "passed",
     "acceptance": "32_real_checks_passed",
-    "integration_authorized": "merge_main_and_push"
+    "integration_authorized": "merge_main_and_push",
+    "work_commits": [
+      "f3028c406b9d4a962ec5029ea6e9b9784e97bcbf",
+      "71087fb3b7d3b3d1a3e23e45e1c2cfa43a8365a5",
+      "4f395f96868affd28ffaac6ceb4727e5723e90b5"
+    ]
   }
 }
