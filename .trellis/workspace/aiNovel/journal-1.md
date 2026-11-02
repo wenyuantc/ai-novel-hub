@@ -1072,3 +1072,40 @@
 
 - 按用户授权将本分支正常合并到main并推送origin/main；本记录写入时该远端步骤尚未执行。
 - 生产发布前使用可清空隔离PostgreSQL补真实行锁竞争验证。
+
+
+## Session 33: 交付管理员整库备份管理
+<!-- trellis-session: v=2 fp=e21ec16b43961e3e -->
+
+**Date**: 2026-11-02
+**Task**: 交付管理员整库备份管理
+**Branch**: `codex/admin-backup-management`
+
+### Summary
+
+完成可配置北京时间计划、本地/S3独立保留、可选GPG加密、SMTP失败提醒及分项授权，真实隔离恢复与浏览器验收通过；用户批准三批提交、收尾、合并main和推送。
+
+### Main Changes
+
+- 新增0030备份表及37项当前权限目录升级，保持0029历史33项、六项设置和作品JSON格式v1。
+- 完成安全配置CAS/原子审计、持久幂等与调度、可恢复GPG私有目录、S3版本化保留和原生鉴权下载。
+- 完成后台页面、同actor撤权清理、HEAD403权限刷新、375px/明暗主题，以及部署工具/恢复指南；保留.lithe/run/local.json原暂存。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3028c406b9d4a962ec5029ea6e9b9784e97bcbf` | feat(admin): 实现整库备份与独立存储管理 |
+| `71087fb3b7d3b3d1a3e23e45e1c2cfa43a8365a5` | feat(frontend): 增加整库备份页面与分项授权 |
+| `4f395f96868affd28ffaac6ceb4727e5723e90b5` | docs(admin): 固化整库备份契约与验收记录 |
+
+### Testing
+
+- [OK] 后端完整基线1526 passed；最终GET/HEAD元数据变更受影响API/OpenAPI60项及runtime36项通过；Ruff通过。
+- [OK] 前端lint/build通过，95文件724项测试通过；真实浏览器4种动作角色/CAS/撤权/下载hash/375px及主题通过。
+- [OK] PG16/SQLite真实all32项通过，覆盖6次恢复并启动目标、S3大文件multipart/独立保留、TLS SMTP/未知投递、崩溃及计划恢复；临时资源已回收。
+- [OK] 最终镜像OpenAPI唯一编号及加密HEAD/GET烟测通过；后端73运行包审计0漏洞；前端保留14项既有moderate并记录可达性。
+
+### Status
+
+[OK] **Completed**
