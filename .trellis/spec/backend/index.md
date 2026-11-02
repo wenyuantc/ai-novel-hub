@@ -38,7 +38,7 @@
 | [项目智能体](./agent.md) | Provider 工具调用协议（`chat_tools_stream`、`TOOLS_UNSUPPORTED`、三家差异、`provider_metadata` 重放）、工具层与新增工具检查清单（kind 分级、`validate_references`、`id_model`）、提案 / 自动执行（首批 ≤3 项）/ 确认时预览比较 409、效果快照与撤销（`EFFECT_TABLES`、冲突检测、外键顺序）、`agent.turn` 断点续跑、安全规则；`external` kind、动态 MCP 工具、Skill 读工具与强制启用 | 已填写 |
 | [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化、用户列表/详情、最近成功登录与三组资源计数、账号防护/会话版本、共享操作异步边界、全局Skill权限与MCP开关 | 已填写 |
-| [角色、授权与用户配额](./rbac-quotas.md) | 四内置/自定义多角色、33动作、唯一超管事实、管理目标保护、共同写屏障、两项额度/四创建入口/真实任务占用及前端撤权 | 已填写 |
+| [角色、授权与用户配额](./rbac-quotas.md) | 四内置/自定义多角色、37动作、唯一超管事实、管理目标保护、共同写屏障、两项额度/四创建入口/真实任务占用及前端撤权 | 已填写 |
 | [管理员系统设置](./system-settings.md) | 六项白名单、持久覆盖优先级、revision与原子审计发布、MCP真实调用边界、30秒公开同步及逐项恢复 | 已填写 |
 | [管理员首页与全站统计](./admin-dashboard.md) | 含回收站的总量、北京时间日快照、独立任务累计、UUID执行身份、24h异常、历史缺口及刷新 | 已填写 |
 | [管理员全站任务监控](./admin-task-monitoring.md) | 现存安全元数据、单SQL筛选计数、本轮时间、持久取消受理/审计、资源屏障与轮次CAS、5秒刷新 | 已填写 |
@@ -46,6 +46,7 @@
 | [管理员作品管理](./admin-projects.md) | `/admin/projects` 查询与聚合、人工内容管理员例外、严格 owner helper、归属投影、私有资源/模型副作用/阅读进度边界 | 已填写 |
 | [作品回收站](./recycle-bin.md) | 30天软删除、管理员恢复/彻删、任务执行链排空、父行事务屏障、到期清理、RESTRICT删号与系统审计 | 已填写 |
 | [平台 API Key 与开放读取](./open-api.md) | 可再次查看 / 复制的密钥、小说授权、独立 X-API-Key、数据库原子分钟额度、20 个只读接口、专属 OpenAPI / Swagger UI、前端显隐与复制 | 已填写 |
+| [管理员整库备份](./admin-backups.md) | PG/SQLite整库、37项目录升级、可选GPG、本地/S3独立保留、SMTP、短事务/未知结果、原生下载及恢复 | 已填写 |
 | [日志规范](./logging-guidelines.md) | 标准库 `logging`、在错误被屏蔽处使用 `logger.exception`、绝不记录密钥 | 已填写 |
 
 ### Code-spec 场景（7 段式契约）

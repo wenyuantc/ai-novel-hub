@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "image_id": "sha256:af56b9a43d74cbcb8a4a0b38954d07c9258676bc6ce53bd6fa0ba5218cdf997c",
+  "checks": {
+    "backup_module_present": true,
+    "root_backup_directory_absent": true,
+    "backend_backup_directory_absent": true,
+    "dotenv_absent": true,
+    "acceptance_secrets_absent": true,
+    "private_gpg_homes_absent": true,
+    "pg_dump": "pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)",
+    "gpg": "gpg (GnuPG) 2.2.40",
+    "gpgconf": "gpgconf (GnuPG) 2.2.40"
+  }
+}

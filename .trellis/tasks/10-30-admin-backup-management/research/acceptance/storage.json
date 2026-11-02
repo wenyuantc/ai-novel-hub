@@ -1,0 +1,64 @@
+{
+  "scenario": "storage",
+  "status": "passed",
+  "started_at": "2026-11-02T04:13:48.498226+00:00",
+  "finished_at": "2026-11-02T04:14:30.196692+00:00",
+  "checks": [
+    {
+      "check": "postgresql.http_permissions_and_revocation",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.configuration_defaults_cas_and_secret_omission",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.s3_switches_retention_versioned_cleanup_old_location",
+      "status": "passed",
+      "versions": 2,
+      "delete_markers": 0,
+      "version_ids_present": true,
+      "multipart_versions": 2
+    },
+    {
+      "check": "postgresql.real_retention_identity_failure_safe_cleanup_recovery_and_expired_download",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.http_permissions_and_revocation",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.configuration_defaults_cas_and_secret_omission",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.s3_switches_retention_versioned_cleanup_old_location",
+      "status": "passed",
+      "versions": 2,
+      "delete_markers": 0,
+      "version_ids_present": true,
+      "multipart_versions": 2
+    },
+    {
+      "check": "sqlite.real_retention_identity_failure_safe_cleanup_recovery_and_expired_download",
+      "status": "passed"
+    },
+    {
+      "check": "container_logs_no_test_secrets",
+      "status": "passed"
+    }
+  ],
+  "failure_check": null,
+  "environment": {
+    "app_image_id": "sha256:bf0cf93cf9c4b04ba931cad9c221e8e277eae3c9dccc3c1dca5616aca755d0f9",
+    "postgres_image": "postgres@sha256:deb28ee471183cb0c303113dac9b2433c51eeeeb678def7af9a9ec5820367815",
+    "s3_image": "rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2",
+    "resource_cleanup": "passed"
+  },
+  "excluded": [
+    "production_data",
+    "external_email_delivery",
+    "browser_checks"
+  ]
+}

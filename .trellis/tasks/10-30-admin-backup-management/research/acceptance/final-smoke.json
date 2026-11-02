@@ -1,0 +1,12 @@
+{
+  "image_id": "sha256:0c40461d98d06648c22f2d5b068371b5c7d972fd935d4cef0926a954dccff595",
+  "status": "passed",
+  "operation_ids": {
+    "get": "download_api_v1_admin_backups_runs__run_id__download_get",
+    "head": "download_api_v1_admin_backups_runs__run_id__download_head"
+  },
+  "encrypted_backup": "succeeded",
+  "head_get_checksum_matches": true,
+  "no_http_restore": true,
+  "resource_cleanup": "passed"
+}

@@ -47,8 +47,8 @@ DB 新增四表，不重建 users/projects：
 
 ### 身份、目录与目标保护
 
-- **唯一超管事实为 `User.is_admin`**；`is_super_admin` 是其安全输出名。super_admin角色元数据由此投影；无显式成员的非超管投影普通用户。复制super只复制33项可委派动作，不复制身份、角色/授权管理权。
-- 四内置角色只读可复制：super_admin全部33项；content_admin为projects三项、workshop八项、recycle_bin.read/restore共13项；reviewer为workshop.read/approve/reject/hide/unhide五项；user无后台项。任意角色都保留本人个人能力。
+- **唯一超管事实为 `User.is_admin`**；`is_super_admin` 是其安全输出名。super_admin角色元数据由此投影；无显式成员的非超管投影普通用户。复制super只复制37项可委派动作，不复制身份、角色/授权管理权。
+- 四内置角色只读可复制：super_admin全部37项；content_admin为projects三项、workshop八项、recycle_bin.read/restore共13项；reviewer为workshop.read/approve/reject/hide/unhide五项；user无后台项。任意角色都保留本人个人能力。
 - 账号可多角色、取权限并集。权限目录唯一来源为 `PERMISSIONS`；变更动作的requires必须显式存在，后端不暗补。角色名trim后非空≤100、说明≤500，未知/重复项拒绝。
 - 只有超管管理角色/分配。非超管即使拥有全部可委派项，也不能更改任何管理账号的状态、管理员重置密码、删除或配额；管理账号指超管或有效权限非空，禁用后仍受保护。安全读取和本人自助改密不误禁。
 - `AdminUserCreate={username,password}`；PATCH仅 `is_active?`，旧HTTP `is_admin` 字段422，不能留无revision提权旁路。自身/最后启用超管保护继续执行。
@@ -125,7 +125,7 @@ UserQuotaOut包含 user_id/username/is_management_account/revision/authorization
 
 ## 6. 必需测试（断言点）
 
-- `test_rbac.py`、`test_rbac_permissions.py`：33动作直接HTTP正反、内置/自定义/多角色、超管复制、管理目标/旧字段/自身/在用/CAS、明确审计范围及owner隔离。
+- `test_rbac.py`、`test_rbac_permissions.py`：37动作直接HTTP正反、内置/自定义/多角色、超管复制、管理目标/旧字段/自身/在用/CAS、明确审计范围及owner隔离。
 - `test_rbac_concurrency.py`：Event控制双向撤权、User锁顺序、角色编辑/删除/分配竞争；四真实入口同时争最后作品名额最多1成功，失败无风格/Task半成品、token未消费/灵感及解析状态不变；claim提交/会话退出×owner cancel/stop、设置未知发布窗口、真实执行峰值/on_success未完。
 - `test_user_quotas.py`：继承/0/正整数/不限、全部生命周期、超管不豁免、四入口原子拒绝、任务排队/全局硬顶/调低不强杀。
 - `test_rbac_migrations.py`：0028代表性存量启用/禁用超管和普通账号，以及作品/章节/私人AI密文子行逐字段不变、FK完整、角色ID不复用、守护降级；create_all不能冒充Alembic。
@@ -154,3 +154,7 @@ if (useAuthStore.getState().status === 'anonymous') navigate('/login')
 ```
 
 边界：旧SQLite User整数ID+JWT sub/ver实体复用风险不在本迁移修复范围，authorization_revision不能被描述为旧JWT隔离机制。
+
+## 0030 备份权限升级
+
+当前目录37项：新增backups.read/configure/run/download，后三项dangerous且requires read。0029的历史33项常量保持冻结；0030原子升级现存内置super_admin并递增角色/authorization revision，自定义和其他内置角色不增权。initialize只补缺失内置角色而读取严格校验目录，不能遗漏存量升级。详见[整库备份](./admin-backups.md)。

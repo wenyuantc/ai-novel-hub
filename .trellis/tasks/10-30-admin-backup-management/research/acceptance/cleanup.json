@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "owned_acceptance_resources_remaining": {
+    "containers": 0,
+    "networks": 0,
+    "volumes": 0
+  },
+  "browser_fixture_resources_removed": true,
+  "final_smoke_resources_removed": true
+}

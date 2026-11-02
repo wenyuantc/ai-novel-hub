@@ -164,3 +164,7 @@ await db.refresh(chapter)
 错误：日期 DELETE 忘记 action 排除，会连清理行为一起抹除；或只凭客户端 count/confirm 删除。
 
 正确：先验证绑定当前 actor 和范围的短期 preview_token、消费 nonce，再在同事务中删除日期及高水位内的非 audit.cleanup 记录并保存实际条数。权限、保护与原子性必须在服务端保证。
+
+## 备份动作（0030）
+
+`backup.settings.update`/`backup.run.accept`/`backup.download.authorize`，目标backup_settings/backup_run。局部typed `backup_change`仅字段名、settings_revision、execution_key、destination和encrypted；不采集连接参数、收件人、秘密长度或原始错误。受理和授权成功不等于执行完成/文件送达。下载打开资源后复核原会话且GET成功审计同事务；HEAD不伪造已送达日志。详见[整库备份](./admin-backups.md)。

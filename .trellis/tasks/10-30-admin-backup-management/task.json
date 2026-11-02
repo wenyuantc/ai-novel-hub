@@ -2,17 +2,17 @@
   "id": "admin-backup-management",
   "name": "admin-backup-management",
   "title": "管理员备份管理",
-  "description": "管理定时备份、备份执行记录和失败提醒，衔接已有作品备份与数据库恢复操作。",
-  "status": "planning",
-  "dev_type": null,
-  "scope": null,
+  "description": "提供 PostgreSQL/SQLite 整库备份、可配置本地/S3、SMTP 失败提醒、可选加密和分项授权。",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": "admin-backups",
   "package": null,
   "priority": "P2",
   "creator": "aiNovel",
   "assignee": "aiNovel",
   "createdAt": "2026-10-30",
   "completedAt": null,
-  "branch": null,
+  "branch": "codex/admin-backup-management",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -23,8 +23,41 @@
   "relatedFiles": [],
   "notes": "",
   "meta": {
-    "planning_stage": "backlog",
+    "planning_stage": "approved",
+    "planning_started_at": "2026-11-02",
+    "backup_scope": "database",
+    "backup_storage": "local_and_s3_independent_switches",
+    "backup_databases": [
+      "postgresql",
+      "sqlite"
+    ],
+    "backup_restore_mode": "download_and_cli_guide",
+    "backup_permission_model": "per_action",
+    "backup_schedule": {
+      "frequency": "daily",
+      "time": "03:00",
+      "timezone": "Asia/Shanghai",
+      "time_configurable": true,
+      "enabled_configurable": true
+    },
+    "backup_retention": {
+      "local_keep_successful": 7,
+      "s3_keep_successful": 7,
+      "independently_configurable": true
+    },
+    "backup_failure_notifications": [
+      "admin_ui",
+      "smtp_email"
+    ],
+    "backup_connection_configuration": "admin_ui_encrypted_credentials",
+    "backup_file_encryption": "configurable",
+    "backup_file_encryption_default": true,
+    "backup_password_management": "admin_ui_encrypted_and_offline_copy",
     "source": "admin-feature-inventory",
-    "implementation_approved": "false"
+    "implementation_approved": "true",
+    "implementation_stage": "committing",
+    "quality_gate": "passed",
+    "acceptance": "32_real_checks_passed",
+    "integration_authorized": "merge_main_and_push"
   }
 }

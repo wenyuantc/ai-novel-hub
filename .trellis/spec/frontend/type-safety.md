@@ -255,3 +255,9 @@ parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? `nov
 - 在 `ChapterUpdate` 中发送 `status: 'generating'`（类型禁止；后端拒绝）。
 - 不通过 `parseServerTime`/`formatTime` 解析服务端时间戳。
 - 对服务端数据做宽泛的 `as` 断言。在类型系统无法推导的地方，以下现有的窄断言是可接受的：`request` 中的 `undefined as T` / `JSON.parse(text) as T`、`WizardGenerator` 中在 `kind` 检查后的 `result as WizardItemMap['world'][]`、来自固定单选组的 `e.target.value as ExportFormat`、`utils/transfer.ts` 中对后端 `action: str` 的 `action as ImportStyleAction`（查表失败有回退），以及 `main.tsx` 中的非空断言 `document.getElementById('root')!`。
+
+## 管理员整库备份传输
+
+`api/adminBackups.ts`与`types.ts`镜像`schemas/backup.py`，不复用个人作品导出Blob模式。HEAD预检后经当前actor/authorizationKey守卫发原生附件，错误进入统一client，提示仅“已开始下载”。`handleErrorResponse`接收原请求method：HEAD403没有JSON正文也触发当代次授权刷新；其他403仍要求permission_denied，旧session失败不得刷新新session，不自动重发业务。
+
+页级controller在保存成功时使旧overview请求失效并立即拉新revision；冲突保留草稿，configure撤权清秘密，下一计划显式Asia/Shanghai。普通HTTP环境缺crypto.randomUUID时使用getRandomValues生成v4。完整状态、秘密PATCH、恢复和测试点见[整库备份契约](../backend/admin-backups.md)。

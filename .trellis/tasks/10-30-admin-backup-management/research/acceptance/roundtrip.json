@@ -1,0 +1,130 @@
+{
+  "scenario": "roundtrip",
+  "status": "passed",
+  "started_at": "2026-11-02T04:28:25.200894+00:00",
+  "finished_at": "2026-11-02T04:31:17.118594+00:00",
+  "checks": [
+    {
+      "check": "postgresql.http_permissions_and_revocation",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.configuration_defaults_cas_and_secret_omission",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.delegated_execute_download_and_cross_actor_request_conflict",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.plain_real_download_restore",
+      "status": "passed",
+      "tables": 15,
+      "credential_decrypts": true,
+      "integrity": true,
+      "schema": "0030",
+      "artifact_sha256": "eef066cb9a1955251c734ec7b022e06a24158e1d7b39f5a2cb746d888c92af30",
+      "restored_app_login_and_read": true
+    },
+    {
+      "check": "postgresql.encrypted_real_download_restore",
+      "status": "passed",
+      "tables": 15,
+      "credential_decrypts": true,
+      "integrity": true,
+      "schema": "0030",
+      "artifact_sha256": "f4e1fdb0e957d453bd7418a9ce72242406f53348a7db078eec1bc99c21f34218",
+      "restored_app_login_and_read": true
+    },
+    {
+      "check": "postgresql.encrypted_rotated_real_download_restore",
+      "status": "passed",
+      "tables": 15,
+      "credential_decrypts": true,
+      "integrity": true,
+      "schema": "0030",
+      "artifact_sha256": "2580a92f2ae72e23a90cf304005ab44af1383b9b3989b388147a57b1a0170955",
+      "restored_app_login_and_read": true
+    },
+    {
+      "check": "postgresql.password_and_format_rotation_only_affects_new_artifacts",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.database_secret_ciphertext_and_terminal_snapshot_cleanup",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.http_permissions_and_revocation",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.configuration_defaults_cas_and_secret_omission",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.delegated_execute_download_and_cross_actor_request_conflict",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.plain_real_download_restore",
+      "status": "passed",
+      "tables": 16,
+      "credential_decrypts": true,
+      "integrity": true,
+      "schema": "0030",
+      "artifact_sha256": "b1e9eec55eba7e2b8988ec5f0218537bbf3346069bea2b34ba96f676573eac06",
+      "restored_app_login_and_read": true
+    },
+    {
+      "check": "sqlite.encrypted_real_download_restore",
+      "status": "passed",
+      "tables": 16,
+      "credential_decrypts": true,
+      "integrity": true,
+      "schema": "0030",
+      "artifact_sha256": "f0d2def7a3ba22eed5a2887dcc665a21a837cd743e5d6f54229ea2314d3ec613",
+      "restored_app_login_and_read": true
+    },
+    {
+      "check": "sqlite.encrypted_rotated_real_download_restore",
+      "status": "passed",
+      "tables": 16,
+      "credential_decrypts": true,
+      "integrity": true,
+      "schema": "0030",
+      "artifact_sha256": "f667df8e92fd3b4e7f16da387d7724149af1f6289283ae0a7e81e0d73c38007d",
+      "restored_app_login_and_read": true
+    },
+    {
+      "check": "sqlite.password_and_format_rotation_only_affects_new_artifacts",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.database_secret_ciphertext_and_terminal_snapshot_cleanup",
+      "status": "passed"
+    },
+    {
+      "check": "container_logs_no_test_secrets",
+      "status": "passed"
+    }
+  ],
+  "failure_check": null,
+  "environment": {
+    "app_image_id": "sha256:614413a6fbd84e2a720772aa2fab6f3320e3519196eb60ee1f0b9290f8d37268",
+    "postgres_image": "postgres@sha256:deb28ee471183cb0c303113dac9b2433c51eeeeb678def7af9a9ec5820367815",
+    "s3_image": "rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2",
+    "tools": {
+      "pg_dump": "pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)",
+      "pg_restore": "pg_restore (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)",
+      "gpg": "gpg (GnuPG) 2.2.40",
+      "gpgconf": "gpgconf (GnuPG) 2.2.40"
+    },
+    "resource_cleanup": "passed"
+  },
+  "excluded": [
+    "production_data",
+    "external_email_delivery",
+    "browser_checks"
+  ]
+}

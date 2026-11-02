@@ -1,0 +1,121 @@
+{
+  "recorded_at_utc": "2026-11-02T04:42:42.443118+00:00",
+  "reviewer": "final_full_review",
+  "status": "passed_with_complete_baseline_and_final_affected_scope_verification",
+  "source_frozen_at": "2026-11-02T12:34:06+08:00",
+  "source_snapshot": {
+    "files": 64,
+    "sha256": "3b1fba2db943a25bbf8d047b80585cb2d956ae1fd69148322530b5acb6954804",
+    "scope": "changed backend/app, backend/alembic, frontend/src, ordinary backend/tests/test_*.py, Dockerfile, docker-compose.yml, backend/pyproject.toml and backend/uv.lock; excludes .trellis documentation and independent acceptance harness"
+  },
+  "scope_boundary": "完整1526项基线已包含终态明文目录回收修复、6项回归和3项APP_SCHEMA断言同步；仅最终GET/HEAD装饰器元数据修复及其新增1项回归在完整基线启动后落盘。最终源码随后完成60项API/OpenAPI与36项运行器增量。没有宣称最终1527项完整套件重跑通过。",
+  "backend": {
+    "working_directory": "backend",
+    "complete_baseline": {
+      "command": "env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run ruff check . && env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest",
+      "session_id": 44095,
+      "exit_code": 0,
+      "ruff": "All checks passed!",
+      "passed": 1526,
+      "failed": 0,
+      "warnings": 2,
+      "pytest_duration_seconds": 738.41,
+      "safe_stdout_tail": "================= 1526 passed, 2 warnings in 738.41s (0:12:18) =================",
+      "warning_details": [
+        {
+          "kind": "ExperimentalWarning",
+          "source": "app/ai/providers/gemini.py:151",
+          "summary": "既有Gemini generate_images方法弃用警告，本任务未更改该调用。"
+        },
+        {
+          "kind": "UserWarning",
+          "source": "app/api/v1/admin_backups.py",
+          "summary": "基线进程导入最终元数据修复前的GET/HEAD共用路由，生成Duplicate Operation ID。随后拆成独立get/head装饰器，新增回归先RED，最终60项增量无该警告。"
+        }
+      ]
+    },
+    "final_api_incremental": {
+      "command": "env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run ruff check . && env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest tests/test_backup_review_contracts.py tests/test_backup_contracts.py tests/test_open_api.py -q",
+      "session_id": 48691,
+      "exit_code": 0,
+      "ruff": "All checks passed!",
+      "passed": 60,
+      "failed": 0,
+      "warnings": 0,
+      "pytest_duration_seconds": 47.21,
+      "safe_stdout_tail": "60 passed in 47.21s"
+    },
+    "final_runtime_incremental": {
+      "command": "env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest tests/test_backup_runtime.py tests/test_backup_runtime_review.py -q",
+      "session_id": 84870,
+      "exit_code": 0,
+      "passed": 36,
+      "failed": 0,
+      "warnings": 0,
+      "pytest_duration_seconds": 25.11,
+      "safe_stdout_tail": "36 passed in 25.11s"
+    },
+    "separate_typecheck": "本仓库后端未配置单独的静态类型检查命令；没有将ruff或pytest冒作typecheck。"
+  },
+  "frontend": {
+    "working_directory": "frontend",
+    "command": "npm run lint && npm run build && npm test",
+    "session_id": 45643,
+    "exit_code": 0,
+    "lint": "passed",
+    "typecheck_and_build": "passed",
+    "test_files": 95,
+    "tests_passed": 724,
+    "scope": "完整前端门禁后未再修改前端源码；真实浏览器证据由主会话单独维护。"
+  },
+  "whitespace": {
+    "tracked_command": "git diff HEAD --check",
+    "exit_code": 0,
+    "untracked_source_files_checked": 44,
+    "untracked_trailing_whitespace_or_missing_final_newline": 0
+  },
+  "fixed_findings": [
+    {
+      "file": "backend/app/services/backups/runtime.py:521",
+      "issue": "终态执行cleanup失败后遗留的自有明文工作目录重启不再回收，未加密执行亦遗漏。",
+      "fix": "对终态cleanup failed/unknown/pending按已知instance/execution精确重试work目录回收；加密home与work独立尝试；保留原备份结果及清理失败历史。",
+      "regression": "backend/tests/test_backup_runtime_review.py:20，encrypted两种状态乘cleanup三种状态，共6项，先RED后GREEN；未知目录保留。"
+    },
+    {
+      "files": [
+        "backend/tests/test_agent_api.py:213",
+        "backend/tests/test_project_cover.py:202",
+        "backend/tests/test_reader.py:260"
+      ],
+      "issue": "既有导出回归硬编码旧app_schema 0024，未跟随已计划的0030元数据更新。",
+      "fix": "同步0030预期，format version仍断言1，其余业务数据断言保留。"
+    },
+    {
+      "file": "backend/app/api/v1/admin_backups.py:119",
+      "issue": "GET/HEAD共用api_route生成重复OpenAPI operationId。",
+      "fix": "使用同函数独立get/head装饰器，保留两方法，生成唯一operationId。",
+      "regression": "backend/tests/test_backup_review_contracts.py:27，先RED 1 failed且复现重复警告，修复后最终API增量60 passed无警告。"
+    }
+  ],
+  "unfixed_new_product_findings": [],
+  "known_boundaries": [
+    "DNS校验至实际连接仍有窗口，部署须配置出站限制；这是design/README已明示边界，没有擅改第三方连接模块。",
+    "本证据不替代真实PG/SQLite/GPG/S3/SMTP隔离all验收或真实浏览器验收；这些由主会话和backup_acceptance维护。",
+    "依赖审计和既有前端moderate风险的适用性由主会话research/dependency-audit.md单独记录。"
+  ],
+  "discarded_non_gate_runs": [
+    {
+      "session_id": 57270,
+      "exit_code": 1,
+      "passed": 1517,
+      "failed": 3,
+      "pytest_duration_seconds": 747.19,
+      "reason": "较早1520项基线的3个旧APP_SCHEMA断言失败；随后修复并由完整44095覆盖。"
+    },
+    {
+      "session_id": 99001,
+      "exit_code": 1,
+      "reason": "最终元数据修复后启动的冗余全量，收到主会话保留44095加受影响增量指令后主动中断；不计任何通过证据。"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "scenario": "browser",
+  "status": "passed",
+  "image_id": "sha256:614413a6fbd84e2a720772aa2fab6f3320e3519196eb60ee1f0b9290f8d37268",
+  "checks": [
+    {
+      "check": "super_admin_navigation_and_default_schedule_display",
+      "status": "passed"
+    },
+    {
+      "check": "separate_local_s3_retention_save_and_password_omission",
+      "status": "passed"
+    },
+    {
+      "check": "cas_conflict_preserves_draft_then_explicit_reload",
+      "status": "passed"
+    },
+    {
+      "check": "actual_gpg_run_succeeded_and_native_download_sha256_matches",
+      "status": "passed",
+      "sha256": "4d5bfec26f6b123986d25d68e59029a811facc5a4805650e5b628be951ef020e"
+    },
+    {
+      "check": "four_action_role_ui_read_configure_run_download",
+      "status": "passed"
+    },
+    {
+      "check": "same_actor_configure_revocation_removes_form_draft_and_secret_inputs",
+      "status": "passed"
+    },
+    {
+      "check": "head_403_revocation_refresh_closes_detail_keeps_session",
+      "status": "passed",
+      "server_head_403_observed": true
+    },
+    {
+      "check": "375px_mobile_cards_and_light_dark_theme",
+      "status": "passed",
+      "viewport": 375,
+      "page_width": 375,
+      "body_width": 375
+    },
+    {
+      "check": "no_console_errors_or_warnings_in_test_tab",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    "browser-desktop.jpg",
+    "browser-mobile-light.jpg"
+  ],
+  "notes": [
+    "只使用独立容器与合成数据；首次旧镜像GPG失败保留历史，修复镜像后run2/run3成功。",
+    "真实浏览器不替代HTTP权限/恢复验收；后续runtime终态清理修复由reliability场景另外验证。"
+  ],
+  "resource_cleanup": "passed"
+}

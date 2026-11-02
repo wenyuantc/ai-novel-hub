@@ -1,0 +1,68 @@
+{
+  "scenario": "smtp",
+  "status": "passed",
+  "started_at": "2026-11-02T04:19:58.650163+00:00",
+  "finished_at": "2026-11-02T04:20:54.041373+00:00",
+  "checks": [
+    {
+      "check": "postgresql.http_permissions_and_revocation",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.configuration_defaults_cas_and_secret_omission",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.delegated_execute_download_and_cross_actor_request_conflict",
+      "status": "passed"
+    },
+    {
+      "check": "postgresql.real_tls_smtp_partial_failed_and_mail_failure",
+      "status": "passed",
+      "captured_messages": 2
+    },
+    {
+      "check": "sqlite.http_permissions_and_revocation",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.configuration_defaults_cas_and_secret_omission",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.delegated_execute_download_and_cross_actor_request_conflict",
+      "status": "passed"
+    },
+    {
+      "check": "sqlite.real_tls_smtp_partial_failed_and_mail_failure",
+      "status": "passed",
+      "captured_messages": 4
+    },
+    {
+      "check": "sqlite.smtp_confirmation_lost_unknown_and_no_blind_retry",
+      "status": "passed"
+    },
+    {
+      "check": "container_logs_no_test_secrets",
+      "status": "passed"
+    }
+  ],
+  "failure_check": null,
+  "environment": {
+    "app_image_id": "sha256:614413a6fbd84e2a720772aa2fab6f3320e3519196eb60ee1f0b9290f8d37268",
+    "postgres_image": "postgres@sha256:deb28ee471183cb0c303113dac9b2433c51eeeeb678def7af9a9ec5820367815",
+    "s3_image": "rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2",
+    "tools": {
+      "pg_dump": "pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)",
+      "pg_restore": "pg_restore (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)",
+      "gpg": "gpg (GnuPG) 2.2.40",
+      "gpgconf": "gpgconf (GnuPG) 2.2.40"
+    },
+    "resource_cleanup": "passed"
+  },
+  "excluded": [
+    "production_data",
+    "external_email_delivery",
+    "browser_checks"
+  ]
+}
