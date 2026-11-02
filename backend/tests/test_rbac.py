@@ -22,7 +22,7 @@ async def test_catalog_and_fixed_roles_are_explicit(system_admin, client):
     assert response.headers["cache-control"] == "no-store"
     items = response.json()["items"]
     assert {item["code"] for item in items} == set(PERMISSION_CODES)
-    assert len(items) == 33
+    assert len(items) == 37
     roles = (await system_admin.get(ROLES)).json()["items"]
     assert {r["system_key"] for r in roles} == set(BUILTIN_ROLES)
     for role in roles:

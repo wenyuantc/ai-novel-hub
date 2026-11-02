@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     auto_analyze_enabled: bool = True
     # 实例级MCP有效开关：关闭后插件接口403，智能体禁止后续调用，已发调用允许结束。
     mcp_enabled: bool = True
+    # 整库备份的部署边界；S3/SMTP及计划保存在独立BackupSettings，不进入六项业务设置。
+    backup_dir: str = Field(default="./backups", min_length=1)
+    backup_pg_dump_path: str = Field(default="pg_dump", min_length=1)
+    backup_gpg_path: str = Field(default="gpg", min_length=1)
+    backup_gpgconf_path: str = Field(default="gpgconf", min_length=1)
+    backup_timeout_seconds: float = Field(default=3600, gt=0, le=86400)
+    allow_private_backup_endpoints: bool = False
+    backup_ca_bundle: str | None = None
     # 生产模式下挂载的前端构建产物目录；不存在则跳过
     frontend_dist_dir: str = str(_DEFAULT_FRONTEND_DIST)
     # 首个管理员引导（可选，须同时设置）：启动时账号不存在则创建，已存在则确保为启用中的管理员，不覆盖密码
@@ -64,6 +72,18 @@ class Settings(BaseSettings):
                 '`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成'
             ) from exc
         return v
+
+    @field_validator("backup_ca_bundle", mode="before")
+    @classmethod
+    def _empty_backup_ca(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @field_validator("backup_dir", "backup_pg_dump_path", "backup_gpg_path", "backup_gpgconf_path", "backup_ca_bundle")
+    @classmethod
+    def _validate_backup_deployment_path(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or any(char in value for char in ("\r", "\n", "\x00"))):
+            raise ValueError("备份部署路径不能为空或包含控制字符")
+        return value
 
     @field_validator("admin_username", "admin_password", mode="before")
     @classmethod

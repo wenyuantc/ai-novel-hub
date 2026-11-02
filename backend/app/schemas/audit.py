@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from app.core.permissions import PERMISSION_CODES
 from app.schemas.admin_task import validate_cancel_reason
+from app.schemas.backup import BackupAuditChange
 from app.schemas.rbac import QuotaConfig
 from app.schemas.system_settings import SystemSettingAuditChange
 from app.schemas.task import TaskKind
@@ -52,10 +53,13 @@ AuditAction = Literal[
     "audit.cleanup",
     "task.cancel_request",
     "system_settings.update",
+    "backup.settings.update",
+    "backup.run.accept",
+    "backup.download.authorize",
 ]
 AuditTargetType = Literal[
     "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task",
-    "system_settings", "role",
+    "system_settings", "role", "backup_settings", "backup_run",
 ]
 AuditResult = Literal["success", "failure"]
 AuditErrorCode = Literal[
@@ -168,6 +172,7 @@ class RbacAuditChange(BaseModel):
 
 
 class AuditSummary(BaseModel):
+    backup_change: BackupAuditChange | None = None
     rbac_change: RbacAuditChange | None = None
     model_config = ConfigDict(extra="forbid")
     settings_changes: list[SystemSettingAuditChange] = Field(default_factory=list, max_length=6)

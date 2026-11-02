@@ -14,3 +14,5 @@ frontend/dist
 .codex
 .cursor
 .opencode
+/backups/
+/backend/backups/

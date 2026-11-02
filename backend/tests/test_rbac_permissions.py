@@ -1,4 +1,4 @@
-"""33项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
+"""37项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
 
 from app.core.permissions import PERMISSION_CODES, PERMISSIONS
 from tests.helpers import create_project, register
@@ -51,6 +51,13 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         }, 200),
         "settings.read": ("GET", "/api/v1/admin/system-settings", None, 200),
         "settings.update": None,
+        "backups.read": ("GET", "/api/v1/admin/backups/runs", None, 200),
+        "backups.configure": None,
+        # 当前未设备份密码，最小run授权应到达配置就绪检查，而非被403拦截。
+        "backups.run": ("POST", "/api/v1/admin/backups/runs", {
+            "request_id": "00000000-0000-4000-8000-000000000001", "settings_revision": 1,
+        }, 400),
+        "backups.download": ("GET", "/api/v1/admin/backups/runs/999999/download?destination=local", None, 404),
         "workshop.read": ("GET", "/api/v1/workshop/admin/submissions", None, 200),
         "workshop.approve": ("POST", "/api/v1/workshop/admin/submissions/999999/approve", {}, 404),
         "workshop.reject": ("POST", "/api/v1/workshop/admin/submissions/999999/reject", {"note": "未通过"}, 404),
@@ -65,7 +72,7 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         "global_skills.delete": None,
         "global_skills.restore_builtin": None,
     }
-    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 33
+    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 37
     serial = 0
 
     async def prepare(code):
@@ -83,6 +90,11 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
             current = (await system_admin.get("/api/v1/admin/system-settings")).json()
             return "PATCH", "/api/v1/admin/system-settings", {
                 "revision": current["revision"], "changes": {"auto_analyze_enabled": False},
+            }, 200
+        if code == "backups.configure":
+            current = (await system_admin.get("/api/v1/admin/backups/settings")).json()
+            return "PATCH", "/api/v1/admin/backups/settings", {
+                "revision": current["revision"], "changes": {"local_keep": 8},
             }, 200
         if code.startswith("projects.") or code.startswith("recycle_bin."):
             # 重置密码测试会撤销owner会话，先用新密码重新登录。

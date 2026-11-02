@@ -185,6 +185,7 @@ def make_settings(tmp_path, **overrides) -> Settings:
         "registration_enabled": True,
         "cookie_secure": False,
         "frontend_dist_dir": str(tmp_path / "no-dist"),
+        "backup_dir": str(tmp_path / "backups"),
         # 自动分析会额外排队任务并消耗 FakeLLM 的预设输出：默认关闭，自动分析相关测试显式开启
         "auto_analyze_enabled": False,
     }

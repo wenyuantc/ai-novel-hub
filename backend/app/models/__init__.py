@@ -1,6 +1,7 @@
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
 from app.models.api_key import ApiKey, ApiKeyProject
 from app.models.audit import AdminAuditLog
+from app.models.backup import BackupArtifact, BackupRun, BackupSettings
 from app.models.base import Base
 from app.models.dashboard import DashboardDailySnapshot, DashboardTracking, TaskStatistic
 from app.models.entities import (
@@ -49,6 +50,9 @@ from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 
 __all__ = [
+    "BackupArtifact",
+    "BackupRun",
+    "BackupSettings",
     "AuthorizationState",
     "Role",
     "UserQuota",

@@ -188,6 +188,10 @@ class AuditOperation:
             "user.roles.update", "user.roles.bootstrap", "user.quotas.update",
         }:
             raise ValueError("角色配额摘要仅允许用于对应管理动作")
+        if summary["backup_change"] is not None and self.values["action"] not in {
+            "backup.settings.update", "backup.run.accept", "backup.download.authorize",
+        }:
+            raise ValueError("备份摘要仅允许用于对应备份动作")
         return AdminAuditLog(
             operation_id=self.operation_id,
             **self.values,

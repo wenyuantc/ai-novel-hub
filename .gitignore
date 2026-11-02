@@ -21,3 +21,7 @@ frontend/dist/
 .DS_Store
 .idea/
 .vscode/
+
+# 整库备份运行产物；锚定根目录，不能忽略app/services/backups源码包。
+/backups/
+/backend/backups/

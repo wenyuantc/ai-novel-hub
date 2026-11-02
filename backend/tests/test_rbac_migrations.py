@@ -33,7 +33,7 @@ def test_0029_preserves_users_sessions_and_business_foreign_keys(tmp_path):
                 "VALUES (1,'旧超管','secret-hash',1,0,7),(2,'普通账号','other-hash',0,1,3)"
             ))
             before = db.execute(text("SELECT * FROM users ORDER BY id")).all()
-        command.upgrade(config, "head")
+        command.upgrade(config, "0029")
         assert set(inspect(engine).get_table_names()) == before_tables | {
             "roles", "user_roles", "authorization_state", "user_quotas",
         }
@@ -46,7 +46,9 @@ def test_0029_preserves_users_sessions_and_business_foreign_keys(tmp_path):
             assert len(roles) == 4
             for key, name, permissions in roles:
                 assert name == BUILTIN_ROLES[key][0]
-                assert set(json.loads(permissions)) == set(BUILTIN_ROLES[key][2])
+                # 历史0029冻结33项，新权限由0030升级现存super_admin元数据。
+                expected = {code for code in BUILTIN_ROLES[key][2] if not code.startswith("backups.")}
+                assert set(json.loads(permissions)) == expected
             assert db.execute(text("PRAGMA foreign_key_check")).all() == []
         for sql in (
             "INSERT INTO authorization_state(id,revision) VALUES(2,0)",

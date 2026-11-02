@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     admin_audit,
+    admin_backups,
     admin_dashboard,
     admin_quotas,
     admin_recycle_bin,
@@ -49,6 +50,7 @@ api_router.include_router(admin.router)
 api_router.include_router(admin_roles.router)
 api_router.include_router(admin_quotas.router)
 api_router.include_router(admin_audit.router)
+api_router.include_router(admin_backups.router)
 api_router.include_router(admin_dashboard.router)
 api_router.include_router(admin_recycle_bin.router)
 api_router.include_router(admin_system_settings.router)

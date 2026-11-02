@@ -37,6 +37,15 @@ services:
       AUTO_ANALYZE_ENABLED: ${AUTO_ANALYZE_ENABLED:-true}
       MCP_ENABLED: ${MCP_ENABLED:-true}
       ALLOW_PRIVATE_AI_ENDPOINTS: ${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
+      BACKUP_DIR: /app/backups
+      BACKUP_PG_DUMP_PATH: ${BACKUP_PG_DUMP_PATH:-/usr/lib/postgresql/16/bin/pg_dump}
+      BACKUP_GPG_PATH: ${BACKUP_GPG_PATH:-gpg}
+      BACKUP_GPGCONF_PATH: ${BACKUP_GPGCONF_PATH:-gpgconf}
+      BACKUP_TIMEOUT_SECONDS: ${BACKUP_TIMEOUT_SECONDS:-3600}
+      ALLOW_PRIVATE_BACKUP_ENDPOINTS: ${ALLOW_PRIVATE_BACKUP_ENDPOINTS:-false}
+      BACKUP_CA_BUNDLE: ${BACKUP_CA_BUNDLE:-}
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/app/backups
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

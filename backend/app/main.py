@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.ai.images import MAX_COVER_BYTES
 from app.ai.images import TOO_LARGE as COVER_TOO_LARGE
@@ -29,6 +31,8 @@ from app.services import (
     style_service,
     task_statistics_service,
 )
+from app.services.backups.runtime import BackupRuntime
+from app.services.backups.service import BackupManager
 from app.services.book_import import service as book_import_service
 from app.services.project_transfer import importer as transfer_importer
 from app.services.system_settings_service import SystemSettingsManager
@@ -36,6 +40,40 @@ from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
 
 logger = logging.getLogger(__name__)
+
+
+class _BackupResponseHeaders:
+    """局部敏感响应边界；纯ASGI保持现有授权屏障的请求Task身份。"""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        is_backup = path == "/api/v1/admin/backups" or path.startswith("/api/v1/admin/backups/")
+        if scope["type"] != "http" or not is_backup:
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def safe_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["Cache-Control"] = "no-store"
+                headers["X-Content-Type-Options"] = "nosniff"
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, safe_send)
+        except Exception:
+            logger.error("备份接口发生未确认错误")
+            if started:
+                # 正文已开始不可改写响应；只传播固定异常，隐藏第三方/SQL原文。
+                raise RuntimeError("备份附件传输已中断") from None
+            response = JSONResponse(status_code=500, content={"detail": "备份操作暂时不可用，请刷新核实"})
+            await response(scope, receive, safe_send)
 
 
 def _mount_frontend(app: FastAPI, dist_dir: str) -> None:
@@ -86,9 +124,12 @@ def create_app(
             await app_.state.task_engine.start()
         await app_.state.recycle_bin_cleaner.start()
         await app_.state.dashboard_sampler.start()
+        await app_.state.backup_runtime.start()
         try:
             yield
         finally:
+            await app_.state.backups.close()
+            await app_.state.backup_runtime.stop()
             await app_.state.system_settings.close()
             await app_.state.dashboard_sampler.stop()
             await app_.state.recycle_bin_cleaner.stop()
@@ -101,6 +142,10 @@ def create_app(
     app.state.engine = engine
     app.state.sessionmaker = create_sessionmaker(engine)
     app.state.cipher = SecretCipher(settings.encryption_key)
+    app.state.backups = BackupManager(settings, app.state.cipher, app.state.sessionmaker)
+    app.state.backup_runtime = BackupRuntime(app.state.backups)
+    app.state.backups.notify = app.state.backup_runtime.notify
+    app.state.backups.tool_readiness = app.state.backup_runtime.tool_readiness
     app.state.provider_factory = provider_factory or create_provider
     app.state.system_settings = SystemSettingsManager(
         settings, app.state.sessionmaker, lambda: app.state.task_engine.notify(),
@@ -169,6 +214,8 @@ def create_app(
     )
 
     register_error_handlers(app)
+
+    app.add_middleware(_BackupResponseHeaders)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict:
