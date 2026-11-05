@@ -555,6 +555,8 @@ export interface WorldSetting {
   content: string
   /** 后端为 str；正常取值为 WorldCategory */
   category: string
+  /** 旧向导草稿可能省略；持久化条目返回数组。 */
+  aliases?: string[]
   sort: number
 }
 
@@ -562,6 +564,7 @@ export interface WorldSettingInput {
   title: string
   content?: string
   category?: WorldCategory
+  aliases?: string[]
   sort?: number | null
 }
 

@@ -6,6 +6,7 @@ import AgentChangeCard from './AgentChangeCard'
 import AgentMarkdown from './AgentMarkdown'
 
 interface Props {
+  focusMessageId?: number | null
   messages: AgentMessage[]
   changes: AgentChange[]
   steps: AgentToolStep[]
@@ -18,12 +19,19 @@ interface Props {
   onAction: (change: AgentChange, action: 'confirm' | 'reject' | 'undo') => void
   onTurn: (id: number, action: 'confirm-all' | 'reject-all' | 'undo') => void
 }
-export default function AgentTimeline({ messages, changes, steps, text, running, busy, actingId, confirmationReady, onAction, onTurn }: Props) {
+export default function AgentTimeline({ messages, changes, steps, text, running, busy, actingId, confirmationReady, onAction, onTurn, focusMessageId }: Props) {
   const { token } = theme.useToken()
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
+  const located = useRef<number | null>(null)
   const items = useMemo(() => buildAgentTimeline(messages, changes, steps), [messages, changes, steps])
   const turns = [...new Set(changes.map((c) => c.turn_task_id).filter((id): id is number => id !== null))]
+  useEffect(() => {
+    if (!focusMessageId || located.current === focusMessageId) return
+    stickRef.current = false
+    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${focusMessageId}"]`)
+    if (node) { located.current = focusMessageId; node.scrollIntoView({ block: 'center' }); node.focus({ preventScroll: true }) }
+  }, [focusMessageId, items])
   useEffect(() => {
     const el = scrollRef.current
     if (el && stickRef.current) el.scrollTop = el.scrollHeight
@@ -35,7 +43,7 @@ export default function AgentTimeline({ messages, changes, steps, text, running,
     {items.length === 0 && !running && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>从当前项目开始对话<br /><Typography.Text type="secondary">例如：检查未回收的伏笔，或把主角的性格改得更冷静。</Typography.Text></span>} />}
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {items.map((item) => <div key={item.key}>
-        {item.type === 'message' && <div style={{ padding: item.message.role === 'user' ? 12 : 0, background: item.message.role === 'user' ? token.colorFillQuaternary : undefined, borderRadius: token.borderRadius }}>
+        {item.type === 'message' && <div data-message-id={item.message.id} tabIndex={focusMessageId === item.message.id ? -1 : undefined} style={{ padding: item.message.role === 'user' ? 12 : 0, background: focusMessageId === item.message.id ? token.colorWarningBg : item.message.role === 'user' ? token.colorFillQuaternary : undefined, borderRadius: token.borderRadius, outline: focusMessageId === item.message.id ? `1px solid ${token.colorWarning}` : undefined }}>
           <Space size={4} wrap>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>{item.message.role === 'user' ? '你' : item.message.role === 'tool' ? '操作记录' : '项目智能体'}</Typography.Text>
             {item.message.role === 'user' && item.message.skill && <Tag style={{ marginInlineEnd: 0 }} title="本轮强制启用的 Skill">Skill：{item.message.skill.name}</Tag>}

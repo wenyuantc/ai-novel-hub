@@ -1,6 +1,8 @@
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Form, Input, Modal, Select, Skeleton, Space, Typography, theme } from 'antd'
 import { useCallback, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { readPositiveId } from '../../utils/mentions'
 import { agentApi } from '../../api/agent'
 import { errorMessage } from '../../api/client'
 import { useLoader } from '../../hooks/useLoader'
@@ -11,11 +13,15 @@ export default function AgentPanel({ projectId }: { projectId: number }) {
   const { token } = theme.useToken()
   const loader = useCallback(() => agentApi.list(projectId), [projectId])
   const { data: conversations, loading, error, reload } = useLoader(loader)
-  const [selected, setSelected] = useState<number | null>(null)
+  const location = useLocation()
+  const requested = readPositiveId(new URLSearchParams(location.search).get('conversation_id'))
+  const [selection, setSelection] = useState<{ key: string; id: number | null }>({ key: '', id: null })
+  const selected = selection.key === location.key ? selection.id : requested
+  const setSelected = (id: number | null) => setSelection({ key: location.key, id })
   const [busy, setBusy] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [form] = Form.useForm<{ title: string }>()
-  const current = conversations?.find((c) => c.id === selected) ?? conversations?.[0]
+  const current = selected !== null ? conversations?.find((c) => c.id === selected) : conversations?.[0]
   const create = async () => {
     setBusy(true)
     try { const next = await agentApi.create(projectId); setSelected(next.id); reload() }
@@ -47,6 +53,7 @@ export default function AgentPanel({ projectId }: { projectId: number }) {
       </Space.Compact>
     </div>
     {error && <Alert type="error" message={error} action={<Button onClick={reload}>重试</Button>} />}
+    {selected !== null && conversations && !current && <Alert type="warning" showIcon message="指定会话不存在或已删除，请选择其他会话。" />}
     {!conversations && loading && <div style={{ padding: 16 }}><Skeleton active /></div>}
     {current ? <AgentConversationView key={current.id} pid={projectId} cid={current.id} onUpdated={reload} /> : !loading && <div style={{ padding: 24, textAlign: 'center' }}>
       <Typography.Paragraph>一起整理设定、检查剧情，或修改当前项目。</Typography.Paragraph>

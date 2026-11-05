@@ -21,6 +21,7 @@ import {
 } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
 import { errorMessage } from '../../api/client'
+import { cleanAliases } from '../../api/characters'
 import { baselineEditorLabel } from '../../api/progressions'
 import { worldApi } from '../../api/story'
 import type { WorldSetting } from '../../api/types'
@@ -31,19 +32,23 @@ import type { WorldFormValues } from '../../components/progressions/worldForm'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
+import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
+import EntityMentions from '../../components/mentions/EntityMentions'
 import { asWorldCategory, groupWorld, WORLD_CATEGORIES, WORLD_CATEGORY_LABELS } from '../../utils/world'
 
 const CATEGORY_OPTIONS = WORLD_CATEGORIES.map((c) => ({ value: c, label: WORLD_CATEGORY_LABELS[c] }))
 
 export default function WorldPanel() {
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => worldApi.list(pid), [pid])
-  const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
+  const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
+  const items = useMemo(() => loadedItems ?? [], [loadedItems])
   const [aiOpen, setAiOpen] = useState(false)
   const [tab, setTab] = useState('base')
   const [form] = Form.useForm<WorldFormValues>()
+  const category = Form.useWatch('category', form)
   const editor = useWorldBaselineEditor(pid, form)
   const { editing, open, saving, baseline, baselineLoading, baselineError, baselineConflict } = editor
   const [filter, setFilter] = useState<string>('all')
@@ -56,6 +61,7 @@ export default function WorldPanel() {
     setTab('base')
     editor.openEditor(item, filter === 'all' ? 'other' : asWorldCategory(filter))
   }
+  useEntityDeepLink(pid, loadedItems, loading, openEdit, canReadNow)
 
   const handleDelete = async (item: WorldSetting) => {
     if (!canEditNow()) return
@@ -85,6 +91,7 @@ export default function WorldPanel() {
         </Space>
       }
     >
+      {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
       <Spin spinning={loading}>
         {items.length === 0 ? (
           <Empty description={canUseAI ? '暂无世界观设定，可手动新增或使用 AI 生成' : '暂无世界观设定，可手动新增'} />
@@ -163,7 +170,7 @@ export default function WorldPanel() {
         keyboard={!saving}
         maskClosable={!saving}
         cancelButtonProps={{ disabled: saving }}
-        footer={tab === 'progression' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
+        footer={tab === 'progression' || tab === 'mentions' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
         okText="保存"
         cancelText="取消"
         width={720}
@@ -235,6 +242,9 @@ export default function WorldPanel() {
                       <Form.Item name="category" label="分类">
                         <Select options={CATEGORY_OPTIONS} style={{ width: 200 }} />
                       </Form.Item>
+                      {(category === 'place' || category === 'item') && <Form.Item name="aliases" label="别名" extra="别名参与全文提及追踪；最多 10 个，每个最多 50 字。" rules={[{ validator: (_, value: string[] | undefined) => { const result = cleanAliases(value ?? []); return result.error ? Promise.reject(new Error(result.error)) : Promise.resolve() } }]}>
+                        <Select mode="tags" tokenSeparators={['，', ',']} placeholder="输入别名后回车" />
+                      </Form.Item>}
                       <Form.Item name="content" label={editing ? '基础内容' : '内容'}>
                         <Input.TextArea autoSize={{ minRows: 6, maxRows: 20 }} />
                       </Form.Item>
@@ -260,6 +270,7 @@ export default function WorldPanel() {
                 />
               ) : null,
             }] : []),
+            ...(editing && (editing.category === 'place' || editing.category === 'item') ? [{ key: 'mentions', label: '提及', children: tab === 'mentions' && open ? <EntityMentions projectId={pid} entity={{ kind: 'world', id: editing.id }} /> : null }] : []),
           ]}
         />
       </Modal>

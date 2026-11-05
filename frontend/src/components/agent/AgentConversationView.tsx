@@ -13,11 +13,16 @@ import AIConfigSelect from '../AIConfigSelect'
 import SkillSelect from '../skills/SkillSelect'
 import AgentTimeline from './AgentTimeline'
 import { useAgentConversation } from './useAgentConversation'
+import { readMentionAnchor, readPositiveId } from '../../utils/mentions'
+import SourceMentionFocus from '../mentions/SourceMentionFocus'
 
 interface Props { pid: number; cid: number; onUpdated: () => void }
 export default function AgentConversationView({ pid, cid, onUpdated }: Props) {
   const { token } = theme.useToken()
   const location = useLocation()
+  const params = new URLSearchParams(location.search)
+  const focusMessageId = readPositiveId(params.get('conversation_id')) === cid ? readPositiveId(params.get('message_id')) : null
+  const mentionAnchor = readMentionAnchor(params)
   const context = useAgentPageContext(pid, location.pathname)
   const agent = useAgentConversation(pid, cid, onUpdated)
   const [input, setInput] = useState('')
@@ -58,7 +63,9 @@ export default function AgentConversationView({ pid, cid, onUpdated }: Props) {
       <Popconfirm title="停止这一轮对话？" description="已经执行的修改会保留，可逐项撤销。" onConfirm={() => agent.cancel()}><Button size="small" icon={<StopOutlined />} loading={agent.busy}>停止</Button></Popconfirm>
     </Space></div>}
     {lastTask && canRetryTask(lastTask.status) && !openTask && <div style={{ padding: '8px 16px' }}><Button size="small" loading={agent.busy} onClick={() => void agent.retry(lastTask)}>重试本轮</Button></div>}
-    <AgentTimeline messages={detail.messages} changes={detail.changes} steps={agent.steps} text={liveText} running={stream.running} busy={agent.busy} actingId={agent.actingId} confirmationReady={openTask?.status === 'paused'} onAction={(item, action) => void agent.change(item, action)} onTurn={(id, action) => void agent.turn(id, action)} />
+    {focusMessageId && !detail.messages.some((m) => m.id === focusMessageId) && <Alert type="warning" message="指定消息不存在或已删除" />}
+    {focusMessageId && mentionAnchor && detail.messages.some((m) => m.id === focusMessageId) && <SourceMentionFocus projectId={pid} type="chat" id={focusMessageId} anchor={mentionAnchor} />}
+    <AgentTimeline focusMessageId={focusMessageId} messages={detail.messages} changes={detail.changes} steps={agent.steps} text={liveText} running={stream.running} busy={agent.busy} actingId={agent.actingId} confirmationReady={openTask?.status === 'paused'} onAction={(item, action) => void agent.change(item, action)} onTurn={(id, action) => void agent.turn(id, action)} />
     <div style={{ padding: 16, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>{contextLabel}{context.selection ? ` · 已附带选中的 ${Array.from(context.selection).length} 字` : ''}</Typography.Paragraph>
       <Space direction="vertical" size={8} style={{ width: '100%' }}>

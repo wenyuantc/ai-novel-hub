@@ -1,15 +1,17 @@
 import type { ProgressionJsonValue, WorldCategory, WorldSetting, WorldSettingInput } from '../../api/types'
 import { asWorldCategory } from '../../utils/world'
+import { cleanAliases } from '../../api/characters'
 
 export interface WorldFormValues {
   title: string
   category: WorldCategory
   content: string
   sort: number | null
+  aliases?: string[]
 }
 
 export function worldFormValues(item: WorldSetting, baseContent: string): WorldFormValues {
-  return { title: item.title, category: asWorldCategory(item.category), content: baseContent, sort: item.sort }
+  return { title: item.title, category: asWorldCategory(item.category), content: baseContent, sort: item.sort, aliases: item.aliases ?? [] }
 }
 
 export function worldBaselineMatches(initial: WorldFormValues, baseline: Record<string, ProgressionJsonValue>): boolean {
@@ -17,7 +19,7 @@ export function worldBaselineMatches(initial: WorldFormValues, baseline: Record<
 }
 
 export function worldMetadataMatches(initial: WorldFormValues, latest: WorldSetting): boolean {
-  return latest.title === initial.title && asWorldCategory(latest.category) === initial.category && latest.sort === initial.sort
+  return latest.title === initial.title && asWorldCategory(latest.category) === initial.category && latest.sort === initial.sort && JSON.stringify(latest.aliases ?? []) === JSON.stringify(initial.aliases ?? [])
 }
 
 export function hasWorldContentDraft(values: WorldFormValues, initial: WorldFormValues): boolean {
@@ -34,6 +36,8 @@ export function toWorldBaselinePatch(
   const title = values.title.trim()
   const category = asWorldCategory(values.category)
   const content = values.content ?? ''
+  const aliases = cleanAliases(values.aliases ?? []).aliases
+  if (JSON.stringify(aliases) !== JSON.stringify(initial.aliases ?? [])) patch.aliases = aliases
   if (title !== initial.title.trim()) patch.title = title
   if (category !== initial.category) patch.category = category
   if (content !== initial.content) patch.content = content

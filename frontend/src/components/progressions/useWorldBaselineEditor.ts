@@ -101,7 +101,7 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
     setBaselineConflict(false)
     setBaselineLoading(!!item)
     setEditing(item)
-    const initial = item ? worldFormValues(item, '') : { title: '', category: defaultCategory, content: '', sort: null }
+    const initial = item ? worldFormValues(item, '') : { title: '', category: defaultCategory, content: '', sort: null, aliases: [] }
     initialRef.current = initial
     form.setFieldsValue(initial)
     setOpenScope(scope)
@@ -145,7 +145,7 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
         if (patch) await progressionApi.updateWorldBaseline(projectId, item.id, patch)
       } else {
         const body: WorldSettingInput = {
-          title: values.title.trim(), content: values.content ?? '', category: values.category ?? 'other', sort: values.sort ?? undefined,
+          title: values.title.trim(), content: values.content ?? '', category: values.category ?? 'other', sort: values.sort ?? undefined, aliases: values.aliases ?? [],
         }
         await worldApi.create(projectId, body)
       }

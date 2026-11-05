@@ -1,4 +1,6 @@
 import { useSettingsConfirmation } from '../../components/systemSettings/useSettingsConfirmation'
+import MentionPreview from '../../components/mentions/MentionPreview'
+import { readMentionAnchor } from '../../utils/mentions'
 import {
   ArrowLeftOutlined,
   BookOutlined,
@@ -153,6 +155,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
   const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
   const [searchParams, setSearchParams] = useSearchParams()
+  const mentionAnchor = useMemo(() => readMentionAnchor(searchParams), [searchParams])
+  const [mentionView, setMentionView] = useState(!!mentionAnchor)
 
   const [chapter, setChapter] = useState<Chapter>(initial)
   const [title, setTitle] = useState(initial.title)
@@ -909,7 +913,12 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
             />
             <SettingContextPreview projectId={pid} chapterId={chapter.id} />
+            <Space wrap style={{ marginBlock: 8 }}>
+              <Button aria-pressed={mentionView} disabled={aiStreaming} onClick={() => setMentionView((v) => !v)}>{mentionView ? '返回正文编辑' : '查看提及标记'}</Button>
+              <Typography.Text type="secondary">{aiStreaming ? '生成完成后可查看提及' : '点击标记可在原页查阅设定'}</Typography.Text>
+            </Space>
             <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
+              {mentionView && !aiStreaming ? <div style={{ padding: 12, fontSize: 16, lineHeight: 1.9 }}><MentionPreview projectId={pid} text={content} anchor={mentionAnchor} draft /></div> : (
               <Input.TextArea
                 value={displayContent}
                 onChange={(e) => {
@@ -924,6 +933,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 placeholder={managingOther ? '在此编辑正文' : '在此书写正文，或使用右侧「AI 生成」'}
                 style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}
               />
+              )}
             </div>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               最后更新：{formatTime(chapter.updated_at)} · Ctrl/⌘ + S 保存

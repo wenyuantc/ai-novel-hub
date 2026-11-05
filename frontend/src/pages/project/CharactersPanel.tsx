@@ -53,6 +53,8 @@ import { useAuthStore } from '../../stores/auth'
 import { useProjectStore } from '../../stores/project'
 import { authorizationKey } from '../../utils/permissions'
 import { invalidateProject } from '../../utils/projectRefresh'
+import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
+import EntityMentions from '../../components/mentions/EntityMentions'
 
 const ALL = '__all__'
 
@@ -72,7 +74,8 @@ export default function CharactersPanel() {
   const identity = `${user?.id ?? 'none'}:${authStatus}:${authorizationKey(user)}`
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['characters', 'careers'] })
+  const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['characters', 'careers'] })
+  const items = useMemo(() => loadedItems ?? [], [loadedItems])
   // 卡片上的主职业·阶段：项目级挂接列表一次取回
   const badgeLoader = useCallback(async () => careerBadges(await assignmentApi.listProject(pid)), [pid])
   const { data: badges, reload: reloadBadges } = useLoader(badgeLoader, { projectId: pid, resources: ['characters', 'careers'] })
@@ -216,6 +219,8 @@ export default function CharactersPanel() {
     setDrawerOpen(true)
     if (item) void loadBaseline(ticket, item, draft ? 'reconcile' : 'replace')
   }
+
+  useEntityDeepLink(pid, loadedItems, loading, openEdit, canReadNow)
 
   const handleSave = async () => {
     if (!canEditNow() || savingRef.current || baselineBlocked.current) return
@@ -373,6 +378,7 @@ export default function CharactersPanel() {
         </Space>
       }
     >
+      {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
       <Spin spinning={loading}>
         {items.length === 0 ? (
           <Empty description={canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} />
@@ -561,6 +567,7 @@ export default function CharactersPanel() {
               ...(editing
                 ? [
                     { key: 'progression', label: '剧情变化', children: null },
+                    { key: 'mentions', label: '提及', children: null },
                     {
                       key: 'rel',
                       label: '关系',
@@ -591,6 +598,7 @@ export default function CharactersPanel() {
           />
         </Form>
         </Spin>
+        {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'mentions' && <EntityMentions projectId={pid} entity={{ kind: 'character', id: editing.id }} />}
         {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'progression' && (
           <SettingProgressionsPanel
             key={`${pid}:character:${editing.id}`}

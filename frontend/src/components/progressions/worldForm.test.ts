@@ -5,6 +5,13 @@ import { hasWorldContentDraft, toWorldBaselinePatch, worldBaselineMatches, world
 const item: WorldSetting = { id: 3, project_id: 8, title: '天剑', category: 'item', content: '剑已毁', sort: 1 }
 
 describe('世界观基础编辑', () => {
+  it('别名作为全书元数据进行去重提交和版本冲突比较，不重发基础正文', () => {
+    const initial = worldFormValues({ ...item, aliases: ['古剑'] }, '完整的剑')
+    expect(toWorldBaselinePatch({ ...initial, aliases: [' 灵剑 ', '灵剑'] }, initial, 4)).toEqual({ aliases: ['灵剑'], edit_mode: 'baseline', expected_revision: 4 })
+    expect(toWorldBaselinePatch({ ...initial, aliases: [] }, initial, 4)).toEqual({ aliases: [], edit_mode: 'baseline', expected_revision: 4 })
+    expect(worldMetadataMatches(initial, { ...item, aliases: ['新别名'] })).toBe(false)
+    expect(initial.content).toBe('完整的剑')
+  })
   it('以服务端基础值而不是最新投影初始化基础文本', () => {
     const initial = worldFormValues(item, '完整的剑')
     expect(initial.content).toBe('完整的剑')

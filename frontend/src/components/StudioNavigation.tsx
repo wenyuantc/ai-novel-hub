@@ -41,6 +41,8 @@ const PROJECT_GROUPS = [
     { key: 'outlines', label: '大纲', icon: <OrderedListOutlined /> },
     { key: 'chapters', label: '章节', icon: <BookOutlined /> },
     { key: 'foreshadows', label: '伏笔', icon: <BulbOutlined /> },
+    { key: 'mentions', label: '提及追踪', icon: <DashboardOutlined /> },
+    { key: 'notes', label: '笔记', icon: <FileTextOutlined /> },
     { key: 'knowledge', label: '知识库', icon: <DatabaseOutlined /> },
     { key: 'memories', label: '剧情记忆', icon: <HistoryOutlined /> },
   ] },

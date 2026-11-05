@@ -15,6 +15,8 @@ import { projectApi } from '../api/projects'
 import { readerApi, saveProgressKeepalive } from '../api/reader'
 import type { Chapter, Project, ReaderTocItem, ReadingPosition } from '../api/types'
 import ReaderAnalysisPanel from '../components/reader/ReaderAnalysisPanel'
+import MentionPreview from '../components/mentions/MentionPreview'
+import { readMentionAnchor } from '../utils/mentions'
 import ProjectManagementNotice from '../components/project/ProjectManagementNotice'
 import { useAuthStore } from '../stores/auth'
 import { projectAccess } from '../utils/projectAccess'
@@ -151,6 +153,10 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const { managingOther, canUseAI } = projectAccess(project, user, pid)
   const navigate = useNavigate()
   const location = useLocation()
+  const mentionAnchor = useMemo(() => readMentionAnchor(new URLSearchParams(location.search)), [location.search])
+  const [showMentions, setShowMentions] = useState(false)
+  const [dismissedAnchor, setDismissedAnchor] = useState('')
+  const mentionsVisible = showMentions || (!!mentionAnchor && dismissedAnchor !== location.search)
   const isMobile = useIsMobile()
   const { token } = theme.useToken()
   const colors = READER_TONES[tone]
@@ -207,7 +213,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
 
   // 正文渲染后：只有这一章就是上次读到的章节才恢复位置，否则回到顶部；空章不记进度
   useEffect(() => {
-    if (!chapter) return
+    if (!chapter || mentionAnchor) return
     const ratio = canUseAI && written ? restoreRatio(chapter.id, readingRef.current) : 0
     const raf = window.requestAnimationFrame(() => {
       const el = document.documentElement
@@ -215,7 +221,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
       if (written) schedule(ratio)
     })
     return () => window.cancelAnimationFrame(raf)
-  }, [chapter, written, schedule, readingRef, canUseAI])
+  }, [chapter, written, schedule, readingRef, canUseAI, mentionAnchor])
 
   useEffect(() => {
     if (!written || !canUseAI) return
@@ -308,6 +314,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
         <Tooltip title="目录">
           <Button type="text" icon={<UnorderedListOutlined />} aria-label="目录" onClick={() => setTocOpen(true)} />
         </Tooltip>
+        <Button type={mentionsVisible ? 'primary' : 'text'} aria-pressed={mentionsVisible} onClick={() => { setShowMentions(!mentionsVisible); setDismissedAnchor(mentionsVisible ? location.search : '') }}>提及</Button>
         {canUseAI && <Tooltip title="本章分析">
           <Button type="text" icon={<ProfileOutlined />} aria-label="本章分析" onClick={() => setPanelOpen(true)} />
         </Tooltip>}
@@ -339,7 +346,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
             <h1 style={{ fontSize: Math.round(settings.fontSize * 1.4), lineHeight: 1.4, textAlign: 'center', margin: '0 0 1.2em' }}>
               {chapterTitle}
             </h1>
-            {written ? (
+            {written && mentionsVisible ? <MentionPreview projectId={pid} text={chapter.content} anchor={mentionAnchor} /> : written ? (
               paragraphs.map((p, i) => (
                 <p key={i} style={{ textIndent: '2em', margin: '0 0 0.6em', wordBreak: 'break-word' }}>
                   {p}

@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Card,
+  Drawer,
   Popconfirm,
   Space,
   Switch,
@@ -16,6 +17,9 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import SourceMentionFocus from '../../components/mentions/SourceMentionFocus'
+import { readMentionAnchor, readPositiveId } from '../../utils/mentions'
 import { errorMessage } from '../../api/client'
 import { duplicateDocumentId, kbApi } from '../../api/kb'
 import type { KbDocument, KbSettings } from '../../api/types'
@@ -44,6 +48,9 @@ import { splitPane, splitRow } from '../../utils/layout'
 export default function KnowledgePanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const mentionDocumentId = readPositiveId(searchParams.get('document_id'))
+  const mentionAnchor = readMentionAnchor(searchParams)
   const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const track = useTasksStore((s) => s.track)
@@ -294,6 +301,9 @@ export default function KnowledgePanel() {
         </div>
       </div>
       <KbChunksDrawer projectId={pid} document={viewing} onClose={() => setViewing(null)} />
+      <Drawer open={!!mentionDocumentId && !!mentionAnchor} title={docs.find((doc) => doc.id === mentionDocumentId)?.filename ?? '资料原文'} width={760} destroyOnHidden onClose={() => setSearchParams((previous) => { const next = new URLSearchParams(previous); for (const key of ['document_id', 'mention_start', 'mention_end', 'mention_hash']) next.delete(key); return next }, { replace: true })}>
+        {mentionDocumentId && mentionAnchor && <SourceMentionFocus projectId={pid} type="knowledge" id={mentionDocumentId} anchor={mentionAnchor} />}
+      </Drawer>
     </>
   )
 }
