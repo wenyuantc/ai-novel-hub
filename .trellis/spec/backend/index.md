@@ -25,6 +25,7 @@
 | [质量规范](./quality-guidelines.md) | ruff + pytest、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
 | [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v3 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
 | [设定随剧情演变](./setting-progressions.md) | 基础值与章初/章末事件、五类主体、旧资料校准、写作上下文、事务与前端契约 | 已填写 |
+| [全文提及与作品笔记](./mention-tracking.md) | 四来源字面索引、歧义/Unicode/原文指纹、双向导航与章节热力图、笔记CAS、世界观别名及备份兼容 | 已填写 |
 | [AI 批量关系生成](./relationship-generation.md) | 所选 ID 范围、只读草稿与勾选保存、关系/类型并发冲突、事务所有权、任务重开及刷新 | 已填写 |
 | [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
 | [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（31 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、写作风格库与解析优先级、风格段注入 | 已填写 |

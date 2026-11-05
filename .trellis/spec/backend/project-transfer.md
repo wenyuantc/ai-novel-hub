@@ -38,7 +38,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
 - **注册表还被智能体撤销复用**（`app/services/agent/effects.py`，见 [agent.md](./agent.md)「效果快照与撤销」）：`scope` 用于差异快照，`RULES` 的顺序是撤销时重新插入的顺序、
   逆序是删除顺序，`deferred` 列先插 null 再回填。调整 RULES 顺序或 deferred 时要同时跑 `tests/test_agent_effects.py`。
 - 列的处理方式互斥并覆盖整张表：`id`（导出原值，导入由数据库分配新 id）/ fill / fk / custom / exclude / 其余原样。
-- 当前登记：`world_settings`、`characters`、`organizations`（`parent_id` deferred）、`organization_members`、`relationship_types`
+- 当前登记：`project_notes`、`world_settings`（aliases登记json_plain）、`characters`、`organizations`（`parent_id` deferred）、`organization_members`、`relationship_types`
   （本项目自定义 + 本项目关系用到的全局预置，后者带 `global: true`）、`relationships`（`pair_low/high` 由 a/b 重算）、`relationship_history`、
   `careers`、`career_stages`、`character_careers`、`career_history`、`outlines`、`chapters`（`plan_id` deferred，`style_id` → `style_ref`）、
   `chapter_plans`、`chapter_characters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`generation_logs`（可选；`ai_config_id` /
@@ -84,9 +84,10 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 2, exported_at, app_schema: "0031"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 2, exported_at, app_schema: "0033"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
+- `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
 - 0024新增的Project生命周期/删除者/协调字段全部在PROJECT_RULE.exclude，导出不携带、导入总是正常作品；当时不因排除运行状态提升备份格式。备份独立流会话必须重新检查项目生命周期，不能因软删行仍存在就继续导出回收站正文；恶意备份注入删除/协调状态需回归测试。
 - 可选顶层 `cover: {mime_type, data: base64} | null`；无封面字段的 v1 旧备份正常导入。封面只占核心组估算字节，计入 base64 编码后的大小。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。

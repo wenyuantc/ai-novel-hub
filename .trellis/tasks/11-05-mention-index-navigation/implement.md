@@ -1,0 +1,11 @@
+# 提及执行清单
+- [ ] 阅读父/子计划和jsonl；M-B、M-F按父implement文件边界直接实现，不再递归派代理。
+- [ ] M-B：纯匹配测试先行；schema/词典/预览；四源当前原文与权限；列表/summary/source-window；有界缓存与线程匹配。
+- [ ] M-B：0033_world_aliases依赖0032；元数据revision、JSON备份、旧导入、智能体撤销兼容。
+- [ ] M-F：DTO/API+偏移/URL/统计工具测试；MentionText/EntityPreview/来源窗口；目录/路由/详情提及；编辑/Reader；聊天与知识库；笔记整合。
+- [ ] M-F：热力图/时间线/数值表、筛选/分页、主题/键盘/窄屏和空错误态。
+- [ ] N完成后四源真实集成；任何协议变更先同步主会话与消费方。
+- [ ] 定向测试通过后backend ruff/pytest、frontend lint/build/test；定向覆盖改稿/恢复/删除/改名/改号/权限/Unicode/草稿。
+- [ ] 冷热扫描性能样例记录；不对工具/资料分块重复计数，不把不完整结果标成全量。
+- [ ] 各自写 implementation-backend.md / implementation-frontend.md，不提交、不归档。
+- [ ] 主会话派trellis-check全范围修复并真浏览器验收，完成父AC1–AC9。
