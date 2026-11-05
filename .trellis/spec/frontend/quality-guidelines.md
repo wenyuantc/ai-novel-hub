@@ -16,6 +16,10 @@ npm run lint && npm run build && npm test
 - `build` → `tsc -b && vite build`（类型检查是构建的一部分；严格的 tsconfig 将未使用的局部变量/参数视为错误）。
 - `test` → `vitest run`（`environment: 'node'`、`include: ['src/**/*.test.ts']`）。
 
+### 功能变更必须同步 README
+
+每次新增、修改或删除前端功能，完成实现与相应验证后，必须在同一轮变更中同步更新项目根目录的 [README.md](../../../README.md)，再报告完成或提交。完整的项目级规则、增改删要求与验收清单统一见[功能变更必须同步 README](../backend/quality-guidelines.md#功能变更必须同步-readme)。界面入口、操作流程、权限或功能限制变化时，应修订既有说明；删除功能还需清理旧能力和失效链接，不能只更新代码、spec 或会话总结。
+
 ### 新增文件的空白门禁
 
 `git diff --check`仅覆盖已跟踪的未暂存差异，不能当作新增/未跟踪文件已验。提交前按已批准文件清单暂存后，必须运行`git diff --cached --check`并确认退出0；尚不能暂存时对新增文件使用no-index检查。不能因普通diff为空而跳过EOF空白检查，也不能把该门禁与commit放在不检查退出码的连续执行中。
@@ -78,6 +82,7 @@ proxy.on('proxyRes', (proxyRes) => {
 ## 代码评审清单
 
 - [ ] 在 `frontend/` 中 `npm run lint && npm run build && npm test` 通过。
+- [ ] 本轮新增、修改、删除的功能已按[项目级规则](../backend/quality-guidelines.md#功能变更必须同步-readme)同步更新根目录 README，入口、流程、权限及限制与实际实现一致。
 - [ ] `src/api/types.ts` 中新增/修改的传输类型与 `backend/app/schemas/*.py` 一致（字段名、可空性、`Literal` 枚举），且标签 `Record` 覆盖所有枚举值。
 - [ ] PATCH 请求体遵循后端语义（省略即保持不变；空 `api_key` 保留原密钥；绝不发送 `status: 'generating'`）。
 - [ ] 所有网络调用都经过 `src/api/`；错误通过 `errorMessage` 显示。

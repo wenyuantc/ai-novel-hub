@@ -32,7 +32,7 @@
 | [管理员作品管理跨层契约](../backend/admin-projects.md) | 管理列表、owner归属、复用人工编辑区、自动任务与私有资源隔离、Reader不写他人进度 | 已填写 |
 | [作品回收站跨层契约](../backend/recycle-bin.md) | 管理员列表/恢复/名称确认彻删、原始删除代次、30天边界、删号保护与目标级状态失效 | 已填写 |
 | [管理员整库备份跨层契约](../backend/admin-backups.md) | 分项权限、独立配置、稳定受理意图、秘密草稿失效、HEAD预检及原生大文件下载 | 已填写 |
-| [质量规范](./quality-guidelines.md) | lint/build/test 门禁、Vite 代理、包体积、禁止/必需模式、评审清单 | 已填写 |
+| [质量规范](./quality-guidelines.md) | lint/build/test 门禁、功能增改删必须同步根目录 README、Vite 代理、包体积、禁止/必需模式、评审清单 | 已填写 |
 | [类型安全](./type-safety.md) | `types.ts` 镜像后端 schema、枚举、PATCH 语义、UTC 时间解析；API 客户端 code-spec 场景 | 已填写 |
 | [管理员用户详情跨层契约](../backend/auth-admin.md) | 最近登录、正常/回收站/删除中基础统计、固定owner作品、共享账号动作及离页/身份/请求代次失效 | 已填写 |
 | [平台 API Key 跨层契约](../backend/open-api.md) | 密钥管理页、主动显隐 / 复制、异步失效、有效期与小说范围、公开客户开发指南及 Swagger 文档入口 | 已填写 |

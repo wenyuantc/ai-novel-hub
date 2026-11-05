@@ -22,7 +22,7 @@
 | [目录结构](./directory-structure.md) | `app/` 分层（api/v1 → services → models、ai/providers、ai/prompts）；路由绝不直接接触 ORM | 已填写 |
 | [数据库规范](./database-guidelines.md) | 异步 engine/session、Alembic `0001`、外键 CASCADE 与 `outline_id` SET NULL、user_id 归属校验 → 404、长度限制、字数统计 | 已填写 |
 | [错误处理](./error-handling.md) | `AppError` 层级、`{"detail": ...}` 响应包、安全的 422/500 处理器、SSE 流式契约场景 | 已填写 |
-| [质量规范](./quality-guidelines.md) | ruff + pytest、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
+| [质量规范](./quality-guidelines.md) | ruff + pytest、功能增改删必须同步根目录 README、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
 | [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v3 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
 | [设定随剧情演变](./setting-progressions.md) | 基础值与章初/章末事件、五类主体、旧资料校准、写作上下文、事务与前端契约 | 已填写 |
 | [规划矩阵与支线](./planning.md) | 稳定规划单元、全类型关联、项目CAS、快照/撤销、明确交汇、AI锁定上下文与前端冲突契约 | 已填写 |
