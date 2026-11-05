@@ -1150,3 +1150,40 @@
 
 - 按用户授权将本分支合并到 main 并推送 origin/main；本记录写入时该远端步骤尚未执行。
 - 生产环境用隔离 PostgreSQL 复核行锁竞争与浏览器交互（审核结论遗留项）。
+
+
+## Session 35: 全文提及追踪、作品笔记与出场热力图
+<!-- trellis-session: v=2 fp=ff5697e9ff95caaf -->
+
+**Date**: 2026-11-05
+**Task**: 全文提及追踪、作品笔记与出场热力图
+**Branch**: `codex/mention-tracking`
+
+### Summary
+
+完成 TODOS 第 2 项及第 9 项基础笔记：四来源提及追踪、精确定位、正文标记和章节出场统计；父任务与两个子任务已归档，用户已授权合并 main 并推送。
+
+### Main Changes
+
+- 实现正文、本人项目聊天、独立笔记和知识库资料的名称与别名追踪；歧义单列、码点定位、旧原文 hash 失效提示。
+- 新增作品笔记 CRUD 与版本冲突保护、世界观别名、0032/0033 迁移及备份兼容；接通草稿和 Reader 标记、详情提及、热力图与时间线。
+- 同步正式规范和 TODOS，归档 mention-tracking、mention-index-navigation、project-notes；保留无关 pelican-cycling.html。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `366c0ed` | feat(story): 添加作品笔记与四源提及接口 |
+| `560363c` | feat(studio): 接入提及跳转与出场热力图 |
+| `2c0bb10` | docs(story): 记录提及追踪规范与验收结果 |
+
+### Testing
+
+- [OK] 前端 lint、TypeScript/Vite 构建及 115 文件 838 测试通过；后端 Ruff 通过。
+- [OK] 后端原始全量 1819 passed、6 failed、1 skipped；4 项本机监听限制及 2 项旧 schema 断言经完整文件复验 21/11/7 passed，合计 1825 个不同用例验证通过；唯一 skip 为既有 PostgreSQL 环境条件。
+- [OK] 真实浏览器验证四源定位、草稿保护、旧链接、热力图、375px/桌面、主题和键盘；550 万码点 SQLite 合成语料 HTTP 冷 0.233 秒、热 0.110 秒。
+- [OK] 收尾未改产品代码；已核对 108 个工作提交文件，1020 个产品文件与收尾前快照一致，git diff --check 通过。
+
+### Status
+
+[OK] **Completed**
