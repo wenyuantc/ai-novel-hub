@@ -1,7 +1,7 @@
 # 实施进度
 
 - 用户已于 2026-11-05 在最终摘要之后回复“开始”，实施授权已记录。
-- 状态：in_progress；分支 `codex/planning-matrix-subplots`。
+- 状态：completed；分支 `codex/planning-matrix-subplots`。
 - 实施前基线：`4c80eca381225050f288de612449ef69587018b8`。
 - 实施前工作区仅本任务规划目录和既有 `pelican-cycling.html` 未跟踪；后者不属于本任务。
 
@@ -33,9 +33,18 @@
 - 前端最终ESLint/生产构建通过，118文件858测试通过；最大vendor-antd块1158.45kB，规划页面约54kB独立懒加载。
 - 最终check未留未修问题；所有22规划路由的隔离/只读权限及7只读无flush入口有回归。
 - 已新增跨层planning规范并同步backend/frontend索引、备份v3、快照和提示词规范。
-- 全量门禁完成，用户已确认提交清单，正在按workflow 3.4执行本地提交。
+- 功能工作提交`03ffca8`已完成；任务已归档（`4e718dd`），第36次会话记录已写入开发者日志。
 - 新出现未跟踪`.openidea/`为不识别的无关文件，与原有`pelican-cycling.html`均不纳入本任务。
 
 - 112个文件的提交方案已写入`commit-plan.md`；全部本任务实现/规范/验收已准备可审阅。用户已回复“明白了，按清单提交并收尾。”，提交、归档与会话日志均已获得授权。
 
 - 最终后端pytest进程正常退出，exit code 0；临时PostgreSQL容器`ainovel-planning-verify-20261105`已停止且--rm移除。
+
+## 收尾结果
+
+- 用户批准的112个功能/测试/规范/任务文件已形成独立工作提交。
+- 本任务已移至`archive/2026-11/11-05-planning-matrix-subplots`，task.json状态为completed，当前任务指针已清理。
+- `.trellis/workspace/aiNovel/journal-1.md`第36次会话记录包含功能提交hash、完整验收及范围边界，随会话日志提交保存。
+- `.openidea/`与`pelican-cycling.html`保持原状；本轮未推送远程。
+
+- 收尾期间出现非本会话修改的`.gitignore`（新增.openidea忽略项）；不纳入任何本任务提交，保留供对应工作处理。

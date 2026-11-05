@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 35
+- **Total Sessions**: 36
 - **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1189 | Active |
+| `journal-1.md` | ~1238 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 36 | 2026-11-05 | 规划矩阵与支线交织接入AI写作 | `03ffca8` | `codex/planning-matrix-subplots` |
 | 35 | 2026-11-05 | 全文提及追踪、作品笔记与出场热力图 | `366c0ed`, `560363c`, `2c0bb10` | `codex/mention-tracking` |
 | 34 | 2026-11-05 | 交付设定按章节演变并完成审核修复 | `0ed55f7e0393c4af9e041c59762f1d21b40e0620`, `576e632ec6e5a1dc0ef684211680ff1e5354236e`, `5bac4e87c10f968264e5cdac7ffe500380e68fe5`, `1e98e01dac35db29bcdc8df49861ecd085a1b804` | `codex/setting-progressions` |
 | 33 | 2026-11-02 | 交付管理员整库备份管理 | `f3028c406b9d4a962ec5029ea6e9b9784e97bcbf`, `71087fb3b7d3b3d1a3e23e45e1c2cfa43a8365a5`, `4f395f96868affd28ffaac6ceb4727e5723e90b5` | `codex/admin-backup-management` |
