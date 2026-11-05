@@ -31,6 +31,7 @@ Aliases = Annotated[list[str], AfterValidator(clean_aliases)]
 
 class WorldSettingCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+    aliases: Aliases = Field(default_factory=list)
     content: str = ""
     category: WorldCategory = "other"
     sort: int | None = None
@@ -38,6 +39,7 @@ class WorldSettingCreate(BaseModel):
 
 class WorldSettingUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
+    aliases: Aliases | None = None
     content: str | None = None
     category: WorldCategory | None = None
     sort: int | None = None
@@ -52,6 +54,7 @@ class WorldSettingOut(BaseModel):
     id: int
     project_id: int
     title: str
+    aliases: list[str]
     content: str
     category: str
     sort: int

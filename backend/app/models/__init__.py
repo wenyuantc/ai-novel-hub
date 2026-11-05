@@ -44,6 +44,7 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.notes import ProjectNote
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
@@ -95,6 +96,7 @@ __all__ = [
     "OutlineSnapshot",
     "Project",
     "ProjectCover",
+    "ProjectNote",
     "PromptOverrideVersion",
     "PromptTemplateOverride",
     "Relationship",

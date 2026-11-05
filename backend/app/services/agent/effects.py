@@ -344,6 +344,10 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
             conflicts.append(_conflict(effect, "记录不属于当前项目"))
             continue
         current = await _current(db, rule, effect["pk"], project_id)
+        expected_after = after
+        if name == "world_settings" and after is not None and "aliases" not in after:
+            # 0033前的v2效果没有该列；只接受仍为迁移默认值的记录，作者新增别名后必须冲突。
+            expected_after = {**after, "aliases": []}
         # 恢复删除行时必须检查全表主键，不能只看项目范围（id 可能已被其他项目占用）。
         if after is None:
             exists = await db.scalar(
@@ -351,7 +355,7 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
             )
             if exists is not None:
                 conflicts.append(_conflict(effect, "原主键已被占用"))
-        elif current != after:
+        elif current != expected_after:
             conflicts.append(_conflict(effect))
         if name == "projects" and (before is None or after is None):
             conflicts.append(_conflict(effect, "不支持创建或删除项目"))

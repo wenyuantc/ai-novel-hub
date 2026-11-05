@@ -232,6 +232,7 @@ class WorldSetting(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # place / faction / item / rule / history / other
     category: Mapped[str] = mapped_column(String(16), default="other", server_default="other", nullable=False)

@@ -46,6 +46,7 @@ from app.models import KbDocument, Project, ProjectCover, RelationshipType, Stor
 from app.models import entities as E
 from app.models.entities import PROJECT_STATUSES
 from app.schemas.project import WizardProgress
+from app.schemas.story import clean_aliases
 from app.schemas.transfer import BackupOptions, ImportPreview, ImportResult, ImportStyleBrief
 from app.services import (
     kb_index_service,
@@ -77,6 +78,7 @@ INSERT_BATCH = 500
 
 TABLE_LABELS: dict[str, str] = {
     "projects": "项目",
+    "project_notes": "作品笔记",
     "world_settings": "世界观",
     "characters": "角色",
     "organizations": "组织",
@@ -352,6 +354,18 @@ def _check_rows(rule: TableRule, rows: Any, errors: _Errors) -> None:
                     problem = _check_json(rule.model, col_name, v)
                 elif (allowed := ENUM_COLUMNS.get((rule.table, col_name))) is not None and v not in allowed:
                     problem = f"取值 {str(v)[:20]} 不合法"
+                if problem is None and rule.table == "world_settings" and col_name == "aliases":
+                    try:
+                        clean_aliases(v)
+                    except ValueError as exc:
+                        problem = str(exc)
+                if problem is None and rule.table == "project_notes":
+                    if col_name == "revision" and v < 1:
+                        problem = "必须为正整数"
+                    elif col_name == "title" and not v.strip():
+                        problem = "不能为空白"
+                    elif col_name == "content" and len(v) > 200_000:
+                        problem = "超过长度上限 200000"
             if problem:
                 errors.add(f"{name}第 {i} 行字段 {col_name} {problem}")
         if rule.has_id and _is_int(row.get("id")):

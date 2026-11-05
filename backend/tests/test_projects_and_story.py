@@ -101,6 +101,12 @@ async def test_cross_user_isolation(client, make_client):
         ("PATCH", base),
         ("DELETE", base),
         ("GET", f"{base}/world"),
+        ("GET", f"{base}/mentions"),
+        ("GET", f"{base}/mentions/catalog"),
+        ("GET", f"{base}/mentions/summary"),
+        ("POST", f"{base}/mentions/preview"),
+        ("GET", f"{base}/mentions/sources/chapter/{ch['id']}"),
+        ("GET", f"{base}/mentions/sources/knowledge/{doc['id']}"),
         ("POST", f"{base}/world"),
         ("GET", f"{base}/world/{w['id']}"),
         ("PATCH", f"{base}/world/{w['id']}"),
@@ -243,6 +249,7 @@ async def test_cross_user_isolation(client, make_client):
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
+        f"{base}/mentions/preview": {"text": "正文"},
         f"{base}/batch-generate/preview": {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]},
         f"{base}/batch-generate": {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]},
         f"{base}/world": {"title": "x"},

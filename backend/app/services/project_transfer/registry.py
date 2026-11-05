@@ -46,6 +46,7 @@ from app.models import (
     Outline,
     OutlineSnapshot,
     Project,
+    ProjectNote,
     Relationship,
     RelationshipHistory,
     RelationshipType,
@@ -130,7 +131,8 @@ PROJECT_RULE = TableRule(
 
 # 导入顺序：被引用的表在前（自引用 / 互相引用的列放在 deferred 里回填）
 RULES: tuple[TableRule, ...] = (
-    TableRule("world_settings", WorldSetting, _own(WorldSetting), fill=_P),
+    TableRule("project_notes", ProjectNote, _own(ProjectNote), fill=_P),
+    TableRule("world_settings", WorldSetting, _own(WorldSetting), fill=_P, json_plain=("aliases",)),
     TableRule("characters", Character, _own(Character), fill=_P, json_plain=("aliases",)),
     TableRule(
         "organizations",

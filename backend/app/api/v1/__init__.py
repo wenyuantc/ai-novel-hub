@@ -27,6 +27,8 @@ from app.api.v1 import (
     kb,
     mcp_plugins,
     memories,
+    mentions,
+    notes,
     organizations,
     outline_pro,
     progressions,
@@ -89,6 +91,8 @@ api_router.include_router(mcp_plugins.router)
 api_router.include_router(inspiration.router)
 api_router.include_router(kb.router)
 api_router.include_router(memories.router)
+api_router.include_router(mentions.router)
+api_router.include_router(notes.router)
 api_router.include_router(book_imports.router)
 
 api_router.include_router(workshop.router)
