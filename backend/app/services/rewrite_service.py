@@ -25,6 +25,7 @@ from app.services import (
     ai_config_service,
     context_builder,
     generation_log_service,
+    planning_context_service,
     prompt_service,
     skill_service,
     style_service,
@@ -107,12 +108,17 @@ async def prepare_rewrite_job(
         before, after = content[max(0, start - CONTINUE_BEFORE_CHARS) : start], ""
     else:
         before, after = content[max(0, start - BEFORE_CHARS) : start], content[end : end + AFTER_CHARS]
+    budget = min(MAX_SETTING_CONTEXT_CHARS, ai_config_service.context_char_budget(cfg, context_budget))
+    planning = await planning_context_service.load_planning_context(
+        db, project, "chapter", chapter.id, scope="selection", budget=budget
+    )
     setting_context = await context_builder.build_setting_context(
         db,
         project,
         chapter,
         text_hint="\n".join((before, original, after)),
-        budget=min(MAX_SETTING_CONTEXT_CHARS, ai_config_service.context_char_budget(cfg, context_budget)),
+        budget=budget - planning.reserved_chars - (2 if planning.text else 0),
+        planning=planning,
     )
     messages = build_rewrite_messages(
         op=req.op,
@@ -124,6 +130,7 @@ async def prepare_rewrite_job(
         instruction=req.instruction,
         skill_guide=(skill or {}).get("body", ""),
         setting_context=setting_context,
+        planning_context=planning.text,
         override=override,
     )
     return RewriteJob(
@@ -151,6 +158,7 @@ async def prepare_rewrite_job(
             "style_choice": req.style,
             "style": style_service.style_log(resolved),
             "skill": skill_service.skill_log(skill),
+            "planning": planning.log_data("selection"),
         },
     )
 

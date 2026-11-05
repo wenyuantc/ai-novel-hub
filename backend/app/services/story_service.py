@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models import Character, Outline, WorldSetting
-from app.services import setting_progression_service
+from app.services import planning_lifecycle, setting_progression_service
 from app.services.cast_service import is_protagonist_role
 from app.services.project_service import get_manageable_project, get_owned_project
 
@@ -115,6 +115,8 @@ async def create_owned(
     elif kind is CHARACTERS:
         await db.flush()
         await setting_progression_service.create_character_timeline(db, item)
+    if kind is OUTLINES:
+        await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     await db.refresh(item)
     return item
@@ -153,6 +155,8 @@ async def update_owned(
     for field, value in values.items():
         if value is not None:
             setattr(item, field, value)
+    if kind is OUTLINES:
+        await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     await db.refresh(item)
     return item
@@ -163,7 +167,12 @@ async def delete_owned(
 ) -> None:
     await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
+    if kind is OUTLINES:
+        await planning_lifecycle.detach_outlines(db, project_id, [item.id])
+    elif kind is CHARACTERS:
+        await planning_lifecycle.remove_character_references(db, project_id, [item.id])
     await db.delete(item)
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
 
 

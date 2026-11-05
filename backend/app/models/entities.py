@@ -216,6 +216,8 @@ class Project(TimestampMixin, Base):
     # 阅读进度（迁移 0016）{chapter_id, chapter_no, ratio: 0–1, updated_at}；
     # chapter_no 用于章节被删除后读取时退回前一已写章节
     reading_progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    # 规划编辑及来源结构变动的并发版本，不随备份／快照恢复回退。
+    planning_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
 class ProjectCover(TimestampMixin, Base):

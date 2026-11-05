@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"ruff、pytest、真实事务与消息捕获验证"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"lint、build、vitest、主题、窄屏和包体积门禁"}
+{"file":".trellis/spec/backend/outline.md","reason":"章号、细纲生命周期、快照及原有行为回归"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"表登记、引用重映射、版本兼容和effects检查"}
+{"file":".trellis/spec/backend/prompts-styles.md","reason":"新锁定变量、旧覆盖兼容、样例和空规划parity"}
+{"file":".trellis/spec/backend/setting-progressions.md","reason":"章节有效状态和不泄露后续变化"}
+{"file":".trellis/spec/backend/mention-tracking.md","reason":"自动提及证据与手动规划语义隔离"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"模型到API到UI以及生成数据流逐边界验证"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/planning-anchor-design.md","reason":"虚拟源、ID复用、生命周期遗漏及CAS重点场景"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/ai-integration-design.md","reason":"FakeLLM实际消息、全部入口和历史能力限制"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/ui-and-api-contract.md","reason":"全类型关联、批量失败和界面可用性验收"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/relationship-and-crossing-contract.md","reason":"关系历史、隐藏主体和交汇去重/过滤/权限验收"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/planning-consistency-review.md","reason":"核实三项来源身份和矩阵列修复未在实现中遗漏"}

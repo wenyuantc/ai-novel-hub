@@ -255,4 +255,17 @@ def snapshot_data(value: Any, ctx: RemapContext) -> dict[str, Any]:
                 "plan_id": pmap.get(link.get("plan_id")) if link.get("plan_id") is not None else None,
             }
         )
-    return {**value, "outlines": outlines, "plans": plans, "links": links}
+    result = {**value, "outlines": outlines, "plans": plans, "links": links}
+    if "planning_bindings" in value:
+        bindings = []
+        for binding in value.get("planning_bindings") or []:
+            if not isinstance(binding, dict):
+                continue
+            unit_id = ctx.ref("planning_units", binding.get("unit_id"), "规划快照绑定")
+            plan_id = pmap.get(binding.get("plan_id"))
+            epoch = binding.get("binding_epoch")
+            if unit_id is None or plan_id is None or type(epoch) is not int or epoch < 0:
+                continue
+            bindings.append({"unit_id": unit_id, "plan_id": plan_id, "binding_epoch": epoch})
+        result["planning_bindings"] = bindings
+    return result

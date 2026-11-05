@@ -56,6 +56,19 @@ from app.models import (
     StoryMemory,
     WorldSetting,
 )
+from app.models.planning import (
+    PlanningTag,
+    PlanningUnit,
+    PlanningUnitCareer,
+    PlanningUnitOrganization,
+    PlanningUnitRelationship,
+    PlanningUnitTag,
+    PlanningUnitWorld,
+    Subplot,
+    SubplotCrossing,
+    SubplotCrossingParticipant,
+    SubplotNode,
+)
 from app.services.project_transfer import remap
 
 Option = Literal["versions", "snapshots", "generation_logs", "inspiration"]
@@ -123,6 +136,7 @@ PROJECT_RULE = TableRule(
     exclude=(
         "style", "deleted_at", "last_deleted_at", "deleted_by_user_id",
         "deleted_by_username", "deletion_started_at", "deletion_token",
+        "planning_revision",  # 新作品独立的并发版本，不导出或随效果回退。
     ),
     json_plain=("wizard_progress", "tags"),
     # 含章节 id；项目先于章节插入，importer 在全部表插入后再改写这一列
@@ -342,6 +356,46 @@ RULES: tuple[TableRule, ...] = (
         # 相关角色名
         json_plain=("characters",),
     ),
+    TableRule(
+        "planning_units", PlanningUnit, _own(PlanningUnit), fill=_P,
+        fk={"chapter_id": "chapters", "plan_id": "chapter_plans", "pov_character_id": "characters"},
+        json_refs={"detached_character_ids": remap.id_list("characters")},
+    ),
+    TableRule("planning_tags", PlanningTag, _own(PlanningTag), fill=_P),
+    TableRule(
+        "planning_unit_tags", PlanningUnitTag, lambda pid: _in(PlanningUnitTag.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "tag_id": "planning_tags"},
+    ),
+    TableRule(
+        "planning_unit_world", PlanningUnitWorld, lambda pid: _in(PlanningUnitWorld.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "world_id": "world_settings"},
+    ),
+    TableRule(
+        "planning_unit_organizations", PlanningUnitOrganization,
+        lambda pid: _in(PlanningUnitOrganization.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "organization_id": "organizations"},
+    ),
+    TableRule(
+        "planning_unit_careers", PlanningUnitCareer, lambda pid: _in(PlanningUnitCareer.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "career_id": "careers"},
+    ),
+    TableRule(
+        "planning_unit_relationships", PlanningUnitRelationship,
+        lambda pid: _in(PlanningUnitRelationship.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "timeline_id": "setting_timelines"},
+    ),
+    TableRule("subplots", Subplot, _own(Subplot), fill=_P),
+    TableRule(
+        "subplot_nodes", SubplotNode, lambda pid: _in(SubplotNode.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "subplot_id": "subplots"},
+    ),
+    TableRule("subplot_crossings", SubplotCrossing, _own(SubplotCrossing), fill=_P,
+              fk={"unit_id": "planning_units"}),
+    TableRule(
+        "subplot_crossing_participants", SubplotCrossingParticipant,
+        lambda pid: _in(SubplotCrossingParticipant.crossing_id, SubplotCrossing, pid),
+        fk={"crossing_id": "subplot_crossings", "subplot_id": "subplots"},
+    ),
     TableRule("kb_settings", KbSettings, _own(KbSettings), fill=_P),
     TableRule(
         "kb_documents",
@@ -376,3 +430,6 @@ RULES: tuple[TableRule, ...] = (
 
 RULES_BY_TABLE: dict[str, TableRule] = {r.table: r for r in RULES}
 TABLE_NAMES: tuple[str, ...] = tuple(r.table for r in RULES)
+PLANNING_TABLES: tuple[str, ...] = tuple(
+    name for name in TABLE_NAMES if name.startswith(("planning_", "subplot"))
+)

@@ -144,6 +144,7 @@ export interface ResetPasswordRequest {
 
 // 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
 export type AuditAction =
+  | 'planning.update'
   | 'role.create' | 'role.update' | 'role.delete' | 'user.roles.update' | 'user.roles.bootstrap' | 'user.quotas.update'
   | 'task.cancel_request'
   | 'system_settings.update'
@@ -3503,3 +3504,163 @@ export interface SettingBaselineUpdate {
   changes?: Record<string, ProgressionJsonValue>
   confirm?: boolean
 }
+
+// 章级规划：镜像 app/schemas/planning.py，关系引用使用稳定 timeline_id。
+export type PlanningTone = 'default' | 'red' | 'orange' | 'gold' | 'green' | 'cyan' | 'blue' | 'purple'
+export type PlanningSourceKind = 'chapter' | 'plan' | 'detached'
+export type PlanningReferenceKind = 'character' | 'world' | 'organization' | 'career' | 'relationship'
+export interface PlanningSource { kind: PlanningSourceKind; id: number }
+export type PlanningReference =
+  | { kind: Exclude<PlanningReferenceKind, 'relationship'>; id: number }
+  | { kind: 'relationship'; timeline_id: number }
+export interface PlanningEntry {
+  reference: PlanningReference
+  name: string
+  category: string | null
+  tracking_supported: boolean
+  relationship_id: number | null
+  character_ids: number[]
+  is_present: boolean | null
+}
+export interface PlanningRevision { revision: number }
+export interface PlanningPage<T> extends PlanningRevision { items: T[]; total: number; page: number; page_size: number }
+export interface PlanningTag { id: number; name: string; tone: PlanningTone; usage_count: number }
+export interface PlanningTagCreate { expected_revision: number; name: string; tone?: PlanningTone }
+export interface PlanningTagUpdate { expected_revision: number; name?: string; tone?: PlanningTone }
+export interface PlanningTagMutation extends PlanningRevision { item: PlanningTag }
+export interface Subplot { id: number; name: string; description: string; tone: PlanningTone; sort: number; node_count: number; crossing_count: number }
+export interface SubplotCreate { expected_revision: number; name: string; description?: string; tone?: PlanningTone; sort?: number }
+export interface SubplotUpdate { expected_revision: number; name?: string; description?: string; tone?: PlanningTone; sort?: number }
+export interface SubplotMutation extends PlanningRevision { item: Subplot }
+export interface SubplotNode { id: number; subplot_id: number; unit_id: number; content: string }
+export interface SubplotNodePut { expected_revision: number; content: string }
+export interface SubplotNodeMutation extends PlanningRevision { item: SubplotNode }
+export interface SubplotCrossing {
+  id: number
+  unit_id: number
+  source: PlanningSource
+  title: string
+  description: string
+  sort: number
+  subplot_ids: number[]
+}
+export interface SubplotCrossingCreate {
+  expected_revision: number
+  source: PlanningSource
+  title: string
+  description: string
+  subplot_ids: number[]
+  sort?: number
+}
+export interface SubplotCrossingUpdate {
+  expected_revision: number
+  source?: PlanningSource
+  title?: string
+  description?: string
+  subplot_ids?: number[]
+  sort?: number
+}
+export interface SubplotCrossingMutation extends PlanningRevision { item: SubplotCrossing }
+export interface PlanningRow {
+  key: string
+  unit_id: number | null
+  source: PlanningSource
+  chapter_id: number | null
+  plan_id: number | null
+  title: string
+  chapter_no: number | null
+  outline_id: number | null
+  volume_no: number | null
+  volume_title: string
+  seq: number | null
+  has_content: boolean
+  pov_character_id: number | null
+  pov_character_name: string | null
+  tags: PlanningTag[]
+  references: PlanningReference[]
+}
+export type MatrixColumnRef = { kind: 'setting'; reference: PlanningReference } | { kind: 'subplot'; subplot_id: number }
+export interface MatrixColumn { key: string; selection: MatrixColumnRef; name: string; tone: PlanningTone; tracking_supported: boolean }
+export interface MatrixSettingCell {
+  kind: 'setting'
+  row_key: string
+  column_key: string
+  manual: boolean
+  pov: boolean
+  tracking_supported: boolean
+  has_content: boolean
+  mention_count: number
+  ambiguous_count: number
+}
+export interface MatrixSubplotCell {
+  kind: 'subplot'
+  row_key: string
+  column_key: string
+  node: SubplotNode | null
+  crossings: SubplotCrossing[]
+  has_progress: boolean
+}
+export type MatrixCell = MatrixSettingCell | MatrixSubplotCell
+export interface PlanningMatrix extends PlanningRevision {
+  rows: PlanningRow[]
+  columns: MatrixColumn[]
+  cells: MatrixCell[]
+  total: number
+  column_total: number
+  page: number
+  page_size: number
+  column_page: number
+  warnings: string[]
+}
+export type PlanningCollectionOp = 'add' | 'remove' | 'replace' | 'clear'
+export interface PlanningCollectionOperation { op: PlanningCollectionOp; ids?: number[] }
+export type PlanningReferenceOperation =
+  | (PlanningCollectionOperation & { kind: Exclude<PlanningReferenceKind, 'relationship'> })
+  | { kind: 'relationship'; op: PlanningCollectionOp; timeline_ids?: number[] }
+export type PlanningPovOperation = { op: 'set'; character_id: number } | { op: 'clear' }
+export interface PlanningBatch {
+  expected_revision: number
+  targets: PlanningSource[]
+  pov?: PlanningPovOperation
+  tags?: PlanningCollectionOperation
+  references?: PlanningReferenceOperation[]
+}
+export interface PlanningMutation extends PlanningRevision { rows: PlanningRow[] }
+export interface PlanningBinding { expected_revision: number; target: PlanningSource }
+export interface PlanningNodeResolution { subplot_id: number; keep_node_id: number; content: string }
+export interface PlanningMerge {
+  expected_revision: number
+  survivor_unit_id: number
+  other_unit_id: number
+  pov_character_id: number | null
+  node_resolutions?: PlanningNodeResolution[]
+}
+export interface WeaveGap { after_key: string; before_key: string | null; after_label: string; before_label: string | null; gap_units: number; is_tail: boolean; exceeds_threshold: boolean }
+export interface WeaveTrack { subplot: Subplot; progress_keys: string[]; nodes: SubplotNode[]; crossing_ids: number[]; gaps: WeaveGap[]; unplanned: boolean }
+export interface PlanningWeave extends PlanningRevision {
+  axis: 'chapter' | 'plan'
+  rows: PlanningRow[]
+  tracks: WeaveTrack[]
+  crossings: SubplotCrossing[]
+  same_position: Record<string, number[]>
+  total: number
+  page: number
+  page_size: number
+  subplot_total: number
+  subplot_page: number
+  gap_threshold: number
+}
+export interface PlanningContextPreview extends PlanningRevision {
+  unit_id: number | null
+  source: PlanningSource
+  chapter_id: number | null
+  plan_id: number | null
+  text: string
+  warnings: string[]
+  node_ids: number[]
+  crossing_ids: number[]
+  subplot_ids: number[]
+  references: PlanningReference[]
+  truncated: boolean
+}
+export interface PlanningDetached extends PlanningPage<PlanningRow> { updated_at: string | null }

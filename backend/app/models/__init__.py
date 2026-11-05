@@ -45,6 +45,19 @@ from app.models.entities import (
     WritingStyle,
 )
 from app.models.notes import ProjectNote
+from app.models.planning import (
+    PlanningTag,
+    PlanningUnit,
+    PlanningUnitCareer,
+    PlanningUnitOrganization,
+    PlanningUnitRelationship,
+    PlanningUnitTag,
+    PlanningUnitWorld,
+    Subplot,
+    SubplotCrossing,
+    SubplotCrossingParticipant,
+    SubplotNode,
+)
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
@@ -97,6 +110,17 @@ __all__ = [
     "Project",
     "ProjectCover",
     "ProjectNote",
+    "PlanningTag",
+    "PlanningUnit",
+    "PlanningUnitCareer",
+    "PlanningUnitOrganization",
+    "PlanningUnitRelationship",
+    "PlanningUnitTag",
+    "PlanningUnitWorld",
+    "Subplot",
+    "SubplotCrossing",
+    "SubplotCrossingParticipant",
+    "SubplotNode",
     "PromptOverrideVersion",
     "PromptTemplateOverride",
     "Relationship",

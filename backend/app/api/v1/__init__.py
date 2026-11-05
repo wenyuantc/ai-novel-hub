@@ -31,6 +31,7 @@ from app.api.v1 import (
     notes,
     organizations,
     outline_pro,
+    planning,
     progressions,
     project_cover,
     projects,
@@ -93,6 +94,7 @@ api_router.include_router(kb.router)
 api_router.include_router(memories.router)
 api_router.include_router(mentions.router)
 api_router.include_router(notes.router)
+api_router.include_router(planning.router)
 api_router.include_router(book_imports.router)
 
 api_router.include_router(workshop.router)

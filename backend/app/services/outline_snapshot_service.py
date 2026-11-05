@@ -28,6 +28,7 @@ from app.schemas.outline import (
     SnapshotOutlineBrief,
     SnapshotRestoreResult,
 )
+from app.services import planning_lifecycle
 from app.services.project_service import get_manageable_project
 
 MAX_SNAPSHOTS = 20
@@ -69,7 +70,8 @@ async def collect(db: AsyncSession, project_id: int) -> dict[str, Any]:
         {"chapter_id": cid, "outline_id": oid, "plan_id": pid, "chapter_no": no}
         for cid, oid, pid, no in link_rows.all()
     ]
-    return {"outlines": outlines, "plans": plans, "links": links}
+    return {"outlines": outlines, "plans": plans, "links": links,
+            "planning_bindings": await planning_lifecycle.snapshot_bindings(db, project_id)}
 
 
 async def prune(db: AsyncSession, project_id: int, *, keep: frozenset[int] = frozenset()) -> None:
@@ -241,9 +243,13 @@ async def _insert_keeping_ids(db: AsyncSession, model: Any, objs: dict[int, Any]
         await db.flush()
 
 
-async def restore_data(db: AsyncSession, project_id: int, data: dict[str, Any]) -> tuple[int, int, int]:
+async def restore_data(
+    db: AsyncSession, project_id: int, data: dict[str, Any], *, warnings: list[str] | None = None
+) -> tuple[int, int, int]:
     """删除项目全部大纲后按 data 重建并恢复关联。不 commit。返回 (大纲数, 细纲数, 恢复的关联数)。"""
     # 细纲随之级联删除，章节的 outline_id / plan_id 由外键置空
+    anchors = await planning_lifecycle.chapter_anchors(db, project_id)
+    await planning_lifecycle.detach_outlines(db, project_id)
     await db.execute(delete(Outline).where(Outline.project_id == project_id))
 
     outlines = data.get("outlines") or []
@@ -267,7 +273,8 @@ async def restore_data(db: AsyncSession, project_id: int, data: dict[str, Any]) 
     chapters = (
         {
             c.id: c
-            for c in await db.scalars(select(Chapter).where(Chapter.project_id == project_id, Chapter.id.in_(ids)))
+            for c in await db.scalars(select(Chapter).where(Chapter.project_id == project_id, Chapter.id.in_(ids))
+                                     .execution_options(populate_existing=True))
         }
         if ids
         else {}
@@ -288,9 +295,16 @@ async def restore_data(db: AsyncSession, project_id: int, data: dict[str, Any]) 
         chapter.plan_id = plan.id if plan is not None else None
         if plan is not None:
             plan.chapter_id = chapter.id
+            plan.character_ids = await planning_lifecycle.character_ids(db, chapter.id)
             used_plans.add(plan.id)
         restored += 1
     await db.flush()
+    planning_warnings = await planning_lifecycle.restore_bindings(
+        db, project_id, data.get("planning_bindings"), plan_objs, anchors
+    )
+    if warnings is not None:
+        warnings.extend(planning_warnings)
+    await planning_lifecycle.bump_revision(db, project_id)
     return len(outline_objs), len(plan_objs), restored
 
 
@@ -301,7 +315,7 @@ async def restore_snapshot(db: AsyncSession, user_id: int, project_id: int, snap
     warnings = await _link_warnings(db, project_id, data.get("links") or [])
     # 被恢复的目标即使是最旧的一个也保留（否则存 backup 后的裁剪会把它删掉，用户无法再次恢复它）
     backup = await save_snapshot(db, project_id, "restore", f"恢复快照 #{snap.id} 前", keep=frozenset({snap.id}))
-    outlines, plans, restored = await restore_data(db, project_id, data)
+    outlines, plans, restored = await restore_data(db, project_id, data, warnings=warnings)
     await db.commit()
     await db.refresh(backup)
     return SnapshotRestoreResult(

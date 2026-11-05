@@ -61,6 +61,7 @@ from app.services import (
     kb_service,
     outline_service,
     outline_snapshot_service,
+    planning_lifecycle,
     project_lifecycle,
     prompt_service,
     relationship_service,
@@ -599,6 +600,7 @@ async def _save_careers(db: AsyncSession, project_id: int, obj: Any) -> dict[str
         await career_service.new_career(db, project_id, CareerCreate.model_validate({**d, "sort": i}))
         for i, d in enumerate(drafts, start=1)
     ]
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for c in careers:
         await db.refresh(c)
@@ -619,6 +621,7 @@ async def _prepare_outline_rows(db: AsyncSession, project_id: int, rows: list[di
         existing = await story_service.list_items(db, story_service.OUTLINES, project_id)
         if existing:
             await outline_snapshot_service.save_snapshot(db, project_id, "wizard_replace", "大纲向导覆盖前")
+        await planning_lifecycle.detach_outlines(db, project_id)
         await db.execute(delete(Outline).where(Outline.project_id == project_id))
         return
     last_volume = (await outline_service.last_volume(db, project_id))[0]
@@ -649,6 +652,10 @@ async def save_wizard_result(
     if kind == "outline":
         await _prepare_outline_rows(db, project_id, rows, outline_mode)
     else:
+        if kind == "characters":
+            await planning_lifecycle.remove_character_references(
+                db, project_id, list(await db.scalars(select(Character.id).where(Character.project_id == project_id)))
+            )
         await db.execute(delete(model).where(model.project_id == project_id))
     entities = [model(project_id=project_id, **row) for row in rows]
     db.add_all(entities)
@@ -665,6 +672,7 @@ async def save_wizard_result(
     if kind == "characters":
         rels = await _save_character_relations(db, project_id, entities, normalize_character_relations(obj))
         assignments, warnings = await _save_character_careers(db, project_id, entities, obj)
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for e in entities:
         await db.refresh(e)

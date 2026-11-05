@@ -22,7 +22,7 @@ from sqlalchemy import JSON, String, Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import NotFoundError
-from app.models import Chapter, InspirationSession, Project, ProjectCover, WritingStyle
+from app.models import Chapter, ChapterCharacter, InspirationSession, Project, ProjectCover, WritingStyle
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
 from app.services import project_lifecycle
 from app.services.project_service import get_owned_project
@@ -30,9 +30,9 @@ from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRul
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 2
+VERSION = 3
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0033"
+APP_SCHEMA = "0034"
 BATCH = 500
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 STYLE_FIELDS = ("name", *FIELD_LIMITS)
@@ -114,8 +114,20 @@ async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> Asy
     while True:
         await _assert_export_active(db, plan)
         rows = (await db.execute(base.where(table.c.id > last).order_by(table.c.id).limit(BATCH))).mappings().all()
+        casts: dict[int, list[int]] = {}
+        if rule.table == "chapter_plans":
+            chapter_ids = [row["chapter_id"] for row in rows if row["chapter_id"] is not None]
+            if chapter_ids:
+                for chapter_id, character_id in await db.execute(
+                    select(ChapterCharacter.chapter_id, ChapterCharacter.character_id)
+                    .where(ChapterCharacter.chapter_id.in_(chapter_ids)).order_by(ChapterCharacter.character_id)
+                ):
+                    casts.setdefault(chapter_id, []).append(character_id)
         for row in rows:
-            yield row
+            if rule.table == "chapter_plans" and row["chapter_id"] is not None:
+                yield {**row, "character_ids": casts.get(row["chapter_id"], [])}
+            else:
+                yield row
         if len(rows) < BATCH:
             return
         last = rows[-1]["id"]

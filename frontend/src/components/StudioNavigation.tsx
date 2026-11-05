@@ -39,6 +39,7 @@ const PROJECT_GROUPS = [
   ] },
   { title: '写作与校验', items: [
     { key: 'outlines', label: '大纲', icon: <OrderedListOutlined /> },
+    { key: 'planning', label: '规划矩阵', icon: <DashboardOutlined /> },
     { key: 'chapters', label: '章节', icon: <BookOutlined /> },
     { key: 'foreshadows', label: '伏笔', icon: <BulbOutlined /> },
     { key: 'mentions', label: '提及追踪', icon: <DashboardOutlined /> },

@@ -9,6 +9,7 @@ import CareerEditDrawer from '../../components/careers/CareerEditDrawer'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import WizardModal from '../../components/WizardModal'
 import { useLoader } from '../../hooks/useLoader'
+import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 
@@ -20,7 +21,7 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 /** 职业：按主修 / 副修分组的卡片（阶梯 + 持有人数），编辑抽屉维护阶段与查看持有人；AI 生成职业 / 职业体系向导。 */
 export default function CareersPanel() {
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
@@ -33,6 +34,8 @@ export default function CareersPanel() {
     setEditing(c)
     setDrawerOpen(true)
   }
+
+  useEntityDeepLink(pid, items, loading, openEdit, canReadNow)
 
   const handleDelete = async (c: Career) => {
     if (!canEditNow()) return

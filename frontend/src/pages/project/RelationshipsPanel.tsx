@@ -35,6 +35,7 @@ import type { Character, RelationCategory, Relationship, RelationStatus } from '
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import RelationEditModal from '../../components/relations/RelationEditModal'
 import RelationHistoryModal, { RelationPairHistory } from '../../components/relations/RelationHistoryModal'
+import RelationTimelineDeepLink from '../../components/relations/RelationTimelineDeepLink'
 import RelationTypeManager from '../../components/relations/RelationTypeManager'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
@@ -249,6 +250,7 @@ export default function RelationshipsPanel() {
         relationships={rels}
         onClose={() => setGenerateOpen(false)}
       />)}
+      <RelationTimelineDeepLink projectId={pid} characters={characters} />
       {history && <RelationHistoryModal projectId={pid} relationship={history} onClose={() => setHistory(null)} />}
       <Modal open={pairHistoryOpen} title="按人物查看关系历史" footer={null} width={680} onCancel={() => { setPairHistoryOpen(false); setHistoryA(undefined); setHistoryB(undefined) }} destroyOnHidden>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>

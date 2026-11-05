@@ -1,6 +1,6 @@
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Checkbox, Empty, Space, Spin, Tag, theme, Typography } from 'antd'
-import { useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { moveItem } from '../../api/careers'
 import { errorMessage } from '../../api/client'
 import {
@@ -15,9 +15,13 @@ import {
 } from '../../api/outlines'
 import { characterApi } from '../../api/story'
 import type { OutlineExpandResult } from '../../api/types'
+import { readPlanningConflict, type PlanningMergeConflict } from '../../utils/planning'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useLoader } from '../../hooks/useLoader'
 import type { TaskResultViewerProps } from '../entities/types'
 import PlanFieldsEditor from './PlanFieldsEditor'
+
+const PlanningMergeModal = lazy(() => import('../planning/PlanningMergeModal'))
 
 /**
  * outline.expand 结果：有正文的细纲标「已有正文，保留」（置灰、不可删除，提交时带 id），其后是可编辑的新细纲草稿
@@ -34,6 +38,8 @@ export default function ExpandDraftResult({ projectId, result, onSaved }: TaskRe
 function Editor({ projectId, parsed, onSaved }: { projectId: number; parsed: OutlineExpandResult; onSaved?: () => void }) {
   const { token } = theme.useToken()
   const { message } = App.useApp()
+  const { canEdit, canEditNow } = useProjectAccess(projectId)
+  const [merge, setMerge] = useState<PlanningMergeConflict>()
   const oid = parsed.outline_id
   const loader = useCallback(
     () => Promise.all([outlineProApi.plans(projectId, oid), characterApi.list(projectId)]),
@@ -79,14 +85,19 @@ function Editor({ projectId, parsed, onSaved }: { projectId: number; parsed: Out
   }
 
   const handleBuild = async () => {
+    if (!canEditNow()) return
     setBuilding(true)
     try {
       const r = await outlineProApi.build(projectId, oid)
+      if (!canEditNow()) return
       message.success(`已建章 ${r.chapters.length} 个，后续章节号已顺延`)
       setBuilt(true)
       onSaved?.()
     } catch (err) {
-      message.error(errorMessage(err))
+      if (!canEditNow()) return
+      const conflict = readPlanningConflict(err)
+      if (conflict) setMerge(conflict)
+      else message.error(errorMessage(err))
     } finally {
       setBuilding(false)
     }
@@ -94,6 +105,7 @@ function Editor({ projectId, parsed, onSaved }: { projectId: number; parsed: Out
 
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
+      {merge && <Suspense fallback={<Spin />}><PlanningMergeModal projectId={projectId} conflict={merge} onClose={() => setMerge(undefined)} onSaved={() => { onSaved?.(); message.success('规划已合并，请再次点击建章') }} /></Suspense>}
       {parsed.warnings.map((w) => (
         <Alert key={w} type="warning" showIcon message={w} />
       ))}
@@ -111,7 +123,7 @@ function Editor({ projectId, parsed, onSaved }: { projectId: number; parsed: Out
           showIcon
           message="细纲已保存。"
           action={
-            <Button size="small" type="primary" loading={building} disabled={built} onClick={() => void handleBuild()}>
+            <Button size="small" type="primary" loading={building} disabled={built || !canEdit} onClick={() => void handleBuild()}>
               {built ? '已建章' : '为新细纲建章'}
             </Button>
           }

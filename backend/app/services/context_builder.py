@@ -40,7 +40,7 @@
 
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,6 +79,9 @@ from app.services.project_service import project_info
 from app.services.retrieval_service import Embedder, EmbedEnv
 from app.services.setting_progression_resolver import EffectiveSnapshot
 
+if TYPE_CHECKING:
+    from app.services.planning_context_service import PlanningContext
+
 RECENT_FULL_CHAPTERS = 2
 SUMMARY_CHARS = 200
 ELLIPSIS = "……"
@@ -100,6 +103,8 @@ class PriorChapter:
 class RelationLine:
     head: str
     description: str = ""
+    # 供规划保护块与普通关系投影去重；不改变原有展示文本。
+    timeline_id: int | None = None
 
     def render(self) -> str:
         return f"{self.head}：{self.description}" if self.description else self.head
@@ -482,9 +487,13 @@ async def _custom_labels(
     return result
 
 
-async def effective_world_text(db: AsyncSession, project: Project, chapter: Chapter) -> str:
+async def effective_world_text(
+    db: AsyncSession, project: Project, chapter: Chapter, *, exclude_ids: set[int] | None = None
+) -> str:
     """按目标章初组装世界观，保留条目分类与原有顺序。"""
     worlds = await story_service.list_items(db, story_service.WORLD, project.id)
+    if exclude_ids:
+        worlds = [world for world in worlds if world.id not in exclude_ids]
     if not worlds:
         return ""
     timelines = list(await db.scalars(
@@ -615,14 +624,14 @@ async def resolve_effective_cast(
 
     relation_timelines = [t for t in relevant if t.subject_kind == "relationship"]
     managed_pairs = {(t.character_id, t.related_character_id) for t in relation_timelines}
-    relation_values: list[tuple[dict[str, Any], RelationshipType]] = []
+    relation_values: list[tuple[dict[str, Any], RelationshipType, int | None]] = []
     for relation, relation_type in await relationship_service.relations_among(db, ids):
         key = (relation.pair_low, relation.pair_high)
         if key not in managed_pairs and relation.is_present:
             relation_values.append(({
                 "identity": {"a_id": relation.a_id, "b_id": relation.b_id}, "intimacy": relation.intimacy,
                 "status": relation.status, "description": relation.description,
-            }, relation_type))
+            }, relation_type, None))
     type_ids = {
         fields["identity"]["type_id"]
         for t in relation_timelines
@@ -640,9 +649,9 @@ async def resolve_effective_cast(
         if fields.get("exists"):
             relation_type = types.get(fields["identity"]["type_id"])
             if relation_type is not None:
-                relation_values.append((fields, relation_type))
+                relation_values.append((fields, relation_type, timeline.id))
     names = {c.id: c.name for c in involved}
-    for values, relation_type in relation_values:
+    for values, relation_type, timeline_id in relation_values:
         identity = values["identity"]
         a_id, b_id = identity["a_id"], identity["b_id"]
         if a_id in names and b_id in names:
@@ -651,13 +660,27 @@ async def resolve_effective_cast(
                 f"{relationship_service.describe_relation(names[a_id], names[b_id], relation_type)}"
                 f"（亲密度 {values['intimacy']}，{relationship_service.STATUS_LABELS.get(status, status)}）",
                 values["description"].strip(),
+                timeline_id=timeline_id,
             ))
     return result
 
 
-async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapter, outline_summary: str) -> CastSection:
+async def build_cast_section(
+    db: AsyncSession, project: Project, chapter: Chapter, outline_summary: str, *,
+    planning: "PlanningContext | None" = None,
+) -> CastSection:
     cast = await cast_service.select_cast(db, project, chapter, outline_summary)
-    effective = await resolve_effective_cast(db, project, chapter, cast.involved)
+    involved = list(cast.involved)
+    extra_ids = planning.additional_character_ids - {c.id for c in involved} if planning else set()
+    if extra_ids:
+        involved.extend(await db.scalars(select(Character).where(
+            Character.project_id == project.id, Character.id.in_(extra_ids)
+        ).order_by(Character.sort, Character.id)))
+    effective = await resolve_effective_cast(db, project, chapter, involved)
+    protected_characters = planning.protected_character_ids if planning else set()
+    protected_relations = planning.protected_relationship_ids if planning else set()
+    protected_organizations = planning.protected_organization_ids if planning else set()
+    protected_careers = planning.protected_career_ids if planning else set()
     return CastSection(
         cards=[
             format_card(
@@ -668,31 +691,38 @@ async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapte
                 custom_fields=effective.custom_fields.get(c.id, []),
             )
             for c in effective.characters
+            if c.id not in protected_characters
         ],
-        relations=effective.relations,
-        organizations=[format_organization(o) for o in effective.organizations.values()],
+        relations=[r for r in effective.relations if r.timeline_id not in protected_relations],
+        organizations=[
+            format_organization(o) for o in effective.organizations.values() if o.id not in protected_organizations
+        ],
         careers=[
             format_career_ladder(c, effective.stages.get(c.id, []))
             for c in sorted(effective.careers.values(), key=lambda c: (c.sort, c.id))
+            if c.id not in protected_careers
         ],
-        roster=[roster_item(c) for c in cast.others],
-        names=[c.name for c in cast.involved],
+        roster=[roster_item(c) for c in cast.others if c.id not in protected_characters],
+        names=[c.name for c in involved],
     )
 
 
 async def build_chapter_context(
-    db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, embedder: Embedder | None = None
+    db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, embedder: Embedder | None = None,
+    planning: "PlanningContext | None" = None,
 ) -> str:
     """embedder：当前用户的向量模型（None = 检索只用关键词）。"""
     with db.no_autoflush:
         outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
         task = await chapter_task(db, chapter)
-        cast = await build_cast_section(db, project, chapter, task.match_text())
+        cast = await build_cast_section(db, project, chapter, task.match_text(), planning=planning)
         prior = await prior_chapters(db, project, chapter)
         knowledge, memories = await retrieval_blocks(db, project, chapter, task, cast.names, prior, embedder=embedder)
         return assemble_context(
             project_text=format_project_info(await project_info(db, project)),
-            world_text=await effective_world_text(db, project, chapter),
+            world_text=await effective_world_text(
+                db, project, chapter, exclude_ids=planning.protected_world_ids if planning else None
+            ),
             cast=cast,
             outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
             prior_chapters=prior,
@@ -704,7 +734,8 @@ async def build_chapter_context(
 
 
 async def build_setting_context(
-    db: AsyncSession, project: Project, chapter: Chapter, *, text_hint: str = "", budget: int = 4000
+    db: AsyncSession, project: Project, chapter: Chapter, *, text_hint: str = "", budget: int = 4000,
+    planning: "PlanningContext | None" = None,
 ) -> str:
     """供局部改写和设定预览使用的章初设定块；不检索知识库或调用模型。"""
     with db.no_autoflush:
@@ -714,11 +745,13 @@ async def build_setting_context(
             return ""
         task = await chapter_task(db, chapter)
         hint = "\n".join(part for part in (task.match_text(), text_hint) if part)
-        cast = await build_cast_section(db, project, chapter, hint)
+        cast = await build_cast_section(db, project, chapter, hint, planning=planning)
         body = assemble_context(
             project_text="",
             include_project=False,
-            world_text=await effective_world_text(db, project, chapter),
+            world_text=await effective_world_text(
+                db, project, chapter, exclude_ids=planning.protected_world_ids if planning else None
+            ),
             cast=cast,
             outline_text="",
             prior_chapters=[],

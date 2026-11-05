@@ -30,7 +30,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline
 from app.schemas.chapter import ChapterBrief
 from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
-from app.services import memory_service, outline_snapshot_service, setting_progression_service
+from app.services import memory_service, outline_snapshot_service, planning_lifecycle, setting_progression_service
 from app.services.chapter_numbering import shift_chapter_numbers
 from app.services.project_service import get_manageable_project
 
@@ -77,17 +77,25 @@ async def plan_outs(db: AsyncSession, project_id: int, plans: list[ChapterPlan])
     valid = await project_character_ids(db, project_id)
     chapter_ids = [p.chapter_id for p in plans if p.chapter_id is not None]
     info: dict[int, tuple[int, bool]] = {}
+    casts: dict[int, list[int]] = {}
     if chapter_ids:
         rows = await db.execute(
             select(Chapter.id, Chapter.chapter_no, Chapter.word_count).where(Chapter.id.in_(chapter_ids))
         )
         info = {cid: (no, (wc or 0) > 0) for cid, no, wc in rows.all()}
+        cast_rows = await db.execute(
+            select(ChapterCharacter.chapter_id, ChapterCharacter.character_id)
+            .where(ChapterCharacter.chapter_id.in_(chapter_ids)).order_by(ChapterCharacter.character_id)
+        )
+        for cid, character_id in cast_rows:
+            casts.setdefault(cid, []).append(character_id)
     outs = []
     for p in plans:
         out = PlanOut.model_validate(p)
         out.character_ids = [c for c in (p.character_ids or []) if c in valid]
         if p.chapter_id is not None and p.chapter_id in info:
             out.chapter_no, out.has_content = info[p.chapter_id]
+            out.character_ids = [cid for cid in casts.get(p.chapter_id, []) if cid in valid]
         outs.append(out)
     return outs
 
@@ -120,6 +128,9 @@ async def update_plan(
             raise BadRequestError("细纲标题不能为空")
     for k, v in values.items():
         setattr(plan, k, v)
+    if "character_ids" in values:
+        await planning_lifecycle.sync_plan_cast(db, plan)
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     await db.refresh(plan)
     return (await plan_outs(db, project_id, [plan]))[0]
@@ -184,6 +195,9 @@ async def sync_plans(
         )
     )
     keep_slot = not kept_built and single is None
+    await planning_lifecycle.detach_sources(
+        db, project_id, plan_ids=[p.id for p in removed], chapter_ids=removed_chapter_ids
+    )
     for p in removed:
         await db.delete(p)
     await db.flush()
@@ -212,10 +226,13 @@ async def sync_plans(
             db.add(plan)
         plan.seq = seq
         result.append(plan)
+        if item.id is not None:
+            await planning_lifecycle.sync_plan_cast(db, plan)
     if ordered:
         # 多章删除和平移可能产生中间态；整批完成后只验证并重算一次。
         await db.flush()
         await setting_progression_service.on_story_positions_changed(db, project_id)
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for p in result:
         await db.refresh(p)
@@ -226,11 +243,8 @@ async def _add_cast(db: AsyncSession, chapter_id: int, character_ids: list[int])
     current = set(
         await db.scalars(select(ChapterCharacter.character_id).where(ChapterCharacter.chapter_id == chapter_id))
     )
-    db.add_all(
-        ChapterCharacter(chapter_id=chapter_id, character_id=cid)
-        for cid in dict.fromkeys(character_ids)
-        if cid not in current
-    )
+    chapter = await db.get(Chapter, chapter_id)
+    await planning_lifecycle.sync_cast(db, chapter, sorted(current | set(character_ids)))
 
 
 async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> PlanBuildResult:
@@ -256,10 +270,12 @@ async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outlin
             .limit(1)
         )
     if single is not None:
+        await planning_lifecycle.preflight_build_binding(db, project_id, single.id, pending[0].id)
         first = pending.pop(0)
         single.plan_id = first.id
         first.chapter_id = single.id
         await _add_cast(db, single.id, [c for c in first.character_ids or [] if c in valid])
+        await planning_lifecycle.attach_built_plan(db, single, first)
         touched.append(single)
         insert_at = single.chapter_no + 1
     elif built_nos:
@@ -294,6 +310,7 @@ async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outlin
         for chapter, plan in created:
             plan.chapter_id = chapter.id
             await _add_cast(db, chapter.id, [c for c in plan.character_ids or [] if c in valid])
+            await planning_lifecycle.attach_built_plan(db, chapter, plan)
             touched.append(chapter)
     await db.flush()
 
@@ -309,6 +326,7 @@ async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outlin
         # 建章时的全部平移完成后，再统一刷新按章节排序的最新投影。
         await db.flush()
         await setting_progression_service.on_story_positions_changed(db, project_id)
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for c in touched:
         await db.refresh(c)

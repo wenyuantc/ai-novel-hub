@@ -16,7 +16,7 @@ from sqlalchemy import DateTime, and_, delete, inspect, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError, ConflictError
+from app.core.errors import AppError, BadRequestError, ConflictError
 from app.models import (
     Base,
     Chapter,
@@ -28,9 +28,10 @@ from app.models import (
     StoryMemory,
     Task,
 )
-from app.services import memory_service, project_lifecycle, retrieval_service, version_service
+from app.models.planning import PlanningUnit
+from app.services import memory_service, planning_lifecycle, project_lifecycle, retrieval_service, version_service
 from app.services.chapter_service import count_words
-from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
+from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, TableRule
 
 Snapshot = dict[str, dict[str, dict[str, Any]]]
 Effect = dict[str, Any]
@@ -66,6 +67,7 @@ EFFECT_TABLES = frozenset(
         "chapter_versions",
         "generation_logs",
         "tasks",
+        *PLANNING_TABLES,
     }
 )
 _RULES = (
@@ -107,6 +109,17 @@ _LABELS = {
     "generation_logs": "生成记录",
     "tasks": "任务",
     "chapter_text": "章节正文",
+    "planning_units": "章节规划",
+    "planning_tags": "规划标签",
+    "planning_unit_tags": "规划标签关联",
+    "planning_unit_world": "规划世界观关联",
+    "planning_unit_organizations": "规划组织关联",
+    "planning_unit_careers": "规划职业关联",
+    "planning_unit_relationships": "规划关系关联",
+    "subplots": "支线",
+    "subplot_nodes": "支线推进",
+    "subplot_crossings": "支线交汇",
+    "subplot_crossing_participants": "交汇参与支线",
 }
 
 
@@ -131,7 +144,8 @@ def _columns(rule: TableRule):
     table = rule.model.__table__
     if rule.table in _LINK_ONLY:
         return [table.c[name] for name in ("id", "project_id", "chapter_id")]
-    ignored = _IGNORED | project_lifecycle.LIFECYCLE_FIELDS if rule.model is Project else _IGNORED
+    ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS | {"planning_revision"}
+               if rule.model is Project else _IGNORED)
     return [col for col in table.columns if col.name not in ignored and col.name != "word_count"]
 
 
@@ -144,6 +158,85 @@ def _row(rule: TableRule, mapping) -> dict:
         if not content.strip():
             row["_empty_content"] = content
     return row
+
+
+_UNIT_DEPENDENTS = (
+    "planning_unit_tags", "planning_unit_world", "planning_unit_organizations", "planning_unit_careers",
+    "planning_unit_relationships", "subplot_nodes", "subplot_crossings",
+)
+
+
+def _planning_signature(unit: dict, snapshot_data: Snapshot) -> str:
+    """派生签名让源操作的撤销也能识别后来修改的节点／交汇，不新增持久副本。"""
+    data = {
+        table: {key: row for key, row in snapshot_data.get(table, {}).items() if row["unit_id"] == unit["id"]}
+        for table in _UNIT_DEPENDENTS
+    }
+    crossing_ids = {row["id"] for row in data["subplot_crossings"].values()}
+    data["subplot_crossing_participants"] = {
+        key: row for key, row in snapshot_data.get("subplot_crossing_participants", {}).items()
+        if row["crossing_id"] in crossing_ids
+    }
+    if unit.get("chapter_id") is not None:
+        data["source_cast"] = sorted(row["character_id"] for row in
+                                     snapshot_data.get("chapter_characters", {}).values()
+                                     if row["chapter_id"] == unit["chapter_id"])
+    elif unit.get("plan_id") is not None:
+        plan = snapshot_data.get("chapter_plans", {}).get(str(unit["plan_id"]), {})
+        data["source_cast"] = sorted(plan.get("character_ids", []))
+    else:
+        data["source_cast"] = sorted(unit.get("detached_character_ids", []))
+    return content_hash(json.dumps(data, sort_keys=True, ensure_ascii=False))
+
+
+async def _current_planning_signature(db: AsyncSession, unit: dict, project_id: int) -> str:
+    data: Snapshot = {}
+    for name in _UNIT_DEPENDENTS:
+        rule = _BY_TABLE[name]
+        rows = (await db.execute(select(*_columns(rule)).where(
+            rule.scope(project_id), rule.model.__table__.c.unit_id == unit["id"]
+        ).with_for_update())).mappings()
+        data[name] = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
+    crossing_ids = [row["id"] for row in data["subplot_crossings"].values()]
+    rule = _BY_TABLE["subplot_crossing_participants"]
+    rows = (await db.execute(select(*_columns(rule)).where(
+        rule.model.__table__.c.crossing_id.in_(crossing_ids)
+    ).with_for_update())).mappings()
+    data[rule.table] = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
+    if unit.get("chapter_id") is not None:
+        ids = await planning_lifecycle.character_ids(db, unit["chapter_id"])
+        data["chapter_characters"] = {str(cid): {"chapter_id": unit["chapter_id"], "character_id": cid} for cid in ids}
+    elif unit.get("plan_id") is not None:
+        plan_ids = await db.scalar(select(ChapterPlan.character_ids).where(
+            ChapterPlan.id == unit["plan_id"], ChapterPlan.project_id == project_id
+        ))
+        data["chapter_plans"] = {str(unit["plan_id"]): {"character_ids": plan_ids or []}}
+    return _planning_signature(unit, data)
+
+
+def _planning_signatures(snapshot_data: Snapshot) -> None:
+    """一次分组，避免对全书每个 unit 重扫全部节点／关联。"""
+    grouped: dict[int, Snapshot] = {}
+    units = snapshot_data.get("planning_units", {})
+    for table in _UNIT_DEPENDENTS:
+        for key, row in snapshot_data.get(table, {}).items():
+            grouped.setdefault(row["unit_id"], {}).setdefault(table, {})[key] = row
+    crossing_units = {row["id"]: row["unit_id"] for row in snapshot_data.get("subplot_crossings", {}).values()}
+    for key, row in snapshot_data.get("subplot_crossing_participants", {}).items():
+        unit_id = crossing_units.get(row["crossing_id"])
+        if unit_id is not None:
+            grouped.setdefault(unit_id, {}).setdefault("subplot_crossing_participants", {})[key] = row
+    chapters = {row["chapter_id"]: row["id"] for row in units.values() if row.get("chapter_id") is not None}
+    for key, row in snapshot_data.get("chapter_characters", {}).items():
+        unit_id = chapters.get(row["chapter_id"])
+        if unit_id is not None:
+            grouped.setdefault(unit_id, {}).setdefault("chapter_characters", {})[key] = row
+    for row in units.values():
+        if row.get("plan_id") is not None and row.get("chapter_id") is None:
+            plan = snapshot_data.get("chapter_plans", {}).get(str(row["plan_id"]))
+            if plan is not None:
+                grouped.setdefault(row["id"], {})["chapter_plans"] = {str(row["plan_id"]): plan}
+        row["_planning_content_hash"] = _planning_signature(row, grouped.get(row["id"], {}))
 
 
 async def snapshot(db: AsyncSession, project_id: int) -> Snapshot:
@@ -159,6 +252,7 @@ async def snapshot(db: AsyncSession, project_id: int) -> Snapshot:
             scope = and_(scope, ChapterVersion.chapter_id.in_(empty_ids))
         rows = (await db.execute(select(*_columns(rule)).where(scope))).mappings()
         result[rule.table] = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
+    _planning_signatures(result)
     return result
 
 
@@ -266,7 +360,10 @@ async def _current(db: AsyncSession, rule: TableRule, pk: dict, project_id: int)
         .mappings()
         .first()
     )
-    return _row(rule, row) if row is not None else None
+    out = _row(rule, row) if row is not None else None
+    if out is not None and rule.table == "planning_units":
+        out["_planning_content_hash"] = await _current_planning_signature(db, out, project_id)
+    return out
 
 
 async def _check_text(db: AsyncSession, project_id: int, effect: Effect) -> bool:
@@ -326,6 +423,16 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
                 if plan is None or (plan["before"] is not None and character_id in plan["before"]["character_ids"]):
                     conflicts.append(_conflict(effect, "细纲新增了角色引用"))
                     break
+            for unit_id, character_ids in await db.execute(select(
+                PlanningUnit.id, PlanningUnit.detached_character_ids
+            ).where(PlanningUnit.project_id == project_id)):
+                if character_id not in character_ids:
+                    continue
+                unit = changes.get(("planning_units", str(unit_id)))
+                if unit is None or (unit["before"] is not None and character_id in
+                                    unit["before"].get("detached_character_ids", [])):
+                    conflicts.append(_conflict(effect, "失去来源的规划新增了角色引用"))
+                    break
     return conflicts
 
 
@@ -377,12 +484,37 @@ def _values(rule: TableRule, row: dict) -> dict:
         values["word_count"] = 0
     if rule.table == "chapter_versions":
         values["word_count"] = count_words(values["content"])
+    if rule.table == "projects":
+        values.pop("planning_revision", None)
     return values
 
 
 async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
     by_table = {rule.table: [e for e in effects if e["table"] == rule.table] for rule in _RULES}
     removing = {(e["table"], name, value) for e in effects if e["before"] is None for name, value in e["pk"].items()}
+    next_epochs = {}
+    for effect in by_table.get("planning_units", []):
+        before, after = effect["before"], effect["after"]
+        if before is not None and (after is None or any(
+            before.get(field) != after.get(field) for field in ("chapter_id", "plan_id", "retired", "binding_epoch")
+        )):
+            next_epochs[before["id"]] = max(before.get("binding_epoch", 0), (after or {}).get("binding_epoch", 0)) + 1
+
+    def values_before(rule, effect):
+        values = _values(rule, effect["before"])
+        if rule.table == "planning_units" and values["id"] in next_epochs:
+            values["binding_epoch"] = next_epochs[values["id"]]
+        return values
+    # 自动承接可能退役一个空 unit；反向恢复时先统一释放来源，不能依赖主键
+    # 顺序让原 unit 抢回仍由 survivor 占用的唯一章／细纲。已完成 _validate。
+    rebound_units = [effect["pk"]["id"] for effect in by_table.get("planning_units", [])
+                     if effect["before"] is not None and effect["after"] is not None and any(
+                         effect["before"].get(field) != effect["after"].get(field)
+                         for field in ("chapter_id", "plan_id")
+                     )]
+    if rebound_units:
+        await db.execute(update(PlanningUnit.__table__).where(PlanningUnit.id.in_(rebound_units))
+                         .values(chapter_id=None, plan_id=None))
     # 先解除既有行对新建父记录的引用，避免删除父记录时把既有行一起级联删掉。
     for rule in _RULES:
         for effect in by_table[rule.table]:
@@ -390,6 +522,8 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
                 continue
             values = {}
             for fk in rule.model.__table__.foreign_keys:
+                if rule.table == "planning_units" and fk.parent.name in {"chapter_id", "plan_id"}:
+                    continue  # 来源在上面统一释放，最后统一恢复。
                 value = effect["after"].get(fk.parent.name)
                 if (fk.column.table.name, fk.column.name, value) in removing:
                     values[fk.parent.name] = effect["before"][fk.parent.name]
@@ -407,7 +541,7 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
         for effect in by_table[rule.table]:
             if effect["before"] is None or effect["after"] is not None:
                 continue
-            values = _values(rule, effect["before"])
+            values = values_before(rule, effect)
             refs = {name: values.pop(name) for name in rule.deferred if values.get(name) is not None}
             if refs:
                 deferred.append((rule, effect["pk"], refs))
@@ -419,7 +553,7 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
                 await db.execute(
                     update(rule.model.__table__)
                     .where(_where(rule, effect["pk"]))
-                    .values(**_values(rule, effect["before"]))
+                    .values(**values_before(rule, effect))
                 )
     for rule, pk, refs in deferred:
         await db.execute(update(rule.model.__table__).where(_where(rule, pk)).values(**refs))
@@ -477,6 +611,10 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool
             await _validate(db, project_id, effects)
             await _restore_rows(db, effects)
             await _refresh_loaded(db, effects)
+            try:
+                await planning_lifecycle.validate_project(db, project_id)
+            except BadRequestError as exc:
+                raise ConflictError("规划关联已变化，无法撤销", extra={"code": "undo_conflict"}) from exc
             if any(_legacy_affects_timeline(effect) for effect in effects):
                 # 同步最新投影与跨主体约束，所有修改留在当前保存点和项目事务中。
                 from app.services.setting_progression_service import materialize_project
@@ -518,6 +656,10 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool
                 await memory_service.index_memories(db, project_id, rows)
                 retrieval_service.invalidate(project_id)
             await db.flush()
+            # 全部恢复与跨主体校验成功后再失效规划版本；失败的保存点不应提前
+            # 修改并 expire 调用方已加载的 Project，破坏后续的异步冲突处理。
+            if any(effect["table"] in EFFECT_TABLES - {"projects", "generation_logs", "tasks"} for effect in effects):
+                await planning_lifecycle.bump_revision(db, project_id)
     except IntegrityError as exc:
         raise ConflictError(
             "关联数据已变化，无法撤销",

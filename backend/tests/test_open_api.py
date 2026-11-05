@@ -6,10 +6,11 @@ from zipfile import ZipFile
 
 import httpx
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, update
 
 from app.models import (
     Chapter,
+    ChapterCharacter,
     ChapterPlan,
     Character,
     Organization,
@@ -106,6 +107,10 @@ async def seed_domain(app, novel_id, *, suffix=""):
         )
         member = OrganizationMember(organization_id=org.id, character_id=hero.id, status="left", position="弟子")
         db.add_all([plan, rel, member, ProjectCover(project_id=novel_id, mime_type="image/png", data=COVER)])
+        await db.flush()
+        await db.execute(update(Chapter).where(Chapter.id == written.id).values(plan_id=plan.id, updated_at=STAMP))
+        # 已建章的选角以章 cast 为权威；细纲只保留历史镜像供兼容读取验证。
+        db.add(ChapterCharacter(chapter_id=written.id, character_id=hero.id))
         await db.commit()
         return {
             "hero": hero.id,

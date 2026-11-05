@@ -42,6 +42,7 @@ from app.schemas.chapter import ChapterOut, GenerateChapterRequest, PolishChapte
 from app.services import (
     ai_config_service,
     generation_log_service,
+    planning_context_service,
     prompt_service,
     retrieval_service,
     skill_service,
@@ -276,11 +277,17 @@ async def build_chapter_job(
         assert isinstance(req, GenerateChapterRequest)
         task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
-        context = await build_chapter_context(db, project, chapter, budget, embedder=embedder)
+        planning = await planning_context_service.load_planning_context(
+            db, project, "chapter", chapter.id, budget=budget
+        )
+        context = await build_chapter_context(
+            db, project, chapter, budget - planning.reserved_chars, embedder=embedder, planning=planning
+        )
         params: dict[str, Any] = {
             "target_words": req.target_words,
             "instruction": req.instruction,
             "auto_continue": req.auto_continue,
+            "planning": planning.log_data("chapter"),
         }
         messages = build_chapter_messages(
             context=context,
@@ -294,6 +301,7 @@ async def build_chapter_job(
             goal=task.goal,
             emotion=task.emotion,
             skill_guide=skill_guide,
+            planning_context=planning.text,
             override=override,
         )
     elif mode == "revise":
@@ -301,7 +309,12 @@ async def build_chapter_job(
         suggestions = await resolve_revision(db, chapter, req)
         task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
-        context = await build_chapter_context(db, project, chapter, budget, embedder=embedder)
+        planning = await planning_context_service.load_planning_context(
+            db, project, "chapter", chapter.id, budget=budget
+        )
+        context = await build_chapter_context(
+            db, project, chapter, budget - planning.reserved_chars, embedder=embedder, planning=planning
+        )
         target_words = req.target_words or max(chapter.word_count, 300)
         params = {
             "analysis_id": req.analysis_id,
@@ -309,6 +322,7 @@ async def build_chapter_job(
             "instruction": req.instruction,
             "preserve": req.preserve,
             "target_words": target_words,
+            "planning": planning.log_data("chapter"),
         }
         messages = build_revise_messages(
             context=context,
@@ -321,6 +335,7 @@ async def build_chapter_job(
             instruction=req.instruction,
             preserve=req.preserve,
             skill_guide=skill_guide,
+            planning_context=planning.text,
             override=override,
         )
     else:

@@ -13,6 +13,7 @@ export const auditLogApi = {
 }
 
 export const AUDIT_ACTION: Record<AuditAction, string> = {
+  'planning.update': '维护作品规划',
   'role.create': '创建角色', 'role.update': '修改角色', 'role.delete': '删除角色',
   'user.roles.update': '分配用户角色', 'user.roles.bootstrap': '引导超级管理员', 'user.quotas.update': '修改用户配额',
   'system_settings.update': '修改系统设置',

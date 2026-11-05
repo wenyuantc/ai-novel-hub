@@ -826,6 +826,8 @@ async def delete_relationship(
 
     版本参数可选：智能体的通用 CRUD 工具与旧调用不传版本，行为保持不变。
     """
+    from app.services.planning_lifecycle import bump_revision
+
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     rel = await get_owned_relationship(db, user_id, project_id, rel_id, include_hidden=True)
     timeline = await db.scalar(
@@ -841,6 +843,7 @@ async def delete_relationship(
     if timeline is not None:
         await db.delete(timeline)
     await db.delete(rel)
+    await bump_revision(db, project_id)
     await db.commit()
 
 

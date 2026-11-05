@@ -1,6 +1,6 @@
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, List, Popconfirm, Space, Tag, Typography } from 'antd'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../../api/client'
 import { outlineProApi, planDraftError, removePlanSync } from '../../api/outlines'
@@ -14,6 +14,7 @@ interface Props {
   characterNames: Map<number, string>
   /** 细纲有变化（编辑 / 删除）后刷新大纲概览 */
   onChanged: () => void
+  focusedPlanId?: number
 }
 
 function toValues(p: Plan): PlanFieldValues {
@@ -29,7 +30,7 @@ function toValues(p: Plan): PlanFieldValues {
 }
 
 /** 大纲页展开行：某条大纲的细纲列表，行内编辑（PATCH 单条）与删除（PUT 整体同步去掉该条；有正文的不能删）。 */
-export default function PlanList({ projectId, outline, characterOptions, characterNames, onChanged }: Props) {
+export default function PlanList({ projectId, outline, characterOptions, characterNames, onChanged, focusedPlanId }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const navigate = useNavigate()
@@ -37,6 +38,12 @@ export default function PlanList({ projectId, outline, characterOptions, charact
   const [draft, setDraft] = useState<PlanFieldValues | null>(null)
   const [pending, setPending] = useState<number | null>(null)
   const plans = [...outline.plans].sort((a, b) => a.seq - b.seq)
+
+  useEffect(() => {
+    if (!focusedPlanId) return
+    const frame = window.requestAnimationFrame(() => document.getElementById(`outline-plan-${focusedPlanId}`)?.scrollIntoView({ block: 'center' }))
+    return () => window.cancelAnimationFrame(frame)
+  }, [focusedPlanId])
 
   const startEdit = (p: Plan) => {
     setEditingId(p.id)
@@ -131,6 +138,7 @@ export default function PlanList({ projectId, outline, characterOptions, charact
         const names = p.character_ids.map((id) => characterNames.get(id)).filter((n): n is string => !!n)
         return (
           <List.Item
+            id={`outline-plan-${p.id}`}
             key={p.id}
             actions={[
               <Button key="edit" type="link" size="small" disabled={!canEdit || editingId !== null} onClick={() => startEdit(p)}>

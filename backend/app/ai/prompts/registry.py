@@ -137,6 +137,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         "按参考资料与本章任务生成一整章正文。",
         (
             T("context", "创作参考资料（作品信息、世界观、角色、大纲、前情）", required=True, sample=SAMPLE_CONTEXT),
+            L("planning_context", "本章规划与指定参考（自动计算，锁定）", "\n\n【本章规划】\n视角人物：林远"),
             T("chapter_no", "章节号", "int", sample=2),
             T("title", "章节标题", sample="初遇"),
             T("heading", "章节标题行（第N章 标题）", sample="第2章 初遇"),
@@ -180,6 +181,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         "按章节分析的修改建议整章重写。",
         (
             T("context", "创作参考资料", required=True, sample=SAMPLE_CONTEXT),
+            L("planning_context", "本章规划与指定参考（自动计算，锁定）", "\n\n【本章规划】\n视角人物：林远"),
             T("chapter_no", "章节号", "int", sample=2),
             T("title", "章节标题", sample="初遇"),
             T("heading", "章节标题行（第N章 标题）", sample="第2章 初遇"),
@@ -208,6 +210,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             INSTRUCTION_VAR,
             SKILL_GUIDE_VAR,
             L("setting_context", "本章有效设定（自动计算，锁定）", "\n\n【本章有效设定】\n■ 林远：练气境"),
+            L("planning_context", "本章规划与指定参考（自动计算，锁定）", "\n\n【本章规划】\n视角人物：林远"),
         ),
     ),
     (

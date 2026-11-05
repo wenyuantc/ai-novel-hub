@@ -45,6 +45,7 @@ from app.core.errors import AppError, BadRequestError
 from app.models import KbDocument, Project, ProjectCover, RelationshipType, StoryMemory, WritingStyle
 from app.models import entities as E
 from app.models.entities import PROJECT_STATUSES
+from app.schemas.planning import PLANNING_TONES
 from app.schemas.project import WizardProgress
 from app.schemas.story import clean_aliases
 from app.schemas.transfer import BackupOptions, ImportPreview, ImportResult, ImportStyleBrief
@@ -58,7 +59,8 @@ from app.services import (
 )
 from app.services.project_transfer import remap
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
-from app.services.project_transfer.registry import PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
+from app.services.project_transfer.planning import validate_planning_tables
+from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
 from app.services.setting_progression_resolver import validate_baseline, validate_progression_value
 from app.services.style_service import FIELD_LIMITS, IMPORT_SUFFIX, NAME_LIMIT, unique_name
@@ -109,11 +111,24 @@ TABLE_LABELS: dict[str, str] = {
     "kb_documents": "知识库文档",
     "outline_snapshots": "大纲快照",
     "inspiration_sessions": "灵感会话",
+    "planning_units": "规划单元",
+    "planning_tags": "规划标签",
+    "planning_unit_tags": "规划标签关联",
+    "planning_unit_world": "规划世界观关联",
+    "planning_unit_organizations": "规划组织关联",
+    "planning_unit_careers": "规划职业关联",
+    "planning_unit_relationships": "规划人物关系关联",
+    "subplots": "支线",
+    "subplot_nodes": "支线推进节点",
+    "subplot_crossings": "支线交汇",
+    "subplot_crossing_participants": "交汇参与支线",
 }
 
 
 # 取值受限的字符串列（读取时 Out schema 为 Literal，非法值会让列表接口 500）
 ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("planning_tags", "tone"): PLANNING_TONES,
+    ("subplots", "tone"): PLANNING_TONES,
     ("world_settings", "category"): E.WORLD_CATEGORIES,
     ("characters", "life_status"): E.LIFE_STATUSES,
     ("organization_members", "status"): E.MEMBER_STATUSES,
@@ -250,9 +265,21 @@ def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        # v2 不携带规划；不能以旧版本绕过 v3 的完整性校验。
+        tables.update({name: [] for name in PLANNING_TABLES})
+        snapshots = tables.get("outline_snapshots")
+        for row in snapshots if isinstance(snapshots, list) else []:
+            if isinstance(row, dict) and isinstance(row.get("data"), dict):
+                row["data"].pop("planning_bindings", None)
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
-    steps = {1: _migrate_v1_to_v2}
+    steps = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
     while version < VERSION:
         data = steps[version](data)
         version += 1
@@ -663,7 +690,7 @@ def parse_backup(raw: bytes) -> Backup:
     tables = data.get("tables")
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
-    for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
+    for table in ("setting_timelines", "setting_text_fields", "setting_progressions", *PLANNING_TABLES):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -697,6 +724,8 @@ def parse_backup(raw: bytes) -> Backup:
     _check_refs(backup, errors)
     errors.raise_if_any()
     _check_setting_data(backup, errors)
+    errors.raise_if_any()
+    validate_planning_tables(backup.tables, errors.add)
     errors.raise_if_any()
     return backup
 
@@ -1130,6 +1159,9 @@ class _Importer:
         # 时间线才是最新值来源；在导入事务内取得项目屏障并重建全部主体，失败时一起回滚。
         await project_lifecycle.lock_active(self.db, self.project_id)
         await setting_progression_service.materialize_project(self.db, self.project_id)
+        from app.services.planning_lifecycle import validate_project
+
+        await validate_project(self.db, self.project_id)
         await self._retrieval()
         await self.db.flush()
         self.warnings += _missing_warnings(self.ctx.missing)

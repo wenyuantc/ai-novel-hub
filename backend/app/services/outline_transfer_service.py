@@ -33,7 +33,7 @@ from app.schemas.outline import (
     clean_key_events,
 )
 from app.schemas.story import OutlineOut
-from app.services import outline_service, outline_snapshot_service, plan_service, story_service
+from app.services import outline_service, outline_snapshot_service, plan_service, planning_lifecycle, story_service
 from app.services.entity_ai_service import resolve_name
 from app.services.project_service import get_owned_project
 
@@ -152,6 +152,7 @@ async def import_outline(
     if req.mode == "replace":
         snap = await outline_snapshot_service.save_snapshot(db, project_id, "import_replace", "导入替换前")
         snapshot_id = snap.id
+        await planning_lifecycle.detach_outlines(db, project_id)
         await db.execute(delete(Outline).where(Outline.project_id == project_id))
         volume_base, chapter_no, sort = 0, 1, 1
     else:
@@ -198,6 +199,7 @@ async def import_outline(
                     )
                 )
                 plans_created += 1
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for o in created:
         await db.refresh(o)

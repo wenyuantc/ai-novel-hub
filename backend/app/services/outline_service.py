@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Chapter, Outline
 from app.schemas.outline import OutlineAppendRequest, OutlineDetail, OutlineMoveRequest
 from app.schemas.story import OutlineOut
-from app.services import plan_service, story_service
+from app.services import plan_service, planning_lifecycle, story_service
 from app.services.project_service import get_manageable_project
 
 
@@ -88,6 +88,8 @@ async def append_outlines(db: AsyncSession, user_id: int, project_id: int, data:
         )
         db.add(o)
         created.append(o)
+    if created:
+        await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for o in created:
         await db.refresh(o)
@@ -108,5 +110,6 @@ async def move_outline(
     base = min((o.sort for o in volume), default=0)
     for i, o in enumerate(volume):
         o.sort = base + i
+    await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     return volume

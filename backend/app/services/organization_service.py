@@ -277,9 +277,12 @@ async def update_org(
 
 
 async def delete_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> None:
+    from app.services.planning_lifecycle import bump_revision
+
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
     await db.delete(org)
+    await bump_revision(db, project_id)
     await db.commit()
 
 

@@ -9,13 +9,13 @@
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import BadRequestError
 from app.models import Chapter, ChapterCharacter, Character, Project
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import get_manageable_chapter
+from app.services.planning_lifecycle import bump_revision, sync_cast
 
 PROTAGONIST_ROLES = frozenset({"主角", "protagonist"})
 PREV_TAIL_CHARS = 1500
@@ -155,16 +155,8 @@ async def set_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: 
         audit.target(chapter)
         previous_ids = await cast_ids(db, chapter.id) if audit.enabled else []
         wanted = list(dict.fromkeys(ids))
-        if wanted:
-            found = set(
-                await db.scalars(
-                    select(Character.id).where(Character.id.in_(wanted), Character.project_id == project_id)
-                )
-            )
-            if len(found) != len(wanted):
-                raise BadRequestError("部分角色不存在或不属于该项目")
-        await db.execute(delete(ChapterCharacter).where(ChapterCharacter.chapter_id == chapter.id))
-        db.add_all(ChapterCharacter(chapter_id=chapter.id, character_id=cid) for cid in wanted)
+        await sync_cast(db, chapter, wanted)
+        await bump_revision(db, project_id)
         audit.affected(wanted)
         if set(previous_ids) != set(wanted):
             audit.summary.changed_fields = ["cast"]

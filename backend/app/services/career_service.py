@@ -364,9 +364,12 @@ async def update_career(
 
 async def delete_career(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> None:
     """删除职业：阶段、挂接与挂接历史随之级联删除。"""
+    from app.services.planning_lifecycle import bump_revision
+
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     career = await get_owned_career(db, user_id, project_id, career_id)
     await db.delete(career)
+    await bump_revision(db, project_id)
     await db.commit()
 
 

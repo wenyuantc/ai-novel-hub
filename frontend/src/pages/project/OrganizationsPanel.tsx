@@ -26,6 +26,7 @@ import type { Organization, OrganizationInput } from '../../api/types'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import { OrganizationMembershipsTab } from '../../components/entities/CharacterMembershipsTab'
 import { useLoader } from '../../hooks/useLoader'
+import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { splitPane, splitRow } from '../../utils/layout'
@@ -62,7 +63,7 @@ function toTreeData(nodes: OrgTreeNode<Organization>[]): DataNode[] {
 /** 组织：左侧组织树（按上级嵌套），右侧详情 + 成员表；支持 AI 生成组织。 */
 export default function OrganizationsPanel() {
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
   const { data: orgs = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
@@ -107,6 +108,8 @@ export default function OrganizationsPanel() {
     )
     setOrgOpen(true)
   }
+
+  useEntityDeepLink(pid, orgs, loading, (org) => setSelectedId(org.id), canReadNow)
 
   const handleSaveOrg = async () => {
     if (!canEditNow()) return

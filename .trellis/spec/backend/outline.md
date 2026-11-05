@@ -100,7 +100,7 @@ AC4 生成提示词、排序、向导进度。
 
 - `outline_snapshots (project_id CASCADE, reason String(32), note String(200), data JSON)`；`reason` ∈ `OUTLINE_SNAPSHOT_REASONS`
   （`wizard_replace` / `import_replace` / `reexpand` / `manual` / `restore`）。`data = {outlines: [原 id + 全部字段], plans: [原 id + 字段，
-  不含 chapter_id], links: [{chapter_id, outline_id, plan_id, chapter_no}]}`。
+  不含 chapter_id], links: [{chapter_id, outline_id, plan_id, chapter_no}], planning_bindings: [{unit_id, plan_id, binding_epoch}]}`。
 - `save_snapshot(db, project_id, reason, note)`：flush 不 commit，保存后裁剪到最近 `MAX_SNAPSHOTS = 20` 个（按 id）。
   自动保存时机：向导覆盖（已有大纲时）、导入替换、重新展开（已有细纲时）、恢复前；手动 `POST /outline-snapshots {note}`。
 - 恢复 `POST /outline-snapshots/{sid}/restore`（单事务）：先存 `restore` 快照（`save_snapshot(..., keep={sid})`：裁剪时排除被恢复的目标，
@@ -109,6 +109,7 @@ AC4 生成提示词、排序、向导进度。
   `_fix_sequences`（PostgreSQL `setval(pg_get_serial_sequence(...), max(id))`，SQLite 跳过）、再插改用新 id 的行 → 按 links 恢复关联（只恢复
   章节仍存在且快照中有对应大纲 / 细纲的，回填 `chapter_plans.chapter_id`）。**不改章节号**；快照后发生过平移时 `warnings` 提示，大纲章节号以快照为准。
   恢复前的快照可再恢复以撤销本次恢复。
+- 规划绑定恢复必须在删纲前捕获真实章锚点，校验unit、binding_epoch、retired和占用后才恢复；不依据可能复用的裸章ID。保持后来编辑的规划文本和存活章cast；旧快照无绑定时保留待关联并提示。详见[规划矩阵与支线](./planning.md)。
 - 列表 `GET /outline-snapshots` → `SnapshotOut[]`（id 降序：`{id, reason, note, created_at, outline_count, plan_count, link_count}`）；
   详情 `GET /outline-snapshots/{sid}` → 另含 `outlines: [{volume_no, volume_title, chapter_no, title, plan_count}]` 与 `warnings`；
   删除 `DELETE /outline-snapshots/{sid}` 204。不存在 / 他人 → 404 `快照不存在`。

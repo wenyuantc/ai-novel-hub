@@ -41,7 +41,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
-| 章节 | `chapter.generate`、`chapter.continue`（只有 user 段，结果只取 user）、`chapter.polish`、`chapter.revise`、`chapter.rewrite`（`op` 在模板里 if 分支） | rewrite：`setting_context` |
+| 章节 | `chapter.generate`、`chapter.continue`（只有 user 段，结果只取 user）、`chapter.polish`、`chapter.revise`、`chapter.rewrite`（`op` 在模板里 if 分支） | generate/revise/rewrite：`planning_context`；rewrite另有`setting_context` |
 | 分析 | `analysis.chapter` | `output_schema`（有伏笔清单时是带 ref_id 的结构）、`json_rule` |
 | 向导 | `wizard.world` / `wizard.characters` / `wizard.outline` / `wizard.careers`；`wizard.continue`（从中断处继续的续写指令，只有 user 段，变量 `generated_chars`，接在原对话 + assistant 已输出内容之后） | `json_rule`、`output_format`（`wizard.continue` 无） |
 | 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` / `relations.generate` | `json_rule`、`output_format` |
@@ -58,6 +58,8 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
   「作者额外要求」之前；续写放在「发展方向」之前，`memories` 放在「前文进展」之后 / 展开放在「相邻章纲」之后），**变量为空时整段不输出，parity 不变**。
   build 函数新增关键字参数 `knowledge: str = ""`（大纲另有 `memories: str = ""`）。章节类模板不加变量：检索块由 `context_builder` 拼进 `{{ context }}`。
   新增这些变量会改变默认模板指纹，已覆盖的用户会看到「默认已更新」；覆盖里没有引用变量时不注入。
+
+- **规划块**：generate/revise/rewrite新增独立锁定`planning_context`；空值保持旧消息逐字不变，旧覆盖漏变量由锁定兜底补一次。只读目标章投影包括POV、节点、完整交汇及全类型显式参考，不含未来节点和支线作者概览；预算从普通上下文中预留，局部scope仅作背景。批量逐章读取，自动续写复用首轮规划快照。见[规划契约](./planning.md)。
 
 - **局部改写设定块**：`chapter.rewrite` 的锁定变量 `setting_context` 由 `build_setting_context` 以目标章初计算并限预算；默认模板直接引用，空块保持旧输出逐字一致。旧覆盖模板未包含该变量时通过锁定变量兜底追加，避免改写第 5 章时读取第 20 章之后的状态。
 

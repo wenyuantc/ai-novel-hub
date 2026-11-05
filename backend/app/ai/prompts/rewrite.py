@@ -31,6 +31,7 @@ def build_rewrite_messages(
     instruction: str = "",
     skill_guide: str = "",
     setting_context: str = "",
+    planning_context: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     # 调用方提供已裁剪、含标题的设定块；添加分隔符以同时支持默认模板与旧覆盖的兜底。
@@ -49,5 +50,6 @@ def build_rewrite_messages(
             "instruction": instruction.strip(),
             "skill_guide": skill_guide.strip(),
             "setting_context": f"\n\n{context}" if context else "",
+            "planning_context": f"\n\n{planning_context.strip()}" if planning_context.strip() else "",
         },
     )

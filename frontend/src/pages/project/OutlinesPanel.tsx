@@ -25,8 +25,8 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { useCallback, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { downloadJson } from '../../api/cards'
 import { chapterApi } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
@@ -50,7 +50,10 @@ import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectStore } from '../../stores/project'
+import { readPlanningConflict, type PlanningMergeConflict } from '../../utils/planning'
 import { groupOutlines, volumeLabel } from '../../utils/outline'
+
+const PlanningMergeModal = lazy(() => import('../../components/planning/PlanningMergeModal'))
 
 /**
  * 大纲页（懒加载路由）：按卷分组的章纲 + 展开状态；已展开的大纲可折叠显示细纲（行内编辑）；
@@ -58,9 +61,11 @@ import { groupOutlines, volumeLabel } from '../../utils/outline'
  */
 export default function OutlinesPanel() {
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const [merge, setMerge] = useState<PlanningMergeConflict>()
   const refreshProject = useProjectStore((s) => s.refresh)
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
   const loader = useCallback(() => Promise.all([outlineProApi.tree(pid), characterApi.list(pid)]), [pid])
@@ -86,6 +91,15 @@ export default function OutlinesPanel() {
   const [pending, setPending] = useState<number | null>(null)
   const [form] = Form.useForm<OutlineInput>()
   usePublishAgentContext(pid, { outline_id: modalOpen ? editing?.id : expandedKeys.at(-1) })
+
+  const linkedOutline = outlines.find((outline) => outline.id === Number(params.get('outline_id')) && outline.plans.some((plan) => plan.id === Number(params.get('plan_id'))))
+  const focusedPlan = linkedOutline ? Number(params.get('plan_id')) : undefined
+  const visibleExpandedKeys = linkedOutline && !expandedKeys.includes(linkedOutline.id) ? [...expandedKeys, linkedOutline.id] : expandedKeys
+  useEffect(() => {
+    if (!params.has('outline_id') || loading || !data || !canReadNow() || linkedOutline) return
+    message.warning('该细纲已不存在，请查看最新大纲')
+    setParams((old) => { const next = new URLSearchParams(old); next.delete('outline_id'); next.delete('plan_id'); return next }, { replace: true })
+  }, [params, loading, data, linkedOutline, canReadNow, message, setParams])
 
   const pendingCount = outlines.filter(canCreateSingleChapter).length
 
@@ -194,7 +208,9 @@ export default function OutlinesPanel() {
       afterChange()
     } catch (err) {
       if (!canEditNow()) return
-      message.error(errorMessage(err))
+      const conflict = readPlanningConflict(err)
+      if (conflict) setMerge(conflict)
+      else message.error(errorMessage(err))
     } finally {
       setPending(null)
     }
@@ -302,14 +318,17 @@ export default function OutlinesPanel() {
                     dataSource={g.items}
                     pagination={false}
                     expandable={{
-                      expandedRowKeys: expandedKeys.filter((k) => g.items.some((o) => o.id === k)),
+                      expandedRowKeys: visibleExpandedKeys.filter((k) => g.items.some((o) => o.id === k)),
                       rowExpandable: (o) => o.plan_count > 0,
-                      onExpand: (open, o) =>
-                        setExpandedKeys((keys) => (open ? [...keys, o.id] : keys.filter((k) => k !== o.id))),
+                      onExpand: (open, o) => {
+                        setExpandedKeys((keys) => (open ? [...keys, o.id] : keys.filter((k) => k !== o.id)))
+                        if (!open && linkedOutline?.id === o.id) setParams((old) => { const next = new URLSearchParams(old); next.delete('outline_id'); next.delete('plan_id'); return next }, { replace: true })
+                      },
                       expandedRowRender: (o) => (
                         <PlanList
                           projectId={pid}
                           outline={o}
+                          focusedPlanId={focusedPlan}
                           characterOptions={characterOptions}
                           characterNames={characterNames}
                           onChanged={afterChange}
@@ -500,6 +519,7 @@ export default function OutlinesPanel() {
           afterChange()
         }}
       />)}
+      {merge && <Suspense fallback={<Spin />}><PlanningMergeModal projectId={pid} conflict={merge} onClose={() => setMerge(undefined)} onSaved={() => { afterChange(); message.success('规划已合并，请再次点击建章') }} /></Suspense>}
       <OutlineSnapshotDrawer
         projectId={pid}
         open={snapshotsOpen}

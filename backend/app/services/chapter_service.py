@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import Chapter, ChapterPlan, ChapterVersion, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
-from app.services import memory_service, project_lifecycle, setting_progression_service, style_service, version_service
+from app.services import (
+    memory_service,
+    planning_lifecycle,
+    project_lifecycle,
+    setting_progression_service,
+    style_service,
+    version_service,
+)
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import get_manageable_project, get_owned_project
 
@@ -118,6 +125,7 @@ async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: 
         audit.target(chapter)
         audit.summary.changed_fields = ["title", "chapter_no", "content"]
         audit.summary.word_count_after = chapter.word_count
+        await planning_lifecycle.bump_revision(db, project_id)
         await audit.commit()
         await db.refresh(chapter)
         return chapter
@@ -163,6 +171,8 @@ async def create_from_outlines(
             created.append(chapter)
         await db.flush()
         audit.affected([c.id for c in created])
+        if created:
+            await planning_lifecycle.bump_revision(db, project_id)
         await audit.commit()
         for c in created:
             await db.refresh(c)
@@ -197,6 +207,7 @@ async def update_chapter(
                 await _get_outline(db, project_id, data.outline_id)
             if data.outline_id != chapter.outline_id and chapter.plan_id is not None:
                 # 改挂到别的大纲：解除与原细纲的绑定（细纲回到未建章状态），保持双向一致
+                await planning_lifecycle.detach_chapter_plan(db, chapter)
                 plan = await db.scalar(select(ChapterPlan).where(ChapterPlan.id == chapter.plan_id))
                 if plan is not None:
                     plan.chapter_id = None
@@ -226,6 +237,8 @@ async def update_chapter(
             # 手动保存：按 10 分钟窗口合并，与正文修改同一事务提交
             version = await version_service.record_manual(db, chapter)
             audit.version(version, project_id)
+        if fields.intersection({"outline_id", "chapter_no", "title"}):
+            await planning_lifecycle.bump_revision(db, project_id)
         await audit.commit(commit_versioned, flush_fn=version_service.flush_versioned)
         await db.refresh(chapter)
         return chapter
@@ -244,9 +257,11 @@ async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapte
                 or 0
             )
         # 先删该章的自动记忆与检索单元（手动记忆保留，chapter_id 由外键置空）
+        await planning_lifecycle.detach_sources(db, project_id, chapter_ids=[chapter.id])
         await memory_service.on_chapters_deleted(db, [chapter.id])
         await db.delete(chapter)
         # FK SET NULL 已生效后再重算，避免把已删除章节的变化继续作为最新状态。
         await db.flush()
         await setting_progression_service.on_story_positions_changed(db, project_id)
+        await planning_lifecycle.bump_revision(db, project_id)
         await audit.commit()

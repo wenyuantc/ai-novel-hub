@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端领域与检查规范索引，按阶段定位详细契约"}
+{"file":".trellis/spec/frontend/index.md","reason":"前端组件、状态、类型和访问权限规范索引"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"复用已有cast、计划、快照、权限和事务helper，避免双套事实源"}
+{"file":".trellis/spec/backend/outline.md","reason":"未建章细纲、建章衔接、章节顺序与快照恢复"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"新增项目表、v3迁移、引用重映射和effects登记"}
+{"file":".trellis/spec/backend/setting-progressions.md","reason":"按章有效设定与计划位置边界"}
+{"file":".trellis/spec/backend/admin-projects.md","reason":"人工内容管理员权限与AI所有者边界"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/planning-anchor-design.md","reason":"稳定unit、项目CAS、源生命周期和旧入口清单"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/ai-integration-design.md","reason":"全部生成入口、锁定变量、预算和全类型设定注入"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/ui-and-api-contract.md","reason":"矩阵布局、批量操作语义、只读和异步状态"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/relationship-and-crossing-contract.md","reason":"第五类人物关系的稳定时间线与明确交汇完整参与集合"}
+{"file":".trellis/tasks/11-05-planning-matrix-subplots/research/planning-consistency-review.md","reason":"binding_epoch、旧章ID复用防护与支线矩阵列的已收敛修复"}
+{"file":".trellis/spec/backend/prompts-styles.md","reason":"阶段2：规划锁定块、旧模板覆盖兼容、默认样例与parity"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"阶段3：严格类型/构建/测试、按需加载、主题与窄屏要求"}

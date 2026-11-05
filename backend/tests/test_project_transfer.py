@@ -569,11 +569,11 @@ async def _seed_progression_changes(app, project_id: int, ids: dict) -> dict:
                 "active": active.id, "orphan": orphan.id, "historical_presence": historical_presence.id}
 
 
-async def test_v2_progressions_round_trip_preserves_historical_references(client, app):
+async def test_progressions_round_trip_preserves_historical_references(client, app):
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 2 and data["app_schema"] == "0033"
+    assert data["version"] == 3 and data["app_schema"] == "0034"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -944,7 +944,7 @@ async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client,
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 2
+    assert src["format"] == "ainovel.project" and src["version"] == 3
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 不导出任务 / 分块 / 检索单元
     assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
@@ -990,7 +990,10 @@ async def test_round_trip_all_entities(client, app):
         # 互相引用：细纲 ↔ 章节
         plan = await db.scalar(select(ChapterPlan).where(ChapterPlan.project_id == pid))
         assert plan.chapter_id == ch2.id and ch2.plan_id == plan.id and ch1.plan_id is None
-        assert plan.character_ids == [c1, c3]
+        # v3 的已建章细纲只导出章 cast 的兼容镜像；旧库中分歧的细纲建议不被导出动作改写。
+        assert plan.character_ids == []
+        original_plan = await db.scalar(select(ChapterPlan).where(ChapterPlan.project_id == p["id"]))
+        assert original_plan.character_ids == [ids["characters"][0], ids["characters"][2]]
         # 自引用：组织上级
         orgs = list(
             await db.scalars(select(Organization).where(Organization.project_id == pid).order_by(Organization.id))
@@ -1235,7 +1238,7 @@ async def test_validation_errors(client, app, monkeypatch):
         (b"not json", "不是合法的 JSON"),
         (b"[1]", "应为 JSON 对象"),
         (dump({**data, "format": "ainovel.cards"}), "format 应为 ainovel.project"),
-        (dump({**data, "version": 3}), "备份来自更新的版本"),
+        (dump({**data, "version": 4}), "备份来自更新的版本"),
         (dump({**data, "version": 0}), "不支持的备份版本"),
         ("﻿".encode() + b"{" * 1 + b'"format": "x"}', "format 应为"),
     ]
