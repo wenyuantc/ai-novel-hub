@@ -1,33 +1,30 @@
-import { DownloadOutlined, PlusOutlined, RobotOutlined, UploadOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, DownloadOutlined, DownOutlined, PlusOutlined, RobotOutlined, SearchOutlined, UnorderedListOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   Alert,
   App,
   Button,
-  Card,
   Checkbox,
-  Descriptions,
   Drawer,
+  Dropdown,
   Empty,
   Form,
+  Input,
+  Pagination,
   Popconfirm,
-  Segmented,
-  Space,
   Spin,
   Tabs,
-  Tag,
   Typography,
 } from 'antd'
-import { lazy, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { assignmentApi, careerBadges } from '../../api/careers'
-import { lifeStatusLabel, roleTypeColor } from '../../api/characters'
 import { ApiError, errorMessage } from '../../api/client'
 import { baselineEditorLabel, progressionApi } from '../../api/progressions'
 import { characterApi } from '../../api/story'
 import type { Character, SettingBaseline } from '../../api/types'
-import AutoGrid from '../../components/AutoGrid'
 import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
+import CharacterCard from '../../components/entities/CharacterCard'
 import {
   characterBaselineMatches,
   characterToBaselineForm,
@@ -55,14 +52,11 @@ import { authorizationKey } from '../../utils/permissions'
 import { invalidateProject } from '../../utils/projectRefresh'
 import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import EntityMentions from '../../components/mentions/EntityMentions'
-
-const ALL = '__all__'
+import { ALL_CHARACTERS, characterPage, characterRoleFilters, filterCharacters } from '../../utils/characterList'
+import './CharactersPanel.css'
 
 // 伏笔 Tab 只在打开角色抽屉并切到该 Tab 时才需要：按需加载，伏笔页的 API / 标签代码不进入口 chunk
 const CharacterForeshadowsTab = lazy(() => import('../../components/foreshadows/CharacterForeshadowsTab'))
-
-/** 卡片标题允许换行：窄卡片里名字 + 标签放不下时折行，而不是被省略号截断。 */
-const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 
 /** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业 / 伏笔）。 */
 export default function CharactersPanel() {
@@ -87,7 +81,11 @@ export default function CharactersPanel() {
   const [exportOpen, setExportOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [filter, setFilter] = useState<string>(ALL)
+  const [filter, setFilter] = useState(ALL_CHARACTERS)
+  const [query, setQuery] = useState('')
+  const [view, setView] = useState<'grid' | 'list'>('grid')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(8)
   const [selected, setSelected] = useState<number[]>([])
   const [baseline, setBaseline] = useState<SettingBaseline | null>(null)
   const [baselineLoading, setBaselineLoading] = useState(false)
@@ -129,11 +127,9 @@ export default function CharactersPanel() {
   }, [pid, identity, form])
   usePublishAgentContext(pid, { character_id: drawerOpen && editorTicket?.projectId === pid ? editing?.id : undefined })
 
-  const roleTypes = useMemo(() => {
-    const set = new Set(items.map((c) => c.role_type.trim() || '未设定'))
-    return [...set]
-  }, [items])
-  const shown = filter === ALL ? items : items.filter((c) => (c.role_type.trim() || '未设定') === filter)
+  const roleFilters = useMemo(() => characterRoleFilters(items), [items])
+  const shown = useMemo(() => filterCharacters(items, filter, query), [items, filter, query])
+  const currentPage = characterPage(shown, page, pageSize)
   // 只保留仍存在的勾选
   const selectedIds = useMemo(() => selected.filter((id) => items.some((c) => c.id === id)), [selected, items])
 
@@ -340,17 +336,19 @@ export default function CharactersPanel() {
     }
   }
 
-  const handleDelete = async (item: Character) => {
-    if (!canEditNow()) return
+  const handleDelete = async (item: Character): Promise<boolean> => {
+    if (!canEditNow()) return false
     try {
-      if (!canEditNow()) return
+      if (!canEditNow()) return false
       await characterApi.remove(pid, item.id)
-      if (!canEditNow()) return
+      if (!canEditNow()) return false
       message.success('已删除（相关关系、组织成员与职业挂接一并清理）')
       invalidateProject(pid, ['characters', 'relationships', 'organizations', 'careers'])
+      return true
     } catch (err) {
-      if (!canEditNow()) return
+      if (!canEditNow()) return false
       message.error(errorMessage(err))
+      return false
     }
   }
 
@@ -358,123 +356,110 @@ export default function CharactersPanel() {
     setSelected((list) => (on ? [...list.filter((x) => x !== id), id] : list.filter((x) => x !== id)))
 
   return (
-    <Card
-      title="角色"
-      extra={
-        <Space wrap>
-          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setGenerateOpen(true)}>
-            AI 生成角色
-          </Button>)}
-          {canUseAI && (<Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)} disabled={items.length === 0}>
-            导出卡片{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
-          </Button>)}
-          {canUseAI && (<Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
-            导入卡片
-          </Button>)}
-          {canUseAI && (<Button onClick={() => setWizardOpen(true)}>AI 重新生成全部</Button>)}
+    <section className="characters-page" aria-labelledby="characters-title">
+      <header className="characters-page-heading">
+        <div className="characters-page-intro">
+          <div className="characters-page-title"><h1 id="characters-title">角色</h1><span>{items.length}</span></div>
+          <p>管理人物设定，让每个角色鲜活而立体。</p>
+        </div>
+        <div className="characters-page-actions">
+          {canUseAI && <>
+            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入卡片</Button>
+            <Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)} disabled={items.length === 0}>
+              导出卡片{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
+            </Button>
+            <Dropdown trigger={['click']} menu={{
+              items: [{ key: 'regenerate', label: 'AI 重新生成全部' }],
+              onClick: ({ key }) => { if (key === 'regenerate') setWizardOpen(true) },
+            }}>
+              <Button>更多<DownOutlined /></Button>
+            </Dropdown>
+            <Button icon={<RobotOutlined />} onClick={() => setGenerateOpen(true)}>AI 生成角色</Button>
+          </>}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
             新增角色
           </Button>
-        </Space>
-      }
-    >
+        </div>
+      </header>
       {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
+      <div className="characters-toolbar">
+        <Tabs
+          className="characters-role-tabs"
+          activeKey={filter}
+          onChange={(value) => { setFilter(value); setPage(1) }}
+          items={roleFilters.map((role) => ({
+            key: role.value,
+            label: <span className="characters-filter-label">{role.label}<span>{role.count}</span></span>,
+          }))}
+        />
+        <div className="characters-search-controls">
+          <Input
+            aria-label="搜索角色"
+            placeholder="搜索姓名、别名或设定…"
+            prefix={<SearchOutlined />}
+            allowClear
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setPage(1) }}
+          />
+          <div className="characters-view-switch" role="group" aria-label="角色展示方式">
+            <Button type={view === 'grid' ? 'primary' : 'default'} icon={<AppstoreOutlined />} aria-label="卡片视图" aria-pressed={view === 'grid'} onClick={() => setView('grid')} />
+            <Button type={view === 'list' ? 'primary' : 'default'} icon={<UnorderedListOutlined />} aria-label="列表视图" aria-pressed={view === 'list'} onClick={() => setView('list')} />
+          </div>
+        </div>
+      </div>
+      <div className="characters-list-summary">
+        <div className="characters-selection">
+          {canUseAI && <Checkbox
+            checked={currentPage.items.length > 0 && currentPage.items.every((character) => selectedIds.includes(character.id))}
+            indeterminate={currentPage.items.some((character) => selectedIds.includes(character.id)) && !currentPage.items.every((character) => selectedIds.includes(character.id))}
+            onChange={(event) => {
+              const ids = currentPage.items.map((character) => character.id)
+              setSelected((list) => event.target.checked ? [...new Set([...list, ...ids])] : list.filter((id) => !ids.includes(id)))
+            }}
+            disabled={currentPage.items.length === 0}
+          >全选当前</Checkbox>}
+          {canUseAI && selectedIds.length > 0 && <>
+            <span>已选 {selectedIds.length} 位</span>
+            <Button type="text" size="small" onClick={() => setSelected([])}>清空选择</Button>
+          </>}
+        </div>
+        <span aria-live="polite">{filter !== ALL_CHARACTERS || query.trim() ? `找到 ${shown.length} 位角色` : `共 ${items.length} 位角色`}</span>
+      </div>
       <Spin spinning={loading}>
         {items.length === 0 ? (
-          <Empty description={canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} />
+          <div className="characters-empty"><Empty description={listError ? '角色列表暂不可用，请重试' : canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} /></div>
+        ) : shown.length === 0 ? (
+          <div className="characters-empty"><Empty description="没有找到匹配的角色">
+            <Button onClick={() => { setQuery(''); setFilter(ALL_CHARACTERS); setPage(1) }}>清除筛选</Button>
+          </Empty></div>
         ) : (
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <Space wrap>
-              <Segmented
-                value={filter}
-                onChange={(v) => setFilter(String(v))}
-                options={[
-                  { value: ALL, label: `全部（${items.length}）` },
-                  ...roleTypes.map((r) => ({ value: r, label: r })),
-                ]}
-              />
-              {canUseAI && <Checkbox
-                checked={shown.length > 0 && shown.every((c) => selectedIds.includes(c.id))}
-                indeterminate={shown.some((c) => selectedIds.includes(c.id)) && !shown.every((c) => selectedIds.includes(c.id))}
-                onChange={(e) => {
-                  const ids = shown.map((c) => c.id)
-                  setSelected((list) =>
-                    e.target.checked ? [...new Set([...list, ...ids])] : list.filter((x) => !ids.includes(x)),
-                  )
-                }}
-              >
-                全选当前
-              </Checkbox>}
-            </Space>
-            <AutoGrid>
-              {shown.map((c) => {
-                const life = lifeStatusLabel(c.life_status)
-                const badge = badges?.get(c.id)
-                return (
-                  <Card
-                      key={c.id}
-                      size="small"
-                      styles={{ title: cardTitleWrap }}
-                      title={
-                        <Space size={4} wrap>
-                          {canUseAI && <Checkbox checked={selectedIds.includes(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} />}
-                          {c.name}
-                          {c.role_type && <Tag color={roleTypeColor(c.role_type)}>{c.role_type}</Tag>}
-                          {c.life_status !== 'alive' && <Tag color={life.color}>{life.label}</Tag>}
-                          {c.always_in_context && <Tag color="geekblue">常驻上下文</Tag>}
-                        </Space>
-                      }
-                      extra={
-                        <Space size={0}>
-                          <Button type="link" size="small" onClick={() => openEdit(c)}>
-                            {canEdit ? '编辑' : '查看'}</Button>
-                          <Popconfirm
-                            title="删除该角色？"
-                            description="相关的人物关系、关系历史、组织成员记录、职业挂接与阶段历史会一并删除。"
-                            okText="删除"
-                            cancelText="取消"
-                            okButtonProps={{ danger: true }}
-                            onConfirm={() => handleDelete(c)}
-                          >
-                            <Button type="link" size="small" danger disabled={!canEdit}>
-                              删除
-                            </Button>
-                          </Popconfirm>
-                        </Space>
-                      }
-                    >
-                      <Descriptions size="small" column={1}>
-                        {badge?.main && <Descriptions.Item label="主职业">{badge.main}</Descriptions.Item>}
-                        {badge && badge.subs.length > 0 && (
-                          <Descriptions.Item label="副职业">{badge.subs.join('；')}</Descriptions.Item>
-                        )}
-                        {c.aliases.length > 0 && <Descriptions.Item label="别名">{c.aliases.join('、')}</Descriptions.Item>}
-                        {(c.age || c.gender) && (
-                          <Descriptions.Item label="年龄 / 性别">{[c.age, c.gender].filter(Boolean).join(' / ')}</Descriptions.Item>
-                        )}
-                        <Descriptions.Item label="简介">
-                          <Typography.Paragraph
-                            style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}
-                            ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}
-                          >
-                            {c.profile || c.personality || c.background || '-'}
-                          </Typography.Paragraph>
-                        </Descriptions.Item>
-                        {c.current_state && (
-                          <Descriptions.Item label="当前状态">
-                            <Typography.Paragraph style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
-                              {c.current_state}
-                            </Typography.Paragraph>
-                          </Descriptions.Item>
-                        )}
-                      </Descriptions>
-                    </Card>
-                )
-              })}
-            </AutoGrid>
-          </Space>
+          <div className={`characters-grid${view === 'list' ? ' characters-grid-list' : ''}`}>
+            {currentPage.items.map((character) => <CharacterCard
+              key={character.id}
+              character={character}
+              career={badges?.get(character.id)}
+              selectable={canUseAI}
+              selected={selectedIds.includes(character.id)}
+              canEdit={canEdit}
+              onSelect={(selected) => toggle(character.id, selected)}
+              onOpen={() => openEdit(character)}
+              onDelete={() => handleDelete(character)}
+            />)}
+          </div>
         )}
       </Spin>
+      {shown.length > 0 && <Pagination
+        className="characters-pagination"
+        current={currentPage.page}
+        pageSize={pageSize}
+        total={shown.length}
+        pageSizeOptions={[8, 16, 32]}
+        locale={{ items_per_page: '条/页', prev_page: '上一页', next_page: '下一页' }}
+        showSizeChanger
+        responsive
+        showTotal={(total) => `显示 ${currentPage.start}–${currentPage.end}，共 ${total} 位角色`}
+        onChange={(nextPage, nextSize) => { setPage(nextSize === pageSize ? nextPage : 1); setPageSize(nextSize) }}
+      />}
 
       <Drawer
         title={editing ? `编辑角色：${editing.name}` : '新增角色'}
@@ -651,6 +636,6 @@ export default function CharactersPanel() {
           reloadBadges()
         }}
       />)}
-    </Card>
+    </section>
   )
 }

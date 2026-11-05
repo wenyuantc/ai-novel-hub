@@ -1,0 +1,91 @@
+.characters-page { min-width: 0; font-family: var(--font-sans); font-size: 14px; container-type: inline-size; }
+.characters-page-heading { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
+.characters-page-intro { min-width: 0; }
+.characters-page-title { display: flex; align-items: center; gap: 12px; }
+.characters-page-title h1 { margin: 0; color: var(--color-surface-foreground); font-size: 28px; font-weight: 650; line-height: 1.4; }
+.characters-page-title > span { padding: 2px 12px; border-radius: 16px; background: var(--color-active); color: var(--color-primary); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.characters-page-intro > p { margin: 4px 0 0; color: var(--color-muted); line-height: 24px; }
+.characters-page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.characters-page-actions .ant-btn { min-height: 36px; }
+.characters-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; border-bottom: 1px solid var(--color-border); }
+.characters-role-tabs { flex: 1 1 500px; min-width: 0; }
+.characters-role-tabs .ant-tabs-nav { margin: 0; }
+.characters-role-tabs .ant-tabs-nav::before { border: 0; }
+.characters-role-tabs .ant-tabs-tab { padding: 12px 4px 14px; }
+.characters-role-tabs .ant-tabs-tab + .ant-tabs-tab { margin-left: 24px; }
+.characters-filter-label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.characters-filter-label > span { color: var(--color-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.characters-role-tabs .ant-tabs-tab-active .characters-filter-label > span { color: inherit; }
+.characters-search-controls { display: flex; flex: 0 1 420px; align-items: center; gap: 12px; min-width: 0; margin-bottom: 6px; }
+.characters-search-controls .ant-input-affix-wrapper { min-width: 0; height: 36px; background: var(--color-paper); }
+.characters-search-controls .ant-input-prefix { margin-right: 8px; color: var(--color-muted); }
+.characters-view-switch { display: flex; flex-shrink: 0; }
+.characters-view-switch .ant-btn { width: 40px; height: 36px; border-radius: 0; }
+.characters-view-switch .ant-btn:first-child { border-start-start-radius: var(--radius-control); border-end-start-radius: var(--radius-control); }
+.characters-view-switch .ant-btn:last-child { border-start-end-radius: var(--radius-control); border-end-end-radius: var(--radius-control); }
+.characters-view-switch .ant-btn-primary { z-index: 1; }
+.characters-list-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 28px; margin: 16px 0 20px; color: var(--color-muted); font-size: 13px; }
+.characters-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.characters-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; gap: 16px; }
+.character-card { display: flex; flex-direction: column; min-width: 0; min-height: 304px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-paper); transition: border-color 150ms ease, box-shadow 150ms ease; }
+.character-card:hover, .character-card:focus-within, .character-card-selected { border-color: var(--color-primary); }
+.character-card:hover { box-shadow: 0 4px 16px color-mix(in srgb, var(--color-primary) 6%, transparent); }
+.character-card-header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.character-card-heading { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; margin: 0; font-size: 18px; line-height: 26px; }
+.character-card-name { min-width: 0; overflow: hidden; padding: 0; border: 0; background: transparent; color: var(--color-surface-foreground); font-family: inherit; font-weight: 650; letter-spacing: .025em; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.character-card-name:hover { color: var(--color-primary); }
+.character-card-role.ant-tag { flex-shrink: 0; max-width: 48%; overflow: hidden; margin: 0; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.character-card-actions { display: flex; flex-shrink: 0; gap: 2px; }
+.character-card-actions .ant-btn { width: 26px; height: 28px; color: var(--color-muted); }
+.character-card-aliases { min-width: 0; min-height: 22px; overflow: hidden; margin: 8px 0 4px; color: var(--color-muted); font-size: 13px; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.character-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 24px; color: var(--color-muted); font-size: 13px; }
+.character-card-demographics { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.character-card-meta .ant-tag { max-width: 40%; overflow: hidden; margin: 0; text-overflow: ellipsis; white-space: nowrap; }
+.character-card-pinned { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; padding: 0 6px; border-radius: 4px; background: var(--color-active); color: var(--color-primary); font-size: 12px; line-height: 22px; white-space: nowrap; }
+.character-card-body { flex: 1; min-width: 0; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+.character-card-profile { display: -webkit-box; overflow: hidden; margin: 0; color: var(--color-ink); font-size: 14px; font-weight: 400; line-height: 25px; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.character-card-careers { min-width: 0; margin-bottom: 8px; color: var(--color-ink); font-size: 13px; }
+.character-card-careers p { overflow: hidden; margin: 0; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.character-card-careers p > span { margin-right: 8px; color: var(--color-muted); }
+.character-card-state { margin-top: 16px; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--color-panel) 70%, var(--color-paper)); }
+.character-card-state h3 { margin: 0; color: var(--color-primary); font-size: 12px; font-weight: 600; line-height: 20px; }
+.character-card-state p { display: -webkit-box; min-height: 48px; overflow: hidden; margin: 2px 0 0; color: var(--color-ink); font-size: 14px; font-weight: 400; line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.character-card .character-card-placeholder { color: var(--color-muted); }
+.character-card :is(p, span)[tabindex="0"]:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 3px; }
+.character-text-preview { max-width: min(380px, calc(100vw - 32px)); font-family: var(--font-sans); }
+.character-text-preview .ant-popover-inner { padding: 16px 18px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-paper); box-shadow: 0 8px 28px color-mix(in srgb, var(--color-surface-foreground) 12%, transparent); }
+.character-text-preview .ant-popover-title { min-width: 0; margin: 0 0 10px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border); color: var(--color-primary); font-size: 13px; font-weight: 600; line-height: 20px; letter-spacing: .04em; }
+.character-text-preview .ant-popover-inner-content { max-height: min(320px, 50vh); overflow-y: auto; overscroll-behavior: contain; }
+.character-text-preview-content { margin: 0; color: var(--color-ink); font-size: 14px; font-weight: 400; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.character-text-preview .ant-popover-arrow::before { background: var(--color-paper); }
+.character-action-tooltip .ant-tooltip-inner { padding: 7px 12px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-paper); color: var(--color-ink); font-family: var(--font-sans); font-size: 13px; line-height: 20px; }
+.character-action-tooltip .ant-tooltip-arrow::before { background: var(--color-paper); }
+.characters-empty { padding: 48px 12px; }
+.characters-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 0; margin-top: 24px; }
+.characters-pagination .ant-pagination-total-text { height: auto; margin-right: auto; padding-right: 16px; color: var(--color-muted); }
+
+@container (min-width: 640px) { .characters-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (min-width: 1000px) { .characters-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (min-width: 1280px) { .characters-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.characters-grid-list { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
+@container (min-width: 900px) {
+  .characters-grid-list .character-card { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 1.4fr) minmax(180px, 1fr); grid-template-rows: auto auto 1fr; gap: 0 24px; min-height: 144px; }
+  .characters-grid-list .character-card-header { grid-column: 1; grid-row: 1; }
+  .characters-grid-list .character-card-aliases { grid-column: 1; grid-row: 2; }
+  .characters-grid-list .character-card-meta { grid-column: 1; grid-row: 3; align-self: start; }
+  .characters-grid-list .character-card-body { grid-column: 2; grid-row: 1 / 4; margin-top: 0; padding-top: 0; border-top: 0; }
+  .characters-grid-list .character-card-state { grid-column: 3; grid-row: 1 / 4; margin-top: 0; }
+}
+@container (max-width: 639.98px) {
+  .characters-page-heading { gap: 16px; }
+  .characters-page-actions { width: 100%; }
+  .characters-page-actions .ant-btn { flex: 1 0 auto; }
+  .characters-search-controls { flex-basis: 100%; margin-bottom: 12px; }
+  .characters-role-tabs { flex-basis: 100%; }
+  .characters-role-tabs .ant-tabs-tab + .ant-tabs-tab { margin-left: 16px; }
+  .characters-list-summary { margin-bottom: 16px; }
+  .character-card { padding: 16px; }
+  .characters-pagination .ant-pagination-total-text { flex-basis: 100%; margin-bottom: 4px; padding-right: 0; }
+  .characters-pagination .ant-pagination-options { margin-left: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { .character-card { transition: none; } }
