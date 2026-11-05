@@ -1109,3 +1109,44 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 34: 交付设定按章节演变并完成审核修复
+<!-- trellis-session: v=2 fp=bcfb68e4cf990cdd -->
+
+**Date**: 2026-11-05
+**Task**: 交付设定按章节演变并完成审核修复
+**Branch**: `codex/setting-progressions`
+
+### Summary
+
+完成设定按章节演变（179 文件）并按审核结论修复三项问题；全量门禁通过后归档任务并记录会话。
+
+### Main Changes
+
+- 实现五类主体的章节级设定时间线、有效值回溯、分析回写与人工维护，含迁移 0031 与备份 v2。
+- PATCH 设定变化禁止改分析来源事件的字段引用，并在写入边界捕获 IntegrityError 转 409；前端仅将 code=stale_revision 的 409 视为版本冲突。
+- DELETE /relationships/{id} 增加可选 expected_revision 对时间线做 CAS，兼容智能体通用 CRUD 与旧调用。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ed55f7e0393c4af9e041c59762f1d21b40e0620` | feat(story): 支持设定按章节演变 |
+| `576e632ec6e5a1dc0ef684211680ff1e5354236e` | chore(trellis): 添加 CodeBuddy 平台集成配置 |
+| `5bac4e87c10f968264e5cdac7ffe500380e68fe5` | fix(story): 设定变化编辑的 409 兜底与冲突判定修正 |
+| `1e98e01dac35db29bcdc8df49861ecd085a1b804` | fix(story): 关系删除补可选版本守卫 |
+
+### Testing
+
+- [OK] 后端全量 1793 passed / 1 skipped；关系相关 51 项、智能体工具 54 项通过；ruff check app tests 通过。
+- [OK] 前端全量 109 文件 / 815 用例通过；eslint、tsc -b && vite build 通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按用户授权将本分支合并到 main 并推送 origin/main；本记录写入时该远端步骤尚未执行。
+- 生产环境用隔离 PostgreSQL 复核行锁竞争与浏览器交互（审核结论遗留项）。
