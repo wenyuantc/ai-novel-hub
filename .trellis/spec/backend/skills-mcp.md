@@ -171,7 +171,7 @@ list_skills(page=1, page_size=20 ≤50) / load_skill(slug, page=1) / read_skill_
 `tests/test_skills.py::test_match_trigger_prefix_only_and_own_first`；`tests/test_agent_mcp_skills.py`：
 `test_catalog_lists_names_only_and_load_skill_reads_pages`（清单不含正文、他人私有 Skill 不出现、分页）、
 `test_forced_skill_after_safety_rules_and_snapshot_on_resume`、`test_trigger_word_forces_skill_and_other_private_skill_404`；
-`tests/test_agent_tools.py::test_registry_has_only_explicit_tools`（51 个工具，含三个 Skill 读工具，没有 `mcp__` 开头的）。
+`tests/test_agent_tools.py::test_registry_has_only_explicit_tools`（54 个工具，含三个 Skill 读工具和三个设定时间线工具，没有 `mcp__` 开头的）。
 
 ---
 

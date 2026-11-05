@@ -1,4 +1,22 @@
-from app.models import Chapter
+import pytest
+from sqlalchemy import event, inspect, select
+
+from app.models import (
+    Career,
+    CareerStage,
+    Chapter,
+    Character,
+    CharacterCareer,
+    Organization,
+    OrganizationMember,
+    Project,
+    Relationship,
+    RelationshipType,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
+    WorldSetting,
+)
 from app.services.context_builder import (
     KNOWLEDGE_HEADER,
     MEMORY_HEADER,
@@ -8,10 +26,12 @@ from app.services.context_builder import (
     MemorySection,
     PriorChapter,
     assemble_context,
+    build_chapter_context,
+    build_setting_context,
     chapter_task,
     prior_coverage,
 )
-from tests.helpers import create_ai_config, create_project, register, run_task
+from tests.helpers import analysis_json, create_ai_config, create_project, register, run_task
 
 
 def _chapters(n: int, size: int) -> list[PriorChapter]:
@@ -237,6 +257,192 @@ async def test_chapter_task_prefers_plan(app, client):
         assert (task.source, task.title, task.summary, task.key_events) == ("outline", "大纲标题", "大纲梗概", [])
         task = await chapter_task(db, await db.get(Chapter, plain["id"]))
         assert (task.source, task.summary) == ("", "")
+
+
+async def test_chapter_and_analysis_use_story_time_settings(app, client, fake_llm):
+    """后期设定不能泄漏至早章；整章生成和分析均使用相同的章初投影。"""
+    await register(client)
+    await create_ai_config(client)
+    project = await create_project(client)
+    pid = project["id"]
+
+    async with app.state.sessionmaker() as db:
+        hero = Character(
+            project_id=pid, name="林远", role_type="主角", current_state="金丹状态", life_status="dead",
+            relations_text="后来与苏晚成为盟友",
+        )
+        partner = Character(project_id=pid, name="苏晚", role_type="主角")
+        place = WorldSetting(project_id=pid, title="青云城", category="place", content="城池沦陷")
+        org = Organization(project_id=pid, name="青云宗", org_type="宗门")
+        old_org = Organization(project_id=pid, name="玄天阁", org_type="书院")
+        career = Career(project_id=pid, name="剑修", kind="main")
+        old_career = Career(project_id=pid, name="丹师", kind="sub")
+        ch5 = Chapter(project_id=pid, chapter_no=5, title="五", content="林远和苏晚走进城池。")
+        ch20 = Chapter(project_id=pid, chapter_no=20, title="二十", content="晋升发生在本章结尾。")
+        ch21 = Chapter(project_id=pid, chapter_no=21, title="二一", content="")
+        db.add_all([hero, partner, place, org, old_org, career, old_career, ch5, ch20, ch21])
+        await db.flush()
+        first = CareerStage(career_id=career.id, position=1, name="练气")
+        second = CareerStage(career_id=career.id, position=2, name="金丹")
+        old_stage = CareerStage(career_id=old_career.id, position=1, name="初品")
+        db.add_all([first, second, old_stage])
+        await db.flush()
+        friendship = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "朋友"))
+        assert friendship is not None
+        relation = Relationship(
+            project_id=pid, a_id=hero.id, b_id=partner.id, pair_low=hero.id, pair_high=partner.id,
+            type_id=friendship.id, intimacy=80, description="结为盟友",
+        )
+        db.add_all([
+            relation,
+            CharacterCareer(character_id=hero.id, career_id=career.id, role="main", stage_id=second.id),
+            OrganizationMember(character_id=hero.id, organization_id=org.id, position="宗主", status="left"),
+        ])
+        await db.flush()
+        hero_base = {key: getattr(hero, key) for key in (
+            "profile", "appearance", "personality", "background", "current_state", "age", "gender", "life_status",
+        )}
+        hero_base.update(current_state="练气状态", life_status="alive")
+        timeline_hero = SettingTimeline(
+            project_id=pid, subject_kind="character", character_id=hero.id, baseline=hero_base
+        )
+        timeline_place = SettingTimeline(project_id=pid, subject_kind="world", world_setting_id=place.id,
+                                         baseline={"content": "山城完好"})
+        timeline_career = SettingTimeline(project_id=pid, subject_kind="career", character_id=hero.id,
+                                          career_id=career.id, baseline={"exists": True, "role": "main",
+                                                                         "stage_id": first.id, "note": ""})
+        timeline_org = SettingTimeline(project_id=pid, subject_kind="membership", character_id=hero.id,
+                                       organization_id=org.id, baseline={"exists": True, "position": "弟子",
+                                                                          "status": "active", "note": ""})
+        # 这两条旧挂接的最新投影不存在，历史读取不能只枚举当前挂接表。
+        timeline_old_org = SettingTimeline(project_id=pid, subject_kind="membership", character_id=hero.id,
+                                           organization_id=old_org.id, baseline={"exists": True,
+                                               "position": "记名弟子", "status": "active", "note": ""})
+        timeline_old_career = SettingTimeline(project_id=pid, subject_kind="career", character_id=hero.id,
+                                              career_id=old_career.id, baseline={"exists": True, "role": "sub",
+                                                                                 "stage_id": old_stage.id, "note": ""})
+        timeline_relation = SettingTimeline(project_id=pid, subject_kind="relationship", character_id=hero.id,
+                                            related_character_id=partner.id, baseline={"exists": False})
+        db.add_all([timeline_hero, timeline_place, timeline_career, timeline_org, timeline_old_org,
+                    timeline_old_career, timeline_relation])
+        await db.flush()
+        field = SettingTextField(timeline_id=timeline_hero.id, label="佩剑", base_value="木剑")
+        world_field = SettingTextField(timeline_id=timeline_place.id, label="地标", base_value="古城门")
+        db.add_all([field, world_field])
+        await db.flush()
+
+        def event(timeline, key, value, *, custom_id=None):
+            return SettingProgression(
+                timeline_id=timeline.id, field_key=key, custom_field_id=custom_id, operation="replace", value=value,
+                anchor_kind="chapter", chapter_id=ch20.id, boundary="end",
+            )
+
+        db.add_all([
+            event(timeline_hero, "current_state", "金丹状态"),
+            event(timeline_hero, "life_status", "dead"),
+            event(timeline_hero, None, "神剑", custom_id=field.id),
+            event(timeline_place, "content", "城池沦陷"),
+            event(timeline_place, None, "门楼废墟", custom_id=world_field.id),
+            event(timeline_career, "stage_id", second.id),
+            event(timeline_old_career, "presence", {"exists": False}),
+            event(timeline_org, "position", "宗主"),
+            event(timeline_org, "status", "left"),
+            event(timeline_old_org, "presence", {"exists": False}),
+            event(timeline_relation, "presence", {
+                "exists": True,
+                "state": {"identity": {"a_id": hero.id, "b_id": partner.id, "type_id": friendship.id},
+                          "intimacy": 80, "status": "normal", "description": "结为盟友"},
+            }),
+        ])
+        await db.commit()
+        ids = (ch5.id, ch20.id, ch21.id)
+        for chapter_id in ids:
+            ch = await db.get(Chapter, chapter_id)
+            result = await build_chapter_context(db, await db.get(Project, pid), ch, 100_000)
+            if chapter_id in ids[:2]:
+                assert "当前状态：练气状态" in result
+                assert "当前状态：金丹状态" not in result
+                assert "■ 林远 · 主角【已死亡】" not in result
+                assert "职业：剑修·练气" in result and "职业：剑修·金丹" not in result
+                assert "副职业：丹师·初品" in result
+                assert "山城完好" in result and "城池沦陷" not in result
+                assert "地标：古城门" in result and "地标：门楼废墟" not in result
+                assert "佩剑：木剑" in result and "佩剑：神剑" not in result
+                assert "青云宗（弟子）" in result and "已离开" not in result
+                assert "玄天阁（记名弟子）" in result
+                assert "【人物关系】" not in result and "关系备注：" not in result
+            else:
+                assert "当前状态：金丹状态" in result and "■ 林远 · 主角【已死亡】" in result
+                assert "职业：剑修·金丹" in result and "城池沦陷" in result
+                assert "副职业：丹师·初品" not in result and "玄天阁" not in result
+                assert "地标：门楼废墟" in result
+                assert "佩剑：神剑" in result and "青云宗（宗主，已离开）" in result
+                assert "【人物关系】" in result and "结为盟友" in result
+        # 按章投影只能构造只读DTO，不能把较早值写回当前ORM。
+        assert hero.current_state == "金丹状态" and hero.life_status == "dead"
+        assert not db.is_modified(hero)
+
+    fake_llm.push(analysis_json(foreshadows=[]))
+    await run_task(client, await client.post(f"/api/v1/chapters/{ids[0]}/analyze"))
+    analysis_prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "当前状态：练气状态" in analysis_prompt and "当前状态：金丹状态" not in analysis_prompt
+    assert "职业：剑修·练气" in analysis_prompt and "职业：剑修·金丹" not in analysis_prompt
+    assert "副职业：丹师·初品" in analysis_prompt
+    assert "青云宗（弟子）" in analysis_prompt and "已离开" not in analysis_prompt
+    assert "结为盟友" not in analysis_prompt
+
+    fake_llm.push("第五章正文")
+    await run_task(client, await client.post(f"/api/v1/chapters/{ids[0]}/generate"))
+    generation_prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "当前状态：练气状态" in generation_prompt and "当前状态：金丹状态" not in generation_prompt
+    assert "山城完好" in generation_prompt and "城池沦陷" not in generation_prompt
+
+
+@pytest.mark.parametrize("builder", ["chapter", "setting"])
+async def test_context_read_does_not_flush_unrelated_changes(app, client, builder):
+    """整段只读查询不刷新其他脏对象，同时可读取调用方已显式 flush 的时间线。"""
+    await register(client)
+    project = await create_project(client, title="测试作品")
+    unrelated = await create_project(client, title="另一个作品")
+
+    async with app.state.sessionmaker() as db:
+        current_project = await db.get(Project, project["id"])
+        chapter = Chapter(project_id=project["id"], chapter_no=5, title="第五章")
+        world = WorldSetting(project_id=project["id"], title="青云城", content="旧城", category="place")
+        db.add_all([chapter, world])
+        await db.flush()
+        timeline = SettingTimeline(
+            project_id=project["id"], subject_kind="world", world_setting_id=world.id, baseline={"content": "旧城"}
+        )
+        db.add(timeline)
+        await db.flush()
+        db.add(SettingProgression(
+            timeline_id=timeline.id, field_key="content", operation="replace", value="章初新城",
+            anchor_kind="planned", chapter_no=5, boundary="start",
+        ))
+        # 调用方明确 flush 的新剧情变化，在同一事务中仍可用于之后的只读投影。
+        await db.flush()
+        other_project = await db.get(Project, unrelated["id"])
+        other_project.title = "尚未保存的改名"
+        assert inspect(other_project).attrs.title.history.has_changes()
+        flushes = []
+
+        def before_flush(*_args):
+            flushes.append(True)
+
+        event.listen(db.sync_session, "before_flush", before_flush)
+        if builder == "chapter":
+            result = await build_chapter_context(db, current_project, chapter, 10_000)
+        else:
+            result = await build_setting_context(db, current_project, chapter, budget=10_000)
+        assert "章初新城" in result
+        assert not flushes
+        assert other_project.title == "尚未保存的改名"
+        assert inspect(other_project).attrs.title.history.has_changes()
+        with db.no_autoflush:
+            stored_title = await db.scalar(select(Project.title).where(Project.id == unrelated["id"]))
+        assert stored_title == "另一个作品"
+        await db.rollback()
 
 
 # ---------------- 检索块（knowledge-base） ----------------

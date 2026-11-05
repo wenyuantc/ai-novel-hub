@@ -16,7 +16,7 @@ from sqlalchemy import DateTime, and_, delete, inspect, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError
+from app.core.errors import AppError, ConflictError
 from app.models import (
     Base,
     Chapter,
@@ -60,6 +60,9 @@ EFFECT_TABLES = frozenset(
         "chapter_characters",
         "chapter_analyses",
         "analysis_changes",
+        "setting_timelines",
+        "setting_text_fields",
+        "setting_progressions",
         "chapter_versions",
         "generation_logs",
         "tasks",
@@ -97,6 +100,9 @@ _LABELS = {
     "chapter_characters": "章节角色",
     "chapter_analyses": "章节分析",
     "analysis_changes": "分析回写",
+    "setting_timelines": "设定时间线",
+    "setting_text_fields": "设定文本字段",
+    "setting_progressions": "剧情变化",
     "chapter_versions": "章节版本",
     "generation_logs": "生成记录",
     "tasks": "任务",
@@ -176,6 +182,7 @@ def diff(before: Snapshot, after: Snapshot) -> list[Effect]:
                         "pk": _pk(rule, previous or current),
                         "before": deepcopy(previous),
                         "after": deepcopy(current),
+                        "format_version": 2,
                     }
                 )
     return result
@@ -189,7 +196,60 @@ def chapter_text_effect(
         "pk": {"id": chapter_id},
         "before": {"version_id": before_version_id, "hash": before_hash},
         "after": {"version_id": after_version_id, "hash": after_hash},
+        "format_version": 2,
     }
+
+
+_LEGACY_SETTING_TABLES = frozenset(
+    {
+        "characters",
+        "world_settings",
+        "organizations",
+        "organization_members",
+        "relationship_types",
+        "relationships",
+        "relationship_history",
+        "careers",
+        "career_stages",
+        "character_careers",
+        "career_history",
+        "chapter_analyses",
+        "analysis_changes",
+        "setting_timelines",
+        "setting_text_fields",
+        "setting_progressions",
+    }
+)
+
+
+def _legacy_affects_timeline(effect: Effect) -> bool:
+    table = effect.get("table")
+    if table in _LEGACY_SETTING_TABLES:
+        return True
+    if table not in {"chapters", "outlines", "chapter_plans"}:
+        return False
+    before, after = effect.get("before"), effect.get("after")
+    if before is None or after is None:
+        return True
+    position_fields = {
+        "chapters": ("chapter_no",),
+        "outlines": ("chapter_no",),
+        "chapter_plans": ("chapter_id", "outline_id", "seq"),
+    }[table]
+    return any(before.get(field) != after.get(field) for field in position_fields)
+
+
+def validate_effect_versions(effects: list[Effect]) -> None:
+    """旧快照缺少基线和变化记录时，不可用 Core 恢复静默破坏时间线。"""
+    for effect in effects:
+        version = effect.get("format_version", 1)
+        if type(version) is not int or version not in (1, 2):
+            raise ConflictError("该智能体修改的效果版本不受支持", extra={"code": "unsupported_effect_version"})
+        if version == 1 and _legacy_affects_timeline(effect):
+            raise ConflictError(
+                "旧智能体修改缺少设定时间线信息，请在基础设定中手动修正",
+                extra={"code": "legacy_effect_requires_manual_correction"},
+            )
 
 
 def _conflict(effect: Effect, reason: str = "执行后已被修改") -> dict:
@@ -330,6 +390,9 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
                 if (fk.column.table.name, fk.column.name, value) in removing:
                     values[fk.parent.name] = effect["before"][fk.parent.name]
             if values:
+                # 自定义字段与内置字段互斥，解除引用时必须同时恢复另一侧。
+                if rule.table == "setting_progressions" and "custom_field_id" in values:
+                    values["field_key"] = effect["before"]["field_key"]
                 await db.execute(update(rule.model.__table__).where(_where(rule, effect["pk"])).values(**values))
     for rule in reversed(_RULES):
         for effect in by_table[rule.table]:
@@ -393,6 +456,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool
     整轮由调用方逆 seq 调用，并在任一异常时回滚外层事务。内层保存点保证即使
     还原遇到外键 / 唯一约束竞争，单项也不会留下部分改动。
     """
+    validate_effect_versions(effects)
     await db.flush()
     # SQLite legacy transaction mode 的 SELECT 不会真正 BEGIN；直接 SAVEPOINT 后
     # RELEASE 会提交它，使调用方无法回滚整轮。无值变化 UPDATE 同时取得项目写锁。
@@ -409,6 +473,18 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool
             await _validate(db, project_id, effects)
             await _restore_rows(db, effects)
             await _refresh_loaded(db, effects)
+            if any(_legacy_affects_timeline(effect) for effect in effects):
+                # 同步最新投影与跨主体约束，所有修改留在当前保存点和项目事务中。
+                from app.services.setting_progression_service import materialize_project
+
+                try:
+                    await materialize_project(db, project_id)
+                except (AppError, ValueError) as exc:
+                    reason = exc.detail if isinstance(exc, AppError) else str(exc)
+                    raise ConflictError(
+                        "关联设定已变化，无法撤销",
+                        extra={"code": "undo_conflict", "conflicts": [{"table": "setting_timelines", "label": reason}]},
+                    ) from exc
             for effect in effects:
                 if effect["table"] == "chapter_text":
                     await _restore_text(db, project_id, effect)

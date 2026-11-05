@@ -18,7 +18,7 @@
 | POST /runs | backups.run | `{request_id:UUID,settings_revision}`，202 表示受理 |
 | HEAD / GET /runs/{id}/download?destination=local或s3 | backups.download | 预检 / 鉴权附件流 |
 
-后三项动作权限均显式 requires `backups.read` 且 dangerous。0030（父0029）创建三个实例表：`BackupSettings` 单行 id=1/CAS/实例身份/计划游标；`BackupRun` 有整数自增ID及不可复用execution_key，request_id和scheduled_date分别唯一，queued/running必须active_slot=1，唯一约束兜底互斥；`BackupArtifact` 每执行/目的地唯一，私有locator/访问密文/S3版本与multipart身份。文件字节数为BigInteger，不能使用PG的32位Integer。实例表不指向projects、不登记作品备份规则；作品JSON仍format v1，APP_SCHEMA元数据同步0030。
+后三项动作权限均显式 requires `backups.read` 且 dangerous。0030（父0029）创建三个实例表：`BackupSettings` 单行 id=1/CAS/实例身份/计划游标；`BackupRun` 有整数自增ID及不可复用execution_key，request_id和scheduled_date分别唯一，queued/running必须active_slot=1，唯一约束兜底互斥；`BackupArtifact` 每执行/目的地唯一，私有locator/访问密文/S3版本与multipart身份。文件字节数为BigInteger，不能使用PG的32位Integer。实例表不指向projects、不登记作品备份规则；0030 当时保留作品 JSON v1。0031 起作品 JSON 为 v2、APP_SCHEMA 为 0031，见 [项目备份](./project-transfer.md)。
 
 `BackupManager(settings,cipher,sessionmaker,notify)` 提供load/update/accept_manual/accept_scheduled/read_settings/overview/list_runs/get_run/authorize_download/close；`BackupRuntime(manager)` 提供start/stop/notify/prepare_download。快照、GPG、SMTP和文件/S3阻塞工作通过 `process.run_blocking` 在线程执行。
 

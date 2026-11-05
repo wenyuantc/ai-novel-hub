@@ -17,6 +17,8 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass
+from datetime import datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
@@ -43,15 +45,13 @@ from app.services import (
     cast_service,
     foreshadow_service,
     memory_service,
-    organization_service,
     project_lifecycle,
     prompt_service,
-    relationship_service,
     task_statistics_service,
     writeback_service,
 )
 from app.services.chapter_service import count_words, get_owned_chapter
-from app.services.context_builder import MEMBER_STATUS_LABELS, format_career_line
+from app.services.context_builder import MEMBER_STATUS_LABELS, format_career_line, resolve_effective_cast
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
 
@@ -639,6 +639,7 @@ class AnalysisJob:
     provider: LLMProvider
     model: str
     messages: list[ChatMessage]
+    chapter_created_at: datetime | None = None
     thinking: ThinkingLevel = "off"
     max_tokens: int | None = None
     task_id: int | None = None
@@ -664,7 +665,12 @@ async def validate_analyze(
     return chapter, cfg.id
 
 
-def _state_card(c: Character, memberships: list, career_line: str) -> str:
+def _state_card(
+    c: Character | SimpleNamespace,
+    memberships: list,
+    career_line: str,
+    custom_fields: list[tuple[str, str]] | None = None,
+) -> str:
     head = f"■ {c.name}"
     if c.aliases:
         head += f"（别名：{'、'.join(c.aliases)}）"
@@ -672,6 +678,9 @@ def _state_card(c: Character, memberships: list, career_line: str) -> str:
         head += f" · {c.role_type}"
     lines = [head, f"存活状态：{LIFE_LABELS.get(c.life_status, c.life_status)}"]
     lines.append(f"当前状态：{c.current_state.strip() or '（未记录）'}")
+    for label, value in custom_fields or []:
+        if value.strip():
+            lines.append(f"{label}：{value.strip()}")
     if memberships:
         orgs = []
         for m, o in memberships:
@@ -712,23 +721,7 @@ async def build_analysis_job(
 
     characters = await cast_service.list_characters(db, project.id)
     involved = await _involved(db, chapter, characters)
-    ids = [c.id for c in involved]
-    by_char: dict[int, list] = {}
-    for m, o in await organization_service.memberships_of(db, ids):
-        by_char.setdefault(m.character_id, []).append((m, o))
-    careers_by_char: dict[int, list] = {}
-    involved_careers = {}
-    for a, career in await career_service.assignments_of(db, ids):
-        careers_by_char.setdefault(a.character_id, []).append((a, career))
-        involved_careers.setdefault(career.id, career)
-    stages = await career_service.stages_of(db, list(involved_careers))
-    names = {c.id: c.name for c in involved}
-    relation_lines = [
-        f"{relationship_service.describe_relation(names[r.a_id], names[r.b_id], t)}"
-        f"（亲密度 {r.intimacy}，{relationship_service.STATUS_LABELS.get(r.status, r.status)}）"
-        + (f"：{r.description.strip()}" if r.description.strip() else "")
-        for r, t in await relationship_service.relations_among(db, ids)
-    ]
+    effective = await resolve_effective_cast(db, project, chapter, involved)
     orgs = await db.scalars(
         select(Organization).where(Organization.project_id == project.id).order_by(Organization.sort, Organization.id)
     )
@@ -739,14 +732,19 @@ async def build_analysis_job(
         title=chapter.title,
         content=chapter.content,
         cast_text="\n\n".join(
-            _state_card(c, by_char.get(c.id, []), format_career_line(careers_by_char.get(c.id, []), stages))
-            for c in involved
+            _state_card(
+                c,
+                effective.memberships.get(c.id, []),
+                format_career_line(effective.careers_by_character.get(c.id, []), effective.stages),
+                effective.custom_fields.get(c.id, []),
+            )
+            for c in effective.characters
         ),
-        relations_text="\n".join(relation_lines),
+        relations_text="\n".join(line.render() for line in effective.relations),
         organizations_text="、".join(o.name for o in orgs),
         careers_text="\n".join(
-            career_service.ladder_line(c, stages.get(c.id, []))
-            for c in sorted(involved_careers.values(), key=lambda c: (c.sort, c.id))
+            career_service.ladder_line(c, effective.stages.get(c.id, []))
+            for c in sorted(effective.careers.values(), key=lambda c: (c.sort, c.id))
         ),
         foreshadows_text="\n".join(foreshadow_service.analysis_line(f) for f in foreshadows),
         override=await prompt_service.get_override(db, user_id, "analysis.chapter"),
@@ -760,6 +758,7 @@ async def build_analysis_job(
         provider=provider,
         model=cfg.model,
         messages=messages,
+        chapter_created_at=chapter.created_at,
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
         task_id=task_id,
@@ -782,9 +781,17 @@ async def run_analysis_job(job: AnalysisJob, sessionmaker: async_sessionmaker[As
             raise AIProviderError("模型未返回任何内容")
         data, warnings = normalize_analysis(extract_json(raw))
         async with sessionmaker() as db:
+            # 与章节编辑、改号和分析回写共用作品写屏障；校验后直到提交不能被其他写入穿透。
+            await project_lifecycle.lock_active(db, job.project_id)
             chapter = await db.get(Chapter, job.chapter_id)
-            if chapter is None:
+            if (
+                chapter is None or chapter.project_id != job.project_id
+                or (job.chapter_created_at is not None and chapter.created_at != job.chapter_created_at)
+            ):
                 yield "error", {"detail": "章节已被删除，分析结果未保存"}
+                return
+            if chapter.chapter_no != job.chapter_no or content_hash(chapter.content) != job.content_hash:
+                yield "error", {"detail": "章节正文或章节位置已变化，分析结果未保存，请重新分析"}
                 return
             task_id = job.task_id if job.task_id is not None and await db.get(Task, job.task_id) else None
             analysis = ChapterAnalysis(

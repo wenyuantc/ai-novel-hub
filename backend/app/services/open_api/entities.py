@@ -164,7 +164,7 @@ async def list_relationships(
     category: RelationCategory | None = None,
 ) -> out.Page[out.Relationship]:
     await get_authorized_project(db, principal, novel_id)
-    stmt = select(Relationship).where(Relationship.project_id == novel_id)
+    stmt = select(Relationship).where(Relationship.project_id == novel_id, Relationship.is_present.is_(True))
     if character_id is not None:
         char = await db.scalar(
             select(Character.id).where(Character.id == character_id, Character.project_id == novel_id)

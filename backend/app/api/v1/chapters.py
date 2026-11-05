@@ -11,10 +11,12 @@ from app.schemas.chapter import (
     GenerateChapterRequest,
     PolishChapterRequest,
 )
+from app.schemas.progression import SettingContextOut, StoryPosition
 from app.schemas.story import ChapterCastOut, ChapterCastUpdate
 from app.schemas.task import TaskOut
-from app.services import cast_service, task_service
+from app.services import cast_service, context_builder, setting_progression_service, task_service
 from app.services import chapter_service as svc
+from app.services.project_service import get_manageable_project
 
 router = APIRouter(tags=["chapters"])
 
@@ -43,6 +45,22 @@ async def create_from_outlines(
 @router.get("/projects/{project_id}/chapters/{chapter_id}", response_model=ChapterOut)
 async def get_chapter(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> Chapter:
     return await svc.get_manageable_chapter(db, user.id, project_id, chapter_id)
+
+
+@router.get("/projects/{project_id}/chapters/{chapter_id}/setting-context", response_model=SettingContextOut)
+async def get_setting_context(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> SettingContextOut:
+    with db.no_autoflush:
+        chapter = await svc.get_manageable_chapter(db, user.id, project_id, chapter_id)
+        project = await get_manageable_project(db, user.id, project_id)
+        text = await context_builder.build_setting_context(db, project, chapter)
+        unverified_count = await setting_progression_service.count_unverified_timelines(db, user.id, project_id)
+        warnings = [f"该作品有 {unverified_count} 条旧设定尚未校准，早期设定可能不准确。"] if unverified_count else []
+        return SettingContextOut(
+            position=StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no, boundary="start"),
+            text=text,
+            legacy_unverified_count=unverified_count,
+            warnings=warnings,
+        )
 
 
 @router.patch("/projects/{project_id}/chapters/{chapter_id}", response_model=ChapterOut)

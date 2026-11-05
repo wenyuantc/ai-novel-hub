@@ -1,0 +1,16 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ruff/pytest、隔离与迁移测试门禁"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/test与真实界面检查"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/entities-core.md", "reason": "新时间语义之外的已有关系职业分析契约保持；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/entities-career-and-analysis.md", "reason": "新时间语义之外的已有关系职业分析契约保持；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "章节插改删与CHAPTER_NO_REFS完整性"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "表/FK/JSON反射、v1兼容和v2往返"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/agent-tools-and-effects.md", "reason": "提案确认冲突、effects依赖和原子撤销；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/agent-safety.md", "reason": "提案确认冲突、effects依赖和原子撤销；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/spec/backend/admin-projects.md", "reason": "人工管理权限与owner-only AI边界"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "locked块覆盖兼容和空块parity"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/frontend-type-organization-1.md", "reason": "类型/空值/错误一致性；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/frontend-type-organization-2.md", "reason": "类型/空值/错误一致性；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/frontend-patch-validation-api.md", "reason": "类型/空值/错误一致性；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/planning-resolution.md", "reason": "逐项验证已收敛风险，不能把规划通过当产品通过"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/integration-and-persistence.md", "reason": "完整入口与持久化验收矩阵"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/ui-and-contracts.md", "reason": "只读/快速切换/409草稿/未保存表单保护"}

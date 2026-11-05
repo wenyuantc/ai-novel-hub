@@ -41,6 +41,9 @@ class WorldSettingUpdate(BaseModel):
     content: str | None = None
     category: WorldCategory | None = None
     sort: int | None = None
+    # 明确修正起始设定，避免把章节最终结果误写成初始值。
+    edit_mode: Literal["baseline"] | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class WorldSettingOut(BaseModel):
@@ -88,6 +91,8 @@ class CharacterUpdate(BaseModel):
     life_status: LifeStatus | None = None
     always_in_context: bool | None = None
     sort: int | None = None
+    edit_mode: Literal["baseline"] | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class CharacterOut(BaseModel):

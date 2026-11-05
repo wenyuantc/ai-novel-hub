@@ -29,6 +29,7 @@ from app.api.v1 import (
     memories,
     organizations,
     outline_pro,
+    progressions,
     project_cover,
     projects,
     prompt_templates,
@@ -69,6 +70,7 @@ api_router.include_router(outline_pro.router)
 api_router.include_router(story.world_router)
 api_router.include_router(story.characters_router)
 api_router.include_router(story.outlines_router)
+api_router.include_router(progressions.router)
 api_router.include_router(organizations.router)
 api_router.include_router(relationships.router)
 api_router.include_router(cards.router)

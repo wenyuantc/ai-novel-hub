@@ -50,8 +50,10 @@ from app.services import (
     career_service,
     generation_log_service,
     organization_service,
+    project_lifecycle,
     prompt_service,
     relationship_service,
+    setting_progression_service,
     story_service,
     style_service,
     wizard_service,
@@ -921,22 +923,25 @@ async def apply_final(db: AsyncSession, project: Project, final: dict[str, Any],
     title_rows = await db.scalars(select(WorldSetting.title).where(WorldSetting.project_id == project.id))
     titles = {merge.norm(t) for t in title_rows}
     sort = await story_service.next_sort(db, WorldSetting, project.id)
+    created_worlds = []
     for w in final.get("world") or []:
         if not merge.norm(w.get("title")) or merge.norm(w["title"]) in titles:
             continue
-        db.add(
-            WorldSetting(
-                project_id=project.id,
-                title=w["title"][:200],
-                content=w.get("content") or "",
-                category=wizard_service.normalize_world_category(w.get("category")),
-                sort=sort,
-            )
+        world = WorldSetting(
+            project_id=project.id,
+            title=w["title"][:200],
+            content=w.get("content") or "",
+            category=wizard_service.normalize_world_category(w.get("category")),
+            sort=sort,
         )
+        db.add(world)
+        created_worlds.append(world)
         titles.add(merge.norm(w["title"]))
         sort += 1
         stats["world"] += 1
     await db.flush()
+    for world in created_worlds:
+        await setting_progression_service.create_world_timeline(db, world)
 
     for r in final.get("relations") or []:
         a, b = lookup.get(merge.norm(r.get("a"))), lookup.get(merge.norm(r.get("b")))
@@ -968,9 +973,7 @@ async def _apply(ctx: "TaskContext", job: ImportJob) -> None:
     cp = job.checkpoint
     final = cp.get("final") or fallback_final(cp.get("findings") or {})
     async with ctx.sessionmaker() as db:
-        project = await db.get(Project, job.project_id)
-        if project is None:
-            raise BadRequestError("项目不存在")
+        project = await project_lifecycle.lock_active(db, job.project_id)
         await apply_final(db, project, final, cp)
         cp["phase"] = "style"
         await _write_checkpoint(db, job)

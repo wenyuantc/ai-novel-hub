@@ -1,4 +1,4 @@
-"""角色 / 组织卡片导入导出（R8，格式 ainovel.cards v2，兼容导入 v1）。
+"""角色 / 组织卡片导入导出（R8，格式 ainovel.cards v3，兼容导入 v1、v2）。
 
 - 卡片按名称关联，不含任何内部 ID；导入时不信任卡片里的任何 ID。
 - 导出：勾选的角色和组织 + 两端都在导出集合内的关系 + 成员角色在集合内的成员关系；
@@ -13,6 +13,7 @@
   （含阶梯）。导入时职业按名称匹配目标项目：匹配上复用（卡片中多出的阶段追加到阶梯末尾），匹配不上新建；
   挂接的阶段按名称匹配，匹配不上追加到末尾；挂接经 career_service.assign_new / apply_assignment(source="import")
   写入，职业对不上、类别不符、超出上限或已挂的跳过并记入 warnings。v1 卡片没有职业，按原逻辑导入。
+- v3 自定义文本字段：只导出字段名及最新有效文本，导入为新角色基础值；不携带源项目的内部 ID 或章节位置。
 """
 
 import json
@@ -45,8 +46,16 @@ from app.schemas.card import (
     PreviewRelationship,
 )
 from app.schemas.career import CareerCreate, StageIn
+from app.schemas.organization import MemberCreate
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
-from app.services import career_service, relationship_service, story_service
+from app.services import (
+    career_service,
+    membership_progression_service,
+    organization_service,
+    relationship_service,
+    setting_progression_service,
+    story_service,
+)
 from app.services.cast_service import is_protagonist_role
 from app.services.organization_service import MAX_DEPTH
 from app.services.project_service import get_owned_project
@@ -103,7 +112,11 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         rows = await db.execute(
             select(Relationship, RelationshipType)
             .join(RelationshipType, RelationshipType.id == Relationship.type_id)
-            .where(Relationship.a_id.in_(char_names), Relationship.b_id.in_(char_names))
+            .where(
+                Relationship.a_id.in_(char_names),
+                Relationship.b_id.in_(char_names),
+                Relationship.is_present.is_(True),
+            )
             .order_by(Relationship.id)
         )
         for r, t in rows.all():
@@ -128,6 +141,7 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         char_careers.setdefault(a.character_id, []).append((a, career))
     stages = await career_service.stages_of(db, list(used))
     stage_names = {s.id: s.name for ss in stages.values() for s in ss}
+    custom_fields = await setting_progression_service.latest_character_snapshots(db, project_id, list(char_names))
     return {
         "format": CARD_FORMAT,
         "version": CARD_VERSION,
@@ -145,6 +159,9 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
                 "profile": c.profile,
                 "current_state": c.current_state,
                 "life_status": c.life_status,
+                "custom_text_fields": [
+                    {"name": item["label"], "value": item["value"]} for item in custom_fields.get(c.id, [])
+                ],
                 "careers": [
                     {
                         "career_name": career.name,
@@ -281,6 +298,9 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
     chars = _dedupe_names(card.characters, "角色", warnings)
     orgs = _dedupe_names(card.organizations, "组织", warnings)
     existing_chars, existing_orgs = await _existing(db, project_id)
+    for c in chars:
+        if c.name in existing_chars and c.custom_text_fields:
+            warnings.append(f"角色「{c.name}」选择跳过时不会导入自定义字段；选择重命名可保留")
     known_chars = set(existing_chars) | {c.name for c in chars}
     known_orgs = set(existing_orgs) | {o.name for o in orgs}
     rels = []
@@ -371,6 +391,8 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         if name in existing_chars:
             if req.resolutions.characters.get(name, "skip") == "skip":
                 char_map[name] = existing_chars[name]
+                if c.custom_text_fields:
+                    warnings.append(f"角色「{name}」已跳过，其自定义字段未导入")
                 char_results.append(
                     ImportedItem(name=name, imported_name=None, id=existing_chars[name], action="skipped")
                 )
@@ -393,6 +415,11 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             "always_in_context": is_protagonist_role(c.role_type),
         }
         created = await story_service.new_character(db, project_id, values)
+        timeline = await setting_progression_service.create_character_timeline(db, created)
+        if c.custom_text_fields:
+            await setting_progression_service.add_initial_text_fields(
+                db, timeline, [(field.name, field.value) for field in c.custom_text_fields]
+            )
         char_map[c.name] = created.id
         char_results.append(ImportedItem(name=c.name, imported_name=name, id=created.id, action=action))
 
@@ -475,6 +502,9 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         oid = org_map.get(o.name)
         if oid is None:
             continue
+        org = await db.scalar(select(Organization).where(Organization.id == oid, Organization.project_id == project_id))
+        if org is None:
+            raise BadRequestError("组织不存在或不属于该项目")
         for m in o.members:
             cid = char_id(m.character_name)
             if cid is None:
@@ -488,17 +518,25 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             if dup is not None:
                 warnings.append(f"「{m.character_name}」已是组织「{o.name}」的成员，已跳过")
                 continue
-            db.add(
-                OrganizationMember(
-                    organization_id=oid,
+            timeline = await membership_progression_service.find_membership_timeline(db, project_id, oid, cid)
+            if timeline is not None:
+                warnings.append(
+                    f"「{m.character_name}」在组织「{o.name}」存在成员历史，无法确定重新加入章节，已跳过；"
+                    "请在组织成员中维护"
+                )
+                continue
+            await organization_service.new_member(
+                db,
+                org,
+                MemberCreate(
                     character_id=cid,
                     position=m.position[:50],
                     status=m.status if m.status in MEMBER_STATUSES else "active",
                     note=m.note,
-                )
+                    expected_revision=0,
+                ),
             )
             members_created += 1
-            await db.flush()
 
     # ---- 职业 ----
     career_results, career_map = await _import_careers(db, project_id, card.careers, warnings)
@@ -518,8 +556,12 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         if not r.role_a.strip():
             warnings.append(f"关系 {label} 缺少称呼，已忽略")
             continue
-        if await relationship_service.find_pair(db, a, b) is not None:
-            warnings.append(f"{label} 之间已有关系，已跳过")
+        existing_relation = await relationship_service.find_pair_record(db, a, b)
+        if existing_relation is not None:
+            if existing_relation.is_present:
+                warnings.append(f"{label} 之间已有关系，已跳过")
+            else:
+                warnings.append(f"{label} 存在已结束的关系历史，无法确定恢复章节，已跳过；请在关系页面处理")
             continue
         await relationship_service.create_relation(
             db,

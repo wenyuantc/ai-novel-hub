@@ -149,6 +149,27 @@ async def test_analyze_errors(app, client, fake_llm):
     assert state["status"] == "none"
 
 
+@pytest.mark.parametrize("edit", [{"content": "后来修改过的正文"}, {"chapter_no": 9}])
+async def test_inflight_analysis_does_not_apply_after_chapter_changes(app, client, fake_llm, edit):
+    """模型运行期间正文或章号变化，旧结果不能回写设定或覆盖剧情记忆。"""
+    _, base, (ch,) = await _setup(client)
+    hero = (await client.post(f"{base}/characters", json={"name": "林远", "current_state": "练气"})).json()
+    gate = Gate()
+    fake_llm.push([gate, analysis_json(
+        character_changes=[{"name": "林远", "current_state": "金丹"}], foreshadows=[],
+    )])
+    task = (await _analyze(client, ch)).json()
+    await gate.wait_reached()
+    changed = await client.patch(f"{base}/chapters/{ch['id']}", json=edit)
+    assert changed.status_code == 200, changed.text
+    gate.release()
+    result = await wait_task(client, task["id"])
+    assert result["status"] == "failed"
+    assert "变化" in result["error"]
+    assert (await client.get(f"{base}/characters/{hero['id']}")).json()["current_state"] == "练气"
+    assert (await client.get(f"/api/v1/chapters/{ch['id']}/analyses")).json() == []
+
+
 async def test_analyze_requires_ai_config(client):
     await register(client)
     p = await create_project(client)

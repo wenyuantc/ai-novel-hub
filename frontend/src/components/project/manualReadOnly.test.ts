@@ -10,15 +10,16 @@ import { memberApi } from '../../api/organizations'
 import { chapterApi } from '../../api/chapters'
 import ChaptersPanel from '../../pages/project/ChaptersPanel'
 import CareerEditDrawer from '../careers/CareerEditDrawer'
-import CharacterCareersTab from '../careers/CharacterCareersTab'
-import CharacterMembershipsTab from '../entities/CharacterMembershipsTab'
+import CharacterCareersTab, { CareerRemoveModal } from '../careers/CharacterCareersTab'
+import CharacterMembershipsTab, { MembershipEditor } from '../entities/CharacterMembershipsTab'
 
 const view = vi.hoisted(() => ({
-  canEdit: false, data: [] as unknown[], buttons: [] as ButtonProps[],
+  canRead: true, canEdit: false, editChecks: 0, data: [] as unknown[], buttons: [] as ButtonProps[],
   confirms: [] as PopconfirmProps[], modals: [] as ModalProps[], menus: [] as DropdownProps[], stageDisabled: undefined as boolean | undefined,
 }))
 vi.mock('../../hooks/useProjectAccess', () => ({ useProjectAccess: () => ({
-  canEdit: view.canEdit, canEditNow: () => view.canEdit, canUseAI: false,
+  canRead: view.canRead, canReadNow: () => view.canRead, canEdit: view.canEdit,
+  canEditNow: () => { view.editChecks += 1; return view.canEdit }, canUseAI: false,
 }) }))
 vi.mock('../../hooks/useLoader', () => ({ useLoader: () => ({
   data: view.data.shift(), loading: false, reload: () => {},
@@ -53,7 +54,7 @@ const button = (label: string) => {
   return found!
 }
 const render = (element: import('react').ReactElement) => renderToString(createElement(App, null, element))
-afterEach(() => { vi.restoreAllMocks(); view.canEdit = false; view.data = []; view.buttons = []; view.confirms = []; view.modals = []; view.menus = []; view.stageDisabled = undefined })
+afterEach(() => { vi.restoreAllMocks(); view.canRead = true; view.canEdit = false; view.editChecks = 0; view.data = []; view.buttons = []; view.confirms = []; view.modals = []; view.menus = []; view.stageDisabled = undefined })
 
 describe('人工只读的关联子表单和真实提交守卫', () => {
   it.each([false, true])('职业阶段编辑器继承canEdit=%s，不能只禁用保存', async (canEdit) => {
@@ -71,8 +72,19 @@ describe('人工只读的关联子表单和真实提交守卫', () => {
     const create = vi.spyOn(memberApi, 'create')
     render(createElement(CharacterMembershipsTab, {projectId: 9, character}))
     expect(button('加入组织').disabled).toBe(true)
-    // 绕过禁用控件，直接执行实际组件保留的确认回调，写前守卫仍拒绝。
-    await Reflect.apply(view.modals[0].onOk!, undefined, [])
+    // 模拟编辑框已打开后权限被撤销，调用实际保存回调，不能只测试选择弹窗。
+    view.modals = []
+    view.canEdit = true
+    render(createElement(MembershipEditor, {
+      projectId: 9, target: {characterId: 3, organizationId: 8, label: '天剑宗', member: null, timeline: null},
+      chapters: [], onClose: noop, onChanged: noop,
+    }))
+    const editor = view.modals.find((props) => props.title === '成员设定：天剑宗')
+    expect(editor).toBeDefined()
+    view.canEdit = false
+    const checks = view.editChecks
+    await Reflect.apply(editor!.onOk!, undefined, [])
+    expect(view.editChecks).toBeGreaterThan(checks)
     expect(create).not.toHaveBeenCalled()
   })
   it('只读职业卸下按钮禁用，旧确认回调也不能执行API', async () => {
@@ -80,10 +92,26 @@ describe('人工只读的关联子表单和真实提交守卫', () => {
     const remove = vi.spyOn(assignmentApi, 'remove')
     render(createElement(CharacterCareersTab, {projectId: 9, character}))
     expect(button('卸下').disabled).toBe(true)
-    const confirmation = view.confirms.find((props) => props.title === '卸下该职业？')
+    view.modals = []
+    view.data = [{ timeline_revision: 2 }]
+    view.canEdit = true
+    render(createElement(CareerRemoveModal, {
+      projectId: 9, characterId: 3, assignment, timeline: undefined, chapters: [], onClose: noop, onChanged: noop,
+    }))
+    const confirmation = view.modals.find((props) => props.title === '处理职业：剑修')
     expect(confirmation).toBeDefined()
-    await confirmation!.onConfirm?.()
+    view.canEdit = false
+    const checks = view.editChecks
+    await Reflect.apply(confirmation!.onOk!, undefined, [])
+    expect(view.editChecks).toBeGreaterThan(checks)
     expect(remove).not.toHaveBeenCalled()
+  })
+  it('没有读取权限时不挂载职业子表单', () => {
+    view.canRead = false
+    view.data = [[assignment], [], [career]]
+    render(createElement(CharacterCareersTab, {projectId: 9, character}))
+    expect(view.data).toHaveLength(3)
+    expect(view.buttons).toHaveLength(0)
   })
   it('移动章节菜单明确显示查看并禁用删除，旧危险确认不能提交', async () => {
     view.data = [[{id: 7, project_id: 9, title: '第一章', content: '', chapter_no: 1, word_count: 1, status: 'draft', updated_at: ''}]]

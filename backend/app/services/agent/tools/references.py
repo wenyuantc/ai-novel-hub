@@ -20,6 +20,8 @@ from app.models import (
     Outline,
     Relationship,
     RelationshipType,
+    SettingTextField,
+    SettingTimeline,
     Skill,
     Task,
     WorldSetting,
@@ -30,6 +32,7 @@ from .base import ToolCtx
 
 _MODELS = {
     "character_id": Character,
+    "related_character_id": Character,
     "a_id": Character,
     "b_id": Character,
     "target_id": Character,
@@ -49,6 +52,8 @@ _MODELS = {
     "world_setting_id": WorldSetting,
     "member_id": OrganizationMember,
     "analysis_id": ChapterAnalysis,
+    "timeline_id": SettingTimeline,
+    "custom_field_id": SettingTextField,
     "task_id": Task,
     "continue_from_task_id": Task,
     "ai_config_id": AIConfig,
@@ -62,6 +67,10 @@ _MODELS = {
 async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise BadRequestError("引用 ID 必须是正整数")
+    # 这些模型的主键都是 INTEGER；按 PostgreSQL INTEGER 的上限统一校验，
+    # 避免越界值进入驱动绑定，也确保 SQLite 和 PostgreSQL 的工具行为一致。
+    if value > 2_147_483_647:
+        raise BadRequestError("引用 ID 超出有效范围")
     stmt = select(model.id).where(model.id == value)
     if model is WritingStyle:
         stmt = stmt.where(or_(WritingStyle.user_id.is_(None), WritingStyle.user_id == ctx.user_id))
@@ -71,6 +80,8 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
         stmt = stmt.where(or_(Skill.owner_user_id.is_(None), Skill.owner_user_id == ctx.user_id))
     elif model is RelationshipType:
         stmt = stmt.where(or_(RelationshipType.project_id.is_(None), RelationshipType.project_id == ctx.project_id))
+    elif model is Relationship:
+        stmt = stmt.where(Relationship.project_id == ctx.project_id, Relationship.is_present.is_(True))
     elif model is CareerStage:
         stmt = stmt.join(Career, Career.id == CareerStage.career_id).where(Career.project_id == ctx.project_id)
     elif model is OrganizationMember:
@@ -80,6 +91,10 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
     elif model is CharacterCareer:
         stmt = stmt.join(Character, Character.id == CharacterCareer.character_id).where(
             Character.project_id == ctx.project_id
+        )
+    elif model is SettingTextField:
+        stmt = stmt.join(SettingTimeline, SettingTimeline.id == SettingTextField.timeline_id).where(
+            SettingTimeline.project_id == ctx.project_id
         )
     else:
         stmt = stmt.where(model.project_id == ctx.project_id)

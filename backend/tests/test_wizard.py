@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.ai.json_extract import JSONExtractError, extract_json
+from app.services import setting_progression_service
 from app.services.wizard_service import normalize_outline
 from tests.helpers import Gate, create_ai_config, create_project, parse_sse, register, run_task, stream_with_gate
 
@@ -140,6 +141,206 @@ async def test_wizard_characters_and_world(client, fake_llm):
     assert [w["title"] for w in world] == ["星际联邦", "跃迁"]
     # 世界观提示词带入已有角色
     assert "林舟" in fake_llm.calls[-1]["messages"][-1]["content"]
+
+
+async def _setting_timeline(client, base, **params):
+    response = await client.get(f"{base}/setting-timelines", params=params)
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 1
+    return response.json()["items"][0]
+
+
+async def _record_change(client, url, revision, field_key, value):
+    response = await client.post(
+        f"{url}/progressions",
+        json={
+            "expected_revision": revision,
+            "field_key": field_key,
+            "operation": "replace",
+            "value": value,
+            "anchor_kind": "planned",
+            "chapter_no": 5,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest.mark.parametrize("kind", ["characters", "world"])
+async def test_wizard_initializes_confirmed_baselines_in_own_project(client, fake_llm, kind):
+    p = await _setup(client)
+    other = await create_project(client, title="另一部作品")
+    base = f"/api/v1/projects/{p['id']}"
+    other_base = f"/api/v1/projects/{other['id']}"
+    foreign = await client.post(f"{other_base}/world", json={"title": "外部", "content": "外部基础"})
+    assert foreign.status_code == 201, foreign.text
+    foreign_timeline = await _setting_timeline(client, other_base, world_setting_id=foreign.json()["id"])
+    await _record_change(client, f"{other_base}/setting-timelines/{foreign_timeline['id']}", 1, "content", "外部变化")
+
+    raw = {"characters": CHARACTERS_JSON[:2]} if kind == "characters" else [
+        {"title": "青云山", "content": "仙山"}, {"title": "北境", "content": "雪原"}
+    ]
+    fake_llm.push(json.dumps(raw, ensure_ascii=False))
+    task, events = await run_task(client, await client.post(f"{base}/wizard/{kind}"))
+    assert task["status"] == "succeeded", task
+    for item in events[-1][1]["result"]["items"]:
+        param = {"character_id": item["id"], "subject_kind": "character"} if kind == "characters" else {
+            "world_setting_id": item["id"], "subject_kind": "world"
+        }
+        timeline = await _setting_timeline(client, base, **param)
+        assert timeline["baseline_status"] == "confirmed"
+        assert timeline["legacy_compat_allowed"] is False
+        baseline = (await client.get(f"{base}/setting-timelines/{timeline['id']}/baseline")).json()["baseline"]
+        field = "profile" if kind == "characters" else "content"
+        assert baseline[field] == item[field]
+    assert (await client.get(f"{other_base}/world/{foreign.json()['id']}")).json()["content"] == "外部变化"
+
+
+@pytest.mark.parametrize("kind", ["characters", "world"])
+@pytest.mark.parametrize("history", ["progression", "custom_field"])
+async def test_wizard_rejects_replace_before_task_when_history_would_be_deleted(client, kind, history):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    endpoint = "characters" if kind == "characters" else "world"
+    key, field = ("name", "profile") if kind == "characters" else ("title", "content")
+    first = await client.post(f"{base}/{endpoint}", json={key: "先保存", field: "原始甲"})
+    second = await client.post(f"{base}/{endpoint}", json={key: "需保留", field: "原始乙"})
+    assert first.status_code == second.status_code == 201
+    subject = "character_id" if kind == "characters" else "world_setting_id"
+    timeline = await _setting_timeline(client, base, **{subject: second.json()["id"]})
+    timeline_url = f"{base}/setting-timelines/{timeline['id']}"
+    if history == "progression":
+        created = await _record_change(client, timeline_url, timeline["revision"], field, "剧情变化后")
+        expected_detail = "剧情变化后"
+        event_id = created["item"]["id"]
+    else:
+        created = await client.post(
+            f"{timeline_url}/text-fields",
+            json={"expected_revision": timeline["revision"], "label": "作者补充", "base_value": "原补充"},
+        )
+        assert created.status_code == 201, created.text
+        expected_detail = "原始乙"
+
+    before = (await client.get(f"{base}/{endpoint}")).json()
+    response = await client.post(f"{base}/wizard/{kind}")
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "wizard_history_conflict"
+    assert "变化" in response.json()["detail"] or "字段" in response.json()["detail"]
+    assert (await client.get(f"{base}/{endpoint}")).json() == before
+    assert (await client.get(f"{base}/{endpoint}/{second.json()['id']}")).json()[field] == expected_detail
+    if history == "progression":
+        assert (await client.get(f"{timeline_url}/progressions")).json()["items"][0]["id"] == event_id
+    else:
+        assert (await client.get(f"{timeline_url}/text-fields")).json()["items"][0]["base_value"] == "原补充"
+
+
+async def test_wizard_rechecks_history_added_during_generation_before_replacing(app, client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    world = (await client.post(f"{base}/world", json={"title": "旧山门", "content": "完好"})).json()
+    timeline = await _setting_timeline(client, base, world_setting_id=world["id"])
+    gate = Gate()
+    fake_llm.push([gate, '[{"title":"新山门","content":"替换"}]'])
+    response = await client.post(f"{base}/wizard/world")
+    assert response.status_code == 202, response.text
+    await gate.wait_reached()
+    url = f"{base}/setting-timelines/{timeline['id']}"
+    created = await _record_change(client, url, timeline["revision"], "content", "新剧情")
+    gate.release()
+    events = parse_sse((await client.get(f"/api/v1/tasks/{response.json()['id']}/stream")).text)
+    assert events[-1][0] == "error"
+    assert "变化" in events[-1][1]["detail"]
+    assert events[-1][1]["task"]["status"] == "failed"
+    assert (await client.get(f"{base}/world/{world['id']}")).json()["content"] == "新剧情"
+    assert (await client.get(f"{url}/progressions")).json()["items"][0]["id"] == created["item"]["id"]
+    assert [w["title"] for w in (await client.get(f"{base}/world")).json()] == ["旧山门"]
+
+
+@pytest.mark.parametrize(
+    ("subject_kind", "wizard_kind", "field"),
+    [("relationship", "characters", "description"), ("career", "characters", "note"),
+     ("membership", "characters", "position"), ("career", "careers", "note")],
+)
+async def test_wizard_rejects_when_replacing_would_cascade_other_subject_history(
+    client, subject_kind, wizard_kind, field
+):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    char = await client.post(f"{base}/characters", json={"name": "甲"})
+    assert char.status_code == 201, char.text
+    character_id = char.json()["id"]
+    if subject_kind == "relationship":
+        other = await client.post(f"{base}/characters", json={"name": "乙"})
+        assert other.status_code == 201, other.text
+        response = await client.post(
+            f"{base}/relationships", json={"a_id": character_id, "b_id": other.json()["id"], "role_a": "朋友"}
+        )
+    elif subject_kind == "career":
+        career = await client.post(f"{base}/careers", json={"name": "剑修", "stages": [{"name": "练气"}]})
+        assert career.status_code == 201, career.text
+        response = await client.post(
+            f"{base}/characters/{character_id}/careers", json={"career_id": career.json()["id"]}
+        )
+    else:
+        org = await client.post(f"{base}/organizations", json={"name": "剑宗"})
+        assert org.status_code == 201, org.text
+        response = await client.post(
+            f"{base}/organizations/{org.json()['id']}/members", json={"character_id": character_id}
+        )
+    assert response.status_code == 201, response.text
+    timeline = await _setting_timeline(client, base, subject_kind=subject_kind, character_id=character_id)
+    url = f"{base}/setting-timelines/{timeline['id']}"
+    event = await _record_change(client, url, timeline["revision"], field, "应保留的变化")
+    before = (await client.get(f"{url}/effective", params={"chapter_no": 10})).json()["fields"]
+    blocked = await client.post(f"{base}/wizard/{wizard_kind}")
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "wizard_history_conflict"
+    assert (await client.get(f"{url}/progressions")).json()["items"][0]["id"] == event["item"]["id"]
+    assert (await client.get(f"{url}/effective", params={"chapter_no": 10})).json()["fields"] == before
+    assert (await client.get(f"{base}/characters/{character_id}")).status_code == 200
+
+
+async def test_wizard_replacement_ignores_inactive_events_and_unaffected_subjects(client, fake_llm):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    world = (await client.post(f"{base}/world", json={"title": "旧世界", "content": "旧内容"})).json()
+    character = (await client.post(f"{base}/characters", json={"name": "保留的角色"})).json()
+    world_timeline = await _setting_timeline(client, base, world_setting_id=world["id"])
+    char_timeline = await _setting_timeline(client, base, character_id=character["id"])
+    char_url = f"{base}/setting-timelines/{char_timeline['id']}"
+    await _record_change(client, char_url, char_timeline["revision"], "profile", "角色剧情")
+    world_url = f"{base}/setting-timelines/{world_timeline['id']}"
+    created = await _record_change(client, world_url, world_timeline["revision"], "content", "已撤销")
+    removed = await client.delete(
+        f"{world_url}/progressions/{created['item']['id']}",
+        params={"expected_revision": created["timeline_revision"]},
+    )
+    assert removed.status_code == 200, removed.text
+    fake_llm.push('[{"title":"新世界","content":"新内容"}]')
+    task, _ = await run_task(client, await client.post(f"{base}/wizard/world"))
+    assert task["status"] == "succeeded", task
+    assert [item["title"] for item in (await client.get(f"{base}/world")).json()] == ["新世界"]
+    assert (await client.get(f"{base}/characters/{character['id']}")).json()["profile"] == "角色剧情"
+    assert (await client.get(f"{char_url}/progressions")).json()["total"] == 1
+
+
+async def test_wizard_rolls_back_old_rows_and_new_timelines_if_initialization_fails(client, fake_llm, monkeypatch):
+    p = await _setup(client)
+    base = f"/api/v1/projects/{p['id']}"
+    old = (await client.post(f"{base}/world", json={"title": "旧设定", "content": "保留"})).json()
+    old_timeline = await _setting_timeline(client, base, world_setting_id=old["id"])
+    original = setting_progression_service.create_world_timeline
+
+    async def fail_after_initialize(db, world, **kwargs):
+        await original(db, world, **kwargs)
+        raise RuntimeError("测试初始化失败")
+
+    monkeypatch.setattr(setting_progression_service, "create_world_timeline", fail_after_initialize)
+    fake_llm.push('[{"title":"新设定","content":"新值"}]')
+    task, _ = await run_task(client, await client.post(f"{base}/wizard/world"))
+    assert task["status"] == "failed"
+    assert (await client.get(f"{base}/world")).json() == [old]
+    assert (await _setting_timeline(client, base, world_setting_id=old["id"]))["id"] == old_timeline["id"]
 
 
 async def test_wizard_parse_error(client, fake_llm):

@@ -1,15 +1,13 @@
 """章节分析回写设定（D3 / R4）：把分析结果转换为回写条目（analysis_changes），并负责应用、撤销、确认、拒绝。
 
 规则：
-- 模型输出变化后的绝对值；after 等于当前值时不生成条目（重复分析幂等）。
+- 受时间线管理的设定按章初快照比较，分析结果写入本章末的绝对变化。
 - 名字按「名字 → 别名」精确匹配本项目角色（组织 / 职业 / 阶段按名称精确匹配）；对不上 → skipped，只做提示。
-- 更晚章节优先：同一 field_key 已有更晚章节的 applied 条目 → skipped「已有第 N 章的更新」。
+- 已记录的更晚变化不会阻止补录早章；最新投影按故事位置重新计算。
 - 常规变化自动写入（applied）：角色当前状态、已有关系的亲密度 / 状态 / 描述（每个字段一条）、境界、组织成员与职位。
   重大变化进入待确认（pending）：存活状态（life_status）、新建关系。
 - 每条写入用 SAVEPOINT（begin_nested）包住；失败只把该条记为 failed，不影响其他条目。
-- 写入入口：关系 relationship_service.apply_change / create_relation、境界 career_service.apply_assignment、
-  成员 organization_service.apply_membership、角色状态 set_character_field（本模块）；来源 analysis，带章节号。
-- 撤销：当前值仍等于 after 才经同一入口写回 before（note「撤销第 N 章分析」），否则 409「该项已被后续修改，无法撤销」。
+- 来源 analysis 的剧情事件在保存点中与回写条目关联；撤销停用原事件并重算，而不覆盖后续事件。
 - 确认 / 拒绝只作用于 pending；确认时按当前状态重新校验后写入。
 - 伏笔（foreshadows）：按编号 ref_id 匹配本项目伏笔。回收已埋 / 部分回收的伏笔（foreshadow_resolve，fs:{id}:resolve）与
   计划中的待埋伏笔在本章埋下（foreshadow_plant_planned，fs:{id}:plant）自动写入；没有编号的新埋设（foreshadow_new，
@@ -19,6 +17,7 @@
   写入入口 foreshadow_service.apply_foreshadow。
 """
 
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -27,11 +26,12 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
+from app.core.errors import AppError, ConflictError, NotFoundError
 from app.models import (
     AnalysisChange,
     Career,
     CareerStage,
+    Chapter,
     ChapterAnalysis,
     Character,
     CharacterCareer,
@@ -39,16 +39,23 @@ from app.models import (
     Organization,
     Project,
     Relationship,
+    SettingProgression,
+    SettingTimeline,
 )
-from app.models.entities import LIFE_STATUSES
 from app.schemas.analysis import AnalysisChangeOut
 from app.schemas.foreshadow import ForeshadowOverrides
+from app.schemas.progression import BaselineUpdate, StoryPosition
 from app.services import (
+    analysis_progression_service,
+    career_progression_service,
     career_service,
     foreshadow_service,
+    membership_progression_service,
     organization_service,
     project_lifecycle,
+    relationship_progression_service,
     relationship_service,
+    setting_progression_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,21 +70,6 @@ FS_DUPLICATE = "本章已有同名伏笔"
 REVERT_CONFLICT = "该项已被后续修改，无法撤销"
 CONFIRM_CHANGED = "该项对应的设定已被修改，无法确认"
 TARGET_GONE = "对应的设定已不存在"
-
-
-# ---------------- 角色状态写入入口 ----------------
-
-
-async def set_character_field(db: AsyncSession, character: Character, field: str, value: str) -> str:
-    """写入角色 current_state / life_status，返回写入前的值。不 commit。"""
-    if field not in CHARACTER_FIELDS:
-        raise ValueError(f"不支持的角色字段：{field}")
-    if field == "life_status" and value not in LIFE_STATUSES:
-        raise BadRequestError("存活状态不合法")
-    before = getattr(character, field)
-    setattr(character, field, value)
-    await db.flush()
-    return before
 
 
 # ---------------- 名字解析 ----------------
@@ -134,6 +126,7 @@ class _Writer:
         self.no = analysis.chapter_no
         self.note = f"第 {analysis.chapter_no} 章分析"
         self.changes: list[AnalysisChange] = []
+        self.reported_fields: set[tuple[int, str]] = set()
 
     def _add(self, kind: str, target: dict, field_key: str, before: Any, after: Any, status: str, reason: str = ""):
         row = AnalysisChange(
@@ -187,11 +180,103 @@ class _Writer:
         else:
             self._add(kind, target, field_key, before, after, "applied")
 
+    async def plan_timeline(
+        self,
+        kind: str,
+        target: dict,
+        field_key: str,
+        after: Any,
+        prepared: analysis_progression_service.PreparedField,
+    ) -> None:
+        """按章初事实规划回写；旧自动组的替代与新条目在同一 SAVEPOINT。"""
+        self.reported_fields.add((prepared.timeline.id, prepared.field_key))
+        before = prepared.before
+        if before == after and not prepared.previous:
+            return
+        if kind in PENDING_KINDS:
+            self._add(
+                kind,
+                {**target, "_timeline_revision": prepared.timeline.revision},
+                field_key,
+                before,
+                after,
+                "pending",
+            )
+            return
+        await self.plan_timeline_group(kind, target, field_key, before, after, [(prepared, after)])
+
+    async def plan_timeline_group(
+        self,
+        kind: str,
+        target: dict,
+        field_key: str,
+        before: Any,
+        after: Any,
+        fields: list[tuple[analysis_progression_service.PreparedField, Any]],
+        audit: Callable[[], Awaitable[Any]] | None = None,
+    ) -> None:
+        self.reported_fields.update((prepared.timeline.id, prepared.field_key) for prepared, _ in fields)
+        if not fields or (before == after and not any(prepared.previous for prepared, _ in fields)):
+            return
+        created: AnalysisChange | None = None
+        try:
+            async with self.db.begin_nested():
+                created = self._add(kind, target, field_key, before, after, "applied")
+                await self.db.flush()
+                await analysis_progression_service.apply_fields(self.db, self.analysis, created, fields)
+                if audit is not None:
+                    await audit()
+        except AppError as exc:
+            await self.db.refresh(fields[0][0].timeline)
+            if created is not None:
+                self.changes.remove(created)
+            self._add(kind, target, field_key, before, after, "failed", exc.detail)
+        except Exception:  # noqa: BLE001
+            await self.db.refresh(fields[0][0].timeline)
+            if created is not None:
+                self.changes.remove(created)
+            logger.exception("分析 %s 回写失败：%s %s", self.analysis.id, kind, field_key)
+            self._add(kind, target, field_key, before, after, "failed", "写入失败：服务器内部错误")
+
+
+async def _chapter_fields(db: AsyncSession, analysis: ChapterAnalysis, timeline: SettingTimeline) -> dict[str, Any]:
+    position = StoryPosition(chapter_id=analysis.chapter_id, chapter_no=analysis.chapter_no, boundary="start")
+    return (await setting_progression_service.resolve_timelines(db, analysis.project_id, [timeline], position))[
+        timeline.id
+    ].fields
+
+
+async def _mark_unreported(db: AsyncSession, writer: _Writer) -> None:
+    """保留旧变化，并在分析历史中提示本轮未再报告的字段。"""
+    rows = (await db.execute(
+        select(AnalysisChange, SettingProgression)
+        .join(SettingProgression, SettingProgression.source_change_id == AnalysisChange.id)
+        .join(ChapterAnalysis, ChapterAnalysis.id == AnalysisChange.analysis_id)
+        .where(
+            AnalysisChange.project_id == writer.analysis.project_id,
+            AnalysisChange.analysis_id != writer.analysis.id,
+            ChapterAnalysis.chapter_id == writer.analysis.chapter_id,
+            SettingProgression.active.is_(True),
+            SettingProgression.source == "analysis",
+        )
+    )).all()
+    missing: dict[int, tuple[AnalysisChange, bool]] = {}
+    for change, event in rows:
+        omitted = (event.timeline_id, event.field_key or "") not in writer.reported_fields
+        previous = missing.get(change.id)
+        missing[change.id] = (change, omitted or (previous is not None and previous[1]))
+    for change, omitted in missing.values():
+        if omitted:
+            change.reason = "本次重新分析未报告此变化，请复核"
+        elif change.reason == "本次重新分析未报告此变化，请复核":
+            change.reason = ""
+
 
 async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict[str, Any]) -> list[AnalysisChange]:
     """按规范化后的分析结果生成并应用回写条目（analysis 须已 flush）。不 commit。"""
     w = _Writer(db, analysis)
     pid = analysis.project_id
+    await project_lifecycle.lock_active(db, pid)
     rows = await db.execute(select(Character.id, Character.name, Character.aliases).where(Character.project_id == pid))
     characters = [_Named(i, n, tuple(a or [])) for i, n, a in rows.all()]
     names = {c.id: c.name for c in characters}
@@ -209,10 +294,14 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
             character = await _fresh(db, Character, cid)
             target = {"character_id": cid, "name": character.name}
 
-            async def _apply(cid: int = cid, field: str = field, value: str = value) -> None:
-                await set_character_field(db, await _fresh(db, Character, cid), field, value)
-
-            await w.plan(kind, target, f"char:{cid}:{field}", getattr(character, field), value, _apply)
+            timeline = await setting_progression_service.create_character_timeline(
+                db, character, baseline_status="legacy_unverified"
+            )
+            field_key = f"char:{cid}:{field}"
+            prepared = await analysis_progression_service.prepare_field(
+                db, analysis, timeline, source_field_key=field_key, field_key=field
+            )
+            await w.plan_timeline(kind, target, field_key, value, prepared)
 
     for r in data.get("relationship_changes", []):
         a_id, a_reason = resolve_name(r["a"], characters)
@@ -225,8 +314,17 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
         if a_id == b_id:
             w.skip("relationship_update", raw_target, updates or r.get("new_relation"), "不能与自己建立关系")
             continue
-        rel = await relationship_service.find_pair(db, a_id, b_id)
-        if rel is None:
+        rel = await relationship_service.find_pair_record(db, a_id, b_id)
+        timeline = await relationship_progression_service.get_or_create_relationship_timeline(
+            db,
+            pid,
+            a_id,
+            b_id,
+            initial_state=relationship_progression_service.relationship_snapshot(rel) if rel is not None else None,
+            baseline_status="legacy_unverified" if rel is not None else "confirmed",
+        )
+        fields = await _chapter_fields(db, analysis, timeline)
+        if not fields.get("exists"):
             new = r.get("new_relation")
             if new is None:
                 reason = f"「{names[a_id]}」与「{names[b_id]}」之间没有已有关系"
@@ -238,29 +336,45 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
                 "status": updates.get("status", "normal"),
                 "description": updates.get("description", ""),
             }
-            target = {"a_id": a_id, "b_id": b_id, "a_name": names[a_id], "b_name": names[b_id]}
-            await w.plan(
-                "relationship_create", target, f"relpair:{min(a_id, b_id)}:{max(a_id, b_id)}", None, after, None
+            w.reported_fields.add((timeline.id, "presence"))
+            target = {
+                "a_id": a_id, "b_id": b_id, "a_name": names[a_id], "b_name": names[b_id],
+                "_timeline_revision": timeline.revision,
+            }
+            w._add(
+                "relationship_create", target, f"relpair:{min(a_id, b_id)}:{max(a_id, b_id)}", None, after, "pending"
             )
+            continue
+        if rel is None:
+            w.skip("relationship_update", raw_target, updates, TARGET_GONE)
             continue
         rel_id = rel.id
         for field, value in updates.items():
             rel = await _fresh(db, Relationship, rel_id)
+            identity = fields["identity"]
             target = {
                 "relationship_id": rel.id,
-                "a_id": rel.a_id,
-                "b_id": rel.b_id,
-                "a_name": names.get(rel.a_id, ""),
-                "b_name": names.get(rel.b_id, ""),
+                "a_id": identity["a_id"],
+                "b_id": identity["b_id"],
+                "a_name": names.get(identity["a_id"], ""),
+                "b_name": names.get(identity["b_id"], ""),
                 "field": field,
             }
+            field_key = f"rel:{rel.id}:{field}"
+            prepared = await analysis_progression_service.prepare_field(
+                db, analysis, timeline, source_field_key=field_key, field_key=field
+            )
 
-            async def _apply_rel(rid: int = rel.id, field: str = field, value: Any = value) -> None:
-                await relationship_service.apply_change(
-                    db, await _fresh(db, Relationship, rid), {field: value}, source=SOURCE, chapter_no=w.no, note=w.note
+            async def _audit_rel(
+                rel_id: int = rel_id, field: str = field, before: Any = prepared.before, after: Any = value
+            ) -> None:
+                await relationship_progression_service.append_analysis_audit(
+                    db, rel_id, {field: [before, after]}, w.no, w.note
                 )
 
-            await w.plan("relationship_update", target, f"rel:{rel.id}:{field}", getattr(rel, field), value, _apply_rel)
+            await w.plan_timeline_group(
+                "relationship_update", target, field_key, prepared.before, value, [(prepared, value)], _audit_rel
+            )
 
     if data.get("career_changes"):
         careers = {c.name: c for c in await career_service.list_project_careers(db, pid)}
@@ -274,12 +388,10 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
             if career is None:
                 w.skip("career_stage", raw_target, {"stage": c["stage"]}, f"未找到名为「{c['career']}」的职业")
                 continue
-            assignment = await db.scalar(
-                select(CharacterCareer).where(
-                    CharacterCareer.character_id == cid, CharacterCareer.career_id == career.id
-                )
-            )
-            if assignment is None:
+            character = await _fresh(db, Character, cid)
+            timeline = await career_progression_service.get_or_create_career_timeline(db, character, career)
+            fields = await _chapter_fields(db, analysis, timeline)
+            if not fields.get("exists"):
                 reason = f"「{names[cid]}」未挂接职业「{career.name}」"
                 w.skip("career_stage", raw_target, {"stage": c["stage"]}, reason)
                 continue
@@ -289,23 +401,25 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
                 reason = f"职业「{career.name}」没有名为「{c['stage']}」的阶段"
                 w.skip("career_stage", raw_target, {"stage": c["stage"]}, reason)
                 continue
-            current = next((s for s in stages if s.id == assignment.stage_id), None)
+            current = next((s for s in stages if s.id == fields["stage_id"]), None)
             target = {"character_id": cid, "name": names[cid], "career_id": career.id, "career_name": career.name}
-            before = _stage_value(current) if current else {"stage_id": assignment.stage_id, "stage": None}
+            before = _stage_value(current) if current else {"stage_id": fields["stage_id"], "stage": None}
+            after = _stage_value(stage)
+            field_key = f"career:{cid}:{career.id}"
+            prepared = await analysis_progression_service.prepare_field(
+                db, analysis, timeline, source_field_key=field_key, field_key="stage_id"
+            )
 
-            async def _apply_career(cid: int = cid, career_id: int = career.id, stage_id: int = stage.id) -> None:
-                await career_service.apply_assignment(
-                    db,
-                    await _fresh(db, Character, cid),
-                    await _fresh(db, Career, career_id),
-                    stage_id=stage_id,
-                    source=SOURCE,
-                    chapter_no=w.no,
-                    history_note=w.note,
+            async def _audit_career(
+                character_id: int = cid, career_id: int = career.id,
+                old_stage: str | None = before["stage"], new_stage: str | None = after["stage"],
+            ) -> None:
+                await career_progression_service.append_analysis_audit(
+                    db, character_id, career_id, {"stage": [old_stage, new_stage]}, w.no, w.note
                 )
 
-            await w.plan(
-                "career_stage", target, f"career:{cid}:{career.id}", before, _stage_value(stage), _apply_career
+            await w.plan_timeline_group(
+                "career_stage", target, field_key, before, after, [(prepared, stage.id)], _audit_career
             )
 
     if data.get("organization_changes"):
@@ -321,23 +435,44 @@ async def apply_analysis(db: AsyncSession, analysis: ChapterAnalysis, data: dict
             if org is None:
                 w.skip("org_membership", raw_target, raw_after, f"未找到名为「{o['organization']}」的组织")
                 continue
-            member = await organization_service.find_membership(db, org.id, cid)
-            before = organization_service.membership_snapshot(member)
+            character = await _fresh(db, Character, cid)
+            existing_timeline = await membership_progression_service.find_membership_timeline(db, pid, org.id, cid)
+            existing_member = (
+                await organization_service.find_membership(db, org.id, cid) if existing_timeline is None else None
+            )
+            timeline = await membership_progression_service.get_or_create_membership_timeline(
+                db, org, character, baseline_status="legacy_unverified" if existing_member else "confirmed"
+            )
+            fields = await _chapter_fields(db, analysis, timeline)
+            before = {key: fields[key] for key in ("position", "status")} if fields.get("exists") else None
             after = _membership_after(o, before)
             if after is None:
                 continue
             target = {"organization_id": org.id, "organization_name": org.name, "character_id": cid, "name": names[cid]}
-
-            async def _apply_org(org_id: int = org.id, cid: int = cid, after: dict = after) -> None:
-                await organization_service.apply_membership(
-                    db, await _fresh(db, Organization, org_id), await _fresh(db, Character, cid), after
+            field_key = f"org:{org.id}:{cid}"
+            event_values = (
+                {"presence": {"exists": True, "state": {**after, "note": ""}}}
+                if before is None
+                else {
+                    key: after[key]
+                    for key in ("position", "status")
+                    if o.get(key) is not None or (key == "status" and o.get("action") in ("join", "leave"))
+                }
+            )
+            event_fields = []
+            for key, value in event_values.items():
+                prepared = await analysis_progression_service.prepare_field(
+                    db, analysis, timeline, source_field_key=field_key, field_key=key
                 )
-
-            await w.plan("org_membership", target, f"org:{org.id}:{cid}", before, after, _apply_org)
+                w.reported_fields.add((timeline.id, key))
+                if key == "presence" or prepared.before != value or prepared.previous:
+                    event_fields.append((prepared, value))
+            await w.plan_timeline_group("org_membership", target, field_key, before, after, event_fields)
 
     if data.get("foreshadows"):
         await _plan_foreshadows(db, w, data["foreshadows"])
 
+    await _mark_unreported(db, w)
     await db.flush()
     return w.changes
 
@@ -457,6 +592,7 @@ async def get_owned_change(db: AsyncSession, user_id: int, change_id: int, *, lo
         raise NotFoundError("回写条目不存在")
     if lock:
         await project_lifecycle.lock_active(db, change.project_id)
+        await db.refresh(change)
     return change
 
 
@@ -474,10 +610,70 @@ async def _project_foreshadow(db: AsyncSession, project_id: int, foreshadow_id: 
     return fs if fs is not None and fs.project_id == project_id else None
 
 
+async def _character_timeline(db: AsyncSession, project_id: int, character_id: int) -> SettingTimeline | None:
+    return await db.scalar(
+        select(SettingTimeline).where(
+            SettingTimeline.project_id == project_id,
+            SettingTimeline.subject_kind == "character",
+            SettingTimeline.character_id == character_id,
+        )
+    )
+
+
+async def _relationship_timeline(db: AsyncSession, project_id: int, a_id: int, b_id: int) -> SettingTimeline | None:
+    low, high = sorted((a_id, b_id))
+    return await db.scalar(select(SettingTimeline).where(
+        SettingTimeline.project_id == project_id, SettingTimeline.subject_kind == "relationship",
+        SettingTimeline.character_id == low, SettingTimeline.related_character_id == high,
+    ))
+
+
+async def _legacy_character_update(
+    db: AsyncSession, change: AnalysisChange, character: Character, field: str, value: Any
+) -> None:
+    """旧分析未绑定事件，只能修订尚未人工校准或记录过新变化的 M1 基线。"""
+    timeline = await _character_timeline(db, change.project_id, character.id)
+    if timeline is None or not timeline.legacy_compat_allowed:
+        raise ConflictError(REVERT_CONFLICT)
+    await setting_progression_service.apply_baseline(
+        db,
+        timeline,
+        BaselineUpdate(expected_revision=timeline.revision, changes={field: value}),
+        preserve_legacy_eligibility=True,
+    )
+
+
+async def _legacy_baseline_update(db: AsyncSession, timeline: SettingTimeline | None, values: dict[str, Any]) -> None:
+    if timeline is None or timeline.baseline_status != "legacy_unverified" or not timeline.legacy_compat_allowed:
+        raise ConflictError(REVERT_CONFLICT)
+    await setting_progression_service.apply_baseline(
+        db, timeline, BaselineUpdate(expected_revision=timeline.revision, changes=values),
+        preserve_legacy_eligibility=True,
+    )
+
+
 async def _finish(db: AsyncSession, change: AnalysisChange) -> AnalysisChangeOut:
     await db.commit()
     await db.refresh(change)
     return AnalysisChangeOut.model_validate(change)
+
+
+async def _pending_analysis(
+    db: AsyncSession, change: AnalysisChange, timeline: SettingTimeline | None, revision: int
+) -> ChapterAnalysis:
+    analysis = await db.get(ChapterAnalysis, change.analysis_id)
+    chapter = await db.get(Chapter, analysis.chapter_id) if analysis is not None else None
+    if (
+        timeline is None
+        or timeline.revision != revision
+        or analysis is None
+        or chapter is None
+        or chapter.project_id != change.project_id
+        or chapter.chapter_no != analysis.chapter_no
+        or hashlib.sha256((chapter.content or "").encode("utf-8")).hexdigest() != analysis.content_hash
+    ):
+        raise ConflictError(CONFIRM_CHANGED)
+    return analysis
 
 
 async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> AnalysisChangeOut:
@@ -486,19 +682,38 @@ async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> Analy
         raise ConflictError("只能撤销已写入的条目")
     pid, t = change.project_id, change.target or {}
     note = f"撤销第 {change.chapter_no} 章分析"
+    timed_kinds = (
+        "character_state", "life_status", "relationship_update", "relationship_create", "career_stage", "org_membership"
+    )
+    if change.kind in timed_kinds and await analysis_progression_service.revoke_group(db, change):
+        if change.kind == "relationship_update":
+            await relationship_progression_service.append_analysis_audit(
+                db, t["relationship_id"], {t["field"]: [change.after, change.before]}, change.chapter_no, note
+            )
+        elif change.kind == "career_stage":
+            await career_progression_service.append_analysis_audit(
+                db, t["character_id"], t["career_id"],
+                {"stage": [(change.after or {}).get("stage"), (change.before or {}).get("stage")]},
+                change.chapter_no, note,
+            )
+        change.status = "reverted"
+        change.resolved_at = func.now()
+        return await _finish(db, change)
     if change.kind in ("character_state", "life_status"):
         field = "current_state" if change.kind == "character_state" else "life_status"
         character = await _project_character(db, pid, t.get("character_id"))
         if character is None or getattr(character, field) != change.after:
             raise ConflictError(REVERT_CONFLICT)
-        await set_character_field(db, character, field, change.before)
+        await _legacy_character_update(db, change, character, field, change.before)
     elif change.kind == "relationship_update":
         rel = await db.get(Relationship, t.get("relationship_id") or 0)
         field = t.get("field")
         if rel is None or rel.project_id != pid or field not in REL_FIELDS or getattr(rel, field) != change.after:
             raise ConflictError(REVERT_CONFLICT)
-        await relationship_service.apply_change(
-            db, rel, {field: change.before}, source=SOURCE, chapter_no=change.chapter_no, note=note
+        timeline = await _relationship_timeline(db, pid, rel.a_id, rel.b_id)
+        await _legacy_baseline_update(db, timeline, {field: change.before})
+        await relationship_progression_service.append_analysis_audit(
+            db, rel.id, {field: [change.after, change.before]}, change.chapter_no, note
         )
     elif change.kind == "relationship_create":
         rel = await db.get(Relationship, t.get("relationship_id") or 0)
@@ -512,8 +727,8 @@ async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> Analy
             )
         ):
             raise ConflictError(REVERT_CONFLICT)
-        await db.delete(rel)
-        await db.flush()
+        timeline = await _relationship_timeline(db, pid, rel.a_id, rel.b_id)
+        await _legacy_baseline_update(db, timeline, {"exists": False})
     elif change.kind == "career_stage":
         character = await _project_character(db, pid, t.get("character_id"))
         career = await db.get(Career, t.get("career_id") or 0)
@@ -526,14 +741,15 @@ async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> Analy
             )
         if assignment is None or assignment.stage_id != (change.after or {}).get("stage_id"):
             raise ConflictError(REVERT_CONFLICT)
-        await career_service.apply_assignment(
-            db,
-            character,
-            career,
-            stage_id=(change.before or {}).get("stage_id"),
-            source=SOURCE,
-            chapter_no=change.chapter_no,
-            history_note=note,
+        timeline = await db.scalar(select(SettingTimeline).where(
+            SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "career",
+            SettingTimeline.character_id == character.id, SettingTimeline.career_id == career.id,
+        ))
+        await _legacy_baseline_update(db, timeline, {"stage_id": (change.before or {}).get("stage_id")})
+        await career_progression_service.append_analysis_audit(
+            db, character.id, career.id,
+            {"stage": [(change.after or {}).get("stage"), (change.before or {}).get("stage")]},
+            change.chapter_no, note,
         )
     elif change.kind == "org_membership":
         character = await _project_character(db, pid, t.get("character_id"))
@@ -545,7 +761,11 @@ async def revert_change(db: AsyncSession, user_id: int, change_id: int) -> Analy
         )
         if current != change.after:
             raise ConflictError(REVERT_CONFLICT)
-        await organization_service.apply_membership(db, org, character, change.before)
+        timeline = await membership_progression_service.find_membership_timeline(db, pid, org.id, character.id)
+        values = {"exists": False} if change.before is None else dict(change.before)
+        if change.before is not None and timeline is not None and not timeline.baseline.get("exists"):
+            raise ConflictError(REVERT_CONFLICT)
+        await _legacy_baseline_update(db, timeline, values)
     elif change.kind in FORESHADOW_AUTO_KINDS:
         fs = await _project_foreshadow(db, pid, t.get("foreshadow_id"))
         if fs is None or _fs_state(fs, change.kind) != change.after:
@@ -577,42 +797,86 @@ async def confirm_change(
     if change.status != "pending":
         raise ConflictError("只能确认待确认的条目")
     pid, t = change.project_id, dict(change.target or {})
-    # field_key 为空（新伏笔）不参与「更晚章节优先」
-    later = await _latest_applied_chapter(db, pid, change.field_key, exclude_id=change.id) if change.field_key else None
+    # 新时间线按故事位置而非「当前值/更晚章节」决定；旧记录与伏笔保留原有冲突规则。
+    timeline_pending = change.kind in ("life_status", "relationship_create") and isinstance(
+        t.get("_timeline_revision"), int
+    )
+    later = (
+        await _latest_applied_chapter(db, pid, change.field_key, exclude_id=change.id)
+        if change.field_key and not timeline_pending
+        else None
+    )
     if later is not None and later > change.chapter_no:
         raise ConflictError(f"已有第 {later} 章的更新，无法确认")
     if change.kind == "life_status":
         character = await _project_character(db, pid, t.get("character_id"))
         if character is None:
             raise ConflictError(TARGET_GONE)
-        if character.life_status != change.before:
-            raise ConflictError(CONFIRM_CHANGED)
-        await set_character_field(db, character, "life_status", change.after)
+        if timeline_pending:
+            timeline = await _character_timeline(db, pid, character.id)
+            analysis = await _pending_analysis(db, change, timeline, t["_timeline_revision"])
+            prepared = await analysis_progression_service.prepare_field(
+                db, analysis, timeline, source_field_key=change.field_key, field_key="life_status"
+            )
+            if prepared.before != change.before:
+                raise ConflictError(CONFIRM_CHANGED)
+            await analysis_progression_service.apply_field(
+                db, analysis, change, prepared, change.after, protection="confirmed"
+            )
+        else:
+            if character.life_status != change.before:
+                raise ConflictError(CONFIRM_CHANGED)
+            await _legacy_character_update(db, change, character, "life_status", change.after)
     elif change.kind == "relationship_create":
         a = await _project_character(db, pid, t.get("a_id"))
         b = await _project_character(db, pid, t.get("b_id"))
         if a is None or b is None:
             raise ConflictError(TARGET_GONE)
-        if await relationship_service.find_pair(db, a.id, b.id) is not None:
-            raise ConflictError(relationship_service.PAIR_CONFLICT)
+        timeline = await _relationship_timeline(db, pid, a.id, b.id)
+        if timeline_pending:
+            analysis = await _pending_analysis(db, change, timeline, t["_timeline_revision"])
+            if (await _chapter_fields(db, analysis, timeline)).get("exists"):
+                raise ConflictError(CONFIRM_CHANGED)
+            protected = await db.scalar(select(SettingProgression.id).where(
+                SettingProgression.timeline_id == timeline.id, SettingProgression.field_key == "presence",
+                SettingProgression.active.is_(True), SettingProgression.chapter_id == analysis.chapter_id,
+                SettingProgression.boundary == "end", SettingProgression.protection.in_(("manual", "confirmed")),
+            ))
+            if protected is not None:
+                raise ConflictError(CONFIRM_CHANGED)
+        elif timeline is None or timeline.baseline.get("exists") is not False:
+            # 无主体可能表示已显式删除，不能从旧分析重新建档。
+            raise ConflictError(CONFIRM_CHANGED)
         after = dict(change.after or {})
-        rel = await relationship_service.create_relation(
-            db,
-            pid,
-            a_id=a.id,
-            b_id=b.id,
+        rel_type, flipped = await relationship_service.resolve_type(
+            db, pid,
             role_a=after.get("role_a"),
             role_b=after.get("role_b"),
             category=after.get("category") or "other",
-            intimacy=int(after.get("intimacy") or 0),
-            status=after.get("status") or "normal",
-            description=after.get("description") or "",
-            source=SOURCE,
-            chapter_no=change.chapter_no,
-            note=f"确认第 {change.chapter_no} 章分析",
+        )
+        a_id, b_id = (b.id, a.id) if flipped else (a.id, b.id)
+        identity = {"a_id": a_id, "b_id": b_id, "type_id": rel_type.id}
+        state = {
+            "identity": identity, "intimacy": int(after.get("intimacy") or 0),
+            "status": after.get("status") or "normal", "description": after.get("description") or "",
+        }
+        if timeline_pending:
+            prepared = await analysis_progression_service.prepare_field(
+                db, analysis, timeline, source_field_key=change.field_key, field_key="presence"
+            )
+            await analysis_progression_service.apply_field(
+                db, analysis, change, prepared, {"exists": True, "state": state}, protection="confirmed"
+            )
+        else:
+            await _legacy_baseline_update(db, timeline, {"exists": True, **state})
+        rel = await relationship_service.find_pair_record(db, a_id, b_id)
+        if rel is None:
+            raise ConflictError(CONFIRM_CHANGED)
+        await relationship_progression_service.append_analysis_audit(
+            db, rel.id, {"created": [None, state]}, change.chapter_no, f"确认第 {change.chapter_no} 章分析"
         )
         # 记录实际写入的值（类型反向匹配时 a / b 会互换），供撤销比对
-        after.update(a_id=rel.a_id, b_id=rel.b_id, type_id=rel.type_id)
+        after.update(**identity)
         change.after = after
         change.target = {**t, "relationship_id": rel.id}
     elif change.kind == "foreshadow_new":

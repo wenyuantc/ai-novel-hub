@@ -605,6 +605,9 @@ export interface CharacterInput {
   /** 创建时省略 = 按定位推断（主角默认开启） */
   always_in_context?: boolean | null
   sort?: number | null
+  /** 编辑已有时间线时显式指定修改基础值，并携带读取时的修订号。 */
+  edit_mode?: 'baseline'
+  expected_revision?: number
 }
 
 export interface Outline {
@@ -1247,12 +1250,26 @@ export interface MemberInput {
   position?: string
   status?: MemberStatus
   note?: string
+  edit_mode?: 'baseline' | 'progression' | null
+  /** 0 表示预期时间线不存在；正数表示匹配现有时间线的版本。 */
+  expected_revision?: number | null
+  anchor_kind?: ProgressionAnchorKind | null
+  chapter_id?: number | null
+  chapter_no?: number | null
+  boundary?: ProgressionBoundary
 }
 
 export interface MemberUpdate {
   position?: string | null
   status?: MemberStatus | null
   note?: string | null
+  edit_mode?: 'baseline' | 'progression' | null
+  /** 更新已有时间线时提供其正数版本。 */
+  expected_revision?: number | null
+  anchor_kind?: ProgressionAnchorKind | null
+  chapter_id?: number | null
+  chapter_no?: number | null
+  boundary?: ProgressionBoundary
 }
 
 export interface OrganizationWithMembers {
@@ -1302,6 +1319,11 @@ export interface RelationshipCreate extends TypeRef {
   description?: string
   source?: 'manual' | 'ai_parse' | 'ai_generate'
   chapter_no?: number | null
+  chapter_id?: number | null
+  anchor_kind?: ProgressionAnchorKind | null
+  boundary?: ProgressionBoundary
+  /** 0 表示预期时间线不存在；正数表示匹配现有时间线的版本。 */
+  expected_revision?: number | null
   note?: string
 }
 
@@ -1313,6 +1335,11 @@ export interface RelationshipUpdate {
   status?: RelationStatus | null
   description?: string | null
   chapter_no?: number | null
+  chapter_id?: number | null
+  anchor_kind?: ProgressionAnchorKind | null
+  boundary?: ProgressionBoundary
+  edit_mode?: 'baseline' | 'progression' | null
+  expected_revision?: number | null
   note?: string
 }
 
@@ -1688,14 +1715,25 @@ export interface AssignmentInput {
   /** 给出时必须等于职业类别 */
   role?: CareerKind | null
   chapter_no?: number | null
+  chapter_id?: number | null
+  anchor_kind?: ProgressionAnchorKind | null
+  boundary?: ProgressionBoundary
+  edit_mode?: 'baseline' | 'progression' | null
+  /** 0 表示预期时间线不存在；正数表示匹配现有时间线的版本。 */
+  expected_revision?: number | null
   history_note?: string
 }
 
-/** 省略 = 不变；chapter_no / history_note 只记入历史 */
+/** 省略 = 不变；章节锚点指定剧情变化的生效位置。 */
 export interface AssignmentUpdate {
   stage_id?: number | null
   note?: string | null
   chapter_no?: number | null
+  chapter_id?: number | null
+  anchor_kind?: ProgressionAnchorKind | null
+  boundary?: ProgressionBoundary
+  edit_mode?: 'baseline' | 'progression' | null
+  expected_revision?: number | null
   history_note?: string
 }
 
@@ -3323,4 +3361,142 @@ export interface BackupOverview {
   last_success: BackupRunOut | null
   last_failure: BackupRunOut | null
   last_available: BackupRunOut | null
+}
+
+/** 剧情变化的位置：已有章节使用稳定 ID，计划章节使用章节号。 */
+/** planned 始终按章号锚定，不自动绑定同号已有章节。 */
+export type ProgressionAnchorKind = 'chapter' | 'planned'
+export type ProgressionBoundary = 'start' | 'end'
+export interface ProgressionPositionInput {
+  anchor_kind: ProgressionAnchorKind
+  chapter_id: number | null
+  chapter_no: number | null
+  boundary: ProgressionBoundary
+}
+
+export type ProgressionSubject =
+  | { subject_kind: 'character'; character_id: number }
+  | { subject_kind: 'world'; world_setting_id: number }
+  | { subject_kind: 'relationship'; character_id: number; related_character_id: number }
+  | { subject_kind: 'career'; character_id: number; career_id: number }
+  | { subject_kind: 'membership'; character_id: number; organization_id: number }
+export interface ProgressionSubjectFilter {
+  subject_kind?: ProgressionSubject['subject_kind']
+  character_id?: number
+  related_character_id?: number
+  world_setting_id?: number
+  career_id?: number
+  organization_id?: number
+}
+export type ProgressionBaselineStatus = 'confirmed' | 'legacy_unverified'
+export type ProgressionOperation = 'append' | 'replace'
+export type ProgressionSource = 'manual' | 'analysis' | 'legacy_import'
+export type ProgressionProtection = 'automatic' | 'confirmed' | 'manual'
+export type ProgressionJsonValue = string | number | boolean | null | ProgressionJsonValue[] | { [key: string]: ProgressionJsonValue }
+
+export interface SettingTimeline {
+  id: number
+  project_id: number
+  subject_kind: ProgressionSubject['subject_kind']
+  character_id: number | null
+  related_character_id: number | null
+  world_setting_id: number | null
+  career_id: number | null
+  organization_id: number | null
+  baseline_status: ProgressionBaselineStatus
+  legacy_compat_allowed: boolean
+  revision: number
+}
+
+export interface SettingBaseline {
+  timeline_id: number
+  baseline: Record<string, ProgressionJsonValue>
+  baseline_status: ProgressionBaselineStatus
+  legacy_compat_allowed: boolean
+  timeline_revision: number
+}
+
+export interface SettingProgression extends ProgressionPositionInput {
+  id: number
+  timeline_id: number
+  field_key: string | null
+  custom_field_id: number | null
+  operation: ProgressionOperation
+  value: ProgressionJsonValue
+  anchor_label: string
+  resolved_chapter_no: number | null
+  orphaned: boolean
+  sort_order: number
+  source: ProgressionSource
+  protection: ProgressionProtection
+  source_change_id: number | null
+  source_content_hash: string | null
+  revision: number
+  active: boolean
+  superseded_by_id: number | null
+  reverted_at: string | null
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SettingProgressionInput extends ProgressionPositionInput {
+  expected_revision: number
+  field_key: string | null
+  custom_field_id: number | null
+  operation: ProgressionOperation
+  value: ProgressionJsonValue
+  sort_order: number
+  note: string
+}
+
+export interface SettingProgressionUpdate extends Partial<Omit<SettingProgressionInput, 'expected_revision'>> {
+  expected_revision: number
+}
+
+export interface SettingTextField {
+  id: number
+  timeline_id: number
+  label: string
+  base_value: string
+  sort: number
+}
+
+export interface SettingTextFieldInput {
+  expected_revision: number
+  label: string
+  base_value: string
+  sort: number
+}
+
+export interface SettingTextFieldUpdate extends Partial<Omit<SettingTextFieldInput, 'expected_revision'>> {
+  expected_revision: number
+}
+
+export interface SettingEffective {
+  timeline_id: number
+  position: { chapter_id: number | null; chapter_no: number; boundary: ProgressionBoundary }
+  fields: Record<string, ProgressionJsonValue>
+  custom_fields: Record<string, string>
+  applied_event_ids: number[]
+  orphaned_event_ids: number[]
+  baseline_status: ProgressionBaselineStatus
+  timeline_revision: number
+}
+
+/** 本章生成时使用的设定块预览，不包含完整提示词或其他上下文。 */
+export interface ChapterSettingContext {
+  position: { chapter_id: number; chapter_no: number; boundary: 'start' }
+  text: string
+  legacy_unverified_count: number
+  warnings: string[]
+}
+
+export interface ProgressionList<T> { items: T[]; total: number; timeline_revision: number }
+export interface ProgressionMutation<T> { item: T; timeline_revision: number }
+export interface ProgressionRevision { timeline_revision: number }
+export interface SettingBaselineUpdate {
+  expected_revision: number
+  changes?: Record<string, ProgressionJsonValue>
+  confirm?: boolean
 }

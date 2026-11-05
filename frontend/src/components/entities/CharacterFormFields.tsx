@@ -118,10 +118,14 @@ export function CharacterDescFields() {
   )
 }
 
-/** 状态字段：当前处境（以后由章节分析回写）。 */
-export function CharacterStateFields() {
+/** 角色详情编辑故事初始状态；AI 草稿仍展示其生成的当前处境。 */
+export function CharacterStateFields({ isBaseline = false }: { isBaseline?: boolean }) {
   return (
-    <Form.Item name="current_state" label="当前状态" tooltip="角色此刻的处境、伤势、所在地等，会注入章节上下文">
+    <Form.Item
+      name="current_state"
+      label={isBaseline ? '初始状态' : '当前状态'}
+      tooltip={isBaseline ? '故事开始时的处境、伤势和所在地；后续变化请在「剧情变化」中维护' : '角色此刻的处境、伤势、所在地等，会注入章节上下文'}
+    >
       <Input.TextArea autoSize={{ minRows: 3, maxRows: 12 }} />
     </Form.Item>
   )

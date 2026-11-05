@@ -6,7 +6,9 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.models import ChapterAnalysis, RelationshipHistory
+from app.core.errors import ConflictError
+from app.models import ChapterAnalysis, RelationshipHistory, SettingProgression, SettingTimeline, WorldSetting
+from app.services import setting_progression_service
 from tests.helpers import Gate, create_ai_config, create_project, register, run_task, wait_task
 
 
@@ -264,6 +266,113 @@ async def test_build_without_existing_chapter_inserts_at_outline(client, fake_ll
     # 没有细纲的大纲建章 → 400
     resp = await client.post(f"{base}/outlines/{outlines[0]['id']}/plans/build")
     assert resp.status_code == 400 and resp.json()["detail"] == "该大纲还没有细纲，请先展开"
+
+
+async def test_sync_plans_orphans_removed_chapter_and_recomputes_setting(app, client):
+    """重新规划删除空章时，同一事务回退设定；后来创建同号章节不恢复孤儿变化。"""
+    project, base = await _setup(client, 2)
+    outline = (await _outlines(client, base))[0]
+    response = await client.put(
+        f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"title": "第一幕"}, {"title": "第二幕"}]}
+    )
+    assert response.status_code == 200, response.text
+    plans = response.json()
+    response = await client.post(f"{base}/outlines/{outline['id']}/plans/build")
+    assert response.status_code == 200, response.text
+    first_chapter, second_chapter = response.json()["chapters"]
+    assert [first_chapter["chapter_no"], second_chapter["chapter_no"]] == [1, 2]
+
+    async with app.state.sessionmaker() as db:
+        world = WorldSetting(project_id=project["id"], title="城池", content="城池被毁")
+        db.add(world)
+        await db.flush()
+        timeline = SettingTimeline(
+            project_id=project["id"], subject_kind="world", world_setting_id=world.id,
+            baseline={"content": "城池完好"},
+        )
+        db.add(timeline)
+        await db.flush()
+        event = SettingProgression(
+            timeline_id=timeline.id, field_key="content", operation="replace", value="城池被毁",
+            anchor_kind="chapter", chapter_id=second_chapter["id"], anchor_label="第2章 第二幕",
+        )
+        db.add(event)
+        await db.commit()
+        world_id, event_id = world.id, event.id
+
+    response = await client.put(
+        f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"id": plans[0]["id"], "title": "第一幕"}]}
+    )
+    assert response.status_code == 200, response.text
+    async with app.state.sessionmaker() as db:
+        event = await db.get(SettingProgression, event_id)
+        world = await db.get(WorldSetting, world_id)
+        assert event is not None and event.anchor_kind == "chapter" and event.chapter_id is None
+        assert event.anchor_label == "第2章 第二幕"
+        assert world is not None and world.content == "城池完好"
+
+    response = await client.put(
+        f"{base}/outlines/{outline['id']}/plans",
+        json={"plans": [{"id": plans[0]["id"], "title": "第一幕"}, {"title": "新第二幕"}]},
+    )
+    assert response.status_code == 200, response.text
+    response = await client.post(f"{base}/outlines/{outline['id']}/plans/build")
+    assert response.status_code == 200, response.text
+    assert response.json()["chapters"][0]["chapter_no"] == 2
+    async with app.state.sessionmaker() as db:
+        event = await db.get(SettingProgression, event_id)
+        world = await db.get(WorldSetting, world_id)
+        assert event is not None and event.chapter_id is None
+        assert world is not None and world.content == "城池完好"
+
+
+async def test_sync_plans_rolls_back_chapter_deletion_on_projection_conflict(app, client, monkeypatch):
+    """最终重算不允许通过时，细纲、章节和设定锚点不能部分提交。"""
+    project, base = await _setup(client, 2)
+    outline = (await _outlines(client, base))[0]
+    response = await client.put(
+        f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"title": "第一幕"}, {"title": "第二幕"}]}
+    )
+    assert response.status_code == 200, response.text
+    plans = response.json()
+    response = await client.post(f"{base}/outlines/{outline['id']}/plans/build")
+    assert response.status_code == 200, response.text
+    removed_chapter = response.json()["chapters"][1]
+
+    async with app.state.sessionmaker() as db:
+        world = WorldSetting(project_id=project["id"], title="城池", content="城池被毁")
+        db.add(world)
+        await db.flush()
+        timeline = SettingTimeline(
+            project_id=project["id"], subject_kind="world", world_setting_id=world.id,
+            baseline={"content": "城池完好"},
+        )
+        db.add(timeline)
+        await db.flush()
+        event = SettingProgression(
+            timeline_id=timeline.id, field_key="content", operation="replace", value="城池被毁",
+            anchor_kind="chapter", chapter_id=removed_chapter["id"], anchor_label="第2章 第二幕",
+        )
+        db.add(event)
+        await db.commit()
+        world_id, event_id = world.id, event.id
+
+    async def conflict_on_recompute(_db, _project_id):
+        raise ConflictError("调整后职业阶段发生冲突")
+
+    monkeypatch.setattr(setting_progression_service, "on_story_positions_changed", conflict_on_recompute)
+    response = await client.put(
+        f"{base}/outlines/{outline['id']}/plans", json={"plans": [{"id": plans[0]["id"], "title": "第一幕"}]}
+    )
+    assert response.status_code == 409
+    remaining = (await client.get(f"{base}/outlines/{outline['id']}/plans")).json()
+    assert [item["id"] for item in remaining] == [item["id"] for item in plans]
+    assert any(item["id"] == removed_chapter["id"] for item in await _chapters(client, base))
+    async with app.state.sessionmaker() as db:
+        event = await db.get(SettingProgression, event_id)
+        world = await db.get(WorldSetting, world_id)
+        assert event is not None and event.chapter_id == removed_chapter["id"]
+        assert world is not None and world.content == "城池被毁"
 
 
 # ---------------- AC3 重新展开 ----------------

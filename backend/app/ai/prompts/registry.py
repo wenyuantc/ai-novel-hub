@@ -207,6 +207,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("style", "写作风格段（由风格库渲染）", sample=SAMPLE_STYLE),
             INSTRUCTION_VAR,
             SKILL_GUIDE_VAR,
+            L("setting_context", "本章有效设定（自动计算，锁定）", "\n\n【本章有效设定】\n■ 林远：练气境"),
         ),
     ),
     (

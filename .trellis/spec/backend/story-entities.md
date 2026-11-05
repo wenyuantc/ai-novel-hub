@@ -5,6 +5,8 @@
 
 ---
 
+> 迁移 0031 后，角色、世界观、关系、职业与成员的基础/剧情变化统一遵循 [设定随剧情演变](./setting-progressions.md)。以下旧审计和当前投影规则仍有效，不能用旧历史替代时间线。
+
 ## 场景：人物关系写入（`relationship_service.apply_change`）
 
 ### 1. 范围 / 触发条件
@@ -31,7 +33,7 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 
 - 语义：「a 是 b 的 `role_a`，b 是 a 的 `role_b`」。a 视角对方显示 `role_b`，b 视角对方显示 `role_a`
   （`RelationshipOut.other_role / self_role / other_name / other_id`，仅 `?character_id=` 查询时有值）。
-- 一对角色一条：`pair_low/pair_high = min/max(a_id, b_id)`，唯一约束兜底；`apply_change` 先查重 → 409 `这两个角色之间已有关系`。
+- 一对角色一个稳定关系载体：`pair_low/pair_high = min/max(a_id, b_id)`，唯一约束兜底；当前存在的关系查重 → 409。结束关系仅隐藏当前载体以保留旧审计；普通列表/图谱只用 `find_current_pair`，需要恢复或检查完整身份时用 `find_pair_record`。显式重建复用隐藏载体。
 - 约束竞争可能在 flush 而非 commit 抛出：`apply_change` 只精确翻译角色对冲突、不主动 rollback；`resolve_type` 的类型首次创建竞争给独立中文409重试提示。HTTP请求或原有外层SAVEPOINT负责回滚，不误报无关完整性错误。详见[批量关系生成](./relationship-generation.md)。
 - `apply_change(rel)`：`rel.id is None` 视为新建（须先设 `project_id`），未给的字段用默认值（0 / normal / ""）。
   校验两端是本项目的不同角色（400 `角色不存在或不属于该项目` / `不能与自己建立关系`）、类型对本项目可见（预置或本项目自定义）、
@@ -82,7 +84,7 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 
 ---
 
-## 场景：卡片导入导出（`ainovel.cards` v1）
+## 场景：卡片导入导出（`ainovel.cards` v3，兼容 v1/v2）
 
 ### 契约
 
@@ -97,13 +99,14 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
   关系类型走 `resolve_type`（反向匹配互换两端，匹配不上建自定义类型），写入走 `apply_change(source="import")`。
 - 新建组织的上级用内存中的上级链检测循环，成环 → warning 并置空。整个导入一个事务，最后 commit。
 - 测试：`tests/test_cards.py`（跨项目往返 + 重命名、skip 关联已有、无法关联与循环、格式 / 大小 400、`rename_for`）。
-- **v2（`10-23-career-system`）**：导出 `version: 2`；角色项增加 `careers: [{career_name, role, stage_name, note}]`，顶层增加
+- **v2（`10-23-career-system`）**：曾导出 `version: 2`；角色项增加 `careers: [{career_name, role, stage_name, note}]`，顶层增加
   `careers: [{name, kind, description, requirements, abilities, rules, stages: [{name, description}]}]`（只含所导出角色挂接的职业）。
-  `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2)`，其他版本 400 `不支持的卡片版本：N（当前支持 1、2）`；v1 没有职业，按原逻辑导入。
+  v1 没有职业，按原逻辑导入。当前 `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2, 3)`，其他版本 400。
   导入：职业按名匹配目标项目，匹配上复用（卡片里多出的阶段追加到末尾）、匹配不上新建；挂接的阶段按名匹配，对不上追加到末尾，
   阶段名为空取第 1 阶；经 `assign_new(source="import")` 写入，职业对不上 / 类别不符 / 超限 / 已挂 → warning 跳过。
   预览增加 `careers: [{name, status: new|reuse, stages_added: [阶段名]}]`；结果增加 `careers: [{name, id, action: created|reused,
   stages_added}]` 与 `careers_assigned`。
+- **v3（设定变化）**：角色增加 `custom_text_fields: [{name, value}]`，导出当前有效快照，不复制源章节、历史或 ID；新角色导入建立 confirmed 基线。已有隐藏关系或退出成员的历史主体不会被卡片覆盖，跳过并警告；新成员走成员服务建立 confirmed 时间线。
 
 ---
 
@@ -194,7 +197,7 @@ characters_text = story_service.format_characters(all_characters)   # 全部角�
 ## 场景：向导适配（R11）
 
 - 角色向导：新格式 `{characters: [结构化字段], relationships: [{a, b, role_a, role_b, category, intimacy, description}]}`；
-  旧格式（数组 + `profile` / `relations_text`）照常解析，`relations_text` 保留为旧备注。先整体替换角色（级联清掉旧关系 / 成员 / 出场），
+  旧格式（数组 + `profile` / `relations_text`）照常解析，`relations_text` 保留为旧备注。在创建任务前和持项目锁的落库前检查受影响主体的变化及自定义字段；存在受保护历史则 409 `wizard_history_conflict`，否则整体替换角色（级联清掉旧关系 / 成员 / 出场），
   再按名字或别名建关系（`apply_change(source="wizard")`），对不上 / 自指 / 同对已有的忽略。`done.result` 多一个 `relationships`
   （`RelationshipOut` 列表，仅 characters）。`always_in_context` 按定位推断。
 - 大纲向导：`outline_mode` replace（默认，已有大纲时先存快照）/ append（接在末尾），见 [outline.md](./outline.md)「向导的大纲模式与进度」。
@@ -208,7 +211,7 @@ characters_text = story_service.format_characters(all_characters)   # 全部角�
 ### 1. 范围 / 触发条件
 
 任何写 `careers` / `career_stages` / `character_careers` / `career_history` 的代码：职业 CRUD、`careers/batch`、
-角色挂接接口、`characters/with-relations` 的 `careers`、`wizard.careers`、角色向导分配职业、卡片 v2 导入，
+角色挂接接口、`characters/with-relations` 的 `careers`、`wizard.careers`、角色向导分配职业、卡片 v3 导入，
 以及以后 `analysis-memory` 的阶段回写。**挂接只能经 `career_service.apply_assignment`（新挂用 `assign_new`）写入**。
 
 ### 2. 签名
@@ -243,7 +246,7 @@ async def careers_reference(db, project_id) -> str   # 「剑修（主修）：�
   已挂 = 对比 `role`（职业类别被改时同步）/ `stage_id` / `note`，有变化才写一条历史（`{"stage": ["第2阶·筑基", "第4阶·金丹"]}`）；
   `remove=True` 删除挂接并写 `{"removed": [职业名, null]}`。阶段以「第N阶·名称」记录（写入时的 position），阶段 / 职业改名后历史仍可读。
 - 修改职业 `kind`：对每个持有人调用 `apply_assignment` 同步主 / 副并写历史；会超出上限 → 409，整个 PATCH 不生效。
-- 上下文（D4 延伸）：涉及角色卡增加 `职业：剑修·筑基（2/9，瓶颈期）；副职业：丹师·一品（1/9）`；新段落 `【职业体系】`
+- 上下文按目标章初的职业时间线求值，不读取最新投影（详见[设定随剧情演变](./setting-progressions.md)）；D4 延伸：涉及角色卡增加 `职业：剑修·筑基（2/9，瓶颈期）；副职业：丹师·一品（1/9）`；新段落 `【职业体系】`
   （位于【相关组织】之后、【其他角色】之前）对涉及角色所挂的每个职业输出 `■ 剑修（主修）：练气 → 筑基 → …`，
   规则非空时附 `规则：<前 200 字>……`；未被涉及角色挂接的职业不出现。裁剪：关系之后、**相关组织之前**截断职业体系。
 - AI：`career.generate`（见下表）只产出草稿，与已有职业同名的 `conflict=true`（同批内重名在规范化时去掉并给 warning，
@@ -251,13 +254,13 @@ async def careers_reference(db, project_id) -> str   # 「剑修（主修）：�
   = `[{career_name, career_id, career_kind, role, stage_name, stage_id, stage_position, note, resolved, reason}]`
   （职业名精确匹配；`role` 取职业类别；阶段名对不上取第 1 阶并写 warning；超出主 1 副 3 → `resolved=false`）。
   `characters/with-relations` 的 `careers: [{career_id, stage_id?, note}]` 经 `assign_new(source="ai")` 写入，失败整体回滚。
-- 向导：`wizard.careers`（`resource_key = wizard:{pid}:careers`）删除全部职业（级联清掉挂接与历史）后写入，
+- 向导：`wizard.careers`（`resource_key = wizard:{pid}:careers`）先检查受影响职业挂接的剧情历史，无受保护历史时删除全部职业并写入，
   `done.result = {kind: "careers", items: CareerOut[], warnings}`；解析不到任何职业 → failed 且保留旧数据。
   角色向导在项目已有职业时要求每个角色输出 `careers: [{name, stage, role, note}]`，按名匹配后 `assign_new(source="wizard")`；
   职业对不上 / 超限 / 重复 → 忽略并写入 `done.result.warnings`，阶段对不上 → 第 1 阶 + warning；`done.result` 另含
   `assignments: AssignmentOut[]`。项目没有职业时提示词与写入完全不变（AC6）。
 - 项目级挂接列表 `GET /projects/{pid}/character-careers` → `AssignmentOut[]`（按角色、主职业在前；先校验项目归属，他人 404），供角色卡片汇总主 / 副职业一次取回，前端不得按职业逐个请求 `holders` 拼装。
-- 卡片 v2：见下方「卡片导入导出」的 v2 补充。
+- 卡片 v3：见上方「卡片导入导出」；职业结构兼容 v2。
 
 | kind | resource_key | 路由 | `done.result` |
 |---|---|---|---|

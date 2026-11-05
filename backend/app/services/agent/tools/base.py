@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError, NotFoundError
 from app.models import Base, Project
+from app.services.project_transfer.remap import RemapContext, setting_event_value, setting_payload
 from app.services.task_engine.registry import TaskContext
 
 ToolKind = Literal["read", "small", "delete", "task", "text", "external"]
@@ -287,6 +288,33 @@ FIELD_LABELS = {
     "parent_id": "上级组织",
     "stage_id": "职业阶段",
     "note": "备注",
+    "subject_kind": "设定主体类型",
+    "related_character_id": "关联角色",
+    "world_setting_id": "世界观",
+    "timeline_id": "设定时间线",
+    "baseline": "基础设定",
+    "baseline_status": "基础设定状态",
+    "legacy_compat_allowed": "旧历史兼容",
+    "revision": "版本",
+    "field_key": "设定字段",
+    "custom_field_id": "自定义字段",
+    "operation": "变化方式",
+    "value": "变化值",
+    "anchor_kind": "章节锚点类型",
+    "anchor_label": "章节锚点",
+    "boundary": "章节边界",
+    "sort_order": "同章节顺序",
+    "protection": "保护方式",
+    "source_change_id": "来源变化",
+    "source_content_hash": "来源正文摘要",
+    "active": "是否生效",
+    "superseded_by_id": "替代变化",
+    "reverted_at": "撤销时间",
+    "base_value": "基础值",
+    "label": "字段名称",
+    "is_present": "当前是否存在",
+    "expected_revision": "预期版本",
+    "edit_mode": "修改意图",
 }
 
 
@@ -301,6 +329,14 @@ def preview_diff(changes: list[dict], *, include_insert_sort: bool = False) -> l
             if "id" in change["pk"]:
                 inserted[(table, change["pk"]["id"])] = f"新增{table}:{counts[table]}"
 
+    class PreviewRemap(RemapContext):
+        def ref(self, table: str, old: Any, where: str) -> Any:
+            if isinstance(old, int) and not isinstance(old, bool):
+                return inserted.get((table, old), old)
+            return old
+
+    remap = PreviewRemap({})
+
     def normalized(table: str, row: dict | None) -> dict:
         if row is None:
             return {}
@@ -309,6 +345,11 @@ def preview_diff(changes: list[dict], *, include_insert_sort: bool = False) -> l
             target = next((fk.column.table.name for fk in column.foreign_keys), table if column.primary_key else None)
             if target is not None and column.name in result:
                 result[column.name] = inserted.get((target, result[column.name]), result[column.name])
+        # 与备份导入复用相同的类型化引用语义；只生成预览副本，不改持久化值。
+        if table == "setting_timelines" and "baseline" in result:
+            result["baseline"] = setting_payload(result["baseline"], remap)
+        if table == "setting_progressions" and "value" in result:
+            result["value"] = setting_event_value(result["value"], result.get("field_key"), remap)
         return result
 
     result = []
@@ -320,17 +361,31 @@ def preview_diff(changes: list[dict], *, include_insert_sort: bool = False) -> l
         for field in sorted(before.keys() | after.keys()):
             if field.startswith("_") or field in {"id", "project_id", "pair_low", "pair_high", "created_at"}:
                 continue
+            # 版本用于冲突判断，不作为读者可见的设定值；完整行仍由 guards 校验。
+            if table == "setting_timelines" and field == "revision":
+                continue
             if field == "sort" and change["before"] is None and not include_insert_sort:
                 continue
             if before.get(field) in (None, "", [], {}) and after.get(field) in (None, "", [], {}):
                 continue
             if before.get(field) != after.get(field):
+                old, new = before.get(field), after.get(field)
+                if (
+                    table == "setting_timelines"
+                    and field == "baseline"
+                    and isinstance(old, dict)
+                    and isinstance(new, dict)
+                ):
+                    missing = object()
+                    changed = {key for key in old.keys() | new.keys() if old.get(key, missing) != new.get(key, missing)}
+                    old = {key: value for key, value in old.items() if key in changed}
+                    new = {key: value for key, value in new.items() if key in changed}
                 result.append(
                     {
                         "field": f"{table}.{key}.{field}",
                         "label": FIELD_LABELS.get(field, field),
-                        "before": before.get(field),
-                        "after": after.get(field),
+                        "before": old,
+                        "after": new,
                     }
                 )
     return result

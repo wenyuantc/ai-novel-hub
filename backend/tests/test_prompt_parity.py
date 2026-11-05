@@ -331,3 +331,23 @@ def test_every_legacy_key_is_covered():
         if not k.startswith(("style.", "inspiration.", "book_import.", "agent."))
         and k not in {"wizard.continue", "relations.generate"}
     }
+
+
+@pytest.mark.parametrize("op", ["rewrite", "expand", "condense", "deslop", "continue"])
+def test_rewrite_setting_context_is_inserted_once(op):
+    kwargs = {"op": op, "selected": "旧正文", "before": "此前正文", "after": "此后正文"}
+    setting_context = "【本章有效设定】\n林远：练气境"
+    messages = new.build_rewrite_messages(**kwargs, setting_context=setting_context)
+
+    user = messages[-1]["content"]
+    assert user.count(setting_context) == 1
+    assert "此前正文" in user
+    assert "金丹境" not in user
+    if op != "continue":
+        assert "旧正文" in user and "此后正文" in user
+
+
+@pytest.mark.parametrize("op", ["rewrite", "expand", "condense", "deslop", "continue"])
+def test_rewrite_empty_setting_context_preserves_legacy_messages(op):
+    kwargs = {"op": op, "selected": "正文", "before": "前文", "after": "后文", "summary": "梗概"}
+    assert new.build_rewrite_messages(**kwargs, setting_context="  \n ") == old.build_rewrite_messages(**kwargs)

@@ -1,5 +1,9 @@
+import pytest
+from sqlalchemy import select
+
+from app.ai.prompts.registry import get_template
 from app.ai.providers import AIProviderError
-from app.models import Chapter
+from app.models import Chapter, Character, Project, PromptTemplateOverride, SettingProgression, SettingTimeline
 from tests.helpers import create_ai_config, create_project, parse_sse, register
 
 # 含 emoji 与 CJK 扩展 B 区生僻字（UTF-16 下各占 2 个码元），偏移按码点计
@@ -187,3 +191,114 @@ async def test_rewrite_error_logged(client, fake_llm):
     log = (await client.get(f"{url}/generation-logs")).json()[0]
     assert (log["kind"], log["status"], log["error"]) == ("deslop", "error", "模型调用失败：超时")
     assert (await client.get(url)).json()["content"] == CONTENT
+
+
+@pytest.mark.parametrize("op", ["rewrite", "expand", "condense", "deslop", "continue"])
+@pytest.mark.parametrize("legacy_override", [False, True], ids=["default", "legacy_override"])
+async def test_rewrite_uses_early_chapter_setting_and_selection_cast(app, client, fake_llm, op, legacy_override):
+    content = "夜雨😀𠀀中，陆无尘拔剑迎敌，风过长街。"
+    selected = "陆无尘拔剑迎敌"
+    start = content.index(selected)
+    end = start + len(selected)
+    chapter, url, rewrite = await _setup(client, content)
+    assert (await client.patch(url, json={"chapter_no": 5})).status_code == 200
+    base = f"/api/v1/projects/{chapter['project_id']}"
+    later = await client.post(f"{base}/chapters", json={"title": "晋升", "chapter_no": 20})
+    assert later.status_code == 201, later.text
+
+    # 配角只在选区／邻近正文里出现，不在梗概、手选角色或前一章里出现。
+    character = await client.post(
+        f"{base}/characters", json={"name": "陆无尘", "role_type": "配角", "current_state": "金丹后期"}
+    )
+    assert character.status_code == 201, character.text
+    character_id = character.json()["id"]
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Character, character_id)
+        timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.subject_kind == "character", SettingTimeline.character_id == character_id
+            )
+        )
+        if timeline is None:
+            timeline = SettingTimeline(project_id=chapter["project_id"], subject_kind="character", character_id=row.id)
+            db.add(timeline)
+        timeline.baseline = {
+            key: getattr(row, key)
+            for key in ("profile", "appearance", "personality", "background", "age", "gender", "life_status")
+        } | {"current_state": "练气中期"}
+        await db.flush()
+        db.add(
+            SettingProgression(
+                timeline_id=timeline.id,
+                field_key="current_state",
+                operation="replace",
+                value="金丹后期",
+                anchor_kind="chapter",
+                chapter_id=later.json()["id"],
+                boundary="end",
+                source="manual",
+                protection="manual",
+            )
+        )
+        if legacy_override:
+            project = await db.get(Project, chapter["project_id"])
+            template = get_template("chapter.rewrite")
+            # 模拟升级前已保存的覆盖，不能通过当前 API 再保存缺少锁定变量的模板。
+            old_user = template.user.replace("{{ setting_context }}", "") + "\n旧覆盖正文标记"
+            db.add(
+                PromptTemplateOverride(
+                    user_id=project.user_id,
+                    key="chapter.rewrite",
+                    system=template.system,
+                    user=old_user,
+                    base_system=template.system,
+                    base_user=old_user,
+                    base_fingerprint="old",
+                )
+            )
+        await db.commit()
+
+    fake_llm.push("改写结果")
+    payload = {"op": op, "start": end if op == "continue" else start, "end": end}
+    resp = await client.post(rewrite, json=payload)
+    assert resp.status_code == 200, resp.text
+    event, done = parse_sse(resp.text)[-1]
+    assert event == "done"
+    assert (done["start"], done["end"], done["original"]) == (
+        payload["start"],
+        end,
+        "" if op == "continue" else selected,
+    )
+    prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "【本章有效设定】" in prompt
+    assert "■ 陆无尘" in prompt and "练气中期" in prompt
+    assert "金丹后期" not in prompt
+    assert "冷峻克制" in prompt
+    if legacy_override:
+        assert "旧覆盖正文标记" in prompt
+
+    # 同一片段移到晋升之后，必须真的应用第20章的事件，不能始终返回基础值。
+    assert (await client.patch(url, json={"chapter_no": 21})).status_code == 200
+    fake_llm.push("改写结果")
+    after_promotion = await client.post(rewrite, json=payload)
+    assert after_promotion.status_code == 200
+    assert parse_sse(after_promotion.text)[-1][0] == "done"
+    later_prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "■ 陆无尘" in later_prompt and "金丹后期" in later_prompt
+    assert "练气中期" not in later_prompt
+
+
+async def test_rewrite_setting_context_obeys_the_model_context_budget(app, client, fake_llm):
+    app.state.settings.context_char_budget = 1000
+    chapter, _, rewrite = await _setup(client)
+    base = f"/api/v1/projects/{chapter['project_id']}"
+    world = await client.post(f"{base}/world", json={"title": "浩瀚星海", "content": "浩瀚" * 2500})
+    assert world.status_code == 201, world.text
+
+    fake_llm.push("改写结果")
+    resp = await client.post(rewrite, json={"op": "rewrite", "start": START, "end": END})
+    assert resp.status_code == 200
+    prompt = fake_llm.calls[-1]["messages"][-1]["content"]
+    marker = "【本章有效设定】"
+    assert marker in prompt
+    assert len(marker + prompt.split(marker, 1)[1]) <= 1000

@@ -43,7 +43,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   `careers`、`career_stages`、`character_careers`、`career_history`、`outlines`、`chapters`（`plan_id` deferred，`style_id` → `style_ref`）、
   `chapter_plans`、`chapter_characters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`generation_logs`（可选；`ai_config_id` /
   `task_id` 不导出）、`chapter_versions`（可选）、`chapter_analyses`（`task_id` 不导出）、`analysis_changes`、`story_memories`、`kb_settings`、
-  `kb_documents`（`status` / `chunk_count` 重算）、`outline_snapshots`（可选）、`inspiration_sessions`（可选；`project_id` / `converted_project_id`
+  `kb_documents`（`status` / `chunk_count` 重算）、`setting_timelines`、`setting_text_fields`、`setting_progressions`、`outline_snapshots`（可选）、`inspiration_sessions`（可选；`project_id` / `converted_project_id`
   指向本项目的改写为新项目，指向其他项目的置空）。
 - **用户级表不登记、也不写进 `NOT_EXPORTED`**（`skills`、`skill_references`、`mcp_plugins`，迁移 `0019`，见 [skills-mcp.md](./skills-mcp.md)；
   同类的还有 `ai_configs`、`prompt_overrides`、`book_imports`）：反射测试只沿「引用方 → 被引用方」方向从 `projects` 扩散，这三张表只引用 `users` /
@@ -57,6 +57,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   | `chapter_plans.character_ids` | 角色 id 列表，去掉对应不上的 |
   | `analysis_changes.target / before / after` | 递归改写 `ANALYSIS_ID_KEYS`（`character_id` / `a_id` / `b_id` → 角色、`relationship_id`、`type_id`、`career_id`、`stage_id`、`organization_id`、`foreshadow_id`）与 `character_ids` 列表；以 `writeback_service` 实际写入的键为准 |
   | `analysis_changes.field_key` | `char:{cid}:x`、`rel:{rid}:x`、`relpair:{low}:{high}`（改写后重新取 min/max）、`career:{cid}:{career_id}`、`org:{org_id}:{cid}`、`fs:{fid}:x`；对应不上 → 空串 |
+  | `setting_timelines.baseline` / `setting_progressions.value` | `setting_payload` 按语义重映射嵌套角色、关系类型、职业阶段等 ID；`stage_id` 裸整数依据字段语义映射，不能将普通整数当 ID。事件来源须与同项目主体一致。 |
   | `chapter_analyses.foreshadow_candidates` | 每项 `ref_id`（伏笔 id） |
   | `projects.reading_progress` | `chapter_id` → 章节；对应不上 / 结构不对 → 整个进度清空为 `{}`（计入警告「阅读进度…」），`ratio` 限制在 [0, 1]。项目先于章节插入，所以 importer 的 `_project` 先跳过 `PROJECT_RULE.json_refs` 的列，全部表插入并回填后由 `_project_refs` 改写（显式写回 `updated_at`）；预览的 `_dry_run_missing` 也会检查项目行 |
   | `outline_snapshots.data` | outlines / plans 的 `id`、plans 的 `outline_id` / `character_ids`、links 的三个 id；快照里已不存在的大纲 / 细纲分配**大于导入时该表最大 id** 的新 id（同一旧 id 得到同一新 id），指向已不存在章节的 link 去掉 |
@@ -79,14 +80,14 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 ---
 
-## 场景：备份格式 v1 与导出
+## 场景：备份格式 v2 与导出
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 1, exported_at, app_schema: "0030"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 2, exported_at, app_schema: "0031"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
-- 0024新增的Project生命周期/删除者/协调字段全部在PROJECT_RULE.exclude，导出不携带、导入总是正常作品；不因排除运行状态而提升备份格式v1。备份独立流会话必须重新检查项目生命周期，不能因软删行仍存在就继续导出回收站正文；恶意备份注入删除/协调状态需回归测试。
+- 0024新增的Project生命周期/删除者/协调字段全部在PROJECT_RULE.exclude，导出不携带、导入总是正常作品；当时不因排除运行状态提升备份格式。备份独立流会话必须重新检查项目生命周期，不能因软删行仍存在就继续导出回收站正文；恶意备份注入删除/协调状态需回归测试。
 - 可选顶层 `cover: {mime_type, data: base64} | null`；无封面字段的 v1 旧备份正常导入。封面只占核心组估算字节，计入 base64 编码后的大小。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。
 - 流式：路由校验归属后 `db.close()`，生成器用自己的 session，按注册表逐表查询，有 id 的表按 id 键集分页（每批 500 行）。
@@ -111,7 +112,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 |---|---|
 | 非 UTF-8 / 非 JSON / 非对象 | `备份文件不是 UTF-8 编码的 JSON` / `备份文件不是合法的 JSON：…` / `备份文件格式不正确：应为 JSON 对象` |
 | format 不符 | `不是有效的项目备份文件（format 应为 ainovel.project）` |
-| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v1），请升级后再导入` |
+| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v2），请升级后再导入` |
 | 嵌套 > 40 层 | `备份文件嵌套层级过深（上限 40 层）` |
 | 缺少 project / tables | `备份文件格式不正确：缺少 project` / `…缺少 tables` |
 | 行字段缺失（NOT NULL 且无默认）/ 类型不符 / 超长 / id 重复 | `备份文件校验失败：…`，errors 如 `角色第 1 行缺少字段 name`、`角色第 1 行字段 name 超过长度上限 100` |
@@ -126,7 +127,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - 导入（单事务）：风格 → 项目 → 按 RULES 顺序插入 → deferred 回填（显式写回 `updated_at` 原值）→ 知识库 `kb_index_service.chunk_document`
   （从 text 重新分块 + 关键词检索单元，文档状态 `ready_keyword_only`，更新时间改回原值）→ `memory_service.index_memories`（保留钉住 / 屏蔽 / content_key）
-  → commit → 导入者有默认向量模型时 `kb_service.start_rebuild`（`task_id`，失败只记警告）。
+  → 同事务 `materialize_project` 校验并重算时间线投影 → commit → 导入者有默认向量模型时 `kb_service.start_rebuild`（`task_id`，失败只记警告）。
 - 风格：预设按 `preset_key`（缺失 → 复制为自定义风格 + 警告）；自定义风格在导入者库里有**名称与全部字段都相同**的 → 复用，否则新建
   （同名不同内容 → `名称（导入）`、`（导入2）`…）。
 - 全局关系类型按 `(role_a, role_b)` 对应；找不到 → 新建为项目自定义类型 + 警告 `预置关系类型「A/B」在当前版本中不存在，已改为项目自定义类型`。
@@ -134,8 +135,9 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - 章节 `status = generating` 导入为 `draft`（没有对应任务）。
 - 失败：插入阶段数据库报错 → 回滚，400 `导入失败：组织（organizations）第 a–b 行附近出错：…`，响应体带 `table` / `row_start` / `row_end`
   （每批 500 行 flush，行号精确到批）。
+- v1 备份导入时以现有档案建立 `legacy_unverified` 基线，不重放不完整旧历史。v2 全量携带基线、字段、有效/失效事件及仅被历史引用的关系类型；校验来源与主体、JSON 引用和生命周期，失败整笔回滚。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。
-  例外：封面不进入通用表注册表，而是新增可选顶层字段，保持 v1；不能用此例外跳过其他新增表的格式迁移评估。
+  例外：封面不进入通用表注册表，而是新增可选顶层字段，曾保持原格式版本；不能用此例外跳过其他新增表的格式迁移评估。
 
 ### 必需的测试
 

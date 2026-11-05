@@ -44,6 +44,7 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 from app.models.system_settings import SystemSettings
@@ -100,6 +101,9 @@ __all__ = [
     "RelationshipHistory",
     "RelationshipType",
     "RetrievalChunk",
+    "SettingProgression",
+    "SettingTextField",
+    "SettingTimeline",
     "Skill",
     "SkillReference",
     "StoryMemory",

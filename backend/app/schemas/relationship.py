@@ -53,6 +53,11 @@ class RelationshipCreate(TypeRef):
     description: str = ""
     source: ApiRelationSource = "manual"
     chapter_no: int | None = Field(default=None, ge=1)
+    chapter_id: int | None = Field(default=None, ge=1)
+    anchor_kind: Literal["chapter", "planned"] | None = None
+    boundary: Literal["start", "end"] = "start"
+    # 0 表示预期人物对的时间线尚不存在；正数对应已有时间线的版本。
+    expected_revision: int | None = Field(default=None, ge=0)
     note: str = Field(default="", max_length=200)
 
 
@@ -69,6 +74,11 @@ class RelationshipUpdate(BaseModel):
     status: RelationStatus | None = None
     description: str | None = None
     chapter_no: int | None = Field(default=None, ge=1)
+    chapter_id: int | None = Field(default=None, ge=1)
+    anchor_kind: Literal["chapter", "planned"] | None = None
+    boundary: Literal["start", "end"] = "start"
+    edit_mode: Literal["baseline", "progression"] | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
     note: str = Field(default="", max_length=200)
 
 

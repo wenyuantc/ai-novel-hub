@@ -53,6 +53,7 @@ import ChapterStyleSetting from '../../components/chapter/ChapterStyleSetting'
 import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
 import ContextPreviewPanel from '../../components/chapter/ContextPreviewPanel'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
+import SettingContextPreview from '../../components/chapter/SettingContextPreview'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
 import SkillSelect from '../../components/skills/SkillSelect'
 import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
@@ -907,6 +908,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               disabled={editorLocked}
               onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
             />
+            <SettingContextPreview projectId={pid} chapterId={chapter.id} />
             <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
               <Input.TextArea
                 value={displayContent}

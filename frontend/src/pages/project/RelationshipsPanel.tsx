@@ -33,7 +33,7 @@ import { characterApi } from '../../api/story'
 import type { Character, RelationCategory, Relationship, RelationStatus } from '../../api/types'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import RelationEditModal from '../../components/relations/RelationEditModal'
-import RelationHistoryModal from '../../components/relations/RelationHistoryModal'
+import RelationHistoryModal, { RelationPairHistory } from '../../components/relations/RelationHistoryModal'
 import RelationTypeManager from '../../components/relations/RelationTypeManager'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
@@ -67,6 +67,9 @@ export default function RelationshipsPanel() {
   const [editing, setEditing] = useState<Relationship | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [history, setHistory] = useState<Relationship | null>(null)
+  const [pairHistoryOpen, setPairHistoryOpen] = useState(false)
+  const [historyA, setHistoryA] = useState<number | undefined>()
+  const [historyB, setHistoryB] = useState<number | undefined>()
   const [typesOpen, setTypesOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
 
@@ -167,7 +170,7 @@ export default function RelationshipsPanel() {
                 <Button type="link" size="small" onClick={() => setHistory(r)}>
                   历史
                 </Button>
-                <Popconfirm title="删除该关系？" okText="删除" cancelText="取消" onConfirm={() => handleDelete(r)}>
+                <Popconfirm title="删除整份关系资料？" description="将同时删除全部剧情变化和操作记录，无法恢复。" okText="删除" cancelText="取消" onConfirm={() => handleDelete(r)}>
                   <Button type="link" size="small" danger disabled={!canEdit}>
                     删除
                   </Button>
@@ -189,6 +192,7 @@ export default function RelationshipsPanel() {
           {canUseAI && (<Button icon={<RobotOutlined />} disabled={characters.length < 2} title={characters.length < 2 ? '至少需要两名已有角色' : undefined} onClick={() => setGenerateOpen(true)}>
             AI 生成关系
           </Button>)}
+          <Button onClick={() => setPairHistoryOpen(true)}>按人物查看历史</Button>
           <Button icon={<SettingOutlined />} onClick={() => setTypesOpen(true)}>
             关系类型
           </Button>
@@ -240,6 +244,16 @@ export default function RelationshipsPanel() {
         onClose={() => setGenerateOpen(false)}
       />)}
       {history && <RelationHistoryModal projectId={pid} relationship={history} onClose={() => setHistory(null)} />}
+      <Modal open={pairHistoryOpen} title="按人物查看关系历史" footer={null} width={680} onCancel={() => { setPairHistoryOpen(false); setHistoryA(undefined); setHistoryB(undefined) }} destroyOnHidden>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Typography.Text type="secondary">选择两位角色，可查看已结束关系的剧情历史。</Typography.Text>
+          <Select aria-label="选择第一位角色" showSearch optionFilterProp="label" placeholder="第一位角色" value={historyA} style={{ width: '100%' }}
+            options={characters.filter((c) => c.id !== historyB).map((c) => ({ value: c.id, label: c.name }))} onChange={setHistoryA} />
+          <Select aria-label="选择第二位角色" showSearch optionFilterProp="label" placeholder="第二位角色" value={historyB} style={{ width: '100%' }}
+            options={characters.filter((c) => c.id !== historyA).map((c) => ({ value: c.id, label: c.name }))} onChange={setHistoryB} />
+          {historyA && historyB && <RelationPairHistory key={`${pid}:${historyA}:${historyB}`} projectId={pid} pair={[historyA, historyB]} />}
+        </Space>
+      </Modal>
       <RelationTypeManager
         projectId={pid}
         open={typesOpen}

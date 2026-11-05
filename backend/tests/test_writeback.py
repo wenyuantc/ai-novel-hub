@@ -1,5 +1,8 @@
 """分析回写设定：自动写入与待确认分流、名字对不上只提示、撤销与冲突、更晚章节优先、单条失败。"""
 
+from sqlalchemy import select
+
+from app.models import SettingProgression, SettingTimeline
 from tests.helpers import analysis_json, create_ai_config, create_project, register, run_task
 
 
@@ -77,6 +80,18 @@ def _by(changes, kind, **match):
     return [c for c in changes if c["kind"] == kind and all(c["target"].get(k) == v for k, v in match.items())]
 
 
+async def _edit_source_event(app, client, base, change, value):
+    async with app.state.sessionmaker() as db:
+        event = await db.scalar(select(SettingProgression).where(SettingProgression.source_change_id == change["id"]))
+        timeline = await db.get(SettingTimeline, event.timeline_id)
+        event_id, timeline_id, revision = event.id, timeline.id, timeline.revision
+    response = await client.patch(
+        f"{base}/setting-timelines/{timeline_id}/progressions/{event_id}",
+        json={"expected_revision": revision, "value": value},
+    )
+    assert response.status_code == 200, response.text
+
+
 async def test_writeback_auto_pending_and_unmatched(app, client, fake_llm):
     """AC4：常规变化自动写入（来源 analysis + 章节号），重大变化待确认，名字对不上只提示。"""
     base, c, rel, career, stages, org, chapters = await _world(client)
@@ -148,10 +163,11 @@ async def test_writeback_auto_pending_and_unmatched(app, client, fake_llm):
     assert resp.status_code == 200 and resp.json()["status"] == "reverted"
     assert (await client.get(f"{base}/relationships", params={"character_id": c["王五"]["id"]})).json() == []
 
-    # 重新分析同一章：结果不变 → 不生成重复条目（幂等）
+    # 重跑同一章需转移来源；旧来源不能撤销新结果。
     again = await _analyze(client, fake_llm, chapters[3], **CHANGES)
     kinds = sorted((x["kind"], x["status"]) for x in again)
-    assert ("character_state", "applied") not in kinds and ("career_stage", "applied") not in kinds
+    assert ("character_state", "applied") in kinds and ("career_stage", "applied") in kinds
+    assert (await client.post(f"/api/v1/analysis-changes/{state['id']}/revert")).status_code == 409
     assert ("relationship_create", "pending") in kinds  # 关系已被撤销，重新进入待确认
 
 
@@ -164,11 +180,12 @@ async def test_reject_and_confirm_rechecks(app, client, fake_llm):
     assert resp.status_code == 200 and resp.json()["status"] == "rejected" and resp.json()["resolved_at"]
     assert (await client.get(f"{base}/characters/{c['苏晚']['id']}")).json()["life_status"] == "alive"
     # 确认前关系已被手动建立 → 409
-    await client.post(
+    manual = await client.post(
         f"{base}/relationships", json={"a_id": c["林远"]["id"], "b_id": c["王五"]["id"], "role_a": "朋友"}
     )
+    assert manual.status_code == 201, manual.text
     resp = await client.post(f"/api/v1/analysis-changes/{create['id']}/confirm")
-    assert resp.status_code == 409 and resp.json()["detail"] == "这两个角色之间已有关系"
+    assert resp.status_code == 409 and resp.json()["detail"] == "该项对应的设定已被修改，无法确认"
     detail = (await client.get(f"/api/v1/analyses/{create['analysis_id']}")).json()
     assert next(x for x in detail["changes"] if x["id"] == create["id"])["status"] == "pending"
 
@@ -203,7 +220,7 @@ async def test_revert_and_conflict(app, client, fake_llm):
     assert resp.status_code == 409 and resp.json()["detail"] == "只能撤销已写入的条目"
 
     # 状态已被手动修改 → 撤销被拒绝
-    await client.patch(f"{base}/relationships/{rel['id']}", json={"status": "complicated"})
+    await _edit_source_event(app, client, base, status, "complicated")
     resp = await client.post(f"/api/v1/analysis-changes/{status['id']}/revert")
     assert resp.status_code == 409 and resp.json()["detail"] == "该项已被后续修改，无法撤销"
 
@@ -221,7 +238,7 @@ async def test_revert_and_conflict(app, client, fake_llm):
 
 
 async def test_later_chapter_wins(app, client, fake_llm):
-    """AC5：先分析第 5 章，再重新分析第 3 章，第 3 章不覆盖第 5 章写入的状态，记为已跳过。"""
+    """先分析第 5 章再补录第 3 章，两处均保留且最新状态遵循故事顺序。"""
     base, c, rel, career, stages, org, chapters = await _world(client)
     ch5 = await _analyze(
         client,
@@ -239,18 +256,20 @@ async def test_later_chapter_wins(app, client, fake_llm):
         relationship_changes=[{"a": "林远", "b": "张三", "intimacy": 20, "description": "心生嫌隙"}],
     )
     by_field = {(x["kind"], x["target"].get("field")): x for x in ch3}
-    assert by_field[("character_state", None)]["status"] == "skipped"
-    assert by_field[("character_state", None)]["reason"] == "已有第 5 章的更新"
-    assert by_field[("relationship_update", "intimacy")]["status"] == "skipped"
+    assert by_field[("character_state", None)]["status"] == "applied"
+    assert by_field[("character_state", None)]["before"] == "初入山门"
+    assert by_field[("relationship_update", "intimacy")]["status"] == "applied"
+    assert by_field[("relationship_update", "intimacy")]["before"] == 60
     # 第 5 章没写过的字段照常写入
     assert by_field[("relationship_update", "description")]["status"] == "applied"
     assert (await client.get(f"{base}/characters/{c['林远']['id']}")).json()["current_state"] == "金丹大成"
     current = next(r for r in (await client.get(f"{base}/relationships")).json() if r["id"] == rel["id"])
     assert (current["intimacy"], current["description"]) == (90, "心生嫌隙")
 
-    # 撤销第 5 章的写入后，第 3 章的重新分析可以生效
+    # 撤销第 5 章的写入后，第 3 章先前补录的变化自然成为最新值。
     state5 = next(x for x in ch5 if x["kind"] == "character_state")
     assert (await client.post(f"/api/v1/analysis-changes/{state5['id']}/revert")).status_code == 200
+    assert (await client.get(f"{base}/characters/{c['林远']['id']}")).json()["current_state"] == "重伤"
     ch3b = await _analyze(client, fake_llm, chapters[3], character_changes=[{"name": "林远", "current_state": "重伤"}])
     assert [x["status"] for x in ch3b] == ["applied"]
 
@@ -288,12 +307,16 @@ async def test_career_and_org_skips(app, client, fake_llm):
 async def test_savepoint_failure_marks_failed(app, client, fake_llm, monkeypatch):
     base, c, rel, career, stages, org, chapters = await _world(client)
     from app.core.errors import BadRequestError
-    from app.services import organization_service
+    from app.services import setting_progression_service
 
-    async def boom(*args, **kwargs):
-        raise BadRequestError("成员写入失败")
+    original = setting_progression_service.materialize_timeline
 
-    monkeypatch.setattr(organization_service, "apply_membership", boom)
+    async def boom(db, timeline):
+        if timeline.subject_kind == "membership":
+            raise BadRequestError("成员写入失败")
+        await original(db, timeline)
+
+    monkeypatch.setattr(setting_progression_service, "materialize_timeline", boom)
     changes = await _analyze(
         client,
         fake_llm,
@@ -310,22 +333,19 @@ async def test_savepoint_failure_marks_failed(app, client, fake_llm, monkeypatch
 
 
 async def test_revert_conflicts_for_every_kind(app, client, fake_llm):
-    """撤销冲突检测：角色状态 / 境界 / 组织成员被手动改过后撤销一律 409，且不改动当前值。"""
+    """人工编辑原事件后，旧分析不得撤销覆盖角色、职业和组织成员事件。"""
     base, c, rel, career, stages, org, chapters = await _world(client)
     changes = await _analyze(client, fake_llm, chapters[3], **CHANGES)
     state = _by(changes, "character_state", character_id=c["林远"]["id"])[0]
     stage = _by(changes, "career_stage")[0]
     member = _by(changes, "org_membership")[0]
 
-    await client.patch(f"{base}/characters/{c['林远']['id']}", json={"current_state": "伤愈"})
-    assignment = (await client.get(f"{base}/characters/{c['林远']['id']}/careers")).json()[0]
-    resp = await client.patch(
-        f"{base}/characters/{c['林远']['id']}/careers/{assignment['id']}", json={"stage_id": stages["练气"]}
+    await _edit_source_event(app, client, base, state, "伤愈")
+    await _edit_source_event(app, client, base, stage, stages["练气"])
+    await _edit_source_event(
+        app, client, base, member,
+        {"exists": True, "state": {"position": "内门弟子", "status": "active", "note": ""}},
     )
-    assert resp.status_code == 200, resp.text
-    m = (await client.get(f"{base}/characters/{c['李四']['id']}/memberships")).json()[0]
-    resp = await client.patch(f"{base}/organizations/{org['id']}/members/{m['id']}", json={"position": "内门弟子"})
-    assert resp.status_code == 200, resp.text
 
     for item in (state, stage, member):
         resp = await client.post(f"/api/v1/analysis-changes/{item['id']}/revert")
@@ -337,7 +357,7 @@ async def test_revert_conflicts_for_every_kind(app, client, fake_llm):
 
 
 async def test_confirm_rejected_when_later_chapter_applied(app, client, fake_llm):
-    """待确认条目确认时重新校验「更晚章节优先」：第 5 章已写入同一字段 → 409，条目仍为待确认。"""
+    """待确认期间主体版本改变时拒绝过期确认；重新分析后仍可补录早章。"""
     base, c, rel, career, stages, org, chapters = await _world(client)
     ch3 = await _analyze(client, fake_llm, chapters[3], character_changes=[{"name": "苏晚", "life_status": "dead"}])
     pending3 = _by(ch3, "life_status")[0]
@@ -347,10 +367,14 @@ async def test_confirm_rejected_when_later_chapter_applied(app, client, fake_llm
     resp = await client.post(f"/api/v1/analysis-changes/{pending5['id']}/confirm")
     assert resp.status_code == 200
     resp = await client.post(f"/api/v1/analysis-changes/{pending3['id']}/confirm")
-    assert resp.status_code == 409 and resp.json()["detail"] == "已有第 5 章的更新，无法确认"
+    assert resp.status_code == 409 and resp.json()["detail"] == "该项对应的设定已被修改，无法确认"
     assert (await client.get(f"{base}/characters/{c['苏晚']['id']}")).json()["life_status"] == "missing"
     detail = (await client.get(f"/api/v1/analyses/{pending3['analysis_id']}")).json()
     assert next(x for x in detail["changes"] if x["id"] == pending3["id"])["status"] == "pending"
+    fresh = await _analyze(client, fake_llm, chapters[3], character_changes=[{"name": "苏晚", "life_status": "dead"}])
+    fresh_id = _by(fresh, "life_status")[0]["id"]
+    assert (await client.post(f"/api/v1/analysis-changes/{fresh_id}/confirm")).status_code == 200
+    assert (await client.get(f"{base}/characters/{c['苏晚']['id']}")).json()["life_status"] == "missing"
 
 
 async def test_savepoint_rolls_back_partial_write(app, client, fake_llm, monkeypatch):
@@ -358,15 +382,20 @@ async def test_savepoint_rolls_back_partial_write(app, client, fake_llm, monkeyp
     base, c, rel, career, stages, org, chapters = await _world(client)
     from app.core.errors import BadRequestError
     from app.models import Character
-    from app.services import organization_service
+    from app.services import setting_progression_service
 
-    async def half_then_fail(db, org_, character, values):
+    original = setting_progression_service.materialize_timeline
+
+    async def half_then_fail(db, timeline):
+        await original(db, timeline)
+        if timeline.subject_kind != "membership":
+            return
         lin = await db.get(Character, c["林远"]["id"])
         lin.current_state = "脏数据"
         await db.flush()
         raise BadRequestError("成员写入失败")
 
-    monkeypatch.setattr(organization_service, "apply_membership", half_then_fail)
+    monkeypatch.setattr(setting_progression_service, "materialize_timeline", half_then_fail)
     changes = await _analyze(
         client,
         fake_llm,

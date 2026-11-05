@@ -354,6 +354,8 @@ class Relationship(TimestampMixin, Base):
     # normal / broken / past / complicated
     status: Mapped[str] = mapped_column(String(16), default="normal", server_default="normal", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 最新时间线中关系不存在时保留载体，以免已有关联审计历史因 CASCADE 丢失。
+    is_present: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
 
 
 class RelationshipHistory(TimestampMixin, Base):

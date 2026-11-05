@@ -1,16 +1,17 @@
-"""角色 / 组织卡片（ainovel.cards v2，兼容导入 v1）。卡片按名称关联，不含任何内部 ID。
+"""角色 / 组织卡片（ainovel.cards v3，兼容导入 v1、v2）。卡片按名称关联，不含任何内部 ID。
 
 v2 = v1 + 角色的职业挂接（characters[].careers）+ 所涉职业的完整定义（顶层 careers）。
+v3 = v2 + 角色自定义文本字段的最新快照（characters[].custom_text_fields）。
 """
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 CARD_FORMAT = "ainovel.cards"
-CARD_VERSION = 2
-# 可导入的版本（v1 没有职业）
-SUPPORTED_CARD_VERSIONS = (1, 2)
+CARD_VERSION = 3
+# 可导入的版本（v1 没有职业，v1/v2 没有自定义文本字段）
+SUPPORTED_CARD_VERSIONS = (1, 2, 3)
 # 导入数据大小上限（序列化后的 UTF-8 字节数）
 MAX_CARD_BYTES = 2 * 1024 * 1024
 
@@ -38,6 +39,18 @@ class CardCareer(BaseModel):
     stages: list[CardStage] = Field(min_length=1, max_length=100)
 
 
+class CardTextField(BaseModel):
+    """名称与文本快照；内部字段 ID 和故事位置不随卡片携带。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    value: str = ""
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_name(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
 class CardCharacter(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     aliases: list[str] = Field(default_factory=list, max_length=50)
@@ -51,6 +64,15 @@ class CardCharacter(BaseModel):
     current_state: str = ""
     life_status: str = "alive"
     careers: list[CardCareerAssignment] = Field(default_factory=list, max_length=10)
+    custom_text_fields: list[CardTextField] = Field(default_factory=list)
+
+    @field_validator("custom_text_fields")
+    @classmethod
+    def unique_text_field_names(cls, value: list[CardTextField]) -> list[CardTextField]:
+        names = [item.name for item in value]
+        if len(set(names)) != len(names):
+            raise ValueError("同一角色的自定义字段名称不能重复")
+        return value
 
 
 class CardMember(BaseModel):
@@ -90,6 +112,25 @@ class CardFile(BaseModel):
     organizations: list[CardOrganization] = Field(default_factory=list, max_length=500)
     relationships: list[CardRelationship] = Field(default_factory=list, max_length=5000)
     careers: list[CardCareer] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_unknown_v1_v2_fields(cls, data: Any) -> Any:
+        """旧版没有此字段，保持原先忽略未知键的行为。"""
+        if not isinstance(data, dict) or isinstance(data.get("version"), bool) or data.get("version") not in (1, 2):
+            return data
+        characters = data.get("characters")
+        if not isinstance(characters, list):
+            return data
+        return {
+            **data,
+            "characters": [
+                {key: val for key, val in item.items() if key != "custom_text_fields"}
+                if isinstance(item, dict)
+                else item
+                for item in characters
+            ],
+        }
 
 
 class CardExportRequest(BaseModel):

@@ -15,18 +15,16 @@ import {
   Select,
   Space,
   Spin,
-  Table,
-  Tag,
   Tree,
   Typography,
 } from 'antd'
 import type { DataNode } from 'antd/es/tree'
 import { useCallback, useMemo, useState } from 'react'
 import { errorMessage } from '../../api/client'
-import { MEMBER_STATUS, memberApi, memberStatusLabel, organizationApi } from '../../api/organizations'
-import { characterApi } from '../../api/story'
-import type { Member, MemberStatus, Organization, OrganizationInput } from '../../api/types'
+import { organizationApi } from '../../api/organizations'
+import type { Organization, OrganizationInput } from '../../api/types'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
+import { OrganizationMembershipsTab } from '../../components/entities/CharacterMembershipsTab'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
@@ -43,15 +41,6 @@ interface OrgFormValues {
   description: string
   sort: number | null
 }
-
-interface MemberFormValues {
-  character_id: number
-  position: string
-  status: MemberStatus
-  note: string
-}
-
-const STATUS_OPTIONS = (Object.keys(MEMBER_STATUS) as MemberStatus[]).map((k) => ({ value: k, label: MEMBER_STATUS[k].label }))
 
 function toTreeData(nodes: OrgTreeNode<Organization>[]): DataNode[] {
   return nodes.map((n) => ({
@@ -77,8 +66,6 @@ export default function OrganizationsPanel() {
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
   const { data: orgs = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
-  const charLoader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: characters = [] } = useLoader(charLoader, { projectId: pid, resources: ['organizations', 'characters'] })
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [editing, setEditing] = useState<Organization | null>(null)
   const [orgOpen, setOrgOpen] = useState(false)
@@ -201,11 +188,10 @@ export default function OrganizationsPanel() {
             <div style={splitPane(480)}>
               {selected ? (
                 <OrgDetail
-                  key={selected.id}
+                  key={`${pid}:${selected.id}`}
                   projectId={pid}
                   org={selected}
                   orgs={orgs}
-                  characters={characters}
                   onEdit={() => openOrg(selected)}
                   onDelete={() => void handleDeleteOrg(selected)}
                   onMembersChanged={reload}
@@ -288,75 +274,15 @@ interface DetailProps {
   projectId: number
   org: Organization
   orgs: Organization[]
-  characters: { id: number; name: string }[]
   onEdit: () => void
   onDelete: () => void
   onMembersChanged: () => void
 }
 
-function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembersChanged }: DetailProps) {
-  const { canEdit, canEditNow } = useProjectAccess(projectId)
-  const { message } = App.useApp()
-  const loader = useCallback(() => memberApi.list(projectId, org.id), [projectId, org.id])
-  const { data: members = [], loading, reload } = useLoader(loader, { projectId, resources: ['organizations', 'characters'] })
-  const [editing, setEditing] = useState<Member | null>(null)
-  const [open, setOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<MemberFormValues>()
+function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged }: DetailProps) {
+  const { canEdit } = useProjectAccess(projectId)
   const parent = orgs.find((o) => o.id === org.parent_id)
 
-  const openMember = (m: Member | null) => {
-    setEditing(m)
-    form.setFieldsValue(
-      m
-        ? { character_id: m.character_id, position: m.position, status: m.status as MemberStatus, note: m.note }
-        : { character_id: undefined, position: '', status: 'active', note: '' },
-    )
-    setOpen(true)
-  }
-
-  const changed = () => {
-    reload()
-    onMembersChanged()
-  }
-
-  const handleSave = async () => {
-    if (!canEditNow()) return
-    const v = await form.validateFields()
-    if (!canEditNow()) return
-    setSaving(true)
-    try {
-      const body = { position: v.position?.trim() ?? '', status: v.status, note: v.note ?? '' }
-      if (!canEditNow()) return
-      if (editing) await memberApi.update(projectId, org.id, editing.id, body)
-      else await memberApi.create(projectId, org.id, { character_id: v.character_id, ...body })
-      if (!canEditNow()) return
-      message.success('已保存')
-      setOpen(false)
-      changed()
-    } catch (err) {
-      if (!canEditNow()) return
-      message.error(errorMessage(err))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleRemove = async (m: Member) => {
-    if (!canEditNow()) return
-    try {
-      if (!canEditNow()) return
-      await memberApi.remove(projectId, org.id, m.id)
-      if (!canEditNow()) return
-      message.success('已移除')
-      changed()
-    } catch (err) {
-      if (!canEditNow()) return
-      message.error(errorMessage(err))
-    }
-  }
-
-  const memberIds = new Set(members.map((m) => m.character_id))
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Card
@@ -396,79 +322,9 @@ function OrgDetail({ projectId, org, orgs, characters, onEdit, onDelete, onMembe
           </Descriptions.Item>
         </Descriptions>
       </Card>
-      <Card
-        size="small"
-        title={`成员（${members.length}）`}
-        extra={
-          <Button size="small" icon={<PlusOutlined />} onClick={() => openMember(null)} disabled={!canEdit || (characters.length === 0)}>
-            添加成员
-          </Button>
-        }
-      >
-        <Table<Member>
-          size="small"
-          rowKey="id"
-          loading={loading}
-          dataSource={members}
-          pagination={false}
-          columns={[
-            { title: '角色', dataIndex: 'character_name' },
-            { title: '职位', dataIndex: 'position', render: (v: string) => v || '-' },
-            {
-              title: '状态',
-              width: 70,
-              render: (_, m) => <Tag color={memberStatusLabel(m.status).color}>{memberStatusLabel(m.status).label}</Tag>,
-            },
-            { title: '备注', dataIndex: 'note', render: (v: string) => v || '-' },
-            {
-              title: '',
-              width: 110,
-              render: (_, m) => (
-                <Space size={0}>
-                  <Button type="link" size="small" onClick={() => openMember(m)}>
-                    {canEdit ? '编辑' : '查看'}</Button>
-                  <Popconfirm title="移出该组织？" okText="移除" cancelText="取消" onConfirm={() => handleRemove(m)}>
-                    <Button type="link" size="small" danger disabled={!canEdit}>
-                      移除
-                    </Button>
-                  </Popconfirm>
-                </Space>
-              ),
-            },
-          ]}
-        />
+      <Card size="small" title="成员与历史">
+        <OrganizationMembershipsTab projectId={projectId} organizationId={org.id} onChanged={onMembersChanged} />
       </Card>
-      <Modal
-        okButtonProps={{ disabled: !canEdit }}
-        title={editing ? '编辑成员' : '添加成员'}
-        open={open}
-        onOk={() => void handleSave()}
-        onCancel={() => setOpen(false)}
-        confirmLoading={saving}
-        okText="保存"
-        cancelText="取消"
-        forceRender
-      >
-        <Form form={form} layout="vertical" disabled={!canEdit}>
-          <Form.Item name="character_id" label="角色" rules={[{ required: true, message: '请选择角色' }]}>
-            <Select
-              disabled={!!editing}
-              showSearch
-              optionFilterProp="label"
-              options={characters.map((c) => ({ value: c.id, label: c.name, disabled: !editing && memberIds.has(c.id) }))}
-            />
-          </Form.Item>
-          <Form.Item name="position" label="职位" rules={[{ max: 50, message: '不超过 50 字' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="status" label="状态">
-            <Select options={STATUS_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="note" label="备注">
-            <Input.TextArea autoSize={{ minRows: 1, maxRows: 4 }} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </Space>
   )
 }

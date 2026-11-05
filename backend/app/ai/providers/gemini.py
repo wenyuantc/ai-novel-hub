@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from google import genai
 from google.genai import types
+from pydantic import TypeAdapter, ValidationError
 
 from app.ai.images import validate_image
 from app.ai.providers.base import (
@@ -32,6 +33,7 @@ _THINKING_LEVEL = {
     "xhigh": types.ThinkingLevel.HIGH,
     "max": types.ThinkingLevel.HIGH,
 }
+_STYLE_INT_ADAPTER = TypeAdapter(int)
 
 
 def thinking_config(model: str, thinking: ThinkingLevel) -> types.ThinkingConfig | None:
@@ -43,7 +45,7 @@ def thinking_config(model: str, thinking: ThinkingLevel) -> types.ThinkingConfig
     return types.ThinkingConfig(thinking_level=_THINKING_LEVEL[thinking])
 
 
-def _gemini_schema(schema: dict) -> dict:
+def _gemini_schema(schema: dict, *, tool_name: str | None = None) -> dict:
     """展开 Pydantic 本地引用并移除 Gemini 不支持的关键字，保留同名业务属性。"""
     unsupported = {"additionalProperties", "$schema", "$id", "$defs", "definitions", "title", "default", "examples"}
 
@@ -57,6 +59,13 @@ def _gemini_schema(schema: dict) -> dict:
             value = {**target, **{k: v for k, v in value.items() if k != "$ref"}}
             refs = (*refs, ref)
         result = {k: v for k, v in value.items() if k not in unsupported}
+        # Pydantic 将单值 Literal[str] 输出为 const；Gemini Schema 用单项 enum 表示。
+        # 不静默丢弃非文本常量约束，避免模型收到比本地校验更宽松的参数定义。
+        if "const" in result:
+            constant = result.pop("const")
+            if not isinstance(constant, str):
+                raise AIProviderError("Gemini 工具参数暂不支持非文本常量")
+            result["enum"] = [constant]
         # Gemini Schema 没有 exclusiveMinimum/Maximum；整数边界可无损转换，
         # 非整数边界使用包含边界的提示，执行前仍由原 Pydantic schema 严格校验。
         if "exclusiveMinimum" in result:
@@ -85,7 +94,39 @@ def _gemini_schema(schema: dict) -> dict:
                 result["anyOf"] = [clean(item, refs) for item in variants]
         return result
 
-    return clean(schema)
+    result = clean(schema)
+    if tool_name == "start_task":
+        # Gemini 的函数参数不能可靠表达 string | integer 联合类型；此路径仅用于本项目工具。
+        # 以数字文本表达风格 ID，在输出边界转换成整数，再交由既有归属检查。
+        properties = result.get("properties", {}).get("params", {}).get("properties", {})
+        style = properties.get("style", {})
+        variants = style.get("anyOf", [])
+        has_names = any(v.get("type") == "string" and v.get("enum") == ["inherit", "none"] for v in variants)
+        has_id = any(v.get("type") == "integer" for v in variants)
+        if len(variants) == 2 and has_names and has_id:
+            properties["style"] = {
+                "type": "string",
+                "nullable": bool(style.get("nullable")),
+                "description": "写作风格：inherit、none，或用数字文本表示已有风格 ID。",
+            }
+    return result
+
+
+def _gemini_tool_arguments(name: str, args: dict) -> dict:
+    """仅规范本项目任务工具的风格 ID，保留签名原始 parts 和其他工具参数。"""
+    if name != "start_task" or not isinstance(args.get("params"), dict):
+        return args
+    params = args["params"]
+    style = params.get("style")
+    if isinstance(style, str | float):
+        try:
+            style_id = _STYLE_INT_ADAPTER.validate_python(style)
+        except ValidationError:
+            return args
+        if style_id > 2_147_483_647:
+            raise AIProviderError("写作风格 ID 超出有效范围")
+        return {**args, "params": {**params, "style": style_id}}
+    return args
 
 
 def _tool_contents(messages: list[AgentMessage]) -> tuple[str, list[types.Content]]:
@@ -258,7 +299,7 @@ class GeminiProvider(LLMProvider):
                             types.FunctionDeclaration(
                                 name=tool["name"],
                                 description=tool["description"],
-                                parameters=_gemini_schema(tool["parameters"])
+                                parameters=_gemini_schema(tool["parameters"], tool_name=tool["name"])
                                 if tool["parameters"].get("properties")
                                 else None,
                             )
@@ -301,7 +342,9 @@ class GeminiProvider(LLMProvider):
                             ToolCall(
                                 id=call_id,
                                 name=function.name,
-                                arguments=json.dumps(function.args or {}, ensure_ascii=False),
+                                arguments=json.dumps(
+                                    _gemini_tool_arguments(function.name, function.args or {}), ensure_ascii=False
+                                ),
                             )
                         )
                 if candidate.finish_reason:

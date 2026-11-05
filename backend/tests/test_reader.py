@@ -257,7 +257,7 @@ async def test_progress_survives_backup_round_trip(client, app):
     resp = await client.get(f"{API}/{pid}/backup")
     assert resp.status_code == 200
     data = json.loads(resp.content)
-    assert data["app_schema"] == "0030"
+    assert data["app_schema"] == "0031"
     assert data["project"]["reading_progress"]["chapter_id"] == c2["id"]
 
     async def _import(payload: dict) -> dict:

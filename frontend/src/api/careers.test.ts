@@ -168,6 +168,22 @@ describe('AI 生成职业草稿', () => {
 })
 
 describe('接口路径', () => {
+  it('卸下职业时显式传递章节锚点、操作意图和时间线版本', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await assignmentApi.remove(2, 7, 9, {
+      edit_mode: 'progression', anchor_kind: 'chapter', chapter_id: 12, boundary: 'end', expected_revision: 4,
+    })
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
+    const [url, request] = calls[0]
+    const [path, query] = url.split('?')
+    expect(path).toBe('/api/v1/projects/2/characters/7/careers/9')
+    expect(Object.fromEntries(new URLSearchParams(query))).toEqual({
+      edit_mode: 'progression', anchor_kind: 'chapter', chapter_id: '12', boundary: 'end', expected_revision: '4',
+    })
+    expect(request.method).toBe('DELETE')
+  })
+
   it('职业 / 挂接 / 历史 / 生成', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)

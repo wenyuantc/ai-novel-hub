@@ -199,7 +199,7 @@ async def test_cover_backup_roundtrip_legacy_and_corruption(client):
     estimate_after = (await client.get(f"/api/v1/projects/{project['id']}/backup/estimate")).json()
     assert estimate_after["core"]["bytes"] - estimate_before["core"]["bytes"] == 4 * ((len(PNG) + 2) // 3)
     backup = (await client.get(f"/api/v1/projects/{project['id']}/backup")).json()
-    assert backup["version"] == 1 and backup["app_schema"] == "0030"
+    assert backup["version"] == 2 and backup["app_schema"] == "0031"
     assert backup["cover"] == {"mime_type": "image/png", "data": base64.b64encode(PNG).decode()}
 
     async def restore(data):

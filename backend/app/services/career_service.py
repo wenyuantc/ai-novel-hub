@@ -2,21 +2,22 @@
 
 - 阶段整体同步（sync_stages）：带 id 的更新、不带 id 的新建、缺失的删除（被角色引用 → 409），
   提交顺序即新的 position（从 1 连续）。阶段 id 稳定，重排后角色仍处于原来那一阶。
-- apply_assignment 是挂接的唯一写入入口：新挂 / 换阶 / 改备注 / 主副同步 / 卸下都经由它，
-  有变化才写一条历史（阶段以「第N阶·名称」记录）；不 commit。接口、向导、卡片导入、AI 生成角色保存，
-  以及以后的 analysis-memory 都必须经由它（新挂用 assign_new，已挂时 409）。
+- apply_assignment 是表单、向导与卡片的挂接写入入口：有变化时写剧情事实并追加审计，不 commit。
+  分析写回使用统一事件服务并单独追加审计，避免生成重复事件。
 - 每个角色最多 1 个主职业、3 个副职业；挂接的 role 恒等于职业的 kind（主修只能挂为主职业，副修只能挂为副职业）。
 """
 
-from typing import Any
+from copy import deepcopy
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Career, CareerHistory, CareerStage, Character, CharacterCareer
+from app.models import Career, CareerHistory, CareerStage, Chapter, Character, CharacterCareer
 from app.models.entities import CAREER_KINDS, CAREER_SOURCES
+from app.models.progressions import SettingProgression, SettingTimeline
 from app.schemas.career import (
     AssignmentCreate,
     AssignmentOut,
@@ -30,7 +31,8 @@ from app.schemas.career import (
     StageIn,
     StageOut,
 )
-from app.services import story_service
+from app.schemas.progression import BaselineUpdate, ProgressionCreate, StoryPosition
+from app.services import career_progression_service, setting_progression_service, story_service
 from app.services.project_service import get_manageable_project
 
 MAX_MAIN_CAREERS = 1
@@ -183,6 +185,8 @@ async def sync_stages(db: AsyncSession, career: Career, items: list[StageIn]) ->
         )
         if in_use:
             raise ConflictError(STAGE_IN_USE)
+        if set(s.id for s in removed) & await career_progression_service.protected_stage_ids(db, career.id):
+            raise ConflictError("该阶段仍被历史设定引用，无法删除")
         for s in removed:
             await db.delete(s)
         await db.flush()
@@ -285,17 +289,75 @@ async def update_career(
     if data.stages is not None:
         await sync_stages(db, career, data.stages)
     if data.kind is not None and data.kind != career.kind:
+        # 先补齐旧挂接主体，再检查该职业曾经出现过的所有角色及其全部区间。
+        old_kind = career.kind
+        holders = list(
+            (
+                await db.scalars(
+                    select(Character)
+                    .join(CharacterCareer, CharacterCareer.character_id == Character.id)
+                    .where(CharacterCareer.career_id == career.id)
+                    .order_by(Character.id)
+                )
+            ).all()
+        )
+        for character in holders:
+            await career_progression_service.get_or_create_career_timeline(db, character, career)
+        timelines = list(
+            (
+                await db.scalars(
+                    select(SettingTimeline)
+                    .where(
+                        SettingTimeline.project_id == project_id,
+                        SettingTimeline.subject_kind == "career",
+                        SettingTimeline.career_id == career.id,
+                    )
+                    .order_by(SettingTimeline.id)
+                )
+            ).all()
+        )
+        character_ids = {timeline.character_id for timeline in timelines if timeline.character_id is not None}
+        await career_progression_service.validate_career_intervals(
+            db, project_id, character_ids, kind_overrides={career.id: data.kind}
+        )
+        # 修改定义是对职业类别的全局修正，必须同步基础和保留的存在事件，
+        # 而不是在当前章节伪造一条剧情变化。
+        for timeline in timelines:
+            await setting_progression_service._claim_revision(db, timeline, timeline.revision)
+            if timeline.baseline.get("exists") is True:
+                baseline = deepcopy(timeline.baseline)
+                baseline["role"] = data.kind
+                timeline.baseline = baseline
+            await db.flush()
+        if timelines:
+            events = await db.scalars(
+                select(SettingProgression).where(
+                    SettingProgression.timeline_id.in_([timeline.id for timeline in timelines]),
+                    SettingProgression.field_key == "presence",
+                )
+            )
+            for event in events:
+                if isinstance(event.value, dict) and event.value.get("exists") is True:
+                    value = deepcopy(event.value)
+                    value["state"]["role"] = data.kind
+                    event.value = value
+                    event.revision += 1
         career.kind = data.kind
         await db.flush()
-        # 类别变化：持有人的主 / 副同步变化（经 apply_assignment 校验上限并写历史）
-        holders = await db.scalars(
-            select(Character)
-            .join(CharacterCareer, CharacterCareer.character_id == Character.id)
-            .where(CharacterCareer.career_id == career.id)
-            .order_by(Character.id)
-        )
-        for character in list(holders):
-            await apply_assignment(db, character, career, source="manual")
+        await career_progression_service.validate_career_intervals(db, project_id, character_ids)
+        snapshots = await setting_progression_service.resolve_timelines(db, project_id, timelines)
+        await career_progression_service.materialize_career_timelines(db, project_id, timelines, snapshots)
+        for character in holders:
+            db.add(
+                CareerHistory(
+                    character_id=character.id,
+                    career_id=career.id,
+                    career_name=career.name,
+                    source="manual",
+                    changes={"role": [old_kind, data.kind]},
+                    note="",
+                )
+            )
     await _commit(db, NAME_CONFLICT)
     return (await _refreshed_outs(db, [career]))[0]
 
@@ -337,17 +399,95 @@ async def list_holders(db: AsyncSession, user_id: int, project_id: int, career_i
 # ---------------- 挂接写入入口 ----------------
 
 
-async def _check_limit(db: AsyncSession, character_id: int, role: str, exclude_id: int | None = None) -> None:
-    stmt = select(func.count(CharacterCareer.id)).where(
-        CharacterCareer.character_id == character_id, CharacterCareer.role == role
+async def _story_anchor(
+    db: AsyncSession,
+    project_id: int,
+    chapter_id: int | None,
+    chapter_no: int | None,
+    anchor_kind: Literal["chapter", "planned"] | None,
+) -> tuple[dict[str, Any] | None, StoryPosition | None, int | None]:
+    """显式指定锚点类型；旧章节号仅在当前项目唯一匹配时自动绑定。"""
+    if anchor_kind not in (None, "chapter", "planned"):
+        raise BadRequestError("章节锚点类型不合法")
+    if anchor_kind == "chapter" and (chapter_id is None or chapter_no is not None):
+        raise BadRequestError("已有章节锚点须指定章节 id")
+    if anchor_kind == "planned" and (chapter_no is None or chapter_id is not None):
+        raise BadRequestError("计划章节锚点须指定章节号")
+    if chapter_id is not None and chapter_no is not None:
+        raise BadRequestError("不能同时指定章节 id 和章节号")
+    if chapter_id is not None:
+        chapter = await db.scalar(select(Chapter).where(Chapter.project_id == project_id, Chapter.id == chapter_id))
+        if chapter is None:
+            raise BadRequestError("章节不存在或不属于该作品")
+        return (
+            {"anchor_kind": "chapter", "chapter_id": chapter.id, "chapter_no": None},
+            StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+            chapter.chapter_no,
+        )
+    if chapter_no is None:
+        return None, None, None
+    if type(chapter_no) is not int or chapter_no < 1 or chapter_no > 2_147_483_647:
+        raise BadRequestError("章节号不合法")
+    if anchor_kind == "planned":
+        return (
+            {"anchor_kind": "planned", "chapter_id": None, "chapter_no": chapter_no},
+            StoryPosition(chapter_no=chapter_no),
+            chapter_no,
+        )
+    chapters = list(
+        (
+            await db.scalars(
+                select(Chapter).where(Chapter.project_id == project_id, Chapter.chapter_no == chapter_no).limit(2)
+            )
+        ).all()
     )
-    if exclude_id is not None:
-        stmt = stmt.where(CharacterCareer.id != exclude_id)
-    n = await db.scalar(stmt) or 0
-    if role == "main" and n >= MAX_MAIN_CAREERS:
-        raise ConflictError(MAIN_LIMIT)
-    if role == "sub" and n >= MAX_SUB_CAREERS:
-        raise ConflictError(SUB_LIMIT)
+    if len(chapters) > 1:
+        raise ConflictError("该章节号对应多个章节，请指定章节 id")
+    if chapters:
+        chapter = chapters[0]
+        return (
+            {"anchor_kind": "chapter", "chapter_id": chapter.id, "chapter_no": None},
+            StoryPosition(chapter_id=chapter.id, chapter_no=chapter_no),
+            chapter_no,
+        )
+    return (
+        {"anchor_kind": "planned", "chapter_id": None, "chapter_no": chapter_no},
+        StoryPosition(chapter_no=chapter_no),
+        chapter_no,
+    )
+
+
+async def _protect_ambiguous_changes(
+    db: AsyncSession,
+    timeline: SettingTimeline,
+    current: CharacterCareer | None,
+    *,
+    stage_id: int | None,
+    note: str | None,
+    remove: bool,
+) -> None:
+    """旧无章请求只修改尚无剧情变化的字段，避免把最新值写回基线。"""
+    fields: set[str] = set()
+    if remove or current is None:
+        fields.add("presence")
+    else:
+        if stage_id is not None and stage_id != current.stage_id:
+            fields.add("stage_id")
+        if note is not None and note.strip()[:200] != current.note:
+            fields.add("note")
+    if not fields:
+        return
+    stmt = select(SettingProgression.id).where(
+        SettingProgression.timeline_id == timeline.id, SettingProgression.active.is_(True)
+    )
+    # 存在性变化会影响全部字段；删除/新挂也必须检查全部已记录剧情。
+    if "presence" not in fields:
+        stmt = stmt.where(SettingProgression.field_key.in_(fields | {"presence"}))
+    if await db.scalar(stmt.limit(1)) is not None:
+        raise ConflictError(
+            "该职业已有剧情变化，请选择修改基础设定或指定生效章节",
+            extra={"code": "progression_intent_required"},
+        )
 
 
 async def apply_assignment(
@@ -362,12 +502,13 @@ async def apply_assignment(
     source: str,
     chapter_no: int | None = None,
     history_note: str = "",
+    chapter_id: int | None = None,
+    anchor_kind: Literal["chapter", "planned"] | None = None,
+    boundary: Literal["start", "end"] = "start",
+    edit_mode: Literal["baseline", "progression"] | None = None,
+    expected_revision: int | None = None,
 ) -> CareerHistory | None:
-    """挂接唯一写入入口。未挂 = 新挂（默认第 1 阶）；已挂 = 更新；remove=True = 卸下。
-
-    校验：职业与角色同项目、阶段属于该职业、role（给出时）等于职业 kind、主 1 副 3 上限。
-    有变化时写一条历史并返回；无变化返回 None。不 commit。
-    """
+    """唯一挂接写入口。基础/剧情事实、区间检查、最新投影和审计在一个保存点内完成。"""
     if source not in CAREER_SOURCES:
         raise ValueError(f"未知的职业挂接来源：{source}")
     if career.project_id != character.project_id:
@@ -376,64 +517,169 @@ async def apply_assignment(
         raise ValueError(f"未知的职业类别：{career.kind}")
     if role is not None and role != career.kind:
         raise BadRequestError(ROLE_MISMATCH[career.kind])
-    current = await db.scalar(
-        select(CharacterCareer).where(
-            CharacterCareer.character_id == character.id, CharacterCareer.career_id == career.id
-        )
+    if boundary not in ("start", "end"):
+        raise BadRequestError("章节边界不合法")
+    if edit_mode is not None and expected_revision is None:
+        raise BadRequestError("明确修改基础或剧情变化时请提供当前版本")
+    anchor, position, history_chapter = await _story_anchor(
+        db, character.project_id, chapter_id, chapter_no, anchor_kind
     )
-    stages = (await stages_of(db, [career.id]))[career.id]
-    by_id = {s.id: s for s in stages}
+    if edit_mode == "baseline" and anchor is not None:
+        raise BadRequestError("基础设定不能指定生效章节")
+    if edit_mode == "progression" and anchor is None:
+        raise BadRequestError("剧情变化必须指定生效章节")
+    if expected_revision is not None and expected_revision < 0:
+        raise BadRequestError("设定版本不合法")
+    if remove and expected_revision == 0:
+        raise BadRequestError("卸下职业时请提供当前版本")
 
-    def label(sid: int | None) -> str | None:
-        s = by_id.get(sid) if sid is not None else None
-        return stage_label(s) if s is not None else None
-
-    changes: dict[str, list[Any]] = {}
-    if remove:
-        if current is None:
+    async with db.begin_nested():
+        current = await db.scalar(
+            select(CharacterCareer).where(
+                CharacterCareer.character_id == character.id, CharacterCareer.career_id == career.id
+            )
+        )
+        missing_legacy_removal = remove and current is None and anchor is None and edit_mode is None
+        unchanged_legacy_form = (
+            not remove
+            and current is not None
+            and anchor is None
+            and edit_mode is None
+            and (stage_id is None or stage_id == current.stage_id)
+            and (note is None or note.strip()[:200] == current.note)
+        )
+        if (missing_legacy_removal or unchanged_legacy_form) and expected_revision is None:
             return None
-        changes["removed"] = [career.name, None]
-        await db.delete(current)
-    else:
+        stages = (await stages_of(db, [career.id]))[career.id]
+        by_id = {s.id: s for s in stages}
         if stage_id is not None and stage_id not in by_id:
             raise BadRequestError(STAGE_NOT_IN_CAREER)
-        new_note = (note or "").strip()[:200] if note is not None else None
-        if current is None:
-            if not stages:
-                raise BadRequestError(STAGES_REQUIRED)
-            await _check_limit(db, character.id, career.kind)
-            sid = stage_id if stage_id is not None else stages[0].id
-            current = CharacterCareer(
-                character_id=character.id, career_id=career.id, role=career.kind, stage_id=sid, note=new_note or ""
+        if not remove and not stages:
+            raise BadRequestError(STAGES_REQUIRED)
+
+        if expected_revision is not None:
+            existing = await db.scalar(
+                select(SettingTimeline).where(
+                    SettingTimeline.project_id == character.project_id,
+                    SettingTimeline.subject_kind == "career",
+                    SettingTimeline.character_id == character.id,
+                    SettingTimeline.career_id == career.id,
+                )
             )
-            db.add(current)
-            changes = {"role": [None, career.kind], "stage": [None, label(sid)], "note": [None, new_note or ""]}
+            if (expected_revision == 0 and existing is not None) or (expected_revision > 0 and existing is None):
+                raise ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision"})
+        timeline = await career_progression_service.get_or_create_career_timeline(db, character, career)
+        if expected_revision is not None and expected_revision > 0 and expected_revision != timeline.revision:
+            raise ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision"})
+        if missing_legacy_removal or unchanged_legacy_form:
+            return None
+        if anchor is None and edit_mode is None:
+            await _protect_ambiguous_changes(db, timeline, current, stage_id=stage_id, note=note, remove=remove)
+
+        if position is None:
+            before = deepcopy(timeline.baseline)
         else:
-            if current.role != career.kind:
-                await _check_limit(db, character.id, career.kind, exclude_id=current.id)
-                changes["role"] = [current.role, career.kind]
-                current.role = career.kind
-            if stage_id is not None and stage_id != current.stage_id:
-                changes["stage"] = [label(current.stage_id), label(stage_id)]
-                current.stage_id = stage_id
-            if new_note is not None and new_note != current.note:
-                changes["note"] = [current.note, new_note]
-                current.note = new_note
-            if not changes:
+            position.boundary = boundary
+            before = (
+                await setting_progression_service.resolve_timelines(db, character.project_id, [timeline], position)
+            )[timeline.id].fields
+        before_exists = before.get("exists") is True
+        if remove:
+            if not before_exists:
                 return None
-    await db.flush()
-    history = CareerHistory(
-        character_id=character.id,
-        career_id=career.id,
-        career_name=career.name,
-        source=source,
-        chapter_no=chapter_no,
-        changes=changes,
-        note=(history_note or "")[:200],
-    )
-    db.add(history)
-    await db.flush()
-    return history
+            after: dict[str, Any] = {"exists": False}
+        elif not before_exists:
+            after = {
+                "exists": True,
+                "role": career.kind,
+                "stage_id": stage_id if stage_id is not None else stages[0].id,
+                "note": (note or "").strip()[:200],
+            }
+        else:
+            after = deepcopy(before)
+            if stage_id is not None:
+                after["stage_id"] = stage_id
+            if note is not None:
+                after["note"] = note.strip()[:200]
+        if before == after:
+            return None
+
+        def label(sid: int | None) -> str | None:
+            stage = by_id.get(sid) if sid is not None else None
+            return stage_label(stage) if stage is not None else None
+
+        changes: dict[str, list[Any]] = {}
+        if not before_exists and after["exists"]:
+            changes = {
+                "role": [None, career.kind],
+                "stage": [None, label(after["stage_id"])],
+                "note": [None, after["note"]],
+            }
+        elif before_exists and not after["exists"]:
+            changes["removed"] = [career.name, None]
+        else:
+            if before.get("stage_id") != after.get("stage_id"):
+                changes["stage"] = [label(before.get("stage_id")), label(after.get("stage_id"))]
+            if before.get("note") != after.get("note"):
+                changes["note"] = [before.get("note"), after.get("note")]
+        if not changes:
+            return None
+
+        if anchor is None:
+            base_changes = (
+                after
+                if before_exists != after["exists"]
+                else {field: after[field] for field in ("stage_id", "note") if before.get(field) != after.get(field)}
+            )
+            await setting_progression_service.apply_baseline(
+                db,
+                timeline,
+                BaselineUpdate(expected_revision=timeline.revision, changes=base_changes),
+                materialize=False,
+            )
+        else:
+            payloads: list[tuple[str, Any]] = []
+            if before_exists != after["exists"]:
+                state = {key: after[key] for key in ("role", "stage_id", "note")} if after["exists"] else None
+                payloads.append(("presence", {"exists": True, "state": state} if state else {"exists": False}))
+            else:
+                payloads.extend(
+                    (field, after[field]) for field in ("stage_id", "note") if before.get(field) != after.get(field)
+                )
+            for field, value in payloads:
+                event_data = ProgressionCreate(
+                    expected_revision=timeline.revision,
+                    field_key=field,
+                    operation="replace",
+                    value=value,
+                    boundary=boundary,
+                    note=(history_note or "")[:200],
+                    **anchor,
+                )
+                await setting_progression_service.apply_progression(
+                    db,
+                    timeline,
+                    event_data,
+                    source="analysis" if source == "analysis" else "manual",
+                    protection="automatic" if source == "analysis" else "manual",
+                    materialize=False,
+                )
+
+        await career_progression_service.validate_career_intervals(db, character.project_id, [character.id])
+        snapshots = await setting_progression_service.resolve_timelines(db, character.project_id, [timeline])
+        await career_progression_service.materialize_career_timelines(db, character.project_id, [timeline], snapshots)
+        history = CareerHistory(
+            character_id=character.id,
+            career_id=career.id,
+            career_name=career.name,
+            source=source,
+            chapter_no=history_chapter,
+            changes=changes,
+            note=(history_note or "")[:200],
+        )
+        db.add(history)
+        await db.flush()
+        return history
 
 
 async def assign_new(
@@ -447,6 +693,11 @@ async def assign_new(
     source: str,
     chapter_no: int | None = None,
     history_note: str = "",
+    chapter_id: int | None = None,
+    anchor_kind: Literal["chapter", "planned"] | None = None,
+    boundary: Literal["start", "end"] = "start",
+    edit_mode: Literal["baseline", "progression"] | None = None,
+    expected_revision: int | None = None,
 ) -> CharacterCareer:
     """新挂（已挂该职业 → 409），经 apply_assignment 写入。不 commit。"""
     exists = await db.scalar(
@@ -455,24 +706,36 @@ async def assign_new(
         )
     )
     if exists is not None:
+        if expected_revision == 0:
+            raise ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision"})
         raise ConflictError(ALREADY_ASSIGNED)
-    await apply_assignment(
-        db,
-        character,
-        career,
-        stage_id=stage_id,
-        note=note,
-        role=role,
-        source=source,
-        chapter_no=chapter_no,
-        history_note=history_note,
-    )
-    created = await db.scalar(
-        select(CharacterCareer).where(
-            CharacterCareer.character_id == character.id, CharacterCareer.career_id == career.id
+    async with db.begin_nested():
+        await apply_assignment(
+            db,
+            character,
+            career,
+            stage_id=stage_id,
+            note=note,
+            role=role,
+            source=source,
+            chapter_no=chapter_no,
+            history_note=history_note,
+            chapter_id=chapter_id,
+            anchor_kind=anchor_kind,
+            boundary=boundary,
+            edit_mode=edit_mode,
+            expected_revision=expected_revision,
         )
-    )
-    assert created is not None
+        created = await db.scalar(
+            select(CharacterCareer).where(
+                CharacterCareer.character_id == character.id, CharacterCareer.career_id == career.id
+            )
+        )
+        if created is None:
+            raise ConflictError(
+                "该职业在最新剧情中已卸下，请到职业时间线新增变化或校准初始状态",
+                extra={"code": "career_history_requires_timeline"},
+            )
     return created
 
 
@@ -577,6 +840,11 @@ async def assign(
         source="manual",
         chapter_no=data.chapter_no,
         history_note=data.history_note,
+        chapter_id=data.chapter_id,
+        anchor_kind=data.anchor_kind,
+        boundary=data.boundary,
+        edit_mode=data.edit_mode,
+        expected_revision=data.expected_revision,
     )
     await _commit(db, ALREADY_ASSIGNED)
     return (await _refreshed_assignments(db, [row]))[0]
@@ -596,17 +864,74 @@ async def update_assignment(
         source="manual",
         chapter_no=data.chapter_no,
         history_note=data.history_note,
+        chapter_id=data.chapter_id,
+        anchor_kind=data.anchor_kind,
+        boundary=data.boundary,
+        edit_mode=data.edit_mode,
+        expected_revision=data.expected_revision,
     )
     await db.commit()
     return (await _refreshed_assignments(db, [row]))[0]
 
 
 async def remove_assignment(
-    db: AsyncSession, user_id: int, project_id: int, character_id: int, assignment_id: int
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    assignment_id: int,
+    *,
+    chapter_id: int | None = None,
+    chapter_no: int | None = None,
+    anchor_kind: Literal["chapter", "planned"] | None = None,
+    boundary: Literal["start", "end"] = "start",
+    edit_mode: Literal["baseline", "progression", "delete"] | None = None,
+    expected_revision: int | None = None,
 ) -> None:
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    character, _, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
-    await apply_assignment(db, character, career, remove=True, source="manual")
+    character, current, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
+    if edit_mode == "delete":
+        if chapter_id is not None or chapter_no is not None or anchor_kind is not None:
+            raise BadRequestError("删除职业资料不能指定生效章节")
+        if expected_revision is None or expected_revision < 1:
+            raise BadRequestError("删除职业资料时请提供当前版本")
+        timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project_id,
+                SettingTimeline.subject_kind == "career",
+                SettingTimeline.character_id == character.id,
+                SettingTimeline.career_id == career.id,
+            )
+        )
+        if timeline is None or timeline.revision != expected_revision:
+            raise ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision"})
+        await setting_progression_service._claim_revision(db, timeline, expected_revision)
+        await db.delete(timeline)
+        await db.delete(current)
+        db.add(
+            CareerHistory(
+                character_id=character.id,
+                career_id=career.id,
+                career_name=career.name,
+                source="manual",
+                changes={"removed": [career.name, None]},
+            )
+        )
+        await db.flush()
+    else:
+        await apply_assignment(
+            db,
+            character,
+            career,
+            remove=True,
+            source="manual",
+            chapter_no=chapter_no,
+            chapter_id=chapter_id,
+            anchor_kind=anchor_kind,
+            boundary=boundary,
+            edit_mode=edit_mode,
+            expected_revision=expected_revision,
+        )
     await db.commit()
 
 

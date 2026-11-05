@@ -1,5 +1,7 @@
 """职业、阶段、持有人与角色挂接 / 挂接历史路由；AI 生成职业走后台任务（202）。"""
 
+from typing import Literal
+
 from fastapi import APIRouter, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
@@ -96,9 +98,31 @@ async def update_assignment(
 
 @router.delete("/characters/{character_id}/careers/{assignment_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_assignment(
-    project_id: int, character_id: int, assignment_id: int, user: CurrentUser, db: DbDep
+    project_id: int,
+    character_id: int,
+    assignment_id: int,
+    user: CurrentUser,
+    db: DbDep,
+    chapter_id: int | None = None,
+    chapter_no: int | None = None,
+    anchor_kind: Literal["chapter", "planned"] | None = None,
+    boundary: Literal["start", "end"] = "start",
+    edit_mode: Literal["baseline", "progression", "delete"] | None = None,
+    expected_revision: int | None = None,
 ) -> Response:
-    await svc.remove_assignment(db, user.id, project_id, character_id, assignment_id)
+    await svc.remove_assignment(
+        db,
+        user.id,
+        project_id,
+        character_id,
+        assignment_id,
+        chapter_id=chapter_id,
+        chapter_no=chapter_no,
+        anchor_kind=anchor_kind,
+        boundary=boundary,
+        edit_mode=edit_mode,
+        expected_revision=expected_revision,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

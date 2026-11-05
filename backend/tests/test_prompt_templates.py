@@ -7,7 +7,8 @@ import json
 import pytest
 
 from app.ai.prompts import registry
-from app.ai.templating import TemplateVar
+from app.ai.prompts.rewrite import build_rewrite_messages
+from app.ai.templating import PromptOverride, TemplateVar
 from app.services import prompt_service
 from tests.helpers import create_ai_config, create_project, register, run_task
 
@@ -209,6 +210,65 @@ async def test_preview_renders_messages_with_locked_blocks(client):
         )
     ).json()
     assert "随便写" not in hacked["messages"][1]["content"]
+
+
+async def test_rewrite_setting_context_is_locked_in_preview_and_override_validation(client):
+    await register(client)
+    key = "chapter.rewrite"
+    system, user = _default(key)
+
+    detail = (await client.get(f"{API}/{key}")).json()
+    variable = next(v for v in detail["variables"] if v["name"] == "setting_context")
+    assert variable["locked"] is True
+    sample = variable["sample"]
+    assert sample and "设定" in sample
+
+    resp = await client.post(
+        f"{API}/{key}/preview",
+        json={"system": system, "user": user, "variables": {"setting_context": "伪造的预览设定"}},
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["errors"] == []
+    assert result["messages"][-1]["content"].count(sample) == 1
+    assert "伪造的预览设定" not in result["messages"][-1]["content"]
+
+    invalid = await client.put(
+        f"{API}/{key}", json={"system": system, "user": user.replace("{{ setting_context }}", "")}
+    )
+    assert invalid.status_code == 400
+    assert any("setting_context" in error["message"] for error in invalid.json()["errors"])
+
+
+@pytest.mark.parametrize("op", ["rewrite", "expand", "condense", "deslop", "continue"])
+async def test_old_saved_rewrite_override_receives_the_locked_setting_context(client, monkeypatch, op):
+    await register(client)
+    key = "chapter.rewrite"
+    current = registry.TEMPLATES[key]
+    old_user = current.user.replace("{{ setting_context }}", "")
+    old_template = dataclasses.replace(
+        current,
+        user=old_user,
+        variables=tuple(variable for variable in current.variables if variable.name != "setting_context"),
+    )
+    monkeypatch.setitem(registry.TEMPLATES, key, old_template)
+    saved_user = old_user + "\n旧的作者自定义内容"
+    resp = await client.put(f"{API}/{key}", json={"system": old_template.system, "user": saved_user})
+    assert resp.status_code == 200, resp.text
+
+    monkeypatch.setitem(registry.TEMPLATES, key, current)
+    detail = (await client.get(f"{API}/{key}")).json()
+    assert detail["override"]["user"] == saved_user
+    assert detail["outdated"] is True
+
+    override = PromptOverride(system=detail["override"]["system"], user=detail["override"]["user"])
+    context = "【本章有效设定】\n林远：练气境"
+    messages = build_rewrite_messages(
+        op=op, selected="原文", before="前文", after="后文", setting_context=context, override=override
+    )
+    assert messages[-1]["content"].count(context) == 1
+    assert "旧的作者自定义内容" in messages[-1]["content"]
+    assert (await client.get(f"{API}/{key}")).json()["override"]["user"] == saved_user
 
 
 async def test_preview_variables_size_limited(client):

@@ -18,7 +18,7 @@
 # backend/app/services/chapter_numbering.py
 @dataclass(frozen=True)
 class ChapterNoRef: model; column: str; scope: Callable[[int], ColumnElement[bool]]   # scope(project_id) → 限定本项目
-CHAPTER_NO_REFS: tuple[ChapterNoRef, ...]   # 13 个字段
+CHAPTER_NO_REFS: tuple[ChapterNoRef, ...]   # 14 个字段
 async def shift_chapter_numbers(db, project_id, *, from_no: int, delta: int) -> None   # 不 commit
 ```
 
@@ -31,8 +31,9 @@ async def shift_chapter_numbers(db, project_id, *, from_no: int, delta: int) -> 
   `relationship_history.chapter_no`（经 `relationships.project_id` 子查询限定）、`career_history.chapter_no`（经 `characters.project_id`）、
   `foreshadow_history.chapter_no`（经 `foreshadows.project_id`）、`foreshadows.planned_plant_chapter / actual_plant_chapter /
   planned_resolve_chapter / actual_resolve_chapter`、`story_memories.chapter_no`、`retrieval_chunks.chapter_no`（knowledge-base，
-  记忆按章号召回；检索缓存签名含 `sum(chapter_no)`，平移后自动失效）。没有 `project_id` 的表一律用子查询限定，绝不能全表更新。
+  记忆按章号召回；检索缓存签名含 `sum(chapter_no)`，平移后自动失效）、`setting_progressions.chapter_no`（仅 planned，按时间线项目限定）。没有 `project_id` 的表一律用子查询限定，绝不能全表更新。
 - `chapters.chapter_no` 没有唯一约束，平移顺序不受约束冲突影响。
+- 已建章锚点用 `chapter_id` 跟随章节；删章后保留孤儿，不能因同号章重建而恢复。章节插入、改号、删除或细纲批量操作 flush 后须在同事务调用 `on_story_positions_changed`，重新验证并物化全部主体；数据库 `SET NULL` 后还须同步已加载事件的 FK 缓存。详见 [设定随剧情演变](./setting-progressions.md)。
 - 文本中的章节号（回写条目 reason「已有第 N 章的更新」、历史 note「第 N 章分析」等）属于历史描述，**不改写**。
 - 章节号模型：每条大纲占 `max(1, 已建章数)` 个章节号；未建章的细纲不占号（建章时才插入并平移）。
   `outline_service.next_chapter_no = max(大纲最大 chapter_no, 章节最大 chapter_no) + 1`。

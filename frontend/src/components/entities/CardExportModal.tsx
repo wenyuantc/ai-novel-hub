@@ -82,6 +82,7 @@ function Inner({ projectId, projectTitle, open, characters, initialCharacterIds,
       </Form>
       <Typography.Text type="secondary">
         只导出两端都在所选范围内的人物关系，以及成员角色在所选范围内的组织成员关系。
+        角色及自定义文本字段导出最新设定，不包含按章节记录的变化。
       </Typography.Text>
     </Modal>
   )

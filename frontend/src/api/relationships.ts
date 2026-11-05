@@ -38,6 +38,8 @@ export const relationshipApi = {
     api.patch<Relationship>(`${p(pid)}/relationships/${rid}`, body),
   remove: (pid: number, rid: number) => api.del(`${p(pid)}/relationships/${rid}`),
   history: (pid: number, rid: number) => api.get<RelationshipHistory[]>(`${p(pid)}/relationships/${rid}/history`),
+  historyForPair: (pid: number, characterId: number, relatedCharacterId: number) =>
+    api.get<RelationshipHistory[]>(`${p(pid)}/relationship-history`, { character_id: characterId, related_character_id: relatedCharacterId }),
   graph: (pid: number) => api.get<RelationshipGraph>(`${p(pid)}/relationship-graph`),
 }
 

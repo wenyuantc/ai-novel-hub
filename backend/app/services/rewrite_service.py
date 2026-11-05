@@ -23,6 +23,7 @@ from app.models import Chapter, GenerationLog
 from app.schemas.chapter_version import RewriteApply, RewriteRequest
 from app.services import (
     ai_config_service,
+    context_builder,
     generation_log_service,
     prompt_service,
     skill_service,
@@ -30,7 +31,6 @@ from app.services import (
     version_service,
 )
 from app.services.chapter_service import commit_versioned, count_words, get_owned_chapter, get_project_chapter
-from app.services.context_builder import chapter_task
 from app.services.generation_service import Event, elapsed_ms, stream_pieces
 from app.services.project_service import get_owned_project
 
@@ -40,6 +40,7 @@ MAX_SELECTION_CHARS = 5000
 BEFORE_CHARS = 1500
 AFTER_CHARS = 500
 CONTINUE_BEFORE_CHARS = 3000
+MAX_SETTING_CONTEXT_CHARS = 4000
 # 采纳时用于乐观校验的"选区前原文"长度（码点）；光标续写时 original 为空，只能靠它发现前文被改
 APPLY_BEFORE_CHARS = 200
 STALE_SELECTION = "正文已变化，请重新选择后再改写"
@@ -74,6 +75,7 @@ async def prepare_rewrite_job(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    context_budget: int,
 ) -> RewriteJob:
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
@@ -96,7 +98,7 @@ async def prepare_rewrite_job(
 
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    task = await chapter_task(db, chapter)
+    task = await context_builder.chapter_task(db, chapter)
     resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
     override = await prompt_service.get_override(db, user_id, "chapter.rewrite")
     skill = await skill_service.snapshot(db, user_id, req.skill_id)
@@ -105,6 +107,13 @@ async def prepare_rewrite_job(
         before, after = content[max(0, start - CONTINUE_BEFORE_CHARS) : start], ""
     else:
         before, after = content[max(0, start - BEFORE_CHARS) : start], content[end : end + AFTER_CHARS]
+    setting_context = await context_builder.build_setting_context(
+        db,
+        project,
+        chapter,
+        text_hint="\n".join((before, original, after)),
+        budget=min(MAX_SETTING_CONTEXT_CHARS, ai_config_service.context_char_budget(cfg, context_budget)),
+    )
     messages = build_rewrite_messages(
         op=req.op,
         selected=original,
@@ -114,6 +123,7 @@ async def prepare_rewrite_job(
         summary=task.summary,
         instruction=req.instruction,
         skill_guide=(skill or {}).get("body", ""),
+        setting_context=setting_context,
         override=override,
     )
     return RewriteJob(

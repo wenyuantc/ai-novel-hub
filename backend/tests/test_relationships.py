@@ -48,7 +48,7 @@ async def test_concurrent_pair_creation_returns_conflict_and_rolls_back(app, cli
     assert login.status_code == 200
     _synchronize_write_admission(monkeypatch, svc)
     # 正常查重已被父锁串行化；显式陈旧查询继续覆盖数据库唯一约束兜底。
-    monkeypatch.setattr(svc, "find_pair", AsyncMock(return_value=None))
+    monkeypatch.setattr(svc, "find_pair_record", AsyncMock(return_value=None))
     body = {"items": [{"a_id": a["id"], "b_id": b["id"], "type_id": type_id, "source": "ai_generate"}]}
     responses = await asyncio.gather(
         client.post(f"{base}/relationships/batch", json=body),
@@ -61,6 +61,57 @@ async def test_concurrent_pair_creation_returns_conflict_and_rolls_back(app, cli
     assert conflict.json()["detail"] == "这两个角色之间已有关系"
     assert await _count(app, Relationship) == 1
     assert await _count(app, RelationshipHistory) == 1
+
+
+@pytest.mark.parametrize("recreate_hidden", [False, True])
+async def test_concurrent_relationship_creation_intent_checks_subject_revision(
+    app, client, make_client, monkeypatch, recreate_hidden
+):
+    from app.services import relationship_service as svc
+
+    base = await _setup(client)
+    a, b = await _char(client, base, "甲"), await _char(client, base, "乙")
+    type_id = await _type_id(client, base, "朋友", "朋友")
+    expected_revision = 0
+    if recreate_hidden:
+        existing = await client.post(
+            f"{base}/relationships", json={"a_id": a["id"], "b_id": b["id"], "type_id": type_id, "chapter_no": 10}
+        )
+        assert existing.status_code == 201, existing.text
+        timeline_response = await client.get(
+            f"{base}/setting-timelines",
+            params={"subject_kind": "relationship", "character_id": a["id"], "related_character_id": b["id"]},
+        )
+        timeline = timeline_response.json()["items"][0]
+        ended = await client.post(
+            f"{base}/setting-timelines/{timeline['id']}/progressions",
+            json={
+                "expected_revision": timeline["revision"],
+                "field_key": "presence",
+                "operation": "replace",
+                "value": {"exists": False},
+                "anchor_kind": "planned",
+                "chapter_no": 20,
+            },
+        )
+        assert ended.status_code == 201, ended.text
+        expected_revision = ended.json()["timeline_revision"]
+
+    second = make_client()
+    login = await second.post("/api/v1/auth/login", json={"username": "alice", "password": "secret123"})
+    assert login.status_code == 200
+    _synchronize_write_admission(monkeypatch, svc)
+    body = {
+        "a_id": a["id"], "b_id": b["id"], "type_id": type_id, "chapter_no": 25,
+        "expected_revision": expected_revision,
+    }
+    responses = await asyncio.gather(
+        client.post(f"{base}/relationships", json=body), second.post(f"{base}/relationships", json=body)
+    )
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    assert next(response for response in responses if response.status_code == 409).json()["code"] == "stale_revision"
+    assert await _count(app, Relationship) == 1
+    assert await _count(app, RelationshipHistory) == (2 if recreate_hidden else 1)
 
 
 async def test_relationship_commit_preserves_unrelated_integrity_errors():

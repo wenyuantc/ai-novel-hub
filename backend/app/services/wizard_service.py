@@ -25,7 +25,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from sqlalchemy import delete
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.json_extract import JSONExtractError, extract_json
@@ -38,9 +38,19 @@ from app.ai.prompts import (
     format_project_info,
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
-from app.core.errors import AppError, BadRequestError
+from app.core.errors import AppError, BadRequestError, ConflictError
 from app.core.security import SecretCipher
-from app.models import Career, Character, CharacterCareer, Outline, Task, WorldSetting
+from app.models import (
+    Career,
+    Character,
+    CharacterCareer,
+    Outline,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
+    Task,
+    WorldSetting,
+)
 from app.models.entities import WORLD_CATEGORIES
 from app.schemas.career import CareerCreate
 from app.schemas.chapter import WizardRequest
@@ -51,8 +61,10 @@ from app.services import (
     kb_service,
     outline_service,
     outline_snapshot_service,
+    project_lifecycle,
     prompt_service,
     relationship_service,
+    setting_progression_service,
     story_service,
 )
 from app.services.cast_service import is_protagonist_role
@@ -153,6 +165,7 @@ async def validate_wizard(
     *,
     user_id: int,
     project_id: int,
+    kind: WizardKind,
     req: WizardRequest,
     cipher: SecretCipher,
     factory: ProviderFactory,
@@ -161,9 +174,36 @@ async def validate_wizard(
 ) -> int:
     """创建任务时同步校验归属、AI 配置与端点；返回解析出的 ai_config_id。不修改任何数据。"""
     await get_owned_project(db, user_id, project_id, lock=True)
+    await _require_safe_replacement(db, project_id, kind)
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     return cfg.id
+
+
+async def _require_safe_replacement(db: AsyncSession, project_id: int, kind: WizardKind) -> None:
+    """调用方持项目写锁；避免覆盖及其级联删除丢失现存变化和自定义字段。"""
+    if kind == "characters":
+        affected = or_(SettingTimeline.character_id.is_not(None), SettingTimeline.related_character_id.is_not(None))
+    elif kind == "world":
+        affected = SettingTimeline.world_setting_id.is_not(None)
+    elif kind == "careers":
+        affected = SettingTimeline.career_id.is_not(None)
+    else:
+        return
+    progression = select(SettingProgression.id).where(
+        SettingProgression.timeline_id == SettingTimeline.id, SettingProgression.active.is_(True)
+    ).exists()
+    custom_field = select(SettingTextField.id).where(SettingTextField.timeline_id == SettingTimeline.id).exists()
+    conflict = await db.scalar(
+        select(SettingTimeline.id)
+        .where(SettingTimeline.project_id == project_id, affected, or_(progression, custom_field))
+        .limit(1)
+    )
+    if conflict is not None:
+        raise ConflictError(
+            "覆盖会删除设定的剧情变化或自定义字段，请先在设定详情中处理这些记录",
+            extra={"code": "wizard_history_conflict"},
+        )
 
 
 async def build_wizard_job(
@@ -599,6 +639,8 @@ async def save_wizard_result(
 
     大纲覆盖模式（默认）与其他类型一样覆盖旧数据（覆盖前存大纲快照）；大纲追加模式不删旧数据，items 只含新增条目。
     """
+    await project_lifecycle.lock_active(db, project_id)
+    await _require_safe_replacement(db, project_id, kind)
     obj = extract_json(raw_text)
     if kind == "careers":
         return await _save_careers(db, project_id, obj)
@@ -611,6 +653,12 @@ async def save_wizard_result(
     entities = [model(project_id=project_id, **row) for row in rows]
     db.add_all(entities)
     await db.flush()
+    if kind == "characters":
+        for entity in entities:
+            await setting_progression_service.create_character_timeline(db, entity)
+    elif kind == "world":
+        for entity in entities:
+            await setting_progression_service.create_world_timeline(db, entity)
     rels = []
     assignments: list[CharacterCareer] = []
     warnings: list[str] = []
@@ -676,6 +724,8 @@ async def run_wizard_job(job: WizardJob, sessionmaker: async_sessionmaker[AsyncS
         yield "error", {"detail": f"AI 输出解析失败：{exc}，请重新生成"}
     except AIProviderError as exc:
         yield "error", {"detail": str(exc)}
+    except AppError as exc:
+        yield "error", {"detail": exc.detail, **(exc.extra or {})}
     except Exception:  # noqa: BLE001
         logger.exception("向导生成失败 project=%s kind=%s", job.project_id, job.kind)
         yield "error", {"detail": "生成失败：服务器内部错误"}

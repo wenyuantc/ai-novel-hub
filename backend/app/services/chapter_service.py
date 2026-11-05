@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import Chapter, ChapterPlan, ChapterVersion, Outline, Project
 from app.schemas.chapter import ChapterCreate, ChaptersFromOutlines, ChapterUpdate
-from app.services import memory_service, project_lifecycle, style_service, version_service
+from app.services import memory_service, project_lifecycle, setting_progression_service, style_service, version_service
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import get_manageable_project, get_owned_project
 
@@ -210,7 +210,10 @@ async def update_chapter(
             if data.chapter_no != chapter.chapter_no:
                 # 剧情记忆按章号召回：该章的记忆跟随
                 await memory_service.on_chapter_renumbered(db, chapter.id, data.chapter_no)
-            chapter.chapter_no = data.chapter_no
+                chapter.chapter_no = data.chapter_no
+                # 先 flush 让时间线按新的章节号排序；重算与原修改同一事务提交。
+                await db.flush()
+                await setting_progression_service.on_story_positions_changed(db, project_id)
         if data.title is not None:
             chapter.title = data.title.strip()
         content_changed = data.content is not None and data.content != chapter.content
@@ -243,4 +246,7 @@ async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapte
         # 先删该章的自动记忆与检索单元（手动记忆保留，chapter_id 由外键置空）
         await memory_service.on_chapters_deleted(db, [chapter.id])
         await db.delete(chapter)
+        # FK SET NULL 已生效后再重算，避免把已删除章节的变化继续作为最新状态。
+        await db.flush()
+        await setting_progression_service.on_story_positions_changed(db, project_id)
         await audit.commit()

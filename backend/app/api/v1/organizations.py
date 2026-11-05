@@ -1,8 +1,8 @@
 """组织与成员路由；AI 生成组织走后台任务（202）。"""
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.entity_ai import OrganizationGenerateRequest
@@ -90,8 +90,46 @@ async def update_member(
 
 
 @router.delete("/organizations/{org_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_member(project_id: int, org_id: int, member_id: int, user: CurrentUser, db: DbDep) -> Response:
-    await svc.remove_member(db, user.id, project_id, org_id, member_id)
+async def remove_member(
+    project_id: int,
+    org_id: int,
+    member_id: int,
+    user: CurrentUser,
+    db: DbDep,
+    edit_mode: Literal["progression", "delete"] | None = None,
+    expected_revision: int | None = Query(default=None, ge=1, le=2_147_483_647),
+    anchor_kind: Literal["chapter", "planned"] | None = None,
+    chapter_id: int | None = Query(default=None, ge=1, le=2_147_483_647),
+    chapter_no: int | None = Query(default=None, ge=1, le=2_147_483_647),
+    boundary: Literal["start", "end"] = "start",
+) -> Response:
+    await svc.remove_member(
+        db,
+        user.id,
+        project_id,
+        org_id,
+        member_id,
+        edit_mode=edit_mode,
+        expected_revision=expected_revision,
+        anchor_kind=anchor_kind,
+        chapter_id=chapter_id,
+        chapter_no=chapter_no,
+        boundary=boundary,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/organizations/{org_id}/membership-records/{character_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_membership_record(
+    project_id: int,
+    org_id: int,
+    character_id: int,
+    user: CurrentUser,
+    db: DbDep,
+    expected_revision: int = Query(ge=1, le=2_147_483_647),
+) -> Response:
+    """删除完整成员资料及其所有剧情记录，包括当前已退出的成员。"""
+    await svc.delete_membership_record(db, user.id, project_id, org_id, character_id, expected_revision)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

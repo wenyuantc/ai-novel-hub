@@ -13,6 +13,7 @@ import type {
   CareerHolder,
   CareerInput,
   CareerKind,
+  ProgressionBoundary,
   CareerStage,
   CareerUpdate,
   StageInput,
@@ -21,6 +22,15 @@ import type {
 
 const base = (pid: number) => `/projects/${pid}/careers`
 const charBase = (pid: number, cid: number) => `/projects/${pid}/characters/${cid}`
+
+export interface CareerRemovalIntent {
+  edit_mode: 'baseline' | 'progression' | 'delete'
+  anchor_kind?: 'chapter' | 'planned'
+  chapter_id?: number
+  chapter_no?: number
+  boundary?: ProgressionBoundary
+  expected_revision?: number
+}
 
 export const careerApi = {
   list: (pid: number) => api.get<Career[]>(base(pid)),
@@ -42,7 +52,8 @@ export const assignmentApi = {
   create: (pid: number, cid: number, body: AssignmentInput) => api.post<Assignment>(`${charBase(pid, cid)}/careers`, body),
   update: (pid: number, cid: number, aid: number, body: AssignmentUpdate) =>
     api.patch<Assignment>(`${charBase(pid, cid)}/careers/${aid}`, body),
-  remove: (pid: number, cid: number, aid: number) => api.del(`${charBase(pid, cid)}/careers/${aid}`),
+  remove: (pid: number, cid: number, aid: number, intent?: CareerRemovalIntent) =>
+    api.del(`${charBase(pid, cid)}/careers/${aid}`, intent ? { ...intent } : undefined),
   /** 倒序 */
   history: (pid: number, cid: number) => api.get<CareerHistory[]>(`${charBase(pid, cid)}/career-history`),
 }

@@ -1,7 +1,7 @@
 """项目备份导入：解析校验 → 预览（令牌缓存）→ 单事务导入为新项目。
 
 解析（parse_backup，纯函数，CPU 密集，路由放进线程）：大小 ≤ 100MB → UTF-8 → json.loads（嵌套深度 ≤ MAX_DEPTH）→
-format / version（更新的版本 400，migrate 逐级升级，目前只有 v1）→ 结构与列类型 / 长度 / 必填 → 文件内引用完整性
+format / version（更新的版本 400，migrate 逐级升级）→ 结构与列类型 / 长度 / 必填 → 文件内引用完整性
 （每个外键都能在文件内找到，风格 ref 都能在 styles[] 中找到）。任何一项不通过 → 400（响应体 errors 列出前 20 条）。
 
 预览（preview）：不写库；解析结果放进进程内缓存（按用户隔离，TOKEN_TTL 秒，每个用户最多 MAX_TOKENS_PER_USER 份），
@@ -47,10 +47,19 @@ from app.models import entities as E
 from app.models.entities import PROJECT_STATUSES
 from app.schemas.project import WizardProgress
 from app.schemas.transfer import BackupOptions, ImportPreview, ImportResult, ImportStyleBrief
-from app.services import kb_index_service, memory_service, project_service, retrieval_service
+from app.services import (
+    kb_index_service,
+    memory_service,
+    project_lifecycle,
+    project_service,
+    retrieval_service,
+    setting_progression_service,
+)
+from app.services.project_transfer import remap
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
+from app.services.setting_progression_resolver import validate_baseline, validate_progression_value
 from app.services.style_service import FIELD_LIMITS, IMPORT_SUFFIX, NAME_LIMIT, unique_name
 
 MAX_BYTES = 100 * 1024 * 1024
@@ -90,6 +99,9 @@ TABLE_LABELS: dict[str, str] = {
     "chapter_versions": "章节版本",
     "chapter_analyses": "章节分析",
     "analysis_changes": "分析回写条目",
+    "setting_timelines": "设定时间线",
+    "setting_text_fields": "设定文本字段",
+    "setting_progressions": "设定剧情变化",
     "story_memories": "剧情记忆",
     "kb_settings": "知识库设置",
     "kb_documents": "知识库文档",
@@ -113,6 +125,13 @@ ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
     ("chapter_versions", "source"): E.VERSION_SOURCES,
     ("analysis_changes", "kind"): E.ANALYSIS_CHANGE_KINDS,
     ("analysis_changes", "status"): E.ANALYSIS_CHANGE_STATUSES,
+    ("setting_timelines", "subject_kind"): ("character", "world", "relationship", "career", "membership"),
+    ("setting_timelines", "baseline_status"): ("confirmed", "legacy_unverified"),
+    ("setting_progressions", "operation"): ("append", "replace"),
+    ("setting_progressions", "anchor_kind"): ("chapter", "planned"),
+    ("setting_progressions", "boundary"): ("start", "end"),
+    ("setting_progressions", "source"): ("manual", "analysis", "legacy_import"),
+    ("setting_progressions", "protection"): ("automatic", "confirmed", "manual"),
     ("foreshadows", "status"): E.FORESHADOW_STATUSES,
     ("foreshadows", "source"): E.FORESHADOW_SOURCES,
     ("story_memories", "kind"): E.MEMORY_KINDS,
@@ -182,9 +201,56 @@ def _too_deep(obj: Any, limit: int) -> bool:
     return False
 
 
+def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """保留旧档案为待校准基线，不回放旧日志；解析校验仍由后续统一执行。"""
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return data
+    timelines: list[dict[str, Any]] = []
+
+    def rows(table: str) -> list[dict[str, Any]]:
+        value = tables.get(table)
+        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+    def add(subject_kind: str, baseline: dict[str, Any], **identity: Any) -> None:
+        timelines.append({"id": len(timelines) + 1, "subject_kind": subject_kind, **identity, "baseline": baseline,
+                          "baseline_status": "legacy_unverified", "legacy_compat_allowed": True, "revision": 1})
+
+    fields = ("profile", "appearance", "personality", "background", "current_state", "life_status", "age", "gender")
+    for row in rows("characters"):
+        if _is_int(row.get("id")):
+            baseline = {f: row.get(f, "alive" if f == "life_status" else "") for f in fields}
+            add("character", baseline, character_id=row["id"])
+    for row in rows("world_settings"):
+        if _is_int(row.get("id")):
+            add("world", {"content": row.get("content", "")}, world_setting_id=row["id"])
+    for row in rows("relationships"):
+        row.pop("is_present", None)  # v1 无此字段，不能从旧备份引入 v2 语义。
+        a, b = row.get("a_id"), row.get("b_id")
+        if _is_int(a) and _is_int(b) and a != b:
+            add("relationship", {
+                "exists": True, "identity": {"a_id": a, "b_id": b, "type_id": row.get("type_id")},
+                "intimacy": row.get("intimacy", 0), "status": row.get("status", "normal"),
+                "description": row.get("description", ""),
+            }, character_id=min(a, b), related_character_id=max(a, b))
+    for row in rows("character_careers"):
+        if _is_int(row.get("character_id")) and _is_int(row.get("career_id")):
+            add("career", {"exists": True, "role": row.get("role"), "stage_id": row.get("stage_id"),
+                           "note": row.get("note", "")},
+                character_id=row["character_id"], career_id=row["career_id"])
+    for row in rows("organization_members"):
+        if _is_int(row.get("character_id")) and _is_int(row.get("organization_id")):
+            add("membership", {"exists": True, "position": row.get("position", ""),
+                               "status": row.get("status", "active"), "note": row.get("note", "")},
+                character_id=row["character_id"], organization_id=row["organization_id"])
+    # v1 中若冒充 v2 表，绝不信任其内容。
+    tables.update({"setting_timelines": timelines, "setting_text_fields": [], "setting_progressions": []})
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
-    """按版本逐级升级到当前版本（以后新增 v2 时在这里补 v1 → v2 的转换）。"""
-    steps: dict[int, Any] = {}
+    """按版本逐级升级到当前版本。"""
+    steps = {1: _migrate_v1_to_v2}
     while version < VERSION:
         data = steps[version](data)
         version += 1
@@ -322,6 +388,179 @@ def _check_refs(backup: Backup, errors: _Errors) -> None:
                 errors.add(f"{name}第 {i} 行引用的风格 {row['style_ref']} 不在 styles 中")
 
 
+def _check_setting_data(backup: Backup, errors: _Errors) -> None:
+    """v2 的设定事件是核心事实：类型、主体、引用缺失均不能降级为警告。"""
+    tables = backup.tables
+    timelines = {row["id"]: row for row in tables.get("setting_timelines", [])}
+    fields = {row["id"]: row for row in tables.get("setting_text_fields", [])}
+    events = {row["id"]: row for row in tables.get("setting_progressions", [])}
+    stages = {row["id"]: row for row in tables.get("career_stages", [])}
+    careers = {row["id"]: row for row in tables.get("careers", [])}
+    sources = {row["id"]: row for row in tables.get("analysis_changes", [])}
+    relationships = {row["id"]: row for row in tables.get("relationships", [])}
+    ids = _id_sets(backup.project, tables)
+    ctx = RemapContext({table: {value: value for value in values} for table, values in ids.items()}, identity=True)
+    subject_fields = {
+        "character": ("character_id",), "world": ("world_setting_id",),
+        "relationship": ("character_id", "related_character_id"),
+        "career": ("character_id", "career_id"), "membership": ("character_id", "organization_id"),
+    }
+    all_subject_fields = {item for names in subject_fields.values() for item in names}
+    subjects: set[tuple[Any, ...]] = set()
+
+    def payload_refs(value: Any, *, event_field: str | None = None) -> bool:
+        before = sum(ctx.missing.values())
+        remap.setting_event_value(value, event_field, ctx)
+        return sum(ctx.missing.values()) == before
+
+    def stage_matches(timeline: dict[str, Any], stage_id: Any) -> bool:
+        stage = stages.get(stage_id) if _is_int(stage_id) else None
+        return stage is not None and stage.get("career_id") == timeline.get("career_id")
+
+    def source_matches(timeline: dict[str, Any], source: dict[str, Any]) -> bool:
+        """只校验稳定主体：手动调整后事件字段或章节位置可以不同于原分析。"""
+        kind = source.get("kind")
+        target = source.get("target")
+        if not isinstance(target, dict):
+            return False
+
+        def same_id(name: str) -> bool:
+            value = target.get(name)
+            return _is_int(value) and value == timeline.get(name)
+
+        if kind in ("character_state", "life_status"):
+            return timeline.get("subject_kind") == "character" and same_id("character_id")
+        if kind == "career_stage":
+            return timeline.get("subject_kind") == "career" and same_id("character_id") and same_id("career_id")
+        if kind == "org_membership":
+            return (timeline.get("subject_kind") == "membership" and same_id("character_id")
+                    and same_id("organization_id"))
+        if kind not in ("relationship_update", "relationship_create") or timeline.get("subject_kind") != "relationship":
+            return False
+        a_id, b_id = target.get("a_id"), target.get("b_id")
+        if (not _is_int(a_id) or not _is_int(b_id)
+                or (min(a_id, b_id), max(a_id, b_id)) !=
+                (timeline.get("character_id"), timeline.get("related_character_id"))):
+            return False
+        if "relationship_id" in target:
+            relationship_id = target["relationship_id"]
+            carrier = relationships.get(relationship_id) if _is_int(relationship_id) else None
+            if carrier is None or {carrier.get("a_id"), carrier.get("b_id")} != {a_id, b_id}:
+                return False
+        return True
+
+    for i, row in enumerate(tables.get("setting_timelines", []), start=1):
+        kind = row.get("subject_kind")
+        required = subject_fields.get(kind, ())
+        subject = tuple(row.get(name) for name in required)
+        if (not required or any(not _is_int(value) for value in subject)
+                or any(row.get(name) is not None for name in all_subject_fields - set(required))
+                or (kind == "relationship" and subject[0] >= subject[1])):
+            errors.add(f"设定时间线第 {i} 行主体身份不合法")
+            continue
+        key = (kind, *subject)
+        if key in subjects:
+            errors.add(f"设定时间线第 {i} 行主体重复")
+        subjects.add(key)
+        if (not all(name in row for name in ("baseline", "baseline_status", "legacy_compat_allowed", "revision"))
+                or row.get("revision", 0) < 1
+                or (row.get("baseline_status") == "confirmed" and row.get("legacy_compat_allowed"))):
+            errors.add(f"设定时间线第 {i} 行基础状态不完整")
+            continue
+        baseline = row["baseline"]
+        identity = subject if kind == "relationship" else None
+        try:
+            validate_baseline(kind, baseline, subject_identity=identity)
+        except ValueError as exc:
+            errors.add(f"设定时间线第 {i} 行基础设定不合法：{exc}")
+            continue
+        if not payload_refs(baseline):
+            errors.add(f"设定时间线第 {i} 行基础设定引用了不存在的数据")
+        if kind == "career" and baseline.get("exists"):
+            career = careers.get(row["career_id"])
+            if (
+                not stage_matches(row, baseline.get("stage_id"))
+                or career is None
+                or baseline.get("role") != career.get("kind")
+            ):
+                errors.add(f"设定时间线第 {i} 行职业阶段或类别不属于该职业")
+
+    # v2 中每个现存主体都有明确基线；只验证数据存在性，不从当前值猜测缺失历史。
+    required_subjects = (
+        [("world", r["id"]) for r in tables.get("world_settings", [])]
+        + [("character", r["id"]) for r in tables.get("characters", [])]
+        + [("relationship", min(r["a_id"], r["b_id"]), max(r["a_id"], r["b_id"]))
+           for r in tables.get("relationships", []) if _is_int(r.get("a_id")) and _is_int(r.get("b_id"))]
+        + [("career", r.get("character_id"), r.get("career_id")) for r in tables.get("character_careers", [])]
+        + [
+            ("membership", r.get("character_id"), r.get("organization_id"))
+            for r in tables.get("organization_members", [])
+        ]
+    )
+    if any(key not in subjects for key in required_subjects):
+        errors.add("备份中有设定主体缺少时间线基础数据")
+
+    names: set[tuple[int, str]] = set()
+    for i, row in enumerate(tables.get("setting_text_fields", []), start=1):
+        timeline = timelines.get(row.get("timeline_id"))
+        label_value = row.get("label")
+        if (timeline is None or timeline.get("subject_kind") not in ("character", "world")
+                or not isinstance(label_value, str) or not label_value.strip() or label_value != label_value.strip()):
+            errors.add(f"设定文本字段第 {i} 行主体或名称不合法")
+            continue
+        key = (row["timeline_id"], label_value)
+        if key in names:
+            errors.add(f"设定文本字段第 {i} 行名称重复")
+        names.add(key)
+        if "base_value" not in row or "sort" not in row:
+            errors.add(f"设定文本字段第 {i} 行基础数据不完整")
+
+    for i, row in enumerate(tables.get("setting_progressions", []), start=1):
+        timeline = timelines.get(row.get("timeline_id"))
+        if timeline is None:
+            continue  # 直接外键错误由 _check_refs 报告。
+        source_id = row.get("source_change_id")
+        if source_id is not None and (source_id not in sources or not source_matches(timeline, sources[source_id])):
+            errors.add(f"设定剧情变化第 {i} 行的分析来源与主体不一致")
+        required = ("field_key", "custom_field_id", "operation", "value", "anchor_kind", "boundary",
+                    "sort_order", "source", "protection", "revision", "active")
+        if not all(name in row for name in required) or row.get("revision", 0) < 1 or row.get("sort_order", -1) < 0:
+            errors.add(f"设定剧情变化第 {i} 行数据不完整")
+            continue
+        field_id = row.get("custom_field_id")
+        if field_id is not None and (field_id not in fields or fields[field_id].get("timeline_id") != timeline["id"]):
+            errors.add(f"设定剧情变化第 {i} 行文本字段不属于该主体")
+            continue
+        anchor_kind, chapter_id, chapter_no = row.get("anchor_kind"), row.get("chapter_id"), row.get("chapter_no")
+        if not ((anchor_kind == "chapter" and chapter_no is None)
+                or (anchor_kind == "planned" and chapter_id is None and _is_int(chapter_no) and chapter_no >= 1)):
+            errors.add(f"设定剧情变化第 {i} 行章节锚点不合法")
+        other = events.get(row.get("superseded_by_id"))
+        if other is not None and (other["id"] == row["id"] or other.get("timeline_id") != timeline["id"]):
+            errors.add(f"设定剧情变化第 {i} 行的替代记录不属于该主体")
+        kind, field_key = timeline.get("subject_kind"), row.get("field_key")
+        identity = ((timeline.get("character_id"), timeline.get("related_character_id"))
+                    if kind == "relationship" else None)
+        try:
+            validate_progression_value(kind, field_key, row.get("operation"), row["value"],
+                                       custom_field_id=field_id, subject_identity=identity)
+        except ValueError as exc:
+            errors.add(f"设定剧情变化第 {i} 行数据不合法：{exc}")
+            continue
+        if not payload_refs(row["value"], event_field=field_key):
+            errors.add(f"设定剧情变化第 {i} 行引用了不存在的数据")
+        if kind == "career":
+            value = row["value"]
+            state = value.get("state") if field_key == "presence" and isinstance(value, dict) else None
+            stage_id = value if field_key == "stage_id" else state.get("stage_id") if isinstance(state, dict) else None
+            if stage_id is not None and not stage_matches(timeline, stage_id):
+                errors.add(f"设定剧情变化第 {i} 行职业阶段不属于该职业")
+            if isinstance(state, dict):
+                career = careers.get(timeline.get("career_id"))
+                if career is None or state.get("role") != career.get("kind"):
+                    errors.add(f"设定剧情变化第 {i} 行职业类别不属于该职业")
+
+
 def _check_styles(styles: Any, errors: _Errors) -> list[dict[str, Any]]:
     if styles is None:
         return []
@@ -410,6 +649,9 @@ def parse_backup(raw: bytes) -> Backup:
     tables = data.get("tables")
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
+    for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
+        if table not in tables or tables[table] is None:
+            errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
     if isinstance(project.get("wizard_progress"), dict):
         try:
@@ -439,6 +681,8 @@ def parse_backup(raw: bytes) -> Backup:
         data=data, version=version, tables=clean, styles=styles, project=project, warnings=warnings, cover=cover
     )
     _check_refs(backup, errors)
+    errors.raise_if_any()
+    _check_setting_data(backup, errors)
     errors.raise_if_any()
     return backup
 
@@ -586,7 +830,10 @@ def _dry_run_missing(backup: Backup) -> Counter[str]:
         for row in backup.tables.get(rule.table) or []:
             for col, fn in (*rule.json_refs.items(), *rule.str_refs.items()):
                 if col in row:
-                    fn(row[col], ctx)
+                    if rule.table == "setting_progressions" and col == "value":
+                        remap.setting_event_value(row[col], row.get("field_key"), ctx)
+                    else:
+                        fn(row[col], ctx)
     return ctx.missing
 
 
@@ -687,7 +934,10 @@ class _Importer:
                 elif v is not None:
                     v = self.maps[target][v]
             elif col_name in rule.json_refs:
-                v = rule.json_refs[col_name](v, self.ctx)
+                if rule.table == "setting_progressions" and col_name == "value":
+                    v = remap.setting_event_value(v, row.get("field_key"), self.ctx)
+                else:
+                    v = rule.json_refs[col_name](v, self.ctx)
             elif col_name in rule.str_refs:
                 v = rule.str_refs[col_name](v, self.ctx)
             else:
@@ -761,6 +1011,11 @@ class _Importer:
             values["pair_low"], values["pair_high"] = (
                 min(values["a_id"], values["b_id"]),
                 max(values["a_id"], values["b_id"]),
+            )
+        elif rule.table == "setting_timelines" and values.get("subject_kind") == "relationship":
+            # 导入文件的角色行顺序可与 ID 顺序不同，重映射后重新规范化稳定人物对。
+            values["character_id"], values["related_character_id"] = sorted(
+                (values["character_id"], values["related_character_id"])
             )
         elif rule.table == "chapters":
             ref = row.get("style_ref")
@@ -858,6 +1113,9 @@ class _Importer:
             await self._table(rule, rows)
         await self._backfill()
         await self._project_refs()
+        # 时间线才是最新值来源；在导入事务内取得项目屏障并重建全部主体，失败时一起回滚。
+        await project_lifecycle.lock_active(self.db, self.project_id)
+        await setting_progression_service.materialize_project(self.db, self.project_id)
         await self._retrieval()
         await self.db.flush()
         self.warnings += _missing_warnings(self.ctx.missing)

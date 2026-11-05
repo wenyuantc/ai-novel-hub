@@ -390,9 +390,7 @@ async def _execute_external(db, task_context, change, *, user_id, compare_previe
     engine = task_context.task_engine
     scope = engine.cleanup_scope(task) if engine is not None and task is not None else nullcontext()
     with scope:
-        return await _execute_external_impl(
-            db, task_context, change, user_id=user_id, compare_preview=compare_preview
-        )
+        return await _execute_external_impl(db, task_context, change, user_id=user_id, compare_preview=compare_preview)
 
 
 async def _execute_external_impl(
@@ -437,7 +435,10 @@ async def _execute_external_impl(
         raise ConflictError("修改正在处理中，请刷新后重试")
     await db.commit()
     sessions = mcp_tools.McpSessions(
-        task_context.mcp_connector, task_context.cipher, settings.allow_private_ai_endpoints, settings=settings,
+        task_context.mcp_connector,
+        task_context.cipher,
+        settings.allow_private_ai_endpoints,
+        settings=settings,
     )
     try:
         data = await mcp_tools.call_data(sessions, resolved, change.arguments)
@@ -575,6 +576,8 @@ async def _undo_changes(
         raise ConflictError("已启动的任务不能撤销，请在任务面板取消")
     memory_changed = False
     try:
+        # 整轮先预检，再开始恢复；旧记录不能导致前几项先执行副作用。
+        effects.validate_effect_versions([effect for row in rows for effect in row.effects])
         for row in rows:
             if row.status != "executed":
                 raise ConflictError("只有已执行的修改可以撤销")

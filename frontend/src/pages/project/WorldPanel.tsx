@@ -1,6 +1,7 @@
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import {
   App,
+  Alert,
   Button,
   Card,
   Empty,
@@ -14,14 +15,19 @@ import {
   Select,
   Space,
   Spin,
+  Tabs,
   Tag,
   Typography,
 } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
 import { errorMessage } from '../../api/client'
+import { baselineEditorLabel } from '../../api/progressions'
 import { worldApi } from '../../api/story'
-import type { WorldSetting, WorldSettingInput } from '../../api/types'
+import type { WorldSetting } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
+import SettingProgressionsPanel from '../../components/progressions/SettingProgressionsPanel'
+import { useWorldBaselineEditor } from '../../components/progressions/useWorldBaselineEditor'
+import type { WorldFormValues } from '../../components/progressions/worldForm'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
@@ -35,11 +41,11 @@ export default function WorldPanel() {
   const { message } = App.useApp()
   const loader = useCallback(() => worldApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
-  const [editing, setEditing] = useState<WorldSetting | null>(null)
-  const [modalOpen, setModalOpen] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<WorldSettingInput>()
+  const [tab, setTab] = useState('base')
+  const [form] = Form.useForm<WorldFormValues>()
+  const editor = useWorldBaselineEditor(pid, form)
+  const { editing, open, saving, baseline, baselineLoading, baselineError, baselineConflict } = editor
   const [filter, setFilter] = useState<string>('all')
   const groups = useMemo(
     () => groupWorld(items).filter((g) => filter === 'all' || g.category === filter),
@@ -47,40 +53,8 @@ export default function WorldPanel() {
   )
 
   const openEdit = (item: WorldSetting | null) => {
-    setEditing(item)
-    form.setFieldsValue(
-      item
-        ? { title: item.title, content: item.content, category: asWorldCategory(item.category), sort: item.sort }
-        : { title: '', content: '', category: filter === 'all' ? 'other' : asWorldCategory(filter), sort: null },
-    )
-    setModalOpen(true)
-  }
-
-  const handleSave = async () => {
-    if (!canEditNow()) return
-    const v = await form.validateFields()
-    if (!canEditNow()) return
-    const body: WorldSettingInput = {
-      title: v.title.trim(),
-      content: v.content ?? '',
-      category: v.category ?? 'other',
-      sort: v.sort ?? undefined,
-    }
-    setSaving(true)
-    try {
-      if (!canEditNow()) return
-      if (editing) await worldApi.update(pid, editing.id, body)
-      else await worldApi.create(pid, body)
-      if (!canEditNow()) return
-      message.success('已保存')
-      setModalOpen(false)
-      reload()
-    } catch (err) {
-      if (!canEditNow()) return
-      message.error(errorMessage(err))
-    } finally {
-      setSaving(false)
-    }
+    setTab('base')
+    editor.openEditor(item, filter === 'all' ? 'other' : asWorldCategory(filter))
   }
 
   const handleDelete = async (item: WorldSetting) => {
@@ -179,38 +153,115 @@ export default function WorldPanel() {
       </Spin>
 
       <Modal
-        okButtonProps={{ disabled: !canEdit }}
-        title={editing ? '编辑世界观条目' : '新增世界观条目'}
-        open={modalOpen}
-        onOk={() => void handleSave()}
-        onCancel={() => setModalOpen(false)}
+        okButtonProps={{ disabled: !canEdit || (!!editing && (!baseline || baselineLoading || !!baselineError || baselineConflict)) }}
+        title={editing ? (canEdit ? '编辑世界观条目' : '查看世界观条目') : '新增世界观条目'}
+        open={open}
+        onOk={() => void editor.save()}
+        onCancel={() => { if (!saving) editor.closeEditor() }}
         confirmLoading={saving}
+        closable={!saving}
+        keyboard={!saving}
+        maskClosable={!saving}
+        cancelButtonProps={{ disabled: saving }}
+        footer={tab === 'progression' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
         okText="保存"
         cancelText="取消"
         width={720}
         forceRender
       >
-        <Form form={form} layout="vertical" disabled={!canEdit}>
-          <Form.Item
-            name="title"
-            label="标题"
-            rules={[
-              { required: true, whitespace: true, message: '请输入标题' },
-              { max: 200, message: '不超过 200 字' },
-            ]}
-          >
-            <Input placeholder="例如：力量体系 / 青云山 / 天机阁" />
-          </Form.Item>
-          <Form.Item name="category" label="分类">
-            <Select options={CATEGORY_OPTIONS} style={{ width: 200 }} />
-          </Form.Item>
-          <Form.Item name="content" label="内容">
-            <Input.TextArea autoSize={{ minRows: 6, maxRows: 20 }} />
-          </Form.Item>
-          <Form.Item name="sort" label="排序（越小越靠前，可留空）">
-            <InputNumber style={{ width: 160 }} />
-          </Form.Item>
-        </Form>
+        <Tabs
+          activeKey={tab}
+          onChange={setTab}
+          items={[
+            {
+              key: 'base',
+              label: '基础设定',
+              forceRender: true,
+              children: (
+                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                  {baselineError && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={baselineError}
+                      description="基础表单中的草稿仍保留在当前窗口。"
+                      action={baselineConflict ? (
+                        <Popconfirm
+                          title="重新读取基础设定和条目信息？"
+                          description="未保存的基础内容、标题、分类和排序会被替换；请先复制需要保留的草稿。"
+                          okText="重新读取"
+                          cancelText="取消"
+                          onConfirm={() => editor.reloadBaseline(true)}
+                        >
+                          <Button size="small">重新读取</Button>
+                        </Popconfirm>
+                      ) : <Button size="small" onClick={() => editor.reloadBaseline()}>刷新基础设定</Button>}
+                    />
+                  )}
+                  {editing && baseline && !baselineError && (
+                    <Alert
+                      type={baseline.baseline_status === 'legacy_unverified' ? 'warning' : 'info'}
+                      showIcon
+                      message={baselineEditorLabel(baseline.baseline_status, canEdit)}
+                      description={baseline.baseline_status === 'legacy_unverified'
+                        ? canEdit ? '请检查基础内容并按需补录变化。旧资料中未记录的剧情变化无法自动还原。' : '旧资料中未记录的剧情变化无法自动还原，早期设定可能不准确。'
+                        : '这里的内容是章节变化应用前的基础值。'}
+                      action={baseline.baseline_status === 'legacy_unverified' && canEdit ? (
+                        <Popconfirm
+                          title="确认基础设定已校准？"
+                          description="请先检查并保存基础内容。"
+                          okText="确认已校准"
+                          cancelText="稍后"
+                          okButtonProps={{ disabled: baselineLoading || saving }}
+                          onConfirm={() => void editor.confirmBaseline()}
+                        >
+                          <Button size="small" disabled={baselineLoading || saving}>确认已校准</Button>
+                        </Popconfirm>
+                      ) : undefined}
+                    />
+                  )}
+                  <Spin spinning={baselineLoading}>
+                    <Form form={form} layout="vertical" disabled={saving || !canEdit || (!!editing && (!baseline || baselineLoading))}>
+                      <Form.Item
+                        name="title"
+                        label="标题"
+                        rules={[
+                          { required: true, whitespace: true, message: '请输入标题' },
+                          { max: 200, message: '不超过 200 字' },
+                        ]}
+                      >
+                        <Input placeholder="例如：力量体系 / 青云山 / 天机阁" />
+                      </Form.Item>
+                      <Form.Item name="category" label="分类">
+                        <Select options={CATEGORY_OPTIONS} style={{ width: 200 }} />
+                      </Form.Item>
+                      <Form.Item name="content" label={editing ? '基础内容' : '内容'}>
+                        <Input.TextArea autoSize={{ minRows: 6, maxRows: 20 }} />
+                      </Form.Item>
+                      <Form.Item name="sort" label="排序（越小越靠前，可留空）">
+                        <InputNumber style={{ width: 160 }} />
+                      </Form.Item>
+                    </Form>
+                  </Spin>
+                </Space>
+              ),
+            },
+            ...(editing ? [{
+              key: 'progression',
+              label: '剧情变化',
+              disabled: saving,
+              children: tab === 'progression' && open ? (
+                <SettingProgressionsPanel
+                  key={`${pid}:world:${editing.id}`}
+                  projectId={pid}
+                  target={{ subject_kind: 'world', world_setting_id: editing.id }}
+                  onChanged={editor.progressionChanged}
+                  onRequestConfirmBaseline={() => void editor.confirmBaseline()}
+                />
+              ) : null,
+            }] : []),
+          ]}
+        />
       </Modal>
 
       {canUseAI && (<WizardModal

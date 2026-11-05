@@ -1,8 +1,11 @@
 """设定、大纲、细纲和章节元信息的工具，复用原有服务校验与写入。"""
 
-from pydantic import BaseModel, Field, create_model
+from typing import Annotated, Literal, Self
+
+from pydantic import BaseModel, Field, create_model, model_validator
 from sqlalchemy import select
 
+from app.core.errors import BadRequestError, NotFoundError
 from app.models import (
     Career,
     Chapter,
@@ -10,12 +13,24 @@ from app.models import (
     Foreshadow,
     Organization,
     Relationship,
+    SettingTextField,
+    SettingTimeline,
 )
 from app.schemas.career import AssignmentCreate, CareerCreate, CareerUpdate
 from app.schemas.chapter import ChapterUpdate
 from app.schemas.foreshadow import ForeshadowCreate, ForeshadowUpdate
 from app.schemas.organization import MemberCreate, MemberUpdate, OrganizationCreate, OrganizationUpdate
 from app.schemas.outline import PlansSync
+from app.schemas.progression import (
+    AnchorKind,
+    BaselineUpdate,
+    Boundary,
+    NonnegativeDbInt,
+    PositiveDbInt,
+    ProgressionCreate,
+    ProgressionOperation,
+    SubjectKind,
+)
 from app.schemas.project import ProjectUpdate
 from app.schemas.relationship import RelationshipCreate, RelationshipUpdate
 from app.schemas.story import (
@@ -34,10 +49,12 @@ from app.services import (
     plan_service,
     project_service,
     relationship_service,
+    setting_progression_service,
     story_service,
 )
 
 from .base import EmptyArgs, IdArgs, Tool, ToolCtx, arguments, serialized
+from .read import PageArgs, paged
 
 
 def crud_tools(
@@ -120,9 +137,168 @@ class MemberArgs(MemberCreate):
     organization_id: int = Field(gt=0)
 
 
+class TimelineListArgs(PageArgs):
+    subject_kind: SubjectKind | None = None
+    character_id: PositiveDbInt | None = None
+    related_character_id: PositiveDbInt | None = None
+    world_setting_id: PositiveDbInt | None = None
+    career_id: PositiveDbInt | None = None
+    organization_id: PositiveDbInt | None = None
+
+
+class _IdentityValue(EmptyArgs):
+    a_id: PositiveDbInt
+    b_id: PositiveDbInt
+    type_id: PositiveDbInt
+
+
+_Intimacy = Annotated[int, Field(strict=True, ge=-100, le=100)]
+_Status = Literal["normal", "broken", "past", "complicated", "active", "left", "expelled", "dead"]
+
+
+class _BaselineChanges(EmptyArgs):
+    """五类主体允许修改的字段；主体及字段组合仍由统一设定服务校验。"""
+
+    profile: str | None = None
+    appearance: str | None = None
+    personality: str | None = None
+    background: str | None = None
+    current_state: str | None = None
+    age: str | None = None
+    gender: str | None = None
+    life_status: Literal["alive", "dead", "missing", "other"] | None = None
+    content: str | None = None
+    exists: Annotated[bool, Field(strict=True)] | None = None
+    identity: _IdentityValue | None = None
+    intimacy: _Intimacy | None = None
+    status: _Status | None = None
+    description: str | None = None
+    role: Literal["main", "sub"] | None = None
+    stage_id: PositiveDbInt | None = None
+    position: str | None = None
+    note: str | None = None
+
+
+class _PresenceState(EmptyArgs):
+    """建立关系、职业或成员时对应主体的完整状态。"""
+
+    identity: _IdentityValue | None = None
+    intimacy: _Intimacy | None = None
+    status: _Status | None = None
+    description: str | None = None
+    role: Literal["main", "sub"] | None = None
+    stage_id: PositiveDbInt | None = None
+    position: str | None = None
+    note: str | None = None
+
+
+class _PresenceValue(EmptyArgs):
+    exists: Annotated[bool, Field(strict=True)]
+    state: _PresenceState | None = Field(default=None, description="建立时提供该主体完整状态；退出时省略。")
+
+
+class _ProgressionValue(EmptyArgs):
+    """根据目标字段只提供一个类型化值，避免任意 JSON 产生不可用的模型工具声明。"""
+
+    text: str | None = Field(default=None, description="文本、状态及自定义文本字段使用。")
+    intimacy: _Intimacy | None = Field(default=None, description="关系亲密度使用。")
+    stage_id: PositiveDbInt | None = Field(default=None, description="职业阶段引用使用。")
+    identity: _IdentityValue | None = Field(default=None, description="关系身份字段使用。")
+    presence: _PresenceValue | None = Field(default=None, description="关系、职业或成员的建立／退出使用。")
+
+    @model_validator(mode="after")
+    def require_one_value(self) -> Self:
+        if len(self.model_fields_set) != 1 or getattr(self, next(iter(self.model_fields_set)), None) is None:
+            raise ValueError("变化值必须且只能填写一个非空的类型化值")
+        return self
+
+    def unpack(self):
+        value = getattr(self, next(iter(self.model_fields_set)))
+        return value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value
+
+
+class BaselineArgs(EmptyArgs):
+    timeline_id: PositiveDbInt
+    expected_revision: PositiveDbInt
+    changes: _BaselineChanges = Field(default_factory=_BaselineChanges, description="只填写要修正的基础字段。")
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def require_intent(self) -> Self:
+        if not self.changes.model_fields_set and not self.confirm:
+            raise ValueError("请选择要修改的基础字段或确认已校准")
+        return self
+
+
+class ProgressionArgs(EmptyArgs):
+    timeline_id: PositiveDbInt
+    expected_revision: PositiveDbInt
+    field_key: str | None = Field(default=None, min_length=1, max_length=64)
+    custom_field_id: PositiveDbInt | None = None
+    operation: ProgressionOperation
+    value: _ProgressionValue = Field(
+        description="只填写与字段对应的一个值：text、intimacy、stage_id、identity 或 presence。"
+    )
+    anchor_kind: AnchorKind
+    chapter_id: PositiveDbInt | None = None
+    chapter_no: PositiveDbInt | None = None
+    boundary: Boundary = "start"
+    sort_order: NonnegativeDbInt = 0
+    note: str = Field(default="", max_length=200)
+
+
+async def list_setting_timelines(ctx: ToolCtx, args: TimelineListArgs):
+    filters = args.model_dump(exclude={"page", "page_size"}, exclude_none=True)
+    result = await setting_progression_service.list_timelines(ctx.db, ctx.user_id, ctx.project_id, **filters)
+    page = paged(result.items, args)
+    timeline_ids = [item["id"] for item in page["items"]]
+    fields_by_timeline: dict[int, list[dict]] = {timeline_id: [] for timeline_id in timeline_ids}
+    if timeline_ids:
+        fields = await ctx.db.execute(
+            select(SettingTextField.timeline_id, SettingTextField.id, SettingTextField.label)
+            .join(SettingTimeline, SettingTimeline.id == SettingTextField.timeline_id)
+            .where(SettingTimeline.project_id == ctx.project_id, SettingTimeline.id.in_(timeline_ids))
+            .order_by(SettingTextField.timeline_id, SettingTextField.sort, SettingTextField.id)
+        )
+        for timeline_id, field_id, label in fields:
+            fields_by_timeline[timeline_id].append({"id": field_id, "label": label})
+    for item in page["items"]:
+        item["custom_fields"] = fields_by_timeline[item["id"]]
+    return page
+
+
+async def update_setting_baseline(ctx: ToolCtx, args: BaselineArgs):
+    data = BaselineUpdate.model_validate(args.model_dump(exclude={"timeline_id"}, exclude_unset=True))
+    return await setting_progression_service.update_baseline(
+        ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data
+    )
+
+
+async def record_setting_progression(ctx: ToolCtx, args: ProgressionArgs):
+    expected_type = {
+        "intimacy": "intimacy",
+        "stage_id": "stage_id",
+        "identity": "identity",
+        "presence": "presence",
+    }.get(args.field_key, "text")
+    if next(iter(args.value.model_fields_set)) != expected_type:
+        raise BadRequestError("变化值的类型与设定字段不匹配")
+    values = args.model_dump(exclude={"timeline_id", "value"}, exclude_unset=True)
+    data = ProgressionCreate.model_validate({**values, "value": args.value.unpack()})
+    return await setting_progression_service.create_progression(
+        ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data
+    )
+
+
 class RemoveMemberArgs(EmptyArgs):
     organization_id: int = Field(gt=0)
     character_id: int = Field(gt=0)
+    edit_mode: Literal["progression", "delete"] | None = None
+    expected_revision: PositiveDbInt | None = None
+    anchor_kind: Literal["chapter", "planned"] | None = None
+    chapter_id: PositiveDbInt | None = None
+    chapter_no: PositiveDbInt | None = None
+    boundary: Literal["start", "end"] = "start"
 
 
 async def set_member(ctx: ToolCtx, args: MemberArgs):
@@ -149,7 +325,39 @@ async def set_member(ctx: ToolCtx, args: MemberArgs):
 async def remove_member(ctx: ToolCtx, args: RemoveMemberArgs):
     current = await organization_service.find_membership(ctx.db, args.organization_id, args.character_id)
     if current is not None:
-        await organization_service.remove_member(ctx.db, ctx.user_id, ctx.project_id, args.organization_id, current.id)
+        await organization_service.remove_member(
+            ctx.db,
+            ctx.user_id,
+            ctx.project_id,
+            args.organization_id,
+            current.id,
+            edit_mode=args.edit_mode,
+            expected_revision=args.expected_revision,
+            anchor_kind=args.anchor_kind,
+            chapter_id=args.chapter_id,
+            chapter_no=args.chapter_no,
+            boundary=args.boundary,
+        )
+    elif args.edit_mode == "delete":
+        if (
+            args.anchor_kind is not None
+            or args.chapter_id is not None
+            or args.chapter_no is not None
+            or args.boundary != "start"
+        ):
+            raise BadRequestError("删除成员资料不能指定生效章节")
+        if args.expected_revision is None:
+            raise BadRequestError("删除成员资料必须指定设定版本")
+        await organization_service.delete_membership_record(
+            ctx.db, ctx.user_id, ctx.project_id, args.organization_id, args.character_id, args.expected_revision
+        )
+    elif (
+        args.edit_mode is not None
+        or args.anchor_kind is not None
+        or args.chapter_id is not None
+        or args.chapter_no is not None
+    ):
+        raise NotFoundError("当前成员不存在，请通过时间线记录变化")
     return {"ok": True}
 
 
@@ -160,9 +368,19 @@ class AssignmentArgs(AssignmentCreate):
 class RemoveAssignmentArgs(EmptyArgs):
     character_id: int = Field(gt=0)
     assignment_id: int = Field(gt=0)
+    edit_mode: Literal["baseline", "progression", "delete"] | None = None
+    expected_revision: PositiveDbInt | None = None
+    anchor_kind: Literal["chapter", "planned"] | None = None
+    chapter_id: PositiveDbInt | None = None
+    chapter_no: PositiveDbInt | None = None
+    boundary: Literal["start", "end"] = "start"
 
 
 async def assign_career(ctx: ToolCtx, args: AssignmentArgs):
+    if (args.edit_mode is not None or args.chapter_id is not None or args.chapter_no is not None) and (
+        args.expected_revision is None
+    ):
+        raise BadRequestError("明确修改意图或章节时必须指定设定版本")
     character = await story_service.get_owned(
         ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id, args.character_id
     )
@@ -176,6 +394,11 @@ async def assign_career(ctx: ToolCtx, args: AssignmentArgs):
         role=args.role,
         source="manual",
         chapter_no=args.chapter_no,
+        chapter_id=args.chapter_id,
+        anchor_kind=args.anchor_kind,
+        boundary=args.boundary,
+        edit_mode=args.edit_mode,
+        expected_revision=args.expected_revision,
         history_note=args.history_note,
     )
     row = await ctx.db.scalar(
@@ -184,11 +407,27 @@ async def assign_career(ctx: ToolCtx, args: AssignmentArgs):
             CharacterCareer.career_id == args.career_id,
         )
     )
-    return (await career_service.assignment_outs(ctx.db, [row]))[0]
+    return (await career_service.assignment_outs(ctx.db, [row]))[0] if row is not None else {"ok": True}
 
 
 async def remove_assignment(ctx: ToolCtx, args: RemoveAssignmentArgs):
-    await career_service.remove_assignment(ctx.db, ctx.user_id, ctx.project_id, args.character_id, args.assignment_id)
+    if (args.edit_mode is not None or args.chapter_id is not None or args.chapter_no is not None) and (
+        args.expected_revision is None
+    ):
+        raise BadRequestError("明确修改意图或章节时必须指定设定版本")
+    await career_service.remove_assignment(
+        ctx.db,
+        ctx.user_id,
+        ctx.project_id,
+        args.character_id,
+        args.assignment_id,
+        chapter_id=args.chapter_id,
+        chapter_no=args.chapter_no,
+        anchor_kind=args.anchor_kind,
+        boundary=args.boundary,
+        edit_mode=args.edit_mode,
+        expected_revision=args.expected_revision,
+    )
     return {"ok": True}
 
 
@@ -276,6 +515,15 @@ for noun, label, model, create_schema, update_schema, create, update, delete in 
     TOOLS.extend(crud_tools(noun, label, model, create_schema, update_schema, create, update, delete))
 TOOLS.extend(
     [
+        Tool("list_setting_timelines", "列出设定时间线及版本", TimelineListArgs, "read", list_setting_timelines),
+        Tool("update_setting_baseline", "修正或确认设定基础值", BaselineArgs, "small", update_setting_baseline),
+        Tool(
+            "record_setting_progression",
+            "在明确章节位置记录设定变化",
+            ProgressionArgs,
+            "small",
+            record_setting_progression,
+        ),
         Tool("set_org_member", "设置组织成员及职位", arguments("AgentMember", MemberArgs), "small", set_member),
         Tool("remove_org_member", "移除组织成员", RemoveMemberArgs, "delete", remove_member),
         Tool(

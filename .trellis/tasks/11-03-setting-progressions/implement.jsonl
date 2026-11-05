@@ -1,0 +1,15 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端模块分层与主题规范入口；各切片按需读取对应详细规范"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/database-core.md", "reason": "异步事务、父行写锁、真实外键与迁移约定；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/database-migration-and-fk.md", "reason": "异步事务、父行写锁、真实外键与迁移约定；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/entities-core.md", "reason": "关系职业写入口、选角裁剪、分析确认撤销原合同；以新设计明示变更为准；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/entities-career-and-analysis.md", "reason": "关系职业写入口、选角裁剪、分析确认撤销原合同；以新设计明示变更为准；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "新增核心表、格式升级、JSON ID重映射、引用闭包与导入原子性"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "局部改写锁定设定块、旧覆盖和预览parity"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端结构和相关规范入口"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/frontend-type-organization-1.md", "reason": "schema镜像、PATCH空值与API错误合同；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/frontend-type-organization-2.md", "reason": "schema镜像、PATCH空值与API错误合同；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/spec-excerpts/frontend-patch-validation-api.md", "reason": "schema镜像、PATCH空值与API错误合同；原规范连续摘录，避免注入截断"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/planning-resolution.md", "reason": "用户已选M1及9项规划核对结论，防止重新采用研究备选"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/timeline-and-legacy.md", "reason": "历史事实、写入与存在性证据；最终规则以design为准"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/integration-and-persistence.md", "reason": "AI入口、编号、备份、卡片、effects与权限检查矩阵"}
+{"file": ".trellis/tasks/11-03-setting-progressions/research/ui-and-contracts.md", "reason": "共享组件、表单防基线污染、旧响应隔离和浏览器验收"}

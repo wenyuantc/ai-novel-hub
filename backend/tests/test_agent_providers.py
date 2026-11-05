@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import httpx2
@@ -10,10 +11,11 @@ from anthropic import AsyncAnthropic
 from google import genai
 from google.genai import types
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from app.ai.providers.anthropic import AnthropicProvider
 from app.ai.providers.base import TOOLS_UNSUPPORTED, AIProviderError, LLMProvider
-from app.ai.providers.gemini import GeminiProvider, _gemini_schema
+from app.ai.providers.gemini import GeminiProvider, _gemini_schema, _gemini_tool_arguments
 from app.ai.providers.openai_compat import OpenAICompatProvider
 from tests.helpers import FakeLLM, Gate
 
@@ -326,6 +328,8 @@ def test_gemini_schema_resolves_refs_and_preserves_property_names():
             "rows": {"type": "array", "items": {"$ref": "#/$defs/Entry"}},
             "optional": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": None},
             "id": {"type": "integer", "exclusiveMinimum": 0, "exclusiveMaximum": 10},
+            "edit_mode": {"anyOf": [{"type": "string", "const": "baseline"}, {"type": "null"}]},
+            "const": {"type": "string"},
         },
     }
     result = _gemini_schema(schema)
@@ -334,6 +338,8 @@ def test_gemini_schema_resolves_refs_and_preserves_property_names():
     assert result["properties"]["rows"]["items"] == {"type": "object", "properties": {"title": {"type": "string"}}}
     assert result["properties"]["optional"] == {"type": "integer", "nullable": True}
     assert result["properties"]["id"] == {"type": "integer", "minimum": 1, "maximum": 9}
+    assert result["properties"]["edit_mode"] == {"type": "string", "enum": ["baseline"], "nullable": True}
+    assert result["properties"]["const"] == {"type": "string"}
     types.Schema.model_validate(result)
     assert schema["additionalProperties"] is False
 
@@ -345,6 +351,171 @@ def test_all_registered_tool_schemas_are_accepted_by_gemini_sdk():
         types.FunctionDeclaration(
             name=tool.name, description=tool.description, parameters=_gemini_schema(tool.parameters)
         )
+
+
+def test_gemini_schema_rejects_unrepresentable_non_string_const():
+    with pytest.raises(AIProviderError, match="非文本常量"):
+        _gemini_schema({"type": "integer", "const": 1})
+
+
+async def test_gemini_start_task_style_is_typed_and_preserves_task_values(monkeypatch):
+    from app.services.agent.tools import get_tool
+    from app.services.agent.tools.tasks import request_params
+
+    tool = get_tool("start_task")
+    spec = {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+    styles = ["inherit", "none", "123", None]
+    parts = [
+        {"functionCall": {"name": "start_task", "args": {
+            "kind": "chapter.generate", "params": {"chapter_id": 1, "style": value}
+        }}}
+        for value in styles
+    ]
+    sdk = SDKTransport(monkeypatch, "gemini", [[gemini_chunk(parts, "STOP")]])
+    events = [event async for event in sdk.provider.chat_tools_stream(MESSAGES, "test-model", [spec])]
+    calls = tool_calls(events)
+    assert len(calls) == 4
+    args = [json.loads(call["arguments"]) for call in calls]
+    assert [item["params"]["style"] for item in args] == ["inherit", "none", 123, None]
+    # 第一次调用保留 Gemini 的原始签名 parts，回放不受内部参数规范化影响。
+    assert calls[0]["provider_metadata"]["parts"][2]["function_call"]["args"]["params"]["style"] == "123"
+    style = (sdk.requests[0]["tools"][0]["functionDeclarations"][0]["parameters"]
+             ["properties"]["params"]["properties"]["style"])
+    assert style["type"] == "STRING" and "anyOf" not in style
+    assert "数字文本" in style["description"]
+    original_style = spec["parameters"]["$defs"]["AgentTaskParams"]["properties"]["style"]
+    assert {variant["type"] for variant in original_style["anyOf"]} == {"string", "integer", "null"}
+
+    ctx = SimpleNamespace(project_id=1)
+    for item, expected in zip(args[:3], ["inherit", "none", 123], strict=True):
+        parsed = tool.schema.model_validate(item)
+        assert request_params(ctx, parsed)["style"] == expected
+    with pytest.raises(ValidationError):  # 显式 null 保持原执行层的拒绝语义，不偷偷改成 inherit。
+        request_params(ctx, tool.schema.model_validate(args[3]))
+
+    unrelated = {"params": {"style": "123"}, "style": "456"}
+    assert _gemini_tool_arguments("other_tool", unrelated) == unrelated
+    assert _gemini_tool_arguments("start_task", {"style": "123"}) == {"style": "123"}
+    for encoded in ("123", " 123 ", "+123", "00123", "123.0", "12_3"):
+        assert _gemini_tool_arguments("start_task", {"params": {"style": encoded}})["params"]["style"] == 123
+    assert _gemini_tool_arguments("start_task", {"params": {"style": 123.0}})["params"]["style"] == 123
+    assert _gemini_tool_arguments("start_task", {"params": {"style": "1e3"}})["params"]["style"] == "1e3"
+    with pytest.raises(AIProviderError, match="超出有效范围"):
+        _gemini_tool_arguments("start_task", {"params": {"style": "999999999999999999"}})
+
+
+async def test_gemini_style_id_goes_through_existing_ownership_check(app, client, make_client, monkeypatch):
+    from app.models import Project
+    from app.services.agent.tools import get_tool
+    from app.services.agent.tools.base import ToolCtx
+    from tests.helpers import create_project, register
+
+    user = await register(client)
+    project = await create_project(client)
+    chapter = await client.post(f"/api/v1/projects/{project['id']}/chapters", json={"title": "第一章"})
+    assert chapter.status_code == 201, chapter.text
+    other = make_client()
+    await register(other, "other_author")
+    response = await other.post("/api/v1/styles", json={"name": "他人的私有风格"})
+    assert response.status_code == 201, response.text
+    style_id = response.json()["id"]
+    original = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": f" +{style_id}.0 "}}
+    parts = [{"functionCall": {"name": "start_task", "args": original}}]
+    sdk = SDKTransport(monkeypatch, "gemini", [[gemini_chunk(parts, "STOP")]])
+    tool = get_tool("start_task")
+    spec = {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+    events = [event async for event in sdk.provider.chat_tools_stream(MESSAGES, "test-model", [spec])]
+    args = json.loads(tool_calls(events)[0]["arguments"])
+    assert args["params"]["style"] == style_id
+    async with app.state.sessionmaker() as db:
+        project_row = await db.get(Project, project["id"])
+        ctx = ToolCtx(db, project_row, user["id"], app.state.task_engine.ctx)
+        assert await tool.preview(ctx, args) == {"error": "不存在"}
+
+
+async def test_agent_reference_ids_reject_out_of_range_values_before_database_binding(app, client):
+    from app.models import Project, WritingStyle
+    from app.services.agent.tools import get_tool
+    from app.services.agent.tools.base import ToolCtx
+    from tests.helpers import create_ai_config, create_project, register
+
+    user = await register(client)
+    project = await create_project(client)
+    await create_ai_config(client)
+    chapter = await client.post(f"/api/v1/projects/{project['id']}/chapters", json={"title": "第一章"})
+    assert chapter.status_code == 201, chapter.text
+    tool = get_tool("start_task")
+    async with app.state.sessionmaker() as db:
+        project_row = await db.get(Project, project["id"])
+        ctx = ToolCtx(db, project_row, user["id"], app.state.task_engine.ctx)
+
+        # 原生整数既可能来自其他 provider，也可能来自不遵守 Gemini 字符串 schema 的模型。
+        for invalid in (2**63, 2_147_483_648):
+            args = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": invalid}}
+            assert await tool.preview(ctx, args) == {"error": "引用 ID 超出有效范围"}
+        args = {"kind": "chapter.generate", "params": {"chapter_id": 2**63, "style": "inherit"}}
+        assert await tool.preview(ctx, args) == {"error": "引用 ID 超出有效范围"}
+
+        for invalid in (-1, -2_147_483_648, -2_147_483_649, -(2**100)):
+            for wire_value in (invalid, str(invalid)):
+                args = _gemini_tool_arguments(
+                    "start_task",
+                    {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": wire_value}},
+                )
+                assert await tool.preview(ctx, args) == {"error": "引用 ID 必须是正整数"}
+
+        db.add(WritingStyle(id=2_147_483_647, user_id=user["id"], name="合法上限风格"))
+        await db.flush()
+        args = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": 2_147_483_647}}
+        result = await tool.preview(ctx, args)
+        assert "error" not in result, result
+
+
+@pytest.mark.parametrize("kind", ["openai", "anthropic", "gemini"])
+async def test_provider_style_ids_keep_existing_ownership_checks(app, client, make_client, monkeypatch, kind):
+    from app.models import Project
+    from app.services.agent.tools import get_tool
+    from app.services.agent.tools.base import ToolCtx
+    from tests.helpers import create_ai_config, create_project, register
+
+    user = await register(client)
+    project = await create_project(client)
+    await create_ai_config(client)
+    chapter = await client.post(f"/api/v1/projects/{project['id']}/chapters", json={"title": "第一章"})
+    assert chapter.status_code == 201, chapter.text
+    own = await client.post("/api/v1/styles", json={"name": "自己的私有风格"})
+    assert own.status_code == 201, own.text
+    other = make_client()
+    await register(other, "other_author")
+    foreign = await other.post("/api/v1/styles", json={"name": "他人的私有风格"})
+    assert foreign.status_code == 201, foreign.text
+
+    def response(style_id):
+        wire_id = str(style_id) if kind == "gemini" else style_id
+        args = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": wire_id}}
+        if kind == "openai":
+            call = {"index": 0, "id": "call-1", "function": {"name": "start_task", "arguments": json.dumps(args)}}
+            return [openai_chunk({"tool_calls": [call]}, "tool_calls")]
+        if kind == "anthropic":
+            block = {"type": "tool_use", "id": "call-1", "name": "start_task", "input": {}}
+            return anthropic_stream([(block, [{"type": "input_json_delta", "partial_json": json.dumps(args)}])])
+        return [gemini_chunk([{"functionCall": {"name": "start_task", "args": args}}], "STOP")]
+
+    sdk = SDKTransport(monkeypatch, kind, [response(own.json()["id"]), response(foreign.json()["id"])])
+    tool = get_tool("start_task")
+    spec = {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+    async with app.state.sessionmaker() as db:
+        project_row = await db.get(Project, project["id"])
+        ctx = ToolCtx(db, project_row, user["id"], app.state.task_engine.ctx)
+        for expected_id, permitted in ((own.json()["id"], True), (foreign.json()["id"], False)):
+            events = [event async for event in sdk.provider.chat_tools_stream(MESSAGES, "test-model", [spec])]
+            args = json.loads(tool_calls(events)[0]["arguments"])
+            assert args["params"]["style"] == expected_id
+            result = await tool.preview(ctx, args)
+            if permitted:
+                assert "error" not in result, result
+            else:
+                assert result == {"error": "不存在"}
 
 
 @pytest.mark.parametrize("kind", ["openai", "anthropic", "gemini"])

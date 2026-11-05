@@ -65,6 +65,7 @@ def describe_tools_error(exc) -> str
 - **Gemini schema 清洗** `_gemini_schema`：展开本地 `$ref`（外部或循环引用 → 报错）；删除 `additionalProperties` / `$schema` / `$id` / `$defs` /
   `definitions` / `title` / `default` / `examples`（只删关键字，不删同名业务属性）；`exclusiveMinimum/Maximum` → `minimum/maximum`（整数 ±1，
   其他按包含边界，执行前仍由 Pydantic 严格校验）；`anyOf` 含 null → `nullable: true`（只剩一个分支时展开）。
+  Pydantic 单值 `Literal[str]` 的 `const` 必须等价转换为单项 `enum`，保留同名业务字段；非文本常量返回 `AIProviderError`，不能静默丢弃约束。 对 `start_task.params.style` 的字符串／整数联合，仅 Gemini 声明改为字符串：`inherit`、`none` 或数字文本；Provider 在事件边界将合法数字文本转为整数，原样重放签名 parts，后续仍由原任务 schema 和风格归属校验。显式 null 不改写，沿用原执行校验。
 
 ### 4. 必需的测试
 
@@ -88,7 +89,7 @@ ToolKind = Literal["read", "small", "delete", "task", "text", "external"]   # ex
     async def run(ctx, args) -> dict       # 仅读工具
     async def preview(ctx, args) -> dict   # 写工具：校验 + 对比，不落库
     async def execute(ctx, args) -> dict   # 写工具：在 SAVEPOINT 内执行
-get_tool(name) / list_tools()   # tools/__init__.py 的静态白名单：READ + SKILL + WRITE + TEXT + TASK（共 51 个）
+get_tool(name) / list_tools()   # tools/__init__.py 的静态白名单：READ + SKILL + WRITE + TEXT + TASK（共 54 个）
 async def validate_references(ctx, args, *, id_model=None)   # tools/references.py
 ```
 
@@ -104,7 +105,7 @@ async def validate_references(ctx, args, *, id_model=None)   # tools/references.
 - **参数**：Pydantic `extra="forbid"`（`EmptyArgs` / `arguments(name, schema, with_id=)` 生成），校验失败、`AppError` 一律转成工具结果
   `{"error": ...}`（`NotFoundError` 统一为 `{"error": "不存在"}`，不区分不存在与无权限；`ValidationError` 为 `{"error": "工具参数校验失败", "errors": [{field, message}]}`），
   **不抛异常、不中断这一轮**。
-- **引用校验先于 schema**（`_validate` 先 `validate_references` 再 `model_validate`，嵌套在 `params` 里会被丢弃的越权 id 也要拦）：
+- **引用校验先于 schema**（`_validate` 先 `validate_references` 再 `model_validate`，嵌套在 `params` 里会被丢弃的越权 id 也要拦）： `owned_reference` 在数据库绑定前要求 ID 为 1–2,147,483,647 的整数，再查项目/用户归属；越界返回可处理的工具错误，不让 SQLite/PG 整数溢出。
   - `project_id` 必须等于当前项目，否则「不存在」；出现 `user_id` → 400「工具不能指定用户」；
   - 键 `id` 按 `id_model` 查；`references._MODELS` 中登记的 `*_id` 按对应模型查**属于当前项目**（`WritingStyle` 预设或本人、`AIConfig` 本人、
     `RelationshipType` 预置或本项目、`CareerStage` / `OrganizationMember` / `CharacterCareer` 经父表 join 到项目；`skill_id` → `Skill`
@@ -242,11 +243,12 @@ async def undo(db, project_id, effects) -> bool            # 不 commit；返回
 - **差异范围**：`EFFECT_TABLES` = `projects`、`characters`、`organizations`、`organization_members`、`relationship_types`（只取本项目自定义；全局预置只读）、
   `relationships`、`relationship_history`、`careers`、`career_stages`、`character_careers`、`career_history`、`world_settings`、`outlines`、
   `chapter_plans`、`chapters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`story_memories`、`chapter_characters`、
-  `chapter_analyses`、`analysis_changes`、`chapter_versions`、`generation_logs`、`tasks`。规则取自备份注册表 `PROJECT_RULE` + `RULES`
+  `chapter_analyses`、`analysis_changes`、`setting_timelines`、`setting_text_fields`、`setting_progressions`、`chapter_versions`、`generation_logs`、`tasks`。规则取自备份注册表 `PROJECT_RULE` + `RULES`
   （**顺序即插入顺序，逆序即删除顺序**），另加 `tasks`。写工具新改动一张表时必须加进来。
 - **列**：忽略 `updated_at` / `word_count`；`created_at` 必须保留（创建后不变，不影响冲突比较；撤销删除时靠它恢复原创建时间，见 `test_undo_delete_keeps_original_created_at`），但 `preview_diff` 必须跳过它，否则新建类提案的预览随秒变化，确认时误判 409，见 `test_preview_diff_ignores_created_at_of_inserted_rows`）；`chapters.content` 不进快照，只存 `_content_hash`，空白正文另存 `_empty_content`
   （唯一会被工具删除的章节是细纲同步删掉的空章节）；`chapter_versions` 只跟踪这些被删空章节的版本（正文修改产生的新版本属于历史，不撤销）；
   `generation_logs` / `tasks` 只取 `id / project_id / chapter_id`，只记录修改（章节删除导致的 SET NULL），不记录增删。
+- **时间线效果版本**：新效果带 `format_version: 2`；旧格式效果若影响设定主体或章锚，在任何恢复之前 409 `legacy_effect_requires_manual_correction`，纯正文旧效果仍可撤销。还原后同事务 `materialize_project` 验证并重算投影；预览对新建引用 ID 做语义化归一，基础值只展示变化字段，但冲突保护保留完整值。`list_setting_timelines`、`update_setting_baseline`、`record_setting_progression` 必须校验作品、字段、章节和引用。 列表 `items[].custom_fields` 批量返回本页字段的 `{id, label}`；基础修正的 `changes` 为显式字段对象，剧情变化 `value` 是只填 `text / intimacy / stage_id / identity / presence` 之一的类型化对象，服务仍校验字段与主体相容性。旧格式尚未执行的工具提案须重新生成。
 - **快照用列查询**（不是 ORM 实例），避免数据库级联或 Core UPDATE 之后读到 identity map 里的旧值。
 - **冲突检测**（任一条不满足 → 409 `{detail: "数据已变化，无法撤销，请检查冲突", code: "undo_conflict", conflicts: [{table, label}]}`，不做任何修改）：
   - 原来是插入 / 修改：当前行（`FOR UPDATE`、项目范围内）必须等于 `after`；

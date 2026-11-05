@@ -1,5 +1,19 @@
 from typing import Any
 
+from sqlalchemy import select
+
+from app.core.errors import BadRequestError
+from app.models import (
+    Character,
+    Organization,
+    OrganizationMember,
+    Relationship,
+    RelationshipHistory,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
+)
+from app.services import organization_service, setting_progression_service
 from app.services.card_service import rename_for
 from tests.helpers import create_project, register
 
@@ -50,8 +64,8 @@ async def test_cards_roundtrip_with_rename(client):
     )
     assert resp.status_code == 200, resp.text
     card = resp.json()
-    assert (card["format"], card["version"]) == ("ainovel.cards", 2)
-    # 没有挂职业：v2 的职业字段为空
+    assert (card["format"], card["version"]) == ("ainovel.cards", 3)
+    # 没有挂职业：职业字段为空
     assert card["careers"] == [] and all(c["careers"] == [] for c in card["characters"])
     assert [c["name"] for c in card["characters"]] == ["林远", "张三", "李四"]
     assert card["characters"][0]["aliases"] == ["小远"]
@@ -188,7 +202,7 @@ async def test_import_rejects_bad_files(client):
     cases = [
         ([1, 2], "应为 JSON 对象"),
         ({"format": "other", "version": 1}, "不是有效的卡片文件"),
-        ({"format": "ainovel.cards", "version": 3}, "不支持的卡片版本"),
+        ({"format": "ainovel.cards", "version": 4}, "不支持的卡片版本"),
         ({"format": "ainovel.cards", "version": True}, "不支持的卡片版本"),
         ({"format": "ainovel.cards", "version": 2, "careers": [{"name": "剑修", "stages": []}]}, "卡片文件格式不正确"),
         ({"format": "ainovel.cards", "version": 1, "characters": [{"name": ""}]}, "卡片文件格式不正确"),
@@ -242,7 +256,7 @@ async def test_cards_v2_careers_roundtrip(client):
     await client.post(f"{base}/characters/{zhang['id']}/careers", json={"career_id": dan["id"]})
 
     card = (await client.post(f"{base}/cards/export", json={"character_ids": [lin["id"], zhang["id"]]})).json()
-    assert card["version"] == 2 and not _id_keys(card)
+    assert card["version"] == 3 and not _id_keys(card)
     assert card["characters"][0]["careers"] == [
         {"career_name": "剑修", "role": "main", "stage_name": "金丹", "note": "初入"},
         {"career_name": "丹师", "role": "sub", "stage_name": "一品", "note": ""},
@@ -319,3 +333,568 @@ async def test_cards_v2_unresolved_careers(client):
     result = (await client.post(f"{base}/cards/import", json={"data": v1})).json()
     assert [c["action"] for c in result["characters"]] == ["created"]
     assert (result["careers"], result["careers_assigned"]) == ([], 0)
+
+
+async def test_cards_v3_custom_text_fields_roundtrip(client, app):
+    """文本自定义字段作为无内部 ID 的角色快照跨作品导入导出。"""
+    await register(client)
+    src = await create_project(client, title="自定义字段来源")
+    src_base = f"/api/v1/projects/{src['id']}"
+    original = {
+        "format": "ainovel.cards",
+        "version": 3,
+        "characters": [
+            {
+                "name": "林远",
+                "current_state": "金丹期",
+                "custom_text_fields": [
+                    {"name": "功法", "value": "九阳真经\n练至大成"},
+                    {"name": "随身物", "value": ""},
+                ],
+            }
+        ],
+    }
+    preview = await client.post(f"{src_base}/cards/import/preview", json={"data": original})
+    assert preview.status_code == 200, preview.text
+    imported = await client.post(f"{src_base}/cards/import", json={"data": original})
+    assert imported.status_code == 200, imported.text
+    char_id = imported.json()["characters"][0]["id"]
+    exported = await client.post(f"{src_base}/cards/export", json={"character_ids": [char_id]})
+    assert exported.status_code == 200, exported.text
+    card = exported.json()
+    assert card["version"] == 3
+    assert not _id_keys(card)
+    assert card["characters"][0]["current_state"] == "金丹期"
+    assert card["characters"][0]["custom_text_fields"] == [
+        {"name": "功法", "value": "九阳真经\n练至大成"},
+        {"name": "随身物", "value": ""},
+    ]
+    async with app.state.sessionmaker() as db:
+        source_timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.subject_kind == "character", SettingTimeline.character_id == char_id
+            )
+        )
+        assert source_timeline is not None
+        assert source_timeline.baseline_status == "confirmed" and not source_timeline.legacy_compat_allowed
+        source_fields = list(
+            await db.scalars(select(SettingTextField).where(SettingTextField.timeline_id == source_timeline.id))
+        )
+        source_field_ids = {item.id for item in source_fields}
+
+    target = await create_project(client, title="自定义字段目标")
+    target_base = f"/api/v1/projects/{target['id']}"
+    restored = await client.post(f"{target_base}/cards/import", json={"data": card})
+    assert restored.status_code == 200, restored.text
+    new_id = restored.json()["characters"][0]["id"]
+    assert new_id != char_id
+    again = await client.post(f"{target_base}/cards/export", json={"character_ids": [new_id]})
+    assert again.status_code == 200, again.text
+    assert again.json()["characters"][0]["custom_text_fields"] == card["characters"][0]["custom_text_fields"]
+    async with app.state.sessionmaker() as db:
+        target_timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.subject_kind == "character", SettingTimeline.character_id == new_id
+            )
+        )
+        assert target_timeline is not None
+        assert target_timeline.baseline_status == "confirmed" and not target_timeline.legacy_compat_allowed
+        target_fields = list(
+            await db.scalars(select(SettingTextField).where(SettingTextField.timeline_id == target_timeline.id))
+        )
+        assert source_field_ids.isdisjoint(item.id for item in target_fields)
+        assert {(item.label, item.base_value) for item in target_fields} == {
+            ("功法", "九阳真经\n练至大成"),
+            ("随身物", ""),
+        }
+        existing_event = await db.scalar(
+            select(SettingProgression.id).where(SettingProgression.timeline_id == target_timeline.id)
+        )
+        assert existing_event is None
+
+
+async def test_cards_v3_conflict_warns_that_skipped_text_fields_are_not_applied(client):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    existing = await _char(client, base, "林远", profile="原有档案")
+    card = {
+        "format": "ainovel.cards",
+        "version": 3,
+        "characters": [{"name": "林远", "custom_text_fields": [{"name": "功法", "value": "九阳"}]}],
+    }
+    preview = await client.post(f"{base}/cards/import/preview", json={"data": card})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["characters"][0]["status"] == "conflict"
+    assert any("跳过" in warning and "自定义字段" in warning for warning in preview.json()["warnings"])
+
+    result = await client.post(f"{base}/cards/import", json={"data": card})
+    assert result.status_code == 200, result.text
+    assert result.json()["characters"][0]["action"] == "skipped"
+    assert any("自定义字段" in warning for warning in result.json()["warnings"])
+    after = await client.get(f"{base}/characters")
+    assert [(item["id"], item["profile"]) for item in after.json()] == [(existing["id"], "原有档案")]
+
+
+async def test_cards_v3_text_field_validation_and_legacy_compatibility(client):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    invalid_fields = [
+        [{"name": "   ", "value": "无名"}],
+        [{"name": "长" * 101, "value": "过长"}],
+        [{"name": "功法", "value": "一"}, {"name": " 功法 ", "value": "二"}],
+        [{"name": "功法", "value": {"text": "不是文本"}}],
+    ]
+    for fields in invalid_fields:
+        data = {"format": "ainovel.cards", "version": 3, "characters": [{"name": "甲", "custom_text_fields": fields}]}
+        for endpoint in ("import/preview", "import"):
+            resp = await client.post(f"{base}/cards/{endpoint}", json={"data": data})
+            assert resp.status_code == 400, resp.text
+            assert "卡片文件格式不正确" in resp.json()["detail"]
+    assert (await client.get(f"{base}/characters")).json() == []
+
+    # v1/v2 从未定义新字段，继续忽略同名的未知附加数据。
+    for version in (1, 2):
+        data = {
+            "format": "ainovel.cards",
+            "version": version,
+            "characters": [{"name": "旧角色", "custom_text_fields": {"not": "a list"}}],
+        }
+        response = await client.post(f"{base}/cards/import/preview", json={"data": data})
+        assert response.status_code == 200, response.text
+
+
+async def test_cards_v3_exports_effective_custom_fields_not_base_or_inactive_events(client, app):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    char = await _char(client, base, "林远", current_state="金丹")
+
+    async with app.state.sessionmaker() as db:
+        timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project["id"],
+                SettingTimeline.subject_kind == "character",
+                SettingTimeline.character_id == char["id"],
+            )
+        )
+        if timeline is None:
+            character = await db.get(Character, char["id"])
+            timeline = SettingTimeline(
+                project_id=project["id"],
+                subject_kind="character",
+                character_id=character.id,
+                baseline={"current_state": character.current_state},
+                baseline_status="confirmed",
+            )
+            db.add(timeline)
+            await db.flush()
+        method = SettingTextField(timeline_id=timeline.id, label="功法", base_value="练气", sort=1)
+        sword = SettingTextField(timeline_id=timeline.id, label="武器", base_value="玄铁剑", sort=2)
+        db.add_all([method, sword])
+        await db.flush()
+        db.add_all(
+            [
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=method.id,
+                    operation="replace",
+                    value="金丹",
+                    anchor_kind="planned",
+                    chapter_no=20,
+                ),
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=method.id,
+                    operation="replace",
+                    value="不应出现的已撤销阶段",
+                    anchor_kind="planned",
+                    chapter_no=21,
+                    active=False,
+                ),
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=sword.id,
+                    operation="append",
+                    value="刻有纹路",
+                    anchor_kind="planned",
+                    chapter_no=10,
+                ),
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=sword.id,
+                    operation="replace",
+                    value="不应出现的孤儿变化",
+                    anchor_kind="chapter",
+                    chapter_id=None,
+                ),
+            ]
+        )
+        await db.commit()
+
+    response = await client.post(f"{base}/cards/export", json={"character_ids": [char["id"]]})
+    assert response.status_code == 200, response.text
+    card = response.json()
+    assert card["version"] == 3 and not _id_keys(card)
+    assert card["characters"][0]["custom_text_fields"] == [
+        {"name": "功法", "value": "金丹"},
+        {"name": "武器", "value": "玄铁剑\n刻有纹路"},
+    ]
+
+
+async def test_cards_v3_excludes_relations_with_absent_latest_state(client, app):
+    await register(client)
+    base, chars, org = await _source_project(client)
+    async with app.state.sessionmaker() as db:
+        rel = await db.scalar(
+            select(Relationship).where(
+                Relationship.pair_low == min(chars[0]["id"], chars[1]["id"]),
+                Relationship.pair_high == max(chars[0]["id"], chars[1]["id"]),
+            )
+        )
+        assert rel is not None
+        rel.is_present = False
+        await db.commit()
+    resp = await client.post(
+        f"{base}/cards/export", json={"character_ids": [c["id"] for c in chars], "organization_ids": [org["id"]]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert {(r["a_name"], r["b_name"]) for r in resp.json()["relationships"]} == {("林远", "李四")}
+
+
+async def test_cards_v3_skip_and_rename_preserve_target_fields_and_project_isolation(client, make_client):
+    await register(client)
+    source = await create_project(client, title="来源")
+    target = await create_project(client, title="目标")
+    source_base = f"/api/v1/projects/{source['id']}"
+    target_base = f"/api/v1/projects/{target['id']}"
+
+    def card(value):
+        return {
+            "format": "ainovel.cards",
+            "version": 3,
+            "characters": [{"name": "林远", "custom_text_fields": [{"name": "功法", "value": value}]}],
+        }
+
+    source_result = await client.post(f"{source_base}/cards/import", json={"data": card("九阳")})
+    target_result = await client.post(f"{target_base}/cards/import", json={"data": card("九阴")})
+    assert source_result.status_code == target_result.status_code == 200
+    source_id = source_result.json()["characters"][0]["id"]
+    target_id = target_result.json()["characters"][0]["id"]
+    source_card = (await client.post(f"{source_base}/cards/export", json={"character_ids": [source_id]})).json()
+
+    skipped = await client.post(f"{target_base}/cards/import", json={"data": source_card})
+    assert skipped.status_code == 200 and skipped.json()["characters"][0]["action"] == "skipped"
+    assert any("自定义字段" in warning for warning in skipped.json()["warnings"])
+    unchanged = await client.post(f"{target_base}/cards/export", json={"character_ids": [target_id]})
+    assert unchanged.json()["characters"][0]["custom_text_fields"] == [{"name": "功法", "value": "九阴"}]
+
+    renamed = await client.post(
+        f"{target_base}/cards/import",
+        json={"data": source_card, "resolutions": {"characters": {"林远": "rename"}}},
+    )
+    assert renamed.status_code == 200 and renamed.json()["characters"][0]["action"] == "renamed"
+    renamed_id = renamed.json()["characters"][0]["id"]
+    copied = await client.post(f"{target_base}/cards/export", json={"character_ids": [renamed_id]})
+    assert copied.json()["characters"][0]["custom_text_fields"] == [{"name": "功法", "value": "九阳"}]
+
+    cross_project = await client.post(f"{target_base}/cards/export", json={"character_ids": [source_id]})
+    assert cross_project.status_code == 400
+    outsider = make_client()
+    await register(outsider, "other_user")
+    cross_user = await outsider.post(f"{source_base}/cards/export", json={"character_ids": [source_id]})
+    assert cross_user.status_code == 404
+
+
+async def test_cards_v1_v2_import_creates_confirmed_baselines_without_custom_fields(client, app):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    imported_ids = []
+    for version in (1, 2):
+        data = {
+            "format": "ainovel.cards",
+            "version": version,
+            "characters": [{"name": f"旧卡角色{version}", "current_state": "练气"}],
+        }
+        response = await client.post(f"{base}/cards/import", json={"data": data})
+        assert response.status_code == 200, response.text
+        imported_ids.append(response.json()["characters"][0]["id"])
+    exported = await client.post(f"{base}/cards/export", json={"character_ids": imported_ids})
+    assert all(item["custom_text_fields"] == [] for item in exported.json()["characters"])
+    async with app.state.sessionmaker() as db:
+        rows = list(
+            await db.scalars(
+                select(SettingTimeline).where(
+                    SettingTimeline.subject_kind == "character", SettingTimeline.character_id.in_(imported_ids)
+                )
+            )
+        )
+        assert len(rows) == 2
+        assert all(row.baseline_status == "confirmed" and row.baseline["current_state"] == "练气" for row in rows)
+        fields = await db.scalars(
+            select(SettingTextField).where(SettingTextField.timeline_id.in_([r.id for r in rows]))
+        )
+        assert not list(fields)
+
+
+async def test_cards_v3_import_rolls_back_characters_and_fields_on_mid_import_failure(client, app, monkeypatch):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    original_add = setting_progression_service.add_initial_text_fields
+
+    async def fail_second_field(db, timeline, fields):
+        if fields and fields[0][0] == "第二项":
+            raise BadRequestError("模拟字段写入失败")
+        return await original_add(db, timeline, fields)
+
+    monkeypatch.setattr(setting_progression_service, "add_initial_text_fields", fail_second_field)
+    data = {
+        "format": "ainovel.cards",
+        "version": 3,
+        "characters": [
+            {"name": "甲", "custom_text_fields": [{"name": "第一项", "value": "已写入"}]},
+            {"name": "乙", "custom_text_fields": [{"name": "第二项", "value": "失败"}]},
+        ],
+    }
+    response = await client.post(f"{base}/cards/import", json={"data": data})
+    assert response.status_code == 400 and response.json()["detail"] == "模拟字段写入失败"
+    assert (await client.get(f"{base}/characters")).json() == []
+    async with app.state.sessionmaker() as db:
+        timelines = list(await db.scalars(select(SettingTimeline).where(SettingTimeline.project_id == project["id"])))
+        assert timelines == []
+
+
+async def test_cards_import_skips_hidden_relationship_without_overwriting_history(client, app):
+    """卡片没有章节信息，不猜测隐藏关系何时恢复，也不覆盖原历史。"""
+    await register(client)
+    source_base, source_chars, _ = await _source_project(client)
+    exported = await client.post(
+        f"{source_base}/cards/export", json={"character_ids": [source_chars[0]["id"], source_chars[1]["id"]]}
+    )
+    assert exported.status_code == 200, exported.text
+    project = await create_project(client, title="目标")
+    base = f"/api/v1/projects/{project['id']}"
+    a = await _char(client, base, "林远")
+    b = await _char(client, base, "张三")
+    created = await client.post(
+        f"{base}/relationships", json={"a_id": a["id"], "b_id": b["id"], "role_a": "朋友"}
+    )
+    assert created.status_code == 201, created.text
+    relation_id = created.json()["id"]
+    async with app.state.sessionmaker() as db:
+        relation = await db.get(Relationship, relation_id)
+        assert relation is not None
+        timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project["id"],
+                SettingTimeline.subject_kind == "relationship",
+                SettingTimeline.character_id == min(a["id"], b["id"]),
+                SettingTimeline.related_character_id == max(a["id"], b["id"]),
+            )
+        )
+        if timeline is None:
+            timeline = SettingTimeline(
+                project_id=project["id"],
+                subject_kind="relationship",
+                character_id=min(a["id"], b["id"]),
+                related_character_id=max(a["id"], b["id"]),
+                baseline={
+                    "exists": True,
+                    "identity": {"a_id": relation.a_id, "b_id": relation.b_id, "type_id": relation.type_id},
+                    "intimacy": relation.intimacy,
+                    "status": relation.status,
+                    "description": relation.description,
+                },
+            )
+            db.add(timeline)
+            await db.flush()
+        event = SettingProgression(
+            timeline_id=timeline.id,
+            field_key="presence",
+            operation="replace",
+            value={"exists": False},
+            anchor_kind="planned",
+            chapter_no=20,
+        )
+        db.add(event)
+        relation.is_present = False
+        await db.flush()
+        timeline_id = timeline.id
+        event_id = event.id
+        history_before = [
+            (item.id, item.changes)
+            for item in await db.scalars(
+                select(RelationshipHistory).where(RelationshipHistory.relationship_id == relation_id)
+            )
+        ]
+        await db.commit()
+
+    result = await client.post(f"{base}/cards/import", json={"data": exported.json()})
+    assert result.status_code == 200, result.text
+    assert result.json()["relationships_created"] == 0
+    assert any("关系历史" in warning and "跳过" in warning for warning in result.json()["warnings"])
+    async with app.state.sessionmaker() as db:
+        relation = await db.get(Relationship, relation_id)
+        assert relation is not None and not relation.is_present
+        history_after = [
+            (item.id, item.changes)
+            for item in await db.scalars(
+                select(RelationshipHistory).where(RelationshipHistory.relationship_id == relation_id)
+            )
+        ]
+        assert history_after == history_before
+        events = list(await db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == timeline_id)))
+        assert [(item.id, item.active, item.value) for item in events] == [(event_id, True, {"exists": False})]
+
+
+async def test_cards_import_creates_confirmed_membership_baseline(client, app):
+    """新导入成员建立明确基础，成员行与时间线属于同一事务。"""
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    card = {
+        "format": "ainovel.cards",
+        "version": 3,
+        "characters": [{"name": "林远"}],
+        "organizations": [
+            {
+                "name": "青云宗",
+                "members": [{"character_name": "林远", "position": "内门弟子", "status": "active", "note": "持令牌"}],
+            }
+        ],
+    }
+    response = await client.post(f"{base}/cards/import", json={"data": card})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["members_created"] == 1
+    character_id = body["characters"][0]["id"]
+    org_id = body["organizations"][0]["id"]
+    async with app.state.sessionmaker() as db:
+        member = await db.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == org_id, OrganizationMember.character_id == character_id
+            )
+        )
+        assert member is not None and (member.position, member.status, member.note) == ("内门弟子", "active", "持令牌")
+        timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project["id"],
+                SettingTimeline.subject_kind == "membership",
+                SettingTimeline.organization_id == org_id,
+                SettingTimeline.character_id == character_id,
+            )
+        )
+        assert timeline is not None
+        assert timeline.baseline_status == "confirmed" and not timeline.legacy_compat_allowed
+        assert timeline.baseline == {"exists": True, "position": "内门弟子", "status": "active", "note": "持令牌"}
+        event = await db.scalar(select(SettingProgression.id).where(SettingProgression.timeline_id == timeline.id))
+        assert event is None
+
+
+async def test_cards_import_skips_exited_membership_without_changing_history(client, app):
+    """已退出的成员仅有历史主体时，卡片不推测其重新加入的章节。"""
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    character = await _char(client, base, "林远")
+    org_response = await client.post(f"{base}/organizations", json={"name": "青云宗"})
+    assert org_response.status_code == 201, org_response.text
+    org = org_response.json()
+    member_response = await client.post(
+        f"{base}/organizations/{org['id']}/members",
+        json={"character_id": character["id"], "position": "内门弟子", "note": "原始备注"},
+    )
+    assert member_response.status_code == 201, member_response.text
+    member_id = member_response.json()["id"]
+    async with app.state.sessionmaker() as db:
+        timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project["id"],
+                SettingTimeline.subject_kind == "membership",
+                SettingTimeline.organization_id == org["id"],
+                SettingTimeline.character_id == character["id"],
+            )
+        )
+        assert timeline is not None
+        timeline_id, revision = timeline.id, timeline.revision
+    removed = await client.delete(
+        f"{base}/organizations/{org['id']}/members/{member_id}",
+        params={"edit_mode": "progression", "expected_revision": revision, "chapter_no": 20},
+    )
+    assert removed.status_code == 204, removed.text
+    assert (await client.get(f"{base}/organizations/{org['id']}/members")).json() == []
+    async with app.state.sessionmaker() as db:
+        timeline = await db.get(SettingTimeline, timeline_id)
+        assert timeline is not None
+        before = (dict(timeline.baseline), timeline.revision, timeline.baseline_status, timeline.legacy_compat_allowed)
+        events_before = [
+            (e.id, e.field_key, e.value, e.active, e.chapter_no)
+            for e in await db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == timeline_id))
+        ]
+        assert len(events_before) == 1 and events_before[0][2] == {"exists": False}
+
+    card = {
+        "format": "ainovel.cards",
+        "version": 3,
+        "characters": [{"name": "林远"}],
+        "organizations": [
+            {"name": "青云宗", "members": [{"character_name": "林远", "position": "掌门", "note": "来自卡片"}]}
+        ],
+    }
+    result = await client.post(f"{base}/cards/import", json={"data": card})
+    assert result.status_code == 200, result.text
+    assert result.json()["members_created"] == 0
+    assert any("成员历史" in warning and "跳过" in warning for warning in result.json()["warnings"])
+    assert (await client.get(f"{base}/organizations/{org['id']}/members")).json() == []
+    async with app.state.sessionmaker() as db:
+        timeline = await db.get(SettingTimeline, timeline_id)
+        assert timeline is not None
+        after = (dict(timeline.baseline), timeline.revision, timeline.baseline_status, timeline.legacy_compat_allowed)
+        assert after == before
+        events_after = [
+            (e.id, e.field_key, e.value, e.active, e.chapter_no)
+            for e in await db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == timeline_id))
+        ]
+        assert events_after == events_before
+
+
+async def test_cards_import_rolls_back_if_membership_creation_fails(client, app, monkeypatch):
+    """卡片中途写成员失败时，不保留此前写入的角色、字段、组织和成员。"""
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    original = organization_service.new_member
+
+    async def fail_second_member(db, org, data):
+        if data.position == "触发失败":
+            raise BadRequestError("模拟成员写入失败")
+        return await original(db, org, data)
+
+    monkeypatch.setattr(organization_service, "new_member", fail_second_member)
+    card = {
+        "format": "ainovel.cards",
+        "version": 3,
+        "characters": [
+            {"name": "甲", "custom_text_fields": [{"name": "功法", "value": "练气"}]},
+            {"name": "乙"},
+        ],
+        "organizations": [
+            {
+                "name": "青云宗",
+                "members": [
+                    {"character_name": "甲", "position": "弟子"},
+                    {"character_name": "乙", "position": "触发失败"},
+                ],
+            }
+        ],
+    }
+    response = await client.post(f"{base}/cards/import", json={"data": card})
+    assert response.status_code == 400 and response.json()["detail"] == "模拟成员写入失败"
+    assert (await client.get(f"{base}/characters")).json() == []
+    assert (await client.get(f"{base}/organizations")).json() == []
+    async with app.state.sessionmaker() as db:
+        assert not list(await db.scalars(select(SettingTimeline).where(SettingTimeline.project_id == project["id"])))
+        assert not list(await db.scalars(select(Organization).where(Organization.project_id == project["id"])))

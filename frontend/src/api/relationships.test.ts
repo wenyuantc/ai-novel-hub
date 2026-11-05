@@ -83,3 +83,11 @@ it('历史值展示', () => {
   expect(formatChangeValue(80)).toBe('80')
   expect(formatChangeValue('师父/徒弟')).toBe('师父/徒弟')
 })
+
+it('按人物对读取已结束关系的旧审计，不依赖当前关系列表', async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{ id: 6, relationship_id: 12, changes: {} }]), { status: 200 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const items = await relationshipApi.historyForPair(8, 9, 2)
+  expect(items[0].relationship_id).toBe(12)
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/projects/8/relationship-history?character_id=9&related_character_id=2')
+})

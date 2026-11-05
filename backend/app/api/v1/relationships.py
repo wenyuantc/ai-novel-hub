@@ -1,6 +1,6 @@
 """关系类型、人物关系、关系历史与图谱路由。"""
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.entity_ai import RelationsGenerateRequest
@@ -84,6 +84,17 @@ async def delete_relationship(project_id: int, rel_id: int, user: CurrentUser, d
 @router.get("/relationships/{rel_id}/history", response_model=list[RelationshipHistoryOut])
 async def list_history(project_id: int, rel_id: int, user: CurrentUser, db: DbDep) -> list[RelationshipHistoryOut]:
     return await svc.list_history(db, user.id, project_id, rel_id)
+
+
+@router.get("/relationship-history", response_model=list[RelationshipHistoryOut])
+async def list_pair_history(
+    project_id: int,
+    user: CurrentUser,
+    db: DbDep,
+    character_id: int = Query(gt=0),
+    related_character_id: int = Query(gt=0),
+) -> list[RelationshipHistoryOut]:
+    return await svc.list_pair_history(db, user.id, project_id, character_id, related_character_id)
 
 
 @router.get("/relationship-graph", response_model=RelationshipGraph)

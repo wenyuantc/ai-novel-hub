@@ -49,6 +49,9 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
     StoryMemory,
     WorldSetting,
 )
@@ -146,10 +149,27 @@ RULES: tuple[TableRule, ...] = (
     TableRule(
         "relationship_types",
         RelationshipType,
-        # 本项目自定义类型 + 本项目关系用到的全局预置类型（导出为 global=true，导入时按 role_a / role_b 对应）
+        # 完整引用闭包：当前关系及所有历史基线／事件（含停用和孤儿）引用的全局类型。
         lambda pid: or_(
             RelationshipType.project_id == pid,
             RelationshipType.id.in_(select(Relationship.type_id).where(Relationship.project_id == pid)),
+            RelationshipType.id.in_(
+                select(SettingTimeline.baseline["identity"]["type_id"].as_integer()).where(
+                    SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "relationship"
+                )
+            ),
+            RelationshipType.id.in_(
+                select(SettingProgression.value["type_id"].as_integer())
+                .join(SettingTimeline, SettingProgression.timeline_id == SettingTimeline.id)
+                .where(SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "relationship",
+                       SettingProgression.field_key == "identity")
+            ),
+            RelationshipType.id.in_(
+                select(SettingProgression.value["state"]["identity"]["type_id"].as_integer())
+                .join(SettingTimeline, SettingProgression.timeline_id == SettingTimeline.id)
+                .where(SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "relationship",
+                       SettingProgression.field_key == "presence")
+            ),
         ),
         custom=("project_id",),
     ),
@@ -285,6 +305,31 @@ RULES: tuple[TableRule, ...] = (
             "after": remap.analysis_payload,
         },
         str_refs={"field_key": remap.field_key},
+    ),
+    TableRule(
+        "setting_timelines",
+        SettingTimeline,
+        _own(SettingTimeline),
+        fill=_P,
+        fk={"character_id": "characters", "related_character_id": "characters", "world_setting_id": "world_settings",
+            "career_id": "careers", "organization_id": "organizations"},
+        json_refs={"baseline": remap.setting_payload},
+    ),
+    TableRule(
+        "setting_text_fields",
+        SettingTextField,
+        lambda pid: _in(SettingTextField.timeline_id, SettingTimeline, pid),
+        fk={"timeline_id": "setting_timelines"},
+    ),
+    TableRule(
+        "setting_progressions",
+        SettingProgression,
+        lambda pid: _in(SettingProgression.timeline_id, SettingTimeline, pid),
+        fk={"timeline_id": "setting_timelines", "custom_field_id": "setting_text_fields", "chapter_id": "chapters",
+            "source_change_id": "analysis_changes", "superseded_by_id": "setting_progressions"},
+        deferred=frozenset({"superseded_by_id"}),
+        # value 的裸 stage_id 在 importer 中按 field_key 选择被引用表，再复用此 remapper。
+        json_refs={"value": remap.setting_payload},
     ),
     TableRule(
         "story_memories",

@@ -30,7 +30,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline
 from app.schemas.chapter import ChapterBrief
 from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
-from app.services import memory_service, outline_snapshot_service
+from app.services import memory_service, outline_snapshot_service, setting_progression_service
 from app.services.chapter_numbering import shift_chapter_numbers
 from app.services.project_service import get_manageable_project
 
@@ -212,6 +212,10 @@ async def sync_plans(
             db.add(plan)
         plan.seq = seq
         result.append(plan)
+    if ordered:
+        # 多章删除和平移可能产生中间态；整批完成后只验证并重算一次。
+        await db.flush()
+        await setting_progression_service.on_story_positions_changed(db, project_id)
     await db.commit()
     for p in result:
         await db.refresh(p)
@@ -301,6 +305,10 @@ async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outlin
     )
     if first_no is not None:
         outline.chapter_no = first_no
+    if pending:
+        # 建章时的全部平移完成后，再统一刷新按章节排序的最新投影。
+        await db.flush()
+        await setting_progression_service.on_story_positions_changed(db, project_id)
     await db.commit()
     for c in touched:
         await db.refresh(c)

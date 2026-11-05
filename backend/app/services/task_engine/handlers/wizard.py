@@ -37,6 +37,7 @@ class WizardHandler:
             db,
             user_id=user_id,
             project_id=project_id,
+            kind=wkind,
             req=req,
             cipher=ctx.cipher,
             factory=ctx.factory,

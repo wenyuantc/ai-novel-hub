@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models import Character, Outline, WorldSetting
+from app.services import setting_progression_service
 from app.services.cast_service import is_protagonist_role
 from app.services.project_service import get_manageable_project, get_owned_project
 
@@ -76,6 +77,7 @@ async def new_character(db: AsyncSession, project_id: int, values: dict[str, Any
     character = Character(project_id=project_id, **values)
     db.add(character)
     await db.flush()
+    await setting_progression_service.create_character_timeline(db, character)
     return character
 
 
@@ -107,6 +109,12 @@ async def create_owned(
         values["sort"] = await next_sort(db, kind.model, project_id)
     item = kind.model(project_id=project_id, **values)
     db.add(item)
+    if kind is WORLD:
+        await db.flush()
+        await setting_progression_service.create_world_timeline(db, item)
+    elif kind is CHARACTERS:
+        await db.flush()
+        await setting_progression_service.create_character_timeline(db, item)
     await db.commit()
     await db.refresh(item)
     return item
@@ -124,7 +132,25 @@ async def update_owned(
 ) -> Any:
     await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    values = data.model_dump(exclude_unset=True)
+    if kind is WORLD:
+        await setting_progression_service.apply_world_content_update(
+            db,
+            item,
+            content=values.pop("content", None),
+            edit_mode=values.pop("edit_mode", None),
+            expected_revision=values.pop("expected_revision", None),
+            metadata_changed=any(value is not None and value != getattr(item, key) for key, value in values.items()),
+        )
+    elif kind is CHARACTERS:
+        await setting_progression_service.apply_character_fields_update(
+            db,
+            item,
+            values,
+            edit_mode=values.pop("edit_mode", None),
+            expected_revision=values.pop("expected_revision", None),
+        )
+    for field, value in values.items():
         if value is not None:
             setattr(item, field, value)
     await db.commit()

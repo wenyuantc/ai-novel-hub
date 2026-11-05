@@ -17,10 +17,15 @@ from app.models import (
     RelationshipHistory,
     RelationshipType,
     RetrievalChunk,
+    SettingProgression,
+    SettingTimeline,
     StoryMemory,
     User,
+    WorldSetting,
 )
+from app.schemas.chapter import ChapterUpdate
 from app.services.chapter_numbering import CHAPTER_NO_REFS, shift_chapter_numbers
+from app.services.chapter_service import delete_chapter, update_chapter
 
 
 def test_all_chapter_no_columns_registered():
@@ -34,7 +39,7 @@ def test_all_chapter_no_columns_registered():
     registered = {ref.key for ref in CHAPTER_NO_REFS}
     assert found - registered == set()
     assert registered - found == set()
-    assert len(registered) == 13
+    assert len(registered) == 14
 
 
 async def _seed(db, user_id: int, title: str, nos: tuple[int, ...]) -> dict:
@@ -160,3 +165,133 @@ async def test_shift_every_registered_field_and_boundaries(app):
         # delta = 0 不做任何事
         await shift_chapter_numbers(db, mine["project_id"], from_no=1, delta=0)
         assert (await _values(db, mine))["chapters"] == [1, 2, 4, 5]
+
+
+async def test_planned_progressions_shift_but_chapter_anchors_follow_identity(app):
+    """计划章号按作品平移；已绑定章节跟随 ID，删除后不能因同号重建而恢复。"""
+    async with app.state.sessionmaker() as db:
+        user = User(username="positions", password_hash="x")
+        db.add(user)
+        await db.flush()
+        mine = Project(user_id=user.id, title="甲")
+        other = Project(user_id=user.id, title="乙")
+        db.add_all([mine, other])
+        await db.flush()
+        mine_character = Character(project_id=mine.id, name="甲")
+        other_character = Character(project_id=other.id, name="乙")
+        mine_chapter = Chapter(project_id=mine.id, chapter_no=6, title="六")
+        other_chapter = Chapter(project_id=other.id, chapter_no=6, title="六")
+        db.add_all([mine_character, other_character, mine_chapter, other_chapter])
+        await db.flush()
+        mine_timeline = SettingTimeline(
+            project_id=mine.id, subject_kind="character", character_id=mine_character.id,
+            baseline={"current_state": "练气"},
+        )
+        other_timeline = SettingTimeline(
+            project_id=other.id, subject_kind="character", character_id=other_character.id,
+            baseline={"current_state": "练气"},
+        )
+        db.add_all([mine_timeline, other_timeline])
+        await db.flush()
+        planned = SettingProgression(
+            timeline_id=mine_timeline.id, field_key="current_state", operation="replace", value="筑基",
+            anchor_kind="planned", chapter_no=6,
+        )
+        linked = SettingProgression(
+            timeline_id=mine_timeline.id, field_key="current_state", operation="replace", value="金丹",
+            anchor_kind="chapter", chapter_id=mine_chapter.id, anchor_label="第6章 六",
+        )
+        already_orphaned = SettingProgression(
+            timeline_id=mine_timeline.id, field_key="current_state", operation="replace", value="元婴",
+            anchor_kind="chapter", chapter_id=None, anchor_label="已删除的第6章",
+        )
+        other_planned = SettingProgression(
+            timeline_id=other_timeline.id, field_key="current_state", operation="replace", value="筑基",
+            anchor_kind="planned", chapter_no=6,
+        )
+        db.add_all([planned, linked, already_orphaned, other_planned])
+        await db.commit()
+
+        await shift_chapter_numbers(db, mine.id, from_no=5, delta=3)
+        await db.flush()
+        await db.refresh(planned)
+        await db.refresh(linked)
+        await db.refresh(already_orphaned)
+        await db.refresh(other_planned)
+        await db.refresh(mine_chapter)
+        await db.refresh(other_chapter)
+        assert planned.chapter_no == 9
+        assert linked.chapter_id == mine_chapter.id and linked.chapter_no is None
+        assert mine_chapter.chapter_no == 9
+        assert already_orphaned.chapter_id is None and already_orphaned.chapter_no is None
+        assert other_planned.chapter_no == 6 and other_chapter.chapter_no == 6
+
+        await shift_chapter_numbers(db, mine.id, from_no=7, delta=-1)
+        await db.refresh(planned)
+        await db.refresh(mine_chapter)
+        await db.refresh(other_planned)
+        assert planned.chapter_no == mine_chapter.chapter_no == 8
+        assert other_planned.chapter_no == 6
+
+        # 数据库对已删除章节设置 NULL；随后创建同号章节不能把孤儿自动关联过去。
+        await db.delete(mine_chapter)
+        await db.flush()
+        await db.refresh(linked)
+        assert linked.anchor_kind == "chapter" and linked.chapter_id is None
+        assert linked.anchor_label == "第6章 六"
+        replacement = Chapter(project_id=mine.id, chapter_no=8, title="新六")
+        db.add(replacement)
+        await db.flush()
+        await db.refresh(linked)
+        await db.refresh(planned)
+        assert linked.chapter_id is None
+        assert planned.anchor_kind == "planned" and planned.chapter_no == replacement.chapter_no
+
+
+async def test_chapter_renumber_and_delete_recompute_latest_in_same_transaction(app):
+    """调整既有章号改变事件先后；删章后同会话读到孤儿且最新值回退。"""
+    async with app.state.sessionmaker() as db:
+        user = User(username="renumber", password_hash="x")
+        db.add(user)
+        await db.flush()
+        project = Project(user_id=user.id, title="世界")
+        db.add(project)
+        await db.flush()
+        world = WorldSetting(project_id=project.id, title="城", content="战后")
+        early = Chapter(project_id=project.id, chapter_no=3, title="战前")
+        late = Chapter(project_id=project.id, chapter_no=9, title="战后")
+        db.add_all([world, early, late])
+        await db.flush()
+        timeline = SettingTimeline(
+            project_id=project.id, subject_kind="world", world_setting_id=world.id, baseline={"content": "初始"}
+        )
+        db.add(timeline)
+        await db.flush()
+        early_event = SettingProgression(
+            timeline_id=timeline.id, field_key="content", operation="replace", value="战前",
+            anchor_kind="chapter", chapter_id=early.id,
+        )
+        late_event = SettingProgression(
+            timeline_id=timeline.id, field_key="content", operation="replace", value="战后",
+            anchor_kind="chapter", chapter_id=late.id, anchor_label="第9章 战后",
+        )
+        db.add_all([early_event, late_event])
+        await db.commit()
+        user_id, project_id, late_id = user.id, project.id, late.id
+
+        # 直接移动第9章到第1章后，第3章变化成为最新。
+        await update_chapter(db, user_id, project_id, late_id, ChapterUpdate(chapter_no=1))
+        assert world.content == "战前"
+        assert late_event.chapter_id == late_id
+
+        # 调回原位置后删章；事件对象在删除前已加载，不得使用缓存中的旧外键。
+        await update_chapter(db, user_id, project_id, late_id, ChapterUpdate(chapter_no=9))
+        assert world.content == "战后"
+        await delete_chapter(db, user_id, project_id, late_id)
+        assert late_event.anchor_kind == "chapter" and late_event.chapter_id is None
+        assert world.content == "战前"
+
+        replacement = Chapter(project_id=project_id, chapter_no=9, title="另一章")
+        db.add(replacement)
+        await db.flush()
+        assert late_event.chapter_id is None and world.content == "战前"

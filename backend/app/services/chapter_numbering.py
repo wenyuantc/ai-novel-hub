@@ -27,6 +27,8 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RetrievalChunk,
+    SettingProgression,
+    SettingTimeline,
     StoryMemory,
 )
 
@@ -60,6 +62,12 @@ def _via_foreshadow(pid: int) -> ColumnElement[bool]:
     return ForeshadowHistory.foreshadow_id.in_(select(Foreshadow.id).where(Foreshadow.project_id == pid))
 
 
+def _via_setting_timeline(pid: int) -> ColumnElement[bool]:
+    return (SettingProgression.anchor_kind == "planned") & SettingProgression.timeline_id.in_(
+        select(SettingTimeline.id).where(SettingTimeline.project_id == pid)
+    )
+
+
 # 新增引用章节号的字段必须登记在这里（见模块说明）
 CHAPTER_NO_REFS: tuple[ChapterNoRef, ...] = (
     ChapterNoRef(Chapter, "chapter_no", _direct(Chapter)),
@@ -76,6 +84,8 @@ CHAPTER_NO_REFS: tuple[ChapterNoRef, ...] = (
     # 剧情记忆与其检索单元（knowledge-base）：召回「本章之前」依赖章节号
     ChapterNoRef(StoryMemory, "chapter_no", _direct(StoryMemory)),
     ChapterNoRef(RetrievalChunk, "chapter_no", _direct(RetrievalChunk)),
+    # 已建章锚点跟随 chapter_id；只有计划章号参与整体平移，删章后的孤儿不得按数字重绑。
+    ChapterNoRef(SettingProgression, "chapter_no", _via_setting_timeline),
 )
 
 
@@ -83,6 +93,8 @@ async def shift_chapter_numbers(db: AsyncSession, project_id: int, *, from_no: i
     """把项目内所有 >= from_no 的章节号加上 delta（可为负）。不 commit。
 
     chapters.chapter_no 没有唯一约束，各表一条 UPDATE，顺序不影响结果。已加载到会话中的对象同步更新（fetch）。
+    调用方持项目写锁并在整批插删和平移完成、flush 后调用
+    setting_progression_service.on_story_positions_changed；这里不在批处理的中间态触发重算。
     """
     if delta == 0:
         return

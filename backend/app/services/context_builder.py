@@ -39,8 +39,10 @@
 """
 
 from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
+from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import format_project_info
@@ -55,7 +57,12 @@ from app.models import (
     OrganizationMember,
     Outline,
     Project,
+    Relationship,
+    RelationshipType,
+    SettingTextField,
+    SettingTimeline,
 )
+from app.schemas.progression import StoryPosition
 from app.services import (
     career_service,
     cast_service,
@@ -65,10 +72,12 @@ from app.services import (
     organization_service,
     plan_service,
     relationship_service,
+    setting_progression_service,
     story_service,
 )
 from app.services.project_service import project_info
 from app.services.retrieval_service import Embedder, EmbedEnv
+from app.services.setting_progression_resolver import EffectiveSnapshot
 
 RECENT_FULL_CHAPTERS = 2
 SUMMARY_CHARS = 200
@@ -141,6 +150,7 @@ class MemorySection:
 @dataclass
 class ContextParts:
     project_text: str
+    include_project: bool = True
     world_text: str = ""
     cards_text: str = ""
     relations: list[RelationLine] = field(default_factory=list)
@@ -155,7 +165,7 @@ class ContextParts:
     memories: list[MemoryLine] = field(default_factory=list)
 
     def render(self) -> str:
-        sections = [f"【作品信息】\n{self.project_text}"]
+        sections = [f"【作品信息】\n{self.project_text}"] if self.include_project else []
         if self.world_text:
             sections.append(f"【世界观】\n{self.world_text}")
         if self.knowledge_text:
@@ -217,6 +227,7 @@ def assemble_context(
     foreshadows: ForeshadowSection | None = None,
     knowledge: str = "",
     memories: MemorySection | None = None,
+    include_project: bool = True,
 ) -> str:
     """纯函数：根据素材与字符预算组装上下文。prior_chapters 需按章节号升序。
 
@@ -229,6 +240,7 @@ def assemble_context(
     cast = cast or CastSection()
     parts = ContextParts(
         project_text=project_text,
+        include_project=include_project,
         world_text=world_text.strip(),
         cards_text="\n\n".join(c.strip() for c in cast.cards if c.strip()),
         relations=[RelationLine(r.head, r.description) for r in cast.relations],
@@ -347,11 +359,12 @@ MEMBER_STATUS_LABELS = {"left": "已离开", "expelled": "已开除", "dead": "�
 
 
 def format_card(
-    c: Character,
-    memberships: list[tuple[OrganizationMember, Organization]],
+    c: Character | SimpleNamespace,
+    memberships: list[tuple[OrganizationMember | SimpleNamespace, Organization]],
     *,
     include_legacy_relations: bool = False,
     career_line: str = "",
+    custom_fields: list[tuple[str, str]] | None = None,
 ) -> str:
     """涉及角色的完整角色卡。非存活状态在标题醒目标注。"""
     head = f"■ {c.name}"
@@ -372,6 +385,9 @@ def format_card(
         ("简介", c.profile),
         ("当前状态", c.current_state),
     ):
+        if value.strip():
+            lines.append(f"{label}：{value.strip()}")
+    for label, value in custom_fields or []:
         if value.strip():
             lines.append(f"{label}：{value.strip()}")
     if memberships:
@@ -427,49 +443,237 @@ def roster_item(c: Character) -> str:
     return c.name + (f"（{c.role_type}）" if c.role_type else "")
 
 
+@dataclass
+class EffectiveCast:
+    """供生成与分析共用的只读投影；不把历史字段赋值给 ORM 当前行。"""
+
+    characters: list[Character | SimpleNamespace] = field(default_factory=list)
+    memberships: dict[int, list[tuple[OrganizationMember | SimpleNamespace, Organization]]] = field(
+        default_factory=dict
+    )
+    careers_by_character: dict[int, list[tuple[CharacterCareer | SimpleNamespace, Career]]] = field(
+        default_factory=dict
+    )
+    careers: dict[int, Career] = field(default_factory=dict)
+    stages: dict[int, list[CareerStage]] = field(default_factory=dict)
+    organizations: dict[int, Organization] = field(default_factory=dict)
+    relations: list[RelationLine] = field(default_factory=list)
+    structured_character_ids: set[int] = field(default_factory=set)
+    custom_fields: dict[int, list[tuple[str, str]]] = field(default_factory=dict)
+
+
+async def _custom_labels(
+    db: AsyncSession, timelines: list[SettingTimeline], snapshots: dict[int, EffectiveSnapshot]
+) -> dict[int, list[tuple[str, str]]]:
+    """批量将稳定自定义字段 ID 映射为显示名称与目标时点的值。"""
+    if not timelines:
+        return {}
+    rows = await db.scalars(
+        select(SettingTextField)
+        .where(SettingTextField.timeline_id.in_([t.id for t in timelines]))
+        .order_by(SettingTextField.sort, SettingTextField.id)
+    )
+    result: dict[int, list[tuple[str, str]]] = {}
+    for item in rows:
+        snapshot = snapshots[item.timeline_id]
+        value = snapshot.custom_fields.get(item.id, "")
+        if value.strip():
+            result.setdefault(item.timeline_id, []).append((item.label, value))
+    return result
+
+
+async def effective_world_text(db: AsyncSession, project: Project, chapter: Chapter) -> str:
+    """按目标章初组装世界观，保留条目分类与原有顺序。"""
+    worlds = await story_service.list_items(db, story_service.WORLD, project.id)
+    if not worlds:
+        return ""
+    timelines = list(await db.scalars(
+        select(SettingTimeline).where(
+            SettingTimeline.project_id == project.id, SettingTimeline.subject_kind == "world"
+        ).order_by(SettingTimeline.id)
+    ))
+    snapshots = await setting_progression_service.resolve_timelines(
+        db, project.id, timelines, StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
+    )
+    labels = await _custom_labels(db, timelines, snapshots)
+    by_world = {t.world_setting_id: t for t in timelines}
+    result = []
+    for world in worlds:
+        timeline = by_world.get(world.id)
+        content = snapshots[timeline.id].fields["content"] if timeline else world.content
+        custom = labels.get(timeline.id, []) if timeline else []
+        text = "\n".join([str(content), *(f"{name}：{value}" for name, value in custom)]).strip()
+        result.append(SimpleNamespace(title=world.title, category=world.category, content=text))
+    return story_service.format_world(result)
+
+
+async def resolve_effective_cast(
+    db: AsyncSession, project: Project, chapter: Chapter, involved: list[Character]
+) -> EffectiveCast:
+    """批量读取目标章的角色、关系、职业和成员，同一逻辑供生成及分析使用。"""
+    result = EffectiveCast()
+    ids = [c.id for c in involved]
+    if not ids:
+        return result
+    id_set = set(ids)
+    timelines = list(await db.scalars(
+        select(SettingTimeline).where(
+            SettingTimeline.project_id == project.id,
+            or_(
+                and_(SettingTimeline.subject_kind.in_(("character", "career", "membership")),
+                     SettingTimeline.character_id.in_(ids)),
+                and_(SettingTimeline.subject_kind == "relationship",
+                     or_(SettingTimeline.character_id.in_(ids), SettingTimeline.related_character_id.in_(ids))),
+            ),
+        ).order_by(SettingTimeline.id)
+    ))
+    relevant = [
+        t for t in timelines
+        if t.subject_kind != "relationship" or (t.character_id in id_set and t.related_character_id in id_set)
+    ]
+    snapshots = await setting_progression_service.resolve_timelines(
+        db, project.id, relevant, StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
+    )
+    char_timelines = {t.character_id: t for t in relevant if t.subject_kind == "character"}
+    custom = await _custom_labels(db, list(char_timelines.values()), snapshots)
+    for c in involved:
+        timeline = char_timelines.get(c.id)
+        if timeline is None:
+            result.characters.append(c)
+            continue
+        # 不复制 SQLAlchemy 的内部状态，也不修改 identity map 中的实体。
+        values: dict[str, Any] = {
+            key: getattr(c, key)
+            for key in ("id", "name", "aliases", "role_type", "always_in_context", "relations_text")
+        }
+        values.update(snapshots[timeline.id].fields)
+        result.characters.append(SimpleNamespace(**values))
+        result.custom_fields[c.id] = custom.get(timeline.id, [])
+
+    # 关系备注是否回退应以整个角色是否已结构化管理为准，而非当前时点是否存在一条有效关系。
+    for t in timelines:
+        if t.subject_kind == "relationship":
+            result.structured_character_ids.update({t.character_id, t.related_character_id} & id_set)
+    pairs = await db.execute(
+        select(Relationship.a_id, Relationship.b_id).where(
+            Relationship.project_id == project.id,
+            or_(Relationship.a_id.in_(ids), Relationship.b_id.in_(ids)),
+        )
+    )
+    for a_id, b_id in pairs:
+        result.structured_character_ids.update({a_id, b_id} & id_set)
+
+    # 当前挂接仅作为没有时间线的旧数据兜底；已卸下的历史主体仍由稳定时间线枚举。
+    current_members = await organization_service.memberships_of(db, ids)
+    members = {(m.character_id, o.id): (m, o) for m, o in current_members}
+    member_timelines = [t for t in relevant if t.subject_kind == "membership"]
+    organization_ids = [t.organization_id for t in member_timelines if t.organization_id is not None]
+    organization_by_id = {o.id: o for _, o in current_members}
+    if organization_ids:
+        rows = await db.scalars(select(Organization).where(
+            Organization.project_id == project.id, Organization.id.in_(organization_ids)
+        ))
+        organization_by_id.update({o.id: o for o in rows})
+    for timeline in member_timelines:
+        key = (timeline.character_id, timeline.organization_id)
+        members.pop(key, None)
+        fields = snapshots[timeline.id].fields
+        org = organization_by_id.get(timeline.organization_id)
+        if fields.get("exists") and org is not None:
+            member = SimpleNamespace(character_id=timeline.character_id, organization_id=org.id,
+                                     position=fields["position"], status=fields["status"], note=fields["note"])
+            members[key] = (member, org)
+    for (character_id, _), (member, org) in sorted(
+        members.items(), key=lambda row: (row[1][1].sort, row[1][1].id, row[0][0])
+    ):
+        result.memberships.setdefault(character_id, []).append((member, org))
+        result.organizations[org.id] = org
+
+    current_careers = await career_service.assignments_of(db, ids)
+    assignments = {(a.character_id, career.id): (a, career) for a, career in current_careers}
+    career_timelines = [t for t in relevant if t.subject_kind == "career"]
+    career_ids = [t.career_id for t in career_timelines if t.career_id is not None]
+    career_by_id = {career.id: career for _, career in current_careers}
+    if career_ids:
+        rows = await db.scalars(select(Career).where(Career.project_id == project.id, Career.id.in_(career_ids)))
+        career_by_id.update({career.id: career for career in rows})
+    for timeline in career_timelines:
+        key = (timeline.character_id, timeline.career_id)
+        assignments.pop(key, None)
+        fields = snapshots[timeline.id].fields
+        career = career_by_id.get(timeline.career_id)
+        if fields.get("exists") and career is not None:
+            assignment = SimpleNamespace(character_id=timeline.character_id, career_id=career.id, role=career.kind,
+                                         stage_id=fields["stage_id"], note=fields["note"])
+            assignments[key] = (assignment, career)
+    for (character_id, _), (assignment, career) in sorted(
+        assignments.items(), key=lambda row: (row[1][0].role, row[1][1].sort, row[1][1].id)
+    ):
+        result.careers_by_character.setdefault(character_id, []).append((assignment, career))
+        result.careers[career.id] = career
+    result.stages = await career_service.stages_of(db, list(result.careers))
+
+    relation_timelines = [t for t in relevant if t.subject_kind == "relationship"]
+    managed_pairs = {(t.character_id, t.related_character_id) for t in relation_timelines}
+    relation_values: list[tuple[dict[str, Any], RelationshipType]] = []
+    for relation, relation_type in await relationship_service.relations_among(db, ids):
+        key = (relation.pair_low, relation.pair_high)
+        if key not in managed_pairs and relation.is_present:
+            relation_values.append(({
+                "identity": {"a_id": relation.a_id, "b_id": relation.b_id}, "intimacy": relation.intimacy,
+                "status": relation.status, "description": relation.description,
+            }, relation_type))
+    type_ids = {
+        fields["identity"]["type_id"]
+        for t in relation_timelines
+        if (fields := snapshots[t.id].fields).get("exists")
+    }
+    types: dict[int, RelationshipType] = {}
+    if type_ids:
+        rows = await db.scalars(select(RelationshipType).where(
+            RelationshipType.id.in_(type_ids),
+            or_(RelationshipType.project_id.is_(None), RelationshipType.project_id == project.id),
+        ))
+        types = {item.id: item for item in rows}
+    for timeline in relation_timelines:
+        fields = snapshots[timeline.id].fields
+        if fields.get("exists"):
+            relation_type = types.get(fields["identity"]["type_id"])
+            if relation_type is not None:
+                relation_values.append((fields, relation_type))
+    names = {c.id: c.name for c in involved}
+    for values, relation_type in relation_values:
+        identity = values["identity"]
+        a_id, b_id = identity["a_id"], identity["b_id"]
+        if a_id in names and b_id in names:
+            status = values["status"]
+            result.relations.append(RelationLine(
+                f"{relationship_service.describe_relation(names[a_id], names[b_id], relation_type)}"
+                f"（亲密度 {values['intimacy']}，{relationship_service.STATUS_LABELS.get(status, status)}）",
+                values["description"].strip(),
+            ))
+    return result
+
+
 async def build_cast_section(db: AsyncSession, project: Project, chapter: Chapter, outline_summary: str) -> CastSection:
     cast = await cast_service.select_cast(db, project, chapter, outline_summary)
-    ids = cast.involved_ids
-    memberships = await organization_service.memberships_of(db, ids)
-    by_char: dict[int, list[tuple[OrganizationMember, Organization]]] = {}
-    orgs: dict[int, Organization] = {}
-    for m, o in memberships:
-        by_char.setdefault(m.character_id, []).append((m, o))
-        orgs.setdefault(o.id, o)
-    # 职业挂接与阶梯：各一次查询，避免按角色逐个查询
-    assignments = await career_service.assignments_of(db, ids)
-    careers_by_char: dict[int, list[tuple[CharacterCareer, Career]]] = {}
-    involved_careers: dict[int, Career] = {}
-    for a, career in assignments:
-        careers_by_char.setdefault(a.character_id, []).append((a, career))
-        involved_careers.setdefault(career.id, career)
-    stages = await career_service.stages_of(db, list(involved_careers))
-    rels = await relationship_service.relations_among(db, ids)
-    names = {c.id: c.name for c in cast.involved}
-    related = {r.a_id for r, _ in rels} | {r.b_id for r, _ in rels}
-    relation_lines = [
-        RelationLine(
-            f"{relationship_service.describe_relation(names[r.a_id], names[r.b_id], t)}"
-            f"（亲密度 {r.intimacy}，{relationship_service.STATUS_LABELS.get(r.status, r.status)}）",
-            r.description.strip(),
-        )
-        for r, t in rels
-    ]
+    effective = await resolve_effective_cast(db, project, chapter, cast.involved)
     return CastSection(
         cards=[
             format_card(
                 c,
-                by_char.get(c.id, []),
-                include_legacy_relations=c.id not in related,
-                career_line=format_career_line(careers_by_char.get(c.id, []), stages),
+                effective.memberships.get(c.id, []),
+                include_legacy_relations=c.id not in effective.structured_character_ids,
+                career_line=format_career_line(effective.careers_by_character.get(c.id, []), effective.stages),
+                custom_fields=effective.custom_fields.get(c.id, []),
             )
-            for c in cast.involved
+            for c in effective.characters
         ],
-        relations=relation_lines,
-        organizations=[format_organization(o) for o in orgs.values()],
+        relations=effective.relations,
+        organizations=[format_organization(o) for o in effective.organizations.values()],
         careers=[
-            format_career_ladder(c, stages.get(c.id, []))
-            for c in sorted(involved_careers.values(), key=lambda c: (c.sort, c.id))
+            format_career_ladder(c, effective.stages.get(c.id, []))
+            for c in sorted(effective.careers.values(), key=lambda c: (c.sort, c.id))
         ],
         roster=[roster_item(c) for c in cast.others],
         names=[c.name for c in cast.involved],
@@ -480,23 +684,47 @@ async def build_chapter_context(
     db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, embedder: Embedder | None = None
 ) -> str:
     """embedder：当前用户的向量模型（None = 检索只用关键词）。"""
-    world = await story_service.list_items(db, story_service.WORLD, project.id)
-    outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
-    task = await chapter_task(db, chapter)
-    cast = await build_cast_section(db, project, chapter, task.match_text())
-    prior = await prior_chapters(db, project, chapter)
-    knowledge, memories = await retrieval_blocks(db, project, chapter, task, cast.names, prior, embedder=embedder)
-    return assemble_context(
-        project_text=format_project_info(await project_info(db, project)),
-        world_text=story_service.format_world(world),
-        cast=cast,
-        outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
-        prior_chapters=prior,
-        budget=budget,
-        foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no),
-        knowledge=knowledge,
-        memories=memories,
-    )
+    with db.no_autoflush:
+        outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
+        task = await chapter_task(db, chapter)
+        cast = await build_cast_section(db, project, chapter, task.match_text())
+        prior = await prior_chapters(db, project, chapter)
+        knowledge, memories = await retrieval_blocks(db, project, chapter, task, cast.names, prior, embedder=embedder)
+        return assemble_context(
+            project_text=format_project_info(await project_info(db, project)),
+            world_text=await effective_world_text(db, project, chapter),
+            cast=cast,
+            outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
+            prior_chapters=prior,
+            budget=budget,
+            foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no),
+            knowledge=knowledge,
+            memories=memories,
+        )
+
+
+async def build_setting_context(
+    db: AsyncSession, project: Project, chapter: Chapter, *, text_hint: str = "", budget: int = 4000
+) -> str:
+    """供局部改写和设定预览使用的章初设定块；不检索知识库或调用模型。"""
+    with db.no_autoflush:
+        header = "【本章有效设定】\n"
+        available = budget - len(header)
+        if available <= 0:
+            return ""
+        task = await chapter_task(db, chapter)
+        hint = "\n".join(part for part in (task.match_text(), text_hint) if part)
+        cast = await build_cast_section(db, project, chapter, hint)
+        body = assemble_context(
+            project_text="",
+            include_project=False,
+            world_text=await effective_world_text(db, project, chapter),
+            cast=cast,
+            outline_text="",
+            prior_chapters=[],
+            budget=available,
+        )
+        return header + body if body else ""
 
 
 async def prior_chapters(db: AsyncSession, project: Project, chapter: Chapter) -> list[PriorChapter]:

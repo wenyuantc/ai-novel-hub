@@ -1,12 +1,12 @@
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
-import { App, Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography } from 'antd'
+import { App, Button, Card, Empty, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { intimacyColor, relationshipApi, relationshipTypeApi, statusLabel } from '../../api/relationships'
 import type { Character, Relationship } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
 import RelationEditModal from '../relations/RelationEditModal'
-import RelationHistoryModal from '../relations/RelationHistoryModal'
+import RelationHistoryModal, { RelationPairHistory } from '../relations/RelationHistoryModal'
 import EntityTaskModal from './EntityTaskModal'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 
@@ -27,6 +27,8 @@ export default function CharacterRelationsTab({ projectId, character, characters
   const [editing, setEditing] = useState<Relationship | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [history, setHistory] = useState<Relationship | null>(null)
+  const [pairHistoryOpen, setPairHistoryOpen] = useState(false)
+  const [historyOther, setHistoryOther] = useState<number | undefined>()
   const [parseOpen, setParseOpen] = useState(false)
 
   const handleDelete = async (r: Relationship) => {
@@ -45,7 +47,8 @@ export default function CharacterRelationsTab({ projectId, character, characters
 
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
-      <Space>
+      <Space wrap>
+        <Button onClick={() => setPairHistoryOpen(true)}>按人物查看历史</Button>
         <Button
           icon={<PlusOutlined />}
           onClick={() => {
@@ -107,7 +110,7 @@ export default function CharacterRelationsTab({ projectId, character, characters
                 <Button type="link" size="small" onClick={() => setHistory(r)}>
                   历史
                 </Button>
-                <Popconfirm title="删除该关系？" okText="删除" cancelText="取消" onConfirm={() => handleDelete(r)}>
+                <Popconfirm title="删除整份关系资料？" description="将同时删除全部剧情变化和操作记录，无法恢复。" okText="删除" cancelText="取消" onConfirm={() => handleDelete(r)}>
                   <Button type="link" size="small" danger disabled={!canEdit}>
                     删除
                   </Button>
@@ -144,6 +147,14 @@ export default function CharacterRelationsTab({ projectId, character, characters
         }}
       />
       {history && <RelationHistoryModal projectId={projectId} relationship={history} onClose={() => setHistory(null)} />}
+      <Modal open={pairHistoryOpen} title={`${character.name}的关系历史`} footer={null} width={680} onCancel={() => { setPairHistoryOpen(false); setHistoryOther(undefined) }} destroyOnHidden>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Typography.Text type="secondary">选择另一位角色，可查看已结束关系的剧情历史。</Typography.Text>
+          <Select aria-label="选择另一位角色" showSearch optionFilterProp="label" placeholder="选择另一位角色" value={historyOther} style={{ width: '100%' }}
+            options={characters.filter((c) => c.id !== character.id).map((c) => ({ value: c.id, label: c.name }))} onChange={setHistoryOther} />
+          {historyOther && <RelationPairHistory key={`${projectId}:${character.id}:${historyOther}`} projectId={projectId} pair={[character.id, historyOther]} />}
+        </Space>
+      </Modal>
       {canUseAI && (<EntityTaskModal
         projectId={projectId}
         kind="relations.parse"

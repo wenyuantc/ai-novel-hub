@@ -126,7 +126,9 @@ function Inner({ projectId, onClose, onImported }: Props) {
               <InboxOutlined />
             </p>
             <p>{fileName ? `已选择：${fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
-            <p style={{ color: token.colorTextTertiary }}>格式 ainovel.cards v1 / v2（v2 含职业），上限 2MB</p>
+            <p style={{ color: token.colorTextTertiary }}>
+              格式 ainovel.cards v1 / v2 / v3（v3 含角色自定义文本字段），上限 2MB
+            </p>
           </Upload.Dragger>
         )}
         {preview && !result && (

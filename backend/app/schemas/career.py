@@ -94,15 +94,26 @@ class AssignmentCreate(BaseModel):
     # 可选；给出时必须与职业类别一致（主修 → main，副修 → sub）
     role: CareerKind | None = None
     chapter_no: int | None = Field(default=None, ge=1)
+    chapter_id: int | None = Field(default=None, ge=1)
+    anchor_kind: Literal["chapter", "planned"] | None = None
+    boundary: Literal["start", "end"] = "start"
+    edit_mode: Literal["baseline", "progression"] | None = None
+    # 0 表示创建前必须没有该角色／职业时间线。
+    expected_revision: int | None = Field(default=None, ge=0)
     history_note: str = Field(default="", max_length=200)
 
 
 class AssignmentUpdate(BaseModel):
-    """省略 = 不变。chapter_no / history_note 只记入历史。"""
+    """省略 = 不变；章节锚点记录剧情变化，基础修正须明确指定。"""
 
     stage_id: int | None = None
     note: str | None = Field(default=None, max_length=200)
     chapter_no: int | None = Field(default=None, ge=1)
+    chapter_id: int | None = Field(default=None, ge=1)
+    anchor_kind: Literal["chapter", "planned"] | None = None
+    boundary: Literal["start", "end"] = "start"
+    edit_mode: Literal["baseline", "progression"] | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
     history_note: str = Field(default="", max_length=200)
 
 

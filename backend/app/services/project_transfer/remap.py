@@ -121,6 +121,30 @@ def analysis_payload(value: Any, ctx: RemapContext) -> Any:
     return out
 
 
+def setting_payload(value: Any, ctx: RemapContext) -> Any:
+    """时间线快照／变化中的结构化引用；原样保留用户文本与普通数值。"""
+    if isinstance(value, list):
+        return [setting_payload(item, ctx) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    for key, item in value.items():
+        table = ANALYSIS_ID_KEYS.get(key)
+        if table is not None and item is not None:
+            out[key] = ctx.ref(table, item, "设定变化")
+        else:
+            out[key] = setting_payload(item, ctx)
+    return out
+
+
+def setting_event_value(value: Any, field: str | None, ctx: RemapContext) -> Any:
+    """字段本身是引用时（例如 stage_id），不能把整数当成普通数值。"""
+    table = ANALYSIS_ID_KEYS.get(field) if field is not None else None
+    if table is not None and not isinstance(value, (dict, list)):
+        return ctx.ref(table, value, "设定变化")
+    return setting_payload(value, ctx)
+
+
 def field_key(value: Any, ctx: RemapContext) -> str:
     """analysis_changes.field_key 中的 id；对应不上时置空串（不再参与「更晚章节优先」比较）。"""
     if not isinstance(value, str) or not value:

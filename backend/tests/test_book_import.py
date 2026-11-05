@@ -13,7 +13,7 @@ from app.ai.providers import AIProviderError
 from app.core.errors import ConflictError
 from app.core.upload_limit import MULTIPART_OVERHEAD
 from app.models import BookImport, ChapterVersion, GenerationLog, Project, Task
-from app.services import kb_parser, task_service
+from app.services import kb_parser, setting_progression_service, task_service
 from app.services.book_import import reverse, splitter
 from app.services.book_import import service as book_service
 from tests.helpers import (
@@ -28,6 +28,59 @@ from tests.kb_fixtures import make_docx, make_epub
 
 API = "/api/v1/book-imports"
 FILLER = "他走进雨夜，四下无人，只有远处的灯火在风中摇晃。"
+
+
+async def test_reverse_initializes_confirmed_character_and_world_baselines(client, fake_llm):
+    rec = await _setup(client)
+    foreign_project = await client.post("/api/v1/projects", json={"title": "另一部作品"})
+    assert foreign_project.status_code == 201, foreign_project.text
+    foreign_base = f"/api/v1/projects/{foreign_project.json()['id']}"
+    foreign_world = await client.post(f"{foreign_base}/world", json={"title": "他处", "content": "保留"})
+    assert foreign_world.status_code == 201, foreign_world.text
+    _push_all(fake_llm)
+    response = await _start(client, rec)
+    project_id = response.json()["project_id"]
+    done, _ = await _run(client, response)
+    assert done["task"]["status"] == "succeeded", done
+    base = f"/api/v1/projects/{project_id}"
+    data = await _project_data(client, project_id)
+    for kind, items, subject_key, field in (
+        ("character", data["characters"], "character_id", "profile"),
+        ("world", data["world"], "world_setting_id", "content"),
+    ):
+        for item in items:
+            found = await client.get(
+                f"{base}/setting-timelines", params={"subject_kind": kind, subject_key: item["id"]}
+            )
+            assert found.status_code == 200, found.text
+            assert found.json()["total"] == 1
+            timeline = found.json()["items"][0]
+            assert timeline["baseline_status"] == "confirmed" and timeline["legacy_compat_allowed"] is False
+            baseline = (await client.get(f"{base}/setting-timelines/{timeline['id']}/baseline")).json()["baseline"]
+            assert baseline[field] == item[field]
+    assert (await client.get(f"{foreign_base}/world")).json() == [foreign_world.json()]
+    assert (await client.get(f"{foreign_base}/setting-timelines")).json()["total"] == 1
+
+
+async def test_reverse_rolls_back_entities_and_baselines_on_initialization_failure(client, fake_llm, monkeypatch):
+    rec = await _setup(client)
+    _push_all(fake_llm)
+    original = setting_progression_service.create_world_timeline
+
+    async def fail_after_initialize(db, world, **kwargs):
+        await original(db, world, **kwargs)
+        raise RuntimeError("测试初始化失败")
+
+    monkeypatch.setattr(setting_progression_service, "create_world_timeline", fail_after_initialize)
+    response = await _start(client, rec)
+    project_id = response.json()["project_id"]
+    done, _ = await _run(client, response)
+    assert done["task"]["status"] == "failed"
+    base = f"/api/v1/projects/{project_id}"
+    for resource in ("characters", "world", "organizations", "careers", "relationships"):
+        assert (await client.get(f"{base}/{resource}")).json() == []
+    assert (await client.get(base)).json()["synopsis"] == ""
+    assert (await client.get(f"{base}/setting-timelines")).json()["total"] == 0
 
 
 @pytest.fixture(autouse=True)

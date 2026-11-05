@@ -4,10 +4,12 @@ from copy import deepcopy
 
 import pytest
 from sqlalchemy import delete, func, select
+from sqlalchemy import event as sqlalchemy_event
 
 from app.models import (
     AIConfig,
     Career,
+    CareerStage,
     Chapter,
     ChapterAnalysis,
     ChapterVersion,
@@ -18,9 +20,14 @@ from app.models import (
     Outline,
     Project,
     Relationship,
+    RelationshipType,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
     Task,
 )
-from app.services import analysis_service, chapter_service, retrieval_service
+from app.schemas.story import CharacterUpdate
+from app.services import analysis_service, chapter_service, retrieval_service, story_service
 from app.services.agent import effects
 from app.services.agent.tools import ToolCtx, get_tool, list_tools
 from tests.helpers import create_ai_config, create_project, register
@@ -69,8 +76,9 @@ async def new_chapter(ctx, content="山风穿过竹林。林远握紧长剑。")
 
 def test_registry_has_only_explicit_tools():
     names = {tool.name for tool in list_tools()}
-    assert len(names) == 51
+    assert len(names) == 54
     assert {"list_skills", "load_skill", "read_skill_reference"} <= names
+    assert {"list_setting_timelines", "update_setting_baseline", "record_setting_progression"} <= names
     assert not any(name.startswith("mcp__") for name in names)
     assert get_tool("delete_project") is None
     assert get_tool("__import__") is None
@@ -79,6 +87,569 @@ def test_registry_has_only_explicit_tools():
         assert tool.parameters.get("additionalProperties") is False
     schema = get_tool("start_task").parameters
     assert "chapter_id" in schema["$defs"]["AgentTaskParams"]["properties"]
+
+
+def test_gemini_setting_tool_declarations_have_typed_nonempty_objects():
+    from google.genai import types
+
+    from app.ai.providers.gemini import _gemini_schema
+
+    def check(node):
+        assert node.get("type") in {"OBJECT", "STRING", "INTEGER", "BOOLEAN"}, node
+        assert "anyOf" not in node
+        if node["type"] == "OBJECT":
+            assert node.get("properties"), node
+            for child in node["properties"].values():
+                check(child)
+
+    declarations = {}
+    for name in ("update_setting_baseline", "record_setting_progression"):
+        tool = get_tool(name)
+        declaration = types.FunctionDeclaration(
+            name=tool.name, description=tool.description, parameters=_gemini_schema(tool.parameters)
+        ).model_dump(mode="json", by_alias=True, exclude_none=True)
+        check(declaration["parameters"])
+        declarations[name] = declaration["parameters"]["properties"]
+
+    changes = declarations["update_setting_baseline"]["changes"]["properties"]
+    assert {"current_state", "content", "identity", "intimacy", "role", "stage_id", "position", "exists"} <= set(
+        changes
+    )
+    value = declarations["record_setting_progression"]["value"]["properties"]
+    assert {"text", "intimacy", "stage_id", "identity", "presence"} <= set(value)
+    assert {"a_id", "b_id", "type_id"} <= set(value["identity"]["properties"])
+    assert {"exists", "state"} <= set(value["presence"]["properties"])
+    assert {"identity", "intimacy", "status", "description", "role", "stage_id", "position", "note"} <= set(
+        value["presence"]["properties"]["state"]["properties"]
+    )
+
+
+async def test_setting_tools_explicit_baseline_and_chapter_progression(ctx):
+    character = await new_character(ctx)
+    chapter = await new_chapter(ctx)
+    result = await get_tool("list_setting_timelines").run(
+        ctx, {"subject_kind": "character", "character_id": character["id"], "page_size": 1}
+    )
+    assert result["total"] == 1 and result["page"] == 1
+    timeline = result["items"][0]
+    assert timeline["project_id"] == ctx.project_id
+    baseline, _ = await apply(
+        ctx,
+        "update_setting_baseline",
+        {
+            "timeline_id": timeline["id"],
+            "expected_revision": timeline["revision"],
+            "changes": {"current_state": "练气"},
+        },
+    )
+    assert baseline["baseline"]["current_state"] == "练气"
+    args = {
+        "timeline_id": timeline["id"],
+        "expected_revision": baseline["timeline_revision"],
+        "field_key": "current_state",
+        "operation": "replace",
+        "value": {"text": "筑基"},
+        "anchor_kind": "chapter",
+        "chapter_id": chapter.id,
+        "boundary": "end",
+    }
+    result, _ = await apply(ctx, "record_setting_progression", args)
+    assert result["item"]["chapter_id"] == chapter.id
+    assert result["item"]["chapter_no"] is None
+    assert result["item"]["boundary"] == "end"
+    assert (await ctx.db.get(Character, character["id"])).current_state == "筑基"
+    assert "error" in await get_tool("record_setting_progression").preview(ctx, args)
+    no_anchor = {key: value for key, value in args.items() if key != "chapter_id"}
+    assert "error" in await get_tool("record_setting_progression").preview(ctx, no_anchor)
+
+
+async def test_setting_tools_reject_foreign_references_and_wrong_custom_field(ctx):
+    character = await new_character(ctx)
+    local = await get_tool("list_setting_timelines").run(ctx, {"character_id": character["id"]})
+    timeline = local["items"][0]
+    other_character = await new_character(ctx, "陈风")
+    other_local = await get_tool("list_setting_timelines").run(ctx, {"character_id": other_character["id"]})
+    wrong_field = SettingTextField(timeline_id=other_local["items"][0]["id"], label="其他设定字段")
+    foreign = Project(user_id=ctx.user_id, title="另一作品")
+    ctx.db.add_all([wrong_field, foreign])
+    await ctx.db.flush()
+    foreign_character = Character(project_id=foreign.id, name="他书角色")
+    foreign_chapter = Chapter(project_id=foreign.id, title="他书章节", chapter_no=1)
+    foreign_type = RelationshipType(project_id=foreign.id, role_a="甲", role_b="乙")
+    foreign_career = Career(project_id=foreign.id, name="他书职业")
+    ctx.db.add_all([foreign_character, foreign_chapter, foreign_type, foreign_career])
+    await ctx.db.flush()
+    foreign_timeline = SettingTimeline(
+        project_id=foreign.id, subject_kind="character", character_id=foreign_character.id, baseline={}
+    )
+    foreign_stage = CareerStage(career_id=foreign_career.id, position=1, name="他书阶段")
+    ctx.db.add_all([foreign_timeline, foreign_stage])
+    await ctx.db.flush()
+    foreign_field = SettingTextField(timeline_id=foreign_timeline.id, label="他书字段")
+    own_field = SettingTextField(timeline_id=timeline["id"], label="本书字段")
+    ctx.db.add_all([foreign_field, own_field])
+    await ctx.db.commit()
+
+    list_tool = get_tool("list_setting_timelines")
+    assert "error" in await list_tool.run(ctx, {"character_id": foreign_character.id})
+    first_page = await list_tool.run(ctx, {"subject_kind": "character", "page_size": 1, "page": 1})
+    second_page = await list_tool.run(ctx, {"subject_kind": "character", "page_size": 1, "page": 2})
+    assert first_page["total"] == second_page["total"] == 2
+    assert first_page["items"][0]["custom_fields"] == [{"id": own_field.id, "label": "本书字段"}]
+    assert second_page["items"][0]["custom_fields"] == [{"id": wrong_field.id, "label": "其他设定字段"}]
+    baseline_tool = get_tool("update_setting_baseline")
+    assert "error" in await baseline_tool.preview(
+        ctx, {"timeline_id": foreign_timeline.id, "expected_revision": 1, "changes": {"current_state": "越权"}}
+    )
+    tool = get_tool("record_setting_progression")
+    args = {
+        "timeline_id": timeline["id"],
+        "expected_revision": timeline["revision"],
+        "field_key": "current_state",
+        "operation": "replace",
+        "value": {"text": "新状态"},
+        "anchor_kind": "chapter",
+        "chapter_id": foreign_chapter.id,
+    }
+    assert "error" in await tool.preview(ctx, args)
+    args = {**args, "anchor_kind": "planned", "chapter_no": 2}
+    args.pop("chapter_id")
+    for field in (wrong_field, foreign_field):
+        assert "error" in await tool.preview(ctx, {**args, "field_key": None, "custom_field_id": field.id})
+    nested = {
+        **args,
+        "value": {"identity": {"a_id": character["id"], "b_id": other_character["id"], "type_id": foreign_type.id}},
+    }
+    assert (await tool.preview(ctx, nested))["error"] == "不存在"
+    nested_presence = {
+        **args,
+        "field_key": "presence",
+        "value": {
+            "presence": {
+                "exists": True,
+                "state": {
+                    "identity": {"a_id": character["id"], "b_id": other_character["id"], "type_id": foreign_type.id}
+                },
+            }
+        },
+    }
+    assert (await tool.preview(ctx, nested_presence))["error"] == "不存在"
+    assert (await tool.preview(ctx, {**args, "field_key": "stage_id", "value": {"stage_id": foreign_stage.id}}))[
+        "error"
+    ] == "不存在"
+
+
+async def test_setting_tool_rejects_ambiguous_untyped_and_mismatched_values(ctx):
+    character = await new_character(ctx)
+    timeline = (await get_tool("list_setting_timelines").run(ctx, {"character_id": character["id"]}))["items"][0]
+    args = {
+        "timeline_id": timeline["id"],
+        "expected_revision": timeline["revision"],
+        "field_key": "current_state",
+        "operation": "replace",
+        "anchor_kind": "planned",
+        "chapter_no": 3,
+    }
+    before = await effects.snapshot(ctx.db, ctx.project_id)
+    for value in (
+        "未经类型包装",
+        {},
+        {"text": "筑基", "intimacy": 10},
+        {"text": "筑基", "other": "多余"},
+        {"intimacy": 10},
+        {"text": None},
+    ):
+        assert "error" in await get_tool("record_setting_progression").preview(ctx, {**args, "value": value})
+    assert await effects.snapshot(ctx.db, ctx.project_id) == before
+
+
+async def test_setting_tools_type_safe_values_cover_all_subjects_and_custom_text(ctx):
+    from app.schemas.progression import TextFieldCreate
+    from app.services import setting_progression_service
+
+    character, other = await new_character(ctx), await new_character(ctx, "陈风")
+    world, _ = await apply(ctx, "create_world_setting", {"title": "灵界", "content": "天地初开"})
+    relation, _ = await apply(
+        ctx, "create_relationship", {"a_id": character["id"], "b_id": other["id"], "role_a": "师父", "role_b": "徒弟"}
+    )
+    career, _ = await apply(ctx, "create_career", {"name": "剑修", "stages": [{"name": "入门"}, {"name": "大师"}]})
+    await apply(ctx, "assign_career", {"character_id": character["id"], "career_id": career["id"]})
+    org, _ = await apply(ctx, "create_organization", {"name": "剑宗"})
+    await apply(ctx, "set_org_member", {"organization_id": org["id"], "character_id": character["id"]})
+
+    filters = {
+        "character": {"character_id": character["id"]},
+        "world": {"world_setting_id": world["id"]},
+        "relationship": {"character_id": character["id"], "related_character_id": other["id"]},
+        "career": {"character_id": character["id"], "career_id": career["id"]},
+        "membership": {"character_id": character["id"], "organization_id": org["id"]},
+    }
+    timelines = {}
+    for kind, extra in filters.items():
+        result = await get_tool("list_setting_timelines").run(ctx, {"subject_kind": kind, **extra})
+        assert result["total"] == 1 and result["items"][0]["custom_fields"] == []
+        timelines[kind] = result["items"][0]
+
+    for kind, field_key, value in (
+        ("relationship", "intimacy", {"stage_id": career["stages"][0]["id"]}),
+        ("career", "stage_id", {"intimacy": career["stages"][1]["id"]}),
+    ):
+        timeline = timelines[kind]
+        assert "error" in await get_tool("record_setting_progression").preview(
+            ctx,
+            {
+                "timeline_id": timeline["id"],
+                "expected_revision": timeline["revision"],
+                "field_key": field_key,
+                "operation": "replace",
+                "value": value,
+                "anchor_kind": "planned",
+                "chapter_no": 1,
+            },
+        )
+
+    identity = {"a_id": character["id"], "b_id": other["id"], "type_id": relation["type_id"]}
+    baselines = {
+        "character": {"current_state": "练气"},
+        "world": {"content": "天地初开"},
+        "relationship": {"identity": identity, "intimacy": 10},
+        "career": {"note": "御剑"},
+        "membership": {"position": "内门弟子"},
+    }
+    for kind, changes in baselines.items():
+        timeline = timelines[kind]
+        result, _ = await apply(
+            ctx,
+            "update_setting_baseline",
+            {"timeline_id": timeline["id"], "expected_revision": timeline["revision"], "changes": changes},
+        )
+        assert all(result["baseline"][key] == value for key, value in changes.items())
+        timeline["revision"] = result["timeline_revision"]
+
+    reverse_identity = {**identity, "a_id": other["id"], "b_id": character["id"]}
+    events = {
+        "character": ("current_state", {"text": "筑基"}, "筑基", "replace"),
+        "world": ("content", {"text": "灾变"}, "灾变", "append"),
+        "relationship": ("identity", {"identity": reverse_identity}, reverse_identity, "replace"),
+        "career": ("stage_id", {"stage_id": career["stages"][1]["id"]}, career["stages"][1]["id"], "replace"),
+        "membership": ("position", {"text": "长老"}, "长老", "replace"),
+    }
+    for kind, (field, value, raw_value, operation) in events.items():
+        timeline = timelines[kind]
+        result, _ = await apply(
+            ctx,
+            "record_setting_progression",
+            {
+                "timeline_id": timeline["id"],
+                "expected_revision": timeline["revision"],
+                "field_key": field,
+                "operation": operation,
+                "value": value,
+                "anchor_kind": "planned",
+                "chapter_no": 1,
+            },
+        )
+        assert result["item"]["value"] == raw_value
+        timeline["revision"] = result["timeline_revision"]
+
+    lifecycle_states = {
+        "relationship": {"identity": reverse_identity, "intimacy": 30, "status": "normal", "description": "师徒"},
+        "career": {"role": "main", "stage_id": career["stages"][1]["id"], "note": "重修"},
+        "membership": {"position": "掌门", "status": "active", "note": "重入"},
+    }
+    for kind, state in lifecycle_states.items():
+        timeline = timelines[kind]
+        for chapter_no, raw in ((2, {"exists": False}), (3, {"exists": True, "state": state})):
+            result, _ = await apply(
+                ctx,
+                "record_setting_progression",
+                {
+                    "timeline_id": timeline["id"],
+                    "expected_revision": timeline["revision"],
+                    "field_key": "presence",
+                    "operation": "replace",
+                    "value": {"presence": raw},
+                    "anchor_kind": "planned",
+                    "chapter_no": chapter_no,
+                },
+            )
+            assert result["item"]["value"] == raw
+            timeline["revision"] = result["timeline_revision"]
+
+    timeline = timelines["character"]
+    field = await setting_progression_service.create_text_field(
+        ctx.db,
+        ctx.user_id,
+        ctx.project_id,
+        timeline["id"],
+        TextFieldCreate(expected_revision=timeline["revision"], label="招式", base_value="基础剑法"),
+    )
+    listed = await get_tool("list_setting_timelines").run(ctx, {"subject_kind": "character", **filters["character"]})
+    assert listed["items"][0]["custom_fields"] == [{"id": field.item.id, "label": "招式"}]
+    result, _ = await apply(
+        ctx,
+        "record_setting_progression",
+        {
+            "timeline_id": timeline["id"],
+            "expected_revision": field.timeline_revision,
+            "custom_field_id": field.item.id,
+            "operation": "append",
+            "value": {"text": "天剑式"},
+            "anchor_kind": "planned",
+            "chapter_no": 2,
+        },
+    )
+    assert result["item"]["custom_field_id"] == field.item.id and result["item"]["value"] == "天剑式"
+
+
+async def test_hidden_relationship_is_not_an_ordinary_tool_target(ctx):
+    a, b = await new_character(ctx), await new_character(ctx, "陈风")
+    type_id = await ctx.db.scalar(select(RelationshipType.id).where(RelationshipType.project_id.is_(None)).limit(1))
+    relation = Relationship(
+        project_id=ctx.project_id,
+        a_id=a["id"],
+        b_id=b["id"],
+        pair_low=a["id"],
+        pair_high=b["id"],
+        type_id=type_id,
+        is_present=False,
+    )
+    ctx.db.add(relation)
+    await ctx.db.commit()
+    assert str(relation.id) in (await effects.snapshot(ctx.db, ctx.project_id))["relationships"]
+    assert (await get_tool("update_relationship").preview(ctx, {"id": relation.id, "intimacy": 10}))[
+        "error"
+    ] == "不存在"
+
+
+async def test_member_removal_tool_records_explicit_exit_then_can_delete_record(ctx):
+    character = await new_character(ctx)
+    org, _ = await apply(ctx, "create_organization", {"name": "门派"})
+    keys = {"organization_id": org["id"], "character_id": character["id"]}
+    member, _ = await apply(ctx, "set_org_member", {**keys, "position": "弟子"})
+    timeline = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "membership"}))["items"][0]
+    chapter = await new_chapter(ctx)
+    args = {
+        **keys,
+        "edit_mode": "progression",
+        "expected_revision": timeline["revision"],
+        "chapter_id": chapter.id,
+        "boundary": "end",
+    }
+    await apply(ctx, "remove_org_member", args)
+    event = await ctx.db.scalar(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    assert event.field_key == "presence" and event.value == {"exists": False}
+    assert event.chapter_id == chapter.id and event.boundary == "end"
+    assert await ctx.db.get(OrganizationMember, member["id"]) is None
+    latest = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "membership"}))["items"][0]
+    delete_args = {**keys, "edit_mode": "delete", "expected_revision": latest["revision"]}
+    await apply(ctx, "remove_org_member", delete_args)
+    assert await ctx.db.get(SettingTimeline, timeline["id"]) is None
+    assert await ctx.db.scalar(select(SettingProgression.id).where(SettingProgression.id == event.id)) is None
+
+
+async def test_member_tool_preserves_explicit_planned_anchor_with_existing_chapter_number(ctx):
+    character = await new_character(ctx)
+    org, _ = await apply(ctx, "create_organization", {"name": "门派"})
+    keys = {"organization_id": org["id"], "character_id": character["id"]}
+    await apply(ctx, "set_org_member", {**keys, "position": "弟子"})
+    chapter = await new_chapter(ctx)
+    timeline = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "membership"}))["items"][0]
+    await apply(
+        ctx,
+        "remove_org_member",
+        {
+            **keys,
+            "edit_mode": "progression",
+            "expected_revision": timeline["revision"],
+            "anchor_kind": "planned",
+            "chapter_no": chapter.chapter_no,
+        },
+    )
+    event = await ctx.db.scalar(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    assert event.anchor_kind == "planned" and event.chapter_id is None and event.chapter_no == chapter.chapter_no
+
+
+async def test_relationship_tool_preserves_explicit_planned_anchor_with_existing_chapter_number(ctx):
+    a, b = await new_character(ctx), await new_character(ctx, "陈风")
+    chapter = await new_chapter(ctx)
+    await apply(
+        ctx,
+        "create_relationship",
+        {
+            "a_id": a["id"],
+            "b_id": b["id"],
+            "role_a": "师父",
+            "role_b": "徒弟",
+            "anchor_kind": "planned",
+            "chapter_no": chapter.chapter_no,
+            "expected_revision": 0,
+        },
+    )
+    timeline = (
+        await get_tool("list_setting_timelines").run(
+            ctx, {"subject_kind": "relationship", "character_id": a["id"], "related_character_id": b["id"]}
+        )
+    )["items"][0]
+    event = await ctx.db.scalar(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    assert event.anchor_kind == "planned" and event.chapter_id is None and event.chapter_no == chapter.chapter_no
+
+
+async def test_career_tools_preserve_explicit_position_and_revision(ctx):
+    character = await new_character(ctx)
+    career, _ = await apply(ctx, "create_career", {"name": "剑修", "stages": [{"name": "入门"}, {"name": "大师"}]})
+    keys = {"character_id": character["id"], "career_id": career["id"]}
+    assignment, _ = await apply(ctx, "assign_career", keys)
+    timeline = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "career"}))["items"][0]
+    first, second = await new_chapter(ctx), await new_chapter(ctx)
+    args = {
+        **keys,
+        "stage_id": career["stages"][1]["id"],
+        "edit_mode": "progression",
+        "chapter_id": first.id,
+        "boundary": "end",
+        "expected_revision": timeline["revision"],
+    }
+    assert "error" in await get_tool("assign_career").preview(
+        ctx, {key: value for key, value in args.items() if key != "expected_revision"}
+    )
+    await apply(ctx, "assign_career", args)
+    events = list(
+        await ctx.db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    )
+    assert len(events) == 1 and events[0].field_key == "stage_id"
+    assert events[0].chapter_id == first.id and events[0].boundary == "end"
+    assert "error" in await get_tool("assign_career").preview(ctx, args)
+    latest = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "career"}))["items"][0]
+    assert "error" in await get_tool("remove_career_assignment").preview(
+        ctx,
+        {
+            "character_id": character["id"],
+            "assignment_id": assignment["id"],
+            "edit_mode": "progression",
+            "chapter_id": second.id,
+        },
+    )
+    await apply(
+        ctx,
+        "remove_career_assignment",
+        {
+            "character_id": character["id"],
+            "assignment_id": assignment["id"],
+            "edit_mode": "progression",
+            "expected_revision": latest["revision"],
+            "chapter_id": second.id,
+            "boundary": "end",
+        },
+    )
+    events = list(
+        await ctx.db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    )
+    assert len(events) == 2 and events[-1].value == {"exists": False}
+    assert events[-1].chapter_id == second.id and events[-1].boundary == "end"
+
+
+async def test_agent_can_create_new_career_timeline_with_expected_zero_revision(ctx):
+    character = await new_character(ctx)
+    career, _ = await apply(ctx, "create_career", {"name": "医修", "stages": [{"name": "初学"}]})
+    chapter = await new_chapter(ctx)
+    args = {
+        "character_id": character["id"],
+        "career_id": career["id"],
+        "edit_mode": "progression",
+        "chapter_id": chapter.id,
+        "expected_revision": 0,
+    }
+    await apply(ctx, "assign_career", args)
+    timeline = (
+        await get_tool("list_setting_timelines").run(
+            ctx, {"subject_kind": "career", "character_id": character["id"], "career_id": career["id"]}
+        )
+    )["items"][0]
+    event = await ctx.db.scalar(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    assert event.field_key == "presence" and event.value["exists"] is True
+    assert event.chapter_id == chapter.id
+    assert "error" in await get_tool("assign_career").preview(ctx, args)
+
+
+async def test_career_tool_preserves_explicit_planned_anchor_with_existing_chapter_number(ctx):
+    character = await new_character(ctx)
+    career, _ = await apply(ctx, "create_career", {"name": "剑修", "stages": [{"name": "入门"}, {"name": "大师"}]})
+    keys = {"character_id": character["id"], "career_id": career["id"]}
+    assignment, _ = await apply(ctx, "assign_career", keys)
+    chapter = await new_chapter(ctx)
+    timeline = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "career"}))["items"][0]
+    await apply(
+        ctx,
+        "assign_career",
+        {
+            **keys,
+            "stage_id": career["stages"][1]["id"],
+            "edit_mode": "progression",
+            "expected_revision": timeline["revision"],
+            "anchor_kind": "planned",
+            "chapter_no": chapter.chapter_no,
+        },
+    )
+    latest = (await get_tool("list_setting_timelines").run(ctx, {**keys, "subject_kind": "career"}))["items"][0]
+    await apply(
+        ctx,
+        "remove_career_assignment",
+        {
+            "character_id": character["id"],
+            "assignment_id": assignment["id"],
+            "edit_mode": "progression",
+            "expected_revision": latest["revision"],
+            "anchor_kind": "planned",
+            "chapter_no": chapter.chapter_no,
+            "boundary": "end",
+        },
+    )
+    events = list(
+        await ctx.db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == timeline["id"]))
+    )
+    assert len(events) == 2
+    assert all(event.anchor_kind == "planned" and event.chapter_id is None for event in events)
+    assert [event.chapter_no for event in events] == [chapter.chapter_no, chapter.chapter_no]
+
+
+async def test_real_relationship_progression_preview_is_stable_when_new_type_id_changes(ctx):
+    a, b = await new_character(ctx), await new_character(ctx, "陈风")
+    chapter = await new_chapter(ctx)
+    args = {
+        "a_id": a["id"],
+        "b_id": b["id"],
+        "role_a": "传剑者",
+        "role_b": "承剑者",
+        "chapter_id": chapter.id,
+        "expected_revision": 0,
+    }
+    allocated = []
+
+    def capture_insert(_conn, cursor, statement, _parameters, _context, _executemany):
+        if statement.lower().lstrip().startswith("insert into relationship_types"):
+            allocated.append(cursor.lastrowid)
+
+    sqlalchemy_event.listen(ctx.db.bind.sync_engine, "after_cursor_execute", capture_insert)
+    try:
+        first = await get_tool("create_relationship").preview(ctx, args)
+        other = Project(user_id=ctx.user_id, title="另一作品")
+        ctx.db.add(other)
+        await ctx.db.flush()
+        ctx.db.add(RelationshipType(project_id=other.id, role_a="其他甲", role_b="其他乙"))
+        await ctx.db.commit()
+        second = await get_tool("create_relationship").preview(ctx, args)
+    finally:
+        sqlalchemy_event.remove(ctx.db.bind.sync_engine, "after_cursor_execute", capture_insert)
+    assert "error" not in first and "error" not in second
+    assert len(allocated) >= 3 and allocated[0] != allocated[-1]
+    assert first == second
+    progression = next(
+        item
+        for item in first["diff"]
+        if item["field"].startswith("setting_progressions.") and item["field"].endswith(".value")
+    )
+    assert progression["after"]["state"]["identity"]["type_id"] == "新增relationship_types:1"
 
 
 @pytest.mark.parametrize(
@@ -392,9 +963,14 @@ async def test_changed_target_and_cascades_refresh_preview(ctx):
     tool = get_tool("update_character")
     args = {"id": char["id"], "personality": "冷静"}
     before = await tool.preview(ctx, args)
-    row = await ctx.db.get(Character, char["id"])
-    row.background = "其他编辑器补充的背景"
-    await ctx.db.commit()
+    await story_service.update_owned(
+        ctx.db,
+        story_service.CHARACTERS,
+        ctx.user_id,
+        ctx.project_id,
+        char["id"],
+        CharacterUpdate(background="其他编辑器补充的背景"),
+    )
     refreshed = await tool.preview(ctx, args)
     assert before["diff"] == refreshed["diff"]
     assert before["guards"] != refreshed["guards"]
@@ -402,6 +978,28 @@ async def test_changed_target_and_cascades_refresh_preview(ctx):
     preview = await get_tool("delete_character").preview(ctx, {"id": char["id"]})
     assert any(item["field"].startswith("organization_members.") for item in preview["diff"])
     assert await ctx.db.scalar(select(func.count(OrganizationMember.id))) == 1
+
+
+async def test_preview_guard_catches_other_baseline_field_changed_concurrently(ctx):
+    char = await new_character(ctx)
+    tool = get_tool("update_character")
+    args = {"id": char["id"], "personality": "沉稳"}
+    before = await tool.preview(ctx, args)
+    await story_service.update_owned(
+        ctx.db,
+        story_service.CHARACTERS,
+        ctx.user_id,
+        ctx.project_id,
+        char["id"],
+        CharacterUpdate(background="他人补充的经历"),
+    )
+    refreshed = await tool.preview(ctx, args)
+    assert before["diff"] == refreshed["diff"]
+    old_guard = next(guard for guard in before["guards"] if guard["table"] == "setting_timelines")
+    new_guard = next(guard for guard in refreshed["guards"] if guard["table"] == "setting_timelines")
+    assert old_guard["hash"] != new_guard["hash"]
+    result = await tool.execute(ctx, args)
+    assert result["personality"] == "沉稳" and result["background"] == "他人补充的经历"
 
 
 async def test_preview_does_not_change_project_timestamp(ctx):

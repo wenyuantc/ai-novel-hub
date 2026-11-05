@@ -39,7 +39,7 @@
   当前 SDK 的 API-key Developer API 对 Imagen 有限制，需要明确中文错误，不能假定模型名称包含 `imagen` 就可用。
   Anthropic 沿用默认“不支持图片生成”错误。
 - 总超时沿用 `AI_REQUEST_TIMEOUT`；不引入独立图片存储目录或数据卷。
-- 备份保持 `ainovel.project` v1，新增可选顶层 `cover: {mime_type, data: base64} | null`。
+- 封面作为可选顶层 `cover: {mime_type, data: base64} | null`；当前备份格式为 `ainovel.project` v2，并兼容不含封面的 v1。
   `project_covers` 登记于 `NOT_EXPORTED`，二进制不走通用行导出。缺失/null 都表示无封面；导入在同一事务写入新项目封面。
 - EPUB 有封面时包含图片资源、`properties="cover-image"`、兼容元数据和 spine 首位的 `cover.xhtml`；无封面不增加这些资源。
 - 前端修改封面成功时只向当前项目 store 合并 `cover_updated_at`；不能用完整返回项目重置概览页未保存的表单。

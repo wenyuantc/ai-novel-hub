@@ -1,3 +1,7 @@
+import asyncio
+import json
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -8,6 +12,427 @@ from sqlalchemy.exc import IntegrityError
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 EXPECTED_TABLES = {"users", "ai_configs", "projects", "world_settings", "characters", "outlines", "chapters"}
+
+
+def test_0031_setting_progressions_preserves_legacy_and_detaches_deleted_sources(tmp_path):
+    """旧档案成为待校准基线；删源章节不删除剧情事件或既有关系历史。"""
+    db_file = tmp_path / "migrate0031.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0030")
+
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users(id,username,password_hash) VALUES (1,'legacy','hash')"))
+            conn.execute(text(
+                "INSERT INTO projects(id,user_id,title,genre,premise,style,status) "
+                "VALUES (1,1,'旧作品','','','','planning'), (2,1,'其他作品','','','','planning')"
+            ))
+            conn.execute(text(
+                "INSERT INTO characters(id,project_id,name,role_type,profile,relations_text,sort,"
+                "appearance,personality,background,current_state,life_status,age,gender) VALUES "
+                "(1,1,'林远','主角','少年','',1,'白衣','坚毅','山村','筑基','alive','18','男'),"
+                "(2,1,'张三','导师','','',2,'','','','','alive','',''),"
+                "(3,2,'旁人','','','',1,'','','','','alive','','')"
+            ))
+            conn.execute(text(
+                "INSERT INTO world_settings(id,project_id,title,content,category,sort) "
+                "VALUES (1,1,'青云山','仙山','place',1)"
+            ))
+            conn.execute(text(
+                "INSERT INTO organizations(id,project_id,name,sort) VALUES (1,1,'青云宗',1)"
+            ))
+            conn.execute(text(
+                "INSERT INTO organization_members(id,organization_id,character_id,position,status,note) "
+                "VALUES (1,1,1,'内门弟子','active','持令牌')"
+            ))
+            conn.execute(text(
+                "INSERT INTO relationships(id,project_id,a_id,b_id,pair_low,pair_high,type_id,intimacy,"
+                "status,description) "
+                "VALUES (1,1,2,1,1,2,1,50,'normal','师徒相知')"
+            ))
+            conn.execute(text(
+                "INSERT INTO relationship_history(id,relationship_id,chapter_no,source,changes,note) "
+                "VALUES (1,1,20,'analysis',:changes,'必须保留')"
+            ), {"changes": '{"status":["past","normal"]}'})
+            conn.execute(text("INSERT INTO careers(id,project_id,name,kind,sort) VALUES (1,1,'剑修','main',1)"))
+            conn.execute(text("INSERT INTO career_stages(id,career_id,position,name) VALUES (1,1,1,'筑基')"))
+            conn.execute(text(
+                "INSERT INTO character_careers(id,character_id,career_id,role,stage_id,note) "
+                "VALUES (1,1,1,'main',1,'初期')"
+            ))
+            conn.execute(text(
+                "INSERT INTO chapters(id,project_id,chapter_no,title,content,status,word_count) "
+                "VALUES (1,1,20,'晋升','正文','draft',2)"
+            ))
+            conn.execute(text(
+                "INSERT INTO chapter_analyses (id,project_id,chapter_id,content_hash,chapter_no,summary,"
+                "plot_points,hooks,conflict,emotion,changes_raw,foreshadow_candidates,scores,metrics,"
+                "suggestions,warnings) "
+                "VALUES (1,1,1,'hash',20,'','[]','[]','{}','{}','{}','[]','{}','{}','[]','[]')"
+            ))
+            conn.execute(text(
+                "INSERT INTO analysis_changes(id,analysis_id,project_id,chapter_no,kind,target,status) "
+                "VALUES (1,1,1,20,'character_state','{}','applied')"
+            ))
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0031")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspector = inspect(engine)
+        assert {"setting_timelines", "setting_text_fields", "setting_progressions"} <= set(inspector.get_table_names())
+        assert "is_present" in {col["name"] for col in inspector.get_columns("relationships")}
+        # 迁移与 create_all 必须建立同一组列、外键和索引，避免只有测试或生产模式有效。
+        from app.models import Base
+
+        for table_name in ("setting_timelines", "setting_text_fields", "setting_progressions"):
+            model = Base.metadata.tables[table_name]
+            columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+            assert set(columns) == set(model.columns.keys())
+            assert all(columns[column.name]["nullable"] == column.nullable for column in model.columns)
+            actual_fks = {
+                (tuple(fk["constrained_columns"]), fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in inspector.get_foreign_keys(table_name)
+            }
+            model_fks = {
+                (tuple(column.name for column in fk.columns), fk.referred_table.name, fk.ondelete)
+                for fk in model.foreign_key_constraints
+            }
+            assert actual_fks == model_fks
+            assert {index["name"] for index in inspector.get_indexes(table_name)} == {
+                index.name for index in model.indexes
+            }
+        source_fk = next(
+            fk for fk in inspector.get_foreign_keys("setting_progressions")
+            if fk["constrained_columns"] == ["source_change_id"]
+        )
+        assert source_fk["options"] == {
+            "ondelete": "SET NULL", "deferrable": True, "initially": "DEFERRED"
+        }
+        model_source_fk = next(
+            fk for fk in Base.metadata.tables["setting_progressions"].foreign_key_constraints
+            if [col.name for col in fk.columns] == ["source_change_id"]
+        )
+        assert (model_source_fk.ondelete, model_source_fk.deferrable, model_source_fk.initially) == (
+            "SET NULL", True, "DEFERRED"
+        )
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            rows = conn.execute(text(
+                "SELECT id,project_id,subject_kind,character_id,related_character_id,world_setting_id,career_id,"
+                "organization_id,baseline,baseline_status,legacy_compat_allowed FROM setting_timelines"
+            )).mappings().all()
+            assert len(rows) == 7
+            assert all(row["baseline_status"] == "legacy_unverified" and row["legacy_compat_allowed"] for row in rows)
+            character = next(row for row in rows if row["subject_kind"] == "character" and row["character_id"] == 1)
+            assert json.loads(character["baseline"]) == {
+                "profile": "少年", "appearance": "白衣", "personality": "坚毅", "background": "山村",
+                "current_state": "筑基", "life_status": "alive", "age": "18", "gender": "男",
+            }
+            world = next(row for row in rows if row["subject_kind"] == "world")
+            assert (world["world_setting_id"], json.loads(world["baseline"])) == (1, {"content": "仙山"})
+            relation = next(row for row in rows if row["subject_kind"] == "relationship")
+            assert (relation["character_id"], relation["related_character_id"]) == (1, 2)
+            assert json.loads(relation["baseline"]) == {
+                "exists": True, "identity": {"a_id": 2, "b_id": 1, "type_id": 1},
+                "intimacy": 50, "status": "normal", "description": "师徒相知",
+            }
+            career = next(row for row in rows if row["subject_kind"] == "career")
+            assert (career["character_id"], career["career_id"], json.loads(career["baseline"])) == (
+                1, 1, {"exists": True, "role": "main", "stage_id": 1, "note": "初期"},
+            )
+            member = next(row for row in rows if row["subject_kind"] == "membership")
+            assert (member["character_id"], member["organization_id"], json.loads(member["baseline"])) == (
+                1, 1, {"exists": True, "position": "内门弟子", "status": "active", "note": "持令牌"},
+            )
+            assert conn.execute(text("SELECT is_present,description FROM relationships WHERE id=1")).one() == (
+                1, "师徒相知"
+            )
+            assert conn.execute(text("SELECT note FROM relationship_history WHERE id=1")).scalar_one() == "必须保留"
+            assert conn.execute(text("SELECT count(*) FROM setting_progressions")).scalar_one() == 0
+            conn.execute(text(
+                "INSERT INTO setting_progressions "
+                "(id,timeline_id,field_key,operation,value,anchor_kind,chapter_id,boundary,source,protection,"
+                "source_change_id) VALUES (1,:timeline,'current_state','replace',:value,'chapter',1,'end',"
+                "'analysis','automatic',1)"
+            ), {"timeline": character["id"], "value": json.dumps("金丹", ensure_ascii=False)})
+            conn.execute(text("DELETE FROM chapters WHERE id=1"))
+            assert conn.execute(text(
+                "SELECT anchor_kind,chapter_id,chapter_no,source_change_id,value FROM setting_progressions WHERE id=1"
+            )).one() == ("chapter", None, None, None, '"金丹"')
+            assert conn.execute(text("SELECT note FROM relationship_history WHERE id=1")).scalar_one() == "必须保留"
+            assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+            conn.execute(text(
+                "INSERT INTO setting_text_fields(id,timeline_id,label,base_value) "
+                "VALUES (1,:timeline,'地形','青山')"
+            ), {"timeline": world["id"]})
+            conn.execute(text(
+                "INSERT INTO setting_progressions "
+                "(id,timeline_id,custom_field_id,operation,value,anchor_kind,chapter_no,boundary) "
+                "VALUES (2,:timeline,1,'append',:value,'planned',30,'start')"
+            ), {"timeline": world["id"], "value": json.dumps("沙漠", ensure_ascii=False)})
+            # 字段与变化同属被删除的主体时，NO ACTION 在语句结束前允许父级的完整级联。
+            savepoint = conn.begin_nested()
+            conn.execute(text("DELETE FROM projects WHERE id=1"))
+            assert conn.execute(text("SELECT count(*) FROM setting_progressions")).scalar_one() == 0
+            assert conn.execute(text("SELECT count(*) FROM setting_text_fields")).scalar_one() == 0
+            assert conn.execute(text("SELECT count(*) FROM setting_timelines WHERE project_id=2")).scalar_one() == 1
+            savepoint.rollback()
+
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text(
+                "INSERT INTO setting_timelines(project_id,subject_kind,character_id,baseline) "
+                "VALUES (1,'character',1,'{}')"
+            ))
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("DELETE FROM setting_text_fields WHERE id=1"))
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text(
+                "INSERT INTO setting_progressions(timeline_id,operation,value,anchor_kind,chapter_no) "
+                "VALUES (:timeline,'replace','\"x\"','planned',5)"
+            ), {"timeline": world["id"]})  # 没有内置字段也没有自定义字段，不能产生不明目标变化。
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text(
+                "INSERT INTO setting_progressions(timeline_id,field_key,operation,value,anchor_kind,chapter_no) "
+                "VALUES (:timeline,'content','replace','\"x\"','chapter',5)"
+            ), {"timeline": world["id"]})  # 已关联章节不得同时携带计划章号。
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text(
+                "INSERT INTO setting_progressions(timeline_id,field_key,operation,value,anchor_kind,chapter_no,"
+                "source_change_id) VALUES (:timeline,'content','replace','\"x\"','planned',5,999999)"
+            ), {"timeline": world["id"]})  # 延迟约束仍在提交时拒绝不存在的来源。
+    finally:
+        engine.dispose()
+
+    # 旧结构没有隐藏载体标记；若直接删列会错误复活关系，且删除载体会丢旧审计。
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE relationships SET is_present=0 WHERE id=1"))
+    finally:
+        engine.dispose()
+    with pytest.raises(RuntimeError, match="已隐藏的人物关系"):
+        command.downgrade(cfg, "0030")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "setting_timelines" in inspect(engine).get_table_names()
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT note FROM relationship_history WHERE id=1")).scalar_one() == "必须保留"
+            conn.execute(text("UPDATE relationships SET is_present=1 WHERE id=1"))
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0030")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "setting_timelines" not in inspect(engine).get_table_names()
+        assert "is_present" not in {col["name"] for col in inspect(engine).get_columns("relationships")}
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            assert conn.execute(text("SELECT current_state FROM characters WHERE id=1")).scalar_one() == "筑基"
+            assert conn.execute(text("SELECT note FROM relationship_history WHERE id=1")).scalar_one() == "必须保留"
+            assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+    finally:
+        engine.dispose()
+
+
+def test_0031_rejects_orphan_legacy_subject_before_schema_changes(tmp_path):
+    """旧库有孤儿主体时先报错，修复后可重试，不留 SQLite 半完成 DDL。"""
+    db_file = tmp_path / "migrate0031-orphan.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0030")
+
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users(id,username,password_hash) VALUES (1,'legacy-orphan','hash')"))
+            conn.execute(text(
+                "INSERT INTO projects(id,user_id,title,genre,premise,style,status) "
+                "VALUES (1,1,'旧作品','','','','planning')"
+            ))
+            # 模拟旧库外键当时未开启，错误归属不能被悄悄复制到新时间线。
+            conn.execute(text(
+                "INSERT INTO characters(id,project_id,name,role_type,profile,relations_text,sort) "
+                "VALUES (1,999,'孤儿','','','',1)"
+            ))
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="旧角色 #1"):
+        command.upgrade(cfg, "0031")
+
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "setting_timelines" not in inspect(engine).get_table_names()
+        assert "is_present" not in {col["name"] for col in inspect(engine).get_columns("relationships")}
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0030"
+            conn.execute(text("UPDATE characters SET project_id=1 WHERE id=1"))
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0031")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT project_id FROM setting_timelines")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
+def test_0031_postgresql_cascades_sources_and_subjects(monkeypatch):
+    """显式提供本地测试库时，在独立 schema 验证真实 PG 双重级联与延迟外键。"""
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext import asyncio as sa_asyncio
+
+    db_url = os.environ.get("AINOVEL_POSTGRES_TEST_URL")
+    if not db_url:
+        pytest.skip("设置 AINOVEL_POSTGRES_TEST_URL 才运行 PostgreSQL 集成测试")
+    parsed = make_url(db_url)
+    if parsed.drivername != "postgresql+asyncpg" or parsed.host != "127.0.0.1" or parsed.database != "ainovel_test":
+        raise ValueError("PostgreSQL 集成测试仅允许本机 ainovel_test 隔离数据库")
+
+    schema = f"progression_test_{uuid.uuid4().hex}"
+    original_factory = sa_asyncio.async_engine_from_config
+
+    def isolated_factory(*args, **kwargs):
+        return original_factory(*args, **kwargs, connect_args={"server_settings": {"search_path": schema}})
+
+    async def with_database(action, *, isolated=True):
+        options = {"connect_args": {"server_settings": {"search_path": schema}}} if isolated else {}
+        engine = sa_asyncio.create_async_engine(db_url, **options)
+        try:
+            async with engine.begin() as conn:
+                database = await conn.scalar(text("SELECT current_database()"))
+                assert database == "ainovel_test"
+                await action(conn)
+        finally:
+            await engine.dispose()
+
+    async def create_schema(conn):
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+
+    async def drop_schema(conn):
+        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+    async def seed(conn):
+        statements = (
+            "INSERT INTO users(id,username,password_hash) VALUES (1,'legacy','hash')",
+            "INSERT INTO projects(id,user_id,title,genre,premise,style,status) "
+            "VALUES (1,1,'旧书','','','','planning'),(2,1,'另一作品','','','','planning')",
+            "INSERT INTO characters(id,project_id,name,role_type,profile,relations_text,sort) "
+            "VALUES (1,1,'旧角色','','','',1),(2,2,'另一角色','','','',1)",
+            "INSERT INTO world_settings(id,project_id,title,content,category,sort) "
+            "VALUES (1,1,'旧世界','仙山','place',1)",
+            "INSERT INTO chapters(id,project_id,chapter_no,title,content,status,word_count) "
+            "VALUES (1,1,1,'一','','draft',0),(2,1,2,'二','','draft',0)",
+            "INSERT INTO chapter_analyses(id,project_id,chapter_id,content_hash,chapter_no,summary,"
+            "plot_points,hooks,conflict,emotion,changes_raw,foreshadow_candidates,scores,metrics,suggestions,warnings) "
+            "VALUES (1,1,1,'h1',1,'','[]','[]','{}','{}','{}','[]','{}','{}','[]','[]'),"
+            "(2,1,2,'h2',2,'','[]','[]','{}','{}','{}','[]','{}','{}','[]','[]')",
+            "INSERT INTO analysis_changes(id,analysis_id,project_id,chapter_no,kind,target,status) "
+            "VALUES (1,1,1,1,'character_state','{}','applied'),(2,2,1,2,'character_state','{}','applied')",
+        )
+        for statement in statements:
+            await conn.execute(text(statement))
+
+    async def verify(conn):
+        options = (await conn.execute(text(
+            "SELECT condeferrable,condeferred FROM pg_constraint "
+            "WHERE conrelid='setting_progressions'::regclass "
+            "AND conname='fk_setting_progressions_source_change_id_analysis_changes'"
+        ))).one()
+        assert options == (True, True)
+        character = await conn.scalar(text(
+            "SELECT id FROM setting_timelines WHERE subject_kind='character' AND character_id=1"
+        ))
+        world = await conn.scalar(text("SELECT id FROM setting_timelines WHERE subject_kind='world'"))
+        await conn.execute(text(
+            "INSERT INTO setting_progressions(timeline_id,field_key,operation,value,anchor_kind,chapter_id,"
+            "source_change_id) VALUES (:timeline,'current_state','replace','\"新状态\"','chapter',1,1)"
+        ), {"timeline": character})
+        await conn.execute(text("DELETE FROM chapters WHERE id=1"))
+        assert (await conn.execute(text(
+            "SELECT chapter_id,source_change_id FROM setting_progressions WHERE timeline_id=:timeline"
+        ), {"timeline": character})).one() == (None, None)
+
+        field = await conn.scalar(text(
+            "INSERT INTO setting_text_fields(timeline_id,label) VALUES (:timeline,'地形') RETURNING id"
+        ), {"timeline": world})
+        first_custom = await conn.scalar(text(
+            "INSERT INTO setting_progressions(timeline_id,custom_field_id,operation,value,anchor_kind,chapter_no) "
+            "VALUES (:timeline,:field,'append','\"山脉\"','planned',3) RETURNING id"
+        ), {"timeline": world, "field": field})
+        replacement = await conn.scalar(text(
+            "INSERT INTO setting_progressions(timeline_id,custom_field_id,operation,value,anchor_kind,chapter_no) "
+            "VALUES (:timeline,:field,'replace','\"雪原\"','planned',4) RETURNING id"
+        ), {"timeline": world, "field": field})
+        await conn.execute(text(
+            "UPDATE setting_progressions SET active=false,superseded_by_id=:replacement WHERE id=:first"
+        ), {"replacement": replacement, "first": first_custom})
+        # 另一条事件先提交，随后在不同事务中删章，模拟常见的已保存分析。
+        await conn.execute(text(
+            "INSERT INTO setting_progressions(timeline_id,field_key,operation,value,anchor_kind,chapter_id,"
+            "source_change_id) VALUES (:timeline,'profile','replace','\"已有变化\"','chapter',2,2)"
+        ), {"timeline": character})
+        async with conn.begin_nested() as savepoint:
+            await conn.execute(text("DELETE FROM world_settings WHERE id=1"))
+            await conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            assert await conn.scalar(text("SELECT count(*) FROM setting_text_fields")) == 0
+            assert await conn.scalar(text("SELECT count(*) FROM setting_progressions WHERE timeline_id=:timeline"),
+                                     {"timeline": world}) == 0
+            await savepoint.rollback()
+        async with conn.begin_nested() as savepoint:
+            await conn.execute(text("DELETE FROM projects WHERE id=1"))
+            await conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            assert await conn.scalar(text("SELECT count(*) FROM setting_text_fields")) == 0
+            assert await conn.scalar(text("SELECT count(*) FROM setting_progressions")) == 0
+            assert await conn.scalar(text("SELECT count(*) FROM setting_timelines WHERE project_id=2")) == 1
+            await savepoint.rollback()
+
+    async def verify_committed_event(conn):
+        await conn.execute(text("DELETE FROM chapters WHERE id=2"))
+        assert (await conn.execute(text(
+            "SELECT chapter_id,source_change_id FROM setting_progressions WHERE field_key='profile'"
+        ))).one() == (None, None)
+
+    async def reject_invalid_source_at_commit(conn):
+        timeline = await conn.scalar(text("SELECT id FROM setting_timelines WHERE subject_kind='world'"))
+        await conn.execute(text(
+            "INSERT INTO setting_progressions(timeline_id,field_key,operation,value,anchor_kind,chapter_no,"
+            "source_change_id) VALUES (:timeline,'content','replace','\"x\"','planned',5,999999)"
+        ), {"timeline": timeline})
+
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    cfg.attributes["configure_logger"] = False
+    asyncio.run(with_database(create_schema, isolated=False))
+    try:
+        monkeypatch.setattr(sa_asyncio, "async_engine_from_config", isolated_factory)
+        command.upgrade(cfg, "0030")
+        asyncio.run(with_database(seed))
+        command.upgrade(cfg, "0031")
+        asyncio.run(with_database(verify))
+        asyncio.run(with_database(verify_committed_event))
+        with pytest.raises(IntegrityError):
+            asyncio.run(with_database(reject_invalid_source_at_commit))
+    finally:
+        asyncio.run(with_database(drop_schema, isolated=False))
 
 
 def test_0028_nullable_login_time_preserves_users_and_children(tmp_path):

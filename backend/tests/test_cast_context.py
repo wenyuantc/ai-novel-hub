@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
+from sqlalchemy import select
+
+from app.models import Chapter, Character, Project, Relationship, RelationshipType, SettingProgression, SettingTimeline
 from app.services.cast_service import is_protagonist, match_characters
-from app.services.context_builder import CastSection, RelationLine, assemble_context
+from app.services.context_builder import CastSection, RelationLine, assemble_context, build_setting_context
 from tests.helpers import create_ai_config, create_project, register, run_task
 
 
@@ -174,3 +177,51 @@ def test_cast_trim_order():
     assert "宗" * 100 not in ctx
     assert "主" * 300 in ctx and "配" * 300 not in ctx
     assert "【当前卷大纲】" in ctx
+
+
+async def test_setting_context_uses_historical_hidden_relation_and_text_hint(app, client):
+    """当前已终止的关系仍可回溯，选区提到的配角使用相同匹配规则。"""
+    await register(client)
+    project = await create_project(client)
+    pid = project["id"]
+    async with app.state.sessionmaker() as db:
+        hero = Character(project_id=pid, name="林远", role_type="主角", relations_text="未来和苏晚决裂")
+        partner = Character(project_id=pid, name="苏晚")
+        chapters = [Chapter(project_id=pid, chapter_no=n, title=str(n)) for n in (5, 10, 15, 20, 21)]
+        db.add_all([hero, partner, *chapters])
+        await db.flush()
+        friend = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "朋友"))
+        enemy = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "仇人"))
+        assert friend is not None and enemy is not None
+        db.add(Relationship(
+            project_id=pid, a_id=hero.id, b_id=partner.id, pair_low=hero.id, pair_high=partner.id,
+            type_id=enemy.id, is_present=False,
+        ))
+        timeline = SettingTimeline(
+            project_id=pid, subject_kind="relationship", character_id=hero.id, related_character_id=partner.id,
+            baseline={"exists": True, "identity": {"a_id": hero.id, "b_id": partner.id, "type_id": friend.id},
+                      "intimacy": 30, "status": "normal", "description": "旧友"},
+        )
+        db.add(timeline)
+        await db.flush()
+        db.add_all([
+            SettingProgression(
+                timeline_id=timeline.id, field_key="identity", operation="replace",
+                value={"a_id": hero.id, "b_id": partner.id, "type_id": enemy.id}, anchor_kind="chapter",
+                chapter_id=chapters[1].id, boundary="start",
+            ),
+            SettingProgression(
+                timeline_id=timeline.id, field_key="presence", operation="replace", value={"exists": False},
+                anchor_kind="chapter", chapter_id=chapters[3].id, boundary="end",
+            ),
+        ])
+        await db.commit()
+        book = await db.get(Project, pid)
+        ctx5 = await build_setting_context(db, book, chapters[0], text_hint="苏晚走来", budget=1000)
+        ctx15 = await build_setting_context(db, book, chapters[2], text_hint="苏晚走来", budget=1000)
+        ctx21 = await build_setting_context(db, book, chapters[4], text_hint="苏晚走来", budget=1000)
+        assert ctx5.startswith("【本章有效设定】\n") and "林远 与 苏晚 是朋友" in ctx5
+        assert "林远 与 苏晚 是仇人" in ctx15
+        assert "【人物关系】" not in ctx21 and "关系备注：" not in ctx21
+        assert len(await build_setting_context(db, book, chapters[0], text_hint="苏晚", budget=120)) <= 120
+        assert not db.dirty

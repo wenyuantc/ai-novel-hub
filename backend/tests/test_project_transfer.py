@@ -33,6 +33,9 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
     StoryMemory,
     WorldSetting,
     WritingStyle,
@@ -382,7 +385,53 @@ async def _setup(client, app) -> tuple[dict, dict]:
     # 旧的 style 字段会建一个自定义风格「《书名》原风格」并设为默认
     p = await create_project(client, tags=["仙侠", "成长"], synopsis="少年求仙")
     ids = await _seed(app, p["id"])
+    # _seed 直接插入 ORM 以覆盖完整备份；模拟 0031 对旧作品建立的 M1 基础快照。
+    await _seed_legacy_timelines(app, p["id"])
     return p, ids
+
+
+async def _seed_legacy_timelines(app, project_id: int) -> None:
+    """测试夹具绕过业务创建入口，显式建立与迁移后数据库等价的时间线。"""
+    async with app.state.sessionmaker() as db:
+        common = {"project_id": project_id, "baseline_status": "legacy_unverified", "legacy_compat_allowed": True}
+        worlds = list(await db.scalars(select(WorldSetting).where(WorldSetting.project_id == project_id)))
+        characters = list(await db.scalars(select(Character).where(Character.project_id == project_id)))
+        relationships = list(await db.scalars(select(Relationship).where(Relationship.project_id == project_id)))
+        assignments = list(
+            await db.scalars(select(CharacterCareer).join(Character).where(Character.project_id == project_id))
+        )
+        members = list(
+            await db.scalars(select(OrganizationMember).join(Character).where(Character.project_id == project_id))
+        )
+        char_fields = (
+            "profile", "appearance", "personality", "background", "current_state", "life_status", "age", "gender"
+        )
+        db.add_all(
+            [
+                *(
+                    SettingTimeline(
+                        **common, subject_kind="world", world_setting_id=w.id, baseline={"content": w.content}
+                    )
+                    for w in worlds
+                ),
+                *(SettingTimeline(**common, subject_kind="character", character_id=c.id,
+                                  baseline={f: getattr(c, f) for f in char_fields}) for c in characters),
+                *(SettingTimeline(
+                    **common, subject_kind="relationship", character_id=r.pair_low, related_character_id=r.pair_high,
+                    baseline={"exists": True, "identity": {"a_id": r.a_id, "b_id": r.b_id, "type_id": r.type_id},
+                              "intimacy": r.intimacy, "status": r.status, "description": r.description},
+                ) for r in relationships),
+                *(SettingTimeline(
+                    **common, subject_kind="career", character_id=a.character_id, career_id=a.career_id,
+                    baseline={"exists": True, "role": a.role, "stage_id": a.stage_id, "note": a.note},
+                ) for a in assignments),
+                *(SettingTimeline(
+                    **common, subject_kind="membership", character_id=m.character_id, organization_id=m.organization_id,
+                    baseline={"exists": True, "position": m.position, "status": m.status, "note": m.note},
+                ) for m in members),
+            ]
+        )
+        await db.commit()
 
 
 async def _backup(client, pid: int, **params) -> dict:
@@ -435,10 +484,467 @@ def _canonical(data: dict) -> dict:
     return out
 
 
+async def _seed_progression_changes(app, project_id: int, ids: dict) -> dict:
+    """制造文本、关系、职业、来源及已撤销事件，供备份语义测试。"""
+    async with app.state.sessionmaker() as db:
+        c1, _, c3 = ids["characters"]
+        rel = await db.scalar(
+            select(Relationship).where(Relationship.project_id == project_id, Relationship.a_id == c1)
+        )
+        relation = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project_id,
+                SettingTimeline.subject_kind == "relationship",
+                SettingTimeline.character_id == min(c1, c3),
+                SettingTimeline.related_character_id == max(c1, c3),
+            )
+        )
+        career = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == project_id,
+                SettingTimeline.subject_kind == "career",
+                SettingTimeline.character_id == c1,
+            )
+        )
+        world = await db.scalar(
+            select(WorldSetting).where(WorldSetting.project_id == project_id, WorldSetting.title == "云梦山")
+        )
+        world_timeline = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.subject_kind == "world", SettingTimeline.world_setting_id == world.id
+            )
+        )
+        friend = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "朋友"))
+        enemy = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "仇人"))
+        confidant = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "知己"))
+        kin = await db.scalar(select(RelationshipType).where(RelationshipType.role_a == "亲属"))
+        stages = list(await db.scalars(
+            select(CareerStage).where(CareerStage.career_id == career.career_id).order_by(CareerStage.position)
+        ))
+        source = await db.scalar(
+            select(AnalysisChange).where(AnalysisChange.project_id == project_id, AnalysisChange.kind == "career_stage")
+        )
+        assert rel and relation and career and world and world_timeline
+        assert friend and enemy and confidant and kin and source
+        relation.baseline = {**relation.baseline, "identity": {"a_id": c1, "b_id": c3, "type_id": friend.id}}
+        rel.type_id = enemy.id
+        career.baseline = {**career.baseline, "stage_id": stages[0].id}
+        text_field = SettingTextField(timeline_id=world_timeline.id, label="持有者", base_value="林远")
+        db.add(text_field)
+        await db.flush()
+        active = SettingProgression(
+            timeline_id=relation.id, field_key="identity", operation="replace",
+            value={"a_id": c1, "b_id": c3, "type_id": enemy.id}, anchor_kind="chapter",
+            chapter_id=ids["chapters"][2], boundary="start", source="manual", protection="manual",
+        )
+        stage = SettingProgression(
+            timeline_id=career.id, field_key="stage_id", operation="replace", value=stages[1].id,
+            anchor_kind="chapter", chapter_id=ids["chapters"][1], boundary="end",
+            source="analysis", protection="automatic", source_change_id=source.id,
+        )
+        custom = SettingProgression(
+            timeline_id=world_timeline.id, custom_field_id=text_field.id, operation="append", value="苏晴",
+            anchor_kind="planned", chapter_no=20, boundary="start", source="manual", protection="manual",
+        )
+        db.add_all([active, stage, custom])
+        await db.flush()
+        orphan = SettingProgression(
+            timeline_id=relation.id, field_key="identity", operation="replace",
+            value={"a_id": c1, "b_id": c3, "type_id": confidant.id}, anchor_kind="chapter",
+            chapter_id=None, boundary="end", source="manual", protection="manual", active=False,
+            superseded_by_id=active.id, anchor_label="已删除章节",
+        )
+        historical_presence = SettingProgression(
+            timeline_id=relation.id, field_key="presence", operation="replace",
+            value={"exists": True, "state": {"identity": {"a_id": c1, "b_id": c3, "type_id": kin.id},
+                                             "intimacy": 37, "status": "normal", "description": "曾为亲属"}},
+            anchor_kind="chapter", chapter_id=None, boundary="end", source="manual", protection="manual",
+            active=False, anchor_label="已删除章节的关系建立",
+        )
+        db.add_all([orphan, historical_presence])
+        await db.commit()
+        return {"friend": friend.id, "enemy": enemy.id, "confidant": confidant.id, "kin": kin.id,
+                "world": world.id, "world_timeline": world_timeline.id, "text_field": text_field.id,
+                "relationship_timeline": relation.id, "career_timeline": career.id, "source": source.id,
+                "active": active.id, "orphan": orphan.id, "historical_presence": historical_presence.id}
+
+
+async def test_v2_progressions_round_trip_preserves_historical_references(client, app):
+    p, ids = await _setup(client, app)
+    temporal = await _seed_progression_changes(app, p["id"], ids)
+    data = await _backup(client, p["id"])
+    assert data["version"] == 2 and data["app_schema"] == "0031"
+    types = data["tables"]["relationship_types"]
+    assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
+    # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
+    friend_row = next(t for t in types if t["id"] == temporal["friend"])
+    friend_row["id"] = 900001
+    old_relation = next(t for t in data["tables"]["setting_timelines"] if t["id"] == temporal["relationship_timeline"])
+    old_relation["baseline"]["identity"]["type_id"] = 900001
+    kin_row = next(t for t in types if t["id"] == temporal["kin"])
+    kin_row["id"] = 900002
+    presence = next(e for e in data["tables"]["setting_progressions"] if e["id"] == temporal["historical_presence"])
+    presence["value"]["state"]["identity"]["type_id"] = 900002
+    # 有效备份的行顺序不一定按 ID 排列，导入后的角色大小顺序和替代事件插入顺序都可能反转。
+    data["tables"]["characters"].reverse()
+    data["tables"]["career_stages"].reverse()
+    data["tables"]["setting_progressions"].reverse()
+    imported = await _import(client, data)
+    pid = imported["project"]["id"]
+    async with app.state.sessionmaker() as db:
+        chars = list(await db.scalars(select(Character).where(Character.project_id == pid).order_by(Character.id)))
+        c1 = next(c.id for c in chars if c.role_type == "主角")
+        c3 = next(c.id for c in chars if c.name == "苏晴")
+        relation = await db.scalar(
+            select(SettingTimeline).where(
+                SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "relationship",
+                SettingTimeline.character_id == min(c1, c3), SettingTimeline.related_character_id == max(c1, c3),
+            )
+        )
+        assert relation.baseline["identity"] == {"a_id": c1, "b_id": c3, "type_id": temporal["friend"]}
+        events = list(await db.scalars(select(SettingProgression).where(SettingProgression.timeline_id == relation.id)))
+        active = next(e for e in events if e.active)
+        orphan = next(e for e in events if not e.active and e.field_key == "identity")
+        presence = next(e for e in events if not e.active and e.field_key == "presence")
+        assert active.value == {"a_id": c1, "b_id": c3, "type_id": temporal["enemy"]}
+        assert active.chapter_id not in ids["chapters"]
+        assert orphan.chapter_id is None and orphan.anchor_kind == "chapter" and orphan.anchor_label == "已删除章节"
+        assert orphan.value["type_id"] == temporal["confidant"] and orphan.superseded_by_id == active.id
+        assert presence.chapter_id is None and presence.value["state"]["identity"] == {
+            "a_id": c1, "b_id": c3, "type_id": temporal["kin"]
+        }
+        career = await db.scalar(
+            select(SettingTimeline).where(SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "career")
+        )
+        event = await db.scalar(select(SettingProgression).where(SettingProgression.timeline_id == career.id))
+        new_stages = list(await db.scalars(
+            select(CareerStage).where(CareerStage.career_id == career.career_id).order_by(CareerStage.position)
+        ))
+        assert career.baseline["stage_id"] == new_stages[0].id and event.value == new_stages[1].id
+        assert event.source_change_id != temporal["source"]
+        assert (await db.get(AnalysisChange, event.source_change_id)).project_id == pid
+        world = await db.scalar(
+            select(WorldSetting).where(WorldSetting.project_id == pid, WorldSetting.title == "云梦山")
+        )
+        wt = await db.scalar(select(SettingTimeline).where(SettingTimeline.world_setting_id == world.id))
+        field = await db.scalar(select(SettingTextField).where(SettingTextField.timeline_id == wt.id))
+        change = await db.scalar(select(SettingProgression).where(SettingProgression.timeline_id == wt.id))
+        assert field.id != temporal["text_field"] and change.custom_field_id == field.id
+        assert (change.anchor_kind, change.chapter_no, change.value) == ("planned", 20, "苏晴")
+
+
+async def test_v1_import_creates_unverified_baselines_without_replaying_history(client, app):
+    p, _ = await _setup(client, app)
+    data = await _backup(client, p["id"])
+    data["version"] = 1
+    for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
+        data["tables"].pop(table, None)
+    for row in data["tables"]["relationships"]:
+        row.pop("is_present", None)
+    long_note = "历史成员备注" * 60
+    data["tables"]["organization_members"][0]["note"] = long_note
+    result = await _import(client, data)
+    async with app.state.sessionmaker() as db:
+        pid = result["project"]["id"]
+        timelines = list(await db.scalars(select(SettingTimeline).where(SettingTimeline.project_id == pid)))
+        assert {t.subject_kind for t in timelines} == {"world", "character", "relationship", "career", "membership"}
+        assert all(t.baseline_status == "legacy_unverified" and t.legacy_compat_allowed for t in timelines)
+        assert await db.scalar(
+            select(func.count())
+            .select_from(SettingProgression)
+            .join(SettingTimeline)
+            .where(SettingTimeline.project_id == pid)
+        ) == 0
+        dead = await db.scalar(select(Character).where(Character.project_id == pid, Character.name == "苏晴"))
+        timeline = next(t for t in timelines if t.character_id == dead.id and t.subject_kind == "character")
+        assert (dead.current_state, dead.life_status) == ("已故", "dead")
+        assert (timeline.baseline["current_state"], timeline.baseline["life_status"]) == ("已故", "dead")
+        membership = next(t for t in timelines if t.subject_kind == "membership")
+        member = await db.scalar(
+            select(OrganizationMember).where(OrganizationMember.character_id == membership.character_id)
+        )
+        assert member.note == membership.baseline["note"] == long_note
+
+
+async def test_v2_import_preserves_long_membership_notes(client, app):
+    p, _ = await _setup(client, app)
+    data = await _backup(client, p["id"])
+    long_note = "完整成员备注" * 60
+    data["tables"]["organization_members"][0]["note"] = long_note
+    timeline = next(row for row in data["tables"]["setting_timelines"] if row["subject_kind"] == "membership")
+    timeline["baseline"]["note"] = long_note
+    result = await _import(client, data)
+    async with app.state.sessionmaker() as db:
+        pid = result["project"]["id"]
+        membership = await db.scalar(select(SettingTimeline).where(
+            SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "membership"
+        ))
+        member = await db.scalar(
+            select(OrganizationMember).where(OrganizationMember.character_id == membership.character_id)
+        )
+        assert member.note == membership.baseline["note"] == long_note
+
+
+async def test_v2_rejects_incomplete_or_inconsistent_timeline_data(client, app):
+    p, ids = await _setup(client, app)
+    temporal = await _seed_progression_changes(app, p["id"], ids)
+    data = await _backup(client, p["id"])
+    cases = []
+    missing_table = json.loads(json.dumps(data))
+    missing_table["tables"].pop("setting_text_fields")
+    cases.append(missing_table)
+    missing_relation_type = json.loads(json.dumps(data))
+    timeline = next(
+        t for t in missing_relation_type["tables"]["setting_timelines"] if t["id"] == temporal["relationship_timeline"]
+    )
+    timeline["baseline"]["identity"]["type_id"] = 999999
+    cases.append(missing_relation_type)
+    missing_presence_type = json.loads(json.dumps(data))
+    presence = next(e for e in missing_presence_type["tables"]["setting_progressions"]
+                    if e["id"] == temporal["historical_presence"])
+    presence["value"]["state"]["identity"]["type_id"] = 999999
+    cases.append(missing_presence_type)
+    missing_stage = json.loads(json.dumps(data))
+    event = next(e for e in missing_stage["tables"]["setting_progressions"] if e.get("field_key") == "stage_id")
+    event["value"] = 999999
+    cases.append(missing_stage)
+    wrong_stage_owner = json.loads(json.dumps(data))
+    wrong_stage_owner["tables"]["careers"].append(
+        {**wrong_stage_owner["tables"]["careers"][0], "id": 999991, "name": "另一个职业"}
+    )
+    wrong_stage_owner["tables"]["career_stages"].append(
+        {**wrong_stage_owner["tables"]["career_stages"][0], "id": 999992, "career_id": 999991}
+    )
+    next(e for e in wrong_stage_owner["tables"]["setting_progressions"] if e.get("field_key") == "stage_id")[
+        "value"
+    ] = 999992
+    cases.append(wrong_stage_owner)
+    wrong_field_owner = json.loads(json.dumps(data))
+    custom = next(e for e in wrong_field_owner["tables"]["setting_progressions"] if e.get("custom_field_id"))
+    custom["timeline_id"] = temporal["career_timeline"]
+    cases.append(wrong_field_owner)
+    missing_subject = json.loads(json.dumps(data))
+    subjects = missing_subject["tables"]["setting_timelines"]
+    subjects.remove(next(t for t in subjects if t["subject_kind"] == "character"))
+    cases.append(missing_subject)
+    bad_identity = json.loads(json.dumps(data))
+    relation = next(
+        t for t in bad_identity["tables"]["setting_timelines"] if t["id"] == temporal["relationship_timeline"]
+    )
+    relation["baseline"]["identity"]["b_id"] = ids["characters"][1]
+    cases.append(bad_identity)
+    self_replacement = json.loads(json.dumps(data))
+    orphan = next(e for e in self_replacement["tables"]["setting_progressions"] if e["id"] == temporal["orphan"])
+    orphan["superseded_by_id"] = orphan["id"]
+    cases.append(self_replacement)
+    for case in cases:
+        resp = await _preview_raw(client, json.dumps(case, ensure_ascii=False).encode())
+        assert resp.status_code == 400, resp.text
+
+
+async def test_v2_analysis_sources_must_belong_to_the_event_subject(client, app):
+    p, ids = await _setup(client, app)
+    await _seed_progression_changes(app, p["id"], ids)
+    data = await _backup(client, p["id"])
+    tables = data["tables"]
+    sources = {row["kind"]: row for row in tables["analysis_changes"]}
+    timelines = tables["setting_timelines"]
+    template = next(row for row in tables["setting_progressions"] if row["field_key"] == "stage_id")
+
+    def subject(source):
+        target, kind = source["target"], source["kind"]
+        for row in timelines:
+            if kind in ("character_state", "life_status"):
+                match = row["subject_kind"] == "character" and row["character_id"] == target["character_id"]
+            elif kind in ("relationship_update", "relationship_create"):
+                match = row["subject_kind"] == "relationship" and {
+                    row["character_id"], row["related_character_id"]
+                } == {target["a_id"], target["b_id"]}
+            elif kind == "career_stage":
+                match = (row["subject_kind"] == "career" and row["character_id"] == target["character_id"]
+                         and row["career_id"] == target["career_id"])
+            else:
+                match = (row["subject_kind"] == "membership" and row["character_id"] == target["character_id"]
+                         and row["organization_id"] == target["organization_id"])
+            if match:
+                return row
+        raise AssertionError(f"未找到 {kind} 对应的主体")
+
+    kinds = ("character_state", "life_status", "relationship_update", "relationship_create",
+             "career_stage", "org_membership")
+    fields = {"character": "profile", "relationship": "description", "career": "note", "membership": "position"}
+    for index, kind in enumerate(kinds):
+        source = sources[kind]
+        timeline = subject(source)
+        # 手动调整后的字段和章节位置允许不同于原分析来源。
+        event = {**template, "id": 900000 + index, "timeline_id": timeline["id"],
+                 "field_key": fields[timeline["subject_kind"]], "value": "手动修改",
+                 "source_change_id": source["id"], "protection": "manual",
+                 "anchor_kind": "planned", "chapter_id": None, "chapter_no": 20}
+        tables["setting_progressions"].append(event)
+    # 关系顺序无关，创建来源可以没有载体 ID。
+    target = sources["relationship_update"]["target"]
+    target["a_id"], target["b_id"] = target["b_id"], target["a_id"]
+    sources["relationship_create"]["target"].pop("relationship_id")
+    assert (await _preview_raw(client, json.dumps(data, ensure_ascii=False).encode())).status_code == 200
+
+    def cloned():
+        return json.loads(json.dumps(data))
+
+    cases = []
+    for kind, key in (("character_state", "character_id"), ("life_status", "character_id"),
+                      ("relationship_update", "a_id"), ("relationship_create", "b_id"),
+                      ("career_stage", "character_id"), ("org_membership", "character_id")):
+        case = cloned()
+        source = next(row for row in case["tables"]["analysis_changes"] if row["kind"] == kind)
+        source["target"][key] = next(i for i in ids["characters"] if i != source["target"][key])
+        cases.append(case)
+    missing_endpoint = cloned()
+    next(row for row in missing_endpoint["tables"]["analysis_changes"]
+         if row["kind"] == "relationship_create")["target"].pop("a_id")
+    cases.append(missing_endpoint)
+    wrong_carrier = cloned()
+    source = next(row for row in wrong_carrier["tables"]["analysis_changes"] if row["kind"] == "relationship_update")
+    source["target"]["relationship_id"] = next(
+        row["id"] for row in wrong_carrier["tables"]["relationships"]
+        if row["id"] != source["target"]["relationship_id"]
+    )
+    cases.append(wrong_carrier)
+    missing_carrier = cloned()
+    next(row for row in missing_carrier["tables"]["analysis_changes"]
+         if row["kind"] == "relationship_update")["target"]["relationship_id"] = 999999
+    cases.append(missing_carrier)
+    wrong_career = cloned()
+    wrong_career["tables"]["careers"].append({**wrong_career["tables"]["careers"][0], "id": 999991})
+    next(row for row in wrong_career["tables"]["analysis_changes"]
+         if row["kind"] == "career_stage")["target"]["career_id"] = 999991
+    cases.append(wrong_career)
+    wrong_organization = cloned()
+    source = next(row for row in wrong_organization["tables"]["analysis_changes"] if row["kind"] == "org_membership")
+    source["target"]["organization_id"] = next(
+        row["id"] for row in wrong_organization["tables"]["organizations"]
+        if row["id"] != source["target"]["organization_id"]
+    )
+    cases.append(wrong_organization)
+    unrelated_kind = cloned()
+    event = next(row for row in unrelated_kind["tables"]["setting_progressions"] if row["id"] == 900000)
+    event["source_change_id"] = sources["foreshadow_resolve"]["id"]
+    cases.append(unrelated_kind)
+    for case in cases:
+        resp = await _preview_raw(client, json.dumps(case, ensure_ascii=False).encode())
+        assert resp.status_code == 400, resp.text
+
+    imported = await _import(client, data)
+    async with app.state.sessionmaker() as db:
+        rows = list(await db.scalars(
+            select(SettingProgression).join(SettingTimeline).where(
+                SettingTimeline.project_id == imported["project"]["id"], SettingProgression.protection == "manual",
+                SettingProgression.source_change_id.is_not(None),
+            )
+        ))
+        assert len(rows) == len(kinds)
+        for event in rows:
+            timeline = await db.get(SettingTimeline, event.timeline_id)
+            source = await db.get(AnalysisChange, event.source_change_id)
+            target = source.target
+            if timeline.subject_kind == "relationship":
+                assert {target["a_id"], target["b_id"]} == {timeline.character_id, timeline.related_character_id}
+                if "relationship_id" in target:
+                    relation = await db.get(Relationship, target["relationship_id"])
+                    assert {relation.a_id, relation.b_id} == {timeline.character_id, timeline.related_character_id}
+            else:
+                assert target["character_id"] == timeline.character_id
+                if timeline.subject_kind == "career":
+                    assert target["career_id"] == timeline.career_id
+                elif timeline.subject_kind == "membership":
+                    assert target["organization_id"] == timeline.organization_id
+
+
+async def test_v2_import_rebuilds_current_projection_from_all_subject_timelines(client, app):
+    p, ids = await _setup(client, app)
+    temporal = await _seed_progression_changes(app, p["id"], ids)
+    data = await _backup(client, p["id"])
+    tables = data["tables"]
+    timelines = tables["setting_timelines"]
+    character = next(row for row in timelines
+                     if row["subject_kind"] == "character" and row["character_id"] == ids["characters"][0])
+    world = next(row for row in timelines if row["id"] == temporal["world_timeline"])
+    membership = next(row for row in timelines if row["subject_kind"] == "membership")
+    career = next(row for row in timelines if row["id"] == temporal["career_timeline"])
+    template = next(row for row in tables["setting_progressions"] if row["field_key"] == "stage_id")
+    for index, (timeline, field_key, value) in enumerate((
+        (character, "profile", "新的角色档案"),
+        (world, "content", "新的世界设定"),
+        (membership, "position", "护法"),
+    )):
+        tables["setting_progressions"].append({
+            **template, "id": 910000 + index, "timeline_id": timeline["id"], "field_key": field_key,
+            "value": value, "anchor_kind": "chapter", "chapter_id": ids["chapters"][-1], "chapter_no": None,
+            "source": "manual", "protection": "manual", "source_change_id": None,
+        })
+    next(row for row in tables["characters"] if row["id"] == character["character_id"])["profile"] = "过时缓存"
+    next(row for row in tables["world_settings"] if row["id"] == temporal["world"])["content"] = "过时缓存"
+    next(row for row in tables["relationships"] if {row["a_id"], row["b_id"]} ==
+         {ids["characters"][0], ids["characters"][2]})["type_id"] = temporal["friend"]
+    tables["character_careers"][0]["stage_id"] = career["baseline"]["stage_id"]
+    tables["organization_members"][0]["position"] = "过时缓存"
+
+    imported = await _import(client, data)
+    async with app.state.sessionmaker() as db:
+        pid = imported["project"]["id"]
+        main = await db.scalar(select(Character).where(Character.project_id == pid, Character.role_type == "主角"))
+        place = await db.scalar(
+            select(WorldSetting).where(WorldSetting.project_id == pid, WorldSetting.title == "云梦山")
+        )
+        member = await db.scalar(select(OrganizationMember).where(OrganizationMember.character_id == main.id))
+        assignment = await db.scalar(select(CharacterCareer).where(CharacterCareer.character_id == main.id))
+        new_career = await db.scalar(select(SettingTimeline).where(
+            SettingTimeline.project_id == pid, SettingTimeline.subject_kind == "career"
+        ))
+        stage_change = await db.scalar(select(SettingProgression).where(
+            SettingProgression.timeline_id == new_career.id, SettingProgression.field_key == "stage_id"
+        ))
+        relation = await db.scalar(
+            select(Relationship).where(Relationship.project_id == pid, Relationship.a_id == main.id)
+        )
+        assert main.profile == "新的角色档案"
+        assert place.content == "新的世界设定"
+        assert member.position == "护法"
+        assert assignment.stage_id == stage_change.value
+        assert relation.type_id == temporal["enemy"]
+
+
+async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client, app):
+    p, ids = await _setup(client, app)
+    await _seed_progression_changes(app, p["id"], ids)
+    data = await _backup(client, p["id"])
+    tables = data["tables"]
+    timeline = next(row for row in tables["setting_timelines"] if row["subject_kind"] == "membership")
+    template = next(row for row in tables["setting_progressions"] if row["field_key"] == "stage_id")
+    tables["setting_progressions"].append({
+        **template, "id": 920000, "timeline_id": timeline["id"], "field_key": "presence", "operation": "replace",
+        "value": {"exists": False}, "anchor_kind": "chapter", "chapter_id": ids["chapters"][0], "chapter_no": None,
+        "source": "manual", "protection": "manual", "source_change_id": None,
+    })
+    tables["setting_progressions"].append({
+        **template, "id": 920001, "timeline_id": timeline["id"], "field_key": "position", "operation": "replace",
+        "value": "护法", "anchor_kind": "chapter", "chapter_id": ids["chapters"][1], "chapter_no": None,
+        "source": "manual", "protection": "manual", "source_change_id": None,
+    })
+    preview = await _preview_raw(client, json.dumps(data, ensure_ascii=False).encode())
+    assert preview.status_code == 200, preview.text
+    async with app.state.sessionmaker() as db:
+        before = await db.scalar(select(func.count()).select_from(Project))
+    result = await client.post(f"{API}/import", json={"token": preview.json()["token"]})
+    assert result.status_code in (400, 409), result.text
+    async with app.state.sessionmaker() as db:
+        assert await db.scalar(select(func.count()).select_from(Project)) == before
+
+
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 1
+    assert src["format"] == "ainovel.project" and src["version"] == 2
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 不导出任务 / 分块 / 检索单元
     assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
@@ -729,7 +1235,7 @@ async def test_validation_errors(client, app, monkeypatch):
         (b"not json", "不是合法的 JSON"),
         (b"[1]", "应为 JSON 对象"),
         (dump({**data, "format": "ainovel.cards"}), "format 应为 ainovel.project"),
-        (dump({**data, "version": 2}), "备份来自更新的版本"),
+        (dump({**data, "version": 3}), "备份来自更新的版本"),
         (dump({**data, "version": 0}), "不支持的备份版本"),
         ("﻿".encode() + b"{" * 1 + b'"format": "x"}', "format 应为"),
     ]

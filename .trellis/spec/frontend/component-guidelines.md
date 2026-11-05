@@ -561,3 +561,9 @@ dayjs.locale('zh-cn')
 - 测试：`components/skills/skillsMcpUI.test.ts`（全局 Skill 对普通用户只读、管理员可编辑与恢复、请求头 keep 只显示名称与掩码、重新设置用密码框、375 宽度渲染无固定宽度）、
   `utils/skills.test.ts`（`/` 补全与匹配规则、分组、触发词规范化、`skillRef`）、`utils/mcp.test.ts`（JSON 导入与 stdio 提示、请求头 keep 时不提交、整体替换与清空、
   本地校验、试用参数、状态）、`api/mcp.test.ts`（工具名在请求体里，含 `/` 也不进路径；导入原样提交）。
+
+---
+
+## 设定剧情变化
+
+角色、世界观、关系、职业和成员维护应区分基础资料、按章有效值与剧情变化；具体 API、锚点、revision、草稿及只读权限见 [设定随剧情演变跨层契约](../backend/setting-progressions.md)。章节编辑器的 `SettingContextPreview` 独立展示本章章初设定，不依赖 AI 配置；切换章节、身份或作品时必须废弃旧请求。

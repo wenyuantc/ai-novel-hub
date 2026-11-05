@@ -89,6 +89,7 @@ async def rewrite_preview(
         factory=factory,
         ai_timeout=settings.ai_request_timeout,
         allow_private=settings.allow_private_ai_endpoints,
+        context_budget=settings.context_char_budget,
     )
     await db.close()
     return sse_response(rewrite_service.run_rewrite_job(job, sessionmaker))

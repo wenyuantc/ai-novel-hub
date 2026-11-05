@@ -196,8 +196,11 @@ async def test_assignment_history(client):
     assert resp.status_code == 200
     assert len((await client.get(hist_url)).json()) == 4
 
-    # 卸下
-    assert (await client.delete(f"{url}/{aid}")).status_code == 204
+    # 已有剧情记录后，先要求明确意图，再按章节卸下。
+    ambiguous = await client.delete(f"{url}/{aid}")
+    assert ambiguous.status_code == 409
+    assert ambiguous.json()["code"] == "progression_intent_required"
+    assert (await client.delete(f"{url}/{aid}", params={"chapter_no": 6})).status_code == 204
     assert (await client.get(url)).json() == []
     assert (await client.get(hist_url)).json()[0]["changes"] == {"removed": ["剑修", None]}
     assert (await client.patch(f"{url}/{aid}", json={"note": "x"})).status_code == 404
