@@ -12,6 +12,7 @@ from typing import cast
 
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -973,6 +974,15 @@ async def update_progression(
         merged = ProgressionCreate(expected_revision=data.expected_revision, **values)
     except ValidationError as exc:
         raise BadRequestError("设定变化字段或章节位置不合法") from exc
+    # 分析来源的事件靠 (source_change_id, 字段引用) 建立部分唯一索引，重跑时也依赖该关联定位旧组。
+    # 改字段引用会撞索引（未捕获的 IntegrityError→500）或让来源指向错误字段，统一以 409 拒绝。
+    if event.source_change_id is not None and (
+        merged.field_key != event.field_key or merged.custom_field_id != event.custom_field_id
+    ):
+        raise ConflictError(
+            "分析来源的设定变化不支持修改字段引用，请删除后重建",
+            extra={"code": "source_field_immutable"},
+        )
     label, _ = await _validate_progression(db, timeline, merged)
     await _claim_revision(db, timeline, data.expected_revision)
     for key, value in merged.model_dump(exclude={"expected_revision"}).items():
@@ -980,12 +990,16 @@ async def update_progression(
     event.anchor_label = label
     event.protection = "manual"
     event.revision += 1
-    await db.flush()
-    await materialize_latest(db, timeline)
-    # onupdate 生成的时间戳在 flush 后可能处于过期状态，显式异步刷新以供 DTO 使用。
-    await db.refresh(event, attribute_names=["updated_at"])
-    item = await _event_out(db, project_id, event)
-    await db.commit()
+    try:
+        await db.flush()
+        await materialize_latest(db, timeline)
+        # onupdate 生成的时间戳在 flush 后可能处于过期状态，显式异步刷新以供 DTO 使用。
+        await db.refresh(event, attribute_names=["updated_at"])
+        item = await _event_out(db, project_id, event)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("设定变化与已有记录冲突，请刷新后重试", extra={"code": "progression_conflict"}) from exc
     return ProgressionMutationOut(item=item, timeline_revision=timeline.revision)
 
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildProgressionInput, compareEditedEvent, compareTextField, fieldChoices, type ProgressionDraft } from './fields'
+import { ApiError } from '../../api/client'
+import { buildProgressionInput, compareEditedEvent, compareTextField, fieldChoices, isStaleRevisionError, type ProgressionDraft } from './fields'
 
 const fields = [{ id: 24, timeline_id: 3, label: '伤势', base_value: '无', sort: 0 }]
 const draft: ProgressionDraft = {
@@ -57,5 +58,18 @@ describe('变化字段与提交校验', () => {
     expect(compareTextField(original, { ...original, base_value: '愈合' })).toBe('changed')
     expect(compareTextField(original, { ...original, label: '伤口' })).toBe('changed')
     expect(compareTextField(original, null)).toBe('deleted')
+  })
+
+  it('只有修订号过期的 409 触发刷新对照，其它 409 按普通错误展示', () => {
+    expect(isStaleRevisionError(new ApiError(409, '设定已被其他操作修改，请刷新后重试', {
+      code: 'stale_revision', detail: '设定已被其他操作修改，请刷新后重试',
+    }))).toBe(true)
+    // 分析来源事件改字段引用、写入冲突、生命周期冲突：刷新后重试必然再次失败，不能误判为版本过期
+    for (const code of ['source_field_immutable', 'progression_conflict', 'progression_lifecycle_conflict']) {
+      expect(isStaleRevisionError(new ApiError(409, '无法保存', { code }))).toBe(false)
+    }
+    expect(isStaleRevisionError(new ApiError(409, '无标记', null))).toBe(false)
+    expect(isStaleRevisionError(new ApiError(400, '参数错误', { code: 'stale_revision' }))).toBe(false)
+    expect(isStaleRevisionError(new Error('网络错误'))).toBe(false)
   })
 })

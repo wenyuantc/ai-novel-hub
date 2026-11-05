@@ -406,3 +406,51 @@ async def test_savepoint_rolls_back_partial_write(app, client, fake_llm, monkeyp
     by_kind = {x["kind"]: x for x in changes}
     assert (by_kind["org_membership"]["status"], by_kind["character_state"]["status"]) == ("failed", "applied")
     assert (await client.get(f"{base}/characters/{c['林远']['id']}")).json()["current_state"] == "重伤"
+
+
+async def test_analysis_sourced_progression_rejects_field_reference_change(app, client, fake_llm):
+    """回归：同一分析来源的 position/status 两条事件改字段引用会撞部分唯一索引。
+
+    旧实现未捕获 IntegrityError，最终由全局 Exception 处理器返回 500；现在应提前返回 409，
+    且不能消耗 revision，也不能误伤「只改值」这类分析事件的正常编辑。
+    """
+    base, characters, _, _, _, org, chapters = await _world(client)
+    response = await client.post(f"{base}/organizations/{org['id']}/members", json={
+        "character_id": characters["李四"]["id"], "position": "弟子", "note": "不可丢失",
+    })
+    assert response.status_code == 201, response.text
+
+    changes = await _analyze(client, fake_llm, chapters[3], organization_changes=[{
+        "name": "李四", "organization": "青云门", "action": "update", "position": "长老", "status": "left",
+    }])
+    change = next(c for c in changes if c["kind"] == "org_membership" and c["status"] == "applied")
+
+    async with app.state.sessionmaker() as db:
+        events = list(await db.scalars(
+            select(SettingProgression).where(SettingProgression.source_change_id == change["id"])
+        ))
+        assert {event.field_key for event in events} == {"position", "status"}
+        target = next(event for event in events if event.field_key == "position")
+        timeline = await db.get(SettingTimeline, target.timeline_id)
+        event_id, timeline_id, revision, original_value = target.id, timeline.id, timeline.revision, target.value
+
+    patched = await client.patch(
+        f"{base}/setting-timelines/{timeline_id}/progressions/{event_id}",
+        json={"expected_revision": revision, "field_key": "status", "value": "left"},
+    )
+    assert patched.status_code == 409, patched.text
+    assert patched.json()["code"] == "source_field_immutable"
+    assert "删除后重建" in patched.json()["detail"]
+
+    # 409 应发生在版本比较之前：引用、值、时间线版本都未被改动。
+    async with app.state.sessionmaker() as db:
+        stored = await db.get(SettingProgression, event_id)
+        assert stored.field_key == "position" and stored.value == original_value
+        assert (await db.get(SettingTimeline, timeline_id)).revision == revision
+
+    edited = await client.patch(
+        f"{base}/setting-timelines/{timeline_id}/progressions/{event_id}",
+        json={"expected_revision": revision, "value": "掌门"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["item"]["field_key"] == "position"

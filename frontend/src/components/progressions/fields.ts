@@ -1,3 +1,4 @@
+import { ApiError } from '../../api/client'
 import { LIFE_STATUS } from '../../api/characters'
 import type {
   ProgressionOperation,
@@ -112,4 +113,9 @@ export function compareTextField(original: SettingTextField, latest: SettingText
   return latest.label === original.label && latest.base_value === original.base_value && latest.sort === original.sort
     ? 'unchanged'
     : 'changed'
+}
+
+/** 只有修订号过期的 409 需要刷新对照；字段不可改等其它 409 按普通错误展示，避免误导作者反复刷新重试。 */
+export function isStaleRevisionError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.body?.code === 'stale_revision'
 }

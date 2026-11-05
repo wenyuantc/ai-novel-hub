@@ -1,9 +1,9 @@
 import { Alert, Button, Checkbox, Modal, Space, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, errorMessage } from '../../api/client'
+import { errorMessage } from '../../api/client'
 import type { SettingProgression, SettingProgressionInput } from '../../api/types'
 import ProgressionEditorFields from './ProgressionEditorFields'
-import { buildProgressionInput, compareEditedEvent, type ProgressionDraft, type ProgressionFieldChoice } from './fields'
+import { buildProgressionInput, compareEditedEvent, isStaleRevisionError, type ProgressionDraft, type ProgressionFieldChoice } from './fields'
 import { describeAnchor, type ChapterReference } from './position'
 
 interface Props {
@@ -62,7 +62,7 @@ export default function ProgressionEditModal({ event, timelineRevision, fields, 
     } catch (err) {
       if (!mounted.current || !canEditNow()) return
       setError(errorMessage(err))
-      if (err instanceof ApiError && err.status === 409) setConflict(true)
+      if (isStaleRevisionError(err)) setConflict(true)
     } finally {
       if (mounted.current) setBusy(false)
     }
