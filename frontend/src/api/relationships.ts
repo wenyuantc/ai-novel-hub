@@ -36,7 +36,9 @@ export const relationshipApi = {
     api.post<Relationship[]>(`${p(pid)}/relationships/batch`, { items }),
   update: (pid: number, rid: number, body: RelationshipUpdate) =>
     api.patch<Relationship>(`${p(pid)}/relationships/${rid}`, body),
-  remove: (pid: number, rid: number) => api.del(`${p(pid)}/relationships/${rid}`),
+  /** expectedRevision 由调用方读取关系时间线后传入；省略时后端不做 CAS（供智能体等旧调用）。 */
+  remove: (pid: number, rid: number, expectedRevision?: number) =>
+    api.del(`${p(pid)}/relationships/${rid}`, expectedRevision === undefined ? undefined : { expected_revision: expectedRevision }),
   history: (pid: number, rid: number) => api.get<RelationshipHistory[]>(`${p(pid)}/relationships/${rid}/history`),
   historyForPair: (pid: number, characterId: number, relatedCharacterId: number) =>
     api.get<RelationshipHistory[]>(`${p(pid)}/relationship-history`, { character_id: characterId, related_character_id: relatedCharacterId }),

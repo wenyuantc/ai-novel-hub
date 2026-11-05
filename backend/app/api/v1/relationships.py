@@ -76,8 +76,14 @@ async def update_relationship(
 
 
 @router.delete("/relationships/{rel_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_relationship(project_id: int, rel_id: int, user: CurrentUser, db: DbDep) -> Response:
-    await svc.delete_relationship(db, user.id, project_id, rel_id)
+async def delete_relationship(
+    project_id: int,
+    rel_id: int,
+    user: CurrentUser,
+    db: DbDep,
+    expected_revision: int | None = Query(default=None, gt=0),
+) -> Response:
+    await svc.delete_relationship(db, user.id, project_id, rel_id, expected_revision)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

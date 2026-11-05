@@ -91,3 +91,13 @@ it('按人物对读取已结束关系的旧审计，不依赖当前关系列表'
   expect(items[0].relationship_id).toBe(12)
   expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/projects/8/relationship-history?character_id=9&related_character_id=2')
 })
+
+it('删除关系时可携带时间线版本做 CAS，省略时保持无参数请求', async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+  vi.stubGlobal('fetch', fetchMock)
+  await relationshipApi.remove(8, 12, 5)
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/projects/8/relationships/12?expected_revision=5')
+  expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'DELETE' })
+  await relationshipApi.remove(8, 12)
+  expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/projects/8/relationships/12')
+})

@@ -704,3 +704,57 @@ async def test_relation_materialization_queries_in_bulk_and_keeps_each_subject_s
             event.remove(engine, "before_cursor_execute", count_selects)
         assert len(selects) <= 3
         assert [carriers[timeline.id].intimacy for timeline in timelines] == list(range(len(others)))
+
+
+async def _create_relationship(client, base, a_id, b_id, type_id):
+    response = await client.post(
+        f"{base}/relationships",
+        json={"a_id": a_id, "b_id": b_id, "type_id": type_id, "chapter_no": 5, "intimacy": 25},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def _relationship_revision(client, base, a_id, b_id):
+    response = await client.get(
+        f"{base}/setting-timelines",
+        params={
+            "subject_kind": "relationship",
+            "character_id": min(a_id, b_id),
+            "related_character_id": max(a_id, b_id),
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["items"][0]["revision"]
+
+
+async def test_delete_relationship_rejects_stale_revision_without_dropping_timeline(client):
+    """可选版本 CAS：期间有人改过关系时，旧页面删除应 409，且不连带删掉时间线与剧情变化。"""
+    _, base, a_id, b_id, friend, _ = await _setup(client)
+    rel_id = await _create_relationship(client, base, a_id, b_id, friend)
+    stale_revision = await _relationship_revision(client, base, a_id, b_id)
+
+    updated = await client.patch(
+        f"{base}/relationships/{rel_id}",
+        json={"description": "先相识", "anchor_kind": "planned", "chapter_no": 10},
+    )
+    assert updated.status_code == 200, updated.text
+    current = await _relationship_revision(client, base, a_id, b_id)
+    assert current > stale_revision
+
+    stale = await client.delete(f"{base}/relationships/{rel_id}", params={"expected_revision": stale_revision})
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["code"] == "stale_revision"
+    assert await _relationship_revision(client, base, a_id, b_id) == current
+    assert any(item["id"] == rel_id for item in (await client.get(f"{base}/relationships")).json())
+
+    removed = await client.delete(f"{base}/relationships/{rel_id}", params={"expected_revision": current})
+    assert removed.status_code == 204, removed.text
+
+
+async def test_delete_relationship_without_revision_keeps_legacy_calls_working(client):
+    """智能体通用 CRUD 与旧调用不传版本，行为保持不变。"""
+    _, base, a_id, b_id, friend, _ = await _setup(client)
+    rel_id = await _create_relationship(client, base, a_id, b_id, friend)
+    removed = await client.delete(f"{base}/relationships/{rel_id}")
+    assert removed.status_code == 204, removed.text

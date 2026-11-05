@@ -819,7 +819,13 @@ async def update_relationship(
     return (await _refreshed_outs(db, [rel]))[0]
 
 
-async def delete_relationship(db: AsyncSession, user_id: int, project_id: int, rel_id: int) -> None:
+async def delete_relationship(
+    db: AsyncSession, user_id: int, project_id: int, rel_id: int, expected_revision: int | None = None
+) -> None:
+    """删除整份关系资料；传入版本时对时间线做 CAS，避免旧页面覆盖期间新增的剧情变化。
+
+    版本参数可选：智能体的通用 CRUD 工具与旧调用不传版本，行为保持不变。
+    """
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     rel = await get_owned_relationship(db, user_id, project_id, rel_id, include_hidden=True)
     timeline = await db.scalar(
@@ -830,6 +836,8 @@ async def delete_relationship(db: AsyncSession, user_id: int, project_id: int, r
             SettingTimeline.related_character_id == rel.pair_high,
         )
     )
+    if expected_revision is not None and timeline is not None and timeline.revision != expected_revision:
+        raise ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision"})
     if timeline is not None:
         await db.delete(timeline)
     await db.delete(rel)

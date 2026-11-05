@@ -2,6 +2,7 @@ import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import { App, Button, Card, Empty, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { errorMessage } from '../../api/client'
+import { progressionApi } from '../../api/progressions'
 import { intimacyColor, relationshipApi, relationshipTypeApi, statusLabel } from '../../api/relationships'
 import type { Character, Relationship } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
@@ -34,8 +35,13 @@ export default function CharacterRelationsTab({ projectId, character, characters
   const handleDelete = async (r: Relationship) => {
     if (!canEditNow()) return
     try {
+      const timeline = await progressionApi.findTimeline(projectId, {
+        subject_kind: 'relationship',
+        character_id: Math.min(r.a_id, r.b_id),
+        related_character_id: Math.max(r.a_id, r.b_id),
+      })
       if (!canEditNow()) return
-      await relationshipApi.remove(projectId, r.id)
+      await relationshipApi.remove(projectId, r.id, timeline?.revision)
       if (!canEditNow()) return
       message.success('已删除')
       reload()

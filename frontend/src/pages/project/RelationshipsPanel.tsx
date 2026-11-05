@@ -19,6 +19,7 @@ import {
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { lifeStatusLabel, roleTypeColor } from '../../api/characters'
 import { errorMessage } from '../../api/client'
+import { progressionApi } from '../../api/progressions'
 import {
   categoryLabel,
   describeRelation,
@@ -83,8 +84,13 @@ export default function RelationshipsPanel() {
   const handleDelete = async (r: Relationship) => {
     if (!canEditNow()) return
     try {
+      const timeline = await progressionApi.findTimeline(pid, {
+        subject_kind: 'relationship',
+        character_id: Math.min(r.a_id, r.b_id),
+        related_character_id: Math.max(r.a_id, r.b_id),
+      })
       if (!canEditNow()) return
-      await relationshipApi.remove(pid, r.id)
+      await relationshipApi.remove(pid, r.id, timeline?.revision)
       if (!canEditNow()) return
       message.success('已删除')
       reload()
