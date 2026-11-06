@@ -28,27 +28,32 @@ curl 'https://your-host/api/open/v1/novels?page=1&page_size=20' \\
 """
 
 
-def install_docs(app: FastAPI) -> None:
-    @app.get(PREFIX + "/openapi.json", include_in_schema=False)
-    async def openapi_schema(request: Request) -> JSONResponse:
-        schema = getattr(app.state, "open_api_schema", None)
-        if schema is None:
-            schema = get_openapi(
-                title="AI 小说平台 · 开放读取 API",
-                version="1.0.0",
-                description=DESCRIPTION,
-                routes=router.routes,
-            )
-            app.state.open_api_schema = schema
-        root = request.scope.get("root_path", "").rstrip("/")
-        # 每实例缓存不包含请求的部署前缀，避免不同 root_path 互相污染。
-        return JSONResponse({**schema, "servers": [{"url": root or "/"}]})
-
-    @app.get(PREFIX + "/docs", include_in_schema=False)
-    async def swagger_docs(request: Request) -> HTMLResponse:
-        root = request.scope.get("root_path", "").rstrip("/")
-        return get_swagger_ui_html(
-            openapi_url=root + PREFIX + "/openapi.json",
-            title="AI 小说平台 · 开放接口文档",
-            swagger_ui_parameters={"persistAuthorization": False, "displayRequestDuration": True},
+async def openapi_schema(request: Request) -> JSONResponse:
+    app = request.app
+    schema = getattr(app.state, "open_api_schema", None)
+    if schema is None:
+        schema = get_openapi(
+            title="AI 小说平台 · 开放读取 API",
+            version="1.0.0",
+            description=DESCRIPTION,
+            routes=router.routes,
         )
+        app.state.open_api_schema = schema
+    root = request.scope.get("root_path", "").rstrip("/")
+    # 每实例缓存不包含请求的部署前缀，避免不同 root_path 互相污染。
+    return JSONResponse({**schema, "servers": [{"url": root or "/"}]})
+
+
+async def swagger_docs(request: Request) -> HTMLResponse:
+    root = request.scope.get("root_path", "").rstrip("/")
+    return get_swagger_ui_html(
+        openapi_url=root + PREFIX + "/openapi.json",
+        title="AI 小说平台 · 开放接口文档",
+        swagger_ui_parameters={"persistAuthorization": False, "displayRequestDuration": True},
+    )
+
+
+def install_docs(app: FastAPI) -> None:
+    # 框架会缓存handler分类；模块级函数不能通过闭包保留已关闭的应用。
+    app.add_api_route(PREFIX + "/openapi.json", openapi_schema, methods=["GET"], include_in_schema=False)
+    app.add_api_route(PREFIX + "/docs", swagger_docs, methods=["GET"], include_in_schema=False)

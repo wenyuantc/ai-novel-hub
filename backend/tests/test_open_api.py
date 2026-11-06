@@ -1,5 +1,7 @@
 """开放读取接口：真实鉴权、小说隔离、领域契约与专属 OpenAPI。"""
 
+import gc
+import weakref
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from zipfile import ZipFile
@@ -477,6 +479,46 @@ async def test_open_docs_schema_and_swagger_are_public_and_separate(client):
     assert (await client.get(OPEN + "/novels")).status_code == 401
     default_schema = (await client.get("/openapi.json")).json()
     assert "/api/v1/projects" in default_schema["paths"]
+
+
+async def test_open_docs_do_not_retain_closed_applications(tmp_path, fake_llm):
+    from app.main import create_app
+    from tests.helpers import make_settings
+
+    async def closed_application(label):
+        application = create_app(
+            make_settings(tmp_path / label), provider_factory=fake_llm.factory, start_task_engine=False
+        )
+        references = tuple(weakref.ref(value) for value in (
+            application, application.state.task_engine, application.state.engine,
+        ))
+        application.state.open_api_schema = {
+            "openapi": "3.1.0", "info": {"title": label, "version": "1"}, "paths": {},
+        }
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=application, root_path=f"/{label}"), base_url="http://testserver"
+            ) as probe:
+                schema = await probe.get(OPEN + "/openapi.json")
+                assert schema.status_code == 200
+                assert schema.json()["info"]["title"] == label
+                assert schema.json()["servers"] == [{"url": f"/{label}"}]
+                docs = await probe.get(OPEN + "/docs")
+                assert docs.status_code == 200
+                assert f"/{label}{OPEN}/openapi.json" in docs.text
+                assert application.url_path_for("openapi_schema") == OPEN + "/openapi.json"
+                assert application.url_path_for("swagger_docs") == OPEN + "/docs"
+        finally:
+            await application.state.system_settings.close()
+            await application.state.task_engine.stop()
+            await application.state.engine.dispose()
+        return references
+
+    first = await closed_application("first")
+    second = await closed_application("second")
+    # 全部资源和客户端已关闭，分类缓存不能通过文档闭包持有旧应用及引擎。
+    gc.collect()
+    assert all(reference() is None for reference in (*first, *second))
 
 
 async def test_open_docs_proxy_root_path_is_used_once(app, catalog):
