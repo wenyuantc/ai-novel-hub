@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 36
-- **Last Active**: 2026-11-05
+- **Total Sessions**: 37
+- **Last Active**: 2026-11-06
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1238 | Active |
+| `journal-1.md` | ~1281 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-11-06 | 自定义字段与自动分类：验收、提交与main合并收口 | `af486229d449b8e391da40e5210bde62475d1b7b`, `8623c53bd4c6a6ec9f1759c7ea78346f83579571`, `49953ce5beae97f6d629806f174bc896b48fff81`, `c700135c737ba0d9f0c3be2dcf5ba89b08687c5f`, `5f84fcce5d04a911c5bae28159b44b330275d0a8`, `ef078e2b5f38db7cb88e86cfc17a499943c805ed` | `main` |
 | 36 | 2026-11-05 | 规划矩阵与支线交织接入AI写作 | `03ffca8` | `codex/planning-matrix-subplots` |
 | 35 | 2026-11-05 | 全文提及追踪、作品笔记与出场热力图 | `366c0ed`, `560363c`, `2c0bb10` | `codex/mention-tracking` |
 | 34 | 2026-11-05 | 交付设定按章节演变并完成审核修复 | `0ed55f7e0393c4af9e041c59762f1d21b40e0620`, `576e632ec6e5a1dc0ef684211680ff1e5354236e`, `5bac4e87c10f968264e5cdac7ffe500380e68fe5`, `1e98e01dac35db29bcdc8df49861ecd085a1b804` | `codex/setting-progressions` |

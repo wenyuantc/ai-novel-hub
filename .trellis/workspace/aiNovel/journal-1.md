@@ -1236,3 +1236,46 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 37: 自定义字段与自动分类：验收、提交与main合并收口
+<!-- trellis-session: v=2 fp=148f3c7058eebf07 -->
+
+**Date**: 2026-11-06
+**Task**: 自定义字段与自动分类：验收、提交与main合并收口
+**Branch**: `main`
+
+### Summary
+
+交付四类型／四实体设定字段、按标签或下拉条件自动分类及v5迁移；已按用户指令提交并合并main，父子三任务归档，保留两项受站点策略阻挡的人工未验记录。
+
+### Main Changes
+
+- 完成字段、分类、独立标签编辑、按章求值与稳定身份保护；后端、前端和迁移均已提交。
+- 同步README、TODOS第4项、字段分类契约和验收证据；main先同步远端文档规范再合并，1164个产品文件与已验证快照一致。
+- 父子三任务已归档并修复上下文引用，当前任务指针清空；停止8014／5179与专用PG容器，保留临时数据与截图。原无关pelican-cycling.html未纳入。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af486229d449b8e391da40e5210bde62475d1b7b` | fix(api): 避免开放文档路由保留已关闭应用 |
+| `8623c53bd4c6a6ec9f1759c7ea78346f83579571` | feat(settings): 新增类型化字段与标签自动分类后端 |
+| `49953ce5beae97f6d629806f174bc896b48fff81` | feat(ui): 接入设定字段、整理标签和自动分类页面 |
+| `c700135c737ba0d9f0c3be2dcf5ba89b08687c5f` | docs(settings): 记录字段分类契约及验收证据 |
+| `5f84fcce5d04a911c5bae28159b44b330275d0a8` | feat(settings): 合并自定义字段与自动分类 |
+| `ef078e2b5f38db7cb88e86cfc17a499943c805ed` | docs(settings): 补充README与交付收口记录 |
+
+### Testing
+
+- [OK] 后端完整2408 passed／1旧0031可选PG skip／1既有SDK warning；新增父级往返集成及直接相关40 passed，包含真实PG且无skip／warning。
+- [OK] 前端136文件986测试通过，lint／TypeScript／Vite构建与diff检查通过；三项归档上下文清单全部通过。
+- [OK] 主体真实浏览器验收通过；分类只读页面、读取失败重试因5179保存权限／管理策略拒绝而未验，不记作通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 保留人工未验项：分类只读控件状态、读取失败后同版本重试；详见归档父任务research/category-browser-verification.md。
