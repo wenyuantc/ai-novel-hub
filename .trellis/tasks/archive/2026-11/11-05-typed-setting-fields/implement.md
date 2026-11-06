@@ -7,7 +7,7 @@
 - [x] 读取本 PRD／design、父任务研究与上下文清单；再次核对当前 Git 状态、迁移 head0034和测试命令。
 - [x] 保留无关文件和其他会话修改；不操作原有 pelican-cycling.html，不重置或撤销他人修改。
 - [x] 用户批准最新父任务完整摘要后，仅 start 本子任务；父任务保持协调用途。
-- [x] 每轮 implement/check 第一行 `Active task: .trellis/tasks/11-05-typed-setting-fields`。优先完整原生上下文注入；若缺失，子代理按该路径自行读取 artifacts 和 manifests，不运行 task.py current 猜其他会话状态。
+- [x] 每轮 implement/check 第一行 `Active task: .trellis/tasks/archive/2026-11/11-05-typed-setting-fields`。优先完整原生上下文注入；若缺失，子代理按该路径自行读取 artifacts 和 manifests，不运行 task.py current 猜其他会话状态。
 - [x] 模型、迁移、schemas、types.ts、共享service、transfer和effects逐片单写者；只有接口冻结且文件不重叠时才并行前端组件。
 
 以下是顺序小切片。每片先用有意义的失败用例锁定行为，再实现和定向验证；不是一次改完所有文件后才测试。较大片按列出的责任包继续分派，不让一个 worker 无边界接管全仓。S10.D中不依赖新API的既有选择器／URL复用抽取可提前独立进行，保持现有规划行为且文件所有权与后端分开；其余UI仍等待S4合同。

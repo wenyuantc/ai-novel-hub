@@ -1,6 +1,6 @@
 # 分类子任务完整后端独立检查
 
-日期：2026-11-06。Active task：`.trellis/tasks/11-05-setting-auto-categories`。
+日期：2026-11-06。Active task：`.trellis/tasks/archive/2026-11/11-05-setting-auto-categories`。
 
 范围为分类新增及其字段／备份／卡片／effects集成。字段阶段2146通过的完整独立检查作为已交付基线，未重复旧字段全文。前端与真实浏览器由主会话及前端checker负责，本报告不代表整个父目标完成。
 

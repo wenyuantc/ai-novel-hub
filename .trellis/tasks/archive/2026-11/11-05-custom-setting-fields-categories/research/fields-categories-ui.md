@@ -3,7 +3,7 @@
 - Query: 调查四类设定面板、字段与剧情变化编辑、作品布局/路由、实体深链、权限、CAS及草稿模式；提出作品级字段配置、四类控件、统一条目标签、非嵌套ANY/ALL分类规则及按时点跨类型结果的最小可用交互。
 - Scope: mixed（以仓库内部源码/规范为主，补充 Ant Design 5 官方文档）
 - Date: 2026-11-05
-- Active task: .trellis/tasks/11-05-custom-setting-fields-categories
+- Active task: .trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories
 - 研究范围：只写本文件；代码、spec、子任务、备份及核心resolver设计均不修改。以下“建议”是待主会话最终方案审核的设计，不能当作已实现能力。
 
 ## Findings

@@ -1,6 +1,6 @@
 # 类型化字段 S1–S2 核心复核
 
-日期：2026-11-05。Active task：`.trellis/tasks/11-05-typed-setting-fields`。
+日期：2026-11-05。Active task：`.trellis/tasks/archive/2026-11/11-05-typed-setting-fields`。
 
 本记录仅为阶段 2.2 的 S1–S2 局部完整复核，不代表字段子任务最终验收通过。未提交 Git，未修改任务状态，未接触 8000 用户服务。
 

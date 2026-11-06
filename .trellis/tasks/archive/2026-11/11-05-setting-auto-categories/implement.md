@@ -7,7 +7,7 @@
 - [x] `11-05-typed-setting-fields` F-AC1–11全部通过，字段目录／EntityRef／批量时点投影和v4数据合同已冻结，字段完整check通过。
 - [x] 当前迁移head为已交付0035；再次检查Git状态及其他会话修改。不得凭父子链接认为依赖已满足。
 - [x] 用户已明确批准包含本子任务的最新最终摘要后才start。本任务不重写前置字段语义。
-- [x] 每次分派第一行 `Active task: .trellis/tasks/11-05-setting-auto-categories`；实现／检查走Trellis子代理，缺原生注入则按本路径读取artifacts/manifests。
+- [x] 每次分派第一行 `Active task: .trellis/tasks/archive/2026-11/11-05-setting-auto-categories`；实现／检查走Trellis子代理，缺原生注入则按本路径读取artifacts/manifests。
 - [x] 共享模型、types.ts、迁移、transfer/effects单写者；所有worker都不是独自工作，不撤销他人变更，不处理无关pelican-cycling.html。
 
 ## C1：标签与规则持久化

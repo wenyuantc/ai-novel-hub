@@ -18,7 +18,7 @@
 | 2：读数据与目录版本一致性 | 已关闭 | 字段 `design.md:88` 明确读前后 fields_revision／timeline revision 核对，变化时冲突或干净重试；字段 `implement.md:58` 加并发屏障回归。分类 `design.md:41`、`implement.md:31` 明确跨全部批次使用一个只读一致快照，并验证中途编辑不能混合结果。 |
 | 3：仅被规则使用的定义类型保护 | 已关闭 | 字段 `design.md:57` 已将分类规则纳入类型转换及范围缩减保护，统一覆盖 UPDATE／DELETE、人工／导入／effects；分类 `design.md:57` 和 `implement.md:43` 明确零绑定／零事件但已有规则时不能转类型，并要求失败不改行或版本。 |
 
-上表的 `字段` 路径前缀为 `.trellis/tasks/11-05-typed-setting-fields/`，`分类` 路径前缀为 `.trellis/tasks/11-05-setting-auto-categories/`。复查没有新增审阅项。
+上表的 `字段` 路径前缀为 `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/`，`分类` 路径前缀为 `.trellis/tasks/archive/2026-11/11-05-setting-auto-categories/`。复查没有新增审阅项。
 
 以下保留首次发现与建议作为修订依据；其中“缺口”描述对应修订前的文档，不代表当前仍未解决。
 
@@ -26,7 +26,7 @@
 
 证据：
 
-- `.trellis/tasks/11-05-typed-setting-fields/design.md:42`、`:44` 明确公共引用为 EntityRef、存储引用为 reference_handle_id。
+- `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md:42`、`:44` 明确公共引用为 EntityRef、存储引用为 reference_handle_id。
 - 同文 `:75` 规定新客户端继续用旧时间线路径修改／删除既有事件，`:77` 又规定值／事件请求带 `expected_timeline_revision` 和 `expected_fields_revision`，但旧入口继续旧 timeline CAS。
 - `backend/app/schemas/progression.py:118`、`:146`、`:148` 的旧 CREATE／PATCH 使用 `expected_revision`，且 extra=forbid。
 - `backend/app/services/setting_progression_service.py:957-974` 先从 ORM 取得原始 value，再合并 PATCH，并交回公共 ProgressionCreate；`:851` 的事件输出也直接序列化 ORM value。
@@ -45,8 +45,8 @@
 
 证据：
 
-- `.trellis/tasks/11-05-custom-setting-fields-categories/prd.md:34`、`:56` 要求并发保护与不覆盖竞争修改。
-- `.trellis/tasks/11-05-custom-setting-fields-categories/design.md:75` 和子任务 `design.md:22/:77` 规定字段目录 CAS；子任务 `design.md:68/:71` 规定读取返回 fields_revision。
+- `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/prd.md:34`、`:56` 要求并发保护与不覆盖竞争修改。
+- `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/design.md:75` 和子任务 `design.md:22/:77` 规定字段目录 CAS；子任务 `design.md:68/:71` 规定读取返回 fields_revision。
 - 子任务 `design.md:83` 采用批量定义／选项／目标预取，但没有规定版本读取顺序、一致快照或读取前后核对。
 - 可复用的本项目模式在 `backend/app/services/planning_context_service.py:474-478`、`:517-520`：读取前取得 revision，完成多次查询后再次核对，避免把旧资料配上新版本。
 
@@ -60,8 +60,8 @@
 
 证据：
 
-- `.trellis/tasks/11-05-custom-setting-fields-categories/design.md:47` 规定分类使用共享下拉字段的稳定选项，`:57` 要求已使用定义类型不原地转换。
-- `.trellis/tasks/11-05-typed-setting-fields/design.md:57` 的类型转换禁止条件只列“已有绑定／事件”；`:58` 虽列出后续分类规则引用，但限定于硬删保护。
+- `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/design.md:47` 规定分类使用共享下拉字段的稳定选项，`:57` 要求已使用定义类型不原地转换。
+- `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md:57` 的类型转换禁止条件只列“已有绑定／事件”；`:58` 虽列出后续分类规则引用，但限定于硬删保护。
 - 字段子任务 `prd.md:24/:40`、`design.md:112` 要向分类交接稳定定义／选项合同。
 
 可发生场景：作者先配置一个下拉定义和选项、创建使用它的分类规则，但尚无条目填写，因此没有 binding／事件。按子设计目前写明的类型转换条件，它仍可改为 line；分类规则的 option_id 随即失去合法的下拉语义。保留主键并不能解决类型改变。
@@ -74,13 +74,13 @@
 
 | 路径 | 本次用途 |
 | --- | --- |
-| `.trellis/tasks/11-05-custom-setting-fields-categories/prd.md` | 来源需求、兼容及并发验收。 |
-| `.trellis/tasks/11-05-custom-setting-fields-categories/design.md` | 总体类型、引用、CAS和分类依赖合同。 |
-| `.trellis/tasks/11-05-typed-setting-fields/prd.md` | 字段子任务范围及分类交接要求。 |
-| `.trellis/tasks/11-05-typed-setting-fields/design.md` | 冻结类型、懒绑定、codec、旧路由与版本合同。 |
-| `.trellis/tasks/11-05-typed-setting-fields/implement.md:57/:58` | 原第 1／2 项的定向回归与并发屏障验证计划。 |
-| `.trellis/tasks/11-05-setting-auto-categories/design.md:41/:57` | 跨批一致快照及规则对定义 UPDATE 的依赖保护。 |
-| `.trellis/tasks/11-05-setting-auto-categories/implement.md:31/:43` | 跨批编辑屏障、零绑定但规则引用的类型转换回归计划。 |
+| `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/prd.md` | 来源需求、兼容及并发验收。 |
+| `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/design.md` | 总体类型、引用、CAS和分类依赖合同。 |
+| `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/prd.md` | 字段子任务范围及分类交接要求。 |
+| `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md` | 冻结类型、懒绑定、codec、旧路由与版本合同。 |
+| `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/implement.md:57/:58` | 原第 1／2 项的定向回归与并发屏障验证计划。 |
+| `.trellis/tasks/archive/2026-11/11-05-setting-auto-categories/design.md:41/:57` | 跨批一致快照及规则对定义 UPDATE 的依赖保护。 |
+| `.trellis/tasks/archive/2026-11/11-05-setting-auto-categories/implement.md:31/:43` | 跨批编辑屏障、零绑定但规则引用的类型转换回归计划。 |
 | `backend/app/schemas/progression.py:113` | 旧请求名与 extra=forbid。 |
 | `backend/app/services/setting_progression_service.py:844/:951` | ORM 原值输出、旧 PATCH 合并及公共模型复用。 |
 | `backend/app/services/planning_context_service.py:474/:517` | 多查询读前／读后 revision 一致性模式。 |

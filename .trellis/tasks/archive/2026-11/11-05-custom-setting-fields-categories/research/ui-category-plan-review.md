@@ -3,7 +3,7 @@
 - Query: 只读审阅父任务与两个子任务design.md，核对四类型UI、空槽原子首写、共享选择器、分类时点/ANY/ALL/后筛分页、历史深链、权限/失效/CAS草稿及卡片外部引用预览映射。
 - Scope: internal
 - Date: 2026-11-05
-- Active task: .trellis/tasks/11-05-custom-setting-fields-categories
+- Active task: .trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories
 
 ## Findings
 
@@ -17,9 +17,9 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| .trellis/tasks/11-05-custom-setting-fields-categories/design.md | 子任务顺序、共享产品合同、权限/事务及备份/卡片总体边界。 |
-| .trellis/tasks/11-05-typed-setting-fields/design.md | 四类值、空槽/绑定、组织和职业主体、字段API/UI及卡片v4合同。 |
-| .trellis/tasks/11-05-setting-auto-categories/design.md | 字符串标签、单层规则、批量后筛分页、历史结果及分类UI合同。 |
+| .trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/design.md | 子任务顺序、共享产品合同、权限/事务及备份/卡片总体边界。 |
+| .trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md | 四类值、空槽/绑定、组织和职业主体、字段API/UI及卡片v4合同。 |
+| .trellis/tasks/archive/2026-11/11-05-setting-auto-categories/design.md | 字符串标签、单层规则、批量后筛分页、历史结果及分类UI合同。 |
 | frontend/src/hooks/useEntityDeepLink.ts | 现有仅消费id的接收侧，供核对历史深链实施落点。 |
 | frontend/src/components/entities/CardImportModal.tsx | 现有卡片预览/冲突选项/提交界面，供核对新增映射能力。 |
 | frontend/src/api/cards.ts、frontend/src/api/types.ts | 现有卡片preview/import客户端及解析/决策类型。 |

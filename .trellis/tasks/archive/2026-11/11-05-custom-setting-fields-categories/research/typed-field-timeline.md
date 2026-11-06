@@ -3,7 +3,7 @@
 - Query: 在保留旧 `SettingTextField.id` 与既有事件关联的前提下，怎样让作品级复用字段覆盖四类值、组织与职业定义，并让查看及 AI 使用同一章节有效值？
 - Scope: mixed；以内部模型、求值、服务、上下文及现有测试为主，外部仅核对 JSON 空值和类型联合文档。不重新调研前端或备份实现。
 - Date: 2026-11-05
-- Task: `.trellis/tasks/11-05-custom-setting-fields-categories`；规划研究，不代表用户已批准实现。
+- Task: `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories`；规划研究，不代表用户已批准实现。
 
 ## Findings
 

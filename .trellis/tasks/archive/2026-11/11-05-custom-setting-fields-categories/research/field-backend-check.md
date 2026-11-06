@@ -1,6 +1,6 @@
 # 字段子任务完整后端独立检查
 
-日期：2026-11-05–06。Active task：`.trellis/tasks/11-05-typed-setting-fields`。
+日期：2026-11-05–06。Active task：`.trellis/tasks/archive/2026-11/11-05-typed-setting-fields`。
 
 本报告属于字段子任务的后端检查，不代表前端／浏览器或父任务验收通过。未提交、未改变任务状态，未操作 `pelican-cycling.html`、8000 用户服务或用户数据库。
 

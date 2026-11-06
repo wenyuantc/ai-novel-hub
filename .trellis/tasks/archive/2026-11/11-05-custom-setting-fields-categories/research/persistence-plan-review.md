@@ -11,7 +11,7 @@
 
 ### 1. 已闭环：分类规则建立后的字段类型/适用范围保护
 
-- 复查证据：`.trellis/tasks/11-05-typed-setting-fields/design.md:57` 已明确把分类规则引用纳入禁止换类型和适用范围交集保护，统一校验覆盖人工 PATCH、导入和 effects；`.trellis/tasks/11-05-setting-auto-categories/design.md:57` 明确 UPDATE/DELETE 均接入，零绑定/零事件仍受保护，合法改名/排序/停用及不破坏交集的范围调整保留。**原阻塞解除。**
+- 复查证据：`.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md:57` 已明确把分类规则引用纳入禁止换类型和适用范围交集保护，统一校验覆盖人工 PATCH、导入和 effects；`.trellis/tasks/archive/2026-11/11-05-setting-auto-categories/design.md:57` 明确 UPDATE/DELETE 均接入，零绑定/零事件仍受保护，合法改名/排序/停用及不破坏交集的范围调整保留。**原阻塞解除。**
 - 原审阅所见：字段设计只在“已有绑定/事件”后禁止类型转换，对分类规则明确的保护仅是禁止硬删；分类设计 `:27` 要求条件引用 dropdown 定义且适用类型有交集，但原 `:57` 只扩展了定义/选项删除检查。
 - 可复现矛盾：创建仅适用于角色的下拉定义 D（尚无条目绑定），创建角色分类 C 引用 D 的选项 O。随后把 D 改成 text，或把 D 的适用类型缩为仅 organization。按字段设计的绑定/事件检查可能通过，真实 FK 也不阻止 UPDATE，但已保存规则不再满足分类设计的合法性，读取会出现永久不匹配或类型错误。
 - 最小补齐：分类子任务把规则依赖加入**定义更新**保护。已有分类规则引用时禁止改变其 dropdown 类型；缩小 applicable_types 若使任一现存分类规则失去交集则返回明确 409。复用同一规则图校验覆盖人工 PATCH、智能体恢复和备份导入，不自动删规则或改选项。适用范围仍可在不破坏现有规则时正常调整。
@@ -19,7 +19,7 @@
 
 ### 2. 已闭环：两处排除目录版本及恢复高水位合同
 
-- 复查证据：`.trellis/tasks/11-05-typed-setting-fields/design.md:118` 明确 fields_revision 同时从 PROJECT_RULE 导出列及 effects 独立项目快照/恢复集合排除，不写回 before 旧值，项目锁内从当前高水位递增且失败不增；`.trellis/tasks/11-05-setting-auto-categories/design.md:76` 对 fields_revision/categories_revision 两列明确同一合同，新作品使用默认起点。**原建议已落实。**
+- 复查证据：`.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md:118` 明确 fields_revision 同时从 PROJECT_RULE 导出列及 effects 独立项目快照/恢复集合排除，不写回 before 旧值，项目锁内从当前高水位递增且失败不增；`.trellis/tasks/archive/2026-11/11-05-setting-auto-categories/design.md:76` 对 fields_revision/categories_revision 两列明确同一合同，新作品使用默认起点。**原建议已落实。**
 - 原审阅所见：两份设计仅要求恢复后递增且不能回退，未指出两处独立排除。现有 `backend/app/services/project_transfer/registry.py:136` 排除 planning_revision；**effects 不直接使用该 exclude**，而在 `backend/app/services/agent/effects.py:143` 单独排除 planning_revision。恢复按 before 整行写回，见 `effects.py:503`、`:550`。
 - 风险：仅向 PROJECT_RULE.exclude 加 fields_revision/categories_revision 不能阻止 effects 捕获并还原它们；若先恢复旧值再 +1，可复用已经发给客户端的旧版本，形成 ABA，或让不相关目录改动导致项目行比较无谓冲突。
 - 最小明确：两个 revision 不随作品备份复制，新作品按默认起点创建；同时从 effects 的项目列快照/恢复值中排除。撤销配置/标签/规则后，在项目锁内从**当前数据库高水位**递增受影响目录，不从 effect.before 起算。旧效果若夹带这些列，也不写回它们；按已定版本兼容策略拒绝或安全清理。
@@ -27,7 +27,7 @@
 
 ### 3. 已闭环：新卡片包内同名实体 skip 不自动解析引用
 
-- 复查证据：`.trellis/tasks/11-05-typed-setting-fields/design.md:117` 已明确 v4 包内被引用冲突实体必须重命名新建或显式确认复用具体目标；默认 skip 仅跳过内容，引用进入待映射清单；旧 char_map 的默认按名关联不代表引用授权，未解决整笔拒绝，v1–v3 旧关系行为保留。分类设计 `:75` 继续沿用 v4 显式映射，所以该保护覆盖 v5。**原建议已落实。**
+- 复查证据：`.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md:117` 已明确 v4 包内被引用冲突实体必须重命名新建或显式确认复用具体目标；默认 skip 仅跳过内容，引用进入待映射清单；旧 char_map 的默认按名关联不代表引用授权，未解决整笔拒绝，v1–v3 旧关系行为保留。分类设计 `:75` 继续沿用 v4 显式映射，所以该保护覆盖 v5。**原建议已落实。**
 - 原审阅所见：原字段设计确认包内 ref、包外映射及 skip 不覆写资料，但未规定被引用包内实体 skip 后的 ref。现有实现 `backend/app/services/card_service.py:391` 在默认 skip 时直接把源名称映射到目标同名 ID，`:426` 也回退按名称查目标；前端 `frontend/src/api/cards.ts:36` 默认将所有冲突设为 skip。
 - 风险：新包里的 A 引用包内 ref B，目标作品已有同名 B；若沿用旧 default skip 的 char_map，A 的 typed reference 会自动绑定现有同名对象，即使新卡片本身采用局部 ref。包内 ref 解决的是文件内身份，不能证明目标项目同名实体就是该身份。
 - 最小明确：对 v4/v5，给被引用的冲突实体选择“重命名新建”或**显式确认复用的具体目标**；普通 skip 若只是跳过内容，则相关 ref 保持未解决并进入现有显式映射流程，未解决整笔拒绝。v1–v3 的旧关系/成员按名行为可保留。预览展示最终包内 ref→新实体/已确认目标映射，不能把未操作过的默认 skip 当成新引用的显式确认。
@@ -44,9 +44,9 @@
 
 ## Files Found / Related Specs
 
-- `.trellis/tasks/11-05-custom-setting-fields-categories/design.md`：父级版本与跨子任务合同。
-- `.trellis/tasks/11-05-typed-setting-fields/design.md`：字段、句柄、时间线、卡片及 effects v3 合同。
-- `.trellis/tasks/11-05-setting-auto-categories/design.md`：标签、规则 FK、v5 与 effects v4 合同。
+- `.trellis/tasks/archive/2026-11/11-05-custom-setting-fields-categories/design.md`：父级版本与跨子任务合同。
+- `.trellis/tasks/archive/2026-11/11-05-typed-setting-fields/design.md`：字段、句柄、时间线、卡片及 effects v3 合同。
+- `.trellis/tasks/archive/2026-11/11-05-setting-auto-categories/design.md`：标签、规则 FK、v5 与 effects v4 合同。
 - `backend/app/services/project_transfer/registry.py`：备份目录版本排除的现有先例。
 - `backend/app/services/agent/effects.py`：独立的 effects 项目列选择与整行恢复。
 - `backend/app/services/card_service.py`、`frontend/src/api/cards.ts`：当前默认 skip 按名关联的确切接点。

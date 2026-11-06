@@ -1,6 +1,6 @@
 # 分类前端独立检查
 
-本报告对应 `.trellis/tasks/11-05-setting-auto-categories`，由已派出的 `trellis-check` 直接审阅与局部自修；没有再派代理、提交代码或修改任务状态。前置字段阶段的完整门禁与浏览器证据另见 `field-frontend-check.md`，本轮不重复旧字段实现审阅。
+本报告对应 `.trellis/tasks/archive/2026-11/11-05-setting-auto-categories`，由已派出的 `trellis-check` 直接审阅与局部自修；没有再派代理、提交代码或修改任务状态。前置字段阶段的完整门禁与浏览器证据另见 `field-frontend-check.md`，本轮不重复旧字段实现审阅。
 
 ## 检查范围与边界
 
