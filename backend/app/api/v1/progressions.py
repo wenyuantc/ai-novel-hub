@@ -82,6 +82,7 @@ async def list_progressions(
     offset: int = Query(default=0, ge=0, le=MAX_DB_INT),
     limit: int = Query(default=50, ge=1, le=200),
     field: str | None = Query(default=None, max_length=100),
+    include_inactive: bool = False,
 ) -> ProgressionListOut:
     if field and field.startswith("custom:"):
         try:
@@ -91,7 +92,9 @@ async def list_progressions(
         else:
             if not 1 <= custom_id <= MAX_DB_INT:
                 raise HTTPException(status_code=422, detail="自定义字段编号超出有效范围")
-    return await svc.list_progressions(db, user.id, project_id, timeline_id, offset=offset, limit=limit, field=field)
+    return await svc.list_progressions(
+        db, user.id, project_id, timeline_id, offset=offset, limit=limit, field=field, include_inactive=include_inactive
+    )
 
 
 @router.post("/{timeline_id}/progressions", response_model=ProgressionMutationOut, status_code=status.HTTP_201_CREATED)
@@ -123,8 +126,17 @@ async def delete_progression(
     user: CurrentUser,
     db: DbDep,
     expected_revision: int = Query(ge=1, le=MAX_DB_INT),
+    expected_fields_revision: int | None = Query(default=None, ge=0, le=MAX_DB_INT),
 ) -> RevisionOut:
-    return await svc.delete_progression(db, user.id, project_id, timeline_id, event_id, expected_revision)
+    return await svc.delete_progression(
+        db,
+        user.id,
+        project_id,
+        timeline_id,
+        event_id,
+        expected_revision,
+        expected_fields_revision=expected_fields_revision,
+    )
 
 
 @router.get("/{timeline_id}/effective", response_model=EffectiveOut)

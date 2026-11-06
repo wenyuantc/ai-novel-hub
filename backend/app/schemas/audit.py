@@ -105,6 +105,10 @@ AuditField = Literal[
     "triggers",
     "body",
     "references",
+    "setting_fields",
+    "field_definitions",
+    "setting_categories",
+    "setting_tags",
     "builtin_key",
     "hidden_by",
 ]

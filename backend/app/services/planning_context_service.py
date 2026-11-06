@@ -35,7 +35,9 @@ from app.models.planning import (
 from app.schemas.planning import EntityReference, PlanningContextPreview, PlanningReference, PlanningSource, SourceKind
 from app.schemas.planning import RelationshipReference as PlanningRelationshipReference
 from app.schemas.progression import StoryPosition
-from app.services import career_service, relationship_service, setting_progression_service
+from app.schemas.setting_fields import EntityRef
+from app.services import career_service, relationship_service, setting_field_service, setting_progression_service
+from app.services.setting_field_formatting import format_entry_fields
 
 MAX_PLANNING_CHARS = 20000
 MIN_ORDINARY_CONTEXT_CHARS = 200
@@ -46,6 +48,8 @@ TRUNCATED_SUFFIX = "……[已截断]"
 class PlanningContext:
     revision: int
     source: PlanningSource
+    # 与普通设定块共用目录版本；非持久化规划版本，不进入规划 API 的 revision。
+    fields_revision: int | None = None
     unit_id: int | None = None
     chapter_id: int | None = None
     plan_id: int | None = None
@@ -355,7 +359,7 @@ async def _setting_items(
             career_line=context_builder.format_career_line(
                 effective.careers_by_character.get(character.id, []), effective.stages
             ),
-            custom_fields=effective.custom_fields.get(character.id, []),
+            field_text=format_entry_fields(effective.entry_fields["character", character.id]),
         )
         items.append(PlanningTextItem(f"{label} #{character.id}：{character.name}", body))
     out.additional_character_ids = set(names)
@@ -377,45 +381,55 @@ async def _setting_items(
     snapshots = await setting_progression_service.resolve_timelines(
         db, project.id, [*world_timelines, *relationships], position
     )
-    custom = await context_builder._custom_labels(db, world_timelines, snapshots)
+    entry_fields = await setting_field_service.resolve_entry_fields(
+        db, project.id, [
+            *[EntityRef(kind="world", id=world.id) for world in worlds],
+            *[EntityRef(kind="organization", id=organization.id) for organization in organizations],
+            *[EntityRef(kind="career", id=career.id) for career in careers],
+        ], position,
+    )
     by_world = {timeline.world_setting_id: timeline for timeline in world_timelines}
     for world in worlds:
         timeline = by_world.get(world.id)
         content = str(snapshots[timeline.id].fields["content"]) if timeline else world.content
-        fields = custom.get(timeline.id, []) if timeline else []
-        body = "\n".join([content, *(f"{label}：{value}" for label, value in fields)]).strip()
+        fields = format_entry_fields(entry_fields["world", world.id])
+        body = "\n".join(part for part in (content, fields) if part).strip()
         items.append(PlanningTextItem(f"指定世界观 #{world.id}：{world.title}（{world.category}）", body))
         out.protected_world_ids.add(world.id)
     for organization in organizations:
+        fields = format_entry_fields(entry_fields["organization", organization.id])
+        note = "静态档案；字段按章初" if fields else "当前静态档案"
         items.append(
             PlanningTextItem(
-                f"指定组织 #{organization.id}：{organization.name}（当前静态档案）",
-                _fields(
+                f"指定组织 #{organization.id}：{organization.name}（{note}）",
+                "\n".join(part for part in (_fields(
                     ("类型", organization.org_type),
                     ("宗旨", organization.purpose),
                     ("所在地", organization.location),
                     ("说明", organization.description),
-                ),
+                ), fields) if part),
             )
         )
         out.protected_organization_ids.add(organization.id)
     stages = await career_service.stages_of(db, [career.id for career in careers])
     for career in careers:
+        fields = format_entry_fields(entry_fields["career", career.id])
+        note = "静态体系；字段按章初" if fields else "当前静态体系"
         stage_text = "\n".join(
             f"{s.position}. {s.name}" + (f"：{s.description}" if s.description else "")
             for s in stages.get(career.id, [])
         )
         items.append(
             PlanningTextItem(
-                f"指定职业 #{career.id}：{career.name}（当前静态体系）",
-                _fields(
+                f"指定职业 #{career.id}：{career.name}（{note}）",
+                "\n".join(part for part in (_fields(
                     ("类型", career.kind),
                     ("说明", career.description),
                     ("获得条件", career.requirements),
                     ("能力", career.abilities),
                     ("规则", career.rules),
                     ("阶段", stage_text),
-                ),
+                ), fields) if part),
             )
         )
         out.protected_career_ids.add(career.id)
@@ -472,6 +486,7 @@ async def load_planning_context(
 ) -> PlanningContext:
     """不写入 unit／设定，不依赖 UI 当前列或支线筛选；权限由上层项目入口校验。"""
     with db.no_autoflush:
+        fields_revision = await setting_field_service.fields_revision(db, project.id)
         revision = await db.scalar(select(Project.planning_revision).where(Project.id == project.id))
         if revision is None:
             raise NotFoundError("作品不存在")
@@ -479,6 +494,7 @@ async def load_planning_context(
         out = PlanningContext(
             revision=revision,
             source=PlanningSource(kind=source_kind, id=source_id),
+            fields_revision=fields_revision,
             unit_id=unit.id if unit else None,
             chapter_id=chapter.id if chapter else None,
             plan_id=plan.id if plan else (chapter.plan_id if chapter else None),
@@ -518,6 +534,7 @@ async def load_planning_context(
         if after != revision:
             # 不在当前 identity map 中重试，避免把缓存的旧节点配上新的 revision。
             raise ConflictError("规划在读取期间发生变化，请刷新后重试", extra={"code": "planning_context_changed"})
+        await setting_field_service.check_fields_revision(db, project.id, fields_revision)
         return out
 
 

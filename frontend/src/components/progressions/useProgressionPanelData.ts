@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { chapterApi } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
 import { progressionApi } from '../../api/progressions'
+import { settingFieldsApi } from '../../api/settingFields'
+import { entryProgressionTarget, subjectEntry } from '../settingFields/valueDraft'
 import type {
   ChapterBrief,
   ProgressionList,
@@ -10,13 +12,15 @@ import type {
   SettingProgression,
   SettingTextField,
   SettingTimeline,
+  SettingEntryFields,
 } from '../../api/types'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectRefresh } from '../../hooks/useProjectRefresh'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
+import { assertSettingReadRevision } from './preview'
 
-export type TextProgressionTarget = Extract<ProgressionSubject, { subject_kind: 'world' | 'character' }>
+export type TextProgressionTarget = Extract<ProgressionSubject, { subject_kind: 'world' | 'character' | 'organization' | 'career_entry' }>
 
 export interface ProgressionPanelData {
   timeline: SettingTimeline
@@ -24,10 +28,12 @@ export interface ProgressionPanelData {
   progressions: ProgressionList<SettingProgression>
   fields: SettingTextField[]
   chapters: ChapterBrief[]
+  entryFields: SettingEntryFields
 }
 
 interface LoadState {
   key: string
+  actorScope: string
   refresh: number
   data: ProgressionPanelData | null
   error: string | null
@@ -38,13 +44,16 @@ const PAGE_SIZE = 20
 async function loadPanel(projectId: number, target: TextProgressionTarget, page: number, signal: AbortSignal): Promise<ProgressionPanelData> {
   const timeline = await progressionApi.findTimeline(projectId, target, signal)
   if (!timeline) throw new Error('未找到该条目的基础设定，请刷新或重新打开条目')
-  const [baseline, progressions, textFields, chapters] = await Promise.all([
+  const entry = subjectEntry(target)
+  if (!entry) throw new Error('该主体不支持条目字段')
+  const [baseline, progressions, textFields, chapters, entryFields] = await Promise.all([
     progressionApi.getBaseline(projectId, timeline.id, signal),
     progressionApi.listProgressions(projectId, timeline.id, { offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE }, signal),
     progressionApi.listTextFields(projectId, timeline.id, signal),
     chapterApi.list(projectId),
+    settingFieldsApi.getEntryFields(projectId, entry, null, signal),
   ])
-  if (baseline.timeline_revision !== progressions.timeline_revision || baseline.timeline_revision !== textFields.timeline_revision) {
+  if (baseline.timeline_revision !== progressions.timeline_revision || baseline.timeline_revision !== textFields.timeline_revision || baseline.timeline_revision !== entryFields.timeline_revision || (progressions.fields_revision != null && progressions.fields_revision !== entryFields.fields_revision)) {
     throw new Error('设定刚刚发生变化，请刷新后重试')
   }
   return {
@@ -53,6 +62,7 @@ async function loadPanel(projectId: number, target: TextProgressionTarget, page:
     progressions,
     fields: textFields.items,
     chapters,
+    entryFields,
   }
 }
 
@@ -62,12 +72,13 @@ export function useProgressionPanelData(projectId: number, target: TextProgressi
   const { canRead, canReadNow } = access
   const identity = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
   const kind = target.subject_kind
-  const targetId = kind === 'world' ? target.world_setting_id : target.character_id
+  const targetId = kind === 'world' ? target.world_setting_id : kind === 'organization' ? target.organization_id : kind === 'career_entry' ? target.career_id : target.character_id
   const subject = useMemo<TextProgressionTarget>(
-    () => kind === 'world' ? { subject_kind: 'world', world_setting_id: targetId } : { subject_kind: 'character', character_id: targetId },
+    () => entryProgressionTarget({ kind: kind === 'career_entry' ? 'career' : kind, id: targetId }),
     [kind, targetId],
   )
   const key = `${identity}:${projectId}:${kind}:${targetId}:${page}`
+  const actorScope = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}`) + `:${projectId}:${kind}:${targetId}`
   const [refreshCount, setRefreshCount] = useState(0)
   const [state, setState] = useState<LoadState | null>(null)
   const epoch = useRef(0)
@@ -86,7 +97,7 @@ export function useProgressionPanelData(projectId: number, target: TextProgressi
     }
   }, [key])
 
-  useProjectRefresh(projectId, kind === 'world' ? ['world', 'chapters'] : ['characters', 'chapters'], refresh)
+  useProjectRefresh(projectId, ['setting_fields', kind === 'world' ? 'world' : kind === 'organization' ? 'organizations' : kind === 'career_entry' ? 'careers' : 'characters', 'chapters'], refresh)
 
   useEffect(() => {
     if (!canRead) return
@@ -97,20 +108,20 @@ export function useProgressionPanelData(projectId: number, target: TextProgressi
     loadPanel(projectId, subject, page, controller.signal).then(
       (data) => {
         if (ticket === epoch.current && scope.current === key && !controller.signal.aborted && canReadNow()) {
-          setState({ key, refresh: refreshCount, data, error: null })
+          setState({ key, actorScope, refresh: refreshCount, data, error: null })
         }
       },
       (err: unknown) => {
         if (ticket === epoch.current && scope.current === key && !controller.signal.aborted && canReadNow()) {
-          setState((previous) => ({ key, refresh: refreshCount, data: previous?.key === key ? previous.data : null, error: errorMessage(err) }))
+          setState((previous) => ({ key, actorScope, refresh: refreshCount, data: previous?.actorScope === actorScope ? previous.data : null, error: errorMessage(err) }))
         }
       },
     ).finally(() => { requests.delete(controller) })
     return () => { controller.abort(); requests.delete(controller) }
-  }, [projectId, subject, page, key, refreshCount, canRead, canReadNow])
+  }, [projectId, subject, page, key, actorScope, refreshCount, canRead, canReadNow])
 
-  const current = state?.key === key ? state : null
-  const loading = canRead && (!current || current.refresh !== refreshCount)
+  const current = canRead && state?.actorScope === actorScope ? state : null
+  const loading = canRead && (!current || current.key !== key || current.refresh !== refreshCount)
 
   /** 显式刷新用于冲突对照；它不会卸载正在编辑的弹窗或重置草稿。 */
   const refreshForComparison = async (eventId: number | null) => {
@@ -126,14 +137,17 @@ export function useProgressionPanelData(projectId: number, target: TextProgressi
       if (controller.signal.aborted || ticket !== epoch.current || scope.current !== key || !canReadNow()) {
         throw new Error('当前条目已切换，请重新打开')
       }
-      if (detail && detail.timeline_revision !== data.baseline.timeline_revision) throw new Error('设定再次发生变化，请重新读取最新版本')
-      setState({ key, refresh: refreshCount, data, error: null })
+      if (detail) assertSettingReadRevision(detail, data.baseline.timeline_revision, data.entryFields.fields_revision)
+      setState({ key, actorScope, refresh: refreshCount, data, error: null })
       return { data, event: detail?.item ?? null }
     } finally {
       pending.current.delete(controller)
     }
   }
 
-  const isCurrent = () => scope.current === key && canReadNow()
+  const isCurrent = () => {
+    const auth = useAuthStore.getState()
+    return scope.current === key && `${auth.status}:${auth.user?.id ?? ''}:${authorizationKey(auth.user)}` === identity && canReadNow()
+  }
   return { ...access, data: current?.data ?? null, error: current?.error ?? null, loading, refresh, refreshForComparison, isCurrent, pageSize: PAGE_SIZE }
 }

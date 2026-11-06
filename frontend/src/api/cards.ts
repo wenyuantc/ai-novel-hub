@@ -1,7 +1,7 @@
-// 角色 / 组织卡片导入导出（ainovel.cards v3 导出，兼容导入 v1、v2；JSON body）
+// 角色 / 组织卡片导入导出（ainovel.cards v5，兼容导入 v1–v4；JSON body）
 
-import { api } from './client'
-import type { CardExportRequest, CardImportResult, CardPreview, CardResolution, CardResolutions } from './types'
+import { request } from './client'
+import type { CardExportRequest, CardImportRequest, CardImportResult, CardPreview, CardPreviewRequest, CardResolution, CardResolutions } from './types'
 
 /** 与后端 MAX_CARD_BYTES 一致：按「紧凑序列化后的 UTF-8 字节数」计（导出文件带缩进，文件本身可以略大） */
 export const MAX_CARD_BYTES = 2 * 1024 * 1024
@@ -9,10 +9,11 @@ export const MAX_CARD_BYTES = 2 * 1024 * 1024
 export const MAX_CARD_FILE_BYTES = 4 * MAX_CARD_BYTES
 
 export const cardApi = {
-  export: (pid: number, body: CardExportRequest) => api.post<Record<string, unknown>>(`/projects/${pid}/cards/export`, body),
-  preview: (pid: number, data: unknown) => api.post<CardPreview>(`/projects/${pid}/cards/import/preview`, { data }),
-  import: (pid: number, data: unknown, resolutions: CardResolutions) =>
-    api.post<CardImportResult>(`/projects/${pid}/cards/import`, { data, resolutions }),
+  export: (pid: number, body: CardExportRequest, signal?: AbortSignal) => request<Record<string, unknown>>(`/projects/${pid}/cards/export`, { method: 'POST', body, signal }),
+  preview: (pid: number, data: unknown, options: Omit<CardPreviewRequest, 'data'> = {}, signal?: AbortSignal) =>
+    request<CardPreview>(`/projects/${pid}/cards/import/preview`, { method: 'POST', body: { data, ...options }, signal }),
+  import: (pid: number, data: unknown, resolutions: CardResolutions, options: Omit<CardImportRequest, 'data' | 'resolutions'> = {}, signal?: AbortSignal) =>
+    request<CardImportResult>(`/projects/${pid}/cards/import`, { method: 'POST', body: { data, resolutions, ...options }, signal }),
 }
 
 const TOO_LARGE = '卡片文件过大，上限为 2MB'
@@ -37,7 +38,8 @@ export function parseCardText(text: string): { data: unknown; error: string | nu
 export function defaultResolutions(preview: CardPreview): CardResolutions {
   const pick = (items: CardPreview['characters']) =>
     Object.fromEntries(items.filter((i) => i.status === 'conflict').map((i) => [i.name, 'skip' as CardResolution]))
-  return { characters: pick(preview.characters), organizations: pick(preview.organizations) }
+  const careers = (preview.careers ?? []).filter((item) => item.status === 'conflict' || item.status === 'rename')
+  return { characters: pick(preview.characters), organizations: pick(preview.organizations), ...(careers.length ? { careers: Object.fromEntries(careers.map((item) => [item.name, 'skip' as CardResolution])) } : {}) }
 }
 
 /** 导入预览统计：新建 / 重命名导入 / 跳过（关联到已有同名对象） */

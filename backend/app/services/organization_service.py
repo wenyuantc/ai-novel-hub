@@ -19,7 +19,14 @@ from app.schemas.organization import (
     validate_member_anchor,
 )
 from app.schemas.progression import AnchorKind, BaselineUpdate, ProgressionCreate, StoryPosition
-from app.services import membership_progression_service, setting_progression_service, story_service
+from app.schemas.setting_fields import EntityRef
+from app.services import (
+    membership_progression_service,
+    setting_catalog_service,
+    setting_field_service,
+    setting_progression_service,
+    story_service,
+)
 from app.services.project_service import get_manageable_project
 
 MAX_DEPTH = 50
@@ -220,6 +227,7 @@ async def new_org(db: AsyncSession, project_id: int, data: OrganizationCreate) -
     org = Organization(project_id=project_id, **values)
     db.add(org)
     await db.flush()
+    await setting_catalog_service.ensure_entry_timeline(db, project_id, "organization", org.id)
     return org
 
 
@@ -281,6 +289,9 @@ async def delete_org(db: AsyncSession, user_id: int, project_id: int, org_id: in
 
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     org = await get_owned_org(db, user_id, project_id, org_id)
+    await setting_field_service.cleanup_unreferenced_handles(
+        db, project_id, [EntityRef(kind="organization", id=org.id)]
+    )
     await db.delete(org)
     await bump_revision(db, project_id)
     await db.commit()

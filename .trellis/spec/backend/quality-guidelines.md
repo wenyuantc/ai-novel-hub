@@ -126,6 +126,20 @@ def make_settings(tmp_path, **overrides) -> Settings:
 `conftest.py` 会在导入 `app.main` **之前**在 `os.environ` 中设置 `JWT_SECRET`、`ENCRYPTION_KEY` 和 `FRONTEND_DIST_DIR`，
 因为 `app.main` 在导入时就会构建默认应用。
 
+### 跨数据库方言的建模隔离
+
+PG测试建库统一调用`tests.schema_helpers.create_isolated_schema(connection)`，每次以`Table.to_metadata`创建独立MetaData，不在ORM共享`Base.metadata`上运行PG create_all。PG的AddConstraint会修改Constraint创建规则，使后续SQLite漏建`use_alter`外键；独立tmp_path不能隔离进程内MetaData状态，`foreign_key_check`也发现不了根本没有创建的FK。
+
+副本必须显式复用关系类型、写作风格、技能三组既有after_create回调；to_metadata不自动传播这些事件，不能只保证表存在。不要重置SQLAlchemy私有`_create_rule`或清缓存让测试变绿。`test_schema_isolation.py`比较PG DDL前后原metadata全部SQLite DDL、三组预置，验证真实plan FK、删大纲后细纲级联／章节关联SET NULL和正文保留；保留真实PG→SQLite测试顺序回归。
+
+### 应用工厂与路由处理器寿命
+
+路由处理器使用模块级函数，通过 `Request.app.state` 取得当前实例资源和缓存，不在每次 `create_app` 时注册捕获该 app 的闭包。FastAPI 的 callable 分类缓存会强持有处理器；捕获 app 会同时保留整个路由图、任务引擎和数据库 engine，关闭客户端／dispose 不能解除这条全局引用。实际例子见 `app/api/open/docs.py`。
+
+修改应用工厂或动态安装路由时，保留独立实例、部署 `root_path` 和权限语义；对应回归在客户端及资源关闭后，以弱引用和窗口外 `gc.collect()` 验证实例可释放，不能先清框架缓存来让断言通过。`tests/test_open_api.py::test_open_docs_do_not_retain_closed_applications` 同时验证两实例的文档缓存、路由名称及回收。
+
+完整测试中出现不同任务流随机超时时，先对照任务终态、订阅队列、事件循环延迟和 GC，再追踪已关闭实例的强引用根。单独重跑通过不能证明环境原因；GC 与流窗口重叠是时序证据，只有修复后的完整门禁才能验证整体结果，不靠放宽超时或删除断言结束诊断。
+
 ### 按测试覆盖配置
 
 对 `settings_overrides` fixture 进行参数化：

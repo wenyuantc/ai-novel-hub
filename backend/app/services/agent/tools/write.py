@@ -33,6 +33,7 @@ from app.schemas.progression import (
 )
 from app.schemas.project import ProjectUpdate
 from app.schemas.relationship import RelationshipCreate, RelationshipUpdate
+from app.schemas.setting_field_value import DropdownSelection, EntityRef, FieldType
 from app.schemas.story import (
     CharacterCreate,
     CharacterUpdate,
@@ -49,6 +50,7 @@ from app.services import (
     plan_service,
     project_service,
     relationship_service,
+    setting_field_service,
     setting_progression_service,
     story_service,
 )
@@ -197,24 +199,33 @@ class _PresenceValue(EmptyArgs):
     state: _PresenceState | None = Field(default=None, description="建立时提供该主体完整状态；退出时省略。")
 
 
-class _ProgressionValue(EmptyArgs):
-    """根据目标字段只提供一个类型化值，避免任意 JSON 产生不可用的模型工具声明。"""
+class _CustomFieldValue(EmptyArgs):
+    """显式、单一类型；null 只表示清空选择或引用。"""
 
-    text: str | None = Field(default=None, description="文本、状态及自定义文本字段使用。")
-    intimacy: _Intimacy | None = Field(default=None, description="关系亲密度使用。")
-    stage_id: PositiveDbInt | None = Field(default=None, description="职业阶段引用使用。")
-    identity: _IdentityValue | None = Field(default=None, description="关系身份字段使用。")
-    presence: _PresenceValue | None = Field(default=None, description="关系、职业或成员的建立／退出使用。")
+    text: str | None = Field(default=None, description="多行文本或旧文本字段；空串清空。")
+    line: str | None = Field(default=None, max_length=500, description="单行字段；空串清空，不允许换行。")
+    dropdown: DropdownSelection | None = Field(default=None, description="下拉选项；显式 null 清空。")
+    reference: EntityRef | None = Field(default=None, description="引用目标的类型及 ID；显式 null 清空。")
 
     @model_validator(mode="after")
     def require_one_value(self) -> Self:
-        if len(self.model_fields_set) != 1 or getattr(self, next(iter(self.model_fields_set)), None) is None:
-            raise ValueError("变化值必须且只能填写一个非空的类型化值")
+        if len(self.model_fields_set) != 1:
+            raise ValueError("变化值必须且只能填写一个类型化值")
+        key = next(iter(self.model_fields_set))
+        if getattr(self, key) is None and key not in {"dropdown", "reference"}:
+            raise ValueError("只有下拉和引用字段允许 null 清空")
         return self
 
     def unpack(self):
         value = getattr(self, next(iter(self.model_fields_set)))
         return value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value
+
+
+class _ProgressionValue(_CustomFieldValue):
+    intimacy: _Intimacy | None = Field(default=None, description="关系亲密度使用。")
+    stage_id: PositiveDbInt | None = Field(default=None, description="职业阶段引用使用。")
+    identity: _IdentityValue | None = Field(default=None, description="关系身份字段使用。")
+    presence: _PresenceValue | None = Field(default=None, description="关系、职业或成员的建立／退出使用。")
 
 
 class BaselineArgs(EmptyArgs):
@@ -233,11 +244,12 @@ class BaselineArgs(EmptyArgs):
 class ProgressionArgs(EmptyArgs):
     timeline_id: PositiveDbInt
     expected_revision: PositiveDbInt
+    expected_fields_revision: NonnegativeDbInt | None = None
     field_key: str | None = Field(default=None, min_length=1, max_length=64)
     custom_field_id: PositiveDbInt | None = None
     operation: ProgressionOperation
     value: _ProgressionValue = Field(
-        description="只填写与字段对应的一个值：text、intimacy、stage_id、identity 或 presence。"
+        description="只填写一个与字段匹配的显式类型值；dropdown/reference 可用 null 清空。"
     )
     anchor_kind: AnchorKind
     chapter_id: PositiveDbInt | None = None
@@ -247,24 +259,85 @@ class ProgressionArgs(EmptyArgs):
     note: str = Field(default="", max_length=200)
 
 
+class FieldBaselineArgs(EmptyArgs):
+    entry: EntityRef
+    definition_id: PositiveDbInt
+    expected_fields_revision: NonnegativeDbInt
+    expected_timeline_revision: NonnegativeDbInt
+    field_type: FieldType
+    value: _CustomFieldValue
+
+
+class FieldProgressionArgs(FieldBaselineArgs):
+    operation: ProgressionOperation
+    anchor_kind: AnchorKind
+    chapter_id: PositiveDbInt | None = None
+    chapter_no: PositiveDbInt | None = None
+    boundary: Boundary = "start"
+    sort_order: NonnegativeDbInt = 0
+    note: str = Field(default="", max_length=200)
+
+
+async def _shared_field_target(ctx: ToolCtx, args: FieldBaselineArgs):
+    if next(iter(args.value.model_fields_set)) != args.field_type:
+        raise BadRequestError("变化值的类型与设定字段不匹配")
+    timeline, definition = await setting_field_service._write_target(
+        ctx.db, ctx.project_id, args.entry.kind, args.entry.id, args.definition_id,
+        args.expected_fields_revision, args.expected_timeline_revision,
+    )
+    if definition.field_type != args.field_type:
+        raise BadRequestError("字段类型与配置不匹配")
+    return timeline, await setting_field_service._ensure_binding(ctx.db, timeline, definition)
+
+
+async def update_setting_field_baseline(ctx: ToolCtx, args: FieldBaselineArgs):
+    timeline, field = await _shared_field_target(ctx, args)
+    await setting_field_service.apply_field_baseline(ctx.db, timeline, field, args.value.unpack(), timeline.revision)
+    return (await setting_field_service.resolve_entry_fields(ctx.db, ctx.project_id, [args.entry]))[
+        args.entry.kind, args.entry.id
+    ]
+
+
+async def record_setting_field_progression(ctx: ToolCtx, args: FieldProgressionArgs):
+    timeline, field = await _shared_field_target(ctx, args)
+    command = ProgressionCreate.model_validate({
+        **args.model_dump(exclude={"entry", "definition_id", "expected_timeline_revision", "field_type", "value"}),
+        "expected_revision": timeline.revision, "custom_field_id": field.id, "value": args.value.unpack(),
+    })
+    # 正式服务统一处理公共值编码、CAS、合法清空和物化，不在工具层复制写入规则。
+    return await setting_progression_service.create_progression(
+        ctx.db, ctx.user_id, ctx.project_id, timeline.id, command,
+    )
+
+
 async def list_setting_timelines(ctx: ToolCtx, args: TimelineListArgs):
     filters = args.model_dump(exclude={"page", "page_size"}, exclude_none=True)
     result = await setting_progression_service.list_timelines(ctx.db, ctx.user_id, ctx.project_id, **filters)
     page = paged(result.items, args)
     timeline_ids = [item["id"] for item in page["items"]]
     fields_by_timeline: dict[int, list[dict]] = {timeline_id: [] for timeline_id in timeline_ids}
+    definitions = await setting_field_service.list_definitions(ctx.db, ctx.user_id, ctx.project_id)
+    by_id = {item.id: item for item in definitions.items}
     if timeline_ids:
         fields = await ctx.db.execute(
-            select(SettingTextField.timeline_id, SettingTextField.id, SettingTextField.label)
+            select(SettingTextField)
             .join(SettingTimeline, SettingTimeline.id == SettingTextField.timeline_id)
             .where(SettingTimeline.project_id == ctx.project_id, SettingTimeline.id.in_(timeline_ids))
             .order_by(SettingTextField.timeline_id, SettingTextField.sort, SettingTextField.id)
         )
-        for timeline_id, field_id, label in fields:
-            fields_by_timeline[timeline_id].append({"id": field_id, "label": label})
+        for (field,) in fields:
+            definition = by_id.get(field.definition_id)
+            metadata = {
+                "id": field.id, "label": definition.label if definition else field.label,
+                "field_type": definition.field_type if definition else "text", "definition_id": field.definition_id,
+            }
+            if definition:
+                metadata.update(options=serialized(definition.options), reference_types=definition.reference_types,
+                                archived=definition.archived)
+            fields_by_timeline[field.timeline_id].append(metadata)
     for item in page["items"]:
         item["custom_fields"] = fields_by_timeline[item["id"]]
-    return page
+    return {**page, "fields_revision": definitions.fields_revision}
 
 
 async def update_setting_baseline(ctx: ToolCtx, args: BaselineArgs):
@@ -281,6 +354,14 @@ async def record_setting_progression(ctx: ToolCtx, args: ProgressionArgs):
         "identity": "identity",
         "presence": "presence",
     }.get(args.field_key, "text")
+    if args.custom_field_id is not None:
+        field = await ctx.db.scalar(select(SettingTextField).where(
+            SettingTextField.id == args.custom_field_id, SettingTextField.timeline_id == args.timeline_id,
+        ))
+        if field is None:
+            raise NotFoundError("字段不存在")
+        specs = await setting_field_service.load_field_specs(ctx.db, ctx.project_id, [field])
+        expected_type = specs[field.id].field_type
     if next(iter(args.value.model_fields_set)) != expected_type:
         raise BadRequestError("变化值的类型与设定字段不匹配")
     values = args.model_dump(exclude={"timeline_id", "value"}, exclude_unset=True)
@@ -515,6 +596,10 @@ for noun, label, model, create_schema, update_schema, create, update, delete in 
     TOOLS.extend(crud_tools(noun, label, model, create_schema, update_schema, create, update, delete))
 TOOLS.extend(
     [
+        Tool("update_setting_field_baseline", "修正共享字段起始值（首次写入可建绑定）", FieldBaselineArgs, "small",
+             update_setting_field_baseline),
+        Tool("record_setting_field_progression", "记录共享字段章节变化（首次写入可建绑定）", FieldProgressionArgs,
+             "small", record_setting_field_progression),
         Tool("list_setting_timelines", "列出设定时间线及版本", TimelineListArgs, "read", list_setting_timelines),
         Tool("update_setting_baseline", "修正或确认设定基础值", BaselineArgs, "small", update_setting_baseline),
         Tool(

@@ -3,9 +3,12 @@ import { App, Button, Card, Empty, Popconfirm, Space, Spin, Tag, Tooltip, Typogr
 import { useCallback, useState, type CSSProperties } from 'react'
 import { CAREER_KIND_LABELS, careerApi } from '../../api/careers'
 import { errorMessage } from '../../api/client'
-import type { Career, CareerKind } from '../../api/types'
+import type { Career, CareerKind, ProgressionPositionInput } from '../../api/types'
+import { useSearchParams } from 'react-router-dom'
+import { readEntityFieldPosition } from '../../utils/entityLinks'
 import AutoGrid from '../../components/AutoGrid'
 import CareerEditDrawer from '../../components/careers/CareerEditDrawer'
+import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import WizardModal from '../../components/WizardModal'
 import { useLoader } from '../../hooks/useLoader'
@@ -21,16 +24,20 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 /** 职业：按主修 / 副修分组的卡片（阶梯 + 持有人数），编辑抽屉维护阶段与查看持有人；AI 生成职业 / 职业体系向导。 */
 export default function CareersPanel() {
   const pid = useProjectId()
+  const tagsSession = useSettingTagsSession(pid)
+  const [searchParams] = useSearchParams()
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
   const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
   const [editing, setEditing] = useState<Career | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
   const [generateOpen, setGenerateOpen] = useState(false)
   const [wizardOpen, setWizardOpen] = useState(false)
 
   const openEdit = (c: Career | null) => {
+    setFieldPosition(c && searchParams.get('id') === String(c.id) ? readEntityFieldPosition(searchParams) : null)
     setEditing(c)
     setDrawerOpen(true)
   }
@@ -42,6 +49,7 @@ export default function CareersPanel() {
     try {
       if (!canEditNow()) return
       await careerApi.remove(pid, c.id)
+      tagsSession.forget({ kind: 'career', id: c.id })
       if (!canEditNow()) return
       message.success('已删除（角色的挂接与阶段历史一并清理）')
       reload()
@@ -146,9 +154,11 @@ export default function CareersPanel() {
       </Spin>
 
       <CareerEditDrawer
+        tagsSession={tagsSession}
         projectId={pid}
         open={drawerOpen}
         career={editing}
+        fieldPosition={fieldPosition}
         onClose={() => setDrawerOpen(false)}
         onSaved={(c) => {
           setEditing(c)

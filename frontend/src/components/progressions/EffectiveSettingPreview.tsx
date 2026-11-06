@@ -1,15 +1,16 @@
 import { Alert, Button, Space, Spin, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import { errorMessage } from '../../api/client'
-import { progressionApi } from '../../api/progressions'
-import type { ProgressionPositionInput, SettingEffective } from '../../api/types'
+import type { ProgressionPositionInput, SettingEffective, SettingEntryFields, SettingEntryRef } from '../../api/types'
+import SettingFieldValueView from '../settingFields/SettingFieldValueView'
+import { fieldSlotValue } from '../settingFields/valueDraft'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
 import ChapterPositionInput from './ChapterPositionInput'
 import type { ProgressionFieldChoice } from './fields'
 import { chapterOptions, toPositionInput, type ChapterReference } from './position'
-import { effectiveRows } from './preview'
+import { effectiveRows, loadEffectivePreview } from './preview'
 
 interface Props {
   projectId: number
@@ -18,25 +19,32 @@ interface Props {
   chapters: readonly ChapterReference[]
   fields: readonly ProgressionFieldChoice[]
   onRefresh: () => void
+  entry?: SettingEntryRef
+  fieldsRevision?: number
+  initialPosition?: ProgressionPositionInput | null
 }
 
 interface Result {
   key: string
   data: SettingEffective | null
   error: string | null
+  entryFields?: SettingEntryFields | null
 }
 
-export default function EffectiveSettingPreview({ projectId, timelineId, timelineRevision, chapters, fields, onRefresh }: Props) {
+export default function EffectiveSettingPreview({ projectId, timelineId, timelineRevision, chapters, fields, onRefresh, entry, fieldsRevision, initialPosition }: Props) {
   const { canRead, canReadNow } = useProjectAccess(projectId)
   const identity = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
   const [position, setPosition] = useState<ProgressionPositionInput>(() => {
+    if (initialPosition) return initialPosition
     const firstChapter = chapterOptions(chapters)[0]?.value ?? null
     return { anchor_kind: firstChapter === null ? 'planned' : 'chapter', chapter_id: firstChapter, chapter_no: null, boundary: 'start' }
   })
   const [result, setResult] = useState<Result | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const chapterId = position.anchor_kind === 'chapter' && chapters.some((chapter) => chapter.id === position.chapter_id) ? position.chapter_id : null
   const selection = toPositionInput({ ...position, chapter_id: chapterId })
-  const requestKey = selection === null ? null : `${identity}:${projectId}:${timelineId}:${timelineRevision}:${selection.anchor_kind}:${selection.chapter_id ?? selection.chapter_no}:${selection.boundary}`
+  const entryKind = entry?.kind, entryId = entry?.id
+  const requestKey = selection === null ? null : `${identity}:${projectId}:${timelineId}:${timelineRevision}:${fieldsRevision}:${entryKind}:${entryId}:${selection.anchor_kind}:${selection.chapter_id ?? selection.chapter_no}:${selection.boundary}:${attempt}`
   const current = result?.key === requestKey ? result : null
 
   useEffect(() => {
@@ -46,19 +54,18 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
     const requested: ProgressionPositionInput = {
       anchor_kind: position.anchor_kind, chapter_id: chapterId, chapter_no: position.chapter_no, boundary: position.boundary,
     }
-    progressionApi.effectiveAtPosition(projectId, timelineId, requested, controller.signal).then(
-      (data) => {
+    loadEffectivePreview({ projectId, timelineId, timelineRevision, fieldsRevision, position: requested,
+      entry: entryKind && entryId ? { kind: entryKind, id: entryId } : undefined, signal: controller.signal }).then(
+      ({ data, entryFields }) => {
         if (!active || !canReadNow()) return
-        setResult(data.timeline_revision === timelineRevision
-          ? { key: requestKey, data, error: null }
-          : { key: requestKey, data: null, error: '设定已更新，请刷新后查看。' })
+        setResult({ key: requestKey, data, entryFields, error: null })
       },
       (err: unknown) => {
         if (active && canReadNow() && !controller.signal.aborted) setResult({ key: requestKey, data: null, error: errorMessage(err) })
       },
     )
     return () => { active = false; controller.abort() }
-  }, [projectId, timelineId, timelineRevision, chapterId, position.anchor_kind, position.chapter_no, position.boundary, canRead, canReadNow, requestKey])
+  }, [projectId, timelineId, timelineRevision, fieldsRevision, entryKind, entryId, chapterId, position.anchor_kind, position.chapter_no, position.boundary, canRead, canReadNow, requestKey])
 
   if (!canRead) return null
   const rows = current?.data ? effectiveRows(current.data, fields) : []
@@ -78,7 +85,7 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
           type="error"
           showIcon
           message={current.error}
-          action={<Button size="small" onClick={onRefresh}>刷新</Button>}
+          action={<Button size="small" onClick={() => { setAttempt((value) => value + 1); onRefresh() }}>刷新</Button>}
         />
       )}
       {current?.data && (
@@ -90,7 +97,8 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
               <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{row.value}</Typography.Paragraph>
             </div>
           ))}
-          {rows.length === 0 && <Typography.Text type="secondary">此位置暂无内容。</Typography.Text>}
+          {current.entryFields?.fields.map((slot) => <div key={`definition:${slot.definition_id}`}><Typography.Text strong>{slot.label}</Typography.Text><div><SettingFieldValueView projectId={projectId} value={fieldSlotValue(slot)} options={slot.options} reference={slot.reference} /></div></div>)}
+          {rows.length === 0 && !current.entryFields?.fields.length && <Typography.Text type="secondary">此位置暂无内容。</Typography.Text>}
         </Space>
       )}
     </Space>

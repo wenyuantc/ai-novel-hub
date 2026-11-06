@@ -45,33 +45,60 @@ async def test_setting_tools_gemini_sdk_wire_schema_and_structured_arguments(mon
                 },
             },
         ),
+        ("record_setting_progression", {**base, "custom_field_id": 8, "expected_fields_revision": 2,
+                                        "value": {"line": "筑基"}}),
+        ("record_setting_progression", {**base, "custom_field_id": 8, "expected_fields_revision": 2,
+                                        "value": {"dropdown": {"option_id": 9}}}),
+        ("record_setting_progression", {**base, "custom_field_id": 8, "expected_fields_revision": 2,
+                                        "value": {"dropdown": None}}),
+        ("record_setting_progression", {**base, "custom_field_id": 8, "expected_fields_revision": 2,
+                                        "value": {"reference": {"kind": "world", "id": 9}}}),
+        ("record_setting_progression", {**base, "custom_field_id": 8, "expected_fields_revision": 2,
+                                        "value": {"reference": None}}),
+        ("update_setting_field_baseline", {
+            "entry": {"kind": "organization", "id": 3}, "definition_id": 4,
+            "expected_timeline_revision": 1, "expected_fields_revision": 2,
+            "field_type": "reference", "value": {"reference": {"kind": "career", "id": 5}},
+        }),
     ]
     parts = [{"functionCall": {"name": name, "args": args}} for name, args in inputs]
     sdk = SDKTransport(monkeypatch, "gemini", [[gemini_chunk(parts, "STOP")]])
     tools = []
-    for name in ("list_setting_timelines", "update_setting_baseline", "record_setting_progression"):
+    for name in (
+        "list_setting_timelines", "update_setting_baseline", "record_setting_progression",
+        "list_setting_field_definitions", "list_setting_entries", "get_setting_entry_fields",
+        "update_setting_field_baseline", "record_setting_field_progression",
+    ):
         tool = get_tool(name)
         tools.append({"name": tool.name, "description": tool.description, "parameters": tool.parameters})
     events = [event async for event in sdk.provider.chat_tools_stream(MESSAGES, "test-model", tools)]
     declarations = {item["name"]: item for item in sdk.requests[0]["tools"][0]["functionDeclarations"]}
 
     def assert_supported(node):
-        assert node.get("type") in {"OBJECT", "STRING", "INTEGER", "BOOLEAN"}, node
+        assert node.get("type") in {"OBJECT", "STRING", "INTEGER", "BOOLEAN", "ARRAY"}, node
         assert "anyOf" not in node
         if node["type"] == "OBJECT":
             assert node.get("properties"), node
             for child in node["properties"].values():
                 assert_supported(child)
+        elif node["type"] == "ARRAY":
+            assert_supported(node["items"])
 
     for declaration in declarations.values():
         assert_supported(declaration["parameters"])
     timeline = declarations["list_setting_timelines"]["parameters"]["properties"]
-    assert set(timeline["subject_kind"]["enum"]) == {"character", "world", "relationship", "career", "membership"}
+    assert set(timeline["subject_kind"]["enum"]) == {
+        "character", "world", "relationship", "career", "membership", "organization", "career_entry",
+    }
     baseline = declarations["update_setting_baseline"]["parameters"]["properties"]["changes"]["properties"]
     assert set(baseline["life_status"]["enum"]) == {"alive", "dead", "missing", "other"}
     value = declarations["record_setting_progression"]["parameters"]["properties"]["value"]["properties"]
     assert value["intimacy"]["minimum"] == -100 and value["intimacy"]["maximum"] == 100
     assert value["stage_id"]["nullable"] is True
+    assert value["dropdown"]["nullable"] is True
+    assert value["dropdown"]["properties"]["option_id"]["type"] == "INTEGER"
+    assert value["reference"]["nullable"] is True
+    assert set(value["reference"]["properties"]["kind"]["enum"]) == {"character", "world", "organization", "career"}
     identity_schema = value["identity"]["properties"]
     assert set(identity_schema) == {"a_id", "b_id", "type_id"}
     state = value["presence"]["properties"]["state"]

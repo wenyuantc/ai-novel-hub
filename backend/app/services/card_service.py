@@ -1,6 +1,7 @@
-"""角色 / 组织卡片导入导出（R8，格式 ainovel.cards v3，兼容导入 v1、v2）。
+"""角色 / 组织卡片导入导出（ainovel.cards v5，兼容导入 v1–v4）。
 
-- 卡片按名称关联，不含任何内部 ID；导入时不信任卡片里的任何 ID。
+- v4 类型化字段以文件局部 ref 关联；包外引用及同名跳过目标需要作者显式映射本作品身份。
+- 原有关系／成员／职业名称关联保持兼容，导出的卡片不包含源数据库 ID。
 - 导出：勾选的角色和组织 + 两端都在导出集合内的关系 + 成员角色在集合内的成员关系；
   上级组织也在导出集合内时才写 parent_name。
 - 导入：同名冲突逐项选择 skip / rename（默认 skip）；rename 追加「（导入）」「（导入2）」……直到不冲突。
@@ -17,6 +18,7 @@
 """
 
 import json
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,7 +27,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError
-from app.models import Career, Character, Organization, OrganizationMember, Relationship, RelationshipType
+from app.models import (
+    Career,
+    Character,
+    Organization,
+    OrganizationMember,
+    Relationship,
+    RelationshipType,
+    SettingFieldDefinition,
+    SettingFieldOption,
+    SettingReferenceHandle,
+    SettingTextField,
+)
 from app.models.entities import CAREER_KINDS, LIFE_STATUSES, MEMBER_STATUSES, RELATION_STATUSES
 from app.schemas.card import (
     CARD_FORMAT,
@@ -39,14 +52,18 @@ from app.schemas.card import (
     CardImportRequest,
     CardImportResult,
     CardPreview,
+    CardPreviewRequest,
     ImportedCareer,
     ImportedItem,
     PreviewCareer,
+    PreviewFieldDefinition,
     PreviewItem,
+    PreviewReference,
     PreviewRelationship,
 )
 from app.schemas.career import CareerCreate, StageIn
 from app.schemas.organization import MemberCreate
+from app.schemas.setting_fields import DefinitionCreate, DefinitionOut, EntityRef, OptionOut
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
 from app.services import (
     career_service,
@@ -56,9 +73,19 @@ from app.services import (
     setting_progression_service,
     story_service,
 )
+from app.services import (
+    setting_catalog_service as catalog,
+)
+from app.services import (
+    setting_category_service as categories,
+)
+from app.services import (
+    setting_field_service as fields,
+)
 from app.services.cast_service import is_protagonist_role
 from app.services.organization_service import MAX_DEPTH
 from app.services.project_service import get_owned_project
+from app.services.setting_field_values import has_field_content
 
 RENAME_SUFFIX = "（导入）"
 
@@ -68,6 +95,8 @@ RENAME_SUFFIX = "（导入）"
 
 async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: CardExportRequest) -> dict[str, Any]:
     await get_owned_project(db, user_id, project_id)
+    category_revision = await categories.categories_revision(db, project_id)
+    await categories.validate_project_category_graph(db, project_id)
     char_ids = list(dict.fromkeys(req.character_ids))
     org_ids = list(dict.fromkeys(req.organization_ids))
     chars = list(
@@ -141,8 +170,7 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         char_careers.setdefault(a.character_id, []).append((a, career))
     stages = await career_service.stages_of(db, list(used))
     stage_names = {s.id: s.name for ss in stages.values() for s in ss}
-    custom_fields = await setting_progression_service.latest_character_snapshots(db, project_id, list(char_names))
-    return {
+    data = {
         "format": CARD_FORMAT,
         "version": CARD_VERSION,
         "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -159,9 +187,6 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
                 "profile": c.profile,
                 "current_state": c.current_state,
                 "life_status": c.life_status,
-                "custom_text_fields": [
-                    {"name": item["label"], "value": item["value"]} for item in custom_fields.get(c.id, [])
-                ],
                 "careers": [
                     {
                         "career_name": career.name,
@@ -201,7 +226,92 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             for career in sorted(used.values(), key=lambda x: (x.sort, x.id))
         ],
     }
+    await _export_typed_fields(
+        db, project_id, data, chars, orgs, list(sorted(used.values(), key=lambda x: (x.sort, x.id)))
+    )
+    await categories.check_categories_revision(db, project_id, category_revision)
+    return data
 
+
+async def _export_typed_fields(db, project_id, data, chars, orgs, careers):
+    """导出最新有效快照；所有局部 ref 独立于源数据库身份。"""
+    with db.no_autoflush:
+        # 省略空快照前先验证全部保留历史，不能把非法 inactive/orphan 绑定悄悄藏起。
+        await fields.validate_project_field_graph(db, project_id)
+        groups = (("character", "characters", chars), ("organization", "organizations", orgs),
+                  ("career", "careers", careers))
+        entries = [EntityRef(kind=kind, id=item.id) for kind, _, items in groups for item in items]
+        resolved = await fields.resolve_entry_fields(db, project_id, entries)
+        revision = (
+            next(iter(resolved.values())).fields_revision if resolved else await fields.fields_revision(db, project_id)
+        )
+        local = {}
+        for kind, key, items in groups:
+            for index, (item, output) in enumerate(zip(items, data[key], strict=True), 1):
+                output["ref"] = local[kind, item.id] = f"{kind}.{index}"
+                output["setting_tags"] = list(item.setting_tags)
+        definition_ids = {
+            slot.definition_id for value in resolved.values() for slot in value.fields if slot.field_id is not None
+        }
+        definitions = list(await db.scalars(select(SettingFieldDefinition).where(
+            SettingFieldDefinition.project_id == project_id, SettingFieldDefinition.id.in_(definition_ids),
+        ).order_by(SettingFieldDefinition.sort, SettingFieldDefinition.id)))
+        await fields.check_fields_revision(db, project_id, revision)
+        by_definition = {definition.id: definition for definition in definitions}
+        snapshot_fields = {
+            key: [slot for slot in value.fields if slot.field_id is not None and (
+                value.entry.type in by_definition[slot.definition_id].applicable_types
+                or has_field_content(slot.value)
+            )]
+            for key, value in resolved.items()
+        }
+        definition_ids = {slot.definition_id for slots in snapshot_fields.values() for slot in slots}
+        definitions = [definition for definition in definitions if definition.id in definition_ids]
+        options = list(await db.scalars(select(SettingFieldOption).where(
+            SettingFieldOption.definition_id.in_(definition_ids),
+        ).order_by(SettingFieldOption.sort, SettingFieldOption.id)))
+        definition_refs, option_refs, snapshots = {}, {}, []
+        for index, definition in enumerate(definitions, 1):
+            ref = definition_refs[definition.id] = f"definition.{index}"
+            option_snapshots = []
+            for index, option in enumerate((o for o in options if o.definition_id == definition.id), 1):
+                option_ref = option_refs[option.id] = f"{ref}.option.{index}"
+                option_snapshots.append({"ref": option_ref, "label": option.label, "sort": option.sort,
+                                         "archived": option.archived})
+            snapshots.append({"ref": ref, **{key: getattr(definition, key) for key in (
+                "label", "field_type", "applicable_types", "reference_types", "sort", "archived",
+            )}, "options": option_snapshots})
+        external_targets = {}
+        for slots in snapshot_fields.values():
+            for slot in slots:
+                if slot.field_id is not None and slot.field_type == "reference" and slot.value is not None:
+                    target = EntityRef.model_validate(slot.value)
+                    if (target.kind, target.id) not in local:
+                        external_targets[target.kind, target.id] = target
+        external_entries = await catalog.get_entries(db, project_id, list(external_targets.values()))
+        externals = []
+        for index, (key, target) in enumerate(external_entries.items(), 1):
+            local[key] = f"external.{index}"
+            externals.append(
+                {"ref": local[key], "kind": target.reference.kind, "type": target.type, "name": target.name}
+            )
+        for kind, key, items in groups:
+            for item, output in zip(items, data[key], strict=True):
+                value = resolved[kind, item.id]
+                if kind == "character":
+                    output["custom_text_fields"] = [
+                        {"name": slot.label, "value": slot.value} for slot in value.legacy_fields
+                    ]
+                output["fields"] = []
+                for slot in snapshot_fields[kind, item.id]:
+                    public = slot.value
+                    if public is not None and slot.field_type == "dropdown":
+                        public = {"option_ref": option_refs[public["option_id"]]}
+                    elif public is not None and slot.field_type == "reference":
+                        public = {"entry_ref": local[public["kind"], public["id"]]}
+                    output["fields"].append({"definition_ref": definition_refs[slot.definition_id], "value": public})
+        data["field_definitions"], data["external_references"] = snapshots, externals
+        await fields.check_fields_revision(db, project_id, revision)
 
 # ---------------- 解析 / 校验 ----------------
 
@@ -220,7 +330,7 @@ def parse_card(data: Any) -> CardFile:
     if data.get("format") != CARD_FORMAT:
         raise BadRequestError("不是有效的卡片文件（format 应为 ainovel.cards）")
     version = data.get("version")
-    if isinstance(version, bool) or version not in SUPPORTED_CARD_VERSIONS:
+    if type(version) is not int or version not in SUPPORTED_CARD_VERSIONS:
         supported = "、".join(str(v) for v in SUPPORTED_CARD_VERSIONS)
         raise BadRequestError(f"不支持的卡片版本：{version}（当前支持 {supported}）")
     try:
@@ -291,11 +401,147 @@ def _preview_items(names: list[str], existing: dict[str, int]) -> list[PreviewIt
     return items
 
 
-async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: Any) -> CardPreview:
+@dataclass
+class _TypedPlan:
+    revision: int
+    definitions: list[PreviewFieldDefinition] = field(default_factory=list)
+    references: list[PreviewReference] = field(default_factory=list)
+    # 新建条目的 ref；跳过条目的字段和值从不写入。
+    created: set[str] = field(default_factory=set)
+
+    @property
+    def can_import(self):
+        return (all(item.status in ("new", "rename", "reuse") for item in self.definitions)
+                and all(item.status != "unresolved" for item in self.references))
+
+
+def _card_entries(card):
+    return [(kind, item) for kind, items in (("character", card.characters), ("organization", card.organizations),
+                                            ("career", card.careers)) for item in items]
+
+
+def _compatible_definition(source, target):
+    return (source.field_type == target.field_type
+            and set(source.applicable_types) <= set(target.applicable_types)
+            and set(source.reference_types) <= set(target.reference_types))
+
+
+async def _typed_plan(db, project_id, card, resolutions, mappings):
+    with db.no_autoflush:
+        revision = await fields.fields_revision(db, project_id)
+        plan = _TypedPlan(revision)
+        if card.version < 4:
+            return plan
+        char_names, org_names = await _existing(db, project_id)
+        career_names = await _target_careers(db, project_id)
+        existing = {"character": char_names, "organization": org_names, "career": career_names}
+        decisions = {"character": resolutions.characters, "organization": resolutions.organizations,
+                     "career": resolutions.careers}
+        entries = {item.ref: (kind, item) for kind, item in _card_entries(card)}
+        external = {item.ref: item for item in card.external_references}
+        definitions = {item.ref: item for item in card.field_definitions}
+        if (
+            set(mappings.references) - (entries.keys() | external.keys())
+            or set(mappings.definitions) - definitions.keys()
+        ):
+            raise BadRequestError("映射包含不存在的卡片 ref")
+        for ref, (kind, item) in entries.items():
+            if item.name not in existing[kind] or decisions[kind].get(item.name) == "rename":
+                plan.created.add(ref)
+        active_definitions = set()
+        referenced: dict[str, list[Any]] = {}
+        for ref, (kind, item) in entries.items():
+            if ref not in plan.created:
+                continue
+            for snapshot in item.fields:
+                definition = definitions[snapshot.definition_ref]
+                if kind not in definition.applicable_types:
+                    raise BadRequestError(f"字段「{definition.label}」不适用于「{item.name}」")
+                active_definitions.add(definition.ref)
+                if definition.field_type == "reference" and snapshot.value is not None:
+                    referenced.setdefault(snapshot.value["entry_ref"], []).append((item.name, definition))
+        target_definitions = list(await db.scalars(select(SettingFieldDefinition).where(
+            SettingFieldDefinition.project_id == project_id,
+        ).order_by(SettingFieldDefinition.sort, SettingFieldDefinition.id)))
+        target_options = list(await db.scalars(select(SettingFieldOption).where(
+            SettingFieldOption.definition_id.in_([d.id for d in target_definitions]),
+        ).order_by(SettingFieldOption.sort, SettingFieldOption.id)))
+        taken = {d.label for d in target_definitions} | {d.label for d in definitions.values()}
+        planned_labels = set()
+        for source in card.field_definitions:
+            if source.ref not in active_definitions:
+                continue
+            compatible = [d for d in target_definitions if _compatible_definition(source, d)]
+            dto = PreviewFieldDefinition(ref=source.ref, label=source.label, field_type=source.field_type,
+                status="conflict" if source.label in {d.label for d in target_definitions} else "new",
+                options=source.options, compatible_targets=[DefinitionOut.model_validate({
+                    **{key: getattr(d, key) for key in DefinitionOut.model_fields if key != "options"},
+                    "options": [OptionOut.model_validate(o) for o in target_options if o.definition_id == d.id],
+                }) for d in compatible])
+            decision = mappings.definitions.get(source.ref)
+            if decision is not None and decision.action == "reuse":
+                target = next((d for d in compatible if d.id == decision.target_definition_id), None)
+                allowed_options = {o.id for o in target_options if target and o.definition_id == target.id}
+                if (target is None or set(decision.option_mappings) != {o.ref for o in source.options}
+                        or not set(decision.option_mappings.values()) <= allowed_options):
+                    dto.status, dto.reason = "incompatible", "复用定义不兼容，或选项尚未全部显式映射"
+                else:
+                    dto.status, dto.target_definition_id = "reuse", target.id
+            elif decision is not None and decision.action == "rename":
+                name = decision.label.strip() if decision.label else rename_for(source.label, taken)
+                if not name or name in {d.label for d in target_definitions} or name in planned_labels:
+                    dto.status, dto.reason = "incompatible", "新定义名称已存在或为空"
+                else:
+                    dto.status, dto.rename_to = "rename", name
+                    taken.add(name)
+                    planned_labels.add(name)
+            elif dto.status == "new":
+                if source.label in planned_labels:
+                    dto.status, dto.reason = "incompatible", "导入方案中有多个字段使用相同的新名称"
+                else:
+                    planned_labels.add(source.label)
+            plan.definitions.append(dto)
+        for ref, sources in referenced.items():
+            kind, local = entries.get(ref, (None, None))
+            kind = kind or external[ref].kind
+            name = local.name if local is not None else external[ref].name
+            result = PreviewReference(ref=ref, kind=kind, name=name, status="unresolved",
+                                      source_fields=[f"{name} / {definition.label}" for name, definition in sources])
+            target = mappings.references.get(ref)
+            if ref in plan.created:
+                if target is not None:
+                    raise BadRequestError("新建或重命名条目已由包内 ref 解析，请移除多余映射")
+                result.status = "internal"
+                target_type = kind
+            elif target is not None:
+                if target.kind != kind:
+                    result.reason = "映射的条目类型不一致"
+                    target_type = ""
+                else:
+                    try:
+                        entry = await catalog.get_entry(db, project_id, target.kind, target.id)
+                    except AppError:
+                        result.reason, target_type = "映射目标不存在或不属于当前作品", ""
+                    else:
+                        result.status, result.target, target_type = "mapped", target, entry.type
+            else:
+                target_type = ""
+                result.reason = "请选择当前作品中的具体条目，或将包内同名条目重命名导入"
+            if target_type and any(target_type not in definition.reference_types for _, definition in sources):
+                result.status, result.reason = "unresolved", "映射目标不在字段允许的引用范围内"
+            plan.references.append(result)
+        await fields.check_fields_revision(db, project_id, revision)
+        return plan
+
+async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: Any,
+                        request: CardPreviewRequest | None = None) -> CardPreview:
     await get_owned_project(db, user_id, project_id)
     card = parse_card(data)
+    request = request or CardPreviewRequest(data=data)
+    category_revision = await categories.categories_revision(db, project_id)
+    typed = await _typed_plan(db, project_id, card, request.resolutions, request.mappings)
     warnings: list[str] = []
-    chars = _dedupe_names(card.characters, "角色", warnings)
+    chars = list(card.characters) if card.version >= 4 else _dedupe_names(card.characters, "角色", warnings)
     orgs = _dedupe_names(card.organizations, "组织", warnings)
     existing_chars, existing_orgs = await _existing(db, project_id)
     for c in chars:
@@ -321,8 +567,18 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
     careers = _dedupe_names(card.careers, "职业", warnings)
     target = await _target_careers(db, project_id)
     preview_careers = []
+    taken_careers = set(target) | {cc.name for cc in careers}
     for cc in careers:
         if cc.name in target:
+            if card.version >= 4:
+                rename = request.resolutions.careers.get(cc.name) == "rename"
+                rename_to = rename_for(cc.name, taken_careers)
+                if rename:
+                    taken_careers.add(rename_to)
+                preview_careers.append(PreviewCareer(
+                    name=cc.name, status="rename" if rename else "conflict", rename_to=rename_to,
+                ))
+                continue
             have = {s.name for s in target[cc.name][1]}
             added = [n for n in _stage_names(cc) if n not in have]
             preview_careers.append(PreviewCareer(name=cc.name, status="reuse", stages_added=added))
@@ -333,7 +589,12 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
         for a in c.careers:
             if a.career_name.strip() not in known_careers:
                 warnings.append(f"角色「{c.name}」的职业「{a.career_name}」无法关联，将被忽略")
+    await fields.check_fields_revision(db, project_id, typed.revision)
+    await categories.check_categories_revision(db, project_id, category_revision)
     return CardPreview(
+        categories_revision=category_revision,
+        fields_revision=typed.revision, can_import=typed.can_import,
+        field_definitions=typed.definitions, references=typed.references,
         characters=_preview_items([c.name for c in chars], existing_chars),
         organizations=_preview_items([o.name for o in orgs], existing_orgs),
         relationships=rels,
@@ -376,8 +637,21 @@ def _clamp(value: int, low: int, high: int) -> int:
 async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: CardImportRequest) -> CardImportResult:
     await get_owned_project(db, user_id, project_id, lock=True)
     card = parse_card(req.data)
+    if card.version >= 5:
+        if req.expected_categories_revision is None:
+            raise BadRequestError("v5 卡片确认导入必须携带分类目录版本，请先预览",
+                                  extra={"code": "categories_revision_required"})
+        await categories.check_categories_revision(db, project_id, req.expected_categories_revision)
+    if card.version >= 4:
+        if req.expected_fields_revision is None:
+            raise BadRequestError("v4 卡片确认导入必须携带字段目录版本，请先预览")
+        await fields.check_fields_revision(db, project_id, req.expected_fields_revision)
+    typed = await _typed_plan(db, project_id, card, req.resolutions, req.mappings)
+    if not typed.can_import:
+        raise BadRequestError("卡片仍有未解决的字段定义或引用，请完成显式映射后再导入")
+    typed_locals: dict[str, EntityRef] = {}
     warnings: list[str] = []
-    chars = _dedupe_names(card.characters, "角色", warnings)
+    chars = list(card.characters) if card.version >= 4 else _dedupe_names(card.characters, "角色", warnings)
     orgs = _dedupe_names(card.organizations, "组织", warnings)
     existing_chars, existing_orgs = await _existing(db, project_id)
 
@@ -421,6 +695,8 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
                 db, timeline, [(field.name, field.value) for field in c.custom_text_fields]
             )
         char_map[c.name] = created.id
+        if c.ref:
+            typed_locals[c.ref] = EntityRef(kind="character", id=created.id)
         char_results.append(ImportedItem(name=c.name, imported_name=name, id=created.id, action=action))
 
     def char_id(name: str) -> int | None:
@@ -459,7 +735,10 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         next_sort += 1
         db.add(org)
         await db.flush()
+        await catalog.ensure_entry_timeline(db, project_id, "organization", org.id)
         org_map[o.name] = org.id
+        if o.ref:
+            typed_locals[o.ref] = EntityRef(kind="organization", id=org.id)
         new_orgs[o.name] = org
         org_results.append(ImportedItem(name=o.name, imported_name=name, id=org.id, action=action))
 
@@ -539,7 +818,14 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             members_created += 1
 
     # ---- 职业 ----
-    career_results, career_map = await _import_careers(db, project_id, card.careers, warnings)
+    career_results, career_map = await _import_careers(
+        db, project_id, card.careers, warnings, req.resolutions.careers if card.version >= 4 else None,
+    )
+    if card.version >= 4:
+        for career in card.careers:
+            if career.ref in typed.created:
+                typed_locals[career.ref] = EntityRef(kind="career", id=career_map[career.name].id)
+        await _apply_typed_fields(db, project_id, card, req.mappings, typed, typed_locals)
     careers_assigned = await _import_assignments(db, project_id, chars, char_map, career_map, career_results, warnings)
 
     # ---- 人物关系 ----
@@ -578,6 +864,14 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         )
         rels_created += 1
 
+    if card.version >= 5:
+        for _, item in _card_entries(card):
+            target = typed_locals.get(item.ref)
+            if target is not None:
+                await categories.apply_entry_tags(db, project_id, target.kind, target.id, item.setting_tags)
+        if typed_locals:
+            await categories.claim_categories_revision(db, project_id, req.expected_categories_revision)
+    await categories.validate_project_category_graph(db, project_id)
     await db.commit()
     return CardImportResult(
         characters=char_results,
@@ -590,16 +884,87 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     )
 
 
+async def _apply_typed_fields(db, project_id, card, mappings, plan, local_targets):
+    """在同一项目事务中先建配置及全部实体，再绑定 snapshot；不搬运源章锚。"""
+    definition_map, option_map = {}, {}
+    source_definitions = {item.ref: item for item in card.field_definitions}
+    changed = False
+    for preview in plan.definitions:
+        source = source_definitions[preview.ref]
+        if preview.status == "reuse":
+            definition_map[source.ref] = preview.target_definition_id
+            option_map.update(mappings.definitions[source.ref].option_mappings)
+            continue
+        definition = await fields.apply_definition(db, project_id, DefinitionCreate(
+            expected_fields_revision=plan.revision,
+            **{**source.model_dump(exclude={"ref", "options"}), "label": preview.rename_to or source.label},
+        ))
+        definition_map[source.ref] = definition.id
+        changed = True
+        for option in source.options:
+            created = SettingFieldOption(definition_id=definition.id, **option.model_dump(exclude={"ref"}))
+            db.add(created)
+            await db.flush()
+            option_map[option.ref] = created.id
+    targets = {item.ref: item.target for item in plan.references if item.target is not None}
+    targets.update(local_targets)
+    for _, item in _card_entries(card):
+        if item.ref not in plan.created:
+            continue
+        target = local_targets[item.ref]
+        timeline = await catalog.ensure_entry_timeline(db, project_id, target.kind, target.id)
+        for snapshot in item.fields:
+            source = source_definitions[snapshot.definition_ref]
+            canonical = snapshot.value
+            if canonical is not None and source.field_type == "dropdown":
+                canonical = {"option_id": option_map[canonical["option_ref"]]}
+            elif canonical is not None and source.field_type == "reference":
+                reference = targets[canonical["entry_ref"]]
+                entry = await catalog.get_entry(db, project_id, reference.kind, reference.id)
+                if entry.type not in source.reference_types:
+                    raise BadRequestError("卡片引用的映射目标不在字段允许范围内")
+                column = catalog.TARGET_COLUMNS[reference.kind]
+                handle = await db.scalar(select(SettingReferenceHandle).where(
+                    SettingReferenceHandle.project_id == project_id, SettingReferenceHandle.kind == reference.kind,
+                    getattr(SettingReferenceHandle, column) == reference.id,
+                ))
+                if handle is None:
+                    handle = SettingReferenceHandle(
+                        project_id=project_id, kind=reference.kind, **{column: reference.id}
+                    )
+                    db.add(handle)
+                    await db.flush()
+                canonical = {"reference_handle_id": handle.id}
+            binding = SettingTextField(timeline_id=timeline.id, definition_id=definition_map[source.ref],
+                                       label=None, base_value=canonical)
+            db.add(binding)
+            await db.flush()
+            # 卡片保存历史快照，可保留停用选项；复用正式 codec 的历史验证路径。
+            binding.base_value = await fields.encode_field_value(
+                db, timeline, binding, canonical, preserve_existing=True
+            )
+    if changed:
+        await fields.claim_fields_revision(db, project_id, plan.revision)
+    await db.flush()
+
+
 async def _import_careers(
-    db: AsyncSession, project_id: int, card_careers: list[CardCareer], warnings: list[str]
+    db: AsyncSession, project_id: int, card_careers: list[CardCareer], warnings: list[str],
+    resolutions: dict[str, str] | None = None,
 ) -> tuple[dict[str, ImportedCareer], dict[str, Career]]:
     """职业按名称复用（补齐阶段到末尾）或新建；返回 (卡片职业名 → 结果, 名称 → 目标职业)。"""
     target = await _target_careers(db, project_id)
     career_map = {name: c for name, (c, _) in target.items()}
     results: dict[str, ImportedCareer] = {}
+    taken = set(career_map) | {cc.name for cc in card_careers}
     for cc in _dedupe_names(card_careers, "职业", warnings):
         names = _stage_names(cc)
-        if cc.name in target:
+        if cc.name in target and resolutions is not None:
+            if resolutions.get(cc.name, "skip") == "skip":
+                career = target[cc.name][0]
+                results[cc.name] = ImportedCareer(name=cc.name, id=career.id, action="reused")
+                continue
+        if cc.name in target and resolutions is None:
             career, ladder = target[cc.name]
             have = {s.name for s in ladder}
             added = 0
@@ -617,11 +982,13 @@ async def _import_careers(
         descs: dict[str, str] = {}
         for st in cc.stages:
             descs.setdefault(st.name.strip()[:50], st.description)
+        name = rename_for(cc.name, taken) if cc.name in target and resolutions is not None else cc.name
+        taken.add(name)
         career = await career_service.new_career(
             db,
             project_id,
             CareerCreate(
-                name=cc.name,
+                name=name,
                 kind=cc.kind if cc.kind in CAREER_KINDS else "main",  # type: ignore[arg-type]
                 description=cc.description,
                 requirements=cc.requirements,

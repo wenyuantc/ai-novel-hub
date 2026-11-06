@@ -218,6 +218,10 @@ class Project(TimestampMixin, Base):
     reading_progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
     # 规划编辑及来源结构变动的并发版本，不随备份／快照恢复回退。
     planning_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # 字段目录 CAS；与条目时间线、规划编辑的版本彼此独立。
+    fields_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # 当前整理标签和分类规则的独立 CAS，不随字段或剧情时间线版本变化。
+    categories_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
 class ProjectCover(TimestampMixin, Base):
@@ -230,11 +234,13 @@ class ProjectCover(TimestampMixin, Base):
 
 class WorldSetting(TimestampMixin, Base):
     __tablename__ = "world_settings"
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     aliases: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    setting_tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # place / faction / item / rule / history / other
     category: Mapped[str] = mapped_column(String(16), default="other", server_default="other", nullable=False)
@@ -243,6 +249,7 @@ class WorldSetting(TimestampMixin, Base):
 
 class Character(TimestampMixin, Base):
     __tablename__ = "characters"
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -254,6 +261,7 @@ class Character(TimestampMixin, Base):
     # 旧关系备注：只读保留，可经 relations.parse 解析为结构化关系
     relations_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     aliases: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    setting_tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     age: Mapped[str] = mapped_column(String(50), default="", server_default="", nullable=False)
     gender: Mapped[str] = mapped_column(String(20), default="", server_default="", nullable=False)
     appearance: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
@@ -268,7 +276,7 @@ class Character(TimestampMixin, Base):
 
 class Organization(TimestampMixin, Base):
     __tablename__ = "organizations"
-    __table_args__ = (UniqueConstraint("project_id", "name"),)
+    __table_args__ = (UniqueConstraint("project_id", "name"), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -283,6 +291,7 @@ class Organization(TimestampMixin, Base):
         ForeignKey("organizations.id", ondelete="SET NULL"), index=True, nullable=True
     )
     description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    setting_tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
@@ -391,7 +400,7 @@ class Career(TimestampMixin, Base):
     """职业定义。kind 决定只能挂为主职业（main）还是副职业（sub）。"""
 
     __tablename__ = "careers"
-    __table_args__ = (UniqueConstraint("project_id", "name"),)
+    __table_args__ = (UniqueConstraint("project_id", "name"), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -405,6 +414,7 @@ class Career(TimestampMixin, Base):
     abilities: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     # 体系规则
     rules: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    setting_tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 

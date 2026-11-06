@@ -20,7 +20,7 @@ import { assignmentApi, careerBadges } from '../../api/careers'
 import { ApiError, errorMessage } from '../../api/client'
 import { baselineEditorLabel, progressionApi } from '../../api/progressions'
 import { characterApi } from '../../api/story'
-import type { Character, SettingBaseline } from '../../api/types'
+import type { Character, ProgressionPositionInput, SettingBaseline } from '../../api/types'
 import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
@@ -40,7 +40,9 @@ import { CharacterBasicFields, CharacterDescFields, CharacterStateFields } from 
 import CharacterMembershipsTab from '../../components/entities/CharacterMembershipsTab'
 import CharacterRelationsTab from '../../components/entities/CharacterRelationsTab'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
-import SettingProgressionsPanel from '../../components/progressions/SettingProgressionsPanel'
+import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
+import SettingTagsPanel from '../../components/settingTags/SettingTagsPanel'
+import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
 import WizardModal from '../../components/WizardModal'
 import { usePublishAgentContext } from '../../hooks/useAgentPageContext'
 import { useLoader } from '../../hooks/useLoader'
@@ -54,6 +56,8 @@ import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import EntityMentions from '../../components/mentions/EntityMentions'
 import { ALL_CHARACTERS, characterPage, characterRoleFilters, filterCharacters } from '../../utils/characterList'
 import './CharactersPanel.css'
+import { useSearchParams } from 'react-router-dom'
+import { readEntityFieldPosition } from '../../utils/entityLinks'
 
 // 伏笔 Tab 只在打开角色抽屉并切到该 Tab 时才需要：按需加载，伏笔页的 API / 标签代码不进入口 chunk
 const CharacterForeshadowsTab = lazy(() => import('../../components/foreshadows/CharacterForeshadowsTab'))
@@ -61,6 +65,8 @@ const CharacterForeshadowsTab = lazy(() => import('../../components/foreshadows/
 /** 角色：卡片列表（按定位筛选、勾选导出、主职业·阶段）+ 分 Tab 编辑抽屉（基础 / 描写 / 状态 / 关系 / 组织 / 职业 / 伏笔）。 */
 export default function CharactersPanel() {
   const pid = useProjectId()
+  const tagsSession = useSettingTagsSession(pid)
+  const [searchParams] = useSearchParams()
   const { canUseAI, canEdit, canReadNow, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const user = useAuthStore((s) => s.user)
@@ -76,6 +82,7 @@ export default function CharactersPanel() {
   const [editing, setEditing] = useState<Character | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [tab, setTab] = useState('basic')
+  const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
@@ -199,7 +206,8 @@ export default function CharactersPanel() {
     editingRef.current = item
     setEditorTicket(ticket)
     setEditing(item)
-    setTab('basic')
+    setFieldPosition(item && searchParams.get('id') === String(item.id) ? readEntityFieldPosition(searchParams) : null)
+    setTab(item && searchParams.get('id') === String(item.id) && readEntityFieldPosition(searchParams) ? 'progression' : 'basic')
     savingRef.current = false
     setSaving(false)
     baselineBlocked.current = !!item
@@ -341,6 +349,7 @@ export default function CharactersPanel() {
     try {
       if (!canEditNow()) return false
       await characterApi.remove(pid, item.id)
+      tagsSession.forget({ kind: 'character', id: item.id })
       if (!canEditNow()) return false
       message.success('已删除（相关关系、组织成员与职业挂接一并清理）')
       invalidateProject(pid, ['characters', 'relationships', 'organizations', 'careers'])
@@ -551,7 +560,8 @@ export default function CharactersPanel() {
               { key: 'state', label: '状态', forceRender: true, children: <CharacterStateFields isBaseline={!!editing} /> },
               ...(editing
                 ? [
-                    { key: 'progression', label: '剧情变化', children: null },
+                    { key: 'progression', label: '字段与剧情变化', children: null },
+                    { key: 'tags', label: '整理标签', children: null },
                     { key: 'mentions', label: '提及', children: null },
                     {
                       key: 'rel',
@@ -583,18 +593,20 @@ export default function CharactersPanel() {
           />
         </Form>
         </Spin>
+        {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'tags' && <SettingTagsPanel session={tagsSession} entry={{ kind: 'character', id: editing.id }} />}
         {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'mentions' && <EntityMentions projectId={pid} entity={{ kind: 'character', id: editing.id }} />}
-        {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'progression' && (
-          <SettingProgressionsPanel
+        {editing && editorTicket?.projectId === pid && drawerOpen && (
+          <div hidden={tab !== 'progression'}><SettingEntryFieldsPanel
             key={`${pid}:character:${editing.id}`}
             projectId={pid}
-            target={{ subject_kind: 'character', character_id: editing.id }}
+            entry={{ kind: 'character', id: editing.id }}
+            initialPosition={fieldPosition}
             onChanged={(revision) => handleProgressionChanged(editorTicket, editing, revision)}
             onRequestConfirmBaseline={() => void confirmBaseline(editorTicket)}
-          />
+          /></div>
         )}
         {!editing && (
-          <Typography.Text type="secondary">保存后可在「关系」「组织」「职业」Tab 中设置人物关系、所属组织与职业阶段。</Typography.Text>
+          <Typography.Text type="secondary">保存后可维护本角色的整理标签、字段与剧情变化，并设置人物关系、所属组织与职业阶段。</Typography.Text>
         )}
       </Drawer>
 

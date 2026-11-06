@@ -575,13 +575,15 @@ async def _undo_changes(
     if any(row.kind == "task" for row in rows):
         raise ConflictError("已启动的任务不能撤销，请在任务面板取消")
     memory_changed = False
+    attempted_effects = []
     try:
         # 整轮先预检，再开始恢复；旧记录不能导致前几项先执行副作用。
-        effects.validate_effect_versions([effect for row in rows for effect in row.effects])
+        await effects.preflight_effect_versions(db, project_id, [effect for row in rows for effect in row.effects])
         for row in rows:
             if row.status != "executed":
                 raise ConflictError("只有已执行的修改可以撤销")
-            memory_changed = await effects.undo(db, project_id, row.effects) or memory_changed
+            attempted_effects.extend(row.effects)
+            memory_changed = await effects.undo(db, project_id, row.effects, discard_inserts=False) or memory_changed
             row.status, row.undone_at = "undone", datetime.now(UTC)
             db.add(
                 AgentMessage(
@@ -595,7 +597,10 @@ async def _undo_changes(
         await db.commit()
     except BaseException:
         await db.rollback()
+        if attempted_effects:
+            await effects.refresh_after_rollback(db, project_id, attempted_effects)
         raise
+    effects.discard_undone_inserts(db, attempted_effects)
     if memory_changed and engine is not None:
         from app.services import kb_index_service
 

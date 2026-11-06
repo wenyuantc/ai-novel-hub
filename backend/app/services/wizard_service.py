@@ -54,6 +54,7 @@ from app.models import (
 from app.models.entities import WORLD_CATEGORIES
 from app.schemas.career import CareerCreate
 from app.schemas.chapter import WizardRequest
+from app.schemas.setting_fields import EntityRef
 from app.schemas.story import CharacterOut, OutlineOut, WorldSettingOut
 from app.services import (
     ai_config_service,
@@ -65,7 +66,7 @@ from app.services import (
     project_lifecycle,
     prompt_service,
     relationship_service,
-    setting_progression_service,
+    setting_field_service,
     story_service,
 )
 from app.services.cast_service import is_protagonist_role
@@ -181,16 +182,23 @@ async def validate_wizard(
     return cfg.id
 
 
-async def _require_safe_replacement(db: AsyncSession, project_id: int, kind: WizardKind) -> None:
+async def _require_safe_replacement(db: AsyncSession, project_id: int, kind: WizardKind) -> list[EntityRef]:
     """调用方持项目写锁；避免覆盖及其级联删除丢失现存变化和自定义字段。"""
     if kind == "characters":
+        model, entry_kind = Character, "character"
         affected = or_(SettingTimeline.character_id.is_not(None), SettingTimeline.related_character_id.is_not(None))
     elif kind == "world":
+        model, entry_kind = WorldSetting, "world"
         affected = SettingTimeline.world_setting_id.is_not(None)
     elif kind == "careers":
+        model, entry_kind = Career, "career"
         affected = SettingTimeline.career_id.is_not(None)
     else:
-        return
+        return []
+    targets = [EntityRef(kind=entry_kind, id=entry_id) for entry_id in await db.scalars(
+        select(model.id).where(model.project_id == project_id)
+    )]
+    await setting_field_service.assert_targets_unreferenced(db, project_id, targets)
     progression = select(SettingProgression.id).where(
         SettingProgression.timeline_id == SettingTimeline.id, SettingProgression.active.is_(True)
     ).exists()
@@ -205,6 +213,7 @@ async def _require_safe_replacement(db: AsyncSession, project_id: int, kind: Wiz
             "覆盖会删除设定的剧情变化或自定义字段，请先在设定详情中处理这些记录",
             extra={"code": "wizard_history_conflict"},
         )
+    return targets
 
 
 async def build_wizard_job(
@@ -643,8 +652,9 @@ async def save_wizard_result(
     大纲覆盖模式（默认）与其他类型一样覆盖旧数据（覆盖前存大纲快照）；大纲追加模式不删旧数据，items 只含新增条目。
     """
     await project_lifecycle.lock_active(db, project_id)
-    await _require_safe_replacement(db, project_id, kind)
+    targets = await _require_safe_replacement(db, project_id, kind)
     obj = extract_json(raw_text)
+    await setting_field_service.cleanup_unreferenced_handles(db, project_id, targets)
     if kind == "careers":
         return await _save_careers(db, project_id, obj)
     model, normalize, out_schema = _KIND_SPEC[kind]
@@ -657,15 +667,14 @@ async def save_wizard_result(
                 db, project_id, list(await db.scalars(select(Character.id).where(Character.project_id == project_id)))
             )
         await db.execute(delete(model).where(model.project_id == project_id))
-    entities = [model(project_id=project_id, **row) for row in rows]
-    db.add_all(entities)
-    await db.flush()
     if kind == "characters":
-        for entity in entities:
-            await setting_progression_service.create_character_timeline(db, entity)
+        entities = [await story_service.new_character(db, project_id, row) for row in rows]
     elif kind == "world":
-        for entity in entities:
-            await setting_progression_service.create_world_timeline(db, entity)
+        entities = [await story_service.new_world(db, project_id, row) for row in rows]
+    else:
+        entities = [model(project_id=project_id, **row) for row in rows]
+        db.add_all(entities)
+        await db.flush()
     rels = []
     assignments: list[CharacterCareer] = []
     warnings: list[str] = []

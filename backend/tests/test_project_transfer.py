@@ -1,7 +1,9 @@
 """项目 JSON 备份与导入：注册表反射、往返一致、可选项、风格、全局关系类型、校验与回滚、跨用户、导入后检索。"""
 
 import json
+from copy import deepcopy
 
+import pytest
 from sqlalchemy import JSON, func, select
 
 from app.models import (
@@ -33,7 +35,10 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    SettingFieldDefinition,
+    SettingFieldOption,
     SettingProgression,
+    SettingReferenceHandle,
     SettingTextField,
     SettingTimeline,
     StoryMemory,
@@ -400,6 +405,8 @@ async def _seed_legacy_timelines(app, project_id: int) -> None:
         assignments = list(
             await db.scalars(select(CharacterCareer).join(Character).where(Character.project_id == project_id))
         )
+        organizations = list(await db.scalars(select(Organization).where(Organization.project_id == project_id)))
+        careers = list(await db.scalars(select(Career).where(Career.project_id == project_id)))
         members = list(
             await db.scalars(select(OrganizationMember).join(Character).where(Character.project_id == project_id))
         )
@@ -408,6 +415,12 @@ async def _seed_legacy_timelines(app, project_id: int) -> None:
         )
         db.add_all(
             [
+                *(SettingTimeline(project_id=project_id, subject_kind="organization", organization_id=o.id,
+                                  baseline={}, baseline_status="confirmed", legacy_compat_allowed=False)
+                  for o in organizations),
+                *(SettingTimeline(project_id=project_id, subject_kind="career_entry", career_id=c.id,
+                                  baseline={}, baseline_status="confirmed", legacy_compat_allowed=False)
+                  for c in careers),
                 *(
                     SettingTimeline(
                         **common, subject_kind="world", world_setting_id=w.id, baseline={"content": w.content}
@@ -573,7 +586,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 3 and data["app_schema"] == "0034"
+    assert data["version"] == 5 and data["app_schema"] == "0036"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -647,8 +660,13 @@ async def test_v1_import_creates_unverified_baselines_without_replaying_history(
     async with app.state.sessionmaker() as db:
         pid = result["project"]["id"]
         timelines = list(await db.scalars(select(SettingTimeline).where(SettingTimeline.project_id == pid)))
-        assert {t.subject_kind for t in timelines} == {"world", "character", "relationship", "career", "membership"}
-        assert all(t.baseline_status == "legacy_unverified" and t.legacy_compat_allowed for t in timelines)
+        assert {t.subject_kind for t in timelines} == {
+            "world", "character", "relationship", "career", "membership", "organization", "career_entry",
+        }
+        old = [t for t in timelines if t.subject_kind not in ("organization", "career_entry")]
+        assert all(t.baseline_status == "legacy_unverified" and t.legacy_compat_allowed for t in old)
+        assert all(t.baseline == {} and t.baseline_status == "confirmed" and not t.legacy_compat_allowed
+                   for t in timelines if t.subject_kind in ("organization", "career_entry"))
         assert await db.scalar(
             select(func.count())
             .select_from(SettingProgression)
@@ -944,7 +962,7 @@ async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client,
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 3
+    assert src["format"] == "ainovel.project" and src["version"] == 5
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 不导出任务 / 分块 / 检索单元
     assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
@@ -1238,7 +1256,7 @@ async def test_validation_errors(client, app, monkeypatch):
         (b"not json", "不是合法的 JSON"),
         (b"[1]", "应为 JSON 对象"),
         (dump({**data, "format": "ainovel.cards"}), "format 应为 ainovel.project"),
-        (dump({**data, "version": 4}), "备份来自更新的版本"),
+        (dump({**data, "version": 6}), "备份来自更新的版本"),
         (dump({**data, "version": 0}), "不支持的备份版本"),
         ("﻿".encode() + b"{" * 1 + b'"format": "x"}', "format 应为"),
     ]
@@ -1490,3 +1508,218 @@ def test_token_cache_global_cap(monkeypatch):
     assert tokens[0] not in importer._CACHE
     assert all(t in importer._CACHE for t in tokens[1:])
     importer.clear_tokens()
+
+
+async def _typed_fields_backup(client, app):
+    project, ids = await _setup(client, app)
+    async with app.state.sessionmaker() as db:
+        timeline = await db.scalar(select(SettingTimeline).where(
+            SettingTimeline.project_id == project["id"], SettingTimeline.subject_kind == "character",
+            SettingTimeline.character_id == ids["characters"][0],
+        ))
+        definitions = []
+        for kind in ("text", "line", "dropdown", "reference"):
+            definition = SettingFieldDefinition(
+                project_id=project["id"], label=f"字段{kind}", field_type=kind,
+                applicable_types=["character", "organization", "career"],
+                reference_types=["world.place", "world.rule"] if kind == "reference" else [],
+            )
+            db.add(definition)
+            definitions.append(definition)
+        await db.flush()
+        options = [SettingFieldOption(definition_id=definitions[2].id, label="旧选项", archived=True),
+                   SettingFieldOption(definition_id=definitions[2].id, label="新选项")]
+        worlds = list(await db.scalars(select(WorldSetting).where(WorldSetting.project_id == project["id"])))
+        handles = [SettingReferenceHandle(project_id=project["id"], kind="world", world_setting_id=w.id)
+                   for w in worlds]
+        db.add_all([*options, *handles])
+        await db.flush()
+        values = ["保留原文\n第二行", "单行", {"option_id": options[0].id}, None]
+        fields = [SettingTextField(timeline_id=timeline.id, definition_id=d.id, label=None, base_value=value)
+                  for d, value in zip(definitions, values, strict=True)]
+        db.add_all(fields)
+        await db.flush()
+        db.add_all(
+            [
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=fields[2].id,
+                    operation="replace",
+                    value={"option_id": options[1].id},
+                    anchor_kind="planned",
+                    chapter_no=20,
+                    boundary="end",
+                ),
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=fields[3].id,
+                    operation="replace",
+                    value={"reference_handle_id": handles[0].id},
+                    anchor_kind="planned",
+                    chapter_no=20,
+                ),
+                SettingProgression(
+                    timeline_id=timeline.id,
+                    custom_field_id=fields[3].id,
+                    operation="replace",
+                    value={"reference_handle_id": handles[1].id},
+                    anchor_kind="chapter",
+                    chapter_id=None,
+                    active=False,
+                    anchor_label="已删章节",
+                ),
+            ]
+        )
+        (await db.get(Project, project["id"])).fields_revision = 42
+        await db.commit()
+    return project, await _backup(client, project["id"])
+
+
+async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
+    project, data = await _typed_fields_backup(client, app)
+    assert (data["version"], data["app_schema"]) == (5, "0036")
+    assert "fields_revision" not in data["project"]
+    assert len(data["tables"]["setting_reference_handles"]) == 2
+    imported = await _import(client, data)
+    result = await _backup(client, imported["project"]["id"])
+    assert _canonical(data) == _canonical(result)
+    for table in (
+        "setting_field_definitions",
+        "setting_field_options",
+        "setting_reference_handles",
+        "setting_text_fields",
+    ):
+        assert {r["id"] for r in data["tables"][table]}.isdisjoint(r["id"] for r in result["tables"][table])
+    options = {o["label"]: o["id"] for o in result["tables"]["setting_field_options"]}
+    fields = result["tables"]["setting_text_fields"]
+    assert any(f["base_value"] == {"option_id": options["旧选项"]} for f in fields)
+    handles = {h["id"] for h in result["tables"]["setting_reference_handles"]}
+    events = result["tables"]["setting_progressions"]
+    assert {
+        e["value"]["reference_handle_id"]
+        for e in events
+        if isinstance(e["value"], dict) and "reference_handle_id" in e["value"]
+    } == handles
+    assert any(not e["active"] and e["chapter_id"] is None for e in events)
+    async with app.state.sessionmaker() as db:
+        assert (await db.get(Project, imported["project"]["id"])).fields_revision == 0
+        assert (await db.get(Project, project["id"])).fields_revision == 42
+
+
+async def test_typed_v4_preview_rejects_missing_and_incompatible_history(client, app):
+    _, data = await _typed_fields_backup(client, app)
+    variants = []
+    missing = deepcopy(data)
+    missing["tables"]["setting_reference_handles"].pop()
+    variants.append(missing)
+    missing = deepcopy(data)
+    missing["tables"].pop("setting_field_options")
+    variants.append(missing)
+    incompatible = deepcopy(data)
+    incompatible["tables"]["setting_field_definitions"][3]["reference_types"] = ["character"]
+    variants.append(incompatible)
+    bad_option = deepcopy(data)
+    bad_option["tables"]["setting_field_options"][0]["definition_id"] = data["tables"]["setting_field_definitions"][0][
+        "id"
+    ]
+    variants.append(bad_option)
+    for value in variants:
+        response = await _preview_raw(client, json.dumps(value).encode())
+        assert response.status_code == 400, response.text
+        assert response.json()["errors"]
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+async def test_old_backups_reject_typed_configuration_without_bindings(client, app, version):
+    project, _ = await _setup(client, app)
+    original = await _backup(client, project["id"])
+    original["version"] = version
+    original["tables"]["setting_timelines"] = [
+        row for row in original["tables"]["setting_timelines"]
+        if row["subject_kind"] not in ("organization", "career_entry")
+    ]
+    assert not original["tables"]["setting_text_fields"]
+    for table in importer.FIELD_TABLES:
+        data = deepcopy(original)
+        # 旧版本没有这些表，不能把仅配置的未来语义静默清空。
+        data["tables"][table] = [{"id": 99999}]
+        response = await _preview_raw(client, json.dumps(data).encode())
+        assert response.status_code == 400, (version, table, response.text)
+        assert "旧版" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("field_type", ["text", "line", "dropdown", "reference"])
+async def test_v4_roundtrip_preserves_empty_binding_after_scope_narrowing(client, app, field_type):
+    project, ids = await _setup(client, app)
+    base = f"{API}/{project['id']}"
+    created = await client.post(f"{base}/setting-field-definitions", json={
+        "expected_fields_revision": 0, "label": "可留空字段", "field_type": field_type,
+        "applicable_types": ["character", "organization"],
+        "reference_types": ["character"] if field_type == "reference" else [],
+    })
+    assert created.status_code == 201, created.text
+    definition_id = created.json()["item"]["id"]
+    fields_url = f"{base}/setting-entries/character/{ids['characters'][0]}/fields"
+    initial = (await client.get(fields_url)).json()
+    empty = "" if field_type in ("text", "line") else None
+    saved = await client.patch(f"{fields_url}/{definition_id}/baseline", json={
+        "expected_fields_revision": 1, "expected_timeline_revision": initial["timeline_revision"],
+        "field_type": field_type, "value": empty,
+    })
+    assert saved.status_code == 200, saved.text
+    changed = await client.patch(f"{base}/setting-field-definitions/{definition_id}", json={
+        "expected_fields_revision": 1, "applicable_types": ["organization"],
+    })
+    assert changed.status_code == 200, changed.text
+    data = await _backup(client, project["id"])
+    imported = await _import(client, data)
+    exported = await _backup(client, imported["project"]["id"])
+    assert _canonical(data) == _canonical(exported)
+    binding = data["tables"]["setting_text_fields"][0]
+    # 空值事件也是保留的历史，即使 inactive+orphan 也不能排除其主体类型。
+    data["tables"]["setting_progressions"].append({
+        "id": 99999, "timeline_id": binding["timeline_id"], "custom_field_id": binding["id"],
+        "field_key": None, "operation": "replace", "value": empty, "anchor_kind": "chapter",
+        "chapter_id": None, "chapter_no": None, "boundary": "end", "sort_order": 0,
+        "source": "manual", "protection": "manual", "revision": 1, "active": False,
+    })
+    rejected = await _preview_raw(client, json.dumps(data).encode())
+    assert rejected.status_code == 400, rejected.text
+    assert any("适用类型" in error for error in rejected.json()["errors"])
+
+
+async def test_v3_upgrade_cannot_smuggle_typed_fields(client, app):
+    _, data = await _typed_fields_backup(client, app)
+    data["version"] = 3
+    response = await _preview_raw(client, json.dumps(data).encode())
+    assert response.status_code == 400, response.text
+    assert "旧版" in response.json()["detail"]
+
+
+async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(client, app):
+    project, ids = await _setup(client, app)
+    await _seed_progression_changes(app, project["id"], ids)
+    original = await _backup(client, project["id"])
+    for version in (2, 3):
+        data = deepcopy(original)
+        data["version"] = version
+        for table in importer.FIELD_TABLES:
+            data["tables"].pop(table)
+        data["tables"]["setting_timelines"] = [row for row in data["tables"]["setting_timelines"]
+            if row["subject_kind"] not in ("organization", "career_entry")]
+        for field in data["tables"]["setting_text_fields"]:
+            field.pop("definition_id")
+        result = await _import(client, data)
+        exported = await _backup(client, result["project"]["id"])
+        assert exported["version"] == 5
+        assert all(not exported["tables"][table] for table in importer.FIELD_TABLES)
+        assert len(exported["tables"]["setting_progressions"]) == len(data["tables"]["setting_progressions"])
+        assert [f["base_value"] for f in exported["tables"]["setting_text_fields"]] == [
+            f["base_value"] for f in data["tables"]["setting_text_fields"]]
+        assert all(f["definition_id"] is None for f in exported["tables"]["setting_text_fields"])
+        assert {"organization", "career_entry"} <= {t["subject_kind"] for t in exported["tables"]["setting_timelines"]}
+    malformed = deepcopy(original)
+    malformed["version"] = 3
+    malformed["tables"]["setting_text_fields"] = 5
+    response = await _preview_raw(client, json.dumps(malformed).encode())
+    assert response.status_code == 400

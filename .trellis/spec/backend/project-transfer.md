@@ -43,7 +43,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   `careers`、`career_stages`、`character_careers`、`career_history`、`outlines`、`chapters`（`plan_id` deferred，`style_id` → `style_ref`）、
   `chapter_plans`、`chapter_characters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`generation_logs`（可选；`ai_config_id` /
   `task_id` 不导出）、`chapter_versions`（可选）、`chapter_analyses`（`task_id` 不导出）、`analysis_changes`、`story_memories`、`kb_settings`、
-  `kb_documents`（`status` / `chunk_count` 重算）、`setting_timelines`、`setting_text_fields`、`setting_progressions`、`outline_snapshots`（可选）、`inspiration_sessions`（可选；`project_id` / `converted_project_id`
+  `kb_documents`（`status` / `chunk_count` 重算）、`setting_timelines`、`setting_field_definitions`、`setting_field_options`、`setting_categories`、`setting_category_rules`、`setting_reference_handles`、`setting_text_fields`、`setting_progressions`、`outline_snapshots`（可选）、`inspiration_sessions`（可选；`project_id` / `converted_project_id`
   指向本项目的改写为新项目，指向其他项目的置空）。
 - **用户级表不登记、也不写进 `NOT_EXPORTED`**（`skills`、`skill_references`、`mcp_plugins`，迁移 `0019`，见 [skills-mcp.md](./skills-mcp.md)；
   同类的还有 `ai_configs`、`prompt_overrides`、`book_imports`）：反射测试只沿「引用方 → 被引用方」方向从 `projects` 扩散，这三张表只引用 `users` /
@@ -51,13 +51,14 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   反过来 `agent_messages.skill_id` 指向 `skills`，但 `agent_messages` 本身已在 `NOT_EXPORTED` 中，备份不含 Skill 引用；`agent_conversations.mcp_plugin_ids`
   同样随会话不导出。Skill / 插件属于用户而非作品，跨实例迁移走 Skill 的 SKILL.md / zip 导出与 `mcpServers` JSON 导入。
 - `project_covers` 属于项目表，但登记在 `NOT_EXPORTED`：图片二进制通过顶层可选 `cover` 字段导出导入，见 [项目封面](./project-cover.md)。
-- **JSON 内的 id**（`remap.py`，对应不上的置 null / 去掉，计数后汇总为一条警告）：
+- **JSON 内的 id**（`remap.py`；普通可选引用对应不上时置 null／去掉并汇总警告；字段选项／handle等核心引用缺失必须整笔拒绝）：
   | 列 | 处理 |
   |---|---|
   | `chapter_plans.character_ids` | 角色 id 列表，去掉对应不上的 |
   | `analysis_changes.target / before / after` | 递归改写 `ANALYSIS_ID_KEYS`（`character_id` / `a_id` / `b_id` → 角色、`relationship_id`、`type_id`、`career_id`、`stage_id`、`organization_id`、`foreshadow_id`）与 `character_ids` 列表；以 `writeback_service` 实际写入的键为准 |
   | `analysis_changes.field_key` | `char:{cid}:x`、`rel:{rid}:x`、`relpair:{low}:{high}`（改写后重新取 min/max）、`career:{cid}:{career_id}`、`org:{org_id}:{cid}`、`fs:{fid}:x`；对应不上 → 空串 |
   | `setting_timelines.baseline` / `setting_progressions.value` | `setting_payload` 按语义重映射嵌套角色、关系类型、职业阶段等 ID；`stage_id` 裸整数依据字段语义映射，不能将普通整数当 ID。事件来源须与同项目主体一致。 |
+  | `setting_text_fields.base_value` / `setting_progressions.value` | 按字段类型重映射option_id／reference_handle_id，包含inactive／orphan；text／line的普通文字不递归改写。缺核心依赖拒绝，不能静默清空。 |
   | `chapter_analyses.foreshadow_candidates` | 每项 `ref_id`（伏笔 id） |
   | `projects.reading_progress` | `chapter_id` → 章节；对应不上 / 结构不对 → 整个进度清空为 `{}`（计入警告「阅读进度…」），`ratio` 限制在 [0, 1]。项目先于章节插入，所以 importer 的 `_project` 先跳过 `PROJECT_RULE.json_refs` 的列，全部表插入并回填后由 `_project_refs` 改写（显式写回 `updated_at`）；预览的 `_dry_run_missing` 也会检查项目行 |
   | `outline_snapshots.data` | outlines / plans 的 `id`、plans 的 `outline_id` / `character_ids`、links 的三个 id；快照里已不存在的大纲 / 细纲分配**大于导入时该表最大 id** 的新 id（同一旧 id 得到同一新 id），指向已不存在章节的 link 去掉 |
@@ -80,11 +81,11 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 ---
 
-## 场景：备份格式 v3 与导出
+## 场景：备份格式 v5 与导出
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 3, exported_at, app_schema: "0034"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 5, exported_at, app_schema: "0036"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
@@ -138,6 +139,9 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
   （每批 500 行 flush，行号精确到批）。
 - v1 备份导入时以现有档案建立 `legacy_unverified` 基线，不重放不完整旧历史。v2 全量携带基线、字段、有效/失效事件及仅被历史引用的关系类型；校验来源与主体、JSON 引用和生命周期，失败整笔回滚。
 - v3 新增11张规划/支线表，绑定代次和退役状态保留；项目 planning_revision 排除并在新作品重置为0。typed FK、detached角色与快照 planning_bindings 的unit/plan均重映射。v2升级清除其未定义的规划字段/表，不能将旧版本夹带内容视为合法v3。已建章plan角色导出以ChapterCharacter为权威且不修改源库；完整规则见[规划矩阵与支线](./planning.md)。
+- v4新增三张字段核心表、JSON起始值及organization／career_entry时间线；v1–v3逐级转换，legacy文本成为原文JSON字符串，不按同名合并。旧格式夹带未来typed表／主体拒绝，测试真实旧版fixture也须移除新结构，不能只改version。fields_revision排除并在新作品重置，导入后validate_project_field_graph＋materialize_project同事务校验。完整合同见[自定义设定字段](./setting-fields.md)。
+- v5新增四实体`setting_tags`和两张分类核心表。旧v1–v4仅允许缺失或规范空数组的未来标签／分类表，补空升级；非空、null或非法形状明确拒绝，不能静默清理。v5必须提供两张核心表，preview与写入后分别用纯分类图和数据库分类图校验，与字段图校验共同保留。字段定义／选项先于分类／规则插入，三条真FK均重映射；规则`deferred`为空，数据库延迟约束不代表可先插null违反CHECK。
+- `PROJECT_RULE.exclude`同时排除`fields_revision/categories_revision`，新作品取默认值，不继承源运行代次。四实体标签与分类适用类型是`json_plain`，规则依赖不是普通可丢弃引用。完整规则、错误与测试见[自动分类契约](./setting-categories.md)。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。
   例外：封面不进入通用表注册表，而是新增可选顶层字段，曾保持原格式版本；不能用此例外跳过其他新增表的格式迁移评估。
 

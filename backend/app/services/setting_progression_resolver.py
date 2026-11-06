@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from pydantic import JsonValue
@@ -16,6 +16,8 @@ from app.schemas.progression import (
     StoryPosition,
     SubjectKind,
 )
+from app.services.setting_field_values import CanonicalFieldValue, FieldSpec, validate_field_value
+from app.services.setting_field_values import is_positive_db_int as _positive_integer
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +49,7 @@ class EffectiveSnapshot:
     applied_event_ids: tuple[int, ...]
     orphaned_event_ids: tuple[int, ...]
     baseline_status: BaselineStatus
+    field_values: dict[int, CanonicalFieldValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,8 @@ _RULES: dict[SubjectKind, dict[str, _FieldRule]] = {
         "status": _FieldRule("member_status"),
         "note": _FieldRule("text", append=True),
     },
+    "organization": {},
+    "career_entry": {},
 }
 
 _LIFECYCLE_FIELDS: dict[str, frozenset[str]] = {
@@ -88,10 +93,6 @@ _LIFECYCLE_FIELDS: dict[str, frozenset[str]] = {
     "career": frozenset({"role", "stage_id", "note"}),
     "membership": frozenset({"position", "status", "note"}),
 }
-
-
-def _positive_integer(value: object) -> bool:
-    return type(value) is int and 1 <= value <= 2_147_483_647
 
 
 def _validate_identity(value: object, subject_identity: tuple[int, int] | None) -> None:
@@ -168,6 +169,7 @@ def validate_progression_value(
     *,
     custom_field_id: int | None = None,
     subject_identity: tuple[int, int] | None = None,
+    field_spec: FieldSpec | None = None,
 ) -> None:
     """校验单次事件的字段、模式和值；不替代主体及外键的归属检查。
 
@@ -179,9 +181,11 @@ def validate_progression_value(
     if (field_key is None) == (custom_field_id is None):
         raise ValueError("内置字段与自定义字段必须且只能指定一个")
     if custom_field_id is not None:
-        if subject_kind not in ("character", "world") or not _positive_integer(custom_field_id):
+        if subject_kind not in ("character", "world", "organization", "career_entry") or not _positive_integer(
+            custom_field_id
+        ):
             raise ValueError("该主体不支持指定的自定义字段")
-        _validate_rule(_FieldRule("text", append=True), value, operation, subject_identity)
+        validate_field_value(field_spec or FieldSpec("text"), value, operation=operation)
         return
 
     if field_key == "presence":
@@ -267,13 +271,14 @@ def _append_text(previous: str, value: str) -> str:
 def resolve_progressions(
     subject_kind: SubjectKind,
     baseline: Mapping[str, JsonValue],
-    custom_fields: Mapping[int, str],
+    custom_fields: Mapping[int, CanonicalFieldValue],
     events: Iterable[ProgressionEvent],
     position: StoryPosition | None,
     *,
     baseline_status: BaselineStatus = "confirmed",
     exclude_event_ids: Iterable[int] = (),
     subject_identity: tuple[int, int] | None = None,
+    field_specs: Mapping[int, FieldSpec] | None = None,
 ) -> EffectiveSnapshot:
     """求给定位置的有效设定；position=None 表示全部事件之后的最新投影。
 
@@ -285,11 +290,15 @@ def resolve_progressions(
         raise ValueError("设定主体或基础状态不合法")
     if not isinstance(baseline, Mapping) or not isinstance(custom_fields, Mapping):
         raise ValueError("基础设定格式不正确")
-    if any(not _positive_integer(key) or not isinstance(value, str) for key, value in custom_fields.items()):
+    if any(not _positive_integer(key) for key in custom_fields):
         raise ValueError("自定义字段基础值不合法")
+    if subject_kind in ("organization", "career_entry"):
+        validate_baseline(subject_kind, baseline)
 
     fields = deepcopy(dict(baseline))
-    custom = dict(custom_fields)
+    # 未提供元数据的旧调用保持 text 语义；对象绝不能被当作文本隐式转换。
+    specs = {key: (field_specs or {}).get(key, FieldSpec("text")) for key in custom_fields}
+    values = {key: validate_field_value(specs[key], value) for key, value in custom_fields.items()}
     excluded = set(exclude_event_ids)
     ordered: list[tuple[tuple[int, int, int, int, int], ProgressionEvent]] = []
     orphaned: list[int] = []
@@ -315,13 +324,17 @@ def resolve_progressions(
             event.value,
             custom_field_id=event.custom_field_id,
             subject_identity=subject_identity,
+            field_spec=specs.get(event.custom_field_id) if event.custom_field_id is not None else None,
         )
         if event.custom_field_id is not None:
-            if event.custom_field_id not in custom:
+            if event.custom_field_id not in values:
                 raise ValueError("自定义字段不存在或不属于此设定")
-            value = cast(str, event.value)
-            previous = custom[event.custom_field_id]
-            custom[event.custom_field_id] = _append_text(previous, value) if event.operation == "append" else value
+            if event.operation == "append":
+                values[event.custom_field_id] = _append_text(
+                    cast(str, values[event.custom_field_id]), cast(str, event.value)
+                )
+            else:
+                values[event.custom_field_id] = deepcopy(cast(CanonicalFieldValue, event.value))
         elif event.field_key == "presence":
             change = cast(dict[str, JsonValue], event.value)
             fields.clear()
@@ -343,4 +356,5 @@ def resolve_progressions(
                 fields[field_key] = deepcopy(event.value)
         applied.append(event.id)
 
-    return EffectiveSnapshot(fields, custom, tuple(applied), tuple(sorted(orphaned)), baseline_status)
+    custom = {key: cast(str, value) for key, value in values.items() if specs[key].field_type == "text"}
+    return EffectiveSnapshot(fields, custom, tuple(applied), tuple(sorted(orphaned)), baseline_status, values)

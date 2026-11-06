@@ -1,19 +1,98 @@
-"""角色 / 组织卡片（ainovel.cards v3，兼容导入 v1、v2）。卡片按名称关联，不含任何内部 ID。
+"""角色 / 组织卡片（ainovel.cards v5，兼容导入 v1–v4），不含源数据库 ID。
 
 v2 = v1 + 角色的职业挂接（characters[].careers）+ 所涉职业的完整定义（顶层 careers）。
 v3 = v2 + 角色自定义文本字段的最新快照（characters[].custom_text_fields）。
+v4 = v3 + 类型化字段配置及当前快照，以包内 ref 和显式外部映射解析引用。
+v5 = v4 + 包内实体当前整理标签，不携带作品分类规则。
 """
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+
+from app.schemas.progression import DbInt
+from app.schemas.setting_categories import normalize_setting_tags
+from app.schemas.setting_field_value import EntityKind, EntityRef, FieldType, PositiveDbInt, SettingEntryType
+from app.schemas.setting_fields import DefinitionCreate, DefinitionOut, OptionCreate
 
 CARD_FORMAT = "ainovel.cards"
-CARD_VERSION = 3
-# 可导入的版本（v1 没有职业，v1/v2 没有自定义文本字段）
-SUPPORTED_CARD_VERSIONS = (1, 2, 3)
+CARD_VERSION = 5
+# 可导入的版本（旧版本不解释后版本的字段与局部引用）
+SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5)
 # 导入数据大小上限（序列化后的 UTF-8 字节数）
 MAX_CARD_BYTES = 2 * 1024 * 1024
+
+
+
+class CardFieldSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    definition_ref: str = Field(min_length=1, max_length=100)
+    value: JsonValue
+
+
+class CardFieldOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ref: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=100)
+    sort: DbInt = 0
+    archived: bool = Field(default=False, strict=True)
+
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def clean_label(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_option(self):
+        OptionCreate.model_validate({**self.model_dump(exclude={"ref"}), "expected_fields_revision": 0})
+        return self
+
+
+class CardFieldDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ref: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=100)
+    field_type: FieldType
+    applicable_types: list[SettingEntryType]
+    reference_types: list[SettingEntryType] = Field(default_factory=list)
+    sort: DbInt = 0
+    archived: bool = Field(default=False, strict=True)
+    options: list[CardFieldOption] = Field(default_factory=list, max_length=500)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def clean_label(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_definition(self):
+        DefinitionCreate.model_validate({**self.model_dump(exclude={"ref", "options"}), "expected_fields_revision": 0})
+        if self.options and self.field_type != "dropdown":
+            raise ValueError("只有下拉字段可带选项")
+        if len({o.label for o in self.options}) != len(self.options):
+            raise ValueError("字段选项名称不能重复")
+        return self
+
+
+class CardExternalReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ref: str = Field(min_length=1, max_length=100)
+    kind: EntityKind
+    type: SettingEntryType
+    name: str = Field(min_length=1, max_length=200)
+
+
+class CardTaggedEntry(BaseModel):
+    setting_tags: list[str] = Field(default_factory=list)
+
+    @field_validator("setting_tags", mode="before")
+    @classmethod
+    def canonical_tags(cls, value):
+        normalized = normalize_setting_tags(value)
+        if normalized != value:
+            raise ValueError("卡片整理标签必须已去空白、去空并去重")
+        return normalized
 
 
 class CardCareerAssignment(BaseModel):
@@ -29,7 +108,9 @@ class CardStage(BaseModel):
     description: str = ""
 
 
-class CardCareer(BaseModel):
+class CardCareer(CardTaggedEntry):
+    ref: str | None = Field(default=None, min_length=1, max_length=100)
+    fields: list[CardFieldSnapshot] = Field(default_factory=list, max_length=500)
     name: str = Field(min_length=1, max_length=100)
     kind: str = "main"
     description: str = ""
@@ -37,6 +118,11 @@ class CardCareer(BaseModel):
     abilities: str = ""
     rules: str = ""
     stages: list[CardStage] = Field(min_length=1, max_length=100)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def clean_entry_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class CardTextField(BaseModel):
@@ -51,7 +137,9 @@ class CardTextField(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
-class CardCharacter(BaseModel):
+class CardCharacter(CardTaggedEntry):
+    ref: str | None = Field(default=None, min_length=1, max_length=100)
+    fields: list[CardFieldSnapshot] = Field(default_factory=list, max_length=500)
     name: str = Field(min_length=1, max_length=100)
     aliases: list[str] = Field(default_factory=list, max_length=50)
     role_type: str = Field(default="", max_length=50)
@@ -74,6 +162,11 @@ class CardCharacter(BaseModel):
             raise ValueError("同一角色的自定义字段名称不能重复")
         return value
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def clean_entry_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
 
 class CardMember(BaseModel):
     character_name: str = Field(min_length=1, max_length=100)
@@ -82,7 +175,9 @@ class CardMember(BaseModel):
     note: str = ""
 
 
-class CardOrganization(BaseModel):
+class CardOrganization(CardTaggedEntry):
+    ref: str | None = Field(default=None, min_length=1, max_length=100)
+    fields: list[CardFieldSnapshot] = Field(default_factory=list, max_length=500)
     name: str = Field(min_length=1, max_length=100)
     org_type: str = Field(default="", max_length=50)
     purpose: str = ""
@@ -91,6 +186,11 @@ class CardOrganization(BaseModel):
     description: str = ""
     parent_name: str | None = Field(default=None, max_length=100)
     members: list[CardMember] = Field(default_factory=list, max_length=500)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def clean_entry_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class CardRelationship(BaseModel):
@@ -112,35 +212,88 @@ class CardFile(BaseModel):
     organizations: list[CardOrganization] = Field(default_factory=list, max_length=500)
     relationships: list[CardRelationship] = Field(default_factory=list, max_length=5000)
     careers: list[CardCareer] = Field(default_factory=list, max_length=200)
+    field_definitions: list[CardFieldDefinition] = Field(default_factory=list, max_length=500)
+    external_references: list[CardExternalReference] = Field(default_factory=list, max_length=2000)
 
     @model_validator(mode="before")
     @classmethod
-    def discard_unknown_v1_v2_fields(cls, data: Any) -> Any:
-        """旧版没有此字段，保持原先忽略未知键的行为。"""
-        if not isinstance(data, dict) or isinstance(data.get("version"), bool) or data.get("version") not in (1, 2):
+    def discard_future_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or type(data.get("version")) is not int:
             return data
-        characters = data.get("characters")
-        if not isinstance(characters, list):
+        if data["version"] < 5:
+            for name in ("characters", "organizations", "careers"):
+                rows = data.get(name)
+                for row in rows if isinstance(rows, list) else []:
+                    if isinstance(row, dict) and "setting_tags" in row:
+                        value = row["setting_tags"]
+                        if not isinstance(value, list) or value:
+                            raise ValueError("旧版卡片不支持整理标签资料，请使用原始版本文件")
+        if data["version"] >= 4:
             return data
-        return {
-            **data,
-            "characters": [
-                {key: val for key, val in item.items() if key != "custom_text_fields"}
-                if isinstance(item, dict)
-                else item
-                for item in characters
-            ],
-        }
+        result = {key: value for key, value in data.items() if key not in ("field_definitions", "external_references")}
+        for key in ("characters", "organizations", "careers"):
+            if isinstance(result.get(key), list):
+                result[key] = [{k: v for k, v in item.items() if k not in ("ref", "fields")
+                                and (data["version"] >= 3 or k != "custom_text_fields")}
+                               if isinstance(item, dict) else item for item in result[key]]
+        return result
+
+    @model_validator(mode="after")
+    def validate_local_graph(self):
+        if self.version < 4:
+            return self
+        all_refs: set[str] = set()
+
+        def add(ref):
+            if not ref or ref in all_refs:
+                raise ValueError("v4 包内 ref 必须非空且唯一")
+            all_refs.add(ref)
+
+        entries = [*self.characters, *self.organizations, *self.careers]
+        for group in (self.organizations, self.careers):
+            if len({item.name for item in group}) != len(group):
+                raise ValueError("v4 组织及职业名称不能重复")
+        if len({item.label for item in self.field_definitions}) != len(self.field_definitions):
+            raise ValueError("v4 字段定义名称不能重复")
+        for item in entries:
+            add(item.ref)
+        for item in self.external_references:
+            add(item.ref)
+            if item.kind != item.type.split(".")[0]:
+                raise ValueError("外部引用类型不一致")
+        entry_refs = set(all_refs)
+        definitions = {item.ref: item for item in self.field_definitions}
+        for definition in self.field_definitions:
+            add(definition.ref)
+            for option in definition.options:
+                add(option.ref)
+        for entry in entries:
+            used = set()
+            for snapshot in entry.fields:
+                definition = definitions.get(snapshot.definition_ref)
+                if definition is None or snapshot.definition_ref in used:
+                    raise ValueError("字段定义缺失或同条目字段重复")
+                used.add(snapshot.definition_ref)
+                value = snapshot.value
+                if definition.field_type in ("text", "line"):
+                    from app.services.setting_field_values import FieldSpec, validate_field_value
+                    validate_field_value(FieldSpec(definition.field_type), value)
+                elif value is not None:
+                    key = "option_ref" if definition.field_type == "dropdown" else "entry_ref"
+                    refs = {o.ref for o in definition.options} if key == "option_ref" else entry_refs
+                    if (
+                        not isinstance(value, dict)
+                        or set(value) != {key}
+                        or not isinstance(value[key], str)
+                        or value[key] not in refs
+                    ):
+                        raise ValueError("字段值包含不存在的包内引用")
+        return self
 
 
 class CardExportRequest(BaseModel):
     character_ids: list[int] = Field(default_factory=list, max_length=1000)
     organization_ids: list[int] = Field(default_factory=list, max_length=500)
-
-
-class CardPreviewRequest(BaseModel):
-    # 前端读取文件后原样提交；结构在服务端校验（格式错误返回 400 中文提示，而非 422）
-    data: Any
 
 
 Resolution = Literal["skip", "rename"]
@@ -149,12 +302,55 @@ Resolution = Literal["skip", "rename"]
 class CardResolutions(BaseModel):
     characters: dict[str, Resolution] = Field(default_factory=dict)
     organizations: dict[str, Resolution] = Field(default_factory=dict)
+    careers: dict[str, Resolution] = Field(default_factory=dict)
 
 
-class CardImportRequest(BaseModel):
+class CardDefinitionMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["reuse", "rename"]
+    target_definition_id: PositiveDbInt | None = None
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    option_mappings: dict[str, PositiveDbInt] = Field(default_factory=dict)
+
+
+class CardMappings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    references: dict[str, EntityRef] = Field(default_factory=dict)
+    definitions: dict[str, CardDefinitionMapping] = Field(default_factory=dict)
+
+
+class CardPreviewRequest(BaseModel):
     data: Any
-    # 未列出的同名冲突项默认跳过
     resolutions: CardResolutions = Field(default_factory=CardResolutions)
+    mappings: CardMappings = Field(default_factory=CardMappings)
+
+
+class CardImportRequest(CardPreviewRequest):
+    expected_fields_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
+    expected_categories_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
+
+
+class PreviewFieldDefinition(BaseModel):
+    ref: str
+    label: str
+    field_type: FieldType
+    status: Literal["new", "conflict", "reuse", "rename", "incompatible"]
+    rename_to: str | None = None
+    target_definition_id: int | None = None
+    options: list[CardFieldOption] = Field(default_factory=list)
+    compatible_targets: list[DefinitionOut] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class PreviewReference(BaseModel):
+    ref: str
+    kind: EntityKind
+    name: str
+    status: Literal["internal", "mapped", "unresolved"]
+    target: EntityRef | None = None
+    reason: str | None = None
+    source_fields: list[str] = Field(default_factory=list)
+
 
 
 class PreviewItem(BaseModel):
@@ -174,13 +370,19 @@ class PreviewRelationship(BaseModel):
 
 class PreviewCareer(BaseModel):
     name: str
-    # new = 目标项目没有，将新建；reuse = 复用目标项目的同名职业
-    status: Literal["new", "reuse"]
+    # reuse 仅为旧版本补阶段；v4 同名默认跳过内容，可显式选择 rename。
+    status: Literal["new", "reuse", "conflict", "rename"]
+    rename_to: str | None = None
     # reuse 时将追加到目标阶梯末尾的阶段名
     stages_added: list[str] = Field(default_factory=list)
 
 
 class CardPreview(BaseModel):
+    fields_revision: int = 0
+    categories_revision: int = 0
+    can_import: bool = True
+    field_definitions: list[PreviewFieldDefinition] = Field(default_factory=list)
+    references: list[PreviewReference] = Field(default_factory=list)
     characters: list[PreviewItem]
     organizations: list[PreviewItem]
     relationships: list[PreviewRelationship]

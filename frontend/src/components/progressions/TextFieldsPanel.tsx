@@ -9,17 +9,19 @@ interface Props {
   onCreate: () => void
   onEdit: (field: SettingTextField) => void
   onDelete: (field: SettingTextField) => Promise<void>
+  onBind?: (field: SettingTextField) => void
 }
 
-export default function TextFieldsPanel({ fields, canEdit, busy, onCreate, onEdit, onDelete }: Props) {
+export default function TextFieldsPanel({ fields, canEdit, busy, onCreate, onEdit, onDelete, onBind }: Props) {
   return (
     <div>
       <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-        <Typography.Title level={5} style={{ margin: 0 }}>文本自定义字段</Typography.Title>
+        <Typography.Title level={5} style={{ margin: 0 }}>本条目原有字段</Typography.Title>
         <Button size="small" icon={<PlusOutlined />} disabled={!canEdit || busy} onClick={onCreate}>新增字段</Button>
       </Space>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>在这里维护故事开始时的基础内容，后续变化可单独记录。</Typography.Paragraph>
       <List
+        rowKey="id"
         size="small"
         dataSource={[...fields]}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义字段" /> }}
@@ -27,6 +29,7 @@ export default function TextFieldsPanel({ fields, canEdit, busy, onCreate, onEdi
           <List.Item
             actions={[
               <Button key="edit" type="link" size="small" onClick={() => onEdit(field)}>{canEdit ? '编辑' : '查看'}</Button>,
+              ...(onBind ? [<Button key="bind" type="link" size="small" disabled={!canEdit || busy} onClick={() => onBind(field)}>关联共享字段</Button>] : []),
               <Popconfirm
                 key="delete"
                 title="删除这个字段？"

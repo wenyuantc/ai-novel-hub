@@ -24,9 +24,11 @@ import { errorMessage } from '../../api/client'
 import { cleanAliases } from '../../api/characters'
 import { baselineEditorLabel } from '../../api/progressions'
 import { worldApi } from '../../api/story'
-import type { WorldSetting } from '../../api/types'
+import type { ProgressionPositionInput, WorldSetting } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
-import SettingProgressionsPanel from '../../components/progressions/SettingProgressionsPanel'
+import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
+import SettingTagsPanel from '../../components/settingTags/SettingTagsPanel'
+import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
 import { useWorldBaselineEditor } from '../../components/progressions/useWorldBaselineEditor'
 import type { WorldFormValues } from '../../components/progressions/worldForm'
 import { useLoader } from '../../hooks/useLoader'
@@ -35,11 +37,15 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import EntityMentions from '../../components/mentions/EntityMentions'
 import { asWorldCategory, groupWorld, WORLD_CATEGORIES, WORLD_CATEGORY_LABELS } from '../../utils/world'
+import { useSearchParams } from 'react-router-dom'
+import { readEntityFieldPosition } from '../../utils/entityLinks'
 
 const CATEGORY_OPTIONS = WORLD_CATEGORIES.map((c) => ({ value: c, label: WORLD_CATEGORY_LABELS[c] }))
 
 export default function WorldPanel() {
   const pid = useProjectId()
+  const tagsSession = useSettingTagsSession(pid)
+  const [searchParams] = useSearchParams()
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => worldApi.list(pid), [pid])
@@ -47,6 +53,7 @@ export default function WorldPanel() {
   const items = useMemo(() => loadedItems ?? [], [loadedItems])
   const [aiOpen, setAiOpen] = useState(false)
   const [tab, setTab] = useState('base')
+  const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
   const [form] = Form.useForm<WorldFormValues>()
   const category = Form.useWatch('category', form)
   const editor = useWorldBaselineEditor(pid, form)
@@ -58,7 +65,8 @@ export default function WorldPanel() {
   )
 
   const openEdit = (item: WorldSetting | null) => {
-    setTab('base')
+    setFieldPosition(item && searchParams.get('id') === String(item.id) ? readEntityFieldPosition(searchParams) : null)
+    setTab(item && searchParams.get('id') === String(item.id) && readEntityFieldPosition(searchParams) ? 'progression' : 'base')
     editor.openEditor(item, filter === 'all' ? 'other' : asWorldCategory(filter))
   }
   useEntityDeepLink(pid, loadedItems, loading, openEdit, canReadNow)
@@ -68,6 +76,7 @@ export default function WorldPanel() {
     try {
       if (!canEditNow()) return
       await worldApi.remove(pid, item.id)
+      tagsSession.forget({ kind: 'world', id: item.id })
       if (!canEditNow()) return
       message.success('已删除')
       reload()
@@ -170,7 +179,7 @@ export default function WorldPanel() {
         keyboard={!saving}
         maskClosable={!saving}
         cancelButtonProps={{ disabled: saving }}
-        footer={tab === 'progression' || tab === 'mentions' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
+        footer={tab === 'progression' || tab === 'mentions' || tab === 'tags' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
         okText="保存"
         cancelText="取消"
         width={720}
@@ -258,18 +267,21 @@ export default function WorldPanel() {
             },
             ...(editing ? [{
               key: 'progression',
-              label: '剧情变化',
+              label: '字段与剧情变化',
               disabled: saving,
-              children: tab === 'progression' && open ? (
-                <SettingProgressionsPanel
+              forceRender: true,
+              children: open ? (
+                <SettingEntryFieldsPanel
                   key={`${pid}:world:${editing.id}`}
                   projectId={pid}
-                  target={{ subject_kind: 'world', world_setting_id: editing.id }}
+                  entry={{ kind: 'world', id: editing.id }}
+                  initialPosition={fieldPosition}
                   onChanged={editor.progressionChanged}
                   onRequestConfirmBaseline={() => void editor.confirmBaseline()}
                 />
               ) : null,
             }] : []),
+            ...(editing ? [{ key: 'tags', label: '整理标签', children: open && tab === 'tags' ? <SettingTagsPanel session={tagsSession} entry={{ kind: 'world', id: editing.id }} /> : null }] : []),
             ...(editing && (editing.category === 'place' || editing.category === 'item') ? [{ key: 'mentions', label: '提及', children: tab === 'mentions' && open ? <EntityMentions projectId={pid} entity={{ kind: 'world', id: editing.id }} /> : null }] : []),
           ]}
         />

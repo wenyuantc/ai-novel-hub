@@ -64,9 +64,9 @@ export const progressionApi = {
     request<ProgressionMutation<SettingProgression>>(`${timeline(projectId, timelineId)}/progressions/${id}`, {
       method: 'PATCH', body,
     }),
-  removeProgression: (projectId: number, timelineId: number, id: number, expectedRevision: number) =>
+  removeProgression: (projectId: number, timelineId: number, id: number, expectedRevision: number, expectedFieldsRevision?: number) =>
     request<ProgressionRevision>(`${timeline(projectId, timelineId)}/progressions/${id}`, {
-      method: 'DELETE', query: { expected_revision: expectedRevision },
+      method: 'DELETE', query: { expected_revision: expectedRevision, expected_fields_revision: expectedFieldsRevision },
     }),
   effective: (
     projectId: number,

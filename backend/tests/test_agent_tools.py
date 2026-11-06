@@ -76,9 +76,11 @@ async def new_chapter(ctx, content="山风穿过竹林。林远握紧长剑。")
 
 def test_registry_has_only_explicit_tools():
     names = {tool.name for tool in list_tools()}
-    assert len(names) == 54
+    assert len(names) == 59
     assert {"list_skills", "load_skill", "read_skill_reference"} <= names
     assert {"list_setting_timelines", "update_setting_baseline", "record_setting_progression"} <= names
+    assert {"list_setting_field_definitions", "list_setting_entries", "get_setting_entry_fields",
+            "update_setting_field_baseline", "record_setting_field_progression"} <= names
     assert not any(name.startswith("mcp__") for name in names)
     assert get_tool("delete_project") is None
     assert get_tool("__import__") is None
@@ -195,8 +197,12 @@ async def test_setting_tools_reject_foreign_references_and_wrong_custom_field(ct
     first_page = await list_tool.run(ctx, {"subject_kind": "character", "page_size": 1, "page": 1})
     second_page = await list_tool.run(ctx, {"subject_kind": "character", "page_size": 1, "page": 2})
     assert first_page["total"] == second_page["total"] == 2
-    assert first_page["items"][0]["custom_fields"] == [{"id": own_field.id, "label": "本书字段"}]
-    assert second_page["items"][0]["custom_fields"] == [{"id": wrong_field.id, "label": "其他设定字段"}]
+    assert first_page["items"][0]["custom_fields"] == [
+        {"id": own_field.id, "label": "本书字段", "field_type": "text", "definition_id": None},
+    ]
+    assert second_page["items"][0]["custom_fields"] == [
+        {"id": wrong_field.id, "label": "其他设定字段", "field_type": "text", "definition_id": None},
+    ]
     baseline_tool = get_tool("update_setting_baseline")
     assert "error" in await baseline_tool.preview(
         ctx, {"timeline_id": foreign_timeline.id, "expected_revision": 1, "changes": {"current_state": "越权"}}
@@ -385,7 +391,9 @@ async def test_setting_tools_type_safe_values_cover_all_subjects_and_custom_text
         TextFieldCreate(expected_revision=timeline["revision"], label="招式", base_value="基础剑法"),
     )
     listed = await get_tool("list_setting_timelines").run(ctx, {"subject_kind": "character", **filters["character"]})
-    assert listed["items"][0]["custom_fields"] == [{"id": field.item.id, "label": "招式"}]
+    assert listed["items"][0]["custom_fields"] == [
+        {"id": field.item.id, "label": "招式", "field_type": "text", "definition_id": None},
+    ]
     result, _ = await apply(
         ctx,
         "record_setting_progression",
@@ -748,6 +756,7 @@ async def test_read_tools_and_chapter_pagination(ctx):
     ch = await new_chapter(ctx, content)
     args_by_name = {
         "get_character": {"id": char["id"]},
+        "get_setting_entry_fields": {"entry": {"kind": "character", "id": char["id"]}},
         "get_organization": {"id": org["id"]},
         "get_outline": {"id": outline["id"]},
         "read_chapter": {"id": ch.id},

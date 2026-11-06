@@ -11,6 +11,8 @@ from app.models import Character, Organization, Outline, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.chapter import ChapterBrief
 from app.schemas.foreshadow import ForeshadowStatus
+from app.schemas.progression import Boundary, PositiveDbInt
+from app.schemas.setting_fields import EntityRef, EntryType
 from app.schemas.story import CharacterOut, WorldCategory, WorldSettingOut
 from app.services import (
     analysis_service,
@@ -22,6 +24,8 @@ from app.services import (
     project_service,
     relationship_service,
     retrieval_service,
+    setting_catalog_service,
+    setting_field_service,
     story_service,
     style_service,
 )
@@ -61,6 +65,48 @@ class AnalysisArgs(EmptyArgs):
 class SearchArgs(EmptyArgs):
     query: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=10)
+
+
+class FieldDefinitionListArgs(PageArgs):
+    types: list[EntryType] | None = Field(default=None, min_length=1, max_length=9)
+    include_archived: bool = True
+
+
+class SettingEntryListArgs(PageArgs):
+    types: list[EntryType] | None = Field(default=None, min_length=1, max_length=9)
+    q: str | None = Field(default=None, max_length=200)
+
+
+class EntryFieldsArgs(PageArgs):
+    entry: EntityRef
+    chapter_id: PositiveDbInt | None = None
+    chapter_no: PositiveDbInt | None = None
+    boundary: Boundary = "start"
+
+
+async def field_definitions(ctx: ToolCtx, args: FieldDefinitionListArgs) -> dict:
+    result = await setting_field_service.list_definitions(
+        ctx.db, ctx.user_id, ctx.project_id, types=args.types, include_archived=args.include_archived,
+    )
+    return {**paged(result.items, args), "fields_revision": result.fields_revision}
+
+
+async def setting_entries(ctx: ToolCtx, args: SettingEntryListArgs) -> dict:
+    result = await setting_catalog_service.list_entries(ctx.db, ctx.user_id, ctx.project_id, **args.model_dump())
+    return {**serialized(result), "page": args.page, "pages": max(1, ceil(result.total / args.page_size))}
+
+
+async def entry_fields(ctx: ToolCtx, args: EntryFieldsArgs) -> dict:
+    result = serialized(await setting_field_service.read_entry_fields(
+        ctx.db, ctx.user_id, ctx.project_id, args.entry.kind, args.entry.id,
+        chapter_id=args.chapter_id, chapter_no=args.chapter_no, boundary=args.boundary,
+    ))
+    # 单条目的字段也有界；引用投影只有身份、当前名称，绝不展开目标正文。
+    combined = result["fields"] + result["legacy_fields"]
+    page = paged(combined, args)
+    result["fields"] = [item for item in page["items"] if item["source"] == "shared"]
+    result["legacy_fields"] = [item for item in page["items"] if item["source"] == "legacy"]
+    return {**result, **{key: page[key] for key in ("page", "pages", "total")}}
 
 
 def paged(items: list, args: PageArgs) -> dict:
@@ -247,6 +293,11 @@ async def active_tasks(ctx: ToolCtx, args: PageArgs) -> dict:
 
 
 TOOLS = [
+    Tool("list_setting_field_definitions", "分页读取共享字段类型与选项目录", FieldDefinitionListArgs,
+         "read", field_definitions),
+    Tool("list_setting_entries", "分页查找角色、世界观、组织或职业引用目标", SettingEntryListArgs,
+         "read", setting_entries),
+    Tool("get_setting_entry_fields", "分页读取条目当前或指定章节的有效字段", EntryFieldsArgs, "read", entry_fields),
     Tool("get_project_overview", "读取作品信息、字数统计和默认风格", EmptyArgs, "read", overview),
     Tool("list_characters", "分页读取角色，可按名字或别名查找", CharacterListArgs, "read", characters),
     Tool("get_character", "读取角色详情", IdArgs, "read", character, id_model=Character),

@@ -27,6 +27,13 @@ import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import { OrganizationMembershipsTab } from '../../components/entities/CharacterMembershipsTab'
 import { useLoader } from '../../hooks/useLoader'
 import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
+import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
+import SettingTagsPanel from '../../components/settingTags/SettingTagsPanel'
+import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
+import type { SettingTagsSession } from '../../components/settingTags/settingTagsController'
+import { useSearchParams } from 'react-router-dom'
+import { readEntityFieldPosition } from '../../utils/entityLinks'
+import type { ProgressionPositionInput } from '../../api/types'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { splitPane, splitRow } from '../../utils/layout'
@@ -62,12 +69,15 @@ function toTreeData(nodes: OrgTreeNode<Organization>[]): DataNode[] {
 
 /** 组织：左侧组织树（按上级嵌套），右侧详情 + 成员表；支持 AI 生成组织。 */
 export default function OrganizationsPanel() {
+  const [searchParams] = useSearchParams()
   const pid = useProjectId()
+  const tagsSession = useSettingTagsSession(pid)
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
   const { data: orgs = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
   const [editing, setEditing] = useState<Organization | null>(null)
   const [orgOpen, setOrgOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -109,7 +119,7 @@ export default function OrganizationsPanel() {
     setOrgOpen(true)
   }
 
-  useEntityDeepLink(pid, orgs, loading, (org) => setSelectedId(org.id), canReadNow)
+  useEntityDeepLink(pid, orgs, loading, (org) => { setSelectedId(org.id); setFieldPosition(readEntityFieldPosition(searchParams)) }, canReadNow)
 
   const handleSaveOrg = async () => {
     if (!canEditNow()) return
@@ -148,6 +158,7 @@ export default function OrganizationsPanel() {
     try {
       if (!canEditNow()) return
       await organizationApi.remove(pid, o.id)
+      tagsSession.forget({ kind: 'organization', id: o.id })
       if (!canEditNow()) return
       message.success('已删除（下级组织变为顶级）')
       setSelectedId(null)
@@ -184,7 +195,7 @@ export default function OrganizationsPanel() {
                   defaultExpandAll
                   blockNode
                   selectedKeys={selectedId !== null ? [selectedId] : []}
-                  onSelect={(keys) => setSelectedId(keys.length > 0 ? Number(keys[0]) : null)}
+                  onSelect={(keys) => { setSelectedId(keys.length > 0 ? Number(keys[0]) : null); setFieldPosition(null) }}
                 />
               </Card>
             </div>
@@ -195,6 +206,8 @@ export default function OrganizationsPanel() {
                   projectId={pid}
                   org={selected}
                   orgs={orgs}
+                  fieldPosition={fieldPosition}
+                  tagsSession={tagsSession}
                   onEdit={() => openOrg(selected)}
                   onDelete={() => void handleDeleteOrg(selected)}
                   onMembersChanged={reload}
@@ -274,6 +287,8 @@ export default function OrganizationsPanel() {
 }
 
 interface DetailProps {
+  tagsSession: SettingTagsSession
+  fieldPosition?: ProgressionPositionInput | null
   projectId: number
   org: Organization
   orgs: Organization[]
@@ -282,7 +297,7 @@ interface DetailProps {
   onMembersChanged: () => void
 }
 
-function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged }: DetailProps) {
+function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged, fieldPosition, tagsSession }: DetailProps) {
   const { canEdit } = useProjectAccess(projectId)
   const parent = orgs.find((o) => o.id === org.parent_id)
 
@@ -324,6 +339,10 @@ function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged }:
             </Typography.Paragraph>
           </Descriptions.Item>
         </Descriptions>
+      </Card>
+      <Card size="small"><SettingTagsPanel session={tagsSession} entry={{ kind: 'organization', id: org.id }} /></Card>
+      <Card size="small" title="组织自身字段与剧情变化">
+        <SettingEntryFieldsPanel key={`${projectId}:organization:${org.id}`} projectId={projectId} entry={{ kind: 'organization', id: org.id }} initialPosition={fieldPosition} />
       </Card>
       <Card size="small" title="成员与历史">
         <OrganizationMembershipsTab projectId={projectId} organizationId={org.id} onChanged={onMembersChanged} />

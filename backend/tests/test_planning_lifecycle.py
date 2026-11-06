@@ -283,7 +283,7 @@ async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db
     response = await client.get(f"/api/v1/projects/{pid}/backup?snapshots=1")
     assert response.status_code == 200
     backup = response.json()
-    assert backup["version"] == 3
+    assert backup["version"] == 5
     preview = await client.post("/api/v1/projects/import/preview", files={"file": ("book.json", response.content)})
     assert preview.status_code == 200, preview.text
     imported = await client.post("/api/v1/projects/import", json={"token": preview.json()["token"]})
@@ -318,6 +318,16 @@ async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db
         }]
     old = json.loads(response.content)
     old["version"] = 2
+    # 模拟真实 v2：保留夹带的规划数据测试版本清理，但移除 v4 才引入的字段图。
+    for table in (*importer.FIELD_TABLES, *importer.CATEGORY_TABLES):
+        old["tables"].pop(table, None)
+    for table in importer.TAG_TABLES:
+        for row in old["tables"].get(table, []):
+            row.pop("setting_tags", None)
+    old["tables"]["setting_timelines"] = [
+        row for row in old["tables"]["setting_timelines"]
+        if row["subject_kind"] not in ("organization", "career_entry")
+    ]
     parsed = importer.parse_backup(json.dumps(old).encode())
     assert parsed.tables["planning_units"] == [] and parsed.tables["subplot_crossings"] == []
     assert all("planning_bindings" not in row["data"] for row in parsed.tables["outline_snapshots"])
@@ -520,7 +530,7 @@ async def test_outline_replacement_preserves_planning_and_current_cast(planning_
     await planning_lifecycle.validate_project(db, pid)
 
 
-async def test_wizard_character_replacement_cleans_json_before_id_reuse(planning_db):
+async def test_wizard_character_replacement_cleans_json_without_reusing_identity(planning_db):
     db, pid, _ = planning_db
     ids = await _seed(db, pid)
     detached = PlanningUnit(project_id=pid, detached_character_ids=[ids["a"], ids["b"]])
@@ -529,7 +539,8 @@ async def test_wizard_character_replacement_cleans_json_before_id_reuse(planning
     revision = await db.scalar(select(Project.planning_revision).where(Project.id == pid))
     await wizard_service.save_wizard_result(db, pid, "characters", '[{"name":"新角色"}]')
     replacement = await db.scalar(select(Character.id).where(Character.project_id == pid))
-    assert replacement == ids["a"]  # 角色也会实际复用被删除的 SQLite 整数 ID。
+    assert replacement > max(ids["a"], ids["b"])
+    assert list(await db.scalars(select(Character.id).where(Character.id.in_([ids["a"], ids["b"]])))) == []
     assert (await _unit(db, detached.id)).detached_character_ids == []
     assert (await _unit(db, ids["unit"])).pov_character_id is None
     assert await db.scalar(select(ChapterPlan.character_ids).where(ChapterPlan.id == ids["plan"])) == []
