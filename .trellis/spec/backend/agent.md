@@ -89,7 +89,7 @@ ToolKind = Literal["read", "small", "delete", "task", "text", "external"]   # ex
     async def run(ctx, args) -> dict       # 仅读工具
     async def preview(ctx, args) -> dict   # 写工具：校验 + 对比，不落库
     async def execute(ctx, args) -> dict   # 写工具：在 SAVEPOINT 内执行
-get_tool(name) / list_tools()   # tools/__init__.py 的静态白名单：READ + SKILL + WRITE + TEXT + TASK（共 54 个）
+get_tool(name) / list_tools()   # tools/__init__.py 的静态白名单：READ + SKILL + WRITE + TEXT + TASK（共 59 个）
 async def validate_references(ctx, args, *, id_model=None)   # tools/references.py
 ```
 
@@ -243,12 +243,15 @@ async def undo(db, project_id, effects) -> bool            # 不 commit；返回
 - **差异范围**：`EFFECT_TABLES` = `projects`、`characters`、`organizations`、`organization_members`、`relationship_types`（只取本项目自定义；全局预置只读）、
   `relationships`、`relationship_history`、`careers`、`career_stages`、`character_careers`、`career_history`、`world_settings`、`outlines`、
   `chapter_plans`、`chapters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`story_memories`、`chapter_characters`、
-  `chapter_analyses`、`analysis_changes`、`setting_timelines`、`setting_text_fields`、`setting_progressions`、`chapter_versions`、`generation_logs`、`tasks`。规则取自备份注册表 `PROJECT_RULE` + `RULES`
+  `chapter_analyses`、`analysis_changes`、`setting_timelines`、`setting_field_definitions`、`setting_field_options`、`setting_reference_handles`、`setting_categories`、`setting_category_rules`、`setting_text_fields`、`setting_progressions`、`chapter_versions`、`generation_logs`、`tasks`。规则取自备份注册表 `PROJECT_RULE` + `RULES`
   （**顺序即插入顺序，逆序即删除顺序**），另加 `tasks`。写工具新改动一张表时必须加进来。
 - **列**：忽略 `updated_at` / `word_count`；`created_at` 必须保留（创建后不变，不影响冲突比较；撤销删除时靠它恢复原创建时间，见 `test_undo_delete_keeps_original_created_at`），但 `preview_diff` 必须跳过它，否则新建类提案的预览随秒变化，确认时误判 409，见 `test_preview_diff_ignores_created_at_of_inserted_rows`）；`chapters.content` 不进快照，只存 `_content_hash`，空白正文另存 `_empty_content`
   （唯一会被工具删除的章节是细纲同步删掉的空章节）；`chapter_versions` 只跟踪这些被删空章节的版本（正文修改产生的新版本属于历史，不撤销）；
   `generation_logs` / `tasks` 只取 `id / project_id / chapter_id`，只记录修改（章节删除导致的 SET NULL），不记录增删。
-- **时间线效果版本**：新效果带 `format_version: 2`；旧格式效果若影响设定主体或章锚，在任何恢复之前 409 `legacy_effect_requires_manual_correction`，纯正文旧效果仍可撤销。还原后同事务 `materialize_project` 验证并重算投影；预览对新建引用 ID 做语义化归一，基础值只展示变化字段，但冲突保护保留完整值。`list_setting_timelines`、`update_setting_baseline`、`record_setting_progression` 必须校验作品、字段、章节和引用。 列表 `items[].custom_fields` 批量返回本页字段的 `{id, label}`；基础修正的 `changes` 为显式字段对象，剧情变化 `value` 是只填 `text / intimacy / stage_id / identity / presence` 之一的类型化对象，服务仍校验字段与主体相容性。旧格式尚未执行的工具提案须重新生成。
+- **时间线效果版本**：新diff／chapter_text效果带 `format_version: 4`，包含字段及分类完整依赖。接受旧v1–v3，保留原v1时间线和v2 typed保护；`preflight_effect_versions`在整轮首restore前按逆序before构造拟恢复分类图，调用纯图校验。旧v3因后来新增rule而无法恢复定义／选项／适用范围时409 `legacy_effect_requires_manual_correction`；v4图冲突为`undo_conflict`。旧v2／v3 UPDATE两边都缺标签时仅比较副本忽略该列，恢复仍省略以保留后来标签；旧CREATE遇后来非空标签拒删，合法旧DELETE才补空标签，未来标签／分类载荷不静默接受。
+- **目录代次**：`fields_revision/categories_revision`同时从备份注册表和effects独立项目列快照／比较／恢复集合排除；受影响目录从当前高水位递增，失败不增。还原后同事务重验fieldGraph＋categoryGraph、每行项目scope再`materialize_project`。预览对新ID及JSON里的option／handle语义归一。详见[字段恢复合同](./setting-fields.md)与[分类恢复合同](./setting-categories.md)。
+- **AI工具结果白名单**：整理标签进入数据库及effects完整快照，但不自动进入模型消息。`tools/base.serialized`仅ORM分支过滤`setting_tags`；显式DTO／dict合同不随意改写。必须使用真实FakeLLM工具返回哨兵验证，不能只查read DTO。
+- **字段工具**：`list_setting_field_definitions`、`list_setting_entries`、`get_setting_entry_fields`为三个有界读工具；`update_setting_field_baseline`与`record_setting_field_progression`原子处理空槽首写。原`record_setting_progression`扩四类值，仍校验作品／字段／章节／引用；provider对象有显式properties和严格嵌套ID检查。`list_setting_timelines.items[].custom_fields`含id／label／field_type／definition_id与必要当前元数据，并返回fields_revision。旧尚未执行且缺新语义的提案须重新生成。
 - **快照用列查询**（不是 ORM 实例），避免数据库级联或 Core UPDATE 之后读到 identity map 里的旧值。
 - **冲突检测**（任一条不满足 → 409 `{detail: "数据已变化，无法撤销，请检查冲突", code: "undo_conflict", conflicts: [{table, label}]}`，不做任何修改）：
   - 原来是插入 / 修改：当前行（`FOR UPDATE`、项目范围内）必须等于 `after`；
@@ -264,13 +267,13 @@ async def undo(db, project_id, effects) -> bool            # 不 commit；返回
   3. 按注册表**顺序**用原 id 重新插入被删的行；`TableRule.deferred` 的列（自引用 / 互相引用，如 `organizations.parent_id`、`chapters.plan_id`）先插 null；
   4. 把修改过的行整行改回 `before`（含章节号平移涉及的所有登记列）；
   5. 回填 deferred 列。
-  之后只刷新 identity map 中受影响的实例（插入的 expunge、其他 refresh；**不能 `expire_all`**，调用方还持有会话 / 提案对象）。
+  之后只刷新本轮identity map中的受影响实例与Project。单项`effects.undo(..., discard_inserts=True)`维持原默认；整轮service传False，外层commit成功后才`discard_undone_inserts`，失败调用`refresh_after_rollback`恢复同session值和原对象attached身份。Core写后refresh的对象可能不dirty，SAVEPOINT回滚不会自动修正其缓存；不能靠预检掩盖恢复后失败，也不能提前expunge破坏外层失败恢复。**不能 `expire_all`**，调用方还持有会话／提案对象；preview同样局部恢复并保留无关pending编辑。
 - **正文撤销**：从 `before.version_id` 的版本恢复正文与字数，记 `source="restore"` 版本（note「撤销智能体修改，恢复自 vN」）。
 - **派生数据**：`story_memories` 有变化时，删除插入行的检索单元（`retrieval_service.delete_refs`），对恢复的行 `memory_service.index_memories`
   重建关键词部分并 `invalidate`；返回 True，由 service 在 commit 后 `kb_index_service.enqueue_memory` 排队向量任务。
 - **原子性**：`undo` 开头对项目行做无值变化 UPDATE（取项目写锁，并防止 SQLite legacy 模式下 RELEASE SAVEPOINT 提交外层事务）；还原中
   `IntegrityError` → 409 `undo_conflict`（「关联记录或唯一字段已变化」）。整轮撤销（`POST /turns/{id}/undo`）按 `seq` 倒序逐项 `undo`，
-  全部在一个外层事务里，任一项冲突整体 rollback。
+  全部在一个外层事务里，任一项冲突整体 rollback。Core恢复后即使ORM对象不dirty，普通失败、物化／commit失败和`CancelledError`也都必须进入受影响identity的回滚刷新；取消属于`BaseException`，不能仅catch Exception。刷新后重抛原异常，不改变任务取消／超时协议。
 - **service 层规则**：只有 `executed` 可撤销（`undone` 重复撤销直接返回）；含 `kind = task` → 409「已启动的任务不能撤销，请在任务面板取消」
   （整轮撤销自动排除 task）；含 `kind = external` → 400「外部操作无法撤销」（整轮撤销排除 external，`TurnChangesOut.notice` =「已跳过 N 项外部操作（无法撤销）」）；
   有运行中（非 `paused`）轮次时 → 409「请等待智能体暂停或结束后撤销」。撤销成功后标记 `undone` 并追加一条

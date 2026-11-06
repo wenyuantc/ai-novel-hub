@@ -84,16 +84,16 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 
 ---
 
-## 场景：卡片导入导出（`ainovel.cards` v3，兼容 v1/v2）
+## 场景：卡片导入导出（`ainovel.cards` v5，兼容 v1–v4）
 
 ### 契约
 
 - 导出 `POST /cards/export {character_ids, organization_ids}`：只含勾选项；关系两端都在集合内才导出；成员角色在集合内才导出；
   上级也在集合内才写 `parent_name`。**任何层级都没有 `id` / `*_id` 键**（`test_cards::_id_keys`）。
-- 预览 / 导入的 body 为 `{data: <原样 JSON>}`（不引入 multipart）。`data` 声明为 `Any`，结构在 `card_service.parse_card`
+- 预览 / 导入的 body 为 `{data: <原样 JSON>, resolutions?, mappings?}`（不引入 multipart）；v4确认另带`expected_fields_revision`。`data` 声明为 `Any`，结构在 `card_service.parse_card`
   中校验，错误一律 400 中文：大小（紧凑序列化 `separators=(",", ":")`、`ensure_ascii=False` 后 UTF-8 > 2MB，与前端 `JSON.stringify` 口径一致，导出文件的缩进不计入）`卡片文件过大，上限为 2MB`、非对象、`format` / `version` 不符、字段错误
   `卡片文件格式不正确：<loc>: <msg>`。不信任卡片里的任何 ID（多余字段忽略）。
-- 卡片内重名只取第一个并给 warning。导入时同名冲突按 `resolutions.{characters|organizations}[name]`：`skip`（默认）映射到目标已有对象；
+- 旧卡片内重名只取第一个并给warning；v4组织／职业／定义名称重复明确拒绝。同名冲突按 `resolutions.{characters|organizations|careers}[name]`：`skip`默认保留目标内容，原关系／成员旧适配仍可按名关联，但不能用它替代v4类型化引用的授权；
   `rename` 用 `rename_for` 追加「（导入）」「（导入2）」……（与目标已有名 + 卡片内名 + 本次已改名都不冲突，超长截断原名）。
 - 关系两端 / 成员角色先查「卡片名 → 新 id」映射，再按名称查目标项目已有对象；对不上、指向自己、称呼只有空白、同一对已有关系 → 跳过并记 warning（预览中标 `unresolved`），不中断整个导入。
   关系类型走 `resolve_type`（反向匹配互换两端，匹配不上建自定义类型），写入走 `apply_change(source="import")`。
@@ -101,12 +101,16 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 - 测试：`tests/test_cards.py`（跨项目往返 + 重命名、skip 关联已有、无法关联与循环、格式 / 大小 400、`rename_for`）。
 - **v2（`10-23-career-system`）**：曾导出 `version: 2`；角色项增加 `careers: [{career_name, role, stage_name, note}]`，顶层增加
   `careers: [{name, kind, description, requirements, abilities, rules, stages: [{name, description}]}]`（只含所导出角色挂接的职业）。
-  v1 没有职业，按原逻辑导入。当前 `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2, 3)`，其他版本 400。
-  导入：职业按名匹配目标项目，匹配上复用（卡片里多出的阶段追加到末尾）、匹配不上新建；挂接的阶段按名匹配，对不上追加到末尾，
+  v1 没有职业，按原逻辑导入。当前 `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5)`，其他版本 400。
+  旧版导入：职业按名匹配目标项目，匹配上复用（卡片里多出的阶段追加到末尾）、匹配不上新建；挂接的阶段按名匹配，对不上追加到末尾，
   阶段名为空取第 1 阶；经 `assign_new(source="import")` 写入，职业对不上 / 类别不符 / 超限 / 已挂 → warning 跳过。
   预览增加 `careers: [{name, status: new|reuse, stages_added: [阶段名]}]`；结果增加 `careers: [{name, id, action: created|reused,
   stages_added}]` 与 `careers_assigned`。
 - **v3（设定变化）**：角色增加 `custom_text_fields: [{name, value}]`，导出当前有效快照，不复制源章节、历史或 ID；新角色导入建立 confirmed 基线。已有隐藏关系或退出成员的历史主体不会被卡片覆盖，跳过并警告；新成员走成员服务建立 confirmed 时间线。
+- **v4（类型化字段）**：条目、定义和选项使用包内唯一ref，快照为`fields[{definition_ref,value}]`，dropdown值用`{option_ref}`，reference用`{entry_ref}`或null；`external_references`只描述包外目标。世界观无卡片容器，不能随引用隐式复制。定义／选项sort复用严格DbInt校验，预览不能接受PG会溢出的值。
+- v4预览含`fields_revision/can_import/field_definitions/references`；定义冲突显式reuse具体definition＋逐option映射或rename新建，引用显式`mappings.references[ref]=EntityRef`。包内同名skip仍未解析，明确指定目标或rename后才解决；未解决不可导入。卡片只复制当前快照，新角色无源章节事件；skip不覆盖值、历史和职业阶段。完整规则及原子回滚见[字段契约](./setting-fields.md)。
+- **v5（整理标签）**：角色／组织／职业项增加规范`setting_tags`，不导出分类规则或成员快照，世界观仍无卡片容器。预览增加`categories_revision`，确认必须带原预览的`expected_categories_revision`，缺失400 `categories_revision_required`；字段CAS和显式引用映射继续执行。只给new／rename写标签，整笔只领一次分类版本，skip／职业reuse不覆盖现有标签，全skip不递增。
+- 旧v1–v4缺失或规范空标签可升级，非空未来标签、null和非法形状拒绝。前端发现字段或分类版本变化时，包括主动更新预览，保留原预览与原版本并显示候选，作者明确采用后才能确认；不能悄悄换版本重提。详见[自动分类契约](./setting-categories.md)。
 
 ---
 
@@ -211,7 +215,7 @@ characters_text = story_service.format_characters(all_characters)   # 全部角�
 ### 1. 范围 / 触发条件
 
 任何写 `careers` / `career_stages` / `character_careers` / `career_history` 的代码：职业 CRUD、`careers/batch`、
-角色挂接接口、`characters/with-relations` 的 `careers`、`wizard.careers`、角色向导分配职业、卡片 v3 导入，
+角色挂接接口、`characters/with-relations` 的 `careers`、`wizard.careers`、角色向导分配职业、卡片导入，
 以及以后 `analysis-memory` 的阶段回写。**挂接只能经 `career_service.apply_assignment`（新挂用 `assign_new`）写入**。
 
 ### 2. 签名
@@ -260,7 +264,7 @@ async def careers_reference(db, project_id) -> str   # 「剑修（主修）：�
   职业对不上 / 超限 / 重复 → 忽略并写入 `done.result.warnings`，阶段对不上 → 第 1 阶 + warning；`done.result` 另含
   `assignments: AssignmentOut[]`。项目没有职业时提示词与写入完全不变（AC6）。
 - 项目级挂接列表 `GET /projects/{pid}/character-careers` → `AssignmentOut[]`（按角色、主职业在前；先校验项目归属，他人 404），供角色卡片汇总主 / 副职业一次取回，前端不得按职业逐个请求 `holders` 拼装。
-- 卡片 v3：见上方「卡片导入导出」；职业结构兼容 v2。
+- 卡片 v5：见上方「卡片导入导出」；旧职业结构兼容v2，v4起同名默认skip不追加阶段，v5复用不覆盖整理标签。
 
 | kind | resource_key | 路由 | `done.result` |
 |---|---|---|---|
