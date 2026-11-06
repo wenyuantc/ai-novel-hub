@@ -1279,3 +1279,25 @@
 ### Next Steps
 
 - 保留人工未验项：分类只读控件状态、读取失败后同版本重试；详见归档父任务research/category-browser-verification.md。
+
+
+## Session 38: 设定条目与字段的 AI 可见策略
+<!-- trellis-session: v=2 fp=d6c434cfe34e0394 -->
+
+**Date**: 2026-11-07
+**Task**: 设定条目与字段的 AI 可见策略
+**Branch**: `codex/setting-ai-visibility`
+
+### Summary
+
+完成 TODOS 第 5 项：全入口执行条目与字段可见策略，手动引用不能绕过限制；支持单向一跳、九类提及、旧会话只读保留和 v6 备份／卡片。后端 2495 项得到通过结果（1 项并行超时后串行通过），前端 1001 项通过。已在本地开发实例复验字段隐藏、手动选角、单跳及提及规则，未发送真实模型请求。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `27199a5` | feat(settings): 统一设定条目与字段的 AI 可见策略 |
+
+### Status
+
+[OK] **Completed**
