@@ -81,7 +81,10 @@ def serialized(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: serialized(item) for key, item in value.items()}
     if isinstance(value, Base):
-        return jsonable_encoder({col.key: getattr(value, col.key) for col in inspect(value).mapper.columns})
+        # 整理标签由专用 DTO/dict 显式承载，新增 ORM 列不能自动扩展旧工具的模型输入。
+        return jsonable_encoder({
+            col.key: getattr(value, col.key) for col in inspect(value).mapper.columns if col.key != "setting_tags"
+        })
     return jsonable_encoder(value)
 
 
@@ -298,6 +301,16 @@ FIELD_LABELS = {
     "revision": "版本",
     "field_key": "设定字段",
     "custom_field_id": "自定义字段",
+    "definition_id": "共享字段定义",
+    "field_type": "字段类型",
+    "applicable_types": "适用条目类型",
+    "reference_types": "允许引用类型",
+    "option_id": "字段选项",
+    "reference_handle_id": "字段引用目标",
+    "archived": "是否停用",
+    "fields_revision": "字段目录版本",
+    "expected_fields_revision": "预期字段目录版本",
+    "expected_timeline_revision": "预期条目版本",
     "operation": "变化方式",
     "value": "变化值",
     "anchor_kind": "章节锚点类型",
@@ -348,6 +361,8 @@ def preview_diff(changes: list[dict], *, include_insert_sort: bool = False) -> l
         # 与备份导入复用相同的类型化引用语义；只生成预览副本，不改持久化值。
         if table == "setting_timelines" and "baseline" in result:
             result["baseline"] = setting_payload(result["baseline"], remap)
+        if table == "setting_text_fields" and "base_value" in result:
+            result["base_value"] = setting_payload(result["base_value"], remap)
         if table == "setting_progressions" and "value" in result:
             result["value"] = setting_event_value(result["value"], result.get("field_key"), remap)
         return result

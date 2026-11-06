@@ -16,7 +16,6 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
-    Text,
     UniqueConstraint,
     false,
     text,
@@ -37,7 +36,11 @@ _SUBJECT_SHAPE = (
     "(subject_kind = 'career' AND character_id IS NOT NULL AND related_character_id IS NULL "
     "AND world_setting_id IS NULL AND career_id IS NOT NULL AND organization_id IS NULL) OR "
     "(subject_kind = 'membership' AND character_id IS NOT NULL AND related_character_id IS NULL "
-    "AND world_setting_id IS NULL AND career_id IS NULL AND organization_id IS NOT NULL)"
+    "AND world_setting_id IS NULL AND career_id IS NULL AND organization_id IS NOT NULL) OR "
+    "(subject_kind = 'organization' AND character_id IS NULL AND related_character_id IS NULL "
+    "AND world_setting_id IS NULL AND career_id IS NULL AND organization_id IS NOT NULL) OR "
+    "(subject_kind = 'career_entry' AND character_id IS NULL AND related_character_id IS NULL "
+    "AND world_setting_id IS NULL AND career_id IS NOT NULL AND organization_id IS NULL)"
 )
 
 
@@ -59,6 +62,8 @@ class SettingTimeline(TimestampMixin, Base):
         _subject_index("uq_setting_timelines_relationship", "relationship", "character_id", "related_character_id"),
         _subject_index("uq_setting_timelines_career", "career", "character_id", "career_id"),
         _subject_index("uq_setting_timelines_membership", "membership", "character_id", "organization_id"),
+        _subject_index("uq_setting_timelines_organization", "organization", "organization_id"),
+        _subject_index("uq_setting_timelines_career_entry", "career_entry", "career_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -88,20 +93,29 @@ class SettingTimeline(TimestampMixin, Base):
 
 
 class SettingTextField(TimestampMixin, Base):
-    """条目内多行文本字段：重命名不改变 ID 和已有变化的关联。"""
+    """条目字段绑定；保留旧物理身份，让旧文本事件继续关联原行。"""
 
     __tablename__ = "setting_text_fields"
     __table_args__ = (
         UniqueConstraint("timeline_id", "label", name="uq_setting_text_fields_timeline_id_label"),
+        UniqueConstraint("timeline_id", "definition_id", name="uq_setting_text_fields_timeline_id_definition_id"),
         CheckConstraint("length(trim(label)) > 0", name="label_nonempty"),
+        CheckConstraint(
+            "(definition_id IS NULL AND label IS NOT NULL) OR (definition_id IS NOT NULL AND label IS NULL)",
+            name="binding_shape",
+        ),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     timeline_id: Mapped[int] = mapped_column(
         ForeignKey("setting_timelines.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    label: Mapped[str] = mapped_column(String(100), nullable=False)
-    base_value: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    definition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("setting_field_definitions.id", ondelete="NO ACTION"), index=True, nullable=True
+    )
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    base_value: Mapped[Any] = mapped_column(JSON(none_as_null=False), default="", server_default='""', nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
@@ -152,7 +166,7 @@ class SettingProgression(TimestampMixin, Base):
     # 不用 RESTRICT：删除主体时字段与事件会在同一语句中级联清理；单独删除被引用字段仍由 NO ACTION 阻止。
     custom_field_id: Mapped[int | None] = mapped_column(ForeignKey("setting_text_fields.id"), index=True, nullable=True)
     operation: Mapped[str] = mapped_column(String(8), nullable=False)
-    value: Mapped[Any] = mapped_column(JSON, nullable=False)
+    value: Mapped[Any] = mapped_column(JSON(none_as_null=False), nullable=False)
     anchor_kind: Mapped[str] = mapped_column(String(8), nullable=False)
     chapter_id: Mapped[int | None] = mapped_column(
         ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True

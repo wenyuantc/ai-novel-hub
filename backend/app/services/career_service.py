@@ -32,7 +32,14 @@ from app.schemas.career import (
     StageOut,
 )
 from app.schemas.progression import BaselineUpdate, ProgressionCreate, StoryPosition
-from app.services import career_progression_service, setting_progression_service, story_service
+from app.schemas.setting_fields import EntityRef
+from app.services import (
+    career_progression_service,
+    setting_catalog_service,
+    setting_field_service,
+    setting_progression_service,
+    story_service,
+)
 from app.services.project_service import get_manageable_project
 
 MAX_MAIN_CAREERS = 1
@@ -243,6 +250,7 @@ async def new_career(db: AsyncSession, project_id: int, data: CareerCreate) -> C
     db.add(career)
     await db.flush()
     await sync_stages(db, career, data.stages)
+    await setting_catalog_service.ensure_entry_timeline(db, project_id, "career", career.id)
     return career
 
 
@@ -368,6 +376,9 @@ async def delete_career(db: AsyncSession, user_id: int, project_id: int, career_
 
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     career = await get_owned_career(db, user_id, project_id, career_id)
+    await setting_field_service.cleanup_unreferenced_handles(
+        db, project_id, [EntityRef(kind="career", id=career.id)]
+    )
     await db.delete(career)
     await bump_revision(db, project_id)
     await db.commit()

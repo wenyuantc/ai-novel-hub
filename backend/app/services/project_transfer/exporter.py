@@ -30,9 +30,9 @@ from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRul
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 3
+VERSION = 5
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0034"
+APP_SCHEMA = "0036"
 BATCH = 500
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 STYLE_FIELDS = ("name", *FIELD_LIMITS)

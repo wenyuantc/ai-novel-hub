@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.schemas.progression import ProgressionCreate, ProgressionUpdate, StoryPosition
 from app.services.setting_progression_resolver import (
+    EffectiveSnapshot,
     ProgressionEvent,
     resolve_progressions,
     validate_baseline,
@@ -377,5 +378,100 @@ def test_career_note_still_enforces_200_character_database_limit():
             "replace",
             {"exists": True, "state": {"role": "main", "stage_id": 1, "note": "甲" * 201}},
         )
+
+
+@pytest.mark.parametrize("subject", ["organization", "career_entry"])
+def test_entry_subjects_have_empty_baselines_and_never_create_assignments(subject):
+    validate_baseline(subject, {})
+    events = [_planned(1, 20, None, "公开招生", custom_field_id=7, boundary="end")]
+    before = resolve_progressions(subject, {}, {7: "不招收"}, events, _at(20))
+    after = resolve_progressions(subject, {}, {7: "不招收"}, events, _at(21))
+    assert before.fields == after.fields == {}
+    assert before.custom_fields == {7: "不招收"}
+    assert after.custom_fields == {7: "公开招生"}
+    with pytest.raises(ValueError):
+        validate_baseline(subject, {"exists": True})
+    with pytest.raises(ValueError):
+        validate_progression_value(subject, "presence", "replace", {"exists": True})
+
+
+@pytest.mark.parametrize("subject", ["character", "world", "organization", "career_entry"])
+def test_all_four_field_types_replay_at_5_20_and_21_with_explicit_clears(subject):
+    from app.services.setting_field_values import FieldSpec
+
+    base = {1: "旧多行", 2: "旧单行", 3: {"option_id": 30}, 4: {"reference_handle_id": 40}}
+    specs = {1: FieldSpec("text"), 2: FieldSpec("line"),
+             3: FieldSpec("dropdown", option_ids=frozenset({30, 31})),
+             4: FieldSpec("reference", reference_handle_ids=frozenset({40, 41}))}
+    values = {1: "新多行", 2: "新单行", 3: {"option_id": 31}, 4: {"reference_handle_id": 41}}
+    events = [_planned(field_id, 20, None, value, custom_field_id=field_id, boundary="end")
+              for field_id, value in values.items()]
+    for chapter in (5, 20):
+        before = resolve_progressions(subject, {}, base, events, _at(chapter), field_specs=specs)
+        assert before.field_values == base
+        assert before.custom_fields == {1: "旧多行"}
+    after = resolve_progressions(subject, {}, base, events, _at(21), field_specs=specs)
+    assert after.field_values == values
+    assert after.custom_fields == {1: "新多行"}
+    assert resolve_progressions(subject, {}, base, events, _at(20, "end"), field_specs=specs).field_values == values
+    clears = [_planned(10 + field_id, 22, None, value, custom_field_id=field_id)
+              for field_id, value in {1: "", 2: "", 3: None, 4: None}.items()]
+    assert resolve_progressions(subject, {}, base, events + clears, None, field_specs=specs).field_values == {
+        1: "", 2: "", 3: None, 4: None,
+    }
+
+
+def test_typed_replay_deep_copies_baselines_and_events_and_keeps_legacy_events_untouched():
+    from app.services.setting_field_values import FieldSpec
+
+    base = {1: {"option_id": 2}, 3: "历史原文"}
+    value = {"option_id": 4}
+    events = [_planned(1, 20, None, value, custom_field_id=1),
+              _planned(2, 20, None, "旧字符串事件", custom_field_id=3, operation="append")]
+    original_base, original_value = deepcopy(base), deepcopy(value)
+    result = resolve_progressions("world", {}, base, events, None, field_specs={
+        1: FieldSpec("dropdown", option_ids=frozenset({2, 4})), 3: FieldSpec("text"),
+    })
+    assert result.custom_fields == {3: "历史原文\n旧字符串事件"}
+    result.field_values[1]["option_id"] = 99
+    assert base == original_base
+    assert value == original_value
+    assert events[1].value == "旧字符串事件"
+
+
+def test_typed_replay_inherits_manual_priority_orphans_and_missing_field_checks():
+    from app.services.setting_field_values import FieldSpec
+
+    spec = {1: FieldSpec("dropdown", option_ids=frozenset({2, 3, 4}))}
+    events = [_planned(1, 20, None, {"option_id": 3}, custom_field_id=1, protection="manual"),
+              _planned(2, 20, None, {"option_id": 4}, custom_field_id=1, protection="automatic", sort_order=99),
+              ProgressionEvent(id=3, field_key=None, custom_field_id=1, operation="replace", value=None,
+                               anchor_kind="chapter", chapter_id=None),
+              _planned(4, 21, None, None, custom_field_id=1, active=False)]
+    result = resolve_progressions("organization", {}, {1: {"option_id": 2}}, events, None, field_specs=spec)
+    assert result.field_values == {1: {"option_id": 3}}
+    assert result.applied_event_ids == (2, 1)
+    assert result.orphaned_event_ids == (3,)
+    with pytest.raises(ValueError):
+        resolve_progressions("organization", {}, {}, events, None, field_specs=spec)
+
+
+def test_typed_progression_requires_prefetched_spec_and_foreign_options_are_rejected():
+    from app.services.setting_field_values import FieldSpec
+
+    event = _planned(1, 20, None, {"option_id": 99}, custom_field_id=1)
+    with pytest.raises(ValueError):
+        resolve_progressions("world", {}, {1: None}, [event], None, field_specs={1: FieldSpec("dropdown")})
+    with pytest.raises(ValueError):
+        resolve_progressions("world", {}, {1: {"option_id": 2}}, [], None)
+
+
+def test_legacy_snapshot_construction_keeps_typed_values_optional_and_independent():
+    first = EffectiveSnapshot({}, {1: "旧字段"}, (), (), "confirmed")
+    second = EffectiveSnapshot({}, {}, (), (), "legacy_unverified")
+    assert first.field_values == second.field_values == {}
+    first.field_values[1] = "新字段"
+    assert second.field_values == {}
+    assert first.custom_fields == {1: "旧字段"}
 
 

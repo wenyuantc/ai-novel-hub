@@ -18,7 +18,7 @@ async def export_cards(project_id: int, body: CardExportRequest, user: CurrentUs
 
 @router.post("/import/preview", response_model=CardPreview)
 async def preview_import(project_id: int, body: CardPreviewRequest, user: CurrentUser, db: DbDep) -> CardPreview:
-    return await svc.preview_cards(db, user.id, project_id, body.data)
+    return await svc.preview_cards(db, user.id, project_id, body.data, body)
 
 
 @router.post("/import", response_model=CardImportResult)

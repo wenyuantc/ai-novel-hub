@@ -7,6 +7,7 @@
 
 import hashlib
 import json
+import logging
 from copy import deepcopy
 from datetime import datetime
 from typing import Any
@@ -25,16 +26,31 @@ from app.models import (
     Project,
     RelationshipType,
     RetrievalChunk,
+    SettingProgression,
+    SettingTextField,
+    SettingTimeline,
     StoryMemory,
     Task,
 )
 from app.models.planning import PlanningUnit
-from app.services import memory_service, planning_lifecycle, project_lifecycle, retrieval_service, version_service
+from app.models.setting_fields import SettingReferenceHandle
+from app.services import (
+    memory_service,
+    planning_lifecycle,
+    project_lifecycle,
+    retrieval_service,
+    setting_category_service,
+    setting_field_service,
+    version_service,
+)
 from app.services.chapter_service import count_words
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, TableRule
+from app.services.project_transfer.remap import RemapContext, setting_event_value, setting_payload
+from app.services.setting_category_validation import assert_canonical_setting_tags, validate_category_graph_snapshot
 
 Snapshot = dict[str, dict[str, dict[str, Any]]]
 Effect = dict[str, Any]
+logger = logging.getLogger(__name__)
 
 # 注册表的拓扑顺序用于插入，逆序用于删除；额外包含实际的级联 / 章号平移影响。
 EFFECT_TABLES = frozenset(
@@ -64,6 +80,11 @@ EFFECT_TABLES = frozenset(
         "setting_timelines",
         "setting_text_fields",
         "setting_progressions",
+        "setting_field_definitions",
+        "setting_field_options",
+        "setting_reference_handles",
+        "setting_categories",
+        "setting_category_rules",
         "chapter_versions",
         "generation_logs",
         "tasks",
@@ -105,6 +126,11 @@ _LABELS = {
     "setting_timelines": "设定时间线",
     "setting_text_fields": "设定文本字段",
     "setting_progressions": "剧情变化",
+    "setting_field_definitions": "字段定义",
+    "setting_field_options": "字段选项",
+    "setting_reference_handles": "字段引用目标",
+    "setting_categories": "设定分类",
+    "setting_category_rules": "分类规则",
     "chapter_versions": "章节版本",
     "generation_logs": "生成记录",
     "tasks": "任务",
@@ -144,7 +170,8 @@ def _columns(rule: TableRule):
     table = rule.model.__table__
     if rule.table in _LINK_ONLY:
         return [table.c[name] for name in ("id", "project_id", "chapter_id")]
-    ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS | {"planning_revision"}
+    ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS
+               | {"planning_revision", "fields_revision", "categories_revision"}
                if rule.model is Project else _IGNORED)
     return [col for col in table.columns if col.name not in ignored and col.name != "word_count"]
 
@@ -276,7 +303,7 @@ def diff(before: Snapshot, after: Snapshot) -> list[Effect]:
                         "pk": _pk(rule, previous or current),
                         "before": deepcopy(previous),
                         "after": deepcopy(current),
-                        "format_version": 2,
+                        "format_version": 4,
                     }
                 )
     return result
@@ -290,7 +317,7 @@ def chapter_text_effect(
         "pk": {"id": chapter_id},
         "before": {"version_id": before_version_id, "hash": before_hash},
         "after": {"version_id": after_version_id, "hash": after_hash},
-        "format_version": 2,
+        "format_version": 4,
     }
 
 
@@ -318,7 +345,7 @@ _LEGACY_SETTING_TABLES = frozenset(
 
 def _legacy_affects_timeline(effect: Effect) -> bool:
     table = effect.get("table")
-    if table in _LEGACY_SETTING_TABLES:
+    if table in _LEGACY_SETTING_TABLES or table in _FIELD_CATALOG_TABLES or table in _CATEGORY_TABLES:
         return True
     if table not in {"chapters", "outlines", "chapter_plans"}:
         return False
@@ -337,13 +364,208 @@ def validate_effect_versions(effects: list[Effect]) -> None:
     """旧快照缺少基线和变化记录时，不可用 Core 恢复静默破坏时间线。"""
     for effect in effects:
         version = effect.get("format_version", 1)
-        if type(version) is not int or version not in (1, 2):
+        if type(version) is not int or version not in (1, 2, 3, 4):
             raise ConflictError("该智能体修改的效果版本不受支持", extra={"code": "unsupported_effect_version"})
         if version == 1 and _legacy_affects_timeline(effect):
             raise ConflictError(
                 "旧智能体修改缺少设定时间线信息，请在基础设定中手动修正",
                 extra={"code": "legacy_effect_requires_manual_correction"},
             )
+
+
+_FIELD_CATALOG_TABLES = frozenset({"setting_field_definitions", "setting_field_options", "setting_reference_handles"})
+_CATEGORY_TABLES = frozenset({"setting_categories", "setting_category_rules"})
+_CATEGORY_GRAPH_TABLES = _CATEGORY_TABLES | {"setting_field_definitions", "setting_field_options"}
+_ENTRY_COLUMNS = {
+    "characters": "character_id", "world_settings": "world_setting_id",
+    "organizations": "organization_id", "careers": "career_id",
+}
+
+
+def _legacy_field_conflict() -> None:
+    raise ConflictError(
+        "旧智能体修改缺少类型化字段资料，请在基础设定中手动修正",
+        extra={"code": "legacy_effect_requires_manual_correction"},
+    )
+
+
+async def _preflight_legacy_field_effects(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """保留字段阶段 v2 的真实旧格式边界，分类兼容不能放宽类型化资料保护。"""
+    legacy = [effect for effect in effects if effect.get("format_version", 1) == 2]
+    if not legacy:
+        return
+    shared = list((await db.execute(select(
+        SettingTextField.id, SettingTextField.timeline_id, SettingTextField.definition_id,
+    ).join(SettingTimeline).where(
+        SettingTimeline.project_id == project_id, SettingTextField.definition_id.is_not(None),
+    ))).all())
+    shared_fields = {row.id for row in shared}
+    shared_timelines = {row.timeline_id for row in shared}
+    for effect in effects:
+        if effect["table"] == "setting_text_fields":
+            for row in (effect["before"], effect["after"]):
+                if row is not None and row.get("definition_id") is not None:
+                    shared_fields.add(row["id"])
+                    shared_timelines.add(row["timeline_id"])
+    typed_events = list((await db.execute(select(SettingProgression.id, SettingProgression.chapter_id).join(
+        SettingTimeline,
+    ).where(SettingTimeline.project_id == project_id, SettingProgression.custom_field_id.in_(shared_fields)))).all())
+    has_typed_events = bool(typed_events) or any(
+        effect["table"] == "setting_progressions" and any(
+            row is not None and row.get("custom_field_id") in shared_fields
+            for row in (effect["before"], effect["after"])
+        ) for effect in effects
+    )
+    timelines = [dict(row) for row in (await db.execute(select(SettingTimeline.__table__).where(
+        SettingTimeline.project_id == project_id,
+    ))).mappings()]
+    handles = [dict(row) for row in (await db.execute(select(SettingReferenceHandle.__table__).where(
+        SettingReferenceHandle.project_id == project_id,
+    ))).mappings()]
+    # 整轮里尚未恢复的 v3 行也属于预检资料图，不能只看当前库中的幸存行。
+    for effect in effects:
+        collection = {"setting_timelines": timelines, "setting_reference_handles": handles}.get(effect["table"])
+        if collection is not None:
+            collection.extend(row for row in (effect["before"], effect["after"]) if row is not None)
+    for effect in legacy:
+        table = effect["table"]
+        rows = [row for row in (effect["before"], effect["after"]) if row is not None]
+        if table in _FIELD_CATALOG_TABLES:
+            _legacy_field_conflict()
+        if table == "setting_text_fields":
+            if effect["pk"]["id"] in shared_fields or any(
+                row.get("definition_id") is not None or row.get("label") is None
+                or not isinstance(row.get("base_value"), str) for row in rows
+            ):
+                _legacy_field_conflict()
+        if table == "setting_progressions" and any(row.get("custom_field_id") in shared_fields for row in rows):
+            _legacy_field_conflict()
+        if table == "setting_timelines" and (
+            any(row.get("subject_kind") in {"organization", "career_entry"} for row in rows)
+            or ((effect["before"] is None or effect["after"] is None) and effect["pk"]["id"] in shared_timelines)
+        ):
+            _legacy_field_conflict()
+        if table in _ENTRY_COLUMNS:
+            destructive = effect["before"] is None or effect["after"] is None
+            category_changed = table == "world_settings" and not destructive and (
+                effect["before"].get("category") != effect["after"].get("category")
+            )
+            if destructive or category_changed:
+                column, entry_id = _ENTRY_COLUMNS[table], effect["pk"]["id"]
+                if any(handle.get(column) == entry_id for handle in handles) or any(
+                    timeline["id"] in shared_timelines and timeline.get(column) == entry_id for timeline in timelines
+                ):
+                    _legacy_field_conflict()
+        if table in {"chapters", "outlines", "chapter_plans"} and has_typed_events and _legacy_affects_timeline(effect):
+            _legacy_field_conflict()
+
+
+def _legacy_category_conflict() -> None:
+    raise ConflictError(
+        "旧智能体修改缺少整理标签或分类资料，请手动修正",
+        extra={"code": "legacy_effect_requires_manual_correction"},
+    )
+
+
+def _legacy_omits_tags(effect: Effect) -> bool:
+    """仅合法旧 UPDATE 的两侧均省略新列时，恢复仍保持省略。"""
+    return (
+        effect.get("format_version", 1) in (2, 3) and effect["table"] in _ENTRY_COLUMNS
+        and effect["before"] is not None and effect["after"] is not None
+        and "setting_tags" not in effect["before"] and "setting_tags" not in effect["after"]
+    )
+
+
+async def _preflight_category_effects(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """只读投影整轮拟恢复图；任何旧资料损失必须早于第一项 restore。"""
+    entity_effects = [effect for effect in effects if effect["table"] in _ENTRY_COLUMNS]
+    tags = {}
+    for table in {effect["table"] for effect in entity_effects}:
+        rule = _BY_TABLE[table]
+        ids = [effect["pk"]["id"] for effect in entity_effects if effect["table"] == table]
+        for entry_id, setting_tags in await db.execute(select(rule.model.id, rule.model.setting_tags).where(
+            rule.scope(project_id), rule.model.id.in_(ids),
+        )):
+            tags[table, entry_id] = deepcopy(setting_tags)
+    for effect in effects:
+        version, table = effect.get("format_version", 1), effect["table"]
+        before, after = effect["before"], effect["after"]
+        if version < 4 and table in _CATEGORY_TABLES:
+            _legacy_category_conflict()
+        if table not in _ENTRY_COLUMNS:
+            continue
+        if version in (2, 3):
+            for row in (before, after):
+                if row is not None and "setting_tags" in row and (
+                    type(row["setting_tags"]) is not list or row["setting_tags"] != []
+                ):
+                    _legacy_category_conflict()
+            if before is not None and after is not None and (
+                ("setting_tags" in before) != ("setting_tags" in after)
+            ):
+                _legacy_category_conflict()
+        elif version == 4:
+            for row in (before, after):
+                if row is None:
+                    continue
+                if "setting_tags" not in row:
+                    _raise_conflicts([_conflict(effect, "效果缺少整理标签快照")])
+                try:
+                    assert_canonical_setting_tags(row["setting_tags"])
+                except (AppError, ValueError) as exc:
+                    raise ConflictError("整理标签快照不合法，无法撤销", extra={"code": "undo_conflict"}) from exc
+        key = table, effect["pk"]["id"]
+        if version in (2, 3) and before is None and key in tags and tags[key] != []:
+            _legacy_category_conflict()
+        if before is None:
+            tags.pop(key, None)
+        elif not _legacy_omits_tags(effect):
+            # 旧 DELETE 恢复仅为新插入行使用已知的迁移空默认，UPDATE 不补空。
+            tags[key] = deepcopy(before.get("setting_tags", []))
+
+    relevant = [effect for effect in effects if effect["table"] in _CATEGORY_GRAPH_TABLES]
+    if not relevant:
+        return
+    graph = {}
+    for table in _CATEGORY_GRAPH_TABLES:
+        rule = _BY_TABLE[table]
+        rows = (await db.execute(select(rule.model.__table__).where(rule.scope(project_id)))).mappings()
+        graph[table] = {str(row["id"]): deepcopy(dict(row)) for row in rows}
+    for effect in relevant:
+        key = _key(effect["pk"])
+        if effect["before"] is None:
+            graph[effect["table"]].pop(key, None)
+        else:
+            graph[effect["table"]][key] = deepcopy(effect["before"])
+    try:
+        validate_category_graph_snapshot(
+            project_id, categories=list(graph["setting_categories"].values()),
+            rules=list(graph["setting_category_rules"].values()),
+            definitions=list(graph["setting_field_definitions"].values()),
+            options=list(graph["setting_field_options"].values()),
+        )
+    except (AppError, ValueError) as exc:
+        if any(effect.get("format_version", 1) < 4 for effect in relevant):
+            _legacy_category_conflict()
+        raise ConflictError("分类规则的依赖已变化，无法撤销", extra={"code": "undo_conflict"}) from exc
+
+
+async def preflight_effect_versions(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    validate_effect_versions(effects)
+    await _preflight_legacy_field_effects(db, project_id, effects)
+    await _preflight_category_effects(db, project_id, effects)
+
+
+def _categories_affected(effects: list[Effect]) -> bool:
+    for effect in effects:
+        if effect["table"] in _CATEGORY_TABLES:
+            return True
+        if effect["table"] in _ENTRY_COLUMNS and not _legacy_omits_tags(effect):
+            before = (effect["before"] or {}).get("setting_tags", [])
+            after = (effect["after"] or {}).get("setting_tags", [])
+            if before != after:
+                return True
+    return False
 
 
 def _conflict(effect: Effect, reason: str = "执行后已被修改") -> dict:
@@ -392,6 +614,16 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
     """禁止删除本次新建实体时悄悄级联删除 / 解除其后来新增的关联。"""
     changes = {(e["table"], _key(e["pk"])): e for e in effects if e["table"] != "chapter_text"}
     conflicts = []
+    semantic_sources = []
+    if any(e["before"] is None and e["table"] != "chapter_text" for e in effects):
+        for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
+            rule = _BY_TABLE[table]
+            rows = (await db.execute(
+                select(*_columns(rule)).where(rule.scope(project_id)).with_for_update()
+            )).mappings()
+            semantic_sources.extend(
+                (table, _key(_pk(rule, row)), _setting_references(table, dict(row))) for row in rows
+            )
     for effect in effects:
         if effect["before"] is not None or effect["table"] == "chapter_text":
             continue
@@ -410,6 +642,17 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
                         continue
                     conflicts.append(_conflict(effect, "新增了关联记录"))
                     break
+        target = (effect["table"], effect["pk"].get("id"))
+        for table, key, references in semantic_sources:
+            if target not in references:
+                continue
+            child = changes.get((table, key))
+            if child is not None and (
+                child["before"] is None or target not in _setting_references(table, child["before"])
+            ):
+                continue
+            conflicts.append(_conflict(effect, "基础值或保留历史新增了引用"))
+            break
         # 细纲的选角存在 JSON 数组中，没有数据库外键；撤销新建角色同样不能留下悬空引用。
         if effect["table"] == "characters":
             character_id = effect["pk"]["id"]
@@ -436,6 +679,26 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
     return conflicts
 
 
+def _setting_references(table: str, row: dict) -> set[tuple[str, int]]:
+    """复用备份的精确 JSON 引用语义，包含停用与孤儿事件。"""
+    references = set()
+
+    class ReferenceCollector(RemapContext):
+        def ref(self, target: str, old: Any, where: str) -> Any:
+            if type(old) is int:
+                references.add((target, old))
+            return old
+
+    context = ReferenceCollector({})
+    if table == "setting_timelines":
+        setting_payload(row.get("baseline"), context)
+    elif table == "setting_text_fields":
+        setting_payload(row.get("base_value"), context)
+    elif table == "setting_progressions":
+        setting_event_value(row.get("value"), row.get("field_key"), context)
+    return references
+
+
 async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
     conflicts = []
     for effect in effects:
@@ -451,10 +714,23 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
             conflicts.append(_conflict(effect, "记录不属于当前项目"))
             continue
         current = await _current(db, rule, effect["pk"], project_id)
-        expected_after = after
+        expected_after = deepcopy(after)
+        if name == "projects" and expected_after is not None:
+            expected_after.pop("fields_revision", None)
+            expected_after.pop("categories_revision", None)
+        if name == "setting_text_fields" and expected_after is not None and effect.get("format_version", 1) < 3:
+            # 仅 legacy 文本允许补充迁移默认值；shared 已在整轮预检中拒绝。
+            expected_after.setdefault("definition_id", None)
         if name == "world_settings" and after is not None and "aliases" not in after:
             # 0033前的v2效果没有该列；只接受仍为迁移默认值的记录，作者新增别名后必须冲突。
-            expected_after = {**after, "aliases": []}
+            expected_after = {**expected_after, "aliases": []}
+        if _legacy_omits_tags(effect) and current is not None:
+            # 只忽略合法旧格式确实没有的标签列；恢复 payload 不补 []，保留后来标签。
+            current.pop("setting_tags", None)
+        elif (name in _ENTRY_COLUMNS and effect.get("format_version", 1) in (2, 3)
+              and before is None and after is not None):
+            if "setting_tags" not in after and current is not None:
+                current.pop("setting_tags", None)
         # 恢复删除行时必须检查全表主键，不能只看项目范围（id 可能已被其他项目占用）。
         if after is None:
             exists = await db.scalar(
@@ -486,6 +762,8 @@ def _values(rule: TableRule, row: dict) -> dict:
         values["word_count"] = count_words(values["content"])
     if rule.table == "projects":
         values.pop("planning_revision", None)
+        values.pop("fields_revision", None)
+        values.pop("categories_revision", None)
     return values
 
 
@@ -531,6 +809,12 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
                 # 自定义字段与内置字段互斥，解除引用时必须同时恢复另一侧。
                 if rule.table == "setting_progressions" and "custom_field_id" in values:
                     values["field_key"] = effect["before"]["field_key"]
+                if rule.table == "setting_text_fields" and "definition_id" in values:
+                    values["label"] = effect["before"]["label"]
+                if rule.table == "setting_category_rules":
+                    # tag/dropdown 互斥；解除新定义或选项引用时原子恢复整组载荷。
+                    values.update({name: effect["before"][name]
+                                   for name in ("kind", "tag", "definition_id", "option_id")})
                 await db.execute(update(rule.model.__table__).where(_where(rule, effect["pk"])).values(**values))
     for rule in reversed(_RULES):
         for effect in by_table[rule.table]:
@@ -565,11 +849,59 @@ async def _refresh_loaded(db: AsyncSession, effects: list[Effect]) -> None:
     for obj in list(db.identity_map.values()):
         state = inspect(obj)
         effect = changes.get((state.mapper.local_table.name, state.identity))
-        if effect is not None:
-            if effect["before"] is None:
-                db.expunge(obj)
-            else:
-                await db.refresh(obj)
+        if effect is not None and effect["before"] is not None:
+            await db.refresh(obj)
+
+
+def discard_undone_inserts(db: AsyncSession, effects: list[Effect]) -> None:
+    """仅成功后移除本轮新建对象；失败回滚时它们仍须属于原会话。"""
+    removed = {(effect["table"], tuple(effect["pk"].values())) for effect in effects if effect["before"] is None}
+    for obj in list(db.identity_map.values()):
+        state = inspect(obj)
+        if (state.mapper.local_table.name, state.identity) in removed:
+            db.expunge(obj)
+
+
+async def refresh_after_rollback(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """Core恢复后的refresh不是ORM脏修改；回滚后只重载本轮身份及项目。"""
+    changed = {("chapters" if effect["table"] == "chapter_text" else effect["table"],
+                tuple(effect["pk"].values())) for effect in effects}
+    changed.add(("projects", (project_id,)))
+    try:
+        with db.no_autoflush:
+            for obj in list(db.identity_map.values()):
+                state = inspect(obj)
+                table = state.mapper.local_table.name
+                if (table, state.identity) not in changed or not state.persistent:
+                    continue
+                rule = _BY_TABLE[table]
+                names = (column.name for column in rule.model.__table__.primary_key)
+                pk = dict(zip(names, state.identity, strict=True))
+                current = await db.scalar(select(state.mapper.class_).where(
+                    _where(rule, pk), rule.scope(project_id),
+                ).execution_options(populate_existing=True))
+                if current is None:
+                    db.expunge(obj)
+    except Exception:
+        logger.exception("撤销回滚后重新加载受影响记录失败")
+        # 连接不可用时也不能继续读临时值；不刷新或失效调用方无关的实例。
+        for obj in list(db.identity_map.values()):
+            state = inspect(obj)
+            if state.persistent and (state.mapper.local_table.name, state.identity) in changed:
+                db.expire(obj)
+
+
+async def _validate_restored_scopes(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """父行主键被他作品复用时，子行恢复不能跟随外键越过作品边界。"""
+    for effect in effects:
+        if effect["before"] is None or effect["table"] == "chapter_text":
+            continue
+        rule = _BY_TABLE[effect["table"]]
+        restored = await db.scalar(select(*rule.model.__table__.primary_key.columns).where(
+            _where(rule, effect["pk"]), rule.scope(project_id),
+        ).limit(1))
+        if restored is None:
+            _raise_conflicts([_conflict(effect, "恢复后的关联不属于当前项目")])
 
 
 async def _restore_text(db: AsyncSession, project_id: int, effect: Effect) -> None:
@@ -588,11 +920,12 @@ async def _restore_text(db: AsyncSession, project_id: int, effect: Effect) -> No
     await version_service.record(db, chapter, "restore", note=f"撤销智能体修改，恢复自 v{version.seq}")
 
 
-async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool:
+async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, discard_inserts: bool = True) -> bool:
     """原子撤销一项，不 commit。返回是否需在外层提交后 enqueue_memory。
 
     整轮由调用方逆 seq 调用，并在任一异常时回滚外层事务。内层保存点保证即使
-    还原遇到外键 / 唯一约束竞争，单项也不会留下部分改动。
+    还原遇到外键 / 唯一约束竞争，单项也不会留下部分改动。整轮调用方传
+    discard_inserts=False，待整轮提交成功后统一移除已撤销的新建对象。
     """
     validate_effect_versions(effects)
     await db.flush()
@@ -606,11 +939,20 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool
     )
     if locked.rowcount != 1:
         _raise_conflicts([{"table": "projects", "label": "项目不存在"}])
+    await preflight_effect_versions(db, project_id, effects)
+    restoring = False
     try:
         async with db.begin_nested():
             await _validate(db, project_id, effects)
+            restoring = True
             await _restore_rows(db, effects)
+            await _validate_restored_scopes(db, project_id, effects)
             await _refresh_loaded(db, effects)
+            try:
+                await setting_field_service.validate_project_field_graph(db, project_id)
+                await setting_category_service.validate_project_category_graph(db, project_id)
+            except (AppError, ValueError) as exc:
+                raise ConflictError("字段资料或历史引用已变化，无法撤销", extra={"code": "undo_conflict"}) from exc
             try:
                 await planning_lifecycle.validate_project(db, project_id)
             except BadRequestError as exc:
@@ -656,13 +998,27 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect]) -> bool
                 await memory_service.index_memories(db, project_id, rows)
                 retrieval_service.invalidate(project_id)
             await db.flush()
+            if any(effect["table"] in {"setting_field_definitions", "setting_field_options"} for effect in effects):
+                current_revision = await setting_field_service.fields_revision(db, project_id)
+                await setting_field_service.claim_fields_revision(db, project_id, current_revision)
+            if _categories_affected(effects):
+                current_revision = await setting_category_service.categories_revision(db, project_id)
+                await setting_category_service.claim_categories_revision(db, project_id, current_revision)
             # 全部恢复与跨主体校验成功后再失效规划版本；失败的保存点不应提前
             # 修改并 expire 调用方已加载的 Project，破坏后续的异步冲突处理。
             if any(effect["table"] in EFFECT_TABLES - {"projects", "generation_logs", "tasks"} for effect in effects):
                 await planning_lifecycle.bump_revision(db, project_id)
-    except IntegrityError as exc:
-        raise ConflictError(
-            "关联数据已变化，无法撤销",
-            extra={"code": "undo_conflict", "conflicts": [_conflict(e, "关联记录或唯一字段已变化") for e in effects]},
-        ) from exc
+    except BaseException as exc:
+        if restoring:
+            await refresh_after_rollback(db, project_id, effects)
+        if isinstance(exc, IntegrityError):
+            raise ConflictError(
+                "关联数据已变化，无法撤销",
+                extra={"code": "undo_conflict", "conflicts": [
+                    _conflict(e, "关联记录或唯一字段已变化") for e in effects
+                ]},
+            ) from exc
+        raise
+    if discard_inserts:
+        discard_undone_inserts(db, effects)
     return bool(memories)

@@ -5,9 +5,11 @@
 """
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import wraps
 from typing import cast
 
 from pydantic import JsonValue, ValidationError
@@ -47,6 +49,7 @@ from app.schemas.progression import (
     TimelineOut,
 )
 from app.services.project_service import get_manageable_project
+from app.services.setting_field_values import CanonicalFieldValue
 from app.services.setting_progression_resolver import (
     EffectiveSnapshot,
     ProgressionEvent,
@@ -67,8 +70,30 @@ CHARACTER_FIELDS = (
 )
 
 
+def _readonly(reader):
+    @wraps(reader)
+    async def wrapped(db: AsyncSession, *args, **kwargs):
+        with db.no_autoflush:
+            return await reader(db, *args, **kwargs)
+
+    return wrapped
+
+
+async def _check_read_revisions(
+    db: AsyncSession, project_id: int, timeline_id: int, timeline_revision: int, field_revision: int
+):
+    from app.services.setting_field_service import fields_revision, stale_revision
+
+    current_timeline = await db.scalar(select(SettingTimeline.revision).where(SettingTimeline.id == timeline_id))
+    if current_timeline != timeline_revision:
+        raise stale_revision(current_timeline or 0, "timeline")
+    current_fields = await fields_revision(db, project_id)
+    if current_fields != field_revision:
+        raise stale_revision(current_fields)
+
+
 def _stale_revision() -> ConflictError:
-    return ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision"})
+    return ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision", "scope": "timeline"})
 
 
 async def _read_project(db: AsyncSession, user_id: int, project_id: int) -> None:
@@ -243,6 +268,21 @@ def _as_event(row: SettingProgression, resolved_chapter_no: int | None) -> Progr
     )
 
 
+@dataclass(frozen=True)
+class FieldTimelineSnapshot:
+    """仅字段投影所需的时间线身份，不加载无关内置正文。"""
+
+    id: int
+    project_id: int
+    subject_kind: str
+    character_id: int | None
+    world_setting_id: int | None
+    organization_id: int | None
+    career_id: int | None
+    revision: int
+    baseline_status: str
+
+
 async def resolve_timelines(
     db: AsyncSession,
     project_id: int,
@@ -252,62 +292,143 @@ async def resolve_timelines(
     exclude_event_ids: Iterable[int] = (),
 ) -> dict[int, EffectiveSnapshot]:
     """批量、只读地求值；事件与字段需由写调用方提前 flush。"""
+    return await _resolve_timeline_snapshots(db, project_id, timelines, position, exclude_event_ids=exclude_event_ids)
+
+
+async def _resolve_field_timelines(
+    db: AsyncSession,
+    project_id: int,
+    timelines: Sequence[FieldTimelineSnapshot],
+    position: StoryPosition | None,
+    *,
+    definition_ids: Collection[int],
+) -> dict[int, dict[int, CanonicalFieldValue]]:
+    """内部字段范围投影只返回值，不能被误用为完整事实快照。"""
+    snapshots = await _resolve_timeline_snapshots(db, project_id, timelines, position, definition_ids=definition_ids)
+    return {timeline_id: snapshot.field_values for timeline_id, snapshot in snapshots.items()}
+
+
+async def _resolve_timeline_snapshots(
+    db: AsyncSession,
+    project_id: int,
+    timelines: Sequence[SettingTimeline | FieldTimelineSnapshot],
+    position: StoryPosition | None,
+    *,
+    exclude_event_ids: Iterable[int] = (),
+    definition_ids: Collection[int] | None = None,
+) -> dict[int, EffectiveSnapshot]:
+    """共享SQL与纯resolver；部分快照只允许由内部字段入口消费。"""
     if not timelines:
         return {}
     if any(t.project_id != project_id or t.id is None for t in timelines):
         raise ValueError("时间线必须已保存且全部属于同一作品")
     ids = [t.id for t in timelines]
-    custom_by_timeline: dict[int, dict[int, str]] = defaultdict(dict)
+    custom_by_timeline: dict[int, dict[int, JsonValue]] = defaultdict(dict)
     events_by_timeline: dict[int, list[ProgressionEvent]] = defaultdict(list)
     # 只读标量列而非 ORM 实例，避免 populate_existing 覆盖调用方尚未保存的对象；
     # no_autoflush 防止预览查询意外把同一 session 的其他脏对象写入事务。
     with db.no_autoflush:
-        fields = await db.execute(
-            select(SettingTextField.timeline_id, SettingTextField.id, SettingTextField.base_value).where(
-                SettingTextField.timeline_id.in_(ids)
+        from app.services.setting_field_service import (
+            fields_revision,
+            load_field_specs,
+            read_field_bindings,
+            stale_revision,
+        )
+
+        before_fields = await fields_revision(db, project_id)
+        before_timelines = dict(
+            (
+                await db.execute(
+                    select(SettingTimeline.id, SettingTimeline.revision).where(
+                        SettingTimeline.id.in_(ids),
+                    )
+                )
+            ).all()
+        )
+        if any(before_timelines.get(timeline.id) != timeline.revision for timeline in timelines):
+            raise stale_revision(max(before_timelines.values(), default=0), "timeline")
+        fields = (
+            await read_field_bindings(db, ids)
+            if definition_ids is None
+            else await read_field_bindings(
+                db,
+                ids,
+                definition_ids=definition_ids,
             )
         )
-        for timeline_id, field_id, base_value in fields:
-            custom_by_timeline[timeline_id][field_id] = base_value
-        rows = await db.execute(
-            select(
-                SettingProgression.id,
-                SettingProgression.timeline_id,
-                SettingProgression.field_key,
-                SettingProgression.custom_field_id,
-                SettingProgression.operation,
-                SettingProgression.value,
-                SettingProgression.anchor_kind,
-                SettingProgression.chapter_id,
-                SettingProgression.chapter_no,
-                SettingProgression.boundary,
-                SettingProgression.sort_order,
-                SettingProgression.protection,
-                SettingProgression.active,
-                SettingProgression.source_change_id,
-                Chapter.chapter_no.label("resolved_chapter_no"),
+        specs = (
+            await load_field_specs(db, project_id, fields)
+            if definition_ids is None
+            else await load_field_specs(
+                db,
+                project_id,
+                fields,
+                definition_ids=definition_ids,
             )
-            .outerjoin(
-                Chapter,
-                and_(Chapter.id == SettingProgression.chapter_id, Chapter.project_id == project_id),
+        )
+        for field in fields:
+            custom_by_timeline[field.timeline_id][field.id] = deepcopy(field.base_value)
+        event_predicates = [SettingProgression.timeline_id.in_(ids)]
+        if definition_ids is not None:
+            event_predicates.append(SettingProgression.custom_field_id.in_([field.id for field in fields]))
+        rows = (
+            await db.execute(
+                select(
+                    SettingProgression.id,
+                    SettingProgression.timeline_id,
+                    SettingProgression.field_key,
+                    SettingProgression.custom_field_id,
+                    SettingProgression.operation,
+                    SettingProgression.value,
+                    SettingProgression.anchor_kind,
+                    SettingProgression.chapter_id,
+                    SettingProgression.chapter_no,
+                    SettingProgression.boundary,
+                    SettingProgression.sort_order,
+                    SettingProgression.protection,
+                    SettingProgression.active,
+                    SettingProgression.source_change_id,
+                    Chapter.chapter_no.label("resolved_chapter_no"),
+                )
+                .outerjoin(
+                    Chapter,
+                    and_(Chapter.id == SettingProgression.chapter_id, Chapter.project_id == project_id),
+                )
+                .where(*event_predicates)
             )
-            .where(SettingProgression.timeline_id.in_(ids))
+            if definition_ids is None or fields
+            else []
         )
         for row in rows:
             events_by_timeline[row.timeline_id].append(
                 _as_event(cast(SettingProgression, row), row.resolved_chapter_no)
             )
+        after_fields = await fields_revision(db, project_id)
+        if before_fields != after_fields:
+            raise stale_revision(after_fields)
+        after_timelines = dict(
+            (
+                await db.execute(
+                    select(SettingTimeline.id, SettingTimeline.revision).where(
+                        SettingTimeline.id.in_(ids),
+                    )
+                )
+            ).all()
+        )
+        if before_timelines != after_timelines:
+            raise stale_revision(max(after_timelines.values(), default=0), "timeline")
     excluded = tuple(exclude_event_ids)
     return {
         timeline.id: resolve_progressions(
             cast(SubjectKind, timeline.subject_kind),
-            timeline.baseline,
+            cast(SettingTimeline, timeline).baseline if definition_ids is None else {},
             custom_by_timeline[timeline.id],
             events_by_timeline[timeline.id],
             position,
             baseline_status=cast(BaselineStatus, timeline.baseline_status),
             exclude_event_ids=excluded,
-            subject_identity=_identity(timeline),
+            subject_identity=_identity(cast(SettingTimeline, timeline)) if definition_ids is None else None,
+            field_specs={field_id: specs[field_id] for field_id in custom_by_timeline[timeline.id]},
         )
         for timeline in timelines
     }
@@ -343,8 +464,15 @@ async def latest_character_snapshots(
     for field in fields:
         character_id = by_timeline[field.timeline_id]
         assert character_id is not None
+        if field.id not in snapshots[field.timeline_id].custom_fields:
+            continue
+        label = field.label
+        if field.definition_id is not None:
+            from app.services.setting_field_service import get_definition
+
+            label = (await get_definition(db, project_id, field.definition_id)).label
         result[character_id].append(
-            {"field_id": field.id, "label": field.label, "value": snapshots[field.timeline_id].custom_fields[field.id]}
+            {"field_id": field.id, "label": label, "value": snapshots[field.timeline_id].custom_fields[field.id]}
         )
     return result
 
@@ -353,7 +481,7 @@ async def _materialize_many(db: AsyncSession, project_id: int, timelines: Sequen
     """验证并批量同步各主体最新投影；不提交调用方事务。"""
     if not timelines:
         return
-    supported = {"world", "character", "relationship", "career", "membership"}
+    supported = {"world", "character", "relationship", "career", "membership", "organization", "career_entry"}
     unsupported = [t for t in timelines if t.subject_kind not in supported or t.project_id != project_id]
     if unsupported:
         raise ConflictError("设定主体类型或作品不合法", extra={"code": "unsupported_projection"})
@@ -476,6 +604,7 @@ async def on_story_positions_changed(db: AsyncSession, project_id: int) -> None:
     await materialize_project(db, project_id)
 
 
+@_readonly
 async def list_timelines(
     db: AsyncSession,
     user_id: int,
@@ -559,6 +688,7 @@ def _baseline_out(timeline: SettingTimeline) -> BaselineOut:
     )
 
 
+@_readonly
 async def read_baseline(db: AsyncSession, user_id: int, project_id: int, timeline_id: int) -> BaselineOut:
     await _read_project(db, user_id, project_id)
     return _baseline_out(await get_timeline(db, project_id, timeline_id))
@@ -732,10 +862,16 @@ async def _chapter_for_anchor(db: AsyncSession, project_id: int, chapter_id: int
 
 
 async def _validate_progression(
-    db: AsyncSession, timeline: SettingTimeline, data: ProgressionCreate
-) -> tuple[str, int | None]:
+    db: AsyncSession,
+    timeline: SettingTimeline,
+    data: ProgressionCreate,
+    *,
+    value_is_canonical: bool = False,
+    prior_value: object = None,
+) -> tuple[str, int | None, JsonValue]:
     if data.sort_order < 0:
         raise BadRequestError("变化顺序不能小于 0")
+    canonical = deepcopy(data.value)
     if data.custom_field_id is not None:
         field = await db.scalar(
             select(SettingTextField).where(
@@ -744,27 +880,41 @@ async def _validate_progression(
         )
         if field is None:
             raise BadRequestError("自定义字段不存在或不属于该设定")
-    try:
-        validate_progression_value(
-            cast(SubjectKind, timeline.subject_kind),
-            data.field_key,
-            data.operation,
+        from app.services.setting_field_service import check_fields_revision, encode_field_value
+
+        if field.definition_id is not None:
+            await check_fields_revision(db, timeline.project_id, data.expected_fields_revision)
+        canonical = await encode_field_value(
+            db,
+            timeline,
+            field,
             data.value,
-            custom_field_id=data.custom_field_id,
-            subject_identity=_identity(timeline),
+            operation=data.operation,
+            prior_value=prior_value,
+            preserve_existing=value_is_canonical,
         )
-    except ValueError as exc:
-        raise BadRequestError(str(exc)) from exc
+    else:
+        try:
+            validate_progression_value(
+                cast(SubjectKind, timeline.subject_kind),
+                data.field_key,
+                data.operation,
+                data.value,
+                custom_field_id=None,
+                subject_identity=_identity(timeline),
+            )
+        except ValueError as exc:
+            raise BadRequestError(str(exc)) from exc
     if timeline.subject_kind == "relationship":
         from app.services.relationship_progression_service import validate_relationship_type_reference
 
         await validate_relationship_type_reference(db, timeline, data.field_key, data.value)
     if data.anchor_kind == "planned":
         assert data.chapter_no is not None
-        return f"第{data.chapter_no}章（计划）", data.chapter_no
+        return f"第{data.chapter_no}章（计划）", data.chapter_no, canonical
     assert data.chapter_id is not None
     chapter = await _chapter_for_anchor(db, timeline.project_id, data.chapter_id)
-    return f"第{chapter.chapter_no}章 {chapter.title}"[:250], chapter.chapter_no
+    return f"第{chapter.chapter_no}章 {chapter.title}"[:250], chapter.chapter_no, canonical
 
 
 async def apply_progression(
@@ -777,9 +927,11 @@ async def apply_progression(
     source_change_id: int | None = None,
     source_content_hash: str | None = None,
     materialize: bool = True,
+    value_is_canonical: bool = False,
 ) -> SettingProgression:
     """持有项目写锁时创建一条事实；不 commit，可用于单项 SAVEPOINT。"""
-    label, _ = await _validate_progression(db, timeline, data)
+    label, _, canonical = await _validate_progression(db, timeline, data, value_is_canonical=value_is_canonical)
+    data = data.model_copy(update={"value": canonical})
     if source_change_id is not None:
         stmt = select(SettingProgression).where(
             SettingProgression.source_change_id == source_change_id,
@@ -801,7 +953,7 @@ async def apply_progression(
                 raise ConflictError("同一分析结果已对应不同的设定变化")
             return prior
     await _claim_revision(db, timeline, data.expected_revision)
-    values = data.model_dump(exclude={"expected_revision"})
+    values = data.model_dump(exclude={"expected_revision", "expected_fields_revision"})
     event = SettingProgression(
         timeline_id=timeline.id,
         **values,
@@ -847,10 +999,53 @@ async def _event_out(db: AsyncSession, project_id: int, event: SettingProgressio
         chapter_no = await db.scalar(
             select(Chapter.chapter_no).where(Chapter.id == event.chapter_id, Chapter.project_id == project_id)
         )
-    resolved = event.chapter_no if event.anchor_kind == "planned" else chapter_no
-    return ProgressionOut.model_validate(event).model_copy(
-        update={"resolved_chapter_no": resolved, "orphaned": event.anchor_kind == "chapter" and chapter_no is None}
-    )
+    return (await _public_events(db, project_id, [(event, chapter_no)]))[0]
+
+
+async def _public_events(db: AsyncSession, project_id: int, rows) -> list[ProgressionOut]:
+    """列表和所有变更响应共用解码及显示元数据，内部句柄永不外露。"""
+    from app.services import setting_catalog_service as catalog
+    from app.services import setting_field_service as fields
+    from app.services.setting_field_values import decode_public_value
+
+    custom_ids = {event.custom_field_id for event, _ in rows if event.custom_field_id is not None}
+    bindings = {
+        field.id: field
+        for field in await db.scalars(
+            select(SettingTextField).where(
+                SettingTextField.id.in_(custom_ids),
+            )
+        )
+    }
+    specs = await fields.load_field_specs(db, project_id, list(bindings.values()))
+    definitions, _ = await fields._metadata(db, project_id)
+    definitions = {definition.id: definition for definition in definitions}
+    targets = await fields._handle_targets(db, project_id)
+    entries = await catalog.get_entries(db, project_id, list(targets.values()))
+    result = []
+    for event, chapter_no in rows:
+        values = {
+            "resolved_chapter_no": event.chapter_no if event.anchor_kind == "planned" else chapter_no,
+            "orphaned": event.anchor_kind == "chapter" and chapter_no is None,
+        }
+        if event.custom_field_id is not None:
+            field = bindings.get(event.custom_field_id)
+            if field is None:
+                raise ConflictError("设定变化缺少字段身份", extra={"code": "invalid_field_graph"})
+            spec = specs[field.id]
+            public = decode_public_value(spec, event.value, reference_targets=targets)
+            definition = definitions.get(field.definition_id)
+            values.update(
+                value=public,
+                field_type=spec.field_type,
+                definition_id=field.definition_id,
+                field_label=definition.label if definition else field.label,
+            )
+            if spec.field_type == "reference" and public is not None:
+                entry = entries[public["kind"], public["id"]]
+                values.update(reference=entry.reference, reference_name=entry.name, reference_type=entry.type)
+        result.append(ProgressionOut.model_validate(event).model_copy(update=values))
+    return result
 
 
 async def _get_event(db: AsyncSession, timeline_id: int, event_id: int) -> SettingProgression:
@@ -866,6 +1061,7 @@ async def _get_event(db: AsyncSession, timeline_id: int, event_id: int) -> Setti
     return event
 
 
+@_readonly
 async def list_progressions(
     db: AsyncSession,
     user_id: int,
@@ -875,10 +1071,17 @@ async def list_progressions(
     offset: int = 0,
     limit: int = 50,
     field: str | None = None,
+    include_inactive: bool = False,
 ) -> ProgressionListOut:
     await _read_project(db, user_id, project_id)
     timeline = await get_timeline(db, project_id, timeline_id)
-    predicates = [SettingProgression.timeline_id == timeline_id, SettingProgression.active.is_(True)]
+    from app.services.setting_field_service import fields_revision
+
+    before_fields = await fields_revision(db, project_id)
+    before_timeline = timeline.revision
+    predicates = [SettingProgression.timeline_id == timeline_id]
+    if not include_inactive:
+        predicates.append(SettingProgression.active.is_(True))
     if field:
         if field.startswith("custom:"):
             try:
@@ -909,29 +1112,29 @@ async def list_progressions(
         .offset(offset)
         .limit(limit)
     )
-    items = [
-        ProgressionOut.model_validate(event).model_copy(
-            update={
-                "resolved_chapter_no": event.chapter_no if event.anchor_kind == "planned" else chapter_no,
-                "orphaned": event.anchor_kind == "chapter" and chapter_no is None,
-            }
-        )
-        for event, chapter_no in rows
-    ]
-    return ProgressionListOut(items=items, total=total or 0, timeline_revision=timeline.revision)
+    items = await _public_events(db, project_id, list(rows))
+    await _check_read_revisions(db, project_id, timeline.id, before_timeline, before_fields)
+    return ProgressionListOut(
+        items=items, total=total or 0, timeline_revision=before_timeline, fields_revision=before_fields
+    )
 
 
 async def create_progression(
     db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: ProgressionCreate
 ) -> ProgressionMutationOut:
-    await _write_project(db, user_id, project_id)
-    timeline = await get_timeline(db, project_id, timeline_id)
-    event = await apply_progression(db, timeline, data)
-    item = await _event_out(db, project_id, event)
-    await db.commit()
-    return ProgressionMutationOut(item=item, timeline_revision=timeline.revision)
+    from app.services.setting_field_service import _editing, fields_revision
+
+    async with _editing(db, user_id, project_id) as audit:
+        timeline = await get_timeline(db, project_id, timeline_id)
+        event = await apply_progression(db, timeline, data)
+        item = await _event_out(db, project_id, event)
+        catalog_revision = await fields_revision(db, project_id)
+        await audit.commit()
+
+        return ProgressionMutationOut(item=item, timeline_revision=timeline.revision, fields_revision=catalog_revision)
 
 
+@_readonly
 async def read_progression(
     db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int
 ) -> ProgressionMutationOut:
@@ -945,73 +1148,114 @@ async def read_progression(
     )
     if event is None:
         raise NotFoundError("设定变化不存在")
-    return ProgressionMutationOut(item=await _event_out(db, project_id, event), timeline_revision=timeline.revision)
+    from app.services.setting_field_service import fields_revision
+
+    before_fields = await fields_revision(db, project_id)
+    before_timeline = timeline.revision
+    item = await _event_out(db, project_id, event)
+    await _check_read_revisions(db, project_id, timeline.id, before_timeline, before_fields)
+    return ProgressionMutationOut(item=item, timeline_revision=before_timeline, fields_revision=before_fields)
 
 
 async def update_progression(
     db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int, data: ProgressionUpdate
 ) -> ProgressionMutationOut:
-    await _write_project(db, user_id, project_id)
-    timeline = await get_timeline(db, project_id, timeline_id)
-    event = await _get_event(db, timeline.id, event_id)
-    values = {
-        key: getattr(event, key)
-        for key in (
-            "field_key",
-            "custom_field_id",
-            "operation",
-            "value",
-            "anchor_kind",
-            "chapter_id",
-            "chapter_no",
-            "boundary",
-            "sort_order",
-            "note",
+    from app.services.setting_field_service import _editing, fields_revision
+
+    async with _editing(db, user_id, project_id) as audit:
+        timeline = await get_timeline(db, project_id, timeline_id)
+        event = await _get_event(db, timeline.id, event_id)
+        values = {
+            key: getattr(event, key)
+            for key in (
+                "field_key",
+                "custom_field_id",
+                "operation",
+                "value",
+                "anchor_kind",
+                "chapter_id",
+                "chapter_no",
+                "boundary",
+                "sort_order",
+                "note",
+            )
+        }
+        values.update(data.model_dump(exclude_unset=True, exclude={"expected_revision", "expected_fields_revision"}))
+        try:
+            merged = ProgressionCreate(
+                expected_revision=data.expected_revision,
+                expected_fields_revision=data.expected_fields_revision,
+                **values,
+            )
+        except ValidationError as exc:
+            raise BadRequestError("设定变化字段或章节位置不合法") from exc
+        # 分析来源的事件靠 (source_change_id, 字段引用) 建立部分唯一索引，重跑时也依赖该关联定位旧组。
+        # 改字段引用会撞索引（未捕获的 IntegrityError→500）或让来源指向错误字段，统一以 409 拒绝。
+        if event.source_change_id is not None and (
+            merged.field_key != event.field_key or merged.custom_field_id != event.custom_field_id
+        ):
+            raise ConflictError(
+                "分析来源的设定变化不支持修改字段引用，请删除后重建",
+                extra={"code": "source_field_immutable"},
+            )
+        from app.services.setting_field_service import check_fields_revision, fields_revision
+
+        if event.custom_field_id is not None:
+            original_field = await _get_text_field(db, timeline.id, event.custom_field_id)
+            if original_field.definition_id is not None:
+                await check_fields_revision(db, project_id, data.expected_fields_revision)
+        label, _, canonical = await _validate_progression(
+            db,
+            timeline,
+            merged,
+            value_is_canonical="value" not in data.model_fields_set and merged.custom_field_id == event.custom_field_id,
+            prior_value=event.value if merged.custom_field_id == event.custom_field_id else None,
         )
-    }
-    values.update(data.model_dump(exclude_unset=True, exclude={"expected_revision"}))
-    try:
-        merged = ProgressionCreate(expected_revision=data.expected_revision, **values)
-    except ValidationError as exc:
-        raise BadRequestError("设定变化字段或章节位置不合法") from exc
-    # 分析来源的事件靠 (source_change_id, 字段引用) 建立部分唯一索引，重跑时也依赖该关联定位旧组。
-    # 改字段引用会撞索引（未捕获的 IntegrityError→500）或让来源指向错误字段，统一以 409 拒绝。
-    if event.source_change_id is not None and (
-        merged.field_key != event.field_key or merged.custom_field_id != event.custom_field_id
-    ):
-        raise ConflictError(
-            "分析来源的设定变化不支持修改字段引用，请删除后重建",
-            extra={"code": "source_field_immutable"},
-        )
-    label, _ = await _validate_progression(db, timeline, merged)
-    await _claim_revision(db, timeline, data.expected_revision)
-    for key, value in merged.model_dump(exclude={"expected_revision"}).items():
-        setattr(event, key, value)
-    event.anchor_label = label
-    event.protection = "manual"
-    event.revision += 1
-    try:
-        await db.flush()
-        await materialize_latest(db, timeline)
-        # onupdate 生成的时间戳在 flush 后可能处于过期状态，显式异步刷新以供 DTO 使用。
-        await db.refresh(event, attribute_names=["updated_at"])
-        item = await _event_out(db, project_id, event)
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise ConflictError("设定变化与已有记录冲突，请刷新后重试", extra={"code": "progression_conflict"}) from exc
-    return ProgressionMutationOut(item=item, timeline_revision=timeline.revision)
+        merged = merged.model_copy(update={"value": canonical})
+        await _claim_revision(db, timeline, data.expected_revision)
+        for key, value in merged.model_dump(exclude={"expected_revision", "expected_fields_revision"}).items():
+            setattr(event, key, value)
+        event.anchor_label = label
+        event.protection = "manual"
+        event.revision += 1
+        try:
+            await db.flush()
+            await materialize_latest(db, timeline)
+            # onupdate 生成的时间戳在 flush 后可能处于过期状态，显式异步刷新以供 DTO 使用。
+            await db.refresh(event, attribute_names=["updated_at"])
+            item = await _event_out(db, project_id, event)
+            catalog_revision = await fields_revision(db, project_id)
+            await audit.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            raise ConflictError("设定变化与已有记录冲突，请刷新后重试", extra={"code": "progression_conflict"}) from exc
+        return ProgressionMutationOut(item=item, timeline_revision=timeline.revision, fields_revision=catalog_revision)
 
 
 async def delete_progression(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int, expected_revision: int
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    timeline_id: int,
+    event_id: int,
+    expected_revision: int,
+    expected_fields_revision: int | None = None,
 ) -> RevisionOut:
-    await _write_project(db, user_id, project_id)
-    timeline = await get_timeline(db, project_id, timeline_id)
-    event = await _get_event(db, timeline.id, event_id)
-    await revoke_progression(db, timeline, event, expected_revision)
-    await db.commit()
-    return RevisionOut(timeline_revision=timeline.revision)
+    from app.services.setting_field_service import _editing, fields_revision
+
+    async with _editing(db, user_id, project_id) as audit:
+        timeline = await get_timeline(db, project_id, timeline_id)
+        event = await _get_event(db, timeline.id, event_id)
+        from app.services.setting_field_service import check_fields_revision, fields_revision
+
+        if event.custom_field_id is not None:
+            field = await _get_text_field(db, timeline.id, event.custom_field_id)
+            if field.definition_id is not None:
+                await check_fields_revision(db, project_id, expected_fields_revision)
+        await revoke_progression(db, timeline, event, expected_revision)
+        catalog_revision = await fields_revision(db, project_id)
+        await audit.commit()
+        return RevisionOut(timeline_revision=timeline.revision, fields_revision=catalog_revision)
 
 
 async def read_effective(
@@ -1027,6 +1271,12 @@ async def read_effective(
     with db.no_autoflush:
         await _read_project(db, user_id, project_id)
         timeline = await get_timeline(db, project_id, timeline_id)
+        from app.services import setting_catalog_service as catalog
+        from app.services import setting_field_service as fields
+        from app.services.setting_field_values import decode_public_value
+
+        before_fields = await fields.fields_revision(db, project_id)
+        before_timeline = timeline.revision
         if (chapter_id is None) == (chapter_no is None):
             raise BadRequestError("请选择一个章节或计划章节号")
         if chapter_id is not None:
@@ -1035,15 +1285,36 @@ async def read_effective(
         assert chapter_no is not None
         position = StoryPosition(chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary)
         result = (await resolve_timelines(db, project_id, [timeline], position))[timeline.id]
+        bindings = list(await db.scalars(select(SettingTextField).where(SettingTextField.timeline_id == timeline.id)))
+        specs = await fields.load_field_specs(db, project_id, bindings)
+        targets = await fields._handle_targets(db, project_id)
+        target_entries = await catalog.get_entries(db, project_id, list(targets.values()))
+        definitions, _ = await fields._metadata(db, project_id)
+        definitions = {d.id: d for d in definitions}
+        labels, reference_names, reference_types, typed_values = {}, {}, {}, {}
+        for field in bindings:
+            public = decode_public_value(specs[field.id], result.field_values[field.id], reference_targets=targets)
+            typed_values[field.id] = {"field_type": specs[field.id].field_type, "value": public}
+            definition = definitions.get(field.definition_id)
+            labels[field.id] = definition.label if definition else field.label
+            if specs[field.id].field_type == "reference" and public is not None:
+                target = target_entries[public["kind"], public["id"]]
+                reference_names[field.id], reference_types[field.id] = target.name, target.type
+        await _check_read_revisions(db, project_id, timeline.id, before_timeline, before_fields)
         return EffectiveOut(
             timeline_id=timeline.id,
             position=position,
             fields=result.fields,
             custom_fields=result.custom_fields,
+            field_values=typed_values,
             applied_event_ids=list(result.applied_event_ids),
             orphaned_event_ids=list(result.orphaned_event_ids),
             baseline_status=result.baseline_status,
-            timeline_revision=timeline.revision,
+            timeline_revision=before_timeline,
+            fields_revision=before_fields,
+            field_labels=labels,
+            reference_names=reference_names,
+            reference_types=reference_types,
         )
 
 
@@ -1068,6 +1339,7 @@ async def _require_unique_label(
         raise ConflictError("该设定已存在同名自定义字段", extra={"code": "duplicate_field"})
 
 
+@_readonly
 async def list_text_fields(db: AsyncSession, user_id: int, project_id: int, timeline_id: int) -> TextFieldListOut:
     await _read_project(db, user_id, project_id)
     timeline = await get_timeline(db, project_id, timeline_id)
@@ -1075,7 +1347,7 @@ async def list_text_fields(db: AsyncSession, user_id: int, project_id: int, time
         (
             await db.scalars(
                 select(SettingTextField)
-                .where(SettingTextField.timeline_id == timeline_id)
+                .where(SettingTextField.timeline_id == timeline_id, SettingTextField.definition_id.is_(None))
                 .order_by(SettingTextField.sort, SettingTextField.id)
             )
         ).all()
@@ -1111,6 +1383,8 @@ async def update_text_field(
     await _write_project(db, user_id, project_id)
     timeline = await get_timeline(db, project_id, timeline_id)
     field = await _get_text_field(db, timeline.id, field_id)
+    if field.definition_id is not None:
+        raise ConflictError("共享字段请在作品字段配置和值入口维护", extra={"code": "shared_field_requires_typed_api"})
     values = data.model_dump(exclude_unset=True, exclude={"expected_revision"})
     if not values or any(value is None for value in values.values()):
         raise BadRequestError("请选择有效的字段修改")
@@ -1133,6 +1407,8 @@ async def delete_text_field(
     await _write_project(db, user_id, project_id)
     timeline = await get_timeline(db, project_id, timeline_id)
     field = await _get_text_field(db, timeline.id, field_id)
+    if field.definition_id is not None:
+        raise ConflictError("共享字段请在作品字段配置和值入口维护", extra={"code": "shared_field_requires_typed_api"})
     active = await db.scalar(
         select(SettingProgression.id)
         .where(

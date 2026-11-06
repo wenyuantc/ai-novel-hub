@@ -71,7 +71,7 @@ async def _add_character_timeline(db, project_id):
     return character, timeline, field, event
 
 
-async def test_v2_effects_restore_deleted_character_timeline_fields_events_and_hidden_relation(db_project):
+async def test_current_effects_restore_deleted_character_timeline_fields_events_and_hidden_relation(db_project):
     db, project = db_project
     character, timeline, field, event = await _add_character_timeline(db, project.id)
     other = Character(project_id=project.id, name="陈风")
@@ -98,7 +98,7 @@ async def test_v2_effects_restore_deleted_character_timeline_fields_events_and_h
     assert {"setting_timelines", "setting_text_fields", "setting_progressions", "relationships"} <= {
         item["table"] for item in captured
     }
-    assert all(item["format_version"] == 2 for item in captured)
+    assert all(item["format_version"] == 4 for item in captured)
     await db.commit()
     await effects.undo(db, project.id, captured)
     await db.commit()

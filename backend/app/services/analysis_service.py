@@ -39,6 +39,8 @@ from app.schemas.analysis import (
     AnalyzeRequest,
     ChapterAnalysisState,
 )
+from app.schemas.progression import StoryPosition
+from app.schemas.setting_fields import EntityRef
 from app.services import (
     ai_config_service,
     career_service,
@@ -47,6 +49,7 @@ from app.services import (
     memory_service,
     project_lifecycle,
     prompt_service,
+    setting_field_service,
     task_statistics_service,
     writeback_service,
 )
@@ -54,6 +57,7 @@ from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.context_builder import MEMBER_STATUS_LABELS, format_career_line, resolve_effective_cast
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
+from app.services.setting_field_formatting import format_entry_fields
 
 if TYPE_CHECKING:
     from app.schemas.task import TaskOut
@@ -669,7 +673,7 @@ def _state_card(
     c: Character | SimpleNamespace,
     memberships: list,
     career_line: str,
-    custom_fields: list[tuple[str, str]] | None = None,
+    field_text: str = "",
 ) -> str:
     head = f"■ {c.name}"
     if c.aliases:
@@ -678,9 +682,8 @@ def _state_card(
         head += f" · {c.role_type}"
     lines = [head, f"存活状态：{LIFE_LABELS.get(c.life_status, c.life_status)}"]
     lines.append(f"当前状态：{c.current_state.strip() or '（未记录）'}")
-    for label, value in custom_fields or []:
-        if value.strip():
-            lines.append(f"{label}：{value.strip()}")
+    if field_text:
+        lines.append(field_text)
     if memberships:
         orgs = []
         for m, o in memberships:
@@ -719,11 +722,22 @@ async def build_analysis_job(
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
 
+    fields_revision = await setting_field_service.fields_revision(db, project.id)
     characters = await cast_service.list_characters(db, project.id)
     involved = await _involved(db, chapter, characters)
     effective = await resolve_effective_cast(db, project, chapter, involved)
-    orgs = await db.scalars(
+    orgs = list(await db.scalars(
         select(Organization).where(Organization.project_id == project.id).order_by(Organization.sort, Organization.id)
+    ))
+    # 分析原本列出项目组织名单；仅在该既有范围内补字段，不增加世界观档案。
+    organization_fields = await setting_field_service.resolve_entry_fields(
+        db, project.id, [EntityRef(kind="organization", id=org.id) for org in orgs],
+        StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+    )
+    organization_text = {org.id: format_entry_fields(organization_fields["organization", org.id]) for org in orgs}
+    organizations_text = (
+        "\n\n".join("\n".join(part for part in (org.name, organization_text[org.id]) if part) for org in orgs)
+        if any(organization_text.values()) else "、".join(org.name for org in orgs)
     )
     foreshadows = await foreshadow_service.analysis_candidates(db, project.id, chapter.chapter_no)
     messages = build_analysis_messages(
@@ -736,19 +750,23 @@ async def build_analysis_job(
                 c,
                 effective.memberships.get(c.id, []),
                 format_career_line(effective.careers_by_character.get(c.id, []), effective.stages),
-                effective.custom_fields.get(c.id, []),
+                format_entry_fields(effective.entry_fields["character", c.id]),
             )
             for c in effective.characters
         ),
         relations_text="\n".join(line.render() for line in effective.relations),
-        organizations_text="、".join(o.name for o in orgs),
+        organizations_text=organizations_text,
         careers_text="\n".join(
-            career_service.ladder_line(c, effective.stages.get(c.id, []))
+            "\n".join(part for part in (
+                career_service.ladder_line(c, effective.stages.get(c.id, [])),
+                format_entry_fields(effective.entry_fields["career", c.id]),
+            ) if part)
             for c in sorted(effective.careers.values(), key=lambda c: (c.sort, c.id))
         ),
         foreshadows_text="\n".join(foreshadow_service.analysis_line(f) for f in foreshadows),
         override=await prompt_service.get_override(db, user_id, "analysis.chapter"),
     )
+    await setting_field_service.check_fields_revision(db, project.id, fields_revision)
     return AnalysisJob(
         project_id=project.id,
         chapter_id=chapter.id,

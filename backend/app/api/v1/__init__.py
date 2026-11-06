@@ -38,6 +38,8 @@ from app.api.v1 import (
     prompt_templates,
     reader,
     relationships,
+    setting_categories,
+    setting_fields,
     skills,
     story,
     styles,
@@ -74,6 +76,8 @@ api_router.include_router(story.world_router)
 api_router.include_router(story.characters_router)
 api_router.include_router(story.outlines_router)
 api_router.include_router(progressions.router)
+api_router.include_router(setting_categories.router)
+api_router.include_router(setting_fields.router)
 api_router.include_router(organizations.router)
 api_router.include_router(relationships.router)
 api_router.include_router(cards.router)

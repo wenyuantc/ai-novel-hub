@@ -101,6 +101,19 @@ async def test_cross_user_isolation(client, make_client):
         ("PATCH", base),
         ("DELETE", base),
         ("GET", f"{base}/world"),
+        ("GET", f"{base}/setting-field-definitions"),
+        ("POST", f"{base}/setting-field-definitions"),
+        ("GET", f"{base}/setting-field-definitions/1"),
+        ("PATCH", f"{base}/setting-field-definitions/1"),
+        ("DELETE", f"{base}/setting-field-definitions/1?expected_fields_revision=0"),
+        ("POST", f"{base}/setting-field-definitions/1/options"),
+        ("PATCH", f"{base}/setting-field-definitions/1/options/1"),
+        ("DELETE", f"{base}/setting-field-definitions/1/options/1?expected_fields_revision=0"),
+        ("GET", f"{base}/setting-entries"),
+        ("GET", f"{base}/setting-entries/character/{c1['id']}/fields"),
+        ("PATCH", f"{base}/setting-entries/character/{c1['id']}/fields/1/baseline"),
+        ("POST", f"{base}/setting-entries/character/{c1['id']}/fields/1/progressions"),
+        ("POST", f"{base}/setting-entries/character/{c1['id']}/legacy-fields/1/binding"),
         ("GET", f"{base}/mentions"),
         ("GET", f"{base}/mentions/catalog"),
         ("GET", f"{base}/mentions/summary"),
@@ -249,6 +262,22 @@ async def test_cross_user_isolation(client, make_client):
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
+        f"{base}/setting-field-definitions": {
+            "expected_fields_revision": 0, "label": "字段", "field_type": "text", "applicable_types": ["character"],
+        },
+        f"{base}/setting-field-definitions/1": {"expected_fields_revision": 0, "label": "字段"},
+        f"{base}/setting-field-definitions/1/options": {"expected_fields_revision": 0, "label": "选项"},
+        f"{base}/setting-field-definitions/1/options/1": {"expected_fields_revision": 0, "label": "选项"},
+        f"{base}/setting-entries/character/{c1['id']}/fields/1/baseline": {
+            "expected_fields_revision": 0, "expected_timeline_revision": 1, "field_type": "text", "value": "值",
+        },
+        f"{base}/setting-entries/character/{c1['id']}/fields/1/progressions": {
+            "expected_fields_revision": 0, "expected_timeline_revision": 1, "field_type": "text", "value": "值",
+            "operation": "replace", "anchor_kind": "planned", "chapter_no": 20,
+        },
+        f"{base}/setting-entries/character/{c1['id']}/legacy-fields/1/binding": {
+            "expected_fields_revision": 0, "expected_timeline_revision": 1, "definition_id": 1,
+        },
         f"{base}/mentions/preview": {"text": "正文"},
         f"{base}/batch-generate/preview": {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]},
         f"{base}/batch-generate": {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]},

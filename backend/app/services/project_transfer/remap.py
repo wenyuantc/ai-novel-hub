@@ -40,6 +40,11 @@ ANALYSIS_ID_KEYS: dict[str, str] = {
 }
 # 列表形式的 id 键（foreshadow_new 确认后 after 里的伏笔快照带 character_ids）
 ANALYSIS_ID_LIST_KEYS: dict[str, str] = {"character_ids": "characters"}
+SETTING_ID_KEYS: dict[str, str] = {
+    **ANALYSIS_ID_KEYS,
+    "option_id": "setting_field_options",
+    "reference_handle_id": "setting_reference_handles",
+}
 
 _FIELD_KEY_RE = re.compile(r"^(char|rel|relpair|career|org|fs):(\d+):(.+)$")
 # field_key 前缀 → (第一段 id 的表, 第二段是 id 时的表；None = 第二段是字段名)
@@ -129,7 +134,7 @@ def setting_payload(value: Any, ctx: RemapContext) -> Any:
         return value
     out = {}
     for key, item in value.items():
-        table = ANALYSIS_ID_KEYS.get(key)
+        table = SETTING_ID_KEYS.get(key)
         if table is not None and item is not None:
             out[key] = ctx.ref(table, item, "设定变化")
         else:

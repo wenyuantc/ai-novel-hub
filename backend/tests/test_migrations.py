@@ -88,14 +88,21 @@ def test_0031_setting_progressions_preserves_legacy_and_detaches_deleted_sources
         inspector = inspect(engine)
         assert {"setting_timelines", "setting_text_fields", "setting_progressions"} <= set(inspector.get_table_names())
         assert "is_present" in {col["name"] for col in inspector.get_columns("relationships")}
-        # 迁移与 create_all 必须建立同一组列、外键和索引，避免只有测试或生产模式有效。
+        # 0031 保持当时的文本字段合同；0035 与当前模型的完整一致性由新迁移测试覆盖。
         from app.models import Base
 
         for table_name in ("setting_timelines", "setting_text_fields", "setting_progressions"):
             model = Base.metadata.tables[table_name]
             columns = {column["name"]: column for column in inspector.get_columns(table_name)}
-            assert set(columns) == set(model.columns.keys())
-            assert all(columns[column.name]["nullable"] == column.nullable for column in model.columns)
+            newer_columns = {"definition_id"} if table_name == "setting_text_fields" else set()
+            assert set(columns) == set(model.columns.keys()) - newer_columns
+            for column in model.columns:
+                if column.name in newer_columns:
+                    continue
+                nullable = False if table_name == "setting_text_fields" and column.name == "label" else column.nullable
+                assert columns[column.name]["nullable"] == nullable
+            if table_name == "setting_text_fields":
+                assert str(columns["base_value"]["type"]) == "TEXT"
             actual_fks = {
                 (tuple(fk["constrained_columns"]), fk["referred_table"], fk["options"].get("ondelete"))
                 for fk in inspector.get_foreign_keys(table_name)
@@ -103,10 +110,15 @@ def test_0031_setting_progressions_preserves_legacy_and_detaches_deleted_sources
             model_fks = {
                 (tuple(column.name for column in fk.columns), fk.referred_table.name, fk.ondelete)
                 for fk in model.foreign_key_constraints
+                if fk.referred_table.name != "setting_field_definitions"
             }
             assert actual_fks == model_fks
             assert {index["name"] for index in inspector.get_indexes(table_name)} == {
                 index.name for index in model.indexes
+                if index.name not in {
+                    "uq_setting_timelines_organization", "uq_setting_timelines_career_entry",
+                    "ix_setting_text_fields_definition_id",
+                }
             }
         source_fk = next(
             fk for fk in inspector.get_foreign_keys("setting_progressions")

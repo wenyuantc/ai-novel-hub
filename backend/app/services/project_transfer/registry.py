@@ -50,7 +50,12 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    SettingCategory,
+    SettingCategoryRule,
+    SettingFieldDefinition,
+    SettingFieldOption,
     SettingProgression,
+    SettingReferenceHandle,
     SettingTextField,
     SettingTimeline,
     StoryMemory,
@@ -137,6 +142,8 @@ PROJECT_RULE = TableRule(
         "style", "deleted_at", "last_deleted_at", "deleted_by_user_id",
         "deleted_by_username", "deletion_started_at", "deletion_token",
         "planning_revision",  # 新作品独立的并发版本，不导出或随效果回退。
+        "fields_revision",  # 字段目录版本属于新作品，不复制源作品的并发代次。
+        "categories_revision",  # 整理标签／分类目录同样使用新作品的独立代次。
     ),
     json_plain=("wizard_progress", "tags"),
     # 含章节 id；项目先于章节插入，importer 在全部表插入后再改写这一列
@@ -145,9 +152,29 @@ PROJECT_RULE = TableRule(
 
 # 导入顺序：被引用的表在前（自引用 / 互相引用的列放在 deferred 里回填）
 RULES: tuple[TableRule, ...] = (
+    TableRule(
+        "setting_field_definitions", SettingFieldDefinition, _own(SettingFieldDefinition), fill=_P,
+        json_plain=("applicable_types", "reference_types"),
+    ),
+    TableRule(
+        "setting_field_options", SettingFieldOption,
+        lambda pid: _in(SettingFieldOption.definition_id, SettingFieldDefinition, pid),
+        fk={"definition_id": "setting_field_definitions"},
+    ),
+    TableRule(
+        "setting_categories", SettingCategory, _own(SettingCategory), fill=_P,
+        json_plain=("applicable_types",),
+    ),
+    TableRule(
+        "setting_category_rules", SettingCategoryRule,
+        lambda pid: _in(SettingCategoryRule.category_id, SettingCategory, pid),
+        fk={"category_id": "setting_categories", "definition_id": "setting_field_definitions",
+            "option_id": "setting_field_options"},
+        # DB 延迟校验不代表延迟插入；必须一次插入满足 rule_shape 的完整载荷。
+    ),
     TableRule("project_notes", ProjectNote, _own(ProjectNote), fill=_P),
-    TableRule("world_settings", WorldSetting, _own(WorldSetting), fill=_P, json_plain=("aliases",)),
-    TableRule("characters", Character, _own(Character), fill=_P, json_plain=("aliases",)),
+    TableRule("world_settings", WorldSetting, _own(WorldSetting), fill=_P, json_plain=("aliases", "setting_tags")),
+    TableRule("characters", Character, _own(Character), fill=_P, json_plain=("aliases", "setting_tags")),
     TableRule(
         "organizations",
         Organization,
@@ -155,6 +182,7 @@ RULES: tuple[TableRule, ...] = (
         fill=_P,
         fk={"parent_id": "organizations"},
         deferred=frozenset({"parent_id"}),
+        json_plain=("setting_tags",),
     ),
     TableRule(
         "organization_members",
@@ -206,7 +234,7 @@ RULES: tuple[TableRule, ...] = (
         # 类型 / 方向以名称记录（relationship_service.apply_change），不含 id
         json_plain=("changes",),
     ),
-    TableRule("careers", Career, _own(Career), fill=_P),
+    TableRule("careers", Career, _own(Career), fill=_P, json_plain=("setting_tags",)),
     TableRule(
         "career_stages",
         CareerStage,
@@ -322,6 +350,12 @@ RULES: tuple[TableRule, ...] = (
         },
         str_refs={"field_key": remap.field_key},
     ),
+    # 全部句柄都属于核心图，包括仅被 inactive／孤儿事件使用的目标。
+    TableRule(
+        "setting_reference_handles", SettingReferenceHandle, _own(SettingReferenceHandle), fill=_P,
+        fk={"character_id": "characters", "world_setting_id": "world_settings",
+            "organization_id": "organizations", "career_id": "careers"},
+    ),
     TableRule(
         "setting_timelines",
         SettingTimeline,
@@ -335,7 +369,8 @@ RULES: tuple[TableRule, ...] = (
         "setting_text_fields",
         SettingTextField,
         lambda pid: _in(SettingTextField.timeline_id, SettingTimeline, pid),
-        fk={"timeline_id": "setting_timelines"},
+        fk={"timeline_id": "setting_timelines", "definition_id": "setting_field_definitions"},
+        json_refs={"base_value": remap.setting_payload},
     ),
     TableRule(
         "setting_progressions",

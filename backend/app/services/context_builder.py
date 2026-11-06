@@ -59,10 +59,10 @@ from app.models import (
     Project,
     Relationship,
     RelationshipType,
-    SettingTextField,
     SettingTimeline,
 )
 from app.schemas.progression import StoryPosition
+from app.schemas.setting_fields import EntityRef, EntryFieldsOut
 from app.services import (
     career_service,
     cast_service,
@@ -72,12 +72,13 @@ from app.services import (
     organization_service,
     plan_service,
     relationship_service,
+    setting_field_service,
     setting_progression_service,
     story_service,
 )
 from app.services.project_service import project_info
 from app.services.retrieval_service import Embedder, EmbedEnv
-from app.services.setting_progression_resolver import EffectiveSnapshot
+from app.services.setting_field_formatting import format_entry_fields
 
 if TYPE_CHECKING:
     from app.services.planning_context_service import PlanningContext
@@ -369,7 +370,7 @@ def format_card(
     *,
     include_legacy_relations: bool = False,
     career_line: str = "",
-    custom_fields: list[tuple[str, str]] | None = None,
+    field_text: str = "",
 ) -> str:
     """涉及角色的完整角色卡。非存活状态在标题醒目标注。"""
     head = f"■ {c.name}"
@@ -392,9 +393,8 @@ def format_card(
     ):
         if value.strip():
             lines.append(f"{label}：{value.strip()}")
-    for label, value in custom_fields or []:
-        if value.strip():
-            lines.append(f"{label}：{value.strip()}")
+    if field_text:
+        lines.append(field_text)
     if memberships:
         orgs = []
         for m, o in memberships:
@@ -409,9 +409,10 @@ def format_card(
     return "\n".join(lines)
 
 
-def format_organization(o: Organization) -> str:
+def format_organization(o: Organization, *, field_text: str = "") -> str:
     head = f"■ {o.name}" + (f"（{o.org_type}）" if o.org_type else "")
-    return f"{head}：{o.purpose.strip()}" if o.purpose.strip() else head
+    text = f"{head}：{o.purpose.strip()}" if o.purpose.strip() else head
+    return "\n".join(part for part in (text, field_text) if part)
 
 
 def _career_item(a: CharacterCareer, career: Career, stages: list[CareerStage]) -> str:
@@ -434,13 +435,15 @@ def format_career_line(items: list[tuple[CharacterCareer, Career]], stages: dict
     return "；".join(parts)
 
 
-def format_career_ladder(career: Career, stages: list[CareerStage]) -> str:
+def format_career_ladder(career: Career, stages: list[CareerStage], *, field_text: str = "") -> str:
     """「■ 剑修（主修）：练气 → 筑基 → 金丹」，规则非空时附一行（前 200 字）。"""
     text = f"■ {career_service.ladder_line(career, stages)}"
     rules = " ".join(career.rules.split())
     if rules:
         clipped = rules[:CAREER_RULES_CHARS] + (ELLIPSIS if len(rules) > CAREER_RULES_CHARS else "")
         text += f"\n规则：{clipped}"
+    if field_text:
+        text += f"\n{field_text}"
     return text
 
 
@@ -464,27 +467,7 @@ class EffectiveCast:
     organizations: dict[int, Organization] = field(default_factory=dict)
     relations: list[RelationLine] = field(default_factory=list)
     structured_character_ids: set[int] = field(default_factory=set)
-    custom_fields: dict[int, list[tuple[str, str]]] = field(default_factory=dict)
-
-
-async def _custom_labels(
-    db: AsyncSession, timelines: list[SettingTimeline], snapshots: dict[int, EffectiveSnapshot]
-) -> dict[int, list[tuple[str, str]]]:
-    """批量将稳定自定义字段 ID 映射为显示名称与目标时点的值。"""
-    if not timelines:
-        return {}
-    rows = await db.scalars(
-        select(SettingTextField)
-        .where(SettingTextField.timeline_id.in_([t.id for t in timelines]))
-        .order_by(SettingTextField.sort, SettingTextField.id)
-    )
-    result: dict[int, list[tuple[str, str]]] = {}
-    for item in rows:
-        snapshot = snapshots[item.timeline_id]
-        value = snapshot.custom_fields.get(item.id, "")
-        if value.strip():
-            result.setdefault(item.timeline_id, []).append((item.label, value))
-    return result
+    entry_fields: dict[tuple[str, int], EntryFieldsOut] = field(default_factory=dict)
 
 
 async def effective_world_text(
@@ -498,20 +481,24 @@ async def effective_world_text(
         return ""
     timelines = list(await db.scalars(
         select(SettingTimeline).where(
-            SettingTimeline.project_id == project.id, SettingTimeline.subject_kind == "world"
+            SettingTimeline.project_id == project.id, SettingTimeline.subject_kind == "world",
+            SettingTimeline.world_setting_id.in_([world.id for world in worlds]),
         ).order_by(SettingTimeline.id)
     ))
     snapshots = await setting_progression_service.resolve_timelines(
         db, project.id, timelines, StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
     )
-    labels = await _custom_labels(db, timelines, snapshots)
+    fields = await setting_field_service.resolve_entry_fields(
+        db, project.id, [EntityRef(kind="world", id=world.id) for world in worlds],
+        StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+    )
     by_world = {t.world_setting_id: t for t in timelines}
     result = []
     for world in worlds:
         timeline = by_world.get(world.id)
         content = snapshots[timeline.id].fields["content"] if timeline else world.content
-        custom = labels.get(timeline.id, []) if timeline else []
-        text = "\n".join([str(content), *(f"{name}：{value}" for name, value in custom)]).strip()
+        custom = format_entry_fields(fields["world", world.id])
+        text = "\n".join(part for part in (str(content), custom) if part).strip()
         result.append(SimpleNamespace(title=world.title, category=world.category, content=text))
     return story_service.format_world(result)
 
@@ -544,7 +531,6 @@ async def resolve_effective_cast(
         db, project.id, relevant, StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
     )
     char_timelines = {t.character_id: t for t in relevant if t.subject_kind == "character"}
-    custom = await _custom_labels(db, list(char_timelines.values()), snapshots)
     for c in involved:
         timeline = char_timelines.get(c.id)
         if timeline is None:
@@ -557,7 +543,6 @@ async def resolve_effective_cast(
         }
         values.update(snapshots[timeline.id].fields)
         result.characters.append(SimpleNamespace(**values))
-        result.custom_fields[c.id] = custom.get(timeline.id, [])
 
     # 关系备注是否回退应以整个角色是否已结构化管理为准，而非当前时点是否存在一条有效关系。
     for t in timelines:
@@ -621,6 +606,13 @@ async def resolve_effective_cast(
         result.careers_by_character.setdefault(character_id, []).append((assignment, career))
         result.careers[career.id] = career
     result.stages = await career_service.stages_of(db, list(result.careers))
+    result.entry_fields = await setting_field_service.resolve_entry_fields(
+        db, project.id, [
+            *[EntityRef(kind="character", id=character.id) for character in involved],
+            *[EntityRef(kind="organization", id=oid) for oid in result.organizations],
+            *[EntityRef(kind="career", id=cid) for cid in result.careers],
+        ], StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+    )
 
     relation_timelines = [t for t in relevant if t.subject_kind == "relationship"]
     managed_pairs = {(t.character_id, t.related_character_id) for t in relation_timelines}
@@ -688,17 +680,21 @@ async def build_cast_section(
                 effective.memberships.get(c.id, []),
                 include_legacy_relations=c.id not in effective.structured_character_ids,
                 career_line=format_career_line(effective.careers_by_character.get(c.id, []), effective.stages),
-                custom_fields=effective.custom_fields.get(c.id, []),
+                field_text=format_entry_fields(effective.entry_fields["character", c.id]),
             )
             for c in effective.characters
             if c.id not in protected_characters
         ],
         relations=[r for r in effective.relations if r.timeline_id not in protected_relations],
         organizations=[
-            format_organization(o) for o in effective.organizations.values() if o.id not in protected_organizations
+            format_organization(o, field_text=format_entry_fields(effective.entry_fields["organization", o.id]))
+            for o in effective.organizations.values() if o.id not in protected_organizations
         ],
         careers=[
-            format_career_ladder(c, effective.stages.get(c.id, []))
+            format_career_ladder(
+                c, effective.stages.get(c.id, []),
+                field_text=format_entry_fields(effective.entry_fields["career", c.id]),
+            )
             for c in sorted(effective.careers.values(), key=lambda c: (c.sort, c.id))
             if c.id not in protected_careers
         ],
@@ -713,12 +709,13 @@ async def build_chapter_context(
 ) -> str:
     """embedder：当前用户的向量模型（None = 检索只用关键词）。"""
     with db.no_autoflush:
+        fields_revision = await _context_fields_revision(db, project.id, planning)
         outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
         task = await chapter_task(db, chapter)
         cast = await build_cast_section(db, project, chapter, task.match_text(), planning=planning)
         prior = await prior_chapters(db, project, chapter)
         knowledge, memories = await retrieval_blocks(db, project, chapter, task, cast.names, prior, embedder=embedder)
-        return assemble_context(
+        text = assemble_context(
             project_text=format_project_info(await project_info(db, project)),
             world_text=await effective_world_text(
                 db, project, chapter, exclude_ids=planning.protected_world_ids if planning else None
@@ -731,6 +728,17 @@ async def build_chapter_context(
             knowledge=knowledge,
             memories=memories,
         )
+        await setting_field_service.check_fields_revision(db, project.id, fields_revision)
+        return text
+
+
+async def _context_fields_revision(
+    db: AsyncSession, project_id: int, planning: "PlanningContext | None",
+) -> int:
+    """规划保护块和普通块必须来自同一字段目录，不在旧 identity map 中拼接新版本。"""
+    if planning is not None and planning.fields_revision is not None:
+        return await setting_field_service.check_fields_revision(db, project_id, planning.fields_revision)
+    return await setting_field_service.fields_revision(db, project_id)
 
 
 async def build_setting_context(
@@ -743,6 +751,7 @@ async def build_setting_context(
         available = budget - len(header)
         if available <= 0:
             return ""
+        fields_revision = await _context_fields_revision(db, project.id, planning)
         task = await chapter_task(db, chapter)
         hint = "\n".join(part for part in (task.match_text(), text_hint) if part)
         cast = await build_cast_section(db, project, chapter, hint, planning=planning)
@@ -757,6 +766,7 @@ async def build_setting_context(
             prior_chapters=[],
             budget=available,
         )
+        await setting_field_service.check_fields_revision(db, project.id, fields_revision)
         return header + body if body else ""
 
 

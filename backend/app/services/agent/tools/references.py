@@ -27,6 +27,7 @@ from app.models import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 
 from .base import ToolCtx
 
@@ -54,6 +55,9 @@ _MODELS = {
     "analysis_id": ChapterAnalysis,
     "timeline_id": SettingTimeline,
     "custom_field_id": SettingTextField,
+    "definition_id": SettingFieldDefinition,
+    "option_id": SettingFieldOption,
+    "reference_handle_id": SettingReferenceHandle,
     "task_id": Task,
     "continue_from_task_id": Task,
     "ai_config_id": AIConfig,
@@ -96,6 +100,10 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
         stmt = stmt.join(SettingTimeline, SettingTimeline.id == SettingTextField.timeline_id).where(
             SettingTimeline.project_id == ctx.project_id
         )
+    elif model is SettingFieldOption:
+        stmt = stmt.join(SettingFieldDefinition, SettingFieldDefinition.id == SettingFieldOption.definition_id).where(
+            SettingFieldDefinition.project_id == ctx.project_id
+        )
     else:
         stmt = stmt.where(model.project_id == ctx.project_id)
     if await ctx.db.scalar(stmt) is None:
@@ -105,6 +113,13 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
 async def validate_references(ctx: ToolCtx, values: Any, *, id_model: type | None = None) -> None:
     if not isinstance(values, dict):
         return
+    # 公共 EntityRef 的 id 由 kind 决定；仍继续遍历所有键，不能让额外嵌套 ID 绕过边界。
+    if "id" in values and isinstance(values.get("kind"), str) and values["kind"] in {
+        "character", "world", "organization", "career",
+    }:
+        id_model = {"character": Character, "world": WorldSetting, "organization": Organization, "career": Career}[
+            values["kind"]
+        ]
     for key, value in values.items():
         if value is None:
             continue

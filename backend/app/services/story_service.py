@@ -1,7 +1,7 @@
 """世界观 / 角色 / 大纲 CRUD；人工路由显式启用管理权限，AI / 工具默认保持严格归属。"""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models import Character, Outline, WorldSetting
-from app.services import planning_lifecycle, setting_progression_service
+from app.schemas.setting_fields import EntityRef, EntryType
+from app.services import (
+    planning_lifecycle,
+    setting_catalog_service,
+    setting_field_service,
+    setting_progression_service,
+)
 from app.services.cast_service import is_protagonist_role
 from app.services.project_service import get_manageable_project, get_owned_project
 
@@ -77,8 +83,20 @@ async def new_character(db: AsyncSession, project_id: int, values: dict[str, Any
     character = Character(project_id=project_id, **values)
     db.add(character)
     await db.flush()
-    await setting_progression_service.create_character_timeline(db, character)
+    await setting_catalog_service.ensure_entry_timeline(db, project_id, "character", character.id)
     return character
+
+
+async def new_world(db: AsyncSession, project_id: int, values: dict[str, Any]) -> WorldSetting:
+    """新建世界观及其原始正文基线；组合事务统一复用，只 flush。"""
+    values = dict(values)
+    if values.get("sort") is None:
+        values["sort"] = await next_sort(db, WorldSetting, project_id)
+    world = WorldSetting(project_id=project_id, **values)
+    db.add(world)
+    await db.flush()
+    await setting_catalog_service.ensure_entry_timeline(db, project_id, "world", world.id)
+    return world
 
 
 async def get_owned(db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int) -> Any:
@@ -103,18 +121,15 @@ async def create_owned(
 ) -> Any:
     await _write_project(db, user_id, project_id, manage=manage)
     values = data.model_dump()
-    if kind is CHARACTERS:
-        apply_character_defaults(values)
-    if values.get("sort") is None:
-        values["sort"] = await next_sort(db, kind.model, project_id)
-    item = kind.model(project_id=project_id, **values)
-    db.add(item)
     if kind is WORLD:
-        await db.flush()
-        await setting_progression_service.create_world_timeline(db, item)
+        item = await new_world(db, project_id, values)
     elif kind is CHARACTERS:
-        await db.flush()
-        await setting_progression_service.create_character_timeline(db, item)
+        item = await new_character(db, project_id, values)
+    else:
+        if values.get("sort") is None:
+            values["sort"] = await next_sort(db, kind.model, project_id)
+        item = kind.model(project_id=project_id, **values)
+        db.add(item)
     if kind is OUTLINES:
         await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
@@ -136,6 +151,11 @@ async def update_owned(
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     values = data.model_dump(exclude_unset=True)
     if kind is WORLD:
+        category = values.get("category")
+        if category is not None and category != item.category:
+            await setting_field_service.assert_entry_type_change_allowed(
+                db, project_id, "world", item.id, cast(EntryType, f"world.{category}")
+            )
         await setting_progression_service.apply_world_content_update(
             db,
             item,
@@ -167,6 +187,10 @@ async def delete_owned(
 ) -> None:
     await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
+    if kind is CHARACTERS or kind is WORLD:
+        await setting_field_service.cleanup_unreferenced_handles(
+            db, project_id, [EntityRef(kind="character" if kind is CHARACTERS else "world", id=item.id)]
+        )
     if kind is OUTLINES:
         await planning_lifecycle.detach_outlines(db, project_id, [item.id])
     elif kind is CHARACTERS:

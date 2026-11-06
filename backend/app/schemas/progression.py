@@ -5,14 +5,15 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SubjectKind = Literal["character", "world", "relationship", "career", "membership"]
+from app.schemas.setting_field_value import EntityRef, FieldType, PositiveDbInt, SettingEntryType, TypedFieldValue
+
+SubjectKind = Literal["character", "world", "relationship", "career", "membership", "organization", "career_entry"]
 Boundary = Literal["start", "end"]
 AnchorKind = Literal["chapter", "planned"]
 ProgressionOperation = Literal["append", "replace"]
 ProgressionSource = Literal["manual", "analysis", "legacy_import"]
 ProgressionProtection = Literal["automatic", "confirmed", "manual"]
 BaselineStatus = Literal["confirmed", "legacy_unverified"]
-PositiveDbInt = Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)]
 NonnegativeDbInt = Annotated[int, Field(strict=True, ge=0, le=2_147_483_647)]
 DbInt = Annotated[int, Field(strict=True, ge=-2_147_483_648, le=2_147_483_647)]
 
@@ -59,6 +60,8 @@ class TimelineCreate(BaseModel):
             "relationship": {"character_id", "related_character_id"},
             "career": {"character_id", "career_id"},
             "membership": {"character_id", "organization_id"},
+            "organization": {"organization_id"},
+            "career_entry": {"career_id"},
         }[self.subject_kind]
         if present != required:
             raise ValueError("主体类型与引用不匹配")
@@ -116,6 +119,7 @@ class ProgressionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: PositiveDbInt
+    expected_fields_revision: NonnegativeDbInt | None = None
     field_key: str | None = Field(default=None, min_length=1, max_length=64)
     custom_field_id: PositiveDbInt | None = None
     operation: ProgressionOperation
@@ -146,6 +150,7 @@ class ProgressionUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: PositiveDbInt
+    expected_fields_revision: NonnegativeDbInt | None = None
     field_key: str | None = Field(default=None, min_length=1, max_length=64)
     custom_field_id: PositiveDbInt | None = None
     operation: ProgressionOperation | None = None
@@ -167,6 +172,12 @@ class ProgressionOut(BaseModel):
     custom_field_id: int | None = None
     operation: ProgressionOperation
     value: JsonValue
+    field_type: FieldType | None = None
+    definition_id: int | None = None
+    field_label: str | None = None
+    reference: EntityRef | None = None
+    reference_name: str | None = None
+    reference_type: SettingEntryType | None = None
     anchor_kind: AnchorKind
     chapter_id: int | None = None
     chapter_no: int | None = None
@@ -192,15 +203,18 @@ class ProgressionListOut(BaseModel):
     items: list[ProgressionOut]
     total: int
     timeline_revision: int
+    fields_revision: int | None = None
 
 
 class ProgressionMutationOut(BaseModel):
     item: ProgressionOut
     timeline_revision: int
+    fields_revision: int | None = None
 
 
 class RevisionOut(BaseModel):
     timeline_revision: int
+    fields_revision: int | None = None
 
 
 class EffectiveOut(BaseModel):
@@ -208,10 +222,15 @@ class EffectiveOut(BaseModel):
     position: StoryPosition
     fields: dict[str, JsonValue]
     custom_fields: dict[int, str]
+    field_values: dict[int, TypedFieldValue] = Field(default_factory=dict)
     applied_event_ids: list[int]
     orphaned_event_ids: list[int]
     baseline_status: BaselineStatus
     timeline_revision: int
+    fields_revision: int | None = None
+    field_labels: dict[int, str] = Field(default_factory=dict)
+    reference_names: dict[int, str] = Field(default_factory=dict)
+    reference_types: dict[int, SettingEntryType] = Field(default_factory=dict)
 
 
 class TextFieldCreate(BaseModel):

@@ -47,6 +47,8 @@ from app.models import entities as E
 from app.models.entities import PROJECT_STATUSES
 from app.schemas.planning import PLANNING_TONES
 from app.schemas.project import WizardProgress
+from app.schemas.setting_categories import normalize_setting_tags
+from app.schemas.setting_fields import DefinitionCreate
 from app.schemas.story import clean_aliases
 from app.schemas.transfer import BackupOptions, ImportPreview, ImportResult, ImportStyleBrief
 from app.services import (
@@ -55,6 +57,7 @@ from app.services import (
     project_lifecycle,
     project_service,
     retrieval_service,
+    setting_category_service,
     setting_progression_service,
 )
 from app.services.project_transfer import remap
@@ -62,6 +65,8 @@ from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
+from app.services.setting_category_validation import validate_category_graph_snapshot
+from app.services.setting_field_values import FieldSpec, has_field_content, validate_field_value
 from app.services.setting_progression_resolver import validate_baseline, validate_progression_value
 from app.services.style_service import FIELD_LIMITS, IMPORT_SUFFIX, NAME_LIMIT, unique_name
 
@@ -106,6 +111,11 @@ TABLE_LABELS: dict[str, str] = {
     "setting_timelines": "设定时间线",
     "setting_text_fields": "设定文本字段",
     "setting_progressions": "设定剧情变化",
+    "setting_field_definitions": "字段定义",
+    "setting_field_options": "字段选项",
+    "setting_reference_handles": "设定引用身份",
+    "setting_categories": "设定分类",
+    "setting_category_rules": "设定分类规则",
     "story_memories": "剧情记忆",
     "kb_settings": "知识库设置",
     "kb_documents": "知识库文档",
@@ -127,6 +137,8 @@ TABLE_LABELS: dict[str, str] = {
 
 # 取值受限的字符串列（读取时 Out schema 为 Literal，非法值会让列表接口 500）
 ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("setting_categories", "match_mode"): ("all", "any"),
+    ("setting_category_rules", "kind"): ("tag", "dropdown"),
     ("planning_tags", "tone"): PLANNING_TONES,
     ("subplots", "tone"): PLANNING_TONES,
     ("world_settings", "category"): E.WORLD_CATEGORIES,
@@ -142,7 +154,11 @@ ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
     ("chapter_versions", "source"): E.VERSION_SOURCES,
     ("analysis_changes", "kind"): E.ANALYSIS_CHANGE_KINDS,
     ("analysis_changes", "status"): E.ANALYSIS_CHANGE_STATUSES,
-    ("setting_timelines", "subject_kind"): ("character", "world", "relationship", "career", "membership"),
+    ("setting_timelines", "subject_kind"): (
+        "character", "world", "relationship", "career", "membership", "organization", "career_entry",
+    ),
+    ("setting_field_definitions", "field_type"): ("text", "line", "dropdown", "reference"),
+    ("setting_reference_handles", "kind"): ("character", "world", "organization", "career"),
     ("setting_timelines", "baseline_status"): ("confirmed", "legacy_unverified"),
     ("setting_progressions", "operation"): ("append", "replace"),
     ("setting_progressions", "anchor_kind"): ("chapter", "planned"),
@@ -277,9 +293,70 @@ def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+FIELD_TABLES = ("setting_field_definitions", "setting_field_options", "setting_reference_handles")
+CATEGORY_TABLES = ("setting_categories", "setting_category_rules")
+TAG_TABLES = ("characters", "world_settings", "organizations", "careers")
+
+
+def _migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
+    """旧文本原样成为 JSON string；不合并字段、不补造或重放事件。"""
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return data
+    if any(tables.get(name) for name in FIELD_TABLES):
+        raise BadRequestError("旧版备份不支持类型化字段配置，请使用原始版本文件")
+    tables.update({name: [] for name in FIELD_TABLES})
+    old_fields = tables.get("setting_text_fields")
+    for row in old_fields if isinstance(old_fields, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("definition_id") is not None or not isinstance(row.get("base_value", ""), str):
+            raise BadRequestError("旧版备份不支持类型化字段，请使用原始版本文件")
+        row["definition_id"] = None
+    timelines = tables.get("setting_timelines")
+    if not isinstance(timelines, list):
+        return data
+    # 旧格式不认识独立条目主体，不能夹带后版本的字段或时间线。
+    if any(isinstance(row, dict) and row.get("subject_kind") in ("organization", "career_entry") for row in timelines):
+        raise BadRequestError("旧版备份不支持独立条目时间线，请使用原始版本文件")
+    used_ids = {row["id"] for row in timelines if isinstance(row, dict) and _is_int(row.get("id"))}
+    next_id = 1
+    for table, kind, column in (("organizations", "organization", "organization_id"),
+                                ("careers", "career_entry", "career_id")):
+        rows = tables.get(table)
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and _is_int(row.get("id")):
+                while next_id in used_ids:
+                    next_id += 1
+                timelines.append({"id": next_id, "subject_kind": kind, column: row["id"], "baseline": {},
+                                  "baseline_status": "confirmed", "legacy_compat_allowed": False, "revision": 1})
+                used_ids.add(next_id)
+    return data
+
+
+def _migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
+    """旧版只有缺失或规范空数组可补空，绝不清掉非空未来语义。"""
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return data
+    for name in CATEGORY_TABLES:
+        if name in tables and (not isinstance(tables[name], list) or tables[name]):
+            raise BadRequestError("旧版备份不支持分类或规则资料，请使用原始版本文件")
+        tables[name] = []
+    for name in TAG_TABLES:
+        rows = tables.get(name)
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            if "setting_tags" in row and (not isinstance(row["setting_tags"], list) or row["setting_tags"]):
+                raise BadRequestError("旧版备份不支持整理标签资料，请使用原始版本文件")
+            row["setting_tags"] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
-    steps = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
+    steps = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4, 4: _migrate_v4_to_v5}
     while version < VERSION:
         data = steps[version](data)
         version += 1
@@ -376,6 +453,12 @@ def _check_rows(rule: TableRule, rows: Any, errors: _Errors) -> None:
                 continue
             v = row[col_name]
             problem = _check_value(col, v)
+            if col_name == "id" and _is_int(v) and v < 1:
+                problem = "必须为正整数"
+            if v is None and (rule.table, col_name) in (
+                ("setting_text_fields", "base_value"), ("setting_progressions", "value"),
+            ):
+                problem = None  # JSON null 是下拉／引用的合法清空；随后依 FieldSpec 校验。
             if problem is None and v is not None:
                 if isinstance(col.type, JSON):
                     problem = _check_json(rule.model, col_name, v)
@@ -384,6 +467,12 @@ def _check_rows(rule: TableRule, rows: Any, errors: _Errors) -> None:
                 if problem is None and rule.table == "world_settings" and col_name == "aliases":
                     try:
                         clean_aliases(v)
+                    except ValueError as exc:
+                        problem = str(exc)
+                if problem is None and col_name == "setting_tags":
+                    try:
+                        if normalize_setting_tags(v) != v:
+                            problem = "必须已去空白、去空并去重"
                     except ValueError as exc:
                         problem = str(exc)
                 if problem is None and rule.table == "project_notes":
@@ -429,9 +518,88 @@ def _check_refs(backup: Backup, errors: _Errors) -> None:
                 errors.add(f"{name}第 {i} 行引用的风格 {row['style_ref']} 不在 styles 中")
 
 
+def _field_specs(tables: dict[str, list[dict[str, Any]]], errors: _Errors) -> dict[int, FieldSpec]:
+    """以完整历史图校验配置及 canonical 值；停用状态不改变历史合法性。"""
+    definitions = {row["id"]: row for row in tables.get("setting_field_definitions", [])}
+    options: dict[int, set[int]] = {}
+    names: set[str] = set()
+    for row in definitions.values():
+        try:
+            validated = DefinitionCreate.model_validate({
+                **{key: row[key] for key in DefinitionCreate.model_fields if key in row},
+                "expected_fields_revision": 0,
+            })
+            if validated.label != row["label"] or row["label"] in names:
+                raise ValueError("名称重复或包含首尾空白")
+            names.add(row["label"])
+        except (ValidationError, ValueError) as exc:
+            errors.add(f"字段定义 #{row['id']} 不合法：{exc}")
+    option_names: set[tuple[int, str]] = set()
+    for row in tables.get("setting_field_options", []):
+        definition = definitions.get(row["definition_id"])
+        key = (row["definition_id"], row["label"])
+        if (definition is None or definition.get("field_type") != "dropdown" or key in option_names
+                or not row["label"].strip() or row["label"] != row["label"].strip()):
+            errors.add(f"字段选项 #{row['id']} 的定义或名称不合法")
+        option_names.add(key)
+        options.setdefault(row["definition_id"], set()).add(row["id"])
+    columns = {"character": ("characters", "character_id"), "world": ("world_settings", "world_setting_id"),
+               "organization": ("organizations", "organization_id"), "career": ("careers", "career_id")}
+    entities = {table: {row["id"]: row for row in tables.get(table, [])} for table, _ in columns.values()}
+    handle_types: dict[int, str] = {}
+    targets: set[tuple[str, int]] = set()
+    for row in tables.get("setting_reference_handles", []):
+        kind = row.get("kind")
+        table, column = columns.get(kind, ("", ""))
+        target_id = row.get(column)
+        target = entities.get(table, {}).get(target_id)
+        if (target is None or any(row.get(other) is not None for _, other in columns.values() if other != column)
+                or (kind, target_id) in targets):
+            errors.add(f"设定引用身份 #{row['id']} 的目标不合法或重复")
+            continue
+        targets.add((kind, target_id))
+        handle_types[row["id"]] = f"world.{target['category']}" if kind == "world" else kind
+    timelines = {row["id"]: row for row in tables.get("setting_timelines", [])}
+    specs = {}
+    bindings: set[tuple[int, int]] = set()
+    historical_fields = {row.get("custom_field_id") for row in tables.get("setting_progressions", [])}
+    for row in tables.get("setting_text_fields", []):
+        definition_id = row.get("definition_id")
+        if definition_id is None:
+            specs[row["id"]] = FieldSpec("text")
+        else:
+            definition = definitions.get(definition_id)
+            timeline = timelines.get(row["timeline_id"])
+            if definition is None or timeline is None:
+                continue
+            kind = timeline["subject_kind"]
+            entry_type = "career" if kind == "career_entry" else kind
+            if kind == "world":
+                world = entities["world_settings"].get(timeline.get("world_setting_id"))
+                entry_type = f"world.{world['category']}" if world else ""
+            key = (row["timeline_id"], definition_id)
+            content = has_field_content(row.get("base_value"), has_events=row["id"] in historical_fields)
+            if (row.get("label") is not None or key in bindings
+                    or (content and entry_type not in definition.get("applicable_types", []))):
+                errors.add(f"设定字段 #{row['id']} 的绑定形状、适用类型或唯一性不合法")
+            bindings.add(key)
+            specs[row["id"]] = FieldSpec(
+                definition["field_type"], definition_id,
+                option_ids=frozenset(options.get(definition_id, set())),
+                reference_handle_ids=frozenset(handle_id for handle_id, entry_type in handle_types.items()
+                                               if entry_type in definition.get("reference_types", [])),
+            )
+        try:
+            validate_field_value(specs[row["id"]], row.get("base_value"))
+        except (ValueError, ValidationError) as exc:
+            errors.add(f"设定字段 #{row['id']} 的基础值不合法：{exc}")
+    return specs
+
+
 def _check_setting_data(backup: Backup, errors: _Errors) -> None:
     """v2 的设定事件是核心事实：类型、主体、引用缺失均不能降级为警告。"""
     tables = backup.tables
+    field_specs = _field_specs(tables, errors)
     timelines = {row["id"]: row for row in tables.get("setting_timelines", [])}
     fields = {row["id"]: row for row in tables.get("setting_text_fields", [])}
     events = {row["id"]: row for row in tables.get("setting_progressions", [])}
@@ -445,6 +613,7 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
         "character": ("character_id",), "world": ("world_setting_id",),
         "relationship": ("character_id", "related_character_id"),
         "career": ("character_id", "career_id"), "membership": ("character_id", "organization_id"),
+        "organization": ("organization_id",), "career_entry": ("career_id",),
     }
     all_subject_fields = {item for names in subject_fields.values() for item in names}
     subjects: set[tuple[Any, ...]] = set()
@@ -530,6 +699,8 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
     required_subjects = (
         [("world", r["id"]) for r in tables.get("world_settings", [])]
         + [("character", r["id"]) for r in tables.get("characters", [])]
+        + [("organization", r["id"]) for r in tables.get("organizations", [])]
+        + [("career_entry", r["id"]) for r in tables.get("careers", [])]
         + [("relationship", min(r["a_id"], r["b_id"]), max(r["a_id"], r["b_id"]))
            for r in tables.get("relationships", []) if _is_int(r.get("a_id")) and _is_int(r.get("b_id"))]
         + [("career", r.get("character_id"), r.get("career_id")) for r in tables.get("character_careers", [])]
@@ -545,6 +716,10 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
     for i, row in enumerate(tables.get("setting_text_fields", []), start=1):
         timeline = timelines.get(row.get("timeline_id"))
         label_value = row.get("label")
+        if "base_value" not in row or "sort" not in row:
+            errors.add(f"设定文本字段第 {i} 行基础数据不完整")
+        if row.get("definition_id") is not None:
+            continue  # 共享绑定由 _field_specs 校验。
         if (timeline is None or timeline.get("subject_kind") not in ("character", "world")
                 or not isinstance(label_value, str) or not label_value.strip() or label_value != label_value.strip()):
             errors.add(f"设定文本字段第 {i} 行主体或名称不合法")
@@ -553,8 +728,6 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
         if key in names:
             errors.add(f"设定文本字段第 {i} 行名称重复")
         names.add(key)
-        if "base_value" not in row or "sort" not in row:
-            errors.add(f"设定文本字段第 {i} 行基础数据不完整")
 
     for i, row in enumerate(tables.get("setting_progressions", []), start=1):
         timeline = timelines.get(row.get("timeline_id"))
@@ -584,7 +757,8 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
                     if kind == "relationship" else None)
         try:
             validate_progression_value(kind, field_key, row.get("operation"), row["value"],
-                                       custom_field_id=field_id, subject_identity=identity)
+                                       custom_field_id=field_id, subject_identity=identity,
+                                       field_spec=field_specs.get(field_id))
         except ValueError as exc:
             errors.add(f"设定剧情变化第 {i} 行数据不合法：{exc}")
             continue
@@ -600,6 +774,28 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
                 career = careers.get(timeline.get("career_id"))
                 if career is None or state.get("role") != career.get("kind"):
                     errors.add(f"设定剧情变化第 {i} 行职业类别不属于该职业")
+
+
+def _check_category_data(backup: Backup, errors: _Errors) -> None:
+    """文件局部归属按 registry.fill 补齐，预览／持久图复用同一 C3 校验内核。"""
+    project_id = backup.project["id"]
+    try:
+        validate_category_graph_snapshot(
+            project_id,
+            categories=[{**row, "project_id": project_id} for row in backup.tables["setting_categories"]],
+            rules=backup.tables["setting_category_rules"],
+            definitions=[{**row, "project_id": project_id}
+                         for row in backup.tables["setting_field_definitions"]],
+            options=backup.tables["setting_field_options"],
+        )
+    except AppError as exc:
+        errors.add(f"设定分类资料不合法：{exc.detail}")
+    names: set[str] = set()
+    for row in backup.tables["setting_categories"]:
+        name = row.get("name", "")
+        if name != name.strip() or name in names:
+            errors.add(f"设定分类 #{row['id']} 名称重复或不是规范值")
+        names.add(name)
 
 
 def _check_styles(styles: Any, errors: _Errors) -> list[dict[str, Any]]:
@@ -690,7 +886,8 @@ def parse_backup(raw: bytes) -> Backup:
     tables = data.get("tables")
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
-    for table in ("setting_timelines", "setting_text_fields", "setting_progressions", *PLANNING_TABLES):
+    for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
+                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -724,6 +921,8 @@ def parse_backup(raw: bytes) -> Backup:
     _check_refs(backup, errors)
     errors.raise_if_any()
     _check_setting_data(backup, errors)
+    errors.raise_if_any()
+    _check_category_data(backup, errors)
     errors.raise_if_any()
     validate_planning_tables(backup.tables, errors.add)
     errors.raise_if_any()
@@ -1158,6 +1357,10 @@ class _Importer:
         await self._project_refs()
         # 时间线才是最新值来源；在导入事务内取得项目屏障并重建全部主体，失败时一起回滚。
         await project_lifecycle.lock_active(self.db, self.project_id)
+        from app.services.setting_field_service import validate_project_field_graph
+
+        await validate_project_field_graph(self.db, self.project_id)
+        await setting_category_service.validate_project_category_graph(self.db, self.project_id)
         await setting_progression_service.materialize_project(self.db, self.project_id)
         from app.services.planning_lifecycle import validate_project
 
