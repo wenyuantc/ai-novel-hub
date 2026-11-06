@@ -11,6 +11,6 @@
 {"file": ".trellis/spec/backend/planning.md", "reason": "手动引用、POV、锁定段、去重、时点和预算"}
 {"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份表登记、格式升级、ID 重映射与事务"}
 {"file": ".trellis/spec/backend/agent.md", "reason": "智能体读写工具、结果回放、断点续跑及效果安全"}
-{"file": ".trellis/tasks/11-06-setting-ai-visibility/research/matching-and-settings.md", "reason": "兼容默认值、类型覆盖及匹配风险的源码依据"}
-{"file": ".trellis/tasks/11-06-setting-ai-visibility/research/ai-paths.md", "reason": "全入口、派生设定、工具回显和重放审计基线"}
-{"file": ".trellis/tasks/11-06-setting-ai-visibility/research/dispatch-boundary.md", "reason": "真实发送屏障、SDK 传输接入和并发验证"}
+{"file": ".trellis/tasks/archive/2026-11/11-06-setting-ai-visibility/research/matching-and-settings.md", "reason": "兼容默认值、类型覆盖及匹配风险的源码依据"}
+{"file": ".trellis/tasks/archive/2026-11/11-06-setting-ai-visibility/research/ai-paths.md", "reason": "全入口、派生设定、工具回显和重放审计基线"}
+{"file": ".trellis/tasks/archive/2026-11/11-06-setting-ai-visibility/research/dispatch-boundary.md", "reason": "真实发送屏障、SDK 传输接入和并发验证"}
