@@ -12,7 +12,7 @@ export default function AgentPanel({ projectId }: { projectId: number }) {
   const { message, modal } = App.useApp()
   const { token } = theme.useToken()
   const loader = useCallback(() => agentApi.list(projectId), [projectId])
-  const { data: conversations, loading, error, reload } = useLoader(loader)
+  const { data: conversations, loading, error, reload } = useLoader(loader, { projectId, resources: ['setting-ai-visibility'] })
   const location = useLocation()
   const requested = readPositiveId(new URLSearchParams(location.search).get('conversation_id'))
   const [selection, setSelection] = useState<{ key: string; id: number | null }>({ key: '', id: null })
@@ -23,6 +23,7 @@ export default function AgentPanel({ projectId }: { projectId: number }) {
   const [form] = Form.useForm<{ title: string }>()
   const current = selected !== null ? conversations?.find((c) => c.id === selected) : conversations?.[0]
   const create = async () => {
+    if (busy) return
     setBusy(true)
     try { const next = await agentApi.create(projectId); setSelected(next.id); reload() }
     catch (err) { message.error(errorMessage(err)) }
@@ -46,16 +47,16 @@ export default function AgentPanel({ projectId }: { projectId: number }) {
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, overflow: 'hidden' }}>
     <div style={{ padding: 12, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
       <Space.Compact style={{ width: '100%' }}>
-        <Select aria-label="智能体会话" style={{ flex: 1, minWidth: 0 }} value={current?.id} loading={loading} placeholder="选择会话" onChange={setSelected} options={conversations?.map((c) => ({ value: c.id, label: c.title || '新会话' }))} />
+        <Select aria-label="智能体会话" style={{ flex: 1, minWidth: 0 }} value={current?.id} loading={loading} placeholder="选择会话" onChange={setSelected} options={conversations?.map((c) => ({ value: c.id, label: `${c.title || '新会话'}${c.history_sealed ? '（只读）' : ''}` }))} />
         <Button icon={<PlusOutlined />} aria-label="新建会话" title="新建会话" loading={busy} onClick={() => void create()} />
         <Button icon={<EditOutlined />} aria-label="重命名会话" title="重命名会话" disabled={!current || busy} onClick={() => { form.setFieldsValue({ title: current?.title }); setRenaming(true) }} />
         <Button icon={<DeleteOutlined />} aria-label="删除会话" title="删除会话" disabled={!current || busy} onClick={remove} />
       </Space.Compact>
     </div>
     {error && <Alert type="error" message={error} action={<Button onClick={reload}>重试</Button>} />}
-    {selected !== null && conversations && !current && <Alert type="warning" showIcon message="指定会话不存在或已删除，请选择其他会话。" />}
+    {selected !== null && conversations && !current && !loading && <Alert type="warning" showIcon message="指定会话不存在或已删除，请选择其他会话。" />}
     {!conversations && loading && <div style={{ padding: 16 }}><Skeleton active /></div>}
-    {current ? <AgentConversationView key={current.id} pid={projectId} cid={current.id} onUpdated={reload} /> : !loading && <div style={{ padding: 24, textAlign: 'center' }}>
+    {current ? <AgentConversationView key={current.id} pid={projectId} cid={current.id} onUpdated={reload} creating={busy} onCreate={() => void create()} /> : !loading && <div style={{ padding: 24, textAlign: 'center' }}>
       <Typography.Paragraph>一起整理设定、检查剧情，或修改当前项目。</Typography.Paragraph>
       <Typography.Paragraph type="secondary">修改前会展示对比，确认后才写入项目。</Typography.Paragraph>
       <Button type="primary" icon={<PlusOutlined />} loading={busy} onClick={() => void create()}>开始新会话</Button>

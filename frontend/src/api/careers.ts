@@ -1,6 +1,6 @@
 // 职业等级体系：职业 / 阶段 CRUD、持有人、角色挂接与历史、AI 生成职业任务，以及相关纯函数
 
-import { api } from './client'
+import { api, request } from './client'
 import type {
   Assignment,
   AssignmentInput,
@@ -34,7 +34,7 @@ export interface CareerRemovalIntent {
 
 export const careerApi = {
   list: (pid: number) => api.get<Career[]>(base(pid)),
-  get: (pid: number, id: number) => api.get<Career>(`${base(pid)}/${id}`),
+  get: (pid: number, id: number, signal?: AbortSignal) => request<Career>(`${base(pid)}/${id}`, { signal }),
   create: (pid: number, body: CareerInput) => api.post<Career>(base(pid), body),
   /** AI 预览确认后一次保存（单事务，任一同名 → 409 全部回滚） */
   batch: (pid: number, careers: CareerInput[]) => api.post<Career[]>(`${base(pid)}/batch`, { careers }),

@@ -57,6 +57,23 @@ from app.services import (
 
 from .base import EmptyArgs, IdArgs, Tool, ToolCtx, arguments, serialized
 from .read import PageArgs, paged
+from .visibility import timeline_allowed, timeline_fields_allowed
+
+
+def _crud_schema(name: str, schema: type[BaseModel], *, with_id: bool = False) -> type[BaseModel]:
+    if "always_in_context" in schema.model_fields:
+        # 旧常驻也是作者策略。仅从模型的输入协议移除，不改人工表单的合同；
+        # 操作仍通过原 schema 再次校验。
+        schema = create_model(
+            f"{name}AuthorFields",
+            __base__=EmptyArgs,
+            **{
+                key: (field.annotation, field)
+                for key, field in schema.model_fields.items()
+                if key != "always_in_context"
+            },
+        )
+    return arguments(name, schema, with_id=with_id)
 
 
 def crud_tools(
@@ -84,7 +101,7 @@ def crud_tools(
         Tool(
             f"create_{noun}",
             f"新建{label}",
-            arguments(f"Create{model.__name__}", create_schema),
+            _crud_schema(f"Create{model.__name__}", create_schema),
             "small",
             operation(create, create_schema, False),
             id_model=model,
@@ -92,7 +109,7 @@ def crud_tools(
         Tool(
             f"update_{noun}",
             f"修改{label}",
-            arguments(f"Update{model.__name__}", update_schema, with_id=True),
+            _crud_schema(f"Update{model.__name__}", update_schema, with_id=True),
             "small",
             operation(update, update_schema, True),
             id_model=model,
@@ -313,7 +330,7 @@ async def record_setting_field_progression(ctx: ToolCtx, args: FieldProgressionA
 async def list_setting_timelines(ctx: ToolCtx, args: TimelineListArgs):
     filters = args.model_dump(exclude={"page", "page_size"}, exclude_none=True)
     result = await setting_progression_service.list_timelines(ctx.db, ctx.user_id, ctx.project_id, **filters)
-    page = paged(result.items, args)
+    page = paged([item for item in result.items if timeline_allowed(ctx, item)], args)
     timeline_ids = [item["id"] for item in page["items"]]
     fields_by_timeline: dict[int, list[dict]] = {timeline_id: [] for timeline_id in timeline_ids}
     definitions = await setting_field_service.list_definitions(ctx.db, ctx.user_id, ctx.project_id)
@@ -327,6 +344,8 @@ async def list_setting_timelines(ctx: ToolCtx, args: TimelineListArgs):
         )
         for (field,) in fields:
             definition = by_id.get(field.definition_id)
+            if ctx.scope is not None and (field.ai_hidden or (definition and definition.ai_hidden)):
+                continue
             metadata = {
                 "id": field.id, "label": definition.label if definition else field.label,
                 "field_type": definition.field_type if definition else "text", "definition_id": field.definition_id,
@@ -341,6 +360,7 @@ async def list_setting_timelines(ctx: ToolCtx, args: TimelineListArgs):
 
 
 async def update_setting_baseline(ctx: ToolCtx, args: BaselineArgs):
+    await timeline_fields_allowed(ctx, args.timeline_id, args.changes.model_fields_set)
     data = BaselineUpdate.model_validate(args.model_dump(exclude={"timeline_id"}, exclude_unset=True))
     return await setting_progression_service.update_baseline(
         ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data
@@ -348,6 +368,8 @@ async def update_setting_baseline(ctx: ToolCtx, args: BaselineArgs):
 
 
 async def record_setting_progression(ctx: ToolCtx, args: ProgressionArgs):
+    if args.field_key:
+        await timeline_fields_allowed(ctx, args.timeline_id, (args.field_key,))
     expected_type = {
         "intimacy": "intimacy",
         "stage_id": "stage_id",

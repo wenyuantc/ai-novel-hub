@@ -205,7 +205,7 @@ async def test_all_reference_kinds_and_per_kind_replacement(client):
     columns = [{"kind": "setting", "reference": ref} for ref in refs]
     view = (await client.get(f"{base}/planning/matrix", params={"column_refs": json.dumps(columns)})).json()
     assert all(cell["manual"] for cell in view["cells"])
-    assert not next(column for column in view["columns"] if column["name"] == "青云宗")["tracking_supported"]
+    assert next(column for column in view["columns"] if column["name"] == "青云宗")["tracking_supported"]
 
 
 async def test_matrix_distinguishes_ambiguity_unwritten_and_manual(client):
@@ -225,6 +225,45 @@ async def test_matrix_distinguishes_ambiguity_unwritten_and_manual(client):
     await client.patch(f"{base}/chapters/{chapter['id']}", json={"content": ""})
     empty = (await client.get(f"{base}/planning/matrix", params={"column_refs": json.dumps(columns)})).json()
     assert all(not cell["has_content"] and cell["ambiguous_count"] == 0 for cell in empty["cells"])
+
+
+async def test_matrix_shares_candidate_tracking_and_exclusion_owners(client):
+    base, chapter, character = await setup(client)
+    changed = await client.patch(f"{base}/characters/{character['id']}", json={"aliases": ["RIVER"]})
+    assert changed.status_code == 200, changed.text
+    organization = (await client.post(f"{base}/organizations", json={"name": "River"})).json()
+    career = (await client.post(f"{base}/careers", json={"name": "巡港人", "stages": [{"name": "初阶"}]})).json()
+    world = (await client.post(f"{base}/world", json={"title": "钟律", "category": "rule"})).json()
+    updated = await client.patch(f"{base}/chapters/{chapter['id']}", json={
+        "content": "🙂 river crossing, river；巡港人、钟律。",
+    })
+    assert updated.status_code == 200, updated.text
+
+    async def policy(kind, item, **patch):
+        url = f"{base}/setting-entries/{kind}/{item['id']}/ai-settings"
+        old = (await client.get(url)).json()
+        response = await client.patch(url, json={
+            **patch, "expected_ai_visibility_revision": old["ai_visibility_revision"],
+        })
+        assert response.status_code == 200, response.text
+
+    async def counts():
+        return {cell["column_key"]: (cell["tracking_supported"], cell["mention_count"], cell["ambiguous_count"])
+                for cell in (await matrix(client, base))["cells"]}
+
+    await policy("character", character, mention_case_sensitive=False, mention_exclusions=["river crossing"])
+    await policy("organization", organization, mention_case_sensitive=False)
+    expected = {
+        f"character:{character['id']}": (True, 0, 1),
+        f"organization:{organization['id']}": (True, 1, 1),
+        f"career:{career['id']}": (True, 1, 0),
+        f"world:{world['id']}": (True, 1, 0),
+    }
+    assert await counts() == expected
+    await policy("character", character, mention_enabled=False)
+    expected[f"character:{character['id']}"] = (False, 0, 0)
+    expected[f"organization:{organization['id']}"] = (True, 2, 0)
+    assert await counts() == expected
 
 
 async def test_merge_requires_every_node_resolution_and_retires_other(client):

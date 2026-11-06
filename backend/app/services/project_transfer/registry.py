@@ -50,6 +50,7 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    SettingAiLink,
     SettingCategory,
     SettingCategoryRule,
     SettingFieldDefinition,
@@ -144,6 +145,7 @@ PROJECT_RULE = TableRule(
         "planning_revision",  # 新作品独立的并发版本，不导出或随效果回退。
         "fields_revision",  # 字段目录版本属于新作品，不复制源作品的并发代次。
         "categories_revision",  # 整理标签／分类目录同样使用新作品的独立代次。
+        "ai_visibility_revision", "ai_history_epoch",  # 新作品不继承运行时门禁。
     ),
     json_plain=("wizard_progress", "tags"),
     # 含章节 id；项目先于章节插入，importer 在全部表插入后再改写这一列
@@ -173,8 +175,14 @@ RULES: tuple[TableRule, ...] = (
         # DB 延迟校验不代表延迟插入；必须一次插入满足 rule_shape 的完整载荷。
     ),
     TableRule("project_notes", ProjectNote, _own(ProjectNote), fill=_P),
-    TableRule("world_settings", WorldSetting, _own(WorldSetting), fill=_P, json_plain=("aliases", "setting_tags")),
-    TableRule("characters", Character, _own(Character), fill=_P, json_plain=("aliases", "setting_tags")),
+    TableRule(
+        "world_settings", WorldSetting, _own(WorldSetting), fill=_P,
+        json_plain=("aliases", "setting_tags", "mention_exclusions", "ai_hidden_builtin_fields"),
+    ),
+    TableRule(
+        "characters", Character, _own(Character), fill=_P,
+        json_plain=("aliases", "setting_tags", "mention_exclusions", "ai_hidden_builtin_fields"),
+    ),
     TableRule(
         "organizations",
         Organization,
@@ -182,7 +190,7 @@ RULES: tuple[TableRule, ...] = (
         fill=_P,
         fk={"parent_id": "organizations"},
         deferred=frozenset({"parent_id"}),
-        json_plain=("setting_tags",),
+        json_plain=("setting_tags", "mention_exclusions", "ai_hidden_builtin_fields"),
     ),
     TableRule(
         "organization_members",
@@ -234,7 +242,10 @@ RULES: tuple[TableRule, ...] = (
         # 类型 / 方向以名称记录（relationship_service.apply_change），不含 id
         json_plain=("changes",),
     ),
-    TableRule("careers", Career, _own(Career), fill=_P, json_plain=("setting_tags",)),
+    TableRule(
+        "careers", Career, _own(Career), fill=_P,
+        json_plain=("setting_tags", "mention_exclusions", "ai_hidden_builtin_fields"),
+    ),
     TableRule(
         "career_stages",
         CareerStage,
@@ -355,6 +366,10 @@ RULES: tuple[TableRule, ...] = (
         "setting_reference_handles", SettingReferenceHandle, _own(SettingReferenceHandle), fill=_P,
         fk={"character_id": "characters", "world_setting_id": "world_settings",
             "organization_id": "organizations", "career_id": "careers"},
+    ),
+    TableRule(
+        "setting_ai_links", SettingAiLink, _own(SettingAiLink), fill=_P,
+        fk={"source_handle_id": "setting_reference_handles", "target_handle_id": "setting_reference_handles"},
     ),
     TableRule(
         "setting_timelines",

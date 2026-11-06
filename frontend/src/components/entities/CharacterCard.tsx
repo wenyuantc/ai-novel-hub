@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, EllipsisOutlined, EyeOutlined, PushpinFilled } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, EllipsisOutlined, EyeOutlined } from '@ant-design/icons'
 import { Button, Checkbox, Dropdown, Modal, Popover, Tag, Tooltip } from 'antd'
 import { useState, type ReactElement } from 'react'
 import type { CharacterCareerBadge } from '../../api/careers'
@@ -82,7 +82,6 @@ export default function CharacterCard({ character, career, selectable, selected,
           <span className="character-card-demographics" tabIndex={metadata ? 0 : undefined}>{metadata || '年龄、性别未设定'}</span>
         </CharacterTextPreview>
         {character.life_status !== 'alive' && <Tag color={life.color}>{life.label}</Tag>}
-        {character.always_in_context && <span className="character-card-pinned"><PushpinFilled />常驻上下文</span>}
       </div>
       <div className="character-card-body">
         {career && (career.main || career.subs.length > 0) && <div className="character-card-careers">

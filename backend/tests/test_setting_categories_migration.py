@@ -21,6 +21,8 @@ from tests.schema_helpers import create_isolated_schema
 from tests.test_setting_fields_migration import (
     _config,
     _foreign_keys_during_migrations,
+    _historical_table,
+    _schema_0036_model_contract,
     _schema_contract,
     _seed_connection,
 )
@@ -58,10 +60,10 @@ def _seed_fields(conn):
         "INSERT INTO chapters(id,project_id,chapter_no,title,content,status,word_count) "
         "VALUES(5,1,20,'转折','原有章节正文','draft',6)"
     ))
-    definitions = Base.metadata.tables["setting_field_definitions"]
+    definitions = _historical_table(conn, "setting_field_definitions")
     options = Base.metadata.tables["setting_field_options"]
     handles = Base.metadata.tables["setting_reference_handles"]
-    fields = Base.metadata.tables["setting_text_fields"]
+    fields = _historical_table(conn, "setting_text_fields")
     events = Base.metadata.tables["setting_progressions"]
     for definition_id, field_type, label in (
         (11, "text", "经历"), (12, "line", "称号"), (13, "dropdown", "阵营"), (14, "reference", "驻地"),
@@ -280,7 +282,9 @@ def test_0036_schema_matches_full_current_orm_and_stable_identities(tmp_path):
         command.upgrade(config, "0036")
         Base.metadata.create_all(expected)
         for name in CHANGED_TABLES:
-            assert _schema_contract(inspect(migrated), name) == _schema_contract(inspect(expected), name), name
+            assert _schema_contract(inspect(migrated), name) == _schema_0036_model_contract(
+                inspect(expected), name,
+            ), name
         for engine in (migrated, expected):
             with engine.connect() as conn:
                 for name in (*NEW_TABLES, *ENTITY_TABLES):
@@ -310,10 +314,10 @@ def test_0036_schema_matches_full_current_orm_and_stable_identities(tmp_path):
 
 @pytest.mark.parametrize("model,name_column", [(Character, "name"), (WorldSetting, "title"),
                                               (Organization, "name"), (Career, "name")])
-def test_0036_new_entity_tag_defaults_are_independent_per_row(tmp_path, model, name_column):
+def test_entity_tag_defaults_are_independent_per_row(tmp_path, model, name_column):
     config, engine = _sqlite_database(tmp_path)
     try:
-        command.upgrade(config, "0036")
+        command.upgrade(config, "0037")
         with Session(engine) as db:
             first = model(project_id=1, **{name_column: "新增甲"})
             second = model(project_id=1, **{name_column: "新增乙"})
@@ -336,10 +340,10 @@ def test_0036_sqlite_rule_reference_requires_valid_targets_at_real_commit(tmp_pa
         command.upgrade(config, "0036")
         categories = Base.metadata.tables["setting_categories"]
         rules = Base.metadata.tables["setting_category_rules"]
-        definitions = Base.metadata.tables["setting_field_definitions"]
         options = Base.metadata.tables["setting_field_options"]
         with engine.begin() as conn:
             conn.execute(text("PRAGMA foreign_keys=ON"))
+            definitions = _historical_table(conn, "setting_field_definitions")
             category_id = conn.scalar(categories.insert().values(
                 project_id=1, name="仅规则引用", applicable_types=["character"], match_mode="all",
             ).returning(categories.c.id))
@@ -385,7 +389,7 @@ def test_0036_rule_shape_names_foreign_keys_category_delete_and_project_cascade(
 def _verify_rules_and_cascade(conn):
     categories = Base.metadata.tables["setting_categories"]
     rules = Base.metadata.tables["setting_category_rules"]
-    definitions = Base.metadata.tables["setting_field_definitions"]
+    definitions = _historical_table(conn, "setting_field_definitions")
     options = Base.metadata.tables["setting_field_options"]
     first = conn.scalar(categories.insert().values(
         project_id=1, name="焦点", applicable_types=APPLICABLE_TYPES, match_mode="all",
@@ -528,7 +532,7 @@ def test_0036_postgresql_0035_roundtrip_and_no_action_rules_project_cascade(monk
             await conn.execute(text(f'SET LOCAL search_path TO "{expected_schema}"'))
             await conn.run_sync(create_isolated_schema)
             expected = await conn.run_sync(lambda sync: {
-                name: _schema_contract(inspect(sync), name) for name in CHANGED_TABLES
+                name: _schema_0036_model_contract(inspect(sync), name) for name in CHANGED_TABLES
             })
             assert actual == expected
         finally:

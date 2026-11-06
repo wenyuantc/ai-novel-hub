@@ -15,6 +15,7 @@ import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectRefresh } from '../../hooks/useProjectRefresh'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
+import { MENTION_DICTIONARY_RESOURCES } from '../../utils/mentions'
 import {
   chapterWindow,
   MENTION_CHAPTER_WINDOW,
@@ -122,7 +123,7 @@ function MentionsContent({ projectId }: { projectId: number }) {
   const { reload: reloadCatalog } = catalog
   const { reload: reloadSummary } = summary
   const refresh = useCallback(() => { reloadCatalog(); reloadSummary() }, [reloadCatalog, reloadSummary])
-  useProjectRefresh(projectId, ['chapters', 'characters', 'world'], refresh)
+  useProjectRefresh(projectId, ['chapters', ...MENTION_DICTIONARY_RESOURCES], refresh)
   const chapters = useMemo(() => chapterWindow(summary.data?.chapters ?? [], chapterPage), [summary.data?.chapters, chapterPage])
   const entries = useMemo(() => summary.data?.entries ?? [], [summary.data?.entries])
   const rows = useMemo(() => mentionChapterRows(entries, chapters.items), [entries, chapters.items])
@@ -156,12 +157,12 @@ function MentionsContent({ projectId }: { projectId: number }) {
     </div>
     <Card size="small" title="筛选统计范围"><StatsFilters entities={catalog.data?.entities ?? []} loading={catalog.loading} onApply={apply} /></Card>
     <Alert type="info" showIcon message={mentionScopeLabel(filter.chapterFrom, filter.chapterTo)}
-      description="统计名称与别名的文本提及，不推断实际剧情在场。聊天、笔记、资料和未保存草稿不计入本页；未写章节不算缺席，有歧义的称呼单独计数。" />
+      description="统计已开启追踪条目的名称和别名，不推断实际剧情在场。聊天、笔记、资料和未保存草稿不计入本页；未写章节不算缺席，有歧义的称呼单独计数。" />
     {(catalog.error || summary.error) && <Alert type="error" showIcon message="提及统计加载失败" description={catalog.error || summary.error}
       action={<Button onClick={refresh}>重试</Button>} />}
     {summary.loading ? <Skeleton active paragraph={{ rows: 6 }} /> : summary.data && <>
-      {!summary.data.total ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的角色、地点或物品">
-        <Space wrap><Link to={`/projects/${projectId}/characters`}>管理角色</Link><Link to={`/projects/${projectId}/world`}>管理地点与物品</Link></Space>
+      {!summary.data.total ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件且已开启追踪的设定条目">
+        <Space wrap><Link to={`/projects/${projectId}/characters`}>管理角色</Link><Link to={`/projects/${projectId}/world`}>管理世界观</Link><Link to={`/projects/${projectId}/organizations`}>管理组织</Link><Link to={`/projects/${projectId}/careers`}>管理职业</Link></Space>
       </Empty> : <>
         <Card size="small" title="提及频次" extra={<Typography.Text type="secondary">范围内共 {summary.data.total} 个条目</Typography.Text>}>
           <Table<MentionSummaryEntry> size="small" aria-label="提及频次统计表" rowKey={(entry) => mentionEntityKey(entry.entity)} columns={columns}

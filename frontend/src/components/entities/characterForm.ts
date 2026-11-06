@@ -10,7 +10,6 @@ export interface CharacterFormValues {
   age: string
   gender: string
   life_status: LifeStatus
-  always_in_context: boolean
   appearance: string
   personality: string
   background: string
@@ -26,7 +25,6 @@ export const EMPTY_CHARACTER: CharacterFormValues = {
   age: '',
   gender: '',
   life_status: 'alive',
-  always_in_context: false,
   appearance: '',
   personality: '',
   background: '',
@@ -43,7 +41,6 @@ export function characterToForm(c: Character | CharacterDraft): CharacterFormVal
     age: c.age,
     gender: c.gender,
     life_status: asLifeStatus(c.life_status),
-    always_in_context: c.always_in_context,
     appearance: c.appearance,
     personality: c.personality,
     background: c.background,
@@ -61,7 +58,6 @@ export function formToCharacterInput(v: CharacterFormValues): CharacterInput {
     age: v.age?.trim() ?? '',
     gender: v.gender?.trim() ?? '',
     life_status: v.life_status ?? 'alive',
-    always_in_context: !!v.always_in_context,
     appearance: v.appearance ?? '',
     personality: v.personality ?? '',
     background: v.background ?? '',

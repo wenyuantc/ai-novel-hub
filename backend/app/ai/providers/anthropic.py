@@ -14,6 +14,7 @@ from app.ai.providers.base import (
     describe_tools_error,
     split_system,
 )
+from app.ai.providers.dispatch_hooks import current_dispatch_hooks
 from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec, history_arguments, native_metadata
 
 DEFAULT_MAX_TOKENS = 8192
@@ -76,12 +77,18 @@ def _tool_messages(messages: list[AgentMessage]) -> tuple[str, list[dict]]:
 
 
 class AnthropicProvider(LLMProvider):
+    uses_dispatch_hooks = True
+
     def _client(self) -> AsyncAnthropic:
+        hooks = current_dispatch_hooks()
+        http_options = {"event_hooks": hooks.event_hooks} if hooks else {}
+        sdk_options = {"max_retries": 0} if hooks else {}
         return AsyncAnthropic(
             api_key=self.api_key,
             base_url=self.base_url,
             timeout=self.timeout,
-            http_client=DefaultAsyncHttpxClient(follow_redirects=self.follow_redirects),
+            http_client=DefaultAsyncHttpxClient(follow_redirects=self.follow_redirects, **http_options),
+            **sdk_options,
         )
 
     async def generate_stream(

@@ -17,11 +17,14 @@ import type { Career, CareerHolder, CareerKind, ProgressionPositionInput } from 
 import { useLoader } from '../../hooks/useLoader'
 import StageListEditor from './StageListEditor'
 import SettingEntryFieldsPanel from '../settingFields/SettingEntryFieldsPanel'
+import SettingAiDetailSections from '../settingAi/SettingAiDetailSections'
+import type { SettingAiSession } from '../settingAi/settingAiController'
 import SettingTagsPanel from '../settingTags/SettingTagsPanel'
 import type { SettingTagsSession } from '../settingTags/settingTagsController'
 
 interface Props {
   tagsSession: SettingTagsSession
+  aiSession: SettingAiSession
   projectId: number
   open: boolean
   /** null = 新建 */
@@ -57,7 +60,7 @@ export default function CareerEditDrawer(props: Props) {
   )
 }
 
-function Inner({ projectId, career, onSaved, fieldPosition, tagsSession }: Props) {
+function Inner({ projectId, career, onSaved, fieldPosition, tagsSession, aiSession }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
@@ -171,7 +174,7 @@ function Inner({ projectId, career, onSaved, fieldPosition, tagsSession }: Props
             </Form.Item>
           </Col>
         </Row>
-        <Form.Item name="rules" label="体系规则" tooltip="生成章节时附在【职业体系】段落中（前 200 字）">
+        <Form.Item name="rules" label="体系规则" tooltip="职业符合纳入策略且规则未隐藏时，可作为 AI 的职业参考。">
           <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
         </Form.Item>
       </Form>
@@ -182,7 +185,8 @@ function Inner({ projectId, career, onSaved, fieldPosition, tagsSession }: Props
           保存
         </Button>
       </div>
-      {current ? <Card size="small" title="职业自身字段与剧情变化" style={{ marginBottom: 16 }}><SettingEntryFieldsPanel key={`${projectId}:career:${current.id}`} projectId={projectId} entry={{ kind: 'career', id: current.id }} initialPosition={fieldPosition} /></Card> : <Typography.Paragraph type="secondary">保存职业后可维护自身字段与剧情变化。</Typography.Paragraph>}
+      {current && <div style={{ marginBottom: 16 }}><SettingAiDetailSections session={aiSession} entry={{ kind: 'career', id: current.id }} /></div>}
+      {current ? <Card size="small" title="职业自身字段与剧情变化" style={{ marginBottom: 16 }}><SettingEntryFieldsPanel key={`${projectId}:career:${current.id}`} projectId={projectId} entry={{ kind: 'career', id: current.id }} initialPosition={fieldPosition} /></Card> : <Typography.Paragraph type="secondary">保存职业后可维护 AI 与提及设置、字段与剧情变化。</Typography.Paragraph>}
       {current && <Card size="small" style={{ marginBottom: 16 }}><SettingTagsPanel session={tagsSession} entry={{ kind: 'career', id: current.id }} /></Card>}
       {current && (
         <>

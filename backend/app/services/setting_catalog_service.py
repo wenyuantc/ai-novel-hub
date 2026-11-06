@@ -1,14 +1,14 @@
 """领域中立的有界条目目录和显式时间线初始化。"""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import cast
 
-from sqlalchemy import func, literal, or_, select, union_all
+from sqlalchemy import false, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
-from app.models import Career, Character, Organization, SettingTimeline, WorldSetting
+from app.models import Career, Character, Organization, SettingReferenceHandle, SettingTimeline, WorldSetting
 from app.schemas.setting_fields import EntityRef, EntryKind, EntryType, SettingEntry, SettingEntryPage
 from app.services.project_service import get_manageable_project
 
@@ -20,6 +20,7 @@ TARGET_COLUMNS = {
     "career": "career_id",
 }
 CANDIDATE_KINDS = ("character", "world", "organization", "career")
+EntryKey = tuple[str, int]
 
 
 @dataclass(frozen=True, order=True)
@@ -150,11 +151,17 @@ async def list_entries(
     q: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    allowed_ids: dict[str, set[int]] | None = None,
 ) -> SettingEntryPage:
     with db.no_autoflush:
         await get_manageable_project(db, user_id, project_id)
         entries = _entry_union(project_id)
         predicates = _entry_filters(entries, types, q)
+        if allowed_ids is not None:
+            predicates.append(or_(false(), *(
+                (entries.c.kind == kind) & entries.c.id.in_(ids)
+                for kind, ids in allowed_ids.items() if ids
+            )))
         total = await db.scalar(select(func.count()).select_from(entries).where(*predicates))
         rows = await db.execute(
             select(entries)
@@ -211,6 +218,50 @@ async def get_entries(
     if set(result) != {(ref.kind, ref.id) for ref in references}:
         raise NotFoundError("设定条目不存在")
     return result
+
+
+def reference_handle_key(handle) -> EntryKey:
+    return handle.kind, getattr(handle, TARGET_COLUMNS[handle.kind])
+
+
+async def find_reference_handles(
+    db: AsyncSession,
+    project_id: int,
+    keys: Collection[EntryKey],
+) -> dict[EntryKey, SettingReferenceHandle]:
+    predicates = []
+    for kind, column in TARGET_COLUMNS.items():
+        ids = {entry_id for entry_kind, entry_id in keys if entry_kind == kind}
+        if ids:
+            predicates.append((SettingReferenceHandle.kind == kind) & getattr(SettingReferenceHandle, column).in_(ids))
+    if not predicates:
+        return {}
+    with db.no_autoflush:
+        rows = await db.scalars(select(SettingReferenceHandle).where(
+            SettingReferenceHandle.project_id == project_id, or_(*predicates),
+        ))
+        return {reference_handle_key(row): row for row in rows}
+
+
+async def ensure_reference_handles(
+    db: AsyncSession,
+    project_id: int,
+    entries: Collection[SettingEntry],
+    *,
+    existing: dict[EntryKey, SettingReferenceHandle] | None = None,
+) -> dict[EntryKey, SettingReferenceHandle]:
+    """调用者持父项目锁；只允许已解析的同项目条目；不提交或回收句柄。"""
+    keys = {(entry.reference.kind, entry.reference.id) for entry in entries}
+    handles = await find_reference_handles(db, project_id, keys) if existing is None else dict(existing)
+    missing = keys - handles.keys()
+    for kind, entry_id in sorted(missing):
+        handles[kind, entry_id] = SettingReferenceHandle(
+            project_id=project_id, kind=kind, **{TARGET_COLUMNS[kind]: entry_id},
+        )
+        db.add(handles[kind, entry_id])
+    if missing:
+        await db.flush()
+    return handles
 
 
 async def find_entry_timeline(

@@ -4,7 +4,7 @@
 
 ## 1. 范围与触发
 
-- 追踪对象仅为角色及 `WorldSetting.category` 为 `place/item` 的条目；名称／别名是当前全书身份资料，不进入按章剧情变化。
+- 追踪支持角色、六类世界观、组织和职业；未配置的旧数据仍仅启用角色和 `place/item`。名称／别名是当前全书身份资料，不进入按章剧情变化；条目 `never` 不自动关闭人工追踪。见 [设定 AI 可见性](./setting-ai-visibility.md)。
 - 四类原文：`Chapter.content`、当前会话所有者的已保存 user/assistant `AgentMessage.content`、`ProjectNote.content`、`KbDocument.text`。不扫描 tool JSON、会话摘要、Skill 快照、章节历史版本、分块回显或灵感 notes 数组。
 - 提及是字面命中，不推断真实剧情在场。章节热力图只统计已保存正文；草稿、聊天、笔记和资料不能折算为章节出场。
 - 无模型调用、无向量依赖、无持久提及副本表；原文与词典是事实源，有界缓存只复用匹配跨度。
@@ -23,7 +23,7 @@
 | `GET/POST /notes` | 分页搜索 `q/page/page_size`；创建 `{title,content?}` →201完整笔记 |
 | `GET/PATCH/DELETE /notes/{id}` | PATCH `{expected_revision,title?,content?}`；DELETE查询参数 `expected_revision` →204 |
 
-分页参数：page≥1，page_size 1–100。`entity_kind = character/world`，`category = character/place/item`，`source_type = chapter/chat/note/knowledge`。
+分页参数：page≥1，page_size 1–100。`entity_kind = character/world/organization/career`，`category = character/place/faction/item/rule/history/other/organization/career`，`source_type = chapter/chat/note/knowledge`。
 
 - `EntityRef {kind,id,name,category,aliases}`；`MentionSpan {start,end,text,entities}`。
 - `SourceRef {type,id,title,chapter_no|null,conversation_id|null,created_at|null}`；`Occurrence` 在 span 上增加 source、content_hash、context_before/context_after。
@@ -37,10 +37,11 @@
 ### 匹配与缓存
 
 - 原文不 trim/normalize；所有位置为 Python Unicode 码点半开区间 `[start,end)`。前端 `utils/mentions.ts::mentionSegments` 用 `Array.from(text)` 按码点分段；只有需要原生Textarea选区时才另用 `utils/textOffset.ts` 转换UTF-16。
-- 字面精确、区分大小写；词表去首尾空白并去重，一字词仍参与。ASCII字母/数字/下划线词边检查相邻字符，避免 Ann 命中 Anna。
-- 标准库 `re` 转义词表，左起最早有效位置、同起点长词优先，消费后不重叠。长词边界不满足时仍可回退合法短词。
+- 默认区分大小写，可按条目关闭追踪、使用 Unicode casefold 或配置排除词；折叠后的命中仍回映原始码点，不允许半个折叠字符。词表去首尾空白并去重，一字词仍参与；ASCII 字母／数字／下划线词边避免 Ann 命中 Anna。
+- 标准库 `re` 转义词表，左起最早有效位置、同起点长词优先，消费后不重叠。先移除被自身完整排除短语覆盖的候选，才计算归属；无效长词后仍回退合法短词，不能误删同词其他候选。
 - 同词多条目返回全部候选；只给 `entities.length===1` 累加确定次数；候选分别记 ambiguous_count。名称与别名同词不重复计数。
-- 词典指纹包含 matcher版本、实体kind/id/name/category和规范化词集合；缓存键包含 project/type/id、原文SHA-256和词典指纹。缓存不存原文、不存授权、不存旧章号元数据。
+- 所有消费者（含规划矩阵）用 `match_entities(hit, dictionary)` 读取命中归属。`dictionary.owners` 仅兼容简单字典的快速路径，不能按 `hit.term` 取归属；进阶匹配的同一词面可能因位置及排除规则归属不同。
+- 词典指纹包含 matcher 版本、实体 kind/id/name/category、规范化词集合、大小写和排除配置；关闭的条目不参与索引。缓存键包含 project/type/id、原文 SHA-256 和词典指纹；缓存不存原文、授权或旧章号元数据。
 - `MentionCache` 默认≤4096来源、总≤200000跨度、单来源≤20000跨度；超限来源完整流式匹配但不缓存，禁止截断后声称完整。零命中也可缓存，仅完整消费来源后写缓存。`tests/conftest.py` 在测试前后清理缓存。
 - 来源分批游标：资料每批1份，其余16份；hash/匹配/聚合放 `anyio.to_thread.run_sync`。分页只保留当前页片段，但统计完整筛选范围；读取不 autoflush/commit 调用方未提交业务对象。
 
@@ -67,7 +68,7 @@
 - 笔记标题trim后1–200字，正文≤200000码点且可空；PATCH省略字段不变，显式null拒绝，未知字段拒绝。revision是严格正整数。
 - 写入先锁作品并校验projects.edit，按project_id+id读取笔记；UPDATE/DELETE用expected_revision数据库CAS，冲突409保留前端草稿；成功更新revision+1。创建请求不自动重试。
 - 笔记页支持?id及?new=1；新建成功替换为真实?id，不触发放弃新笔记草稿确认。关闭、跨笔记、跨页及刷新保留现有草稿保护。
-- `project_notes` 原文进入项目备份RULES；旧备份无表合法；world_settings.aliases登记json_plain；APP_SCHEMA=0033。导入验证别名约束、笔记标题/正文上限及正revision。
+- `project_notes` 原文进入项目备份 RULES，早于 0032 的备份无表合法；`world_settings.aliases` 登记 `json_plain`。导入验证别名约束、笔记标题／正文上限及正 revision。
 - 名称/别名仍走设定元数据revision守卫，不写剧情变化。旧v2智能体效果缺aliases时，只有当前值仍为迁移默认[]才兼容恢复；作者已新增别名必须报冲突，不静默抹除。
 - 本次未增加笔记AI工具、自动注入、收藏/固定/并排工作台或开放API端点。
 

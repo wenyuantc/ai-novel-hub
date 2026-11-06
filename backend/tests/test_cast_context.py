@@ -5,7 +5,7 @@ from sqlalchemy import select
 from app.models import Chapter, Character, Project, Relationship, RelationshipType, SettingProgression, SettingTimeline
 from app.services.cast_service import is_protagonist, match_characters
 from app.services.context_builder import CastSection, RelationLine, assemble_context, build_setting_context
-from tests.helpers import create_ai_config, create_project, register, run_task
+from tests.helpers import create_ai_config, create_project, mark_existing_settings, register, run_task
 
 
 def _c(cid: int, name: str, aliases: list[str] | None = None, **kw):
@@ -46,7 +46,7 @@ def test_is_protagonist():
 EXTRA = "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥金木水火"
 
 
-async def test_chapter_context_cast(client, fake_llm):
+async def test_chapter_context_cast(app, client, fake_llm):
     """AC8：30 个角色，梗概提到 2 个（其中一个用别名）+ 手动指定 1 个 + 主角 → 完整卡片；其余只进名单。"""
     await register(client)
     await create_ai_config(client)
@@ -97,6 +97,7 @@ async def test_chapter_context_cast(client, fake_llm):
     resp = await client.put(f"{base}/chapters/{ch['id']}/cast", json={"character_ids": [bai["id"], bai["id"]]})
     assert resp.json() == {"character_ids": [bai["id"]]}
     assert (await client.get(f"{base}/chapters/{ch['id']}/cast")).json() == {"character_ids": [bai["id"]]}
+    await mark_existing_settings(app, p["id"])
 
     fake_llm.push("正文")
     await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate"))
@@ -185,8 +186,8 @@ async def test_setting_context_uses_historical_hidden_relation_and_text_hint(app
     project = await create_project(client)
     pid = project["id"]
     async with app.state.sessionmaker() as db:
-        hero = Character(project_id=pid, name="林远", role_type="主角", relations_text="未来和苏晚决裂")
-        partner = Character(project_id=pid, name="苏晚")
+        hero = Character(project_id=pid, name="林远", role_type="主角", relations_text="未来和苏晚决裂", ai_mode=None)
+        partner = Character(project_id=pid, name="苏晚", ai_mode=None)
         chapters = [Chapter(project_id=pid, chapter_no=n, title=str(n)) for n in (5, 10, 15, 20, 21)]
         db.add_all([hero, partner, *chapters])
         await db.flush()

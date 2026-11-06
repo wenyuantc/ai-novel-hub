@@ -57,7 +57,7 @@ async def test_generate_preview_then_confirm_selected(app, client, fake_llm):
         json.dumps({"relationships": [relation(ids[0], ids[1]), relation(ids[0], ids[2]), relation(ids[1], ids[2])]})
     )
     response = await client.post(
-        f"{base}/relationships/generate", json={"character_ids": ids, "instruction": "围绕成长与信任"}
+        f"{base}/relationships/generate", json={"character_ids": ids, "instruction": "围绕成长与信任，故事发生在北境"}
     )
     assert response.status_code == 202, response.text
     assert (response.json()["kind"], response.json()["title"], response.json()["character_id"]) == (

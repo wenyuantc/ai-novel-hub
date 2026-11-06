@@ -98,7 +98,7 @@ async def test_current_effects_restore_deleted_character_timeline_fields_events_
     assert {"setting_timelines", "setting_text_fields", "setting_progressions", "relationships"} <= {
         item["table"] for item in captured
     }
-    assert all(item["format_version"] == 4 for item in captured)
+    assert all(item["format_version"] == 5 for item in captured)
     await db.commit()
     await effects.undo(db, project.id, captured)
     await db.commit()

@@ -18,6 +18,9 @@ export const agentApi = {
     api.post<AgentTurnResult>(`${base(pid)}/turns/${id}/${action}`),
 }
 
+export const isAgentHistorySealed = (err: unknown): boolean =>
+  err instanceof ApiError && err.status === 409 && err.body?.code === 'ai_history_sealed'
+
 /** 409 后重新获取服务端提案；不重放用户的确认，必须再次确认新预览。 */
 export async function withAgentRefresh<T>(operation: () => Promise<T>, refresh: () => Promise<void>): Promise<T> {
   try {

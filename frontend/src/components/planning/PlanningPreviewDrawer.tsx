@@ -12,7 +12,7 @@ export default function PlanningPreviewDrawer({ projectId, row, onClose }: Props
   const [scope, setScope] = useState<'chapter' | 'selection'>('chapter')
   const load = useCallback((signal: AbortSignal) => planningApi.preview(projectId, row.source, scope, signal), [projectId, row.source, scope])
   const result = usePlanningQuery(projectId, `preview:${row.key}:${scope}`, load)
-  useProjectRefresh(projectId, ['planning', 'characters', 'world', 'relationships', 'organizations', 'careers', 'chapters', 'outlines'], result.reload)
+  useProjectRefresh(projectId, ['planning', 'characters', 'world', 'relationships', 'organizations', 'careers', 'chapters', 'outlines', 'setting-ai-visibility'], result.reload)
   const width = useModalWidth(760)
   return <Drawer open title={`AI 规划内容 · ${planningRowLabel(row)}`} width={width} onClose={onClose}>
     <Space direction="vertical" size={16} style={{ width: '100%' }}>

@@ -17,6 +17,7 @@ function ConfigurationSummary({ title, item }: { title: string; item: SettingFie
       {'field_type' in item && <>
         <Descriptions.Item label="类型">{SETTING_FIELD_TYPE_LABELS[item.field_type]}</Descriptions.Item>
         <Descriptions.Item label="适用类型">{item.applicable_types.map((type) => SETTING_ENTRY_TYPE_LABELS[type]).join('、')}</Descriptions.Item>
+        <Descriptions.Item label="AI 可见性">{item.ai_hidden ? '对 AI 隐藏' : '可供 AI 使用'}</Descriptions.Item>
         {item.field_type === 'reference' && <Descriptions.Item label="可引用">{item.reference_types.map((type) => SETTING_ENTRY_TYPE_LABELS[type]).join('、')}</Descriptions.Item>}
         {item.field_type === 'dropdown' && <Descriptions.Item label="选项">{item.options.map((option) => `${option.label}${option.archived ? '（已停用）' : ''}`).join('、') || '尚无选项'}</Descriptions.Item>}
       </>}

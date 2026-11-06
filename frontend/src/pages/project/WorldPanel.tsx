@@ -26,6 +26,8 @@ import { baselineEditorLabel } from '../../api/progressions'
 import { worldApi } from '../../api/story'
 import type { ProgressionPositionInput, WorldSetting } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
+import SettingAiPanel from '../../components/settingAi/SettingAiPanel'
+import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
 import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
 import SettingTagsPanel from '../../components/settingTags/SettingTagsPanel'
 import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
@@ -36,6 +38,7 @@ import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import EntityMentions from '../../components/mentions/EntityMentions'
+import { invalidateProject } from '../../utils/projectRefresh'
 import { asWorldCategory, groupWorld, WORLD_CATEGORIES, WORLD_CATEGORY_LABELS } from '../../utils/world'
 import { useSearchParams } from 'react-router-dom'
 import { readEntityFieldPosition } from '../../utils/entityLinks'
@@ -45,6 +48,7 @@ const CATEGORY_OPTIONS = WORLD_CATEGORIES.map((c) => ({ value: c, label: WORLD_C
 export default function WorldPanel() {
   const pid = useProjectId()
   const tagsSession = useSettingTagsSession(pid)
+  const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
@@ -55,7 +59,6 @@ export default function WorldPanel() {
   const [tab, setTab] = useState('base')
   const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
   const [form] = Form.useForm<WorldFormValues>()
-  const category = Form.useWatch('category', form)
   const editor = useWorldBaselineEditor(pid, form)
   const { editing, open, saving, baseline, baselineLoading, baselineError, baselineConflict } = editor
   const [filter, setFilter] = useState<string>('all')
@@ -77,9 +80,10 @@ export default function WorldPanel() {
       if (!canEditNow()) return
       await worldApi.remove(pid, item.id)
       tagsSession.forget({ kind: 'world', id: item.id })
+      aiSession.forget({ kind: 'world', id: item.id })
       if (!canEditNow()) return
       message.success('已删除')
-      reload()
+      invalidateProject(pid, ['world', 'setting-ai-visibility'])
     } catch (err) {
       if (!canEditNow()) return
       message.error(errorMessage(err))
@@ -179,7 +183,7 @@ export default function WorldPanel() {
         keyboard={!saving}
         maskClosable={!saving}
         cancelButtonProps={{ disabled: saving }}
-        footer={tab === 'progression' || tab === 'mentions' || tab === 'tags' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
+        footer={tab !== 'base' ? <Button onClick={editor.closeEditor}>关闭</Button> : undefined}
         okText="保存"
         cancelText="取消"
         width={720}
@@ -251,9 +255,9 @@ export default function WorldPanel() {
                       <Form.Item name="category" label="分类">
                         <Select options={CATEGORY_OPTIONS} style={{ width: 200 }} />
                       </Form.Item>
-                      {(category === 'place' || category === 'item') && <Form.Item name="aliases" label="别名" extra="别名参与全文提及追踪；最多 10 个，每个最多 50 字。" rules={[{ validator: (_, value: string[] | undefined) => { const result = cleanAliases(value ?? []); return result.error ? Promise.reject(new Error(result.error)) : Promise.resolve() } }]}>
+                      <Form.Item name="aliases" label="别名" extra="开启追踪时，别名参与提及匹配；最多 10 个，每个最多 50 字。" rules={[{ validator: (_, value: string[] | undefined) => { const result = cleanAliases(value ?? []); return result.error ? Promise.reject(new Error(result.error)) : Promise.resolve() } }]}>
                         <Select mode="tags" tokenSeparators={['，', ',']} placeholder="输入别名后回车" />
-                      </Form.Item>}
+                      </Form.Item>
                       <Form.Item name="content" label={editing ? '基础内容' : '内容'}>
                         <Input.TextArea autoSize={{ minRows: 6, maxRows: 20 }} />
                       </Form.Item>
@@ -282,7 +286,10 @@ export default function WorldPanel() {
               ) : null,
             }] : []),
             ...(editing ? [{ key: 'tags', label: '整理标签', children: open && tab === 'tags' ? <SettingTagsPanel session={tagsSession} entry={{ kind: 'world', id: editing.id }} /> : null }] : []),
-            ...(editing && (editing.category === 'place' || editing.category === 'item') ? [{ key: 'mentions', label: '提及', children: tab === 'mentions' && open ? <EntityMentions projectId={pid} entity={{ kind: 'world', id: editing.id }} /> : null }] : []),
+            ...(editing ? [
+              { key: 'ai-settings', label: 'AI 与提及', children: open && tab === 'ai-settings' ? <SettingAiPanel session={aiSession} entry={{ kind: 'world', id: editing.id }} /> : null },
+              { key: 'mentions', label: '提及', children: tab === 'mentions' && open ? <EntityMentions projectId={pid} entity={{ kind: 'world', id: editing.id }} /> : null },
+            ] : []),
           ]}
         />
       </Modal>

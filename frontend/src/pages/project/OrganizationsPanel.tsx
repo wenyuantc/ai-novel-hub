@@ -1,5 +1,6 @@
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import {
+  Alert,
   App,
   Button,
   Card,
@@ -28,6 +29,9 @@ import { OrganizationMembershipsTab } from '../../components/entities/CharacterM
 import { useLoader } from '../../hooks/useLoader'
 import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
 import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
+import SettingAiDetailSections from '../../components/settingAi/SettingAiDetailSections'
+import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
+import type { SettingAiSession } from '../../components/settingAi/settingAiController'
 import SettingTagsPanel from '../../components/settingTags/SettingTagsPanel'
 import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
 import type { SettingTagsSession } from '../../components/settingTags/settingTagsController'
@@ -38,6 +42,7 @@ import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { splitPane, splitRow } from '../../utils/layout'
 import { buildOrgTree, descendantIds, orgPath, type OrgTreeNode } from '../../utils/orgTree'
+import { invalidateProject } from '../../utils/projectRefresh'
 
 interface OrgFormValues {
   name: string
@@ -72,10 +77,12 @@ export default function OrganizationsPanel() {
   const [searchParams] = useSearchParams()
   const pid = useProjectId()
   const tagsSession = useSettingTagsSession(pid)
+  const aiSession = useSettingAiSession(pid)
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
-  const { data: orgs = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
+  const { data: loadedOrgs, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
+  const orgs = useMemo(() => loadedOrgs ?? [], [loadedOrgs])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
   const [editing, setEditing] = useState<Organization | null>(null)
@@ -119,7 +126,7 @@ export default function OrganizationsPanel() {
     setOrgOpen(true)
   }
 
-  useEntityDeepLink(pid, orgs, loading, (org) => { setSelectedId(org.id); setFieldPosition(readEntityFieldPosition(searchParams)) }, canReadNow)
+  useEntityDeepLink(pid, loadedOrgs, loading, (org) => { setSelectedId(org.id); setFieldPosition(readEntityFieldPosition(searchParams)) }, canReadNow)
 
   const handleSaveOrg = async () => {
     if (!canEditNow()) return
@@ -144,7 +151,7 @@ export default function OrganizationsPanel() {
       message.success('已保存')
       setOrgOpen(false)
       setSelectedId(saved.id)
-      reload()
+      invalidateProject(pid, ['organizations'])
     } catch (err) {
       if (!canEditNow()) return
       message.error(errorMessage(err))
@@ -159,10 +166,11 @@ export default function OrganizationsPanel() {
       if (!canEditNow()) return
       await organizationApi.remove(pid, o.id)
       tagsSession.forget({ kind: 'organization', id: o.id })
+      aiSession.forget({ kind: 'organization', id: o.id })
       if (!canEditNow()) return
       message.success('已删除（下级组织变为顶级）')
       setSelectedId(null)
-      reload()
+      invalidateProject(pid, ['organizations', 'setting-ai-visibility'])
     } catch (err) {
       if (!canEditNow()) return
       message.error(errorMessage(err))
@@ -183,6 +191,7 @@ export default function OrganizationsPanel() {
         </Space>
       }
     >
+      {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
       <Spin spinning={loading}>
         {orgs.length === 0 ? (
           <Empty description={canUseAI ? '暂无组织，可手动新增或使用 AI 生成' : '暂无组织，可手动新增'} />
@@ -208,6 +217,7 @@ export default function OrganizationsPanel() {
                   orgs={orgs}
                   fieldPosition={fieldPosition}
                   tagsSession={tagsSession}
+                  aiSession={aiSession}
                   onEdit={() => openOrg(selected)}
                   onDelete={() => void handleDeleteOrg(selected)}
                   onMembersChanged={reload}
@@ -288,6 +298,7 @@ export default function OrganizationsPanel() {
 
 interface DetailProps {
   tagsSession: SettingTagsSession
+  aiSession: SettingAiSession
   fieldPosition?: ProgressionPositionInput | null
   projectId: number
   org: Organization
@@ -297,7 +308,7 @@ interface DetailProps {
   onMembersChanged: () => void
 }
 
-function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged, fieldPosition, tagsSession }: DetailProps) {
+function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged, fieldPosition, tagsSession, aiSession }: DetailProps) {
   const { canEdit } = useProjectAccess(projectId)
   const parent = orgs.find((o) => o.id === org.parent_id)
 
@@ -340,6 +351,7 @@ function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged, f
           </Descriptions.Item>
         </Descriptions>
       </Card>
+      <SettingAiDetailSections session={aiSession} entry={{ kind: 'organization', id: org.id }} />
       <Card size="small"><SettingTagsPanel session={tagsSession} entry={{ kind: 'organization', id: org.id }} /></Card>
       <Card size="small" title="组织自身字段与剧情变化">
         <SettingEntryFieldsPanel key={`${projectId}:organization:${org.id}`} projectId={projectId} entry={{ kind: 'organization', id: org.id }} initialPosition={fieldPosition} />

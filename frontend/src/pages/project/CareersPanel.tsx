@@ -1,13 +1,15 @@
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
-import { App, Button, Card, Empty, Popconfirm, Space, Spin, Tag, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Card, Empty, Popconfirm, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useCallback, useState, type CSSProperties } from 'react'
 import { CAREER_KIND_LABELS, careerApi } from '../../api/careers'
 import { errorMessage } from '../../api/client'
 import type { Career, CareerKind, ProgressionPositionInput } from '../../api/types'
 import { useSearchParams } from 'react-router-dom'
 import { readEntityFieldPosition } from '../../utils/entityLinks'
+import { invalidateProject } from '../../utils/projectRefresh'
 import AutoGrid from '../../components/AutoGrid'
 import CareerEditDrawer from '../../components/careers/CareerEditDrawer'
+import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
 import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
 import WizardModal from '../../components/WizardModal'
@@ -25,11 +27,13 @@ const cardTitleWrap: CSSProperties = { whiteSpace: 'normal' }
 export default function CareersPanel() {
   const pid = useProjectId()
   const tagsSession = useSettingTagsSession(pid)
+  const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
-  const { data: items = [], loading, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
+  const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
+  const items = loadedItems ?? []
   const [editing, setEditing] = useState<Career | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
@@ -42,7 +46,7 @@ export default function CareersPanel() {
     setDrawerOpen(true)
   }
 
-  useEntityDeepLink(pid, items, loading, openEdit, canReadNow)
+  useEntityDeepLink(pid, loadedItems, loading, openEdit, canReadNow)
 
   const handleDelete = async (c: Career) => {
     if (!canEditNow()) return
@@ -50,9 +54,10 @@ export default function CareersPanel() {
       if (!canEditNow()) return
       await careerApi.remove(pid, c.id)
       tagsSession.forget({ kind: 'career', id: c.id })
+      aiSession.forget({ kind: 'career', id: c.id })
       if (!canEditNow()) return
       message.success('已删除（角色的挂接与阶段历史一并清理）')
-      reload()
+      invalidateProject(pid, ['careers', 'setting-ai-visibility'])
     } catch (err) {
       if (!canEditNow()) return
       message.error(errorMessage(err))
@@ -129,9 +134,10 @@ export default function CareersPanel() {
         </Space>
       }
     >
+      {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
       <Spin spinning={loading}>
         {items.length === 0 ? (
-          <Empty description="暂无职业。职业用于记录角色的境界 / 等级，生成章节时会注入涉及角色的职业与完整阶梯" />
+          <Empty description="暂无职业。职业用于记录角色的境界或等级；AI 只使用符合纳入策略且未隐藏的资料。" />
         ) : (
           <Space direction="vertical" size="large" style={{ width: '100%' }}>
             {GROUPS.map((g) => {
@@ -155,6 +161,7 @@ export default function CareersPanel() {
 
       <CareerEditDrawer
         tagsSession={tagsSession}
+        aiSession={aiSession}
         projectId={pid}
         open={drawerOpen}
         career={editing}
@@ -162,7 +169,7 @@ export default function CareersPanel() {
         onClose={() => setDrawerOpen(false)}
         onSaved={(c) => {
           setEditing(c)
-          reload()
+          invalidateProject(pid, ['careers'])
         }}
       />
       {canUseAI && (<EntityTaskModal projectId={pid} kind="career.generate" open={generateOpen} onClose={() => setGenerateOpen(false)} onSaved={reload} />)}

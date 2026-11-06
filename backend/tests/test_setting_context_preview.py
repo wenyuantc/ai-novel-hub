@@ -23,8 +23,12 @@ async def _seed_project(app, client):
     project_id = project["id"]
     async with app.state.sessionmaker() as db:
         chapters = [Chapter(project_id=project_id, chapter_no=n, title=f"第{n}章") for n in (5, 20, 21)]
-        world = WorldSetting(project_id=project_id, title="山门", category="place", content="山门被毁")
-        character = Character(project_id=project_id, name="林远", role_type="主角", current_state="金丹")
+        world = WorldSetting(
+            project_id=project_id, title="山门", category="place", content="山门被毁", ai_mode="always",
+        )
+        character = Character(
+            project_id=project_id, name="林远", role_type="主角", current_state="金丹", ai_mode="always",
+        )
         db.add_all([*chapters, world, character])
         await db.flush()
         world_timeline = SettingTimeline(

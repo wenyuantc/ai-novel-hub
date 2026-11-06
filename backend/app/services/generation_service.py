@@ -49,6 +49,7 @@ from app.services import (
     style_service,
     version_service,
 )
+from app.services.ai_dispatch import guard_provider, visibility_sessionmaker
 from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.context_builder import build_chapter_context, chapter_task
 from app.services.project_service import get_owned_project
@@ -278,7 +279,7 @@ async def build_chapter_job(
         task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
         planning = await planning_context_service.load_planning_context(
-            db, project, "chapter", chapter.id, budget=budget
+            db, project, "chapter", chapter.id, budget=budget, text_hint=req.instruction,
         )
         context = await build_chapter_context(
             db, project, chapter, budget - planning.reserved_chars, embedder=embedder, planning=planning
@@ -310,7 +311,8 @@ async def build_chapter_job(
         task = await chapter_task(db, chapter)
         budget = ai_config_service.context_char_budget(cfg, context_budget)
         planning = await planning_context_service.load_planning_context(
-            db, project, "chapter", chapter.id, budget=budget
+            db, project, "chapter", chapter.id, budget=budget,
+            text_hint="\n".join((chapter.content, req.instruction)),
         )
         context = await build_chapter_context(
             db, project, chapter, budget - planning.reserved_chars, embedder=embedder, planning=planning
@@ -356,6 +358,10 @@ async def build_chapter_job(
     params["style_choice"] = req.style
     params["style"] = style_service.style_log(resolved)
     params["skill"] = skill_service.skill_log(skill)
+    if mode in ("generate", "revise"):
+        assert planning.setting_scope is not None
+        await planning.setting_scope.scope.verify(db)
+        provider = guard_provider(provider, planning.setting_scope.scope.stamp, visibility_sessionmaker(db))
 
     return ChapterJob(
         chapter_id=chapter.id,

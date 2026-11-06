@@ -214,7 +214,9 @@ async def test_generate_prompt_has_foreshadow_reminders(app, client, fake_llm):
     gone = await fs(title="已废弃的", planned_plant_chapter=8, status="abandoned")
     target = (await client.post(f"{base}/chapters", json={"title": "新章", "chapter_no": 8})).json()
     fake_llm.push("新章节正文")
-    await run_task(client, await client.post(f"/api/v1/chapters/{target['id']}/generate"))
+    await run_task(client, await client.post(
+        f"/api/v1/chapters/{target['id']}/generate", json={"instruction": "本章写林远的遭遇"},
+    ))
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     section = prompt.split("【伏笔提醒】\n")[1].split("\n\n")[0].splitlines()
     assert section == [
@@ -269,10 +271,10 @@ async def test_chapter_and_analysis_use_story_time_settings(app, client, fake_ll
     async with app.state.sessionmaker() as db:
         hero = Character(
             project_id=pid, name="林远", role_type="主角", current_state="金丹状态", life_status="dead",
-            relations_text="后来与苏晚成为盟友",
+            ai_mode="always", relations_text="后来与苏晚成为盟友",
         )
-        partner = Character(project_id=pid, name="苏晚", role_type="主角")
-        place = WorldSetting(project_id=pid, title="青云城", category="place", content="城池沦陷")
+        partner = Character(project_id=pid, name="苏晚", role_type="主角", ai_mode="always")
+        place = WorldSetting(project_id=pid, title="青云城", category="place", content="城池沦陷", ai_mode="always")
         org = Organization(project_id=pid, name="青云宗", org_type="宗门")
         old_org = Organization(project_id=pid, name="玄天阁", org_type="书院")
         career = Career(project_id=pid, name="剑修", kind="main")
@@ -408,7 +410,9 @@ async def test_context_read_does_not_flush_unrelated_changes(app, client, builde
     async with app.state.sessionmaker() as db:
         current_project = await db.get(Project, project["id"])
         chapter = Chapter(project_id=project["id"], chapter_no=5, title="第五章")
-        world = WorldSetting(project_id=project["id"], title="青云城", content="旧城", category="place")
+        world = WorldSetting(
+            project_id=project["id"], title="青云城", content="旧城", category="place", ai_mode="always",
+        )
         db.add_all([chapter, world])
         await db.flush()
         timeline = SettingTimeline(

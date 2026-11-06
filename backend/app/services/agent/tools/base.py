@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
@@ -13,8 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError, NotFoundError
 from app.models import Base, Project
+from app.services.ai_dispatch import VisibilityPolicyError
 from app.services.project_transfer.remap import RemapContext, setting_event_value, setting_payload
 from app.services.task_engine.registry import TaskContext
+
+if TYPE_CHECKING:
+    from app.services.setting_ai_context import AiScope
 
 ToolKind = Literal["read", "small", "delete", "task", "text", "external"]
 Preview = dict[str, Any]
@@ -26,6 +30,9 @@ class ToolCtx:
     project: Project
     user_id: int
     task_context: TaskContext
+    scope: "AiScope | None" = None
+    # 审批服务已在本事务取得项目锁并验证 scope 时，预览和执行复用该门禁。
+    visibility_locked: bool = False
 
     @property
     def project_id(self) -> int:
@@ -55,9 +62,9 @@ async def lock_project(db: AsyncSession, project_id: int, user_id: int) -> None:
 
     显式保留 updated_at，防止 SQLAlchemy onupdate 将无值变化的行锁变成项目编辑。
     """
-    from app.services.project_service import get_owned_project
+    from app.services.setting_ai_visibility import lock_author_visibility_write
 
-    await get_owned_project(db, user_id, project_id, lock=True)
+    await lock_author_visibility_write(db, user_id, project_id, manage=False)
 
 
 class EmptyArgs(BaseModel):
@@ -83,12 +90,16 @@ def serialized(value: Any) -> Any:
     if isinstance(value, Base):
         # 整理标签由专用 DTO/dict 显式承载，新增 ORM 列不能自动扩展旧工具的模型输入。
         return jsonable_encoder({
-            col.key: getattr(value, col.key) for col in inspect(value).mapper.columns if col.key != "setting_tags"
+            col.key: getattr(value, col.key)
+            for col in inspect(value).mapper.columns
+            if col.key != "setting_tags" and not col.key.startswith(("ai_", "mention_"))
         })
     return jsonable_encoder(value)
 
 
-def error_result(exc: AppError | ValidationError) -> dict:
+def error_result(exc: AppError | ValidationError, *, scoped: bool = False) -> dict:
+    if isinstance(exc, VisibilityPolicyError):
+        raise exc
     if isinstance(exc, NotFoundError):
         return {"error": "不存在"}
     if isinstance(exc, ValidationError):
@@ -97,7 +108,9 @@ def error_result(exc: AppError | ValidationError) -> dict:
             for e in exc.errors(include_input=False, include_context=False, include_url=False)
         ]
         return {"error": "工具参数校验失败", "errors": errors}
-    return {"error": exc.detail}
+    # 底层业务错误可能引用未入选的同名对象、关系或依赖数据。人类预览与
+    # 模型工具回执分开，不能把业务异常的详细文本送回模型。
+    return {"error": "操作未完成，请检查允许的对象与输入"} if scoped else {"error": exc.detail}
 
 
 Operation = Callable[[ToolCtx, BaseModel], Awaitable[Any]]
@@ -119,19 +132,33 @@ class Tool:
 
     async def _validate(self, ctx: ToolCtx, args: dict) -> BaseModel:
         from .references import validate_references
+        from .visibility import ENTRY_KINDS, field_write_allowed
 
+        if ctx.scope is not None and "always_in_context" in args:
+            raise BadRequestError("AI 可见设置只能由作者维护")
         # 在丢弃未知字段之前检查引用，嵌套 params 中的越权 ID 也不例外。
         await validate_references(ctx, args, id_model=self.id_model)
-        return self.schema.model_validate(args)
+        data = self.schema.model_validate(args)
+        if self.kind != "read" and self.id_model in ENTRY_KINDS and "id" in args:
+            field_write_allowed(ctx, ENTRY_KINDS[self.id_model], args["id"], data.model_fields_set)
+        return data
 
     async def run(self, ctx: ToolCtx, args: dict) -> dict:
         try:
             if self.kind != "read":
                 raise BadRequestError("写操作需要先生成提案")
+            if ctx.scope is not None:
+                await ctx.scope.verify(ctx.db)
             result = serialized(await self.operation(ctx, await self._validate(ctx, args)))
             return result if isinstance(result, dict) else {"items": result}
         except (AppError, ValidationError) as exc:
-            return error_result(exc)
+            return error_result(exc, scoped=ctx.scope is not None)
+
+    async def _lock_write(self, ctx: ToolCtx) -> None:
+        if not ctx.visibility_locked:
+            await lock_project(ctx.db, ctx.project_id, ctx.user_id)
+            if ctx.scope is not None:
+                await ctx.scope.verify(ctx.db)
 
     async def preview(self, ctx: ToolCtx, args: dict) -> Preview:
         from app.services.agent import effects
@@ -140,7 +167,7 @@ class Tool:
             data = await self._validate(ctx, args)
             if self.kind == "read":
                 raise BadRequestError("读工具没有修改预览")
-            await lock_project(ctx.db, ctx.project_id, ctx.user_id)
+            await self._lock_write(ctx)
             tx = await ctx.db.begin_nested()
             try:
                 scoped = replace(ctx, db=TransactionSession(ctx.db))
@@ -181,14 +208,14 @@ class Tool:
                 await tx.rollback()
                 await ctx.db.refresh(ctx.project)
         except (AppError, ValidationError) as exc:
-            return error_result(exc)
+            return error_result(exc, scoped=ctx.scope is not None)
 
     async def execute(self, ctx: ToolCtx, args: dict) -> dict:
         try:
             data = await self._validate(ctx, args)
             if self.kind == "read":
                 raise BadRequestError("读工具不能执行修改")
-            await lock_project(ctx.db, ctx.project_id, ctx.user_id)
+            await self._lock_write(ctx)
             async with ctx.db.begin_nested():
                 value = await self.operation(replace(ctx, db=TransactionSession(ctx.db)), data)
                 await ctx.db.flush()
@@ -196,7 +223,7 @@ class Tool:
             return result if isinstance(result, dict) else {"items": result} if result is not None else {"ok": True}
         except (AppError, ValidationError) as exc:
             await ctx.db.refresh(ctx.project)
-            return error_result(exc)
+            return error_result(exc, scoped=ctx.scope is not None)
 
 
 FIELD_LABELS = {

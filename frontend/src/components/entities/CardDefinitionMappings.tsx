@@ -31,7 +31,7 @@ function DefinitionChoice({ definition: item, mapping, selected, disabled, onCha
       <Input id={`${id}-label`} aria-label={`「${item.label}」新字段名称`} value={mapping.label ?? ''} placeholder={`${item.label}（导入）`} onChange={(event) => onChange({ ...mapping, label: event.target.value })} />
     </Form.Item>}
     {mapping?.action === 'reuse' && <>
-      <Form.Item label="复用的字段" htmlFor={`${id}-target`} extra="只列出类型与适用范围兼容的字段；已有条目的字段值和历史不会被覆写。">
+      <Form.Item label="复用的字段" htmlFor={`${id}-target`} extra="只列出类型、适用范围与 AI 可见性相容的字段；已有条目的设置和值不会被覆写。">
         <Select<number> id={`${id}-target`} aria-label={`「${item.label}」复用的字段`} allowClear value={mapping.target_definition_id ?? undefined} options={targets} placeholder="明确选择一个现有字段"
           onChange={(id) => { const next = item.compatible_targets.find((entry) => entry.id === id); onChange({ action: 'reuse', target_definition_id: id, option_mappings: {} }, next) }} />
       </Form.Item>
@@ -55,7 +55,7 @@ export default function CardDefinitionMappings({ definitions, mappings, selected
   return <section aria-label="卡片字段定义映射">
     <Typography.Title level={5}>字段定义（{definitions.length}）</Typography.Title>
     <Collapse accordion destroyOnHidden items={definitions.map((definition) => ({ key: definition.ref,
-      label: <Space wrap><span style={{ overflowWrap: 'anywhere' }}>{definition.label}</span><Tag>{SETTING_FIELD_TYPE_LABELS[definition.field_type]}</Tag><Tag>{STATUS[definition.status]}</Tag></Space>,
+      label: <Space wrap><span style={{ overflowWrap: 'anywhere' }}>{definition.label}</span><Tag>{SETTING_FIELD_TYPE_LABELS[definition.field_type]}</Tag>{definition.ai_hidden && <Tag>AI 隐藏</Tag>}<Tag>{STATUS[definition.status]}</Tag></Space>,
       children: <DefinitionChoice definition={definition} mapping={mappings[definition.ref]} selected={selected[definition.ref]} disabled={disabled} onChange={(mapping, target) => onChange(definition.ref, mapping, target)} />,
     }))} />
   </section>

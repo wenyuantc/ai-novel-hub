@@ -54,7 +54,9 @@ async def test_character_generate_preview_then_save(app, client, fake_llm):
     await client.post(f"{base}/organizations", json={"name": "青云宗"})
     fake_llm.push("```json\n" + json.dumps(CHARACTER_JSON, ensure_ascii=False) + "\n```")
 
-    resp = await client.post(f"{base}/characters/generate", json={"instruction": "要一位师父", "role_type": "重要配角"})
+    resp = await client.post(f"{base}/characters/generate", json={
+        "instruction": "为青云宗的林远安排一位师父", "role_type": "重要配角",
+    })
     assert resp.status_code == 202, resp.text
     assert (resp.json()["kind"], resp.json()["title"]) == ("character.generate", "AI 生成角色")
     assert resp.json()["character_id"] is None
@@ -78,7 +80,7 @@ async def test_character_generate_preview_then_save(app, client, fake_llm):
     assert bad["intimacy"] == 100
 
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
-    assert "林远（主角） 别名：小远" in prompt and "青云宗" in prompt and "要一位师父" in prompt
+    assert "林远（主角） 别名：小远" in prompt and "- 青云宗" in prompt and "安排一位师父" in prompt
     # 不写库、不写生成记录
     assert await _count(app, Character) == 1
     assert await _count(app, Relationship) == 0
@@ -135,7 +137,9 @@ async def test_organization_generate(app, client, fake_llm):
             ensure_ascii=False,
         )
     )
-    task, events = await run_task(client, await client.post(f"{base}/organizations/generate", json={}))
+    task, events = await run_task(client, await client.post(
+        f"{base}/organizations/generate", json={"instruction": "参考天道盟与甲"},
+    ))
     assert task["status"] == "succeeded" and task["title"] == "AI 生成组织"
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "- 天道盟（联盟）｜势力 90｜所在地：中州" in prompt

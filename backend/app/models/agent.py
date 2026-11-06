@@ -19,6 +19,7 @@ class AgentConversation(TimestampMixin, Base):
     auto_execute: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     summary: Mapped[str] = mapped_column(Text, default="", server_default="")
     summarized_until: Mapped[int | None] = mapped_column(Integer)
+    ai_history_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # 本会话启用的 MCP 插件 id（NULL = 不启用）；运行时再按归属与启用状态过滤
     mcp_plugin_ids: Mapped[list[int] | None] = mapped_column(JSON)

@@ -22,7 +22,7 @@ async def test_world_aliases_new_and_old_backup_round_trip(client):
     await client.post(f"{base}/world", json={"title": "青云城", "category": "place", "aliases": ["古城"]})
     await client.post(f"{base}/notes", json={"title": "笔记", "content": "古城传说"})
     backup = await _backup(client, project["id"])
-    assert backup["app_schema"] == "0036"
+    assert backup["app_schema"] == "0037"
     imported = await _import(client, backup)
     imported_base = f"/api/v1/projects/{imported['project']['id']}"
     assert (await client.get(f"{imported_base}/world")).json()[0]["aliases"] == ["古城"]
@@ -81,8 +81,12 @@ async def test_world_aliases_effect_restore_and_older_v2_snapshots(client, app):
         delta = effects.diff(before, await effects.snapshot(db, project["id"]))
         for effect in delta:
             if effect["table"] == "world_settings":
+                effect["format_version"] = 2
                 for side in ("before", "after"):
                     effect[side].pop("aliases")
+                    effect[side].pop("setting_tags")
+                    for key in effects._legacy_visibility_defaults("world_settings"):
+                        effect[side].pop(key)
         await db.commit()
         # 0033前的v2快照没有aliases；仅在当前仍为默认空别名时可安全回退。
         await effects.undo(db, project["id"], delta)

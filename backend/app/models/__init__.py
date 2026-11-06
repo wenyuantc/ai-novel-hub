@@ -61,7 +61,7 @@ from app.models.planning import (
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.setting_categories import SettingCategory, SettingCategoryRule
-from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
+from app.models.setting_fields import SettingAiLink, SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
@@ -131,6 +131,7 @@ __all__ = [
     "RetrievalChunk",
     "SettingCategory",
     "SettingCategoryRule",
+    "SettingAiLink",
     "SettingFieldDefinition",
     "SettingFieldOption",
     "SettingReferenceHandle",

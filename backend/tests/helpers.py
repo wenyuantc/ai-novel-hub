@@ -207,6 +207,18 @@ async def create_project(client: httpx.AsyncClient, **kw) -> dict:
     return resp.json()
 
 
+async def mark_existing_settings(app, project_id: int) -> None:
+    """将历史行为回归的测试档案标记为 0037 升级前已存在；新建默认另行验证。"""
+    from sqlalchemy import update
+
+    from app.models import Career, Character, Organization, WorldSetting
+
+    async with app.state.sessionmaker() as db:
+        for model in (Character, WorldSetting, Organization, Career):
+            await db.execute(update(model).where(model.project_id == project_id).values(ai_mode=None))
+        await db.commit()
+
+
 async def purge_trashed_project(admin: httpx.AsyncClient, project_id: int) -> None:
     """仅清理测试中已明确软删除的作品，走真实管理员精确确认接口。"""
     listing = await admin.get("/api/v1/admin/recycle-bin/projects", params={"page_size": 100})

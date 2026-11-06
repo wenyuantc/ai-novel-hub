@@ -34,6 +34,14 @@ describe('卡片局部身份与显式映射', () => {
     expect(referenceTypes('outside-place', 'world', metadata, { characters: {}, organizations: {} }, { characters: [{ name: '林远', status: 'new', rename_to: null }], organizations: [], careers: [] })).toEqual(['world.place'])
     expect(referenceTypes('unused', 'world', metadata, { characters: {}, organizations: {} }, { characters: [], organizations: [], careers: [] })).toHaveLength(6)
   })
+  it('v6 链接限定精确包外子类，仅来源被创建时约束映射', () => {
+    const source = { ...data, characters: [{ ...data.characters[0], fields: [], ai_link_refs: ['outside-place', 'local-org'] }] }
+    const preview = { characters: [{ name: '林远', status: 'conflict' as const, rename_to: '林远（导入）' }], organizations: [], careers: [] }
+    const metadata = cardMetadata({ ...source, version: 6 })
+    expect(referenceTypes('outside-place', 'world', metadata, { characters: { 林远: 'rename' }, organizations: {} }, preview)).toEqual(['world.place'])
+    expect(referenceTypes('outside-place', 'world', metadata, { characters: { 林远: 'skip' }, organizations: {} }, preview)).toHaveLength(6)
+    expect(cardMetadata({ ...source, version: 5 }).usages).toEqual([])
+  })
   it('改名空白由后端生成，选项映射保持显式多对一；不推断同名映射', () => {
     expect(cleanCardMappings({ references: {}, definitions: { rank: { action: 'rename', label: '  ', option_mappings: {} }, other: { action: 'reuse', target_definition_id: 7, option_mappings: { a: 9, b: 9 } } } })).toEqual({ references: {}, definitions: { rank: { action: 'rename', option_mappings: {} }, other: { action: 'reuse', target_definition_id: 7, option_mappings: { a: 9, b: 9 } } } })
   })

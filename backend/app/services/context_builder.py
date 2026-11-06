@@ -38,6 +38,7 @@
   7. 最终硬截断兜底，保证不超过预算
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -76,8 +77,12 @@ from app.services import (
     setting_progression_service,
     story_service,
 )
+from app.services.ai_dispatch import VisibilityStamp, read_visibility_stamp, visibility_sessionmaker
+from app.services.mentions.context import load_candidates
+from app.services.mentions.matcher import EntryKey
 from app.services.project_service import project_info
-from app.services.retrieval_service import Embedder, EmbedEnv
+from app.services.retrieval_service import Embedder, EmbedEnv, guard_embedder
+from app.services.setting_ai_context import AiScope, build_scope
 from app.services.setting_field_formatting import format_entry_fields
 
 if TYPE_CHECKING:
@@ -371,27 +376,32 @@ def format_card(
     include_legacy_relations: bool = False,
     career_line: str = "",
     field_text: str = "",
+    hidden: frozenset[str] = frozenset(),
 ) -> str:
     """涉及角色的完整角色卡。非存活状态在标题醒目标注。"""
     head = f"■ {c.name}"
     if c.aliases:
         head += f"（别名：{'、'.join(c.aliases)}）"
-    if c.role_type:
+    if "role_type" not in hidden and c.role_type:
         head += f" · {c.role_type}"
-    if c.life_status in LIFE_STATUS_LABELS:
+    if "life_status" not in hidden and c.life_status in LIFE_STATUS_LABELS:
         head += f"【{LIFE_STATUS_LABELS[c.life_status]}】"
     lines = [head]
-    basics = [f"{label}：{v.strip()}" for label, v in (("年龄", c.age), ("性别", c.gender)) if v.strip()]
+    basics = [
+        f"{label}：{value.strip()}" for key, label, value in (
+            ("age", "年龄", c.age), ("gender", "性别", c.gender),
+        ) if key not in hidden and value.strip()
+    ]
     if basics:
         lines.append("；".join(basics))
-    for label, value in (
-        ("外貌", c.appearance),
-        ("性格", c.personality),
-        ("背景", c.background),
-        ("简介", c.profile),
-        ("当前状态", c.current_state),
+    for key, label, value in (
+        ("appearance", "外貌", c.appearance),
+        ("personality", "性格", c.personality),
+        ("background", "背景", c.background),
+        ("profile", "简介", c.profile),
+        ("current_state", "当前状态", c.current_state),
     ):
-        if value.strip():
+        if key not in hidden and value.strip():
             lines.append(f"{label}：{value.strip()}")
     if field_text:
         lines.append(field_text)
@@ -404,15 +414,25 @@ def format_card(
     if career_line:
         lines.append(career_line)
     # 尚未结构化的旧关系备注仍作为参考（已有结构化关系时不再重复）
-    if include_legacy_relations and c.relations_text.strip():
+    if include_legacy_relations and "relations_text" not in hidden and c.relations_text.strip():
         lines.append(f"关系备注：{c.relations_text.strip()}")
     return "\n".join(lines)
 
 
-def format_organization(o: Organization, *, field_text: str = "") -> str:
-    head = f"■ {o.name}" + (f"（{o.org_type}）" if o.org_type else "")
-    text = f"{head}：{o.purpose.strip()}" if o.purpose.strip() else head
-    return "\n".join(part for part in (text, field_text) if part)
+def format_organization(
+    o: Organization, *, field_text: str = "", hidden: frozenset[str] = frozenset(), detailed: bool = False,
+) -> str:
+    head = f"■ {o.name}" + (f"（{o.org_type}）" if "org_type" not in hidden and o.org_type else "")
+    text = f"{head}：{o.purpose.strip()}" if "purpose" not in hidden and o.purpose.strip() else head
+    details = []
+    if detailed:
+        if "location" not in hidden and o.location.strip():
+            details.append(f"所在地：{o.location.strip()}")
+        if "power_level" not in hidden and o.power_level is not None:
+            details.append(f"势力值：{o.power_level}")
+        if "description" not in hidden and o.description.strip():
+            details.append(f"说明：{o.description.strip()}")
+    return "\n".join(part for part in (text, *details, field_text) if part)
 
 
 def _career_item(a: CharacterCareer, career: Career, stages: list[CareerStage]) -> str:
@@ -435,10 +455,17 @@ def format_career_line(items: list[tuple[CharacterCareer, Career]], stages: dict
     return "；".join(parts)
 
 
-def format_career_ladder(career: Career, stages: list[CareerStage], *, field_text: str = "") -> str:
+def format_career_ladder(
+    career: Career, stages: list[CareerStage], *, field_text: str = "",
+    hidden: frozenset[str] = frozenset(), detailed: bool = False,
+) -> str:
     """「■ 剑修（主修）：练气 → 筑基 → 金丹」，规则非空时附一行（前 200 字）。"""
-    text = f"■ {career_service.ladder_line(career, stages)}"
-    rules = " ".join(career.rules.split())
+    text = f"■ {career_service.ladder_line(career, stages if 'stages' not in hidden else [])}"
+    if detailed:
+        for key, label in (("description", "说明"), ("requirements", "获得条件"), ("abilities", "能力")):
+            if key not in hidden and (value := getattr(career, key).strip()):
+                text += f"\n{label}：{value}"
+    rules = " ".join(career.rules.split()) if "rules" not in hidden else ""
     if rules:
         clipped = rules[:CAREER_RULES_CHARS] + (ELLIPSIS if len(rules) > CAREER_RULES_CHARS else "")
         text += f"\n规则：{clipped}"
@@ -447,8 +474,8 @@ def format_career_ladder(career: Career, stages: list[CareerStage], *, field_tex
     return text
 
 
-def roster_item(c: Character) -> str:
-    return c.name + (f"（{c.role_type}）" if c.role_type else "")
+def roster_item(c: Character, *, include_role: bool = True) -> str:
+    return c.name + (f"（{c.role_type}）" if include_role and c.role_type else "")
 
 
 @dataclass
@@ -471,12 +498,15 @@ class EffectiveCast:
 
 
 async def effective_world_text(
-    db: AsyncSession, project: Project, chapter: Chapter, *, exclude_ids: set[int] | None = None
+    db: AsyncSession, project: Project, chapter: Chapter, *, scope: AiScope,
+    exclude_ids: set[int] | None = None,
 ) -> str:
     """按目标章初组装世界观，保留条目分类与原有顺序。"""
     worlds = await story_service.list_items(db, story_service.WORLD, project.id)
-    if exclude_ids:
-        worlds = [world for world in worlds if world.id not in exclude_ids]
+    worlds = [
+        world for world in worlds if scope.includes("world", world.id)
+        and (exclude_ids is None or world.id not in exclude_ids)
+    ]
     if not worlds:
         return ""
     timelines = list(await db.scalars(
@@ -496,20 +526,24 @@ async def effective_world_text(
     result = []
     for world in worlds:
         timeline = by_world.get(world.id)
-        content = snapshots[timeline.id].fields["content"] if timeline else world.content
-        custom = format_entry_fields(fields["world", world.id])
+        content = ""
+        if scope.field_visible("world", world.id, "content"):
+            content = snapshots[timeline.id].fields["content"] if timeline else world.content
+        custom = format_entry_fields(scope.entry_fields(fields["world", world.id]))
         text = "\n".join(part for part in (str(content), custom) if part).strip()
         result.append(SimpleNamespace(title=world.title, category=world.category, content=text))
     return story_service.format_world(result)
 
 
 async def resolve_effective_cast(
-    db: AsyncSession, project: Project, chapter: Chapter, involved: list[Character]
+    db: AsyncSession, project: Project, chapter: Chapter, involved: list[Character], *, scope: AiScope | None = None,
 ) -> EffectiveCast:
     """批量读取目标章的角色、关系、职业和成员，同一逻辑供生成及分析使用。"""
     result = EffectiveCast()
+    if scope is not None:
+        involved = [character for character in involved if scope.includes("character", character.id)]
     ids = [c.id for c in involved]
-    if not ids:
+    if not ids and scope is None:
         return result
     id_set = set(ids)
     timelines = list(await db.scalars(
@@ -577,9 +611,13 @@ async def resolve_effective_cast(
             member = SimpleNamespace(character_id=timeline.character_id, organization_id=org.id,
                                      position=fields["position"], status=fields["status"], note=fields["note"])
             members[key] = (member, org)
+    if scope is not None:
+        scope.include_associations((("character", cid), ("organization", oid)) for cid, oid in members)
     for (character_id, _), (member, org) in sorted(
         members.items(), key=lambda row: (row[1][1].sort, row[1][1].id, row[0][0])
     ):
+        if scope is not None and not scope.includes("organization", org.id):
+            continue
         result.memberships.setdefault(character_id, []).append((member, org))
         result.organizations[org.id] = org
 
@@ -600,12 +638,30 @@ async def resolve_effective_cast(
             assignment = SimpleNamespace(character_id=timeline.character_id, career_id=career.id, role=career.kind,
                                          stage_id=fields["stage_id"], note=fields["note"])
             assignments[key] = (assignment, career)
+    if scope is not None:
+        scope.include_associations((("character", cid), ("career", kid)) for cid, kid in assignments)
     for (character_id, _), (assignment, career) in sorted(
         assignments.items(), key=lambda row: (row[1][0].role, row[1][1].sort, row[1][1].id)
     ):
+        if scope is not None and not scope.includes("career", career.id):
+            continue
         result.careers_by_character.setdefault(character_id, []).append((assignment, career))
         result.careers[career.id] = career
+    if scope is not None:
+        for kind, model, target in (
+            ("organization", Organization, result.organizations), ("career", Career, result.careers),
+        ):
+            extra_ids = scope.ids(kind) - target.keys()
+            if extra_ids:
+                rows = await db.scalars(select(model).where(model.project_id == project.id, model.id.in_(extra_ids))
+                                        .order_by(model.sort, model.id))
+                target.update({row.id: row for row in rows})
     result.stages = await career_service.stages_of(db, list(result.careers))
+    if scope is not None:
+        result.stages = {
+            ident: stages for ident, stages in result.stages.items()
+            if scope.field_visible("career", ident, "stages")
+        }
     result.entry_fields = await setting_field_service.resolve_entry_fields(
         db, project.id, [
             *[EntityRef(kind="character", id=character.id) for character in involved],
@@ -613,6 +669,8 @@ async def resolve_effective_cast(
             *[EntityRef(kind="career", id=cid) for cid in result.careers],
         ], StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
     )
+    if scope is not None:
+        result.entry_fields = {key: scope.entry_fields(value) for key, value in result.entry_fields.items()}
 
     relation_timelines = [t for t in relevant if t.subject_kind == "relationship"]
     managed_pairs = {(t.character_id, t.related_character_id) for t in relation_timelines}
@@ -657,18 +715,59 @@ async def resolve_effective_cast(
     return result
 
 
-async def build_cast_section(
+@dataclass
+class ChapterSettings:
+    scope: AiScope
+    effective: EffectiveCast
+    others: list[Character]
+
+
+async def prepare_chapter_settings(
     db: AsyncSession, project: Project, chapter: Chapter, outline_summary: str, *,
-    planning: "PlanningContext | None" = None,
-) -> CastSection:
-    cast = await cast_service.select_cast(db, project, chapter, outline_summary)
-    involved = list(cast.involved)
-    extra_ids = planning.additional_character_ids - {c.id for c in involved} if planning else set()
-    if extra_ids:
-        involved.extend(await db.scalars(select(Character).where(
-            Character.project_id == project.id, Character.id.in_(extra_ids)
-        ).order_by(Character.sort, Character.id)))
-    effective = await resolve_effective_cast(db, project, chapter, involved)
+    explicit: Iterable[EntryKey] = (), stamp: VisibilityStamp | None = None,
+    extra_text: str = "", legacy_extra_text: str = "",
+) -> ChapterSettings:
+    """普通块和规划块使用同一章初资格及字段投影。"""
+    stamp = stamp if stamp is not None else await read_visibility_stamp(db, project.id)
+    candidates = await load_candidates(db, project.id)
+    by_key = {candidate.key: candidate for candidate in candidates}
+    characters = await cast_service.list_characters(db, project.id)
+    manual = set(await cast_service.cast_ids(db, chapter.id))
+    prior_text = await cast_service.previous_tail(db, chapter)
+    legacy_chars = [
+        character for character in characters
+        if (entry := by_key.get(("character", character.id))) is not None and entry.mode is None
+    ]
+    pinned = {
+        c.id for c in characters if (
+            (entry := by_key.get(("character", c.id))) is not None
+            and (entry.mode == "always" or (entry.mode is None and cast_service.is_protagonist(c)))
+        )
+    }
+    old_detected = set(cast_service.match_characters(
+        "\n".join(part for part in (outline_summary, legacy_extra_text, prior_text) if part),
+        [c for c in legacy_chars if not by_key["character", c.id].tracking_explicit],
+    ))
+    legacy = {
+        *[("character", cid) for cid in pinned | old_detected],
+        *[entry.key for entry in candidates if entry.ref.kind == "world" and entry.mode is None],
+    }
+    scope = await build_scope(
+        db, project.id, stamp=stamp, candidates=candidates, legacy=legacy,
+        explicit=[*explicit, *(("character", cid) for cid in manual)],
+        texts=(outline_summary, extra_text, prior_text),
+    )
+    involved = [c for c in characters if scope.includes("character", c.id)]
+    involved.sort(key=lambda c: 0 if c.id in pinned else 1 if c.id in manual else 2)
+    others = [c for c in legacy_chars if not scope.includes("character", c.id)]
+    effective = await resolve_effective_cast(db, project, chapter, involved, scope=scope)
+    await scope.verify(db)
+    return ChapterSettings(scope=scope, effective=effective, others=others)
+
+
+def build_cast_section(prepared: ChapterSettings, *, planning: "PlanningContext | None" = None) -> CastSection:
+    effective = prepared.effective
+    scope = prepared.scope
     protected_characters = planning.protected_character_ids if planning else set()
     protected_relations = planning.protected_relationship_ids if planning else set()
     protected_organizations = planning.protected_organization_ids if planning else set()
@@ -681,25 +780,33 @@ async def build_cast_section(
                 include_legacy_relations=c.id not in effective.structured_character_ids,
                 career_line=format_career_line(effective.careers_by_character.get(c.id, []), effective.stages),
                 field_text=format_entry_fields(effective.entry_fields["character", c.id]),
+                hidden=scope.hidden("character", c.id),
             )
             for c in effective.characters
             if c.id not in protected_characters
         ],
         relations=[r for r in effective.relations if r.timeline_id not in protected_relations],
         organizations=[
-            format_organization(o, field_text=format_entry_fields(effective.entry_fields["organization", o.id]))
+            format_organization(
+                o, field_text=format_entry_fields(effective.entry_fields["organization", o.id]),
+                hidden=scope.hidden("organization", o.id), detailed=not scope.legacy("organization", o.id),
+            )
             for o in effective.organizations.values() if o.id not in protected_organizations
         ],
         careers=[
             format_career_ladder(
                 c, effective.stages.get(c.id, []),
                 field_text=format_entry_fields(effective.entry_fields["career", c.id]),
+                hidden=scope.hidden("career", c.id), detailed=not scope.legacy("career", c.id),
             )
             for c in sorted(effective.careers.values(), key=lambda c: (c.sort, c.id))
             if c.id not in protected_careers
         ],
-        roster=[roster_item(c) for c in cast.others if c.id not in protected_characters],
-        names=[c.name for c in involved],
+        roster=[
+            roster_item(c, include_role=scope.legacy_roster_field("character", c.id, "role_type"))
+            for c in prepared.others if c.id not in protected_characters
+        ],
+        names=[c.name for c in effective.characters],
     )
 
 
@@ -712,23 +819,31 @@ async def build_chapter_context(
         fields_revision = await _context_fields_revision(db, project.id, planning)
         outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
         task = await chapter_task(db, chapter)
-        cast = await build_cast_section(db, project, chapter, task.match_text(), planning=planning)
+        prepared = planning.setting_scope if planning and planning.setting_scope is not None else (
+            await prepare_chapter_settings(db, project, chapter, task.match_text())
+        )
+        scope = prepared.scope
+        cast = build_cast_section(prepared, planning=planning)
         prior = await prior_chapters(db, project, chapter)
-        knowledge, memories = await retrieval_blocks(db, project, chapter, task, cast.names, prior, embedder=embedder)
+        guarded_embedder = guard_embedder(embedder, scope.stamp, visibility_sessionmaker(db)) if embedder else None
+        knowledge, memories = await retrieval_blocks(
+            db, project, chapter, task, cast.names, prior, embedder=guarded_embedder,
+        )
         text = assemble_context(
             project_text=format_project_info(await project_info(db, project)),
             world_text=await effective_world_text(
-                db, project, chapter, exclude_ids=planning.protected_world_ids if planning else None
+                db, project, chapter, scope=scope, exclude_ids=planning.protected_world_ids if planning else None
             ),
             cast=cast,
             outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
             prior_chapters=prior,
             budget=budget,
-            foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no),
+            foreshadows=await build_foreshadow_section(db, project.id, chapter.chapter_no, scope=scope),
             knowledge=knowledge,
             memories=memories,
         )
         await setting_field_service.check_fields_revision(db, project.id, fields_revision)
+        await scope.verify(db)
         return text
 
 
@@ -743,7 +858,7 @@ async def _context_fields_revision(
 
 async def build_setting_context(
     db: AsyncSession, project: Project, chapter: Chapter, *, text_hint: str = "", budget: int = 4000,
-    planning: "PlanningContext | None" = None,
+    planning: "PlanningContext | None" = None, include_protected: bool = False,
 ) -> str:
     """供局部改写和设定预览使用的章初设定块；不检索知识库或调用模型。"""
     with db.no_autoflush:
@@ -753,13 +868,19 @@ async def build_setting_context(
             return ""
         fields_revision = await _context_fields_revision(db, project.id, planning)
         task = await chapter_task(db, chapter)
-        hint = "\n".join(part for part in (task.match_text(), text_hint) if part)
-        cast = await build_cast_section(db, project, chapter, hint, planning=planning)
+        prepared = planning.setting_scope if planning and planning.setting_scope is not None else (
+            await prepare_chapter_settings(
+                db, project, chapter, task.match_text(), extra_text=text_hint, legacy_extra_text=text_hint,
+            )
+        )
+        scope = prepared.scope
+        protected = planning if not include_protected else None
+        cast = build_cast_section(prepared, planning=protected)
         body = assemble_context(
             project_text="",
             include_project=False,
             world_text=await effective_world_text(
-                db, project, chapter, exclude_ids=planning.protected_world_ids if planning else None
+                db, project, chapter, scope=scope, exclude_ids=protected.protected_world_ids if protected else None
             ),
             cast=cast,
             outline_text="",
@@ -767,6 +888,7 @@ async def build_setting_context(
             budget=available,
         )
         await setting_field_service.check_fields_revision(db, project.id, fields_revision)
+        await scope.verify(db)
         return header + body if body else ""
 
 
@@ -834,27 +956,40 @@ async def retrieval_blocks(
 async def retrieval_preview(db: AsyncSession, user_id: int, chapter_id: int, *, env: EmbedEnv) -> tuple[str, str]:
     """GET /chapters/{id}/context-preview：本次生成会注入的参考资料与相关旧情节（带标题行，裁剪前；不注入为空串）。"""
     from app.services.chapter_service import get_owned_chapter
+    from app.services.planning_context_service import load_planning_context
     from app.services.project_service import get_owned_project
 
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
     embedder = await env.embedder(db, user_id)
     task = await chapter_task(db, chapter)
-    cast = await cast_service.select_cast(db, project, chapter, task.match_text())
+    planning = await load_planning_context(db, project, "chapter", chapter.id)
+    prepared = planning.setting_scope
+    assert prepared is not None
+    scope = prepared.scope
     prior = await prior_chapters(db, project, chapter)
     knowledge, memories = await retrieval_blocks(
-        db, project, chapter, task, [c.name for c in cast.involved], prior, embedder=embedder
+        db, project, chapter, task, [c.name for c in prepared.effective.characters], prior,
+        embedder=guard_embedder(embedder, scope.stamp, visibility_sessionmaker(db)) if embedder else None,
     )
+    await scope.verify(db)
     return (
         f"{KNOWLEDGE_HEADER}\n{knowledge}" if knowledge.strip() else "",
         MEMORY_HEADER + "\n" + "\n".join(m.text for m in memories.lines) if memories.lines else "",
     )
 
 
-async def build_foreshadow_section(db: AsyncSession, project_id: int, chapter_no: int) -> ForeshadowSection:
+async def build_foreshadow_section(
+    db: AsyncSession, project_id: int, chapter_no: int, *, scope: AiScope,
+) -> ForeshadowSection:
     rem = await foreshadow_service.reminders(db, project_id, chapter_no)
     if rem.empty():
         return ForeshadowSection()
+    rem.links = {
+        fs_id: [(ident, name) for ident, name in links
+                if scope.includes("character", ident) or scope.legacy("character", ident)]
+        for fs_id, links in rem.links.items()
+    }
     return ForeshadowSection(**foreshadow_service.reminder_lines(rem))
 
 

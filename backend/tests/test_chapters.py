@@ -76,8 +76,10 @@ async def test_generate_requires_ai_config(client):
 async def test_generate_chapter_task_persists(app, client, fake_llm):
     _, base, o1, _ = await _setup(client)
     await create_ai_config(client)
-    await client.post(f"{base}/characters", json={"name": "林舟", "role_type": "主角"})
+    hero = (await client.post(f"{base}/characters", json={"name": "林舟", "role_type": "主角"})).json()
     ch = (await client.post(f"{base}/chapters", json={"outline_id": o1["id"]})).json()
+    selected = await client.put(f"{base}/chapters/{ch['id']}/cast", json={"character_ids": [hero["id"]]})
+    assert selected.status_code == 200, selected.text
 
     text = "夜色深沉，星舰缓缓驶离港口。\n\n林舟站在舰桥上，望着远方。"
     gate = Gate()
@@ -114,7 +116,7 @@ async def test_generate_chapter_task_persists(app, client, fake_llm):
     # 提示词包含大纲梗概与角色
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "飞船出发" in prompt
-    assert "林舟" in prompt
+    assert "■ 林舟" in prompt
 
 
 async def test_generate_error_restores_status(app, client, fake_llm):

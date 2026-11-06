@@ -32,6 +32,7 @@ from app.models import Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES
 from app.services import authorization_service as authz
 from app.services import quota_service, task_service, task_statistics_service
+from app.services.ai_dispatch import VisibilityChangedError
 from app.services.task_engine.cancellation import AdminCancellationDrain
 from app.services.task_engine.hub import TaskHub
 from app.services.task_engine.registry import Event, TaskContext, TaskHandler, get_handler
@@ -43,6 +44,14 @@ CANCELLED_MESSAGE = "任务已取消"
 TASK_GONE_MESSAGE = "任务不存在"
 # SSE 心跳帧标记（app.api.sse 渲染为注释帧 ": ping"）
 HEARTBEAT_EVENT = ""
+
+# 这些 build_job 只从原始请求/当前数据库组装上下文。仅准备阶段可重建一次，
+# 绝不重跑已开始的 runner，也不重播 Agent 或已生成的多轮副本。
+_REBUILDABLE_VISIBILITY_JOBS = frozenset({
+    "chapter.generate", "chapter.revise", "chapter.analyze", "outline.continue", "outline.expand",
+    "character.generate", "organization.generate", "career.generate", "relations.parse", "relations.generate",
+    "wizard.outline", "wizard.characters", "wizard.world", "wizard.careers",
+})
 
 
 class TaskEngine:
@@ -385,7 +394,12 @@ class TaskEngine:
                 status, error = "cancelled", CANCELLED_MESSAGE
             else:
                 try:
-                    job = await handler.build_job(self.ctx, task)
+                    try:
+                        job = await handler.build_job(self.ctx, task)
+                    except VisibilityChangedError:
+                        if task.kind not in _REBUILDABLE_VISIBILITY_JOBS:
+                            raise
+                        job = await handler.build_job(self.ctx, task)
                 except AppError as exc:
                     error = exc.detail
                 else:

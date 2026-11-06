@@ -34,7 +34,9 @@ export default function LegacyFieldBindingModal({ projectId, field, snapshot, ca
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => { mounted.current = false; controller.abort() }
   }, [projectId, snapshot, canEditNow])
-  const compatible = definitions.filter((item) => item.field_type === 'text' && !item.archived && !expected.fields.some((slot) => slot.definition_id === item.id && slot.field_id !== null))
+  const sourceHidden = expected.legacy_fields.some((slot) => slot.field_id === field.id && slot.ai_hidden)
+  const compatible = definitions.filter((item) => item.field_type === 'text' && !item.archived && (!sourceHidden || item.ai_hidden)
+    && !expected.fields.some((slot) => slot.definition_id === item.id && slot.field_id !== null))
   const save = async () => {
     if (!canEdit || !canEditNow() || busy || loading || conflict || !selected || !compatible.some((item) => item.id === selected) || (review && !acknowledged)) return
     setBusy(true); setError(null)
@@ -62,6 +64,7 @@ export default function LegacyFieldBindingModal({ projectId, field, snapshot, ca
   return <Modal open title={`关联共享字段：${field.label}`} onCancel={onCancel} onOk={() => void save()} okText="确认关联" cancelText="关闭" confirmLoading={busy} okButtonProps={{ disabled: !canEdit || loading || conflict || !selected || (review && !acknowledged) }} closable={!busy} maskClosable={!busy}>
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Alert type="info" showIcon message="保留原字段身份、起始值和全部章节变化，仅显式关联一个适用的共享多行文本定义。" />
+      {sourceHidden && <Typography.Text type="secondary">原字段已对 AI 隐藏，只能关联同样隐藏的共享定义。</Typography.Text>}
       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>原起始值：{field.base_value || '未填写'}</Typography.Paragraph>
       <Select aria-label="目标共享文本字段" style={{ width: '100%' }} value={selected} onChange={setSelected} loading={loading} disabled={!canEdit || busy || loading} placeholder="选择兼容的共享文本字段" options={compatible.map((item) => ({ value: item.id, label: item.label }))} />
       {error && <Alert type={conflict ? 'warning' : 'error'} message={error} showIcon />}

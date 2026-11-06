@@ -21,6 +21,12 @@ async def _seed_history(client, *, first_content=""):
     )
     assert response.status_code == 201, response.text
     character_id = response.json()["id"]
+    policy_url = f"{base}/setting-entries/character/{character_id}/ai-settings"
+    policy = (await client.get(policy_url)).json()
+    updated = await client.patch(policy_url, json={
+        "expected_ai_visibility_revision": policy["ai_visibility_revision"], "ai_mode": "always",
+    })
+    assert updated.status_code == 200, updated.text
     response = await client.get(
         f"{base}/setting-timelines", params={"subject_kind": "character", "character_id": character_id}
     )

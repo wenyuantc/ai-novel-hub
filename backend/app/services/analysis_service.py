@@ -29,7 +29,7 @@ from app.ai.prompts import build_analysis_messages
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
-from app.models import Chapter, ChapterAnalysis, Character, Organization, Project, Task
+from app.models import Chapter, ChapterAnalysis, Character, Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES, LIFE_STATUSES, MEMBER_STATUSES, RELATION_STATUSES
 from app.schemas.analysis import (
     AnalysisBrief,
@@ -39,24 +39,26 @@ from app.schemas.analysis import (
     AnalyzeRequest,
     ChapterAnalysisState,
 )
-from app.schemas.progression import StoryPosition
-from app.schemas.setting_fields import EntityRef
 from app.services import (
     ai_config_service,
     career_service,
     cast_service,
     foreshadow_service,
     memory_service,
+    planning_context_service,
     project_lifecycle,
     prompt_service,
     setting_field_service,
     task_statistics_service,
     writeback_service,
 )
+from app.services.ai_dispatch import guard_provider, read_visibility_stamp, visibility_sessionmaker
 from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.context_builder import MEMBER_STATUS_LABELS, format_career_line, resolve_effective_cast
 from app.services.generation_service import Event
+from app.services.mentions.context import load_candidates
 from app.services.project_service import get_owned_project, project_info
+from app.services.setting_ai_context import build_scope
 from app.services.setting_field_formatting import format_entry_fields
 
 if TYPE_CHECKING:
@@ -674,14 +676,18 @@ def _state_card(
     memberships: list,
     career_line: str,
     field_text: str = "",
+    hidden: frozenset[str] = frozenset(),
 ) -> str:
     head = f"■ {c.name}"
     if c.aliases:
         head += f"（别名：{'、'.join(c.aliases)}）"
-    if c.role_type:
+    if "role_type" not in hidden and c.role_type:
         head += f" · {c.role_type}"
-    lines = [head, f"存活状态：{LIFE_LABELS.get(c.life_status, c.life_status)}"]
-    lines.append(f"当前状态：{c.current_state.strip() or '（未记录）'}")
+    lines = [head]
+    if "life_status" not in hidden:
+        lines.append(f"存活状态：{LIFE_LABELS.get(c.life_status, c.life_status)}")
+    if "current_state" not in hidden:
+        lines.append(f"当前状态：{c.current_state.strip() or '（未记录）'}")
     if field_text:
         lines.append(field_text)
     if memberships:
@@ -693,13 +699,6 @@ def _state_card(
     if career_line:
         lines.append(career_line)
     return "\n".join(lines)
-
-
-async def _involved(db: AsyncSession, chapter: Chapter, characters: list[Character]) -> list[Character]:
-    """本章涉及角色：主角 ∪ 手动指定出场 ∪ 本章正文中提及的角色（名字 / 别名，规则同选角）。"""
-    manual = set(await cast_service.cast_ids(db, chapter.id))
-    mentioned = set(cast_service.match_characters(chapter.content, characters))
-    return [c for c in characters if cast_service.is_protagonist(c) or c.id in manual or c.id in mentioned]
 
 
 async def build_analysis_job(
@@ -723,18 +722,33 @@ async def build_analysis_job(
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
 
     fields_revision = await setting_field_service.fields_revision(db, project.id)
+    stamp = await read_visibility_stamp(db, project.id)
+    planning_revision = await planning_context_service.planning_revision(db, project.id)
+    candidates = await load_candidates(db, project.id)
+    legacy_char = {entry.ref.id: entry for entry in candidates if entry.ref.kind == "character" and entry.mode is None}
     characters = await cast_service.list_characters(db, project.id)
-    involved = await _involved(db, chapter, characters)
-    effective = await resolve_effective_cast(db, project, chapter, involved)
-    orgs = list(await db.scalars(
-        select(Organization).where(Organization.project_id == project.id).order_by(Organization.sort, Organization.id)
-    ))
-    # 分析原本列出项目组织名单；仅在该既有范围内补字段，不增加世界观档案。
-    organization_fields = await setting_field_service.resolve_entry_fields(
-        db, project.id, [EntityRef(kind="organization", id=org.id) for org in orgs],
-        StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+    mentioned = set(cast_service.match_characters(chapter.content, [
+        char for char in characters if char.id in legacy_char and not legacy_char[char.id].tracking_explicit
+    ]))
+    legacy = [
+        ("character", char.id) for char in characters if char.id in legacy_char
+        and (cast_service.is_protagonist(char) or char.id in mentioned)
+    ]
+    # 分析原本列出全部组织；只对存量档案保留这个默认，不引入原来不读的世界观。
+    legacy.extend(entry.key for entry in candidates if entry.ref.kind == "organization" and entry.mode is None)
+    explicit = await planning_context_service.chapter_explicit_entries(db, project, chapter)
+    explicit.extend(("character", cid) for cid in await cast_service.cast_ids(db, chapter.id))
+    scope = await build_scope(
+        db, project.id, stamp=stamp, candidates=candidates,
+        texts=(chapter.content,), legacy=legacy,
+        explicit=explicit,
+        kinds=("character", "organization", "career"),
     )
-    organization_text = {org.id: format_entry_fields(organization_fields["organization", org.id]) for org in orgs}
+    effective = await resolve_effective_cast(db, project, chapter, characters, scope=scope)
+    orgs = sorted(effective.organizations.values(), key=lambda org: (org.sort, org.id))
+    organization_text = {
+        org.id: format_entry_fields(effective.entry_fields["organization", org.id]) for org in orgs
+    }
     organizations_text = (
         "\n\n".join("\n".join(part for part in (org.name, organization_text[org.id]) if part) for org in orgs)
         if any(organization_text.values()) else "、".join(org.name for org in orgs)
@@ -751,6 +765,7 @@ async def build_analysis_job(
                 effective.memberships.get(c.id, []),
                 format_career_line(effective.careers_by_character.get(c.id, []), effective.stages),
                 format_entry_fields(effective.entry_fields["character", c.id]),
+                hidden=scope.hidden("character", c.id),
             )
             for c in effective.characters
         ),
@@ -767,13 +782,15 @@ async def build_analysis_job(
         override=await prompt_service.get_override(db, user_id, "analysis.chapter"),
     )
     await setting_field_service.check_fields_revision(db, project.id, fields_revision)
+    await planning_context_service.check_planning_revision(db, project.id, planning_revision)
+    await scope.verify(db)
     return AnalysisJob(
         project_id=project.id,
         chapter_id=chapter.id,
         chapter_no=chapter.chapter_no,
         content=chapter.content,
         content_hash=content_hash(chapter.content),
-        provider=provider,
+        provider=guard_provider(provider, scope.stamp, visibility_sessionmaker(db)),
         model=cfg.model,
         messages=messages,
         chapter_created_at=chapter.created_at,

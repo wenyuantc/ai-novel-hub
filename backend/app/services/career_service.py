@@ -8,7 +8,7 @@
 """
 
 from copy import deepcopy
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -35,12 +35,16 @@ from app.schemas.progression import BaselineUpdate, ProgressionCreate, StoryPosi
 from app.schemas.setting_fields import EntityRef
 from app.services import (
     career_progression_service,
+    setting_ai_visibility,
     setting_catalog_service,
     setting_field_service,
     setting_progression_service,
     story_service,
 )
 from app.services.project_service import get_manageable_project
+
+if TYPE_CHECKING:
+    from app.services.setting_ai_context import AiScope
 
 MAX_MAIN_CAREERS = 1
 MAX_SUB_CAREERS = 3
@@ -374,7 +378,7 @@ async def delete_career(db: AsyncSession, user_id: int, project_id: int, career_
     """删除职业：阶段、挂接与挂接历史随之级联删除。"""
     from app.services.planning_lifecycle import bump_revision
 
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
     career = await get_owned_career(db, user_id, project_id, career_id)
     await setting_field_service.cleanup_unreferenced_handles(
         db, project_id, [EntityRef(kind="career", id=career.id)]
@@ -1040,33 +1044,36 @@ def normalize_career_drafts(obj: Any, *, force_kind: str | None = None) -> tuple
     return drafts, warnings
 
 
-async def careers_reference(db: AsyncSession, project_id: int) -> str:
+async def careers_reference(db: AsyncSession, project_id: int, *, scope: "AiScope") -> str:
     """已有职业的名称、类别与阶梯摘要（提示词参考）；没有职业时为空串。"""
-    careers = await list_project_careers(db, project_id)
+    careers = [c for c in await list_project_careers(db, project_id) if scope.includes("career", c.id)]
     if not careers:
         return ""
     stages = await stages_of(db, [c.id for c in careers])
-    return "\n".join(ladder_line(c, stages[c.id]) for c in careers)
+    return "\n".join(
+        ladder_line(c, stages[c.id] if scope.field_visible("career", c.id, "stages") else [])
+        for c in careers
+    )
 
 
 # 详细参考里每个字段的截断长度：够 AI 看清定位 / 能力 / 规则，又不至于让十几个职业撑爆上下文
 DETAIL_FIELD_CHARS = 100
 
 
-async def careers_detail_reference(db: AsyncSession, project_id: int) -> str:
+async def careers_detail_reference(db: AsyncSession, project_id: int, *, scope: "AiScope") -> str:
     """生成新职业用的详细参考：阶梯摘要 + 描述 / 特殊能力 / 体系规则（各截断）。
 
     不含获得条件与阶段描述——对「保持体系一致、避免能力重叠」帮助有限却最占篇幅。
     """
-    careers = await list_project_careers(db, project_id)
+    careers = [c for c in await list_project_careers(db, project_id) if scope.includes("career", c.id)]
     if not careers:
         return ""
     stages = await stages_of(db, [c.id for c in careers])
     blocks: list[str] = []
     for c in careers:
-        lines = ["- " + ladder_line(c, stages[c.id])]
-        for label, text in (("描述", c.description), ("特殊能力", c.abilities), ("体系规则", c.rules)):
-            text = text.strip()
+        lines = ["- " + ladder_line(c, stages[c.id] if scope.field_visible("career", c.id, "stages") else [])]
+        for key, label in (("description", "描述"), ("abilities", "特殊能力"), ("rules", "体系规则")):
+            text = getattr(c, key).strip() if scope.field_visible("career", c.id, key) else ""
             if text:
                 clipped = text if len(text) <= DETAIL_FIELD_CHARS else text[:DETAIL_FIELD_CHARS] + "……"
                 lines.append(f"  {label}：{clipped}")

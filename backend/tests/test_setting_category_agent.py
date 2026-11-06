@@ -85,6 +85,8 @@ def _legacy(captured, version=3):
         for row in (effect["before"], effect["after"]):
             if row is None:
                 continue
+            for key in effects._legacy_visibility_defaults(effect["table"]):
+                row.pop(key, None)
             if effect["table"] in ENTITY_TABLES:
                 row.pop("setting_tags", None)
             if effect["table"] == "projects":
@@ -112,7 +114,7 @@ async def test_v4_snapshots_tags_categories_rules_and_excludes_both_project_revi
     assert after["characters"][str(entry.id)]["setting_tags"] == ["同盟"]
     assert {"fields_revision", "categories_revision"}.isdisjoint(after["projects"][str(ctx.project_id)])
     captured = effects.diff(before, after)
-    assert all(item["format_version"] == 4 for item in captured)
+    assert all(item["format_version"] == 5 for item in captured)
     await ctx.db.commit()
     await effects.undo(ctx.db, ctx.project_id, captured)
     assert await effects.snapshot(ctx.db, ctx.project_id) == before
@@ -378,7 +380,7 @@ async def test_next_fake_llm_messages_do_not_receive_tags_from_write_result(clie
         "id": created["id"], "name" if kind == "character" else "title": "新名",
     })])
     fake_llm.push_tools([("text", {"text": "名称已更新"})])
-    task = await wait_task(client, await send(client, url, "更新名称"))
+    task = await wait_task(client, await send(client, url, "把「旧名」改名"), within=15)
     assert task["status"] == "succeeded", task
     messages = fake_llm.tool_calls[1]["messages"]
     assert "模型不可见哨兵" not in json.dumps(messages, ensure_ascii=False)

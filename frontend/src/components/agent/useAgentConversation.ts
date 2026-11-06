@@ -1,10 +1,11 @@
 import { App } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { agentApi, withAgentRefresh } from '../../api/agent'
+import { agentApi, isAgentHistorySealed, withAgentRefresh } from '../../api/agent'
 import { errorMessage } from '../../api/client'
 import { isActiveTask, taskApi } from '../../api/tasks'
 import type { AgentChange, AgentConversationDetail, AgentConversationUpdate, AgentSendRequest, Task } from '../../api/types'
 import { useTaskStream } from '../../hooks/useTaskStream'
+import { useProjectRefresh } from '../../hooks/useProjectRefresh'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { changedResources, mergeToolStep, upsertAgentChange, type AgentToolStep } from '../../utils/agent'
@@ -15,6 +16,7 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
   const [detail, setDetail] = useState<AgentConversationDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [sealedError, setSealedError] = useState(false)
   // 正在确认 / 拒绝 / 撤销的提案：只有这张卡片显示加载状态（外部调用确认最长约 30 秒）
   const [actingId, setActingId] = useState<number | null>(null)
   const [lastTask, setLastTask] = useState<Task | null>(null)
@@ -35,6 +37,8 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
   const refreshSafe = useCallback(() => {
     void refresh().catch((err: unknown) => { if (alive.current) setError(errorMessage(err)) })
   }, [refresh])
+  useProjectRefresh(pid, ['setting-ai-visibility'], refreshSafe)
+  const historySealed = sealedError || detail?.history_sealed === true
   const invalidate = useCallback((changes: AgentChange[]) => {
     invalidateProject(pid, changedResources(changes))
     void useProjectStore.getState().refresh()
@@ -94,7 +98,13 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     if (busy) return false
     setBusy(true)
     try {
-      await withAgentRefresh(operation, async () => { await refresh() })
+      await withAgentRefresh(async () => {
+        try { return await operation() }
+        catch (err) {
+          if (alive.current && isAgentHistorySealed(err)) setSealedError(true)
+          throw err
+        }
+      }, async () => { await refresh() })
       const next = await refresh()
       invalidate(next.changes.filter((c) => c.status === 'executed' || c.status === 'undone'))
       onUpdated()
@@ -103,14 +113,14 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     } catch (err) { message.error(errorMessage(err)); return false }
     finally { if (alive.current) setBusy(false) }
   }
-  const send = (body: AgentSendRequest) => act(async () => {
+  const send = (body: AgentSendRequest) => historySealed ? Promise.resolve(false) : act(async () => {
     const result = await agentApi.send(pid, cid, body)
     track(result.task)
     setSteps([])
     stream.reset()
   })
   const change = async (item: AgentChange, action: 'confirm' | 'reject' | 'undo') => {
-    if (busy) return false
+    if (busy || (historySealed && action !== 'undo')) return false
     setActingId(item.id)
     try {
       return await act(async () => {
@@ -118,7 +128,7 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
       }, action === 'undo' ? '已撤销修改' : undefined)
     } finally { if (alive.current) setActingId(null) }
   }
-  const turn = (id: number, action: 'confirm-all' | 'reject-all' | 'undo') => act(async () => {
+  const turn = (id: number, action: 'confirm-all' | 'reject-all' | 'undo') => historySealed && action !== 'undo' ? Promise.resolve(false) : act(async () => {
     const result = await agentApi.turn(pid, id, action)
     result.changes.forEach(updateChange)
     if (result.task) track(result.task)
@@ -129,8 +139,8 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     const task = detail?.active_task
     if (task) track(await taskApi.cancel(task.id))
   }, '已取消本轮对话')
-  const retry = (task: Task) => act(async () => { track(await taskApi.retry(task.id)) })
-  const update = (body: AgentConversationUpdate) => act(async () => { await agentApi.update(pid, cid, body) })
+  const retry = (task: Task) => historySealed ? Promise.resolve(false) : act(async () => { track(await taskApi.retry(task.id)) })
+  const update = (body: AgentConversationUpdate) => historySealed ? Promise.resolve(false) : act(async () => { await agentApi.update(pid, cid, body) })
 
-  return { detail, error, busy, actingId, steps, stream, lastTask: stream.task ?? lastTask, refresh: refreshSafe, send, change, turn, cancel, retry, update }
+  return { detail, error, busy, historySealed, actingId, steps, stream, lastTask: stream.task ?? lastTask, refresh: refreshSafe, send, change, turn, cancel, retry, update }
 }

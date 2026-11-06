@@ -84,7 +84,7 @@ function Editor({
       <Form form={form} layout="vertical" initialValues={characterToForm(parsed.draft)} disabled={saving}>
         <Tabs
           items={[
-            { key: 'basic', label: '基础', forceRender: true, children: <CharacterBasicFields form={form} creating showSort={false} /> },
+            { key: 'basic', label: '基础', forceRender: true, children: <CharacterBasicFields form={form} showSort={false} /> },
             { key: 'desc', label: '描写', forceRender: true, children: <CharacterDescFields /> },
             { key: 'state', label: '状态', forceRender: true, children: <CharacterStateFields /> },
             {

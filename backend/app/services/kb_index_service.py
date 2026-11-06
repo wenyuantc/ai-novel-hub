@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.ai.providers import AIProviderError, ProviderFactory
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
-from app.models import KbChunk, KbDocument, Project, RetrievalChunk, Task
+from app.models import KbChunk, KbDocument, Project, RetrievalChunk, StoryMemory, Task
 from app.services import kb_parser, project_lifecycle, retrieval_service, task_statistics_service
 from app.services.project_service import get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder
@@ -239,9 +239,24 @@ async def _embed_stale(
             )
             if not rows:
                 return
-            vectors = await embedder.embed([r.text for r in rows])
-            assert embedder.key is not None
-            await retrieval_service.store_embeddings(db, rows, vectors, embedder.key)
+            # 内部关键词索引会附加从设定库解析出的角色名。向量服务只需要记忆正文，
+            # 不能把无稳定身份、可能来自已隐藏档案的旧关联名重新发送。
+            memory_ids = {row.ref_id for row in rows if row.source == "memory"}
+            memory_content = dict((await db.execute(
+                select(StoryMemory.id, StoryMemory.content).where(
+                    StoryMemory.project_id == job.project_id, StoryMemory.id.in_(memory_ids),
+                )
+            )).all()) if memory_ids else {}
+            active = [row for row in rows if row.source != "memory" or row.ref_id in memory_content]
+            if active:
+                vectors = await embedder.embed([
+                    memory_content[row.ref_id] if row.source == "memory" else row.text for row in active
+                ])
+                assert embedder.key is not None
+                await retrieval_service.store_embeddings(db, active, vectors, embedder.key)
+            for row in rows:
+                if row.source == "memory" and row.ref_id not in memory_content:
+                    await db.delete(row)
             await db.commit()
         done += len(rows)
         yield "delta", {"text": f"生成向量 {min(done, total)}/{max(total, done)}\n"}

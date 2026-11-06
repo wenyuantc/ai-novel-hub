@@ -137,11 +137,13 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
       try { values = await form.validateFields() } catch { return }
       if (!current(ticket) || !canEditNow()) return
       const item = itemRef.current
+      let categoryChanged = false
       if (item) {
         const base = baselineRef.current
         const initial = initialRef.current
         if (!base || !initial) return
         const patch = toWorldBaselinePatch(values, initial, base.timeline_revision)
+        categoryChanged = patch?.category !== undefined
         if (patch) await progressionApi.updateWorldBaseline(projectId, item.id, patch)
       } else {
         const body: WorldSettingInput = {
@@ -152,7 +154,7 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
       if (!current(ticket) || !canEditNow()) return
       message.success('已保存')
       closeEditor()
-      invalidateProject(projectId, ['world'])
+      invalidateProject(projectId, ['world', ...(categoryChanged ? ['setting-ai-visibility' as const] : [])])
     } catch (err) {
       if (!current(ticket) || !canEditNow()) return
       if (err instanceof ApiError && err.status === 409 && err.body?.code === 'stale_revision') {

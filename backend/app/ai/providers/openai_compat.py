@@ -15,6 +15,7 @@ from app.ai.providers.base import (
     describe_error,
     describe_tools_error,
 )
+from app.ai.providers.dispatch_hooks import current_dispatch_hooks
 from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec
 
 
@@ -40,13 +41,20 @@ def _tool_messages(messages: list[AgentMessage]) -> list[dict]:
 class OpenAICompatProvider(LLMProvider):
     """OpenAI 及兼容接口（中转、DeepSeek、Ollama、llama.cpp 等）。"""
 
+    uses_dispatch_hooks = True
+
     def _client(self) -> AsyncOpenAI:
         # 本地 LLM 常无需 Key，但 SDK 要求非空
+        hooks = current_dispatch_hooks()
+        http_options = {"event_hooks": hooks.event_hooks} if hooks else {}
+        # SDK 会把 request hook 的拒绝包装成连接错误；受控发送只在业务层显式重试。
+        sdk_options = {"max_retries": 0} if hooks else {}
         return AsyncOpenAI(
             api_key=self.api_key or "EMPTY",
             base_url=self.base_url,
             timeout=self.timeout,
-            http_client=DefaultAsyncHttpxClient(follow_redirects=self.follow_redirects),
+            http_client=DefaultAsyncHttpxClient(follow_redirects=self.follow_redirects, **http_options),
+            **sdk_options,
         )
 
     async def generate_stream(

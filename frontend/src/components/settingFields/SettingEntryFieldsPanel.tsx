@@ -67,7 +67,7 @@ function EntryFieldsInner({ projectId, entry, onChanged, onRequestConfirmBaselin
     {baselineEditors.length > 0 && activeBaseline === null && <Typography.Text type="secondary">本条目有已保留的起始值草稿，点击对应字段可继续。</Typography.Text>}
     <Spin spinning={loading}><List dataSource={data.fields} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该类型还没有适用的共享字段" /> }} renderItem={(slot) => <List.Item>
       <Space direction="vertical" size={4} style={{ width: '100%' }}>
-        <Space wrap><Typography.Text strong>{slot.label}</Typography.Text><Tag>共享字段</Tag>{slot.archived && <Tag>已停用</Tag>}</Space>
+        <Space wrap><Typography.Text strong>{slot.label}</Typography.Text><Tag>共享字段</Tag>{slot.archived && <Tag>已停用</Tag>}{slot.ai_hidden && <Tag>对 AI 隐藏</Tag>}</Space>
         <div><Typography.Text type="secondary">故事开始时：</Typography.Text><SettingFieldValueView projectId={projectId} value={fieldSlotValue(slot, true)} options={slot.options} reference={slot.base_reference} /></div>
         <div><Typography.Text type="secondary">当前有效值：</Typography.Text><SettingFieldValueView projectId={projectId} value={fieldSlotValue(slot)} options={slot.options} reference={slot.reference} /></div>
         <Space wrap><Button size="small" onClick={() => openBaseline(slot)} disabled={loading || !!error}>{canEdit ? '编辑起始值' : '查看起始值'}</Button><Button size="small" onClick={() => openEvent(slot)} disabled={!writable || slot.archived}>记录章节变化</Button></Space>

@@ -275,6 +275,8 @@ async def test_live_chapter_snapshot_uses_current_cast(planning_db):
 
 
 async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db, client, app):
+    from tests.test_project_transfer import _without_ai_settings
+
     db, pid, user_id = planning_db
     ids = await _seed(db, pid)
     references = await _seed_references(db, client, pid, ids)
@@ -283,7 +285,7 @@ async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db
     response = await client.get(f"/api/v1/projects/{pid}/backup?snapshots=1")
     assert response.status_code == 200
     backup = response.json()
-    assert backup["version"] == 5
+    assert backup["version"] == 6
     preview = await client.post("/api/v1/projects/import/preview", files={"file": ("book.json", response.content)})
     assert preview.status_code == 200, preview.text
     imported = await client.post("/api/v1/projects/import", json={"token": preview.json()["token"]})
@@ -317,7 +319,7 @@ async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db
             "unit_id": unit.id, "plan_id": unit.plan_id, "binding_epoch": 7,
         }]
     old = json.loads(response.content)
-    old["version"] = 2
+    _without_ai_settings(old, 2)
     # 模拟真实 v2：保留夹带的规划数据测试版本清理，但移除 v4 才引入的字段图。
     for table in (*importer.FIELD_TABLES, *importer.CATEGORY_TABLES):
         old["tables"].pop(table, None)

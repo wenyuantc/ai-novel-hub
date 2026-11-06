@@ -3,14 +3,15 @@
 from dataclasses import dataclass
 
 import anyio
-from sqlalchemy import select
+from sqlalchemy import JSON, literal, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
-from app.models import Character, WorldSetting
+from app.models import Career, Character, Organization, WorldSetting
 from app.schemas.mentions import SOURCE_TYPES, EntityCategory, EntityKind, EntityRef, SourceType
-from app.services.mentions.matcher import Dictionary, compile_dictionary
+from app.services.mentions.matcher import Dictionary, EntryKey, TrackingRule, compile_dictionary
 from app.services.project_service import get_manageable_project
+from app.services.setting_ai_visibility import effective_mention_enabled
 
 
 class InvalidMentionQuery(AppError):
@@ -23,29 +24,68 @@ class QueryContext:
     source_types: list[SourceType]
 
 
+@dataclass(frozen=True)
+class MentionCandidate:
+    ref: EntityRef
+    mode: str | None
+    tracking: TrackingRule
+    tracking_explicit: bool
+    hidden_builtin_fields: frozenset[str]
+
+    @property
+    def key(self) -> EntryKey:
+        return self.ref.kind, self.ref.id
+
+
+async def load_candidates(db: AsyncSession, project_id: int) -> list[MentionCandidate]:
+    """一次语句从同一快照读取四类身份与匹配配置；不加载作者正文。"""
+    statements = []
+    models = (("character", Character), ("world", WorldSetting), ("organization", Organization), ("career", Career))
+    for kind, model in models:
+        statements.append(select(
+            literal(kind).label("kind"),
+            model.id,
+            (WorldSetting.title if model is WorldSetting else model.name).label("name"),
+            (WorldSetting.category if model is WorldSetting else literal(kind)).label("category"),
+            (model.aliases if model in (Character, WorldSetting) else literal(None, type_=JSON)).label("aliases"),
+            model.ai_mode,
+            model.mention_enabled,
+            model.mention_case_sensitive,
+            model.mention_exclusions,
+            model.ai_hidden_builtin_fields,
+        ).where(model.project_id == project_id))
+    with db.no_autoflush:
+        rows = (await db.execute(union_all(*statements))).all()
+    return [
+        MentionCandidate(
+            ref=EntityRef(kind=row.kind, id=row.id, name=row.name, category=row.category, aliases=row.aliases or []),
+            mode=row.ai_mode,
+            tracking=TrackingRule(
+                effective_mention_enabled(row.kind, row.ai_mode, row.mention_enabled, category=row.category),
+                row.mention_case_sensitive,
+                tuple(row.mention_exclusions),
+            ),
+            tracking_explicit=(
+                row.mention_enabled is not None or not row.mention_case_sensitive or bool(row.mention_exclusions)
+            ),
+            hidden_builtin_fields=frozenset(row.ai_hidden_builtin_fields),
+        )
+        for row in rows
+    ]
+
+
+def candidate_dictionary(candidates: list[MentionCandidate]) -> Dictionary:
+    return compile_dictionary([candidate.ref for candidate in candidates], {
+        candidate.key: candidate.tracking for candidate in candidates
+    })
+
+
 async def query_context(db: AsyncSession, user_id: int, project_id: int) -> QueryContext:
     with db.no_autoflush:
         project = await get_manageable_project(db, user_id, project_id)
         available = list(SOURCE_TYPES) if project.user_id == user_id else [t for t in SOURCE_TYPES if t != "chat"]
-        characters = await db.execute(
-            select(Character.id, Character.name, Character.aliases).where(
-                Character.project_id == project_id,
-            )
-        )
-        worlds = await db.execute(
-            select(WorldSetting.id, WorldSetting.title, WorldSetting.aliases, WorldSetting.category).where(
-                WorldSetting.project_id == project_id,
-                WorldSetting.category.in_(("place", "item")),
-            )
-        )
-    entities = [
-        EntityRef(kind="character", id=c.id, name=c.name, category="character", aliases=c.aliases or [])
-        for c in characters
-    ]
-    entities.extend(
-        EntityRef(kind="world", id=w.id, name=w.title, category=w.category, aliases=w.aliases or []) for w in worlds
-    )
-    dictionary = await anyio.to_thread.run_sync(compile_dictionary, entities)
+        candidates = await load_candidates(db, project_id)
+    dictionary = await anyio.to_thread.run_sync(candidate_dictionary, candidates)
     return QueryContext(dictionary, available)
 
 
@@ -64,6 +104,7 @@ def select_entities(
         entries = [e for e in entries if e.id == entity_id]
         if not entries:
             raise NotFoundError("设定条目不存在")
+    entries = [entry for entry in entries if (entry.kind, entry.id) in dictionary.enabled]
     if category is not None:
         entries = [e for e in entries if e.category == category]
     if q and (query := q.strip().casefold()):

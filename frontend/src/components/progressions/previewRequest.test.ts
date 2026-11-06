@@ -10,6 +10,7 @@ const effective: SettingEffective = {
 const entryFields: SettingEntryFields = {
   entry: { reference: { kind: 'character', id: 4 }, name: '林远', type: 'character', category: null },
   timeline_id: 3, timeline_revision: 7, fields_revision: 2,
+  ai_visibility_revision: 0,
   position: effective.position, fields: [], legacy_fields: [],
 }
 const input = () => ({ projectId: 1, timelineId: 3, timelineRevision: 7, fieldsRevision: 2, entry: entryFields.entry.reference,

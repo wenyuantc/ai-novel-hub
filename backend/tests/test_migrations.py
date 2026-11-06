@@ -88,13 +88,13 @@ def test_0031_setting_progressions_preserves_legacy_and_detaches_deleted_sources
         inspector = inspect(engine)
         assert {"setting_timelines", "setting_text_fields", "setting_progressions"} <= set(inspector.get_table_names())
         assert "is_present" in {col["name"] for col in inspector.get_columns("relationships")}
-        # 0031 保持当时的文本字段合同；0035 与当前模型的完整一致性由新迁移测试覆盖。
+        # 0031 保持当时的文本字段合同；0035、0037 的增量由各自迁移测试覆盖。
         from app.models import Base
 
         for table_name in ("setting_timelines", "setting_text_fields", "setting_progressions"):
             model = Base.metadata.tables[table_name]
             columns = {column["name"]: column for column in inspector.get_columns(table_name)}
-            newer_columns = {"definition_id"} if table_name == "setting_text_fields" else set()
+            newer_columns = {"definition_id", "ai_hidden"} if table_name == "setting_text_fields" else set()
             assert set(columns) == set(model.columns.keys()) - newer_columns
             for column in model.columns:
                 if column.name in newer_columns:

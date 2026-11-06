@@ -36,14 +36,17 @@ async def _seed(app, client, *, planning=False, legacy_override=False):
     await create_ai_config(client)
     pid = project["id"]
     async with app.state.sessionmaker() as db:
-        hero = Character(project_id=pid, name="林远", role_type="主角", current_state="原始人物状态")
-        world = WorldSetting(project_id=pid, title="旧城", category="place", content="原始世界正文")
-        org = Organization(project_id=pid, name="观星阁", purpose="观察星象")
-        career = Career(project_id=pid, name="符师", kind="main", rules="符术消耗灵力")
-        unselected_org = Organization(project_id=pid, name="远方组织")
-        unselected_career = Career(project_id=pid, name="远方职业", kind="sub")
+        hero = Character(project_id=pid, name="林远", role_type="主角", current_state="原始人物状态", ai_mode=None)
+        world = WorldSetting(project_id=pid, title="旧城", category="place", content="原始世界正文", ai_mode=None)
+        org = Organization(project_id=pid, name="观星阁", purpose="观察星象", ai_mode=None)
+        career = Career(project_id=pid, name="符师", kind="main", rules="符术消耗灵力", ai_mode=None)
+        unselected_org = Organization(project_id=pid, name="远方组织", ai_mode=None)
+        unselected_career = Career(project_id=pid, name="远方职业", kind="sub", ai_mode=None)
         targets = [
-            Career(project_id=pid, name=name, kind="sub", description="引用目标正文禁止注入", rules="引用规则禁止注入")
+            Career(
+                project_id=pid, name=name, kind="sub", description="引用目标正文禁止注入",
+                rules="引用规则禁止注入", ai_mode=None,
+            )
             for name in ("旧参照职业", "新参照职业")
         ]
         chapters = {
@@ -378,7 +381,9 @@ async def test_batch_generation_resolves_each_chapter_fields(app, client, fake_l
 async def test_character_reference_does_not_add_a_full_cast_card(app, client, fake_llm):
     data = await _seed(app, client)
     async with app.state.sessionmaker() as db:
-        target = Character(project_id=data["pid"], name="被引用配角", role_type="配角", profile="引用角色正文禁止注入")
+        target = Character(
+            project_id=data["pid"], name="被引用配角", role_type="配角", profile="引用角色正文禁止注入", ai_mode=None,
+        )
         definition = await db.scalar(
             select(SettingFieldDefinition).where(
                 SettingFieldDefinition.project_id == data["pid"],

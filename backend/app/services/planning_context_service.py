@@ -1,7 +1,7 @@
 """同章规划的只读投影：实际生成、局部重写和预览共享来源与过滤逻辑。"""
 
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,12 +36,20 @@ from app.schemas.planning import EntityReference, PlanningContextPreview, Planni
 from app.schemas.planning import RelationshipReference as PlanningRelationshipReference
 from app.schemas.progression import StoryPosition
 from app.schemas.setting_fields import EntityRef
-from app.services import career_service, relationship_service, setting_field_service, setting_progression_service
+from app.services import relationship_service, setting_field_service, setting_progression_service
+from app.services.ai_dispatch import VisibilityStamp, read_visibility_stamp, require_visibility_stamp
+from app.services.mentions.matcher import EntryKey
+from app.services.setting_ai_context import AiScope, build_scope
 from app.services.setting_field_formatting import format_entry_fields
+
+if TYPE_CHECKING:
+    from app.services.context_builder import ChapterSettings
 
 MAX_PLANNING_CHARS = 20000
 MIN_ORDINARY_CONTEXT_CHARS = 200
 TRUNCATED_SUFFIX = "……[已截断]"
+
+type SettingReferences = tuple[list[WorldSetting], list[Organization], list[Career], list[SettingTimeline]]
 
 
 @dataclass
@@ -50,6 +58,7 @@ class PlanningContext:
     source: PlanningSource
     # 与普通设定块共用目录版本；非持久化规划版本，不进入规划 API 的 revision。
     fields_revision: int | None = None
+    setting_scope: "ChapterSettings | None" = None
     unit_id: int | None = None
     chapter_id: int | None = None
     plan_id: int | None = None
@@ -151,6 +160,26 @@ def fit_planning_context(
     return rendered, True
 
 
+async def _chapter_unit(db: AsyncSession, project_id: int, chapter_id: int) -> PlanningUnit | None:
+    return await db.scalar(select(PlanningUnit).where(
+        PlanningUnit.project_id == project_id, PlanningUnit.chapter_id == chapter_id, PlanningUnit.retired.is_(False),
+    ))
+
+
+async def planning_revision(db: AsyncSession, project_id: int) -> int:
+    with db.no_autoflush:
+        revision = await db.scalar(select(Project.planning_revision).where(Project.id == project_id))
+    if revision is None:
+        raise NotFoundError("作品不存在")
+    return revision
+
+
+async def check_planning_revision(db: AsyncSession, project_id: int, revision: int) -> None:
+    if await planning_revision(db, project_id) != revision:
+        # 不在当前 identity map 中重试，避免把缓存的旧节点配上新的 revision。
+        raise ConflictError("规划在读取期间发生变化，请刷新后重试", extra={"code": "planning_context_changed"})
+
+
 async def _source(
     db: AsyncSession, project: Project, source_kind: SourceKind, source_id: int
 ) -> tuple[PlanningUnit | None, Chapter | None, ChapterPlan | None]:
@@ -160,13 +189,7 @@ async def _source(
         chapter = await db.scalar(select(Chapter).where(Chapter.id == source_id, Chapter.project_id == project.id))
         if chapter is None:
             raise NotFoundError("章节不存在")
-        unit = await db.scalar(
-            select(PlanningUnit).where(
-                PlanningUnit.project_id == project.id,
-                PlanningUnit.chapter_id == chapter.id,
-                PlanningUnit.retired.is_(False),
-            )
-        )
+        unit = await _chapter_unit(db, project.id, chapter.id)
     elif source_kind == "plan":
         plan = await db.scalar(
             select(ChapterPlan)
@@ -257,8 +280,8 @@ async def _story_items(
 
 
 async def _references(
-    db: AsyncSession, project: Project, unit: PlanningUnit, out: PlanningContext
-) -> tuple[list[WorldSetting], list[Organization], list[Career], list[SettingTimeline]]:
+    db: AsyncSession, project: Project, unit: PlanningUnit,
+) -> SettingReferences:
     worlds = list(
         await db.scalars(
             select(WorldSetting)
@@ -295,10 +318,28 @@ async def _references(
             .order_by(SettingTimeline.id)
         )
     )
-    for kind, entities in (("world", worlds), ("organization", organizations), ("career", careers)):
-        out.references.extend(EntityReference(kind=kind, id=entity.id) for entity in entities)
-    out.references.extend(PlanningRelationshipReference(kind="relationship", timeline_id=t.id) for t in relationships)
     return worlds, organizations, careers, relationships
+
+
+def _explicit_entries(unit: PlanningUnit, rows: SettingReferences) -> list[EntryKey]:
+    worlds, organizations, careers, relationships = rows
+    entries = [
+        *(("world", row.id) for row in worlds),
+        *(("organization", row.id) for row in organizations),
+        *(("career", row.id) for row in careers),
+        *(("character", ident) for row in relationships
+          for ident in (row.character_id, row.related_character_id) if ident is not None),
+    ]
+    if unit.pov_character_id is not None:
+        entries.append(("character", unit.pov_character_id))
+    return entries
+
+
+async def chapter_explicit_entries(db: AsyncSession, project: Project, chapter: Chapter) -> list[EntryKey]:
+    """分析等不渲染规划文本的入口复用作者指定；调用者在包含手动 cast 的整个读取前后验版本。"""
+    with db.no_autoflush:
+        unit = await _chapter_unit(db, project.id, chapter.id)
+        return _explicit_entries(unit, await _references(db, project, unit)) if unit is not None else []
 
 
 def _fields(*values: tuple[str, str]) -> str:
@@ -306,12 +347,17 @@ def _fields(*values: tuple[str, str]) -> str:
 
 
 async def _setting_items(
-    db: AsyncSession, project: Project, chapter: Chapter | None, unit: PlanningUnit, out: PlanningContext
+    db: AsyncSession, project: Project, chapter: Chapter | None, unit: PlanningUnit, out: PlanningContext,
+    rows: SettingReferences,
+    scope: AiScope,
 ) -> list[PlanningTextItem]:
     # 局部导入避免普通上下文与只读规划投影之间出现模块初始化环。
     from app.services import context_builder
 
-    worlds, organizations, careers, relationships = await _references(db, project, unit, out)
+    worlds, organizations, careers, relationships = rows
+    worlds = [row for row in worlds if scope.includes("world", row.id)]
+    organizations = [row for row in organizations if scope.includes("organization", row.id)]
+    careers = [row for row in careers if scope.includes("career", row.id)]
     character_ids = {
         cid
         for timeline in relationships
@@ -320,6 +366,7 @@ async def _setting_items(
     }
     if unit.pov_character_id is not None:
         character_ids.add(unit.pov_character_id)
+    character_ids.intersection_update(scope.ids("character"))
     characters = (
         list(
             await db.scalars(
@@ -349,8 +396,11 @@ async def _setting_items(
         return items
 
     position = StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
-    effective = await context_builder.resolve_effective_cast(db, project, chapter, characters)
+    assert out.setting_scope is not None
+    effective = out.setting_scope.effective
     for character in effective.characters:
+        if character.id not in names:
+            continue
         label = "视角人物" if character.id == unit.pov_character_id else "关系参考人物（不额外要求出场）"
         body = context_builder.format_card(
             character,
@@ -360,6 +410,7 @@ async def _setting_items(
                 effective.careers_by_character.get(character.id, []), effective.stages
             ),
             field_text=format_entry_fields(effective.entry_fields["character", character.id]),
+            hidden=scope.hidden("character", character.id),
         )
         items.append(PlanningTextItem(f"{label} #{character.id}：{character.name}", body))
     out.additional_character_ids = set(names)
@@ -391,45 +442,46 @@ async def _setting_items(
     by_world = {timeline.world_setting_id: timeline for timeline in world_timelines}
     for world in worlds:
         timeline = by_world.get(world.id)
-        content = str(snapshots[timeline.id].fields["content"]) if timeline else world.content
-        fields = format_entry_fields(entry_fields["world", world.id])
+        content = ""
+        if scope.field_visible("world", world.id, "content"):
+            content = str(snapshots[timeline.id].fields["content"]) if timeline else world.content
+        fields = format_entry_fields(scope.entry_fields(entry_fields["world", world.id]))
         body = "\n".join(part for part in (content, fields) if part).strip()
         items.append(PlanningTextItem(f"指定世界观 #{world.id}：{world.title}（{world.category}）", body))
         out.protected_world_ids.add(world.id)
     for organization in organizations:
-        fields = format_entry_fields(entry_fields["organization", organization.id])
+        fields = format_entry_fields(scope.entry_fields(entry_fields["organization", organization.id]))
         note = "静态档案；字段按章初" if fields else "当前静态档案"
+        details = _fields(*(
+            (label, getattr(organization, key)) for key, label in (
+                ("org_type", "类型"), ("purpose", "宗旨"), ("location", "所在地"), ("description", "说明"),
+            ) if scope.field_visible("organization", organization.id, key)
+        ))
         items.append(
             PlanningTextItem(
                 f"指定组织 #{organization.id}：{organization.name}（{note}）",
-                "\n".join(part for part in (_fields(
-                    ("类型", organization.org_type),
-                    ("宗旨", organization.purpose),
-                    ("所在地", organization.location),
-                    ("说明", organization.description),
-                ), fields) if part),
+                "\n".join(part for part in (details, fields) if part),
             )
         )
         out.protected_organization_ids.add(organization.id)
-    stages = await career_service.stages_of(db, [career.id for career in careers])
+    stages = effective.stages
     for career in careers:
-        fields = format_entry_fields(entry_fields["career", career.id])
+        fields = format_entry_fields(scope.entry_fields(entry_fields["career", career.id]))
         note = "静态体系；字段按章初" if fields else "当前静态体系"
         stage_text = "\n".join(
             f"{s.position}. {s.name}" + (f"：{s.description}" if s.description else "")
             for s in stages.get(career.id, [])
         )
+        details = _fields(*(
+            (label, getattr(career, key)) for key, label in (
+                ("kind", "类型"), ("description", "说明"), ("requirements", "获得条件"),
+                ("abilities", "能力"), ("rules", "规则"),
+            ) if scope.field_visible("career", career.id, key)
+        ), ("阶段", stage_text))
         items.append(
             PlanningTextItem(
                 f"指定职业 #{career.id}：{career.name}（{note}）",
-                "\n".join(part for part in (_fields(
-                    ("类型", career.kind),
-                    ("说明", career.description),
-                    ("获得条件", career.requirements),
-                    ("能力", career.abilities),
-                    ("规则", career.rules),
-                    ("阶段", stage_text),
-                ), fields) if part),
+                "\n".join(part for part in (details, fields) if part),
             )
         )
         out.protected_career_ids.add(career.id)
@@ -451,7 +503,7 @@ async def _setting_items(
     )
     for timeline in relationships:
         if timeline.character_id not in names or timeline.related_character_id not in names:
-            out.warnings.append(f"人物关系 #{timeline.id} 的参考角色已不存在，已省略")
+            out.warnings.append(f"人物关系 #{timeline.id} 的参考角色不可用于 AI 或已不存在，已省略")
             continue
         fields = snapshots[timeline.id].fields
         pair = f"{names[timeline.character_id]}／{names[timeline.related_character_id]}"
@@ -483,13 +535,17 @@ async def load_planning_context(
     *,
     scope: PlanningScope = "chapter",
     budget: int = 4000,
+    text_hint: str = "",
+    legacy_text_hint: str = "",
+    stamp: VisibilityStamp | None = None,
 ) -> PlanningContext:
     """不写入 unit／设定，不依赖 UI 当前列或支线筛选；权限由上层项目入口校验。"""
+    from app.services import context_builder
+
     with db.no_autoflush:
+        stamp = stamp if stamp is not None else await read_visibility_stamp(db, project.id)
         fields_revision = await setting_field_service.fields_revision(db, project.id)
-        revision = await db.scalar(select(Project.planning_revision).where(Project.id == project.id))
-        if revision is None:
-            raise NotFoundError("作品不存在")
+        revision = await planning_revision(db, project.id)
         unit, chapter, plan = await _source(db, project, source_kind, source_id)
         out = PlanningContext(
             revision=revision,
@@ -499,10 +555,18 @@ async def load_planning_context(
             chapter_id=chapter.id if chapter else None,
             plan_id=plan.id if plan else (chapter.plan_id if chapter else None),
         )
+        explicit: list[EntryKey] = []
         if unit is not None:
             out.plan_id = unit.plan_id or out.plan_id
             story = await _story_items(db, project, unit, out)
-            settings = await _setting_items(db, project, chapter, unit, out)
+            rows = await _references(db, project, unit)
+            worlds, organizations, careers, relationships = rows
+            explicit.extend(_explicit_entries(unit, rows))
+            for kind, entities in (("world", worlds), ("organization", organizations), ("career", careers)):
+                out.references.extend(EntityReference(kind=kind, id=entity.id) for entity in entities)
+            out.references.extend(
+                PlanningRelationshipReference(kind="relationship", timeline_id=row.id) for row in relationships
+            )
             if chapter is not None:
                 manual = list(
                     await db.scalars(
@@ -522,7 +586,19 @@ async def load_planning_context(
                     if manual_ids
                     else []
                 )
+            explicit.extend(("character", ident) for ident in manual)
             out.references[0:0] = [EntityReference(kind="character", id=cid) for cid in sorted(set(manual))]
+        if chapter is not None:
+            task = await context_builder.chapter_task(db, chapter)
+            out.setting_scope = await context_builder.prepare_chapter_settings(
+                db, project, chapter, task.match_text(), explicit=explicit, stamp=stamp, extra_text=text_hint,
+                legacy_extra_text=legacy_text_hint,
+            )
+        if unit is not None:
+            ai_scope = out.setting_scope.scope if out.setting_scope is not None else await build_scope(
+                db, project.id, explicit=explicit, stamp=stamp,
+            )
+            settings = await _setting_items(db, project, chapter, unit, out, rows, ai_scope)
             # 规划为空时不改变预算；有规划才预留正文上下文和锁定块前的两个换行。
             limit = min(MAX_PLANNING_CHARS, budget - MIN_ORDINARY_CONTEXT_CHARS - 2)
             out.text, out.truncated = fit_planning_context(
@@ -530,11 +606,9 @@ async def load_planning_context(
             )
             if out.truncated:
                 out.warnings.append("部分规划或指定设定因上下文预算被截断，完整内容仍保留在规划中")
-        after = await db.scalar(select(Project.planning_revision).where(Project.id == project.id))
-        if after != revision:
-            # 不在当前 identity map 中重试，避免把缓存的旧节点配上新的 revision。
-            raise ConflictError("规划在读取期间发生变化，请刷新后重试", extra={"code": "planning_context_changed"})
+        await check_planning_revision(db, project.id, revision)
         await setting_field_service.check_fields_revision(db, project.id, fields_revision)
+        await require_visibility_stamp(db, stamp)
         return out
 
 

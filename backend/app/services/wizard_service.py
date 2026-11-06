@@ -69,10 +69,12 @@ from app.services import (
     setting_field_service,
     story_service,
 )
+from app.services.ai_dispatch import guard_provider, read_visibility_stamp, visibility_sessionmaker
 from app.services.cast_service import is_protagonist_role
 from app.services.entity_ai_service import normalize_aliases, normalize_career_assignments, normalize_category
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
+from app.services.setting_ai_context import build_scope, current_character_text, current_world_text
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +151,11 @@ async def load_resume_source(
         raise BadRequestError("只有失败、已取消或已中断的向导任务可以从中断处继续")
     if not trim_to_resume_point(task.output_text or ""):
         raise BadRequestError("该任务没有可续写的部分输出，请重新生成")
+    stamp = await read_visibility_stamp(db, project_id)
+    if (task.input or {}).get("ai_history_epoch", 0) != stamp.epoch:
+        raise ConflictError("AI 可见设置已收紧，旧向导结果不能继续发送，请重新生成", extra={
+            "code": "ai_visibility_changed",
+        })
     return task
 
 
@@ -235,6 +242,15 @@ async def build_wizard_job(
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
 
     info = await project_info(db, project)
+    kinds = {
+        "outline": ("world", "character"),
+        "characters": ("world", "career"),
+        "careers": ("world",),
+        "world": ("character",),
+    }[kind]
+    scope = await build_scope(
+        db, project_id, texts=(format_project_info(info), req.instruction), kinds=kinds, legacy_all=True,
+    )
     override = await prompt_service.get_override(db, user_id, f"wizard.{kind}")
     # 知识库参考资料：查询 = 作品信息 + 本步骤的额外要求
     knowledge = await kb_service.knowledge_for_project(
@@ -247,10 +263,12 @@ async def build_wizard_job(
         allow_private=allow_private,
         purpose=f"向导：{kind}",
     )
-    world_text = story_service.format_world(await story_service.list_items(db, story_service.WORLD, project_id))
-    characters_text = story_service.format_characters(
-        await story_service.list_items(db, story_service.CHARACTERS, project_id)
-    )
+    world_text = current_world_text(
+        scope, await story_service.list_items(db, story_service.WORLD, project_id),
+    ) if "world" in kinds else ""
+    characters_text = current_character_text(
+        scope, await story_service.list_items(db, story_service.CHARACTERS, project_id),
+    ) if "character" in kinds else ""
     outline_text = story_service.format_outlines(await story_service.list_items(db, story_service.OUTLINES, project_id))
 
     if kind == "outline":
@@ -281,7 +299,7 @@ async def build_wizard_job(
             world_text=world_text,
             outline_text=outline_text,
             instruction=req.instruction,
-            careers_text=await career_service.careers_reference(db, project_id),
+            careers_text=await career_service.careers_reference(db, project_id, scope=scope),
             knowledge=knowledge,
             override=override,
         )
@@ -314,10 +332,11 @@ async def build_wizard_job(
             generated=prefix,
             override=await prompt_service.get_override(db, user_id, "wizard.continue"),
         )
+    await scope.verify(db)
     return WizardJob(
         project_id=project_id,
         kind=kind,
-        provider=provider,
+        provider=guard_provider(provider, scope.stamp, visibility_sessionmaker(db)),
         model=cfg.model,
         messages=messages,
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
@@ -651,6 +670,10 @@ async def save_wizard_result(
 
     大纲覆盖模式（默认）与其他类型一样覆盖旧数据（覆盖前存大纲快照）；大纲追加模式不删旧数据，items 只含新增条目。
     """
+    from app.services.ai_dispatch import lock_visibility_write
+
+    if kind != "outline":
+        await lock_visibility_write(db, project_id)
     await project_lifecycle.lock_active(db, project_id)
     targets = await _require_safe_replacement(db, project_id, kind)
     obj = extract_json(raw_text)

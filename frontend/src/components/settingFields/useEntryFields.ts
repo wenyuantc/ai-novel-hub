@@ -33,7 +33,7 @@ export function useEntryFields(projectId: number, entry: SettingEntryRef) {
     scope.current = key
     return () => { scope.current = ''; sequence.current += 1; pending.forEach((controller) => controller.abort()); pending.clear() }
   }, [key])
-  useProjectRefresh(projectId, ['setting_fields', 'characters', 'world', 'organizations', 'careers', 'chapters'], refresh)
+  useProjectRefresh(projectId, ['setting_fields', 'setting-ai-visibility', 'characters', 'world', 'organizations', 'careers', 'chapters'], refresh)
   const isCurrent = useCallback(() => scope.current === key && identityNow() === identity && canReadNow(), [key, identity, canReadNow])
   useEffect(() => {
     if (!access.canRead) return

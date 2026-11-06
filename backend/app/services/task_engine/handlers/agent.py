@@ -8,8 +8,9 @@ from app.core.errors import ConflictError
 from app.models import AgentChange, AgentConversation, AgentMessage, Task
 from app.schemas.agent import SendMessage
 from app.services import ai_config_service, skill_service
-from app.services.agent import context, service
+from app.services.agent import context, history, service
 from app.services.agent.runner import AgentJob, run_agent
+from app.services.ai_dispatch import guard_provider
 from app.services.task_engine.registry import TaskSpec, register
 
 
@@ -18,8 +19,9 @@ class AgentHandler:
 
     async def validate_and_claim(self, db, ctx, *, user_id, kind, params):
         pid, cid = int(params["project_id"]), int(params["conversation_id"])
-        conversation = await service.owned_conversation(db, user_id, pid, cid)
+        conversation = await service.owned_conversation(db, user_id, pid, cid, lock=True)
         await db.execute(select(AgentConversation.id).where(AgentConversation.id == cid).with_for_update())
+        stamp = await history.require_open_history(db, conversation, adopt_empty=True)
         if await service.active_turn(db, cid):
             raise ConflictError("当前会话已有进行中或待确认的轮次")
         req = SendMessage.model_validate(params)
@@ -56,7 +58,7 @@ class AgentHandler:
             chapter_id=None,
             resource_key=f"agent:{cid}",
             title=f"智能体：{req.content[:20]}",
-            input={"request": params, "ai_config_id": cfg.id, "message_id": message.id},
+            input={"request": params, "ai_config_id": cfg.id, "message_id": message.id, "history_epoch": stamp.epoch},
         )
 
     async def validate_retry(self, db, ctx, *, user_id, task):
@@ -64,7 +66,8 @@ class AgentHandler:
             raise ConflictError("此轮已有重试任务，请使用最新任务继续")
         req = task.input["request"]
         cid = int(req["conversation_id"])
-        await service.owned_conversation(db, user_id, task.project_id, cid)
+        conversation = await service.owned_conversation(db, user_id, task.project_id, cid, lock=True)
+        await history.require_open_history(db, conversation, expected_epoch=task.input.get("history_epoch"))
         if await service.active_turn(db, cid):
             raise ConflictError("当前会话已有进行中或待确认的轮次")
         cfg = await ai_config_service.resolve_config(db, user_id, task.input.get("ai_config_id"))
@@ -88,7 +91,8 @@ class AgentHandler:
 
     async def revalidate_resume(self, db, ctx, task):
         req = task.input["request"]
-        await service.owned_conversation(db, task.user_id, task.project_id, req["conversation_id"])
+        conversation = await service.owned_conversation(db, task.user_id, task.project_id, req["conversation_id"])
+        await history.require_open_history(db, conversation, expected_epoch=task.input.get("history_epoch"))
         pending = await db.scalar(
             select(AgentChange.id)
             .where(AgentChange.turn_task_id == task.id, AgentChange.status.in_(("proposed", "executing")))
@@ -103,7 +107,10 @@ class AgentHandler:
     async def build_job(self, ctx, task):
         async with ctx.sessionmaker() as db:
             req = task.input["request"]
-            conversation = await service.owned_conversation(db, task.user_id, task.project_id, req["conversation_id"])
+            conversation = await service.owned_conversation(
+                db, task.user_id, task.project_id, req["conversation_id"], lock=True,
+            )
+            stamp = await history.require_open_history(db, conversation, expected_epoch=task.input.get("history_epoch"))
             cfg = await ai_config_service.resolve_config(db, task.user_id, task.input.get("ai_config_id"))
             provider = await ai_config_service.build_provider(
                 cfg,
@@ -134,7 +141,8 @@ class AgentHandler:
             )
             await db.commit()
             return AgentJob(
-                task.id, task.user_id, task.project_id, conversation.id, task.input["message_id"], cfg, provider
+                task.id, task.user_id, task.project_id, conversation.id, task.input["message_id"], cfg,
+                guard_provider(provider, stamp, ctx.sessionmaker), stamp,
             )
 
     def run(self, job, ctx):

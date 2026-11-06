@@ -84,7 +84,7 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 
 ---
 
-## 场景：卡片导入导出（`ainovel.cards` v5，兼容 v1–v4）
+## 场景：卡片导入导出（`ainovel.cards` v6，兼容 v1–v5）
 
 ### 契约
 
@@ -101,7 +101,7 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 - 测试：`tests/test_cards.py`（跨项目往返 + 重命名、skip 关联已有、无法关联与循环、格式 / 大小 400、`rename_for`）。
 - **v2（`10-23-career-system`）**：曾导出 `version: 2`；角色项增加 `careers: [{career_name, role, stage_name, note}]`，顶层增加
   `careers: [{name, kind, description, requirements, abilities, rules, stages: [{name, description}]}]`（只含所导出角色挂接的职业）。
-  v1 没有职业，按原逻辑导入。当前 `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5)`，其他版本 400。
+  v1 没有职业，按原逻辑导入。当前 `parse_card` 接受 `SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5, 6)`，其他版本 400。
   旧版导入：职业按名匹配目标项目，匹配上复用（卡片里多出的阶段追加到末尾）、匹配不上新建；挂接的阶段按名匹配，对不上追加到末尾，
   阶段名为空取第 1 阶；经 `assign_new(source="import")` 写入，职业对不上 / 类别不符 / 超限 / 已挂 → warning 跳过。
   预览增加 `careers: [{name, status: new|reuse, stages_added: [阶段名]}]`；结果增加 `careers: [{name, id, action: created|reused,
@@ -111,6 +111,7 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 - v4预览含`fields_revision/can_import/field_definitions/references`；定义冲突显式reuse具体definition＋逐option映射或rename新建，引用显式`mappings.references[ref]=EntityRef`。包内同名skip仍未解析，明确指定目标或rename后才解决；未解决不可导入。卡片只复制当前快照，新角色无源章节事件；skip不覆盖值、历史和职业阶段。完整规则及原子回滚见[字段契约](./setting-fields.md)。
 - **v5（整理标签）**：角色／组织／职业项增加规范`setting_tags`，不导出分类规则或成员快照，世界观仍无卡片容器。预览增加`categories_revision`，确认必须带原预览的`expected_categories_revision`，缺失400 `categories_revision_required`；字段CAS和显式引用映射继续执行。只给new／rename写标签，整笔只领一次分类版本，skip／职业reuse不覆盖现有标签，全skip不递增。
 - 旧v1–v4缺失或规范空标签可升级，非空未来标签、null和非法形状拒绝。前端发现字段或分类版本变化时，包括主动更新预览，保留原预览与原版本并显示候选，作者明确采用后才能确认；不能悄悄换版本重提。详见[自动分类契约](./setting-categories.md)。
+- **v6（AI 可见性）**：角色／组织／职业项增加 `ai_settings`、`ai_link_refs`；兼容角色保留 `legacy_always_in_context`，共享定义和旧字段携带 `ai_hidden`。连接通过包内唯一 ref 或同类型包外显式映射，不按名称隐式认领；新建／重命名才写入配置，复用不覆盖，定义复用必须匹配可见性。确认增加 `expected_ai_visibility_revision`，与原字段／分类 CAS 并存。详细验证见 [AI 可见性契约](./setting-ai-visibility.md)。
 
 ---
 
@@ -145,6 +146,8 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 
 `context_builder.build_chapter_context(db, project, chapter, budget)`（签名不变，`generation_service` 不需要感知选角）、
 `cast_service.select_cast`、`/chapters/{cid}/cast`。
+
+以下主角／常驻和“其他角色”名单规则描述未配置的旧条目。新条目和显式配置使用 [AI 可见性契约](./setting-ai-visibility.md)，全入口先校验资格和字段遮罩；章初时点、预算和手动 cast API 保留。
 
 ### 2. 签名
 
@@ -264,7 +267,7 @@ async def careers_reference(db, project_id) -> str   # 「剑修（主修）：�
   职业对不上 / 超限 / 重复 → 忽略并写入 `done.result.warnings`，阶段对不上 → 第 1 阶 + warning；`done.result` 另含
   `assignments: AssignmentOut[]`。项目没有职业时提示词与写入完全不变（AC6）。
 - 项目级挂接列表 `GET /projects/{pid}/character-careers` → `AssignmentOut[]`（按角色、主职业在前；先校验项目归属，他人 404），供角色卡片汇总主 / 副职业一次取回，前端不得按职业逐个请求 `holders` 拼装。
-- 卡片 v5：见上方「卡片导入导出」；旧职业结构兼容v2，v4起同名默认skip不追加阶段，v5复用不覆盖整理标签。
+- 卡片 v6：见上方「卡片导入导出」；旧职业结构兼容 v2，v4 起同名默认 skip 不追加阶段，复用不覆盖整理标签或 AI 可见策略。
 
 | kind | resource_key | 路由 | `done.result` |
 |---|---|---|---|

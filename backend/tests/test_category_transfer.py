@@ -32,6 +32,7 @@ from tests.test_project_transfer import (
     _preview_raw,
     _setup,
     _typed_fields_backup,
+    _without_ai_settings,
 )
 from tests.test_recycle_bin import item as recycle_item
 from tests.test_setting_fields_postgresql import (
@@ -74,7 +75,7 @@ async def _category_backup(client, app):
 
 def _old_backup(original, version):
     data = deepcopy(original)
-    data["version"] = version
+    _without_ai_settings(data, version)
     for table in CATEGORY_TABLES:
         data["tables"].pop(table, None)
     for table in ENTITY_TABLES:
@@ -95,7 +96,7 @@ def _old_backup(original, version):
 
 async def test_categories_v5_roundtrip_preserves_tags_rules_and_resets_both_revisions(client, app):
     project, original = await _category_backup(client, app)
-    assert (original["version"], original["app_schema"]) == (5, "0036")
+    assert (original["version"], original["app_schema"]) == (6, "0037")
     assert not {"fields_revision", "categories_revision"}.intersection(original["project"])
     imported = await _import(client, original)
     result = await _backup(client, imported["project"]["id"])
@@ -131,7 +132,7 @@ async def test_real_old_backups_gain_only_empty_category_state(client, app, vers
     data["project"].update(fields_revision={"ignored": True}, categories_revision=None)
     imported = await _import(client, data)
     result = await _backup(client, imported["project"]["id"])
-    assert result["version"] == 5
+    assert result["version"] == 6
     assert all(result["tables"][table] == [] for table in CATEGORY_TABLES)
     assert all(row["setting_tags"] == [] for table in ENTITY_TABLES for row in result["tables"][table])
     if version == 4:

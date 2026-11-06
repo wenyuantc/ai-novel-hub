@@ -24,7 +24,7 @@ ENDPOINTS = {
 async def identity_client(request, tmp_path, fake_llm):
     """两条真实建库路径都必须保护身份，不能只改测试使用的 ORM。"""
     if request.param == "migrated":
-        await asyncio.to_thread(command.upgrade, _config(tmp_path / "test.db"), "0036")
+        await asyncio.to_thread(command.upgrade, _config(tmp_path / "test.db"), "head")
     application = create_app(make_settings(tmp_path), provider_factory=fake_llm.factory, start_task_engine=False)
     try:
         if request.param == "create_all":

@@ -40,6 +40,7 @@ from app.schemas.planning import (
     RelationshipReference,
     SubplotCrossingOut,
 )
+from app.services.mentions.context import MentionCandidate, load_candidates
 
 REFERENCE_JOINS = {
     "world": (PlanningUnitWorld, "world_id", WorldSetting),
@@ -62,34 +63,22 @@ async def revision(db: AsyncSession, project_id: int) -> int:
     return await db.scalar(select(Project.planning_revision).where(Project.id == project_id)) or 0
 
 
-async def entries(db: AsyncSession, project_id: int) -> list[PlanningEntry]:
+async def entries(
+    db: AsyncSession, project_id: int, *, candidates: list[MentionCandidate] | None = None,
+) -> list[PlanningEntry]:
     """只加载目录身份；关系选择包含隐藏及尚无当前载体的时间线。"""
-    characters = list(await db.execute(select(Character.id, Character.name).where(Character.project_id == project_id)))
-    names = {row.id: row.name for row in characters}
+    if candidates is None:
+        candidates = await load_candidates(db, project_id)
+    names = {item.ref.id: item.ref.name for item in candidates if item.ref.kind == "character"}
     result = [
         PlanningEntry(
-            reference=EntityReference(kind="character", id=row.id),
-            name=row.name,
-            category="character",
-            tracking_supported=True,
+            reference=EntityReference(kind=item.ref.kind, id=item.ref.id),
+            name=item.ref.name,
+            category=item.ref.category if item.ref.kind in ("character", "world") else None,
+            tracking_supported=item.tracking.enabled,
         )
-        for row in characters
+        for item in candidates
     ]
-    worlds = await db.execute(
-        select(WorldSetting.id, WorldSetting.title, WorldSetting.category).where(WorldSetting.project_id == project_id)
-    )
-    result.extend(
-        PlanningEntry(
-            reference=EntityReference(kind="world", id=row.id),
-            name=row.title,
-            category=row.category,
-            tracking_supported=row.category in ("place", "item"),
-        )
-        for row in worlds
-    )
-    for kind, model in (("organization", Organization), ("career", Career)):
-        found = await db.execute(select(model.id, model.name).where(model.project_id == project_id))
-        result.extend(PlanningEntry(reference=EntityReference(kind=kind, id=row.id), name=row.name) for row in found)
     carriers = {
         (row.pair_low, row.pair_high): row
         for row in await db.execute(

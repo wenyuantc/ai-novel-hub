@@ -135,12 +135,14 @@ async def test_wizard_characters_and_world(client, fake_llm):
     fake_llm.push(
         '```json\n[{"title": "星际联邦", "content": "十二星系"}, {"title": "跃迁", "content": "超光速"}]\n```'
     )
-    _, events = await run_task(client, await client.post(f"{base}/wizard/world"))
+    _, events = await run_task(client, await client.post(
+        f"{base}/wizard/world", json={"instruction": "为林舟设计世界"},
+    ))
     assert events[-1][0] == "done"
     world = (await client.get(f"{base}/world")).json()
     assert [w["title"] for w in world] == ["星际联邦", "跃迁"]
     # 世界观提示词带入已有角色
-    assert "林舟" in fake_llm.calls[-1]["messages"][-1]["content"]
+    assert "■ 林舟" in fake_llm.calls[-1]["messages"][-1]["content"]
 
 
 async def _setting_timeline(client, base, **params):

@@ -23,26 +23,33 @@ from app.models import (
     Chapter,
     ChapterPlan,
     ChapterVersion,
+    Character,
     Project,
     RelationshipType,
     RetrievalChunk,
+    SettingFieldDefinition,
     SettingProgression,
     SettingTextField,
     SettingTimeline,
     StoryMemory,
     Task,
+    WorldSetting,
 )
 from app.models.planning import PlanningUnit
 from app.models.setting_fields import SettingReferenceHandle
+from app.schemas.setting_ai_visibility import StoredAiSettings, legacy_ai_settings
 from app.services import (
     memory_service,
     planning_lifecycle,
     project_lifecycle,
     retrieval_service,
+    setting_ai_visibility,
     setting_category_service,
     setting_field_service,
     version_service,
 )
+from app.services.ai_dispatch import lock_visibility_write
+from app.services.cast_service import is_protagonist_role
 from app.services.chapter_service import count_words
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, TableRule
 from app.services.project_transfer.remap import RemapContext, setting_event_value, setting_payload
@@ -51,6 +58,10 @@ from app.services.setting_category_validation import assert_canonical_setting_ta
 Snapshot = dict[str, dict[str, dict[str, Any]]]
 Effect = dict[str, Any]
 logger = logging.getLogger(__name__)
+EFFECT_VERSION = 5
+_PROJECT_RUNTIME_REVISIONS = frozenset({
+    "planning_revision", "fields_revision", "categories_revision", "ai_visibility_revision", "ai_history_epoch",
+})
 
 # 注册表的拓扑顺序用于插入，逆序用于删除；额外包含实际的级联 / 章号平移影响。
 EFFECT_TABLES = frozenset(
@@ -83,6 +94,7 @@ EFFECT_TABLES = frozenset(
         "setting_field_definitions",
         "setting_field_options",
         "setting_reference_handles",
+        "setting_ai_links",
         "setting_categories",
         "setting_category_rules",
         "chapter_versions",
@@ -129,6 +141,7 @@ _LABELS = {
     "setting_field_definitions": "字段定义",
     "setting_field_options": "字段选项",
     "setting_reference_handles": "字段引用目标",
+    "setting_ai_links": "设定 AI 关联",
     "setting_categories": "设定分类",
     "setting_category_rules": "分类规则",
     "chapter_versions": "章节版本",
@@ -170,8 +183,7 @@ def _columns(rule: TableRule):
     table = rule.model.__table__
     if rule.table in _LINK_ONLY:
         return [table.c[name] for name in ("id", "project_id", "chapter_id")]
-    ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS
-               | {"planning_revision", "fields_revision", "categories_revision"}
+    ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS | _PROJECT_RUNTIME_REVISIONS
                if rule.model is Project else _IGNORED)
     return [col for col in table.columns if col.name not in ignored and col.name != "word_count"]
 
@@ -303,7 +315,7 @@ def diff(before: Snapshot, after: Snapshot) -> list[Effect]:
                         "pk": _pk(rule, previous or current),
                         "before": deepcopy(previous),
                         "after": deepcopy(current),
-                        "format_version": 4,
+                        "format_version": EFFECT_VERSION,
                     }
                 )
     return result
@@ -317,7 +329,7 @@ def chapter_text_effect(
         "pk": {"id": chapter_id},
         "before": {"version_id": before_version_id, "hash": before_hash},
         "after": {"version_id": after_version_id, "hash": after_hash},
-        "format_version": 4,
+        "format_version": EFFECT_VERSION,
     }
 
 
@@ -364,7 +376,7 @@ def validate_effect_versions(effects: list[Effect]) -> None:
     """旧快照缺少基线和变化记录时，不可用 Core 恢复静默破坏时间线。"""
     for effect in effects:
         version = effect.get("format_version", 1)
-        if type(version) is not int or version not in (1, 2, 3, 4):
+        if type(version) is not int or not 1 <= version <= EFFECT_VERSION:
             raise ConflictError("该智能体修改的效果版本不受支持", extra={"code": "unsupported_effect_version"})
         if version == 1 and _legacy_affects_timeline(effect):
             raise ConflictError(
@@ -504,7 +516,7 @@ async def _preflight_category_effects(db: AsyncSession, project_id: int, effects
                 ("setting_tags" in before) != ("setting_tags" in after)
             ):
                 _legacy_category_conflict()
-        elif version == 4:
+        elif version >= 4:
             for row in (before, after):
                 if row is None:
                     continue
@@ -554,6 +566,62 @@ async def preflight_effect_versions(db: AsyncSession, project_id: int, effects: 
     validate_effect_versions(effects)
     await _preflight_legacy_field_effects(db, project_id, effects)
     await _preflight_category_effects(db, project_id, effects)
+    _preflight_visibility_effects(effects)
+
+
+_AI_ENTRY_KINDS = {"characters": "character", "world_settings": "world", "organizations": "organization",
+                   "careers": "career"}
+
+
+def _legacy_visibility_defaults(table: str) -> dict:
+    if table in _AI_ENTRY_KINDS:
+        return legacy_ai_settings().model_dump()
+    if table in ("setting_field_definitions", "setting_text_fields"):
+        return {"ai_hidden": False}
+    return {}
+
+
+def _preflight_visibility_effects(effects: list[Effect]) -> None:
+    for effect in effects:
+        table, before, after = effect["table"], effect["before"], effect["after"]
+        version = effect.get("format_version", 1)
+        defaults = _legacy_visibility_defaults(table)
+        if table == "setting_ai_links" and version < EFFECT_VERSION:
+            raise ConflictError(
+                "旧智能体修改缺少 AI 关联资料，请手动修正",
+                extra={"code": "legacy_effect_requires_manual_correction"},
+            )
+        if not defaults:
+            continue
+        values = [{key: row[key] for key in defaults if key in row} for row in (before, after) if row is not None]
+        if version < EFFECT_VERSION:
+            if any(type(value) is not type(defaults[key]) or value != defaults[key]
+                   for row in values for key, value in row.items()):
+                raise ConflictError(
+                    "旧智能体修改不能恢复 AI 可见性设置，请手动修正",
+                    extra={"code": "legacy_effect_requires_manual_correction"},
+                )
+            continue
+        try:
+            for row in (before, after):
+                if row is None:
+                    continue
+                config = {key: row[key] for key in defaults}
+                if table in _AI_ENTRY_KINDS:
+                    normalized = setting_ai_visibility.normalize_settings(
+                        _AI_ENTRY_KINDS[table], StoredAiSettings.model_validate(config),
+                    )
+                    if normalized.model_dump() != config:
+                        raise ValueError("AI 设置未规范化")
+                elif type(config["ai_hidden"]) is not bool or (
+                    table == "setting_text_fields" and config["ai_hidden"] and row.get("definition_id") is not None
+                ):
+                    raise ValueError("字段可见性不合法")
+        except (KeyError, AppError, ValueError):
+            _raise_conflicts([_conflict(effect, "AI 可见性快照缺失或不合法")])
+        if len(values) == 2 and values[0] != values[1]:
+            # 普通智能体操作不允许写作者配置；不把异常的 before/after 当作隐私开关。
+            _raise_conflicts([_conflict(effect, "不能通过撤销更改作者的 AI 设置")])
 
 
 def _categories_affected(effects: list[Effect]) -> bool:
@@ -632,6 +700,8 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
                 if fk.column.table.name != effect["table"]:
                     continue
                 value = effect["pk"].get(fk.column.name)
+                if value is None:
+                    continue  # 复合外键的附加归属列不是被撤销主键。
                 rows = (
                     await db.execute(select(*table.primary_key.columns).where(fk.parent == value).with_for_update())
                 ).mappings()
@@ -716,8 +786,21 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
         current = await _current(db, rule, effect["pk"], project_id)
         expected_after = deepcopy(after)
         if name == "projects" and expected_after is not None:
-            expected_after.pop("fields_revision", None)
-            expected_after.pop("categories_revision", None)
+            for key in _PROJECT_RUNTIME_REVISIONS:
+                expected_after.pop(key, None)
+        legacy_metadata = (
+            _legacy_visibility_defaults(name) if effect.get("format_version", 1) < EFFECT_VERSION else {}
+        )
+        if legacy_metadata and expected_after is not None:
+            if before is None:
+                # 删除旧效果创建的行时，不能一并删除作者后来追加的限制。
+                expected_after.update(legacy_metadata)
+            else:
+                # 旧 UPDATE 只回写业务内容，不能把缺失的隐私列解释为默认可见。
+                for key in legacy_metadata:
+                    expected_after.pop(key, None)
+                    if current is not None:
+                        current.pop(key, None)
         if name == "setting_text_fields" and expected_after is not None and effect.get("format_version", 1) < 3:
             # 仅 legacy 文本允许补充迁移默认值；shared 已在整轮预检中拒绝。
             expected_after.setdefault("definition_id", None)
@@ -761,9 +844,8 @@ def _values(rule: TableRule, row: dict) -> dict:
     if rule.table == "chapter_versions":
         values["word_count"] = count_words(values["content"])
     if rule.table == "projects":
-        values.pop("planning_revision", None)
-        values.pop("fields_revision", None)
-        values.pop("categories_revision", None)
+        for key in _PROJECT_RUNTIME_REVISIONS:
+            values.pop(key, None)
     return values
 
 
@@ -780,6 +862,14 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
 
     def values_before(rule, effect):
         values = _values(rule, effect["before"])
+        if effect.get("format_version", 1) < EFFECT_VERSION:
+            legacy = _legacy_visibility_defaults(rule.table)
+            if effect["after"] is None:
+                # INSERT 必须显式补兼容 NULL，而不能回落到新行默认 detected。
+                values.update(legacy)
+            else:
+                for key in legacy:
+                    values.pop(key, None)
         if rule.table == "planning_units" and values["id"] in next_epochs:
             values["binding_epoch"] = next_epochs[values["id"]]
         return values
@@ -811,6 +901,8 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
                     values["field_key"] = effect["before"]["field_key"]
                 if rule.table == "setting_text_fields" and "definition_id" in values:
                     values["label"] = effect["before"]["label"]
+                    if effect.get("format_version", 1) == EFFECT_VERSION:
+                        values["ai_hidden"] = effect["before"]["ai_hidden"]
                 if rule.table == "setting_category_rules":
                     # tag/dropdown 互斥；解除新定义或选项引用时原子恢复整组载荷。
                     values.update({name: effect["before"][name]
@@ -920,6 +1012,99 @@ async def _restore_text(db: AsyncSession, project_id: int, effect: Effect) -> No
     await version_service.record(db, chapter, "restore", note=f"撤销智能体修改，恢复自 v{version.seq}")
 
 
+async def _guard_field_visibility_rebinding(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """旧快照的重绑不能把继承自定义目录的隐藏字段悄悄改回可见。"""
+    candidates = [
+        effect for effect in effects if effect["table"] == "setting_text_fields"
+        and effect["before"] is not None and effect["after"] is not None
+        and effect["before"].get("definition_id") != effect["after"].get("definition_id")
+    ]
+    if not candidates:
+        return
+    current_flags = dict((await db.execute(
+        select(SettingTextField.id, SettingTextField.ai_hidden)
+        .join(SettingTimeline).where(
+            SettingTimeline.project_id == project_id,
+            SettingTextField.id.in_([effect["pk"]["id"] for effect in candidates]),
+        )
+    )).all())
+    definitions = {
+        row.get("definition_id") for effect in candidates for row in (effect["before"], effect["after"])
+        if row.get("definition_id") is not None
+    }
+    current_definitions = dict((await db.execute(
+        select(SettingFieldDefinition.id, SettingFieldDefinition.ai_hidden).where(
+            SettingFieldDefinition.project_id == project_id, SettingFieldDefinition.id.in_(definitions),
+        )
+    )).all())
+    restoring_definitions = {
+        effect["pk"]["id"]: effect["before"].get("ai_hidden", False)
+        for effect in effects if effect["table"] == "setting_field_definitions" and effect["before"] is not None
+    }
+    for effect in candidates:
+        before, after = effect["before"], effect["after"]
+        before_definition, after_definition = before.get("definition_id"), after.get("definition_id")
+        current_hidden = (
+            current_flags.get(effect["pk"]["id"], False) if after_definition is None
+            else current_definitions.get(after_definition, False)
+        )
+        restored_hidden = (
+            before.get("ai_hidden", current_flags.get(effect["pk"]["id"], False)) if before_definition is None
+            else restoring_definitions.get(before_definition, current_definitions.get(before_definition, False))
+        )
+        if (current_hidden and not restored_hidden) or (
+            before_definition is not None and current_flags.get(effect["pk"]["id"], False)
+        ):
+            _raise_conflicts([_conflict(effect, "重绑可能放宽字段的 AI 可见限制")])
+
+
+async def _invalidate_restored_visibility(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    def pinned(row: dict) -> bool:
+        return bool(row.get("always_in_context")) or is_protagonist_role(row.get("role_type"))
+
+    changed = tighten = False
+    legacy_pins: dict[int, bool] = {}
+    legacy_world_tracking: set[int] = set()
+    for effect in effects:
+        table, before, after = effect["table"], effect["before"], effect["after"]
+        if table == "setting_ai_links":
+            changed = True
+            tighten |= after is not None
+        elif (before is None or after is None) and _legacy_visibility_defaults(table):
+            row = before if before is not None else after
+            if row is not None and any(row.get(key, value) != value
+                                       for key, value in _legacy_visibility_defaults(table).items()):
+                changed = True
+        elif table == "characters" and before is not None and after is not None and pinned(before) != pinned(after):
+            legacy_pins[effect["pk"]["id"]] = pinned(after)
+        elif table == "world_settings" and before is not None and after is not None:
+            tracks_before = setting_ai_visibility.effective_mention_enabled(
+                "world", None, None, category=before.get("category"),
+            )
+            tracks_after = setting_ai_visibility.effective_mention_enabled(
+                "world", None, None, category=after.get("category"),
+            )
+            if tracks_before != tracks_after:
+                legacy_world_tracking.add(effect["pk"]["id"])
+    if legacy_pins:
+        ids = list(await db.scalars(select(Character.id).where(
+            Character.project_id == project_id, Character.ai_mode.is_(None), Character.id.in_(legacy_pins),
+        )))
+        changed |= bool(ids)
+        tighten |= any(legacy_pins[entry_id] for entry_id in ids)
+    if legacy_world_tracking:
+        changed_tracking = await db.scalar(select(WorldSetting.id).where(
+            WorldSetting.project_id == project_id,
+            WorldSetting.ai_mode.is_(None),
+            WorldSetting.mention_enabled.is_(None),
+            WorldSetting.id.in_(legacy_world_tracking),
+        ).limit(1)) is not None
+        changed |= changed_tracking
+        tighten |= changed_tracking
+    if changed:
+        await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=tighten)
+
+
 async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, discard_inserts: bool = True) -> bool:
     """原子撤销一项，不 commit。返回是否需在外层提交后 enqueue_memory。
 
@@ -928,6 +1113,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
     discard_inserts=False，待整轮提交成功后统一移除已撤销的新建对象。
     """
     validate_effect_versions(effects)
+    await lock_visibility_write(db, project_id)
     await db.flush()
     # SQLite legacy transaction mode 的 SELECT 不会真正 BEGIN；直接 SAVEPOINT 后
     # RELEASE 会提交它，使调用方无法回滚整轮。无值变化 UPDATE 同时取得项目写锁。
@@ -944,12 +1130,14 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
     try:
         async with db.begin_nested():
             await _validate(db, project_id, effects)
+            await _guard_field_visibility_rebinding(db, project_id, effects)
             restoring = True
             await _restore_rows(db, effects)
             await _validate_restored_scopes(db, project_id, effects)
             await _refresh_loaded(db, effects)
             try:
                 await setting_field_service.validate_project_field_graph(db, project_id)
+                await setting_ai_visibility.validate_project_links(db, project_id)
                 await setting_category_service.validate_project_category_graph(db, project_id)
             except (AppError, ValueError) as exc:
                 raise ConflictError("字段资料或历史引用已变化，无法撤销", extra={"code": "undo_conflict"}) from exc
@@ -1004,6 +1192,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
             if _categories_affected(effects):
                 current_revision = await setting_category_service.categories_revision(db, project_id)
                 await setting_category_service.claim_categories_revision(db, project_id, current_revision)
+            await _invalidate_restored_visibility(db, project_id, effects)
             # 全部恢复与跨主体校验成功后再失效规划版本；失败的保存点不应提前
             # 修改并 expire 调用方已加载的 Project，破坏后续的异步冲突处理。
             if any(effect["table"] in EFFECT_TABLES - {"projects", "generation_logs", "tasks"} for effect in effects):

@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from app.models import Career, CareerHistory, CharacterCareer, GenerationLog
 from app.services.career_service import normalize_career_drafts
 from app.services.context_builder import CastSection, assemble_context
-from tests.helpers import create_ai_config, create_project, register, run_task
+from tests.helpers import create_ai_config, create_project, mark_existing_settings, register, run_task
 
 
 async def _count(app, model) -> int:
@@ -60,7 +60,7 @@ async def test_career_generate_draft_only(app, client, fake_llm):
     await client.post(f"{base}/world", json={"title": "灵气", "content": "天地灵气复苏", "category": "rule"})
     fake_llm.push("```json\n" + json.dumps(GENERATED, ensure_ascii=False) + "\n```")
 
-    resp = await client.post(f"{base}/careers/generate", json={"count": 3, "instruction": "偏东方"})
+    resp = await client.post(f"{base}/careers/generate", json={"count": 3, "instruction": "偏东方，参考丹师和灵气"})
     assert resp.status_code == 202, resp.text
     assert (resp.json()["kind"], resp.json()["title"]) == ("career.generate", "AI 生成职业")
     task, events = await run_task(client, resp)
@@ -131,7 +131,9 @@ async def test_character_generate_with_career_suggestions(app, client, fake_llm)
             ensure_ascii=False,
         )
     )
-    _, events = await run_task(client, await client.post(f"{base}/characters/generate"))
+    _, events = await run_task(client, await client.post(
+        f"{base}/characters/generate", json={"instruction": "参考剑修、丹师和法修"},
+    ))
     result = events[-1][1]["result"]
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "剑修（主修）：练气 → 筑基 → 金丹" in prompt and '"careers"' in prompt
@@ -195,7 +197,7 @@ async def test_wizard_careers_then_characters(app, client, fake_llm):
     await client.post(f"{base}/world", json={"title": "灵气", "content": "灵气复苏"})
 
     fake_llm.push(json.dumps(CAREERS_WIZARD, ensure_ascii=False))
-    resp = await client.post(f"{base}/wizard/careers", json={"career_count": 2})
+    resp = await client.post(f"{base}/wizard/careers", json={"career_count": 2, "instruction": "参考灵气体系"})
     assert resp.status_code == 202, resp.text
     assert (resp.json()["kind"], resp.json()["title"]) == ("wizard.careers", "职业体系向导")
     task, events = await run_task(client, resp)
@@ -233,7 +235,9 @@ async def test_wizard_careers_then_characters(app, client, fake_llm):
             ensure_ascii=False,
         )
     )
-    _, events = await run_task(client, await client.post(f"{base}/wizard/characters", json={"character_count": 3}))
+    _, events = await run_task(client, await client.post(
+        f"{base}/wizard/characters", json={"character_count": 3, "instruction": "可参考剑修、丹师"},
+    ))
     result = events[-1][1]["result"]
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "剑修（主修）：练气 → 筑基" in prompt and '"careers"' in prompt
@@ -277,7 +281,7 @@ async def test_wizard_careers_parse_error_keeps_data(client, fake_llm):
     assert [c["name"] for c in (await client.get(f"{base}/careers")).json()] == ["剑修"]
 
 
-async def test_chapter_context_includes_careers(client, fake_llm):
+async def test_chapter_context_includes_careers(app, client, fake_llm):
     """AC5：涉及角色卡含职业行，【职业体系】列出所挂职业的完整阶梯；未涉及的职业不出现。"""
     base = await _setup(client)
     stages = ["练气", "筑基", "金丹", "元婴", "化神", "炼虚", "合体", "大乘", "渡劫"]
@@ -294,6 +298,8 @@ async def test_chapter_context_includes_careers(client, fake_llm):
     # 白夜不在本章：魔修不应出现
     await client.post(f"{base}/characters/{villain['id']}/careers", json={"career_id": magic["id"]})
     ch = (await client.post(f"{base}/chapters", json={"title": "下山"})).json()
+    # 旧档案的主角常驻与名单行为保留；新默认另由可见性专项测试覆盖。
+    await mark_existing_settings(app, ch["project_id"])
 
     fake_llm.push("正文")
     await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate"))

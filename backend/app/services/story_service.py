@@ -12,6 +12,7 @@ from app.models import Character, Outline, WorldSetting
 from app.schemas.setting_fields import EntityRef, EntryType
 from app.services import (
     planning_lifecycle,
+    setting_ai_visibility,
     setting_catalog_service,
     setting_field_service,
     setting_progression_service,
@@ -147,9 +148,19 @@ async def update_owned(
     *,
     manage: bool = False,
 ) -> Any:
-    await _write_project(db, user_id, project_id, manage=manage)
-    item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     values = data.model_dump(exclude_unset=True)
+    check_legacy_pin = kind is CHARACTERS and any(
+        values.get(key) is not None for key in ("always_in_context", "role_type")
+    )
+    check_legacy_tracking = kind is WORLD and values.get("category") is not None
+    if check_legacy_pin or check_legacy_tracking:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=manage)
+    else:
+        await _write_project(db, user_id, project_id, manage=manage)
+    item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
+    legacy_pin = check_legacy_pin and item.ai_mode is None
+    before_pinned = legacy_pin and (item.always_in_context or is_protagonist_role(item.role_type))
+    old_category = item.category if check_legacy_tracking else None
     if kind is WORLD:
         category = values.get("category")
         if category is not None and category != item.category:
@@ -175,6 +186,20 @@ async def update_owned(
     for field, value in values.items():
         if value is not None:
             setattr(item, field, value)
+    if legacy_pin:
+        after_pinned = item.always_in_context or is_protagonist_role(item.role_type)
+        if before_pinned != after_pinned:
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=before_pinned)
+    if check_legacy_tracking and old_category != item.category:
+        before_tracking = setting_ai_visibility.effective_mention_enabled(
+            "world", item.ai_mode, item.mention_enabled, category=old_category,
+        )
+        after_tracking = setting_ai_visibility.effective_mention_enabled(
+            "world", item.ai_mode, item.mention_enabled, category=item.category,
+        )
+        if before_tracking != after_tracking:
+            # Legacy 世界观进入词典也可能使已有字面命中变为歧义。
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=True)
     if kind is OUTLINES:
         await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
@@ -185,7 +210,10 @@ async def update_owned(
 async def delete_owned(
     db: AsyncSession, kind: StoryKind, user_id: int, project_id: int, item_id: int, *, manage: bool = False
 ) -> None:
-    await _write_project(db, user_id, project_id, manage=manage)
+    if kind is CHARACTERS or kind is WORLD:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=manage)
+    else:
+        await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     if kind is CHARACTERS or kind is WORLD:
         await setting_field_service.cleanup_unreferenced_handles(

@@ -1,13 +1,21 @@
 import { App } from 'antd'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
+import { StaticRouter } from 'react-router-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { changeFixture } from '../../utils/agent.test'
 import AgentChangeCard from './AgentChangeCard'
 import AgentMarkdown from './AgentMarkdown'
 import AgentDock from './AgentDock'
+import AgentConversationView from './AgentConversationView'
 
 vi.mock('./AgentPanel', () => ({ default: () => createElement('div', null, '对话') }))
+vi.mock('./useAgentConversation', () => ({ useAgentConversation: () => ({
+  historySealed: true, busy: false, steps: [], stream: { running: false, text: '' },
+  detail: { active_task: { id: 8, status: 'paused' },
+    messages: [{ id: 1, conversation_id: 2, turn_task_id: 8, role: 'user', content: '仍可阅读的原消息' }],
+    changes: [changeFixture({ turn_task_id: 8, status: 'proposed' })] },
+}) }))
 // Drawer 使用 portal；node 测试检查传给实际容器的移动端宽度和开关语义。
 vi.mock('antd', async (original) => {
   const actual = await original<typeof import('antd')>()
@@ -23,6 +31,16 @@ const renderExternal = (over: Partial<ReturnType<typeof changeFixture>> = {}, pr
   renderToString(createElement(App, null, createElement(AgentChangeCard, { change: externalChange(over), onAction: () => {}, ...props }))).replaceAll('<!-- -->', '')
 
 describe('智能体 UI', () => {
+  it('封存后显示历史和新开入口，不提供消息发送，旧提案不可继续', () => {
+    const element = createElement(AgentConversationView, { pid: 3, cid: 2, onUpdated: () => {}, onCreate: () => {}, creating: false })
+    const html = renderToString(createElement(App, null, createElement(StaticRouter, { location: '/projects/3/overview' }, element))).replaceAll('<!-- -->', '')
+    expect(html).toContain('仍可阅读的原消息')
+    expect(html).toContain('此会话仅供查看')
+    expect(html).toContain('新开会话')
+    expect(html).toContain('旧会话不能继续，可以停止这一轮。')
+    expect(html).not.toContain('发给项目智能体的消息')
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*><span>确\s*认<\/span><\/button>/)
+  })
   it('提案显示字段前后对比；按钮随 proposed/executed/undone/rejected 状态切换', () => {
     const proposed = renderCard('proposed')
     expect(proposed).toContain('急躁')

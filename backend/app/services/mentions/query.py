@@ -15,14 +15,14 @@ from app.schemas.mentions import (
     SourceType,
 )
 from app.services.mentions.context import query_context, select_entities, selected_sources, validate_chapter_range
-from app.services.mentions.matcher import Dictionary, cache, iter_matches, span_out, text_hash
+from app.services.mentions.matcher import Dictionary, cache, iter_matches, match_entities, span_out, text_hash
 from app.services.mentions.sources import SourceDocument, iter_documents
 
 
 async def catalog(db: AsyncSession, user_id: int, project_id: int) -> MentionCatalog:
     context = await query_context(db, user_id, project_id)
     return MentionCatalog(
-        entities=list(context.dictionary.entities),
+        entities=select_entities(context.dictionary),
         dictionary_hash=context.dictionary.fingerprint,
         available_source_types=context.source_types,
     )
@@ -55,7 +55,7 @@ def _source_page(
     total = 0
     scope = (project_id, document.ref.type, document.ref.id)
     for hit in cache.iter_matches(scope, document.text, dictionary, content_hash=content_hash):
-        owners = dictionary.owners[hit.term]
+        owners = match_entities(hit, dictionary)
         if not any((entity.kind, entity.id) in keys for entity in owners):
             continue
         if total >= skip and len(items) < take:

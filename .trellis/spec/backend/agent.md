@@ -9,6 +9,8 @@
 `app/services/agent/`（`tools/` 工具注册表、`effects.py` 差异快照与撤销、`context.py` 消息组装、`runner.py` 循环、`service.py` 会话 / 提案、
 `transactions.py` 隔离级别、`mcp_tools.py` 本轮 MCP 工具映射与连接）、`app/services/task_engine/handlers/agent.py`、`app/api/v1/agent.py`、`app/schemas/agent.py`、`app/ai/prompts/agent.py`。
 
+> Agent 设定读取、回执及传输受 [AI 可见性契约](./setting-ai-visibility.md) 约束。项目收紧后旧会话仍可读，`history_sealed` 禁止继续／重放；外部工具不绕过后续模型发送门禁。
+
 ---
 
 ## 场景：Provider 工具调用协议（`chat_tools_stream`）
@@ -243,13 +245,13 @@ async def undo(db, project_id, effects) -> bool            # 不 commit；返回
 - **差异范围**：`EFFECT_TABLES` = `projects`、`characters`、`organizations`、`organization_members`、`relationship_types`（只取本项目自定义；全局预置只读）、
   `relationships`、`relationship_history`、`careers`、`career_stages`、`character_careers`、`career_history`、`world_settings`、`outlines`、
   `chapter_plans`、`chapters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`story_memories`、`chapter_characters`、
-  `chapter_analyses`、`analysis_changes`、`setting_timelines`、`setting_field_definitions`、`setting_field_options`、`setting_reference_handles`、`setting_categories`、`setting_category_rules`、`setting_text_fields`、`setting_progressions`、`chapter_versions`、`generation_logs`、`tasks`。规则取自备份注册表 `PROJECT_RULE` + `RULES`
+  `chapter_analyses`、`analysis_changes`、`setting_timelines`、`setting_field_definitions`、`setting_field_options`、`setting_reference_handles`、`setting_ai_links`、`setting_categories`、`setting_category_rules`、`setting_text_fields`、`setting_progressions`、`chapter_versions`、`generation_logs`、`tasks`。规则取自备份注册表 `PROJECT_RULE` + `RULES`
   （**顺序即插入顺序，逆序即删除顺序**），另加 `tasks`。写工具新改动一张表时必须加进来。
 - **列**：忽略 `updated_at` / `word_count`；`created_at` 必须保留（创建后不变，不影响冲突比较；撤销删除时靠它恢复原创建时间，见 `test_undo_delete_keeps_original_created_at`），但 `preview_diff` 必须跳过它，否则新建类提案的预览随秒变化，确认时误判 409，见 `test_preview_diff_ignores_created_at_of_inserted_rows`）；`chapters.content` 不进快照，只存 `_content_hash`，空白正文另存 `_empty_content`
   （唯一会被工具删除的章节是细纲同步删掉的空章节）；`chapter_versions` 只跟踪这些被删空章节的版本（正文修改产生的新版本属于历史，不撤销）；
   `generation_logs` / `tasks` 只取 `id / project_id / chapter_id`，只记录修改（章节删除导致的 SET NULL），不记录增删。
-- **时间线效果版本**：新diff／chapter_text效果带 `format_version: 4`，包含字段及分类完整依赖。接受旧v1–v3，保留原v1时间线和v2 typed保护；`preflight_effect_versions`在整轮首restore前按逆序before构造拟恢复分类图，调用纯图校验。旧v3因后来新增rule而无法恢复定义／选项／适用范围时409 `legacy_effect_requires_manual_correction`；v4图冲突为`undo_conflict`。旧v2／v3 UPDATE两边都缺标签时仅比较副本忽略该列，恢复仍省略以保留后来标签；旧CREATE遇后来非空标签拒删，合法旧DELETE才补空标签，未来标签／分类载荷不静默接受。
-- **目录代次**：`fields_revision/categories_revision`同时从备份注册表和effects独立项目列快照／比较／恢复集合排除；受影响目录从当前高水位递增，失败不增。还原后同事务重验fieldGraph＋categoryGraph、每行项目scope再`materialize_project`。预览对新ID及JSON里的option／handle语义归一。详见[字段恢复合同](./setting-fields.md)与[分类恢复合同](./setting-categories.md)。
+- **时间线效果版本**：新 diff／chapter_text 效果带 `format_version: 5`，包含字段、分类及可见策略／链接依赖。合法旧 v1–v4 继续受时间线、typed 和分类保护；整轮恢复前预检，不能覆盖后来新增的作者限制或链接。`preflight_effect_versions` 按逆序 before 构造拟恢复分类图并校验；旧 v3 恢复失败为 `legacy_effect_requires_manual_correction`，新版图冲突为 `undo_conflict`。旧 v2／v3 UPDATE 两侧均缺标签时比较与写入保留后来标签；旧 CREATE 遇后来非空标签拒删，合法旧 DELETE 补空，不接受未来载荷。
+- **目录代次**：`fields_revision/categories_revision/ai_visibility_revision/ai_history_epoch` 从备份和 effects 项目列快照／比较／恢复集合排除；受影响目录从当前高水位递增，失败不增。还原后同事务重验字段、分类、链接及每行项目 scope，再 `materialize_project`。预览对新 ID 及 JSON 里的 option／handle 语义归一。详见[字段恢复合同](./setting-fields.md)与[分类恢复合同](./setting-categories.md)。
 - **AI工具结果白名单**：整理标签进入数据库及effects完整快照，但不自动进入模型消息。`tools/base.serialized`仅ORM分支过滤`setting_tags`；显式DTO／dict合同不随意改写。必须使用真实FakeLLM工具返回哨兵验证，不能只查read DTO。
 - **字段工具**：`list_setting_field_definitions`、`list_setting_entries`、`get_setting_entry_fields`为三个有界读工具；`update_setting_field_baseline`与`record_setting_field_progression`原子处理空槽首写。原`record_setting_progression`扩四类值，仍校验作品／字段／章节／引用；provider对象有显式properties和严格嵌套ID检查。`list_setting_timelines.items[].custom_fields`含id／label／field_type／definition_id与必要当前元数据，并返回fields_revision。旧尚未执行且缺新语义的提案须重新生成。
 - **快照用列查询**（不是 ORM 实例），避免数据库级联或 Core UPDATE 之后读到 identity map 里的旧值。

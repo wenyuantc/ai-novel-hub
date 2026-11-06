@@ -29,7 +29,7 @@ import { PLANNING_REFERENCE_LABELS } from '../../utils/planning'
 import type { PlanningMergeConflict } from '../../utils/planning'
 import './PlanningPanel.css'
 
-const resources = ['planning', 'chapters', 'outlines', 'characters', 'world', 'organizations', 'relationships', 'careers'] as const
+const resources = ['planning', 'chapters', 'outlines', 'characters', 'world', 'organizations', 'relationships', 'careers', 'setting-ai-visibility'] as const
 interface CrossingEditor { row?: PlanningRow; crossing?: SubplotCrossing; initialSubplotIds?: number[]; revision: number }
 /** 作品与授权变更时重建局部工作台，旧选择和草稿不跨身份复用。 */
 export default function PlanningPanel() {

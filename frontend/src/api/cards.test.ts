@@ -3,7 +3,7 @@ import { cardApi, cardFilename, defaultResolutions, importedName, MAX_CARD_BYTES
 import type { CardPreview } from './types'
 
 const preview: CardPreview = {
-  fields_revision: 0, categories_revision: 0, can_import: true, field_definitions: [], references: [],
+  fields_revision: 0, categories_revision: 0, ai_visibility_revision: 0, can_import: true, field_definitions: [], references: [],
   characters: [
     { name: '林远', status: 'conflict', rename_to: '林远（导入）' },
     { name: '张三', status: 'new', rename_to: null },

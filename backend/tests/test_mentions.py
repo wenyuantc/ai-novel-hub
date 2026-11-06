@@ -80,7 +80,7 @@ async def test_catalog_preview_four_sources_and_complete_pagination(client, app,
     url = f"{data['base']}/mentions"
     catalog = await get_json(client, f"{url}/catalog")
     assert catalog["available_source_types"] == ["chapter", "chat", "note", "knowledge"]
-    assert {e["category"] for e in catalog["entities"]} == {"character", "place", "item"}
+    assert {e["category"] for e in catalog["entities"]} == {"character", "place", "item", "rule"}
     preview = await client.post(f"{url}/preview", json={"text": "🙂云城 旧剑 小白"})
     assert preview.status_code == 200, preview.text
     body = preview.json()

@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
@@ -15,14 +16,18 @@ from app.core.errors import AppError, ConflictError
 from app.models import AgentChange, AgentConversation, AgentMessage, AIConfig, Task
 from app.schemas.agent import ChangeOut
 from app.services import project_service
-from app.services.agent import context, mcp_tools, transactions
+from app.services.agent import context, history, mcp_tools, transactions
 from app.services.agent.tools import get_tool, list_tools
 from app.services.agent.tools.base import ToolCtx
+from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, require_visibility_stamp
 from app.services.task_engine.registry import Event, TaskContext
 
 MAX_TOOL_CALLS = 8
 MAX_WRITE_PROPOSALS = 50
 AUTO_EXECUTE_LIMIT = 3
+
+if TYPE_CHECKING:
+    from app.services.setting_ai_context import AiScope
 
 
 @dataclass
@@ -34,6 +39,7 @@ class AgentJob:
     input_message_id: int
     config: AIConfig
     provider: LLMProvider
+    stamp: VisibilityStamp
 
 
 async def _checkpoint(db, task_id: int, values: dict) -> None:
@@ -131,20 +137,21 @@ async def _external_call(
 
 
 async def _process_calls(
-    job: AgentJob, ctx: TaskContext, checkpoint: dict, sessions: mcp_tools.McpSessions
+    job: AgentJob, ctx: TaskContext, checkpoint: dict, sessions: mcp_tools.McpSessions, scope: "AiScope",
 ) -> AsyncIterator[Event]:
     from app.services.agent import service
 
     tool_map = checkpoint.get("mcp_tool_map") or {}
 
     async with transactions.session(ctx.sessionmaker) as db:
+        await require_visibility_stamp(db, job.stamp)
         # 重试 / 续跑时，停在 executing 的中断外部调用判为失败（不重新调用），否则这一轮会一直等待确认
         if await service.recover_external(db, task_id=job.task_id):
             await db.commit()
         assistant = await db.get(AgentMessage, checkpoint["assistant_message_id"])
         calls = assistant.tool_calls or []
         project = await project_service.get_owned_project(db, job.user_id, job.project_id)
-        tool_ctx = ToolCtx(db, project, job.user_id, ctx)
+        tool_ctx = ToolCtx(db, project, job.user_id, ctx, scope)
         batch = []
         for index, call in enumerate(calls):
             existing = await db.scalar(
@@ -178,6 +185,8 @@ async def _process_calls(
                 await _result(db, job, call, {"error": "工具参数必须是合法的 JSON 对象"})
                 continue
             if tool is None and call["name"] in tool_map:
+                async with ctx.sessionmaker() as check_db:
+                    await require_visibility_stamp(check_db, job.stamp)
                 external = await mcp_tools.resolve(
                     db, ctx.settings, job.user_id, job.conversation_id, tool_map, call["name"]
                 )
@@ -192,6 +201,8 @@ async def _process_calls(
             if tool.kind == "read":
                 try:
                     value = await tool.run(tool_ctx, args)
+                except VisibilityPolicyError:
+                    raise
                 except AppError as exc:
                     value = {"error": exc.detail}
                 await _result(db, job, call, value)
@@ -245,7 +256,7 @@ async def _process_calls(
             await _checkpoint(db, job.task_id, checkpoint)
             for change in pending:
                 try:
-                    await service.execute_change(db, ctx, change, user_id=job.user_id)
+                    await service.execute_change(db, ctx, change, user_id=job.user_id, scope=scope)
                 except ConflictError as exc:
                     if not exc.extra or exc.extra.get("code") != "preview_changed":
                         raise
@@ -262,7 +273,7 @@ async def _process_calls(
                     db,
                     job,
                     {"id": change.tool_call_id, "name": change.tool_name},
-                    change.result or {"error": change.error or "修改未执行"},
+                    context.change_result_for_model(change),
                 )
                 yield (
                     "tool_end",
@@ -340,6 +351,11 @@ async def _run_agent(job: AgentJob, ctx: TaskContext) -> AsyncIterator[Event]:
 
 async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions) -> AsyncIterator[Event]:
     async with transactions.session(ctx.sessionmaker) as db:
+        await require_visibility_stamp(db, job.stamp)
+        user_message = await db.get(AgentMessage, job.input_message_id)
+        if user_message is None or user_message.conversation_id != job.conversation_id or user_message.role != "user":
+            raise ConflictError("本轮原始消息不可用，请重新发起")
+        scope = await history.build_tool_scope(db, job.stamp, user_message.content)
         task = await db.get(Task, job.task_id)
         checkpoint = dict(task.checkpoint or {})
         if "mcp_tool_map" not in checkpoint:
@@ -366,7 +382,7 @@ async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions
     while True:
         if checkpoint.get("assistant_message_id") != checkpoint.get("processed_assistant_id"):
             paused = False
-            async with aclosing(_process_calls(job, ctx, checkpoint, sessions)) as events:
+            async with aclosing(_process_calls(job, ctx, checkpoint, sessions, scope)) as events:
                 async for event in events:
                     if event[0] == "paused":
                         paused = True
@@ -379,7 +395,8 @@ async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions
             user_message = await db.get(AgentMessage, job.input_message_id)
             try:
                 messages, prompt = await context.build_messages(
-                    db, conversation, project, job.config, job.provider, user_message.page_context, job.task_id
+                    db, conversation, project, job.config, job.provider, user_message.page_context, job.task_id,
+                    scope=scope,
                 )
             except (AppError, AIProviderError) as exc:
                 yield "error", {"detail": str(exc)}
@@ -436,7 +453,7 @@ async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions
             await _save_log(
                 job,
                 ctx,
-                messages=messages,
+                messages=[] if isinstance(exc, VisibilityPolicyError) else messages,
                 prompt=prompt,
                 round_no=round_no,
                 text="".join(pieces),

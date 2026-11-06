@@ -31,6 +31,7 @@ from app.services import (
     style_service,
     version_service,
 )
+from app.services.ai_dispatch import guard_provider, visibility_sessionmaker
 from app.services.chapter_service import commit_versioned, count_words, get_owned_chapter, get_project_chapter
 from app.services.generation_service import Event, elapsed_ms, stream_pieces
 from app.services.project_service import get_owned_project
@@ -109,14 +110,16 @@ async def prepare_rewrite_job(
     else:
         before, after = content[max(0, start - BEFORE_CHARS) : start], content[end : end + AFTER_CHARS]
     budget = min(MAX_SETTING_CONTEXT_CHARS, ai_config_service.context_char_budget(cfg, context_budget))
+    selected_hint = "\n".join((before, original, after))
     planning = await planning_context_service.load_planning_context(
-        db, project, "chapter", chapter.id, scope="selection", budget=budget
+        db, project, "chapter", chapter.id, scope="selection", budget=budget,
+        text_hint="\n".join((selected_hint, req.instruction)), legacy_text_hint=selected_hint,
     )
     setting_context = await context_builder.build_setting_context(
         db,
         project,
         chapter,
-        text_hint="\n".join((before, original, after)),
+        text_hint=selected_hint,
         budget=budget - planning.reserved_chars - (2 if planning.text else 0),
         planning=planning,
     )
@@ -133,6 +136,8 @@ async def prepare_rewrite_job(
         planning_context=planning.text,
         override=override,
     )
+    assert planning.setting_scope is not None
+    provider = guard_provider(provider, planning.setting_scope.scope.stamp, visibility_sessionmaker(db))
     return RewriteJob(
         project_id=project.id,
         chapter_id=chapter.id,

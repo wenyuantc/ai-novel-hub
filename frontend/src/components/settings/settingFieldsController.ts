@@ -41,7 +41,7 @@ export class SettingFieldsController {
 
   constructor(private readonly pid: number, private readonly api = settingFieldsApi,
     private readonly readable: () => boolean = () => true, private readonly writable: () => boolean = () => true,
-    private readonly changed: () => void = () => {}) {}
+    private readonly changed: (aiChanged?: boolean) => void = () => {}) {}
 
   getSnapshot = () => this.state
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
@@ -163,8 +163,10 @@ export class SettingFieldsController {
     try {
       let items = this.state.data?.items ?? []
       let revision: number
+      let aiChanged = false
       if (editor.kind === 'definition') {
-        const body = definitionInput(editor.draft, editor.expectedRevision)
+        const body = definitionInput(editor.draft, editor.expectedRevision, editor.original?.ai_hidden ?? false)
+        aiChanged = body.ai_hidden !== undefined
         const result = editor.original ? await this.api.updateDefinition(this.pid, editor.original.id, body, request.signal) : await this.api.createDefinition(this.pid, body, request.signal)
         if (!this.validWrite(generation, request)) return
         items = [...items.filter((item) => item.id !== result.item.id), result.item]
@@ -177,7 +179,7 @@ export class SettingFieldsController {
         revision = result.fields_revision
       }
       this.update({ data: { items, total: items.length, fields_revision: revision }, saving: false, editor: null, notice: editor.kind === 'definition' ? '字段定义已保存。' : '下拉选项已保存。' })
-      this.changed()
+      this.changed(aiChanged)
     } catch (err) { if (this.valid(generation, request)) this.failure(err) }
   }
 

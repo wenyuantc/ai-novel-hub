@@ -43,7 +43,7 @@ export class CardImportController {
   private valid(generation: number, request: AbortController) { return this.active && generation === this.generation && !request.signal.aborted && this.current() }
   private begin() { this.cancel(); const request = new AbortController(); this.request = request; return { request, generation: this.generation } }
   private editable() { return this.current() && !this.state.loading && !this.state.importing && !this.state.result }
-  private edited(patch: Partial<CardImportState>) { this.update({ ...patch, needsPreview: this.state.metadata.version === 4 || this.state.metadata.version === 5, reviewPreview: null, error: null }) }
+  private edited(patch: Partial<CardImportState>) { this.update({ ...patch, needsPreview: (this.state.metadata.version ?? 0) >= 4, reviewPreview: null, error: null }) }
 
   selectFile = async (file: Pick<File, 'size' | 'name' | 'text'>) => {
     if (!this.current() || this.state.importing) return
@@ -105,7 +105,9 @@ export class CardImportController {
     try {
       const preview = await this.api.preview(this.pid, this.state.data, { resolutions: choices, mappings }, request.signal)
       if (!this.valid(generation, request)) return
-      const versionsChanged = this.state.metadata.version === 5 && (preview.fields_revision !== originalPreview.fields_revision || preview.categories_revision !== originalPreview.categories_revision)
+      const version = this.state.metadata.version ?? 0
+      const versionsChanged = (version >= 5 && (preview.fields_revision !== originalPreview.fields_revision || preview.categories_revision !== originalPreview.categories_revision))
+        || (version >= 6 && preview.ai_visibility_revision !== originalPreview.ai_visibility_revision)
       this.update(this.state.reviewRequired || versionsChanged ? { reviewPreview: preview, loading: false, reviewRequired: true, needsPreview: true }
         : { preview, loading: false, needsPreview: false, reviewPreview: null })
     } catch (err) { if (this.valid(generation, request)) this.update({ loading: false, needsPreview: true, error: errorMessage(err) }) }
@@ -119,9 +121,11 @@ export class CardImportController {
   confirm = async () => {
     if (!this.editable() || !this.state.preview?.can_import || this.state.needsPreview || this.state.reviewRequired) return
     const { request, generation } = this.begin()
-    const typed = this.state.metadata.version === 4 || this.state.metadata.version === 5
-    const options = typed ? { mappings: cleanCardMappings(this.state.mappings), expected_fields_revision: this.state.preview.fields_revision,
-      ...(this.state.metadata.version === 5 ? { expected_categories_revision: this.state.preview.categories_revision } : {}) } : {}
+    const version = this.state.metadata.version ?? 0
+    const options = version >= 4 ? { mappings: cleanCardMappings(this.state.mappings), expected_fields_revision: this.state.preview.fields_revision,
+      ...(version >= 5 ? { expected_categories_revision: this.state.preview.categories_revision } : {}),
+      ...(version >= 6 ? { expected_ai_visibility_revision: this.state.preview.ai_visibility_revision } : {}),
+    } : {}
     this.update({ importing: true, error: null })
     try {
       const result = await this.api.import(this.pid, this.state.data, copyChoices(this.state.choices), options, request.signal)

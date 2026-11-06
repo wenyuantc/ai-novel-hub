@@ -506,9 +506,12 @@ async def test_kb_injected_into_wizard_entity_and_chapter(client, fake_llm):
     await client.post(f"{pbase}/world", json={"title": "天剑宗", "content": "北境第一剑宗"})
     ch = (await client.post(f"{pbase}/chapters", json={"title": "天剑宗试炼"})).json()
     fake_llm.push("正文")
-    await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 500}))
+    await run_task(client, await client.post(
+        f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 500, "instruction": "写天剑宗的试炼"},
+    ))
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     assert "【参考资料（来自知识库" in prompt
+    assert "北境第一剑宗" in prompt
     assert prompt.index("【世界观】") < prompt.index("【参考资料（来自知识库")
 
     # 项目总开关关闭：不再注入

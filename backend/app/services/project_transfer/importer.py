@@ -47,6 +47,7 @@ from app.models import entities as E
 from app.models.entities import PROJECT_STATUSES
 from app.schemas.planning import PLANNING_TONES
 from app.schemas.project import WizardProgress
+from app.schemas.setting_ai_visibility import MAX_AI_LINKS, StoredAiSettings, legacy_ai_settings
 from app.schemas.setting_categories import normalize_setting_tags
 from app.schemas.setting_fields import DefinitionCreate
 from app.schemas.story import clean_aliases
@@ -57,6 +58,7 @@ from app.services import (
     project_lifecycle,
     project_service,
     retrieval_service,
+    setting_ai_visibility,
     setting_category_service,
     setting_progression_service,
 )
@@ -114,6 +116,7 @@ TABLE_LABELS: dict[str, str] = {
     "setting_field_definitions": "字段定义",
     "setting_field_options": "字段选项",
     "setting_reference_handles": "设定引用身份",
+    "setting_ai_links": "设定 AI 关联",
     "setting_categories": "设定分类",
     "setting_category_rules": "设定分类规则",
     "story_memories": "剧情记忆",
@@ -295,7 +298,10 @@ def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
 
 FIELD_TABLES = ("setting_field_definitions", "setting_field_options", "setting_reference_handles")
 CATEGORY_TABLES = ("setting_categories", "setting_category_rules")
-TAG_TABLES = ("characters", "world_settings", "organizations", "careers")
+ENTRY_TABLE_KINDS = {"characters": "character", "world_settings": "world", "organizations": "organization",
+                     "careers": "career"}
+TAG_TABLES = tuple(ENTRY_TABLE_KINDS)
+AI_HIDDEN_TABLES = ("setting_field_definitions", "setting_text_fields")
 
 
 def _migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
@@ -354,9 +360,52 @@ def _migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _rows_in(tables: dict[str, Any], name: str):
+    rows = tables.get(name)
+    return (row for row in rows if isinstance(row, dict)) if isinstance(rows, list) else ()
+
+
+def _reject_future_ai_data(data: dict[str, Any]) -> None:
+    """先于旧迁移的重建／清理，拒绝把新隐私配置伪装成不支持它的版本。"""
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return
+    message = "旧版备份不支持设定 AI 可见性资料，请使用原始版本文件"
+    if "setting_ai_links" in tables and tables["setting_ai_links"] != []:
+        raise BadRequestError(message)
+    defaults = legacy_ai_settings().model_dump()
+    for name in ENTRY_TABLE_KINDS:
+        for row in _rows_in(tables, name):
+            if any(key in row and (type(row[key]) is not type(value) or row[key] != value)
+                   for key, value in defaults.items()):
+                raise BadRequestError(message)
+    for name in AI_HIDDEN_TABLES:
+        if any("ai_hidden" in row and row["ai_hidden"] is not False for row in _rows_in(tables, name)):
+            raise BadRequestError(message)
+
+
+def _migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return data
+    for name in ENTRY_TABLE_KINDS:
+        for row in _rows_in(tables, name):
+            row.update(legacy_ai_settings().model_dump())
+    for name in AI_HIDDEN_TABLES:
+        for row in _rows_in(tables, name):
+            row["ai_hidden"] = False
+    tables["setting_ai_links"] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
-    steps = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4, 4: _migrate_v4_to_v5}
+    if version < 6:
+        _reject_future_ai_data(data)
+    steps = {
+        1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4,
+        4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6,
+    }
     while version < VERSION:
         data = steps[version](data)
         version += 1
@@ -798,6 +847,42 @@ def _check_category_data(backup: Backup, errors: _Errors) -> None:
         names.add(name)
 
 
+def _check_ai_data(backup: Backup, errors: _Errors) -> None:
+    """v6 配置必须完整；不能靠数据库新建默认将缺列的隐藏资料变可见。"""
+    tables = backup.tables
+    for name, kind in ENTRY_TABLE_KINDS.items():
+        for i, row in enumerate(tables.get(name, []), start=1):
+            values = {key: row[key] for key in StoredAiSettings.model_fields if key in row}
+            try:
+                normalized = setting_ai_visibility.normalize_settings(kind, StoredAiSettings.model_validate(values))
+                if normalized.model_dump() != values:
+                    raise ValueError("AI 设置不是规范值")
+            except (AppError, ValueError):
+                errors.add(f"{label(name)}第 {i} 行 AI 设置缺失或不合法")
+    for name in AI_HIDDEN_TABLES:
+        for i, row in enumerate(tables.get(name, []), start=1):
+            if type(row.get("ai_hidden")) is not bool or (
+                name == "setting_text_fields" and row["ai_hidden"] and row.get("definition_id") is not None
+            ):
+                errors.add(f"{label(name)}第 {i} 行字段可见性缺失或不合法")
+    links = tables["setting_ai_links"]
+    project_id = backup.project["id"]
+    scopes = {row["id"]: row.get("project_id", project_id) for row in tables.get("setting_reference_handles", [])}
+    seen = set()
+    counts = Counter()
+    for i, row in enumerate(links, start=1):
+        source, target = row["source_handle_id"], row["target_handle_id"]
+        scope_ids = (row.get("project_id", project_id), scopes.get(source), scopes.get(target))
+        if any(type(scope) is not int or scope != project_id for scope in scope_ids):
+            errors.add(f"设定 AI 关联第 {i} 行不属于同一作品")
+        if source == target or (source, target) in seen:
+            errors.add(f"设定 AI 关联第 {i} 行不能自关联或重复")
+        seen.add((source, target))
+        counts[source] += 1
+        if counts[source] == MAX_AI_LINKS + 1:
+            errors.add(f"设定 AI 关联第 {i} 行的源条目超过关联上限")
+
+
 def _check_styles(styles: Any, errors: _Errors) -> list[dict[str, Any]]:
     if styles is None:
         return []
@@ -887,7 +972,7 @@ def parse_backup(raw: bytes) -> Backup:
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
-                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES):
+                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links"):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -919,6 +1004,8 @@ def parse_backup(raw: bytes) -> Backup:
         data=data, version=version, tables=clean, styles=styles, project=project, warnings=warnings, cover=cover
     )
     _check_refs(backup, errors)
+    errors.raise_if_any()
+    _check_ai_data(backup, errors)
     errors.raise_if_any()
     _check_setting_data(backup, errors)
     errors.raise_if_any()
@@ -1360,6 +1447,7 @@ class _Importer:
         from app.services.setting_field_service import validate_project_field_graph
 
         await validate_project_field_graph(self.db, self.project_id)
+        await setting_ai_visibility.validate_project_links(self.db, self.project_id)
         await setting_category_service.validate_project_category_graph(self.db, self.project_id)
         await setting_progression_service.materialize_project(self.db, self.project_id)
         from app.services.planning_lifecycle import validate_project

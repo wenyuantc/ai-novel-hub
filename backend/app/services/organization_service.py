@@ -22,6 +22,7 @@ from app.schemas.progression import AnchorKind, BaselineUpdate, ProgressionCreat
 from app.schemas.setting_fields import EntityRef
 from app.services import (
     membership_progression_service,
+    setting_ai_visibility,
     setting_catalog_service,
     setting_field_service,
     setting_progression_service,
@@ -287,7 +288,7 @@ async def update_org(
 async def delete_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> None:
     from app.services.planning_lifecycle import bump_revision
 
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
     org = await get_owned_org(db, user_id, project_id, org_id)
     await setting_field_service.cleanup_unreferenced_handles(
         db, project_id, [EntityRef(kind="organization", id=org.id)]

@@ -1,7 +1,6 @@
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Select, Space, Tooltip, Typography } from 'antd'
 import { useCallback, useState } from 'react'
-import { isProtagonist } from '../../api/characters'
 import { errorMessage } from '../../api/client'
 import { castApi, characterApi } from '../../api/story'
 import { useLoader } from '../../hooks/useLoader'
@@ -14,7 +13,7 @@ interface Props {
 
 /**
  * 本章出场角色（可选，手动指定）：变更即 PUT /cast 整体替换，与正文保存分开、不影响 dirty。
- * 生成时与主角、自动匹配（梗概 + 上一章结尾）取并集注入完整角色卡。
+ * 这是明确的人工引用，仍受条目策略与字段可见性限制。
  */
 export default function CastSelect({ pid, chapterId, disabled }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(pid)
@@ -45,11 +44,10 @@ export default function CastSelect({ pid, chapterId, disabled }: Props) {
     }
   }
 
-  const protagonists = characters.filter(isProtagonist).map((c) => c.name)
   return (
     <Space size={8} style={{ width: '100%', marginBottom: 8 }} align="center">
       <Tooltip
-        title={`主角${protagonists.length ? `（${protagonists.join('、')}）` : ''}始终注入；本章梗概与上一章结尾提到的角色会自动匹配。这里可额外指定。`}
+        title="为本章手动指定出场角色。「永不加入」的角色和隐藏字段仍不会提供给 AI。"
       >
         <Typography.Text type="secondary" style={{ whiteSpace: 'nowrap' }}>
           出场角色

@@ -6,7 +6,7 @@ import { CardImportController } from './cardImportController'
 
 const source = { format: 'ainovel.cards', version: 4, characters: [{ ref: 'local', name: '林远', fields: [] }], organizations: [], careers: [] }
 const file = (data: unknown = source) => ({ name: '设定卡片.json', size: 100, text: async () => JSON.stringify(data) })
-const preview = (over: Partial<CardPreview> = {}): CardPreview => ({ fields_revision: 2, categories_revision: 0, can_import: true, field_definitions: [], references: [], characters: [{ name: '林远', status: 'new', rename_to: null }], organizations: [], careers: [], relationships: [], warnings: [], ...over })
+const preview = (over: Partial<CardPreview> = {}): CardPreview => ({ fields_revision: 2, categories_revision: 0, ai_visibility_revision: 0, can_import: true, field_definitions: [], references: [], characters: [{ name: '林远', status: 'new', rename_to: null }], organizations: [], careers: [], relationships: [], warnings: [], ...over })
 const result: CardImportResult = { characters: [], organizations: [], careers: [], relationships_created: 0, members_created: 0, careers_assigned: 0, warnings: [] }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
 function setup(initial = preview()) {
@@ -41,8 +41,26 @@ describe('卡片预览和确认的代次与显式核对', () => {
     await controller.confirm(); expect(api.import).not.toHaveBeenCalled()
     await controller.refreshPreview(); await controller.confirm()
     expect(api.import.mock.calls[0][3]).toMatchObject({ expected_categories_revision: 8 })
+    expect(api.import.mock.calls[0][3]).not.toHaveProperty('expected_ai_visibility_revision')
     const old = setup(preview({ categories_revision: 8 })); await old.controller.selectFile(file()); await old.controller.confirm()
     expect(old.api.import.mock.calls[0][3]).not.toHaveProperty('expected_categories_revision')
+  })
+
+  it('v6 需要三目录版本；更新后的 AI 版本不能覆盖原确认，映射保留至显式采用', async () => {
+    const { controller, api } = setup(preview({ categories_revision: 8, ai_visibility_revision: 9 }))
+    await controller.selectFile(file({ ...source, version: 6 }))
+    controller.setReference('outside', { reference: { kind: 'world', id: 7 }, type: 'world.place', name: '青山', category: 'place' })
+    await controller.confirm()
+    expect(api.import).not.toHaveBeenCalled()
+    api.preview.mockResolvedValueOnce(preview({ categories_revision: 8, ai_visibility_revision: 10 }))
+    await controller.refreshPreview()
+    expect(controller.getSnapshot()).toMatchObject({ reviewRequired: true, preview: { ai_visibility_revision: 9 }, reviewPreview: { ai_visibility_revision: 10 } })
+    await controller.confirm()
+    expect(api.import).not.toHaveBeenCalled()
+    controller.acceptReview()
+    await controller.confirm()
+    expect(api.import.mock.calls[0][3]).toMatchObject({ expected_fields_revision: 2, expected_categories_revision: 8,
+      expected_ai_visibility_revision: 10, mappings: { references: { outside: { kind: 'world', id: 7 } } } })
   })
 
   it.each(['fields_revision', 'categories_revision'] as const)('v5主动更新时%s变化也仅生成对照，不自动采用新保存版本', async (field) => {
@@ -56,14 +74,14 @@ describe('卡片预览和确认的代次与显式核对', () => {
     expect(api.import.mock.calls[0][3]).toHaveProperty(field === 'fields_revision' ? 'expected_fields_revision' : 'expected_categories_revision', 20)
   })
   it('默认skip不解析typed引用，选择后必须重新预览且确认携带原预览目录版本', async () => {
-    const { controller, api } = setup(preview({ can_import: false, references: [{ ref: 'outside', kind: 'world', name: '山门', status: 'unresolved', target: null, reason: '请选择具体目标', source_fields: ['林远 / 驻地'] }] }))
+    const { controller, api } = setup(preview({ can_import: false, references: [{ ref: 'outside', kind: 'world', name: '山门', status: 'unresolved', target: null, reason: '请选择具体目标', source_fields: ['林远 / 驻地'], source_links: [] }] }))
     await controller.selectFile(file())
     await controller.confirm()
     expect(api.import).not.toHaveBeenCalled()
     controller.setReference('outside', { reference: { kind: 'world', id: 7 }, type: 'world.place', name: '青山', category: 'place' })
     await controller.confirm()
     expect(api.import).not.toHaveBeenCalled()
-    api.preview.mockResolvedValueOnce(preview({ fields_revision: 5, references: [{ ref: 'outside', kind: 'world', name: '山门', status: 'mapped', target: { kind: 'world', id: 7 }, reason: null, source_fields: ['林远 / 驻地'] }] }))
+    api.preview.mockResolvedValueOnce(preview({ fields_revision: 5, references: [{ ref: 'outside', kind: 'world', name: '山门', status: 'mapped', target: { kind: 'world', id: 7 }, reason: null, source_fields: ['林远 / 驻地'], source_links: [] }] }))
     await controller.refreshPreview()
     await controller.confirm()
     expect(api.import).toHaveBeenCalledWith(1, source, expect.any(Object), { expected_fields_revision: 5, mappings: { references: { outside: { kind: 'world', id: 7 } }, definitions: {} } }, expect.any(AbortSignal))

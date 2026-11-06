@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Task
 from app.schemas.chapter import WizardRequest
 from app.services import wizard_service
+from app.services.ai_dispatch import read_visibility_stamp
 from app.services.task_engine.registry import Event, TaskContext, TaskSpec, register
 
 WIZARD_LABELS = {"outline": "大纲向导", "characters": "角色向导", "world": "世界观向导", "careers": "职业体系向导"}
@@ -44,6 +45,7 @@ class WizardHandler:
             ai_timeout=ctx.settings.ai_request_timeout,
             allow_private=ctx.settings.allow_private_ai_endpoints,
         )
+        stamp = await read_visibility_stamp(db, project_id)
         return TaskSpec(
             project_id=project_id,
             chapter_id=None,
@@ -52,6 +54,7 @@ class WizardHandler:
             input={
                 "request": {"project_id": project_id, **req.model_dump(mode="json")},
                 "ai_config_id": ai_config_id,
+                "ai_history_epoch": stamp.epoch,
             },
             retry_of_id=retry_of_id,
         )

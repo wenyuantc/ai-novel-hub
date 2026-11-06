@@ -18,7 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.json_extract import JSONExtractError, extract_json
-from app.ai.prompts import ProjectInfo, build_outline_continue_messages, build_outline_expand_messages
+from app.ai.prompts import (
+    ProjectInfo,
+    build_outline_continue_messages,
+    build_outline_expand_messages,
+    format_project_info,
+)
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.ai.templating import PromptOverride
 from app.core.errors import BadRequestError
@@ -43,10 +48,12 @@ from app.services import (
     retrieval_service,
     story_service,
 )
+from app.services.ai_dispatch import guard_provider, visibility_sessionmaker
 from app.services.context_builder import latest_summaries
 from app.services.entity_ai_service import resolve_name
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
+from app.services.setting_ai_context import build_scope, current_character_text, current_world_text
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +332,11 @@ async def build_outline_job(
     )
     if kind == "outline.continue":
         req = OutlineContinueRequest.model_validate(params)
+        scope = await build_scope(
+            db, project_id,
+            texts=(format_project_info(info), req.direction, *(o.summary for o in outlines[-RECENT_OUTLINES:])),
+            kinds=("world",), legacy_all=True,
+        )
         next_no = await outline_service.next_chapter_no(db, project_id)
         last_no, last_title = await outline_service.last_volume(db, project_id)
         if req.new_volume is not None:
@@ -348,7 +360,7 @@ async def build_outline_job(
             count=req.count,
             next_chapter_no=next_no,
             volume_hint=volume_hint,
-            world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
+            world_text=_clip(current_world_text(scope, world), REFERENCE_WORLD_CHARS),
             recent_outlines_text=_clip(
                 story_service.format_outlines(outlines[-RECENT_OUTLINES:]), REFERENCE_TEXT_CHARS
             ),
@@ -361,11 +373,17 @@ async def build_outline_job(
         )
         job.count = req.count
         job.new_volume = req.new_volume.model_dump() if req.new_volume is not None else None
+        await scope.verify(db)
+        job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
         return job
 
     req_e = OutlineExpandRequest.model_validate(params)
     outline_id = int(params["outline_id"])
     outline = await plan_service.get_project_outline(db, user_id, project_id, outline_id)
+    scope = await build_scope(
+        db, project_id, texts=(outline.title, outline.summary, req_e.instruction),
+        kinds=("character",), legacy_metadata_kinds=("character",),
+    )
     kept = await _kept_plans(db, project_id, outline_id)
     _check_total(req_e.count, len(kept))
     idx = next(i for i, o in enumerate(outlines) if o.id == outline.id)
@@ -394,12 +412,14 @@ async def build_outline_job(
         "outline_text": _outline_line(outline)
         + (f"（第{outline.volume_no}卷 {outline.volume_title}）" if outline.volume_title else ""),
         "neighbors_text": "\n".join(neighbors),
-        "roster_text": _clip(story_service.format_roster(characters), REFERENCE_ROSTER_CHARS),
+        "roster_text": _clip(current_character_text(scope, characters, roster=True), REFERENCE_ROSTER_CHARS),
         "kept_text": "\n".join(_kept_line(p) for p in kept),
         "instruction": req_e.instruction,
         "knowledge": knowledge,
         "memories": memories,
     }
+    await scope.verify(db)
+    job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
     return job
 
 

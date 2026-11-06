@@ -28,8 +28,10 @@ from app.models import (
     WritingStyle,
 )
 from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
+from app.services.setting_catalog_service import reference_handle_key
 
 from .base import ToolCtx
+from .visibility import ENTRY_KINDS, allowed, allowed_field, timeline_allowed
 
 _MODELS = {
     "character_id": Character,
@@ -75,6 +77,17 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
     # 避免越界值进入驱动绑定，也确保 SQLite 和 PostgreSQL 的工具行为一致。
     if value > 2_147_483_647:
         raise BadRequestError("引用 ID 超出有效范围")
+    if model in ENTRY_KINDS and not allowed(ctx, ENTRY_KINDS[model], value):
+        raise NotFoundError("不存在")
+    if ctx.scope is not None and model in (SettingTimeline, SettingReferenceHandle):
+        row = await ctx.db.scalar(select(model).where(model.id == value, model.project_id == ctx.project_id))
+        if row is None:
+            raise NotFoundError("不存在")
+        if model is SettingTimeline and not timeline_allowed(ctx, row):
+            raise NotFoundError("不存在")
+        if model is SettingReferenceHandle and not allowed(ctx, *reference_handle_key(row)):
+            raise NotFoundError("不存在")
+        return
     stmt = select(model.id).where(model.id == value)
     if model is WritingStyle:
         stmt = stmt.where(or_(WritingStyle.user_id.is_(None), WritingStyle.user_id == ctx.user_id))
@@ -86,23 +99,57 @@ async def owned_reference(ctx: ToolCtx, model: type, value: Any) -> None:
         stmt = stmt.where(or_(RelationshipType.project_id.is_(None), RelationshipType.project_id == ctx.project_id))
     elif model is Relationship:
         stmt = stmt.where(Relationship.project_id == ctx.project_id, Relationship.is_present.is_(True))
+        if ctx.scope is not None:
+            chars = ctx.scope.ids("character")
+            stmt = stmt.where(Relationship.a_id.in_(chars), Relationship.b_id.in_(chars))
     elif model is CareerStage:
         stmt = stmt.join(Career, Career.id == CareerStage.career_id).where(Career.project_id == ctx.project_id)
+        if ctx.scope is not None:
+            career_id = await ctx.db.scalar(stmt.with_only_columns(CareerStage.career_id))
+            if not allowed_field(ctx, "career", career_id, "stages"):
+                raise NotFoundError("不存在")
+            return
     elif model is OrganizationMember:
         stmt = stmt.join(Organization, Organization.id == OrganizationMember.organization_id).where(
             Organization.project_id == ctx.project_id
         )
+        if ctx.scope is not None:
+            stmt = stmt.where(
+                OrganizationMember.organization_id.in_(ctx.scope.ids("organization")),
+                OrganizationMember.character_id.in_(ctx.scope.ids("character")),
+            )
     elif model is CharacterCareer:
         stmt = stmt.join(Character, Character.id == CharacterCareer.character_id).where(
             Character.project_id == ctx.project_id
         )
+        if ctx.scope is not None:
+            stmt = stmt.where(
+                CharacterCareer.character_id.in_(ctx.scope.ids("character")),
+                CharacterCareer.career_id.in_(ctx.scope.ids("career")),
+            )
     elif model is SettingTextField:
         stmt = stmt.join(SettingTimeline, SettingTimeline.id == SettingTextField.timeline_id).where(
             SettingTimeline.project_id == ctx.project_id
         )
+        if ctx.scope is not None:
+            binding = await ctx.db.scalar(
+                stmt.with_only_columns(SettingTextField).where(SettingTextField.ai_hidden.is_(False)),
+            )
+            if binding is None:
+                raise NotFoundError("不存在")
+            await owned_reference(ctx, SettingTimeline, binding.timeline_id)
+            if binding.definition_id is not None:
+                await owned_reference(ctx, SettingFieldDefinition, binding.definition_id)
+            return
     elif model is SettingFieldOption:
         stmt = stmt.join(SettingFieldDefinition, SettingFieldDefinition.id == SettingFieldOption.definition_id).where(
             SettingFieldDefinition.project_id == ctx.project_id
+        )
+        if ctx.scope is not None:
+            stmt = stmt.where(SettingFieldDefinition.ai_hidden.is_(False))
+    elif model is SettingFieldDefinition and ctx.scope is not None:
+        stmt = stmt.where(
+            SettingFieldDefinition.project_id == ctx.project_id, SettingFieldDefinition.ai_hidden.is_(False),
         )
     else:
         stmt = stmt.where(model.project_id == ctx.project_id)

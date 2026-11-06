@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import (
     Project,
+    SettingAiLink,
     SettingCategory,
     SettingCategoryRule,
     SettingProgression,
@@ -28,6 +29,8 @@ from app.models import (
 from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 from app.schemas import setting_fields as s
 from app.schemas.progression import ProgressionCreate, ProgressionMutationOut, StoryPosition
+from app.schemas.setting_ai_visibility import LegacyFieldAiVisibilityUpdate
+from app.services import setting_ai_visibility as visibility
 from app.services import setting_catalog_service as catalog
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import get_manageable_project
@@ -85,12 +88,18 @@ async def claim_fields_revision(db: AsyncSession, project_id: int, expected: int
 
 
 @asynccontextmanager
-async def _editing(db: AsyncSession, user_id: int, project_id: int, *, configuration: bool = False):
+async def _editing(
+    db: AsyncSession, user_id: int, project_id: int, *, configuration: bool = False, ai_visibility: bool = False,
+):
     async with AuditOperation(db, user_id, "project.update", "project", project_id, project_id=project_id) as audit:
-        project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-        audit.target(project)
-        audit.summary.changed_fields = ["field_definitions" if configuration else "setting_fields"]
         try:
+            project = (
+                await visibility.lock_author_visibility_write(db, user_id, project_id)
+                if ai_visibility else
+                await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+            )
+            audit.target(project)
+            audit.summary.changed_fields = ["field_definitions" if configuration else "setting_fields"]
             yield audit
         except IntegrityError as exc:
             await db.rollback()
@@ -105,7 +114,7 @@ async def get_definition(db: AsyncSession, project_id: int, definition_id: int) 
         select(SettingFieldDefinition).where(
             SettingFieldDefinition.project_id == project_id,
             SettingFieldDefinition.id == definition_id,
-        )
+        ).execution_options(populate_existing=True)
     )
     if definition is None:
         raise NotFoundError("字段定义不存在")
@@ -215,6 +224,7 @@ async def apply_definition(
                 "reference_types",
                 "sort",
                 "archived",
+                "ai_hidden",
             )
         }
         if definition is not None
@@ -249,9 +259,26 @@ async def save_definition(
     data: s.DefinitionCreate | s.DefinitionUpdate,
     definition_id: int | None = None,
 ) -> s.DefinitionMutation:
-    async with _editing(db, user_id, project_id, configuration=True) as audit:
+    visibility_write = data.ai_hidden is not None if definition_id is not None else bool(data.ai_hidden)
+    async with _editing(db, user_id, project_id, configuration=True, ai_visibility=visibility_write) as audit:
         await check_fields_revision(db, project_id, data.expected_fields_revision)
+        previous_hidden = False
+        if visibility_write and definition_id is not None:
+            previous = await get_definition(db, project_id, definition_id)
+            previous_hidden = previous.ai_hidden
+            if previous_hidden == data.ai_hidden and data.model_fields_set == {"ai_hidden", "expected_fields_revision"}:
+                _, options = await _metadata(db, project_id)
+                result = s.DefinitionMutation(
+                    item=_definition_out(previous, options), fields_revision=data.expected_fields_revision,
+                )
+                await db.commit()
+                return result
         definition = await apply_definition(db, project_id, data, definition_id)
+        if visibility_write and definition.ai_hidden != previous_hidden:
+            await visibility.bump_visibility_revision(
+                db, project_id, tighten=definition_id is not None and definition.ai_hidden,
+            )
+            audit.summary.changed_fields.append("ai_hidden")
         revision = await claim_fields_revision(db, project_id, data.expected_fields_revision)
         _, options = await _metadata(db, project_id)
         item = _definition_out(definition, options)
@@ -268,6 +295,7 @@ async def _bindings(db: AsyncSession, project_id: int, definition_id: int | None
             SettingTextField.label,
             SettingTextField.base_value,
             SettingTextField.sort,
+            SettingTextField.ai_hidden,
             SettingTimeline.id,
             SettingTimeline.project_id,
             SettingTimeline.subject_kind,
@@ -282,7 +310,7 @@ async def _bindings(db: AsyncSession, project_id: int, definition_id: int | None
     if definition_id is not None:
         stmt = stmt.where(SettingTextField.definition_id == definition_id)
     return [
-        (FieldBindingSnapshot(*deepcopy(tuple(row[:6]))), TimelineIdentity(*row[6:])) for row in await db.execute(stmt)
+        (FieldBindingSnapshot(*deepcopy(tuple(row[:7]))), TimelineIdentity(*row[7:])) for row in await db.execute(stmt)
     ]
 
 
@@ -312,6 +340,7 @@ class FieldBindingSnapshot:
     label: str | None
     base_value: CanonicalFieldValue
     sort: int
+    ai_hidden: bool = False
 
 
 @dataclass(frozen=True)
@@ -346,6 +375,7 @@ async def read_field_bindings(
                 SettingTextField.label,
                 SettingTextField.base_value,
                 SettingTextField.sort,
+                SettingTextField.ai_hidden,
             )
             .where(*predicates)
             .order_by(
@@ -649,28 +679,16 @@ async def encode_field_value(
         except ValidationError as exc:
             raise BadRequestError("引用目标格式不合法") from exc
         target = await catalog.get_entry(db, timeline.project_id, ref.kind, ref.id)
-        existing = await db.scalar(
-            select(SettingReferenceHandle).where(
-                SettingReferenceHandle.project_id == timeline.project_id,
-                SettingReferenceHandle.kind == ref.kind,
-                getattr(SettingReferenceHandle, catalog.TARGET_COLUMNS[ref.kind]) == ref.id,
-            )
-        )
+        key = ref.kind, ref.id
+        existing = await catalog.find_reference_handles(db, timeline.project_id, [key])
+        previous = existing.get(key)
         # 已保存的身份可原样保留；新选择才受停用和当前引用范围约束。
-        same = bool(existing and prior_value == {"reference_handle_id": existing.id})
+        same = bool(previous and prior_value == {"reference_handle_id": previous.id})
         if not same and target.type not in definition.reference_types:
             raise BadRequestError("该字段不允许引用此类型的条目")
-        if existing is None:
-            existing = SettingReferenceHandle(
-                project_id=timeline.project_id,
-                kind=ref.kind,
-                **{
-                    catalog.TARGET_COLUMNS[ref.kind]: ref.id,
-                },
-            )
-            db.add(existing)
-            await db.flush()
-        handles[ref.kind, ref.id] = existing.id
+        handles[key] = (
+            await catalog.ensure_reference_handles(db, timeline.project_id, [target], existing=existing)
+        )[key].id
     spec = (await load_field_specs(db, timeline.project_id, [field]))[field.id]
     try:
         canonical = (
@@ -849,7 +867,7 @@ async def bind_legacy(
 ) -> s.EntryFieldsOut:
     from app.services import setting_progression_service as progressions
 
-    async with _editing(db, user_id, project_id) as audit:
+    async with _editing(db, user_id, project_id, ai_visibility=True) as audit:
         timeline, definition = await _write_target(
             db,
             project_id,
@@ -869,6 +887,11 @@ async def bind_legacy(
             raise NotFoundError("原有字段不存在")
         if field.definition_id is not None or definition.field_type != "text" or definition.archived:
             raise BadRequestError("只能将原有文本字段关联到启用的多行文本定义")
+        if field.ai_hidden and not definition.ai_hidden:
+            raise ConflictError(
+                "原有字段仅作者可见，不能关联到 AI 可见定义；请先显式调整可见性",
+                extra={"code": "field_visibility_conflict"},
+            )
         entry = await catalog.get_entry(db, project_id, kind, entry_id)
         if entry.type not in definition.applicable_types:
             raise BadRequestError("字段不适用于该条目类型")
@@ -883,6 +906,9 @@ async def bind_legacy(
         ):
             raise ConflictError("该条目已绑定此字段，不能合并原有资料", extra={"code": "field_binding_exists"})
         await progressions._claim_revision(db, timeline, timeline.revision)
+        if definition.ai_hidden:
+            await visibility.bump_visibility_revision(db, project_id, tighten=not field.ai_hidden)
+            audit.summary.changed_fields.append("ai_hidden")
         # 关联只改变身份归属；旧行/旧事件的时间戳也保留。
         await db.execute(
             update(SettingTextField)
@@ -890,6 +916,7 @@ async def bind_legacy(
             .values(
                 definition_id=definition.id,
                 label=None,
+                ai_hidden=False,
                 updated_at=field.updated_at,
             )
             .execution_options(synchronize_session="fetch")
@@ -897,6 +924,50 @@ async def bind_legacy(
         await db.flush()
         result = (await resolve_entry_fields(db, project_id, [entry.reference]))[kind, entry_id]
         await audit.commit()
+    return result
+
+
+async def write_legacy_visibility(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    kind: s.EntryKind,
+    entry_id: int,
+    field_id: int,
+    data: LegacyFieldAiVisibilityUpdate,
+) -> s.EntryFieldsOut:
+    from app.services import setting_progression_service as progressions
+
+    async with _editing(db, user_id, project_id, ai_visibility=True) as audit:
+        entry = await catalog.get_entry(db, project_id, kind, entry_id)
+        timeline = await catalog.find_entry_timeline(db, project_id, kind, entry_id)
+        if timeline is None:
+            raise NotFoundError("原有字段不存在")
+        field = await db.scalar(
+            select(SettingTextField).where(
+                SettingTextField.timeline_id == timeline.id,
+                SettingTextField.id == field_id,
+                SettingTextField.definition_id.is_(None),
+            ).execution_options(populate_existing=True)
+        )
+        if field is None:
+            raise NotFoundError("原有字段不存在")
+        expected = await visibility.check_visibility_revision(db, project_id, data.expected_ai_visibility_revision)
+        if timeline.revision != data.expected_timeline_revision:
+            raise stale_revision(timeline.revision, "timeline")
+        changed = field.ai_hidden != data.ai_hidden
+        if changed:
+            await progressions._claim_revision(db, timeline, data.expected_timeline_revision, metadata_only=True)
+            await visibility.bump_visibility_revision(db, project_id, expected=expected, tighten=data.ai_hidden)
+            field.ai_hidden = data.ai_hidden
+            await db.flush()
+            audit.summary.changed_fields.append("ai_hidden")
+            audit.affected([field.id])
+        result = (await resolve_entry_fields(db, project_id, [entry.reference]))[kind, entry_id]
+        if changed:
+            await audit.commit()
+        else:
+            await db.commit()
     return result
 
 
@@ -915,6 +986,7 @@ async def resolve_entry_fields(
         return {}
     with db.no_autoflush:
         before = await fields_revision(db, project_id)
+        ai_before = await visibility.visibility_revision(db, project_id)
         identities = await catalog.get_entries(db, project_id, entries)
         predicates = [
             (SettingTimeline.subject_kind == ("career_entry" if kind == "career" else kind))
@@ -1032,6 +1104,7 @@ async def resolve_entry_fields(
                         reference_types=definition.reference_types,
                         options=options.get(definition.id, []),
                         archived=definition.archived,
+                        ai_hidden=definition.ai_hidden,
                         sort=definition.sort,
                         reference=reference,
                         base_reference=base_reference,
@@ -1049,6 +1122,7 @@ async def resolve_entry_fields(
                             base_value=deepcopy(field.base_value),
                             value=values_by_timeline[timeline.id][field.id],
                             sort=field.sort,
+                            ai_hidden=field.ai_hidden,
                         )
                     )
             result[key] = s.EntryFieldsOut(
@@ -1056,6 +1130,7 @@ async def resolve_entry_fields(
                 timeline_id=timeline.id if timeline else None,
                 timeline_revision=revisions.get(timeline.id, 0) if timeline else 0,
                 fields_revision=before,
+                ai_visibility_revision=ai_before,
                 position=position,
                 fields=shared,
                 legacy_fields=legacy,
@@ -1075,6 +1150,7 @@ async def resolve_entry_fields(
         after = await fields_revision(db, project_id)
         if before != after:
             raise stale_revision(after)
+        await visibility.check_visibility_revision(db, project_id, ai_before)
         return result
 
 
@@ -1146,7 +1222,9 @@ async def assert_targets_unreferenced(db: AsyncSession, project_id: int, targets
 
 
 async def cleanup_unreferenced_handles(db: AsyncSession, project_id: int, targets: Sequence[s.EntityRef]) -> None:
-    """调用方持项目锁，先证明全部无依赖再清理句柄；不提交。"""
+    """调用方持发送门禁和项目锁；证明无字段历史依赖，再清理端点（含级联关联）。"""
+    if not targets:
+        return
     await assert_targets_unreferenced(db, project_id, targets)
     wanted = {(target.kind, target.id) for target in targets}
     ids = [
@@ -1155,6 +1233,12 @@ async def cleanup_unreferenced_handles(db: AsyncSession, project_id: int, target
         if (target.kind, target.id) in wanted
     ]
     if ids:
+        links_removed = await db.scalar(select(SettingAiLink.id).where(
+            SettingAiLink.project_id == project_id,
+            or_(SettingAiLink.source_handle_id.in_(ids), SettingAiLink.target_handle_id.in_(ids)),
+        ).limit(1))
+        if links_removed is not None:
+            await visibility.bump_visibility_revision(db, project_id, tighten=True)
         await db.execute(
             delete(SettingReferenceHandle).where(
                 SettingReferenceHandle.project_id == project_id,

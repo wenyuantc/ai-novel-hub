@@ -33,7 +33,7 @@ async def _tags(client, base, kind, entry_id, tags):
     return response.json()
 
 
-async def test_cards_v5_exports_and_imports_tags_without_categories(client):
+async def test_cards_v6_exports_and_imports_tags_without_categories(client):
     await register(client)
     base, chars, org = await _source_project(client)
     career = await _career(client, base, "剑修", ["初阶"])
@@ -45,7 +45,7 @@ async def test_cards_v5_exports_and_imports_tags_without_categories(client):
                                                              "organization_ids": [org["id"]]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 5 and "setting_categories" not in card and "setting_category_rules" not in card
+    assert card["version"] == 6 and "setting_categories" not in card and "setting_category_rules" not in card
     assert card["characters"][0]["setting_tags"] == ["人物"]
     assert card["organizations"][0]["setting_tags"] == ["组织"]
     assert card["careers"][0]["setting_tags"] == ["职业"]
@@ -54,6 +54,7 @@ async def test_cards_v5_exports_and_imports_tags_without_categories(client):
     preview = (await client.post(f"{target_base}/cards/import/preview", json={"data": card})).json()
     assert preview["categories_revision"] == 0
     response = await client.post(f"{target_base}/cards/import", json={"data": card,
+        "expected_ai_visibility_revision": preview["ai_visibility_revision"],
         "expected_fields_revision": preview["fields_revision"], "expected_categories_revision": 0})
     assert response.status_code == 200, response.text
     for key, kind, tag in (("characters", "character", "人物"), ("organizations", "organization", "组织"),
@@ -185,8 +186,8 @@ async def test_cards_v5_rejects_noncanonical_snapshot_tags(client):
         assert response.status_code == 400, (value, response.text)
 
 
-async def test_postgresql_cards_v5_tags_snapshot(postgres_fields_client):
-    await test_cards_v5_exports_and_imports_tags_without_categories(postgres_fields_client)
+async def test_postgresql_cards_v6_tags_snapshot(postgres_fields_client):
+    await test_cards_v6_exports_and_imports_tags_without_categories(postgres_fields_client)
 
 
 async def test_postgresql_cards_v5_failure_rolls_back_both_revisions(

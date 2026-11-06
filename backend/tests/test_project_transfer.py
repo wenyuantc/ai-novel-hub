@@ -113,6 +113,23 @@ API = "/api/v1/projects"
 KB_TEXT = "# 门派\n\n## 天剑宗\n\n天剑宗坐落在云梦山巅，以剑修闻名天下。\n\n## 东海龙宫\n\n龙宫位于东海之底。"
 
 
+def _without_ai_settings(data, version):
+    """从 v6 导出构造真实旧版本：版本号之外也没有 v6 的限制和链接数据。"""
+    from app.schemas.setting_ai_visibility import StoredAiSettings
+
+    data["version"] = version
+    tables = data["tables"]
+    tables.pop("setting_ai_links", None)
+    for name in importer.ENTRY_TABLE_KINDS:
+        for row in tables.get(name, []):
+            for key in StoredAiSettings.model_fields:
+                row.pop(key, None)
+    for name in importer.AI_HIDDEN_TABLES:
+        for row in tables.get(name, []):
+            row.pop("ai_hidden", None)
+    return data
+
+
 async def _seed(app, project_id: int) -> dict:
     """往项目里写入每一种实体（含同名角色、同名章节），返回各对象 id。"""
     async with app.state.sessionmaker() as db:
@@ -586,7 +603,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 5 and data["app_schema"] == "0036"
+    assert data["version"] == 6 and data["app_schema"] == "0037"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -649,7 +666,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
 async def test_v1_import_creates_unverified_baselines_without_replaying_history(client, app):
     p, _ = await _setup(client, app)
     data = await _backup(client, p["id"])
-    data["version"] = 1
+    _without_ai_settings(data, 1)
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
         data["tables"].pop(table, None)
     for row in data["tables"]["relationships"]:
@@ -962,7 +979,7 @@ async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client,
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 5
+    assert src["format"] == "ainovel.project" and src["version"] == 6
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 不导出任务 / 分块 / 检索单元
     assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
@@ -1256,7 +1273,7 @@ async def test_validation_errors(client, app, monkeypatch):
         (b"not json", "不是合法的 JSON"),
         (b"[1]", "应为 JSON 对象"),
         (dump({**data, "format": "ainovel.cards"}), "format 应为 ainovel.project"),
-        (dump({**data, "version": 6}), "备份来自更新的版本"),
+        (dump({**data, "version": 7}), "备份来自更新的版本"),
         (dump({**data, "version": 0}), "不支持的备份版本"),
         ("﻿".encode() + b"{" * 1 + b'"format": "x"}', "format 应为"),
     ]
@@ -1577,7 +1594,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (5, "0036")
+    assert (data["version"], data["app_schema"]) == (6, "0037")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)
@@ -1633,7 +1650,7 @@ async def test_typed_v4_preview_rejects_missing_and_incompatible_history(client,
 async def test_old_backups_reject_typed_configuration_without_bindings(client, app, version):
     project, _ = await _setup(client, app)
     original = await _backup(client, project["id"])
-    original["version"] = version
+    _without_ai_settings(original, version)
     original["tables"]["setting_timelines"] = [
         row for row in original["tables"]["setting_timelines"]
         if row["subject_kind"] not in ("organization", "career_entry")
@@ -1690,7 +1707,7 @@ async def test_v4_roundtrip_preserves_empty_binding_after_scope_narrowing(client
 
 async def test_v3_upgrade_cannot_smuggle_typed_fields(client, app):
     _, data = await _typed_fields_backup(client, app)
-    data["version"] = 3
+    _without_ai_settings(data, 3)
     response = await _preview_raw(client, json.dumps(data).encode())
     assert response.status_code == 400, response.text
     assert "旧版" in response.json()["detail"]
@@ -1702,7 +1719,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
     original = await _backup(client, project["id"])
     for version in (2, 3):
         data = deepcopy(original)
-        data["version"] = version
+        _without_ai_settings(data, version)
         for table in importer.FIELD_TABLES:
             data["tables"].pop(table)
         data["tables"]["setting_timelines"] = [row for row in data["tables"]["setting_timelines"]
@@ -1711,7 +1728,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
             field.pop("definition_id")
         result = await _import(client, data)
         exported = await _backup(client, result["project"]["id"])
-        assert exported["version"] == 5
+        assert exported["version"] == 6
         assert all(not exported["tables"][table] for table in importer.FIELD_TABLES)
         assert len(exported["tables"]["setting_progressions"]) == len(data["tables"]["setting_progressions"])
         assert [f["base_value"] for f in exported["tables"]["setting_text_fields"]] == [
@@ -1719,7 +1736,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
         assert all(f["definition_id"] is None for f in exported["tables"]["setting_text_fields"])
         assert {"organization", "career_entry"} <= {t["subject_kind"] for t in exported["tables"]["setting_timelines"]}
     malformed = deepcopy(original)
-    malformed["version"] = 3
+    _without_ai_settings(malformed, 3)
     malformed["tables"]["setting_text_fields"] = 5
     response = await _preview_raw(client, json.dumps(malformed).encode())
     assert response.status_code == 400

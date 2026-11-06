@@ -7,7 +7,7 @@ from pydantic import Field
 from sqlalchemy import select
 
 from app.core.errors import BadRequestError, NotFoundError
-from app.models import Character, Organization, Outline, Task
+from app.models import Character, Organization, Outline, StoryMemory, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.chapter import ChapterBrief
 from app.schemas.foreshadow import ForeshadowStatus
@@ -29,8 +29,10 @@ from app.services import (
     story_service,
     style_service,
 )
+from app.services.ai_dispatch import visibility_sessionmaker
 
 from .base import EmptyArgs, IdArgs, Tool, ToolCtx, serialized
+from .visibility import allowed, analysis_payload, assignment_payload, entry_payload
 
 
 class PageArgs(EmptyArgs):
@@ -88,21 +90,37 @@ async def field_definitions(ctx: ToolCtx, args: FieldDefinitionListArgs) -> dict
     result = await setting_field_service.list_definitions(
         ctx.db, ctx.user_id, ctx.project_id, types=args.types, include_archived=args.include_archived,
     )
-    return {**paged(result.items, args), "fields_revision": result.fields_revision}
+    items = result.items if ctx.scope is None else [
+        item.model_dump(mode="json", exclude={"ai_hidden"}) for item in result.items if not item.ai_hidden
+    ]
+    return {**paged(items, args), "fields_revision": result.fields_revision}
 
 
 async def setting_entries(ctx: ToolCtx, args: SettingEntryListArgs) -> dict:
-    result = await setting_catalog_service.list_entries(ctx.db, ctx.user_id, ctx.project_id, **args.model_dump())
+    allowed_ids = (
+        {kind: ctx.scope.ids(kind) for kind in setting_catalog_service.ENTRY_MODELS}
+        if ctx.scope is not None else None
+    )
+    result = await setting_catalog_service.list_entries(
+        ctx.db, ctx.user_id, ctx.project_id, allowed_ids=allowed_ids, **args.model_dump(),
+    )
     return {**serialized(result), "page": args.page, "pages": max(1, ceil(result.total / args.page_size))}
 
 
 async def entry_fields(ctx: ToolCtx, args: EntryFieldsArgs) -> dict:
-    result = serialized(await setting_field_service.read_entry_fields(
+    detail = await setting_field_service.read_entry_fields(
         ctx.db, ctx.user_id, ctx.project_id, args.entry.kind, args.entry.id,
         chapter_id=args.chapter_id, chapter_no=args.chapter_no, boundary=args.boundary,
-    ))
+    )
+    if ctx.scope is not None:
+        detail = ctx.scope.entry_fields(detail)
+    result = serialized(detail)
     # 单条目的字段也有界；引用投影只有身份、当前名称，绝不展开目标正文。
     combined = result["fields"] + result["legacy_fields"]
+    if ctx.scope is not None:
+        result.pop("ai_visibility_revision", None)
+        for item in combined:
+            item.pop("ai_hidden", None)
     page = paged(combined, args)
     result["fields"] = [item for item in page["items"] if item["source"] == "shared"]
     result["legacy_fields"] = [item for item in page["items"] if item["source"] == "legacy"]
@@ -127,58 +145,61 @@ async def overview(ctx: ToolCtx, args: EmptyArgs) -> dict:
 
 async def characters(ctx: ToolCtx, args: CharacterListArgs) -> dict:
     rows = await story_service.list_owned(ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id)
+    rows = [row for row in rows if allowed(ctx, "character", row.id)]
     if args.query:
         query = args.query.casefold()
         rows = [row for row in rows if query in (row.name + " " + " ".join(row.aliases)).casefold()]
-    return paged([CharacterOut.model_validate(row) for row in rows], args)
+    return paged([entry_payload(ctx, "character", CharacterOut.model_validate(row)) for row in rows], args)
 
 
 async def character(ctx: ToolCtx, args: IdArgs) -> dict:
     row = await story_service.get_owned(ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id, args.id)
+    careers = await career_service.list_assignments(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    memberships = await organization_service.character_memberships(ctx.db, ctx.user_id, ctx.project_id, args.id)
     return {
-        **serialized(CharacterOut.model_validate(row)),
-        "careers": serialized(await career_service.list_assignments(ctx.db, ctx.user_id, ctx.project_id, args.id)),
-        "memberships": serialized(
-            await organization_service.character_memberships(
-                ctx.db,
-                ctx.user_id,
-                ctx.project_id,
-                args.id,
-            )
-        ),
+        **entry_payload(ctx, "character", CharacterOut.model_validate(row)),
+        "careers": [assignment_payload(ctx, item) for item in careers if allowed(ctx, "career", item.career_id)],
+        "memberships": [
+            serialized(item) for item in memberships if allowed(ctx, "organization", item.organization_id)
+        ],
     }
 
 
 async def organizations(ctx: ToolCtx, args: PageArgs) -> dict:
-    return paged(await organization_service.list_orgs(ctx.db, ctx.user_id, ctx.project_id), args)
+    rows = await organization_service.list_orgs(ctx.db, ctx.user_id, ctx.project_id)
+    rows = [row for row in rows if allowed(ctx, "organization", row.id)]
+    return paged([entry_payload(ctx, "organization", row) for row in rows], args)
 
 
 async def organization(ctx: ToolCtx, args: IdArgs) -> dict:
-    result = serialized(await organization_service.get_org(ctx.db, ctx.user_id, ctx.project_id, args.id))
-    result["members"] = serialized(
-        await organization_service.list_members(ctx.db, ctx.user_id, ctx.project_id, args.id)
-    )
+    item = await organization_service.get_org(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    result = entry_payload(ctx, "organization", item)
+    members = await organization_service.list_members(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    result["members"] = [serialized(member) for member in members if allowed(ctx, "character", member.character_id)]
     return result
 
 
 async def relationships(ctx: ToolCtx, args: RelationshipListArgs) -> dict:
+    rows = await relationship_service.list_relationships(
+        ctx.db, ctx.user_id, ctx.project_id, character_id=args.character_id,
+    )
     return paged(
-        await relationship_service.list_relationships(
-            ctx.db, ctx.user_id, ctx.project_id, character_id=args.character_id
-        ),
+        [row for row in rows if allowed(ctx, "character", row.a_id) and allowed(ctx, "character", row.b_id)],
         args,
     )
 
 
 async def careers(ctx: ToolCtx, args: PageArgs) -> dict:
-    return paged(await career_service.list_careers(ctx.db, ctx.user_id, ctx.project_id), args)
+    rows = await career_service.list_careers(ctx.db, ctx.user_id, ctx.project_id)
+    return paged([entry_payload(ctx, "career", row) for row in rows if allowed(ctx, "career", row.id)], args)
 
 
 async def world(ctx: ToolCtx, args: WorldListArgs) -> dict:
     rows = await story_service.list_owned(
         ctx.db, story_service.WORLD, ctx.user_id, ctx.project_id, category=args.category
     )
-    return paged([WorldSettingOut.model_validate(row) for row in rows], args)
+    rows = [row for row in rows if allowed(ctx, "world", row.id)]
+    return paged([entry_payload(ctx, "world", WorldSettingOut.model_validate(row)) for row in rows], args)
 
 
 async def outline_tree(ctx: ToolCtx, args: PageArgs) -> dict:
@@ -197,7 +218,10 @@ async def outline(ctx: ToolCtx, args: IdArgs) -> dict:
     item = next((row for row in rows if row.id == args.id), None)
     if item is None:
         raise NotFoundError("不存在")
-    return serialized(item)
+    data = serialized(item)
+    for plan in data["plans"]:
+        plan["character_ids"] = [ident for ident in plan["character_ids"] if allowed(ctx, "character", ident)]
+    return data
 
 
 async def chapters(ctx: ToolCtx, args: PageArgs) -> dict:
@@ -230,13 +254,21 @@ async def analysis(ctx: ToolCtx, args: AnalysisArgs) -> dict:
     latest = (await analysis_service.latest_analyses(ctx.db, [args.chapter_id])).get(args.chapter_id)
     if latest is None:
         return {"analysis": None}
-    return {"analysis": serialized(await analysis_service.get_analysis(ctx.db, ctx.user_id, latest.id))}
+    return {"analysis": analysis_payload(ctx, await analysis_service.get_analysis(ctx.db, ctx.user_id, latest.id))}
 
 
 async def foreshadows(ctx: ToolCtx, args: ForeshadowListArgs) -> dict:
-    return paged(
-        await foreshadow_service.list_foreshadows(ctx.db, ctx.user_id, ctx.project_id, status=args.status), args
-    )
+    rows = serialized(await foreshadow_service.list_foreshadows(
+        ctx.db, ctx.user_id, ctx.project_id, status=args.status,
+    ))
+    for row in rows:
+        visible = [
+            (ident, name) for ident, name in zip(row["character_ids"], row["character_names"], strict=True)
+            if allowed(ctx, "character", ident)
+        ]
+        row["character_ids"] = [ident for ident, _ in visible]
+        row["character_names"] = [name for _, name in visible]
+    return paged(rows, args)
 
 
 async def search(ctx: ToolCtx, args: SearchArgs, source: str) -> dict:
@@ -249,6 +281,8 @@ async def search(ctx: ToolCtx, args: SearchArgs, source: str) -> dict:
         ai_timeout=deps.settings.ai_request_timeout,
         allow_private=deps.settings.allow_private_ai_endpoints,
     )
+    if ctx.scope is not None:
+        embedder = retrieval_service.guard_embedder(embedder, ctx.scope.stamp, visibility_sessionmaker(ctx.db))
     result = await retrieval_service.search(
         ctx.db,
         ctx.project_id,
@@ -260,6 +294,15 @@ async def search(ctx: ToolCtx, args: SearchArgs, source: str) -> dict:
     )
     if warning:
         result.warnings.append(warning)
+    if source == "memory" and ctx.scope is not None and result.hits:
+        # 内部全文索引含结构化角色名，模型工具只能拿剧情记忆的原正文。
+        refs = {hit.ref_id for hit in result.hits}
+        originals = dict((await ctx.db.execute(select(StoryMemory.id, StoryMemory.content).where(
+            StoryMemory.project_id == ctx.project_id, StoryMemory.id.in_(refs),
+        ))).all())
+        result.hits = [hit for hit in result.hits if hit.ref_id in originals]
+        for hit in result.hits:
+            hit.text = originals[hit.ref_id]
     return asdict(result)
 
 
@@ -289,7 +332,13 @@ async def active_tasks(ctx: ToolCtx, args: PageArgs) -> dict:
             .order_by(Task.id.desc())
         )
     )
-    return paged([task_service.to_out(row) for row in rows], args)
+    if ctx.scope is None:
+        return paged([task_service.to_out(row) for row in rows], args)
+    # 任务结果/标题/断点可以携带生成的档案快照或目标名；此工具只报告安全状态。
+    return paged([
+        {"id": row.id, "kind": row.kind, "status": row.status, "progress": row.progress, "chapter_id": row.chapter_id}
+        for row in rows
+    ], args)
 
 
 TOOLS = [

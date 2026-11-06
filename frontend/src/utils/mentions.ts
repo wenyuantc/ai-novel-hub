@@ -1,4 +1,7 @@
 import type { MentionAnchor, MentionEntity, MentionSource, MentionSpan } from '../api/mentions'
+import type { ProjectResource } from './projectRefresh'
+
+export const MENTION_DICTIONARY_RESOURCES = ['setting-ai-visibility', 'characters', 'world', 'organizations', 'careers'] as const satisfies readonly ProjectResource[]
 
 export function readPositiveId(value: string | null): number | null {
   if (!value || !/^\d+$/.test(value)) return null
@@ -28,9 +31,6 @@ export function mentionHref(pid: number, source: MentionSource, anchor: MentionA
   else if (source.type === 'note') { path = 'notes'; params.set('id', String(source.id)) }
   else { path = 'knowledge'; params.set('document_id', String(source.id)) }
   return `/projects/${pid}/${path}?${params}`
-}
-export function entityHref(pid: number, entity: Pick<MentionEntity, 'kind' | 'id'>): string {
-  return `/projects/${pid}/${entity.kind === 'character' ? 'characters' : 'world'}?id=${entity.id}`
 }
 export interface MentionSegment { start: number; end: number; text: string; entities: MentionEntity[]; focused: boolean }
 /** 原文码点范围转为 React 文本段；保留空白，忽略落在窗口外或重叠的错误范围。 */

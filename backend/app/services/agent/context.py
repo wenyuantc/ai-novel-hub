@@ -5,7 +5,7 @@ import json
 import time
 from contextlib import aclosing
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,9 +26,24 @@ from app.models import (
     Project,
 )
 from app.services import project_service, prompt_service, skill_service
+from app.services.agent import history
+from app.services.ai_dispatch import (
+    VisibilityPolicyError,
+    guard_provider,
+    require_visibility_stamp,
+    visibility_sessionmaker,
+)
+
+if TYPE_CHECKING:
+    from app.services.setting_ai_context import AiScope
 
 RESULT_LIMIT = 8000
 TRUNCATED = "内容过长已截断，请用分页参数读取"
+_PAGE_SECTIONS = frozenset({
+    "overview", "wizard", "world", "characters", "organizations", "relationships", "careers", "setting-fields",
+    "setting-categories", "foreshadows", "knowledge", "notes", "mentions", "memories", "outlines", "planning",
+    "chapters", "read",
+})
 
 
 def untrusted_text(text: str) -> str:
@@ -82,16 +97,26 @@ def forced_skill_message(snapshot: dict | None) -> dict | None:
     return {"role": "system", "content": f"{header}\n\n{snapshot['body'][: skill_service.SNAPSHOT_LIMIT]}"}
 
 
-async def validate_page_context(db: AsyncSession, project_id: int, raw: dict | None) -> dict:
+async def validate_page_context(
+    db: AsyncSession, project_id: int, raw: dict | None, *, scope: "AiScope | None" = None,
+) -> dict:
     if not raw:
         return {}
     cleaned = {}
     route = str(raw.get("route") or "")[:500]
     if route.startswith(f"/projects/{project_id}/") or route == f"/projects/{project_id}":
-        cleaned["route"] = route
+        if scope is None:
+            cleaned["route"] = route
+        else:
+            # 深链、查询串和浏览对象不是作者显式引用；只发送已知页面类别。
+            base = f"/projects/{project_id}"
+            section = route.removeprefix(base).lstrip("/").split("/", 1)[0]
+            cleaned["route"] = f"{base}/{section}" if section in _PAGE_SECTIONS else base
     for key, model in (("chapter_id", Chapter), ("outline_id", Outline), ("character_id", Character)):
         value = raw.get(key)
         if isinstance(value, int) and not isinstance(value, bool):
+            if model is Character and scope is not None and not scope.includes("character", value):
+                continue
             exists = await db.scalar(select(model.id).where(model.id == value, model.project_id == project_id))
             if exists is not None:
                 cleaned[key] = value
@@ -125,6 +150,27 @@ def _groups(rows: list[AgentMessage]) -> list[list[AgentMessage]]:
     return groups
 
 
+def change_result_for_model(change: AgentChange) -> dict:
+    """审批记录面向人类；模型只拿最小回执，不能经写工具读回未提交给它的资料。"""
+    if change.status == "undone":
+        return {"message": "用户已撤销该修改"}
+    if change.kind == "external":
+        return change.result or {"error": "外部操作未完成"}
+    if change.status == "rejected":
+        return {"message": "用户拒绝了该修改"}
+    if change.status != "executed":
+        return {"error": "修改未完成，请检查允许的对象与输入"}
+    result = {"ok": True}
+    raw = change.result or {}
+    task_id = raw.get("task_id")
+    if change.kind == "task" and type(task_id) is int:
+        result["task_id"] = task_id
+    if change.tool_name.startswith("create_") and type(raw.get("id")) is int:
+        # 仅返回刚创建的对象 ID，方便引用本次写入；此回执不授予后续读取资格。
+        result["id"] = raw["id"]
+    return result
+
+
 def _group_messages(group: list[AgentMessage], changes: dict[tuple, AgentChange]) -> list[dict]:
     first = group[0]
     if not first.tool_calls:
@@ -137,10 +183,7 @@ def _group_messages(group: list[AgentMessage], changes: dict[tuple, AgentChange]
             change = changes.get((first.turn_task_id, call["id"]))
             data = {"error": "这次工具调用未完成，请重新查询状态，不要假定操作已执行"}
             if change is not None:
-                if change.status == "undone":
-                    data = {"message": "用户已撤销该修改"}
-                elif change.result is not None:
-                    data = change.result
+                data = change_result_for_model(change)
             result = {"role": "tool", "tool_call_id": call["id"], "name": call["name"], "content": tool_result(data)}
         messages.append(result)
     # 用户在待确认时撤销已完成修改，备注须位于本次原生 tool_result 组之后。
@@ -175,9 +218,15 @@ async def build_messages(
     provider: LLMProvider,
     page_context: dict | None = None,
     task_id: int | None = None,
+    *,
+    scope: "AiScope | None" = None,
 ) -> tuple[list[dict], dict]:
     from app.services import generation_log_service
 
+    stamp = await history.require_open_history(db, conversation)
+    if scope is not None:
+        await require_visibility_stamp(db, scope.stamp)
+    provider = guard_provider(provider, stamp, visibility_sessionmaker(db))
     budget = int((cfg.context_window_k or 32) * 1000 * 0.6)
     rows = list(
         await db.scalars(
@@ -198,6 +247,8 @@ async def build_messages(
         .order_by(AgentMessage.id.desc())
         .limit(1)
     )
+    if scope is None:
+        scope = await history.build_tool_scope(db, stamp, latest_user.content if latest_user is not None else "")
     changes = {
         (c.turn_task_id, c.tool_call_id): c
         for c in await db.scalars(select(AgentChange).where(AgentChange.conversation_id == conversation.id))
@@ -233,6 +284,7 @@ async def build_messages(
         pieces = []
         started = time.monotonic()
         status, error = "success", ""
+        log_messages = summary_messages
         try:
             async with aclosing(
                 provider.generate_stream(summary_messages, cfg.model, max_tokens=min(2000, budget // 4))
@@ -246,6 +298,8 @@ async def build_messages(
             raise
         except Exception as exc:
             status, error = "error", str(exc)[:500]
+            if isinstance(exc, VisibilityPolicyError):
+                log_messages = []
             raise
         finally:
             await generation_log_service.write_log(
@@ -262,7 +316,7 @@ async def build_messages(
                     "stage": "summary",
                     "prompt": prompt_meta("agent.summarize", override),
                 },
-                messages=summary_messages,
+                messages=log_messages,
                 status=status,
                 error=error,
                 output_chars=len("".join(pieces)),
@@ -300,7 +354,7 @@ async def build_messages(
     selected_messages = [item for _, group in sorted(selected, key=lambda entry: entry[0]) for item in group]
     override = await prompt_service.get_override(db, conversation.user_id, "agent.system")
     info = format_project_info(await project_service.project_info(db, project))
-    safe_page = await validate_page_context(db, project.id, page_context)
+    safe_page = await validate_page_context(db, project.id, page_context, scope=scope)
     system = render(
         "agent.system",
         override,
@@ -324,4 +378,5 @@ async def build_messages(
     if summary_message:
         messages.append(summary_message)
     messages.extend(selected_messages)
+    await require_visibility_stamp(db, scope.stamp)
     return messages, prompt_meta("agent.system", override)

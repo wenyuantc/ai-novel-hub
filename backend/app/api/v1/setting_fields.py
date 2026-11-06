@@ -7,6 +7,8 @@ from fastapi import APIRouter, Path, Query
 from app.core.deps import CurrentUser, DbDep
 from app.schemas import setting_fields as s
 from app.schemas.progression import Boundary, ProgressionMutationOut
+from app.schemas.setting_ai_visibility import EntryAiSettingsOut, EntryAiSettingsUpdate, LegacyFieldAiVisibilityUpdate
+from app.services import setting_ai_visibility as visibility
 from app.services import setting_catalog_service as catalog
 from app.services import setting_field_service as svc
 
@@ -94,6 +96,18 @@ async def entries(
     return await catalog.list_entries(db, user.id, project_id, types=types, q=q, page=page, page_size=page_size)
 
 
+@router.get("/setting-entries/{kind}/{entry_id}/ai-settings", response_model=EntryAiSettingsOut)
+async def ai_settings(project_id: Id, kind: s.EntryKind, entry_id: Id, user: CurrentUser, db: DbDep):
+    return await visibility.read_settings(db, user.id, project_id, kind, entry_id)
+
+
+@router.patch("/setting-entries/{kind}/{entry_id}/ai-settings", response_model=EntryAiSettingsOut)
+async def update_ai_settings(
+    project_id: Id, kind: s.EntryKind, entry_id: Id, body: EntryAiSettingsUpdate, user: CurrentUser, db: DbDep,
+):
+    return await visibility.write_settings(db, user.id, project_id, kind, entry_id, body)
+
+
 @router.get("/setting-entries/{kind}/{entry_id}/fields", response_model=s.EntryFieldsOut)
 async def fields(
     project_id: Id,
@@ -151,3 +165,18 @@ async def binding(
     db: DbDep,
 ):
     return await svc.bind_legacy(db, user.id, project_id, kind, entry_id, field_id, body)
+
+
+@router.patch(
+    "/setting-entries/{kind}/{entry_id}/legacy-fields/{field_id}/ai-visibility", response_model=s.EntryFieldsOut
+)
+async def legacy_ai_visibility(
+    project_id: Id,
+    kind: s.EntryKind,
+    entry_id: Id,
+    field_id: Id,
+    body: LegacyFieldAiVisibilityUpdate,
+    user: CurrentUser,
+    db: DbDep,
+):
+    return await svc.write_legacy_visibility(db, user.id, project_id, kind, entry_id, field_id, body)

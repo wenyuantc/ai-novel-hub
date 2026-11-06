@@ -26,6 +26,10 @@ class AIProviderError(Exception):
     """模型调用失败（网络、鉴权、配额等），message 为可直接展示给用户的中文说明。"""
 
 
+class RequestPolicyError(AIProviderError):
+    """受控请求被本地策略拒绝，不应归类为网络故障或模型不支持。"""
+
+
 @dataclass(frozen=True)
 class GeneratedImage:
     data: bytes
@@ -35,6 +39,8 @@ class GeneratedImage:
 class LLMProvider(ABC):
     # 禁止访问私网时由 build_provider 置为 False，防止重定向跳回内网
     follow_redirects: bool = True
+    # 三种实际 SDK 均在 HTTPX 每次发送前执行策略钩子；测试替身由服务层校验。
+    uses_dispatch_hooks: bool = False
 
     def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 300.0):
         self.api_key = api_key
@@ -89,6 +95,15 @@ def split_system(messages: list[ChatMessage]) -> tuple[str, list[ChatMessage]]:
 
 
 def describe_error(exc: Exception) -> str:
+    # OpenAI / Anthropic SDK 会把请求钩子抛出的异常包装为 APIConnectionError。
+    # 恢复本地的受控错误，不把它翻译成可自动重试的网络失败。
+    cause: BaseException | None = exc
+    for _ in range(8):
+        if isinstance(cause, RequestPolicyError):
+            raise cause from None
+        if cause is None:
+            break
+        cause = cause.__cause__
     text = str(exc).strip() or exc.__class__.__name__
     if len(text) > 500:
         text = text[:500] + "…"

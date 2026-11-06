@@ -15,11 +15,12 @@ export interface DefinitionDraft {
   reference_types: SettingEntryType[]
   sort: number | null
   archived: boolean
+  ai_hidden: boolean
 }
 export interface OptionDraft { label: string; sort: number | null; archived: boolean }
 
 export function definitionDraft(item: SettingFieldDefinition | null): DefinitionDraft {
-  return { label: item?.label ?? '', field_type: item?.field_type ?? 'text', applicable_types: [...item?.applicable_types ?? []], reference_types: [...item?.reference_types ?? []], sort: item?.sort ?? 0, archived: item?.archived ?? false }
+  return { label: item?.label ?? '', field_type: item?.field_type ?? 'text', applicable_types: [...item?.applicable_types ?? []], reference_types: [...item?.reference_types ?? []], sort: item?.sort ?? 0, archived: item?.archived ?? false, ai_hidden: item?.ai_hidden ?? false }
 }
 
 const validSort = (value: number | null) => value !== null && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
@@ -35,9 +36,10 @@ export function optionDraftError(draft: OptionDraft): string | null {
   return labelError(draft.label) ?? (!validSort(draft.sort) ? '显示顺序必须是有效整数' : null)
 }
 
-export function definitionInput(draft: DefinitionDraft, expectedRevision: number): SettingFieldDefinitionCreate {
+export function definitionInput(draft: DefinitionDraft, expectedRevision: number, originalHidden = false): SettingFieldDefinitionCreate {
   return { expected_fields_revision: expectedRevision, label: draft.label.trim(), field_type: draft.field_type,
-    applicable_types: [...draft.applicable_types], reference_types: draft.field_type === 'reference' ? [...draft.reference_types] : [], sort: draft.sort ?? 0, archived: draft.archived }
+    applicable_types: [...draft.applicable_types], reference_types: draft.field_type === 'reference' ? [...draft.reference_types] : [], sort: draft.sort ?? 0, archived: draft.archived,
+    ...(draft.ai_hidden !== originalHidden ? { ai_hidden: draft.ai_hidden } : {}) }
 }
 
 /** 文本原样提交，不裁剪正文；单行限制使用 Unicode 码点。 */

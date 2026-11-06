@@ -1,6 +1,18 @@
 """作品字段目录和稳定引用身份；条目值仍保存在原有时间线字段表。"""
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Index, Integer, String, UniqueConstraint, false, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    false,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -36,6 +48,7 @@ class SettingFieldDefinition(TimestampMixin, Base):
     reference_types: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    ai_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
 
 
 class SettingFieldOption(TimestampMixin, Base):
@@ -71,6 +84,7 @@ class SettingReferenceHandle(TimestampMixin, Base):
     __tablename__ = "setting_reference_handles"
     __table_args__ = (
         CheckConstraint(_REFERENCE_SHAPE, name="target_shape"),
+        Index("uq_setting_reference_handles_project_id_id", "project_id", "id", unique=True),
         _target_index("character", "character_id"),
         _target_index("world", "world_setting_id"),
         _target_index("organization", "organization_id"),
@@ -94,3 +108,31 @@ class SettingReferenceHandle(TimestampMixin, Base):
     career_id: Mapped[int | None] = mapped_column(
         ForeignKey("careers.id", ondelete="NO ACTION"), index=True, nullable=True
     )
+
+
+class SettingAiLink(TimestampMixin, Base):
+    """作者声明的单向上下文关联；句柄删除时解除关联，不把它变成剧情依赖。"""
+
+    __tablename__ = "setting_ai_links"
+    __table_args__ = (
+        UniqueConstraint("project_id", "source_handle_id", "target_handle_id"),
+        CheckConstraint("source_handle_id <> target_handle_id", name="distinct_handles"),
+        ForeignKeyConstraint(
+            ["project_id", "source_handle_id"],
+            ["setting_reference_handles.project_id", "setting_reference_handles.id"],
+            name="fk_setting_ai_links_source_handle",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "target_handle_id"],
+            ["setting_reference_handles.project_id", "setting_reference_handles.id"],
+            name="fk_setting_ai_links_target_handle",
+            ondelete="CASCADE",
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    source_handle_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    target_handle_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)

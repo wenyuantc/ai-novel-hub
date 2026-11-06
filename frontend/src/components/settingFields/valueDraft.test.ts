@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SettingFieldSlot } from '../../api/types'
 import { emptyFieldValue, entryProgressionTarget, fieldSlotValue, fieldValueFromRaw, sameFieldValue, validateEntryFieldValue } from './valueDraft'
 
-const slot: SettingFieldSlot = { field_id: null, definition_id: 8, source: 'shared', label: '阵营', field_type: 'dropdown', base_value: null, value: { option_id: 4 }, options: [{ id: 3, definition_id: 8, label: '旧阵营', archived: true, sort: 0 }, { id: 4, definition_id: 8, label: '新阵营', archived: false, sort: 1 }], reference_types: [], reference: null, base_reference: null, archived: false, sort: 0 }
+const slot: SettingFieldSlot = { field_id: null, definition_id: 8, source: 'shared', label: '阵营', field_type: 'dropdown', base_value: null, value: { option_id: 4 }, options: [{ id: 3, definition_id: 8, label: '旧阵营', archived: true, sort: 0 }, { id: 4, definition_id: 8, label: '新阵营', archived: false, sort: 1 }], reference_types: [], reference: null, base_reference: null, archived: false, ai_hidden: false, sort: 0 }
 
 describe('条目类型化字段草稿', () => {
   it('当前值和起始值分别读取，不把未来投影反填到基础草稿', () => {

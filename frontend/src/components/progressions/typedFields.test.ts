@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SettingFieldSlot, SettingProgression } from '../../api/types'
 import { buildProgressionInput, changeProgressionField, fieldChoices, initialProgressionDraft, progressionUpdateInput, progressionValueLabel, sharedProgressionCommand, type ProgressionDraft } from './fields'
 
-const dropdown: SettingFieldSlot = { field_id: 24, definition_id: 8, source: 'shared', label: '阵营', field_type: 'dropdown', base_value: null, value: { option_id: 4 }, options: [{ id: 3, definition_id: 8, label: '旧阵营', archived: true, sort: 0 }, { id: 4, definition_id: 8, label: '新阵营', archived: false, sort: 1 }], reference_types: [], reference: null, base_reference: null, archived: false, sort: 0 }
+const dropdown: SettingFieldSlot = { field_id: 24, definition_id: 8, source: 'shared', label: '阵营', field_type: 'dropdown', base_value: null, value: { option_id: 4 }, options: [{ id: 3, definition_id: 8, label: '旧阵营', archived: true, sort: 0 }, { id: 4, definition_id: 8, label: '新阵营', archived: false, sort: 1 }], reference_types: [], reference: null, base_reference: null, archived: false, ai_hidden: false, sort: 0 }
 const reference: SettingFieldSlot = { ...dropdown, definition_id: 9, field_id: 25, field_type: 'reference', label: '所属组织', base_value: null, value: null, options: [], reference_types: ['organization'] }
 const line: SettingFieldSlot = { ...dropdown, definition_id: 10, field_id: 26, field_type: 'line', label: '头衔', base_value: '', value: '', options: [] }
 const text: SettingFieldSlot = { ...line, definition_id: 11, field_id: 27, field_type: 'text' }

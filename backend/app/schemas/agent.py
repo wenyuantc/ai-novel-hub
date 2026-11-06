@@ -52,6 +52,7 @@ class ConversationOut(BaseModel):
     summary: str
     summarized_until: int | None
     last_message_at: datetime | None
+    history_sealed: bool = False
     mcp_plugin_ids: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

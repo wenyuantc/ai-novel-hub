@@ -1,4 +1,4 @@
-"""角色 / 组织卡片导入导出（ainovel.cards v5，兼容导入 v1–v4）。
+"""角色 / 组织卡片导入导出（ainovel.cards v6，兼容导入 v1–v5）。
 
 - v4 类型化字段以文件局部 ref 关联；包外引用及同名跳过目标需要作者显式映射本作品身份。
 - 原有关系／成员／职业名称关联保持兼容，导出的卡片不包含源数据库 ID。
@@ -15,6 +15,7 @@
   挂接的阶段按名称匹配，匹配不上追加到末尾；挂接经 career_service.assign_new / apply_assignment(source="import")
   写入，职业对不上、类别不符、超出上限或已挂的跳过并记入 warnings。v1 卡片没有职业，按原逻辑导入。
 - v3 自定义文本字段：只导出字段名及最新有效文本，导入为新角色基础值；不携带源项目的内部 ID 或章节位置。
+- v6 保留条目设置及字段可见性；AI 关联使用与类型化字段相同的局部 ref／显式映射。
 """
 
 import json
@@ -63,6 +64,7 @@ from app.schemas.card import (
 )
 from app.schemas.career import CareerCreate, StageIn
 from app.schemas.organization import MemberCreate
+from app.schemas.setting_ai_visibility import StoredAiSettings, legacy_ai_settings
 from app.schemas.setting_fields import DefinitionCreate, DefinitionOut, EntityRef, OptionOut
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
 from app.services import (
@@ -72,6 +74,9 @@ from app.services import (
     relationship_service,
     setting_progression_service,
     story_service,
+)
+from app.services import (
+    setting_ai_visibility as visibility,
 )
 from app.services import (
     setting_catalog_service as catalog,
@@ -95,6 +100,7 @@ RENAME_SUFFIX = "（导入）"
 
 async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: CardExportRequest) -> dict[str, Any]:
     await get_owned_project(db, user_id, project_id)
+    ai_revision = await visibility.visibility_revision(db, project_id)
     category_revision = await categories.categories_revision(db, project_id)
     await categories.validate_project_category_graph(db, project_id)
     char_ids = list(dict.fromkeys(req.character_ids))
@@ -187,6 +193,7 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
                 "profile": c.profile,
                 "current_state": c.current_state,
                 "life_status": c.life_status,
+                "legacy_always_in_context": c.always_in_context,
                 "careers": [
                     {
                         "career_name": career.name,
@@ -230,6 +237,7 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         db, project_id, data, chars, orgs, list(sorted(used.values(), key=lambda x: (x.sort, x.id)))
     )
     await categories.check_categories_revision(db, project_id, category_revision)
+    await visibility.check_visibility_revision(db, project_id, ai_revision)
     return data
 
 
@@ -238,6 +246,7 @@ async def _export_typed_fields(db, project_id, data, chars, orgs, careers):
     with db.no_autoflush:
         # 省略空快照前先验证全部保留历史，不能把非法 inactive/orphan 绑定悄悄藏起。
         await fields.validate_project_field_graph(db, project_id)
+        await visibility.validate_project_links(db, project_id)
         groups = (("character", "characters", chars), ("organization", "organizations", orgs),
                   ("career", "careers", careers))
         entries = [EntityRef(kind=kind, id=item.id) for kind, _, items in groups for item in items]
@@ -250,6 +259,9 @@ async def _export_typed_fields(db, project_id, data, chars, orgs, careers):
             for index, (item, output) in enumerate(zip(items, data[key], strict=True), 1):
                 output["ref"] = local[kind, item.id] = f"{kind}.{index}"
                 output["setting_tags"] = list(item.setting_tags)
+                stored = StoredAiSettings.model_validate(item)
+                output["ai_settings"] = visibility.normalize_settings(kind, stored).model_dump()
+        links = await visibility.load_link_targets(db, project_id, local.keys())
         definition_ids = {
             slot.definition_id for value in resolved.values() for slot in value.fields if slot.field_id is not None
         }
@@ -279,7 +291,7 @@ async def _export_typed_fields(db, project_id, data, chars, orgs, careers):
                 option_snapshots.append({"ref": option_ref, "label": option.label, "sort": option.sort,
                                          "archived": option.archived})
             snapshots.append({"ref": ref, **{key: getattr(definition, key) for key in (
-                "label", "field_type", "applicable_types", "reference_types", "sort", "archived",
+                "label", "field_type", "applicable_types", "reference_types", "sort", "archived", "ai_hidden",
             )}, "options": option_snapshots})
         external_targets = {}
         for slots in snapshot_fields.values():
@@ -288,9 +300,13 @@ async def _export_typed_fields(db, project_id, data, chars, orgs, careers):
                     target = EntityRef.model_validate(slot.value)
                     if (target.kind, target.id) not in local:
                         external_targets[target.kind, target.id] = target
+        for targets in links.values():
+            for kind, entry_id in targets:
+                if (kind, entry_id) not in local:
+                    external_targets[kind, entry_id] = EntityRef(kind=kind, id=entry_id)
         external_entries = await catalog.get_entries(db, project_id, list(external_targets.values()))
         externals = []
-        for index, (key, target) in enumerate(external_entries.items(), 1):
+        for index, (key, target) in enumerate(sorted(external_entries.items()), 1):
             local[key] = f"external.{index}"
             externals.append(
                 {"ref": local[key], "kind": target.reference.kind, "type": target.type, "name": target.name}
@@ -298,9 +314,11 @@ async def _export_typed_fields(db, project_id, data, chars, orgs, careers):
         for kind, key, items in groups:
             for item, output in zip(items, data[key], strict=True):
                 value = resolved[kind, item.id]
+                output["ai_link_refs"] = [local[target] for target in links.get((kind, item.id), ())]
                 if kind == "character":
                     output["custom_text_fields"] = [
-                        {"name": slot.label, "value": slot.value} for slot in value.legacy_fields
+                        {"name": slot.label, "value": slot.value, "ai_hidden": slot.ai_hidden}
+                        for slot in value.legacy_fields
                     ]
                 output["fields"] = []
                 for slot in snapshot_fields[kind, item.id]:
@@ -422,6 +440,7 @@ def _card_entries(card):
 
 def _compatible_definition(source, target):
     return (source.field_type == target.field_type
+            and source.ai_hidden == target.ai_hidden
             and set(source.applicable_types) <= set(target.applicable_types)
             and set(source.reference_types) <= set(target.reference_types))
 
@@ -450,9 +469,12 @@ async def _typed_plan(db, project_id, card, resolutions, mappings):
                 plan.created.add(ref)
         active_definitions = set()
         referenced: dict[str, list[Any]] = {}
+        linked: dict[str, list[str]] = {}
         for ref, (kind, item) in entries.items():
             if ref not in plan.created:
                 continue
+            for target_ref in item.ai_link_refs:
+                linked.setdefault(target_ref, []).append(item.name)
             for snapshot in item.fields:
                 definition = definitions[snapshot.definition_ref]
                 if kind not in definition.applicable_types:
@@ -473,6 +495,7 @@ async def _typed_plan(db, project_id, card, resolutions, mappings):
                 continue
             compatible = [d for d in target_definitions if _compatible_definition(source, d)]
             dto = PreviewFieldDefinition(ref=source.ref, label=source.label, field_type=source.field_type,
+                ai_hidden=source.ai_hidden,
                 status="conflict" if source.label in {d.label for d in target_definitions} else "new",
                 options=source.options, compatible_targets=[DefinitionOut.model_validate({
                     **{key: getattr(d, key) for key in DefinitionOut.model_fields if key != "options"},
@@ -484,7 +507,7 @@ async def _typed_plan(db, project_id, card, resolutions, mappings):
                 allowed_options = {o.id for o in target_options if target and o.definition_id == target.id}
                 if (target is None or set(decision.option_mappings) != {o.ref for o in source.options}
                         or not set(decision.option_mappings.values()) <= allowed_options):
-                    dto.status, dto.reason = "incompatible", "复用定义不兼容，或选项尚未全部显式映射"
+                    dto.status, dto.reason = "incompatible", "复用定义的类型、AI 可见性不兼容，或选项尚未完整映射"
                 else:
                     dto.status, dto.target_definition_id = "reuse", target.id
             elif decision is not None and decision.action == "rename":
@@ -501,12 +524,16 @@ async def _typed_plan(db, project_id, card, resolutions, mappings):
                 else:
                     planned_labels.add(source.label)
             plan.definitions.append(dto)
-        for ref, sources in referenced.items():
+        for ref in dict.fromkeys([*referenced, *linked]):
+            sources = referenced.get(ref, [])
             kind, local = entries.get(ref, (None, None))
             kind = kind or external[ref].kind
             name = local.name if local is not None else external[ref].name
-            result = PreviewReference(ref=ref, kind=kind, name=name, status="unresolved",
-                                      source_fields=[f"{name} / {definition.label}" for name, definition in sources])
+            result = PreviewReference(
+                ref=ref, kind=kind, name=name, status="unresolved",
+                source_fields=[f"{name} / {definition.label}" for name, definition in sources],
+                source_links=linked.get(ref, []),
+            )
             target = mappings.references.get(ref)
             if ref in plan.created:
                 if target is not None:
@@ -529,15 +556,35 @@ async def _typed_plan(db, project_id, card, resolutions, mappings):
                 result.reason = "请选择当前作品中的具体条目，或将包内同名条目重命名导入"
             if target_type and any(target_type not in definition.reference_types for _, definition in sources):
                 result.status, result.reason = "unresolved", "映射目标不在字段允许的引用范围内"
+            if ref in linked and target_type and target_type != (kind if local is not None else external[ref].type):
+                result.status, result.reason = "unresolved", "映射目标与 AI 关联的条目类型不一致"
             plan.references.append(result)
+        _reject_ambiguous_ai_links(entries, plan)
         await fields.check_fields_revision(db, project_id, revision)
         return plan
+
+
+def _reject_ambiguous_ai_links(entries, plan: _TypedPlan) -> None:
+    mapped = {item.ref: item for item in plan.references if item.status == "mapped"}
+    for ref in plan.created:
+        _, source = entries[ref]
+        seen = set()
+        for target_ref in source.ai_link_refs:
+            match = mapped.get(target_ref)
+            if match is None or match.target is None:
+                continue
+            key = (match.target.kind, match.target.id)
+            if key in seen:
+                match.status, match.reason = "unresolved", f"「{source.name}」的多个 AI 关联映射到同一条目"
+            seen.add(key)
+
 
 async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: Any,
                         request: CardPreviewRequest | None = None) -> CardPreview:
     await get_owned_project(db, user_id, project_id)
     card = parse_card(data)
     request = request or CardPreviewRequest(data=data)
+    ai_revision = await visibility.visibility_revision(db, project_id)
     category_revision = await categories.categories_revision(db, project_id)
     typed = await _typed_plan(db, project_id, card, request.resolutions, request.mappings)
     warnings: list[str] = []
@@ -591,8 +638,11 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
                 warnings.append(f"角色「{c.name}」的职业「{a.career_name}」无法关联，将被忽略")
     await fields.check_fields_revision(db, project_id, typed.revision)
     await categories.check_categories_revision(db, project_id, category_revision)
+    if card.version >= 6:
+        await visibility.check_visibility_revision(db, project_id, ai_revision)
     return CardPreview(
         categories_revision=category_revision,
+        ai_visibility_revision=ai_revision,
         fields_revision=typed.revision, can_import=typed.can_import,
         field_definitions=typed.definitions, references=typed.references,
         characters=_preview_items([c.name for c in chars], existing_chars),
@@ -635,8 +685,18 @@ def _clamp(value: int, low: int, high: int) -> int:
 
 
 async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: CardImportRequest) -> CardImportResult:
-    await get_owned_project(db, user_id, project_id, lock=True)
+    raw_version = req.data.get("version") if isinstance(req.data, dict) else None
+    if type(raw_version) is int and raw_version >= 6:
+        # 同其它配置写入一样，先取发送写门禁再取父项目锁。
+        await visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
+    else:
+        await get_owned_project(db, user_id, project_id, lock=True)
     card = parse_card(req.data)
+    if card.version >= 6:
+        if req.expected_ai_visibility_revision is None:
+            raise BadRequestError("v6 卡片确认导入必须携带 AI 可见性版本，请先预览",
+                                  extra={"code": "ai_visibility_revision_required"})
+        await visibility.check_visibility_revision(db, project_id, req.expected_ai_visibility_revision)
     if card.version >= 5:
         if req.expected_categories_revision is None:
             raise BadRequestError("v5 卡片确认导入必须携带分类目录版本，请先预览",
@@ -648,7 +708,7 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         await fields.check_fields_revision(db, project_id, req.expected_fields_revision)
     typed = await _typed_plan(db, project_id, card, req.resolutions, req.mappings)
     if not typed.can_import:
-        raise BadRequestError("卡片仍有未解决的字段定义或引用，请完成显式映射后再导入")
+        raise BadRequestError("卡片仍有未解决的字段定义、引用或 AI 关联，请完成显式映射后再导入")
     typed_locals: dict[str, EntityRef] = {}
     warnings: list[str] = []
     chars = list(card.characters) if card.version >= 4 else _dedupe_names(card.characters, "角色", warnings)
@@ -686,14 +746,18 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             "profile": c.profile,
             "current_state": c.current_state,
             "life_status": c.life_status if c.life_status in LIFE_STATUSES else "alive",
-            "always_in_context": is_protagonist_role(c.role_type),
+            "always_in_context": (c.legacy_always_in_context if c.legacy_always_in_context is not None
+                                  else is_protagonist_role(c.role_type)),
+            **_import_ai_settings("character", c),
         }
         created = await story_service.new_character(db, project_id, values)
         timeline = await setting_progression_service.create_character_timeline(db, created)
         if c.custom_text_fields:
-            await setting_progression_service.add_initial_text_fields(
+            legacy_fields = await setting_progression_service.add_initial_text_fields(
                 db, timeline, [(field.name, field.value) for field in c.custom_text_fields]
             )
+            for field, source in zip(legacy_fields, c.custom_text_fields, strict=True):
+                field.ai_hidden = source.ai_hidden
         char_map[c.name] = created.id
         if c.ref:
             typed_locals[c.ref] = EntityRef(kind="character", id=created.id)
@@ -731,6 +795,7 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             power_level=o.power_level,
             description=o.description,
             sort=next_sort,
+            **_import_ai_settings("organization", o),
         )
         next_sort += 1
         db.add(org)
@@ -825,7 +890,15 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         for career in card.careers:
             if career.ref in typed.created:
                 typed_locals[career.ref] = EntityRef(kind="career", id=career_map[career.name].id)
-        await _apply_typed_fields(db, project_id, card, req.mappings, typed, typed_locals)
+        targets = {item.ref: item.target for item in typed.references if item.target is not None} | typed_locals
+        await _apply_typed_fields(db, project_id, card, req.mappings, typed, typed_locals, targets)
+        if card.version >= 6 and typed_locals:
+            await _apply_ai_links(db, project_id, card, typed_locals, targets)
+            await visibility.validate_project_links(db, project_id)
+            # 写入的条目／定义均为新建，已有条目的配置没有放宽或收紧。
+            await visibility.bump_visibility_revision(
+                db, project_id, tighten=False, expected=req.expected_ai_visibility_revision,
+            )
     careers_assigned = await _import_assignments(db, project_id, chars, char_map, career_map, career_results, warnings)
 
     # ---- 人物关系 ----
@@ -884,7 +957,23 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     )
 
 
-async def _apply_typed_fields(db, project_id, card, mappings, plan, local_targets):
+def _import_ai_settings(kind, entry):
+    if entry.ai_settings is None:
+        return legacy_ai_settings().model_dump()
+    return visibility.normalize_settings(kind, entry.ai_settings).model_dump()
+
+
+async def _apply_ai_links(db, project_id, card, local_targets, targets):
+    sources = {item.ref: item.ai_link_refs for _, item in _card_entries(card)
+               if item.ref in local_targets and item.ai_link_refs}
+    required = sources.keys() | {ref for links in sources.values() for ref in links}
+    entries = await catalog.get_entries(db, project_id, [targets[ref] for ref in required])
+    by_ref = {ref: entries[targets[ref].kind, targets[ref].id] for ref in required}
+    for source_ref, links in sources.items():
+        await visibility.replace_links(db, project_id, by_ref[source_ref], [by_ref[ref] for ref in links])
+
+
+async def _apply_typed_fields(db, project_id, card, mappings, plan, local_targets, targets):
     """在同一项目事务中先建配置及全部实体，再绑定 snapshot；不搬运源章锚。"""
     definition_map, option_map = {}, {}
     source_definitions = {item.ref: item for item in card.field_definitions}
@@ -906,8 +995,6 @@ async def _apply_typed_fields(db, project_id, card, mappings, plan, local_target
             db.add(created)
             await db.flush()
             option_map[option.ref] = created.id
-    targets = {item.ref: item.target for item in plan.references if item.target is not None}
-    targets.update(local_targets)
     for _, item in _card_entries(card):
         if item.ref not in plan.created:
             continue
@@ -997,6 +1084,8 @@ async def _import_careers(
                 stages=[StageIn(name=n, description=descs.get(n, "")) for n in names],
             ),
         )
+        for key, value in _import_ai_settings("career", cc).items():
+            setattr(career, key, value)
         career_map[cc.name] = career
         results[cc.name] = ImportedCareer(name=cc.name, id=career.id, action="created")
     return results, career_map

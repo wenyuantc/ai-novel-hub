@@ -12,7 +12,7 @@ from app.schemas.mentions import (
     SummaryChapter,
 )
 from app.services.mentions.context import query_context, select_entities, validate_chapter_range
-from app.services.mentions.matcher import Dictionary, cache
+from app.services.mentions.matcher import Dictionary, cache, match_entities
 from app.services.mentions.sources import SourceDocument, iter_documents
 
 
@@ -26,7 +26,7 @@ def _chapter_counts(
     has_content = bool(document.text.strip())
     if keys:
         for hit in cache.iter_matches((project_id, "chapter", document.ref.id), document.text, dictionary):
-            owners = dictionary.owners[hit.term]
+            owners = match_entities(hit, dictionary)
             bucket = 0 if len(owners) == 1 else 1
             for entity in owners:
                 key = (entity.kind, entity.id)

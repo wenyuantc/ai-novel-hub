@@ -39,7 +39,7 @@ async def test_confirmation_refreshes_stale_preview_then_undo_conflicts(client, 
     char_url = f"/api/v1/projects/{project['id']}/characters"
     character = (await client.post(char_url, json={"name": "林远", "personality": "热情"})).json()
     fake_llm.push_tools([call("update_character", {"id": character["id"], "personality": "冷静"})])
-    task_id = await send(client, url)
+    task_id = await send(client, url, "请修改林远的性格")
     await wait_task(client, task_id, statuses=("paused",))
     change = (await client.get(url)).json()["changes"][0]
     assert (await client.patch(char_url + f"/{character['id']}", json={"personality": "焦虑"})).status_code == 200
@@ -210,7 +210,7 @@ async def test_agent_versions_and_success_error_logs_survive_backup(client, fake
     assert any(v["source"] == "agent" for v in backup["tables"]["chapter_versions"])
     imported = await _import(client, backup)
     copied = await _backup(client, imported["project"]["id"], versions="1", logs="1")
-    assert copied["app_schema"] == "0036"
+    assert copied["app_schema"] == "0037"
     assert {log["status"] for log in copied["tables"]["generation_logs"]} == {"success", "error"}
     assert all(log["kind"] == "agent.turn" for log in copied["tables"]["generation_logs"])
 

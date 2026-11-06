@@ -55,6 +55,7 @@ class DefinitionCreate(BaseModel):
     reference_types: list[EntryType] = Field(default_factory=list, max_length=9)
     sort: DbInt = 0
     archived: bool = Field(default=False, strict=True)
+    ai_hidden: bool = Field(default=False, strict=True)
 
     @field_validator("label")
     @classmethod
@@ -86,6 +87,14 @@ class DefinitionUpdate(BaseModel):
     reference_types: list[EntryType] | None = Field(default=None, max_length=9)
     sort: DbInt | None = None
     archived: bool | None = Field(default=None, strict=True)
+    ai_hidden: bool | None = Field(default=None, strict=True)
+
+    @field_validator("ai_hidden")
+    @classmethod
+    def visibility_not_null(cls, value: bool | None) -> bool:
+        if value is None:
+            raise ValueError("请省略未修改的 AI 可见性")
+        return value
 
 
 class OptionCreate(BaseModel):
@@ -130,6 +139,7 @@ class DefinitionOut(BaseModel):
     reference_types: list[EntryType]
     sort: int
     archived: bool
+    ai_hidden: bool = False
     options: list[OptionOut] = Field(default_factory=list)
 
 
@@ -169,6 +179,7 @@ class FieldSlot(BaseModel):
     reference_types: list[EntryType] = Field(default_factory=list)
     options: list[OptionOut] = Field(default_factory=list)
     archived: bool = False
+    ai_hidden: bool = False
     sort: int = 0
     # 名称投影仅含引用目标身份和当前名称，绝不递归目标正文。
     reference: SettingEntry | None = None
@@ -179,6 +190,7 @@ class EntryFieldsOut(FieldRevision):
     entry: SettingEntry
     timeline_id: int | None
     timeline_revision: int
+    ai_visibility_revision: int = 0
     position: StoryPosition | None
     fields: list[FieldSlot]
     legacy_fields: list[FieldSlot]

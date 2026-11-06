@@ -271,6 +271,7 @@ class TextFieldOut(BaseModel):
     label: str
     base_value: str
     sort: int
+    ai_hidden: bool = False
 
 
 class TextFieldListOut(BaseModel):

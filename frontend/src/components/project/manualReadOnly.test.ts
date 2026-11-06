@@ -13,6 +13,7 @@ import CareerEditDrawer from '../careers/CareerEditDrawer'
 import CharacterCareersTab, { CareerRemoveModal } from '../careers/CharacterCareersTab'
 import CharacterMembershipsTab, { MembershipEditor } from '../entities/CharacterMembershipsTab'
 import { useSettingTagsSession } from '../settingTags/useSettingTagsSession'
+import { useSettingAiSession } from '../settingAi/useSettingAiSession'
 
 const view = vi.hoisted(() => ({
   canRead: true, canEdit: false, editChecks: 0, data: [] as unknown[], buttons: [] as ButtonProps[],
@@ -55,9 +56,10 @@ const button = (label: string) => {
   return found!
 }
 const render = (element: import('react').ReactElement) => renderToString(createElement(App, null, element))
-function CareerDrawerFixture(props: Omit<Parameters<typeof CareerEditDrawer>[0], 'tagsSession'>) {
+function CareerDrawerFixture(props: Omit<Parameters<typeof CareerEditDrawer>[0], 'tagsSession' | 'aiSession'>) {
   const tagsSession = useSettingTagsSession(props.projectId)
-  return createElement(CareerEditDrawer, { ...props, tagsSession })
+  const aiSession = useSettingAiSession(props.projectId)
+  return createElement(CareerEditDrawer, { ...props, tagsSession, aiSession })
 }
 afterEach(() => { vi.restoreAllMocks(); view.canRead = true; view.canEdit = false; view.editChecks = 0; view.data = []; view.buttons = []; view.confirms = []; view.modals = []; view.menus = []; view.stageDisabled = undefined })
 

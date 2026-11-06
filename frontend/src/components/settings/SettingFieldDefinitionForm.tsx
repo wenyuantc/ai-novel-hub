@@ -32,6 +32,10 @@ export default function SettingFieldDefinitionForm({ value, disabled, onChange }
     <Form.Item label="启用状态" extra="停用后保留已有值和章节历史。">
       <Switch checked={!value.archived} checkedChildren="启用" unCheckedChildren="停用" onChange={(enabled) => onChange({ archived: !enabled })} aria-label="启用这个字段" />
     </Form.Item>
+    <Form.Item label="AI 可见性" extra="隐藏作用于使用此共享定义的所有条目；字段内容和章节历史仍可人工查看。收紧后，部分旧会话需要新开。">
+      <Switch checked={value.ai_hidden} checkedChildren="隐藏" unCheckedChildren="可用"
+        onChange={(ai_hidden) => onChange({ ai_hidden })} aria-label="对 AI 隐藏此共享字段" />
+    </Form.Item>
     {value.field_type === 'dropdown' && <Typography.Paragraph type="secondary">先保存字段，再为它添加下拉选项。选项改名或停用后，原有章节记录仍保留关联。</Typography.Paragraph>}
   </Form>
 }

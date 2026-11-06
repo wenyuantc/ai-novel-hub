@@ -31,6 +31,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 from app.models.style_presets import PRESET_STYLES
 
+AI_SETTING_MODES = ("always", "detected", "manual_only", "never")
+
 CHAPTER_STATUSES = ("draft", "generating", "done")
 AI_PROVIDERS = ("openai_compat", "anthropic", "gemini")
 PROJECT_STATUSES = ("planning", "writing", "completed")
@@ -222,6 +224,9 @@ class Project(TimestampMixin, Base):
     fields_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     # 当前整理标签和分类规则的独立 CAS，不随字段或剧情时间线版本变化。
     categories_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # AI 设置并发版本与历史重发代次；不属于可还原的设定内容。
+    ai_visibility_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    ai_history_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
 class ProjectCover(TimestampMixin, Base):
@@ -232,9 +237,24 @@ class ProjectCover(TimestampMixin, Base):
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
-class WorldSetting(TimestampMixin, Base):
+class SettingAiMetadata:
+    # 显式 None 必须落为 SQL NULL，而不是被新建默认覆盖（旧备份和卡片）。
+    ai_mode: Mapped[str | None] = mapped_column(String(16).evaluates_none(), server_default="detected")
+    mention_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    mention_case_sensitive: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    mention_exclusions: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    ai_hidden_builtin_fields: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False,
+    )
+
+
+def _ai_mode_constraint() -> CheckConstraint:
+    return CheckConstraint("ai_mode IN ('always', 'detected', 'manual_only', 'never')", name="ai_mode")
+
+
+class WorldSetting(SettingAiMetadata, TimestampMixin, Base):
     __tablename__ = "world_settings"
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (_ai_mode_constraint(), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -247,9 +267,9 @@ class WorldSetting(TimestampMixin, Base):
     sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
-class Character(TimestampMixin, Base):
+class Character(SettingAiMetadata, TimestampMixin, Base):
     __tablename__ = "characters"
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (_ai_mode_constraint(), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -274,9 +294,9 @@ class Character(TimestampMixin, Base):
     sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
-class Organization(TimestampMixin, Base):
+class Organization(SettingAiMetadata, TimestampMixin, Base):
     __tablename__ = "organizations"
-    __table_args__ = (UniqueConstraint("project_id", "name"), {"sqlite_autoincrement": True})
+    __table_args__ = (UniqueConstraint("project_id", "name"), _ai_mode_constraint(), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -396,11 +416,11 @@ class ChapterCharacter(TimestampMixin, Base):
     )
 
 
-class Career(TimestampMixin, Base):
+class Career(SettingAiMetadata, TimestampMixin, Base):
     """职业定义。kind 决定只能挂为主职业（main）还是副职业（sub）。"""
 
     __tablename__ = "careers"
-    __table_args__ = (UniqueConstraint("project_id", "name"), {"sqlite_autoincrement": True})
+    __table_args__ = (UniqueConstraint("project_id", "name"), _ai_mode_constraint(), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)

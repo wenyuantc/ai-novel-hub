@@ -4,7 +4,7 @@ import { settingFieldsApi } from '../../api/settingFields'
 import type { SettingFieldDefinition, SettingFieldDefinitionList, SettingFieldDefinitionMutation } from '../../api/types'
 import { SettingFieldsController } from './settingFieldsController'
 
-const field = (over: Partial<SettingFieldDefinition> = {}): SettingFieldDefinition => ({ id: 4, project_id: 1, label: '境界', field_type: 'dropdown', applicable_types: ['character'], reference_types: [], sort: 0, archived: false, options: [{ id: 8, definition_id: 4, label: '练气', sort: 0, archived: false }], ...over })
+const field = (over: Partial<SettingFieldDefinition> = {}): SettingFieldDefinition => ({ id: 4, project_id: 1, label: '境界', field_type: 'dropdown', applicable_types: ['character'], reference_types: [], sort: 0, archived: false, ai_hidden: false, options: [{ id: 8, definition_id: 4, label: '练气', sort: 0, archived: false }], ...over })
 const page = (revision = 1, item = field()): SettingFieldDefinitionList => ({ fields_revision: revision, items: [item], total: 1 })
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
 function setup() {

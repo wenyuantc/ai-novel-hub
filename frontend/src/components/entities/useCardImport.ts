@@ -14,11 +14,11 @@ export function useCardImport(projectId: number, actorId: number, identity: stri
     return auth.status === 'authenticated' && auth.user?.id === actorId && authorizationKey(auth.user) === identity
       && projectAccess(useProjectStore.getState().project, auth.user, projectId).canEdit
   }, () => {
-    invalidateProject(projectId, ['characters', 'organizations', 'relationships', 'careers', 'setting_fields', 'setting-categories'])
+    invalidateProject(projectId, ['characters', 'organizations', 'relationships', 'careers', 'setting_fields', 'setting-categories', 'setting-ai-visibility'])
     onImported()
   }))
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   useEffect(() => { controller.activate(); return () => controller.deactivate() }, [controller])
-  useProjectRefresh(projectId, ['characters', 'organizations', 'careers', 'world', 'setting_fields', 'setting-categories'], controller.invalidate)
+  useProjectRefresh(projectId, ['characters', 'organizations', 'careers', 'world', 'setting_fields', 'setting-categories', 'setting-ai-visibility'], controller.invalidate)
   return { state, controller }
 }

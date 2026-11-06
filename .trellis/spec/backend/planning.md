@@ -46,7 +46,7 @@
 
 - 引用为判别联合：`{kind:character|world|organization|career,id}` 或 `{kind:relationship,timeline_id}`。world 覆盖全部现有分类；关系必须使用 `setting_timelines.id` 且 `subject_kind=relationship`，不能用当前 `relationships.id` 替代。隐藏或尚无当前载体的关系仍有稳定引用。
 - 集合操作 `add|remove|replace|clear`；关系用 `timeline_ids`，其他用 `ids`。`clear` 不带 ID；每种设定最多一个操作，所有 ID 必须属于同作品。POV 使用 `set + character_id` 或 `clear`。
-- 矩阵列有 `selection.kind=setting|subplot`，格子有 `kind=setting|subplot`。设定格区分 `manual`、`pov`、正文确定／歧义次数、`tracking_supported`、`has_content`；未写／不支持追踪不等于零次出场。
+- 矩阵列有 `selection.kind=setting|subplot`，格子有 `kind=setting|subplot`。设定格区分 `manual`、`pov`、正文确定／歧义次数、`tracking_supported`、`has_content`；未写或没有启用追踪不等于零次出场。目录和统计使用同一 `load_candidates` 快照，角色、各世界观、组织和职业的实际追踪配置决定 `tracking_supported`；关系不追踪。用 `match_entities` 读取每次命中的归属，不能绕过大小写／排除规则。
 - 交汇独立于普通 node：2–20条同作品、不重复的支线，即使参与方没有 node 也算推进。相同标题的不同 event ID 不合并；筛掉某列不能删除事件里的其他参与者。
 - 已建章轴按真实章顺序、计划轴按计划顺序分别计算；断档在完整未分页轴上算实际位置数，不以章号相减，也不混合两种轴。`WeaveGap.after_label/before_label` 来自完整轴的真实章号／细纲位置，跨分页展开列表仍能显示准确起止及间隔数量；UI过滤后交汇提示未展示参与支线数。`same_position` 只说明同章推进，剧情交汇必须有作者维护的 crossing。
 - 被交汇引用的支线删除返回409。数据库参与表的 subplot FK 使用 `NO ACTION DEFERRABLE INITIALLY DEFERRED`：独立删支线仍受保护，整作品多路径级联能在事务末清空；不能改成立即 RESTRICT／NO ACTION。

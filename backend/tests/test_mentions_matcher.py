@@ -1,5 +1,5 @@
 from app.schemas.mentions import EntityRef
-from app.services.mentions.matcher import MentionCache, compile_dictionary, iter_matches, span_out
+from app.services.mentions.matcher import MentionCache, TrackingRule, compile_dictionary, iter_matches, span_out
 
 
 def entity(id, name, aliases=(), *, kind="character", category="character"):
@@ -83,3 +83,39 @@ def test_cache_limits_and_empty_scans():
     assert len(list(cache.iter_matches((1, "chapter", 1), "甲", dictionary))) == 1
     cache.clear()
     assert cache.info() == {"sources": 0, "spans": 0}
+
+
+def test_mixed_case_exclusions_are_local_to_a_span_and_owner():
+    entities = [entity(1, "Will"), entity(2, "will"), entity(3, "Will Smith"), entity(4, "Smith")]
+    rules = {
+        ("character", 1): TrackingRule(case_sensitive=False, exclusions=("will smith",)),
+        ("character", 3): TrackingRule(exclusions=("Will Smith Jr",)),
+        ("character", 4): TrackingRule(enabled=False),
+    }
+    dictionary = compile_dictionary(entities, rules)
+    text = "🙂Will Smith Jr will smith WILL anna"
+    spans = [span_out(hit, dictionary) for hit in iter_matches(text, dictionary)]
+    assert [(s.text, [owner.id for owner in s.entities]) for s in spans] == [
+        ("will", [2]), ("WILL", [1]),
+    ]
+    assert all(text[s.start:s.end] == s.text for s in spans)
+    assert dictionary.fingerprint != compile_dictionary(entities).fingerprint
+
+
+def test_excluded_longer_can_fall_back_to_same_position_shorter():
+    entities = [entity(1, "青云宗"), entity(2, "青云")]
+    dictionary = compile_dictionary(entities, {("character", 1): TrackingRule(exclusions=("青云宗章程",))})
+    text = "青云宗章程，青云宗"
+    assert [hit.term for hit in iter_matches(text, dictionary)] == ["青云", "青云宗"]
+
+
+def test_unicode_fold_expansion_preserves_original_offsets_and_whole_codepoint():
+    entities = [entity(1, "Straße"), entity(2, "SS"), entity(3, "S"), entity(4, "μ")]
+    rules = {("character", e.id): TrackingRule(case_sensitive=False) for e in entities}
+    dictionary = compile_dictionary(entities, rules)
+    text = "🙂STRASSE ß S μ Μ"
+    spans = [span_out(hit, dictionary) for hit in iter_matches(text, dictionary)]
+    assert [(s.start, s.end, s.text, [e.id for e in s.entities]) for s in spans] == [
+        (1, 8, "STRASSE", [1]), (9, 10, "ß", [2]), (11, 12, "S", [3]),
+        (13, 14, "μ", [4]), (15, 16, "Μ", [4]),
+    ]

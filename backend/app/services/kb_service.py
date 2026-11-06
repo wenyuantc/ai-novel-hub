@@ -33,6 +33,7 @@ from app.schemas.kb import (
     StaleCounts,
 )
 from app.services import kb_parser, retrieval_service
+from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, visibility_sessionmaker
 from app.services.project_service import get_manageable_project, get_owned_project
 from app.services.retrieval_service import Embedder
 
@@ -327,6 +328,8 @@ async def knowledge_text(
             db, project.id, query, top_k=settings.top_k, min_score=settings.min_score, embedder=embedder
         )
         return "\n".join(format_lines(hits, settings.max_chars))
+    except VisibilityPolicyError:
+        raise
     except Exception:  # noqa: BLE001
         logger.warning("知识库检索失败（项目 %s，%s），本次不注入参考资料", project.id, purpose, exc_info=True)
         return ""
@@ -342,6 +345,7 @@ async def knowledge_for_project(
     ai_timeout: float,
     allow_private: bool,
     purpose: str = "",
+    visibility_stamp: VisibilityStamp | None = None,
 ) -> str:
     """向导 / 实体生成 / 灵感模式用：按项目所有者的向量模型检索参考资料（没有向量模型时只用关键词）。"""
     settings = await load_settings(db, project.id)
@@ -353,6 +357,8 @@ async def knowledge_for_project(
     embedder = await retrieval_service.get_embedder(
         db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
     )
+    if embedder is not None and visibility_stamp is not None:
+        embedder = retrieval_service.guard_embedder(embedder, visibility_stamp, visibility_sessionmaker(db))
     return await knowledge_text(db, project, query, embedder=embedder, purpose=purpose)
 
 

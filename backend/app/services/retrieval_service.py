@@ -26,17 +26,18 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import numpy as np
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.providers import AIProviderError, LLMProvider, ProviderFactory
 from app.core.errors import BadRequestError
 from app.core.security import SecretCipher
 from app.models import AIConfig, RetrievalChunk
+from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, guard_provider
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,15 @@ class Embedder:
         return [self._cache[t] for t in texts]
 
 
+def guard_embedder(
+    embedder: Embedder | None, stamp: VisibilityStamp, sessionmaker: async_sessionmaker[AsyncSession],
+) -> Embedder | None:
+    """仅给由设定派生的本次检索绑定发送戳；不改变普通知识库索引。"""
+    if embedder is None:
+        return None
+    return replace(embedder, provider=guard_provider(embedder.provider, stamp, sessionmaker), _cache={})
+
+
 async def default_embedding_config(db: AsyncSession, user_id: int) -> AIConfig | None:
     """用户的默认向量模型配置（没有默认时取最新一条）；没有配置返回 None。"""
     return await db.scalar(
@@ -244,6 +254,8 @@ async def embed_query(embedder: Embedder | None, text: str) -> tuple[np.ndarray 
             vec = (await embedder.embed([text]))[0]
     except TimeoutError:
         return None, f"查询向量生成超时（{QUERY_EMBED_TIMEOUT_SECONDS} 秒），本次只用关键词检索"
+    except VisibilityPolicyError:
+        raise
     except AIProviderError as exc:
         return None, f"查询向量生成失败（{exc}），本次只用关键词检索"
     return vec, ""

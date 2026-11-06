@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, event, inspect, select, text
+from sqlalchemy import MetaData, Table, create_engine, event, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
@@ -92,6 +92,11 @@ def _snapshot(conn, table, condition=""):
     return [dict(row) for row in conn.execute(text(f"SELECT * FROM {table} {condition} ORDER BY id")).mappings()]
 
 
+def _historical_table(conn, name):
+    """写入旧修订用当时的物理列，避免触发新 ORM 的 Python 列默认。"""
+    return Table(name, MetaData(), autoload_with=conn, resolve_fks=False)
+
+
 def _foreign_keys_during_migrations(monkeypatch):
     original = async_sqlalchemy.async_engine_from_config
 
@@ -146,9 +151,33 @@ def _schema_contract(inspector, table):
     }
 
 
+def _schema_0036_model_contract(inspector, table):
+    """比较冻结的 0036 结构，不把当前的 AI 策略列计入历史合同。"""
+    contract = _schema_contract(inspector, table)
+    columns = contract["columns"]
+    if table == "projects":
+        columns.pop("ai_visibility_revision")
+        columns.pop("ai_history_epoch")
+    if table == "agent_conversations":
+        columns.pop("ai_history_epoch")
+    if table in {"characters", "world_settings", "organizations", "careers"}:
+        for name in (
+            "ai_mode", "mention_enabled", "mention_case_sensitive", "mention_exclusions", "ai_hidden_builtin_fields",
+        ):
+            columns.pop(name)
+        contract["check_constraints"].pop(f"ck_{table}_ai_mode")
+    if table in {"setting_text_fields", "setting_field_definitions"}:
+        columns.pop("ai_hidden")
+    if table == "setting_text_fields":
+        contract["check_constraints"].pop("ck_setting_text_fields_legacy_ai_hidden")
+    if table == "setting_reference_handles":
+        contract["indexes"].pop("uq_setting_reference_handles_project_id_id")
+    return contract
+
+
 def _schema_0035_model_contract(inspector, table):
     """0035 结构冻结：0036 只为 projects 增加独立分类目录代次。"""
-    contract = _schema_contract(inspector, table)
+    contract = _schema_0036_model_contract(inspector, table)
     if table == "projects":
         contract["columns"].pop("categories_revision")
     return contract
@@ -193,7 +222,7 @@ def test_0035_deleted_highest_empty_binding_id_is_never_reused(tmp_path):
             maximum = conn.scalar(text("SELECT max(id) FROM setting_text_fields"))
             assert maximum == 203
             conn.execute(text("DELETE FROM setting_text_fields WHERE id=:id"), {"id": maximum})
-            field = Base.metadata.tables["setting_text_fields"]
+            field = _historical_table(conn, "setting_text_fields")
             created = conn.scalar(field.insert().values(timeline_id=101, label="另一个空字段", base_value="")
                                   .returning(field.c.id))
             assert created > maximum
@@ -220,13 +249,6 @@ def test_0035_preserves_legacy_children_and_safe_empty_downgrade(tmp_path, monke
         _foreign_keys_during_migrations(monkeypatch)
 
     command.upgrade(config, "0035")
-    inspector = inspect(engine)
-    for name in ("setting_field_definitions", "setting_field_options", "setting_reference_handles",
-                 "setting_text_fields", "setting_timelines"):
-        assert set(Base.metadata.tables[name].c.keys()) == {c["name"] for c in inspector.get_columns(name)}
-        assert {index.name for index in Base.metadata.tables[name].indexes} == {
-            index["name"] for index in inspector.get_indexes(name)
-        }
     with engine.begin() as conn:
         conn.execute(text("PRAGMA foreign_keys=ON"))
         assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
@@ -284,7 +306,7 @@ def test_0035_shapes_json_null_stable_handles_and_project_cascade(tmp_path):
             "INSERT INTO setting_reference_handles(project_id,kind,character_id) VALUES(1,'character',1)"
         ))
         assert conn.scalar(text("SELECT id FROM setting_reference_handles")) > first
-        binding = Base.metadata.tables["setting_text_fields"]
+        binding = _historical_table(conn, "setting_text_fields")
         conn.execute(binding.insert().values(timeline_id=101, definition_id=1, label=None, base_value=None))
         assert conn.execute(text(
             "SELECT base_value IS NULL, json_type(base_value) FROM setting_text_fields WHERE definition_id=1"
@@ -372,10 +394,14 @@ def test_0035_postgresql_preserves_text_json_null_and_no_action_project_cascade(
     original_factory = async_sqlalchemy.async_engine_from_config
 
     def isolated_factory(*args, **kwargs):
-        return original_factory(*args, **kwargs, connect_args={"server_settings": {"search_path": schema}})
+        return original_factory(
+            *args, **kwargs, connect_args={"server_settings": {"search_path": schema, "timezone": "UTC"}},
+        )
 
     async def run(action, *, isolated=True):
-        kwargs = {"connect_args": {"server_settings": {"search_path": schema}}} if isolated else {}
+        kwargs = {"connect_args": {"server_settings": {
+            "search_path": schema if isolated else "public", "timezone": "UTC",
+        }}}
         engine = async_sqlalchemy.create_async_engine(database_url, **kwargs)
         try:
             async with engine.begin() as conn:
@@ -437,9 +463,9 @@ def test_0035_postgresql_preserves_text_json_null_and_no_action_project_cascade(
             await conn.execute(text(f'DROP SCHEMA "{expected_schema}" CASCADE'))
 
     async def verify_new_data(conn):
-        fields = Base.metadata.tables["setting_text_fields"]
+        fields = await conn.run_sync(_historical_table, "setting_text_fields")
         handles = Base.metadata.tables["setting_reference_handles"]
-        definitions = Base.metadata.tables["setting_field_definitions"]
+        definitions = await conn.run_sync(_historical_table, "setting_field_definitions")
         options = Base.metadata.tables["setting_field_options"]
         events = Base.metadata.tables["setting_progressions"]
         reference = await conn.scalar(definitions.insert().values(

@@ -14,7 +14,13 @@ from app.schemas.chapter import (
 from app.schemas.progression import SettingContextOut, StoryPosition
 from app.schemas.story import ChapterCastOut, ChapterCastUpdate
 from app.schemas.task import TaskOut
-from app.services import cast_service, context_builder, setting_progression_service, task_service
+from app.services import (
+    cast_service,
+    context_builder,
+    planning_context_service,
+    setting_progression_service,
+    task_service,
+)
 from app.services import chapter_service as svc
 from app.services.project_service import get_manageable_project
 
@@ -52,7 +58,10 @@ async def get_setting_context(project_id: int, chapter_id: int, user: CurrentUse
     with db.no_autoflush:
         chapter = await svc.get_manageable_chapter(db, user.id, project_id, chapter_id)
         project = await get_manageable_project(db, user.id, project_id)
-        text = await context_builder.build_setting_context(db, project, chapter)
+        planning = await planning_context_service.load_planning_context(db, project, "chapter", chapter.id)
+        text = await context_builder.build_setting_context(
+            db, project, chapter, planning=planning, include_protected=True,
+        )
         unverified_count = await setting_progression_service.count_unverified_timelines(db, user.id, project_id)
         warnings = [f"该作品有 {unverified_count} 条旧设定尚未校准，早期设定可能不准确。"] if unverified_count else []
         return SettingContextOut(

@@ -1444,8 +1444,8 @@ export interface RelationshipGraph {
   organizations: GraphOrganization[]
 }
 
-// 卡片（ainovel.cards v5，兼容导入 v1–v4）
-export type CardVersion = 1 | 2 | 3 | 4 | 5
+// 卡片（ainovel.cards v6，兼容导入 v1–v5）
+export type CardVersion = 1 | 2 | 3 | 4 | 5 | 6
 
 export interface CardExportRequest {
   character_ids: number[]
@@ -1463,11 +1463,16 @@ export interface CardFieldOption { ref: string; label: string; sort: number; arc
 export interface CardDefinitionMapping { action: 'reuse' | 'rename'; target_definition_id?: number | null; label?: string | null; option_mappings: Record<string, number> }
 export interface CardMappings { references: Record<string, SettingEntryRef>; definitions: Record<string, CardDefinitionMapping> }
 export interface CardPreviewRequest { data: unknown; resolutions?: CardResolutions; mappings?: CardMappings }
-export interface CardImportRequest extends CardPreviewRequest { expected_fields_revision?: number | null; expected_categories_revision?: number | null }
+export interface CardImportRequest extends CardPreviewRequest {
+  expected_fields_revision?: number | null
+  expected_categories_revision?: number | null
+  expected_ai_visibility_revision?: number | null
+}
 export interface CardPreviewFieldDefinition {
   ref: string
   label: string
   field_type: SettingFieldType
+  ai_hidden: boolean
   status: 'new' | 'conflict' | 'reuse' | 'rename' | 'incompatible'
   rename_to: string | null
   target_definition_id: number | null
@@ -1483,6 +1488,7 @@ export interface CardPreviewReference {
   target: SettingEntryRef | null
   reason: string | null
   source_fields: string[]
+  source_links: string[]
 }
 
 export interface CardPreviewItem {
@@ -1510,6 +1516,7 @@ export interface CardPreviewCareer {
 export interface CardPreview {
   fields_revision: number
   categories_revision: number
+  ai_visibility_revision: number
   can_import: boolean
   field_definitions: CardPreviewFieldDefinition[]
   references: CardPreviewReference[]
@@ -2928,6 +2935,8 @@ export interface AgentConversation {
   auto_execute: boolean
   summary: string
   summarized_until: number | null
+  /** 策略收紧后，旧上下文仍可查看但不得继续用于请求。 */
+  history_sealed: boolean
   last_message_at: string | null
   /** 本会话启用的 MCP 插件 id（[] = 不启用） */
   mcp_plugin_ids: number[]
@@ -3420,6 +3429,7 @@ export interface SettingFieldDefinition {
   reference_types: SettingEntryType[]
   sort: number
   archived: boolean
+  ai_hidden: boolean
   options: SettingFieldOption[]
 }
 export interface SettingFieldDefinitionList extends SettingFieldsRevision { items: SettingFieldDefinition[]; total: number }
@@ -3433,6 +3443,7 @@ export interface SettingFieldDefinitionCreate {
   reference_types?: SettingEntryType[]
   sort?: number
   archived?: boolean
+  ai_hidden?: boolean
 }
 export interface SettingFieldDefinitionUpdate {
   expected_fields_revision: number
@@ -3442,6 +3453,7 @@ export interface SettingFieldDefinitionUpdate {
   reference_types?: SettingEntryType[] | null
   sort?: number | null
   archived?: boolean | null
+  ai_hidden?: boolean
 }
 export interface SettingFieldOptionCreate { expected_fields_revision: number; label: string; sort?: number; archived?: boolean }
 export interface SettingFieldOptionUpdate { expected_fields_revision: number; label?: string | null; sort?: number | null; archived?: boolean | null }
@@ -3459,6 +3471,7 @@ export type SettingFieldSlot = {
   reference_types: SettingEntryType[]
   options: SettingFieldOption[]
   archived: boolean
+  ai_hidden: boolean
   sort: number
   reference: SettingEntry | null
   base_reference: SettingEntry | null
@@ -3472,6 +3485,7 @@ export interface SettingEntryFields extends SettingFieldsRevision {
   entry: SettingEntry
   timeline_id: number | null
   timeline_revision: number
+  ai_visibility_revision: number
   position: { chapter_id: number | null; chapter_no: number; boundary: ProgressionBoundary } | null
   fields: SettingFieldSlot[]
   legacy_fields: SettingFieldSlot[]

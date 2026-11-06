@@ -1,0 +1,16 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端分层、规范入口与关联契约"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端分层、类型镜像、状态和质量规范入口"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Alembic、物理事务、父行屏障与外键"}
+{"file": ".trellis/spec/backend/story-entities.md", "reason": "原选角、名单、关系、组织、职业、卡片和提示词裁剪"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "检索派生名称、向量调用与上下文边界"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "现有表单、AntD、权限、确认、主题和操作状态"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "TS 与后端 DTO、PATCH 省略语义及 ApiError"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "目标章节／未建章时点、成员／任职／关系及历史保留"}
+{"file": ".trellis/spec/backend/setting-fields.md", "reason": "共享／旧字段、空槽、按章求值、引用和历史依赖"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "四来源权限、Unicode 原文偏移、缓存和全量统计"}
+{"file": ".trellis/spec/backend/planning.md", "reason": "手动引用、POV、锁定段、去重、时点和预算"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份表登记、格式升级、ID 重映射与事务"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "智能体读写工具、结果回放、断点续跑及效果安全"}
+{"file": ".trellis/tasks/11-06-setting-ai-visibility/research/matching-and-settings.md", "reason": "兼容默认值、类型覆盖及匹配风险的源码依据"}
+{"file": ".trellis/tasks/11-06-setting-ai-visibility/research/ai-paths.md", "reason": "全入口、派生设定、工具回显和重放审计基线"}
+{"file": ".trellis/tasks/11-06-setting-ai-visibility/research/dispatch-boundary.md", "reason": "真实发送屏障、SDK 传输接入和并发验证"}

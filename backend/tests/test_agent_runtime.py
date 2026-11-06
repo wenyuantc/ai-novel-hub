@@ -77,7 +77,7 @@ async def test_auto_execution_threshold(client, fake_llm, count, paused):
     _, _, url = await setup_agent(client, auto=True)
     fake_llm.push_tools([call("create_character", {"name": f"人物{i}"}, f"c{i}") for i in range(count)])
     fake_llm.push_tools([("text", {"text": "完成"})])
-    task = await wait_task(client, await send(client, url), statuses=("succeeded", "paused", "failed"))
+    task = await wait_task(client, await send(client, url), statuses=("succeeded", "paused", "failed"), within=15)
     assert task["status"] == ("paused" if paused else "succeeded"), task
     changes = (await client.get(url)).json()["changes"]
     assert len(changes) == count
@@ -98,9 +98,9 @@ async def test_auto_only_first_batch_even_when_first_batch_needed_confirmation(c
     fake_llm.push_tools([call("create_character", {"name": f"首批{i}"}, f"c{i}") for i in range(4)])
     fake_llm.push_tools([call("create_character", {"name": "后续小修改"}, "later")])
     task_id = await send(client, url)
-    assert (await wait_task(client, task_id, statuses=("paused", "failed")))["status"] == "paused"
+    assert (await wait_task(client, task_id, statuses=("paused", "failed"), within=15))["status"] == "paused"
     assert (await client.post(base + f"/turns/{task_id}/confirm-all")).status_code == 200
-    task = await wait_task(client, task_id, statuses=("paused", "succeeded", "failed"))
+    task = await wait_task(client, task_id, statuses=("paused", "succeeded", "failed"), within=15)
     assert task["status"] == "paused", task
     changes = (await client.get(url)).json()["changes"]
     assert [c["status"] for c in changes] == ["executed"] * 4 + ["proposed"]
@@ -113,7 +113,8 @@ async def test_auto_batch_with_delete_waits_for_confirmation(client, fake_llm, w
     victim = (await client.post(char_url, json={"name": "待删除"})).json()
     batch = [call("create_character", {"name": "新角色"}, "small")] if with_small else []
     fake_llm.push_tools([*batch, call("delete_character", {"id": victim["id"]}, "delete")])
-    task = await wait_task(client, await send(client, url), statuses=("paused", "succeeded", "failed"))
+    task_id = await send(client, url, "请审核待删除角色")
+    task = await wait_task(client, task_id, statuses=("paused", "succeeded", "failed"))
     assert task["status"] == "paused", task
     assert all(c["status"] == "proposed" for c in (await client.get(url)).json()["changes"])
     assert [c["name"] for c in (await client.get(char_url)).json()] == ["待删除"]
@@ -132,7 +133,8 @@ async def test_auto_bulk_sync_always_requires_confirmation(client, fake_llm, bul
         ).json()
         args = {"id": career["id"], "stages": [{"name": "替换原阶段"}]}
     fake_llm.push_tools([call(bulk_tool, args)])
-    task = await wait_task(client, await send(client, url), statuses=("paused", "succeeded", "failed"))
+    task_id = await send(client, url, "请调整修士或细纲")
+    task = await wait_task(client, task_id, statuses=("paused", "succeeded", "failed"))
     assert task["status"] == "paused", task
     assert (await client.get(url)).json()["changes"][0]["status"] == "proposed"
 

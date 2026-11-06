@@ -16,7 +16,7 @@ export function useSettingFieldConfiguration(projectId: number, actorId: number)
         ? projectAccess(useProjectStore.getState().project, auth.user, projectId) : null
     }
     return new SettingFieldsController(projectId, undefined, () => access()?.canRead === true, () => access()?.canEdit === true,
-      () => invalidateProject(projectId, ['setting_fields']))
+      (aiChanged) => invalidateProject(projectId, aiChanged ? ['setting_fields', 'setting-ai-visibility'] : ['setting_fields']))
   })
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   useEffect(() => {

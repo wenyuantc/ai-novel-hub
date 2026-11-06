@@ -5,8 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EntityKind = Literal["character", "world"]
-EntityCategory = Literal["character", "place", "item"]
+from app.schemas.setting_field_value import EntityKind as EntityKind
+
+EntityCategory = Literal["character", "place", "faction", "item", "rule", "history", "other", "organization", "career"]
 SourceType = Literal["chapter", "chat", "note", "knowledge"]
 SOURCE_TYPES: tuple[SourceType, ...] = ("chapter", "chat", "note", "knowledge")
 

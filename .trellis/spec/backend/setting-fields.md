@@ -4,6 +4,8 @@
 
 新增字段类型、编辑共享定义／选项、条目起始值／剧情变化、引用目标删除、上下文组装、卡片／备份导入或智能体撤销时遵循本契约。字段类型为 `text | line | dropdown | reference`，四类值均按章回溯；名称、适用范围、选项名称及启用状态使用当前配置。
 
+AI 消费不能使用人工字段 DTO 直接渲染。`ai_hidden` 在共享定义或未绑定旧字段上配置，按当前策略隐藏名称、原值、选项与历史；改绑不得静默放宽。见 [设定 AI 可见性](./setting-ai-visibility.md)。
+
 原五类时间线事实见[设定随剧情演变](./setting-progressions.md)。公开条目身份仅 `EntityRef {kind: character | world | organization | career, id: 严格正整数}`；世界观类型另用 `world.place/faction/item/rule/history/other`。职业定义的时间线主体为 `career_entry`，组织定义为 `organization`，不能混用人物职业挂接 `career` 或成员 `membership`。
 
 ## 2. 签名（DB / API / 服务）

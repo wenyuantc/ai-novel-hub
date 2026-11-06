@@ -14,7 +14,7 @@ interface Props {
 /** 配置按名称呈现，窄内容区允许标题、范围和选项自然换行。 */
 export default function SettingFieldDefinitionCard({ definition: item, editable, disabled, onEdit, onOption }: Props) {
   return <Card size="small" styles={{ title: { whiteSpace: 'normal', paddingBlock: 12 } }}
-    title={<Space wrap size={8}><span style={{ overflowWrap: 'anywhere' }}>{item.label}</span><Tag>{SETTING_FIELD_TYPE_LABELS[item.field_type]}</Tag>{item.archived && <Tag>已停用</Tag>}</Space>}>
+    title={<Space wrap size={8}><span style={{ overflowWrap: 'anywhere' }}>{item.label}</span><Tag>{SETTING_FIELD_TYPE_LABELS[item.field_type]}</Tag>{item.archived && <Tag>已停用</Tag>}{item.ai_hidden && <Tag>对 AI 隐藏</Tag>}</Space>}>
     <Typography.Paragraph style={{ marginBottom: 8 }}>适用于：{item.applicable_types.map((type) => SETTING_ENTRY_TYPE_LABELS[type]).join('、')}</Typography.Paragraph>
     {item.field_type === 'reference' && <Typography.Paragraph style={{ marginBottom: 8 }}>可引用：{item.reference_types.map((type) => SETTING_ENTRY_TYPE_LABELS[type]).join('、')}</Typography.Paragraph>}
     <Typography.Text type="secondary">显示顺序：{item.sort}</Typography.Text>

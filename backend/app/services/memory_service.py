@@ -40,6 +40,7 @@ from app.schemas.memory import (
     MemoryUpdate,
 )
 from app.services import cast_service, retrieval_service
+from app.services.ai_dispatch import VisibilityPolicyError
 from app.services.project_service import get_manageable_project, get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder, SearchFilter
 
@@ -411,6 +412,8 @@ async def recall(
             summary_chapters=set(summary_chapter_nos or ()),
             settings=settings,
         )
+    except VisibilityPolicyError:
+        raise
     except Exception:  # noqa: BLE001
         logger.warning("剧情记忆召回失败（项目 %s，第 %s 章），本次不注入", project.id, chapter_no, exc_info=True)
         return []

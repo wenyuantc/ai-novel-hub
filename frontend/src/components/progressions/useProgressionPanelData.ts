@@ -97,7 +97,7 @@ export function useProgressionPanelData(projectId: number, target: TextProgressi
     }
   }, [key])
 
-  useProjectRefresh(projectId, ['setting_fields', kind === 'world' ? 'world' : kind === 'organization' ? 'organizations' : kind === 'career_entry' ? 'careers' : 'characters', 'chapters'], refresh)
+  useProjectRefresh(projectId, ['setting_fields', 'setting-ai-visibility', kind === 'world' ? 'world' : kind === 'organization' ? 'organizations' : kind === 'career_entry' ? 'careers' : 'characters', 'chapters'], refresh)
 
   useEffect(() => {
     if (!canRead) return

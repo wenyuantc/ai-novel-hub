@@ -65,7 +65,7 @@ async def test_cards_roundtrip_with_rename(client):
     )
     assert resp.status_code == 200, resp.text
     card = resp.json()
-    assert (card["format"], card["version"]) == ("ainovel.cards", 5)
+    assert (card["format"], card["version"]) == ("ainovel.cards", 6)
     # 没有挂职业：职业字段为空
     assert card["careers"] == [] and all(c["careers"] == [] for c in card["characters"])
     assert [c["name"] for c in card["characters"]] == ["林远", "张三", "李四"]
@@ -98,7 +98,7 @@ async def test_cards_roundtrip_with_rename(client):
 
     resp = await client.post(
         f"{base2}/cards/import",
-        json={"expected_categories_revision": 0,
+        json={"expected_categories_revision": 0, "expected_ai_visibility_revision": pv["ai_visibility_revision"],
             "data": card,
             "expected_fields_revision": 0,
             "resolutions": {"characters": {"林远": "rename"}, "organizations": {"青云宗": "rename"}},
@@ -152,7 +152,8 @@ async def test_import_skip_links_to_existing(client):
     result = (
         await client.post(
             f"{base2}/cards/import",
-            json={"expected_categories_revision": 0, "data": card, "expected_fields_revision": 0},
+            json={"expected_categories_revision": 0, "expected_ai_visibility_revision": 0,
+                  "data": card, "expected_fields_revision": 0},
         )
     ).json()
     assert [c["action"] for c in result["characters"]] == ["skipped", "skipped", "created"]
@@ -217,7 +218,7 @@ async def test_import_rejects_bad_files(client):
     cases = [
         ([1, 2], "应为 JSON 对象"),
         ({"format": "other", "version": 1}, "不是有效的卡片文件"),
-        ({"format": "ainovel.cards", "version": 6}, "不支持的卡片版本"),
+        ({"format": "ainovel.cards", "version": 7}, "不支持的卡片版本"),
         ({"format": "ainovel.cards", "version": True}, "不支持的卡片版本"),
         ({"format": "ainovel.cards", "version": 2, "careers": [{"name": "剑修", "stages": []}]}, "卡片文件格式不正确"),
         ({"format": "ainovel.cards", "version": 1, "characters": [{"name": ""}]}, "卡片文件格式不正确"),
@@ -271,7 +272,7 @@ async def test_cards_v2_careers_roundtrip(client):
     await client.post(f"{base}/characters/{zhang['id']}/careers", json={"career_id": dan["id"]})
 
     card = (await client.post(f"{base}/cards/export", json={"character_ids": [lin["id"], zhang["id"]]})).json()
-    assert card["version"] == 5 and not _id_keys(card)
+    assert card["version"] == 6 and not _id_keys(card)
     assert card["characters"][0]["careers"] == [
         {"career_name": "剑修", "role": "main", "stage_name": "金丹", "note": "初入"},
         {"career_name": "丹师", "role": "sub", "stage_name": "一品", "note": ""},
@@ -281,6 +282,10 @@ async def test_cards_v2_careers_roundtrip(client):
     assert [s["name"] for s in card["careers"][0]["stages"]] == ["练气", "筑基", "金丹"]
 
     card["version"] = 2
+    for entry in [*card["characters"], *card["careers"]]:
+        entry.pop("ai_settings")
+        entry.pop("ai_link_refs")
+        entry.pop("legacy_always_in_context", None)
     # 乙：已有同名「剑修」但只有两阶
     p2 = await create_project(client, title="乙")
     base2 = f"/api/v1/projects/{p2['id']}"
@@ -393,12 +398,12 @@ async def test_cards_v3_custom_text_fields_roundtrip(client, app):
     exported = await client.post(f"{src_base}/cards/export", json={"character_ids": [char_id]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 5
+    assert card["version"] == 6
     assert not _id_keys(card)
     assert card["characters"][0]["current_state"] == "金丹期"
     assert card["characters"][0]["custom_text_fields"] == [
-        {"name": "功法", "value": "九阳真经\n练至大成"},
-        {"name": "随身物", "value": ""},
+        {"name": "功法", "value": "九阳真经\n练至大成", "ai_hidden": False},
+        {"name": "随身物", "value": "", "ai_hidden": False},
     ]
     async with app.state.sessionmaker() as db:
         source_timeline = await db.scalar(
@@ -417,7 +422,8 @@ async def test_cards_v3_custom_text_fields_roundtrip(client, app):
     target_base = f"/api/v1/projects/{target['id']}"
     restored = await client.post(
         f"{target_base}/cards/import",
-        json={"expected_categories_revision": 0, "data": card, "expected_fields_revision": 0},
+        json={"expected_categories_revision": 0, "expected_ai_visibility_revision": 0,
+              "data": card, "expected_fields_revision": 0},
     )
     assert restored.status_code == 200, restored.text
     new_id = restored.json()["characters"][0]["id"]
@@ -572,10 +578,10 @@ async def test_cards_v3_exports_effective_custom_fields_not_base_or_inactive_eve
     response = await client.post(f"{base}/cards/export", json={"character_ids": [char["id"]]})
     assert response.status_code == 200, response.text
     card = response.json()
-    assert card["version"] == 5 and not _id_keys(card)
+    assert card["version"] == 6 and not _id_keys(card)
     assert card["characters"][0]["custom_text_fields"] == [
-        {"name": "功法", "value": "金丹"},
-        {"name": "武器", "value": "玄铁剑\n刻有纹路"},
+        {"name": "功法", "value": "金丹", "ai_hidden": False},
+        {"name": "武器", "value": "玄铁剑\n刻有纹路", "ai_hidden": False},
     ]
 
 
@@ -626,17 +632,21 @@ async def test_cards_v3_skip_and_rename_preserve_target_fields_and_project_isola
 
     skipped = await client.post(
         f"{target_base}/cards/import",
-        json={"expected_categories_revision": 0, "data": source_card, "expected_fields_revision": 0},
+        json={"expected_categories_revision": 0, "expected_ai_visibility_revision": 0,
+              "data": source_card, "expected_fields_revision": 0},
     )
     assert skipped.status_code == 200 and skipped.json()["characters"][0]["action"] == "skipped"
     assert any("自定义字段" in warning for warning in skipped.json()["warnings"])
     unchanged = await client.post(f"{target_base}/cards/export", json={"character_ids": [target_id]})
-    assert unchanged.json()["characters"][0]["custom_text_fields"] == [{"name": "功法", "value": "九阴"}]
+    assert unchanged.json()["characters"][0]["custom_text_fields"] == [
+        {"name": "功法", "value": "九阴", "ai_hidden": False},
+    ]
 
     renamed = await client.post(
         f"{target_base}/cards/import",
         json={
             "expected_categories_revision": 0,
+            "expected_ai_visibility_revision": 0,
             "data": source_card,
             "expected_fields_revision": 0,
             "resolutions": {"characters": {"林远": "rename"}},
@@ -645,7 +655,9 @@ async def test_cards_v3_skip_and_rename_preserve_target_fields_and_project_isola
     assert renamed.status_code == 200 and renamed.json()["characters"][0]["action"] == "renamed"
     renamed_id = renamed.json()["characters"][0]["id"]
     copied = await client.post(f"{target_base}/cards/export", json={"character_ids": [renamed_id]})
-    assert copied.json()["characters"][0]["custom_text_fields"] == [{"name": "功法", "value": "九阳"}]
+    assert copied.json()["characters"][0]["custom_text_fields"] == [
+        {"name": "功法", "value": "九阳", "ai_hidden": False},
+    ]
 
     cross_project = await client.post(f"{target_base}/cards/export", json={"character_ids": [source_id]})
     assert cross_project.status_code == 400
@@ -782,7 +794,8 @@ async def test_cards_import_skips_hidden_relationship_without_overwriting_histor
 
     result = await client.post(
         f"{base}/cards/import",
-        json={"expected_categories_revision": 0, "data": exported.json(), "expected_fields_revision": 0},
+        json={"expected_categories_revision": 0, "expected_ai_visibility_revision": 0,
+              "data": exported.json(), "expected_fields_revision": 0},
     )
     assert result.status_code == 200, result.text
     assert result.json()["relationships_created"] == 0
@@ -990,7 +1003,7 @@ async def test_cards_v4_local_cycle_and_external_reference_require_explicit_mapp
     exported = await client.post(f"{base}/cards/export", json={"character_ids": [a["id"], b["id"]]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 5 and not _id_keys(card)
+    assert card["version"] == 6 and not _id_keys(card)
     assert len(card["external_references"]) == 1
     destination = await create_project(client, title="接收")
     target_base = f"/api/v1/projects/{destination['id']}"
@@ -1001,6 +1014,7 @@ async def test_cards_v4_local_cycle_and_external_reference_require_explicit_mapp
     assert not preview["can_import"]
     assert len([r for r in preview["references"] if r["status"] == "unresolved"]) == 1
     failed = await client.post(f"{target_base}/cards/import", json={"expected_categories_revision": 0, "data": card,
+                                  "expected_ai_visibility_revision": preview["ai_visibility_revision"],
                                   "expected_fields_revision": preview["fields_revision"]})
     assert failed.status_code == 400, failed.text
     assert (await client.get(f"{target_base}/characters")).json() == []
@@ -1009,6 +1023,7 @@ async def test_cards_v4_local_cycle_and_external_reference_require_explicit_mapp
         f"{target_base}/cards/import",
         json={
             "expected_categories_revision": 0,
+            "expected_ai_visibility_revision": preview["ai_visibility_revision"],
             "data": card,
             "mappings": mappings,
             "expected_fields_revision": preview["fields_revision"],
@@ -1390,6 +1405,7 @@ async def test_cards_v4_omit_inapplicable_empty_binding_and_roundtrip(client, fi
     assert preview.json()["can_import"], preview.text
     assert card["characters"][0]["fields"] == [] and card["field_definitions"] == []
     imported = await client.post(f"{target_base}/cards/import", json={"expected_categories_revision": 0,
+        "expected_ai_visibility_revision": preview.json()["ai_visibility_revision"],
         "data": card, "expected_fields_revision": preview.json()["fields_revision"],
     })
     assert imported.status_code == 200, imported.text

@@ -3,12 +3,13 @@ import { useCallback, useEffect, useRef } from 'react'
 import { mentionApi, type MentionAnchor } from '../../api/mentions'
 import { useMentionQuery } from '../../hooks/useMentionQuery'
 import { useProjectRefresh } from '../../hooks/useProjectRefresh'
+import { MENTION_DICTIONARY_RESOURCES } from '../../utils/mentions'
 import MentionText from './MentionText'
 
 export default function MentionPreview({ projectId, text, anchor, draft = false, onLocated }: { projectId: number; text: string; anchor?: MentionAnchor | null; draft?: boolean; onLocated?: () => void }) {
   const load = useCallback((signal: AbortSignal) => mentionApi.preview(projectId, text, signal), [projectId, text])
   const result = useMentionQuery(projectId, text, load, true, draft ? 300 : 0)
-  useProjectRefresh(projectId, ['world', 'characters'], result.reload)
+  useProjectRefresh(projectId, MENTION_DICTIONARY_RESOURCES, result.reload)
   const ref = useRef<HTMLDivElement>(null)
   const valid = !!anchor && !!result.data && anchor.content_hash === result.data.content_hash
   useEffect(() => {

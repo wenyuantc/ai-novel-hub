@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import { MENTION_CATEGORY_LABELS } from '../api/mentions'
+import { entityDetailHref } from './entityLinks'
 import { mentionHref, mentionSegments, readMentionAnchor, resolveEntityDeepLink } from './mentions'
 
 describe('提及原文定位', () => {
+  it('九类提及有类型标签，同 ID 的不同设定仍跳到各自的详情入口', () => {
+    expect(Object.keys(MENTION_CATEGORY_LABELS).sort()).toEqual(['career', 'character', 'faction', 'history', 'item', 'organization', 'other', 'place', 'rule'])
+    for (const [kind, path] of [['character', 'characters'], ['world', 'world'], ['organization', 'organizations'], ['career', 'careers']] as const) {
+      expect(entityDetailHref(2, { kind, id: 7 })).toBe(`/projects/2/${path}?id=7`)
+    }
+  })
   it('首次加载失败保留深链，成功重试后才判断目标存在性', () => {
     const entity = { id: 7, project_id: 2 }
     expect(resolveEntityDeepLink(2, undefined, false, '7')).toEqual({ status: 'waiting' })

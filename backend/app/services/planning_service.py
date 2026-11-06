@@ -22,6 +22,8 @@ from app.models.planning import (
 from app.schemas import planning as s
 from app.services import planning_queries as query
 from app.services.audit_writer import AuditOperation
+from app.services.mentions.context import MentionCandidate, candidate_dictionary, load_candidates
+from app.services.mentions.matcher import cache, match_entities
 from app.services.project_service import get_manageable_project
 
 
@@ -711,11 +713,12 @@ async def matrix(
 ):
     async def read():
         all_rows = await query.rows(db, project_id)
-        catalog = await query.entries(db, project_id)
+        candidates = await load_candidates(db, project_id)
+        catalog = await query.entries(db, project_id, candidates=candidates)
         subplots = await _subplot_outs(db, project_id)
-        return all_rows, catalog, subplots
+        return all_rows, catalog, subplots, candidates
 
-    rev, (all_rows, catalog, subplots) = await _snapshot(db, user_id, project_id, read)
+    rev, (all_rows, catalog, subplots, candidates) = await _snapshot(db, user_id, project_id, read)
     selected = [
         row
         for row in all_rows
@@ -792,7 +795,7 @@ async def matrix(
     column_total = len(columns)
     columns = columns[(column_page - 1) * 30 : column_page * 30]
     with db.no_autoflush:
-        counts = await _mention_counts(db, user_id, project_id, selected, columns)
+        counts = await _mention_counts(db, project_id, selected, columns, candidates)
         has_subplot_columns = any(column.selection.kind == "subplot" for column in columns)
         nodes = (
             await _nodes(db, project_id, [row.unit_id for row in selected if row.unit_id])
@@ -853,15 +856,14 @@ async def matrix(
     )
 
 
-async def _mention_counts(db: AsyncSession, user_id: int, project_id: int, rows, columns):
-    from app.services.mentions.context import query_context
-    from app.services.mentions.matcher import cache
-
+async def _mention_counts(
+    db: AsyncSession, project_id: int, rows: list[s.PlanningRow], columns: list[s.MatrixColumn],
+    candidates: list[MentionCandidate],
+):
     keys = {column.key for column in columns if column.tracking_supported}
     chapter_ids = [row.chapter_id for row in rows if row.chapter_id is not None]
     if not keys or not chapter_ids:
         return {}
-    dictionary = (await query_context(db, user_id, project_id)).dictionary
     documents = list(
         await db.execute(
             select(Chapter.id, Chapter.content).where(Chapter.project_id == project_id, Chapter.id.in_(chapter_ids))
@@ -869,10 +871,11 @@ async def _mention_counts(db: AsyncSession, user_id: int, project_id: int, rows,
     )
 
     def count():
+        dictionary = candidate_dictionary(candidates)
         found = {}
         for chapter_id, content in documents:
             for hit in cache.iter_matches((project_id, "chapter", chapter_id), content, dictionary):
-                owners = dictionary.owners[hit.term]
+                owners = match_entities(hit, dictionary)
                 bucket = 0 if len(owners) == 1 else 1
                 for owner in owners:
                     key = f"{owner.kind}:{owner.id}"

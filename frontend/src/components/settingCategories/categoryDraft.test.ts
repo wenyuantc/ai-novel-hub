@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SettingCategory, SettingFieldDefinition } from '../../api/types'
 import { categoryDraft, categoryDraftInput, categoryPatch, moveCategoryRule, ruleDescription } from './categoryDraft'
 
-const field: SettingFieldDefinition = { id: 3, project_id: 1, label: '阵营', field_type: 'dropdown', applicable_types: ['character'], reference_types: [], sort: 0, archived: false, options: [{ id: 7, definition_id: 3, label: '同盟', sort: 0, archived: false }] }
+const field: SettingFieldDefinition = { id: 3, project_id: 1, label: '阵营', field_type: 'dropdown', applicable_types: ['character'], reference_types: [], sort: 0, archived: false, ai_hidden: false, options: [{ id: 7, definition_id: 3, label: '同盟', sort: 0, archived: false }] }
 const category: SettingCategory = { id: 4, project_id: 1, name: '同盟', applicable_types: ['character'], match_mode: 'all', sort: 0,
   rules: [{ id: 8, category_id: 4, kind: 'dropdown', definition_id: 3, option_id: 7, sort: 12 }] }
 

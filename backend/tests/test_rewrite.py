@@ -296,7 +296,7 @@ async def test_rewrite_setting_context_obeys_the_model_context_budget(app, clien
     assert world.status_code == 201, world.text
 
     fake_llm.push("改写结果")
-    resp = await client.post(rewrite, json={"op": "rewrite", "start": START, "end": END})
+    resp = await client.post(rewrite, json={"op": "rewrite", "start": START, "end": END, "instruction": "参考浩瀚星海"})
     assert resp.status_code == 200
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
     marker = "【本章有效设定】"

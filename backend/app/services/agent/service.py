@@ -26,13 +26,15 @@ from app.schemas.agent import (
     TurnChangesOut,
 )
 from app.schemas.chapter_version import GenerationLogOut
-from app.services import project_lifecycle, project_service, task_service
-from app.services.agent import effects, mcp_tools, transactions
+from app.services import project_lifecycle, project_service, setting_ai_visibility, task_service
+from app.services.agent import effects, history, mcp_tools, transactions
 from app.services.agent.tools import get_tool
 from app.services.agent.tools.base import ToolCtx
+from app.services.ai_dispatch import read_visibility_stamp, require_visibility_stamp
 from app.services.task_engine.registry import TaskContext
 
 if TYPE_CHECKING:
+    from app.services.setting_ai_context import AiScope
     from app.services.task_engine.engine import TaskEngine
 
 logger = logging.getLogger(__name__)
@@ -120,21 +122,28 @@ async def active_turn(db: AsyncSession, conversation_id: int) -> Task | None:
 
 async def list_conversations(db: AsyncSession, user_id: int, project_id: int) -> list[ConversationOut]:
     await project_service.get_owned_project(db, user_id, project_id)
-    rows = await db.scalars(
-        select(AgentConversation)
+    epoch = (await read_visibility_stamp(db, project_id)).epoch
+    rows = await db.execute(
+        select(AgentConversation, history.has_history_expression())
         .where(
             AgentConversation.project_id == project_id,
             AgentConversation.user_id == user_id,
         )
         .order_by(AgentConversation.last_message_at.desc(), AgentConversation.id.desc())
     )
-    return [ConversationOut.model_validate(row) for row in rows]
+    return [
+        ConversationOut.model_validate(row).model_copy(
+            update={"history_sealed": row.ai_history_epoch != epoch and bool(has_history)},
+        )
+        for row, has_history in rows
+    ]
 
 
 async def create_conversation(
     db: AsyncSession, user_id: int, project_id: int, req: ConversationCreate
 ) -> ConversationOut:
     await project_service.get_owned_project(db, user_id, project_id, lock=True)
+    epoch = (await read_visibility_stamp(db, project_id)).epoch
     previous = await db.scalar(
         select(AgentConversation)
         .where(
@@ -149,6 +158,7 @@ async def create_conversation(
         project_id=project_id,
         title=req.title.strip(),
         auto_execute=previous.auto_execute if previous else False,
+        ai_history_epoch=epoch,
     )
     db.add(row)
     await db.commit()
@@ -167,8 +177,11 @@ async def get_conversation(
         select(AgentChange).where(AgentChange.conversation_id == row.id).order_by(AgentChange.id)
     )
     task = await active_turn(db, row.id)
+    epoch = (await read_visibility_stamp(db, project_id)).epoch
+    public = ConversationOut.model_validate(row).model_dump()
+    public["history_sealed"] = await history.is_sealed(db, row, epoch)
     return ConversationDetail(
-        **ConversationOut.model_validate(row).model_dump(),
+        **public,
         messages=[MessageOut.model_validate(m) for m in messages],
         changes=[ChangeOut.model_validate(c) for c in changes],
         active_task=await task_service.task_out(db, engine, task) if task else None,
@@ -195,7 +208,10 @@ async def update_conversation(
         row.mcp_plugin_ids = ids or None
     await db.commit()
     await db.refresh(row)
-    return ConversationOut.model_validate(row)
+    epoch = (await read_visibility_stamp(db, project_id)).epoch
+    return ConversationOut.model_validate(row).model_copy(
+        update={"history_sealed": await history.is_sealed(db, row, epoch)},
+    )
 
 
 async def list_generation_logs(
@@ -244,6 +260,9 @@ async def send_message(
 ) -> MessageAccepted:
     async with conversation_lock(conversation_id):
         row = await owned_conversation(db, user_id, project_id, conversation_id, lock=True)
+        epoch = (await read_visibility_stamp(db, project_id)).epoch
+        if await history.is_sealed(db, row, epoch):
+            raise history.HistorySealedError
         # handler 内再次持锁校验，避免其他创建入口绕过约束。
         if await active_turn(db, row.id):
             raise ConflictError("当前会话已有进行中或待确认的轮次")
@@ -270,7 +289,10 @@ async def send_message(
 async def owned_change(
     db: AsyncSession, user_id: int, project_id: int, change_id: int, *, lock: bool = False
 ) -> AgentChange:
-    await project_service.get_owned_project(db, user_id, project_id, lock=lock)
+    if lock:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
+    else:
+        await project_service.get_owned_project(db, user_id, project_id)
     change = await db.scalar(
         select(AgentChange)
         .join(
@@ -286,7 +308,10 @@ async def owned_change(
 
 
 async def _turn(db: AsyncSession, user_id: int, project_id: int, task_id: int, *, lock: bool = False) -> Task:
-    await project_service.get_owned_project(db, user_id, project_id, lock=lock)
+    if lock:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
+    else:
+        await project_service.get_owned_project(db, user_id, project_id)
     task = await task_service.get_owned_task(db, user_id, task_id)
     if task.kind != "agent.turn" or task.project_id != project_id:
         raise NotFoundError("智能体轮次不存在")
@@ -294,19 +319,34 @@ async def _turn(db: AsyncSession, user_id: int, project_id: int, task_id: int, *
 
 
 async def execute_change(
-    db: AsyncSession, task_context: TaskContext, change: AgentChange, *, user_id: int, compare_preview: bool = True
+    db: AsyncSession, task_context: TaskContext, change: AgentChange, *, user_id: int, compare_preview: bool = True,
+    scope: "AiScope | None" = None,
 ) -> AgentChange:
     """调用方负责会话互斥与提交；savepoint 保证返回 error 的工具也不会留下部分修改。"""
     if change.status != "proposed":
         return change
-    await project_service.get_owned_project(db, user_id, change.project_id, lock=True)
+    project = await setting_ai_visibility.lock_author_visibility_write(db, user_id, change.project_id, manage=False)
+    conversation = await owned_conversation(db, user_id, project.id, change.conversation_id)
+    task = await db.get(Task, change.turn_task_id) if change.turn_task_id else None
+    stamp = await history.require_open_history(
+        db, conversation, expected_epoch=task.input.get("history_epoch") if task else None,
+    )
+    if scope is not None:
+        await require_visibility_stamp(db, scope.stamp)
     if change.kind == "external":
         return await _execute_external(db, task_context, change, user_id=user_id, compare_preview=compare_preview)
-    project = await project_service.get_owned_project(db, user_id, change.project_id, lock=True)
+    if scope is None:
+        source_id = task.input.get("message_id") if task else None
+        source = await db.scalar(select(AgentMessage.content).where(
+            AgentMessage.id == source_id, AgentMessage.conversation_id == conversation.id, AgentMessage.role == "user",
+        )) if source_id is not None else None
+        if source is None:
+            raise ConflictError("本轮原始消息不可用，请重新发起")
+        scope = await history.build_tool_scope(db, stamp, source)
     tool = get_tool(change.tool_name)
     if tool is None:
         raise BadRequestError("工具不存在")
-    ctx = ToolCtx(db, project, user_id, task_context)
+    ctx = ToolCtx(db, project, user_id, task_context, scope, visibility_locked=True)
     fresh = await tool.preview(ctx, change.arguments)
     if "error" in fresh:
         change.status, change.error, change.result = "failed", fresh["error"], fresh
@@ -493,6 +533,15 @@ async def maybe_resume(db: AsyncSession, engine: "TaskEngine", user_id: int, tas
     )
     task = await db.get(Task, task_id, populate_existing=True)
     if not remaining and task is not None and task.status == "paused":
+        conversation = await owned_conversation(
+            db, user_id, task.project_id, task.input["request"]["conversation_id"],
+        )
+        try:
+            await history.require_open_history(db, conversation, expected_epoch=task.input.get("history_epoch"))
+        except history.HistorySealedError:
+            # 人工仍可拒绝最后一项旧提案，但不能由此续跑旧上下文。
+            await task_service.cancel_task(db, engine, user_id, task.id)
+            return
         await task_service.resume_task(db, engine, user_id, task.id)
 
 
@@ -506,15 +555,15 @@ async def decide_change(
     confirm: bool,
     resume: bool = True,
 ) -> ChangeOut:
-    initial = await owned_change(db, user_id, project_id, change_id, lock=True)
+    initial = await owned_change(db, user_id, project_id, change_id)
     cid, turn_id = initial.conversation_id, initial.turn_task_id
     await db.rollback()  # 在等待进程锁前释放只读事务和旧快照。
     async with conversation_lock(cid):
-        await owned_change(db, user_id, project_id, change_id, lock=True)
+        change = await owned_change(db, user_id, project_id, change_id, lock=True)
         # 中断的外部调用（进程崩溃 / 请求被取消时停在 executing）先判为失败，否则本轮永远无法继续
         if turn_id is not None and await recover_external(db, task_id=turn_id):
             await db.commit()
-        change = await owned_change(db, user_id, project_id, change_id, lock=True)
+            change = await owned_change(db, user_id, project_id, change_id, lock=True)
         await db.execute(select(AgentConversation.id).where(AgentConversation.id == cid).with_for_update())
         if change.status == "executing":
             raise ConflictError("修改正在处理中，请刷新后重试")
@@ -538,7 +587,10 @@ async def decide_change(
 async def decide_turn(
     db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, task_id: int, *, confirm: bool
 ) -> TurnChangesOut:
-    await _turn(db, user_id, project_id, task_id, lock=True)
+    task = await _turn(db, user_id, project_id, task_id, lock=True)
+    if confirm:
+        conversation = await owned_conversation(db, user_id, project_id, task.input["request"]["conversation_id"])
+        await history.require_open_history(db, conversation, expected_epoch=task.input.get("history_epoch"))
     ids = list(
         await db.scalars(
             select(AgentChange.id)

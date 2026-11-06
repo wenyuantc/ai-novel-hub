@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { agentApi, withAgentRefresh } from './agent'
+import { agentApi, isAgentHistorySealed, withAgentRefresh } from './agent'
 import { ApiError } from './client'
 import { readAgentChange } from './agentEvents'
 import { subscribeTask, taskLink } from './tasks'
@@ -30,6 +30,17 @@ describe('智能体 API 与事件边界', () => {
     expect(refresh).toHaveBeenCalledTimes(1)
     await expect(withAgentRefresh(() => Promise.reject(new ApiError(400, '非法请求')), refresh)).rejects.toMatchObject({ status: 400 })
     expect(refresh).toHaveBeenCalledTimes(1)
+  })
+  it('已封存的旧会话不会在 409 后重发，且不将普通冲突认作会话封存', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ code: 'ai_history_sealed', detail: '请新开会话' }), { status: 409 }))
+    vi.stubGlobal('fetch', fetch)
+    const refresh = vi.fn(async () => {})
+    const rejected = withAgentRefresh(() => agentApi.send(3, 2, { content: '继续' }), refresh)
+    await expect(rejected).rejects.toMatchObject({ status: 409 })
+    expect(await rejected.catch(isAgentHistorySealed)).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(isAgentHistorySealed(new ApiError(409, '设定变化', { code: 'ai_visibility_changed' }))).toBe(false)
   })
   it('流式工具开始/结束和提案执行按顺序交付，非法载荷不进入 UI', async () => {
     const proposal = changeFixture()

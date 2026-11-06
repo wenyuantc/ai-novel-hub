@@ -15,6 +15,7 @@ import TextFieldsPanel from './TextFieldsPanel'
 import { compareTextField, fieldChoices, progressionField, progressionReference, progressionValueLabel, progressionUpdateInput, sharedProgressionCommand, type ProgressionFieldChoice } from './fields'
 import { fieldValueFromRaw, subjectEntry } from '../settingFields/valueDraft'
 import LegacyFieldBindingModal from '../settingFields/LegacyFieldBindingModal'
+import LegacyFieldVisibilityModal from '../settingFields/LegacyFieldVisibilityModal'
 import SettingFieldValueView from '../settingFields/SettingFieldValueView'
 import { describeAnchor } from './position'
 import { type TextProgressionTarget, useProgressionPanelData } from './useProgressionPanelData'
@@ -46,6 +47,7 @@ export default function SettingProgressionsPanel({ projectId, target, onChanged,
   const [fieldEditors, setFieldEditors] = useState<FieldEditor[]>([])
   const [activeField, setActiveField] = useState<number | 'new' | null>(null)
   const [binding, setBinding] = useState<SettingTextField | null>(null)
+  const [visibilityField, setVisibilityField] = useState<SettingTextField | null>(null)
   const [busy, setBusy] = useState(false)
   const mounted = useRef(true)
   const panel = useProgressionPanelData(projectId, target, page)
@@ -54,10 +56,11 @@ export default function SettingProgressionsPanel({ projectId, target, onChanged,
 
   const writable = canEdit && !busy && !loading && !error
   const kind = target.subject_kind
-  const updated = (revision: number) => {
+  const updated = (revision: number, visibilityChanged = false) => {
     if (!isCurrent() || !canEditNow()) return
     onChanged?.(revision)
-    invalidateProject(projectId, ['setting_fields', kind === 'world' ? 'world' : kind === 'organization' ? 'organizations' : kind === 'career_entry' ? 'careers' : 'characters'])
+    invalidateProject(projectId, ['setting_fields', kind === 'world' ? 'world' : kind === 'organization' ? 'organizations' : kind === 'career_entry' ? 'careers' : 'characters',
+      ...(visibilityChanged ? ['setting-ai-visibility' as const] : [])])
   }
   const requireWritable = () => {
     if (!isCurrent() || !canEditNow()) throw new Error('权限或当前条目已变化，请重新打开')
@@ -198,7 +201,9 @@ export default function SettingProgressionsPanel({ projectId, target, onChanged,
             )}
           />
         )}
-        <TextFieldsPanel key={rowScope} fields={data.fields} canEdit={writable} busy={busy} onCreate={() => editField(null)} onEdit={editField} onDelete={removeField} onBind={setBinding} />
+        <TextFieldsPanel key={rowScope} fields={data.fields} canEdit={writable} busy={busy} onCreate={() => editField(null)} onEdit={editField} onDelete={removeField} onBind={setBinding}
+          hiddenFieldIds={new Set(data.entryFields.legacy_fields.flatMap((slot) => slot.ai_hidden && slot.field_id !== null ? [slot.field_id] : []))}
+          onVisibility={(field) => { if (isCurrent() && canEditNow()) setVisibilityField(field) }} />
         <Divider style={{ margin: '4px 0' }} />
         <div>
           <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -281,7 +286,11 @@ export default function SettingProgressionsPanel({ projectId, target, onChanged,
           }}
         />
       ))}
-      {binding && subjectEntry(target) && <LegacyFieldBindingModal projectId={projectId} field={binding} snapshot={data.entryFields} canEdit={writable} canEditNow={() => isCurrent() && canEditNow()} onCancel={() => setBinding(null)} onSaved={(revision) => { updated(revision); setBinding(null) }} onRefresh={async () => (await refreshForComparison(null)).data.entryFields} />}
+      {binding && subjectEntry(target) && <LegacyFieldBindingModal projectId={projectId} field={binding} snapshot={data.entryFields} canEdit={writable} canEditNow={() => isCurrent() && canEditNow()} onCancel={() => setBinding(null)} onSaved={(revision) => { updated(revision, true); setBinding(null) }} onRefresh={async () => (await refreshForComparison(null)).data.entryFields} />}
+      {visibilityField && <LegacyFieldVisibilityModal key={`${projectId}:${data.timeline.id}:${visibilityField.id}`} projectId={projectId} field={visibilityField} snapshot={data.entryFields}
+        canEdit={writable} canEditNow={() => isCurrent() && canEditNow()} onCancel={() => setVisibilityField(null)}
+        onSaved={(revision) => { updated(revision, true); setVisibilityField(null); message.success('字段 AI 可见性已保存') }}
+        onRefresh={async () => (await refreshForComparison(null)).data.entryFields} />}
       {fieldEditors.map((fieldEditor) => (
         <TextFieldModal
           key={fieldEditor.field?.id ?? 'new'}

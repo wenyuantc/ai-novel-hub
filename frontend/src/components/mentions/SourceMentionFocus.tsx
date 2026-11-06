@@ -2,12 +2,15 @@ import { Alert, Button, Card, Spin, Typography } from 'antd'
 import { useCallback, useEffect, useRef } from 'react'
 import { mentionApi, MENTION_SOURCE_LABELS, type MentionAnchor, type MentionSourceType } from '../../api/mentions'
 import { useMentionQuery } from '../../hooks/useMentionQuery'
+import { useProjectRefresh } from '../../hooks/useProjectRefresh'
+import { MENTION_DICTIONARY_RESOURCES } from '../../utils/mentions'
 import MentionText from './MentionText'
 
 export default function SourceMentionFocus({ projectId, type, id, anchor }: { projectId: number; type: MentionSourceType; id: number; anchor: MentionAnchor }) {
   const { start, end, content_hash } = anchor
   const load = useCallback((signal: AbortSignal) => mentionApi.source(projectId, type, id, { start, end, content_hash }, signal), [projectId, type, id, start, end, content_hash])
   const result = useMentionQuery(projectId, `${type}:${id}:${start}:${end}:${content_hash}`, load)
+  useProjectRefresh(projectId, MENTION_DICTIONARY_RESOURCES, result.reload)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => { if (result.data && !result.data.stale) ref.current?.querySelector('[data-mention-focus]')?.scrollIntoView({ block: 'center' }) }, [result.data])
   return <div ref={ref}><Card size="small" title={`${MENTION_SOURCE_LABELS[type]}原文定位`} style={{ marginBlock: 12 }}>

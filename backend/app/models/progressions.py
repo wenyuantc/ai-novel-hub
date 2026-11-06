@@ -104,6 +104,7 @@ class SettingTextField(TimestampMixin, Base):
             "(definition_id IS NULL AND label IS NOT NULL) OR (definition_id IS NOT NULL AND label IS NULL)",
             name="binding_shape",
         ),
+        CheckConstraint("definition_id IS NULL OR NOT ai_hidden", name="legacy_ai_hidden"),
         {"sqlite_autoincrement": True},
     )
 
@@ -117,6 +118,7 @@ class SettingTextField(TimestampMixin, Base):
     label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     base_value: Mapped[Any] = mapped_column(JSON(none_as_null=False), default="", server_default='""', nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    ai_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
 
 
 class SettingProgression(TimestampMixin, Base):

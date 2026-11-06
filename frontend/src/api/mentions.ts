@@ -1,9 +1,9 @@
 import { request } from './client'
-import type { Character, WorldSetting } from './types'
+import type { Character, SettingEntryKind, WorldCategory, WorldSetting } from './types'
 
 export type MentionSourceType = 'chapter' | 'chat' | 'note' | 'knowledge'
-export type MentionEntityKind = 'character' | 'world'
-export type MentionCategory = 'character' | 'place' | 'item'
+export type MentionEntityKind = SettingEntryKind
+export type MentionCategory = Exclude<SettingEntryKind, 'world'> | WorldCategory
 export interface MentionEntity { kind: MentionEntityKind; id: number; name: string; category: MentionCategory; aliases: string[] }
 export interface MentionSpan { start: number; end: number; text: string; entities: MentionEntity[] }
 export interface MentionAnchor { start: number; end: number; content_hash: string }
@@ -30,4 +30,7 @@ export const mentionApi = {
   source: (pid: number, type: MentionSourceType, id: number, anchor?: Partial<MentionAnchor>, signal?: AbortSignal) => request<MentionSourceWindow>(`${base(pid)}/sources/${type}/${id}`, { query: { ...anchor }, signal }),
 }
 export const MENTION_SOURCE_LABELS: Record<MentionSourceType, string> = { chapter: '正文', chat: '聊天', note: '笔记', knowledge: '资料' }
-export const MENTION_CATEGORY_LABELS: Record<MentionCategory, string> = { character: '角色', place: '地点', item: '物品' }
+export const MENTION_CATEGORY_LABELS: Record<MentionCategory, string> = {
+  character: '角色', place: '地点', faction: '世界观势力', item: '物品', rule: '世界观规则', history: '世界观历史', other: '其他世界观',
+  organization: '组织', career: '职业',
+}

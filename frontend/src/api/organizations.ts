@@ -1,6 +1,6 @@
 // 组织与成员
 
-import { api } from './client'
+import { api, request } from './client'
 import type {
   Member,
   MemberInput,
@@ -61,7 +61,7 @@ const base = (pid: number) => `/projects/${pid}/organizations`
 
 export const organizationApi = {
   list: (pid: number) => api.get<Organization[]>(base(pid)),
-  get: (pid: number, oid: number) => api.get<Organization>(`${base(pid)}/${oid}`),
+  get: (pid: number, oid: number, signal?: AbortSignal) => request<Organization>(`${base(pid)}/${oid}`, { signal }),
   create: (pid: number, body: OrganizationInput) => api.post<Organization>(base(pid), body),
   withMembers: (pid: number, body: OrganizationWithMembers) =>
     api.post<OrganizationWithMembersOut>(`${base(pid)}/with-members`, body),

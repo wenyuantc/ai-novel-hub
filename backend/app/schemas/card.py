@@ -1,9 +1,10 @@
-"""角色 / 组织卡片（ainovel.cards v5，兼容导入 v1–v4），不含源数据库 ID。
+"""角色 / 组织卡片（ainovel.cards v6，兼容导入 v1–v5），不含源数据库 ID。
 
 v2 = v1 + 角色的职业挂接（characters[].careers）+ 所涉职业的完整定义（顶层 careers）。
 v3 = v2 + 角色自定义文本字段的最新快照（characters[].custom_text_fields）。
 v4 = v3 + 类型化字段配置及当前快照，以包内 ref 和显式外部映射解析引用。
 v5 = v4 + 包内实体当前整理标签，不携带作品分类规则。
+v6 = v5 + 条目 AI 设置、随包字段的 AI 可见性及显式定向关联。
 """
 
 from typing import Any, Literal
@@ -11,14 +12,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from app.schemas.progression import DbInt
+from app.schemas.setting_ai_visibility import HIDEABLE_BUILTIN_FIELDS, MAX_AI_LINKS, StoredAiSettings
 from app.schemas.setting_categories import normalize_setting_tags
 from app.schemas.setting_field_value import EntityKind, EntityRef, FieldType, PositiveDbInt, SettingEntryType
 from app.schemas.setting_fields import DefinitionCreate, DefinitionOut, OptionCreate
 
 CARD_FORMAT = "ainovel.cards"
-CARD_VERSION = 5
+CARD_VERSION = 6
 # 可导入的版本（旧版本不解释后版本的字段与局部引用）
-SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5)
+SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5, 6)
 # 导入数据大小上限（序列化后的 UTF-8 字节数）
 MAX_CARD_BYTES = 2 * 1024 * 1024
 
@@ -58,6 +60,7 @@ class CardFieldDefinition(BaseModel):
     reference_types: list[SettingEntryType] = Field(default_factory=list)
     sort: DbInt = 0
     archived: bool = Field(default=False, strict=True)
+    ai_hidden: bool = Field(default=False, strict=True)
     options: list[CardFieldOption] = Field(default_factory=list, max_length=500)
 
     @field_validator("label", mode="before")
@@ -85,6 +88,8 @@ class CardExternalReference(BaseModel):
 
 class CardTaggedEntry(BaseModel):
     setting_tags: list[str] = Field(default_factory=list)
+    ai_settings: StoredAiSettings | None = None
+    ai_link_refs: list[str] = Field(default_factory=list, max_length=MAX_AI_LINKS)
 
     @field_validator("setting_tags", mode="before")
     @classmethod
@@ -130,6 +135,7 @@ class CardTextField(BaseModel):
 
     name: str = Field(min_length=1, max_length=100)
     value: str = ""
+    ai_hidden: bool = Field(default=False, strict=True)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -151,6 +157,7 @@ class CardCharacter(CardTaggedEntry):
     profile: str = ""
     current_state: str = ""
     life_status: str = "alive"
+    legacy_always_in_context: bool | None = Field(default=None, strict=True)
     careers: list[CardCareerAssignment] = Field(default_factory=list, max_length=10)
     custom_text_fields: list[CardTextField] = Field(default_factory=list)
 
@@ -220,6 +227,18 @@ class CardFile(BaseModel):
     def discard_future_fields(cls, data: Any) -> Any:
         if not isinstance(data, dict) or type(data.get("version")) is not int:
             return data
+        if data["version"] < 6:
+            def rows(container, key):
+                items = container.get(key)
+                return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+            legacy_ai_keys = {"ai_settings", "ai_link_refs", "legacy_always_in_context", *StoredAiSettings.model_fields}
+            entries = [item for name in ("characters", "organizations", "careers") for item in rows(data, name)]
+            fields = [*rows(data, "field_definitions"),
+                      *(field for item in entries for field in rows(item, "custom_text_fields"))]
+            if (any(legacy_ai_keys.intersection(item) for item in entries)
+                    or any("ai_hidden" in field for field in fields)):
+                raise ValueError("旧版卡片不支持 AI 可见性配置，请使用原始版本文件")
         if data["version"] < 5:
             for name in ("characters", "organizations", "careers"):
                 rows = data.get(name)
@@ -250,6 +269,7 @@ class CardFile(BaseModel):
             all_refs.add(ref)
 
         entries = [*self.characters, *self.organizations, *self.careers]
+        # 角色允许同名，字段引用和 AI 关联均按局部 ref 区分角色身份。
         for group in (self.organizations, self.careers):
             if len({item.name for item in group}) != len(group):
                 raise ValueError("v4 组织及职业名称不能重复")
@@ -262,6 +282,8 @@ class CardFile(BaseModel):
             if item.kind != item.type.split(".")[0]:
                 raise ValueError("外部引用类型不一致")
         entry_refs = set(all_refs)
+        if self.version >= 6:
+            self._validate_ai_settings(entry_refs)
         definitions = {item.ref: item for item in self.field_definitions}
         for definition in self.field_definitions:
             add(definition.ref)
@@ -289,6 +311,27 @@ class CardFile(BaseModel):
                     ):
                         raise ValueError("字段值包含不存在的包内引用")
         return self
+
+    def _validate_ai_settings(self, entry_refs: set[str]) -> None:
+        for kind, entries in (("character", self.characters), ("organization", self.organizations),
+                              ("career", self.careers)):
+            for entry in entries:
+                if entry.ai_settings is None or "ai_link_refs" not in entry.model_fields_set:
+                    raise ValueError("v6 卡片条目缺少 AI 设置或关联")
+                if set(entry.ai_settings.ai_hidden_builtin_fields).difference(HIDEABLE_BUILTIN_FIELDS[kind]):
+                    raise ValueError("v6 卡片条目包含不可隐藏的内建字段")
+                refs = set(entry.ai_link_refs)
+                if len(refs) != len(entry.ai_link_refs) or entry.ref in refs or refs.difference(entry_refs):
+                    raise ValueError("AI 关联不能重复、指向自身或不存在的卡片 ref")
+        for entry in self.characters:
+            if entry.legacy_always_in_context is None:
+                raise ValueError("v6 角色卡片缺少兼容常驻配置")
+            if any("ai_hidden" not in field.model_fields_set for field in entry.custom_text_fields):
+                raise ValueError("v6 卡片文本字段缺少 AI 可见性配置")
+        if any("ai_hidden" not in field.model_fields_set for field in self.field_definitions):
+            raise ValueError("v6 卡片字段定义缺少 AI 可见性配置")
+        if any(not any(stage.name.strip() for stage in entry.stages) for entry in self.careers):
+            raise ValueError("v6 卡片职业必须有有效阶段")
 
 
 class CardExportRequest(BaseModel):
@@ -328,12 +371,14 @@ class CardPreviewRequest(BaseModel):
 class CardImportRequest(CardPreviewRequest):
     expected_fields_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
     expected_categories_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
+    expected_ai_visibility_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
 
 
 class PreviewFieldDefinition(BaseModel):
     ref: str
     label: str
     field_type: FieldType
+    ai_hidden: bool = False
     status: Literal["new", "conflict", "reuse", "rename", "incompatible"]
     rename_to: str | None = None
     target_definition_id: int | None = None
@@ -350,6 +395,7 @@ class PreviewReference(BaseModel):
     target: EntityRef | None = None
     reason: str | None = None
     source_fields: list[str] = Field(default_factory=list)
+    source_links: list[str] = Field(default_factory=list)
 
 
 
@@ -380,6 +426,7 @@ class PreviewCareer(BaseModel):
 class CardPreview(BaseModel):
     fields_revision: int = 0
     categories_revision: int = 0
+    ai_visibility_revision: int = 0
     can_import: bool = True
     field_definitions: list[PreviewFieldDefinition] = Field(default_factory=list)
     references: list[PreviewReference] = Field(default_factory=list)

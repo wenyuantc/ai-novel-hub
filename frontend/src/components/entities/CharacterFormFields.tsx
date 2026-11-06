@@ -1,4 +1,4 @@
-import { Col, Form, Input, InputNumber, Row, Select, Switch } from 'antd'
+import { Col, Form, Input, InputNumber, Row, Select } from 'antd'
 import type { FormInstance } from 'antd'
 import { cleanAliases, LIFE_STATUS, roleTypeOptions } from '../../api/characters'
 import type { LifeStatus } from '../../api/types'
@@ -8,13 +8,11 @@ const LIFE_OPTIONS = (Object.keys(LIFE_STATUS) as LifeStatus[]).map((k) => ({ va
 
 interface BasicProps {
   form: FormInstance<CharacterFormValues>
-  /** 新建时：定位选「主角」自动开启始终注入上下文 */
-  creating?: boolean
   showSort?: boolean
 }
 
-/** 基础字段：名字、别名、定位（下拉 + 兼容旧值）、年龄、性别、存活状态、始终注入上下文。 */
-export function CharacterBasicFields({ form, creating, showSort = true }: BasicProps) {
+/** 基础资料与 AI 策略独立保存；定位不直接切换 AI 档位。 */
+export function CharacterBasicFields({ form, showSort = true }: BasicProps) {
   const roleType = Form.useWatch('role_type', form)
   return (
     <>
@@ -37,9 +35,6 @@ export function CharacterBasicFields({ form, creating, showSort = true }: BasicP
               allowClear
               options={roleTypeOptions(roleType)}
               placeholder="选择定位"
-              onChange={(v: string | undefined) => {
-                if (creating && v === '主角') form.setFieldValue('always_in_context', true)
-              }}
             />
           </Form.Item>
         </Col>
@@ -75,25 +70,9 @@ export function CharacterBasicFields({ form, creating, showSort = true }: BasicP
           </Form.Item>
         </Col>
       </Row>
-      <Row gutter={16}>
-        <Col span={12}>
-          <Form.Item
-            name="always_in_context"
-            label="始终注入章节上下文"
-            valuePropName="checked"
-            tooltip="开启后每章生成都会带上该角色的完整设定（主角默认开启）"
-          >
-            <Switch />
-          </Form.Item>
-        </Col>
-        {showSort && (
-          <Col span={12}>
-            <Form.Item name="sort" label="排序（越小越靠前，可留空）">
-              <InputNumber style={{ width: 160 }} />
-            </Form.Item>
-          </Col>
-        )}
-      </Row>
+      {showSort && <Form.Item name="sort" label="排序（越小越靠前，可留空）">
+        <InputNumber style={{ width: 160 }} />
+      </Form.Item>}
     </>
   )
 }
@@ -124,7 +103,7 @@ export function CharacterStateFields({ isBaseline = false }: { isBaseline?: bool
     <Form.Item
       name="current_state"
       label={isBaseline ? '初始状态' : '当前状态'}
-      tooltip={isBaseline ? '故事开始时的处境、伤势和所在地；后续变化请在「剧情变化」中维护' : '角色此刻的处境、伤势、所在地等，会注入章节上下文'}
+      tooltip={isBaseline ? '故事开始时的处境、伤势和所在地；后续变化请在「剧情变化」中维护' : '角色此刻的处境、伤势、所在地等'}
     >
       <Input.TextArea autoSize={{ minRows: 3, maxRows: 12 }} />
     </Form.Item>

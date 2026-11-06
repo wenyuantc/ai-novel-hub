@@ -4,6 +4,7 @@ import re
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
+import httpx
 from google import genai
 from google.genai import types
 from pydantic import TypeAdapter, ValidationError
@@ -20,6 +21,7 @@ from app.ai.providers.base import (
     describe_tools_error,
     split_system,
 )
+from app.ai.providers.dispatch_hooks import current_dispatch_hooks
 from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec, history_arguments, native_metadata
 
 # Gemini 1.x / 2.x 用 thinking_budget（-1 = 动态，由模型在自身上限内决定）；3 及以后用 thinking_level
@@ -175,11 +177,22 @@ def _tool_contents(messages: list[AgentMessage]) -> tuple[str, list[types.Conten
 
 
 class GeminiProvider(LLMProvider):
+    uses_dispatch_hooks = True
+
     def _client(self) -> genai.Client:
+        hooks = current_dispatch_hooks()
+        guarded_client = (
+            hooks.own_client(httpx.AsyncClient(follow_redirects=self.follow_redirects, event_hooks=hooks.event_hooks))
+            if hooks
+            else None
+        )
         http_options = types.HttpOptions(
             base_url=self.base_url,
             timeout=int(self.timeout * 1000),
             async_client_args={"follow_redirects": self.follow_redirects},
+            # 显式注入可确保装有 aiohttp 时也不绕开受控的 HTTPX 传输。
+            httpx_async_client=guarded_client,
+            retry_options=types.HttpRetryOptions(attempts=1) if hooks else None,
         )
         return genai.Client(api_key=self.api_key, http_options=http_options)
 

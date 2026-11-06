@@ -13,7 +13,7 @@ import { useCardImport } from './useCardImport'
 
 interface Props { projectId: number; open: boolean; onClose: () => void; onImported: () => void }
 
-/** 保留旧版名称关联；v5标签和字段快照通过显式映射及双版本确认。 */
+/** 保留旧版名称关联；新版字段和 AI 关联通过显式映射及相应目录版本确认。 */
 export default function CardImportModal(props: Props) {
   const user = useAuthStore((state) => state.user)
   const { canEdit } = useProjectAccess(props.projectId)
@@ -36,9 +36,10 @@ function TagSnapshot({ items }: { items: CardTagSummary[] }) {
   </List.Item>} />
 }
 
-function PreviewSummary({ preview, title, tags }: { preview: CardPreview; title: string; tags: CardTagSummary[] }) {
+function PreviewSummary({ preview, title, tags, showAiRevision }: { preview: CardPreview; title: string; tags: CardTagSummary[]; showAiRevision: boolean }) {
   return <Card size="small" title={title} styles={{ title: { whiteSpace: 'normal' } }}>
     <Typography.Paragraph>角色 {preview.characters.length} 个、组织 {preview.organizations.length} 个、职业 {preview.careers.length} 个；{preview.can_import ? '映射已通过校验' : '仍有未解决的映射'}。</Typography.Paragraph>
+    {showAiRevision && <Typography.Paragraph type="secondary">AI 可见性版本：{preview.ai_visibility_revision}</Typography.Paragraph>}
     {preview.field_definitions.map((item) => <div key={item.ref}>{item.label}：{item.status === 'new' ? '新建' : item.status === 'rename' ? `新建为「${item.rename_to}」` : item.status === 'reuse' ? `复用「${item.compatible_targets.find((target) => target.id === item.target_definition_id)?.label ?? '原选择'}」` : item.reason ?? '需要明确选择'}</div>)}
     {preview.references.map((item) => <div key={item.ref}>{item.name}：{item.status === 'internal' ? '随卡片新建' : item.status === 'mapped' ? '已映射到明确目标' : item.reason ?? '尚未解决'}</div>)}
     <TagSnapshot items={tags} />
@@ -51,7 +52,8 @@ function Inner({ projectId, onClose, onImported, actorId, identity }: Props & { 
   const { state, controller } = useCardImport(projectId, actorId, identity, onImported)
   const busy = state.loading || state.importing
   const preview = state.reviewPreview ?? state.preview
-  const typed = state.metadata.version === 4 || state.metadata.version === 5
+  const version = state.metadata.version ?? 0
+  const typed = version >= 4
   const tags = preview ? cardTagImportSummary(state.metadata, state.choices, preview) : []
   return <Modal open title="导入卡片" width={820} onCancel={onClose} maskClosable={false} footer={null}
     closable={!state.importing} keyboard={!state.importing} destroyOnHidden>
@@ -60,22 +62,24 @@ function Inner({ projectId, onClose, onImported, actorId, identity }: Props & { 
         beforeUpload={(file) => { if (canEditNow()) void controller.selectFile(file); return false }}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p style={{ overflowWrap: 'anywhere' }}>{state.fileName ? `已选择：${state.fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
-        <p style={{ color: token.colorTextTertiary }}>支持 ainovel.cards v1–v5，上限 2MB。v5 包含类型化字段的当前快照和整理标签。</p>
+        <p style={{ color: token.colorTextTertiary }}>支持 ainovel.cards v1–v6，上限 2MB。</p>
       </Upload.Dragger>}
       {state.loading && !state.preview && <Typography.Text role="status">正在读取并校验卡片，请稍候……</Typography.Text>}
       {state.error && <Alert type="error" showIcon message={state.error} description={state.preview ? '文件与当前选择仍保留，未自动重提导入。' : undefined} />}
       {state.reviewRequired && <Alert type="warning" showIcon message="请重新预览并比较后确认" description="原预览和版本仍保留。查看最新预览后，需要你明确采用；系统不会自动覆盖更新。" />}
       {state.needsPreview && !state.reviewRequired && <Alert type="info" showIcon message="处理方式或映射已改变，请更新预览后再确认。" />}
       {state.reviewPreview && state.preview && <>
-        <PreviewSummary title="原预览" preview={state.preview} tags={cardTagImportSummary(state.metadata, state.choices, state.preview)} />
-        <PreviewSummary title="最新预览" preview={state.reviewPreview} tags={cardTagImportSummary(state.metadata, state.choices, state.reviewPreview)} />
+        <PreviewSummary title="原预览" preview={state.preview} tags={cardTagImportSummary(state.metadata, state.choices, state.preview)} showAiRevision={version >= 6} />
+        <PreviewSummary title="最新预览" preview={state.reviewPreview} tags={cardTagImportSummary(state.metadata, state.choices, state.reviewPreview)} showAiRevision={version >= 6} />
         <Button disabled={busy} onClick={() => { if (canEditNow()) controller.acceptReview() }}>已核对，采用最新预览</Button>
       </>}
       {preview && !state.result && <>
         {preview.warnings.map((warning, index) => <Alert key={index} type="warning" showIcon message={warning} />)}
         {typed && <Alert type="info" showIcon message="导入当前快照，不复制章节历史"
           description="跳过的条目保留已有字段值与历史。包内引用按本次新建身份连接；包外引用须明确映射。世界观没有卡片容器，目标档案不会随引用自动复制。" />}
-        {state.metadata.version === 5 && <Card size="small" title="整理标签快照"><Typography.Paragraph type="secondary">仅新建或重命名新建的条目写入卡片标签；跳过内容、复用职业均保留已有标签。自动分类规则不会随卡片导入。</Typography.Paragraph><TagSnapshot items={tags} /></Card>}
+        {version >= 6 && <Alert type="info" showIcon message="卡片带有 AI 与提及设置"
+          description="只有新建和重命名新建的条目会写入卡片中的 AI 设置、字段隐藏和单向关联。跳过条目、复用职业均保留本作品原有设置。" />}
+        {version >= 5 && <Card size="small" title="整理标签快照"><Typography.Paragraph type="secondary">仅新建或重命名新建的条目写入卡片标签；跳过内容、复用职业均保留已有标签。自动分类规则不会随卡片导入。</Typography.Paragraph><TagSnapshot items={tags} /></Card>}
         <CardImportEntities preview={preview} choices={state.choices} v4={typed} disabled={busy} onChange={controller.setResolution} />
         {typed && <>
           <CardDefinitionMappings definitions={preview.field_definitions} mappings={state.mappings.definitions} selected={state.selectedDefinitions} disabled={busy} onChange={controller.setDefinition} />

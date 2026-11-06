@@ -47,10 +47,12 @@ from app.services import (
     relationship_service,
     story_service,
 )
+from app.services.ai_dispatch import guard_provider, visibility_sessionmaker
 from app.services.cast_service import is_protagonist_role
 from app.services.context_builder import MEMBER_STATUS_LABELS, format_card
 from app.services.generation_service import Event
 from app.services.project_service import get_owned_project, project_info
+from app.services.setting_ai_context import AiScope, build_scope, current_character_text, current_world_text
 
 logger = logging.getLogger(__name__)
 
@@ -519,6 +521,8 @@ async def validate_entity_task(
         if character_id is None:
             raise BadRequestError("缺少角色")
         character = await story_service.get_owned(db, story_service.CHARACTERS, user_id, project_id, character_id)
+        if character.ai_mode == "never" or "relations_text" in character.ai_hidden_builtin_fields:
+            raise _not_available()
         if not character.relations_text.strip():
             raise BadRequestError("该角色没有旧关系备注，无需解析")
         title = f"解析旧关系 · {character.name}"
@@ -533,6 +537,10 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "……"
 
 
+def _not_available() -> BadRequestError:
+    return BadRequestError("所选设定或字段不可用于 AI，请调整可见策略", extra={"code": "setting_not_available"})
+
+
 async def _selected_for_generation(
     db: AsyncSession, project_id: int, character_ids: list[int]
 ) -> tuple[list[Character], list[tuple[Relationship, RelationshipType]], int]:
@@ -543,6 +551,8 @@ async def _selected_for_generation(
     by_id = {c.id: c for c in characters}
     if len(character_ids) < 2 or len(by_id) != len(character_ids):
         raise NotFoundError("所选角色不存在或不属于该项目")
+    if any(char.ai_mode == "never" for char in characters):
+        raise _not_available()
     existing = await relationship_service.relations_among(db, character_ids)
     missing = len(character_ids) * (len(character_ids) - 1) // 2 - len(existing)
     if missing <= 0:
@@ -555,16 +565,24 @@ async def _relations_generate_context(
     project_id: int,
     characters: list[Character],
     existing: list[tuple[Relationship, RelationshipType]],
+    scope: AiScope,
 ) -> dict[str, str]:
     """身份与占用对独立保留，详细资料逐角色裁剪，避免长卡片吞掉后面的角色。"""
     memberships = await organization_service.memberships_of(db, [c.id for c in characters])
+    scope.include_associations((("character", m.character_id), ("organization", org.id)) for m, org in memberships)
+    visible_memberships = [(m, org) for m, org in memberships if scope.includes("organization", org.id)]
     identities = "\n".join(
-        f"ID={c.id}｜{c.name}｜定位：{c.role_type or '未设定'}｜别名：{'、'.join(c.aliases or []) or '无'}"
+        f"ID={c.id}｜{c.name}"
+        + (f"｜定位：{c.role_type or '未设定'}" if scope.field_visible("character", c.id, "role_type") else "")
+        + f"｜别名：{'、'.join(c.aliases or []) or '无'}"
         for c in characters
     )
     cards = "\n\n".join(
         f"ID={c.id}\n"
-        + _clip(format_card(c, [(m, o) for m, o in memberships if m.character_id == c.id]), REFERENCE_CARD_CHARS)
+        + _clip(format_card(
+            c, [(m, o) for m, o in visible_memberships if m.character_id == c.id],
+            hidden=scope.hidden("character", c.id),
+        ), REFERENCE_CARD_CHARS)
         for c in characters
     )
     names = {c.id: c.name for c in characters}
@@ -591,12 +609,12 @@ async def _relations_generate_context(
     }
 
 
-async def _orgs_text(db: AsyncSession, project_id: int) -> str:
+async def _orgs_text(db: AsyncSession, project_id: int, scope: AiScope) -> str:
     """已有组织的完整资料（类型 / 势力 / 上级 / 所在地 / 宗旨 / 描述 / 成员），供 AI 生成角色与组织时参考。"""
     orgs = list(
         await db.scalars(
             select(Organization)
-            .where(Organization.project_id == project_id)
+            .where(Organization.project_id == project_id, Organization.id.in_(scope.ids("organization")))
             .order_by(Organization.sort, Organization.id)
         )
     )
@@ -607,7 +625,10 @@ async def _orgs_text(db: AsyncSession, project_id: int) -> str:
     rows = await db.execute(
         select(OrganizationMember, Character.name)
         .join(Character, Character.id == OrganizationMember.character_id)
-        .where(OrganizationMember.organization_id.in_(names))
+        .where(
+            OrganizationMember.organization_id.in_(names), Character.project_id == project_id,
+            Character.id.in_(scope.ids("character")),
+        )
         .order_by(OrganizationMember.id)
     )
     for m, char_name in rows:
@@ -615,16 +636,17 @@ async def _orgs_text(db: AsyncSession, project_id: int) -> str:
         members.setdefault(m.organization_id, []).append(char_name + (f"（{'，'.join(extra)}）" if extra else ""))
     blocks: list[str] = []
     for o in orgs:
-        head = [o.name + (f"（{o.org_type}）" if o.org_type else "")]
-        if o.power_level is not None:
+        hidden = scope.hidden("organization", o.id)
+        head = [o.name + (f"（{o.org_type}）" if "org_type" not in hidden and o.org_type else "")]
+        if "power_level" not in hidden and o.power_level is not None:
             head.append(f"势力 {o.power_level}")
         if o.parent_id in names:
             head.append(f"上级：{names[o.parent_id]}")
-        if o.location.strip():
+        if "location" not in hidden and o.location.strip():
             head.append(f"所在地：{o.location.strip()}")
         lines = ["- " + "｜".join(head)]
-        for label, text in (("宗旨", o.purpose), ("描述", o.description)):
-            if text.strip():
+        for key, label, text in (("purpose", "宗旨", o.purpose), ("description", "描述", o.description)):
+            if key not in hidden and text.strip():
                 lines.append(f"  {label}：{text.strip()}")
         if members.get(o.id):
             lines.append(f"  成员：{'、'.join(members[o.id])}")
@@ -667,13 +689,33 @@ async def build_entity_job(
         "relations.generate": "relations.generate",
     }[kind]
     override = await prompt_service.get_override(db, user_id, template_key)
+    instruction = str(params.get("instruction") or "")
+    character_id = int(params["character_id"]) if kind == "relations.parse" else None
+    kinds = {
+        "relations.generate": ("character", "world", "organization"),
+        "relations.parse": ("character",),
+        "career.generate": ("world", "career"),
+        "character.generate": ("character", "world", "organization", "career"),
+        "organization.generate": ("character", "world", "organization"),
+    }[kind]
+    explicit = [("character", c.id) for c in selected]
+    if character_id is not None:
+        explicit.append(("character", character_id))
+    scope = await build_scope(
+        db, project_id, texts=(instruction, format_project_info(info)),
+        explicit=explicit,
+        kinds=kinds, legacy_kinds=(("world",) if kind == "relations.generate" else set(kinds) - {"character"}),
+        legacy_metadata_kinds=() if kind == "relations.generate" else ("character",),
+    )
+    for char in selected:
+        scope.require_entry("character", char.id)
+    if character_id is not None:
+        scope.require_entry("character", character_id, field="relations_text")
     characters = (
         selected
         if kind == "relations.generate"
         else await story_service.list_items(db, story_service.CHARACTERS, project_id)
     )
-    instruction = str(params.get("instruction") or "")
-    character_id: int | None = None
     knowledge = ""
     if kind != "relations.parse":
         # 知识库参考资料：查询 = 生成请求中的描述 + 作品信息
@@ -693,14 +735,15 @@ async def build_entity_job(
             ai_timeout=ai_timeout,
             allow_private=allow_private,
             purpose=kind,
+            visibility_stamp=scope.stamp if selected else None,
         )
     if kind == "relations.generate":
         world = await story_service.list_items(db, story_service.WORLD, project_id)
         messages = build_relations_generate_messages(
             info,
-            **await _relations_generate_context(db, project_id, selected, existing),
+            **await _relations_generate_context(db, project_id, selected, existing, scope),
             count=options["count"],
-            world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
+            world_text=_clip(current_world_text(scope, world), REFERENCE_WORLD_CHARS),
             instruction=instruction,
             knowledge=knowledge,
             override=override,
@@ -712,14 +755,16 @@ async def build_entity_job(
             info,
             count=options["count"],
             kind=options["kind"],
-            world_text=_clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
-            careers_text=_clip(await career_service.careers_detail_reference(db, project_id), REFERENCE_CAREERS_CHARS),
+            world_text=_clip(current_world_text(scope, world), REFERENCE_WORLD_CHARS),
+            careers_text=_clip(
+                await career_service.careers_detail_reference(db, project_id, scope=scope), REFERENCE_CAREERS_CHARS,
+            ),
             instruction=instruction,
             knowledge=knowledge,
             override=override,
         )
     elif kind == "relations.parse":
-        character_id = int(params["character_id"])
+        assert character_id is not None
         subject = await story_service.get_owned(db, story_service.CHARACTERS, user_id, project_id, character_id)
         if not subject.relations_text.strip():
             raise BadRequestError("该角色没有旧关系备注，无需解析")
@@ -728,16 +773,17 @@ async def build_entity_job(
             character_name=subject.name,
             relations_text=subject.relations_text,
             roster_text=_clip(
-                story_service.format_roster([c for c in characters if c.id != subject.id]), REFERENCE_ROSTER_CHARS
+                current_character_text(scope, [c for c in characters if c.id != subject.id], roster=True),
+                REFERENCE_ROSTER_CHARS,
             ),
             override=override,
         )
     else:
         world = await story_service.list_items(db, story_service.WORLD, project_id)
         common = {
-            "world_text": _clip(story_service.format_world(world), REFERENCE_WORLD_CHARS),
-            "roster_text": _clip(story_service.format_roster(characters), REFERENCE_ROSTER_CHARS),
-            "organizations_text": _clip(await _orgs_text(db, project_id), REFERENCE_ORGS_CHARS),
+            "world_text": _clip(current_world_text(scope, world), REFERENCE_WORLD_CHARS),
+            "roster_text": _clip(current_character_text(scope, characters, roster=True), REFERENCE_ROSTER_CHARS),
+            "organizations_text": _clip(await _orgs_text(db, project_id, scope), REFERENCE_ORGS_CHARS),
             "instruction": instruction,
             "knowledge": knowledge,
             "override": override,
@@ -746,15 +792,18 @@ async def build_entity_job(
             messages = build_character_generate_messages(
                 info,
                 role_type=str(params.get("role_type") or ""),
-                careers_text=_clip(await career_service.careers_reference(db, project_id), REFERENCE_ROSTER_CHARS),
+                careers_text=_clip(
+                    await career_service.careers_reference(db, project_id, scope=scope), REFERENCE_ROSTER_CHARS,
+                ),
                 **common,
             )
         else:
             messages = build_organization_generate_messages(info, **common)
+    await scope.verify(db)
     return EntityJob(
         kind=kind,
         project_id=project_id,
-        provider=provider,
+        provider=guard_provider(provider, scope.stamp, visibility_sessionmaker(db)),
         model=cfg.model,
         messages=messages,
         thinking=cfg.thinking_level,  # type: ignore[arg-type]

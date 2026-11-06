@@ -39,7 +39,7 @@ export default function PlanningCellDrawer({ projectId, row, column, cell, revis
           <Button type="primary" disabled={!mutation.canEdit || blocked} loading={mutation.saving} onClick={() => column.selection.kind === 'setting' && void changeManual(column.selection.reference, cell.manual)}>{cell.manual ? '移除手动关联' : '加入手动关联'}</Button>
         </Space>
         <Typography.Text type="secondary">手动规划与正文提及独立。移除手动关联不会修改正文，也不会清除自动提及。</Typography.Text>
-        {row.chapter_no !== null && cell.tracking_supported && (column.selection.reference.kind === 'character' || column.selection.reference.kind === 'world') && <><Divider>提及来源</Divider><EntityMentions projectId={projectId} entity={{ kind: column.selection.reference.kind, id: column.selection.reference.id }} chapterFrom={row.chapter_no ?? undefined} chapterTo={row.chapter_no ?? undefined} sourceType="chapter" /></>}
+        {row.chapter_no !== null && cell.tracking_supported && column.selection.reference.kind !== 'relationship' && <><Divider>提及来源</Divider><EntityMentions projectId={projectId} entity={column.selection.reference} chapterFrom={row.chapter_no} chapterTo={row.chapter_no} sourceType="chapter" /></>}
       </>}
       {column.selection.kind === 'subplot' && cell.kind === 'subplot' && <>
         <Typography.Title level={4}>本章推进目标</Typography.Title>

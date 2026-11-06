@@ -1,5 +1,5 @@
 import { PlusOutlined } from '@ant-design/icons'
-import { Button, Empty, List, Popconfirm, Space, Typography } from 'antd'
+import { Button, Empty, List, Popconfirm, Space, Tag, Typography } from 'antd'
 import type { SettingTextField } from '../../api/types'
 
 interface Props {
@@ -10,9 +10,11 @@ interface Props {
   onEdit: (field: SettingTextField) => void
   onDelete: (field: SettingTextField) => Promise<void>
   onBind?: (field: SettingTextField) => void
+  hiddenFieldIds: ReadonlySet<number>
+  onVisibility: (field: SettingTextField) => void
 }
 
-export default function TextFieldsPanel({ fields, canEdit, busy, onCreate, onEdit, onDelete, onBind }: Props) {
+export default function TextFieldsPanel({ fields, canEdit, busy, onCreate, onEdit, onDelete, onBind, hiddenFieldIds, onVisibility }: Props) {
   return (
     <div>
       <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -44,8 +46,12 @@ export default function TextFieldsPanel({ fields, canEdit, busy, onCreate, onEdi
             ]}
           >
             <List.Item.Meta
-              title={field.label}
-              description={<Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }} ellipsis={{ rows: 3, expandable: true }}>{field.base_value || '（无基础内容）'}</Typography.Paragraph>}
+              title={<Space wrap>{field.label}{hiddenFieldIds.has(field.id) && <Tag>对 AI 隐藏</Tag>}</Space>}
+              description={<>
+                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }} ellipsis={{ rows: 3, expandable: true }}>{field.base_value || '（无基础内容）'}</Typography.Paragraph>
+                {canEdit && <Button type="link" size="small" style={{ paddingInline: 0 }} disabled={busy}
+                  aria-label={`设置「${field.label}」的 AI 可见性`} onClick={() => onVisibility(field)}>设置 AI 可见性</Button>}
+              </>}
             />
           </List.Item>
         )}

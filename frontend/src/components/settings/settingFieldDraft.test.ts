@@ -3,7 +3,7 @@ import type { SettingFieldDefinition } from '../../api/types'
 import { definitionDraft, definitionDraftError, definitionInput, fieldValueError, formatFieldValue, optionDraftError, settingFieldTypeFilter } from './settingFieldDraft'
 
 const definition: SettingFieldDefinition = {
-  id: 10, project_id: 1, label: '境界', field_type: 'dropdown', applicable_types: ['character'], reference_types: [], sort: 2, archived: false,
+  id: 10, project_id: 1, label: '境界', field_type: 'dropdown', applicable_types: ['character'], reference_types: [], sort: 2, archived: false, ai_hidden: false,
   options: [{ id: 17, definition_id: 10, label: '练气', sort: 0, archived: true }],
 }
 
@@ -34,6 +34,13 @@ describe('字段配置与类型化值草稿', () => {
     draft.sort = null
     expect(definitionDraftError(draft)).toContain('顺序')
     expect(optionDraftError({ label: ' 已停用 ', sort: 0, archived: true })).toBeNull()
+  })
+  it('定义级 AI 隐藏可显式开启或解除，普通字段更新不重写该开关', () => {
+    const draft = definitionDraft({ ...definition, ai_hidden: true })
+    expect(draft.ai_hidden).toBe(true)
+    expect(definitionInput(draft, 5, true)).not.toHaveProperty('ai_hidden')
+    expect(definitionInput({ ...draft, ai_hidden: false }, 5, true)).toHaveProperty('ai_hidden', false)
+    expect(definitionInput(draft, 5)).toHaveProperty('ai_hidden', true)
   })
   it('单行按码点限制并拒绝行分隔符，清空选择与空文本保持类型', () => {
     expect(fieldValueError({ field_type: 'line', value: '😀'.repeat(500) })).toBeNull()

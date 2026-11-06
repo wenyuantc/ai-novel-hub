@@ -40,6 +40,8 @@ import { CharacterBasicFields, CharacterDescFields, CharacterStateFields } from 
 import CharacterMembershipsTab from '../../components/entities/CharacterMembershipsTab'
 import CharacterRelationsTab from '../../components/entities/CharacterRelationsTab'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
+import SettingAiPanel from '../../components/settingAi/SettingAiPanel'
+import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
 import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
 import SettingTagsPanel from '../../components/settingTags/SettingTagsPanel'
 import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
@@ -66,6 +68,7 @@ const CharacterForeshadowsTab = lazy(() => import('../../components/foreshadows/
 export default function CharactersPanel() {
   const pid = useProjectId()
   const tagsSession = useSettingTagsSession(pid)
+  const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
   const { canUseAI, canEdit, canReadNow, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
@@ -270,7 +273,7 @@ export default function CharactersPanel() {
       message.success('已保存')
       editingRef.current = saved
       setEditing(saved)
-      invalidateProject(pid, ['characters'])
+      invalidateProject(pid, ['characters', ...(patch?.role_type !== undefined ? ['setting-ai-visibility' as const] : [])])
       // 保存结果是最新投影，不可用作基础快照；重新读取前暂停下一次保存。
       baselineBlocked.current = true
       setCurrentBaseline(null)
@@ -350,9 +353,10 @@ export default function CharactersPanel() {
       if (!canEditNow()) return false
       await characterApi.remove(pid, item.id)
       tagsSession.forget({ kind: 'character', id: item.id })
+      aiSession.forget({ kind: 'character', id: item.id })
       if (!canEditNow()) return false
       message.success('已删除（相关关系、组织成员与职业挂接一并清理）')
-      invalidateProject(pid, ['characters', 'relationships', 'organizations', 'careers'])
+      invalidateProject(pid, ['characters', 'relationships', 'organizations', 'careers', 'setting-ai-visibility'])
       return true
     } catch (err) {
       if (!canEditNow()) return false
@@ -488,7 +492,7 @@ export default function CharactersPanel() {
         }}
         width="min(760px, 100vw)"
         forceRender
-        extra={
+        extra={tab !== 'ai-settings' && (
           <Button
             type="primary"
             loading={saving}
@@ -497,7 +501,7 @@ export default function CharactersPanel() {
           >
             {editing ? '保存基础设定' : '保存'}
           </Button>
-        }
+        )}
       >
         {editing && baseline && !baselineError && (
           <Alert
@@ -555,13 +559,14 @@ export default function CharactersPanel() {
             activeKey={tab}
             onChange={setTab}
             items={[
-              { key: 'basic', label: '基础', forceRender: true, children: <CharacterBasicFields form={form} creating={!editing} /> },
+              { key: 'basic', label: '基础', forceRender: true, children: <CharacterBasicFields form={form} /> },
               { key: 'desc', label: '描写', forceRender: true, children: <CharacterDescFields /> },
               { key: 'state', label: '状态', forceRender: true, children: <CharacterStateFields isBaseline={!!editing} /> },
               ...(editing
                 ? [
                     { key: 'progression', label: '字段与剧情变化', children: null },
                     { key: 'tags', label: '整理标签', children: null },
+                    { key: 'ai-settings', label: 'AI 与提及', children: null },
                     { key: 'mentions', label: '提及', children: null },
                     {
                       key: 'rel',
@@ -594,6 +599,7 @@ export default function CharactersPanel() {
         </Form>
         </Spin>
         {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'tags' && <SettingTagsPanel session={tagsSession} entry={{ kind: 'character', id: editing.id }} />}
+        {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'ai-settings' && <SettingAiPanel session={aiSession} entry={{ kind: 'character', id: editing.id }} />}
         {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'mentions' && <EntityMentions projectId={pid} entity={{ kind: 'character', id: editing.id }} />}
         {editing && editorTicket?.projectId === pid && drawerOpen && (
           <div hidden={tab !== 'progression'}><SettingEntryFieldsPanel
@@ -606,7 +612,7 @@ export default function CharactersPanel() {
           /></div>
         )}
         {!editing && (
-          <Typography.Text type="secondary">保存后可维护本角色的整理标签、字段与剧情变化，并设置人物关系、所属组织与职业阶段。</Typography.Text>
+          <Typography.Text type="secondary">新角色默认检测到才加入 AI 上下文。保存后可在「AI 与提及」中修改策略，也可维护字段、关系及剧情变化。</Typography.Text>
         )}
       </Drawer>
 
