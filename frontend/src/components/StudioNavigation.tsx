@@ -36,6 +36,8 @@ const PROJECT_GROUPS = [
     { key: 'organizations', label: '组织', icon: <ClusterOutlined /> },
     { key: 'relationships', label: '关系', icon: <ApartmentOutlined /> },
     { key: 'careers', label: '职业', icon: <TrophyOutlined /> },
+    { key: 'setting-fields', label: '设定字段', icon: <SettingOutlined /> },
+    { key: 'setting-categories', label: '设定分类', icon: <ApartmentOutlined /> },
   ] },
   { title: '写作与校验', items: [
     { key: 'outlines', label: '大纲', icon: <OrderedListOutlined /> },

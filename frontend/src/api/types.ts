@@ -165,6 +165,8 @@ export type AuditField =
   | 'selling_points' | 'audience' | 'target_words' | 'status' | 'style' | 'default_style_id' | 'auto_analyze'
   | 'chapter_no' | 'outline_id' | 'plan_id' | 'style_id' | 'content' | 'starred' | 'note' | 'cast'
   | 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body' | 'references' | 'builtin_key' | 'hidden_by'
+  | 'setting_fields' | 'field_definitions'
+  | 'setting_categories' | 'setting_tags'
 export type AuditSafeState = 'draft' | 'planning' | 'writing' | 'completed' | 'archived' | 'generating' | 'done' | 'active' | 'hidden' | 'admin' | 'author' | 'pending' | 'approved' | 'rejected' | 'cancelled'
 
 export interface AuditValueChange {
@@ -1442,7 +1444,8 @@ export interface RelationshipGraph {
   organizations: GraphOrganization[]
 }
 
-// 卡片（ainovel.cards v1）
+// 卡片（ainovel.cards v5，兼容导入 v1–v4）
+export type CardVersion = 1 | 2 | 3 | 4 | 5
 
 export interface CardExportRequest {
   character_ids: number[]
@@ -1454,6 +1457,32 @@ export type CardResolution = 'skip' | 'rename'
 export interface CardResolutions {
   characters: Record<string, CardResolution>
   organizations: Record<string, CardResolution>
+  careers?: Record<string, CardResolution>
+}
+export interface CardFieldOption { ref: string; label: string; sort: number; archived: boolean }
+export interface CardDefinitionMapping { action: 'reuse' | 'rename'; target_definition_id?: number | null; label?: string | null; option_mappings: Record<string, number> }
+export interface CardMappings { references: Record<string, SettingEntryRef>; definitions: Record<string, CardDefinitionMapping> }
+export interface CardPreviewRequest { data: unknown; resolutions?: CardResolutions; mappings?: CardMappings }
+export interface CardImportRequest extends CardPreviewRequest { expected_fields_revision?: number | null; expected_categories_revision?: number | null }
+export interface CardPreviewFieldDefinition {
+  ref: string
+  label: string
+  field_type: SettingFieldType
+  status: 'new' | 'conflict' | 'reuse' | 'rename' | 'incompatible'
+  rename_to: string | null
+  target_definition_id: number | null
+  options: CardFieldOption[]
+  compatible_targets: SettingFieldDefinition[]
+  reason: string | null
+}
+export interface CardPreviewReference {
+  ref: string
+  kind: SettingEntryKind
+  name: string
+  status: 'internal' | 'mapped' | 'unresolved'
+  target: SettingEntryRef | null
+  reason: string | null
+  source_fields: string[]
 }
 
 export interface CardPreviewItem {
@@ -1473,11 +1502,17 @@ export interface CardPreviewRelationship {
 /** v2：职业按名匹配目标项目；reuse 时 stages_added 为将追加到阶梯末尾的阶段名 */
 export interface CardPreviewCareer {
   name: string
-  status: 'new' | 'reuse'
+  status: 'new' | 'reuse' | 'conflict' | 'rename'
+  rename_to?: string | null
   stages_added: string[]
 }
 
 export interface CardPreview {
+  fields_revision: number
+  categories_revision: number
+  can_import: boolean
+  field_definitions: CardPreviewFieldDefinition[]
+  references: CardPreviewReference[]
   characters: CardPreviewItem[]
   organizations: CardPreviewItem[]
   relationships: CardPreviewRelationship[]
@@ -3367,6 +3402,165 @@ export interface BackupOverview {
   last_available: BackupRunOut | null
 }
 
+// 类型化设定字段：镜像 app/schemas/setting_fields.py，引用仅使用公开条目身份。
+export type SettingFieldType = 'text' | 'line' | 'dropdown' | 'reference'
+export type SettingEntryKind = 'character' | 'world' | 'organization' | 'career'
+export type SettingEntryType = 'character' | `world.${WorldCategory}` | 'organization' | 'career'
+export interface SettingEntryRef { kind: SettingEntryKind; id: number }
+export interface SettingEntry { reference: SettingEntryRef; type: SettingEntryType; name: string; category: string | null }
+export interface SettingEntryPage { items: SettingEntry[]; total: number }
+export interface SettingFieldsRevision { fields_revision: number }
+export interface SettingFieldOption { id: number; definition_id: number; label: string; sort: number; archived: boolean }
+export interface SettingFieldDefinition {
+  id: number
+  project_id: number
+  label: string
+  field_type: SettingFieldType
+  applicable_types: SettingEntryType[]
+  reference_types: SettingEntryType[]
+  sort: number
+  archived: boolean
+  options: SettingFieldOption[]
+}
+export interface SettingFieldDefinitionList extends SettingFieldsRevision { items: SettingFieldDefinition[]; total: number }
+export interface SettingFieldDefinitionMutation extends SettingFieldsRevision { item: SettingFieldDefinition }
+export interface SettingFieldOptionMutation extends SettingFieldsRevision { item: SettingFieldOption }
+export interface SettingFieldDefinitionCreate {
+  expected_fields_revision: number
+  label: string
+  field_type: SettingFieldType
+  applicable_types: SettingEntryType[]
+  reference_types?: SettingEntryType[]
+  sort?: number
+  archived?: boolean
+}
+export interface SettingFieldDefinitionUpdate {
+  expected_fields_revision: number
+  label?: string | null
+  field_type?: SettingFieldType | null
+  applicable_types?: SettingEntryType[] | null
+  reference_types?: SettingEntryType[] | null
+  sort?: number | null
+  archived?: boolean | null
+}
+export interface SettingFieldOptionCreate { expected_fields_revision: number; label: string; sort?: number; archived?: boolean }
+export interface SettingFieldOptionUpdate { expected_fields_revision: number; label?: string | null; sort?: number | null; archived?: boolean | null }
+/** 空字符串清空文本；null 清空下拉与引用，省略 value 的 PATCH 另有不变语义。 */
+export type SettingFieldValue =
+  | { field_type: 'text'; value: string }
+  | { field_type: 'line'; value: string }
+  | { field_type: 'dropdown'; value: { option_id: number } | null }
+  | { field_type: 'reference'; value: SettingEntryRef | null }
+export type SettingFieldSlot = {
+  field_id: number | null
+  definition_id: number | null
+  label: string
+  source: 'shared' | 'legacy'
+  reference_types: SettingEntryType[]
+  options: SettingFieldOption[]
+  archived: boolean
+  sort: number
+  reference: SettingEntry | null
+  base_reference: SettingEntry | null
+} & (
+  | { field_type: 'text'; base_value: string; value: string }
+  | { field_type: 'line'; base_value: string; value: string }
+  | { field_type: 'dropdown'; base_value: { option_id: number } | null; value: { option_id: number } | null }
+  | { field_type: 'reference'; base_value: SettingEntryRef | null; value: SettingEntryRef | null }
+)
+export interface SettingEntryFields extends SettingFieldsRevision {
+  entry: SettingEntry
+  timeline_id: number | null
+  timeline_revision: number
+  position: { chapter_id: number | null; chapter_no: number; boundary: ProgressionBoundary } | null
+  fields: SettingFieldSlot[]
+  legacy_fields: SettingFieldSlot[]
+}
+export type SettingFieldValueWrite = SettingFieldValue & { expected_fields_revision: number; expected_timeline_revision: number }
+export type SettingFieldProgressionCreate = SettingFieldValueWrite & ProgressionPositionInput & {
+  operation: ProgressionOperation
+  sort_order?: number
+  note?: string
+}
+export interface SettingLegacyBinding { expected_fields_revision: number; expected_timeline_revision: number; definition_id: number }
+export interface SettingFieldProgressionMutation extends ProgressionMutation<SettingProgression> { fields_revision: number }
+
+// 自动分类：镜像 app/schemas/setting_categories.py；标签为当前整理信息，不加入旧条目DTO。
+export type SettingCategoryMatchMode = 'all' | 'any'
+export type SettingCategoryRuleInput =
+  | { kind: 'tag'; tag: string; sort?: number }
+  | { kind: 'dropdown'; definition_id: number; option_id: number; sort?: number }
+/** 规范化响应始终含sort；保存payload不携带规则行ID。 */
+export type SettingCategoryRuleSpec = SettingCategoryRuleInput & { sort: number }
+export type SettingCategoryRule = SettingCategoryRuleSpec & { id: number; category_id: number }
+export interface SettingCategorySpec {
+  name: string
+  applicable_types: SettingEntryType[]
+  match_mode: SettingCategoryMatchMode
+  sort: number
+  rules: SettingCategoryRuleSpec[]
+}
+/** 创建及草稿预览允许省略sort，默认值由后端应用。 */
+export interface SettingCategoryInput extends Omit<SettingCategorySpec, 'sort' | 'rules'> {
+  sort?: number
+  rules: SettingCategoryRuleInput[]
+}
+export interface SettingCategory extends Omit<SettingCategorySpec, 'rules'> {
+  id: number
+  project_id: number
+  rules: SettingCategoryRule[]
+}
+export interface SettingCategoriesRevision { categories_revision: number }
+/** 两个版本与同一响应内容来自同一读取快照，不从其他请求补齐。 */
+export interface SettingCategoryVersions extends SettingCategoriesRevision { fields_revision: number }
+export interface SettingCategoryWriteVersions { expected_categories_revision: number; expected_fields_revision: number }
+export interface SettingCategoryCreate extends SettingCategoryInput, SettingCategoryWriteVersions {}
+/** 省略保持原值；分类修改不接受显式null。 */
+export interface SettingCategoryUpdate extends Partial<SettingCategoryInput>, SettingCategoryWriteVersions {}
+export interface SettingCategoryMutation extends SettingCategoryVersions { item: SettingCategory }
+export interface SettingCategoryListQuery {
+  types?: SettingEntryType[] | null
+  q?: string | null
+  page?: number
+  page_size?: number
+}
+export interface SettingCategoryPage extends SettingCategoryVersions { items: SettingCategory[]; total: number; page: number; page_size: number }
+export interface SettingCategoryEntryQuery extends SettingCategoryListQuery {
+  chapter_id?: number | null
+  chapter_no?: number | null
+  boundary?: ProgressionBoundary
+}
+export interface SettingCategoryMatchReason {
+  rule_index: number
+  rule_id: number | null
+  kind: SettingCategoryRuleInput['kind']
+  description: string
+  tag: string | null
+  definition_id: number | null
+  definition_label: string | null
+  option_id: number | null
+  option_label: string | null
+}
+export interface SettingCategoryEntry extends SettingEntry { setting_tags: string[]; reasons: SettingCategoryMatchReason[] }
+export interface SettingCategoryEntryPage extends SettingCategoryVersions {
+  category: SettingCategory | SettingCategorySpec
+  position: SettingEntryFields['position']
+  items: SettingCategoryEntry[]
+  total: number
+  page: number
+  page_size: number
+}
+export interface SettingCategoryPreview {
+  draft: SettingCategoryInput
+  filters?: SettingCategoryEntryQuery
+  editing_category_id?: number | null
+}
+export interface SettingTagsValue { setting_tags: string[] }
+export interface SettingTagsUpdate extends SettingTagsValue { expected_categories_revision: number }
+export interface SettingTagsOut extends SettingTagsValue, SettingCategoriesRevision { entry: SettingEntry }
+export interface SettingTagSuggestions extends SettingCategoriesRevision { items: string[]; has_more: boolean }
+export interface SettingTagSuggestionsQuery { q?: string | null; limit?: number }
+
 /** 剧情变化的位置：已有章节使用稳定 ID，计划章节使用章节号。 */
 /** planned 始终按章号锚定，不自动绑定同号已有章节。 */
 export type ProgressionAnchorKind = 'chapter' | 'planned'
@@ -3384,6 +3578,8 @@ export type ProgressionSubject =
   | { subject_kind: 'relationship'; character_id: number; related_character_id: number }
   | { subject_kind: 'career'; character_id: number; career_id: number }
   | { subject_kind: 'membership'; character_id: number; organization_id: number }
+  | { subject_kind: 'organization'; organization_id: number }
+  | { subject_kind: 'career_entry'; career_id: number }
 export interface ProgressionSubjectFilter {
   subject_kind?: ProgressionSubject['subject_kind']
   character_id?: number
@@ -3427,6 +3623,12 @@ export interface SettingProgression extends ProgressionPositionInput {
   custom_field_id: number | null
   operation: ProgressionOperation
   value: ProgressionJsonValue
+  field_type?: SettingFieldType | null
+  definition_id?: number | null
+  field_label?: string | null
+  reference?: SettingEntryRef | null
+  reference_name?: string | null
+  reference_type?: SettingEntryType | null
   anchor_label: string
   resolved_chapter_no: number | null
   orphaned: boolean
@@ -3446,6 +3648,7 @@ export interface SettingProgression extends ProgressionPositionInput {
 
 export interface SettingProgressionInput extends ProgressionPositionInput {
   expected_revision: number
+  expected_fields_revision?: number | null
   field_key: string | null
   custom_field_id: number | null
   operation: ProgressionOperation
@@ -3482,6 +3685,11 @@ export interface SettingEffective {
   position: { chapter_id: number | null; chapter_no: number; boundary: ProgressionBoundary }
   fields: Record<string, ProgressionJsonValue>
   custom_fields: Record<string, string>
+  field_values?: Record<string, SettingFieldValue>
+  fields_revision?: number | null
+  field_labels?: Record<string, string>
+  reference_names?: Record<string, string>
+  reference_types?: Record<string, SettingEntryType>
   applied_event_ids: number[]
   orphaned_event_ids: number[]
   baseline_status: ProgressionBaselineStatus
@@ -3496,9 +3704,9 @@ export interface ChapterSettingContext {
   warnings: string[]
 }
 
-export interface ProgressionList<T> { items: T[]; total: number; timeline_revision: number }
-export interface ProgressionMutation<T> { item: T; timeline_revision: number }
-export interface ProgressionRevision { timeline_revision: number }
+export interface ProgressionList<T> { items: T[]; total: number; timeline_revision: number; fields_revision?: number | null }
+export interface ProgressionMutation<T> { item: T; timeline_revision: number; fields_revision?: number | null }
+export interface ProgressionRevision { timeline_revision: number; fields_revision?: number | null }
 export interface SettingBaselineUpdate {
   expected_revision: number
   changes?: Record<string, ProgressionJsonValue>

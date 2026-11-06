@@ -1,5 +1,5 @@
 import { useProjectAccess } from '../../hooks/useProjectAccess'
-import { App, Button, Col, Drawer, Empty, Form, Input, Row, Select, Table, Tag, Typography } from 'antd'
+import { App, Button, Card, Col, Drawer, Empty, Form, Input, Row, Select, Table, Tag, Typography } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
 import {
   CAREER_KIND_LABELS,
@@ -13,17 +13,22 @@ import {
   type StageRow,
 } from '../../api/careers'
 import { errorMessage } from '../../api/client'
-import type { Career, CareerHolder, CareerKind } from '../../api/types'
+import type { Career, CareerHolder, CareerKind, ProgressionPositionInput } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
 import StageListEditor from './StageListEditor'
+import SettingEntryFieldsPanel from '../settingFields/SettingEntryFieldsPanel'
+import SettingTagsPanel from '../settingTags/SettingTagsPanel'
+import type { SettingTagsSession } from '../settingTags/settingTagsController'
 
 interface Props {
+  tagsSession: SettingTagsSession
   projectId: number
   open: boolean
   /** null = 新建 */
   career: Career | null
   onClose: () => void
   onSaved: (career: Career) => void
+  fieldPosition?: ProgressionPositionInput | null
 }
 
 interface FormValues {
@@ -52,7 +57,7 @@ export default function CareerEditDrawer(props: Props) {
   )
 }
 
-function Inner({ projectId, career, onSaved }: Props) {
+function Inner({ projectId, career, onSaved, fieldPosition, tagsSession }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
@@ -177,6 +182,8 @@ function Inner({ projectId, career, onSaved }: Props) {
           保存
         </Button>
       </div>
+      {current ? <Card size="small" title="职业自身字段与剧情变化" style={{ marginBottom: 16 }}><SettingEntryFieldsPanel key={`${projectId}:career:${current.id}`} projectId={projectId} entry={{ kind: 'career', id: current.id }} initialPosition={fieldPosition} /></Card> : <Typography.Paragraph type="secondary">保存职业后可维护自身字段与剧情变化。</Typography.Paragraph>}
+      {current && <Card size="small" style={{ marginBottom: 16 }}><SettingTagsPanel session={tagsSession} entry={{ kind: 'career', id: current.id }} /></Card>}
       {current && (
         <>
           <Typography.Title level={5}>持有人（{holders.length}）</Typography.Title>

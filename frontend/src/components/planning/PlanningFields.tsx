@@ -1,9 +1,11 @@
-import { Alert, Button, Empty, Input, Pagination, Select, Space, Spin, Typography } from 'antd'
+import { Alert, Button, Input, Pagination, Select, Space, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { planningApi } from '../../api/planning'
 import type { PlanningReferenceKind, PlanningRow, PlanningSource, PlanningTag, Subplot } from '../../api/types'
 import { useMentionQuery as usePlanningQuery } from '../../hooks/useMentionQuery'
 import { planningReferenceId, planningRowLabel, planningSourceKey } from '../../utils/planning'
+import EntrySelect from '../entities/EntrySelect'
+import type { EntrySelectQuery } from '../entities/entrySelectState'
 
 interface EntryProps {
   projectId: number; kind: PlanningReferenceKind; value?: number[]; onChange?: (value: number[]) => void
@@ -11,21 +13,14 @@ interface EntryProps {
 }
 /** 分页搜索设定，不一次加载全书档案；关系值对应时间线。 */
 export function PlanningEntrySelect({ projectId, kind, value = [], onChange, disabled, single, label }: EntryProps) {
-  const [q, setQ] = useState('')
-  const [page, setPage] = useState(1)
-  const load = useCallback((signal: AbortSignal) => planningApi.entries(projectId, { kind, q, page, page_size: 30 }, signal), [projectId, kind, q, page])
-  const result = usePlanningQuery(projectId, `entry:${kind}:${q}:${page}`, load, true, 120)
-  const options = (result.data?.items ?? []).map((item) => ({ value: planningReferenceId(item.reference), label: `${item.name}${item.is_present === false ? '（历史关系）' : ''}` }))
-  for (const id of value) if (!options.some((option) => option.value === id)) options.push({ value: id, label: `已选条目 #${id}` })
-  return <Space direction="vertical" size={4} style={{ width: '100%' }}>
-    <Select<number | number[]> aria-label={label} style={{ width: '100%' }} mode={single ? undefined : 'multiple'} allowClear showSearch
-      placeholder={label} value={single ? value[0] : value} disabled={disabled} filterOption={false} loading={result.loading}
-      options={options} onSearch={(next) => { setQ(next); setPage(1) }}
-      onChange={(next) => onChange?.(Array.isArray(next) ? next : next === undefined ? [] : [next])}
-      popupRender={(menu) => <>{menu}<div style={{ padding: 8 }}><Pagination simple size="small" current={page} pageSize={30} total={result.data?.total ?? 0} onChange={setPage} /></div></>}
-      notFoundContent={result.loading ? <Spin size="small" /> : result.error ? '加载失败，请重试' : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的设定" />} />
-    {result.error && <Alert type="error" showIcon message={result.error} action={<Button size="small" onClick={result.reload}>重试</Button>} />}
-  </Space>
+  const loadEntries = useCallback(async (query: EntrySelectQuery, signal: AbortSignal) => {
+    const result = await planningApi.entries(projectId, { kind, ...query }, signal)
+    return {
+      items: result.items.map((item) => ({ value: planningReferenceId(item.reference), label: `${item.name}${item.is_present === false ? '（历史关系）' : ''}` })),
+      total: result.total,
+    }
+  }, [projectId, kind])
+  return <EntrySelect projectId={projectId} queryKey={`planning-entry:${kind}`} loadEntries={loadEntries} value={value} onChange={onChange} disabled={disabled} single={single} label={label} />
 }
 
 interface SubplotProps {

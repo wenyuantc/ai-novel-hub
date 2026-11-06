@@ -5,6 +5,7 @@ import { ApiError } from '../../api/client'
 import { planningApi } from '../../api/planning'
 import type { MatrixCell, MatrixColumn, PlanningReference, PlanningReferenceOperation, PlanningRow, SubplotCrossing } from '../../api/types'
 import { useModalWidth } from '../../hooks/useIsMobile'
+import { entityDetailHref } from '../../utils/entityLinks'
 import { planningRowLabel, settingCellDescription } from '../../utils/planning'
 import EntityMentions from '../mentions/EntityMentions'
 import PlanningRevisionReview from './PlanningRevisionReview'
@@ -17,8 +18,7 @@ interface Props {
 }
 function entryLink(pid: number, reference: PlanningReference) {
   if (reference.kind === 'relationship') return `/projects/${pid}/relationships?timeline_id=${reference.timeline_id}`
-  const page = { character: 'characters', world: 'world', organization: 'organizations', career: 'careers' }[reference.kind]
-  return `/projects/${pid}/${page}?id=${reference.id}`
+  return entityDetailHref(pid, reference)
 }
 export default function PlanningCellDrawer({ projectId, row, column, cell, revision: initialRevision, onClose, onSaved, onNode, onCrossing, onCreateCrossing }: Props) {
   const [revision, setRevision] = useState(initialRevision)

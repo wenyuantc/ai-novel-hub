@@ -12,6 +12,7 @@ import ChaptersPanel from '../../pages/project/ChaptersPanel'
 import CareerEditDrawer from '../careers/CareerEditDrawer'
 import CharacterCareersTab, { CareerRemoveModal } from '../careers/CharacterCareersTab'
 import CharacterMembershipsTab, { MembershipEditor } from '../entities/CharacterMembershipsTab'
+import { useSettingTagsSession } from '../settingTags/useSettingTagsSession'
 
 const view = vi.hoisted(() => ({
   canRead: true, canEdit: false, editChecks: 0, data: [] as unknown[], buttons: [] as ButtonProps[],
@@ -54,6 +55,10 @@ const button = (label: string) => {
   return found!
 }
 const render = (element: import('react').ReactElement) => renderToString(createElement(App, null, element))
+function CareerDrawerFixture(props: Omit<Parameters<typeof CareerEditDrawer>[0], 'tagsSession'>) {
+  const tagsSession = useSettingTagsSession(props.projectId)
+  return createElement(CareerEditDrawer, { ...props, tagsSession })
+}
 afterEach(() => { vi.restoreAllMocks(); view.canRead = true; view.canEdit = false; view.editChecks = 0; view.data = []; view.buttons = []; view.confirms = []; view.modals = []; view.menus = []; view.stageDisabled = undefined })
 
 describe('人工只读的关联子表单和真实提交守卫', () => {
@@ -61,7 +66,7 @@ describe('人工只读的关联子表单和真实提交守卫', () => {
     view.canEdit = canEdit
     view.data = [[]]
     const update = vi.spyOn(careerApi, 'update')
-    render(createElement(CareerEditDrawer, {projectId: 9, open: true, career, onClose: noop, onSaved: noop}))
+    render(createElement(CareerDrawerFixture, {projectId: 9, open: true, career, onClose: noop, onSaved: noop}))
     expect(view.stageDisabled).toBe(!canEdit)
     expect(button('添加阶段').disabled).toBe(!canEdit)
     expect(button('保存').disabled).toBe(!canEdit)

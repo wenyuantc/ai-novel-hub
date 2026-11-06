@@ -1,236 +1,94 @@
-import { InboxOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Descriptions, Modal, Radio, Space, Table, Tag, theme, Typography, Upload } from 'antd'
-import { useState } from 'react'
-import { cardApi, defaultResolutions, importedName, MAX_CARD_FILE_BYTES, parseCardText, summarizeImport } from '../../api/cards'
-import { errorMessage } from '../../api/client'
-import type { CardImportResult, CardPreview, CardPreviewItem, CardResolution, CardResolutions } from '../../api/types'
+import { InboxOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, List, Modal, Space, Tag, theme, Typography, Upload } from 'antd'
+import type { CardPreview } from '../../api/types'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
+import { useAuthStore } from '../../stores/auth'
+import { authorizationKey } from '../../utils/permissions'
+import CardDefinitionMappings from './CardDefinitionMappings'
+import CardImportEntities from './CardImportEntities'
+import CardImportResultView from './CardImportResultView'
+import CardReferenceMappings from './CardReferenceMappings'
+import { cardTagImportSummary, type CardTagSummary } from './cardImportMapping'
+import { useCardImport } from './useCardImport'
 
-interface Props {
-  projectId: number
-  open: boolean
-  onClose: () => void
-  onImported: () => void
-}
+interface Props { projectId: number; open: boolean; onClose: () => void; onImported: () => void }
 
-/** 卡片导入：本地读取 JSON → 预览（新增 / 同名冲突 / 无法关联 / 职业新建或复用）→ 冲突逐项选择跳过或重命名 → 导入（单事务）。 */
+/** 保留旧版名称关联；v5标签和字段快照通过显式映射及双版本确认。 */
 export default function CardImportModal(props: Props) {
+  const user = useAuthStore((state) => state.user)
+  const { canEdit } = useProjectAccess(props.projectId)
   if (!props.open) return null
-  return <Inner {...props} />
+  if (!user || !canEdit) return <Modal open title="导入卡片" onCancel={props.onClose} footer={<Button onClick={props.onClose}>关闭</Button>}>
+    <Alert type="info" showIcon message="当前为只读，不能导入卡片。" />
+  </Modal>
+  const identity = authorizationKey(user)
+  return <Inner key={`${props.projectId}:${user.id}:${identity}`} {...props} actorId={user.id} identity={identity} />
 }
 
-function Inner({ projectId, onClose, onImported }: Props) {
+function TagSnapshot({ items }: { items: CardTagSummary[] }) {
+  if (!items.length) return null
+  return <List size="small" dataSource={items} pagination={{ pageSize: 10, hideOnSinglePage: true }} renderItem={(item) => <List.Item>
+    <Space direction="vertical" size={8} style={{ width: '100%', minWidth: 0, overflowWrap: 'anywhere' }}>
+      <Typography.Text strong>{item.name} · {item.kind === 'character' ? '角色' : item.kind === 'organization' ? '组织' : '职业'}</Typography.Text>
+      <div>卡片标签：{item.tags.length ? <Space wrap size={[4, 8]}>{item.tags.map((tag) => <Tag key={tag} style={{ maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{tag}</Tag>)}</Space> : '无'}</div>
+      <Typography.Text type="secondary">{item.action === 'skipped' ? '跳过内容，保留原有整理标签。' : item.action === 'renamed' ? '重命名新建时写入这些标签。' : '新建时写入这些标签。'}</Typography.Text>
+    </Space>
+  </List.Item>} />
+}
+
+function PreviewSummary({ preview, title, tags }: { preview: CardPreview; title: string; tags: CardTagSummary[] }) {
+  return <Card size="small" title={title} styles={{ title: { whiteSpace: 'normal' } }}>
+    <Typography.Paragraph>角色 {preview.characters.length} 个、组织 {preview.organizations.length} 个、职业 {preview.careers.length} 个；{preview.can_import ? '映射已通过校验' : '仍有未解决的映射'}。</Typography.Paragraph>
+    {preview.field_definitions.map((item) => <div key={item.ref}>{item.label}：{item.status === 'new' ? '新建' : item.status === 'rename' ? `新建为「${item.rename_to}」` : item.status === 'reuse' ? `复用「${item.compatible_targets.find((target) => target.id === item.target_definition_id)?.label ?? '原选择'}」` : item.reason ?? '需要明确选择'}</div>)}
+    {preview.references.map((item) => <div key={item.ref}>{item.name}：{item.status === 'internal' ? '随卡片新建' : item.status === 'mapped' ? '已映射到明确目标' : item.reason ?? '尚未解决'}</div>)}
+    <TagSnapshot items={tags} />
+  </Card>
+}
+
+function Inner({ projectId, onClose, onImported, actorId, identity }: Props & { actorId: number; identity: string }) {
   const { token } = theme.useToken()
-  const { message } = App.useApp()
-  const [data, setData] = useState<unknown>(null)
-  const [fileName, setFileName] = useState('')
-  const [preview, setPreview] = useState<CardPreview | null>(null)
-  const [choices, setChoices] = useState<CardResolutions>({ characters: {}, organizations: {} })
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<CardImportResult | null>(null)
-
-  const handleFile = async (file: File) => {
-    if (file.size > MAX_CARD_FILE_BYTES) {
-      message.error('卡片文件过大，上限为 2MB')
-      return
-    }
-    const parsed = parseCardText(await file.text())
-    if (parsed.error) {
-      message.error(parsed.error)
-      return
-    }
-    setLoading(true)
-    try {
-      const p = await cardApi.preview(projectId, parsed.data)
-      setData(parsed.data)
-      setFileName(file.name)
-      setPreview(p)
-      setChoices(defaultResolutions(p))
-      setResult(null)
-    } catch (err) {
-      message.error(errorMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleImport = async () => {
-    setLoading(true)
-    try {
-      const r = await cardApi.import(projectId, data, choices)
-      setResult(r)
-      message.success('导入完成')
-      onImported()
-    } catch (err) {
-      message.error(errorMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const itemTable = (kind: 'characters' | 'organizations', items: CardPreviewItem[]) => (
-    <Table<CardPreviewItem>
-      size="small"
-      rowKey="name"
-      pagination={false}
-      dataSource={items}
-      columns={[
-        { title: '名称', dataIndex: 'name' },
-        {
-          title: '状态',
-          width: 90,
-          render: (_, i) => (i.status === 'new' ? <Tag color="green">新增</Tag> : <Tag color="orange">同名冲突</Tag>),
-        },
-        {
-          title: '处理',
-          render: (_, i) =>
-            i.status === 'new' ? (
-              <Typography.Text type="secondary">直接导入</Typography.Text>
-            ) : (
-              <Radio.Group
-                size="small"
-                value={choices[kind][i.name] ?? 'skip'}
-                onChange={(e) =>
-                  setChoices((c) => ({ ...c, [kind]: { ...c[kind], [i.name]: e.target.value as CardResolution } }))
-                }
-              >
-                <Radio value="skip">跳过（关联已有）</Radio>
-                <Radio value="rename">重命名为「{i.rename_to ?? i.name}」</Radio>
-              </Radio.Group>
-            ),
-        },
-        {
-          title: '导入后名称',
-          render: (_, i) => importedName(i, choices[kind][i.name]),
-        },
-      ]}
-    />
-  )
-
-  const charSum = preview ? summarizeImport(preview.characters, choices.characters) : null
-  const orgSum = preview ? summarizeImport(preview.organizations, choices.organizations) : null
-
-  return (
-    <Modal open title="导入卡片" width={820} onCancel={onClose} maskClosable={false} footer={null} destroyOnHidden>
-      <Space direction="vertical" style={{ width: '100%' }}>
-        {!result && (
-          <Upload.Dragger
-            accept=".json,application/json"
-            showUploadList={false}
-            disabled={loading}
-            beforeUpload={(file) => {
-              void handleFile(file)
-              return false
-            }}
-          >
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined />
-            </p>
-            <p>{fileName ? `已选择：${fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
-            <p style={{ color: token.colorTextTertiary }}>
-              格式 ainovel.cards v1 / v2 / v3（v3 含角色自定义文本字段），上限 2MB
-            </p>
-          </Upload.Dragger>
-        )}
-        {preview && !result && (
-          <>
-            {preview.warnings.map((w) => (
-              <Alert key={w} type="warning" showIcon message={w} />
-            ))}
-            <Typography.Text strong>
-              角色（新建 {charSum?.created}，重命名 {charSum?.renamed}，跳过 {charSum?.skipped}）
-            </Typography.Text>
-            {itemTable('characters', preview.characters)}
-            <Typography.Text strong>
-              组织（新建 {orgSum?.created}，重命名 {orgSum?.renamed}，跳过 {orgSum?.skipped}）
-            </Typography.Text>
-            {itemTable('organizations', preview.organizations)}
-            {(preview.careers ?? []).length > 0 && (
-              <>
-                <Typography.Text strong>
-                  职业（新建 {preview.careers.filter((c) => c.status === 'new').length}，复用{' '}
-                  {preview.careers.filter((c) => c.status === 'reuse').length}）
-                </Typography.Text>
-                <Table
-                  size="small"
-                  rowKey="name"
-                  pagination={false}
-                  dataSource={preview.careers}
-                  columns={[
-                    { title: '职业', dataIndex: 'name' },
-                    {
-                      title: '状态',
-                      width: 110,
-                      render: (_, c) =>
-                        c.status === 'new' ? <Tag color="green">新建</Tag> : <Tag color="blue">复用同名职业</Tag>,
-                    },
-                    {
-                      title: '阶段',
-                      render: (_, c) =>
-                        c.status === 'new' ? (
-                          <Typography.Text type="secondary">按卡片阶梯新建</Typography.Text>
-                        ) : c.stages_added.length > 0 ? (
-                          `追加到阶梯末尾：${c.stages_added.join('、')}`
-                        ) : (
-                          <Typography.Text type="secondary">阶段均已存在</Typography.Text>
-                        ),
-                    },
-                  ]}
-                />
-              </>
-            )}
-            <Typography.Text strong>人物关系（{preview.relationships.length}）</Typography.Text>
-            <Table
-              size="small"
-              rowKey={(r) => `${r.a_name}-${r.b_name}`}
-              pagination={{ pageSize: 8, hideOnSinglePage: true }}
-              dataSource={preview.relationships}
-              columns={[
-                { title: '关系', render: (_, r) => `${r.a_name} 是 ${r.b_name} 的${r.role_a}` },
-                {
-                  title: '状态',
-                  width: 100,
-                  render: (_, r) => (r.status === 'ok' ? <Tag color="green">可关联</Tag> : <Tag color="red">无法关联</Tag>),
-                },
-              ]}
-            />
-            <Space>
-              <Button type="primary" loading={loading} onClick={() => void handleImport()}>
-                确认导入
-              </Button>
-              <Button onClick={onClose}>取消</Button>
-            </Space>
-          </>
-        )}
-        {result && (
-          <>
-            <Descriptions size="small" column={2} bordered>
-              <Descriptions.Item label="新建角色">{result.characters.filter((c) => c.action !== 'skipped').length}</Descriptions.Item>
-              <Descriptions.Item label="跳过角色">{result.characters.filter((c) => c.action === 'skipped').length}</Descriptions.Item>
-              <Descriptions.Item label="新建组织">{result.organizations.filter((c) => c.action !== 'skipped').length}</Descriptions.Item>
-              <Descriptions.Item label="跳过组织">{result.organizations.filter((c) => c.action === 'skipped').length}</Descriptions.Item>
-              <Descriptions.Item label="人物关系">{result.relationships_created}</Descriptions.Item>
-              <Descriptions.Item label="组织成员">{result.members_created}</Descriptions.Item>
-              {(result.careers ?? []).length > 0 && (
-                <>
-                  <Descriptions.Item label="新建职业">{result.careers.filter((c) => c.action === 'created').length}</Descriptions.Item>
-                  <Descriptions.Item label="复用职业">
-                    {result.careers.filter((c) => c.action === 'reused').length}
-                    {result.careers.some((c) => c.stages_added > 0) &&
-                      `（追加 ${result.careers.reduce((n, c) => n + c.stages_added, 0)} 个阶段）`}
-                  </Descriptions.Item>
-                </>
-              )}
-              <Descriptions.Item label="职业挂接">{result.careers_assigned ?? 0}</Descriptions.Item>
-            </Descriptions>
-            {result.warnings.map((w) => (
-              <Alert key={w} type="warning" showIcon message={w} />
-            ))}
-            <Button type="primary" onClick={onClose}>
-              完成
-            </Button>
-          </>
-        )}
-      </Space>
-    </Modal>
-  )
+  const { canEditNow } = useProjectAccess(projectId)
+  const { state, controller } = useCardImport(projectId, actorId, identity, onImported)
+  const busy = state.loading || state.importing
+  const preview = state.reviewPreview ?? state.preview
+  const typed = state.metadata.version === 4 || state.metadata.version === 5
+  const tags = preview ? cardTagImportSummary(state.metadata, state.choices, preview) : []
+  return <Modal open title="导入卡片" width={820} onCancel={onClose} maskClosable={false} footer={null}
+    closable={!state.importing} keyboard={!state.importing} destroyOnHidden>
+    <Space direction="vertical" size={16} style={{ width: '100%', minWidth: 0 }}>
+      {!state.result && <Upload.Dragger accept=".json,application/json" showUploadList={false} disabled={busy}
+        beforeUpload={(file) => { if (canEditNow()) void controller.selectFile(file); return false }}>
+        <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+        <p style={{ overflowWrap: 'anywhere' }}>{state.fileName ? `已选择：${state.fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
+        <p style={{ color: token.colorTextTertiary }}>支持 ainovel.cards v1–v5，上限 2MB。v5 包含类型化字段的当前快照和整理标签。</p>
+      </Upload.Dragger>}
+      {state.loading && !state.preview && <Typography.Text role="status">正在读取并校验卡片，请稍候……</Typography.Text>}
+      {state.error && <Alert type="error" showIcon message={state.error} description={state.preview ? '文件与当前选择仍保留，未自动重提导入。' : undefined} />}
+      {state.reviewRequired && <Alert type="warning" showIcon message="请重新预览并比较后确认" description="原预览和版本仍保留。查看最新预览后，需要你明确采用；系统不会自动覆盖更新。" />}
+      {state.needsPreview && !state.reviewRequired && <Alert type="info" showIcon message="处理方式或映射已改变，请更新预览后再确认。" />}
+      {state.reviewPreview && state.preview && <>
+        <PreviewSummary title="原预览" preview={state.preview} tags={cardTagImportSummary(state.metadata, state.choices, state.preview)} />
+        <PreviewSummary title="最新预览" preview={state.reviewPreview} tags={cardTagImportSummary(state.metadata, state.choices, state.reviewPreview)} />
+        <Button disabled={busy} onClick={() => { if (canEditNow()) controller.acceptReview() }}>已核对，采用最新预览</Button>
+      </>}
+      {preview && !state.result && <>
+        {preview.warnings.map((warning, index) => <Alert key={index} type="warning" showIcon message={warning} />)}
+        {typed && <Alert type="info" showIcon message="导入当前快照，不复制章节历史"
+          description="跳过的条目保留已有字段值与历史。包内引用按本次新建身份连接；包外引用须明确映射。世界观没有卡片容器，目标档案不会随引用自动复制。" />}
+        {state.metadata.version === 5 && <Card size="small" title="整理标签快照"><Typography.Paragraph type="secondary">仅新建或重命名新建的条目写入卡片标签；跳过内容、复用职业均保留已有标签。自动分类规则不会随卡片导入。</Typography.Paragraph><TagSnapshot items={tags} /></Card>}
+        <CardImportEntities preview={preview} choices={state.choices} v4={typed} disabled={busy} onChange={controller.setResolution} />
+        {typed && <>
+          <CardDefinitionMappings definitions={preview.field_definitions} mappings={state.mappings.definitions} selected={state.selectedDefinitions} disabled={busy} onChange={controller.setDefinition} />
+          <CardReferenceMappings projectId={projectId} preview={preview} metadata={state.metadata} choices={state.choices} mappings={state.mappings.references} selected={state.selectedEntries} disabled={busy} onChange={controller.setReference} />
+        </>}
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={state.loading} disabled={state.importing} onClick={() => { if (canEditNow()) void controller.refreshPreview() }}>更新预览</Button>
+          <Button type="primary" loading={state.importing} disabled={busy || state.needsPreview || state.reviewRequired || !state.preview?.can_import}
+            onClick={() => { if (canEditNow()) void controller.confirm() }}>确认导入</Button>
+          <Button disabled={state.importing} onClick={onClose}>取消</Button>
+        </Space>
+      </>}
+      {state.result && <><Alert type="success" showIcon message="卡片导入完成" /><CardImportResultView result={state.result} /><Button type="primary" onClick={onClose}>完成</Button></>}
+    </Space>
+  </Modal>
 }

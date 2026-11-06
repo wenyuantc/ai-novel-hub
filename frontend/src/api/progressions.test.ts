@@ -4,6 +4,23 @@ import { progressionApi } from './progressions'
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('设定变化 API', () => {
+  it('共享事件PATCH保留省略与null差异，删除同时携带目录CAS', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ timeline_revision: 8, fields_revision: 5 }))))
+    vi.stubGlobal('fetch', fetchMock)
+    await progressionApi.updateProgression(4, 8, 18, { expected_revision: 7, expected_fields_revision: 5, note: '调整备注' })
+    await progressionApi.updateProgression(4, 8, 18, { expected_revision: 8, expected_fields_revision: 5, value: null })
+    await progressionApi.removeProgression(4, 8, 18, 9, 5)
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ expected_revision: 7, expected_fields_revision: 5, note: '调整备注' })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ expected_revision: 8, expected_fields_revision: 5, value: null })
+    expect(fetchMock.mock.calls[2][0]).toBe('/api/v1/projects/4/setting-timelines/8/progressions/18?expected_revision=9&expected_fields_revision=5')
+  })
+  it('组织自身和职业定义时间线查询不携带人物身份', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ items: [], total: 0 }))))
+    vi.stubGlobal('fetch', fetchMock)
+    await progressionApi.findTimeline(4, { subject_kind: 'organization', organization_id: 7 })
+    await progressionApi.findTimeline(4, { subject_kind: 'career_entry', career_id: 7 })
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(['/api/v1/projects/4/setting-timelines?subject_kind=organization&organization_id=7', '/api/v1/projects/4/setting-timelines?subject_kind=career_entry&career_id=7'])
+  })
   it('用作品和主体查询唯一时间线，读取请求可取消', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       items: [{ id: 8, subject_kind: 'world', revision: 2 }], total: 1,

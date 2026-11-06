@@ -54,6 +54,8 @@ export const AUDIT_STATE: Record<AuditSafeState, string> = {
 }
 
 export const AUDIT_FIELD: Record<AuditField, string> = {
+  setting_fields: '设定字段值', field_definitions: '设定字段配置',
+  setting_categories: '设定分类', setting_tags: '整理标签',
   username: '用户名', is_admin: '管理员角色', is_active: '启用状态', title: '标题', genre: '题材', premise: '创意', synopsis: '简介', theme: '主题', tags: '标签',
   selling_points: '卖点', audience: '目标读者', target_words: '目标字数', status: '状态', style: '写作风格', default_style_id: '默认风格 ID', auto_analyze: '自动分析',
   chapter_no: '章节号', outline_id: '大纲 ID', plan_id: '细纲 ID', style_id: '风格 ID', content: '正文内容', starred: '标星', note: '版本备注', cast: '章节选角',
