@@ -1,8 +1,8 @@
 # 本任务本地提交计划
 
-当前分支：`codex/custom-setting-fields-categories`。按仓库最近的中文Conventional Commit风格分4个提交；此清单尚未执行。
+当前分支：`codex/custom-setting-fields-categories`。按仓库最近的中文Conventional Commit风格分4个工作提交，现均已执行。
 
-实现与完整自动化通过；分类只读界面和失败重试仍受浏览器站点保存权限／管理策略阻挡，已明确记录为未验。确认本清单只执行本地工作提交，保留两项人工验收与当前任务状态；TODOS第4项、任务归档和journal另待验收收口。
+实现与完整自动化通过；分类只读界面和失败重试仍受浏览器站点保存权限／管理策略阻挡，已明确记录为未验。用户随后明确要求“提交 收尾 合并到main并推送”，现执行完整收口；两项人工未验仍单独保留，不改写为通过。
 
 证据：后端完整2408通过／旧0031可选PG一项跳过／既有SDK警告一项；前端136文件986测试通过；新增父级v5导入后相同时点集成独立1项及相关40项通过，含实际PG；原完整套件运行后只增加测试，产品未改。
 
@@ -254,4 +254,13 @@
 
 ## 确认依据
 
-`.trellis/workflow.md`第3.4步要求“Present the plan once, ask for one-shot confirmation”。回复“行／ok”执行上述4个本地提交；如用户选择自己提交，保留本清单供手动使用。
+`.trellis/workflow.md`第3.4步要求“Present the plan once, ask for one-shot confirmation”。用户后续已明确要求“提交 收尾 合并到main并推送”，已覆盖原清单的提交确认及后续归档、合并和推送授权。
+
+## 已执行与追加收口
+
+- `af48622` fix(api): 避免开放文档路由保留已关闭应用
+- `8623c53` feat(settings): 新增类型化字段与标签自动分类后端
+- `49953ce` feat(ui): 接入设定字段、整理标签和自动分类页面
+- `c700135` docs(settings): 记录字段分类契约及验收证据
+
+本地main合并提交：`5f84fcce5d04a911c5bae28159b44b330275d0a8`。远端新增README同步规范，本轮追加README功能／迁移／v5说明、TODOS第4项与交付记录；后续按用户授权归档父子三任务、写journal并推送origin/main。原无关pelican-cycling.html继续排除。

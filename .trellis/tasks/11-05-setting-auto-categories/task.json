@@ -15,12 +15,25 @@
   "branch": "codex/custom-setting-fields-categories",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "5f84fcce5d04a911c5bae28159b44b330275d0a8",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "11-05-custom-setting-fields-categories",
   "relatedFiles": [],
-  "notes": "",
-  "meta": {}
+  "notes": "2026-11-06：在已说明两项UI受站点策略阻挡的前提下，用户明确要求“提交 收尾 合并到main并推送”。按现有代码与验证记录交付收尾；未执行的只读分类页／失败重试仍保留人工未验，不记为通过。",
+  "meta": {
+    "work_commits": [
+      "af486229d449b8e391da40e5210bde62475d1b7b",
+      "8623c53bd4c6a6ec9f1759c7ea78346f83579571",
+      "49953ce5beae97f6d629806f174bc896b48fff81",
+      "c700135c737ba0d9f0c3be2dcf5ba89b08687c5f"
+    ],
+    "integration_commit": "5f84fcce5d04a911c5bae28159b44b330275d0a8",
+    "remaining_manual_ui_checks": [
+      "分类只读页面控件状态",
+      "分类读取失败后同版本重试"
+    ],
+    "ui_blocker": "浏览器已保存站点权限／管理策略拒绝5179；用户重新授权后仍拒绝，未绕过"
+  }
 }

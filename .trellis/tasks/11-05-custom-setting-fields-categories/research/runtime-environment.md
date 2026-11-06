@@ -6,7 +6,7 @@
 
 - ROOT：`/var/folders/h1/jwfsdnfs4lg5p4fcbkcwwp600000gn/T/ainovel-categories-browser-1onr9vwt`，指针`/tmp/ainovel-categories-browser-root.txt`。
 - server.py仅使用本ROOT/test.db、FakeLLM与测试密钥，不读产品.env。四实体AUTOINCREMENT最终发布后才新建库，未沿用旧0035库。所有seed先验证health中的ROOT及model=fake。
-- 8014曾为读取失败验收准备停止；浏览器动作被权限策略拒绝，请求未发出。随后以最终代码恢复，当前统一exec session81291（旧82656进程已停止）。前端5179为session51809，仅代理8014。两服务暂保留供用户检查，不能据此声称剩余UI已通过。
+- 8014曾为读取失败验收准备停止；浏览器动作被权限策略拒绝，请求未发出。随后以最终代码恢复（session81291，旧82656已停止）；收口时已核对命令并停止该服务及前端5179（session51809，仅代理8014），lsof确认两端口无监听。临时SQLite／截图仍保留，不能据此声称剩余UI已通过。
 - seed.py创建项目1“字段与分类隔离验收”、四实体／四类型字段、5／20／21章；seed_categories.py创建ALL／ANY及221个跨批分页地点；真实API与界面修改均只在此库。
 - seed_cards.py追加无字段值合成源角色／组织／关联职业，以及项目2“卡片v5标签隔离目标”的同名目标。浏览器实际v5 skip／rename导入与三类标签保留已验证；fixture.json／cards_fixture.json记录实际ID。
 - fields_author用于编辑；fields_reader仅projects.read，创建／授权已获用户明确批准，仅存在临时库。分类只读界面尚未登录验收；字段阶段只读UI已在旧隔离库验收，不能混作本次分类证据。
@@ -21,6 +21,6 @@
 
 ## PostgreSQL
 
-- 容器ainovel-fields-verify-20261105，PostgreSQL16，本机32814，数据库fields_verify、用户field_test，仍保留本任务专用容器。
+- 容器ainovel-fields-verify-20261105，PostgreSQL16，本机32814，数据库fields_verify、用户field_test，收口时已停止本任务专用容器，保留容器与数据，docker inspect确认Running=false。
 - 凭据仅在0600文件`/tmp/ainovel-fields-01a1ab26-postgres.env`，不记录URL／密码到仓库。每测试随机schema并finally清理；本任务全部PG在最终完整轮实跑。
 - 不设置旧AINOVEL_POSTGRES_TEST_URL冒充ainovel_test；旧0031仅此一项可选skip原样保留。PG建库用独立MetaData和三组原预置，不污染后续SQLite。

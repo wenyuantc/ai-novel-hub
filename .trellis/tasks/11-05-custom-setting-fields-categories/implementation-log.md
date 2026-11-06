@@ -150,3 +150,11 @@
 - 新增唯一文件test_setting_fields_categories_roundtrip.py，真实HTTP四实体×四类型、16个20章end事件、当前标签及ALL／ANY；v5导入新project后对5start／20start／20end／21start逐点按label／名称／类型／tags比较固定真值表，并逐表验证新ID、双向修改隔离、跨项目引用404且revision不变。
 - 合法包故意移除16事件的正式RED精确失败于(20,end)，1 failed in3.45s；健康导入、永久丢事件／end移start负控制及隔离全部1 passed in6.06s。新增＋直接相关备份／query模块及原typed往返共40 passed in48.96s，真实PG包含且无skip／warning；Ruff和新增空白检查通过。产品／原测试／fixtures未改，不重复完整2408轮。日志/tmp/ainovel-categories-backend-01a1ac16-parent-roundtrip-related.log。
 - 父AC7／同位置备份验收已勾。外部阻挡的两项UI、C-AC8／父AC10、TODOS第4及任务归档仍保留未完成。已准备research/commit-plan.md中4个本地工作提交，222个本任务文件；pelican-cycling.html是原无关未跟踪文件，排除。未执行git add／commit。
+
+## 2026-11-06 用户要求完整收口
+
+2026-11-06：在已说明两项UI受站点策略阻挡的前提下，用户明确要求“提交 收尾 合并到main并推送”。按现有代码与验证记录交付收尾；未执行的只读分类页／失败重试仍保留人工未验，不记为通过。
+
+- 原4个工作提交已执行，本地main已先同步远端3个文档／规范提交，再以5f84fcce5d04a911c5bae28159b44b330275d0a8合并功能分支。唯一backend/index冲突保留双方条目，1164个产品文件与已验证快照完全一致。
+- 已按远端新规范同步README的功能、迁移及v5数据说明，并更新TODOS第4项；两项人工未验仍原样保留，未改写C-AC8／父AC10全浏览器条件。
+- 已停止8014／5179与本任务PG容器，保留库／截图；无关pelican-cycling.html未纳入提交。接续归档父子三任务、记录journal与推送main。
