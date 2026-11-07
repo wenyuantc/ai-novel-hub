@@ -9,7 +9,7 @@ from app.schemas.setting_field_value import EntityRef, FieldType, PositiveDbInt,
 
 SubjectKind = Literal["character", "world", "relationship", "career", "membership", "organization", "career_entry"]
 Boundary = Literal["start", "end"]
-AnchorKind = Literal["chapter", "planned"]
+AnchorKind = Literal["chapter", "planned", "scene"]
 ProgressionOperation = Literal["append", "replace"]
 ProgressionSource = Literal["manual", "analysis", "legacy_import"]
 ProgressionProtection = Literal["automatic", "confirmed", "manual"]
@@ -19,11 +19,21 @@ DbInt = Annotated[int, Field(strict=True, ge=-2_147_483_648, le=2_147_483_647)]
 
 
 class StoryPosition(BaseModel):
-    """已解析的故事位置：同一章号具有相同时间，不比较章节 id。"""
+    """已解析位置；旧章边界共享章号窗口，场景在窗口内按真实章及场景顺序排列。"""
 
     chapter_id: PositiveDbInt | None = None
     chapter_no: PositiveDbInt
     boundary: Boundary = "start"
+    scene_id: PositiveDbInt | None = None
+    scene_order: NonnegativeDbInt | None = None
+
+    @model_validator(mode="after")
+    def resolved_scene(self) -> Self:
+        if (self.scene_id is None) != (self.scene_order is None):
+            raise ValueError("场景位置必须包含稳定身份和服务端解析顺序")
+        if self.scene_id is not None and self.chapter_id is None:
+            raise ValueError("场景位置必须包含所属章节")
+        return self
 
 
 class SettingContextOut(BaseModel):
@@ -127,6 +137,7 @@ class ProgressionCreate(BaseModel):
     anchor_kind: AnchorKind
     chapter_id: PositiveDbInt | None = None
     chapter_no: PositiveDbInt | None = None
+    scene_id: PositiveDbInt | None = None
     boundary: Boundary = "start"
     sort_order: NonnegativeDbInt = 0
     note: str = Field(default="", max_length=200)
@@ -135,10 +146,18 @@ class ProgressionCreate(BaseModel):
     def validate_reference_and_anchor(self) -> Self:
         if (self.field_key is None) == (self.custom_field_id is None):
             raise ValueError("内置字段与自定义字段必须且只能指定一个")
-        if self.anchor_kind == "chapter" and (self.chapter_id is None or self.chapter_no is not None):
+        if self.anchor_kind == "chapter" and (
+            self.chapter_id is None or self.chapter_no is not None or self.scene_id is not None
+        ):
             raise ValueError("已有章节锚点必须指定章节 id，不能同时指定计划章节号")
-        if self.anchor_kind == "planned" and (self.chapter_no is None or self.chapter_id is not None):
+        if self.anchor_kind == "planned" and (
+            self.chapter_no is None or self.chapter_id is not None or self.scene_id is not None
+        ):
             raise ValueError("计划章节锚点必须指定章节号，不能同时指定章节 id")
+        if self.anchor_kind == "scene" and (
+            self.scene_id is None or self.chapter_id is not None or self.chapter_no is not None
+        ):
+            raise ValueError("场景锚点必须只指定场景 id，不能同时指定章节")
         if self.operation == "append" and (not isinstance(self.value, str) or not self.value.strip()):
             raise ValueError("追加内容不能为空")
         return self
@@ -158,6 +177,7 @@ class ProgressionUpdate(BaseModel):
     anchor_kind: AnchorKind | None = None
     chapter_id: PositiveDbInt | None = None
     chapter_no: PositiveDbInt | None = None
+    scene_id: PositiveDbInt | None = None
     boundary: Boundary | None = None
     sort_order: NonnegativeDbInt | None = None
     note: str | None = Field(default=None, max_length=200)
@@ -181,6 +201,7 @@ class ProgressionOut(BaseModel):
     anchor_kind: AnchorKind
     chapter_id: int | None = None
     chapter_no: int | None = None
+    scene_id: int | None = None
     anchor_label: str = ""
     boundary: Boundary
     sort_order: int
@@ -194,6 +215,7 @@ class ProgressionOut(BaseModel):
     reverted_at: datetime | None = None
     note: str = ""
     resolved_chapter_no: int | None = None
+    resolved_scene_order: int | None = None
     orphaned: bool = False
     created_at: datetime
     updated_at: datetime

@@ -22,6 +22,7 @@ from app.models.planning import (
     PlanningTag,
     PlanningUnit,
     PlanningUnitCareer,
+    PlanningUnitCharacter,
     PlanningUnitOrganization,
     PlanningUnitRelationship,
     PlanningUnitTag,
@@ -30,6 +31,7 @@ from app.models.planning import (
     SubplotCrossingParticipant,
     SubplotNode,
 )
+from app.models.scenes import Scene
 from app.schemas.planning import (
     EntityReference,
     PlanningEntry,
@@ -108,11 +110,12 @@ async def entries(
     return sorted(result, key=lambda item: (item.reference.kind, item.name.casefold(), reference_key(item.reference)))
 
 
-async def rows(db: AsyncSession, project_id: int) -> list[PlanningRow]:
+async def rows(db: AsyncSession, project_id: int, *, granularity: str = "chapter") -> list[PlanningRow]:
     chapters = list(
         await db.execute(
             select(
-                Chapter.id, Chapter.title, Chapter.chapter_no, Chapter.outline_id, Chapter.plan_id, Chapter.word_count
+                Chapter.id, Chapter.title, Chapter.chapter_no, Chapter.outline_id, Chapter.plan_id, Chapter.word_count,
+                Chapter.content_revision,
             )
             .where(Chapter.project_id == project_id)
             .order_by(Chapter.chapter_no, Chapter.id)
@@ -147,6 +150,9 @@ async def rows(db: AsyncSession, project_id: int) -> list[PlanningRow]:
             .execution_options(populate_existing=True)
         )
     )
+    scene_chapters = dict((await db.execute(select(Scene.id, Scene.chapter_id).join(
+        Chapter, Chapter.id == Scene.chapter_id
+    ).where(Chapter.project_id == project_id))).all())
     by_chapter = {unit.chapter_id: unit for unit in units if unit.chapter_id is not None}
     by_plan = {unit.plan_id: unit for unit in units if unit.plan_id is not None and unit.chapter_id is None}
     character_names = dict(
@@ -169,6 +175,13 @@ async def rows(db: AsyncSession, project_id: int) -> list[PlanningRow]:
     ):
         tags[unit_id].append(PlanningTagOut.model_validate(tag))
     references: dict[int, list[PlanningReference]] = defaultdict(list)
+    for unit_id, character_id in await db.execute(
+        select(PlanningUnitCharacter.unit_id, PlanningUnitCharacter.character_id)
+        .join(PlanningUnit, PlanningUnit.id == PlanningUnitCharacter.unit_id)
+        .join(Character, Character.id == PlanningUnitCharacter.character_id)
+        .where(PlanningUnit.project_id == project_id, Character.project_id == project_id)
+    ):
+        references[unit_id].append(EntityReference(kind="character", id=character_id))
     for kind, (join, column_name, target) in REFERENCE_JOINS.items():
         column = getattr(join, column_name)
         query = (
@@ -216,7 +229,11 @@ async def rows(db: AsyncSession, project_id: int) -> list[PlanningRow]:
             pov_character_id=unit.pov_character_id if unit and unit.pov_character_id in character_names else None,
             pov_character_name=character_names.get(unit.pov_character_id) if unit else None,
             tags=sorted(tags[unit.id], key=lambda tag: tag.id) if unit else [],
-            references=sorted(refs, key=reference_key),
+            references=sorted({reference_key(ref): ref for ref in refs}.values(), key=reference_key),
+            content_revision=chapter.content_revision if chapter else None,
+            source_level=unit.source_level if unit else "chapter",
+            scene_id=unit.scene_id if unit and unit.source_level == "scene" else None,
+            source_chapter_id=scene_chapters.get(unit.scene_id) if unit and unit.source_level == "scene" else None,
         )
 
     result = [
@@ -228,13 +245,42 @@ async def rows(db: AsyncSession, project_id: int) -> list[PlanningRow]:
         )
         for chapter in chapters
     ]
+    active_scene_ids = set(await db.scalars(select(Scene.id).join(Chapter, Chapter.id == Scene.chapter_id).where(
+        Chapter.project_id == project_id, Scene.active.is_(True)
+    )))
+    if granularity in ("scene", "all"):
+        from app.services.planning_scene_service import resolve_scene_plannings
+
+        parents = {row.chapter_id: row for row in result}
+        scene_rows = list(await db.execute(select(
+            Scene.id, Scene.chapter_id, Scene.title, Scene.sort,
+            Scene.word_count,
+        ).join(Chapter, Chapter.id == Scene.chapter_id).where(
+            Chapter.project_id == project_id, Scene.active.is_(True),
+        ).order_by(Chapter.chapter_no, Chapter.id, Scene.sort, Scene.id)))
+        effective = await resolve_scene_plannings(db, project_id, [row.id for row in scene_rows], chapter_rows=result)
+        scenes = []
+        for scene in scene_rows:
+            parent = parents[scene.chapter_id]
+            planning = effective[scene.id]
+            scenes.append(parent.model_copy(update={
+                "key": f"scene:{scene.id}", "source": PlanningSource(kind="scene", id=scene.id),
+                "unit_id": planning.unit_id, "scene_id": scene.id, "scene_sort": scene.sort,
+                "source_chapter_id": scene.chapter_id,
+                "source_level": "scene", "title": scene.title, "has_content": scene.word_count > 0,
+                "pov_character_id": planning.effective.pov_character_id,
+                "pov_character_name": planning.effective.pov_character_name,
+                "tags": planning.effective.tags, "references": planning.effective.references,
+                "scene_planning": planning,
+            }))
+        result = scenes if granularity == "scene" else [*result, *scenes]
 
     def plan_order(plan):
         outline = outlines[plan.outline_id]
         return outline.volume_no, outline.sort, outline.chapter_no, outline.id, plan.seq, plan.id
 
     for plan in sorted(plans, key=plan_order):
-        if plan.chapter_id is None:
+        if plan.chapter_id is None and granularity != "scene":
             result.append(
                 build(PlanningSource(kind="plan", id=plan.id), plan.title, plan=plan, unit=by_plan.get(plan.id))
             )
@@ -242,12 +288,17 @@ async def rows(db: AsyncSession, project_id: int) -> list[PlanningRow]:
         if (
             unit.chapter_id is None
             and unit.plan_id is None
+            and unit.scene_id not in active_scene_ids
             and (
                 unit.pov_character_id is not None
                 or unit.detached_character_ids
                 or tags[unit.id]
                 or references[unit.id]
                 or unit.id in occupied
+                or (unit.source_level == "scene" and any(
+                    getattr(unit, f"{field}_mode") == "override"
+                    for field in ("pov", "tags", "character", "world", "organization", "career", "relationship")
+                ))
             )
         ):
             result.append(build(PlanningSource(kind="detached", id=unit.id), unit.last_source_label, unit=unit))

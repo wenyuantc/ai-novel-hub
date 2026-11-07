@@ -33,7 +33,7 @@ export function careerPreviewRequest(
   const selected = toPositionInput({ ...position, chapter_id: chapterId })
   if (!selected) return null
   return {
-    key: JSON.stringify([identity, projectId, timelineId, revision, selected.anchor_kind, selected.chapter_id ?? selected.chapter_no, selected.boundary]),
+    key: JSON.stringify([identity, projectId, timelineId, revision, selected.anchor_kind, selected.scene_id ?? selected.chapter_id ?? selected.chapter_no, selected.boundary]),
     timelineId,
     revision,
     position: selected,
@@ -42,7 +42,7 @@ export function careerPreviewRequest(
 
 export function careerPreviewResponse(request: CareerPreviewRequest, data: SettingEffective): CareerPreviewResult {
   const samePosition = data.position.boundary === request.position.boundary && (
-    request.position.anchor_kind === 'chapter'
+    request.position.anchor_kind === 'scene' ? data.position.scene_id === request.position.scene_id : request.position.anchor_kind === 'chapter'
       ? data.position.chapter_id === request.position.chapter_id
       : data.position.chapter_id === null && data.position.chapter_no === request.position.chapter_no
   )

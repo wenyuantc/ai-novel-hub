@@ -138,6 +138,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         (
             T("context", "创作参考资料（作品信息、世界观、角色、大纲、前情）", required=True, sample=SAMPLE_CONTEXT),
             L("planning_context", "本章规划与指定参考（自动计算，锁定）", "\n\n【本章规划】\n视角人物：林远"),
+            L("scene_context", "目标场景范围与衔接（自动计算，锁定）", ""),
             T("chapter_no", "章节号", "int", sample=2),
             T("title", "章节标题", sample="初遇"),
             T("heading", "章节标题行（第N章 标题）", sample="第2章 初遇"),
@@ -169,6 +170,9 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         "润色整章正文，保留情节与信息点。",
         (
             T("content", "章节原文", required=True, sample="林远推开舱门，冷风扑面而来。"),
+            L("scene_context", "目标场景范围与衔接（自动计算，锁定）", ""),
+            L("planning_context", "本场景规划与指定参考（自动计算，锁定）", ""),
+            L("setting_context", "本场景有效设定（自动计算，锁定）", ""),
             T("style", "写作风格段（由风格库渲染）", sample=SAMPLE_STYLE),
             INSTRUCTION_VAR,
             SKILL_GUIDE_VAR,
@@ -182,6 +186,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         (
             T("context", "创作参考资料", required=True, sample=SAMPLE_CONTEXT),
             L("planning_context", "本章规划与指定参考（自动计算，锁定）", "\n\n【本章规划】\n视角人物：林远"),
+            L("scene_context", "目标场景范围与衔接（自动计算，锁定）", ""),
             T("chapter_no", "章节号", "int", sample=2),
             T("title", "章节标题", sample="初遇"),
             T("heading", "章节标题行（第N章 标题）", sample="第2章 初遇"),
@@ -211,6 +216,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             SKILL_GUIDE_VAR,
             L("setting_context", "本章有效设定（自动计算，锁定）", "\n\n【本章有效设定】\n■ 林远：练气境"),
             L("planning_context", "本章规划与指定参考（自动计算，锁定）", "\n\n【本章规划】\n视角人物：林远"),
+            L("scene_context", "目标场景范围与衔接（自动计算，锁定）", ""),
         ),
     ),
     (

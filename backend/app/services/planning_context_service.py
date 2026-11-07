@@ -1,6 +1,7 @@
 """同章规划的只读投影：实际生成、局部重写和预览共享来源与过滤逻辑。"""
 
 from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import or_, select
@@ -32,9 +33,10 @@ from app.models.planning import (
     SubplotCrossingParticipant,
     SubplotNode,
 )
+from app.models.scenes import Scene
 from app.schemas.planning import EntityReference, PlanningContextPreview, PlanningReference, PlanningSource, SourceKind
 from app.schemas.planning import RelationshipReference as PlanningRelationshipReference
-from app.schemas.progression import StoryPosition
+from app.schemas.progression import SettingContextOut, StoryPosition
 from app.schemas.setting_fields import EntityRef
 from app.services import relationship_service, setting_field_service, setting_progression_service
 from app.services.ai_dispatch import VisibilityStamp, read_visibility_stamp, require_visibility_stamp
@@ -62,6 +64,10 @@ class PlanningContext:
     unit_id: int | None = None
     chapter_id: int | None = None
     plan_id: int | None = None
+    scene_id: int | None = None
+    position: StoryPosition | None = None
+    manual_character_ids: list[int] | None = None
+    content_revision: int | None = None
     pov_character_id: int | None = None
     text: str = ""
     truncated: bool = False
@@ -86,6 +92,8 @@ class PlanningContext:
     def log_data(self, scope: PlanningScope) -> dict[str, Any]:
         return {
             "unit_id": self.unit_id,
+            "scene_id": self.scene_id,
+            "content_revision": self.content_revision,
             "revision": self.revision,
             "scope": scope,
             "pov_character_id": self.pov_character_id,
@@ -214,6 +222,16 @@ async def _source(
         unit = await db.scalar(
             select(PlanningUnit).where(PlanningUnit.project_id == project.id, PlanningUnit.retired.is_(False), target)
         )
+    elif source_kind == "scene":
+        chapter = await db.scalar(select(Chapter).join(Scene, Scene.chapter_id == Chapter.id).where(
+            Chapter.project_id == project.id, Scene.id == source_id, Scene.active.is_(True),
+        ))
+        if chapter is None:
+            raise NotFoundError("场景不存在")
+        unit = await db.scalar(select(PlanningUnit).where(
+            PlanningUnit.project_id == project.id, PlanningUnit.scene_id == source_id,
+            PlanningUnit.retired.is_(False), PlanningUnit.source_level == "scene",
+        ))
     else:
         unit = await db.scalar(
             select(PlanningUnit).where(
@@ -222,6 +240,7 @@ async def _source(
                 PlanningUnit.retired.is_(False),
                 PlanningUnit.chapter_id.is_(None),
                 PlanningUnit.plan_id.is_(None),
+                PlanningUnit.scene_id.is_(None),
             )
         )
         if unit is None:
@@ -275,7 +294,7 @@ async def _story_items(
         items.append(
             PlanningTextItem(f"明确交汇 #{event.id}：{event.title}｜参与支线：{names}", event.description.strip())
         )
-    out.subplot_ids = sorted(subplot_ids)
+    out.subplot_ids = sorted(set(out.subplot_ids) | subplot_ids)
     return items
 
 
@@ -395,7 +414,7 @@ async def _setting_items(
         out.warnings.append("尚未绑定实际章节，仅预览规划指令；设定资料将在建章后按章初位置解析")
         return items
 
-    position = StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
+    position = out.position or StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
     assert out.setting_scope is not None
     effective = out.setting_scope.effective
     for character in effective.characters:
@@ -538,6 +557,7 @@ async def load_planning_context(
     text_hint: str = "",
     legacy_text_hint: str = "",
     stamp: VisibilityStamp | None = None,
+    preceding_text: str | None = None,
 ) -> PlanningContext:
     """不写入 unit／设定，不依赖 UI 当前列或支线筛选；权限由上层项目入口校验。"""
     from app.services import context_builder
@@ -547,6 +567,12 @@ async def load_planning_context(
         fields_revision = await setting_field_service.fields_revision(db, project.id)
         revision = await planning_revision(db, project.id)
         unit, chapter, plan = await _source(db, project, source_kind, source_id)
+        if source_kind == "scene":
+            return await _load_scene_context(
+                db, project, source_id, chapter, unit, revision=revision, fields_revision=fields_revision,
+                scope=scope, budget=budget, text_hint=text_hint, legacy_text_hint=legacy_text_hint, stamp=stamp,
+                preceding_text=preceding_text,
+            )
         out = PlanningContext(
             revision=revision,
             source=PlanningSource(kind=source_kind, id=source_id),
@@ -593,6 +619,7 @@ async def load_planning_context(
             out.setting_scope = await context_builder.prepare_chapter_settings(
                 db, project, chapter, task.match_text(), explicit=explicit, stamp=stamp, extra_text=text_hint,
                 legacy_extra_text=legacy_text_hint,
+                preceding_text=preceding_text,
             )
         if unit is not None:
             ai_scope = out.setting_scope.scope if out.setting_scope is not None else await build_scope(
@@ -628,6 +655,8 @@ async def context_preview(
         source=out.source,
         chapter_id=out.chapter_id,
         plan_id=out.plan_id,
+        scene_id=out.scene_id,
+        content_revision=out.content_revision,
         text=out.text,
         warnings=out.warnings,
         node_ids=out.node_ids,
@@ -636,3 +665,91 @@ async def context_preview(
         references=out.references,
         truncated=out.truncated,
     )
+
+
+async def _load_scene_context(
+    db, project, scene_id, chapter, unit, *, revision, fields_revision, scope, budget,
+    text_hint, legacy_text_hint, stamp, preceding_text=None,
+) -> PlanningContext:
+    from app.services import context_builder
+    from app.services.planning_scene_service import resolve_scene_planning
+
+    content_revision = await db.scalar(select(Chapter.content_revision).where(
+        Chapter.id == chapter.id, Chapter.project_id == project.id
+    ))
+    planning = await resolve_scene_planning(db, project.id, scene_id)
+    effective = planning.effective
+    position = await setting_progression_service.resolve_scene_position(db, project.id, scene_id)
+    scene_text = await db.scalar(select(Scene.content).where(Scene.id == scene_id, Scene.chapter_id == chapter.id))
+    manual = [ref.id for ref in effective.references if ref.kind == "character"]
+    out = PlanningContext(
+        revision=revision, source=PlanningSource(kind="scene", id=scene_id), fields_revision=fields_revision,
+        unit_id=unit.id if unit else None, chapter_id=chapter.id, plan_id=chapter.plan_id,
+        scene_id=scene_id, position=position, manual_character_ids=manual,
+        content_revision=content_revision,
+        references=list(effective.references),
+    )
+    # 本地覆盖先收敛为唯一有效意图，再进入资格/字段门禁，不能把章默认偷偷 union 回来。
+    rows = []
+    for kind, model in (("world", WorldSetting), ("organization", Organization), ("career", Career),
+                        ("relationship", SettingTimeline)):
+        ids = [ref.timeline_id if ref.kind == "relationship" else ref.id
+               for ref in effective.references if ref.kind == kind]
+        statement = select(model).where(model.project_id == project.id, model.id.in_(ids)).order_by(model.id)
+        if kind == "relationship":
+            statement = statement.where(SettingTimeline.subject_kind == "relationship")
+        rows.append(list(await db.scalars(statement)))
+    view = SimpleNamespace(pov_character_id=effective.pov_character_id)
+    explicit = _explicit_entries(view, tuple(rows))
+    explicit.extend(("character", identity) for identity in manual)
+    task = await context_builder.chapter_task(db, chapter)
+    out.setting_scope = await context_builder.prepare_chapter_settings(
+        db, project, chapter, task.match_text(), explicit=explicit, stamp=stamp, extra_text=text_hint,
+        legacy_extra_text=legacy_text_hint, position=position, manual_character_ids=manual, source_text=scene_text,
+        preceding_text=preceding_text,
+    )
+    story = []
+    parent = await _chapter_unit(db, project.id, chapter.id)
+    if parent is not None:
+        story += [replace(item, title=f"本章共同背景（非本场景完成目标） · {item.title}")
+                  for item in await _story_items(db, project, parent, out)]
+    if unit is not None:
+        story += await _story_items(db, project, unit, out)
+    settings = await _setting_items(db, project, chapter, view, out, tuple(rows), out.setting_scope.scope)
+    limit = min(MAX_PLANNING_CHARS, budget - MIN_ORDINARY_CONTEXT_CHARS - 2)
+    out.text, out.truncated = fit_planning_context(settings + story, scope=scope, budget=limit)
+    if out.truncated:
+        out.warnings.append("部分场景规划或指定设定因上下文预算被截断，完整内容仍保留在规划中")
+    await check_planning_revision(db, project.id, revision)
+    await setting_field_service.check_fields_revision(db, project.id, fields_revision)
+    await require_visibility_stamp(db, stamp)
+    if content_revision != await db.scalar(select(Chapter.content_revision).where(
+        Chapter.id == chapter.id, Chapter.project_id == project.id
+    )):
+        raise ConflictError("场景上下文读取期间已变化，请重新预览", extra={"code": "scene_context_changed"})
+    return out
+
+
+async def scene_setting_context(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int
+) -> SettingContextOut:
+    """人工只读预览复用真实出站的统一选择与时点，不返回完整作者档案。"""
+    from app.services import context_builder
+    from app.services.chapter_service import get_manageable_chapter
+    from app.services.project_service import get_manageable_project
+    from app.services.scene_service import require_scene
+
+    with db.no_autoflush:
+        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        await require_scene(db, chapter, scene_id)
+        project = await get_manageable_project(db, user_id, project_id)
+        planning = await load_planning_context(db, project, "scene", scene_id)
+        text = await context_builder.build_setting_context(
+            db, project, chapter, planning=planning, include_protected=True,
+        )
+        unverified = await setting_progression_service.count_unverified_timelines(db, user_id, project_id)
+        warnings = list(planning.warnings)
+        if unverified:
+            warnings.append(f"该作品有 {unverified} 条旧设定尚未校准，早期设定可能不准确。")
+        return SettingContextOut(position=planning.position, text=text, legacy_unverified_count=unverified,
+                                 warnings=warnings)

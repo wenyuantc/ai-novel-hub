@@ -823,7 +823,10 @@ async def test_replacement_records_agent_version_and_stales_analysis(ctx):
     tool = get_tool("replace_chapter_text")
     args = {"chapter_id": cid, "original": "握紧", "replacement": "放下"}
     before = await tool.preview(ctx, args)
-    ch.content += "远处传来钟声。"
+    # 模拟合法的人工改稿但不写版本；章正文已是Scene投影，不能再直接篡改投影列。
+    from app.services import scene_service
+
+    await scene_service.replace_legacy_content(ctx.db, ch, ch.content + "远处传来钟声。")
     await ctx.db.commit()
     refreshed = await tool.preview(ctx, args)
     assert before["content_hash"] != refreshed["content_hash"]

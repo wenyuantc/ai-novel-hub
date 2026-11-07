@@ -72,6 +72,10 @@ async def test_generation_projection_masks_builtin_and_custom_and_does_not_walk_
         chapters = [Chapter(project_id=pid, title=f"测试第{n}章", chapter_no=n) for n in (5, 20, 21)]
         db.add_all([hero, private, org, career, world, detected, manual, *chapters])
         await db.flush()
+        from app.services.scene_service import initialize_chapter
+
+        for chapter in chapters:
+            await initialize_chapter(db, chapter)
         timeline = SettingTimeline(
             project_id=pid, subject_kind="character", character_id=hero.id,
             baseline={
@@ -288,6 +292,9 @@ async def test_continuation_does_not_send_first_round_context_after_tightening(a
     )).json()
     await _settings(client, base, "character", hero["id"], ai_mode="always")
     chapter = (await client.post(f"{base}/chapters", json={"title": "测试续写"})).json()
+    chapter_url = f"{base}/chapters/{chapter['id']}"
+    scene = (await client.get(f"{chapter_url}/scenes")).json()["items"][0]
+    assert (await client.get(f"{chapter_url}/versions")).json() == []
     gate = Gate()
     fake_llm.push(["已生成首句。", gate])
     response = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={
@@ -303,8 +310,15 @@ async def test_continuation_does_not_send_first_round_context_after_tightening(a
     events = await stream_task(client, response.json()["id"])
     assert len(fake_llm.calls) == 1
     event, result = events[-1]
-    assert event == "done" and result["task"]["status"] == "succeeded", events[-1]
+    # 可见性收紧撤回了整个上下文快照；最终保存必须拒绝，而非把旧首轮当作成功稿。
+    # 这不同于普通续写网络失败，后者仍保留主结果并返回warning。
+    assert event == "error" and result["task"]["status"] == "failed", events[-1]
     assert "AI 可见设置已变更" in json.dumps(result, ensure_ascii=False)
+    saved = (await client.get(chapter_url)).json()
+    saved_scene = (await client.get(f"{chapter_url}/scenes/{scene['id']}")).json()
+    assert saved["content"] == saved_scene["content"] == chapter["content"] == ""
+    assert saved["content_revision"] == saved_scene["content_revision"] == chapter["content_revision"]
+    assert (await client.get(f"{chapter_url}/versions")).json() == []
 
 
 async def test_initial_job_can_rebuild_before_any_generation_request(app, client, fake_llm, monkeypatch):

@@ -108,7 +108,9 @@ async def test_setting_context_preview_uses_chapter_start_without_ai_or_database
         assert "练气" in payloads[no]["text"]
         assert "山门被毁" not in payloads[no]["text"]
         assert "金丹" not in payloads[no]["text"]
-        assert payloads[no]["position"] == {"chapter_id": chapters[no], "chapter_no": no, "boundary": "start"}
+        assert payloads[no]["position"] == {
+            "chapter_id": chapters[no], "chapter_no": no, "boundary": "start", "scene_id": None, "scene_order": None,
+        }
         assert payloads[no]["legacy_unverified_count"] == 1
         assert payloads[no]["warnings"]
     assert "山门被毁" in payloads[21]["text"]

@@ -34,7 +34,7 @@ from app.models import (
     Task,
     User,
 )
-from app.services import memory_service, retrieval_service, version_service
+from app.services import memory_service, retrieval_service, scene_service, version_service
 from app.services.agent import effects
 from app.services.chapter_numbering import CHAPTER_NO_REFS, shift_chapter_numbers
 from tests.test_chapter_numbering import _seed, _values
@@ -320,6 +320,7 @@ async def test_delete_empty_plan_chapter_restores_versions_analysis_memory_and_l
     chapter = Chapter(project_id=pid, title="已清空的章节", outline_id=outline.id, content=" \n")
     db.add(chapter)
     await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     plan = ChapterPlan(project_id=pid, outline_id=outline.id, seq=1, title="细纲", chapter_id=chapter.id)
     analysis = ChapterAnalysis(project_id=pid, chapter_id=chapter.id, chapter_no=1, content_hash="old")
     log = GenerationLog(project_id=pid, chapter_id=chapter.id, kind="generate", status="success")
@@ -405,9 +406,11 @@ async def test_undo_inserted_chapter_does_not_delete_later_written_content(proje
     before = await effects.snapshot(db, project.id)
     chapter = Chapter(project_id=project.id, title="新章")
     db.add(chapter)
+    await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     delta = effects.diff(before, await effects.snapshot(db, project.id))
     await db.commit()
-    chapter.content = "后来写的正文"
+    await scene_service.replace_legacy_content(db, chapter, "后来写的正文")
     await db.commit()
     with pytest.raises(ConflictError):
         await effects.undo(db, project.id, delta)
@@ -439,9 +442,10 @@ async def test_text_restores_by_version_and_rejects_later_content_change(project
     chapter = Chapter(project_id=pid, title="文本", content="甲走进山谷。", word_count=6)
     db.add(chapter)
     await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     original = await version_service.record(db, chapter, "baseline")
     before = await effects.snapshot(db, pid)
-    chapter.content = "甲慢慢走进山谷。"
+    await scene_service.replace_legacy_content(db, chapter, "甲慢慢走进山谷。")
     latest = await version_service.record(db, chapter, "agent")
     delta = effects.diff(before, await effects.snapshot(db, pid))
     delta.append(
@@ -455,7 +459,7 @@ async def test_text_restores_by_version_and_rejects_later_content_change(project
     )
     await db.commit()
     if changed:
-        chapter.content = "后续手动编辑正文"
+        await scene_service.replace_legacy_content(db, chapter, "后续手动编辑正文")
         await db.commit()
         with pytest.raises(ConflictError):
             await effects.undo(db, pid, delta)
@@ -476,8 +480,9 @@ async def test_text_effect_rechecks_hash_versions_and_project_without_row_diff(p
     chapter = Chapter(project_id=project.id, title="原文校验", content="修改前正文")
     db.add(chapter)
     await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     original = await version_service.record(db, chapter, "baseline")
-    chapter.content = "修改后正文"
+    await scene_service.replace_legacy_content(db, chapter, "修改后正文")
     latest = await version_service.record(db, chapter, "agent")
     delta = effects.chapter_text_effect(
         chapter.id,
@@ -488,7 +493,7 @@ async def test_text_effect_rechecks_hash_versions_and_project_without_row_diff(p
     )
     pid = project.id
     if changed == "content":
-        chapter.content = "之后手动写入的正文"
+        await scene_service.replace_legacy_content(db, chapter, "之后手动写入的正文")
     elif changed == "before_version":
         original.content = "历史版本内容已变化"
     elif changed == "after_version":

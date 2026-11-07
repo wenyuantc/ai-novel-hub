@@ -13,6 +13,7 @@ from app.models import (
     Chapter,
     ChapterCharacter,
     ChapterPlan,
+    ChapterVersion,
     Character,
     CharacterCareer,
     Organization,
@@ -38,7 +39,7 @@ from app.models.planning import (
     SubplotCrossingParticipant,
     SubplotNode,
 )
-from app.services import context_builder, planning_context_service
+from app.services import context_builder, planning_context_service, scene_service
 from tests.helpers import Gate, analysis_json, create_ai_config, create_project, parse_sse, register, run_task
 
 
@@ -93,6 +94,8 @@ async def _seed(app, client, *, content="需要改写的原文。"):
         ]
         db.add_all([hero, partner, world, org, career, outline, *chapters.values(), *subplots])
         await db.flush()
+        for chapter in chapters.values():
+            await scene_service.initialize_chapter(db, chapter)
         db.add(CareerStage(career_id=career.id, name="入门", position=1, description="能读基础符文"))
         plan = ChapterPlan(project_id=pid, outline_id=outline.id, seq=1, title="将来细纲", character_ids=[])
         db.add(plan)
@@ -490,7 +493,7 @@ async def test_planning_preview_is_locked_and_new_override_must_keep_it(client):
         assert response.status_code == 400 and "planning_context" in response.text
 
 
-async def test_auto_continue_keeps_snapshot_when_planning_changes_during_generation(app, client, fake_llm):
+async def test_auto_continue_rejects_changed_planning_snapshot_before_second_send(app, client, fake_llm):
     data = await _seed(app, client)
     gate = Gate()
     fake_llm.push(["首" * 50, gate])
@@ -516,11 +519,19 @@ async def test_auto_continue_keeps_snapshot_when_planning_changes_during_generat
     finally:
         gate.release()
     task, _ = await run_task(client, response)
-    assert task["status"] == "succeeded", task
-    assert len(fake_llm.calls) == 2
+    # 场景设计 §8 同时保护后续真实发送及最终采纳，不能给旧规划续签。
+    assert task["status"] == "failed", task
+    assert len(fake_llm.calls) == 1
     for call in fake_llm.calls:
         _assert_current_planning(_prompt(call))
         assert "任务中途改成另一规划" not in _prompt(call)
+    async with app.state.sessionmaker() as db:
+        chapter = await db.get(Chapter, data["chapters"][5])
+        assert chapter.content == "需要改写的原文。"
+        assert [scene.content for scene in await scene_service.list_active_scenes(db, chapter.id)] == [
+            "需要改写的原文。",
+        ]
+        assert list(await db.scalars(select(ChapterVersion.id).where(ChapterVersion.chapter_id == chapter.id))) == []
 
 
 async def test_budget_accounts_for_protected_block_and_reports_truncation(app, client):

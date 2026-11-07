@@ -23,6 +23,7 @@ def build_chapter_messages(
     emotion: str = "",
     skill_guide: str = "",
     planning_context: str = "",
+    scene_context: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """key_events / goal / emotion 来自细纲（没有细纲时为空，提示词与之前一致）。"""
@@ -43,6 +44,7 @@ def build_chapter_messages(
             "instruction": instruction.strip(),
             "skill_guide": skill_guide.strip(),
             "planning_context": f"\n\n{planning_context.strip()}" if planning_context.strip() else "",
+            "scene_context": f"\n\n{scene_context.strip()}" if scene_context.strip() else "",
         },
     )
 
@@ -53,6 +55,9 @@ def build_polish_messages(
     style: str = "",
     instruction: str = "",
     skill_guide: str = "",
+    scene_context: str = "",
+    planning_context: str = "",
+    setting_context: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     return render(
@@ -63,6 +68,9 @@ def build_polish_messages(
             "style": style.strip(),
             "instruction": instruction.strip(),
             "skill_guide": skill_guide.strip(),
+            "scene_context": f"\n\n{scene_context.strip()}" if scene_context.strip() else "",
+            "planning_context": f"\n\n{planning_context.strip()}" if planning_context.strip() else "",
+            "setting_context": f"\n\n{setting_context.strip()}" if setting_context.strip() else "",
         },
     )
 
@@ -80,6 +88,7 @@ def build_revise_messages(
     preserve: list[str] | None = None,
     skill_guide: str = "",
     planning_context: str = "",
+    scene_context: str = "",
     override: PromptOverride | None = None,
 ) -> list[ChatMessage]:
     """按分析建议整章重写：参考资料 + 原文全文 + 勾选的建议 + 补充要求 + 需保留的要素。"""
@@ -99,6 +108,7 @@ def build_revise_messages(
             "instruction": instruction.strip(),
             "skill_guide": skill_guide.strip(),
             "planning_context": f"\n\n{planning_context.strip()}" if planning_context.strip() else "",
+            "scene_context": f"\n\n{scene_context.strip()}" if scene_context.strip() else "",
         },
     )
 

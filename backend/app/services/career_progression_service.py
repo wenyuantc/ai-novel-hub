@@ -18,7 +18,9 @@ from app.schemas.progression import StoryPosition
 from app.services.setting_progression_resolver import (
     EffectiveSnapshot,
     ProgressionEvent,
+    event_position,
     resolve_progressions,
+    story_position_key,
     validate_baseline,
     validate_progression_value,
 )
@@ -193,16 +195,20 @@ async def validate_career_intervals(
     _ensure_limits(counts, affected)
 
     events_by_timeline: dict[int, list[ProgressionEvent]] = defaultdict(list)
-    changed_at: dict[tuple[int, str], set[int]] = defaultdict(set)
+    changed_at: dict[tuple[int, ...], set[int]] = defaultdict(set)
+    positions: dict[tuple[int, ...], StoryPosition] = {}
     if timelines:
         # 复用统一事件转换，避免两处对章节/排序字段定义不同。
-        from app.services.setting_progression_service import _as_event
+        from app.services.setting_progression_service import _as_event, load_scene_positions
 
-        rows = await db.execute(
+        rows = (await db.execute(
             select(SettingProgression, Chapter.chapter_no)
             .outerjoin(Chapter, and_(Chapter.id == SettingProgression.chapter_id, Chapter.project_id == project_id))
             .where(SettingProgression.timeline_id.in_(list(by_id)))
             .execution_options(populate_existing=True)
+        )).all()
+        scene_positions = await load_scene_positions(
+            db, project_id, {row.scene_id for row, _ in rows if row.scene_id is not None}
         )
         for row, linked_number in rows:
             timeline = by_id[row.timeline_id]
@@ -220,15 +226,15 @@ async def validate_career_intervals(
                 )
             if not row.active:
                 continue
-            event = _as_event(row, linked_number)
+            event = _as_event(row, linked_number, scene_position=scene_positions.get(row.scene_id))
             events_by_timeline[timeline.id].append(event)
-            number = row.chapter_no if row.anchor_kind == "planned" else linked_number
-            if number is not None:
-                changed_at[(number, row.boundary)].add(timeline.id)
+            position = event_position(event)
+            if position is not None:
+                key = story_position_key(position)
+                positions[key] = position
+                changed_at[key].add(timeline.id)
 
-    for (number, boundary), changed_ids in sorted(
-        changed_at.items(), key=lambda item: (item[0][0], item[0][1] == "end")
-    ):
+    for key, changed_ids in sorted(changed_at.items()):
         changed_characters: set[int] = set()
         for timeline_id in changed_ids:
             timeline = by_id[timeline_id]
@@ -239,7 +245,7 @@ async def validate_career_intervals(
                     timeline.baseline,
                     {},
                     events_by_timeline[timeline_id],
-                    StoryPosition(chapter_no=number, boundary=cast(str, boundary)),
+                    positions[key],
                 )
             except ValueError as exc:
                 raise ConflictError(

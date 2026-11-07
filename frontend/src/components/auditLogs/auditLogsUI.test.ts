@@ -86,7 +86,7 @@ describe('审计详情只读语义', () => {
     expect(detail(log({ version_ref: null, version_status: null }))).toContain('本次操作没有关联业务版本')
   })
   it('主动读取的版本只展示为当前正文，不能视为操作时刻全文', () => {
-    const html = render(createElement(AuditLogDetailContent, { canReadVersion: true, log: log({ version_status: 'changed' }), version: { id: 4, chapter_id: 12, seq: 2, source: 'manual', content: '这是独立 API 返回的当前正文', word_count: 16, starred: false, note: '', generation_log_id: null, created_at: '2026-10-31T01:00:00Z', updated_at: '2026-10-31T01:01:00Z' }, versionError: null, versionLoading: false, onLoadVersion: noop }))
+    const html = render(createElement(AuditLogDetailContent, { canReadVersion: true, log: log({ version_status: 'changed' }), version: { id: 4, chapter_id: 12, seq: 2, source: 'manual', content: '这是独立 API 返回的当前正文', word_count: 16, starred: false, note: '', generation_log_id: null, has_scene_snapshot: false, scene_snapshot: null, created_at: '2026-10-31T01:00:00Z', updated_at: '2026-10-31T01:01:00Z' }, versionError: null, versionLoading: false, onLoadVersion: noop }))
     expect(html).toContain('这是独立 API 返回的当前正文')
     expect(html).toContain('以下不是审计保存的正文')
     expect(html).toContain('不能视为本次操作时刻的确定全文')

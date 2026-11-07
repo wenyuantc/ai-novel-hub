@@ -10,7 +10,16 @@ class PlanningUnit(TimestampMixin, Base):
     __tablename__ = "planning_units"
     __table_args__ = (
         CheckConstraint("binding_epoch >= 0", name="binding_epoch_nonnegative"),
-        CheckConstraint("NOT retired OR (chapter_id IS NULL AND plan_id IS NULL)", name="retired_detached"),
+        CheckConstraint(
+            "NOT retired OR (chapter_id IS NULL AND plan_id IS NULL AND scene_id IS NULL)", name="retired_detached"
+        ),
+        CheckConstraint("source_level IN ('chapter', 'scene')", name="source_level"),
+        CheckConstraint(
+            "(source_level = 'chapter' AND scene_id IS NULL) OR "
+            "(source_level = 'scene' AND chapter_id IS NULL AND plan_id IS NULL)", name="source_shape"
+        ),
+        *(CheckConstraint(f"{field}_mode IN ('inherit', 'override')", name=f"{field}_mode")
+          for field in ("pov", "tags", "character", "world", "organization", "career", "relationship")),
         {"sqlite_autoincrement": True},
     )
 
@@ -18,6 +27,15 @@ class PlanningUnit(TimestampMixin, Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), unique=True)
     plan_id: Mapped[int | None] = mapped_column(ForeignKey("chapter_plans.id", ondelete="SET NULL"), unique=True)
+    scene_id: Mapped[int | None] = mapped_column(ForeignKey("scenes.id", ondelete="SET NULL"), unique=True)
+    source_level: Mapped[str] = mapped_column(String(8), default="chapter", server_default="chapter")
+    pov_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
+    tags_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
+    character_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
+    world_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
+    organization_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
+    career_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
+    relationship_mode: Mapped[str] = mapped_column(String(8), default="inherit", server_default="inherit")
     pov_character_id: Mapped[int | None] = mapped_column(ForeignKey("characters.id", ondelete="SET NULL"), index=True)
     last_source_label: Mapped[str] = mapped_column(String(300), default="", server_default="")
     last_volume_label: Mapped[str] = mapped_column(String(300), default="", server_default="")
@@ -42,6 +60,17 @@ class PlanningUnitTag(TimestampMixin, Base):
     unit_id: Mapped[int] = mapped_column(ForeignKey("planning_units.id", ondelete="CASCADE"), primary_key=True)
     tag_id: Mapped[int] = mapped_column(
         ForeignKey("planning_tags.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+
+
+class PlanningUnitCharacter(TimestampMixin, Base):
+    """仅用于场景本地角色；章级手动角色仍由 ChapterCharacter 持有。"""
+
+    __tablename__ = "planning_unit_characters"
+
+    unit_id: Mapped[int] = mapped_column(ForeignKey("planning_units.id", ondelete="CASCADE"), primary_key=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), primary_key=True, index=True
     )
 
 

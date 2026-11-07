@@ -356,7 +356,11 @@ async def start(db: AsyncSession, engine: "TaskEngine", user_id: int, import_id:
             )
         db.add_all(chapters)
         await db.flush()
-        version_service.add_initial(db, chapters, "import", note="拆书导入")
+        from app.services.scene_service import initialize_chapter
+
+        for chapter in chapters:
+            await initialize_chapter(db, chapter)
+        await version_service.add_initial(db, chapters, "import", note="拆书导入")
         await db.delete(record)
         await db.flush()
         params = {

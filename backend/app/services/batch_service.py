@@ -488,6 +488,7 @@ async def _generate_chapter(
                         result = data
                     elif event == "error":
                         error = str(data.get("detail") or "生成失败")
+                        retryable = data.get("retryable", True)
                     else:
                         yield event, data
         except AppError as exc:

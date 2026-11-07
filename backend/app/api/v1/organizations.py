@@ -1,6 +1,6 @@
 """组织与成员路由；AI 生成组织走后台任务（202）。"""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Response, status
 
@@ -98,7 +98,8 @@ async def remove_member(
     db: DbDep,
     edit_mode: Literal["progression", "delete"] | None = None,
     expected_revision: int | None = Query(default=None, ge=1, le=2_147_483_647),
-    anchor_kind: Literal["chapter", "planned"] | None = None,
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None,
+    scene_id: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
     chapter_id: int | None = Query(default=None, ge=1, le=2_147_483_647),
     chapter_no: int | None = Query(default=None, ge=1, le=2_147_483_647),
     boundary: Literal["start", "end"] = "start",
@@ -112,6 +113,7 @@ async def remove_member(
         edit_mode=edit_mode,
         expected_revision=expected_revision,
         anchor_kind=anchor_kind,
+        scene_id=scene_id,
         chapter_id=chapter_id,
         chapter_no=chapter_no,
         boundary=boundary,

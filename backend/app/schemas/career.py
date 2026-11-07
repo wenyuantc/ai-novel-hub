@@ -95,7 +95,8 @@ class AssignmentCreate(BaseModel):
     role: CareerKind | None = None
     chapter_no: int | None = Field(default=None, ge=1)
     chapter_id: int | None = Field(default=None, ge=1)
-    anchor_kind: Literal["chapter", "planned"] | None = None
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None
+    scene_id: int | None = Field(default=None, ge=1, le=2_147_483_647, strict=True)
     boundary: Literal["start", "end"] = "start"
     edit_mode: Literal["baseline", "progression"] | None = None
     # 0 表示创建前必须没有该角色／职业时间线。
@@ -110,7 +111,8 @@ class AssignmentUpdate(BaseModel):
     note: str | None = Field(default=None, max_length=200)
     chapter_no: int | None = Field(default=None, ge=1)
     chapter_id: int | None = Field(default=None, ge=1)
-    anchor_kind: Literal["chapter", "planned"] | None = None
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None
+    scene_id: int | None = Field(default=None, ge=1, le=2_147_483_647, strict=True)
     boundary: Literal["start", "end"] = "start"
     edit_mode: Literal["baseline", "progression"] | None = None
     expected_revision: int | None = Field(default=None, ge=1)

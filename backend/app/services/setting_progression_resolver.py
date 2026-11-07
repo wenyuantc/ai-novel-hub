@@ -31,7 +31,10 @@ class ProgressionEvent:
     anchor_kind: AnchorKind
     chapter_id: int | None = None
     chapter_no: int | None = None
+    scene_id: int | None = None
     resolved_chapter_no: int | None = None
+    resolved_chapter_id: int | None = None
+    resolved_scene_order: int | None = None
     boundary: Boundary = "start"
     sort_order: int = 0
     protection: ProgressionProtection = "manual"
@@ -242,13 +245,23 @@ def _event_chapter_no(event: ProgressionEvent) -> int | None:
     if event.anchor_kind == "chapter":
         if event.chapter_id is None or event.resolved_chapter_no is None:
             return None
-        if event.chapter_no is not None or not _positive_integer(event.chapter_id):
+        if event.chapter_no is not None or event.scene_id is not None or not _positive_integer(event.chapter_id):
             raise ValueError("关联章节锚点格式不正确")
         chapter_no = event.resolved_chapter_no
     elif event.anchor_kind == "planned":
-        if event.chapter_id is not None:
+        if event.chapter_id is not None or event.scene_id is not None:
             raise ValueError("计划章节不能携带章节 id")
         chapter_no = event.chapter_no
+    elif event.anchor_kind == "scene":
+        if event.chapter_id is not None or event.chapter_no is not None:
+            raise ValueError("场景锚点不能携带章节 id 或计划章号")
+        if event.scene_id is None or event.resolved_chapter_no is None:
+            return None
+        if (not _positive_integer(event.scene_id) or not _positive_integer(event.resolved_chapter_id)
+                or type(event.resolved_scene_order) is not int
+                or not 0 <= event.resolved_scene_order <= 2_147_483_647):
+            raise ValueError("场景锚点缺少真实章节或顺序")
+        chapter_no = event.resolved_chapter_no
     else:
         raise ValueError("不支持的章节锚点")
     if not _positive_integer(chapter_no):
@@ -256,12 +269,33 @@ def _event_chapter_no(event: ProgressionEvent) -> int | None:
     return cast(int, chapter_no)
 
 
-def _sort_key(event: ProgressionEvent, chapter_no: int) -> tuple[int, int, int, int, int]:
+def story_position_key(position: StoryPosition) -> tuple[int, int, int, int, int]:
+    """保留同章号旧边界，在其间插入按实际章身份与当前场景顺序定位的窗口。"""
+    if position.scene_id is not None:
+        return position.chapter_no, 1, position.chapter_id, position.scene_order, int(position.boundary == "end")
+    return position.chapter_no, 0 if position.boundary == "start" else 2, 0, 0, 0
+
+
+def event_position(event: ProgressionEvent) -> StoryPosition | None:
+    chapter_no = _event_chapter_no(event)
+    if chapter_no is None:
+        return None
+    return StoryPosition(
+        chapter_id=event.resolved_chapter_id if event.anchor_kind == "scene" else event.chapter_id,
+        chapter_no=chapter_no, boundary=event.boundary,
+        scene_id=event.scene_id if event.anchor_kind == "scene" else None,
+        scene_order=event.resolved_scene_order if event.anchor_kind == "scene" else None,
+    )
+
+
+def _sort_key(event: ProgressionEvent, chapter_no: int) -> tuple[int, ...]:
     boundary_order = {"start": 0, "end": 1}
     protection_order = {"automatic": 0, "confirmed": 1, "manual": 1}
     if event.boundary not in boundary_order or event.protection not in protection_order:
         raise ValueError("变化的章节边界或人工保护状态不合法")
-    return chapter_no, boundary_order[event.boundary], protection_order[event.protection], event.sort_order, event.id
+    position = event_position(event)
+    assert position is not None and position.chapter_no == chapter_no
+    return (*story_position_key(position), protection_order[event.protection], event.sort_order, event.id)
 
 
 def _append_text(previous: str, value: str) -> str:
@@ -300,9 +334,9 @@ def resolve_progressions(
     specs = {key: (field_specs or {}).get(key, FieldSpec("text")) for key in custom_fields}
     values = {key: validate_field_value(specs[key], value) for key, value in custom_fields.items()}
     excluded = set(exclude_event_ids)
-    ordered: list[tuple[tuple[int, int, int, int, int], ProgressionEvent]] = []
+    ordered: list[tuple[tuple[int, ...], ProgressionEvent]] = []
     orphaned: list[int] = []
-    target = (position.chapter_no, 0 if position.boundary == "start" else 1) if position else None
+    target = story_position_key(position) if position else None
 
     for event in events:
         if not event.active or event.id in excluded:
@@ -312,7 +346,7 @@ def resolve_progressions(
             orphaned.append(event.id)
             continue
         key = _sort_key(event, chapter_no)
-        if target is None or key[:2] <= target:
+        if target is None or key[:5] <= target:
             ordered.append((key, event))
 
     applied: list[int] = []

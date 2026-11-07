@@ -387,7 +387,13 @@ async def test_legacy_style_field_creates_original_style(client, fake_llm):
     legacy = prompt_legacy.build_chapter_messages(
         context=context, chapter_no=1, title="山门", summary="", target_words=3000, style="更凌厉"
     )
-    assert messages == legacy
+    # 新锁定范围是必要的独立增量；此前风格段和其余旧消息仍须逐字符相同。
+    legacy_user, boundary, scene_scope = user.partition("\n\n【场景写作范围（锁定）】")
+    assert boundary and scene_scope
+    assert [{**message, "content": legacy_user} if index == len(messages) - 1 else message
+            for index, message in enumerate(messages)] == legacy
+    assert user.count("【场景写作范围（锁定）】") == 1
+    assert "只输出当前目标场景的正文" in scene_scope and "本场景目标字数：3000" in scene_scope
     assert "写作风格：更凌厉" in context  # 作品信息里的风格行同样不变
     # 空串：取消默认（原风格保留）
     resp = await client.patch(base, json={"style": ""})

@@ -1,5 +1,6 @@
 import type { ProgressionPositionInput, SettingEntryRef } from '../api/types'
 import { readPositiveId } from './mentions'
+import { storyPositionQuery } from './storyPosition'
 
 export type EntityRef = SettingEntryRef
 const ENTITY_PAGES: Record<EntityRef['kind'], string> = {
@@ -10,11 +11,9 @@ const ENTITY_PAGES: Record<EntityRef['kind'], string> = {
 export function entityDetailHref(projectId: number, reference: EntityRef, position?: ProgressionPositionInput | null): string {
   const params = new URLSearchParams({ id: String(reference.id) })
   if (position) {
-    const value = position.anchor_kind === 'chapter' ? position.chapter_id : position.chapter_no
-    if (value === null || !Number.isInteger(value) || value < 1 || value > 2_147_483_647 || (position.anchor_kind === 'chapter' ? position.chapter_no !== null : position.chapter_id !== null)) throw new Error('有效值预览位置无效')
+    const query = storyPositionQuery(position)
     params.set('view', 'effective')
-    params.set(position.anchor_kind === 'chapter' ? 'chapter_id' : 'chapter_no', String(value))
-    params.set('boundary', position.boundary)
+    for (const [key, value] of Object.entries(query)) params.set(key, String(value))
   }
   return `/projects/${projectId}/${ENTITY_PAGES[reference.kind]}?${params}`
 }
@@ -24,10 +23,11 @@ export function readEntityFieldPosition(params: URLSearchParams): ProgressionPos
   if (params.get('view') !== 'effective') return null
   const boundary = params.get('boundary')
   if (boundary !== 'start' && boundary !== 'end') return null
-  const chapter = params.get('chapter_id'), planned = params.get('chapter_no')
-  if ((chapter === null) === (planned === null)) return null
-  const value = readPositiveId(chapter ?? planned)
+  const chapter = params.get('chapter_id'), planned = params.get('chapter_no'), scene = params.get('scene_id')
+  if ([chapter, planned, scene].filter((value) => value !== null).length !== 1) return null
+  const value = readPositiveId(chapter ?? planned ?? scene)
   if (value === null || value > 2_147_483_647) return null
   return chapter !== null ? { anchor_kind: 'chapter', chapter_id: value, chapter_no: null, boundary }
-    : { anchor_kind: 'planned', chapter_id: null, chapter_no: value, boundary }
+    : scene !== null ? { anchor_kind: 'scene', scene_id: value, chapter_id: null, chapter_no: null, boundary }
+      : { anchor_kind: 'planned', chapter_id: null, chapter_no: value, boundary }
 }

@@ -1,4 +1,5 @@
 import { request } from './client'
+import { storyPositionQuery } from '../utils/storyPosition'
 import type {
   ChapterSettingContext,
   ProgressionBaselineStatus,
@@ -83,14 +84,8 @@ export const progressionApi = {
     position: ProgressionPositionInput,
     signal?: AbortSignal,
   ) => {
-    const positionValue = position.anchor_kind === 'chapter' ? position.chapter_id : position.chapter_no
-    if (positionValue === null || !Number.isSafeInteger(positionValue) || positionValue < 1 || positionValue > 2_147_483_647) {
-      throw new Error('请选择有效章节')
-    }
-    const query = position.anchor_kind === 'chapter'
-      ? { chapter_id: positionValue, boundary: position.boundary }
-      : { chapter_no: positionValue, boundary: position.boundary }
-    return request<SettingEffective>(`${timeline(projectId, timelineId)}/effective`, { query, signal })
+    const query = storyPositionQuery(position)
+    return request<SettingEffective>(`${timeline(projectId, timelineId)}/effective`, { query: { ...query }, signal })
   },
   chapterSettingContext: (projectId: number, chapterId: number, signal?: AbortSignal) =>
     request<ChapterSettingContext>(`/projects/${projectId}/chapters/${chapterId}/setting-context`, { signal }),

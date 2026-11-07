@@ -447,7 +447,7 @@ export interface Project {
   total_words: number
   /** 封面版本；null = 无封面，图片通过独立接口读取 */
   cover_updated_at: string | null
-  /** AI 生成 / 润色 / 按建议重写成功后自动排队分析本章（默认 true） */
+  /** 整章 AI 生成 / 润色 / 按建议重写成功后自动排队一次章级分析（默认 true）；单场景正文改稿仅令已有章分析过期，不自动分析。 */
   auto_analyze: boolean
   /** 向导进度（outline-pro）：步骤名由前端定义（WIZARD_STEP_KEYS），后端不校验取值 */
   wizard_progress: WizardProgress
@@ -660,12 +660,106 @@ export interface ChapterBrief {
   title: string
   status: ChapterStatus
   word_count: number
+  content_revision: number
   updated_at: string
 }
 
 export interface Chapter extends ChapterBrief {
   content: string
 }
+
+// ---------------- 独立场景（backend/app/schemas/scene.py） ----------------
+export type ScenePlanningField = 'pov' | 'tags' | PlanningReferenceKind
+export type ScenePlanningMode = 'inherit' | 'override'
+export interface ScenePlanningRaw {
+  modes: Record<ScenePlanningField, ScenePlanningMode>
+  pov_character_id: number | null
+  tag_ids: number[]
+  references: PlanningReference[]
+}
+export interface ScenePlanning {
+  unit_id: number | null
+  binding_epoch: number | null
+  raw: ScenePlanningRaw
+  effective: {
+    pov_character_id: number | null
+    pov_character_name: string | null
+    tags: PlanningTag[]
+    references: PlanningReference[]
+    sources: Record<ScenePlanningField, 'chapter' | 'scene'>
+  }
+  revision: number
+}
+export interface SceneBrief {
+  id: number
+  chapter_id: number
+  chapter_no: number
+  chapter_title: string
+  title: string
+  summary: string
+  sort: number
+  word_count: number
+  content_revision: number
+  planning_revision: number
+  created_at: string
+  updated_at: string
+  planning: ScenePlanning
+}
+export interface Scene extends SceneBrief {
+  content: string
+  separator_before: string
+  active: boolean
+}
+export interface ScenePage {
+  items: SceneBrief[]
+  total: number
+  offset: number
+  limit: number
+  content_revision: number | null
+  planning_revision: number
+}
+export interface SceneCreate {
+  expected_content_revision: number
+  title?: string
+  content?: string
+  summary?: string
+  after_scene_id?: number | null
+}
+export interface SceneUpdate {
+  expected_content_revision: number
+  title?: string
+  content?: string
+  summary?: string
+}
+export interface SceneMutation { items: Scene[]; content_revision: number; planning_revision: number }
+export interface SceneReorder { expected_content_revision: number; scene_ids: number[] }
+export interface SceneSplit { expected_content_revision: number; offset: number; right_title?: string }
+export interface SceneReferenceBlocker { kind: string; id: number; label: string }
+export interface SceneMergePreview {
+  scene_ids: number[]
+  content_revision: number
+  planning_revision: number
+  signature: string
+  blockers: SceneReferenceBlocker[]
+  conflicts: { field: string; left: string | null; right: string | null }[]
+}
+export interface SceneMerge extends SceneReorder {
+  expected_planning_revision: number
+  signature: string
+  metadata_source: 'left' | 'right'
+}
+export interface ScenePositionResolution {
+  scene_id: number | null
+  start: number | null
+  end: number | null
+  content_revision: number
+  fingerprint: string
+  reason: 'stale' | 'cross_scene' | 'separator' | null
+}
+export interface SceneSettingContext extends Omit<ChapterSettingContext, 'position'> {
+  position: { chapter_id: number; chapter_no: number; scene_id: number; scene_order: number; boundary: 'start' }
+}
+export interface ChapterContentRevision { chapter_id: number; content_revision: number }
 
 export interface ChapterCreate {
   outline_id?: number | null
@@ -693,6 +787,8 @@ export interface GenerateChapterRequest {
   style?: StyleChoice
   /** 选用的 Skill（本人或全局）作为补充工作流；任务创建时快照 */
   skill_id?: number | null
+  expected_content_revision?: number
+  expected_planning_revision?: number
 }
 
 /** generate SSE 的 continue 事件：每轮自动续写开始前，round 从 1 起，最多 2 */
@@ -706,13 +802,27 @@ export interface ContinueEvent {
 export interface ChapterDone {
   chapter: Chapter
   warning?: string
+  scene?: Scene
+  scene_ids?: number[]
 }
+
+export interface SceneAIRevision { expected_content_revision: number; expected_planning_revision: number }
+export type GenerateSceneRequest = GenerateChapterRequest & SceneAIRevision
+export type PolishSceneRequest = PolishChapterRequest & SceneAIRevision
+export type ReviseSceneRequest = ReviseChapterRequest & SceneAIRevision
+export type SceneRewriteRequest = RewriteRequest & SceneAIRevision
+export interface SceneRewriteDone extends RewriteDone { scene_id: number; chapter_id: number; content_revision: number; planning_revision: number }
+export type SceneRewriteApply = RewriteApply & SceneAIRevision
+export interface SceneRestorePreview { version_id: number; has_scene_snapshot: boolean; content_revision: number; scene_ids: number[]; retiring_scene_ids: number[]; blockers: SceneReferenceBlocker[] }
+export interface SceneExtractPreview { version_id: number; scene_id: number; content_revision: number; original: string; replacement: string; signature: string }
 
 export interface PolishChapterRequest {
   ai_config_id?: number | null
   instruction?: string
   style?: StyleChoice
   skill_id?: number | null
+  expected_content_revision?: number
+  expected_planning_revision?: number
 }
 
 export type WizardKind = 'outline' | 'characters' | 'world' | 'careers'
@@ -755,10 +865,17 @@ export interface ChapterVersionBrief {
   generation_log_id: number | null
   created_at: string
   updated_at: string
+  has_scene_snapshot: boolean
 }
 
 export interface ChapterVersion extends ChapterVersionBrief {
   content: string
+  scene_snapshot: SceneSnapshot | null
+}
+
+export interface SceneSnapshot {
+  schema_version: 1
+  scenes: { id: number; title: string; content: string; summary: string; sort: number; separator_before: string; planning: { unit_id: number | null; binding_epoch: number | null; raw: ScenePlanningRaw } | null }[]
 }
 
 /** 省略或 null = 不变 */
@@ -879,6 +996,8 @@ export interface Task {
   title: string
   project_id: number | null
   chapter_id: number | null
+  /** 缺失或 null 为整章，真实场景任务指向稳定身份。 */
+  scene_id?: number | null
   /** 0–100 */
   progress: number
   stage: string
@@ -1270,6 +1389,7 @@ export interface MemberInput {
   /** 0 表示预期时间线不存在；正数表示匹配现有时间线的版本。 */
   expected_revision?: number | null
   anchor_kind?: ProgressionAnchorKind | null
+  scene_id?: number | null
   chapter_id?: number | null
   chapter_no?: number | null
   boundary?: ProgressionBoundary
@@ -1283,6 +1403,7 @@ export interface MemberUpdate {
   /** 更新已有时间线时提供其正数版本。 */
   expected_revision?: number | null
   anchor_kind?: ProgressionAnchorKind | null
+  scene_id?: number | null
   chapter_id?: number | null
   chapter_no?: number | null
   boundary?: ProgressionBoundary
@@ -1337,6 +1458,7 @@ export interface RelationshipCreate extends TypeRef {
   chapter_no?: number | null
   chapter_id?: number | null
   anchor_kind?: ProgressionAnchorKind | null
+  scene_id?: number | null
   boundary?: ProgressionBoundary
   /** 0 表示预期时间线不存在；正数表示匹配现有时间线的版本。 */
   expected_revision?: number | null
@@ -1353,6 +1475,7 @@ export interface RelationshipUpdate {
   chapter_no?: number | null
   chapter_id?: number | null
   anchor_kind?: ProgressionAnchorKind | null
+  scene_id?: number | null
   boundary?: ProgressionBoundary
   edit_mode?: 'baseline' | 'progression' | null
   expected_revision?: number | null
@@ -1773,6 +1896,7 @@ export interface AssignmentInput {
   chapter_no?: number | null
   chapter_id?: number | null
   anchor_kind?: ProgressionAnchorKind | null
+  scene_id?: number | null
   boundary?: ProgressionBoundary
   edit_mode?: 'baseline' | 'progression' | null
   /** 0 表示预期时间线不存在；正数表示匹配现有时间线的版本。 */
@@ -1787,6 +1911,7 @@ export interface AssignmentUpdate {
   chapter_no?: number | null
   chapter_id?: number | null
   anchor_kind?: ProgressionAnchorKind | null
+  scene_id?: number | null
   boundary?: ProgressionBoundary
   edit_mode?: 'baseline' | 'progression' | null
   expected_revision?: number | null
@@ -2003,6 +2128,8 @@ export interface ReviseChapterRequest {
   ai_config_id?: number | null
   style?: StyleChoice
   skill_id?: number | null
+  expected_content_revision?: number
+  expected_planning_revision?: number
 }
 
 // ---------------- 伏笔（backend/app/schemas/foreshadow.py） ----------------
@@ -3496,7 +3623,7 @@ export interface SettingEntryFields extends SettingFieldsRevision {
   timeline_id: number | null
   timeline_revision: number
   ai_visibility_revision: number
-  position: { chapter_id: number | null; chapter_no: number; boundary: ProgressionBoundary } | null
+  position: { chapter_id: number | null; chapter_no: number; scene_id?: number | null; scene_order?: number | null; boundary: ProgressionBoundary } | null
   fields: SettingFieldSlot[]
   legacy_fields: SettingFieldSlot[]
 }
@@ -3550,6 +3677,7 @@ export interface SettingCategoryListQuery {
 }
 export interface SettingCategoryPage extends SettingCategoryVersions { items: SettingCategory[]; total: number; page: number; page_size: number }
 export interface SettingCategoryEntryQuery extends SettingCategoryListQuery {
+  scene_id?: number | null
   chapter_id?: number | null
   chapter_no?: number | null
   boundary?: ProgressionBoundary
@@ -3587,12 +3715,13 @@ export interface SettingTagSuggestionsQuery { q?: string | null; limit?: number 
 
 /** 剧情变化的位置：已有章节使用稳定 ID，计划章节使用章节号。 */
 /** planned 始终按章号锚定，不自动绑定同号已有章节。 */
-export type ProgressionAnchorKind = 'chapter' | 'planned'
+export type ProgressionAnchorKind = 'chapter' | 'planned' | 'scene'
 export type ProgressionBoundary = 'start' | 'end'
 export interface ProgressionPositionInput {
   anchor_kind: ProgressionAnchorKind
   chapter_id: number | null
   chapter_no: number | null
+  scene_id?: number | null
   boundary: ProgressionBoundary
 }
 
@@ -3706,7 +3835,7 @@ export interface SettingTextFieldUpdate extends Partial<Omit<SettingTextFieldInp
 
 export interface SettingEffective {
   timeline_id: number
-  position: { chapter_id: number | null; chapter_no: number; boundary: ProgressionBoundary }
+  position: { chapter_id: number | null; chapter_no: number; scene_id?: number | null; scene_order?: number | null; boundary: ProgressionBoundary }
   fields: Record<string, ProgressionJsonValue>
   custom_fields: Record<string, string>
   field_values?: Record<string, SettingFieldValue>
@@ -3739,7 +3868,7 @@ export interface SettingBaselineUpdate {
 
 // 章级规划：镜像 app/schemas/planning.py，关系引用使用稳定 timeline_id。
 export type PlanningTone = 'default' | 'red' | 'orange' | 'gold' | 'green' | 'cyan' | 'blue' | 'purple'
-export type PlanningSourceKind = 'chapter' | 'plan' | 'detached'
+export type PlanningSourceKind = 'chapter' | 'plan' | 'scene' | 'detached'
 export type PlanningReferenceKind = 'character' | 'world' | 'organization' | 'career' | 'relationship'
 export interface PlanningSource { kind: PlanningSourceKind; id: number }
 export type PlanningReference =
@@ -3813,6 +3942,12 @@ export interface PlanningRow {
   pov_character_name: string | null
   tags: PlanningTag[]
   references: PlanningReference[]
+  scene_id: number | null
+  scene_sort: number | null
+  scene_planning: ScenePlanning | null
+  content_revision: number | null
+  source_level: 'chapter' | 'scene'
+  source_chapter_id: number | null
 }
 export type MatrixColumnRef = { kind: 'setting'; reference: PlanningReference } | { kind: 'subplot'; subplot_id: number }
 export interface MatrixColumn { key: string; selection: MatrixColumnRef; name: string; tone: PlanningTone; tracking_supported: boolean }
@@ -3847,21 +3982,22 @@ export interface PlanningMatrix extends PlanningRevision {
   column_page: number
   warnings: string[]
 }
-export type PlanningCollectionOp = 'add' | 'remove' | 'replace' | 'clear'
+export type PlanningCollectionOp = 'add' | 'remove' | 'replace' | 'clear' | 'inherit'
 export interface PlanningCollectionOperation { op: PlanningCollectionOp; ids?: number[] }
 export type PlanningReferenceOperation =
   | (PlanningCollectionOperation & { kind: Exclude<PlanningReferenceKind, 'relationship'> })
   | { kind: 'relationship'; op: PlanningCollectionOp; timeline_ids?: number[] }
-export type PlanningPovOperation = { op: 'set'; character_id: number } | { op: 'clear' }
+export type PlanningPovOperation = { op: 'set'; character_id: number } | { op: 'clear' | 'inherit' }
 export interface PlanningBatch {
   expected_revision: number
   targets: PlanningSource[]
   pov?: PlanningPovOperation
   tags?: PlanningCollectionOperation
   references?: PlanningReferenceOperation[]
+  expected_content_revisions?: ChapterContentRevision[]
 }
-export interface PlanningMutation extends PlanningRevision { rows: PlanningRow[] }
-export interface PlanningBinding { expected_revision: number; target: PlanningSource }
+export interface PlanningMutation extends PlanningRevision { rows: PlanningRow[]; content_revisions: ChapterContentRevision[] }
+export interface PlanningBinding { expected_revision: number; target: PlanningSource; expected_content_revisions?: ChapterContentRevision[] }
 export interface PlanningNodeResolution { subplot_id: number; keep_node_id: number; content: string }
 export interface PlanningMerge {
   expected_revision: number
@@ -3873,7 +4009,7 @@ export interface PlanningMerge {
 export interface WeaveGap { after_key: string; before_key: string | null; after_label: string; before_label: string | null; gap_units: number; is_tail: boolean; exceeds_threshold: boolean }
 export interface WeaveTrack { subplot: Subplot; progress_keys: string[]; nodes: SubplotNode[]; crossing_ids: number[]; gaps: WeaveGap[]; unplanned: boolean }
 export interface PlanningWeave extends PlanningRevision {
-  axis: 'chapter' | 'plan'
+  axis: 'chapter' | 'plan' | 'scene'
   rows: PlanningRow[]
   tracks: WeaveTrack[]
   crossings: SubplotCrossing[]
@@ -3886,6 +4022,8 @@ export interface PlanningWeave extends PlanningRevision {
   gap_threshold: number
 }
 export interface PlanningContextPreview extends PlanningRevision {
+  scene_id: number | null
+  content_revision: number | null
   unit_id: number | null
   source: PlanningSource
   chapter_id: number | null

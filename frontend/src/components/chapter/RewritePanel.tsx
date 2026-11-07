@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react'
 import { applyRewrite, REWRITE_OP_LABELS, rewriteChapter } from '../../api/chapterVersions'
 import { countWords } from '../../api/chapters'
 import { ApiError, errorMessage } from '../../api/client'
-import type { Chapter, RewriteDone, RewriteOp, RewriteRequest, StyleChoice } from '../../api/types'
+import { sceneApi } from '../../api/scenes'
+import type { Chapter, RewriteDone, RewriteOp, RewriteRequest, Scene, SceneRewriteDone, StyleChoice } from '../../api/types'
 import { useStreamTask } from '../../hooks/useStreamTask'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { codePointLength, utf16ToCodePoint } from '../../utils/textOffset'
 import StreamOutput from '../StreamOutput'
 import TextDiff from '../TextDiff'
@@ -37,6 +39,9 @@ interface Props {
   /** 预览中（流式或待采纳）为 true：编辑器需把正文设为只读 */
   onLockChange: (locked: boolean) => void
   onApplied: (chapter: Chapter) => void
+  sceneId?: number
+  getSceneVersions?: () => { content_revision: number; planning_revision: number } | null
+  onSceneApplied?: (scene: Scene) => void
 }
 
 const SELECTION_OPS: RewriteOp[] = ['rewrite', 'expand', 'condense', 'deslop', 'continue']
@@ -59,12 +64,17 @@ export default function RewritePanel({
   ensureSaved,
   onLockChange,
   onApplied,
+  sceneId,
+  getSceneVersions,
+  onSceneApplied,
 }: Props) {
   const { message } = App.useApp()
+  const { canUseAI, canEditNow } = useProjectAccess(pid)
   const task = useStreamTask()
   const [op, setOp] = useState<RewriteOp>('rewrite')
   const [instruction, setInstruction] = useState('')
-  const [result, setResult] = useState<RewriteDone | null>(null)
+  const [result, setResult] = useState<RewriteDone | SceneRewriteDone | null>(null)
+  const [conflict, setConflict] = useState(false)
   const [applying, setApplying] = useState(false)
   const [lastRequest, setLastRequest] = useState<RewriteRequest | null>(null)
 
@@ -84,10 +94,20 @@ export default function RewritePanel({
   const canStart = !disabled && !locked && !tooLong && !blankSelection && !cursorPrefixEmpty
 
   const run = async (req: RewriteRequest) => {
+    if (!canUseAI || !canEditNow()) return
     setLastRequest(req)
     setResult(null)
-    const outcome = await task.start((onDelta, signal) => rewriteChapter(chapterId, req, onDelta, signal))
-    if (outcome.status === 'done') setResult(outcome.value)
+    setConflict(false)
+    const versions = getSceneVersions?.()
+    if (sceneId && !versions) return
+    const outcome = await task.start<RewriteDone | SceneRewriteDone>((onDelta, signal) => sceneId && versions
+      ? sceneApi.rewrite(pid, chapterId, sceneId, { ...req, expected_content_revision: versions.content_revision, expected_planning_revision: versions.planning_revision }, onDelta, signal)
+      : rewriteChapter(chapterId, req, onDelta, signal))
+    if (!canUseAI || !canEditNow()) return
+    if (outcome.status === 'done') {
+      if (sceneId && (!('scene_id' in outcome.value) || outcome.value.scene_id !== sceneId || outcome.value.chapter_id !== chapterId)) { message.error('改写结果目标与当前场景不一致，未采纳'); return }
+      setResult(outcome.value)
+    }
     else if (outcome.status === 'aborted') message.info('已停止，正文未改变')
   }
 
@@ -115,14 +135,15 @@ export default function RewritePanel({
 
   const handleDiscard = () => {
     setResult(null)
+    setConflict(false)
     task.reset()
   }
 
   const handleApply = async () => {
-    if (!result) return
+    if (!result || conflict || !canUseAI || !canEditNow()) return
     setApplying(true)
     try {
-      const chapter = await applyRewrite(pid, chapterId, {
+      const body = {
         start: result.start,
         end: result.end,
         original: result.original,
@@ -130,15 +151,24 @@ export default function RewritePanel({
         before: result.before,
         replacement: result.text,
         log_id: result.log_id,
-      })
+      }
+      if (sceneId) {
+        if (!('scene_id' in result) || result.scene_id !== sceneId || result.chapter_id !== chapterId) throw new Error('场景改写目标已失效，请重新生成')
+        const scene = await sceneApi.applyRewrite(pid, chapterId, sceneId, { ...body, expected_content_revision: result.content_revision, expected_planning_revision: result.planning_revision })
+        if (!canEditNow()) return
+        onSceneApplied?.(scene)
+      } else {
+        const chapter = await applyRewrite(pid, chapterId, body)
+        if (!canEditNow()) return
+        onApplied(chapter)
+      }
       setResult(null)
       task.reset()
-      onApplied(chapter)
       message.success('已采纳，并存为新版本')
     } catch (err) {
       message.error(errorMessage(err))
       // 正文已变化：预览作废，需重新选择
-      if (err instanceof ApiError && err.status === 409) handleDiscard()
+      if (err instanceof ApiError && err.status === 409) setConflict(true)
     } finally {
       setApplying(false)
     }
@@ -207,10 +237,10 @@ export default function RewritePanel({
           </Typography.Text>
           <TextDiff a={result.original} b={result.text} maxHeight={320} />
           <Space wrap>
-            <Button type="primary" icon={<CheckOutlined />} loading={applying} onClick={() => void handleApply()}>
+            <Button type="primary" icon={<CheckOutlined />} loading={applying} disabled={conflict} onClick={() => void handleApply()}>
               采纳
             </Button>
-            <Button icon={<ReloadOutlined />} disabled={applying || disabled} onClick={handleRegenerate}>
+            <Button icon={<ReloadOutlined />} disabled={applying || disabled || conflict} onClick={handleRegenerate}>
               重新生成
             </Button>
             <Button icon={<CloseOutlined />} disabled={applying} onClick={handleDiscard}>
@@ -237,6 +267,7 @@ export default function RewritePanel({
         </Typography.Text>
       )}
       {task.error && !task.running && <Alert type="error" showIcon message="改写失败" description={task.error} />}
+      {conflict && <Alert type="warning" showIcon message="正文或规划版本已变化，预览已保留但不能直接采纳" description="先保留所需文字，放弃此预览并核对最新场景后，重新明确发起改写；不会自动更新版本覆盖新稿。" />}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
         预览期间正文只读；采纳后只替换该段，替换前的正文自动存为版本。
       </Typography.Paragraph>

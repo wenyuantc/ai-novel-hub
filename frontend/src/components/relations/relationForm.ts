@@ -92,6 +92,7 @@ export function buildRelationUpdate(before: RelationSnapshot, values: RelationVa
     const pos = context.position && toPositionInput(context.position)
     if (!pos) return { ok: false, error: '请选择章节或输入有效的计划章节号' }
     body.anchor_kind = pos.anchor_kind
+    if (pos.anchor_kind === 'scene') body.scene_id = pos.scene_id
     body.chapter_id = pos.chapter_id
     body.chapter_no = pos.chapter_no
     body.boundary = pos.boundary

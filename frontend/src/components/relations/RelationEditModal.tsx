@@ -195,7 +195,7 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
         const common: RelationshipCreate = { a_id: v.self_id, b_id: v.other_id, intimacy: v.intimacy, status: v.status,
           description: v.description ?? '', source: 'manual', note: v.note?.trim() ?? '',
           expected_revision: existing?.revision ?? 0,
-          ...(pos ? { anchor_kind: pos.anchor_kind, chapter_id: pos.chapter_id, chapter_no: pos.chapter_no, boundary: pos.boundary } : {}) }
+          ...(pos ? { anchor_kind: pos.anchor_kind, ...(pos.anchor_kind === 'scene' ? { scene_id: pos.scene_id } : {}), chapter_id: pos.chapter_id, chapter_no: pos.chapter_no, boundary: pos.boundary } : {}) }
         if (v.custom) saved = await relationshipApi.create(projectId, { ...common, role_a: v.self_role?.trim(), role_b: v.other_role?.trim(), category: v.category })
         else {
           if (!opt) throw new Error('请选择关系类型')

@@ -15,7 +15,7 @@ vi.mock('react', () => ({
 
 beforeEach(() => { hooks.owned.current = null; hooks.setup = null; hooks.deps = [] })
 
-function setup(denied = false) {
+function setup(denied = false, scopeKey?: string) {
   const handles: Array<{ destroy: ReturnType<typeof vi.fn> }> = []
   const options: ModalFuncProps[] = []
   const modal = { confirm: vi.fn((option: ModalFuncProps) => {
@@ -24,7 +24,7 @@ function setup(denied = false) {
     handles.push(handle)
     return handle
   }) }
-  const confirm = runConfirmationHook(modal, denied)
+  const confirm = runConfirmationHook(modal, denied, scopeKey)
   if (!hooks.setup) throw new Error('确认框清理生命周期未注册')
   const effect = hooks.setup
   const cleanup = effect()
@@ -44,14 +44,25 @@ describe('系统设置确认框的页面所有权', () => {
   it('denied变化清理旧确认框，拒绝创建新的管理确认框', () => {
     const view = setup()
     view.confirm({ title: '恢复部署值？' })
-    expect(hooks.deps).toEqual([false])
+    expect(hooks.deps).toEqual([false, undefined])
     view.cleanup()
     const denied = setup(true)
     denied.confirm({ title: '不可再次展示' })
     expect(view.handles[0].destroy).toHaveBeenCalledTimes(1)
     expect(denied.modal.confirm).not.toHaveBeenCalled()
-    expect(hooks.deps).toEqual([true])
+    expect(hooks.deps).toEqual([true, undefined])
     denied.cleanup()
+  })
+  it('场景身份改变同样销毁旧确认框，不把旧确认作用于新场景', () => {
+    const original = setup(false, 'chapter:1:scene:2')
+    original.confirm({ title: '重新生成场景二？' })
+    expect(hooks.deps).toEqual([false, 'chapter:1:scene:2'])
+    original.cleanup()
+    const next = setup(false, 'chapter:1:scene:3')
+    expect(original.handles[0].destroy).toHaveBeenCalledTimes(1)
+    expect(hooks.owned.current).toBeNull()
+    expect(hooks.deps).toEqual([false, 'chapter:1:scene:3'])
+    next.cleanup()
   })
 
   it('StrictMode清理重装不遗留句柄，新确认框仍正常拥有和销毁', () => {

@@ -162,24 +162,26 @@ dayjs.locale('zh-cn')
 
 三层结构：`ChapterEditorPage`（解析 `:cid`，渲染 `<ChapterLoader key={chapterId} …/>`，使切换章节时重建全部状态）→ `ChapterLoader`（加载章节 + 同级章节列表）→ `ChapterEditor`。必须保留的行为：
 
-1. **脏状态跟踪**：`const dirty = content !== chapter.content || title !== chapter.title`；`applyServerChapter(c)` 根据服务端响应重置 `chapter`、`title`、`content`。
+1. **场景草稿**：`dirty = sceneEditor.dirty || title !== chapter.title`，结构拟排序另有`structureDirty`。正文／作者摘要由`SceneDraftController`按稳定Scene身份隔离，章响应只更新章元数据，不把整章稿写入当前景；完整合同见[独立场景](../backend/scenes.md)。
 2. **AI 生成/润色走后台任务，开始前自动保存**（`10-23-task-engine`）：
    ```ts
    const runAI = async (mode: 'generate' | 'polish') => {
      if (!(await ensureSaved())) return
      setStarting(true)
-     const created = await (mode === 'generate' ? generateChapter(cid, body) : polishChapter(cid, body))  // 202 Task；失败 → message.error + reloadChapter
+     const created = aiScope === 'scene'
+       ? await sceneApi.generate(pid, chapter.id, current.id, body)
+       : await generateChapter(chapter.id, body)  // 示例为generate；polish同样按scope分派，body含两版本
      setStarting(false)
      trackTask(created)                                   // useTasksStore.track：立即刷新、切到 3 秒轮询
      setChapter((p) => ({ ...p, status: 'generating' })) // 创建即抢占
      await followTask(created)                            // useTaskStream().follow
    }
    ```
-   `followTask`：`succeeded` → `parseChapterDone(result)` → `replaceFromServer(chapter)`（解析失败时重新 GET 章节），`warning` 用 `message.warning`；`cancelled` → `已停止，正文保持原样` + `reloadChapter()`；`failed` / `interrupted` / `lost` → 错误 `Alert`（中断时标题为 `任务已中断`）+ `reloadChapter()`；`detached`（卸载 / 切换章节）→ 不做任何事。
-   **挂载时自动接上**：仅当初始章节 `status === 'generating'` 时查询 `GET /tasks?chapter_id&active=true`，找到 `chapter.*` 任务就切到对应 Tab 并 `followTask`（通过 ref 调用最新函数）；查询完成前 `attachChecked = false`，此时不显示「卡住」提示、生成/润色按钮禁用。**其他入口新建的任务**（任务面板重试、另一个标签页）：订阅 `useTasksStore.active`，`attachChecked && !aiRunning` 时出现本章且未订阅过（`followedIdsRef`）的 `chapter.*` 活动任务即接上（有未保存修改时 `message.warning` 提示将被覆盖）。局部改写面板在 `chapter.status === 'generating'`（含查询完成前）时禁用。
-3. **任务期间只读**：`aiRunning = aiTask.running || starting`（含排队）。排队中 / 尚无输出时文本域仍显示原正文，开始输出后显示 `aiTask.text`（`displayContent = aiStreaming ? aiTask.text : content`）；`readOnly={editorLocked}`；标题输入框、AI 表单、标签页和 `AIConfigSelect` 都按 `aiRunning`/`editorLocked` 禁用。排队中显示 `queueLabel(task)`（`排队中，前面还有 N 个任务`）的 info `Alert`；运行中显示 `Progress` + `stage`；断线重连时显示警告 `连接中断，正在重连…（任务仍在后台运行）`。停止按钮（排队时 `取消排队`，否则 `停止（已输出 N 字）`）调用 `aiTask.cancel()`，创建请求返回前禁用。
+   `followTask`成功后解析章结果并刷新场景目录，单景另核验result.scene的身份；不覆盖不同Scene或后来输入的草稿，warning单独提示。cancelled显示原稿保持，failed/interrupted/lost可见且重读状态，detached只断订阅不取消任务。新请求按目标调用sceneApi或原章API，均携当前内容／规划版本。
+   **挂载与外部任务接续**：沿用活动任务查询／store订阅与attachChecked，不提前误报stuck。Task.scene_id决定稳定目标，另一景作业不能把其流接进当前景；脏稿保持并提示核对，不警告后直接覆盖。任务标题／链接携真实Scene，缺scene_id按兼容整章处理；局部预览期间仍保持编辑锁。
+3. **任务期间只读**：`aiRunning = aiTask.running || starting`（含排队）。Scene文本域始终显示自己的正文草稿；`aiTask.text`只在AI助手独立只读StreamOutput展示，绝不能复用旧`displayContent=aiTask.text`。标题、AI表单和模型选择按锁禁用，保留排队／进度／stage／重连提示及停止按钮。任务按TaskOut.scene_id接回真实景，另一景任务不能替当前景接入流。
 4. **Ctrl/Cmd+S**：只注册一次 window `keydown` 监听器；它通过 ref 调用最新的 `handleSave`（在无依赖的 effect 中执行 `saveShortcutRef.current = handleSave`），因此监听器永远不会捕获过期状态。`handleSave` 在运行/保存中不做任何事，无改动时显示 `没有需要保存的修改`。
-5. **未保存离开守卫**：`const guard = dirty || rewriteLocked`——**AI 任务进行中可以直接离开**，任务在后台继续，返回编辑器自动接上（第 2 条），也可在任务面板查看；只有未保存修改或局部改写流式中 / 有待采纳结果（第 9 条）才拦截。浏览器卸载通过 `beforeunload` 监听器处理（仅在 `guard` 时挂载）；应用内导航通过 `useBlocker(({ currentLocation, nextLocation }) => guard && currentLocation.pathname !== nextLocation.pathname)` 处理，并弹出确认 `Modal`，其确定操作执行 `blocker.proceed?.()`（卸载时 `useTaskStream` 只断开订阅，不取消任务）。
+5. **未保存离开守卫**：`guard = dirty || rewriteLocked || structureDirty`。后台AI可直接离开且继续运行；场景正文／摘要草稿、拟排序、局部流或待采纳结果需离开确认。beforeunload与应用内useBlocker保留；卸载仅断任务订阅，不取消后台作业。确认框随actor／项目／章／授权代次失效关闭。
 6. **卡在 `generating` 的章节**：`const stuck = chapter.status === 'generating' && !aiRunning && attachChecked`（挂载时已查过且没有活动任务，例如另一窗口的任务刚创建、或后端异常）会显示一个带 `复位` 操作的警告 `Alert` → `chapterApi.update(pid, chapter.id, { status: 'draft' })`。卡住期间，保存、标记完成和 AI 按钮都被禁用，因为后端会以 409 拒绝对生成中章节的正文/标题 PATCH（`backend/app/services/chapter_service.py` 中的 `ConflictError`），且生成/润色会返回 409 `该章节正在生成中，请稍候再试`。
 7. **覆盖已有正文的重新生成**通过 `modal.confirm` 询问（`重新生成正文？`）；正文为空时禁用润色。
 8. 上一章/下一章导航按 `chapter_no` 再按 `id` 对同级章节排序。
@@ -189,15 +191,15 @@ dayjs.locale('zh-cn')
 版本与局部改写（`10-23-chapter-versions`）在此基础上新增：
 
 9. **编辑锁**：`const editorLocked = aiRunning || rewriteLocked`（`rewriteLocked` 由 `RewritePanel.onLockChange` 上报：改写流式中或有待采纳结果）。正文 `readOnly`、标题、保存、`AIConfigSelect`、生成/润色 Tab 都按 `editorLocked` 禁用；`handleSave` 在 `editorLocked` 时不做任何事。离开守卫包含 `rewriteLocked`：确认离开时 `RewritePanel` 卸载，其 `useStreamTask` 自动中止请求，预览结果丢弃（正文不受影响），弹窗文案区分「正在生成 / 有未保存的修改 / 局部改写结果未采纳」。
-10. **选区跟踪**：文本域 `onSelect/onKeyUp/onMouseUp/onChange` 调 `syncSelection(el)`，状态保存 UTF-16 偏移；只有在发请求时才换算为码点（`utils/textOffset.ts`）。服务端改写正文的路径（生成完成、采纳改写、回滚）统一走 `replaceFromServer(c)`：`applyServerChapter` + 把选区记录移到正文末尾；普通保存仍用 `applyServerChapter`，不重置选区。
+10. **选区跟踪**：Scene文本域的onSelect/onKeyUp/onMouseUp/onChange保存本景UTF-16位置，发请求才转码点；拆分也用同一转换。局部done绑定Scene／章／两版本／log，按预览范围采纳，不拿最新版本自动重签。切换Scene重置选区；后续局部操作重新核对可见选区，不假定替换后旧范围自动扩成新全文。
 11. **自动保存**：`ensureSaved()`（无改动直接返回 true，否则 `save()` + `已自动保存当前修改`）被整章生成/润色、局部改写开始、回滚共用。
 12. **整章生成**：请求体显式带 `auto_continue: genOptions.autoContinue`（后端默认 false，开关默认开，`utils/preferences.ts` 记住选择）；订阅收到 `continue` 事件（`aiTask.continueInfo`）时显示 `字数不足，自动续写第 n 轮` 的 info `Alert`；`done.warning` 存在时用 `message.warning` 提示（正文已保存）。重新生成确认文案提示「当前正文会自动存为历史版本」。
-13. **版本历史**：标题栏「版本历史」按钮（任何时候都可打开查看）。`restoreDisabled = editorLocked || saving || stuck`。`handleRestore` = `ensureSaved` → `versionApi.restore` → `replaceFromServer` → `onChanged()` + `refreshProject()`。
+13. **版本历史**：标题栏可查看历史，写操作仍受editorLocked/saving/stuck限制。`SceneVersionActions`先预检两稿／结构／保留引用；新结构恢复带内容版本，多景旧纯文本只提供签名差异预览与明确提取到单景，不伪装整章恢复。409保留输入／选择，核对最新后显式重试。
 
 章节分析与按建议重写（`10-23-analysis-memory`）在此基础上新增：
 
-14. **分析状态**：`const analysis = useChapterAnalysis(initial.id)`（`hooks/useChapterAnalysis.ts`）。挂载时 `GET /chapters/{cid}/analysis-status`，`latest_analysis_id` 变化或每次 `refresh()` 后重新 `GET /analyses/{id}` 取最新详情（回写条目可能被其他入口修改）；`status` = 订阅中的分析任务 ? `analyzing` : 服务端状态。**自动接上**本章的 `chapter.analyze`：`useTasksStore.active` 里出现本章未订阅过的分析任务，或状态接口的 `active_task_id`（`taskApi.get` 后订阅）；结束后 `refresh()`，成功 `message.success('本章分析完成（回写：已写入 N · 待确认 M）')`、失败 `message.warning`。卸载只断开订阅。标题栏状态 `Tag`（`ANALYSIS_STATUS`，点击打开抽屉）+ 「分析」按钮（`Badge` = 最新分析中 `pending` 条目数）。以下路径之后调用 `analysis.refresh()`：保存（正文变化 → 可能 `stale`）、回滚、采纳局部改写、章节任务成功（后端 `on_success` 已在广播 `done` 前自动排队分析，刷新即可拿到 `active_task_id` 并接上）。手动分析 `runAnalyze` = `ensureSaved` → `analysis.start(aiConfigId)`（`POST /chapters/{cid}/analyze`，200/202 都返回 `Task` → `track` + 订阅）。
-15. **按建议重写**与整章生成同样处理：`runRevise(body)` = `ensureSaved` → `reviseChapter(cid, {...body, ai_config_id: aiConfigId})`（202；失败 `message.error` + `reloadChapter`）→ `track` → 置 `generating` → `void followTask(created)`（创建成功即返回 true，抽屉不等待完成）。`chapter.revise` 属于 `CHAPTER_WRITE_KINDS`（`api/tasks.ts`），挂载接续 / 外部任务接续、只读、停止按钮、卡住判定全部与生成 / 润色共用；接上时 AI 助手切到「AI 生成」标签（重写没有独立标签），并显示 info `Alert`「正在按分析建议重写本章」；若当前在「局部改写」标签则切走以显示停止按钮。成功文案 `按建议重写完成，已保存`。**评分对比**：`followTask` **仅在成功**时用 `reviseCompareFor(outcome.task ?? t, 最新已知分析 id)`（`api/analysis.ts`）得出 `reviseCompare` 传给抽屉：`baseAnalysisId = TaskOut.analysis_id`（后端取自 `input.request.analysis_id`，仅 `chapter.revise` 有值），`sinceAnalysisId = max(base, 成功时已知的 latest_analysis_id)`（经 ref 读取，避免旧闭包；自动重新分析在任务成功后才入队，必然晚于它）。因此任务面板重试、其他标签页发起后被本页接上的重写同样能对比评分，不依赖本页创建时的本地记录。
+14. **分析状态**：`const analysis = useChapterAnalysis(initial.id)`（`hooks/useChapterAnalysis.ts`）。挂载时 `GET /chapters/{cid}/analysis-status`，`latest_analysis_id` 变化或每次 `refresh()` 后重新 `GET /analyses/{id}` 取最新详情（回写条目可能被其他入口修改）；`status` = 订阅中的分析任务 ? `analyzing` : 服务端状态。**自动接上**本章的 `chapter.analyze`：`useTasksStore.active` 里出现本章未订阅过的分析任务，或状态接口的 `active_task_id`（`taskApi.get` 后订阅）；结束后 `refresh()`，成功 `message.success('本章分析完成（回写：已写入 N · 待确认 M）')`、失败 `message.warning`。卸载只断开订阅。标题栏状态 `Tag`（`ANALYSIS_STATUS`，点击打开抽屉）+ 「分析」按钮（`Badge` = 最新分析中 `pending` 条目数）。以下路径之后调用 `analysis.refresh()`：保存（正文变化 → 可能 `stale`）、回滚、采纳局部改写、章节任务成功（仅整章成功的 `on_success` 在done前按原开关排队一次分析；单Scene成功只刷新过期状态，不自动分析）。手动分析 `runAnalyze` = `ensureSaved` → `analysis.start(aiConfigId)`（`POST /chapters/{cid}/analyze`，200/202 都返回 `Task` → `track` + 订阅）。
+15. **按建议重写**与整章生成同样处理：`runRevise(body)` = `ensureSaved` → 按aiScope调用`sceneApi.revise(pid,cid,sid,{...body,...两版本})`或原`reviseChapter(cid,body)`（202；失败 `message.error` + `reloadChapter`）→ `track` → 置 `generating` → `void followTask(created)`（创建成功即返回 true，抽屉不等待完成）。`chapter.revise` 属于 `CHAPTER_WRITE_KINDS`（`api/tasks.ts`），挂载接续 / 外部任务接续、只读、停止按钮、卡住判定全部与生成 / 润色共用；接上时 AI 助手切到「AI 生成」标签（重写没有独立标签），并显示按建议重写提示；若当前在「局部改写」标签则切走以显示停止按钮。抽屉必须展示当前选择的稳定Scene／整章范围，运行提示只取真实Task.scene_id，不能借表单当前范围扩大目标。字数明确为可选总量：单Scene／多景章留空按各景原字数，旧章目标仅一景留空下限300，显式总量按有正文景分配、保留空景。**评分对比**：`followTask`仅在成功时用`reviseCompareFor(outcome.task ?? t, 最新已知分析id)`（`api/analysis.ts`）；显式Scene任务返回null并清旧compare，只刷新章分析过期状态，不虚等全章自动分析。整章或旧缺省scene_id才派生`baseAnalysisId=TaskOut.analysis_id`及`sinceAnalysisId=max(base, 成功时已知latest_analysis_id)`，保留任务重试／其他页接续的评分合同。只有真实分析任务在运行时写“正在重新分析”，尚未取得新分析则提示等待或手动重跑；另一景任务完成同样刷新章分析／作品状态但保留当前景草稿。
 16. **`?panel=analysis`**（任务面板跳转）：`open = analysisOpen || searchParams.get('panel') === 'analysis'`（派生，不用 effect 同步），关闭时 `setSearchParams(删除 panel, { replace: true })`。离开守卫只比较 pathname，不受查询串影响。
 
 
@@ -251,7 +253,7 @@ dayjs.locale('zh-cn')
 ### 章节分析（`10-23-analysis-memory`）
 
 - 章节列表 `ChaptersPanel`：「分析」列 = `ANALYSIS_STATUS` Tag + 整体评分（`formatScore`）；状态来自 `GET /projects/{pid}/analysis/statuses`，loader 依赖章节列表的 `data`（列表每次重载后跟着刷新；**不要**依赖 `data = []` 默认值产生的新数组，否则会无限重载），失败只影响该列。
-- 项目概览 `OverviewPanel`：`AnalysisSettingsCard` 渲染在以 `updated_at` 为 key 的表单**之外**（切换开关会改 `updated_at`，放在里面会重置未保存的基本信息表单）。`自动分析` `Switch` → `PATCH /projects/{pid} {auto_analyze}` → `setProject`，旁注「每章生成后会多一次 AI 调用」；`分析全部未分析 / 已过期章节` → `POST /analysis/analyze-pending` → `已加入 N 章分析…` / `没有需要分析的章节…` + `useTasksStore.refresh()`。
+- 项目概览`AnalysisSettingsCard`仍在以updated_at为key的表单之外，切换不清外层草稿；整章成功后原流程分析一次，单Scene改稿只使旧分析过期。Switch仍PATCH auto_analyze；分析全部未分析／过期仍走原任务流程，不把单景稿自动分析成全章。
 
 ### 大纲进阶（`10-23-outline-pro`）
 
@@ -566,4 +568,4 @@ dayjs.locale('zh-cn')
 
 ## 设定剧情变化
 
-角色、世界观、关系、职业和成员维护应区分基础资料、按章有效值与剧情变化；具体 API、锚点、revision、草稿及只读权限见 [设定随剧情演变跨层契约](../backend/setting-progressions.md)。章节编辑器的 `SettingContextPreview` 独立展示本章章初设定，不依赖 AI 配置；切换章节、身份或作品时必须废弃旧请求。
+角色、世界观、关系、职业和成员维护区分基础、所选章节／真实场景有效值与剧情变化；API与锚点见[演变合同](../backend/setting-progressions.md)。编辑器`SceneSettingPreview`独立展示本景开始时的设定，不依赖AI配置；ChapterPositionInput的Scene模式传真实scene_id，不退回章初。切换Scene／章／身份／作品必须废弃旧请求。

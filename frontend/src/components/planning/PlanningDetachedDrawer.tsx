@@ -9,7 +9,7 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectRefresh } from '../../hooks/useProjectRefresh'
 import { planningRowLabel, readPlanningConflict } from '../../utils/planning'
 import type { PlanningMergeConflict } from '../../utils/planning'
-import { PlanningSourceSelect } from './PlanningFields'
+import { PlanningSourceSelect, SameChapterSceneSelect } from './PlanningFields'
 import PlanningRevisionReview from './PlanningRevisionReview'
 import { usePlanningMutation } from './usePlanningMutation'
 
@@ -50,20 +50,23 @@ export default function PlanningDetachedDrawer({ projectId, onClose, onSaved, on
 function BindingModal({ projectId, row, revision: initialRevision, onClose, onSaved, onMerge }: { projectId: number; row: PlanningRow; revision: number; onClose: () => void; onSaved: (revision: number) => void; onMerge: (conflict: PlanningMergeConflict) => void }) {
   const [revision, setRevision] = useState(initialRevision)
   const [target, setTarget] = useState<PlanningSource>()
+  const [targetRow, setTargetRow] = useState<PlanningRow>()
   const mutation = usePlanningMutation(projectId, onSaved)
   const width = useModalWidth(640)
   const blocked = mutation.failure instanceof ApiError && [0, 409].includes(mutation.failure.status)
   const merge = readPlanningConflict(mutation.failure)
   const save = async () => {
     if (!target || row.unit_id === null) { mutation.setError('请选择新的关联位置'); return }
-    const result = await mutation.run(() => planningApi.bind(projectId, row.unit_id!, { expected_revision: revision, target }))
+    if (row.source_level === 'scene' && (!row.source_chapter_id || target.kind !== 'scene' || !targetRow || targetRow.chapter_id !== row.source_chapter_id || targetRow.content_revision == null)) { mutation.setError('只能重连到原章的活动场景；请重新核对目标版本'); return }
+    const expected_content_revisions = row.source_level === 'scene' && targetRow?.chapter_id && targetRow.content_revision != null ? [{ chapter_id: targetRow.chapter_id, content_revision: targetRow.content_revision }] : undefined
+    const result = await mutation.run(() => planningApi.bind(projectId, row.unit_id!, { expected_revision: revision, target, ...(expected_content_revisions ? { expected_content_revisions } : {}) }))
     if (result) onClose()
   }
   return <Modal open title={`重新关联 · ${row.title}`} width={width} maskClosable={false} onCancel={() => { if (!mutation.saving) onClose() }} footer={<Space><Button disabled={mutation.saving} onClick={onClose}>取消</Button><Button type="primary" disabled={!mutation.canEdit || blocked} loading={mutation.saving} onClick={() => void save()}>确认关联</Button></Space>}>
-    <Space direction="vertical" size={16} style={{ width: '100%' }}><PlanningSourceSelect projectId={projectId} value={target} onChange={setTarget} disabled={mutation.saving || !mutation.canEdit} />
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>{row.source_level === 'scene' ? row.source_chapter_id ? <SameChapterSceneSelect projectId={projectId} chapterId={row.source_chapter_id} value={target} onChange={(next) => { setTargetRow(next); setTarget(next.source) }} disabled={mutation.saving || !mutation.canEdit} /> : <Alert type="warning" message="原章已不存在，无法证明场景归属，不能重连；规划内容仍保留。" /> : <PlanningSourceSelect projectId={projectId} allowedKinds={['chapter', 'plan']} value={target} onChange={(next) => { if (next?.kind !== 'scene') setTarget(next) }} disabled={mutation.saving || !mutation.canEdit} />}
       {mutation.error && <Alert type="error" showIcon message={mutation.error} />}
       {merge && <Button onClick={() => onMerge(merge)}>核对并合并双方规划</Button>}
-      <PlanningRevisionReview projectId={projectId} failure={mutation.failure} targets={[row.source, ...(target ? [target] : [])]} originalRows={[row]} onAccept={(next) => { setRevision(next); mutation.clearError() }} />
+      <PlanningRevisionReview projectId={projectId} failure={mutation.failure} targets={[row.source, ...(target ? [target] : [])]} originalRows={[row]} onAccept={(next, latestRows) => { setRevision(next); const latest = latestRows?.find((item) => item.source.kind === 'scene' && item.source.id === target?.id); if (latest) setTargetRow(latest); mutation.clearError() }} />
     </Space>
   </Modal>
 }

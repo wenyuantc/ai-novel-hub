@@ -153,12 +153,14 @@ async def lock_visibility_write(
 class _GuardedProvider(LLMProvider):
     def __init__(
         self, provider: LLMProvider, stamp: VisibilityStamp, sessionmaker: async_sessionmaker[AsyncSession],
+        verify: Callable[[AsyncSession], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(provider.api_key, provider.base_url, provider.timeout)
         self.follow_redirects = provider.follow_redirects
         self._provider = provider
         self._stamp = stamp
         self._sessionmaker = sessionmaker
+        self._verify = verify
 
     @asynccontextmanager
     async def _send_lease(self) -> AsyncIterator[None]:
@@ -168,6 +170,8 @@ class _GuardedProvider(LLMProvider):
             except NotFoundError:
                 raise VisibilityChangedError from None
             await require_visibility_stamp(db, self._stamp)
+            if self._verify is not None:
+                await self._verify(db)
             yield
 
     @asynccontextmanager
@@ -177,6 +181,8 @@ class _GuardedProvider(LLMProvider):
             # messages 与真实模型受同一代次限制；不把事务锁留到替身响应流。
             async with self._sessionmaker() as db:
                 await require_visibility_stamp(db, self._stamp)
+                if self._verify is not None:
+                    await self._verify(db)
         hooks = DispatchHooks(self._send_lease)
         try:
             yield hooks
@@ -247,10 +253,13 @@ class _GuardedProvider(LLMProvider):
 
 def guard_provider(
     provider: LLMProvider, stamp: VisibilityStamp, sessionmaker: async_sessionmaker[AsyncSession],
+    *, verify: Callable[[AsyncSession], Awaitable[None]] | None = None,
 ) -> LLMProvider:
     """把构建时的戳绑定到 provider；每次调用重验而非给旧消息续签。"""
     if isinstance(provider, _GuardedProvider):
         if provider._stamp != stamp:
             raise VisibilityChangedError
+        if verify is not None and provider._verify is not verify:
+            raise VisibilityChangedError
         return provider
-    return _GuardedProvider(provider, stamp, sessionmaker)
+    return _GuardedProvider(provider, stamp, sessionmaker, verify)

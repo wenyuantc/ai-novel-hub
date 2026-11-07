@@ -124,12 +124,13 @@ class CategoryEntryQuery(BaseModel):
     page_size: Annotated[int, Field(strict=True, ge=1, le=100)] = 50
     chapter_id: PositiveDbInt | None = None
     chapter_no: PositiveDbInt | None = None
+    scene_id: PositiveDbInt | None = None
     boundary: Boundary = "start"
 
     @model_validator(mode="after")
     def one_position(self) -> Self:
-        if self.chapter_id is not None and self.chapter_no is not None:
-            raise ValueError("章节 ID 与计划章节号只能选择一个")
+        if sum(value is not None for value in (self.chapter_id, self.chapter_no, self.scene_id)) > 1:
+            raise ValueError("场景、章节 ID 与计划章节号只能选择一个")
         return self
 
 

@@ -136,7 +136,7 @@ export function initialProgressionDraft(event: SettingProgression | null, fields
   return {
     field: selected?.id ?? null, operation: event?.operation ?? (selected?.supportsAppend ? 'append' : 'replace'),
     value: typed ? typed.value : event ? '' : emptyFieldValue(selected?.slot?.field_type ?? 'text').value,
-    position: event ? { anchor_kind: event.anchor_kind, chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary }
+    position: event ? { anchor_kind: event.anchor_kind, ...(event.anchor_kind === 'scene' ? { scene_id: event.scene_id } : {}), chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary }
       : { anchor_kind: chapters.length ? 'chapter' : 'planned', chapter_id: null, chapter_no: null, boundary: 'start' },
     sort_order: event?.sort_order ?? 0, note: event?.note ?? '',
   }
@@ -149,7 +149,7 @@ export function sharedProgressionCommand(input: SettingProgressionInput, slot: S
   if (slot.archived) throw new Error('此字段已停用，不能新增变化')
   return { definitionId: slot.definition_id, body: {
     ...typed, expected_fields_revision: input.expected_fields_revision, expected_timeline_revision: input.expected_revision,
-    anchor_kind: input.anchor_kind, chapter_id: input.chapter_id, chapter_no: input.chapter_no, boundary: input.boundary,
+    anchor_kind: input.anchor_kind, ...(input.anchor_kind === 'scene' ? { scene_id: input.scene_id } : {}), chapter_id: input.chapter_id, chapter_no: input.chapter_no, boundary: input.boundary,
     operation: input.operation, sort_order: input.sort_order, note: input.note,
   } }
 }

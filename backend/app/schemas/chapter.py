@@ -16,6 +16,7 @@ class ChapterCreate(BaseModel):
 
 
 class ChapterUpdate(BaseModel):
+    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
     outline_id: int | None = None
     # 本章写作风格覆盖；显式 null = 继承项目默认
     style_id: int | None = None
@@ -45,6 +46,7 @@ class ChapterBrief(BaseModel):
     title: str
     status: ChapterStatus
     word_count: int
+    content_revision: int
     updated_at: datetime
 
 
@@ -53,6 +55,8 @@ class ChapterOut(ChapterBrief):
 
 
 class GenerateChapterRequest(BaseModel):
+    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_planning_revision: int | None = Field(default=None, ge=0, strict=True)
     ai_config_id: int | None = None
     instruction: str = Field(default="", max_length=2000)
     target_words: int = Field(default=3000, ge=300, le=20000)
@@ -65,6 +69,8 @@ class GenerateChapterRequest(BaseModel):
 
 
 class PolishChapterRequest(BaseModel):
+    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_planning_revision: int | None = Field(default=None, ge=0, strict=True)
     ai_config_id: int | None = None
     instruction: str = Field(default="", max_length=2000)
     # 写作风格：inherit = 章节覆盖 > 项目默认；none = 不用风格；整数 = 临时指定风格 id
@@ -91,6 +97,9 @@ class WizardRequest(BaseModel):
 
 class ReviseChapterRequest(BaseModel):
     """按分析建议整章重写（chapter.revise）。至少勾选一条建议或填写 instruction。"""
+
+    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_planning_revision: int | None = Field(default=None, ge=0, strict=True)
 
     analysis_id: int
     suggestion_ids: list[int] = Field(default_factory=list, max_length=20)

@@ -644,3 +644,36 @@ async def test_terminal_pending_anomaly_in_recycled_project_cannot_be_purged_or_
         row = await db.get(Task, task.id)
         assert row.status == "succeeded" and row.admin_cancel_operation_id == marker
         assert (await db.get(TaskStatistic, task.statistics_key)).removed_at is None
+
+
+async def test_owner_task_projection_handles_arbitrary_historical_input_without_repairing_it(app, client):
+    user = await register(client)
+    project = await create_project(client)
+    chapter = (await client.post(f"/api/v1/projects/{project['id']}/chapters", json={})).json()
+    scenes = (await client.get(f"/api/v1/projects/{project['id']}/chapters/{chapter['id']}/scenes")).json()
+    scene_id = scenes["items"][0]["id"]
+    payloads = [
+        (None, None), ("legacy-root", None), ([], None), (17, None), (True, None),
+        ({"request": "legacy-request"}, None), ({"request": []}, None), ({"request": False}, None),
+        ({"request": {"target": []}}, None),
+        ({"request": {"target": {"kind": "scene", "scene_id": True}}}, None),
+        ({"request": {"target": {"kind": "scene", "scene_id": str(scene_id)}}}, None),
+        ({"request": {"target": {"kind": "scene", "scene_id": scene_id, "unexpected": True}}}, None),
+        ({"request": {"target": {"kind": "scene", "scene_id": scene_id}}}, scene_id),
+    ]
+    for payload, expected_scene in payloads:
+        async with app.state.sessionmaker() as db:
+            task = Task(user_id=user["id"], project_id=project["id"], chapter_id=chapter["id"],
+                        kind="chapter.generate", status="failed", input=payload)
+            db.add(task)
+            await db.commit()
+            original = json.dumps(task.input, sort_keys=True)
+            assert task_service.to_out(task).scene_id == expected_scene
+            assert json.dumps(task.input, sort_keys=True) == original and task not in db.dirty
+            task_id = task.id
+        response = await client.get(f"/api/v1/tasks/{task_id}")
+        assert response.status_code == 200, response.text
+        assert response.json()["scene_id"] == expected_scene
+        async with app.state.sessionmaker() as db:
+            stored = await db.get(Task, task_id)
+            assert json.dumps(stored.input, sort_keys=True) == original

@@ -9,9 +9,15 @@ from app.schemas.progression import AnchorKind, Boundary, NonnegativeDbInt, Posi
 MemberStatus = Literal["active", "left", "expelled", "dead"]
 
 
-def validate_member_anchor(anchor_kind: AnchorKind | None, chapter_id: int | None, chapter_no: int | None) -> None:
-    if chapter_id is not None and chapter_no is not None:
+def validate_member_anchor(
+    anchor_kind: AnchorKind | None, chapter_id: int | None, chapter_no: int | None, scene_id: int | None = None
+) -> None:
+    if sum(value is not None for value in (chapter_id, chapter_no, scene_id)) > 1:
         raise ValueError("不能同时指定章节 id 和章节号")
+    if anchor_kind == "scene" and scene_id is None:
+        raise ValueError("场景锚点必须指定场景 id")
+    if scene_id is not None and anchor_kind != "scene":
+        raise ValueError("场景 id 必须使用场景锚点")
     if anchor_kind == "chapter" and chapter_id is None:
         raise ValueError("已有章节锚点必须指定章节 id")
     if anchor_kind == "planned" and chapter_no is None:
@@ -64,12 +70,13 @@ class _MemberIntent(BaseModel):
     anchor_kind: AnchorKind | None = None
     chapter_id: PositiveDbInt | None = None
     chapter_no: PositiveDbInt | None = None
+    scene_id: PositiveDbInt | None = None
     boundary: Boundary = "start"
 
     @model_validator(mode="after")
     def validate_position(self) -> Self:
-        validate_member_anchor(self.anchor_kind, self.chapter_id, self.chapter_no)
-        has_position = self.chapter_id is not None or self.chapter_no is not None
+        validate_member_anchor(self.anchor_kind, self.chapter_id, self.chapter_no, self.scene_id)
+        has_position = any(value is not None for value in (self.chapter_id, self.chapter_no, self.scene_id))
         if self.edit_mode == "baseline" and has_position:
             raise ValueError("修正基础设定不能指定生效章节")
         if self.edit_mode == "progression" and not has_position:

@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from app.ai.providers import AIProviderError
 from app.models import Chapter, ChapterVersion, GenerationLog
 from app.schemas.chapter import GenerateChapterRequest
-from app.services import generation_log_service, generation_service, version_service
+from app.services import generation_log_service, generation_service, scene_service, version_service
 from tests.helpers import (
     Gate,
     create_ai_config,
@@ -44,7 +44,7 @@ async def _set_content_raw(app, chapter_id: int, content: str) -> None:
     """绕过 service 直接改正文（模拟存量章节：有正文但没有版本）。"""
     async with app.state.sessionmaker() as db:
         row = await db.get(Chapter, chapter_id)
-        row.content = content
+        await scene_service.replace_legacy_content(db, row, content)
         await db.commit()
 
 
@@ -70,7 +70,7 @@ async def test_manual_save_merges_within_window(client, monkeypatch):
     assert len(vs) == 1 and vs[0]["source"] == "manual"
     assert (await client.get(f"{url}/versions/{vs[0]['id']}")).json()["content"] == "三稿"
 
-    # 内容与最新版本相同：不写；清空：不写
+    # 内容与最新版本相同：不写；清空在新场景合同下强制保留历史边界。
     await client.patch(url, json={"content": "三稿"})
     await client.patch(url, json={"title": "改标题"})
     assert len(await _versions(client, url)) == 1
@@ -82,7 +82,9 @@ async def test_manual_save_merges_within_window(client, monkeypatch):
     assert [(v["seq"], v["source"]) for v in vs] == [(2, "manual"), (1, "manual")]
 
     await client.patch(url, json={"content": "   "})
-    assert len(await _versions(client, url)) == 2
+    versions = await _versions(client, url)
+    assert len(versions) == 3 and versions[0]["word_count"] == 0
+    assert (await client.get(f"{url}/versions/{versions[0]['id']}")).json()["content"] == "   "
 
 
 async def test_manual_merge_window_is_fixed_from_creation(app, client):
@@ -116,11 +118,11 @@ async def test_prune_keeps_starred_and_latest(app, client):
     _, _, ch, url = await _setup(client, ai=False)
     async with app.state.sessionmaker() as db:
         chapter = await db.get(Chapter, ch["id"])
-        chapter.content = "v1"
+        await scene_service.replace_legacy_content(db, chapter, "v1")
         first = await version_service.record(db, chapter, "manual")
         first.starred = True
         for i in range(2, 53):  # 再写 51 个未标星版本
-            chapter.content = f"v{i}"
+            await scene_service.replace_legacy_content(db, chapter, f"v{i}")
             await version_service.record(db, chapter, "manual")
         await db.commit()
         seqs = set(await db.scalars(select(ChapterVersion.seq).where(ChapterVersion.chapter_id == ch["id"])))
@@ -329,19 +331,25 @@ async def test_restore_and_undo(app, client, monkeypatch):
     vs = await _versions(client, url)
     v1, v2 = vs[1], vs[0]
 
-    resp = await client.post(f"{url}/versions/{v1['id']}/restore")
+    resp = await client.post(f"{url}/versions/{v1['id']}/restore", json={
+        "expected_content_revision": (await client.get(url)).json()["content_revision"],
+    })
     assert resp.status_code == 200
     assert resp.json()["content"] == "A稿" and resp.json()["word_count"] == 2
     vs = await _versions(client, url)
     assert (vs[0]["seq"], vs[0]["source"], vs[0]["note"]) == (3, "restore", "恢复自 v1")
 
     # 撤销回滚：恢复回滚前的快照 v2
-    resp = await client.post(f"{url}/versions/{v2['id']}/restore")
+    resp = await client.post(f"{url}/versions/{v2['id']}/restore", json={
+        "expected_content_revision": (await client.get(url)).json()["content_revision"],
+    })
     assert resp.json()["content"] == "B稿"
 
     # 当前正文未被版本保存过：回滚前先补 baseline
     await _set_content_raw(app, ch["id"], "未存的C稿")
-    await client.post(f"{url}/versions/{v1['id']}/restore")
+    await client.post(f"{url}/versions/{v1['id']}/restore", json={
+        "expected_content_revision": (await client.get(url)).json()["content_revision"],
+    })
     vs = await _versions(client, url)
     assert [v["source"] for v in vs[:2]] == ["restore", "baseline"]
     assert (await client.get(f"{url}/versions/{vs[1]['id']}")).json()["content"] == "未存的C稿"
@@ -351,7 +359,9 @@ async def test_restore_and_undo(app, client, monkeypatch):
         row = await db.get(Chapter, ch["id"])
         row.status = "generating"
         await db.commit()
-    resp = await client.post(f"{url}/versions/{v2['id']}/restore")
+    resp = await client.post(f"{url}/versions/{v2['id']}/restore", json={
+        "expected_content_revision": (await client.get(url)).json()["content_revision"],
+    })
     assert resp.status_code == 409
 
 

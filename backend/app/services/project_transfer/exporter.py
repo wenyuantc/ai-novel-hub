@@ -21,7 +21,7 @@ from urllib.parse import quote
 from sqlalchemy import JSON, String, Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, InspirationSession, Project, ProjectCover, WritingStyle
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
 from app.services import project_lifecycle, setting_ai_visibility
@@ -30,9 +30,9 @@ from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRul
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 6
+VERSION = 7
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0038"
+APP_SCHEMA = "0039"
 BATCH = 500
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 STYLE_FIELDS = ("name", *FIELD_LIMITS)
@@ -163,6 +163,9 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             yield b"{}"
             return
         ai_revision = project.ai_visibility_revision
+        planning_revision = project.planning_revision
+        content_revisions = dict((await db.execute(select(Chapter.id, Chapter.content_revision)
+            .where(Chapter.project_id == project.id))).all())
         styles, refs = await _styles(db, project)
         cover = await db.get(ProjectCover, project.id)
         head = {
@@ -201,6 +204,11 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             yield b"]"
         # 新策略跨实体、字段、链接多表写入。不能结束一个混合新旧限制的可导入文件。
         await setting_ai_visibility.check_visibility_revision(db, plan.project_id, ai_revision)
+        current_revisions = dict((await db.execute(select(Chapter.id, Chapter.content_revision)
+            .where(Chapter.project_id == project.id))).all())
+        current_planning = await db.scalar(select(Project.planning_revision).where(Project.id == project.id))
+        if current_revisions != content_revisions or current_planning != planning_revision:
+            raise ConflictError("备份导出期间章节或场景已变化，请重新导出", extra={"code": "scene_context_changed"})
         yield b"}}"
 
 

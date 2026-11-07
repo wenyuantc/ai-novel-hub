@@ -30,6 +30,7 @@
 | [设定 AI 可见性](./setting-ai-visibility.md) | 0037 条目／字段规则、匹配和单向一跳、按章投影、真实出站门禁、旧会话、v6 格式 | 已填写 |
 | [系列作品与共享设定](./series-settings.md) | 0038 系列边界、显式采用、逐书投影、引用预检、发送锁序、单书快照及兼容 | 已填写 |
 | [规划矩阵与支线](./planning.md) | 稳定规划单元、全类型关联、项目CAS、快照/撤销、明确交汇、AI锁定上下文与前端冲突契约 | 已填写 |
+| [独立场景闭环](./scenes.md) | 0039单一正文权威、按项继承、场景时点、无损拆并、结构历史、v7备份及AI原子保存 | 已填写 |
 | [全文提及与作品笔记](./mention-tracking.md) | 四来源字面索引、歧义/Unicode/原文指纹、双向导航与章节热力图、笔记CAS、世界观别名及备份兼容 | 已填写 |
 | [AI 批量关系生成](./relationship-generation.md) | 所选 ID 范围、只读草稿与勾选保存、关系/类型并发冲突、事务所有权、任务重开及刷新 | 已填写 |
 | [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
@@ -37,7 +38,7 @@
 | [实例内提示词工坊](./workshop.md) | 风格 / 单 key 模板共享、审核快照、404/403 权限、匿名与删号署名、原子计数、导入前版本与恢复 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
-| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v6 格式（兼容 v1–v5）、表规则注册表（新增项目相关表必须登记，反射测试）、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、风格 / 全局关系类型对应、EPUB 3 + NCX 结构与分卷规则 | 已填写 |
+| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v7 格式（兼容 v1–v6）、表规则注册表、场景及历史核心引用、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
 | [项目封面](./project-cover.md) | 图片上传/生成预览确认、拥有权与魔数校验、微秒版本 URL、图片 Provider、备份可选 cover 与 EPUB 封面 | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
@@ -73,6 +74,7 @@
 | Skill 权限与导入格式、生成任务快照、MCP 适配与安全、动态工具映射、external 提案与中断回收 | [skills-mcp.md](./skills-mcp.md) |
 | 检索打分与缓存、知识库建索引、剧情记忆同步与召回 | [retrieval.md](./retrieval.md) |
 | 项目备份注册表 / 导入映射、EPUB 结构 | [project-transfer.md](./project-transfer.md) |
+| 场景正文、局部码点、结构历史、继承与整章AI原子保存 | [scenes.md](./scenes.md) |
 | 封面上传与生成预览、版本 URL、图片备份与 EPUB | [project-cover.md](./project-cover.md) |
 | 提示词模板（校验 / 渲染 / 覆盖）与写作风格解析 | [prompts-styles.md](./prompts-styles.md) |
 | 实例内共享（审核状态、署名、点赞 / 下载计数、模板导入恢复） | [workshop.md](./workshop.md) |

@@ -2,12 +2,13 @@
 
 版本是"某个时刻正文的快照"，即事件发生后的状态。规则：
 - 手动保存（record_manual）：与最新版本相同则跳过；最新版本是未标星的 manual 且距其
-  created_at 不到 MANUAL_MERGE_WINDOW 时原地更新（固定窗口：合并不延长窗口）；否则新建。正文为空时不写版本。
+  created_at 不到 MANUAL_MERGE_WINDOW 时原地更新（固定窗口：合并不延长窗口）；否则新建。
+  初始空稿不写，清空、结构或本地覆盖变化强制保留可撤销边界。
 - AI 覆盖 / 局部改写 / 回滚之前先 ensure_baseline：当前正文非空且与最新版本不同时补一个 baseline。
 - 每次新建版本后 prune：保留最新 MAX_VERSIONS 个未标星版本 + 全部标星版本；最新版本永不删除。
 
 这些函数都不 commit，由调用方统一提交，保证"改正文 + 写版本 + 写日志"在同一个事务里。
-写入版本时取 chapter.content / chapter.word_count，调用方需先更新这两个字段。
+写入前调用方必须经 scene_service 更新权威场景与章投影；版本同时保存结构与原始本地意图。
 """
 
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.models import Chapter, ChapterVersion
+from app.models import Chapter, ChapterVersion, Scene
 
 MANUAL_MERGE_WINDOW = timedelta(minutes=10)
 MAX_VERSIONS = 50
@@ -86,8 +87,11 @@ async def record(
     db: AsyncSession, chapter: Chapter, source: str, *, log_id: int | None = None, note: str = ""
 ) -> ChapterVersion:
     """以当前正文新建一个版本并裁剪。"""
+    from app.services.scene_service import capture_snapshot
+
     version = ChapterVersion(
         chapter_id=chapter.id,
+        scene_snapshot=await capture_snapshot(db, chapter),
         seq=await _next_seq(db, chapter.id),
         source=source,
         content=chapter.content,
@@ -102,50 +106,72 @@ async def record(
     return version
 
 
-async def ensure_baseline(db: AsyncSession, chapter: Chapter) -> None:
-    """覆盖正文前调用：当前正文非空且未被最新版本保存过时，补一个 baseline 快照。"""
-    if not chapter.content.strip():
+async def ensure_baseline(db: AsyncSession, chapter: Chapter, *, force: bool = False) -> None:
+    """覆盖前保存真实结构；结构操作即使无正文也保留基线。"""
+    from app.services.scene_service import capture_snapshot
+
+    if not force and not chapter.content.strip():
         return
     latest = await get_latest(db, chapter.id)
-    if latest is None or latest.content != chapter.content:
+    snapshot = await capture_snapshot(db, chapter)
+    if latest is None or latest.content != chapter.content or latest.scene_snapshot != snapshot:
         await record(db, chapter, "baseline")
 
 
+def same_structure(first: dict | None, second: dict | None) -> bool:
+    """仅普通正文可合并；身份、分隔、摘要、覆盖意图变化都强制留边界。"""
+    if first is None or second is None:
+        return False
+    def shape(value):
+        return {**value, "scenes": [{k: v for k, v in scene.items() if k != "content"}
+                                   for scene in value["scenes"]]}
+    return shape(first) == shape(second)
+
+
 async def record_manual(db: AsyncSession, chapter: Chapter) -> ChapterVersion | None:
-    """手动保存后调用（chapter.content 已是新正文）。"""
-    if not chapter.content.strip():
-        return None
+    """相同结构的普通正文按原10分钟窗口合并；清空强制保留可撤销边界。"""
+    from app.services.scene_service import capture_snapshot
+
     latest = await get_latest(db, chapter.id)
-    if latest is not None and latest.content == chapter.content:
+    snapshot = await capture_snapshot(db, chapter)
+    if latest is not None and latest.content == chapter.content and latest.scene_snapshot == snapshot:
         return None
+    if not chapter.content.strip():
+        return await record(db, chapter, "manual", note="清空正文") if latest is not None else None
     if (
         latest is not None
         and latest.source == "manual"
         and not latest.starred
+        and not latest.note
+        and bool(latest.content.strip())
+        and same_structure(latest.scene_snapshot, snapshot)
         and _now() - _aware(latest.created_at) < MANUAL_MERGE_WINDOW
     ):
         latest.content = chapter.content
         latest.word_count = chapter.word_count
+        latest.scene_snapshot = snapshot
         await flush_versioned(db)
         return latest
     return await record(db, chapter, "manual")
 
 
-def add_initial(db: AsyncSession, chapters: list[Chapter], source: str, *, note: str = "") -> None:
-    """给刚创建、还没有任何版本的章节批量写入第 1 个版本（如拆书导入）；正文为空的跳过。不 flush、不 commit。
-
-    新章节没有历史版本，不需要逐章查询 seq 与裁剪，因此批量 add（导入可达 3000 章）。
-    """
-    db.add_all(
-        ChapterVersion(
-            chapter_id=c.id,
-            seq=1,
-            source=source,
-            content=c.content,
-            word_count=c.word_count,
-            starred=False,
-            note=note[:200],
-        )
-        for c in chapters
-        if c.content.strip()
-    )
+async def add_initial(db: AsyncSession, chapters: list[Chapter], source: str, *, note: str = "") -> None:
+    """新建章节批量初稿；调用方已显式初始化场景，没有规划单元或旧历史。"""
+    ids = [chapter.id for chapter in chapters]
+    scenes = list(await db.scalars(select(Scene).where(Scene.chapter_id.in_(ids), Scene.active.is_(True))
+                                   .order_by(Scene.sort, Scene.id))) if ids else []
+    snapshots: dict[int, list[dict]] = {}
+    for scene in scenes:
+        snapshots.setdefault(scene.chapter_id, []).append({
+            "id": scene.id, "title": scene.title, "content": scene.content, "summary": scene.summary,
+            "sort": scene.sort, "separator_before": scene.separator_before, "planning": None,
+        })
+    for chapter in chapters:
+        if chapter.id not in snapshots:
+            raise ConflictError("新章节缺少初始场景")
+        if chapter.content.strip():
+            db.add(ChapterVersion(
+                chapter_id=chapter.id, seq=1, source=source, content=chapter.content,
+                word_count=chapter.word_count, starred=False, note=note[:200],
+                scene_snapshot={"schema_version": 1, "scenes": snapshots[chapter.id]},
+            ))

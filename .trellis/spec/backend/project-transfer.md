@@ -81,11 +81,11 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 ---
 
-## 场景：备份格式 v6 与导出
+## 场景：备份格式 v7 与导出
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 6, exported_at, app_schema: "0038"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 7, exported_at, app_schema: "0039"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
@@ -114,7 +114,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 |---|---|
 | 非 UTF-8 / 非 JSON / 非对象 | `备份文件不是 UTF-8 编码的 JSON` / `备份文件不是合法的 JSON：…` / `备份文件格式不正确：应为 JSON 对象` |
 | format 不符 | `不是有效的项目备份文件（format 应为 ainovel.project）` |
-| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v6），请升级后再导入` |
+| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v7），请升级后再导入` |
 | 嵌套 > 40 层 | `备份文件嵌套层级过深（上限 40 层）` |
 | 缺少 project / tables | `备份文件格式不正确：缺少 project` / `…缺少 tables` |
 | 行字段缺失（NOT NULL 且无默认）/ 类型不符 / 超长 / id 重复 | `备份文件校验失败：…`，errors 如 `角色第 1 行缺少字段 name`、`角色第 1 行字段 name 超过长度上限 100` |
@@ -144,6 +144,8 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - `PROJECT_RULE.exclude`同时排除`fields_revision/categories_revision`，新作品取默认值，不继承源运行代次。四实体标签与分类适用类型是`json_plain`，规则依赖不是普通可丢弃引用。完整规则、错误与测试见[自动分类契约](./setting-categories.md)。
 - v6 保存四实体策略、共享／旧字段 `ai_hidden` 和核心表 `setting_ai_links`。两个端点在稳定句柄之后插入并重映射，校验项目、重复、自关联与每源上限。导入 v1–v5 保留存量模式；拒绝夹带非兼容新配置、丢失 v6 必需配置的文件。`ai_visibility_revision`、`ai_history_epoch` 不导出；原字段值仍保存在人工备份。见 [AI 可见性契约](./setting-ai-visibility.md)。
 - 0038 不改变 v6 形状：只导出已在本书采用的投影及本书引用，`series_books`、`series_entry_uses` 明确排除，恢复作品不继承系列身份或授权。系列写同事务推进作品可见版本，导出结束仍按本书版本防止混合资料。见 [系列设定契约](./series-settings.md)。
+- v7／0039新增核心`scenes`（含退场身份）、`planning_unit_characters`和Scene来源／覆盖列、演变`scene_id`、可选版本的`scene_snapshot`。历史JSON在所有实体映射建立后重映射Scene/unit/tag/全类型引用；缺核心引用、错所属章、重复活动顺序、正文／字数／结构投影矛盾均在预览拒绝。历史unit可已合法改挂到同章另一景，但不能引用另一章unit。纯校验入口`project_transfer/scenes.validate_scene_tables`，实际合同见[场景](./scenes.md)。
+- v1–v6先拒绝非法夹带Scene、覆盖模式、Scene锚或结构历史，再为每个旧章逐字符建立一个初始Scene；旧版本snapshot保持null。不能只改version制造旧fixture。新作品内容版本从0开始；导出结束检查全部章内容及规划版本，混合快照中止而非交付伪完整JSON。卡片仍v6，不能一起机械升级。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。
   例外：封面不进入通用表注册表，而是新增可选顶层字段，曾保持原格式版本；不能用此例外跳过其他新增表的格式迁移评估。
 

@@ -422,11 +422,17 @@ async def _story_anchor(
     project_id: int,
     chapter_id: int | None,
     chapter_no: int | None,
-    anchor_kind: Literal["chapter", "planned"] | None,
+    anchor_kind: Literal["chapter", "planned", "scene"] | None,
+    scene_id: int | None = None,
 ) -> tuple[dict[str, Any] | None, StoryPosition | None, int | None]:
     """显式指定锚点类型；旧章节号仅在当前项目唯一匹配时自动绑定。"""
-    if anchor_kind not in (None, "chapter", "planned"):
+    if anchor_kind not in (None, "chapter", "planned", "scene"):
         raise BadRequestError("章节锚点类型不合法")
+    if anchor_kind == "scene" or scene_id is not None:
+        if anchor_kind != "scene" or scene_id is None or chapter_id is not None or chapter_no is not None:
+            raise BadRequestError("场景锚点必须只指定场景 id")
+        position = await setting_progression_service.resolve_scene_position(db, project_id, scene_id)
+        return {"anchor_kind": "scene", "scene_id": scene_id}, position, position.chapter_no
     if anchor_kind == "chapter" and (chapter_id is None or chapter_no is not None):
         raise BadRequestError("已有章节锚点须指定章节 id")
     if anchor_kind == "planned" and (chapter_no is None or chapter_id is not None):
@@ -521,7 +527,8 @@ async def apply_assignment(
     chapter_no: int | None = None,
     history_note: str = "",
     chapter_id: int | None = None,
-    anchor_kind: Literal["chapter", "planned"] | None = None,
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None,
+    scene_id: int | None = None,
     boundary: Literal["start", "end"] = "start",
     edit_mode: Literal["baseline", "progression"] | None = None,
     expected_revision: int | None = None,
@@ -540,7 +547,7 @@ async def apply_assignment(
     if edit_mode is not None and expected_revision is None:
         raise BadRequestError("明确修改基础或剧情变化时请提供当前版本")
     anchor, position, history_chapter = await _story_anchor(
-        db, character.project_id, chapter_id, chapter_no, anchor_kind
+        db, character.project_id, chapter_id, chapter_no, anchor_kind, scene_id
     )
     if edit_mode == "baseline" and anchor is not None:
         raise BadRequestError("基础设定不能指定生效章节")
@@ -712,7 +719,8 @@ async def assign_new(
     chapter_no: int | None = None,
     history_note: str = "",
     chapter_id: int | None = None,
-    anchor_kind: Literal["chapter", "planned"] | None = None,
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None,
+    scene_id: int | None = None,
     boundary: Literal["start", "end"] = "start",
     edit_mode: Literal["baseline", "progression"] | None = None,
     expected_revision: int | None = None,
@@ -739,6 +747,7 @@ async def assign_new(
             chapter_no=chapter_no,
             history_note=history_note,
             chapter_id=chapter_id,
+            scene_id=scene_id,
             anchor_kind=anchor_kind,
             boundary=boundary,
             edit_mode=edit_mode,
@@ -859,6 +868,7 @@ async def assign(
         chapter_no=data.chapter_no,
         history_note=data.history_note,
         chapter_id=data.chapter_id,
+        scene_id=data.scene_id,
         anchor_kind=data.anchor_kind,
         boundary=data.boundary,
         edit_mode=data.edit_mode,
@@ -883,6 +893,7 @@ async def update_assignment(
         chapter_no=data.chapter_no,
         history_note=data.history_note,
         chapter_id=data.chapter_id,
+        scene_id=data.scene_id,
         anchor_kind=data.anchor_kind,
         boundary=data.boundary,
         edit_mode=data.edit_mode,
@@ -901,7 +912,8 @@ async def remove_assignment(
     *,
     chapter_id: int | None = None,
     chapter_no: int | None = None,
-    anchor_kind: Literal["chapter", "planned"] | None = None,
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None,
+    scene_id: int | None = None,
     boundary: Literal["start", "end"] = "start",
     edit_mode: Literal["baseline", "progression", "delete"] | None = None,
     expected_revision: int | None = None,
@@ -909,7 +921,7 @@ async def remove_assignment(
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
     character, current, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
     if edit_mode == "delete":
-        if chapter_id is not None or chapter_no is not None or anchor_kind is not None:
+        if chapter_id is not None or chapter_no is not None or scene_id is not None or anchor_kind is not None:
             raise BadRequestError("删除职业资料不能指定生效章节")
         if expected_revision is None or expected_revision < 1:
             raise BadRequestError("删除职业资料时请提供当前版本")
@@ -945,6 +957,7 @@ async def remove_assignment(
             source="manual",
             chapter_no=chapter_no,
             chapter_id=chapter_id,
+            scene_id=scene_id,
             anchor_kind=anchor_kind,
             boundary=boundary,
             edit_mode=edit_mode,

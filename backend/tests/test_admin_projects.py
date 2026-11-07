@@ -140,8 +140,10 @@ async def test_admin_manual_setting_modules_and_versions(admin_client, client):
     versions = await _json(admin_client, "GET", f"{base}/chapters/{chapter['id']}/versions")
     version = await _json(admin_client, "GET", f"{base}/chapters/{chapter['id']}/versions/{versions[0]['id']}")
     assert version["content"] == "管理员正文"
+    current = await _json(admin_client, "GET", f"{base}/chapters/{chapter['id']}")
     restored = await _json(
-        admin_client, "POST", f"{base}/chapters/{chapter['id']}/versions/{versions[0]['id']}/restore"
+        admin_client, "POST", f"{base}/chapters/{chapter['id']}/versions/{versions[0]['id']}/restore",
+        {"expected_content_revision": current["content_revision"]},
     )
     assert restored["content"] == "管理员正文"
     fs = await _json(

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.ai.prompts.registry import get_template
 from app.ai.providers import AIProviderError
 from app.models import Chapter, Character, Project, PromptTemplateOverride, SettingProgression, SettingTimeline
+from app.services.scene_service import replace_legacy_content
 from tests.helpers import create_ai_config, create_project, parse_sse, register
 
 # 含 emoji 与 CJK 扩展 B 区生僻字（UTF-16 下各占 2 个码元），偏移按码点计
@@ -83,7 +84,7 @@ async def test_apply_ignores_foreign_log_and_writes_baseline(app, client):
     ch, url, _ = await _setup(client)
     async with app.state.sessionmaker() as db:
         row = await db.get(Chapter, ch["id"])
-        row.content = CONTENT + "未保存"  # 存量正文未被版本保存
+        await replace_legacy_content(db, row, CONTENT + "未保存")  # 正文合法，尚未写入正文版本
         await db.commit()
     resp = await client.post(
         f"{url}/rewrite/apply",

@@ -36,6 +36,7 @@ from app.models import (
     WorldSetting,
 )
 from app.models.planning import PlanningUnit
+from app.models.scenes import Scene
 from app.models.setting_fields import SettingReferenceHandle
 from app.schemas.setting_ai_visibility import StoredAiSettings, legacy_ai_settings
 from app.services import (
@@ -43,6 +44,7 @@ from app.services import (
     planning_lifecycle,
     project_lifecycle,
     retrieval_service,
+    scene_service,
     series_policy,
     setting_ai_visibility,
     setting_category_service,
@@ -53,13 +55,22 @@ from app.services.ai_dispatch import lock_visibility_write
 from app.services.cast_service import is_protagonist_role
 from app.services.chapter_service import count_words
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, TableRule
-from app.services.project_transfer.remap import RemapContext, setting_event_value, setting_payload
+from app.services.project_transfer.remap import RemapContext, scene_snapshot, setting_event_value, setting_payload
 from app.services.setting_category_validation import assert_canonical_setting_tags, validate_category_graph_snapshot
 
-Snapshot = dict[str, dict[str, dict[str, Any]]]
+
+class Snapshot(dict[str, dict[str, dict[str, Any]]]):
+    """字典资料不含运行代次；删除章时另留只作单调下界的事务内证据。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.content_revision_floors: dict[int, int] = {}
+
+
 Effect = dict[str, Any]
 logger = logging.getLogger(__name__)
-EFFECT_VERSION = 5
+EFFECT_VERSION = 6
+_VISIBILITY_EFFECT_VERSION = 5
 _PROJECT_RUNTIME_REVISIONS = frozenset({
     "planning_revision", "fields_revision", "categories_revision", "ai_visibility_revision", "ai_history_epoch",
 })
@@ -82,6 +93,7 @@ EFFECT_TABLES = frozenset(
         "outlines",
         "chapter_plans",
         "chapters",
+        "scenes",
         "foreshadows",
         "foreshadow_characters",
         "foreshadow_history",
@@ -129,6 +141,8 @@ _LABELS = {
     "outlines": "大纲",
     "chapter_plans": "细纲",
     "chapters": "章节",
+    "scenes": "场景",
+    "planning_unit_characters": "场景角色关联",
     "foreshadows": "伏笔",
     "foreshadow_characters": "伏笔角色",
     "foreshadow_history": "伏笔历史",
@@ -186,12 +200,14 @@ def _columns(rule: TableRule):
         return [table.c[name] for name in ("id", "project_id", "chapter_id")]
     ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS | _PROJECT_RUNTIME_REVISIONS
                if rule.model is Project else _IGNORED)
+    if rule.table == "chapters":
+        ignored = ignored | {"content_revision"}
     return [col for col in table.columns if col.name not in ignored and col.name != "word_count"]
 
 
 def _row(rule: TableRule, mapping) -> dict:
     row = jsonable_encoder(dict(mapping))
-    if rule.table == "chapters":
+    if rule.table in {"chapters", "scenes"}:
         content = row.pop("content")
         row["_content_hash"] = content_hash(content)
         # 空白正文也须原样恢复；非空正文只保存 hash，不保存在普通 effects 中。
@@ -201,16 +217,17 @@ def _row(rule: TableRule, mapping) -> dict:
 
 
 _UNIT_DEPENDENTS = (
+    "planning_unit_characters",
     "planning_unit_tags", "planning_unit_world", "planning_unit_organizations", "planning_unit_careers",
     "planning_unit_relationships", "subplot_nodes", "subplot_crossings",
 )
 
 
-def _planning_signature(unit: dict, snapshot_data: Snapshot) -> str:
+def _planning_signature(unit: dict, snapshot_data: Snapshot, *, scene_aware: bool = True) -> str:
     """派生签名让源操作的撤销也能识别后来修改的节点／交汇，不新增持久副本。"""
     data = {
         table: {key: row for key, row in snapshot_data.get(table, {}).items() if row["unit_id"] == unit["id"]}
-        for table in _UNIT_DEPENDENTS
+        for table in _UNIT_DEPENDENTS if scene_aware or table != "planning_unit_characters"
     }
     crossing_ids = {row["id"] for row in data["subplot_crossings"].values()}
     data["subplot_crossing_participants"] = {
@@ -229,9 +246,13 @@ def _planning_signature(unit: dict, snapshot_data: Snapshot) -> str:
     return content_hash(json.dumps(data, sort_keys=True, ensure_ascii=False))
 
 
-async def _current_planning_signature(db: AsyncSession, unit: dict, project_id: int) -> str:
+async def _current_planning_signature(
+    db: AsyncSession, unit: dict, project_id: int, *, scene_aware: bool = True,
+) -> str:
     data: Snapshot = {}
     for name in _UNIT_DEPENDENTS:
+        if not scene_aware and name == "planning_unit_characters":
+            continue
         rule = _BY_TABLE[name]
         rows = (await db.execute(select(*_columns(rule)).where(
             rule.scope(project_id), rule.model.__table__.c.unit_id == unit["id"]
@@ -251,7 +272,7 @@ async def _current_planning_signature(db: AsyncSession, unit: dict, project_id: 
             ChapterPlan.id == unit["plan_id"], ChapterPlan.project_id == project_id
         ))
         data["chapter_plans"] = {str(unit["plan_id"]): {"character_ids": plan_ids or []}}
-    return _planning_signature(unit, data)
+    return _planning_signature(unit, data, scene_aware=scene_aware)
 
 
 def _planning_signatures(snapshot_data: Snapshot) -> None:
@@ -279,10 +300,42 @@ def _planning_signatures(snapshot_data: Snapshot) -> None:
         row["_planning_content_hash"] = _planning_signature(row, grouped.get(row["id"], {}))
 
 
+def _scene_signatures(data: Snapshot) -> None:
+    """正文相同的重排、摘要和本地模式变化也不能让旧效果误判可撤销。"""
+    for chapter in data.get("chapters", {}).values():
+        scenes = {key: row for key, row in data.get("scenes", {}).items() if row["chapter_id"] == chapter["id"]}
+        ids = {row["id"] for row in scenes.values()}
+        units = {key: row for key, row in data.get("planning_units", {}).items() if row.get("scene_id") in ids}
+        chapter["_scene_structure_hash"] = content_hash(json.dumps(
+            {"scenes": scenes, "planning": units}, ensure_ascii=False, sort_keys=True,
+        ))
+
+
+async def _current_scene_signature(db: AsyncSession, project_id: int, chapter: dict) -> str:
+    rule = _BY_TABLE["scenes"]
+    rows = (await db.execute(select(*_columns(rule)).where(
+        Scene.chapter_id == chapter["id"], rule.scope(project_id),
+    ).with_for_update())).mappings()
+    scenes = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
+    rule = _BY_TABLE["planning_units"]
+    rows = (await db.execute(select(*_columns(rule)).where(
+        PlanningUnit.project_id == project_id, PlanningUnit.scene_id.in_([row["id"] for row in scenes.values()]),
+    ).with_for_update())).mappings()
+    units = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
+    for unit in units.values():
+        unit["_planning_content_hash"] = await _current_planning_signature(db, unit, project_id)
+    data = {"chapters": {str(chapter["id"]): dict(chapter)}, "scenes": scenes, "planning_units": units}
+    _scene_signatures(data)
+    return data["chapters"][str(chapter["id"])]["_scene_structure_hash"]
+
+
 async def snapshot(db: AsyncSession, project_id: int) -> Snapshot:
     """仅查询当前项目；返回可直接 JSON 序列化的独立数据，不缓存 ORM 实例。"""
     await db.flush()
-    result: Snapshot = {}
+    result = Snapshot()
+    result.content_revision_floors = dict((await db.execute(select(
+        Chapter.id, Chapter.content_revision,
+    ).where(Chapter.project_id == project_id))).all())
     for rule in _RULES:
         scope = rule.scope(project_id)
         if rule.table == "relationship_types":
@@ -293,6 +346,7 @@ async def snapshot(db: AsyncSession, project_id: int) -> Snapshot:
         rows = (await db.execute(select(*_columns(rule)).where(scope))).mappings()
         result[rule.table] = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
     _planning_signatures(result)
+    _scene_signatures(result)
     return result
 
 
@@ -310,15 +364,18 @@ def diff(before: Snapshot, after: Snapshot) -> list[Effect]:
             if rule.table in _LINK_ONLY and (previous is None or current is None):
                 continue
             if previous != current:
-                result.append(
-                    {
+                effect = {
                         "table": rule.table,
                         "pk": _pk(rule, previous or current),
                         "before": deepcopy(previous),
                         "after": deepcopy(current),
                         "format_version": EFFECT_VERSION,
                     }
-                )
+                if rule.table == "chapters" and previous is not None and current is None:
+                    effect["content_revision_floor"] = getattr(before, "content_revision_floors", {}).get(
+                        previous["id"], 0,
+                    )
+                result.append(effect)
     return result
 
 
@@ -358,7 +415,7 @@ _LEGACY_SETTING_TABLES = frozenset(
 
 def _legacy_affects_timeline(effect: Effect) -> bool:
     table = effect.get("table")
-    if table in _LEGACY_SETTING_TABLES or table in _FIELD_CATALOG_TABLES or table in _CATEGORY_TABLES:
+    if table in _LEGACY_SETTING_TABLES | _FIELD_CATALOG_TABLES | _CATEGORY_TABLES | {"scenes"}:
         return True
     if table not in {"chapters", "outlines", "chapter_plans"}:
         return False
@@ -568,10 +625,63 @@ async def preflight_effect_versions(db: AsyncSession, project_id: int, effects: 
     await _preflight_legacy_field_effects(db, project_id, effects)
     await _preflight_category_effects(db, project_id, effects)
     _preflight_visibility_effects(effects)
+    await _preflight_legacy_scenes(db, project_id, effects)
+
+
+async def _preflight_legacy_scenes(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """真实旧文本效果只桥接无结构歧义的单场景，不全盘封禁无关旧操作。"""
+    for effect in effects:
+        if effect.get("format_version", 1) >= 6 or effect["table"] not in {"chapters", "chapter_text"}:
+            continue
+        before, after = effect["before"], effect["after"]
+        structural = effect["table"] == "chapter_text" or before is None or after is None
+        if not structural:
+            structural = before.get("_content_hash") != after.get("_content_hash")
+        if not structural:
+            continue
+        chapter_id = effect["pk"]["id"]
+        count = list(await db.scalars(select(Scene.id).join(Chapter).where(
+            Chapter.project_id == project_id, Scene.chapter_id == chapter_id, Scene.active.is_(True),
+        )))
+        if len(count) > 1:
+            raise ConflictError(
+                "旧智能体修改无法安全恢复多场景结构，请手动核对",
+                extra={"code": "legacy_effect_requires_manual_correction"},
+            )
+
+
+async def _bridge_legacy_scene_creates(db: AsyncSession, project_id: int, effects: list[Effect]) -> list[Effect]:
+    """旧建空章的唯一初始 Scene 是已知派生行；后加作者元数据仍不可一起删除。"""
+    bridged = list(effects)
+    for effect in effects:
+        if (effect.get("format_version", 1) >= 6 or effect["table"] != "chapters"
+                or effect["before"] is not None or effect["after"] is None):
+            continue
+        rule = _BY_TABLE["scenes"]
+        rows = (await db.execute(select(*_columns(rule)).where(
+            Scene.chapter_id == effect["pk"]["id"], rule.scope(project_id),
+        ))).mappings().all()
+        if not rows:
+            continue
+        row = _row(rule, rows[0])
+        local = await db.scalar(select(PlanningUnit.id).where(PlanningUnit.scene_id == row["id"]).limit(1))
+        if (len(rows) != 1 or row["title"] or row["summary"] or row["separator_before"] or row["sort"] != 0
+                or not row["active"] or local is not None or row["_content_hash"] != effect["after"]["_content_hash"]):
+            raise ConflictError("旧智能体修改不能删除后加的场景资料，请手动核对",
+                                extra={"code": "legacy_effect_requires_manual_correction"})
+        bridged.append({"table": "scenes", "pk": {"id": row["id"]}, "before": None, "after": row,
+                        "format_version": EFFECT_VERSION})
+    return bridged
 
 
 _AI_ENTRY_KINDS = {"characters": "character", "world_settings": "world", "organizations": "organization",
                    "careers": "career"}
+_SCENE_UNIT_DEFAULTS = {
+    "scene_id": None, "source_level": "chapter",
+    **{f"{kind}_mode": "inherit" for kind in (
+        "pov", "tags", "character", "world", "organization", "career", "relationship",
+    )},
+}
 
 
 def _legacy_visibility_defaults(table: str) -> dict:
@@ -587,7 +697,7 @@ def _preflight_visibility_effects(effects: list[Effect]) -> None:
         table, before, after = effect["table"], effect["before"], effect["after"]
         version = effect.get("format_version", 1)
         defaults = _legacy_visibility_defaults(table)
-        if table == "setting_ai_links" and version < EFFECT_VERSION:
+        if table == "setting_ai_links" and version < _VISIBILITY_EFFECT_VERSION:
             raise ConflictError(
                 "旧智能体修改缺少 AI 关联资料，请手动修正",
                 extra={"code": "legacy_effect_requires_manual_correction"},
@@ -595,7 +705,7 @@ def _preflight_visibility_effects(effects: list[Effect]) -> None:
         if not defaults:
             continue
         values = [{key: row[key] for key in defaults if key in row} for row in (before, after) if row is not None]
-        if version < EFFECT_VERSION:
+        if version < _VISIBILITY_EFFECT_VERSION:
             if any(type(value) is not type(defaults[key]) or value != defaults[key]
                    for row in values for key, value in row.items()):
                 raise ConflictError(
@@ -654,6 +764,8 @@ async def _current(db: AsyncSession, rule: TableRule, pk: dict, project_id: int)
     out = _row(rule, row) if row is not None else None
     if out is not None and rule.table == "planning_units":
         out["_planning_content_hash"] = await _current_planning_signature(db, out, project_id)
+    if out is not None and rule.table == "chapters":
+        out["_scene_structure_hash"] = await _current_scene_signature(db, project_id, out)
     return out
 
 
@@ -661,21 +773,26 @@ async def _check_text(db: AsyncSession, project_id: int, effect: Effect) -> bool
     chapter_id = effect["pk"]["id"]
     chapter = (
         await db.execute(
-            select(Chapter.content, Chapter.status)
+            select(Chapter)
             .where(Chapter.id == chapter_id, Chapter.project_id == project_id)
             .with_for_update()
         )
-    ).first()
+    ).scalar_one_or_none()
     if chapter is None or chapter.status == "generating" or content_hash(chapter.content) != effect["after"]["hash"]:
         return False
     for side in ("before", "after"):
         version = await db.scalar(
-            select(ChapterVersion.content).where(
+            select(ChapterVersion).where(
                 ChapterVersion.id == effect[side]["version_id"], ChapterVersion.chapter_id == chapter_id
             )
         )
-        if version is None or content_hash(version) != effect[side]["hash"]:
+        if version is None or content_hash(version.content) != effect[side]["hash"]:
             return False
+        if effect.get("format_version", 1) >= 6:
+            if version.scene_snapshot is None:
+                return False
+            if side == "after" and await scene_service.capture_snapshot(db, chapter) != version.scene_snapshot:
+                return False
     return True
 
 
@@ -684,15 +801,24 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
     changes = {(e["table"], _key(e["pk"])): e for e in effects if e["table"] != "chapter_text"}
     conflicts = []
     semantic_sources = []
+    removing_targets = {(e["table"], e["pk"].get("id")) for e in effects
+                        if e["before"] is None and e["table"] != "chapter_text"}
     if any(e["before"] is None and e["table"] != "chapter_text" for e in effects):
-        for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
+        for table in ("setting_timelines", "setting_text_fields", "setting_progressions", "chapter_versions"):
             rule = _BY_TABLE[table]
-            rows = (await db.execute(
-                select(*_columns(rule)).where(rule.scope(project_id)).with_for_update()
-            )).mappings()
-            semantic_sources.extend(
-                (table, _key(_pk(rule, row)), _setting_references(table, dict(row))) for row in rows
-            )
+            columns = ([ChapterVersion.id, ChapterVersion.scene_snapshot] if table == "chapter_versions"
+                       else _columns(rule))
+            statement = select(*columns).where(rule.scope(project_id)).with_for_update()
+            if table == "chapter_versions":
+                statement = statement.where(ChapterVersion.scene_snapshot.is_not(None))
+            rows = await db.stream(statement)
+            try:
+                async for row in rows.mappings():
+                    references = _setting_references(table, dict(row)) & removing_targets
+                    if references:
+                        semantic_sources.append((table, _key(_pk(rule, row)), references))
+            finally:
+                await rows.close()
     for effect in effects:
         if effect["before"] is not None or effect["table"] == "chapter_text":
             continue
@@ -767,6 +893,8 @@ def _setting_references(table: str, row: dict) -> set[tuple[str, int]]:
         setting_payload(row.get("base_value"), context)
     elif table == "setting_progressions":
         setting_event_value(row.get("value"), row.get("field_key"), context)
+    elif table == "chapter_versions":
+        scene_snapshot(row.get("scene_snapshot"), context)
     return references
 
 
@@ -852,11 +980,35 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
             continue
         current = await _current(db, rule, effect["pk"], project_id)
         expected_after = deepcopy(after)
+        if effect.get("format_version", 1) < 6 and expected_after is not None:
+            if name == "planning_units":
+                missing_scene_columns = not any(key in expected_after for key in _SCENE_UNIT_DEFAULTS)
+                if missing_scene_columns and current is not None:
+                    # 仅桥接真实0038旧行的迁移默认；后来本地关联不是可忽略的空集合。
+                    local = _BY_TABLE["planning_unit_characters"].model
+                    if await db.scalar(select(local.unit_id).where(local.unit_id == current["id"]).limit(1)):
+                        conflicts.append(_conflict(effect, "后来新增了场景角色关联"))
+                        continue
+                    current["_planning_content_hash"] = await _current_planning_signature(
+                        db, current, project_id, scene_aware=False,
+                    )
+                for key, value in _SCENE_UNIT_DEFAULTS.items():
+                    expected_after.setdefault(key, value)
+            elif name == "setting_progressions":
+                expected_after.setdefault("scene_id", None)
+            elif name == "chapter_versions":
+                expected_after.setdefault("scene_snapshot", None)
+        if name == "chapters" and effect.get("format_version", 1) < 6:
+            if current is not None:
+                current.pop("_scene_structure_hash", None)
+            if expected_after is not None:
+                expected_after.pop("_scene_structure_hash", None)
+                expected_after.pop("content_revision", None)
         if name == "projects" and expected_after is not None:
             for key in _PROJECT_RUNTIME_REVISIONS:
                 expected_after.pop(key, None)
         legacy_metadata = (
-            _legacy_visibility_defaults(name) if effect.get("format_version", 1) < EFFECT_VERSION else {}
+            _legacy_visibility_defaults(name) if effect.get("format_version", 1) < _VISIBILITY_EFFECT_VERSION else {}
         )
         if legacy_metadata and expected_after is not None:
             if before is None:
@@ -905,7 +1057,7 @@ def _values(rule: TableRule, row: dict) -> dict:
     for column in rule.model.__table__.columns:
         if isinstance(column.type, DateTime) and isinstance(values.get(column.name), str):
             values[column.name] = datetime.fromisoformat(values[column.name])
-    if rule.table == "chapters" and "_empty_content" in row:
+    if rule.table in {"chapters", "scenes"} and "_empty_content" in row:
         values["content"] = row["_empty_content"]
         values["word_count"] = 0
     if rule.table == "chapter_versions":
@@ -913,6 +1065,8 @@ def _values(rule: TableRule, row: dict) -> dict:
     if rule.table == "projects":
         for key in _PROJECT_RUNTIME_REVISIONS:
             values.pop(key, None)
+    if rule.table == "chapters":
+        values.pop("content_revision", None)
     return values
 
 
@@ -925,15 +1079,19 @@ async def _restore_rows(
     for effect in by_table.get("planning_units", []):
         before, after = effect["before"], effect["after"]
         if before is not None and (after is None or any(
-            before.get(field) != after.get(field) for field in ("chapter_id", "plan_id", "retired", "binding_epoch")
+            before.get(field) != after.get(field)
+            for field in ("chapter_id", "plan_id", "scene_id", "retired", "binding_epoch")
         )):
             next_epochs[before["id"]] = max(before.get("binding_epoch", 0), (after or {}).get("binding_epoch", 0)) + 1
 
     def values_before(rule, effect):
         values = _values(rule, effect["before"])
+        if rule.table == "chapters" and effect["after"] is None:
+            # 仅新插回的旧身份使用原运行下界；普通 UPDATE 永不回灌旧 revision。
+            values["content_revision"] = effect.get("content_revision_floor", 0)
         for key in preserve.get((rule.table, effect["pk"].get("id")), ()):
             values.pop(key, None)
-        if effect.get("format_version", 1) < EFFECT_VERSION:
+        if effect.get("format_version", 1) < _VISIBILITY_EFFECT_VERSION:
             legacy = _legacy_visibility_defaults(rule.table)
             if effect["after"] is None:
                 # INSERT 必须显式补兼容 NULL，而不能回落到新行默认 detected。
@@ -949,11 +1107,11 @@ async def _restore_rows(
     rebound_units = [effect["pk"]["id"] for effect in by_table.get("planning_units", [])
                      if effect["before"] is not None and effect["after"] is not None and any(
                          effect["before"].get(field) != effect["after"].get(field)
-                         for field in ("chapter_id", "plan_id")
+                         for field in ("chapter_id", "plan_id", "scene_id")
                      )]
     if rebound_units:
         await db.execute(update(PlanningUnit.__table__).where(PlanningUnit.id.in_(rebound_units))
-                         .values(chapter_id=None, plan_id=None))
+                         .values(chapter_id=None, plan_id=None, scene_id=None))
     # 先解除既有行对新建父记录的引用，避免删除父记录时把既有行一起级联删掉。
     for rule in _RULES:
         for effect in by_table[rule.table]:
@@ -961,7 +1119,7 @@ async def _restore_rows(
                 continue
             values = {}
             for fk in rule.model.__table__.foreign_keys:
-                if rule.table == "planning_units" and fk.parent.name in {"chapter_id", "plan_id"}:
+                if rule.table == "planning_units" and fk.parent.name in {"chapter_id", "plan_id", "scene_id"}:
                     continue  # 来源在上面统一释放，最后统一恢复。
                 value = effect["after"].get(fk.parent.name)
                 if (fk.column.table.name, fk.column.name, value) in removing:
@@ -972,7 +1130,7 @@ async def _restore_rows(
                     values["field_key"] = effect["before"]["field_key"]
                 if rule.table == "setting_text_fields" and "definition_id" in values:
                     values["label"] = effect["before"]["label"]
-                    if effect.get("format_version", 1) == EFFECT_VERSION:
+                    if effect.get("format_version", 1) >= _VISIBILITY_EFFECT_VERSION:
                         values["ai_hidden"] = effect["before"]["ai_hidden"]
                 if rule.table == "setting_category_rules":
                     # tag/dropdown 互斥；解除新定义或选项引用时原子恢复整组载荷。
@@ -1078,9 +1236,36 @@ async def _restore_text(db: AsyncSession, project_id: int, effect: Effect) -> No
         .where(ChapterVersion.id == effect["before"]["version_id"])
         .execution_options(populate_existing=True)
     )
-    chapter.content = version.content
-    chapter.word_count = count_words(version.content)
+    if effect.get("format_version", 1) >= 6:
+        contents = {scene["id"]: scene["content"] for scene in version.scene_snapshot["scenes"]}
+        await scene_service.replace_chapter_contents(db, chapter, contents)
+    else:
+        await scene_service.replace_legacy_content(db, chapter, version.content)
     await version_service.record(db, chapter, "restore", note=f"撤销智能体修改，恢复自 v{version.seq}")
+
+
+async def _restore_scene_projections(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
+    """旧删空章的恢复显式初始化；新结构/规划撤销推进当前内容代次，不倒灌旧值。"""
+    text_ids = {effect["pk"]["id"] for effect in effects if effect["table"] == "chapter_text"}
+    chapter_ids = {effect["pk"]["id"] for effect in effects if effect["table"] == "chapters"
+                   and effect["before"] is not None and effect["after"] is None}
+    restored_ids = set(chapter_ids)
+    for effect in effects:
+        if effect["table"] == "scenes":
+            chapter_ids.update(row["chapter_id"] for row in (effect["before"], effect["after"]) if row is not None)
+        elif effect["table"] == "planning_units":
+            scene_ids = [row["scene_id"] for row in (effect["before"], effect["after"])
+                         if row is not None and row.get("scene_id") is not None]
+            if scene_ids:
+                chapter_ids.update(await db.scalars(select(Scene.chapter_id).where(Scene.id.in_(scene_ids))))
+    for chapter_id in sorted(chapter_ids - text_ids):
+        chapter = await db.scalar(select(Chapter).where(
+            Chapter.id == chapter_id, Chapter.project_id == project_id,
+        ).execution_options(populate_existing=True))
+        if chapter is not None:
+            if chapter_id in restored_ids and not await scene_service.list_active_scenes(db, chapter_id):
+                await scene_service.initialize_chapter(db, chapter)
+            await scene_service.refresh_projection(db, chapter)
 
 
 async def _guard_field_visibility_rebinding(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
@@ -1197,6 +1382,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
     if locked.rowcount != 1:
         _raise_conflicts([{"table": "projects", "label": "项目不存在"}])
     await preflight_effect_versions(db, project_id, effects)
+    effects = await _bridge_legacy_scene_creates(db, project_id, effects)
     restoring = False
     try:
         async with db.begin_nested():
@@ -1232,6 +1418,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
             for effect in effects:
                 if effect["table"] == "chapter_text":
                     await _restore_text(db, project_id, effect)
+            await _restore_scene_projections(db, project_id, effects)
             memories = [e for e in effects if e["table"] == "story_memories"]
             if memories:
                 removed = [e["pk"]["id"] for e in memories if e["before"] is None]

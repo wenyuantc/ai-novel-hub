@@ -39,11 +39,16 @@ def test_0034_preserves_existing_story_and_guards_downgrade(tmp_path):
     command.upgrade(config, "0034")
     engine = create_engine(f"sqlite:///{path}")
     inspector = inspect(engine)
-    tables = {name for name in Base.metadata.tables if name.startswith(("planning_", "subplot"))}
+    tables = {name for name in Base.metadata.tables if name.startswith(("planning_", "subplot"))
+              and name != "planning_unit_characters"}
     assert len(tables) == 11
     for name in tables:
-        assert set(Base.metadata.tables[name].c.keys()) == {c["name"] for c in inspector.get_columns(name)}
-        assert len(Base.metadata.tables[name].foreign_keys) == len(inspector.get_foreign_keys(name))
+        future = {"scene_id", "source_level", *(f"{field}_mode" for field in (
+            "pov", "tags", "character", "world", "organization", "career", "relationship",
+        ))} if name == "planning_units" else set()
+        assert set(Base.metadata.tables[name].c.keys()) - future == {c["name"] for c in inspector.get_columns(name)}
+        old_fks = {fk for fk in Base.metadata.tables[name].foreign_keys if fk.parent.name not in future}
+        assert len(old_fks) == len(inspector.get_foreign_keys(name))
     with engine.begin() as conn:
         conn.execute(text("PRAGMA foreign_keys=ON"))
         assert conn.execute(text("SELECT content FROM chapters WHERE id=1")).scalar_one() == "不可变的正文"

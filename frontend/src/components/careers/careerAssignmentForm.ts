@@ -37,9 +37,10 @@ export function buildCareerBaselineChanges(
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 
-function positionQuery(position: ProgressionPositionInput): Pick<CareerRemovalIntent, 'anchor_kind' | 'chapter_id' | 'chapter_no' | 'boundary'> | null {
+function positionQuery(position: ProgressionPositionInput): Pick<CareerRemovalIntent, 'anchor_kind' | 'chapter_id' | 'chapter_no' | 'scene_id' | 'boundary'> | null {
   const valid = toPositionInput(position)
   if (!valid) return null
+  if (valid.anchor_kind === 'scene') return { anchor_kind: 'scene', scene_id: valid.scene_id!, boundary: valid.boundary }
   return valid.anchor_kind === 'chapter'
     ? { anchor_kind: 'chapter', chapter_id: valid.chapter_id!, boundary: valid.boundary }
     : { anchor_kind: 'planned', chapter_no: valid.chapter_no!, boundary: valid.boundary }

@@ -2,6 +2,7 @@ import { SETTING_ENTRY_TYPE_LABELS } from '../../api/settingFields'
 import type { ProgressionPositionInput, SettingCategoryEntryQuery, SettingCategoryVersions, SettingEntryType, SettingFieldDefinitionList } from '../../api/types'
 import { readEntityFieldPosition } from '../../utils/entityLinks'
 import { readPositiveId } from '../../utils/mentions'
+import { storyPositionQuery } from '../../utils/storyPosition'
 
 export interface CategoryFilters { types: SettingEntryType[]; q: string; page: number; pageSize: number; position: ProgressionPositionInput | null; invalidPosition: boolean }
 export interface CategoryBundle<T> { value: T; definitions: SettingFieldDefinitionList }
@@ -13,9 +14,9 @@ function readCategoryPosition(params: URLSearchParams): ProgressionPositionInput
   if (params.get('view') !== 'effective') return null
   const boundary = params.get('boundary')
   if (boundary !== 'start' && boundary !== 'end') return null
-  const chapter = params.get('chapter_id'), planned = params.get('chapter_no')
-  const anchor = chapter === '' && planned === null ? 'chapter' : planned === '' && chapter === null ? 'planned' : null
-  return anchor ? { anchor_kind: anchor, chapter_id: null, chapter_no: null, boundary } : null
+  const chapter = params.get('chapter_id'), planned = params.get('chapter_no'), scene = params.get('scene_id')
+  const anchor = chapter === '' && planned === null && scene === null ? 'chapter' : planned === '' && chapter === null && scene === null ? 'planned' : scene === '' && chapter === null && planned === null ? 'scene' : null
+  return anchor ? { anchor_kind: anchor, chapter_id: null, chapter_no: null, ...(anchor === 'scene' ? { scene_id: null } : {}), boundary } : null
 }
 export const initialCategoryFilters = (): CategoryFilters => ({ types: [], q: '', page: 1, pageSize: 20, position: null, invalidPosition: false })
 export function changeCategoryFilters(current: CategoryFilters, patch: Partial<CategoryFilters>): CategoryFilters {
@@ -25,17 +26,17 @@ export function changeCategoryFilters(current: CategoryFilters, patch: Partial<C
 }
 export function categoryQueryRequest(filters: CategoryFilters): { ok: true; query: SettingCategoryEntryQuery; position: ProgressionPositionInput | null } | { ok: false; error: string } {
   const position = filters.position
-  if (filters.invalidPosition || (position && (position.anchor_kind === 'chapter' ? position.chapter_no !== null : position.chapter_id !== null))) return { ok: false, error: '章节位置无效，请重新选择已有章或计划章' }
-  const number = position?.anchor_kind === 'chapter' ? position.chapter_id : position?.chapter_no
-  if (position && (number === null || number === undefined || !Number.isInteger(number) || number < 1 || number > 2_147_483_647)) return { ok: false, error: '请选择有效章节' }
+  if (filters.invalidPosition) return { ok: false, error: '章节位置无效，请重新选择已有章、场景或计划章' }
+  let positionQuery = {}
+  try { if (position) positionQuery = storyPositionQuery(position) } catch { return { ok: false, error: position?.anchor_kind === 'scene' ? '请选择有效场景' : '请选择有效章节' } }
   if ([...filters.q].length > 200) return { ok: false, error: '名称搜索最多 200 字' }
   return { ok: true, position: position ? { ...position } : null, query: { ...(filters.types.length ? { types: [...filters.types] } : {}), ...(filters.q.trim() ? { q: filters.q.trim() } : {}), page: filters.page, page_size: filters.pageSize,
-    ...(position ? position.anchor_kind === 'chapter' ? { chapter_id: position.chapter_id, boundary: position.boundary } : { chapter_no: position.chapter_no, boundary: position.boundary } : {}) } }
+    ...positionQuery } }
 }
 export function readCategoryLocation(search: string): { categoryId: number | null; filters: CategoryFilters } {
   const params = new URLSearchParams(search)
   const position = readCategoryPosition(params)
-  const history = ['view', 'chapter_id', 'chapter_no', 'boundary'].some((key) => params.has(key))
+  const history = ['view', 'chapter_id', 'chapter_no', 'scene_id', 'boundary'].some((key) => params.has(key))
   const pageSize = Number(params.get('page_size'))
   return { categoryId: readPositiveId(params.get('id')), filters: { types: [...new Set(params.getAll('type').filter(entryType))], q: params.get('q') ?? '',
     page: readPositiveId(params.get('page')) ?? 1, pageSize: [20, 50, 100].includes(pageSize) ? pageSize : 20,
@@ -52,8 +53,8 @@ export function categoryLocation(categoryId: number | null, filters: CategoryFil
     params.set('view', 'effective')
     const position = filters.position
     if (position) {
-      const value = position.anchor_kind === 'chapter' ? position.chapter_id : position.chapter_no
-      params.set(position.anchor_kind === 'chapter' ? 'chapter_id' : 'chapter_no', value === null ? '' : String(value))
+      const value = position.anchor_kind === 'chapter' ? position.chapter_id : position.anchor_kind === 'scene' ? position.scene_id : position.chapter_no
+      params.set(position.anchor_kind === 'chapter' ? 'chapter_id' : position.anchor_kind === 'scene' ? 'scene_id' : 'chapter_no', value == null ? '' : String(value))
       params.set('boundary', position.boundary)
     }
   }

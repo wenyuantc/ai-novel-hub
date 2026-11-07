@@ -23,8 +23,9 @@
 - **投影：** `setting_ai_context.build_scope(...) -> AiScope`；普通块和规划保护段共享章初 `ChapterSettings`。分析也读取作者指定的 POV／引用；读规划和手动出场前后核对 `planning_revision`，不能混合两次保存状态。原始场景输入使用 [统一 matcher](./mention-tracking.md)，不扫描已渲染的设定、工具回显和向量结果。先按时点解析再用 `field_visible` / `entry_fields` / `ref_visible` 过滤，再做裁剪和拼接。隐藏字段的标签、选项、历史和派生值均不进入模型；例如隐藏 `career.stages` 后也不能从任职摘要发出阶段。身份由条目资格控制，不是字段开关。
 - **读写：** 人工可读用 `get_manageable_project`，写需 `projects.edit` 或归属；按权限写屏障 → `lock_visibility_write` → 项目生命周期／CAS 次序。同事务提交资料与版本，等值不递增；配置变化递增 revision，可能缩小资格的变更（含候选竞争）递增 epoch，已知只放宽的不封存。新增限制或隐藏值改绑不能通过旧元数据写、卡片复用或效果恢复放宽。
 - **出站：** 构建前读 SQL 标量 `VisibilityStamp(project_id, revision, epoch, last_deleted_at)`。`guard_provider(provider, stamp, sessionmaker)` / `guard_embedder(...)` 保留构建戳，每个真实 HTTP 发送从独立事务验戳，不能给旧负载重签。PostgreSQL 项目级事务共享／独占 advisory lock；SQLite 实体 no-op UPDATE。响应头即释放，异常／取消兜底；新尝试、重定向、fallback 不绕过。无结构化设定的独立试写等不需要策略。更新前排空旧执行器，不混跑版本。
+- **场景写作：** `guard_provider(..., verify=callback)`在原真实发送lease内补查SceneContextStamp，不替代visibility检查。该stamp覆盖目标章内容／位置、项目规划和时间线／字段版本；只有可见性不变而目标正文已变也拒绝旧负载。前章普通正文只是构建时背景，不绑定其他章内容版本误伤合法并行。最终采纳／保存再次核验；首轮发送后作者收紧never不是普通续写warning，当前未提交章保留原稿。原始Scene规划只供作者，POV和引用经AiScope后才能进入锁定块。见[场景合同](./scenes.md)。
 - **历史：** Agent 在本轮作者输入上取资格并在搜索／分页前过滤；只用投影或最小写回执。收紧后有历史的旧 epoch 会话 `history_sealed`，历史仍能读，不再摘要、重放、确认后继续；无历史的空会话可采用当前代次。构建期冲突时可安全重建的首轮任务重新组装；带旧派生上下文的续跑停止，已有章节及副作用不回滚重做。
-- **格式：** 项目备份 v6 / `app_schema=0037` 持久保存策略、字段 flags 和链接，两端句柄重映射；不复制项目版本或 Agent 会话。卡片 v6 的包内 `ai_settings`、`ai_link_refs`、字段 flags 和兼容角色的 `legacy_always_in_context` 随新建项，包外 `external_references` 需显式映射；复用不改策略，定义复用必须匹配可见性。旧格式保持兼容默认，不接受夹带会被丢弃的新保护资料。人工文件仍含原值。Agent effects v5 在整轮恢复前校验，不恢复项目代次。
+- **格式：** 策略最初由v6／0037保存，当前项目备份为v7／0039，两端句柄仍显式重映射，不复制项目代次或Agent会话。卡片仍v6，包内`ai_settings/ai_link_refs`、字段flags和兼容角色的`legacy_always_in_context`随新建项，包外引用需显式映射；复用不改策略，定义复用必须匹配可见性。旧格式不接受夹带会被丢弃的新保护资料，人工文件仍含原值。当前effects v6，visibility兼容阈值保持5，合法v5不能被误判为缺策略。
 - **前端：** 四种详情使用 `SettingAiPanel` 和 `api/settingAiVisibility.ts`；与详情外层独立草稿。409 后保留草稿，读取对照并显式采用新版本；列表逐项合并作者真实增删，不能把最新的隐藏字段一起取消。网络失败可重试，撤权不提交旧请求。字段页、旧字段、备份／卡片和 Agent 封存提供各自明确反馈。
 
 ## 4. 校验与错误

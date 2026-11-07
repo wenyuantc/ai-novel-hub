@@ -500,6 +500,7 @@ class EffectiveCast:
 async def effective_world_text(
     db: AsyncSession, project: Project, chapter: Chapter, *, scope: AiScope,
     exclude_ids: set[int] | None = None,
+    position: StoryPosition | None = None,
 ) -> str:
     """按目标章初组装世界观，保留条目分类与原有顺序。"""
     worlds = await story_service.list_items(db, story_service.WORLD, project.id)
@@ -515,12 +516,11 @@ async def effective_world_text(
             SettingTimeline.world_setting_id.in_([world.id for world in worlds]),
         ).order_by(SettingTimeline.id)
     ))
-    snapshots = await setting_progression_service.resolve_timelines(
-        db, project.id, timelines, StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
-    )
+    position = position or StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
+    snapshots = await setting_progression_service.resolve_timelines(db, project.id, timelines, position)
     fields = await setting_field_service.resolve_entry_fields(
         db, project.id, [EntityRef(kind="world", id=world.id) for world in worlds],
-        StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+        position,
     )
     by_world = {t.world_setting_id: t for t in timelines}
     result = []
@@ -537,9 +537,11 @@ async def effective_world_text(
 
 async def resolve_effective_cast(
     db: AsyncSession, project: Project, chapter: Chapter, involved: list[Character], *, scope: AiScope | None = None,
+    position: StoryPosition | None = None,
 ) -> EffectiveCast:
     """批量读取目标章的角色、关系、职业和成员，同一逻辑供生成及分析使用。"""
     result = EffectiveCast()
+    position = position or StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
     if scope is not None:
         involved = [character for character in involved if scope.includes("character", character.id)]
     ids = [c.id for c in involved]
@@ -562,7 +564,7 @@ async def resolve_effective_cast(
         if t.subject_kind != "relationship" or (t.character_id in id_set and t.related_character_id in id_set)
     ]
     snapshots = await setting_progression_service.resolve_timelines(
-        db, project.id, relevant, StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
+        db, project.id, relevant, position
     )
     char_timelines = {t.character_id: t for t in relevant if t.subject_kind == "character"}
     for c in involved:
@@ -667,7 +669,7 @@ async def resolve_effective_cast(
             *[EntityRef(kind="character", id=character.id) for character in involved],
             *[EntityRef(kind="organization", id=oid) for oid in result.organizations],
             *[EntityRef(kind="career", id=cid) for cid in result.careers],
-        ], StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no),
+        ], position,
     )
     if scope is not None:
         result.entry_fields = {key: scope.entry_fields(value) for key, value in result.entry_fields.items()}
@@ -720,20 +722,38 @@ class ChapterSettings:
     scope: AiScope
     effective: EffectiveCast
     others: list[Character]
+    position: StoryPosition | None = None
 
 
 async def prepare_chapter_settings(
     db: AsyncSession, project: Project, chapter: Chapter, outline_summary: str, *,
     explicit: Iterable[EntryKey] = (), stamp: VisibilityStamp | None = None,
     extra_text: str = "", legacy_extra_text: str = "",
+    position: StoryPosition | None = None,
+    manual_character_ids: Iterable[int] | None = None,
+    source_text: str | None = None,
+    preceding_text: str | None = None,
 ) -> ChapterSettings:
     """普通块和规划块使用同一章初资格及字段投影。"""
     stamp = stamp if stamp is not None else await read_visibility_stamp(db, project.id)
     candidates = await load_candidates(db, project.id)
     by_key = {candidate.key: candidate for candidate in candidates}
     characters = await cast_service.list_characters(db, project.id)
-    manual = set(await cast_service.cast_ids(db, chapter.id))
-    prior_text = await cast_service.previous_tail(db, chapter)
+    manual = set(await cast_service.cast_ids(db, chapter.id) if manual_character_ids is None else manual_character_ids)
+    position = position or StoryPosition(chapter_id=chapter.id, chapter_no=chapter.chapter_no)
+    prior_text = preceding_text if preceding_text is not None else await cast_service.previous_tail(db, chapter)
+    if preceding_text is None and position.scene_id is not None:
+        from app.models.scenes import Scene
+
+        previous = await db.scalar(select(Scene.content).where(
+            Scene.chapter_id == chapter.id, Scene.active.is_(True), Scene.sort < position.scene_order,
+        ).order_by(Scene.sort.desc(), Scene.id.desc()).limit(1))
+        if previous is not None:
+            prior_text = previous[-cast_service.PREV_TAIL_CHARS:]
+    # 章/细纲梗概是普通共同背景，Scene正文是额外的自动匹配素材；
+    # 不能以空Scene替换掉旧梗概检测，也不把章手动cast混回有效本地覆盖。
+    selection_text = (outline_summary if source_text is None else
+                      "\n".join(part for part in (outline_summary, source_text) if part))
     legacy_chars = [
         character for character in characters
         if (entry := by_key.get(("character", character.id))) is not None and entry.mode is None
@@ -745,7 +765,7 @@ async def prepare_chapter_settings(
         )
     }
     old_detected = set(cast_service.match_characters(
-        "\n".join(part for part in (outline_summary, legacy_extra_text, prior_text) if part),
+        "\n".join(part for part in (selection_text, legacy_extra_text, prior_text) if part),
         [c for c in legacy_chars if not by_key["character", c.id].tracking_explicit],
     ))
     legacy = {
@@ -755,14 +775,14 @@ async def prepare_chapter_settings(
     scope = await build_scope(
         db, project.id, stamp=stamp, candidates=candidates, legacy=legacy,
         explicit=[*explicit, *(("character", cid) for cid in manual)],
-        texts=(outline_summary, extra_text, prior_text),
+        texts=(selection_text, extra_text, prior_text),
     )
     involved = [c for c in characters if scope.includes("character", c.id)]
     involved.sort(key=lambda c: 0 if c.id in pinned else 1 if c.id in manual else 2)
     others = [c for c in legacy_chars if not scope.includes("character", c.id)]
-    effective = await resolve_effective_cast(db, project, chapter, involved, scope=scope)
+    effective = await resolve_effective_cast(db, project, chapter, involved, scope=scope, position=position)
     await scope.verify(db)
-    return ChapterSettings(scope=scope, effective=effective, others=others)
+    return ChapterSettings(scope=scope, effective=effective, others=others, position=position)
 
 
 def build_cast_section(prepared: ChapterSettings, *, planning: "PlanningContext | None" = None) -> CastSection:
@@ -813,6 +833,9 @@ def build_cast_section(prepared: ChapterSettings, *, planning: "PlanningContext 
 async def build_chapter_context(
     db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, embedder: Embedder | None = None,
     planning: "PlanningContext | None" = None,
+    position: StoryPosition | None = None, manual_character_ids: Iterable[int] | None = None,
+    source_text: str | None = None,
+    preceding_text: str | None = None,
 ) -> str:
     """embedder：当前用户的向量模型（None = 检索只用关键词）。"""
     with db.no_autoflush:
@@ -820,7 +843,9 @@ async def build_chapter_context(
         outlines = await story_service.list_items(db, story_service.OUTLINES, project.id)
         task = await chapter_task(db, chapter)
         prepared = planning.setting_scope if planning and planning.setting_scope is not None else (
-            await prepare_chapter_settings(db, project, chapter, task.match_text())
+            await prepare_chapter_settings(db, project, chapter, task.match_text(), position=position,
+                                           manual_character_ids=manual_character_ids, source_text=source_text,
+                                           preceding_text=preceding_text)
         )
         scope = prepared.scope
         cast = build_cast_section(prepared, planning=planning)
@@ -832,7 +857,8 @@ async def build_chapter_context(
         text = assemble_context(
             project_text=format_project_info(await project_info(db, project)),
             world_text=await effective_world_text(
-                db, project, chapter, scope=scope, exclude_ids=planning.protected_world_ids if planning else None
+                db, project, chapter, scope=scope, exclude_ids=planning.protected_world_ids if planning else None,
+                position=prepared.position,
             ),
             cast=cast,
             outline_text=story_service.format_outlines(_current_volume_outlines(outlines, chapter)),
@@ -859,10 +885,14 @@ async def _context_fields_revision(
 async def build_setting_context(
     db: AsyncSession, project: Project, chapter: Chapter, *, text_hint: str = "", budget: int = 4000,
     planning: "PlanningContext | None" = None, include_protected: bool = False,
+    position: StoryPosition | None = None, manual_character_ids: Iterable[int] | None = None,
+    source_text: str | None = None,
+    preceding_text: str | None = None,
 ) -> str:
     """供局部改写和设定预览使用的章初设定块；不检索知识库或调用模型。"""
     with db.no_autoflush:
-        header = "【本章有效设定】\n"
+        is_scene = (planning and planning.scene_id) or (position and position.scene_id)
+        header = "【本场景有效设定】\n" if is_scene else "【本章有效设定】\n"
         available = budget - len(header)
         if available <= 0:
             return ""
@@ -871,6 +901,8 @@ async def build_setting_context(
         prepared = planning.setting_scope if planning and planning.setting_scope is not None else (
             await prepare_chapter_settings(
                 db, project, chapter, task.match_text(), extra_text=text_hint, legacy_extra_text=text_hint,
+                position=position, manual_character_ids=manual_character_ids, source_text=source_text,
+                preceding_text=preceding_text,
             )
         )
         scope = prepared.scope
@@ -880,7 +912,8 @@ async def build_setting_context(
             project_text="",
             include_project=False,
             world_text=await effective_world_text(
-                db, project, chapter, scope=scope, exclude_ids=protected.protected_world_ids if protected else None
+                db, project, chapter, scope=scope, exclude_ids=protected.protected_world_ids if protected else None,
+                position=prepared.position,
             ),
             cast=cast,
             outline_text="",

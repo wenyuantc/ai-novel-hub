@@ -243,7 +243,7 @@ async def test_build_error_not_retried_and_restores_chapter(app, client, fake_ll
     assert row.status == "draft" and row.content == ""
 
 
-async def test_chapter_deleted_mid_batch_is_skipped(app, client, fake_llm):
+async def test_future_chapter_deleted_during_current_proposal_invalidates_planning_snapshot(app, client, fake_llm):
     _, base, (c1, c2, c3), _ = await _setup(client, ["", "", ""])
     gate = Gate()
     fake_llm.push(["第一章", gate, "正文"])
@@ -253,9 +253,15 @@ async def test_chapter_deleted_mid_batch_is_skipped(app, client, fake_llm):
     assert (await client.delete(f"{base}/chapters/{c2['id']}")).status_code == 204
     gate.release()
     task = await wait_task(client, task_id)
-    assert task["status"] == "succeeded"
-    assert [i["state"] for i in task["checkpoint"]["items"]] == ["done", "skipped_missing", "done"]
-    assert (await _task_result(app, task_id))["skipped_missing"] == 1
+    # 场景设计 §8：删除章会推进项目规划版本，不能给已发送的当前章旧消息重签。
+    # 这不是在下章构建前发现缺章的普通 skip；当前未提交提案必须失败且不半写。
+    assert task["status"] == "failed" and task["step_cursor"] == 0
+    assert task["checkpoint"]["items"][0]["state"] == "failed"
+    assert "已变化" in task["error"]
+    assert (await _chapter(app, c1["id"])).content == (await _chapter(app, c3["id"])).content == ""
+    assert len(fake_llm.calls) == 1
+    versions = (await client.get(f"{base}/chapters/{c1['id']}/versions")).json()
+    assert versions == []
 
 
 # ---------- 审核点：待审核 / 继续 / 结束 ----------
@@ -407,7 +413,9 @@ async def test_range_lock_and_single_batch_per_project(app, client, fake_llm):
     # 手动编辑不受范围锁限制
     assert (await client.patch(f"{base}/chapters/{c3['id']}", json={"title": "改名"})).status_code == 200
     gate.release()
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    # 人工维护被允许不代表在飞行的旧项目规划快照仍可提交；改名推进规划版本。
+    assert (await wait_task(client, task_id))["status"] == "failed"
+    assert (await _chapter(app, c1["id"])).content == ""
 
 
 # ---------- 取消 / 中断 ----------

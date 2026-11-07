@@ -7,7 +7,7 @@ interface Props { data: PlanningWeave; canEdit: boolean; onNode: (row: PlanningR
 /** 同章分布与作者明确交汇分别标记；间隔直接采用完整轴的服务端结果。 */
 export default function PlanningWeaveTable({ data, canEdit, onNode, onCrossing, onCreateCrossing }: Props) {
   if (!data.tracks.length) return <Empty description="还没有支线，请在支线管理中新建。" />
-  const unitName = data.axis === 'chapter' ? '已建章' : '未建章细纲'
+  const unitName = data.axis === 'chapter' ? '已建章' : data.axis === 'scene' ? '实际场景' : '未建章细纲'
   const visibleSubplots = new Set(data.tracks.map((track) => track.subplot.id))
   return <Space direction="vertical" size={16} style={{ width: '100%' }}>
     <Typography.Text type="secondary">● 普通推进 ◆ 作者明确交汇 同位置有多条支线只表示并行推进。空档按完整{unitName}顺序计算，不受当前窗口影响。</Typography.Text>

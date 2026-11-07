@@ -12,7 +12,7 @@ from app.models import WorldSetting
 from app.services.agent import effects
 from app.services.project_transfer import importer
 from tests.helpers import create_project, register
-from tests.test_project_transfer import _backup, _import
+from tests.test_project_transfer import _backup, _import, _without_ai_settings
 
 
 async def test_world_aliases_new_and_old_backup_round_trip(client):
@@ -22,12 +22,12 @@ async def test_world_aliases_new_and_old_backup_round_trip(client):
     await client.post(f"{base}/world", json={"title": "青云城", "category": "place", "aliases": ["古城"]})
     await client.post(f"{base}/notes", json={"title": "笔记", "content": "古城传说"})
     backup = await _backup(client, project["id"])
-    assert backup["app_schema"] == "0038"
+    assert backup["app_schema"] == "0039"
     imported = await _import(client, backup)
     imported_base = f"/api/v1/projects/{imported['project']['id']}"
     assert (await client.get(f"{imported_base}/world")).json()[0]["aliases"] == ["古城"]
     assert (await client.get(f"{imported_base}/mentions", params={"source_type": "note"})).json()["total"] == 1
-    legacy = deepcopy(backup)
+    legacy = _without_ai_settings(deepcopy(backup), 2)
     legacy["tables"].pop("project_notes")
     legacy["tables"]["world_settings"][0].pop("aliases")
     legacy["app_schema"] = "0031"

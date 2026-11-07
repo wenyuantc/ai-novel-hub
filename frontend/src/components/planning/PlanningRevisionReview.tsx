@@ -9,7 +9,7 @@ import { PLANNING_REFERENCE_LABELS, planningReferenceId, planningRowLabel } from
 
 interface Props {
   projectId: number; failure: unknown; targets?: PlanningSource[]; originalRows?: PlanningRow[]
-  resource?: PlanningReviewResource; subplotId?: number; onAccept: (revision: number) => void
+  resource?: PlanningReviewResource; subplotId?: number; onAccept: (revision: number, rows?: PlanningRow[]) => void
 }
 interface Review { matrix: PlanningMatrix; revision: number; details: string[]; unavailable: boolean }
 /** 冲突后只重读、不重放；作者核对最新目标及待修改内容后才更新表单版本。 */
@@ -30,7 +30,7 @@ export default function PlanningRevisionReview({ projectId, failure, targets = [
     request.current = controller
     setLoading(true); setError(''); setConfirmed(false); setLatest(undefined)
     try {
-      const matrix = await planningApi.matrix(projectId, { column_mode: 'custom', column_refs: subplotId ? [{ kind: 'subplot', subplot_id: subplotId }] : [], source_refs: targets.length ? targets : undefined, page_size: 100 }, controller.signal)
+      const matrix = await planningApi.matrix(projectId, { granularity: targets.some((source) => source.kind === 'scene') || originalRows.some((row) => row.source_level === 'scene') ? 'scene' : 'chapter', column_mode: 'custom', column_refs: subplotId ? [{ kind: 'subplot', subplot_id: subplotId }] : [], source_refs: targets.length ? targets : undefined, page_size: 100 }, controller.signal)
       const catalog = resource ? await readPlanningReviewResource(projectId, resource, controller.signal) : undefined
       if (catalog && catalog.revision !== matrix.revision) throw new Error('读取期间规划再次变化，请重新加载最新内容')
       const details: string[] = []
@@ -43,7 +43,7 @@ export default function PlanningRevisionReview({ projectId, failure, targets = [
     } catch (err) { if (!controller.signal.aborted && canReadNow()) setError(errorMessage(err)) }
     finally { if (!controller.signal.aborted && canReadNow()) setLoading(false) }
   }
-  const currentRow = (source: PlanningSource) => latest?.matrix.rows.find((row) => source.kind === 'chapter' ? row.chapter_id === source.id : source.kind === 'plan' ? row.plan_id === source.id : row.unit_id === source.id && row.source.kind === 'detached')
+  const currentRow = (source: PlanningSource) => latest?.matrix.rows.find((row) => source.kind === 'chapter' ? row.chapter_id === source.id : source.kind === 'plan' ? row.plan_id === source.id : source.kind === 'scene' ? row.scene_id === source.id : row.unit_id === source.id && row.source.kind === 'detached')
   const unavailable = latest?.unavailable || targets.some((source) => !currentRow(source))
   const changedBinding = originalRows.some((old) => {
     const current = currentRow(old.source)
@@ -58,7 +58,7 @@ export default function PlanningRevisionReview({ projectId, failure, targets = [
       {latest.details.map((detail, index) => <Typography.Paragraph key={index} style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{detail}</Typography.Paragraph>)}
       {(unavailable || changedBinding) ? <Typography.Text type="danger">部分目标已删除或规划身份改变，请重新选择目标；当前填写内容仍在此处供你核对。</Typography.Text> : <>
         <Checkbox checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}>已核对最新目标，保留当前填写内容重新提交</Checkbox>
-        <Button disabled={!confirmed} onClick={() => { if (canEditNow()) onAccept(latest.revision) }}>使用最新版本</Button>
+        <Button disabled={!confirmed} onClick={() => { if (canEditNow()) onAccept(latest.revision, latest.matrix.rows) }}>使用最新版本</Button>
       </>}
     </>}
   </Space>} />

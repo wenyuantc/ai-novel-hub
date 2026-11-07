@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chapter, Task
 from app.schemas.chapter import GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
-from app.services import analysis_service, generation_service
-from app.services.chapter_service import count_words
+from app.schemas.scene_ai import SceneTarget, parse_target
+from app.services import analysis_service, generation_service, planning_context_service, scene_service
+from app.services.chapter_service import count_words, get_owned_chapter
 from app.services.task_engine.registry import Event, TaskContext, TaskSpec, register
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,15 @@ class ChapterHandler:
     async def validate_retry(self, db: AsyncSession, ctx: TaskContext, *, user_id: int, task: Task) -> TaskSpec:
         """重试：重新校验与抢占，但沿用原任务的 Skill 快照（之后编辑 Skill 不影响重试）。"""
         params = dict(task.input.get("request") or {})
+        chapter = await get_owned_chapter(db, user_id, task.input["chapter_id"], lock=True)
+        await db.refresh(chapter)
+        target = parse_target(params.get("target"))
+        if isinstance(target, SceneTarget):
+            await scene_service.require_scene(db, chapter, target.scene_id)
+        params.update(
+            expected_content_revision=chapter.content_revision,
+            expected_planning_revision=await planning_context_service.planning_revision(db, chapter.project_id),
+        )
         return await self._claim(db, ctx, user_id=user_id, kind=task.kind, params=params, skill=task.input.get("skill"))
 
     async def _claim(
@@ -68,6 +78,7 @@ class ChapterHandler:
     ) -> TaskSpec:
         mode = _mode(kind)
         req = _request(kind, params)
+        target = parse_target(params.get("target"))
         chapter_id = int(params["chapter_id"])
         claim = await generation_service.validate_and_claim(
             db,
@@ -80,14 +91,21 @@ class ChapterHandler:
             ai_timeout=ctx.settings.ai_request_timeout,
             allow_private=ctx.settings.allow_private_ai_endpoints,
             skill_snapshot=skill,
+            target=target,
+            project_id=params.get("project_id"),
         )
+        title = chapter_title(claim.chapter_no, claim.chapter_title, mode)
+        if isinstance(target, SceneTarget):
+            suffix = f" · 场景 {target.scene_id}"
+            title = title[:200 - len(suffix)].rstrip() + suffix
         return TaskSpec(
             project_id=claim.project_id,
             chapter_id=claim.chapter_id,
             resource_key=f"chapter:{claim.chapter_id}",
-            title=chapter_title(claim.chapter_no, claim.chapter_title, mode),
+            title=title,
             input={
-                "request": {"chapter_id": claim.chapter_id, **req.model_dump(mode="json")},
+                "request": {"chapter_id": claim.chapter_id, **req.model_dump(mode="json"),
+                            "target": target.model_dump()},
                 "chapter_id": claim.chapter_id,
                 "prev_status": claim.prev_status,
                 "ai_config_id": claim.ai_config_id,
@@ -115,6 +133,7 @@ class ChapterHandler:
                 context_budget=ctx.settings.context_char_budget,
                 task_id=task.id,
                 skill=task.input.get("skill"),
+                target=parse_target(params.get("target")),
             )
 
     def run(self, job: generation_service.ChapterJob, ctx: TaskContext) -> AsyncIterator[Event]:
@@ -151,7 +170,8 @@ class ChapterHandler:
 
     async def on_success(self, ctx: TaskContext, task: Task) -> None:
         """正文已被 AI 覆盖：按项目开关自动排队分析本章（D2）。"""
-        await analysis_service.enqueue_auto(ctx, task.project_id, task.chapter_id)
+        if not isinstance(parse_target((task.input.get("request") or {}).get("target")), SceneTarget):
+            await analysis_service.enqueue_auto(ctx, task.project_id, task.chapter_id)
 
 
 register(ChapterHandler())

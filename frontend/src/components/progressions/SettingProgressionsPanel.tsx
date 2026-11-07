@@ -17,7 +17,7 @@ import { fieldValueFromRaw, subjectEntry } from '../settingFields/valueDraft'
 import LegacyFieldBindingModal from '../settingFields/LegacyFieldBindingModal'
 import LegacyFieldVisibilityModal from '../settingFields/LegacyFieldVisibilityModal'
 import SettingFieldValueView from '../settingFields/SettingFieldValueView'
-import { describeAnchor } from './position'
+import { describeAnchor, describeBoundary } from './position'
 import { type TextProgressionTarget, useProgressionPanelData } from './useProgressionPanelData'
 
 interface Props {
@@ -213,7 +213,7 @@ export default function SettingProgressionsPanel({ projectId, target, onChanged,
               <Button size="small" type="primary" icon={<PlusOutlined />} disabled={!writable || fields.every((field) => field.slot?.archived)} onClick={() => editEvent(null)}>新增变化</Button>
             </Space>
           </Space>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>记录从哪个章节起追加或替换某个字段，不会修改其他字段。</Typography.Paragraph>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>记录从哪个章节或场景起追加或替换某个字段，不会修改其他字段。</Typography.Paragraph>
           <List
             rowKey="id"
             size="small"
@@ -245,12 +245,12 @@ export default function SettingProgressionsPanel({ projectId, target, onChanged,
                         <Typography.Text strong>{selected?.label ?? event.field_label ?? '字段暂不可用'}</Typography.Text>
                         <Tag>{event.operation === 'append' ? '追加' : '替换'}</Tag>
                         <Tag>{SOURCE_LABELS[event.source]}</Tag>
-                        {event.orphaned && <Tag color="warning">关联章节已删除</Tag>}
+                        {event.orphaned && <Tag color="warning">{event.anchor_kind === 'scene' ? '场景已退场或失联' : '关联章节已删除'}</Tag>}
                       </Space>
                     )}
                     description={(
                       <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                        <Typography.Text type="secondary">{describeAnchor(event, data.chapters)} · {event.boundary === 'start' ? '从本章起' : '本章结束后'}</Typography.Text>
+                        <Typography.Text type="secondary">{describeAnchor(event, data.chapters)} · {describeBoundary(event)}</Typography.Text>
                         <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }} ellipsis={{ rows: 3, expandable: true }}>{typed ? <SettingFieldValueView projectId={projectId} value={typed} options={selected?.slot?.options} reference={progressionReference(event)} /> : progressionValueLabel(event, selected)}</Typography.Paragraph>
                         {event.note && <Typography.Text type="secondary">备注：{event.note}</Typography.Text>}
                       </Space>

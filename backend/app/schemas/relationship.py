@@ -54,7 +54,8 @@ class RelationshipCreate(TypeRef):
     source: ApiRelationSource = "manual"
     chapter_no: int | None = Field(default=None, ge=1)
     chapter_id: int | None = Field(default=None, ge=1)
-    anchor_kind: Literal["chapter", "planned"] | None = None
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None
+    scene_id: int | None = Field(default=None, ge=1, le=2_147_483_647, strict=True)
     boundary: Literal["start", "end"] = "start"
     # 0 表示预期人物对的时间线尚不存在；正数对应已有时间线的版本。
     expected_revision: int | None = Field(default=None, ge=0)
@@ -75,7 +76,8 @@ class RelationshipUpdate(BaseModel):
     description: str | None = None
     chapter_no: int | None = Field(default=None, ge=1)
     chapter_id: int | None = Field(default=None, ge=1)
-    anchor_kind: Literal["chapter", "planned"] | None = None
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None
+    scene_id: int | None = Field(default=None, ge=1, le=2_147_483_647, strict=True)
     boundary: Literal["start", "end"] = "start"
     edit_mode: Literal["baseline", "progression"] | None = None
     expected_revision: int | None = Field(default=None, ge=1)

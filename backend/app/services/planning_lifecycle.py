@@ -15,6 +15,7 @@ from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outlin
 from app.models.planning import (
     PlanningUnit,
     PlanningUnitCareer,
+    PlanningUnitCharacter,
     PlanningUnitOrganization,
     PlanningUnitRelationship,
     PlanningUnitTag,
@@ -22,8 +23,10 @@ from app.models.planning import (
     SubplotCrossing,
     SubplotNode,
 )
+from app.models.scenes import Scene
 
 UNIT_ASSOCIATIONS = (
+    PlanningUnitCharacter,
     PlanningUnitTag,
     PlanningUnitWorld,
     PlanningUnitOrganization,
@@ -85,6 +88,15 @@ async def sync_plan_cast(db: AsyncSession, plan: ChapterPlan) -> None:
 
 
 async def _remember(db: AsyncSession, unit: PlanningUnit) -> list[int]:
+    if unit.source_level == "scene":
+        scene = await db.scalar(select(Scene).join(Chapter, Chapter.id == Scene.chapter_id).where(
+            Scene.id == unit.scene_id, Chapter.project_id == unit.project_id
+        )) if unit.scene_id is not None else None
+        if scene is not None:
+            unit.last_source_label = scene.title[:300]
+        return list(await db.scalars(select(PlanningUnitCharacter.character_id).where(
+            PlanningUnitCharacter.unit_id == unit.id
+        )))
     chapter = await db.scalar(select(Chapter).where(
         Chapter.id == unit.chapter_id, Chapter.project_id == unit.project_id
     )) if unit.chapter_id is not None else None
@@ -116,9 +128,13 @@ async def detach_sources(
     removed_chapters, removed_plans = set(chapter_ids), set(plan_ids)
     if not removed_chapters and not removed_plans:
         return
+    removed_scenes = set(await db.scalars(select(Scene.id).join(Chapter, Chapter.id == Scene.chapter_id).where(
+        Chapter.project_id == project_id, Scene.chapter_id.in_(removed_chapters)
+    ))) if removed_chapters else set()
     units = list(await db.scalars(select(PlanningUnit).where(
         PlanningUnit.project_id == project_id, PlanningUnit.retired.is_(False),
-        or_(PlanningUnit.chapter_id.in_(removed_chapters), PlanningUnit.plan_id.in_(removed_plans)),
+        or_(PlanningUnit.chapter_id.in_(removed_chapters), PlanningUnit.plan_id.in_(removed_plans),
+            PlanningUnit.scene_id.in_(removed_scenes)),
     )))
     # 即使没有持久 unit，删除章仍须把当前 cast 交还给保留的细纲。
     plans = list(await db.scalars(select(ChapterPlan).where(
@@ -133,7 +149,11 @@ async def detach_sources(
             unit.chapter_id = None
         if unit.plan_id in removed_plans:
             unit.plan_id = None
-        if unit.chapter_id is None and unit.plan_id is None:
+        if unit.scene_id in removed_scenes:
+            unit.scene_id = None
+        # 旧章的 cast 需要交还孤立单元；场景已有自己的真实角色关联表，
+        # 复制进章级遗留字段会形成与 source_level 冲突的第二份事实。
+        if unit.source_level == "chapter" and unit.chapter_id is None and unit.plan_id is None:
             unit.detached_character_ids = ids
     await db.flush()
 
@@ -178,6 +198,11 @@ async def remove_character_references(db: AsyncSession, project_id: int, ids: It
 
 
 async def has_content(db: AsyncSession, unit: PlanningUnit) -> bool:
+    if unit.source_level == "scene" and any(
+        getattr(unit, f"{field}_mode") == "override"
+        for field in ("pov", "tags", "character", "world", "organization", "career", "relationship")
+    ):
+        return True
     if unit.pov_character_id is not None or unit.detached_character_ids:
         return True
     for model in UNIT_ASSOCIATIONS:
@@ -265,7 +290,7 @@ async def restore_bindings(
             PlanningUnit.id == binding["unit_id"], PlanningUnit.project_id == project_id,
         ))
         plan = plans.get(binding.get("plan_id"))
-        valid = (unit is not None and plan is not None and not unit.retired
+        valid = (unit is not None and plan is not None and not unit.retired and unit.source_level == "chapter"
                  and type(binding.get("binding_epoch")) is int and unit.binding_epoch == binding["binding_epoch"]
                  and unit.id not in seen)
         if valid:
@@ -301,6 +326,7 @@ async def validate_project(db: AsyncSession, project_id: int) -> None:
         "chapters": ("id", "plan_id"), "chapter_plans": ("id", "chapter_id"),
         "characters": ("id",), "world_settings": ("id",), "organizations": ("id",), "careers": ("id",),
         "setting_timelines": ("id", "subject_kind"),
+        "scenes": ("id", "chapter_id", "active"),
     }
     tables = {}
     for name in (*fields, *PLANNING_TABLES):

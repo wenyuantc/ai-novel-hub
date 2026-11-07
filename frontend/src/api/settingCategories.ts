@@ -12,6 +12,7 @@ const tags = (pid: number, entry: SettingEntryRef) => `/projects/${pid}/setting-
 
 function assertCategoryPosition(query: SettingCategoryEntryQuery = {}): void {
   if (query.chapter_id != null && query.chapter_no != null) throw new Error('章节 ID 与计划章节号只能选择一个')
+  if ([query.chapter_id, query.chapter_no, query.scene_id].filter((value) => value != null).length > 1) throw new Error('章节 ID、计划章节号与场景 ID 只能选择一个')
 }
 
 /** 只封装传输，不拼合跨请求版本、不逐条求值，也不自动刷新或重放冲突请求。 */

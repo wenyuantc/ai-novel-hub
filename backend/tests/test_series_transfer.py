@@ -112,8 +112,8 @@ async def test_series_backup_materializes_only_the_book_and_remaps_cast(
     assert (await client.get(f"{OPEN}/novels/{a['id']}/characters", headers=key)).status_code == 404
 
     file = await _backup(client, b["id"])
-    assert file["version"] == 6
-    assert file["app_schema"] == "0038"
+    assert file["version"] == 7
+    assert file["app_schema"] == "0039"
     assert not {"series_books", "series_entry_uses", "series_entries"} & set(file["tables"])
     assert [(r["id"], r["name"]) for r in file["tables"]["characters"]] == [(local_id, "林青")]
     assert [(r["id"], r["title"]) for r in file["tables"]["world_settings"]] == [

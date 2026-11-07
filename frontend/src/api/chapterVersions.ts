@@ -14,6 +14,7 @@ import type {
   RewriteOp,
   RewriteRequest,
   VersionSource,
+  Scene, SceneRestorePreview, SceneExtractPreview,
 } from './types'
 
 const base = (pid: number, cid: number) => `/projects/${pid}/chapters/${cid}`
@@ -24,7 +25,10 @@ export const versionApi = {
   update: (pid: number, cid: number, vid: number, body: ChapterVersionUpdate) =>
     api.patch<ChapterVersionBrief>(`${base(pid, cid)}/versions/${vid}`, body),
   remove: (pid: number, cid: number, vid: number) => api.del(`${base(pid, cid)}/versions/${vid}`),
-  restore: (pid: number, cid: number, vid: number) => api.post<Chapter>(`${base(pid, cid)}/versions/${vid}/restore`),
+  restore: (pid: number, cid: number, vid: number, revision?: number) => api.post<Chapter>(`${base(pid, cid)}/versions/${vid}/restore`, revision === undefined ? undefined : { expected_content_revision: revision }),
+  restorePreview: (pid: number, cid: number, vid: number, revision: number) => api.get<SceneRestorePreview>(`${base(pid, cid)}/versions/${vid}/restore-preview`, { expected_content_revision: revision }),
+  extractPreview: (pid: number, cid: number, vid: number, sid: number, revision: number) => api.get<SceneExtractPreview>(`${base(pid, cid)}/versions/${vid}/extract-preview`, { scene_id: sid, expected_content_revision: revision }),
+  extract: (pid: number, cid: number, vid: number, body: { scene_id: number; expected_content_revision: number; signature: string }) => api.post<Scene>(`${base(pid, cid)}/versions/${vid}/extract`, body),
 }
 
 export const generationLogApi = {

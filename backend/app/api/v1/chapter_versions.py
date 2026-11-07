@@ -1,6 +1,6 @@
 """章节版本、生成记录与局部改写路由（从 chapters.py 拆出，避免单文件过长）。"""
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.sse import sse_response
@@ -15,7 +15,10 @@ from app.schemas.chapter_version import (
     GenerationLogOut,
     RewriteApply,
     RewriteRequest,
+    VersionExtract,
+    VersionRestore,
 )
+from app.schemas.scene import SceneOut
 from app.services import chapter_version_service as svc
 from app.services import generation_log_service, rewrite_service
 
@@ -50,8 +53,11 @@ async def delete_version(project_id: int, chapter_id: int, version_id: int, user
 
 
 @router.post(f"{_BASE}/versions/{{version_id}}/restore", response_model=ChapterOut)
-async def restore_version(project_id: int, chapter_id: int, version_id: int, user: CurrentUser, db: DbDep) -> Chapter:
-    return await svc.restore_version(db, user.id, project_id, chapter_id, version_id)
+async def restore_version(
+    project_id: int, chapter_id: int, version_id: int, user: CurrentUser, db: DbDep,
+    body: VersionRestore | None = None,
+) -> Chapter:
+    return await svc.restore_version(db, user.id, project_id, chapter_id, version_id, body)
 
 
 @router.get(f"{_BASE}/generation-logs", response_model=list[GenerationLogBrief])
@@ -93,3 +99,27 @@ async def rewrite_preview(
     )
     await db.close()
     return sse_response(rewrite_service.run_rewrite_job(job, sessionmaker))
+
+
+@router.get(f"{_BASE}/versions/{{version_id}}/restore-preview")
+async def restore_preview(
+    project_id: int, chapter_id: int, version_id: int, user: CurrentUser, db: DbDep,
+    expected_content_revision: int = Query(ge=0),
+) -> dict:
+    return await svc.restore_preview(db, user.id, project_id, chapter_id, version_id, expected_content_revision)
+
+
+@router.get(f"{_BASE}/versions/{{version_id}}/extract-preview")
+async def extract_preview(
+    project_id: int, chapter_id: int, version_id: int, user: CurrentUser, db: DbDep,
+    scene_id: int = Query(gt=0), expected_content_revision: int = Query(ge=0),
+) -> dict:
+    return await svc.extract_preview(db, user.id, project_id, chapter_id, version_id, scene_id,
+                                     expected_content_revision)
+
+
+@router.post(f"{_BASE}/versions/{{version_id}}/extract", response_model=SceneOut)
+async def extract_version(
+    project_id: int, chapter_id: int, version_id: int, body: VersionExtract, user: CurrentUser, db: DbDep,
+) -> SceneOut:
+    return await svc.extract_version(db, user.id, project_id, chapter_id, version_id, body)

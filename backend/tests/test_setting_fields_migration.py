@@ -9,7 +9,19 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import MetaData, Table, create_engine, event, inspect, select, text
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    create_engine,
+    event,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
@@ -93,7 +105,7 @@ def _snapshot(conn, table, condition=""):
 
 
 def _historical_table(conn, name):
-    """写入旧修订用当时的物理列，避免触发新 ORM 的 Python 列默认。"""
+    """读写旧修订只用当时物理列，避免引入未来 ORM 列与 Python 默认。"""
     return Table(name, MetaData(), autoload_with=conn, resolve_fks=False)
 
 
@@ -151,8 +163,21 @@ def _schema_contract(inspector, table):
     }
 
 
+def _create_pre_scene_anchor_contract(connection):
+    """期望库用冻结旧DDL取同方言CHECK文本；不推导或改写实际历史库的约束。"""
+    Table(
+        "_pre_scene_anchor_contract", MetaData(),
+        Column("anchor_kind", String(8)), Column("chapter_id", Integer), Column("chapter_no", Integer),
+        CheckConstraint(
+            "(anchor_kind = 'chapter' AND chapter_no IS NULL) OR "
+            "(anchor_kind = 'planned' AND chapter_id IS NULL AND chapter_no IS NOT NULL AND chapter_no >= 1)",
+            name="legacy_anchor_shape",
+        ),
+    ).create(connection)
+
+
 def _schema_0037_model_contract(inspector, table):
-    """0038 新增系列复合外键索引，不混入 0037 及之前的结构比较。"""
+    """0038系列索引、0039场景锚点不混入0037及之前的冻结结构比较。"""
     contract = _schema_contract(inspector, table)
     index = {
         "projects": "uq_projects_id_user_id",
@@ -161,6 +186,15 @@ def _schema_0037_model_contract(inspector, table):
     }.get(table)
     if index is not None:
         contract["indexes"].pop(index)
+    if table == "setting_progressions":
+        contract["columns"].pop("scene_id")
+        contract["foreign_keys"].pop("fk_setting_progressions_scene_id_scenes")
+        contract["indexes"].pop("ix_setting_progressions_scene_id")
+        legacy = inspector.get_check_constraints("_pre_scene_anchor_contract")
+        assert len(legacy) == 1 and legacy[0]["name"] == "legacy_anchor_shape"
+        contract["check_constraints"]["ck_setting_progressions_anchor_shape"] = " ".join(
+            legacy[0]["sqltext"].split()
+        )
     return contract
 
 
@@ -203,6 +237,8 @@ def test_0035_schema_matches_version_contract(tmp_path):
     expected = create_engine("sqlite://")
     try:
         Base.metadata.create_all(expected)
+        with expected.begin() as conn:
+            _create_pre_scene_anchor_contract(conn)
         actual_inspector, expected_inspector = inspect(migrated), inspect(expected)
         for table in SCHEMA_TABLES:
             assert _schema_contract(actual_inspector, table) == _schema_0035_model_contract(
@@ -325,7 +361,8 @@ def test_0035_shapes_json_null_stable_handles_and_project_cascade(tmp_path):
             "SELECT base_value IS NULL, json_type(base_value) FROM setting_text_fields WHERE definition_id=1"
         )).one() == (0, "null")
         field_id = conn.scalar(text("SELECT id FROM setting_text_fields WHERE definition_id=1"))
-        conn.execute(Base.metadata.tables["setting_progressions"].insert().values(
+        events = _historical_table(conn, "setting_progressions")
+        conn.execute(events.insert().values(
             timeline_id=101, custom_field_id=field_id, operation="replace", value=None,
             anchor_kind="planned", chapter_no=32,
         ))
@@ -466,6 +503,7 @@ def test_0035_postgresql_preserves_text_json_null_and_no_action_project_cascade(
         try:
             await conn.execute(text(f'SET LOCAL search_path TO "{expected_schema}"'))
             await conn.run_sync(create_isolated_schema)
+            await conn.run_sync(_create_pre_scene_anchor_contract)
             expected = await conn.run_sync(lambda sync: {
                 table: _schema_0035_model_contract(inspect(sync), table) for table in SCHEMA_TABLES
             })
@@ -480,7 +518,7 @@ def test_0035_postgresql_preserves_text_json_null_and_no_action_project_cascade(
         handles = Base.metadata.tables["setting_reference_handles"]
         definitions = await conn.run_sync(_historical_table, "setting_field_definitions")
         options = Base.metadata.tables["setting_field_options"]
-        events = Base.metadata.tables["setting_progressions"]
+        events = await conn.run_sync(_historical_table, "setting_progressions")
         reference = await conn.scalar(definitions.insert().values(
             project_id=1, label="牵挂", field_type="reference", applicable_types=["character"],
             reference_types=["character", "world.place", "organization", "career"],

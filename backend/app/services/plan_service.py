@@ -307,7 +307,10 @@ async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outlin
             db.add(chapter)
             created.append((chapter, plan))
         await db.flush()
+        from app.services.scene_service import initialize_chapter
+
         for chapter, plan in created:
+            await initialize_chapter(db, chapter)
             plan.chapter_id = chapter.id
             await _add_cast(db, chapter.id, [c for c in plan.character_ids or [] if c in valid])
             await planning_lifecycle.attach_built_plan(db, chapter, plan)

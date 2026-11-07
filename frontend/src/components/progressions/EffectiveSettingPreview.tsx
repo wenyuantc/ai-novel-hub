@@ -44,7 +44,7 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
   const chapterId = position.anchor_kind === 'chapter' && chapters.some((chapter) => chapter.id === position.chapter_id) ? position.chapter_id : null
   const selection = toPositionInput({ ...position, chapter_id: chapterId })
   const entryKind = entry?.kind, entryId = entry?.id
-  const requestKey = selection === null ? null : `${identity}:${projectId}:${timelineId}:${timelineRevision}:${fieldsRevision}:${entryKind}:${entryId}:${selection.anchor_kind}:${selection.chapter_id ?? selection.chapter_no}:${selection.boundary}:${attempt}`
+  const requestKey = selection === null ? null : `${identity}:${projectId}:${timelineId}:${timelineRevision}:${fieldsRevision}:${entryKind}:${entryId}:${selection.anchor_kind}:${selection.scene_id ?? selection.chapter_id ?? selection.chapter_no}:${selection.boundary}:${attempt}`
   const current = result?.key === requestKey ? result : null
 
   useEffect(() => {
@@ -52,7 +52,7 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
     let active = true
     const controller = new AbortController()
     const requested: ProgressionPositionInput = {
-      anchor_kind: position.anchor_kind, chapter_id: chapterId, chapter_no: position.chapter_no, boundary: position.boundary,
+      anchor_kind: position.anchor_kind, ...(position.anchor_kind === 'scene' ? { scene_id: position.scene_id } : {}), chapter_id: chapterId, chapter_no: position.chapter_no, boundary: position.boundary,
     }
     loadEffectivePreview({ projectId, timelineId, timelineRevision, fieldsRevision, position: requested,
       entry: entryKind && entryId ? { kind: entryKind, id: entryId } : undefined, signal: controller.signal }).then(
@@ -65,13 +65,13 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
       },
     )
     return () => { active = false; controller.abort() }
-  }, [projectId, timelineId, timelineRevision, fieldsRevision, entryKind, entryId, chapterId, position.anchor_kind, position.chapter_no, position.boundary, canRead, canReadNow, requestKey])
+  }, [projectId, timelineId, timelineRevision, fieldsRevision, entryKind, entryId, chapterId, position.anchor_kind, position.scene_id, position.chapter_no, position.boundary, canRead, canReadNow, requestKey])
 
   if (!canRead) return null
   const rows = current?.data ? effectiveRows(current.data, fields) : []
   return (
     <Space direction="vertical" size="small" style={{ width: '100%' }}>
-      <Typography.Title level={5} style={{ marginBottom: 0 }}>按章节查看有效设定</Typography.Title>
+      <Typography.Title level={5} style={{ marginBottom: 0 }}>按章节／场景查看有效设定</Typography.Title>
       <Typography.Text type="secondary">这是所选条目的设定内容；生成时还会按选角和上下文预算处理。</Typography.Text>
       <ChapterPositionInput
         chapters={chapters}
@@ -90,7 +90,7 @@ export default function EffectiveSettingPreview({ projectId, timelineId, timelin
       )}
       {current?.data && (
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          {current.data.orphaned_event_ids.length > 0 && <Alert type="warning" showIcon message={`${current.data.orphaned_event_ids.length} 条变化的关联章节已删除，未计入结果。`} />}
+          {current.data.orphaned_event_ids.length > 0 && <Alert type="warning" showIcon message={`${current.data.orphaned_event_ids.length} 条变化的关联章节或场景已失联，未计入结果。`} />}
           {rows.map((row) => (
             <div key={row.key}>
               <Typography.Text strong>{row.label}</Typography.Text>

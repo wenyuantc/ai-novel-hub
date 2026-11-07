@@ -519,6 +519,7 @@ class Outline(TimestampMixin, Base):
 
 class Chapter(TimestampMixin, Base):
     __tablename__ = "chapters"
+    __table_args__ = (CheckConstraint("content_revision >= 0", name="content_revision_nonnegative"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -529,6 +530,7 @@ class Chapter(TimestampMixin, Base):
     chapter_no: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 对应的细纲；与 chapter_plans.chapter_id 双向冗余，由 plan_service 维护一致。
@@ -623,12 +625,17 @@ class ChapterVersion(TimestampMixin, Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    scene_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     starred: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     note: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
     generation_log_id: Mapped[int | None] = mapped_column(
         ForeignKey("generation_logs.id", ondelete="SET NULL"), index=True, nullable=True
     )
+
+    @property
+    def has_scene_snapshot(self) -> bool:
+        return self.scene_snapshot is not None
 
 
 class Task(TimestampMixin, Base):

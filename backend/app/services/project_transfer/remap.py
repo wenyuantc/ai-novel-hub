@@ -274,3 +274,28 @@ def snapshot_data(value: Any, ctx: RemapContext) -> dict[str, Any]:
             bindings.append({"unit_id": unit_id, "plan_id": plan_id, "binding_epoch": epoch})
         result["planning_bindings"] = bindings
     return result
+
+
+def scene_snapshot(value: Any, ctx: RemapContext) -> dict[str, Any] | None:
+    """结构历史只映射真实保留身份；不为缺失场景／规划伪造 synthetic 身份。"""
+    if value is None:
+        return None
+    items = []
+    for item in value["scenes"]:
+        identity = ctx.ref("scenes", item["id"], "场景结构历史")
+        planning = item["planning"]
+        if planning is not None:
+            raw = planning["raw"]
+            references = []
+            for reference in raw["references"]:
+                kind = reference["kind"]
+                table = {"character": "characters", "world": "world_settings", "organization": "organizations",
+                         "career": "careers", "relationship": "setting_timelines"}[kind]
+                key = "timeline_id" if kind == "relationship" else "id"
+                references.append({**reference, key: ctx.ref(table, reference[key], "场景历史设定引用")})
+            planning = {**planning, "unit_id": ctx.ref("planning_units", planning["unit_id"], "场景规划历史"),
+                        "raw": {**raw,
+                                "pov_character_id": ctx.ref("characters", raw["pov_character_id"], "场景历史POV"),
+                                "tag_ids": id_list("planning_tags")(raw["tag_ids"], ctx), "references": references}}
+        items.append({**item, "id": identity, "planning": planning})
+    return {**value, "scenes": items}

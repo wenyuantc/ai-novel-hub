@@ -33,6 +33,7 @@ project_service.WRITTEN = Chapter.word_count > 0   # 「已写章节」
 - 列表与详情都返回这两个字段；`list_projects` 查询次数固定（项目 + 统计 + 风格 1 次、最近编辑 1 次、进度至多 2 次），不随项目数增长。
 - 目录只含已写章节，按 `(chapter_no, id)` 排序；卷信息经 `outline_id` 取大纲 `volume_no` / `volume_title`，没有关联大纲时都为 null。
   章节正文复用 `GET /projects/{pid}/chapters/{cid}`，侧边栏复用分析接口。
+- 0039后正文来源仍是该接口的`Chapter.content`，但它只由Scene有序投影维护；排序、拆并、恢复和AI保存必须同步投影与字数。Reader不在客户端重新拼场景、不跳过零字／空白景，不把摘要插入正文。TXT／Markdown／EPUB和开放章正文沿用同一兼容投影，进度仍为章ID＋ratio，不新造Scene阅读进度。见[场景合同](./scenes.md)。
 - 备份：`reading_progress` 登记在 `PROJECT_RULE.json_refs`（`remap.reading_progress`），见 project-transfer.md。
 
 ### 4. 必需的测试

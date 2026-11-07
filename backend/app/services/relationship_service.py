@@ -282,10 +282,16 @@ async def _story_anchor(
     chapter_id: int | None,
     boundary: str,
     anchor_kind: str | None,
+    scene_id: int | None = None,
 ) -> tuple[dict[str, Any] | None, StoryPosition | None, int | None]:
     """旧章号唯一匹配时关联稳定章节；尚未建章保留为计划章。"""
-    if anchor_kind not in (None, "chapter", "planned"):
+    if anchor_kind not in (None, "chapter", "planned", "scene"):
         raise BadRequestError("章节锚点类型不合法")
+    if anchor_kind == "scene" or scene_id is not None:
+        if anchor_kind != "scene" or scene_id is None or chapter_id is not None or chapter_no is not None:
+            raise BadRequestError("场景锚点必须只指定场景 id")
+        position = await setting_progression_service.resolve_scene_position(db, project_id, scene_id, boundary)
+        return {"anchor_kind": "scene", "scene_id": scene_id, "boundary": boundary}, position, position.chapter_no
     if anchor_kind == "planned" and (chapter_no is None or chapter_id is not None):
         raise BadRequestError("计划章必须指定章节号")
     if anchor_kind == "chapter" and (chapter_id is None or chapter_no is not None):
@@ -380,6 +386,7 @@ async def apply_change(
     chapter_no: int | None = None,
     chapter_id: int | None = None,
     anchor_kind: str | None = None,
+    scene_id: int | None = None,
     boundary: str = "start",
     edit_mode: str | None = None,
     expected_revision: int | None = None,
@@ -401,7 +408,7 @@ async def apply_change(
     if unknown:
         raise ValueError(f"不支持的关系字段：{sorted(unknown)}")
     anchor, position, history_chapter = await _story_anchor(
-        db, rel.project_id, chapter_no, chapter_id, boundary, anchor_kind
+        db, rel.project_id, chapter_no, chapter_id, boundary, anchor_kind, scene_id
     )
     if edit_mode == "baseline" and anchor is not None:
         raise BadRequestError("基础修正不能同时指定剧情位置")
@@ -610,6 +617,7 @@ async def create_relation(
     chapter_no: int | None = None,
     chapter_id: int | None = None,
     anchor_kind: str | None = None,
+    scene_id: int | None = None,
     boundary: str = "start",
     expected_revision: int | None = None,
     note: str = "",
@@ -639,6 +647,7 @@ async def create_relation(
         source=source,
         chapter_no=chapter_no,
         chapter_id=chapter_id,
+        scene_id=scene_id,
         anchor_kind=anchor_kind,
         boundary=boundary,
         expected_revision=expected_revision,
@@ -753,6 +762,7 @@ def _create_kwargs(data: RelationshipCreate) -> dict[str, Any]:
         "source": data.source,
         "chapter_no": data.chapter_no,
         "chapter_id": data.chapter_id,
+        "scene_id": data.scene_id,
         "anchor_kind": data.anchor_kind,
         "boundary": data.boundary,
         "expected_revision": data.expected_revision,
@@ -809,6 +819,7 @@ async def update_relationship(
         source="manual",
         chapter_no=data.chapter_no,
         chapter_id=data.chapter_id,
+        scene_id=data.scene_id,
         anchor_kind=data.anchor_kind,
         boundary=data.boundary,
         edit_mode=data.edit_mode,

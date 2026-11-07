@@ -298,6 +298,16 @@ describe('按建议重写请求', () => {
 })
 
 describe('reviseCompareFor', () => {
+  it('独立场景重写不创建全章评分对比，不能等待不存在的全章自动分析', () => {
+    const sceneTask = { kind: 'chapter.revise' as const, analysis_id: 5, scene_id: 22 }
+    expect(reviseCompareFor(sceneTask, 8)).toBeNull()
+  })
+  it('显式整章和旧缺省整章任务仍沿用原 base/since 合同', () => {
+    const chapterTask = { kind: 'chapter.revise' as const, analysis_id: 5, scene_id: null }
+    const legacyTask = { kind: 'chapter.revise' as const, analysis_id: 5 }
+    expect(reviseCompareFor(chapterTask, 8)).toEqual({ baseAnalysisId: 5, sinceAnalysisId: 8 })
+    expect(reviseCompareFor(legacyTask, 3)).toEqual({ baseAnalysisId: 5, sinceAnalysisId: 5 })
+  })
   it('取 TaskOut.analysis_id 为基准，since 取已知最新分析与基准中较大者', () => {
     expect(reviseCompareFor({ kind: 'chapter.revise', analysis_id: 5 }, 8)).toEqual({ baseAnalysisId: 5, sinceAnalysisId: 8 })
     expect(reviseCompareFor({ kind: 'chapter.revise', analysis_id: 5 }, 3)).toEqual({ baseAnalysisId: 5, sinceAnalysisId: 5 })

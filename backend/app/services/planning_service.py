@@ -13,12 +13,14 @@ from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outlin
 from app.models.planning import (
     PlanningTag,
     PlanningUnit,
+    PlanningUnitCharacter,
     PlanningUnitTag,
     Subplot,
     SubplotCrossing,
     SubplotCrossingParticipant,
     SubplotNode,
 )
+from app.models.scenes import Scene
 from app.schemas import planning as s
 from app.services import planning_queries as query
 from app.services import series_policy
@@ -89,15 +91,28 @@ class SourceTarget:
     chapter: Chapter | None = None
     plan: ChapterPlan | None = None
     unit: PlanningUnit | None = None
+    scene: Scene | None = None
 
 
 async def resolve_source(db: AsyncSession, project_id: int, source: s.PlanningSource) -> SourceTarget:
     """只读解析与别名规范化；不得按标题、章号或旧整数 ID 猜测重连。"""
     if source.kind == "detached":
         unit = await _unit(db, project_id, source.id)
-        if unit.chapter_id is not None or unit.plan_id is not None:
+        active_scene = await db.scalar(select(Scene.id).where(
+            Scene.id == unit.scene_id, Scene.active.is_(True)
+        )) if unit.scene_id is not None else None
+        if unit.chapter_id is not None or unit.plan_id is not None or active_scene is not None:
             raise ConflictError("规划已经重新关联，请刷新", extra={"code": "planning_source_changed"})
         return SourceTarget(source, unit=unit)
+    if source.kind == "scene":
+        from app.services.planning_scene_service import _scene
+
+        scene, chapter = await _scene(db, project_id, source.id)
+        unit = await db.scalar(select(PlanningUnit).where(
+            PlanningUnit.project_id == project_id, PlanningUnit.scene_id == scene.id,
+            PlanningUnit.source_level == "scene", PlanningUnit.retired.is_(False),
+        ))
+        return SourceTarget(source, chapter=chapter, unit=unit, scene=scene)
     chapter = None
     plan = None
     if source.kind == "plan":
@@ -149,6 +164,12 @@ async def resolve_source(db: AsyncSession, project_id: int, source: s.PlanningSo
 
 async def _materialize(db: AsyncSession, project_id: int, target: SourceTarget) -> PlanningUnit:
     if target.unit is None:
+        if target.scene is not None:
+            target.unit = PlanningUnit(project_id=project_id, source_level="scene", scene_id=target.scene.id,
+                                       last_source_label=target.scene.title)
+            db.add(target.unit)
+            await db.flush()
+            return target.unit
         chapter, plan = target.chapter, target.plan
         outline_id = chapter.outline_id if chapter else plan.outline_id
         outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
@@ -176,6 +197,8 @@ async def _validate_ids(db: AsyncSession, project_id: int, model, ids: list[int]
 
 
 async def _character_ids(db: AsyncSession, target: SourceTarget) -> list[int]:
+    if target.scene:
+        return await _join_ids(db, PlanningUnitCharacter, "character_id", target.unit.id) if target.unit else []
     if target.chapter:
         return list(
             await db.scalars(
@@ -188,7 +211,9 @@ async def _character_ids(db: AsyncSession, target: SourceTarget) -> list[int]:
 
 
 async def _set_characters(db: AsyncSession, target: SourceTarget, ids: list[int]):
-    if target.chapter:
+    if target.scene:
+        await _set_join(db, PlanningUnitCharacter, "character_id", target.unit.id, ids)
+    elif target.chapter:
         from app.services.planning_lifecycle import sync_cast
 
         await sync_cast(db, target.chapter, ids)
@@ -218,10 +243,24 @@ async def _join_ids(db: AsyncSession, model, column: str, unit_id: int) -> list[
 
 
 async def batch_update(db: AsyncSession, user_id: int, project_id: int, body: s.PlanningBatch) -> s.PlanningMutation:
+    content_revisions = []
     async with _editing(db, user_id, project_id, body.expected_revision):
         targets = [await resolve_source(db, project_id, source) for source in body.targets]
         if len({query.source_key(target.source) for target in targets}) != len(targets):
             raise BadRequestError("同一个章节及其细纲不能重复提交")
+        scene_chapters = {target.chapter.id: target.chapter for target in targets if target.scene is not None}
+        expected = {item.chapter_id: item.content_revision for item in body.expected_content_revisions}
+        if set(expected) != set(scene_chapters):
+            raise BadRequestError("场景规划修改必须提供每个受影响章节的内容版本")
+        from app.services import scene_service, version_service
+        from app.services.generation_service import ensure_outside_batch
+
+        for chapter in scene_chapters.values():
+            if chapter.status == "generating":
+                raise ConflictError("该章节正在生成中，请稍候再试")
+            await ensure_outside_batch(db, chapter)
+            await scene_service.check_revision(db, chapter, expected[chapter.id])
+            await version_service.ensure_baseline(db, chapter, force=True)
         if body.pov and body.pov.character_id is not None:
             await _validate_ids(db, project_id, Character, [body.pov.character_id])
         if body.tags:
@@ -235,6 +274,15 @@ async def batch_update(db: AsyncSession, user_id: int, project_id: int, body: s.
                 await _validate_ids(db, project_id, model, ids, relationship=operation.kind == "relationship")
         for target in targets:
             unit = await _materialize(db, project_id, target)
+            if target.scene is not None:
+                await _update_scene_intent(db, project_id, target, body)
+                continue
+            if unit.source_level == "scene":
+                raise BadRequestError("退场场景的规划请先关联同章活动场景后再编辑")
+            if (body.pov is not None and body.pov.op == "inherit"
+                    or body.tags is not None and body.tags.op == "inherit"
+                    or any(operation.op == "inherit" for operation in body.references)):
+                raise BadRequestError("只有场景规划可以恢复章默认继承")
             if body.pov is not None:
                 unit.pov_character_id = body.pov.character_id
             if body.tags is not None:
@@ -249,10 +297,48 @@ async def batch_update(db: AsyncSession, user_id: int, project_id: int, body: s.
                     values = operation.timeline_ids if operation.kind == "relationship" else operation.ids
                     existing = await _join_ids(db, model, column, unit.id)
                     await _set_join(db, model, column, unit.id, _apply(existing, operation.op, values))
+            await db.flush()
+        for chapter in scene_chapters.values():
+            current = await scene_service.touch_revision(db, chapter, expected[chapter.id])
+            await version_service.record(db, chapter, "manual", note="修改场景本地规划")
+            content_revisions.append(s.ChapterContentRevision(chapter_id=chapter.id, content_revision=current))
         await db.flush()
         keys = {query.source_key(target.source) for target in targets}
-        result = [row for row in await query.rows(db, project_id) if row.key in keys]
-    return s.PlanningMutation(revision=body.expected_revision + 1, rows=result)
+        result = [row for row in await query.rows(db, project_id, granularity="all") if row.key in keys]
+    for row in result:
+        if row.scene_planning is not None:
+            row.scene_planning.revision = body.expected_revision + 1
+    return s.PlanningMutation(revision=body.expected_revision + 1, rows=result, content_revisions=content_revisions)
+
+
+async def _update_scene_intent(
+    db: AsyncSession, project_id: int, target: SourceTarget, body: s.PlanningBatch
+) -> None:
+    from app.services.planning_scene_service import _write_raw, resolve_scene_planning
+
+    planning = await resolve_scene_planning(db, project_id, target.scene.id)
+    raw = planning.raw.model_dump(mode="json")
+    if body.pov is not None:
+        raw["modes"]["pov"] = "inherit" if body.pov.op == "inherit" else "override"
+        raw["pov_character_id"] = body.pov.character_id
+    if body.tags is not None:
+        inherit = body.tags.op == "inherit"
+        raw["modes"]["tags"] = "inherit" if inherit else "override"
+        raw["tag_ids"] = [] if inherit else _apply(
+            [tag.id for tag in planning.effective.tags], body.tags.op, body.tags.ids
+        )
+    for operation in body.references:
+        inherit = operation.op == "inherit"
+        raw["modes"][operation.kind] = "inherit" if inherit else "override"
+        raw["references"] = [ref for ref in raw["references"] if ref["kind"] != operation.kind]
+        if not inherit:
+            current = [ref.timeline_id if ref.kind == "relationship" else ref.id
+                       for ref in planning.effective.references if ref.kind == operation.kind]
+            values = operation.timeline_ids if operation.kind == "relationship" else operation.ids
+            raw["references"] += [{"kind": operation.kind,
+                                    "timeline_id" if operation.kind == "relationship" else "id": identity}
+                                   for identity in _apply(current, operation.op, values)]
+    await _write_raw(db, target.unit, s.ScenePlanningRaw.model_validate(raw))
 
 
 async def list_entries(
@@ -363,8 +449,12 @@ async def save_tag(db: AsyncSession, user_id: int, project_id: int, body, tag_id
 
 
 async def delete_tag(db: AsyncSession, user_id: int, project_id: int, tag_id: int, expected_revision: int):
+    from app.services.planning_scene_service import assert_tag_unreferenced
+
     async with _editing(db, user_id, project_id, expected_revision):
-        await db.delete(await _tag(db, project_id, tag_id))
+        tag = await _tag(db, project_id, tag_id)
+        await assert_tag_unreferenced(db, project_id, tag_id)
+        await db.delete(tag)
     return s.PlanningRevision(revision=expected_revision + 1)
 
 
@@ -507,7 +597,7 @@ async def list_crossings(
     db: AsyncSession, user_id: int, project_id: int, *, source=None, subplot_id=None, page=1, page_size=50
 ):
     async def read():
-        all_rows = await query.rows(db, project_id)
+        all_rows = await query.rows(db, project_id, granularity="all")
         items = await query.crossings(db, project_id, all_rows)
         if source:
             target = await resolve_source(db, project_id, source)
@@ -557,7 +647,7 @@ async def save_crossing(db: AsyncSession, user_id: int, project_id: int, body, c
         await db.flush()
         result = next(
             crossing
-            for crossing in await query.crossings(db, project_id, await query.rows(db, project_id))
+            for crossing in await query.crossings(db, project_id, await query.rows(db, project_id, granularity="all"))
             if crossing.id == item.id
         )
     return s.SubplotCrossingMutation(revision=body.expected_revision + 1, item=result)
@@ -570,7 +660,7 @@ async def delete_crossing(db: AsyncSession, user_id: int, project_id: int, cross
 
 
 async def merge_conflict(db: AsyncSession, project_id: int, first: PlanningUnit, second: PlanningUnit) -> ConflictError:
-    all_rows = await query.rows(db, project_id)
+    all_rows = await query.rows(db, project_id, granularity="all")
     units = [row for row in all_rows if row.unit_id in (first.id, second.id)]
     grouped: dict[int, list[s.SubplotNodeOut]] = defaultdict(list)
     for node in await db.scalars(select(SubplotNode).where(SubplotNode.unit_id.in_((first.id, second.id)))):
@@ -601,6 +691,10 @@ async def _target_for_unit(db: AsyncSession, project_id: int, unit: PlanningUnit
         source = s.PlanningSource(kind="chapter", id=unit.chapter_id)
     elif unit.plan_id is not None:
         source = s.PlanningSource(kind="plan", id=unit.plan_id)
+    elif unit.scene_id is not None and await db.scalar(select(Scene.id).where(
+        Scene.id == unit.scene_id, Scene.active.is_(True)
+    )) is not None:
+        source = s.PlanningSource(kind="scene", id=unit.scene_id)
     else:
         source = s.PlanningSource(kind="detached", id=unit.id)
     target = await resolve_source(db, project_id, source)
@@ -610,32 +704,68 @@ async def _target_for_unit(db: AsyncSession, project_id: int, unit: PlanningUnit
 
 
 async def bind_unit(db: AsyncSession, user_id: int, project_id: int, unit_id: int, body: s.PlanningBinding):
+    content_revisions = []
     async with _editing(db, user_id, project_id, body.expected_revision):
         unit = await _unit(db, project_id, unit_id)
         original = await _target_for_unit(db, project_id, unit)
         target = await resolve_source(db, project_id, body.target)
-        if target.unit is not None and target.unit.id != unit.id:
-            raise await merge_conflict(db, project_id, target.unit, unit)
-        character_ids = sorted(set(await _character_ids(db, original)) | set(await _character_ids(db, target)))
-        unit.chapter_id = target.chapter.id if target.chapter else None
-        unit.plan_id = target.plan.id if target.plan else None
-        unit.binding_epoch += 1
-        unit.detached_character_ids = []
-        unit.last_source_label = target.chapter.title if target.chapter else target.plan.title
-        outline_id = target.chapter.outline_id if target.chapter else target.plan.outline_id
-        outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
-        unit.last_volume_label = outline.volume_title if outline else ""
-        target.unit = unit
-        await _set_characters(db, target, character_ids)
-        await db.flush()
-        result = [row for row in await query.rows(db, project_id) if row.unit_id == unit.id]
-    return s.PlanningMutation(revision=body.expected_revision + 1, rows=result)
+        if (unit.source_level == "scene") != (target.scene is not None):
+            raise BadRequestError("场景规划只能关联同章场景，不能跨层重新关联")
+        if unit.source_level == "scene":
+            source_chapter = await db.scalar(select(Scene.chapter_id).join(Chapter, Chapter.id == Scene.chapter_id)
+                                             .where(Scene.id == unit.scene_id, Chapter.project_id == project_id))
+            if source_chapter is None or source_chapter != target.chapter.id:
+                raise BadRequestError("无法证明原场景所属章节，或目标不在同章，不能重新关联")
+            if target.unit is not None and target.unit.id != unit.id:
+                raise await merge_conflict(db, project_id, target.unit, unit)
+            expected = {item.chapter_id: item.content_revision for item in body.expected_content_revisions}
+            if set(expected) != {target.chapter.id}:
+                raise BadRequestError("场景规划重新关联必须提供所属章节内容版本")
+            from app.services import scene_service, version_service
+            from app.services.generation_service import ensure_outside_batch
+
+            if target.chapter.status == "generating":
+                raise ConflictError("该章节正在生成中，请稍候再试")
+            await ensure_outside_batch(db, target.chapter)
+            await scene_service.check_revision(db, target.chapter, expected[target.chapter.id])
+            await version_service.ensure_baseline(db, target.chapter, force=True)
+            unit.scene_id = target.scene.id
+            unit.binding_epoch += 1
+            unit.last_source_label = target.scene.title[:300]
+            await db.flush()
+            current = await scene_service.touch_revision(db, target.chapter, expected[target.chapter.id])
+            await version_service.record(db, target.chapter, "manual", note="重新关联场景规划")
+            content_revisions.append(s.ChapterContentRevision(chapter_id=target.chapter.id, content_revision=current))
+            result = [row for row in await query.rows(db, project_id, granularity="scene") if row.unit_id == unit.id]
+        else:
+            result = await _bind_chapter_unit(db, project_id, unit, original, target)
+    return s.PlanningMutation(revision=body.expected_revision + 1, rows=result, content_revisions=content_revisions)
+
+
+async def _bind_chapter_unit(db, project_id, unit, original, target):
+    if target.unit is not None and target.unit.id != unit.id:
+        raise await merge_conflict(db, project_id, target.unit, unit)
+    character_ids = sorted(set(await _character_ids(db, original)) | set(await _character_ids(db, target)))
+    unit.chapter_id = target.chapter.id if target.chapter else None
+    unit.plan_id = target.plan.id if target.plan else None
+    unit.binding_epoch += 1
+    unit.detached_character_ids = []
+    unit.last_source_label = target.chapter.title if target.chapter else target.plan.title
+    outline_id = target.chapter.outline_id if target.chapter else target.plan.outline_id
+    outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
+    unit.last_volume_label = outline.volume_title if outline else ""
+    target.unit = unit
+    await _set_characters(db, target, character_ids)
+    await db.flush()
+    return [row for row in await query.rows(db, project_id) if row.unit_id == unit.id]
 
 
 async def merge_units(db: AsyncSession, user_id: int, project_id: int, body: s.PlanningMerge):
     async with _editing(db, user_id, project_id, body.expected_revision):
         survivor = await _unit(db, project_id, body.survivor_unit_id)
         other = await _unit(db, project_id, body.other_unit_id)
+        if survivor.source_level == "scene" or other.source_level == "scene":
+            raise BadRequestError("场景规划不能使用章级合并；请在同章场景合并预览中明确选择元数据")
         if other.chapter_id is not None and survivor.chapter_id is None:
             raise await merge_conflict(db, project_id, survivor, other)
         left = await _target_for_unit(db, project_id, survivor)
@@ -705,6 +835,20 @@ async def _nodes(db: AsyncSession, project_id: int, unit_ids=None) -> list[s.Sub
     ]
 
 
+async def _check_row_content_revisions(db: AsyncSession, project_id: int, rows: list[s.PlanningRow]) -> None:
+    expected = {row.chapter_id: row.content_revision for row in rows if row.chapter_id is not None}
+    ids = list(expected)
+    with db.no_autoflush:
+        for start in range(0, len(ids), 500):
+            current = dict((await db.execute(select(Chapter.id, Chapter.content_revision).where(
+                Chapter.project_id == project_id, Chapter.id.in_(ids[start:start + 500]),
+            ))).all())
+            if current != {identity: expected[identity] for identity in ids[start:start + 500]}:
+                raise ConflictError("场景正文或结构在读取期间已变化，请刷新规划视图", extra={
+                    "code": "scene_context_changed",
+                })
+
+
 async def matrix(
     db: AsyncSession,
     user_id: int,
@@ -722,9 +866,10 @@ async def matrix(
     entity_kind=None,
     entry_q=None,
     source_refs=None,
+    granularity="chapter",
 ):
     async def read():
-        all_rows = await query.rows(db, project_id)
+        all_rows = await query.rows(db, project_id, granularity="scene" if source_kind == "scene" else granularity)
         candidates = await load_candidates(db, project_id)
         catalog = await query.entries(db, project_id, candidates=candidates)
         subplots = await _subplot_outs(db, project_id)
@@ -825,7 +970,7 @@ async def matrix(
         for column in columns:
             if column.selection.kind == "setting":
                 ref = column.selection.reference
-                definite, ambiguous = counts.get((row.chapter_id, column.key), (0, 0))
+                definite, ambiguous = counts.get((row.key, column.key), (0, 0))
                 cells.append(
                     s.MatrixSettingCell(
                         row_key=row.key,
@@ -836,6 +981,9 @@ async def matrix(
                         has_content=row.has_content,
                         mention_count=definite,
                         ambiguous_count=ambiguous,
+                        manual_source=getattr(row.scene_planning.effective.sources, ref.kind)
+                        if row.scene_planning else None,
+                        pov_source=row.scene_planning.effective.sources.pov if row.scene_planning else None,
                     )
                 )
             else:
@@ -854,6 +1002,7 @@ async def matrix(
         current_revision = await query.revision(db, project_id)
     if current_revision != rev:
         raise _stale(current_revision)
+    await _check_row_content_revisions(db, project_id, selected)
     return s.PlanningMatrix(
         revision=rev,
         rows=selected,
@@ -873,26 +1022,31 @@ async def _mention_counts(
     candidates: list[MentionCandidate],
 ):
     keys = {column.key for column in columns if column.tracking_supported}
-    chapter_ids = [row.chapter_id for row in rows if row.chapter_id is not None]
-    if not keys or not chapter_ids:
+    chapter_ids = [row.chapter_id for row in rows if row.source.kind == "chapter"]
+    scene_ids = [row.scene_id for row in rows if row.source.kind == "scene"]
+    if not keys or not (chapter_ids or scene_ids):
         return {}
-    documents = list(
-        await db.execute(
+    documents = [(f"chapter:{identity}", "chapter", identity, content) for identity, content in
+                 await db.execute(
             select(Chapter.id, Chapter.content).where(Chapter.project_id == project_id, Chapter.id.in_(chapter_ids))
-        )
-    )
+        )] if chapter_ids else []
+    if scene_ids:
+        documents += [(f"scene:{identity}", "scene", identity, content) for identity, content in
+                      await db.execute(select(Scene.id, Scene.content).join(Chapter, Chapter.id == Scene.chapter_id)
+                                       .where(Chapter.project_id == project_id, Scene.id.in_(scene_ids),
+                                              Scene.active.is_(True)))]
 
     def count():
         dictionary = candidate_dictionary(candidates)
         found = {}
-        for chapter_id, content in documents:
-            for hit in cache.iter_matches((project_id, "chapter", chapter_id), content, dictionary):
+        for row_key, source_kind, source_id, content in documents:
+            for hit in cache.iter_matches((project_id, source_kind, source_id), content, dictionary):
                 owners = match_entities(hit, dictionary)
                 bucket = 0 if len(owners) == 1 else 1
                 for owner in owners:
                     key = f"{owner.kind}:{owner.id}"
                     if key in keys:
-                        counts = found.setdefault((chapter_id, key), [0, 0])
+                        counts = found.setdefault((row_key, key), [0, 0])
                         counts[bucket] += 1
         return found
 
@@ -913,7 +1067,7 @@ async def weave(
     gap_threshold=5,
 ):
     async def read():
-        all_rows = await query.rows(db, project_id)
+        all_rows = await query.rows(db, project_id, granularity="scene" if axis == "scene" else "chapter")
         nodes = list(
             await db.execute(
                 select(SubplotNode.unit_id, SubplotNode.subplot_id)
@@ -940,7 +1094,8 @@ async def weave(
     by_unit = {row.unit_id: row for row in axis_rows if row.unit_id is not None}
     rank = {row.key: index for index, row in enumerate(axis_rows)}
     labels = {
-        row.key: (f"第 {row.chapter_no} 章 · {row.title}" if row.chapter_no is not None
+        row.key: (f"第 {row.chapter_no} 章 · 场景 {row.scene_sort + 1} · {row.title}" if row.scene_id is not None
+                  else f"第 {row.chapter_no} 章 · {row.title}" if row.chapter_no is not None
                   else f"第 {row.volume_no} 卷 · 细纲 {row.seq} · {row.title}")
         for row in axis_rows
     }
@@ -995,6 +1150,7 @@ async def weave(
         current_revision = await query.revision(db, project_id)
     if current_revision != rev:
         raise _stale(current_revision)
+    await _check_row_content_revisions(db, project_id, axis_rows)
     return s.PlanningWeave(
         revision=rev,
         axis=axis,

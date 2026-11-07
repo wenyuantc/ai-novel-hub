@@ -1,4 +1,5 @@
 import { ApiError, request } from './client'
+import { storyPositionQuery } from '../utils/storyPosition'
 import type {
   SettingEntryType, SettingFieldDefinitionCreate, SettingFieldDefinitionList, SettingFieldDefinitionMutation,
   SettingFieldDefinitionUpdate, SettingFieldOptionCreate, SettingFieldOptionMutation, SettingFieldOptionUpdate,
@@ -16,10 +17,7 @@ export const settingFieldsApi = {
   listEntries: (pid: number, query: { types?: SettingEntryType[]; q?: string; page?: number; page_size?: number } = {}, signal?: AbortSignal) =>
     request<SettingEntryPage>(`/projects/${pid}/setting-entries`, { query: { ...query }, signal }),
   getEntryFields: (pid: number, entry: SettingEntryRef, position: ProgressionPositionInput | null = null, signal?: AbortSignal) =>
-    request<SettingEntryFields>(entryFields(pid, entry), { query: position ? {
-      chapter_id: position.anchor_kind === 'chapter' ? position.chapter_id : undefined,
-      chapter_no: position.anchor_kind === 'planned' ? position.chapter_no : undefined, boundary: position.boundary,
-    } : undefined, signal }),
+    request<SettingEntryFields>(entryFields(pid, entry), { query: position ? { ...storyPositionQuery(position) } : undefined, signal }),
   updateBaseline: (pid: number, entry: SettingEntryRef, definitionId: number, body: SettingFieldValueWrite, signal?: AbortSignal) =>
     request<SettingEntryFields>(`${entryFields(pid, entry)}/${definitionId}/baseline`, { method: 'PATCH', body, signal }),
   createProgression: (pid: number, entry: SettingEntryRef, definitionId: number, body: SettingFieldProgressionCreate, signal?: AbortSignal) =>

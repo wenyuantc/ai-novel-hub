@@ -14,7 +14,7 @@ import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
 import { invalidateProject } from '../../utils/projectRefresh'
 import ChapterPositionInput from '../progressions/ChapterPositionInput'
-import { describeAnchor, toPositionInput } from '../progressions/position'
+import { describeAnchor, describeBoundary, toPositionInput } from '../progressions/position'
 
 const STATUS_OPTIONS = Object.entries(MEMBER_STATUS).map(([value, item]) => ({ value, label: item.label }))
 const EMPTY_STATE: MemberState = { position: '', status: 'active', note: '' }
@@ -37,7 +37,7 @@ function draftChanged(draft: Draft): boolean {
 }
 
 function positionKey(mode: 'baseline' | 'progression', position: ProgressionPositionInput): string {
-  return mode === 'baseline' ? 'baseline' : `${position.anchor_kind}:${position.chapter_id ?? ''}:${position.chapter_no ?? ''}:${position.boundary}`
+  return mode === 'baseline' ? 'baseline' : `${position.anchor_kind}:${position.scene_id ?? ''}:${position.chapter_id ?? ''}:${position.chapter_no ?? ''}:${position.boundary}`
 }
 
 function snapshotText(snapshot: MemberSnapshot): string {
@@ -390,8 +390,8 @@ export function MembershipEditor({ projectId, target, chapters, onClose, onChang
           <List size="small" dataSource={events?.items ?? []} locale={{ emptyText: '暂无剧情变化' }} renderItem={(event) => <List.Item actions={[
             <Button key="edit" type="link" size="small" onClick={() => setEventEditing(event)}>{canEdit ? '编辑' : '查看'}</Button>,
             <Popconfirm key="delete" title="删除这条剧情变化？" description="其余历史将重新计算。" onConfirm={() => void deleteEvent(event)}><Button type="link" size="small" danger disabled={!canEdit || saving}>删除</Button></Popconfirm>,
-          ]}><List.Item.Meta title={<Space wrap><span>{EVENT_LABELS[event.field_key ?? ''] ?? '未知变化'}</span>{event.operation === 'append' && <Tag>追加</Tag>}{event.orphaned && <Tag color="warning">关联章节已删除</Tag>}</Space>}
-            description={<><span>{describeAnchor(event, chapters)} · {event.boundary === 'start' ? '从本章起' : '本章结束后'}</span><br /><span style={{ whiteSpace: 'pre-wrap' }}>{formatMemberEvent(event)}</span></>} /></List.Item>} />
+          ]}><List.Item.Meta title={<Space wrap><span>{EVENT_LABELS[event.field_key ?? ''] ?? '未知变化'}</span>{event.operation === 'append' && <Tag>追加</Tag>}{event.orphaned && <Tag color="warning">{event.anchor_kind === 'scene' ? '场景已退场或失联' : '关联章节已删除'}</Tag>}</Space>}
+            description={<><span>{describeAnchor(event, chapters)} · {describeBoundary(event)}</span><br /><span style={{ whiteSpace: 'pre-wrap' }}>{formatMemberEvent(event)}</span></>} /></List.Item>} />
           {events && events.total > 50 && <Space><Button size="small" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</Button><span>第 {page} 页</span><Button size="small" disabled={page * 50 >= events.total} onClick={() => setPage(page + 1)}>下一页</Button></Space>}
         </Card>}
         {timelineId !== null && <Popconfirm title="删除全部成员资料和历史？" description="该角色在此组织的所有基础设定和剧情变化都会删除，无法撤销。" okText="删除全部历史" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void deleteRecord()}><Button danger disabled={!canEdit || saving || !loaded || !!error || conflict}>删除完整成员资料</Button></Popconfirm>}
@@ -423,7 +423,7 @@ function formatMemberEvent(event: SettingProgression): string {
 function MembershipEventEditor({ projectId, timelineId, event, revision, chapters, onClose, onChanged }: { projectId: number; timelineId: number; event: SettingProgression; revision: number; chapters: ChapterBrief[]; onClose: () => void; onChanged: () => void }) {
   const { canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
   const { modal } = App.useApp()
-  const originalPosition: ProgressionPositionInput = { anchor_kind: event.anchor_kind, chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary }
+  const originalPosition: ProgressionPositionInput = { anchor_kind: event.anchor_kind, ...(event.anchor_kind === 'scene' ? { scene_id: event.scene_id } : {}), chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary }
   const initialPresence = event.field_key === 'presence' ? eventPresence(event) : null
   const [position, setPosition] = useState<ProgressionPositionInput>(originalPosition)
   const [value, setValue] = useState(() => typeof event.value === 'string' ? event.value : '')

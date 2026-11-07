@@ -22,6 +22,7 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
+from app.schemas.scene_ai import SceneTarget, parse_target
 from app.schemas.skill import SkillRef
 from app.schemas.task import TaskOut
 from app.services import project_lifecycle, task_statistics_service
@@ -71,9 +72,14 @@ def visible_task_project_exists():
 # ---------------- 序列化 ----------------
 
 
-def _request_int(task: Task, key: str) -> int | None:
+def _request_dict(task: Task) -> dict[str, Any]:
+    """历史JSON不保证是对象；只读投影不能修写或把损坏target当合法目标。"""
     request = (task.input or {}).get("request") if isinstance(task.input, dict) else None
-    value = request.get(key) if isinstance(request, dict) else None
+    return request if isinstance(request, dict) else {}
+
+
+def _request_int(task: Task, key: str) -> int | None:
+    value = _request_dict(task).get(key)
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
@@ -98,10 +104,18 @@ def _skill_ref(task: Task) -> SkillRef | None:
 
 def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine | None" = None) -> TaskOut:
     out = TaskOut.model_validate(task)
+    try:
+        target = parse_target(_request_dict(task).get("target"))
+    except ValidationError:
+        target = None
+    scene_id = (target.scene_id if isinstance(target, SceneTarget) and task.kind in (
+        "chapter.generate", "chapter.polish", "chapter.revise",
+    ) else None)
     update_fields: dict[str, Any] = {
         "queue_position": queue_position if task.status == "queued" else None,
         "character_id": _subject_character_id(task),
         "analysis_id": _revise_analysis_id(task),
+        "scene_id": scene_id if type(scene_id) is int and scene_id > 0 else None,
         "outline_id": _request_int(task, "outline_id") if task.kind == "outline.expand" else None,
         "skill": _skill_ref(task),
     }

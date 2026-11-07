@@ -50,6 +50,7 @@ from app.models import (
     Relationship,
     RelationshipHistory,
     RelationshipType,
+    Scene,
     SettingAiLink,
     SettingCategory,
     SettingCategoryRule,
@@ -66,6 +67,7 @@ from app.models.planning import (
     PlanningTag,
     PlanningUnit,
     PlanningUnitCareer,
+    PlanningUnitCharacter,
     PlanningUnitOrganization,
     PlanningUnitRelationship,
     PlanningUnitTag,
@@ -278,6 +280,11 @@ RULES: tuple[TableRule, ...] = (
         deferred=frozenset({"plan_id"}),
         # 经 styles[] 的 ref 映射（style_ref）
         custom=("style_id",),
+        exclude=("content_revision",),  # 新书独立运行代次，不复制源书并发状态。
+    ),
+    TableRule(
+        "scenes", Scene, lambda pid: _in(Scene.chapter_id, Chapter, pid),
+        fk={"chapter_id": "chapters"},
     ),
     TableRule(
         "chapter_plans",
@@ -327,6 +334,7 @@ RULES: tuple[TableRule, ...] = (
         lambda pid: _in(ChapterVersion.chapter_id, Chapter, pid),
         option="versions",
         fk={"chapter_id": "chapters", "generation_log_id": "generation_logs"},
+        json_refs={"scene_snapshot": remap.scene_snapshot},
     ),
     TableRule(
         "chapter_analyses",
@@ -394,7 +402,7 @@ RULES: tuple[TableRule, ...] = (
         SettingProgression,
         lambda pid: _in(SettingProgression.timeline_id, SettingTimeline, pid),
         fk={"timeline_id": "setting_timelines", "custom_field_id": "setting_text_fields", "chapter_id": "chapters",
-            "source_change_id": "analysis_changes", "superseded_by_id": "setting_progressions"},
+            "scene_id": "scenes", "source_change_id": "analysis_changes", "superseded_by_id": "setting_progressions"},
         deferred=frozenset({"superseded_by_id"}),
         # value 的裸 stage_id 在 importer 中按 field_key 选择被引用表，再复用此 remapper。
         json_refs={"value": remap.setting_payload},
@@ -410,13 +418,19 @@ RULES: tuple[TableRule, ...] = (
     ),
     TableRule(
         "planning_units", PlanningUnit, _own(PlanningUnit), fill=_P,
-        fk={"chapter_id": "chapters", "plan_id": "chapter_plans", "pov_character_id": "characters"},
+        fk={"chapter_id": "chapters", "plan_id": "chapter_plans", "scene_id": "scenes",
+            "pov_character_id": "characters"},
         json_refs={"detached_character_ids": remap.id_list("characters")},
     ),
     TableRule("planning_tags", PlanningTag, _own(PlanningTag), fill=_P),
     TableRule(
         "planning_unit_tags", PlanningUnitTag, lambda pid: _in(PlanningUnitTag.unit_id, PlanningUnit, pid),
         fk={"unit_id": "planning_units", "tag_id": "planning_tags"},
+    ),
+    TableRule(
+        "planning_unit_characters", PlanningUnitCharacter,
+        lambda pid: _in(PlanningUnitCharacter.unit_id, PlanningUnit, pid),
+        fk={"unit_id": "planning_units", "character_id": "characters"},
     ),
     TableRule(
         "planning_unit_world", PlanningUnitWorld, lambda pid: _in(PlanningUnitWorld.unit_id, PlanningUnit, pid),

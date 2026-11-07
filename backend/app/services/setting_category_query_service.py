@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.errors import BadRequestError, ConflictError, NotFoundError, UnauthorizedError
 from app.models import Project, SettingCategory, SettingCategoryRule
 from app.schemas import setting_categories as s
-from app.schemas.progression import StoryPosition
 from app.schemas.setting_fields import DefinitionOut, OptionOut
 from app.services import authorization_service as authz
 from app.services import setting_catalog_service as catalog
@@ -20,7 +19,6 @@ from app.services.project_service import get_manageable_project
 from app.services.setting_category_matcher import match_category
 from app.services.setting_category_validation import validate_category_spec_metadata
 from app.services.setting_field_values import is_positive_db_int
-from app.services.setting_progression_service import _chapter_for_anchor
 
 
 @dataclass(frozen=True)
@@ -192,13 +190,11 @@ async def query_category_entries(
             spec = draft
             retained = (await load_category(db, project_id, editing_category_id)).rules if editing_category_id else ()
         metadata = await validate_category_spec(db, project_id, spec, retained_rules=retained)
-        chapter_no = filters.chapter_no
-        if filters.chapter_id is not None:
-            chapter_no = (await _chapter_for_anchor(db, project_id, filters.chapter_id)).chapter_no
-        position = (
-            StoryPosition(chapter_id=filters.chapter_id, chapter_no=chapter_no, boundary=filters.boundary)
-            if chapter_no
-            else None
+        from app.services.setting_progression_service import resolve_story_position
+
+        position = await resolve_story_position(
+            db, project_id, chapter_id=filters.chapter_id, chapter_no=filters.chapter_no,
+            scene_id=filters.scene_id, boundary=filters.boundary, optional=True,
         )
         types = [
             entry_type for entry_type in spec.applicable_types if filters.types is None or entry_type in filters.types

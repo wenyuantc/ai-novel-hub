@@ -64,7 +64,7 @@ def _seed_fields(conn):
     options = Base.metadata.tables["setting_field_options"]
     handles = Base.metadata.tables["setting_reference_handles"]
     fields = _historical_table(conn, "setting_text_fields")
-    events = Base.metadata.tables["setting_progressions"]
+    events = _historical_table(conn, "setting_progressions")
     for definition_id, field_type, label in (
         (11, "text", "经历"), (12, "line", "称号"), (13, "dropdown", "阵营"), (14, "reference", "驻地"),
     ):
@@ -187,7 +187,7 @@ def _record_migration_fk_states(monkeypatch, foreign_keys):
 
 
 def _effective_values(conn):
-    fields = Base.metadata.tables["setting_text_fields"]
+    fields = _historical_table(conn, "setting_text_fields")
     values = dict(conn.execute(select(fields.c.id, fields.c.base_value).where(fields.c.timeline_id == 101)).all())
     specs = {
         201: FieldSpec("text"), 203: FieldSpec("text"), 221: FieldSpec("text", definition_id=11),
@@ -196,9 +196,8 @@ def _effective_values(conn):
         224: FieldSpec("reference", definition_id=14, reference_handle_ids=frozenset({31, 32})),
     }
     events = []
-    for row in conn.execute(select(Base.metadata.tables["setting_progressions"]).where(
-        Base.metadata.tables["setting_progressions"].c.timeline_id == 101
-    )).mappings():
+    event_table = _historical_table(conn, "setting_progressions")
+    for row in conn.execute(select(event_table).where(event_table.c.timeline_id == 101)).mappings():
         events.append(ProgressionEvent(**{
             key: row[key] for key in ProgressionEvent.__dataclass_fields__ if key in row
         }, resolved_chapter_no=20 if row["chapter_id"] == 5 else None))

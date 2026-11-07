@@ -5,7 +5,7 @@ import type { SettingProgression, SettingProgressionInput } from '../../api/type
 import ProgressionEditorFields from './ProgressionEditorFields'
 import { buildProgressionInput, compareEditedEvent, initialProgressionDraft, isStaleRevisionError, progressionField, progressionReference, progressionValueLabel, type ProgressionFieldChoice } from './fields'
 import { fieldValueFromRaw } from '../settingFields/valueDraft'
-import { describeAnchor, type ChapterReference } from './position'
+import { describeAnchor, describeBoundary, type ChapterReference } from './position'
 
 interface Props {
   projectId: number
@@ -100,7 +100,7 @@ export default function ProgressionEditModal({ projectId, open = true, event, ti
     >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {event?.source === 'analysis' && <Alert type="info" showIcon message="保存后，此变化会作为作者维护的内容，不会被重新分析静默覆盖。" />}
-        {event?.orphaned && <Alert type="warning" showIcon message="原关联章节已删除，请选择新的生效位置后保存。" />}
+        {event?.orphaned && <Alert type="warning" showIcon message="原关联章节或场景已失联，请选择新的生效位置后保存。" />}
         {error && <Alert type={conflict ? 'warning' : 'error'} showIcon message={error} description={conflict ? '内容已保留。请先读取最新版本并核对，再决定是否保存。' : undefined} />}
         {externallyChanged && <Alert type="warning" showIcon message="条目或字段配置已更新，当前草稿仍保留，请读取最新版本并比较。" />}
         {(conflict || externallyChanged) && <Button onClick={() => void refresh()} loading={busy}>读取最新版本</Button>}
@@ -112,7 +112,7 @@ export default function ProgressionEditModal({ projectId, open = true, event, ti
             message="这条变化在编辑期间已被修改"
             description={(
               <Space direction="vertical">
-                <Typography.Text>当前记录：{describeAnchor(latest, chapters)} · {latest.boundary === 'start' ? '从本章起' : '本章结束后'} · {latest.operation === 'append' ? '追加' : '替换'}</Typography.Text>
+                <Typography.Text>当前记录：{describeAnchor(latest, chapters)} · {describeBoundary(latest)} · {latest.operation === 'append' ? '追加' : '替换'}</Typography.Text>
                 <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{progressionValueLabel(latest, progressionField(latest, fields))}</Typography.Paragraph>
               </Space>
             )}

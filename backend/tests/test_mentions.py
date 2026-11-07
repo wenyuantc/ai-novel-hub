@@ -360,6 +360,10 @@ async def test_ai_save_and_version_restore_recompute_mentions(client, app, fake_
     task = await wait_task(client, response.json()["id"])
     assert task["status"] == "succeeded", task
     assert (await get_json(client, url, **query))["total"] == 1
-    restored = await client.post(f"{versions_url}/{original['id']}/restore")
+    current = (await client.get(f"{data['base']}/chapters/{chapter_id}")).json()
+    restored = await client.post(
+        f"{versions_url}/{original['id']}/restore",
+        json={"expected_content_revision": current["content_revision"]},
+    )
     assert restored.status_code == 200, restored.text
     assert (await get_json(client, url, **query))["total"] == 4

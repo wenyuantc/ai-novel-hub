@@ -56,7 +56,7 @@ async def test_effects_capture_catalog_and_never_snapshot_field_revision(ctx):
     after = await effects.snapshot(ctx.db, ctx.project_id)
     assert {"setting_field_definitions", "setting_field_options", "setting_reference_handles"} <= effects.EFFECT_TABLES
     assert "fields_revision" not in after["projects"][str(ctx.project_id)]
-    assert all(item["format_version"] == 5 for item in effects.diff(before, after))
+    assert all(item["format_version"] == 6 for item in effects.diff(before, after))
 
 
 @pytest.mark.parametrize("value", [{"line": "筑基"}, {"dropdown": {"option_id": 2}}, {"dropdown": None},

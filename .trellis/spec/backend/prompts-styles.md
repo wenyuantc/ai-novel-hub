@@ -41,7 +41,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
-| 章节 | `chapter.generate`、`chapter.continue`（只有 user 段，结果只取 user）、`chapter.polish`、`chapter.revise`、`chapter.rewrite`（`op` 在模板里 if 分支） | generate/revise/rewrite：`planning_context`；rewrite另有`setting_context` |
+| 章节 | `chapter.generate`、`chapter.continue`（只有 user 段，结果只取 user）、`chapter.polish`、`chapter.revise`、`chapter.rewrite`（`op` 在模板里 if 分支） | generate/polish/revise/rewrite：`planning_context`、`scene_context`；rewrite另有`setting_context` |
 | 分析 | `analysis.chapter` | `output_schema`（有伏笔清单时是带 ref_id 的结构）、`json_rule` |
 | 向导 | `wizard.world` / `wizard.characters` / `wizard.outline` / `wizard.careers`；`wizard.continue`（从中断处继续的续写指令，只有 user 段，变量 `generated_chars`，接在原对话 + assistant 已输出内容之后） | `json_rule`、`output_format`（`wizard.continue` 无） |
 | 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` / `relations.generate` | `json_rule`、`output_format` |
@@ -59,9 +59,10 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
   build 函数新增关键字参数 `knowledge: str = ""`（大纲另有 `memories: str = ""`）。章节类模板不加变量：检索块由 `context_builder` 拼进 `{{ context }}`。
   新增这些变量会改变默认模板指纹，已覆盖的用户会看到「默认已更新」；覆盖里没有引用变量时不注入。
 
-- **规划块**：generate/revise/rewrite新增独立锁定`planning_context`；空值保持旧消息逐字不变，旧覆盖漏变量由锁定兜底补一次。只读目标章投影包括POV、节点、完整交汇及全类型显式参考，不含未来节点和支线作者概览；预算从普通上下文中预留，局部scope仅作背景。批量逐章读取，自动续写复用首轮规划快照。见[规划契约](./planning.md)。
+- **规划块**：generate/polish/revise/rewrite使用锁定`planning_context`；空规划不增加剧情指令，旧覆盖漏变量由锁定兜底补一次。Scene使用逐项有效规划及scene start，排除never／隐藏字段，不含未来节点和作者支线概览；局部scope仅作背景。自动续写沿用首轮规划但每次发送核验原stamp，失效停止且不采纳旧提案。见[规划](./planning.md)。
+- **场景范围块**：上述四类builder另接`scene_context`，默认模板／registry同步声明锁定变量，旧覆盖缺失时追加一次。内部`scene.scope.user.j2`经`prompts/scene.py::render_scene_scope`渲染身份、标题、作者摘要、当前序号／总数、分配目标字数、前景衔接及selection范围，不是新增可编辑模板key。结构化POV／引用只从已过滤planning_context进入，不把原始ScenePlanningOut拼进范围块。整章后景用暂存前景而非旧DB正文；范围块非空时不承诺旧整条消息parity。见[场景](./scenes.md)。
 
-- **局部改写设定块**：`chapter.rewrite` 的锁定变量 `setting_context` 由 `build_setting_context` 以目标章初计算并限预算；默认模板直接引用，空块保持旧输出逐字一致。旧覆盖模板未包含该变量时通过锁定变量兜底追加，避免改写第 5 章时读取第 20 章之后的状态。
+- **局部改写设定块**：`chapter.rewrite`锁定`setting_context`由`build_setting_context`以目标章初／Scene开始位置计算并限预算；旧覆盖缺失仍兜底追加，避免早期写作读取未来状态。
 
 - **Skill 变量**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
   - `skill_guide`（`SKILL_GUIDE_VAR`，非必需、未锁定、sample 为空）声明在 `chapter.generate` / `chapter.polish` / `chapter.revise` / `chapter.rewrite`

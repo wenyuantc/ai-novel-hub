@@ -128,21 +128,39 @@ async def test_connectivity_test_never_thinks(client, fake_llm):
     assert fake_llm.calls[-1]["max_tokens"] == 16
 
 
-async def test_chapter_context_budget_from_config(client, fake_llm, monkeypatch):
+@pytest.mark.parametrize(("context_k", "output_k"), [(32, 8), (16, 4)])
+async def test_chapter_context_budget_from_config(client, fake_llm, monkeypatch, context_k, output_k):
     _, base, o1, _ = await _setup(client)
-    await create_ai_config(client, context_window_k=32, max_output_k=8)
+    await create_ai_config(client, context_window_k=context_k, max_output_k=output_k)
     ch = (await client.post(f"{base}/chapters", json={"outline_id": o1["id"]})).json()
     seen = []
+    scopes = []
     original = generation_service.build_chapter_context
+    original_scope = generation_service.scene_ai_context.scope_block
 
     async def _spy(db, project, chapter, budget, **kw):
-        seen.append(budget)
-        return await original(db, project, chapter, budget, **kw)
+        text = await original(db, project, chapter, budget, **kw)
+        seen.append((budget, len(text), kw["planning"].reserved_chars))
+        return text
+
+    def _scope_spy(**kw):
+        text = original_scope(**kw)
+        scopes.append(text)
+        return text
 
     monkeypatch.setattr(generation_service, "build_chapter_context", _spy)
+    monkeypatch.setattr(generation_service.scene_ai_context, "scope_block", _scope_spy)
     fake_llm.push("正文")
     await run_task(client, await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000}))
-    assert seen == [(32 - 8) * 1000 - 4000]
+    assert len(seen) == len(scopes) == 1
+    configured_budget = (context_k - output_k) * 1000 - 4000
+    ordinary_budget, actual_chars, planning_chars = seen[0]
+    # 范围块与规划、普通资料使用同一配置预算，而不是额外无限追加。
+    reserved_chars = len(scopes[0]) + 2 + planning_chars
+    assert ordinary_budget + reserved_chars == configured_budget
+    assert actual_chars <= ordinary_budget < configured_budget
+    assert actual_chars + reserved_chars <= configured_budget
+    assert "【场景写作范围（锁定）】" in scopes[0]
 
 
 def _cfg(**kw) -> AIConfig:

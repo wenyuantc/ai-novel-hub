@@ -1,10 +1,10 @@
-# 设定随剧情演变（章节级时间线）
+# 设定随剧情演变（章节与场景时间线）
 
 ## 场景：基础值、章节变化及有效设定
 
 ### 1. 范围 / 触发条件
 
-新增或修改角色、世界观、关系、职业挂接、组织成员、组织定义、职业定义、章节位置，以及生成、重写、分析写回、备份或智能体撤销时，必须保持同一套故事时间语义。实现位于 `models/progressions.py`、`setting_progression_resolver.py`、`setting_progression_service.py` 与 `api/v1/progressions.py`。当前只支持章节与章初/章末，不提供独立场景。四类自定义字段与0035持久身份见[自定义设定字段](./setting-fields.md)。
+新增或修改角色、世界观、关系、职业挂接、组织成员、组织定义、职业定义、章节／场景位置，以及生成、重写、分析写回、备份或智能体撤销时，必须保持同一套故事时间语义。实现位于 `models/progressions.py`、`setting_progression_resolver.py`、`setting_progression_service.py` 与 `api/v1/progressions.py`。0039新增真实场景开始／结束，旧章初／章末语义不变。四类字段见[自定义设定字段](./setting-fields.md)，结构保护见[独立场景](./scenes.md)。
 
 ### 2. 签名
 
@@ -19,12 +19,16 @@ await apply_baseline(db, timeline, data: BaselineUpdate, *, materialize=True, ..
 await apply_progression(db, timeline, data, ...)
 await materialize_project(db, project_id)
 await on_story_positions_changed(db, project_id)
+await resolve_scene_position(db, project_id, scene_id, boundary="start")
 # context_builder.py
-await build_setting_context(db, project, chapter, *, text_hint="", budget=4000)
+await build_setting_context(db, project, chapter, *, text_hint="", budget=4000,
+                            position=None, manual_character_ids=None,
+                            source_text=None, preceding_text=None)
 ```
 
 - `GET/POST /api/v1/projects/{pid}/setting-timelines`；`GET/PATCH /{timeline_id}/baseline`；`GET/POST /{timeline_id}/progressions`；`GET/PATCH/DELETE /{timeline_id}/progressions/{event_id}`；`GET /{timeline_id}/effective`；`GET/POST /{timeline_id}/text-fields`、`PATCH/DELETE /{timeline_id}/text-fields/{field_id}`。以上后缀均接在 `setting-timelines` 下。
 - `GET /api/v1/projects/{pid}/chapters/{cid}/setting-context` 返回 `{position: {chapter_id, chapter_no, boundary: "start"}, text, legacy_unverified_count, warnings}`，是人工只读预览，不是完整提示词。
+- 对应`/chapters/{cid}/scenes/{sid}/setting-context`返回Scene开始位置；effective、字段按位置查询和分类结果支持互斥的`scene_id`，不能将选中场景退回章初。
 - 数据表：`setting_timelines` 保存主体、`baseline`、`baseline_status` 与 `revision`；`setting_text_fields` 保存文本自定义字段；`setting_progressions` 保存变化、位置、来源和保护状态。迁移为 `0031_setting_progressions`。事件 `source_change_id` 外键为 `ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED`：同一事务删章会同时触发章节和分析来源级联，PostgreSQL 必须延迟引用校验才能让两列均置空。
 
 ### 3. 契约
@@ -33,10 +37,11 @@ await build_setting_context(db, project, chapter, *, text_hint="", budget=4000)
 - 基础值是故事起点，当前档案是应用全部有效变化后的投影；读早期章节时绝不能用当前投影替代基础值。已有作品迁移只以现有档案建立 `legacy_unverified` 基础值，旧历史只读，不推断缺失状态。作者显式核对并确认后才标为 `confirmed`；新建主体基线为 `confirmed`。
 - 创建变化必须带 `expected_revision`、`operation: append | replace`、字段（内置 `field_key` 或 `custom_field_id` 恰选一个）及位置。`anchor_kind: chapter` 指向同项目 `chapter_id`；`planned` 指定数字 `chapter_no`，即使同号章节存在也不自动绑定。`boundary: start | end` 表示本章开始或结束后生效；旧实体接口未指定锚类型时保留原章号适配行为。
 - 求值先复制基线，排除无效及孤儿事件，再按 `(章号, start 在 end 前, automatic 在 confirmed/manual 前, sort_order, id)` 应用。追加只用于非空文本，以换行连接；替换写入目标值。章节 ID 跟随重排，计划章号由 `CHAPTER_NO_REFS` 平移；删除绑定章节后事件保留为孤儿且不生效，不因重建同号章节自动恢复。
+- `anchor_kind:scene`只接`scene_id`和boundary，不混章ID／计划号。StoryPosition的`scene_order`由服务端当前sort解析。旧start在全部同号章Scene之前、旧end在之后，中间按真实章ID／Scene顺序／start-end排列，保留同号章旧事件次序。Scene失活或失联即孤儿，不按sort复活；排序／拆并／恢复重验完整历史并同事务物化，无法保留独立事实时拒绝结构操作。
 - 关系/职业/成员可先不存在、在章节建立、退出、以后再建立；不存在期间的字段写入不合法。改基线或事件时必须验证受影响的全部历史区间，包括主副职业数量上限；若无效应整笔回滚。手动确认/变化不得被自动分析悄悄覆盖；分析按目标章末记录且按故事顺序重算，重复分析、撤销或确认必须保持来源与事务边界。
 - 降级0031会移除时间线与自定义字段，先保存当前完整备份；当前投影保留。存在隐藏关系时，旧版本无法表示其不可见状态，降级明确拒绝以保留旧审计。0035有新类型语义资料时同样拒绝有损降级，详见字段契约。
 - 新增/修改/删除时间线事实与当前投影在项目写屏障和同一个外层事务中完成；供事务编排的底层 `apply_*` / 物化服务只 `flush` 不 `commit`；API 入口负责提交或回滚。写请求通过原子 revision 比较，`stale_revision` 时保留草稿。查询和上下文组装全程 `db.no_autoflush`，不得触发其他未提交 ORM 对象写库；读取已明确 flush 的事件必须可见。
-- 正文生成、整章重写/建议改写、局部改写和章节分析均使用目标章初有效设定；局部改写的 `setting_context` 为锁定模板变量，旧模板缺变量也有兜底。变更分析执行时若正文或章节位置已变，不能把过期结果保存为当前事实。
+- 场景生成、润色、重写和局部改写使用目标Scene开始时的有效设定，旧章级分析仍使用既有章初输入／章末写回。局部`setting_context`为锁定变量，旧模板缺变量也有兜底。真实出站及采纳／保存复核内容、规划、时间线／字段和可见快照，过期不写；单景改稿不自动分析为全章事实。
 - 前端分别展示基础、有效值与事件列表；提供校准、章初/章末、已有/计划章及追加/替换。`frontend/src/api/progressions.ts` 镜像后端类型；切换作品/主体/章节、权限或请求代次须废弃旧响应，冲突或关闭编辑时保留未保存草稿。人工只读用户可看设定预览但不能写入。
 - 向导覆盖角色、世界观或职业前及落库前重新检查受影响主体的有效变化和自定义字段；有历史时 409 `wizard_history_conflict`，防止级联删除。拆书与向导的新设定、卡片新导入主体均需创建基础时间线。
 
@@ -63,6 +68,7 @@ await build_setting_context(db, project, chapter, *, text_hint="", budget=4000)
 - 纯求值：`tests/test_setting_progression_resolver.py` 覆盖章初/章末、同章排序、追加/替换、孤儿、未出现主体、不可变输入和整数边界。
 - 数据/API：`tests/test_migrations.py`、`test_setting_progressions.py`、`test_relationship_progressions.py`、`test_career_progressions.py`、`test_membership_progressions.py` 覆盖迁移、版本竞争、回滚、项目隔离及可重建主体。
 - 集成：`test_context_builder.py`、`test_rewrite.py`、`test_progression_writeback.py`、`test_chapter_numbering.py`、`test_project_transfer.py`、`test_progression_agent_effects.py` 覆盖写作上下文、乱序分析、锚点移动、备份与撤销；向导、卡片与拆书测试覆盖新建及覆盖入口。
+- `test_scene_progressions.py`／`test_scene_context.py`：同号章、场景end不提前进入start、非法职业历史重排回滚、字段／分类位置和实际never／隐藏字段预览；`test_scene_generation.py`验证真实模型输入与最终快照竞争。
 - 前端：`frontend/src/components/progressions/*.test.ts` 及角色、职业、关系表单和章节预览测试；运行 lint、build、完整测试，并用隔离作品验证实际表单和响应布局。
 
 ### 7. 错误与正确写法

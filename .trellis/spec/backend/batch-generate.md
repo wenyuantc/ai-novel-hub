@@ -69,6 +69,8 @@ POST /tasks/{id}/finish  -> 200 TaskOut（paused → succeeded，result.ended_ea
   部署开关 `AUTO_ANALYZE_ENABLED` 或项目 `auto_analyze` 关闭 → `skipped`；失败（含 AppError）→ `failed` + warning，不阻塞批量、不重试。
   分析原文不进入任务输出。与手动分析其他章节并发时依赖回写的「更晚章节优先」规则。
 - **上下文**：每章的 ChapterJob 在循环里临时组装，第 N 章看到第 N-1 章正文与其分析回写后的角色状态 / 伏笔；审核期间的修改在继续后生效。
+- **0039场景闭环**：仍逐章checkpoint，不改成逐Scene断点。每章内部沿稳定Scene顺序暂存、全主成功后一次内容CAS提交，身份／摘要／规划不变；当前章失败／提交前取消不半写，已完成前章保留。每景有效规划／scene start与暂存前景由原ChapterJob统一构建，不复制生成逻辑。
+- **快照失效与跳过区别**：每次真实出站和保存前核验同一内容／项目规划／相关设定stamp。首轮飞行中删未来章、改未来标题若推进planning_revision，会使当前旧快照失效，不能重签后强行成功；进入下章快照前发现章已删除仍正常`skipped_missing`。普通额外续写网络／渲染失败仍warning，不能与安全快照撤回混为一谈。
 - **审核点**：`review_every > 0` 且 `since_review >= review_every` 且后面还有需要生成的章节 → `since_review` 归零并产出 `paused`
   （载荷 = 汇总）→ 任务 `paused`（`stage = 待审核`、`finished_at` 为空）。待审核**不锁范围**：范围内章节可单独生成 / 编辑。
   继续 = `revalidate` 后条件 UPDATE `paused → queued`（清 `result/error/finished_at`），同一任务 id、断点保留；结束 = `succeeded` + `ended_early`。

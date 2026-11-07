@@ -6,6 +6,7 @@
 
 - 追踪支持角色、六类世界观、组织和职业；未配置的旧数据仍仅启用角色和 `place/item`。名称／别名是当前全书身份资料，不进入按章剧情变化；条目 `never` 不自动关闭人工追踪。见 [设定 AI 可见性](./setting-ai-visibility.md)。
 - 四类原文：`Chapter.content`、当前会话所有者的已保存 user/assistant `AgentMessage.content`、`ProjectNote.content`、`KbDocument.text`。不扫描 tool JSON、会话摘要、Skill 快照、章节历史版本、分块回显或灵感 notes 数组。
+- 0039后`Chapter.content`是活动Scene的完整有序投影；章级索引／热力图不重复统计Scene摘要或结构历史。编辑器草稿标记只扫描当前景，矩阵场景行只统计本景正文。
 - 提及是字面命中，不推断真实剧情在场。章节热力图只统计已保存正文；草稿、聊天、笔记和资料不能折算为章节出场。
 - 无模型调用、无向量依赖、无持久提及副本表；原文与词典是事实源，有界缓存只复用匹配跨度。
 
@@ -57,6 +58,7 @@
 
 - `utils/mentions.ts` 统一生成 source URL，参数为 `mention_start/end/hash`，不把原文片段塞进URL。正文到Reader、聊天到overview指定conversation_id/message_id、笔记到notes?id、资料到knowledge?document_id。
 - SourceWindow hash不一致返回stale=true、target=null以及当前文本开头窗口；不能静默高亮旧偏移。位置有效但过大/越界按422拒绝。
+- 编辑器用`GET /chapters/{cid}/scenes/resolve-position`校验完整章指纹和绝对码点，再转换为真实Scene局部码点／UTF-16。stale不套旧位置，cross_scene/separator只在整章通读预览，不猜归属；解析后取景仍需核对相同content_revision。
 - 编辑器与笔记的预览使用当前本地content，切换视图不提交、不清草稿；AI流期间不把未保存流计入索引。Reader使用原文范围，定位优先于阅读进度恢复。
 - `MentionText` 只渲染React文本节点与按钮；歧义弹候选，点击打开同页 `EntityPreview`。进入完整设定仍遵守原有离页保护。
 - 聊天选择真实会话/消息，用原文定位窗口避免Markdown字符偏移错误；定位期间暂停自动粘底。资料按document ID+原文位置定位，不依赖可重建的chunk ID。

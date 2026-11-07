@@ -52,7 +52,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseChapterDone(result: unknown): ChapterDone | null {
   if (!isRecord(result) || !isRecord(result.chapter) || typeof result.chapter.id !== 'number') return null
   const warning = typeof result.warning === 'string' && result.warning ? result.warning : undefined
-  return { chapter: result.chapter as unknown as Chapter, warning }
+  const scene = isRecord(result.scene) && typeof result.scene.id === 'number' && typeof result.scene.chapter_id === 'number' ? result.scene as unknown as import('./types').Scene : undefined
+  const scene_ids = Array.isArray(result.scene_ids) && result.scene_ids.every((id) => typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ? result.scene_ids : undefined
+  return { chapter: result.chapter as unknown as Chapter, warning, scene, scene_ids }
 }
 
 export const CHAPTER_STATUS: Record<ChapterStatus, { label: string; color: string }> = {

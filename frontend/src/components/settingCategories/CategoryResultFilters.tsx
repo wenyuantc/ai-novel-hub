@@ -15,7 +15,7 @@ export default function CategoryResultFilters({ value, chapters, disabled = fals
     <Form.Item label="求值位置" htmlFor={`${prefix}-mode`} style={{ marginBottom: 12 }}>
       <Radio.Group id={`${prefix}-mode`} aria-label="分类求值位置" value={value.position || value.invalidPosition ? 'history' : 'current'} disabled={disabled}
         onChange={(event) => { const mode: unknown = event.target.value; if (mode === 'current') onChange({ position: null }); else if (mode === 'history') onChange({ position: { anchor_kind: 'chapter', chapter_id: null, chapter_no: null, boundary: 'start' } }) }}
-        options={[{ value: 'current', label: '当前（含有效计划变化）' }, { value: 'history', label: '按章节查看' }]} />
+        options={[{ value: 'current', label: '当前（含有效计划变化）' }, { value: 'history', label: '按章节／场景查看' }]} />
     </Form.Item>
     {(value.position || value.invalidPosition) && <div style={{ marginBottom: 16 }}>
       <ChapterPositionInput chapters={chapters} value={value.position ?? { anchor_kind: 'chapter', chapter_id: null, chapter_no: null, boundary: 'start' }} purpose="preview" disabled={disabled} onChange={(position) => onChange({ position })} />

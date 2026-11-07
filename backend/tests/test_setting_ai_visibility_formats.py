@@ -1,4 +1,4 @@
-"""项目备份 v6 和效果 v5 的 AI 限制兼容、映射与失败原子性。"""
+"""AI 限制在当前项目备份／效果和真实旧v4效果中的兼容、映射与原子性。"""
 
 import json
 from contextlib import aclosing
@@ -62,7 +62,7 @@ async def _protected_backup(client):
 async def test_v6_roundtrip_remaps_links_and_does_not_export_or_copy_runtime_counters(client, app):
     source, data = await _protected_backup(client)
     assert await _state(app, source["id"]) == (4, 3)
-    assert data["version"] == 6 and data["app_schema"] == "0038"
+    assert data["version"] == 7 and data["app_schema"] == "0039"
     assert {"ai_visibility_revision", "ai_history_epoch"}.isdisjoint(data["project"])
     before = data["tables"]
     assert before["world_settings"][0]["content"] == "受保护的设定原文"
@@ -194,7 +194,7 @@ async def test_v5_refuses_author_changes_and_v4_only_updates_its_own_content(ctx
     before = await effects.snapshot(ctx.db, ctx.project_id)
     entry.name = "智能体改名"
     delta = effects.diff(before, await effects.snapshot(ctx.db, ctx.project_id))
-    assert all(effect["format_version"] == 5 for effect in delta)
+    assert all(effect["format_version"] == 6 for effect in delta)
     assert {"ai_visibility_revision", "ai_history_epoch"}.isdisjoint(before["projects"][str(ctx.project_id)])
     await ctx.db.commit()
     await _author_change(ctx, "character", entry.id, 0, ai_mode="never", ai_hidden_builtin_fields=["profile"])

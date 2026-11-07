@@ -12,13 +12,13 @@ import { invalidateProject } from '../utils/projectRefresh'
 export interface PlanningMatrixQuery {
   page?: number; page_size?: number; column_page?: number
   column_mode?: 'settings' | 'subplots' | 'custom'; column_refs?: MatrixColumnRef[]
-  source_kind?: 'chapter' | 'plan'; volume_no?: number; tag_id?: number; q?: string
+  source_kind?: 'chapter' | 'plan' | 'scene'; granularity?: 'chapter' | 'scene'; volume_no?: number; tag_id?: number; q?: string
   entity_kind?: PlanningReferenceKind; entry_q?: string
   source_refs?: PlanningSource[]
 }
 export interface PlanningEntryQuery { kind?: PlanningReferenceKind; category?: string; q?: string; page?: number; page_size?: number }
 export interface PlanningWeaveQuery {
-  axis?: 'chapter' | 'plan'; page?: number; page_size?: number; subplot_page?: number
+  axis?: 'chapter' | 'plan' | 'scene'; page?: number; page_size?: number; subplot_page?: number
   subplot_page_size?: number; subplot_ids?: number[]; gap_threshold?: number
 }
 export interface PlanningCrossingQuery { page?: number; page_size?: number; source_kind?: PlanningSource['kind']; source_id?: number; subplot_id?: number }

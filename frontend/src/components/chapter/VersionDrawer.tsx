@@ -5,13 +5,13 @@ import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useRef, useState } from 'react'
 import { versionApi, VERSION_SOURCE } from '../../api/chapterVersions'
 import { errorMessage } from '../../api/client'
-import type { ChapterVersionBrief } from '../../api/types'
+import type { ChapterVersion, ChapterVersionBrief, SceneSnapshot } from '../../api/types'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { formatTime } from '../../utils/time'
 import TextDiff from '../TextDiff'
 import GenerationLogList from './GenerationLogList'
-import { useSettingsConfirmation } from '../systemSettings/useSettingsConfirmation'
+import SceneVersionActions, { type VersionSceneContext } from '../scenes/SceneVersionActions'
 
 interface Props {
   pid: number
@@ -24,7 +24,8 @@ interface Props {
   /** 生成中 / 保存中 / 局部改写预览中等情况下禁止回滚 */
   restoreDisabled: boolean
   /** 由编辑器执行回滚（含未保存修改时先自动保存），成功返回 true */
-  onRestore: (version: ChapterVersionBrief) => Promise<boolean>
+  onRestore: (version: ChapterVersionBrief, revision?: number) => Promise<boolean>
+  sceneContext?: VersionSceneContext
 }
 
 /** 章节版本历史抽屉：版本列表（查看 / 对比 / 恢复 / 标星 / 备注 / 删除）+ 生成记录。 */
@@ -55,6 +56,7 @@ interface DiffView {
 interface ContentView {
   version: ChapterVersionBrief
   content: string
+  snapshot: SceneSnapshot | null
 }
 
 function VersionList({
@@ -64,11 +66,11 @@ function VersionList({
   currentDirty,
   restoreDisabled,
   onRestore,
+  sceneContext,
 }: Omit<Props, 'open' | 'onClose'>) {
   const { token } = theme.useToken()
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
   const { canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
-  const confirm = useSettingsConfirmation(modal, !canEdit)
   const loader = useCallback(() => versionApi.list(pid, chapterId), [pid, chapterId])
   const { data: items = [], loading, reload, setData } = useLoader(loader)
   const [selected, setSelected] = useState<number[]>([])
@@ -77,16 +79,17 @@ function VersionList({
   const [pending, setPending] = useState(false)
   useAuthorizationCleanup(() => setPending(false))
   // 版本正文缓存；updated_at 变化（手动保存合并）时失效
-  const cache = useRef(new Map<number, { stamp: string; content: string }>())
+  const cache = useRef(new Map<number, { stamp: string; full: ChapterVersion }>())
   const latestId = items[0]?.id
 
-  const fetchContent = async (v: ChapterVersionBrief): Promise<string> => {
+  const fetchVersion = async (v: ChapterVersionBrief): Promise<ChapterVersion> => {
     const hit = cache.current.get(v.id)
-    if (hit && hit.stamp === v.updated_at) return hit.content
+    if (hit && hit.stamp === v.updated_at) return hit.full
     const full = await versionApi.get(pid, chapterId, v.id)
-    if (canReadNow()) cache.current.set(v.id, { stamp: v.updated_at, content: full.content })
-    return full.content
+    if (canReadNow()) cache.current.set(v.id, { stamp: v.updated_at, full })
+    return full
   }
+  const fetchContent = async (v: ChapterVersionBrief): Promise<string> => (await fetchVersion(v)).content
 
   const withPending = async (fn: () => Promise<void>, write = false) => {
     if (!(write ? canEditNow() : canReadNow())) return
@@ -129,8 +132,8 @@ function VersionList({
 
   const showView = (v: ChapterVersionBrief) =>
     withPending(async () => {
-      const content = await fetchContent(v)
-      if (canReadNow()) setView({ version: v, content })
+      const full = await fetchVersion(v)
+      if (canReadNow()) setView({ version: v, content: full.content, snapshot: full.scene_snapshot })
     })
 
   const compareWithCurrent = (v: ChapterVersionBrief) =>
@@ -149,23 +152,6 @@ function VersionList({
       setDiff({ title: `v${x.seq} → v${y.seq}`, a, b })
     })
 
-  const confirmRestore = (v: ChapterVersionBrief) => {
-    if (!canEditNow()) return
-    confirm({
-      title: `恢复到 v${v.seq}？`,
-      content: `当前正文会先存为版本，恢复本身也会生成新版本，可随时撤销。${currentDirty ? '未保存的修改将先自动保存。' : ''}`,
-      okText: '恢复',
-      cancelText: '取消',
-      onOk: async () => {
-        if (!canEditNow()) return
-        if (await onRestore(v) && canEditNow()) {
-          setView(null)
-          reload()
-        }
-      },
-    })
-  }
-
   const columns: ColumnsType<ChapterVersionBrief> = [
     {
       title: '版本',
@@ -183,7 +169,7 @@ function VersionList({
               onClick={() => void toggleStar(v)}
             />
           </Tooltip>
-          <span>v{v.seq}</span>
+          <span>v{v.seq}</span><Tag>{v.has_scene_snapshot ? '场景结构' : '旧纯文本'}</Tag>
           {v.id === latestId && <Tag color="green">最新</Tag>}
         </Space>
       ),
@@ -220,9 +206,7 @@ function VersionList({
           <Button type="link" size="small" onClick={() => void compareWithCurrent(v)}>
             对比当前
           </Button>
-          <Button type="link" size="small" disabled={!canEdit || restoreDisabled} onClick={() => confirmRestore(v)}>
-            恢复
-          </Button>
+          <SceneVersionActions projectId={pid} chapterId={chapterId} version={v} context={sceneContext} disabled={!canEdit || restoreDisabled} onRestore={onRestore} onRestored={() => { setView(null); reload() }} />
           {v.id === latestId ? (
             <Tooltip title="不能删除最新版本">
               <Button type="link" size="small" danger disabled>
@@ -248,7 +232,7 @@ function VersionList({
           对比所选（{selected.length}/2）
         </Button>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          每章保留最近 50 个未标星版本，标星版本永久保留；10 分钟内的连续手动保存合并为一个版本。
+          每章保留最近 50 个未标星版本，标星版本永久保留；同结构的普通手写可在 10 分钟内合并；结构、清空与覆盖操作保留独立边界。
         </Typography.Text>
       </Space>
       <Table
@@ -278,13 +262,12 @@ function VersionList({
           view && (
             <Space>
               <Button onClick={() => void compareWithCurrent(view.version)}>与当前对比</Button>
-              <Button type="primary" disabled={!canEdit || restoreDisabled} onClick={() => confirmRestore(view.version)}>
-                恢复此版本
-              </Button>
+              <SceneVersionActions projectId={pid} chapterId={chapterId} version={view.version} context={sceneContext} disabled={!canEdit || restoreDisabled} onRestore={onRestore} onRestored={() => { setView(null); reload() }} />
             </Space>
           )
         }
       >
+        {view?.snapshot && <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }}>{view.snapshot.scenes.map((scene, index) => <div key={scene.id}><Tag>场景 {index + 1} · #{scene.id}</Tag><strong>{scene.title || '未命名'}</strong><Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>作者摘要：{scene.summary || '无'}</Typography.Paragraph><Typography.Text type="secondary">本地模式：{scene.planning ? Object.entries(scene.planning.raw.modes).map(([field, mode]) => `${field}=${mode === 'inherit' ? '继承' : '覆盖'}`).join(' · ') : '全部继承本章'}</Typography.Text></div>)}</Space>}
         {view && (
           <div
             style={{

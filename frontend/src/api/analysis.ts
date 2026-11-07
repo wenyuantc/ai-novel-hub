@@ -403,12 +403,59 @@ export interface ReviseFormValues {
   suggestionIds: number[]
   instruction: string
   preserve: string[]
-  /** null = 原文字数 */
+  /** null = 不发送 target_words，由服务端按真实章／场景范围使用默认目标。 */
   targetWords: number | null
   aiConfigId: number | null
 }
 
 export type ReviseBuild = { ok: true; body: ReviseChapterRequest } | { ok: false; error: string }
+
+/** 编辑器本次选择的展示范围，不参与请求编码；场景身份来自当前已保存 Scene。 */
+export type ReviseScope =
+  | { kind: 'chapter'; sceneCount?: number }
+  | { kind: 'scene'; sceneId: number | null; sceneTitle?: string; sceneOrder?: number }
+
+/** 字数和分析提示遵循真实范围；章级仅一景保留旧的 300 字默认下限。 */
+export function reviseScopePresentation(scope: ReviseScope = { kind: 'chapter', sceneCount: 1 }, autoAnalyze = true) {
+  const explicitTotal = '显式填写范围为 300–20000 字。'
+  if (scope.kind === 'scene') {
+    const identity = scope.sceneId === null ? '（尚未加载）' : ` · ${scope.sceneOrder === undefined ? '' : `场景 ${scope.sceneOrder + 1} · `}${scope.sceneTitle || '未命名'}（#${scope.sceneId}）`
+    return {
+      scopeLabel: `当前场景${identity}`,
+      targetWordsLabel: '目标总字数（可选）',
+      targetWordsHint: `留空按当前场景原文字数，可少于 300 字；填写时总量仅用于这个场景。${explicitTotal}`,
+      completionHint: '仅更新目标场景正文，摘要与规划不变。正文变化会使已有章分析过期；不会自动进行整章分析，不把局部结果当作全章事实，可手动重新分析本章。',
+    }
+  }
+  const fallback = scope.sceneCount === 1
+    ? '整章仅一个场景时，留空按原文字数与 300 字中的较大值。'
+    : scope.sceneCount !== undefined && scope.sceneCount > 1
+      ? '留空按各有正文场景各自原文字数，不套用章级单场景的 300 字默认下限。'
+      : '留空按各有正文场景各自原文字数；整章仅一个场景时，按原文字数与 300 字中的较大值。'
+  return {
+    scopeLabel: `整章（保留场景结构）${scope.sceneCount ? ` · ${scope.sceneCount} 个场景` : ''}`,
+    targetWordsLabel: '目标总字数（可选）',
+    targetWordsHint: `${fallback}显式填写时按有正文场景均分总量，余数按已保存顺序分配；空场景保留。${explicitTotal}`,
+    completionHint: `所有目标场景成功后，整章统一保存，仅更新正文并保留场景结构、摘要与规划。${autoAnalyze ? '整章成功后按全站及项目自动分析设置重新分析一次，完成后可对比全章评分。' : '项目已关闭自动分析，可手动重新分析本章后对比全章评分。'}`,
+  }
+}
+
+/** 运行中的范围只取真实 TaskOut.scene_id，不能借用当前表单中的 AI 范围。 */
+export function reviseScopeForTask(task: Pick<Task, 'scene_id'> | null | undefined, knownScope?: ReviseScope): ReviseScope {
+  const sceneId = task?.scene_id
+  if (sceneId == null) return knownScope?.kind === 'chapter' ? knownScope : { kind: 'chapter' }
+  return knownScope?.kind === 'scene' && knownScope.sceneId === sceneId ? knownScope : { kind: 'scene', sceneId }
+}
+
+/** 运行中的标题和保存后影响复用实际任务范围。 */
+export function reviseRunningPresentation(task: Pick<Task, 'scene_id'> | null | undefined, autoAnalyze: boolean) {
+  const sceneId = task?.scene_id
+  const scope = reviseScopeForTask(task)
+  return {
+    title: `正在按建议重写${sceneId == null ? '整章' : `场景 #${sceneId}`}`,
+    description: reviseScopePresentation(scope, autoAnalyze).completionHint,
+  }
+}
 
 /** 构造并校验重写请求（与后端 ReviseChapterRequest 的约束一致）；去重、去空白 */
 export function buildReviseRequest(v: ReviseFormValues): ReviseBuild {
@@ -443,10 +490,11 @@ export interface ReviseCompare {
 /**
  * 由成功的 chapter.revise 任务得出评分对比基准。base 取 TaskOut.analysis_id（任务面板重试、其他标签页发起的重写同样可用）；
  * since 取「重写成功时已知的最新分析」与 base 中较大者——自动重新分析在任务成功后才入队，因此它一定晚于此时已知的分析。
+ * 独立场景重写不触发全章自动分析，不能派生全章评分对比。旧缺省／null scene_id 保留整章合同。
  * 非 revise 任务或缺少 analysis_id 返回 null。
  */
-export function reviseCompareFor(task: Pick<Task, 'kind' | 'analysis_id'>, latestKnownId: number | null): ReviseCompare | null {
-  if (task.kind !== 'chapter.revise' || typeof task.analysis_id !== 'number') return null
+export function reviseCompareFor(task: Pick<Task, 'kind' | 'analysis_id'> & Partial<Pick<Task, 'scene_id'>>, latestKnownId: number | null): ReviseCompare | null {
+  if (task.kind !== 'chapter.revise' || typeof task.analysis_id !== 'number' || task.scene_id != null) return null
   const base = task.analysis_id
   return { baseAnalysisId: base, sinceAnalysisId: latestKnownId === null ? base : Math.max(base, latestKnownId) }
 }

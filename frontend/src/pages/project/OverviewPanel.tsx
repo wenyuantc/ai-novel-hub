@@ -79,11 +79,12 @@ function AnalysisSettingsCard({ project }: { project: Project }) {
       <Space direction="vertical">
         <Space wrap>
           <Switch checked={project.auto_analyze} loading={toggling} onChange={(v) => void handleToggle(v)} />
-          <Typography.Text>AI 生成 / 润色 / 按建议重写后自动分析本章</Typography.Text>
+          <Typography.Text>整章 AI 生成 / 润色 / 按建议重写成功后自动分析一次</Typography.Text>
         </Space>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          开启后每章生成后会多一次 AI 调用：提炼摘要、情节点与钩子，回写角色 / 关系 / 境界 / 组织变化，给出评分与改进建议；
-          下一章生成时用分析摘要作前情提要。手动编辑不会触发分析，只会把分析标记为「已过期」。
+          开启后，整章全部场景成功并统一保存后，只自动分析本章一次，会增加一次 AI 调用：提炼摘要、情节点与钩子，
+          回写角色 / 关系 / 境界 / 组织变化，给出评分与改进建议；下一章生成时用分析摘要作前情提要。
+          单场景生成或改稿、手动改稿不会触发自动分析；正文变化会把已有章分析标记为「已过期」，不把局部结果当作全章事实。
         </Typography.Text>
         <Button icon={<ExperimentOutlined />} loading={queueing} onClick={() => void handleAnalyzePending()}>
           分析全部未分析 / 已过期章节

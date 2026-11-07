@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError
 from app.models import (
     CareerHistory,
+    Chapter,
     ChapterCharacter,
     ChapterPlan,
+    ChapterVersion,
     Character,
     CharacterCareer,
     ForeshadowCharacter,
@@ -25,11 +27,13 @@ from app.models import (
     SettingTimeline,
     WorldSetting,
 )
+from app.models.planning import PlanningUnitCharacter
 from app.schemas.setting_field_value import EntityRef
 from app.services import setting_field_service
 
 _CHARACTER_REFS = (
     ("章节出场", ChapterCharacter.character_id),
+    ("场景本地角色", PlanningUnitCharacter.character_id),
     ("规划视角", PlanningUnit.pov_character_id),
     ("组织成员", OrganizationMember.character_id),
     ("职业任职", CharacterCareer.character_id),
@@ -99,6 +103,16 @@ async def blocking_reasons(db: AsyncSession, project_id: int, refs: Sequence[Ent
             ),
         ])
     reasons = list(await db.scalars(union_all(*statements)))
+    snapshots = await db.stream_scalars(select(ChapterVersion.scene_snapshot).join(
+        Chapter, Chapter.id == ChapterVersion.chapter_id
+    ).where(Chapter.project_id == project_id, ChapterVersion.scene_snapshot.is_not(None)))
+    try:
+        async for snapshot in snapshots:
+            if _scene_snapshot_references(snapshot, chars, worlds):
+                reasons.append("可恢复的场景规划历史")
+                break
+    finally:
+        await snapshots.close()
     if chars:
         for label, statement, snapshots in (
             ("细纲出场", select(ChapterPlan.character_ids).where(ChapterPlan.project_id == project_id), False),
@@ -133,3 +147,26 @@ async def blocking_reasons(db: AsyncSession, project_id: int, refs: Sequence[Ent
             raise
         reasons.append("本书字段引用或历史")
     return reasons
+
+
+def _scene_snapshot_references(snapshot, chars: set[int], worlds: set[int]) -> bool:
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("scenes"), list):
+        return False
+    for scene in snapshot["scenes"]:
+        planning = scene.get("planning") if isinstance(scene, dict) else None
+        raw = planning.get("raw") if isinstance(planning, dict) else None
+        if not isinstance(raw, dict):
+            continue
+        if type(raw.get("pov_character_id")) is int and raw["pov_character_id"] in chars:
+            return True
+        references = raw.get("references")
+        if not isinstance(references, list):
+            continue
+        for ref in references:
+            if not isinstance(ref, dict) or type(ref.get("id")) is not int:
+                continue
+            if ref.get("kind") == "character" and ref["id"] in chars:
+                return True
+            if ref.get("kind") == "world" and ref["id"] in worlds:
+                return True
+    return False

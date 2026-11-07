@@ -132,8 +132,10 @@ class SettingProgression(TimestampMixin, Base):
             name="field_reference",
         ),
         CheckConstraint(
-            "(anchor_kind = 'chapter' AND chapter_no IS NULL) OR "
-            "(anchor_kind = 'planned' AND chapter_id IS NULL AND chapter_no IS NOT NULL AND chapter_no >= 1)",
+            "(anchor_kind = 'chapter' AND chapter_no IS NULL AND scene_id IS NULL) OR "
+            "(anchor_kind = 'planned' AND chapter_id IS NULL AND scene_id IS NULL "
+            "AND chapter_no IS NOT NULL AND chapter_no >= 1) OR "
+            "(anchor_kind = 'scene' AND chapter_id IS NULL AND chapter_no IS NULL)",
             name="anchor_shape",
         ),
         CheckConstraint("boundary IN ('start', 'end')", name="boundary"),
@@ -172,6 +174,9 @@ class SettingProgression(TimestampMixin, Base):
     anchor_kind: Mapped[str] = mapped_column(String(8), nullable=False)
     chapter_id: Mapped[int | None] = mapped_column(
         ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    scene_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scenes.id", ondelete="SET NULL"), index=True, nullable=True
     )
     # 只有 planned 锚点保存数字；chapter_id 被删除后不得靠旧数字自动重绑。
     chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)

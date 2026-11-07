@@ -94,6 +94,7 @@ async def entries(
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
     chapter_id: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
     chapter_no: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
+    scene_id: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
     boundary: Boundary = "start",
 ):
     try:
@@ -104,6 +105,7 @@ async def entries(
             page_size=page_size,
             chapter_id=chapter_id,
             chapter_no=chapter_no,
+            scene_id=scene_id,
             boundary=boundary,
         )
     except ValidationError as exc:

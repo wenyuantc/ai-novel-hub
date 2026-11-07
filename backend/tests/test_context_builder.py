@@ -17,6 +17,7 @@ from app.models import (
     SettingTimeline,
     WorldSetting,
 )
+from app.services import scene_service
 from app.services.context_builder import (
     KNOWLEDGE_HEADER,
     MEMORY_HEADER,
@@ -284,6 +285,7 @@ async def test_chapter_and_analysis_use_story_time_settings(app, client, fake_ll
         ch21 = Chapter(project_id=pid, chapter_no=21, title="二一", content="")
         db.add_all([hero, partner, place, org, old_org, career, old_career, ch5, ch20, ch21])
         await db.flush()
+        await scene_service.initialize_chapter(db, ch5)
         first = CareerStage(career_id=career.id, position=1, name="练气")
         second = CareerStage(career_id=career.id, position=2, name="金丹")
         old_stage = CareerStage(career_id=old_career.id, position=1, name="初品")

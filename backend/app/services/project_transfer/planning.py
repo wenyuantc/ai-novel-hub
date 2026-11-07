@@ -8,14 +8,33 @@ def validate_planning_tables(tables: dict[str, list[dict]], error: Callable[[str
     units = {row["id"]: row for row in tables.get("planning_units", [])}
     chapters = {row["id"]: row for row in tables.get("chapters", [])}
     plans = {row["id"]: row for row in tables.get("chapter_plans", [])}
+    scenes = {row["id"]: row for row in tables.get("scenes", [])}
     timelines = {row["id"]: row for row in tables.get("setting_timelines", [])}
-    source_ids = {"chapter_id": set(chapters), "plan_id": set(plans),
+    source_ids = {"chapter_id": set(chapters), "plan_id": set(plans), "scene_id": set(scenes),
                   "pov_character_id": {row["id"] for row in tables.get("characters", [])}}
     occupied_chapters: set[int] = set()
     occupied_plans: set[int] = set()
+    occupied_scenes: set[int] = set()
     retired = {uid for uid, row in units.items() if row.get("retired", False)}
     for uid, unit in units.items():
         chapter_id, plan_id = unit.get("chapter_id"), unit.get("plan_id")
+        scene_id, level = unit.get("scene_id"), unit.get("source_level", "chapter")
+        if level not in ("chapter", "scene") or (level == "chapter" and scene_id is not None) or (
+            level == "scene" and (chapter_id is not None or plan_id is not None)
+        ):
+            error(f"规划单元 #{uid} 的场景／章节来源形状无效")
+        for field in ("pov", "tags", "character", "world", "organization", "career", "relationship"):
+            if unit.get(f"{field}_mode", "inherit") not in ("inherit", "override"):
+                error(f"规划单元 #{uid} 的 {field} 继承模式无效")
+        if (level == "scene" and unit.get("pov_mode", "inherit") == "inherit"
+                and unit.get("pov_character_id") is not None):
+            error(f"场景规划单元 #{uid} 继承 POV 时不能携带本地角色")
+        if level == "scene" and unit.get("detached_character_ids"):
+            error(f"场景规划单元 #{uid} 不能携带旧章孤立角色副本")
+        if scene_id is not None:
+            if scene_id in occupied_scenes:
+                error(f"场景 #{scene_id} 被多个规划单元占用")
+            occupied_scenes.add(scene_id)
         if type(unit.get("binding_epoch", 0)) is not int or unit.get("binding_epoch", 0) < 0:
             error(f"规划单元 #{uid} 的绑定代次无效")
         if chapter_id is not None:
@@ -33,13 +52,14 @@ def validate_planning_tables(tables: dict[str, list[dict]], error: Callable[[str
             chapter = chapters.get(chapter_id)
             if chapter is not None and chapter.get("plan_id") != plan_id:
                 error(f"规划单元 #{uid} 的章节未绑定指定细纲")
-        if uid in retired and any((chapter_id is not None, plan_id is not None,
+        if uid in retired and any((chapter_id is not None, plan_id is not None, scene_id is not None,
                                    unit.get("pov_character_id") is not None, unit.get("detached_character_ids"))):
             error(f"退役规划单元 #{uid} 仍携带来源或有效资料")
-        if (chapter_id is not None or plan_id is not None) and unit.get("detached_character_ids"):
+        if any(value is not None for value in (chapter_id, plan_id, scene_id)) and unit.get("detached_character_ids"):
             error(f"规划单元 #{uid} 已有来源，不能同时保留孤立角色副本")
 
     join_targets = {
+        "planning_unit_characters": ("character_id", "characters"),
         "planning_unit_tags": ("tag_id", "planning_tags"),
         "planning_unit_world": ("world_id", "world_settings"),
         "planning_unit_organizations": ("organization_id", "organizations"),
@@ -58,6 +78,14 @@ def validate_planning_tables(tables: dict[str, list[dict]], error: Callable[[str
                 error(f"{table} 引用了当前作品之外或不存在的资料")
             if row["unit_id"] in retired:
                 error("退役规划单元仍有设定或标签关联")
+            unit = units.get(row["unit_id"], {})
+            mode = {"planning_unit_characters": "character", "planning_unit_tags": "tags",
+                    "planning_unit_world": "world", "planning_unit_organizations": "organization",
+                    "planning_unit_careers": "career", "planning_unit_relationships": "relationship"}[table]
+            if unit.get("source_level", "chapter") == "scene" and unit.get(f"{mode}_mode", "inherit") == "inherit":
+                error(f"场景规划单元继承 {mode} 时不能携带本地关联")
+            if table == "planning_unit_characters" and units.get(row["unit_id"], {}).get("source_level") != "scene":
+                error("本地场景角色关联不能写入章级规划单元")
             if table == "planning_unit_relationships":
                 timeline = timelines.get(row[column])
                 if timeline is not None and timeline.get("subject_kind") != "relationship":

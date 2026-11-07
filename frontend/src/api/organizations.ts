@@ -23,7 +23,7 @@ export interface MemberState {
   note: string
 }
 
-export type MemberIntent = Pick<MemberInput, 'edit_mode' | 'expected_revision' | 'anchor_kind' | 'chapter_id' | 'chapter_no' | 'boundary'> & {
+export type MemberIntent = Pick<MemberInput, 'edit_mode' | 'expected_revision' | 'anchor_kind' | 'chapter_id' | 'chapter_no' | 'scene_id' | 'boundary'> & {
   edit_mode: 'baseline' | 'progression'
 }
 
@@ -52,7 +52,7 @@ export function memberPositionIntent(position: ProgressionPositionInput, revisio
   return {
     edit_mode: 'progression', expected_revision: revision,
     anchor_kind: normalized.anchor_kind,
-    ...(normalized.anchor_kind === 'chapter' ? { chapter_id: normalized.chapter_id! } : { chapter_no: normalized.chapter_no! }),
+    ...(normalized.anchor_kind === 'chapter' ? { chapter_id: normalized.chapter_id! } : normalized.anchor_kind === 'scene' ? { scene_id: normalized.scene_id! } : { chapter_no: normalized.chapter_no! }),
     boundary: normalized.boundary,
   }
 }

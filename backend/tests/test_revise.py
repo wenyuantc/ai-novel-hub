@@ -114,3 +114,45 @@ async def test_revise_conflicts_with_generation(app, client, fake_llm):
     assert task["status"] == "failed" and task["error"] == "模型调用失败：额度不足"
     saved = (await client.get(f"{base}/chapters/{ch['id']}")).json()
     assert saved["content"] == "生成中的正文" and saved["status"] == "done"
+
+
+@pytest.mark.parametrize(("scoped", "second_content", "explicit_total", "expected"), [
+    (False, None, None, [300]),
+    (True, None, None, [14]),
+    (False, "另稿", None, [14, 2]),
+    (False, "", None, [14]),
+    (False, "另稿", 901, [451, 450]),
+])
+async def test_revise_default_words_preserve_legacy_single_chapter_but_not_multiply_scene_targets(
+    client, fake_llm, scoped, second_content, explicit_total, expected,
+):
+    base, chapter, analysis = await _setup(client, fake_llm)
+    url = f"{base}/chapters/{chapter['id']}/scenes"
+    if second_content is not None:
+        page = (await client.get(url)).json()
+        added = await client.post(url, json={"expected_content_revision": page["content_revision"],
+                                            "content": second_content})
+        assert added.status_code == 201, added.text
+    page = (await client.get(url)).json()
+    scene_ids = [scene["id"] for scene in page["items"]]
+    body = {"analysis_id": analysis["id"], "instruction": "仅处理对应正文",
+            "expected_content_revision": page["content_revision"],
+            "expected_planning_revision": page["planning_revision"]}
+    if explicit_total is not None:
+        body["target_words"] = explicit_total
+    for index in range(len(expected)):
+        fake_llm.push(f"重写提案{index}")
+    endpoint = (f"{url}/{scene_ids[0]}/revise" if scoped else f"/api/v1/chapters/{chapter['id']}/revise")
+    task, events = await run_task(client, await client.post(endpoint, json=body))
+    assert task["status"] == "succeeded", events[-1]
+    calls = fake_llm.calls[1:]
+    assert len(calls) == len(expected)
+    for call, words in zip(calls, expected, strict=True):
+        prompt = "\n".join(message["content"] for message in call["messages"])
+        assert f"目标字数：约 {words} 字" in prompt and f"本场景目标字数：{words}" in prompt
+    logs = (await client.get(f"{base}/chapters/{chapter['id']}/generation-logs")).json()
+    assert logs[0]["params"]["target_words"] == sum(expected)
+    assert [scene["target_words"] for scene in logs[0]["params"]["scenes"]] == expected
+    if second_content == "":
+        empty = (await client.get(f"{url}/{scene_ids[1]}")).json()
+        assert empty["content"] == ""

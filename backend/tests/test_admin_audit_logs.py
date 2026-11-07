@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from uuid import uuid4
 
 import jwt
@@ -125,9 +126,32 @@ async def test_project_chapter_two_actors_versions_and_deleted_snapshots(admin, 
     d = await detail(admin, first_event)
     assert d["version_status"] == "changed" and "初稿正文" not in json.dumps(d)
     assert events[1].summary["word_count_before"] == 4 and events[1].summary["word_count_after"] == 6
-    # 清空不会新造空版本，仍有独立事件
+    # 清空强制保留新的空正文结构版本，审计只关联版本元数据。
     assert (await admin.patch(chapter_url, json={"content": ""})).status_code == 200
-    assert (await rows(app))[-1].version_ref is None
+    clear_event = (await rows(app))[-1]
+    versions = (await admin.get(f"{chapter_url}/versions")).json()
+    assert len(versions) == 2
+    empty_version = (await admin.get(f"{chapter_url}/versions/{versions[0]['id']}")).json()
+    assert empty_version["id"] != events[1].version_ref["version_id"]
+    assert empty_version["seq"] == events[1].version_ref["seq"] + 1
+    assert empty_version["content"] == "" and empty_version["word_count"] == 0
+    assert empty_version["has_scene_snapshot"] is True
+    assert len(empty_version["scene_snapshot"]["scenes"]) == 1
+    assert empty_version["scene_snapshot"]["scenes"][0]["content"] == ""
+    assert clear_event.action == "chapter.update" and clear_event.result == "success"
+    assert clear_event.actor_user_id == first_event.actor_user_id
+    assert clear_event.owner_user_id == owner["id"]
+    assert clear_event.summary["word_count_before"] == 6 and clear_event.summary["word_count_after"] == 0
+    assert clear_event.version_ref == {
+        "project_id": p["id"],
+        "chapter_id": c["id"],
+        "version_id": empty_version["id"],
+        "seq": empty_version["seq"],
+        "content_sha256": sha256(b"").hexdigest(),
+    }
+    clear_detail = await detail(admin, clear_event)
+    assert clear_detail["version_status"] == "available"
+    assert "初稿正文" not in json.dumps(clear_detail) and "修改后的正文" not in json.dumps(clear_detail)
     assert (await admin.patch(base, json={"status": "writing", "title": "改名后"})).status_code == 200
     assert (await rows(app))[-1].summary["changes"] == [{"field": "status", "before": "planning", "after": "writing"}]
     # 本人创作与普通用户被拒绝不采集
@@ -169,7 +193,10 @@ async def test_chapter_cast_outlines_versions_success_and_business_failures(admi
     assert (await admin.patch(vp, json={"starred": True, "note": "不得进入审计的备注"})).status_code == 200
     assert (await admin.delete(vp)).status_code == 400
     assert (await admin.patch(path, json={"content": "第二版"})).status_code == 200
-    assert (await admin.post(f"{vp}/restore")).status_code == 200
+    current = (await admin.get(path)).json()
+    assert (await admin.post(
+        f"{vp}/restore", json={"expected_content_revision": current["content_revision"]},
+    )).status_code == 200
     assert (await admin.delete(vp)).status_code == 204
     assert (await admin.delete(path)).status_code == 204
     events = await rows(app)

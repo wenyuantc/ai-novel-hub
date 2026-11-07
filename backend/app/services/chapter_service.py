@@ -117,6 +117,10 @@ async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: 
             word_count=count_words(data.content),
         )
         db.add(chapter)
+        from app.services.scene_service import initialize_chapter
+
+        await db.flush()
+        await initialize_chapter(db, chapter)
         if data.content.strip():
             await db.flush()
             version = await version_service.record_manual(db, chapter)
@@ -170,6 +174,10 @@ async def create_from_outlines(
             db.add(chapter)
             created.append(chapter)
         await db.flush()
+        from app.services.scene_service import initialize_chapter
+
+        for chapter in created:
+            await initialize_chapter(db, chapter)
         audit.affected([c.id for c in created])
         if created:
             await planning_lifecycle.bump_revision(db, project_id)
@@ -188,7 +196,7 @@ async def update_chapter(
         )
         audit.target(chapter)
         project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-        audit.track(chapter, data.model_fields_set)
+        audit.track(chapter, data.model_fields_set - {"expected_content_revision"})
         fields = data.model_fields_set
         if project.user_id != user_id:
             if "style_id" in fields:
@@ -229,8 +237,11 @@ async def update_chapter(
             chapter.title = data.title.strip()
         content_changed = data.content is not None and data.content != chapter.content
         if data.content is not None:
-            chapter.content = data.content
-            chapter.word_count = count_words(data.content)
+            from app.services.scene_service import replace_legacy_content
+
+            if content_changed and not data.content.strip():
+                await version_service.ensure_baseline(db, chapter, force=True)
+            await replace_legacy_content(db, chapter, data.content, expected_revision=data.expected_content_revision)
         if data.status is not None:
             chapter.status = data.status
         if content_changed:

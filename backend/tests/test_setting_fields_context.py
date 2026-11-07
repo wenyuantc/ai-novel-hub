@@ -25,7 +25,13 @@ from app.models import (
 from app.models.planning import PlanningUnit, PlanningUnitCareer, PlanningUnitOrganization, PlanningUnitWorld
 from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 from app.schemas.setting_fields import EntityRef, EntryFieldsOut, FieldSlot, OptionOut, SettingEntry
-from app.services import analysis_service, context_builder, planning_context_service, setting_field_service
+from app.services import (
+    analysis_service,
+    context_builder,
+    planning_context_service,
+    scene_service,
+    setting_field_service,
+)
 from app.services.setting_field_formatting import format_entry_fields
 from tests.helpers import analysis_json, create_ai_config, create_project, parse_sse, register, run_task
 
@@ -55,6 +61,8 @@ async def _seed(app, client, *, planning=False, legacy_override=False):
         }
         db.add_all([hero, world, org, career, unselected_org, unselected_career, *targets, *chapters.values()])
         await db.flush()
+        for chapter in chapters.values():
+            await scene_service.initialize_chapter(db, chapter)
         stage = CareerStage(career_id=career.id, position=1, name="入门")
         db.add(stage)
         await db.flush()

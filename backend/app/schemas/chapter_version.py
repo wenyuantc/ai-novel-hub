@@ -32,6 +32,7 @@ class ChapterVersionBrief(BaseModel):
     seq: int
     source: VersionSource
     word_count: int
+    has_scene_snapshot: bool
     starred: bool
     note: str
     generation_log_id: int | None
@@ -41,6 +42,7 @@ class ChapterVersionBrief(BaseModel):
 
 class ChapterVersionOut(ChapterVersionBrief):
     content: str
+    scene_snapshot: dict[str, Any] | None
 
 
 class ChapterVersionUpdate(BaseModel):
@@ -76,6 +78,8 @@ class GenerationLogOut(GenerationLogBrief):
 
 
 class RewriteRequest(BaseModel):
+    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_planning_revision: int | None = Field(default=None, ge=0, strict=True)
     ai_config_id: int | None = None
     op: RewriteOp
     # 码点偏移，范围 [0, len(content)]；op=continue 时 start == end 表示光标位置
@@ -89,6 +93,8 @@ class RewriteRequest(BaseModel):
 
 
 class RewriteApply(BaseModel):
+    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_planning_revision: int | None = Field(default=None, ge=0, strict=True)
     start: int = Field(ge=0)
     end: int = Field(ge=0)
     # 预览时的选区原文，用于乐观并发校验
@@ -98,3 +104,17 @@ class RewriteApply(BaseModel):
     before: str | None = Field(default=None, max_length=200)
     replacement: str = Field(max_length=100_000)
     log_id: int | None = None
+
+
+class VersionRestore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_content_revision: int | None = Field(default=None, strict=True, ge=0)
+
+
+class VersionExtract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: int = Field(strict=True, gt=0)
+    expected_content_revision: int = Field(strict=True, ge=0)
+    signature: str = Field(min_length=64, max_length=64, pattern="^[a-f0-9]+$")

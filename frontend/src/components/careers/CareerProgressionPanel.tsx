@@ -9,7 +9,7 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
 import ChapterPositionInput from '../progressions/ChapterPositionInput'
-import { describeAnchor, toPositionInput, type ChapterReference } from '../progressions/position'
+import { describeAnchor, describeBoundary, toPositionInput, type ChapterReference } from '../progressions/position'
 import { buildCareerBaselineChanges, buildCareerEventValue, isStaleCareerRevision, type CareerBaseline } from './careerAssignmentForm'
 import { careerPreviewRequest, careerPreviewResponse, currentCareerPreview, initialCareerPreviewPosition, type CareerPreviewResult } from './careerPreview'
 
@@ -65,7 +65,7 @@ function eventDraft(event: SettingProgression | null, career: Career, expectedRe
     event, expectedRevision, field, exists: object?.exists !== false,
     stageId: typeof value === 'number' ? value : typeof state?.stage_id === 'number' ? state.stage_id : career.stages[0]?.id ?? null,
     note: typeof value === 'string' ? value : typeof state?.note === 'string' ? state.note : '',
-    position: event ? { anchor_kind: event.anchor_kind, chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary } : blankPosition(),
+    position: event ? { anchor_kind: event.anchor_kind, ...(event.anchor_kind === 'scene' ? { scene_id: event.scene_id } : {}), chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary } : blankPosition(),
     sortOrder: event?.sort_order ?? 0,
     historyNote: event?.note ?? '',
   }
@@ -104,7 +104,7 @@ function CareerPreview({ projectId, timeline, career, chapters, onChanged }: Pro
       {request !== null && !current && <Spin size="small" aria-label="正在读取职业设定" />}
       {current?.error && <Alert type="warning" showIcon message={current.error} action={<Button size="small" onClick={onChanged}>刷新</Button>} />}
       {current?.data && <>
-        {current.data.orphaned_event_ids.length > 0 && <Alert type="warning" showIcon message={`${current.data.orphaned_event_ids.length} 条变化的关联章节已删除，未计入结果。`} />}
+        {current.data.orphaned_event_ids.length > 0 && <Alert type="warning" showIcon message={`${current.data.orphaned_event_ids.length} 条变化的关联位置已失效，未计入结果。`} />}
         <Typography.Text>{current.data.fields.exists === true ? `${career.name} · ${stageName(career, current.data.fields.stage_id)}${typeof current.data.fields.note === 'string' && current.data.fields.note ? ` · ${current.data.fields.note}` : ''}` : '此时尚未挂接或已卸下该职业'}</Typography.Text>
       </>}
     </Space>
@@ -201,7 +201,7 @@ export default function CareerProgressionPanel({ projectId, timeline, career, ch
         <Button key="edit" type="link" size="small" disabled={revision === null || busy || loading} onClick={() => { if (revision !== null) { setError(null); setConflict(false); setEvent(eventDraft(item, career, revision)) } }}>编辑</Button>,
         <Button key="delete" type="link" size="small" danger disabled={revision === null || busy || loading} onClick={() => { if (revision !== null) { setError(null); setConflict(false); setDeleting({ event: item, expectedRevision: revision }) } }}>删除</Button>,
       ] : []}>
-        <Space direction="vertical" size={2}><Space wrap><Typography.Text>{describeAnchor(item, chapters)} · {item.boundary === 'start' ? '章初' : '章末'}</Typography.Text><Tag>{sourceLabels[item.source]}</Tag><Tag>{protectionLabels[item.protection]}</Tag>{item.orphaned && <Tag color="orange">章节已删除，不生效</Tag>}</Space><Typography.Text>{eventDescription(item, career)}</Typography.Text>{item.note && <Typography.Text type="secondary">{item.note}</Typography.Text>}</Space>
+        <Space direction="vertical" size={2}><Space wrap><Typography.Text>{describeAnchor(item, chapters)} · {describeBoundary(item, 'short')}</Typography.Text><Tag>{sourceLabels[item.source]}</Tag><Tag>{protectionLabels[item.protection]}</Tag>{item.orphaned && <Tag color="orange">{item.anchor_kind === 'scene' ? '场景已退场或失联，不生效' : '章节已删除，不生效'}</Tag>}</Space><Typography.Text>{eventDescription(item, career)}</Typography.Text>{item.note && <Typography.Text type="secondary">{item.note}</Typography.Text>}</Space>
       </List.Item>} />
       {data.list.total > 20 && <Pagination size="small" current={Math.floor(offset / 20) + 1} pageSize={20} total={data.list.total} onChange={(page) => setOffset((page - 1) * 20)} showSizeChanger={false} />}
     </>}

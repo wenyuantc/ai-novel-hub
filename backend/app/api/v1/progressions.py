@@ -147,10 +147,12 @@ async def read_effective(
     db: DbDep,
     chapter_id: int | None = Query(default=None, ge=1, le=MAX_DB_INT),
     chapter_no: int | None = Query(default=None, ge=1, le=MAX_DB_INT),
+    scene_id: int | None = Query(default=None, ge=1, le=MAX_DB_INT),
     boundary: Boundary = "start",
 ) -> EffectiveOut:
     return await svc.read_effective(
-        db, user.id, project_id, timeline_id, chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary
+        db, user.id, project_id, timeline_id, chapter_id=chapter_id, chapter_no=chapter_no,
+        scene_id=scene_id, boundary=boundary
     )
 
 

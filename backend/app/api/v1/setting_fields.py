@@ -117,10 +117,12 @@ async def fields(
     db: DbDep,
     chapter_id: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
     chapter_no: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
+    scene_id: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
     boundary: Boundary = "start",
 ):
     return await svc.read_entry_fields(
-        db, user.id, project_id, kind, entry_id, chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary
+        db, user.id, project_id, kind, entry_id, chapter_id=chapter_id, chapter_no=chapter_no,
+        scene_id=scene_id, boundary=boundary
     )
 
 

@@ -1,4 +1,5 @@
 import { api, request } from './client'
+import { invalidateProject } from '../utils/projectRefresh'
 import type {
   ChapterCast,
   Character,
@@ -30,5 +31,5 @@ export const castApi = {
     request<ChapterCast>(`/projects/${pid}/chapters/${cid}/cast`, {
       method: 'PUT',
       body: { character_ids: characterIds },
-    }),
+    }).then((result) => { invalidateProject(pid, ['planning', 'chapters']); return result }),
 }

@@ -45,7 +45,7 @@ from app.models import (
     WorldSetting,
     WritingStyle,
 )
-from app.services.project_transfer import importer
+from app.services.project_transfer import exporter, importer
 from app.services.project_transfer.registry import NOT_EXPORTED, PROJECT_RULE, RULES
 from tests.helpers import create_ai_config, create_project, register, wait_task
 
@@ -119,6 +119,18 @@ def _without_ai_settings(data, version):
 
     data["version"] = version
     tables = data["tables"]
+    tables.pop("scenes", None)
+    tables.pop("planning_unit_characters", None)
+    for row in tables.get("chapter_versions", []):
+        assert row.get("scene_snapshot") is None  # 此夹具的版本确实是旧纯文本。
+        row.pop("scene_snapshot", None)
+    for row in tables.get("planning_units", []):
+        row.pop("scene_id", None)
+        row.pop("source_level", None)
+        for field in ("pov", "tags", "character", "world", "organization", "career", "relationship"):
+            row.pop(f"{field}_mode", None)
+    for row in tables.get("setting_progressions", []):
+        row.pop("scene_id", None)
     tables.pop("setting_ai_links", None)
     for name in importer.ENTRY_TABLE_KINDS:
         for row in tables.get(name, []):
@@ -216,6 +228,10 @@ async def _seed(app, project_id: int) -> dict:
         ch3 = Chapter(project_id=project_id, outline_id=o2.id, chapter_no=3, title="下山", content="", status="draft")
         db.add_all([ch1, ch2, ch3])
         await db.flush()
+        from app.services.scene_service import initialize_chapter
+
+        for chapter in (ch1, ch2, ch3):
+            await initialize_chapter(db, chapter)
         plan = ChapterPlan(
             project_id=project_id,
             outline_id=o1.id,
@@ -603,7 +619,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 6 and data["app_schema"] == "0038"
+    assert data["version"] == 7 and data["app_schema"] == "0039"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -979,7 +995,7 @@ async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client,
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 6
+    assert src["format"] == "ainovel.project" and src["version"] == 7
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 不导出任务 / 分块 / 检索单元
     assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
@@ -1273,7 +1289,7 @@ async def test_validation_errors(client, app, monkeypatch):
         (b"not json", "不是合法的 JSON"),
         (b"[1]", "应为 JSON 对象"),
         (dump({**data, "format": "ainovel.cards"}), "format 应为 ainovel.project"),
-        (dump({**data, "version": 7}), "备份来自更新的版本"),
+        (dump({**data, "version": exporter.VERSION + 1}), "备份来自更新的版本"),
         (dump({**data, "version": 0}), "不支持的备份版本"),
         ("﻿".encode() + b"{" * 1 + b'"format": "x"}', "format 应为"),
     ]
@@ -1594,7 +1610,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (6, "0038")
+    assert (data["version"], data["app_schema"]) == (7, "0039")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)
@@ -1728,7 +1744,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
             field.pop("definition_id")
         result = await _import(client, data)
         exported = await _backup(client, result["project"]["id"])
-        assert exported["version"] == 6
+        assert exported["version"] == 7
         assert all(not exported["tables"][table] for table in importer.FIELD_TABLES)
         assert len(exported["tables"]["setting_progressions"]) == len(data["tables"]["setting_progressions"])
         assert [f["base_value"] for f in exported["tables"]["setting_text_fields"]] == [

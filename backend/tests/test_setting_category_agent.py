@@ -114,7 +114,7 @@ async def test_v4_snapshots_tags_categories_rules_and_excludes_both_project_revi
     assert after["characters"][str(entry.id)]["setting_tags"] == ["同盟"]
     assert {"fields_revision", "categories_revision"}.isdisjoint(after["projects"][str(ctx.project_id)])
     captured = effects.diff(before, after)
-    assert all(item["format_version"] == 5 for item in captured)
+    assert all(item["format_version"] == 6 for item in captured)
     await ctx.db.commit()
     await effects.undo(ctx.db, ctx.project_id, captured)
     assert await effects.snapshot(ctx.db, ctx.project_id) == before

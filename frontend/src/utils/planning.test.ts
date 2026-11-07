@@ -3,7 +3,7 @@ import { ApiError } from '../api/client'
 import { batchPayload, emptyBatchDraft, planningReferenceKey, planningRowLabel, planningSourceKey, readPlanningConflict, settingCellDescription } from './planning'
 import type { PlanningRow } from '../api/types'
 
-const row: PlanningRow = { key: 'plan:4', unit_id: null, source: { kind: 'plan', id: 4 }, chapter_id: null, plan_id: 4, title: '雨夜来客', chapter_no: null, outline_id: 2, volume_no: 1, volume_title: '启程', seq: 3, has_content: false, pov_character_id: null, pov_character_name: null, tags: [], references: [] }
+const row: PlanningRow = { key: 'plan:4', unit_id: null, source: { kind: 'plan', id: 4 }, chapter_id: null, plan_id: 4, title: '雨夜来客', chapter_no: null, outline_id: 2, volume_no: 1, volume_title: '启程', seq: 3, scene_id: null, scene_sort: null, content_revision: null, scene_planning: null, source_level: 'chapter', source_chapter_id: null, has_content: false, pov_character_id: null, pov_character_name: null, tags: [], references: [] }
 describe('规划交互契约', () => {
   it('批量替换一种设定不清除其他类型，关系传时间线而非载体id', () => {
     const draft = emptyBatchDraft()

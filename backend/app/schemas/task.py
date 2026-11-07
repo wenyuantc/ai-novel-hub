@@ -38,6 +38,7 @@ class TaskOut(BaseModel):
     title: str
     project_id: int | None
     chapter_id: int | None
+    scene_id: int | None = None
     progress: int
     stage: str
     error: str

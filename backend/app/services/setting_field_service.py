@@ -1163,18 +1163,16 @@ async def read_entry_fields(
     *,
     chapter_id: int | None = None,
     chapter_no: int | None = None,
+    scene_id: int | None = None,
     boundary="start",
 ) -> s.EntryFieldsOut:
-    from app.services.setting_progression_service import _chapter_for_anchor
+    from app.services.setting_progression_service import resolve_story_position
 
     with db.no_autoflush:
         await get_manageable_project(db, user_id, project_id)
-        if chapter_id is not None and chapter_no is not None:
-            raise BadRequestError("章节 ID 与计划章节号只能选择一个")
-        if chapter_id is not None:
-            chapter_no = (await _chapter_for_anchor(db, project_id, chapter_id)).chapter_no
-        position = (
-            StoryPosition(chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary) if chapter_no else None
+        position = await resolve_story_position(
+            db, project_id, chapter_id=chapter_id, chapter_no=chapter_no, scene_id=scene_id,
+            boundary=boundary, optional=True,
         )
         return (await resolve_entry_fields(db, project_id, [s.EntityRef(kind=kind, id=entry_id)], position))[
             kind, entry_id
@@ -1184,6 +1182,9 @@ async def read_entry_fields(
 async def assert_targets_unreferenced(db: AsyncSession, project_id: int, targets: Sequence[s.EntityRef]) -> None:
     """单删/覆盖/撤销共用保护，检查所有保留基础值及事件，不遗漏停用和孤儿。"""
     with db.no_autoflush:
+        from app.services.planning_scene_service import assert_settings_unreferenced
+
+        await assert_settings_unreferenced(db, project_id, targets)
         handles = await _handle_targets(db, project_id)
         requested = {(target.kind, target.id) for target in targets}
         ids = {hid for hid, ref in handles.items() if (ref.kind, ref.id) in requested}

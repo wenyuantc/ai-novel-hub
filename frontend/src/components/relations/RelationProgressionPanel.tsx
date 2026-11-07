@@ -12,7 +12,7 @@ import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
 import { invalidateProject } from '../../utils/projectRefresh'
 import ChapterPositionInput from '../progressions/ChapterPositionInput'
-import { describeAnchor, toPositionInput } from '../progressions/position'
+import { describeAnchor, describeBoundary, toPositionInput } from '../progressions/position'
 import { buildRelationEvent, createRelationRequestScope, readRelationSnapshot, relationSubject, type RelationEventDraft, type RelationEventField, type RelationSnapshot } from './relationForm'
 import { applyRelationRefresh, refreshRelationData } from './relationRefresh'
 
@@ -64,7 +64,7 @@ function draftFor(event: SettingProgression | null, pair: readonly [number, numb
   if (!event) return draft
   if (!event.field_key || !Object.hasOwn(FIELD_LABELS, event.field_key) || event.custom_field_id !== null) throw new Error('此变化的字段无法在关系编辑器中安全修改')
   draft.field = event.field_key as RelationEventField
-  draft.position = { anchor_kind: event.anchor_kind, chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary }
+  draft.position = { anchor_kind: event.anchor_kind, ...(event.anchor_kind === 'scene' ? { scene_id: event.scene_id } : {}), chapter_id: event.chapter_id, chapter_no: event.chapter_no, boundary: event.boundary }
   draft.operation = event.operation; draft.sortOrder = event.sort_order; draft.note = event.note
   if (draft.field === 'presence') {
     if (!object(event.value) || typeof event.value.exists !== 'boolean') throw new Error('关系建立变化格式不完整')
@@ -210,7 +210,7 @@ function RelationProgressionSession({ projectId, pair }: Props) {
           <Popconfirm key="delete" title="删除这条剧情变化？" description="删除后会重新计算该关系的后续状态。" okText="删除" cancelText="取消" onConfirm={() => void removeEvent(event)}><Button type="link" danger disabled={busy}>删除</Button></Popconfirm>,
         ] : []}>
           <Space direction="vertical" size={2} style={{ width: '100%' }}>
-            <Space wrap><Tag color={event.orphaned ? 'orange' : 'blue'}>{describeAnchor(event, data.chapters)}</Tag><Tag>{event.boundary === 'start' ? '从本章起' : '本章结束后'}</Tag>
+            <Space wrap><Tag color={event.orphaned ? 'orange' : 'blue'}>{describeAnchor(event, data.chapters)}</Tag><Tag>{describeBoundary(event)}</Tag>
               <Tag>{event.source === 'analysis' ? '章节分析' : event.source === 'legacy_import' ? '旧资料导入' : '手工记录'}</Tag></Space>
             <Typography.Text strong>{FIELD_LABELS[event.field_key as RelationEventField] ?? event.field_key ?? '未知字段'} · {event.operation === 'append' ? '追加' : '替换'}</Typography.Text>
             <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{eventText(event, [a, b], data.characters, data.types)}</Typography.Paragraph>
@@ -278,12 +278,12 @@ function RelationEventModal({ projectId, data, pair, event, canEdit, canEditNow,
     cancelButtonProps={{ disabled: busy }} closable={!busy} maskClosable={!busy} keyboard={!busy} width={620}>
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       {parentError && <Alert type="warning" showIcon message={parentError} description="草稿仍保留，请刷新关系资料后继续。" action={<Button size="small" onClick={onRefreshParent}>重试刷新</Button>} />}
-      {event?.orphaned && <Alert type="warning" showIcon message="原章节已删除，请选择新的生效位置。" />}
+      {event?.orphaned && <Alert type="warning" showIcon message={event.anchor_kind === 'scene' ? '原场景已退场或失联，请选择新的生效位置。' : '原章节已删除，请选择新的生效位置。'} />}
       {error && <Alert type={conflict ? 'warning' : 'error'} showIcon message={error} description={conflict ? '草稿已保留，请先读取最新版本并核对。' : undefined} />}
       {conflict && <Button onClick={() => void refresh()} loading={busy}>读取最新版本</Button>}
       {comparison === 'deleted' && <Alert type="warning" showIcon message="这条变化已被删除；草稿仍保留，请复制后按需新增。" />}
       {comparison === 'changed' && latest && <Alert type="warning" showIcon message="这条变化已被其他操作修改" description={<Space direction="vertical">
-        <Typography.Text>当前记录：{describeAnchor(latest, data.chapters)} · {latest.boundary === 'start' ? '从本章起' : '本章结束后'} · {FIELD_LABELS[latest.field_key as RelationEventField] ?? latest.field_key}</Typography.Text>
+        <Typography.Text>当前记录：{describeAnchor(latest, data.chapters)} · {describeBoundary(latest)} · {FIELD_LABELS[latest.field_key as RelationEventField] ?? latest.field_key}</Typography.Text>
         <Typography.Text>{eventText(latest, pair, data.characters, data.types)}</Typography.Text><Checkbox checked={ack} onChange={(e) => setAck(e.target.checked)}>我已比较，确认用当前草稿覆盖</Checkbox>
       </Space>} />}
       {comparison === 'unchanged' && <Alert type="info" showIcon message="已读取最新版本，草稿仍保留。" />}

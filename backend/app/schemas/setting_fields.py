@@ -215,16 +215,25 @@ class FieldProgressionCreate(FieldValueWrite):
     anchor_kind: AnchorKind
     chapter_id: PositiveDbInt | None = None
     chapter_no: PositiveDbInt | None = None
+    scene_id: PositiveDbInt | None = None
     boundary: Boundary = "start"
     sort_order: NonnegativeDbInt = 0
     note: str = Field(default="", max_length=200)
 
     @model_validator(mode="after")
     def anchor(self) -> Self:
-        if self.anchor_kind == "chapter" and (self.chapter_id is None or self.chapter_no is not None):
+        if self.anchor_kind == "chapter" and (
+            self.chapter_id is None or self.chapter_no is not None or self.scene_id is not None
+        ):
             raise ValueError("已有章节必须指定章节 ID")
-        if self.anchor_kind == "planned" and (self.chapter_no is None or self.chapter_id is not None):
+        if self.anchor_kind == "planned" and (
+            self.chapter_no is None or self.chapter_id is not None or self.scene_id is not None
+        ):
             raise ValueError("计划章节必须指定章节号")
+        if self.anchor_kind == "scene" and (
+            self.scene_id is None or self.chapter_id is not None or self.chapter_no is not None
+        ):
+            raise ValueError("场景锚点必须只指定场景 ID")
         return self
 
 

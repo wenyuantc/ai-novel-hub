@@ -1,5 +1,4 @@
 import { useSettingsConfirmation } from '../../components/systemSettings/useSettingsConfirmation'
-import MentionPreview from '../../components/mentions/MentionPreview'
 import { readMentionAnchor } from '../../utils/mentions'
 import {
   ArrowLeftOutlined,
@@ -24,6 +23,7 @@ import {
   Input,
   Modal,
   Progress,
+  Segmented,
   Result,
   Space,
   Spin,
@@ -33,7 +33,7 @@ import {
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useBlocker, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ANALYSIS_STATUS, countPending, reviseChapter, reviseCompareFor } from '../../api/analysis'
+import { ANALYSIS_STATUS, countPending, reviseChapter, reviseCompareFor, reviseRunningPresentation } from '../../api/analysis'
 import { versionApi } from '../../api/chapterVersions'
 import {
   chapterApi,
@@ -44,6 +44,13 @@ import {
   polishChapter,
 } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
+import { sceneApi } from '../../api/scenes'
+import SceneWritingPanel from '../../components/scenes/SceneWritingPanel'
+import { useSceneEditor } from '../../components/scenes/useSceneEditor'
+import { sceneTargetAllocation } from '../../components/scenes/scenePresentation'
+import StreamOutput from '../../components/StreamOutput'
+import { useAuthStore } from '../../stores/auth'
+import { authorizationKey } from '../../utils/permissions'
 import { outlineProApi } from '../../api/outlines'
 import { isActiveTask, isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
 import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, StyleChoice, Task } from '../../api/types'
@@ -55,7 +62,6 @@ import ChapterStyleSetting from '../../components/chapter/ChapterStyleSetting'
 import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
 import ContextPreviewPanel from '../../components/chapter/ContextPreviewPanel'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
-import SettingContextPreview from '../../components/chapter/SettingContextPreview'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
 import SkillSelect from '../../components/skills/SkillSelect'
 import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
@@ -93,8 +99,9 @@ export default function ChapterEditorPage() {
   const pid = useProjectId()
   const { cid } = useParams()
   const chapterId = Number(cid)
+  const identity = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
   if (!Number.isFinite(chapterId)) return <Result status="404" title="章节不存在" />
-  return <ChapterLoader key={chapterId} pid={pid} cid={chapterId} />
+  return <ChapterLoader key={`${pid}:${chapterId}:${identity}`} pid={pid} cid={chapterId} />
 }
 
 function ChapterLoader({ pid, cid }: { pid: number; cid: number }) {
@@ -137,7 +144,7 @@ type AIMode = 'generate' | 'polish' | 'rewrite'
 const TOOLBAR_IN_HEADER_MIN_WIDTH = 920
 
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
-  const { canUseAI, managingOther, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, managingOther, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const isMobile = useIsMobile()
   // 工具栏按钮较多：只在正文卡片足够宽（约等于原 xxl 视口、停靠面板关闭时的宽度）时放进卡片标题栏，
   // 其余宽度放在正文上方，避免标题被挤压；按卡片实际宽度判断，右侧停靠面板打开时同样生效
@@ -146,7 +153,6 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   // 移动端 AI 助手面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
-  const confirm = useSettingsConfirmation(modal, !canEdit)
   const navigate = useNavigate()
   const refreshProject = useProjectStore((s) => s.refresh)
   const trackTask = useTasksStore((s) => s.track)
@@ -156,12 +162,18 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
   const [searchParams, setSearchParams] = useSearchParams()
   const mentionAnchor = useMemo(() => readMentionAnchor(searchParams), [searchParams])
-  const [mentionView, setMentionView] = useState(!!mentionAnchor)
 
   const [chapter, setChapter] = useState<Chapter>(initial)
   const [title, setTitle] = useState(initial.title)
-  const [content, setContent] = useState(initial.content)
-  const [saving, setSaving] = useState(false)
+  const requestedSceneId = Number(searchParams.get('scene_id')) || undefined
+  const sceneEditor = useSceneEditor(pid, initial.id, requestedSceneId)
+  const scene = sceneEditor.scene
+  const currentSceneId = scene?.id
+  const confirm = useSettingsConfirmation(modal, !canEdit, `${pid}:${initial.id}:${currentSceneId ?? ''}`)
+  const content = sceneEditor.draft.content
+  const [aiScope, setAiScope] = useState<'scene' | 'chapter'>('scene')
+  const [savingChapter, setSaving] = useState(false)
+  const saving = savingChapter || sceneEditor.saving
   const [resetting, setResetting] = useState(false)
   const [aiMode, setAiMode] = useState<AIMode>('generate')
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
@@ -175,6 +187,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     autoContinue: readAutoContinue(),
   }))
   const [polishInstruction, setPolishInstruction] = useState('')
+  const sceneAllocations = sceneTargetAllocation(genOptions.targetWords, sceneEditor.page?.items.map((item) => item.id) ?? [])
   // 本章细纲（按细纲建章的章节）：展示要点，目标字数预填 est_words
   const [plan, setPlan] = useState<Plan | null>(null)
   // 用户是否已手动改过目标字数：细纲加载完成前改过的不被 est_words 覆盖
@@ -189,6 +202,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   usePublishAgentContext(pid, { chapter_id: initial.id, outline_id: initial.outline_id ?? undefined, selection: content.slice(selection.start, selection.end) })
   const [externalChapter, setExternalChapter] = useState<Chapter | null>(null)
   const [rewriteLocked, setRewriteLocked] = useState(false)
+  const [structureDirty, setStructureDirty] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [analysisOpen, setAnalysisOpen] = useState(false)
   // 按建议重写成功后的评分对比基准（由任务的 analysis_id 得出，任务面板重试 / 其他标签页发起的重写同样适用）
@@ -206,9 +220,18 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [starting, setStarting] = useState(false)
   // 章节处于 generating 时，挂载后要先查一次活动任务再决定是否显示「卡住」提示
   const [attachChecked, setAttachChecked] = useState(initial.status !== 'generating')
-  const scrollRef = useRef<HTMLDivElement>(null)
   // 已经订阅过的任务 id：避免任务结束后轮询列表尚未更新时被重复接上
   const followedIdsRef = useRef(new Set<number>())
+  const detachWriteTask = aiTask.detach
+  const followedWriteTask = aiTask.task
+  const writeTaskRunning = aiTask.running
+  useEffect(() => {
+    const task = followedWriteTask
+    if (task?.scene_id && task.scene_id !== currentSceneId && writeTaskRunning) {
+      followedIdsRef.current.delete(task.id)
+      detachWriteTask()
+    }
+  }, [currentSceneId, followedWriteTask, writeTaskRunning, detachWriteTask])
 
   useEffect(() => {
     if (initial.plan_id === null) return
@@ -228,7 +251,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }, [pid, initial.id, initial.plan_id])
 
-  const dirty = content !== chapter.content || title !== chapter.title
+  const dirty = sceneEditor.dirty || title !== chapter.title
+  const dirtyRef = useRef(dirty)
+  useEffect(() => { dirtyRef.current = dirty }, [dirty])
   const aiRunning = aiTask.running || starting
   const aiStatus = aiTask.task?.status
   const busy = aiRunning || saving
@@ -244,10 +269,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     <StyleChoiceSelect value={styleChoice} onChange={setStyleChoice} context={styleContext} disabled={disabled} />
   )
   const skillSelect = (disabled: boolean) => <SkillSelect value={skillId} onChange={setSkillId} disabled={disabled} />
-  // 排队中 / 尚无输出时仍显示原正文；开始输出后显示实时文本
-  const aiStreaming = aiTask.running && (aiTask.text !== '' || aiStatus === 'running')
-  const displayContent = aiStreaming ? aiTask.text : content
-  const words = useMemo(() => countWords(displayContent), [displayContent])
+  const words = useMemo(() => countWords(content), [content])
 
   const { prev, next } = useMemo(() => {
     const sorted = [...siblings].sort((a, b) => a.chapter_no - b.chapter_no || a.id - b.id)
@@ -258,54 +280,49 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const applyServerChapter = useCallback((c: Chapter) => {
     setChapter(c)
     setTitle(c.title)
-    setContent(c.content)
   }, [])
 
   /** 服务端改写了正文（生成 / 采纳改写 / 回滚）：同步并把光标记录移到末尾（与浏览器行为一致）。 */
   const replaceFromServer = useCallback(
     (c: Chapter) => {
       applyServerChapter(c)
-      setSelection({ start: c.content.length, end: c.content.length })
+      void sceneEditor.controller.load()
+      setSelection({ start: 0, end: 0 })
     },
-    [applyServerChapter],
+    [applyServerChapter, sceneEditor.controller, setSelection],
   )
 
   useProjectRefresh(pid, ['chapters', 'outlines', 'characters', 'memories'], () => {
     onChanged()
     void refreshAnalysis()
     void chapterApi.get(pid, chapter.id).then((next) => {
-      if (next.content === chapter.content && next.title === chapter.title) return
+      if (!canReadNow()) return
+      if (next.content_revision === chapter.content_revision && next.title === chapter.title) return
       if (dirty || editorLocked || saving) setExternalChapter(next)
       else replaceFromServer(next)
-    }).catch((err: unknown) => message.error(errorMessage(err)))
+    }).catch((err: unknown) => { if (canReadNow()) message.error(errorMessage(err)) })
   })
-
-  const syncSelection = (el: HTMLTextAreaElement) => {
-    const { selectionStart: start, selectionEnd: end } = el
-    setSelection((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
-  }
+  useProjectRefresh(pid, ['planning', 'setting-ai-visibility'], () => { void sceneEditor.controller.load() })
 
   const save = useCallback(async (): Promise<boolean> => {
-    if (!canEditNow()) return false
+    if (!canEditNow() || !sceneEditor.controller.getSnapshot().scene) return false
     setSaving(true)
     try {
-      if (!canEditNow()) return false
-      const updated = await chapterApi.update(pid, chapter.id, { title, content })
+      if (!(await sceneEditor.controller.save()) || !canEditNow()) return false
+      const updated = title !== chapter.title
+        ? await chapterApi.update(pid, chapter.id, { title })
+        : await chapterApi.get(pid, chapter.id)
       if (!canEditNow()) return false
       applyServerChapter(updated)
       onChanged()
       void refreshProject()
-      // 正文变化后分析可能变为「已过期」
       void refreshAnalysis()
       return true
     } catch (err) {
-      if (!canEditNow()) return false
-      message.error(errorMessage(err))
+      if (canEditNow()) message.error(errorMessage(err))
       return false
-    } finally {
-      setSaving(false)
-    }
-  }, [pid, chapter.id, title, content, applyServerChapter, onChanged, refreshProject, refreshAnalysis, message, canEditNow])
+    } finally { setSaving(false) }
+  }, [pid, chapter.id, chapter.title, title, sceneEditor.controller, applyServerChapter, onChanged, refreshProject, refreshAnalysis, message, canEditNow])
 
   const handleSave = useCallback(async () => {
     if (!canEditNow()) return
@@ -336,7 +353,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }, [])
 
   // 未保存 / 局部改写预览中（流式或待采纳）离开提示；AI 任务在后台运行，可以直接离开
-  const guard = dirty || rewriteLocked
+  const guard = dirty || rewriteLocked || structureDirty
   useEffect(() => {
     if (!guard) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -347,18 +364,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [guard])
   const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) => guard && currentLocation.pathname !== nextLocation.pathname,
+    ({ currentLocation, nextLocation }) => guard && (currentLocation.pathname !== nextLocation.pathname || new URLSearchParams(currentLocation.search).get('scene_id') !== new URLSearchParams(nextLocation.search).get('scene_id')),
   )
-
-  // 流式输出时自动滚动到底部
-  useEffect(() => {
-    const el = scrollRef.current
-    if (aiStreaming && el) el.scrollTop = el.scrollHeight
-  }, [aiTask.text, aiStreaming])
 
   const reloadChapter = async () => {
     try {
       const fresh = await chapterApi.get(pid, chapter.id)
+      if (!canReadNow()) return
       // 只同步服务端状态，保留本地正文（生成失败/中止时正文未变）
       setChapter(fresh)
     } catch {
@@ -368,6 +380,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   /** AI 操作 / 回滚前：有未保存修改先自动保存。 */
   const ensureSaved = async (): Promise<boolean> => {
+    if (!sceneEditor.controller.getSnapshot().scene) return false
+    if (sceneEditor.conflict || sceneEditor.externalChange) { message.warning('请先核对最新场景并明确接受版本号，当前草稿未覆盖'); return false }
     if (!dirty) return true
     if (!(await save())) return false
     message.info('已自动保存当前修改')
@@ -378,22 +392,43 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const followTask = async (t: Task) => {
     followedIdsRef.current.add(t.id)
     const outcome = await aiTask.follow(t)
-    if (outcome.status === 'detached') return
+    if (outcome.status === 'detached' || !canReadNow()) return
+    if (t.scene_id && t.scene_id !== sceneEditor.controller.getSnapshot().scene?.id) {
+      await reloadChapter()
+      if (!canReadNow()) return
+      void sceneEditor.controller.load()
+      if (outcome.status === 'succeeded') {
+        // 另一景成功也使本章分析过期；只刷新章级派生资料，不把整章稿写入当前景草稿。
+        setReviseCompare(null)
+        onChanged()
+        void refreshProject()
+        void refreshAnalysis()
+      }
+      return
+    }
     if (outcome.status === 'succeeded') {
       const done = parseChapterDone(outcome.result)
-      if (done) {
-        replaceFromServer(done.chapter)
+      if (done && done.chapter.id === chapter.id) {
+        if (dirtyRef.current) { setChapter(done.chapter); setExternalChapter(done.chapter); void sceneEditor.controller.load() }
+        else replaceFromServer(done.chapter)
       } else {
         try {
-          replaceFromServer(await chapterApi.get(pid, chapter.id))
+          const fresh = await chapterApi.get(pid, chapter.id)
+          if (!canReadNow()) return
+          if (dirtyRef.current) { setChapter(fresh); setExternalChapter(fresh); void sceneEditor.controller.load() }
+          else replaceFromServer(fresh)
         } catch {
           // 忽略
         }
       }
       if (done?.warning) message.warning(`生成完成，已保存；${done.warning}`)
       else message.success(SUCCESS_MESSAGES[t.kind] ?? '生成完成，已保存')
-      const cmp = reviseCompareFor(outcome.task ?? t, latestAnalysisIdRef.current)
-      if (cmp) setReviseCompare(cmp)
+      const finishedTask = outcome.task ?? t
+      if (finishedTask.kind === 'chapter.revise') {
+        const cmp = reviseCompareFor({ ...finishedTask, scene_id: t.scene_id ?? finishedTask.scene_id }, latestAnalysisIdRef.current)
+        // Scene 重写只令章分析过期；也清掉此前整章任务留下的比较，不等待不存在的自动分析。
+        setReviseCompare(cmp)
+      }
       onChanged()
       void refreshProject()
       // 成功后后端可能已自动排队分析本章：刷新状态以接上分析任务
@@ -411,7 +446,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   /** 接上由其他入口（任务面板重试、另一个标签页）为本章创建的任务 */
   const attachExternal = (t: Task) => {
-    if (dirty) message.warning('本章已有后台任务开始执行，当前未保存的修改将在任务完成后被覆盖')
+    if (dirty) message.warning('本章已有后台任务开始执行；本地场景草稿会保留，完成后请核对最新版本')
     setAiMode(aiModeForTask(t))
     setChapter((prev) => ({ ...prev, status: 'generating' }))
     void followTask(t)
@@ -423,10 +458,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   useEffect(() => {
     if (!canUseAI || !attachChecked || aiRunning) return
     const t = activeTasks.find(
-      (x) => x.chapter_id === chapter.id && isChapterWriteKind(x.kind) && !followedIdsRef.current.has(x.id),
+      (x) => x.chapter_id === chapter.id && isChapterWriteKind(x.kind) && (!x.scene_id || x.scene_id === scene?.id) && !followedIdsRef.current.has(x.id),
     )
     if (t) attachExternalRef.current(t)
-  }, [activeTasks, attachChecked, aiRunning, chapter.id, canUseAI])
+  }, [activeTasks, attachChecked, aiRunning, chapter.id, canUseAI, scene?.id])
 
   // 批量生成正在写本章（批量任务没有 chapter_id，按断点里的当前章识别）：只读等待、不提供复位；写完后从服务端刷新正文
   const batchWriting = canUseAI && activeTasks.some(
@@ -450,17 +485,17 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   // 章节处于 generating：查找它的活动任务（排队或运行中）并自动接上
   useEffect(() => {
-    if (!canUseAI || initial.status !== 'generating') return
+    if (!canUseAI || initial.status !== 'generating' || !currentSceneId) return
     let alive = true
     taskApi
       .list({ chapter_id: initial.id, active: true, limit: 5 })
       .then((list) => {
         if (!alive) return
-        const t = list.find((x) => isChapterWriteKind(x.kind))
+        const t = list.find((x) => isChapterWriteKind(x.kind) && (!x.scene_id || x.scene_id === currentSceneId))
         if (t) {
           setAiMode(aiModeForTask(t))
           void followRef.current(t)
-        }
+        } else { const other = list.find((x) => isChapterWriteKind(x.kind)); if (other) trackTask(other) }
       })
       .catch(() => {
         // 查询失败时按「卡住」处理，用户仍可复位
@@ -471,40 +506,31 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     return () => {
       alive = false
     }
-  }, [initial.id, initial.status, canUseAI])
+  }, [initial.id, initial.status, canUseAI, currentSceneId, trackTask])
 
   const runAI = async (mode: 'generate' | 'polish') => {
-    if (!canUseAI) return
-    if (!(await ensureSaved())) return
+    if (!canUseAI || !canEditNow() || !(await ensureSaved())) return
+    const current = sceneEditor.controller.getSnapshot().scene
+    if (!current) return
+    const versions = { expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
     setStarting(true)
     let created: Task
     try {
-      created =
-        mode === 'generate'
-          ? await generateChapter(chapter.id, {
-              ai_config_id: aiConfigId,
-              instruction: genOptions.instruction.trim(),
-              target_words: genOptions.targetWords,
-              // 后端默认 false，必须显式传
-              auto_continue: genOptions.autoContinue,
-              style: styleChoice,
-              skill_id: skillId,
-            })
-          : await polishChapter(chapter.id, {
-              ai_config_id: aiConfigId,
-              instruction: polishInstruction.trim(),
-              style: styleChoice,
-              skill_id: skillId,
-            })
+      if (mode === 'generate') {
+        const body = { ai_config_id: aiConfigId, instruction: genOptions.instruction.trim(), target_words: genOptions.targetWords, auto_continue: genOptions.autoContinue, style: styleChoice, skill_id: skillId, ...versions }
+        created = aiScope === 'scene' ? await sceneApi.generate(pid, chapter.id, current.id, body) : await generateChapter(chapter.id, body)
+      } else {
+        const body = { ai_config_id: aiConfigId, instruction: polishInstruction.trim(), style: styleChoice, skill_id: skillId, ...versions }
+        created = aiScope === 'scene' ? await sceneApi.polish(pid, chapter.id, current.id, body) : await polishChapter(chapter.id, body)
+      }
+      if (!canEditNow()) return
+      if (sceneEditor.controller.getSnapshot().scene?.id !== current.id) { trackTask(created); return }
     } catch (err) {
-      message.error(errorMessage(err))
-      setStarting(false)
+      if (canEditNow() && sceneEditor.controller.getSnapshot().scene?.id === current.id) message.error(errorMessage(err))
       await reloadChapter()
       return
-    }
-    setStarting(false)
+    } finally { if (canEditNow()) setStarting(false) }
     trackTask(created)
-    // 任务创建即抢占章节
     setChapter((prev) => ({ ...prev, status: 'generating' }))
     await followTask(created)
   }
@@ -516,9 +542,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     setStarting(true)
     let created: Task
     try {
-      created = await reviseChapter(chapter.id, { ...body, ai_config_id: aiConfigId, style: styleChoice, skill_id: skillId })
+      const current = sceneEditor.controller.getSnapshot().scene
+      if (!current) { setStarting(false); return false }
+      const request = { ...body, ai_config_id: aiConfigId, style: styleChoice, skill_id: skillId, expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
+      created = aiScope === 'scene' ? await sceneApi.revise(pid, chapter.id, current.id, request) : await reviseChapter(chapter.id, request)
+      if (!canEditNow()) return false
+      if (sceneEditor.controller.getSnapshot().scene?.id !== current.id) { trackTask(created); setStarting(false); return true }
     } catch (err) {
-      message.error(errorMessage(err))
+      if (canEditNow() && sceneEditor.controller.getSnapshot().scene?.id === currentSceneId) message.error(errorMessage(err))
       setStarting(false)
       await reloadChapter()
       return false
@@ -554,8 +585,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const confirmGenerate = () => {
     if (content.trim()) {
       confirm({
-        title: '重新生成正文？',
-        content: '当前正文会自动存为历史版本，可在「版本历史」中对比或恢复。生成完成后覆盖正文，中途停止则保持原样。',
+        title: aiScope === 'scene' ? '重新生成当前场景？' : '按现有场景结构重新生成整章？',
+        content: aiScope === 'scene' ? '只更新当前场景正文，摘要和规划不变；旧稿自动保留历史。中途停止保持原样。' : '按顺序逐场景处理，仅更新正文，身份、顺序、摘要与规划不变。全部成功后整章统一保存，中途停止不部分覆盖。目标字数是整章总量。',
         okText: '生成',
         cancelText: '取消',
         onOk: () => {
@@ -567,15 +598,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const handleRestore = async (v: ChapterVersionBrief): Promise<boolean> => {
+  const handleRestore = async (v: ChapterVersionBrief, expectedRevision?: number): Promise<boolean> => {
     if (!canEditNow()) return false
     if (!(await ensureSaved())) return false
     if (!canEditNow()) return false
     try {
       if (!canEditNow()) return false
-      const updated = await versionApi.restore(pid, chapter.id, v.id)
+      const updated = await versionApi.restore(pid, chapter.id, v.id, expectedRevision ?? sceneEditor.controller.getSnapshot().scene?.content_revision)
       if (!canEditNow()) return false
-      replaceFromServer(updated)
+      if (sceneEditor.controller.getSnapshot().scene?.id === currentSceneId) replaceFromServer(updated)
       message.success(`已恢复到 v${v.seq}`)
       onChanged()
       void refreshProject()
@@ -634,11 +665,30 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const stuck = canUseAI && chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
+  const otherSceneWriting = canUseAI && activeTasks.some((task) => task.chapter_id === chapter.id && isChapterWriteKind(task.kind) && isActiveTask(task.status) && !!task.scene_id && task.scene_id !== scene?.id)
+  const wasOtherSceneWriting = useRef(false)
+  useEffect(() => {
+    if (otherSceneWriting) { wasOtherSceneWriting.current = true; return }
+    if (!wasOtherSceneWriting.current) return
+    wasOtherSceneWriting.current = false
+    if (!canReadNow()) return
+    // 未订阅的异景任务退出也重新读取章级派生状态，不推测终态或自动发起分析。
+    void sceneEditor.controller.load()
+    void chapterApi.get(pid, chapter.id).then((fresh) => {
+      if (!canReadNow()) return
+      setChapter(fresh)
+      setReviseCompare(null)
+      onChanged()
+      void refreshProject()
+      void refreshAnalysis()
+    }).catch((err: unknown) => { if (canReadNow()) message.error(errorMessage(err)) })
+  }, [otherSceneWriting, sceneEditor.controller, pid, chapter.id, canReadNow, message, onChanged, refreshProject, refreshAnalysis])
+  const stuck = canUseAI && !otherSceneWriting && chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
   // 批量正在写本章：正文 / 标题只读、不能保存（后端对生成中章节的正文 PATCH 返回 409，写完后会用服务端正文覆盖本地）
-  const batchLocked = batchWriting && chapter.status === 'generating'
+  const batchLocked = otherSceneWriting || batchWriting && chapter.status === 'generating'
   const status = aiRunning ? CHAPTER_STATUS.generating : CHAPTER_STATUS[chapter.status]
-  const revising = aiRunning && aiTask.task?.kind === 'chapter.revise'
+  const revising = aiTask.running && aiTask.task?.kind === 'chapter.revise'
+  const reviseRunningCopy = reviseRunningPresentation(aiTask.task, autoAnalyze)
   const analysisStatus = ANALYSIS_STATUS[analysis.status]
   const pendingChanges = countPending(analysis.latest?.changes)
   // 任务面板「跳转」带 ?panel=analysis 时直接打开分析抽屉
@@ -654,8 +704,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const reviseBlockedReason =
     hasConfig === false
       ? '尚未配置 AI 模型'
-      : !content.trim()
-        ? '章节正文为空，无法重写'
+      : !(aiScope === 'scene' ? content : chapter.content).trim()
+        ? aiScope === 'scene' ? '当前场景正文为空，无法重写' : '章节正文为空，无法重写'
         : aiRunning || stuck || chapter.status === 'generating' || !attachChecked
           ? '本章正在生成中，请稍候'
           : saving || rewriteLocked
@@ -716,6 +766,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const aiPanel = (
     <Card size="small" title="AI 助手">
       <Space direction="vertical" style={{ width: '100%' }}>
+        <Segmented aria-label="AI处理范围" value={aiScope} disabled={editorLocked || saving} options={[{ value: 'scene', label: '当前场景' }, { value: 'chapter', label: '整章保结构' }]} onChange={setAiScope} />
+        <Typography.Text type="secondary">{aiScope === 'scene' ? `只更新场景 ${(scene?.sort ?? 0) + 1} 的正文；摘要与规划不变` : '逐场景生成提案，整章统一保存；目标字数为整章总量'}</Typography.Text>
         <div>
           <Typography.Text type="secondary">AI 配置</Typography.Text>
           <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
@@ -740,7 +792,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 <Space direction="vertical" style={{ width: '100%' }}>
                   {plan && <ChapterPlanCard plan={plan} />}
                   <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
-                  <ContextPreviewPanel chapterId={chapter.id} />
+                  {aiScope === 'chapter' && (sceneAllocations ? <Typography.Text type="secondary">已保存结构的总量分配：{sceneAllocations.slice(0, 12).map((item, index) => `场景 ${index + 1}：${item.words} 字`).join('；')}{sceneAllocations.length > 12 ? `；其余 ${sceneAllocations.length - 12} 个场景按同一均分规则分配` : ''}</Typography.Text> : <Alert type="warning" message="目标总字数不足以为每个场景分配正数字数，或场景目录尚未加载。" />)}
+                  {aiScope === 'chapter' && <ContextPreviewPanel chapterId={chapter.id} />}
                 </Space>
               ),
             },
@@ -758,6 +811,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               disabled: aiRunning,
               children: (
                 <RewritePanel
+                  key={scene?.id ?? 'loading'}
+                  sceneId={scene?.id}
+                  getSceneVersions={() => { const current = sceneEditor.controller.getSnapshot().scene; return current ? { content_revision: current.content_revision, planning_revision: current.planning_revision } : null }}
+                  onSceneApplied={() => { void sceneEditor.controller.load(undefined, false); void reloadChapter(); onChanged(); void refreshProject(); void refreshAnalysis() }}
                   pid={pid}
                   chapterId={chapter.id}
                   content={content}
@@ -766,7 +823,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   styleChoice={styleChoice}
                   skillId={skillId}
                   // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
-                  disabled={aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
+                  disabled={!scene || aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
                   ensureSaved={ensureSaved}
                   onLockChange={setRewriteLocked}
                   onApplied={handleRewriteApplied}
@@ -775,8 +832,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             },
           ]}
         />
+        {aiTask.running && <><Typography.Text strong>{aiTask.task?.scene_id ? `场景任务 #${aiTask.task.scene_id} · 只读提案` : '整章保结构任务 · 只读提案'}</Typography.Text><StreamOutput text={aiTask.text} running maxHeight={320} /></>}
         {revising && (
-          <Alert type="info" showIcon message="正在按分析建议重写本章" description="完成后覆盖正文，旧稿自动存为历史版本。" />
+          <Alert type="info" showIcon message={reviseRunningCopy.title} description={reviseRunningCopy.description} />
         )}
         {aiTask.running && aiStatus === 'queued' && aiTask.task && (
           <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
@@ -809,20 +867,20 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             type="primary"
             block
             icon={<ThunderboltOutlined />}
-            disabled={hasConfig === false || stuck || saving || !attachChecked}
+            disabled={!scene || sceneEditor.loading || !!sceneEditor.conflict || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || (aiScope === 'chapter' && !sceneAllocations)}
             onClick={confirmGenerate}
           >
-            {content.trim() ? '重新生成本章' : '生成本章正文'}
+            {aiScope === 'scene' ? content.trim() ? '重新生成当前场景' : '生成当前场景正文' : '按现有场景生成整章'}
           </Button>
         ) : (
           <Button
             type="primary"
             block
             icon={<ThunderboltOutlined />}
-            disabled={hasConfig === false || stuck || saving || !attachChecked || !content.trim()}
+            disabled={!scene || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || !(aiScope === 'scene' ? content : chapter.content).trim()}
             onClick={() => void runAI('polish')}
           >
-            润色本章
+            {aiScope === 'scene' ? '润色当前场景' : '逐场景润色整章'}
           </Button>
         )}
         {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
@@ -835,7 +893,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         )}
         {aiMode !== 'rewrite' && (
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
-            生成会自动带入世界观、角色、本卷大纲与前文；完成后自动保存，被覆盖的旧稿自动存为历史版本。任务在后台运行，可离开本页，返回后自动接上；生成中不可编辑，可随时停止，停止后正文保持原样。
+            当前场景使用本场景有效规划和开始时的设定；整章按现有场景顺序生成，仅更新正文，全部成功后统一保存。旧稿自动保留历史，任务可离页继续；场景与整章提案始终只读，不覆盖本地草稿。
           </Typography.Paragraph>
         )}
       </Space>
@@ -844,7 +902,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   return (
     <>
-      {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="智能体已更新此章节，当前本地草稿已保留" description="加载最新版本会替换编辑器中尚未保存的内容。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => confirm({ title: '加载最新章节？', content: '编辑器中尚未保存的修改会被替换。', onOk: async () => { if (!canEditNow()) return; const latest = await chapterApi.get(pid, chapter.id); if (!canEditNow()) return; replaceFromServer(latest); setExternalChapter(null) } })}>加载最新版本</Button>} />}
+      {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="章节已被其他操作更新，本地场景草稿已保留" description="可加载最新章信息；场景草稿保留并单独核对，未保存的章节标题会在确认后替换。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => confirm({ title: '加载最新章信息？', content: '未保存的章节标题会替换为服务端值；场景草稿仍保留，需单独核对。', onOk: async () => { if (!canEditNow()) return; const latest = await chapterApi.get(pid, chapter.id); if (!canEditNow()) return; replaceFromServer(latest); setExternalChapter(null) } })}>核对最新章信息</Button>} />}
       <div style={splitRow}>
         <div ref={editorPaneRef} style={splitPane(640)}>
           <Card
@@ -855,11 +913,12 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   type="text"
                   size="small"
                   icon={<ArrowLeftOutlined />}
+                  aria-label="返回章节列表"
                   onClick={() => navigate(`/projects/${pid}/chapters`)}
                 />
                 <span>第 {chapter.chapter_no} 章</span>
                 <Tag color={status.color}>{status.label}</Tag>
-                <Typography.Text type="secondary">{words} 字</Typography.Text>
+                <Typography.Text type="secondary">当前场景 {words} 字 · 整章 {chapter.word_count} 字</Typography.Text>
                 {dirty && !aiRunning && <Tag color="orange">未保存</Tag>}
                 {canUseAI && <Tag color={analysisStatus.color} style={{ cursor: 'pointer' }} onClick={() => setAnalysisOpen(true)}>
                   {analysisStatus.label}
@@ -898,11 +957,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               onChange={(e) => setTitle(e.target.value)}
               placeholder="章节标题"
               maxLength={200}
-              disabled={!canEdit || editorLocked || batchLocked}
+              disabled={!canEdit || editorLocked || batchLocked || saving}
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
-            <CastSelect pid={pid} chapterId={chapter.id} disabled={editorLocked} />
+            <CastSelect pid={pid} chapterId={chapter.id} disabled={editorLocked || saving || batchLocked || stuck} />
             <ChapterStyleSetting
               pid={pid}
               chapterId={chapter.id}
@@ -912,29 +971,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               disabled={editorLocked}
               onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
             />
-            <SettingContextPreview projectId={pid} chapterId={chapter.id} />
-            <Space wrap style={{ marginBlock: 8 }}>
-              <Button aria-pressed={mentionView} disabled={aiStreaming} onClick={() => setMentionView((v) => !v)}>{mentionView ? '返回正文编辑' : '查看提及标记'}</Button>
-              <Typography.Text type="secondary">{aiStreaming ? '生成完成后可查看提及' : '点击标记可在原页查阅设定'}</Typography.Text>
-            </Space>
-            <div ref={scrollRef} style={{ height: 'calc(100vh - 300px)', minHeight: 360, overflow: 'auto' }}>
-              {mentionView && !aiStreaming ? <div style={{ padding: 12, fontSize: 16, lineHeight: 1.9 }}><MentionPreview projectId={pid} text={content} anchor={mentionAnchor} draft /></div> : (
-              <Input.TextArea
-                value={displayContent}
-                onChange={(e) => {
-                  setContent(e.target.value)
-                  syncSelection(e.target)
-                }}
-                onSelect={(e) => syncSelection(e.currentTarget)}
-                onKeyUp={(e) => syncSelection(e.currentTarget)}
-                onMouseUp={(e) => syncSelection(e.currentTarget)}
-                readOnly={!canEdit || editorLocked || batchLocked}
-                autoSize={{ minRows: 20 }}
-                placeholder={managingOther ? '在此编辑正文' : '在此书写正文，或使用右侧「AI 生成」'}
-                style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}
-              />
-              )}
-            </div>
+            {otherSceneWriting && <Alert type="info" showIcon message="本章另一场景正在后台写作；当前草稿保留，完成后请核对最新版本。" />}
+            <SceneWritingPanel onStructureDirtyChange={setStructureDirty} projectId={pid} chapter={chapter} state={sceneEditor} controller={sceneEditor.controller} disabled={editorLocked || batchLocked || saving || stuck} selection={selection} onSelection={setSelection} ensureSaved={ensureSaved} onChanged={() => { onChanged(); void reloadChapter(); void refreshProject(); void refreshAnalysis() }} onSelect={async (sid) => { if (rewriteLocked || aiRunning || saving) return false; if (!(await ensureSaved())) return false; const selected = await sceneEditor.controller.select(sid); if (selected) { setSelection({ start: 0, end: 0 }); const next = new URLSearchParams(searchParams); next.set('scene_id', String(sid)); setSearchParams(next, { replace: true }) } return selected }} mentionAnchor={mentionAnchor} />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               最后更新：{formatTime(chapter.updated_at)} · Ctrl/⌘ + S 保存
             </Typography.Text>
@@ -966,22 +1004,29 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         </>
       )}
       <VersionDrawer
+        key={`versions:${currentSceneId}`}
         pid={pid}
         chapterId={chapter.id}
         open={versionsOpen}
         onClose={() => setVersionsOpen(false)}
-        currentContent={content}
-        currentDirty={dirty}
+        currentContent={chapter.content}
+        currentDirty={false}
+        sceneContext={{ scenes: sceneEditor.page?.items ?? [], currentSceneId: scene?.id ?? null, prepare: async () => await ensureSaved() ? sceneEditor.controller.getSnapshot().scene?.content_revision ?? null : null, onExtract: async (version, preview) => { if (!canEditNow()) return false; try { await versionApi.extract(pid, chapter.id, version.id, { scene_id: preview.scene_id, expected_content_revision: preview.content_revision, signature: preview.signature }); if (!canEditNow()) return false; await sceneEditor.controller.load(); await reloadChapter(); onChanged(); void refreshProject(); void refreshAnalysis(); message.success('完整旧稿已提取到指定场景，其他场景不变'); return true } catch (err) { if (canEditNow()) message.error(errorMessage(err)); return false } } }}
         restoreDisabled={editorLocked || saving || stuck}
         onRestore={handleRestore}
       />
       {canUseAI && <AnalysisDrawer
+        key={`analysis:${currentSceneId}`}
         open={analysisOpen || panelRequested}
         onClose={closeAnalysis}
         chapterId={chapter.id}
+        reviseScope={aiScope === 'scene'
+          ? { kind: 'scene', sceneId: currentSceneId ?? null, sceneTitle: scene?.title, sceneOrder: scene?.sort }
+          : { kind: 'chapter', sceneCount: sceneEditor.page?.total ?? 0 }}
+        reviseTask={revising ? aiTask.task : null}
         analysis={analysis}
         autoAnalyze={autoAnalyze}
-        analyzeDisabled={hasConfig === false || aiRunning || stuck || saving || !content.trim()}
+        analyzeDisabled={hasConfig === false || aiRunning || stuck || saving || !chapter.content.trim()}
         onAnalyze={runAnalyze}
         reviseBlockedReason={reviseBlockedReason}
         reviseRunning={revising}
@@ -992,7 +1037,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       />}
       <Modal
         open={blocker.state === 'blocked'}
-        title={dirty ? '有未保存的修改' : '局部改写结果未采纳'}
+        title={dirty ? '有未保存的修改' : structureDirty ? '场景顺序尚未保存' : '局部改写结果未采纳'}
         okText="离开"
         cancelText="留下"
         okButtonProps={{ danger: true }}
@@ -1001,7 +1046,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       >
         {dirty
           ? '离开后未保存的修改将丢失，确定离开吗？'
-          : '离开将丢弃局部改写的预览结果（正文不受影响）。确定离开吗？'}
+          : structureDirty ? '离开将丢弃尚未提交的拟排序（服务端顺序不受影响）。确定离开吗？' : '离开将丢弃局部改写的预览结果（正文不受影响）。确定离开吗？'}
       </Modal>
     </>
   )

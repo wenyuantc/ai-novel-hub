@@ -38,7 +38,11 @@ import {
   priorityLabel,
   replaceChange,
   REVISE_PRESERVE_PRESETS,
+  reviseRunningPresentation,
+  reviseScopePresentation,
+  reviseScopeForTask,
   type ReviseCompare,
+  type ReviseScope,
   SCORE_KEYS,
   SCORE_LABELS,
   SCORE_RUBRIC,
@@ -47,7 +51,7 @@ import {
 import { errorMessage } from '../../api/client'
 import { candidateLabel, readCandidates } from '../../api/foreshadows'
 import { queueLabel } from '../../api/tasks'
-import type { Analysis, AnalysisBrief, AnalysisChange, AnalysisScores, ReviseChapterRequest } from '../../api/types'
+import type { Analysis, AnalysisBrief, AnalysisChange, AnalysisScores, ReviseChapterRequest, Task } from '../../api/types'
 import type { ChapterAnalysis } from '../../hooks/useChapterAnalysis'
 import { useLoader } from '../../hooks/useLoader'
 import { formatTime } from '../../utils/time'
@@ -61,7 +65,7 @@ interface Props {
   onClose: () => void
   chapterId: number
   analysis: ChapterAnalysis
-  /** 项目是否开启自动分析（重写后是否会自动重新分析） */
+  /** 项目自动分析设置仅用于整章成功后的提示，不给独立场景安排全章分析。 */
   autoAnalyze: boolean
   /** 生成中 / 正文为空 / 没有 AI 配置等情况下禁止发起分析 */
   analyzeDisabled: boolean
@@ -78,6 +82,10 @@ interface Props {
   reviseStyle?: ReactNode
   /** 重写表单中的 Skill 选择（与 AI 助手的「Skill（可选）」同一状态） */
   reviseSkill?: ReactNode
+  /** 本次表单的范围和真实 Scene 身份；旧调用缺省为章级。 */
+  reviseScope?: ReviseScope
+  /** 运行提示只读实际任务范围，不复用表单选择。 */
+  reviseTask?: Pick<Task, 'kind' | 'scene_id'> | null
 }
 
 /** 章节分析抽屉：状态与分析按钮、评分对比、分析结果（含建议与重写表单）、回写清单、历史与评分走势。 */
@@ -114,6 +122,8 @@ function AnalysisBody({
   compare,
   reviseStyle,
   reviseSkill,
+  reviseScope,
+  reviseTask,
 }: Omit<Props, 'open' | 'onClose'>) {
   const { message } = App.useApp()
   const { latest, version, patchChange } = analysis
@@ -237,6 +247,7 @@ function AnalysisBody({
         analyzing={running}
         autoAnalyze={autoAnalyze}
         reviseRunning={reviseRunning}
+        reviseTask={reviseTask}
       />
       {!hasAnalysis && !running ? (
         <Empty description="本章尚未分析。分析会提炼摘要、情节点与钩子，识别设定变化并回写，给出评分和改进建议。" />
@@ -273,6 +284,9 @@ function AnalysisBody({
                       onRevise={onRevise}
                       reviseStyle={reviseStyle}
                       reviseSkill={reviseSkill}
+                      reviseScope={reviseScope}
+                      reviseTask={reviseTask}
+                      autoAnalyze={autoAnalyze}
                     />
                   ) : (
                     !viewingOther && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={running ? '分析进行中…' : '加载中…'} />
@@ -320,6 +334,7 @@ function CompareCard({
   analyzing,
   autoAnalyze,
   reviseRunning,
+  reviseTask,
 }: {
   compare: ReviseCompare | null
   history: AnalysisBrief[]
@@ -327,10 +342,12 @@ function CompareCard({
   analyzing: boolean
   autoAnalyze: boolean
   reviseRunning: boolean
+  reviseTask?: Props['reviseTask']
 }) {
   const { token } = theme.useToken()
   if (reviseRunning) {
-    return <Alert type="info" showIcon message="正在按建议重写，完成后正文自动覆盖并重新分析。" />
+    const running = reviseRunningPresentation(reviseTask, autoAnalyze)
+    return <Alert type="info" showIcon message={running.title} description={running.description} />
   }
   if (!compare) return null
   const fresh = latestId !== null && (compare.sinceAnalysisId === null || latestId > compare.sinceAnalysisId)
@@ -340,9 +357,11 @@ function CompareCard({
         type="info"
         showIcon
         message={
-          analyzing || autoAnalyze
-            ? '重写完成，正在重新分析，完成后显示前后评分对比…'
-            : '重写完成。项目已关闭自动分析，点击「重新分析」后可对比前后评分。'
+          analyzing
+            ? '整章重写完成，正在重新分析，完成后显示前后评分对比…'
+            : autoAnalyze
+              ? '整章重写完成，等待新的整章分析后显示前后评分对比；也可点击「重新分析」。'
+              : '整章重写完成。项目已关闭自动分析，点击「重新分析」后可对比前后评分。'
         }
       />
     )
@@ -378,10 +397,13 @@ interface ResultProps {
   onRevise: Props['onRevise']
   reviseStyle?: ReactNode
   reviseSkill?: ReactNode
+  reviseScope?: ReviseScope
+  reviseTask?: Props['reviseTask']
+  autoAnalyze: boolean
 }
 
 /** 单次分析结果：评分（与上次差值）、指标、摘要、情节点、钩子、冲突与情感、建议 + 按建议重写表单 */
-function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRunning, onRevise, reviseStyle, reviseSkill }: ResultProps) {
+function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRunning, onRevise, reviseStyle, reviseSkill, reviseScope, reviseTask, autoAnalyze }: ResultProps) {
   const { token } = theme.useToken()
   const { message } = App.useApp()
   const delta = scoreDelta(detail.scores, previousScores)
@@ -392,6 +414,9 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
   const [targetWords, setTargetWords] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const candidates = useMemo(() => readCandidates(detail.foreshadow_candidates), [detail.foreshadow_candidates])
+  const displayedScope = reviseRunning ? reviseScopeForTask(reviseTask, reviseScope) : reviseScope
+  const presentation = reviseScopePresentation(displayedScope, autoAnalyze)
+  const runningPresentation = reviseRunningPresentation(reviseTask, autoAnalyze)
 
   const handleRevise = async () => {
     const built = buildReviseRequest({
@@ -537,6 +562,7 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
             })}
           </Checkbox.Group>
         )}
+        <Alert type="info" showIcon style={{ marginTop: 12 }} message={`本次重写范围：${presentation.scopeLabel}`} description="建议来自本章分析，仅处理本次所选范围。" />
         <Form layout="vertical" style={{ marginTop: 12 }} disabled={reviseRunning || submitting}>
           <Form.Item label="补充修改要求（可选）" style={{ marginBottom: 8 }}>
             <Input.TextArea
@@ -557,7 +583,7 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
               options={REVISE_PRESERVE_PRESETS.map((p) => ({ value: p, label: p }))}
             />
           </Form.Item>
-          <Form.Item label="目标字数（留空 = 原文字数）" style={{ marginBottom: 8 }}>
+          <Form.Item label={presentation.targetWordsLabel} extra={presentation.targetWordsHint} style={{ marginBottom: 8 }}>
             <InputNumber
               min={300}
               max={20000}
@@ -590,10 +616,10 @@ function AnalysisResult({ detail, previousScores, reviseBlockedReason, reviseRun
           disabled={Boolean(reviseBlockedReason) || (checked.length === 0 && !instruction.trim())}
           onClick={() => void handleRevise()}
         >
-          {reviseRunning ? '正在按建议重写…' : `按建议重写${checked.length ? `（${checked.length} 条）` : ''}`}
+          {reviseRunning ? `${runningPresentation.title}…` : `按建议重写${reviseScope?.kind === 'scene' ? '当前场景' : '整章'}${checked.length ? `（${checked.length} 条）` : ''}`}
         </Button>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
-          重写在后台运行，完成后覆盖正文，旧稿自动存为历史版本（来源「按建议重写」），并自动重新分析以对比评分。
+          重写在后台运行，旧稿自动存为历史版本（来源「按建议重写」）。{presentation.completionHint}
         </Typography.Paragraph>
       </Card>
       {candidates.length > 0 && (

@@ -111,16 +111,16 @@ export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
  * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页；大纲续写 / 展开 → 大纲页；批量生成 → 章节页；
  * 建索引（文档 / 重建 / 记忆向量）→ 知识库页；拆书反推 → 项目概览。无法定位时为 null。
  */
-export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'>): string | null {
+export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> & Partial<Pick<Task, 'scene_id'>>): string | null {
   if (task.project_id === null) return null
   const base = `/projects/${task.project_id}`
   switch (task.kind) {
     case 'chapter.generate':
     case 'chapter.polish':
-      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}`
+      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}${task.scene_id ? `?scene_id=${task.scene_id}` : ''}`
     case 'chapter.analyze':
     case 'chapter.revise':
-      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}?${ANALYSIS_PANEL_QUERY}`
+      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}?${ANALYSIS_PANEL_QUERY}${task.scene_id ? `&scene_id=${task.scene_id}` : ''}`
     case 'character.generate':
     case 'relations.parse':
       return `${base}/characters`

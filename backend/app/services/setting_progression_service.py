@@ -16,11 +16,13 @@ from pydantic import JsonValue, ValidationError
 from sqlalchemy import and_, case, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Chapter, Character, WorldSetting
+from app.models import Chapter, Character, Project, WorldSetting
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
+from app.models.scenes import Scene
 from app.schemas.progression import (
     AnchorKind,
     BaselineOut,
@@ -250,7 +252,9 @@ async def add_initial_text_fields(
     return result
 
 
-def _as_event(row: SettingProgression, resolved_chapter_no: int | None) -> ProgressionEvent:
+def _as_event(
+    row: SettingProgression, resolved_chapter_no: int | None, *, scene_position: StoryPosition | None = None
+) -> ProgressionEvent:
     return ProgressionEvent(
         id=row.id,
         field_key=row.field_key,
@@ -260,13 +264,59 @@ def _as_event(row: SettingProgression, resolved_chapter_no: int | None) -> Progr
         anchor_kind=cast(AnchorKind, row.anchor_kind),
         chapter_id=row.chapter_id,
         chapter_no=row.chapter_no,
-        resolved_chapter_no=resolved_chapter_no,
+        scene_id=row.scene_id,
+        resolved_chapter_no=(scene_position.chapter_no if scene_position else None)
+        if row.anchor_kind == "scene" else resolved_chapter_no,
+        resolved_chapter_id=scene_position.chapter_id if scene_position else None,
+        resolved_scene_order=scene_position.scene_order if scene_position else None,
         boundary=cast(Boundary, row.boundary),
         sort_order=row.sort_order,
         protection=cast(ProgressionProtection, row.protection),
         active=row.active,
         source_change_id=row.source_change_id,
     )
+
+
+async def load_scene_positions(
+    db: AsyncSession, project_id: int, scene_ids: Collection[int]
+) -> dict[int, StoryPosition]:
+    """只从活动身份解析位置；退场或物理失联从不按序号认领。"""
+    if not scene_ids:
+        return {}
+    with db.no_autoflush:
+        return {row.id: StoryPosition(
+            chapter_id=row.chapter_id, chapter_no=row.chapter_no, scene_id=row.id, scene_order=row.sort
+        ) for row in await db.execute(select(Scene.id, Scene.chapter_id, Scene.sort, Chapter.chapter_no)
+                                     .join(Chapter, Chapter.id == Scene.chapter_id).where(
+            Chapter.project_id == project_id, Scene.id.in_(scene_ids), Scene.active.is_(True),
+        ))}
+
+
+async def resolve_scene_position(
+    db: AsyncSession, project_id: int, scene_id: int, boundary: Boundary = "start"
+) -> StoryPosition:
+    position = (await load_scene_positions(db, project_id, [scene_id])).get(scene_id)
+    if position is None:
+        raise BadRequestError("场景不存在、已退场或不属于该作品")
+    return position.model_copy(update={"boundary": boundary})
+
+
+async def resolve_story_position(
+    db: AsyncSession, project_id: int, *, chapter_id: int | None = None, chapter_no: int | None = None,
+    scene_id: int | None = None, boundary: Boundary = "start", optional: bool = False,
+) -> StoryPosition | None:
+    """HTTP 的位置联合边界共用校验，调用者不可自报 Scene.sort。"""
+    count = sum(value is not None for value in (chapter_id, chapter_no, scene_id))
+    if count == 0 and optional:
+        return None
+    if count != 1:
+        raise BadRequestError("请选择一个场景、已有章节或计划章节号")
+    if scene_id is not None:
+        return await resolve_scene_position(db, project_id, scene_id, boundary)
+    if chapter_id is not None:
+        chapter = await _chapter_for_anchor(db, project_id, chapter_id)
+        chapter_no = chapter.chapter_no
+    return StoryPosition(chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary)
 
 
 @dataclass(frozen=True)
@@ -336,6 +386,7 @@ async def _resolve_timeline_snapshots(
             stale_revision,
         )
 
+        story_revision = await db.scalar(select(Project.planning_revision).where(Project.id == project_id))
         before_fields = await fields_revision(db, project_id)
         before_timelines = dict(
             (
@@ -373,7 +424,7 @@ async def _resolve_timeline_snapshots(
         if definition_ids is not None:
             event_predicates.append(SettingProgression.custom_field_id.in_([field.id for field in fields]))
         rows = (
-            await db.execute(
+            (await db.execute(
                 select(
                     SettingProgression.id,
                     SettingProgression.timeline_id,
@@ -384,6 +435,7 @@ async def _resolve_timeline_snapshots(
                     SettingProgression.anchor_kind,
                     SettingProgression.chapter_id,
                     SettingProgression.chapter_no,
+                    SettingProgression.scene_id,
                     SettingProgression.boundary,
                     SettingProgression.sort_order,
                     SettingProgression.protection,
@@ -396,13 +448,23 @@ async def _resolve_timeline_snapshots(
                     and_(Chapter.id == SettingProgression.chapter_id, Chapter.project_id == project_id),
                 )
                 .where(*event_predicates)
-            )
+            )).all()
             if definition_ids is None or fields
             else []
         )
+        scene_ids = {row.scene_id for row in rows if row.scene_id is not None}
+        if position is not None and position.scene_id is not None:
+            scene_ids.add(position.scene_id)
+        scene_positions = await load_scene_positions(db, project_id, scene_ids)
+        if position is not None and position.scene_id is not None:
+            current = scene_positions.get(position.scene_id)
+            if (current is None or current.chapter_id != position.chapter_id
+                    or current.chapter_no != position.chapter_no or current.scene_order != position.scene_order):
+                raise ConflictError("场景故事位置已变化，请重新预览", extra={"code": "scene_context_changed"})
         for row in rows:
             events_by_timeline[row.timeline_id].append(
-                _as_event(cast(SettingProgression, row), row.resolved_chapter_no)
+                _as_event(cast(SettingProgression, row), row.resolved_chapter_no,
+                          scene_position=scene_positions.get(row.scene_id))
             )
         after_fields = await fields_revision(db, project_id)
         if before_fields != after_fields:
@@ -418,6 +480,10 @@ async def _resolve_timeline_snapshots(
         )
         if before_timelines != after_timelines:
             raise stale_revision(max(after_timelines.values(), default=0), "timeline")
+        if scene_ids and story_revision != await db.scalar(select(Project.planning_revision).where(
+            Project.id == project_id
+        )):
+            raise ConflictError("场景故事位置读取期间已变化，请重新预览", extra={"code": "scene_context_changed"})
     excluded = tuple(exclude_event_ids)
     return {
         timeline.id: resolve_progressions(
@@ -590,18 +656,20 @@ async def on_story_positions_changed(db: AsyncSession, project_id: int) -> None:
         for obj in db.identity_map.values()
         if isinstance(obj, SettingProgression)
         and obj.__dict__.get("id") is not None
-        and obj.__dict__.get("chapter_id") is not None
+        and (obj.__dict__.get("chapter_id") is not None or obj.__dict__.get("scene_id") is not None)
     }
     if loaded_events:
         rows = await db.execute(
-            select(SettingProgression.id, SettingProgression.chapter_id)
+            select(SettingProgression.id, SettingProgression.chapter_id, SettingProgression.scene_id)
             .join(SettingTimeline, SettingTimeline.id == SettingProgression.timeline_id)
             .where(SettingTimeline.project_id == project_id, SettingProgression.id.in_(loaded_events))
         )
-        for event_id, chapter_id in rows:
+        for event_id, chapter_id, scene_id in rows:
             event = loaded_events[event_id]
             if event.__dict__["chapter_id"] != chapter_id:
                 set_committed_value(event, "chapter_id", chapter_id)
+            if event.__dict__.get("scene_id") != scene_id:
+                set_committed_value(event, "scene_id", scene_id)
     await materialize_project(db, project_id)
 
 
@@ -958,6 +1026,10 @@ async def _validate_progression(
     if data.anchor_kind == "planned":
         assert data.chapter_no is not None
         return f"第{data.chapter_no}章（计划）", data.chapter_no, canonical
+    if data.anchor_kind == "scene":
+        position = await resolve_scene_position(db, timeline.project_id, data.scene_id, data.boundary)
+        title = await db.scalar(select(Scene.title).where(Scene.id == data.scene_id))
+        return f"第{position.chapter_no}章 场景{position.scene_order + 1} {title}"[:250], position.chapter_no, canonical
     assert data.chapter_id is not None
     chapter = await _chapter_for_anchor(db, timeline.project_id, data.chapter_id)
     return f"第{chapter.chapter_no}章 {chapter.title}"[:250], chapter.chapter_no, canonical
@@ -993,6 +1065,7 @@ async def apply_progression(
                 or prior.anchor_kind != data.anchor_kind
                 or prior.chapter_id != data.chapter_id
                 or prior.chapter_no != data.chapter_no
+                or prior.scene_id != data.scene_id
                 or prior.boundary != data.boundary
                 or prior.protection != protection
             ):
@@ -1069,10 +1142,17 @@ async def _public_events(db: AsyncSession, project_id: int, rows) -> list[Progre
     targets = await fields._handle_targets(db, project_id)
     entries = await catalog.get_entries(db, project_id, list(targets.values()))
     result = []
+    scene_positions = await load_scene_positions(
+        db, project_id, {event.scene_id for event, _ in rows if event.scene_id is not None}
+    )
     for event, chapter_no in rows:
+        scene_position = scene_positions.get(event.scene_id)
         values = {
-            "resolved_chapter_no": event.chapter_no if event.anchor_kind == "planned" else chapter_no,
-            "orphaned": event.anchor_kind == "chapter" and chapter_no is None,
+            "resolved_chapter_no": (scene_position.chapter_no if scene_position else None)
+            if event.anchor_kind == "scene" else event.chapter_no if event.anchor_kind == "planned" else chapter_no,
+            "resolved_scene_order": scene_position.scene_order if scene_position else None,
+            "orphaned": (event.anchor_kind == "chapter" and chapter_no is None)
+            or (event.anchor_kind == "scene" and scene_position is None),
         }
         if event.custom_field_id is not None:
             field = bindings.get(event.custom_field_id)
@@ -1140,16 +1220,24 @@ async def list_progressions(
         else:
             predicates.append(SettingProgression.field_key == field)
     total = await db.scalar(select(func.count()).select_from(SettingProgression).where(*predicates))
+    scene_chapter = aliased(Chapter)
     resolved_no = case(
-        (SettingProgression.anchor_kind == "planned", SettingProgression.chapter_no), else_=Chapter.chapter_no
+        (SettingProgression.anchor_kind == "planned", SettingProgression.chapter_no),
+        (SettingProgression.anchor_kind == "scene", scene_chapter.chapter_no), else_=Chapter.chapter_no
     )
     rows = await db.execute(
         select(SettingProgression, Chapter.chapter_no)
         .outerjoin(Chapter, and_(Chapter.id == SettingProgression.chapter_id, Chapter.project_id == project_id))
+        .outerjoin(Scene, and_(Scene.id == SettingProgression.scene_id, Scene.active.is_(True)))
+        .outerjoin(scene_chapter, and_(scene_chapter.id == Scene.chapter_id, scene_chapter.project_id == project_id))
         .where(*predicates)
         .order_by(
             case((resolved_no.is_(None), 1), else_=0),
             resolved_no,
+            case((SettingProgression.anchor_kind == "scene", 1),
+                 (SettingProgression.boundary == "start", 0), else_=2),
+            case((SettingProgression.anchor_kind == "scene", scene_chapter.id), else_=0),
+            case((SettingProgression.anchor_kind == "scene", Scene.sort), else_=0),
             case((SettingProgression.boundary == "start", 0), else_=1),
             case((SettingProgression.protection == "automatic", 0), else_=1),
             SettingProgression.sort_order,
@@ -1221,6 +1309,7 @@ async def update_progression(
                 "anchor_kind",
                 "chapter_id",
                 "chapter_no",
+                "scene_id",
                 "boundary",
                 "sort_order",
                 "note",
@@ -1313,6 +1402,7 @@ async def read_effective(
     chapter_id: int | None,
     chapter_no: int | None,
     boundary: Boundary,
+    scene_id: int | None = None,
 ) -> EffectiveOut:
     with db.no_autoflush:
         await _read_project(db, user_id, project_id)
@@ -1323,13 +1413,9 @@ async def read_effective(
 
         before_fields = await fields.fields_revision(db, project_id)
         before_timeline = timeline.revision
-        if (chapter_id is None) == (chapter_no is None):
-            raise BadRequestError("请选择一个章节或计划章节号")
-        if chapter_id is not None:
-            chapter = await _chapter_for_anchor(db, project_id, chapter_id)
-            chapter_no = chapter.chapter_no
-        assert chapter_no is not None
-        position = StoryPosition(chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary)
+        position = await resolve_story_position(
+            db, project_id, chapter_id=chapter_id, chapter_no=chapter_no, scene_id=scene_id, boundary=boundary
+        )
         result = (await resolve_timelines(db, project_id, [timeline], position))[timeline.id]
         bindings = list(await db.scalars(select(SettingTextField).where(SettingTextField.timeline_id == timeline.id)))
         specs = await fields.load_field_specs(db, project_id, bindings)

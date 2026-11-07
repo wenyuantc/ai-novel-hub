@@ -61,11 +61,16 @@ async def _member_position(
     chapter_id: int | None,
     chapter_no: int | None,
     boundary: Literal["start", "end"],
+    scene_id: int | None = None,
 ) -> tuple[str, int | None, int | None, StoryPosition]:
     try:
-        validate_member_anchor(anchor_kind, chapter_id, chapter_no)
+        validate_member_anchor(anchor_kind, chapter_id, chapter_no, scene_id)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
+    if scene_id is not None:
+        return "scene", None, None, await setting_progression_service.resolve_scene_position(
+            db, project_id, scene_id, boundary
+        )
     if (chapter_id is None) == (chapter_no is None):
         raise BadRequestError("请指定一个生效章节")
     if anchor_kind == "planned":
@@ -132,6 +137,7 @@ async def _record_member_change(
     chapter_id: int | None,
     chapter_no: int | None,
     boundary: Literal["start", "end"],
+    scene_id: int | None = None,
 ) -> None:
     await setting_progression_service.apply_progression(
         db,
@@ -144,6 +150,7 @@ async def _record_member_change(
             anchor_kind=anchor_kind,
             chapter_id=chapter_id,
             chapter_no=chapter_no,
+            scene_id=scene_id,
             boundary=boundary,
         ),
         materialize=False,
@@ -349,7 +356,7 @@ async def new_member(db: AsyncSession, org: Organization, data: MemberCreate) ->
     )
     if dup is not None:
         raise ConflictError(MEMBER_CONFLICT)
-    has_position = data.chapter_id is not None or data.chapter_no is not None
+    has_position = any(value is not None for value in (data.chapter_id, data.chapter_no, data.scene_id))
     if not has_position and timeline is None:
         member = OrganizationMember(
             organization_id=org.id,
@@ -373,11 +380,12 @@ async def new_member(db: AsyncSession, org: Organization, data: MemberCreate) ->
 
     state = {"position": data.position, "status": data.status, "note": data.note}
     if has_position:
-        anchor_kind, chapter_id, chapter_no, _ = await _member_position(
+        anchor_kind, chapter_id, chapter_no, story_position = await _member_position(
             db,
             org.project_id,
             anchor_kind=data.anchor_kind,
             chapter_id=data.chapter_id,
+            scene_id=data.scene_id,
             chapter_no=data.chapter_no,
             boundary=data.boundary,
         )
@@ -387,6 +395,7 @@ async def new_member(db: AsyncSession, org: Organization, data: MemberCreate) ->
             field_key="presence",
             value={"exists": True, "state": state},
             anchor_kind=anchor_kind,
+            scene_id=story_position.scene_id,
             chapter_id=chapter_id,
             chapter_no=chapter_no,
             boundary=data.boundary,
@@ -448,7 +457,7 @@ async def update_member(
         for field in MEMBER_FIELDS
         if field in data.model_fields_set and getattr(data, field) is not None
     }
-    has_position = data.chapter_id is not None or data.chapter_no is not None
+    has_position = any(value is not None for value in (data.chapter_id, data.chapter_no, data.scene_id))
     if not supplied and data.edit_mode is None and not has_position and data.expected_revision is None:
         return await _member_out(db, member.id)
     timeline = await membership_progression_service.get_or_create_membership_timeline(
@@ -465,6 +474,7 @@ async def update_member(
             project_id,
             anchor_kind=data.anchor_kind,
             chapter_id=data.chapter_id,
+            scene_id=data.scene_id,
             chapter_no=data.chapter_no,
             boundary=data.boundary,
         )
@@ -487,6 +497,7 @@ async def update_member(
                     field_key=field,
                     value=value,
                     anchor_kind=anchor_kind,
+                    scene_id=position.scene_id,
                     chapter_id=chapter_id,
                     chapter_no=chapter_no,
                     boundary=data.boundary,
@@ -525,6 +536,7 @@ async def remove_member(
     anchor_kind: AnchorKind | None = None,
     chapter_id: int | None = None,
     chapter_no: int | None = None,
+    scene_id: int | None = None,
     boundary: Literal["start", "end"] = "start",
 ) -> None:
     await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
@@ -534,10 +546,10 @@ async def remove_member(
     assert character is not None
     timeline = await membership_progression_service.find_membership_timeline(db, project_id, org.id, character.id)
     try:
-        validate_member_anchor(anchor_kind, chapter_id, chapter_no)
+        validate_member_anchor(anchor_kind, chapter_id, chapter_no, scene_id)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
-    has_position = chapter_id is not None or chapter_no is not None
+    has_position = any(value is not None for value in (chapter_id, chapter_no, scene_id))
     if edit_mode == "delete" and has_position:
         raise BadRequestError("删除成员资料不能指定生效章节")
     if edit_mode == "progression" and not has_position:
@@ -552,7 +564,8 @@ async def remove_member(
             )
         _require_revision(timeline, expected_revision)
         resolved_kind, anchor_id, anchor_no, position = await _member_position(
-            db, project_id, anchor_kind=anchor_kind, chapter_id=chapter_id, chapter_no=chapter_no, boundary=boundary
+            db, project_id, anchor_kind=anchor_kind, chapter_id=chapter_id, chapter_no=chapter_no,
+            scene_id=scene_id, boundary=boundary
         )
         try:
             snapshot = (await setting_progression_service.resolve_timelines(db, project_id, [timeline], position))[
@@ -571,6 +584,7 @@ async def remove_member(
             field_key="presence",
             value={"exists": False},
             anchor_kind=resolved_kind,
+            scene_id=position.scene_id,
             chapter_id=anchor_id,
             chapter_no=anchor_no,
             boundary=boundary,

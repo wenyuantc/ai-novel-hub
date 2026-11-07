@@ -94,7 +94,8 @@ def test_0031_setting_progressions_preserves_legacy_and_detaches_deleted_sources
         for table_name in ("setting_timelines", "setting_text_fields", "setting_progressions"):
             model = Base.metadata.tables[table_name]
             columns = {column["name"]: column for column in inspector.get_columns(table_name)}
-            newer_columns = {"definition_id", "ai_hidden"} if table_name == "setting_text_fields" else set()
+            newer_columns = ({"definition_id", "ai_hidden"} if table_name == "setting_text_fields"
+                             else {"scene_id"} if table_name == "setting_progressions" else set())
             assert set(columns) == set(model.columns.keys()) - newer_columns
             for column in model.columns:
                 if column.name in newer_columns:
@@ -110,14 +111,14 @@ def test_0031_setting_progressions_preserves_legacy_and_detaches_deleted_sources
             model_fks = {
                 (tuple(column.name for column in fk.columns), fk.referred_table.name, fk.ondelete)
                 for fk in model.foreign_key_constraints
-                if fk.referred_table.name != "setting_field_definitions"
+                if fk.referred_table.name not in {"setting_field_definitions", "scenes"}
             }
             assert actual_fks == model_fks
             assert {index["name"] for index in inspector.get_indexes(table_name)} == {
                 index.name for index in model.indexes
                 if index.name not in {
                     "uq_setting_timelines_organization", "uq_setting_timelines_career_entry",
-                    "ix_setting_text_fields_definition_id",
+                    "ix_setting_text_fields_definition_id", "ix_setting_progressions_scene_id",
                 }
             }
         source_fk = next(

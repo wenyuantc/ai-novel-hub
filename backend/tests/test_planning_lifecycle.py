@@ -39,6 +39,7 @@ from app.services import (
     outline_transfer_service,
     plan_service,
     planning_lifecycle,
+    scene_service,
     setting_progression_service,
     story_service,
     wizard_service,
@@ -72,6 +73,7 @@ async def _seed(db, project_id, *, built=False):
         chapter = Chapter(project_id=project_id, outline_id=outline.id, plan_id=plan.id, chapter_no=1, title=plan.title)
         db.add(chapter)
         await db.flush()
+        await scene_service.initialize_chapter(db, chapter)
         plan.chapter_id = chapter.id
         db.add(ChapterCharacter(chapter_id=chapter.id, character_id=a.id))
     unit = PlanningUnit(project_id=project_id, plan_id=plan.id,
@@ -200,6 +202,7 @@ async def test_build_conflict_is_preflight_and_does_not_partially_build(planning
     existing = Chapter(project_id=pid, outline_id=ids["outline"], chapter_no=1, title="旧章")
     db.add(existing)
     await db.flush()
+    await scene_service.initialize_chapter(db, existing)
     existing_id = existing.id
     db.add_all([PlanningUnit(project_id=pid, chapter_id=existing_id, pov_character_id=ids["b"]),
                 ChapterPlan(project_id=pid, outline_id=ids["outline"], seq=2, title="后续细纲")])
@@ -254,6 +257,8 @@ async def test_snapshot_does_not_attach_old_unit_to_reused_chapter_id(planning_d
     await story_service.delete_owned(db, story_service.OUTLINES, user_id, pid, ids["outline"], manage=True)
     new = Chapter(project_id=pid, title="与旧章无关的新章", chapter_no=1)
     db.add(new)
+    await db.flush()
+    await scene_service.initialize_chapter(db, new)
     await db.commit()
     assert new.id == ids["chapter"]
     result = await outline_snapshot_service.restore_snapshot(db, user_id, pid, snapshot.id)
@@ -285,7 +290,7 @@ async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db
     response = await client.get(f"/api/v1/projects/{pid}/backup?snapshots=1")
     assert response.status_code == 200
     backup = response.json()
-    assert backup["version"] == 6
+    assert backup["version"] == 7
     preview = await client.post("/api/v1/projects/import/preview", files={"file": ("book.json", response.content)})
     assert preview.status_code == 200, preview.text
     imported = await client.post("/api/v1/projects/import", json={"token": preview.json()["token"]})
@@ -396,9 +401,18 @@ async def test_legacy_effect_cannot_delete_newly_added_planning(planning_db):
     before = await effects.snapshot(db, pid)
     chapter = Chapter(project_id=pid, title="旧效果创建的章", chapter_no=1)
     db.add(chapter)
+    await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     await db.commit()
     after = await effects.snapshot(db, pid)
-    delta = effects.diff(before, after)  # 没有规划表的旧版 v2 effect。
+    # 真正的旧版v2不含场景表或新内容代次，不能只给新格式改数字冒充历史载荷。
+    delta = [item for item in effects.diff(before, after) if item["table"] != "scenes"]
+    for item in delta:
+        item["format_version"] = 2
+        if item["table"] == "chapters":
+            for side in ("before", "after"):
+                if item[side] is not None:
+                    item[side].pop("content_revision", None)
     assert all(not e["table"].startswith("planning_") for e in delta)
     db.add(PlanningUnit(project_id=pid, chapter_id=chapter.id))
     await db.commit()
@@ -575,6 +589,7 @@ async def test_undo_build_releases_sources_before_restoring_retired_empty_unit(p
     chapter = Chapter(project_id=pid, title="旧有空章", chapter_no=1)
     db.add(chapter)
     await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     empty = PlanningUnit(project_id=pid, chapter_id=chapter.id)
     db.add(empty)
     await db.commit()

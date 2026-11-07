@@ -19,6 +19,7 @@ import PlanningMergeModal from '../../components/planning/PlanningMergeModal'
 import PlanningNodeModal from '../../components/planning/PlanningNodeModal'
 import PlanningPreviewDrawer from '../../components/planning/PlanningPreviewDrawer'
 import PlanningWeaveTable from '../../components/planning/PlanningWeaveTable'
+import SceneGrid from '../../components/scenes/SceneGrid'
 import { useMentionQuery as usePlanningQuery } from '../../hooks/useMentionQuery'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectId } from '../../hooks/useProjectId'
@@ -43,7 +44,7 @@ export default function PlanningPanel() {
 function PlanningWorkspace({ projectId }: { projectId: number }) {
   const access = useProjectAccess(projectId)
   const { message } = App.useApp()
-  const [view, setView] = useState<'matrix' | 'weave'>('matrix')
+  const [view, setView] = useState<'matrix' | 'weave' | 'scenes'>('matrix')
   const [query, setQuery] = useState<PlanningMatrixQuery>({ page: 1, page_size: 50, column_page: 1, column_mode: 'settings' })
   const [weaveQuery, setWeaveQuery] = useState<PlanningWeaveQuery>({ axis: 'chapter', page: 1, page_size: 30, subplot_page: 1, subplot_page_size: 20, gap_threshold: 5 })
   const [selection, setSelection] = useState<{ scope: string; keys: string[] }>({ scope: '', keys: [] })
@@ -80,13 +81,13 @@ function PlanningWorkspace({ projectId }: { projectId: number }) {
   </Space>}>
     <div className="planning-workspace"><Space direction="vertical" size={16} style={{ width: '100%' }}>
       {!access.canEdit && <Alert type="info" showIcon message="当前为只读查看，规划和 AI 内容预览仍可使用。" />}
-      <div className="planning-toolbar"><Segmented aria-label="规划视图" value={view} onChange={(next) => { setView(next as 'matrix' | 'weave'); setSelection({ scope: '', keys: [] }) }} options={[{ value: 'matrix', label: '规划矩阵' }, { value: 'weave', label: '支线交织' }]} />
+      <div className="planning-toolbar"><Segmented aria-label="规划视图" value={view} onChange={(next) => { setView(next as 'matrix' | 'weave' | 'scenes'); setSelection({ scope: '', keys: [] }) }} options={[{ value: 'matrix', label: '规划矩阵' }, { value: 'scenes', label: '场景卡片' }, { value: 'weave', label: '支线交织' }]} />
         <Button onClick={() => setCatalog('subplots')}>支线管理</Button><Button onClick={() => setCatalog('tags')}>标签管理</Button><Button onClick={() => setCrossingsList({})}>明确交汇</Button><Button onClick={() => setDetachedOpen(true)}>待重新关联</Button>
         <Button type="primary" disabled={!access.canEdit || currentRevision === undefined} onClick={() => newCrossing()}>新建交汇事件</Button>
       </div>
       {view === 'matrix' ? <>
         <Card size="small"><div className="planning-filters">
-          <div className="planning-filter"><label htmlFor="planning-source-filter">规划位置</label><Select id="planning-source-filter" style={{ width: '100%' }} value={query.source_kind ?? 'all'} options={[{ value: 'all', label: '全部章节与细纲' }, { value: 'chapter', label: '已有章节' }, { value: 'plan', label: '未建章细纲' }]} onChange={(value: 'all' | 'chapter' | 'plan') => updateQuery({ source_kind: value === 'all' ? undefined : value })} /></div>
+          <div className="planning-filter"><label htmlFor="planning-source-filter">规划位置</label><Select id="planning-source-filter" style={{ width: '100%' }} value={query.source_kind ?? 'all'} options={[{ value: 'all', label: '全部章节与细纲' }, { value: 'chapter', label: '已有章节' }, { value: 'plan', label: '未建章细纲' }, { value: 'scene', label: '实际场景（按章分组）' }]} onChange={(value: 'all' | 'chapter' | 'plan' | 'scene') => updateQuery({ source_kind: value === 'all' ? undefined : value, granularity: value === 'scene' ? 'scene' : 'chapter' })} /></div>
           <div className="planning-filter"><label htmlFor="planning-row-search">章节／细纲标题</label><Input id="planning-row-search" value={query.q ?? ''} placeholder="搜索规划位置" maxLength={200} allowClear onChange={(event) => updateQuery({ q: event.target.value || undefined })} /></div>
           <div className="planning-filter"><label htmlFor="planning-volume-filter">分卷</label><InputNumber id="planning-volume-filter" min={1} precision={0} style={{ width: '100%' }} placeholder="全部分卷" value={query.volume_no} onChange={(value) => updateQuery({ volume_no: value ?? undefined })} /></div>
           <div className="planning-filter"><label htmlFor="planning-tag-filter">标签</label><PlanningTagSelect projectId={projectId} id="planning-tag-filter" single label="全部标签" value={query.tag_id ? [query.tag_id] : []} onChange={(ids) => updateQuery({ tag_id: ids[0] })} /></div>
@@ -107,18 +108,18 @@ function PlanningWorkspace({ projectId }: { projectId: number }) {
             {query.column_mode !== 'custom' && <Space wrap><Typography.Text type="secondary">展示列</Typography.Text><Pagination simple current={matrix.data.column_page} pageSize={30} total={matrix.data.column_total} onChange={(column_page) => setQuery((old) => ({ ...old, column_page }))} /></Space>}
           </div>
         </>}
-      </> : <>
+      </> : view === 'weave' ? <>
         <Card size="small"><Space direction="vertical" size={12} style={{ width: '100%' }}><div className="planning-toolbar">
-          <Segmented aria-label="支线顺序轴" value={weaveQuery.axis} options={[{ value: 'chapter', label: '已建章顺序' }, { value: 'plan', label: '未建章细纲顺序' }]} onChange={(axis) => setWeaveQuery((old) => ({ ...old, axis: axis as 'chapter' | 'plan', page: 1 }))} />
+          <Segmented aria-label="支线顺序轴" value={weaveQuery.axis} options={[{ value: 'chapter', label: '已建章顺序' }, { value: 'plan', label: '未建章细纲顺序' }, { value: 'scene', label: '实际场景独立轴' }]} onChange={(axis) => setWeaveQuery((old) => ({ ...old, axis: axis as 'chapter' | 'plan' | 'scene', page: 1 }))} />
           <Typography.Text>间隔提醒阈值</Typography.Text><InputNumber aria-label="间隔提醒阈值" min={1} max={100} precision={0} value={weaveQuery.gap_threshold} onChange={(value) => setWeaveQuery((old) => ({ ...old, gap_threshold: value ?? 5 }))} />
         </div><PlanningSubplotSelect projectId={projectId} label="筛选支线（不选则显示全部）" value={weaveQuery.subplot_ids ?? []} known={weave.data?.tracks.map((track) => track.subplot)} onChange={(subplot_ids) => { if (subplot_ids.length > 30) { message.warning('最多同时筛选 30 条支线'); return } setWeaveQuery((old) => ({ ...old, subplot_ids: subplot_ids.length ? subplot_ids : undefined, subplot_page: 1 })) }} /></Space></Card>
         {weave.loading && <Skeleton active paragraph={{ rows: 5 }} />}
         {weave.error && <Alert type="error" message={weave.error} action={<Button onClick={weave.reload}>重试</Button>} />}
         {weave.data && <><PlanningWeaveTable data={weave.data} canEdit={access.canEdit} onNode={openNode} onCrossing={openCrossing} onCreateCrossing={newCrossing} />
-          <div className="planning-pagination"><Pagination current={weave.data.page} pageSize={weave.data.page_size} total={weave.data.total} showSizeChanger={false} onChange={(page) => setWeaveQuery((old) => ({ ...old, page }))} showTotal={(total) => `共 ${total} 个${weave.data!.axis === 'chapter' ? '已建章' : '未建章细纲'}`} />
+          <div className="planning-pagination"><Pagination current={weave.data.page} pageSize={weave.data.page_size} total={weave.data.total} showSizeChanger={false} onChange={(page) => setWeaveQuery((old) => ({ ...old, page }))} showTotal={(total) => `共 ${total} 个${weave.data!.axis === 'chapter' ? '已建章' : weave.data!.axis === 'scene' ? '实际场景' : '未建章细纲'}`} />
             <Space wrap><Typography.Text type="secondary">支线窗口</Typography.Text><Pagination simple current={weave.data.subplot_page} pageSize={20} total={weave.data.subplot_total} onChange={(subplot_page) => setWeaveQuery((old) => ({ ...old, subplot_page }))} /></Space>
           </div></>}
-      </>}
+      </> : <SceneGrid projectId={projectId} />}
     </Space></div>
     {batch && <PlanningBatchModal projectId={projectId} {...batch} onClose={() => setBatch(undefined)} onSaved={saved} />}
     {node && <PlanningNodeModal projectId={projectId} {...node} onClose={() => setNode(undefined)} onSaved={saved} />}

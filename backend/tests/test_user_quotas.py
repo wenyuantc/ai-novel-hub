@@ -212,10 +212,13 @@ async def test_explicit_task_limit_replaces_default_and_inherit_uses_latest_defa
 
     monkeypatch.setattr(engine, "_dispatch", dispatch)
     try:
+        # 先固定故事结构再测试并发额度。交错建章会推进全局规划版本，
+        # 使已开始构建的旧Scene快照安全失效；那不是本例要测的quota变化。
+        chapters = [(await client.post(
+            f"/api/v1/projects/{project['id']}/chapters", json={"title": str(index)},
+        )).json() for index in range(3)]
         for index in range(3):
-            chapter = (await client.post(
-                f"/api/v1/projects/{project['id']}/chapters", json={"title": str(index)},
-            )).json()
+            chapter = chapters[index]
             response = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})
             assert response.status_code == 202, response.text
             tasks.append(response.json())

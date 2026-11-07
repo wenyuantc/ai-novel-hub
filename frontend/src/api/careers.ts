@@ -25,7 +25,8 @@ const charBase = (pid: number, cid: number) => `/projects/${pid}/characters/${ci
 
 export interface CareerRemovalIntent {
   edit_mode: 'baseline' | 'progression' | 'delete'
-  anchor_kind?: 'chapter' | 'planned'
+  anchor_kind?: 'chapter' | 'planned' | 'scene'
+  scene_id?: number | null
   chapter_id?: number
   chapter_no?: number
   boundary?: ProgressionBoundary

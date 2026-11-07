@@ -67,6 +67,7 @@ from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
+from app.services.project_transfer.scenes import validate_scene_tables
 from app.services.setting_category_validation import validate_category_graph_snapshot
 from app.services.setting_field_values import FieldSpec, has_field_content, validate_field_value
 from app.services.setting_progression_resolver import validate_baseline, validate_progression_value
@@ -101,6 +102,7 @@ TABLE_LABELS: dict[str, str] = {
     "career_history": "职业历史",
     "outlines": "大纲",
     "chapters": "章节",
+    "scenes": "场景",
     "chapter_plans": "细纲",
     "chapter_characters": "出场角色",
     "foreshadows": "伏笔",
@@ -127,6 +129,7 @@ TABLE_LABELS: dict[str, str] = {
     "planning_units": "规划单元",
     "planning_tags": "规划标签",
     "planning_unit_tags": "规划标签关联",
+    "planning_unit_characters": "场景角色关联",
     "planning_unit_world": "规划世界观关联",
     "planning_unit_organizations": "规划组织关联",
     "planning_unit_careers": "规划职业关联",
@@ -164,7 +167,7 @@ ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
     ("setting_reference_handles", "kind"): ("character", "world", "organization", "career"),
     ("setting_timelines", "baseline_status"): ("confirmed", "legacy_unverified"),
     ("setting_progressions", "operation"): ("append", "replace"),
-    ("setting_progressions", "anchor_kind"): ("chapter", "planned"),
+    ("setting_progressions", "anchor_kind"): ("chapter", "planned", "scene"),
     ("setting_progressions", "boundary"): ("start", "end"),
     ("setting_progressions", "source"): ("manual", "analysis", "legacy_import"),
     ("setting_progressions", "protection"): ("automatic", "confirmed", "manual"),
@@ -398,13 +401,58 @@ def _migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+
+def _reject_future_scene_data(data: dict[str, Any]) -> None:
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return
+    message = "旧版备份不支持独立场景资料，请使用原始版本文件"
+    for table in ("scenes", "planning_unit_characters"):
+        if table in tables and tables[table] != []:
+            raise BadRequestError(message)
+    if any(row.get("scene_snapshot") is not None for row in _rows_in(tables, "chapter_versions")):
+        raise BadRequestError(message)
+    for row in _rows_in(tables, "planning_units"):
+        if row.get("scene_id") is not None or row.get("source_level", "chapter") != "chapter":
+            raise BadRequestError(message)
+        if any(row.get(f"{field}_mode", "inherit") != "inherit" for field in (
+            "pov", "tags", "character", "world", "organization", "career", "relationship",
+        )):
+            raise BadRequestError(message)
+    if any(row.get("scene_id") is not None or row.get("anchor_kind") == "scene"
+           for row in _rows_in(tables, "setting_progressions")):
+        raise BadRequestError(message)
+
+
+def _migrate_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
+    from app.services.chapter_service import count_words
+
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return data
+    scenes = []
+    for chapter in _rows_in(tables, "chapters"):
+        content = chapter.get("content", "")
+        # 非法旧列仍交给统一 schema 校验，不尝试清洗或猜测内容。
+        if not isinstance(content, str):
+            continue
+        scene = {"id": len(scenes) + 1, "chapter_id": chapter.get("id"), "title": "", "content": content,
+                 "word_count": count_words(content), "summary": "", "sort": 0, "separator_before": "", "active": True}
+        scene.update({key: chapter[key] for key in ("created_at", "updated_at") if key in chapter})
+        scenes.append(scene)
+    tables["scenes"] = scenes
+    tables["planning_unit_characters"] = []
+    return data
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
+    if version < 7:
+        _reject_future_scene_data(data)
     if version < 6:
         _reject_future_ai_data(data)
     steps = {
         1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4,
-        4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6,
+        4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6, 6: _migrate_v6_to_v7,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -795,8 +843,11 @@ def _check_setting_data(backup: Backup, errors: _Errors) -> None:
             errors.add(f"设定剧情变化第 {i} 行文本字段不属于该主体")
             continue
         anchor_kind, chapter_id, chapter_no = row.get("anchor_kind"), row.get("chapter_id"), row.get("chapter_no")
-        if not ((anchor_kind == "chapter" and chapter_no is None)
-                or (anchor_kind == "planned" and chapter_id is None and _is_int(chapter_no) and chapter_no >= 1)):
+        scene_id = row.get("scene_id")
+        if not ((anchor_kind == "chapter" and chapter_no is None and scene_id is None)
+                or (anchor_kind == "scene" and chapter_id is None and chapter_no is None)
+                or (anchor_kind == "planned" and chapter_id is None and scene_id is None
+                    and _is_int(chapter_no) and chapter_no >= 1)):
             errors.add(f"设定剧情变化第 {i} 行章节锚点不合法")
         other = events.get(row.get("superseded_by_id"))
         if other is not None and (other["id"] == row["id"] or other.get("timeline_id") != timeline["id"]):
@@ -972,7 +1023,7 @@ def parse_backup(raw: bytes) -> Backup:
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
-                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links"):
+                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes"):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -1012,6 +1063,8 @@ def parse_backup(raw: bytes) -> Backup:
     _check_category_data(backup, errors)
     errors.raise_if_any()
     validate_planning_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
     return backup
 
@@ -1262,6 +1315,9 @@ class _Importer:
                     v = self.maps["projects"].get(v) if v is not None else None
                 elif v is not None:
                     v = self.maps[target][v]
+            elif rule.table == "chapter_versions" and col_name == "scene_snapshot":
+                # 规划与所有真实身份插入完成后统一映射；不能提前丢失 unit/tag 引用。
+                v = None
             elif col_name in rule.json_refs:
                 if rule.table == "setting_progressions" and col_name == "value":
                     v = remap.setting_event_value(v, row.get("field_key"), self.ctx)
@@ -1409,6 +1465,18 @@ class _Importer:
                 update(model).where(model.id == new_id).values(**values).execution_options(synchronize_session=False)
             )
 
+    async def _scene_history(self) -> None:
+        rule = RULES_BY_TABLE["chapter_versions"]
+        for row in self.backup.tables.get("chapter_versions", []):
+            if row.get("scene_snapshot") is None:
+                continue
+            values = {"scene_snapshot": remap.scene_snapshot(row["scene_snapshot"], self.ctx)}
+            if row.get("updated_at") is not None:
+                values["updated_at"] = _convert(rule.model.__table__.c.updated_at, row["updated_at"])
+            await self.db.execute(update(rule.model).where(
+                rule.model.id == self.maps[rule.table][row["id"]]
+            ).values(**values).execution_options(synchronize_session=False))
+
     async def _retrieval(self) -> None:
         docs = [d for d in self.objects.get("kb_documents") or [] if isinstance(d, KbDocument)]
         # 只读已在会话里的值（没有原值时属性已过期，访问会触发隐式查询）
@@ -1441,6 +1509,7 @@ class _Importer:
                 continue
             await self._table(rule, rows)
         await self._backfill()
+        await self._scene_history()
         await self._project_refs()
         # 时间线才是最新值来源；在导入事务内取得项目屏障并重建全部主体，失败时一起回滚。
         await project_lifecycle.lock_active(self.db, self.project_id)

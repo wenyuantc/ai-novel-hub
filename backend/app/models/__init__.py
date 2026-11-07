@@ -49,6 +49,7 @@ from app.models.planning import (
     PlanningTag,
     PlanningUnit,
     PlanningUnitCareer,
+    PlanningUnitCharacter,
     PlanningUnitOrganization,
     PlanningUnitRelationship,
     PlanningUnitTag,
@@ -60,6 +61,7 @@ from app.models.planning import (
 )
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
+from app.models.scenes import Scene
 from app.models.series import Series, SeriesBook, SeriesEntry, SeriesEntryUse
 from app.models.setting_categories import SettingCategory, SettingCategoryRule
 from app.models.setting_fields import SettingAiLink, SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
@@ -116,6 +118,7 @@ __all__ = [
     "PlanningTag",
     "PlanningUnit",
     "PlanningUnitCareer",
+    "PlanningUnitCharacter",
     "PlanningUnitOrganization",
     "PlanningUnitRelationship",
     "PlanningUnitTag",
@@ -130,6 +133,7 @@ __all__ = [
     "RelationshipHistory",
     "RelationshipType",
     "RetrievalChunk",
+    "Scene",
     "Series",
     "SeriesBook",
     "SeriesEntry",

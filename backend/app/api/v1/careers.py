@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.career import (
@@ -105,7 +105,8 @@ async def remove_assignment(
     db: DbDep,
     chapter_id: int | None = None,
     chapter_no: int | None = None,
-    anchor_kind: Literal["chapter", "planned"] | None = None,
+    anchor_kind: Literal["chapter", "planned", "scene"] | None = None,
+    scene_id: int | None = Query(default=None, ge=1, le=2_147_483_647),
     boundary: Literal["start", "end"] = "start",
     edit_mode: Literal["baseline", "progression", "delete"] | None = None,
     expected_revision: int | None = None,
@@ -117,6 +118,7 @@ async def remove_assignment(
         character_id,
         assignment_id,
         chapter_id=chapter_id,
+        scene_id=scene_id,
         chapter_no=chapter_no,
         anchor_kind=anchor_kind,
         boundary=boundary,

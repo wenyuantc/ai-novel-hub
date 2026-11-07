@@ -21,7 +21,7 @@ from app.models import (
     User,
 )
 from app.schemas.progression import ProgressionCreate
-from app.services import setting_progression_service, version_service
+from app.services import scene_service, setting_progression_service, version_service
 from app.services.agent import effects
 from app.services.agent.service import _undo_changes
 from app.services.agent.tools.base import preview_diff
@@ -98,7 +98,7 @@ async def test_current_effects_restore_deleted_character_timeline_fields_events_
     assert {"setting_timelines", "setting_text_fields", "setting_progressions", "relationships"} <= {
         item["table"] for item in captured
     }
-    assert all(item["format_version"] == 5 for item in captured)
+    assert all(item["format_version"] == 6 for item in captured)
     await db.commit()
     await effects.undo(db, project.id, captured)
     await db.commit()
@@ -385,24 +385,20 @@ async def test_undo_turn_rejects_later_legacy_item_before_any_row_restore(db_pro
 
 async def test_legacy_chapter_position_rejected_but_pure_text_undo_still_works(db_project):
     db, project = db_project
-    chapter = Chapter(project_id=project.id, title="原章", chapter_no=2, content="之前")
+    chapter = Chapter(project_id=project.id, title="原章", chapter_no=2, content="之前", word_count=2)
     db.add(chapter)
     await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
     original = await version_service.record(db, chapter, "baseline")
-    before = await effects.snapshot(db, project.id)
-    chapter.content = "之后"
+    await scene_service.replace_legacy_content(db, chapter, "之后")
     latest = await version_service.record(db, chapter, "agent")
-    captured = effects.diff(before, await effects.snapshot(db, project.id))
-    captured.append(
-        effects.chapter_text_effect(
-            chapter.id,
-            original.id,
-            latest.id,
-            effects.content_hash(original.content),
-            effects.content_hash(latest.content),
-        )
-    )
-    legacy_text = [{key: value for key, value in row.items() if key != "format_version"} for row in captured]
+    # 真实旧纯文本历史没有场景快照；旧效果同样只含当年的版本身份与原文指纹。
+    original.scene_snapshot = latest.scene_snapshot = None
+    legacy_text = [{
+        "table": "chapter_text", "pk": {"id": chapter.id},
+        "before": {"version_id": original.id, "hash": effects.content_hash(original.content)},
+        "after": {"version_id": latest.id, "hash": effects.content_hash(latest.content)},
+    }]
     await db.commit()
     await effects.undo(db, project.id, legacy_text)
     await db.commit()

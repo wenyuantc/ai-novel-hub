@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 PlanningTone = Literal["default", "red", "orange", "gold", "green", "cyan", "blue", "purple"]
 PLANNING_TONES = ("default", "red", "orange", "gold", "green", "cyan", "blue", "purple")
-SourceKind = Literal["chapter", "plan", "detached"]
+SourceKind = Literal["chapter", "plan", "scene", "detached"]
 ReferenceKind = Literal["character", "world", "organization", "career", "relationship"]
 PositiveId = Annotated[int, Field(gt=0, le=2_147_483_647, strict=True)]
 Revision = Annotated[int, Field(ge=0, le=2_147_483_646, strict=True)]
@@ -70,6 +70,68 @@ class PlanningTagOut(BaseModel):
     name: str
     tone: PlanningTone
     usage_count: int = 0
+
+
+class ScenePlanningModes(StrictInput):
+    pov: Literal["inherit", "override"] = "inherit"
+    tags: Literal["inherit", "override"] = "inherit"
+    character: Literal["inherit", "override"] = "inherit"
+    world: Literal["inherit", "override"] = "inherit"
+    organization: Literal["inherit", "override"] = "inherit"
+    career: Literal["inherit", "override"] = "inherit"
+    relationship: Literal["inherit", "override"] = "inherit"
+
+
+class ScenePlanningSources(BaseModel):
+    pov: Literal["chapter", "scene"] = "chapter"
+    tags: Literal["chapter", "scene"] = "chapter"
+    character: Literal["chapter", "scene"] = "chapter"
+    world: Literal["chapter", "scene"] = "chapter"
+    organization: Literal["chapter", "scene"] = "chapter"
+    career: Literal["chapter", "scene"] = "chapter"
+    relationship: Literal["chapter", "scene"] = "chapter"
+
+
+class ScenePlanningRaw(StrictInput):
+    modes: ScenePlanningModes = Field(default_factory=ScenePlanningModes)
+    pov_character_id: PositiveId | None = None
+    tag_ids: IdList = Field(default_factory=list)
+    references: Annotated[list[PlanningReference], Field(max_length=2500)] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def distinct(self):
+        if len(set(self.tag_ids)) != len(self.tag_ids):
+            raise ValueError("标签不能重复")
+        refs = [(ref.kind, ref.timeline_id if ref.kind == "relationship" else ref.id) for ref in self.references]
+        if len(set(refs)) != len(refs):
+            raise ValueError("场景关联不能重复")
+        if self.modes.pov == "inherit" and self.pov_character_id is not None:
+            raise ValueError("继承 POV 不能携带本地角色")
+        if self.modes.tags == "inherit" and self.tag_ids:
+            raise ValueError("继承标签不能携带本地值")
+        if any(getattr(self.modes, ref.kind) == "inherit" for ref in self.references):
+            raise ValueError("继承关联不能携带本地值")
+        return self
+
+
+class ScenePlanningEffective(BaseModel):
+    pov_character_id: int | None = None
+    pov_character_name: str | None = None
+    tags: list[PlanningTagOut] = Field(default_factory=list)
+    references: list[PlanningReference] = Field(default_factory=list)
+    sources: ScenePlanningSources = Field(default_factory=ScenePlanningSources)
+
+
+class ScenePlanningOut(PlanningRevision):
+    unit_id: int | None = None
+    binding_epoch: int | None = None
+    raw: ScenePlanningRaw = Field(default_factory=ScenePlanningRaw)
+    effective: ScenePlanningEffective = Field(default_factory=ScenePlanningEffective)
+
+
+class ChapterContentRevision(StrictInput):
+    chapter_id: PositiveId
+    content_revision: Revision
 
 
 class PlanningTagCreate(StrictInput):
@@ -241,6 +303,12 @@ class PlanningRow(BaseModel):
     pov_character_name: str | None
     tags: list[PlanningTagOut]
     references: list[PlanningReference]
+    scene_id: int | None = None
+    scene_sort: int | None = None
+    scene_planning: ScenePlanningOut | None = None
+    content_revision: int | None = None
+    source_level: Literal["chapter", "scene"] = "chapter"
+    source_chapter_id: int | None = None
 
 
 class SettingColumn(StrictInput):
@@ -274,6 +342,8 @@ class MatrixSettingCell(BaseModel):
     has_content: bool
     mention_count: int = 0
     ambiguous_count: int = 0
+    manual_source: Literal["chapter", "scene"] | None = None
+    pov_source: Literal["chapter", "scene"] | None = None
 
 
 class MatrixSubplotCell(BaseModel):
@@ -301,14 +371,14 @@ class PlanningMatrix(PlanningRevision):
 
 
 class CollectionOperation(StrictInput):
-    op: Literal["add", "remove", "replace", "clear"]
+    op: Literal["add", "remove", "replace", "clear", "inherit"]
     ids: IdList = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_operation(self):
         if len(self.ids) != len(set(self.ids)):
             raise ValueError("条目不能重复")
-        if self.op == "clear" and self.ids:
+        if self.op in ("clear", "inherit") and self.ids:
             raise ValueError("清空操作不能携带条目")
         return self
 
@@ -319,14 +389,14 @@ class EntityOperation(CollectionOperation):
 
 class RelationshipOperation(StrictInput):
     kind: Literal["relationship"]
-    op: Literal["add", "remove", "replace", "clear"]
+    op: Literal["add", "remove", "replace", "clear", "inherit"]
     timeline_ids: IdList = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_operation(self):
         if len(self.timeline_ids) != len(set(self.timeline_ids)):
             raise ValueError("关系不能重复")
-        if self.op == "clear" and self.timeline_ids:
+        if self.op in ("clear", "inherit") and self.timeline_ids:
             raise ValueError("清空操作不能携带关系")
         return self
 
@@ -335,7 +405,7 @@ ReferenceOperation = Annotated[EntityOperation | RelationshipOperation, Field(di
 
 
 class PovOperation(StrictInput):
-    op: Literal["set", "clear"]
+    op: Literal["set", "clear", "inherit"]
     character_id: PositiveId | None = None
 
     @model_validator(mode="after")
@@ -351,6 +421,9 @@ class PlanningBatch(StrictInput):
     pov: PovOperation | None = None
     tags: CollectionOperation | None = None
     references: Annotated[list[ReferenceOperation], Field(max_length=5)] = Field(default_factory=list)
+    expected_content_revisions: Annotated[list[ChapterContentRevision], Field(max_length=100)] = Field(
+        default_factory=list
+    )
 
     @model_validator(mode="after")
     def distinct(self):
@@ -358,6 +431,8 @@ class PlanningBatch(StrictInput):
             raise ValueError("目标不能重复")
         if len({item.kind for item in self.references}) != len(self.references):
             raise ValueError("每类设定只能指定一种操作")
+        if len({item.chapter_id for item in self.expected_content_revisions}) != len(self.expected_content_revisions):
+            raise ValueError("章节内容版本不能重复")
         if self.pov is None and self.tags is None and not self.references:
             raise ValueError("至少提供一个修改字段")
         return self
@@ -365,17 +440,21 @@ class PlanningBatch(StrictInput):
 
 class PlanningMutation(PlanningRevision):
     rows: list[PlanningRow]
+    content_revisions: list[ChapterContentRevision] = Field(default_factory=list)
 
 
 class PlanningBinding(StrictInput):
     expected_revision: Revision
     target: PlanningSource
+    expected_content_revisions: Annotated[list[ChapterContentRevision], Field(max_length=1)] = Field(
+        default_factory=list
+    )
 
     @field_validator("target")
     @classmethod
     def live_target(cls, value):
         if value.kind == "detached":
-            raise ValueError("目标必须是章节或细纲")
+            raise ValueError("目标必须是章节、细纲或场景")
         return value
 
 
@@ -421,7 +500,7 @@ class WeaveTrack(BaseModel):
 
 
 class PlanningWeave(PlanningRevision):
-    axis: Literal["chapter", "plan"]
+    axis: Literal["chapter", "plan", "scene"]
     rows: list[PlanningRow]
     tracks: list[WeaveTrack]
     crossings: list[SubplotCrossingOut]
@@ -439,6 +518,8 @@ class PlanningContextPreview(PlanningRevision):
     source: PlanningSource
     chapter_id: int | None
     plan_id: int | None
+    scene_id: int | None = None
+    content_revision: int | None = None
     text: str
     warnings: list[str] = Field(default_factory=list)
     node_ids: list[int] = Field(default_factory=list)
