@@ -1,0 +1,31 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查：后端门禁、README 同步、测试隔离与 service 分层"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/database-core.md", "reason": "检查：数据库事务、归属、字数、迁移与常见错误（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/database-versions-tasks.md", "reason": "检查：外键、正文历史及后台任务事务（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/errors-core.md", "reason": "检查：AppError、错误转换及响应安全（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/errors-sse.md", "reason": "检查：后台任务与同步 SSE 完整合同（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/spec/backend/planning.md", "reason": "检查：稳定规划、类型化引用、CAS、绑定代次、矩阵与真实上下文"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "检查：旧章边界、历史重验、孤儿、当前投影与位置消费者"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "检查：统一资格和字段隐藏、真实出站门禁与旧会话保护"}
+{"file": ".trellis/spec/backend/series-settings.md", "reason": "检查：本书采用、稳定投影、依赖预检与锁序"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "检查：项目表注册、格式升级、JSON ID 重映射与单事务导入"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/agent-tools.md", "reason": "检查：Agent 工具、确认预览及安全（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/agent-effects.md", "reason": "检查：effects 快照／撤销与原有格式（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "检查：章级断点、取消、范围锁、审核和续跑"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "检查：原文指纹、码点定位、只读索引与旧深链"}
+{"file": ".trellis/spec/backend/reader.md", "reason": "检查：完整章正文、字数、书架与阅读进度兼容"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/frontend-components.md", "reason": "检查：权限、Ant Design、章节编辑器与组件生命周期（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/frontend-io-theme.md", "reason": "检查：备份／导入、阅读、主题与响应式（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/spec-excerpts/frontend-types.md", "reason": "检查：传输类型、PATCH、时间、API 客户端完整合同（有来源 SHA 和行号，避免超限截断）"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "检查：任务订阅、同步 SSE、请求生命周期和失效"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查：lint/build/test、只读 UI、新文件空白门禁与 README"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/current-boundaries.md", "reason": "检查：来源需求、当前写入／消费边界及官方参考"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/chapter-compatibility.md", "reason": "检查：已确认的统一场景化、所有旧建章入口与无损约束"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/multiscene-whole-chapter.md", "reason": "检查：已确认的整章保结构、旧纯文本提取及原任务保存语义"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/scene-planning-defaults.md", "reason": "检查：已确认的按项继承／覆盖、选角旁路与可见策略边界"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/scene-organization-scope.md", "reason": "检查：已确认的章内拆并范围和中间锚点不可等价反例"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/integration-contracts.md", "reason": "检查：当前源码依据、技术选择、旧位置兼容、任务重放与安全发布"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/ai-contract.md", "reason": "场景 AI 路由、两版本、TaskOut.scene_id、done 与局部采纳精确 wire 合同"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/foundation-contract.md", "reason": "E0/E1实际基础API与只flush原语冻结合同"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/planning-contract.md", "reason": "E2原始/有效规划、CAS、位置和上下文冻结合同"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "检查场景跨层实际合同、旧写保护和验收证据"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "检查默认模板、registry和builder同步及旧覆盖安全"}

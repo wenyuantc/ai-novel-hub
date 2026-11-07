@@ -117,3 +117,9 @@ main使用专用headed Chrome会话、私有SQLite/FakeLLM和合成账号，不�
 2026-11-07，用户明确要求“提交 收尾 合并main并推送”，确认已呈现的完整文件清单与工作提交计划。提交前再次核对243个本任务路径与计划完全相同、无新出现的未识别变更，backend604／frontend644份源文件仍逐个匹配最终全量cut。远端origin/main、本地main和分支原HEAD均为ae2eb72；保留两个原有skill目录，不暂存、不删除，不改应用依赖或Git／Trellis全局配置。
 
 按工作提交→独立归档提交→独立日志提交→合并main／推送执行；归档及日志脚本使用公开`--no-commit`选项后按窄路径手工提交中文消息，保留三阶段顺序，不amend、不强推。实际Git结果在后续归档记录与会话日志中记录，不预报合并／推送成功。
+
+## 工作提交与归档
+
+- 工作提交已成功：`89e6da960146c6e38295eb510bcbd9c485278dbb`，消息`feat(scenes): 实现场景独立写作与规划闭环`；严格纳入已确认243个路径，两个原有skill文件逐字符未变且仍未跟踪。
+- `task.py archive 11-07-independent-scenes --no-commit`成功，任务状态completed、会话指针已清，目录移至archive/2026-11。归档仅修复本任务两份JSONL的实际file引用、Markdown任务内链接，并登记工作提交；不修改产品源码或Trellis框架。
+- 归档与日志各自独立提交，随后按授权快进合并main、正常推送origin/main；实际远端结果另行核实，不使用force或amend。
