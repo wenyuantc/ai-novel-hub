@@ -1,0 +1,14 @@
+{"file": ".trellis/tasks/archive/2026-11/11-07-series-shared-settings/research/current-implementation.md", "reason": "确认书库、四实体、读取与复用入口以及同项目边界"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-series-shared-settings/research/transition-dependencies.md", "reason": "梳理持久和可恢复依赖、非 FK 引用、任务和备份的不同处理"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-series-shared-settings/research/projection-write-boundaries.md", "reason": "确定现有写入旁路与仅书内的合法写回，先建立反例"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "同事务约束、稳定 ID、父表迁移和 SQLite/PostgreSQL 外键"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "404、结构化 409 和并发失效响应"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "确认基线、章初章末、本书物化及事件操作"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "按书候选、隐藏字段、关联、真实发送门禁与旧会话"}
+{"file": ".trellis/spec/backend/setting-fields.md", "reason": "句柄、历史引用、类型变动校验、旧字段和分类边界"}
+{"file": ".trellis/spec/backend/planning.md", "reason": "稳定规划 ID、POV 和同章选角、快照及 CAS"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "排除系列关联、快照闭合、v6 兼容和共享注册表"}
+{"file": ".trellis/spec/backend/recycle-bin.md", "reason": "软删保留依赖、父锁、恢复及彻删竞争"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "复用书库和既有设定面板的控件、空态和权限模式"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "本书 ID 和系列 ID 的 API 类型契约及补丁语义"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "以作品范围和请求代次管理读写、草稿与精确刷新"}

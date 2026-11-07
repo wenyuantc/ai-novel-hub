@@ -1,0 +1,12 @@
+{"file": ".trellis/tasks/archive/2026-11/11-07-series-shared-settings/research/transition-dependencies.md", "reason": "核查细纲、回收站、快照、停用历史和跨事务引用"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-series-shared-settings/research/projection-write-boundaries.md", "reason": "核查绑定实体、共享基线、合法书内事件与直接 Core 写入"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint、测试隔离、FakeLLM、功能说明与安全门禁"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "升级与回滚、PG/SQLite 约束、串行化和稳定身份"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "同时检查多书的真实出站戳、隐藏字段与旧会话"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "对照共享基线变更后每书独立的章初／章末投影"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "区分确认、人工撤销、真实工具权限和续跑"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "反射注册表与跨库快照往返、引用无悬挂"}
+{"file": ".trellis/spec/backend/open-api.md", "reason": "API Key 不扩权，列表、详情和派生关联均局限单书"}
+{"file": ".trellis/spec/backend/recycle-bin.md", "reason": "可恢复引用及彻删时只有本书资源级联"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端构建、lint、测试与手工场景"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "共享库和本书入口不混用类型与身份"}
