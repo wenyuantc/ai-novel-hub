@@ -1338,3 +1338,52 @@
 ### Next Steps
 
 - 将 main 推送 origin；上线前按 0038 迁移与旧任务排空要求部署。
+
+
+## Session 40: 独立场景完整写作闭环
+<!-- trellis-session: v=2 fp=96e9d73a24fb3067 -->
+
+**Date**: 2026-11-07
+**Task**: 独立场景完整写作闭环
+**Branch**: `codex/independent-scenes`
+
+### Summary
+
+完成第7项全栈场景写作闭环、双数据库与浏览器验收，提交并归档任务，按用户授权继续合并main及推送。
+
+### Main Changes
+
+## 独立场景完整写作闭环
+
+- 用户逐项确认完整闭环、旧章无损单初始景、整章AI保结构、旧纯文本明确提取、七项默认继承／覆盖与同章拆并排序，最终明确授权提交、收尾、合并main并推送。
+- Scene成为唯一正文权威，Chapter保留有序兼容投影；0039实迁移、场景独立规划与时点、全部AI及旧正文入口、结构历史和v7完整备份一并切换，不发布半接入状态。
+- 前端沿用Ant Design，实现场景编辑／导航／卡片网格／矩阵、Unicode光标拆分、拖动与按钮排序、受保护合并、继承覆盖、冲突保稿及显式核对重试；单景AI只改目标，整章暂存全部主提案后一次CAS。
+- 独立审查C1–C12全部闭合；特别补齐Core撤销历史JSON依赖、合法跨章并行、不假造单景全章评分，以及无历史旧入口纯空白清空的双结构快照保护。
+
+## 实际验证
+
+- HEAD隔离基线后端2517通过。首轮本任务完整后端18失败／2640通过，分类修复真实回归和必要fixture兼容后重新全量，不删安全断言、不扩大配额屏障超时。
+- 最终完整后端2669通过、1条既有Gemini SDK弃用警告、无跳过；真实SQLite迁移及四组专用PostgreSQL全启用，604份源码测试模板cut全程一致。
+- 最终前端lint、含TypeScript检查的build、147文件1054测试全部通过；644份源码cut全程一致。独立C11 32、C12 1＋4精确回归通过。
+- 29项真实UI／HTTP证据均通过，含三景正文与规划、五局部emoji、整章取消不半写、批量暂停续跑、历史与文件备份恢复、三格式导出、双页409、同actor撤权、375px明暗与键盘，以及未订阅异景任务结束后的保稿／分析过期刷新。
+- 只使用私有合成数据、FakeLLM及隔离SDK本地HTTP门禁，不冒充真实模型质量保证或所有类型／故障组合均已手工穷举。自有QAserver、两个Chrome会话和专用PG均已停止；四库无遗留测试schema，未触碰用户作品或他人进程。
+
+## 提交与收尾
+
+- 工作提交：89e6da960146c6e38295eb510bcbd9c485278dbb，feat(scenes): 实现场景独立写作与规划闭环。
+- 归档提交：2a176af，chore(task): 归档独立场景写作任务。
+- 已归档至 `.trellis/tasks/archive/2026-11/11-07-independent-scenes/`；task.json为completed且记录工作提交，会话指针已清。两份31条上下文及任务内Markdown链接更新后验证通过。
+- README／TODO第1、3、7项及实际code-spec同步，完整验收和失败历史在归档verification.md／execution-log.md／research/check-report.md；Mac UTF-8 locale及各安全合同已记录到spec。
+- 两个原有未跟踪source-command skill目录保留且未改、不提交；本次没有修改依赖或全局Git／Trellis配置，不amend、不强推。
+- 本条日志记录后按用户授权将功能分支快进合并main并正常推送origin/main，再直接核对远端OID；Git合并／推送不等于已部署应用。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `89e6da960146c6e38295eb510bcbd9c485278dbb` | feat(scenes): 实现场景独立写作与规划闭环 |
+
+### Status
+
+[OK] **Completed**
