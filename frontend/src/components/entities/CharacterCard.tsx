@@ -15,6 +15,7 @@ interface Props {
   onSelect: (selected: boolean) => void
   onOpen: () => void
   onDelete: () => Promise<boolean>
+  onPromote?: () => void
 }
 
 /** 截断字段的完整内容预览，支持鼠标悬停、键盘聚焦和正文复制。 */
@@ -33,9 +34,10 @@ function CharacterTextPreview({ title, text, children }: { title: string; text?:
 }
 
 /** 角色资料卡：身份、别名、属性与状态分层，危险操作收进菜单并二次确认。 */
-export default function CharacterCard({ character, career, selectable, selected, canEdit, onSelect, onOpen, onDelete }: Props) {
+export default function CharacterCard({ character, career, selectable, selected, canEdit, onSelect, onOpen, onDelete, onPromote }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const seriesManaged = character.origin?.scope === 'series'
   const life = lifeStatusLabel(character.life_status)
   const aliases = character.aliases.join(' · ')
   const metadata = [characterAgeLabel(character.age), character.gender.trim()].filter(Boolean).join(' · ')
@@ -66,12 +68,13 @@ export default function CharacterCard({ character, career, selectable, selected,
           <Tooltip title={canEdit ? '编辑角色' : '查看角色'} classNames={{ root: 'character-action-tooltip' }}>
             <Button type="text" size="small" icon={canEdit ? <EditOutlined /> : <EyeOutlined />} aria-label={`${canEdit ? '编辑' : '查看'}角色：${character.name}`} onClick={onOpen} />
           </Tooltip>
-          <Dropdown trigger={['click']} menu={{
-            items: [{ key: 'delete', label: '删除角色', icon: <DeleteOutlined />, danger: true, disabled: !canEdit }],
-            onClick: ({ key }) => { if (key === 'delete' && canEdit) setDeleteOpen(true) },
+          {!seriesManaged && <Dropdown trigger={['click']} menu={{
+            items: [...(onPromote ? [{ key: 'promote', label: '提升为系列共享', disabled: !canEdit }] : []),
+              { key: 'delete', label: '删除角色', icon: <DeleteOutlined />, danger: true, disabled: !canEdit }],
+            onClick: ({ key }) => { if (!canEdit) return; if (key === 'delete') setDeleteOpen(true); else if (key === 'promote') onPromote?.() },
           }}>
             <Button type="text" size="small" icon={<EllipsisOutlined />} aria-label={`更多角色操作：${character.name}`} />
-          </Dropdown>
+          </Dropdown>}
         </div>
       </header>
       <CharacterTextPreview title="角色别名" text={aliases}>
@@ -82,6 +85,7 @@ export default function CharacterCard({ character, career, selectable, selected,
           <span className="character-card-demographics" tabIndex={metadata ? 0 : undefined}>{metadata || '年龄、性别未设定'}</span>
         </CharacterTextPreview>
         {character.life_status !== 'alive' && <Tag color={life.color}>{life.label}</Tag>}
+        {seriesManaged && <Tag color="blue">系列共享</Tag>}
       </div>
       <div className="character-card-body">
         {career && (career.main || career.subs.length > 0) && <div className="character-card-careers">

@@ -38,7 +38,7 @@ async def update_wizard_progress(
     project_id: int, body: WizardProgressUpdate, user: CurrentUser, db: DbDep
 ) -> ProjectOut:
     project = await svc.update_wizard_progress(db, user.id, project_id, body)
-    return await svc.project_out(db, project)
+    return await svc.project_out(db, project, actor_user_id=user.id)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

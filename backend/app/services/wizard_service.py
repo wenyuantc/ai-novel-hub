@@ -66,6 +66,7 @@ from app.services import (
     project_lifecycle,
     prompt_service,
     relationship_service,
+    series_policy,
     setting_field_service,
     story_service,
 )
@@ -202,6 +203,11 @@ async def _require_safe_replacement(db: AsyncSession, project_id: int, kind: Wiz
         affected = SettingTimeline.career_id.is_not(None)
     else:
         return []
+    if entry_kind in ("character", "world") and await series_policy.used_local_ids(db, project_id, entry_kind):
+        raise ConflictError(
+            "本书已采用系列设定，不能用向导整体覆盖此类型",
+            extra={"code": "series_setting_managed"},
+        )
     targets = [EntityRef(kind=entry_kind, id=entry_id) for entry_id in await db.scalars(
         select(model.id).where(model.project_id == project_id)
     )]

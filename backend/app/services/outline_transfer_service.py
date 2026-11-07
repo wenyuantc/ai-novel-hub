@@ -33,7 +33,14 @@ from app.schemas.outline import (
     clean_key_events,
 )
 from app.schemas.story import OutlineOut
-from app.services import outline_service, outline_snapshot_service, plan_service, planning_lifecycle, story_service
+from app.services import (
+    outline_service,
+    outline_snapshot_service,
+    plan_service,
+    planning_lifecycle,
+    series_policy,
+    story_service,
+)
 from app.services.entity_ai_service import resolve_name
 from app.services.project_service import get_owned_project
 
@@ -129,10 +136,17 @@ def _counts(parsed: OutlineFile) -> tuple[int, int, int]:
     return volumes, outlines, plans
 
 
+async def _importable_characters(db: AsyncSession, project_id: int) -> list[Character]:
+    bound = await series_policy.used_local_ids(db, project_id, "character")
+    characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
+    # 大纲交换文件只有名字，不包含作者显式选择的本书条目 ID。
+    return [character for character in characters if character.id not in bound]
+
+
 async def preview_import(db: AsyncSession, user_id: int, project_id: int, data: Any) -> OutlineImportPreview:
     await get_owned_project(db, user_id, project_id)
     parsed = parse_outline_file(data)
-    characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
+    characters = await _importable_characters(db, project_id)
     _, unresolved, warnings = _resolve_characters(parsed, characters)
     volumes, outlines, plans = _counts(parsed)
     return OutlineImportPreview(
@@ -145,7 +159,7 @@ async def import_outline(
 ) -> OutlineImportResult:
     await get_owned_project(db, user_id, project_id, lock=True)
     parsed = parse_outline_file(req.data)
-    characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
+    characters = await _importable_characters(db, project_id)
     mapping, unresolved, warnings = _resolve_characters(parsed, characters)
 
     snapshot_id: int | None = None

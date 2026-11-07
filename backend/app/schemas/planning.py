@@ -52,8 +52,13 @@ class PlanningRevision(BaseModel):
     revision: int
 
 
+class PlanningPickerEntry(PlanningEntry):
+    # 只标记本书已采用的条目，不返回系列身份或其他作品信息。
+    series_shared: bool
+
+
 class PlanningEntryPage(PlanningRevision):
-    items: list[PlanningEntry]
+    items: list[PlanningPickerEntry]
     total: int
     page: int
     page_size: int

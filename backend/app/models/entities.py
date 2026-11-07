@@ -178,6 +178,7 @@ class Project(TimestampMixin, Base):
     __tablename__ = "projects"
     __table_args__ = (
         Index("ix_projects_deleted_at_id", "deleted_at", "id"),
+        Index("uq_projects_id_user_id", "id", "user_id", unique=True),
         CheckConstraint("deleted_at IS NULL OR deletion_started_at IS NULL", name="deletion_state"),
         CheckConstraint(
             "(deletion_started_at IS NULL) = (deletion_token IS NULL)", name="deletion_intent"
@@ -254,7 +255,11 @@ def _ai_mode_constraint() -> CheckConstraint:
 
 class WorldSetting(SettingAiMetadata, TimestampMixin, Base):
     __tablename__ = "world_settings"
-    __table_args__ = (_ai_mode_constraint(), {"sqlite_autoincrement": True})
+    __table_args__ = (
+        _ai_mode_constraint(),
+        Index("uq_world_settings_project_id_id", "project_id", "id", unique=True),
+        {"sqlite_autoincrement": True},
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -269,7 +274,11 @@ class WorldSetting(SettingAiMetadata, TimestampMixin, Base):
 
 class Character(SettingAiMetadata, TimestampMixin, Base):
     __tablename__ = "characters"
-    __table_args__ = (_ai_mode_constraint(), {"sqlite_autoincrement": True})
+    __table_args__ = (
+        _ai_mode_constraint(),
+        Index("uq_characters_project_id_id", "project_id", "id", unique=True),
+        {"sqlite_autoincrement": True},
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)

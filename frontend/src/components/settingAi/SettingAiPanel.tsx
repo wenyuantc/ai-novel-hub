@@ -7,24 +7,11 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 import EntrySelect from '../entities/EntrySelect'
 import type { EntrySelectQuery } from '../entities/entrySelectState'
 import type { SettingAiSession } from './settingAiController'
+import { SETTING_AI_MODES, SETTING_AI_MODE_OPTIONS, settingAiFieldLabel } from './settingAiOptions'
 import { normalizeExclusions, settingAiDirty, settingAiDraftError, settingLinkKey, type SettingAiDraft } from './settingAiDraft'
 
-const MODES: Record<SettingAiMode, { label: string; description: string }> = {
-  always: { label: '始终加入', description: '有设定上下文的 AI 操作可使用此条目，不要求文本中提到它。' },
-  detected: { label: '检测到才加入', description: '名称或别名被明确检测到时可加入，也可通过手动指定或合格的关联加入。' },
-  manual_only: { label: '检测到不自动加入', description: '字面命中不会自动加入；仍允许手动指定或合格的关联加入。' },
-  never: { label: '永不加入', description: '此条目不提供给 AI，手动指定和关联也不能绕过。人工查看与提及统计不受影响。' },
-}
-const MODE_OPTIONS = (Object.entries(MODES) as [SettingAiMode, typeof MODES[SettingAiMode]][]).map(([value, { label }]) => ({ value, label }))
-const FIELD_LABELS: Record<string, string> = {
-  role_type: '角色定位', age: '年龄', gender: '性别', profile: '简介', appearance: '外貌', personality: '性格',
-  background: '背景', current_state: '当前处境', life_status: '生死状态', relations_text: '旧关系备注',
-  content: '档案正文', org_type: '组织类型', purpose: '宗旨', location: '所在地', power_level: '势力值', description: '描述',
-  requirements: '获得条件', abilities: '特殊能力', rules: '体系规则', stages: '职业阶段资料',
-}
-const fieldLabel = (key: string) => FIELD_LABELS[key] ?? key
 const linkLabel = (target: SettingEntry) => `${target.name} · ${SETTING_ENTRY_TYPE_LABELS[target.type]}`
-const modeLabel = (mode: SettingAiMode | null) => mode === null ? '沿用旧规则' : MODES[mode].label
+const modeLabel = (mode: SettingAiMode | null) => mode === null ? '沿用旧规则' : SETTING_AI_MODES[mode].label
 
 function Summary({ title, value }: { title: string; value: SettingAiDraft }) {
   return <Descriptions title={title} size="small" column={1}>
@@ -32,15 +19,15 @@ function Summary({ title, value }: { title: string; value: SettingAiDraft }) {
     <Descriptions.Item label="提及追踪">{value.mention_enabled ? '开启' : '关闭'}</Descriptions.Item>
     <Descriptions.Item label="大小写">{value.mention_case_sensitive ? '区分' : '忽略'}</Descriptions.Item>
     <Descriptions.Item label="排除短语">{value.mention_exclusions.join('、') || '无'}</Descriptions.Item>
-    <Descriptions.Item label="隐藏字段">{value.ai_hidden_builtin_fields.map(fieldLabel).join('、') || '无'}</Descriptions.Item>
+    <Descriptions.Item label="隐藏字段">{value.ai_hidden_builtin_fields.map(settingAiFieldLabel).join('、') || '无'}</Descriptions.Item>
     <Descriptions.Item label="带入目标">{value.links.map(linkLabel).join('、') || '无'}</Descriptions.Item>
   </Descriptions>
 }
 
-interface Props { session: SettingAiSession; entry: SettingEntryRef }
+interface Props { session: SettingAiSession; entry: SettingEntryRef; seriesManaged?: boolean }
 
 /** 独立于档案基础表单保存 AI 策略和提及规则。 */
-export default function SettingAiPanel({ session, entry }: Props) {
+export default function SettingAiPanel({ session, entry, seriesManaged = false }: Props) {
   const { kind, id } = entry
   const controller = useMemo(() => session.forEntry({ kind, id }), [session, kind, id])
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
@@ -57,9 +44,12 @@ export default function SettingAiPanel({ session, entry }: Props) {
     : <Spin aria-label="正在读取 AI 与提及设置" />
 
   const disabled = !canEdit || !!pending
-  const invalid = settingAiDraftError(draft)
-  const dirty = settingAiDirty(base, draft)
+  const sharedDisabled = disabled || seriesManaged
+  const effectiveDraft = seriesManaged ? { ...base, links: draft.links } : draft
+  const invalid = settingAiDraftError(effectiveDraft)
+  const dirty = settingAiDirty(base, effectiveDraft)
   return <Space direction="vertical" size="middle" style={{ width: '100%', minWidth: 0 }}>
+    {seriesManaged && <Alert type="info" showIcon message="条目策略和隐藏字段由系列统一维护。此处只可编辑本书关联。" />}
     <Typography.Text type="secondary">本区独立保存，不修改档案原文或剧情变化。收紧限制后，旧会话可能需新开，已发出的请求不能撤回。</Typography.Text>
     {!canEdit && <Alert type="info" showIcon message={dirty ? '当前为只读，未保存的设置草稿仍保留。' : '当前为只读，可查看 AI 与提及设置。'} />}
     {notice && <Alert type={reviewRequired ? 'warning' : 'info'} showIcon message={notice} />}
@@ -69,42 +59,42 @@ export default function SettingAiPanel({ session, entry }: Props) {
       action={!latest && <Button size="small" loading={pending === 'read'} onClick={() => void controller.refresh()}>读取最新设置</Button>} />}
     <Space direction="vertical" size={4} style={{ width: '100%' }}>
       <label htmlFor={`${ids}-mode`}>条目策略</label>
-      <Select<SettingAiMode> id={`${ids}-mode`} aria-label="条目策略" style={{ width: '100%' }} value={draft.ai_mode ?? undefined}
-        disabled={disabled} placeholder="沿用旧规则" options={MODE_OPTIONS} onChange={(ai_mode) => controller.edit({ ai_mode })} />
-      <Typography.Text type="secondary">{draft.ai_mode === null
+      <Select<SettingAiMode> id={`${ids}-mode`} aria-label="条目策略" style={{ width: '100%' }} value={effectiveDraft.ai_mode ?? undefined}
+        disabled={sharedDisabled} placeholder="沿用旧规则" options={SETTING_AI_MODE_OPTIONS} onChange={(ai_mode) => controller.edit({ ai_mode })} />
+      <Typography.Text type="secondary">{effectiveDraft.ai_mode === null
         ? '此条目沿用原有的注入行为。首次保存明确的策略后，将采用所选规则。'
-        : MODES[draft.ai_mode].description}</Typography.Text>
+        : SETTING_AI_MODES[effectiveDraft.ai_mode].description}</Typography.Text>
     </Space>
     <Space wrap>
-      <Switch aria-label="提及追踪" checked={draft.mention_enabled} disabled={disabled}
+      <Switch aria-label="提及追踪" checked={effectiveDraft.mention_enabled} disabled={sharedDisabled}
         onChange={(mention_enabled) => controller.edit({ mention_enabled })} />
       <Typography.Text>提及追踪</Typography.Text>
-      <Switch aria-label="区分大小写" checked={draft.mention_case_sensitive} disabled={disabled || !draft.mention_enabled}
+      <Switch aria-label="区分大小写" checked={effectiveDraft.mention_case_sensitive} disabled={sharedDisabled || !effectiveDraft.mention_enabled}
         onChange={(mention_case_sensitive) => controller.edit({ mention_case_sensitive })} />
       <Typography.Text>区分大小写</Typography.Text>
     </Space>
-    {!draft.mention_enabled && <Typography.Text type="secondary">关闭后不高亮、不统计，也不参与 AI 字面检测；不阻止合格的手动或关联引用。</Typography.Text>}
+    {!effectiveDraft.mention_enabled && <Typography.Text type="secondary">关闭后不高亮、不统计，也不参与 AI 字面检测；不阻止合格的手动或关联引用。</Typography.Text>}
     <Space direction="vertical" size={4} style={{ width: '100%' }}>
       <label htmlFor={`${ids}-exclude`}>排除短语</label>
-      <Select<string[]> id={`${ids}-exclude`} aria-label="排除短语" mode="tags" open={false} style={{ width: '100%' }} value={draft.mention_exclusions}
-        disabled={disabled || !draft.mention_enabled} placeholder="输入短语后按 Enter 添加" onChange={(items) => controller.edit({ mention_exclusions: normalizeExclusions(items) })} />
+      <Select<string[]> id={`${ids}-exclude`} aria-label="排除短语" mode="tags" open={false} style={{ width: '100%' }} value={effectiveDraft.mention_exclusions}
+        disabled={sharedDisabled || !effectiveDraft.mention_enabled} placeholder="输入短语后按 Enter 添加" onChange={(items) => controller.edit({ mention_exclusions: normalizeExclusions(items) })} />
       <Typography.Text type="secondary">只忽略完整落在排除短语里的本条目提及。按字面匹配，不使用正则；最多 20 项，每项 80 字。</Typography.Text>
     </Space>
     <Space direction="vertical" size={4} role="group" aria-label="对 AI 隐藏的内建字段">
       <Typography.Text strong>对 AI 隐藏的内建字段</Typography.Text>
       <Typography.Text type="secondary">勾选后，字段及其剧情历史仍可在人工档案中查看和维护。</Typography.Text>
       <Space wrap>
-        {base.hideable_builtin_fields.map((key) => <Checkbox key={key} checked={draft.ai_hidden_builtin_fields.includes(key)} disabled={disabled}
+        {base.hideable_builtin_fields.map((key) => <Checkbox key={key} checked={effectiveDraft.ai_hidden_builtin_fields.includes(key)} disabled={sharedDisabled}
           onChange={(event) => controller.edit({ ai_hidden_builtin_fields: event.target.checked
-            ? [...draft.ai_hidden_builtin_fields, key] : draft.ai_hidden_builtin_fields.filter((item) => item !== key) })}>{fieldLabel(key)}</Checkbox>)}
+            ? [...effectiveDraft.ai_hidden_builtin_fields, key] : effectiveDraft.ai_hidden_builtin_fields.filter((item) => item !== key) })}>{settingAiFieldLabel(key)}</Checkbox>)}
       </Space>
     </Space>
     <Space direction="vertical" size={4} style={{ width: '100%' }}>
       <label htmlFor={`${ids}-links`}>随本条目带入的关联</label>
       <Typography.Text type="secondary">本条目直接入选 → 所选目标也有资格入选。只向这一方向展开一层，不能带入「永不加入」的目标。</Typography.Text>
       {canEdit ? <LinkPicker key={settingLinkKey(entry)} projectId={session.projectId} entry={entry} id={`${ids}-links`} disabled={disabled}
-        value={draft.links} onChange={(links) => controller.edit({ links })} /> :
-        <Space wrap>{draft.links.length ? draft.links.map((target) => <Tag key={settingLinkKey(target.reference)}>{linkLabel(target)}</Tag>) : <Typography.Text type="secondary">无关联</Typography.Text>}</Space>}
+        value={effectiveDraft.links} onChange={(links) => controller.edit({ links })} /> :
+        <Space wrap>{effectiveDraft.links.length ? effectiveDraft.links.map((target) => <Tag key={settingLinkKey(target.reference)}>{linkLabel(target)}</Tag>) : <Typography.Text type="secondary">无关联</Typography.Text>}</Space>}
     </Space>
     {invalid && <Alert type="warning" showIcon message={invalid} />}
     {latest && <>
@@ -118,7 +108,7 @@ export default function SettingAiPanel({ session, entry }: Props) {
     </>}
     <Space wrap>
       {canEdit && <Button type="primary" loading={pending === 'write'} disabled={disabled || !dirty || !!invalid || reviewRequired}
-        onClick={() => void controller.save()}>保存 AI 与提及设置</Button>}
+        onClick={() => void controller.save(seriesManaged)}>保存 AI 与提及设置</Button>}
       {canEdit && dirty && !reviewRequired && <Button disabled={disabled} onClick={controller.reset}>放弃未保存改动</Button>}
       <Button loading={pending === 'read'} disabled={pending === 'write'} onClick={() => void controller.refresh()}>重新读取</Button>
     </Space>

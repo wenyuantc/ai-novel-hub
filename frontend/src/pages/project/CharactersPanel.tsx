@@ -25,6 +25,8 @@ import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
 import CharacterCard from '../../components/entities/CharacterCard'
+import { BookSeriesLibrary, BookSeriesPromotion, BookSeriesScope, BookSeriesUnuse, SharedSettingNotice } from '../../components/series/BookSeriesSettings'
+import { bookCharacterPatch, inSettingScope, type SettingScope } from '../../components/series/seriesState'
 import {
   characterBaselineMatches,
   characterToBaselineForm,
@@ -70,12 +72,16 @@ export default function CharactersPanel() {
   const tagsSession = useSettingTagsSession(pid)
   const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
-  const { canUseAI, canEdit, canReadNow, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canReadNow, canEditNow, managingOther } = useProjectAccess(pid)
   const { message } = App.useApp()
   const user = useAuthStore((s) => s.user)
   const authStatus = useAuthStore((s) => s.status)
   const identity = `${user?.id ?? 'none'}:${authStatus}:${authorizationKey(user)}`
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
+  const series = useProjectStore((s) => !managingOther && s.project?.id === pid ? s.project.series : null)
+  const [settingScope, setSettingScope] = useState<SettingScope>('all')
+  const [promoting, setPromoting] = useState<Character | null>(null)
+  const [unusing, setUnusing] = useState<{ id: number; title: string } | null>(null)
   const loader = useCallback(() => characterApi.list(pid), [pid])
   const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['characters', 'careers'] })
   const items = useMemo(() => loadedItems ?? [], [loadedItems])
@@ -83,6 +89,9 @@ export default function CharactersPanel() {
   const badgeLoader = useCallback(async () => careerBadges(await assignmentApi.listProject(pid)), [pid])
   const { data: badges, reload: reloadBadges } = useLoader(badgeLoader, { projectId: pid, resources: ['characters', 'careers'] })
   const [editing, setEditing] = useState<Character | null>(null)
+  const origin = editing ? items.find((item) => item.id === editing.id)?.origin ?? editing.origin : undefined
+  const seriesManaged = origin?.scope === 'series'
+  const sharedEntryId = origin?.scope === 'series' ? origin.series_entry_id : null
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [tab, setTab] = useState('basic')
   const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
@@ -137,8 +146,9 @@ export default function CharactersPanel() {
   }, [pid, identity, form])
   usePublishAgentContext(pid, { character_id: drawerOpen && editorTicket?.projectId === pid ? editing?.id : undefined })
 
-  const roleFilters = useMemo(() => characterRoleFilters(items), [items])
-  const shown = useMemo(() => filterCharacters(items, filter, query), [items, filter, query])
+  const scopedItems = useMemo(() => series ? items.filter((item) => inSettingScope(item.origin, settingScope)) : items, [items, series, settingScope])
+  const roleFilters = useMemo(() => characterRoleFilters(scopedItems), [scopedItems])
+  const shown = useMemo(() => filterCharacters(scopedItems, filter, query), [scopedItems, filter, query])
   const currentPage = characterPage(shown, page, pageSize)
   // 只保留仍存在的勾选
   const selectedIds = useMemo(() => selected.filter((id) => items.some((c) => c.id === id)), [selected, items])
@@ -246,7 +256,8 @@ export default function CharactersPanel() {
     if (!gate.current.isCurrent(ticket) || !canEditNow() || savingRef.current || baselineBlocked.current) return
     const initial = initialValues.current
     if (editing && !initial) return
-    const patch = initial && editing ? formToCharacterPatch(v, initial) : null
+    const changed = initial && editing ? formToCharacterPatch(v, initial) : null
+    const patch = changed && seriesManaged ? bookCharacterPatch(changed) : changed
     if (patch && Object.keys(patch).length === 0) {
       message.info('没有需要保存的修改')
       return
@@ -348,7 +359,7 @@ export default function CharactersPanel() {
   }
 
   const handleDelete = async (item: Character): Promise<boolean> => {
-    if (!canEditNow()) return false
+    if (item.origin?.scope === 'series' || !canEditNow()) return false
     try {
       if (!canEditNow()) return false
       await characterApi.remove(pid, item.id)
@@ -382,7 +393,7 @@ export default function CharactersPanel() {
               导出卡片{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
             </Button>
             <Dropdown trigger={['click']} menu={{
-              items: [{ key: 'regenerate', label: 'AI 重新生成全部' }],
+              items: [{ key: 'regenerate', label: 'AI 重新生成全部', disabled: items.some((item) => item.origin?.scope === 'series') }],
               onClick: ({ key }) => { if (key === 'regenerate') setWizardOpen(true) },
             }}>
               <Button>更多<DownOutlined /></Button>
@@ -395,6 +406,9 @@ export default function CharactersPanel() {
         </div>
       </header>
       {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
+      {series && <BookSeriesScope series={series} value={settingScope} onChange={(scope) => {
+        setSettingScope(scope); setFilter(ALL_CHARACTERS); setPage(1); setSelected([])
+      }} />}
       <div className="characters-toolbar">
         <Tabs
           className="characters-role-tabs"
@@ -436,11 +450,11 @@ export default function CharactersPanel() {
             <Button type="text" size="small" onClick={() => setSelected([])}>清空选择</Button>
           </>}
         </div>
-        <span aria-live="polite">{filter !== ALL_CHARACTERS || query.trim() ? `找到 ${shown.length} 位角色` : `共 ${items.length} 位角色`}</span>
+        <span aria-live="polite">{filter !== ALL_CHARACTERS || query.trim() ? `找到 ${shown.length} 位角色` : `共 ${scopedItems.length} 位角色`}</span>
       </div>
       <Spin spinning={loading}>
-        {items.length === 0 ? (
-          <div className="characters-empty"><Empty description={listError ? '角色列表暂不可用，请重试' : canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} /></div>
+        {scopedItems.length === 0 ? (
+          <div className="characters-empty"><Empty description={listError ? '角色列表暂不可用，请重试' : settingScope === 'series' ? '本书尚未采用系列角色' : canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} /></div>
         ) : shown.length === 0 ? (
           <div className="characters-empty"><Empty description="没有找到匹配的角色">
             <Button onClick={() => { setQuery(''); setFilter(ALL_CHARACTERS); setPage(1) }}>清除筛选</Button>
@@ -457,6 +471,7 @@ export default function CharactersPanel() {
               onSelect={(selected) => toggle(character.id, selected)}
               onOpen={() => openEdit(character)}
               onDelete={() => handleDelete(character)}
+              onPromote={series && character.origin?.scope !== 'series' ? () => { if (canEditNow()) setPromoting(character) } : undefined}
             />)}
           </div>
         )}
@@ -474,8 +489,19 @@ export default function CharactersPanel() {
         onChange={(nextPage, nextSize) => { setPage(nextSize === pageSize ? nextPage : 1); setPageSize(nextSize) }}
       />}
 
+      {series && settingScope !== 'book' && <BookSeriesLibrary key={`${pid}:${series.id}`} series={series} projectId={pid} kind="character" />}
+      {series && promoting && <BookSeriesPromotion seriesId={series.id} projectId={pid} kind="character" id={promoting.id}
+        title={promoting.name} onClose={() => setPromoting(null)} />}
+      {series && unusing && <BookSeriesUnuse seriesId={series.id} seriesEntryId={unusing.id} projectId={pid} kind="character"
+        title={unusing.title} onClose={() => setUnusing(null)} onDone={() => {
+          setUnusing(null)
+          gate.current.close()
+          baselineAbort.current?.abort()
+          setDrawerOpen(false)
+        }} />}
+
       <Drawer
-        title={editing ? `编辑角色：${editing.name}` : '新增角色'}
+        title={editing ? `${seriesManaged ? '本书角色' : '编辑角色'}：${editing.name}` : '新增角色'}
         open={drawerOpen && editorTicket?.projectId === pid}
         onClose={() => {
           rememberDraft()
@@ -499,11 +525,13 @@ export default function CharactersPanel() {
             onClick={() => void handleSave()}
             disabled={!canEdit || (!!editing && (!baseline || !!baselineError || baselineConflict || baselineLoading))}
           >
-            {editing ? '保存基础设定' : '保存'}
+            {editing ? seriesManaged ? '保存本书设定' : '保存基础设定' : '保存'}
           </Button>
         )}
       >
-        {editing && baseline && !baselineError && (
+        <SharedSettingNotice origin={origin} onUnuse={series && sharedEntryId != null && editing
+          ? () => { if (canEditNow()) setUnusing({ id: sharedEntryId, title: editing.name }) } : undefined} />
+        {!seriesManaged && editing && baseline && !baselineError && (
           <Alert
             showIcon
             type={baseline.baseline_status === 'legacy_unverified' ? 'warning' : 'info'}
@@ -559,8 +587,8 @@ export default function CharactersPanel() {
             activeKey={tab}
             onChange={setTab}
             items={[
-              { key: 'basic', label: '基础', forceRender: true, children: <CharacterBasicFields form={form} /> },
-              { key: 'desc', label: '描写', forceRender: true, children: <CharacterDescFields /> },
+              { key: 'basic', label: '基础', forceRender: true, children: <CharacterBasicFields form={form} seriesManaged={seriesManaged} /> },
+              { key: 'desc', label: seriesManaged ? '共享描写' : '描写', forceRender: true, children: <CharacterDescFields seriesManaged={seriesManaged} /> },
               { key: 'state', label: '状态', forceRender: true, children: <CharacterStateFields isBaseline={!!editing} /> },
               ...(editing
                 ? [
@@ -599,7 +627,7 @@ export default function CharactersPanel() {
         </Form>
         </Spin>
         {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'tags' && <SettingTagsPanel session={tagsSession} entry={{ kind: 'character', id: editing.id }} />}
-        {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'ai-settings' && <SettingAiPanel session={aiSession} entry={{ kind: 'character', id: editing.id }} />}
+        {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'ai-settings' && <SettingAiPanel session={aiSession} entry={{ kind: 'character', id: editing.id }} seriesManaged={seriesManaged} />}
         {editing && editorTicket?.projectId === pid && drawerOpen && tab === 'mentions' && <EntityMentions projectId={pid} entity={{ kind: 'character', id: editing.id }} />}
         {editing && editorTicket?.projectId === pid && drawerOpen && (
           <div hidden={tab !== 'progression'}><SettingEntryFieldsPanel

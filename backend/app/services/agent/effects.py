@@ -43,6 +43,7 @@ from app.services import (
     planning_lifecycle,
     project_lifecycle,
     retrieval_service,
+    series_policy,
     setting_ai_visibility,
     setting_category_service,
     setting_field_service,
@@ -769,6 +770,72 @@ def _setting_references(table: str, row: dict) -> set[tuple[str, int]]:
     return references
 
 
+async def _preflight_series_effects(
+    db: AsyncSession, project_id: int, effects: list[Effect],
+) -> dict[tuple[str, int], frozenset[str]]:
+    """Core 撤销绕过普通写服务，须按当前绑定保护共享事实而不是冻结整行。"""
+    preserve: dict[tuple[str, int], frozenset[str]] = {}
+    conflicts = []
+    for kind, table, subject_column, shared in (
+        ("character", "characters", "character_id", series_policy.CHARACTER_SHARED_FIELDS),
+        ("world", "world_settings", "world_setting_id", series_policy.WORLD_SHARED_FIELDS),
+    ):
+        entities = [effect for effect in effects if effect["table"] == table]
+        timelines = [
+            effect for effect in effects if effect["table"] == "setting_timelines" and any(
+                row is not None and row.get("subject_kind") == kind
+                for row in (effect["before"], effect["after"])
+            )
+        ]
+        candidates = {effect["pk"]["id"] for effect in entities}
+        candidates.update(
+            row[subject_column] for effect in timelines for row in (effect["before"], effect["after"])
+            if row is not None and row.get("subject_kind") == kind and type(row.get(subject_column)) is int
+        )
+        bound = await series_policy.used_local_ids(db, project_id, kind, candidates)
+        if not bound:
+            continue
+        baseline_fields = series_policy.shared_baseline_fields(kind)
+        static_fields = (shared - baseline_fields) | series_policy.AI_SHARED_FIELDS
+        for effect in entities:
+            ident = effect["pk"]["id"]
+            if ident not in bound:
+                continue
+            before, after = effect["before"], effect["after"]
+            if before is None or after is None or any(
+                field not in before or field not in after or before[field] != after[field]
+                for field in static_fields | {"id", "project_id"}
+            ):
+                conflicts.append(_conflict(effect, "撤销会删除或改写由系列管理的条目"))
+                continue
+            # 派生当前列由下方时间线重算；绝不把旧行载荷回写共享元数据。
+            preserve[table, ident] = shared | series_policy.AI_SHARED_FIELDS
+        for effect in timelines:
+            before, after = effect["before"], effect["after"]
+            if not any(
+                row is not None and row.get("subject_kind") == kind and row.get(subject_column) in bound
+                for row in (before, after)
+            ):
+                continue
+            if before is None or after is None or any(
+                before.get(key) != after.get(key) for key in (
+                    "id", "project_id", "subject_kind", "character_id", "world_setting_id",
+                    "related_character_id", "career_id", "organization_id",
+                    "baseline_status", "legacy_compat_allowed",
+                )
+            ):
+                conflicts.append(_conflict(effect, "撤销会删除或改变系列投影的时间线主体"))
+                continue
+            old_base, new_base = before.get("baseline"), after.get("baseline")
+            if not isinstance(old_base, dict) or not isinstance(new_base, dict) or any(
+                key not in old_base or key not in new_base or old_base[key] != new_base[key] for key in baseline_fields
+            ):
+                conflicts.append(_conflict(effect, "撤销会改写系列共享基础"))
+    if conflicts:
+        _raise_conflicts(conflicts)
+    return preserve
+
+
 async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
     conflicts = []
     for effect in effects:
@@ -849,7 +916,9 @@ def _values(rule: TableRule, row: dict) -> dict:
     return values
 
 
-async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
+async def _restore_rows(
+    db: AsyncSession, effects: list[Effect], preserve: dict[tuple[str, int], frozenset[str]],
+) -> None:
     by_table = {rule.table: [e for e in effects if e["table"] == rule.table] for rule in _RULES}
     removing = {(e["table"], name, value) for e in effects if e["before"] is None for name, value in e["pk"].items()}
     next_epochs = {}
@@ -862,6 +931,8 @@ async def _restore_rows(db: AsyncSession, effects: list[Effect]) -> None:
 
     def values_before(rule, effect):
         values = _values(rule, effect["before"])
+        for key in preserve.get((rule.table, effect["pk"].get("id")), ()):
+            values.pop(key, None)
         if effect.get("format_version", 1) < EFFECT_VERSION:
             legacy = _legacy_visibility_defaults(rule.table)
             if effect["after"] is None:
@@ -1130,9 +1201,10 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
     try:
         async with db.begin_nested():
             await _validate(db, project_id, effects)
+            preserve = await _preflight_series_effects(db, project_id, effects)
             await _guard_field_visibility_rebinding(db, project_id, effects)
             restoring = True
-            await _restore_rows(db, effects)
+            await _restore_rows(db, effects, preserve)
             await _validate_restored_scopes(db, project_id, effects)
             await _refresh_loaded(db, effects)
             try:

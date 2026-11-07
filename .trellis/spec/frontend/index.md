@@ -19,6 +19,7 @@
 | [自定义设定字段跨层契约](../backend/setting-fields.md) | 四类控件、配置页、空槽首写、领域条目选择、独立草稿、四实体字段与卡片显式映射 | 已填写 |
 | [整理标签与自动分类跨层契约](../backend/setting-categories.md) | 标签独立保存、规则草稿双版本、当前／按章结果与分页、只读预览、冲突对照和v5卡片 | 已填写 |
 | [设定 AI 可见性跨层契约](../backend/setting-ai-visibility.md) | AI 与提及、独立草稿／冲突对照、字段隐藏、v6 卡片映射、Agent 旧会话封存 | 已填写 |
+| [系列作品与共享设定跨层契约](../backend/series-settings.md) | 系列与本书 ID 分离、采用确认、归属预检、书内演变和备份提示 | 已填写 |
 | [规划矩阵与支线跨层契约](../backend/planning.md) | 两类矩阵列、批量操作、交织双轴/明确交汇、CAS草稿保留、待关联/合并、AI预览 | 已填写 |
 | [全文提及与作品笔记跨层契约](../backend/mention-tracking.md) | 草稿/阅读标记、设定预览、四来源深链、失效位置、热力图、笔记保存与加载重试 | 已填写 |
 | [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理页 / `RequirePermission`、项目智能体面板与 external 提案卡片、Skill / MCP 插件页（`SkillSelect` 复用、请求头编辑语义） | 已填写 |

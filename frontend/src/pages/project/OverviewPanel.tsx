@@ -200,6 +200,10 @@ function OverviewInner({ project }: { project: Project }) {
           </Card>
         </div>}
       </div>
+      {!managingOther && <Card size="small" title="作品系列">
+        {project.series ? <Link to={`/series/${project.series.id}`}>{project.series.name} · 管理成员与共享设定</Link>
+          : <Link to="/series">尚未加入系列 · 前往系列管理</Link>}
+      </Card>}
       <Card title="基本信息">
         <div style={splitRow}>
           <div style={{ flex: '0 0 180px', maxWidth: '100%' }}>

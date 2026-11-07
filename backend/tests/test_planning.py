@@ -3,12 +3,14 @@
 import asyncio
 import json
 
+import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy import text as sql_text
 
 from app.models import PlanningUnit, Project, SubplotCrossingParticipant
 from tests.helpers import create_project, register
 from tests.rbac_helpers import assign_roles, create_role
+from tests.test_series import _entry, _join, _new_series, _use
 
 
 async def setup(client):
@@ -24,6 +26,38 @@ async def matrix(client, base):
     response = await client.get(f"{base}/planning/matrix")
     assert response.status_code == 200, response.text
     return response.json()
+
+
+@pytest.mark.parametrize(("kind", "resource", "fields"), [
+    ("character", "characters", {"name": "重名"}),
+    ("world", "world", {"title": "重名", "category": "place"}),
+])
+async def test_picker_labels_only_adopted_series_entries_without_series_ids(client, kind, resource, fields):
+    await register(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}"
+    local = await client.post(f"{base}/{resource}", json=fields)
+    assert local.status_code == 201, local.text
+    series = await _join(client, await _new_series(client), project)
+    series_path = f"/api/v1/series/{series['id']}"
+    shared = await _entry(client, series_path, series["revision"], kind, **fields)
+    entries = f"{base}/planning/entries"
+    params = {"kind": kind, "q": "重名"}
+    initial = (await client.get(entries, params=params)).json()
+    assert initial["total"] == 1 and not initial["items"][0]["series_shared"]
+
+    adopted = await _use(client, f"{series_path}/entries/{shared['item']['id']}", shared["revision"], project["id"])
+    result = await client.get(entries, params=params)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["revision"] > initial["revision"] and body["total"] == 2
+    by_id = {item["reference"]["id"]: item for item in body["items"]}
+    assert {ref_id: item["series_shared"] for ref_id, item in by_id.items()} == {
+        local.json()["id"]: False,
+        adopted["ref"]["id"]: True,
+    }
+    assert all(item["name"] == "重名" and not {"series_id", "series_entry_id"} & item.keys()
+               for item in by_id.values())
 
 
 async def test_tag_search_filters_before_pagination(client):

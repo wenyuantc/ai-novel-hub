@@ -1,5 +1,5 @@
 import { AppstoreOutlined, BulbOutlined, CloudUploadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons'
-import { Alert, Button, Input, Select, Skeleton, Spin } from 'antd'
+import { Alert, Button, Input, Select, Skeleton, Space, Spin } from 'antd'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
@@ -46,7 +46,7 @@ export default function ProjectListPage() {
   const hint = loading && !projects.length ? '正在载入你的作品…' : error && !projects.length ? '暂时无法读取作品，请重试。' : `${stats.count} 部作品 · ${stats.words.toLocaleString()} 字，每个世界都在这里。`
 
   return (
-    <StudioPage title="我的作品" hint={hint} action={<Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>}>
+    <StudioPage title="我的作品" hint={hint} action={<Space wrap><Link to="/series">作品系列</Link><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button></Space>}>
       {recent && <ContinueWriting key={recent.id} project={recent} />}
       <div className="library-toolbar">
         <div className="library-filters" role="group" aria-label="作品状态筛选">{STATUS_FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={prefs.status === item.value} onClick={() => setPrefs((p) => ({ ...p, status: item.value }))}>{item.label}</button>)}</div>

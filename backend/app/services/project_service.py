@@ -7,11 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts import ProjectInfo
 from app.core.errors import ForbiddenError, NotFoundError
-from app.models import Chapter, Project, ProjectCover, User, WritingStyle
+from app.models import Chapter, Project, ProjectCover, Series, SeriesBook, User, WritingStyle
 from app.schemas.project import (
     ProjectCreate,
     ProjectOut,
     ProjectOwner,
+    ProjectSeriesBrief,
     ProjectUpdate,
     ReadingOut,
     WizardProgress,
@@ -182,14 +183,16 @@ def _to_out(
 
 
 async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
-    """固定次数的查询（项目 + 统计 + 风格一次，最近编辑一次，阅读进度至多两次），不随项目数增长。"""
+    """系列与作品、统计及风格一起投影，不随项目数增加查询次数。"""
     stats = chapter_stats_subquery()
     rows = (
         await db.execute(
-            select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle, ProjectCover.updated_at)
+            select(Project, stats.c.chapter_count, stats.c.total_words, WritingStyle, ProjectCover.updated_at, Series)
             .outerjoin(stats, stats.c.project_id == Project.id)
             .outerjoin(WritingStyle, WritingStyle.id == Project.default_style_id)
             .outerjoin(ProjectCover, ProjectCover.project_id == Project.id)
+            .outerjoin(SeriesBook, SeriesBook.project_id == Project.id)
+            .outerjoin(Series, and_(Series.id == SeriesBook.series_id, Series.owner_id == user_id))
             .where(Project.user_id == user_id, *project_lifecycle.active_conditions())
             .order_by(Project.updated_at.desc(), Project.id.desc())
         )
@@ -197,7 +200,13 @@ async def list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
     projects = [r[0] for r in rows]
     last = await _last_edited(db, [p.id for p in projects])
     reading = await _reading(db, projects)
-    return [_to_out(p, cc, tw, st, None, last.get(p.id), reading.get(p.id), cover) for p, cc, tw, st, cover in rows]
+    result = []
+    for p, cc, tw, st, cover, series in rows:
+        out = _to_out(p, cc, tw, st, None, last.get(p.id), reading.get(p.id), cover)
+        if series is not None:
+            out.series = ProjectSeriesBrief.model_validate(series)
+        result.append(out)
+    return result
 
 
 async def project_out(
@@ -218,6 +227,15 @@ async def project_out(
     owner = await db.get(User, project.user_id)
     if owner is not None:
         out.owner = ProjectOwner(id=owner.id, username=owner.username)
+    # 只有明确带作者身份的 HTTP 响应提供系列元数据；智能体等内部调用默认无系列信息。
+    if actor_user_id == project.user_id:
+        series = await db.scalar(
+            select(Series)
+            .join(SeriesBook, SeriesBook.series_id == Series.id)
+            .where(SeriesBook.project_id == project.id, Series.owner_id == actor_user_id)
+        )
+        if series is not None:
+            out.series = ProjectSeriesBrief.model_validate(series)
     return out
 
 

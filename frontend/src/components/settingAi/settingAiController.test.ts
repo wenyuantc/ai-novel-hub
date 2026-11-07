@@ -27,6 +27,14 @@ function setup() {
 }
 
 describe('独立的 AI 与提及草稿', () => {
+  it('本书采用系列条目后，只保存本书 AI 关联，不提交旧草稿里的系列策略', async () => {
+    const { controller, update } = setup()
+    await controller.open()
+    controller.edit({ ai_mode: 'never', mention_enabled: true, ai_hidden_builtin_fields: ['description'], links: [] })
+    await controller.save(true)
+    expect(update.mock.calls[0][2]).toEqual({ expected_ai_visibility_revision: 8, links: [] })
+  })
+
   it('只提交作者修改项，空列表清除，沿用旧规则不是可提交的档位', () => {
     const base = settings()
     const draft = { ...settingAiDraft(base), mention_enabled: true, mention_exclusions: [], links: [] }

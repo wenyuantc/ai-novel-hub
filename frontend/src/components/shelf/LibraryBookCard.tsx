@@ -23,6 +23,7 @@ export default function LibraryBookCard({ project: p, author, onExport, onBackup
         <div className="library-book-details">
           <div className="library-book-status"><ProjectBadge status={p.status} /></div>
           <h2 className="library-book-heading" id={`library-book-title-${p.id}`}><Link to={overview} title={p.title}>{p.title}</Link></h2>
+          {p.series && <Link className="library-book-series" to={`/series/${p.series.id}`} title={`所属系列：${p.series.name}`}>系列：{p.series.name}</Link>}
           <p className="library-book-description" title={p.synopsis || p.premise}>{p.synopsis || p.premise || '故事尚在构思，写下第一段简介，让这个世界慢慢清晰。'}</p>
           <time className="library-book-updated" dateTime={p.updated_at} title={formatTime(p.updated_at)}>更新于 {formatRelative(p.updated_at)}</time>
         </div>

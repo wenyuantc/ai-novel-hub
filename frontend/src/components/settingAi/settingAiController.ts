@@ -92,16 +92,18 @@ export class SettingAiController {
     this.update({ base: latest, draft: keepDraft ? rebaseSettingAiDraft(base, draft, latest) : settingAiDraft(latest),
       latest: null, reviewRequired: false, error: null, notice: keepDraft ? '已采用最新版本，草稿仍保留，请核对后再保存。' : null })
   }
-  save = async () => {
+  save = async (seriesManaged = false) => {
     const { base, draft, pending, reviewRequired } = this.state
-    if (!this.active || !this.access().canEdit || !base || !draft || pending || reviewRequired || !settingAiDirty(base, draft)) return
-    const invalid = settingAiDraftError(draft)
+    if (!this.active || !this.access().canEdit || !base || !draft || pending || reviewRequired) return
+    const effectiveDraft = seriesManaged ? { ...base, links: draft.links } : draft
+    if (!settingAiDirty(base, effectiveDraft)) return
+    const invalid = settingAiDraftError(effectiveDraft)
     if (invalid) { this.update({ error: invalid }); return }
     const ticket = this.begin()
     this.update({ pending: 'write', error: null, notice: null })
     try {
       if (!this.valid(ticket) || !this.access().canEdit) { this.invalidate(); return }
-      const saved = await this.api.update(this.projectId, this.entry, settingAiPatch(base, draft), ticket.controller.signal)
+      const saved = await this.api.update(this.projectId, this.entry, settingAiPatch(base, effectiveDraft), ticket.controller.signal)
       if (!this.valid(ticket)) return
       if (!this.access().canEdit) { this.invalidate(); return }
       this.update({ base: saved, draft: settingAiDraft(saved), pending: null, reviewRequired: false, notice: 'AI 与提及设置已保存。' })

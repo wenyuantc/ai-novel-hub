@@ -58,7 +58,7 @@ export function settingAiPatch(base: SettingAiSettings, draft: SettingAiDraft): 
 }
 
 /** 列表只重放作者实际添加／移除的项，不能顺便撤销另一会话刚保存的限制。 */
-function rebaseSet<T>(base: T[], draft: T[], latest: T[], key: (value: T) => string): T[] {
+export function rebaseSet<T>(base: T[], draft: T[], latest: T[], key: (value: T) => string): T[] {
   const baseKeys = new Set(base.map(key))
   const draftKeys = new Set(draft.map(key))
   const values = new Map<string, T>()

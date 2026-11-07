@@ -21,7 +21,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
-from app.models import Chapter, ChapterPlan, Outline, OutlineSnapshot
+from app.models import Chapter, ChapterPlan, Character, Outline, OutlineSnapshot
 from app.schemas.outline import (
     SnapshotDetail,
     SnapshotOut,
@@ -259,12 +259,22 @@ async def restore_data(
     await _insert_keeping_ids(db, Outline, outline_objs)
 
     plans = [p for p in data.get("plans") or [] if int(p["outline_id"]) in outline_objs]
+    character_ids = set(await db.scalars(select(Character.id).where(Character.project_id == project_id))) if any(
+        p.get("character_ids") for p in plans
+    ) else set()
+    ignored_characters = False
     plan_objs: dict[int, ChapterPlan] = {}
     for p in plans:
+        fields = {f: p[f] for f in PLAN_FIELDS if f in p}
+        saved_ids = fields.get("character_ids") or []
+        valid_ids = [cid for cid in saved_ids if type(cid) is int and cid in character_ids]
+        if len(saved_ids) != len(valid_ids):
+            ignored_characters = True
+        fields["character_ids"] = valid_ids
         plan_objs[int(p["id"])] = ChapterPlan(
             project_id=project_id,
             outline_id=outline_objs[int(p["outline_id"])].id,
-            **{f: p[f] for f in PLAN_FIELDS if f in p},
+            **fields,
         )
     await _insert_keeping_ids(db, ChapterPlan, plan_objs)
 
@@ -303,6 +313,8 @@ async def restore_data(
         db, project_id, data.get("planning_bindings"), plan_objs, anchors
     )
     if warnings is not None:
+        if ignored_characters:
+            warnings.append("快照中不再属于本书的角色未恢复")
         warnings.extend(planning_warnings)
     await planning_lifecycle.bump_revision(db, project_id)
     return len(outline_objs), len(plan_objs), restored

@@ -109,12 +109,12 @@ async def _lock_postgres(db: AsyncSession, project_id: int, *, write: bool) -> N
         await asyncio.sleep(min(remaining, _LOCK_POLL_SECONDS))
 
 
-async def _lock_sqlite(db: AsyncSession, project_id: int) -> None:
+async def _lock_sqlite(db: AsyncSession, project_id: int, *, include_recycled: bool = False) -> None:
     # SELECT / with_for_update 在 SQLite 不持有物理写锁。no-op UPDATE 使独立连接
     # 与策略保存事务互斥，且不触碰更新时间、业务列或 ORM 中待写的值。
     statement = (
         update(Project)
-        .where(Project.id == project_id, *active_conditions())
+        .where(Project.id == project_id, *(() if include_recycled else active_conditions()))
         .values(ai_visibility_revision=Project.ai_visibility_revision, updated_at=Project.updated_at)
         .execution_options(synchronize_session=False)
     )
@@ -132,20 +132,22 @@ async def _lock_sqlite(db: AsyncSession, project_id: int) -> None:
         raise NotFoundError("作品不存在")
 
 
-async def _lock(db: AsyncSession, project_id: int, *, write: bool) -> None:
+async def _lock(db: AsyncSession, project_id: int, *, write: bool, include_recycled: bool = False) -> None:
     with db.no_autoflush:
         match db.get_bind().dialect.name:
             case "postgresql":
                 await _lock_postgres(db, project_id, write=write)
             case "sqlite":
-                await _lock_sqlite(db, project_id)
+                await _lock_sqlite(db, project_id, include_recycled=include_recycled)
             case _:
                 raise RuntimeError("受控 AI 请求不支持当前数据库")
 
 
-async def lock_visibility_write(db: AsyncSession, project_id: int) -> None:
+async def lock_visibility_write(
+    db: AsyncSession, project_id: int, *, include_recycled: bool = False
+) -> None:
     """策略作者写入口：与策略 CAS 及 commit 同一事务；不要在服务内提前释放。"""
-    await _lock(db, project_id, write=True)
+    await _lock(db, project_id, write=True, include_recycled=include_recycled)
 
 
 class _GuardedProvider(LLMProvider):

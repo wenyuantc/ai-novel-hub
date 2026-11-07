@@ -9,10 +9,11 @@ const LIFE_OPTIONS = (Object.keys(LIFE_STATUS) as LifeStatus[]).map((k) => ({ va
 interface BasicProps {
   form: FormInstance<CharacterFormValues>
   showSort?: boolean
+  seriesManaged?: boolean
 }
 
 /** 基础资料与 AI 策略独立保存；定位不直接切换 AI 档位。 */
-export function CharacterBasicFields({ form, showSort = true }: BasicProps) {
+export function CharacterBasicFields({ form, showSort = true, seriesManaged = false }: BasicProps) {
   const roleType = Form.useWatch('role_type', form)
   return (
     <>
@@ -26,7 +27,7 @@ export function CharacterBasicFields({ form, showSort = true }: BasicProps) {
               { max: 100, message: '不超过 100 字' },
             ]}
           >
-            <Input />
+            <Input readOnly={seriesManaged} />
           </Form.Item>
         </Col>
         <Col span={12}>
@@ -51,7 +52,7 @@ export function CharacterBasicFields({ form, showSort = true }: BasicProps) {
           },
         ]}
       >
-        <Select mode="tags" tokenSeparators={[',', '，', '、']} open={false} placeholder="例如：小远、林师兄" />
+        <Select disabled={seriesManaged} mode="tags" tokenSeparators={[',', '，', '、']} open={false} placeholder="例如：小远、林师兄" />
       </Form.Item>
       <Row gutter={16}>
         <Col span={8}>
@@ -61,7 +62,7 @@ export function CharacterBasicFields({ form, showSort = true }: BasicProps) {
         </Col>
         <Col span={8}>
           <Form.Item name="gender" label="性别" rules={[{ max: 20, message: '不超过 20 字' }]}>
-            <Input />
+            <Input readOnly={seriesManaged} />
           </Form.Item>
         </Col>
         <Col span={8}>
@@ -78,20 +79,20 @@ export function CharacterBasicFields({ form, showSort = true }: BasicProps) {
 }
 
 /** 描写字段：外貌、性格、背景、简介。 */
-export function CharacterDescFields() {
+export function CharacterDescFields({ seriesManaged = false }: { seriesManaged?: boolean }) {
   return (
     <>
       <Form.Item name="appearance" label="外貌">
-        <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
+        <Input.TextArea readOnly={seriesManaged} autoSize={{ minRows: 2, maxRows: 8 }} />
       </Form.Item>
       <Form.Item name="personality" label="性格">
-        <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
+        <Input.TextArea readOnly={seriesManaged} autoSize={{ minRows: 2, maxRows: 8 }} />
       </Form.Item>
       <Form.Item name="background" label="背景">
-        <Input.TextArea autoSize={{ minRows: 2, maxRows: 10 }} />
+        <Input.TextArea readOnly={seriesManaged} autoSize={{ minRows: 2, maxRows: 10 }} />
       </Form.Item>
       <Form.Item name="profile" label="简介">
-        <Input.TextArea autoSize={{ minRows: 3, maxRows: 12 }} />
+        <Input.TextArea readOnly={seriesManaged} autoSize={{ minRows: 3, maxRows: 12 }} />
       </Form.Item>
     </>
   )

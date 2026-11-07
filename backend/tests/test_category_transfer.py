@@ -96,7 +96,7 @@ def _old_backup(original, version):
 
 async def test_categories_v5_roundtrip_preserves_tags_rules_and_resets_both_revisions(client, app):
     project, original = await _category_backup(client, app)
-    assert (original["version"], original["app_schema"]) == (6, "0037")
+    assert (original["version"], original["app_schema"]) == (6, "0038")
     assert not {"fields_revision", "categories_revision"}.intersection(original["project"])
     imported = await _import(client, original)
     result = await _backup(client, imported["project"]["id"])

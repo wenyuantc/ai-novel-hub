@@ -60,6 +60,7 @@ from app.models.planning import (
 )
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
+from app.models.series import Series, SeriesBook, SeriesEntry, SeriesEntryUse
 from app.models.setting_categories import SettingCategory, SettingCategoryRule
 from app.models.setting_fields import SettingAiLink, SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
@@ -129,6 +130,10 @@ __all__ = [
     "RelationshipHistory",
     "RelationshipType",
     "RetrievalChunk",
+    "Series",
+    "SeriesBook",
+    "SeriesEntry",
+    "SeriesEntryUse",
     "SettingCategory",
     "SettingCategoryRule",
     "SettingAiLink",

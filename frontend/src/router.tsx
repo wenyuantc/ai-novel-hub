@@ -44,6 +44,8 @@ export const router = createBrowserRouter([
     ),
     children: [
       { path: 'projects', element: <ProjectListPage /> },
+      { path: 'series', lazy: lazyPage(() => import('./pages/SeriesPage')) },
+      { path: 'series/:sid', lazy: lazyPage(() => import('./pages/SeriesPage')) },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
       { path: 'settings/api-keys', lazy: lazyPage(() => import('./pages/ApiKeysPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },

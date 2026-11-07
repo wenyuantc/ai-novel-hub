@@ -5,8 +5,8 @@
 - 导出：勾选的角色和组织 + 两端都在导出集合内的关系 + 成员角色在集合内的成员关系；
   上级组织也在导出集合内时才写 parent_name。
 - 导入：同名冲突逐项选择 skip / rename（默认 skip）；rename 追加「（导入）」「（导入2）」……直到不冲突。
-  建立「卡片名 → 目标 id」映射：新建项映射到新 id，被跳过的同名项映射到目标项目已有的同名对象；
-  关系与成员关系的两端先在映射里找，再按名称找目标项目已有对象。
+  建立「卡片名 → 目标 id」映射：新建项映射到新 id，被跳过的同名项只能复用目标项目已有的本书专属对象；
+  关系与成员关系的两端先在映射里找，再按名称找目标项目已有的本书专属对象。
   关系类型按 (role_a, role_b) 匹配预置 / 本项目自定义类型（反向匹配时互换两端），匹配不上新建自定义类型；
   关系一律经 relationship_service.apply_change(source="import") 写入；同一对角色已有关系时跳过并记入 warnings。
   整个导入在一个事务内完成。
@@ -19,6 +19,7 @@
 """
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -72,6 +73,7 @@ from app.services import (
     membership_progression_service,
     organization_service,
     relationship_service,
+    series_policy,
     setting_progression_service,
     story_service,
 )
@@ -387,8 +389,10 @@ def rename_for(name: str, taken: set[str], max_len: int = 100) -> str:
         n += 1
 
 
-async def _existing(db: AsyncSession, project_id: int) -> tuple[dict[str, int], dict[str, int]]:
-    """目标项目已有的「名称 → id」（角色同名时取排序最前的一个）。"""
+async def _existing(db: AsyncSession, project_id: int) -> tuple[set[str], dict[str, int], dict[str, int]]:
+    """占用名称含系列投影；自动复用只从本书专属角色中按排序取第一个。"""
+    bound = await series_policy.used_local_ids(db, project_id, "character")
+    names: set[str] = set()
     chars: dict[str, int] = {}
     for cid, name in (
         await db.execute(
@@ -397,16 +401,18 @@ async def _existing(db: AsyncSession, project_id: int) -> tuple[dict[str, int], 
             .order_by(Character.sort, Character.id)
         )
     ).all():
-        chars.setdefault(name, cid)
+        names.add(name)
+        if cid not in bound:
+            chars.setdefault(name, cid)
     orgs = dict(
         (
             await db.execute(select(Organization.name, Organization.id).where(Organization.project_id == project_id))
         ).all()
     )
-    return chars, orgs
+    return names, chars, orgs
 
 
-def _preview_items(names: list[str], existing: dict[str, int]) -> list[PreviewItem]:
+def _preview_items(names: list[str], existing: Collection[str]) -> list[PreviewItem]:
     taken = set(existing) | set(names)
     items = []
     for name in names:
@@ -451,7 +457,7 @@ async def _typed_plan(db, project_id, card, resolutions, mappings):
         plan = _TypedPlan(revision)
         if card.version < 4:
             return plan
-        char_names, org_names = await _existing(db, project_id)
+        char_names, _, org_names = await _existing(db, project_id)
         career_names = await _target_careers(db, project_id)
         existing = {"character": char_names, "organization": org_names, "career": career_names}
         decisions = {"character": resolutions.characters, "organization": resolutions.organizations,
@@ -590,11 +596,16 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
     warnings: list[str] = []
     chars = list(card.characters) if card.version >= 4 else _dedupe_names(card.characters, "角色", warnings)
     orgs = _dedupe_names(card.organizations, "组织", warnings)
-    existing_chars, existing_orgs = await _existing(db, project_id)
+    occupied_chars, existing_chars, existing_orgs = await _existing(db, project_id)
+    blocked_chars = occupied_chars - existing_chars.keys()
     for c in chars:
-        if c.name in existing_chars and c.custom_text_fields:
+        if c.name in blocked_chars and request.resolutions.characters.get(c.name) != "rename":
+            warnings.append(f"角色「{c.name}」与系列条目同名，跳过时不会关联到该条目；可重命名导入")
+        elif c.name in occupied_chars and c.custom_text_fields:
             warnings.append(f"角色「{c.name}」选择跳过时不会导入自定义字段；选择重命名可保留")
-    known_chars = set(existing_chars) | {c.name for c in chars}
+    known_chars = set(existing_chars) | {
+        c.name for c in chars if c.name not in blocked_chars or request.resolutions.characters.get(c.name) == "rename"
+    }
     known_orgs = set(existing_orgs) | {o.name for o in orgs}
     rels = []
     for r in card.relationships:
@@ -645,7 +656,7 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
         ai_visibility_revision=ai_revision,
         fields_revision=typed.revision, can_import=typed.can_import,
         field_definitions=typed.definitions, references=typed.references,
-        characters=_preview_items([c.name for c in chars], existing_chars),
+        characters=_preview_items([c.name for c in chars], occupied_chars),
         organizations=_preview_items([o.name for o in orgs], existing_orgs),
         relationships=rels,
         careers=preview_careers,
@@ -713,22 +724,26 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     warnings: list[str] = []
     chars = list(card.characters) if card.version >= 4 else _dedupe_names(card.characters, "角色", warnings)
     orgs = _dedupe_names(card.organizations, "组织", warnings)
-    existing_chars, existing_orgs = await _existing(db, project_id)
+    occupied_chars, existing_chars, existing_orgs = await _existing(db, project_id)
 
     # ---- 角色 ----
     char_map: dict[str, int] = {}
     char_results: list[ImportedItem] = []
-    taken_chars = set(existing_chars) | {c.name for c in chars}
+    taken_chars = occupied_chars | {c.name for c in chars}
     for c in chars:
         name = c.name
         action = "created"
-        if name in existing_chars:
+        if name in occupied_chars:
             if req.resolutions.characters.get(name, "skip") == "skip":
-                char_map[name] = existing_chars[name]
+                existing_id = existing_chars.get(name)
+                if existing_id is None:
+                    warnings.append(f"角色「{name}」与系列条目同名，已跳过，不会写入该条目的关联")
+                else:
+                    char_map[name] = existing_id
                 if c.custom_text_fields:
                     warnings.append(f"角色「{name}」已跳过，其自定义字段未导入")
                 char_results.append(
-                    ImportedItem(name=name, imported_name=None, id=existing_chars[name], action="skipped")
+                    ImportedItem(name=name, imported_name=None, id=existing_id, action="skipped")
                 )
                 continue
             name = rename_for(name, taken_chars)

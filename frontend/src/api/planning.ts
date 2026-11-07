@@ -2,7 +2,7 @@ import { request } from './client'
 import type { QueryValue } from './client'
 import type {
   MatrixColumnRef, PlanningBatch, PlanningBinding, PlanningContextPreview, PlanningDetached,
-  PlanningEntry, PlanningMatrix, PlanningMerge, PlanningMutation, PlanningPage, PlanningReferenceKind,
+  PlanningMatrix, PlanningMerge, PlanningMutation, PlanningPage, PlanningPickerEntry, PlanningReferenceKind,
   PlanningRevision, PlanningSource, PlanningTag, PlanningTagCreate, PlanningTagMutation, PlanningTagUpdate,
   PlanningWeave, Subplot, SubplotCreate, SubplotCrossing, SubplotCrossingCreate, SubplotCrossingMutation,
   SubplotCrossingUpdate, SubplotMutation, SubplotNodeMutation, SubplotNodePut, SubplotUpdate,
@@ -37,7 +37,7 @@ export const planningApi = {
   matrix: (pid: number, query: PlanningMatrixQuery = {}, signal?: AbortSignal) =>
     request<PlanningMatrix>(`${base(pid)}/matrix`, { query: planningMatrixQuery(query), signal }),
   entries: (pid: number, query: PlanningEntryQuery = {}, signal?: AbortSignal) =>
-    request<PlanningPage<PlanningEntry>>(`${base(pid)}/entries`, { query: { ...query }, signal }),
+    request<PlanningPage<PlanningPickerEntry>>(`${base(pid)}/entries`, { query: { ...query }, signal }),
   tags: (pid: number, query: PlanningListQuery = {}, signal?: AbortSignal) =>
     request<PlanningPage<PlanningTag>>(`${base(pid)}/tags`, { query: { ...query }, signal }),
   createTag: (pid: number, body: PlanningTagCreate) => changed(pid, request<PlanningTagMutation>(`${base(pid)}/tags`, { method: 'POST', body })),

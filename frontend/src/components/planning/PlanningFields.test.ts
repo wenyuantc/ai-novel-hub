@@ -47,4 +47,18 @@ describe('规划条目选择器适配', () => {
     })
     expect(onChange).not.toHaveBeenCalled()
   })
+
+  it.each(['character', 'world'] as const)('同名 %s 区分系列归属，但选择值仍是书内 ID', async (kind) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      revision: 10, total: 2, page: 1, page_size: 30,
+      items: [
+        { reference: { kind, id: 9 }, name: '重名', series_shared: false },
+        { reference: { kind, id: 17 }, name: '重名', series_shared: true },
+      ],
+    }))))
+    renderToStaticMarkup(createElement(PlanningEntrySelect, { projectId: 2, kind, label: '选择设定' }))
+    expect(await entrySelect.props!.loadEntries({ q: '重名', page: 1, page_size: 30 }, new AbortController().signal)).toEqual({
+      items: [{ value: 9, label: '重名' }, { value: 17, label: '重名（系列共享）' }], total: 2,
+    })
+  })
 })

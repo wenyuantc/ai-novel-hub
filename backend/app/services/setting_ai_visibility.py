@@ -14,7 +14,7 @@ from app.models import Project, SettingAiLink, SettingReferenceHandle
 from app.schemas import setting_ai_visibility as s
 from app.schemas.setting_fields import EntityRef, EntryKind, SettingEntry
 from app.services import authorization_service as authz
-from app.services import project_lifecycle
+from app.services import project_lifecycle, series_policy
 from app.services import setting_catalog_service as catalog
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import get_manageable_project, get_owned_project
@@ -285,6 +285,8 @@ async def write_settings(
             entries = await catalog.get_entries(db, project_id, [_ref(key) for key in next_targets])
             targets = [entries[key] for key in next_targets]
             changed = {key: value for key, value in new.model_dump().items() if getattr(old, key) != value}
+            if kind in ("character", "world") and changed.keys() & series_policy.AI_SHARED_FIELDS:
+                await series_policy.reject_bound_entry(db, project_id, kind, entry_id)
             links_changed = next_targets != current_targets
             if changed or links_changed:
                 revision = await bump_visibility_revision(

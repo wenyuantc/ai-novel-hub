@@ -38,6 +38,7 @@ from app.api.v1 import (
     prompt_templates,
     reader,
     relationships,
+    series,
     setting_categories,
     setting_fields,
     skills,
@@ -66,6 +67,7 @@ api_router.include_router(api_keys.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}
 api_router.include_router(transfer.router)
 api_router.include_router(projects.router)
+api_router.include_router(series.router)
 api_router.include_router(project_cover.router)
 api_router.include_router(reader.router)
 # 固定路径（with-relations / generate）先于通用 CRUD 的 /{item_id} 注册

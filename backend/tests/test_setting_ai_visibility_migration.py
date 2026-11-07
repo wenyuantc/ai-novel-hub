@@ -24,6 +24,7 @@ from tests.test_setting_categories_migration import (
 from tests.test_setting_fields_migration import (
     _config,
     _foreign_keys_during_migrations,
+    _schema_0037_model_contract,
     _schema_contract,
     _seed_connection,
 )
@@ -105,7 +106,8 @@ def test_0037_preserves_real_0036_rows_and_schema_then_safe_roundtrip(tmp_path, 
         command.upgrade(config, "0037")
         Base.metadata.create_all(expected)
         for table in CHANGED_TABLES:
-            assert _schema_contract(inspect(engine), table) == _schema_contract(inspect(expected), table), table
+            current = _schema_contract(inspect(engine), table)
+            assert current == _schema_0037_model_contract(inspect(expected), table), table
         with engine.connect() as conn:
             _assert_preserved(conn, before)
             _assert_legacy_defaults(conn)
@@ -237,7 +239,7 @@ def test_0037_postgresql_preserves_rows_constraints_and_orm_contract(tmp_path, m
             conn.exec_driver_sql(f'CREATE SCHEMA "{model_schema}"')
             conn.exec_driver_sql(f'SET LOCAL search_path TO "{model_schema}"')
             create_isolated_schema(conn)
-            assert inspect_contract(conn) == actual
+            assert {name: _schema_0037_model_contract(inspect(conn), name) for name in CHANGED_TABLES} == actual
             conn.exec_driver_sql(f'DROP SCHEMA "{model_schema}" CASCADE')
 
         asyncio.run(run(compare_with_models))

@@ -53,6 +53,7 @@ from app.services import (
     project_lifecycle,
     prompt_service,
     relationship_service,
+    series_policy,
     story_service,
     style_service,
     wizard_service,
@@ -839,6 +840,7 @@ async def apply_final(db: AsyncSession, project: Project, final: dict[str, Any],
     stats["project_fields"] = written
 
     characters = list(await db.scalars(select(Character).where(Character.project_id == project.id)))
+    bound_characters = await series_policy.used_local_ids(db, project.id, "character")
     taken: set[str] = set()
     for c in characters:
         taken |= _keys(c.name, c.aliases)
@@ -867,6 +869,8 @@ async def apply_final(db: AsyncSession, project: Project, final: dict[str, Any],
         stats["characters"] += 1
     lookup: dict[str, int] = {}
     for c in characters:
+        if c.id in bound_characters:
+            continue  # 同名参与去重，不可自动作为新成员或新关系的端点。
         for key in _keys(c.name, c.aliases):
             lookup.setdefault(key, c.id)
 

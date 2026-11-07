@@ -151,9 +151,22 @@ def _schema_contract(inspector, table):
     }
 
 
+def _schema_0037_model_contract(inspector, table):
+    """0038 新增系列复合外键索引，不混入 0037 及之前的结构比较。"""
+    contract = _schema_contract(inspector, table)
+    index = {
+        "projects": "uq_projects_id_user_id",
+        "characters": "uq_characters_project_id_id",
+        "world_settings": "uq_world_settings_project_id_id",
+    }.get(table)
+    if index is not None:
+        contract["indexes"].pop(index)
+    return contract
+
+
 def _schema_0036_model_contract(inspector, table):
     """比较冻结的 0036 结构，不把当前的 AI 策略列计入历史合同。"""
-    contract = _schema_contract(inspector, table)
+    contract = _schema_0037_model_contract(inspector, table)
     columns = contract["columns"]
     if table == "projects":
         columns.pop("ai_visibility_revision")

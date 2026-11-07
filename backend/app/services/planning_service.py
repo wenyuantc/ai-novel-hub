@@ -21,6 +21,7 @@ from app.models.planning import (
 )
 from app.schemas import planning as s
 from app.services import planning_queries as query
+from app.services import series_policy
 from app.services.audit_writer import AuditOperation
 from app.services.mentions.context import MentionCandidate, candidate_dictionary, load_candidates
 from app.services.mentions.matcher import cache, match_entities
@@ -257,21 +258,32 @@ async def batch_update(db: AsyncSession, user_id: int, project_id: int, body: s.
 async def list_entries(
     db: AsyncSession, user_id: int, project_id: int, *, kind=None, category=None, q=None, page=1, page_size=50
 ) -> s.PlanningEntryPage:
-    rev, catalog = await _snapshot(db, user_id, project_id, lambda: query.entries(db, project_id))
-    selected = [
-        entry
-        for entry in catalog
-        if (kind is None or entry.reference.kind == kind)
-        and (category is None or entry.category == category)
-        and (not q or q.strip().casefold() in entry.name.casefold())
-    ]
-    return s.PlanningEntryPage(
-        revision=rev,
-        items=selected[(page - 1) * page_size : page * page_size],
-        total=len(selected),
-        page=page,
-        page_size=page_size,
-    )
+    async def read_page() -> tuple[list[s.PlanningPickerEntry], int]:
+        catalog = await query.entries(db, project_id)
+        search = q.strip().casefold() if q else ""
+        selected = [
+            entry
+            for entry in catalog
+            if (kind is None or entry.reference.kind == kind)
+            and (category is None or entry.category == category)
+            and (not search or search in entry.name.casefold())
+        ]
+        current = selected[(page - 1) * page_size : page * page_size]
+        shared = {
+            entry_kind: await series_policy.used_local_ids(db, project_id, entry_kind, {
+                item.reference.id for item in current if item.reference.kind == entry_kind
+            })
+            for entry_kind in ("character", "world")
+        }
+        items = []
+        for item in current:
+            ref = item.reference
+            bound = ref.kind in ("character", "world") and ref.id in shared[ref.kind]
+            items.append(s.PlanningPickerEntry(**item.model_dump(), series_shared=bound))
+        return items, len(selected)
+
+    revision, (items, total) = await _snapshot(db, user_id, project_id, read_page)
+    return s.PlanningEntryPage(revision=revision, items=items, total=total, page=page, page_size=page_size)
 
 
 async def list_detached(db: AsyncSession, user_id: int, project_id: int, *, q=None, page=1, page_size=50):

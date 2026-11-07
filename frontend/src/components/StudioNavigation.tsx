@@ -11,6 +11,7 @@ export interface NavGroup { title: string; items: NavItem[] }
 const GLOBAL_GROUPS: NavGroup[] = [
   { title: '创作空间', items: [
     { to: '/projects', label: '我的作品', icon: <BookOutlined /> },
+    { to: '/series', label: '作品系列', icon: <ApartmentOutlined /> },
     { to: '/inspiration', label: '灵感立项', icon: <BulbOutlined /> },
     { to: '/book-import', label: '拆书导入', icon: <ImportOutlined /> },
   ] },

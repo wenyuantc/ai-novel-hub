@@ -659,7 +659,7 @@ async def apply(db: AsyncSession, user_id: int, session_id: int, data: ApplyRequ
         setattr(project, field, list(value) if isinstance(value, list) else value)
     await db.commit()
     await db.refresh(project)
-    return await project_service.project_out(db, project)
+    return await project_service.project_out(db, project, actor_user_id=user_id)
 
 
 async def from_project(db: AsyncSession, user_id: int, project_id: int) -> SessionOut:

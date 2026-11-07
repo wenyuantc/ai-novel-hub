@@ -12,6 +12,7 @@ from app.models import Character, Outline, WorldSetting
 from app.schemas.setting_fields import EntityRef, EntryType
 from app.services import (
     planning_lifecycle,
+    series_policy,
     setting_ai_visibility,
     setting_catalog_service,
     setting_field_service,
@@ -158,6 +159,14 @@ async def update_owned(
     else:
         await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
+    if kind in (CHARACTERS, WORLD):
+        projection_kind = "character" if kind is CHARACTERS else "world"
+        shared_fields = (
+            series_policy.CHARACTER_SHARED_FIELDS if kind is CHARACTERS else series_policy.WORLD_SHARED_FIELDS
+        )
+        static_fields = shared_fields - series_policy.shared_baseline_fields(projection_kind)
+        if any(values.get(key) is not None and values[key] != getattr(item, key) for key in static_fields):
+            await series_policy.reject_bound_entry(db, project_id, projection_kind, item_id)
     legacy_pin = check_legacy_pin and item.ai_mode is None
     before_pinned = legacy_pin and (item.always_in_context or is_protagonist_role(item.role_type))
     old_category = item.category if check_legacy_tracking else None
@@ -216,6 +225,7 @@ async def delete_owned(
         await _write_project(db, user_id, project_id, manage=manage)
     item = await (get_manageable if manage else get_owned)(db, kind, user_id, project_id, item_id)
     if kind is CHARACTERS or kind is WORLD:
+        await series_policy.reject_bound_entry(db, project_id, "character" if kind is CHARACTERS else "world", item_id)
         await setting_field_service.cleanup_unreferenced_handles(
             db, project_id, [EntityRef(kind="character" if kind is CHARACTERS else "world", id=item.id)]
         )

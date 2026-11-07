@@ -116,11 +116,20 @@ class ProjectOwner(BaseModel):
     username: str
 
 
+class ProjectSeriesBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    revision: int
+
+
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     owner: ProjectOwner | None = None
+    series: ProjectSeriesBrief | None = None
     title: str
     genre: str
     premise: str

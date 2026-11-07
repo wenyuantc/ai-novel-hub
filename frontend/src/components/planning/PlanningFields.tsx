@@ -16,7 +16,10 @@ export function PlanningEntrySelect({ projectId, kind, value = [], onChange, dis
   const loadEntries = useCallback(async (query: EntrySelectQuery, signal: AbortSignal) => {
     const result = await planningApi.entries(projectId, { kind, ...query }, signal)
     return {
-      items: result.items.map((item) => ({ value: planningReferenceId(item.reference), label: `${item.name}${item.is_present === false ? '（历史关系）' : ''}` })),
+      items: result.items.map((item) => ({
+        value: planningReferenceId(item.reference),
+        label: `${item.name}${item.series_shared ? '（系列共享）' : item.is_present === false ? '（历史关系）' : ''}`,
+      })),
       total: result.total,
     }
   }, [projectId, kind])

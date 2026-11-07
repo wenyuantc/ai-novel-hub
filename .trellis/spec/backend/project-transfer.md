@@ -85,7 +85,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 6, exported_at, app_schema: "0037"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 6, exported_at, app_schema: "0038"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
@@ -143,6 +143,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - v5新增四实体`setting_tags`和两张分类核心表。旧v1–v4仅允许缺失或规范空数组的未来标签／分类表，补空升级；非空、null或非法形状明确拒绝，不能静默清理。v5必须提供两张核心表，preview与写入后分别用纯分类图和数据库分类图校验，与字段图校验共同保留。字段定义／选项先于分类／规则插入，三条真FK均重映射；规则`deferred`为空，数据库延迟约束不代表可先插null违反CHECK。
 - `PROJECT_RULE.exclude`同时排除`fields_revision/categories_revision`，新作品取默认值，不继承源运行代次。四实体标签与分类适用类型是`json_plain`，规则依赖不是普通可丢弃引用。完整规则、错误与测试见[自动分类契约](./setting-categories.md)。
 - v6 保存四实体策略、共享／旧字段 `ai_hidden` 和核心表 `setting_ai_links`。两个端点在稳定句柄之后插入并重映射，校验项目、重复、自关联与每源上限。导入 v1–v5 保留存量模式；拒绝夹带非兼容新配置、丢失 v6 必需配置的文件。`ai_visibility_revision`、`ai_history_epoch` 不导出；原字段值仍保存在人工备份。见 [AI 可见性契约](./setting-ai-visibility.md)。
+- 0038 不改变 v6 形状：只导出已在本书采用的投影及本书引用，`series_books`、`series_entry_uses` 明确排除，恢复作品不继承系列身份或授权。系列写同事务推进作品可见版本，导出结束仍按本书版本防止混合资料。见 [系列设定契约](./series-settings.md)。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。
   例外：封面不进入通用表注册表，而是新增可选顶层字段，曾保持原格式版本；不能用此例外跳过其他新增表的格式迁移评估。
 

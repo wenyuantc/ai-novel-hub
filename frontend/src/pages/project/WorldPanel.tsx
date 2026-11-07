@@ -26,6 +26,9 @@ import { baselineEditorLabel } from '../../api/progressions'
 import { worldApi } from '../../api/story'
 import type { ProgressionPositionInput, WorldSetting } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
+import { BookSeriesLibrary, BookSeriesPromotion, BookSeriesScope, BookSeriesUnuse, SharedSettingNotice } from '../../components/series/BookSeriesSettings'
+import { inSettingScope, type SettingScope } from '../../components/series/seriesState'
+import { useProjectStore } from '../../stores/project'
 import SettingAiPanel from '../../components/settingAi/SettingAiPanel'
 import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
 import SettingEntryFieldsPanel from '../../components/settingFields/SettingEntryFieldsPanel'
@@ -50,8 +53,12 @@ export default function WorldPanel() {
   const tagsSession = useSettingTagsSession(pid)
   const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
-  const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canEditNow, canReadNow, managingOther } = useProjectAccess(pid)
   const { message } = App.useApp()
+  const series = useProjectStore((state) => !managingOther && state.project?.id === pid ? state.project.series : null)
+  const [settingScope, setSettingScope] = useState<SettingScope>('all')
+  const [promoting, setPromoting] = useState<WorldSetting | null>(null)
+  const [unusing, setUnusing] = useState<{ id: number; title: string } | null>(null)
   const loader = useCallback(() => worldApi.list(pid), [pid])
   const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
   const items = useMemo(() => loadedItems ?? [], [loadedItems])
@@ -61,10 +68,14 @@ export default function WorldPanel() {
   const [form] = Form.useForm<WorldFormValues>()
   const editor = useWorldBaselineEditor(pid, form)
   const { editing, open, saving, baseline, baselineLoading, baselineError, baselineConflict } = editor
+  const origin = editing ? items.find((item) => item.id === editing.id)?.origin ?? editing.origin : undefined
+  const seriesManaged = origin?.scope === 'series'
+  const sharedEntryId = origin?.scope === 'series' ? origin.series_entry_id : null
   const [filter, setFilter] = useState<string>('all')
+  const scopedItems = useMemo(() => series ? items.filter((item) => inSettingScope(item.origin, settingScope)) : items, [items, series, settingScope])
   const groups = useMemo(
-    () => groupWorld(items).filter((g) => filter === 'all' || g.category === filter),
-    [items, filter],
+    () => groupWorld(scopedItems).filter((g) => filter === 'all' || g.category === filter),
+    [scopedItems, filter],
   )
 
   const openEdit = (item: WorldSetting | null) => {
@@ -75,7 +86,7 @@ export default function WorldPanel() {
   useEntityDeepLink(pid, loadedItems, loading, openEdit, canReadNow)
 
   const handleDelete = async (item: WorldSetting) => {
-    if (!canEditNow()) return
+    if (item.origin?.scope === 'series' || !canEditNow()) return
     try {
       if (!canEditNow()) return
       await worldApi.remove(pid, item.id)
@@ -95,7 +106,7 @@ export default function WorldPanel() {
       title="世界观设定"
       extra={
         <Space>
-          {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)}>
+          {canUseAI && (<Button icon={<RobotOutlined />} disabled={items.some((item) => item.origin?.scope === 'series')} onClick={() => setAiOpen(true)}>
             AI 重新生成
           </Button>)}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} disabled={!canEdit}>
@@ -105,17 +116,18 @@ export default function WorldPanel() {
       }
     >
       {listError && <Alert type="error" showIcon message={listError} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 12 }} />}
+      {series && <BookSeriesScope series={series} value={settingScope} onChange={(scope) => { setSettingScope(scope); setFilter('all') }} />}
       <Spin spinning={loading}>
-        {items.length === 0 ? (
-          <Empty description={canUseAI ? '暂无世界观设定，可手动新增或使用 AI 生成' : '暂无世界观设定，可手动新增'} />
+        {scopedItems.length === 0 ? (
+          <Empty description={settingScope === 'series' ? '本书尚未采用系列世界观' : canUseAI ? '暂无世界观设定，可手动新增或使用 AI 生成' : '暂无世界观设定，可手动新增'} />
         ) : (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Segmented
               value={filter}
               onChange={(v) => setFilter(String(v))}
               options={[
-                { value: 'all', label: `全部（${items.length}）` },
-                ...groupWorld(items).map((g) => ({
+                { value: 'all', label: `全部（${scopedItems.length}）` },
+                ...groupWorld(scopedItems).map((g) => ({
                   value: g.category,
                   label: `${WORLD_CATEGORY_LABELS[g.category]}（${g.items.length}）`,
                 })),
@@ -132,8 +144,11 @@ export default function WorldPanel() {
                     <List.Item
                       actions={[
                         <Button key="edit" type="link" size="small" onClick={() => openEdit(w)}>
-                          {canEdit ? '编辑' : '查看'}</Button>,
-                        <Popconfirm
+                          {canEdit ? w.origin?.scope === 'series' ? '本书详情' : '编辑' : '查看'}</Button>,
+                        ...(series && canEdit && w.origin?.scope !== 'series' ? [
+                          <Button key="promote" type="link" size="small" onClick={() => { if (canEditNow()) setPromoting(w) }}>提升为系列共享</Button>,
+                        ] : []),
+                        ...(w.origin?.scope === 'series' ? [] : [<Popconfirm
                           key="del"
                           title="删除该条目？"
                           okText="删除"
@@ -144,7 +159,7 @@ export default function WorldPanel() {
                           <Button type="link" size="small" danger disabled={!canEdit}>
                             删除
                           </Button>
-                        </Popconfirm>,
+                        </Popconfirm>]),
                       ]}
                     >
                       <List.Item.Meta
@@ -152,6 +167,7 @@ export default function WorldPanel() {
                           <Space size={4}>
                             <Tag>{WORLD_CATEGORY_LABELS[asWorldCategory(w.category)]}</Tag>
                             {w.title}
+                            {w.origin?.scope === 'series' && <Tag color="blue">系列共享</Tag>}
                           </Space>
                         }
                         description={
@@ -172,11 +188,17 @@ export default function WorldPanel() {
         )}
       </Spin>
 
+      {series && settingScope !== 'book' && <BookSeriesLibrary key={`${pid}:${series.id}`} series={series} projectId={pid} kind="world" />}
+      {series && promoting && <BookSeriesPromotion seriesId={series.id} projectId={pid} kind="world" id={promoting.id}
+        title={promoting.title} onClose={() => setPromoting(null)} />}
+      {series && unusing && <BookSeriesUnuse seriesId={series.id} seriesEntryId={unusing.id} projectId={pid} kind="world"
+        title={unusing.title} onClose={() => setUnusing(null)} onDone={() => { setUnusing(null); editor.closeEditor() }} />}
+
       <Modal
         okButtonProps={{ disabled: !canEdit || (!!editing && (!baseline || baselineLoading || !!baselineError || baselineConflict)) }}
-        title={editing ? (canEdit ? '编辑世界观条目' : '查看世界观条目') : '新增世界观条目'}
+        title={editing ? (canEdit ? seriesManaged ? '编辑本书设定' : '编辑世界观条目' : '查看世界观条目') : '新增世界观条目'}
         open={open}
-        onOk={() => void editor.save()}
+        onOk={() => void editor.save(seriesManaged)}
         onCancel={() => { if (!saving) editor.closeEditor() }}
         confirmLoading={saving}
         closable={!saving}
@@ -189,13 +211,15 @@ export default function WorldPanel() {
         width={720}
         forceRender
       >
+        <SharedSettingNotice origin={origin} onUnuse={series && sharedEntryId != null && editing
+          ? () => { if (canEditNow()) setUnusing({ id: sharedEntryId, title: editing.title }) } : undefined} />
         <Tabs
           activeKey={tab}
           onChange={setTab}
           items={[
             {
               key: 'base',
-              label: '基础设定',
+              label: seriesManaged ? '共享基础与本书排序' : '基础设定',
               forceRender: true,
               children: (
                 <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -218,7 +242,7 @@ export default function WorldPanel() {
                       ) : <Button size="small" onClick={() => editor.reloadBaseline()}>刷新基础设定</Button>}
                     />
                   )}
-                  {editing && baseline && !baselineError && (
+                  {!seriesManaged && editing && baseline && !baselineError && (
                     <Alert
                       type={baseline.baseline_status === 'legacy_unverified' ? 'warning' : 'info'}
                       showIcon
@@ -250,16 +274,16 @@ export default function WorldPanel() {
                           { max: 200, message: '不超过 200 字' },
                         ]}
                       >
-                        <Input placeholder="例如：力量体系 / 青云山 / 天机阁" />
+                        <Input readOnly={seriesManaged} placeholder="例如：力量体系 / 青云山 / 天机阁" />
                       </Form.Item>
                       <Form.Item name="category" label="分类">
-                        <Select options={CATEGORY_OPTIONS} style={{ width: 200 }} />
+                        <Select disabled={seriesManaged} options={CATEGORY_OPTIONS} style={{ width: 200 }} />
                       </Form.Item>
                       <Form.Item name="aliases" label="别名" extra="开启追踪时，别名参与提及匹配；最多 10 个，每个最多 50 字。" rules={[{ validator: (_, value: string[] | undefined) => { const result = cleanAliases(value ?? []); return result.error ? Promise.reject(new Error(result.error)) : Promise.resolve() } }]}>
-                        <Select mode="tags" tokenSeparators={['，', ',']} placeholder="输入别名后回车" />
+                        <Select disabled={seriesManaged} mode="tags" tokenSeparators={['，', ',']} placeholder="输入别名后回车" />
                       </Form.Item>
                       <Form.Item name="content" label={editing ? '基础内容' : '内容'}>
-                        <Input.TextArea autoSize={{ minRows: 6, maxRows: 20 }} />
+                        <Input.TextArea readOnly={seriesManaged} autoSize={{ minRows: 6, maxRows: 20 }} />
                       </Form.Item>
                       <Form.Item name="sort" label="排序（越小越靠前，可留空）">
                         <InputNumber style={{ width: 160 }} />
@@ -287,7 +311,7 @@ export default function WorldPanel() {
             }] : []),
             ...(editing ? [{ key: 'tags', label: '整理标签', children: open && tab === 'tags' ? <SettingTagsPanel session={tagsSession} entry={{ kind: 'world', id: editing.id }} /> : null }] : []),
             ...(editing ? [
-              { key: 'ai-settings', label: 'AI 与提及', children: open && tab === 'ai-settings' ? <SettingAiPanel session={aiSession} entry={{ kind: 'world', id: editing.id }} /> : null },
+              { key: 'ai-settings', label: 'AI 与提及', children: open && tab === 'ai-settings' ? <SettingAiPanel session={aiSession} entry={{ kind: 'world', id: editing.id }} seriesManaged={seriesManaged} /> : null },
               { key: 'mentions', label: '提及', children: tab === 'mentions' && open ? <EntityMentions projectId={pid} entity={{ kind: 'world', id: editing.id }} /> : null },
             ] : []),
           ]}

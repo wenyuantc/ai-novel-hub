@@ -19,7 +19,7 @@ export default function CastSelect({ pid, chapterId, disabled }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const charLoader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: characters = [] } = useLoader(charLoader)
+  const { data: characters = [] } = useLoader(charLoader, { projectId: pid, resources: ['characters'] })
   const castLoader = useCallback(() => castApi.get(pid, chapterId), [pid, chapterId])
   const { data: cast, loading, setData } = useLoader(castLoader)
   const [saving, setSaving] = useState(false)
@@ -65,7 +65,7 @@ export default function CastSelect({ pid, chapterId, disabled }: Props) {
         loading={loading || saving}
         disabled={!canEdit || (disabled || loading)}
         onChange={(ids: number[]) => void handleChange(ids)}
-        options={characters.map((c) => ({ value: c.id, label: c.name }))}
+        options={characters.map((c) => ({ value: c.id, label: c.origin?.scope === 'series' ? `${c.name}（系列共享）` : c.name }))}
         maxTagCount="responsive"
       />
     </Space>

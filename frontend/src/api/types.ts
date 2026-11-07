@@ -433,6 +433,8 @@ export interface RecyclePurgeRequest extends RecycleRestoreRequest {
 
 export interface Project {
   id: number
+  /** 仅作品作者可读取所属系列摘要。 */
+  series?: { id: number; name: string; revision: number } | null
   /** 服务端确认的项目归属；旧的自有项目响应可省略。 */
   owner?: ProjectOwner | null
   title: string
@@ -551,8 +553,15 @@ export interface ProjectUpdate extends Partial<ProjectCreate> {
 
 export type WorldCategory = 'place' | 'faction' | 'item' | 'rule' | 'history' | 'other'
 
+export type SettingOrigin = { scope: 'book' } | {
+  scope: 'series'
+  series_id?: number | null
+  series_entry_id?: number | null
+}
+
 export interface WorldSetting {
   id: number
+  origin?: SettingOrigin
   project_id: number
   title: string
   content: string
@@ -575,6 +584,7 @@ export type LifeStatus = 'alive' | 'dead' | 'missing' | 'other'
 
 export interface Character {
   id: number
+  origin?: SettingOrigin
   project_id: number
   name: string
   role_type: string
@@ -3743,6 +3753,9 @@ export interface PlanningEntry {
   relationship_id: number | null
   character_ids: number[]
   is_present: boolean | null
+}
+export interface PlanningPickerEntry extends PlanningEntry {
+  series_shared: boolean
 }
 export interface PlanningRevision { revision: number }
 export interface PlanningPage<T> extends PlanningRevision { items: T[]; total: number; page: number; page_size: number }

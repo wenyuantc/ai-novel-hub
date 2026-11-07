@@ -48,6 +48,7 @@ from app.schemas.progression import (
     TimelineListOut,
     TimelineOut,
 )
+from app.services import series_policy
 from app.services.project_service import get_manageable_project
 from app.services.setting_field_values import CanonicalFieldValue
 from app.services.setting_progression_resolver import (
@@ -703,6 +704,49 @@ async def apply_baseline(
     preserve_legacy_eligibility: bool = False,
 ) -> None:
     """按实际基础值比较并修改，供同事务表单与内部流程调用。"""
+    await _reject_shared_baseline_changes(db, timeline, data.changes)
+    await _apply_baseline(
+        db, timeline, data, materialize=materialize, preserve_legacy_eligibility=preserve_legacy_eligibility,
+    )
+
+
+async def _reject_shared_baseline_changes(
+    db: AsyncSession, timeline: SettingTimeline, changes: dict[str, JsonValue],
+) -> None:
+    kind = timeline.subject_kind
+    if kind not in ("character", "world"):
+        return
+    entry_id = timeline.character_id if kind == "character" else timeline.world_setting_id
+    if entry_id is None or not await series_policy.used_local_ids(
+        db, timeline.project_id, cast(series_policy.ProjectionKind, kind), {entry_id},
+    ):
+        return
+    # 基线整体落库；即使只改本书键，也不能从 session 缓存合并旧的共享键。
+    await db.refresh(timeline, attribute_names=("baseline", "revision", "baseline_status", "legacy_compat_allowed"))
+    shared = series_policy.shared_baseline_fields(kind)
+    if any(key in shared and value != timeline.baseline.get(key) for key, value in changes.items()):
+        raise series_policy.managed_setting_error()
+
+
+async def _apply_series_baseline(
+    db: AsyncSession, timeline: SettingTimeline, changes: dict[str, JsonValue],
+) -> None:
+    """仅供已持锁的系列投影刷新；不接收外部版本或允许写入本书基础键。"""
+    if not changes or not changes.keys() <= series_policy.shared_baseline_fields(timeline.subject_kind):
+        raise ValueError("系列投影只能更新共享基础字段")
+    if timeline.baseline_status != "confirmed":
+        raise ConflictError("书内基础设定尚未校准", extra={"code": "series_baseline_unverified"})
+    await _apply_baseline(db, timeline, BaselineUpdate(expected_revision=timeline.revision, changes=changes))
+
+
+async def _apply_baseline(
+    db: AsyncSession,
+    timeline: SettingTimeline,
+    data: BaselineUpdate,
+    *,
+    materialize: bool = True,
+    preserve_legacy_eligibility: bool = False,
+) -> None:
     if preserve_legacy_eligibility:
         if timeline.baseline_status != "legacy_unverified" or not timeline.legacy_compat_allowed or data.confirm:
             raise ConflictError("基础设定已校准或修改，不能按旧分析撤销", extra={"code": "legacy_baseline_changed"})
@@ -775,6 +819,7 @@ async def apply_world_content_update(
         .limit(1)
     )
     if has_changes is not None:
+        await _reject_shared_baseline_changes(db, timeline, {"content": content})
         raise ConflictError(
             "该字段已有剧情变化，请选择修正基础设定或记录新变化",
             extra={"code": "progression_intent_required"},
@@ -827,6 +872,7 @@ async def apply_character_fields_update(
                 .limit(1)
             )
             if has_changes is not None:
+                await _reject_shared_baseline_changes(db, timeline, changes)
                 raise ConflictError(
                     "该字段已有剧情变化，请选择修正基础设定或记录新变化",
                     extra={"code": "progression_intent_required"},

@@ -74,6 +74,8 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
         const replacement = worldFormValues(latest, next.baseline.content)
         form.setFieldsValue(replacement)
         initialRef.current = replacement
+        itemRef.current = latest
+        setEditing(latest)
       }
       baselineRef.current = next
       setBaseline(next)
@@ -127,7 +129,7 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
     void loadBaseline(ticket, item, mode)
   }
 
-  const save = async () => {
+  const save = async (seriesManaged = false) => {
     const ticket = activeTicket.current
     if (ticket === null || !current(ticket) || !canEditNow() || savingRef.current || blocked.current) return
     savingRef.current = true
@@ -142,7 +144,8 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
         const base = baselineRef.current
         const initial = initialRef.current
         if (!base || !initial) return
-        const patch = toWorldBaselinePatch(values, initial, base.timeline_revision)
+        const managed = seriesManaged || item.origin?.scope === 'series'
+        const patch = toWorldBaselinePatch(managed ? { ...initial, sort: values.sort } : values, initial, base.timeline_revision)
         categoryChanged = patch?.category !== undefined
         if (patch) await progressionApi.updateWorldBaseline(projectId, item.id, patch)
       } else {

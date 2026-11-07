@@ -119,6 +119,20 @@ class CharacterOut(BaseModel):
     sort: int
 
 
+class SettingOrigin(BaseModel):
+    scope: Literal["book", "series"] = "book"
+    series_id: int | None = None
+    series_entry_id: int | None = None
+
+
+class CharacterWithOrigin(CharacterOut):
+    origin: SettingOrigin = Field(default_factory=SettingOrigin)
+
+
+class WorldSettingWithOrigin(WorldSettingOut):
+    origin: SettingOrigin = Field(default_factory=SettingOrigin)
+
+
 class OutlineCreate(BaseModel):
     volume_no: int = Field(default=1, ge=1)
     volume_title: str = Field(default="", max_length=200)
