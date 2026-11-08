@@ -34,10 +34,12 @@ class AgentHandler:
             allow_private=ctx.settings.allow_private_ai_endpoints,
         )
         page = await context.validate_page_context(db, pid, req.page_context.model_dump() if req.page_context else None)
-        # 强制启用的 Skill：显式 skill_id（不可见 → 404）或消息开头的 /触发词；快照随消息保存，本轮续跑沿用
+        # 强制启用的 Skill：显式 skill_id（不可见 → 404）或消息开头的 /触发词；快照随消息保存，本轮续跑沿用。
+        # 手动指定时用请求里的 skill_inputs 校验并填充；触发词启用时正文不填充，附输入项定义由智能体代填
+        manual = req.skill_id is not None
         skill = (
             await skill_service.get_visible_skill(db, user_id, req.skill_id)
-            if req.skill_id is not None
+            if manual
             else await skill_service.match_trigger(db, user_id, req.content)
         )
         message = AgentMessage(
@@ -46,7 +48,9 @@ class AgentHandler:
             content=req.content,
             page_context=page,
             skill_id=skill.id if skill else None,
-            skill_snapshot=await skill_service.snapshot_of(db, skill) if skill else None,
+            skill_snapshot=(
+                await skill_service.snapshot_of(db, skill, req.skill_inputs, fill=manual) if skill else None
+            ),
         )
         db.add(message)
         conversation.last_message_at = datetime.now(UTC)

@@ -59,7 +59,7 @@ export const AUDIT_FIELD: Record<AuditField, string> = {
   username: '用户名', is_admin: '管理员角色', is_active: '启用状态', title: '标题', genre: '题材', premise: '创意', synopsis: '简介', theme: '主题', tags: '标签',
   selling_points: '卖点', audience: '目标读者', target_words: '目标字数', status: '状态', style: '写作风格', default_style_id: '默认风格 ID', auto_analyze: '自动分析',
   chapter_no: '章节号', outline_id: '大纲 ID', plan_id: '细纲 ID', style_id: '风格 ID', content: '正文内容', starred: '标星', note: '版本备注', cast: '章节选角',
-  slug: '标识', name: '名称', description: '描述', category: '分类', triggers: '触发词', body: '资源正文', references: '参考资料', builtin_key: '内置标识', hidden_by: '下架方',
+  slug: '标识', name: '名称', description: '描述', category: '分类', triggers: '触发词', body: '资源正文', inputs: '输入项', references: '参考资料', builtin_key: '内置标识', hidden_by: '下架方',
 }
 
 

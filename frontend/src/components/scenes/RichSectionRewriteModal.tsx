@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useProjectStore } from '../../stores/project'
 import { authorizationKey } from '../../utils/permissions'
 import { projectAccess } from '../../utils/projectAccess'
+import { skillChoiceProblemText, type SkillRequestChoice } from '../../utils/skillInputs'
 import StreamOutput from '../StreamOutput'
 import TextDiff from '../TextDiff'
 import { sectionDisclosure, sectionSelectionProblem, type SectionRewriteTarget } from './RichSectionRewriteModalModel'
@@ -18,7 +19,8 @@ interface Props {
   target: SectionRewriteTarget | null
   aiConfigId: number | null
   styleChoice: StyleChoice
-  skillId: number | null
+  /** 本次选用的 Skill 及输入项（章节编辑器 AI 助手提供） */
+  skill: SkillRequestChoice
   onClose: () => void
   onApplied: (document: RichDocumentOut) => void
   onLockChange: (locked: boolean) => void
@@ -63,7 +65,7 @@ async function selectedHash(text: string): Promise<string> {
  * 每次出站都重新取得明确确认；预览和采纳绑定同一身份、选区与章版本。
  * 服务端仍负责发送租约、身份复核和原子写入。
  */
-export default function RichSectionRewriteModal({ target, aiConfigId, styleChoice, skillId, onClose, onApplied, onLockChange }: Props) {
+export default function RichSectionRewriteModal({ target, aiConfigId, styleChoice, skill, onClose, onApplied, onLockChange }: Props) {
   const user = useAuthStore((state) => state.user)
   const authStatus = useAuthStore((state) => state.status)
   const project = useProjectStore((state) => state.project)
@@ -75,6 +77,8 @@ export default function RichSectionRewriteModal({ target, aiConfigId, styleChoic
   // target 包含旧作者选区，不能只清预览后继续交给后来登录的同作品用户。
   const [boundIdentity, setBoundIdentity] = useState<string | null>(() => target ? identity : null)
   const allowed = authStatus === 'authenticated' && access.canUseAI && access.canEdit && boundIdentity === identity
+  // 选用的 Skill 有必填输入项未填时不能发送
+  const skillProblem = skillChoiceProblemText(skill)
   const key = JSON.stringify([target && [target.projectId, target.chapterId, target.sceneId, target.sectionKey,
     target.sectionTitle, target.includeInAi, target.contentRevision, target.planningRevision,
     target.start, target.end, target.selectedText], identity])
@@ -141,7 +145,7 @@ export default function RichSectionRewriteModal({ target, aiConfigId, styleChoic
   }
 
   const send = async () => {
-    if (!target || !allowed || !state.confirmation || state.frozen || busy.current || sectionSelectionProblem(target)) return
+    if (!target || !allowed || !state.confirmation || state.frozen || busy.current || sectionSelectionProblem(target) || skillProblem) return
     const snapshot = { ...target }
     const ticket = ++epoch.current
     if (!isCurrent(ticket, snapshot)) return
@@ -158,7 +162,7 @@ export default function RichSectionRewriteModal({ target, aiConfigId, styleChoic
       const body: SectionRewriteRequest = {
         expected_content_revision: snapshot.contentRevision, expected_planning_revision: snapshot.planningRevision,
         request_id: globalThis.crypto.randomUUID(), confirmed: true, op, start: snapshot.start, end: snapshot.end,
-        selected_hash: hash, instruction, ai_config_id: aiConfigId, style: styleChoice, skill_id: skillId,
+        selected_hash: hash, instruction, ai_config_id: aiConfigId, style: styleChoice, ...skill.payload,
       }
       const result = await richDocumentApi.rewriteSelection(snapshot.projectId, snapshot.chapterId, snapshot.sceneId,
         snapshot.sectionKey, body, snapshot.selectedText, (part) => {
@@ -263,13 +267,14 @@ export default function RichSectionRewriteModal({ target, aiConfigId, styleChoic
               </details>
             </>}
             {state.error && <Alert type="warning" showIcon message={state.error} />}
+            {skillProblem && <Alert type="warning" showIcon message={skillProblem} description="请在 AI 助手的「Skill（可选）」下方填写。" />}
             <Space wrap>
               {state.result && <Button type="primary" loading={state.stage === 'applying'} disabled={state.frozen || state.stage !== 'idle'}
                 onClick={() => state.formatRequired
                   ? setStored((previous) => ({ ...previous, formatConfirmation: true })) : void apply()}>
                 {state.formatRequired ? '核对格式并采纳' : '采纳选区'}
               </Button>}
-              <Button type={state.result ? 'default' : 'primary'} disabled={!!problem || state.frozen || state.stage !== 'idle'}
+              <Button type={state.result ? 'default' : 'primary'} disabled={!!problem || !!skillProblem || state.frozen || state.stage !== 'idle'}
                 onClick={() => setStored((previous) => ({ ...(previous.key === key ? previous : initial(key)), confirmation: true }))}>
                 {state.result ? '重新生成' : '继续并确认发送'}
               </Button>

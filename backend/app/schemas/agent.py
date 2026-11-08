@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
-from app.schemas.skill import SkillRef
+from app.schemas.skill import SkillInputValues, SkillRef, require_skill_for_inputs
 from app.schemas.task import TaskOut
 
 
@@ -32,6 +32,10 @@ class SendMessage(BaseModel):
     ai_config_id: int | None = Field(default=None, gt=0)
     # 为本轮强制启用的 Skill（本人或全局）；不填时服务端也会识别消息开头的 /触发词
     skill_id: int | None = Field(default=None, gt=0)
+    # 手动指定 Skill 时的输入值；触发词启用时不填，由智能体按对话代填
+    skill_inputs: SkillInputValues = Field(default_factory=dict)
+
+    _skill_inputs_need_skill = model_validator(mode="after")(require_skill_for_inputs)
 
     @field_validator("content")
     @classmethod

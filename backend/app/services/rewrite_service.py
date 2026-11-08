@@ -131,7 +131,7 @@ async def prepare_rewrite_job(
     task = await context_builder.chapter_task(db, chapter)
     resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
     override = await prompt_service.get_override(db, user_id, "chapter.rewrite")
-    skill = await skill_service.snapshot(db, user_id, req.skill_id)
+    skill = await skill_service.snapshot(db, user_id, req.skill_id, req.skill_inputs)
     original = content[start:end]
     if req.op == "continue":
         before, after = content[max(0, start - CONTINUE_BEFORE_CHARS) : start], ""

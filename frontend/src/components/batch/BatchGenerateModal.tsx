@@ -22,7 +22,9 @@ import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { defaultBatchRange, endIdUpTo, formatEta, rangeChapters, sortChapters } from '../../utils/batch'
 import { useProjectStore } from '../../stores/project'
 import AIConfigSelect from '../AIConfigSelect'
-import SkillSelect from '../skills/SkillSelect'
+import SkillChoiceField from '../skills/SkillChoiceField'
+import { useSkillChoice } from '../../hooks/useSkillChoice'
+import { skillChoiceProblemText } from '../../utils/skillInputs'
 import StyleChoiceSelect from '../styles/StyleChoiceSelect'
 
 interface Props {
@@ -45,7 +47,6 @@ interface FormValues {
   instruction: string
   ai_config_id: number | null
   style: StyleChoice
-  skill_id: number | null
 }
 
 /** 参数变化后多久请求预览 */
@@ -67,7 +68,6 @@ function toRequest(v: Partial<FormValues>): BatchGenerateRequest | null {
     instruction: v.instruction?.trim() ?? '',
     ai_config_id: v.ai_config_id ?? null,
     style: v.style ?? 'inherit',
-    skill_id: v.skill_id ?? null,
   }
 }
 
@@ -88,6 +88,9 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
   )
   const [starting, setStarting] = useState(false)
   const seqRef = useRef(0)
+  // 整批共用一个 Skill 与一份输入值（创建时快照，每章相同；续跑 / 重试沿用）
+  const skillChoice = useSkillChoice()
+  const skillProblem = skillChoiceProblemText(skillChoice)
 
   const request = useMemo(() => (values ? toRequest(values) : null), [values])
   // 预览只依赖影响范围与字数的字段（附加要求 / 模型等变化不重新预览）
@@ -130,8 +133,10 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
 
   const handleOk = async () => {
     const v = await form.validateFields()
-    const body = toRequest(v)
-    if (!body) return
+    if (skillProblem) { message.warning(skillProblem); return }
+    const base = toRequest(v)
+    if (!base) return
+    const body: BatchGenerateRequest = { ...base, ...skillChoice.payload }
     setStarting(true)
     try {
       const task = await startBatch(projectId, body)
@@ -164,7 +169,7 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
       onOk={() => void handleOk()}
       onCancel={onClose}
       confirmLoading={starting}
-      okButtonProps={{ disabled: hasConfig === false || rangeInvalid || nothing || !request }}
+      okButtonProps={{ disabled: hasConfig === false || rangeInvalid || nothing || !request || !!skillProblem }}
       maskClosable={false}
       destroyOnHidden
     >
@@ -183,7 +188,6 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
           instruction: '',
           ai_config_id: null,
           style: 'inherit',
-          skill_id: null,
         }}
       >
         <Space size="middle" wrap align="start">
@@ -255,12 +259,11 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
             />
           </Form.Item>
           <Form.Item
-            name="skill_id"
             label="Skill（可选）"
-            tooltip="全部章节使用同一个 Skill 作为补充工作流；创建任务时保存当时的内容，续跑 / 重试沿用"
+            tooltip="全部章节使用同一个 Skill 与同一组输入值作为补充工作流；创建任务时保存当时的内容，续跑 / 重试沿用"
             style={{ minWidth: 'min(300px, 100%)' }}
           >
-            <SkillSelect />
+            <SkillChoiceField choice={skillChoice} />
           </Form.Item>
         </Space>
       </Form>

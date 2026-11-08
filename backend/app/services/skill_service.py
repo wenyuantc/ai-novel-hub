@@ -6,6 +6,7 @@
 - 触发词：只匹配消息开头的 `/词`（后接空白或结束），大小写不敏感，本人的 Skill 优先于全局。
 - 组件引用 `{{> 标识 }}`：保存 / 导入时校验引用的组件属于所有者且存在；全局 Skill 禁止引用组件。
   快照、智能体 load_skill、导出都使用展开后的正文（库内存原文）。
+- 自定义输入项：正文 `{{ 标识 }}` 在快照时按「组件展开 → 填充输入值」渲染；没有输入项时正文逐字不变。
 """
 
 import io
@@ -19,6 +20,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import skill_inputs
 from app.ai.components import expand, expand_lenient, has_refs
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import Skill, SkillReference, User
@@ -27,7 +29,9 @@ from app.schemas.skill import (
     SkillBrief,
     SkillComponentRef,
     SkillCreate,
+    SkillInputDef,
     SkillOut,
+    SkillPreviewOut,
     SkillReferenceIn,
     SkillReferenceOut,
     SkillScope,
@@ -87,9 +91,19 @@ def _brief(user: User, skill: Skill, refs: list[SkillReference], *, global_updat
         "editable": editable(user, skill, global_update=global_update),
         "body_chars": len(skill.body),
         "reference_titles": [r.title for r in refs],
+        "inputs": input_defs(skill),
         "created_at": skill.created_at,
         "updated_at": skill.updated_at,
     }
+
+
+def input_defs(skill: Skill) -> list[dict[str, Any]]:
+    """库内的输入项定义；结构不对的旧数据视为没有输入项。"""
+    raw = skill.inputs or []
+    try:
+        return [SkillInputDef.model_validate(d).model_dump() for d in raw] if isinstance(raw, list) else []
+    except ValidationError:
+        return []
 
 
 async def to_out(db: AsyncSession, user: User, skill: Skill) -> SkillOut:
@@ -99,6 +113,7 @@ async def to_out(db: AsyncSession, user: User, skill: Skill) -> SkillOut:
         body=skill.body,
         references=[SkillReferenceOut.model_validate(r) for r in refs],
         components=[SkillComponentRef(**c) for c in await component_lookup.refs(db, skill.owner_user_id, skill.body)],
+        input_warnings=skill_inputs.warnings(input_defs(skill), await expanded_body(db, skill)),
     )
 
 
@@ -240,12 +255,13 @@ async def _create_skill(db: AsyncSession, user: User, req: SkillCreate, audit: A
         category=req.category,
         triggers=req.triggers,
         body=req.body,
+        inputs=[d.model_dump() for d in req.inputs],
     )
     db.add(skill)
     await _flush_unique(db)
     _set_references(db, skill.id, req.references)
     audit.target(skill)
-    audit.summary.changed_fields = ["slug", "name", "body", "references"]
+    audit.summary.changed_fields = ["slug", "name", "body", "references"] + (["inputs"] if req.inputs else [])
     audit.summary.body_chars_after = len(skill.body)
     audit.summary.reference_count_after = len(req.references)
     await audit.commit(_commit_unique, flush_fn=_flush_unique)
@@ -330,6 +346,7 @@ async def copy_skill(db: AsyncSession, user: User, skill_id: int) -> SkillOut:
         category=source.category,
         triggers=list(source.triggers or []),
         body=source.body,
+        inputs=input_defs(source),
         source_skill_id=source.id,
     )
     db.add(skill)
@@ -347,10 +364,12 @@ async def restore_builtin(db: AsyncSession, user: User, skill_id: int) -> SkillO
         await authz.require(db, user, "global_skills.restore_builtin", write=True)
         if not skill.builtin_key:
             raise BadRequestError("该 Skill 不是内置 Skill")
-        audit.track(skill, ["slug", "name", "description", "category", "triggers", "body"])
+        audit.track(skill, ["slug", "name", "description", "category", "triggers", "body", "inputs"])
         fields = builtin_fields(skill.builtin_key)
         for key in ("slug", "name", "description", "category", "triggers", "body"):
             setattr(skill, key, fields[key])
+        # 内置 Skill 没有输入项
+        skill.inputs = []
         if audit.enabled:
             audit.summary.reference_count_before = len(await _references(db, skill.id))
             audit.summary.reference_count_after = 0
@@ -392,7 +411,46 @@ def _from_markdown(text: str, refs: list[SkillReferenceIn]) -> SkillCreate:
         triggers=[str(t) for t in triggers],
         body=body,
         references=refs,
+        inputs=_inputs_from_meta(meta.get("inputs")),
     )
+
+
+_INPUT_KEYS = ("name", "label", "help", "kind", "required", "default", "options")
+
+
+def _inputs_from_meta(raw: Any) -> list[dict[str, Any]]:
+    """frontmatter 的 inputs：先查类型与数量（只接受标量），再交给 SkillInputDef 校验，防 YAML 别名放大。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > skill_inputs.MAX_INPUTS:
+        raise SkillFormatError(f"frontmatter 的 inputs 应为列表，最多 {skill_inputs.MAX_INPUTS} 项")
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict) or not all(isinstance(k, str) for k in item):
+            raise SkillFormatError(f"frontmatter 的 inputs 第 {index} 项应为映射")
+        unknown = [k for k in item if k not in _INPUT_KEYS]
+        if unknown:
+            raise SkillFormatError(f"frontmatter 的 inputs 第 {index} 项含不支持的字段：{'、'.join(unknown)[:100]}")
+        entry: dict[str, Any] = {}
+        for key, value in item.items():
+            if value is None:
+                continue
+            if key == "required":
+                if not isinstance(value, bool):
+                    raise SkillFormatError(f"frontmatter 的 inputs 第 {index} 项 required 应为 true / false")
+                entry[key] = value
+            elif key == "options":
+                if not isinstance(value, list) or len(value) > skill_inputs.MAX_OPTIONS or not all(
+                    _scalar(o) for o in value
+                ):
+                    raise SkillFormatError(f"frontmatter 的 inputs 第 {index} 项 options 应为字符串列表")
+                entry[key] = [str(o) for o in value]
+            else:
+                if not _scalar(value):
+                    raise SkillFormatError(f"frontmatter 的 inputs 第 {index} 项 {key} 应为字符串")
+                entry[key] = str(value)
+        result.append(entry)
+    return result
 
 
 def _scalar(value: Any) -> bool:
@@ -492,6 +550,11 @@ async def export_skill(db: AsyncSession, user: User, skill_id: int) -> tuple[str
         meta["category"] = skill.category
     if skill.triggers:
         meta["triggers"] = list(skill.triggers)
+    defs = input_defs(skill)
+    if defs:
+        meta["inputs"] = [
+            {k: d[k] for k in _INPUT_KEYS if k in ("name", "label", "kind", "required") or d.get(k)} for d in defs
+        ]
     # 离开作者本人：组件引用展开为正文
     text = dump_skill_md(meta, await expanded_body(db, skill))
     if not refs:
@@ -531,21 +594,59 @@ async def match_trigger(db: AsyncSession, user_id: int, text: str) -> Skill | No
     return None
 
 
-async def snapshot_of(db: AsyncSession, skill: Skill) -> dict[str, Any]:
-    """快照展开组件后的正文；之后修改组件不影响已有任务及其重试。"""
-    return {"id": skill.id, "name": skill.name, "body": (await expanded_body(db, skill))[:SNAPSHOT_LIMIT]}
+async def snapshot_of(
+    db: AsyncSession, skill: Skill, inputs: dict[str, str] | None = None, *, fill: bool = True,
+) -> dict[str, Any]:
+    """快照「展开组件 → 填入输入值」后的正文；之后修改组件或 Skill 不影响已有任务及其重试。
+
+    - 没有输入项：`{id, name, body}`，正文与改动前逐字相同；
+    - 有输入项且 fill：按当前定义校验输入（失败 400）、补默认值并填充，另记 `inputs`（最终值）；
+    - 有输入项但不 fill（智能体触发词启用）：正文不填充，另记 `input_defs` 供智能体代填。
+    """
+    defs = input_defs(skill)
+    body = await expanded_body(db, skill)
+    snap: dict[str, Any] = {"id": skill.id, "name": skill.name}
+    if not defs:
+        if inputs:
+            skill_inputs.resolve(defs, inputs)  # 未知标识 → 400
+        snap["body"] = body[:SNAPSHOT_LIMIT]
+        return snap
+    if not fill:
+        snap["body"] = body[:SNAPSHOT_LIMIT]
+        snap["input_defs"] = defs
+        return snap
+    values = skill_inputs.resolve(defs, inputs)
+    snap["body"] = skill_inputs.fill(body, values)[:SNAPSHOT_LIMIT]
+    snap["inputs"] = values
+    return snap
 
 
-async def snapshot(db: AsyncSession, user_id: int, skill_id: int | None) -> dict[str, Any] | None:
-    """生成任务创建时快照 Skill 正文（不可见 → 404）；之后编辑 Skill 不影响已有任务。"""
+async def snapshot(
+    db: AsyncSession, user_id: int, skill_id: int | None, inputs: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """生成任务创建时快照 Skill 正文（不可见 → 404，输入不合法 → 400）；之后编辑 Skill 不影响已有任务。"""
     if skill_id is None:
         return None
-    return await snapshot_of(db, await get_visible_skill(db, user_id, skill_id))
+    return await snapshot_of(db, await get_visible_skill(db, user_id, skill_id), inputs)
 
 
 def skill_log(snap: dict[str, Any] | None) -> dict[str, Any] | None:
-    """生成记录 params.skill：只记 id 与名称。"""
-    return {"id": snap["id"], "name": snap["name"]} if snap else None
+    """生成记录 params.skill：记 id 与名称；Skill 有输入项时另记所用输入值。"""
+    if not snap:
+        return None
+    log = {"id": snap["id"], "name": snap["name"]}
+    if snap.get("inputs"):
+        log["inputs"] = dict(snap["inputs"])
+    return log
+
+
+async def preview(db: AsyncSession, user_id: int, skill_id: int, inputs: dict[str, str]) -> SkillPreviewOut:
+    """填入输入值、展开组件后的正文（与快照一致的渲染）；不落库，错误以列表返回而不是 400。"""
+    skill = await get_visible_skill(db, user_id, skill_id)
+    defs = input_defs(skill)
+    values, missing, errors = skill_inputs.check(defs, inputs)
+    body = skill_inputs.fill(await expanded_body(db, skill), values) if defs else await expanded_body(db, skill)
+    return SkillPreviewOut(body=body[:SNAPSHOT_LIMIT], missing_required=missing, errors=errors)
 
 
 async def create_skill(db: AsyncSession, user: User, req: SkillCreate) -> SkillOut:

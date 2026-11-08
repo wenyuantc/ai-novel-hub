@@ -16,6 +16,7 @@ import { projectAccess } from '../../utils/projectAccess'
 import StreamOutput from '../StreamOutput'
 import TextDiff from '../TextDiff'
 import { classifyRewriteApplyIssue, rewriteApplyBody, rewritePreviewProblem, type RewritePreviewTarget } from './RewritePanelModel'
+import { skillChoiceProblemText, type SkillRequestChoice } from '../../utils/skillInputs'
 
 /** 单次选区上限（码点），与后端一致 */
 export const MAX_REWRITE_CHARS = 5000
@@ -35,8 +36,8 @@ interface Props {
   aiConfigId: number | null
   /** 本次写作风格（由编辑器 AI 助手的「本次写作风格」提供） */
   styleChoice: StyleChoice
-  /** 本次选用的 Skill（由 AI 助手的「Skill（可选）」提供） */
-  skillId: number | null
+  /** 本次选用的 Skill 及输入项（由 AI 助手的「Skill（可选）」提供） */
+  skill: SkillRequestChoice
   /** 编辑器其他任务进行中 / 章节卡在生成中 / 无 AI 配置 */
   disabled: boolean
   /** 有未保存修改时先保存；失败返回 false */
@@ -73,7 +74,7 @@ export default function RewritePanel({
   selection,
   aiConfigId,
   styleChoice,
-  skillId,
+  skill,
   disabled,
   ensureSaved,
   onLockChange,
@@ -136,7 +137,8 @@ export default function RewritePanel({
   const tooLong = effectiveOp !== 'continue' && selectedChars > MAX_REWRITE_CHARS
   const blankSelection = effectiveOp !== 'continue' && !selectedText.trim()
   const cursorPrefixEmpty = effectiveOp === 'continue' && !content.slice(0, selection.end).trim()
-  const canStart = !disabled && !locked && !tooLong && !blankSelection && !cursorPrefixEmpty
+  const skillProblem = skillChoiceProblemText(skill)
+  const canStart = !disabled && !locked && !tooLong && !blankSelection && !cursorPrefixEmpty && !skillProblem
 
   const run = async (target: RewritePreviewTarget) => {
     if (running.current || !canEditNow() || !authorizedForIdentity(pid, target.identity)) return
@@ -179,7 +181,7 @@ export default function RewritePanel({
       if (sceneId !== undefined && !versions) { message.warning('场景版本尚未加载，请重新选择。'); return }
       const request: RewriteRequest = {
         ai_config_id: aiConfigId, op: effectiveOp, start: cpStart, end: cpEnd,
-        instruction: instruction.trim(), style: styleChoice, skill_id: skillId,
+        instruction: instruction.trim(), style: styleChoice, ...skill.payload,
       }
       const points = Array.from(content)
       await run({ chapterId, sceneId, request, original: points.slice(cpStart, cpEnd).join(''), identity,
@@ -344,6 +346,7 @@ export default function RewritePanel({
           {effectiveOp === 'continue' ? '在光标处续写' : `${REWRITE_OP_LABELS[effectiveOp]}选中内容`}
         </Button>
       )}
+      {skillProblem && !locked && <Typography.Text type="warning" style={{ fontSize: 12 }}>{skillProblem}</Typography.Text>}
       {cursorPrefixEmpty && !locked && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           光标前没有正文，无法续写；整章生成请用「AI 生成」。

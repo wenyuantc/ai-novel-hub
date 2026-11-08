@@ -4,7 +4,7 @@ import { matchTrigger, normalizeTriggers, skillRef, skillSelectOptions, slashQue
 
 export const skillFixture = (over: Partial<SkillBrief> = {}): SkillBrief => ({
   id: 1, scope: 'mine', slug: 'long-continue', name: '长篇续写', description: '续写规范', category: '续写', triggers: ['续写'],
-  builtin_key: null, source_skill_id: null, editable: true, body_chars: 100, reference_titles: [], created_at: '', updated_at: '', ...over,
+  builtin_key: null, source_skill_id: null, editable: true, body_chars: 100, reference_titles: [], inputs: [], created_at: '', updated_at: '', ...over,
 })
 const skills = [
   skillFixture({ id: 10, scope: 'global', name: '全局续写', triggers: ['续写', 'XuXie'], editable: false }),

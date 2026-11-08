@@ -7,6 +7,7 @@ import { sceneApi } from '../../api/scenes'
 import { currentRequestGeneration, errorMessage } from '../../api/client'
 import { richDocumentApi, type MarkerTimelineItem } from '../../api/richDocument'
 import type { Chapter, StyleChoice } from '../../api/types'
+import type { SkillRequestChoice } from '../../utils/skillInputs'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
 import { useProjectStore } from '../../stores/project'
@@ -36,12 +37,12 @@ interface Props {
   onStructureDirtyChange: (dirty: boolean) => void
   markerJump: MarkerLocation | null
   onNavigateMarker: (location: MarkerLocation) => Promise<boolean>
-  aiConfigId: number | null; styleChoice: StyleChoice; skillId: number | null
+  aiConfigId: number | null; styleChoice: StyleChoice; skill: SkillRequestChoice
   onSectionLockChange: (locked: boolean) => void
   onOpenInspectorTab?: (tab: 'ai' | 'scene' | 'chapter') => void
 }
 /** 当前场景独立编辑；整章仅通读服务端投影，不在浏览器重造正文拼接规则。 */
-export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, selection, onSelection, ensureSaved, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skillId, onSectionLockChange, onOpenInspectorTab }: Props) {
+export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, selection, onSelection, ensureSaved, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skill, onSectionLockChange, onOpenInspectorTab }: Props) {
   const { canEdit, canUseAI, canReadNow, canEditNow } = useProjectAccess(projectId)
   const { message, modal } = App.useApp()
   const { token } = theme.useToken()
@@ -607,7 +608,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
         target={sectionTarget}
         aiConfigId={aiConfigId}
         styleChoice={styleChoice}
-        skillId={skillId}
+        skill={skill}
         onClose={() => setSectionTarget(null)}
         onApplied={sectionApplied}
         onLockChange={onSectionLockChange}

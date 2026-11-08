@@ -192,7 +192,7 @@ async def validate_and_claim(
     await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     await style_service.validate_choice(db, user_id, req.style)
     # 重试沿用原任务的快照（Skill 之后被修改或删除都不影响）
-    skill = skill_snapshot or await skill_service.snapshot(db, user_id, req.skill_id)
+    skill = skill_snapshot or await skill_service.snapshot(db, user_id, req.skill_id, req.skill_inputs)
     if mode == "generate" and isinstance(req, GenerateChapterRequest) and req.target_words < len(selected):
         raise BadRequestError("整章目标字数不足以为每个场景分配正字数，请增大目标字数")
     if mode == "polish" and not any(scene.content.strip() for scene in selected):

@@ -88,7 +88,7 @@ describe('组件库页面', () => {
 
 describe('Skill 与模板覆盖编辑页的组件引用', () => {
   const skill = (over: Partial<Skill> = {}): Skill => ({
-    ...skillFixture(), body: '正文{{> banned-words }}', references: [], components: [{ id: 1, slug: 'banned-words', name: '禁用词' }], ...over,
+    ...skillFixture(), body: '正文{{> banned-words }}', references: [], components: [{ id: 1, slug: 'banned-words', name: '禁用词' }], input_warnings: [], ...over,
   })
   const props = { open: true, skillId: 1, scope: 'mine' as const, isAdmin: false, onClose: noop, onSaved: noop, onCopy: noop }
 
@@ -97,6 +97,31 @@ describe('Skill 与模板覆盖编辑页的组件引用', () => {
     expect(html).toContain('href="/prompt-components?id=1"')
     expect(text(html)).toContain('引用的组件：禁用词')
     expect(html).toContain('aria-label="插入组件引用"')
+  })
+
+  it('输入项编辑器与占位警告：草稿与保存时一致时显示服务端 input_warnings；全局可写时同样可编辑输入项', () => {
+    const withInputs = skill({
+      body: '基调：{{ tone }}；{{ other }}',
+      components: [],
+      inputs: [{ name: 'tone', label: '基调', help: '', kind: 'select', required: false, default: '轻松', options: ['轻松', '沉重'] }],
+      input_warnings: ['正文中的 {{ other }} 没有声明为输入项，将原样保留'],
+    })
+    const html = render(createElement(SkillForm, { ...props, skill: withInputs }))
+    expect(text(html)).toContain('输入项1')
+    expect(html).toContain('aria-label="删除输入项"')
+    expect(text(html)).toContain('添加输入项')
+    expect(text(html)).toContain('正文中的{{other}}没有声明为输入项，将原样保留')
+    auth.superAdmin = true
+    try {
+      const global = render(createElement(SkillForm, { ...props, skill: skill({ scope: 'global', editable: true, components: [], inputs: withInputs.inputs }) }))
+      expect(global).toContain('aria-label="删除输入项"')
+    } finally {
+      auth.superAdmin = false
+    }
+    // 只读的全局 Skill：看得到输入项，但没有增删入口
+    const readonly = render(createElement(SkillForm, { ...props, skill: skill({ scope: 'global', editable: false, components: [], inputs: withInputs.inputs }) }))
+    expect(text(readonly)).toContain('输入项1')
+    expect(readonly).not.toContain('aria-label="删除输入项"')
   })
 
   it('全局 Skill 提示不能引用组件，不提供插入入口', () => {

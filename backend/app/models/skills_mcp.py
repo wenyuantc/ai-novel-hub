@@ -48,6 +48,8 @@ class Skill(TimestampMixin, Base):
     category: Mapped[str] = mapped_column(String(30), default="", server_default="", nullable=False)
     triggers: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     body: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # 自定义输入项定义 [{name, label, help, kind, required, default, options}]（app/schemas/skill.py::SkillInputDef）
+    inputs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     source_skill_id: Mapped[int | None] = mapped_column(
         ForeignKey("skills.id", ondelete="SET NULL"), index=True, nullable=True
     )

@@ -287,6 +287,7 @@ FIELD_LABELS = {
     "instruction": "补充要求",
     "style": "写作风格",
     "skill_id": "Skill",
+    "skill_inputs": "Skill 输入",
     "auto_continue": "自动续写",
     "analysis_id": "分析结果",
     "suggestion_ids": "选择的建议",

@@ -1,7 +1,7 @@
 import { request } from './client'
 import { runGeneration } from './sse'
 import { parseSceneRewriteDone } from './scenes'
-import type { SceneRewriteDone, StyleChoice, Task } from './types'
+import type { SceneRewriteDone, SkillInputValues, StyleChoice, Task } from './types'
 
 export interface RichInlineStyle { kind: 'bold' | 'italic'; start: number; end: number }
 export interface RichBlockStyle { kind: 'heading' | 'bullet_list' | 'ordered_list' | 'blockquote'; start: number; end: number; level: number | null }
@@ -35,7 +35,7 @@ export interface MarkerRelinkOut { source_chapter_id: number; source_revision: n
 export interface SectionRewriteRequest {
   expected_content_revision: number; expected_planning_revision: number; request_id: string; confirmed: true
   op: 'rewrite' | 'expand' | 'condense' | 'deslop'; start: number; end: number; selected_hash: string
-  instruction?: string; ai_config_id?: number | null; style?: StyleChoice; skill_id?: number | null
+  instruction?: string; ai_config_id?: number | null; style?: StyleChoice; skill_id?: number | null; skill_inputs?: SkillInputValues
 }
 export interface SectionRewriteDone extends SceneRewriteDone { section_key: string; request_id: string; log_id: number }
 export interface SectionRewriteApply {

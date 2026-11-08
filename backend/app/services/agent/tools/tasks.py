@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, create_model
 from sqlalchemy import select
 
-from app.core.errors import NotFoundError
+from app.core.errors import BadRequestError, NotFoundError
 from app.models import Chapter, Task
 from app.schemas.analysis import AnalyzeRequest
 from app.schemas.batch import BatchGenerateRequest
@@ -53,6 +53,19 @@ _PARAM_FIELDS = {
     for key, field in request.model_fields.items()
 }
 _PARAM_FIELDS.update({key: (int | None, None) for key in ("project_id", "chapter_id", "outline_id")})
+
+
+class SkillInputItem(EmptyArgs):
+    name: str = Field(min_length=1, max_length=32, description="输入项标识（load_skill 返回的 inputs[].name）")
+    value: str = Field(max_length=5000)
+
+
+# 请求里 skill_inputs 是「标识 → 值」映射；函数 schema 用带 properties 的对象数组表达
+# （Gemini 会去掉 additionalProperties，映射会变成没有 properties 的空 object），执行前再转换回映射
+_PARAM_FIELDS["skill_inputs"] = (
+    list[SkillInputItem] | None,
+    Field(default=None, max_length=20, description="Skill 输入项的值；仅在给了 skill_id 时使用"),
+)
 TaskParams = create_model("AgentTaskParams", __base__=EmptyArgs, **_PARAM_FIELDS)
 
 
@@ -64,6 +77,7 @@ class StartArgs(EmptyArgs):
             "任务参数。chapter.generate/polish/revise/analyze 必须给 chapter_id；revise 还需 analysis_id。"
             "chapter.batch 必须给 start_chapter_id、end_chapter_id；outline.expand 必须给 outline_id。"
             "可选 ai_config_id、instruction；生成可给 target_words；大纲/职业生成可给 count。项目由服务端绑定。"
+            "带 skill_id 时可给 skill_inputs（输入项标识 → 值，定义见 load_skill 的 inputs），缺必填项会返回错误。"
         ),
     )
 
@@ -80,9 +94,16 @@ def request_params(ctx: ToolCtx, args: StartArgs) -> dict:
         __config__=ConfigDict(extra="forbid"),
         **fields,
     )
-    return schema.model_validate(
-        {**args.params.model_dump(exclude_unset=True), "project_id": ctx.project_id}
-    ).model_dump(mode="json")
+    raw = args.params.model_dump(exclude_unset=True)
+    items = raw.pop("skill_inputs", None)
+    if items:
+        names = [item["name"] for item in items]
+        duplicated = sorted({n for n in names if names.count(n) > 1})
+        if duplicated:
+            # 映射会静默丢掉前面的值，直接报错让智能体修正
+            raise BadRequestError(f"Skill 输入项标识重复：{'、'.join(duplicated)}")
+        raw["skill_inputs"] = {item["name"]: item["value"] for item in items}
+    return schema.model_validate({**raw, "project_id": ctx.project_id}).model_dump(mode="json")
 
 
 class DeferredEngine:
@@ -157,7 +178,11 @@ def _skill_guard(skill: dict | None) -> dict | None:
     if not skill:
         return None
     digest = hashlib.sha256(str(skill.get("body") or "").encode()).hexdigest()
-    return {"id": skill.get("id"), "name": skill.get("name"), "hash": digest}
+    guard = {"id": skill.get("id"), "name": skill.get("name"), "hash": digest}
+    if skill.get("inputs"):
+        # 输入值同样参与 preview_changed 比较（正文哈希已包含填充结果，这里便于确认时展示）
+        guard["inputs"] = dict(skill["inputs"])
+    return guard
 
 
 async def execute(ctx: ToolCtx, args: StartArgs) -> dict:

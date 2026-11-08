@@ -280,6 +280,54 @@ body = await skill_service.expanded_body(db, skill)              # 快照 / load
 
 ---
 
+## 场景：Skill 自定义输入项（`11-08-prompt-inputs`，迁移 `0043`）
+
+### 1. 范围 / 触发条件
+
+修改 `app/ai/skill_inputs.py`、`skills.inputs`、`SkillInputDef`、`skill_service.snapshot / snapshot_of / preview`、任何带 `skill_id` 的请求 schema，
+或智能体 `load_skill` / 触发词 / `start_task` 的 Skill 路径时。
+
+### 2. 签名
+
+```python
+# app/ai/skill_inputs.py（纯函数）
+PLACEHOLDER_RE = r"\{\{\s*([A-Za-z_一-鿿][A-Za-z0-9_一-鿿]{0,31})\s*\}\}"; MAX_INPUTS = 20; VALUE_LIMITS = {text: 200, textarea: 5000, select: 50}
+def placeholders(text) -> set[str]; def fill(text, values) -> str          # 单次 re.sub，值不再解析；values 为空时原样返回
+def check(defs, raw) -> (values, missing, errors); def resolve(defs, raw) -> values   # resolve 失败 400「Skill 输入有误：…」
+def warnings(defs, text) -> list[str]; def describe(defs) -> str; AGENT_FILL_INSTRUCTIONS
+# app/schemas/skill.py
+SkillInputDef{name, label ≤30, help ≤200, kind: text|textarea|select, required, default, options}   # extra="forbid"
+SkillInputValues = dict[str, str]（≤20 项，键值总长 ≤60000）; require_skill_for_inputs  # skill_inputs 非空且 skill_id 为空 → 422
+SkillBrief.inputs; SkillOut.input_warnings; POST /skills/{id}/preview {inputs} → {body, missing_required, errors}
+# app/services/skill_service.py
+async def snapshot_of(db, skill, inputs=None, *, fill=True) -> {id, name, body[, inputs][, input_defs]}
+async def snapshot(db, user_id, skill_id, inputs=None); def skill_log(snap) -> {id, name[, inputs]}
+```
+
+### 3. 契约
+
+- **兼容**：Skill 没有输入项 → 快照 `{id, name, body}`、`skill_log` `{id, name}` 与改动前逐字相同，正文里的 `{{x}}` 原样保留；此时请求带任何
+  `skill_inputs` 都按未知标识 400。
+- **渲染顺序**：组件展开（`expanded_body`）→ `fill`，组件内容中的占位同样被填充；输入值里的 `{{ }}` / `{{> }}` 不再处理。
+- **校验**（`check`）：未知标识、非字符串、超长、下拉值不在选项中 → 错误；未出现的项用默认值，出现的项原样使用（可选项可清空）；必填项去空白后为空 → missing。
+- **请求**：`GenerateChapterRequest` / `PolishChapterRequest` / `ReviseChapterRequest` / `RewriteRequest` / `BatchGenerateRequest` / `SceneModelOptions`（场景与区块改写）/
+  `SendMessage` 均有 `skill_inputs`。新增带 `skill_id` 的请求必须同时加 `skill_inputs` 与 `require_skill_for_inputs`，并把它传给 `snapshot`。
+- **快照**：有输入项时快照存填充后的正文与最终值 `inputs`；重试 / 续跑 / 批量逐章读 `input.skill`，不重新渲染。
+- **智能体**：`load_skill` 返回未填充正文 + `inputs` 定义 + `instructions`；手动 `skill_id` 用请求 `skill_inputs` 填充（`fill=True`）；触发词命中用 `fill=False`，
+  快照另存 `input_defs`，`forced_skill_message` 在正文后追加「【该 Skill 的输入项】」清单与代填说明（仍是安全规则之后的独立 system 消息）。
+  `start_task` 的 `params.skill_inputs` 是 `[{name, value}]` 数组（Gemini 会丢掉 additionalProperties），执行前转回映射，标识重复 → 工具错误；
+  预览 `skill` 带 `inputs`，正文哈希含填充结果，参与 `preview_changed`。
+- **SKILL.md**：frontmatter `inputs` 列表，每项只允许 `name/label/help/kind/required/default/options`，`required` 须为 bool，其余字段只接受标量（`options` 为标量列表、≤50），
+  ≤20 项，先查类型再交 `SkillInputDef`（防 YAML 别名放大）；导出时非空才写。
+- **迁移 0043**：`skills.inputs JSON NOT NULL DEFAULT '[]'` 原位加列；有非空输入项时 downgrade 抛 `RuntimeError`。
+
+### 4. 必需的测试
+
+`tests/test_skill_inputs.py`（校验矩阵、单次填充、无输入项逐字不变、各入口快照与重试、批量逐章同值、智能体三条路径、SKILL.md 往返与拒绝、场景与区块改写）；
+`tests/test_migrations.py::test_0043_skill_inputs`。
+
+---
+
 ## 场景：MCP 适配层（`app/services/mcp/client.py`）
 
 ### 1. 签名

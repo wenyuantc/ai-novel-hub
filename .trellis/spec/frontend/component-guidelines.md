@@ -545,6 +545,10 @@ dayjs.locale('zh-cn')
 - **`skills/SkillSelect`**（复用点；选项标签为「名称（slug）」，因为副本和全局 Skill 常同名）：`{ value?: number | null; onChange?; disabled?; placeholder? = '不使用 Skill'; style?; 'aria-label'? }`，`useSkills()` 加载，
   `skillSelectOptions` 分「我的」「全局」两组，可清空（= null = 不使用 Skill）、可搜索。用于：章节编辑器 AI 助手（一个 `skillId` 状态，生成 / 润色 / 局部改写
   `RewritePanel.skillId` / 按建议重写都带 `skill_id`）、`BatchGenerateModal`（表单字段 `skill_id`）、智能体输入区。新增「可选 Skill」的入口一律复用它，不另写下拉。
+- **Skill 输入项**（`11-08-prompt-inputs`）：手动选用 Skill 的入口用 `useSkillChoice()`（`{skillId, skill, values, problems, valid, payload, setSkillId, setInputs}`，切换 Skill 时按新 Skill 默认值重置）
+  + `skills/SkillChoiceField`（`SkillSelect` + `SkillInputsForm`，带「预览」调用 `POST /skills/{id}/preview`），请求体展开 `...choice.payload`（选了 Skill 才带 `skill_id`，有输入项才带 `skill_inputs`），
+  `skillChoiceProblemText(choice)` 非空时禁用提交并提示。下层组件（`RewritePanel`、`SceneWritingPanel` → `RichSectionRewriteModal`）只接收 `SkillRequestChoice`，区块改写复用章节编辑器 AI 助手的选择与表单。
+  Skill 列表未加载时只带 `skill_id`，由服务端校验。`SkillEditDrawer` 用 `SkillInputsEditor` 编辑定义，占位提示在草稿与上次保存一致时用服务端 `input_warnings`（展开组件后），否则按草稿原文实时计算。
 - **生成记录与任务**：`GenerationLogList` 用 `skillRef(params.skill)` 收窄后显示所用 Skill；`TaskPanel` 行与 `TaskOutputModal` 在 `task.skill` 存在时显示「Skill：名称」Tag（创建时的快照）。
 - **`pages/McpPluginsPage`**：卡片网格（`Col xs=24 md=12 xl=8`），达到 `MAX_MCP_PLUGINS`（10）时禁用添加；刷新失败时 `message.error` 后再 `GET` 一次插件以显示最新 `last_error`。
 - **`mcp/McpPluginCard`**：名称、传输类型、地址（长地址 `overflowWrap: anywhere`）、`pluginStatus`（连接失败 > 已连接 > 未测试）、工具数量、启用 `Switch`；

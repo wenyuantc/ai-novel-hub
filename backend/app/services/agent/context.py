@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import skill_inputs
 from app.ai.prompts import format_project_info
 from app.ai.prompts.agent import FORCED_SKILL_HEADER, SAFETY_RULES, SKILLS_CATALOG_LIMIT, SKILLS_CATALOG_MORE
 from app.ai.prompts.registry import prompt_meta, render
@@ -94,7 +95,12 @@ def forced_skill_message(snapshot: dict | None) -> dict | None:
     if not snapshot or not snapshot.get("body"):
         return None
     header = FORCED_SKILL_HEADER.format(name=snapshot.get("name", ""))
-    return {"role": "system", "content": f"{header}\n\n{snapshot['body'][: skill_service.SNAPSHOT_LIMIT]}"}
+    content = f"{header}\n\n{snapshot['body'][: skill_service.SNAPSHOT_LIMIT]}"
+    defs = snapshot.get("input_defs")
+    if isinstance(defs, list) and defs:
+        # 触发词启用带输入项的 Skill：正文未填充，附上输入项定义由智能体按对话代填
+        content += f"\n\n【该 Skill 的输入项】\n{skill_inputs.describe(defs)}\n{skill_inputs.AGENT_FILL_INSTRUCTIONS}"
+    return {"role": "system", "content": content}
 
 
 async def validate_page_context(

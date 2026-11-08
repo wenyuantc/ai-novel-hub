@@ -236,7 +236,7 @@ async def validate_start(
     ai_config_id = await _check_config(db, ctx, user_id, req.ai_config_id)
     await style_service.validate_choice(db, user_id, req.style)
     # Skill 快照：之后编辑 Skill 不影响续跑与重试（重试复制 input）
-    skill = await skill_service.snapshot(db, user_id, req.skill_id)
+    skill = await skill_service.snapshot(db, user_id, req.skill_id, req.skill_inputs)
     if not any(req.include_written or not is_written(c) for c in chapters):
         raise BadRequestError(NOTHING_TO_GENERATE)
     await _check_not_generating(db, [c.id for c in chapters], include_written=req.include_written)

@@ -7,7 +7,7 @@ import { useStyleStore } from './styles'
 import { useAIConfigStore } from './aiConfigs'
 import { deferred } from '../components/systemSettings/systemSettingsTestFixtures'
 import type { SkillBrief } from '../api/types'
-const oldSkill: SkillBrief = { id: 1, scope: 'mine', slug: 'old', name: '旧账号私有内容', description: '', category: '', triggers: [], builtin_key: null, source_skill_id: null, editable: true, body_chars: 10, reference_titles: [], created_at: '', updated_at: '' }
+const oldSkill: SkillBrief = { id: 1, scope: 'mine', slug: 'old', name: '旧账号私有内容', description: '', category: '', triggers: [], builtin_key: null, source_skill_id: null, editable: true, body_chars: 10, reference_titles: [], inputs: [], created_at: '', updated_at: '' }
 
 afterEach(() => { useSkillStore.getState().reset(); useStyleStore.getState().reset(); useAIConfigStore.getState().reset(); vi.restoreAllMocks() })
 

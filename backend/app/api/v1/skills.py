@@ -6,7 +6,16 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 
 from app.core.deps import CurrentUser, DbDep
-from app.schemas.skill import SkillBrief, SkillCreate, SkillOut, SkillReferencesUpdate, SkillScope, SkillUpdate
+from app.schemas.skill import (
+    SkillBrief,
+    SkillCreate,
+    SkillOut,
+    SkillPreviewOut,
+    SkillPreviewRequest,
+    SkillReferencesUpdate,
+    SkillScope,
+    SkillUpdate,
+)
 from app.services import skill_service as svc
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -56,6 +65,12 @@ async def delete_skill(skill_id: int, user: CurrentUser, db: DbDep) -> Response:
 @router.put("/{skill_id}/references", response_model=SkillOut)
 async def replace_references(skill_id: int, body: SkillReferencesUpdate, user: CurrentUser, db: DbDep) -> SkillOut:
     return await svc.replace_references(db, user, skill_id, body.references)
+
+
+@router.post("/{skill_id}/preview", response_model=SkillPreviewOut)
+async def preview_skill(skill_id: int, body: SkillPreviewRequest, user: CurrentUser, db: DbDep) -> SkillPreviewOut:
+    """填入输入值并展开组件后的正文（实际注入的补充工作流）；不落库，可见即可预览。"""
+    return await svc.preview(db, user.id, skill_id, body.inputs)
 
 
 @router.post("/{skill_id}/copy", response_model=SkillOut, status_code=status.HTTP_201_CREATED)

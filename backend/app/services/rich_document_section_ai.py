@@ -80,7 +80,7 @@ async def prepare_section_rewrite(
     task = await context_builder.chapter_task(db, chapter)
     resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
     override = await prompt_service.get_override(db, user_id, "chapter.rewrite")
-    skill = await skill_service.snapshot(db, user_id, req.skill_id)
+    skill = await skill_service.snapshot(db, user_id, req.skill_id, req.skill_inputs)
     budget = min(MAX_SETTING_CONTEXT_CHARS, ai_config_service.context_char_budget(cfg, context_budget))
     scenes = await scene_service.list_active_scenes(db, chapter.id)
     preceding = "".join(item.separator_before + item.content for item in scenes if item.sort < scene.sort)

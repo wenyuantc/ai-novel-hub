@@ -74,7 +74,9 @@ import RewritePanel, { type TextSelection } from '../../components/chapter/Rewri
 import VersionDrawer from '../../components/chapter/VersionDrawer'
 import NoteSidePanel from '../../components/notes/NoteSidePanel'
 import { chapterLeaveBlocked } from '../../components/notes/noteDraft'
-import SkillSelect from '../../components/skills/SkillSelect'
+import SkillChoiceField from '../../components/skills/SkillChoiceField'
+import { useSkillChoice } from '../../hooks/useSkillChoice'
+import { skillChoiceProblemText } from '../../utils/skillInputs'
 import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
 import { useChapterAnalysis } from '../../hooks/useChapterAnalysis'
@@ -206,8 +208,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   // 本次生成 / 润色 / 重写 / 局部改写临时使用的风格（inherit = 本章风格 > 项目默认）
   const [styleChoice, setStyleChoice] = useState<StyleChoice>('inherit')
-  // 本次生成 / 润色 / 重写 / 局部改写选用的 Skill（补充工作流，任务创建时快照）
-  const [skillId, setSkillId] = useState<number | null>(null)
+  // 本次生成 / 润色 / 重写 / 局部改写选用的 Skill 及其输入项（补充工作流，任务创建时快照）
+  const skillChoice = useSkillChoice()
+  const skillProblem = skillChoiceProblemText(skillChoice)
   const [genOptions, setGenOptions] = useState<GenerateOptions>(() => ({
     targetWords: 3000,
     instruction: '',
@@ -296,7 +299,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const styleSelect = (disabled: boolean) => (
     <StyleChoiceSelect value={styleChoice} onChange={setStyleChoice} context={styleContext} disabled={disabled} />
   )
-  const skillSelect = (disabled: boolean) => <SkillSelect value={skillId} onChange={setSkillId} disabled={disabled} />
+  const skillSelect = (disabled: boolean) => <SkillChoiceField choice={skillChoice} disabled={disabled} />
   const words = useMemo(() => countWords(content), [content])
 
   const { prev, next } = useMemo(() => {
@@ -541,6 +544,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }, [initial.id, initial.status, canUseAI, currentSceneId, trackTask])
 
   const runAI = async (mode: 'generate' | 'polish') => {
+    if (skillProblem) { message.warning(skillProblem); return }
     if (!canUseAI || !canEditNow() || !(await ensureSaved())) return
     const current = sceneEditor.controller.getSnapshot().scene
     if (!current) return
@@ -549,10 +553,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     let created: Task
     try {
       if (mode === 'generate') {
-        const body = { ai_config_id: aiConfigId, instruction: genOptions.instruction.trim(), target_words: genOptions.targetWords, auto_continue: genOptions.autoContinue, style: styleChoice, skill_id: skillId, ...versions }
+        const body = { ai_config_id: aiConfigId, instruction: genOptions.instruction.trim(), target_words: genOptions.targetWords, auto_continue: genOptions.autoContinue, style: styleChoice, ...skillChoice.payload, ...versions }
         created = aiScope === 'scene' ? await sceneApi.generate(pid, chapter.id, current.id, body) : await generateChapter(chapter.id, body)
       } else {
-        const body = { ai_config_id: aiConfigId, instruction: polishInstruction.trim(), style: styleChoice, skill_id: skillId, ...versions }
+        const body = { ai_config_id: aiConfigId, instruction: polishInstruction.trim(), style: styleChoice, ...skillChoice.payload, ...versions }
         created = aiScope === 'scene' ? await sceneApi.polish(pid, chapter.id, current.id, body) : await polishChapter(chapter.id, body)
       }
       if (!canEditNow()) return
@@ -570,13 +574,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   /** 按建议重写：与整章生成同样走后台任务（创建即抢占、正文只读、可停止）；任务创建成功即返回 true */
   const runRevise = async (body: ReviseChapterRequest): Promise<boolean> => {
     if (!canUseAI) return false
+    if (skillProblem) { message.warning(skillProblem); return false }
     if (!(await ensureSaved())) return false
     setStarting(true)
     let created: Task
     try {
       const current = sceneEditor.controller.getSnapshot().scene
       if (!current) { setStarting(false); return false }
-      const request = { ...body, ai_config_id: aiConfigId, style: styleChoice, skill_id: skillId, expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
+      const request = { ...body, ai_config_id: aiConfigId, style: styleChoice, ...skillChoice.payload, expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
       created = aiScope === 'scene' ? await sceneApi.revise(pid, chapter.id, current.id, request) : await reviseChapter(chapter.id, request)
       if (!canEditNow()) return false
       if (sceneEditor.controller.getSnapshot().scene?.id !== current.id) { trackTask(created); setStarting(false); return true }
@@ -615,6 +620,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }
 
   const confirmGenerate = () => {
+    if (skillProblem) { message.warning(skillProblem); return }
     if (content.trim()) {
       confirm({
         title: aiScope === 'scene' ? '重新生成当前场景？' : '按现有场景结构重新生成整章？',
@@ -863,7 +869,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 selection={selection}
                 aiConfigId={aiConfigId}
                 styleChoice={styleChoice}
-                skillId={skillId}
+                skill={skillChoice}
                 // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
                 disabled={!scene || !selectionEditable || aiRunning || sectionLocked || saving || chapter.status === 'generating' || hasConfig === false}
                 ensureSaved={ensureSaved}
@@ -900,6 +906,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           description={`首轮 ${aiTask.continueInfo.words} 字 / 目标 ${aiTask.continueInfo.target} 字`}
         />
       )}
+      {skillProblem && !aiRunning && aiMode !== 'rewrite' && <Typography.Text type="warning" style={{ fontSize: 12 }}>{skillProblem}</Typography.Text>}
       {aiMode === 'rewrite' ? null : aiRunning ? (
         <Button danger block icon={<StopOutlined />} disabled={!aiTask.running} onClick={() => void handleCancel()}>
           {aiStatus === 'queued' ? '取消排队' : `停止（已输出 ${countWords(aiTask.text)} 字）`}
@@ -909,7 +916,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           type="primary"
           block
           icon={<ThunderboltOutlined />}
-          disabled={!scene || sceneEditor.loading || !!sceneEditor.conflict || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || (aiScope === 'chapter' && !sceneAllocations)}
+          disabled={!scene || sceneEditor.loading || !!sceneEditor.conflict || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || (aiScope === 'chapter' && !sceneAllocations) || !!skillProblem}
           onClick={confirmGenerate}
         >
           {aiScope === 'scene' ? content.trim() ? '重新生成当前场景' : '生成当前场景正文' : '按现有场景生成整章'}
@@ -919,7 +926,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           type="primary"
           block
           icon={<ThunderboltOutlined />}
-          disabled={!scene || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || !(aiScope === 'scene' ? content : chapter.content).trim()}
+          disabled={!scene || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || !(aiScope === 'scene' ? content : chapter.content).trim() || !!skillProblem}
           onClick={() => void runAI('polish')}
         >
           {aiScope === 'scene' ? '润色当前场景' : '逐场景润色整章'}
@@ -1211,7 +1218,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             <SceneWritingPanel
               aiConfigId={aiConfigId}
               styleChoice={styleChoice}
-              skillId={skillId}
+              skill={skillChoice}
               onSectionLockChange={setSectionLocked}
               onStructureDirtyChange={setStructureDirty}
               onOpenInspectorTab={(tab) => {

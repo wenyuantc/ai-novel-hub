@@ -7,6 +7,7 @@ from math import ceil
 
 from pydantic import Field
 
+from app.ai import skill_inputs
 from app.core.errors import BadRequestError
 from app.services import skill_service
 
@@ -64,7 +65,7 @@ async def load_skill(ctx: ToolCtx, args: SkillLoadArgs) -> dict:
     # 展开组件后的正文（与生成任务快照一致）
     body, pages = _page(await skill_service.expanded_body(ctx.db, skill), args.page)
     refs = await skill_service.references_of(ctx.db, skill.id)
-    return {
+    result = {
         "slug": skill.slug,
         "name": skill.name,
         "description": skill.description,
@@ -73,6 +74,14 @@ async def load_skill(ctx: ToolCtx, args: SkillLoadArgs) -> dict:
         "pages": pages,
         "references": [{"index": i, "title": r.title, "chars": len(r.content)} for i, r in enumerate(refs, start=1)],
     }
+    defs = skill_service.input_defs(skill)
+    if defs:
+        # 正文未填充：给出输入项定义与代填说明，由智能体按对话内容代入，必填项不确定时追问作者
+        result["inputs"] = [
+            {k: d[k] for k in ("name", "label", "kind", "required", "default", "options", "help")} for d in defs
+        ]
+        result["instructions"] = skill_inputs.AGENT_FILL_INSTRUCTIONS
+    return result
 
 
 async def read_reference(ctx: ToolCtx, args: SkillReferenceArgs) -> dict:

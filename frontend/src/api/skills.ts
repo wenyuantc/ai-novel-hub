@@ -2,7 +2,7 @@
 
 import { api } from './client'
 import { downloadAttachment } from './projects'
-import type { Skill, SkillBrief, SkillCreate, SkillReferenceInput, SkillScope, SkillUpdate } from './types'
+import type { Skill, SkillBrief, SkillCreate, SkillInputValues, SkillPreviewOut, SkillReferenceInput, SkillScope, SkillUpdate } from './types'
 
 export const skillApi = {
   list: (scope: SkillScope | 'all' = 'all') => api.get<SkillBrief[]>('/skills', { scope }),
@@ -15,6 +15,9 @@ export const skillApi = {
   /** 整体替换参考资料列表（顺序即 sort） */
   replaceReferences: (id: number, references: SkillReferenceInput[]) =>
     api.put<Skill>(`/skills/${id}/references`, { references }),
+  /** 填入输入值、展开组件后的正文（即实际注入的补充工作流）；不落库，可见即可预览 */
+  preview: (id: number, inputs: SkillInputValues, signal?: AbortSignal) =>
+    api.post<SkillPreviewOut>(`/skills/${id}/preview`, { inputs }, signal),
   /** 复制为我的副本（slug 冲突时追加 -2、-3） */
   copy: (id: number) => api.post<Skill>(`/skills/${id}/copy`),
   /** 仅管理员、仅内置 Skill */
@@ -43,6 +46,18 @@ export const SKILL_LIMITS = {
   referenceTitle: 100,
   referenceContent: 100000,
   uploadBytes: 2 * 1024 * 1024,
+} as const
+
+/** 与后端 app/ai/skill_inputs.py 一致 */
+export const SKILL_INPUT_LIMITS = {
+  inputs: 20,
+  label: 30,
+  help: 200,
+  option: 50,
+  minOptions: 2,
+  maxOptions: 50,
+  /** 各类型取值上限（字数） */
+  value: { text: 200, textarea: 5000, select: 50 },
 } as const
 
 export const SKILL_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/

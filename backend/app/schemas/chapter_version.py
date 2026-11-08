@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.skill import SkillInputValues, require_skill_for_inputs
 from app.schemas.style import StyleChoice
 
 VersionSource = Literal["manual", "baseline", "generate", "polish", "rewrite", "restore", "revise", "import", "agent"]
@@ -90,6 +91,10 @@ class RewriteRequest(BaseModel):
     style: StyleChoice = "inherit"
     # 选用的 Skill（本人或全局）作为补充工作流；任务创建时快照正文，之后编辑 Skill 不影响重试
     skill_id: int | None = Field(default=None, gt=0)
+    # Skill 输入项的值（标识 → 值）；按 Skill 当前定义校验并补默认值后填入快照正文
+    skill_inputs: SkillInputValues = Field(default_factory=dict)
+
+    _skill_inputs_need_skill = model_validator(mode="after")(require_skill_for_inputs)
 
 
 class RewriteApply(BaseModel):

@@ -1990,3 +1990,49 @@ def test_0042_prompt_components(tmp_path):
             assert conn.execute(text("SELECT count(*) FROM users")).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_0043_skill_inputs(tmp_path):
+    """0043 原位新增 skills.inputs（存量回填 []，正文与子表不动）；有输入项时拒绝有损降级。"""
+    db_file = tmp_path / "migrate0043.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0042")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (1, 'a', 'x')"))
+            conn.execute(text(
+                "INSERT INTO skills (id, owner_user_id, slug, name, body) VALUES (900, 1, 'old', 'n', '旧 {{x}}')"
+            ))
+            conn.execute(text("INSERT INTO skill_references (skill_id, title, content) VALUES (900, 't', 'c')"))
+    finally:
+        engine.dispose()
+    command.upgrade(cfg, "0043")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "inputs" in {c["name"] for c in inspect(engine).get_columns("skills")}
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT inputs, body FROM skills WHERE id = 900")).one() == ("[]", "旧 {{x}}")
+            assert conn.execute(text("SELECT count(*) FROM skill_references")).scalar_one() == 1
+            conn.execute(text("""UPDATE skills SET inputs = '[{"name": "a", "label": "A"}]' WHERE id = 900"""))
+    finally:
+        engine.dispose()
+    with pytest.raises(RuntimeError):
+        command.downgrade(cfg, "0042")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE skills SET inputs = '[]'"))
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0042")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "inputs" not in {c["name"] for c in inspect(engine).get_columns("skills")}
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM skill_references")).scalar_one() == 1
+    finally:
+        engine.dispose()

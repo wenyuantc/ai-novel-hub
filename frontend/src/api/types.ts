@@ -164,7 +164,7 @@ export type AuditField =
   | 'username' | 'is_admin' | 'is_active' | 'title' | 'genre' | 'premise' | 'synopsis' | 'theme' | 'tags'
   | 'selling_points' | 'audience' | 'target_words' | 'status' | 'style' | 'default_style_id' | 'auto_analyze'
   | 'chapter_no' | 'outline_id' | 'plan_id' | 'style_id' | 'content' | 'starred' | 'note' | 'cast'
-  | 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body' | 'references' | 'builtin_key' | 'hidden_by'
+  | 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body' | 'inputs' | 'references' | 'builtin_key' | 'hidden_by'
   | 'setting_fields' | 'field_definitions'
   | 'setting_categories' | 'setting_tags'
 export type AuditSafeState = 'draft' | 'planning' | 'writing' | 'completed' | 'archived' | 'generating' | 'done' | 'active' | 'hidden' | 'admin' | 'author' | 'pending' | 'approved' | 'rejected' | 'cancelled'
@@ -787,6 +787,8 @@ export interface GenerateChapterRequest {
   style?: StyleChoice
   /** 选用的 Skill（本人或全局）作为补充工作流；任务创建时快照 */
   skill_id?: number | null
+  /** Skill 输入项的值（标识 → 值）；仅在选了带输入项的 Skill 时发送，服务端校验并补默认值后快照 */
+  skill_inputs?: SkillInputValues
   expected_content_revision?: number
   expected_planning_revision?: number
 }
@@ -826,6 +828,8 @@ export interface PolishChapterRequest {
   instruction?: string
   style?: StyleChoice
   skill_id?: number | null
+  /** Skill 输入项的值（标识 → 值）；仅在选了带输入项的 Skill 时发送，服务端校验并补默认值后快照 */
+  skill_inputs?: SkillInputValues
   expected_content_revision?: number
   expected_planning_revision?: number
 }
@@ -944,6 +948,8 @@ export interface RewriteRequest {
   instruction?: string
   style?: StyleChoice
   skill_id?: number | null
+  /** Skill 输入项的值（标识 → 值）；仅在选了带输入项的 Skill 时发送，服务端校验并补默认值后快照 */
+  skill_inputs?: SkillInputValues
 }
 
 /** 局部改写 done 载荷：正文未改，需调用 apply 采纳 */
@@ -1081,6 +1087,8 @@ export interface BatchGenerateRequest {
   style?: StyleChoice
   /** 全部章节使用的 Skill；创建时快照，续跑 / 重试沿用 */
   skill_id?: number | null
+  /** Skill 输入项的值（标识 → 值）；仅在选了带输入项的 Skill 时发送，服务端校验并补默认值后快照 */
+  skill_inputs?: SkillInputValues
 }
 
 export type BatchWordsSource = 'plan' | 'uniform'
@@ -2137,6 +2145,8 @@ export interface ReviseChapterRequest {
   ai_config_id?: number | null
   style?: StyleChoice
   skill_id?: number | null
+  /** Skill 输入项的值（标识 → 值）；仅在选了带输入项的 Skill 时发送，服务端校验并补默认值后快照 */
+  skill_inputs?: SkillInputValues
   expected_content_revision?: number
   expected_planning_revision?: number
 }
@@ -3162,7 +3172,7 @@ export interface AgentConversationDetail extends AgentConversation {
   changes: AgentChange[]
   active_task: Task | null
 }
-export interface AgentSendRequest { content: string; page_context?: AgentPageContext; ai_config_id?: number | null; skill_id?: number | null }
+export interface AgentSendRequest { content: string; page_context?: AgentPageContext; ai_config_id?: number | null; skill_id?: number | null; skill_inputs?: SkillInputValues }
 export interface AgentSendResult { message: AgentMessage; task: Task }
 export interface AgentTurnResult { changes: AgentChange[]; task: Task | null; error?: string | null; notice?: string | null }
 export interface AgentToolStart { call_id: string; name: string; label: string }
@@ -3224,6 +3234,28 @@ export type SkillScope = 'mine' | 'global'
 export interface SkillRef { id: number; name: string }
 export interface SkillReference { id: number; title: string; sort: number; content: string }
 export interface SkillReferenceInput { title: string; content: string }
+/** text = 单行（≤200 字）；textarea = 多行（≤5000 字）；select = 单选下拉（2–50 个选项） */
+export type SkillInputKind = 'text' | 'textarea' | 'select'
+/** Skill 的自定义输入项；正文用 {{ name }} 引用其值 */
+export interface SkillInputDef {
+  /** 标识：字母 / 数字 / 下划线 / 汉字，不以数字开头，≤32；Skill 内唯一 */
+  name: string
+  /** 显示名 ≤30 */
+  label: string
+  /** 说明 ≤200 */
+  help: string
+  kind: SkillInputKind
+  required: boolean
+  /** 下拉时须是选项之一（或为空） */
+  default: string
+  /** 仅下拉：2–50 项，每项 ≤50 */
+  options: string[]
+}
+/** 请求中的 Skill 输入值（标识 → 值），≤20 项 */
+export type SkillInputValues = Record<string, string>
+export interface SkillPreviewRequest { inputs: SkillInputValues }
+/** 填入输入值、展开组件后的正文（即实际注入的补充工作流）；不落库 */
+export interface SkillPreviewOut { body: string; missing_required: string[]; errors: string[] }
 /** 列表项：不含正文与参考资料内容 */
 export interface SkillBrief {
   id: number
@@ -3240,6 +3272,8 @@ export interface SkillBrief {
   editable: boolean
   body_chars: number
   reference_titles: string[]
+  /** 自定义输入项定义（列表也带，选中后无需再取详情即可渲染表单） */
+  inputs: SkillInputDef[]
   created_at: string
   updated_at: string
 }
@@ -3248,6 +3282,8 @@ export interface Skill extends SkillBrief {
   references: SkillReference[]
   /** 正文引用的所有者本人的提示词组件 */
   components: PromptComponentRef[]
+  /** 占位提示：正文里未声明的 {{ x }}、声明了却未引用的输入项（不阻止保存） */
+  input_warnings: string[]
 }
 export interface SkillCreate {
   scope?: SkillScope
@@ -3257,9 +3293,10 @@ export interface SkillCreate {
   category?: string
   triggers?: string[]
   body?: string
+  inputs?: SkillInputDef[]
   references?: SkillReferenceInput[]
 }
-export type SkillUpdate = Partial<Pick<SkillCreate, 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body'>>
+export type SkillUpdate = Partial<Pick<SkillCreate, 'slug' | 'name' | 'description' | 'category' | 'triggers' | 'body' | 'inputs'>>
 
 // ---------------- MCP 插件（backend/app/schemas/mcp.py） ----------------
 

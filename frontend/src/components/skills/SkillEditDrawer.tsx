@@ -6,13 +6,15 @@ import { Alert, App, Button, Card, Drawer, Form, Input, Radio, Select, Skeleton,
 import { useCallback, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { SKILL_LIMITS, SKILL_SLUG_RE, skillApi } from '../../api/skills'
-import type { Skill, SkillReferenceInput, SkillScope } from '../../api/types'
+import type { Skill, SkillInputDef, SkillReferenceInput, SkillScope } from '../../api/types'
 import { useModalWidth } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
 import { normalizeTriggers, suggestSlug } from '../../utils/skills'
 import { componentRef, insertSnippet } from '../../utils/promptComponents'
 import AgentMarkdown from '../agent/AgentMarkdown'
 import { ComponentInsertSelect, ComponentRefTags } from '../promptComponents/ComponentRefs'
+import { inputDefErrors, inputWarnings, normalizeInputDefs } from '../../utils/skillInputs'
+import SkillInputsEditor from './SkillInputsEditor'
 
 interface Props {
   open: boolean
@@ -35,6 +37,7 @@ interface FormValues {
   category: string
   triggers: string[]
   body: string
+  inputs: SkillInputDef[]
   references: SkillReferenceInput[]
 }
 
@@ -58,6 +61,9 @@ function Loaded(props: Props & { skillId: number }) {
 }
 
 const refsKey = (refs: SkillReferenceInput[]) => JSON.stringify(refs.map((r) => [r.title.trim(), r.content]))
+/** 占位警告的依据：正文 + 已声明的标识（与服务端 input_warnings 对应的草稿版本） */
+const warningKey = (body: string, inputs: Partial<SkillInputDef>[] | undefined) =>
+  JSON.stringify([body, (inputs ?? []).map((d) => (d?.name ?? '').trim())])
 
 export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: Skill | null }) {
   const { message } = App.useApp()
@@ -70,7 +76,9 @@ export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { 
   const operation = useAuthorizationScope(undefined, false, global)
   const readOnly = skill !== null ? global ? !can(actor, 'global_skills.update') : !skill.editable : global && !can(actor, 'global_skills.create')
   const canReferences = skill ? !global || can(actor, 'global_skills.references') : !readOnly
-  const body = Form.useWatch('body', form) ?? ''
+  const watchedBody = Form.useWatch('body', form) as string | undefined
+  const body = watchedBody ?? ''
+  const draftInputs = Form.useWatch('inputs', form) as Partial<SkillInputDef>[] | undefined
   const initial: FormValues = skill
     ? {
         scope: skill.scope,
@@ -80,21 +88,33 @@ export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { 
         category: skill.category,
         triggers: skill.triggers,
         body: skill.body,
+        inputs: skill.inputs ?? [],
         references: skill.references.map((r) => ({ title: r.title, content: r.content })),
       }
-    : { scope, slug: '', name: '', description: '', category: '', triggers: [], body: '', references: [] }
+    : { scope, slug: '', name: '', description: '', category: '', triggers: [], body: '', inputs: [], references: [] }
   // 上次保存的参考资料：没变化时不调用整体替换接口
   const savedRefs = useRef(refsKey(initial.references))
   const pending = useRef(false)
   // 引用的组件：保存后以服务端响应为准（未保存的改动不实时解析）
   const [components, setComponents] = useState(skill?.components ?? [])
-  // 正文光标（UTF-16），插入组件引用时用；没有时插在末尾
+  // 服务端占位警告（展开组件后计算）：草稿与上次保存一致时显示它，否则按草稿实时计算
+  const [savedWarnings, setSavedWarnings] = useState(() =>
+    skill ? { key: warningKey(skill.body, skill.inputs), warnings: skill.input_warnings ?? [] } : null)
+  // 首次渲染时 useWatch 尚未取到值，按初始值计算
+  const draftBody = watchedBody ?? initial.body
+  const currentWarningKey = warningKey(draftBody, draftInputs ?? initial.inputs)
+  const placeholderWarnings = savedWarnings && savedWarnings.key === currentWarningKey
+    ? savedWarnings.warnings
+    : inputWarnings((draftInputs ?? initial.inputs).map((d) => ({ name: d?.name ?? '' })), draftBody)
+  // 正文光标（UTF-16），插入组件引用 / 输入占位时用；没有时插在末尾
   const bodyCaret = useRef<[number, number] | null>(null)
   const syncCaret = (el: HTMLTextAreaElement) => {
     bodyCaret.current = [el.selectionStart, el.selectionEnd]
   }
-  const insertComponent = (slug: string) => {
-    const next = insertSnippet(form.getFieldValue('body') ?? '', componentRef(slug), bodyCaret.current)
+  const insertComponent = (slug: string) => insertIntoBody(componentRef(slug))
+  const insertPlaceholder = (name: string) => insertIntoBody(`{{ ${name} }}`)
+  const insertIntoBody = (snippet: string) => {
+    const next = insertSnippet(form.getFieldValue('body') ?? '', snippet, bodyCaret.current)
     form.setFieldValue('body', next.text)
     bodyCaret.current = [next.caret, next.caret]
     setTab('edit')
@@ -125,6 +145,13 @@ export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { 
       category: v.category?.trim() ?? '',
       triggers: normalizeTriggers(v.triggers ?? []),
       body: v.body ?? '',
+      inputs: normalizeInputDefs(v.inputs ?? []),
+    }
+    const inputErrors = inputDefErrors(fields.inputs)
+    if (!readOnly && inputErrors.length) {
+      message.error(inputErrors.join('；'))
+      if (operation.current(ticket)) pending.current = false
+      return
     }
     const references = (v.references ?? []).map((r) => ({ title: r.title.trim(), content: r.content ?? '' }))
     setSaving(true)
@@ -142,6 +169,7 @@ export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { 
       if (!operation.current(ticket)) return
       savedRefs.current = refsKey(references)
       setComponents(saved.components ?? [])
+      setSavedWarnings({ key: warningKey(saved.body, saved.inputs), warnings: saved.input_warnings ?? [] })
       message.success('已保存')
       onSaved(saved)
     } catch (err) {
@@ -277,6 +305,22 @@ export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { 
             ]}
           />
         </Form.Item>
+        {placeholderWarnings.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="输入占位提示（不影响保存）"
+            description={<ul style={{ margin: 0, paddingLeft: 20 }}>{placeholderWarnings.map((w) => <li key={w}>{w}</li>)}</ul>}
+          />
+        )}
+        <Typography.Title level={5}>输入项</Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          在正文中写 {'{{ 标识 }}'} 引用输入值；手动选用该 Skill 时会出现表单，按默认值预填，必填项为空不能提交。智能体自行使用时由它根据对话代填。没有声明的花括号文本原样保留。
+        </Typography.Paragraph>
+        <div style={{ marginBottom: 16 }}>
+          <SkillInputsEditor form={form} readOnly={readOnly} onInsert={readOnly ? undefined : insertPlaceholder} />
+        </div>
         <Typography.Title level={5}>参考资料</Typography.Title>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           智能体按需逐篇读取，不会一次全部放进提示词。标题即导出时的文件名。

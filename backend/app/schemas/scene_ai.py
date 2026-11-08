@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from app.schemas.chapter import GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
 from app.schemas.chapter_version import RewriteApply, RewriteRequest
+from app.schemas.skill import SkillInputValues, require_skill_for_inputs
 
 DatabaseId = Annotated[int, Field(gt=0, le=2_147_483_647)]
 
@@ -41,7 +42,10 @@ class SceneRevisions(BaseModel):
 class SceneModelOptions(SceneRevisions):
     ai_config_id: DatabaseId | None = None
     skill_id: DatabaseId | None = None
+    skill_inputs: SkillInputValues = Field(default_factory=dict)
     style: Literal["inherit", "none"] | DatabaseId = "inherit"
+
+    _skill_inputs_need_skill = model_validator(mode="after")(require_skill_for_inputs)
 
 
 class SceneGenerateRequest(SceneModelOptions, GenerateChapterRequest):

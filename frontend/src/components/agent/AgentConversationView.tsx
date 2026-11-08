@@ -10,7 +10,9 @@ import { useAuthStore } from '../../stores/auth'
 import { useSkills } from '../../stores/skills'
 import { matchTrigger, triggerOptions } from '../../utils/skills'
 import AIConfigSelect from '../AIConfigSelect'
-import SkillSelect from '../skills/SkillSelect'
+import SkillChoiceField from '../skills/SkillChoiceField'
+import { useSkillChoice } from '../../hooks/useSkillChoice'
+import { skillChoiceProblemText } from '../../utils/skillInputs'
 import AgentTimeline from './AgentTimeline'
 import { useAgentConversation } from './useAgentConversation'
 import { readMentionAnchor, readPositiveId } from '../../utils/mentions'
@@ -27,8 +29,10 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
   const agent = useAgentConversation(pid, cid, onUpdated)
   const [input, setInput] = useState('')
   const [configId, setConfigId] = useState<number | null>(null)
-  // 本轮强制启用的 Skill（选择器优先于 /触发词）；发送后清空
-  const [skillId, setSkillId] = useState<number | null>(null)
+  // 本轮强制启用的 Skill 及其输入项（选择器优先于 /触发词）；发送后清空。触发词命中时不填表单，由智能体按对话代填
+  const skillChoice = useSkillChoice()
+  const skillId = skillChoice.skillId
+  const skillProblem = skillChoiceProblemText(skillChoice)
   const { skills } = useSkills()
   const mcpEnabled = useAuthStore((s) => s.mcpEnabled)
   const suggestions = useMemo(() => triggerOptions(input, skills), [input, skills])
@@ -38,8 +42,8 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
   const openTask = detail?.active_task
   const blocked = historySealed || agent.busy || !!openTask || stream.running
   const send = async () => {
-    if (blocked || !input.trim() || Array.from(input).length > 8000) return
-    if (await agent.send({ content: input.trim(), page_context: context, ai_config_id: configId, skill_id: skillId })) { setInput(''); setSkillId(null) }
+    if (blocked || !input.trim() || Array.from(input).length > 8000 || skillProblem) return
+    if (await agent.send({ content: input.trim(), page_context: context, ai_config_id: configId, ...skillChoice.payload })) { setInput(''); skillChoice.setSkillId(null) }
   }
   if (!detail) return <div style={{ padding: 16 }}>{agent.error ? <Alert type="error" showIcon message={agent.error} action={<Button onClick={agent.refresh}>重试</Button>} /> : <Skeleton active paragraph={{ rows: 6 }} />}</div>
   const persisted = detail.messages.filter((m) => m.role === 'assistant' && m.turn_task_id === stream.task?.id).map((m) => m.content).join('')
@@ -76,7 +80,7 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>{contextLabel}{context.selection ? ` · 已附带选中的 ${Array.from(context.selection).length} 字` : ''}</Typography.Paragraph>
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
         <AIConfigSelect value={configId} onChange={setConfigId} disabled={blocked} />
-        <SkillSelect aria-label="本轮启用的 Skill" value={skillId} onChange={setSkillId} disabled={blocked} placeholder="Skill（可选，或输入 / 选择触发词）" />
+        <SkillChoiceField aria-label="本轮启用的 Skill" choice={skillChoice} disabled={blocked} placeholder="Skill（可选，或输入 / 选择触发词）" />
         <AutoComplete
           value={input}
           onChange={(value: string) => setInput(value.slice(0, 8000))}
@@ -88,8 +92,9 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && suggestions.length === 0) { e.preventDefault(); void send() }
           }} />
         </AutoComplete>
-        {(skillId !== null || triggered) && <Typography.Text type="secondary" style={{ fontSize: 12 }}>本轮将启用 Skill「{skillId !== null ? skills.find((s) => s.id === skillId)?.name ?? '已选择' : triggered?.name}」</Typography.Text>}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}><Typography.Text type="secondary" style={{ fontSize: 12 }}>Enter 发送 · Shift + Enter 换行</Typography.Text><Button type="primary" icon={<SendOutlined />} disabled={blocked || !input.trim()} loading={agent.busy} onClick={() => void send()}>发送</Button></div>
+        {(skillId !== null || triggered) && <Typography.Text type="secondary" style={{ fontSize: 12 }}>本轮将启用 Skill「{skillId !== null ? skillChoice.skill?.name ?? '已选择' : triggered?.name}」{triggered && triggered.inputs.length > 0 ? `；它有 ${triggered.inputs.length} 个输入项，将由智能体根据对话代填，必填项不确定时会先问你` : ''}</Typography.Text>}
+        {skillProblem && <Typography.Text type="warning" style={{ fontSize: 12 }}>{skillProblem}</Typography.Text>}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}><Typography.Text type="secondary" style={{ fontSize: 12 }}>Enter 发送 · Shift + Enter 换行</Typography.Text><Button type="primary" icon={<SendOutlined />} disabled={blocked || !input.trim() || !!skillProblem} loading={agent.busy} onClick={() => void send()}>发送</Button></div>
       </Space>
     </div>
     )}
