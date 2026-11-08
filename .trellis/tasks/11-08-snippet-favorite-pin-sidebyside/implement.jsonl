@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "作品笔记 API、模型与前端编辑器的现行合同"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份版本升级、旧格式夹带拒绝与 migrate 步骤规则"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与模型约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "409/422/403 错误约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "前端组件约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "useLoader 刷新与草稿状态管理"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端字段与备份跨层一致性"}
