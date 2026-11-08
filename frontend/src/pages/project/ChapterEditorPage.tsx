@@ -3,12 +3,14 @@ import { readMentionAnchor } from '../../utils/mentions'
 import {
   ArrowLeftOutlined,
   BookOutlined,
+  FileTextOutlined,
   RobotOutlined,
   ExperimentOutlined,
   HistoryOutlined,
   LeftOutlined,
   RightOutlined,
   SaveOutlined,
+  SettingOutlined,
   StopOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
@@ -29,6 +31,7 @@ import {
   Spin,
   Tabs,
   Tag,
+  theme,
   Typography,
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -45,6 +48,8 @@ import {
 } from '../../api/chapters'
 import { errorMessage } from '../../api/client'
 import { sceneApi } from '../../api/scenes'
+import ScenePlanningPanel from '../../components/scenes/ScenePlanningPanel'
+import SceneSettingPreview from '../../components/scenes/SceneSettingPreview'
 import SceneWritingPanel from '../../components/scenes/SceneWritingPanel'
 import { readMarkerLocation, type MarkerLocation } from '../../components/scenes/markerLocation'
 import { editorFromSectionDocument } from '../../components/scenes/richSectionProjection'
@@ -153,7 +158,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   // 其余宽度放在正文上方，避免标题被挤压；按卡片实际宽度判断，右侧停靠面板打开时同样生效
   const [editorPaneRef, editorPaneWidth] = useElementWidth<HTMLDivElement>()
   const toolbarInHeader = editorPaneWidth >= TOOLBAR_IN_HEADER_MIN_WIDTH
-  // 移动端 AI 助手面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
+  const { token } = theme.useToken()
+  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [inspectorTab, setInspectorTab] = useState<'ai' | 'scene' | 'chapter'>('ai')
+  // 移动端辅助面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
@@ -772,143 +780,336 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       >
         保存
       </Button>
+      {!isMobile && (
+        <Button
+          size="small"
+          icon={<SettingOutlined />}
+          type={inspectorOpen ? 'default' : 'primary'}
+          onClick={() => setInspectorOpen((prev) => !prev)}
+          title={inspectorOpen ? '收起右侧辅助面板（进入宽屏沉浸码字模式）' : '展开右侧辅助面板（AI助手/场景规划/章节设置）'}
+        >
+          {inspectorOpen ? '收起侧栏' : '辅助面板'}
+        </Button>
+      )}
     </Space>
   )
 
-  const aiPanel = (
-    <Card size="small" title="AI 助手">
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Segmented aria-label="AI处理范围" value={aiScope} disabled={editorLocked || saving} options={[{ value: 'scene', label: '当前场景' }, { value: 'chapter', label: '整章保结构' }]} onChange={setAiScope} />
-        <Typography.Text type="secondary">{aiScope === 'scene' ? `只更新场景 ${(scene?.sort ?? 0) + 1} 的正文；摘要与规划不变` : '逐场景生成提案，整章统一保存；目标字数为整章总量'}</Typography.Text>
+  const aiPanelContent = (
+    <Space direction="vertical" style={{ width: '100%' }}>
+      <Segmented aria-label="AI处理范围" value={aiScope} disabled={editorLocked || saving} options={[{ value: 'scene', label: '当前场景' }, { value: 'chapter', label: '整章保结构' }]} onChange={setAiScope} />
+      <Typography.Text type="secondary">{aiScope === 'scene' ? `只更新场景 ${(scene?.sort ?? 0) + 1} 的正文；摘要与规划不变` : '逐场景生成提案，整章统一保存；目标字数为整章总量'}</Typography.Text>
+      <div>
+        <Typography.Text type="secondary">AI 配置</Typography.Text>
+        <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
+      </div>
+      <div>
+        <Typography.Text type="secondary">本次写作风格</Typography.Text>
+        {styleSelect(editorLocked)}
+      </div>
+      <div>
+        <Typography.Text type="secondary">Skill（可选）</Typography.Text>
+        {skillSelect(editorLocked)}
+      </div>
+      <Tabs
+        activeKey={aiMode}
+        onChange={(k) => setAiMode(k as AIMode)}
+        items={[
+          {
+            key: 'generate',
+            label: 'AI 生成',
+            disabled: editorLocked,
+            children: (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {plan && <ChapterPlanCard plan={plan} />}
+                <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
+                {aiScope === 'chapter' && (sceneAllocations ? <Typography.Text type="secondary">已保存结构的总量分配：{sceneAllocations.slice(0, 12).map((item, index) => `场景 ${index + 1}：${item.words} 字`).join('；')}{sceneAllocations.length > 12 ? `；其余 ${sceneAllocations.length - 12} 个场景按同一均分规则分配` : ''}</Typography.Text> : <Alert type="warning" message="目标总字数不足以为每个场景分配正数字数，或场景目录尚未加载。" />)}
+                {aiScope === 'chapter' && <ContextPreviewPanel chapterId={chapter.id} />}
+              </Space>
+            ),
+          },
+          {
+            key: 'polish',
+            label: 'AI 润色',
+            disabled: editorLocked,
+            children: (
+              <PolishForm value={polishInstruction} onChange={setPolishInstruction} disabled={aiRunning} />
+            ),
+          },
+          {
+            key: 'rewrite',
+            label: '局部改写',
+            disabled: aiRunning || sectionLocked,
+            children: (
+              <RewritePanel
+                key={scene?.id ?? 'loading'}
+                sceneId={scene?.id}
+                getSceneVersions={() => { const current = sceneEditor.controller.getSnapshot().scene; return current ? { content_revision: current.content_revision, planning_revision: current.planning_revision } : null }}
+                onSceneApplied={() => { void sceneEditor.controller.load(undefined, false); void reloadChapter(); onChanged(); void refreshProject(); void refreshAnalysis() }}
+                pid={pid}
+                chapterId={chapter.id}
+                content={content}
+                selection={selection}
+                aiConfigId={aiConfigId}
+                styleChoice={styleChoice}
+                skillId={skillId}
+                // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
+                disabled={!scene || !selectionEditable || aiRunning || sectionLocked || saving || chapter.status === 'generating' || hasConfig === false}
+                ensureSaved={ensureSaved}
+                onLockChange={setRewriteLocked}
+                onApplied={handleRewriteApplied}
+              />
+            ),
+          },
+        ]}
+      />
+      {aiTask.running && <><Typography.Text strong>{aiTask.task?.scene_id ? `场景任务 #${aiTask.task.scene_id} · 只读提案` : '整章保结构任务 · 只读提案'}</Typography.Text><StreamOutput text={aiTask.text} running maxHeight={320} /></>}
+      {revising && (
+        <Alert type="info" showIcon message={reviseRunningCopy.title} description={reviseRunningCopy.description} />
+      )}
+      {aiTask.running && aiStatus === 'queued' && aiTask.task && (
+        <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
+      )}
+      {aiTask.running && aiStatus === 'running' && aiTask.task && (
         <div>
-          <Typography.Text type="secondary">AI 配置</Typography.Text>
-          <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />
+          <Progress percent={aiTask.task.progress} size="small" status="active" style={{ marginBottom: 0 }} />
+          {aiTask.task.stage && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {aiTask.task.stage}
+            </Typography.Text>
+          )}
         </div>
-        <div>
-          <Typography.Text type="secondary">本次写作风格</Typography.Text>
-          {styleSelect(editorLocked)}
-        </div>
-        <div>
-          <Typography.Text type="secondary">Skill（可选）</Typography.Text>
-          {skillSelect(editorLocked)}
-        </div>
-        <Tabs
-          activeKey={aiMode}
-          onChange={(k) => setAiMode(k as AIMode)}
-          items={[
-            {
-              key: 'generate',
-              label: 'AI 生成',
-              disabled: editorLocked,
-              children: (
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  {plan && <ChapterPlanCard plan={plan} />}
-                  <GenerateForm value={genOptions} onChange={changeGenOptions} disabled={aiRunning} />
-                  {aiScope === 'chapter' && (sceneAllocations ? <Typography.Text type="secondary">已保存结构的总量分配：{sceneAllocations.slice(0, 12).map((item, index) => `场景 ${index + 1}：${item.words} 字`).join('；')}{sceneAllocations.length > 12 ? `；其余 ${sceneAllocations.length - 12} 个场景按同一均分规则分配` : ''}</Typography.Text> : <Alert type="warning" message="目标总字数不足以为每个场景分配正数字数，或场景目录尚未加载。" />)}
-                  {aiScope === 'chapter' && <ContextPreviewPanel chapterId={chapter.id} />}
-                </Space>
-              ),
-            },
-            {
-              key: 'polish',
-              label: 'AI 润色',
-              disabled: editorLocked,
-              children: (
-                <PolishForm value={polishInstruction} onChange={setPolishInstruction} disabled={aiRunning} />
-              ),
-            },
-            {
-              key: 'rewrite',
-              label: '局部改写',
-              disabled: aiRunning || sectionLocked,
-              children: (
-                <RewritePanel
-                  key={scene?.id ?? 'loading'}
-                  sceneId={scene?.id}
-                  getSceneVersions={() => { const current = sceneEditor.controller.getSnapshot().scene; return current ? { content_revision: current.content_revision, planning_revision: current.planning_revision } : null }}
-                  onSceneApplied={() => { void sceneEditor.controller.load(undefined, false); void reloadChapter(); onChanged(); void refreshProject(); void refreshAnalysis() }}
-                  pid={pid}
-                  chapterId={chapter.id}
-                  content={content}
-                  selection={selection}
-                  aiConfigId={aiConfigId}
-                  styleChoice={styleChoice}
-                  skillId={skillId}
-                  // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
-                  disabled={!scene || !selectionEditable || aiRunning || sectionLocked || saving || chapter.status === 'generating' || hasConfig === false}
-                  ensureSaved={ensureSaved}
-                  onLockChange={setRewriteLocked}
-                  onApplied={handleRewriteApplied}
-                />
-              ),
-            },
-          ]}
+      )}
+      {aiTask.reconnecting && <Alert type="warning" showIcon message="连接中断，正在重连…（任务仍在后台运行）" />}
+      {aiTask.running && aiTask.continueInfo && (
+        <Alert
+          type="info"
+          showIcon
+          message={`字数不足，自动续写第 ${aiTask.continueInfo.round} 轮`}
+          description={`首轮 ${aiTask.continueInfo.words} 字 / 目标 ${aiTask.continueInfo.target} 字`}
         />
-        {aiTask.running && <><Typography.Text strong>{aiTask.task?.scene_id ? `场景任务 #${aiTask.task.scene_id} · 只读提案` : '整章保结构任务 · 只读提案'}</Typography.Text><StreamOutput text={aiTask.text} running maxHeight={320} /></>}
-        {revising && (
-          <Alert type="info" showIcon message={reviseRunningCopy.title} description={reviseRunningCopy.description} />
+      )}
+      {aiMode === 'rewrite' ? null : aiRunning ? (
+        <Button danger block icon={<StopOutlined />} disabled={!aiTask.running} onClick={() => void handleCancel()}>
+          {aiStatus === 'queued' ? '取消排队' : `停止（已输出 ${countWords(aiTask.text)} 字）`}
+        </Button>
+      ) : aiMode === 'generate' ? (
+        <Button
+          type="primary"
+          block
+          icon={<ThunderboltOutlined />}
+          disabled={!scene || sceneEditor.loading || !!sceneEditor.conflict || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || (aiScope === 'chapter' && !sceneAllocations)}
+          onClick={confirmGenerate}
+        >
+          {aiScope === 'scene' ? content.trim() ? '重新生成当前场景' : '生成当前场景正文' : '按现有场景生成整章'}
+        </Button>
+      ) : (
+        <Button
+          type="primary"
+          block
+          icon={<ThunderboltOutlined />}
+          disabled={!scene || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || !(aiScope === 'scene' ? content : chapter.content).trim()}
+          onClick={() => void runAI('polish')}
+        >
+          {aiScope === 'scene' ? '润色当前场景' : '逐场景润色整章'}
+        </Button>
+      )}
+      {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
+        <Alert
+          type="error"
+          showIcon
+          message={aiStatus === 'interrupted' ? '任务已中断' : '生成失败'}
+          description={aiTask.error}
+        />
+      )}
+      {aiMode !== 'rewrite' && (
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+          当前场景使用本场景有效规划和开始时的设定；整章按现有场景顺序生成，仅更新正文，全部成功后统一保存。旧稿自动保留历史，任务可离页继续；场景与整章提案始终只读，不覆盖本地草稿。
+        </Typography.Paragraph>
+      )}
+    </Space>
+  )
+
+  const scenePlanningContent = (
+    <Space direction="vertical" style={{ width: '100%' }} size={16}>
+      <div style={{ paddingBottom: 10, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <Typography.Text strong style={{ fontSize: 14 }}>
+            {scene ? `场景 ${(scene.sort ?? 0) + 1}：${scene.title || '未命名场景'}` : '未选中场景'}
+          </Typography.Text>
+          {scene && (
+            <Tag color={scene.word_count ? 'blue' : 'default'} style={{ margin: 0 }}>
+              {scene.word_count ? `${scene.word_count} 字` : '未写'}
+            </Tag>
+          )}
+        </div>
+        {scene && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            内容版本 rev.{scene.content_revision} · 规划版本 rev.{scene.planning_revision}
+          </Typography.Text>
         )}
-        {aiTask.running && aiStatus === 'queued' && aiTask.task && (
-          <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
-        )}
-        {aiTask.running && aiStatus === 'running' && aiTask.task && (
+      </div>
+
+      {scene ? (
+        <>
           <div>
-            <Progress percent={aiTask.task.progress} size="small" status="active" style={{ marginBottom: 0 }} />
-            {aiTask.task.stage && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {aiTask.task.stage}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Typography.Text strong style={{ fontSize: 13 }}>
+                作者摘要
               </Typography.Text>
-            )}
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                独立保存 · AI写作参考
+              </Typography.Text>
+            </div>
+            <Input.TextArea
+              aria-label="场景摘要"
+              value={sceneEditor.draft.summary}
+              maxLength={200000}
+              placeholder="输入当前场景的情节推进、关键冲突或注意事项..."
+              autoSize={{ minRows: 2, maxRows: 6 }}
+              onChange={(event) => sceneEditor.controller.change({ summary: event.target.value })}
+              disabled={!canEdit || editorLocked || saving}
+            />
           </div>
-        )}
-        {aiTask.reconnecting && <Alert type="warning" showIcon message="连接中断，正在重连…（任务仍在后台运行）" />}
-        {aiTask.running && aiTask.continueInfo && (
-          <Alert
-            type="info"
-            showIcon
-            message={`字数不足，自动续写第 ${aiTask.continueInfo.round} 轮`}
-            description={`首轮 ${aiTask.continueInfo.words} 字 / 目标 ${aiTask.continueInfo.target} 字`}
+
+          <ScenePlanningPanel
+            key={`planning:${scene.id}`}
+            projectId={pid}
+            scene={scene}
+            disabled={editorLocked || saving}
+            ensureSaved={ensureSaved}
+            onChanged={() => {
+              void sceneEditor.controller.load()
+              onChanged()
+            }}
           />
-        )}
-        {aiMode === 'rewrite' ? null : aiRunning ? (
-          <Button danger block icon={<StopOutlined />} disabled={!aiTask.running} onClick={() => void handleCancel()}>
-            {aiStatus === 'queued' ? '取消排队' : `停止（已输出 ${countWords(aiTask.text)} 字）`}
-          </Button>
-        ) : aiMode === 'generate' ? (
-          <Button
-            type="primary"
-            block
-            icon={<ThunderboltOutlined />}
-            disabled={!scene || sceneEditor.loading || !!sceneEditor.conflict || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || (aiScope === 'chapter' && !sceneAllocations)}
-            onClick={confirmGenerate}
-          >
-            {aiScope === 'scene' ? content.trim() ? '重新生成当前场景' : '生成当前场景正文' : '按现有场景生成整章'}
-          </Button>
-        ) : (
-          <Button
-            type="primary"
-            block
-            icon={<ThunderboltOutlined />}
-            disabled={!scene || hasConfig === false || stuck || otherSceneWriting || saving || !attachChecked || !(aiScope === 'scene' ? content : chapter.content).trim()}
-            onClick={() => void runAI('polish')}
-          >
-            {aiScope === 'scene' ? '润色当前场景' : '逐场景润色整章'}
-          </Button>
-        )}
-        {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
-          <Alert
-            type="error"
-            showIcon
-            message={aiStatus === 'interrupted' ? '任务已中断' : '生成失败'}
-            description={aiTask.error}
+
+          <SceneSettingPreview
+            key={`setting:${scene.id}:${scene.content_revision}`}
+            projectId={pid}
+            chapterId={chapter.id}
+            sceneId={scene.id}
           />
-        )}
-        {aiMode !== 'rewrite' && (
-          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
-            当前场景使用本场景有效规划和开始时的设定；整章按现有场景顺序生成，仅更新正文，全部成功后统一保存。旧稿自动保留历史，任务可离页继续；场景与整章提案始终只读，不覆盖本地草稿。
+        </>
+      ) : (
+        <Alert type="info" message="请选择或新建一个场景进行规划。" />
+      )}
+    </Space>
+  )
+
+  const chapterSettingsContent = (
+    <Space direction="vertical" style={{ width: '100%' }} size={16}>
+      <div>
+        <div style={{ marginBottom: 6 }}>
+          <Typography.Text strong style={{ fontSize: 13 }}>
+            本章出场角色
+          </Typography.Text>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '2px 0 6px' }}>
+            手动指定本章出场角色。主角始终注入，隐藏字段仍受保护。
           </Typography.Paragraph>
-        )}
-      </Space>
+        </div>
+        <CastSelect
+          pid={pid}
+          chapterId={chapter.id}
+          disabled={editorLocked || saving || batchLocked || stuck}
+          hideLabel
+        />
+      </div>
+
+      <div>
+        <div style={{ marginBottom: 6 }}>
+          <Typography.Text strong style={{ fontSize: 13 }}>
+            本章写作风格
+          </Typography.Text>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '2px 0 6px' }}>
+            生成、润色与局部改写默认继承本章风格；未设置时继承项目默认风格。
+          </Typography.Paragraph>
+        </div>
+        <ChapterStyleSetting
+          pid={pid}
+          chapterId={chapter.id}
+          value={chapter.style_id}
+          projectDefault={projectDefaultStyle}
+          readOnly={managingOther}
+          disabled={editorLocked}
+          hideLabel
+          onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
+        />
+      </div>
+
+      <div
+        style={{
+          marginTop: 8,
+          padding: '12px 14px',
+          background: token.colorFillAlter,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: 8,
+        }}
+      >
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
+          章节概览
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 12px', fontSize: 12 }}>
+          <div>
+            <span style={{ color: token.colorTextSecondary }}>当前场景字数：</span>
+            <span style={{ fontWeight: 500 }}>{words} 字</span>
+          </div>
+          <div>
+            <span style={{ color: token.colorTextSecondary }}>全章合计字数：</span>
+            <span style={{ fontWeight: 500 }}>{chapter.word_count} 字</span>
+          </div>
+          <div>
+            <span style={{ color: token.colorTextSecondary }}>场景总数：</span>
+            <span style={{ fontWeight: 500 }}>{sceneEditor.page?.total ?? 0} 个</span>
+          </div>
+          <div>
+            <span style={{ color: token.colorTextSecondary }}>章节状态：</span>
+            <Tag color={status.color} style={{ margin: 0, fontSize: 11, lineHeight: '18px', padding: '0 4px' }}>
+              {status.label}
+            </Tag>
+          </div>
+        </div>
+      </div>
+    </Space>
+  )
+
+  const inspectorTabItems = useMemo(() => {
+    const items = []
+    if (canUseAI) {
+      items.push({ key: 'ai', label: 'AI 助手', icon: <RobotOutlined /> })
+    }
+    items.push(
+      { key: 'scene', label: '场景规划', icon: <FileTextOutlined /> },
+      { key: 'chapter', label: '章节设置', icon: <SettingOutlined /> },
+    )
+    return items
+  }, [canUseAI])
+
+  useEffect(() => {
+    if (!canUseAI && inspectorTab === 'ai') {
+      setInspectorTab('scene')
+    }
+  }, [canUseAI, inspectorTab])
+
+  const inspectorPanel = (
+    <Card
+      size="small"
+      styles={{
+        header: { padding: '4px 12px', minHeight: 46 },
+        body: { padding: '12px 14px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' },
+      }}
+      title={
+        <Tabs
+          activeKey={inspectorTab}
+          onChange={(k) => setInspectorTab(k as 'ai' | 'scene' | 'chapter')}
+          size="small"
+          style={{ marginBottom: -8 }}
+          items={inspectorTabItems}
+        />
+      }
+    >
+      {inspectorTab === 'ai' && aiPanelContent}
+      {inspectorTab === 'scene' && scenePlanningContent}
+      {inspectorTab === 'chapter' && chapterSettingsContent}
     </Card>
   )
 
@@ -916,7 +1117,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     <>
       {externalChapter && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="章节已被其他操作更新，本地场景草稿已保留" description="可加载最新章信息；场景草稿保留并单独核对，未保存的章节标题会在确认后替换。" action={<Button size="small" disabled={editorLocked || saving} onClick={() => confirm({ title: '加载最新章信息？', content: '未保存的章节标题会替换为服务端值；场景草稿仍保留，需单独核对。', onOk: async () => { if (!canEditNow()) return; const latest = await chapterApi.get(pid, chapter.id); if (!canEditNow()) return; replaceFromServer(latest); setExternalChapter(null) } })}>核对最新章信息</Button>} />}
       <div style={splitRow}>
-        <div ref={editorPaneRef} style={splitPane(640)}>
+        <div ref={editorPaneRef} style={inspectorOpen && !isMobile ? splitPane(640) : { flex: '1 1 100%', minWidth: 0 }}>
           <Card
             size="small"
             title={
@@ -973,45 +1174,91 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               variant="borderless"
               style={{ fontSize: 20, fontWeight: 600, paddingInline: 0, marginBottom: 8 }}
             />
-            <CastSelect pid={pid} chapterId={chapter.id} disabled={editorLocked || saving || batchLocked || stuck} />
-            <ChapterStyleSetting
-              pid={pid}
-              chapterId={chapter.id}
-              value={chapter.style_id}
-              projectDefault={projectDefaultStyle}
-              readOnly={managingOther}
-              disabled={editorLocked}
-              onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <Space size={8} wrap style={{ fontSize: 12 }}>
+                <Tag color="default" style={{ margin: 0, borderRadius: 10 }}>
+                  风格：{chapter.style_id ? '本章专属风格' : (projectDefaultStyle ? `默认 (${projectDefaultStyle.name})` : '继承项目')}
+                </Tag>
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: 'auto', fontSize: 12 }}
+                  onClick={() => {
+                    setInspectorTab('chapter')
+                    setInspectorOpen(true)
+                  }}
+                >
+                  ⚙️ 章节设置 (角色/风格) →
+                </Button>
+              </Space>
+            </div>
+            {otherSceneWriting && <Alert type="info" showIcon message="本章另一场景正在后台写作；当前草稿保留，完成后请核对最新版本。" style={{ marginBottom: 12 }} />}
+            <SceneWritingPanel
+              aiConfigId={aiConfigId}
+              styleChoice={styleChoice}
+              skillId={skillId}
+              onSectionLockChange={setSectionLocked}
+              onStructureDirtyChange={setStructureDirty}
+              onOpenInspectorTab={(tab) => {
+                setInspectorTab(tab)
+                setInspectorOpen(true)
+              }}
+              projectId={pid}
+              chapter={chapter}
+              state={sceneEditor}
+              controller={sceneEditor.controller}
+              disabled={editorLocked || batchLocked || saving || stuck}
+              selection={selection}
+              onSelection={setSelection}
+              ensureSaved={ensureSaved}
+              onChanged={() => { onChanged(); void reloadChapter(); void refreshProject(); void refreshAnalysis() }}
+              onSelect={async (sid) => { if (rewriteLocked || sectionLocked || aiRunning || saving) return false; if (!(await ensureSaved())) return false; const selected = await sceneEditor.controller.select(sid); if (selected) { setSelection({ start: 0, end: 0 }); const next = new URLSearchParams(searchParams); next.set('scene_id', String(sid)); setSearchParams(next, { replace: true }) } return selected }}
+              mentionAnchor={mentionAnchor}
+              markerJump={markerJump}
+              onNavigateMarker={async (target: MarkerLocation) => { if (rewriteLocked || sectionLocked || structureDirty || aiRunning || saving) { message.warning('请先完成当前场景排序或改写预览。'); return false } if (!(await ensureSaved())) return false; navigate(`/projects/${pid}/chapters/${target.chapterId}?scene_id=${target.sceneId}`, { state: { markerLocation: target } }); return true }}
             />
-            {otherSceneWriting && <Alert type="info" showIcon message="本章另一场景正在后台写作；当前草稿保留，完成后请核对最新版本。" />}
-            <SceneWritingPanel aiConfigId={aiConfigId} styleChoice={styleChoice} skillId={skillId} onSectionLockChange={setSectionLocked} onStructureDirtyChange={setStructureDirty} projectId={pid} chapter={chapter} state={sceneEditor} controller={sceneEditor.controller} disabled={editorLocked || batchLocked || saving || stuck} selection={selection} onSelection={setSelection} ensureSaved={ensureSaved} onChanged={() => { onChanged(); void reloadChapter(); void refreshProject(); void refreshAnalysis() }} onSelect={async (sid) => { if (rewriteLocked || sectionLocked || aiRunning || saving) return false; if (!(await ensureSaved())) return false; const selected = await sceneEditor.controller.select(sid); if (selected) { setSelection({ start: 0, end: 0 }); const next = new URLSearchParams(searchParams); next.set('scene_id', String(sid)); setSearchParams(next, { replace: true }) } return selected }} mentionAnchor={mentionAnchor} markerJump={markerJump} onNavigateMarker={async (target: MarkerLocation) => { if (rewriteLocked || sectionLocked || structureDirty || aiRunning || saving) { message.warning('请先完成当前场景排序或改写预览。'); return false } if (!(await ensureSaved())) return false; navigate(`/projects/${pid}/chapters/${target.chapterId}?scene_id=${target.sceneId}`, { state: { markerLocation: target } }); return true }} />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              最后更新：{formatTime(chapter.updated_at)} · Ctrl/⌘ + S 保存
-            </Typography.Text>
+            <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                最后更新：{formatTime(chapter.updated_at)} · Ctrl/⌘ + S 保存
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                场景 {scene ? scene.sort + 1 : 0} · {words} 字
+              </Typography.Text>
+            </div>
           </Card>
         </div>
-        {canUseAI && !isMobile && <div style={splitPane(264)}>{aiPanel}</div>}
+        {!isMobile && inspectorOpen && <div style={{ flex: '0 0 360px', width: 360, minWidth: 320 }}>{inspectorPanel}</div>}
       </div>
-      {canUseAI && isMobile && (
+      {isMobile && (
         <>
           <FloatButton
             type="primary"
-            icon={<RobotOutlined />}
-            tooltip="AI 助手"
+            icon={<SettingOutlined />}
+            tooltip="辅助面板"
             badge={aiRunning ? { dot: true } : undefined}
             style={{ insetInlineEnd: 24, bottom: 104 }}
             onClick={() => setAiPanelOpen(true)}
           />
           <Drawer
-            title="AI 助手"
+            title={inspectorTab === 'ai' ? '🤖 AI 助手' : inspectorTab === 'scene' ? '📋 场景规划' : '⚙️ 章节设置'}
+            extra={
+              <Segmented
+                size="small"
+                value={inspectorTab}
+                onChange={(val) => setInspectorTab(val as 'ai' | 'scene' | 'chapter')}
+                options={inspectorTabItems.map((item) => ({ value: item.key, label: item.label }))}
+              />
+            }
             placement="bottom"
             height="85vh"
             open={aiPanelOpen}
             forceRender
             onClose={() => setAiPanelOpen(false)}
-            styles={{ body: { padding: 8 } }}
+            styles={{ body: { padding: 12 } }}
           >
-            {aiPanel}
+            {inspectorTab === 'ai' && aiPanelContent}
+            {inspectorTab === 'scene' && scenePlanningContent}
+            {inspectorTab === 'chapter' && chapterSettingsContent}
           </Drawer>
         </>
       )}

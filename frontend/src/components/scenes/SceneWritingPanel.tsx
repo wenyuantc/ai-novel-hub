@@ -1,4 +1,5 @@
-import { Alert, App, Button, Drawer, Form, Input, Modal, Space, Spin, Typography } from 'antd'
+import { BookOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, OrderedListOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
+import { Alert, App, Button, Drawer, Input, Modal, Space, Spin, Tabs, Tag, theme, Typography } from 'antd'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MentionAnchor } from '../../api/mentions'
@@ -37,11 +38,16 @@ interface Props {
   onNavigateMarker: (location: MarkerLocation) => Promise<boolean>
   aiConfigId: number | null; styleChoice: StyleChoice; skillId: number | null
   onSectionLockChange: (locked: boolean) => void
+  onOpenInspectorTab?: (tab: 'ai' | 'scene' | 'chapter') => void
 }
 /** 当前场景独立编辑；整章仅通读服务端投影，不在浏览器重造正文拼接规则。 */
-export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, selection, onSelection, ensureSaved, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skillId, onSectionLockChange }: Props) {
+export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, selection, onSelection, ensureSaved, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skillId, onSectionLockChange, onOpenInspectorTab }: Props) {
   const { canEdit, canUseAI, canReadNow, canEditNow } = useProjectAccess(projectId)
   const { message, modal } = App.useApp()
+  const { token } = theme.useToken()
+  const [orderDrawerOpen, setOrderDrawerOpen] = useState(false)
+  const [planningDrawerOpen, setPlanningDrawerOpen] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(false)
   const [reading, setReading] = useState(!!mentionAnchor)
   const [mentions, setMentions] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
@@ -246,37 +252,366 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
     } catch (err) { if (canReadNow()) setLocationMessage(errorMessage(err)) }
     finally { if (canReadNow()) setLocating(false) }
   }
-  return <Space direction="vertical" size={12} style={{ width: '100%' }}>
-    <Space wrap><Button disabled={state.composing || sectionBusy} onClick={() => setReading(true)}>整章通读（只读）</Button><Button disabled={state.composing || sectionBusy} onClick={() => setTimelineOpen(true)}>全书标记</Button><Typography.Text type="secondary">正文编辑与摘要仅作用于当前场景</Typography.Text></Space>
-    <SceneNavigator projectId={projectId} chapterId={chapter.id} page={state.page} sceneId={scene?.id} disabled={disabled || sectionBusy || state.loading || state.composing} controller={controller} ensureSaved={ensureSaved} onChanged={onChanged} onSelect={onSelect} onDraftChange={onStructureDirtyChange} />
-    {state.error && <Alert type="error" showIcon message={state.error} action={<Button disabled={state.saving || disabled} onClick={() => void controller.load()}>重新读取目录（保留草稿）</Button>} />}
-    <SceneConflictReview state={state} controller={controller} disabled={!canEdit || disabled} />
-    {state.loading && <Spin />}
-    {scene && <>
-      <Form layout="vertical" disabled={!canEdit || disabled || sectionBusy || state.loading}>
-        <Form.Item label={`场景 ${scene.sort + 1} 标题`} style={{ marginBottom: 12 }}><Input aria-label="场景标题" value={state.draft.title} maxLength={200} onChange={(event) => controller.change({ title: event.target.value })} /></Form.Item>
-        <Form.Item label="作者摘要（独立保存，不自动推断）" style={{ marginBottom: 8 }}><Input.TextArea aria-label="场景摘要" value={state.draft.summary} maxLength={200000} autoSize={{ minRows: 2, maxRows: 6 }} onChange={(event) => controller.change({ summary: event.target.value })} /></Form.Item>
-      </Form>
-      <ScenePlanningPanel key={`planning:${scene.id}`} projectId={projectId} scene={scene} disabled={disabled || sectionBusy || state.loading || state.composing} ensureSaved={ensureSaved} onChanged={() => { void controller.load(); onChanged() }} />
-      <SceneSettingPreview key={`setting:${scene.id}:${scene.content_revision}`} projectId={projectId} chapterId={chapter.id} sceneId={scene.id} />
-      <SceneStructureActions key={`structure:${scene.id}`} projectId={projectId} chapterId={chapter.id} state={state} controller={controller} selection={selection} disabled={disabled || sectionBusy || state.loading || state.composing || !!unsupported} ensureSaved={ensureSaved} onChanged={onChanged} />
-      <Button disabled={state.composing || sectionBusy} aria-pressed={mentions} onClick={() => setMentions((old) => !old)}>{mentions ? '返回当前场景编辑' : '查看当前场景提及标记'}</Button>
-      {mentions ? <div style={{ padding: 8, fontSize: 16, lineHeight: 1.9 }}><MentionPreview projectId={projectId} text={state.draft.content} draft /></div> : unsupported || !state.documentDraft ? <>
-        <Alert type="warning" showIcon message="正文暂为只读" description={`${unsupported} 原文与作者资料未改变。`} />
-        <Input.TextArea ref={input} aria-label="当前场景正文" value={state.draft.content} readOnly onSelect={(event) => sync(event.currentTarget)} onKeyUp={(event) => sync(event.currentTarget)} onMouseUp={(event) => sync(event.currentTarget)} autoSize={{ minRows: 20 }} style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }} />
-      </> : <RichSceneEditor key={scene.id} ref={richEditor} document={state.documentDraft} savedDocument={state.document?.document} readOnly={!canEdit || disabled || sectionBusy || state.loading} onDocument={(next, evidence) => controller.changeDocument(next, evidence)} onCompositionChange={(value) => controller.setComposing(value)} onSelection={onSelection} onSectionConvert={convertSection} onSectionRewrite={canUseAI ? (value) => void openSectionRewrite(value) : undefined} />}
-    </>}
-    <Modal open={reading} title="整章通读 · 只读已保存正文" width={900} footer={<Space wrap>{mentionAnchor && <Button loading={locating} disabled={disabled} onClick={() => void locate()}>定位对应场景并编辑</Button>}<Button onClick={() => setReading(false)}>关闭通读</Button></Space>} onCancel={() => setReading(false)}>
-      <Alert type="info" message="按服务端保存的场景顺序通读；当前未保存的正文或摘要不在此预览中。" style={{ marginBottom: 12 }} />
-      {locationMessage && <Alert type="warning" showIcon message={locationMessage} style={{ marginBottom: 12 }} />}
-      <div style={{ maxHeight: '65vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 16, lineHeight: 1.9 }}><MentionPreview projectId={projectId} text={chapter.content} anchor={mentionAnchor} /></div>
-    </Modal>
-    <Drawer title="全书标记" open={timelineOpen} onClose={() => setTimelineOpen(false)} width="min(560px, 100vw)"
-      afterOpenChange={(open) => { if (!open && pendingTimelineFocus.current) { setFocus(pendingTimelineFocus.current); pendingTimelineFocus.current = null } }}>
-      <Typography.Paragraph type="secondary">重新关联前，请先在当前场景的正文选中文字；旧片段不会自动匹配。</Typography.Paragraph>
-      {timelineOpen && <MarkerTimeline projectId={projectId} refreshKey={scene?.content_revision} editable={canEdit && !disabled && !sectionBusy} onJump={jump} onRelink={relink} onDelete={deleteMarker} />}
-    </Drawer>
-    <RichSectionRewriteModal target={sectionTarget} aiConfigId={aiConfigId} styleChoice={styleChoice} skillId={skillId}
-      onClose={() => setSectionTarget(null)} onApplied={sectionApplied} onLockChange={onSectionLockChange} />
-  </Space>
+  const handleCreateScene = async () => {
+    if (!canEditNow() || disabled || sectionBusy || state.loading || state.composing || !(await ensureSaved())) return
+    const originalScene = controller.getSnapshot().scene
+    if (!originalScene || originalScene.content_revision === undefined) return
+    try {
+      const added = await sceneApi.create(projectId, chapter.id, {
+        expected_content_revision: originalScene.content_revision,
+        title: '新场景',
+        after_scene_id: originalScene.id,
+      })
+      await controller.load(added.id, false)
+      onChanged()
+      message.success('已创建独立场景')
+    } catch (err) {
+      if (canEditNow()) message.error(errorMessage(err))
+    }
+  }
+
+  const sceneTabs = (state.page?.items ?? []).map((item, index) => {
+    const isSelected = item.id === scene?.id
+    return {
+      key: String(item.id),
+      label: (
+        <Space size={6} style={{ fontWeight: isSelected ? 600 : 400 }}>
+          <span>{`场景 ${index + 1}${item.title ? ` · ${item.title}` : ''}`}</span>
+          <Tag
+            bordered={false}
+            color={isSelected ? 'processing' : 'default'}
+            style={{ marginInlineEnd: 0, fontSize: 12, paddingInline: 6 }}
+          >
+            {item.word_count ? `${item.word_count} 字` : '未写'}
+          </Tag>
+        </Space>
+      ),
+    }
+  })
+
+  return (
+    <div style={{ width: '100%' }}>
+      {/* 水平场景导航栏 */}
+      <div style={{ marginBottom: 8, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <Tabs
+          type="card"
+          size="small"
+          activeKey={scene ? String(scene.id) : undefined}
+          onChange={(k) => void onSelect(Number(k))}
+          items={sceneTabs}
+          style={{ marginBottom: 0 }}
+          tabBarStyle={{ marginBottom: 0 }}
+          tabBarExtraContent={
+            <Space size={6} wrap style={{ paddingBottom: 4 }}>
+              <Button
+                size="small"
+                type="dashed"
+                icon={<PlusOutlined />}
+                disabled={!canEdit || disabled || sectionBusy || state.loading || state.composing}
+                onClick={() => void handleCreateScene()}
+              >
+                新场景
+              </Button>
+              <Button
+                size="small"
+                icon={<OrderedListOutlined />}
+                disabled={disabled || sectionBusy || state.loading}
+                onClick={() => setOrderDrawerOpen(true)}
+              >
+                场景排序管理
+              </Button>
+              <Button
+                size="small"
+                icon={<BookOutlined />}
+                disabled={state.composing || sectionBusy}
+                onClick={() => setReading(true)}
+              >
+                整章通读
+              </Button>
+              <Button
+                size="small"
+                icon={<HistoryOutlined />}
+                disabled={state.composing || sectionBusy}
+                onClick={() => setTimelineOpen(true)}
+              >
+                全书标记
+              </Button>
+              <Button
+                size="small"
+                icon={<EyeOutlined />}
+                disabled={state.composing || sectionBusy}
+                aria-pressed={mentions}
+                onClick={() => setMentions((old) => !old)}
+              >
+                {mentions ? '返回编辑' : '提及标记'}
+              </Button>
+            </Space>
+          }
+        />
+      </div>
+
+      {/* 场景子栏 */}
+      {scene && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '6px 12px',
+            background: token.colorFillQuaternary,
+            borderRadius: 6,
+            marginBottom: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Space size={8} style={{ flex: '1 1 240px', minWidth: 180 }}>
+            <Typography.Text type="secondary" style={{ whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500 }}>
+              场景 {scene.sort + 1} 标题：
+            </Typography.Text>
+            <Input
+              aria-label="场景标题"
+              variant="borderless"
+              placeholder="输入场景标题"
+              value={state.draft.title}
+              maxLength={200}
+              onChange={(event) => controller.change({ title: event.target.value })}
+              disabled={!canEdit || disabled || sectionBusy || state.loading}
+              style={{ fontWeight: 600, fontSize: 14, padding: 0 }}
+            />
+          </Space>
+          <Space size={8} wrap>
+            {scene.planning?.effective && (
+              <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
+                POV: {scene.planning.effective.pov_character_name ?? '未指定'}（{scene.planning.effective.sources.pov === 'chapter' ? '继承' : '覆盖'}）
+              </Tag>
+            )}
+            <Button
+              size="small"
+              type={summaryOpen ? 'primary' : 'default'}
+              icon={<FileTextOutlined />}
+              onClick={() => setSummaryOpen((v) => !v)}
+            >
+              {summaryOpen ? '收起摘要' : '作者摘要'}
+            </Button>
+            <SceneStructureActions
+              key={`structure:${scene.id}`}
+              projectId={projectId}
+              chapterId={chapter.id}
+              state={state}
+              controller={controller}
+              selection={selection}
+              disabled={disabled || sectionBusy || state.loading || state.composing || !!unsupported}
+              ensureSaved={ensureSaved}
+              onChanged={onChanged}
+            />
+            <Button
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={() => {
+                if (onOpenInspectorTab) {
+                  onOpenInspectorTab('scene')
+                } else {
+                  setPlanningDrawerOpen(true)
+                }
+              }}
+            >
+              规划与设定
+            </Button>
+          </Space>
+        </div>
+      )}
+
+      {/* 展开的场景摘要 */}
+      {summaryOpen && scene && (
+        <div
+          style={{
+            padding: '8px 12px',
+            background: token.colorFillAlter,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 6,
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              作者摘要（独立保存，不自动推断，作为 AI 写作和整章结构上下文参考）
+            </Typography.Text>
+            <Button type="text" size="small" onClick={() => setSummaryOpen(false)}>
+              收起
+            </Button>
+          </div>
+          <Input.TextArea
+            aria-label="场景摘要"
+            value={state.draft.summary}
+            maxLength={200000}
+            placeholder="在此输入当前场景摘要、情节推进或注意事项..."
+            autoSize={{ minRows: 2, maxRows: 6 }}
+            onChange={(event) => controller.change({ summary: event.target.value })}
+            disabled={!canEdit || disabled || sectionBusy || state.loading}
+          />
+        </div>
+      )}
+
+      {/* 状态与冲突提示 */}
+      {state.error && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 8 }}
+          message={state.error}
+          action={<Button disabled={state.saving || disabled} onClick={() => void controller.load()}>重新读取目录（保留草稿）</Button>}
+        />
+      )}
+      <SceneConflictReview state={state} controller={controller} disabled={!canEdit || disabled} />
+      {state.loading && <Spin style={{ display: 'block', margin: '16px auto' }} />}
+
+      {/* 核心正文编辑器 */}
+      {scene && (
+        <>
+          {mentions ? (
+            <div style={{ padding: 8, fontSize: 16, lineHeight: 1.9 }}>
+              <MentionPreview projectId={projectId} text={state.draft.content} draft />
+            </div>
+          ) : unsupported || !state.documentDraft ? (
+            <>
+              <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="正文暂为只读" description={`${unsupported} 原文与作者资料未改变。`} />
+              <Input.TextArea
+                ref={input}
+                aria-label="当前场景正文"
+                value={state.draft.content}
+                readOnly
+                onSelect={(event) => sync(event.currentTarget)}
+                onKeyUp={(event) => sync(event.currentTarget)}
+                onMouseUp={(event) => sync(event.currentTarget)}
+                autoSize={{ minRows: 20 }}
+                style={{ fontSize: 16, lineHeight: 1.9, resize: 'none' }}
+              />
+            </>
+          ) : (
+            <RichSceneEditor
+              key={scene.id}
+              ref={richEditor}
+              document={state.documentDraft}
+              savedDocument={state.document?.document}
+              readOnly={!canEdit || disabled || sectionBusy || state.loading}
+              onDocument={(next, evidence) => controller.changeDocument(next, evidence)}
+              onCompositionChange={(value) => controller.setComposing(value)}
+              onSelection={onSelection}
+              onSectionConvert={convertSection}
+              onSectionRewrite={canUseAI ? (value) => void openSectionRewrite(value) : undefined}
+            />
+          )}
+        </>
+      )}
+
+      {/* 场景管理与排序抽屉 */}
+      <SceneNavigator
+        projectId={projectId}
+        chapterId={chapter.id}
+        page={state.page}
+        sceneId={scene?.id}
+        disabled={disabled || sectionBusy || state.loading || state.composing}
+        controller={controller}
+        ensureSaved={ensureSaved}
+        onChanged={onChanged}
+        onSelect={onSelect}
+        onDraftChange={onStructureDirtyChange}
+        open={orderDrawerOpen}
+        onClose={() => setOrderDrawerOpen(false)}
+      />
+
+      {/* 场景规划与有效设定抽屉 */}
+      <Drawer
+        title={scene ? `场景 ${scene.sort + 1} · 规划与有效设定` : '场景规划与有效设定'}
+        open={planningDrawerOpen}
+        onClose={() => setPlanningDrawerOpen(false)}
+        width="min(540px, 100vw)"
+      >
+        {scene && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Typography.Text strong>{`场景 ${scene.sort + 1} · ${scene.title || '未命名'}`}</Typography.Text>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+                字数：{scene.word_count ? `${scene.word_count} 字` : '未写'} · 内容版本 rev.{scene.content_revision}
+              </Typography.Paragraph>
+            </div>
+            <ScenePlanningPanel
+              key={`planning:${scene.id}`}
+              projectId={projectId}
+              scene={scene}
+              disabled={disabled || sectionBusy || state.loading || state.composing}
+              ensureSaved={ensureSaved}
+              onChanged={() => { void controller.load(); onChanged() }}
+            />
+            <SceneSettingPreview
+              key={`setting:${scene.id}:${scene.content_revision}`}
+              projectId={projectId}
+              chapterId={chapter.id}
+              sceneId={scene.id}
+            />
+          </Space>
+        )}
+      </Drawer>
+
+      {/* 整章通读弹窗 */}
+      <Modal
+        open={reading}
+        title="整章通读 · 只读已保存正文"
+        width={900}
+        footer={
+          <Space wrap>
+            {mentionAnchor && <Button loading={locating} disabled={disabled} onClick={() => void locate()}>定位对应场景并编辑</Button>}
+            <Button onClick={() => setReading(false)}>关闭通读</Button>
+          </Space>
+        }
+        onCancel={() => setReading(false)}
+      >
+        <Alert type="info" message="按服务端保存的场景顺序通读；当前未保存的正文或摘要不在此预览中。" style={{ marginBottom: 12 }} />
+        {locationMessage && <Alert type="warning" showIcon message={locationMessage} style={{ marginBottom: 12 }} />}
+        <div style={{ maxHeight: '65vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 16, lineHeight: 1.9 }}>
+          <MentionPreview projectId={projectId} text={chapter.content} anchor={mentionAnchor} />
+        </div>
+      </Modal>
+
+      {/* 全书标记时间线 */}
+      <Drawer
+        title="全书标记"
+        open={timelineOpen}
+        onClose={() => setTimelineOpen(false)}
+        width="min(560px, 100vw)"
+        afterOpenChange={(open) => {
+          if (!open && pendingTimelineFocus.current) {
+            setFocus(pendingTimelineFocus.current)
+            pendingTimelineFocus.current = null
+          }
+        }}
+      >
+        <Typography.Paragraph type="secondary">
+          重新关联前，请先在当前场景的正文选中文字；旧片段不会自动匹配。
+        </Typography.Paragraph>
+        {timelineOpen && (
+          <MarkerTimeline
+            projectId={projectId}
+            refreshKey={scene?.content_revision}
+            editable={canEdit && !disabled && !sectionBusy}
+            onJump={jump}
+            onRelink={relink}
+            onDelete={deleteMarker}
+          />
+        )}
+      </Drawer>
+
+      {/* 局部区块改写弹窗 */}
+      <RichSectionRewriteModal
+        target={sectionTarget}
+        aiConfigId={aiConfigId}
+        styleChoice={styleChoice}
+        skillId={skillId}
+        onClose={() => setSectionTarget(null)}
+        onApplied={sectionApplied}
+        onLockChange={onSectionLockChange}
+      />
+    </div>
+  )
 }

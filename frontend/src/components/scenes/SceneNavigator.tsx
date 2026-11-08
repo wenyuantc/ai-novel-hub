@@ -15,10 +15,12 @@ interface Props {
   controller: SceneDraftController; ensureSaved: () => Promise<boolean>; onChanged: () => void
   onSelect: (id: number) => Promise<boolean>
   onDraftChange: (dirty: boolean) => void
+  open?: boolean
+  onClose?: () => void
 }
 interface OrderDraft { ids: number[]; revision: number; conflict: boolean; latest?: ScenePage }
 /** 章内轻量场景目录；拖动和上下移共用拟排序，冲突时保留原方案供核对。 */
-export default function SceneNavigator({ projectId, chapterId, page, sceneId, disabled, controller, ensureSaved, onChanged, onSelect, onDraftChange }: Props) {
+export default function SceneNavigator({ projectId, chapterId, page, sceneId, disabled, controller, ensureSaved, onChanged, onSelect, onDraftChange, open: openProp, onClose }: Props) {
   const { message } = App.useApp()
   const { token } = theme.useToken()
   const { canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
@@ -95,7 +97,7 @@ export default function SceneNavigator({ projectId, chapterId, page, sceneId, di
         onDragOver={(event) => { if (!disabled && canEdit) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); if (dragged.current !== null) move(dragged.current, index); dragged.current = null }}>
         <Space direction="vertical" size={4} style={{ width: '100%' }}><Space wrap>
           <span draggable={canEdit && !disabled && !working} onDragStart={() => { dragged.current = id }} onDragEnd={() => { dragged.current = null }} title="拖动调整本章场景顺序" style={{ cursor: 'grab' }}><HolderOutlined aria-label="场景拖动手柄" /></span>
-          <Button type={id === sceneId ? 'primary' : 'text'} size="small" style={{ maxWidth: '100%', height: 'auto', whiteSpace: 'normal', textAlign: 'start' }} disabled={disabled || working || !!order} onClick={() => void onSelect(id).then((selected) => { if (selected) setOpen(false) })}>{sceneLabel(scene)}</Button>
+          <Button type={id === sceneId ? 'primary' : 'text'} size="small" style={{ maxWidth: '100%', height: 'auto', whiteSpace: 'normal', textAlign: 'start' }} disabled={disabled || working || !!order} onClick={() => void onSelect(id).then((selected) => { if (selected) { setOpen(false); onClose?.() } })}>{sceneLabel(scene)}</Button>
           <Tag>{scene.word_count ? `${scene.word_count} 字` : '未写'}</Tag>
         </Space>
         {scene.summary && <Typography.Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>{scene.summary}</Typography.Paragraph>}
@@ -109,5 +111,19 @@ export default function SceneNavigator({ projectId, chapterId, page, sceneId, di
       {sameSceneIds(order.ids, order.latest.items.map((item) => item.id)) ? <><Checkbox checked={checked} onChange={(event) => setChecked(event.target.checked)}>已核对，仍采用上方拟排序</Checkbox><Button disabled={!checked || !canEdit} onClick={() => { if (!canEditNow() || order.latest?.content_revision === null || order.latest?.content_revision === undefined) return; setOrder({ ...order, revision: order.latest.content_revision, conflict: false, latest: undefined }); setError('') }}>使用已核对版本，保留拟排序</Button></> : <Typography.Text type="danger">场景已增删，请先保留记录，再放弃拟排序并重新加载；不能自动合并身份列表。</Typography.Text>}
     </>}</Space>} />}
   </Space>
+  if (openProp !== undefined) {
+    return (
+      <Drawer
+        title="场景目录与排序管理"
+        open={openProp}
+        placement={isMobile ? 'bottom' : 'right'}
+        width="min(540px, 100vw)"
+        height={isMobile ? '80vh' : undefined}
+        onClose={onClose}
+      >
+        {list}
+      </Drawer>
+    )
+  }
   return isMobile ? <><Button block onClick={() => setOpen(true)} style={{ marginBottom: 12 }}>场景目录 · {page?.items.find((item) => item.id === sceneId)?.title || '当前场景'}</Button><Drawer title="本章场景" open={open} placement="bottom" height="80vh" onClose={() => setOpen(false)}>{list}</Drawer></> : <div role="region" aria-label="本章场景导航与排序" tabIndex={0} style={{ marginBlock: 12, maxHeight: 360, overflow: 'auto', padding: 2 }}>{list}</div>
 }
