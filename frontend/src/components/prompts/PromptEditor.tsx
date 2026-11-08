@@ -25,6 +25,8 @@ import type { PromptPreview, PromptTemplateDetail, TemplateIssue, TemplatePart, 
 import { useLoader } from '../../hooks/useLoader'
 import { formatIssue, issuesForPart, issuesFromError, lineRange, PART_LABELS, templateBadges } from '../../utils/prompts'
 import { formatTime } from '../../utils/time'
+import { componentRef, insertSnippet } from '../../utils/promptComponents'
+import { ComponentInsertSelect, ComponentRefTags } from '../promptComponents/ComponentRefs'
 import PromptDiffModal from './PromptDiffModal'
 import PromptPreviewPane from './PromptPreviewPane'
 import PromptThreeWayModal from './PromptThreeWayModal'
@@ -156,20 +158,21 @@ function EditorInner({ detail, onDetail, onDirtyChange }: InnerProps) {
     el.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
-  const insertVar = (v: TemplateVar) => {
+  /** 在最近聚焦段的光标处插入片段（没有光标时插在末尾） */
+  const insertText = (snippet: string) => {
     const part = showSystem ? lastFocused : 'user'
-    const text = textOf(part)
-    const snippet = `{{ ${v.name} }}`
-    const [start, end] = carets[part] ?? [text.length, text.length]
-    setTextOf(part, text.slice(0, start) + snippet + text.slice(end))
-    setCarets((prev) => ({ ...prev, [part]: [start + snippet.length, start + snippet.length] }))
+    const next = insertSnippet(textOf(part), snippet, carets[part])
+    setTextOf(part, next.text)
+    setCarets((prev) => ({ ...prev, [part]: [next.caret, next.caret] }))
     requestAnimationFrame(() => {
       const el = textareaOf(part)
       if (!el) return
       el.focus()
-      el.setSelectionRange(start + snippet.length, start + snippet.length)
+      el.setSelectionRange(next.caret, next.caret)
     })
   }
+
+  const insertVar = (v: TemplateVar) => insertText(`{{ ${v.name} }}`)
 
   const run = async (name: string, fn: () => Promise<void>) => {
     setBusy(name)
@@ -351,6 +354,15 @@ function EditorInner({ detail, onDetail, onDirtyChange }: InnerProps) {
               {general.map((i, idx) => (
                 <Alert key={idx} type="error" showIcon message={formatIssue(i)} />
               ))}
+              <Space wrap size={8}>
+                {/* 预览按编辑器当前内容解析引用；预览还没返回时用已保存覆盖的引用 */}
+                <ComponentRefTags components={preview?.components ?? detail.components ?? []} />
+                <Tooltip title="在最近编辑段的光标处插入 {{> 标识 }}，保存时按原样展开组件内容再校验">
+                  <span>
+                    <ComponentInsertSelect onInsert={(slug) => insertText(componentRef(slug))} />
+                  </span>
+                </Tooltip>
+              </Space>
               <Space wrap>
                 <Input
                   placeholder="版本备注（可选）"

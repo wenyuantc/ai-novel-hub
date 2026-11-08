@@ -60,6 +60,7 @@ from app.models.planning import (
     SubplotNode,
 )
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
+from app.models.prompt_components import PromptComponent
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.rich_document import (
     SceneDocumentMeta,
@@ -136,6 +137,7 @@ __all__ = [
     "SubplotCrossing",
     "SubplotCrossingParticipant",
     "SubplotNode",
+    "PromptComponent",
     "PromptOverrideVersion",
     "PromptTemplateOverride",
     "Relationship",

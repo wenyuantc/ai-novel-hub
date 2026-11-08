@@ -68,5 +68,5 @@ async def restore_version(key: str, version_id: int, user: CurrentUser, db: DbDe
 
 
 @router.post("/{key}/preview", response_model=PromptPreviewOut)
-async def preview_template(key: str, body: PromptPreviewRequest, user: CurrentUser) -> PromptPreviewOut:
-    return svc.preview(key, body)
+async def preview_template(key: str, body: PromptPreviewRequest, user: CurrentUser, db: DbDep) -> PromptPreviewOut:
+    return await svc.preview(db, user.id, key, body)

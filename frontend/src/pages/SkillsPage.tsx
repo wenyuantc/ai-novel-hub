@@ -4,6 +4,7 @@ import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
 import { PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Col, Empty, Row, Space, Spin, Tabs, Typography, Upload } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { errorMessage } from '../api/client'
 import { SKILL_LIMITS, skillApi } from '../api/skills'
 import type { Skill, SkillBrief, SkillScope } from '../api/types'
@@ -29,7 +30,15 @@ export default function SkillsPage() {
   const reload = useSkillStore((s) => s.load)
   const { mine, global } = useMemo(() => splitSkills(skills), [skills])
   const [tab, setTab] = useState<SkillScope>('mine')
-  const [editing, setEditing] = useState<Editing>(null)
+  // 从组件库的使用关系跳转过来（?skill=id，只会是我的 Skill）：挂载时打开抽屉，随后去掉参数
+  const [searchParams, setSearchParams] = useSearchParams()
+  const linkedSkill = searchParams.get('skill')
+  const [editing, setEditing] = useState<Editing>(() =>
+    linkedSkill && /^\d+$/.test(linkedSkill) ? { id: Number(linkedSkill), scope: 'mine' } : null,
+  )
+  useEffect(() => {
+    if (linkedSkill) setSearchParams({}, { replace: true })
+  }, [linkedSkill, setSearchParams])
   useAuthorizationCleanup(() => {
     if (useAuthStore.getState().user?.id !== actor?.id || editing?.scope === 'global') setEditing(null)
     if (confirmation.current?.global || useAuthStore.getState().user?.id !== actor?.id) { confirmation.current?.destroy(); confirmation.current = null }

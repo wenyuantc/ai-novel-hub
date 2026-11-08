@@ -4,6 +4,8 @@
 - 写：本人的 Skill 本人可写；全局 Skill 只有管理员可写，其他人可见但写操作 403（403 只用于「可见但不可写」）。
 - 导入 / 导出：SKILL.md（frontmatter + 正文），有参考资料时为 zip（SKILL.md + references/*.md）。
 - 触发词：只匹配消息开头的 `/词`（后接空白或结束），大小写不敏感，本人的 Skill 优先于全局。
+- 组件引用 `{{> 标识 }}`：保存 / 导入时校验引用的组件属于所有者且存在；全局 Skill 禁止引用组件。
+  快照、智能体 load_skill、导出都使用展开后的正文（库内存原文）。
 """
 
 import io
@@ -17,11 +19,13 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.components import expand, expand_lenient, has_refs
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import Skill, SkillReference, User
 from app.schemas.skill import (
     MAX_REFERENCES,
     SkillBrief,
+    SkillComponentRef,
     SkillCreate,
     SkillOut,
     SkillReferenceIn,
@@ -30,6 +34,7 @@ from app.schemas.skill import (
     SkillUpdate,
 )
 from app.services import authorization_service as authz
+from app.services import component_lookup
 from app.services.audit_writer import AuditOperation
 from app.skills import SkillFormatError, builtin_fields, dump_skill_md, parse_skill_md
 
@@ -41,6 +46,7 @@ MAX_UNZIPPED_BYTES = 5 * 1024 * 1024
 TOO_LARGE = "Skill 文件过大，上限为 2MB"
 NOT_FOUND = "Skill 不存在"
 GLOBAL_READONLY = "全局 Skill 只有管理员可以修改，可以复制为自己的副本后修改"
+GLOBAL_NO_COMPONENTS = "全局 Skill 不能引用提示词组件，请把组件内容直接写进正文"
 _TRIGGER = re.compile(r"^/(\S+)(?:\s|$)")
 _REF_PREFIX = re.compile(r"^\d{2}-")
 
@@ -92,7 +98,28 @@ async def to_out(db: AsyncSession, user: User, skill: Skill) -> SkillOut:
         **_brief(user, skill, refs, global_update=await authz.allows(db, user, "global_skills.update")),
         body=skill.body,
         references=[SkillReferenceOut.model_validate(r) for r in refs],
+        components=[SkillComponentRef(**c) for c in await component_lookup.refs(db, skill.owner_user_id, skill.body)],
     )
+
+
+async def check_components(db: AsyncSession, owner_id: int | None, body: str) -> None:
+    """保存前校验正文中的组件引用：全局 Skill 不能引用；私有 Skill 只能引用所有者本人存在的组件。"""
+    if not has_refs(body):
+        return
+    if owner_id is None:
+        raise BadRequestError(GLOBAL_NO_COMPONENTS)
+    errors = expand(body, await component_lookup.contents(db, owner_id)).errors
+    if errors:
+        reasons = "；".join(f"第 {line} 行：{msg}" for line, _, msg in errors)
+        raise BadRequestError(f"Skill 正文中的组件引用有误：{reasons}")
+
+
+async def expanded_body(db: AsyncSession, skill: Skill) -> str:
+    """展开组件后的正文；没有引用时原样返回。解析不到的引用原样保留（兼容旧正文中的字面 `{{>`）。"""
+    if not has_refs(skill.body):
+        return skill.body
+    contents = await component_lookup.contents(db, skill.owner_user_id)
+    return expand_lenient(skill.body, contents)
 
 
 async def visible_skills(db: AsyncSession, user_id: int) -> list[Skill]:
@@ -203,6 +230,7 @@ def _set_references(db: AsyncSession, skill_id: int, refs: list[SkillReferenceIn
 async def _create_skill(db: AsyncSession, user: User, req: SkillCreate, audit: AuditOperation) -> SkillOut:
     audit.values["target_label"] = req.name
     owner = await _owner_for(db, user, req.scope)
+    await check_components(db, owner, req.body)
     await _check_quota(db, owner)
     skill = Skill(
         owner_user_id=owner,
@@ -238,6 +266,8 @@ async def update_skill(db: AsyncSession, user: User, skill_id: int, req: SkillUp
                 if not value:
                     raise BadRequestError("名称不能为空")
             setattr(skill, key, value)
+        if req.body is not None:
+            await check_components(db, skill.owner_user_id, skill.body)
         await audit.commit(_commit_unique, flush_fn=_flush_unique)
         await db.refresh(skill)
         return await to_out(db, user, skill)
@@ -462,7 +492,8 @@ async def export_skill(db: AsyncSession, user: User, skill_id: int) -> tuple[str
         meta["category"] = skill.category
     if skill.triggers:
         meta["triggers"] = list(skill.triggers)
-    text = dump_skill_md(meta, skill.body)
+    # 离开作者本人：组件引用展开为正文
+    text = dump_skill_md(meta, await expanded_body(db, skill))
     if not refs:
         return f"{skill.slug}.SKILL.md", "text/markdown; charset=utf-8", text.encode("utf-8")
     buffer = io.BytesIO()
@@ -500,15 +531,16 @@ async def match_trigger(db: AsyncSession, user_id: int, text: str) -> Skill | No
     return None
 
 
-def snapshot_of(skill: Skill) -> dict[str, Any]:
-    return {"id": skill.id, "name": skill.name, "body": skill.body[:SNAPSHOT_LIMIT]}
+async def snapshot_of(db: AsyncSession, skill: Skill) -> dict[str, Any]:
+    """快照展开组件后的正文；之后修改组件不影响已有任务及其重试。"""
+    return {"id": skill.id, "name": skill.name, "body": (await expanded_body(db, skill))[:SNAPSHOT_LIMIT]}
 
 
 async def snapshot(db: AsyncSession, user_id: int, skill_id: int | None) -> dict[str, Any] | None:
     """生成任务创建时快照 Skill 正文（不可见 → 404）；之后编辑 Skill 不影响已有任务。"""
     if skill_id is None:
         return None
-    return snapshot_of(await get_visible_skill(db, user_id, skill_id))
+    return await snapshot_of(db, await get_visible_skill(db, user_id, skill_id))
 
 
 def skill_log(snap: dict[str, Any] | None) -> dict[str, Any] | None:

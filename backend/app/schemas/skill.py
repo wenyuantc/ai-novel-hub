@@ -139,9 +139,17 @@ class SkillBrief(BaseModel):
     updated_at: datetime
 
 
+class SkillComponentRef(BaseModel):
+    id: int
+    slug: str
+    name: str
+
+
 class SkillOut(SkillBrief):
     body: str
     references: list[SkillReferenceOut]
+    # 正文引用的所有者本人的提示词组件
+    components: list[SkillComponentRef] = Field(default_factory=list)
 
 
 class SkillRef(BaseModel):

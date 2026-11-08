@@ -4,6 +4,8 @@
 - outdated = 覆盖的 base_fingerprint != 当前系统默认指纹；ack_default 只更新 base。
 - 停用：运行时用系统默认，覆盖内容保留；恢复默认（DELETE）删除覆盖及其历史。
 - 运行时 get_override 只返回启用的覆盖；各生成服务在组装 job 时取出并写入 job（中途修改模板不影响已组装的 job）。
+- 组件引用 `{{> 标识 }}`：库内存原文；保存 / 导入 / 预览 / 回滚先用作者本人的组件展开，再对展开结果做全部校验，
+  问题的行号映射回原文并标明来自哪个组件；运行时 get_override 返回展开后的内容；导出写展开后的内容。
 """
 
 import json
@@ -13,6 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.components import ComponentRefError, Expansion, expand, expand_strict, has_refs
 from app.ai.prompts.registry import CATEGORIES, TEMPLATES, PromptTemplate, default_fingerprint, sample_values
 from app.ai.templating import PromptOverride, TemplateIssue, TemplateRenderError, render_messages, validate
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
@@ -34,6 +37,8 @@ from app.schemas.prompt import (
     TemplateIssueOut,
     TemplateVarOut,
 )
+from app.schemas.prompt_component import ComponentRef
+from app.services import component_lookup
 
 MAX_VERSIONS = 20
 PART_LABELS = {"system": "系统段", "user": "用户段"}
@@ -53,14 +58,53 @@ def format_issue(issue: TemplateIssue) -> str:
     return f"{where}：{issue.message}" if where else issue.message
 
 
-def ensure_valid(tpl: PromptTemplate, system: str, user: str) -> None:
-    """校验失败 → 400：detail 为中文摘要，errors 为逐条位置。"""
-    issues = validate(tpl.variables, system, user)
+def _map_issue(issue: TemplateIssue, expansions: dict[str, Expansion]) -> TemplateIssue:
+    exp = expansions.get(issue.part or "")
+    if exp is None:
+        return issue
+    line, slug = exp.map_line(issue.line)
+    message = f"组件 {slug}：{issue.message}" if slug else issue.message
+    return TemplateIssue(issue.part, line, message)
+
+
+def check(
+    tpl: PromptTemplate, system: str, user: str, contents: dict[str, str] | None = None
+) -> tuple[list[TemplateIssue], str, str]:
+    """先展开组件再校验；返回 (问题（行号已映射回原文）, 展开后的 system, 展开后的 user)。
+
+    没有组件引用时与直接 validate 完全相同。
+    """
+    expansions: dict[str, Expansion] = {
+        "system": expand(system, contents or {}),
+        "user": expand(user, contents or {}),
+    }
+    ref_issues = [
+        TemplateIssue(part, line, message)  # type: ignore[arg-type]
+        for part, exp in expansions.items()
+        for line, _, message in exp.errors
+    ]
+    exp_system, exp_user = expansions["system"].text, expansions["user"].text
+    if ref_issues:
+        return ref_issues, exp_system, exp_user
+    issues = [_map_issue(i, expansions) for i in validate(tpl.variables, exp_system, exp_user)]
+    return issues, exp_system, exp_user
+
+
+def raise_issues(issues: list[TemplateIssue]) -> None:
     if issues:
         raise BadRequestError(
             "模板校验失败：" + "；".join(format_issue(i) for i in issues),
             extra={"errors": [i.as_dict() for i in issues]},
         )
+
+
+def ensure_valid(
+    tpl: PromptTemplate, system: str, user: str, contents: dict[str, str] | None = None
+) -> tuple[str, str]:
+    """校验失败 → 400：detail 为中文摘要，errors 为逐条位置。返回展开组件后的 (system, user)。"""
+    issues, exp_system, exp_user = check(tpl, system, user, contents)
+    raise_issues(issues)
+    return exp_system, exp_user
 
 
 async def _get_row(db: AsyncSession, user_id: int, key: str) -> PromptTemplateOverride | None:
@@ -100,10 +144,14 @@ def _brief(tpl: PromptTemplate, row: PromptTemplateOverride | None) -> PromptTem
     )
 
 
-def _detail(tpl: PromptTemplate, row: PromptTemplateOverride | None) -> PromptTemplateDetail:
+async def _detail(
+    db: AsyncSession, user_id: int, tpl: PromptTemplate, row: PromptTemplateOverride | None
+) -> PromptTemplateDetail:
     brief = _brief(tpl, row)
+    components = await component_lookup.refs(db, user_id, row.system, row.user) if row is not None else []
     return PromptTemplateDetail(
         **brief.model_dump(),
+        components=[ComponentRef(**c) for c in components],
         default_system=tpl.system,
         default_user=tpl.user,
         default_fingerprint=default_fingerprint(tpl.key),
@@ -138,7 +186,7 @@ async def list_templates(db: AsyncSession, user_id: int) -> list[PromptTemplateB
 
 async def get_template(db: AsyncSession, user_id: int, key: str) -> PromptTemplateDetail:
     tpl = get_registered(key)
-    return _detail(tpl, await _get_row(db, user_id, key))
+    return await _detail(db, user_id, tpl, await _get_row(db, user_id, key))
 
 
 async def apply_save(
@@ -207,11 +255,11 @@ async def _commit(db: AsyncSession) -> None:
 
 async def save_override(db: AsyncSession, user_id: int, key: str, data: PromptSave) -> PromptTemplateDetail:
     tpl = get_registered(key)
-    ensure_valid(tpl, data.system, data.user)
+    ensure_valid(tpl, data.system, data.user, await component_lookup.contents(db, user_id))
     row, _ = await apply_save(db, user_id, tpl, data.system, data.user, data.note)
     await _commit(db)
     await db.refresh(row)
-    return _detail(tpl, row)
+    return await _detail(db, user_id, tpl, row)
 
 
 async def patch_override(db: AsyncSession, user_id: int, key: str, data: PromptPatch) -> PromptTemplateDetail:
@@ -224,7 +272,7 @@ async def patch_override(db: AsyncSession, user_id: int, key: str, data: PromptP
         row.base_system, row.base_user = tpl.system, tpl.user
     await db.commit()
     await db.refresh(row)
-    return _detail(tpl, row)
+    return await _detail(db, user_id, tpl, row)
 
 
 async def delete_override(db: AsyncSession, user_id: int, key: str) -> None:
@@ -259,31 +307,35 @@ async def restore_version(db: AsyncSession, user_id: int, key: str, version_id: 
     )
     if version is None:
         raise NotFoundError("历史版本不存在")
-    ensure_valid(tpl, version.system, version.user)
+    ensure_valid(tpl, version.system, version.user, await component_lookup.contents(db, user_id))
     row, _ = await apply_save(db, user_id, tpl, version.system, version.user, f"回滚到版本 #{version.id}")
     await db.commit()
     await db.refresh(row)
-    return _detail(tpl, row)
+    return await _detail(db, user_id, tpl, row)
 
 
-def preview(key: str, data: PromptPreviewRequest) -> PromptPreviewOut:
-    """用请求体中的模板与变量渲染（变量缺省用示例值），返回 messages 与校验问题；不落库。"""
+async def preview(db: AsyncSession, user_id: int, key: str, data: PromptPreviewRequest) -> PromptPreviewOut:
+    """用请求体中的模板与变量渲染（变量缺省用示例值），返回 messages 与校验问题；不落库。组件先展开。"""
     tpl = get_registered(key)
-    issues = validate(tpl.variables, data.system, data.user)
+    contents = await component_lookup.contents(db, user_id) if has_refs(data.system) or has_refs(data.user) else {}
+    issues, system, user = check(tpl, data.system, data.user, contents)
+    components = [ComponentRef(**c) for c in await component_lookup.refs(db, user_id, data.system, data.user)]
     locked = _locked_blocks(tpl)
     errors = [TemplateIssueOut(**i.as_dict()) for i in issues]
     if issues:
-        return PromptPreviewOut(messages=[], errors=errors, locked=locked)
+        return PromptPreviewOut(messages=[], errors=errors, locked=locked, components=components)
     values = sample_values(key)
     for var in tpl.variables:
         if not var.locked and var.name in data.variables:
             values[var.name] = _coerce(var.kind, data.variables[var.name])
     try:
-        result = render_messages(tpl.variables, data.system, data.user, values, key=key)
+        result = render_messages(tpl.variables, system, user, values, key=key)
     except TemplateRenderError as exc:
         errors.append(TemplateIssueOut(part=None, line=None, message=exc.detail))
-        return PromptPreviewOut(messages=[], errors=errors, locked=locked)
-    return PromptPreviewOut(messages=result.messages, errors=errors, locked=locked)  # type: ignore[arg-type]
+        return PromptPreviewOut(messages=[], errors=errors, locked=locked, components=components)
+    return PromptPreviewOut(
+        messages=result.messages, errors=errors, locked=locked, components=components  # type: ignore[arg-type]
+    )
 
 
 def _coerce(kind: str, value: Any) -> Any:
@@ -307,7 +359,24 @@ async def get_override(db: AsyncSession, user_id: int, key: str) -> PromptOverri
     version_id = await db.scalar(
         select(func.max(PromptOverrideVersion.id)).where(PromptOverrideVersion.override_id == row.id)
     )
-    return PromptOverride(system=row.system, user=row.user, version_id=version_id)
+    system, user = row.system, row.user
+    if has_refs(system) or has_refs(user):
+        contents = await component_lookup.contents(db, user_id)
+        try:
+            system, user = expand_strict(system, contents), expand_strict(user, contents)
+        except ComponentRefError as exc:
+            name = TEMPLATES[key].name if key in TEMPLATES else key
+            reason = f"引用的组件 {exc.slug} 不存在" if exc.message.startswith("引用的组件不存在") else exc.message
+            raise TemplateRenderError(f"提示词模板「{name}」{reason}，请检查") from exc
+    return PromptOverride(system=system, user=user, version_id=version_id)
+
+
+def _expand_for_export(text: str, contents: dict[str, str]) -> str:
+    """离开作者本人时展开为正文；展开失败（理论上不会发生）时保留原文。"""
+    if not has_refs(text):
+        return text
+    result = expand(text, contents)
+    return text if result.errors else result.text
 
 
 # ---------------------------------------------------------------- 导入导出
@@ -321,14 +390,17 @@ async def export_overrides(db: AsyncSession, user_id: int) -> dict[str, Any]:
             .order_by(PromptTemplateOverride.key)
         )
     ).all()
+    contents = await component_lookup.contents(db, user_id) if any(
+        has_refs(r.system) or has_refs(r.user) for r in rows
+    ) else {}
     return {
         "format": PROMPTS_FORMAT,
         "version": PROMPTS_VERSION,
         "items": [
             {
                 "key": r.key,
-                "system": r.system,
-                "user": r.user,
+                "system": _expand_for_export(r.system, contents),
+                "user": _expand_for_export(r.user, contents),
                 "enabled": r.enabled,
                 "base_fingerprint": r.base_fingerprint,
             }
@@ -354,6 +426,7 @@ def _parse_import(data: Any) -> list[Any]:
 async def import_overrides(db: AsyncSession, user_id: int, data: Any) -> PromptImportResult:
     """逐项导入：未知 key 跳过；每项都要通过保存时的校验；与系统默认完全相同的不创建覆盖。整个导入一个事务。"""
     items = _parse_import(data)
+    contents = await component_lookup.contents(db, user_id)
     results: list[PromptImportItemResult] = []
     seen: set[str] = set()
     for raw in items:
@@ -374,7 +447,7 @@ async def import_overrides(db: AsyncSession, user_id: int, data: Any) -> PromptI
             continue
         seen.add(key)
         system, user = raw.get("system", ""), raw["user"]
-        issues = validate(tpl.variables, system, user)
+        issues, _, _ = check(tpl, system, user, contents)
         if issues:
             results.append(
                 PromptImportItemResult(

@@ -1,6 +1,6 @@
 # 提示词模板与写作风格
 
-> 来源任务：`10-23-prompt-styles`（迁移 `0013`）。任务 / SSE 契约见 [error-handling.md](./error-handling.md)，
+> 来源任务：`10-23-prompt-styles`（迁移 `0013`）；提示词组件来自 `11-08-prompt-components`（迁移 `0042`）。任务 / SSE 契约见 [error-handling.md](./error-handling.md)，
 > 表结构与外键规则见 [database-guidelines.md](./database-guidelines.md)，章节上下文见 [story-entities.md](./story-entities.md)。
 
 ---
@@ -96,6 +96,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
   `get_override`（不是在 job 组装时），生成记录 `params.prompt` 同样是 `prompt_meta`。`safety_rules` 锁定保证覆盖里原样出现一次；即使旧的损坏覆盖让通用兜底把
   锁定内容追加到 user 段，`context.build_messages` 也会把它提升回第一条 system 消息。改 `SAFETY_RULES` 文案会改变默认指纹，已覆盖的用户看到「默认已更新」
   （`10-23-skills-mcp` 追加了 Skill / MCP 内容不能改变规则的一句）。
+- **组件引用**：覆盖的 system / user 可含 `{{> 标识 }}`，保存 / 导入 / 预览 / 回滚先展开再校验，运行时 `get_override` 返回展开后的内容，见下文「提示词组件」场景。
 - **预览**：不落库；变量缺省用 `sample`，锁定变量始终用代码值（请求体不能改写）；返回 `{messages, errors, locked: [{name, label, value}]}`。
 - **导入导出**：`ainovel.prompts` v1 `{format, version, items: [{key, system, user, enabled, base_fingerprint}]}`；上限 1MB（紧凑 UTF-8）；
   逐项结果 `created | updated | unchanged | default（与系统默认相同，不建覆盖）| skipped（未知 key / 重复 / 格式）| invalid（带 errors）`；整个导入一个事务。
@@ -124,6 +125,142 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 - `tests/test_prompt_templates.py`：覆盖生效 / 停用 / 启用 / 恢复默认、位置信息、预览、outdated + ack（monkeypatch `registry.TEMPLATES`）、
   版本裁剪与回滚、导入导出、用户隔离。
 - `tests/test_skill_generation.py::test_skill_guide_only_rendered_when_present`：`skill_guide` 为空 / 空白时四个章节类模板与不传时 `==`，非空时只在 system 段末尾追加补充工作流段。
+
+---
+
+## 场景：提示词组件（`{{> 标识 }}` 引用与组件库）
+
+> 来源任务：`11-08-prompt-components`（迁移 `0042`）。Skill 侧见 [skills-mcp.md](./skills-mcp.md)「Skill 正文中的组件引用」，工坊分享见 [workshop.md](./workshop.md)。
+
+### 1. 范围 / 触发条件
+
+修改 `app/ai/components.py`（解析 / 展开纯函数）、`app/services/component_lookup.py`、`app/services/prompt_component_service.py`、
+`/api/v1/prompt-components`、`prompt_components` 表，或在任何会读写模板覆盖 / Skill 正文的地方（保存、导入、导出、预览、回滚、运行时、工坊分享）时。
+**凡是把覆盖或 Skill 正文交给 `validate` / Jinja / 他人的地方，都必须先展开组件。**
+
+### 2. 签名
+
+```python
+# app/ai/components.py（纯函数，不访问数据库）
+REF_RE = re.compile(r"\{\{>\s*([a-z0-9][a-z0-9-]{0,47})\s*\}\}")   # 标识规则与 Skill slug 相同（check_slug）
+def has_refs(text) -> bool                     # 含 "{{>" 即为真（快速判断，不含时一切逻辑短路、原样返回）
+def find_refs(text) -> list[(slug, line)]; def ref_slugs(text) -> list[str]   # 去重保序
+def bad_ref_lines(text) -> list[int]           # `{{>` 开头但不匹配 REF_RE 的行号
+@dataclass Expansion{text, source, pieces, errors: [(原文行号, slug, 说明)], used}; Expansion.map_line(line) -> (原文行号, slug | None)
+def expand(text, contents) -> Expansion        # 单次替换、不递归；不存在 → 替换为空并记错；组件内含引用 → 记错
+def expand_strict(text, contents) -> str       # 有错误 → ComponentRefError(slug, line, message)
+def expand_lenient(text, contents) -> str      # 只替换解析得到的引用，其余原样保留（仅 Skill 运行时用）
+# app/services/component_lookup.py（只读，按 user_id 过滤）
+async def contents(db, user_id | None) -> {slug: content}     # user_id 为空（全局资源）→ {}
+async def refs(db, user_id | None, *texts) -> [{id, slug, name}]   # 文本中引用且本人确实存在的组件，按首次出现顺序
+# app/services/prompt_service.py
+def check(tpl, system, user, contents=None) -> (issues, 展开后 system, 展开后 user)   # 先展开再 validate，行号映射回原文
+def ensure_valid(tpl, system, user, contents=None) -> (展开后 system, 展开后 user)   # 失败 400（与原契约同）
+async def preview(db, user_id, key, data) -> PromptPreviewOut                     # 原为同步 preview(key, data)
+# app/services/prompt_component_service.py
+MAX_COMPONENTS = 200
+async def list_components(db, user_id, q="") / get_component / to_out / create_component / update_component / delete_component
+async def export_components(db, user_id) / import_components(db, user_id, data)
+```
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /prompt-components?q=` | `list[ComponentBrief]`，按 slug 排序；`q`（≤100）在 slug / 名称 / 说明 / 内容中 `ilike` 搜索（转义 `% _ \`） |
+| `POST /prompt-components` | 201 `ComponentOut` |
+| `GET /prompt-components/export` | `ainovel.prompt-components` v1 |
+| `POST /prompt-components/import` | `{data}` → `{items: [{slug, status, message, failures}]}` |
+| `GET \| PUT \| DELETE /prompt-components/{id}` | 详情（含 `content`、`usages`）/ 带 `revision` 的整体更新 / 删除 204 |
+
+固定路径 `/export`、`/import` 注册在 `/{component_id}` 之前。
+
+```sql
+-- 0042：prompt_components
+id PK; user_id FK users.id ON DELETE CASCADE（索引 ix_prompt_components_user_id）;
+slug VARCHAR(48); name VARCHAR(100); description VARCHAR(500) DEFAULT ''; content TEXT DEFAULT '';
+revision INT DEFAULT 1 CHECK (revision >= 1); created_at / updated_at; UNIQUE(user_id, slug)
+```
+
+### 3. 契约
+
+- **语法**：`{{> 标识 }}`，空白可有可无，标识为 `^[a-z0-9][a-z0-9-]{0,47}$`。在 Jinja 中 `{{>` 本是语法错误，所以旧覆盖不可能含引用，迁移无需回填；
+  **没有引用时所有路径与改造前逐字相同**（`has_refs` 短路）。前端 `utils/promptComponents.ts::REF_RE` 与后端同口径。
+- **不嵌套**：组件内容含 `{{>` → 保存 / 导入 400 `组件内不能引用其他组件`；展开时组件内容里的引用不再展开并记错。
+- **库内存原文**：`prompt_override_versions` / `prompt_overrides` / `skills.body` 一律保存带引用的原文，展开只发生在读取时。
+- **覆盖保存 / 导入 / 预览 / 回滚**：先用 `component_lookup.contents(db, user_id)`（只取本人的组件）展开，再对展开结果走原有全部 `validate`（锁定变量、未知变量、
+  长度 20000 等都按展开后计算，所以组件内容可以使用该模板已声明的变量）。引用错误（不存在 / 嵌套 / 格式不对）先于模板校验返回，`TemplateIssue(part, 原文行号, 说明)`，
+  例如 `引用的组件不存在：x`、`组件 x：组件内不能引用其他组件`、`组件引用格式不正确，应为 {{> 标识 }}（…）`。模板校验问题经 `Expansion.map_line`
+  映射回原文行号；落在组件展开范围内的问题行号取引用所在行，`message` 加前缀 `组件 {slug}：`。
+- **运行时**：`get_override` 返回**展开后**的 `PromptOverride`（`expand_strict`），各 build 函数与 `render` 无需感知组件。保存后组件因竞态消失 →
+  `TemplateRenderError("提示词模板「{名称}」引用的组件 {slug} 不存在，请检查")`；嵌套错误同样以「提示词模板「名称」+ 说明 + ，请检查」报出。任务内即 failed，不把 `{{>` 交给 Jinja。
+- **导出覆盖**：`export_overrides` 写展开后的 `system` / `user`（离开作者本人；展开失败时保留原文，理论上不会发生）。
+- **响应字段**：`PromptTemplateDetail.components` = 已保存覆盖原文引用的本人组件；`PromptPreviewOut.components` = 请求体模板引用的本人组件；均为 `[{id, slug, name}]`，
+  只列存在的组件。
+- **组件库**：只属于作者本人，他人的组件一律 404 `组件不存在`，展开也只查本人组件（所以引用他人标识 = 引用不存在的组件）。每人上限 `MAX_COMPONENTS = 200`
+  （超出 400 `最多保存 200 个组件`）；`content` ≤ 20000 字（`CONTENT_LIMIT`）、名称 1–100（strip 后非空）、说明 ≤ 500（strip）。用户级资源，不进项目备份。
+- **使用关系**：不建关系表，查询时扫描本人 `Skill.body` 与覆盖 `system` / `user` 中含 `{{>` 的行，得到 `ComponentUsage{kind: skill|override, id(Skill), key(覆盖), name, enabled(覆盖启用状态，Skill 为 null)}`；
+  `ComponentBrief.usage_count` = 引用方数量，`ComponentOut.usages` 为完整列表。
+- **引用完整性**：
+  - 删除或修改标识时有引用方 → 409，`detail = 组件 {slug} 正被 Skill「A」、模板「B」引用，不能删除|修改标识；请先移除这些引用`，`code = component_in_use`，`usages = [...]`。
+  - 修改内容时用新内容展开并 `check` 每个引用它的覆盖（**停用的覆盖也算**），有失败 → 400，`code = component_breaks_usages`，
+    `failures = [{key, name, errors: [{part, line, message}]}]`，`detail` 逐条列出模板与原因。Skill 正文不参与影响校验（正文不经 Jinja）。
+- **并发**：`ComponentUpdate.revision`（≥1）与当前不符 → 409 `code = stale_revision`（`组件已被修改，请加载最新版本后再保存；当前草稿可继续保留`）；
+  UPDATE 以 `revision` 为 CAS 条件，rowcount ≠ 1 同样 409。内容完全没变时不增加修订号。
+- **标识冲突**：新建 / 改标识撞到本人已有标识 → 409 `标识已被使用，请换一个`（先查询，`IntegrityError` 兜底）。
+- **导入导出**：`{format: "ainovel.prompt-components", version: 1, items: [{slug, name, description, content}]}`（不含 id / 修订号）；上限 1MB（紧凑 UTF-8）；
+  逐项 `created | updated | unchanged | invalid`：按标识新建或更新，字段校验失败 / 文件内重复（只取第一项）/ 内容含引用 / 超过 200 → invalid；
+  更新内容同样做影响校验，失败时 invalid 并带 `failures`；更新时 `revision + 1`。整个导入一个事务。
+- **迁移 0042**：只建表、不动已有数据。`downgrade` 时表中有数据 → `RuntimeError("仍有提示词组件，拒绝有损降级；…")`，空表才删表。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 结果 |
+|---|---|
+| 读 / 改 / 删他人的组件或不存在的 id | 404 `组件不存在` |
+| slug 不合法、名称空、超长（内容 > 20000、说明 > 500） | 422 |
+| 组件内容含 `{{>` | 400 `组件内不能引用其他组件` |
+| 超过 200 个 | 400 `最多保存 200 个组件` |
+| 标识冲突 | 409 `标识已被使用，请换一个` |
+| 更新时 `revision` 过期 | 409 `code=stale_revision` |
+| 删除 / 改标识时被 Skill 或覆盖引用 | 409 `code=component_in_use` + `usages` |
+| 改内容让引用它的覆盖校验失败 | 400 `code=component_breaks_usages` + `failures` |
+| 覆盖保存 / 导入 / 回滚引用不存在或格式不对的组件 | 400 + `errors`（原文行号）；导入为该项 invalid |
+| 运行时覆盖引用的组件已不存在 | `TemplateRenderError`，任务 failed `提示词模板「X」引用的组件 x 不存在，请检查` |
+| 导入文件 > 1MB / format / version 不对 / items 非数组 | 400 |
+| 降级 0042 时仍有组件 | `RuntimeError`，拒绝降级 |
+
+### 5. Good / Base / Bad
+
+- Good：覆盖 user 段写 `{{> ban }}`，组件内容 `{{ title }}` 是该模板已声明变量 → 保存通过，运行时 `get_override` 返回展开文本，渲染结果与手写相同。
+- Base：模板覆盖没有任何 `{{>` → `check` 等同 `validate`，`get_override` / 导出 / 预览与改造前逐字相同。
+- Bad：组件内容写 `{{ unknown }}` → 保存覆盖 400，`message` 为 `组件 ban：未知变量：unknown`，`line` 是 `{{> ban }}` 所在原文行；
+  若是修改已被引用的组件内容造成的 → 400 `component_breaks_usages`。
+
+### 6. 必需的测试
+
+- `tests/test_prompt_components_expand.py`：`test_find_refs_and_slugs`、`test_expand_without_refs_is_identity`（无引用逐字不变）、
+  `test_expand_replaces_in_place_and_maps_lines`、`test_expand_unknown_nested_and_bad_format`、`test_check_maps_issue_to_component_source`（行号 + 「组件 x：」前缀）、
+  `test_defaults_and_builtin_skills_have_no_refs`（默认模板与内置 Skill 不含 `{{>`）、`test_expand_lenient_keeps_unresolved_refs_literal`。
+- `tests/test_prompt_components.py`：`test_crud_revision_search_and_validation`（409 冲突、422、嵌套 400、stale_revision、搜索）、`test_quota`、
+  `test_other_users_components_invisible_and_unreferenceable`、`test_override_validation_reports_component_source`、
+  `test_override_and_skill_use_components_at_runtime_and_snapshot`、`test_integrity_and_usages`（component_in_use + usages、component_breaks_usages + failures）、
+  `test_exports_and_workshop_share_are_expanded`、`test_global_skill_cannot_reference_components`、`test_agent_load_skill_reads_expanded_body`、
+  `test_component_library_import_export`、`test_runtime_missing_component_is_readable_error`（断言错误含 `引用的组件 ban 不存在，请检查`）。
+- `tests/test_migrations.py::test_0042_prompt_components`：`(user_id, slug)` 唯一、删用户级联、有组件时降级抛错。
+
+### 7. 错误 vs 正确
+
+```python
+# 错误：直接校验 / 渲染原文——`{{>` 在 Jinja 中是语法错误，组件内容里的变量也不会被检查
+issues = validate(tpl.variables, data.system, data.user)
+return PromptOverride(system=row.system, user=row.user, version_id=version_id)
+# 正确：先用本人的组件展开，再校验 / 返回展开后的内容；问题行号映射回原文
+issues, system, user = prompt_service.check(tpl, data.system, data.user, await component_lookup.contents(db, user_id))
+system, user = expand_strict(row.system, contents), expand_strict(row.user, contents)   # get_override
+
+# 错误：把展开后的文本写回库——之后修改组件不再生效，使用关系也查不到
+row.system = exp_system
+# 正确：库内存原文，只在读取（运行时 / 导出 / 分享）时展开
+```
 
 ---
 

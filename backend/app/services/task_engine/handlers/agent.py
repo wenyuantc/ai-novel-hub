@@ -46,7 +46,7 @@ class AgentHandler:
             content=req.content,
             page_context=page,
             skill_id=skill.id if skill else None,
-            skill_snapshot=skill_service.snapshot_of(skill) if skill else None,
+            skill_snapshot=await skill_service.snapshot_of(db, skill) if skill else None,
         )
         db.add(message)
         conversation.last_message_at = datetime.now(UTC)

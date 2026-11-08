@@ -5,7 +5,7 @@ import { canRestoreWorkshopItem, normalizeWorkshopTags, promptShare, styleShare,
 
 const template = (enabled = true): PromptTemplateDetail => ({
   key: 'chapter.generate', name: '写章节', category: 'chapter', category_label: '章节', description: '写作', overridden: true, enabled,
-  outdated: false, updated_at: '', default_system: '默认系统', default_user: '默认用户', default_fingerprint: 'fp', variables: [], locked: [],
+  outdated: false, updated_at: '', default_system: '默认系统', default_user: '默认用户', default_fingerprint: 'fp', variables: [], locked: [], components: [],
   override: { system: '我的系统', user: '我的用户', enabled, base_fingerprint: 'fp', base_system: '', base_user: '', updated_at: '' },
 })
 export const workshopItemFixture = (overrides: Partial<WorkshopItem> = {}): WorkshopItem => ({

@@ -1,5 +1,5 @@
 import {
-  ApartmentOutlined, ApiOutlined, BgColorsOutlined, BookOutlined, BulbOutlined, ClusterOutlined,
+  ApartmentOutlined, ApiOutlined, BgColorsOutlined, BlockOutlined, BookOutlined, BulbOutlined, ClusterOutlined,
   DashboardOutlined, DatabaseOutlined, FileTextOutlined, GlobalOutlined, HistoryOutlined,
   ImportOutlined, KeyOutlined, OrderedListOutlined, RocketOutlined, SettingOutlined, ShopOutlined, TeamOutlined, TrophyOutlined,
 } from '@ant-design/icons'
@@ -19,6 +19,7 @@ const GLOBAL_GROUPS: NavGroup[] = [
     { to: '/settings/ai', label: '模型配置', icon: <SettingOutlined /> },
     { to: '/settings/api-keys', label: 'API 密钥', icon: <KeyOutlined /> },
     { to: '/prompt-templates', label: '提示词模板', icon: <FileTextOutlined /> },
+    { to: '/prompt-components', label: '提示词组件', icon: <BlockOutlined /> },
     { to: '/styles', label: '写作风格', icon: <BgColorsOutlined /> },
     { to: '/workshop', label: '提示词工坊', icon: <ShopOutlined /> },
     { to: '/skills', label: '写作技能', icon: <BulbOutlined /> },

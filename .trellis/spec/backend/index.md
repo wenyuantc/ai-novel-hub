@@ -35,8 +35,8 @@
 | [全文提及与作品笔记](./mention-tracking.md) | 四来源字面索引、歧义/Unicode/原文指纹、双向导航与章节热力图、笔记CAS、世界观别名及备份兼容 | 已填写 |
 | [AI 批量关系生成](./relationship-generation.md) | 所选 ID 范围、只读草稿与勾选保存、关系/类型并发冲突、事务所有权、任务重开及刷新 | 已填写 |
 | [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
-| [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（31 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、写作风格库与解析优先级、风格段注入 | 已填写 |
-| [实例内提示词工坊](./workshop.md) | 风格 / 单 key 模板共享、审核快照、404/403 权限、匿名与删号署名、原子计数、导入前版本与恢复 | 已填写 |
+| [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（31 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、提示词组件（`{{> 标识 }}` 先展开再校验、引用完整性、修订号 CAS、`0042`）、写作风格库与解析优先级、风格段注入 | 已填写 |
+| [实例内提示词工坊](./workshop.md) | 风格 / 单 key 模板共享（含组件引用的模板展开后写入快照）、审核快照、404/403 权限、匿名与删号署名、原子计数、导入前版本与恢复 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
 | [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v8 格式（兼容 v1–v7）、表规则注册表、场景及历史核心引用、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
@@ -45,7 +45,7 @@
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
 | [拆书导入](./book-import.md) | `book_imports` 解析记录（切章强规则、序章 / 目录区 / 兜底、docx / epub、子进程正则）、7 种校正与提示、修订号 409 `code = stale_revision`、单事务开始导入、`book.import` 断点 / 暂停 / 跳过 / 只写空字段 | 已填写 |
 | [项目智能体](./agent.md) | Provider 工具调用协议（`chat_tools_stream`、`TOOLS_UNSUPPORTED`、三家差异、`provider_metadata` 重放）、工具层与新增工具检查清单（kind 分级、`validate_references`、`id_model`）、提案 / 自动执行（首批 ≤3 项）/ 确认时预览比较 409、效果快照与撤销（`EFFECT_TABLES`、冲突检测、外键顺序）、`agent.turn` 断点续跑、安全规则；`external` kind、动态 MCP 工具、Skill 读工具与强制启用 | 已填写 |
-| [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
+| [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`、正文组件引用（保存严格 / 运行时宽松展开）；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化、用户列表/详情、最近成功登录与三组资源计数、账号防护/会话版本、共享操作异步边界、全局Skill权限与MCP开关 | 已填写 |
 | [角色、授权与用户配额](./rbac-quotas.md) | 四内置/自定义多角色、37动作、唯一超管事实、管理目标保护、共同写屏障、两项额度/四创建入口/真实任务占用及前端撤权 | 已填写 |
 | [管理员系统设置](./system-settings.md) | 六项白名单、持久覆盖优先级、revision与原子审计发布、MCP真实调用边界、30秒公开同步及逐项恢复 | 已填写 |
@@ -72,13 +72,14 @@
 | 批量顺序生成（断点、待审核、范围锁、任务内分析） | [batch-generate.md](./batch-generate.md) |
 | 拆书导入（切章与校正、修订号乐观并发、开始导入事务、反推断点 / 暂停 / 跳过、只写空字段） | [book-import.md](./book-import.md) |
 | 项目智能体（工具调用协议、提案确认、效果快照与撤销、续跑） | [agent.md](./agent.md) |
-| Skill 权限与导入格式、生成任务快照、MCP 适配与安全、动态工具映射、external 提案与中断回收 | [skills-mcp.md](./skills-mcp.md) |
+| Skill 权限与导入格式、生成任务快照、正文组件引用、MCP 适配与安全、动态工具映射、external 提案与中断回收 | [skills-mcp.md](./skills-mcp.md) |
 | 检索打分与缓存、知识库建索引、剧情记忆同步与召回 | [retrieval.md](./retrieval.md) |
 | 项目备份注册表 / 导入映射、EPUB 结构 | [project-transfer.md](./project-transfer.md) |
 | 场景正文、局部码点、结构历史、继承与整章AI原子保存 | [scenes.md](./scenes.md) |
 | 场景富格式、作者区块、标记时间线与 AI 核对 | [rich-documents.md](./rich-documents.md) |
 | 封面上传与生成预览、版本 URL、图片备份与 EPUB | [project-cover.md](./project-cover.md) |
 | 提示词模板（校验 / 渲染 / 覆盖）与写作风格解析 | [prompts-styles.md](./prompts-styles.md) |
+| 提示词组件（`{{> 标识 }}` 展开、行号映射、`component_in_use` / `component_breaks_usages` / `stale_revision`、导入导出、`0042`） | [prompts-styles.md](./prompts-styles.md)（「提示词组件」场景） |
 | 实例内共享（审核状态、署名、点赞 / 下载计数、模板导入恢复） | [workshop.md](./workshop.md) |
 | 管理员角色、用户管理、token 版本控制（`ver`、防护规则） | [auth-admin.md](./auth-admin.md#场景管理员角色用户管理与-token-版本控制) |
 

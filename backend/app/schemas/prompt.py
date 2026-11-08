@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.prompt_component import ComponentRef
+
 PROMPTS_FORMAT = "ainovel.prompts"
 PROMPTS_VERSION = 1
 MAX_IMPORT_BYTES = 1024 * 1024
@@ -64,6 +66,8 @@ class PromptTemplateDetail(PromptTemplateBrief):
     variables: list[TemplateVarOut]
     locked: list[LockedBlockOut]
     override: PromptOverrideOut | None = None
+    # 覆盖（原文）引用的本人组件
+    components: list[ComponentRef] = Field(default_factory=list)
 
 
 class PromptSave(BaseModel):
@@ -115,6 +119,8 @@ class PromptPreviewOut(BaseModel):
     messages: list[PreviewMessage]
     errors: list[TemplateIssueOut]
     locked: list[LockedBlockOut]
+    # 请求体模板中引用的本人组件
+    components: list[ComponentRef] = Field(default_factory=list)
 
 
 class PromptImportRequest(BaseModel):

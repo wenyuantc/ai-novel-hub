@@ -61,7 +61,8 @@ async def list_skills(ctx: ToolCtx, args: SkillListArgs) -> dict:
 
 async def load_skill(ctx: ToolCtx, args: SkillLoadArgs) -> dict:
     skill = await skill_service.by_slug(ctx.db, ctx.user_id, args.slug)
-    body, pages = _page(skill.body, args.page)
+    # 展开组件后的正文（与生成任务快照一致）
+    body, pages = _page(await skill_service.expanded_body(ctx.db, skill), args.page)
     refs = await skill_service.references_of(ctx.db, skill.id)
     return {
         "slug": skill.slug,

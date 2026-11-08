@@ -1943,3 +1943,50 @@ def test_0023_admin_audit_snapshots_no_cascade_no_reused_ids(tmp_path):
         assert EXPECTED_TABLES <= set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
+
+
+def test_0042_prompt_components(tmp_path):
+    """0042 只新增组件表：(user_id, slug) 唯一、删用户级联；有组件时拒绝有损降级。"""
+    db_file = tmp_path / "migrate0042.db"
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0041")
+    command.upgrade(cfg, "0042")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        insp = inspect(engine)
+        cols = {c["name"] for c in insp.get_columns("prompt_components")}
+        assert {"user_id", "slug", "name", "description", "content", "revision"} <= cols
+        assert insp.get_foreign_keys("prompt_components")[0]["options"]["ondelete"] == "CASCADE"
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("INSERT INTO users (id, username, password_hash) VALUES (1, 'a', 'x'), (2, 'b', 'x')"))
+            conn.execute(text(
+                "INSERT INTO prompt_components (user_id, slug, name) VALUES (1, 'ban', 'n'), (2, 'ban', 'n')"
+            ))
+            assert conn.execute(text("SELECT revision, content FROM prompt_components LIMIT 1")).one() == (1, "")
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("INSERT INTO prompt_components (user_id, slug, name) VALUES (1, 'ban', 'dup')"))
+    finally:
+        engine.dispose()
+    with pytest.raises(RuntimeError):
+        command.downgrade(cfg, "0041")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.execute(text("DELETE FROM users WHERE id = 2"))
+            assert conn.execute(text("SELECT count(*) FROM prompt_components")).scalar_one() == 1
+            conn.execute(text("DELETE FROM prompt_components"))
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0041")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        assert "prompt_components" not in inspect(engine).get_table_names()
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM users")).scalar_one() == 1
+    finally:
+        engine.dispose()

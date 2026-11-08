@@ -564,6 +564,41 @@ dayjs.locale('zh-cn')
   `utils/skills.test.ts`（`/` 补全与匹配规则、分组、触发词规范化、`skillRef`）、`utils/mcp.test.ts`（JSON 导入与 stdio 提示、请求头 keep 时不提交、整体替换与清空、
   本地校验、试用参数、状态）、`api/mcp.test.ts`（工具名在请求体里，含 `/` 也不进路径；导入原样提交）。
 
+### 提示词组件库（`11-08-prompt-components`）
+
+后端契约见 [../backend/prompts-styles.md](../backend/prompts-styles.md)「提示词组件」与 [../backend/skills-mcp.md](../backend/skills-mcp.md)「Skill 正文中的组件引用」。
+
+- **入口**：`StudioNavigation` 创作资源分组「提示词组件」（`/prompt-components`，`BlockOutlined`，位于「提示词模板」之后），`router.tsx` 的 `lazyPage` 懒加载路由。
+- **`pages/PromptComponentsPage`**：`useLoader(() => promptComponentApi.list(q))`；`Input.Search` 提交时才 `setQ`（不逐字请求）；`List` 每项显示名称、`{{> slug }}`、说明、
+  `引用 N` Tag（`usage_count`）。工具栏：新建、导入（`JsonImportButton`，`MAX_COMPONENT_IMPORT_BYTES` = 1MB，结果用 `COMPONENT_IMPORT_LABELS` / `summarizeComponentImport`
+  逐项列出，`invalid` 项的 `failures` 经 `normalizeFailures` + `ComponentFailureList` 展示）、导出（`downloadJson` + `datedFilename`）。
+  **`?id=` 深链**：URL 里的 `id` 决定抽屉打开哪个组件（`ComponentRefTags` 标签跳转过来），关闭抽屉时 `setSearchParams({}, {replace: true})`。
+  删除：列表已知 `usage_count > 0` 时**不发删除请求**，直接取详情用 `ComponentUsageList` 显示引用方；否则 `modal.confirm` 后删除，仍收到 409 时用 `readUsages(err)` 显示。
+- **`promptComponents/ComponentEditDrawer`**：`useModalWidth(760)`，`destroyOnHidden`；编辑时先 `promptComponentApi.get` 再以 `key = componentId` 挂载 `ComponentForm`。
+  - 保存用 `base.revision`（服务端最新已知版本，state），`classifySaveError(err)` 把失败分为三类显示在 `ComponentRejectionAlert`：
+    `stale`（409 `stale_revision`）/ `in_use`（409 `component_in_use`，列出引用方）/ `breaks`（400 `component_breaks_usages`，逐条列出受影响覆盖与原因）；其他错误 `message.error(detail)`。
+  - **冲突保留草稿**：`stale` 时提示「当前草稿不会丢失」+「加载最新版本」→ `reloadLatest` **只更新 `base`（修订号与使用关系），不动表单**，并显示
+    「已加载最新版本（修订 N），当前草稿保留；再次保存会以草稿覆盖最新版本」+「改用最新内容」（这时才 `form.setFieldsValue(valuesOf(base))`）。
+    禁止在冲突后自动用服务端内容覆盖表单，也禁止自动重试保存。
+  - 新建时名称失焦且标识为空 → `suggestSlug` 给建议；详情下方 `ComponentUsageList` 列出使用关系。
+- **`promptComponents/ComponentUsageList`**：每个引用方显示 `usageLabel`（`Skill` / `模板覆盖` / `模板覆盖（已停用）`）与名称，链接 `usageHref`：
+  Skill → `/skills?skill={id}`，覆盖 → `/prompt-templates?key={key}`（`encodeURIComponent`）。
+- **`promptComponents/ComponentRefs`**（复用点，Skill 与模板编辑器共用）：
+  - `ComponentRefTags({components})`：「引用的组件：」+ 每个组件一个 `Tag` 链接到 `/prompt-components?id={id}`，空时显示「无」；数据只来自服务端
+    （`Skill.components`、`PromptTemplateDetail.components`、`PromptPreview.components`），前端不自行解析存在性。
+  - `ComponentInsertSelect({onInsert, disabled?})`：`value={null}` 的可搜索 `Select`，**展开时才** `promptComponentApi.list()`，选项「名称（slug）」，选中后回调 slug 并保持空值；
+    没有组件时 `notFoundContent` 链接到组件库。插入统一用 `insertSnippet(text, componentRef(slug), caret)`（越界夹紧、选区替换、无光标插在末尾）。
+- **接入**：
+  - `prompts/PromptEditor`：`insertVar` 与插入组件共用 `insertText`（最近聚焦段的光标处）；引用标签优先用 `preview.components`（编辑器当前内容），预览未返回时用 `detail.components`。
+  - `skills/SkillEditDrawer`（`SkillForm` 已导出供测试）：正文 `TextArea` `id="skill-body"`，`onSelect/onKeyUp/onMouseUp` 把光标记入 `bodyCaret` ref，插入后切回「编辑」Tab 并恢复光标；
+    引用标签用保存响应的 `saved.components` 更新（未保存改动不实时解析）。**全局 Skill** 不显示插入入口，可写时显示 info「全局 Skill 不能引用提示词组件…」。
+  - `pages/SkillsPage` 支持 **`?skill=id` 深链**：`useState` 初始化时若 `skill` 为纯数字则以 `{id, scope: 'mine'}` 打开编辑抽屉，随后 `setSearchParams({}, {replace: true})` 去掉参数。
+- **纯函数**（`utils/promptComponents.ts`）：`REF_RE` 与后端同口径、`refSlugs`、`insertSnippet`、`isStaleRevision` / `readUsages` / `readFailures`（只在对应状态码 **且** `body.code` 匹配时识别）、
+  `classifySaveError`、`usageHref` / `usageLabel`、`summarizeComponentImport`。
+- 测试：`utils/promptComponents.test.ts`（引用写法与插入、结构化错误只在对应状态码与 code 下识别、跳转地址、导入汇总）、`api/promptComponents.test.ts`（方法与路径、
+  带修订号更新、结构化错误不自动重试）、`pages/PromptComponentsPage.test.ts`（列表与入口、使用关系跳转与停用标记、冲突保留草稿与「加载最新版本」、
+  我的 Skill 显示引用与插入入口、全局 Skill 无插入入口、模板编辑器显示引用与插入入口）。
+
 ---
 
 ## 设定剧情变化

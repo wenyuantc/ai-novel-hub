@@ -38,6 +38,9 @@
 
 提交为 `{kind, item_id?, prompt_key?, name, description, category, tags, content, is_anonymous}`。
 `kind` 为 `style | prompt`；模板按单个 key 分享，正文为 `{system, user}`；风格正文复用风格字段规则。
+- **模板含组件引用**（`11-08-prompt-components`，见 [prompts-styles.md](./prompts-styles.md)「提示词组件」）：`_clean_content(db, viewer, data)` 在 `system` / `user`
+  含 `{{>` 时取**提交者本人**的组件，`system, user = prompt_service.ensure_valid(tpl, system, user, contents)`——先展开、再校验，**写入提交快照的是展开后的正文**，
+  快照与已发布条目永远不含 `{{> }}`（其他用户没有这些组件）。「与系统默认完全相同」按展开后的内容比较；引用不存在的组件 → 400 + `errors`。
 
 - 名称非空、≤100 字，说明 ≤500 字；每用户最多 20 个待审核提交，请求体整体 ≤1 MiB。
 - 分类：`general | xuanhuan | wuxia | romance | scifi | suspense | history | urban | other`。
@@ -73,6 +76,7 @@
 | 同条目已有 pending 更新，或重复审核 / 撤回已终结提交 | 409 |
 | 内置预设风格原样提交，或与系统默认完全相同的模板 | 400 |
 | 模板校验失败或 key 已不存在 | 400；校验失败响应保留错误列表 |
+| 分享的模板引用了提交者不存在的组件 | 400；`errors` 指向原文行号 |
 | 非法枚举、空驳回原因、schema 元数据字段超长 | 422 |
 | 风格 content 字段或模板段超长 | 400（服务层与模板校验） |
 | 超过请求体限制 | 400（沿用 `UploadLimitMiddleware` 的上传限制响应） |
@@ -90,6 +94,7 @@
 点赞 / 取消点赞必须检查记录与计数；重复和并发调用不得重复计数。
 导入测试检查独立风格副本、模板启用、当前生效内容可恢复、同文导入版本、模板升级校验失败无写入。
 迁移测试检查四张表、外键动作、部分唯一索引及 downgrade 不影响原用户数据。
+`tests/test_prompt_components.py::test_exports_and_workshop_share_are_expanded` 断言分享含组件引用的模板后，提交快照为展开后正文、不含 `{{>`。
 
 ## 7. 错误写法 vs 正确写法
 
@@ -105,5 +110,13 @@ if inserted:
 ```
 
 前端Browse按actor ID+workshop.read布尔重建：撤read时即使刷新500也立即撤下隐藏条目/匿名真名，不能仅reload保留旧data；个人分享区只按actor隔离，无关revision不清草稿。
+
+```python
+# 错误：把原文（含 `{{> ban }}`）写进快照——其他用户导入后引用的是他们并不存在的组件
+prompt_service.ensure_valid(tpl, system, user)
+return {"system": system, "user": user}
+# 正确：用提交者的组件展开后校验，并保存展开结果
+system, user = prompt_service.ensure_valid(tpl, system, user, contents)
+```
 
 禁止为了分享模板绕过现有沙箱校验，禁止在前端拼装真实作者署名，禁止在审核通过前覆盖已发布正文。

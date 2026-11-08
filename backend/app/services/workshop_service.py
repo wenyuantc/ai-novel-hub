@@ -10,6 +10,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.components import has_refs
 from app.ai.prompts import registry
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models import (
@@ -33,7 +34,7 @@ from app.schemas.workshop import (
     WorkshopSubmit,
 )
 from app.services import authorization_service as authz
-from app.services import prompt_service, style_service
+from app.services import component_lookup, prompt_service, style_service
 from app.services.audit_writer import AuditOperation
 
 CONTENT_FIELDS = ("kind", "prompt_key", "name", "description", "category", "tags", "content", "is_anonymous")
@@ -243,7 +244,7 @@ async def list_submissions(
     return WorkshopSubmissionList(items=await _submission_outputs(db, viewer, rows), total=total)
 
 
-def _clean_content(data: WorkshopSubmit) -> dict[str, str]:
+async def _clean_content(db: AsyncSession, viewer: User, data: WorkshopSubmit) -> dict[str, str]:
     if len(data.model_dump_json().encode("utf-8")) > MAX_BODY_BYTES:
         raise BadRequestError("提交内容过大，上限为 1MB")
     if data.kind == "prompt":
@@ -253,7 +254,9 @@ def _clean_content(data: WorkshopSubmit) -> dict[str, str]:
         if set(data.content) - {"system", "user"} or "user" not in data.content:
             raise BadRequestError("模板内容须包含 user，只能包含 system 和 user")
         system, user = data.content.get("system", ""), data.content["user"]
-        prompt_service.ensure_valid(tpl, system, user)
+        # 离开作者本人：组件引用展开为正文后再校验与保存，快照里不含 `{{> }}`
+        contents = await component_lookup.contents(db, viewer.id) if has_refs(system) or has_refs(user) else {}
+        system, user = prompt_service.ensure_valid(tpl, system, user, contents)
         if (system, user) == (tpl.system, tpl.user):
             raise BadRequestError("与系统默认完全相同的模板不能分享")
         return {"system": system, "user": user}
@@ -282,7 +285,7 @@ async def submit(
     async with AuditOperation(db, viewer, "workshop.publish", "workshop_submission", None, enabled=publishing) as audit:
         audit.values["target_label"] = data.name
         values = data.model_dump(exclude={"item_id"})
-        values["content"] = _clean_content(data)
+        values["content"] = await _clean_content(db, viewer, data)
         values["description"] = data.description.strip()
         # 同一用户串行校验待审核上限；pending item 唯一索引另兜底并发更新。
         await db.scalar(select(User.id).where(User.id == viewer.id).with_for_update())

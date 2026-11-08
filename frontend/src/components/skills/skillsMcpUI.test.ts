@@ -2,6 +2,7 @@
 import { App } from 'antd'
 import { createElement, type ReactElement } from 'react'
 import { renderToString } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { McpPlugin } from '../../api/types'
 import { skillFixture } from '../../utils/skills.test'
@@ -27,7 +28,8 @@ const { default: HeadersEditor, MASK } = await import('../mcp/HeadersEditor')
 const { default: McpPluginCard } = await import('../mcp/McpPluginCard')
 
 // 去掉 React 在相邻文本节点之间插入的 <!-- --> 便于断言
-const render = (el: ReactElement) => renderToString(createElement(App, null, el)).replaceAll('<!-- -->', '')
+// SkillsPage 读取 ?skill= 参数，需要 Router 上下文
+const render = (el: ReactElement) => renderToString(createElement(MemoryRouter, null, createElement(App, null, el))).replaceAll('<!-- -->', '')
 const noop = () => {}
 const pluginFixture = (over: Partial<McpPlugin> = {}): McpPlugin => ({
   id: 1, slug: 'dict', name: '词典', transport: 'streamable_http', url: 'https://example.com/a/very/long/path/that/should/wrap/mcp?token-free=1',

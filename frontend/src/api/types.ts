@@ -2617,6 +2617,8 @@ export interface PromptTemplateDetail extends PromptTemplateBrief {
   variables: TemplateVar[]
   locked: LockedBlock[]
   override: PromptOverride | null
+  /** 覆盖原文引用的本人组件（未覆盖时为空） */
+  components: PromptComponentRef[]
 }
 
 export interface PromptSave {
@@ -2651,6 +2653,8 @@ export interface PromptPreview {
   messages: GenerationMessage[]
   errors: TemplateIssue[]
   locked: LockedBlock[]
+  /** 请求体模板中引用的本人组件 */
+  components: PromptComponentRef[]
 }
 
 export type PromptImportStatus = 'created' | 'updated' | 'unchanged' | 'default' | 'skipped' | 'invalid'
@@ -3164,6 +3168,55 @@ export interface AgentTurnResult { changes: AgentChange[]; task: Task | null; er
 export interface AgentToolStart { call_id: string; name: string; label: string }
 export interface AgentToolEnd { call_id: string; ok: boolean; summary: string }
 
+// ---------------- 提示词组件（backend/app/schemas/prompt_component.py） ----------------
+
+export interface PromptComponentRef { id: number; slug: string; name: string }
+/** 引用方：skill → id 为 Skill id；override → key 为模板 key，enabled 为覆盖是否启用 */
+export interface PromptComponentUsage {
+  kind: 'skill' | 'override'
+  id: number | null
+  key: string | null
+  name: string
+  enabled: boolean | null
+}
+export interface PromptComponentBrief {
+  id: number
+  slug: string
+  name: string
+  description: string
+  revision: number
+  content_chars: number
+  usage_count: number
+  created_at: string
+  updated_at: string
+}
+export interface PromptComponent extends PromptComponentBrief {
+  content: string
+  usages: PromptComponentUsage[]
+}
+export interface PromptComponentCreate {
+  slug: string
+  /** 1–100 */
+  name: string
+  /** ≤500 */
+  description?: string
+  /** ≤20000，不能含 {{> }} */
+  content?: string
+}
+export interface PromptComponentUpdate extends PromptComponentCreate {
+  /** 读取时的修订号；不一致 → 409 stale_revision */
+  revision: number
+}
+/** 修改内容会让引用它的覆盖校验失败时的逐项原因（400 component_breaks_usages 的 failures） */
+export interface PromptComponentFailure { key: string; name: string; errors: TemplateIssue[] }
+export interface PromptComponentImportItem {
+  slug: string
+  status: 'created' | 'updated' | 'unchanged' | 'invalid'
+  message: string
+  failures: PromptComponentFailure[]
+}
+export interface PromptComponentImportResult { items: PromptComponentImportItem[] }
+
 // ---------------- Skill（backend/app/schemas/skill.py） ----------------
 
 /** mine = 我的；global = 管理员发布的全局 Skill（普通用户只读，可复制） */
@@ -3193,6 +3246,8 @@ export interface SkillBrief {
 export interface Skill extends SkillBrief {
   body: string
   references: SkillReference[]
+  /** 正文引用的所有者本人的提示词组件 */
+  components: PromptComponentRef[]
 }
 export interface SkillCreate {
   scope?: SkillScope

@@ -67,7 +67,7 @@ describe('工坊详情渲染与权限', () => {
     const template: PromptTemplateDetail = {
       key: 'chapter.generate', name: '章节生成', category: 'chapter', category_label: '章节', description: '',
       overridden: false, enabled: false, outdated: false, updated_at: null,
-      default_system: '默认系统', default_user: '默认用户', default_fingerprint: 'fp', variables: [], locked: [], override: null,
+      default_system: '默认系统', default_user: '默认用户', default_fingerprint: 'fp', variables: [], locked: [], override: null, components: [],
     }
     const get = vi.spyOn(promptApi, 'get').mockResolvedValue(template)
     try {

@@ -2,7 +2,7 @@ import { can } from '../../utils/permissions'
 import { useAuthStore } from '../../stores/auth'
 import { useAuthorizationScope } from '../../hooks/useAuthorizationScope'
 import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Drawer, Form, Input, Radio, Select, Skeleton, Space, Tabs, Typography } from 'antd'
+import { Alert, App, Button, Card, Drawer, Form, Input, Radio, Select, Skeleton, Space, Tabs, Tooltip, Typography } from 'antd'
 import { useCallback, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { SKILL_LIMITS, SKILL_SLUG_RE, skillApi } from '../../api/skills'
@@ -10,7 +10,9 @@ import type { Skill, SkillReferenceInput, SkillScope } from '../../api/types'
 import { useModalWidth } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
 import { normalizeTriggers, suggestSlug } from '../../utils/skills'
+import { componentRef, insertSnippet } from '../../utils/promptComponents'
 import AgentMarkdown from '../agent/AgentMarkdown'
+import { ComponentInsertSelect, ComponentRefTags } from '../promptComponents/ComponentRefs'
 
 interface Props {
   open: boolean
@@ -57,7 +59,7 @@ function Loaded(props: Props & { skillId: number }) {
 
 const refsKey = (refs: SkillReferenceInput[]) => JSON.stringify(refs.map((r) => [r.title.trim(), r.content]))
 
-function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: Skill | null }) {
+export function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: Skill | null }) {
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const [saving, setSaving] = useState(false)
@@ -84,6 +86,25 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
   // 上次保存的参考资料：没变化时不调用整体替换接口
   const savedRefs = useRef(refsKey(initial.references))
   const pending = useRef(false)
+  // 引用的组件：保存后以服务端响应为准（未保存的改动不实时解析）
+  const [components, setComponents] = useState(skill?.components ?? [])
+  // 正文光标（UTF-16），插入组件引用时用；没有时插在末尾
+  const bodyCaret = useRef<[number, number] | null>(null)
+  const syncCaret = (el: HTMLTextAreaElement) => {
+    bodyCaret.current = [el.selectionStart, el.selectionEnd]
+  }
+  const insertComponent = (slug: string) => {
+    const next = insertSnippet(form.getFieldValue('body') ?? '', componentRef(slug), bodyCaret.current)
+    form.setFieldValue('body', next.text)
+    bodyCaret.current = [next.caret, next.caret]
+    setTab('edit')
+    requestAnimationFrame(() => {
+      const el = document.getElementById('skill-body')
+      if (!(el instanceof HTMLTextAreaElement)) return
+      el.focus()
+      el.setSelectionRange(next.caret, next.caret)
+    })
+  }
 
   const handleSave = async () => {
     if ((readOnly && !canReferences) || pending.current || !operation.allowed()) return
@@ -120,6 +141,7 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
       }
       if (!operation.current(ticket)) return
       savedRefs.current = refsKey(references)
+      setComponents(saved.components ?? [])
       message.success('已保存')
       onSaved(saved)
     } catch (err) {
@@ -203,6 +225,27 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
           <Select disabled={readOnly} mode="tags" tokenSeparators={[' ', ',', '，']} open={false} placeholder="输入后回车，例如 续写" />
         </Form.Item>
         <Form.Item label="工作流正文（Markdown）">
+          {global ? (
+            !readOnly && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message="全局 Skill 不能引用提示词组件（组件属于个人），请把内容直接写进正文。"
+              />
+            )
+          ) : (
+            <Space wrap size={8} style={{ marginBottom: 8 }}>
+              <ComponentRefTags components={components} />
+              {!readOnly && (
+                <Tooltip title="在正文光标处插入 {{> 标识 }}；生成任务与智能体读取时按原样展开组件内容">
+                  <span>
+                    <ComponentInsertSelect onInsert={insertComponent} />
+                  </span>
+                </Tooltip>
+              )}
+            </Space>
+          )}
           <Tabs
             size="small"
             activeKey={tab}
@@ -213,7 +256,16 @@ function SkillForm({ skill, scope, isAdmin, onSaved, onCopy }: Props & { skill: 
                 label: '编辑',
                 children: (
                   <Form.Item name="body" noStyle>
-                    <Input.TextArea disabled={readOnly} maxLength={SKILL_LIMITS.body} autoSize={{ minRows: 8, maxRows: 24 }} showCount />
+                    <Input.TextArea
+                      id="skill-body"
+                      disabled={readOnly}
+                      maxLength={SKILL_LIMITS.body}
+                      autoSize={{ minRows: 8, maxRows: 24 }}
+                      showCount
+                      onSelect={(e) => syncCaret(e.currentTarget)}
+                      onKeyUp={(e) => syncCaret(e.currentTarget)}
+                      onMouseUp={(e) => syncCaret(e.currentTarget)}
+                    />
                   </Form.Item>
                 ),
               },
