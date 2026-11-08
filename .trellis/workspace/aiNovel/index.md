@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
-- **Last Active**: 2026-11-07
+- **Total Sessions**: 41
+- **Last Active**: 2026-11-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1389 | Active |
+| `journal-1.md` | ~1427 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-11-08 | 富文本编辑、正文标记与作者区块 | `b74d92d` | `codex/rich-text-markers-sections` |
 | 40 | 2026-11-07 | 独立场景完整写作闭环 | `89e6da960146c6e38295eb510bcbd9c485278dbb` | `codex/independent-scenes` |
 | 39 | 2026-11-07 | 系列作品与跨书共享设定交付与收尾 | `357071f` | `main` |
 | 38 | 2026-11-07 | 设定条目与字段的 AI 可见策略 | `27199a5` | `codex/setting-ai-visibility` |

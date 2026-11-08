@@ -1387,3 +1387,41 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 41: 富文本编辑、正文标记与作者区块
+<!-- trellis-session: v=2 fp=92ec377a53af4fe3 -->
+
+**Date**: 2026-11-08
+**Task**: 富文本编辑、正文标记与作者区块
+**Branch**: `codex/rich-text-markers-sections`
+
+### Summary
+
+完成场景富文本、全书标记、作者区块及 AI 安全核对闭环。
+
+### Main Changes
+
+- 支持可视化正文格式、标记时间线、区块排序与转正文；旧文本及 Unicode／CRLF 坐标保持兼容。
+- 区块默认不进入 AI 上下文；实现单次选区确认、待核对提案、冲突保护、阅读导出及 v8 备份。
+- 完成跨章身份恢复、删除标记墓碑与主题／权限质量审查，并更新 README、TODOS 与跨层规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b74d92d` | feat(editor): 支持富文本、正文标记与作者区块 |
+
+### Testing
+
+- [OK] 后端全量 2899 passed、116 skipped；专用真实 PostgreSQL 92 passed；Ruff 通过。
+- [OK] 前端 172 文件、1175 项通过；lint、TypeScript/Vite 构建及真实浏览器/FakeLLM 流程通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 部署前备份数据库并执行 Alembic 0040；区块转换会清空编辑器撤销栈，可由章节版本恢复。
+- 批量提案自动分析在模型调用边界崩溃时不自动重发，需人工核对；旧墓碑和已有双活备份不会自动清洗。
