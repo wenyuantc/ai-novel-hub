@@ -1469,3 +1469,25 @@ TODOS 第10项拆为父任务+组件/输入表单两个子任务并完成规划�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 44: Skill 自定义输入表单
+<!-- trellis-session: v=2 fp=ed1738753a44170d -->
+
+**Date**: 2026-11-09
+**Task**: Skill 自定义输入表单
+**Branch**: `feat/prompt-inputs`
+
+### Summary
+
+完成 TODOS 第10项第二子任务：Skill 输入项（单行/多行/下拉、必填、默认值，0043）、{{ 标识 }} 占位、六个入口表单与预览、服务端校验与快照、智能体代填与 start_task skill_inputs、SKILL.md 往返。后端 2938 通过/116 跳过，前端 178 文件/1222 用例通过；隔离 SQLite+本地假模型浏览器验证预览与实际出站一致。父任务与两个子任务均已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `baf7386` | feat(skills): Skill 自定义输入表单 |
+
+### Status
+
+[OK] **Completed**
