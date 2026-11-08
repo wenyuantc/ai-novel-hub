@@ -1447,3 +1447,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 43: 提示词可复用组件
+<!-- trellis-session: v=2 fp=06ebca5fe1cd70a3 -->
+
+**Date**: 2026-11-09
+**Task**: 提示词可复用组件
+**Branch**: `feat/prompt-components-inputs`
+
+### Summary
+
+TODOS 第10项拆为父任务+组件/输入表单两个子任务并完成规划（决策 D1–D6）；实现并验收提示词可复用组件（0042 组件库、{{> 标识 }} 引用、覆盖先展开再校验、引用完整性与 CAS、快照/导出/工坊展开、全局 Skill 禁止、Skill 运行时宽松展开、前端组件库页与引用展示）。后端 2921 通过/116 跳过，前端 175 文件/1198 用例通过，隔离 SQLite 浏览器实测通过；输入表单子任务待实施。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `676afe1` | feat(prompts): 提示词可复用组件与使用关系 |
+
+### Status
+
+[OK] **Completed**

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 42
-- **Last Active**: 2026-11-08
+- **Total Sessions**: 43
+- **Last Active**: 2026-11-09
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1449 | Active |
+| `journal-1.md` | ~1471 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 43 | 2026-11-09 | 提示词可复用组件 | `676afe1` | `feat/prompt-components-inputs` |
 | 42 | 2026-11-08 | 笔记收藏、固定与章节编辑页笔记栏 | `912f344` | `main` |
 | 41 | 2026-11-08 | 富文本编辑、正文标记与作者区块 | `b74d92d` | `codex/rich-text-markers-sections` |
 | 40 | 2026-11-07 | 独立场景完整写作闭环 | `89e6da960146c6e38295eb510bcbd9c485278dbb` | `codex/independent-scenes` |
