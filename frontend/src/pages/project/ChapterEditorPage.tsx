@@ -4,6 +4,7 @@ import {
   ArrowLeftOutlined,
   BookOutlined,
   FileTextOutlined,
+  FormOutlined,
   RobotOutlined,
   ExperimentOutlined,
   HistoryOutlined,
@@ -71,6 +72,8 @@ import ChapterPlanCard from '../../components/chapter/ChapterPlanCard'
 import ContextPreviewPanel from '../../components/chapter/ContextPreviewPanel'
 import RewritePanel, { type TextSelection } from '../../components/chapter/RewritePanel'
 import VersionDrawer from '../../components/chapter/VersionDrawer'
+import NoteSidePanel from '../../components/notes/NoteSidePanel'
+import { chapterLeaveBlocked } from '../../components/notes/noteDraft'
 import SkillSelect from '../../components/skills/SkillSelect'
 import StyleChoiceSelect from '../../components/styles/StyleChoiceSelect'
 import ChapterForeshadowButton from '../../components/foreshadows/ChapterForeshadowButton'
@@ -151,6 +154,9 @@ type AIMode = 'generate' | 'polish' | 'rewrite'
 /** 正文卡片宽度达到它时工具栏放进卡片标题栏（≈ 1600px 视口、停靠面板关闭时正文栏的宽度，含竖向滚动条时约 935）。 */
 const TOOLBAR_IN_HEADER_MIN_WIDTH = 920
 
+type InspectorTab = 'ai' | 'scene' | 'chapter' | 'notes'
+const INSPECTOR_TITLES: Record<InspectorTab, string> = { ai: '🤖 AI 助手', scene: '📋 场景规划', chapter: '⚙️ 章节设置', notes: '📝 笔记' }
+
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const { canUseAI, managingOther, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const isMobile = useIsMobile()
@@ -160,7 +166,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const toolbarInHeader = editorPaneWidth >= TOOLBAR_IN_HEADER_MIN_WIDTH
   const { token } = theme.useToken()
   const [inspectorOpen, setInspectorOpen] = useState(true)
-  const [inspectorTab, setInspectorTab] = useState<'ai' | 'scene' | 'chapter'>('ai')
+  const [selectedInspectorTab, setInspectorTab] = useState<InspectorTab>('ai')
+  // 无 AI 权限时 AI 标签不可用，回退到场景规划（派生而非在 effect 中改写状态）
+  const inspectorTab: InspectorTab = !canUseAI && selectedInspectorTab === 'ai' ? 'scene' : selectedInspectorTab
+  // 笔记栏草稿：笔记栏保持挂载（隐藏而非卸载），未保存状态并入本页离开拦截
+  const [noteDirty, setNoteDirty] = useState(false)
   // 移动端辅助面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
@@ -372,7 +382,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }, [])
 
   // 未保存 / 局部改写预览中（流式或待采纳）离开提示；AI 任务在后台运行，可以直接离开
-  const guard = dirty || rewriteLocked || sectionLocked || structureDirty
+  const pageGuard = dirty || rewriteLocked || sectionLocked || structureDirty
+  const guard = pageGuard || noteDirty
   useEffect(() => {
     if (!guard) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -382,8 +393,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [guard])
+  // 笔记草稿只拦截离开本页；切场景不卸载笔记栏，因此不因笔记草稿拦截
   const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) => guard && (currentLocation.pathname !== nextLocation.pathname || new URLSearchParams(currentLocation.search).get('scene_id') !== new URLSearchParams(nextLocation.search).get('scene_id')),
+    ({ currentLocation, nextLocation }) => chapterLeaveBlocked(pageGuard, noteDirty, currentLocation, nextLocation),
   )
 
   const reloadChapter = async () => {
@@ -1080,15 +1092,17 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     items.push(
       { key: 'scene', label: '场景规划', icon: <FileTextOutlined /> },
       { key: 'chapter', label: '章节设置', icon: <SettingOutlined /> },
+      { key: 'notes', label: '笔记', icon: <FormOutlined /> },
     )
     return items
   }, [canUseAI])
 
-  useEffect(() => {
-    if (!canUseAI && inspectorTab === 'ai') {
-      setInspectorTab('scene')
-    }
-  }, [canUseAI, inspectorTab])
+  // 笔记栏始终挂载，非当前标签时隐藏，切换标签或收起侧栏都不丢草稿；桌面与移动端互斥只渲染一份
+  const notesContent = (
+    <div style={inspectorTab === 'notes' ? undefined : { display: 'none' }}>
+      <NoteSidePanel projectId={pid} onDirtyChange={setNoteDirty} />
+    </div>
+  )
 
   const inspectorPanel = (
     <Card
@@ -1100,16 +1114,17 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       title={
         <Tabs
           activeKey={inspectorTab}
-          onChange={(k) => setInspectorTab(k as 'ai' | 'scene' | 'chapter')}
+          onChange={(k) => setInspectorTab(k as InspectorTab)}
           size="small"
           style={{ marginBottom: -8 }}
           items={inspectorTabItems}
         />
       }
     >
-      {inspectorTab === 'ai' && aiPanelContent}
-      {inspectorTab === 'scene' && scenePlanningContent}
-      {inspectorTab === 'chapter' && chapterSettingsContent}
+      {inspectorOpen && inspectorTab === 'ai' && aiPanelContent}
+      {inspectorOpen && inspectorTab === 'scene' && scenePlanningContent}
+      {inspectorOpen && inspectorTab === 'chapter' && chapterSettingsContent}
+      {notesContent}
     </Card>
   )
 
@@ -1227,7 +1242,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             </div>
           </Card>
         </div>
-        {!isMobile && inspectorOpen && <div style={{ flex: '0 0 360px', width: 360, minWidth: 320 }}>{inspectorPanel}</div>}
+        {/* 收起时隐藏而非卸载，仅笔记栏保持挂载，其余标签内容仍随收起卸载 */}
+        {!isMobile && <div style={inspectorOpen ? { flex: '0 0 360px', width: 360, minWidth: 320 } : { display: 'none' }}>{inspectorPanel}</div>}
       </div>
       {isMobile && (
         <>
@@ -1240,12 +1256,12 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             onClick={() => setAiPanelOpen(true)}
           />
           <Drawer
-            title={inspectorTab === 'ai' ? '🤖 AI 助手' : inspectorTab === 'scene' ? '📋 场景规划' : '⚙️ 章节设置'}
+            title={INSPECTOR_TITLES[inspectorTab]}
             extra={
               <Segmented
                 size="small"
                 value={inspectorTab}
-                onChange={(val) => setInspectorTab(val as 'ai' | 'scene' | 'chapter')}
+                onChange={(val) => setInspectorTab(val as InspectorTab)}
                 options={inspectorTabItems.map((item) => ({ value: item.key, label: item.label }))}
               />
             }
@@ -1259,6 +1275,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             {inspectorTab === 'ai' && aiPanelContent}
             {inspectorTab === 'scene' && scenePlanningContent}
             {inspectorTab === 'chapter' && chapterSettingsContent}
+            {notesContent}
           </Drawer>
         </>
       )}
@@ -1296,7 +1313,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       />}
       <Modal
         open={blocker.state === 'blocked'}
-        title={dirty ? '有未保存的修改' : structureDirty ? '场景顺序尚未保存' : '局部改写结果未采纳'}
+        title={dirty ? '有未保存的修改' : structureDirty ? '场景顺序尚未保存' : (rewriteLocked || sectionLocked) ? '局部改写结果未采纳' : '笔记有未保存修改'}
         okText="离开"
         cancelText="留下"
         okButtonProps={{ danger: true }}
@@ -1305,7 +1322,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       >
         {dirty
           ? '离开后未保存的修改将丢失，确定离开吗？'
-          : structureDirty ? '离开将丢弃尚未提交的拟排序（服务端顺序不受影响）。确定离开吗？' : '离开将丢弃局部改写的预览结果（正文不受影响）。确定离开吗？'}
+          : structureDirty ? '离开将丢弃尚未提交的拟排序（服务端顺序不受影响）。确定离开吗？'
+            : (rewriteLocked || sectionLocked) ? '离开将丢弃局部改写的预览结果（正文不受影响）。确定离开吗？'
+              : '离开将丢弃笔记栏中当前笔记的未保存修改（正文不受影响）。确定离开吗？'}
+        {pageGuard && noteDirty && ' 笔记栏中的笔记也有未保存修改，离开后同样会丢失。'}
       </Modal>
     </>
   )

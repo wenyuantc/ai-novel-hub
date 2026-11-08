@@ -1,10 +1,11 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Drawer, Empty, Input, List, Pagination, Space, Spin, Typography } from 'antd'
+import { Alert, Button, Card, Drawer, Empty, Input, List, Pagination, Segmented, Space, Spin, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { noteApi } from '../../api/notes'
 import NoteEditor from '../../components/notes/NoteEditor'
-import { noteId, noteSearch } from '../../components/notes/noteDraft'
+import NoteFlagButtons from '../../components/notes/NoteFlagButtons'
+import { noteId, noteListEmptyText, noteSearch } from '../../components/notes/noteDraft'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
@@ -29,6 +30,7 @@ function NotesWorkspace({ projectId: pid }: { projectId: number }) {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const [q, setQ] = useState('')
+  const [favoriteOnly, setFavoriteOnly] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const id = noteId(searchParams.get('id'))
@@ -44,9 +46,15 @@ function NotesWorkspace({ projectId: pid }: { projectId: number }) {
       </div>
       {canEdit && <Button type="primary" icon={<PlusOutlined />} onClick={() => go('new')}>新建笔记</Button>}
     </Space>
-    <Input.Search placeholder="搜索标题或正文" aria-label="搜索作品笔记" allowClear maxLength={200}
-      onSearch={(value) => { setQ(value.trim()); setPage(1) }} style={{ maxWidth: 460 }} />
-    <NotesList key={`${q}:${page}:${pageSize}`} projectId={pid} query={q} page={page} pageSize={pageSize}
+    <Space wrap>
+      <Input.Search placeholder="搜索标题或正文" aria-label="搜索作品笔记" allowClear maxLength={200}
+        onSearch={(value) => { setQ(value.trim()); setPage(1) }} style={{ width: mobile ? '100%' : 460 }} />
+      <Segmented aria-label="笔记筛选" value={favoriteOnly ? 'favorite' : 'all'}
+        options={[{ label: '全部', value: 'all' }, { label: '收藏', value: 'favorite' }]}
+        onChange={(value) => { setFavoriteOnly(value === 'favorite'); setPage(1) }} />
+    </Space>
+    <NotesList key={`${q}:${favoriteOnly}:${page}:${pageSize}`} projectId={pid} query={q} favoriteOnly={favoriteOnly}
+      page={page} pageSize={pageSize}
       onOpen={(target) => go(target)} onPage={(next, size) => { setPage(size === pageSize ? next : 1); setPageSize(size) }} />
     <Drawer title={creating ? '新建笔记' : canEdit ? '编辑笔记' : '查看笔记'} open={open}
       width={mobile ? '100%' : 760} destroyOnHidden onClose={() => go(null)}>
@@ -58,29 +66,34 @@ function NotesWorkspace({ projectId: pid }: { projectId: number }) {
   </Space>
 }
 
-function NotesList({ projectId: pid, query, page, pageSize, onOpen, onPage }: {
-  projectId: number; query: string; page: number; pageSize: number
+function NotesList({ projectId: pid, query, favoriteOnly, page, pageSize, onOpen, onPage }: {
+  projectId: number; query: string; favoriteOnly: boolean; page: number; pageSize: number
   onOpen: (id: number) => void; onPage: (page: number, size: number) => void
 }) {
   const { canReadNow } = useProjectAccess(pid)
   const load = useCallback(async () => {
     if (!canReadNow()) throw new Error('当前账号无权查看作品笔记')
-    const result = await noteApi.list(pid, { q: query, page, page_size: pageSize })
+    const result = await noteApi.list(pid, { q: query, favorite: favoriteOnly, page, page_size: pageSize })
     if (!canReadNow()) throw new Error('作品访问权限已变更')
     return result
-  }, [pid, query, page, pageSize, canReadNow])
+  }, [pid, query, favoriteOnly, page, pageSize, canReadNow])
   const { data, loading, error, reload } = useLoader(load, { projectId: pid, resources: ['notes'] })
-  return <Card title={data ? `全部笔记 · ${data.total}` : '全部笔记'} extra={
+  const heading = favoriteOnly ? '收藏笔记' : '全部笔记'
+  return <Card title={data ? `${heading} · ${data.total}` : heading} extra={
     <Button icon={<ReloadOutlined />} disabled={loading} onClick={reload}>刷新</Button>
   }>
     {error && <Alert type="error" showIcon message={error} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 16 }} />}
     <List loading={loading} dataSource={data?.items ?? []} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-      description={query ? '没有找到相关笔记' : '还没有笔记，点击「新建笔记」开始记录'} /> }}
+      description={noteListEmptyText(query, favoriteOnly)} /> }}
       renderItem={(note) => <List.Item key={note.id}>
         <div style={{ minWidth: 0, width: '100%' }}>
-          <Button type="link" onClick={() => onOpen(note.id)} style={{ padding: 0, maxWidth: '100%', height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}>
-            <span style={{ overflowWrap: 'anywhere' }}>{note.title}</span>
-          </Button>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <Button type="link" onClick={() => onOpen(note.id)} style={{ padding: 0, minWidth: 0, flex: '0 1 auto', height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}>
+              <span style={{ overflowWrap: 'anywhere' }}>{note.title}</span>
+            </Button>
+            {note.is_pinned && <Tag color="blue" style={{ marginInlineEnd: 0, flex: 'none' }}>已固定</Tag>}
+            <span style={{ marginInlineStart: 'auto', flex: 'none' }}><NoteFlagButtons projectId={pid} note={note} /></span>
+          </div>
           <Typography.Paragraph ellipsis={{ rows: 2 }} type="secondary" style={{ margin: '6px 0', whiteSpace: 'pre-wrap' }}>
             {note.excerpt || '（暂无正文）'}
           </Typography.Paragraph>

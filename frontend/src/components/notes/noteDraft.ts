@@ -33,3 +33,37 @@ export function noteTargetKey(pathname: string, search: string): string {
   const params = new URLSearchParams(search)
   return `${pathname}?id=${params.get('id') ?? ''}&new=${params.get('new') ?? ''}`
 }
+
+/** 笔记栏的选中项：key 决定编辑器实例，新建保存后只补 id、不重建编辑器。 */
+export interface SideNoteSelection { key: string; id: number | null }
+
+/** 切换笔记栏目标：同一篇不动作；当前有未保存修改时必须先确认。 */
+export function sideNoteSwitch(current: SideNoteSelection | null, target: number | 'new' | null, dirty: boolean): 'same' | 'confirm' | 'switch' {
+  if (target !== 'new' && target !== null && current?.id === target) return 'same'
+  if (target === null && current === null) return 'same'
+  return dirty ? 'confirm' : 'switch'
+}
+
+/** 标记写入只取服务端返回的两个标记，保留编辑器自身的修订号与已保存正文，避免掩盖修订冲突。 */
+export function mergeNoteFlags<T extends Pick<ProjectNote, 'is_favorite' | 'is_pinned'>>(
+  saved: T, updated: Pick<ProjectNote, 'is_favorite' | 'is_pinned'>,
+): T {
+  return { ...saved, is_favorite: updated.is_favorite, is_pinned: updated.is_pinned }
+}
+
+export function noteListEmptyText(query: string, favoriteOnly: boolean): string {
+  if (query) return favoriteOnly ? '没有找到相关的收藏笔记' : '没有找到相关笔记'
+  return favoriteOnly ? '没有收藏的笔记' : '还没有笔记，点击「新建笔记」开始记录'
+}
+
+interface LeaveLocation { pathname: string; search: string }
+
+/**
+ * 章节编辑页离开拦截：正文类草稿在换页或换场景时拦截；
+ * 笔记栏草稿只在离开页面时拦截（切场景不卸载笔记栏）。
+ */
+export function chapterLeaveBlocked(pageGuard: boolean, noteGuard: boolean, current: LeaveLocation, next: LeaveLocation): boolean {
+  const pathChanged = current.pathname !== next.pathname
+  const sceneChanged = new URLSearchParams(current.search).get('scene_id') !== new URLSearchParams(next.search).get('scene_id')
+  return (pageGuard && (pathChanged || sceneChanged)) || (noteGuard && pathChanged)
+}

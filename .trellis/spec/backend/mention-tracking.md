@@ -21,8 +21,9 @@
 | `GET /mentions` | `entity_kind?,entity_id?,source_type?,chapter_from?,chapter_to?,page=1,page_size=20` → `{items,total,page,page_size,source_counts,dictionary_hash}` |
 | `GET /mentions/summary` | 另支持 `category?,q?`，服务端筛选条目后分页 → `{chapters,entries,total,page,page_size}` |
 | `GET /mentions/sources/{type}/{id}` | `start=0,end?,content_hash?` → `SourceWindow`，原文窗口≤8000码点 |
-| `GET/POST /notes` | 分页搜索 `q/page/page_size`；创建 `{title,content?}` →201完整笔记 |
-| `GET/PATCH/DELETE /notes/{id}` | PATCH `{expected_revision,title?,content?}`；DELETE查询参数 `expected_revision` →204 |
+| `GET/POST /notes` | 分页搜索 `q/page/page_size/favorite?/pinned?`（仅 true 过滤，排序 is_pinned desc→updated_at desc→id desc）；创建 `{title,content?}` →201完整笔记 |
+| `GET/PATCH/DELETE /notes/{id}` | PATCH `{expected_revision,title?,content?}`（不接受标记字段）；DELETE查询参数 `expected_revision` →204 |
+| `PUT /notes/{id}/flags` | `{is_favorite?,is_pinned?}` strict bool、拒 null/空体/未知字段（422）；需 `projects.edit` 并锁项目；幂等设置、无 CAS，**不**递增 revision，`updated_at` 显式写回原值 → 完整笔记 |
 
 分页参数：page≥1，page_size 1–100。`entity_kind = character/world/organization/career`，`category = character/place/faction/item/rule/history/other/organization/career`，`source_type = chapter/chat/note/knowledge`。
 
@@ -31,6 +32,8 @@
 - summary 条目有 entity、mention_count、ambiguous_count、chapter_count、last_chapter_no、gap_chapters、稀疏 counts（chapter_id/count/ambiguous_count）；chapters 保留 has_content。
 - `SourceWindow {source,content_hash,stale,window_start,text,spans,target_start,target_end}`，spans 与 target 均为全文绝对码点位置。
 - 迁移 `0032`：`project_notes(id,project_id,title,content,revision,created_at,updated_at)`，project_id CASCADE，revision默认1。列表仅取180字 excerpt，不取长正文。
+- 迁移 `0041`：`project_notes.is_favorite/is_pinned` BOOLEAN NOT NULL 默认 false + 索引 `(project_id,is_pinned,updated_at)`；旧行不改 revision/updated_at。SQLite batch 重建保留 AUTOINCREMENT 高水位；存在任何收藏或固定标记时拒绝有损 downgrade。收藏／固定是作品级数据，不按用户区分。
+- 章节编辑页「笔记」检视标签（`components/notes/NoteSidePanel.tsx`）：固定笔记≤100篇＋搜索打开＋新建，嵌入 `NoteEditor embedded`。嵌入模式不渲染自身 `NoteRouteGuard`（全页只允许一个 `useBlocker`），未保存状态经 `onDirtyChange` 并入编辑页 guard；笔记草稿只在离开编辑页时拦截，不拦截切换 scene_id。笔记栏根节点拦截 Ctrl/⌘+S 冒泡，防止触发 window 级正文保存。笔记栏以 `display:none` 保持挂载（切标签、收起侧栏不丢草稿）；跨移动端断点会重建。
 - 迁移 `0033`：`world_settings.aliases` JSON默认`[]`；API复用 `Aliases`（去空/去重、≤10项、每项≤50字），PATCH省略/null不改、`[]`清空。
 
 ## 3. 关键合同

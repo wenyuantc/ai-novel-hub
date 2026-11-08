@@ -473,6 +473,26 @@ def _migrate_v7_to_v8(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+_NOTE_FLAGS = ("is_favorite", "is_pinned")
+
+
+def _reject_future_note_flags(data: dict[str, Any]) -> None:
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return
+    for row in _rows_in(tables, "project_notes"):
+        if any(key in row for key in _NOTE_FLAGS):
+            raise BadRequestError("旧版备份不支持笔记收藏与固定，请使用原始版本文件")
+
+
+def _migrate_v8_to_v9(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for row in _rows_in(tables, "project_notes"):
+            row.update(dict.fromkeys(_NOTE_FLAGS, False))
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 7:
@@ -481,9 +501,12 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         _reject_future_ai_data(data)
     if version < 8:
         _reject_future_rich_data(data)
+    if version < 9:
+        _reject_future_note_flags(data)
     steps = {
         1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4,
         4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6, 6: _migrate_v6_to_v7, 7: _migrate_v7_to_v8,
+        8: _migrate_v8_to_v9,
     }
     while version < VERSION:
         data = steps[version](data)

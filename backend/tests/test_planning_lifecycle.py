@@ -290,7 +290,7 @@ async def test_v3_backup_round_trip_and_v2_does_not_smuggle_planning(planning_db
     response = await client.get(f"/api/v1/projects/{pid}/backup?snapshots=1")
     assert response.status_code == 200
     backup = response.json()
-    assert backup["version"] == 8
+    assert backup["version"] == 9
     preview = await client.post("/api/v1/projects/import/preview", files={"file": ("book.json", response.content)})
     assert preview.status_code == 200, preview.text
     imported = await client.post("/api/v1/projects/import", json={"token": preview.json()["token"]})

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
 from app.models.notes import ProjectNote
-from app.schemas.notes import NoteCreate, NotePage, NoteSummary, NoteUpdate
+from app.schemas.notes import NoteCreate, NoteFlags, NotePage, NoteSummary, NoteUpdate
 from app.services.admin_service import _escape_like
 from app.services.project_service import get_manageable_project
 
@@ -23,6 +23,8 @@ async def list_notes(
     project_id: int,
     *,
     q: str | None = None,
+    favorite: bool | None = None,
+    pinned: bool | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> NotePage:
@@ -33,15 +35,21 @@ async def list_notes(
         conditions.append(or_(
             ProjectNote.title.ilike(pattern, escape="\\"), ProjectNote.content.ilike(pattern, escape="\\")
         ))
+    # 仅 true 过滤；false / 缺省表示不过滤。
+    if favorite:
+        conditions.append(ProjectNote.is_favorite.is_(True))
+    if pinned:
+        conditions.append(ProjectNote.is_pinned.is_(True))
     total = await db.scalar(select(func.count()).select_from(ProjectNote).where(*conditions)) or 0
     rows = await db.execute(
         select(
             ProjectNote.id, ProjectNote.project_id, ProjectNote.title,
             func.substr(ProjectNote.content, 1, 180).label("excerpt"),
-            ProjectNote.revision, ProjectNote.created_at, ProjectNote.updated_at,
+            ProjectNote.revision, ProjectNote.is_favorite, ProjectNote.is_pinned,
+            ProjectNote.created_at, ProjectNote.updated_at,
         )
         .where(*conditions)
-        .order_by(ProjectNote.updated_at.desc(), ProjectNote.id.desc())
+        .order_by(ProjectNote.is_pinned.desc(), ProjectNote.updated_at.desc(), ProjectNote.id.desc())
         .offset((page - 1) * page_size).limit(page_size)
     )
     return NotePage(
@@ -83,6 +91,24 @@ async def update_note(
     if result.rowcount != 1:
         await db.rollback()
         raise _stale()
+    await db.commit()
+    await db.refresh(note)
+    return note
+
+
+async def set_note_flags(
+    db: AsyncSession, user_id: int, project_id: int, note_id: int, body: NoteFlags
+) -> ProjectNote:
+    """幂等设置收藏／固定；不做 CAS、不递增 revision，并把 updated_at 写回原值以覆盖 onupdate。"""
+    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    note = await _note(db, project_id, note_id)
+    values = body.model_dump(exclude_unset=True)
+    await db.execute(
+        update(ProjectNote)
+        .where(ProjectNote.project_id == project_id, ProjectNote.id == note_id)
+        .values(**values, updated_at=ProjectNote.updated_at)
+        .execution_options(synchronize_session=False)
+    )
     await db.commit()
     await db.refresh(note)
     return note

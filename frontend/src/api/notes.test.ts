@@ -25,6 +25,27 @@ describe('作品笔记 API', () => {
     expect(calls.every(({ init }) => init.credentials === 'include')).toBe(true)
   })
 
+  it('收藏/固定筛选只在为 true 时携带，标记通过独立 PUT 设置且不带修订号', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push({ url, init })
+      return new Response('{}', { status: 200 })
+    })
+    await noteApi.list(7, { q: '线索', favorite: true, page: 1, page_size: 20 })
+    await noteApi.list(7, { pinned: true, page_size: 100 })
+    await noteApi.list(7, { favorite: false, pinned: false })
+    await noteApi.setFlags(7, 3, { is_pinned: true })
+    await noteApi.setFlags(7, 3, { is_favorite: false })
+    expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+      ['GET', '/api/v1/projects/7/notes?q=%E7%BA%BF%E7%B4%A2&favorite=true&page=1&page_size=20'],
+      ['GET', '/api/v1/projects/7/notes?pinned=true&page_size=100'],
+      ['GET', '/api/v1/projects/7/notes'],
+      ['PUT', '/api/v1/projects/7/notes/3/flags'], ['PUT', '/api/v1/projects/7/notes/3/flags'],
+    ])
+    expect(JSON.parse(calls[3].init.body as string)).toEqual({ is_pinned: true })
+    expect(JSON.parse(calls[4].init.body as string)).toEqual({ is_favorite: false })
+  })
+
   it('只识别修订冲突，不自动重试写入', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ detail: '已修改', code: 'stale_revision' }), { status: 409 }))
     vi.stubGlobal('fetch', fetch)

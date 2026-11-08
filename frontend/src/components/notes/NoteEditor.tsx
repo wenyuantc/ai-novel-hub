@@ -1,29 +1,44 @@
 import { DeleteOutlined, SaveOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Form, Input, Modal, Popconfirm, Segmented, Space, Typography } from 'antd'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Navigate, useBlocker, useLocation } from 'react-router-dom'
 import { errorMessage } from '../../api/client'
 import { isNoteConflict, noteApi, type NoteInput, type ProjectNote } from '../../api/notes'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { invalidateProject } from '../../utils/projectRefresh'
 import { formatTime } from '../../utils/time'
-import { noteDirty, noteDraftError, noteSearch, noteTargetKey } from './noteDraft'
+import { mergeNoteFlags, noteDirty, noteDraftError, noteSearch, noteTargetKey } from './noteDraft'
+import NoteFlagButtons from './NoteFlagButtons'
 import { readMentionAnchor } from '../../utils/mentions'
 import MentionPreview from '../mentions/MentionPreview'
 
-interface Props { projectId: number; initial: ProjectNote | null }
+/**
+ * 嵌入模式（章节编辑页笔记栏）：不注册路由拦截与 beforeunload（同页只能有一个 useBlocker），
+ * 未保存状态通过 onDirtyChange 交给宿主页面统一拦截；新建/删除不改 URL，改为回调。
+ * onDirtyChange 须为稳定引用。
+ */
+export interface NoteEditorEmbedded {
+  onDirtyChange: (dirty: boolean) => void
+  onSaved: (note: ProjectNote) => void
+  onDeleted: () => void
+}
+
+interface Props { projectId: number; initial: ProjectNote | null; embedded?: NoteEditorEmbedded }
 
 /** 笔记正文只在明确保存时提交；修订冲突和切换视图都保留当前草稿。 */
-export default function NoteEditor({ projectId: pid, initial }: Props) {
+export default function NoteEditor({ projectId: pid, initial, embedded }: Props) {
   const { message } = App.useApp()
   const { canEdit, canReadNow, canEditNow } = useProjectAccess(pid)
   const location = useLocation()
-  const mentionAnchor = readMentionAnchor(new URLSearchParams(location.search))
+  // 嵌入时宿主页面的 URL 定位参数属于正文，不能套到笔记上。
+  const mentionAnchor = embedded ? null : readMentionAnchor(new URLSearchParams(location.search))
+  const viewSearch = embedded ? '' : location.search
+  const fieldId = useId()
   const [saved, setSaved] = useState(initial)
   const [draft, setDraft] = useState<NoteInput>({ title: initial?.title ?? '', content: initial?.content ?? '' })
   const [view, setView] = useState({ search: '', preview: false })
-  const preview = view.search === location.search ? view.preview : !!mentionAnchor
-  const setPreview = (value: boolean) => setView({ search: location.search, preview: value })
+  const preview = view.search === viewSearch ? view.preview : !!mentionAnchor
+  const setPreview = (value: boolean) => setView({ search: viewSearch, preview: value })
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
@@ -32,15 +47,12 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
   const [pendingSearch, setPendingSearch] = useState<string | null>(null)
   const dirty = noteDirty(draft, saved)
   const guard = pendingSearch === null && dirty
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => guard
-    && noteTargetKey(currentLocation.pathname, currentLocation.search) !== noteTargetKey(nextLocation.pathname, nextLocation.search))
-
+  const onDirtyChange = embedded?.onDirtyChange
+  useEffect(() => { onDirtyChange?.(dirty) }, [dirty, onDirtyChange])
   useEffect(() => {
-    if (!guard) return
-    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
-    window.addEventListener('beforeunload', beforeUnload)
-    return () => window.removeEventListener('beforeunload', beforeUnload)
-  }, [guard])
+    if (!onDirtyChange) return
+    return () => onDirtyChange(false)
+  }, [onDirtyChange])
 
   const save = async () => {
     if (busyRef.current || !canEditNow()) return
@@ -60,7 +72,8 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
       setConflict(false)
       invalidateProject(pid, ['notes'])
       message.success('笔记已保存')
-      if (!saved) setPendingSearch(noteSearch(location.search, updated.id))
+      if (embedded) embedded.onSaved(updated)
+      else if (!saved) setPendingSearch(noteSearch(location.search, updated.id))
     } catch (err) {
       if (!canReadNow()) return
       setConflict(isNoteConflict(err))
@@ -101,7 +114,8 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
       if (!canEditNow()) return
       invalidateProject(pid, ['notes'])
       message.success('笔记已删除')
-      setPendingSearch(noteSearch(location.search, null))
+      if (embedded) embedded.onDeleted()
+      else setPendingSearch(noteSearch(location.search, null))
     } catch (err) {
       if (!canReadNow()) return
       setConflict(isNoteConflict(err))
@@ -117,6 +131,8 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
   return <div onKeyDown={(event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
+      // 嵌入编辑页时阻止冒泡到 window 级快捷键，避免同时触发正文保存。
+      if (embedded) event.stopPropagation()
       void save()
     }
   }}>
@@ -125,6 +141,8 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
         value={preview ? 'preview' : 'edit'} onChange={(value) => setPreview(value === 'preview')} />
         : <Typography.Text type="secondary">只读查看</Typography.Text>}
       <Space wrap>
+        {saved && <NoteFlagButtons projectId={pid} note={saved}
+          onChange={(updated) => setSaved((value) => value && mergeNoteFlags(value, updated))} />}
         <Typography.Text type="secondary">{dirty ? '有未保存修改' : saved ? `已保存 · ${formatTime(saved.updated_at)}` : '新笔记'}</Typography.Text>
         {canEdit && <Button type="primary" icon={<SaveOutlined />} loading={busy} disabled={!dirty && !!saved}
           onClick={() => { void save() }}>保存</Button>}
@@ -135,17 +153,18 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
       action={conflict && saved ? <Button size="small" disabled={busy} onClick={() => setReloadConfirm(true)}>加载最新版本</Button> : undefined}
       style={{ marginBottom: 16 }} />}
     {canEdit && !preview ? <Form layout="vertical">
-      <Form.Item label="标题" htmlFor="note-title" required>
-        <Input id="note-title" value={draft.title} disabled={busy} placeholder="例如：人物线索、调查资料、后续想法"
+      <Form.Item label="标题" htmlFor={`${fieldId}-title`} required>
+        <Input id={`${fieldId}-title`} value={draft.title} disabled={busy} placeholder="例如：人物线索、调查资料、后续想法"
           onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} />
       </Form.Item>
-      <Form.Item label="正文" htmlFor="note-content" extra="纯文本笔记，最多 200000 字。保存后参与提及追踪。">
-        <Input.TextArea id="note-content" value={draft.content} disabled={busy} autoSize={{ minRows: 14, maxRows: 28 }}
+      <Form.Item label="正文" htmlFor={`${fieldId}-content`} extra="纯文本笔记，最多 200000 字。保存后参与提及追踪。">
+        <Input.TextArea id={`${fieldId}-content`} value={draft.content} disabled={busy}
+          autoSize={embedded ? { minRows: 8, maxRows: 18 } : { minRows: 14, maxRows: 28 }}
           placeholder="记录想法、研究材料或创作待办……"
           onChange={(event) => setDraft((value) => ({ ...value, content: event.target.value }))} />
       </Form.Item>
     </Form> : <section aria-label="笔记原文">
-      <Typography.Title level={4} style={{ overflowWrap: 'anywhere' }}>{draft.title || '未命名笔记'}</Typography.Title>
+      <Typography.Title level={embedded ? 5 : 4} style={{ overflowWrap: 'anywhere' }}>{draft.title || '未命名笔记'}</Typography.Title>
       <div style={{ lineHeight: 1.8 }}><MentionPreview projectId={pid} text={draft.content} anchor={mentionAnchor} draft={dirty} /></div>
     </section>}
     {canEdit && saved && <Popconfirm title={`删除「${saved.title}」？`} description="笔记及未保存的修改将被删除。"
@@ -156,10 +175,25 @@ export default function NoteEditor({ projectId: pid, initial }: Props) {
       onOk={() => { void loadLatest() }} okText="放弃修改并加载" cancelText="保留草稿">
       当前未保存的内容会被最新版本替换。
     </Modal>
-    <Modal title="笔记有未保存修改" open={blocker.state === 'blocked'} okText="放弃修改并离开" cancelText="继续编辑"
-      okButtonProps={{ danger: true, disabled: busy }} onCancel={() => { if (blocker.state === 'blocked') blocker.reset() }}
-      onOk={() => { if (blocker.state === 'blocked') blocker.proceed() }}>
-      {busy ? '正在保存，请等待请求完成。' : '离开将丢弃当前笔记的未保存修改。'}
-    </Modal>
+    {!embedded && <NoteRouteGuard guard={guard} busy={busy} />}
   </div>
+}
+
+/** 独立笔记页的离开保护；仅在非嵌入模式渲染，避免与宿主页面的 useBlocker 并存。 */
+function NoteRouteGuard({ guard, busy }: { guard: boolean; busy: boolean }) {
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => guard
+    && noteTargetKey(currentLocation.pathname, currentLocation.search) !== noteTargetKey(nextLocation.pathname, nextLocation.search))
+
+  useEffect(() => {
+    if (!guard) return
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [guard])
+
+  return <Modal title="笔记有未保存修改" open={blocker.state === 'blocked'} okText="放弃修改并离开" cancelText="继续编辑"
+    okButtonProps={{ danger: true, disabled: busy }} onCancel={() => { if (blocker.state === 'blocked') blocker.reset() }}
+    onOk={() => { if (blocker.state === 'blocked') blocker.proceed() }}>
+    {busy ? '正在保存，请等待请求完成。' : '离开将丢弃当前笔记的未保存修改。'}
+  </Modal>
 }

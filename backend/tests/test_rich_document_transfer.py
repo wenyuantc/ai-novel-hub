@@ -41,7 +41,7 @@ async def _seed_rich(app, client):
 async def test_rich_backup_roundtrip_rebinds_scene_and_section_ids(app, client):
     project, _chapter, _first, _second = await _seed_rich(app, client)
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (8, "0040")
+    assert (data["version"], data["app_schema"]) == (9, "0041")
     imported = await _import(client, data)
     result = await _backup(client, imported["project"]["id"])
     old_block, new_block = data["tables"]["scene_sections"][0], result["tables"]["scene_sections"][0]

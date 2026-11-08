@@ -71,6 +71,7 @@ vi.mock('../../components/scenes/useSceneEditor', () => ({ useSceneEditor: () =>
 vi.mock('../../components/chapter/AnalysisDrawer', () => ({ default: ({ onRevise }: { onRevise: (body: ReviseChapterRequest) => Promise<boolean> }) => { view.onRevise = onRevise; return null } }))
 vi.mock('../../components/scenes/SceneWritingPanel', () => ({ default: () => null }))
 vi.mock('../../components/chapter/VersionDrawer', () => ({ default: () => null }))
+vi.mock('../../components/notes/NoteSidePanel', () => ({ default: () => null }))
 vi.mock('../../components/chapter/RewritePanel', () => ({ default: () => null }))
 vi.mock('../../components/chapter/CastSelect', () => ({ default: () => null }))
 vi.mock('../../components/chapter/ChapterStyleSetting', () => ({ default: () => null }))
