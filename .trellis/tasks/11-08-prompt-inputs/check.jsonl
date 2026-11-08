@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "提示词模板校验/渲染/覆盖/导入导出契约"}
+{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "Skill 归属、导入格式、快照与智能体契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与归属校验约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError 与 extra 错误体"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁与 README 同步"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "SkillSelect 复用与页面模式"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像后端 schema"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流检查"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "智能体工具层、start_task 预览与 preview_changed"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "批量任务 input 快照与续跑"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "新增 useSkillChoice hook 约定"}

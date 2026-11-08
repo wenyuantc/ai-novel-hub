@@ -1,0 +1,29 @@
+{
+  "id": "prompt-components-inputs",
+  "name": "prompt-components-inputs",
+  "title": "提示词组件与自定义输入表单",
+  "description": "TODOS 第10项：提示词可复用组件与作者自定义输入表单的总任务，负责需求来源、子任务映射与集成验收",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-11-08",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-08-prompt-components",
+    "11-08-prompt-inputs"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
