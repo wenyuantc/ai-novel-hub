@@ -30,10 +30,13 @@ from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRul
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 7
+VERSION = 8
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0039"
+APP_SCHEMA = "0040"
 BATCH = 500
+# 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
+RICH_ROW_BATCH = 1
+BUFFER_CHARS = 1_000_000
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 STYLE_FIELDS = ("name", *FIELD_LIMITS)
 
@@ -105,15 +108,17 @@ async def _assert_export_active(db: AsyncSession, plan: ExportPlan) -> None:
 async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> AsyncIterator[Any]:
     table = rule.model.__table__
     base = select(table).where(_scope(rule, plan))
-    if not rule.has_id:
+    if not rule.has_id and rule.table != "scene_documents":
         await _assert_export_active(db, plan)
         for row in (await db.execute(base.order_by(*table.primary_key.columns))).mappings():
             yield row
         return
+    key = table.c.id if rule.has_id else table.c.scene_id
+    page_size = RICH_ROW_BATCH if rule.table in {"scene_documents", "scene_sections"} else BATCH
     last = 0
     while True:
         await _assert_export_active(db, plan)
-        rows = (await db.execute(base.where(table.c.id > last).order_by(table.c.id).limit(BATCH))).mappings().all()
+        rows = (await db.execute(base.where(key > last).order_by(key).limit(page_size))).mappings().all()
         casts: dict[int, list[int]] = {}
         if rule.table == "chapter_plans":
             chapter_ids = [row["chapter_id"] for row in rows if row["chapter_id"] is not None]
@@ -128,9 +133,9 @@ async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> Asy
                 yield {**row, "character_ids": casts.get(row["chapter_id"], [])}
             else:
                 yield row
-        if len(rows) < BATCH:
+        if len(rows) < page_size:
             return
-        last = rows[-1]["id"]
+        last = rows[-1][key.name]
 
 
 async def _styles(db: AsyncSession, project: Project) -> tuple[list[dict[str, Any]], dict[int, str]]:
@@ -189,16 +194,19 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             yield f'{prefix}"{rule.table}":['.encode()
             first = True
             buffer: list[str] = []
+            buffer_chars = 0
             async for row in _iter_rows(db, rule, plan):
                 data = _row(rule, row, included)
                 if rule.table == "chapters":
                     data["style_ref"] = refs.get(row["style_id"]) if row["style_id"] is not None else None
                 elif rule.table == "relationship_types":
                     data["global"] = row["project_id"] is None
-                buffer.append(_dumps(data))
-                if len(buffer) >= BATCH:
+                encoded = _dumps(data)
+                buffer.append(encoded)
+                buffer_chars += len(encoded)
+                if len(buffer) >= BATCH or buffer_chars >= BUFFER_CHARS:
                     yield (("" if first else ",") + ",".join(buffer)).encode("utf-8")
-                    first, buffer = False, []
+                    first, buffer, buffer_chars = False, [], 0
             if buffer:
                 yield (("" if first else ",") + ",".join(buffer)).encode("utf-8")
             yield b"]"

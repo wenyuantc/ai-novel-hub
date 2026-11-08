@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Response, status
 
 from app.core.deps import CurrentUser, DbDep
-from app.schemas.reader import ReadingProgressIn, TocItem
+from app.schemas.reader import ReaderChapter, ReadingProgressIn, TocItem
 from app.services import reader_service as svc
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["reader"])
@@ -16,3 +16,8 @@ async def save_reading_progress(project_id: int, body: ReadingProgressIn, user: 
 @router.get("/reader/toc", response_model=list[TocItem])
 async def reader_toc(project_id: int, user: CurrentUser, db: DbDep) -> list[TocItem]:
     return await svc.toc(db, user.id, project_id)
+
+
+@router.get("/reader/chapters/{chapter_id}", response_model=ReaderChapter)
+async def reader_chapter(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> ReaderChapter:
+    return await svc.chapter(db, user.id, project_id, chapter_id)

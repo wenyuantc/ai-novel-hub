@@ -61,6 +61,15 @@ from app.models.planning import (
 )
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
+from app.models.rich_document import (
+    SceneDocumentMeta,
+    SceneMarker,
+    SceneReviewAnalysisReceipt,
+    SceneReviewPayloadChunk,
+    SceneReviewProposal,
+    SceneSection,
+    SceneSelectionReceipt,
+)
 from app.models.scenes import Scene
 from app.models.series import Series, SeriesBook, SeriesEntry, SeriesEntryUse
 from app.models.setting_categories import SettingCategory, SettingCategoryRule
@@ -134,6 +143,13 @@ __all__ = [
     "RelationshipType",
     "RetrievalChunk",
     "Scene",
+    "SceneDocumentMeta",
+    "SceneMarker",
+    "SceneReviewAnalysisReceipt",
+    "SceneReviewProposal",
+    "SceneReviewPayloadChunk",
+    "SceneSection",
+    "SceneSelectionReceipt",
     "Series",
     "SeriesBook",
     "SeriesEntry",

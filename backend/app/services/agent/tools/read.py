@@ -6,7 +6,7 @@ from math import ceil
 from pydantic import Field
 from sqlalchemy import select
 
-from app.core.errors import BadRequestError, NotFoundError
+from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Character, Organization, Outline, StoryMemory, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.chapter import ChapterBrief
@@ -236,17 +236,48 @@ async def chapters(ctx: ToolCtx, args: PageArgs) -> dict:
 
 
 async def chapter(ctx: ToolCtx, args: ChapterReadArgs) -> dict:
+    from app.services.rich_document_ai import render_visible_sections, visible_sections
+    from app.services.scene_service import check_revision, list_active_scenes, project_scenes
+
     row = await chapter_service.get_project_chapter(ctx.db, ctx.user_id, ctx.project_id, args.id)
     pages = max(1, ceil(len(row.content) / 4000))
     if args.page > pages:
         raise BadRequestError(f"页码超出范围，共 {pages} 页")
     start = (args.page - 1) * 4000
-    return {
+    end = min(start + 4000, len(row.content))
+    revision = row.content_revision
+    scenes = await list_active_scenes(ctx.db, row.id)
+    projected, ranges = project_scenes(scenes)
+    if not scenes or projected != row.content:
+        raise ConflictError("章节场景正文投影不一致", extra={"code": "scene_invariant_error"})
+    scene_lengths = {scene.id: len(scene.content) for scene in scenes}
+    intervals = {}
+    for item in ranges:
+        if item.end < start or item.start > end:
+            continue
+        lower = max(0, start - item.start)
+        upper = min(scene_lengths[item.scene_id], end - item.start)
+        if lower > upper:
+            continue
+        include_upper = item.start + upper < end or (args.page == pages and item.start + upper == len(row.content))
+        if lower < upper or include_upper:
+            intervals[item.scene_id] = (lower, upper, include_upper)
+    result = {
         **serialized(ChapterBrief.model_validate(row)),
-        "content": row.content[start : start + 4000],
+        "content": row.content[start:end],
         "page": args.page,
         "pages": pages,
     }
+    # 正文分页与码点偏移保持旧合同；作者区块作为独立、受预算控制的非正文背景。
+    visible = await visible_sections(ctx.db, ctx.project_id, scene_ids=list(intervals), anchor_ranges=intervals,
+                                     max_rows=8, text_limit=256)
+    author_context = render_visible_sections(visible, 1_500)
+    if author_context:
+        result["author_sections"] = author_context
+    await check_revision(ctx.db, row, revision)
+    if ctx.scope is not None:
+        await ctx.scope.verify(ctx.db)
+    return result
 
 
 async def analysis(ctx: ToolCtx, args: AnalysisArgs) -> dict:
@@ -358,7 +389,7 @@ TOOLS = [
     Tool("get_outline_tree", "分页读取卷、大纲与细纲概要", PageArgs, "read", outline_tree),
     Tool("get_outline", "读取大纲及其细纲", IdArgs, "read", outline, id_model=Outline),
     Tool("list_chapters", "分页读取章节及分析状态", PageArgs, "read", chapters),
-    Tool("read_chapter", "分页读取章节正文，每页4000字", ChapterReadArgs, "read", chapter),
+    Tool("read_chapter", "分页读取章节正式正文（每页4000字）及已启用的作者区块参考", ChapterReadArgs, "read", chapter),
     Tool("get_chapter_analysis", "读取章节最新分析", AnalysisArgs, "read", analysis),
     Tool("list_foreshadows", "分页读取伏笔与回收状态", ForeshadowListArgs, "read", foreshadows),
     Tool("search_memories", "检索剧情记忆", SearchArgs, "read", memories),

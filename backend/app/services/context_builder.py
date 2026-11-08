@@ -38,6 +38,7 @@
   7. 最终硬截断兜底，保证不超过预算
 """
 
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
@@ -849,7 +850,7 @@ async def build_chapter_context(
         )
         scope = prepared.scope
         cast = build_cast_section(prepared, planning=planning)
-        prior = await prior_chapters(db, project, chapter)
+        prior = await prior_chapters(db, project, chapter, budget=budget)
         guarded_embedder = guard_embedder(embedder, scope.stamp, visibility_sessionmaker(db)) if embedder else None
         knowledge, memories = await retrieval_blocks(
             db, project, chapter, task, cast.names, prior, embedder=guarded_embedder,
@@ -925,7 +926,11 @@ async def build_setting_context(
         return header + body if body else ""
 
 
-async def prior_chapters(db: AsyncSession, project: Project, chapter: Chapter) -> list[PriorChapter]:
+async def prior_chapters(
+    db: AsyncSession, project: Project, chapter: Chapter, *, budget: int = 4_000,
+) -> list[PriorChapter]:
+    from app.services.rich_document_ai import render_visible_sections, visible_sections
+
     rows = await db.execute(
         select(Chapter.id, Chapter.chapter_no, Chapter.title, Chapter.content)
         .where(
@@ -937,10 +942,41 @@ async def prior_chapters(db: AsyncSession, project: Project, chapter: Chapter) -
     )
     prior_rows = rows.all()
     summaries = await latest_summaries(db, project.id, [r[0] for r in prior_rows])
-    return [
-        PriorChapter(chapter_no=no, title=title, content=content, summary=summaries.get(cid, ""))
-        for cid, no, title, content in prior_rows
-    ]
+    author_budget = max(0, min(12_000, budget // 4))
+    sections = []
+    if author_budget >= 100:
+        row_budget = min(64, max(1, author_budget // 256))
+        sections = await visible_sections(
+            db, project.id, chapter_ids=[row[0] for row in reversed(prior_rows)], recent_first=True,
+            max_rows=row_budget, text_limit=min(2_000, max(1, author_budget // row_budget)),
+        )
+    by_chapter = defaultdict(list)
+    for item in sections:
+        by_chapter[item.chapter_id].append(item)
+    rendered = {}
+    notice = "\n[其他前章的已开启区块可能因预算未纳入]"
+    remaining_author = max(0, author_budget - len(notice))
+    for cid, _no, _title, _content in reversed(prior_rows):
+        author_context = render_visible_sections(by_chapter[cid], min(1_500, remaining_author))
+        if author_context:
+            rendered[cid] = author_context
+            remaining_author -= len(author_context)
+    omitted_chapters = [cid for cid, _no, _title, _content in reversed(prior_rows)
+                        if by_chapter[cid] and cid not in rendered]
+    if omitted_chapters and rendered:
+        rendered[next(iter(rendered))] += notice
+    result = []
+    for cid, no, title, content in prior_rows:
+        summary = summaries.get(cid, "")
+        author_context = rendered.get(cid, "")
+        if author_context:
+            if not summary.strip():
+                compact = " ".join(content.split())
+                summary = compact[:SUMMARY_CHARS] + (ELLIPSIS if len(compact) > SUMMARY_CHARS else "")
+            summary = "\n".join(part for part in (summary, author_context) if part)
+            content = "\n\n".join(part for part in (content, author_context) if part)
+        result.append(PriorChapter(chapter_no=no, title=title, content=content, summary=summary))
+    return result
 
 
 def prior_coverage(prior: list[PriorChapter], recent_count: int = RECENT_FULL_CHAPTERS) -> tuple[set[int], set[int]]:

@@ -136,6 +136,21 @@ class TaskEngine:
         if self._wake is not None:
             self._wake.set()
 
+    async def _durable_rich_review(self, task: Task | None) -> tuple[Task, dict[str, Any]] | None:
+        """仅认同一个不可复用 task UUID 与事务内已落库的提案/轮次。"""
+        if task is None or task.statistics_key is None:
+            return None
+        from app.services.rich_document_review import recover_pending_identity
+
+        async with self.ctx.sessionmaker() as db:
+            row = await db.scalar(select(Task).where(
+                Task.id == task.id, Task.statistics_key == task.statistics_key,
+            ))
+            if row is None or row.status != "running":
+                return None
+            identity = await recover_pending_identity(db, row)
+            return (row, identity) if identity is not None else None
+
     async def recover(self) -> None:
         """把上次进程遗留的 running 任务置为 interrupted，并还原其占用的资源；queued 任务保持不变。"""
         sm = self.ctx.sessionmaker
@@ -147,6 +162,26 @@ class TaskEngine:
             if task.statistics_key is not None:
                 self.admin_cancellations.recovering.add(task.statistics_key)
             handler = _try_handler(task.kind)
+            pending = await self._durable_rich_review(task)
+            if pending is not None:
+                current, identity = pending
+                if current.admin_cancel_operation_id is not None:
+                    # 管理员显式取消由其持久化 drain 接管；不能先以 interrupted 或 on_abort 覆盖提案。
+                    continue
+                try:
+                    row, committed = await self.complete_state(
+                        current, expected_status="running", status="paused", result=identity, error="",
+                        text=current.output_text, progress=current.progress, abort_ok=True,
+                    )
+                except Exception:
+                    logger.error("富文档提案启动恢复尚未完成 task_key=%s", task.statistics_key)
+                    continue
+                if committed and task.statistics_key is not None:
+                    self.admin_cancellations.recovering.discard(task.statistics_key)
+                if row is not None and row.status == "paused":
+                    self.close_hub(task.id, "paused", {"task": task_service.out_json(row), "result": identity},
+                                   statistics_key=task.statistics_key)
+                continue
             abort_ok = handler is not None
             if handler is not None:
                 try:
@@ -497,8 +532,15 @@ class TaskEngine:
         committed = False
         abort_ok = status in ("succeeded", "paused") or (handler is not None and task is not None)
         try:
+            pending = await self._durable_rich_review(task)
+            if pending is not None and status not in ("succeeded", "paused"):
+                current, identity = pending
+                # 一旦提案事务提交，后续异常/关机不能重发模型；显式取消只丢弃提案、不回滚后来抢占。
+                if status != "cancelled" and current.admin_cancel_operation_id is None:
+                    status, result, error = "paused", identity, ""
+                abort_ok = True
             # 暂停时资源已在当前步结束时释放，断点保留，不回退
-            if status not in ("succeeded", "paused") and handler is not None and task is not None:
+            if status not in ("succeeded", "paused") and pending is None and handler is not None and task is not None:
                 try:
                     await handler.on_abort(self.ctx, task)
                 except Exception:
@@ -584,6 +626,9 @@ class TaskEngine:
                 if observed is not None and not abort_ok:
                     # 收尾失败绝不释放管理员意图持有的资源屏障。
                     return row, False
+                if status == "paused" and isinstance(result, dict) and result.get("reason") == "rich_document_review" \
+                        and observed is not None:
+                    status, result, error = "cancelled", None, "任务已取消，候选未采纳"
                 stamp = None if status == "paused" else task_statistics_service.now_utc()
                 changed = await db.execute(update(Task).where(
                     Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == expected_status,
@@ -597,6 +642,10 @@ class TaskEngine:
                 if changed.rowcount != 1:
                     await db.rollback()
                     continue
+                if status == "cancelled":
+                    from app.services.rich_document_review import discard_pending
+
+                    await discard_pending(db, row)
                 await task_statistics_service.record_state_change(db, row, status, finished_at=stamp)
                 try:
                     await db.commit()

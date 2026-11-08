@@ -25,6 +25,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 from app.ai.images import IMAGE_EXTENSIONS
 from app.models import Chapter, Outline, Project
+from app.schemas.reader import ReaderBlock
 from app.services.export_service import chapter_heading
 
 MIMETYPE = b"application/epub+zip"
@@ -35,7 +36,8 @@ _CN_DIGITS = "零一二三四五六七八九"
 
 CSS = """body { margin: 0 5%; }
 h1, h2, h3 { text-align: center; font-weight: bold; }
-h1 { margin: 30% 0 1em; font-size: 1.8em; }
+h1 { font-size: 1.8em; }
+.title-page h1 { margin: 30% 0 1em; }
 h2 { margin: 1.5em 0 1.2em; font-size: 1.4em; }
 p { text-indent: 2em; line-height: 1.6; margin: 0 0 .4em; }
 .title-page p, .volume-page p { text-indent: 0; text-align: center; }
@@ -82,6 +84,7 @@ class EpubChapter:
     file: str
     heading: str
     paragraphs: list[str]
+    body_xhtml: str | None = None
 
 
 @dataclass
@@ -142,7 +145,10 @@ def build_book(
     author: str,
     include_synopsis: bool,
     now: datetime | None = None,
+    formatting: dict[int, list[ReaderBlock]] | None = None,
 ) -> EpubBook:
+    from app.services.rich_document_render import render_xhtml
+
     now = now or datetime.now(UTC)
     volumes: list[EpubVolume] = []
     ch_index = 0
@@ -155,7 +161,9 @@ def build_book(
             volume = EpubVolume(file=f"vol-{vol_index}.xhtml", label=volume_label(vol_no, vol_title))
         for ch in items:
             ch_index += 1
-            volume.chapters.append(EpubChapter(f"ch-{ch_index}.xhtml", chapter_heading(ch), paragraphs(ch.content)))
+            rich_body = render_xhtml(ch.content, formatting[ch.id], x) if formatting and ch.id in formatting else None
+            volume.chapters.append(EpubChapter(f"ch-{ch_index}.xhtml", chapter_heading(ch), paragraphs(ch.content),
+                                               body_xhtml=rich_body))
         volumes.append(volume)
     synopsis = (project.synopsis or "").strip() or (project.premise or "").strip()
     tags = [t for t in (project.tags or []) if isinstance(t, str) and t.strip()]
@@ -208,7 +216,9 @@ def _volume_page(volume: EpubVolume) -> str:
 
 
 def _chapter_page(ch: EpubChapter) -> str:
-    body = f"<h2>{x(ch.heading)}</h2>\n" + "\n".join(f"<p>{x(p)}</p>" for p in ch.paragraphs)
+    body = f"<h2>{x(ch.heading)}</h2>\n" + (
+        ch.body_xhtml if ch.body_xhtml is not None else "\n".join(f"<p>{x(p)}</p>" for p in ch.paragraphs)
+    )
     return _xhtml(ch.heading, body)
 
 
@@ -368,7 +378,9 @@ def build_epub(
     include_synopsis: bool,
     now: datetime | None = None,
     cover: tuple[bytes, str] | None = None,
+    formatting: dict[int, list[ReaderBlock]] | None = None,
 ) -> bytes:
-    book = build_book(project, chapters, outlines, author=author, include_synopsis=include_synopsis, now=now)
+    book = build_book(project, chapters, outlines, author=author, include_synopsis=include_synopsis, now=now,
+                      formatting=formatting)
     book.cover = cover
     return render(book)

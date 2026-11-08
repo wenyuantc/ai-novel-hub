@@ -95,7 +95,10 @@ def visibility_sessionmaker(db: AsyncSession) -> async_sessionmaker[AsyncSession
         bind = bind.engine
     if not isinstance(bind, AsyncEngine):
         raise RuntimeError("受控 AI 请求缺少数据库引擎")
-    return async_sessionmaker(bind, expire_on_commit=False)
+    # 单次授权发送可能先取认证写门禁；仅复用协调器，不跨会话共享 actor 或事务状态。
+    runtime = db.info.get("authorization_runtime")
+    info = {"authorization_runtime": runtime} if runtime is not None else {}
+    return async_sessionmaker(bind, expire_on_commit=False, info=info)
 
 
 async def _lock_postgres(db: AsyncSession, project_id: int, *, write: bool) -> None:
@@ -154,6 +157,7 @@ class _GuardedProvider(LLMProvider):
     def __init__(
         self, provider: LLMProvider, stamp: VisibilityStamp, sessionmaker: async_sessionmaker[AsyncSession],
         verify: Callable[[AsyncSession], Awaitable[None]] | None = None,
+        authorize: Callable[[AsyncSession], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(provider.api_key, provider.base_url, provider.timeout)
         self.follow_redirects = provider.follow_redirects
@@ -161,10 +165,13 @@ class _GuardedProvider(LLMProvider):
         self._stamp = stamp
         self._sessionmaker = sessionmaker
         self._verify = verify
+        self._authorize = authorize
 
     @asynccontextmanager
     async def _send_lease(self) -> AsyncIterator[None]:
         async with self._sessionmaker() as db:
+            if self._authorize is not None:
+                await self._authorize(db)
             try:
                 await _lock(db, self._stamp.project_id, write=False)
             except NotFoundError:
@@ -180,6 +187,8 @@ class _GuardedProvider(LLMProvider):
             # 注入的 FakeLLM 等不发 HTTP，仍要在调用时检查，确保测试捕获的
             # messages 与真实模型受同一代次限制；不把事务锁留到替身响应流。
             async with self._sessionmaker() as db:
+                if self._authorize is not None:
+                    await self._authorize(db)
                 await require_visibility_stamp(db, self._stamp)
                 if self._verify is not None:
                     await self._verify(db)
@@ -254,6 +263,7 @@ class _GuardedProvider(LLMProvider):
 def guard_provider(
     provider: LLMProvider, stamp: VisibilityStamp, sessionmaker: async_sessionmaker[AsyncSession],
     *, verify: Callable[[AsyncSession], Awaitable[None]] | None = None,
+    authorize: Callable[[AsyncSession], Awaitable[None]] | None = None,
 ) -> LLMProvider:
     """把构建时的戳绑定到 provider；每次调用重验而非给旧消息续签。"""
     if isinstance(provider, _GuardedProvider):
@@ -261,5 +271,7 @@ def guard_provider(
             raise VisibilityChangedError
         if verify is not None and provider._verify is not verify:
             raise VisibilityChangedError
+        if authorize is not None and provider._authorize is not authorize:
+            raise VisibilityChangedError
         return provider
-    return _GuardedProvider(provider, stamp, sessionmaker, verify)
+    return _GuardedProvider(provider, stamp, sessionmaker, verify, authorize)

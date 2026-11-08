@@ -79,7 +79,7 @@ class BatchHandler:
     async def on_abort(self, ctx: TaskContext, task: Task) -> None:
         """失败 / 取消 / 中断：断点中的当前章仍处于 generating 时还原（已完成的章节保留）。"""
         try:
-            await batch_service.restore_current(ctx, task.id)
+            await batch_service.restore_current(ctx, task.id, task.statistics_key)
         except Exception:  # noqa: BLE001
             logger.error("任务回退当前章节状态失败 task=%s", task.id)
             raise

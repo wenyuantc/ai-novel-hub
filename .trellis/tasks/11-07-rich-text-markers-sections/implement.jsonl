@@ -1,0 +1,23 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据、投影和事务契约"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用已有结构写入与边界类型"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/database-core.md", "reason": "数据库、迁移和写入约束；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/database-history-tasks.md", "reason": "数据库、迁移和写入约束；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/error-core.md", "reason": "API 错误和 SSE 行为；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/error-tasks.md", "reason": "API 错误和 SSE 行为；已保留来源和行号的规范摘录"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "场景权威、版本、拆并及 AI 快照"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "纯文本指纹、定位与提及统计"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份注册、历史身份重映射和 EPUB"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "批量任务 checkpoint、暂停和续跑"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/agent-tools.md", "reason": "Agent 读写、提案与 effects 保护；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/agent-effects.md", "reason": "Agent 读写、提案与 effects 保护；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/agent-runtime.md", "reason": "Agent 读写、提案与 effects 保护；已保留来源和行号的规范摘录"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "AI 出站门禁与旧会话封存"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试、权限、安全和 README 更新"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/frontend-editor.md", "reason": "编辑器、AntD 和权限界面模式；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/frontend-reader.md", "reason": "编辑器、AntD 和权限界面模式；已保留来源和行号的规范摘录"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "场景草稿及异步状态所有权"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/frontend-types.md", "reason": "结构类型、API 和坐标转换；已保留来源和行号的规范摘录"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/current-boundaries.md", "reason": "本任务证据与编辑器研究"}

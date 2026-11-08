@@ -10,6 +10,7 @@ handler 可选钩子（getattr 探测）：
 
 import asyncio
 import bisect
+from copy import deepcopy
 from datetime import UTC, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,7 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, Project, Task
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
+from app.schemas.rich_document_review import ReviewIdentity
 from app.schemas.scene_ai import SceneTarget, parse_target
 from app.schemas.skill import SkillRef
 from app.schemas.task import TaskOut
@@ -119,6 +121,14 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
         "outline_id": _request_int(task, "outline_id") if task.kind == "outline.expand" else None,
         "skill": _skill_ref(task),
     }
+    review = (task.checkpoint or {}).get("rich_review") if isinstance(task.checkpoint, dict) else None
+    if (isinstance(review, dict) and task.statistics_key is not None and review.get("phase") in
+            ("awaiting_review", "applied", "discarded") and all(
+                isinstance(review.get(key), str) for key in ("run_key", "token")
+            ) and type(review.get("chapter_id")) is int):
+        update_fields["rich_review"] = {"task_key": task.statistics_key, "run_key": review["run_key"],
+                                        "token": review["token"], "chapter_id": review["chapter_id"],
+                                        "phase": review["phase"]}
     checkpoint_out = getattr(get_handler(task.kind), "checkpoint_out", None)
     if checkpoint_out is not None:
         update_fields["checkpoint"] = checkpoint_out(task)
@@ -175,6 +185,10 @@ async def create_task(
         spec = await handler.validate_and_claim(db, engine.ctx, user_id=user_id, kind=kind, params=params)
     if spec.project_id is not None:
         await get_owned_project(db, user_id, spec.project_id, lock=True)
+    checkpoint = deepcopy(retry_of.checkpoint) if retry_of is not None and retry_of.checkpoint is not None else None
+    if isinstance(checkpoint, dict):
+        # 重试是新的 task UUID/执行轮次，不能复制旧提案身份。
+        checkpoint.pop("rich_review", None)
     task = Task(
         user_id=user_id,
         project_id=spec.project_id,
@@ -188,7 +202,7 @@ async def create_task(
         stage=STAGE_LABELS["queued"],
         retry_of_id=retry_of.id if retry_of is not None else spec.retry_of_id,
         step_cursor=retry_of.step_cursor if retry_of is not None else 0,
-        checkpoint=retry_of.checkpoint if retry_of is not None else None,
+        checkpoint=checkpoint,
     )
     db.add(task)
     try:
@@ -230,6 +244,10 @@ async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
         await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status != "paused":
         raise ConflictError("只有待审核的任务可以继续")
+    from app.services.rich_document_review import pending_for_task
+
+    if await pending_for_task(db, task) is not None:
+        raise ConflictError("请先核对并采纳或放弃富文档提案", extra={"code": "rich_review_pending"})
     hook = getattr(get_handler(task.kind), "revalidate_resume", None)
     if hook is not None:
         await hook(db, engine.ctx, task)
@@ -262,7 +280,9 @@ async def resume_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task
     return await task_out(db, engine, task)
 
 
-async def finish_paused_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
+async def finish_paused_task(
+    db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int, expected_review: ReviewIdentity | None = None,
+) -> TaskOut:
     """待审核 → 已完成（提前结束）：剩余步骤不再执行。"""
     task = await get_owned_task(db, user_id, task_id)
     await refresh_same_task(db, task)
@@ -272,17 +292,29 @@ async def finish_paused_task(db: AsyncSession, engine: "TaskEngine", user_id: in
         await get_owned_project(db, user_id, task.project_id, lock=True)
     if task.status != "paused":
         raise ConflictError("只有待审核的任务可以结束")
+    from app.services.rich_document_review import discard_pending, pending_for_task, require_review_identity
+
+    await require_review_identity(db, task, expected_review)
+    proposal = await pending_for_task(db, task)
     hook = getattr(get_handler(task.kind), "finish_result", None)
     final = hook(task) if hook is not None else {**(task.result or {}), "ended_early": True}
+    if proposal is not None:
+        final = {**final, "ended_early": True, "review_discarded": True, "applied": False}
+    status = "cancelled" if proposal is not None and task.kind != "chapter.batch" else "succeeded"
     stamp = task_statistics_service.now_utc()
     result = await db.execute(
         update(Task)
         .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
+               Task.queued_at == task.queued_at,
                Task.admin_cancel_operation_id.is_(None))
-        .values(status="succeeded", result=final, progress=100, stage=STAGE_LABELS["succeeded"], finished_at=stamp)
+        .values(status=status, result=final, progress=100 if status == "succeeded" else task.progress,
+                error="候选未采纳，任务已结束" if status == "cancelled" else "",
+                stage=STAGE_LABELS[status], finished_at=stamp)
     )
     if result.rowcount == 1:
-        await task_statistics_service.record_state_change(db, task, "succeeded", finished_at=stamp)
+        if proposal is not None:
+            await discard_pending(db, task)
+        await task_statistics_service.record_state_change(db, task, status, finished_at=stamp)
     await db.commit()
     if result.rowcount != 1:
         raise ConflictError("任务状态已变化，请刷新后重试")
@@ -364,19 +396,31 @@ async def list_tasks(
 # ---------------- 取消 / 删除 / 清理 ----------------
 
 
-async def cancel_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
+async def cancel_task(
+    db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int, expected_review: ReviewIdentity | None = None,
+) -> TaskOut:
     task = await get_owned_task(db, user_id, task_id)
-    return await _cancel_loaded_task(db, engine, task)
+    return await _cancel_loaded_task(db, engine, task, expected_review=expected_review, verify_review=True)
 
 
-async def _cancel_loaded_task(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
+async def _cancel_loaded_task(
+    db: AsyncSession, engine: "TaskEngine", task: Task, *, expected_review: ReviewIdentity | None = None,
+    verify_review: bool = False,
+) -> TaskOut:
     """调用者已核实归属或删除项目范围；只共享取消，不伪装成目标 owner。"""
     with engine.cleanup_scope(task):
-        return await _cancel_loaded_impl(db, engine, task)
+        return await _cancel_loaded_impl(db, engine, task, expected_review=expected_review, verify_review=verify_review)
 
 
-async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
+async def _cancel_loaded_impl(
+    db: AsyncSession, engine: "TaskEngine", task: Task, *, expected_review: ReviewIdentity | None = None,
+    verify_review: bool = False,
+) -> TaskOut:
     await refresh_same_task(db, task)
+    if verify_review:
+        from app.services.rich_document_review import require_review_identity
+
+        await require_review_identity(db, task, expected_review)
     if task.admin_cancel_operation_id is not None:
         return await _wait_admin_cancel(db, engine, task)
     if task.status == "queued":
@@ -405,22 +449,32 @@ async def _cancel_loaded_impl(db: AsyncSession, engine: "TaskEngine", task: Task
             return await _wait_admin_cancel(db, engine, task)
     if task.status == "paused":
         stamp = task_statistics_service.now_utc()
+        discarded_review = False
+        had_released_review = ((task.checkpoint or {}).get("rich_review") or {}).get("phase") == "awaiting_review"
         result = await db.execute(
             update(Task)
             .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
+                   Task.queued_at == task.queued_at,
                    Task.admin_cancel_operation_id.is_(None))
             .values(status="cancelled", error="任务已取消", stage=STAGE_LABELS["cancelled"], finished_at=stamp)
         )
         if result.rowcount == 1:
+            from app.services.rich_document_review import discard_pending
+
+            discarded_review = await discard_pending(db, task)
             await task_statistics_service.record_state_change(db, task, "cancelled", finished_at=stamp)
         await db.commit()
         if result.rowcount == 1:
             # 待审核时没有执行体，资源也已释放；on_abort 幂等，照常调用
-            await _abort_loaded_task(engine, task)
+            # 富文档提案已在暂停前释放章抢占，不能误回滚后来另一个任务的 generating。
+            if not discarded_review and not had_released_review:
+                await _abort_loaded_task(engine, task)
             await refresh_same_task(db, task)
             await prune_finished(db, task.user_id)
             return to_out(task)
         await refresh_same_task(db, task)
+        if verify_review and expected_review is not None:
+            raise ConflictError("原提案轮次已变化，请刷新后重试", extra={"code": "rich_review_task_changed"})
         if task.admin_cancel_operation_id is not None:
             return await _wait_admin_cancel(db, engine, task)
         if task.status == "queued":
@@ -473,7 +527,9 @@ async def _wait_admin_cancel(db: AsyncSession, engine: "TaskEngine", task: Task)
     return await task_out(db, engine, task)
 
 
-async def delete_task(db: AsyncSession, user_id: int, task_id: int) -> None:
+async def delete_task(
+    db: AsyncSession, user_id: int, task_id: int, expected_review: ReviewIdentity | None = None,
+) -> None:
     task = await get_owned_task(db, user_id, task_id)
     await refresh_same_task(db, task)
     if task.admin_cancel_operation_id is not None:
@@ -484,6 +540,9 @@ async def delete_task(db: AsyncSession, user_id: int, task_id: int) -> None:
         raise ConflictError("任务待审核，无法删除，请先结束或取消")
     if task.status not in FINISHED_TASK_STATUSES:
         raise ConflictError("任务进行中，无法删除，请先取消")
+    from app.services.rich_document_review import require_finished_review_identity
+
+    require_finished_review_identity(task, expected_review)
     await task_statistics_service.mark_removed(
         db, Task.id == task.id, Task.statistics_key == task.statistics_key
     )

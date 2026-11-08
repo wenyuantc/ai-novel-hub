@@ -7,7 +7,7 @@ const project = { id: 8, owner: { id: 2, username: 'alice' } }
 
 describe('项目管理能力', () => {
   it('管理员管理他人项目只启用人工管理，自有项目继续正常写作', () => {
-    expect(projectAccess(project, admin, 8)).toMatchObject({ ready: true, managingOther: true, canUseAI: false })
+    expect(projectAccess(project, admin, 8)).toMatchObject({ ready: true, managingOther: true, canEdit: true, canUseAI: false })
     expect(projectAccess({ ...project, owner: { id: 1, username: 'root' } }, admin, 8)).toMatchObject({ ready: true, managingOther: false, canUseAI: true })
     expect(projectAccess(project, owner, 8)).toMatchObject({ ready: true, managingOther: false, canUseAI: true })
   })

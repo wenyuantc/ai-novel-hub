@@ -23,6 +23,7 @@ from app.models import (
     RelationshipType,
     WorldSetting,
 )
+from app.services.scene_service import initialize_chapter
 from tests.helpers import create_project, register
 
 OPEN = "/api/open/v1"
@@ -88,6 +89,8 @@ async def seed_domain(app, novel_id, *, suffix=""):
         )
         db.add_all([written, blank])
         await db.flush()
+        await initialize_chapter(db, written)
+        await initialize_chapter(db, blank)
         plan = ChapterPlan(
             project_id=novel_id,
             outline_id=late.id,

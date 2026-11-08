@@ -3,7 +3,7 @@ import { App, Button, Drawer, Empty, FloatButton, List, Modal, Popconfirm, Progr
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../api/client'
-import { canRetryTask, isActiveTask, queueLabel, TASK_STATUS, taskApi, taskLink } from '../api/tasks'
+import { canRetryTask, isActiveTask, queueLabel, TASK_STATUS, taskApi, taskLink, taskReviewIdentity } from '../api/tasks'
 import type { Task } from '../api/types'
 import { useLoader } from '../hooks/useLoader'
 import { useTaskStream } from '../hooks/useTaskStream'
@@ -13,6 +13,7 @@ import { formatTime } from '../utils/time'
 import { hasResultViewer } from './entities/taskResultViewers'
 import TaskResultModal from './entities/TaskResultModal'
 import StreamOutput from './StreamOutput'
+import RichReviewModal from './scenes/RichReviewModal'
 import { AGENT_DOCK_WIDTH_VAR } from '../utils/agentPreferences'
 
 /** 右下角后台任务面板：活动任务数徽标 + 抽屉（进行中 / 最近），支持取消、重试、查看输出、跳转、删除、清理。 */
@@ -28,6 +29,7 @@ export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrig
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
   const [tab, setTab] = useState('active')
+  const [reviewing, setReviewing] = useState<Task | null>(null)
   const [viewing, setViewing] = useState<Task | null>(null)
   const [resultOf, setResultOf] = useState<Task | null>(null)
   const [clearing, setClearing] = useState(false)
@@ -96,7 +98,7 @@ export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrig
               key: 'active',
               label: `进行中（${active.length}）`,
               children: (
-                <TaskList tasks={active} onView={setViewing} onViewResult={setResultOf} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
+                <TaskList tasks={active} onView={setViewing} onViewResult={setResultOf} onReview={setReviewing} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
               ),
             },
             {
@@ -104,7 +106,7 @@ export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrig
               label: '最近',
               children: (
                 <Spin spinning={recentLoading}>
-                  <TaskList tasks={recent} onView={setViewing} onViewResult={setResultOf} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
+                  <TaskList tasks={recent} onView={setViewing} onViewResult={setResultOf} onReview={setReviewing} onTrack={track} onRemoved={bump} onNavigate={() => setOpen(false)} />
                 </Spin>
               ),
             },
@@ -113,6 +115,7 @@ export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrig
       </Drawer>
       {viewing && <TaskOutputModal task={viewing} onClose={() => setViewing(null)} />}
       {resultOf && <TaskResultModal task={resultOf} onClose={() => setResultOf(null)} />}
+      {reviewing && <RichReviewModal key={`${reviewing.id}:${reviewing.rich_review?.run_key}`} task={reviewing} onClose={() => setReviewing(null)} onChanged={(updated) => { track(updated); bump() }} />}
     </>
   )
 }
@@ -122,12 +125,13 @@ interface ListProps {
   onView: (t: Task) => void
   /** 已成功、且 kind 注册了结果查看组件的任务：打开可编辑预览 */
   onViewResult: (t: Task) => void
+  onReview: (t: Task) => void
   onTrack: (t: Task) => void
   onRemoved: () => void
   onNavigate: () => void
 }
 
-function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate }: ListProps) {
+function TaskList({ tasks, onView, onViewResult, onReview, onTrack, onRemoved, onNavigate }: ListProps) {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const [pending, setPending] = useState<number | null>(null)
@@ -161,6 +165,9 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
             查看输出
           </Button>,
         ]
+        if (paused && t.rich_review?.phase === 'awaiting_review') {
+          actions.unshift(<Button key="rich-review" type="link" size="small" onClick={() => onReview(t)}>核对候选</Button>)
+        }
         if ((t.status === 'succeeded' || paused) && hasResultViewer(t.kind)) {
           actions.unshift(
             <Button key="result" type="link" size="small" onClick={() => onViewResult(t)}>
@@ -212,6 +219,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               key="resume"
               type="link"
               size="small"
+              disabled={t.rich_review?.phase === 'awaiting_review'}
               loading={pending === t.id}
               onClick={() =>
                 void act(t.id, async () => {
@@ -225,12 +233,12 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
             <Popconfirm
               key="finish"
               title="结束该任务？"
-              description="已完成的内容保留，剩余部分不再处理。"
+              description={t.rich_review?.phase === 'awaiting_review' ? '当前候选将被放弃、原章保持不变；已完成章节保留。' : '已完成的内容保留，剩余部分不再处理。'}
               okText="结束"
               cancelText="不结束"
               onConfirm={() =>
                 act(t.id, async () => {
-                  onTrack(await taskApi.finish(t.id))
+                  onTrack(await taskApi.finish(t.id, taskReviewIdentity(t)))
                   message.success('已结束')
                 })
               }
@@ -247,7 +255,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               cancelText="不取消"
               onConfirm={() =>
                 act(t.id, async () => {
-                  onTrack(await taskApi.cancel(t.id))
+                  onTrack(await taskApi.cancel(t.id, taskReviewIdentity(t)))
                   message.success('已取消')
                 })
               }
@@ -275,7 +283,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               cancelText="不取消"
               onConfirm={() =>
                 act(t.id, async () => {
-                  onTrack(await taskApi.cancel(t.id))
+                  onTrack(await taskApi.cancel(t.id, taskReviewIdentity(t)))
                   message.success('已取消')
                 })
               }
@@ -312,7 +320,7 @@ function TaskList({ tasks, onView, onViewResult, onTrack, onRemoved, onNavigate 
               cancelText="取消"
               onConfirm={() =>
                 act(t.id, async () => {
-                  await taskApi.remove(t.id)
+                  await taskApi.remove(t.id, taskReviewIdentity(t, true))
                   onRemoved()
                 })
               }

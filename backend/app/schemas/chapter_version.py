@@ -104,12 +104,15 @@ class RewriteApply(BaseModel):
     before: str | None = Field(default=None, max_length=200)
     replacement: str = Field(max_length=100_000)
     log_id: int | None = None
+    # 仅确认无法可靠保留的排版变化；不得绕过区块、标记或版本冲突。
+    confirm_format_loss: bool = Field(default=False, strict=True)
 
 
 class VersionRestore(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_content_revision: int | None = Field(default=None, strict=True, ge=0)
+    confirm_rich_document_loss: bool = Field(default=False, strict=True)
 
 
 class VersionExtract(BaseModel):
@@ -118,3 +121,4 @@ class VersionExtract(BaseModel):
     scene_id: int = Field(strict=True, gt=0)
     expected_content_revision: int = Field(strict=True, ge=0)
     signature: str = Field(min_length=64, max_length=64, pattern="^[a-f0-9]+$")
+    confirm_rich_document_loss: bool = Field(default=False, strict=True)

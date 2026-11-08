@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { readChapterScenes, sceneApi } from '../../api/scenes'
+import { richDocumentApi } from '../../api/richDocument'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
@@ -15,6 +16,8 @@ export function useSceneEditor(projectId: number, chapterId: number, initialScen
     list: (signal) => readChapterScenes(projectId, chapterId, signal),
     get: (sid, signal) => sceneApi.get(projectId, chapterId, sid, signal),
     update: (sid, body) => sceneApi.update(projectId, chapterId, sid, body),
+    getDocument: (sid, signal) => richDocumentApi.get(projectId, chapterId, sid, signal),
+    saveDocument: (sid, body) => richDocumentApi.save(projectId, chapterId, sid, body),
   }, () => belongs() && canReadNow(), () => belongs() && canEditNow())
   }, [projectId, chapterId, identity, canReadNow, canEditNow])
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)

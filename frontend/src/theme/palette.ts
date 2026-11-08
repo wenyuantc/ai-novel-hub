@@ -120,6 +120,20 @@ export function chartPalette(resolved: ResolvedTheme): ChartPalette {
   return resolved === 'dark' ? DARK : LIGHT
 }
 
+/** 编辑器作者标记的透明叠色；文本颜色仍沿用正文，明暗主题分别校准对比度。 */
+const RICH_MARKERS_LIGHT = {
+  yellow: 'rgba(250, 200, 50, .24)', green: 'rgba(75, 180, 100, .24)', blue: 'rgba(80, 150, 235, .24)',
+  purple: 'rgba(170, 115, 220, .24)', red: 'rgba(225, 100, 100, .24)',
+}
+const RICH_MARKERS_DARK: typeof RICH_MARKERS_LIGHT = {
+  yellow: 'rgba(250, 200, 50, .30)', green: 'rgba(75, 180, 100, .30)', blue: 'rgba(80, 150, 235, .30)',
+  purple: 'rgba(170, 115, 220, .30)', red: 'rgba(225, 100, 100, .30)',
+}
+
+export function richMarkerPalette(resolved: ResolvedTheme) {
+  return resolved === 'dark' ? RICH_MARKERS_DARK : RICH_MARKERS_LIGHT
+}
+
 /** 阅读器背景：浅色 / 护眼 / 暗色（「跟随全局」时按全局主题取 light / dark） */
 export type ReaderTone = 'light' | 'sepia' | 'dark'
 export const READER_TONES: Record<ReaderTone, { bg: string; text: string; secondary: string; dark: boolean }> = {

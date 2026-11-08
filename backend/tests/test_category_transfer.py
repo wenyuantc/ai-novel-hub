@@ -96,7 +96,7 @@ def _old_backup(original, version):
 
 async def test_categories_v5_roundtrip_preserves_tags_rules_and_resets_both_revisions(client, app):
     project, original = await _category_backup(client, app)
-    assert (original["version"], original["app_schema"]) == (7, "0039")
+    assert (original["version"], original["app_schema"]) == (8, "0040")
     assert not {"fields_revision", "categories_revision"}.intersection(original["project"])
     imported = await _import(client, original)
     result = await _backup(client, imported["project"]["id"])
@@ -132,7 +132,7 @@ async def test_real_old_backups_gain_only_empty_category_state(client, app, vers
     data["project"].update(fields_revision={"ignored": True}, categories_revision=None)
     imported = await _import(client, data)
     result = await _backup(client, imported["project"]["id"])
-    assert result["version"] == 7
+    assert result["version"] == 8
     assert all(result["tables"][table] == [] for table in CATEGORY_TABLES)
     assert all(row["setting_tags"] == [] for table in ENTITY_TABLES for row in result["tables"][table])
     if version == 4:

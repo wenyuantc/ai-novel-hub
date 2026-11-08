@@ -17,7 +17,6 @@
   写入入口 foreshadow_service.apply_foreshadow。
 """
 
-import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -661,6 +660,8 @@ async def _finish(db: AsyncSession, change: AnalysisChange) -> AnalysisChangeOut
 async def _pending_analysis(
     db: AsyncSession, change: AnalysisChange, timeline: SettingTimeline | None, revision: int
 ) -> ChapterAnalysis:
+    from app.services.rich_document_ai import analysis_fingerprints
+
     analysis = await db.get(ChapterAnalysis, change.analysis_id)
     chapter = await db.get(Chapter, analysis.chapter_id) if analysis is not None else None
     if (
@@ -670,8 +671,9 @@ async def _pending_analysis(
         or chapter is None
         or chapter.project_id != change.project_id
         or chapter.chapter_no != analysis.chapter_no
-        or hashlib.sha256((chapter.content or "").encode("utf-8")).hexdigest() != analysis.content_hash
     ):
+        raise ConflictError(CONFIRM_CHANGED)
+    if (await analysis_fingerprints(db, [chapter]))[chapter.id] != analysis.content_hash:
         raise ConflictError(CONFIRM_CHANGED)
     return analysis
 

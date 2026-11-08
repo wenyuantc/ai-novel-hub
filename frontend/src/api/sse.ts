@@ -1,6 +1,6 @@
 // 基于 fetch + ReadableStream 的 SSE 客户端（局部改写为 POST + JSON body；任务订阅为 GET，同样走 fetch 以统一错误处理与 401）
 
-import { ApiError, buildUrl, handleErrorResponse } from './client'
+import { ApiError, buildUrl, handleErrorResponse, watchRequestGeneration } from './client'
 
 export interface SSEMessage {
   event: string
@@ -95,46 +95,67 @@ async function readSSE(
   signal?: AbortSignal,
   onActivity?: () => void,
 ): Promise<void> {
-  let resp: Response
-  try {
-    resp = await fetch(buildUrl(path), { ...init, credentials: 'include', signal })
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') throw err
-    throw new ApiError(0, '网络错误，无法连接服务器')
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const watch = watchRequestGeneration(abort)
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  const assertActive = () => {
+    if (controller.signal.aborted) throw new DOMException('aborted', 'AbortError')
   }
-  if (!resp.ok) await handleErrorResponse(path, resp)
-  const contentType = resp.headers.get('content-type') ?? ''
-  if (!contentType.includes('text/event-stream') || !resp.body) {
-    throw new ApiError(resp.status, '服务器未返回流式响应')
-  }
-
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  const parser = new SSEParser()
-  const cancelReader = () => { void reader.cancel().catch(() => {}) }
-  signal?.addEventListener('abort', cancelReader, { once: true })
   try {
-    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-    for (;;) {
-      const { value, done } = await reader.read()
-      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      if (done) break
-      // 注释心跳也算活动，避免模型长时间没有正文时误判连接失活。
-      onActivity?.()
-      for (const msg of parser.feed(decoder.decode(value, { stream: true }))) {
-        if (handlers.onMessage(msg) === false) return
+    let resp: Response
+    try {
+      resp = await fetch(buildUrl(path), { ...init, credentials: 'include', signal: controller.signal })
+    } catch (err) {
+      if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+        throw new DOMException('aborted', 'AbortError')
       }
+      throw new ApiError(0, '网络错误，无法连接服务器')
     }
-    for (const msg of parser.feed(decoder.decode())) {
-      if (handlers.onMessage(msg) === false) return
+    assertActive()
+    if (!resp.ok) await handleErrorResponse(path, resp, watch.generation, init.method as 'GET' | 'POST' | undefined)
+    const contentType = resp.headers.get('content-type') ?? ''
+    if (!contentType.includes('text/event-stream') || !resp.body) {
+      throw new ApiError(resp.status, '服务器未返回流式响应')
     }
-    for (const msg of parser.flush()) {
-      if (handlers.onMessage(msg) === false) return
+
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    const parser = new SSEParser()
+    const cancelReader = () => { void reader.cancel().catch(() => {}) }
+    controller.signal.addEventListener('abort', cancelReader, { once: true })
+    const deliver = (messages: SSEMessage[]) => {
+      for (const msg of messages) {
+        assertActive()
+        const result = handlers.onMessage(msg)
+        // 回调本身也可能触发登出或身份切换，剩余帧不能继续交付。
+        assertActive()
+        if (result === false) return false
+      }
+      return true
+    }
+    try {
+      assertActive()
+      for (;;) {
+        const { value, done } = await reader.read()
+        assertActive()
+        if (done) break
+        // 注释心跳也算活动，避免模型长时间没有正文时误判连接失活。
+        onActivity?.()
+        assertActive()
+        if (!deliver(parser.feed(decoder.decode(value, { stream: true })))) return
+      }
+      if (!deliver(parser.feed(decoder.decode()))) return
+      deliver(parser.flush())
+    } finally {
+      controller.signal.removeEventListener('abort', cancelReader)
+      cancelReader()
+      reader.releaseLock()
     }
   } finally {
-    signal?.removeEventListener('abort', cancelReader)
-    cancelReader()
-    reader.releaseLock()
+    signal?.removeEventListener('abort', abort)
+    watch.dispose()
   }
 }
 

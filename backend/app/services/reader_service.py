@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
 from app.models import Chapter, Outline, Project
-from app.schemas.reader import ReadingProgressIn, TocItem
+from app.schemas.chapter import ChapterOut
+from app.schemas.reader import ReaderChapter, ReadingProgressIn, TocItem
 from app.services.project_service import WRITTEN, get_manageable_project, get_owned_project
 
 
@@ -54,3 +55,15 @@ async def toc(db: AsyncSession, user_id: int, project_id: int) -> list[TocItem]:
         TocItem(id=i, chapter_no=no, title=t, word_count=wc, volume_no=vn, volume_title=vt)
         for i, no, t, wc, vn, vt in rows.all()
     ]
+
+
+async def chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> ReaderChapter:
+    """一次读取正文和排版；不携带作者区块、标记或其他私有资料。"""
+    from app.services.rich_document_render import load_chapter_projections
+
+    await get_manageable_project(db, user_id, project_id)
+    projections = await load_chapter_projections(db, project_id, chapter_ids=[chapter_id])
+    if not projections:
+        raise NotFoundError("章节不存在")
+    projection = projections[0]
+    return ReaderChapter(chapter=ChapterOut.model_validate(projection.chapter), blocks=projection.blocks)

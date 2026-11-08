@@ -51,6 +51,9 @@ from app.models import (
     RelationshipHistory,
     RelationshipType,
     Scene,
+    SceneDocumentMeta,
+    SceneMarker,
+    SceneSection,
     SettingAiLink,
     SettingCategory,
     SettingCategoryRule,
@@ -93,6 +96,9 @@ NOT_EXPORTED: dict[str, str] = {
     "agent_messages": "智能体消息属于运行时数据，不跨实例迁移",
     "agent_changes": "智能体提案和效果属于运行时数据，不跨实例迁移",
     "tasks": "后台任务是运行时状态，导入后没有意义；导入后按需重新排队建索引",
+    "scene_review_proposals": "模型待确认提案是任务运行态，已保存作者资料由场景文档与历史保存",
+    "scene_review_payload_chunks": "待确认提案分块是任务运行态，不属于作品备份",
+    "scene_review_analysis_receipts": "提案分析的幂等收据属于任务运行态，实际分析随作品迁移",
     "kb_chunks": "由知识库文档的 text 重新分块得到，导入时在同一事务里重新生成",
     "retrieval_chunks": "检索单元（关键词 / 向量）是派生数据，导入时经业务写入点重建关键词部分，向量由重建任务生成",
 }
@@ -131,6 +137,10 @@ def _in(column, model, pid: int):
 
 def _own(model) -> Callable[[int], ColumnElement[bool]]:
     return lambda pid: model.project_id == pid
+
+
+def _in_scenes(column, pid: int):
+    return column.in_(select(Scene.id).where(_in(Scene.chapter_id, Chapter, pid)))
 
 
 _P = {"project_id": "project"}
@@ -285,6 +295,20 @@ RULES: tuple[TableRule, ...] = (
     TableRule(
         "scenes", Scene, lambda pid: _in(Scene.chapter_id, Chapter, pid),
         fk={"chapter_id": "chapters"},
+    ),
+    TableRule(
+        "scene_documents", SceneDocumentMeta, lambda pid: _in_scenes(SceneDocumentMeta.scene_id, pid),
+        fk={"scene_id": "scenes"}, json_plain=("formatting",),
+    ),
+    TableRule(
+        "scene_sections", SceneSection, lambda pid: _in_scenes(SceneSection.scene_id, pid),
+        fk={"scene_id": "scenes", "origin_section_id": "scene_sections"},
+        deferred=frozenset({"origin_section_id"}), json_plain=("formatting",),
+    ),
+    TableRule(
+        "scene_markers", SceneMarker, lambda pid: _in_scenes(SceneMarker.scene_id, pid),
+        fk={"scene_id": "scenes", "section_id": "scene_sections", "origin_marker_id": "scene_markers"},
+        deferred=frozenset({"origin_marker_id"}),
     ),
     TableRule(
         "chapter_plans",

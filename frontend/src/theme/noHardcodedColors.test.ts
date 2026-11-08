@@ -1,12 +1,18 @@
+/// <reference types="node" />
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 // 防回归：源码中禁止写死颜色值（#hex / rgb() / rgba() / hsl() / hsla()），请改用 antd token（theme.useToken）或 theme/palette.ts。
 // 白名单：palette.ts 整个文件；确有必要的单行在行尾加 `// theme-allow` 注释。测试文件不扫描。
-const sources = import.meta.glob(['../**/*.{ts,tsx,css}', '!../**/*.test.ts'], {
+const imported = import.meta.glob(['../**/*.{ts,tsx,css}', '!../**/*.test.ts'], {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>
+// Vitest 对 CSS 的 ?raw 模块可能返回空串；明确读取真实文件，不能因占位模块漏检 CSS。
+const sources = Object.fromEntries(Object.entries(imported).map(([path, text]) => [
+  path, path.endsWith('.css') ? readFileSync(new URL(path, import.meta.url), 'utf8') : text,
+]))
 
 const WHITELIST = new Set(['./palette.ts', '../theme/palette.ts'])
 const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(/
@@ -28,6 +34,7 @@ describe('禁止写死颜色', () => {
     expect(Object.keys(sources).length).toBeGreaterThan(50)
     expect(Object.keys(sources)).toContain('../App.tsx')
     expect(Object.keys(sources)).toContain('../index.css')
+    expect(sources['../components/scenes/RichSceneEditor.css']).toContain('rich-marker-yellow')
     // Skill / MCP 页面与组件同样受检
     for (const file of ['../pages/SkillsPage.tsx', '../pages/McpPluginsPage.tsx', '../components/mcp/McpPluginDrawer.tsx', '../components/skills/SkillEditDrawer.tsx'])
       expect(Object.keys(sources)).toContain(file)

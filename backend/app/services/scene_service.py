@@ -7,6 +7,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from itertools import batched, chain
 from typing import Any
 
 from pydantic import ValidationError
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Chapter, Project, Scene
+from app.models import Chapter, Project, Scene, SceneDocumentMeta, SceneMarker, SceneSection
 from app.schemas.scene import (
     SceneBrief,
     SceneCreate,
@@ -27,9 +28,9 @@ from app.schemas.scene import (
     ScenePage,
     ScenePositionOut,
     SceneReorder,
-    SceneSnapshot,
     SceneSplit,
     SceneUpdate,
+    parse_scene_snapshot,
 )
 from app.services import setting_progression_service, version_service
 from app.services.audit_writer import AuditOperation
@@ -140,20 +141,89 @@ async def refresh_projection(
     scenes = await list_active_scenes(db, chapter.id)
     if not scenes:
         raise ConflictError("章节缺少活动场景，请检查创建或导入入口", extra={"code": "scene_invariant_error"})
+    projection, ranges = project_scenes(scenes)
+    # 旧版允许在 CRLF 中间拆景。仅当本次章投影确有跨景接缝时，
+    # 才读取完整元数据验证；无关位置的编辑不受影响。
+    from app.schemas.rich_document import is_text_boundary, validate_chapter_document_boundaries
+
+    if any(not is_text_boundary(projection, position) for item in ranges for position in (item.start, item.end)):
+        from app.services.rich_document_store import capture_documents
+
+        documents, _ = await capture_documents(db, scenes)
+        try:
+            validate_chapter_document_boundaries([(scene.separator_before, documents[scene.id]) for scene in scenes])
+        except ValueError as exc:
+            raise SceneParameterError(str(exc)) from exc
     await touch_revision(db, chapter, expected_revision)
     for scene in scenes:
         scene.word_count = count_words(scene.content)
-    chapter.content, _ = project_scenes(scenes)
+    chapter.content = projection
     chapter.word_count = count_words(chapter.content)
     await db.flush()
     # 原子 UPDATE 的服务端 onupdate 会使属性过期；响应前显式加载，避免异步隐式 IO。
     await db.refresh(chapter, ["updated_at"])
 
 
+async def _rich_scene_ids(db: AsyncSession, scene_ids: list[int]) -> set[int]:
+    if not scene_ids:
+        return set()
+    scene_id_set = set(scene_ids)
+    pending = {item.scene_id for item in chain(db.new, db.dirty, db.deleted)
+               if isinstance(item, SceneDocumentMeta | SceneSection | SceneMarker) and item.scene_id in scene_id_set}
+    with db.no_autoflush:
+        for batch in batched(sorted(scene_id_set), 200):
+            rows = select(SceneDocumentMeta.scene_id).where(SceneDocumentMeta.scene_id.in_(batch)).union_all(
+                select(SceneSection.scene_id).where(SceneSection.scene_id.in_(batch)),
+                select(SceneMarker.scene_id).where(SceneMarker.scene_id.in_(batch)),
+            )
+            pending.update(await db.scalars(rows))
+    return pending
+
+
+async def _require_plain_scenes(db: AsyncSession, scene_ids: list[int]) -> None:
+    """旧路径无法映射富文档，暂以明确冲突保护资料，而不是猜测位置或丢弃。"""
+    if await _rich_scene_ids(db, scene_ids):
+        raise ConflictError("该操作无法安全映射富格式、标记或区块，请使用支持完整文档的操作", extra={
+            "code": "rich_document_unmapped",
+        })
+
+
+async def _require_safe_legacy_edit(db: AsyncSession, scene: Scene, content: str) -> None:
+    """只允许能够证明完全不触及现有结构的尾部编辑；其余旧请求仍需完整文档。"""
+    if scene.content == content or not await _rich_scene_ids(db, [scene.id]):
+        return
+    from app.schemas.rich_document import SceneDocument
+    from app.services.rich_document_store import capture_documents
+
+    # 共同前缀之后可能发生任意替换；相等锚点的插入偏向未知，也不能猜测。
+    common = 0
+    for left, right in zip(scene.content, content, strict=False):
+        if left != right:
+            break
+        common += 1
+    if common:
+        try:
+            document = (await capture_documents(db, [scene]))[0][scene.id]
+            positions = [*document.formatting.boundaries]
+            positions.extend(item.end for item in (*document.formatting.inline, *document.formatting.blocks))
+            positions.extend(section.anchor for section in document.sections)
+            positions.extend(marker.end for marker in document.markers
+                             if marker.section_key is None and marker.status == "active" and marker.end is not None)
+            if all(position < common for position in positions):
+                SceneDocument.model_validate({**document.model_dump(mode="json"), "content": content})
+                return
+        except (ConflictError, ValidationError):
+            pass
+    raise ConflictError("该操作无法安全映射富格式、标记或区块，请使用支持完整文档的操作", extra={
+        "code": "rich_document_unmapped",
+    })
+
+
 async def replace_scene_content(
     db: AsyncSession, chapter: Chapter, scene: Scene, content: str, *, expected_revision: int | None = None,
 ) -> None:
     target = await require_scene(db, chapter, scene.id)
+    await _require_safe_legacy_edit(db, target, content)
     target.content = content
     await refresh_projection(db, chapter, expected_revision=expected_revision)
 
@@ -164,6 +234,8 @@ async def replace_chapter_contents(
     scenes = await list_active_scenes(db, chapter.id)
     if not scenes or set(contents) != {scene.id for scene in scenes}:
         raise ConflictError("场景结构已变化，请重新发起操作", extra={"code": "scene_context_changed"})
+    for scene in scenes:
+        await _require_safe_legacy_edit(db, scene, contents[scene.id])
     for scene in scenes:
         scene.content = contents[scene.id]
     await refresh_projection(db, chapter, expected_revision=expected_revision)
@@ -182,6 +254,8 @@ async def replace_legacy_content(
     if prefix and content.startswith(prefix):
         content = content[len(prefix):]
     elif prefix:
+        # 在改变分隔符之前完成预检，失败时调用方的会话内对象也保持原样。
+        await _require_safe_legacy_edit(db, scene, content)
         scene.separator_before = ""
     await replace_scene_content(db, chapter, scene, content, expected_revision=expected_revision)
 
@@ -212,6 +286,7 @@ async def resolve_chapter_range(
 
 async def capture_snapshot(db: AsyncSession, chapter: Chapter) -> dict[str, Any]:
     from app.services.planning_scene_service import capture_scene_planning
+    from app.services.rich_document_store import capture_documents
 
     scenes = await list_active_scenes(db, chapter.id)
     if not scenes:
@@ -220,10 +295,13 @@ async def capture_snapshot(db: AsyncSession, chapter: Chapter) -> dict[str, Any]
         raise ConflictError("章节投影与场景正文不一致，请检查正文写入入口", extra={"code": "scene_invariant_error"})
     with db.no_autoflush:
         planning = await capture_scene_planning(db, chapter.project_id, [scene.id for scene in scenes])
-    return {"schema_version": 1, "scenes": [{
+        documents, has_documents = await capture_documents(db, scenes)
+    items = [{
         "id": scene.id, "title": scene.title, "content": scene.content, "summary": scene.summary,
         "sort": scene.sort, "separator_before": scene.separator_before, "planning": planning.get(scene.id),
-    } for scene in scenes]}
+        **({"document": documents[scene.id].model_dump(mode="json", exclude={"content"})} if has_documents else {}),
+    } for scene in scenes]
+    return {"schema_version": 2 if has_documents else 1, "scenes": items}
 
 
 async def reference_blockers(
@@ -268,16 +346,36 @@ async def _set_order(db: AsyncSession, scenes: list[Scene]) -> None:
 
 async def restore_snapshot(
     db: AsyncSession, chapter: Chapter, snapshot: dict, *, expected_revision: int | None = None,
+    visibility_locked: bool = False, confirm_rich_document_loss: bool = False,
 ) -> None:
     from app.services.planning_scene_service import restore_scene_planning, retire_scene_planning
+    from app.services.rich_document_history import apply_restored_documents, plan_restore
 
     try:
-        parsed = SceneSnapshot.model_validate(snapshot)
+        parsed = parse_scene_snapshot(snapshot)
     except ValidationError as exc:
         raise ConflictError("场景历史格式无效，不能恢复", extra={"code": "scene_reference_conflict"}) from exc
     current = await list_active_scenes(db, chapter.id)
     ids = [item.id for item in parsed.scenes]
     targets = [await require_scene(db, chapter, sid, active=False) for sid in ids]
+    rich_ids = await _rich_scene_ids(db, list({item.id for item in current} | set(ids)))
+    rich_plan = None
+    if rich_ids or parsed.schema_version == 2:
+        if not visibility_locked:
+            raise ConflictError("该操作无法安全恢复富文档", extra={"code": "rich_document_unmapped"})
+        rich_plan = await plan_restore(db, current, targets, parsed)
+        if rich_plan.blockers:
+            raise ConflictError("结构历史存在身份或资料冲突，请先核对", extra={
+                "code": "rich_document_unmapped", "blockers": rich_plan.blockers,
+            })
+        if rich_plan.requires_confirmation and not confirm_rich_document_loss:
+            raise ConflictError("恢复会改变当前富格式、区块或标记，请先预览并确认", extra={
+                "code": "rich_document_confirmation_required",
+            })
+        if rich_plan.visibility_changed:
+            from app.services.setting_ai_visibility import bump_visibility_revision
+
+            await bump_visibility_revision(db, chapter.project_id, tighten=rich_plan.visibility_tightened)
     removed = [scene.id for scene in current if scene.id not in ids]
     await _protect_references(db, chapter, removed, include_local=True)
     # 首先释放活动唯一顺序；所有身份始终留存，不以快照裸 ID 新建 Scene。
@@ -285,6 +383,8 @@ async def restore_snapshot(
         scene.active = False
     await db.flush()
     await retire_scene_planning(db, chapter.project_id, removed)
+    if rich_plan is not None:
+        await apply_restored_documents(db, targets, rich_plan.documents)
     for scene, item in zip(targets, parsed.scenes, strict=True):
         scene.title, scene.content, scene.summary = item.title, item.content, item.summary
         scene.separator_before, scene.sort = item.separator_before, item.sort
@@ -452,6 +552,8 @@ async def update_scene(
         await check_revision(db, chapter, data.expected_content_revision)
         values = {field: (getattr(data, field).strip() if field == "title" else getattr(data, field))
                   for field in data.model_fields_set - {"expected_content_revision"}}
+        if "content" in values:
+            await _require_safe_legacy_edit(db, scene, values["content"])
         # 编辑器一次提交完整草稿。相同的标题／摘要不应把普通正文保存误判成
         # 结构操作，否则每次手写都绕过固定的十分钟版本合并窗口。
         metadata = any(field in values and values[field] != getattr(scene, field) for field in ("title", "summary"))
@@ -495,8 +597,12 @@ async def split_scene(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int, data: SceneSplit,
 ) -> SceneMutation:
     from app.services.planning_scene_service import clone_scene_planning
+    from app.services.rich_document_store import capture_documents
+    from app.services.rich_document_structure import apply_split, split_document
+    from app.services.setting_ai_visibility import bump_visibility_revision, lock_author_visibility_write
 
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
+        await lock_author_visibility_write(db, user_id, project_id)
         chapter = await _write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         audit.track(chapter, ["content"])
@@ -504,6 +610,11 @@ async def split_scene(
         await check_revision(db, chapter, data.expected_content_revision)
         if not 0 < data.offset < len(scene.content):
             raise SceneParameterError("拆分光标必须位于正文内部，不能产生无意空片")
+        rich = bool(await _rich_scene_ids(db, [scene.id]))
+        split_docs = None
+        if rich:
+            original = (await capture_documents(db, [scene]))[0][scene.id]
+            split_docs = split_document(original, data.offset)
         await _protect_references(db, chapter, [scene.id])
         scenes = await list_active_scenes(db, chapter.id)
         before = project_scenes(scenes)[0]
@@ -515,6 +626,10 @@ async def split_scene(
         scene.content = scene.content[:data.offset]
         db.add(right)
         await db.flush()
+        if split_docs is not None:
+            await apply_split(db, scene, right, *split_docs)
+            if any(section.include_in_ai for section in split_docs[1].sections):
+                await bump_visibility_revision(db, project_id, tighten=True)
         await clone_scene_planning(db, project_id, scene.id, right.id)
         scenes.insert(scenes.index(scene) + 1, right)
         await _set_order(db, scenes)
@@ -527,6 +642,7 @@ async def split_scene(
 
 async def _merge_preview(db: AsyncSession, chapter: Chapter, data: SceneMergePreview) -> SceneMergePreviewOut:
     from app.services.planning_scene_service import capture_scene_planning
+    from app.services.rich_document_structure import merge_document
 
     await check_revision(db, chapter, data.expected_content_revision)
     scenes = await list_active_scenes(db, chapter.id)
@@ -536,6 +652,16 @@ async def _merge_preview(db: AsyncSession, chapter: Chapter, data: SceneMergePre
         raise BadRequestError("只能按原顺序合并本章两个相邻活动场景")
     planning = await capture_scene_planning(db, chapter.project_id, data.scene_ids)
     blockers = await reference_blockers(db, chapter, data.scene_ids)
+    rich_ids = await _rich_scene_ids(db, data.scene_ids)
+    blocked_rich: set[int] = set()
+    if rich_ids:
+        try:
+            await merge_document(db, left, right)
+        except ConflictError:
+            blocked_rich.add(right.id if right.id in rich_ids else left.id)
+    blockers.extend({"kind": "rich_document", "id": scene_id, "scene_id": scene_id,
+                     "label": "富格式、标记或区块需要完整文档映射"}
+                    for scene_id in sorted(blocked_rich))
     conflicts = []
     for field in ("title", "summary"):
         if getattr(left, field) != getattr(right, field):
@@ -566,8 +692,11 @@ async def merge_scenes(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: SceneMerge,
 ) -> SceneMutation:
     from app.services.planning_scene_service import clone_scene_planning, retire_scene_planning
+    from app.services.rich_document_structure import apply_merge, merge_document
+    from app.services.setting_ai_visibility import bump_visibility_revision, lock_author_visibility_write
 
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
+        await lock_author_visibility_write(db, user_id, project_id)
         chapter = await _write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         audit.track(chapter, ["content"])
@@ -583,12 +712,21 @@ async def merge_scenes(
                 "code": "scene_reference_conflict", "blockers": [b.model_dump() for b in preview.blockers],
             })
         left, right = [await require_scene(db, chapter, sid) for sid in data.scene_ids]
+        rich = bool(await _rich_scene_ids(db, [left.id, right.id]))
+        merged_doc = await merge_document(db, left, right) if rich else None
+        moving_enabled = bool(await db.scalar(select(SceneSection.id).where(
+            SceneSection.scene_id == right.id, SceneSection.active.is_(True), SceneSection.include_in_ai.is_(True),
+        ).limit(1))) if rich else False
         before = project_scenes(await list_active_scenes(db, chapter.id))[0]
         await version_service.ensure_baseline(db, chapter, force=True)
         if data.metadata_source == "right":
             left.title, left.summary = right.title, right.summary
             await clone_scene_planning(db, project_id, right.id, left.id)
         left.content += right.separator_before + right.content
+        if merged_doc is not None:
+            await apply_merge(db, left, right, merged_doc)
+            if moving_enabled:
+                await bump_visibility_revision(db, project_id, tighten=True)
         right.active = False
         await db.flush()
         await retire_scene_planning(db, project_id, [right.id])
@@ -611,6 +749,7 @@ async def delete_scene(
         audit.track(chapter, ["content"])
         scene = await require_scene(db, chapter, scene_id)
         await check_revision(db, chapter, expected_revision)
+        await _require_plain_scenes(db, [scene.id])
         if len(await list_active_scenes(db, chapter.id)) == 1:
             raise ConflictError("不能删除最后一个场景，请清空正文或保留空场景", extra={"code": "scene_last_required"})
         await _protect_references(db, chapter, [scene.id])

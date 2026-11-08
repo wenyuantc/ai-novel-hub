@@ -62,7 +62,7 @@ async def _protected_backup(client):
 async def test_v6_roundtrip_remaps_links_and_does_not_export_or_copy_runtime_counters(client, app):
     source, data = await _protected_backup(client)
     assert await _state(app, source["id"]) == (4, 3)
-    assert data["version"] == 7 and data["app_schema"] == "0039"
+    assert data["version"] == 8 and data["app_schema"] == "0040"
     assert {"ai_visibility_revision", "ai_history_epoch"}.isdisjoint(data["project"])
     before = data["tables"]
     assert before["world_settings"][0]["content"] == "受保护的设定原文"

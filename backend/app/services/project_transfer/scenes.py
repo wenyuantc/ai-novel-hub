@@ -2,11 +2,13 @@
 
 from collections import defaultdict
 from collections.abc import Callable
+from uuid import UUID
 
 from pydantic import ValidationError
 
 from app.schemas.planning import ScenePlanningRaw
-from app.schemas.scene import SceneSnapshot
+from app.schemas.rich_document import SceneDocument
+from app.schemas.scene import SceneSnapshotV2, parse_scene_snapshot
 
 
 def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], None]) -> None:
@@ -37,6 +39,15 @@ def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], 
                "career": "careers", "relationship": "setting_timelines"}
     ids = {name: {row["id"] for row in rows if "id" in row} for name, rows in tables.items()}
     relationships = {row["id"]: row for row in tables.get("setting_timelines", [])}
+    rich_identities: dict[str, dict[int, set[UUID]]] = {}
+    for table in ("scene_sections", "scene_markers"):
+        per_scene: dict[int, set[UUID]] = defaultdict(set)
+        for row in tables.get(table, []):
+            try:
+                per_scene[row["scene_id"]].add(UUID(row["logical_key"]))
+            except (ValueError, TypeError, AttributeError):
+                error("富文档持久身份不是合法 UUID")
+        rich_identities[table] = per_scene
     for version in tables.get("chapter_versions", []):
         snapshot = version.get("scene_snapshot")
         if snapshot is None:
@@ -44,7 +55,7 @@ def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], 
         try:
             if type(snapshot.get("schema_version")) is not int:
                 raise ValueError("快照版本不是整数")
-            parsed = SceneSnapshot.model_validate(snapshot)
+            parsed = parse_scene_snapshot(snapshot)
         except (ValidationError, TypeError, ValueError, AttributeError):
             error("章节版本的场景结构快照格式无效")
             continue
@@ -55,6 +66,14 @@ def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], 
             carrier = scenes.get(item.id)
             if carrier is None or carrier["chapter_id"] != version.get("chapter_id"):
                 error("场景历史身份缺失或属于其他章节")
+            if isinstance(parsed, SceneSnapshotV2):
+                document = SceneDocument.model_validate({"content": item.content, **item.document})
+                section_keys = {section.key for section in document.sections} | set(document.retired_section_keys)
+                if not section_keys <= rich_identities["scene_sections"].get(item.id, set()):
+                    error("场景历史的区块身份缺失或属于其他场景")
+                marker_keys = {marker.key for marker in document.markers}
+                if not marker_keys <= rich_identities["scene_markers"].get(item.id, set()):
+                    error("场景历史的标记身份缺失或属于其他场景")
             planning = item.planning
             if planning is None:
                 continue

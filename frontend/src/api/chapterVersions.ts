@@ -1,5 +1,6 @@
 import { api } from './client'
 import { runGeneration } from './sse'
+import { parseSceneRewriteDone } from './scenes'
 import type {
   Chapter,
   ChapterVersion,
@@ -10,11 +11,10 @@ import type {
   GenerationLogBrief,
   GenerationStatus,
   RewriteApply,
-  RewriteDone,
   RewriteOp,
   RewriteRequest,
   VersionSource,
-  Scene, SceneRestorePreview, SceneExtractPreview,
+  Scene, SceneRewriteDone, SceneRestorePreview, SceneExtractPreview,
 } from './types'
 
 const base = (pid: number, cid: number) => `/projects/${pid}/chapters/${cid}`
@@ -25,10 +25,10 @@ export const versionApi = {
   update: (pid: number, cid: number, vid: number, body: ChapterVersionUpdate) =>
     api.patch<ChapterVersionBrief>(`${base(pid, cid)}/versions/${vid}`, body),
   remove: (pid: number, cid: number, vid: number) => api.del(`${base(pid, cid)}/versions/${vid}`),
-  restore: (pid: number, cid: number, vid: number, revision?: number) => api.post<Chapter>(`${base(pid, cid)}/versions/${vid}/restore`, revision === undefined ? undefined : { expected_content_revision: revision }),
+  restore: (pid: number, cid: number, vid: number, revision?: number, confirmRichDocumentLoss = false) => api.post<Chapter>(`${base(pid, cid)}/versions/${vid}/restore`, revision === undefined && !confirmRichDocumentLoss ? undefined : { expected_content_revision: revision, confirm_rich_document_loss: confirmRichDocumentLoss }),
   restorePreview: (pid: number, cid: number, vid: number, revision: number) => api.get<SceneRestorePreview>(`${base(pid, cid)}/versions/${vid}/restore-preview`, { expected_content_revision: revision }),
   extractPreview: (pid: number, cid: number, vid: number, sid: number, revision: number) => api.get<SceneExtractPreview>(`${base(pid, cid)}/versions/${vid}/extract-preview`, { scene_id: sid, expected_content_revision: revision }),
-  extract: (pid: number, cid: number, vid: number, body: { scene_id: number; expected_content_revision: number; signature: string }) => api.post<Scene>(`${base(pid, cid)}/versions/${vid}/extract`, body),
+  extract: (pid: number, cid: number, vid: number, body: { scene_id: number; expected_content_revision: number; signature: string; confirm_rich_document_loss?: boolean }) => api.post<Scene>(`${base(pid, cid)}/versions/${vid}/extract`, body),
 }
 
 export const generationLogApi = {
@@ -42,8 +42,8 @@ export function rewriteChapter(
   body: RewriteRequest,
   onDelta: (text: string) => void,
   signal?: AbortSignal,
-): Promise<RewriteDone> {
-  return runGeneration<RewriteDone>(`/chapters/${cid}/rewrite`, body, { onDelta, signal })
+): Promise<SceneRewriteDone> {
+  return runGeneration<SceneRewriteDone>(`/chapters/${cid}/rewrite`, body, { onDelta, signal, parseDone: parseSceneRewriteDone })
 }
 
 /** 采纳局部改写；原文已变化时后端返回 409。 */

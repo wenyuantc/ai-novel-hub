@@ -5,7 +5,7 @@ from collections.abc import Collection
 from itertools import batched
 from typing import cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,21 +79,33 @@ async def lock_author_visibility_write(
     db: AsyncSession, user_id: int, project_id: int, *, manage: bool = True,
 ) -> Project:
     """权限写屏障 → 发送写门禁 → 父项目锁；所有策略写路径保持同一顺序。"""
-    from app.services.ai_dispatch import VisibilityBusyError, is_sqlite_busy, lock_visibility_write
+    from app.services import ai_dispatch
+
+    sqlite = db.get_bind().dialect.name == "sqlite"
+    timeout = int(await db.scalar(text("PRAGMA busy_timeout")) or 0) if sqlite else None
+    if sqlite:
+        # SQLite 写锁覆盖整库：认证屏障发生在可见性门禁之前，也须遵循同一限时。
+        await db.execute(text(f"PRAGMA busy_timeout = {int(ai_dispatch._LOCK_WAIT_SECONDS * 1000)}"))
 
     try:
         if manage:
             project = await get_manageable_project(db, user_id, project_id)
             if project.user_id != user_id:
                 await authz.require(db, user_id, "projects.edit", write=True, targets=(project.user_id,))
+            else:
+                await authz.require_authenticated(db, user_id, write=True)
         else:
             await get_owned_project(db, user_id, project_id)
-        await lock_visibility_write(db, project_id)
+            await authz.require_authenticated(db, user_id, write=True)
+        await ai_dispatch.lock_visibility_write(db, project_id)
         return await project_lifecycle.lock_active(db, project_id)
     except OperationalError as exc:
-        if db.get_bind().dialect.name == "sqlite" and is_sqlite_busy(exc):
-            raise VisibilityBusyError() from None
+        if sqlite and ai_dispatch.is_sqlite_busy(exc):
+            raise ai_dispatch.VisibilityBusyError() from None
         raise
+    finally:
+        if timeout is not None:
+            await db.execute(text(f"PRAGMA busy_timeout = {timeout}"))
 
 
 async def bump_visibility_revision(

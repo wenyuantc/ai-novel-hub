@@ -35,6 +35,8 @@ class MemoryOut(BaseModel):
     importance: int
     origin: MemoryOrigin
     analysis_id: int | None
+    # None 表示手动记忆或缺少可验证的分析来源，不能误判为新鲜或过期。
+    source_stale: bool | None = None
     pinned: bool
     muted: bool
     created_at: datetime

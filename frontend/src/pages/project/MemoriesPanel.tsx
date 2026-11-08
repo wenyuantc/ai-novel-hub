@@ -27,6 +27,7 @@ import type { KbSettings, Memory, MemoryKind, MemoryListQuery, MemoryOrigin } fr
 import IndexStatusBanner from '../../components/kb/IndexStatusBanner'
 import MemoryEditModal from '../../components/kb/MemoryEditModal'
 import MemorySearchDebug from '../../components/kb/MemorySearchDebug'
+import MemorySourceBadge from '../../components/kb/MemorySourceBadge'
 import RetrievalSettingsCard from '../../components/kb/RetrievalSettingsCard'
 import { useIndexStatus } from '../../hooks/useIndexStatus'
 import { useLoader } from '../../hooks/useLoader'
@@ -171,6 +172,7 @@ export default function MemoriesPanel() {
           >
             {m.content}
           </Typography.Paragraph>
+          <MemorySourceBadge memory={m} />
           {m.characters.length > 0 && (
             <Space size={4} wrap>
               {m.characters.map((c) => (
@@ -283,6 +285,10 @@ export default function MemoriesPanel() {
           >
             <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
               章节分析完成后自动从摘要、重要情节、钩子、人物变化与伏笔生成记忆；重新分析会替换该章的自动记忆，钉住与屏蔽标记按内容保留。
+            </Typography.Paragraph>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+              关闭区块的 AI 上下文只阻止之后自动读取该区块；已有摘要、聊天和剧情记忆不会被追回，仍可能再次发送给模型。
+              可屏蔽不希望召回的自动记忆。
             </Typography.Paragraph>
             <Space wrap style={{ marginBottom: 12 }}>
               <InputNumber

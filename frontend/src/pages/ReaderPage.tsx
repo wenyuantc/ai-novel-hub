@@ -10,11 +10,11 @@ import {
 import { Button, ConfigProvider, Drawer, Empty, Result, Segmented, Slider, Space, Spin, theme, Tooltip, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { chapterApi } from '../api/chapters'
 import { projectApi } from '../api/projects'
 import { readerApi, saveProgressKeepalive } from '../api/reader'
-import type { Chapter, Project, ReaderTocItem, ReadingPosition } from '../api/types'
+import type { Project, ReaderTocItem, ReadingPosition } from '../api/types'
 import ReaderAnalysisPanel from '../components/reader/ReaderAnalysisPanel'
+import RichReaderContent from '../components/reader/RichReaderContent'
 import MentionPreview from '../components/mentions/MentionPreview'
 import { readMentionAnchor } from '../utils/mentions'
 import ProjectManagementNotice from '../components/project/ProjectManagementNotice'
@@ -108,6 +108,9 @@ export default function ReaderPage() {
       </div>,
     )
   }
+  if (!projectAccess(currentData.project, user, pid).canRead) {
+    return wrap(<Result status="403" title="当前账号无法继续读取该作品" extra={<Link to="/projects">返回书架</Link>} />)
+  }
   if (cid === null) {
     if (start !== null) return wrap(null)
     return wrap(
@@ -164,10 +167,11 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const [panelOpen, setPanelOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const loader = useCallback(() => chapterApi.get(pid, chapterId), [pid, chapterId])
-  const { data: chapter, loading, error } = useLoader<Chapter>(loader)
-  const paragraphs = useMemo(() => splitParagraphs(chapter?.content ?? ''), [chapter])
-  const written = paragraphs.length > 0
+  const loader = useCallback(() => readerApi.chapter(pid, chapterId), [pid, chapterId])
+  const { data: readerChapter, loading, error } = useLoader(loader)
+  const chapter = readerChapter?.chapter
+  const written = !!chapter?.content.trim()
+  const paragraphs = useMemo(() => readerChapter?.blocks === null ? splitParagraphs(chapter?.content ?? '') : [], [readerChapter, chapter])
   const { prev, next } = useMemo(
     () => (chapter ? tocNeighbors(toc, chapter.chapter_no) : { prev: null, next: null }),
     [toc, chapter],
@@ -346,11 +350,10 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
             <h1 style={{ fontSize: Math.round(settings.fontSize * 1.4), lineHeight: 1.4, textAlign: 'center', margin: '0 0 1.2em' }}>
               {chapterTitle}
             </h1>
-            {written && mentionsVisible ? <MentionPreview projectId={pid} text={chapter.content} anchor={mentionAnchor} /> : written ? (
-              paragraphs.map((p, i) => (
-                <p key={i} style={{ textIndent: '2em', margin: '0 0 0.6em', wordBreak: 'break-word' }}>
-                  {p}
-                </p>
+            {written && mentionsVisible ? <MentionPreview projectId={pid} text={chapter.content} anchor={mentionAnchor}
+              renderText={readerChapter?.blocks ? (spans, focus) => <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks ?? []} mentions={{ spans, focus }} /> : undefined} /> : written ? (
+              readerChapter?.blocks ? <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks} /> : paragraphs.map((p, i) => (
+                <p key={i} style={{ textIndent: '2em', margin: '0 0 0.6em', wordBreak: 'break-word' }}>{p}</p>
               ))
             ) : (
               <Empty description="本章还没有正文">

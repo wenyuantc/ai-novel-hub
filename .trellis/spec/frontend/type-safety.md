@@ -12,13 +12,13 @@ RBAC传输镜像app/schemas/rbac.py：User必含is_super_admin/roles/effective_p
 
 ## 概述
 
-TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`、`noUnusedLocals`、`noUnusedParameters`、`noFallthroughCasesInSwitch`、`verbatimModuleSyntax`）。ESLint 强制 `'@typescript-eslint/no-explicit-any': 'error'`。没有运行时校验库（不用 Zod/Yup）：默认信任响应体与 `src/api/types.ts` 一致，而该文件镜像后端的 Pydantic schema。不可信的数据结构（错误响应体、SSE 载荷）通过 `unknown` + 类型守卫进行收窄。
+TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`、`noUnusedLocals`、`noUnusedParameters`、`noFallthroughCasesInSwitch`、`verbatimModuleSyntax`）。ESLint 强制 `'@typescript-eslint/no-explicit-any': 'error'`。没有运行时校验库（不用 Zod/Yup）：传输类型须与后端 Pydantic schema 对齐，共享类型放在 `src/api/types.ts`，领域专用类型可就近放在对应的 `src/api/` 模块。不可信的数据结构（错误响应体、SSE 载荷）通过 `unknown` + 类型守卫进行收窄。
 
 ---
 
 ## 类型组织
 
-- **所有传输类型都放在 `src/api/types.ts`**（文件头注释：`与后端 app/schemas/*.py 对齐的类型定义`）。每个 Pydantic 模型对应一个 TS interface：`*Out` → 去后缀的名字（`AIConfig`、`Project`、`Chapter`），`*Create`/`*Update`/`*Request` → 同名。
+- **共享传输类型放在 `src/api/types.ts`；领域专用请求／响应可在所属 API 模块定义**，例如 `richDocument.ts`、`reader.ts`。所有类型均须镜像后端 schema；常见命名为 `*Out` → 去后缀的名字（`AIConfig`、`Project`、`Chapter`），`*Create`/`*Update`/`*Request` → 同名。
 - 字段名保持与传输格式完全一致的 `snake_case`。`datetime` 字段为 `string`。带默认值的可选请求字段用 `?:`；可空字段用 `| null`。
 - 枚举是从后端 `Literal[...]` 复制而来的字符串字面量联合类型：
 
@@ -251,7 +251,7 @@ parseContentDispositionFilename(resp.headers.get('content-disposition')) ?? `nov
 
 - `any`（lint 报错）。使用 `unknown` + 类型收窄。
 - 在 `src/api/` 之外直接调用 `fetch`——应通过 `api.*`、`postSSE`/`runGeneration` 或 `exportProject`。
-- 在组件内重新声明传输类型；应扩展 `types.ts`。
+- 在组件内重新声明传输类型；应扩展 `types.ts` 或相应领域 API 模块。
 - 在 `ChapterUpdate` 中发送 `status: 'generating'`（类型禁止；后端拒绝）。
 - 不通过 `parseServerTime`/`formatTime` 解析服务端时间戳。
 - 对服务端数据做宽泛的 `as` 断言。在类型系统无法推导的地方，以下现有的窄断言是可接受的：`request` 中的 `undefined as T` / `JSON.parse(text) as T`、`WizardGenerator` 中在 `kind` 检查后的 `result as WizardItemMap['world'][]`、来自固定单选组的 `e.target.value as ExportFormat`、`utils/transfer.ts` 中对后端 `action: str` 的 `action as ImportStyleAction`（查表失败有回退），以及 `main.tsx` 中的非空断言 `document.getElementById('root')!`。

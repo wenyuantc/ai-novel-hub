@@ -128,13 +128,16 @@ class AdminCancellationDrain:
                     if (task.checkpoint or {}).get("current"):
                         logger.error("暂停任务断点资源不安全 task_key=%s operation=%s", task_key, operation_id)
                         return
-                if task.status == "paused" and task.kind not in ("chapter.batch", "book.import", "agent.turn"):
+                released_review = ((task.checkpoint or {}).get("rich_review") or {}).get("phase") == "awaiting_review"
+                if (task.status == "paused" and not released_review
+                        and task.kind not in ("chapter.batch", "book.import", "agent.turn")):
                     logger.error("未知暂停任务禁止资源回滚 task_key=%s operation=%s", task_key, operation_id)
                     return
                 # 未知kind不能猜测如何安全释放资源，保留pending供后续修复。
                 handler = get_handler(task.kind)
-                await handler.on_abort(engine.ctx, task)
-                interrupted = task.status == "running" and task_key in self.recovering
+                if not released_review:
+                    await handler.on_abort(engine.ctx, task)
+                interrupted = task.status == "running" and task_key in self.recovering and not released_review
                 status = "interrupted" if interrupted else "cancelled"
                 error = "服务重启，任务已中断" if interrupted else "任务已取消"
                 row, committed = await engine.complete_state(

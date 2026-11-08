@@ -168,6 +168,17 @@ export function memoryEditable(m: { origin: MemoryOrigin }): boolean {
   return m.origin === 'manual'
 }
 
+/** 仅有证据时标示自动记忆来源；旧服务未提供字段时不臆断。 */
+export function memorySourceStatus(m: {
+  origin: MemoryOrigin
+  source_stale?: boolean | null
+}): 'stale' | 'unknown' | null {
+  if (m.origin !== 'auto') return null
+  if (m.source_stale === true) return 'stale'
+  if (m.source_stale === null) return 'unknown'
+  return null
+}
+
 /** 章号范围筛选：起止都给出且起 > 止时互换 */
 export function normalizeChapterRange(from: number | null | undefined, to: number | null | undefined): [number?, number?] {
   const a = from ?? undefined

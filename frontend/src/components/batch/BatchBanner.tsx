@@ -1,11 +1,12 @@
 import { Alert, App, Button, Popconfirm, Progress, Space, Spin, Typography } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { errorMessage } from '../../api/client'
-import { queueLabel, TASK_STATUS, taskApi } from '../../api/tasks'
+import { queueLabel, TASK_STATUS, taskApi, taskReviewIdentity } from '../../api/tasks'
 import type { BatchChapterStart, BatchItem, Task } from '../../api/types'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
 import { batchBannerState, batchCheckpoint, batchCounts, batchCurrentPhase, batchResumeIndex, batchStageIndex } from '../../utils/batch'
+import RichReviewModal from '../scenes/RichReviewModal'
 
 // 清单 / 实时输出只在展开时加载（章节页在入口 chunk 中）
 const BatchProgressView = lazy(() => import('./BatchProgressView'))
@@ -30,6 +31,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
   const track = useTasksStore((s) => s.track)
   const refreshTasks = useTasksStore((s) => s.refresh)
   const stream = useTaskStream()
+  const [reviewing, setReviewing] = useState(false)
   const { follow, detach } = stream
   const state = batchBannerState(task)
   const live = state === 'running'
@@ -149,7 +151,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
         description="已完成的章节保留，正在写的章节恢复原状态。"
         okText="取消任务"
         cancelText="不取消"
-        onConfirm={() => act(() => taskApi.cancel(task.id), '已取消')}
+        onConfirm={() => act(() => taskApi.cancel(task.id, taskReviewIdentity(task)), '已取消')}
       >
         <Button size="small" danger loading={busy}>
           取消
@@ -162,21 +164,22 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
       <Space wrap size={6}>
         <Typography.Text strong>{task.title} · 待审核</Typography.Text>
         <Typography.Text type="secondary">
-          已处理 {counts.processed}/{counts.total} 章。可以先检查、修改已写章节，继续后下一章会用上修改。
+          {task.rich_review?.phase === 'awaiting_review' ? '当前章候选需要核对，确认前原章保持不变。' : `已处理 ${counts.processed}/${counts.total} 章。可以先检查、修改已写章节，继续后下一章会用上修改。`}
         </Typography.Text>
       </Space>
     )
     actions = (
       <Space>
-        <Button size="small" type="primary" loading={busy} onClick={() => void act(() => taskApi.resume(task.id), '已继续')}>
+        {task.rich_review?.phase === 'awaiting_review' && <Button size="small" type="primary" onClick={() => setReviewing(true)}>核对候选</Button>}
+        <Button size="small" type="primary" loading={busy} disabled={task.rich_review?.phase === 'awaiting_review'} onClick={() => void act(() => taskApi.resume(task.id), '已继续')}>
           继续
         </Button>
         <Popconfirm
           title="结束批量生成？"
-          description="已完成的章节保留，剩余章节不再生成。"
+          description={task.rich_review?.phase === 'awaiting_review' ? '当前章候选将被放弃，已完成章节保留。' : '已完成的章节保留，剩余章节不再生成。'}
           okText="结束"
           cancelText="不结束"
-          onConfirm={() => act(() => taskApi.finish(task.id), '已结束')}
+          onConfirm={() => act(() => taskApi.finish(task.id, taskReviewIdentity(task)), '已结束')}
         >
           <Button size="small" disabled={busy}>
             结束
@@ -212,7 +215,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
   }
 
   return (
-    <Alert
+    <><Alert
       type={type}
       showIcon
       style={{ marginBottom: 16 }}
@@ -243,6 +246,6 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
           )}
         </Space>
       }
-    />
+    />{reviewing && <RichReviewModal key={`${task.id}:${task.rich_review?.run_key}`} task={task} onClose={() => setReviewing(false)} onChanged={(updated) => { track(updated); onChaptersChanged(); void refreshTasks() }} />}</>
   )
 }

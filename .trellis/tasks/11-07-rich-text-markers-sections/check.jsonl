@@ -1,0 +1,17 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对跨层投影和异步提交"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "核对场景历史、CAS 和 AI 原子性"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "核对 Unicode 定位和纯文本索引"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "核对备份、迁移和 ID 引用"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "核对批量断点与待审核语义"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/agent-tools.md", "reason": "核对旧入口、effects 和恢复兼容；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/agent-effects.md", "reason": "核对旧入口、effects 和恢复兼容；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/agent-runtime.md", "reason": "核对旧入口、effects 和恢复兼容；已保留来源和行号的规范摘录"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "核对模型出站和历史封存"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对后端测试、权限与安全质量门禁"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/frontend-editor.md", "reason": "核对编辑器与现有 UI 约定；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/frontend-reader.md", "reason": "核对编辑器与现有 UI 约定；已保留来源和行号的规范摘录"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/spec-excerpts/frontend-types.md", "reason": "核对前后端类型和文本坐标；已保留来源和行号的规范摘录"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对前端 lint、构建和测试"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/current-boundaries.md", "reason": "核对现状和已知技术风险"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/verification-baseline.md", "reason": "旧源码真实 PostgreSQL 验证基线，仅供对照，不代表新实现通过"}
+{"file": ".trellis/tasks/11-07-rich-text-markers-sections/research/browser-prototype/README.md", "reason": "真实 Chromium 无损原型及边界，产品回归不能用原型通过替代"}

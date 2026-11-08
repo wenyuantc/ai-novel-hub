@@ -32,7 +32,7 @@ import {
   Typography,
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useBlocker, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ANALYSIS_STATUS, countPending, reviseChapter, reviseCompareFor, reviseRunningPresentation } from '../../api/analysis'
 import { versionApi } from '../../api/chapterVersions'
 import {
@@ -46,6 +46,9 @@ import {
 import { errorMessage } from '../../api/client'
 import { sceneApi } from '../../api/scenes'
 import SceneWritingPanel from '../../components/scenes/SceneWritingPanel'
+import { readMarkerLocation, type MarkerLocation } from '../../components/scenes/markerLocation'
+import { editorFromSectionDocument } from '../../components/scenes/richSectionProjection'
+import { validSectionDocument } from '../../components/scenes/richSectionValidity'
 import { useSceneEditor } from '../../components/scenes/useSceneEditor'
 import { sceneTargetAllocation } from '../../components/scenes/scenePresentation'
 import StreamOutput from '../../components/StreamOutput'
@@ -154,6 +157,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
   const navigate = useNavigate()
+  const location = useLocation()
   const refreshProject = useProjectStore((s) => s.refresh)
   const trackTask = useTasksStore((s) => s.track)
   const activeTasks = useTasksStore((s) => s.active)
@@ -161,6 +165,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
   const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
   const [searchParams, setSearchParams] = useSearchParams()
+  const markerJump = useMemo(() => readMarkerLocation(location.state, initial.id), [location.state, initial.id])
   const mentionAnchor = useMemo(() => readMentionAnchor(searchParams), [searchParams])
 
   const [chapter, setChapter] = useState<Chapter>(initial)
@@ -168,6 +173,10 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const requestedSceneId = Number(searchParams.get('scene_id')) || undefined
   const sceneEditor = useSceneEditor(pid, initial.id, requestedSceneId)
   const scene = sceneEditor.scene
+  const selectionEditable = useMemo(() => {
+    if (!sceneEditor.documentDraft) return false
+    try { return validSectionDocument(sceneEditor.documentDraft) && !!editorFromSectionDocument(sceneEditor.documentDraft) } catch { return false }
+  }, [sceneEditor.documentDraft])
   const currentSceneId = scene?.id
   const confirm = useSettingsConfirmation(modal, !canEdit, `${pid}:${initial.id}:${currentSceneId ?? ''}`)
   const content = sceneEditor.draft.content
@@ -202,6 +211,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   usePublishAgentContext(pid, { chapter_id: initial.id, outline_id: initial.outline_id ?? undefined, selection: content.slice(selection.start, selection.end) })
   const [externalChapter, setExternalChapter] = useState<Chapter | null>(null)
   const [rewriteLocked, setRewriteLocked] = useState(false)
+  const [sectionLocked, setSectionLocked] = useState(false)
   const [structureDirty, setStructureDirty] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [analysisOpen, setAnalysisOpen] = useState(false)
@@ -259,7 +269,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const busy = aiRunning || saving
   // AI 任务进行中（含排队）或局部改写预览中：正文只读，避免选区失效
   const managedGenerating = !canUseAI && chapter.status === 'generating'
-  const editorLocked = aiRunning || rewriteLocked || managedGenerating
+  const editorLocked = aiRunning || rewriteLocked || sectionLocked || managedGenerating
   // 「继承」解析为本章风格 > 项目默认（下拉里显示实际会用哪个风格）
   const styleContext = useMemo(
     () => ({ chapterStyleId: chapter.style_id, projectDefault: projectDefaultStyle }),
@@ -327,6 +337,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const handleSave = useCallback(async () => {
     if (!canEditNow()) return
     if (editorLocked || saving) return
+    if (sceneEditor.controller.getSnapshot().composing) { message.info('输入法组合尚未结束，请确认文字后再保存。'); return }
     if (!dirty) {
       message.info('没有需要保存的修改')
       return
@@ -334,7 +345,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     if (!canEditNow()) return
     if (await save()) message.success('已保存')
     if (!canEditNow()) return
-  }, [editorLocked, saving, dirty, save, message, canEditNow])
+  }, [editorLocked, saving, dirty, save, message, canEditNow, sceneEditor.controller])
 
   // Ctrl/Cmd + S 保存
   const saveShortcutRef = useRef(handleSave)
@@ -353,7 +364,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   }, [])
 
   // 未保存 / 局部改写预览中（流式或待采纳）离开提示；AI 任务在后台运行，可以直接离开
-  const guard = dirty || rewriteLocked || structureDirty
+  const guard = dirty || rewriteLocked || sectionLocked || structureDirty
   useEffect(() => {
     if (!guard) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -381,6 +392,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   /** AI 操作 / 回滚前：有未保存修改先自动保存。 */
   const ensureSaved = async (): Promise<boolean> => {
     if (!sceneEditor.controller.getSnapshot().scene) return false
+    if (sceneEditor.controller.getSnapshot().composing) { message.warning('请先确认输入法组合文字。'); return false }
     if (sceneEditor.conflict || sceneEditor.externalChange) { message.warning('请先核对最新场景并明确接受版本号，当前草稿未覆盖'); return false }
     if (!dirty) return true
     if (!(await save())) return false
@@ -598,13 +610,13 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const handleRestore = async (v: ChapterVersionBrief, expectedRevision?: number): Promise<boolean> => {
+  const handleRestore = async (v: ChapterVersionBrief, expectedRevision?: number, confirmRichDocumentLoss = false): Promise<boolean> => {
     if (!canEditNow()) return false
     if (!(await ensureSaved())) return false
     if (!canEditNow()) return false
     try {
       if (!canEditNow()) return false
-      const updated = await versionApi.restore(pid, chapter.id, v.id, expectedRevision ?? sceneEditor.controller.getSnapshot().scene?.content_revision)
+      const updated = await versionApi.restore(pid, chapter.id, v.id, expectedRevision ?? sceneEditor.controller.getSnapshot().scene?.content_revision, confirmRichDocumentLoss)
       if (!canEditNow()) return false
       if (sceneEditor.controller.getSnapshot().scene?.id === currentSceneId) replaceFromServer(updated)
       message.success(`已恢复到 v${v.seq}`)
@@ -708,7 +720,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         ? aiScope === 'scene' ? '当前场景正文为空，无法重写' : '章节正文为空，无法重写'
         : aiRunning || stuck || chapter.status === 'generating' || !attachChecked
           ? '本章正在生成中，请稍候'
-          : saving || rewriteLocked
+          : saving || rewriteLocked || sectionLocked
             ? '请先完成保存或局部改写'
             : ''
 
@@ -755,7 +767,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         size="small"
         icon={<SaveOutlined />}
         loading={saving}
-        disabled={!canEdit || (editorLocked || stuck || batchLocked || !dirty)}
+        disabled={!canEdit || (editorLocked || stuck || batchLocked || sceneEditor.composing || !dirty)}
         onClick={() => void handleSave()}
       >
         保存
@@ -808,7 +820,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             {
               key: 'rewrite',
               label: '局部改写',
-              disabled: aiRunning,
+              disabled: aiRunning || sectionLocked,
               children: (
                 <RewritePanel
                   key={scene?.id ?? 'loading'}
@@ -823,7 +835,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                   styleChoice={styleChoice}
                   skillId={skillId}
                   // 章节 generating（含挂载后尚未查完活动任务）时后端会 409，一律禁用
-                  disabled={!scene || aiRunning || saving || chapter.status === 'generating' || hasConfig === false}
+                  disabled={!scene || !selectionEditable || aiRunning || sectionLocked || saving || chapter.status === 'generating' || hasConfig === false}
                   ensureSaved={ensureSaved}
                   onLockChange={setRewriteLocked}
                   onApplied={handleRewriteApplied}
@@ -972,7 +984,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               onChanged={(styleId) => setChapter((prev) => ({ ...prev, style_id: styleId }))}
             />
             {otherSceneWriting && <Alert type="info" showIcon message="本章另一场景正在后台写作；当前草稿保留，完成后请核对最新版本。" />}
-            <SceneWritingPanel onStructureDirtyChange={setStructureDirty} projectId={pid} chapter={chapter} state={sceneEditor} controller={sceneEditor.controller} disabled={editorLocked || batchLocked || saving || stuck} selection={selection} onSelection={setSelection} ensureSaved={ensureSaved} onChanged={() => { onChanged(); void reloadChapter(); void refreshProject(); void refreshAnalysis() }} onSelect={async (sid) => { if (rewriteLocked || aiRunning || saving) return false; if (!(await ensureSaved())) return false; const selected = await sceneEditor.controller.select(sid); if (selected) { setSelection({ start: 0, end: 0 }); const next = new URLSearchParams(searchParams); next.set('scene_id', String(sid)); setSearchParams(next, { replace: true }) } return selected }} mentionAnchor={mentionAnchor} />
+            <SceneWritingPanel aiConfigId={aiConfigId} styleChoice={styleChoice} skillId={skillId} onSectionLockChange={setSectionLocked} onStructureDirtyChange={setStructureDirty} projectId={pid} chapter={chapter} state={sceneEditor} controller={sceneEditor.controller} disabled={editorLocked || batchLocked || saving || stuck} selection={selection} onSelection={setSelection} ensureSaved={ensureSaved} onChanged={() => { onChanged(); void reloadChapter(); void refreshProject(); void refreshAnalysis() }} onSelect={async (sid) => { if (rewriteLocked || sectionLocked || aiRunning || saving) return false; if (!(await ensureSaved())) return false; const selected = await sceneEditor.controller.select(sid); if (selected) { setSelection({ start: 0, end: 0 }); const next = new URLSearchParams(searchParams); next.set('scene_id', String(sid)); setSearchParams(next, { replace: true }) } return selected }} mentionAnchor={mentionAnchor} markerJump={markerJump} onNavigateMarker={async (target: MarkerLocation) => { if (rewriteLocked || sectionLocked || structureDirty || aiRunning || saving) { message.warning('请先完成当前场景排序或改写预览。'); return false } if (!(await ensureSaved())) return false; navigate(`/projects/${pid}/chapters/${target.chapterId}?scene_id=${target.sceneId}`, { state: { markerLocation: target } }); return true }} />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               最后更新：{formatTime(chapter.updated_at)} · Ctrl/⌘ + S 保存
             </Typography.Text>
@@ -1011,7 +1023,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         onClose={() => setVersionsOpen(false)}
         currentContent={chapter.content}
         currentDirty={false}
-        sceneContext={{ scenes: sceneEditor.page?.items ?? [], currentSceneId: scene?.id ?? null, prepare: async () => await ensureSaved() ? sceneEditor.controller.getSnapshot().scene?.content_revision ?? null : null, onExtract: async (version, preview) => { if (!canEditNow()) return false; try { await versionApi.extract(pid, chapter.id, version.id, { scene_id: preview.scene_id, expected_content_revision: preview.content_revision, signature: preview.signature }); if (!canEditNow()) return false; await sceneEditor.controller.load(); await reloadChapter(); onChanged(); void refreshProject(); void refreshAnalysis(); message.success('完整旧稿已提取到指定场景，其他场景不变'); return true } catch (err) { if (canEditNow()) message.error(errorMessage(err)); return false } } }}
+        sceneContext={{ scenes: sceneEditor.page?.items ?? [], currentSceneId: scene?.id ?? null, prepare: async () => await ensureSaved() ? sceneEditor.controller.getSnapshot().scene?.content_revision ?? null : null, onExtract: async (version, preview, confirmRichDocumentLoss) => { if (!canEditNow()) return false; try { await versionApi.extract(pid, chapter.id, version.id, { scene_id: preview.scene_id, expected_content_revision: preview.content_revision, signature: preview.signature, confirm_rich_document_loss: confirmRichDocumentLoss }); if (!canEditNow()) return false; await sceneEditor.controller.load(); await reloadChapter(); onChanged(); void refreshProject(); void refreshAnalysis(); message.success('完整旧稿已提取到指定场景，其他场景不变'); return true } catch (err) { if (canEditNow()) message.error(errorMessage(err)); return false } } }}
         restoreDisabled={editorLocked || saving || stuck}
         onRestore={handleRestore}
       />

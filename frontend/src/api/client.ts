@@ -21,9 +21,22 @@ type UnauthorizedHandler = () => void
 let unauthorizedHandler: UnauthorizedHandler | null = null
 let permissionDeniedHandler: (() => void) | null = null
 let requestGeneration = 0
+const generationListeners = new Set<() => void>()
 
 /** 会话代次改变后，旧请求的401/403不能登出或刷新后来登录的账号。 */
-export function invalidateRequestGeneration(): void { requestGeneration += 1 }
+export function invalidateRequestGeneration(): void {
+  requestGeneration += 1
+  for (const listener of [...generationListeners]) listener()
+}
+
+export function currentRequestGeneration(): number { return requestGeneration }
+
+/** 长连接需在身份改变时立即终止，不能等待下一条网络消息才发现旧代次。 */
+export function watchRequestGeneration(invalidate: () => void): { generation: number; dispose: () => void } {
+  const generation = requestGeneration
+  generationListeners.add(invalidate)
+  return { generation, dispose: () => generationListeners.delete(invalidate) }
+}
 
 /** RBAC403只请求刷新能力，不撤销有效登录，也不重放原业务。 */
 export function setPermissionDeniedHandler(handler: (() => void) | null): void {

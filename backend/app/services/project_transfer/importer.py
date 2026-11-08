@@ -67,6 +67,7 @@ from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
+from app.services.project_transfer.rich_documents import validate_rich_tables
 from app.services.project_transfer.scenes import validate_scene_tables
 from app.services.setting_category_validation import validate_category_graph_snapshot
 from app.services.setting_field_values import FieldSpec, has_field_content, validate_field_value
@@ -103,6 +104,9 @@ TABLE_LABELS: dict[str, str] = {
     "outlines": "大纲",
     "chapters": "章节",
     "scenes": "场景",
+    "scene_documents": "场景格式",
+    "scene_sections": "正文区块",
+    "scene_markers": "正文标记",
     "chapter_plans": "细纲",
     "chapter_characters": "出场角色",
     "foreshadows": "伏笔",
@@ -143,6 +147,8 @@ TABLE_LABELS: dict[str, str] = {
 
 # 取值受限的字符串列（读取时 Out schema 为 Literal，非法值会让列表接口 500）
 ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("scene_markers", "status"): ("active", "stale", "deleted"),
+    ("scene_markers", "color"): ("yellow", "green", "blue", "purple", "red"),
     ("setting_categories", "match_mode"): ("all", "any"),
     ("setting_category_rules", "kind"): ("tag", "dropdown"),
     ("planning_tags", "tone"): PLANNING_TONES,
@@ -444,15 +450,40 @@ def _migrate_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
     tables["planning_unit_characters"] = []
     return data
 
+
+def _reject_future_rich_data(data: dict[str, Any]) -> None:
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return
+    message = "旧版备份不支持富文档资料，请使用原始版本文件"
+    for name in ("scene_documents", "scene_sections", "scene_markers"):
+        if name in tables and tables[name] != []:
+            raise BadRequestError(message)
+    for row in _rows_in(tables, "chapter_versions"):
+        snapshot = row.get("scene_snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("schema_version") != 1:
+            raise BadRequestError(message)
+
+
+def _migrate_v7_to_v8(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for name in ("scene_documents", "scene_sections", "scene_markers"):
+            tables[name] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 7:
         _reject_future_scene_data(data)
     if version < 6:
         _reject_future_ai_data(data)
+    if version < 8:
+        _reject_future_rich_data(data)
     steps = {
         1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4,
-        4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6, 6: _migrate_v6_to_v7,
+        4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6, 6: _migrate_v6_to_v7, 7: _migrate_v7_to_v8,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -1023,7 +1054,8 @@ def parse_backup(raw: bytes) -> Backup:
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
-                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes"):
+                  *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes",
+                  "scene_documents", "scene_sections", "scene_markers"):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -1065,6 +1097,8 @@ def parse_backup(raw: bytes) -> Backup:
     validate_planning_tables(backup.tables, errors.add)
     errors.raise_if_any()
     validate_scene_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    validate_rich_tables(backup.tables, errors.add)
     errors.raise_if_any()
     return backup
 

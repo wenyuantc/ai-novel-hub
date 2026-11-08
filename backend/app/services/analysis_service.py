@@ -397,13 +397,15 @@ async def _active_tasks(db: AsyncSession, chapter_ids: list[int]) -> dict[int, i
     return {cid: tid for cid, tid in rows.all()}
 
 
-def _state(chapter: Chapter, latest: ChapterAnalysis | None, active_task_id: int | None) -> ChapterAnalysisState:
+def _state(
+    chapter: Chapter, latest: ChapterAnalysis | None, active_task_id: int | None, current_hash: str,
+) -> ChapterAnalysisState:
     if active_task_id is not None:
         status = "analyzing"
     elif latest is None:
         status = "none"
     else:
-        status = "analyzed" if latest.content_hash == content_hash(chapter.content) else "stale"
+        status = "analyzed" if latest.content_hash == current_hash else "stale"
     return ChapterAnalysisState(
         chapter_id=chapter.id,
         status=status,
@@ -415,10 +417,13 @@ def _state(chapter: Chapter, latest: ChapterAnalysis | None, active_task_id: int
 
 
 async def _states(db: AsyncSession, chapters: list[Chapter]) -> list[ChapterAnalysisState]:
+    from app.services.rich_document_ai import analysis_fingerprints
+
     ids = [c.id for c in chapters]
     latest = await latest_analyses(db, ids)
     active = await _active_tasks(db, ids)
-    return [_state(c, latest.get(c.id), active.get(c.id)) for c in chapters]
+    fingerprints = await analysis_fingerprints(db, chapters)
+    return [_state(c, latest.get(c.id), active.get(c.id), fingerprints[c.id]) for c in chapters]
 
 
 async def project_states(db: AsyncSession, user_id: int, project_id: int) -> list[ChapterAnalysisState]:
@@ -442,8 +447,10 @@ def _brief(a: ChapterAnalysis, current_hash: str) -> AnalysisBrief:
 
 async def list_analyses(db: AsyncSession, user_id: int, chapter_id: int) -> list[AnalysisBrief]:
     """历史列表（新的在前，不含大字段）。"""
+    from app.services.rich_document_ai import analysis_fingerprints
+
     chapter = await get_owned_chapter(db, user_id, chapter_id)
-    current = content_hash(chapter.content)
+    current = (await analysis_fingerprints(db, [chapter]))[chapter.id]
     rows = await db.scalars(
         select(ChapterAnalysis).where(ChapterAnalysis.chapter_id == chapter.id).order_by(ChapterAnalysis.id.desc())
     )
@@ -462,9 +469,12 @@ async def get_owned_analysis(db: AsyncSession, user_id: int, analysis_id: int) -
 
 
 async def get_analysis(db: AsyncSession, user_id: int, analysis_id: int) -> AnalysisOut:
+    from app.services.rich_document_ai import analysis_fingerprints
+
     analysis = await get_owned_analysis(db, user_id, analysis_id)
-    content = await db.scalar(select(Chapter.content).where(Chapter.id == analysis.chapter_id)) or ""
-    brief = _brief(analysis, content_hash(content))
+    chapter = await db.get(Chapter, analysis.chapter_id)
+    current = (await analysis_fingerprints(db, [chapter]))[chapter.id] if chapter is not None else content_hash("")
+    brief = _brief(analysis, current)
     changes = await writeback_service.list_changes(db, analysis.id)
     return AnalysisOut(
         **brief.model_dump(),
@@ -516,12 +526,15 @@ async def request_analyze(
 
 async def pending_chapter_ids(db: AsyncSession, project_id: int) -> list[int]:
     """按 chapter_no 顺序：正文非空、未分析或已过期、且没有排队中 / 运行中分析的章节 id。"""
+    from app.services.rich_document_ai import analysis_fingerprints
+
     chapters = list(
         await db.scalars(
             select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_no, Chapter.id)
         )
     )
     latest = await latest_analyses(db, [c.id for c in chapters])
+    fingerprints = await analysis_fingerprints(db, chapters)
     queued = set(
         await db.scalars(
             select(Task.chapter_id).where(
@@ -534,7 +547,7 @@ async def pending_chapter_ids(db: AsyncSession, project_id: int) -> list[int]:
         if not c.content.strip() or c.id in queued:
             continue
         a = latest.get(c.id)
-        if a is None or a.content_hash != content_hash(c.content):
+        if a is None or a.content_hash != fingerprints[c.id]:
             targets.append(c.id)
     return targets
 
@@ -597,8 +610,6 @@ async def enqueue_auto(ctx: "TaskContext", project_id: int | None, chapter_id: i
     部署开关或项目开关关闭、章节已删除或正文为空、同章已有排队中的分析 → 不入队。
     任务归属项目所有者（计入其并发上限，可在任务面板看到与取消）；调度由引擎在当前任务结束后唤醒。
     """
-    from app.services import task_service
-
     if project_id is None or chapter_id is None or not ctx.settings.auto_analyze_enabled:
         return None
     async with ctx.sessionmaker() as db:
@@ -610,26 +621,36 @@ async def enqueue_auto(ctx: "TaskContext", project_id: int | None, chapter_id: i
             await project_lifecycle.lock_active(db, project.id)
         except (ConflictError, NotFoundError):
             return None
-        chapter = await db.get(Chapter, chapter_id)
-        if chapter is None or chapter.project_id != project.id or not chapter.content.strip():
+        task = await enqueue_auto_in_transaction(db, project, chapter_id)
+        if task is None:
             return None
-        if await queued_analysis(db, chapter.id) is not None:
-            return None
-        task = Task(
-            user_id=project.user_id,
-            project_id=project.id,
-            chapter_id=chapter.id,
-            kind=KIND,
-            title=task_title(chapter)[:200],
-            serial_key=serial_key(project.id),
-            status="queued",
-            input={"request": {"chapter_id": chapter.id}, "chapter_id": chapter.id, "auto": True},
-            stage=task_service.STAGE_LABELS["queued"],
-        )
-        db.add(task)
-        await task_statistics_service.record_created(db, task)
         await db.commit()
         return task.id
+
+
+async def enqueue_auto_in_transaction(db: AsyncSession, project: Project, chapter_id: int) -> Task | None:
+    """调用方已持有活动项目锁并检查开关；入队与调用方正文提交原子完成。"""
+    from app.services import task_service
+
+    chapter = await db.get(Chapter, chapter_id)
+    if chapter is None or chapter.project_id != project.id or not chapter.content.strip():
+        return None
+    if await queued_analysis(db, chapter.id) is not None:
+        return None
+    task = Task(
+        user_id=project.user_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        kind=KIND,
+        title=task_title(chapter)[:200],
+        serial_key=serial_key(project.id),
+        status="queued",
+        input={"request": {"chapter_id": chapter.id}, "chapter_id": chapter.id, "auto": True},
+        stage=task_service.STAGE_LABELS["queued"],
+    )
+    db.add(task)
+    await task_statistics_service.record_created(db, task)
+    return task
 
 
 # ---------------- 任务：校验 / 组装 / 运行 ----------------
@@ -649,6 +670,8 @@ class AnalysisJob:
     thinking: ThinkingLevel = "off"
     max_tokens: int | None = None
     task_id: int | None = None
+    task_key: str | None = None
+    review_analysis: dict[str, Any] | None = None
 
 
 async def validate_analyze(
@@ -712,8 +735,18 @@ async def build_analysis_job(
     ai_timeout: float,
     allow_private: bool,
     task_id: int | None = None,
+    task_key: str | None = None,
+    review_analysis: dict[str, Any] | None = None,
+    context_budget: int = 12_000,
 ) -> AnalysisJob:
     """任务开始运行时按最新正文与设定组装提示词。"""
+    from app.services.rich_document_ai import (
+        analysis_fingerprints,
+        count_visible_chapter_sections,
+        render_visible_sections,
+        visible_sections,
+    )
+
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
     if not chapter.content.strip():
@@ -724,10 +757,21 @@ async def build_analysis_job(
     fields_revision = await setting_field_service.fields_revision(db, project.id)
     stamp = await read_visibility_stamp(db, project.id)
     planning_revision = await planning_context_service.planning_revision(db, project.id)
+    author_context = ""
+    author_budget = min(3_000, max(0, ai_config_service.context_char_budget(cfg, context_budget) // 4))
+    if author_budget >= 100:
+        count = await count_visible_chapter_sections(db, project.id, chapter.id)
+        if count:
+            row_budget = min(32, count, max(1, author_budget // 256))
+            visible = await visible_sections(db, project.id, chapter_ids=[chapter.id], max_rows=row_budget,
+                                             text_limit=min(2_000, max(1, author_budget // row_budget)))
+            author_context = render_visible_sections(visible, author_budget)
+    analysis_text = "\n\n".join(part for part in (chapter.content, author_context) if part)
+    fingerprint = (await analysis_fingerprints(db, [chapter]))[chapter.id]
     candidates = await load_candidates(db, project.id)
     legacy_char = {entry.ref.id: entry for entry in candidates if entry.ref.kind == "character" and entry.mode is None}
     characters = await cast_service.list_characters(db, project.id)
-    mentioned = set(cast_service.match_characters(chapter.content, [
+    mentioned = set(cast_service.match_characters(analysis_text, [
         char for char in characters if char.id in legacy_char and not legacy_char[char.id].tracking_explicit
     ]))
     legacy = [
@@ -740,7 +784,7 @@ async def build_analysis_job(
     explicit.extend(("character", cid) for cid in await cast_service.cast_ids(db, chapter.id))
     scope = await build_scope(
         db, project.id, stamp=stamp, candidates=candidates,
-        texts=(chapter.content,), legacy=legacy,
+        texts=(analysis_text,), legacy=legacy,
         explicit=explicit,
         kinds=("character", "organization", "career"),
     )
@@ -758,7 +802,7 @@ async def build_analysis_job(
         await project_info(db, project),
         chapter_no=chapter.chapter_no,
         title=chapter.title,
-        content=chapter.content,
+        content=analysis_text,
         cast_text="\n\n".join(
             _state_card(
                 c,
@@ -789,7 +833,7 @@ async def build_analysis_job(
         chapter_id=chapter.id,
         chapter_no=chapter.chapter_no,
         content=chapter.content,
-        content_hash=content_hash(chapter.content),
+        content_hash=fingerprint,
         provider=guard_provider(provider, scope.stamp, visibility_sessionmaker(db)),
         model=cfg.model,
         messages=messages,
@@ -797,11 +841,15 @@ async def build_analysis_job(
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
         task_id=task_id,
+        task_key=task_key,
+        review_analysis=review_analysis,
     )
 
 
 async def run_analysis_job(job: AnalysisJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:
     """流式输出模型原文（delta）；解析成功后在同一事务内保存分析与回写条目，done 返回概要。"""
+    from app.services.rich_document_ai import analysis_fingerprints
+
     pieces: list[str] = []
     try:
         stream_iter = job.provider.generate_stream(
@@ -825,10 +873,29 @@ async def run_analysis_job(job: AnalysisJob, sessionmaker: async_sessionmaker[As
             ):
                 yield "error", {"detail": "章节已被删除，分析结果未保存"}
                 return
-            if chapter.chapter_no != job.chapter_no or content_hash(chapter.content) != job.content_hash:
+            current = (await analysis_fingerprints(db, [chapter]))[chapter.id]
+            if chapter.chapter_no != job.chapter_no or current != job.content_hash:
                 yield "error", {"detail": "章节正文或章节位置已变化，分析结果未保存，请重新分析"}
                 return
-            task_id = job.task_id if job.task_id is not None and await db.get(Task, job.task_id) else None
+            receipt = None
+            if job.review_analysis is not None:
+                from app.models import SceneReviewAnalysisReceipt
+
+                ref = job.review_analysis
+                receipt = await db.get(SceneReviewAnalysisReceipt, ref.get("run_key"), with_for_update=True)
+                if (receipt is None or receipt.status != "running" or receipt.task_key != ref.get("task_key")
+                        or receipt.chapter_id != job.chapter_id or receipt.content_hash != job.content_hash):
+                    yield "error", {"detail": "提案分析轮次已变化，结果未保存"}
+                    return
+            task_id = None
+            if job.task_id is not None:
+                matching = select(Task.id).where(Task.id == job.task_id)
+                if job.task_key is not None:
+                    matching = matching.where(Task.statistics_key == job.task_key)
+                task_id = await db.scalar(matching)
+                if job.task_key is not None and task_id is None:
+                    yield "error", {"detail": "分析任务身份已变化，结果未保存"}
+                    return
             analysis = ChapterAnalysis(
                 project_id=job.project_id,
                 chapter_id=job.chapter_id,
@@ -856,6 +923,8 @@ async def run_analysis_job(job: AnalysisJob, sessionmaker: async_sessionmaker[As
             changes = await writeback_service.apply_analysis(db, analysis, data)
             # 剧情记忆：替换本章自动记忆（按类型 + 内容继承钉住 / 屏蔽），与分析同一事务
             await memory_service.sync_from_analysis(db, chapter, analysis)
+            if receipt is not None:
+                receipt.analysis_id, receipt.status = analysis.id, "completed"
             await db.commit()
             counts: dict[str, int] = {}
             for c in changes:

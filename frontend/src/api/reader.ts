@@ -1,9 +1,17 @@
 // 阅读器：目录、阅读进度（reader-ui）
 import { api, buildUrl } from './client'
-import type { ReaderTocItem, ReadingProgressUpdate } from './types'
+import type { Chapter, ReaderTocItem, ReadingProgressUpdate } from './types'
+
+export interface ReaderRun { start: number; end: number; bold: boolean; italic: boolean }
+export interface ReaderBlock {
+  kind: 'paragraph' | 'heading' | 'bullet_list' | 'ordered_list' | 'blockquote'
+  start: number; end: number; level: number | null; runs: ReaderRun[]
+}
+export interface ReaderChapter { chapter: Chapter; blocks: ReaderBlock[] | null }
 
 export const readerApi = {
   toc: (pid: number) => api.get<ReaderTocItem[]>(`/projects/${pid}/reader/toc`),
+  chapter: (pid: number, cid: number) => api.get<ReaderChapter>(`/projects/${pid}/reader/chapters/${cid}`),
   saveProgress: (pid: number, body: ReadingProgressUpdate) => api.put<void>(`/projects/${pid}/reading-progress`, body),
 }
 

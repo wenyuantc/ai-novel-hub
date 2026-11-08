@@ -110,12 +110,24 @@ async def ensure_baseline(db: AsyncSession, chapter: Chapter, *, force: bool = F
     """覆盖前保存真实结构；结构操作即使无正文也保留基线。"""
     from app.services.scene_service import capture_snapshot
 
-    if not force and not chapter.content.strip():
+    snapshot = await capture_snapshot(db, chapter)
+    if not force and not chapter.content.strip() and not _has_rich_material(snapshot):
         return
     latest = await get_latest(db, chapter.id)
-    snapshot = await capture_snapshot(db, chapter)
     if latest is None or latest.content != chapter.content or latest.scene_snapshot != snapshot:
         await record(db, chapter, "baseline")
+
+
+def _has_rich_material(snapshot: dict) -> bool:
+    if snapshot.get("schema_version") != 2:
+        return False
+    for scene in snapshot["scenes"]:
+        document = scene["document"]
+        formatting = document["formatting"]
+        if (document["sections"] or document["retired_section_keys"] or document["markers"]
+                or formatting["boundaries"] or formatting["inline"] or formatting["blocks"]):
+            return True
+    return False
 
 
 def same_structure(first: dict | None, second: dict | None) -> bool:
@@ -136,7 +148,7 @@ async def record_manual(db: AsyncSession, chapter: Chapter) -> ChapterVersion | 
     snapshot = await capture_snapshot(db, chapter)
     if latest is not None and latest.content == chapter.content and latest.scene_snapshot == snapshot:
         return None
-    if not chapter.content.strip():
+    if not chapter.content.strip() and not _has_rich_material(snapshot):
         return await record(db, chapter, "manual", note="清空正文") if latest is not None else None
     if (
         latest is not None

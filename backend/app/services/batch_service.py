@@ -25,7 +25,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError, ConflictError
-from app.models import Chapter, ChapterPlan, Project, Task
+from app.models import Chapter, ChapterAnalysis, ChapterPlan, Project, SceneReviewAnalysisReceipt, Task
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.batch import BatchGenerateRequest, BatchPreview, BatchPreviewItem, BatchSkippedItem
 from app.schemas.chapter import GenerateChapterRequest
@@ -323,6 +323,7 @@ def finish_result(task: Task) -> dict[str, Any]:
 @dataclass
 class BatchJob:
     task_id: int
+    task_key: str | None
     user_id: int
     project_id: int
     req: BatchGenerateRequest
@@ -358,6 +359,7 @@ async def build_batch_job(ctx: "TaskContext", task: Task) -> BatchJob:
     checkpoint.setdefault("since_review", 0)
     return BatchJob(
         task_id=task.id,
+        task_key=task.statistics_key,
         user_id=task.user_id,
         project_id=project.id,
         req=req,
@@ -371,11 +373,13 @@ async def build_batch_job(ctx: "TaskContext", task: Task) -> BatchJob:
 
 async def _write_checkpoint(db: AsyncSession, job: BatchJob) -> None:
     """写入断点（不 commit）。"""
-    await db.execute(
+    result = await db.execute(
         update(Task)
-        .where(Task.id == job.task_id)
+        .where(Task.id == job.task_id, Task.statistics_key == job.task_key, Task.status == "running")
         .values(step_cursor=job.cursor, checkpoint=copy.deepcopy(job.checkpoint))
     )
+    if result.rowcount != 1:
+        raise ConflictError("批量任务身份或状态已变化，不能更新旧断点", extra={"code": "rich_review_task_changed"})
 
 
 async def _save(ctx: "TaskContext", job: BatchJob) -> None:
@@ -384,10 +388,12 @@ async def _save(ctx: "TaskContext", job: BatchJob) -> None:
         await db.commit()
 
 
-async def restore_current(ctx: "TaskContext", task_id: int) -> None:
+async def restore_current(ctx: "TaskContext", task_id: int, task_key: str | None) -> None:
     """on_abort：断点中记录的当前章仍处于 generating 时还原为抢占前状态（幂等）。"""
     async with ctx.sessionmaker() as db:
-        checkpoint = await db.scalar(select(Task.checkpoint).where(Task.id == task_id))
+        if task_key is None:
+            return
+        checkpoint = await db.scalar(select(Task.checkpoint).where(Task.id == task_id, Task.statistics_key == task_key))
         current = (checkpoint or {}).get("current")
         if not current:
             return
@@ -475,17 +481,21 @@ async def _generate_chapter(
                         allow_private=settings.allow_private_ai_endpoints,
                         context_budget=settings.context_char_budget,
                         task_id=job.task_id,
+                        task_key=job.task_key,
                         skill=job.skill,
                     )
             except AppError:
                 # 配置被删 / 章节被复位等：不重试；章节仍是本任务抢占的 generating，还原
                 retryable = False
-                await restore_current(ctx, job.task_id)
+                await restore_current(ctx, job.task_id, job.task_key)
                 raise
             async with aclosing(generation_service.run_chapter_job(chapter_job, ctx.sessionmaker)) as events:
                 async for event, data in events:
                     if event == "done":
                         result = data
+                    elif event == "paused":
+                        yield event, data
+                        return
                     elif event == "error":
                         error = str(data.get("detail") or "生成失败")
                         retryable = data.get("retryable", True)
@@ -518,6 +528,16 @@ async def _analyze_chapter(
     if not enabled:
         item["analysis"] = "skipped"
         return
+    review_ref = job.checkpoint.get("rich_analysis")
+    if review_ref is not None:
+        state, note = await _reserve_review_analysis(ctx, job, cid, review_ref)
+        if state != "execute":
+            item["analysis"] = "ok" if state == "completed" else "failed"
+            if note:
+                item["warning"] = f"{item['warning']}；{note}" if item.get("warning") else note
+            if state == "completed":
+                await kb_index_service.enqueue_memory(ctx.sessionmaker, job.project_id)
+            return
     yield _stage(job, index, "分析中")
     error = ""
     try:
@@ -532,7 +552,12 @@ async def _analyze_chapter(
                 ai_timeout=settings.ai_request_timeout,
                 allow_private=settings.allow_private_ai_endpoints,
                 task_id=job.task_id,
+                task_key=job.task_key,
+                review_analysis=review_ref,
+                context_budget=settings.context_char_budget,
             )
+            if review_ref is not None and analysis_job.content_hash != review_ref["content_hash"]:
+                raise ConflictError("采纳后的章节已变化，未自动分析；请手动分析")
         done = False
         async with aclosing(analysis_service.run_analysis_job(analysis_job, ctx.sessionmaker)) as events:
             async for event, data in events:
@@ -545,6 +570,8 @@ async def _analyze_chapter(
     except AppError as exc:
         error = exc.detail
     if error:
+        if review_ref is not None:
+            await _fail_review_analysis(ctx, review_ref)
         item["analysis"] = "failed"
         note = f"分析失败：{error}"
         item["warning"] = f"{item['warning']}；{note}" if item.get("warning") else note
@@ -552,6 +579,58 @@ async def _analyze_chapter(
         item["analysis"] = "ok"
         # 本章记忆已随分析写入；有向量模型时排队生成向量（与独立分析任务的 on_success 一致）
         await kb_index_service.enqueue_memory(ctx.sessionmaker, job.project_id)
+
+
+async def _reserve_review_analysis(
+    ctx: "TaskContext", job: BatchJob, chapter_id: int, ref: dict[str, Any],
+) -> tuple[str, str]:
+    """先持久登记一次模型调用；崩溃后结果未知时不自动重复发送。"""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services.rich_document_ai import analysis_fingerprints
+
+    if (not isinstance(ref, dict) or type(ref.get("chapter_id")) is not int or ref["chapter_id"] != chapter_id
+            or not all(isinstance(ref.get(key), str) for key in ("run_key", "task_key", "content_hash"))):
+        return "blocked", "分析断点身份无效，未重复发送；请手动分析"
+    async with ctx.sessionmaker() as db:
+        task = await db.scalar(select(Task.id).where(
+            Task.id == job.task_id, Task.statistics_key == job.task_key, Task.status == "running",
+        ))
+        chapter = await db.get(Chapter, chapter_id)
+        if task is None or chapter is None or chapter.project_id != job.project_id:
+            return "blocked", "分析任务或章节已变化，未重复发送"
+        if (await analysis_fingerprints(db, [chapter]))[chapter_id] != ref["content_hash"]:
+            return "blocked", "采纳后的章节已变化，未自动分析；请手动分析"
+        receipt = await db.get(SceneReviewAnalysisReceipt, ref["run_key"])
+        if receipt is not None:
+            if (receipt.task_key != ref["task_key"] or receipt.chapter_id != chapter_id
+                    or receipt.content_hash != ref["content_hash"]):
+                return "blocked", "分析轮次身份不一致，未重复发送"
+            if receipt.status == "completed" and receipt.analysis_id is not None:
+                analysis = await db.get(ChapterAnalysis, receipt.analysis_id)
+                if (analysis is not None and analysis.chapter_id == chapter_id
+                        and analysis.content_hash == ref["content_hash"]):
+                    return "completed", ""
+            return "blocked", "该次分析已开始或结果已移除，未自动重复；可手动分析"
+        db.add(SceneReviewAnalysisReceipt(run_key=ref["run_key"], task_key=ref["task_key"], chapter_id=chapter_id,
+                                          content_hash=ref["content_hash"], status="running"))
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            return "blocked", "该次分析已由另一执行轮次领取，未重复发送"
+    return "execute", ""
+
+
+async def _fail_review_analysis(ctx: "TaskContext", ref: dict[str, Any]) -> None:
+    async with ctx.sessionmaker() as db:
+        await db.execute(update(SceneReviewAnalysisReceipt).where(
+            SceneReviewAnalysisReceipt.run_key == ref.get("run_key"),
+            SceneReviewAnalysisReceipt.task_key == ref.get("task_key"),
+            SceneReviewAnalysisReceipt.chapter_id == ref.get("chapter_id"),
+            SceneReviewAnalysisReceipt.status == "running",
+        ).values(status="failed"))
+        await db.commit()
 
 
 async def run_batch_job(job: BatchJob, ctx: "TaskContext") -> AsyncIterator["Event"]:
@@ -602,6 +681,8 @@ async def run_batch_job(job: BatchJob, ctx: "TaskContext") -> AsyncIterator["Eve
             yield _stage(job, i, "生成中")
             async for event in _generate_chapter(ctx, job, i, item):
                 yield event
+                if event[0] == "paused":
+                    return
             if item["state"] == "failed":
                 if job.req.skip_on_fail:
                     job.cursor = i + 1
@@ -619,6 +700,7 @@ async def run_batch_job(job: BatchJob, ctx: "TaskContext") -> AsyncIterator["Eve
         # phase == analyze：正文已写好，还没分析
         async for event in _analyze_chapter(ctx, job, i, item):
             yield event
+        cp.pop("rich_analysis", None)
         cp["phase"] = "generate"
         cp["since_review"] = int(cp.get("since_review") or 0) + 1
         job.cursor = i + 1

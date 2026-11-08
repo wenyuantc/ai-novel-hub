@@ -4,6 +4,7 @@ import { errorMessage } from '../../api/client'
 import { memoryApi } from '../../api/memories'
 import type { MemorySearchResult } from '../../api/types'
 import { MEMORY_KIND_COLORS, MEMORY_KIND_LABELS } from '../../utils/kb'
+import MemorySourceBadge from './MemorySourceBadge'
 import ScoreTags from './ScoreTags'
 import SearchResultSummary from './SearchResultSummary'
 
@@ -121,6 +122,7 @@ export default function MemorySearchDebug({ projectId }: Props) {
                         </Tag>
                         {h.memory.pinned && <Tag color="gold">已钉住</Tag>}
                         {h.memory.muted && <Tag>已屏蔽</Tag>}
+                        <MemorySourceBadge memory={h.memory} />
                       </Space>
                       <ScoreTags score={h.score} vectorScore={h.vector_score} keywordScore={h.keyword_score} />
                       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>

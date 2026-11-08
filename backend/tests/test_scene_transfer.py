@@ -6,7 +6,16 @@ from copy import deepcopy
 import pytest
 from sqlalchemy import select
 
-from app.models import Chapter, ChapterVersion, PlanningUnit, Scene, SettingProgression, SettingTimeline
+from app.models import (
+    Chapter,
+    ChapterVersion,
+    PlanningUnit,
+    Scene,
+    SceneMarker,
+    SceneSection,
+    SettingProgression,
+    SettingTimeline,
+)
 from app.services.project_transfer import importer
 from tests.test_project_transfer import _backup, _import, _preview_raw, _setup
 from tests.test_scenes import setup_scene
@@ -50,7 +59,7 @@ async def test_v7_scenes_raw_planning_history_and_retired_ids_roundtrip(app, cli
                                   value="夜访后", anchor_kind="scene", scene_id=second["id"], boundary="end"))
         await db.commit()
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (7, "0039")
+    assert (data["version"], data["app_schema"]) == (8, "0040")
     assert "content_revision" not in data["tables"]["chapters"][0]
     imported = await _import(client, data)
     new_project_id = imported["project"]["id"]
@@ -144,3 +153,153 @@ async def test_scene_inherit_cannot_smuggle_local_values(client):
         broken["tables"]["planning_units"][0][f"{field}_mode"] = "inherit"
         rejected = await _preview_raw(client, json.dumps(broken).encode())
         assert rejected.status_code == 400 and "继承" in rejected.json()["detail"], rejected.text
+
+
+async def test_marker_split_lineage_survives_backup_and_rejects_corrupt_origin(app, client):
+    project, _chapter, url, scene = await setup_scene(client, "甲🙂乙丙丁尾")
+    async with app.state.sessionmaker() as db:
+        db.add(SceneMarker(scene_id=scene["id"], logical_key="12345678-1234-4123-8123-123456789def",
+                           status="active", color="blue", start_offset=4, end_offset=5))
+        await db.commit()
+    split = await client.post(f"{url}/scenes/{scene['id']}/split", json={
+        "expected_content_revision": 0, "offset": 3,
+    })
+    assert split.status_code == 200, split.text
+    data = await _backup(client, project["id"])
+    markers = data["tables"]["scene_markers"]
+    source = next(row for row in markers if row["status"] == "deleted")
+    moved = next(row for row in markers if row["status"] == "active")
+    assert moved["origin_marker_id"] == source["id"]
+    imported = await _import(client, data)
+    new_id = imported["project"]["id"]
+    result = await _backup(client, new_id)
+    new_markers = result["tables"]["scene_markers"]
+    new_source = next(row for row in new_markers if row["status"] == "deleted")
+    new_moved = next(row for row in new_markers if row["status"] == "active")
+    assert new_moved["origin_marker_id"] == new_source["id"] != source["id"]
+    for invalid in (moved["id"], 999999):
+        broken = deepcopy(data)
+        active = next(row for row in broken["tables"]["scene_markers"] if row["status"] == "active")
+        active["origin_marker_id"] = invalid
+        rejected = await _preview_raw(client, json.dumps(broken).encode())
+        assert rejected.status_code == 400, rejected.text
+
+
+async def test_section_split_lineage_survives_backup_and_rejects_corrupt_origin(app, client):
+    project, _chapter, url, scene = await setup_scene(client, "甲🙂乙丙丁尾")
+    async with app.state.sessionmaker() as db:
+        db.add(SceneSection(scene_id=scene["id"], logical_key="12345678-1234-4123-8123-123456789abc",
+                            anchor=4, sort=0, title="私密", content="材料🙂", include_in_ai=True))
+        await db.commit()
+    split = await client.post(f"{url}/scenes/{scene['id']}/split", json={
+        "expected_content_revision": 0, "offset": 3,
+    })
+    assert split.status_code == 200, split.text
+    data = await _backup(client, project["id"])
+    sections = data["tables"]["scene_sections"]
+    source = next(row for row in sections if not row["active"])
+    moved = next(row for row in sections if row["active"])
+    assert moved["origin_section_id"] == source["id"]
+    imported = await _import(client, data)
+    result = await _backup(client, imported["project"]["id"])
+    new_source = next(row for row in result["tables"]["scene_sections"] if not row["active"])
+    new_moved = next(row for row in result["tables"]["scene_sections"] if row["active"])
+    assert new_moved["origin_section_id"] == new_source["id"] != source["id"]
+    for invalid in (moved["id"], 999999):
+        broken = deepcopy(data)
+        active = next(row for row in broken["tables"]["scene_sections"] if row["active"])
+        active["origin_section_id"] = invalid
+        rejected = await _preview_raw(client, json.dumps(broken).encode())
+        assert rejected.status_code == 400, rejected.text
+
+
+@pytest.mark.parametrize("kind", ["section", "marker"])
+async def test_rich_backup_accepts_legacy_duplicate_live_lineage(app, client, kind):
+    """兼容旧版本可产生的双活备份，保留血缘与两处作者资料。"""
+    project, _chapter, url, scene = await setup_scene(client, "甲🙂乙丙丁尾")
+    async with app.state.sessionmaker() as db:
+        if kind == "section":
+            db.add(SceneSection(scene_id=scene["id"], logical_key="12345678-1234-4123-8123-123456789abc",
+                                anchor=4, sort=0, title="备注", content="作者资料"))
+        else:
+            db.add(SceneMarker(scene_id=scene["id"], logical_key="12345678-1234-4123-8123-123456789def",
+                               status="active", color="blue", start_offset=4, end_offset=5))
+        await db.commit()
+    split = await client.post(f"{url}/scenes/{scene['id']}/split", json={
+        "expected_content_revision": 0, "offset": 3,
+    })
+    assert split.status_code == 200, split.text
+    data = await _backup(client, project["id"])
+    assert (await _preview_raw(client, json.dumps(data).encode())).status_code == 200
+    rows = data["tables"]["scene_sections" if kind == "section" else "scene_markers"]
+    if kind == "section":
+        source = next(row for row in rows if not row["active"])
+        source.update(active=True, anchor=1)
+    else:
+        source = next(row for row in rows if row["status"] == "deleted")
+        source.update(status="active", start_offset=0, end_offset=1, last_start=None)
+    preview = await _preview_raw(client, json.dumps(data).encode())
+    assert preview.status_code == 200, preview.text
+    origin_field = "origin_section_id" if kind == "section" else "origin_marker_id"
+    independent = deepcopy(data)
+    other = next(row for row in independent["tables"]["scene_sections" if kind == "section" else "scene_markers"]
+                 if row.get(origin_field) is not None)
+    other[origin_field] = None
+    assert (await _preview_raw(client, json.dumps(independent).encode())).status_code == 200
+    imported = await _import(client, data)
+    result = await _backup(client, imported["project"]["id"])
+    restored = result["tables"]["scene_sections" if kind == "section" else "scene_markers"]
+    new_source = next(row for row in restored if row[origin_field] is None)
+    new_moved = next(row for row in restored if row[origin_field] == new_source["id"])
+    if kind == "section":
+        assert new_source["active"] and new_moved["active"]
+        assert new_source["content"] == new_moved["content"] == "作者资料"
+    else:
+        assert new_source["status"] == new_moved["status"] == "active"
+        assert (new_source["start_offset"], new_moved["start_offset"]) == (0, 1)
+
+
+@pytest.mark.parametrize("kind", ["section", "marker"])
+async def test_split_history_restore_backup_keeps_retired_scene_material(app, client, kind):
+    """恢复拆景前的版本时，退场场景的数据也必须继续可备份。"""
+    project, chapter, url, scene = await setup_scene(client, "甲🙂乙丙丁尾")
+    async with app.state.sessionmaker() as db:
+        if kind == "section":
+            db.add(SceneSection(scene_id=scene["id"], logical_key="12345678-1234-4123-8123-123456789abc",
+                                anchor=4, sort=0, title="备注", content="作者资料"))
+        else:
+            db.add(SceneMarker(scene_id=scene["id"], logical_key="12345678-1234-4123-8123-123456789def",
+                               status="active", color="blue", start_offset=4, end_offset=5))
+        await db.commit()
+    split = await client.post(f"{url}/scenes/{scene['id']}/split", json={
+        "expected_content_revision": 0, "offset": 3,
+    })
+    assert split.status_code == 200, split.text
+    async with app.state.sessionmaker() as db:
+        baseline = await db.scalar(select(ChapterVersion).where(
+            ChapterVersion.chapter_id == chapter["id"], ChapterVersion.source == "baseline",
+        ))
+        assert baseline is not None
+        baseline_id = baseline.id
+    restored = await client.post(f"{url}/versions/{baseline_id}/restore", json={
+        "expected_content_revision": 1, "confirm_rich_document_loss": True,
+    })
+    assert restored.status_code == 200, restored.text
+    data = await _backup(client, project["id"])
+    rows = data["tables"]["scene_sections" if kind == "section" else "scene_markers"]
+    live = [row for row in rows if row["active"]] if kind == "section" else [
+        row for row in rows if row["status"] != "deleted"
+    ]
+    assert len(live) == 2
+    scenes = {row["id"]: row for row in data["tables"]["scenes"]}
+    assert sum(bool(scenes[row["scene_id"]]["active"]) for row in live) == 1
+    preview = await _preview_raw(client, json.dumps(data).encode())
+    assert preview.status_code == 200, preview.text
+    imported = await _import(client, data)
+    result = await _backup(client, imported["project"]["id"])
+    restored = result["tables"]["scene_sections" if kind == "section" else "scene_markers"]
+    assert len(restored) == 2
+    if kind == "section":
+        assert [row["content"] for row in restored] == ["作者资料", "作者资料"]
+    else:
+        assert all(row["status"] == "active" for row in restored)

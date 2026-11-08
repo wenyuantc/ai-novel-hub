@@ -54,6 +54,8 @@ class TaskOut(BaseModel):
     # 多步任务的结构化断点（chapter.batch：阶段、当前章、每章结果，前端据此渲染章节清单；
     # book.import：断点摘要，见 book_import.reverse.summarize，不含体积较大的中间结果）
     checkpoint: dict[str, Any] | None = None
+    # 仅富文档待核对时暴露随机身份，用于重新读取、取消和采纳同一执行轮次。
+    rich_review: dict[str, Any] | None = None
     # 断点：下一步要处理的章节在 input.chapter_ids 中的下标（仅多步任务有意义），前端据此显示「从第 N 章续跑」
     step_cursor: int = 0
     # 仅排队中的任务有值：前面还在排队的任务数（全局先进先出，0 = 下一个执行）

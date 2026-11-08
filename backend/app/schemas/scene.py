@@ -5,6 +5,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.rich_document import SceneDocument, validate_chapter_document_boundaries
+
 SceneId = Annotated[int, Field(strict=True, gt=0, le=2_147_483_647)]
 ContentRevision = Annotated[int, Field(strict=True, ge=0)]
 SceneTitle = Annotated[str, Field(strict=True, max_length=200)]
@@ -165,3 +167,34 @@ class SceneSnapshot(SceneRequest):
         if len(set(ids)) != len(ids) or len(set(ranks)) != len(ranks) or ranks != sorted(ranks):
             raise ValueError("场景快照身份或顺序无效")
         return self
+
+
+class SnapshotSceneV2(SnapshotScene):
+    # 历史正文已有独立 content 字段；文档部分只存新增元数据，避免复制两份原文。
+    document: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_document(self):
+        if "content" in self.document:
+            raise ValueError("场景历史正文不能重复存储")
+        SceneDocument.model_validate({"content": self.content, **self.document})
+        return self
+
+
+class SceneSnapshotV2(SceneSnapshot):
+    schema_version: Literal[2]
+    scenes: list[SnapshotSceneV2] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_chapter_boundaries(self):
+        validate_chapter_document_boundaries([
+            (item.separator_before, SceneDocument.model_validate({"content": item.content, **item.document}))
+            for item in self.scenes
+        ])
+        return self
+
+
+def parse_scene_snapshot(value: dict[str, Any]) -> SceneSnapshot | SceneSnapshotV2:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        return SceneSnapshotV2.model_validate(value)
+    return SceneSnapshot.model_validate(value)

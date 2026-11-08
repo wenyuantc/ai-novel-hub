@@ -24,7 +24,7 @@ interface Props {
   /** 生成中 / 保存中 / 局部改写预览中等情况下禁止回滚 */
   restoreDisabled: boolean
   /** 由编辑器执行回滚（含未保存修改时先自动保存），成功返回 true */
-  onRestore: (version: ChapterVersionBrief, revision?: number) => Promise<boolean>
+  onRestore: (version: ChapterVersionBrief, revision?: number, confirmRichDocumentLoss?: boolean) => Promise<boolean>
   sceneContext?: VersionSceneContext
 }
 

@@ -215,7 +215,7 @@ async def test_v5_roundtrip_replays_four_entities_fields_and_categories_and_isol
     for position, phase in PHASES.items():
         assert original[position] == _expected(phase), position
     backup = await _backup(client, source_project["id"])
-    assert (backup["version"], backup["app_schema"]) == (7, "0039")
+    assert (backup["version"], backup["app_schema"]) == (8, "0040")
     assert len(backup["tables"]["setting_text_fields"]) == len(backup["tables"]["setting_progressions"]) == 16
     imported = await _import(client, backup, title="导入后的独立作品")
     target_project = imported["project"]

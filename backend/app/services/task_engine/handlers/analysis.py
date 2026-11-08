@@ -55,6 +55,8 @@ class AnalysisHandler:
                 ai_timeout=ctx.settings.ai_request_timeout,
                 allow_private=ctx.settings.allow_private_ai_endpoints,
                 task_id=task.id,
+                task_key=task.statistics_key,
+                context_budget=ctx.settings.context_char_budget,
             )
 
     def run(self, job: analysis_service.AnalysisJob, ctx: TaskContext) -> AsyncIterator[Event]:

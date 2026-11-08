@@ -10,6 +10,7 @@ import {
   KB_MAX_FILE_BYTES,
   MEMORY_KIND_LABELS,
   memoryEditable,
+  memorySourceStatus,
   normalizeChapterRange,
   precheckUpload,
   scoreColor,
@@ -146,6 +147,14 @@ describe('记忆', () => {
   it('只有手动记忆可以编辑 / 删除', () => {
     expect(memoryEditable({ origin: 'manual' })).toBe(true)
     expect(memoryEditable({ origin: 'auto' })).toBe(false)
+  })
+
+  it('只对有证据的自动记忆标注来源过期，不把手动或未知来源伪称新鲜', () => {
+    expect(memorySourceStatus({ origin: 'auto', source_stale: true })).toBe('stale')
+    expect(memorySourceStatus({ origin: 'auto', source_stale: false })).toBe(null)
+    expect(memorySourceStatus({ origin: 'auto', source_stale: null })).toBe('unknown')
+    expect(memorySourceStatus({ origin: 'auto' })).toBe(null)
+    expect(memorySourceStatus({ origin: 'manual', source_stale: true })).toBe(null)
   })
 
   it('章号范围：起 > 止时互换，缺省保留 undefined', () => {

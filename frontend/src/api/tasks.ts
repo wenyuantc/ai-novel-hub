@@ -21,17 +21,24 @@ import type {
   WizardKind,
 } from './types'
 
+export interface TaskReviewIdentity { task_key: string; run_key: string; token: string }
+export function taskReviewIdentity(task: Task, includeFinished = false): TaskReviewIdentity | undefined {
+  const review = task.rich_review
+  return review && (review.phase === 'awaiting_review' || includeFinished)
+    ? { task_key: review.task_key, run_key: review.run_key, token: review.token } : undefined
+}
+
 export const taskApi = {
   list: (query: TaskListQuery = {}) => api.get<Task[]>('/tasks', { ...query } as Record<string, QueryValue>),
   get: (id: number) => api.get<Task>(`/tasks/${id}`),
   output: (id: number) => api.get<TaskOutput>(`/tasks/${id}/output`),
-  cancel: (id: number) => api.post<Task>(`/tasks/${id}/cancel`),
+  cancel: (id: number, review?: TaskReviewIdentity) => api.post<Task>(`/tasks/${id}/cancel`, review),
   retry: (id: number) => api.post<Task>(`/tasks/${id}/retry`),
   /** 待审核 → 排队（同一任务从断点继续，202） */
   resume: (id: number) => api.post<Task>(`/tasks/${id}/resume`),
   /** 待审核 → 已完成（result.ended_early = true） */
-  finish: (id: number) => api.post<Task>(`/tasks/${id}/finish`),
-  remove: (id: number) => api.del(`/tasks/${id}`),
+  finish: (id: number, review?: TaskReviewIdentity) => api.post<Task>(`/tasks/${id}/finish`, review),
+  remove: (id: number, review?: TaskReviewIdentity) => api.del(`/tasks/${id}`, review ? { ...review } : undefined),
   /**
    * 拆书反推（book.import）因失败暂停时跳过当前步骤并继续（202，同一任务）：通读批次不写摘要、汇总改用代码合并结果。
    * 路径在 /book-imports 下；放在这里是因为任务面板在入口 chunk 中，不能引用拆书页的 api/bookImport.ts

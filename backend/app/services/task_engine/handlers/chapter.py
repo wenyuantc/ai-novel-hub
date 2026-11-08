@@ -132,6 +132,7 @@ class ChapterHandler:
                 allow_private=ctx.settings.allow_private_ai_endpoints,
                 context_budget=ctx.settings.context_char_budget,
                 task_id=task.id,
+                task_key=task.statistics_key,
                 skill=task.input.get("skill"),
                 target=parse_target(params.get("target")),
             )

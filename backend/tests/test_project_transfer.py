@@ -94,7 +94,16 @@ def test_registry_handles_every_fk_and_json_column():
         for col, target in rule.fk.items():
             assert target == "projects" or target in {r.table for r in RULES}, f"{rule.table}.{col} → {target}"
             fk_targets = {fk.column.table.name for fk in table.columns[col].foreign_keys}
-            assert fk_targets == {target}, f"{rule.table}.{col} 的被引用表应为 {fk_targets}"
+            if rule.table == "scene_markers" and col == "scene_id":
+                # 直接场景 FK 用于 ID 重映射；复合 FK 额外保证标记和区块属于同一场景。
+                assert fk_targets == {"scenes", "scene_sections"}
+                composite = next(c for c in table.foreign_key_constraints if len(c.elements) == 2)
+                assert {(fk.parent.name, fk.column.table.name, fk.column.name) for fk in composite.elements} == {
+                    ("scene_id", "scene_sections", "scene_id"), ("section_id", "scene_sections", "id"),
+                }
+                assert rule.fk["section_id"] == "scene_sections"
+            else:
+                assert fk_targets == {target}, f"{rule.table}.{col} 的被引用表应为 {fk_targets}"
 
 
 def test_registry_import_order():
@@ -114,11 +123,14 @@ KB_TEXT = "# 门派\n\n## 天剑宗\n\n天剑宗坐落在云梦山巅，以剑�
 
 
 def _without_ai_settings(data, version):
-    """从 v6 导出构造真实旧版本：版本号之外也没有 v6 的限制和链接数据。"""
+    """从无富资料的新导出构造真实旧版：移除后续格式、AI 限制和链接。"""
     from app.schemas.setting_ai_visibility import StoredAiSettings
 
     data["version"] = version
     tables = data["tables"]
+    for table in ("scene_documents", "scene_sections", "scene_markers"):
+        assert not tables.get(table)  # 不能伪造有作者资料的旧备份。
+        tables.pop(table, None)
     tables.pop("scenes", None)
     tables.pop("planning_unit_characters", None)
     for row in tables.get("chapter_versions", []):
@@ -619,7 +631,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 7 and data["app_schema"] == "0039"
+    assert data["version"] == 8 and data["app_schema"] == "0040"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -995,7 +1007,7 @@ async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client,
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 7
+    assert src["format"] == "ainovel.project" and src["version"] == 8
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 不导出任务 / 分块 / 检索单元
     assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
@@ -1610,7 +1622,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (7, "0039")
+    assert (data["version"], data["app_schema"]) == (8, "0040")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)
@@ -1744,7 +1756,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
             field.pop("definition_id")
         result = await _import(client, data)
         exported = await _backup(client, result["project"]["id"])
-        assert exported["version"] == 7
+        assert exported["version"] == 8
         assert all(not exported["tables"][table] for table in importer.FIELD_TABLES)
         assert len(exported["tables"]["setting_progressions"]) == len(data["tables"]["setting_progressions"])
         assert [f["base_value"] for f in exported["tables"]["setting_text_fields"]] == [

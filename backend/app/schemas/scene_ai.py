@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from app.schemas.chapter import GenerateChapterRequest, PolishChapterRequest, ReviseChapterRequest
 from app.schemas.chapter_version import RewriteApply, RewriteRequest
@@ -67,3 +67,32 @@ class SceneRewriteApply(SceneRevisions, RewriteApply):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     log_id: DatabaseId | None = None
+
+
+class SectionRewriteRequest(SceneModelOptions):
+    """关闭区块选区的显式、不可复用确认；正文仅通过范围和摘要绑定。"""
+
+    request_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    confirmed: Literal[True]
+    op: Literal["rewrite", "expand", "condense", "deslop"]
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    selected_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instruction: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strict_confirmation(cls, value):
+        if not isinstance(value, dict) or type(value.get("confirmed")) is not bool or value["confirmed"] is not True:
+            raise ValueError("必须明确确认发送所选区块文字")
+        return value
+
+
+class SectionRewriteApply(SceneRevisions):
+    request_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    log_id: DatabaseId
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    original: str = Field(max_length=5_000)
+    replacement: str = Field(max_length=100_000)
+    confirm_format_loss: bool = False

@@ -813,8 +813,13 @@ export type ReviseSceneRequest = ReviseChapterRequest & SceneAIRevision
 export type SceneRewriteRequest = RewriteRequest & SceneAIRevision
 export interface SceneRewriteDone extends RewriteDone { scene_id: number; chapter_id: number; content_revision: number; planning_revision: number }
 export type SceneRewriteApply = RewriteApply & SceneAIRevision
-export interface SceneRestorePreview { version_id: number; has_scene_snapshot: boolean; content_revision: number; scene_ids: number[]; retiring_scene_ids: number[]; blockers: SceneReferenceBlocker[] }
-export interface SceneExtractPreview { version_id: number; scene_id: number; content_revision: number; original: string; replacement: string; signature: string }
+export interface SceneRichHistoryChange {
+  scene_id: number; will_retire: boolean
+  before_sections: number; after_sections: number; before_markers: number; after_markers: number
+  sections_changed: boolean; markers_changed: boolean; format_changed: boolean; before_format_ranges: number; after_format_ranges: number
+}
+export interface SceneRestorePreview { version_id: number; has_scene_snapshot: boolean; content_revision: number; scene_ids: number[]; retiring_scene_ids: number[]; blockers: SceneReferenceBlocker[]; requires_rich_confirmation: boolean; rich_changes: SceneRichHistoryChange[] }
+export interface SceneExtractPreview { version_id: number; scene_id: number; content_revision: number; original: string; replacement: string; signature: string; requires_rich_confirmation: boolean; rich_changes: SceneRichHistoryChange[] }
 
 export interface PolishChapterRequest {
   ai_config_id?: number | null
@@ -874,7 +879,7 @@ export interface ChapterVersion extends ChapterVersionBrief {
 }
 
 export interface SceneSnapshot {
-  schema_version: 1
+  schema_version: 1 | 2
   scenes: { id: number; title: string; content: string; summary: string; sort: number; separator_before: string; planning: { unit_id: number | null; binding_epoch: number | null; raw: ScenePlanningRaw } | null }[]
 }
 
@@ -953,6 +958,8 @@ export interface RewriteDone {
 }
 
 export interface RewriteApply {
+  expected_content_revision?: number
+  expected_planning_revision?: number
   start: number
   end: number
   original: string
@@ -960,6 +967,7 @@ export interface RewriteApply {
   before?: string | null
   replacement: string
   log_id?: number | null
+  confirm_format_loss?: boolean
 }
 
 // ---------------- 后台任务（backend/app/schemas/task.py） ----------------
@@ -1016,6 +1024,7 @@ export interface Task {
    * 按 kind 收窄：批量用 utils/batchState.ts 的 batchCheckpoint，拆书用 utils/bookImport.ts 的 bookImportSummary（任务面板只用 bookImportState.ts 的轻量读取）
    */
   checkpoint: BatchCheckpoint | BookImportSummary | AgentCheckpoint | null
+  rich_review?: { task_key: string; run_key: string; token: string; chapter_id: number; phase: 'awaiting_review' | 'applied' | 'discarded' } | null
   /** 断点：下一步要处理的章节在 checkpoint.items 中的下标（仅多步任务有意义） */
   step_cursor: number
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
@@ -2902,6 +2911,8 @@ export interface Memory {
   importance: number
   origin: MemoryOrigin
   analysis_id: number | null
+  /** 自动记忆来源分析是否过期；null/缺省表示不可验证，手动记忆不适用。 */
+  source_stale?: boolean | null
   pinned: boolean
   muted: boolean
   created_at: string

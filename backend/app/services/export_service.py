@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError
 from app.models import Chapter, Outline, Project, ProjectCover
+from app.schemas.reader import ReaderBlock
 from app.services.project_service import get_owned_project
 
 ExportFormat = Literal["txt", "md", "epub"]
@@ -59,11 +60,13 @@ def render_txt(project: Project, chapters: list[Chapter]) -> str:
     if meta:
         parts.append("\n".join(meta))
     for ch in chapters:
-        parts.append(f"{chapter_heading(ch)}\n\n{ch.content.strip()}")
+        parts.append(f"{chapter_heading(ch)}\n\n{ch.content}")
     return "\n\n\n".join(parts) + "\n"
 
 
-def render_md(project: Project, chapters: list[Chapter]) -> str:
+def render_md(project: Project, chapters: list[Chapter], formatting: dict[int, list[ReaderBlock]] | None = None) -> str:
+    from app.services.rich_document_render import render_markdown
+
     parts = [f"# {project.title}"]
     meta = []
     if project.genre:
@@ -73,7 +76,8 @@ def render_md(project: Project, chapters: list[Chapter]) -> str:
     if meta:
         parts.append("\n>\n".join(meta))
     for ch in chapters:
-        parts.append(f"## {chapter_heading(ch)}\n\n{ch.content.strip()}")
+        body = render_markdown(ch.content, formatting[ch.id]) if formatting and ch.id in formatting else ch.content
+        parts.append(f"## {chapter_heading(ch)}\n\n{body}")
     return "\n\n".join(parts) + "\n"
 
 
@@ -104,14 +108,18 @@ async def export_project(
     include_synopsis: bool = True,
 ) -> ExportFile:
     project = await get_owned_project(db, user_id, project_id)
-    stmt = select(Chapter).where(Chapter.project_id == project.id, Chapter.status != "generating")
-    if chapter_ids is not None:
-        stmt = stmt.where(Chapter.id.in_(chapter_ids))
-    selected = list(await db.scalars(stmt.order_by(Chapter.chapter_no, Chapter.id)))
+    from app.services.rich_document_render import load_chapter_projections
+
+    # TXT 也核对场景投影，但完全不加载或展开格式及作者资料。
+    projections = await load_chapter_projections(db, project.id, chapter_ids=chapter_ids, exclude_generating=True,
+                                                  include_formatting=fmt != "txt")
+    selected = [projection.chapter for projection in projections]
     chapters = [c for c in selected if c.content.strip()]
     if not chapters:
         raise BadRequestError("没有可导出的章节（章节正文为空）")
     base = _UNSAFE_FILENAME_RE.sub("_", project.title).strip() or "novel"
+    formatting = {projection.chapter.id: projection.blocks for projection in projections
+                  if projection.blocks is not None}
     if fmt == "epub":
         from app.services import epub_service
 
@@ -127,8 +135,9 @@ async def export_project(
         data = epub_service.build_epub(
             project, chapters, outlines, author=author.strip()[:AUTHOR_LIMIT], include_synopsis=include_synopsis,
             cover=(cover.data, cover.mime_type) if cover is not None else None,
+            formatting=formatting,
         )
         return ExportFile(f"{base}.epub", data, "application/epub+zip", warnings)
     if fmt == "md":
-        return ExportFile(f"{base}.md", render_md(project, chapters), "text/markdown; charset=utf-8")
+        return ExportFile(f"{base}.md", render_md(project, chapters, formatting), "text/markdown; charset=utf-8")
     return ExportFile(f"{base}.txt", render_txt(project, chapters), "text/plain; charset=utf-8")

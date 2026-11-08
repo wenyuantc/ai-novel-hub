@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from uuid import uuid4
 
 import anyio
 from sqlalchemy import select, update
@@ -48,6 +49,7 @@ from app.services import (
     retrieval_service,
     scene_ai_context,
     scene_service,
+    setting_ai_visibility,
     skill_service,
     style_service,
     version_service,
@@ -59,7 +61,7 @@ from app.services.project_service import get_owned_project
 
 logger = logging.getLogger(__name__)
 
-Event = tuple[Literal["delta", "continue", "done", "error", "stage"], dict]
+Event = tuple[Literal["delta", "continue", "done", "error", "stage", "paused"], dict]
 Mode = Literal["generate", "polish", "revise"]
 ChapterRequest = GenerateChapterRequest | PolishChapterRequest | ReviseChapterRequest
 
@@ -89,6 +91,8 @@ class ChapterJob:
     auto_continue: bool = False
     params: dict[str, Any] = field(default_factory=dict)
     task_id: int | None = None
+    task_key: str | None = None
+    run_key: str = field(default_factory=lambda: str(uuid4()))
     # 自动续写指令的用户覆盖（组装 job 时取出）
     continue_override: PromptOverride | None = None
     user_id: int = 0
@@ -279,6 +283,7 @@ async def build_chapter_job(
     allow_private: bool,
     context_budget: int,
     task_id: int | None = None,
+    task_key: str | None = None,
     skill: dict[str, Any] | None = None,
     target: ChapterTarget | SceneTarget | None = None,
 ) -> ChapterJob:
@@ -339,7 +344,7 @@ async def build_chapter_job(
         project_id=project.id, ai_config_id=cfg.id, provider_name=cfg.provider,
         target_words=steps[0]["target_words"],
         auto_continue=isinstance(req, GenerateChapterRequest) and req.auto_continue,
-        params=params, task_id=task_id, continue_override=continue_override, user_id=user_id,
+        params=params, task_id=task_id, task_key=task_key, continue_override=continue_override, user_id=user_id,
         target=target, scenes=scenes, steps=steps, context_stamp=stamp, request=req,
         context_budget=ai_config_service.context_char_budget(cfg, context_budget), override=override,
         style=resolved.block if resolved is not None else "", skill_guide=str((skill or {}).get("body") or ""),
@@ -353,6 +358,8 @@ async def build_chapter_job(
 
 async def _prepare_scene_step(db: AsyncSession, job: ChapterJob, step: dict[str, Any], preceding: str) -> None:
     """只读重建当前步骤，绝不暂写 Scene 或混入数据库中的旧前场景。"""
+    from app.services.rich_document_ai import scene_reference_context
+
     assert job.context_stamp is not None and job.request is not None and job.raw_provider is not None
     await scene_ai_context.require_stamp(db, job.context_stamp)
     chapter = await get_owned_chapter(db, job.user_id, job.chapter_id)
@@ -371,10 +378,17 @@ async def _prepare_scene_step(db: AsyncSession, job: ChapterJob, step: dict[str,
         scene_id=step["id"], title=step["title"], summary=clipped(step["summary"]), index=index,
         total=len(job.scenes), target_words=step["target_words"], preceding_text=preceding_tail,
     )
+    author_budget = max(0, min(3_000, budget // 4, budget - len(scene_context) - 2))
+    author_context = await scene_reference_context(
+        db, project.id, [(scene["id"], scene["sort"]) for scene in job.scenes if scene["sort"] <= step["sort"]],
+        author_budget,
+    )
+    if author_context:
+        scene_context += "\n\n" + author_context
     remaining = budget - len(scene_context) - 2
     planning = await planning_context_service.load_planning_context(
         db, project, "scene", step["id"], budget=remaining,
-        text_hint="\n".join((step["content"], req.instruction)), stamp=job.context_stamp.visibility,
+        text_hint="\n".join((step["content"], req.instruction, author_context)), stamp=job.context_stamp.visibility,
         preceding_text=preceding if index > 1 else None,
     )
     task = await chapter_task(db, chapter)
@@ -441,6 +455,7 @@ async def _save_chapter_result(
 
     async def save() -> dict[str, Any] | None:
         async with sessionmaker() as db:
+            await setting_ai_visibility.lock_author_visibility_write(db, job.user_id, job.project_id, manage=False)
             try:
                 chapter = await get_owned_chapter(db, job.user_id, job.chapter_id, lock=True)
             except NotFoundError:
@@ -450,8 +465,44 @@ async def _save_chapter_result(
                 raise ConflictError("章节生成状态已被复位，生成结果未保存")
             assert job.context_stamp is not None
             await scene_ai_context.require_stamp(db, job.context_stamp)
+            scenes = await scene_service.list_active_scenes(db, chapter.id)
+            if set(contents) != {scene.id for scene in scenes}:
+                raise ConflictError("场景结构已变化，请重新发起操作", extra={"code": "scene_context_changed"})
+            rich_ids = await scene_service._rich_scene_ids(db, [scene.id for scene in scenes])
+            plans = None
+            if rich_ids:
+                from app.services.rich_document_proposal_mapping import build_scene_proposal
+                from app.services.rich_document_store import capture_documents
+
+                documents, _ = await capture_documents(db, scenes)
+                plans = {scene.id: build_scene_proposal(documents[scene.id], contents[scene.id]) for scene in scenes}
+                if any(plan.requires_review for plan in plans.values()):
+                    from app.services.rich_document_review import persist_pending
+
+                    review = await persist_pending(db, chapter, job, plans, log_values)
+                    if cancelled.is_set():
+                        raise asyncio.CancelledError
+                    await db.commit()
+                    return {"rich_review": review}
             await version_service.ensure_baseline(db, chapter)
-            if isinstance(job.target, SceneTarget):
+            if plans is not None:
+                from app.services.rich_document_proposal_mapping import resolve_scene_proposal
+                from app.services.rich_document_service import write_mapped_document
+
+                for current in scenes:
+                    plan = plans[current.id]
+                    if current.content == contents[current.id]:
+                        continue
+                    if current.id in rich_ids:
+                        mapped = resolve_scene_proposal(plan, {}, confirm_format_loss=False)
+                        await write_mapped_document(db, job.project_id, current, plan.original, mapped,
+                                                    job.context_stamp.content_revision)
+                    else:
+                        current.content = contents[current.id]
+                await scene_service.refresh_projection(
+                    db, chapter, expected_revision=job.context_stamp.content_revision,
+                )
+            elif isinstance(job.target, SceneTarget):
                 scene = await scene_service.require_scene(db, chapter, job.target.scene_id)
                 await scene_service.replace_scene_content(
                     db, chapter, scene, contents[scene.id], expected_revision=job.context_stamp.content_revision,
@@ -467,6 +518,7 @@ async def _save_chapter_result(
             await db.refresh(chapter)
             payload: dict[str, Any] = {"chapter": ChapterOut.model_validate(chapter).model_dump(mode="json")}
             if isinstance(job.target, SceneTarget):
+                scene = await scene_service.require_scene(db, chapter, job.target.scene_id)
                 payload["scene"] = (await scene_service.scene_out(db, chapter, scene)).model_dump(mode="json")
             else:
                 payload["scene_ids"] = [scene["id"] for scene in job.scenes]
@@ -592,6 +644,9 @@ async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[Asyn
         if out is None:
             raise NotFoundError("章节已被删除，生成结果未保存")
         finished = True
+        if "rich_review" in out:
+            yield "paused", out["rich_review"]
+            return
         if warning:
             out["warning"] = warning
         yield "done", out

@@ -1,0 +1,21 @@
+.rich-scene-editor .ProseMirror {
+  min-height: 440px;
+  padding: 8px 12px;
+  border: 1px solid var(--rich-border);
+  border-radius: 6px;
+  color: var(--rich-text);
+  background: var(--rich-bg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.9;
+}
+.rich-scene-editor .ProseMirror:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.rich-scene-editor .ProseMirror p, .rich-scene-editor .ProseMirror h2 { margin: 0; }
+.rich-scene-editor .ProseMirror blockquote { border-inline-start: 3px solid var(--rich-border); padding-inline-start: 12px; margin-inline: 0; }
+.rich-scene-editor .rich-marker { text-decoration: underline dotted; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.rich-scene-editor .rich-marker-yellow { background: var(--rich-marker-yellow); }
+.rich-scene-editor .rich-marker-green { background: var(--rich-marker-green); }
+.rich-scene-editor .rich-marker-blue { background: var(--rich-marker-blue); }
+.rich-scene-editor .rich-marker-purple { background: var(--rich-marker-purple); }
+.rich-scene-editor .rich-marker-red { background: var(--rich-marker-red); }

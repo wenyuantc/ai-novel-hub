@@ -23,6 +23,7 @@ import logging
 import math
 import unicodedata
 from dataclasses import dataclass
+from itertools import batched
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -248,6 +249,33 @@ async def get_project_memory(db: AsyncSession, user_id: int, project_id: int, me
     return m
 
 
+async def _memory_outputs(db: AsyncSession, rows: list[StoryMemory]) -> list[MemoryOut]:
+    """只标记有真实关联分析的自动记忆；不删除、屏蔽或改变召回。"""
+    from app.services.rich_document_ai import analysis_fingerprints
+
+    analysis_ids = {row.analysis_id for row in rows if row.origin == "auto" and row.analysis_id is not None}
+    analyses = {row.id: row for row in await db.scalars(select(ChapterAnalysis).where(
+        ChapterAnalysis.id.in_(analysis_ids),
+    ))} if analysis_ids else {}
+    chapter_ids = {analysis.chapter_id for analysis in analyses.values()}
+    chapters = {}
+    for batch in batched(sorted(chapter_ids), 20):
+        source = list(await db.scalars(select(Chapter).where(Chapter.id.in_(batch))))
+        fingerprints = await analysis_fingerprints(db, source)
+        chapters.update({chapter.id: (chapter.project_id, chapter.chapter_no, fingerprints[chapter.id])
+                         for chapter in source})
+    result = []
+    for row in rows:
+        analysis = analyses.get(row.analysis_id) if row.origin == "auto" else None
+        chapter = chapters.get(analysis.chapter_id) if analysis is not None else None
+        stale = None
+        if (analysis is not None and chapter is not None and row.project_id == analysis.project_id == chapter[0]
+                and row.chapter_id == analysis.chapter_id):
+            stale = analysis.chapter_no != chapter[1] or analysis.content_hash != chapter[2]
+        result.append(MemoryOut.model_validate(row).model_copy(update={"source_stale": stale}))
+    return result
+
+
 async def list_memories(
     db: AsyncSession,
     user_id: int,
@@ -280,14 +308,14 @@ async def list_memories(
     if q and q.strip():
         conds.append(StoryMemory.content.contains(q.strip(), autoescape=True))
     total = await db.scalar(select(func.count(StoryMemory.id)).where(*conds)) or 0
-    rows = await db.scalars(
+    rows = list(await db.scalars(
         select(StoryMemory)
         .where(*conds)
         .order_by(StoryMemory.chapter_no, StoryMemory.id)
         .offset((page - 1) * page_size)
         .limit(page_size)
-    )
-    return MemoryPage(items=[MemoryOut.model_validate(m) for m in rows], total=total, page=page, page_size=page_size)
+    ))
+    return MemoryPage(items=await _memory_outputs(db, rows), total=total, page=page, page_size=page_size)
 
 
 async def _chapter_id_for(db: AsyncSession, project_id: int, chapter_no: int) -> int | None:
@@ -319,7 +347,7 @@ async def create_memory(db: AsyncSession, user_id: int, project_id: int, data: M
     await retrieval_service.upsert_many(db, project_id, "memory", [_chunk(m)])
     await db.commit()
     await db.refresh(m)
-    return MemoryOut.model_validate(m)
+    return (await _memory_outputs(db, [m]))[0]
 
 
 async def update_memory(
@@ -348,7 +376,7 @@ async def update_memory(
     await retrieval_service.upsert_many(db, project_id, "memory", [_chunk(m)])
     await db.commit()
     await db.refresh(m)
-    return MemoryOut.model_validate(m)
+    return (await _memory_outputs(db, [m]))[0]
 
 
 async def delete_memory(db: AsyncSession, user_id: int, project_id: int, memory_id: int) -> None:
@@ -530,10 +558,11 @@ async def search_debug(
             )
         )
     }
+    outputs = {item.id: item for item in await _memory_outputs(db, list(rows.values()))}
     return MemorySearchResult(
         hits=[
             MemorySearchHit(
-                memory=MemoryOut.model_validate(rows[h.ref_id]),
+                memory=outputs[h.ref_id],
                 score=h.score,
                 vector_score=h.vector_score,
                 keyword_score=h.keyword_score,

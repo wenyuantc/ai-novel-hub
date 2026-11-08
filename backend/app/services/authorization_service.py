@@ -198,10 +198,10 @@ def actor_snapshot(db: AsyncSession, actor: User | int | AuthenticatedActor) -> 
     return actor_id if isinstance(actor, int) else AuthenticatedActor(actor.id, actor.token_version)
 
 
-async def require(
-    db: AsyncSession, actor: User | int | AuthenticatedActor, permission: str | None = None, *,
-    write: bool = False, targets: tuple[int, ...] = (),
+async def require_authenticated(
+    db: AsyncSession, actor: User | int | AuthenticatedActor, *, write: bool = False, targets: tuple[int, ...] = (),
 ) -> AuthorizationSnapshot:
+    """重验登录身份而不额外要求管理权限；写入时保持认证门禁与 User 锁。"""
     original = actor_snapshot(db, actor)
     actor_id = original if isinstance(original, int) else original.id
     if write:
@@ -216,6 +216,30 @@ async def require(
         isinstance(original, AuthenticatedActor) and original.token_version != current.token_version
     ):
         raise UnauthorizedError("未登录或登录已过期")
+    return current
+
+
+async def require_authenticated_for_send(db: AsyncSession, actor: User | int | AuthenticatedActor) -> None:
+    """发送 lease 持有单用户读锁，防停用/撤销令牌穿透；不把全局授权门禁持到网络上。"""
+    original = actor_snapshot(db, actor)
+    actor_id = original if isinstance(original, int) else original.id
+    if db.get_bind().dialect.name == "sqlite":
+        await lock_users(db, actor_id, missing_ok=True)
+    statement = select(User.is_active, User.token_version).where(User.id == actor_id)
+    if db.get_bind().dialect.name == "postgresql":
+        statement = statement.with_for_update(read=True)
+    row = (await db.execute(statement)).one_or_none()
+    if row is None or not row.is_active or (
+        isinstance(original, AuthenticatedActor) and original.token_version != row.token_version
+    ):
+        raise UnauthorizedError("未登录或登录已过期")
+
+
+async def require(
+    db: AsyncSession, actor: User | int | AuthenticatedActor, permission: str | None = None, *,
+    write: bool = False, targets: tuple[int, ...] = (),
+) -> AuthorizationSnapshot:
+    current = await require_authenticated(db, actor, write=write, targets=targets)
     if not (current.is_super_admin if permission is None else current.allows(permission)):
         extra = {"code": "permission_denied"}
         if permission is not None:

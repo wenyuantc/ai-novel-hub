@@ -30,6 +30,7 @@ from app.services import (
     prompt_service,
     scene_ai_context,
     scene_service,
+    setting_ai_visibility,
     skill_service,
     style_service,
     version_service,
@@ -72,6 +73,8 @@ class RewriteJob:
     scene_start: int = 0
     scene_end: int = 0
     context_stamp: scene_ai_context.SceneContextStamp | None = None
+    section_key: str | None = None
+    request_id: str | None = None
 
 
 async def prepare_rewrite_job(
@@ -88,6 +91,8 @@ async def prepare_rewrite_job(
     project_id: int | None = None,
     scene_id: int | None = None,
 ) -> RewriteJob:
+    from app.services.rich_document_ai import scene_reference_context
+
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
     if project_id is not None and chapter.project_id != project_id:
@@ -140,7 +145,13 @@ async def prepare_rewrite_job(
         index=next(index for index, row in enumerate(scenes, 1) if row.id == scene.id), total=len(scenes),
         target_words=0, preceding_text=preceding[-500:], selection=True,
     )
-    selected_hint = "\n".join((before, original, after))
+    author_budget = max(0, min(2_000, budget // 4, budget - len(scene_context) - 2))
+    author_context = await scene_reference_context(
+        db, project.id, [(item.id, item.sort) for item in scenes if item.sort <= scene.sort], author_budget,
+    )
+    if author_context:
+        scene_context += "\n\n" + author_context
+    selected_hint = "\n".join((before, original, after, author_context))
     remaining = budget - len(scene_context) - 2
     planning = await planning_context_service.load_planning_context(
         db, project, "scene", scene.id, scope="selection", budget=remaining,
@@ -246,9 +257,7 @@ async def run_rewrite_job(job: RewriteJob, sessionmaker: async_sessionmaker[Asyn
             await scene_ai_context.require_stamp(db, job.context_stamp)
         log_id = await generation_log_service.save_log(sessionmaker, **log_kwargs("success", "", text))
         finished = True
-        yield (
-            "done",
-            {
+        payload = {
                 "text": text,
                 "start": job.start,
                 "end": job.end,
@@ -258,8 +267,10 @@ async def run_rewrite_job(job: RewriteJob, sessionmaker: async_sessionmaker[Asyn
                 "scene_id": job.scene_id, "chapter_id": job.chapter_id,
                 "content_revision": job.context_stamp.content_revision,
                 "planning_revision": job.context_stamp.planning_revision,
-            },
-        )
+            }
+        if job.section_key is not None:
+            payload.update(section_key=job.section_key, request_id=job.request_id)
+        yield "done", payload
     except AppError as exc:
         fail_status, fail_error = "error", exc.detail
         yield "error", {"detail": exc.detail, **(exc.extra or {})}
@@ -282,6 +293,8 @@ async def _apply(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: RewriteApply,
     scene_id: int | None,
 ) -> tuple[Chapter, object]:
+    # 即使本次选区本身没有区块，替换也可能移动已启用区块的位置；先取得发送写门禁。
+    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
     chapter = await get_owned_chapter(db, user_id, chapter_id, lock=True)
     await db.refresh(chapter)
     if chapter.project_id != project_id:
@@ -310,6 +323,14 @@ async def _apply(
             GenerationLog.id == data.log_id, GenerationLog.project_id == project_id,
             GenerationLog.chapter_id == chapter.id,
         ))
+    # 旧章级入口过去允许无版本/日志的手工替换；新增的格式损失确认不得借此绕过快照校验。
+    if data.confirm_format_loss and (
+        data.expected_content_revision is None or data.expected_planning_revision is None
+        or log is None or log.status != "success" or "scene_id" not in (log.params or {})
+    ):
+        raise ConflictError("确认格式变化前，请重新预览并核对当前版本", extra={
+            "code": "rich_document_confirmation_context_required",
+        })
     # 新入口必须绑定真实预览记录才能证明时间线/字段/可见性仍是同一快照。
     # 旧单场景客户端无日志的手工采纳保留原乐观选区语义。
     if scene_id is not None and (log is None or log.status != "success"):
@@ -325,11 +346,34 @@ async def _apply(
         await scene_ai_context.require_stamp(db, params.get("context_snapshot") or {})
     elif scene_id is not None:
         raise ConflictError("改写预览记录缺少场景快照，请重新预览", extra={"code": "scene_context_changed"})
+    mapped = None
+    current = None
+    if await scene_service._rich_scene_ids(db, [scene.id]):
+        from app.services.rich_document_mapping import FormatLossRequired, UnsafeMapping, map_explicit_replacement
+        from app.services.rich_document_store import capture_documents
+
+        current = (await capture_documents(db, [scene]))[0][scene.id]
+        try:
+            mapped = map_explicit_replacement(current, start, end, data.replacement,
+                                              confirm_format_loss=data.confirm_format_loss)
+        except FormatLossRequired as exc:
+            raise ConflictError(str(exc), extra={"code": "rich_document_confirmation_required"}) from exc
+        except UnsafeMapping as exc:
+            raise ConflictError(str(exc), extra={"code": "rich_document_unmapped"}) from exc
     await version_service.ensure_baseline(db, chapter)
-    await scene_service.replace_scene_content(
-        db, chapter, scene, content[:start] + data.replacement + content[end:],
-        expected_revision=data.expected_content_revision,
-    )
+    if mapped is None:
+        await scene_service.replace_scene_content(
+            db, chapter, scene, content[:start] + data.replacement + content[end:],
+            expected_revision=data.expected_content_revision,
+        )
+    else:
+        from app.services.rich_document_service import write_mapped_document
+
+        assert current is not None
+        expected = (data.expected_content_revision if data.expected_content_revision is not None
+                    else chapter.content_revision)
+        await write_mapped_document(db, project_id, scene, current, mapped, expected)
+        await scene_service.refresh_projection(db, chapter, expected_revision=expected)
     await version_service.record(db, chapter, "rewrite", log_id=log.id if log else None)
     return chapter, scene
 

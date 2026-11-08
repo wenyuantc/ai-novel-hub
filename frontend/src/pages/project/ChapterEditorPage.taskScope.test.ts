@@ -57,7 +57,7 @@ vi.mock('../../hooks/useTaskStream', () => ({ useTaskStream: () => ({ running: f
 vi.mock('../../stores/project', () => ({ useProjectStore: (select: (state: unknown) => unknown) => select({ project: { auto_analyze: true, default_style: null }, refresh: view.refreshProject }) }))
 vi.mock('../../stores/tasks', () => ({ useTasksStore: (select: (state: unknown) => unknown) => select({ active: view.activeTasks, track: view.track }) }))
 vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (state: unknown) => unknown) => select({ status: 'authenticated', user: { id: 1 } }) }))
-vi.mock('react-router-dom', () => ({ useParams: () => ({ cid: '3' }), useNavigate: () => () => {}, useSearchParams: () => [new URLSearchParams(), () => {}], useBlocker: () => ({ state: 'unblocked' }) }))
+vi.mock('react-router-dom', () => ({ useParams: () => ({ cid: '3' }), useNavigate: () => () => {}, useLocation: () => ({ state: null }), useSearchParams: () => [new URLSearchParams(), () => {}], useBlocker: () => ({ state: 'unblocked' }) }))
 vi.mock('../../api/scenes', () => ({ sceneApi: { revise: view.createTask } }))
 vi.mock('../../api/chapters', async (original) => {
   const actual = await original<typeof import('../../api/chapters')>()
