@@ -1491,3 +1491,25 @@ TODOS 第10项拆为父任务+组件/输入表单两个子任务并完成规划�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 45: 作品级协作者邀请：E4-i 收口、Gate E、文档与提交
+<!-- trellis-session: v=2 fp=177c351975829425 -->
+
+**Date**: 2026-11-15
+**Task**: 作品级协作者邀请：E4-i 收口、Gate E、文档与提交
+**Branch**: `codex/novel-collaborators`
+
+### Summary
+
+完成 E4i-g（PG 并发 9 项 + E7 端到端测试）、裁决 28–31、E4i-g2 作者向量费用提示、E4i-h（发送受理即清空输入、已结束轮次工具步骤显示已停止）；Gate E 后端 SQLite/PG 全量与前端全量通过，修复 0037 冻结结构契约，补跑全部 PG skip；浏览器验证 Agent 协作者与撤权/降级流程；规范补 PG 测试库守卫与迁移冻结契约；README/TODOS 同步，清单 33/37 勾选（A1、D1、G5 浏览器、H4 部署演练未完成）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4ecf119` | feat(collab): 作品级协作者邀请 |
+
+### Status
+
+[OK] **Completed**
