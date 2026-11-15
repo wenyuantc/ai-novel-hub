@@ -272,7 +272,8 @@ async def _seed(app, project_id: int) -> dict:
             )
         )
         log = GenerationLog(
-            project_id=project_id, chapter_id=ch1.id, kind="generate", status="success", params={"a": 1}
+            project_id=project_id, actor_user_id=(await db.get(Project, project_id)).user_id,
+            chapter_id=ch1.id, kind="generate", status="success", params={"a": 1}
         )
         db.add(log)
         await db.flush()
@@ -631,7 +632,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 9 and data["app_schema"] == "0041"
+    assert data["version"] == 9 and data["app_schema"] == "0052"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1534,7 +1535,12 @@ async def test_import_queues_rebuild_with_embedding_model(client, app):
     result = await _import(client, await _backup(client, p["id"]))
     pid = result["project"]["id"]
     assert result["task_id"] is not None
-    task = await wait_task(client, result["task_id"])
+    # 导入响应仅给出整数 ID；从用户可见任务列表独立选择此作品的索引任务并保留原凭据。
+    visible = await client.get("/api/v1/tasks", params={"project_id": pid, "kind": "kb.index"})
+    assert visible.status_code == 200, visible.text
+    candidates = visible.json()
+    assert len(candidates) == 1 and candidates[0]["id"] == result["task_id"]
+    task = await wait_task(client, candidates[0])
     assert task["status"] == "succeeded" and task["kind"] == "kb.index" and task["project_id"] == pid
     status = (await client.get(f"{API}/{pid}/kb/index-status")).json()
     assert status["needs_rebuild"] is False and status["stale_count"] == 0
@@ -1622,7 +1628,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (9, "0041")
+    assert (data["version"], data["app_schema"]) == (9, "0052")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)

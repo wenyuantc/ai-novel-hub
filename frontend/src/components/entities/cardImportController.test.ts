@@ -19,6 +19,113 @@ function setup(initial = preview()) {
 }
 
 describe('卡片预览和确认的代次与显式核对', () => {
+  it('只读协作者可选择文件和更新预览，但不能提交导入', async () => {
+    const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()), import: vi.fn<typeof cardApi.import>(async () => result) }
+    const controller = new CardImportController(1, api, () => true, () => {}, () => false)
+    controller.activate()
+    await controller.selectFile(file())
+    await controller.refreshPreview()
+    expect(api.preview).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot().preview).not.toBeNull()
+    await controller.confirm()
+    expect(api.import).not.toHaveBeenCalled()
+  })
+
+  it('导入期间降为只读时，迟到响应不能触发当前作品刷新', async () => {
+    const pending = deferred<CardImportResult>()
+    let writable = true
+    const imported = vi.fn()
+    const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()),
+      import: vi.fn<typeof cardApi.import>(() => pending.promise) }
+    const controller = new CardImportController(1, api, () => true, imported, () => writable)
+    controller.activate()
+    await controller.selectFile(file())
+    const saving = controller.confirm()
+    writable = false
+    pending.resolve(result)
+    await saving
+    expect(imported).not.toHaveBeenCalled()
+    expect(controller.getSnapshot().result).toBeNull()
+  })
+
+  it('404 冻结导入并复查作品，仍可编辑时保留文件、预览与映射', async () => {
+    const check = deferred<'confirmed'>()
+    const verify = vi.fn(() => check.promise)
+    const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()), import: vi.fn<typeof cardApi.import>(async () => result) }
+    const controller = new CardImportController(1, api, () => true, () => {}, () => true, verify)
+    controller.activate()
+    await controller.selectFile(file())
+    controller.setReference('outside', { reference: { kind: 'world', id: 7 }, type: 'world.place', name: '青山', category: 'place' })
+    api.preview.mockRejectedValueOnce(new ApiError(404, '作品不存在'))
+    await controller.refreshPreview()
+    expect(verify).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toMatchObject({ accessUncertain: true, checkingAccess: true, preview: { fields_revision: 2 },
+      data: source, mappings: { references: { outside: { kind: 'world', id: 7 } } } })
+    await controller.confirm()
+    expect(api.import).not.toHaveBeenCalled()
+    check.resolve('confirmed')
+    await vi.waitFor(() => expect(controller.getSnapshot().accessUncertain).toBe(false))
+    expect(controller.getSnapshot().reviewRequired).toBe(true)
+    await controller.confirm()
+    expect(api.import).not.toHaveBeenCalled()
+  })
+
+  it('复查网络失败时保留输入并冻结；切换身份或明确撤权时清除', async () => {
+    let allowed = true
+    const verify = vi.fn().mockResolvedValueOnce('unknown').mockResolvedValueOnce('denied')
+    const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()), import: vi.fn<typeof cardApi.import>(async () => result) }
+    const controller = new CardImportController(1, api, () => allowed, () => {}, () => true, verify)
+    controller.activate(); await controller.selectFile(file())
+    api.import.mockRejectedValueOnce(new ApiError(403, '只读'))
+    await controller.confirm()
+    await vi.waitFor(() => expect(controller.getSnapshot().checkingAccess).toBe(false))
+    expect(controller.getSnapshot()).toMatchObject({ accessUncertain: true, data: source, preview: { fields_revision: 2 } })
+    await controller.confirm(); expect(api.import).toHaveBeenCalledTimes(1)
+    await controller.recheckAccess()
+    expect(controller.getSnapshot()).toMatchObject({ data: null, preview: null })
+    allowed = false; controller.accessChanged()
+    expect(controller.getSnapshot().data).toBeNull()
+  })
+
+  it('首次预览 404 后保留已解析文件，权限确认后可手动重试预览', async () => {
+    const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()), import: vi.fn<typeof cardApi.import>(async () => result) }
+    api.preview.mockRejectedValueOnce(new ApiError(404, '目标不存在'))
+    const controller = new CardImportController(1, api, () => true, () => {}, () => true, async () => 'confirmed')
+    controller.activate(); await controller.selectFile(file())
+    await vi.waitFor(() => expect(controller.getSnapshot().accessUncertain).toBe(false))
+    expect(controller.getSnapshot()).toMatchObject({ data: source, preview: null })
+    await controller.refreshPreview()
+    expect(controller.getSnapshot().preview).not.toBeNull()
+    expect(api.preview).toHaveBeenCalledTimes(2)
+  })
+
+  it('授权轮次变化时保留映射、忽略旧复查，已发送导入须核对结果', async () => {
+    const pending = deferred<CardImportResult>()
+    const oldCheck = deferred<'denied'>()
+    const verify = vi.fn().mockReturnValueOnce(oldCheck.promise).mockResolvedValueOnce('confirmed')
+    const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()),
+      import: vi.fn<typeof cardApi.import>(() => pending.promise) }
+    const imported = vi.fn()
+    const controller = new CardImportController(1, api, () => true, imported, () => true, verify)
+    controller.activate(); await controller.selectFile(file())
+    const saving = controller.confirm()
+    controller.accessChanged()
+    expect(controller.getSnapshot()).toMatchObject({ accessUncertain: true, resultUnknown: true, reviewRequired: true, data: source })
+    const checking = controller.recheckAccess()
+    controller.accessChanged()
+    oldCheck.resolve('denied'); pending.resolve(result)
+    await checking; await saving
+    expect(controller.getSnapshot()).toMatchObject({ accessUncertain: true, resultUnknown: true, data: source })
+    expect(imported).not.toHaveBeenCalled()
+    await controller.recheckAccess()
+    expect(controller.getSnapshot().error).toContain('先前导入结果尚不明确')
+    await controller.refreshPreview()
+    await controller.confirm()
+    expect(api.import).toHaveBeenCalledTimes(1)
+    controller.acceptReview()
+    expect(controller.getSnapshot().resultUnknown).toBe(false)
+  })
+
   it('v5用原预览双版本确认，分类冲突保留输入/映射/双版本，明确采用候选后才可重试', async () => {
     const { controller, api } = setup(preview({ categories_revision: 6 }))
     await controller.selectFile(file({ ...source, version: 5, characters: [{ ...source.characters[0], setting_tags: ['同盟'] }] }))

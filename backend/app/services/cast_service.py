@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chapter, ChapterCharacter, Character, Project
 from app.services.audit_writer import AuditOperation
-from app.services.chapter_service import get_manageable_chapter
+from app.services.chapter_service import get_manageable_chapter, get_manual_chapter
 from app.services.planning_lifecycle import bump_revision, sync_cast
 
 PROTAGONIST_ROLES = frozenset({"主角", "protagonist"})
@@ -139,18 +139,27 @@ async def select_cast(
 # ---------------- 出场角色读写 ----------------
 
 
-async def get_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> list[int]:
-    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+async def get_cast(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, manual: bool = False,
+) -> list[int]:
+    chapter = (
+        await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read") if manual else
+        await get_manageable_chapter(db, user_id, project_id, chapter_id)
+    )
     return await cast_ids(db, chapter.id)
 
 
-async def set_cast(db: AsyncSession, user_id: int, project_id: int, chapter_id: int, ids: list[int]) -> list[int]:
+async def set_cast(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, ids: list[int], *, manual: bool = False,
+) -> list[int]:
     """整体替换本章出场角色；所有 id 必须属于本项目。"""
     async with AuditOperation(
         db, user_id, "chapter.cast.update", "chapter", chapter_id, project_id=project_id
     ) as audit:
-        chapter = await get_manageable_chapter(
-            db, user_id, project_id, chapter_id, lock=True, permission="projects.edit"
+        chapter = (
+            await get_manual_chapter(db, user_id, project_id, chapter_id, "content.edit", for_update=True)
+            if manual else
+            await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True, permission="projects.edit")
         )
         audit.target(chapter)
         previous_ids = await cast_ids(db, chapter.id) if audit.enabled else []

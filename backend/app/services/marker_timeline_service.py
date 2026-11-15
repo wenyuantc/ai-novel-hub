@@ -17,8 +17,7 @@ from app.schemas.rich_document import (
     marker_excerpt,
     require_range,
 )
-from app.services import scene_service
-from app.services.project_service import get_manageable_project
+from app.services import project_access, scene_service
 
 
 async def _project_marker_stamp(db: AsyncSession, project_id: int) -> dict[int, tuple[int, str, int]]:
@@ -32,7 +31,7 @@ async def list_markers(
     expected_snapshot: str | None = None,
 ) -> MarkerTimelinePage:
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        await project_access.require_project(db, user_id, project_id, "content.read")
         planning_revision = await scene_service._planning_revision(db, project_id)
         chapter_stamp = await _project_marker_stamp(db, project_id)
         serialized = json.dumps([project_id, planning_revision, sorted(chapter_stamp.items())], separators=(",", ":"))

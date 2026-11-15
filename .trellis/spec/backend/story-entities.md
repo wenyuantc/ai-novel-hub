@@ -134,7 +134,8 @@ async def relations_among(db, character_ids) -> list[tuple[Relationship, Relatio
 - 成员建议：`{character_name, character_id, position, resolved, reason}`；组织草稿含 `parent_name` 与按名解析的 `parent_id`。
 - `TaskOut.character_id`：`task_service.to_out` 取自 `input.request.character_id`（仅 `relations.parse` 有值，其余为 `null`），
   前端「解析旧关系」弹窗据此在 `GET /tasks?project_id&kind=relations.parse&active=true` 结果里接上本角色的活动任务。
-- 创建前同步校验：项目归属、AI 配置、`relations.parse` 的角色归属（404）与旧备注非空（400 `该角色没有旧关系备注，无需解析`）。
+- 创建前同步校验：项目 `ai.use` 能力、AI 配置、`relations.parse` 的角色属于本作品（404）与旧备注非空（400 `该角色没有旧关系备注，无需解析`）。
+- 协作者（E4-g3b）：作者与 accepted editor 共用五个入口（viewer 403；待接受/非成员/已撤权/仅管理员 404，零任务零调用），任务归真实 actor，本人模型优先、作者模型仅在授权且本人无配置时回退并记录来源；检索按受理冻结的共享向量选择（E6-d：作者已授权且有向量 → 作者向量受控发送、读作者旧键；否则只用关键词，见 [retrieval.md](./retrieval.md)）。草稿只写 Task 终态，保存仍走人工 `content.edit` 接口。完整撤权时点与草稿终态收尾见 [error-handling.md](./error-handling.md)「协作者执行（E4）」实体条目。
 - 提示词在 `app/ai/prompts/entities.py`：参考资料只给名字 / 定位 / 别名名单（≤3000 字）与世界观（≤4000 字），要求不重名。
 - 测试：`tests/test_entity_tasks.py`。
 

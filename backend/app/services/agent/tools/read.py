@@ -4,16 +4,17 @@ from dataclasses import asdict
 from math import ceil
 
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
-from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Character, Organization, Outline, StoryMemory, Task
+from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
+from app.models import Character, Organization, Outline, Project, StoryMemory, Task, WritingStyle
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.chapter import ChapterBrief
 from app.schemas.foreshadow import ForeshadowStatus
 from app.schemas.progression import Boundary, PositiveDbInt
 from app.schemas.setting_fields import EntityRef, EntryType
 from app.schemas.story import CharacterOut, WorldCategory, WorldSettingOut
+from app.schemas.style import StyleBrief
 from app.services import (
     analysis_service,
     career_service,
@@ -29,9 +30,9 @@ from app.services import (
     story_service,
     style_service,
 )
-from app.services.ai_dispatch import visibility_sessionmaker
+from app.services.ai_dispatch import VisibilityPolicyError, visibility_sessionmaker
 
-from .base import EmptyArgs, IdArgs, Tool, ToolCtx, serialized
+from .base import EmptyArgs, IdArgs, Tool, ToolCtx, collaborative, serialized
 from .visibility import allowed, analysis_payload, assignment_payload, entry_payload
 
 
@@ -89,6 +90,7 @@ class EntryFieldsArgs(PageArgs):
 async def field_definitions(ctx: ToolCtx, args: FieldDefinitionListArgs) -> dict:
     result = await setting_field_service.list_definitions(
         ctx.db, ctx.user_id, ctx.project_id, types=args.types, include_archived=args.include_archived,
+        **collaborative(ctx),
     )
     items = result.items if ctx.scope is None else [
         item.model_dump(mode="json", exclude={"ai_hidden"}) for item in result.items if not item.ai_hidden
@@ -102,7 +104,7 @@ async def setting_entries(ctx: ToolCtx, args: SettingEntryListArgs) -> dict:
         if ctx.scope is not None else None
     )
     result = await setting_catalog_service.list_entries(
-        ctx.db, ctx.user_id, ctx.project_id, allowed_ids=allowed_ids, **args.model_dump(),
+        ctx.db, ctx.user_id, ctx.project_id, allowed_ids=allowed_ids, **args.model_dump(), **collaborative(ctx),
     )
     return {**serialized(result), "page": args.page, "pages": max(1, ceil(result.total / args.page_size))}
 
@@ -110,7 +112,7 @@ async def setting_entries(ctx: ToolCtx, args: SettingEntryListArgs) -> dict:
 async def entry_fields(ctx: ToolCtx, args: EntryFieldsArgs) -> dict:
     detail = await setting_field_service.read_entry_fields(
         ctx.db, ctx.user_id, ctx.project_id, args.entry.kind, args.entry.id,
-        chapter_id=args.chapter_id, chapter_no=args.chapter_no, boundary=args.boundary,
+        chapter_id=args.chapter_id, chapter_no=args.chapter_no, boundary=args.boundary, **collaborative(ctx),
     )
     if ctx.scope is not None:
         detail = ctx.scope.entry_fields(detail)
@@ -138,13 +140,37 @@ def paged(items: list, args: PageArgs) -> dict:
     }
 
 
+async def project_for_model(ctx: ToolCtx, project: Project) -> dict:
+    """项目人工投影可供管理员代管，模型只能获得实际 actor 可见的风格。"""
+    out = await project_service.project_out(ctx.db, project, actor_user_id=ctx.user_id)
+    style = None
+    if type(ctx.user_id) is int and ctx.user_id > 0 and out.default_style_id is not None:
+        # 最后一次查询将绑定、归属和内容放在同一快照，不能复用管理员投影或 ORM 缓存的旧风格。
+        with ctx.db.no_autoflush:
+            style = (await ctx.db.execute(select(
+                WritingStyle.id, WritingStyle.name, WritingStyle.description, WritingStyle.user_id,
+            ).join(Project, Project.default_style_id == WritingStyle.id).where(
+                Project.id == ctx.project_id, WritingStyle.id == out.default_style_id,
+                or_(WritingStyle.user_id.is_(None), WritingStyle.user_id == ctx.user_id),
+            ))).one_or_none()
+    visible = StyleBrief(
+        id=style.id, name=style.name, description=style.description, is_preset=style.user_id is None,
+    ) if style is not None else None
+    return serialized(out.model_copy(update={
+        "default_style_id": style.id if style is not None else None,
+        "default_style": visible,
+    }))
+
+
 async def overview(ctx: ToolCtx, args: EmptyArgs) -> dict:
     await ctx.db.refresh(ctx.project)
-    return serialized(await project_service.project_out(ctx.db, ctx.project))
+    return await project_for_model(ctx, ctx.project)
 
 
 async def characters(ctx: ToolCtx, args: CharacterListArgs) -> dict:
-    rows = await story_service.list_owned(ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id)
+    rows = await story_service.list_owned(
+        ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id, **collaborative(ctx, "manage"),
+    )
     rows = [row for row in rows if allowed(ctx, "character", row.id)]
     if args.query:
         query = args.query.casefold()
@@ -152,10 +178,26 @@ async def characters(ctx: ToolCtx, args: CharacterListArgs) -> dict:
     return paged([entry_payload(ctx, "character", CharacterOut.model_validate(row)) for row in rows], args)
 
 
+async def story_character(ctx: ToolCtx, character_id: int):
+    """协作轮次读取人工资料入口（content.read）；作者沿用原严格作者入口。"""
+    read = story_service.get_collaborative if ctx.grant is not None else story_service.get_owned
+    return await read(ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id, character_id)
+
+
+async def project_chapter(ctx: ToolCtx, chapter_id: int):
+    if ctx.grant is not None:
+        return await chapter_service.get_manual_chapter(ctx.db, ctx.user_id, ctx.project_id, chapter_id, "content.read")
+    return await chapter_service.get_project_chapter(ctx.db, ctx.user_id, ctx.project_id, chapter_id)
+
+
 async def character(ctx: ToolCtx, args: IdArgs) -> dict:
-    row = await story_service.get_owned(ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id, args.id)
-    careers = await career_service.list_assignments(ctx.db, ctx.user_id, ctx.project_id, args.id)
-    memberships = await organization_service.character_memberships(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    row = await story_character(ctx, args.id)
+    careers = await career_service.list_assignments(
+        ctx.db, ctx.user_id, ctx.project_id, args.id, **collaborative(ctx),
+    )
+    memberships = await organization_service.character_memberships(
+        ctx.db, ctx.user_id, ctx.project_id, args.id, **collaborative(ctx),
+    )
     return {
         **entry_payload(ctx, "character", CharacterOut.model_validate(row)),
         "careers": [assignment_payload(ctx, item) for item in careers if allowed(ctx, "career", item.career_id)],
@@ -166,22 +208,24 @@ async def character(ctx: ToolCtx, args: IdArgs) -> dict:
 
 
 async def organizations(ctx: ToolCtx, args: PageArgs) -> dict:
-    rows = await organization_service.list_orgs(ctx.db, ctx.user_id, ctx.project_id)
+    rows = await organization_service.list_orgs(ctx.db, ctx.user_id, ctx.project_id, **collaborative(ctx))
     rows = [row for row in rows if allowed(ctx, "organization", row.id)]
     return paged([entry_payload(ctx, "organization", row) for row in rows], args)
 
 
 async def organization(ctx: ToolCtx, args: IdArgs) -> dict:
-    item = await organization_service.get_org(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    item = await organization_service.get_org(ctx.db, ctx.user_id, ctx.project_id, args.id, **collaborative(ctx))
     result = entry_payload(ctx, "organization", item)
-    members = await organization_service.list_members(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    members = await organization_service.list_members(
+        ctx.db, ctx.user_id, ctx.project_id, args.id, **collaborative(ctx),
+    )
     result["members"] = [serialized(member) for member in members if allowed(ctx, "character", member.character_id)]
     return result
 
 
 async def relationships(ctx: ToolCtx, args: RelationshipListArgs) -> dict:
     rows = await relationship_service.list_relationships(
-        ctx.db, ctx.user_id, ctx.project_id, character_id=args.character_id,
+        ctx.db, ctx.user_id, ctx.project_id, character_id=args.character_id, **collaborative(ctx),
     )
     return paged(
         [row for row in rows if allowed(ctx, "character", row.a_id) and allowed(ctx, "character", row.b_id)],
@@ -190,20 +234,21 @@ async def relationships(ctx: ToolCtx, args: RelationshipListArgs) -> dict:
 
 
 async def careers(ctx: ToolCtx, args: PageArgs) -> dict:
-    rows = await career_service.list_careers(ctx.db, ctx.user_id, ctx.project_id)
+    rows = await career_service.list_careers(ctx.db, ctx.user_id, ctx.project_id, **collaborative(ctx))
     return paged([entry_payload(ctx, "career", row) for row in rows if allowed(ctx, "career", row.id)], args)
 
 
 async def world(ctx: ToolCtx, args: WorldListArgs) -> dict:
     rows = await story_service.list_owned(
-        ctx.db, story_service.WORLD, ctx.user_id, ctx.project_id, category=args.category
+        ctx.db, story_service.WORLD, ctx.user_id, ctx.project_id, category=args.category,
+        **collaborative(ctx, "manage"),
     )
     rows = [row for row in rows if allowed(ctx, "world", row.id)]
     return paged([entry_payload(ctx, "world", WorldSettingOut.model_validate(row)) for row in rows], args)
 
 
 async def outline_tree(ctx: ToolCtx, args: PageArgs) -> dict:
-    rows = serialized(await outline_service.outline_tree(ctx.db, ctx.user_id, ctx.project_id))
+    rows = serialized(await outline_service.outline_tree(ctx.db, ctx.user_id, ctx.project_id, **collaborative(ctx)))
     for row in rows:
         row["summary"] = row["summary"][:300]
         row["plans"] = [
@@ -214,7 +259,7 @@ async def outline_tree(ctx: ToolCtx, args: PageArgs) -> dict:
 
 
 async def outline(ctx: ToolCtx, args: IdArgs) -> dict:
-    rows = await outline_service.outline_tree(ctx.db, ctx.user_id, ctx.project_id)
+    rows = await outline_service.outline_tree(ctx.db, ctx.user_id, ctx.project_id, **collaborative(ctx))
     item = next((row for row in rows if row.id == args.id), None)
     if item is None:
         raise NotFoundError("不存在")
@@ -224,22 +269,32 @@ async def outline(ctx: ToolCtx, args: IdArgs) -> dict:
     return data
 
 
+async def chapter_briefs(ctx: ToolCtx, rows: list) -> list[dict]:
+    """协作轮次与人工章节接口同一投影：隐藏作者私人风格 ID 与失效的大纲 / 细纲关联；作者轮次不变。"""
+    if ctx.grant is None:
+        return [serialized(ChapterBrief.model_validate(row)) for row in rows]
+    views = await chapter_service.manual_chapter_views(ctx.db, ctx.user_id, ctx.project_id, rows, full=False)
+    return [serialized(view) for view in views]
+
+
 async def chapters(ctx: ToolCtx, args: PageArgs) -> dict:
     states = {
         state.chapter_id: serialized(state)
-        for state in await analysis_service.project_states(ctx.db, ctx.user_id, ctx.project_id)
+        for state in await analysis_service.project_states(
+            ctx.db, ctx.user_id, ctx.project_id, **collaborative(ctx),
+        )
     }
-    rows = await chapter_service.list_chapters(ctx.db, ctx.user_id, ctx.project_id)
-    return paged(
-        [{**serialized(ChapterBrief.model_validate(row)), "analysis": states.get(row.id)} for row in rows], args
-    )
+    list_rows = chapter_service.list_manual_chapters if ctx.grant is not None else chapter_service.list_chapters
+    rows = await list_rows(ctx.db, ctx.user_id, ctx.project_id)
+    briefs = await chapter_briefs(ctx, rows)
+    return paged([{**brief, "analysis": states.get(brief["id"])} for brief in briefs], args)
 
 
 async def chapter(ctx: ToolCtx, args: ChapterReadArgs) -> dict:
     from app.services.rich_document_ai import render_visible_sections, visible_sections
     from app.services.scene_service import check_revision, list_active_scenes, project_scenes
 
-    row = await chapter_service.get_project_chapter(ctx.db, ctx.user_id, ctx.project_id, args.id)
+    row = await project_chapter(ctx, args.id)
     pages = max(1, ceil(len(row.content) / 4000))
     if args.page > pages:
         raise BadRequestError(f"页码超出范围，共 {pages} 页")
@@ -263,7 +318,7 @@ async def chapter(ctx: ToolCtx, args: ChapterReadArgs) -> dict:
         if lower < upper or include_upper:
             intervals[item.scene_id] = (lower, upper, include_upper)
     result = {
-        **serialized(ChapterBrief.model_validate(row)),
+        **(await chapter_briefs(ctx, [row]))[0],
         "content": row.content[start:end],
         "page": args.page,
         "pages": pages,
@@ -281,16 +336,17 @@ async def chapter(ctx: ToolCtx, args: ChapterReadArgs) -> dict:
 
 
 async def analysis(ctx: ToolCtx, args: AnalysisArgs) -> dict:
-    await chapter_service.get_project_chapter(ctx.db, ctx.user_id, ctx.project_id, args.chapter_id)
+    await project_chapter(ctx, args.chapter_id)
     latest = (await analysis_service.latest_analyses(ctx.db, [args.chapter_id])).get(args.chapter_id)
     if latest is None:
         return {"analysis": None}
-    return {"analysis": analysis_payload(ctx, await analysis_service.get_analysis(ctx.db, ctx.user_id, latest.id))}
+    detail = await analysis_service.get_analysis(ctx.db, ctx.user_id, latest.id, **collaborative(ctx))
+    return {"analysis": analysis_payload(ctx, detail)}
 
 
 async def foreshadows(ctx: ToolCtx, args: ForeshadowListArgs) -> dict:
     rows = serialized(await foreshadow_service.list_foreshadows(
-        ctx.db, ctx.user_id, ctx.project_id, status=args.status,
+        ctx.db, ctx.user_id, ctx.project_id, status=args.status, **collaborative(ctx),
     ))
     for row in rows:
         visible = [
@@ -302,18 +358,81 @@ async def foreshadows(ctx: ToolCtx, args: ForeshadowListArgs) -> dict:
     return paged(rows, args)
 
 
+async def _collaborator_embedder(ctx: ToolCtx) -> tuple[retrieval_service.Embedder | None, str | None]:
+    """协作轮次的检索向量（E6 裁决 1 / E4-i 裁决 12）：只用受理时冻结的作者共享向量选择。
+
+    - 未冻结（作者向量配置本地不可用）、冻结为关键词（作者未授权 / 未配置）、或缺少执行身份（确认路径）：
+      只用关键词，零作者向量调用；协作者本人的向量配置永不参与。
+    - 冻结为向量：每次查询嵌入经 ``for_task`` 守卫在真实发送租约内重验原执行、原邀请轮次、作者模型授权与
+      两份模型绑定；构造 provider 的普通故障经锁内复核未变 → 关键词继续，任一变化 → 失败关闭（裁决 17）。
+    """
+    from app.services import collaboration_ai_guard, kb_service
+    from app.services.agent.access import frozen_shared_embedding
+
+    execution = ctx.execution() if ctx.execution is not None else None
+    binding = ctx.text_binding
+    if execution is None or binding is None or ctx.scope is None:
+        return None, None
+    if (execution.grant_identity != ctx.grant or binding.grant_identity != ctx.grant
+            or binding.actor_id != ctx.user_id or execution.actor_id != ctx.user_id
+            or binding.project_id != ctx.project_id or execution.project_id != ctx.project_id):
+        raise collaboration_ai_guard.CollaborationSendBlocked()
+    selection = frozen_shared_embedding(execution, binding)
+    if selection is None:
+        return None, kb_service.KEYWORD_ONLY_OWNER_UNAVAILABLE
+    if selection.grant_identity != ctx.grant or selection.actor_id != ctx.user_id:
+        raise collaboration_ai_guard.CollaborationSendBlocked()
+    if selection.mode != "vector":
+        return None, (kb_service.KEYWORD_ONLY_COLLABORATOR if selection.reason == "owner_embedding_not_allowed"
+                      else kb_service.KEYWORD_ONLY_OWNER_UNCONFIGURED)
+    deps = ctx.task_context
+    allow_private = deps.settings.allow_private_ai_endpoints
+    maker = visibility_sessionmaker(ctx.db)
+    guard = collaboration_ai_guard.for_task(
+        execution, selection, ctx.scope.stamp, cipher=deps.cipher, allow_private=allow_private,
+        extra_bindings=(binding,),
+    )
+    # 短事务先按原执行锁内重验并读取冻结配置的 provider/model，不能把冻结选择本身当作授权证明。
+    async with maker() as verify_db:
+        await guard.require_task_write(verify_db)
+        try:
+            snapshot = await retrieval_service.load_bound_shared_embedding_config(
+                verify_db, selection, cipher=deps.cipher, allow_private=allow_private, for_update=True,
+            )
+        except VisibilityPolicyError:
+            raise
+        except AppError:
+            # 冻结选择在锁内已不成立（授权 / 配置变化或本地不可用）属策略类变化：终止轮次，
+            # 不能作为普通工具错误回给模型后继续（E6 裁决 11 / 20②）。
+            raise collaboration_ai_guard.CollaborationSendBlocked() from None
+        await verify_db.rollback()
+    bound = await collaboration_ai_guard.prepare_shared_embedding(
+        guard, maker, deps.factory, request_timeout=deps.settings.ai_request_timeout,
+    )
+    if bound is None:
+        return None, None
+    if (bound.provider_name, bound.model) != (snapshot.provider, snapshot.model):
+        raise collaboration_ai_guard.CollaborationSendBlocked()
+    # 裁决 1：只读作者旧键 provider:model:dim（作者与授权编辑者的索引任务都写这个空间）。
+    embedder = retrieval_service.Embedder(bound.provider, bound.provider_name, bound.model)
+    return retrieval_service.guard_embedder(embedder, ctx.scope.stamp, maker), None
+
+
 async def search(ctx: ToolCtx, args: SearchArgs, source: str) -> dict:
     deps = ctx.task_context
-    embedder, warning = await retrieval_service.resolve_embedder(
-        ctx.db,
-        ctx.user_id,
-        cipher=deps.cipher,
-        factory=deps.factory,
-        ai_timeout=deps.settings.ai_request_timeout,
-        allow_private=deps.settings.allow_private_ai_endpoints,
-    )
-    if ctx.scope is not None:
-        embedder = retrieval_service.guard_embedder(embedder, ctx.scope.stamp, visibility_sessionmaker(ctx.db))
+    if ctx.grant is not None:
+        embedder, warning = await _collaborator_embedder(ctx)
+    else:
+        embedder, warning = await retrieval_service.resolve_embedder(
+            ctx.db,
+            ctx.user_id,
+            cipher=deps.cipher,
+            factory=deps.factory,
+            ai_timeout=deps.settings.ai_request_timeout,
+            allow_private=deps.settings.allow_private_ai_endpoints,
+        )
+        if ctx.scope is not None:
+            embedder = retrieval_service.guard_embedder(embedder, ctx.scope.stamp, visibility_sessionmaker(ctx.db))
     result = await retrieval_service.search(
         ctx.db,
         ctx.project_id,
@@ -323,6 +442,11 @@ async def search(ctx: ToolCtx, args: SearchArgs, source: str) -> dict:
         min_score=0.1,
         embedder=embedder,
     )
+    if ctx.grant is not None:
+        from app.services import kb_service
+
+        # 提供方错误原文可能含作者的模型名 / 端点：协作者只看到固定文案。
+        result.warnings = kb_service.public_search_warnings(result.warnings, ctx.grant)
     if warning:
         result.warnings.append(warning)
     if source == "memory" and ctx.scope is not None and result.hits:

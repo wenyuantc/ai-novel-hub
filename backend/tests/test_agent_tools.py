@@ -25,11 +25,14 @@ from app.models import (
     SettingTextField,
     SettingTimeline,
     Task,
+    User,
 )
 from app.schemas.story import CharacterUpdate
 from app.services import analysis_service, chapter_service, retrieval_service, story_service
 from app.services.agent import effects
 from app.services.agent.tools import ToolCtx, get_tool, list_tools
+from app.services.ai_dispatch import VisibilityPolicyError
+from app.services.authorization_service import AuthenticatedActor
 from tests.helpers import create_ai_config, create_project, register
 
 
@@ -42,6 +45,9 @@ async def ctx(app, client):
     await app.state.task_engine.stop()
     async with app.state.sessionmaker() as db:
         row = await db.get(Project, project["id"])
+        # 与真实 runner 一致：工具会话绑定受理时的认证身份，任务创建据此重验原令牌。
+        token_version = (await db.get(User, user["id"])).token_version
+        db.info["authenticated_actor"] = AuthenticatedActor(user["id"], token_version)
         yield ToolCtx(db, row, user["id"], app.state.task_engine.ctx)
 
 
@@ -950,14 +956,49 @@ async def test_task_preview_uses_real_handler_without_claiming(ctx, fake_llm, ki
 async def test_start_task_whitelist_validation_and_transaction(ctx):
     tool = get_tool("start_task")
     assert "error" in await tool.preview(ctx, {"kind": "book.import", "params": {}})
+    # 预览已接入真实 handler：缺必填章节只是参数错误，不建任务。
     assert "error" in await tool.preview(ctx, {"kind": "chapter.generate", "params": {}})
-    result = await tool.execute(ctx, {"kind": "character.generate", "params": {"instruction": "冷静的剑修"}})
-    assert "error" not in result, result
-    task = await ctx.db.get(Task, result["task_id"])
-    assert task.project_id == ctx.project_id and task.status == "queued"
+    # 受控受理类型只能经提案确认服务在锁外完成模型预检后受理；通用执行入口（已持锁、位于保存点、
+    # 没有提案来源证明）一律失败关闭，不建任务、不领取章节占用。
+    blocked = await tool.execute(ctx, {"kind": "character.generate", "params": {"instruction": "冷静的剑修"}})
+    assert blocked == {"error": "智能体暂不能发起该类任务，请直接在对应页面发起"}
+    chapter = await new_chapter(ctx)
+    with pytest.raises(VisibilityPolicyError):
+        await tool.execute(ctx, {"kind": "chapter.generate", "params": {"chapter_id": chapter.id}})
+    assert await ctx.db.scalar(select(func.count(Task.id))) == 0
+    await ctx.db.refresh(chapter)
+    assert chapter.status == "draft" and chapter.generation_claim_key is None
+    # E4-g1 起章节分析也是受控受理类型：通用执行同样失败关闭，不建任务。
+    blocked = await tool.execute(ctx, {"kind": "chapter.analyze", "params": {"chapter_id": chapter.id}})
+    assert blocked == {"error": "智能体暂不能发起该类任务，请直接在对应页面发起"}
+    assert await ctx.db.scalar(select(func.count(Task.id))) == 0
+    # E4-g2 起批量也是受控受理类型（作者批量只能经提案确认的 execute_admitted）：通用执行失败关闭。
+    blocked = await tool.execute(ctx, {"kind": "chapter.batch", "params": {
+        "start_chapter_id": chapter.id, "end_chapter_id": chapter.id, "include_written": True,
+    }})
+    assert blocked == {"error": "智能体暂不能发起该类任务，请直接在对应页面发起"}
+    assert await ctx.db.scalar(select(func.count(Task.id))) == 0
+    # 大纲续写/展开同为受控受理类型（E4-g3a 开放协作者后作者 Agent 仍只能经签名提案确认）：通用执行失败关闭。
+    outline, _ = await apply(ctx, "create_outline", {"title": "启程"})
+    for kind, params in (("outline.continue", {"count": 1}), ("outline.expand", {"outline_id": outline["id"]})):
+        blocked = await tool.execute(ctx, {"kind": kind, "params": params})
+        assert blocked == {"error": "智能体暂不能发起该类任务，请直接在对应页面发起"}
+    assert await ctx.db.scalar(select(func.count(Task.id))) == 0
+    # 实体生成三类同为受控受理类型（E4-g3b 开放协作者后作者 Agent 仍只能经签名提案确认）：通用执行失败关闭。
+    for kind, params in (("character.generate", {}), ("organization.generate", {"instruction": "宗门"}),
+                         ("career.generate", {"count": 1})):
+        blocked = await tool.execute(ctx, {"kind": kind, "params": params})
+        assert blocked == {"error": "智能体暂不能发起该类任务，请直接在对应页面发起"}
+    assert await ctx.db.scalar(select(func.count(Task.id))) == 0
+    # 开书向导（E4-g3c 开放协作者）不在智能体白名单：预览与通用执行都失败关闭，不建任务（直接写库的整体替换
+    # 只能经向导页面的受控受理发起）。
+    for kind in ("wizard.outline", "wizard.characters", "wizard.world", "wizard.careers"):
+        assert "error" in await tool.preview(ctx, {"kind": kind, "params": {}})
+        assert "error" in await tool.execute(ctx, {"kind": kind, "params": {}})
+    assert await ctx.db.scalar(select(func.count(Task.id))) == 0
     await ctx.db.commit()
     active = await get_tool("list_active_tasks").run(ctx, {})
-    assert [row["id"] for row in active["items"]] == [task.id]
+    assert active["items"] == []
 
 
 async def test_task_request_always_binds_server_project(ctx):
@@ -1036,7 +1077,9 @@ async def test_preview_reuses_business_validation_without_partial_writes(ctx):
 async def test_task_preview_real_handler_rejects_missing_config(ctx):
     await ctx.db.execute(delete(AIConfig).where(AIConfig.user_id == ctx.user_id))
     await ctx.db.commit()
-    result = await get_tool("start_task").preview(ctx, {"kind": "character.generate", "params": {}})
+    chapter = await new_chapter(ctx)
+    args = {"kind": "chapter.analyze", "params": {"chapter_id": chapter.id}}
+    result = await get_tool("start_task").preview(ctx, args)
     assert "尚未配置" in result["error"]
     assert await ctx.db.scalar(select(func.count(Task.id))) == 0
 
@@ -1063,8 +1106,15 @@ async def test_cross_user_nested_config_and_ids_are_not_found(ctx, make_client):
 
 
 async def test_task_execute_also_stays_in_outer_transaction(ctx, app):
-    result = await get_tool("start_task").execute(ctx, {"kind": "character.generate", "params": {}})
-    assert "task_id" in result
+    chapter = await new_chapter(ctx)
+    await ctx.db.commit()
+    # E4-g2 起白名单内全部任务类型都只能经受控受理（提案确认的 execute_admitted 在根事务保存点内建任务）；
+    # 通用执行既不建任务也不提交外层事务：回滚后另一连接看不到任何任务。
+    args = {"kind": "chapter.batch", "params": {
+        "start_chapter_id": chapter.id, "end_chapter_id": chapter.id, "include_written": True,
+    }}
+    result = await get_tool("start_task").execute(ctx, args)
+    assert result == {"error": "智能体暂不能发起该类任务，请直接在对应页面发起"}, result
     await ctx.db.rollback()
     async with app.state.sessionmaker() as other:
         assert await other.scalar(select(func.count(Task.id))) == 0

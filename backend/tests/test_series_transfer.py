@@ -45,7 +45,8 @@ async def test_series_backup_materializes_only_the_book_and_remaps_cast(
     a = await create_project(client, title="甲书")
     b = await create_project(client, title="乙书")
     route, series = await _join_books(client, a, b)
-    series_brief = {"id": series["id"], "name": series["name"], "revision": series["revision"]}
+    series_brief = {"id": series["id"], "name": series["name"], "revision": series["revision"],
+                    "authorization_version": None}
     project = (await client.get(f"{BASE}/projects/{b['id']}")).json()
     assert project["series"] == series_brief
     assert {p["id"]: p["series"] for p in (await client.get(f"{BASE}/projects")).json()} == {
@@ -113,7 +114,7 @@ async def test_series_backup_materializes_only_the_book_and_remaps_cast(
 
     file = await _backup(client, b["id"])
     assert file["version"] == 9
-    assert file["app_schema"] == "0041"
+    assert file["app_schema"] == "0052"
     assert not {"series_books", "series_entry_uses", "series_entries"} & set(file["tables"])
     assert [(r["id"], r["name"]) for r in file["tables"]["characters"]] == [(local_id, "林青")]
     assert [(r["id"], r["title"]) for r in file["tables"]["world_settings"]] == [

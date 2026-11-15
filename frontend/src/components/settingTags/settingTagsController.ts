@@ -1,10 +1,12 @@
 import { ApiError, errorMessage } from '../../api/client'
 import { settingCategoriesApi, settingCategoryConflictScope } from '../../api/settingCategories'
 import type { SettingEntryRef, SettingTagsOut } from '../../api/types'
+import type { ProjectAccessCheck } from '../../stores/project'
+import { writeResultUnknown } from '../../utils/writeResult'
 import { normalizeSettingTags, sameTags, tagSnapshot } from './tagDraft'
 
 type TagsApi = Pick<typeof settingCategoriesApi, 'getTags' | 'updateTags' | 'suggestTags'>
-export interface SettingTagsAccess { identity: string; canRead: boolean; canEdit: boolean }
+export interface SettingTagsAccess { identity: string; owner?: string; canRead: boolean; canEdit: boolean }
 export interface SettingTagsState {
   base: SettingTagsOut | null
   original: SettingTagsOut | null
@@ -22,11 +24,14 @@ export interface SettingTagsState {
   suggestions: string[]
   suggesting: boolean
   suggestionError: string | null
+  accessUncertain: boolean
+  checkingAccess: boolean
 }
 interface Ticket { request: AbortController; identity: string }
 type RequestKind = 'read' | 'write' | 'suggestion'
 const emptyState = (): SettingTagsState => ({ base: null, original: null, draft: [], search: '', latest: null, reviewRequired: false, reviewed: false,
-  loading: false, saving: false, reviewing: false, error: null, draftError: null, notice: null, suggestions: [], suggesting: false, suggestionError: null })
+  loading: false, saving: false, reviewing: false, error: null, draftError: null, notice: null, suggestions: [], suggesting: false, suggestionError: null,
+  accessUncertain: false, checkingAccess: false })
 const OPEN_ACCESS: SettingTagsAccess = { identity: 'local', canRead: true, canEdit: true }
 
 export function tagsDraftDirty(state: SettingTagsState): boolean {
@@ -40,22 +45,50 @@ export class SettingTagsController {
   private state = emptyState()
   private listeners = new Set<() => void>()
   private active = false
+  private accessCheck = 0
+  private readonly owner: string | undefined
   private requests: Record<RequestKind, Ticket | null> = { read: null, write: null, suggestion: null }
 
   constructor(private readonly pid: number, private readonly entry: SettingEntryRef, private readonly api: TagsApi,
-    private readonly access: () => SettingTagsAccess, private readonly changed: (entry: SettingEntryRef) => void) {}
+    private readonly access: () => SettingTagsAccess, private readonly changed: (entry: SettingEntryRef) => void,
+    private readonly verifyAccess: (identity: string, afterFailure: boolean) => Promise<ProjectAccessCheck>) {
+    this.owner = access().owner
+  }
 
   getSnapshot = () => this.state
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private update(patch: Partial<SettingTagsState>) { this.state = { ...this.state, ...patch }; this.listeners.forEach((listener) => listener()) }
   private readFailure(error: unknown) {
-    if (error instanceof ApiError && error.status === 404) this.clear()
+    if (this.denyIfNeeded(error)) return
     this.update({ loading: false, reviewing: false, error: errorMessage(error) })
+  }
+  private denyIfNeeded(error: unknown) {
+    if (!(error instanceof ApiError) || (error.status !== 403 && error.status !== 404)) return false
+    this.cancelAll()
+    this.update({ loading: false, saving: false, reviewing: false, suggesting: false, suggestions: [],
+      accessUncertain: true, checkingAccess: false, reviewRequired: this.state.base !== null,
+      reviewed: false, latest: null, error: '作品权限需要确认，标签草稿已保留。' })
+    void this.recheckAccess(true)
+    return true
+  }
+  recheckAccess = async (afterFailure = false) => {
+    if (!this.active || !this.state.accessUncertain || this.state.checkingAccess) return
+    const ticket = ++this.accessCheck
+    const identity = this.access().identity
+    this.update({ checkingAccess: true })
+    const result = await this.verifyAccess(identity, afterFailure).catch(() => 'unknown' as const)
+    if (!this.active || ticket !== this.accessCheck || this.access().identity !== identity) return
+    if (!this.access().canRead || (this.owner !== undefined && this.owner !== this.access().owner) || result === 'denied') {
+      this.clear(); return
+    }
+    if (result === 'confirmed') this.update({ accessUncertain: false, checkingAccess: false, error: '作品权限已确认，请读取最新标签并核对。' })
+    else this.update({ checkingAccess: false, error: '暂时无法确认作品权限，标签草稿已保留，请重试权限确认。' })
   }
   private cancel(kind: RequestKind) { this.requests[kind]?.request.abort(); this.requests[kind] = null }
   private cancelAll() { this.cancel('read'); this.cancel('write'); this.cancel('suggestion') }
   private allowed() {
-    if (!this.access().canRead) { this.clear(); return false }
+    const access = this.access()
+    if (!access.canRead || (this.owner !== undefined && this.owner !== access.owner)) { this.clear(); return false }
     return this.active
   }
   private begin(kind: RequestKind): Ticket {
@@ -74,22 +107,29 @@ export class SettingTagsController {
   open = async () => { this.active = true; await this.refresh() }
   close = () => {
     this.active = false
+    this.accessCheck += 1
     this.invalidate(false)
   }
-  clear = () => { this.cancelAll(); this.state = emptyState(); this.listeners.forEach((listener) => listener()) }
+  clear = () => { this.accessCheck += 1; this.cancelAll(); this.state = emptyState(); this.listeners.forEach((listener) => listener()) }
   invalidate = (requireReview = true) => {
     const interrupted = this.state.saving
     this.cancelAll()
     if (!this.access().canRead) { this.clear(); return }
     const reviewRequired = this.state.reviewRequired || (requireReview && tagsDraftDirty(this.state)) || interrupted
-    this.update({ loading: false, saving: false, reviewing: false, suggesting: false, suggestions: [], latest: null, reviewed: false, reviewRequired,
+    this.update({ loading: false, saving: false, reviewing: false, suggesting: false, checkingAccess: false, suggestions: [], latest: null, reviewed: false, reviewRequired,
       notice: interrupted ? '保存结果尚不能确认，标签草稿已保留，请先读取最新标签并对照。' : this.state.notice })
   }
-  accessChanged = () => { this.invalidate(); if (this.active) void this.refresh() }
+  accessChanged = () => {
+    this.accessCheck += 1
+    const access = this.access()
+    if (!access.canRead || !access.canEdit || (this.owner !== undefined && this.owner !== access.owner)) { this.clear(); return }
+    this.invalidate()
+    this.update({ accessUncertain: true, checkingAccess: false, error: '作品授权已变化，标签草稿已保留，请重新确认权限。' })
+  }
   refreshIfOpen = () => { if (this.active) { this.invalidate(); void this.refresh() } }
 
   refresh = async () => {
-    if (!this.allowed() || this.state.saving || this.state.reviewing) return
+    if (!this.allowed() || this.state.saving || this.state.reviewing || this.state.accessUncertain) return
     const ticket = this.begin('read')
     this.update({ loading: true, error: null })
     try {
@@ -121,7 +161,7 @@ export class SettingTagsController {
     this.update({ search, suggestions: [], suggesting: false, suggestionError: null, draftError, notice: null })
   }
   suggest = async () => {
-    if (!this.allowed() || !this.access().canEdit || !this.state.base || this.state.saving || this.state.reviewing) return
+    if (!this.allowed() || !this.access().canEdit || !this.state.base || this.state.saving || this.state.reviewing || this.state.accessUncertain) return
     const search = this.state.search
     let q: string
     try { q = normalizeSettingTags([search])[0] ?? '' }
@@ -131,11 +171,11 @@ export class SettingTagsController {
     try {
       const result = await this.api.suggestTags(this.pid, { q, limit: 20 }, ticket.request.signal)
       if (this.valid(ticket, 'suggestion') && this.access().canEdit && this.state.search === search) this.update({ suggestions: normalizeSettingTags(result.items.slice(0, 20)), suggesting: false })
-    } catch (error) { if (this.valid(ticket, 'suggestion')) this.update({ suggesting: false, suggestionError: errorMessage(error) }) }
+    } catch (error) { if (this.valid(ticket, 'suggestion') && !this.denyIfNeeded(error)) this.update({ suggesting: false, suggestionError: errorMessage(error) }) }
   }
 
   compare = async () => {
-    if (!this.allowed() || !this.state.base || this.state.saving || this.state.reviewing) return
+    if (!this.allowed() || !this.state.base || this.state.saving || this.state.reviewing || this.state.accessUncertain) return
     const ticket = this.begin('read')
     this.update({ reviewing: true, loading: false, error: null, reviewed: false })
     try {
@@ -144,7 +184,7 @@ export class SettingTagsController {
     } catch (error) { if (this.valid(ticket, 'read')) this.readFailure(error) }
   }
   acceptComparison = () => {
-    if (!this.allowed() || !this.access().canEdit || !this.state.reviewed || !this.state.latest || this.state.saving || this.state.reviewing) return
+    if (!this.allowed() || !this.access().canEdit || !this.state.reviewed || !this.state.latest || this.state.saving || this.state.reviewing || this.state.accessUncertain) return
     let matches = false
     try { matches = sameTags(normalizeSettingTags([...this.state.draft, this.state.search]), this.state.latest.setting_tags) } catch { /* 非法草稿仍保留供作者修正。 */ }
     this.update({ base: tagSnapshot(this.state.latest, this.entry), latest: null, reviewed: false, reviewRequired: false, error: null,
@@ -152,7 +192,7 @@ export class SettingTagsController {
   }
 
   save = async () => {
-    if (!this.allowed() || !this.access().canEdit || !this.state.base || this.state.saving || this.state.loading || this.state.reviewing || this.state.reviewRequired) return
+    if (!this.allowed() || !this.access().canEdit || !this.state.base || this.state.saving || this.state.loading || this.state.reviewing || this.state.reviewRequired || this.state.accessUncertain) return
     let tags: string[]
     try { tags = normalizeSettingTags([...this.state.draft, this.state.search]) }
     catch (error) { this.update({ draftError: errorMessage(error) }); return }
@@ -173,7 +213,8 @@ export class SettingTagsController {
       this.changed({ ...this.entry })
     } catch (error) {
       if (!this.valid(ticket, 'write')) return
-      const uncertain = !(error instanceof ApiError) || error.status === 0 || error.status >= 500
+      if (this.denyIfNeeded(error)) return
+      const uncertain = writeResultUnknown(error)
       this.update({ saving: false, error: errorMessage(error), reviewRequired: !!settingCategoryConflictScope(error) || uncertain, reviewed: false, latest: null,
         notice: uncertain ? '保存结果尚不能确认，标签草稿已保留，请先读取最新标签并对照。' : null })
     }
@@ -184,11 +225,12 @@ export class SettingTagsController {
 export class SettingTagsSession {
   private controllers = new Map<string, SettingTagsController>()
   constructor(readonly projectId: number, private readonly api: TagsApi = settingCategoriesApi,
-    private readonly access: () => SettingTagsAccess = () => OPEN_ACCESS, private readonly changed: (entry: SettingEntryRef) => void = () => {}) {}
+    private readonly access: () => SettingTagsAccess = () => OPEN_ACCESS, private readonly changed: (entry: SettingEntryRef) => void = () => {},
+    private readonly verifyAccess: (identity: string, afterFailure: boolean) => Promise<ProjectAccessCheck> = async () => 'unknown') {}
   get(entry: SettingEntryRef) {
     const key = `${entry.kind}:${entry.id}`
     let controller = this.controllers.get(key)
-    if (!controller) { controller = new SettingTagsController(this.projectId, { ...entry }, this.api, this.access, this.changed); this.controllers.set(key, controller) }
+    if (!controller) { controller = new SettingTagsController(this.projectId, { ...entry }, this.api, this.access, this.changed, this.verifyAccess); this.controllers.set(key, controller) }
     return controller
   }
   forget = (entry: SettingEntryRef) => {

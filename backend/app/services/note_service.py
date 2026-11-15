@@ -7,7 +7,7 @@ from app.core.errors import ConflictError, NotFoundError
 from app.models.notes import ProjectNote
 from app.schemas.notes import NoteCreate, NoteFlags, NotePage, NoteSummary, NoteUpdate
 from app.services.admin_service import _escape_like
-from app.services.project_service import get_manageable_project
+from app.services.project_access import require_project
 
 
 async def _note(db: AsyncSession, project_id: int, note_id: int) -> ProjectNote:
@@ -28,7 +28,7 @@ async def list_notes(
     page: int = 1,
     page_size: int = 20,
 ) -> NotePage:
-    await get_manageable_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "content.read")
     conditions = [ProjectNote.project_id == project_id]
     if q and q.strip():
         pattern = f"%{_escape_like(q.strip())}%"
@@ -58,12 +58,12 @@ async def list_notes(
 
 
 async def get_note(db: AsyncSession, user_id: int, project_id: int, note_id: int) -> ProjectNote:
-    await get_manageable_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "content.read")
     return await _note(db, project_id, note_id)
 
 
 async def create_note(db: AsyncSession, user_id: int, project_id: int, body: NoteCreate) -> ProjectNote:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     note = ProjectNote(project_id=project_id, title=body.title, content=body.content)
     db.add(note)
     await db.commit()
@@ -78,7 +78,7 @@ def _stale() -> ConflictError:
 async def update_note(
     db: AsyncSession, user_id: int, project_id: int, note_id: int, body: NoteUpdate
 ) -> ProjectNote:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     note = await _note(db, project_id, note_id)
     values = body.model_dump(exclude_unset=True, exclude={"expected_revision"})
     result = await db.execute(
@@ -100,7 +100,7 @@ async def set_note_flags(
     db: AsyncSession, user_id: int, project_id: int, note_id: int, body: NoteFlags
 ) -> ProjectNote:
     """幂等设置收藏／固定；不做 CAS、不递增 revision，并把 updated_at 写回原值以覆盖 onupdate。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     note = await _note(db, project_id, note_id)
     values = body.model_dump(exclude_unset=True)
     await db.execute(
@@ -115,7 +115,7 @@ async def set_note_flags(
 
 
 async def delete_note(db: AsyncSession, user_id: int, project_id: int, note_id: int, expected_revision: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     await _note(db, project_id, note_id)
     result = await db.execute(
         delete(ProjectNote)

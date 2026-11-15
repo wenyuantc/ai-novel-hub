@@ -1,4 +1,6 @@
 import { RELATION_STATUS } from '../../api/relationships'
+import { watchRequestGeneration } from '../../api/client'
+import { writeResultUnknown } from '../../utils/writeResult'
 import type {
   ProgressionPositionInput,
   ProgressionSubject,
@@ -163,3 +165,54 @@ export function createRelationRequestScope() {
     isCurrent: (ticket: number, allowed: boolean) => allowed && ticket === version,
   }
 }
+
+export interface RelationSaveState {
+  saving: boolean
+  uncertain: boolean
+  scopeVersion: number | null
+}
+
+/** 一个待保存身份只允许一个在途写请求；结果未知时只能显式核对后解除。 */
+export class RelationSaveGuard {
+  private snapshot: RelationSaveState = { saving: false, uncertain: false, scopeVersion: null }
+  private listeners = new Set<() => void>()
+  private serial = 0
+  private current: number | null = null
+
+  getSnapshot = () => this.snapshot
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  private publish(snapshot: RelationSaveState) { this.snapshot = snapshot; this.listeners.forEach((listener) => listener()) }
+
+  begin(scopeVersion: number): number | null {
+    if (this.snapshot.saving || this.snapshot.uncertain) return null
+    const token = ++this.serial
+    this.current = token
+    this.publish({ saving: true, uncertain: false, scopeVersion })
+    return token
+  }
+  finish(token: number, confirmed: boolean, failure?: { started: boolean; error: unknown }) {
+    if (this.current !== token) return
+    this.current = null
+    const uncertain = !confirmed || !!failure && failure.started && writeResultUnknown(failure.error)
+    this.publish({ saving: false, uncertain, scopeVersion: null })
+  }
+  acknowledge() {
+    if (this.snapshot.saving) return
+    this.publish({ saving: false, uncertain: false, scopeVersion: null })
+  }
+}
+
+// 弹窗降权卸载、重新授权后重开时仍共用在途状态；只存身份和状态，不存关系内容。
+const relationSaveGuards = new Map<string, RelationSaveGuard>()
+export function relationSaveGuard(key: string): RelationSaveGuard {
+  let guard = relationSaveGuards.get(key)
+  if (!guard) {
+    guard = new RelationSaveGuard()
+    relationSaveGuards.set(key, guard)
+  }
+  return guard
+}
+watchRequestGeneration(() => relationSaveGuards.clear())

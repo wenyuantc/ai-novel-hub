@@ -1,13 +1,11 @@
-import { Alert, App, Button, Card, Popconfirm, Space, Tag, Typography, theme } from 'antd'
-import { useCallback, useState } from 'react'
-import { errorMessage } from '../../api/client'
-import { isOpenTask, taskApi, TASK_STATUS } from '../../api/tasks'
+import { Alert, Button, Card, Popconfirm, Space, Tag, Typography, theme } from 'antd'
+import { useRef } from 'react'
+import { agentChangeIdentity } from '../../api/agent'
+import { hasTaskIdentity } from '../../api/tasks'
 import type { AgentChange } from '../../api/types'
-import { useLoader } from '../../hooks/useLoader'
-import { useTasksStore } from '../../stores/tasks'
-import { AGENT_CHANGE_STATUS, agentValue, canUndoChange, changeTaskId, externalCall, externalResult } from '../../utils/agent'
+import { captureProjectScope, isProjectScopeCurrent, type ProjectScope } from '../../stores/project'
+import { agentChangeState, agentValue, canUndoChange, externalCall, externalResult } from '../../utils/agent'
 import TextDiff from '../TextDiff'
-import { TaskOutputModal } from '../TaskPanel'
 
 interface Props {
   change: AgentChange
@@ -16,17 +14,22 @@ interface Props {
   /** 正在处理的就是这张卡片：按钮显示加载状态（外部调用在确认请求中同步执行，最长约 30 秒）；未提供时沿用 busy */
   acting?: boolean
   confirmationReady?: boolean
+  /** 所属轮次已结束仍为待确认：显示「轮次已结束」并置灰，不再提供确认 / 拒绝（裁决 26）。 */
+  turnEnded?: boolean
+  /** 服务端 writable=false（只读会话）：撤销也不可用。 */
+  canWrite?: boolean
   onAction: (change: AgentChange, action: 'confirm' | 'reject' | 'undo') => void
 }
-export default function AgentChangeCard({ change, busy, acting, confirmationReady = true, onAction }: Props) {
+export default function AgentChangeCard({ change, busy, acting, confirmationReady = true, turnEnded = false, canWrite = true, onAction }: Props) {
   const { token } = theme.useToken()
-  const state = AGENT_CHANGE_STATUS[change.status]
-  const taskId = changeTaskId(change)
+  const state = agentChangeState(change, null, turnEnded)
+  const identified = !!agentChangeIdentity(change) && hasTaskIdentity({ id: change.turn_task_id ?? 0, task_key: change.turn_task_key ?? null })
+  const undoSnapshot = useRef<{ change: AgentChange; scope: ProjectScope | null } | null>(null)
   const external = externalCall(change)
   const outcome = change.kind === 'external' ? externalResult(change) : null
   const loading = acting ?? busy
   const pre = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0, maxHeight: 240, overflowY: 'auto', fontSize: 12, background: token.colorFillQuaternary, padding: 8, borderRadius: token.borderRadius } as const
-  return <Card size="small" title={<span style={{ whiteSpace: 'normal' }}>{change.preview.title}</span>} extra={<Tag color={state.color}>{state.label}</Tag>} styles={{ body: { padding: 12 } }}>
+  return <Card size="small" style={turnEnded ? { opacity: 0.6 } : undefined} aria-disabled={turnEnded || undefined} title={<span style={{ whiteSpace: 'normal' }}>{change.preview.title}</span>} extra={<Tag color={state.color}>{state.label}</Tag>} styles={{ body: { padding: 12 } }}>
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       {change.preview.warnings.filter((w) => change.kind !== 'external' || !w.includes('无法撤销')).map((warning, i) => <Alert key={i} type="warning" showIcon message={warning} />)}
       {change.kind === 'task' && <Typography.Text type="secondary">启动后会消耗 AI 调用，可在任务列表查看进度或取消。</Typography.Text>}
@@ -54,38 +57,19 @@ export default function AgentChangeCard({ change, busy, acting, confirmationRead
         </table>
       </div>}
       {change.preview.diff.filter((d) => typeof d.before === 'string' && typeof d.after === 'string' && (change.kind === 'text' || d.before.length + d.after.length > 500)).map((d) => <details key={d.field}><summary>{d.label} · 逐字对比</summary><TextDiff a={String(d.before)} b={String(d.after)} maxHeight={240} /></details>)}
-      {change.error && <Alert type="error" showIcon message={change.error} />}
+      {change.error && <Alert type={state.label === '已作废' ? 'warning' : 'error'} showIcon message={change.error} />}
+      {turnEnded && <Typography.Text type="secondary">所属轮次已结束，此提案不能再确认；如仍需要，请在会话中重新发起。</Typography.Text>}
+      {!identified && <Alert type="warning" showIcon message="提案身份或预览版本不可确认，请刷新后重新确认。" />}
       <Space wrap>
-        {change.status === 'proposed' && <>
-          <Button size="small" type="primary" loading={loading} disabled={!confirmationReady || (busy && !loading)} onClick={() => onAction(change, 'confirm')}>{change.kind === 'external' ? '确认调用' : '确认'}</Button>
-          <Button size="small" disabled={busy || !confirmationReady} onClick={() => onAction(change, 'reject')}>拒绝</Button>
+        {change.status === 'proposed' && !turnEnded && <>
+          <Button size="small" type="primary" loading={loading} disabled={!identified || !confirmationReady || (busy && !loading)} onClick={() => onAction(change, 'confirm')}>{change.kind === 'external' ? '确认调用' : '确认'}</Button>
+          <Button size="small" disabled={!identified || busy || !confirmationReady} onClick={() => onAction(change, 'reject')}>拒绝</Button>
         </>}
-        {canUndoChange(change) && <Popconfirm title="撤销这项修改？" description="若数据之后又被修改，将提示冲突并保留当前内容。" onConfirm={() => onAction(change, 'undo')}><Button size="small" loading={loading} disabled={busy && !loading}>撤销</Button></Popconfirm>}
-        {taskId !== null && <AgentTaskActions taskId={taskId} />}
+        {canUndoChange(change) && <Popconfirm disabled={!canWrite} title="撤销这项修改？" description="若数据之后又被修改，将提示冲突并保留当前内容。"
+          onOpenChange={(open) => { if (open) undoSnapshot.current = { change: { ...change }, scope: captureProjectScope(change.project_id) } }}
+          onConfirm={() => { const captured = undoSnapshot.current; if (captured && isProjectScopeCurrent(captured.scope, 'canUseAgent')) onAction(captured.change, 'undo') }}><Button size="small" loading={loading} disabled={!canWrite || !identified || (busy && !loading)}>撤销</Button></Popconfirm>}
+        {change.kind === 'task' && change.status === 'executed' && <Typography.Text type="secondary">此记录未保存可验证的子任务身份，请从任务列表查看。</Typography.Text>}
       </Space>
     </Space>
   </Card>
-}
-
-function AgentTaskActions({ taskId }: { taskId: number }) {
-  const version = useTasksStore((s) => s.version)
-  const track = useTasksStore((s) => s.track)
-  const { message } = App.useApp()
-  const [viewing, setViewing] = useState(false)
-  const [cancelling, setCancelling] = useState(false)
-  const loader = useCallback(() => { void version; return taskApi.get(taskId) }, [taskId, version])
-  const { data: task, error, reload } = useLoader(loader)
-  const cancel = async () => {
-    setCancelling(true)
-    try { track(await taskApi.cancel(taskId)); reload(); message.success('已取消任务') }
-    catch (err) { message.error(errorMessage(err)); reload() }
-    finally { setCancelling(false) }
-  }
-  return <>
-    {task && <Tag color={TASK_STATUS[task.status].color}>{TASK_STATUS[task.status].label}</Tag>}
-    <Button size="small" disabled={!task} onClick={() => setViewing(true)}>查看任务</Button>
-    {task && isOpenTask(task.status) && <Popconfirm title="取消这个后台任务？" onConfirm={() => cancel()}><Button size="small" loading={cancelling}>取消任务</Button></Popconfirm>}
-    {error && <Typography.Text type="secondary">{error}</Typography.Text>}
-    {viewing && task && <TaskOutputModal task={task} onClose={() => setViewing(false)} />}
-  </>
 }

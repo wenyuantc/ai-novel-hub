@@ -1,8 +1,10 @@
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
+from app.models.analysis_index_receipt import AnalysisIndexReceipt
 from app.models.api_key import ApiKey, ApiKeyProject
 from app.models.audit import AdminAuditLog
 from app.models.backup import BackupArtifact, BackupRun, BackupSettings
 from app.models.base import Base
+from app.models.collaboration import CollaborationAuditEvent, ProjectCollaborator, SeriesCollaborator
 from app.models.dashboard import DashboardDailySnapshot, DashboardTracking, TaskStatistic
 from app.models.entities import (
     AIConfig,
@@ -44,6 +46,7 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.inspiration_origin import InspirationOrigin
 from app.models.notes import ProjectNote
 from app.models.planning import (
     PlanningTag,
@@ -93,6 +96,7 @@ __all__ = [
     "AgentMessage",
     "AIConfig",
     "AnalysisChange",
+    "AnalysisIndexReceipt",
     "ApiKey",
     "ApiKeyProject",
     "Base",
@@ -105,6 +109,7 @@ __all__ = [
     "ChapterCharacter",
     "ChapterPlan",
     "ChapterVersion",
+    "CollaborationAuditEvent",
     "Character",
     "CharacterCareer",
     "DashboardDailySnapshot",
@@ -113,6 +118,7 @@ __all__ = [
     "ForeshadowCharacter",
     "ForeshadowHistory",
     "GenerationLog",
+    "InspirationOrigin",
     "InspirationSession",
     "KbChunk",
     "KbDocument",
@@ -124,6 +130,7 @@ __all__ = [
     "OutlineSnapshot",
     "Project",
     "ProjectCover",
+    "ProjectCollaborator",
     "ProjectNote",
     "PlanningTag",
     "PlanningUnit",
@@ -154,6 +161,7 @@ __all__ = [
     "SceneSelectionReceipt",
     "Series",
     "SeriesBook",
+    "SeriesCollaborator",
     "SeriesEntry",
     "SeriesEntryUse",
     "SettingCategory",

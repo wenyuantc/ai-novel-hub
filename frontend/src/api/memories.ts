@@ -1,6 +1,6 @@
 // 剧情记忆：列表筛选、手动记忆增删改、钉住 / 屏蔽、检索调试；章节的注入预览
 
-import { api } from './client'
+import { ApiError, api } from './client'
 import type {
   ContextPreview,
   Memory,
@@ -35,4 +35,9 @@ export const memoryApi = {
   search: (pid: number, body: MemorySearchRequest) => api.post<MemorySearchResult>(`${base(pid)}/search`, body),
   /** 本次生成会注入的【参考资料】与【相关旧情节】（裁剪前） */
   contextPreview: (chapterId: number) => api.get<ContextPreview>(`/chapters/${chapterId}/context-preview`),
+}
+
+/** 注入预览被拒绝为「无权限」：403（查看者 / 协作授权已变化）。404 等仍按错误显示。 */
+export function contextPreviewDenied(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403
 }

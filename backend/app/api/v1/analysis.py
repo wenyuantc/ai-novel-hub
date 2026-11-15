@@ -14,7 +14,7 @@ from app.schemas.analysis import (
 from app.schemas.chapter import ReviseChapterRequest
 from app.schemas.foreshadow import ConfirmChangeRequest
 from app.schemas.task import TaskOut
-from app.services import analysis_service, task_service, writeback_service
+from app.services import analysis_service, generation_service, writeback_service
 
 router = APIRouter(tags=["analysis"])
 
@@ -44,7 +44,7 @@ async def analyze_pending(
 
 @router.get("/projects/{project_id}/analysis/statuses", response_model=list[ChapterAnalysisState])
 async def analysis_statuses(project_id: int, user: CurrentUser, db: DbDep) -> list[ChapterAnalysisState]:
-    return await analysis_service.project_states(db, user.id, project_id)
+    return await analysis_service.project_states(db, user.id, project_id, manual=True)
 
 
 @router.get("/chapters/{chapter_id}/analysis-status", response_model=ChapterAnalysisState)
@@ -59,7 +59,7 @@ async def list_analyses(chapter_id: int, user: CurrentUser, db: DbDep) -> list[A
 
 @router.get("/analyses/{analysis_id}", response_model=AnalysisOut)
 async def get_analysis(analysis_id: int, user: CurrentUser, db: DbDep) -> AnalysisOut:
-    return await analysis_service.get_analysis(db, user.id, analysis_id)
+    return await analysis_service.get_analysis(db, user.id, analysis_id, manual=True)
 
 
 @router.post("/analysis-changes/{change_id}/revert", response_model=AnalysisChangeOut)
@@ -85,4 +85,4 @@ async def revise_chapter(
     chapter_id: int, body: ReviseChapterRequest, user: CurrentUser, db: DbDep, engine: TaskEngineDep
 ) -> TaskOut:
     params = {"chapter_id": chapter_id, **body.model_dump(mode="json")}
-    return await task_service.create_task(db, engine, user.id, "chapter.revise", params)
+    return await generation_service.create_chapter_task(db, engine, user.id, "chapter.revise", params)

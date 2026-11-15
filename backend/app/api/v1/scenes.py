@@ -156,7 +156,7 @@ async def setting_context(
 ) -> SettingContextOut:
     from app.services.planning_context_service import scene_setting_context
 
-    return await scene_setting_context(db, user.id, project_id, chapter_id, scene_id)
+    return await scene_setting_context(db, user.id, project_id, chapter_id, scene_id, manual=True)
 
 
 @router.get(f"{_BASE}/{{scene_id}}/document", response_model=SceneDocumentOut)

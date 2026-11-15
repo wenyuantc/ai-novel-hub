@@ -1,3 +1,4 @@
+import hmac
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -141,6 +142,11 @@ def create_app(
     app.state.settings = settings
     app.state.engine = engine
     app.state.sessionmaker = create_sessionmaker(engine)
+    # 预览版本只使用域分离的派生密钥；会话不保存 JWT 原密钥。
+    app.state.sessionmaker.configure(info={
+        **app.state.sessionmaker.kw.get("info", {}),
+        "agent_view_hmac_key": hmac.digest(settings.jwt_secret.encode(), b"ainovel/agent-view-key/v1", "sha256"),
+    })
     app.state.cipher = SecretCipher(settings.encryption_key)
     app.state.backups = BackupManager(settings, app.state.cipher, app.state.sessionmaker)
     app.state.backup_runtime = BackupRuntime(app.state.backups)

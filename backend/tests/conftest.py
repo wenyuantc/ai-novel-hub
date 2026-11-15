@@ -38,9 +38,83 @@ def fake_dns(monkeypatch):
     monkeypatch.setattr(endpoint_guard, "_resolve", _resolve)
 
 
+@pytest.fixture(autouse=True)
+def isolated_conversation_locks(monkeypatch):
+    """会话进程锁按会话 id 缓存；每个测试换新事件循环且 id 从 1 复用，须隔离注册表。"""
+    from weakref import WeakValueDictionary
+
+    from app.services.agent import service as agent_service
+
+    monkeypatch.setattr(agent_service, "_locks", WeakValueDictionary())
+
+
 @pytest.fixture
-def fake_llm() -> FakeLLM:
-    return FakeLLM()
+def fake_llm(monkeypatch) -> FakeLLM:
+    """仅本测试的纯内存 provider 可走测试门禁；生产工厂仍按原规则验证。"""
+    from app.services import ai_dispatch, collaboration_ai_guard
+
+    fake = FakeLLM()
+    original_factory_allowed = ai_dispatch._chapter_factory_allowed
+    original_provider_allowed = ai_dispatch._chapter_provider_allowed
+    original_guard_factory = collaboration_ai_guard._trusted_factory
+    original_guard_provider = collaboration_ai_guard._trusted_provider
+
+    def is_fake_factory(factory):
+        return getattr(factory, "__self__", None) is fake and getattr(factory, "__func__", None) is FakeLLM.factory
+
+    def factory_allowed(factory):
+        return is_fake_factory(factory) or original_factory_allowed(factory)
+
+    def provider_allowed(factory, provider_name, provider):
+        if is_fake_factory(factory):
+            return any(provider is item for item in fake._providers) and provider.uses_dispatch_hooks is True
+        return original_provider_allowed(factory, provider_name, provider)
+
+    def guard_factory_allowed(factory):
+        return is_fake_factory(factory) or original_guard_factory(factory)
+
+    def guard_provider_allowed(factory, provider, provider_name):
+        if is_fake_factory(factory):
+            return (any(provider is item for item in fake._providers)
+                    and fake._provider_names.get(provider) == provider_name and provider.uses_dispatch_hooks is True)
+        return original_guard_provider(factory, provider, provider_name)
+
+    monkeypatch.setattr(ai_dispatch, "_chapter_factory_allowed", factory_allowed)
+    monkeypatch.setattr(ai_dispatch, "_chapter_provider_allowed", provider_allowed)
+    monkeypatch.setattr(collaboration_ai_guard, "_trusted_factory", guard_factory_allowed)
+    monkeypatch.setattr(collaboration_ai_guard, "_trusted_provider", guard_provider_allowed)
+    return fake
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "pg_isolated_schema: 该测试会改 DDL，PostgreSQL 夹具为其单独建删 schema，不使用进程共享 schema",
+    )
+
+
+@pytest.fixture(scope="session")
+def pg_shared():
+    """进程级共享 PostgreSQL schema：每个测试库只 create_all 一次，会话结束时 DROP。"""
+    from tests.pg_support import SharedPostgres
+
+    shared = SharedPostgres()
+    try:
+        yield shared
+    finally:
+        shared.close()
+
+
+@pytest.fixture
+async def pg_schema_lease(pg_shared, request):
+    """本测试对共享 schema 的租用；收尾核对 DDL 指纹并 TRUNCATE 清空（标记 pg_isolated_schema 则独立建删）。"""
+    from tests.pg_support import SchemaLease
+
+    lease = SchemaLease(pg_shared, isolated=request.node.get_closest_marker("pg_isolated_schema") is not None)
+    try:
+        yield lease
+    finally:
+        await lease.release()
 
 
 @pytest.fixture

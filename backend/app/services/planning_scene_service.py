@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import inspect, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
@@ -45,14 +45,47 @@ async def _raw_values(db: AsyncSession, units: Sequence[PlanningUnit]) -> dict[i
         for start in range(0, len(units), 400):
             result.update(await _raw_values(db, units[start:start + 400]))
         return result
+    if any(inspect(unit).attrs.project_id.history.has_changes() for unit in units):
+        raise ConflictError("场景规划关联数据不一致，无法读取", extra={"code": "scene_reference_invalid"})
+    pending_povs = [unit for unit in units if inspect(unit).attrs.pov_character_id.history.has_changes()]
+    if pending_povs:
+        with db.no_autoflush:
+            projects = dict((await db.execute(select(Character.id, Character.project_id).where(
+                Character.id.in_([unit.pov_character_id for unit in pending_povs if unit.pov_character_id is not None]),
+            ))).all())
+        if any(unit.pov_character_id is not None and projects.get(unit.pov_character_id) != unit.project_id
+               for unit in pending_povs):
+            raise ConflictError("场景规划关联数据不一致，无法读取", extra={"code": "scene_reference_invalid"})
     ids = [unit.id for unit in units]
+    joins = {"character": (PlanningUnitCharacter, "character_id", Character), **query.REFERENCE_JOINS}
+    # 原始意图和结构快照都会对用户输出；关联目标的作品必须与规划单元一致。
+    scope = select(PlanningUnit.id, PlanningUnit.project_id, PlanningUnit.pov_character_id).where(
+        PlanningUnit.id.in_(ids),
+    ).cte("scene_planning_scope")
+    checks = [
+        select(scope.c.id).outerjoin(Character, Character.id == scope.c.pov_character_id).where(
+            scope.c.pov_character_id.is_not(None), Character.project_id.is_distinct_from(scope.c.project_id),
+        ),
+        select(scope.c.id).join(PlanningUnitTag, PlanningUnitTag.unit_id == scope.c.id)
+        .outerjoin(PlanningTag, PlanningTag.id == PlanningUnitTag.tag_id).where(
+            PlanningTag.project_id.is_distinct_from(scope.c.project_id),
+        ),
+    ]
+    for kind, (model, column, target) in joins.items():
+        invalid = target.project_id.is_distinct_from(scope.c.project_id)
+        if kind == "relationship":
+            invalid = or_(invalid, SettingTimeline.subject_kind.is_distinct_from("relationship"))
+        checks.append(select(scope.c.id).join(model, model.unit_id == scope.c.id)
+                      .outerjoin(target, target.id == getattr(model, column)).where(invalid))
+    invalid_refs = union_all(*checks).subquery()
+    if await db.scalar(select(invalid_refs.c.id).limit(1)) is not None:
+        raise ConflictError("场景规划关联数据不一致，无法读取", extra={"code": "scene_reference_invalid"})
     tags: dict[int, list[int]] = {identity: [] for identity in ids}
     refs: dict[int, list[s.PlanningReference]] = {identity: [] for identity in ids}
     for uid, tag_id in await db.execute(select(PlanningUnitTag.unit_id, PlanningUnitTag.tag_id).where(
         PlanningUnitTag.unit_id.in_(ids)
     )):
         tags[uid].append(tag_id)
-    joins = {"character": (PlanningUnitCharacter, "character_id", Character), **query.REFERENCE_JOINS}
     for kind, (model, column, _) in joins.items():
         for uid, value in await db.execute(select(model.unit_id, getattr(model, column)).where(model.unit_id.in_(ids))):
             refs[uid].append(

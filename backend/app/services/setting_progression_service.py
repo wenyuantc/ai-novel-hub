@@ -50,7 +50,7 @@ from app.schemas.progression import (
     TimelineListOut,
     TimelineOut,
 )
-from app.services import series_policy
+from app.services import project_access, series_policy
 from app.services.project_service import get_manageable_project
 from app.services.setting_field_values import CanonicalFieldValue
 from app.services.setting_progression_resolver import (
@@ -99,12 +99,18 @@ def _stale_revision() -> ConflictError:
     return ConflictError("设定已被其他操作修改，请刷新后重试", extra={"code": "stale_revision", "scope": "timeline"})
 
 
-async def _read_project(db: AsyncSession, user_id: int, project_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id)
+async def _read_project(db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False) -> None:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
 
 
-async def _write_project(db: AsyncSession, user_id: int, project_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+async def _write_project(db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False) -> None:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.edit", for_update=True)
+    else:
+        await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
 
 
 async def get_timeline(db: AsyncSession, project_id: int, timeline_id: int) -> SettingTimeline:
@@ -685,8 +691,9 @@ async def list_timelines(
     world_setting_id: int | None = None,
     career_id: int | None = None,
     organization_id: int | None = None,
+    manual: bool = False,
 ) -> TimelineListOut:
-    await _read_project(db, user_id, project_id)
+    await _read_project(db, user_id, project_id, manual=manual)
     stmt = select(SettingTimeline).where(SettingTimeline.project_id == project_id)
     for name, value in (
         ("subject_kind", subject_kind),
@@ -702,10 +709,12 @@ async def list_timelines(
     return TimelineListOut(items=[TimelineOut.model_validate(row) for row in rows], total=len(rows))
 
 
-async def count_unverified_timelines(db: AsyncSession, user_id: int, project_id: int) -> int:
+async def count_unverified_timelines(
+    db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False,
+) -> int:
     """统计本作品待校准主体；不加载时间线及基础设定 JSON。"""
     with db.no_autoflush:
-        await _read_project(db, user_id, project_id)
+        await _read_project(db, user_id, project_id, manual=manual)
         result = await db.scalar(
             select(func.count())
             .select_from(SettingTimeline)
@@ -714,8 +723,10 @@ async def count_unverified_timelines(db: AsyncSession, user_id: int, project_id:
     return result or 0
 
 
-async def create_timeline(db: AsyncSession, user_id: int, project_id: int, data: TimelineCreate) -> TimelineOut:
-    await _write_project(db, user_id, project_id)
+async def create_timeline(
+    db: AsyncSession, user_id: int, project_id: int, data: TimelineCreate, *, manual: bool = False,
+) -> TimelineOut:
+    await _write_project(db, user_id, project_id, manual=manual)
     if data.subject_kind == "world":
         world = await db.scalar(
             select(WorldSetting).where(WorldSetting.id == data.world_setting_id, WorldSetting.project_id == project_id)
@@ -758,8 +769,10 @@ def _baseline_out(timeline: SettingTimeline) -> BaselineOut:
 
 
 @_readonly
-async def read_baseline(db: AsyncSession, user_id: int, project_id: int, timeline_id: int) -> BaselineOut:
-    await _read_project(db, user_id, project_id)
+async def read_baseline(
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, *, manual: bool = False,
+) -> BaselineOut:
+    await _read_project(db, user_id, project_id, manual=manual)
     return _baseline_out(await get_timeline(db, project_id, timeline_id))
 
 
@@ -770,9 +783,10 @@ async def apply_baseline(
     *,
     materialize: bool = True,
     preserve_legacy_eligibility: bool = False,
+    actor_user_id: int | None = None,
 ) -> None:
     """按实际基础值比较并修改，供同事务表单与内部流程调用。"""
-    await _reject_shared_baseline_changes(db, timeline, data.changes)
+    await _reject_shared_baseline_changes(db, timeline, data.changes, actor_user_id=actor_user_id)
     await _apply_baseline(
         db, timeline, data, materialize=materialize, preserve_legacy_eligibility=preserve_legacy_eligibility,
     )
@@ -780,6 +794,7 @@ async def apply_baseline(
 
 async def _reject_shared_baseline_changes(
     db: AsyncSession, timeline: SettingTimeline, changes: dict[str, JsonValue],
+    *, actor_user_id: int | None = None,
 ) -> None:
     kind = timeline.subject_kind
     if kind not in ("character", "world"):
@@ -793,7 +808,9 @@ async def _reject_shared_baseline_changes(
     await db.refresh(timeline, attribute_names=("baseline", "revision", "baseline_status", "legacy_compat_allowed"))
     shared = series_policy.shared_baseline_fields(kind)
     if any(key in shared and value != timeline.baseline.get(key) for key, value in changes.items()):
-        raise series_policy.managed_setting_error()
+        raise await series_policy.managed_setting_error_for_actor(
+            db, timeline.project_id, cast(series_policy.ProjectionKind, kind), entry_id, actor_user_id,
+        )
 
 
 async def _apply_series_baseline(
@@ -855,6 +872,7 @@ async def apply_world_content_update(
     edit_mode: str | None,
     expected_revision: int | None,
     metadata_changed: bool = False,
+    actor_user_id: int | None = None,
 ) -> None:
     """将旧 world PATCH 的正文与显式初始修正映射到同一个事务。"""
     if content is None and edit_mode is None:
@@ -870,7 +888,8 @@ async def apply_world_content_update(
             raise _stale_revision()
         if content is not None and content != timeline.baseline.get("content"):
             await apply_baseline(
-                db, timeline, BaselineUpdate(expected_revision=expected_revision, changes={"content": content})
+                db, timeline, BaselineUpdate(expected_revision=expected_revision, changes={"content": content}),
+                actor_user_id=actor_user_id,
             )
         elif metadata_changed:
             await _claim_revision(db, timeline, expected_revision, metadata_only=True)
@@ -887,13 +906,14 @@ async def apply_world_content_update(
         .limit(1)
     )
     if has_changes is not None:
-        await _reject_shared_baseline_changes(db, timeline, {"content": content})
+        await _reject_shared_baseline_changes(db, timeline, {"content": content}, actor_user_id=actor_user_id)
         raise ConflictError(
             "该字段已有剧情变化，请选择修正基础设定或记录新变化",
             extra={"code": "progression_intent_required"},
         )
     await apply_baseline(
-        db, timeline, BaselineUpdate(expected_revision=timeline.revision, changes={"content": content})
+        db, timeline, BaselineUpdate(expected_revision=timeline.revision, changes={"content": content}),
+        actor_user_id=actor_user_id,
     )
 
 
@@ -904,6 +924,7 @@ async def apply_character_fields_update(
     *,
     edit_mode: str | None,
     expected_revision: int | None,
+    actor_user_id: int | None = None,
 ) -> None:
     """消费角色时间线字段；调用方在同一事务内再保存名字等全书资料。"""
     provided = {name: values.pop(name) for name in CHARACTER_FIELDS if name in values and values[name] is not None}
@@ -940,7 +961,7 @@ async def apply_character_fields_update(
                 .limit(1)
             )
             if has_changes is not None:
-                await _reject_shared_baseline_changes(db, timeline, changes)
+                await _reject_shared_baseline_changes(db, timeline, changes, actor_user_id=actor_user_id)
                 raise ConflictError(
                     "该字段已有剧情变化，请选择修正基础设定或记录新变化",
                     extra={"code": "progression_intent_required"},
@@ -950,6 +971,7 @@ async def apply_character_fields_update(
             db,
             timeline,
             BaselineUpdate(expected_revision=timeline.revision, changes=changes),
+            actor_user_id=actor_user_id,
         )
     elif edit_mode == "baseline" and any(
         value is not None and value != getattr(character, name) for name, value in values.items()
@@ -959,11 +981,11 @@ async def apply_character_fields_update(
 
 
 async def update_baseline(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: BaselineUpdate
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: BaselineUpdate, *, manual: bool = False,
 ) -> BaselineOut:
-    await _write_project(db, user_id, project_id)
+    await _write_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
-    await apply_baseline(db, timeline, data)
+    await apply_baseline(db, timeline, data, actor_user_id=user_id if manual else None)
     await db.commit()
     return _baseline_out(timeline)
 
@@ -1198,8 +1220,9 @@ async def list_progressions(
     limit: int = 50,
     field: str | None = None,
     include_inactive: bool = False,
+    manual: bool = False,
 ) -> ProgressionListOut:
-    await _read_project(db, user_id, project_id)
+    await _read_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
     from app.services.setting_field_service import fields_revision
 
@@ -1254,11 +1277,11 @@ async def list_progressions(
 
 
 async def create_progression(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: ProgressionCreate
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: ProgressionCreate, *, manual: bool = False,
 ) -> ProgressionMutationOut:
     from app.services.setting_field_service import _editing, fields_revision
 
-    async with _editing(db, user_id, project_id) as audit:
+    async with _editing(db, user_id, project_id, manual=manual) as audit:
         timeline = await get_timeline(db, project_id, timeline_id)
         event = await apply_progression(db, timeline, data)
         item = await _event_out(db, project_id, event)
@@ -1270,10 +1293,10 @@ async def create_progression(
 
 @_readonly
 async def read_progression(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int, *, manual: bool = False,
 ) -> ProgressionMutationOut:
     """详情包含停用项，便于发生版本冲突时比较当前事实。"""
-    await _read_project(db, user_id, project_id)
+    await _read_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
     event = await db.scalar(
         select(SettingProgression).where(
@@ -1292,11 +1315,12 @@ async def read_progression(
 
 
 async def update_progression(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int, data: ProgressionUpdate
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, event_id: int, data: ProgressionUpdate,
+    *, manual: bool = False,
 ) -> ProgressionMutationOut:
     from app.services.setting_field_service import _editing, fields_revision
 
-    async with _editing(db, user_id, project_id) as audit:
+    async with _editing(db, user_id, project_id, manual=manual) as audit:
         timeline = await get_timeline(db, project_id, timeline_id)
         event = await _get_event(db, timeline.id, event_id)
         values = {
@@ -1375,10 +1399,11 @@ async def delete_progression(
     event_id: int,
     expected_revision: int,
     expected_fields_revision: int | None = None,
+    *, manual: bool = False,
 ) -> RevisionOut:
     from app.services.setting_field_service import _editing, fields_revision
 
-    async with _editing(db, user_id, project_id) as audit:
+    async with _editing(db, user_id, project_id, manual=manual) as audit:
         timeline = await get_timeline(db, project_id, timeline_id)
         event = await _get_event(db, timeline.id, event_id)
         from app.services.setting_field_service import check_fields_revision, fields_revision
@@ -1403,9 +1428,10 @@ async def read_effective(
     chapter_no: int | None,
     boundary: Boundary,
     scene_id: int | None = None,
+    manual: bool = False,
 ) -> EffectiveOut:
     with db.no_autoflush:
-        await _read_project(db, user_id, project_id)
+        await _read_project(db, user_id, project_id, manual=manual)
         timeline = await get_timeline(db, project_id, timeline_id)
         from app.services import setting_catalog_service as catalog
         from app.services import setting_field_service as fields
@@ -1472,8 +1498,10 @@ async def _require_unique_label(
 
 
 @_readonly
-async def list_text_fields(db: AsyncSession, user_id: int, project_id: int, timeline_id: int) -> TextFieldListOut:
-    await _read_project(db, user_id, project_id)
+async def list_text_fields(
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, *, manual: bool = False,
+) -> TextFieldListOut:
+    await _read_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
     fields = list(
         (
@@ -1492,9 +1520,9 @@ async def list_text_fields(db: AsyncSession, user_id: int, project_id: int, time
 
 
 async def create_text_field(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: TextFieldCreate
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, data: TextFieldCreate, *, manual: bool = False,
 ) -> TextFieldMutationOut:
-    await _write_project(db, user_id, project_id)
+    await _write_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
     if timeline.subject_kind not in ("character", "world"):
         raise BadRequestError("该设定不支持自定义文本字段")
@@ -1510,9 +1538,10 @@ async def create_text_field(
 
 
 async def update_text_field(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, field_id: int, data: TextFieldUpdate
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, field_id: int, data: TextFieldUpdate,
+    *, manual: bool = False,
 ) -> TextFieldMutationOut:
-    await _write_project(db, user_id, project_id)
+    await _write_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
     field = await _get_text_field(db, timeline.id, field_id)
     if field.definition_id is not None:
@@ -1534,9 +1563,10 @@ async def update_text_field(
 
 
 async def delete_text_field(
-    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, field_id: int, expected_revision: int
+    db: AsyncSession, user_id: int, project_id: int, timeline_id: int, field_id: int, expected_revision: int,
+    *, manual: bool = False,
 ) -> RevisionOut:
-    await _write_project(db, user_id, project_id)
+    await _write_project(db, user_id, project_id, manual=manual)
     timeline = await get_timeline(db, project_id, timeline_id)
     field = await _get_text_field(db, timeline.id, field_id)
     if field.definition_id is not None:

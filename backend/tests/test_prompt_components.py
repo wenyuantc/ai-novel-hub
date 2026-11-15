@@ -9,7 +9,7 @@ from sqlalchemy import update
 from app.ai.prompts import registry
 from app.models import User
 from app.services import prompt_component_service
-from tests.helpers import create_ai_config, create_project, register, run_task
+from tests.helpers import create_ai_config, create_project, register, run_task, task_params
 
 API = "/api/v1/prompt-components"
 PROMPTS = "/api/v1/prompt-templates"
@@ -167,7 +167,8 @@ async def test_override_and_skill_use_components_at_runtime_and_snapshot(client,
     put = {"slug": "ban", "name": "禁用词", "description": "", "content": "【禁用词】第二版", "revision": 1}
     assert (await client.put(f"{API}/{comp['id']}", json=put)).status_code == 200
     fake_llm.push("重试正文。")
-    task, _ = await run_task(client, await client.post(f"/api/v1/tasks/{failed['id']}/retry"))
+    response = await client.post(f"/api/v1/tasks/{failed['id']}/retry", params=task_params(failed))
+    task, _ = await run_task(client, response)
     assert task["status"] == "succeeded"
     system = fake_llm.calls[-1]["messages"][0]["content"]
     # Skill 部分是旧快照；覆盖（运行时读取）已是新内容
@@ -290,7 +291,7 @@ async def test_agent_load_skill_reads_expanded_body(client, fake_llm):
     from tests.helpers import wait_task
 
     resp = await client.post(url + "/messages", json={"content": "读一下"})
-    assert (await wait_task(client, resp.json()["task"]["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, resp.json()["task"]))["status"] == "succeeded"
     results = [
         json.loads(m["content"])["data"] for m in (await client.get(url)).json()["messages"] if m["role"] == "tool"
     ]

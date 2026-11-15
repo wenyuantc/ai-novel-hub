@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError
-from app.models import Chapter, Outline, Project, ProjectCover
+from app.models import Chapter, Outline, Project, ProjectCover, User
 from app.schemas.reader import ReaderBlock
+from app.services import project_access
 from app.services.project_service import get_owned_project
 
 ExportFormat = Literal["txt", "md", "epub"]
@@ -107,7 +108,26 @@ async def export_project(
     author: str = "",
     include_synopsis: bool = True,
 ) -> ExportFile:
+    """开放 API 等既有调用保留严格作者限制。"""
     project = await get_owned_project(db, user_id, project_id)
+    return await _export_authorized(db, project, fmt, chapter_ids, author=author, include_synopsis=include_synopsis)
+
+
+async def export_manual_project(
+    db: AsyncSession, user_id: int, project_id: int, fmt: ExportFormat, chapter_ids: list[int] | None, *,
+    author: str | None = None, include_synopsis: bool = True,
+) -> ExportFile:
+    """站内作品文本导出显式允许已接受协作者。"""
+    project = await project_access.require_project(db, user_id, project_id, "export")
+    if author is None:
+        author = await db.scalar(select(User.username).where(User.id == project.user_id)) or ""
+    return await _export_authorized(db, project, fmt, chapter_ids, author=author, include_synopsis=include_synopsis)
+
+
+async def _export_authorized(
+    db: AsyncSession, project: Project, fmt: ExportFormat, chapter_ids: list[int] | None, *,
+    author: str, include_synopsis: bool,
+) -> ExportFile:
     from app.services.rich_document_render import load_chapter_projections
 
     # TXT 也核对场景投影，但完全不加载或展开格式及作者资料。
@@ -125,7 +145,9 @@ async def export_project(
 
         outline_ids = {c.outline_id for c in chapters if c.outline_id is not None}
         outlines = (
-            {o.id: o for o in await db.scalars(select(Outline).where(Outline.id.in_(outline_ids)))}
+            {o.id: o for o in await db.scalars(select(Outline).where(
+                Outline.project_id == project.id, Outline.id.in_(outline_ids),
+            ))}
             if outline_ids
             else {}
         )

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import delete
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, UnauthorizedError
 from app.models import Task, TaskStatistic, User
 from app.models.entities import FINISHED_TASK_STATUSES
 from app.services import admin_service, task_service
@@ -25,8 +25,8 @@ async def _users(db):
     return actor.id, owner.id, other.id
 
 
-async def _new_task(db, user_id, status="queued"):
-    task = Task(user_id=user_id, kind="chapter.analyze", status=status, output_text="新用户内容")
+async def _new_task(db, user_id, status="queued", kind="chapter.analyze"):
+    task = Task(user_id=user_id, kind=kind, status=status, output_text="新用户内容")
     db.add(task)
     await stats.record_created(db, task)
     if status in FINISHED_TASK_STATUSES:
@@ -81,7 +81,7 @@ async def test_stale_cancel_cannot_cancel_reused_task_or_invent_old_terminal(app
 @pytest.mark.parametrize("operation", ["resume_task", "finish_paused_task"])
 async def test_stale_paused_mutation_cannot_change_replacement(app, monkeypatch, operation):
     async with _reused_task(app, "paused", "paused") as (db, original, new_key, _):
-        async def loaded(*args):
+        async def loaded(*args, **kwargs):
             return original
 
         monkeypatch.setattr(task_service, "get_owned_task", loaded)
@@ -92,7 +92,7 @@ async def test_stale_paused_mutation_cannot_change_replacement(app, monkeypatch,
 
 async def test_stale_delete_does_not_remove_replacement_or_mark_its_statistics(app, monkeypatch):
     async with _reused_task(app, "failed") as (db, original, new_key, _):
-        async def loaded(*args):
+        async def loaded(*args, **kwargs):
             return original
 
         monkeypatch.setattr(task_service, "get_owned_task", loaded)
@@ -177,11 +177,13 @@ async def test_recovery_snapshot_does_not_interrupt_replacement(app, monkeypatch
     sm = app.state.sessionmaker
     async with sm() as db:
         actor_id, owner_id, other_id = await _users(db)
-        original = await _new_task(db, owner_id, "running")
+        # 启动恢复对 chapter.analyze / wizard.* 只登记待核对、不调用 on_abort；
+        # 这里用仍走通用 on_abort 恢复路径的类型，才能覆盖 abort 期间整数 ID 复用的窗口。
+        original = await _new_task(db, owner_id, "running", kind="character.generate")
         await db.commit()
     new_key = None
 
-    async def replace_during_abort(*args):
+    async def replace_during_abort(*args, **kwargs):
         nonlocal new_key
         new_id, new_key = await _replace_owner(sm, actor_id, owner_id, other_id, "running")
         assert new_id == original.id
@@ -242,7 +244,9 @@ async def test_cancel_cleanup_after_prune_await_keeps_replacement_hub(app, monke
 
     monkeypatch.setattr(task_service, "prune_finished", replace_during_prune)
     async with sm() as db:
-        await task_service.cancel_task(db, engine, owner_id, original.id)
+        # 裁剪时原账号被删除，响应阶段必须重新认证，不能继续向失效账号返回任务信息。
+        with pytest.raises(UnauthorizedError):
+            await task_service.cancel_task(db, engine, owner_id, original.id)
     assert engine.hubs[original.id].statistics_key == new_key and not engine.hubs[original.id].closed
     await _assert_replacement_intact(app, original, new_key)
 
@@ -268,6 +272,6 @@ async def test_identity_swap_after_refresh_still_cannot_mutate_replacement(app, 
 
     monkeypatch.setattr(task_service, "refresh_same_task", replace_after_refresh)
     async with sm() as db:
-        with pytest.raises(ConflictError):
+        with pytest.raises(UnauthorizedError):
             await getattr(task_service, operation)(db, app.state.task_engine, owner_id, original.id)
     await _assert_replacement_intact(app, original, new_key, "paused")

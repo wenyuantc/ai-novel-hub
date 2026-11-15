@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline, Project, SettingTimeline
+from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline, Project, SeriesBook, SettingTimeline
 from app.models.planning import (
     PlanningTag,
     PlanningUnit,
@@ -22,12 +22,12 @@ from app.models.planning import (
 )
 from app.models.scenes import Scene
 from app.schemas import planning as s
+from app.services import authorization_service, series_policy, series_read
 from app.services import planning_queries as query
-from app.services import series_policy
 from app.services.audit_writer import AuditOperation
 from app.services.mentions.context import MentionCandidate, candidate_dictionary, load_candidates
 from app.services.mentions.matcher import cache, match_entities
-from app.services.project_service import get_manageable_project
+from app.services.project_access import require_project, resolve_access
 
 
 def _stale(revision: int) -> ConflictError:
@@ -43,7 +43,7 @@ def _stale(revision: int) -> ConflictError:
 @asynccontextmanager
 async def _editing(db: AsyncSession, user_id: int, project_id: int, expected_revision: int):
     async with AuditOperation(db, user_id, "planning.update", "project", project_id, project_id=project_id) as audit:
-        project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+        project = await require_project(db, user_id, project_id, "content.edit", for_update=True)
         current = await query.revision(db, project_id)
         if current != expected_revision:
             raise _stale(current)
@@ -64,7 +64,7 @@ async def _editing(db: AsyncSession, user_id: int, project_id: int, expected_rev
 
 async def _snapshot(db: AsyncSession, user_id: int, project_id: int, reader):
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        await require_project(db, user_id, project_id, "content.read")
         for _ in range(2):
             before = await query.revision(db, project_id)
             result = await reader()
@@ -117,7 +117,9 @@ async def resolve_source(db: AsyncSession, project_id: int, source: s.PlanningSo
     plan = None
     if source.kind == "plan":
         plan = await db.scalar(
-            select(ChapterPlan).join(Outline).where(ChapterPlan.id == source.id, Outline.project_id == project_id)
+            select(ChapterPlan).join(Outline).where(
+                ChapterPlan.id == source.id, ChapterPlan.project_id == project_id, Outline.project_id == project_id,
+            )
         )
         if plan is None:
             raise NotFoundError("细纲不存在")
@@ -140,6 +142,7 @@ async def resolve_source(db: AsyncSession, project_id: int, source: s.PlanningSo
                 .where(
                     ChapterPlan.id == chapter.plan_id,
                     ChapterPlan.chapter_id == chapter.id,
+                    ChapterPlan.project_id == project_id,
                     Outline.project_id == project_id,
                 )
             )
@@ -361,6 +364,12 @@ async def list_entries(
             })
             for entry_kind in ("character", "world")
         }
+        project, access, _ = await resolve_access(db, user_id, project_id)
+        if access.is_collaborator and not await authorization_service.allows(db, user_id, "projects.read"):
+            series_id = await db.scalar(select(SeriesBook.series_id).where(SeriesBook.project_id == project.id))
+            visible = await series_read.visible_series_ids(db, user_id, {series_id} if series_id else set())
+            if series_id not in visible:
+                shared = {entry_kind: set() for entry_kind in shared}
         items = []
         for item in current:
             ref = item.reference

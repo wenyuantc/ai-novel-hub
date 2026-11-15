@@ -1,12 +1,14 @@
-import { Alert, App, Button, Popconfirm, Progress, Space, Spin, Typography } from 'antd'
+import { Alert, App, Button, Progress, Space, Spin, Typography } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { errorMessage } from '../../api/client'
-import { queueLabel, TASK_STATUS, taskApi, taskReviewIdentity } from '../../api/tasks'
+import { hasTaskIdentity, queueLabel, TASK_STATUS, taskApi, taskReviewIdentity } from '../../api/tasks'
 import type { BatchChapterStart, BatchItem, Task } from '../../api/types'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
+import { captureProjectScope, isProjectScopeCurrent } from '../../stores/project'
 import { batchBannerState, batchCheckpoint, batchCounts, batchCurrentPhase, batchResumeIndex, batchStageIndex } from '../../utils/batch'
 import RichReviewModal from '../scenes/RichReviewModal'
+import TaskActionConfirm from '../TaskActionConfirm'
 
 // 清单 / 实时输出只在展开时加载（章节页在入口 chunk 中）
 const BatchProgressView = lazy(() => import('./BatchProgressView'))
@@ -51,11 +53,11 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
   })
 
   useEffect(() => {
-    if (!live) return
+    if (!live || !hasTaskIdentity(task)) return
     let alive = true
     const reloadCheckpoint = () => {
       taskApi
-        .get(task.id)
+        .get({ id: task.id, task_key: task.task_key })
         .then((t) => {
           const cp = batchCheckpoint(t.checkpoint)
           if (alive && cp) setLiveItems(cp.items)
@@ -94,6 +96,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
       else void refreshTasks()
       changedRef.current()
       if (outcome.status === 'paused') message.info('批量生成已到审核点，检查修改后可点「继续」')
+      else if (outcome.status === 'succeeded' && outcome.unpublished) message.info(outcome.detail)
       else if (outcome.status === 'succeeded') message.success('批量生成完成')
     })
     return () => {
@@ -102,24 +105,29 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
     }
     // 只按任务 id 与是否运行订阅；task 对象每次轮询都会变化
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.id, live, follow, detach])
+  }, [task.id, task.task_key, live, follow, detach])
 
   const act = async (fn: () => Promise<Task>, done: string) => {
+    const scope = task.project_id === null ? null : captureProjectScope(task.project_id)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
     setBusy(true)
     try {
-      track(await fn())
+      const result = await fn()
+      if (!isProjectScopeCurrent(scope, 'canUseAI')) return
+      track(result)
       message.success(done)
       onChaptersChanged()
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope, 'canUseAI')) message.error(errorMessage(err))
     } finally {
       setBusy(false)
     }
   }
 
   if (state === 'none') return null
+  const identified = hasTaskIdentity(task)
 
-  const view = live && stream.task?.id === task.id ? stream.task : task
+  const view = live && stream.task?.id === task.id && stream.task.task_key === task.task_key ? stream.task : task
   const items = liveItems ?? batchCheckpoint(view.checkpoint)?.items ?? batchCheckpoint(task.checkpoint)?.items ?? []
   const counts = batchCounts(items)
   const resumeIndex = state === 'resumable' ? batchResumeIndex(task) : null
@@ -146,17 +154,18 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
       </Space>
     )
     actions = (
-      <Popconfirm
+      <TaskActionConfirm
+        task={task}
         title="取消批量生成？"
         description="已完成的章节保留，正在写的章节恢复原状态。"
         okText="取消任务"
         cancelText="不取消"
-        onConfirm={() => act(() => taskApi.cancel(task.id, taskReviewIdentity(task)), '已取消')}
+        onConfirm={(selected) => act(() => taskApi.cancel(selected, taskReviewIdentity(selected)), '已取消')}
       >
-        <Button size="small" danger loading={busy}>
+        <Button size="small" danger loading={busy} disabled={!identified}>
           取消
         </Button>
-      </Popconfirm>
+      </TaskActionConfirm>
     )
   } else if (state === 'paused') {
     type = 'warning'
@@ -170,21 +179,22 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
     )
     actions = (
       <Space>
-        {task.rich_review?.phase === 'awaiting_review' && <Button size="small" type="primary" onClick={() => setReviewing(true)}>核对候选</Button>}
-        <Button size="small" type="primary" loading={busy} disabled={task.rich_review?.phase === 'awaiting_review'} onClick={() => void act(() => taskApi.resume(task.id), '已继续')}>
+        {task.rich_review?.phase === 'awaiting_review' && <Button size="small" type="primary" disabled={!identified || task.rich_review.task_key !== task.task_key} onClick={() => setReviewing(true)}>核对候选</Button>}
+        <Button size="small" type="primary" loading={busy} disabled={!identified || task.rich_review?.phase === 'awaiting_review'} onClick={() => void act(() => taskApi.resume(task), '已继续')}>
           继续
         </Button>
-        <Popconfirm
+        <TaskActionConfirm
+          task={task}
           title="结束批量生成？"
           description={task.rich_review?.phase === 'awaiting_review' ? '当前章候选将被放弃，已完成章节保留。' : '已完成的章节保留，剩余章节不再生成。'}
           okText="结束"
           cancelText="不结束"
-          onConfirm={() => act(() => taskApi.finish(task.id, taskReviewIdentity(task)), '已结束')}
+          onConfirm={(selected) => act(() => taskApi.finish(selected, taskReviewIdentity(selected)), '已结束')}
         >
-          <Button size="small" disabled={busy}>
+          <Button size="small" disabled={busy || !identified}>
             结束
           </Button>
-        </Popconfirm>
+        </TaskActionConfirm>
       </Space>
     )
   } else {
@@ -204,7 +214,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
     )
     actions = (
       <Space>
-        <Button size="small" type="primary" loading={busy} onClick={() => void act(() => taskApi.retry(task.id), '已重新提交')}>
+        <Button size="small" type="primary" loading={busy} disabled={!identified} onClick={() => void act(() => taskApi.retry(task), '已重新提交')}>
           {resumeNo !== null && resumeNo !== undefined ? `从第 ${resumeNo} 章续跑` : '续跑'}
         </Button>
         <Button size="small" type="text" onClick={onDismiss}>
@@ -223,6 +233,7 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
       action={actions}
       description={
         <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          {!identified && <Typography.Text type="warning">任务身份不可确认，请刷新任务列表。</Typography.Text>}
           {state === 'running' && (
             <Progress
               percent={view.progress}
@@ -246,6 +257,6 @@ export default function BatchBanner({ task, onChaptersChanged, onDismiss }: Prop
           )}
         </Space>
       }
-    />{reviewing && <RichReviewModal key={`${task.id}:${task.rich_review?.run_key}`} task={task} onClose={() => setReviewing(false)} onChanged={(updated) => { track(updated); onChaptersChanged(); void refreshTasks() }} />}</>
+    />{reviewing && <RichReviewModal key={`${task.id}:${task.task_key}:${task.rich_review?.run_key}`} task={task} onClose={() => setReviewing(false)} onChanged={(updated) => { track(updated); onChaptersChanged(); void refreshTasks() }} />}</>
   )
 }

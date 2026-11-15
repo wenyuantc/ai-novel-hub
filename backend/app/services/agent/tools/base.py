@@ -18,7 +18,11 @@ from app.services.project_transfer.remap import RemapContext, setting_event_valu
 from app.services.task_engine.registry import TaskContext
 
 if TYPE_CHECKING:
+    from app.services.agent.transactions import AgentAuditCoordinator
+    from app.services.collaboration_task_access import GrantIdentity
+    from app.services.project_ai_config import ResolvedProjectModel
     from app.services.setting_ai_context import AiScope
+    from app.services.task_engine.execution_identity import TaskExecutionIdentity
 
 ToolKind = Literal["read", "small", "delete", "task", "text", "external"]
 Preview = dict[str, Any]
@@ -31,8 +35,17 @@ class ToolCtx:
     user_id: int
     task_context: TaskContext
     scope: "AiScope | None" = None
-    # 审批服务已在本事务取得项目锁并验证 scope 时，预览和执行复用该门禁。
+    # 审批服务已在本事务取得发送写门禁、项目锁并验证 scope 时，预览和执行不再重取门禁、不重验 scope；
+    # 但 Agent 写能力（作者 / 原轮次 accepted editor）仍在每次写前锁后复核，不能因此跳过。
     visibility_locked: bool = False
+    # 由根事务持有；所有嵌套工具共用同一个协调器，不能在保存点内持久化失败审计。
+    audit_coordinator: "AgentAuditCoordinator | None" = None
+    # 轮次绑定的协作授权 (invitation_id, revision)；作者轮次为 None。
+    grant: "GrantIdentity | None" = None
+    # 协作轮次（E4i-c）：当前已证明的执行身份与冻结文本模型绑定，仅供检索工具建立 for_task 守卫；
+    # 作者轮次、确认路径为 None（缺失时检索只用关键词，不调用作者向量）。
+    execution: "Callable[[], TaskExecutionIdentity] | None" = None
+    text_binding: "ResolvedProjectModel | None" = None
 
     @property
     def project_id(self) -> int:
@@ -40,11 +53,30 @@ class ToolCtx:
         return inspect(self.project).identity[0]
 
 
+def collaborative(ctx: ToolCtx, flag: str = "manual") -> dict[str, bool]:
+    """协作轮次（带原 grant）改走 service 的协作者分支（`manual=True` / `manage=True`）。
+
+    该分支只要求 `content.read/edit`，管理员人工来源也会放行；写工具的 Agent 能力（作者，或原轮次
+    accepted editor + `ai.use`）已由 `_lock_write` 在同一事务锁后先行判定，管理员 `projects.edit` 不能补足。
+    作者轮次不传参数，沿用原严格作者 / 管理员入口，行为不变。
+    """
+    return {flag: True} if ctx.grant is not None else {}
+
+
 class TransactionSession:
     """复用现有 service，而不允许它提交或回滚调用方的审批事务。"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(
+        self, db: AsyncSession, *, audit_coordinator: "AgentAuditCoordinator | None" = None,
+        audit_mode: Literal["preview", "execute"] = "execute",
+    ):
         self.db = db
+        if audit_coordinator is not None:
+            from app.services.agent.transactions import AgentAuditScope
+
+            self._agent_audit_scope = AgentAuditScope(audit_coordinator, audit_mode)
+        else:
+            self._agent_audit_scope = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.db, name)
@@ -57,14 +89,18 @@ class TransactionSession:
         pass
 
 
-async def lock_project(db: AsyncSession, project_id: int, user_id: int) -> None:
+async def lock_project(
+    db: AsyncSession, project_id: int, user_id: int, *, grant: "GrantIdentity | None" = None,
+    visibility_write: bool = True,
+) -> None:
     """串行项目写入，并在 SQLite legacy 模式中确保 SAVEPOINT 外已有物理事务。
 
-    显式保留 updated_at，防止 SQLAlchemy onupdate 将无值变化的行锁变成项目编辑。
+    锁后要求作者本人，或原邀请轮次的 accepted editor（`ai.use`）；管理员人工来源不并入。
+    授权失效抛 `AgentAuthorizationChangedError` 终止本轮。父行锁显式保留 updated_at。
     """
-    from app.services.setting_ai_visibility import lock_author_visibility_write
+    from app.services.agent.access import lock_agent_write
 
-    await lock_author_visibility_write(db, user_id, project_id, manage=False)
+    await lock_agent_write(db, user_id, project_id, grant=grant, visibility_write=visibility_write)
 
 
 class EmptyArgs(BaseModel):
@@ -155,10 +191,13 @@ class Tool:
             return error_result(exc, scoped=ctx.scope is not None)
 
     async def _lock_write(self, ctx: ToolCtx) -> None:
-        if not ctx.visibility_locked:
-            await lock_project(ctx.db, ctx.project_id, ctx.user_id)
-            if ctx.scope is not None:
-                await ctx.scope.verify(ctx.db)
+        # 确认 / 自动执行路径（visibility_locked）同事务已持发送写门禁；能力复核仍须执行，
+        # 否则管理员人工来源或已降级成员可沿确认路径写入（硬约束：确认路径不得跳过工具内复核）。
+        await lock_project(
+            ctx.db, ctx.project_id, ctx.user_id, grant=ctx.grant, visibility_write=not ctx.visibility_locked,
+        )
+        if not ctx.visibility_locked and ctx.scope is not None:
+            await ctx.scope.verify(ctx.db)
 
     async def preview(self, ctx: ToolCtx, args: dict) -> Preview:
         from app.services.agent import effects
@@ -170,7 +209,9 @@ class Tool:
             await self._lock_write(ctx)
             tx = await ctx.db.begin_nested()
             try:
-                scoped = replace(ctx, db=TransactionSession(ctx.db))
+                scoped = replace(ctx, db=TransactionSession(
+                    ctx.db, audit_coordinator=ctx.audit_coordinator, audit_mode="preview",
+                ))
                 if self.preview_operation is not None:
                     result = await self.preview_operation(scoped, data)
                 else:
@@ -217,10 +258,13 @@ class Tool:
                 raise BadRequestError("读工具不能执行修改")
             await self._lock_write(ctx)
             async with ctx.db.begin_nested():
-                value = await self.operation(replace(ctx, db=TransactionSession(ctx.db)), data)
+                scoped = TransactionSession(ctx.db, audit_coordinator=ctx.audit_coordinator, audit_mode="execute")
+                value = await self.operation(replace(ctx, db=scoped), data)
                 await ctx.db.flush()
                 result = serialized(value)
             return result if isinstance(result, dict) else {"items": result} if result is not None else {"ok": True}
+        except VisibilityPolicyError:
+            raise
         except (AppError, ValidationError) as exc:
             await ctx.db.refresh(ctx.project)
             return error_result(exc, scoped=ctx.scope is not None)

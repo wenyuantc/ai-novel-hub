@@ -91,6 +91,8 @@ export function useHasAIConfig(): boolean | null  // store 尚未加载时为 nu
 ```
 读取 `useAIConfigStore()`；它**不会**触发加载——由 `AIConfigSelect`（渲染在每个生成按钮旁边）调用 `load()`。调用方仅在明确为 `false` 时禁用生成按钮（`disabled={hasConfig === false || …}`），因此加载期间按钮不会被阻塞。
 
+含义是「当前上下文能否发起文本 AI」，由 `useAIModelSource('text')`（`src/hooks/useAIModelSource.ts`）派生：`loading` → null，`none` → false，`own`/`owner` → true。`useAIModelSource(modelType)` 读路由 `:pid`，作品路由内用 `projectAccess` 快照 + 本人该类型配置交给纯函数 `aiModelSource`（`utils/projectAccess.ts`）：作品快照未就绪或本人配置未加载 → `loading`；无 canUseAI（查看者/纯管理员）→ `none`；本人有该类型配置 → `own`（显式选择须属本人，本人配置无效由后端报错，不回退）；无本人配置且为 accepted 编辑者、`allow_owner_ai=true` → `owner`（留空 `ai_config_id=null`，后端回退作者默认配置，费用由作者承担）；作者本人永不 `owner`。作品外（无 `:pid`，如风格/拆书/灵感）与 `embedding` 只看本人配置，行为不变。仅作者入口（canUseOwnerAI：Agent、知识库/记忆检索调试、灵感）不受影响。
+
 ---
 
 ## 数据请求
@@ -149,6 +151,7 @@ export function isAbortError(err: unknown): boolean // DOMException 且 name ===
 - 解码器：`TextDecoder('utf-8')` 配合 `{ stream: true }`，使跨 chunk 拆分的多字节中文字符能正确解码；EOF 时执行最终的 `decoder.decode()` + `parser.flush()`；`onMessage` 返回 `false` 时立即结束读取，后续帧不再分派。中止时主动取消 reader，仍抛 `AbortError`；在 `finally` 中取消 reader 并执行 `reader.releaseLock()`，不能只释放锁而留下占用连接的响应体。
 
 - **任务订阅（`subscribeTask`）**：`GET /tasks/{id}/stream`，事件 `snapshot {task, text}`（每次（重）连接的首帧，**覆盖**本地文本，因此重连不重复不遗漏）/ `delta {text}` / `continue` / `progress {status, progress, stage, queue_position?}` / `done {task, result}` / `error {task, detail}`；`: ping` 心跳注释被解析器忽略。`done` → `{status: 'succeeded', result}`；`error` 按 `task.status` 区分 `cancelled` / `interrupted`，其余（含 `task` 为 null）为 `failed`。
+- **协作者受控流 `permission_denied`（E5-g）**：`error {task:null, code:'permission_denied'}` 只出现在协作者受控流（作者流不发此帧）。首次收到时立即停止交付后续帧，`taskApi.get` 核对详情：可读（任一状态，非终态继续/终态回放）则按 `min(baseDelayMs, maxDelayMs)` 退避后**只重订阅一次**（调 `onReconnect(1, delay)`，不计入网络重连次数）；详情 403/404/身份变化/读取失败、或重订阅后再次 `permission_denied`，按原语义处理（作品作用域：`onProjectAccessDenied` + 授权刷新 + 抛 403；个人任务：`failed` + detail）。重订阅握手 403/404 走 `getSSE` 原握手失效路径。这用于消化后端已记录的窗口（领取瞬间 5 秒等待、单帧租约超时、收据收尾后在途帧），不得改成循环重试。`done {unpublished:true}` 见 `TaskEnd`：成功但 `result=null`，调用方刷新而非使用结果。
 - **终态与空闲超时**：收到 `done` / `error` / `paused` 后立即结束订阅并释放连接，不等待 HTTP EOF。`getSSE` 从请求发起开始计时，连续 45 秒没有原始字节（覆盖响应头挂起与正文读取挂起）则以 `StreamError` 中止本次连接并交回 `subscribeTask` 重连；`: ping` 虽不产生业务事件，仍重置计时，后端 15 秒心跳足以维持模型等待。外部 signal 中止必须返回 `AbortError`、不重连，所有退出路径清理超时定时器和监听器。同步 POST 生成不启用此超时，避免重复提交生成请求。
 - **重连**：流结束但没有 `done`/`error`（`StreamError`）、网络错误（`ApiError(0)` / `TypeError`）、5xx、2xx 但非流式 → 按 `reconnectDelay` 退避后重连，触发 `onReconnect`；只有收到 `snapshot` **且**该连接存活满 `stableMs`（5 秒）后才断开，才把连续失败计数清零——「连上即断」反复循环时计数继续累计、退避加长并最终放弃，不会无限 ~1s 重连；连续失败超过 `maxRetries` 抛最后一次错误。4xx（401 / 404 `任务不存在`）不重连，直接抛 `ApiError`。中止（含等待重连期间）抛 `AbortError`，只断开订阅、不影响任务。
 

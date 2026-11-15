@@ -560,7 +560,9 @@ async def test_typed_fields_are_trimmed_inside_the_existing_context_budget(app, 
         project = await db.get(Project, data["pid"])
         chapter = await db.get(Chapter, data["chapters"][5])
         if builder == "chapter":
-            text = await context_builder.build_chapter_context(db, project, chapter, 1000)
+            text = await context_builder.build_chapter_context(
+                db, project, chapter, 1000, actor_user_id=project.user_id,
+            )
         else:
             text = await context_builder.build_setting_context(db, project, chapter, budget=1000)
         assert len(text) <= 1000
@@ -598,7 +600,7 @@ async def test_context_rejects_catalog_changes_between_projection_batches(app, c
         chapter = await db.get(Chapter, data["chapters"][5])
         with pytest.raises(ConflictError) as error:
             if builder == "chapter":
-                await context_builder.build_chapter_context(db, project, chapter, 20000)
+                await context_builder.build_chapter_context(db, project, chapter, 20000, actor_user_id=project.user_id)
             elif builder == "setting":
                 await context_builder.build_setting_context(db, project, chapter, budget=20000)
             elif builder == "planning":
@@ -632,7 +634,9 @@ async def test_ordinary_context_rejects_a_different_catalog_than_its_planning_bl
         )
         with pytest.raises(ConflictError) as error:
             if builder == "chapter":
-                await context_builder.build_chapter_context(db, project, chapter, 20000, planning=planning)
+                await context_builder.build_chapter_context(
+                    db, project, chapter, 20000, actor_user_id=project.user_id, planning=planning,
+                )
             else:
                 await context_builder.build_setting_context(db, project, chapter, budget=20000, planning=planning)
         assert error.value.extra["code"] == "stale_revision"

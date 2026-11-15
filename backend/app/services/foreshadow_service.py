@@ -27,7 +27,8 @@ from app.schemas.foreshadow import (
     PlantRequest,
     ResolveRequest,
 )
-from app.services.chapter_service import get_manageable_chapter
+from app.services import project_access
+from app.services.chapter_service import get_manageable_chapter, get_manual_chapter
 from app.services.project_service import get_manageable_project
 
 NOT_FOUND = "伏笔不存在"
@@ -271,8 +272,13 @@ async def _out(db: AsyncSession, fs: Foreshadow) -> ForeshadowOut:
 # ---------------- CRUD ----------------
 
 
-async def get_owned_foreshadow(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> Foreshadow:
-    await get_manageable_project(db, user_id, project_id)
+async def get_owned_foreshadow(
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, *, manual: bool = False,
+) -> Foreshadow:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
     fs = await db.scalar(select(Foreshadow).where(Foreshadow.id == foreshadow_id, Foreshadow.project_id == project_id))
     if fs is None:
         raise NotFoundError(NOT_FOUND)
@@ -297,13 +303,21 @@ async def list_foreshadows(
     long_term: bool = False,
     character_id: int | None = None,
     sort: str = "planned_resolve",
+    manual: bool = False,
 ) -> list[ForeshadowOut]:
     """筛选：状态、仅超期、仅长线、关联角色；排序：计划回收章（空值在后）或重要度（高在前）。"""
-    await get_manageable_project(db, user_id, project_id)
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
     stmt = select(Foreshadow).where(Foreshadow.project_id == project_id)
     if status is not None:
         stmt = stmt.where(Foreshadow.status == status)
     if character_id is not None:
+        if manual and await db.scalar(select(Character.id).where(
+            Character.id == character_id, Character.project_id == project_id,
+        )) is None:
+            raise NotFoundError("角色不存在")
         stmt = stmt.where(
             Foreshadow.id.in_(
                 select(ForeshadowCharacter.foreshadow_id).where(ForeshadowCharacter.character_id == character_id)
@@ -322,13 +336,24 @@ async def list_foreshadows(
     return await outs(db, items, current_no)
 
 
-async def get_foreshadow(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> ForeshadowOut:
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+async def get_foreshadow(
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, *, manual: bool = False,
+) -> ForeshadowOut:
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     return (await outs(db, [fs], await current_chapter(db, project_id)))[0]
 
 
-async def create_foreshadow(db: AsyncSession, user_id: int, project_id: int, data: ForeshadowCreate) -> ForeshadowOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+async def _write_project(db: AsyncSession, user_id: int, project_id: int, *, manual: bool) -> None:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.edit", for_update=True)
+    else:
+        await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+
+
+async def create_foreshadow(
+    db: AsyncSession, user_id: int, project_id: int, data: ForeshadowCreate, *, manual: bool = False,
+) -> ForeshadowOut:
+    await _write_project(db, user_id, project_id, manual=manual)
     fs = Foreshadow(project_id=project_id, source="manual")
     await apply_foreshadow(db, fs, data.model_dump(), source="manual")
     await db.commit()
@@ -336,10 +361,16 @@ async def create_foreshadow(db: AsyncSession, user_id: int, project_id: int, dat
 
 
 async def update_foreshadow(
-    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: ForeshadowUpdate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    foreshadow_id: int,
+    data: ForeshadowUpdate,
+    *,
+    manual: bool = False,
 ) -> ForeshadowOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     fields = data.model_fields_set
     values: dict[str, Any] = {}
     for f in TRACKED_FIELDS:
@@ -357,18 +388,20 @@ async def update_foreshadow(
     return await _out(db, fs)
 
 
-async def delete_foreshadow(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+async def delete_foreshadow(
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, *, manual: bool = False,
+) -> None:
+    await _write_project(db, user_id, project_id, manual=manual)
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     await db.delete(fs)
     await db.commit()
 
 
 async def plant(
-    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: PlantRequest
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: PlantRequest, *, manual: bool = False,
 ) -> ForeshadowOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     values: dict[str, Any] = {"status": "planted"}
     if data.chapter_no is not None:
         values["actual_plant_chapter"] = data.chapter_no
@@ -378,10 +411,10 @@ async def plant(
 
 
 async def resolve(
-    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: ResolveRequest
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, data: ResolveRequest, *, manual: bool = False,
 ) -> ForeshadowOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     values: dict[str, Any] = {"status": "partial" if data.partial else "resolved"}
     if data.chapter_no is not None:
         values["actual_resolve_chapter"] = data.chapter_no
@@ -390,18 +423,20 @@ async def resolve(
     return await _out(db, fs)
 
 
-async def abandon(db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int) -> ForeshadowOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+async def abandon(
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, *, manual: bool = False,
+) -> ForeshadowOut:
+    await _write_project(db, user_id, project_id, manual=manual)
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     await apply_foreshadow(db, fs, {"status": "abandoned"}, source="manual")
     await db.commit()
     return await _out(db, fs)
 
 
 async def list_history(
-    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int
+    db: AsyncSession, user_id: int, project_id: int, foreshadow_id: int, *, manual: bool = False,
 ) -> list[ForeshadowHistoryOut]:
-    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id)
+    fs = await get_owned_foreshadow(db, user_id, project_id, foreshadow_id, manual=manual)
     rows = await db.scalars(
         select(ForeshadowHistory).where(ForeshadowHistory.foreshadow_id == fs.id).order_by(ForeshadowHistory.id.desc())
     )
@@ -419,8 +454,11 @@ async def list_history(
     ]
 
 
-async def stats(db: AsyncSession, user_id: int, project_id: int) -> ForeshadowStats:
-    await get_manageable_project(db, user_id, project_id)
+async def stats(db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False) -> ForeshadowStats:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
     items = await project_foreshadows(db, project_id)
     current_no = await current_chapter(db, project_id)
     result = ForeshadowStats(current_chapter=current_no)
@@ -548,8 +586,13 @@ def reminder_lines(rem: Reminders) -> dict[str, list[str]]:
     }
 
 
-async def chapter_reminders(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> ForeshadowReminders:
-    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+async def chapter_reminders(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, manual: bool = False,
+) -> ForeshadowReminders:
+    chapter = (
+        await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read") if manual else
+        await get_manageable_chapter(db, user_id, project_id, chapter_id)
+    )
     rem = await reminders(db, project_id, chapter.chapter_no)
     n = chapter.chapter_no
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgressUpdate
-from app.services import export_service
+from app.services import export_service, project_access
 from app.services import project_service as svc
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -18,12 +18,12 @@ async def list_projects(user: CurrentUser, db: DbDep) -> list[ProjectOut]:
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(body: ProjectCreate, user: CurrentUser, db: DbDep) -> ProjectOut:
     project, notice = await svc.create_project(db, user.id, body)
-    return await svc.project_out(db, project, notice)
+    return await svc.project_out(db, project, notice, actor_user_id=user.id)
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: int, user: CurrentUser, db: DbDep) -> ProjectOut:
-    project = await svc.get_manageable_project(db, user.id, project_id)
+    project = await project_access.require_project(db, user.id, project_id, "content.read")
     return await svc.project_out(db, project, actor_user_id=user.id)
 
 
@@ -57,15 +57,15 @@ async def export_project(
     author: Annotated[str | None, Query(max_length=export_service.AUTHOR_LIMIT)] = None,
     include_synopsis: Annotated[bool, Query()] = True,
 ) -> Response:
-    """EPUB：author 默认取用户名；include_synopsis 控制是否生成简介页。跳过的空章节经 X-Export-Warnings 返回。"""
+    """EPUB 默认署作品作者；可通过 author 覆盖，空章节提示放在 X-Export-Warnings。"""
     ids = export_service.parse_chapter_ids(chapter_ids)
-    file = await export_service.export_project(
+    file = await export_service.export_manual_project(
         db,
         user.id,
         project_id,
         format,
         ids,
-        author=user.username if author is None else author,
+        author=author,
         include_synopsis=include_synopsis,
     )
     headers = {"Content-Disposition": file.content_disposition}

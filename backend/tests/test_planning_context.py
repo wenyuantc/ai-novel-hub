@@ -341,7 +341,8 @@ async def test_relationship_reference_is_effective_at_target_chapter_even_withou
         assert "本章开始时没有有效关系" in previews[25].text
         assert "关系参考人物（不额外要求出场）" in previews[15].text
         normal = await context_builder.build_chapter_context(
-            db, project, await db.get(Chapter, data["chapters"][15]), 10000, planning=previews[15]
+            db, project, await db.get(Chapter, data["chapters"][15]), 10000,
+            actor_user_id=project.user_id, planning=previews[15],
         )
         assert "两人曾于星桥盟誓" not in normal  # 已在锁定的显式关系块中，只出现一次。
 
@@ -395,10 +396,14 @@ async def test_only_tags_preserves_old_context_and_only_crossing_still_has_plann
         await db.flush()
         db.add(PlanningUnitTag(unit_id=unit.id, tag_id=tag.id))
         await db.flush()
-        baseline = await context_builder.build_chapter_context(db, project, chapter, 4000)
+        baseline = await context_builder.build_chapter_context(
+            db, project, chapter, 4000, actor_user_id=project.user_id,
+        )
         planning = await planning_context_service.load_planning_context(db, project, "chapter", chapter.id)
         assert planning.text == "" and planning.reserved_chars == 0
-        assert await context_builder.build_chapter_context(db, project, chapter, 4000, planning=planning) == baseline
+        assert await context_builder.build_chapter_context(
+            db, project, chapter, 4000, actor_user_id=project.user_id, planning=planning,
+        ) == baseline
         event = SubplotCrossing(
             project_id=project.id, unit_id=unit.id, title="单独事件", description="没有普通节点仍是交汇"
         )
@@ -550,6 +555,7 @@ async def test_budget_accounts_for_protected_block_and_reports_truncation(app, c
             project,
             chapter,
             1600 - planning.reserved_chars,
+            actor_user_id=project.user_id,
             planning=planning,
         )
         assert len(ordinary) + planning.reserved_chars <= 1600

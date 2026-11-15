@@ -1,10 +1,13 @@
 """批量顺序生成（chapter.batch）：跳过 / 重写、顺序与上下文、任务内分析、失败重试与续跑、审核点、范围锁、
 取消 / 中断、目标字数、预览与校验，以及引擎对 paused 状态的处理。"""
 
+import asyncio
+
 import pytest
 from sqlalchemy import update
 
 from app.ai.providers import AIProviderError
+from app.core.errors import BadRequestError, ConflictError
 from app.models import Chapter, Task
 from app.services import batch_service, generation_service
 from tests.helpers import (
@@ -15,6 +18,7 @@ from tests.helpers import (
     register,
     run_task,
     stream_task,
+    task_params,
     wait_task,
     wait_until,
 )
@@ -74,7 +78,27 @@ async def test_skips_written_and_include_written_keeps_versions(app, client, fak
     _, base, (c1, c2, c3), _ = await _setup(client, ["", "已写好的第二章", ""])
     fake_llm.push("第一章正文")
     fake_llm.push("第三章正文")
-    task, events = await run_task(client, await _start(client, base, c1, c3))
+    engine = app.state.task_engine
+    await engine.stop()
+    response = await _start(client, base, c1, c3)
+    assert response.status_code == 202, response.text
+    task_ref = response.json()
+    stream = asyncio.create_task(stream_task(client, task_ref))
+    try:
+        # 先注册订阅再开调度，事件不回放，确保逐章事件的计数测量完整。
+        await wait_until(lambda: (
+            (hub := engine.hubs.get(task_ref["id"])) is not None
+            and hub.statistics_key == task_ref["task_key"] and hub.subscriber_count > 0
+        ))
+        await engine.start()
+        events = await stream
+    finally:
+        if not stream.done():
+            stream.cancel()
+            await asyncio.gather(stream, return_exceptions=True)
+        if not engine.running:
+            await engine.start()
+    task = events[-1][1]["task"]
     assert task["status"] == "succeeded" and task["kind"] == "chapter.batch"
     assert task["chapter_id"] is None and task["title"] == "批量生成 第1–3章"
     result = events[-1][1]["result"]
@@ -126,7 +150,8 @@ async def test_sequential_context_with_analysis_writeback(app, client, fake_llm)
     assert {s["status"] for s in states} == {"analyzed"}
     assert any(e == "progress" and "分析中" in d["stage"] for e, d in events)
     # 每章开始前清空实时输出：任务输出只保留最后一章
-    assert (await client.get(f"/api/v1/tasks/{task['id']}/output")).json()["text"] == "第二章正文"
+    output = await client.get(f"/api/v1/tasks/{task['id']}/output", params=task_params(task))
+    assert output.json()["text"] == "第二章正文"
 
 
 @pytest.mark.parametrize("settings_overrides", [AUTO_ON])
@@ -181,7 +206,7 @@ async def test_failure_stops_and_retry_resumes(app, client, fake_llm):
 
     fake_llm.push("第二章正文")
     fake_llm.push("第三章正文")
-    resp = await client.post(f"/api/v1/tasks/{task['id']}/retry")
+    resp = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
     retried, _ = await run_task(client, resp)
     assert retried["status"] == "succeeded" and retried["retry_of_id"] == task["id"]
     assert len(fake_llm.calls) == 6  # 已完成的第 1 章不重写
@@ -218,29 +243,54 @@ async def test_retry_succeeds_on_second_attempt(app, client, fake_llm):
 
 
 async def test_build_error_not_retried_and_restores_chapter(app, client, fake_llm, monkeypatch):
-    """组装阶段的业务错误（如模型配置被删）不重试：任务失败，当前章还原。"""
+    """第二章组装阶段业务错误不重试，第一章保留、当前章还原。"""
     builds: list[int] = []
     original_build = generation_service.build_chapter_job
 
     async def counting_build(db, **kw):
         builds.append(kw["chapter_id"])
+        if len(builds) == 2:
+            raise BadRequestError("测试章节组装失败")
         return await original_build(db, **kw)
 
     monkeypatch.setattr(generation_service, "build_chapter_job", counting_build)
     _, base, (c1, c2), _ = await _setup(client, ["", ""])
+    fake_llm.push("第一章正文")
+    task_ref = (await _start(client, base, c1, c2)).json()
+    task = await wait_task(client, task_ref, within=20)
+    assert task["status"] == "failed" and task["step_cursor"] == 1, (task, builds, fake_llm.calls)
+    assert len(fake_llm.calls) == 1
+    assert builds == [c1["id"], c2["id"]]  # 第 2 章只组装一次，不重试
+    first, second = await _chapter(app, c1["id"]), await _chapter(app, c2["id"])
+    assert first.status == "done" and first.content == "第一章正文"
+    assert second.status == "draft" and second.content == ""
+    assert first.generation_claim_key is None and second.generation_claim_key is None
+
+
+async def test_model_removed_during_first_stream_blocks_commit_and_releases_claim(app, client, fake_llm):
+    """模型流中撤销原配置后，不得保存旧输出或推进游标。"""
+    _, base, (c1, c2), _ = await _setup(client, ["", ""])
     cfg = (await client.get("/api/v1/ai-configs")).json()[0]
     gate = Gate()
     fake_llm.push(["第一章", gate, "正文"])
-    task_id = (await _start(client, base, c1, c2)).json()["id"]
-    await gate.wait_reached()
-    assert (await client.delete(f"/api/v1/ai-configs/{cfg['id']}")).status_code == 204
-    gate.release()
-    task = await wait_task(client, task_id)
-    assert task["status"] == "failed" and task["step_cursor"] == 1
+    task_ref = (await _start(client, base, c1, c2)).json()
+    try:
+        await gate.wait_reached()
+        original = await _chapter(app, c1["id"])
+        assert original.status == "generating" and original.generation_claim_key is not None
+        assert original.generation_claim_task_key == task_ref["task_key"]
+        assert (await client.delete(f"/api/v1/ai-configs/{cfg['id']}")).status_code == 204
+    finally:
+        gate.release()
+    task = await wait_task(client, task_ref)
+    assert task["status"] == "failed" and task["step_cursor"] == 0
     assert len(fake_llm.calls) == 1
-    assert builds == [c1["id"], c2["id"]]  # 第 2 章只组装一次，不重试
-    row = await _chapter(app, c2["id"])
-    assert row.status == "draft" and row.content == ""
+    for chapter_id in (c1["id"], c2["id"]):
+        chapter = await _chapter(app, chapter_id)
+        assert chapter.status == "draft" and chapter.content == ""
+        assert chapter.generation_claim_key is None and chapter.generation_claim_task_key is None
+        assert (await client.get(f"{base}/chapters/{chapter_id}/versions")).json() == []
+    assert task["checkpoint"]["current"] is None
 
 
 async def test_future_chapter_deleted_during_current_proposal_invalidates_planning_snapshot(app, client, fake_llm):
@@ -248,15 +298,17 @@ async def test_future_chapter_deleted_during_current_proposal_invalidates_planni
     gate = Gate()
     fake_llm.push(["第一章", gate, "正文"])
     fake_llm.push("第三章正文")
-    task_id = (await _start(client, base, c1, c3)).json()["id"]
+    task_ref = (await _start(client, base, c1, c3)).json()
     await gate.wait_reached()
     assert (await client.delete(f"{base}/chapters/{c2['id']}")).status_code == 204
     gate.release()
-    task = await wait_task(client, task_id)
+    task = await wait_task(client, task_ref)
     # 场景设计 §8：删除章会推进项目规划版本，不能给已发送的当前章旧消息重签。
     # 这不是在下章构建前发现缺章的普通 skip；当前未提交提案必须失败且不半写。
     assert task["status"] == "failed" and task["step_cursor"] == 0
-    assert task["checkpoint"]["items"][0]["state"] == "failed"
+    # 引擎输出门禁在发布 delta 前即失败关闭（scene_context_changed），runner 不再有机会记录本项；
+    # 断点保留未完成的 pending 且已释放占用，重试会重新生成该章。
+    assert task["checkpoint"]["items"][0]["state"] == "pending" and task["checkpoint"]["current"] is None
     assert "已变化" in task["error"]
     assert (await _chapter(app, c1["id"])).content == (await _chapter(app, c3["id"])).content == ""
     assert len(fake_llm.calls) == 1
@@ -271,12 +323,13 @@ async def test_future_chapter_deleted_during_current_proposal_invalidates_planni
 async def test_paused_batch_does_not_hold_user_slot(app, client, fake_llm):
     """待审核不占每用户并发名额：上限为 1 时，暂停期间别的任务照常运行。"""
     _, base, (c1, c2, c3), _ = await _setup(client, ["", "", ""])
-    task_id = (await _start(client, base, c1, c2, review_every=1)).json()["id"]
-    await wait_task(client, task_id, statuses=PAUSED)
+    task_ref = (await _start(client, base, c1, c2, review_every=1)).json()
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=PAUSED)
     fake_llm.push("范围外的第三章")
     single, _ = await run_task(client, await client.post(f"/api/v1/chapters/{c3['id']}/generate", json={}))
     assert single["status"] == "succeeded"
-    assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["status"] == "paused"
+    assert (await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))).json()["status"] == "paused"
 
 
 async def test_review_pause_then_resume_uses_edits(app, client, fake_llm):
@@ -286,23 +339,24 @@ async def test_review_pause_then_resume_uses_edits(app, client, fake_llm):
     fake_llm.push("第二章正文")
     resp = await _start(client, base, c1, c4, review_every=2)
     assert resp.status_code == 202
-    task_id = resp.json()["id"]
-    events = await stream_task(client, task_id)
+    task_ref = resp.json()
+    task_id = task_ref["id"]
+    events = await stream_task(client, task_ref)
     assert events[-1][0] == "paused"
-    paused = await wait_task(client, task_id, statuses=PAUSED)
+    paused = await wait_task(client, task_ref, statuses=PAUSED)
     assert paused["stage"] == "待审核" and paused["finished_at"] is None
     assert paused["checkpoint"]["since_review"] == 0
     engine = app.state.task_engine
     await wait_until(lambda: task_id not in engine._running)
     # 订阅已暂停的任务：快照 + paused
-    assert [e for e, _ in await stream_task(client, task_id)] == ["snapshot", "paused"]
+    assert [e for e, _ in await stream_task(client, task_ref)] == ["snapshot", "paused"]
     # 「进行中」列表包含待审核；不能删除；重启恢复不影响
     active = (await client.get("/api/v1/tasks", params={"active": "true"})).json()
     assert [t["id"] for t in active] == [task_id]
-    resp = await client.delete(f"/api/v1/tasks/{task_id}")
+    resp = await client.delete(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))
     assert resp.status_code == 409 and "待审核" in resp.json()["detail"]
     await engine.recover()
-    assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["status"] == "paused"
+    assert (await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))).json()["status"] == "paused"
     # 待审核期间不能发起新批量
     resp = await _start(client, base, c3, c4)
     assert resp.status_code == 409 and resp.json()["detail"] == "已有进行中或待审核的批量生成"
@@ -313,16 +367,16 @@ async def test_review_pause_then_resume_uses_edits(app, client, fake_llm):
     ).status_code == 200
     fake_llm.push("第三章正文")
     fake_llm.push("第四章正文")
-    resp = await client.post(f"/api/v1/tasks/{task_id}/resume")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))
     assert resp.status_code == 202 and resp.json()["id"] == task_id and resp.json()["status"] == "queued"
-    final = await wait_task(client, task_id)
+    final = await wait_task(client, task_ref)
     assert final["status"] == "succeeded"  # 最后一章写完不再暂停
     gens = _gen_calls(fake_llm)
     assert len(gens) == 4
     assert "审核修改后的第二章" in _prompt(gens[2])
     assert (await _chapter(app, c4["id"])).content == "第四章正文"
     assert (await _task_result(app, task_id))["done"] == 4
-    resp = await client.post(f"/api/v1/tasks/{task_id}/resume")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))
     assert resp.status_code == 409
 
 
@@ -330,31 +384,33 @@ async def test_review_pause_frees_range_and_finish(app, client, fake_llm):
     _, base, (c1, c2, c3), _ = await _setup(client, ["", "", ""])
     fake_llm.push("第一章正文")
     resp = await _start(client, base, c1, c3, review_every=1)
-    task_id = resp.json()["id"]
-    await wait_task(client, task_id, statuses=PAUSED)
+    task_ref = resp.json()
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=PAUSED)
     # 待审核不锁范围：范围内章节可单独生成
     fake_llm.push("单独生成的第二章")
     single, _ = await run_task(client, await client.post(f"/api/v1/chapters/{c2['id']}/generate", json={}))
     assert single["status"] == "succeeded"
     # 结束：以已完成收尾
-    resp = await client.post(f"/api/v1/tasks/{task_id}/finish")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/finish", params=task_params(task_ref))
     assert resp.status_code == 200
     out = resp.json()
     assert out["status"] == "succeeded" and out["progress"] == 100 and out["finished_at"]
-    detail = (await client.get(f"/api/v1/tasks/{task_id}")).json()
+    detail = (await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))).json()
     task_row_result = await _task_result(app, task_id)
     assert task_row_result["ended_early"] is True and task_row_result["remaining"] == 2
     assert task_row_result["done"] == 1
     assert detail["status"] == "succeeded"
     assert (await _chapter(app, c3["id"])).content == ""
-    assert (await client.post(f"/api/v1/tasks/{task_id}/finish")).status_code == 409
+    assert (await client.post(f"/api/v1/tasks/{task_id}/finish", params=task_params(task_ref))).status_code == 409
 
 
 async def test_cancel_paused_batch(app, client, fake_llm):
     _, base, (c1, c2), _ = await _setup(client, ["", ""])
-    task_id = (await _start(client, base, c1, c2, review_every=1)).json()["id"]
-    await wait_task(client, task_id, statuses=PAUSED)
-    resp = await client.post(f"/api/v1/tasks/{task_id}/cancel")
+    task_ref = (await _start(client, base, c1, c2, review_every=1)).json()
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=PAUSED)
+    resp = await client.post(f"/api/v1/tasks/{task_id}/cancel", params=task_params(task_ref))
     assert resp.status_code == 200 and resp.json()["status"] == "cancelled"
     # 取消后可以发起新批量
     task, _ = await run_task(client, await _start(client, base, c1, c2))
@@ -375,11 +431,12 @@ async def test_cancel_after_paused_event_keeps_paused(app, client, fake_llm, mon
 
     monkeypatch.setattr(batch_service, "run_batch_job", run_then_block)
     _, base, (c1, c2), _ = await _setup(client, ["", ""])
-    task_id = (await _start(client, base, c1, c2, review_every=1)).json()["id"]
+    task_ref = (await _start(client, base, c1, c2, review_every=1)).json()
+    task_id = task_ref["id"]
     await gate.wait_reached()
-    resp = await client.post(f"/api/v1/tasks/{task_id}/cancel")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/cancel", params=task_params(task_ref))
     assert resp.status_code == 200 and resp.json()["status"] == "paused"
-    task = await wait_task(client, task_id, statuses=PAUSED)
+    task = await wait_task(client, task_ref, statuses=PAUSED)
     assert task["error"] == "" and task["step_cursor"] == 1
 
 
@@ -395,7 +452,7 @@ async def test_range_lock_and_single_batch_per_project(app, client, fake_llm):
     _, base, (c1, c2, c3, c4), _ = await _setup(client, ["", "", "", ""])
     gate = Gate()
     fake_llm.push(["第一章", gate, "正文"])
-    task_id = (await _start(client, base, c1, c3)).json()["id"]
+    task_ref = (await _start(client, base, c1, c3)).json()
     await gate.wait_reached()
     for path in ("generate", "polish"):
         resp = await client.post(f"/api/v1/chapters/{c2['id']}/{path}", json={})
@@ -414,7 +471,7 @@ async def test_range_lock_and_single_batch_per_project(app, client, fake_llm):
     assert (await client.patch(f"{base}/chapters/{c3['id']}", json={"title": "改名"})).status_code == 200
     gate.release()
     # 人工维护被允许不代表在飞行的旧项目规划快照仍可提交；改名推进规划版本。
-    assert (await wait_task(client, task_id))["status"] == "failed"
+    assert (await wait_task(client, task_ref))["status"] == "failed"
     assert (await _chapter(app, c1["id"])).content == ""
 
 
@@ -426,15 +483,17 @@ async def test_cancel_keeps_done_and_restores_current(app, client, fake_llm):
     gate = Gate()
     fake_llm.push("第一章正文")
     fake_llm.push(["第二章半截", gate, "后半"])
-    task_id = (await _start(client, base, c1, c2, include_written=True)).json()["id"]
+    task_ref = (await _start(client, base, c1, c2, include_written=True)).json()
+    task_id = task_ref["id"]
     await gate.wait_reached()
     assert (await _chapter(app, c2["id"])).status == "generating"
-    resp = await client.post(f"/api/v1/tasks/{task_id}/cancel")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/cancel", params=task_params(task_ref))
     assert resp.status_code == 200 and resp.json()["status"] == "cancelled"
     assert (await _chapter(app, c1["id"])).content == "第一章正文"
     row = await _chapter(app, c2["id"])
     assert row.status == "draft" and row.content == "旧稿"
-    assert (await client.get(f"/api/v1/tasks/{task_id}/output")).json()["text"] == "第二章半截"
+    output = await client.get(f"/api/v1/tasks/{task_id}/output", params=task_params(task_ref))
+    assert output.json()["text"] == "第二章半截"
 
 
 @pytest.mark.parametrize("settings_overrides", [AUTO_ON])
@@ -443,27 +502,34 @@ async def test_interrupt_then_retry_resumes_analysis_phase(app, client, fake_llm
     gate = Gate()
     fake_llm.push("第一章正文")
     fake_llm.push([gate, analysis_json()])
-    task_id = (await _start(client, base, c1, c2)).json()["id"]
+    task_ref = (await _start(client, base, c1, c2)).json()
+    task_id = task_ref["id"]
     await gate.wait_reached()
+    assert len(fake_llm.calls) == 2  # 第一章分析已进入发送，结果未知。
     engine = app.state.task_engine
     await engine.stop()
-    interrupted = (await client.get(f"/api/v1/tasks/{task_id}")).json()
+    interrupted = (await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))).json()
     assert interrupted["status"] == "interrupted"
     assert interrupted["checkpoint"]["phase"] == "analyze" and interrupted["checkpoint"]["current"] is None
     assert interrupted["step_cursor"] == 0  # 分析阶段中断：断点仍停在该章
     versions_before = (await client.get(f"{base}/chapters/{c1['id']}/versions")).json()
     await engine.start()
 
-    fake_llm.push(analysis_json())
     fake_llm.push("第二章正文")
     fake_llm.push(analysis_json())
-    retried, _ = await run_task(client, await client.post(f"/api/v1/tasks/{task_id}/retry"))
+    response = await client.post(f"/api/v1/tasks/{task_id}/retry", params=task_params(task_ref))
+    retried, events = await run_task(client, response)
     assert retried["status"] == "succeeded"
-    # 第 1 章只补做分析，不重写
+    # 第 1 章结果未知，不重复分析也不重写；第 2 章仍正常生成和分析。
     assert len(_gen_calls(fake_llm)) == 2
+    assert len(fake_llm.calls) == 4
     assert (await _chapter(app, c1["id"])).content == "第一章正文"
+    assert (await _chapter(app, c2["id"])).content == "第二章正文"
     assert (await client.get(f"{base}/chapters/{c1['id']}/versions")).json() == versions_before
-    assert [i["analysis"] for i in retried["checkpoint"]["items"]] == ["ok", "ok"]
+    items = retried["checkpoint"]["items"]
+    assert [i["analysis"] for i in items] == ["failed", "ok"]
+    assert "未自动重复" in items[0]["warning"]
+    assert [item["chapter_id"] for item in events[-1][1]["result"]["analysis_failed"]] == [c1["id"]]
 
 
 async def test_interrupt_restores_current_chapter(app, client, fake_llm):
@@ -471,17 +537,37 @@ async def test_interrupt_restores_current_chapter(app, client, fake_llm):
     gate = Gate()
     fake_llm.push("第一章正文")
     fake_llm.push(["半截", gate, "后半"])
-    task_id = (await _start(client, base, c1, c2)).json()["id"]
+    task_ref = (await _start(client, base, c1, c2)).json()
+    task_id = task_ref["id"]
     await gate.wait_reached()
+    async with app.state.sessionmaker() as db:
+        original = await db.get(Task, task_id)
+        snapshot = batch_service.capture_abort_snapshot(original, recovery=True)
+        assert snapshot.claim is not None and snapshot.claim.chapter_id == c2["id"]
+        assert (await db.get(Chapter, c2["id"])).generation_claim_key == snapshot.claim.claim_key
     engine = app.state.task_engine
     await engine.stop()
-    task = (await client.get(f"/api/v1/tasks/{task_id}")).json()
-    assert task["status"] == "interrupted" and task["checkpoint"]["current"]["chapter_id"] == c2["id"]
+    task = (await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))).json()
+    assert task["status"] == "interrupted" and task["checkpoint"]["current"] is None
     row = await _chapter(app, c2["id"])
-    assert row.status == "draft" and row.content == ""
+    assert row.status == "draft" and row.content == "" and row.generation_claim_key is None
     await engine.start()
-    fake_llm.push("第二章正文")
-    retried, _ = await run_task(client, await client.post(f"/api/v1/tasks/{task_id}/retry"))
+    retry_gate = Gate()
+    fake_llm.push([retry_gate, "第二章正文"])
+    response = await client.post(f"/api/v1/tasks/{task_id}/retry", params=task_params(task_ref))
+    assert response.status_code == 202, response.text
+    retry_ref = response.json()
+    try:
+        await retry_gate.wait_reached()
+        newer = await _chapter(app, c2["id"])
+        assert newer.status == "generating" and newer.generation_claim_key != snapshot.claim.claim_key
+        with pytest.raises(ConflictError):
+            await batch_service.restore_abort_snapshot(engine.ctx, snapshot)
+        still_newer = await _chapter(app, c2["id"])
+        assert still_newer.status == "generating" and still_newer.generation_claim_key == newer.generation_claim_key
+    finally:
+        retry_gate.release()
+    retried = await wait_task(client, retry_ref)
     assert retried["status"] == "succeeded"
     assert (await _chapter(app, c1["id"])).content == "第一章正文"
     assert (await _chapter(app, c2["id"])).content == "第二章正文"
@@ -489,25 +575,66 @@ async def test_interrupt_restores_current_chapter(app, client, fake_llm):
 
 
 async def test_crash_recovery_restores_current_chapter(app, client, fake_llm):
-    """进程崩溃：下次 start 把遗留 running 批量置为 interrupted，按断点还原当前章。"""
+    """只凭真实运行中的原 claim 模拟崩溃，恢复时可还原当前章。"""
 
     _, base, (c1,), _ = await _setup(client, ["旧稿"])
-    engine = app.state.task_engine
-    await engine.stop()
-    task_id = (await _start(client, base, c1, c1, include_written=True)).json()["id"]
     async with app.state.sessionmaker() as db:
+        await db.execute(update(Chapter).where(Chapter.id == c1["id"]).values(status="done"))
+        await db.commit()
+    engine = app.state.task_engine
+    gate = Gate()
+    fake_llm.push([gate, "不应保存"])
+    task_ref = (await _start(client, base, c1, c1, include_written=True)).json()
+    task_id = task_ref["id"]
+    await gate.wait_reached()
+    async with app.state.sessionmaker() as db:
+        snapshot = batch_service.capture_abort_snapshot(await db.get(Task, task_id), recovery=True)
+        assert snapshot.claim is not None and snapshot.claim.chapter_id == c1["id"]
+        assert snapshot.claim.prev_status == "done"
+        assert (await db.get(Chapter, c1["id"])).generation_claim_key == snapshot.claim.claim_key
+    await engine.stop()
+    gate.release()
+    async with app.state.sessionmaker() as db:
+        # 恢复在真实调用中捕获的持久事实，模拟崩溃未执行正常排空。
         await db.execute(update(Chapter).where(Chapter.id == c1["id"]).values(status="generating"))
+        await db.execute(update(Chapter).where(Chapter.id == c1["id"]).values(
+            generation_claim_key=snapshot.claim.claim_key, generation_claim_task_key=snapshot.claim.task_key,
+            generation_claim_prev_status=snapshot.claim.prev_status,
+        ))
         await db.execute(
             update(Task)
-            .where(Task.id == task_id)
-            .values(status="running", checkpoint={"current": {"chapter_id": c1["id"], "prev_status": "done"}})
+            .where(Task.id == task_id, Task.statistics_key == task_ref["task_key"])
+            .values(status="running", execution_key=snapshot.execution_key,
+                    checkpoint=snapshot.checkpoint, step_cursor=snapshot.cursor)
         )
         await db.commit()
     engine.hubs.clear()
     await engine.start()
-    assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["status"] == "interrupted"
+    recovered = await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))
+    assert recovered.json()["status"] == "interrupted"
     row = await _chapter(app, c1["id"])
-    assert row.status == "done" and row.content == "旧稿"
+    assert row.status == "done" and row.content == "旧稿" and row.generation_claim_key is None
+    assert len(fake_llm.calls) == 1
+
+
+async def test_crash_recovery_keeps_unproven_legacy_chapter_unchanged(app, client, fake_llm):
+    _, base, (c1,), _ = await _setup(client, ["旧稿"])
+    engine = app.state.task_engine
+    await engine.stop()
+    task_ref = (await _start(client, base, c1, c1, include_written=True)).json()
+    async with app.state.sessionmaker() as db:
+        await db.execute(update(Chapter).where(Chapter.id == c1["id"]).values(status="generating"))
+        await db.execute(update(Task).where(
+            Task.id == task_ref["id"], Task.statistics_key == task_ref["task_key"],
+        ).values(status="running", checkpoint={"current": {"chapter_id": c1["id"], "prev_status": "done"}}))
+        await db.commit()
+    await engine.start()
+    recovered = await client.get(f"/api/v1/tasks/{task_ref['id']}", params=task_params(task_ref))
+    assert recovered.json()["status"] == "running"
+    row = await _chapter(app, c1["id"])
+    assert row.status == "generating" and row.content == "旧稿" and row.generation_claim_key is None
+    retry = await client.post(f"/api/v1/tasks/{task_ref['id']}/retry", params=task_params(task_ref))
+    assert retry.status_code == 409 and fake_llm.calls == []
 
 
 # ---------- 目标字数 ----------
@@ -599,7 +726,7 @@ async def test_progress_monotonic_and_capped(app, client, fake_llm):
     fake_llm.push("一" * 70)
     fake_llm.push("二" * 70)
     resp = await _start(client, base, c1, c2, target_words=300)
-    events = await stream_task(client, resp.json()["id"])
+    events = await stream_task(client, resp.json())
     values = [d["progress"] for e, d in events if e == "progress" and d["status"] == "running"]
     assert values == sorted(values) and all(v <= 95 for v in values)
     assert events[-1][1]["task"]["progress"] == 100

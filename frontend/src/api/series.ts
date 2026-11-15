@@ -8,6 +8,9 @@ export interface Series {
   revision: number
   book_count: number
   entry_count: number
+  is_owner: boolean
+  can_manage_collaborators: boolean
+  authorization_version: string | null
 }
 
 export interface SeriesBook { id: number; title: string; recycled: boolean }
@@ -43,7 +46,8 @@ type EntryData =
   | { kind: 'character'; data: SeriesCharacterData }
   | { kind: 'world'; data: SeriesWorldData }
 
-export type SeriesEntry = EntryData & { id: number; ai_settings: SeriesAiSettings; uses: SeriesUse[] }
+/** has_uses 包含调用者无法访问及回收站中的成员书；uses 仅包含允许展示的书。 */
+export type SeriesEntry = EntryData & { id: number; ai_settings: SeriesAiSettings; has_uses: boolean; uses: SeriesUse[] }
 export type SeriesEntryInput = EntryData & { ai_settings: SeriesAiSettings }
 export interface SeriesEntryPage { items: SeriesEntry[]; total: number; revision: number }
 export interface SeriesMutation { revision: number; item?: SeriesEntry | null; ref?: SeriesBookRef | null }

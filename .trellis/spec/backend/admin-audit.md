@@ -58,6 +58,7 @@ async def flush_versioned(db) -> None
 
 - 服务层显式接入，不使用 middleware/ORM 全局监听，也不 monkey-patch session.commit。必须保留真实 actor，不能用 owner 代替。
 - `AuditOperation.__aenter__` 以当前授权快照核实启用管理账号（超管或有效权限非空），不只检查is_admin；动作授权仍由业务显式校验，enabled=False不是通行证；project_id 指向本人作品时默认关闭采集。管理员restore/purge通过局部 `include_own_project=True` 也记录自己的作品，系统expire走专用内部选项；不能因此全局开放本人日常创作采集。已确认私有 Skill 不采集，且不为审计越过原可见性 helper。
+- 上述初始化的用户、项目和作者查询必须在 `db.no_autoflush` 中执行，不能在业务授权和父行锁之前刷新调用方的待写实体。初始化失败发生在 `__aexit__` 之外：业务 `AppError` 保留原语义，数据库异常以不含原始 SQL、参数和异常链的安全错误传播；`40001` 只保留安全冲突标识，供 Agent 处理序列化冲突。覆盖 `test_audit_authorization_no_autoflush.py`。
 - 业务变更和成功审计共用一次事务。通常通过 audit.commit 设置 committed，再 refresh/构造响应；非审计路径仍按原规则提交。工坊 approve 保留既有例外：在条目/审核锁释放前先 flush/refresh 并生成 output，再 audit.commit。不能为了统一文案把其响应投影移至提交后；提交前投影失败仍整体回滚。
 - 业务 flush 在成功审计入库前完成；调用者传已有业务错误翻译的 flush_fn。章节使用 version_service.flush_versioned，Skill 使用 _flush_unique，审计表自身错误不能被误译成业务唯一键 409。
 - 失败先 rollback，再使用提前保存的安全快照写失败记录。不能在 rollback 后读过期 ORM 属性，不能把未提交的 after 值当作事实。

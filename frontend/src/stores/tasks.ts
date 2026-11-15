@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { isActiveTask, isOpenTask, taskApi } from '../api/tasks'
+import { hasTaskIdentity, isActiveTask, isOpenTask, taskApi } from '../api/tasks'
 import type { Task } from '../api/types'
 
 /** 有活动任务时的轮询间隔 */
@@ -18,6 +18,8 @@ export function countRunning(list: Task[]): number {
 
 /** 把一个任务合并进未结束列表（含待审核）：已结束则移除，否则按 id 覆盖/插入；保持 id 倒序（与后端列表一致）。 */
 export function upsertActive(list: Task[], task: Task): Task[] {
+  // 相同整数 ID 的不同实例不能被迟到的本地响应替换或移除，等待列表重新读取。
+  if (list.some((item) => item.id === task.id && item.task_key !== task.task_key)) return list
   const rest = list.filter((t) => t.id !== task.id)
   if (!isOpenTask(task.status)) return rest
   return [...rest, task].sort((a, b) => b.id - a.id)
@@ -28,7 +30,7 @@ export function countFinished(prev: Task[], next: Task[]): number {
   const byId = new Map(next.map((t) => [t.id, t]))
   return prev.filter((t) => {
     const now = byId.get(t.id)
-    if (!now) return true
+    if (!now || now.task_key !== t.task_key) return true
     return isActiveTask(t.status) && now.status === 'paused'
   }).length
 }
@@ -91,7 +93,9 @@ export const useTasksStore = create<TasksState>((set, get) => {
     },
 
     track: (task) => {
+      if (!hasTaskIdentity(task)) { void get().refresh(); return }
       if (task.project_id !== null && discardedProjects.has(task.project_id)) { void get().refresh(); return }
+      if (get().active.some((current) => current.id === task.id && current.task_key !== task.task_key)) { void get().refresh(); return }
       set({ active: upsertActive(get().active, task), version: get().version + 1 })
       void get().refresh()
     },

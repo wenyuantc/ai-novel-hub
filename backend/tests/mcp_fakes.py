@@ -7,9 +7,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import uvicorn
 
-from app.services.mcp.client import McpError, McpResult, McpTarget, McpToolInfo
+from app.services.mcp.client import McpError, McpResult, McpTarget, McpToolInfo, _register_test_connector
 
 
 def tool(name: str, properties: dict | None = None, required: list[str] | None = None, **kw) -> McpToolInfo:
@@ -38,6 +39,10 @@ class FakeMcpConnector:
     closes: int = 0
     open: int = 0
 
+    def __post_init__(self) -> None:
+        # 仅测试代码显式登记；模拟发送也必须经过与真实 HTTP 相同的门禁。
+        _register_test_connector(self)
+
     def add(self, url: str, tools: list[McpToolInfo], handler: Handler | None = None) -> FakeServer:
         server = FakeServer(tools=tools, handler=handler)
         self.servers[url] = server
@@ -48,7 +53,7 @@ class FakeMcpConnector:
         return len(self.targets)
 
     @asynccontextmanager
-    async def __call__(self, target: McpTarget, *, allow_private: bool) -> AsyncIterator[Any]:
+    async def __call__(self, target: McpTarget, *, allow_private: bool, request_gate=None) -> AsyncIterator[Any]:
         self.targets.append(target)
         server = self.servers.get(target.url)
         if server is None:
@@ -63,6 +68,13 @@ class FakeMcpConnector:
                 return list(server.tools)
 
             async def call_tool(self, name: str, arguments: dict) -> McpResult:
+                if request_gate is not None:
+                    request = httpx.Request("POST", target.url, json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": name, "arguments": arguments},
+                    })
+                    await request_gate.before_request(request)
+                    await request_gate.after_headers(httpx.Response(200, request=request))
                 fake.calls.append((target.url, name, dict(arguments)))
                 if server.handler is None:
                     return McpResult(text=f"{name} 结果：{arguments}")
@@ -76,6 +88,8 @@ class FakeMcpConnector:
         try:
             yield _Conn()
         finally:
+            if request_gate is not None:
+                await request_gate.aclose()
             self.open -= 1
             self.closes += 1
 

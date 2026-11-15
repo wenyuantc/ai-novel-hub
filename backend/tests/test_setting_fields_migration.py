@@ -186,6 +186,10 @@ def _schema_0037_model_contract(inspector, table):
     }.get(table)
     if index is not None:
         contract["indexes"].pop(index)
+    if table == "agent_conversations":
+        # 0053 摘要来源、0054 协作邀请轮次（E4-i）晚于 0037，不计入冻结结构。
+        contract["columns"].pop("summary_source")
+        contract["columns"].pop("collaboration_invitation_id")
     if table == "setting_progressions":
         contract["columns"].pop("scene_id")
         contract["foreign_keys"].pop("fk_setting_progressions_scene_id_scenes")

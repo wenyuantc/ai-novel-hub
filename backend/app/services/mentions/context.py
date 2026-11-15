@@ -10,7 +10,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models import Career, Character, Organization, WorldSetting
 from app.schemas.mentions import SOURCE_TYPES, EntityCategory, EntityKind, EntityRef, SourceType
 from app.services.mentions.matcher import Dictionary, EntryKey, TrackingRule, compile_dictionary
-from app.services.project_service import get_manageable_project
+from app.services.project_access import resolve_access
 from app.services.setting_ai_visibility import effective_mention_enabled
 
 
@@ -82,8 +82,10 @@ def candidate_dictionary(candidates: list[MentionCandidate]) -> Dictionary:
 
 async def query_context(db: AsyncSession, user_id: int, project_id: int) -> QueryContext:
     with db.no_autoflush:
-        project = await get_manageable_project(db, user_id, project_id)
-        available = list(SOURCE_TYPES) if project.user_id == user_id else [t for t in SOURCE_TYPES if t != "chat"]
+        project, access, _ = await resolve_access(db, user_id, project_id)
+        # 单纯管理员沿用原有聊天不可见语义；已接受的协作者只查询本人会话。
+        available = (list(SOURCE_TYPES) if project.user_id == user_id or access.is_collaborator
+                     else [t for t in SOURCE_TYPES if t != "chat"])
         candidates = await load_candidates(db, project_id)
     dictionary = await anyio.to_thread.run_sync(candidate_dictionary, candidates)
     return QueryContext(dictionary, available)

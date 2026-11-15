@@ -60,6 +60,7 @@ class GenerationLogBrief(BaseModel):
     chapter_id: int | None
     kind: GenerationKind
     ai_config_id: int | None
+    model_source: Literal["actor", "owner"] | None = None
     provider: str
     model: str
     params: dict[str, Any]

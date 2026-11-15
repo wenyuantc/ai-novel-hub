@@ -649,12 +649,31 @@ async def context_preview(
     budget: int = 4000,
 ) -> PlanningContextPreview:
     out = await load_planning_context(db, project, source_kind, source_id, scope=scope, budget=budget)
+    return await _preview_out(db, project.id, out)
+
+
+async def _preview_out(db: AsyncSession, project_id: int, out: PlanningContext) -> PlanningContextPreview:
+    """只返回已确认属于本作品、且与章节双向绑定的细纲 ID。"""
+    plan_id = None
+    if out.plan_id is not None:
+        statement = select(ChapterPlan.id).join(Outline, Outline.id == ChapterPlan.outline_id).where(
+            ChapterPlan.id == out.plan_id, ChapterPlan.project_id == project_id, Outline.project_id == project_id,
+        )
+        if out.chapter_id is not None:
+            statement = statement.join(Chapter, Chapter.id == ChapterPlan.chapter_id).where(
+                Chapter.id == out.chapter_id, Chapter.project_id == project_id,
+                Chapter.plan_id == ChapterPlan.id, Chapter.outline_id == ChapterPlan.outline_id,
+            )
+        elif out.source.kind != "plan" or out.source.id != out.plan_id:
+            statement = statement.where(False)
+        with db.no_autoflush:
+            plan_id = await db.scalar(statement)
     return PlanningContextPreview(
         revision=out.revision,
         unit_id=out.unit_id,
         source=out.source,
         chapter_id=out.chapter_id,
-        plan_id=out.plan_id,
+        plan_id=plan_id,
         scene_id=out.scene_id,
         content_revision=out.content_revision,
         text=out.text,
@@ -665,6 +684,40 @@ async def context_preview(
         references=out.references,
         truncated=out.truncated,
     )
+
+
+async def manual_context_preview(
+    db: AsyncSession, user_id: int, project_id: int, source_kind: SourceKind, source_id: int, *,
+    scope: PlanningScope = "chapter", budget: int = 4000,
+) -> PlanningContextPreview:
+    """人工预览只读取本书，在响应前复查权限与构建时的版本。"""
+    from app.services import authorization_service as authz
+    from app.services import project_access
+
+    with db.no_autoflush:
+        project, initial, _ = await project_access.resolve_access(db, user_id, project_id)
+        stamp = await read_visibility_stamp(db, project_id)
+        out = await load_planning_context(db, project, source_kind, source_id, scope=scope, budget=budget, stamp=stamp)
+        result = await _preview_out(db, project_id, out)
+        _, current, _ = await project_access.resolve_access(db, user_id, project_id)
+        if initial.is_collaborator and initial.authorization_version != current.authorization_version:
+            # 保留仍有原管理员读取权限的路径；不能把新一轮邀请当作旧请求的授权。
+            if not (await authz.require_authenticated(db, user_id)).allows("projects.read"):
+                raise ConflictError("协作授权已变化，请刷新后重试", extra={"code": "collaboration_changed"})
+        await check_planning_revision(db, project_id, out.revision)
+        if out.fields_revision is not None:
+            await setting_field_service.check_fields_revision(db, project_id, out.fields_revision)
+        await require_visibility_stamp(db, stamp)
+        if out.scene_id is not None and out.chapter_id is not None and out.content_revision is not None:
+            current_revision = await db.scalar(select(Chapter.content_revision).join(
+                Scene, Scene.chapter_id == Chapter.id,
+            ).where(
+                Chapter.id == out.chapter_id, Chapter.project_id == project_id,
+                Scene.id == out.scene_id, Scene.active.is_(True),
+            ))
+            if current_revision != out.content_revision:
+                raise ConflictError("场景上下文读取期间已变化，请重新预览", extra={"code": "scene_context_changed"})
+        return result
 
 
 async def _load_scene_context(
@@ -731,23 +784,34 @@ async def _load_scene_context(
 
 
 async def scene_setting_context(
-    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int, *, manual: bool = False,
 ) -> SettingContextOut:
     """人工只读预览复用真实出站的统一选择与时点，不返回完整作者档案。"""
-    from app.services import context_builder
-    from app.services.chapter_service import get_manageable_chapter
+    from app.services import context_builder, project_access
+    from app.services.chapter_service import get_manageable_chapter, get_manual_chapter
     from app.services.project_service import get_manageable_project
-    from app.services.scene_service import require_scene
+    from app.services.scene_service import check_revision, require_scene
 
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = (await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read") if manual
+                   else await get_manageable_chapter(db, user_id, project_id, chapter_id))
         await require_scene(db, chapter, scene_id)
-        project = await get_manageable_project(db, user_id, project_id)
+        project = (await project_access.require_project(db, user_id, project_id, "content.read") if manual
+                   else await get_manageable_project(db, user_id, project_id))
         planning = await load_planning_context(db, project, "scene", scene_id)
         text = await context_builder.build_setting_context(
             db, project, chapter, planning=planning, include_protected=True,
         )
-        unverified = await setting_progression_service.count_unverified_timelines(db, user_id, project_id)
+        unverified = await setting_progression_service.count_unverified_timelines(
+            db, user_id, project_id, manual=manual,
+        )
+        await check_planning_revision(db, project_id, planning.revision)
+        if planning.fields_revision is not None:
+            await setting_field_service.check_fields_revision(db, project_id, planning.fields_revision)
+        if planning.setting_scope is not None:
+            await planning.setting_scope.scope.verify(db)
+        if planning.content_revision is not None:
+            await check_revision(db, chapter, planning.content_revision)
         warnings = list(planning.warnings)
         if unverified:
             warnings.append(f"该作品有 {unverified} 条旧设定尚未校准，早期设定可能不准确。")

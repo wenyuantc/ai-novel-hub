@@ -277,7 +277,9 @@ StyleChoice = Literal["inherit", "none"] | int    # schemas/style.py
 async def resolve(db, user_id, project, chapter | None, choice="inherit") -> ResolvedStyle | None   # {id, name, description, block, source}
 async def validate_choice(db, user_id, choice) -> None      # 创建任务时同步校验临时指定的风格（400）
 async def ensure_assignable(db, user_id, style_id | None)   # 项目 / 章节 PATCH（400）
-async def default_description(db, project) -> str           # ProjectInfo.style
+async def visible_default_style(db, project, *, actor_user_id) -> WritingStyle | None
+async def default_description(db, project, *, actor_user_id) -> str  # ProjectInfo.style
+async def project_info(db, project, *, actor_user_id) -> ProjectInfo
 async def sync_presets(sessionmaker)                        # lifespan；按 preset_key upsert
 def style_log(resolved) -> {id, name, block, source} | None # 生成记录 params.style
 ```
@@ -289,7 +291,8 @@ def style_log(resolved) -> {id, name, block, source} | None # 生成记录 param
 - 可见性：预设或本人所有；他人风格一律 404。项目默认 / 章节覆盖 / 临时指定只能指向可见风格（400）。
 - **优先级**：请求 `style`（整数）> `chapter.style_id` > `project.default_style_id` > 无；`"none"` 直接不用风格。风格段 = `style.block` 渲染结果，
   作为章节类模板的 `{{ style }}`；默认 `style.block` 在只有 `extra`（且 description 是 extra 的子串）时原样输出 extra，所以迁移来的「原风格」提示词与改造前逐字一致。
-- **向导 / 实体 / 分析 / 大纲**以及章节上下文的【作品信息】：`ProjectInfo.style` = 项目默认风格的 `description`（`project_service.project_info(db, project)`，异步）。
+- **向导 / 实体 / 分析 / 大纲**以及章节上下文的【作品信息】：`ProjectInfo.style` = 当前真实操作者可见的项目默认风格 `description`；`project_info` / `default_description` 必须显式传 `actor_user_id`，不能把缺省身份推断成项目作者。章节生成、拆书任务与 Agent 分别使用任务／会话的真实 `user_id`，仅本人风格或全局预设可进入模型提示词。不可见的私人默认风格不进入提示词，不能输出其 ID、名称或描述。封面默认提示词也按真实 actor 过滤，并通过 `warning` 提示当前账号无法继承；这只实现提示词隐私基础，不代表协作者 AI 入口已开放。
+- **项目投影**：作者和协作者只能查看本人或全局风格；保留管理员原代管语义，允许管理员查看该作品真实作者的风格。异常绑定第三人风格或风格已缺失时，详情、书架和写响应均将风格及 `default_style_id` 投影为 null，且不修改数据库原绑定。管理员兼协作者按上述两种身份能力求并集，不能因此查看第三人风格。
 - **【作品信息】的结构化字段**（`0014`）：`format_project_info` 依次输出 `书名`、`题材`、`一句话设定`、`写作风格`，之后按
   `类型标签：A、B` → `主题` → `简介` → `核心卖点` → `目标读者` 追加；**每项去空白后非空才输出**，所以字段全空时与改造前逐字一致
   （parity 测试照常通过，`tests/prompt_legacy.py` 不改）。`target_words` 不进提示词（只用于概览进度与向导参数建议）。

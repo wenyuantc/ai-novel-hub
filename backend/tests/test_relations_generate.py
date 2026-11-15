@@ -7,7 +7,8 @@ from sqlalchemy import func, select
 
 from app.ai.providers import AIProviderError
 from app.models import Character, GenerationLog, Relationship, RelationshipHistory, RelationshipType
-from tests.helpers import Gate, create_ai_config, create_project, register, run_task, wait_task
+from app.services.ai_dispatch import read_visibility_stamp
+from tests.helpers import Gate, create_ai_config, create_project, register, run_task, task_params, wait_task
 
 
 async def setup(client, *, config=True, count=3):
@@ -187,20 +188,33 @@ async def test_generate_marks_duplicate_self_unselected_existing_and_invalid_fie
 async def test_generation_rechecks_current_data_after_llm(app, client, fake_llm):
     base, ids = await setup(client, count=4)
     gate = Gate()
-    fake_llm.push([gate, json.dumps({"relationships": [relation(ids[0], ids[1]), relation(ids[0], ids[3])]})])
+    stale_output = "删除角色前的过期关系内容"
+    fake_llm.push([gate, json.dumps({"relationships": [
+        relation(ids[0], ids[1], description=stale_output), relation(ids[0], ids[3], description=stale_output),
+    ]}, ensure_ascii=False)])
     response = await client.post(f"{base}/relationships/generate", json={"character_ids": ids})
-    await gate.wait_reached()
-    await client.post(f"{base}/relationships", json=relation(ids[1], ids[0]))
-    await client.delete(f"{base}/characters/{ids[3]}")
-    before = await counts(app)
-    gate.release()
+    assert response.status_code == 202, response.text
+    try:
+        await gate.wait_reached()
+        async with app.state.sessionmaker() as db:
+            original_stamp = await read_visibility_stamp(db, response.json()["project_id"])
+        assert (await client.post(f"{base}/relationships", json=relation(ids[1], ids[0]))).status_code == 201
+        async with app.state.sessionmaker() as db:
+            after_relationship = await read_visibility_stamp(db, response.json()["project_id"])
+        assert after_relationship == original_stamp
+        assert (await client.delete(f"{base}/characters/{ids[3]}")).status_code == 204
+        async with app.state.sessionmaker() as db:
+            after_delete = await read_visibility_stamp(db, response.json()["project_id"])
+        assert after_delete.epoch > original_stamp.epoch
+        before = await counts(app)
+    finally:
+        gate.release()
     task, events = await run_task(client, response)
-    assert task["status"] == "succeeded", task
-    suggestions = events[-1][1]["result"]["suggestions"]
-    assert [s["resolved"] for s in suggestions] == [False, False]
-    assert suggestions[0]["reason"] == "两人之间已有关系"
-    assert suggestions[1]["reason"] == "角色已被删除或不属于该项目"
-    assert suggestions[1]["target_name"] == "张三"
+    assert task["status"] == "failed" and events[-1][0] == "error", task
+    assert len(fake_llm.calls) == 1
+    assert stale_output not in json.dumps(events, ensure_ascii=False)
+    output = await client.get(f"/api/v1/tasks/{task['id']}/output", params=task_params(response.json()))
+    assert output.status_code == 200 and stale_output not in output.text
     assert await counts(app) == before
 
 
@@ -291,7 +305,7 @@ async def test_generate_uses_enabled_knowledge_and_honors_project_switch(client,
         files={"file": ("门派资料.md", "# 天剑宗\n\n天剑宗弟子看重师承与誓约。".encode(), "text/markdown")},
     )
     assert upload.status_code == 202, upload.text
-    indexed = await wait_task(client, upload.json()["task"]["id"])
+    indexed = await wait_task(client, upload.json()["task"])
     assert indexed["status"] == "succeeded"
     await client.patch(f"{base}/kb/settings", json={"min_score": 0})
     for enabled in (True, False):
@@ -316,7 +330,7 @@ async def test_queued_task_rechecks_missing_pairs_without_model_call(app, client
     assert response.status_code == 202
     await client.post(f"{base}/relationships", json=relation(*ids))
     await app.state.task_engine.start()
-    task = await wait_task(client, response.json()["id"])
+    task = await wait_task(client, response.json())
     assert task["status"] == "failed" and "已无缺失关系" in task["error"]
     assert fake_llm.calls == []
 
@@ -330,12 +344,13 @@ async def test_cancel_and_retry_keep_original_selection(app, client, fake_llm):
     await gate.wait_reached()
     active = (await client.get("/api/v1/tasks", params={"kind": "relations.generate", "active": True})).json()
     assert [t["id"] for t in active] == [response.json()["id"]]
-    assert (await client.post(f"/api/v1/tasks/{response.json()['id']}/cancel")).status_code == 200
-    cancelled = await wait_task(client, response.json()["id"])
+    cancel = await client.post(f"/api/v1/tasks/{response.json()['id']}/cancel", params=task_params(response.json()))
+    assert cancel.status_code == 200
+    cancelled = await wait_task(client, response.json())
     assert cancelled["status"] == "cancelled"
     assert await counts(app) == before
     fake_llm.push('{"relationships": []}')
-    retry = await client.post(f"/api/v1/tasks/{response.json()['id']}/retry")
+    retry = await client.post(f"/api/v1/tasks/{response.json()['id']}/retry", params=task_params(response.json()))
     task, events = await run_task(client, retry)
     assert task["status"] == "succeeded" and task["retry_of_id"] == cancelled["id"]
     assert events[-1][1]["result"]["character_ids"] == ids
@@ -363,7 +378,7 @@ async def test_generate_project_character_config_and_task_permissions(client, ma
     denied = await bob.post(f"{base}/relationships/generate", json={"character_ids": ids})
     assert denied.status_code == 404 and denied.json()["detail"] == "项目不存在"
     for path in ("", "/output", "/stream"):
-        response = await bob.get(f"/api/v1/tasks/{task['id']}{path}")
+        response = await bob.get(f"/api/v1/tasks/{task['id']}{path}", params=task_params(task))
         assert response.status_code == 404 and response.json()["detail"] == "任务不存在"
     assert len(fake_llm.calls) == 1
 

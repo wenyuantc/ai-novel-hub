@@ -35,6 +35,7 @@ from app.schemas.progression import BaselineUpdate, ProgressionCreate, StoryPosi
 from app.schemas.setting_fields import EntityRef
 from app.services import (
     career_progression_service,
+    project_access,
     setting_ai_visibility,
     setting_catalog_service,
     setting_field_service,
@@ -149,8 +150,35 @@ async def _refreshed_outs(db: AsyncSession, careers: list[Career]) -> list[Caree
     return await career_outs(db, careers)
 
 
-async def get_owned_career(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> Career:
-    await get_manageable_project(db, user_id, project_id)
+async def _read_project(db: AsyncSession, user_id: int, project_id: int, *, manual: bool) -> None:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
+
+
+async def _write_project(
+    db: AsyncSession, user_id: int, project_id: int, *, manual: bool, visibility_write: bool = False,
+) -> None:
+    if manual:
+        await project_access.require_project(
+            db, user_id, project_id, "content.edit", for_update=True, visibility_write=visibility_write,
+        )
+    elif visibility_write:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
+    else:
+        await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+
+
+async def get_owned_career(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    career_id: int,
+    *,
+    manual: bool = False,
+) -> Career:
+    await _read_project(db, user_id, project_id, manual=manual)
     career = await db.scalar(select(Career).where(Career.id == career_id, Career.project_id == project_id))
     if career is None:
         raise NotFoundError("职业不存在")
@@ -258,138 +286,202 @@ async def new_career(db: AsyncSession, project_id: int, data: CareerCreate) -> C
     return career
 
 
-async def list_careers(db: AsyncSession, user_id: int, project_id: int) -> list[CareerOut]:
-    await get_manageable_project(db, user_id, project_id)
+async def list_careers(db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False) -> list[CareerOut]:
+    await _read_project(db, user_id, project_id, manual=manual)
     return await career_outs(db, await list_project_careers(db, project_id))
 
 
-async def get_career(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> CareerOut:
-    return (await career_outs(db, [await get_owned_career(db, user_id, project_id, career_id)]))[0]
+async def get_career(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    career_id: int,
+    *,
+    manual: bool = False,
+) -> CareerOut:
+    return (await career_outs(db, [await get_owned_career(db, user_id, project_id, career_id, manual=manual)]))[0]
 
 
-async def create_career(db: AsyncSession, user_id: int, project_id: int, data: CareerCreate) -> CareerOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    career = await new_career(db, project_id, data)
-    await _commit(db, NAME_CONFLICT)
-    return (await _refreshed_outs(db, [career]))[0]
+async def create_career(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    data: CareerCreate,
+    *,
+    manual: bool = False,
+) -> CareerOut:
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    async with story_service._candidate_write_rollback(db):
+        previous_candidates = await story_service._candidate_snapshot(db, project_id)
+        career = await new_career(db, project_id, data)
+        await story_service._bump_new_candidate_competition(db, project_id, previous_candidates)
+        await _commit(db, NAME_CONFLICT)
+        return (await _refreshed_outs(db, [career]))[0]
 
 
-async def create_careers(db: AsyncSession, user_id: int, project_id: int, data: CareerBatchCreate) -> list[CareerOut]:
+async def create_careers(
+    db: AsyncSession, user_id: int, project_id: int, data: CareerBatchCreate, *, manual: bool = False,
+) -> list[CareerOut]:
     """批量新建（AI 生成预览确认后保存），单事务：任一条失败则全部不写入。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    careers = [await new_career(db, project_id, item) for item in data.careers]
-    await _commit(db, NAME_CONFLICT)
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    try:
+        # 与卡片导入采用同一候选竞争判断；局部导入避免 card_service 的服务依赖形成环。
+        from app.services.card_service import _candidate_competition
+        from app.services.mentions.context import load_candidates
+
+        previous_candidates = await load_candidates(db, project_id)
+        careers = [await new_career(db, project_id, item) for item in data.careers]
+        if _candidate_competition(previous_candidates, await load_candidates(db, project_id)):
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=True)
+        await _commit(db, NAME_CONFLICT)
+    except BaseException:
+        await db.rollback()
+        raise
     return await _refreshed_outs(db, careers)
 
 
 async def update_career(
-    db: AsyncSession, user_id: int, project_id: int, career_id: int, data: CareerUpdate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    career_id: int,
+    data: CareerUpdate,
+    *,
+    manual: bool = False,
 ) -> CareerOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    career = await get_owned_career(db, user_id, project_id, career_id)
-    if data.name is not None:
-        name = data.name.strip()
-        if not name:
-            raise BadRequestError("职业名称不能为空")
-        if await _name_taken(db, project_id, name, exclude_id=career.id):
-            raise ConflictError(NAME_CONFLICT)
-        career.name = name
-    for f in ("description", "requirements", "abilities", "rules", "sort"):
-        v = getattr(data, f)
-        if v is not None:
-            setattr(career, f, v)
-    if data.stages is not None:
-        await sync_stages(db, career, data.stages)
-    if data.kind is not None and data.kind != career.kind:
-        # 先补齐旧挂接主体，再检查该职业曾经出现过的所有角色及其全部区间。
-        old_kind = career.kind
-        holders = list(
-            (
-                await db.scalars(
-                    select(Character)
-                    .join(CharacterCareer, CharacterCareer.character_id == Character.id)
-                    .where(CharacterCareer.career_id == career.id)
-                    .order_by(Character.id)
-                )
-            ).all()
-        )
-        for character in holders:
-            await career_progression_service.get_or_create_career_timeline(db, character, career)
-        timelines = list(
-            (
-                await db.scalars(
-                    select(SettingTimeline)
-                    .where(
-                        SettingTimeline.project_id == project_id,
-                        SettingTimeline.subject_kind == "career",
-                        SettingTimeline.career_id == career.id,
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=data.name is not None)
+    async with story_service._candidate_write_rollback(db):
+        career = await get_owned_career(db, user_id, project_id, career_id, manual=manual)
+        identity_tightened = False
+        if data.name is not None:
+            name = data.name.strip()
+            if not name:
+                raise BadRequestError("职业名称不能为空")
+            if await _name_taken(db, project_id, name, exclude_id=career.id):
+                raise ConflictError(NAME_CONFLICT)
+            identity_tightened = story_service._identity_change_tightens(
+                await story_service._candidate_snapshot(db, project_id), "career", career.id, name=name,
+            )
+            career.name = name
+        for f in ("description", "requirements", "abilities", "rules", "sort"):
+            v = getattr(data, f)
+            if v is not None:
+                setattr(career, f, v)
+        if data.stages is not None:
+            await sync_stages(db, career, data.stages)
+        if data.kind is not None and data.kind != career.kind:
+            # 先补齐旧挂接主体，再检查该职业曾经出现过的所有角色及其全部区间。
+            old_kind = career.kind
+            holders = list(
+                (
+                    await db.scalars(
+                        select(Character)
+                        .join(CharacterCareer, CharacterCareer.character_id == Character.id)
+                        .where(CharacterCareer.career_id == career.id)
+                        .order_by(Character.id)
                     )
-                    .order_by(SettingTimeline.id)
+                ).all()
+            )
+            for character in holders:
+                await career_progression_service.get_or_create_career_timeline(db, character, career)
+            timelines = list(
+                (
+                    await db.scalars(
+                        select(SettingTimeline)
+                        .where(
+                            SettingTimeline.project_id == project_id,
+                            SettingTimeline.subject_kind == "career",
+                            SettingTimeline.career_id == career.id,
+                        )
+                        .order_by(SettingTimeline.id)
+                    )
+                ).all()
+            )
+            character_ids = {timeline.character_id for timeline in timelines if timeline.character_id is not None}
+            await career_progression_service.validate_career_intervals(
+                db, project_id, character_ids, kind_overrides={career.id: data.kind}
+            )
+            # 修改定义是对职业类别的全局修正，必须同步基础和保留的存在事件，
+            # 而不是在当前章节伪造一条剧情变化。
+            for timeline in timelines:
+                await setting_progression_service._claim_revision(db, timeline, timeline.revision)
+                if timeline.baseline.get("exists") is True:
+                    baseline = deepcopy(timeline.baseline)
+                    baseline["role"] = data.kind
+                    timeline.baseline = baseline
+                await db.flush()
+            if timelines:
+                events = await db.scalars(
+                    select(SettingProgression).where(
+                        SettingProgression.timeline_id.in_([timeline.id for timeline in timelines]),
+                        SettingProgression.field_key == "presence",
+                    )
                 )
-            ).all()
-        )
-        character_ids = {timeline.character_id for timeline in timelines if timeline.character_id is not None}
-        await career_progression_service.validate_career_intervals(
-            db, project_id, character_ids, kind_overrides={career.id: data.kind}
-        )
-        # 修改定义是对职业类别的全局修正，必须同步基础和保留的存在事件，
-        # 而不是在当前章节伪造一条剧情变化。
-        for timeline in timelines:
-            await setting_progression_service._claim_revision(db, timeline, timeline.revision)
-            if timeline.baseline.get("exists") is True:
-                baseline = deepcopy(timeline.baseline)
-                baseline["role"] = data.kind
-                timeline.baseline = baseline
+                for event in events:
+                    if isinstance(event.value, dict) and event.value.get("exists") is True:
+                        value = deepcopy(event.value)
+                        value["state"]["role"] = data.kind
+                        event.value = value
+                        event.revision += 1
+            career.kind = data.kind
             await db.flush()
-        if timelines:
-            events = await db.scalars(
-                select(SettingProgression).where(
-                    SettingProgression.timeline_id.in_([timeline.id for timeline in timelines]),
-                    SettingProgression.field_key == "presence",
+            await career_progression_service.validate_career_intervals(db, project_id, character_ids)
+            snapshots = await setting_progression_service.resolve_timelines(db, project_id, timelines)
+            await career_progression_service.materialize_career_timelines(db, project_id, timelines, snapshots)
+            for character in holders:
+                db.add(
+                    CareerHistory(
+                        character_id=character.id,
+                        career_id=career.id,
+                        career_name=career.name,
+                        source="manual",
+                        changes={"role": [old_kind, data.kind]},
+                        note="",
+                    )
                 )
-            )
-            for event in events:
-                if isinstance(event.value, dict) and event.value.get("exists") is True:
-                    value = deepcopy(event.value)
-                    value["state"]["role"] = data.kind
-                    event.value = value
-                    event.revision += 1
-        career.kind = data.kind
-        await db.flush()
-        await career_progression_service.validate_career_intervals(db, project_id, character_ids)
-        snapshots = await setting_progression_service.resolve_timelines(db, project_id, timelines)
-        await career_progression_service.materialize_career_timelines(db, project_id, timelines, snapshots)
-        for character in holders:
-            db.add(
-                CareerHistory(
-                    character_id=character.id,
-                    career_id=career.id,
-                    career_name=career.name,
-                    source="manual",
-                    changes={"role": [old_kind, data.kind]},
-                    note="",
-                )
-            )
-    await _commit(db, NAME_CONFLICT)
-    return (await _refreshed_outs(db, [career]))[0]
+        if identity_tightened:
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=True)
+        await _commit(db, NAME_CONFLICT)
+        return (await _refreshed_outs(db, [career]))[0]
 
 
-async def delete_career(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> None:
+async def delete_career(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    career_id: int,
+    *,
+    manual: bool = False,
+) -> None:
     """删除职业：阶段、挂接与挂接历史随之级联删除。"""
     from app.services.planning_lifecycle import bump_revision
 
-    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
-    career = await get_owned_career(db, user_id, project_id, career_id)
-    await setting_field_service.cleanup_unreferenced_handles(
-        db, project_id, [EntityRef(kind="career", id=career.id)]
-    )
-    await db.delete(career)
-    await bump_revision(db, project_id)
-    await db.commit()
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    async with story_service._candidate_write_rollback(db):
+        career = await get_owned_career(db, user_id, project_id, career_id, manual=manual)
+        before_revision = await setting_ai_visibility.visibility_revision(db, project_id)
+        await setting_field_service.cleanup_unreferenced_handles(
+            db, project_id, [EntityRef(kind="career", id=career.id)]
+        )
+        await story_service._ensure_removed_candidate_bump(db, project_id, before_revision)
+        await db.delete(career)
+        await bump_revision(db, project_id)
+        await db.commit()
 
 
-async def list_holders(db: AsyncSession, user_id: int, project_id: int, career_id: int) -> list[CareerHolderOut]:
-    career = await get_owned_career(db, user_id, project_id, career_id)
+async def list_holders(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    career_id: int,
+    *,
+    manual: bool = False,
+) -> list[CareerHolderOut]:
+    career = await get_owned_career(db, user_id, project_id, career_id, manual=manual)
     total = len((await stages_of(db, [career.id]))[career.id])
     rows = await db.execute(
         select(CharacterCareer, Character.name, CareerStage)
@@ -814,14 +906,29 @@ async def _refreshed_assignments(db: AsyncSession, rows: list[CharacterCareer]) 
     return await assignment_outs(db, rows)
 
 
-async def _owned_character(db: AsyncSession, user_id: int, project_id: int, character_id: int) -> Character:
+async def _owned_character(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    *,
+    manual: bool = False,
+) -> Character:
+    if manual:
+        return await story_service.get_collaborative(db, story_service.CHARACTERS, user_id, project_id, character_id)
     return await story_service.get_manageable(db, story_service.CHARACTERS, user_id, project_id, character_id)
 
 
 async def _owned_assignment(
-    db: AsyncSession, user_id: int, project_id: int, character_id: int, assignment_id: int
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    assignment_id: int,
+    *,
+    manual: bool = False,
 ) -> tuple[Character, CharacterCareer, Career]:
-    character = await _owned_character(db, user_id, project_id, character_id)
+    character = await _owned_character(db, user_id, project_id, character_id, manual=manual)
     row = (
         await db.execute(
             select(CharacterCareer, Career)
@@ -834,14 +941,27 @@ async def _owned_assignment(
     return character, row[0], row[1]
 
 
-async def list_assignments(db: AsyncSession, user_id: int, project_id: int, character_id: int) -> list[AssignmentOut]:
-    character = await _owned_character(db, user_id, project_id, character_id)
+async def list_assignments(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    *,
+    manual: bool = False,
+) -> list[AssignmentOut]:
+    character = await _owned_character(db, user_id, project_id, character_id, manual=manual)
     return await assignment_outs(db, await character_assignments(db, character.id))
 
 
-async def list_project_assignments(db: AsyncSession, user_id: int, project_id: int) -> list[AssignmentOut]:
+async def list_project_assignments(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    *,
+    manual: bool = False,
+) -> list[AssignmentOut]:
     """项目内全部角色的挂接（角色卡片汇总用，一次请求）：按角色、主职业在前。"""
-    await get_manageable_project(db, user_id, project_id)
+    await _read_project(db, user_id, project_id, manual=manual)
     rows = await db.scalars(
         select(CharacterCareer)
         .join(Career, Career.id == CharacterCareer.career_id)
@@ -852,10 +972,16 @@ async def list_project_assignments(db: AsyncSession, user_id: int, project_id: i
 
 
 async def assign(
-    db: AsyncSession, user_id: int, project_id: int, character_id: int, data: AssignmentCreate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    data: AssignmentCreate,
+    *,
+    manual: bool = False,
 ) -> AssignmentOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    character = await _owned_character(db, user_id, project_id, character_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    character = await _owned_character(db, user_id, project_id, character_id, manual=manual)
     career = await get_project_career(db, project_id, data.career_id)
     row = await assign_new(
         db,
@@ -879,10 +1005,19 @@ async def assign(
 
 
 async def update_assignment(
-    db: AsyncSession, user_id: int, project_id: int, character_id: int, assignment_id: int, data: AssignmentUpdate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    assignment_id: int,
+    data: AssignmentUpdate,
+    *,
+    manual: bool = False,
 ) -> AssignmentOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    character, row, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    character, row, career = await _owned_assignment(
+        db, user_id, project_id, character_id, assignment_id, manual=manual,
+    )
     await apply_assignment(
         db,
         character,
@@ -917,9 +1052,12 @@ async def remove_assignment(
     boundary: Literal["start", "end"] = "start",
     edit_mode: Literal["baseline", "progression", "delete"] | None = None,
     expected_revision: int | None = None,
+    manual: bool = False,
 ) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    character, current, career = await _owned_assignment(db, user_id, project_id, character_id, assignment_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    character, current, career = await _owned_assignment(
+        db, user_id, project_id, character_id, assignment_id, manual=manual,
+    )
     if edit_mode == "delete":
         if chapter_id is not None or chapter_no is not None or scene_id is not None or anchor_kind is not None:
             raise BadRequestError("删除职业资料不能指定生效章节")
@@ -966,8 +1104,15 @@ async def remove_assignment(
     await db.commit()
 
 
-async def list_history(db: AsyncSession, user_id: int, project_id: int, character_id: int) -> list[CareerHistoryOut]:
-    character = await _owned_character(db, user_id, project_id, character_id)
+async def list_history(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    *,
+    manual: bool = False,
+) -> list[CareerHistoryOut]:
+    character = await _owned_character(db, user_id, project_id, character_id, manual=manual)
     rows = await db.scalars(
         select(CareerHistory).where(CareerHistory.character_id == character.id).order_by(CareerHistory.id.desc())
     )

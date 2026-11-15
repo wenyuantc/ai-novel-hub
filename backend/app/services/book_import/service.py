@@ -379,5 +379,7 @@ async def start(db: AsyncSession, engine: "TaskEngine", user_id: int, import_id:
     return StartResult(project_id=project.id, task=task)
 
 
-async def skip_task(db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int) -> TaskOut:
-    return await reverse.skip_paused(db, engine, user_id, task_id)
+async def skip_task(
+    db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int, *, expected_task_key: str | None = None,
+) -> TaskOut:
+    return await reverse.skip_paused(db, engine, user_id, task_id, expected_task_key=expected_task_key)

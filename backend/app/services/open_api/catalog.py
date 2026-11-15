@@ -102,10 +102,13 @@ async def _chapter_outs[T: out.ChapterBrief](db: AsyncSession, chapters: list[Ch
     outline_ids = {chapter.outline_id for chapter in chapters if chapter.outline_id is not None}
     volumes = (
         {
-            oid: (number, title)
-            for oid, number, title in (
+            (project_id, oid): (number, title)
+            for project_id, oid, number, title in (
                 await db.execute(
-                    select(Outline.id, Outline.volume_no, Outline.volume_title).where(Outline.id.in_(outline_ids))
+                    select(Outline.project_id, Outline.id, Outline.volume_no, Outline.volume_title).where(
+                        Outline.id.in_(outline_ids),
+                        Outline.project_id.in_({chapter.project_id for chapter in chapters}),
+                    )
                 )
             ).all()
         }
@@ -115,7 +118,7 @@ async def _chapter_outs[T: out.ChapterBrief](db: AsyncSession, chapters: list[Ch
     results = []
     for chapter in chapters:
         result = schema.model_validate(chapter)
-        result.volume_no, result.volume_title = volumes.get(chapter.outline_id, (None, None))
+        result.volume_no, result.volume_title = volumes.get((chapter.project_id, chapter.outline_id), (None, None))
         results.append(result)
     return results
 

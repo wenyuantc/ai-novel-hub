@@ -3,14 +3,17 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 
-from app.models import ApiKey, McpPlugin
+from app.core.security import ACCESS_TOKEN_COOKIE, decode_access_token
+from app.models import AgentChange, ApiKey, Task
 from app.schemas.system_settings import MAX_OPEN_API_RATE_LIMIT_PER_MINUTE
 from app.services import api_key_service
 from app.services.agent import mcp_tools
-from app.services.mcp.client import McpError
+from app.services.ai_dispatch import VisibilityPolicyError, read_visibility_stamp
+from app.services.authorization_service import AuthenticatedActor
 from tests.helpers import (
     Gate,
     analysis_json,
@@ -19,9 +22,12 @@ from tests.helpers import (
     register,
     run_task,
     stream_task,
+    task_params,
     wait_task,
+    wait_until,
 )
 from tests.mcp_fakes import FakeMcpConnector, tool
+from tests.test_agent_mcp_skills import call, send_task
 from tests.test_system_settings import save_settings
 
 MCP_URL = "https://runtime.example.com/mcp"
@@ -62,7 +68,8 @@ async def test_hot_concurrency_lower_preserves_running_and_raise_releases_queue(
         await save_settings(system_admin, **lower)
         assert len(fake_llm.calls) == 2 and fake_llm.aborted == 0
         for row in tasks[:2]:
-            assert (await client.get(f"/api/v1/tasks/{row['id']}")).json()["status"] == "running"
+            status = await client.get(f"/api/v1/tasks/{row['id']}", params=task_params(row))
+            assert status.json()["status"] == "running"
         engine = app.state.task_engine
         original = engine._dispatch
         original_done = engine._on_done
@@ -87,12 +94,14 @@ async def test_hot_concurrency_lower_preserves_running_and_raise_releases_queue(
         # 等待实际完成身份，再验证一次完成后的真实调度，不猜gate属于哪个ID。
         finished_id = await asyncio.wait_for(completed.get(), 5)
         assert finished_id in {row["id"] for row in tasks[:2]}
-        assert (await wait_task(client, finished_id))["status"] == "succeeded"
+        finished_ref = next(row for row in tasks[:2] if row["id"] == finished_id)
+        assert (await wait_task(client, finished_ref))["status"] == "succeeded"
         completion_observed = True
         engine.notify()
         await asyncio.wait_for(dispatched.wait(), 5)
         assert len(fake_llm.calls) == 2 and not gates[2].reached.is_set()
-        assert (await client.get(f"/api/v1/tasks/{tasks[2]['id']}")).json()["status"] == "queued"
+        queued = await client.get(f"/api/v1/tasks/{tasks[2]['id']}", params=task_params(tasks[2]))
+        assert queued.json()["status"] == "queued"
         await save_settings(system_admin, task_max_concurrency=3, task_max_per_user=2)
         await gates[2].wait_reached()
         assert len(fake_llm.calls) == 3 and fake_llm.aborted == 0
@@ -100,7 +109,7 @@ async def test_hot_concurrency_lower_preserves_running_and_raise_releases_queue(
         for gate in gates:
             gate.release()
     for row in tasks:
-        assert (await wait_task(client, row["id"]))["status"] == "succeeded"
+        assert (await wait_task(client, row))["status"] == "succeeded"
     assert fake_llm.aborted == 0
 
 
@@ -115,7 +124,7 @@ async def test_auto_analysis_hot_switch_uses_trigger_time_and_preserves_existing
     await generation.wait_reached()
     await save_settings(system_admin, auto_analyze_enabled=False)
     generation.release()
-    assert (await stream_task(client, started.json()["id"]))[-1][0] == "done"
+    assert (await stream_task(client, started.json()))[-1][0] == "done"
     assert (await client.get("/api/v1/tasks", params={"kind": "chapter.analyze"})).json() == []
     assert len(fake_llm.calls) == 1
 
@@ -124,14 +133,14 @@ async def test_auto_analysis_hot_switch_uses_trigger_time_and_preserves_existing
     fake_llm.push("第二章正文")
     fake_llm.push([analysis_gate, analysis_json()])
     started = await client.post(f"/api/v1/chapters/{second['id']}/generate", json={})
-    assert (await stream_task(client, started.json()["id"]))[-1][0] == "done"
+    assert (await stream_task(client, started.json()))[-1][0] == "done"
     await analysis_gate.wait_reached()
     analyzing = (await client.get("/api/v1/tasks", params={"kind": "chapter.analyze"})).json()
     assert len(analyzing) == 1
     await save_settings(system_admin, auto_analyze_enabled=False)
     assert fake_llm.aborted == 0
     analysis_gate.release()
-    assert (await wait_task(client, analyzing[0]["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, analyzing[0]))["status"] == "succeeded"
     fake_llm.push(analysis_json())
     manual, _ = await run_task(client, await client.post(f"/api/v1/chapters/{first['id']}/analyze", json={}))
     assert manual["status"] == "succeeded" and fake_llm.aborted == 0
@@ -149,8 +158,8 @@ async def test_batch_next_analysis_stage_reads_hot_switch(client, system_admin, 
     await gate.wait_reached()
     await save_settings(system_admin, auto_analyze_enabled=False)
     gate.release()
-    assert (await stream_task(client, started.json()["id"]))[-1][0] == "done"
-    finished = (await client.get(f"/api/v1/tasks/{started.json()['id']}")).json()
+    assert (await stream_task(client, started.json()))[-1][0] == "done"
+    finished = (await client.get(f"/api/v1/tasks/{started.json()['id']}", params=task_params(started.json()))).json()
     assert finished["checkpoint"]["items"][0]["analysis"] == "skipped"
     assert len(fake_llm.calls) == 1
 
@@ -209,6 +218,58 @@ async def setup_plugin(app, client):
     return plugin, connector
 
 
+async def _paused_mcp_claims(app, client, fake_llm, plugin, count):
+    """从真实受理的暂停轮次及原认证快照创建受控的测试 claim。"""
+    await create_ai_config(client)
+    project = await create_project(client)
+    base = f"/api/v1/projects/{project['id']}/agent"
+    conversation = await client.post(base + "/conversations", json={})
+    assert conversation.status_code == 201, conversation.text
+    url = base + f"/conversations/{conversation.json()['id']}"
+    attached = await client.patch(url, json={"mcp_plugin_ids": [plugin["id"]]})
+    assert attached.status_code == 200, attached.text
+    name = f"mcp__{plugin['slug']}__lookup"
+    fake_llm.push_tools([call(name, {"n": i}, f"call-{i}") for i in range(1, count + 1)])
+    task_ref = await send_task(client, url)
+    assert (await wait_task(client, task_ref, statuses=("paused", "failed")))["status"] == "paused"
+    view = (await client.get(url)).json()
+    assert len(view["changes"]) == count
+    cookie_actor = decode_access_token(client.cookies[ACCESS_TOKEN_COOKIE], app.state.settings.jwt_secret)
+    assert cookie_actor is not None
+    actor = AuthenticatedActor(*cookie_actor)
+    result = []
+    async with app.state.sessionmaker() as db:
+        task = await db.get(Task, task_ref["id"])
+        assert task.statistics_key == task_ref["task_key"] and task.status == "paused" and task.user_id == actor.id
+        assert task.input["_agent_actor_token_version"] == actor.token_version
+        assert task.input["_task_actor_token_version"] == actor.token_version
+        stamp = await read_visibility_stamp(db, project["id"])
+        for presented in view["changes"]:
+            change = await db.get(AgentChange, presented["id"])
+            assert change.change_key == presented["change_key"] and change.turn_task_key == task_ref["task_key"]
+            resolved = await mcp_tools.resolve(db, app.state.settings, actor.id, change.conversation_id,
+                                               task.checkpoint["mcp_tool_map"], change.tool_name)
+            assert resolved is not None
+            claim_id, started = str(uuid4()), datetime.now(UTC)
+            change.status, change.executed_at = "executing", started
+            change.result = {"_external_claim_id": claim_id, "_external_task_key": task_ref["task_key"]}
+            await db.flush()
+            identity = mcp_tools.McpSendIdentity(
+                sessionmaker=app.state.sessionmaker, actor=actor, project_id=project["id"],
+                conversation_id=change.conversation_id, task_id=task.id, task_key=task_ref["task_key"],
+                queued_at=task.queued_at, execution_key=None, change_id=change.id, change_key=change.change_key,
+                claim_id=claim_id, tool_call_id=change.tool_call_id, started_at=started, stamp=stamp,
+                task_snapshot=mcp_tools.task_snapshot(task), change_snapshot=mcp_tools.change_snapshot(change),
+            )
+            change.result = {**change.result, "_external_snapshot_mac": mcp_tools.identity_snapshot_mac(
+                db.info.get("agent_view_hmac_key"), identity,
+            )}
+            result.append((identity, resolved, dict(change.arguments)))
+        await db.commit()
+    result.sort(key=lambda item: item[2]["n"])
+    return result
+
+
 @pytest.mark.parametrize("operation", ["refresh", "call"])
 async def test_mcp_close_during_connect_prevents_unstarted_trial_or_discovery(
     app, client, system_admin, operation,
@@ -239,28 +300,33 @@ async def test_mcp_close_during_connect_prevents_unstarted_trial_or_discovery(
     assert (await client.get("/api/v1/mcp-plugins")).status_code == 403
 
 
-async def test_agent_worker_rechecks_after_connect(app, client, system_admin):
+async def test_agent_worker_rechecks_after_connect(app, client, system_admin, fake_llm, monkeypatch):
     plugin, fake = await setup_plugin(app, client)
+    (identity, resolved, arguments), = await _paused_mcp_claims(app, client, fake_llm, plugin, 1)
     reached, release = asyncio.Event(), asyncio.Event()
+    original_connect = FakeMcpConnector.__call__
 
     @asynccontextmanager
-    async def connector(target, *, allow_private):
-        async with fake(target, allow_private=allow_private) as connection:
-            reached.set()
-            await release.wait()
+    async def held_connect(self, target, *, allow_private, request_gate=None):
+        async with original_connect(self, target, allow_private=allow_private, request_gate=request_gate) as connection:
+            if self is fake:
+                reached.set()
+                await release.wait()
             yield connection
 
-    sessions = mcp_tools.McpSessions(connector, app.state.cipher, False, settings=app.state.settings)
-    async with app.state.sessionmaker() as db:
-        row = await db.get(McpPlugin, plugin["id"])
-    pending = asyncio.create_task(sessions.call(row, "lookup", {}))
+    monkeypatch.setattr(FakeMcpConnector, "__call__", held_connect)
+    sessions = mcp_tools.McpSessions(fake, app.state.cipher, False, settings=app.state.settings)
+    state = mcp_tools.McpSendState()
+    pending = asyncio.create_task(sessions.call(resolved.plugin, resolved.tool["name"], arguments, state,
+                                                identity=identity, resolved=resolved))
     try:
         await asyncio.wait_for(reached.wait(), 5)
         await save_settings(system_admin, mcp_enabled=False)
         release.set()
-        with pytest.raises(McpError, match="管理员已关闭 MCP"):
+        with pytest.raises(VisibilityPolicyError, match="MCP 功能已关闭") as blocked:
             await pending
-        assert fake.calls == []
+        assert blocked.value.extra == {"code": "mcp_disabled"}
+        assert fake.calls == [] and not state.started
     finally:
         release.set()
         await sessions.aclose()
@@ -268,9 +334,10 @@ async def test_agent_worker_rechecks_after_connect(app, client, system_admin):
 
 
 async def test_worker_queued_call_is_blocked_but_already_issued_call_completes(
-    app, client, system_admin,
+    app, client, system_admin, fake_llm,
 ):
     plugin, fake = await setup_plugin(app, client)
+    claims = await _paused_mcp_claims(app, client, fake_llm, plugin, 2)
     reached, release = asyncio.Event(), asyncio.Event()
 
     async def handler(_name, _arguments):
@@ -279,19 +346,26 @@ async def test_worker_queued_call_is_blocked_but_already_issued_call_completes(
         return "完成"
 
     fake.servers[MCP_URL].handler = handler
-    async with app.state.sessionmaker() as db:
-        row = await db.get(McpPlugin, plugin["id"])
     sessions = mcp_tools.McpSessions(fake, app.state.cipher, False, settings=app.state.settings)
-    first = asyncio.create_task(sessions.call(row, "lookup", {"n": 1}))
+    first_identity, first_resolved, first_arguments = claims[0]
+    second_identity, second_resolved, second_arguments = claims[1]
+    first_state, second_state = mcp_tools.McpSendState(), mcp_tools.McpSendState()
+    first = asyncio.create_task(sessions.call(first_resolved.plugin, first_resolved.tool["name"], first_arguments,
+                                              first_state, identity=first_identity, resolved=first_resolved))
     try:
         await asyncio.wait_for(reached.wait(), 5)
-        second = asyncio.create_task(sessions.call(row, "lookup", {"n": 2}))
+        second = asyncio.create_task(sessions.call(second_resolved.plugin, second_resolved.tool["name"],
+                                                   second_arguments, second_state,
+                                                   identity=second_identity, resolved=second_resolved))
+        await wait_until(lambda: sessions._workers[plugin["id"]]._queue.qsize() == 1)
         await save_settings(system_admin, mcp_enabled=False)
         release.set()
         assert (await first).text == "完成"
-        with pytest.raises(McpError, match="管理员已关闭 MCP"):
+        with pytest.raises(VisibilityPolicyError, match="MCP 功能已关闭") as blocked:
             await second
-        assert len(fake.calls) == 1
+        assert blocked.value.extra == {"code": "mcp_disabled"}
+        assert first_state.started and not second_state.started
+        assert fake.calls == [(MCP_URL, "lookup", first_arguments)]
     finally:
         release.set()
         await sessions.aclose()

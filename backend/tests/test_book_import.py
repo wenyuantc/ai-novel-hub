@@ -204,7 +204,7 @@ def _start(client, rec: dict, **body):
 
 async def _run(client, resp) -> tuple[dict, list]:
     assert resp.status_code == 202, resp.text
-    events = await stream_task(client, resp.json()["task"]["id"])
+    events = await stream_task(client, resp.json()["task"])
     return events[-1][1], events
 
 
@@ -617,7 +617,7 @@ async def test_failure_pauses_then_resume_skip_or_finish(app, client, fake_llm, 
     task_url = f"/api/v1/tasks/{task['id']}"
 
     if action == "finish":
-        resp = await client.post(f"{task_url}/finish")
+        resp = await client.post(f"{task_url}/finish", params={"task_key": task["task_key"]})
         assert resp.status_code == 200 and resp.json()["status"] == "succeeded"
         final = resp.json()
         async with app.state.sessionmaker() as db:
@@ -631,9 +631,9 @@ async def test_failure_pauses_then_resume_skip_or_finish(app, client, fake_llm, 
         for d in DIGESTS[1:]:
             fake_llm.push(d)
         fake_llm.push(SYNTHESIZE)
-        resp = await client.post(f"{task_url}/resume")
+        resp = await client.post(f"{task_url}/resume", params={"task_key": task["task_key"]})
         assert resp.status_code == 202
-        events = await stream_task(client, task["id"])
+        events = await stream_task(client, task)
         done = events[-1][1]
         assert done["task"]["status"] == "succeeded" and done["result"]["batches_done"] == 4
         assert done["result"]["stats"]["summaries"] == 3
@@ -644,9 +644,9 @@ async def test_failure_pauses_then_resume_skip_or_finish(app, client, fake_llm, 
     for d in DIGESTS[2:]:
         fake_llm.push(d)
     fake_llm.push(SYNTHESIZE)
-    resp = await client.post(f"{API}/tasks/{task['id']}/skip")
+    resp = await client.post(f"{API}/tasks/{task['id']}/skip", params={"task_key": task["task_key"]})
     assert resp.status_code == 202, resp.text
-    events = await stream_task(client, task["id"])
+    events = await stream_task(client, task)
     done = events[-1][1]
     result = done["result"]
     assert done["task"]["status"] == "succeeded"
@@ -660,7 +660,7 @@ async def test_skip_requires_failed_pause(client, fake_llm):
     rec = await _setup(client)
     _push_all(fake_llm)
     done, _ = await _run(client, await _start(client, rec))
-    resp = await client.post(f"{API}/tasks/{done['task']['id']}/skip")
+    resp = await client.post(f"{API}/tasks/{done['task']['id']}/skip", params={"task_key": done["task"]["task_key"]})
     assert resp.status_code == 409 and resp.json()["detail"] == reverse.SKIP_CONFLICT
 
 
@@ -676,9 +676,11 @@ async def test_synthesize_failure_skip_uses_merged_findings(client, fake_llm):
     assert paused["task"]["status"] == "paused"
     reason = paused["result"]["pause_reason"]
     assert reason["phase"] == "synthesize" and reason["batch_index"] is None and "AI 输出解析失败" in reason["error"]
-    resp = await client.post(f"{API}/tasks/{paused['task']['id']}/skip")
+    resp = await client.post(
+        f"{API}/tasks/{paused['task']['id']}/skip", params={"task_key": paused["task"]["task_key"]},
+    )
     assert resp.status_code == 202
-    done = (await stream_task(client, paused["task"]["id"]))[-1][1]
+    done = (await stream_task(client, paused["task"]))[-1][1]
     assert done["task"]["status"] == "succeeded"
     assert done["result"]["skipped"] == [{"stage": "synthesize", "chapter_nos": []}]
     data = await _project_data(client, pid)
@@ -694,20 +696,21 @@ async def test_interrupt_then_retry_does_not_repeat_done_batches(app, client, fa
     gate = Gate()
     fake_llm.push(DIGESTS[0])
     fake_llm.push([gate, DIGESTS[1]])
-    task_id = (await _start(client, rec, extract_style=False)).json()["task"]["id"]
+    initial_task = (await _start(client, rec, extract_style=False)).json()["task"]
+    task_id = initial_task["id"]
     await gate.wait_reached()
     engine = app.state.task_engine
     await engine.stop()
-    task = (await client.get(f"/api/v1/tasks/{task_id}")).json()
+    task = (await client.get(f"/api/v1/tasks/{task_id}", params={"task_key": initial_task["task_key"]})).json()
     assert task["status"] == "interrupted" and task["step_cursor"] == 1
     assert task["checkpoint"]["batches_done"] == 1
     await engine.start()
     for d in DIGESTS[1:]:
         fake_llm.push(d)
     fake_llm.push(SYNTHESIZE)
-    resp = await client.post(f"/api/v1/tasks/{task_id}/retry")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/retry", params={"task_key": initial_task["task_key"]})
     assert resp.status_code == 202
-    done = (await stream_task(client, resp.json()["id"]))[-1][1]
+    done = (await stream_task(client, resp.json()))[-1][1]
     assert done["task"]["status"] == "succeeded" and done["task"]["retry_of_id"] == task_id
     assert done["result"]["stats"]["summaries"] == 3
     prompts = [_prompt(c) for c in _digest_calls(fake_llm)]
@@ -730,8 +733,12 @@ async def test_deep_analyze_queued_after_characters(app, client, fake_llm):
             )
         )
     assert len(ids) == 3
-    for tid in ids:
-        assert (await wait_task(client, tid))["status"] == "succeeded"
+    listing = await client.get("/api/v1/tasks", params={"project_id": pid, "kind": "chapter.analyze"})
+    assert listing.status_code == 200, listing.text
+    tasks = listing.json()
+    assert {task["id"] for task in tasks} == set(ids)
+    for task in tasks:
+        assert (await wait_task(client, task))["status"] == "succeeded"
     analysis_calls = [c for c in fake_llm.calls if "【输出 JSON 结构】" in _prompt(c)]
     # 分析时角色已经写入：提示词里有本章涉及角色的当前状态
     assert len(analysis_calls) == 3 and all("林远" in _prompt(c) and "苏晴" in _prompt(c) for c in analysis_calls)
@@ -821,7 +828,9 @@ async def test_second_import_task_rejected(client, fake_llm):
     assert (await client.get(f"{API}/{rec2['id']}")).status_code == 200
     assert len((await client.get("/api/v1/projects")).json()) == 1
     # 结束后可以再发起
-    await client.post(f"/api/v1/tasks/{paused['task']['id']}/finish")
+    await client.post(
+        f"/api/v1/tasks/{paused['task']['id']}/finish", params={"task_key": paused["task"]["task_key"]},
+    )
     _push_all(fake_llm)
     done, _ = await _run(client, await _start(client, rec2))
     assert done["task"]["status"] == "succeeded"
@@ -850,7 +859,9 @@ async def test_cross_user_isolation(client, make_client, fake_llm):
     for coro in checks:
         resp = await coro
         assert resp.status_code == 404 and resp.json()["detail"] == "解析记录不存在", resp.text
-    resp = await bob.post(f"{API}/tasks/{paused['task']['id']}/skip")
+    resp = await bob.post(
+        f"{API}/tasks/{paused['task']['id']}/skip", params={"task_key": paused["task"]["task_key"]},
+    )
     assert resp.status_code == 404 and resp.json()["detail"] == "任务不存在"
     assert (await bob.get(API)).json() == []
 

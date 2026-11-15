@@ -1,10 +1,13 @@
 """规划的只读投影；所有位置来自真实来源，不在 GET 中物化规划单元。"""
 
 from collections import defaultdict
+from copy import deepcopy
+from itertools import batched
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ConflictError
 from app.models import (
     Career,
     Chapter,
@@ -110,6 +113,38 @@ async def entries(
     return sorted(result, key=lambda item: (item.reference.kind, item.name.casefold(), reference_key(item.reference)))
 
 
+async def _project_units(db: AsyncSession, project_id: int) -> list[PlanningUnit]:
+    """刷新来源身份时保留调用方待写的普通字段，不静默覆盖未提交变更。"""
+    protected = {"id", "project_id", "chapter_id", "plan_id", "scene_id", "source_level", "binding_epoch", "retired"}
+    pending: dict[int, dict] = {}
+    protected_ids = []
+    for unit in list(db.identity_map.values()):
+        if not isinstance(unit, PlanningUnit):
+            continue
+        state = inspect(unit)
+        identity = state.identity[0]
+        changed = {column.key for column in state.mapper.columns if state.attrs[column.key].history.has_changes()}
+        if changed & protected:
+            protected_ids.append(identity)
+        if changed - protected:
+            pending[identity] = {field: deepcopy(getattr(unit, field)) for field in changed - protected}
+    with db.no_autoflush:
+        for batch in batched(protected_ids, 400):
+            if await db.scalar(select(PlanningUnit.id).where(
+                PlanningUnit.project_id == project_id, PlanningUnit.id.in_(batch),
+            ).limit(1)) is not None:
+                raise ConflictError("规划来源已有未提交修改，请先完成当前操作")
+        units = list(await db.scalars(
+            select(PlanningUnit)
+            .where(PlanningUnit.project_id == project_id, PlanningUnit.retired.is_(False))
+            .execution_options(populate_existing=True)
+        ))
+        for unit in units:
+            for field, value in pending.get(unit.id, {}).items():
+                setattr(unit, field, value)
+    return units
+
+
 async def rows(db: AsyncSession, project_id: int, *, granularity: str = "chapter") -> list[PlanningRow]:
     chapters = list(
         await db.execute(
@@ -132,7 +167,7 @@ async def rows(db: AsyncSession, project_id: int, *, granularity: str = "chapter
                 ChapterPlan.character_ids,
             )
             .join(Outline, ChapterPlan.outline_id == Outline.id)
-            .where(Outline.project_id == project_id)
+            .where(Outline.project_id == project_id, ChapterPlan.project_id == project_id)
         )
     )
     outlines = {
@@ -143,13 +178,8 @@ async def rows(db: AsyncSession, project_id: int, *, granularity: str = "chapter
             ).where(Outline.project_id == project_id)
         )
     }
-    units = list(
-        await db.scalars(
-            select(PlanningUnit)
-            .where(PlanningUnit.project_id == project_id, PlanningUnit.retired.is_(False))
-            .execution_options(populate_existing=True)
-        )
-    )
+    plan_ids = {plan.id for plan in plans}
+    units = await _project_units(db, project_id)
     scene_chapters = dict((await db.execute(select(Scene.id, Scene.chapter_id).join(
         Chapter, Chapter.id == Scene.chapter_id
     ).where(Chapter.project_id == project_id))).all())
@@ -205,6 +235,8 @@ async def rows(db: AsyncSession, project_id: int, *, granularity: str = "chapter
     def build(source, title, chapter=None, plan=None, unit=None):
         outline_id = chapter.outline_id if chapter else plan.outline_id if plan else None
         outline = outlines.get(outline_id)
+        outline_id = outline.id if outline else None
+        plan_id = chapter.plan_id if chapter and chapter.plan_id in plan_ids else plan.id if plan else None
         character_ids = cast[chapter.id] if chapter else plan.character_ids if plan else unit.detached_character_ids
         refs = [
             EntityReference(kind="character", id=identity)
@@ -218,7 +250,7 @@ async def rows(db: AsyncSession, project_id: int, *, granularity: str = "chapter
             unit_id=unit.id if unit else None,
             source=source,
             chapter_id=chapter.id if chapter else None,
-            plan_id=chapter.plan_id if chapter else plan.id if plan else None,
+            plan_id=plan_id,
             title=title,
             chapter_no=chapter.chapter_no if chapter else None,
             outline_id=outline_id,

@@ -24,6 +24,7 @@ from app.models import (
     ChapterPlan,
     ChapterVersion,
     Character,
+    GenerationLog,
     Project,
     RelationshipType,
     RetrievalChunk,
@@ -65,6 +66,8 @@ class Snapshot(dict[str, dict[str, dict[str, Any]]]):
     def __init__(self) -> None:
         super().__init__()
         self.content_revision_floors: dict[int, int] = {}
+        # 私人引用也要固定原触发者；单靠整数 ID 会把 SQLite 复用后的新任务误认作旧链接。
+        self.private_links: dict[str, dict[int, dict[str, Any]]] = {"tasks": {}, "generation_logs": {}}
 
 
 Effect = dict[str, Any]
@@ -73,6 +76,9 @@ EFFECT_VERSION = 6
 _VISIBILITY_EFFECT_VERSION = 5
 _PROJECT_RUNTIME_REVISIONS = frozenset({
     "planning_revision", "fields_revision", "categories_revision", "ai_visibility_revision", "ai_history_epoch",
+})
+_CHAPTER_RUNTIME_FIELDS = frozenset({
+    "generation_claim_key", "generation_claim_task_key", "generation_claim_prev_status",
 })
 
 # 注册表的拓扑顺序用于插入，逆序用于删除；额外包含实际的级联 / 章号平移影响。
@@ -125,6 +131,11 @@ _BY_TABLE = {rule.table: rule for rule in _RULES}
 # created_at 创建后不变，须保留在快照中，撤销删除时才能原样恢复。
 _IGNORED = frozenset({"updated_at"})
 _LINK_ONLY = frozenset({"generation_logs", "tasks"})
+# 仅关联类效果的私人身份列：只进入内部证明，不进入普通效果行。
+_LINK_IDENTITY_FIELDS = {
+    "tasks": ("user_id", "statistics_key"),
+    "generation_logs": ("actor_user_id", "created_at", "log_instance_key"),
+}
 _LABELS = {
     "projects": "项目",
     "characters": "角色",
@@ -197,16 +208,20 @@ def _where(rule: TableRule, pk: dict):
 def _columns(rule: TableRule):
     table = rule.model.__table__
     if rule.table in _LINK_ONLY:
-        return [table.c[name] for name in ("id", "project_id", "chapter_id")]
+        identity_fields = _LINK_IDENTITY_FIELDS[rule.table]
+        return [table.c[name] for name in ("id", "project_id", "chapter_id", *identity_fields)]
     ignored = (_IGNORED | project_lifecycle.LIFECYCLE_FIELDS | _PROJECT_RUNTIME_REVISIONS
                if rule.model is Project else _IGNORED)
     if rule.table == "chapters":
-        ignored = ignored | {"content_revision"}
+        ignored = ignored | {"content_revision"} | _CHAPTER_RUNTIME_FIELDS
     return [col for col in table.columns if col.name not in ignored and col.name != "word_count"]
 
 
 def _row(rule: TableRule, mapping) -> dict:
     row = jsonable_encoder(dict(mapping))
+    if rule.table in _LINK_ONLY:
+        for name in _LINK_IDENTITY_FIELDS[rule.table]:
+            row.pop(name)
     if rule.table in {"chapters", "scenes"}:
         content = row.pop("content")
         row["_content_hash"] = content_hash(content)
@@ -344,7 +359,21 @@ async def snapshot(db: AsyncSession, project_id: int) -> Snapshot:
             empty_ids = [int(key) for key, row in result["chapters"].items() if "_empty_content" in row]
             scope = and_(scope, ChapterVersion.chapter_id.in_(empty_ids))
         rows = (await db.execute(select(*_columns(rule)).where(scope))).mappings()
-        result[rule.table] = {_key(_pk(rule, row)): _row(rule, row) for row in rows}
+        result[rule.table] = {}
+        for row in rows:
+            if rule.table == "tasks":
+                result.private_links["tasks"][row["id"]] = {
+                    "actor_user_id": row["user_id"], "statistics_key": row["statistics_key"],
+                }
+            elif rule.table == "generation_logs":
+                # 0052 起只用服务端不可变的日志实例键识别；整数 id 被删除复用后 actor/时间相同也不能冒认原日志。
+                # 旧日志没有实例键，只能沿用升级前的创建时间证明（0052 后新插入必有实例键，不会落入此分支）。
+                result.private_links["generation_logs"][row["id"]] = (
+                    {"actor_user_id": row["actor_user_id"], "log_instance_key": row["log_instance_key"]}
+                    if row["log_instance_key"] is not None
+                    else {"actor_user_id": row["actor_user_id"], "created_at": jsonable_encoder(row["created_at"])}
+                )
+            result[rule.table][_key(_pk(rule, row))] = _row(rule, row)
     _planning_signatures(result)
     _scene_signatures(result)
     return result
@@ -358,6 +387,12 @@ def diff(before: Snapshot, after: Snapshot) -> list[Effect]:
         old, new = before.get(rule.table, {}), after.get(rule.table, {})
         for key in sorted(old.keys() | new.keys()):
             previous, current = old.get(key), new.get(key)
+            if rule.table == "chapters":
+                # 快照可能来自旧运行体或损坏历史；不将生成占用记入公开效果或撤销数据。
+                previous = {k: v for k, v in previous.items() if k not in _CHAPTER_RUNTIME_FIELDS} \
+                    if previous is not None else None
+                current = {k: v for k, v in current.items() if k not in _CHAPTER_RUNTIME_FIELDS} \
+                    if current is not None else None
             if rule.table == "chapter_versions":
                 if previous is None or str(previous["chapter_id"]) not in removed_chapters:
                     continue
@@ -371,6 +406,21 @@ def diff(before: Snapshot, after: Snapshot) -> list[Effect]:
                         "after": deepcopy(current),
                         "format_version": EFFECT_VERSION,
                     }
+                if rule.table in _LINK_ONLY:
+                    row_id = (previous or current)["id"]
+                    old_identity = getattr(before, "private_links", {}).get(rule.table, {}).get(row_id)
+                    new_identity = getattr(after, "private_links", {}).get(rule.table, {}).get(row_id)
+                    if old_identity is not None and old_identity == new_identity:
+                        effect["_private_identity"] = deepcopy(old_identity)
+                elif rule.table == "chapter_versions":
+                    identities = {}
+                    for side, source, snapshot_data in (("before", previous, before), ("after", current, after)):
+                        log_id = source.get("generation_log_id") if source is not None else None
+                        identity = getattr(snapshot_data, "private_links", {}).get("generation_logs", {}).get(log_id)
+                        if identity is not None:
+                            identities[side] = deepcopy(identity)
+                    if identities:
+                        effect["_private_log_references"] = identities
                 if rule.table == "chapters" and previous is not None and current is None:
                     effect["content_revision_floor"] = getattr(before, "content_revision_floors", {}).get(
                         previous["id"], 0,
@@ -964,6 +1014,18 @@ async def _preflight_series_effects(
     return preserve
 
 
+async def _log_identity_matches(db: AsyncSession, effect: Effect) -> bool:
+    """带实例键证明的日志效果只能作用于同一实例；整数 id 复用的新日志不能被当作原记录。"""
+    proof = effect.get("_private_identity")
+    current = await db.scalar(select(GenerationLog.log_instance_key).where(GenerationLog.id == effect["pk"].get("id")))
+    if not isinstance(proof, dict) or "log_instance_key" not in proof:
+        # 0052 前的效果没有实例键证明：只可作用于仍无实例键的旧行；有键的行是 0052 后插入的
+        # （实例键不可变、旧行永远为 NULL），即使 ID、actor 与时间相同也不是原记录。
+        return current is None
+    key = proof["log_instance_key"]
+    return type(key) is str and bool(key) and current == key
+
+
 async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
     conflicts = []
     for effect in effects:
@@ -978,8 +1040,19 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
         ):
             conflicts.append(_conflict(effect, "记录不属于当前项目"))
             continue
+        if name in _LINK_ONLY and (before is None or after is None):
+            # diff 只为两侧都存在的关联行产生效果；旧或伪造效果不能借撤销删除私人记录，
+            # 也不能插入缺少服务端实例键的生成记录。
+            conflicts.append(_conflict(effect, "只能恢复章节关联，不能创建或删除"))
+            continue
         current = await _current(db, rule, effect["pk"], project_id)
+        if name == "generation_logs" and current is not None and not await _log_identity_matches(db, effect):
+            conflicts.append(_conflict(effect, "生成记录已不是原记录"))
+            continue
         expected_after = deepcopy(after)
+        if name == "chapters" and expected_after is not None:
+            for key in _CHAPTER_RUNTIME_FIELDS:
+                expected_after.pop(key, None)
         if effect.get("format_version", 1) < 6 and expected_after is not None:
             if name == "planning_units":
                 missing_scene_columns = not any(key in expected_after for key in _SCENE_UNIT_DEFAULTS)
@@ -1053,6 +1126,9 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
 
 
 def _values(rule: TableRule, row: dict) -> dict:
+    if rule.table in _LINK_ONLY:
+        # 仅恢复章节外键；旧或恶意快照不能覆盖私人归属、模型来源或任务运行身份。
+        return {name: row[name] for name in ("id", "project_id", "chapter_id") if name in row}
     values = {name: value for name, value in row.items() if name in rule.model.__table__.columns}
     for column in rule.model.__table__.columns:
         if isinstance(column.type, DateTime) and isinstance(values.get(column.name), str):
@@ -1067,6 +1143,8 @@ def _values(rule: TableRule, row: dict) -> dict:
             values.pop(key, None)
     if rule.table == "chapters":
         values.pop("content_revision", None)
+        for key in _CHAPTER_RUNTIME_FIELDS:
+            values.pop(key, None)
     return values
 
 
@@ -1390,6 +1468,13 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
             preserve = await _preflight_series_effects(db, project_id, effects)
             await _guard_field_visibility_rebinding(db, project_id, effects)
             restoring = True
+            memories = [e for e in effects if e["table"] == "story_memories"]
+            removed = [e["pk"]["id"] for e in memories if e["before"] is None]
+            recreated = [e["pk"]["id"] for e in memories if e["before"] is not None and e["after"] is None]
+            # 必须在删除来源前证明业务记忆及所有检索行都属于本书，且与撤销同一保存点回滚。
+            await retrieval_service.delete_project_refs(db, project_id, "memory", removed)
+            # 恢复被删除记忆是重新建立来源，不能继承同 ID 的旧孤儿索引，即使孤儿标记为本书。
+            await retrieval_service.require_unindexed_sources(db, "memory", recreated)
             await _restore_rows(db, effects, preserve)
             await _validate_restored_scopes(db, project_id, effects)
             await _refresh_loaded(db, effects)
@@ -1419,10 +1504,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
                 if effect["table"] == "chapter_text":
                     await _restore_text(db, project_id, effect)
             await _restore_scene_projections(db, project_id, effects)
-            memories = [e for e in effects if e["table"] == "story_memories"]
             if memories:
-                removed = [e["pk"]["id"] for e in memories if e["before"] is None]
-                await retrieval_service.delete_refs(db, "memory", removed)
                 restored = [e["pk"]["id"] for e in memories if e["before"] is not None]
                 rows = list(
                     await db.scalars(

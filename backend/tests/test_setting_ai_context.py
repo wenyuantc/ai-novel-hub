@@ -14,6 +14,8 @@ from app.models import (
     SettingTextField,
     SettingTimeline,
     StoryMemory,
+    Task,
+    User,
     WorldSetting,
 )
 from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
@@ -27,7 +29,6 @@ from app.services import (
     planning_context_service,
     wizard_service,
 )
-from app.services.retrieval_service import Embedder
 from app.services.setting_ai_context import build_scope
 from tests.helpers import Gate, analysis_json, create_ai_config, create_project, register, run_task, stream_task
 from tests.test_setting_fields_postgresql import (
@@ -307,7 +308,7 @@ async def test_continuation_does_not_send_first_round_context_after_tightening(a
         await _settings(client, base, "character", hero["id"], ai_mode="never")
     finally:
         gate.release()
-    events = await stream_task(client, response.json()["id"])
+    events = await stream_task(client, response.json())
     assert len(fake_llm.calls) == 1
     event, result = events[-1]
     # 可见性收紧撤回了整个上下文快照；最终保存必须拒绝，而非把旧首轮当作成功稿。
@@ -350,7 +351,12 @@ async def test_initial_job_can_rebuild_before_any_generation_request(app, client
 
 
 async def test_memory_embedding_does_not_send_canonical_names_from_old_internal_index(app, client, fake_llm):
-    await register(client)
+    # E6-b：作者旧记忆任务也经受控批次（快照 → guard 发送 → 锁内 CAS 写），快照只取记忆正文。
+    from tests.test_kb_index_admission_e6a import _build, _claim
+
+    await app.state.task_engine.stop()
+    user = await register(client)
+    await create_ai_config(client, name="向量", model_type="embedding", model="emb-memory")
     pid = (await create_project(client))["id"]
     async with app.state.sessionmaker() as db:
         memory = StoryMemory(
@@ -360,13 +366,18 @@ async def test_memory_embedding_does_not_send_canonical_names_from_old_internal_
         db.add(memory)
         await db.flush()
         await memory_service.index_memories(db, pid, [memory])
+        account = await db.get(User, user["id"])
+        task = Task(user_id=user["id"], project_id=pid, kind="kb.index", status="queued",
+                    serial_key=kb_index_service.serial_key(pid),
+                    input={"request": {"project_id": pid, "mode": "memory"},
+                           "_task_actor_token_version": account.token_version})
+        db.add(task)
         await db.commit()
-    embedder = Embedder(fake_llm.factory("openai_compat", "test", None, 10), "openai_compat", "test")
-    job = kb_index_service.IndexJob("memory", pid, None, embedder)
-    events = [event async for event in kb_index_service._embed_stale(
-        app.state.sessionmaker, job, source="memory", ref_ids=None, total=1,
-    )]
-    assert len(events) == 1
+        task_id = task.id
+    execution = await _claim(app, task_id)
+    job = await _build(app, task_id, execution, fake_llm.factory)
+    events = [event async for event in kb_index_service.run_index_job(job, app.state.sessionmaker)]
+    assert [name for name, _ in events] == ["delta", "done"], events
     assert fake_llm.embed_calls[0]["texts"] == ["原文保留"]
 
 
@@ -384,7 +395,7 @@ async def test_generation_retrieval_embedding_uses_projected_cast(client, fake_l
         "file": ("测试资料.txt", "只为触发混合检索的资料。".encode(), "text/plain"),
     })
     assert index.status_code == 202, index.text
-    events = await stream_task(client, index.json()["task"]["id"])
+    events = await stream_task(client, index.json()["task"])
     assert events[-1][0] == "done"
     fake_llm.embed_calls.clear()
     chapter = (await client.post(f"{base}/chapters", json={"title": "向量验证"})).json()

@@ -2,14 +2,15 @@ import asyncio
 import time
 from contextlib import aclosing
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.endpoint_guard import ensure_endpoint_allowed
 from app.ai.providers import AIProviderError, LLMProvider, ProviderFactory
-from app.core.errors import BadRequestError, NotFoundError
+from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher, mask_secret
-from app.models import AIConfig
+from app.models import AIConfig, User
 from app.schemas.ai_config import (
     AIConfigCreate,
     AIConfigOut,
@@ -22,6 +23,8 @@ from app.schemas.ai_config import (
     check_embedding_provider,
     check_output_within_context,
 )
+from app.services import authorization_service as authz
+from app.services.ai_dispatch import is_sqlite_busy
 
 TEST_TIMEOUT_SECONDS = 30
 LIST_MODELS_TIMEOUT_SECONDS = 30
@@ -33,6 +36,50 @@ PROMPT_RESERVE_TOKENS = 4000
 # 中文约 1 字 ≈ 1 token 的保守估算
 CHARS_PER_TOKEN = 1.0
 MIN_CONTEXT_CHARS = 1000
+# 单用户配置选择屏障，独立于作品 AI 发送门禁的 advisory 命名空间。
+_CONFIG_LOCK_NAMESPACE = 0x41494346
+
+
+async def lock_config_owner(db: AsyncSession, user_id: int, *, write: bool) -> None:
+    """先于配置读写取得事务锁；调用方负责在 commit/rollback 时释放。"""
+    if type(user_id) is not int or not 0 < user_id <= 2**31 - 1:
+        raise ValueError("用户身份无效")
+    try:
+        with db.no_autoflush:
+            dialect = db.get_bind().dialect.name
+            if dialect == "postgresql":
+                fn = func.pg_advisory_xact_lock if write else func.pg_advisory_xact_lock_shared
+                await db.execute(select(fn(_CONFIG_LOCK_NAMESPACE, user_id)))
+            elif dialect == "sqlite":
+                # SQLite 没有行级共享锁；两端用同一 User no-op UPDATE 取得物理写屏障。
+                result = await db.execute(update(User).where(User.id == user_id).values(
+                    id=User.id, updated_at=User.updated_at,
+                ).execution_options(synchronize_session=False))
+                if result.rowcount != 1:
+                    raise NotFoundError("用户不存在")
+            else:
+                raise RuntimeError("模型配置屏障不支持当前数据库")
+    except OperationalError as exc:
+        if db.get_bind().dialect.name == "sqlite" and is_sqlite_busy(exc):
+            await db.rollback()
+            raise ConflictError("模型配置正在变化，请重试", extra={"code": "collaboration_busy"}) from None
+        raise
+
+
+async def _lock_authenticated_config_writer(db: AsyncSession, user_id: int) -> None:
+    """先锁并核验原始登录，再锁配置；等待期间不能让撤销令牌穿过写入。"""
+    try:
+        with db.no_autoflush:
+            # 与受控模型发送保持同序：用户认证行 → 配置选择锁。
+            # 读锁持至提交，停用或撤令牌必须先于本次写入、或等待本次写入结束。
+            await authz.require_authenticated_for_send(db, user_id)
+            await lock_config_owner(db, user_id, write=True)
+            await authz.require_authenticated_for_send(db, user_id)
+    except OperationalError as exc:
+        if db.get_bind().dialect.name == "sqlite" and is_sqlite_busy(exc):
+            await db.rollback()
+            raise ConflictError("模型配置正在变化，请重试", extra={"code": "collaboration_busy"}) from None
+        raise
 
 
 def to_out(cfg: AIConfig, cipher: SecretCipher) -> AIConfigOut:
@@ -89,6 +136,7 @@ async def _clear_default(db: AsyncSession, user_id: int, model_type: str, except
 
 
 async def create_config(db: AsyncSession, cipher: SecretCipher, user_id: int, data: AIConfigCreate) -> AIConfig:
+    await _lock_authenticated_config_writer(db, user_id)
     has_any = await db.scalar(
         select(AIConfig.id).where(AIConfig.user_id == user_id, AIConfig.model_type == data.model_type).limit(1)
     )
@@ -117,6 +165,7 @@ async def create_config(db: AsyncSession, cipher: SecretCipher, user_id: int, da
 async def update_config(
     db: AsyncSession, cipher: SecretCipher, user_id: int, config_id: int, data: AIConfigUpdate
 ) -> AIConfig:
+    await _lock_authenticated_config_writer(db, user_id)
     cfg = await get_config(db, user_id, config_id)
     fields = data.model_fields_set
     old_type = cfg.model_type
@@ -167,6 +216,7 @@ async def update_config(
 
 
 async def set_default(db: AsyncSession, user_id: int, config_id: int) -> AIConfig:
+    await _lock_authenticated_config_writer(db, user_id)
     cfg = await get_config(db, user_id, config_id)
     await _clear_default(db, user_id, cfg.model_type, except_id=cfg.id)
     cfg.is_default = True
@@ -176,6 +226,7 @@ async def set_default(db: AsyncSession, user_id: int, config_id: int) -> AIConfi
 
 
 async def delete_config(db: AsyncSession, user_id: int, config_id: int) -> None:
+    await _lock_authenticated_config_writer(db, user_id)
     cfg = await get_config(db, user_id, config_id)
     was_default = cfg.is_default
     model_type = cfg.model_type

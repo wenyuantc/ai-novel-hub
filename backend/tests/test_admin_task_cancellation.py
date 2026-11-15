@@ -36,7 +36,8 @@ REQUEST = AdminTaskCancelRequest(confirm=True, reason="人工处理排队异常"
 
 async def accept(app, actor, task):
     async with app.state.sessionmaker() as db:
-        return await admin_task_service.cancel_task(db, app.state.task_engine, actor, task.statistics_key, REQUEST)
+        task_key = task if isinstance(task, str) else task.statistics_key
+        return await admin_task_service.cancel_task(db, app.state.task_engine, actor, task_key, REQUEST)
 
 
 async def test_audit_failure_rolls_back_intent_without_signal(app, client, monkeypatch):
@@ -66,7 +67,7 @@ async def test_accepted_queued_holds_resource_until_abort_and_blocks_claim(app, 
     actor, task = await setup_task(app, client)
     reached, release = asyncio.Event(), asyncio.Event()
 
-    async def abort(ctx, row):
+    async def abort(ctx, row, **_kwargs):
         reached.set()
         await release.wait()
 
@@ -94,7 +95,7 @@ async def test_abort_failure_retains_queued_marker_then_retries(app, client, mon
     actor, task = await setup_task(app, client)
     calls = []
 
-    async def abort(ctx, row):
+    async def abort(ctx, row, **_kwargs):
         calls.append(row.id)
         raise RuntimeError("private")
 
@@ -105,7 +106,7 @@ async def test_abort_failure_retains_queued_marker_then_retries(app, client, mon
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, task.id)
         assert row.status == "queued" and row.admin_cancel_operation_id == accepted.operation_id
-    async def success(ctx, row):
+    async def success(ctx, row, **_kwargs):
         calls.append(row.id)
     monkeypatch.setattr(handler, "on_abort", success)
     await app.state.task_engine.scan_admin_cancellations()
@@ -142,7 +143,7 @@ async def test_terminal_marker_anomaly_is_not_aborted_or_pruned(app, client, mon
     async with app.state.sessionmaker() as db:
         await db.execute(update(Task).where(Task.id == task.id).values(admin_cancel_operation_id=str(uuid4())))
         await db.commit()
-    async def forbidden_abort(*args):
+    async def forbidden_abort(*args, **_kwargs):
         raise AssertionError("不能对已成功任务重放旧abort")
     monkeypatch.setattr(get_handler(task.kind), "on_abort", forbidden_abort)
     await app.state.task_engine.scan_admin_cancellations()
@@ -166,7 +167,7 @@ async def test_late_winner_clears_marker_in_original_finalization(app, client, m
         await release.wait()
         return await original(*args, **kwargs)
 
-    async def abort(*args):
+    async def abort(*args, **_kwargs):
         aborts.append(True)
 
     monkeypatch.setattr(engine, "complete_state", gate)
@@ -230,26 +231,26 @@ async def test_slow_running_cleanup_stays_pending_and_cancel_is_once(app, client
     original_abort = handler.on_abort
     calls = []
 
-    async def abort(ctx, task):
+    async def abort(ctx, task, **kwargs):
         calls.append(task.id)
         abort_gate.reached.set()
         await abort_gate.released.wait()
-        await original_abort(ctx, task)
+        await original_abort(ctx, task, **kwargs)
 
     monkeypatch.setattr(handler, "on_abort", abort)
     async with app.state.sessionmaker() as db:
         task = await db.get(Task, task_out["id"])
-    first = await accept(app, actor, task)
+    first = await accept(app, actor, task_out["task_key"])
     await abort_gate.wait_reached()
     await engine.wait_admin_cancellations()
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, task.id)
         assert row.status == "running" and row.admin_cancel_operation_id == first.operation_id
-    second = await accept(app, actor, task)
+    second = await accept(app, actor, task_out["task_key"])
     assert first == second and calls == [task.id]
     assert engine.project_work(project["id"])
     abort_gate.release()
-    ended = await wait_task(client, task.id)
+    ended = await wait_task(client, task_out)
     assert ended["status"] == "cancelled"
     async with app.state.sessionmaker() as db:
         assert (await db.get(Task, task.id)).admin_cancel_operation_id is None
@@ -323,16 +324,22 @@ async def test_admin_cancel_preserves_real_atomic_save_boundary(app, client, fak
     await stream.wait_reached()
     async with app.state.sessionmaker() as db:
         task = await db.get(Task, task_out["id"])
-    response = await client.post(f"/api/v1/admin/tasks/{task.statistics_key}/cancel",
+    if cancel_at == "committed":
+        # 成功提交后再受理取消，确保测试真正覆盖 commit 已获胜的顺序。
+        stream.release()
+        await saving.wait_reached()
+    response = await client.post(f"/api/v1/admin/tasks/{task_out['task_key']}/cancel",
                                  json={"confirm": True, "reason": "验证安全收尾"})
     assert response.status_code == 202, response.text
     await asyncio.wait_for(signal_ready.wait(), 3)
-    stream.release()
+    if cancel_at == "returning":
+        # 先持久受理时禁止正文提交；屏障此时覆盖失败日志的活游标。
+        stream.release()
     try:
         await asyncio.wait_for(cancel_sent.wait(), 3)
     finally:
         saving.release()
-    ended = await wait_task(client, task.id)
+    ended = await wait_task(client, task_out)
     await engine.wait_admin_cancellations()
     expected = "cancelled" if cancel_at == "returning" else "succeeded"
     assert ended["status"] == expected and not driver_cancelled
@@ -373,7 +380,7 @@ async def test_final_state_save_failure_retries_known_winner_not_abort(app, clie
             raise RuntimeError("private commit parameters")
         await original_commit(db)
 
-    async def abort(*args):
+    async def abort(*args, **_kwargs):
         aborts.append(True)
 
     monkeypatch.setattr(AsyncSession, "commit", commit)
@@ -400,7 +407,7 @@ async def test_running_abort_failure_retains_barrier_and_restart_interrupts(app,
     accepted = await accept(app, actor, task)
     handler = get_handler(task.kind)
 
-    async def fail(*args):
+    async def fail(*args, **_kwargs):
         raise RuntimeError("private abort details")
 
     monkeypatch.setattr(handler, "on_abort", fail)
@@ -412,7 +419,7 @@ async def test_running_abort_failure_retains_barrier_and_restart_interrupts(app,
         record = await db.get(TaskStatistic, task.statistics_key)
         assert record is None or record.finished_event_at is None
 
-    async def success(*args):
+    async def success(*args, **_kwargs):
         return None
 
     monkeypatch.setattr(handler, "on_abort", success)
@@ -431,7 +438,7 @@ async def test_shutdown_waits_independent_drain_without_cancelling_cleanup(app, 
     stop_waiting = asyncio.Event()
     original_wait = engine.wait_admin_cancellations
 
-    async def abort(*args):
+    async def abort(*args, **_kwargs):
         abort_gate.reached.set()
         await abort_gate.released.wait()
 
@@ -467,7 +474,7 @@ async def test_old_round_known_winner_cannot_finalize_resumed_round(app, client,
         await db.commit()
     calls = []
 
-    async def abort(*args):
+    async def abort(*args, **_kwargs):
         calls.append(True)
 
     monkeypatch.setattr(get_handler(task.kind), "on_abort", abort)
@@ -545,22 +552,33 @@ async def test_completed_old_paused_round_cannot_skip_new_round_abort_repair(app
     monkeypatch.setattr(task_statistics_service, "now_utc", lambda: frozen)
     async with app.state.sessionmaker() as db:
         await task_service.resume_task(db, engine, actor.id, task.id)
-        await db.execute(update(Chapter).where(Chapter.id == chapter.id).values(status="generating"))
+        # 构造下一轮的真实单章 Task/claim：不能只造 generating 状态再猜它归谁。
+        from app.services import project_access
+        from app.services.task_engine.handlers import chapter as chapter_handler
+
+        await project_access.require_project(db, actor.id, project.id, "ai.use", for_update=True,
+                                             visibility_write=True)
+        resumed = await db.get(Task, task.id)
+        resumed.kind, resumed.chapter_id, resumed.resource_key = "chapter.generate", chapter.id, f"chapter:{chapter.id}"
+        resumed.input = {"request": {"chapter_id": chapter.id}, "chapter_id": chapter.id, "prev_status": "draft"}
+        await db.flush()
+        await chapter_handler.bind_queued_claim(db, resumed)
         await db.commit()
         resumed = await db.get(Task, task.id)
         assert resumed.queued_at > task.queued_at.replace(tzinfo=None)
         assert not engine.admin_cancellations.completed_round(resumed)
     calls = []
+    from app.services import chapter_claim
 
-    async def abort(ctx, row):
-        calls.append(row.id)
+    release = chapter_claim.release_chapter_claim
+
+    async def abort(db, claim):
+        calls.append(claim.task_id)
         if len(calls) == 1:
             raise RuntimeError("新一轮普通取消收尾暂时失败")
-        async with ctx.sessionmaker() as db:
-            await db.execute(update(Chapter).where(Chapter.id == chapter.id).values(status="draft"))
-            await db.commit()
+        return await release(db, claim)
 
-    monkeypatch.setattr(handler, "on_abort", abort)
+    monkeypatch.setattr(chapter_claim, "release_chapter_claim", abort)
     async with app.state.sessionmaker() as db:
         with pytest.raises(RuntimeError):
             await task_service.cancel_task(db, engine, actor.id, task.id)
@@ -600,7 +618,7 @@ async def test_cancelled_commit_ack_loss_never_replays_old_abort_on_new_resource
             lost = True
             raise RuntimeError("提交成功但确认丢失")
 
-    async def old_abort(ctx, row):
+    async def old_abort(ctx, row, **_kwargs):
         aborts.append(row.id)
         async with ctx.sessionmaker() as db:
             await db.execute(update(Chapter).where(Chapter.id == chapter.id).values(status="draft"))
@@ -613,22 +631,38 @@ async def test_cancelled_commit_ack_loss_never_replays_old_abort_on_new_resource
     await engine._finalize(task.id, task, old_handler, hub, status="cancelled", result=None, error="任务已取消")
     assert lost and engine.admin_cancellations.completed_round(task)
     async with app.state.sessionmaker() as db:
-        await db.execute(update(Chapter).where(Chapter.id == chapter.id).values(status="generating"))
+        from app.services import project_access
+        from app.services.task_engine.handlers import chapter as chapter_handler
+
+        await project_access.require_project(db, actor.id, project.id, "ai.use", for_update=True,
+                                             visibility_write=True)
         new = Task(user_id=actor.id, project_id=project.id, chapter_id=chapter.id, kind="chapter.generate",
-                   status="queued", resource_key=task.resource_key,
-                   input={"chapter_id": chapter.id, "prev_status": "draft"})
+                   status="queued", resource_key=f"chapter:{chapter.id}", input={
+                       "request": {"chapter_id": chapter.id}, "chapter_id": chapter.id, "prev_status": "draft",
+                   })
         db.add(new)
+        await db.flush()
+        await chapter_handler.bind_queued_claim(db, new)
         await db.commit()
-    handler = get_handler("chapter.generate")
-    original_abort = handler.on_abort
+    from app.services import chapter_claim
 
-    async def new_abort(ctx, row):
-        async with ctx.sessionmaker() as db:
-            assert (await db.get(Chapter, chapter.id)).status == "generating"  # 旧abort未先误伤。
-        await original_abort(ctx, row)
+    original_release = chapter_claim.release_chapter_claim
 
-    monkeypatch.setattr(handler, "on_abort", new_abort)
-    engine._abort_failures.add(project.id)  # 其他收尾故障也不能让项目级重试重放旧代次。
+    async def new_abort(db, claim):
+        assert (await db.get(Chapter, chapter.id)).status == "generating"  # 旧abort未先误伤。
+        return await original_release(db, claim)
+
+    monkeypatch.setattr(chapter_claim, "release_chapter_claim", new_abort)
+    # 其他收尾故障也不能让项目级重试重放旧代次：缺原始身份的失败标记只能失败关闭。
+    engine._abort_failures.add(project.id)
+    async with app.state.sessionmaker() as db:
+        with pytest.raises(ConflictError) as blocked:
+            await task_service.stop_project_tasks(db, engine, project.id)
+        assert blocked.value.extra == {"code": "project_tasks_not_stopped"}
+    async with app.state.sessionmaker() as db:
+        assert (await db.get(Chapter, chapter.id)).status == "generating"
+    assert aborts == [task.id]
+    engine._abort_failures.discard(project.id)
     async with app.state.sessionmaker() as db:
         await task_service.stop_project_tasks(db, engine, project.id)
         assert (await db.get(Chapter, chapter.id)).status == "draft"

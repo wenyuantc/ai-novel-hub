@@ -15,7 +15,7 @@ from tests.test_scenes import setup_scene
 @pytest.mark.parametrize("offset", [0, 50])
 async def test_scene_page_rejects_chapter_changed_between_parent_and_rows(client, monkeypatch, offset):
     _, _, url, scene = await setup_scene(client, "原稿")
-    original = scene_service.get_manageable_chapter
+    original = scene_service.get_manual_chapter
     changed = False
 
     async def update_after_parent_read(*args, **kwargs):
@@ -29,7 +29,7 @@ async def test_scene_page_rejects_chapter_changed_between_parent_and_rows(client
             assert response.status_code == 200, response.text
         return chapter
 
-    monkeypatch.setattr(scene_service, "get_manageable_chapter", update_after_parent_read)
+    monkeypatch.setattr(scene_service, "get_manual_chapter", update_after_parent_read)
     response = await client.get(f"{url}/scenes?offset={offset}")
     assert changed
     assert response.status_code == 409, response.text

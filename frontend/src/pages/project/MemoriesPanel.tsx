@@ -33,7 +33,10 @@ import { useIndexStatus } from '../../hooks/useIndexStatus'
 import { useLoader } from '../../hooks/useLoader'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
+import { useProjectStore } from '../../stores/project'
 import {
+  collaboratorKbAccess,
+  collaboratorSearchNotice,
   MEMORY_KIND_COLORS,
   MEMORY_KIND_LABELS,
   MEMORY_ORIGIN_LABELS,
@@ -53,7 +56,11 @@ function triBool(v: TriState): boolean | undefined {
 export default function MemoriesPanel() {
   const { token } = theme.useToken()
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseOwnerAI, canUseAIEntitled, canEdit, canEditNow, role, isCollaborator } = useProjectAccess(pid)
+  const project = useProjectStore((s) => s.project)
+  // accepted 编辑者：索引状态精简视图 + 以服务端 index-status 判定检索调试是否开放
+  const collaborator = role === 'editor' && isCollaborator && canEdit && canUseAIEntitled
+  const accessKey = `${project?.id === pid ? project.access?.authorization_version ?? '' : ''}:${project?.access?.allow_owner_ai ? 1 : 0}`
   const { message } = App.useApp()
 
   const [chapterFrom, setChapterFrom] = useState<number | null>(null)
@@ -92,7 +99,10 @@ export default function MemoriesPanel() {
   const { data: characters } = useLoader(charLoader, { projectId: pid, resources: ['memories', 'characters'] })
   const characterNames = useMemo(() => (characters ?? []).map((c) => c.name), [characters])
 
-  const { status, refresh: refreshStatus } = useIndexStatus(pid, { enabled: canUseAI })
+  const { status, refresh: refreshStatus } = useIndexStatus(pid, {
+    enabled: canUseOwnerAI || collaborator, foreground: collaborator, revalidateKey: accessKey,
+  })
+  const shared = collaboratorKbAccess(status)
 
   /** 改筛选条件时回到第 1 页 */
   const filter = <T,>(set: (v: T) => void) => (v: T) => {
@@ -263,7 +273,9 @@ export default function MemoriesPanel() {
 
   return (
     <>
-      {canUseAI && <IndexStatusBanner projectId={pid} status={status} scope="memory" onChanged={() => refreshStatus()} />}
+      {canUseOwnerAI && <IndexStatusBanner projectId={pid} status={status} scope="memory" onChanged={() => refreshStatus()} />}
+      {collaborator && <IndexStatusBanner projectId={pid} status={status} scope="memory" audience="collaborator"
+        canStart={canEditNow} onChanged={() => refreshStatus()} />}
       <div style={splitRow}>
         <div style={splitPane(600)}>
           <Card
@@ -388,7 +400,8 @@ export default function MemoriesPanel() {
               scope="memory"
               onSaved={(s: KbSettings) => setSettings(() => s)}
             />
-            {canUseAI && <MemorySearchDebug projectId={pid} />}
+            {canUseOwnerAI && <MemorySearchDebug projectId={pid} />}
+            {collaborator && shared.authorized && <MemorySearchDebug projectId={pid} notice={collaboratorSearchNotice(status)} />}
           </Space>
         </div>
       </div>

@@ -84,7 +84,7 @@ async def test_cross_user_isolation(client, make_client):
         f"{base}/kb/documents", files={"file": ("设定.md", "# 门派\n\n天剑宗".encode(), "text/markdown")}
     )
     doc = upload.json()["document"]
-    await wait_task(client, upload.json()["task"]["id"])
+    await wait_task(client, upload.json()["task"])
     mem = (await client.post(f"{base}/memories", json={"chapter_no": 1, "content": "备忘"})).json()
 
     bob = make_client()

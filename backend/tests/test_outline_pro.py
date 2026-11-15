@@ -135,7 +135,7 @@ async def test_continue_resource_conflict(app, client, fake_llm):
     second = await client.post(f"{base}/outlines/continue", json={"count": 1})
     assert second.status_code == 409
     gate.release()
-    assert (await wait_task(client, first.json()["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, first.json()))["status"] == "succeeded"
 
 
 # ---------------- AC2 展开 + 建章 ----------------

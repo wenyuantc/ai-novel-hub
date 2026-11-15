@@ -1,12 +1,13 @@
 """向导从中断处继续：部分输出截断 / 续写开头清洗 / 接口校验 / 拼接后解析落库 / 链式继续。"""
 
 import json
+from uuid import uuid4
 
 import pytest
 
 from app.ai.providers import AIProviderError
 from app.services.wizard_service import clean_continuation_head, trim_to_resume_point
-from tests.helpers import create_ai_config, create_project, register, run_task
+from tests.helpers import create_ai_config, create_project, register, run_task, task_params
 
 STREAM_FAILED = AIProviderError("模型调用失败：Upstream HTTP/2 stream failed")
 
@@ -78,11 +79,13 @@ async def _failed_outline_task(client, fake_llm) -> tuple[dict, str]:
 
 async def test_resume_outline_after_stream_failure(client, fake_llm):
     old, base = await _failed_outline_task(client, fake_llm)
-    assert (await client.get(f"/api/v1/tasks/{old['id']}/output")).json()["text"] == PARTIAL
+    assert (await client.get(f"/api/v1/tasks/{old['id']}/output", params=task_params(old))).json()["text"] == PARTIAL
 
     # 模型漏写逗号、带代码块标记：清洗后拼接
     fake_llm.push("```json\n" + REST.lstrip(", "))
-    resp = await client.post(f"{base}/wizard/outline", json={"continue_from_task_id": old["id"], "volume_count": 9})
+    resp = await client.post(f"{base}/wizard/outline", json={
+        "continue_from_task_id": old["id"], "continue_from_task_key": old["task_key"], "volume_count": 9,
+    })
     task, events = await run_task(client, resp)
     assert task["status"] == "succeeded", task["error"]
     assert task["retry_of_id"] == old["id"]
@@ -101,15 +104,19 @@ async def test_resume_chain_after_second_failure(client, fake_llm):
     second_rest = REST[: REST.index("}") + 1]  # 只多写了第 2 章
     fake_llm.push([second_rest + "x" * 700, STREAM_FAILED])
     second, _ = await run_task(
-        client, await client.post(f"{base}/wizard/outline", json={"continue_from_task_id": old["id"]})
+        client, await client.post(f"{base}/wizard/outline", json={
+            "continue_from_task_id": old["id"], "continue_from_task_key": old["task_key"],
+        })
     )
     assert second["status"] == "failed"
-    text = (await client.get(f"/api/v1/tasks/{second['id']}/output")).json()["text"]
+    text = (await client.get(f"/api/v1/tasks/{second['id']}/output", params=task_params(second))).json()["text"]
     assert text.startswith(RESUME_POINT + second_rest)
 
     fake_llm.push(REST[len(second_rest) :])
     third, events = await run_task(
-        client, await client.post(f"{base}/wizard/outline", json={"continue_from_task_id": second["id"]})
+        client, await client.post(f"{base}/wizard/outline", json={
+            "continue_from_task_id": second["id"], "continue_from_task_key": second["task_key"],
+        })
     )
     assert third["status"] == "succeeded", third["error"]
     assert [i["title"] for i in events[-1][1]["result"]["items"]] == ["出发", "异象", "接触"]
@@ -118,20 +125,28 @@ async def test_resume_chain_after_second_failure(client, fake_llm):
 async def test_resume_rejects_invalid_source(client, fake_llm):
     old, base = await _failed_outline_task(client, fake_llm)
     # 类型不同
-    resp = await client.post(f"{base}/wizard/world", json={"continue_from_task_id": old["id"]})
+    resp = await client.post(f"{base}/wizard/world", json={
+        "continue_from_task_id": old["id"], "continue_from_task_key": old["task_key"],
+    })
     assert resp.status_code == 400 and "不存在" in resp.json()["detail"]
     # 不存在
-    resp = await client.post(f"{base}/wizard/outline", json={"continue_from_task_id": 9999})
+    resp = await client.post(f"{base}/wizard/outline", json={
+        "continue_from_task_id": 9999, "continue_from_task_key": str(uuid4()),
+    })
     assert resp.status_code == 400
     # 已成功的任务不能继续
     fake_llm.push(FULL_OUTLINE)
     ok, _ = await run_task(client, await client.post(f"{base}/wizard/outline"))
-    resp = await client.post(f"{base}/wizard/outline", json={"continue_from_task_id": ok["id"]})
+    resp = await client.post(f"{base}/wizard/outline", json={
+        "continue_from_task_id": ok["id"], "continue_from_task_key": ok["task_key"],
+    })
     assert resp.status_code == 400 and "失败" in resp.json()["detail"]
     # 没有完整对象的部分输出
     fake_llm.push(['{"volumes": [{"volume_no": 1', STREAM_FAILED])
     bare, _ = await run_task(client, await client.post(f"{base}/wizard/outline"))
-    resp = await client.post(f"{base}/wizard/outline", json={"continue_from_task_id": bare["id"]})
+    resp = await client.post(f"{base}/wizard/outline", json={
+        "continue_from_task_id": bare["id"], "continue_from_task_key": bare["task_key"],
+    })
     assert resp.status_code == 400 and "没有可续写" in resp.json()["detail"]
 
 
@@ -141,5 +156,7 @@ async def test_resume_rejects_other_users_task(client, make_client, fake_llm):
     await register(other, username="other")
     await create_ai_config(other)
     p = await create_project(other)
-    resp = await other.post(f"/api/v1/projects/{p['id']}/wizard/outline", json={"continue_from_task_id": old["id"]})
+    resp = await other.post(f"/api/v1/projects/{p['id']}/wizard/outline", json={
+        "continue_from_task_id": old["id"], "continue_from_task_key": old["task_key"],
+    })
     assert resp.status_code == 400

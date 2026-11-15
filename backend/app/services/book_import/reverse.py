@@ -38,7 +38,8 @@ from app.ai.prompts import (
 from app.ai.prompts.registry import prompt_meta
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ThinkingLevel
 from app.ai.templating import PromptOverride
-from app.core.errors import AppError, BadRequestError, ConflictError
+from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
+from app.core.security import SecretCipher
 from app.models import Career, Chapter, Character, Organization, Outline, Project, Task, WorldSetting, WritingStyle
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.career import MAX_STAGES, CareerCreate, StageIn
@@ -46,11 +47,13 @@ from app.schemas.organization import MemberCreate, OrganizationCreate
 from app.schemas.project import AUDIENCE_MAX, MAX_TAGS, SELLING_POINTS_MAX, SYNOPSIS_MAX, TAG_MAX_LEN, THEME_MAX
 from app.services import (
     ai_config_service,
+    ai_dispatch,
     analysis_service,
     career_service,
+    collaboration_ai_guard,
     generation_log_service,
     organization_service,
-    project_lifecycle,
+    project_ai_config,
     prompt_service,
     relationship_service,
     series_policy,
@@ -59,8 +62,10 @@ from app.services import (
     wizard_service,
 )
 from app.services.book_import import merge
+from app.services.collaboration_task_access import task_grant_identity
 from app.services.entity_ai_service import normalize_org_draft
 from app.services.project_service import get_owned_project, project_info
+from app.services.task_engine import execution_identity
 
 if TYPE_CHECKING:
     from app.services.task_engine.registry import Event, TaskContext
@@ -430,14 +435,14 @@ async def open_import(db: AsyncSession, user_id: int, *, exclude_id: int | None 
 
 
 async def _check_config(db: AsyncSession, ctx: "TaskContext", user_id: int, ai_config_id: int | None) -> int:
+    from app.ai.endpoint_guard import ensure_endpoint_allowed
+
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
-    await ai_config_service.build_provider(
-        cfg,
-        ctx.cipher,
-        ctx.factory,
-        ctx.settings.ai_request_timeout,
-        allow_private=ctx.settings.allow_private_ai_endpoints,
-    )
+    if not ctx.settings.allow_private_ai_endpoints:
+        try:
+            await ensure_endpoint_allowed(cfg.base_url)
+        except AIProviderError as exc:
+            raise BadRequestError(str(exc)) from exc
     return cfg.id
 
 
@@ -465,20 +470,48 @@ async def validate_start(
         "ai_config_id": params.get("ai_config_id"),
     }
     ai_config_id = await _check_config(db, ctx, user_id, request["ai_config_id"])
+    model = await project_ai_config.resolve_project_model(
+        db, user_id, project.id, "text", cipher=ctx.cipher, config_id=ai_config_id,
+        allow_private=ctx.settings.allow_private_ai_endpoints, for_update=True,
+    )
+    embedding = await project_ai_config.resolve_shared_embedding(
+        db, user_id, project.id, cipher=ctx.cipher,
+        allow_private=ctx.settings.allow_private_ai_endpoints, for_update=True,
+    )
     if await open_import(db, user_id) is not None:
         raise ConflictError(OPEN_CONFLICT)
     return {
         "project_id": project.id,
         "title": f"拆书反推：《{project.title}》",
-        "input": {"request": request, "ai_config_id": ai_config_id},
+        "input": {
+            "request": request, "ai_config_id": ai_config_id,
+            "_project_model": project_ai_config.serialize_project_model(model),
+            "_shared_embedding": project_ai_config.serialize_shared_embedding(embedding),
+        },
     }
 
 
 async def revalidate(db: AsyncSession, ctx: "TaskContext", task: Task) -> int:
     """重试 / 继续 / 跳过前：项目与模型配置仍有效，用户没有其他未结束的拆书任务。返回 ai_config_id。"""
-    request = task.input.get("request") or {}
-    await get_owned_project(db, task.user_id, int(task.project_id or 0))
-    ai_config_id = await _check_config(db, ctx, task.user_id, request.get("ai_config_id"))
+    project = await get_owned_project(db, task.user_id, int(task.project_id or 0), lock=True)
+    model = project_ai_config.deserialize_project_model(
+        task.input.get("_project_model"), actor_id=task.user_id, project_id=project.id,
+        project_owner_id=project.user_id,
+    )
+    embedding = project_ai_config.deserialize_shared_embedding(
+        task.input.get("_shared_embedding"), actor_id=task.user_id, project_id=project.id,
+        project_owner_id=project.user_id, task_grant=project_ai_config.TASK_GRANT_ABSENT,
+    )
+    if model is None or model.model_type != "text" or model.config_id != task.input.get("ai_config_id"):
+        raise ConflictError("拆书原模型身份无法验证，请重新发起")
+    await ai_config_service.lock_config_owner(db, task.user_id, write=False)
+    await project_ai_config.revalidate_project_model(
+        db, model, cipher=ctx.cipher, allow_private=ctx.settings.allow_private_ai_endpoints,
+    )
+    await project_ai_config.revalidate_shared_embedding(
+        db, embedding, cipher=ctx.cipher, allow_private=ctx.settings.allow_private_ai_endpoints,
+    )
+    ai_config_id = await _check_config(db, ctx, task.user_id, model.config_id)
     if await open_import(db, task.user_id, exclude_id=task.id) is not None:
         raise ConflictError(OPEN_CONFLICT)
     return ai_config_id
@@ -501,6 +534,12 @@ class ImportJob:
     max_tokens: int | None
     cursor: int
     checkpoint: dict[str, Any]
+    task_execution_identity: execution_identity.TaskExecutionIdentity
+    model_binding: project_ai_config.ResolvedProjectModel
+    embedding_binding: project_ai_config.ResolvedSharedEmbedding
+    visibility_stamp: ai_dispatch.VisibilityStamp
+    cipher: SecretCipher
+    allow_private: bool
     last_progress: int = 1
 
     @property
@@ -518,53 +557,116 @@ async def _plan(db: AsyncSession, project_id: int, nos: list[int]) -> list[list[
     return plan_batches(items)
 
 
-async def build_import_job(ctx: "TaskContext", task: Task) -> ImportJob:
-    request = task.input.get("request") or {}
+async def build_import_job(
+    ctx: "TaskContext", task: Task, *, execution: execution_identity.TaskExecutionIdentity,
+) -> ImportJob:
+    if (type(execution) is not execution_identity.TaskExecutionIdentity
+            or not execution_identity.matches_running(execution, task) or execution.kind != KIND
+            or execution.project_id is None or execution.chapter_id is not None
+            or execution.grant_identity is not None or type(execution.actor_token_version) is not int):
+        raise ConflictError("拆书执行身份无法验证，请重新发起", extra={"code": "task_execution_changed"})
+    payload = execution.input
+    request = payload.get("request")
+    if not isinstance(request, dict) or request.get("project_id") != execution.project_id:
+        raise ConflictError("拆书执行身份无法验证，请重新发起", extra={"code": "task_execution_changed"})
+    model = project_ai_config.deserialize_project_model(
+        payload.get("_project_model"), actor_id=execution.actor_id, project_id=execution.project_id,
+        project_owner_id=execution.actor_id,
+    )
+    embedding = project_ai_config.deserialize_shared_embedding(
+        payload.get("_shared_embedding"), actor_id=execution.actor_id, project_id=execution.project_id,
+        project_owner_id=execution.actor_id, task_grant=project_ai_config.TASK_GRANT_ABSENT,
+    )
+    if model is None or model.model_type != "text" or model.config_id != payload.get("ai_config_id"):
+        raise ConflictError("拆书原模型身份无法验证，请重新发起")
     settings = ctx.settings
     async with ctx.sessionmaker() as db:
-        project = await get_owned_project(db, task.user_id, int(task.project_id or 0))
-        cfg = await ai_config_service.resolve_config(db, task.user_id, request.get("ai_config_id"))
-        provider = await ai_config_service.build_provider(
-            cfg,
-            ctx.cipher,
-            ctx.factory,
-            settings.ai_request_timeout,
-            allow_private=settings.allow_private_ai_endpoints,
+        await execution_identity.require_write_execution(db, execution)
+        project = await get_owned_project(db, execution.actor_id, execution.project_id)
+        # 先取配置选择门禁，再锁文本/向量配置行，避免与配置更新反向等待。
+        await ai_config_service.lock_config_owner(db, execution.actor_id, write=False)
+        await project_ai_config.revalidate_project_model(
+            db, model, cipher=ctx.cipher, allow_private=settings.allow_private_ai_endpoints,
         )
-        checkpoint = copy.deepcopy(task.checkpoint) if task.checkpoint else None
-        if not checkpoint:
+        await project_ai_config.revalidate_shared_embedding(
+            db, embedding, cipher=ctx.cipher, allow_private=settings.allow_private_ai_endpoints,
+        )
+        stamp = await ai_dispatch.read_visibility_stamp(db, project.id)
+        checkpoint = execution.checkpoint
+        if checkpoint is None:
             checkpoint = new_checkpoint(await _plan(db, project.id, _reverse_range(request.get("reverse_chapter_nos"))))
+    guard = collaboration_ai_guard.for_task(
+        execution, model, stamp, cipher=ctx.cipher, allow_private=settings.allow_private_ai_endpoints,
+        extra_bindings=(embedding,),
+    )
+    bound = await guard.prepare_provider(ctx.sessionmaker, ctx.factory, request_timeout=settings.ai_request_timeout)
     # 继续 / 重试 / 跳过：从断点重做当前步骤
     checkpoint["pause_reason"] = None
     return ImportJob(
-        task_id=task.id,
-        user_id=task.user_id,
+        task_id=execution.task_id,
+        user_id=execution.actor_id,
         project_id=project.id,
         request=request,
-        ai_config_id=cfg.id,
-        provider=provider,
-        provider_name=cfg.provider,
-        model=cfg.model,
-        thinking=cfg.thinking_level,  # type: ignore[arg-type]
-        max_tokens=ai_config_service.max_output_tokens(cfg),
-        cursor=min(task.step_cursor, len(checkpoint.get("batches") or [])),
+        ai_config_id=model.config_id,
+        provider=bound.provider,
+        provider_name=bound.provider_name,
+        model=bound.model,
+        thinking=bound.thinking_level,  # type: ignore[arg-type]
+        max_tokens=bound.max_output_k * ai_config_service.TOKENS_PER_K if bound.max_output_k else None,
+        cursor=min(execution.step_cursor, len(checkpoint.get("batches") or [])),
         checkpoint=checkpoint,
+        task_execution_identity=execution,
+        model_binding=model,
+        embedding_binding=embedding,
+        visibility_stamp=stamp,
+        cipher=ctx.cipher,
+        allow_private=settings.allow_private_ai_endpoints,
     )
 
 
-async def _write_checkpoint(db: AsyncSession, job: ImportJob) -> None:
-    """写入断点（不 commit）。"""
-    await db.execute(
+async def _lock_job(db: AsyncSession, ctx: "TaskContext", job: ImportJob) -> None:
+    """在任何业务写入前核验原 actor、领取轮次、已确认断点及模型绑定。"""
+    await execution_identity.require_write_execution(db, job.task_execution_identity)
+    await ai_config_service.lock_config_owner(db, job.user_id, write=False)
+    await project_ai_config.revalidate_project_model(
+        db, job.model_binding, cipher=ctx.cipher, allow_private=ctx.settings.allow_private_ai_endpoints,
+    )
+    await project_ai_config.revalidate_shared_embedding(
+        db, job.embedding_binding, cipher=ctx.cipher, allow_private=ctx.settings.allow_private_ai_endpoints,
+    )
+    await ai_dispatch.require_visibility_stamp(db, job.visibility_stamp)
+
+
+async def _write_checkpoint(db: AsyncSession, ctx: "TaskContext", job: ImportJob, *, locked: bool = False) -> None:
+    """同事务写断点，调用方提交确认后再推进执行身份。"""
+    if not locked:
+        await _lock_job(db, ctx, job)
+    identity = job.task_execution_identity
+    result = await db.execute(
         update(Task)
-        .where(Task.id == job.task_id)
+        .where(Task.id == identity.task_id, Task.statistics_key == identity.task_key,
+               Task.user_id == identity.actor_id, Task.project_id == identity.project_id,
+               Task.queued_at == identity.queued_at, Task.execution_key == identity.execution_key,
+               Task.status == "running", Task.admin_cancel_operation_id.is_(None))
         .values(step_cursor=job.cursor, checkpoint=copy.deepcopy(job.checkpoint))
     )
+    if result.rowcount != 1:
+        raise ConflictError("拆书执行身份已变化", extra={"code": "task_execution_changed"})
+
+
+async def _commit_checkpoint(db: AsyncSession, job: ImportJob) -> None:
+    advanced = execution_identity.advance_checkpoint(
+        job.task_execution_identity, copy.deepcopy(job.checkpoint), step_cursor=job.cursor,
+    )
+    # 提交未确认时绝不更新本地身份；旧身份不匹配已提交的新断点，禁止重放。
+    await db.commit()
+    job.task_execution_identity = advanced
 
 
 async def _save(ctx: "TaskContext", job: ImportJob) -> None:
     async with ctx.sessionmaker() as db:
-        await _write_checkpoint(db, job)
-        await db.commit()
+        await _write_checkpoint(db, ctx, job)
+        await _commit_checkpoint(db, job)
 
 
 def progress(job: ImportJob) -> int:
@@ -588,6 +690,13 @@ def _log_fields(base: dict[str, Any], status: str, error: str, pieces: list[str]
     }
 
 
+async def _save_log(ctx: "TaskContext", job: ImportJob, fields: dict[str, Any]) -> None:
+    async with ctx.sessionmaker() as db:
+        await _lock_job(db, ctx, job)
+        await generation_log_service.write_log(db, **fields, model_binding=job.model_binding)
+        await db.commit()
+
+
 async def _call(
     ctx: "TaskContext",
     job: ImportJob,
@@ -603,6 +712,14 @@ async def _call(
     out: dict[str, Any],
 ) -> AsyncIterator["Event"]:
     """调用一次 AI（含自动重试），实时转发输出；成功 out["value"] = parse(JSON)，仍失败 out["error"] = 错误信息。"""
+    guard = collaboration_ai_guard.for_task(
+        job.task_execution_identity, job.model_binding, job.visibility_stamp, cipher=ctx.cipher,
+        allow_private=ctx.settings.allow_private_ai_endpoints, extra_bindings=(job.embedding_binding,),
+    )
+    bound = await guard.prepare_provider(
+        ctx.sessionmaker, ctx.factory, request_timeout=ctx.settings.ai_request_timeout,
+    )
+    job.provider = bound.provider
     attempt = 0
     while True:
         if attempt:
@@ -617,6 +734,7 @@ async def _call(
         error = ""
         base = {
             "project_id": job.project_id,
+            "actor_user_id": job.user_id,
             "chapter_id": chapter_id,
             "kind": log_kind,
             "ai_config_id": job.ai_config_id,
@@ -629,27 +747,30 @@ async def _call(
 
         try:
             stream = job.provider.generate_stream(messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking)
-            async with aclosing(stream) as chunks:
-                async for piece in chunks:
+            async with aclosing(stream) as chunks, aclosing(analysis_service.coalesce_ready_text(chunks)) as ready:
+                async for piece in ready:
                     pieces.append(piece)
                     yield "delta", {"text": piece}
             text = "".join(pieces)
             if not text.strip():
                 raise AIProviderError("模型未返回任何内容")
             value = parse(extract_json(text))
+        except ai_dispatch.VisibilityPolicyError:
+            raise
         except AIProviderError as exc:
             error = str(exc)
         except JSONExtractError as exc:
             error = f"AI 输出解析失败：{exc}"
         except asyncio.CancelledError:
-            # 被取消（取消任务 / 服务关停）：屏蔽取消写一条 cancelled 记录后照常向上传递
-            with anyio.CancelScope(shield=True):
-                await generation_log_service.save_log(
-                    ctx.sessionmaker, **_log_fields(base, "cancelled", "任务已取消", pieces, started)
-                )
+            # 仅原身份仍可证明时记录取消；拒绝后不能借用当前用户身份补写。
+            with anyio.move_on_after(1, shield=True):
+                try:
+                    await _save_log(ctx, job, _log_fields(base, "cancelled", "任务已取消", pieces, started))
+                except Exception:  # noqa: BLE001
+                    pass
             raise
         status = "error" if error else "success"
-        await generation_log_service.save_log(ctx.sessionmaker, **_log_fields(base, status, error, pieces, started))
+        await _save_log(ctx, job, _log_fields(base, status, error, pieces, started))
         if not error:
             out["value"] = value
             return
@@ -699,7 +820,7 @@ async def _digest_batch(ctx: "TaskContext", job: ImportJob, index: int) -> Async
             c.id: c
             for c in await db.scalars(select(Chapter).where(Chapter.id.in_(ids), Chapter.project_id == job.project_id))
         }
-        info = format_project_info(await project_info(db, project))
+        info = format_project_info(await project_info(db, project, actor_user_id=job.user_id))
         override = await prompt_service.get_override(db, job.user_id, "book_import.digest")
     blocks: list[str] = []
     present: list[tuple[Chapter, int, int]] = []
@@ -749,6 +870,7 @@ async def _digest_batch(ctx: "TaskContext", job: ImportJob, index: int) -> Async
     stats = cp["stats"]
     summaries: dict[int, list[str]] = normalized["summaries"]
     async with ctx.sessionmaker() as db:
+        await _lock_job(db, ctx, job)
         for chapter, k, m in present:
             text = _join(summaries.get(chapter.chapter_no, []))
             if not text and len(present) == 1 and len(summaries) == 1:
@@ -767,8 +889,8 @@ async def _digest_batch(ctx: "TaskContext", job: ImportJob, index: int) -> Async
             cp["findings"] = merge.accumulate(cp["findings"], {k: v for k, v in normalized.items() if k != "summaries"})
         batch["state"], batch["error"] = "done", ""
         job.cursor = index + 1
-        await _write_checkpoint(db, job)
-        await db.commit()
+        await _write_checkpoint(db, ctx, job, locked=True)
+        await _commit_checkpoint(db, job)
     yield "batch_end", {"index": index, "total": job.total, "state": "done"}
 
 
@@ -779,7 +901,7 @@ async def _synthesize(ctx: "TaskContext", job: ImportJob) -> AsyncIterator["Even
         project = await db.get(Project, job.project_id)
         if project is None:
             raise BadRequestError("项目不存在")
-        info = format_project_info(await project_info(db, project))
+        info = format_project_info(await project_info(db, project, actor_user_id=job.user_id))
         rows = await db.execute(
             select(Outline.chapter_no, Outline.title, Outline.summary)
             .where(
@@ -970,11 +1092,12 @@ async def _apply(ctx: "TaskContext", job: ImportJob) -> None:
     cp = job.checkpoint
     final = cp.get("final") or fallback_final(cp.get("findings") or {})
     async with ctx.sessionmaker() as db:
-        project = await project_lifecycle.lock_active(db, job.project_id)
+        await _lock_job(db, ctx, job)
+        project = await get_owned_project(db, job.user_id, job.project_id)
         await apply_final(db, project, final, cp)
         cp["phase"] = "style"
-        await _write_checkpoint(db, job)
-        await db.commit()
+        await _write_checkpoint(db, ctx, job, locked=True)
+        await _commit_checkpoint(db, job)
 
 
 async def _style_sample(db: AsyncSession, project_id: int, nos: list[int]) -> str:
@@ -1042,6 +1165,7 @@ async def _style(ctx: "TaskContext", job: ImportJob) -> AsyncIterator["Event"]:
         else:
             draft = out["value"]
     async with ctx.sessionmaker() as db:
+        await _lock_job(db, ctx, job)
         if draft is not None:
             project = await db.get(Project, job.project_id)
             if project is None:
@@ -1055,21 +1179,26 @@ async def _style(ctx: "TaskContext", job: ImportJob) -> AsyncIterator["Event"]:
                 project.default_style_id = style.id
             cp["stats"]["style_id"] = style.id
         cp["phase"] = "analyze"
-        await _write_checkpoint(db, job)
-        await db.commit()
+        await _write_checkpoint(db, ctx, job, locked=True)
+        await _commit_checkpoint(db, job)
 
 
 async def _analyze(ctx: "TaskContext", job: ImportJob) -> None:
     cp = job.checkpoint
     async with ctx.sessionmaker() as db:
+        await _lock_job(db, ctx, job)
         project = await db.get(Project, job.project_id)
         if project is None:
             raise BadRequestError("项目不存在")
-        ids = await analysis_service.enqueue_pending(db, project, ai_config_id=job.request.get("ai_config_id"))
+        ids = await analysis_service.enqueue_pending(
+            db, project, ai_config_id=job.ai_config_id, execution=job.task_execution_identity,
+            expected_cursor=job.cursor, expected_checkpoint=copy.deepcopy(job.checkpoint),
+            cipher=ctx.cipher, allow_private=ctx.settings.allow_private_ai_endpoints,
+        )
         cp["stats"]["analyses_queued"] = len(ids)
         cp["phase"] = "done"
-        await _write_checkpoint(db, job)
-        await db.commit()
+        await _write_checkpoint(db, ctx, job, locked=True)
+        await _commit_checkpoint(db, job)
 
 
 def _paused(job: ImportJob) -> "Event":
@@ -1119,25 +1248,37 @@ async def run_import_job(job: ImportJob, ctx: "TaskContext") -> AsyncIterator["E
     yield "done", summarize(cp)
 
 
-async def skip_paused(db: AsyncSession, engine: Any, user_id: int, task_id: int) -> Any:
+async def skip_paused(
+    db: AsyncSession, engine: Any, user_id: int, task_id: int, *, expected_task_key: str | None = None,
+) -> Any:
     """跳过因失败暂停的当前步骤后续跑（同一任务）。"""
     from app.services import task_service
 
-    task = await task_service.get_owned_task(db, user_id, task_id)
+    if expected_task_key is None:
+        raise NotFoundError("任务不存在")
+    task = await task_service.get_owned_task(db, user_id, task_id, expected_task_key=expected_task_key)
+    grant, queued_at = task_grant_identity(task.input), task.queued_at
+    await task_service._lock_user_task_project(
+        db, user_id, task, active_grant_required=True, expected_grant=grant, expected_queued_at=queued_at,
+    )
     reason = (task.checkpoint or {}).get("pause_reason") or {}
-    if task.kind != KIND or task.status != "paused" or reason.get("reason") != "failed":
+    if (task.kind != KIND or task.status != "paused" or reason.get("reason") != "failed"
+            or task.admin_cancel_operation_id is not None or task.execution_key is not None):
         raise ConflictError(SKIP_CONFLICT)
     await revalidate(db, engine.ctx, task)
     cp = copy.deepcopy(task.checkpoint)
     cursor = apply_skip(cp, task.step_cursor)
-    result = await db.execute(
-        update(Task).where(
-            Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
-            Task.admin_cancel_operation_id.is_(None),
-        ).values(checkpoint=cp, step_cursor=cursor)
-    )
-    await db.commit()
-    if result.rowcount != 1:
-        raise ConflictError("任务状态已变化，请刷新后重试")
-    await db.refresh(task)
-    return await task_service.resume_task(db, engine, user_id, task_id)
+    try:
+        result = await db.execute(
+            update(Task).where(
+                Task.id == task_id, Task.statistics_key == expected_task_key, Task.queued_at == queued_at,
+                Task.status == "paused", Task.admin_cancel_operation_id.is_(None), Task.execution_key.is_(None),
+            ).values(checkpoint=cp, step_cursor=cursor)
+        )
+        if result.rowcount != 1:
+            raise ConflictError("任务状态已变化，请刷新后重试")
+        # 断点推进与恢复排队同事务提交；恢复时仍使用客户端原身份。
+        return await task_service.resume_task(db, engine, user_id, task_id, expected_task_key=expected_task_key)
+    except BaseException:
+        await db.rollback()
+        raise

@@ -46,8 +46,8 @@ async def list_imports(user: CurrentUser, db: DbDep) -> list[BookImportBrief]:
 
 
 @router.post("/tasks/{task_id}/skip", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
-async def skip_task(task_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
-    return await svc.skip_task(db, engine, user.id, task_id)
+async def skip_task(task_id: int, task_key: str, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
+    return await svc.skip_task(db, engine, user.id, task_id, expected_task_key=task_key)
 
 
 @router.get("/{import_id}", response_model=BookImportOut)

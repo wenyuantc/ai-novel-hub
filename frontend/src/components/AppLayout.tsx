@@ -1,14 +1,15 @@
 import { ArrowLeftOutlined, AuditOutlined, BookOutlined, CloudDownloadOutlined, DashboardOutlined, DeleteOutlined, KeyOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { Button, Drawer, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { currentRequestGeneration, watchRequestGeneration } from '../api/client'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useAuthStore } from '../stores/auth'
 import { useProjectStore } from '../stores/project'
 import { useTasksStore } from '../stores/tasks'
 import ThemeSwitch from '../theme/ThemeSwitch'
-import { projectAccess } from '../utils/projectAccess'
+import { projectAccess, showsTaskPanel } from '../utils/projectAccess'
 import { can, isSuperAdmin, firstAdminPath } from '../utils/permissions'
 import ChangePasswordModal from './ChangePasswordModal'
 import { navigationItem, studioNavigation } from './StudioNavigation'
@@ -16,25 +17,35 @@ import { StudioBrand } from './StudioUI'
 import TaskPanel from './TaskPanel'
 import './AppLayout.css'
 
+const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
+
 /** 纸上书房外壳：216px 分组导航、56px 顶栏，真实账户与后台任务，移动端复用同一份导航。 */
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const mcpEnabled = useAuthStore((s) => s.mcpEnabled)
   const cachedProject = useProjectStore((s) => s.project)
+  const scopeVersion = useProjectStore((s) => s.scopeVersion)
   const activeCount = useTasksStore((s) => s.active.length)
   const tasksLoaded = useTasksStore((s) => s.loaded)
   const location = useLocation()
   const navigate = useNavigate()
   const isMobile = useIsMobile()
   const [passwordOpen, setPasswordOpen] = useState(false)
-  const [tasksOpen, setTasksOpen] = useState(false)
+  const [tasksOpenAt, setTasksOpenAt] = useState<string | null>(null)
+  const sessionGeneration = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
   const [navOpenAt, setNavOpenAt] = useState<string | null>(null)
   const navOpen = isMobile && navOpenAt === location.key
   const match = /^\/projects\/(\d+)(?:\/|$)/.exec(location.pathname)
   const projectId = match ? Number(match[1]) : null
   const project = cachedProject?.id === projectId ? cachedProject : null
-  const { managingOther, canUseAI } = projectAccess(project, user, projectId ?? NaN)
+  const access = projectAccess(project, user, projectId ?? NaN)
+  const { managingOther, isCollaborator, canUseAI } = access
+  // 协作者的共享书在个人书架；只有纯管理员代管才返回作品管理。
+  const administeringOther = managingOther && !isCollaborator
+  const showTaskPanel = showsTaskPanel(projectId, access)
+  const taskScope = `${sessionGeneration}:${user?.id ?? ''}:${projectId ?? 'global'}:${projectId === null ? '' : scopeVersion}`
+  const tasksOpen = tasksOpenAt === taskScope
   const groups = studioNavigation(projectId, mcpEnabled, canUseAI)
   const current = navigationItem(groups, location.pathname)
   const adminSection = location.pathname.startsWith('/admin/')
@@ -90,7 +101,7 @@ export default function AppLayout() {
       <StudioBrand onClick={() => setNavOpenAt(null)} />
       {projectId !== null ? (
         <div className="studio-project-switch">
-          <Link to={managingOther ? '/admin/projects' : '/projects'} onClick={() => setNavOpenAt(null)}><ArrowLeftOutlined /> {managingOther ? '作品管理' : '全部作品'}</Link>
+          <Link to={administeringOther ? '/admin/projects' : '/projects'} onClick={() => setNavOpenAt(null)}><ArrowLeftOutlined /> {administeringOther ? '作品管理' : '全部作品'}</Link>
           <Link to={`/projects/${projectId}/overview`} onClick={() => setNavOpenAt(null)} title={project?.title}>{project?.title ?? '正在载入作品…'}</Link>
         </div>
       ) : <Button type="primary" className="studio-new-project" icon={<PlusOutlined />} onClick={() => { setNavOpenAt(null); navigate('/projects?create=1') }}>新建作品</Button>}
@@ -107,8 +118,8 @@ export default function AppLayout() {
         ))}
       </nav>
       <div className="studio-sidebar-footer">
-        {projectId !== null && !managingOther && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
-        <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpen(true) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>
+        {projectId !== null && !administeringOther && <Link to="/settings/ai" className="studio-nav-action" onClick={() => setNavOpenAt(null)}><SettingOutlined />模型与创作资源</Link>}
+        {showTaskPanel && <button type="button" className="studio-nav-action" onClick={() => { setNavOpenAt(null); setTasksOpenAt(taskScope) }}><UnorderedListOutlined />后台任务{tasksLoaded && <span className="studio-task-count">{activeCount}</span>}</button>}
         {can(user, 'dashboard.read') && projectId === null && <Link className="studio-nav-action" to="/admin/dashboard" aria-current={location.pathname.startsWith('/admin/dashboard') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><DashboardOutlined />管理员首页</Link>}
         {can(user, 'tasks.read') && projectId === null && <Link className="studio-nav-action" to="/admin/tasks" aria-current={location.pathname.startsWith('/admin/tasks') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><UnorderedListOutlined />全站任务监控</Link>}
         {can(user, 'users.read') && projectId === null && <Link className="studio-nav-action" to="/admin/users" aria-current={location.pathname.startsWith('/admin/users') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><TeamOutlined />用户管理</Link>}
@@ -130,7 +141,7 @@ export default function AppLayout() {
         <header className="studio-topbar">
           {isMobile && <Button type="text" aria-label="打开菜单" icon={<MenuOutlined />} onClick={() => setNavOpenAt(location.key)} />}
           <nav className="studio-breadcrumb" aria-label="面包屑导航">
-            <Link to={managingOther ? '/admin/projects' : adminSection ? firstAdminPath(user) : '/projects'}>{managingOther ? '作品管理' : adminSection ? '管理后台' : '我的作品'}</Link><RightOutlined />
+            <Link to={administeringOther ? '/admin/projects' : adminSection ? firstAdminPath(user) : '/projects'}>{administeringOther ? '作品管理' : adminSection ? '管理后台' : '我的作品'}</Link><RightOutlined />
             {project && <><Link to={`/projects/${project.id}/overview`} title={project.title}>{project.title}</Link><RightOutlined /></>}
             <span aria-current="page">{pageName}</span>
           </nav>
@@ -140,7 +151,7 @@ export default function AppLayout() {
       </div>
       {isMobile && <Drawer placement="left" width={280} open={navOpen} onClose={() => setNavOpenAt(null)} className="studio-mobile-drawer" styles={{ body: { padding: 0 } }} aria-label="创作导航"><aside className="studio-sidebar studio-sidebar-mobile">{sidebar}</aside></Drawer>}
       <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
-      <TaskPanel open={tasksOpen} onOpenChange={setTasksOpen} hideTrigger />
+      {showTaskPanel && <TaskPanel key={taskScope} open={tasksOpen} onOpenChange={(open) => setTasksOpenAt(open ? taskScope : null)} hideTrigger />}
     </div>
   )
 }

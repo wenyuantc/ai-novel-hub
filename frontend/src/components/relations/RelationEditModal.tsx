@@ -1,17 +1,17 @@
 import { Alert, App, Button, Checkbox, Col, Form, Input, Modal, Radio, Row, Select, Slider, Space, Spin, Switch } from 'antd'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { chapterApi } from '../../api/chapters'
-import { ApiError, errorMessage } from '../../api/client'
+import { ApiError, currentRequestGeneration, errorMessage, watchRequestGeneration } from '../../api/client'
 import { progressionApi } from '../../api/progressions'
 import { intimacyColor, isSymmetric, parseTypeOptionValue, RELATION_CATEGORY, RELATION_STATUS, relationshipApi, typeOptions, typeOptionValue } from '../../api/relationships'
 import type { Character, ChapterBrief, ProgressionPositionInput, RelationCategory, Relationship, RelationshipCreate, RelationshipType, RelationStatus, SettingBaseline, SettingTimeline } from '../../api/types'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
-import { authorizationKey } from '../../utils/permissions'
+import { useProjectStore } from '../../stores/project'
 import { invalidateProject } from '../../utils/projectRefresh'
 import ChapterPositionInput from '../progressions/ChapterPositionInput'
 import { toPositionInput } from '../progressions/position'
-import { buildRelationUpdate, createRelationRequestScope, readRelationSnapshot, relationSubject, type RelationSnapshot } from './relationForm'
+import { buildRelationUpdate, createRelationRequestScope, readRelationSnapshot, relationSaveGuard, relationSubject, type RelationSnapshot } from './relationForm'
 
 interface Props {
   projectId: number
@@ -41,22 +41,33 @@ interface LoadedSnapshot { snapshot: RelationSnapshot; revision: number; mode: M
 const emptyPosition: ProgressionPositionInput = { anchor_kind: 'chapter', chapter_id: null, chapter_no: null, boundary: 'start' }
 const STATUS_OPTIONS = (Object.keys(RELATION_STATUS) as RelationStatus[]).map((k) => ({ value: k, label: RELATION_STATUS[k].label }))
 const CATEGORY_OPTIONS = (Object.keys(RELATION_CATEGORY) as RelationCategory[]).map((k) => ({ value: k, label: RELATION_CATEGORY[k].label }))
+const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
 
 /** 基础值和所选章节的有效值各自读取，避免用当前状态覆盖早期剧情。 */
 export default function RelationEditModal(props: Props) {
-  const identity = useAuthStore((s) => `${s.status}:${s.user?.id ?? ''}:${authorizationKey(s.user)}`)
-  if (!props.open) return null
-  const key = `${props.projectId}:${props.editing?.id ?? 'new'}:${props.viewerId ?? ''}:${identity}`
-  return <RelationEditSession key={key} {...props} />
+  const status = useAuthStore((s) => s.status)
+  const actorId = useAuthStore((s) => s.user?.id)
+  const generation = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
+  const { canRead, canEdit } = useProjectAccess(props.projectId)
+  if (!props.open || !canRead) return null
+  const identity = `${status}:${actorId ?? ''}:${generation}`
+  // 失去写权限时卸载草稿；仍可编辑的授权变化不重建表单。
+  const key = `${props.projectId}:${props.editing?.id ?? 'new'}:${props.viewerId ?? ''}:${identity}:${canEdit}`
+  return <RelationEditSession key={key} {...props} identity={identity} />
 }
 
-function RelationEditSession({ projectId, open, characters, types, viewerId, editing, onClose, onSaved }: Props) {
+function RelationEditSession({ projectId, open, characters, types, viewerId, editing, onClose, onSaved, identity }: Props & { identity: string }) {
   const { canEdit, canRead, canReadNow, canEditNow } = useProjectAccess(projectId)
-  const identity = useAuthStore((s) => `${s.status}:${s.user?.id ?? ''}:${authorizationKey(s.user)}`)
+  const scopeVersion = useProjectStore((s) => s.scopeVersion)
   const { message, modal } = App.useApp()
   const [form] = Form.useForm<FormValues>()
-  const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const saveGuard = useMemo(() => relationSaveGuard(`${identity}:${projectId}:${editing?.id ?? 'new'}:${viewerId ?? ''}`),
+    [identity, projectId, editing?.id, viewerId])
+  const saveState = useSyncExternalStore(saveGuard.subscribe, saveGuard.getSnapshot, saveGuard.getSnapshot)
+  const saving = saveState.saving
+  const [loadingState, setLoadingState] = useState({ version: scopeVersion, value: true })
+  const loading = loadingState.version === scopeVersion && loadingState.value
+  const setLoading = (value: boolean) => setLoadingState({ version: scopeVersion, value })
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
   const [comparison, setComparison] = useState<'unchanged' | 'changed' | 'missing' | null>(null)
@@ -70,7 +81,8 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
   const [loaded, setLoaded] = useState<LoadedSnapshot | null>(null)
   const scope = useRef(createRelationRequestScope())
   const request = useRef(0)
-  const savingRef = useRef(false)
+  const initialStarted = useRef(false)
+  const initialComplete = useRef(false)
   const selfId = Form.useWatch('self_id', form)
   const otherId = Form.useWatch('other_id', form)
   const custom = Form.useWatch('custom', form)
@@ -85,18 +97,21 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
     const activeScope = scope.current
     activeScope.invalidate()
     request.current += 1
-    savingRef.current = false
     return () => { activeScope.invalidate(); request.current += 1 }
-  }, [projectId, open, editing?.id, viewerId, identity])
+  }, [projectId, open, editing?.id, viewerId, identity, canReadNow, canEditNow])
 
   useEffect(() => {
-    if (!open || !canRead || !canReadNow()) return
+    if (!open || !canRead || !canReadNow() || initialComplete.current) return
     const ticket = scope.current.capture()
     const readTicket = ++request.current
     const current = () => scope.current.isCurrent(ticket, canReadNow()) && request.current === readTicket
-    form.resetFields()
-    form.setFieldsValue({ self_id: viewerId, custom: false, category: 'other', intimacy: 0, status: 'normal', description: '', note: '' })
+    if (!initialStarted.current) {
+      form.resetFields()
+      form.setFieldsValue({ self_id: viewerId, custom: false, category: 'other', intimacy: 0, status: 'normal', description: '', note: '' })
+      initialStarted.current = true
+    }
     const run = async () => {
+      setLoading(true)
       try {
         const [chapterList, result] = await Promise.all([
           chapterApi.list(projectId),
@@ -104,7 +119,7 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
         ])
         if (!current()) return
         setChapters(chapterList)
-        if (!editing) return
+        if (!editing) { initialComplete.current = true; return }
         if (!result) throw new Error('关系时间线不存在，无法安全编辑；请检查数据后重试')
         const base = await progressionApi.getBaseline(projectId, result.id)
         if (!current()) return
@@ -118,7 +133,8 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
           form.setFieldsValue({ self_id: self, other_id: other, type_option: typeOptionValue(snapshot.type_id, !!chosen && isSymmetric(chosen) || self === snapshot.a_id),
             intimacy: snapshot.intimacy, status: snapshot.status, description: snapshot.description })
         }
-      } catch (err) { if (current()) setError(errorMessage(err)) }
+        initialComplete.current = true
+      } catch (err) { if (current()) { initialComplete.current = true; setError(errorMessage(err)) } }
       finally { if (current()) setLoading(false) }
     }
     void run()
@@ -127,7 +143,7 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
   }, [open, projectId, editing?.id, viewerId, identity, canRead, canReadNow, form])
 
   const readSnapshot = async (compareOnly = false) => {
-    if (!editing || !timeline || !canReadNow() || savingRef.current) return
+    if (!editing || !timeline || !canReadNow() || saveGuard.getSnapshot().saving) return
     if (mode === 'progression' && !toPositionInput(position)) { setError('请选择有效的章节位置'); return }
     const ticket = scope.current.capture()
     const readTicket = ++request.current
@@ -145,6 +161,7 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
         setLatestSnapshot(snapshot)
         setComparison(!snapshot.exists ? 'missing' : JSON.stringify(snapshot) === JSON.stringify(currentLoaded.snapshot) ? 'unchanged' : 'changed')
         setLoaded({ ...currentLoaded, revision: result.timeline_revision }); setAck(false); setConflict(false)
+        saveGuard.acknowledge()
       } else {
         setLoaded({ snapshot, revision: result.timeline_revision, mode, positionKey: mode === 'baseline' ? '' : positionKey })
         setConflict(false); setComparison(null); setAck(false)
@@ -165,12 +182,39 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
       modal.confirm({ title: '读取其他状态？', content: '当前表单中的未保存修改会被替换。', okText: '读取', cancelText: '保留草稿', onOk: () => readSnapshot() })
     } else void readSnapshot()
   }
+  const reviewCreation = async () => {
+    if (saving || !saveState.uncertain || !canReadNow()) return
+    const { self_id: self, other_id: other } = form.getFieldsValue()
+    if (!Number.isInteger(self) || !Number.isInteger(other) || self === other) {
+      setError('请先选择两位不同的角色，再核对创建结果。')
+      return
+    }
+    const ticket = scope.current.capture()
+    const readTicket = ++request.current
+    const current = () => scope.current.isCurrent(ticket, canReadNow()) && request.current === readTicket
+    setLoading(true)
+    try {
+      const existing = await progressionApi.findTimeline(projectId, relationSubject(self, other))
+      if (!current()) return
+      if (existing) {
+        setError('已找到这两位角色的关系，请关闭窗口后核对；本地草稿仍保留。')
+        return
+      }
+      saveGuard.acknowledge()
+      setError('未找到已创建的关系，已核对最新状态；可继续使用本地草稿。')
+    } catch (err) { if (current()) setError(errorMessage(err)) }
+    finally { if (current()) setLoading(false) }
+  }
   const save = async () => {
-    if (savingRef.current || !canEditNow() || loading || conflict || comparison === 'missing' || (comparison === 'changed' && !ack)) return
+    if (!canEditNow() || loading || saveGuard.getSnapshot().uncertain || conflict || comparison === 'missing' || (comparison === 'changed' && !ack)) return
     if (editing && (!currentLoaded || !currentLoaded.snapshot.exists)) { setError('请先读取要修改的基础设定或章节状态'); return }
     const ticket = scope.current.capture()
     const current = () => scope.current.isCurrent(ticket, canEditNow())
-    savingRef.current = true; setSaving(true); setError('')
+    const run = saveGuard.begin(scopeVersion)
+    if (run === null) return
+    let writeStarted = false
+    let failure: { started: boolean; error: unknown } | undefined
+    setError('')
     try {
       const v = await form.validateFields()
       if (!current()) return
@@ -185,6 +229,7 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
         { mode, revision: currentLoaded.revision, position: mode === 'progression' ? position : null, note: v.note ?? '' })
         if (!result.ok) throw new Error(result.error)
         if (!result.body) { message.info('没有需要保存的修改'); return }
+        writeStarted = true
         saved = await relationshipApi.update(projectId, editing.id, result.body)
       } else {
         if (v.self_id === v.other_id) throw new Error('请选择两位不同的角色')
@@ -196,9 +241,13 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
           description: v.description ?? '', source: 'manual', note: v.note?.trim() ?? '',
           expected_revision: existing?.revision ?? 0,
           ...(pos ? { anchor_kind: pos.anchor_kind, ...(pos.anchor_kind === 'scene' ? { scene_id: pos.scene_id } : {}), chapter_id: pos.chapter_id, chapter_no: pos.chapter_no, boundary: pos.boundary } : {}) }
-        if (v.custom) saved = await relationshipApi.create(projectId, { ...common, role_a: v.self_role?.trim(), role_b: v.other_role?.trim(), category: v.category })
+        if (v.custom) {
+          writeStarted = true
+          saved = await relationshipApi.create(projectId, { ...common, role_a: v.self_role?.trim(), role_b: v.other_role?.trim(), category: v.category })
+        }
         else {
           if (!opt) throw new Error('请选择关系类型')
+          writeStarted = true
           saved = await relationshipApi.create(projectId, { ...common, a_id: opt.viewerIsA ? v.self_id : v.other_id,
             b_id: opt.viewerIsA ? v.other_id : v.self_id, type_id: opt.typeId })
         }
@@ -207,12 +256,15 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
       invalidateProject(projectId, ['relationships', 'characters'])
       message.success('已保存'); onSaved(saved)
     } catch (err) {
+      failure = { started: writeStarted, error: err }
       if (!current()) return
       // Ant Form validation already displays field errors.
       if (typeof err === 'object' && err !== null && 'errorFields' in err) return
       setError(errorMessage(err))
       if (err instanceof ApiError && err.status === 409 && editing) { setConflict(true); setComparison(null) }
-    } finally { if (scope.current.isCurrent(ticket, true)) { savingRef.current = false; setSaving(false) } }
+    } finally {
+      saveGuard.finish(run, current(), failure)
+    }
   }
   const formatSnapshot = (snapshot: RelationSnapshot) => {
     if (!snapshot.exists) return '此时关系不存在'
@@ -226,12 +278,15 @@ function RelationEditSession({ projectId, open, characters, types, viewerId, edi
   const unavailable = !!editing && (!currentLoaded || !currentLoaded.snapshot.exists)
   return (
     <Modal title={editing ? '编辑关系' : '新增关系'} open={open} onOk={() => void save()} onCancel={onClose} confirmLoading={saving}
-      okButtonProps={{ disabled: !canEdit || loading || unavailable || conflict || comparison === 'missing' || (comparison === 'changed' && !ack) }}
+      okButtonProps={{ disabled: !canEdit || loading || unavailable || saveState.uncertain || conflict || comparison === 'missing' || (comparison === 'changed' && !ack) }}
       okText="保存" cancelText="取消" width={640} closable={!saving} maskClosable={!saving} keyboard={!saving} cancelButtonProps={{ disabled: saving }}>
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         {baseline?.baseline_status === 'legacy_unverified' && <Alert type="warning" showIcon message="旧关系待校准" description="旧作品没有完整的历史状态。请核对基础设定，并在剧情变化中确认校准。" />}
+        {saving && saveState.scopeVersion !== scopeVersion && <Alert type="warning" showIcon message="权限已变化，正在等待先前保存结束" description="本地草稿已保留；请求结束后须核对结果，不能自动重发。" />}
+        {saveState.uncertain && <Alert type="warning" showIcon message="保存结果尚未确认" description={editing ? '请读取最新状态并核对后再提交。' : '请先检查两位角色的关系是否已创建。'} />}
         {error && <Alert type={conflict ? 'warning' : 'error'} showIcon message={error} description={conflict ? '草稿已保留，请读取最新状态并核对。' : undefined} />}
-        {conflict && currentLoaded && <Button disabled={loading} onClick={() => void readSnapshot(true)}>读取最新状态并比较</Button>}
+        {(conflict || saveState.uncertain) && currentLoaded && <Button disabled={loading || saving} onClick={() => void readSnapshot(true)}>读取最新状态并比较</Button>}
+        {saveState.uncertain && !editing && <Button disabled={loading || saving} onClick={() => void reviewCreation()}>检查是否已创建</Button>}
         {comparison === 'unchanged' && <Alert type="info" showIcon message="当前状态未变，草稿仍保留，可以继续保存。" />}
         {comparison === 'changed' && latestSnapshot && <Alert type="warning" showIcon message="此位置的关系状态已改变，草稿仍保留。" description={<Space direction="vertical">
           {currentLoaded && <span>读取时：{formatSnapshot(currentLoaded.snapshot)}</span>}<span>最新状态：{formatSnapshot(latestSnapshot)}</span>

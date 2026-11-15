@@ -96,8 +96,10 @@ async def convert_section(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int,
     section_key: UUID, expected_revision: int,
 ) -> SceneDocumentOut:
-    from app.services import rich_document_service
+    from app.services import project_access, rich_document_service
 
+    # 这是实际写动作；先判定能力，再读取版本和执行纯转换。保存仍在锁内重新校验权限。
+    await project_access.require_project(db, user_id, project_id, "content.edit")
     current = await rich_document_service.get_document(db, user_id, project_id, chapter_id, scene_id)
     if current.content_revision != expected_revision:
         raise ConflictError("场景已被其他操作修改，请核对最新内容后重试", extra={

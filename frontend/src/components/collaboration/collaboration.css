@@ -1,0 +1,17 @@
+.collaboration-invitation-section, .collaboration-panel { margin-bottom: 24px; }
+.collaboration-invitation-section h2, .collaboration-heading h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.collaboration-invitation-section h2 { margin-bottom: 12px; }
+.collaboration-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.collaboration-panel > .ant-alert, .collaboration-invitation-section > .ant-alert { margin-bottom: 12px; }
+.collaboration-invitations, .collaboration-members { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.collaboration-invitation, .collaboration-member { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface-raised); padding: 12px 16px; }
+.collaboration-invitation-copy, .collaboration-member-copy { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.collaboration-invitation-copy span, .collaboration-member-copy span, .collaboration-hint, .collaboration-empty { color: var(--color-muted); font-size: 13px; }
+.collaboration-invite-form { display: flex; gap: 8px; margin-bottom: 8px; }
+.collaboration-invite-form .ant-input { flex: 1; min-width: 0; }
+.collaboration-invite-form .ant-select { min-width: 104px; }
+.collaboration-fee-choice { display: grid; gap: 4px; margin-bottom: 12px; }
+.collaboration-fee-choice > span, .collaboration-modal-fields > .ant-space-item > span { color: var(--color-muted); font-size: 13px; }
+.collaboration-modal-fields { width: 100%; margin-bottom: 12px; }
+.collaboration-modal-fields .ant-select { min-width: 160px; }
+@media (max-width: 539.98px) { .collaboration-invite-form { flex-wrap: wrap; } .collaboration-invite-form .ant-input { flex-basis: 100%; } }

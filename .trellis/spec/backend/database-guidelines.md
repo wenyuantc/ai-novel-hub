@@ -1,5 +1,11 @@
 # 数据库规范
 
+新增迁移 `0052_generation_log_instance_identity`（父0051）：`generation_logs` 原位增加可空 `log_instance_key` / `model_config_instance_key`（规范小写UUIDv4 CHECK，前者全局唯一索引），不重建父表、旧行保持NULL不补认。新插入必须带 `log_instance_key`（ORM默认值服务端生成；裸SQL缺失被BEFORE INSERT触发器拒绝），两键写后不可改、NULL旧行也不能补写（BEFORE UPDATE触发器，SQLite/PG两分支与create_all的after_create DDL逐字一致）。`model_config_instance_key` 只由 `write_log` 的服务端模型绑定写入。存在带键记录时拒绝降级（SQLite先取写锁、PG `ACCESS EXCLUSIVE` 后再扫描）。两键不进入任何API/SSE/Agent对外效果/单书备份：单书备份排除两列、导入时重新生成日志键；只带 `created_at` 的旧Agent证明只能匹配 `log_instance_key IS NULL` 的行；Agent撤销对生成记录/任务只允许更新章节关联，不能插入或删除。
+
+新增迁移 `0054_agent_conversation_round`（父0053）：`agent_conversations` 原位增加可空 `collaboration_invitation_id` String(36)（协作者经 HTTP 创建会话时的当前邀请 UUID，作者/旧行NULL），撤权后重邀的旧会话据此只读；不进入任何对外输出与单书备份；存在非空标记时拒绝降级（SQLite先取写锁、PG `ACCESS EXCLUSIVE` 后扫描）。见[智能体](./agent.md)。
+
+新增迁移 `0053_agent_summary_source`（父0052）：`agent_conversations` 原位增加可空 `summary_source` String(80)（编辑者摘要来源 `collaborator:<邀请UUID>:<轮次>`，作者/旧行NULL），不进入任何对外输出与单书备份；存在非空标记时拒绝降级（SQLite先取写锁、PG `ACCESS EXCLUSIVE` 后扫描）。见[智能体](./agent.md)。
+
 新增迁移0029（父0028）创建roles/user_roles/authorization_state/user_quotas，不重建users/projects；唯一超管仍是User.is_admin，角色AUTOINCREMENT与FK RESTRICT、两项mode/value约束、同快照投影、共同授权锁序、四创建入口与真实占用见[RBAC与配额](./rbac-quotas.md)。新实例/用户级表不登记项目备份；有新语义数据时拒绝有损downgrade。
 
 新增迁移 `0028_user_last_login`（父0027）：User增加可空UTC `last_login_at`，存量不回填，原位ADD/DROP COLUMN不重建users父表；只在密码登录/注册自动登录的条件认证事务记录，保留核验版本快照与账号updated_at。三种生命周期的用户资源单SQL聚合、Cookie与持久化故障边界见[管理员用户详情与登录契约](./auth-admin.md)。
@@ -61,6 +67,8 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
     async with request.app.state.sessionmaker() as session:
         yield session
 ```
+
+**SQLite 取消释放（`_release_cancelled_sqlite`，`handle_error` 监听）**：asyncio 取消打断 aiosqlite 语句时，SQLAlchemy 把 `CancelledError` 视为退出异常，既不关游标也不回滚就作废连接；被异常回溯引用、未 finalize 的游标会让 sqlite3 留下「僵尸连接」，写锁/读锁保留到 GC，后续占用回退和任务收尾反复 `database is locked`、任务永久 running。监听在原始异常为 `CancelledError` 时依次关闭被打断游标（取 `context.execution_context.cursor`，SQLAlchemy 2.1 的 `context.cursor` 不赋值）并回滚，再交还 SQLAlchemy 作废；取消照常向上传递，PostgreSQL 不注册。不得删除或改为只回滚（只回滚仍保留读锁）。回归：`tests/test_sqlite_cancel_rollback.py`。新增可被撤权/用户取消打断的持锁步骤时，依赖此统一处理，无需逐处包 `_finish_before_cancel`；但需要该步骤完整执行的语义（如 build_job 内多语句一致性）仍按引擎原规则处理。
 
 流式任务**不得**复用请求 session：路由在 prepare 步骤之后调用
 `await db.close()`，SSE 生成器通过 `async with sessionmaker() as db:`
@@ -424,8 +432,8 @@ async def get_latest(db, chapter_id) -> ChapterVersion | None
 # backend/app/services/chapter_version_service.py —— HTTP 入口（list/get/update/delete/restore）
 # backend/app/services/generation_log_service.py
 MAX_LOGS_PER_PROJECT = 200
-async def write_log(db, *, project_id, chapter_id, kind, ai_config_id, provider, model, params, messages,
-                    status, error="", output_chars=0, duration_ms=0) -> GenerationLog   # flush + 裁剪，不 commit
+async def write_log(db, *, project_id, actor_user_id, chapter_id, kind, ai_config_id, provider, model, params, messages,
+                    status, error="", output_chars=0, duration_ms=0, task_id=None) -> GenerationLog   # flush + 裁剪，不 commit
 async def save_log(sessionmaker, **kwargs) -> int | None   # 独立 session + commit，吞异常（失败/取消路径）
 # chapter_service
 async def commit_versioned(db) -> None   # (chapter_id, seq) 唯一约束冲突 → 409
@@ -447,14 +455,65 @@ async def commit_versioned(db) -> None   # (chapter_id, seq) 唯一约束冲突 
 - `prune`：保留最新 50 个未标星 + 全部标星；最新版本若未标星必在前 50，故永不被删。
 - 回滚：`ensure_baseline` → 正文改为目标版本 → `record("restore", note="恢复自 v{seq}")`；不改标题、不改状态；
   章节 `generating` 时 409。回滚前的快照仍在列表中，再恢复它即可撤销回滚。
-- 生成记录每个项目保留最近 200 条（按 id）；`write_log` 会把生成期间已被删除的章节/配置外键置空，避免外键失败。
-  `prompt_tokens`/`completion_tokens` 目前恒为 NULL（provider 流式接口拿不到用量）。
+- 生成记录按项目和真实触发者分别保留最近 200 条（按 id）；不得裁剪其他用户或触发者未知的记录。`write_log` 会把生成期间已被删除的章节/配置外键置空，避免外键失败。
+  `prompt_tokens`/`completion_tokens` 在供应商返回用量时记录，缺失时保留 NULL。
 
 ### 4. 必需的测试
 
 `backend/tests/test_chapter_versions.py`：合并窗口（monkeypatch `version_service._now`）、标星不合并、
 上限裁剪（第 51 个未标星删最旧，标星保留）、删除最新版本 400、AI 覆盖补 baseline、回滚与撤销、
 日志 200 条裁剪、跨用户 404。
+
+---
+
+## 场景：生成记录的触发者与隔离备份
+
+### 1. 范围 / 触发条件
+
+新增或修改生成记录写入、章节版本投影、单书备份，以及 `0044` 生成记录迁移时适用。
+
+### 2. 签名
+
+- `generation_logs.actor_user_id` 为可空用户外键，`ON DELETE SET NULL`；`write_log(..., actor_user_id=<真实触发者>)` 对新记录要求显式传入非空 actor。
+- `write_log` 只 flush，不提交；独立会话的 `save_log` 返回记录 ID 或 `None`。
+
+### 3. 契约
+
+- 迁移时按项目原作者回填旧记录；用户被删除后为 NULL，不能把未知触发者推断为当前作者。触发者删除竞争导致写入失败时，外层事务正常回滚。
+- 按 `(project_id, actor_user_id)` 单独保留最近 200 条；删除时再次限定这两个字段，不影响其他人或 NULL 记录。
+- 对外日志与章节版本的日志 ID 按实际触发者过滤。单书备份仅导出作者日志，过滤后的版本日志引用置空；导入时将日志归属填为导入用户。
+- SQLAlchemy 异常不得向上层 traceback 或服务日志暴露 SQL 参数、提示词和正文；`write_log` 仅保留安全错误类型和是否为 `40001` 序列化冲突的布尔分类，离开 `except` 后抛出无原异常链的安全异常；`save_log` 仅记录安全错误类型。Agent 仍把 `40001` 映射为原有并发冲突提示。
+
+### 4. 验证与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 新日志没有真实 actor | 拒绝写入，不猜测为作者 |
+| 写入期间 actor 删除或数据库失败 | 失败关闭，记录安全错误类型；不输出原始 SQL 参数 |
+| 旧日志 actor 已删除 | 保留 NULL，不向任何成员当作本人日志返回 |
+| 备份中的版本引用被过滤日志 | 导出引用为 NULL，版本仍可恢复 |
+
+### 5. 正例 / 基本 / 反例
+
+- 正例：编辑者超过上限只裁剪自己的旧日志，作者和未知 actor 记录保留。
+- 基本：作者的旧日志回填后，可随单书备份导出并归导入者。
+- 反例：按整个项目裁剪，或将非作者日志连同引用导出。
+
+### 6. 必需测试
+
+`test_collaboration_migration.py`、`test_collaboration_postgresql.py` 验证回填、外键和降级保护；`test_collaboration_log_privacy.py` 验证日志、版本及备份隔离；`test_collaboration_log_retention.py` 验证跨用户裁剪；`test_collaboration_log_failure_privacy.py` 验证数据库异常不泄露请求内容。
+
+### 7. 错误与正确
+
+```python
+# 错误：以整本作品裁剪，可能删除其他人的私人日志。
+select(GenerationLog.id).where(GenerationLog.project_id == project_id)
+
+# 正确：同时限定真实触发者，删除时也重验归属。
+select(GenerationLog.id).where(
+    GenerationLog.project_id == project_id, GenerationLog.actor_user_id == actor_user_id,
+)
+```
 
 ---
 

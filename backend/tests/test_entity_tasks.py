@@ -248,7 +248,7 @@ async def test_relations_parse_validation_and_conflict(client, fake_llm):
     # 生成角色允许并发
     assert (await client.post(f"{base}/characters/generate")).status_code == 202
     gate.release()
-    task = await wait_task(client, first.json()["id"])
+    task = await wait_task(client, first.json())
     assert task["status"] == "failed" and "解析失败" in task["error"]
 
 

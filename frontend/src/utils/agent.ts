@@ -1,4 +1,5 @@
-import type { AgentChange, AgentChangeStatus, AgentExternalCall, AgentMessage, AgentToolEnd, AgentToolStart } from '../api/types'
+import type { AgentChange, AgentChangeStatus, AgentExternalCall, AgentMessage, AgentToolEnd, AgentToolStart, Task } from '../api/types'
+import { canRetryTask, hasTaskIdentity, isOpenTask } from '../api/tasks'
 import type { ProjectResource } from './projectRefresh'
 
 export const AGENT_CHANGE_STATUS: Record<AgentChangeStatus, { label: string; color: string }> = {
@@ -6,13 +7,20 @@ export const AGENT_CHANGE_STATUS: Record<AgentChangeStatus, { label: string; col
   executed: { label: '已执行', color: 'success' }, rejected: { label: '已拒绝', color: 'default' },
   failed: { label: '执行失败', color: 'error' }, undone: { label: '已撤销', color: 'default' },
 }
-export interface AgentToolStep extends AgentToolStart { ok?: boolean; summary?: string; turn_task_id?: number | null }
-export function mergeToolStep(steps: AgentToolStep[], event: (AgentToolStart | AgentToolEnd) & { turn_task_id?: number | null }): AgentToolStep[] {
-  const old = steps.find((s) => s.call_id === event.call_id && s.turn_task_id === event.turn_task_id)
+export interface AgentToolStep extends AgentToolStart { ok?: boolean; summary?: string; turn_task_id?: number | null; turn_task_key?: string | null }
+export function mergeToolStep(steps: AgentToolStep[], event: (AgentToolStart | AgentToolEnd) & { turn_task_id?: number | null; turn_task_key?: string | null }): AgentToolStep[] {
+  const old = steps.find((s) => s.call_id === event.call_id && s.turn_task_id === event.turn_task_id && s.turn_task_key === event.turn_task_key)
   const next = { name: '', label: '工具调用', ...old, ...event }
-  return old ? steps.map((s) => s.call_id === event.call_id && s.turn_task_id === event.turn_task_id ? next : s) : [...steps, next]
+  return old ? steps.map((s) => s.call_id === event.call_id && s.turn_task_id === event.turn_task_id && s.turn_task_key === event.turn_task_key ? next : s) : [...steps, next]
 }
 export function upsertAgentChange(changes: AgentChange[], change: AgentChange): AgentChange[] {
+  const current = changes.find((item) => item.id === change.id)
+  if (current && (current.change_key !== change.change_key || current.view_version !== change.view_version)) return changes
+  if (current && current.status !== change.status) {
+    const next = current.status === 'proposed' ? ['executing', 'executed', 'rejected', 'failed']
+      : current.status === 'executing' ? ['executed', 'failed'] : current.status === 'executed' ? ['undone'] : []
+    if (!next.includes(change.status)) return changes
+  }
   return [...changes.filter((c) => c.id !== change.id), change].sort((a, b) => a.seq - b.seq || a.id - b.id)
 }
 /** 任务只能取消；外部插件调用（external）无法撤销 */
@@ -30,12 +38,6 @@ export function externalResult(change: AgentChange): { text: string; error: bool
   if (typeof r.error === 'string') return { text: r.error, error: true }
   if (typeof r.text === 'string') return { text: r.text, error: false }
   return null
-}
-export function changeTaskId(change: AgentChange): number | null {
-  if (change.kind !== 'task' || change.status !== 'executed') return null
-  if (typeof change.result?.task_id === 'number') return change.result.task_id
-  const task = change.result?.task
-  return typeof task === 'object' && task !== null && 'id' in task && typeof task.id === 'number' ? task.id : null
 }
 export function agentValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '（空）'
@@ -61,26 +63,27 @@ export function buildAgentTimeline(messages: AgentMessage[], changes: AgentChang
   const result: AgentTimelineItem[] = []
   const calls = new Set<string>()
   const shownChanges = new Set<number>()
-  const addTool = (callId: string, name: string, turnId: number | null | undefined) => {
-    const key = `${turnId ?? 'history'}:${callId}`
+  const addTool = (callId: string, name: string, turnId: number | null | undefined, turnKey: string | null | undefined, origin: string) => {
+    const bound = hasTaskIdentity({ id: turnId ?? 0, task_key: turnKey ?? null })
+    const key = `${turnId ?? 'history'}:${bound ? turnKey : `unbound-${origin}`}:${callId}`
     if (calls.has(key)) return
     calls.add(key)
-    const output = messages.find((m) => m.role === 'tool' && m.tool_call_id === callId && m.turn_task_id === turnId)
-    const step = live.find((s) => s.call_id === callId && s.turn_task_id === turnId)
-    result.push({ key: `tool-${key}`, type: 'tool', step: { call_id: callId, name, label: toolLabel(name), ...(output ? { ok: !output.content.includes('"error"'), summary: output.content } : {}), ...step } })
-    changes.filter((c) => c.tool_call_id === callId && c.turn_task_id === turnId).forEach((change) => { shownChanges.add(change.id); result.push({ key: `change-${change.id}`, type: 'change', change }) })
+    const output = bound ? messages.find((m) => m.role === 'tool' && m.tool_call_id === callId && m.turn_task_id === turnId && m.turn_task_key === turnKey) : undefined
+    const step = bound ? live.find((s) => s.call_id === callId && s.turn_task_id === turnId && s.turn_task_key === turnKey) : undefined
+    result.push({ key: `tool-${key}`, type: 'tool', step: { call_id: callId, name, label: toolLabel(name), turn_task_id: turnId ?? null, turn_task_key: turnKey ?? null, ...(output ? { ok: !output.content.includes('"error"'), summary: output.content } : {}), ...step } })
+    if (bound) changes.filter((c) => c.tool_call_id === callId && c.turn_task_id === turnId && c.turn_task_key === turnKey).forEach((change) => { shownChanges.add(change.id); result.push({ key: `change-${change.id}:${change.change_key ?? 'unknown'}`, type: 'change', change }) })
   }
   for (const message of messages) {
     if (message.role === 'tool') {
-      if (message.tool_call_id) addTool(message.tool_call_id, message.tool_name ?? '', message.turn_task_id)
+      if (message.tool_call_id) addTool(message.tool_call_id, message.tool_name ?? '', message.turn_task_id, message.turn_task_key, `message-${message.id}`)
       else if (message.content) result.push({ key: `message-${message.id}`, type: 'message', message })
       continue
     }
     if (message.content) result.push({ key: `message-${message.id}`, type: 'message', message })
-    for (const call of message.tool_calls ?? []) addTool(call.id, call.name, message.turn_task_id)
+    for (const call of message.tool_calls ?? []) addTool(call.id, call.name, message.turn_task_id, message.turn_task_key, `message-${message.id}`)
   }
-  for (const step of live) addTool(step.call_id, step.name, step.turn_task_id)
-  for (const change of changes) if (!shownChanges.has(change.id)) result.push({ key: `change-${change.id}`, type: 'change', change })
+  for (const [index, step] of live.entries()) addTool(step.call_id, step.name, step.turn_task_id, step.turn_task_key, `live-${index}`)
+  for (const change of changes) if (!shownChanges.has(change.id)) result.push({ key: `change-${change.id}:${change.change_key ?? 'unknown'}`, type: 'change', change })
   return result
 }
 
@@ -104,4 +107,62 @@ export function changedResources(changes: AgentChange[]): ProjectResource[] {
     if (change.tool_name.includes('foreshadow')) resources.add('foreshadows')
   }
   return [...resources]
+}
+
+/** 协作授权失效时系统作废本轮待确认提案的固定文案（后端 COLLABORATION_CHANGE_VOIDED，裁决 25）。 */
+export const AGENT_VOIDED_ERROR = '协作授权已失效，提案已作废'
+/** 续跑时模型配置失效的失败文案（作者向量配置变化、本人或作者文本模型配置被改 / 删均会出现；裁决 27、28）。 */
+export const AGENT_MODEL_INVALID_ERROR = '模型配置已失效，请重新选择'
+export const AGENT_MODEL_CHANGED_HINT = '模型配置已变化（可能是本人或作者的配置），请在会话中重新发起'
+/** 协作者通用重试被拒（403 / 400 / 409 不统一，裁决 24）的统一提示。 */
+export const AGENT_RETRY_REJECTED_HINT = '不可重试，请在当前会话重新发起'
+
+type OpenTurn = Pick<Task, 'id' | 'task_key' | 'status'>
+
+/** 提案所属轮次仍未结束（排队 / 运行 / 待确认），且与该轮次实例一致。 */
+export function isAgentTurnOpen(change: Pick<AgentChange, 'turn_task_id' | 'turn_task_key'>, turn: OpenTurn | null | undefined): boolean {
+  return !!turn && isOpenTask(turn.status) && change.turn_task_id === turn.id && !!turn.task_key
+    && change.turn_task_key === turn.task_key
+}
+
+/** 工具步骤没有结果、所属轮次也已结束（失败 / 取消 / 授权失效作废 / 中断）时的状态文案。 */
+export const AGENT_TOOL_STOPPED = '已停止'
+/**
+ * 工具步骤状态：有结果按成败显示；无结果时只有所属轮次仍未结束（或正在实时订阅该步骤）才显示「处理中」，
+ * 否则显示「已停止」，避免已结束轮次残留「处理中」（E4i-h）。
+ */
+export function agentToolStepState(step: Pick<AgentToolStep, 'ok' | 'turn_task_id' | 'turn_task_key'>, turn: OpenTurn | null | undefined, live = false) {
+  if (step.ok !== undefined) return { label: step.ok ? '完成' : '未完成', stopped: false }
+  const open = live || isAgentTurnOpen({ turn_task_id: step.turn_task_id ?? null, turn_task_key: step.turn_task_key ?? null }, turn)
+  return { label: open ? '处理中' : AGENT_TOOL_STOPPED, stopped: !open }
+}
+
+/**
+ * 提案卡片状态：协作授权失效作废的提案显示「已作废」（裁决 25）；所属轮次已结束仍残留的待确认提案
+ * 显示「轮次已结束」并置灰（裁决 26，服务端不事后补作废，也已无法确认）。
+ */
+export function agentChangeState(change: Pick<AgentChange, 'status' | 'error' | 'turn_task_id' | 'turn_task_key'>, turn: OpenTurn | null | undefined, timeline = true) {
+  if (change.status === 'failed' && change.error === AGENT_VOIDED_ERROR) return { label: '已作废', color: 'default', ended: false }
+  if (timeline && change.status === 'proposed' && !isAgentTurnOpen(change, turn)) return { label: '轮次已结束', color: 'default', ended: true }
+  return { ...AGENT_CHANGE_STATUS[change.status], ended: false }
+}
+
+/**
+ * 「重试本轮」：协作者因作者向量配置变化失败的轮次重试必然再次失败，隐藏并提示重新发起（裁决 27）；
+ * 协作者重试已被服务端拒绝（rejected）时同样隐藏并统一提示（裁决 24）。作者行为不变。
+ */
+export function agentRetryState(task: Pick<Task, 'status' | 'error' | 'kind'>, collaborator: boolean, rejected: boolean): { retry: boolean; hint: string | null } {
+  if (collaborator && task.kind === 'agent.turn' && (task.error ?? '').includes(AGENT_MODEL_INVALID_ERROR)) {
+    return { retry: false, hint: AGENT_MODEL_CHANGED_HINT }
+  }
+  if (collaborator && rejected) return { retry: false, hint: AGENT_RETRY_REJECTED_HINT }
+  return { retry: canRetryTask(task.status), hint: null }
+}
+
+/** 会话只读原因（服务端 writable=false 时）：查看者、或撤权后重邀留下的旧轮次会话（裁决 4、7）。 */
+export function agentReadOnlyNotice(writable: boolean, canUseAgent: boolean): string | null {
+  if (writable) return null
+  return canUseAgent
+    ? '此会话属于之前的协作授权，只能查看；请新开会话继续。'
+    : '当前为查看者，只能查看本人会话，不能发送、确认、拒绝或撤销。'
 }

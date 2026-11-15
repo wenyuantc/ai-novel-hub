@@ -12,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models import AgentChange, AnalysisChange, Chapter, ChapterAnalysis, OrganizationMember, Project, User
 from app.schemas.transfer import BackupOptions
-from app.services import admin_service, organization_service, project_lifecycle, project_service, recycle_bin_service
+from app.services import (
+    admin_service,
+    authorization_service,
+    organization_service,
+    project_lifecycle,
+    project_service,
+    recycle_bin_service,
+)
 from app.services.agent import effects
 from app.services.agent.tools.base import TransactionSession, lock_project
 from app.services.project_transfer import exporter
@@ -41,12 +48,21 @@ async def test_accepted_content_write_finishes_before_delete_barrier(app, client
     original = project_lifecycle.lock_active
     deletion = None
 
+    original_gate = authorization_service.gate
+
     async def observe(db, target):
         if asyncio.current_task() is deletion:
             attempted.set()
         return await original(db, target)
 
+    async def observe_gate(db):
+        # 删除按 RBAC 锁序先取授权门禁再锁父项目；SQLite 下首个写屏障即在此等待已接纳的写入。
+        if asyncio.current_task() is deletion:
+            attempted.set()
+        return await original_gate(db)
+
     monkeypatch.setattr(project_lifecycle, "lock_active", observe)
+    monkeypatch.setattr(authorization_service, "gate", observe_gate)
     async with app.state.sessionmaker() as writer:
         await project_service.get_owned_project(writer, owner["id"], pid, lock=True)
         row = await writer.get(Chapter, chapter["id"])
@@ -235,7 +251,7 @@ async def test_direct_analysis_and_agent_ids_cannot_read_or_write_trash(app, cli
         )
         db.add(agent_change)
         await db.commit()
-        agent_id = agent_change.id
+        agent_id, agent_key = agent_change.id, agent_change.change_key
     assert (await client.delete(f"/api/v1/projects/{pid}")).status_code == 204
     assert (await client.get(f"/api/v1/analyses/{analysis_id}")).status_code == 404
     for suffix in ("confirm", "reject", "revert"):
@@ -243,8 +259,10 @@ async def test_direct_analysis_and_agent_ids_cannot_read_or_write_trash(app, cli
     base = f"/api/v1/projects/{pid}/agent"
     assert (await client.get(f"{base}/conversations/{conversation['id']}")).status_code == 404
     assert (await client.patch(f"{base}/conversations/{conversation['id']}", json={"title": "禁止"})).status_code == 404
+    # 单项提案动作须携带展示时的 change_key/view_version（否则 422）；身份完整时仍因回收站作品 404。
+    action = {"change_key": agent_key, "view_version": "0" * 64}
     for suffix in ("confirm", "reject", "undo"):
-        assert (await client.post(f"{base}/changes/{agent_id}/{suffix}")).status_code == 404
+        assert (await client.post(f"{base}/changes/{agent_id}/{suffix}", json=action)).status_code == 404
 
 
 @pytest.mark.parametrize("operation", ["add", "remove"])
@@ -271,13 +289,22 @@ async def test_membership_writes_hold_parent_barrier_until_commit(app, client, m
             await release.wait()
         return result
 
+    original_gate = authorization_service.gate
+
     async def parent_lock(db, project_id):
         if asyncio.current_task() is deletion:
             deleting.set()
         return await original_lock(db, project_id)
 
+    async def gate(db):
+        # 删除按 RBAC 锁序先取授权门禁再锁父项目；首个写屏障即须等待已接纳的成员写入。
+        if asyncio.current_task() is deletion:
+            deleting.set()
+        return await original_gate(db)
+
     monkeypatch.setattr(organization_service, "get_owned_org", get_org)
     monkeypatch.setattr(project_lifecycle, "lock_active", parent_lock)
+    monkeypatch.setattr(authorization_service, "gate", gate)
     mutation = asyncio.create_task(
         client.request(
             "POST" if operation == "add" else "DELETE",

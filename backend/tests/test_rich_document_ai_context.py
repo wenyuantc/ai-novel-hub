@@ -8,8 +8,8 @@ from sqlalchemy import event
 from app.models import Chapter, Project, Scene, SceneSection
 from app.services import context_builder, rich_document_ai
 from app.services.rich_document_ai import visible_sections
-from tests.helpers import Gate, create_ai_config, parse_sse, wait_task
-from tests.test_agent_runtime import call, send, setup_agent
+from tests.helpers import Gate, create_ai_config, parse_sse, task_params, wait_task
+from tests.test_agent_runtime import call, send_task, setup_agent
 from tests.test_rich_document_api import KEY, SECTION_AFTER, add_section, save_payload
 from tests.test_scene_planning import scene_setup
 
@@ -50,9 +50,9 @@ async def test_real_generation_messages_include_enabled_target_only(client, fake
         assert "开启区块名称" in sent and "开启区块内容" in sent
         assert "关闭区块名称" not in sent and "关闭区块内容" not in sent
     finally:
-        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel")
+        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel", params=task_params(started.json()))
         gate.release()
-        await wait_task(client, started.json()["id"])
+        await wait_task(client, started.json())
 
 
 async def test_real_generation_messages_include_enabled_prior_chapter_only(client, fake_llm):
@@ -75,9 +75,9 @@ async def test_real_generation_messages_include_enabled_prior_chapter_only(clien
         assert "前章正文" in sent and "开启区块名称" in sent and "开启区块内容" in sent
         assert "关闭区块名称" not in sent and "关闭区块内容" not in sent
     finally:
-        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel")
+        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel", params=task_params(started.json()))
         gate.release()
-        await wait_task(client, started.json()["id"])
+        await wait_task(client, started.json())
 
 
 async def test_real_generation_messages_include_enabled_previous_scene_without_future_sources(client, fake_llm):
@@ -108,9 +108,9 @@ async def test_real_generation_messages_include_enabled_previous_scene_without_f
         assert "未来区块名称" not in first_sent and "未来区块内容" not in first_sent
         assert "关闭区块名称" not in sent and "关闭区块内容" not in sent
     finally:
-        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel")
+        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel", params=task_params(started.json()))
         gate.release()
-        await wait_task(client, started.json()["id"])
+        await wait_task(client, started.json())
 
 
 async def test_sqlite_nul_and_crlf_truncation_reaches_actual_messages_safely(app, client, fake_llm):
@@ -138,9 +138,9 @@ async def test_sqlite_nul_and_crlf_truncation_reaches_actual_messages_safely(app
         sent = str(fake_llm.calls[-1]["messages"])
         assert "a" * 1_000 in sent and "已截断" in sent
     finally:
-        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel")
+        await client.post(f"/api/v1/tasks/{started.json()['id']}/cancel", params=task_params(started.json()))
         gate.release()
-        await wait_task(client, started.json()["id"])
+        await wait_task(client, started.json())
 
 
 async def test_long_book_sections_are_bounded_before_materializing_context(app, client, monkeypatch):
@@ -199,8 +199,8 @@ async def test_agent_real_tool_messages_keep_formal_offsets_and_filter_section_s
     await _add_visibility_examples(client, f"{scenes_url}/{scene['id']}/document")
     fake_llm.push_tools([call("read_chapter", {"id": chapter_id, "page": 1}, "chapter")])
     fake_llm.push_tools([("text", {"text": "已读取"})])
-    task_id = await send(client, conversation, "请读取章节")
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    task_ref = await send_task(client, conversation, "请读取章节")
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     messages = fake_llm.tool_calls[-1]["messages"]
     tool_result = next(message for message in messages if message.get("tool_call_id") == "chapter")
     data = json.loads(tool_result["content"])["data"]
@@ -243,8 +243,8 @@ async def test_agent_chapter_paging_limits_sections_by_exact_scene_projection(cl
         call("read_chapter", {"id": chapter["id"], "page": 2}, "second"),
     ])
     fake_llm.push_tools([("text", {"text": "已读取"})])
-    task_id = await send(client, conversation, "请分页读取")
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    task_ref = await send_task(client, conversation, "请分页读取")
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     data = {message["tool_call_id"]: json.loads(message["content"])["data"]
             for message in fake_llm.tool_calls[-1]["messages"] if message["role"] == "tool"}
     assert data["first"]["content"] == "甲" * 4_000
@@ -268,8 +268,8 @@ async def test_agent_empty_chapter_page_includes_section_at_zero(client, fake_ll
     assert (await client.put(endpoint, json=body)).status_code == 200
     fake_llm.push_tools([call("read_chapter", {"id": chapter["id"], "page": 1}, "empty")])
     fake_llm.push_tools([("text", {"text": "已读取"})])
-    task_id = await send(client, conversation, "读取空章")
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    task_ref = await send_task(client, conversation, "读取空章")
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     message = next(row for row in fake_llm.tool_calls[-1]["messages"] if row.get("tool_call_id") == "empty")
     data = json.loads(message["content"])["data"]
     assert data["content"] == "" and data["pages"] == 1 and "作者🙂" in data["author_sections"]

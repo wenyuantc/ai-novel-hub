@@ -16,7 +16,7 @@ from app.models import (
     Task,
     User,
 )
-from tests.helpers import Gate, analysis_json, create_ai_config, run_task, stream_task, wait_task
+from tests.helpers import Gate, analysis_json, create_ai_config, run_task, stream_task, task_params, wait_task
 from tests.test_rich_document_api import KEY, add_section, save_payload
 from tests.test_scenes import setup_scene
 
@@ -57,7 +57,7 @@ async def test_proposal_requires_confirmation_then_atomically_applies_once(app, 
     data = preview.json()
     assert data["content_revision"] == source["content_revision"]
     assert data["scenes"][0]["unresolved_sections"] == [KEY] and data["scenes"][0]["format_loss"] is True
-    assert (await client.post(f"/api/v1/tasks/{task['id']}/resume")).status_code == 409
+    assert (await client.post(f"/api/v1/tasks/{task['id']}/resume", params=task_params(task))).status_code == 409
     body = {**query, "sections": [{"scene_id": scene["id"], "section_key": KEY, "anchor": 3}],
             "confirm_format_loss": False}
     denied = await client.post(f"{path}/accept", json=body)
@@ -139,14 +139,21 @@ async def test_missing_proposal_chunk_closes_stream_on_early_rejection(app, clie
 
 
 async def test_pending_review_is_recovered_from_running_checkpoint_without_model_replay(app, client, fake_llm):
+    from app.services import rich_document_review
+
     _project, chapter, _url, _scene, document_url, source, task, identity = await _pending(app, client, fake_llm)
     async with app.state.sessionmaker() as db:
-        await db.execute(update(Task).where(Task.id == task["id"]).values(status="running", result=None))
+        proposal = await db.scalar(select(SceneReviewProposal).where(SceneReviewProposal.token == identity["token"]))
+        receipt = (await rich_document_review._read_payload(db, proposal))["execution_receipt"]
+        assert (receipt["task_id"], receipt["task_key"]) == (task["id"], task["task_key"])
+        await db.execute(update(Task).where(
+            Task.id == task["id"], Task.statistics_key == task["task_key"],
+        ).values(status="running", execution_key=receipt["execution_key"], result=None))
         await db.commit()
     await app.state.task_engine.recover()
-    current = (await client.get(f"/api/v1/tasks/{task['id']}")).json()
+    current = (await client.get(f"/api/v1/tasks/{task['id']}", params=task_params(task))).json()
     assert current["status"] == "paused"
-    assert (await stream_task(client, task["id"]))[-1][1]["result"] == identity
+    assert (await stream_task(client, task))[-1][1]["result"] == identity
     assert (await client.get(document_url)).json() == source and len(fake_llm.calls) == 1
     async with app.state.sessionmaker() as db:
         assert (await db.get(Chapter, chapter["id"])).status != "generating"
@@ -173,8 +180,8 @@ async def test_edit_during_review_keeps_stale_proposal_readable_but_cannot_apply
 @pytest.mark.parametrize("action", ["cancel", "finish"])
 async def test_generic_termination_discards_review_without_faking_adoption(app, client, fake_llm, action):
     _project, _chapter, _url, _scene, document_url, source, task, identity = await _pending(app, client, fake_llm)
-    assert (await client.post(f"/api/v1/tasks/{task['id']}/{action}")).status_code == 409
-    ended = await client.post(f"/api/v1/tasks/{task['id']}/{action}", json={
+    assert (await client.post(f"/api/v1/tasks/{task['id']}/{action}", params=task_params(task))).status_code == 409
+    ended = await client.post(f"/api/v1/tasks/{task['id']}/{action}", params=task_params(task), json={
         key: identity[key] for key in ("task_key", "run_key", "token")
     })
     assert ended.status_code == 200 and ended.json()["status"] == "cancelled", ended.text
@@ -195,7 +202,7 @@ async def test_cancelling_old_paused_proposal_does_not_release_new_task_chapter(
     assert response.status_code == 202, response.text
     await gate.wait_reached()
     try:
-        ended = await client.post(f"/api/v1/tasks/{task['id']}/cancel", json={
+        ended = await client.post(f"/api/v1/tasks/{task['id']}/cancel", params=task_params(task), json={
             key: identity[key] for key in ("task_key", "run_key", "token")
         })
         assert ended.status_code == 200 and ended.json()["status"] == "cancelled"
@@ -203,7 +210,7 @@ async def test_cancelling_old_paused_proposal_does_not_release_new_task_chapter(
             assert (await db.get(Chapter, chapter["id"])).status == "generating"
     finally:
         gate.release()
-    later = await wait_task(client, response.json()["id"], statuses=("paused", "failed", "succeeded"))
+    later = await wait_task(client, response.json(), statuses=("paused", "failed", "succeeded"))
     assert later["status"] == "paused" and (await client.get(document_url)).json() == source
 
 
@@ -213,10 +220,12 @@ async def test_cancel_and_accept_compete_without_partial_write(app, client, fake
     accept = {"task_key": identity["task_key"], "run_key": identity["run_key"],
               "sections": [{"scene_id": scene["id"], "section_key": KEY, "anchor": 3}],
               "confirm_format_loss": True}
-    first, second = await asyncio.gather(client.post(f"{path}/accept", json=accept),
-                                         client.post(f"/api/v1/tasks/{task['id']}/cancel", json={
-                                             key: identity[key] for key in ("task_key", "run_key", "token")
-                                         }))
+    first, second = await asyncio.gather(
+        client.post(f"{path}/accept", json=accept),
+        client.post(f"/api/v1/tasks/{task['id']}/cancel", params=task_params(task), json={
+            key: identity[key] for key in ("task_key", "run_key", "token")
+        }),
+    )
     async with app.state.sessionmaker() as db:
         stored_task = await db.get(Task, task["id"])
         proposal = await db.scalar(select(SceneReviewProposal).where(SceneReviewProposal.token == identity["token"]))
@@ -230,19 +239,22 @@ async def test_cancel_and_accept_compete_without_partial_write(app, client, fake
 
 @pytest.mark.parametrize("change", ["disabled", "token_version"])
 async def test_review_accept_rechecks_account_identity_after_authentication(app, client, fake_llm, monkeypatch, change):
-    from app.services import setting_ai_visibility
+    from app.services import project_access
 
     _project, _chapter, _url, scene, document_url, source, task, identity = await _pending(app, client, fake_llm)
     path = f"/api/v1/tasks/{task['id']}/rich-proposals/{identity['token']}"
-    original = setting_ai_visibility.lock_author_visibility_write
+    original = project_access.require_project
     reached, proceed = asyncio.Event(), asyncio.Event()
 
     async def delayed(*args, **kwargs):
-        reached.set()
-        await proceed.wait()
+        # 采纳已改由 require_project 的认证/User → 发送写门禁 → 作品屏障入口加锁；在请求认证之后、
+        # 该写屏障之前停住，验证屏障内重验原认证身份。
+        if kwargs.get("for_update"):
+            reached.set()
+            await proceed.wait()
         return await original(*args, **kwargs)
 
-    monkeypatch.setattr(setting_ai_visibility, "lock_author_visibility_write", delayed)
+    monkeypatch.setattr(project_access, "require_project", delayed)
     body = {"task_key": identity["task_key"], "run_key": identity["run_key"],
             "sections": [{"scene_id": scene["id"], "section_key": KEY, "anchor": 3}],
             "confirm_format_loss": True}
@@ -297,7 +309,7 @@ async def test_batch_review_resumes_at_next_phase_without_regenerating_current_c
         "confirm_format_loss": False,
     })
     assert accepted.status_code == 200, accepted.text
-    finished = await wait_task(client, task["id"], statuses=("succeeded", "failed"), within=10)
+    finished = await wait_task(client, task, statuses=("succeeded", "failed"), within=10)
     assert finished["status"] == "succeeded", finished
     assert [item["state"] for item in finished["checkpoint"]["items"]] == ["done", "done", "done"]
     assert (await client.get(url)).json()["content"] == "第二章候选"
@@ -337,16 +349,16 @@ async def test_batch_review_analysis_committed_before_checkpoint_is_not_sent_aga
         "confirm_format_loss": False,
     })
     assert accepted.status_code == 200, accepted.text
-    failed = await wait_task(client, task["id"], statuses=("failed",), within=10)
+    failed = await wait_task(client, task, statuses=("failed",), within=10)
     assert failed["checkpoint"]["phase"] == "analyze" and len(fake_llm.calls) == 2
     async with app.state.sessionmaker() as db:
         receipt = await db.get(SceneReviewAnalysisReceipt, identity["run_key"])
         assert receipt.status == "completed" and receipt.analysis_id is not None
         assert len(list(await db.scalars(select(ChapterAnalysis)))) == 1
     monkeypatch.setattr(batch_service, "_save", original)
-    retry = await client.post(f"/api/v1/tasks/{task['id']}/retry")
+    retry = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
     assert retry.status_code == 202, retry.text
-    completed = await wait_task(client, retry.json()["id"], statuses=("succeeded", "failed"), within=10)
+    completed = await wait_task(client, retry.json(), statuses=("succeeded", "failed"), within=10)
     assert completed["status"] == "succeeded" and len(fake_llm.calls) == 2
     async with app.state.sessionmaker() as db:
         assert len(list(await db.scalars(select(ChapterAnalysis)))) == 1
@@ -378,9 +390,9 @@ async def test_batch_review_analysis_interrupted_in_flight_is_not_automatically_
     await gate.wait_reached()
     await app.state.task_engine.stop()
     await app.state.task_engine.start()
-    retry = await client.post(f"/api/v1/tasks/{task['id']}/retry")
+    retry = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
     assert retry.status_code == 202, retry.text
-    completed = await wait_task(client, retry.json()["id"], statuses=("succeeded", "failed"), within=10)
+    completed = await wait_task(client, retry.json(), statuses=("succeeded", "failed"), within=10)
     assert completed["status"] == "succeeded" and len(fake_llm.calls) == 2
     assert completed["checkpoint"]["items"][0]["analysis"] == "failed"
     assert "未自动重复" in completed["checkpoint"]["items"][0]["warning"]

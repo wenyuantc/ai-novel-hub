@@ -6,11 +6,12 @@ import { errorMessage } from '../../api/client'
 import { missingRelationPairCount } from '../../api/entityTasks'
 import { organizationApi } from '../../api/organizations'
 import { relationshipApi } from '../../api/relationships'
-import { queueLabel, TASK_KIND_LABELS, taskApi } from '../../api/tasks'
+import { hasTaskIdentity, queueLabel, TASK_KIND_LABELS, taskApi } from '../../api/tasks'
 import type { CareerKind, Character, Relationship, Task } from '../../api/types'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
+import { captureProjectScope, isProjectScopeCurrent } from '../../stores/project'
 import AIConfigSelect from '../AIConfigSelect'
 import StreamOutput from '../StreamOutput'
 import { TASK_RESULT_VIEWERS } from './taskResultViewers'
@@ -51,11 +52,11 @@ const PLACEHOLDERS: Record<Exclude<EntityTaskKind, 'relations.parse'>, string> =
 /**
  * 设定类 AI 任务弹窗：填写参数 → 创建后台任务并订阅 → 完成后展示可编辑预览（注册表中的结果组件）→ 确认保存。
  * 运行中可以关闭：任务在后台继续，完成后可在任务面板「查看结果」打开同一预览。
- * 打开时自动接上活动任务：生成类按 project + kind，解析任务再按 character_id 区分角色。
+ * 无原角色实例证明的解析任务不自动恢复；当前页面新建的任务可正常订阅。
  */
 export default function EntityTaskModal(props: Props) {
   if (!props.open) return null
-  return <Inner {...props} />
+  return <Inner key={`${props.projectId}:${props.kind}:${props.characterId ?? ''}`} {...props} />
 }
 
 function Inner({ projectId, kind, onClose, characterId, characterName, characters = [], relationships = [], onSaved }: Props) {
@@ -64,7 +65,7 @@ function Inner({ projectId, kind, onClose, characterId, characterName, character
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   const [starting, setStarting] = useState(false)
   const startingRef = useRef(false)
-  const [recovering, setRecovering] = useState(true)
+  const [recovering, setRecovering] = useState(kind !== 'relations.parse')
   const [result, setResult] = useState<unknown>(undefined)
   const stream = useTaskStream()
   const trackTask = useTasksStore((s) => s.track)
@@ -78,8 +79,11 @@ function Inner({ projectId, kind, onClose, characterId, characterName, character
   const label = TASK_KIND_LABELS[kind]
 
   const followTask = async (t: Task) => {
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI') || !hasTaskIdentity(t)) return
     setResult(undefined)
     const outcome = await stream.follow(t)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
     if (outcome.status === 'succeeded') setResult(outcome.result)
     else if (outcome.status === 'cancelled') message.info('已停止，未写入任何数据')
   }
@@ -88,15 +92,17 @@ function Inner({ projectId, kind, onClose, characterId, characterName, character
     followRef.current = followTask
   })
 
-  // 打开时接上活动任务：生成类取本项目同类最新一个；解析任务按 TaskOut.character_id 匹配本角色
+  // 项目级生成可从当前列表恢复；旧角色 ID 不能证明是当前角色。
   useEffect(() => {
-    if (kind === 'relations.parse' && characterId === undefined) return
+    if (kind === 'relations.parse') return
     let alive = true
+    const scope = captureProjectScope(projectId)
     taskApi
-      .list({ project_id: projectId, kind, active: true, limit: kind === 'relations.parse' ? 50 : 1 })
+      .list({ project_id: projectId, kind, active: true, limit: 1 })
       .then((list) => {
-        const found = kind === 'relations.parse' ? list.find((t) => t.character_id === characterId) : list[0]
-        if (alive && found) void followRef.current(found)
+        const found = list[0]
+        if (alive && found && hasTaskIdentity(found) && found.project_id === projectId && found.kind === kind
+          && isProjectScopeCurrent(scope, 'canUseAI')) void followRef.current(found)
       })
       .catch(() => {
         // 查询失败按无活动任务处理
@@ -110,6 +116,8 @@ function Inner({ projectId, kind, onClose, characterId, characterName, character
   const handleStart = async () => {
     if (startingRef.current || stream.running || recovering || noMissingPairs) return
     startingRef.current = true
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) { startingRef.current = false; return }
     let v: FormValues
     try {
       v = await form.validateFields()
@@ -147,13 +155,15 @@ function Inner({ projectId, kind, onClose, characterId, characterName, character
         created = await characterExtraApi.parseRelations(projectId, characterId as number, { ai_config_id: aiConfigId })
       }
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope, 'canUseAI')) message.error(errorMessage(err))
       setStarting(false)
       startingRef.current = false
       return
     }
     setStarting(false)
     startingRef.current = false
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
+    if (!hasTaskIdentity(created)) { message.warning('任务身份不可确认，请刷新任务列表。'); return }
     trackTask(created)
     await followTask(created)
   }

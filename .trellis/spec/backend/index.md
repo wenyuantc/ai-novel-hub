@@ -22,7 +22,7 @@
 | [目录结构](./directory-structure.md) | `app/` 分层（api/v1 → services → models、ai/providers、ai/prompts）；路由绝不直接接触 ORM | 已填写 |
 | [数据库规范](./database-guidelines.md) | 异步 engine/session、Alembic `0001`、外键 CASCADE 与 `outline_id` SET NULL、user_id 归属校验 → 404、长度限制、字数统计 | 已填写 |
 | [错误处理](./error-handling.md) | `AppError` 层级、`{"detail": ...}` 响应包、安全的 422/500 处理器、SSE 流式契约场景 | 已填写 |
-| [质量规范](./quality-guidelines.md) | ruff + pytest、功能增改删必须同步根目录 README、测试隔离、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
+| [质量规范](./quality-guidelines.md) | ruff + pytest、功能增改删必须同步根目录 README、测试隔离、PG 隔离测试库环境变量与守卫、迁移冻结结构契约、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
 | [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v6 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
 | [设定随剧情演变](./setting-progressions.md) | 基础值与章初/章末事件、七类主体、旧资料校准、写作上下文、事务与前端契约 | 已填写 |
 | [自定义设定字段](./setting-fields.md) | 四类字段、空槽首写、共享目录CAS、稳定选项／引用、按章投影、v4备份／卡片及effects v3 | 已填写 |
@@ -39,8 +39,8 @@
 | [实例内提示词工坊](./workshop.md) | 风格 / 单 key 模板共享（含组件引用的模板展开后写入快照）、审核快照、404/403 权限、匿名与删号署名、原子计数、导入前版本与恢复 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
-| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v8 格式（兼容 v1–v7）、表规则注册表、场景及历史核心引用、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
-| [项目封面](./project-cover.md) | 图片上传/生成预览确认、拥有权与魔数校验、微秒版本 URL、图片 Provider、备份可选 cover 与 EPUB 封面 | 已填写 |
+| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v9 格式（兼容 v1–v8）、表规则注册表、场景及历史核心引用、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
+| [项目封面](./project-cover.md) | 人工与协作 AI 权限、本人模型优先及作者授权、受控发送和预览、魔数校验、微秒版本 URL、备份与 EPUB | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
 | [拆书导入](./book-import.md) | `book_imports` 解析记录（切章强规则、序章 / 目录区 / 兜底、docx / epub、子进程正则）、7 种校正与提示、修订号 409 `code = stale_revision`、单事务开始导入、`book.import` 断点 / 暂停 / 跳过 / 只写空字段 | 已填写 |

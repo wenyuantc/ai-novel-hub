@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import (
@@ -45,7 +46,13 @@ from app.schemas.relationship import (
     RelationshipUpdate,
 )
 from app.schemas.story import CharacterOut
-from app.services import career_service, setting_progression_service, story_service
+from app.services import (
+    career_service,
+    project_access,
+    setting_ai_visibility,
+    setting_progression_service,
+    story_service,
+)
 from app.services.cast_service import is_protagonist
 from app.services.project_service import get_manageable_project
 from app.services.relationship_progression_service import (
@@ -174,8 +181,34 @@ async def resolve_type(
     return t, False
 
 
-async def list_types(db: AsyncSession, user_id: int, project_id: int) -> list[RelationshipTypeOut]:
-    await get_manageable_project(db, user_id, project_id)
+async def _read_project(db: AsyncSession, user_id: int, project_id: int, *, manual: bool) -> None:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
+
+
+async def _write_project(
+    db: AsyncSession, user_id: int, project_id: int, *, manual: bool, visibility_write: bool = False,
+) -> None:
+    if manual:
+        await project_access.require_project(
+            db, user_id, project_id, "content.edit", for_update=True, visibility_write=visibility_write,
+        )
+    elif visibility_write:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
+    else:
+        await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+
+
+async def list_types(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    *,
+    manual: bool = False,
+) -> list[RelationshipTypeOut]:
+    await _read_project(db, user_id, project_id, manual=manual)
     rows = await db.scalars(
         select(RelationshipType)
         .where(_visible_types(project_id))
@@ -185,9 +218,14 @@ async def list_types(db: AsyncSession, user_id: int, project_id: int) -> list[Re
 
 
 async def create_type(
-    db: AsyncSession, user_id: int, project_id: int, data: RelationshipTypeCreate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    data: RelationshipTypeCreate,
+    *,
+    manual: bool = False,
 ) -> RelationshipTypeOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await _write_project(db, user_id, project_id, manual=manual)
     ra, rb = data.role_a.strip(), data.role_b.strip()
     if not ra or not rb:
         raise BadRequestError("称呼不能为空")
@@ -204,8 +242,8 @@ async def create_type(
     return _type_out(t)
 
 
-async def delete_type(db: AsyncSession, user_id: int, project_id: int, type_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+async def delete_type(db: AsyncSession, user_id: int, project_id: int, type_id: int, *, manual: bool = False) -> None:
+    await _write_project(db, user_id, project_id, manual=manual)
     t = await db.scalar(select(RelationshipType).where(RelationshipType.id == type_id, _visible_types(project_id)))
     if t is None:
         raise NotFoundError("关系类型不存在")
@@ -600,6 +638,17 @@ async def apply_change(
     return history
 
 
+async def _require_project_characters(db: AsyncSession, project_id: int, requested: set[int]) -> None:
+    if not requested:
+        return
+    with db.no_autoflush:
+        local_ids = set(await db.scalars(select(Character.id).where(
+            Character.project_id == project_id, Character.id.in_(requested),
+        )))
+    if local_ids != requested:
+        raise BadRequestError("角色不存在或不属于该项目")
+
+
 async def create_relation(
     db: AsyncSession,
     project_id: int,
@@ -623,6 +672,8 @@ async def create_relation(
     note: str = "",
 ) -> Relationship:
     """解析类型后建立关系；已有隐藏载体时复用以保留审计。不 commit。"""
+    # 人物对按全库唯一性查重；必须先确定两端归属，避免通过冲突响应探测其他作品的关系。
+    await _require_project_characters(db, project_id, {a_id, b_id})
     t, flipped = await resolve_type(db, project_id, type_id=type_id, role_a=role_a, role_b=role_b, category=category)
     if flipped:
         a_id, b_id = b_id, a_id
@@ -630,7 +681,8 @@ async def create_relation(
         timeline = await _pair_timeline(db, project_id, a_id, b_id)
         _check_expected_timeline_revision(timeline, expected_revision)
     existing = await find_pair_record(db, a_id, b_id)
-    if existing is not None and existing.is_present:
+    # 异常旧数据可能把本书人物对绑定到其他作品；绝不能复用其隐藏关系载体。
+    if existing is not None and (existing.project_id != project_id or existing.is_present):
         raise ConflictError(PAIR_CONFLICT)
     rel = existing if existing is not None else Relationship(project_id=project_id)
     await apply_change(
@@ -669,29 +721,55 @@ async def _commit(db: AsyncSession) -> None:
 # ---------------- 序列化 ----------------
 
 
+def valid_relationship_condition():
+    """两端人物属于该作品，类型属于该作品或为全局预置。"""
+    a = aliased(Character)
+    b = aliased(Character)
+    kind = aliased(RelationshipType)
+    return (
+        select(a.id).where(a.id == Relationship.a_id, a.project_id == Relationship.project_id)
+        .correlate(Relationship).exists()
+        & select(b.id).where(b.id == Relationship.b_id, b.project_id == Relationship.project_id)
+        .correlate(Relationship).exists()
+        & select(kind.id).where(
+            kind.id == Relationship.type_id,
+            or_(kind.project_id.is_(None), kind.project_id == Relationship.project_id),
+        ).correlate(Relationship).exists()
+    )
+
+
 async def to_outs(db: AsyncSession, rels: list[Relationship], viewer_id: int | None = None) -> list[RelationshipOut]:
     if not rels:
         return []
-    char_ids = {r.a_id for r in rels} | {r.b_id for r in rels}
-    names = dict((await db.execute(select(Character.id, Character.name).where(Character.id.in_(char_ids)))).all())
-    types = {
-        t.id: t
-        for t in await db.scalars(select(RelationshipType).where(RelationshipType.id.in_({r.type_id for r in rels})))
-    }
+    a = aliased(Character)
+    b = aliased(Character)
+    rows = (await db.execute(select(
+        Relationship.id, Relationship.project_id, Relationship.a_id, Relationship.b_id, Relationship.type_id,
+        a.name.label("a_name"), b.name.label("b_name"), RelationshipType.category,
+        RelationshipType.role_a, RelationshipType.role_b,
+    ).join(a, (a.id == Relationship.a_id) & (a.project_id == Relationship.project_id))
+      .join(b, (b.id == Relationship.b_id) & (b.project_id == Relationship.project_id))
+      .join(RelationshipType, RelationshipType.id == Relationship.type_id)
+      .where(Relationship.id.in_([rel.id for rel in rels]), _visible_types(Relationship.project_id)))).all()
+    visible = {row.id: row for row in rows}
     outs = []
     for r in rels:
-        t = types[r.type_id]
+        row = visible.get(r.id)
+        if row is None or (row.project_id, row.a_id, row.b_id, row.type_id) != (
+            r.project_id, r.a_id, r.b_id, r.type_id,
+        ):
+            continue
         out = RelationshipOut(
             id=r.id,
             project_id=r.project_id,
             a_id=r.a_id,
             b_id=r.b_id,
-            a_name=names.get(r.a_id, ""),
-            b_name=names.get(r.b_id, ""),
-            type_id=t.id,
-            category=t.category,
-            role_a=t.role_a,
-            role_b=t.role_b,
+            a_name=row.a_name,
+            b_name=row.b_name,
+            type_id=row.type_id,
+            category=row.category,
+            role_a=row.role_a,
+            role_b=row.role_b,
             intimacy=r.intimacy,
             status=r.status,
             description=r.description,
@@ -700,11 +778,13 @@ async def to_outs(db: AsyncSession, rels: list[Relationship], viewer_id: int | N
         )
         if viewer_id == r.a_id:
             out = out.model_copy(
-                update={"other_id": r.b_id, "other_name": out.b_name, "other_role": t.role_b, "self_role": t.role_a}
+                update={"other_id": r.b_id, "other_name": out.b_name,
+                        "other_role": row.role_b, "self_role": row.role_a}
             )
         elif viewer_id == r.b_id:
             out = out.model_copy(
-                update={"other_id": r.a_id, "other_name": out.a_name, "other_role": t.role_a, "self_role": t.role_b}
+                update={"other_id": r.a_id, "other_name": out.a_name,
+                        "other_role": row.role_a, "self_role": row.role_b}
             )
         outs.append(out)
     return outs
@@ -713,17 +793,28 @@ async def to_outs(db: AsyncSession, rels: list[Relationship], viewer_id: int | N
 async def _refreshed_outs(db: AsyncSession, rels: list[Relationship], viewer_id: int | None = None):
     for r in rels:
         await db.refresh(r)
-    return await to_outs(db, rels, viewer_id)
+    outs = await to_outs(db, rels, viewer_id)
+    if len(outs) != len(rels):
+        raise NotFoundError("关系不存在")
+    return outs
 
 
 # ---------------- HTTP 入口 ----------------
 
 
 async def get_owned_relationship(
-    db: AsyncSession, user_id: int, project_id: int, rel_id: int, *, include_hidden: bool = False
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    rel_id: int,
+    *,
+    include_hidden: bool = False,
+    manual: bool = False,
 ) -> Relationship:
-    await get_manageable_project(db, user_id, project_id)
-    stmt = select(Relationship).where(Relationship.id == rel_id, Relationship.project_id == project_id)
+    await _read_project(db, user_id, project_id, manual=manual)
+    stmt = select(Relationship).where(
+        Relationship.id == rel_id, Relationship.project_id == project_id, valid_relationship_condition(),
+    )
     if not include_hidden:
         stmt = stmt.where(Relationship.is_present.is_(True))
     rel = await db.scalar(stmt)
@@ -733,10 +824,17 @@ async def get_owned_relationship(
 
 
 async def list_relationships(
-    db: AsyncSession, user_id: int, project_id: int, *, character_id: int | None = None
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    *,
+    character_id: int | None = None,
+    manual: bool = False,
 ) -> list[RelationshipOut]:
-    await get_manageable_project(db, user_id, project_id)
-    stmt = select(Relationship).where(Relationship.project_id == project_id, Relationship.is_present.is_(True))
+    await _read_project(db, user_id, project_id, manual=manual)
+    stmt = select(Relationship).where(
+        Relationship.project_id == project_id, Relationship.is_present.is_(True), valid_relationship_condition(),
+    )
     if character_id is not None:
         exists = await db.scalar(
             select(Character.id).where(Character.id == character_id, Character.project_id == project_id)
@@ -771,9 +869,14 @@ def _create_kwargs(data: RelationshipCreate) -> dict[str, Any]:
 
 
 async def create_relationship(
-    db: AsyncSession, user_id: int, project_id: int, data: RelationshipCreate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    data: RelationshipCreate,
+    *,
+    manual: bool = False,
 ) -> RelationshipOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await _write_project(db, user_id, project_id, manual=manual)
     try:
         rel = await create_relation(db, project_id, **_create_kwargs(data))
     except ConflictError:
@@ -784,24 +887,33 @@ async def create_relationship(
 
 
 async def create_relationships(
-    db: AsyncSession, user_id: int, project_id: int, data: RelationshipBatchCreate
+    db: AsyncSession, user_id: int, project_id: int, data: RelationshipBatchCreate, *, manual: bool = False,
 ) -> list[RelationshipOut]:
     """批量新建（AI 关系建议预览确认后保存），单事务：任一条失败则全部不写入。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual)
     try:
+        requested = {cid for item in data.items for cid in (item.a_id, item.b_id)}
+        await _require_project_characters(db, project_id, requested)
         rels = [await create_relation(db, project_id, **_create_kwargs(item)) for item in data.items]
-    except ConflictError:
+        await _commit(db)
+    except BaseException:
         await db.rollback()
         raise
-    await _commit(db)
     return await _refreshed_outs(db, rels)
 
 
 async def update_relationship(
-    db: AsyncSession, user_id: int, project_id: int, rel_id: int, data: RelationshipUpdate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    rel_id: int,
+    data: RelationshipUpdate,
+    *,
+    manual: bool = False,
 ) -> RelationshipOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    rel = await get_owned_relationship(db, user_id, project_id, rel_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    rel = await get_owned_relationship(db, user_id, project_id, rel_id, manual=manual)
     values: dict[str, Any] = {}
     if data.a_id is not None:
         if data.a_id not in (rel.a_id, rel.b_id):
@@ -831,7 +943,13 @@ async def update_relationship(
 
 
 async def delete_relationship(
-    db: AsyncSession, user_id: int, project_id: int, rel_id: int, expected_revision: int | None = None
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    rel_id: int,
+    expected_revision: int | None = None,
+    *,
+    manual: bool = False,
 ) -> None:
     """删除整份关系资料；传入版本时对时间线做 CAS，避免旧页面覆盖期间新增的剧情变化。
 
@@ -839,8 +957,8 @@ async def delete_relationship(
     """
     from app.services.planning_lifecycle import bump_revision
 
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    rel = await get_owned_relationship(db, user_id, project_id, rel_id, include_hidden=True)
+    await _write_project(db, user_id, project_id, manual=manual)
+    rel = await get_owned_relationship(db, user_id, project_id, rel_id, include_hidden=True, manual=manual)
     timeline = await db.scalar(
         select(SettingTimeline).where(
             SettingTimeline.project_id == project_id,
@@ -867,16 +985,29 @@ async def _relationship_history(db: AsyncSession, rel_id: int) -> list[Relations
     return [RelationshipHistoryOut.model_validate(h) for h in rows]
 
 
-async def list_history(db: AsyncSession, user_id: int, project_id: int, rel_id: int) -> list[RelationshipHistoryOut]:
-    rel = await get_owned_relationship(db, user_id, project_id, rel_id, include_hidden=True)
+async def list_history(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    rel_id: int,
+    *,
+    manual: bool = False,
+) -> list[RelationshipHistoryOut]:
+    rel = await get_owned_relationship(db, user_id, project_id, rel_id, include_hidden=True, manual=manual)
     return await _relationship_history(db, rel.id)
 
 
 async def list_pair_history(
-    db: AsyncSession, user_id: int, project_id: int, character_id: int, related_character_id: int
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    related_character_id: int,
+    *,
+    manual: bool = False,
 ) -> list[RelationshipHistoryOut]:
     """按稳定人物对读取旧审计，包含隐藏载体；不影响当前关系列表。"""
-    await get_manageable_project(db, user_id, project_id)
+    await _read_project(db, user_id, project_id, manual=manual)
     if character_id == related_character_id:
         raise BadRequestError("关系两端不能是同一角色")
     ids = {character_id, related_character_id}
@@ -888,43 +1019,58 @@ async def list_pair_history(
     rel = await find_pair_record(db, character_id, related_character_id)
     if rel is None:
         return []
-    if rel.project_id != project_id:
-        raise NotFoundError("关系不存在")
+    if rel.project_id != project_id or await db.scalar(select(Relationship.id).where(
+        Relationship.id == rel.id, valid_relationship_condition(),
+    )) is None:
+        return []
     return await _relationship_history(db, rel.id)
 
 
 async def create_character_with_relations(
-    db: AsyncSession, user_id: int, project_id: int, data: CharacterWithRelations
+    db: AsyncSession, user_id: int, project_id: int, data: CharacterWithRelations, *, manual: bool = False,
 ) -> dict[str, Any]:
     """新建一个角色并同时建立勾选的关系与职业挂接（单事务）。subject_is_a 为真时新角色是 role_a 一方。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    character = await story_service.new_character(db, project_id, data.character.model_dump())
-    rels = []
-    for d in data.relations:
-        a_id, b_id = (character.id, d.target_id) if d.subject_is_a else (d.target_id, character.id)
-        rels.append(
-            await create_relation(
-                db,
-                project_id,
-                a_id=a_id,
-                b_id=b_id,
-                type_id=d.type_id,
-                role_a=d.role_a,
-                role_b=d.role_b,
-                category=d.category,
-                intimacy=d.intimacy,
-                status=d.status,
-                description=d.description,
-                source="manual",
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    try:
+        # 与卡片导入采用同一候选竞争判断；局部导入避免 card_service 的服务依赖形成环。
+        from app.services.card_service import _candidate_competition
+        from app.services.mentions.context import load_candidates
+
+        previous_candidates = await load_candidates(db, project_id)
+        await _require_project_characters(db, project_id, {item.target_id for item in data.relations})
+        character = await story_service.new_character(db, project_id, data.character.model_dump())
+        rels = []
+        for d in data.relations:
+            a_id, b_id = (character.id, d.target_id) if d.subject_is_a else (d.target_id, character.id)
+            rels.append(
+                await create_relation(
+                    db,
+                    project_id,
+                    a_id=a_id,
+                    b_id=b_id,
+                    type_id=d.type_id,
+                    role_a=d.role_a,
+                    role_b=d.role_b,
+                    category=d.category,
+                    intimacy=d.intimacy,
+                    status=d.status,
+                    description=d.description,
+                    source="manual",
+                )
             )
-        )
-    assignments = []
-    for d in data.careers:
-        career = await career_service.get_project_career(db, project_id, d.career_id)
-        assignments.append(
-            await career_service.assign_new(db, character, career, stage_id=d.stage_id, note=d.note, source="ai")
-        )
-    await _commit(db)
+        assignments = []
+        for d in data.careers:
+            career = await career_service.get_project_career(db, project_id, d.career_id)
+            assignments.append(
+                await career_service.assign_new(db, character, career, stage_id=d.stage_id, note=d.note, source="ai")
+            )
+        if _candidate_competition(previous_candidates, await load_candidates(db, project_id)):
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=True)
+        await _commit(db)
+    except BaseException:
+        await db.rollback()
+        raise
     await db.refresh(character)
     for a in assignments:
         await db.refresh(a)
@@ -946,14 +1092,15 @@ async def relations_among(db: AsyncSession, character_ids: list[int]) -> list[tu
             Relationship.a_id.in_(character_ids),
             Relationship.b_id.in_(character_ids),
             Relationship.is_present.is_(True),
+            valid_relationship_condition(),
         )
         .order_by(Relationship.id)
     )
     return [(r, t) for r, t in rows.all()]
 
 
-async def graph(db: AsyncSession, user_id: int, project_id: int) -> RelationshipGraph:
-    await get_manageable_project(db, user_id, project_id)
+async def graph(db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False) -> RelationshipGraph:
+    await _read_project(db, user_id, project_id, manual=manual)
     characters = await story_service.list_items(db, story_service.CHARACTERS, project_id)
     orgs = list(
         await db.scalars(
@@ -966,7 +1113,8 @@ async def graph(db: AsyncSession, user_id: int, project_id: int) -> Relationship
         await db.execute(
             select(OrganizationMember.character_id, OrganizationMember.organization_id)
             .join(Organization, Organization.id == OrganizationMember.organization_id)
-            .where(Organization.project_id == project_id)
+            .join(Character, Character.id == OrganizationMember.character_id)
+            .where(Organization.project_id == project_id, Character.project_id == project_id)
             .order_by(OrganizationMember.id)
         )
     ).all()
@@ -977,10 +1125,12 @@ async def graph(db: AsyncSession, user_id: int, project_id: int) -> Relationship
         await db.execute(
             select(Relationship, RelationshipType)
             .join(RelationshipType, RelationshipType.id == Relationship.type_id)
-            .where(Relationship.project_id == project_id, Relationship.is_present.is_(True))
+            .where(Relationship.project_id == project_id, Relationship.is_present.is_(True),
+                   valid_relationship_condition())
             .order_by(Relationship.id)
         )
     ).all()
+    org_ids = {org.id for org in orgs}
     return RelationshipGraph(
         nodes=[
             GraphNode(
@@ -1010,7 +1160,8 @@ async def graph(db: AsyncSession, user_id: int, project_id: int) -> Relationship
             )
             for r, t in rels
         ],
-        organizations=[
-            GraphOrganization(id=o.id, name=o.name, parent_id=o.parent_id, org_type=o.org_type) for o in orgs
-        ],
+        organizations=[GraphOrganization(
+            id=o.id, name=o.name, parent_id=o.parent_id if o.parent_id in org_ids else None,
+            org_type=o.org_type,
+        ) for o in orgs],
     )

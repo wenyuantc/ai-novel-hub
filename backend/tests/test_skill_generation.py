@@ -8,7 +8,7 @@ import pytest
 from app.ai.prompts import build_chapter_messages, build_polish_messages, build_revise_messages, build_rewrite_messages
 from app.ai.providers import AIProviderError
 from app.services import batch_service
-from tests.helpers import analysis_json, create_ai_config, create_project, register, run_task, wait_task
+from tests.helpers import analysis_json, create_ai_config, create_project, register, run_task, task_params, wait_task
 
 SKILLS = "/api/v1/skills"
 
@@ -77,7 +77,7 @@ async def test_generate_snapshots_skill_and_retry_uses_snapshot(client, fake_llm
     # 之后修改 Skill：重试仍使用创建时的快照
     assert (await client.patch(f"{SKILLS}/{skill['id']}", json={"body": "第二版工作流"})).status_code == 200
     fake_llm.push("新的正文。")
-    resp = await client.post(f"/api/v1/tasks/{task['id']}/retry")
+    resp = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
     task, _ = await run_task(client, resp)
     assert task["status"] == "succeeded" and task["skill"]["id"] == skill["id"]
     assert "第一版工作流" in _system(fake_llm.calls[-1]) and "第二版" not in _system(fake_llm.calls[-1])
@@ -90,7 +90,8 @@ async def test_generate_snapshots_skill_and_retry_uses_snapshot(client, fake_llm
     )
     assert (await client.delete(f"{SKILLS}/{skill['id']}")).status_code == 204
     fake_llm.push("又一版正文。")
-    task, _ = await run_task(client, await client.post(f"/api/v1/tasks/{failed['id']}/retry"))
+    response = await client.post(f"/api/v1/tasks/{failed['id']}/retry", params=task_params(failed))
+    task, _ = await run_task(client, response)
     assert task["status"] == "succeeded"
     assert "第二版工作流" in _system(fake_llm.calls[-1])
 
@@ -179,11 +180,12 @@ async def test_batch_snapshot_survives_skill_edit_on_resume(client, fake_llm):
         },
     )
     assert resp.status_code == 202, resp.text
-    task_id = resp.json()["id"]
-    assert (await wait_task(client, task_id, statuses=("paused", "failed")))["status"] == "paused"
+    task_ref = resp.json()
+    task_id = task_ref["id"]
+    assert (await wait_task(client, task_ref, statuses=("paused", "failed")))["status"] == "paused"
     await client.patch(f"{SKILLS}/{skill['id']}", json={"body": "第二版工作流"})
-    assert (await client.post(f"/api/v1/tasks/{task_id}/resume")).status_code == 202
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    assert (await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))).status_code == 202
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     prompts = [_system(c) for c in fake_llm.calls]
     assert len(prompts) == 2 and all("第一版工作流" in p for p in prompts)
     assert (await _logs(client, base, c2))[0]["params"]["skill"]["id"] == skill["id"]
@@ -198,17 +200,23 @@ async def test_agent_start_task_skill_reference_checks_visibility(client, make_c
     bob = make_client()
     await register(bob, "bob")
     secret = (await bob.post(SKILLS, json={"slug": "secret", "name": "秘密"})).json()
+    # 智能体派生单章任务已按协作契约失败关闭（agent_derived_chapter_identity_required），
+    # Skill 引用/输入校验改用仍可经 start_task 预览的批量任务覆盖。E4-g2 起批量也是受控受理类型：
+    # 与真实 runner 一致，工具会话须绑定原认证身份，预览按该身份锁内重选模型。
+    from app.models import User
+    from app.services.authorization_service import AuthenticatedActor
+
     tool = get_tool("start_task")
+    batch = {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]}
     async with app.state.sessionmaker() as db:
         project = await db.get(Project, int(base.rsplit("/", 1)[1]))
+        token_version = (await db.get(User, project.user_id)).token_version
+        db.info["authenticated_actor"] = AuthenticatedActor(project.user_id, token_version)
         ctx = ToolCtx(db, project, project.user_id, app.state.task_engine.ctx)
-        denied = await tool.preview(
-            ctx, {"kind": "chapter.generate", "params": {"chapter_id": ch["id"], "skill_id": secret["id"]}}
-        )
+        denied = await tool.preview(ctx, {"kind": "chapter.batch", "params": {**batch, "skill_id": secret["id"]}})
         assert denied == {"error": "不存在"}
-        allowed = await tool.preview(
-            ctx, {"kind": "chapter.generate", "params": {"chapter_id": ch["id"], "skill_id": skill["id"]}}
-        )
+        await db.rollback()
+        allowed = await tool.preview(ctx, {"kind": "chapter.batch", "params": {**batch, "skill_id": skill["id"]}})
         assert allowed["skill"]["id"] == skill["id"] and len(allowed["skill"]["hash"]) == 64
         assert any(d["label"] == "Skill" and d["after"] == skill["id"] for d in allowed["diff"])
         json.dumps(allowed)

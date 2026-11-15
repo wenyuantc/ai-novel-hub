@@ -5,7 +5,8 @@ import pytest
 from sqlalchemy import select
 
 from app.ai.providers import AIProviderError
-from app.models import Project, RetrievalChunk, User
+from app.core.errors import ConflictError
+from app.models import Project, RetrievalChunk, StoryMemory, User
 from app.services import retrieval_service as rs
 from app.services.retrieval_service import ChunkInput, Embedder, SearchFilter
 from tests.helpers import FakeLLM
@@ -207,6 +208,8 @@ async def test_cache_invalidation(db):
     assert [h.ref_id for h in (await rs.search(db, pid, "kb", "兵器", top_k=5, min_score=0)).hits] == [6]
 
     # 章节号平移（不经 retrieval_service）也会失效
+    db.add(StoryMemory(id=1, project_id=pid, chapter_no=3, kind="manual", content="林远击败对手"))
+    await db.flush()
     await rs.upsert_many(db, pid, "memory", [ChunkInput(ref_id=1, text="林远击败对手", chapter_no=3)])
     await db.commit()
     assert (await rs.search(db, pid, "memory", "林远", top_k=5, min_score=0, filters=SearchFilter(chapter_lt=4))).hits
@@ -216,6 +219,29 @@ async def test_cache_invalidation(db):
     await db.commit()
     flt = SearchFilter(chapter_lt=4)
     assert (await rs.search(db, pid, "memory", "林远", top_k=5, min_score=0, filters=flt)).hits == []
+
+
+@pytest.mark.parametrize("source", ["orphan", "other_project"])
+async def test_cache_shift_rejects_unverified_memory_sources(db, source):
+    from app.services.chapter_numbering import shift_chapter_numbers
+
+    pid = _pid(db)
+    if source == "other_project":
+        owner_id = (await db.get(Project, pid)).user_id
+        other = Project(user_id=owner_id, title="另一作品")
+        db.add(other)
+        await db.flush()
+        db.add(StoryMemory(id=1, project_id=other.id, chapter_no=3, kind="manual", content="不属于本作品"))
+        await db.flush()
+    # 模拟旧库中的孤儿或跨作品索引，不能被当前作品的章号维护认领。
+    await rs.upsert_many(db, pid, "memory", [ChunkInput(ref_id=1, text="林远击败对手", chapter_no=3)])
+    await db.commit()
+    with pytest.raises(ConflictError):
+        await shift_chapter_numbers(db, pid, from_no=1, delta=2)
+    await db.rollback()
+    stored = await db.scalar(select(RetrievalChunk).where(RetrievalChunk.project_id == pid,
+                                                         RetrievalChunk.source == "memory"))
+    assert stored.ref_id == 1 and stored.chapter_no == 3 and stored.text == "林远击败对手"
 
 
 async def test_filters(db):

@@ -21,6 +21,7 @@ vi.mock('../../hooks/useLoader', () => ({
 }))
 vi.mock('../../api/series', () => ({ seriesApi: { promote: state.promote, move: state.move } }))
 vi.mock('./useSeriesAction', () => ({
+  useSeriesIdentity: () => 'session:1', currentSeriesIdentity: () => 'session:1',
   useSeriesAction: () => ({ busy: false, error: null, clearError: vi.fn(),
     run: async (operation: () => Promise<unknown>, onSuccess: (value: unknown) => void) => onSuccess(await operation()),
   }),

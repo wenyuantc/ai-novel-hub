@@ -18,6 +18,7 @@ from app.services import setting_category_query_service as query
 from app.services import setting_field_service as fields
 from app.services.audit_writer import AuditOperation
 from app.services.authorization_service import AuthenticatedActor
+from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
 from app.services.setting_category_validation import assert_canonical_setting_tags as _assert_canonical_tags
 from app.services.setting_category_validation import validate_category_graph_snapshot
@@ -52,9 +53,12 @@ async def claim_categories_revision(db: AsyncSession, project_id: int, expected:
 
 
 @asynccontextmanager
-async def _editing(db: AsyncSession, actor_id: int, project_id: int, field: AuditField):
+async def _editing(db: AsyncSession, actor_id: int, project_id: int, field: AuditField, *, manual: bool = False):
     async with AuditOperation(db, actor_id, "project.update", "project", project_id, project_id=project_id) as audit:
-        project = await get_manageable_project(db, actor_id, project_id, lock=True, permission="projects.edit")
+        project = (
+            await require_project(db, actor_id, project_id, "content.edit", for_update=True) if manual else
+            await get_manageable_project(db, actor_id, project_id, lock=True, permission="projects.edit")
+        )
         audit.target(project)
         audit.summary.changed_fields = [field]
         try:
@@ -76,8 +80,9 @@ async def list_categories(
     q: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    manual: bool = False,
 ) -> s.CategoryPage:
-    async with query.category_read_snapshot(sessionmaker, actor, project_id) as db:
+    async with query.category_read_snapshot(sessionmaker, actor, project_id, manual=manual) as db:
         versions = await query._revisions(db, project_id)
         predicates = [SettingCategory.project_id == project_id]
         if q and q.strip():
@@ -114,8 +119,9 @@ async def read_category(
     actor: AuthenticatedActor,
     project_id: int,
     category_id: int,
+    *, manual: bool = False,
 ) -> s.CategoryMutation:
-    async with query.category_read_snapshot(sessionmaker, actor, project_id) as db:
+    async with query.category_read_snapshot(sessionmaker, actor, project_id, manual=manual) as db:
         versions = await query._revisions(db, project_id)
         item = await query.load_category(db, project_id, category_id)
         return s.CategoryMutation(item=item, categories_revision=versions[0], fields_revision=versions[1])
@@ -170,8 +176,9 @@ async def save_category(
     project_id: int,
     data: s.CategoryCreate | s.CategoryUpdate,
     category_id: int | None = None,
+    *, manual: bool = False,
 ) -> s.CategoryMutation:
-    async with _editing(db, actor_id, project_id, "setting_categories") as audit:
+    async with _editing(db, actor_id, project_id, "setting_categories", manual=manual) as audit:
         await check_categories_revision(db, project_id, data.expected_categories_revision)
         field_revision = await fields.check_fields_revision(db, project_id, data.expected_fields_revision)
         item = await apply_category(db, project_id, data, category_id)
@@ -186,8 +193,9 @@ async def delete_category(
     project_id: int,
     category_id: int,
     expected: int,
+    *, manual: bool = False,
 ) -> s.CategoryVersions:
-    async with _editing(db, actor_id, project_id, "setting_categories") as audit:
+    async with _editing(db, actor_id, project_id, "setting_categories", manual=manual) as audit:
         await check_categories_revision(db, project_id, expected)
         await query.load_category(db, project_id, category_id)
         await db.execute(
@@ -213,8 +221,9 @@ async def read_tags(
     project_id: int,
     kind: EntryKind,
     entry_id: int,
+    *, manual: bool = False,
 ) -> s.SettingTagsOut:
-    async with query.category_read_snapshot(sessionmaker, actor, project_id) as db:
+    async with query.category_read_snapshot(sessionmaker, actor, project_id, manual=manual) as db:
         revision = await categories_revision(db, project_id)
         entry, tags = await _entry_tags(db, project_id, kind, entry_id)
         return s.SettingTagsOut(entry=entry, setting_tags=tags, categories_revision=revision)
@@ -251,8 +260,9 @@ async def save_tags(
     kind: EntryKind,
     entry_id: int,
     data: s.SettingTagsUpdate,
+    *, manual: bool = False,
 ) -> s.SettingTagsOut:
-    async with _editing(db, actor_id, project_id, "setting_tags") as audit:
+    async with _editing(db, actor_id, project_id, "setting_tags", manual=manual) as audit:
         await check_categories_revision(db, project_id, data.expected_categories_revision)
         tags = await apply_entry_tags(db, project_id, kind, entry_id, data.setting_tags)
         entry = await catalog.get_entry(db, project_id, kind, entry_id)
@@ -268,9 +278,10 @@ async def suggest_tags(
     *,
     q: str | None = None,
     limit: int = 30,
+    manual: bool = False,
 ) -> s.SettingTagSuggestions:
     """数据库展开、去重和限量；Python最多持有 limit+1 个标签，不加载全部条目。"""
-    async with query.category_read_snapshot(sessionmaker, actor, project_id) as db:
+    async with query.category_read_snapshot(sessionmaker, actor, project_id, manual=manual) as db:
         revision = await categories_revision(db, project_id)
         postgres = db.bind.dialect.name == "postgresql"
         selects = []

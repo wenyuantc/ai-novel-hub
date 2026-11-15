@@ -8,9 +8,10 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons'
 import { Button, ConfigProvider, Drawer, Empty, Result, Segmented, Slider, Space, Spin, theme, Tooltip, Typography } from 'antd'
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { projectApi } from '../api/projects'
+import { ApiError, currentRequestGeneration, watchRequestGeneration } from '../api/client'
 import { readerApi, saveProgressKeepalive } from '../api/reader'
 import type { Project, ReaderTocItem, ReadingPosition } from '../api/types'
 import ReaderAnalysisPanel from '../components/reader/ReaderAnalysisPanel'
@@ -19,7 +20,8 @@ import MentionPreview from '../components/mentions/MentionPreview'
 import { readMentionAnchor } from '../utils/mentions'
 import ProjectManagementNotice from '../components/project/ProjectManagementNotice'
 import { useAuthStore } from '../stores/auth'
-import { projectAccess } from '../utils/projectAccess'
+import { isProjectAccess, projectAccess } from '../utils/projectAccess'
+import { authorizationKey } from '../utils/permissions'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useLoader } from '../hooks/useLoader'
 import { READER_TONES, type ReaderTone } from '../theme/palette'
@@ -54,12 +56,74 @@ interface ReaderData {
   toc: ReaderTocItem[]
 }
 
+interface ReaderSessionScope {
+  actorId: number
+  generation: number
+  authorization: string
+}
+
+const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
+
+function isCurrentSession(scope: ReaderSessionScope): boolean {
+  const auth = useAuthStore.getState()
+  return auth.status === 'authenticated' && auth.user?.id === scope.actorId
+    && authorizationKey(auth.user) === scope.authorization && currentRequestGeneration() === scope.generation
+}
+
+class ReaderAccessChanged extends Error {
+  constructor() { super('作品访问权限已变化，请重新打开阅读器') }
+}
+
+function sameReaderAccess(before: Project, current: Project, user: ReturnType<typeof useAuthStore.getState>['user']): boolean {
+  const first = before.access
+  const next = current.access
+  return current.id === before.id && current.owner?.id === before.owner?.id && isProjectAccess(first)
+    && isProjectAccess(next) && projectAccess(current, user, before.id).canRead
+    && first.role === next.role && first.is_collaborator === next.is_collaborator
+    && first.authorization_version === next.authorization_version && first.can_edit_content === next.can_edit_content
+    && first.can_use_ai === next.can_use_ai && first.can_write_reading_progress === next.can_write_reading_progress
+}
+
+/** 子资源失败只能提示复查；只有权威作品明确失权或授权轮次变化才关闭阅读会话。 */
+async function readerAccessLostAfterFailure(pid: number, expected: Project | null,
+  user: ReturnType<typeof useAuthStore.getState>['user'], current: () => boolean): Promise<boolean> {
+  try {
+    const project = await projectApi.get(pid)
+    return current() && (!projectAccess(project, user, pid).canRead || (expected !== null && !sameReaderAccess(expected, project, user)))
+  } catch (error) {
+    return current() && error instanceof ApiError && (error.status === 403 || error.status === 404)
+  }
+}
+
+/** 阅读器不使用项目 store；正文落地前独立核对服务器的当前协作轮次。 */
+async function verifyReaderAccess(project: Project, user: ReturnType<typeof useAuthStore.getState>['user']): Promise<Project> {
+  const before = project.access
+  if (!isProjectAccess(before) || !projectAccess(project, user, project.id).canRead) throw new ReaderAccessChanged()
+  // 作者的作品归属不会通过邀请更换；其账号和会话仍由调用方即时校验。
+  if (before.role === 'owner') return project
+  const current = await projectApi.get(project.id)
+  if (!sameReaderAccess(project, current, user)) throw new ReaderAccessChanged()
+  return current
+}
+
 /**
  * 阅读器（/projects/:pid/read/:cid，全屏、在 ProjectLayout 之外）：章内滚动、章末上一章 / 下一章、←/→ 切章、按卷分组的目录、
  * 阅读设置（localStorage `ainovel.reader`）、阅读进度上报服务端、本章分析侧栏、跳到编辑器。
  * 不带 :cid 时按阅读进度（没有则第一个已写章节）定位。
  */
 export default function ReaderPage() {
+  const { pid } = useParams()
+  const status = useAuthStore((s) => s.status)
+  const user = useAuthStore((s) => s.user)
+  const generation = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
+  if (status !== 'authenticated' || !user) return <Result status="403" title="当前账号无法继续读取该作品" />
+  const authorization = authorizationKey(user)
+  const scope = { actorId: user.id, generation, authorization }
+  // 每次会话、账户、权限或作品变更时销毁旧目录、正文、进度与所有阅读器 effect。
+  return <ReaderSession key={`${pid}:${user.id}:${authorization}:${generation}`} scope={scope} />
+}
+
+function ReaderSession({ scope }: { scope: ReaderSessionScope }) {
   const params = useParams()
   const pid = Number(params.pid)
   const cid = params.cid === undefined ? null : Number(params.cid)
@@ -75,19 +139,45 @@ export default function ReaderPage() {
 
   // 最近一次读到的位置：初始取服务端，之后随本页上报更新（切回读过的章节时据此恢复）
   const readingRef = useRef<ReadingPosition | null>(null)
+  const readerProjectRef = useRef<Project | null>(null)
+  const loadingSeq = useRef(0)
+  const sessionActive = useRef(true)
+  const sessionCurrent = useCallback(() => sessionActive.current && isCurrentSession(scope), [scope])
+  const [accessLost, setAccessLost] = useState(false)
+  const accessLostNow = useCallback(() => {
+    if (!sessionCurrent()) return
+    sessionActive.current = false
+    readingRef.current = null
+    readerProjectRef.current = null
+    setAccessLost(true)
+  }, [sessionCurrent])
   const loader = useCallback(async (): Promise<ReaderData> => {
-    const [project, toc] = await Promise.all([projectApi.get(pid), readerApi.toc(pid)])
-    readingRef.current = projectAccess(project, user, pid).managingOther ? null : project.reading
-    return { project, toc }
-  }, [pid, user])
+    const seq = ++loadingSeq.current
+    try {
+      const [project, toc] = await Promise.all([projectApi.get(pid), readerApi.toc(pid)])
+      if (seq !== loadingSeq.current || !sessionCurrent()) throw new ReaderAccessChanged()
+      const verified = await verifyReaderAccess(project, user)
+      if (seq !== loadingSeq.current || !sessionCurrent()) throw new ReaderAccessChanged()
+      readerProjectRef.current = verified
+      readingRef.current = projectAccess(verified, user, pid).canWriteReadingProgress ? verified.reading : null
+      return { project: verified, toc }
+    } catch (err) {
+      const current = () => seq === loadingSeq.current && sessionCurrent()
+      if (current() && (err instanceof ReaderAccessChanged || (err instanceof ApiError && [403, 404].includes(err.status)
+        && await readerAccessLostAfterFailure(pid, readerProjectRef.current, user, current)))) accessLostNow()
+      throw err
+    }
+  }, [pid, user, sessionCurrent, accessLostNow])
   const { data, loading, error } = useLoader(loader)
 
   const currentData = data?.project.id === pid ? data : undefined
-  // 管理员阅读他人项目不使用所有者的阅读进度。
-  const start = currentData ? startChapterId(currentData.toc, projectAccess(currentData.project, user, pid).managingOther ? null : currentData.project.reading) : null
+  // 仅作者使用自己的阅读进度；协作者与管理员均从首个已写章节开始。
+  const access = projectAccess(currentData?.project, user, pid)
+  const start = currentData && access.canRead && !accessLost && isCurrentSession(scope)
+    ? startChapterId(currentData.toc, access.canWriteReadingProgress ? currentData.project.reading : null) : null
   useEffect(() => {
-    if (cid === null && start !== null) navigate(`/projects/${pid}/read/${start}`, { replace: true, state: location.state })
-  }, [cid, start, pid, navigate, location.state])
+    if (cid === null && start !== null && sessionCurrent()) navigate(`/projects/${pid}/read/${start}`, { replace: true, state: location.state })
+  }, [cid, start, pid, navigate, location.state, sessionCurrent])
 
   const wrap = (node: ReactNode) => (
     <ConfigProvider theme={{ algorithm: colors.dark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
@@ -98,6 +188,7 @@ export default function ReaderPage() {
   if (!Number.isFinite(pid) || (cid !== null && !Number.isFinite(cid))) {
     return wrap(<Result status="404" title="页面不存在" extra={<Link to="/projects">返回书架</Link>} />)
   }
+  if (accessLost) return wrap(<Result status="warning" title="无法继续读取此作品" extra={<Link to="/projects">返回书架</Link>} />)
   if (error) {
     return wrap(<Result status="warning" title="无法打开阅读器" subTitle={error} extra={<Link to="/projects">返回书架</Link>} />)
   }
@@ -108,7 +199,7 @@ export default function ReaderPage() {
       </div>,
     )
   }
-  if (!projectAccess(currentData.project, user, pid).canRead) {
+  if (!access.canRead || !isCurrentSession(scope)) {
     return wrap(<Result status="403" title="当前账号无法继续读取该作品" extra={<Link to="/projects">返回书架</Link>} />)
   }
   if (cid === null) {
@@ -120,7 +211,7 @@ export default function ReaderPage() {
         extra={
           <Space>
             <Link to="/projects">返回书架</Link>
-            <Link to={`/projects/${pid}/chapters`}>去写作</Link>
+            {access.canEdit && <Link to={`/projects/${pid}/chapters`}>去写作</Link>}
           </Space>
         }
       />,
@@ -136,6 +227,8 @@ export default function ReaderPage() {
       onSettings={setSettings}
       tone={tone}
       readingRef={readingRef}
+      sessionCurrent={sessionCurrent}
+      onAccessLost={accessLostNow}
     />,
   )
 }
@@ -148,12 +241,15 @@ interface ViewProps {
   onSettings: (s: ReaderSettings) => void
   tone: ReaderTone
   readingRef: MutableRefObject<ReadingPosition | null>
+  sessionCurrent: () => boolean
+  onAccessLost: () => void
 }
 
-function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readingRef }: ViewProps) {
+function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readingRef, sessionCurrent, onAccessLost }: ViewProps) {
   const pid = project.id
   const user = useAuthStore((s) => s.user)
-  const { managingOther, canUseAI } = projectAccess(project, user, pid)
+  const { managingOther, isCollaborator, canUseAI, canEdit, canWriteReadingProgress } = projectAccess(project, user, pid)
+  const administeringOther = managingOther && !isCollaborator
   const navigate = useNavigate()
   const location = useLocation()
   const mentionAnchor = useMemo(() => readMentionAnchor(new URLSearchParams(location.search)), [location.search])
@@ -166,10 +262,30 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const [tocOpen, setTocOpen] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const alive = useRef(true)
+  const chapterLoadSeq = useRef(0)
+  useLayoutEffect(() => () => { chapterLoadSeq.current += 1 }, [chapterId, project.id, project.owner?.id,
+    project.access.role, project.access.authorization_version, project.access.is_collaborator,
+    project.access.can_read, project.access.can_edit_content, project.access.can_use_ai, project.access.can_write_reading_progress])
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
-  const loader = useCallback(() => readerApi.chapter(pid, chapterId), [pid, chapterId])
+  const loader = useCallback(async () => {
+    const seq = ++chapterLoadSeq.current
+    const current = () => seq === chapterLoadSeq.current && alive.current && sessionCurrent()
+    try {
+      const result = await readerApi.chapter(pid, chapterId)
+      if (!current()) throw new ReaderAccessChanged()
+      await verifyReaderAccess(project, user)
+      if (!current()) throw new ReaderAccessChanged()
+      return result
+    } catch (err) {
+      if (current() && (err instanceof ReaderAccessChanged || (err instanceof ApiError && [403, 404].includes(err.status)
+        && await readerAccessLostAfterFailure(pid, project, user, current)))) onAccessLost()
+      throw err
+    }
+  }, [pid, chapterId, onAccessLost, project, user, sessionCurrent])
   const { data: readerChapter, loading, error } = useLoader(loader)
-  const chapter = readerChapter?.chapter
+  const chapter = readerChapter?.chapter.id === chapterId ? readerChapter.chapter : undefined
   const written = !!chapter?.content.trim()
   const paragraphs = useMemo(() => readerChapter?.blocks === null ? splitParagraphs(chapter?.content ?? '') : [], [readerChapter, chapter])
   const { prev, next } = useMemo(
@@ -188,12 +304,16 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const timerRef = useRef<number | null>(null)
   const report = useCallback(
     (keepalive: boolean) => {
-      if (!canUseAI) return
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current)
         timerRef.current = null
       }
       const p = pendingRef.current
+      if (!canWriteReadingProgress || !sessionCurrent()) {
+        p.dirty = false
+        readingRef.current = null
+        return
+      }
       if (!p.dirty || !chapter) return
       p.dirty = false
       const body = { chapter_id: chapter.id, ratio: p.ratio }
@@ -203,32 +323,32 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
         // 进度上报失败不打扰阅读；下次滚动会再报
       })
     },
-    [chapter, pid, readingRef, canUseAI],
+    [chapter, pid, readingRef, canWriteReadingProgress, sessionCurrent],
   )
   const schedule = useCallback(
     (ratio: number) => {
-      if (!canUseAI) return
+      if (!canWriteReadingProgress || !sessionCurrent()) return
       pendingRef.current = { ratio, dirty: true }
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
       timerRef.current = window.setTimeout(() => report(false), REPORT_DELAY_MS)
     },
-    [report, canUseAI],
+    [report, canWriteReadingProgress, sessionCurrent],
   )
 
   // 正文渲染后：只有这一章就是上次读到的章节才恢复位置，否则回到顶部；空章不记进度
   useEffect(() => {
     if (!chapter || mentionAnchor) return
-    const ratio = canUseAI && written ? restoreRatio(chapter.id, readingRef.current) : 0
+    const ratio = canWriteReadingProgress && sessionCurrent() && written ? restoreRatio(chapter.id, readingRef.current) : 0
     const raf = window.requestAnimationFrame(() => {
       const el = document.documentElement
       window.scrollTo(0, scrollTopForRatio(ratio, el.scrollHeight, window.innerHeight))
       if (written) schedule(ratio)
     })
     return () => window.cancelAnimationFrame(raf)
-  }, [chapter, written, schedule, readingRef, canUseAI, mentionAnchor])
+  }, [chapter, written, schedule, readingRef, canWriteReadingProgress, sessionCurrent, mentionAnchor])
 
   useEffect(() => {
-    if (!written || !canUseAI) return
+    if (!written || !canWriteReadingProgress || !sessionCurrent()) return
     let frame = 0
     const onScroll = () => {
       if (frame) return
@@ -252,7 +372,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
       window.removeEventListener('pagehide', onPageHide)
       report(true) // 切章 / 离开阅读器
     }
-  }, [written, schedule, report, canUseAI])
+  }, [written, schedule, report, canWriteReadingProgress, sessionCurrent])
 
   // ←/→ 切章（抽屉打开、焦点在输入控件时不响应）
   const anyDrawer = tocOpen || panelOpen || settingsOpen
@@ -303,7 +423,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
     <>
       <div style={barStyle}>
         <Tooltip title="返回">
-          <Button type="text" icon={<ArrowLeftOutlined />} aria-label="返回" onClick={() => navigate(from ?? (managingOther ? '/admin/projects' : '/projects'))} />
+          <Button type="text" icon={<ArrowLeftOutlined />} aria-label="返回" onClick={() => navigate(from ?? (administeringOther ? '/admin/projects' : '/projects'))} />
         </Tooltip>
         <div style={{ flex: 1, minWidth: 0, lineHeight: 1.3 }}>
           <Typography.Text strong ellipsis style={{ display: 'block', color: colors.text }}>
@@ -325,19 +445,19 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
         <Tooltip title="阅读设置">
           <Button type="text" icon={<SettingOutlined />} aria-label="阅读设置" onClick={() => setSettingsOpen(true)} />
         </Tooltip>
-        <Tooltip title={isMobile ? '编辑本章' : undefined}>
+        <Tooltip title={isMobile ? (canEdit ? '编辑本章' : '查看本章') : undefined}>
           <Button
             type="text"
             icon={<EditOutlined />}
-            aria-label="编辑本章"
+            aria-label={canEdit ? '编辑本章' : '查看本章'}
             onClick={() => navigate(`/projects/${pid}/chapters/${chapterId}`)}
           >
-            {!isMobile && '编辑本章'}
+            {!isMobile && (canEdit ? '编辑本章' : '查看本章')}
           </Button>
         </Tooltip>
       </div>
 
-      {managingOther && project.owner && <div style={{ padding: '12px 16px 0' }}><ProjectManagementNotice owner={project.owner} /></div>}
+      {administeringOther && project.owner && <div style={{ padding: '12px 16px 0' }}><ProjectManagementNotice owner={project.owner} /></div>}
       <article style={articleStyle}>
         {loading && !chapter ? (
           <div style={{ padding: 48, textAlign: 'center' }}>
@@ -357,7 +477,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
               ))
             ) : (
               <Empty description="本章还没有正文">
-                <Link to={`/projects/${pid}/chapters/${chapterId}`}>去写作</Link>
+                {canEdit && <Link to={`/projects/${pid}/chapters/${chapterId}`}>去写作</Link>}
               </Empty>
             )}
             <div

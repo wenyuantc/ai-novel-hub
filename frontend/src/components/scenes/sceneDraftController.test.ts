@@ -135,4 +135,107 @@ describe('场景草稿控制器', () => {
     expect(controller.getSnapshot().draft.content).toBe('退场前未保存稿')
     expect(controller.getSnapshot().error).toContain('不会自动')
   })
+  it('授权版本变化但仍可编辑时保留草稿，作废旧读取结果', async () => {
+    const { api, controller } = setup()
+    await controller.load()
+    controller.change({ title: '未保存标题', content: '未保存正文' })
+    let resolve!: (value: ScenePage) => void
+    api.list.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const stale = controller.load()
+    controller.authorizationChanged()
+    resolve(page([scene(1, 4)]))
+    await stale
+    expect(controller.getSnapshot().draft).toMatchObject({ title: '未保存标题', content: '未保存正文' })
+    expect(controller.getSnapshot().scene?.content_revision).toBe(2)
+    expect(controller.getSnapshot().saving).toBe(false)
+    expect(api.update).not.toHaveBeenCalled()
+  })
+  it('保存途中更改授权时保留草稿、等待旧请求落定，并显式核对后才允许再次保存', async () => {
+    const { api, controller } = setup()
+    await controller.load()
+    controller.change({ content: '本地尚需核对' })
+    let resolve!: (value: Scene) => void
+    api.update.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const pending = controller.save()
+    controller.authorizationChanged()
+    expect(controller.getSnapshot().saving).toBe(true)
+    expect(controller.getSnapshot().draft.content).toBe('本地尚需核对')
+    await controller.reviewLatest()
+    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(await controller.save()).toBeNull()
+    resolve({ ...scene(1, 3), content: '服务器已提交的内容' })
+    expect(await pending).toBeNull()
+    expect(controller.getSnapshot()).toMatchObject({ saving: false, externalChange: true,
+      draft: { content: '本地尚需核对' } })
+    expect(api.update).toHaveBeenCalledTimes(1)
+    await controller.load() // 后台目录刷新即使看到相同版本，也不能代替人工核对。
+    expect(controller.getSnapshot().externalChange).toBe(true)
+    expect(await controller.save()).toBeNull()
+    api.get.mockResolvedValueOnce({ ...scene(1, 3), content: '服务器已提交的内容' })
+    await controller.reviewLatest()
+    expect(controller.getSnapshot().conflict?.content).toBe('服务器已提交的内容')
+    controller.acknowledgeLatest()
+    expect(controller.getSnapshot().draft.content).toBe('本地尚需核对')
+    await controller.save()
+    expect(api.update).toHaveBeenCalledTimes(2)
+    expect(api.update.mock.calls[1]).toEqual([1, expect.objectContaining({ expected_content_revision: 3, content: '本地尚需核对' })])
+  })
+  it('降为只读时清除未提交草稿；完全撤权后清除场景并忽略迟到保存', async () => {
+    let read = true
+    let edit = true
+    const api = { list: vi.fn(async () => page([scene()])), get: vi.fn(async () => scene()), update: vi.fn() }
+    const controller = new SceneDraftController(9, api, () => read, () => edit)
+    controller.activate()
+    await controller.load()
+    controller.change({ content: '不能留给只读者的草稿' })
+    edit = false
+    controller.authorizationChanged()
+    expect(controller.getSnapshot().draft.content).toBe('甲😀乙')
+    edit = true
+    controller.authorizationChanged()
+    controller.change({ content: '提交前的新草稿' })
+    let resolve!: (value: Scene) => void
+    api.update.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const pending = controller.save()
+    read = false
+    edit = false
+    controller.authorizationChanged()
+    expect(controller.getSnapshot()).toMatchObject({ scene: null, page: null, draft: { title: '', content: '', summary: '' } })
+    resolve({ ...scene(1, 3), content: '旧响应' })
+    await pending
+    expect(controller.getSnapshot()).toMatchObject({ scene: null, page: null, draft: { content: '' } })
+  })
+  it('旧保存先于界面完成授权切换时仍进入结果待核对状态，不遗留保存锁', async () => {
+    let version = 1
+    const api = { list: vi.fn(async () => page([scene()])), get: vi.fn(async () => scene()), update: vi.fn() }
+    const controller = new SceneDraftController(9, api, () => true, () => true, () => version)
+    controller.activate()
+    await controller.load()
+    controller.change({ content: '本地草稿' })
+    let resolve!: (value: Scene) => void
+    api.update.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const pending = controller.save()
+    version = 2 // 新权限仍可编辑，但旧轮次立即失效；新的 UI 效果还未运行。
+    resolve({ ...scene(1, 3), content: '旧响应' })
+    expect(await pending).toBeNull()
+    controller.authorizationChanged()
+    expect(controller.getSnapshot()).toMatchObject({ saving: false, externalChange: true, draft: { content: '本地草稿' } })
+    expect(await controller.save()).toBeNull()
+    expect(api.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('已发出的保存遇到网络失败时保留草稿，核对前不能重提', async () => {
+    const { controller, api } = setup()
+    await controller.load()
+    controller.change({ content: '本地待核对' })
+    api.update.mockRejectedValueOnce(new ApiError(0, '网络中断'))
+    expect(await controller.save()).toBeNull()
+    expect(controller.getSnapshot()).toMatchObject({ saving: false, externalChange: true, draft: { content: '本地待核对' } })
+    expect(await controller.save()).toBeNull()
+    expect(api.update).toHaveBeenCalledTimes(1)
+    await controller.reviewLatest()
+    controller.acknowledgeLatest()
+    await controller.save()
+    expect(api.update).toHaveBeenCalledTimes(2)
+  })
 })

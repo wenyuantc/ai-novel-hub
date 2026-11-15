@@ -32,10 +32,9 @@ from app.schemas.scene import (
     SceneUpdate,
     parse_scene_snapshot,
 )
-from app.services import setting_progression_service, version_service
+from app.services import project_access, setting_progression_service, version_service
 from app.services.audit_writer import AuditOperation
-from app.services.chapter_service import count_words, get_manageable_chapter
-from app.services.project_service import get_manageable_project
+from app.services.chapter_service import count_words, get_manual_chapter
 
 _MAX_SORT = 2**31 - 1
 
@@ -396,15 +395,14 @@ async def restore_snapshot(
     await setting_progression_service.on_story_positions_changed(db, chapter.project_id)
 
 
-async def _write_chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> Chapter:
+async def get_manual_write_chapter(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, visibility_write: bool = False,
+) -> Chapter:
     from app.services.generation_service import ensure_outside_batch
 
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    chapter = await db.scalar(select(Chapter).where(
-        Chapter.id == chapter_id, Chapter.project_id == project_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    if chapter is None:
-        raise NotFoundError("章节不存在")
+    chapter = await get_manual_chapter(
+        db, user_id, project_id, chapter_id, "content.edit", for_update=True, visibility_write=visibility_write,
+    )
     if chapter.status == "generating":
         raise ConflictError("该章节正在生成中，请等待完成后再编辑")
     await ensure_outside_batch(db, chapter)
@@ -447,11 +445,11 @@ async def list_scenes(
     from app.services.planning_scene_service import resolve_scene_plannings
 
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        await project_access.require_project(db, user_id, project_id, "content.read")
         revision = await _planning_revision(db, project_id)
         chapter = None
         if chapter_id is not None:
-            chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+            chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         conditions = [Chapter.project_id == project_id, Scene.active.is_(True)]
         if chapter_id is not None:
             conditions.append(Scene.chapter_id == chapter_id)
@@ -485,7 +483,7 @@ async def list_scenes(
 
 async def get_scene(db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int) -> SceneOut:
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         revision = chapter.content_revision
         output = await scene_out(db, chapter, await require_scene(db, chapter, scene_id))
         await check_revision(db, chapter, revision)
@@ -513,7 +511,7 @@ async def create_scene(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: SceneCreate,
 ) -> SceneOut:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await _write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         audit.track(chapter, ["content"])
         await check_revision(db, chapter, data.expected_content_revision)
@@ -545,7 +543,7 @@ async def update_scene(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int, data: SceneUpdate,
 ) -> SceneOut:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await _write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         audit.track(chapter, ["content"])
         scene = await require_scene(db, chapter, scene_id)
@@ -578,7 +576,7 @@ async def reorder_scenes(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: SceneReorder,
 ) -> SceneMutation:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await _write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         audit.track(chapter, ["content"])
         await check_revision(db, chapter, data.expected_content_revision)
@@ -599,11 +597,10 @@ async def split_scene(
     from app.services.planning_scene_service import clone_scene_planning
     from app.services.rich_document_store import capture_documents
     from app.services.rich_document_structure import apply_split, split_document
-    from app.services.setting_ai_visibility import bump_visibility_revision, lock_author_visibility_write
+    from app.services.setting_ai_visibility import bump_visibility_revision
 
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        await lock_author_visibility_write(db, user_id, project_id)
-        chapter = await _write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_write_chapter(db, user_id, project_id, chapter_id, visibility_write=True)
         audit.target(chapter)
         audit.track(chapter, ["content"])
         scene = await require_scene(db, chapter, scene_id)
@@ -684,7 +681,7 @@ async def merge_preview(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: SceneMergePreview,
 ) -> SceneMergePreviewOut:
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         return await _merge_preview(db, chapter, data)
 
 
@@ -693,11 +690,10 @@ async def merge_scenes(
 ) -> SceneMutation:
     from app.services.planning_scene_service import clone_scene_planning, retire_scene_planning
     from app.services.rich_document_structure import apply_merge, merge_document
-    from app.services.setting_ai_visibility import bump_visibility_revision, lock_author_visibility_write
+    from app.services.setting_ai_visibility import bump_visibility_revision
 
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        await lock_author_visibility_write(db, user_id, project_id)
-        chapter = await _write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_write_chapter(db, user_id, project_id, chapter_id, visibility_write=True)
         audit.target(chapter)
         audit.track(chapter, ["content"])
         preview = await _merge_preview(db, chapter, data)
@@ -744,7 +740,7 @@ async def delete_scene(
     from app.services.planning_scene_service import capture_scene_planning, retire_scene_planning
 
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
-        chapter = await _write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         audit.track(chapter, ["content"])
         scene = await require_scene(db, chapter, scene_id)
@@ -774,7 +770,7 @@ async def resolve_position(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, fingerprint: str, start: int, end: int,
 ) -> ScenePositionOut:
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         content, ranges = project_scenes(await list_active_scenes(db, chapter.id))
         current = content_fingerprint(content)
         result = ScenePositionOut(content_revision=chapter.content_revision, fingerprint=current)

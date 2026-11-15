@@ -25,7 +25,7 @@ describe('kbApi', () => {
     const calls = stubFetch(202, { document: { id: 1 }, task: { id: 2 } })
     const file = new File(['# 标题\n正文'], '设定.md', { type: 'text/markdown' })
     const r = await kbApi.upload(3, file)
-    expect(r.task.id).toBe(2)
+    expect(r.task?.id).toBe(2)
     expect(calls[0].url).toBe('/api/v1/projects/3/kb/documents')
     expect(calls[0].init.method).toBe('POST')
     expect(calls[0].init.credentials).toBe('include')
@@ -34,6 +34,13 @@ describe('kbApi', () => {
     expect(((body as FormData).get('file') as File).name).toBe('设定.md')
     const headers = calls[0].init.headers as Record<string, string>
     expect(headers['Content-Type']).toBeUndefined()
+  })
+
+  it('关键词上传返回空任务，不伪造后台任务', async () => {
+    stubFetch(202, { document: { id: 1, status: 'ready_keyword_only' }, task: null })
+    const r = await kbApi.upload(3, new File(['关键词'], '资料.md'))
+    expect(r.document.status).toBe('ready_keyword_only')
+    expect(r.task).toBeNull()
   })
 
   it('重复上传 409：读出已有文档 id；其他错误为 null', async () => {

@@ -10,7 +10,7 @@ export default function SceneConflictReview({ state, controller, disabled }: Pro
   const stamp = state.conflict ? `${state.conflict.content_revision}:${state.conflict.planning_revision}` : null
   const checked = stamp !== null && checkedStamp === stamp
   if (!state.conflict && !state.externalChange) return null
-  return <Alert type="warning" showIcon message="场景已被其他操作修改，本地草稿已保留" description={<Space direction="vertical" style={{ width: '100%' }}>
+  return <Alert type="warning" showIcon message="场景保存状态需要核对，本地草稿已保留" description={<Space direction="vertical" style={{ width: '100%' }}>
     {!state.conflict ? <Button onClick={() => void controller.reviewLatest()}>加载最新场景供核对</Button> : <>
       <Typography.Text>最新标题：{state.conflict.title || '未命名'} · 最新摘要：{state.conflict.summary || '无'} · 版本 {state.conflict.content_revision}</Typography.Text>
       <Typography.Text>最新规划：POV {state.conflict.planning.effective.pov_character_name ?? '无'}；标签 {state.conflict.planning.effective.tags.map((tag) => tag.name).join('、') || '无'}；引用 {state.conflict.planning.effective.references.map((ref) => `${ref.kind} #${ref.kind === 'relationship' ? ref.timeline_id : ref.id}`).join('、') || '无'}</Typography.Text>

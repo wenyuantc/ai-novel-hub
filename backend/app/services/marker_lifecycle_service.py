@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, Scene, SceneMarker, SceneSection
 from app.schemas.rich_document import MarkerDeleteOut, MarkerRelink, MarkerRelinkOut, require_range
-from app.services import rich_document_service, scene_service, setting_ai_visibility, version_service
+from app.services import chapter_service, rich_document_service, scene_service, version_service
 from app.services.audit_writer import AuditOperation
 from app.services.rich_document_store import retire_marker
 
@@ -38,9 +38,9 @@ async def relink(
     db: AsyncSession, user_id: int, project_id: int, scene_id: int, key: UUID, body: MarkerRelink,
 ) -> MarkerRelinkOut:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", project_id=project_id) as audit:
-        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
+        await chapter_service.lock_manual_project_visibility(db, user_id, project_id)
         source_id = await _source_chapter_id(db, project_id, scene_id)
-        chapters = {chapter_id: await scene_service._write_chapter(db, user_id, project_id, chapter_id)
+        chapters = {chapter_id: await scene_service.get_manual_write_chapter(db, user_id, project_id, chapter_id)
                     for chapter_id in sorted({source_id, body.target_chapter_id})}
         source, target = chapters[source_id], chapters[body.target_chapter_id]
         audit.target(source)
@@ -101,9 +101,9 @@ async def delete_stale(
     db: AsyncSession, user_id: int, project_id: int, scene_id: int, key: UUID, expected_revision: int,
 ) -> MarkerDeleteOut:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", project_id=project_id) as audit:
-        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
+        await chapter_service.lock_manual_project_visibility(db, user_id, project_id)
         chapter_id = await _source_chapter_id(db, project_id, scene_id)
-        chapter = await scene_service._write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await scene_service.get_manual_write_chapter(db, user_id, project_id, chapter_id)
         audit.target(chapter)
         await scene_service.check_revision(db, chapter, expected_revision)
         scene = await scene_service.require_scene(db, chapter, scene_id, active=False)

@@ -18,6 +18,9 @@ import {
 function p(over: Partial<Project>): Project {
   return {
     id: 1,
+    access: { role: 'owner', is_collaborator: false, authorization_version: null, allow_owner_ai: false, can_read: true,
+      can_edit_content: true, can_export: true, can_use_ai: true, can_manage_collaborators: true,
+      can_recycle: true, can_backup: true, can_write_reading_progress: true },
     title: '书',
     genre: '',
     premise: '',

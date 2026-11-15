@@ -10,7 +10,7 @@ from app.models import Scene, SceneDocumentMeta, SceneMarker, SceneSection
 from app.schemas.rich_document import SceneDocument, SceneDocumentOut, SceneDocumentSave, marker_excerpt
 from app.services import scene_service, setting_ai_visibility, version_service
 from app.services.audit_writer import AuditOperation
-from app.services.chapter_service import get_manageable_chapter
+from app.services.chapter_service import get_manual_chapter
 from app.services.rich_document_core import validate_storage_bounds
 from app.services.rich_document_store import capture_documents, retire_marker
 
@@ -31,7 +31,7 @@ async def get_document(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, scene_id: int,
 ) -> SceneDocumentOut:
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         content_revision = chapter.content_revision
         planning_revision = await scene_service._planning_revision(db, project_id)
         scene = await scene_service.require_scene(db, chapter, scene_id)
@@ -298,8 +298,9 @@ async def save_document(
 ) -> SceneDocumentOut:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
         # 正文中的已启用区块也是隐私策略：固定先拿权限写屏障、发送写门禁，再锁项目和章节。
-        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
-        chapter = await scene_service._write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await scene_service.get_manual_write_chapter(
+            db, user_id, project_id, chapter_id, visibility_write=True,
+        )
         audit.target(chapter)
         audit.track(chapter, ["content"])
         await scene_service.check_revision(db, chapter, body.expected_content_revision)

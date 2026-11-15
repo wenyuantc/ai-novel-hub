@@ -52,7 +52,8 @@ class KbDocumentOut(BaseModel):
 
 class KbUploadResult(BaseModel):
     document: KbDocumentOut
-    task: TaskOut
+    # 协作者的关键词索引在请求事务内完成，不会创建后台任务。
+    task: TaskOut | None
 
 
 class KbDocumentUpdate(BaseModel):
@@ -115,3 +116,13 @@ class IndexStatus(BaseModel):
     stale: StaleCounts
     # 项目有排队 / 运行中的建索引任务（横幅可据此提示「正在建索引」而不是「需要重建」）
     indexing: bool
+    # E6-d（裁决 7/8）：作者是否配置了默认向量模型（协作者视图不返回配置名 / 模型名 / ID）
+    owner_embedding_configured: bool = False
+    # 当前请求者的同步检索 / AI 上下文会用作者共享向量（vector）还是只用关键词（keyword）
+    retrieval_mode: Literal["vector", "keyword"] = "keyword"
+    # keyword 时的原因：作者未授权共享向量 / 作者未配置向量模型 / 作者向量配置存在但本地不可用
+    # （密钥无法解密、端点无效等，裁决 16）；vector 时为 null。
+    # stale_count > 0 时整书检索仍会按「部分资料待建向量」退回关键词（见 retrieval.search）。
+    keyword_reason: Literal[
+        "owner_embedding_not_allowed", "embedding_config_missing", "owner_embedding_unavailable"
+    ] | None = None

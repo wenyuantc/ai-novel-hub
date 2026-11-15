@@ -1,19 +1,29 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { currentRequestGeneration, watchRequestGeneration } from '../../api/client'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
+import { useSeriesAccessLoss, useSeriesAuthorization } from './seriesAccessContext'
 
-export function useSeriesIdentity() {
-  return useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
+function subscribeGeneration(onChange: () => void) {
+  return watchRequestGeneration(onChange).dispose
 }
 
-function currentIdentity() {
+export function useSeriesIdentity() {
+  const auth = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
+  const generation = useSyncExternalStore(subscribeGeneration, currentRequestGeneration, currentRequestGeneration)
+  return `${auth}:${generation}`
+}
+
+export function currentSeriesIdentity() {
   const state = useAuthStore.getState()
-  return `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`
+  return `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}:${currentRequestGeneration()}`
 }
 
 /** 启动后换页、换书或换会话时丢弃迟到结果；不对写请求进行猜测重放。 */
 export function useSeriesAction() {
   const identity = useSeriesIdentity()
+  const accessLoss = useSeriesAccessLoss()
+  const authorization = useSeriesAuthorization()
   const gate = useRef({ mounted: false, serial: 0, pending: false })
   const [state, setState] = useState<{ identity: string; busy: boolean; error: unknown }>({ identity, busy: false, error: null })
   useLayoutEffect(() => {
@@ -25,16 +35,21 @@ export function useSeriesAction() {
 
   const run = async <T,>(operation: (current: () => boolean) => Promise<T>, onSuccess: (value: T) => void) => {
     const ref = gate.current
-    if (ref.pending || !ref.mounted || identity !== currentIdentity()) return
+    if (ref.pending || !ref.mounted || identity !== currentSeriesIdentity()) return
     const serial = ++ref.serial
-    const current = () => ref.mounted && serial === ref.serial && identity === currentIdentity()
+    const authorizationTicket = authorization.capture()
+    const current = () => ref.mounted && serial === ref.serial && identity === currentSeriesIdentity()
+      && authorization.current(authorizationTicket)
     ref.pending = true
     setState({ identity, busy: true, error: null })
     try {
       const value = await operation(current)
       if (current()) onSuccess(value)
     } catch (err) {
-      if (current()) setState({ identity, busy: true, error: err })
+      if (current()) {
+        accessLoss(err)
+        setState({ identity, busy: true, error: err })
+      }
     } finally {
       if (current()) { ref.pending = false; setState((prev) => ({ ...prev, busy: false })) }
     }

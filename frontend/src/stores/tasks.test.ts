@@ -8,6 +8,7 @@ afterEach(() => { useTasksStore.getState().reset(); vi.restoreAllMocks() })
 function task(id: number, status: Task['status'] = 'running'): Task {
   return {
     id,
+    task_key: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`,
     kind: 'wizard.world',
     status,
     title: '世界观向导',
@@ -65,6 +66,14 @@ describe('tasks store 纯函数', () => {
     list = upsertActive(list, { ...task(3), progress: 50 })
     expect(list[0].progress).toBe(50)
     expect(upsertActive(list, task(2, 'cancelled')).map((t) => t.id)).toEqual([3, 1])
+  })
+
+  it('迟到的旧任务结果不能覆盖或移除同 ID 的新实例', () => {
+    const current = task(1)
+    const old = { ...task(1), task_key: '00000000-0000-4000-8000-999999999999' }
+    expect(upsertActive([current], { ...old, status: 'succeeded' })).toEqual([current])
+    expect(upsertActive([current], { ...old, status: 'running', title: '旧任务' })).toEqual([current])
+    expect(countFinished([old], [current])).toBe(1)
   })
 
   it('countFinished：上一轮存在、本轮消失的任务数', () => {

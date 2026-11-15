@@ -378,14 +378,22 @@ async def validate_choice(db: AsyncSession, user_id: int, choice: StyleChoice) -
             raise BadRequestError("指定的写作风格不存在或不可用")
 
 
-async def default_description(db: AsyncSession, project: Project) -> str:
-    """项目默认风格的一句话描述（向导与实体类提示词的「写作风格：」行）。"""
+async def visible_default_style(db: AsyncSession, project: Project, *, actor_user_id: int) -> WritingStyle | None:
+    """按真实操作者投影项目默认风格；不可见和缺失均不返回身份或内容。"""
+    if type(actor_user_id) is not int or actor_user_id <= 0:
+        raise ValueError("需要有效的实际操作者")
     if project.default_style_id is None:
-        return ""
-    desc = await db.scalar(
-        select(WritingStyle.description).where(WritingStyle.id == project.default_style_id, _visible(project.user_id))
-    )
-    return (desc or "").strip()
+        return None
+    with db.no_autoflush:
+        return await db.scalar(select(WritingStyle).where(
+            WritingStyle.id == project.default_style_id, _visible(actor_user_id),
+        ))
+
+
+async def default_description(db: AsyncSession, project: Project, *, actor_user_id: int) -> str:
+    """作品信息中的风格描述只使用实际操作者可见的风格。"""
+    style = await visible_default_style(db, project, actor_user_id=actor_user_id)
+    return (style.description or "").strip() if style is not None else ""
 
 
 # ---------------------------------------------------------------- 项目兼容：旧的 style 自由文本

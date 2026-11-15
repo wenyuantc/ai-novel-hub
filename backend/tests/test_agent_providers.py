@@ -433,6 +433,15 @@ async def test_gemini_style_id_goes_through_existing_ownership_check(app, client
         assert await tool.preview(ctx, args) == {"error": "不存在"}
 
 
+async def _bind_actor(db, user):
+    from app.models import User
+    from app.services.authorization_service import AuthenticatedActor
+
+    # 预览的模型预检按原认证身份锁内重选。
+    token_version = (await db.get(User, user["id"])).token_version
+    db.info["authenticated_actor"] = AuthenticatedActor(user["id"], token_version)
+
+
 async def test_agent_reference_ids_reject_out_of_range_values_before_database_binding(app, client):
     from app.models import Project, WritingStyle
     from app.services.agent.tools import get_tool
@@ -447,26 +456,33 @@ async def test_agent_reference_ids_reject_out_of_range_values_before_database_bi
     tool = get_tool("start_task")
     async with app.state.sessionmaker() as db:
         project_row = await db.get(Project, project["id"])
+        # 与真实 runner 一致：工具会话绑定原认证身份（E4-g2 起批量也是受控受理类型，预览需真实 actor）。
+        await _bind_actor(db, user)
         ctx = ToolCtx(db, project_row, user["id"], app.state.task_engine.ctx)
 
         # 原生整数既可能来自其他 provider，也可能来自不遵守 Gemini 字符串 schema 的模型。
+        # 派生单章任务经 Agent 已失败关闭（见 test_agent_derived_chapter_admission），
+        # 用同样接受 style 的单章批量预览覆盖引用校验。
+        cid = chapter.json()["id"]
+        batch = {"start_chapter_id": cid, "end_chapter_id": cid}
         for invalid in (2**63, 2_147_483_648):
-            args = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": invalid}}
+            args = {"kind": "chapter.batch", "params": {**batch, "style": invalid}}
             assert await tool.preview(ctx, args) == {"error": "引用 ID 超出有效范围"}
-        args = {"kind": "chapter.generate", "params": {"chapter_id": 2**63, "style": "inherit"}}
+        args = {"kind": "chapter.batch",
+                "params": {"start_chapter_id": 2**63, "end_chapter_id": cid, "style": "inherit"}}
         assert await tool.preview(ctx, args) == {"error": "引用 ID 超出有效范围"}
 
         for invalid in (-1, -2_147_483_648, -2_147_483_649, -(2**100)):
             for wire_value in (invalid, str(invalid)):
                 args = _gemini_tool_arguments(
                     "start_task",
-                    {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": wire_value}},
+                    {"kind": "chapter.batch", "params": {**batch, "style": wire_value}},
                 )
                 assert await tool.preview(ctx, args) == {"error": "引用 ID 必须是正整数"}
 
         db.add(WritingStyle(id=2_147_483_647, user_id=user["id"], name="合法上限风格"))
         await db.flush()
-        args = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": 2_147_483_647}}
+        args = {"kind": "chapter.batch", "params": {**batch, "style": 2_147_483_647}}
         result = await tool.preview(ctx, args)
         assert "error" not in result, result
 
@@ -492,7 +508,9 @@ async def test_provider_style_ids_keep_existing_ownership_checks(app, client, ma
 
     def response(style_id):
         wire_id = str(style_id) if kind == "gemini" else style_id
-        args = {"kind": "chapter.generate", "params": {"chapter_id": chapter.json()["id"], "style": wire_id}}
+        # 派生单章任务经 Agent 已失败关闭，用同样接受 style 的单章批量预览。
+        cid = chapter.json()["id"]
+        args = {"kind": "chapter.batch", "params": {"start_chapter_id": cid, "end_chapter_id": cid, "style": wire_id}}
         if kind == "openai":
             call = {"index": 0, "id": "call-1", "function": {"name": "start_task", "arguments": json.dumps(args)}}
             return [openai_chunk({"tool_calls": [call]}, "tool_calls")]
@@ -506,6 +524,7 @@ async def test_provider_style_ids_keep_existing_ownership_checks(app, client, ma
     spec = {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
     async with app.state.sessionmaker() as db:
         project_row = await db.get(Project, project["id"])
+        await _bind_actor(db, user)
         ctx = ToolCtx(db, project_row, user["id"], app.state.task_engine.ctx)
         for expected_id, permitted in ((own.json()["id"], True), (foreign.json()["id"], False)):
             events = [event async for event in sdk.provider.chat_tools_stream(MESSAGES, "test-model", [spec])]

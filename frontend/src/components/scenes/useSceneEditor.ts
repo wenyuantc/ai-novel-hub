@@ -1,25 +1,38 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { currentRequestGeneration, watchRequestGeneration } from '../../api/client'
 import { readChapterScenes, sceneApi } from '../../api/scenes'
 import { richDocumentApi } from '../../api/richDocument'
-import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
-import { authorizationKey } from '../../utils/permissions'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { SceneDraftController, sceneDraftDirty } from './sceneDraftController'
 
-/** 授权和章身份发生变化时重建控制器，卸载只丢弃本页响应。 */
+const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
+
+/** 账号、会话与章隔离控制器；同一会话授权变化只作废旧请求，保留仍可编辑的草稿。 */
 export function useSceneEditor(projectId: number, chapterId: number, initialSceneId?: number) {
-  const { canReadNow, canEditNow } = useProjectAccess(projectId)
-  const identity = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
+  const scopeVersion = useProjectStore((state) => state.scopeVersion)
+  const status = useAuthStore((state) => state.status)
+  const actorId = useAuthStore((state) => state.user?.id)
+  const generation = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
+  const identity = `${status}:${actorId ?? ''}:${generation}`
   const controller = useMemo(() => {
-    const belongs = () => { const state = useAuthStore.getState(); return identity === `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}` }
+    const belongs = () => {
+      const state = useAuthStore.getState()
+      return identity === `${state.status}:${state.user?.id ?? ''}:${currentRequestGeneration()}`
+    }
     return new SceneDraftController(chapterId, {
-    list: (signal) => readChapterScenes(projectId, chapterId, signal),
-    get: (sid, signal) => sceneApi.get(projectId, chapterId, sid, signal),
-    update: (sid, body) => sceneApi.update(projectId, chapterId, sid, body),
-    getDocument: (sid, signal) => richDocumentApi.get(projectId, chapterId, sid, signal),
-    saveDocument: (sid, body) => richDocumentApi.save(projectId, chapterId, sid, body),
-  }, () => belongs() && canReadNow(), () => belongs() && canEditNow())
-  }, [projectId, chapterId, identity, canReadNow, canEditNow])
+      list: (signal) => readChapterScenes(projectId, chapterId, signal),
+      get: (sid, signal) => sceneApi.get(projectId, chapterId, sid, signal),
+      update: (sid, body) => sceneApi.update(projectId, chapterId, sid, body),
+      getDocument: (sid, signal) => richDocumentApi.get(projectId, chapterId, sid, signal),
+      saveDocument: (sid, body) => richDocumentApi.save(projectId, chapterId, sid, body),
+    }, () => belongs() && isProjectScopeCurrent(captureProjectScope(projectId), 'canRead'),
+    () => belongs() && isProjectScopeCurrent(captureProjectScope(projectId), 'canEdit'),
+    () => useProjectStore.getState().scopeVersion)
+  }, [projectId, chapterId, identity])
+  useLayoutEffect(() => {
+    controller.authorizationChanged()
+  }, [controller, scopeVersion])
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const requested = useRef(initialSceneId)
   useEffect(() => { requested.current = initialSceneId }, [initialSceneId])

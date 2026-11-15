@@ -175,8 +175,10 @@ async def test_current_admin_and_owner_boundaries(app, monitor_admin, client):
         assert (await client.get(path)).status_code == 403
     response = await client.post(f"{ROOT}/{tasks[0].statistics_key}/cancel", json={"confirm": True, "reason": "处理"})
     assert response.status_code == 403
-    assert (await monitor_admin.get(f"/api/v1/tasks/{tasks[0].id}")).status_code == 404
-    assert (await monitor_admin.post(f"/api/v1/tasks/{tasks[0].id}/retry")).status_code == 404
+    observed = (await monitor_admin.get(f"{ROOT}/{tasks[0].statistics_key}")).json()
+    params = {"task_key": observed["task_key"]}
+    assert (await monitor_admin.get(f"/api/v1/tasks/{tasks[0].id}", params=params)).status_code == 404
+    assert (await monitor_admin.post(f"/api/v1/tasks/{tasks[0].id}/retry", params=params)).status_code == 404
     assert (await monitor_admin.get(f"{ROOT}/{uuid4()}")).status_code == 404
     async with app.state.sessionmaker() as db:
         admin = await db.scalar(select(User).where(User.username == "monitor_admin"))

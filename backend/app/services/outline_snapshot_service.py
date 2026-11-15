@@ -29,7 +29,7 @@ from app.schemas.outline import (
     SnapshotRestoreResult,
 )
 from app.services import planning_lifecycle
-from app.services.project_service import get_manageable_project
+from app.services.project_access import require_project
 
 MAX_SNAPSHOTS = 20
 NOT_FOUND = "快照不存在"
@@ -118,7 +118,7 @@ def to_out(snap: OutlineSnapshot) -> SnapshotOut:
 
 
 async def _get(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int) -> OutlineSnapshot:
-    await get_manageable_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "content.read")
     snap = await db.scalar(
         select(OutlineSnapshot).where(OutlineSnapshot.id == snapshot_id, OutlineSnapshot.project_id == project_id)
     )
@@ -128,7 +128,7 @@ async def _get(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int
 
 
 async def list_snapshots(db: AsyncSession, user_id: int, project_id: int) -> list[SnapshotOut]:
-    await get_manageable_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "content.read")
     rows = await db.scalars(
         select(OutlineSnapshot).where(OutlineSnapshot.project_id == project_id).order_by(OutlineSnapshot.id.desc())
     )
@@ -136,7 +136,7 @@ async def list_snapshots(db: AsyncSession, user_id: int, project_id: int) -> lis
 
 
 async def create_manual(db: AsyncSession, user_id: int, project_id: int, note: str) -> SnapshotOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     snap = await save_snapshot(db, project_id, "manual", note)
     await db.commit()
     await db.refresh(snap)
@@ -144,7 +144,7 @@ async def create_manual(db: AsyncSession, user_id: int, project_id: int, note: s
 
 
 async def delete_snapshot(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     snap = await _get(db, user_id, project_id, snapshot_id)
     await db.delete(snap)
     await db.commit()
@@ -321,7 +321,7 @@ async def restore_data(
 
 
 async def restore_snapshot(db: AsyncSession, user_id: int, project_id: int, snapshot_id: int) -> SnapshotRestoreResult:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     snap = await _get(db, user_id, project_id, snapshot_id)
     data = dict(snap.data or {})
     warnings = await _link_warnings(db, project_id, data.get("links") or [])

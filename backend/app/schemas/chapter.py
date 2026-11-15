@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.skill import SkillInputValues, require_skill_for_inputs
 from app.schemas.style import StyleChoice
@@ -101,7 +102,25 @@ class WizardRequest(BaseModel):
     career_count: int = Field(default=4, ge=1, le=12)
     # 从中断处继续：引用同项目同类型、失败 / 已取消 / 已中断且有部分输出的向导任务；
     # 生成参数沿用该任务的原请求（只有 ai_config_id 可以换）
-    continue_from_task_id: int | None = None
+    continue_from_task_id: int | None = Field(default=None, gt=0, le=2_147_483_647, strict=True)
+    continue_from_task_key: str | None = Field(default=None, min_length=36, max_length=36, strict=True)
+
+    @field_validator("continue_from_task_key")
+    @classmethod
+    def canonical_continue_key(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                if str(UUID(value)) != value:
+                    raise ValueError
+            except ValueError:
+                raise ValueError("向导续写任务身份无效") from None
+        return value
+
+    @model_validator(mode="after")
+    def require_continue_identity(self) -> "WizardRequest":
+        if (self.continue_from_task_id is None) != (self.continue_from_task_key is None):
+            raise ValueError("向导续写须同时提供任务 ID 和任务身份")
+        return self
 
 
 class ReviseChapterRequest(BaseModel):

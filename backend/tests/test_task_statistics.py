@@ -19,8 +19,13 @@ async def _user(db, name="statistics_owner", *, admin=False):
     return user
 
 
-async def _task(db, user_id, *, status="queued", project_id=None):
-    task = Task(user_id=user_id, project_id=project_id, kind="chapter.analyze", status=status)
+# chapter.analyze / wizard.* 的遗留 running 需核对原执行收据（失败关闭，不按启动恢复直接中断），
+# 运行中统计用例改用无执行收据约束的普通任务类型，只验证统计事务本身。
+_PLAIN_RUNNING_KIND = "outline.continue"
+
+
+async def _task(db, user_id, *, status="queued", project_id=None, kind="chapter.analyze"):
+    task = Task(user_id=user_id, project_id=project_id, kind=kind, status=status)
     db.add(task)
     await stats.record_created(db, task)
     return task
@@ -184,7 +189,7 @@ async def test_startup_recovery_records_once(app):
     await engine.stop()
     async with app.state.sessionmaker() as db:
         user = await _user(db)
-        task = await _task(db, user.id, status="running")
+        task = await _task(db, user.id, status="running", kind=_PLAIN_RUNNING_KIND)
         await db.commit()
         key = task.statistics_key
     await engine.recover()
@@ -202,7 +207,7 @@ async def test_duplicate_finalize_cannot_overwrite_winning_terminal(app):
     await engine.stop()
     async with app.state.sessionmaker() as db:
         user = await _user(db)
-        task = await _task(db, user.id, status="running")
+        task = await _task(db, user.id, status="running", kind=_PLAIN_RUNNING_KIND)
         await db.commit()
     await engine._finalize(task.id, task, None, TaskHub(task.id), status="succeeded", result={}, error="")
     await engine._finalize(task.id, task, None, TaskHub(task.id), status="failed", result=None, error="旧回调")
@@ -218,7 +223,7 @@ async def test_competing_finalizers_commit_one_terminal_and_one_result(app):
     await engine.stop()
     async with app.state.sessionmaker() as db:
         user = await _user(db)
-        task = await _task(db, user.id, status="running")
+        task = await _task(db, user.id, status="running", kind=_PLAIN_RUNNING_KIND)
         await db.commit()
     await asyncio.gather(
         engine._finalize(task.id, task, None, TaskHub(task.id), status="succeeded", result={}, error=""),
@@ -239,7 +244,7 @@ async def test_statistics_failure_rolls_back_terminal_update(app, monkeypatch):
     await engine.stop()
     async with app.state.sessionmaker() as db:
         user = await _user(db)
-        task = await _task(db, user.id, status="running")
+        task = await _task(db, user.id, status="running", kind=_PLAIN_RUNNING_KIND)
         await db.commit()
         user_id, task_id, key = user.id, task.id, task.statistics_key
 

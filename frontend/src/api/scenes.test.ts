@@ -35,8 +35,8 @@ describe('场景 API 合同', () => {
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ target_words: 500, expected_content_revision: 4, expected_planning_revision: 5 })
     await versionApi.extract(1, 2, 6, { scene_id: 3, expected_content_revision: 4, signature: 'hash' })
     expect(fetch.mock.calls[1][0]).toBe('/api/v1/projects/1/chapters/2/versions/6/extract')
-    expect(taskLink({ kind: 'chapter.generate', project_id: 1, chapter_id: 2, scene_id: 3 })).toBe('/projects/1/chapters/2?scene_id=3')
-    expect(taskLink({ kind: 'chapter.revise', project_id: 1, chapter_id: 2, scene_id: 3 })).toBe('/projects/1/chapters/2?panel=analysis&scene_id=3')
+    expect(taskLink({ kind: 'chapter.generate', project_id: 1, chapter_id: 2, scene_id: 3 })).toBe('/projects/1/chapters')
+    expect(taskLink({ kind: 'chapter.revise', project_id: 1, chapter_id: 2, scene_id: 3 })).toBe('/projects/1/chapters')
   })
   it('局部SSE缺少目标或快照不能采纳，版本0合法', () => {
     const value = { text: '新稿😀', original: '旧稿', before: '', start: 0, end: 2, log_id: null, scene_id: 3, chapter_id: 2, content_revision: 0, planning_revision: 0 }

@@ -12,6 +12,7 @@ from tests.helpers import (
     register,
     run_task,
     stream_with_gate,
+    task_params,
 )
 
 
@@ -93,7 +94,7 @@ async def test_generate_chapter_task_persists(app, client, fake_llm):
     # 创建即抢占：排队 / 运行期间章节处于 generating（编辑器只读）
     assert (await client.get(f"{base}/chapters/{ch['id']}")).json()["status"] == "generating"
 
-    stream = await stream_with_gate(app, client, task["id"], gate)
+    stream = await stream_with_gate(app, client, task, gate)
     assert stream.headers["content-type"].startswith("text/event-stream")
     assert stream.headers["x-accel-buffering"] == "no"
     events = parse_sse(stream.text)
@@ -111,7 +112,7 @@ async def test_generate_chapter_task_persists(app, client, fake_llm):
 
     saved = (await client.get(f"{base}/chapters/{ch['id']}")).json()
     assert saved["content"] == text and saved["status"] == "done"
-    assert (await client.get(f"/api/v1/tasks/{task['id']}/output")).json()["text"] == text
+    assert (await client.get(f"/api/v1/tasks/{task['id']}/output", params=task_params(task))).json()["text"] == text
 
     # 提示词包含大纲梗概与角色
     prompt = fake_llm.calls[-1]["messages"][-1]["content"]
@@ -134,7 +135,7 @@ async def test_generate_error_restores_status(app, client, fake_llm):
         assert row.status == "draft"
         assert row.content == "旧稿"
     # 已输出的部分文本保留供查看
-    assert (await client.get(f"/api/v1/tasks/{task['id']}/output")).json()["text"] == "部分"
+    assert (await client.get(f"/api/v1/tasks/{task['id']}/output", params=task_params(task))).json()["text"] == "部分"
 
 
 async def test_generating_conflict(app, client):

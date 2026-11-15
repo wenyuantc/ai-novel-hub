@@ -61,7 +61,7 @@ import StreamOutput from '../../components/StreamOutput'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
 import { outlineProApi } from '../../api/outlines'
-import { isActiveTask, isChapterWriteKind, queueLabel, taskApi } from '../../api/tasks'
+import { queueLabel } from '../../api/tasks'
 import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, StyleChoice, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
 import AnalysisDrawer, { type ReviseCompare } from '../../components/chapter/AnalysisDrawer'
@@ -89,7 +89,6 @@ import { useLoader } from '../../hooks/useLoader'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
-import { batchCheckpoint } from '../../utils/batchState'
 import { readAutoContinue } from '../../utils/preferences'
 import { splitPane, splitRow } from '../../utils/layout'
 import { formatTime } from '../../utils/time'
@@ -100,11 +99,6 @@ const SUCCESS_MESSAGES: Partial<Record<Task['kind'], string>> = {
   'chapter.generate': '生成完成，已保存',
   'chapter.polish': '润色完成，已保存',
   'chapter.revise': '按建议重写完成，已保存',
-}
-
-/** 接上章节任务时切换的 AI 助手标签：重写没有独立标签，放在「AI 生成」下显示进度与停止按钮 */
-function aiModeForTask(t: Task): 'generate' | 'polish' {
-  return t.kind === 'chapter.polish' ? 'polish' : 'generate'
 }
 
 /** 路由入口：以章节 id 为 key，切换章节时整体重建编辑器状态。 */
@@ -180,7 +174,6 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const location = useLocation()
   const refreshProject = useProjectStore((s) => s.refresh)
   const trackTask = useTasksStore((s) => s.track)
-  const activeTasks = useTasksStore((s) => s.active)
   const hasConfig = useHasAIConfig()
   const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
   const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
@@ -203,7 +196,6 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [aiScope, setAiScope] = useState<'scene' | 'chapter'>('scene')
   const [savingChapter, setSaving] = useState(false)
   const saving = savingChapter || sceneEditor.saving
-  const [resetting, setResetting] = useState(false)
   const [aiMode, setAiMode] = useState<AIMode>('generate')
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   // 本次生成 / 润色 / 重写 / 局部改写临时使用的风格（inherit = 本章风格 > 项目默认）
@@ -249,17 +241,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const aiTask = useTaskStream()
   // 正在创建任务（请求未返回）
   const [starting, setStarting] = useState(false)
-  // 章节处于 generating 时，挂载后要先查一次活动任务再决定是否显示「卡住」提示
-  const [attachChecked, setAttachChecked] = useState(initial.status !== 'generating')
-  // 已经订阅过的任务 id：避免任务结束后轮询列表尚未更新时被重复接上
-  const followedIdsRef = useRef(new Set<number>())
+  // 旧任务的章节 / 场景整数 ID 无实例证明；只跟随本页面明确创建的任务。
+  const attachChecked = true
   const detachWriteTask = aiTask.detach
   const followedWriteTask = aiTask.task
   const writeTaskRunning = aiTask.running
   useEffect(() => {
     const task = followedWriteTask
     if (task?.scene_id && task.scene_id !== currentSceneId && writeTaskRunning) {
-      followedIdsRef.current.delete(task.id)
       detachWriteTask()
     }
   }, [currentSceneId, followedWriteTask, writeTaskRunning, detachWriteTask])
@@ -425,7 +414,6 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
 
   /** 订阅章节任务直到结束：成功覆盖正文，失败 / 取消 / 中断只同步服务端状态并保留本地正文。 */
   const followTask = async (t: Task) => {
-    followedIdsRef.current.add(t.id)
     const outcome = await aiTask.follow(t)
     if (outcome.status === 'detached' || !canReadNow()) return
     if (t.scene_id && t.scene_id !== sceneEditor.controller.getSnapshot().scene?.id) {
@@ -456,7 +444,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           // 忽略
         }
       }
-      if (done?.warning) message.warning(`生成完成，已保存；${done.warning}`)
+      // 结果未发布（收据受限收尾）：已按上面重新读取已保存的正文，提示沿用服务端说明。
+      if (outcome.unpublished) message.info(outcome.detail)
+      else if (done?.warning) message.warning(`生成完成，已保存；${done.warning}`)
       else message.success(SUCCESS_MESSAGES[t.kind] ?? '生成完成，已保存')
       const finishedTask = outcome.task ?? t
       if (finishedTask.kind === 'chapter.revise') {
@@ -473,75 +463,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     if (outcome.status === 'cancelled') message.info('已停止，正文保持原样')
     await reloadChapter()
   }
-  // 挂载时的自动接续用 ref 调用最新的 followTask
-  const followRef = useRef(followTask)
-  useEffect(() => {
-    followRef.current = followTask
-  })
-
-  /** 接上由其他入口（任务面板重试、另一个标签页）为本章创建的任务 */
-  const attachExternal = (t: Task) => {
-    if (dirty) message.warning('本章已有后台任务开始执行；本地场景草稿会保留，完成后请核对最新版本')
-    setAiMode(aiModeForTask(t))
-    setChapter((prev) => ({ ...prev, status: 'generating' }))
-    void followTask(t)
-  }
-  const attachExternalRef = useRef(attachExternal)
-  useEffect(() => {
-    attachExternalRef.current = attachExternal
-  })
-  useEffect(() => {
-    if (!canUseAI || !attachChecked || aiRunning) return
-    const t = activeTasks.find(
-      (x) => x.chapter_id === chapter.id && isChapterWriteKind(x.kind) && (!x.scene_id || x.scene_id === scene?.id) && !followedIdsRef.current.has(x.id),
-    )
-    if (t) attachExternalRef.current(t)
-  }, [activeTasks, attachChecked, aiRunning, chapter.id, canUseAI, scene?.id])
-
-  // 批量生成正在写本章（批量任务没有 chapter_id，按断点里的当前章识别）：只读等待、不提供复位；写完后从服务端刷新正文
-  const batchWriting = canUseAI && activeTasks.some(
-    (x) => x.kind === 'chapter.batch' && isActiveTask(x.status) && batchCheckpoint(x.checkpoint)?.current?.chapter_id === chapter.id,
-  )
-  const wasBatchWritingRef = useRef(false)
-  useEffect(() => {
-    if (batchWriting) {
-      wasBatchWritingRef.current = true
-      return
-    }
-    if (!wasBatchWritingRef.current) return
-    wasBatchWritingRef.current = false
-    chapterApi
-      .get(pid, chapter.id)
-      .then((fresh) => replaceFromServer(fresh))
-      .catch(() => {
-        // 忽略：用户可手动刷新
-      })
-  }, [batchWriting, pid, chapter.id, replaceFromServer])
-
-  // 章节处于 generating：查找它的活动任务（排队或运行中）并自动接上
-  useEffect(() => {
-    if (!canUseAI || initial.status !== 'generating' || !currentSceneId) return
-    let alive = true
-    taskApi
-      .list({ chapter_id: initial.id, active: true, limit: 5 })
-      .then((list) => {
-        if (!alive) return
-        const t = list.find((x) => isChapterWriteKind(x.kind) && (!x.scene_id || x.scene_id === currentSceneId))
-        if (t) {
-          setAiMode(aiModeForTask(t))
-          void followRef.current(t)
-        } else { const other = list.find((x) => isChapterWriteKind(x.kind)); if (other) trackTask(other) }
-      })
-      .catch(() => {
-        // 查询失败时按「卡住」处理，用户仍可复位
-      })
-      .finally(() => {
-        if (alive) setAttachChecked(true)
-      })
-    return () => {
-      alive = false
-    }
-  }, [initial.id, initial.status, canUseAI, currentSceneId, trackTask])
+  // 当前数据没有章节 / 场景实例证明，不按后台任务里的旧整数关联自动恢复订阅。
+  const batchWriting = false
 
   const runAI = async (mode: 'generate' | 'polish') => {
     if (skillProblem) { message.warning(skillProblem); return }
@@ -664,25 +587,6 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     void refreshAnalysis()
   }
 
-  const handleResetStatus = async () => {
-    if (!canEditNow()) return
-    if (!canUseAI) return
-    setResetting(true)
-    try {
-      if (!canEditNow()) return
-      const updated = await chapterApi.update(pid, chapter.id, { status: 'draft' })
-      if (!canEditNow()) return
-      setChapter(updated)
-      message.success('已复位为草稿')
-      onChanged()
-    } catch (err) {
-      if (!canEditNow()) return
-      message.error(errorMessage(err))
-    } finally {
-      setResetting(false)
-    }
-  }
-
   const handleToggleDone = async () => {
     if (!canEditNow()) return
     if (editorLocked || saving) return
@@ -703,24 +607,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }
   }
 
-  const otherSceneWriting = canUseAI && activeTasks.some((task) => task.chapter_id === chapter.id && isChapterWriteKind(task.kind) && isActiveTask(task.status) && !!task.scene_id && task.scene_id !== scene?.id)
-  const wasOtherSceneWriting = useRef(false)
-  useEffect(() => {
-    if (otherSceneWriting) { wasOtherSceneWriting.current = true; return }
-    if (!wasOtherSceneWriting.current) return
-    wasOtherSceneWriting.current = false
-    if (!canReadNow()) return
-    // 未订阅的异景任务退出也重新读取章级派生状态，不推测终态或自动发起分析。
-    void sceneEditor.controller.load()
-    void chapterApi.get(pid, chapter.id).then((fresh) => {
-      if (!canReadNow()) return
-      setChapter(fresh)
-      setReviseCompare(null)
-      onChanged()
-      void refreshProject()
-      void refreshAnalysis()
-    }).catch((err: unknown) => { if (canReadNow()) message.error(errorMessage(err)) })
-  }, [otherSceneWriting, sceneEditor.controller, pid, chapter.id, canReadNow, message, onChanged, refreshProject, refreshAnalysis])
+  const otherSceneWriting = false
   const stuck = canUseAI && !otherSceneWriting && chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
   // 批量正在写本章：正文 / 标题只读、不能保存（后端对生成中章节的正文 PATCH 返回 409，写完后会用服务端正文覆盖本地）
   const batchLocked = otherSceneWriting || batchWriting && chapter.status === 'generating'
@@ -1179,12 +1066,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 showIcon
                 style={{ marginBottom: 12 }}
                 message="该章节处于「生成中」状态"
-                description="未找到进行中的 AI 任务；如果确认生成已中断，可复位为草稿后继续编辑。"
-                action={
-                  <Button size="small" loading={resetting} onClick={() => void handleResetStatus()} disabled={!canEdit}>
-                    复位
-                  </Button>
-                }
+                description="暂无法安全关联先前的任务。请在任务面板核对执行状态，完成后刷新章节。"
               />
             )}
             <Input

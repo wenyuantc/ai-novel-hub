@@ -32,7 +32,7 @@ describe('富文档 API', () => {
   })
 
   it('提案采纳绑定三重身份并转发中止信号，不在中止后重发', async () => {
-    const task = { id: 4, rich_review: { task_key: 'task-key', run_key: 'run-key', token: 'token', chapter_id: 2 } } as Task
+    const task = { id: 4, task_key: '00000000-0000-4000-8000-000000000004', rich_review: { task_key: '00000000-0000-4000-8000-000000000004', run_key: 'run-key', token: 'token', chapter_id: 2 } } as Task
     const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
     }))
@@ -42,10 +42,43 @@ describe('富文档 API', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(fetch.mock.calls[0][0]).toBe('/api/v1/tasks/4/rich-proposals/token/accept')
     expect(fetch.mock.calls[0][1]?.signal).toBe(controller.signal)
-    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ task_key: 'task-key', run_key: 'run-key',
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ task_key: task.task_key, run_key: 'run-key',
       sections: [{ scene_id: 3, section_key: 'section', anchor: 1 }], confirm_format_loss: true })
     controller.abort()
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('首次和显式重复采纳均保留分析提示，服务端无提示时允许省略', async () => {
+    const task = { id: 4, task_key: '00000000-0000-4000-8000-000000000004', rich_review: {
+      task_key: '00000000-0000-4000-8000-000000000004', run_key: 'run-key', token: 'token', chapter_id: 2,
+    } } as Task
+    const outcome = { status: 'applied', task_status: 'succeeded', chapter_id: 2, content_revision: 3,
+      analysis_warning: '自动分析未排队，请检查模型设置后手动分析' }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementationOnce(async () => new Response(JSON.stringify(outcome)))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(outcome)))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({ status: 'applied', task_status: 'queued', chapter_id: 2, content_revision: 3 })))
+    vi.stubGlobal('fetch', fetch)
+    expect(await richDocumentApi.acceptReview(task, [], false)).toEqual(outcome)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(await richDocumentApi.acceptReview(task, [], false)).toEqual(outcome)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(await richDocumentApi.acceptReview(task, [], false)).toEqual({ status: 'applied', task_status: 'queued', chapter_id: 2, content_revision: 3 })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    { status: 'pending' }, { task_status: 'running' }, { chapter_id: 8 }, { content_revision: -1 },
+    { analysis_warning: null }, { analysis_warning: 42 }, { analysis_warning: '包含私人配置的错误信息' },
+  ])('不接受与原章节不一致或结构不完整的采纳响应 %#', async (changed) => {
+    const task = { id: 4, task_key: '00000000-0000-4000-8000-000000000004', rich_review: {
+      task_key: '00000000-0000-4000-8000-000000000004', run_key: 'run-key', token: 'token', chapter_id: 2,
+    } } as Task
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({
+      status: 'applied', task_status: 'succeeded', chapter_id: 2, content_revision: 3, ...changed,
+    })))
+    vi.stubGlobal('fetch', fetch)
+    await expect(richDocumentApi.acceptReview(task, [], false)).rejects.toThrow('采纳结果无法确认')
+    expect(fetch).toHaveBeenCalledOnce()
   })
 })

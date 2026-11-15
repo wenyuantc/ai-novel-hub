@@ -38,13 +38,13 @@ async def categories(
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
 ):
     return await service.list_categories(
-        sessionmaker, _actor(db, user), project_id, types=types, q=q, page=page, page_size=page_size
+        sessionmaker, _actor(db, user), project_id, types=types, q=q, page=page, page_size=page_size, manual=True,
     )
 
 
 @router.post("/setting-categories", response_model=s.CategoryMutation, status_code=201)
 async def create_category(project_id: Id, body: s.CategoryCreate, user: CurrentUser, db: DbDep):
-    return await service.save_category(db, user.id, project_id, body)
+    return await service.save_category(db, user.id, project_id, body, manual=True)
 
 
 # 固定preview路径先于动态分类ID；只读快照仅需projects.read，不进入任何写/审计上下文。
@@ -57,17 +57,18 @@ async def preview(project_id: Id, body: s.CategoryPreview, user: CurrentUser, db
         draft=body.draft,
         editing_category_id=body.editing_category_id,
         filters=body.filters,
+        manual=True,
     )
 
 
 @router.get("/setting-categories/{category_id}", response_model=s.CategoryMutation)
 async def category(project_id: Id, category_id: Id, user: CurrentUser, db: DbDep, sessionmaker: SessionmakerDep):
-    return await service.read_category(sessionmaker, _actor(db, user), project_id, category_id)
+    return await service.read_category(sessionmaker, _actor(db, user), project_id, category_id, manual=True)
 
 
 @router.patch("/setting-categories/{category_id}", response_model=s.CategoryMutation)
 async def update_category(project_id: Id, category_id: Id, body: s.CategoryUpdate, user: CurrentUser, db: DbDep):
-    return await service.save_category(db, user.id, project_id, body, category_id)
+    return await service.save_category(db, user.id, project_id, body, category_id, manual=True)
 
 
 @router.delete("/setting-categories/{category_id}", response_model=s.CategoryVersions)
@@ -78,7 +79,9 @@ async def delete_category(
     user: CurrentUser,
     db: DbDep,
 ):
-    return await service.delete_category(db, user.id, project_id, category_id, expected_categories_revision)
+    return await service.delete_category(
+        db, user.id, project_id, category_id, expected_categories_revision, manual=True,
+    )
 
 
 @router.get("/setting-categories/{category_id}/entries", response_model=s.CategoryEntryPage)
@@ -111,7 +114,7 @@ async def entries(
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
     return await query.query_category_entries(
-        sessionmaker, _actor(db, user), project_id, category_id=category_id, filters=filters
+        sessionmaker, _actor(db, user), project_id, category_id=category_id, filters=filters, manual=True,
     )
 
 
@@ -119,14 +122,14 @@ async def entries(
 async def tags(
     project_id: Id, kind: EntryKind, entry_id: Id, user: CurrentUser, db: DbDep, sessionmaker: SessionmakerDep
 ):
-    return await service.read_tags(sessionmaker, _actor(db, user), project_id, kind, entry_id)
+    return await service.read_tags(sessionmaker, _actor(db, user), project_id, kind, entry_id, manual=True)
 
 
 @router.patch("/setting-entries/{kind}/{entry_id}/tags", response_model=s.SettingTagsOut)
 async def update_tags(
     project_id: Id, kind: EntryKind, entry_id: Id, body: s.SettingTagsUpdate, user: CurrentUser, db: DbDep
 ):
-    return await service.save_tags(db, user.id, project_id, kind, entry_id, body)
+    return await service.save_tags(db, user.id, project_id, kind, entry_id, body, manual=True)
 
 
 @router.get("/setting-entry-tags", response_model=s.SettingTagSuggestions)
@@ -138,4 +141,4 @@ async def suggestions(
     q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
 ):
-    return await service.suggest_tags(sessionmaker, _actor(db, user), project_id, q=q, limit=limit)
+    return await service.suggest_tags(sessionmaker, _actor(db, user), project_id, q=q, limit=limit, manual=True)

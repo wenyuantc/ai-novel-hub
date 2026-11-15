@@ -132,6 +132,26 @@ PG测试建库统一调用`tests.schema_helpers.create_isolated_schema(connectio
 
 副本必须显式复用关系类型、写作风格、技能三组既有after_create回调；to_metadata不自动传播这些事件，不能只保证表存在。不要重置SQLAlchemy私有`_create_rule`或清缓存让测试变绿。`test_schema_isolation.py`比较PG DDL前后原metadata全部SQLite DDL、三组预置，验证真实plan FK、删大纲后细纲级联／章节关联SET NULL和正文保留；保留真实PG→SQLite测试顺序回归。
 
+### PostgreSQL 隔离测试库与环境变量
+
+PG 测试缺对应环境变量时 `skip`，变量指错库时直接 `ValueError`（不是 skip）。全量门禁要证明“0 skip”，必须按守卫给每类测试准备专用角色/库，不能把一个 URL 塞给所有变量：
+
+| 环境变量 | 守卫要求（本机 127.0.0.1） |
+|---|---|
+| `AINOVEL_COLLAB_POSTGRES_TEST_URL` | 用户 `collab_test`、库 `collab_test`（`pg_support.collab_test_url` 的共用回落） |
+| `AINOVEL_AGENT_POSTGRES_TEST_URL` / `AINOVEL_COLLAB_TASKS_POSTGRES_TEST_URL` / `AINOVEL_COLLAB_REVIEW_POSTGRES_TEST_URL` | 用户 `collab_test`，库分别为 `collab_agents` / `collab_tasks` / `collab_review`；**设了就必须是该库**，否则不设，回落共用 `collab_test` |
+| `AINOVEL_FIELDS_POSTGRES_TEST_URL` 等字段类 | `field_test` / `fields_verify` |
+| 场景 / 系列专用变量 | `scenes_test/scenes_verify`、`series_test/series_verify` |
+| `AINOVEL_POSTGRES_TEST_URL` | 库 `ainovel_test` |
+
+- 守卫只校验库名与用户；表都建在随机 schema 内、用后删除，几类测试可以放在同一个测试容器里的不同库。
+- 连接串含口令：写入 600 权限文件后 `export "VAR=$(cat file)"` 注入，不打印、不进日志。
+- 真实备份测试（`test_ai_config_instance_migration_postgresql.py`）需要 PATH 中的 `pg_dump` / `pg_restore`，且主版本必须与服务端一致：PG16 服务端搭配 18.x 客户端时，`pg_restore` 会发出 `SET transaction_timeout` 而失败。macOS 上应把 `libpq@16` 的 bin 放在 PATH 最前，不能用默认的 `libpq`（18）。
+
+### 迁移冻结结构契约
+
+`tests/test_setting_fields_migration.py::_schema_0037_model_contract` 用当前 ORM 模型推导某个历史版本（0037）的冻结结构。之后的迁移给同一张表加列，必须在该函数里 `pop` 掉这些列，并注明来自哪个迁移。否则 `test_setting_ai_visibility_migration.py::test_0037_preserves_real_0036_rows_and_schema_then_safe_roundtrip` 会稳定失败，而迁移本身并没有错。已排除的列：`agent_conversations.summary_source`（0053）、`collaboration_invitation_id`（0054）。新增迁移给 0037 已有的表加列时，同步更新这里，修改范围只限这个测试函数，不要去动迁移。
+
 ### 应用工厂与路由处理器寿命
 
 路由处理器使用模块级函数，通过 `Request.app.state` 取得当前实例资源和缓存，不在每次 `create_app` 时注册捕获该 app 的闭包。FastAPI 的 callable 分类缓存会强持有处理器；捕获 app 会同时保留整个路由图、任务引擎和数据库 engine，关闭客户端／dispose 不能解除这条全局引用。实际例子见 `app/api/open/docs.py`。

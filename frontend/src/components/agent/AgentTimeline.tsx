@@ -1,7 +1,10 @@
 import { Button, Empty, Popconfirm, Space, Spin, Tag, Typography, theme } from 'antd'
 import { useEffect, useMemo, useRef } from 'react'
-import type { AgentChange, AgentMessage } from '../../api/types'
-import { buildAgentTimeline, canUndoChange, type AgentToolStep } from '../../utils/agent'
+import { agentChangeIdentity, type AgentTurnAction } from '../../api/agent'
+import { hasTaskIdentity, type TaskIdentity } from '../../api/tasks'
+import { captureProjectScope, isProjectScopeCurrent, type ProjectScope } from '../../stores/project'
+import type { AgentChange, AgentMessage, Task } from '../../api/types'
+import { agentToolStepState, buildAgentTimeline, canUndoChange, isAgentTurnOpen, type AgentToolStep } from '../../utils/agent'
 import AgentChangeCard from './AgentChangeCard'
 import AgentMarkdown from './AgentMarkdown'
 
@@ -14,18 +17,29 @@ interface Props {
   running: boolean
   busy: boolean
   /** 正在处理的提案 id */
-  actingId?: number | null
+  actingKey?: string | null
   confirmationReady: boolean
+  /** 当前未结束的轮次（会话详情的 active_task）：其余轮次残留的待确认提案按「轮次已结束」置灰（裁决 26）。 */
+  confirmationTask?: Pick<Task, 'id' | 'task_key' | 'status'> | null
+  /** 服务端 writable：为 false 时确认 / 拒绝 / 撤销全部不可用（只读会话，裁决 4、7）。 */
+  canWrite?: boolean
   onAction: (change: AgentChange, action: 'confirm' | 'reject' | 'undo') => void
-  onTurn: (id: number, action: 'confirm-all' | 'reject-all' | 'undo') => void
+  onTurn: (task: TaskIdentity, action: AgentTurnAction, shown: AgentChange[]) => void
 }
-export default function AgentTimeline({ messages, changes, steps, text, running, busy, actingId, confirmationReady, onAction, onTurn, focusMessageId }: Props) {
+export default function AgentTimeline({ messages, changes, steps, text, running, busy, actingKey, confirmationReady, confirmationTask, canWrite = true, onAction, onTurn, focusMessageId }: Props) {
   const { token } = theme.useToken()
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const located = useRef<number | null>(null)
   const items = useMemo(() => buildAgentTimeline(messages, changes, steps), [messages, changes, steps])
-  const turns = [...new Set(changes.map((c) => c.turn_task_id).filter((id): id is number => id !== null))]
+  const turns = new Map<string, { task: TaskIdentity; shown: AgentChange[] }>()
+  for (const change of changes) {
+    if (change.turn_task_id === null) continue
+    const task = { id: change.turn_task_id, task_key: change.turn_task_key ?? null }
+    const key = `${task.id}:${task.task_key ?? ''}`
+    const group = turns.get(key) ?? { task, shown: [] }
+    group.shown.push(change); turns.set(key, group)
+  }
   useEffect(() => {
     if (!focusMessageId || located.current === focusMessageId) return
     stickRef.current = false
@@ -50,24 +64,47 @@ export default function AgentTimeline({ messages, changes, steps, text, running,
           </Space>
           {item.message.role === 'assistant' ? <AgentMarkdown text={item.message.content} /> : <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.message.content}</div>}
         </div>}
-        {item.type === 'tool' && <details style={{ background: token.colorFillQuaternary, borderRadius: token.borderRadius, padding: 8 }}>
-          <summary style={{ cursor: 'pointer', overflowWrap: 'anywhere' }}>{item.step.label} · {item.step.ok === undefined ? '处理中' : item.step.ok ? '完成' : '未完成'}</summary>
-          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 200, overflowY: 'auto', fontSize: 12 }}>{item.step.summary || '正在读取或准备修改…'}</pre>
-        </details>}
-        {item.type === 'change' && <AgentChangeCard change={item.change} busy={busy} acting={actingId === undefined ? undefined : busy && actingId === item.change.id} confirmationReady={confirmationReady} onAction={onAction} />}
+        {item.type === 'tool' && <ToolStep step={item.step} state={agentToolStepState(item.step, confirmationTask, running && steps.some((s) => s.call_id === item.step.call_id
+          && s.turn_task_id === item.step.turn_task_id && s.turn_task_key === item.step.turn_task_key))} />}
+        {item.type === 'change' && <AgentChangeCard change={item.change} busy={busy} acting={actingKey === undefined ? undefined : busy && actingKey === item.change.change_key}
+          confirmationReady={confirmationReady && confirmationTask?.id === item.change.turn_task_id && !!confirmationTask.task_key
+            && confirmationTask.task_key === item.change.turn_task_key}
+          turnEnded={item.change.status === 'proposed' && !isAgentTurnOpen(item.change, confirmationTask)} canWrite={canWrite} onAction={onAction} />}
       </div>)}
       {running && <div><Typography.Text type="secondary">项目智能体 <Spin size="small" /></Typography.Text>{text && <AgentMarkdown text={text} />}</div>}
-      {turns.map((id) => {
-        const pending = changes.filter((c) => c.turn_task_id === id && c.status === 'proposed')
-        const undoable = changes.filter((c) => c.turn_task_id === id && canUndoChange(c))
-        return <Space key={id} wrap>
-          {pending.length > 1 && <>
-            <Button size="small" type="primary" disabled={!confirmationReady} loading={busy} onClick={() => onTurn(id, 'confirm-all')}>全部确认（{pending.length}）</Button>
-            <Button size="small" disabled={busy || !confirmationReady} onClick={() => onTurn(id, 'reject-all')}>全部拒绝</Button>
-          </>}
-          {undoable.length > 1 && <Popconfirm title={`撤销这一轮的 ${undoable.length} 项修改？`} description="后台任务需单独取消。任一项冲突时不会撤销任何修改。" onConfirm={() => onTurn(id, 'undo')}><Button size="small" disabled={busy || running}>撤销整轮</Button></Popconfirm>}
-        </Space>
-      })}
+      {[...turns.entries()].map(([key, group]) => <TurnActions key={key} {...group} busy={busy} running={running} canWrite={canWrite}
+        ended={!isAgentTurnOpen({ turn_task_id: group.task.id, turn_task_key: group.task.task_key }, confirmationTask)}
+        confirmationReady={confirmationReady && confirmationTask?.id === group.task.id && confirmationTask.task_key === group.task.task_key}
+        onTurn={onTurn} />)}
     </Space>
   </div>
+}
+
+function ToolStep({ step, state }: { step: AgentToolStep; state: { label: string; stopped: boolean } }) {
+  const { token } = theme.useToken()
+  return <details style={{ background: token.colorFillQuaternary, borderRadius: token.borderRadius, padding: 8 }}>
+    <summary style={{ cursor: 'pointer', overflowWrap: 'anywhere' }}>{step.label} · {state.label}</summary>
+    <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 200, overflowY: 'auto', fontSize: 12 }}>{step.summary || (state.stopped ? '本轮已结束，此步骤没有返回结果。' : '正在读取或准备修改…')}</pre>
+  </details>
+}
+
+function TurnActions({ task, shown, busy, running, confirmationReady, canWrite, ended, onTurn }: {
+  task: TaskIdentity; shown: AgentChange[]; busy: boolean; running: boolean; confirmationReady: boolean; canWrite: boolean; ended: boolean; onTurn: Props['onTurn']
+}) {
+  const pending = shown.filter((change) => change.status === 'proposed')
+  const undoable = shown.filter(canUndoChange)
+  const snapshot = () => ({ task: { ...task }, shown: shown.map((change) => ({ ...change })) })
+  const undoSnapshot = useRef<{ value: ReturnType<typeof snapshot>; scope: ProjectScope | null } | null>(null)
+  const identified = hasTaskIdentity(task)
+  const validPending = identified && pending.every((change) => !!agentChangeIdentity(change))
+  const validUndo = identified && undoable.every((change) => !!agentChangeIdentity(change))
+  return <Space wrap>
+    {pending.length > 1 && !ended && <>
+      <Button size="small" type="primary" disabled={!validPending || !confirmationReady} loading={busy} onClick={() => { const captured = snapshot(); onTurn(captured.task, 'confirm-all', captured.shown) }}>全部确认（{pending.length}）</Button>
+      <Button size="small" disabled={!validPending || busy || !confirmationReady} onClick={() => { const captured = snapshot(); onTurn(captured.task, 'reject-all', captured.shown) }}>全部拒绝</Button>
+    </>}
+    {undoable.length > 1 && <Popconfirm disabled={!canWrite} title={`撤销这一轮的 ${undoable.length} 项修改？`} description="后台任务需单独取消。任一项冲突时不会撤销任何修改。"
+      onOpenChange={(open) => { if (open) undoSnapshot.current = { value: snapshot(), scope: captureProjectScope(shown[0]?.project_id ?? 0) } }}
+      onConfirm={() => { const captured = undoSnapshot.current; if (captured && isProjectScopeCurrent(captured.scope, 'canUseAgent')) onTurn(captured.value.task, 'undo', captured.value.shown) }}><Button size="small" disabled={!canWrite || !validUndo || busy || running}>撤销整轮</Button></Popconfirm>}
+  </Space>
 }

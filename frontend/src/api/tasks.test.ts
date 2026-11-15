@@ -22,6 +22,7 @@ import type { Task } from './types'
 function task(over: Partial<Task> = {}): Task {
   return {
     id: 1,
+    task_key: '00000000-0000-4000-8000-000000000001',
     kind: 'chapter.generate',
     status: 'running',
     title: '第 1 章 · AI 生成',
@@ -115,7 +116,7 @@ describe('subscribeTask', () => {
     ])
     vi.stubGlobal('fetch', async () => stream.response)
     let end: TaskEnd | undefined
-    const pending = subscribeTask(1, {}).then((outcome) => { end = outcome })
+    const pending = subscribeTask(task(), {}).then((outcome) => { end = outcome })
     try {
       await vi.advanceTimersByTimeAsync(0)
       expect(end?.status).toBe(status)
@@ -125,6 +126,36 @@ describe('subscribeTask', () => {
       stream.close()
       await pending
     }
+  })
+
+  it('收据收尾的未发布 done：成功终态、忽略 result 并保留「请刷新后查看」说明', async () => {
+    const note = '正文已保存；执行授权或设置已变化，结果未发布，也未派生后续任务'
+    vi.stubGlobal('fetch', async () => sseResponse([
+      frame('snapshot', { task: task(), text: '生成内容' }),
+      frame('done', {
+        task: task({ status: 'succeeded', error: note }), result: { chapter: { id: 3 } },
+        unpublished: true, detail: '正文已保存，请刷新后查看',
+      }),
+    ]))
+    const end = await subscribeTask(task(), {})
+    expect(end).toMatchObject({ status: 'succeeded', result: null, unpublished: true, detail: '正文已保存，请刷新后查看' })
+    expect(end.task?.status).toBe('succeeded')
+    expect(end.task?.error).toBe(note)
+  })
+
+  it('未发布 done 缺少说明时使用固定提示，普通 done 不带 unpublished', async () => {
+    vi.stubGlobal('fetch', async () => sseResponse([
+      frame('snapshot', { task: task(), text: '' }),
+      frame('done', { task: task({ status: 'succeeded' }), result: null, unpublished: true }),
+    ]))
+    expect(await subscribeTask(task(), {})).toMatchObject({ unpublished: true, detail: '结果已保存，请刷新后查看' })
+    vi.stubGlobal('fetch', async () => sseResponse([
+      frame('snapshot', { task: task(), text: '' }),
+      frame('done', { task: task({ status: 'succeeded' }), result: { chapter: { id: 3 } } }),
+    ]))
+    const normal = await subscribeTask(task(), {})
+    expect(normal).toMatchObject({ status: 'succeeded', result: { chapter: { id: 3 } } })
+    expect('unpublished' in normal).toBe(false)
   })
 
   it('请求响应头一直挂起时自动断开重连，取回已完成任务', async () => {
@@ -140,7 +171,7 @@ describe('subscribeTask', () => {
     vi.stubGlobal('fetch', fetchMock)
     const reconnect = vi.fn()
     let end: TaskEnd | undefined
-    void subscribeTask(1, { onReconnect: reconnect }, undefined, { sleep: noSleep })
+    void subscribeTask(task(), { onReconnect: reconnect }, undefined, { sleep: noSleep })
       .then((outcome) => { end = outcome })
     await vi.advanceTimersByTimeAsync(45_000)
     expect(stalled.signal?.aborted).toBe(true)
@@ -161,7 +192,7 @@ describe('subscribeTask', () => {
     vi.stubGlobal('fetch', fetchMock)
     const r = recorder()
     let end: TaskEnd | undefined
-    void subscribeTask(1, r.handlers, undefined, { sleep: noSleep }).then((outcome) => { end = outcome })
+    void subscribeTask(task(), r.handlers, undefined, { sleep: noSleep }).then((outcome) => { end = outcome })
     try {
       await vi.advanceTimersByTimeAsync(0)
       expect(r.text()).toBe('部分')
@@ -181,7 +212,7 @@ describe('subscribeTask', () => {
     const fetchMock = vi.fn(async () => stream.response)
     vi.stubGlobal('fetch', fetchMock)
     const reconnect = vi.fn()
-    const pending = subscribeTask(1, { onReconnect: reconnect })
+    const pending = subscribeTask(task(), { onReconnect: reconnect })
     try {
       await vi.advanceTimersByTimeAsync(0)
       for (let i = 0; i < 4; i++) {
@@ -206,7 +237,7 @@ describe('subscribeTask', () => {
     const controller = new AbortController()
     const reconnect = vi.fn()
     let error: unknown
-    void subscribeTask(1, { onReconnect: reconnect }, controller.signal).catch((err: unknown) => { error = err })
+    void subscribeTask(task(), { onReconnect: reconnect }, controller.signal).catch((err: unknown) => { error = err })
     controller.abort()
     await vi.advanceTimersByTimeAsync(0)
     expect(isAbortError(error)).toBe(true)
@@ -230,7 +261,7 @@ describe('subscribeTask', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
     const r = recorder()
-    const end = await subscribeTask(1, r.handlers)
+    const end = await subscribeTask(task(), r.handlers)
     expect(end).toEqual({
       status: 'succeeded',
       task: task({ status: 'succeeded', progress: 100 }),
@@ -239,7 +270,7 @@ describe('subscribeTask', () => {
     expect(r.text()).toBe('首轮\n\n续写')
     expect(r.log).toEqual(['snapshot:queued', 'progress:queued:0:0', 'progress:running:5:-', 'continue:1'])
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('/api/v1/tasks/1/stream')
+    expect(url).toBe('/api/v1/tasks/1/stream?task_key=00000000-0000-4000-8000-000000000001')
     expect(init.method).toBe('GET')
     expect(init.credentials).toBe('include')
   })
@@ -261,7 +292,7 @@ describe('subscribeTask', () => {
     vi.stubGlobal('fetch', async () => responses[i++]())
     const r = recorder()
     const sleeps: number[] = []
-    const end = await subscribeTask(1, r.handlers, undefined, {
+    const end = await subscribeTask(task(), r.handlers, undefined, {
       sleep: async (ms) => {
         sleeps.push(ms)
       },
@@ -285,7 +316,7 @@ describe('subscribeTask', () => {
       vi.stubGlobal('fetch', async () =>
         sseResponse([frame('snapshot', { task: t, text: '部分' }), frame('error', { task: t, detail: '模型调用失败：额度不足' })]),
       )
-      const end = await subscribeTask(1, {}, undefined, { sleep: noSleep })
+      const end = await subscribeTask(task(), {}, undefined, { sleep: noSleep })
       expect(end).toEqual({ status: expected, task: t, detail: '模型调用失败：额度不足' })
     }
   })
@@ -320,7 +351,7 @@ describe('subscribeTask', () => {
     const r = recorder()
     const log: string[] = []
     let resets = 0
-    const end = await subscribeTask(1, {
+    const end = await subscribeTask(task(), {
       ...r.handlers,
       onReset: () => {
         resets += 1
@@ -351,7 +382,7 @@ describe('subscribeTask', () => {
       ]),
     )
     const log: string[] = []
-    const end = await subscribeTask(1, {
+    const end = await subscribeTask(task(), {
       onStage: (st) => log.push(`stage:${st}`),
       onBatchEnd: (e) => log.push(`batch:${e.index}/${e.total}:${e.state}`),
     })
@@ -362,7 +393,7 @@ describe('subscribeTask', () => {
   it('404 不重连，直接抛 ApiError', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ detail: '任务不存在' }), { status: 404 }))
     vi.stubGlobal('fetch', fetchMock)
-    const err = await subscribeTask(9, {}, undefined, { sleep: noSleep }).catch((e: unknown) => e)
+    const err = await subscribeTask(task({ id: 9 }), {}, undefined, { sleep: noSleep }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).detail).toBe('任务不存在')
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -371,7 +402,7 @@ describe('subscribeTask', () => {
   it('连续失败超过上限后抛出最后一次错误', async () => {
     const fetchMock = vi.fn(async () => new Response('', { status: 502 }))
     vi.stubGlobal('fetch', fetchMock)
-    const err = await subscribeTask(1, {}, undefined, { maxRetries: 2, sleep: noSleep }).catch((e: unknown) => e)
+    const err = await subscribeTask(task(), {}, undefined, { maxRetries: 2, sleep: noSleep }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(502)
     expect(fetchMock).toHaveBeenCalledTimes(3)
@@ -381,7 +412,7 @@ describe('subscribeTask', () => {
     const fetchMock = vi.fn(async () => sseResponse([frame('snapshot', { task: task(), text: '' })]))
     vi.stubGlobal('fetch', fetchMock)
     const sleeps: number[] = []
-    const err = await subscribeTask(1, {}, undefined, {
+    const err = await subscribeTask(task(), {}, undefined, {
       maxRetries: 3,
       now: () => 0,
       sleep: async (ms) => {
@@ -404,7 +435,7 @@ describe('subscribeTask', () => {
     })
     let clock = 0
     const sleeps: number[] = []
-    const end = await subscribeTask(1, {}, undefined, {
+    const end = await subscribeTask(task(), {}, undefined, {
       maxRetries: 1,
       stableMs: 5000,
       // 每次读取时间前进 6 秒：snapshot 与断开之间相隔 6 秒，视为稳定连接
@@ -420,9 +451,92 @@ describe('subscribeTask', () => {
   it('中止 signal 抛 AbortError（等待重连期间中止也一样）', async () => {
     vi.stubGlobal('fetch', async () => sseResponse([frame('snapshot', { task: task(), text: '' })]))
     const controller = new AbortController()
-    const p = subscribeTask(1, { onReconnect: () => controller.abort() }, controller.signal, { baseDelayMs: 10_000 })
+    const p = subscribeTask(task(), { onReconnect: () => controller.abort() }, controller.signal, { baseDelayMs: 10_000 })
     const err = await p.catch((e: unknown) => e)
     expect(isAbortError(err)).toBe(true)
+  })
+})
+
+describe('subscribeTask：受控流 permission_denied 重订阅一次', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+  const denied = frame('error', { task: null, detail: '任务访问权限已失效', code: 'permission_denied' })
+
+  it('详情仍可读时只重订阅一次，新订阅回放终态', async () => {
+    const detail = vi.spyOn(taskApi, 'get').mockResolvedValue(task())
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sseResponse([frame('snapshot', { task: task(), text: '旧' }), denied, frame('delta', { text: '不得交付' })]))
+      .mockResolvedValueOnce(sseResponse([frame('snapshot', { task: task(), text: '完整输出' }), frame('done', { task: task({ status: 'succeeded' }), result: { ok: 1 } })]))
+    vi.stubGlobal('fetch', fetchMock)
+    const rec = recorder()
+    const sleep = vi.fn(async () => {})
+    const end = await subscribeTask(task(), rec.handlers, undefined, { sleep, baseDelayMs: 300, maxDelayMs: 200 })
+    expect(end).toMatchObject({ status: 'succeeded', result: { ok: 1 } })
+    expect(rec.text()).toBe('完整输出')
+    expect(detail).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // 退避有上限：取 min(base, max)
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(200, undefined)
+    expect(rec.log).toContain('reconnect:1:200')
+  })
+
+  it('重订阅后再次 permission_denied 按原错误处理，不再循环', async () => {
+    const detail = vi.spyOn(taskApi, 'get').mockResolvedValue(task())
+    const fetchMock = vi.fn(async () => sseResponse([frame('snapshot', { task: task(), text: '旧' }), denied]))
+    vi.stubGlobal('fetch', fetchMock)
+    const end = await subscribeTask(task(), {}, undefined, { sleep: noSleep })
+    expect(end).toEqual({ status: 'failed', task: null, detail: '任务访问权限已失效' })
+    expect(detail).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('作品作用域下二次拒绝：清理输出、复查作品并抛 403', async () => {
+    vi.spyOn(taskApi, 'get').mockResolvedValue(task())
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse([denied])))
+    const cleared = vi.fn()
+    const refresh = vi.fn()
+    await expect(subscribeTask(task(), { onProjectAccessDenied: cleared }, undefined,
+      { sleep: noSleep, projectFailure: { isCurrent: () => true, refresh } })).rejects.toMatchObject({ status: 403 })
+    expect(cleared).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it.each([404, 403])('详情 %s 时不重订阅，按原错误处理', async (status) => {
+    const detail = vi.spyOn(taskApi, 'get').mockRejectedValue(new ApiError(status, '任务不存在'))
+    const fetchMock = vi.fn(async () => sseResponse([denied]))
+    vi.stubGlobal('fetch', fetchMock)
+    const sleep = vi.fn(async () => {})
+    const cleared = vi.fn()
+    const refresh = vi.fn()
+    await expect(subscribeTask(task(), { onProjectAccessDenied: cleared }, undefined,
+      { sleep, projectFailure: { isCurrent: () => true, refresh } })).rejects.toMatchObject({ status: 403 })
+    expect(detail).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(sleep).not.toHaveBeenCalled()
+    expect(cleared).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it('作者路径：普通 error 终态不查详情、不重订阅', async () => {
+    const detail = vi.spyOn(taskApi, 'get')
+    const fetchMock = vi.fn(async () => sseResponse([frame('error', { task: task({ status: 'failed' }), detail: '模型调用失败' })]))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await subscribeTask(task(), {}, undefined, { sleep: noSleep })).toMatchObject({ status: 'failed', detail: '模型调用失败' })
+    expect(detail).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('等待重订阅期间中止：抛 AbortError，不再发起订阅', async () => {
+    vi.spyOn(taskApi, 'get').mockResolvedValue(task())
+    const fetchMock = vi.fn(async () => sseResponse([denied]))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const sleep = async () => { controller.abort(); throw new DOMException('aborted', 'AbortError') }
+    const err = await subscribeTask(task(), {}, controller.signal, { sleep }).catch((e: unknown) => e)
+    expect(isAbortError(err)).toBe(true)
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 })
 
@@ -441,7 +555,7 @@ describe('task helpers', () => {
   })
 
   it('taskLink：章节任务到编辑器，向导任务到向导页对应步骤', () => {
-    expect(taskLink(task())).toBe('/projects/2/chapters/3')
+    expect(taskLink(task())).toBe('/projects/2/chapters')
     expect(taskLink(task({ chapter_id: null }))).toBeNull()
     expect(taskLink(task({ kind: 'wizard.characters', chapter_id: null }))).toBe('/projects/2/wizard?kind=characters')
     expect(taskLink(task({ project_id: null }))).toBeNull()
@@ -453,11 +567,11 @@ describe('task helpers', () => {
     const calls: string[] = []
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
       calls.push(`${init.method} ${url}`)
-      return new Response(JSON.stringify(task({ kind: 'book.import', status: 'queued' })), { status: 202 })
+      return new Response(JSON.stringify(task({ id: 7, kind: 'book.import', status: 'queued' })), { status: 202 })
     })
-    const t = await taskApi.skipBookImport(7)
+    const t = await taskApi.skipBookImport(task({ id: 7 }))
     expect(t.status).toBe('queued')
-    expect(calls).toEqual(['POST /api/v1/book-imports/tasks/7/skip'])
+    expect(calls).toEqual(['POST /api/v1/book-imports/tasks/7/skip?task_key=00000000-0000-4000-8000-000000000001'])
   })
 
   it('taskLink：建索引到知识库页', () => {
@@ -486,9 +600,9 @@ describe('task helpers', () => {
     expect(wizardTaskKind('careers')).toBe('wizard.careers')
   })
 
-  it('taskLink / 标签：章节分析与按建议重写到编辑器并打开分析面板', () => {
-    expect(taskLink(task({ kind: 'chapter.analyze' }))).toBe('/projects/2/chapters/3?panel=analysis')
-    expect(taskLink(task({ kind: 'chapter.revise' }))).toBe('/projects/2/chapters/3?panel=analysis')
+  it('taskLink / 标签：章节实例无证明时只跳章节列表', () => {
+    expect(taskLink(task({ kind: 'chapter.analyze' }))).toBe('/projects/2/chapters')
+    expect(taskLink(task({ kind: 'chapter.revise' }))).toBe('/projects/2/chapters')
     expect(taskLink(task({ kind: 'chapter.analyze', chapter_id: null }))).toBeNull()
     expect(TASK_KIND_LABELS['chapter.analyze']).toBe('章节分析')
     expect(TASK_KIND_LABELS['chapter.revise']).toBe('按建议重写')
@@ -509,14 +623,14 @@ describe('task helpers', () => {
   })
 
   it('resume / finish 接口路径', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(task()), { status: 200 }))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(task({ id: 4 })), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    await taskApi.resume(4)
-    await taskApi.finish(4)
+    await taskApi.resume(task({ id: 4 }))
+    await taskApi.finish(task({ id: 4 }))
     const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
     expect(calls.map((c) => [c[0], c[1].method])).toEqual([
-      ['/api/v1/tasks/4/resume', 'POST'],
-      ['/api/v1/tasks/4/finish', 'POST'],
+      ['/api/v1/tasks/4/resume?task_key=00000000-0000-4000-8000-000000000001', 'POST'],
+      ['/api/v1/tasks/4/finish?task_key=00000000-0000-4000-8000-000000000001', 'POST'],
     ])
   })
 

@@ -23,15 +23,18 @@ chapter_plans.chapter_id 与 chapters.plan_id 双向冗余，只经本模块维�
 4. 大纲的 chapter_no 设为其第一章的章节号。
 """
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.util import identity_key
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline
 from app.schemas.chapter import ChapterBrief
 from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
+from app.services import authorization_service as authz
 from app.services import memory_service, outline_snapshot_service, planning_lifecycle, setting_progression_service
-from app.services.chapter_numbering import shift_chapter_numbers
+from app.services.chapter_numbering import preflight_chapter_shift, shift_chapter_numbers
+from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
 
 OUTLINE_NOT_FOUND = "大纲条目不存在"
@@ -41,8 +44,28 @@ CHARACTERS_INVALID = "部分角色不存在或不属于该项目"
 PLAN_EDIT_FIELDS = ("title", "summary", "key_events", "character_ids", "emotion", "goal", "est_words")
 
 
+def _require_stable_coordinates(instance, fields: tuple[str, ...]) -> None:
+    state = inspect(instance)
+    if any(state.attrs[field].history.has_changes() for field in fields):
+        raise ConflictError("规划关联已有未提交修改，请先完成当前操作")
+
+
+def _require_stable_plans(outline: Outline, plans: list[ChapterPlan]) -> None:
+    _require_stable_coordinates(outline, ("id", "project_id", "chapter_no"))
+    for plan in plans:
+        _require_stable_coordinates(plan, ("id", "project_id", "outline_id", "chapter_id", "seq"))
+
+
 async def get_project_outline(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> Outline:
     await get_manageable_project(db, user_id, project_id)
+    outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
+    if outline is None:
+        raise NotFoundError(OUTLINE_NOT_FOUND)
+    return outline
+
+
+async def get_manual_project_outline(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> Outline:
+    await require_project(db, user_id, project_id, "content.read")
     outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
     if outline is None:
         raise NotFoundError(OUTLINE_NOT_FOUND)
@@ -62,7 +85,9 @@ async def plans_of(db: AsyncSession, outline_ids: list[int]) -> dict[int, list[C
     if not outline_ids:
         return {}
     rows = await db.scalars(
-        select(ChapterPlan).where(ChapterPlan.outline_id.in_(outline_ids)).order_by(ChapterPlan.seq, ChapterPlan.id)
+        select(ChapterPlan).join(Outline, Outline.id == ChapterPlan.outline_id).where(
+            ChapterPlan.outline_id.in_(outline_ids), ChapterPlan.project_id == Outline.project_id,
+        ).order_by(ChapterPlan.seq, ChapterPlan.id)
     )
     out: dict[int, list[ChapterPlan]] = {}
     for p in rows:
@@ -80,12 +105,14 @@ async def plan_outs(db: AsyncSession, project_id: int, plans: list[ChapterPlan])
     casts: dict[int, list[int]] = {}
     if chapter_ids:
         rows = await db.execute(
-            select(Chapter.id, Chapter.chapter_no, Chapter.word_count).where(Chapter.id.in_(chapter_ids))
+            select(Chapter.id, Chapter.chapter_no, Chapter.word_count).where(
+                Chapter.id.in_(chapter_ids), Chapter.project_id == project_id,
+            )
         )
         info = {cid: (no, (wc or 0) > 0) for cid, no, wc in rows.all()}
         cast_rows = await db.execute(
             select(ChapterCharacter.chapter_id, ChapterCharacter.character_id)
-            .where(ChapterCharacter.chapter_id.in_(chapter_ids)).order_by(ChapterCharacter.character_id)
+            .where(ChapterCharacter.chapter_id.in_(info)).order_by(ChapterCharacter.character_id)
         )
         for cid, character_id in cast_rows:
             casts.setdefault(cid, []).append(character_id)
@@ -96,6 +123,8 @@ async def plan_outs(db: AsyncSession, project_id: int, plans: list[ChapterPlan])
         if p.chapter_id is not None and p.chapter_id in info:
             out.chapter_no, out.has_content = info[p.chapter_id]
             out.character_ids = [cid for cid in casts.get(p.chapter_id, []) if cid in valid]
+        elif p.chapter_id is not None:
+            out.chapter_id = None
         outs.append(out)
     return outs
 
@@ -104,8 +133,30 @@ async def _outline_plans(db: AsyncSession, outline_id: int) -> list[ChapterPlan]
     return (await plans_of(db, [outline_id])).get(outline_id, [])
 
 
+async def _plan_links(db: AsyncSession, project_id: int, outline_id: int) -> list[tuple[int, int | None]]:
+    """只读持久关联列，不把锁前判断结果放入 ORM 身份缓存。"""
+    rows = await db.execute(select(ChapterPlan.id, ChapterPlan.chapter_id)
+                            .join(Outline, Outline.id == ChapterPlan.outline_id).where(
+                                Outline.id == outline_id, Outline.project_id == project_id,
+                                ChapterPlan.project_id == project_id,
+                            ))
+    return [(plan_id, chapter_id) for plan_id, chapter_id in rows]
+
+
+async def _locked_manual_plans(db: AsyncSession, project_id: int, outline_id: int) -> list[ChapterPlan]:
+    links = await _plan_links(db, project_id, outline_id)
+    for plan_id, _ in links:
+        cached = db.identity_map.get(identity_key(ChapterPlan, plan_id))
+        if cached is not None and db.is_modified(cached, include_collections=False):
+            raise ConflictError("细纲已有未提交修改，请先完成当前操作")
+    rows = await db.scalars(select(ChapterPlan).join(Outline, Outline.id == ChapterPlan.outline_id).where(
+        Outline.id == outline_id, Outline.project_id == project_id, ChapterPlan.project_id == project_id,
+    ).order_by(ChapterPlan.seq, ChapterPlan.id).execution_options(populate_existing=True))
+    return list(rows)
+
+
 async def list_plans(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> list[PlanOut]:
-    await get_project_outline(db, user_id, project_id, outline_id)
+    await get_manual_project_outline(db, user_id, project_id, outline_id)
     return await plan_outs(db, project_id, await _outline_plans(db, outline_id))
 
 
@@ -113,9 +164,11 @@ async def update_plan(
     db: AsyncSession, user_id: int, project_id: int, outline_id: int, plan_id: int, data: PlanUpdate
 ) -> PlanOut:
     """单条细纲的行内编辑（不影响建章状态）。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    await get_project_outline(db, user_id, project_id, outline_id)
-    plan = await db.scalar(select(ChapterPlan).where(ChapterPlan.id == plan_id, ChapterPlan.outline_id == outline_id))
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
+    await get_manual_project_outline(db, user_id, project_id, outline_id)
+    plan = await db.scalar(select(ChapterPlan).where(
+        ChapterPlan.id == plan_id, ChapterPlan.outline_id == outline_id, ChapterPlan.project_id == project_id,
+    ))
     if plan is None:
         raise NotFoundError(PLAN_NOT_FOUND)
     values = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
@@ -141,98 +194,154 @@ async def get_chapter_plan(db: AsyncSession, chapter: Chapter) -> ChapterPlan | 
     if chapter.plan_id is None:
         return None
     return await db.scalar(
-        select(ChapterPlan).where(ChapterPlan.id == chapter.plan_id, ChapterPlan.project_id == chapter.project_id)
+        select(ChapterPlan).join(Outline, Outline.id == ChapterPlan.outline_id).where(
+            ChapterPlan.id == chapter.plan_id, ChapterPlan.project_id == chapter.project_id,
+            Outline.project_id == chapter.project_id,
+        )
     )
 
 
 async def chapter_plan_out(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> PlanOut | None:
-    from app.services.chapter_service import get_manageable_chapter
+    from app.services.chapter_service import get_manual_chapter
 
-    chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+    chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
     plan = await get_chapter_plan(db, chapter)
     return (await plan_outs(db, project_id, [plan]))[0] if plan is not None else None
 
 
 async def sync_plans(
-    db: AsyncSession, user_id: int, project_id: int, outline_id: int, data: PlansSync
+    db: AsyncSession, user_id: int, project_id: int, outline_id: int, data: PlansSync, *, manual: bool = False,
 ) -> list[PlanOut]:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    outline = await get_project_outline(db, user_id, project_id, outline_id)
-    existing = await _outline_plans(db, outline_id)
-    by_id = {p.id: p for p in existing}
-    submitted: set[int] = set()
-    for item in data.plans:
-        if item.id is None:
-            continue
-        if item.id not in by_id:
-            raise BadRequestError("细纲不存在或不属于该大纲")
-        if item.id in submitted:
-            raise BadRequestError("同一条细纲不能重复提交")
-        submitted.add(item.id)
-    await check_characters(db, project_id, [c for item in data.plans for c in item.character_ids])
-
-    removed = [p for p in existing if p.id not in submitted]
-    removed_chapter_ids = [p.chapter_id for p in removed if p.chapter_id is not None]
-    removed_chapters = (
-        list(await db.scalars(select(Chapter).where(Chapter.id.in_(removed_chapter_ids))))
-        if removed_chapter_ids
-        else []
-    )
-    for ch in removed_chapters:
-        if ch.content.strip():
-            raise ConflictError(CONTENT_PLAN_DELETE)
-        if ch.status == "generating":
-            raise ConflictError("该章节正在生成中，请稍候再试")
-
-    if existing:
-        await outline_snapshot_service.save_snapshot(db, project_id, "reexpand", f"重新展开「{outline.title}」前")
-
-    # 删除后大纲是否还有章节：没有时保留它占的那一个章节号（与未建章的大纲一致），最前面那一章删除时不平移
-    kept_built = any(by_id[i].chapter_id is not None for i in submitted)
-    single = await db.scalar(
-        select(Chapter.id).where(
-            Chapter.project_id == project_id, Chapter.outline_id == outline_id, Chapter.plan_id.is_(None)
-        )
-    )
-    keep_slot = not kept_built and single is None
-    await planning_lifecycle.detach_sources(
-        db, project_id, plan_ids=[p.id for p in removed], chapter_ids=removed_chapter_ids
-    )
-    for p in removed:
-        await db.delete(p)
-    await db.flush()
-    # 空章节随细纲删除：从后往前删，其后的章节号整体 -1
-    ordered = sorted(removed_chapters, key=lambda c: (c.chapter_no, c.id), reverse=True)
-    await memory_service.on_chapters_deleted(db, [c.id for c in ordered])
-    for i, ch in enumerate(ordered):
-        no = ch.chapter_no
-        await db.delete(ch)
-        await db.flush()
-        if keep_slot and i == len(ordered) - 1:
-            outline.chapter_no = no
-            continue
-        await shift_chapter_numbers(db, project_id, from_no=no + 1, delta=-1)
-
-    result: list[ChapterPlan] = []
-    for seq, item in enumerate(data.plans, start=1):
-        values = item.model_dump(include=set(PLAN_EDIT_FIELDS))
-        values["character_ids"] = list(dict.fromkeys(values["character_ids"]))
-        if item.id is not None:
-            plan = by_id[item.id]
-            for k, v in values.items():
-                setattr(plan, k, v)
+    with db.no_autoflush:
+        gated = False
+        bypass = True
+        if manual:
+            project = await require_project(db, user_id, project_id, "content.edit")
+            initial = await authz.require_authenticated(db, user_id)
+            prior_bypass = project.user_id == user_id or (
+                initial.allows("projects.read") and initial.allows("projects.edit")
+            )
+            if not prior_bypass:
+                submitted_ids = {item.id for item in data.plans if item.id is not None}
+                gated = any(chapter_id is not None and plan_id not in submitted_ids
+                            for plan_id, chapter_id in await _plan_links(db, project_id, outline_id))
+            project = await require_project(
+                db, user_id, project_id, "content.edit", for_update=True, visibility_write=gated,
+            )
+            current = await authz.require_authenticated(db, user_id)
+            bypass = project.user_id == user_id or (
+                current.allows("projects.read") and current.allows("projects.edit")
+            )
+            if prior_bypass != bypass:
+                raise ConflictError("作品权限已变化，请刷新后重试", extra={"code": "collaboration_busy"})
+            outline = await get_manual_project_outline(db, user_id, project_id, outline_id)
+            existing = await _locked_manual_plans(db, project_id, outline_id)
         else:
-            plan = ChapterPlan(project_id=project_id, outline_id=outline_id, **values)
-            db.add(plan)
-        plan.seq = seq
-        result.append(plan)
-        if item.id is not None:
-            await planning_lifecycle.sync_plan_cast(db, plan)
-    if ordered:
-        # 多章删除和平移可能产生中间态；整批完成后只验证并重算一次。
+            await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+            outline = await get_project_outline(db, user_id, project_id, outline_id)
+            existing = await _outline_plans(db, outline_id)
+        _require_stable_plans(outline, existing)
+        by_id = {p.id: p for p in existing}
+        submitted: set[int] = set()
+        for item in data.plans:
+            if item.id is None:
+                continue
+            if item.id not in by_id:
+                raise BadRequestError("细纲不存在或不属于该大纲")
+            if item.id in submitted:
+                raise BadRequestError("同一条细纲不能重复提交")
+            submitted.add(item.id)
+        await check_characters(db, project_id, [c for item in data.plans for c in item.character_ids])
+
+        removed = [p for p in existing if p.id not in submitted]
+        removed_chapter_ids = [p.chapter_id for p in removed if p.chapter_id is not None]
+        if manual and not bypass and removed_chapter_ids and not gated:
+            # 锁前无删章、锁后出现删章：不能持父锁逆序补发送门禁。
+            raise ConflictError("细纲关联已变化，请刷新后重试", extra={"code": "collaboration_busy"})
+        removed_chapters = (
+            list(await db.scalars(select(Chapter).where(
+                Chapter.id.in_(removed_chapter_ids), Chapter.project_id == project_id,
+            )))
+            if removed_chapter_ids
+            else []
+        )
+        if len(removed_chapters) != len(removed_chapter_ids):
+            raise ConflictError("细纲关联的章节不存在或不属于该项目")
+        if manual and removed_chapter_ids:
+            from app.services.chapter_service import get_manual_chapter
+
+            removed_chapters = [await get_manual_chapter(
+                db, user_id, project_id, chapter_id, "content.edit", for_update=True,
+            ) for chapter_id in sorted(removed_chapter_ids)]
+        for ch in removed_chapters:
+            _require_stable_coordinates(ch, ("id", "project_id", "outline_id", "plan_id", "chapter_no"))
+            if ch.content.strip():
+                raise ConflictError(CONTENT_PLAN_DELETE)
+            if manual and not bypass:
+                from app.services.chapter_service import _ensure_other_tasks_do_not_use_chapter
+
+                await _ensure_other_tasks_do_not_use_chapter(db, user_id, ch)
+            elif ch.status == "generating":
+                raise ConflictError("该章节正在生成中，请稍候再试")
+        if removed_chapter_ids:
+            from app.services.chapter_delete_guard import ensure_chapter_delete_isolation
+
+            await ensure_chapter_delete_isolation(db, project_id, removed_chapter_ids)
+            await memory_service.validate_chapters_deleted(db, removed_chapter_ids)
+
+        # 倒序删除时先平移较大的章节；最后一章若保留占位则不平移。
+        kept_built = any(by_id[i].chapter_id is not None for i in submitted)
+        single = await db.scalar(select(Chapter.id).where(
+            Chapter.project_id == project_id, Chapter.outline_id == outline_id, Chapter.plan_id.is_(None),
+        ))
+        keep_slot = not kept_built and single is None
+        ordered = sorted(removed_chapters, key=lambda c: (c.chapter_no, c.id), reverse=True)
+        shift_starts = [ch.chapter_no + 1 for i, ch in enumerate(ordered)
+                        if not (keep_slot and i == len(ordered) - 1)]
+        if shift_starts:
+            await preflight_chapter_shift(db, project_id, min(shift_starts))
+
+    async with db.begin_nested():
+        if existing:
+            await outline_snapshot_service.save_snapshot(db, project_id, "reexpand", f"重新展开「{outline.title}」前")
+
+        await planning_lifecycle.detach_sources(
+            db, project_id, plan_ids=[p.id for p in removed], chapter_ids=removed_chapter_ids
+        )
+        for p in removed:
+            await db.delete(p)
         await db.flush()
-        await setting_progression_service.on_story_positions_changed(db, project_id)
-    await planning_lifecycle.bump_revision(db, project_id)
+        # 空章节随细纲删除：从后往前删，其后的章节号整体 -1
+        await memory_service.on_chapters_deleted(db, [c.id for c in ordered])
+        for i, ch in enumerate(ordered):
+            no = ch.chapter_no
+            await db.delete(ch)
+            await db.flush()
+            if keep_slot and i == len(ordered) - 1:
+                outline.chapter_no = no
+                continue
+            await shift_chapter_numbers(db, project_id, from_no=no + 1, delta=-1)
+
+        result: list[ChapterPlan] = []
+        for seq, item in enumerate(data.plans, start=1):
+            values = item.model_dump(include=set(PLAN_EDIT_FIELDS))
+            values["character_ids"] = list(dict.fromkeys(values["character_ids"]))
+            if item.id is not None:
+                plan = by_id[item.id]
+                for k, v in values.items():
+                    setattr(plan, k, v)
+            else:
+                plan = ChapterPlan(project_id=project_id, outline_id=outline_id, **values)
+                db.add(plan)
+            plan.seq = seq
+            result.append(plan)
+            if item.id is not None:
+                await planning_lifecycle.sync_plan_cast(db, plan)
+        if ordered:
+            # 多章删除和平移可能产生中间态；整批完成后只验证并重算一次。
+            await db.flush()
+            await setting_progression_service.on_story_positions_changed(db, project_id)
+        await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for p in result:
         await db.refresh(p)
@@ -248,50 +357,68 @@ async def _add_cast(db: AsyncSession, chapter_id: int, character_ids: list[int])
 
 
 async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outline_id: int) -> PlanBuildResult:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    outline = await get_project_outline(db, user_id, project_id, outline_id)
-    plans = await _outline_plans(db, outline_id)
-    if not plans:
-        raise BadRequestError("该大纲还没有细纲，请先展开")
-    pending = [p for p in plans if p.chapter_id is None]
-    if not pending:
-        raise BadRequestError("细纲都已建章")
-    valid = await project_character_ids(db, project_id)
-    built_ids = [p.chapter_id for p in plans if p.chapter_id is not None]
-    built_nos = list(await db.scalars(select(Chapter.chapter_no).where(Chapter.id.in_(built_ids)))) if built_ids else []
+    with db.no_autoflush:
+        await require_project(db, user_id, project_id, "content.edit", for_update=True)
+        outline = await get_manual_project_outline(db, user_id, project_id, outline_id)
+        plans = await _outline_plans(db, outline_id)
+        _require_stable_plans(outline, plans)
+        if not plans:
+            raise BadRequestError("该大纲还没有细纲，请先展开")
+        pending = [p for p in plans if p.chapter_id is None]
+        if not pending:
+            raise BadRequestError("细纲都已建章")
+        valid = await project_character_ids(db, project_id)
+        built_ids = [p.chapter_id for p in plans if p.chapter_id is not None]
+        built_nos = list(await db.scalars(select(Chapter.chapter_no).where(
+            Chapter.id.in_(built_ids), Chapter.project_id == project_id,
+        ))) if built_ids else []
+        if len(built_nos) != len(built_ids):
+            raise ConflictError("细纲关联的章节不存在或不属于该项目")
+        for chapter_id in built_ids:
+            cached = db.identity_map.get(identity_key(Chapter, chapter_id))
+            if cached is not None:
+                _require_stable_coordinates(cached, ("id", "project_id", "outline_id", "plan_id", "chapter_no"))
+
+        single = None
+        if not built_ids:
+            single = await db.scalar(
+                select(Chapter)
+                .where(Chapter.project_id == project_id, Chapter.outline_id == outline_id, Chapter.plan_id.is_(None))
+                .order_by(Chapter.chapter_no, Chapter.id)
+                .limit(1)
+            )
+        if single is not None:
+            _require_stable_coordinates(single, ("id", "project_id", "outline_id", "plan_id", "chapter_no"))
+            await planning_lifecycle.preflight_build_binding(db, project_id, single.id, pending[0].id)
+            insert_at = single.chapter_no + 1
+        elif built_nos:
+            insert_at = max(built_nos) + 1
+        else:
+            insert_at = outline.chapter_no
+
+        remaining = len(pending) - (1 if single is not None else 0)
+        shift_start, shift_delta = insert_at, remaining
+        if remaining and single is None and not built_nos:
+            occupied = await db.scalar(select(Chapter.id).where(
+                Chapter.project_id == project_id, Chapter.chapter_no == insert_at,
+            ).limit(1))
+            if occupied is None:
+                shift_start, shift_delta = insert_at + 1, remaining - 1
+        if shift_delta:
+            await preflight_chapter_shift(db, project_id, shift_start)
 
     touched: list[Chapter] = []
-    single = None
-    if not built_ids:
-        single = await db.scalar(
-            select(Chapter)
-            .where(Chapter.project_id == project_id, Chapter.outline_id == outline_id, Chapter.plan_id.is_(None))
-            .order_by(Chapter.chapter_no, Chapter.id)
-            .limit(1)
-        )
-    if single is not None:
-        await planning_lifecycle.preflight_build_binding(db, project_id, single.id, pending[0].id)
-        first = pending.pop(0)
-        single.plan_id = first.id
-        first.chapter_id = single.id
-        await _add_cast(db, single.id, [c for c in first.character_ids or [] if c in valid])
-        await planning_lifecycle.attach_built_plan(db, single, first)
-        touched.append(single)
-        insert_at = single.chapter_no + 1
-    elif built_nos:
-        insert_at = max(built_nos) + 1
-    else:
-        insert_at = outline.chapter_no
+    async with db.begin_nested():
+        if single is not None:
+            first = pending.pop(0)
+            single.plan_id = first.id
+            first.chapter_id = single.id
+            await _add_cast(db, single.id, [c for c in first.character_ids or [] if c in valid])
+            await planning_lifecycle.attach_built_plan(db, single, first)
+            touched.append(single)
 
-    if pending:
-        occupied = await db.scalar(
-            select(Chapter.id).where(Chapter.project_id == project_id, Chapter.chapter_no == insert_at).limit(1)
-        )
-        if single is None and not built_nos and occupied is None:
-            # 还没有章节的大纲本身占着 1 个章节号（且没有别的章节占用）：第一章用掉这个号，只需为其余章节腾位置
-            await shift_chapter_numbers(db, project_id, from_no=insert_at + 1, delta=len(pending) - 1)
-        else:
-            await shift_chapter_numbers(db, project_id, from_no=insert_at, delta=len(pending))
+        if pending:
+            await shift_chapter_numbers(db, project_id, from_no=shift_start, delta=shift_delta)
         created = []
         for i, plan in enumerate(pending):
             chapter = Chapter(
@@ -315,21 +442,21 @@ async def build_chapters(db: AsyncSession, user_id: int, project_id: int, outlin
             await _add_cast(db, chapter.id, [c for c in plan.character_ids or [] if c in valid])
             await planning_lifecycle.attach_built_plan(db, chapter, plan)
             touched.append(chapter)
-    await db.flush()
-
-    first_no = await db.scalar(
-        select(func.min(Chapter.chapter_no)).where(
-            Chapter.project_id == project_id,
-            Chapter.plan_id.in_(select(ChapterPlan.id).where(ChapterPlan.outline_id == outline_id)),
-        )
-    )
-    if first_no is not None:
-        outline.chapter_no = first_no
-    if pending:
-        # 建章时的全部平移完成后，再统一刷新按章节排序的最新投影。
         await db.flush()
-        await setting_progression_service.on_story_positions_changed(db, project_id)
-    await planning_lifecycle.bump_revision(db, project_id)
+
+        first_no = await db.scalar(
+            select(func.min(Chapter.chapter_no)).where(
+                Chapter.project_id == project_id,
+                Chapter.plan_id.in_(select(ChapterPlan.id).where(ChapterPlan.outline_id == outline_id)),
+            )
+        )
+        if first_no is not None:
+            outline.chapter_no = first_no
+        if pending:
+            # 建章时的全部平移完成后，再统一刷新按章节排序的最新投影。
+            await db.flush()
+            await setting_progression_service.on_story_positions_changed(db, project_id)
+        await planning_lifecycle.bump_revision(db, project_id)
     await db.commit()
     for c in touched:
         await db.refresh(c)

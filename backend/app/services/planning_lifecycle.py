@@ -7,10 +7,10 @@
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, or_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import BadRequestError
+from app.core.errors import BadRequestError, ConflictError
 from app.models import Chapter, ChapterCharacter, ChapterPlan, Character, Outline, Project
 from app.models.planning import (
     PlanningUnit,
@@ -128,6 +128,14 @@ async def detach_sources(
     removed_chapters, removed_plans = set(chapter_ids), set(plan_ids)
     if not removed_chapters and not removed_plans:
         return
+    if removed_plans:
+        foreign_refs = union_all(
+            select(Chapter.id).where(Chapter.project_id != project_id, Chapter.plan_id.in_(removed_plans)),
+            select(PlanningUnit.id).where(PlanningUnit.project_id != project_id,
+                                          PlanningUnit.plan_id.in_(removed_plans)),
+        ).subquery()
+        if await db.scalar(select(foreign_refs.c.id).limit(1)) is not None:
+            raise ConflictError("大纲关联数据不一致，无法执行操作", extra={"code": "outline_reference_conflict"})
     removed_scenes = set(await db.scalars(select(Scene.id).join(Chapter, Chapter.id == Scene.chapter_id).where(
         Chapter.project_id == project_id, Scene.chapter_id.in_(removed_chapters)
     ))) if removed_chapters else set()
@@ -159,9 +167,24 @@ async def detach_sources(
 
 
 async def detach_outlines(db: AsyncSession, project_id: int, outline_ids: Iterable[int] | None = None) -> None:
+    identities = None if outline_ids is None else list(outline_ids)
+    outlines = select(Outline.id).where(Outline.project_id == project_id)
+    if identities is not None:
+        outlines = outlines.where(Outline.id.in_(identities))
+    plans = select(ChapterPlan.id).where(ChapterPlan.outline_id.in_(outlines))
+    # 数据库的 CASCADE / SET NULL 不区分作品；异常跨作品关联须在删除前整体阻断。
+    foreign_links = union_all(
+        select(ChapterPlan.id).where(ChapterPlan.outline_id.in_(outlines), ChapterPlan.project_id != project_id),
+        select(Chapter.id).where(
+            Chapter.project_id != project_id, or_(Chapter.outline_id.in_(outlines), Chapter.plan_id.in_(plans)),
+        ),
+        select(PlanningUnit.id).where(PlanningUnit.project_id != project_id, PlanningUnit.plan_id.in_(plans)),
+    ).subquery()
+    if await db.scalar(select(foreign_links.c.id).limit(1)) is not None:
+        raise ConflictError("大纲关联数据不一致，无法执行操作", extra={"code": "outline_reference_conflict"})
     query = select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
-    if outline_ids is not None:
-        query = query.where(ChapterPlan.outline_id.in_(list(outline_ids)))
+    if identities is not None:
+        query = query.where(ChapterPlan.outline_id.in_(identities))
     await detach_sources(db, project_id, plan_ids=list(await db.scalars(query)))
 
 

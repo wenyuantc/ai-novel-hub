@@ -28,14 +28,16 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError, BadRequestError
+from app.core.errors import AppError, BadRequestError, ConflictError
 from app.models import (
     Career,
     Character,
     Organization,
     OrganizationMember,
+    Project,
     Relationship,
     RelationshipType,
+    SeriesEntryUse,
     SettingFieldDefinition,
     SettingFieldOption,
     SettingReferenceHandle,
@@ -69,11 +71,13 @@ from app.schemas.setting_ai_visibility import StoredAiSettings, legacy_ai_settin
 from app.schemas.setting_fields import DefinitionCreate, DefinitionOut, EntityRef, OptionOut
 from app.schemas.story import MAX_ALIAS_LEN, MAX_ALIASES
 from app.services import (
+    authorization_service,
     career_service,
     membership_progression_service,
     organization_service,
     relationship_service,
     series_policy,
+    series_read,
     setting_progression_service,
     story_service,
 )
@@ -90,8 +94,9 @@ from app.services import (
     setting_field_service as fields,
 )
 from app.services.cast_service import is_protagonist_role
+from app.services.mentions.context import MentionCandidate, load_candidates
 from app.services.organization_service import MAX_DEPTH
-from app.services.project_service import get_owned_project
+from app.services.project_access import require_project
 from app.services.setting_field_values import has_field_content
 
 RENAME_SUFFIX = "（导入）"
@@ -101,7 +106,8 @@ RENAME_SUFFIX = "（导入）"
 
 
 async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: CardExportRequest) -> dict[str, Any]:
-    await get_owned_project(db, user_id, project_id)
+    # 卡片导出与大纲导出一样仅向作者及已接受的协作者开放；管理员人工读取权不能扩充导出权。
+    await require_project(db, user_id, project_id, "export")
     ai_revision = await visibility.visibility_revision(db, project_id)
     category_revision = await categories.categories_revision(db, project_id)
     await categories.validate_project_category_graph(db, project_id)
@@ -157,6 +163,9 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             .order_by(Relationship.id)
         )
         for r, t in rows.all():
+            if r.project_id != project_id or t.project_id not in (None, project_id):
+                # 关联两端虽然都在本书，关系载体或自定义类型仍可能错误地属于其他作品。
+                raise ConflictError("卡片关联数据不完整，请联系作品作者", extra={"code": "invalid_card_association"})
             rels.append(
                 {
                     "a_name": char_names[r.a_id],
@@ -174,9 +183,14 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     used: dict[int, Career] = {}
     char_careers: dict[int, list[tuple[Any, Career]]] = {}
     for a, career in assignments:
+        if career.project_id != project_id:
+            raise ConflictError("卡片关联数据不完整，请联系作品作者", extra={"code": "invalid_card_association"})
         used.setdefault(career.id, career)
         char_careers.setdefault(a.character_id, []).append((a, career))
     stages = await career_service.stages_of(db, list(used))
+    stage_owners = {s.id: career_id for career_id, values in stages.items() for s in values}
+    if any(stage_owners.get(assignment.stage_id) != career.id for assignment, career in assignments):
+        raise ConflictError("卡片关联数据不完整，请联系作品作者", extra={"code": "invalid_card_association"})
     stage_names = {s.id: s.name for ss in stages.values() for s in ss}
     data = {
         "format": CARD_FORMAT,
@@ -412,6 +426,55 @@ async def _existing(db: AsyncSession, project_id: int) -> tuple[set[str], dict[s
     return names, chars, orgs
 
 
+async def _visible_series_names(db: AsyncSession, user_id: int, project_id: int, names: set[str]) -> set[str]:
+    """仅对有系列阅读权的调用者说明被占用名称的系列身份。"""
+    if not names:
+        return set()
+    with db.no_autoflush:
+        rows = (await db.execute(
+            select(Character.name, SeriesEntryUse.series_id)
+            .join(SeriesEntryUse, SeriesEntryUse.character_id == Character.id)
+            .where(Character.project_id == project_id, SeriesEntryUse.project_id == project_id)
+        )).all()
+        rows = [(name, series_id) for name, series_id in rows if name in names]
+        if not rows:
+            return set()
+        owner_id = await db.scalar(select(Project.user_id).where(Project.id == project_id))
+        series_ids = {series_id for _, series_id in rows}
+        if owner_id == user_id or await authorization_service.allows(db, user_id, "projects.read"):
+            visible_ids = series_ids
+        else:
+            visible_ids = await series_read.visible_series_ids(db, user_id, series_ids)
+    # 名称可能对应多条角色，所有来源都可见时才说明其系列身份。
+    return {name for name, _ in rows} - {name for name, series_id in rows if series_id not in visible_ids}
+
+
+def _candidate_competition(before: list[MentionCandidate], after: list[MentionCandidate]) -> bool:
+    """新启用候选可能遮蔽旧的唯一字面命中；大小写折叠与子串比较保守判断。"""
+    previous = {candidate.key for candidate in before}
+
+    def terms(candidates: Collection[MentionCandidate]) -> set[str]:
+        return {term.strip().casefold() for candidate in candidates if candidate.tracking.enabled
+                for term in (candidate.ref.name, *candidate.ref.aliases) if term.strip()}
+
+    old = terms(before)
+    new = terms([candidate for candidate in after if candidate.key not in previous])
+    if not old or not new:
+        return False
+    if old & new:
+        return True
+    # 异常大的卡片和词典不能触发二次复杂度计算；保守作收紧处理。
+    if len(old) * len(new) > 100_000:
+        return True
+    def overlaps(a: str, b: str) -> bool:
+        if a in b or b in a:
+            return True
+        # 两个词可在文字中部分重叠；新词先命中时也会遮蔽旧词。
+        return any(a.endswith(b[:size]) or b.endswith(a[:size]) for size in range(1, min(len(a), len(b))))
+
+    return any(overlaps(a, b) for a in old for b in new)
+
+
 def _preview_items(names: list[str], existing: Collection[str]) -> list[PreviewItem]:
     taken = set(existing) | set(names)
     items = []
@@ -587,7 +650,7 @@ def _reject_ambiguous_ai_links(entries, plan: _TypedPlan) -> None:
 
 async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: Any,
                         request: CardPreviewRequest | None = None) -> CardPreview:
-    await get_owned_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "export")
     card = parse_card(data)
     request = request or CardPreviewRequest(data=data)
     ai_revision = await visibility.visibility_revision(db, project_id)
@@ -598,9 +661,13 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
     orgs = _dedupe_names(card.organizations, "组织", warnings)
     occupied_chars, existing_chars, existing_orgs = await _existing(db, project_id)
     blocked_chars = occupied_chars - existing_chars.keys()
+    visible_series_names = await _visible_series_names(db, user_id, project_id, blocked_chars)
     for c in chars:
         if c.name in blocked_chars and request.resolutions.characters.get(c.name) != "rename":
-            warnings.append(f"角色「{c.name}」与系列条目同名，跳过时不会关联到该条目；可重命名导入")
+            if c.name in visible_series_names:
+                warnings.append(f"角色「{c.name}」与系列条目同名，跳过时不会关联到该条目；可重命名导入")
+            else:
+                warnings.append(f"角色「{c.name}」已存在且不可作为关联目标；可重命名导入")
         elif c.name in occupied_chars and c.custom_text_fields:
             warnings.append(f"角色「{c.name}」选择跳过时不会导入自定义字段；选择重命名可保留")
     known_chars = set(existing_chars) | {
@@ -696,12 +763,19 @@ def _clamp(value: int, low: int, high: int) -> int:
 
 
 async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: CardImportRequest) -> CardImportResult:
-    raw_version = req.data.get("version") if isinstance(req.data, dict) else None
-    if type(raw_version) is int and raw_version >= 6:
-        # 同其它配置写入一样，先取发送写门禁再取父项目锁。
-        await visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
-    else:
-        await get_owned_project(db, user_id, project_id, lock=True)
+    """导入是原子操作；内部调用者捕获异常后也不能提交已 flush 的部分结果。"""
+    try:
+        return await _import_cards(db, user_id, project_id, req)
+    except BaseException:
+        await db.rollback()
+        raise
+
+
+async def _import_cards(db: AsyncSession, user_id: int, project_id: int, req: CardImportRequest) -> CardImportResult:
+    # 所有版本都可能新建旧式角色及其 AI 上下文默认值；一致取得发送门禁与项目锁。
+    # 卡片原为严格作者能力，仅从已接受协作关系扩充；不能因管理员读写权开放给非成员。
+    await require_project(db, user_id, project_id, "export", for_update=True, visibility_write=True)
+    await require_project(db, user_id, project_id, "content.edit")
     card = parse_card(req.data)
     if card.version >= 6:
         if req.expected_ai_visibility_revision is None:
@@ -717,6 +791,7 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         if req.expected_fields_revision is None:
             raise BadRequestError("v4 卡片确认导入必须携带字段目录版本，请先预览")
         await fields.check_fields_revision(db, project_id, req.expected_fields_revision)
+    previous_candidates = await load_candidates(db, project_id)
     typed = await _typed_plan(db, project_id, card, req.resolutions, req.mappings)
     if not typed.can_import:
         raise BadRequestError("卡片仍有未解决的字段定义、引用或 AI 关联，请完成显式映射后再导入")
@@ -725,6 +800,7 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     chars = list(card.characters) if card.version >= 4 else _dedupe_names(card.characters, "角色", warnings)
     orgs = _dedupe_names(card.organizations, "组织", warnings)
     occupied_chars, existing_chars, existing_orgs = await _existing(db, project_id)
+    visible_series_names = await _visible_series_names(db, user_id, project_id, occupied_chars - existing_chars.keys())
 
     # ---- 角色 ----
     char_map: dict[str, int] = {}
@@ -737,7 +813,10 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
             if req.resolutions.characters.get(name, "skip") == "skip":
                 existing_id = existing_chars.get(name)
                 if existing_id is None:
-                    warnings.append(f"角色「{name}」与系列条目同名，已跳过，不会写入该条目的关联")
+                    if name in visible_series_names:
+                        warnings.append(f"角色「{name}」与系列条目同名，已跳过，不会写入该条目的关联")
+                    else:
+                        warnings.append(f"角色「{name}」已存在且不可复用，已跳过，不会写入该条目的关联")
                 else:
                     char_map[name] = existing_id
                 if c.custom_text_fields:
@@ -910,10 +989,6 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         if card.version >= 6 and typed_locals:
             await _apply_ai_links(db, project_id, card, typed_locals, targets)
             await visibility.validate_project_links(db, project_id)
-            # 写入的条目／定义均为新建，已有条目的配置没有放宽或收紧。
-            await visibility.bump_visibility_revision(
-                db, project_id, tighten=False, expected=req.expected_ai_visibility_revision,
-            )
     careers_assigned = await _import_assignments(db, project_id, chars, char_map, career_map, career_results, warnings)
 
     # ---- 人物关系 ----
@@ -960,6 +1035,15 @@ async def import_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
         if typed_locals:
             await categories.claim_categories_revision(db, project_id, req.expected_categories_revision)
     await categories.validate_project_category_graph(db, project_id)
+    # 新的可追踪名称/别名可遮蔽旧唯一命中。若发生候选竞争，旧模型负载与会话均须失效；
+    # 老格式无显式 AI 配置，但它创建的 legacy 角色仍可能参与字面匹配。
+    await db.flush()
+    competes = _candidate_competition(previous_candidates, await load_candidates(db, project_id))
+    if competes or (card.version >= 6 and typed_locals):
+        await visibility.bump_visibility_revision(
+            db, project_id, tighten=competes,
+            expected=req.expected_ai_visibility_revision if card.version >= 6 else None,
+        )
     await db.commit()
     return CardImportResult(
         characters=char_results,

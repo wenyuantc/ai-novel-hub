@@ -17,7 +17,7 @@ from app.services import authorization_service as authz
 from app.services import project_lifecycle, retrieval_service, task_service, task_statistics_service
 from app.services.admin_service import _escape_like
 from app.services.audit_writer import AuditOperation
-from app.services.project_service import chapter_stats_subquery, get_manageable_project
+from app.services.project_service import chapter_stats_subquery, get_manageable_project, has_unsettled_external_change
 
 if TYPE_CHECKING:
     from app.services.task_engine.engine import TaskEngine
@@ -25,6 +25,44 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 CLEANUP_INTERVAL = 3600.0
 CLEANUP_BATCH = 100
+
+
+def _has_pending_session_writes(db: AsyncSession) -> bool:
+    """协调器会自行提交，不能把调用方的待写对象一起 flush 或提交。"""
+    return bool(db.new or db.deleted or any(db.is_modified(item) for item in db.dirty))
+
+
+async def _reject_pending_soft_delete(db: AsyncSession, actor_id: int, project_id: int) -> None:
+    """先按持久事实做无副作用鉴权，再拒绝暂存；不回滚调用方的事务。"""
+    with db.no_autoflush:
+        record = (await db.execute(select(
+            Project.user_id, Project.deleted_at, Project.deletion_started_at,
+        ).where(Project.id == project_id))).one_or_none()
+        if record is None:
+            raise NotFoundError("项目不存在")
+        await authz.require_authenticated(db, actor_id)
+        if record.user_id != actor_id:
+            if not await authz.allows(db, actor_id, "projects.read"):
+                raise NotFoundError("项目不存在")
+            await authz.require(db, actor_id, "projects.recycle")
+        if record.deleted_at is not None:
+            raise NotFoundError("项目不存在")
+        if record.deletion_started_at is not None:
+            raise ConflictError("作品正在删除，请稍后重试", extra={"code": "project_deleting"})
+    raise ConflictError("当前事务含未保存的修改，无法删除作品", extra={"code": "project_tasks_not_stopped"})
+
+
+async def _reject_pending_purge(db: AsyncSession, actor_id: int | None, project_id: int, *, system: bool) -> None:
+    """保留既有管理员鉴权优先级，不提交或覆盖其他待写对象。"""
+    if not system:
+        if actor_id is None:
+            raise ForbiddenError("需要管理员权限")
+        with db.no_autoflush:
+            owner = await db.scalar(select(Project.user_id).where(Project.id == project_id))
+            if owner is None:
+                raise NotFoundError("项目不存在")
+            await authz.require(db, actor_id, "recycle_bin.purge")
+    raise ConflictError("当前事务含未保存的修改，无法删除作品", extra={"code": "project_tasks_not_stopped"})
 
 
 async def _actor(db: AsyncSession, actor_id: int, *, admin: bool = False, permission: str | None = None) -> User:
@@ -51,22 +89,36 @@ async def _release_intent(sessionmaker, project_id: int, token: str) -> None:
 
 
 async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: int, project_id: int) -> None:
+    if _has_pending_session_writes(db):
+        await _reject_pending_soft_delete(db, actor_id, project_id)
     token = str(uuid4())
     started = False
     try:
         async with AuditOperation(
             db, actor_id, "project.delete", "project", project_id, project_id=project_id
         ) as audit:
+            record = await project_lifecycle.load_record(db, project_id)
+            if record is None:
+                raise NotFoundError("项目不存在")
+            await authz.require_authenticated(db, actor_id, write=True, targets=(record.user_id,))
             project = await get_manageable_project(db, actor_id, project_id, lock=True, permission="projects.recycle")
             await _actor(db, actor_id)
             audit.target(project)
+            # 本地 work 只能提示有机会等到收尾，不能证明任何具体 claim 属于该进程。
+            unsettled = await has_unsettled_external_change(db, project_id=project_id)
+            if unsettled and not engine.project_work(project_id):
+                raise ConflictError("作品仍有操作尚未安全收尾", extra={"code": "project_tasks_not_stopped"})
             project.deletion_started_at = project_lifecycle.now_utc()
             project.deletion_token = token
             started = True
             owner_id = project.user_id
             await db.commit()
+            if unsettled:
+                # 意图只冻结新写入；等待时绝不取消任务。等待后必须重新锁内检查持久状态。
+                await _wait_for_external_work(db, engine, actor_id, owner_id, project_id, token)
             cancelled = await task_service.stop_project_tasks(db, engine, project_id)
             await db.rollback()
+            await authz.require_authenticated(db, actor_id, write=True, targets=(owner_id,))
             if owner_id != actor_id:
                 await authz.require(db, actor_id, "projects.recycle", write=True, targets=(owner_id,))
             project = await project_lifecycle.lock_record(db, project_id)
@@ -103,6 +155,33 @@ async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: 
                 raise
 
 
+async def _wait_for_external_work(
+    db: AsyncSession, engine: "TaskEngine", actor_id: int, owner_id: int, project_id: int, token: str,
+) -> None:
+    try:
+        async with asyncio.timeout(engine.cancel_wait_seconds):
+            while True:
+                work = engine.project_work(project_id)
+                if work:
+                    await db.rollback()
+                    # 任一工作结束即可重查；其他工作仍可按原有排空流程取消。
+                    await asyncio.wait(work, return_when=asyncio.FIRST_COMPLETED)
+                await authz.require_authenticated(db, actor_id, write=True, targets=(owner_id,))
+                if owner_id != actor_id:
+                    await authz.require(db, actor_id, "projects.recycle", write=True, targets=(owner_id,))
+                project = await project_lifecycle.lock_record(db, project_id)
+                if project.deletion_token != token or project.deleted_at is not None or project.user_id != owner_id:
+                    raise ConflictError("作品状态已变化，请刷新后重试")
+                if not await has_unsettled_external_change(db, project_id=project_id):
+                    await db.rollback()
+                    return
+                if not engine.project_work(project_id):
+                    raise ConflictError("作品仍有操作尚未安全收尾", extra={"code": "project_tasks_not_stopped"})
+                await db.rollback()
+    except TimeoutError as exc:
+        raise ConflictError("等待操作安全收尾超时，作品未删除", extra={"code": "project_tasks_not_stopped"}) from exc
+
+
 async def _counts(db: AsyncSession, audit: AuditOperation, project_id: int) -> None:
     audit.summary.chapter_count = int(
         await db.scalar(select(func.count(Chapter.id)).where(Chapter.project_id == project_id)) or 0
@@ -118,17 +197,28 @@ async def _counts(db: AsyncSession, audit: AuditOperation, project_id: int) -> N
 
 
 async def _ensure_idle(db: AsyncSession, engine: "TaskEngine", project_id: int) -> None:
-    if engine.project_work(project_id) or project_id in engine._abort_failures:
+    if engine.project_work(project_id) or engine.has_cleanup_failure(project_id):
         raise ConflictError("任务尚未安全收尾，作品未删除", extra={"code": "project_tasks_not_stopped"})
+    if await has_unsettled_external_change(db, project_id=project_id):
+        raise ConflictError("作品仍有操作尚未安全收尾", extra={"code": "project_tasks_not_stopped"})
     if (
         await db.scalar(
-            select(Task.id).where(Task.project_id == project_id, or_(
-                Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None)
-            )).limit(1)
+            select(Task.id).outerjoin(Chapter, Chapter.id == Task.chapter_id).where(
+                or_(Task.project_id == project_id, Chapter.project_id == project_id),
+                or_(Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None),
+                    Task.execution_key.is_not(None)),
+            ).limit(1)
         )
         is not None
     ):
         raise ConflictError("作品仍有未结束任务", extra={"code": "project_tasks_not_stopped"})
+    candidates = list(await db.scalars(select(Task).outerjoin(Chapter, Chapter.id == Task.chapter_id).where(
+        or_(Task.project_id == project_id, Chapter.project_id == project_id),
+        ~task_service._without_unresolved_task_receipt(db),
+    ).order_by(Task.id).with_for_update(of=Task)))
+    for task in candidates:
+        if task.project_id != project_id or await task_service.has_unresolved_receipt(db, task):
+            raise ConflictError("任务完成事实尚未核对，作品未删除", extra={"code": "project_tasks_not_stopped"})
 
 
 async def list_projects(
@@ -220,6 +310,8 @@ async def purge(
     cutoff: datetime | None = None,
 ) -> None:
     system = actor_id is None and cutoff is not None
+    if _has_pending_session_writes(db):
+        await _reject_pending_purge(db, actor_id, project_id, system=system)
     if not system:
         if actor_id is None:
             raise ForbiddenError("需要管理员权限")
@@ -258,8 +350,9 @@ async def purge(
         )).all())
         await db.delete(project)
         await audit.commit()
-        engine.forget_project_hubs(list(task_keys), statistics_keys=task_keys)
-        engine._abort_failures.discard(project_id)
+        # commit 期间若仍出现尚未核实的收尾证据，不能通过清理内存掩盖它。
+        if not engine.has_cleanup_failure(project_id):
+            engine.forget_project_hubs(list(task_keys), statistics_keys=task_keys)
         retrieval_service.invalidate(project_id)
 
 

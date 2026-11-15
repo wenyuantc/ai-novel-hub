@@ -1,9 +1,18 @@
 import { api } from './client'
+import { hasTaskIdentity } from './tasks'
 import type { OutlineMode, Task, TaskStatus, WizardItemMap, WizardKind, WizardProgress, WizardProgressUpdate, WizardRequest } from './types'
 
 /** 向导：创建后台任务（202）；结果在任务 done.result = {kind, items} 中。 */
-export function runWizard(projectId: number, kind: WizardKind, body: WizardRequest): Promise<Task> {
-  return api.post<Task>(`/projects/${projectId}/wizard/${kind}`, body)
+export async function runWizard(projectId: number, kind: WizardKind, body: WizardRequest): Promise<Task> {
+  if ((body.continue_from_task_id !== undefined || body.continue_from_task_key !== undefined)
+    && !hasTaskIdentity({ id: body.continue_from_task_id ?? 0, task_key: body.continue_from_task_key ?? null })) {
+    throw new Error('无法验证先前任务身份，请保留输出并刷新后重新确认。')
+  }
+  const result = await api.post<Task>(`/projects/${projectId}/wizard/${kind}`, body)
+  if (!hasTaskIdentity(result) || (body.continue_from_task_key !== undefined && result.task_key === body.continue_from_task_key)) {
+    throw new Error('请求已提交，但新任务身份无法确认；请到任务列表核对后再继续。')
+  }
+  return result
 }
 
 /** 校验向导任务的 done.result；kind 不匹配或结构不对时返回 null。 */

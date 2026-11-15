@@ -22,6 +22,7 @@ from app.schemas.progression import AnchorKind, BaselineUpdate, ProgressionCreat
 from app.schemas.setting_fields import EntityRef
 from app.services import (
     membership_progression_service,
+    project_access,
     setting_ai_visibility,
     setting_catalog_service,
     setting_field_service,
@@ -157,8 +158,35 @@ async def _record_member_change(
     )
 
 
-async def get_owned_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> Organization:
-    await get_manageable_project(db, user_id, project_id)
+async def _read_project(db: AsyncSession, user_id: int, project_id: int, *, manual: bool) -> None:
+    if manual:
+        await project_access.require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
+
+
+async def _write_project(
+    db: AsyncSession, user_id: int, project_id: int, *, manual: bool, visibility_write: bool = False,
+) -> None:
+    if manual:
+        await project_access.require_project(
+            db, user_id, project_id, "content.edit", for_update=True, visibility_write=visibility_write,
+        )
+    elif visibility_write:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
+    else:
+        await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+
+
+async def get_owned_org(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    *,
+    manual: bool = False,
+) -> Organization:
+    await _read_project(db, user_id, project_id, manual=manual)
     org = await db.scalar(select(Organization).where(Organization.id == org_id, Organization.project_id == project_id))
     if org is None:
         raise NotFoundError("组织不存在")
@@ -170,7 +198,9 @@ async def _member_counts(db: AsyncSession, org_ids: list[int]) -> dict[int, int]
         return {}
     rows = await db.execute(
         select(OrganizationMember.organization_id, func.count(OrganizationMember.id))
-        .where(OrganizationMember.organization_id.in_(org_ids))
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .join(Character, Character.id == OrganizationMember.character_id)
+        .where(OrganizationMember.organization_id.in_(org_ids), Character.project_id == Organization.project_id)
         .group_by(OrganizationMember.organization_id)
     )
     return {oid: int(n) for oid, n in rows.all()}
@@ -178,7 +208,14 @@ async def _member_counts(db: AsyncSession, org_ids: list[int]) -> dict[int, int]
 
 async def _outs(db: AsyncSession, orgs: list[Organization]) -> list[OrganizationOut]:
     counts = await _member_counts(db, [o.id for o in orgs])
-    return [OrganizationOut.model_validate(o).model_copy(update={"member_count": counts.get(o.id, 0)}) for o in orgs]
+    parent_ids = {o.parent_id for o in orgs if o.parent_id is not None}
+    parents = dict((await db.execute(select(Organization.id, Organization.project_id).where(
+        Organization.id.in_(parent_ids),
+    ))).all()) if parent_ids else {}
+    return [OrganizationOut.model_validate(o).model_copy(update={
+        "member_count": counts.get(o.id, 0),
+        "parent_id": o.parent_id if parents.get(o.parent_id) == o.project_id else None,
+    }) for o in orgs]
 
 
 async def check_parent(db: AsyncSession, project_id: int, org_id: int | None, parent_id: int | None) -> None:
@@ -239,8 +276,8 @@ async def new_org(db: AsyncSession, project_id: int, data: OrganizationCreate) -
     return org
 
 
-async def list_orgs(db: AsyncSession, user_id: int, project_id: int) -> list[OrganizationOut]:
-    await get_manageable_project(db, user_id, project_id)
+async def list_orgs(db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False) -> list[OrganizationOut]:
+    await _read_project(db, user_id, project_id, manual=manual)
     orgs = list(
         await db.scalars(
             select(Organization)
@@ -251,61 +288,107 @@ async def list_orgs(db: AsyncSession, user_id: int, project_id: int) -> list[Org
     return await _outs(db, orgs)
 
 
-async def get_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> OrganizationOut:
-    return (await _outs(db, [await get_owned_org(db, user_id, project_id, org_id)]))[0]
+async def get_org(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    *,
+    manual: bool = False,
+) -> OrganizationOut:
+    return (await _outs(db, [await get_owned_org(db, user_id, project_id, org_id, manual=manual)]))[0]
 
 
-async def create_org(db: AsyncSession, user_id: int, project_id: int, data: OrganizationCreate) -> OrganizationOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await new_org(db, project_id, data)
-    await _commit(db, NAME_CONFLICT)
-    await db.refresh(org)
-    return (await _outs(db, [org]))[0]
+async def create_org(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    data: OrganizationCreate,
+    *,
+    manual: bool = False,
+) -> OrganizationOut:
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    async with story_service._candidate_write_rollback(db):
+        previous_candidates = await story_service._candidate_snapshot(db, project_id)
+        org = await new_org(db, project_id, data)
+        await story_service._bump_new_candidate_competition(db, project_id, previous_candidates)
+        await _commit(db, NAME_CONFLICT)
+        await db.refresh(org)
+        return (await _outs(db, [org]))[0]
 
 
 async def update_org(
-    db: AsyncSession, user_id: int, project_id: int, org_id: int, data: OrganizationUpdate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    data: OrganizationUpdate,
+    *,
+    manual: bool = False,
 ) -> OrganizationOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await get_owned_org(db, user_id, project_id, org_id)
-    fields = data.model_fields_set
-    values: dict[str, Any] = {}
-    for f in ("name", "org_type", "purpose", "location", "description", "sort"):
-        v = getattr(data, f)
-        if f in fields and v is not None:
-            values[f] = v.strip() if f == "name" else v
-    if "name" in values:
-        if not values["name"]:
-            raise BadRequestError("组织名称不能为空")
-        if await _name_taken(db, project_id, values["name"], exclude_id=org.id):
-            raise ConflictError(NAME_CONFLICT)
-    # 可空字段：显式传 null = 清空
-    if "power_level" in fields:
-        values["power_level"] = data.power_level
-    if "parent_id" in fields:
-        await check_parent(db, project_id, org.id, data.parent_id)
-        values["parent_id"] = data.parent_id
-    for f, v in values.items():
-        setattr(org, f, v)
-    await _commit(db, NAME_CONFLICT)
-    await db.refresh(org)
-    return (await _outs(db, [org]))[0]
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=data.name is not None)
+    async with story_service._candidate_write_rollback(db):
+        org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
+        fields = data.model_fields_set
+        values: dict[str, Any] = {}
+        for f in ("name", "org_type", "purpose", "location", "description", "sort"):
+            v = getattr(data, f)
+            if f in fields and v is not None:
+                values[f] = v.strip() if f == "name" else v
+        if "name" in values:
+            if not values["name"]:
+                raise BadRequestError("组织名称不能为空")
+            if await _name_taken(db, project_id, values["name"], exclude_id=org.id):
+                raise ConflictError(NAME_CONFLICT)
+        identity_tightened = bool(
+            "name" in values and story_service._identity_change_tightens(
+                await story_service._candidate_snapshot(db, project_id), "organization", org.id, name=values["name"],
+            )
+        )
+        # 可空字段：显式传 null = 清空
+        if "power_level" in fields:
+            values["power_level"] = data.power_level
+        if "parent_id" in fields:
+            await check_parent(db, project_id, org.id, data.parent_id)
+            values["parent_id"] = data.parent_id
+        for f, v in values.items():
+            setattr(org, f, v)
+        if identity_tightened:
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=True)
+        await _commit(db, NAME_CONFLICT)
+        await db.refresh(org)
+        return (await _outs(db, [org]))[0]
 
 
-async def delete_org(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> None:
+async def delete_org(db: AsyncSession, user_id: int, project_id: int, org_id: int, *, manual: bool = False) -> None:
     from app.services.planning_lifecycle import bump_revision
 
-    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
-    org = await get_owned_org(db, user_id, project_id, org_id)
-    await setting_field_service.cleanup_unreferenced_handles(
-        db, project_id, [EntityRef(kind="organization", id=org.id)]
-    )
-    await db.delete(org)
-    await bump_revision(db, project_id)
-    await db.commit()
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    async with story_service._candidate_write_rollback(db):
+        org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
+        before_revision = await setting_ai_visibility.visibility_revision(db, project_id)
+        await setting_field_service.cleanup_unreferenced_handles(
+            db, project_id, [EntityRef(kind="organization", id=org.id)]
+        )
+        await story_service._ensure_removed_candidate_bump(db, project_id, before_revision)
+        await db.delete(org)
+        await bump_revision(db, project_id)
+        await db.commit()
 
 
 # ---------------- 成员 ----------------
+
+
+def valid_member_condition():
+    """成员的两端必须共同归属组织所在作品，适用于分页前筛选。"""
+    return select(Organization.id).join(
+        Character, Character.id == OrganizationMember.character_id,
+    ).where(
+        Organization.id == OrganizationMember.organization_id, Character.project_id == Organization.project_id,
+    ).correlate(OrganizationMember).exists()
 
 
 async def _member_outs(db: AsyncSession, stmt) -> list[MemberOut]:
@@ -313,6 +396,7 @@ async def _member_outs(db: AsyncSession, stmt) -> list[MemberOut]:
         stmt.add_columns(Organization.name, Character.name)
         .join(Organization, Organization.id == OrganizationMember.organization_id)
         .join(Character, Character.id == OrganizationMember.character_id)
+        .where(Character.project_id == Organization.project_id)
         .order_by(OrganizationMember.id)
     )
     return [
@@ -331,7 +415,10 @@ async def _member_outs(db: AsyncSession, stmt) -> list[MemberOut]:
 
 
 async def _member_out(db: AsyncSession, member_id: int) -> MemberOut:
-    return (await _member_outs(db, select(OrganizationMember).where(OrganizationMember.id == member_id)))[0]
+    rows = await _member_outs(db, select(OrganizationMember).where(OrganizationMember.id == member_id))
+    if not rows:
+        raise NotFoundError("成员不存在")
+    return rows[0]
 
 
 async def new_member(db: AsyncSession, org: Organization, data: MemberCreate) -> OrganizationMember:
@@ -420,14 +507,29 @@ async def new_member(db: AsyncSession, org: Organization, data: MemberCreate) ->
     return member
 
 
-async def list_members(db: AsyncSession, user_id: int, project_id: int, org_id: int) -> list[MemberOut]:
-    org = await get_owned_org(db, user_id, project_id, org_id)
+async def list_members(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    *,
+    manual: bool = False,
+) -> list[MemberOut]:
+    org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
     return await _member_outs(db, select(OrganizationMember).where(OrganizationMember.organization_id == org.id))
 
 
-async def add_member(db: AsyncSession, user_id: int, project_id: int, org_id: int, data: MemberCreate) -> MemberOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await get_owned_org(db, user_id, project_id, org_id)
+async def add_member(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    data: MemberCreate,
+    *,
+    manual: bool = False,
+) -> MemberOut:
+    await _write_project(db, user_id, project_id, manual=manual)
+    org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
     member = await new_member(db, org, data)
     await _commit(db, MEMBER_CONFLICT)
     return await _member_out(db, member.id)
@@ -436,7 +538,8 @@ async def add_member(db: AsyncSession, user_id: int, project_id: int, org_id: in
 async def _get_member(db: AsyncSession, org: Organization, member_id: int) -> OrganizationMember:
     member = await db.scalar(
         select(OrganizationMember).where(
-            OrganizationMember.id == member_id, OrganizationMember.organization_id == org.id
+            OrganizationMember.id == member_id, OrganizationMember.organization_id == org.id,
+            valid_member_condition(),
         )
     )
     if member is None:
@@ -445,13 +548,23 @@ async def _get_member(db: AsyncSession, org: Organization, member_id: int) -> Or
 
 
 async def update_member(
-    db: AsyncSession, user_id: int, project_id: int, org_id: int, member_id: int, data: MemberUpdate
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    member_id: int,
+    data: MemberUpdate,
+    *,
+    manual: bool = False,
 ) -> MemberOut:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await get_owned_org(db, user_id, project_id, org_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
     member = await _get_member(db, org, member_id)
-    character = await db.scalar(select(Character).where(Character.id == member.character_id))
-    assert character is not None
+    character = await db.scalar(select(Character).where(
+        Character.id == member.character_id, Character.project_id == project_id,
+    ))
+    if character is None:
+        raise NotFoundError("成员不存在")
     supplied = {
         field: getattr(data, field)
         for field in MEMBER_FIELDS
@@ -538,12 +651,16 @@ async def remove_member(
     chapter_no: int | None = None,
     scene_id: int | None = None,
     boundary: Literal["start", "end"] = "start",
+    manual: bool = False,
 ) -> None:
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await get_owned_org(db, user_id, project_id, org_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
     member = await _get_member(db, org, member_id)
-    character = await db.scalar(select(Character).where(Character.id == member.character_id))
-    assert character is not None
+    character = await db.scalar(select(Character).where(
+        Character.id == member.character_id, Character.project_id == project_id,
+    ))
+    if character is None:
+        raise NotFoundError("成员不存在")
     timeline = await membership_progression_service.find_membership_timeline(db, project_id, org.id, character.id)
     try:
         validate_member_anchor(anchor_kind, chapter_id, chapter_no, scene_id)
@@ -603,8 +720,15 @@ async def remove_member(
     await db.commit()
 
 
-async def character_memberships(db: AsyncSession, user_id: int, project_id: int, character_id: int) -> list[MemberOut]:
-    await get_manageable_project(db, user_id, project_id)
+async def character_memberships(
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    character_id: int,
+    *,
+    manual: bool = False,
+) -> list[MemberOut]:
+    await _read_project(db, user_id, project_id, manual=manual)
     exists = await db.scalar(
         select(Character.id).where(Character.id == character_id, Character.project_id == project_id)
     )
@@ -614,11 +738,18 @@ async def character_memberships(db: AsyncSession, user_id: int, project_id: int,
 
 
 async def delete_membership_record(
-    db: AsyncSession, user_id: int, project_id: int, org_id: int, character_id: int, expected_revision: int
+    db: AsyncSession,
+    user_id: int,
+    project_id: int,
+    org_id: int,
+    character_id: int,
+    expected_revision: int,
+    *,
+    manual: bool = False,
 ) -> None:
     """明确删除稳定成员主体的整份资料；即使当前角色已经退出也可操作。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await get_owned_org(db, user_id, project_id, org_id)
+    await _write_project(db, user_id, project_id, manual=manual)
+    org = await get_owned_org(db, user_id, project_id, org_id, manual=manual)
     character = await db.scalar(
         select(Character).where(Character.id == character_id, Character.project_id == project_id)
     )
@@ -661,13 +792,25 @@ async def memberships_of(db: AsyncSession, character_ids: list[int]) -> list[tup
 
 
 async def create_with_members(
-    db: AsyncSession, user_id: int, project_id: int, data: OrganizationWithMembers
+    db: AsyncSession, user_id: int, project_id: int, data: OrganizationWithMembers, *, manual: bool = False,
 ) -> dict[str, Any]:
     """AI 生成组织预览确认后一次保存：组织 + 勾选的成员（单事务）。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    org = await new_org(db, project_id, data.organization)
-    members = [await new_member(db, org, m) for m in data.members]
-    await _commit(db, NAME_CONFLICT)
+    with db.no_autoflush:
+        await _write_project(db, user_id, project_id, manual=manual, visibility_write=True)
+    try:
+        # 与卡片导入采用同一候选竞争判断；局部导入避免 card_service 的服务依赖形成环。
+        from app.services.card_service import _candidate_competition
+        from app.services.mentions.context import load_candidates
+
+        previous_candidates = await load_candidates(db, project_id)
+        org = await new_org(db, project_id, data.organization)
+        members = [await new_member(db, org, m) for m in data.members]
+        if _candidate_competition(previous_candidates, await load_candidates(db, project_id)):
+            await setting_ai_visibility.bump_visibility_revision(db, project_id, tighten=True)
+        await _commit(db, NAME_CONFLICT)
+    except BaseException:
+        await db.rollback()
+        raise
     await db.refresh(org)
     return {
         "organization": (await _outs(db, [org]))[0],

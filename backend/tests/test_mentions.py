@@ -357,7 +357,7 @@ async def test_ai_save_and_version_restore_recompute_mentions(client, app, fake_
     fake_llm.push("青云城的夜色很静。")
     response = await client.post(f"/api/v1/chapters/{chapter_id}/generate", json={})
     assert response.status_code == 202, response.text
-    task = await wait_task(client, response.json()["id"])
+    task = await wait_task(client, response.json())
     assert task["status"] == "succeeded", task
     assert (await get_json(client, url, **query))["total"] == 1
     current = (await client.get(f"{data['base']}/chapters/{chapter_id}")).json()

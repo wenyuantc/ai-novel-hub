@@ -685,7 +685,11 @@ async def test_history_missing_section_identity_rolls_back_all_changes(app, clie
     denied = await client.post(f"{url}/versions/{version_id}/restore", json={
         "expected_content_revision": 1, "confirm_rich_document_loss": True,
     })
-    assert denied.status_code == 409 and denied.json()["code"] == "rich_document_identity_missing"
+    # scenes.md：恢复前 validate_history_snapshot 对缺失/不可确认的富文档区块身份统一匿名
+    # scene_reference_invalid，先于富文档恢复层的 rich_document_identity_missing。
+    assert denied.status_code == 409 and denied.json() == {
+        "detail": "场景历史关联数据不一致，无法操作", "code": "scene_reference_invalid",
+    }
     assert (await client.get(endpoint)).json() == saved.json()
     async with app.state.sessionmaker() as db:
         assert len(list(await db.scalars(select(ChapterVersion).where(

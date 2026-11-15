@@ -27,7 +27,7 @@ import { worldApi } from '../../api/story'
 import type { ProgressionPositionInput, WorldSetting } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
 import { BookSeriesLibrary, BookSeriesPromotion, BookSeriesScope, BookSeriesUnuse, SharedSettingNotice } from '../../components/series/BookSeriesSettings'
-import { inSettingScope, type SettingScope } from '../../components/series/seriesState'
+import { canChangeSeriesBook, inSettingScope, type SettingScope } from '../../components/series/seriesState'
 import { useProjectStore } from '../../stores/project'
 import SettingAiPanel from '../../components/settingAi/SettingAiPanel'
 import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
@@ -53,9 +53,10 @@ export default function WorldPanel() {
   const tagsSession = useSettingTagsSession(pid)
   const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
-  const { canUseAI, canEdit, canEditNow, canReadNow, managingOther } = useProjectAccess(pid)
+  const { canUseAI, canRead, canEdit, canEditNow, canReadNow, role, isCollaborator } = useProjectAccess(pid)
   const { message } = App.useApp()
-  const series = useProjectStore((state) => !managingOther && state.project?.id === pid ? state.project.series : null)
+  const series = useProjectStore((state) => canRead && state.project?.id === pid ? state.project.series : null)
+  const canChangeSeries = canChangeSeriesBook(role, isCollaborator, canEdit)
   const [settingScope, setSettingScope] = useState<SettingScope>('all')
   const [promoting, setPromoting] = useState<WorldSetting | null>(null)
   const [unusing, setUnusing] = useState<{ id: number; title: string } | null>(null)
@@ -145,7 +146,7 @@ export default function WorldPanel() {
                       actions={[
                         <Button key="edit" type="link" size="small" onClick={() => openEdit(w)}>
                           {canEdit ? w.origin?.scope === 'series' ? '本书详情' : '编辑' : '查看'}</Button>,
-                        ...(series && canEdit && w.origin?.scope !== 'series' ? [
+                        ...(series && canChangeSeries && w.origin?.scope !== 'series' ? [
                           <Button key="promote" type="link" size="small" onClick={() => { if (canEditNow()) setPromoting(w) }}>提升为系列共享</Button>,
                         ] : []),
                         ...(w.origin?.scope === 'series' ? [] : [<Popconfirm
@@ -189,9 +190,9 @@ export default function WorldPanel() {
       </Spin>
 
       {series && settingScope !== 'book' && <BookSeriesLibrary key={`${pid}:${series.id}`} series={series} projectId={pid} kind="world" />}
-      {series && promoting && <BookSeriesPromotion seriesId={series.id} projectId={pid} kind="world" id={promoting.id}
+      {series && canChangeSeries && promoting && <BookSeriesPromotion seriesId={series.id} projectId={pid} kind="world" id={promoting.id}
         title={promoting.title} onClose={() => setPromoting(null)} />}
-      {series && unusing && <BookSeriesUnuse seriesId={series.id} seriesEntryId={unusing.id} projectId={pid} kind="world"
+      {series && canChangeSeries && unusing && <BookSeriesUnuse seriesId={series.id} seriesEntryId={unusing.id} projectId={pid} kind="world"
         title={unusing.title} onClose={() => setUnusing(null)} onDone={() => { setUnusing(null); editor.closeEditor() }} />}
 
       <Modal
@@ -211,7 +212,7 @@ export default function WorldPanel() {
         width={720}
         forceRender
       >
-        <SharedSettingNotice origin={origin} onUnuse={series && sharedEntryId != null && editing
+        <SharedSettingNotice origin={origin} onUnuse={series && canChangeSeries && sharedEntryId != null && editing
           ? () => { if (canEditNow()) setUnusing({ id: sharedEntryId, title: editing.title }) } : undefined} />
         <Tabs
           activeKey={tab}
@@ -325,6 +326,7 @@ export default function WorldPanel() {
         existingCount={items.length}
         onClose={() => setAiOpen(false)}
         onDone={() => reload()}
+        onRefresh={() => reload()}
       />)}
     </Card>
   )

@@ -5,7 +5,16 @@ import pytest
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.services import setting_progression_service
 from app.services.wizard_service import normalize_outline
-from tests.helpers import Gate, create_ai_config, create_project, parse_sse, register, run_task, stream_with_gate
+from tests.helpers import (
+    Gate,
+    create_ai_config,
+    create_project,
+    parse_sse,
+    register,
+    run_task,
+    stream_with_gate,
+    task_params,
+)
 
 OUTLINE_JSON = {
     "volumes": [
@@ -81,7 +90,7 @@ async def test_wizard_outline_with_fence(app, client, fake_llm):
         None,
         "大纲向导",
     )
-    events = parse_sse((await stream_with_gate(app, client, task["id"], gate)).text)
+    events = parse_sse((await stream_with_gate(app, client, task, gate)).text)
     assert "".join(d["text"] for e, d in events if e == "delta") == raw
     kind, payload = events[-1]
     assert kind == "done" and payload["task"]["status"] == "succeeded"
@@ -249,7 +258,8 @@ async def test_wizard_rechecks_history_added_during_generation_before_replacing(
     url = f"{base}/setting-timelines/{timeline['id']}"
     created = await _record_change(client, url, timeline["revision"], "content", "新剧情")
     gate.release()
-    events = parse_sse((await client.get(f"/api/v1/tasks/{response.json()['id']}/stream")).text)
+    stream = await client.get(f"/api/v1/tasks/{response.json()['id']}/stream", params=task_params(response.json()))
+    events = parse_sse(stream.text)
     assert events[-1][0] == "error"
     assert "变化" in events[-1][1]["detail"]
     assert events[-1][1]["task"]["status"] == "failed"

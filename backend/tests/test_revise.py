@@ -68,7 +68,7 @@ async def test_revise_versions_logs_and_reanalysis(app, client, fake_llm):
     assert all(t["analysis_id"] is None for t in tasks)  # 只有 chapter.revise 有值
     listed = (await client.get("/api/v1/tasks", params={"kind": "chapter.revise"})).json()
     assert [t["analysis_id"] for t in listed] == [analysis["id"]]
-    assert (await wait_task(client, tasks[0]["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, tasks[0]))["status"] == "succeeded"
     history = (await client.get(f"/api/v1/chapters/{ch['id']}/analyses")).json()
     assert [h["scores"]["overall"] for h in history] == [8.7, 7.0]
     assert history[0]["stale"] is False and history[1]["stale"] is True
@@ -104,7 +104,7 @@ async def test_revise_conflicts_with_generation(app, client, fake_llm):
     resp = await _revise(client, ch, analysis_id=analysis["id"], instruction="改")
     assert resp.status_code == 409 and resp.json()["detail"] == "该章节正在生成中，请稍候再试"
     gate.release()
-    assert (await wait_task(client, gen["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, gen))["status"] == "succeeded"
 
     # 重写失败：正文与版本不变，章节状态复位
     from app.ai.providers import AIProviderError

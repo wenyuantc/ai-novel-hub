@@ -114,6 +114,9 @@ class SeriesOut(BaseModel):
     revision: int
     book_count: int
     entry_count: int
+    is_owner: bool
+    can_manage_collaborators: bool
+    authorization_version: str | None
 
 
 class SeriesBookOut(BaseModel):
@@ -134,6 +137,8 @@ class SeriesUseOut(BaseModel):
 class _SeriesEntryOut(BaseModel):
     id: int
     ai_settings: SeriesAiOut
+    # 包含调用者不可见及回收站书籍的绑定，仅用于判断能否删除。
+    has_uses: bool
     uses: list[SeriesUseOut]
 
 

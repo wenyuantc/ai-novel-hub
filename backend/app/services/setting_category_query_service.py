@@ -15,6 +15,7 @@ from app.schemas.setting_fields import DefinitionOut, OptionOut
 from app.services import authorization_service as authz
 from app.services import setting_catalog_service as catalog
 from app.services import setting_field_service as fields
+from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
 from app.services.setting_category_matcher import match_category
 from app.services.setting_category_validation import validate_category_spec_metadata
@@ -97,6 +98,7 @@ async def category_read_snapshot(
     sessionmaker: async_sessionmaker[AsyncSession],
     actor: authz.AuthenticatedActor,
     project_id: int,
+    *, manual: bool = False,
 ) -> AsyncIterator[AsyncSession]:
     """SQL前配置独立连接，认证/授权/生命周期和全部候选批次共享快照。"""
     if not isinstance(actor, authz.AuthenticatedActor):
@@ -120,7 +122,10 @@ async def category_read_snapshot(
                 if not current.is_active or current.token_version != actor.token_version:
                     raise UnauthorizedError("未登录或登录已过期")
                 db.info["authenticated_actor"] = actor
-                await get_manageable_project(db, actor.id, project_id)
+                if manual:
+                    await require_project(db, actor.id, project_id, "content.read")
+                else:
+                    await get_manageable_project(db, actor.id, project_id)
                 yield db
         finally:
             await db.rollback()
@@ -171,6 +176,7 @@ async def query_category_entries(
     draft: s.CategorySpec | None = None,
     editing_category_id: int | None = None,
     filters: s.CategoryEntryQuery | None = None,
+    manual: bool = False,
 ) -> s.CategoryEntryPage:
     """保存分类与未保存预览共用查询；总数在完整规则匹配后累计。"""
     if (category_id is None) == (draft is None) or (editing_category_id is not None and draft is None):
@@ -179,7 +185,7 @@ async def query_category_entries(
         raise BadRequestError("分类编号不合法")
     filters = filters.model_copy(deep=True) if filters is not None else s.CategoryEntryQuery()
     draft = draft.model_copy(deep=True) if draft is not None else None
-    async with category_read_snapshot(sessionmaker, actor, project_id) as db:
+    async with category_read_snapshot(sessionmaker, actor, project_id, manual=manual) as db:
         before = await _revisions(db, project_id)
         if category_id is not None:
             category = await load_category(db, project_id, category_id)

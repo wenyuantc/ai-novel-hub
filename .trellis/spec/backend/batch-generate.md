@@ -13,6 +13,15 @@
 中的范围锁。以后任何「多步、跨步有状态」的任务类型（拆书等）都应复用这里的断点（`step_cursor` + `checkpoint`）与暂停（`paused`）模式，
 而不是拆成 N 个串联的子任务。
 
+> E4-g2：`BatchHandler` 声明 `admission_preflight_aware` 与 `collaboration_execution_ready`，accepted editor 可发起批量（viewer 403、
+> 无协作来源 404）；作者 Agent 的批量只能经签名提案确认的 `execute_admitted`。协作者批量的逐章授权重验、停止终态与断点受限收尾见
+> [error-handling.md](./error-handling.md)「协作者执行（E4）」。协作者的待审核批量在降级/撤权/轮次失效后由系统受限收尾为 failed
+> （已写章节与断点保留、待审核富文档提案丢弃、作品级批量互斥释放），见同处「待审核协作任务的系统收尾（E5-a）」。
+
+> 受控任务流（E5-c2，协作者订阅；生产路由自 E5-f 起对协作者挂载受控管线）：批量每一帧按当前步骤的发布 guard 证明——章内绑定本章 attempt + 批量章节占用，逐章分析中绑定分析原执行 + 收据引用，章与章之间/审核点/完成用不可发送的仅发布 guard；帧来源被同一执行后来的步骤取代时，只能以同一 hub 已登记、与持锁行逐字一致的最新来源复核。批量在本章占用提交后会重发一次当前阶段（文案不变、不广播）以刷新发布来源。修改批量步骤、断点写入或事件顺序时，须同步 `handlers/batch.py` 的 `stream_guard` 与 error-handling.md「受控任务流的批量运行中帧证明（E5-c2）」。
+
+> 断点受限收尾（E5-d）：全部章节已持久、仅完成发布核验失败而按断点记 succeeded 时，终态帧为带任务快照的 `done {task, result: null, unpublished: true, detail: "批量已完成，请刷新后查看"}`（不带 summarize 结果）；按断点记 failed/cancelled/interrupted 时为带快照的普通 `error`。实时与回放一致，见 error-handling.md「收据收尾的终态帧（E5-d）」。
+
 ### 2. 签名
 
 ```python
@@ -25,9 +34,10 @@ class BatchPreview: total, items[{chapter_id, chapter_no, title, target_words, w
 
 # backend/app/services/batch_service.py
 KIND = "chapter.batch"; MAX_CHAPTERS = 200; MAX_RETRIES = 2; RETRY_DELAYS = (5.0, 15.0)  # 测试 monkeypatch 为 0
-async def preview(db, settings, user_id, project_id, req) -> BatchPreview          # 不建任务
-async def validate_start(db, ctx, *, user_id, project_id, req) -> dict             # TaskSpec 字段，不修改数据
-async def revalidate(db, ctx, task) -> int                                          # 重试 / 继续前，返回 ai_config_id
+async def preview(db, settings, user_id, project_id, req) -> BatchPreview          # 不建任务；require_project(ai.use)
+async def create_batch_task(db, engine, user_id, project_id, req) -> TaskOut       # HTTP 入口：锁外 ai.use 短读 + 模型预检/DNS → 中央受控受理
+async def validate_start(db, ctx, *, user_id, project_id, req, accepted_model) -> dict  # 受理事务内，按原 grant 锁后重验，不解析 DNS
+async def revalidate(db, ctx, task, accepted_model=None) -> int                     # 重试（受控，原绑定须逐字一致）/ 继续前，返回 ai_config_id
 async def build_batch_job(ctx, task) -> BatchJob
 async def run_batch_job(job, ctx) -> AsyncIterator[Event]
 async def restore_current(ctx, task_id) -> None                                     # on_abort

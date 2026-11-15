@@ -20,6 +20,13 @@ export class ApiError extends Error {
 type UnauthorizedHandler = () => void
 let unauthorizedHandler: UnauthorizedHandler | null = null
 let permissionDeniedHandler: (() => void) | null = null
+type ProjectFailureTarget = { projectId: number } | { chapterId: number }
+export interface CapturedProjectFailure {
+  isCurrent: () => boolean
+  refresh: () => void
+}
+type CaptureProjectFailure = (target: ProjectFailureTarget) => CapturedProjectFailure | null
+let captureProjectFailure: CaptureProjectFailure | null = null
 let requestGeneration = 0
 const generationListeners = new Set<() => void>()
 
@@ -41,6 +48,25 @@ export function watchRequestGeneration(invalidate: () => void): { generation: nu
 /** RBAC403只请求刷新能力，不撤销有效登录，也不重放原业务。 */
 export function setPermissionDeniedHandler(handler: (() => void) | null): void {
   permissionDeniedHandler = handler
+}
+
+/** 注入作品作用域捕获器，避免网络层依赖具体的 store。 */
+export function setProjectFailureCapture(capture: CaptureProjectFailure | null): void {
+  captureProjectFailure = capture
+}
+
+/** 在请求发出前固定目标；作品详情 GET 是权威刷新本身，不能再触发刷新。 */
+export function captureProjectFailureForRequest(path: string, method: RequestOptions['method'] = 'GET'): CapturedProjectFailure | null {
+  const project = /^\/projects\/(\d+)(?:\/(.*))?$/.exec(path)
+  if (project) {
+    if (method === 'GET' && !project[2]) return null
+    const projectId = Number(project[1])
+    return Number.isSafeInteger(projectId) && projectId > 0 ? captureProjectFailure?.({ projectId }) ?? null : null
+  }
+  const chapter = /^\/chapters\/(\d+)(?:\/|$)/.exec(path)
+  if (!chapter) return null
+  const chapterId = Number(chapter[1])
+  return Number.isSafeInteger(chapterId) && chapterId > 0 ? captureProjectFailure?.({ chapterId }) ?? null : null
 }
 
 /** 注册 401 处理器（由 auth store 注入，用于清空会话并跳转登录页）。 */
@@ -98,11 +124,13 @@ function shouldRedirectOn401(path: string): boolean {
   return !path.startsWith('/auth/login') && !path.startsWith('/auth/me')
 }
 
-export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration, method: RequestOptions['method'] = 'GET'): Promise<never> {
+export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration, method: RequestOptions['method'] = 'GET', projectFailure: CapturedProjectFailure | null = null): Promise<never> {
   const { detail, body } = await readErrorBody(resp)
-  if (generation === requestGeneration && resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
+  const isCurrent = () => generation === requestGeneration && (projectFailure?.isCurrent() ?? true)
+  if (isCurrent() && resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
   // HEAD按HTTP语义没有正文，无法依赖JSON中的permission_denied；仍只刷新同一会话，不重放业务。
-  if (generation === requestGeneration && resp.status === 403 && (method === 'HEAD' || body?.code === 'permission_denied') && !path.startsWith('/auth/me')) permissionDeniedHandler?.()
+  if (isCurrent() && resp.status === 403 && (method === 'HEAD' || body?.code === 'permission_denied') && !path.startsWith('/auth/me')) permissionDeniedHandler?.()
+  if (isCurrent() && (resp.status === 403 || resp.status === 404)) projectFailure?.refresh()
   throw new ApiError(resp.status, detail, body)
 }
 
@@ -116,6 +144,7 @@ export interface RequestOptions {
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<Response> {
   const generation = requestGeneration
   const { method = 'GET', body, query, signal } = options
+  const onProjectFailure = captureProjectFailureForRequest(path, method)
   const headers: Record<string, string> = { Accept: 'application/json' }
   let payload: string | FormData | undefined
   if (body instanceof FormData) {
@@ -132,7 +161,7 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
     if (err instanceof DOMException && err.name === 'AbortError') throw err
     throw new ApiError(0, '网络错误，无法连接服务器')
   }
-  if (!resp.ok) await handleErrorResponse(path, resp, generation, method)
+  if (!resp.ok) await handleErrorResponse(path, resp, generation, method, onProjectFailure)
   return resp
 }
 

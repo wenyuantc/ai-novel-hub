@@ -14,7 +14,7 @@ from app.models.entities import FINISHED_TASK_STATUSES
 from app.services import task_service, task_statistics_service
 from app.services.task_engine.hub import TaskHub
 from app.services.task_engine.registry import get_handler
-from tests.helpers import create_ai_config, create_project, register
+from tests.helpers import create_ai_config, create_project, register, task_params
 
 CANCEL_BODY = {"confirm": True, "reason": "人工排查异常占用"}
 PRIVATE_PARTS = (
@@ -98,7 +98,7 @@ async def test_admin_acceptance_between_owner_check_and_update_is_a_real_cas_bar
     async def revalidate(*args):
         return None
 
-    async def abort(ctx, row):
+    async def abort(ctx, row, **_kwargs):
         aborts.append(row.statistics_key)
 
     # 不测试 agent 的提案前置条件；只隔离恢复/结束预校验，真实条件写不能被替换。
@@ -107,20 +107,23 @@ async def test_admin_acceptance_between_owner_check_and_update_is_a_real_cas_bar
     monkeypatch.setattr(handler, "on_abort", abort)
     reached, release = asyncio.Event(), asyncio.Event()
     async with app.state.sessionmaker() as db:
-        actual_execute = db.execute
+        actual_lock = task_service._lock_user_task_project
 
-        async def blocked_execute(statement, *args, **kwargs):
-            if not reached.is_set() and _status_update(statement, attempted_status):
+        async def blocked_lock(session, *args, **kwargs):
+            # owner 已完成无锁的归属与旧值检查，但尚未取得共同授权/User 写屏障。
+            # 屏障取得后管理员受理也需同一屏障，二者被串行化，不可能再插入；
+            # 因此这里是受理能真实先提交的最后窗口，之后的锁内重读与条件写必须看到它。
+            if session is db and not reached.is_set():
                 reached.set()
                 await release.wait()
-            return await actual_execute(statement, *args, **kwargs)
+            return await actual_lock(session, *args, **kwargs)
 
-        monkeypatch.setattr(db, "execute", blocked_execute)
+        monkeypatch.setattr(task_service, "_lock_user_task_project", blocked_lock)
         owner_write = asyncio.create_task(getattr(task_service, operation)(db, engine, owner_id, task.id))
         try:
             await asyncio.wait_for(reached.wait(), 3)
             # 第二个真实 HTTP/数据库会话先提交意图；owner 已通过所有旧值检查。
-            accepted = await _accept(client, task.statistics_key)
+            accepted = await asyncio.wait_for(_accept(client, task.statistics_key), 10)
             await _assert_open_intent(app, task, accepted["operation_id"], initial_status)
             aborts_before_acceptance = list(aborts)
             release.set()
@@ -151,7 +154,7 @@ async def test_admin_acceptance_after_finalize_observed_null_does_not_ignore_fai
     monkeypatch.setattr(engine, "request_admin_cancel", lambda *args: None)
     aborts = []
 
-    async def failed_abort(ctx, row):
+    async def failed_abort(ctx, row, **_kwargs):
         aborts.append(row.statistics_key)
         raise RuntimeError(PRIVATE_PARTS[1])
 
@@ -242,9 +245,10 @@ async def test_real_audit_transaction_failure_has_no_cancel_side_effect_or_priva
         assert all(private not in json.dumps(logs[0].summary, ensure_ascii=False) for private in PRIVATE_PARTS)
 
 
-async def test_already_scanned_claim_loses_to_acceptance_and_failed_abort_keeps_real_chapter_resource(
+async def test_already_scanned_claim_loses_to_acceptance_and_atomically_releases_only_its_chapter_claim(
     app, client, make_client, monkeypatch, fake_llm
 ):
+    """单章排队取消把终态与精确 claim 释放放在同一事务（chapter-claim 设计），不再依赖 on_abort。"""
     owner, _ = await _actors(app, client, make_client)
     project = await create_project(owner)
     await create_ai_config(owner)
@@ -267,55 +271,44 @@ async def test_already_scanned_claim_loses_to_acceptance_and_failed_abort_keeps_
     monkeypatch.setattr(engine, "_claim_and_run", claim_after_scan)
     monkeypatch.setattr(engine, "_stopping", False)
     handler = get_handler(task.kind)
-    actual_abort = handler.on_abort
     aborts = []
-    allow_abort = False
 
-    async def fail_until_repaired(ctx, row):
+    async def recorded_abort(ctx, row, **_kwargs):
+        # 精确 claim 已随终态释放；旧式按章节 ID 的 abort 不得被调用来复位资源。
         aborts.append(row.statistics_key)
-        if not allow_abort:
-            raise RuntimeError(PRIVATE_PARTS[1])
-        await actual_abort(ctx, row)
+        raise AssertionError("单章排队取消不应依赖 on_abort")
 
-    monkeypatch.setattr(handler, "on_abort", fail_until_repaired)
+    monkeypatch.setattr(handler, "on_abort", recorded_abort)
     await engine._dispatch()
     execution = engine._running[task.id]
     try:
         await asyncio.wait_for(reached.wait(), 3)
-        accepted = await _accept(client, task.statistics_key)
-        await asyncio.wait_for(engine.wait_admin_cancellations(), 3)
-        await _assert_open_intent(app, task, accepted["operation_id"], "queued")
-        release.set()
-        await asyncio.wait_for(execution, 3)
-        await _assert_open_intent(app, task, accepted["operation_id"], "queued")
-        conflict = await owner.post(f"/api/v1/chapters/{chapter_id}/generate", json={})
-        assert conflict.status_code == 409, conflict.text
-        async with app.state.sessionmaker() as db:
-            assert (await db.get(Chapter, chapter_id)).status == "generating"
-            assert (await db.get(Task, task.id)).resource_key == task.resource_key
-        assert aborts == [task.statistics_key]
-        assert fake_llm.calls == []
-
-        allow_abort = True
-        await engine.scan_admin_cancellations()
+        accepted = await asyncio.wait_for(_accept(client, task.statistics_key), 10)
         await asyncio.wait_for(engine.wait_admin_cancellations(), 3)
         async with app.state.sessionmaker() as db:
             old = await db.get(Task, task.id)
             assert old.status == "cancelled" and old.admin_cancel_operation_id is None
             assert (await db.get(Chapter, chapter_id)).status == "draft"
+        # 已被扫描的旧领取在受理之后才执行，必须失败而不能重新占用章节或调用模型。
+        release.set()
+        await asyncio.wait_for(execution, 3)
+        async with app.state.sessionmaker() as db:
+            assert (await db.get(Task, task.id)).status == "cancelled"
+            assert (await db.get(Chapter, chapter_id)).status == "draft"
+        assert aborts == [] and fake_llm.calls == []
+
         replacement = await owner.post(f"/api/v1/chapters/{chapter_id}/generate", json={})
         assert replacement.status_code == 202, replacement.text
         assert replacement.json()["id"] != task.id
+        # 重放旧管理员操作只能命中旧任务的原 claim，不能复位新任务的占用。
         engine.request_admin_cancel(task.statistics_key, accepted["operation_id"])
         await asyncio.wait_for(engine.wait_admin_cancellations(), 3)
         async with app.state.sessionmaker() as db:
             assert (await db.get(Chapter, chapter_id)).status == "generating"
             assert (await db.get(Task, replacement.json()["id"])).status == "queued"
-        assert aborts == [task.statistics_key, task.statistics_key]
-        assert fake_llm.calls == []
+        assert aborts == [] and fake_llm.calls == []
     finally:
         release.set()
-        await asyncio.gather(execution, return_exceptions=True)
 
 
 async def test_old_drain_and_old_uuid_cannot_clear_new_intent_after_actual_sqlite_id_reuse(
@@ -327,7 +320,7 @@ async def test_old_drain_and_old_uuid_cannot_clear_new_intent_after_actual_sqlit
     reached, release = asyncio.Event(), asyncio.Event()
     aborts = []
 
-    async def blocked_abort(ctx, row):
+    async def blocked_abort(ctx, row, **_kwargs):
         aborts.append(row.statistics_key)
         reached.set()
         await release.wait()
@@ -405,7 +398,8 @@ async def test_private_title_hub_stage_error_and_content_are_neither_projected_s
         assert search.json()["items"] == [] and search.json()["total"] == 0
         assert sum(search.json()["counts"].values()) == 0
     # 秘密仍在真实拥有者记录，不是通过清空源字段让安全测试碰巧通过。
-    owned = await owner.get(f"/api/v1/tasks/{task.id}")
+    owner_ref = (task.id, task.statistics_key)
+    owned = await owner.get(f"/api/v1/tasks/{task.id}", params=task_params(owner_ref))
     assert owned.status_code == 200 and owned.json()["title"] == PRIVATE_PARTS[0]
     accepted = await _accept(client, task.statistics_key)
     async with app.state.sessionmaker() as db:
@@ -425,7 +419,7 @@ async def test_pending_projectless_task_blocks_account_cascade_until_actual_drai
     engine = app.state.task_engine
     reached, release = asyncio.Event(), asyncio.Event()
 
-    async def blocked_abort(ctx, row):
+    async def blocked_abort(ctx, row, **_kwargs):
         reached.set()
         await release.wait()
 
@@ -484,7 +478,9 @@ async def test_terminal_pending_anomalies_survive_real_prune_clear_and_single_de
     cleared = await owner.delete("/api/v1/tasks")
     assert cleared.status_code == 200 and cleared.json()["deleted"] == 1
     for task, operation_id, status in protected:
-        refused = await owner.delete(f"/api/v1/tasks/{task.id}")
+        refused = await owner.delete(
+            f"/api/v1/tasks/{task.id}", params=task_params((task.id, task.statistics_key)),
+        )
         assert refused.status_code == 409
         async with app.state.sessionmaker() as db:
             row = await db.get(Task, task.id)
@@ -517,7 +513,7 @@ async def test_soft_delete_timeout_keeps_independent_drain_then_waits_before_rea
     reached, release, deleting = asyncio.Event(), asyncio.Event(), asyncio.Event()
     aborted = []
 
-    async def blocked_abort(ctx, row):
+    async def blocked_abort(ctx, row, **_kwargs):
         aborted.append(row.statistics_key)
         reached.set()
         await release.wait()
@@ -591,7 +587,7 @@ async def test_recycled_project_cannot_be_purged_while_admin_drain_is_actual_pro
     engine = app.state.task_engine
     reached, release = asyncio.Event(), asyncio.Event()
 
-    async def blocked_abort(ctx, row):
+    async def blocked_abort(ctx, row, **_kwargs):
         reached.set()
         await release.wait()
 
@@ -628,7 +624,7 @@ async def test_terminal_pending_anomaly_in_recycled_project_cannot_be_purged_or_
     )
     aborts = []
 
-    async def forbidden_abort(*args):
+    async def forbidden_abort(*args, **_kwargs):
         aborts.append(args)
         raise AssertionError("不能盲目回滚已成功任务")
 
@@ -670,8 +666,8 @@ async def test_owner_task_projection_handles_arbitrary_historical_input_without_
             original = json.dumps(task.input, sort_keys=True)
             assert task_service.to_out(task).scene_id == expected_scene
             assert json.dumps(task.input, sort_keys=True) == original and task not in db.dirty
-            task_id = task.id
-        response = await client.get(f"/api/v1/tasks/{task_id}")
+            task_id, task_key = task.id, task.statistics_key
+        response = await client.get(f"/api/v1/tasks/{task_id}", params=task_params((task_id, task_key)))
         assert response.status_code == 200, response.text
         assert response.json()["scene_id"] == expected_scene
         async with app.state.sessionmaker() as db:

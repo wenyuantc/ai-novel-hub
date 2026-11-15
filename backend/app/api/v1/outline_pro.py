@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
+from app.core.errors import ConflictError
 from app.models import Outline
 from app.schemas.outline import (
     OutlineAppendRequest,
@@ -31,19 +32,47 @@ from app.schemas.outline import (
 from app.schemas.story import OutlineOut
 from app.schemas.task import TaskOut
 from app.services import (
+    authorization_service,
     outline_service,
     outline_snapshot_service,
     outline_transfer_service,
     plan_service,
+    project_access,
+    project_ai_config,
     task_service,
 )
+from app.services.task_engine.admission import prepare_task_admission
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["outline-pro"])
 
 
+async def _create_outline_task(db, engine, user_id: int, kind: str, params: dict[str, Any]) -> TaskOut:
+    """任何写锁前完成能力短读、模型预检与 DNS（受理证明），再交中央受理在同一写事务内消费。
+
+    作者与 accepted editor 共用（E4-g3a）：本人模型优先，仅本人无文本配置且作者授权时回退作者配置，
+    本人配置无效不回退；viewer 403、待接受/非成员/已撤权/仅管理员身份 404，均不建任务、不调用模型。
+    """
+    actor = authorization_service.actor_snapshot(db, user_id)
+    if (type(actor) is not authorization_service.AuthenticatedActor or actor.id != user_id
+            or type(actor.token_version) is not int or actor.token_version < 0 or db.new or db.dirty or db.deleted):
+        raise ConflictError("原认证身份无法验证", extra={"code": "task_actor_unavailable"})
+    # 请求认证产生的只读事务在 DNS 前结束，不占用连接或锁。
+    await db.rollback()
+    ctx = engine.ctx
+    async with ctx.sessionmaker() as read:
+        await authorization_service.require_authenticated(read, actor)
+        await project_access.require_project(read, actor.id, params["project_id"], "ai.use")
+    model = await project_ai_config.preflight_project_model(
+        ctx.sessionmaker, actor, params["project_id"], "text", cipher=ctx.cipher,
+        config_id=params.get("ai_config_id"), allow_private=ctx.settings.allow_private_ai_endpoints,
+    )
+    proof = await prepare_task_admission(ctx, actor, kind, params, model_preflight=model)
+    return await task_service.create_task(db, engine, user_id, kind, params, admission=proof)
+
+
 @router.get("/outlines/tree", response_model=list[OutlineDetail])
 async def outline_tree(project_id: int, user: CurrentUser, db: DbDep) -> list[OutlineDetail]:
-    return await outline_service.outline_tree(db, user.id, project_id)
+    return await outline_service.outline_tree(db, user.id, project_id, manual=True)
 
 
 @router.get("/outlines/export")
@@ -79,7 +108,7 @@ async def continue_outline(
     body: OutlineContinueRequest | None = None,
 ) -> TaskOut:
     params = {"project_id": project_id, **(body or OutlineContinueRequest()).model_dump(mode="json")}
-    return await task_service.create_task(db, engine, user.id, "outline.continue", params)
+    return await _create_outline_task(db, engine, user.id, "outline.continue", params)
 
 
 @router.post("/outlines/{outline_id}/move", response_model=list[OutlineOut])
@@ -103,7 +132,7 @@ async def expand_outline(
         "outline_id": outline_id,
         **(body or OutlineExpandRequest()).model_dump(mode="json"),
     }
-    return await task_service.create_task(db, engine, user.id, "outline.expand", params)
+    return await _create_outline_task(db, engine, user.id, "outline.expand", params)
 
 
 @router.get("/outlines/{outline_id}/plans", response_model=list[PlanOut])
@@ -113,7 +142,7 @@ async def list_plans(project_id: int, outline_id: int, user: CurrentUser, db: Db
 
 @router.put("/outlines/{outline_id}/plans", response_model=list[PlanOut])
 async def sync_plans(project_id: int, outline_id: int, body: PlansSync, user: CurrentUser, db: DbDep) -> list[PlanOut]:
-    return await plan_service.sync_plans(db, user.id, project_id, outline_id, body)
+    return await plan_service.sync_plans(db, user.id, project_id, outline_id, body, manual=True)
 
 
 @router.patch("/outlines/{outline_id}/plans/{plan_id}", response_model=PlanOut)

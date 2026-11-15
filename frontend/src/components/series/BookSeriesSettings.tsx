@@ -1,12 +1,15 @@
 import { Alert, App, Button, Segmented, Space, Spin } from 'antd'
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { SeriesKind } from '../../api/series'
 import type { Project, SettingOrigin } from '../../api/types'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useProjectStore } from '../../stores/project'
 import { invalidateProject } from '../../utils/projectRefresh'
+import SeriesAccessBoundary from './SeriesAccessBoundary'
 import SeriesTransitionDialog from './SeriesTransitionDialog'
-import { SERIES_SCOPE_OPTIONS, seriesSettingResources, type SettingScope } from './seriesState'
+import { validProjectSeriesAccess } from './seriesAuthorization'
+import { canChangeSeriesBook, SERIES_SCOPE_OPTIONS, seriesSettingResources, type SettingScope } from './seriesState'
 
 const SeriesLibrary = lazy(() => import('./SeriesLibrary'))
 
@@ -23,8 +26,18 @@ export function BookSeriesLibrary({ series, projectId, kind }: {
   series: NonNullable<Project['series']>; projectId: number; kind: SeriesKind
 }) {
   const title = useProjectStore((state) => state.project?.id === projectId ? state.project.title : '本书')
+  const version = useProjectStore((state) => state.scopeVersion)
+  const { role, isCollaborator, canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
+  const canUseBook = canChangeSeriesBook(role, isCollaborator, canEdit)
+  const refreshOnDenied = useCallback(() => { if (canReadNow()) void useProjectStore.getState().refresh() }, [canReadNow])
+  const validVersion = validProjectSeriesAccess(role, series.authorization_version)
+  if (!validVersion) return <Alert type="warning" showIcon message="系列授权信息不完整，请重新读取作品。"
+    action={<Button size="small" onClick={refreshOnDenied}>重新读取</Button>} />
   return <Suspense fallback={<Spin aria-label="正在读取系列设定" />}>
-    <SeriesLibrary seriesId={series.id} seriesRevision={series.revision} kind={kind} book={{ id: projectId, title }} />
+    <SeriesAccessBoundary key={`${projectId}:${version}`} authorizationVersion={series.authorization_version} onAccessLost={refreshOnDenied}>
+      <SeriesLibrary seriesId={series.id} seriesRevision={series.revision} kind={kind}
+      book={{ id: projectId, title }} canUseBook={canUseBook}
+      canUseBookNow={() => canUseBook && canEditNow()} /></SeriesAccessBoundary>
   </Suspense>
 }
 
@@ -33,12 +46,21 @@ export function BookSeriesPromotion({ seriesId, projectId, kind, id, title, onCl
 }) {
   const { message } = App.useApp()
   const [request] = useState(() => ({ action: 'promote' as const, project_id: projectId, kind, entry_id: id }))
-  return <SeriesTransitionDialog seriesId={seriesId} request={request} label={title} onClose={onClose}
+  const version = useProjectStore((state) => state.scopeVersion)
+  const series = useProjectStore((state) => state.project?.id === projectId && state.project.series?.id === seriesId
+    ? state.project.series : null)
+  const { role, isCollaborator, canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
+  const allowed = canChangeSeriesBook(role, isCollaborator, canEdit)
+  const refreshOnDenied = useCallback(() => { if (canReadNow()) void useProjectStore.getState().refresh() }, [canReadNow])
+  if (!allowed || !series || !validProjectSeriesAccess(role, series.authorization_version)) return null
+  return <SeriesAccessBoundary key={`${projectId}:${version}`} authorizationVersion={series.authorization_version} onAccessLost={refreshOnDenied}>
+    <SeriesTransitionDialog seriesId={seriesId} request={request} label={title} onClose={onClose}
+    canAct={() => allowed && canEditNow()}
     onDone={(ids) => {
       for (const pid of ids) invalidateProject(pid, seriesSettingResources(kind))
       onClose()
       message.success('已提升为系列共享')
-    }} />
+    }} /></SeriesAccessBoundary>
 }
 
 export function SharedSettingNotice({ origin, onUnuse }: { origin?: SettingOrigin; onUnuse?: () => void }) {
@@ -57,10 +79,19 @@ export function BookSeriesUnuse({ seriesId, seriesEntryId, projectId, title, kin
 }) {
   const { message } = App.useApp()
   const [request] = useState(() => ({ action: 'unuse' as const, project_id: projectId, entry_id: seriesEntryId }))
-  return <SeriesTransitionDialog seriesId={seriesId} request={request} label={title} onClose={onClose}
+  const version = useProjectStore((state) => state.scopeVersion)
+  const series = useProjectStore((state) => state.project?.id === projectId && state.project.series?.id === seriesId
+    ? state.project.series : null)
+  const { role, isCollaborator, canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
+  const allowed = canChangeSeriesBook(role, isCollaborator, canEdit)
+  const refreshOnDenied = useCallback(() => { if (canReadNow()) void useProjectStore.getState().refresh() }, [canReadNow])
+  if (!allowed || !series || !validProjectSeriesAccess(role, series.authorization_version)) return null
+  return <SeriesAccessBoundary key={`${projectId}:${version}`} authorizationVersion={series.authorization_version} onAccessLost={refreshOnDenied}>
+    <SeriesTransitionDialog seriesId={seriesId} request={request} label={title} onClose={onClose}
+    canAct={() => allowed && canEditNow()}
     onDone={(ids) => {
       onDone()
       for (const pid of ids) invalidateProject(pid, seriesSettingResources(kind))
       message.success('已取消在本书使用')
-    }} />
+    }} /></SeriesAccessBoundary>
 }

@@ -125,7 +125,9 @@ async def list_members(
 ) -> out.Page[out.OrganizationMember]:
     await get_authorized_project(db, principal, novel_id)
     await organization_service.get_owned_org(db, principal.user_id, novel_id, organization_id)
-    stmt = select(OrganizationMember).where(OrganizationMember.organization_id == organization_id)
+    stmt = select(OrganizationMember).where(
+        OrganizationMember.organization_id == organization_id, organization_service.valid_member_condition(),
+    )
     if status is not None:
         stmt = stmt.where(OrganizationMember.status == status)
     records, total = await page_models(db, stmt.order_by(OrganizationMember.id), page, page_size)
@@ -138,6 +140,9 @@ async def list_members(
         else []
     )
     by_id = {item.id: item for item in serialized}
+    if len(by_id) != len(records):
+        # 分页之后关联变化，不能携带过期总数或把缺失的行当成其他作品内容。
+        raise NotFoundError("成员不存在")
     items = [
         out.OrganizationMember.model_validate(
             {
@@ -164,7 +169,10 @@ async def list_relationships(
     category: RelationCategory | None = None,
 ) -> out.Page[out.Relationship]:
     await get_authorized_project(db, principal, novel_id)
-    stmt = select(Relationship).where(Relationship.project_id == novel_id, Relationship.is_present.is_(True))
+    stmt = select(Relationship).where(
+        Relationship.project_id == novel_id, Relationship.is_present.is_(True),
+        relationship_service.valid_relationship_condition(),
+    )
     if character_id is not None:
         char = await db.scalar(
             select(Character.id).where(Character.id == character_id, Character.project_id == novel_id)
@@ -179,6 +187,8 @@ async def list_relationships(
         stmt = stmt.where(RelationshipType.category == category)
     records, total = await page_models(db, stmt.order_by(Relationship.id), page, page_size)
     serialized = await relationship_service.to_outs(db, records, character_id)
+    if len(serialized) != len(records):
+        raise NotFoundError("关系不存在")
     return out.Page(
         items=[out.Relationship.model_validate(item.model_dump()) for item in serialized],
         total=total,
@@ -195,8 +205,10 @@ async def get_relationship(
 ) -> out.Relationship:
     await get_authorized_project(db, principal, novel_id)
     record = await relationship_service.get_owned_relationship(db, principal.user_id, novel_id, relationship_id)
-    serialized = (await relationship_service.to_outs(db, [record]))[0]
-    return out.Relationship.model_validate(serialized.model_dump())
+    serialized = await relationship_service.to_outs(db, [record])
+    if not serialized:
+        raise NotFoundError("关系不存在")
+    return out.Relationship.model_validate(serialized[0].model_dump())
 
 
 async def list_relationship_types(

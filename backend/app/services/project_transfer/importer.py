@@ -1387,6 +1387,10 @@ class _Importer:
             values[col_name] = v
         for col_name, kind in rule.fill.items():
             values[col_name] = self.project_id if kind == "project" else self.user_id
+        if rule.table == "generation_logs":
+            # 外部备份/旧 params 都不是服务端选型证明；忽略伪造字段，恢复后明确未知。
+            values["model_source"] = None
+            values["model_config_owner_id"] = None
         return values, later
 
     async def _styles(self) -> None:
@@ -1536,11 +1540,13 @@ class _Importer:
 
     async def _retrieval(self) -> None:
         docs = [d for d in self.objects.get("kb_documents") or [] if isinstance(d, KbDocument)]
+        memories = [m for m in self.objects.get("story_memories") or [] if isinstance(m, StoryMemory)]
+        # 导入时记忆均为新行；同名旧索引无法证明来源，不能被导入覆盖或继承旧向量。
+        await retrieval_service.require_unindexed_sources(self.db, "memory", [m.id for m in memories])
         # 只读已在会话里的值（没有原值时属性已过期，访问会触发隐式查询）
         originals = {d.id: sa_inspect(d).dict.get("updated_at") for d in docs}
         for doc in docs:
             await kb_index_service.chunk_document(self.db, doc)
-        memories = [m for m in self.objects.get("story_memories") or [] if isinstance(m, StoryMemory)]
         await memory_service.index_memories(self.db, self.project_id, memories)
         await self.db.flush()
         # 写分块数会触发 onupdate：把文档的更新时间改回备份中的原值
@@ -1618,7 +1624,7 @@ async def import_backup(db: AsyncSession, engine, user_id: int, backup: Backup, 
         except AppError as exc:
             importer.warnings.append(f"重建索引任务排队失败（{exc.detail}），可稍后在知识库页面手动重建")
     return ImportResult(
-        project=await project_service.project_out(db, project),
+        project=await project_service.project_out(db, project, actor_user_id=user_id),
         counts=backup.counts,
         warnings=importer.warnings,
         task_id=task_id,

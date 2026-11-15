@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, event, literal, or_, select, update
+from sqlalchemy import and_, event, literal, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,19 @@ async def initialize(factory: async_sessionmaker[AsyncSession]) -> None:
         await db.commit()
 
 
+def _repeatable_read(db: AsyncSession) -> bool:
+    bind = db.bind
+    if bind is None or bind.dialect.name != "postgresql":
+        return False
+    level = bind.get_execution_options().get("isolation_level")
+    return isinstance(level, str) and level.upper() in ("REPEATABLE READ", "SERIALIZABLE")
+
+
+def holds_gate(db: AsyncSession) -> bool:
+    """当前根事务是否已持有授权门禁（提交/回滚后自动释放）。"""
+    return "authorization_gate_lease" in db.info
+
+
 async def gate(db: AsyncSession) -> None:
     if "authorization_gate_lease" in db.info:
         return
@@ -95,6 +108,12 @@ async def gate(db: AsyncSession) -> None:
     db.info["authorization_gate_lease"] = lease
     try:
         with db.no_autoflush:
+            if db.get_transaction() is None and _repeatable_read(db):
+                # PostgreSQL RR 在首条查询/修改语句冻结快照；若在其中等待其他实例的门禁行锁，对方提交后
+                # 本事务只能得到序列化失败。先用不冻结快照的表锁等待其他门禁持有者结束，再执行行更新。
+                await db.execute(text(
+                    f"LOCK TABLE {AuthorizationState.__tablename__} IN SHARE ROW EXCLUSIVE MODE"
+                ))
             result = await db.execute(
                 update(AuthorizationState).where(AuthorizationState.id == 1)
                 .values(id=AuthorizationState.id).execution_options(synchronize_session=False)
@@ -181,10 +200,10 @@ def snapshots_from_rows(rows) -> dict[int, AuthorizationSnapshot]:
 async def snapshot(db: AsyncSession, user_id: int) -> AuthorizationSnapshot:
     with db.no_autoflush:
         rows = (await db.execute(snapshot_statement().where(User.id == user_id))).all()
-    if not rows:
-        if await db.scalar(select(User.id).where(User.id == user_id)) is None:
-            raise NotFoundError("用户不存在")
-        raise AuthorizationStorageError("授权状态不可用，请联系管理员")
+        if not rows:
+            if await db.scalar(select(User.id).where(User.id == user_id)) is None:
+                raise NotFoundError("用户不存在")
+            raise AuthorizationStorageError("授权状态不可用，请联系管理员")
     return snapshots_from_rows(rows)[user_id]
 
 

@@ -20,7 +20,7 @@ from app.schemas.admin_task import (
     AdminTaskFilters,
     AdminTaskList,
 )
-from app.services import task_statistics_service
+from app.services import project_lifecycle, task_statistics_service
 from app.services.admin_service import _escape_like
 from app.services.audit_writer import AuditOperation
 from app.services.task_service import STAGE_LABELS
@@ -193,6 +193,16 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", actor: User, task_
         ))
         if task is None:
             raise NotFoundError("任务不存在或已移除")
+        if (task.kind in ("chapter.generate", "chapter.polish", "chapter.revise")
+                and task.project_id is not None):
+            # 管理受理也按 User→项目→Task 顺序捕获原章节占用。
+            project_id = task.project_id
+            await project_lifecycle.lock_record(db, project_id)
+            task = await db.scalar(select(Task).where(
+                Task.statistics_key == task_key, Task.project_id == project_id,
+            ).execution_options(populate_existing=True))
+            if task is None:
+                raise ConflictError("任务执行轮次已变化，请刷新后重试")
         # 目标owner已通过上面的父用户写屏障与删号串行。
         audit.target(task, label=safe_title(task.kind, task.id))
         await audit.owner(task.user_id)
@@ -212,11 +222,19 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", actor: User, task_
             if task.status not in OPEN_TASK_STATUSES:
                 raise ConflictError("任务已结束，无法受理取消请求")
             previous = task.status
+            values = {"admin_cancel_operation_id": audit.operation_id,
+                      "admin_cancel_requested_at": task_statistics_service.now_utc()}
+            if task.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
+                from app.services.task_engine.cancellation import _CHAPTER_INTENT, chapter_cancel_intent
+
+                intent = chapter_cancel_intent(task, audit.operation_id)
+                if intent is not None:
+                    values["input"] = {**task.input, _CHAPTER_INTENT: intent}
             changed = await db.execute(update(Task).where(
                 Task.id == task.id, Task.statistics_key == task_key, Task.status == previous,
+                Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
                 Task.admin_cancel_operation_id.is_(None),
-            ).values(admin_cancel_operation_id=audit.operation_id,
-                     admin_cancel_requested_at=task_statistics_service.now_utc()).execution_options(
+            ).values(**values).execution_options(
                          synchronize_session=False
                      ))
             if changed.rowcount == 1:

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.schemas.skill import SkillRef
 
@@ -33,6 +33,8 @@ class TaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    # 稳定实例身份。无法证明身份的历史记录保留空值，客户端不能据整数 ID 猜测或补查。
+    task_key: str | None = Field(default=None, validation_alias=AliasChoices("task_key", "statistics_key"))
     kind: TaskKind
     status: TaskStatus
     title: str
@@ -60,6 +62,10 @@ class TaskOut(BaseModel):
     step_cursor: int = 0
     # 仅排队中的任务有值：前面还在排队的任务数（全局先进先出，0 = 下一个执行）
     queue_position: int | None = None
+    # 只读：任务输入本身决定「不能直接重试」时的原因（目前仅 kb.index：memory_bound = 记忆条目 / 分析派生
+    # 绑定，legacy_index = 旧版无占用清理记录，binding_invalid / request_invalid = 原绑定 / 请求破损）。
+    # 与重试受理同一判定函数；为空不代表一定可重试（状态与授权仍在受理时锁内判定）。
+    retry_blocked_reason: Literal["memory_bound", "legacy_index", "binding_invalid", "request_invalid"] | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

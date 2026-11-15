@@ -176,7 +176,7 @@ async def test_admin_memory_and_kb_edits_never_enqueue_owner_models(app, admin_c
     upload = await client.post(f"{base}/kb/documents", files={"file": ("设定.md", "# 天剑宗\n\n山中门派".encode())})
     assert upload.status_code == 202, upload.text
     document = upload.json()["document"]
-    await wait_task(client, upload.json()["task"]["id"])
+    await wait_task(client, upload.json()["task"])
     await create_ai_config(client, model_type="embedding")
     async with app.state.sessionmaker() as db:
         before = await db.scalar(select(func.count(Task.id)))

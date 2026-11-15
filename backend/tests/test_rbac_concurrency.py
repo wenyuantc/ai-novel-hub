@@ -13,7 +13,7 @@ from app.models import Project, Task, User, WritingStyle
 from app.services import authorization_service as authz
 from app.services import quota_service
 from app.services.audit_writer import AuditOperation
-from tests.helpers import Gate, create_ai_config, create_project, register, wait_task
+from tests.helpers import Gate, create_ai_config, create_project, register, task_params, wait_task
 from tests.rbac_helpers import assign_roles, authorization_revision, create_role, set_quota
 from tests.test_book_import import _start, upload
 
@@ -225,6 +225,7 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
         rows.append(response.json())
     ids = [await asyncio.wait_for(selected.get(), 5) for _ in range(2)]
     assert set(ids) == {row["id"] for row in rows}
+    task_refs = {row["id"]: row for row in rows}
     assert engine.admitted_count(user["id"]) == 0
     # 两个预候选都已登记，后来的降额必须在真实claim复核；候选本身不耗占用。
     await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 1}})
@@ -271,7 +272,9 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
         await llm_gate.wait_reached()
         await asyncio.wait_for(completed.wait(), 5)
         assert engine.admitted_count(user["id"]) == 1
-        assert (await client.get(f"/api/v1/tasks/{ids[1]}")).json()["status"] == "queued"
+        assert (await client.get(f"/api/v1/tasks/{ids[1]}", params=task_params(task_refs[ids[1]]))).json()[
+            "status"
+        ] == "queued"
         assert len(fake_llm.calls) == 1
         # 降到0不会取消已准入任务，也不会让排队轮次提前claim。
         await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 0}})
@@ -280,8 +283,9 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
         for event in candidates.values():
             event.set()
         llm_gate.release()
-    assert (await wait_task(client, ids[0]))["status"] == "succeeded"
-    assert (await client.post(f"/api/v1/tasks/{ids[1]}/cancel")).status_code == 200
+    assert (await wait_task(client, task_refs[ids[0]]))["status"] == "succeeded"
+    cancel = await client.post(f"/api/v1/tasks/{ids[1]}/cancel", params=task_params(task_refs[ids[1]]))
+    assert cancel.status_code == 200
 
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
@@ -297,11 +301,11 @@ async def test_database_terminal_state_does_not_release_post_success_execution_s
     terminal, finish_success = asyncio.Event(), asyncio.Event()
     first_id = None
 
-    async def success(handler, task):
+    async def success(handler, task, *, execution=None):
         if task.id == first_id:
             terminal.set()
             await finish_success.wait()
-        await original_success(handler, task)
+        await original_success(handler, task, execution=execution)
 
     monkeypatch.setattr(engine, "_on_success", success)
     generation = Gate()
@@ -327,7 +331,8 @@ async def test_database_terminal_state_does_not_release_post_success_execution_s
         assert engine.admitted_count(user["id"]) == 1
         quota = (await system_admin.get(f"/api/v1/admin/users/{user['id']}/quotas")).json()
         assert quota["task_concurrency"]["used"] == 1
-        assert (await client.get(f"/api/v1/tasks/{rows[1]['id']}")).json()["status"] == "queued"
+        queued = await client.get(f"/api/v1/tasks/{rows[1]['id']}", params=task_params(rows[1]))
+        assert queued.json()["status"] == "queued"
         assert not second_generation.reached.is_set()
         finish_success.set()
         await second_generation.wait_reached()
@@ -337,7 +342,7 @@ async def test_database_terminal_state_does_not_release_post_success_execution_s
         finish_success.set()
         second_generation.release()
     for row in rows:
-        assert (await wait_task(client, row["id"]))["status"] == "succeeded"
+        assert (await wait_task(client, row))["status"] == "succeeded"
 
 
 @pytest.mark.parametrize("commit_was_applied", [False, True])
@@ -371,7 +376,7 @@ async def test_uncertain_claim_commit_reconciles_same_uuid_without_duplicate_exe
     started = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})
     assert started.status_code == 202, started.text
     await asyncio.wait_for(claimed.wait(), 5)
-    finished = await wait_task(client, started.json()["id"])
+    finished = await wait_task(client, started.json())
     assert finished["status"] == "succeeded"
     assert len(fake_llm.calls) == 1
     assert finished["id"] == started.json()["id"]
@@ -434,7 +439,8 @@ async def test_unknown_settings_commit_pauses_admission_until_confirmed_publish(
         start_claim.set()
         await asyncio.wait_for(rejected.wait(), 5)
         assert engine.admitted_count(user["id"]) == 0 and not fake_llm.calls
-        assert (await client.get(f"/api/v1/tasks/{started.json()['id']}")).json()["status"] == "queued"
+        queued = await client.get(f"/api/v1/tasks/{started.json()['id']}", params=task_params(started.json()))
+        assert queued.json()["status"] == "queued"
         allow_read = True
         await manager.load()
         assert engine.runtime.settings_confirmed and app.state.settings.task_max_per_user == 1
@@ -444,7 +450,7 @@ async def test_unknown_settings_commit_pauses_admission_until_confirmed_publish(
         allow_read = True
         start_claim.set()
         generation.release()
-    assert (await wait_task(client, started.json()["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, started.json()))["status"] == "succeeded"
     assert len(fake_llm.calls) == 1
 
 
@@ -520,17 +526,26 @@ async def test_cancel_in_claim_gap_defers_signal_until_safe_finalize(
     )).json()
     response = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})
     assert response.status_code == 202, response.text
-    task_id = response.json()["id"]
+    task_ref = response.json()
+    task_id = task_ref["id"]
     pending = None
     try:
         await asyncio.wait_for(committed.wait(), 5)
         assert task_id in engine._claiming
         assert engine.admitted_count() == (1 if claim_gap == "session_exit" else 0)
         pending = asyncio.create_task(
-            client.post(f"/api/v1/tasks/{task_id}/cancel") if stop_action == "owner_cancel" else engine.stop()
+            client.post(f"/api/v1/tasks/{task_id}/cancel", params=task_params(task_ref))
+            if stop_action == "owner_cancel" else engine.stop()
         )
-        await asyncio.wait_for(cancellation.wait(), 5)
-        assert task_id in (engine._cancel_requested if stop_action == "owner_cancel" else engine._shutdown)
+        if stop_action == "owner_cancel":
+            # 协作改造后本人取消须先取得共同授权门禁并重验作品身份；领取在提交/会话退出窗口仍持有同一
+            # runtime，因此取消请求只能排在领取之后，不能在窗口内触碰执行游标。
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert not cancellation.is_set() and not pending.done()
+        else:
+            await asyncio.wait_for(cancellation.wait(), 5)
+            assert task_id in engine._shutdown
         assert not engine._running[task_id].cancelled() and task_id in engine._claiming
     finally:
         return_commit.set()

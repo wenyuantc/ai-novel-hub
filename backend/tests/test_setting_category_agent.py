@@ -33,7 +33,7 @@ from app.services.agent.service import _undo_changes
 from app.services.agent.tools import get_tool
 from app.services.agent.tools.base import preview_diff, serialized
 from tests.helpers import wait_task
-from tests.test_agent_runtime import call, send, setup_agent
+from tests.test_agent_runtime import call, send_task, setup_agent
 from tests.test_agent_tools import apply, new_chapter
 from tests.test_agent_tools import ctx as ctx
 from tests.test_setting_category_query import snapshot_database as snapshot_database
@@ -376,11 +376,13 @@ async def test_next_fake_llm_messages_do_not_receive_tags_from_write_result(clie
         "expected_categories_revision": 0, "setting_tags": ["模型不可见哨兵"],
     })
     assert tagged.status_code == 200, tagged.text
+    # 改名会移除旧名候选并按可见性契约收紧会话代次（新会话才能继续），
+    # 本用例只验证写结果不回灌标签，因此改写不影响身份的正文字段。
     fake_llm.push_tools([call("update_character" if kind == "character" else "update_world_setting", {
-        "id": created["id"], "name" if kind == "character" else "title": "新名",
+        "id": created["id"], "personality" if kind == "character" else "content": "新内容",
     })])
-    fake_llm.push_tools([("text", {"text": "名称已更新"})])
-    task = await wait_task(client, await send(client, url, "把「旧名」改名"), within=15)
+    fake_llm.push_tools([("text", {"text": "资料已更新"})])
+    task = await wait_task(client, await send_task(client, url, "更新「旧名」的资料"), within=15)
     assert task["status"] == "succeeded", task
     messages = fake_llm.tool_calls[1]["messages"]
     assert "模型不可见哨兵" not in json.dumps(messages, ensure_ascii=False)

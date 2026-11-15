@@ -4,20 +4,50 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
-from app.models import Chapter, ChapterVersion
-from app.schemas.chapter_version import ChapterVersionUpdate, VersionExtract, VersionRestore
+from app.models import Chapter, ChapterVersion, GenerationLog, Project, ProjectCollaborator
+from app.schemas.chapter_version import (
+    ChapterVersionBrief,
+    ChapterVersionOut,
+    ChapterVersionUpdate,
+    VersionExtract,
+    VersionRestore,
+)
 from app.schemas.scene import SceneOut, parse_scene_snapshot
 from app.services import version_service
 from app.services.audit_writer import AuditOperation
-from app.services.chapter_service import commit_versioned, get_manageable_chapter
+from app.services.chapter_service import commit_versioned, get_manual_chapter
+from app.services.chapter_version_snapshot import validate_history_snapshot
 
 
-async def list_versions(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> list[ChapterVersion]:
-    await get_manageable_chapter(db, user_id, project_id, chapter_id)
+async def _visible_log_ids(
+    db: AsyncSession, user_id: int, project_id: int, versions: list[ChapterVersion]
+) -> set[int]:
+    ids = {v.generation_log_id for v in versions if v.generation_log_id is not None}
+    if not ids:
+        return set()
+    owner = await db.scalar(select(Project.id).where(Project.id == project_id, Project.user_id == user_id))
+    if owner is None:
+        member = await db.scalar(select(ProjectCollaborator.id).where(
+            ProjectCollaborator.project_id == project_id, ProjectCollaborator.user_id == user_id,
+            ProjectCollaborator.status == "accepted",
+        ))
+        if member is None:
+            return set()
+    return set(await db.scalars(select(GenerationLog.id).where(
+        GenerationLog.id.in_(ids), GenerationLog.project_id == project_id, GenerationLog.actor_user_id == user_id,
+    )))
+
+
+async def list_versions(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> list[ChapterVersionBrief]:
+    await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
     rows = await db.scalars(
         select(ChapterVersion).where(ChapterVersion.chapter_id == chapter_id).order_by(ChapterVersion.seq.desc())
     )
-    return list(rows)
+    versions = list(rows)
+    visible = await _visible_log_ids(db, user_id, project_id, versions)
+    return [ChapterVersionBrief.model_validate(v).model_copy(update={
+        "generation_log_id": v.generation_log_id if v.generation_log_id in visible else None,
+    }) for v in versions]
 
 
 async def _get_version(db: AsyncSession, chapter_id: int, version_id: int) -> ChapterVersion:
@@ -62,18 +92,24 @@ async def _legacy_extract_snapshot(db: AsyncSession, chapter: Chapter, scene_id:
 
 async def get_version(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, version_id: int
-) -> ChapterVersion:
-    await get_manageable_chapter(db, user_id, project_id, chapter_id)
-    return await _get_version(db, chapter_id, version_id)
+) -> ChapterVersionOut:
+    await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
+    version = await _get_version(db, chapter_id, version_id)
+    if version.scene_snapshot is not None:
+        await validate_history_snapshot(db, project_id, chapter_id, version.scene_snapshot)
+    visible = await _visible_log_ids(db, user_id, project_id, [version])
+    return ChapterVersionOut.model_validate(version).model_copy(update={
+        "generation_log_id": version.generation_log_id if version.generation_log_id in visible else None,
+    })
 
 
 async def update_version(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, version_id: int, data: ChapterVersionUpdate
-) -> ChapterVersion:
+) -> ChapterVersionBrief:
     async with AuditOperation(
         db, user_id, "chapter_version.update", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True, permission="projects.edit")
+        await get_manual_chapter(db, user_id, project_id, chapter_id, "content.edit", for_update=True)
         version = await _get_version(db, chapter_id, version_id)
         audit.target(version, label=f"v{version.seq}")
         audit.version(version, project_id)
@@ -84,14 +120,17 @@ async def update_version(
             version.note = data.note.strip()
         await audit.commit()
         await db.refresh(version)
-        return version
+        visible = await _visible_log_ids(db, user_id, project_id, [version])
+        return ChapterVersionBrief.model_validate(version).model_copy(update={
+            "generation_log_id": version.generation_log_id if version.generation_log_id in visible else None,
+        })
 
 
 async def delete_version(db: AsyncSession, user_id: int, project_id: int, chapter_id: int, version_id: int) -> None:
     async with AuditOperation(
         db, user_id, "chapter_version.delete", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        await get_manageable_chapter(db, user_id, project_id, chapter_id, lock=True, permission="projects.edit")
+        await get_manual_chapter(db, user_id, project_id, chapter_id, "content.edit", for_update=True)
         version = await _get_version(db, chapter_id, version_id)
         audit.target(version, label=f"v{version.seq}")
         audit.version(version, project_id)
@@ -108,7 +147,7 @@ async def restore_preview(
     from app.services import scene_service
 
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         await scene_service.check_revision(db, chapter, expected_revision)
         planning_revision = await scene_service._planning_revision(db, project_id)
         target = await _get_version(db, chapter.id, version_id)
@@ -125,6 +164,7 @@ async def restore_preview(
         if candidate_snapshot is not None:
             from app.services.rich_document_history import plan_restore
 
+            await validate_history_snapshot(db, project_id, chapter.id, candidate_snapshot, for_restore=True)
             snapshot = parse_scene_snapshot(candidate_snapshot)
             ids = [item.id for item in snapshot.scenes]
             targets = [await scene_service.require_scene(db, chapter, scene_id, active=False) for scene_id in ids]
@@ -153,13 +193,14 @@ async def restore_version(
     data: VersionRestore | None = None,
 ) -> Chapter:
     """新历史恢复真实结构；旧纯文本只允许单场景写入，绝不伪造历史划分。"""
-    from app.services import planning_lifecycle, scene_service, setting_ai_visibility
+    from app.services import planning_lifecycle, scene_service
 
     async with AuditOperation(
         db, user_id, "chapter_version.restore", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
-        chapter = await scene_service._write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await scene_service.get_manual_write_chapter(
+            db, user_id, project_id, chapter_id, visibility_write=True,
+        )
         audit.track(chapter, ["content"])
         audit.values["chapter_id"] = chapter_id
         target = await _get_version(db, chapter_id, version_id)
@@ -181,6 +222,8 @@ async def restore_version(
                 if expected is None:
                     raise BadRequestError("恢复富文档上的旧纯文本必须提供当前内容版本")
                 snapshot = await _legacy_plain_snapshot(db, chapter, content)
+        if snapshot is not None:
+            await validate_history_snapshot(db, project_id, chapter.id, snapshot, for_restore=True)
         await version_service.ensure_baseline(db, chapter, force=True)
         if snapshot is not None:
             await scene_service.restore_snapshot(
@@ -204,7 +247,7 @@ async def extract_preview(
     from app.services import scene_service
 
     with db.no_autoflush:
-        chapter = await get_manageable_chapter(db, user_id, project_id, chapter_id)
+        chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.read")
         await scene_service.check_revision(db, chapter, expected_revision)
         scene = await scene_service.require_scene(db, chapter, scene_id)
         target = await _get_version(db, chapter.id, version_id)
@@ -232,13 +275,14 @@ async def extract_preview(
 async def extract_version(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, version_id: int, data: VersionExtract,
 ) -> SceneOut:
-    from app.services import planning_lifecycle, scene_service, setting_ai_visibility
+    from app.services import planning_lifecycle, scene_service
 
     async with AuditOperation(
         db, user_id, "chapter_version.restore", "chapter_version", version_id, project_id=project_id
     ) as audit:
-        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id)
-        chapter = await scene_service._write_chapter(db, user_id, project_id, chapter_id)
+        chapter = await scene_service.get_manual_write_chapter(
+            db, user_id, project_id, chapter_id, visibility_write=True,
+        )
         target = await _get_version(db, chapter.id, version_id)
         audit.target(target, label=f"v{target.seq}")
         preview = await extract_preview(db, user_id, project_id, chapter_id, version_id,

@@ -42,7 +42,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
   （本项目自定义 + 本项目关系用到的全局预置，后者带 `global: true`）、`relationships`（`pair_low/high` 由 a/b 重算）、`relationship_history`、
   `careers`、`career_stages`、`character_careers`、`career_history`、`outlines`、`chapters`（`plan_id` deferred，`style_id` → `style_ref`）、
   `chapter_plans`、`chapter_characters`、`foreshadows`、`foreshadow_characters`、`foreshadow_history`、`generation_logs`（可选；`ai_config_id` /
-  `task_id` 不导出）、`chapter_versions`（可选）、`chapter_analyses`（`task_id` 不导出）、`analysis_changes`、`story_memories`、`kb_settings`、
+  `task_id` / `model_source` / `model_config_owner_id` / `log_instance_key` / `model_config_instance_key` 不导出，导入时来源置未知、日志实例键由服务端重新生成）、`chapter_versions`（可选）、`chapter_analyses`（`task_id` 不导出）、`analysis_changes`、`story_memories`、`kb_settings`、
   `kb_documents`（`status` / `chunk_count` 重算）、`setting_timelines`、`setting_field_definitions`、`setting_field_options`、`setting_categories`、`setting_category_rules`、`setting_reference_handles`、`setting_text_fields`、`setting_progressions`、`outline_snapshots`（可选）、`inspiration_sessions`（可选；`project_id` / `converted_project_id`
   指向本项目的改写为新项目，指向其他项目的置空）。
 - **用户级表不登记、也不写进 `NOT_EXPORTED`**（`skills`、`skill_references`、`mcp_plugins`，迁移 `0019`，见 [skills-mcp.md](./skills-mcp.md)；
@@ -85,7 +85,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 9, exported_at, app_schema: "0041"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 9, exported_at, app_schema: "0052"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], project: {…, default_style_ref}, tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。

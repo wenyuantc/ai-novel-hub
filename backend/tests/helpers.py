@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 
 from app.ai.providers import LLMProvider
 from app.ai.providers.base import AIProviderError, GeneratedImage
+from app.ai.providers.dispatch_hooks import current_dispatch_hooks
 from app.ai.tools import AgentEvent
 from app.core.config import Settings
 
@@ -47,11 +48,17 @@ class FakeLLM:
     embed_error: Exception | None = None
     embed_error_sticky: bool = False
     embed_dim: int = 64
+    # 每次 embed 依次消费一项（None 表示不阻塞）：before 在受控发送门禁（模拟响应头）之前阻塞，
+    # after 在门禁放行、记录调用之后、返回向量之前阻塞，用于构造「发送前」与「发送后写入前」时序。
+    embed_before_gates: list[Gate | None] = field(default_factory=list)
+    embed_after_gates: list[Gate | None] = field(default_factory=list)
     # 每次 chat_tools_stream 消费一项；可在事件之间插入异常/Gate 验证中断与取消。
     tool_script: list[list[AgentEvent | Exception | Gate] | Exception] = field(default_factory=list)
     tool_calls: list[dict] = field(default_factory=list)
     images: list[GeneratedImage | Exception] = field(default_factory=list)
     image_calls: list[dict] = field(default_factory=list)
+    _providers: set[LLMProvider] = field(default_factory=set, repr=False)
+    _provider_names: dict[LLMProvider, str] = field(default_factory=dict, repr=False)
 
     def push(self, item: "str | list[str | Exception | Gate] | Exception") -> None:
         if isinstance(item, str):
@@ -65,7 +72,23 @@ class FakeLLM:
         fake = self
 
         class _Provider(LLMProvider):
+            # 纯内存替身模拟一次本地响应头，令受控调用实际执行数据库门禁预检。
+            # 该模拟不发网络，也不能作为真实 HTTP 发送顺序的验证证据。
+            uses_dispatch_hooks = True
+
+            async def _preflight(self):
+                hooks = current_dispatch_hooks()
+                if hooks is None:
+                    return
+                request = httpx.Request("POST", "https://fake-provider.invalid/request")
+                for hook in hooks.event_hooks["request"]:
+                    await hook(request)
+                response = httpx.Response(200, request=request)
+                for hook in hooks.event_hooks["response"]:
+                    await hook(response)
+
             async def generate_image(self, prompt, model):
+                await self._preflight()
                 fake.image_calls.append({"provider": provider, "model": model, "prompt": prompt})
                 if provider == "anthropic":
                     return await super().generate_image(prompt, model)
@@ -77,6 +100,7 @@ class FakeLLM:
             async def chat_tools_stream(
                 self, messages, model, tools, *, tool_choice="auto", max_tokens=None, thinking="off", temperature=None
             ):
+                await self._preflight()
                 call = {
                     "provider": provider,
                     "api_key": api_key,
@@ -114,6 +138,7 @@ class FakeLLM:
                         fake.aborted += 1
 
             async def list_models(self):
+                await self._preflight()
                 fake.list_calls.append(
                     {"provider": provider, "api_key": api_key, "base_url": base_url, "timeout": timeout}
                 )
@@ -122,7 +147,16 @@ class FakeLLM:
                 return [{"id": m["id"], "name": m.get("name")} for m in fake.models]
 
             async def embed(self, texts, model):
+                gate = fake.embed_before_gates.pop(0) if fake.embed_before_gates else None
+                if gate is not None:
+                    gate.reached.set()
+                    await gate.released.wait()
+                await self._preflight()
                 fake.embed_calls.append({"provider": provider, "model": model, "texts": list(texts)})
+                gate = fake.embed_after_gates.pop(0) if fake.embed_after_gates else None
+                if gate is not None:
+                    gate.reached.set()
+                    await gate.released.wait()
                 if fake.embed_error is not None:
                     err = fake.embed_error
                     if not fake.embed_error_sticky:
@@ -131,6 +165,7 @@ class FakeLLM:
                 return [fake_vector(t, fake.embed_dim) for t in texts]
 
             async def generate_stream(self, messages, model, *, temperature=None, max_tokens=None, thinking="off"):
+                await self._preflight()
                 fake.calls.append(
                     {
                         "provider": provider,
@@ -160,7 +195,10 @@ class FakeLLM:
                     if not completed:
                         fake.aborted += 1
 
-        return _Provider(api_key=api_key, base_url=base_url, timeout=timeout)
+        instance = _Provider(api_key=api_key, base_url=base_url, timeout=timeout)
+        self._providers.add(instance)
+        self._provider_names[instance] = provider
+        return instance
 
 
 def fake_vector(text: str, dim: int = 64) -> list[float]:
@@ -262,11 +300,33 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
 TERMINAL_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
 
 
-async def wait_task(client: httpx.AsyncClient, task_id: int, within: float = 5.0, statuses=TERMINAL_TASK_STATUSES):
+def task_identity(task: dict | tuple[int, str] | int) -> tuple[int, dict[str, str]]:
+    """保留创建/列表响应中的身份；过渡期的整数调用不通过当前 ID 反查凭据。"""
+    if isinstance(task, dict):
+        task_id, task_key = task["id"], task["task_key"]
+    elif isinstance(task, tuple):
+        task_id, task_key = task
+    else:
+        return task, {}
+    if not isinstance(task_id, int) or not isinstance(task_key, str) or not task_key:
+        raise ValueError("任务引用必须包含原响应的 task_key")
+    return task_id, {"task_key": task_key}
+
+
+def task_params(task: dict | tuple[int, str]) -> dict[str, str]:
+    """从先前响应构造单任务请求参数。"""
+    return task_identity(task)[1]
+
+
+async def wait_task(
+    client: httpx.AsyncClient, task: dict | tuple[int, str] | int,
+    within: float = 5.0, statuses=TERMINAL_TASK_STATUSES,
+):
     """轮询任务直到进入指定状态（默认任一终态），返回 TaskOut。"""
+    task_id, params = task_identity(task)
     deadline = time.monotonic() + within
     while True:
-        resp = await client.get(f"/api/v1/tasks/{task_id}")
+        resp = await client.get(f"/api/v1/tasks/{task_id}", params=params)
         assert resp.status_code == 200, resp.text
         task = resp.json()
         if task["status"] in statuses:
@@ -284,9 +344,12 @@ async def wait_until(predicate, within: float = 5.0) -> None:
         await asyncio.sleep(0.005)
 
 
-async def stream_task(client: httpx.AsyncClient, task_id: int, within: float = 10.0) -> list[tuple[str, dict]]:
+async def stream_task(
+    client: httpx.AsyncClient, task: dict | tuple[int, str] | int, within: float = 10.0,
+) -> list[tuple[str, dict]]:
     """订阅任务流直到 done / error（ASGITransport 会缓冲整个响应），返回解析后的事件。"""
-    resp = await asyncio.wait_for(client.get(f"/api/v1/tasks/{task_id}/stream"), within)
+    task_id, params = task_identity(task)
+    resp = await asyncio.wait_for(client.get(f"/api/v1/tasks/{task_id}/stream", params=params), within)
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("text/event-stream")
     return parse_sse(resp.text)
@@ -295,7 +358,7 @@ async def stream_task(client: httpx.AsyncClient, task_id: int, within: float = 1
 async def run_task(client: httpx.AsyncClient, resp: httpx.Response) -> tuple[dict, list[tuple[str, dict]]]:
     """创建任务的响应（202）→ 订阅至结束，返回 (最终 TaskOut, 事件)。"""
     assert resp.status_code == 202, resp.text
-    events = await stream_task(client, resp.json()["id"])
+    events = await stream_task(client, resp.json())
     return events[-1][1]["task"], events
 
 
@@ -311,10 +374,13 @@ def final_event(events: list[tuple[str, dict]]) -> tuple[str, dict]:
     return event, {k: v for k, v in data.items() if k != "task"}
 
 
-async def stream_with_gate(app, client: httpx.AsyncClient, task_id: int, gate: Gate) -> httpx.Response:
+async def stream_with_gate(
+    app, client: httpx.AsyncClient, task: dict | tuple[int, str] | int, gate: Gate,
+) -> httpx.Response:
     """任务阻塞在 gate 时先挂上订阅，再放行：保证全部 delta 都经由流到达。"""
+    task_id, params = task_identity(task)
     await gate.wait_reached()
-    pending = asyncio.ensure_future(client.get(f"/api/v1/tasks/{task_id}/stream"))
+    pending = asyncio.ensure_future(client.get(f"/api/v1/tasks/{task_id}/stream", params=params))
     engine = app.state.task_engine
     await wait_until(lambda: (h := engine.hubs.get(task_id)) is not None and h.subscriber_count > 0)
     gate.release()

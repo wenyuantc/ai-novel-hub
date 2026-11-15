@@ -10,16 +10,17 @@ const snapshot = (revision = 1, tags = ['原标签'], ref = entry): SettingTagsO
 })
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
 function setup() {
-  let access: SettingTagsAccess = { identity: 'actor:1:auth:1', canRead: true, canEdit: true }
+  let access: SettingTagsAccess = { owner: 'actor:1:session:1', identity: 'actor:1:auth:1', canRead: true, canEdit: true }
   const api = {
     getTags: vi.fn<(pid: number, ref: SettingEntryRef, signal?: AbortSignal) => Promise<SettingTagsOut>>(async (_pid, ref) => snapshot(1, ['原标签'], ref)),
     updateTags: vi.fn<(pid: number, ref: SettingEntryRef, body: { setting_tags: string[]; expected_categories_revision: number }, signal?: AbortSignal) => Promise<SettingTagsOut>>(async (_pid, ref, body) => snapshot(body.expected_categories_revision + 1, body.setting_tags, ref)),
     suggestTags: vi.fn(async () => ({ categories_revision: 1, items: ['建议标签'], has_more: false })),
   }
   const changed = vi.fn()
-  const session = new SettingTagsSession(3, api, () => access, changed)
+  const verify = vi.fn(async (): Promise<'confirmed' | 'unknown' | 'stale' | 'denied'> => 'confirmed')
+  const session = new SettingTagsSession(3, api, () => access, changed, verify)
   const controller = session.get(entry)
-  return { session, controller, api, changed, setAccess: (patch: Partial<SettingTagsAccess>) => { access = { ...access, ...patch } } }
+  return { session, controller, api, changed, verify, setAccess: (patch: Partial<SettingTagsAccess>) => { access = { ...access, ...patch } } }
 }
 
 describe('条目整理标签的草稿和请求所有者', () => {
@@ -58,16 +59,51 @@ describe('条目整理标签的草稿和请求所有者', () => {
     expect(changed).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['refresh', 'compare'] as const)('%s确认条目已不存在时撤下旧标签与草稿并禁止保存', async (method) => {
-    const { controller, api } = setup()
+  it.each(['refresh', 'compare'] as const)('%s收到 404 时保留标签草稿，确认作品后仍需对照才能保存', async (method) => {
+    const { controller, api, verify } = setup()
     await controller.open()
     controller.edit(['已删除条目的草稿'])
     controller.setSearch('旧搜索')
     api.getTags.mockRejectedValueOnce(new ApiError(404, '条目不存在'))
     await controller[method]()
-    expect(controller.getSnapshot()).toMatchObject({ base: null, original: null, latest: null, draft: [], search: '', error: '条目不存在' })
+    await vi.waitFor(() => expect(controller.getSnapshot().accessUncertain).toBe(false))
+    expect(verify).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toMatchObject({ base: { categories_revision: 1 }, draft: ['已删除条目的草稿'], search: '旧搜索', reviewRequired: true })
     await controller.save()
     expect(api.updateTags).not.toHaveBeenCalled()
+  })
+
+  it('权限复查网络失败冻结写入并保留草稿，只有显式重查权限后才能对照', async () => {
+    const { controller, api, verify } = setup()
+    await controller.open(); controller.edit(['我的草稿'])
+    verify.mockResolvedValueOnce('unknown').mockResolvedValueOnce('confirmed')
+    api.updateTags.mockRejectedValueOnce(new ApiError(403, '只读'))
+    await controller.save()
+    await vi.waitFor(() => expect(controller.getSnapshot().checkingAccess).toBe(false))
+    expect(controller.getSnapshot()).toMatchObject({ accessUncertain: true, draft: ['我的草稿'], reviewRequired: true })
+    await controller.save(); await controller.compare()
+    expect(api.updateTags).toHaveBeenCalledTimes(1)
+    expect(api.getTags).toHaveBeenCalledTimes(1)
+    await controller.recheckAccess()
+    expect(controller.getSnapshot().accessUncertain).toBe(false)
+    await controller.compare()
+    expect(api.getTags).toHaveBeenCalledTimes(2)
+  })
+
+  it('旧授权复查的迟到撤权结果不能清除新轮次草稿，切换会话则清除', async () => {
+    const { session, controller, api, verify, setAccess } = setup()
+    await controller.open(); controller.edit(['保留草稿'])
+    const pending = deferred<'denied'>()
+    verify.mockReturnValueOnce(pending.promise)
+    api.getTags.mockRejectedValueOnce(new ApiError(404, '缺失'))
+    await controller.refresh()
+    setAccess({ identity: 'actor:1:auth:2' })
+    session.accessChanged()
+    pending.resolve('denied'); await Promise.resolve()
+    expect(controller.getSnapshot()).toMatchObject({ draft: ['保留草稿'], accessUncertain: true })
+    setAccess({ owner: 'actor:1:session:2', identity: 'actor:1:new-session' })
+    session.accessChanged()
+    expect(controller.getSnapshot()).toMatchObject({ base: null, draft: [], search: '' })
   })
 
   it('清空只写 [] 和原 categories 版本，不混外层名称、基础字段或职业事实', async () => {
@@ -179,7 +215,7 @@ describe('条目整理标签的草稿和请求所有者', () => {
     session.accessChanged()
     pending.resolve(snapshot(8, ['旧请求结果']))
     await saving
-    expect(controller.getSnapshot()).toMatchObject({ draft: ['尚未保存'], base: { categories_revision: 1 }, reviewRequired: true })
+    expect(controller.getSnapshot()).toMatchObject({ draft: [], base: null })
     expect(changed).not.toHaveBeenCalled()
     await controller.save()
     expect(api.updateTags).toHaveBeenCalledTimes(1)

@@ -72,6 +72,8 @@ DB 新增四表，不重建 users/projects：
 
 `create_sessionmaker` 的session.info共享一个runtime，不能每session新建协调器。`authz.require(...,write=True,targets=(...))` 在资源锁前取得gate，租约由根事务结束事件释放。最后超管保护在gate下exists，不能在User锁后再无序锁全体User。回收站drain期间不持gate，第二阶段用原actor primitive重新授权。
 
+认证与能力解析在授权确认前必须保持 `db.no_autoflush`，包括账号不存在／授权状态缺失的备用 SELECT 和项目锁后的协作成员重读。待写实体不得因查询而提前 flush；退出作用域后恢复 session 原本的 autoflush 设置。调用方若捕获授权拒绝，必须回滚本操作未经授权的待写数据，不能直接提交；Agent 工具由外层 SAVEPOINT 回滚。新授权路径用 `test_collaboration_access_no_autoflush.py` 和 `test_audit_authorization_no_autoflush.py` 验证待写实体、失败认证及 PostgreSQL 撤权先提交时不会先执行写入。
+
 作品创建只取owner User屏障（无可编辑的全局作品默认，不反向取gate），与所有配额修改同序。设置load/reload/recovery/保存的**所有发布路径**与领取共用runtime；commit确认后无await同步发布。提交事实未知时 `settings_confirmed=False` 暂停新准入，dispatch返回而非热循环；在同runtime内恢复确认后再开放。继续沿用单进程TaskEngine，不宣称多实例租约。
 
 新增 `role.create/update/delete`、`user.roles.update/bootstrap`、`user.quotas.update` 审计，安全类型化 `rbac_change` 只存角色ID/允许权限/两项额度前后值；原已采集管理动作在自定义角色下也不能漏审。**不扩大全量人工子模块/本人日常/普通AI审计**。业务与成功日志同事务，未知提交不补相反失败。
@@ -89,6 +91,7 @@ UserQuotaOut包含 user_id/username/is_management_account/revision/authorization
 
 - `project_count.used` 包含全部未物理删除作品（正常/回收站/删除中/过期待清理）。降低不删数据、软删不释放、恢复不重复扣、purge完成才释放。所有角色含超管均不豁免。
 - 普通创建、灵感转换、备份实际导入、拆书start，均在任何作品/风格/状态/token消费/Task副作用前锁owner，并持至原整体提交。拆书按User→BookImport锁并重验revision，灵感锁后重读converted状态。预览不预占。
+- 派生任务（Agent受控受理的 `start_task`、分析派生的记忆向量 `kb.index`）的 `Task.user_id` 与令牌轮次继承原执行的真实actor，按该actor占用任务并发额度，不改记为作品作者，也不额外豁免；见[智能体](./agent.md)与[检索](./retrieval.md)。
 - 用户任务unlimited仍受全站task_max_concurrency硬顶。达到并发上限继续queued，不失败/取消；降低不强杀已执行体。
 - `_dispatch` 批量预筛选不等于准入；候选与admitted分离，真正claim在runtime/gate/User后用最新额度/全局顶复核。commit确认后在runtime内同步发布admitted才执行，直到真实_on_done（含on_success）释放；DB终态不是释放时刻。
 - `_claiming` 保护须覆盖领取session的异步 `__aexit__`，随后无await进入 `_run` 的try/finalize。提前清标记会使owner取消/stop留下孤立running；取消只登记意图，由真正运行体安全收尾。

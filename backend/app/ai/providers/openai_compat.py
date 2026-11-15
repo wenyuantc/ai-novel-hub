@@ -103,7 +103,10 @@ class OpenAICompatProvider(LLMProvider):
     async def _download_image(self, url: str) -> bytes:
         if not self.follow_redirects:
             await ensure_endpoint_allowed(url)
-        async with AsyncClient(timeout=self.timeout, follow_redirects=self.follow_redirects) as client:
+        # 图片 URL 是同一次生成的后续物理出站：每个下载/重定向也须重验原授权。
+        hooks = current_dispatch_hooks()
+        http_options = {"event_hooks": hooks.event_hooks} if hooks else {}
+        async with AsyncClient(timeout=self.timeout, follow_redirects=self.follow_redirects, **http_options) as client:
             async with client.stream("GET", url) as response:
                 # 即使允许私网也不把重定向响应体当成图片；关闭重定向时尤其不能跨过检查。
                 if response.is_redirect:

@@ -22,9 +22,9 @@ from sqlalchemy import JSON, String, Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import ConflictError, NotFoundError
-from app.models import Chapter, ChapterCharacter, InspirationSession, Project, ProjectCover, WritingStyle
+from app.models import Chapter, ChapterCharacter, GenerationLog, InspirationSession, Project, ProjectCover, WritingStyle
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
-from app.services import project_lifecycle, setting_ai_visibility
+from app.services import personal_projection, project_lifecycle, setting_ai_visibility
 from app.services.project_service import get_owned_project
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
 from app.services.style_service import FIELD_LIMITS
@@ -32,7 +32,7 @@ from app.services.style_service import FIELD_LIMITS
 FORMAT = "ainovel.project"
 VERSION = 9
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0041"
+APP_SCHEMA = "0052"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -79,6 +79,111 @@ def _dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=_value)
 
 
+_DROP = object()
+
+
+def _normalized_key(value: str) -> str:
+    """兼容大小写、下划线、驼峰及历史分隔符，但仅比较已知内部键。"""
+    return "".join(char for char in value.casefold() if char.isalnum())
+
+
+def _export_private_key(value: Any) -> bool:
+    # 单书格式额外排除来源声明；普通字段和以 _ 开头的内部键不能混为一谈。
+    return personal_projection.normalized_private_key(value) or (
+        isinstance(value, str) and not value.startswith("_") and _normalized_key(value) == "modelsource"
+    )
+
+
+def _internal_field(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.split(".")
+    return personal_projection.normalized_private_path(value) or any(
+        _export_private_key(".".join(parts[index:])) for index in range(len(parts))
+    )
+
+
+def _private_guards(value: Any) -> bool:
+    return personal_projection.has_private_guard({"guards": value})
+
+
+def _partial_private(value: str, *, in_preview: bool, hide_model: bool) -> bool:
+    """截断 JSON 若已出现内部键或预览护栏，不能原样暴露后续片段。"""
+    if personal_projection.partial_private(value, in_preview=in_preview):
+        return True
+    return any(
+        _export_private_key(key) or (hide_model and personal_projection.normalized_model_metadata_key(key))
+        for key in personal_projection._partial_keys(value)
+    )
+
+
+def _strip_log_internal_params(
+    value: Any, depth: int = 0, *, in_preview: bool = False, hide_model: bool = False,
+) -> Any:
+    """保留普通日志内容；递归移除原实例私有身份、凭据及已知预览护栏。"""
+    if depth > 64:
+        return None
+    if isinstance(value, dict):
+        field = next((item for key, item in value.items()
+                      if isinstance(key, str) and _normalized_key(key) == "field"), None)
+        if _internal_field(field):
+            return _DROP
+        result = {}
+        for key, item in value.items():
+            normalized = _normalized_key(key) if isinstance(key, str) else None
+            if isinstance(key, str) and (
+                _export_private_key(key)
+                or (not key.startswith("_") and normalized == "guards" and _private_guards(item))
+            ):
+                continue
+            if hide_model and personal_projection.normalized_model_metadata_key(key):
+                result[key] = None
+                continue
+            child_preview = in_preview or normalized == "preview"
+            cleaned = _strip_log_internal_params(item, depth + 1, in_preview=child_preview, hide_model=hide_model)
+            if cleaned is not _DROP:
+                result[key] = cleaned
+        return result
+    if isinstance(value, list):
+        return [cleaned for item in value
+                if (cleaned := _strip_log_internal_params(
+                    item, depth + 1, in_preview=in_preview, hide_model=hide_model,
+                )) is not _DROP]
+    if isinstance(value, str) and value.lstrip().startswith(("{", "[", '"')):
+        try:
+            parsed = json.loads(value)
+        except RecursionError:
+            return None
+        except (ValueError, TypeError):
+            if _partial_private(value, in_preview=in_preview, hide_model=hide_model):
+                return "[私有内容已隐藏]"
+            return value
+        if isinstance(parsed, (dict, list, str)):
+            cleaned = _strip_log_internal_params(parsed, depth + 1, in_preview=in_preview, hide_model=hide_model)
+            if cleaned is _DROP:
+                return None
+            if cleaned != parsed:
+                return json.dumps(cleaned, ensure_ascii=False)
+    return value
+
+
+def _project_log(row: Any, data: dict[str, Any], owner_id: int) -> dict[str, Any]:
+    # 使用可信列判断模型来源；params 中的同名字段只是用户内容，不能授权模型元数据。
+    projected = personal_projection._project_log_sources(
+        [data], [(row["model_source"], row["model_config_owner_id"])], user_id=owner_id, is_owner=True,
+    )[0]
+    # 这两列不属于单书格式，来源始终不得成为导入时的证明。
+    projected.pop("model_source", None)
+    projected.pop("ai_config_id", None)
+    source, config_owner = row["model_source"], row["model_config_owner_id"]
+    actor_model = source == "actor" and type(config_owner) is int and config_owner == owner_id
+    legacy_author = source is None and config_owner is None
+    for field, fallback in (("params", {}), ("messages", []), ("error", "")):
+        cleaned = _strip_log_internal_params(projected[field], hide_model=not (actor_model or legacy_author))
+        projected[field] = fallback if cleaned is _DROP or (field == "error" and cleaned is None) else cleaned
+    return projected
+
+
 def _row(rule: TableRule, row: Any, included: set[str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for col in rule.columns:
@@ -94,6 +199,8 @@ def _scope(rule: TableRule, plan: ExportPlan):
     cond = rule.scope(plan.project_id)
     if rule.model is InspirationSession:
         cond = cond & (InspirationSession.user_id == plan.owner_id)
+    elif rule.model is GenerationLog:
+        cond = cond & (GenerationLog.actor_user_id == plan.owner_id)
     return cond
 
 
@@ -159,6 +266,7 @@ async def _styles(db: AsyncSession, project: Project) -> tuple[list[dict[str, An
 
 async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: ExportPlan) -> AsyncIterator[bytes]:
     included = included_tables(plan.options)
+    exported_log_ids: set[int] = set()
     async with sessionmaker() as db:
         project = await db.scalar(
             select(Project).where(Project.id == plan.project_id, *project_lifecycle.active_conditions())
@@ -197,6 +305,11 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             buffer_chars = 0
             async for row in _iter_rows(db, rule, plan):
                 data = _row(rule, row, included)
+                if rule.table == "generation_logs":
+                    data = _project_log(row, data, plan.owner_id)
+                    exported_log_ids.add(row["id"])
+                elif rule.table == "chapter_versions" and data["generation_log_id"] not in exported_log_ids:
+                    data["generation_log_id"] = None
                 if rule.table == "chapters":
                     data["style_ref"] = refs.get(row["style_id"]) if row["style_id"] is not None else None
                 elif rule.table == "relationship_types":

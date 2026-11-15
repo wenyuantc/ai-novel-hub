@@ -88,6 +88,9 @@ OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "insp
 # 与项目相关、但不导出的表（理由见值）。
 # book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
+    "analysis_index_receipts": "分析派生索引的去重收据属于任务运行态，不随单书备份迁移",
+    "inspiration_origins": "个人灵感会话的原邀请身份不随单书备份迁移",
+    "project_collaborators": "协作授权属于用户关系，不随单书备份迁移",
     "series_books": "系列成员关系是跨作品授权；单书始终恢复为独立作品",
     "series_entry_uses": "本书采用的条目以已存在的书内投影导出，不携带共享绑定",
     "api_key_projects": "访问密钥的小说授权属于用户凭据，不随小说备份迁移",
@@ -290,7 +293,9 @@ RULES: tuple[TableRule, ...] = (
         deferred=frozenset({"plan_id"}),
         # 经 styles[] 的 ref 映射（style_ref）
         custom=("style_id",),
-        exclude=("content_revision",),  # 新书独立运行代次，不复制源书并发状态。
+        # 单书导入不能继承旧书的生成占用或并发版本。
+        exclude=("content_revision", "generation_claim_key", "generation_claim_task_key",
+                 "generation_claim_prev_status"),
     ),
     TableRule(
         "scenes", Scene, lambda pid: _in(Scene.chapter_id, Chapter, pid),
@@ -345,11 +350,13 @@ RULES: tuple[TableRule, ...] = (
         GenerationLog,
         _own(GenerationLog),
         option="generation_logs",
-        fill=_P,
+        fill={"project_id": "project", "actor_user_id": "user"},
         fk={"chapter_id": "chapters"},
-        # 配置 / 任务属于导出者，不随项目迁移（provider / model 已冗余存储）
-        exclude=("ai_config_id", "task_id"),
-        # params / messages 只作信息记录，原样保留
+        # 配置 / 任务及可信来源快照属于原实例，不导出，导入时来源统一为未知。
+        # 日志 / 模型配置实例键是本实例的服务端身份：不导出，导入时由服务端重新生成日志实例键。
+        exclude=("ai_config_id", "task_id", "model_source", "model_config_owner_id",
+                 "log_instance_key", "model_config_instance_key"),
+        # params 过滤内部身份后保留普通信息；messages 原样保留。
         json_plain=("params", "messages"),
     ),
     TableRule(
@@ -492,8 +499,8 @@ RULES: tuple[TableRule, ...] = (
         KbDocument,
         _own(KbDocument),
         fill=_P,
-        # 导入时重新分块：状态与分块数重新计算
-        exclude=("status", "chunk_count"),
+        # 导入时重新分块，任务占用不能跨作品迁移。
+        exclude=("status", "chunk_count", "index_task_key", "index_task_queued_at", "index_claim_key"),
         json_plain=("warnings",),
     ),
     TableRule(

@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
@@ -58,6 +59,8 @@ class ConversationOut(BaseModel):
     last_message_at: datetime | None
     history_sealed: bool = False
     mcp_plugin_ids: list[int] = Field(default_factory=list)
+    # 服务端计算：当前用户此刻能否写入该会话（作者，或当前邀请轮次的 accepted editor）；不输出邀请标识（裁决 23）。
+    writable: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -68,10 +71,11 @@ class ConversationOut(BaseModel):
 
 
 class MessageOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     id: int
     conversation_id: int
     turn_task_id: int | None
+    turn_task_key: str | None = None
     role: Literal["user", "assistant", "tool"]
     content: str
     tool_calls: list[dict[str, Any]] | None
@@ -95,9 +99,12 @@ class MessageOut(BaseModel):
 class ChangeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    change_key: str | None = None
+    view_version: str | None = None
     conversation_id: int
     project_id: int
     turn_task_id: int | None
+    turn_task_key: str | None = None
     tool_call_id: str
     tool_name: str
     arguments: dict[str, Any]
@@ -112,6 +119,26 @@ class ChangeOut(BaseModel):
     seq: int
     created_at: datetime
     updated_at: datetime
+
+
+class ChangeAction(BaseModel):
+    change_key: UUID
+    view_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ChangeExpectation(ChangeAction):
+    id: int = Field(gt=0)
+
+
+class TurnAction(BaseModel):
+    task_key: UUID
+    changes: list[ChangeExpectation]
+
+    @model_validator(mode="after")
+    def unique_changes(self):
+        if len({item.id for item in self.changes}) != len(self.changes):
+            raise ValueError("提案不能重复")
+        return self
 
 
 class ConversationDetail(ConversationOut):

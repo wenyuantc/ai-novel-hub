@@ -9,12 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 
 from app.models import AgentChange, Chapter, KbDocument, Project, Task
-from app.services import task_service
+from app.services import recycle_bin_service, task_service
 from app.services.agent import service as agent_service
 from app.services.task_engine.registry import get_handler
-from tests.helpers import Gate, create_ai_config, create_project, register, stream_task
+from tests.helpers import Gate, create_ai_config, create_project, register, stream_task, task_params, wait_task
 from tests.mcp_fakes import FakeMcpConnector
-from tests.test_agent_mcp_skills import _stuck_external, call, send
+from tests.test_agent_mcp_skills import _stuck_external, call, change_action, send_task
 from tests.test_agent_mcp_skills import setup as setup_agent
 from tests.test_recycle_bin import RECYCLE, item
 from tests.test_recycle_bin import admin as admin
@@ -65,16 +65,8 @@ async def test_running_task_stops_before_trash_and_restore_does_not_restart(app,
 async def test_queued_and_paused_tasks_are_both_cancelled(app, admin, client):
     owner, project, chapter = await setup_chapter(client)
     await app.state.task_engine.stop()
+    queued = await generate(client, chapter)
     async with app.state.sessionmaker() as db:
-        (await db.get(Chapter, chapter["id"])).status = "generating"
-        queued = Task(
-            user_id=owner["id"],
-            project_id=project["id"],
-            chapter_id=chapter["id"],
-            kind="chapter.generate",
-            status="queued",
-            input={"chapter_id": chapter["id"], "prev_status": "draft"},
-        )
         paused = Task(
             user_id=owner["id"],
             project_id=project["id"],
@@ -83,9 +75,9 @@ async def test_queued_and_paused_tasks_are_both_cancelled(app, admin, client):
             status="paused",
             input={},
         )
-        db.add_all([queued, paused])
+        db.add(paused)
         await db.commit()
-        ids = [queued.id, paused.id]
+        ids = [queued["id"], paused.id]
     assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 204
     async with app.state.sessionmaker() as db:
         assert [t.status for t in await db.scalars(select(Task).where(Task.id.in_(ids)).order_by(Task.id))] == [
@@ -96,52 +88,60 @@ async def test_queued_and_paused_tasks_are_both_cancelled(app, admin, client):
 
 
 async def test_concurrent_queued_cancel_cleanup_is_waited_and_new_writes_are_blocked(app, client, monkeypatch):
-    owner, project, chapter = await setup_chapter(client)
+    _, project, chapter = await setup_chapter(client)
     await app.state.task_engine.stop()
+    task_ref = await generate(client, chapter)
+    task_id = task_ref["id"]
     async with app.state.sessionmaker() as db:
-        (await db.get(Chapter, chapter["id"])).status = "generating"
-        task = Task(
-            user_id=owner["id"],
-            project_id=project["id"],
-            chapter_id=chapter["id"],
-            kind="chapter.generate",
-            status="queued",
-            input={"chapter_id": chapter["id"], "prev_status": "draft"},
-        )
-        db.add(task)
-        await db.commit()
-        task_id = task.id
+        original_task = await db.get(Task, task_id)
+        assert original_task.statistics_key == task_ref["task_key"]
+        original_queued_at = original_task.queued_at
     entered, release, deleting = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    handler = get_handler("chapter.generate")
-    original_abort = handler.on_abort
+    original_refresh = task_service.refresh_same_task
     original_stop = task_service.stop_project_tasks
 
-    async def abort(ctx, task):
-        entered.set()
-        await release.wait()
-        await original_abort(ctx, task)
+    async def refresh_after_commit(db, task):
+        # 章节 claim 已与取消终态原子提交；仍在请求的 cleanup_scope 内等待收尾。
+        if (task.id == task_id and task.statistics_key == task_ref["task_key"]
+                and task.queued_at == original_queued_at and not db.in_transaction()):
+            entered.set()
+            await release.wait()
+        return await original_refresh(db, task)
 
     async def stop(db, engine, pid):
         deleting.set()
         return await original_stop(db, engine, pid)
 
-    monkeypatch.setattr(handler, "on_abort", abort)
+    monkeypatch.setattr(task_service, "refresh_same_task", refresh_after_commit)
     monkeypatch.setattr(task_service, "stop_project_tasks", stop)
-    cancellation = asyncio.create_task(client.post(f"/api/v1/tasks/{task_id}/cancel"))
-    await asyncio.wait_for(entered.wait(), 3)
-    deletion = asyncio.create_task(client.delete(f"/api/v1/projects/{project['id']}"))
+    cancellation = asyncio.create_task(client.post(f"/api/v1/tasks/{task_id}/cancel", params=task_params(task_ref)))
+    deletion = None
     try:
+        await asyncio.wait_for(entered.wait(), 3)
+        async with app.state.sessionmaker() as db:
+            assert (await db.get(Task, task_id)).status == "cancelled"
+            assert (await db.get(Chapter, chapter["id"])).status == "draft"
+        deletion = asyncio.create_task(client.delete(f"/api/v1/projects/{project['id']}"))
         await asyncio.wait_for(deleting.wait(), 3)
         assert not deletion.done()
         assert (await client.patch(f"/api/v1/projects/{project['id']}", json={"title": "禁止修改"})).status_code == 409
-        assert (await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})).status_code == 404
+        # 已授权入口遇删除中沿用 project_deleting 409（design.md），不创建新任务。
+        blocked = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})
+        assert blocked.status_code == 409 and blocked.json()["code"] == "project_deleting", blocked.text
         assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 409
+        release.set()
+        cancelled = await cancellation
+        assert cancelled.status_code == 200, cancelled.text
+        assert (await asyncio.wait_for(deletion, 5)).status_code == 204
+        async with app.state.sessionmaker() as db:
+            assert (await db.get(Chapter, chapter["id"])).status == "draft"
     finally:
         release.set()
-    assert (await cancellation).status_code == 200
-    assert (await asyncio.wait_for(deletion, 5)).status_code == 204
-    async with app.state.sessionmaker() as db:
-        assert (await db.get(Chapter, chapter["id"])).status == "draft"
+        for pending in (cancellation, deletion):
+            if pending is not None and not pending.done():
+                pending.cancel()
+                with suppress(asyncio.CancelledError):
+                    await pending
 
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": True}])
@@ -152,10 +152,10 @@ async def test_database_terminal_task_still_waits_for_success_callback(app, clie
     original_success = handler.on_success
     original_stop = task_service.stop_project_tasks
 
-    async def success(ctx, task):
+    async def success(ctx, task, **kwargs):
         entered.set()
         await release.wait()
-        await original_success(ctx, task)
+        await original_success(ctx, task, **kwargs)
 
     async def stop(db, engine, pid):
         deleting.set()
@@ -187,10 +187,10 @@ async def test_timeout_or_cancelled_request_never_leaves_a_tombstone(app, client
     handler = get_handler("chapter.generate")
     original_success = handler.on_success
 
-    async def success(ctx, task):
+    async def success(ctx, task, **kwargs):
         entered.set()
         await release.wait()
-        await original_success(ctx, task)
+        await original_success(ctx, task, **kwargs)
 
     monkeypatch.setattr(handler, "on_success", success)
     fake_llm.push("已保存")
@@ -229,30 +229,27 @@ async def test_timeout_or_cancelled_request_never_leaves_a_tombstone(app, client
 
 
 async def test_failed_abort_does_not_claim_deletion_succeeded(app, client, monkeypatch):
-    owner, project, chapter = await setup_chapter(client)
-    await app.state.task_engine.stop()
-    async with app.state.sessionmaker() as db:
-        task = Task(
-            user_id=owner["id"],
-            project_id=project["id"],
-            chapter_id=chapter["id"],
-            kind="chapter.generate",
-            status="queued",
-            input={"chapter_id": chapter["id"], "prev_status": "draft"},
-        )
-        db.add(task)
-        await db.commit()
-    handler = get_handler("chapter.generate")
+    from app.services import chapter_claim
 
-    async def fail(ctx, task):
+    _, project, chapter = await setup_chapter(client)
+    await app.state.task_engine.stop()
+    task = await generate(client, chapter)
+    attempts = 0
+
+    async def fail(_db, _claim):
+        nonlocal attempts
+        attempts += 1
         raise RuntimeError("测试失败，不含实际用户内容")
 
-    monkeypatch.setattr(handler, "on_abort", fail)
+    monkeypatch.setattr(chapter_claim, "release_chapter_claim", fail)
     response = await client.delete(f"/api/v1/projects/{project['id']}")
     assert response.status_code == 409 and response.json()["code"] == "project_tasks_not_stopped"
+    assert attempts == 1
     async with app.state.sessionmaker() as db:
         row = await db.get(Project, project["id"])
         assert row.deleted_at is None and row.deletion_started_at is None
+        assert (await db.get(Task, task["id"])).status == "queued"
+        assert (await db.get(Chapter, chapter["id"])).status == "generating"
 
 
 async def test_external_confirmation_request_is_drained_before_trash(app, admin, client, fake_llm, monkeypatch):
@@ -267,17 +264,23 @@ async def test_external_confirmation_request_is_drained_before_trash(app, admin,
 
     project, base, url, _ = await setup_agent(client, connector, handler=remote)
     fake_llm.push_tools([call("mcp__dict__send", {"to": "编辑部"})])
-    task_id = await send(client, url)
-    assert (await stream_task(client, task_id))[-1][0] == "paused"
+    response = await client.post(url + "/messages", json={"content": "请帮我查一下"})
+    assert response.status_code == 202, response.text
+    task_ref = response.json()["task"]
+    task_id = task_ref["id"]
+    assert (await stream_task(client, task_ref))[-1][0] == "paused"
     change = (await client.get(url)).json()["changes"][0]
-    original_stop = task_service.stop_project_tasks
+    original_wait = recycle_bin_service._wait_for_external_work
 
-    async def stop(db, engine, pid):
+    async def wait(db, engine, actor_id, owner_id, pid, token):
         deleting.set()
-        return await original_stop(db, engine, pid)
+        return await original_wait(db, engine, actor_id, owner_id, pid, token)
 
-    monkeypatch.setattr(task_service, "stop_project_tasks", stop)
-    confirmation = asyncio.create_task(client.post(f"{base}/changes/{change['id']}/confirm"))
+    monkeypatch.setattr(recycle_bin_service, "_wait_for_external_work", wait)
+    confirmation = asyncio.create_task(client.post(
+        f"{base}/changes/{change['id']}/confirm",
+        json={"change_key": change["change_key"], "view_version": change["view_version"]},
+    ))
     await asyncio.wait_for(entered.wait(), 5)
     deletion = asyncio.create_task(admin.delete(f"/api/v1/projects/{project['id']}"))
     try:
@@ -304,12 +307,13 @@ async def test_running_abort_failure_keeps_terminal_state_and_next_delete_can_re
     original = handler.on_abort
     attempts = 0
 
-    async def fail_once(ctx, task):
+    async def fail_once(ctx, row, *, claim=None, execution=None):
         nonlocal attempts
+        assert claim is not None and claim.task_key == task["task_key"]
         attempts += 1
         if attempts == 1:
             raise RuntimeError("首次回退失败")
-        await original(ctx, task)
+        await original(ctx, row, claim=claim, execution=execution)
 
     monkeypatch.setattr(handler, "on_abort", fail_once)
     assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 409
@@ -321,29 +325,14 @@ async def test_running_abort_failure_keeps_terminal_state_and_next_delete_can_re
 
 
 async def test_kb_abort_database_failure_is_not_silently_treated_as_safe(app, client, monkeypatch):
-    owner, project, _ = await setup_chapter(client)
+    _, project, _ = await setup_chapter(client)
     await app.state.task_engine.stop()
-    async with app.state.sessionmaker() as db:
-        document = KbDocument(
-            project_id=project["id"],
-            filename="设定.md",
-            mime="text/markdown",
-            sha256="0" * 64,
-            text="原始设定",
-            status="pending",
-        )
-        db.add(document)
-        await db.flush()
-        task = Task(
-            user_id=owner["id"],
-            project_id=project["id"],
-            kind="kb.index",
-            status="queued",
-            input={"request": {"project_id": project["id"], "mode": "document", "document_id": document.id}},
-        )
-        db.add(task)
-        await db.commit()
-        document_id = document.id
+    upload = await client.post(
+        f"/api/v1/projects/{project['id']}/kb/documents",
+        files={"file": ("设定.md", "原始设定".encode(), "text/markdown")},
+    )
+    assert upload.status_code == 202, upload.text
+    document_id = upload.json()["document"]["id"]
     original = AsyncSession.execute
     failed = False
 
@@ -361,6 +350,7 @@ async def test_kb_abort_database_failure_is_not_silently_treated_as_safe(app, cl
 
     monkeypatch.setattr(AsyncSession, "execute", fail_once)
     assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 409
+    assert failed  # 必须确实在原文档 claim 的回退写入处失败，而非因缺凭据提前退出。
     async with app.state.sessionmaker() as db:
         assert (await db.get(Project, project["id"])).deleted_at is None
         assert (await db.get(KbDocument, document_id)).status == "pending"
@@ -369,10 +359,114 @@ async def test_kb_abort_database_failure_is_not_silently_treated_as_safe(app, cl
         assert (await db.get(KbDocument, document_id)).status == "failed"
 
 
+async def _legacy_document_task(app, owner, project, *, status="pending"):
+    async with app.state.sessionmaker() as db:
+        document = KbDocument(
+            project_id=project["id"], filename="历史.md", mime="text/markdown",
+            sha256="0" * 64, text="仍需保留的设定", status=status,
+        )
+        db.add(document)
+        await db.flush()
+        task = Task(
+            user_id=owner["id"], project_id=project["id"], kind="kb.index", status="queued",
+            resource_key=f"kbdoc:{document.id}",
+            input={"request": {"project_id": project["id"], "mode": "document", "document_id": document.id}},
+        )
+        db.add(task)
+        await db.commit()
+        return document.id, task.id, task.statistics_key
+
+
+async def test_unproven_pending_document_blocks_project_deletion(app, client):
+    # E4-e：旧无占用文档任务可证明无执行体时，删除排空走受限系统清理，作品可以删除。
+    owner, project, _ = await setup_chapter(client)
+    await app.state.task_engine.stop()
+    document_id, task_id, task_key = await _legacy_document_task(app, owner, project)
+
+    assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 204
+    async with app.state.sessionmaker() as db:
+        row, saved, stopped = await db.get(Project, project["id"]), await db.get(KbDocument, document_id), await db.get(
+            Task, task_id,
+        )
+        assert row.deleted_at is not None and row.deletion_started_at is None
+        assert (saved.status, saved.text) == ("failed", "仍需保留的设定")
+        assert saved.index_task_key is None and saved.index_claim_key is None
+        assert stopped.status == "cancelled" and stopped.statistics_key == task_key and stopped.execution_key is None
+
+
+async def test_unprovable_legacy_document_task_still_blocks_project_deletion(app, client):
+    # 文档已非 pending：无法证明可安全清理，保持原失败关闭，作品不被删除。
+    owner, project, _ = await setup_chapter(client)
+    await app.state.task_engine.stop()
+    document_id, task_id, task_key = await _legacy_document_task(app, owner, project, status="ready_keyword_only")
+
+    denied = await client.delete(f"/api/v1/projects/{project['id']}")
+    assert denied.status_code == 409 and denied.json()["code"] == "project_tasks_not_stopped", denied.text
+    async with app.state.sessionmaker() as db:
+        row, saved, queued = await db.get(Project, project["id"]), await db.get(KbDocument, document_id), await db.get(
+            Task, task_id,
+        )
+        assert row.deleted_at is None and row.deletion_started_at is None and row.deletion_token is None
+        assert saved.status == "ready_keyword_only" and saved.text == "仍需保留的设定"
+        assert saved.index_task_key is None and saved.index_claim_key is None
+        assert queued.status == "queued" and queued.statistics_key == task_key
+
+
 async def test_waiting_for_conversation_lock_cannot_recover_external_after_trash(app, client, fake_llm, monkeypatch):
     connector = FakeMcpConnector()
     app.state.task_engine.ctx.mcp_connector = connector
-    base, _, _, change = await _stuck_external(client, fake_llm, connector, app, minutes_ago=3)
+    project, base, url, _ = await setup_agent(client, connector)
+    fake_llm.push_tools([call("mcp__dict__send", {"to": "编辑部"})])
+    fake_llm.push_tools([("text", {"text": "发送完成"})])
+    task = await send_task(client, url)
+    assert (await wait_task(client, task, statuses=("paused",)))["status"] == "paused"
+    proposed = (await client.get(url)).json()["changes"][0]
+    completed = await client.post(f"{base}/changes/{proposed['id']}/confirm", json=change_action(proposed))
+    assert completed.status_code == 200 and completed.json()["status"] == "executed", completed.text
+    assert (await wait_task(client, task))["status"] == "succeeded"
+    change = completed.json()
+    pid = project["id"]
+    async with app.state.sessionmaker() as db:
+        cid = (await db.get(AgentChange, change["id"])).conversation_id
+    lock = agent_service.conversation_lock(cid)
+    waiting = asyncio.Event()
+
+    class ObservedLock:
+        async def __aenter__(self):
+            waiting.set()
+            return await lock.__aenter__()
+
+        async def __aexit__(self, *args):
+            return await lock.__aexit__(*args)
+
+    await lock.acquire()
+    monkeypatch.setattr(agent_service, "conversation_lock", lambda conversation_id: ObservedLock())
+    confirmation = asyncio.create_task(
+        client.post(f"{base}/changes/{change['id']}/confirm", json=change_action(change))
+    )
+    try:
+        try:
+            await asyncio.wait_for(waiting.wait(), 3)
+            assert (await client.delete(f"/api/v1/projects/{pid}")).status_code == 204
+            async with app.state.sessionmaker() as db:
+                before = (await db.get(AgentChange, change["id"])).status
+        finally:
+            lock.release()
+        assert (await confirmation).status_code == 404
+        async with app.state.sessionmaker() as db:
+            assert (await db.get(AgentChange, change["id"])).status == before == "executed"
+        assert len(connector.calls) == 1
+    finally:
+        if not confirmation.done():
+            confirmation.cancel()
+            with suppress(asyncio.CancelledError):
+                await confirmation
+
+
+async def test_unproven_external_blocks_trash_while_confirmation_waits(app, client, fake_llm, monkeypatch):
+    connector = FakeMcpConnector()
+    app.state.task_engine.ctx.mcp_connector = connector
+    base, _, task, change = await _stuck_external(client, fake_llm, connector, app, minutes_ago=3, signed=False)
     pid = int(base.split("/")[-2])
     async with app.state.sessionmaker() as db:
         cid = (await db.get(AgentChange, change["id"])).conversation_id
@@ -389,15 +483,33 @@ async def test_waiting_for_conversation_lock_cannot_recover_external_after_trash
 
     await lock.acquire()
     monkeypatch.setattr(agent_service, "conversation_lock", lambda conversation_id: ObservedLock())
-    confirmation = asyncio.create_task(client.post(f"{base}/changes/{change['id']}/confirm"))
+    confirmation = asyncio.create_task(
+        client.post(f"{base}/changes/{change['id']}/confirm", json=change_action(change))
+    )
     try:
-        await asyncio.wait_for(waiting.wait(), 3)
-        assert (await client.delete(f"/api/v1/projects/{pid}")).status_code == 204
+        try:
+            await asyncio.wait_for(waiting.wait(), 3)
+            denied = await client.delete(f"/api/v1/projects/{pid}")
+            assert denied.status_code == 409 and denied.json()["code"] == "project_tasks_not_stopped", denied.text
+            async with app.state.sessionmaker() as db:
+                project = await db.get(Project, pid)
+                assert project.deleted_at is None and project.deletion_started_at is None
+                assert project.deletion_token is None
+                assert (await db.get(AgentChange, change["id"])).status == "executing"
+                assert (await db.get(Task, task["id"])).status == "paused"
+        finally:
+            lock.release()
+        recovered = await confirmation
+        assert recovered.status_code == 409 and recovered.json()["detail"] == "修改正在处理中，请刷新后重试"
         async with app.state.sessionmaker() as db:
-            before = (await db.get(AgentChange, change["id"])).status
+            stored = await db.get(AgentChange, change["id"])
+            assert stored.status == "executing" and stored.error == ""
+            assert "_external_outcome_unknown" not in stored.result
+            assert "_external_snapshot_mac" not in stored.result
+            assert stored.result["_external_task_key"] == task["task_key"]
+        assert connector.calls == []
     finally:
-        lock.release()
-    assert (await confirmation).status_code == 404
-    async with app.state.sessionmaker() as db:
-        assert (await db.get(AgentChange, change["id"])).status == before == "executing"
-    assert connector.calls == []
+        if not confirmation.done():
+            confirmation.cancel()
+            with suppress(asyncio.CancelledError):
+                await confirmation

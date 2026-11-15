@@ -14,7 +14,7 @@ from app.models import Project, SettingAiLink, SettingReferenceHandle
 from app.schemas import setting_ai_visibility as s
 from app.schemas.setting_fields import EntityRef, EntryKind, SettingEntry
 from app.services import authorization_service as authz
-from app.services import project_lifecycle, series_policy
+from app.services import project_access, project_lifecycle, series_policy
 from app.services import setting_catalog_service as catalog
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import get_manageable_project, get_owned_project
@@ -174,9 +174,14 @@ def _public_settings(
     )
 
 
-async def read_settings(db: AsyncSession, user_id: int, project_id: int, kind: EntryKind, entry_id: int):
+async def read_settings(
+    db: AsyncSession, user_id: int, project_id: int, kind: EntryKind, entry_id: int, *, manual: bool = False,
+):
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        if manual:
+            await project_access.require_project(db, user_id, project_id, "content.read")
+        else:
+            await get_manageable_project(db, user_id, project_id)
         before = await visibility_revision(db, project_id)
         entry = await catalog.get_entry(db, project_id, kind, entry_id)
         model = catalog.ENTRY_MODELS[kind]
@@ -264,10 +269,16 @@ async def validate_project_links(db: AsyncSession, project_id: int) -> None:
 
 async def write_settings(
     db: AsyncSession, user_id: int, project_id: int, kind: EntryKind, entry_id: int, data: s.EntryAiSettingsUpdate,
+    *, manual: bool = False,
 ) -> s.EntryAiSettingsOut:
     async with AuditOperation(db, user_id, "project.update", "project", project_id, project_id=project_id) as audit:
         try:
-            project = await lock_author_visibility_write(db, user_id, project_id)
+            project = (
+                await project_access.require_project(
+                    db, user_id, project_id, "content.edit", for_update=True, visibility_write=True,
+                )
+                if manual else await lock_author_visibility_write(db, user_id, project_id)
+            )
             audit.target(project)
             model = catalog.ENTRY_MODELS[kind]
             item = await db.scalar(
@@ -298,7 +309,9 @@ async def write_settings(
             targets = [entries[key] for key in next_targets]
             changed = {key: value for key, value in new.model_dump().items() if getattr(old, key) != value}
             if kind in ("character", "world") and changed.keys() & series_policy.AI_SHARED_FIELDS:
-                await series_policy.reject_bound_entry(db, project_id, kind, entry_id)
+                await series_policy.reject_bound_entry(
+                    db, project_id, kind, entry_id, actor_user_id=user_id if manual else None,
+                )
             links_changed = next_targets != current_targets
             if changed or links_changed:
                 revision = await bump_visibility_revision(
@@ -309,7 +322,8 @@ async def write_settings(
                     setattr(item, key, value)
                 if links_changed:
                     await replace_links(db, project_id, entry, targets)
-                audit.summary.changed_fields = sorted(set(changed) | ({"links"} if links_changed else set()))
+                # 管理审计只接受既有安全分类，不记录配置值或绕过字段白名单。
+                audit.summary.changed_fields = ["setting_fields"]
                 audit.affected([entry_id])
                 await audit.commit()
             else:

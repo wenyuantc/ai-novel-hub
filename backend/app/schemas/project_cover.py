@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -16,8 +18,10 @@ class CoverGenerateRequest(BaseModel):
 
 class CoverPromptOut(BaseModel):
     prompt: str
+    warning: str | None = None
 
 
 class CoverGenerateOut(BaseModel):
     image_base64: str
     mime_type: str
+    model_source: Literal["actor", "owner"] | None = None

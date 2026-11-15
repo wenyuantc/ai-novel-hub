@@ -89,7 +89,7 @@ function scene(id: number): Scene {
   }
 }
 function task(status: Task['status'] = 'running'): Task {
-  return { id: 10, kind: 'chapter.revise', status, title: '场景22重写', project_id: 1, chapter_id: 3, scene_id: 22, analysis_id: 5, progress: 0, stage: '', error: '', retry_of_id: null, character_id: null, outline_id: null, checkpoint: null, step_cursor: 0, queue_position: null, created_at: '', started_at: null, finished_at: null }
+  return { id: 10, task_key: '00000000-0000-4000-8000-000000000010', kind: 'chapter.revise', status, title: '场景22重写', project_id: 1, chapter_id: 3, scene_id: 22, analysis_id: 5, progress: 0, stage: '', error: '', retry_of_id: null, character_id: null, outline_id: null, checkpoint: null, step_cursor: 0, queue_position: null, created_at: '', started_at: null, finished_at: null }
 }
 beforeEach(() => {
   vi.clearAllMocks()
@@ -108,55 +108,46 @@ beforeEach(() => {
   view.createTask.mockResolvedValue(task())
 })
 
-describe('另一场景任务终态的章分析刷新', () => {
+describe('章节任务身份与终态', () => {
   const renderStoreState = (activeTasks: Task[]) => {
     view.activeTasks = activeTasks
     view.loaderCalls = 0
     view.effects = []
     renderToStaticMarkup(createElement(App, null, createElement(ChapterEditorPage)))
-    const watcher = view.effects.find((effect) => effect.deps?.includes(view.controller))
-    if (!watcher) throw new Error('未捕获真实异景 active-store watcher')
-    return { watcher, attach: view.effects.find((effect) => effect.deps?.[0] === activeTasks) }
+    return { attach: view.effects.find((effect) => effect.deps?.includes(activeTasks)) }
   }
 
-  it('未订阅的另一Scene从active store退出后刷新章分析/列表，只读保留当前草稿且只执行一次', async () => {
+  it('列表中仅整数章节 / 场景相同的旧任务不自动接续或刷新当前草稿', () => {
     view.scene = scene(23)
     view.draft = '场景23未保存草稿😀'
     const active = renderStoreState([task()])
-    active.attach?.setup()
-    active.watcher.setup()
+    expect(active.attach).toBeUndefined()
     expect(view.follow).not.toHaveBeenCalled()
-    expect(view.otherSceneRef?.current).toBe(true)
     expect(view.refreshAnalysis).not.toHaveBeenCalled()
-
     const finished = renderStoreState([])
-    view.stateUpdates = []
-    finished.watcher.setup()
-    await vi.waitFor(() => expect(view.refreshAnalysis).toHaveBeenCalledExactlyOnceWith())
-    expect(view.getChapter).toHaveBeenCalledExactlyOnceWith(1, 3)
-    expect(view.refreshAnalysis).toHaveBeenCalledExactlyOnceWith()
-    expect(view.reloadSiblings).toHaveBeenCalledExactlyOnceWith()
-    expect(view.refreshProject).toHaveBeenCalledExactlyOnceWith()
-    expect(view.stateUpdates.filter((value) => value === null)).toHaveLength(1) // 清掉旧全章 compare
-    expect(view.loadScene).toHaveBeenCalledExactlyOnceWith() // 默认 preserveDraft，不传 false
-    expect(view.analyze).not.toHaveBeenCalled()
-    expect(view.follow).not.toHaveBeenCalled()
-    expect(view.parseDone).not.toHaveBeenCalled()
-    expect(view.changeScene).not.toHaveBeenCalled()
+    expect(finished.attach).toBeUndefined()
+    expect(view.getChapter).not.toHaveBeenCalled()
+    expect(view.loadScene).not.toHaveBeenCalled()
     expect(view.scene.id).toBe(23)
     expect(view.draft).toBe('场景23未保存草稿😀')
-    finished.watcher.setup()
-    expect(view.refreshAnalysis).toHaveBeenCalledTimes(1)
-    expect(view.reloadSiblings).toHaveBeenCalledTimes(1)
   })
 
-  it('首次挂载没有异景任务时不伪造退出事件或清理比较', () => {
-    renderStoreState([]).watcher.setup()
+  it('首次挂载不依赖无实例证明的任务列表或伪造终态', () => {
+    expect(renderStoreState([]).attach).toBeUndefined()
     expect(view.getChapter).not.toHaveBeenCalled()
     expect(view.refreshAnalysis).not.toHaveBeenCalled()
     expect(view.reloadSiblings).not.toHaveBeenCalled()
     expect(view.refreshProject).not.toHaveBeenCalled()
     expect(view.stateUpdates.filter((value) => value === null)).toHaveLength(0)
+  })
+
+  it('未知来源的生成中章节只提示核对任务，不推断中断或提供复位', () => {
+    if (!view.chapter) throw new Error('缺少章节')
+    view.chapter.status = 'generating'
+    const html = renderToStaticMarkup(createElement(App, null, createElement(ChapterEditorPage)))
+    expect(html).toContain('暂无法安全关联先前的任务')
+    expect(html).not.toContain('复位为草稿')
+    expect(view.follow).not.toHaveBeenCalled()
   })
 
   it.each(['succeeded', 'cancelled'] as const)('%s 只按真实终态刷新派生状态，保留当前另一场景草稿', async (status) => {

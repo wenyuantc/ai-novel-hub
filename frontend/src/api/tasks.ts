@@ -1,7 +1,7 @@
 // 后台任务：CRUD + 订阅（GET /tasks/{id}/stream，断线自动重连，snapshot 覆盖本地文本）
 
 import { isAgentToolStart, isAgentToolEnd, readAgentChange } from './agentEvents'
-import { ApiError, api, request, type QueryValue } from './client'
+import { ApiError, api, request, type CapturedProjectFailure, type QueryValue } from './client'
 import { getSSE, isAbortError, readDetail, readText, StreamError } from './sse'
 import type {
   AgentToolStart,
@@ -22,6 +22,23 @@ import type {
 } from './types'
 
 export interface TaskReviewIdentity { task_key: string; run_key: string; token: string }
+export type TaskIdentity = Pick<Task, 'id' | 'task_key'>
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+export function hasTaskIdentity(task: TaskIdentity | null | undefined): task is TaskIdentity & { task_key: string } {
+  return !!task && Number.isSafeInteger(task.id) && task.id > 0 && typeof task.task_key === 'string' && UUID.test(task.task_key)
+}
+function requireTaskIdentity(task: TaskIdentity): TaskIdentity & { task_key: string } {
+  if (!hasTaskIdentity(task)) throw new Error('任务身份不可确认，请刷新列表后重新操作。')
+  return { id: task.id, task_key: task.task_key }
+}
+function sameTask(result: Task, expected: TaskIdentity & { task_key: string }): Task {
+  if (!result || result.id !== expected.id || result.task_key !== expected.task_key) throw new ApiError(409, '任务身份已变化，请刷新后重新确认。')
+  return result
+}
+function reviewQuery(task: TaskIdentity & { task_key: string }, review?: TaskReviewIdentity) {
+  if (review && review.task_key !== task.task_key) throw new Error('任务与提案身份不一致，请刷新后重新操作。')
+  return { task_key: task.task_key }
+}
 export function taskReviewIdentity(task: Task, includeFinished = false): TaskReviewIdentity | undefined {
   const review = task.rich_review
   return review && (review.phase === 'awaiting_review' || includeFinished)
@@ -30,20 +47,47 @@ export function taskReviewIdentity(task: Task, includeFinished = false): TaskRev
 
 export const taskApi = {
   list: (query: TaskListQuery = {}) => api.get<Task[]>('/tasks', { ...query } as Record<string, QueryValue>),
-  get: (id: number) => api.get<Task>(`/tasks/${id}`),
-  output: (id: number) => api.get<TaskOutput>(`/tasks/${id}/output`),
-  cancel: (id: number, review?: TaskReviewIdentity) => api.post<Task>(`/tasks/${id}/cancel`, review),
-  retry: (id: number) => api.post<Task>(`/tasks/${id}/retry`),
+  get: async (task: TaskIdentity, signal?: AbortSignal) => {
+    const identity = requireTaskIdentity(task)
+    return sameTask(await request<Task>(`/tasks/${identity.id}`, { query: reviewQuery(identity), signal }), identity)
+  },
+  output: async (task: TaskIdentity) => {
+    const identity = requireTaskIdentity(task)
+    return request<TaskOutput>(`/tasks/${identity.id}/output`, { query: reviewQuery(identity) })
+  },
+  cancel: async (task: TaskIdentity, review?: TaskReviewIdentity) => {
+    const identity = requireTaskIdentity(task)
+    return sameTask(await request<Task>(`/tasks/${identity.id}/cancel`, { method: 'POST', query: reviewQuery(identity, review), body: review }), identity)
+  },
+  retry: async (task: TaskIdentity) => {
+    const identity = requireTaskIdentity(task)
+    const result = await request<Task>(`/tasks/${identity.id}/retry`, { method: 'POST', query: reviewQuery(identity) })
+    if (!hasTaskIdentity(result) || result.task_key === identity.task_key) throw new ApiError(409, '重试结果缺少新的任务身份，请刷新列表。')
+    return result
+  },
   /** 待审核 → 排队（同一任务从断点继续，202） */
-  resume: (id: number) => api.post<Task>(`/tasks/${id}/resume`),
+  resume: async (task: TaskIdentity) => {
+    const identity = requireTaskIdentity(task)
+    return sameTask(await request<Task>(`/tasks/${identity.id}/resume`, { method: 'POST', query: reviewQuery(identity) }), identity)
+  },
   /** 待审核 → 已完成（result.ended_early = true） */
-  finish: (id: number, review?: TaskReviewIdentity) => api.post<Task>(`/tasks/${id}/finish`, review),
-  remove: (id: number, review?: TaskReviewIdentity) => api.del(`/tasks/${id}`, review ? { ...review } : undefined),
+  finish: async (task: TaskIdentity, review?: TaskReviewIdentity) => {
+    const identity = requireTaskIdentity(task)
+    return sameTask(await request<Task>(`/tasks/${identity.id}/finish`, { method: 'POST', query: reviewQuery(identity, review), body: review }), identity)
+  },
+  remove: async (task: TaskIdentity, review?: TaskReviewIdentity) => {
+    const identity = requireTaskIdentity(task)
+    return request<void>(`/tasks/${identity.id}`, { method: 'DELETE', query: { ...reviewQuery(identity, review),
+      ...(review ? { run_key: review.run_key, token: review.token } : {}) } })
+  },
   /**
    * 拆书反推（book.import）因失败暂停时跳过当前步骤并继续（202，同一任务）：通读批次不写摘要、汇总改用代码合并结果。
    * 路径在 /book-imports 下；放在这里是因为任务面板在入口 chunk 中，不能引用拆书页的 api/bookImport.ts
    */
-  skipBookImport: (id: number) => api.post<Task>(`/book-imports/tasks/${id}/skip`),
+  skipBookImport: async (task: TaskIdentity) => {
+    const identity = requireTaskIdentity(task)
+    return sameTask(await request<Task>(`/book-imports/tasks/${identity.id}/skip`, { method: 'POST', query: reviewQuery(identity) }), identity)
+  },
   /** 清理已结束任务（DELETE 带查询参数，api.del 不支持 query） */
   clearFinished: (projectId?: number) =>
     request<TaskClearResult>('/tasks', { method: 'DELETE', query: { finished: true, project_id: projectId } }),
@@ -64,6 +108,22 @@ export const CHAPTER_WRITE_KINDS: readonly TaskKind[] = ['chapter.generate', 'ch
 
 export function isChapterWriteKind(kind: TaskKind): boolean {
   return CHAPTER_WRITE_KINDS.includes(kind)
+}
+
+/**
+ * 协作者可实时订阅的任务类型（与后端 stream_evidence 白名单一致）：单章、分析、批量、向导、大纲、实体。
+ * 智能体、知识库索引、拆书等对协作者订阅返回 404，只展示状态与详情，不发起订阅。
+ */
+export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
+  'chapter.generate', 'chapter.polish', 'chapter.revise', 'chapter.analyze', 'chapter.batch',
+  'wizard.outline', 'wizard.characters', 'wizard.world', 'wizard.careers',
+  'outline.continue', 'outline.expand',
+  'character.generate', 'organization.generate', 'career.generate', 'relations.parse', 'relations.generate',
+]
+
+/** 作者（及个人任务）可订阅全部类型；协作者只订阅白名单内类型。 */
+export function canStreamTask(kind: TaskKind, isCollaborator: boolean): boolean {
+  return !isCollaborator || COLLABORATOR_STREAM_KINDS.includes(kind)
 }
 
 /** 只有失败、已取消、已中断的任务可以重试（与后端一致） */
@@ -114,7 +174,7 @@ export function queueLabel(task: Pick<Task, 'status' | 'queue_position'>): strin
 export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
 
 /**
- * 任务面板「跳转」目标：章节任务 → 章节编辑器（分析 / 按建议重写 → 编辑器并打开分析面板）；向导任务 → 向导页对应步骤；
+ * 任务面板「跳转」目标：无实例证明的章节任务 → 章节列表；向导任务 → 向导页对应步骤；
  * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页；大纲续写 / 展开 → 大纲页；批量生成 → 章节页；
  * 建索引（文档 / 重建 / 记忆向量）→ 知识库页；拆书反推 → 项目概览。无法定位时为 null。
  */
@@ -124,10 +184,10 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> 
   switch (task.kind) {
     case 'chapter.generate':
     case 'chapter.polish':
-      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}${task.scene_id ? `?scene_id=${task.scene_id}` : ''}`
     case 'chapter.analyze':
     case 'chapter.revise':
-      return task.chapter_id === null ? null : `${base}/chapters/${task.chapter_id}?${ANALYSIS_PANEL_QUERY}${task.scene_id ? `&scene_id=${task.scene_id}` : ''}`
+      // 当前 TaskOut 的章节 / 场景整数 ID 未绑定实例证明，只能导航到章节列表。
+      return task.chapter_id === null ? null : `${base}/chapters`
     case 'character.generate':
     case 'relations.parse':
       return `${base}/characters`
@@ -199,10 +259,13 @@ export function isBookBatchEnd(data: unknown): data is BookBatchEnd {
 
 /**
  * 订阅终止结果：成功带 result（章节 {chapter, warning?}；向导 {kind, items}）；待审核（多步任务到达审核点）带 paused 载荷；
- * 否则带中文 detail
+ * 否则带中文 detail。
+ * 收据受限收尾（E5-d）：内容已保存但执行授权或设置已变化，结果未发布——仍是成功终态，result 为 null，
+ * unpublished=true 并带固定说明 detail（如「正文已保存，请刷新后查看」），调用方应重新读取而不是使用 result。
  */
 export type TaskEnd =
-  | { status: 'succeeded'; task: Task | null; result: unknown }
+  | { status: 'succeeded'; task: Task | null; result: unknown; unpublished?: false }
+  | { status: 'succeeded'; task: Task | null; result: null; unpublished: true; detail: string }
   | { status: 'paused'; task: Task | null; result: unknown }
   | { status: 'failed' | 'cancelled' | 'interrupted'; task: Task | null; detail: string }
 
@@ -228,6 +291,8 @@ export interface TaskStreamHandlers {
   onExecuted?: (change: AgentChange) => void
   /** 连接断开、即将第 attempt 次重连 */
   onReconnect?: (attempt: number, delayMs: number) => void
+  /** 仅作用域仍有效时：作品任务的访问失败，调用方应丢弃已缓存的输出。 */
+  onProjectAccessDenied?: () => void
 }
 
 export interface SubscribeOptions {
@@ -240,6 +305,8 @@ export interface SubscribeOptions {
   /** 测试注入 */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
   now?: () => number
+  /** 由已验证的初始任务及当前作品作用域捕获，跨重连保持不变。 */
+  projectFailure?: CapturedProjectFailure | null
 }
 
 /** 第 attempt（从 1 起）次重连前的等待：指数退避，封顶 maxDelayMs */
@@ -276,11 +343,13 @@ function isRetryable(err: unknown): boolean {
  * 中止（signal）抛 AbortError，只断开订阅，不影响任务；4xx 抛 ApiError；重连耗尽抛最后一次错误。
  */
 export async function subscribeTask(
-  taskId: number,
+  task: TaskIdentity,
   handlers: TaskStreamHandlers,
   signal?: AbortSignal,
   options: SubscribeOptions = {},
 ): Promise<TaskEnd> {
+  // 捕获最初可证明的任务身份：重连和消息处理都不得从当前整数 ID 推测新身份。
+  const identity = requireTaskIdentity(task)
   const {
     maxRetries = 8,
     baseDelayMs = 1000,
@@ -288,23 +357,51 @@ export async function subscribeTask(
     stableMs = 5000,
     sleep = abortableSleep,
     now = Date.now,
+    projectFailure = null,
   } = options
+  const handshakeScope = projectFailure && {
+    isCurrent: projectFailure.isCurrent,
+    refresh: () => {
+      if (!projectFailure.isCurrent()) return
+      handlers.onProjectAccessDenied?.()
+      if (projectFailure.isCurrent()) projectFailure.refresh()
+    },
+  }
+  // 协作者受控流的 permission_denied 可能来自已知窗口（领取瞬间等待超时、单帧租约超时、收据收尾后的在途帧），
+  // 先核对详情再重订阅一次；第二次拒绝或详情不可读时按原错误处理。作者流不会收到该帧，行为不变。
+  let deniedRetried = false
+  const denied = (data: Record<string, unknown>): TaskEnd => {
+    if (projectFailure) {
+      handlers.onProjectAccessDenied?.()
+      if (projectFailure.isCurrent()) projectFailure.refresh()
+      throw new ApiError(403, readDetail(data), data)
+    }
+    return { status: 'failed', task: null, detail: readDetail(data) }
+  }
   let failures = 0
   for (;;) {
-    const holder: { end: TaskEnd | null } = { end: null }
+    const holder: { end: TaskEnd | null; denied: Record<string, unknown> | null } = { end: null, denied: null }
     // 本次连接收到 snapshot 的时间；断开时据此判断连接是否稳定
     let snapshotAt: number | null = null
     try {
+      if (projectFailure && !projectFailure.isCurrent()) throw new DOMException('aborted', 'AbortError')
       await getSSE(
-        `/tasks/${taskId}/stream`,
+        `/tasks/${identity.id}/stream?task_key=${encodeURIComponent(identity.task_key)}`,
         {
           onMessage: (msg) => {
-            if (holder.end) return
+            if (holder.end || holder.denied) return
+            if (projectFailure && !projectFailure.isCurrent()) throw new DOMException('aborted', 'AbortError')
             let data: unknown
             try {
               data = JSON.parse(msg.data)
             } catch {
               return
+            }
+            if (isRecord(data) && data.task != null) {
+              const received = readTask(data)
+              if (!received || received.id !== identity.id || received.task_key !== identity.task_key) {
+                throw new ApiError(409, '任务身份已变化，请刷新后重新打开。')
+              }
             }
             switch (msg.event) {
               case 'snapshot':
@@ -347,6 +444,9 @@ export async function subscribeTask(
               case 'executed': {
                 const change = readAgentChange(data)
                 if (change) {
+                  if (change.turn_task_id !== identity.id || change.turn_task_key !== identity.task_key) {
+                    throw new ApiError(409, '提案所属任务已变化，请刷新后重新确认。')
+                  }
                   if (msg.event === 'proposal') handlers.onProposal?.(change)
                   else handlers.onExecuted?.(change)
                 }
@@ -356,9 +456,19 @@ export async function subscribeTask(
                 holder.end = { status: 'paused', task: readTask(data), result: isRecord(data) ? data.result : null }
                 break
               case 'done':
-                holder.end = { status: 'succeeded', task: readTask(data), result: isRecord(data) ? data.result : null }
+                holder.end = isRecord(data) && data.unpublished === true
+                  ? { status: 'succeeded', task: readTask(data), result: null, unpublished: true, detail: typeof data.detail === 'string' && data.detail ? data.detail : '结果已保存，请刷新后查看' }
+                  : { status: 'succeeded', task: readTask(data), result: isRecord(data) ? data.result : null }
                 break
               case 'error': {
+                if (isRecord(data) && data.code === 'permission_denied') {
+                  if (!deniedRetried) {
+                    holder.denied = data
+                    return false
+                  }
+                  holder.end = denied(data)
+                  return false
+                }
                 const task = readTask(data)
                 const st = task?.status
                 const status = st === 'cancelled' || st === 'interrupted' ? st : 'failed'
@@ -371,8 +481,26 @@ export async function subscribeTask(
           },
         },
         signal,
+        handshakeScope,
       )
       if (holder.end) return holder.end
+      if (holder.denied) {
+        const data = holder.denied
+        deniedRetried = true
+        let fresh: Task | null = null
+        try {
+          fresh = await taskApi.get(identity, signal)
+        } catch (err) {
+          if (isAbortError(err) || signal?.aborted) throw err
+        }
+        if (projectFailure && !projectFailure.isCurrent()) throw new DOMException('aborted', 'AbortError')
+        // 详情 403/404/身份变化或读取失败：不重订阅，按原 permission_denied 处理。
+        if (!fresh) return denied(data)
+        const delay = reconnectDelay(1, baseDelayMs, maxDelayMs)
+        handlers.onReconnect?.(1, delay)
+        await sleep(delay, signal)
+        continue
+      }
       throw new StreamError('连接意外中断')
     } catch (err) {
       if (isAbortError(err) || signal?.aborted) throw err

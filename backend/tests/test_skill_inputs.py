@@ -9,7 +9,7 @@ from app.ai import skill_inputs as si
 from app.ai.providers import AIProviderError
 from app.core.errors import BadRequestError
 from app.services import batch_service
-from tests.helpers import create_ai_config, create_project, register, run_task, wait_task
+from tests.helpers import create_ai_config, create_project, register, run_task, task_params, wait_task
 
 SKILLS = "/api/v1/skills"
 TONE = {
@@ -229,7 +229,7 @@ async def test_generate_fills_inputs_rejects_invalid_and_retry_keeps_snapshot(cl
     # 修改输入项与正文后重试：仍用原值原正文
     await client.patch(f"{SKILLS}/{skill['id']}", json={"body": "第二版 {{ hero }}", "inputs": [HERO]})
     fake_llm.push("新的正文。")
-    task, _ = await run_task(client, await client.post(f"/api/v1/tasks/{task['id']}/retry"))
+    task, _ = await run_task(client, await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task)))
     assert task["status"] == "succeeded"
     assert "基调：轻松；重点人物：林远" in _system(fake_llm.calls[-1]) and "第二版" not in _system(fake_llm.calls[-1])
     logs = await _logs(client, base, ch)
@@ -286,11 +286,12 @@ async def test_batch_uses_same_inputs_for_every_chapter(client, fake_llm):
     assert bad.status_code == 400
     resp = await client.post(f"{base}/batch-generate", json=body)
     assert resp.status_code == 202, resp.text
-    task_id = resp.json()["id"]
-    assert (await wait_task(client, task_id, statuses=("paused", "failed")))["status"] == "paused"
+    task_ref = resp.json()
+    task_id = task_ref["id"]
+    assert (await wait_task(client, task_ref, statuses=("paused", "failed")))["status"] == "paused"
     await client.patch(f"{SKILLS}/{skill['id']}", json={"inputs": [HERO], "body": "第二版"})
-    assert (await client.post(f"/api/v1/tasks/{task_id}/resume")).status_code == 202
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    assert (await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))).status_code == 202
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     prompts = [_system(c) for c in fake_llm.calls]
     assert len(prompts) == 2 and all("基调：沉重；重点人物：林远" in p for p in prompts)
     assert (await _logs(client, base, c2))[0]["params"]["skill"]["inputs"] == {"基调": "沉重", "hero": "林远"}
@@ -311,7 +312,7 @@ async def _agent(client):
 async def _send(client, url, text="请帮忙", **kw):
     response = await client.post(url + "/messages", json={"content": text, **kw})
     assert response.status_code == 202, response.text
-    return response.json()["task"]["id"]
+    return response.json()["task"]
 
 
 def _forced(fake_llm) -> list[str]:
@@ -348,8 +349,8 @@ async def test_agent_load_skill_trigger_and_manual_inputs(client, fake_llm):
     resp = await client.post(url + "/messages", json={"content": "x", "skill_id": skill["id"]})
     assert resp.status_code == 400 and "重点人物" in resp.json()["detail"]
     fake_llm.push_tools([("text", {"text": "好"})])
-    task_id = await _send(client, url, "写", skill_id=skill["id"], skill_inputs={"hero": "林远"})
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    task_ref = await _send(client, url, "写", skill_id=skill["id"], skill_inputs={"hero": "林远"})
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     forced = _forced(fake_llm)
     assert "基调：轻松；重点人物：林远" in forced[-1] and "【该 Skill 的输入项】" not in forced[-1]
     user_message = [m for m in (await client.get(url)).json()["messages"] if m["role"] == "user"][-1]
@@ -362,31 +363,41 @@ async def test_agent_start_task_skill_inputs(client, app):
     from app.services.agent.tools.base import ToolCtx
 
     base, (ch,), skill = await _setup(client)
+    # 智能体派生单章任务已按协作契约失败关闭（agent_derived_chapter_identity_required），
+    # Skill 引用/输入校验改用仍可经 start_task 预览的批量任务覆盖。E4-g2 起批量也是受控受理类型：
+    # 与真实 runner 一致，工具会话须绑定原认证身份，预览按该身份锁内重选模型。
+    from app.models import User
+    from app.services.authorization_service import AuthenticatedActor
+
     tool = get_tool("start_task")
+    batch = {"start_chapter_id": ch["id"], "end_chapter_id": ch["id"]}
     async with app.state.sessionmaker() as db:
         project = await db.get(Project, int(base.rsplit("/", 1)[1]))
+        token_version = (await db.get(User, project.user_id)).token_version
+        db.info["authenticated_actor"] = AuthenticatedActor(project.user_id, token_version)
         ctx = ToolCtx(db, project, project.user_id, app.state.task_engine.ctx)
         missing = await tool.preview(
-            ctx, {"kind": "chapter.generate", "params": {"chapter_id": ch["id"], "skill_id": skill["id"]}}
+            ctx, {"kind": "chapter.batch", "params": {**batch, "skill_id": skill["id"]}}
         )
         assert "error" in missing and "重点人物" in missing["error"]
-        params = {"chapter_id": ch["id"], "skill_id": skill["id"], "skill_inputs": [{"name": "hero", "value": "林远"}]}
-        first = await tool.preview(ctx, {"kind": "chapter.generate", "params": params})
+        await db.rollback()
+        params = {**batch, "skill_id": skill["id"], "skill_inputs": [{"name": "hero", "value": "林远"}]}
+        first = await tool.preview(ctx, {"kind": "chapter.batch", "params": params})
         assert first["skill"]["inputs"] == {"基调": "轻松", "hero": "林远"}
         assert any(d["label"] == "Skill 输入" and d["after"] == {"hero": "林远"} for d in first["diff"])
         await db.rollback()
         params["skill_inputs"] = [{"name": "hero", "value": "苏晴"}]
-        second = await tool.preview(ctx, {"kind": "chapter.generate", "params": params})
+        second = await tool.preview(ctx, {"kind": "chapter.batch", "params": params})
         assert second["skill"]["hash"] != first["skill"]["hash"]
         json.dumps(second)
         await db.rollback()
         # 未知标识同样是工具错误
         params["skill_inputs"] = [{"name": "nope", "value": "x"}]
-        unknown = await tool.preview(ctx, {"kind": "chapter.generate", "params": params})
+        unknown = await tool.preview(ctx, {"kind": "chapter.batch", "params": params})
         assert "未知的输入项" in unknown["error"]
         # 同一标识给了两次：不静默覆盖，返回工具错误
         params["skill_inputs"] = [{"name": "hero", "value": "甲"}, {"name": "hero", "value": "乙"}]
-        duplicated = await tool.preview(ctx, {"kind": "chapter.generate", "params": params})
+        duplicated = await tool.preview(ctx, {"kind": "chapter.batch", "params": params})
         assert "标识重复" in duplicated["error"]
 
 
@@ -472,7 +483,8 @@ async def test_scene_generate_and_section_rewrite_fill_inputs(client, fake_llm):
     assert "基调：沉重；重点人物：苏晴" in _system(fake_llm.calls[-1])
     await client.patch(f"{SKILLS}/{skill['id']}", json={"body": "第二版", "inputs": []})
     fake_llm.push("重试成功")
-    retried, _ = await run_task(client, await client.post(f"/api/v1/tasks/{task['id']}/retry"))
+    response = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
+    retried, _ = await run_task(client, response)
     # 场景任务成功后可能进入待审核；这里只关心重试沿用的快照
     assert retried["status"] in ("succeeded", "paused") and retried["retry_of_id"] == task["id"]
     assert "基调：沉重；重点人物：苏晴" in _system(fake_llm.calls[-1]) and "第二版" not in _system(fake_llm.calls[-1])

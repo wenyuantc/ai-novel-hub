@@ -1,4 +1,4 @@
-"""知识库：管理员可维护已有内容；上传、索引任务及模型检索保持严格项目归属。"""
+"""知识库：人工内容按作品能力访问；共享向量任务对作者与已获作者模型授权的编辑者开放（E6-c，任务归真实触发者）。"""
 
 from typing import Annotated
 
@@ -20,6 +20,7 @@ from app.schemas.kb import (
 from app.schemas.task import TaskOut
 from app.services import kb_parser
 from app.services import kb_service as svc
+from app.services.project_access import require_project
 
 router = APIRouter(prefix="/projects/{project_id}/kb", tags=["knowledge-base"])
 
@@ -47,11 +48,17 @@ async def upload_document(
     engine: TaskEngineDep,
     file: Annotated[UploadFile, File(description="txt / md / json / docx / epub / pdf，≤ 20MB")],
 ) -> KbUploadResult:
+    # 预检不授予协作者代作者排队；关键词分块 / 协作向量受理在服务层按原邀请与事务锁完成。
+    user_id = user.id
+    write_actor = await svc.capture_content_write_actor(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "ai.use")
     # 多读 1 字节即可判断是否超限，不把超大文件整个读进内存
     data = await file.read(kb_parser.MAX_FILE_BYTES + 1)
     if len(data) > kb_parser.MAX_FILE_BYTES:
         raise BadRequestError(kb_parser.TOO_LARGE)
-    return await svc.upload_document(db, engine, user.id, project_id, file.filename or "", data)
+    return await svc.upload_document(
+        db, engine, user_id, project_id, file.filename or "", data, write_actor=write_actor,
+    )
 
 
 @router.patch("/documents/{document_id}", response_model=KbDocumentOut)
@@ -71,6 +78,7 @@ async def delete_document(project_id: int, document_id: int, user: CurrentUser, 
 async def reindex_document(
     project_id: int, document_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep
 ) -> TaskOut:
+    await require_project(db, user.id, project_id, "ai.use")
     return await svc.reindex_document(db, engine, user.id, project_id, document_id)
 
 
@@ -90,14 +98,16 @@ async def list_chunks(
 async def search(
     project_id: int, body: KbSearchRequest, user: CurrentUser, db: DbDep, env: EmbedEnvDep
 ) -> KbSearchResult:
+    await require_project(db, user.id, project_id, "ai.use")
     return await svc.search_debug(db, user.id, project_id, body, env=env)
 
 
 @router.get("/index-status", response_model=IndexStatus)
-async def index_status(project_id: int, user: CurrentUser, db: DbDep) -> IndexStatus:
-    return await svc.index_status(db, user.id, project_id)
+async def index_status(project_id: int, user: CurrentUser, db: DbDep, env: EmbedEnvDep) -> IndexStatus:
+    return await svc.index_status(db, user.id, project_id, env=env)
 
 
 @router.post("/rebuild", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def rebuild(project_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
+    await require_project(db, user.id, project_id, "ai.use")
     return await svc.start_rebuild(db, engine, user.id, project_id)

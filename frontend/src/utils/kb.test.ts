@@ -1,10 +1,23 @@
+import { ApiError } from '../api/client'
 import { describe, expect, it } from 'vitest'
 import type { IndexStatus, KbDocumentStatus, MemoryKind } from '../api/types'
+import { currentIndexStatus, indexStatusKey } from '../hooks/useIndexStatus'
 import {
+  AGENT_OWNER_MODEL_COST,
+  AGENT_OWNER_MODEL_VECTOR_COST,
+  AGENT_OWNER_VECTOR_COST,
+  agentOwnerCostNotice,
   docStatusHint,
   formatFileSize,
   formatScore,
   indexBanner,
+  collaboratorDocStatusHint,
+  collaboratorIndexBanner,
+  collaboratorKbAccess,
+  collaboratorSearchNotice,
+  collaboratorUploadHint,
+  kbActionError,
+  keywordReasonText,
   isDocBusy,
   KB_DOC_STATUS,
   KB_MAX_FILE_BYTES,
@@ -24,6 +37,9 @@ function status(over: Partial<IndexStatus> = {}): IndexStatus {
     stale_count: 0,
     stale: { kb: 0, memory: 0 },
     indexing: false,
+    owner_embedding_configured: true,
+    retrieval_mode: 'vector',
+    keyword_reason: null,
     ...over,
   }
 }
@@ -130,11 +146,31 @@ describe('索引横幅', () => {
     expect(b?.description).toContain('向量 · bge-m3')
   })
 
+  it('需要重建的标题带待建向量数（作者与协作者同口径）', () => {
+    expect(indexBanner(status({ needs_rebuild: true, stale_count: 7, stale: { kb: 4, memory: 3 } }), 'kb')?.message)
+      .toBe('需要重建索引：7 条资料待建向量')
+  })
+
   it('没有向量模型：只用关键词，不能重建', () => {
     const b = indexBanner(status({ embedding_model: null }), 'kb')
     expect(b?.type).toBe('info')
     expect(b?.message).toContain('只用关键词')
     expect(b?.canRebuild).toBe(false)
+  })
+
+  it('作者本人向量配置不可用（E6-f 裁决 18）：提示去模型配置，重建置灰并说明原因；优先于需要重建', () => {
+    const b = indexBanner(status({ needs_rebuild: true, stale_count: 7, stale: { kb: 4, memory: 3 },
+      retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_unavailable' }), 'kb')
+    expect(b?.message).toBe('向量配置不可用，请到模型配置检查')
+    expect(b?.canRebuild).toBe(false)
+    expect(b?.rebuildDisabledReason).toContain('修复模型配置')
+    expect(b?.configLink).toBe(true)
+    expect(b?.description).toContain('7 条资料待建向量')
+    // 建索引中仍优先；其他关键词原因（作者视图不会出现）不触发
+    expect(indexBanner(status({ indexing: true, keyword_reason: 'owner_embedding_unavailable' }), 'kb')?.message)
+      .toBe('正在建索引')
+    expect(indexBanner(status({ needs_rebuild: true, stale_count: 1, keyword_reason: 'embedding_config_missing' }), 'kb')
+      ?.message).toBe('需要重建索引：1 条资料待建向量')
   })
 })
 
@@ -162,5 +198,95 @@ describe('记忆', () => {
     expect(normalizeChapterRange(2, 5)).toEqual([2, 5])
     expect(normalizeChapterRange(null, 3)).toEqual([undefined, 3])
     expect(normalizeChapterRange(undefined, undefined)).toEqual([undefined, undefined])
+  })
+})
+
+describe('协作者视图（以服务端 index-status 为准）', () => {
+  const collab = (over: Partial<IndexStatus> = {}) => status({ embedding_model: null, ...over })
+
+  it('能力只由 retrieval_mode / keyword_reason 派生；未读到状态时不臆断', () => {
+    expect(collaboratorKbAccess(undefined)).toEqual({ known: false, vector: false, authorized: false, reason: null })
+    expect(collaboratorKbAccess(collab())).toEqual({ known: true, vector: true, authorized: true, reason: null })
+    expect(collaboratorKbAccess(collab({ retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_not_allowed' })))
+      .toEqual({ known: true, vector: false, authorized: false, reason: '作者未授权使用其模型配置' })
+    expect(collaboratorKbAccess(collab({ retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_unavailable' })))
+      .toMatchObject({ vector: false, authorized: true, reason: '作者的向量模型配置当前不可用' })
+    expect(keywordReasonText('embedding_config_missing')).toBe('作者未配置向量模型')
+    expect(keywordReasonText(null)).toBe('当前不能使用作者共享的向量模型')
+  })
+
+  it('上传提示：向量可用 → 费用由作者承担；否则仅关键词 + 原因', () => {
+    expect(collaboratorUploadHint(collab()).message).toBe('使用作者共享的向量模型，费用由作者承担')
+    const keyword = collaboratorUploadHint(collab({ retrieval_mode: 'keyword', keyword_reason: 'embedding_config_missing' }))
+    expect(keyword.message).toBe('仅关键词检索')
+    expect(keyword.description).toContain('作者未配置向量模型')
+    expect(collaboratorUploadHint(undefined).message).toBe('正在确认索引方式')
+    expect(collaboratorSearchNotice(collab())).toContain('费用由作者承担')
+    expect(collaboratorSearchNotice(collab({ retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_unavailable' })))
+      .toBe('仅关键词检索：作者的向量模型配置当前不可用。')
+    expect(collaboratorSearchNotice(undefined)).toBeNull()
+  })
+
+  it('横幅：embedding_model 为 null 不显示「未配置」；待建向量数；向量可用才可重建；记忆页带补救说明', () => {
+    expect(collaboratorIndexBanner(collab(), 'kb')).toBeNull()
+    const pending = collaboratorIndexBanner(collab({ stale_count: 4, stale: { kb: 1, memory: 3 } }), 'memory')
+    expect(pending).toMatchObject({ type: 'warning', message: '4 条资料待建向量', canRebuild: true })
+    expect(pending?.description).toContain('费用由作者承担')
+    expect(pending?.description).toContain('无法直接重试；可重新编辑此条或由有权限者全书重建')
+    expect(collaboratorIndexBanner(collab({ stale_count: 1, stale: { kb: 1, memory: 0 } }), 'kb')?.description)
+      .not.toContain('无法直接重试')
+    const keyword = collaboratorIndexBanner(collab({ retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_not_allowed',
+      stale_count: 2, stale: { kb: 2, memory: 0 } }), 'kb')
+    expect(keyword).toMatchObject({ type: 'info', canRebuild: false })
+    expect(keyword?.message).toBe('当前只用关键词检索：作者未授权使用其模型配置')
+    expect(keyword?.description).toBe('2 条资料待建向量。')
+    for (const b of [pending, keyword]) expect(JSON.stringify(b)).not.toContain('未配置向量模型，当前')
+    const indexing = collaboratorIndexBanner(collab({ indexing: true, stale_count: 2 }), 'kb')
+    expect(indexing).toMatchObject({ message: '正在建索引', canRebuild: false })
+  })
+
+  it('文档提示与错误文案', () => {
+    const doc = { status: 'ready_keyword_only' as const, error: '' }
+    expect(collaboratorDocStatusHint(doc, collab())).toContain('费用由作者承担')
+    expect(collaboratorDocStatusHint(doc, collab({ retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_not_allowed' })))
+      .toContain('请联系作者')
+    expect(collaboratorDocStatusHint({ status: 'failed', error: '失败了' }, collab())).toBe('失败了')
+    expect(kbActionError(new ApiError(403, '作者未授权共享向量模型', { code: 'owner_embedding_not_allowed' })))
+      .toBe('作者未授权使用其模型配置，不能建立向量索引；当前仅使用关键词检索。')
+    expect(kbActionError(new ApiError(403, '当前作品没有执行该操作的权限', { code: 'project_readonly' })))
+      .toBe('当前作品没有执行该操作的权限')
+  })
+})
+
+describe('Agent 输入区的作者费用提示（裁决 31）', () => {
+  const collab = (over: Partial<IndexStatus> = {}) => status({ embedding_model: null, ...over })
+  const keyword = collab({ retrieval_mode: 'keyword', keyword_reason: 'owner_embedding_not_allowed' })
+
+  it('作者本人不提示向量费用（即使服务端为 vector）', () => {
+    expect(agentOwnerCostNotice({ collaborator: false, modelSource: 'own', status: status() })).toBeNull()
+  })
+  it('协作者 + 向量 + 本人模型 → 向量费用由作者承担', () => {
+    expect(agentOwnerCostNotice({ collaborator: true, modelSource: 'own', status: collab() })).toBe(AGENT_OWNER_VECTOR_COST)
+    expect(AGENT_OWNER_VECTOR_COST).toBe('知识库检索将使用作者共享的向量模型，向量费用由作者承担。')
+  })
+  it('协作者 + 关键词 / 状态未知 → 不提示', () => {
+    expect(agentOwnerCostNotice({ collaborator: true, modelSource: 'own', status: keyword })).toBeNull()
+    expect(agentOwnerCostNotice({ collaborator: true, modelSource: 'own', status: undefined })).toBeNull()
+  })
+  it('模型来源为作者：向量时合并为一行，否则沿用原模型费用文案', () => {
+    expect(agentOwnerCostNotice({ collaborator: true, modelSource: 'owner', status: collab() })).toBe(AGENT_OWNER_MODEL_VECTOR_COST)
+    expect(AGENT_OWNER_MODEL_VECTOR_COST).toContain('外部服务费用由作者账户承担')
+    expect(agentOwnerCostNotice({ collaborator: true, modelSource: 'owner', status: keyword })).toBe(AGENT_OWNER_MODEL_COST)
+    expect(agentOwnerCostNotice({ collaborator: true, modelSource: 'owner', status: undefined })).toBe(AGENT_OWNER_MODEL_COST)
+  })
+  it('旧作品 / 旧授权轮次的响应与关闭时的状态不生效', () => {
+    const loaded = { key: indexStatusKey(3, 'v1:1'), status: collab() }
+    const notice = (key: string, enabled = true) =>
+      agentOwnerCostNotice({ collaborator: true, modelSource: 'own', status: currentIndexStatus(loaded, key, enabled) })
+    expect(notice(indexStatusKey(3, 'v1:1'))).toBe(AGENT_OWNER_VECTOR_COST)
+    expect(notice(indexStatusKey(4, 'v1:1'))).toBeNull()
+    expect(notice(indexStatusKey(3, 'v2:1'))).toBeNull()
+    expect(notice(indexStatusKey(3, 'v1:0'))).toBeNull()
+    expect(notice(indexStatusKey(3, 'v1:1'), false)).toBeNull()
   })
 })

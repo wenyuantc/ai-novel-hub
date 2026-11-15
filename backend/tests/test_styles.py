@@ -17,6 +17,7 @@ from tests.helpers import (
     register,
     run_task,
     stream_task,
+    task_params,
     wait_task,
 )
 
@@ -225,14 +226,15 @@ async def test_batch_explicit_style_kept_across_resume(app, client, fake_llm):
         },
     )
     assert resp.status_code == 202
-    task_id = resp.json()["id"]
-    assert (await stream_task(client, task_id))[-1][0] == "paused"
+    task_ref = resp.json()
+    task_id = task_ref["id"]
+    assert (await stream_task(client, task_ref))[-1][0] == "paused"
     async with app.state.sessionmaker() as db:
         from app.models import Task
 
         assert (await db.get(Task, task_id)).input["request"]["style"] == c["id"]
-    assert (await client.post(f"/api/v1/tasks/{task_id}/resume")).status_code == 202
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    assert (await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))).status_code == 202
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     prompts = _gen_prompts(fake_llm)
     assert len(prompts) == 2 and all("写作风格：指定风格段" in pr for pr in prompts)
     assert not any("项目风格段" in pr for pr in prompts)
@@ -257,13 +259,14 @@ async def test_batch_resume_rejects_deleted_explicit_style(client, fake_llm):
             "style": c["id"],
         },
     )
-    task_id = resp.json()["id"]
-    assert (await stream_task(client, task_id))[-1][0] == "paused"
+    task_ref = resp.json()
+    task_id = task_ref["id"]
+    assert (await stream_task(client, task_ref))[-1][0] == "paused"
     # 暂停期间删掉指定的风格：继续时同步校验 → 400，任务仍待审核
     assert (await client.delete(f"{API}/{c['id']}")).status_code == 204
-    resp = await client.post(f"/api/v1/tasks/{task_id}/resume")
+    resp = await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))
     assert resp.status_code == 400 and resp.json()["detail"] == "指定的写作风格不存在或不可用"
-    assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["status"] == "paused"
+    assert (await client.get(f"/api/v1/tasks/{task_id}", params=task_params(task_ref))).json()["status"] == "paused"
 
 
 # ---------------- 删除引用回落 ----------------

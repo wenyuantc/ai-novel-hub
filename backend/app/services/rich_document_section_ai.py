@@ -14,14 +14,17 @@ from app.ai.prompts.registry import prompt_meta
 from app.ai.providers import ProviderFactory
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
-from app.models import GenerationLog, SceneSelectionReceipt
+from app.models import AIConfig, Chapter, GenerationLog, Project, SceneSelectionReceipt
 from app.schemas.rich_document import SceneDocument, SceneDocumentOut
 from app.schemas.scene_ai import SectionRewriteApply, SectionRewriteRequest
 from app.services import (
     ai_config_service,
     authorization_service,
+    collaboration_ai_guard,
     context_builder,
     planning_context_service,
+    project_access,
+    project_ai_config,
     prompt_service,
     scene_ai_context,
     scene_service,
@@ -34,7 +37,15 @@ from app.services.ai_dispatch import VisibilityPolicyError, guard_provider, visi
 from app.services.chapter_service import commit_versioned, get_owned_chapter
 from app.services.generation_service import ensure_outside_batch
 from app.services.project_service import get_owned_project
-from app.services.rewrite_service import MAX_SELECTION_CHARS, MAX_SETTING_CONTEXT_CHARS, RewriteJob
+from app.services.rewrite_service import (
+    MAX_SELECTION_CHARS,
+    MAX_SETTING_CONTEXT_CHARS,
+    RewriteJob,
+    _ai_project_chapter,
+    _has_log_identity_columns,
+    _require_log_identity_storage,
+    _trusted_log_grant,
+)
 from app.services.rich_document_ai import scene_reference_context
 from app.services.rich_document_core import selected_section_text
 from app.services.rich_document_store import capture_documents
@@ -50,10 +61,16 @@ async def prepare_section_rewrite(
     allow_private: bool, context_budget: int,
 ) -> RewriteJob:
     authenticated = authorization_service.actor_snapshot(db, user_id)
-    chapter = await get_owned_chapter(db, user_id, chapter_id)
-    project = await get_owned_project(db, user_id, project_id)
-    if chapter.project_id != project.id:
-        raise NotFoundError("章节不存在")
+    owner_id = await db.scalar(select(Project.user_id).join(Chapter, Chapter.project_id == Project.id).where(
+        Project.id == project_id, Chapter.id == chapter_id,
+    ))
+    if owner_id == user_id:
+        chapter = await get_owned_chapter(db, user_id, chapter_id)
+        project = await get_owned_project(db, user_id, project_id)
+    else:
+        project, chapter = await _ai_project_chapter(
+            db, user_id, chapter_id, project_id, for_update=True, visibility_write=True,
+        )
     if await db.get(SceneSelectionReceipt, req.request_id) is not None:
         raise _used()
     scene = await scene_service.require_scene(db, chapter, scene_id)
@@ -75,8 +92,22 @@ async def prepare_section_rewrite(
     if scene_service.content_fingerprint(original) != req.selected_hash:
         raise ConflictError("区块选区已变化，请重新选择并确认", extra={"code": "stale_section_selection"})
 
-    cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
-    provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    binding = None
+    if project.user_id == user_id:
+        cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
+        provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    else:
+        await _require_log_identity_storage(db)
+        binding = await project_ai_config.resolve_project_model(
+            db, user_id, project_id, "text", cipher=cipher, config_id=req.ai_config_id,
+            allow_private=allow_private, for_update=True,
+        )
+        cfg = await db.scalar(select(AIConfig).where(
+            AIConfig.id == binding.config_id, AIConfig.user_id == binding.config_owner_id,
+        ))
+        if cfg is None:
+            raise collaboration_ai_guard.CollaborationSendBlocked()
+        provider = None
     task = await context_builder.chapter_task(db, chapter)
     resolved = await style_service.resolve(db, user_id, project, chapter, req.style)
     override = await prompt_service.get_override(db, user_id, "chapter.rewrite")
@@ -127,8 +158,18 @@ async def prepare_section_rewrite(
     await scene_ai_context.require_stamp(db, stamp)
 
     # 确认记录不存作品、区块身份或文本；只保留至账户删除，防旧 UUID 在项目删建后复用。
-    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
+    if binding is None:
+        await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
     await scene_ai_context.require_stamp(db, stamp)
+    if binding is None and _has_log_identity_columns():
+        log_binding = await project_ai_config.resolve_project_model(
+            db, user_id, project_id, "text", cipher=cipher, config_id=cfg.id,
+            allow_private=allow_private, for_update=True,
+        )
+        if project_ai_config._fingerprint(cfg) != log_binding.config_fingerprint:
+            raise ConflictError("模型配置已变化，请重新预览")
+    else:
+        log_binding = binding
     db.add(SceneSelectionReceipt(request_key=req.request_id, user_id=user_id))
     try:
         await db.commit()
@@ -153,10 +194,30 @@ async def prepare_section_rewrite(
     async def authorize(session: AsyncSession) -> None:
         await authorization_service.require_authenticated_for_send(session, authenticated)
 
-    provider = guard_provider(provider, stamp.visibility, visibility_sessionmaker(db), verify=verify,
-                              authorize=authorize)
+    send_guard = None
+    actor = None
+    if binding is None:
+        assert provider is not None
+        provider = guard_provider(provider, stamp.visibility, visibility_sessionmaker(db), verify=verify,
+                                  authorize=authorize)
+    else:
+        async def mark_sent() -> None:
+            nonlocal sent
+            async with send_lock:
+                if sent:
+                    raise VisibilityPolicyError("本次选区确认不可重发，请重新确认", extra={
+                        "code": "section_confirmation_used",
+                    })
+                sent = True
+
+        send_guard = collaboration_ai_guard.for_http(
+            db, user_id, binding, stamp.visibility, cipher=cipher, allow_private=allow_private,
+            scene=stamp, after_verify=mark_sent,
+        )
+        actor = db.info["authenticated_actor"]
     return RewriteJob(
-        project_id=project.id, chapter_id=chapter.id, scene_id=scene.id, op=req.op, start=req.start, end=req.end,
+        project_id=project.id, chapter_id=chapter.id, user_id=user_id,
+        scene_id=scene.id, op=req.op, start=req.start, end=req.end,
         scene_start=req.start, scene_end=req.end, context_stamp=stamp, original=original, before="", provider=provider,
         section_key=str(section_key), request_id=req.request_id, model=cfg.model, messages=messages,
         ai_config_id=cfg.id, provider_name=cfg.provider,
@@ -167,6 +228,8 @@ async def prepare_section_rewrite(
                 "prompt": prompt_meta("chapter.rewrite", override), "style_choice": req.style,
                 "style": style_service.style_log(resolved), "skill": skill_service.skill_log(skill),
                 "planning": planning.log_data("selection")},
+        actor=actor, binding=binding, log_binding=log_binding, send_guard=send_guard, factory=factory,
+        ai_timeout=ai_timeout, cipher=cipher, allow_private=allow_private,
     )
 
 
@@ -177,11 +240,9 @@ async def apply_section_rewrite(
     from app.services.rich_document_mapping import FormatLossRequired, UnsafeMapping, map_explicit_replacement
     from app.services.rich_document_service import write_mapped_document
 
-    await setting_ai_visibility.lock_author_visibility_write(db, user_id, project_id, manage=False)
-    chapter = await get_owned_chapter(db, user_id, chapter_id, lock=True)
-    await db.refresh(chapter)
-    if chapter.project_id != project_id:
-        raise NotFoundError("章节不存在")
+    project, chapter = await _ai_project_chapter(
+        db, user_id, chapter_id, project_id, for_update=True, visibility_write=True,
+    )
     if chapter.status == "generating":
         raise ConflictError("该章节正在生成中，请稍候再试")
     await ensure_outside_batch(db, chapter)
@@ -194,10 +255,16 @@ async def apply_section_rewrite(
     receipt = await db.get(SceneSelectionReceipt, data.request_id)
     log = await db.scalar(select(GenerationLog).where(
         GenerationLog.id == data.log_id, GenerationLog.project_id == project_id,
-        GenerationLog.chapter_id == chapter_id, GenerationLog.status == "success",
+        GenerationLog.chapter_id == chapter_id, GenerationLog.actor_user_id == user_id,
+        GenerationLog.status == "success",
     ))
     if receipt is None or receipt.user_id != user_id or log is None:
         raise ConflictError("选区预览已失效，请重新确认", extra={"code": "stale_section_selection"})
+    if project.user_id != user_id:
+        grant = _trusted_log_grant(log, user_id, project)
+        if grant is None:
+            raise ConflictError("选区预览已失效，请重新确认", extra={"code": "stale_section_selection"})
+        await project_access.require_project(db, user_id, project_id, "ai.use", for_update=True, grant_identity=grant)
     params = log.params or {}
     if (params.get("scene_id") != scene_id or params.get("section_key") != str(section_key)
             or params.get("request_id") != data.request_id or params.get("scene_start") != data.start

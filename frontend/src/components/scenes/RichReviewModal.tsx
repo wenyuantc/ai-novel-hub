@@ -1,10 +1,15 @@
 import { Alert, App, Button, Checkbox, Input, InputNumber, Modal, Space, Spin, Tag, Typography } from 'antd'
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { currentRequestGeneration, errorMessage, request, watchRequestGeneration } from '../../api/client'
+import { useLocation } from 'react-router-dom'
+import { ApiError, currentRequestGeneration, errorMessage, watchRequestGeneration } from '../../api/client'
+import { projectApi } from '../../api/projects'
+import { taskApi } from '../../api/tasks'
 import { richDocumentApi, type RichReviewPosition, type RichReviewPreview, type RichReviewScene } from '../../api/richDocument'
-import type { Task } from '../../api/types'
+import type { Project, Task, User } from '../../api/types'
 import { useAuthStore } from '../../stores/auth'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { authorizationKey } from '../../utils/permissions'
+import { projectAccess } from '../../utils/projectAccess'
 import TextDiff from '../TextDiff'
 import { reviewTextareaOffset, validReviewAnchor } from './reviewOffsets'
 
@@ -13,6 +18,13 @@ const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).
 const sessionIdentity = () => {
   const auth = useAuthStore.getState()
   return JSON.stringify([auth.status, auth.user?.id ?? null, authorizationKey(auth.user), currentRequestGeneration()])
+}
+
+function reviewAccessKey(project: Project, user: User, projectId: number): string | null {
+  const access = projectAccess(project, user, projectId)
+  if (!access.ready || !access.canUseAIEntitled || (access.role !== 'owner' && access.role !== 'editor')) return null
+  return JSON.stringify([project.id, project.owner?.id ?? null, access.role, project.access.authorization_version,
+    project.access.allow_owner_ai])
 }
 
 function reviewPositions(preview: RichReviewPreview, anchors: Record<string, number>): RichReviewPosition[] | null {
@@ -41,6 +53,7 @@ export default function RichReviewModal({ task, onClose, onChanged }: { task: Ta
   const [working, setWorking] = useState(false)
   const [frozen, setFrozen] = useState(false)
   const [error, setError] = useState('')
+  const [analysisWarning, setAnalysisWarning] = useState('')
   const [confirmed, setConfirmed] = useState(false)
   const [anchors, setAnchors] = useState<Record<string, number>>({})
   const [cursors, setCursors] = useState<Record<number, number>>({})
@@ -50,14 +63,29 @@ export default function RichReviewModal({ task, onClose, onChanged }: { task: Ta
   const sessionGeneration = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
   const actor = JSON.stringify([authStatus, user?.id ?? null, authorizationKey(user), sessionGeneration])
   const [boundActor] = useState(actor)
-  const allowed = authStatus === 'authenticated' && !!user && actor === boundActor
-  const taskIdentity = JSON.stringify([task.id, identity?.task_key, identity?.run_key, identity?.token, identity?.chapter_id])
+  const projectVersion = useProjectStore((state) => state.scopeVersion)
+  const [boundProjectVersion] = useState(projectVersion)
+  const [projectScope] = useState(() => task.project_id === null ? null : captureProjectScope(task.project_id))
+  const { pathname } = useLocation()
+  const [boundPath] = useState(pathname)
+  const allowed = authStatus === 'authenticated' && !!user && actor === boundActor && projectVersion === boundProjectVersion
+    && pathname === boundPath && (!projectScope || isProjectScopeCurrent(projectScope, 'canUseAIEntitled'))
+  const taskIdentity = JSON.stringify([task.id, task.task_key, task.project_id, identity?.task_key, identity?.run_key, identity?.token, identity?.chapter_id])
   const latestTaskIdentity = useRef(taskIdentity)
   const callbacks = useRef({ onClose, onChanged })
   const epoch = useRef(0)
   const pending = useRef<AbortController | null>(null)
+  const writeIssued = useRef(false)
+  const originalAccess = useRef<string | null>(null)
   const current = (ticket: number, expectedTask: string) => epoch.current === ticket
     && latestTaskIdentity.current === expectedTask && sessionIdentity() === boundActor
+    && useProjectStore.getState().scopeVersion === boundProjectVersion
+    && (!projectScope || isProjectScopeCurrent(projectScope, 'canUseAIEntitled'))
+    && (typeof window === 'undefined' || window.location.pathname === boundPath)
+  const readAccess = async () => {
+    if (!user || !Number.isSafeInteger(task.project_id) || !task.project_id || task.project_id < 0) return null
+    return reviewAccessKey(await projectApi.get(task.project_id), user, task.project_id)
+  }
 
   useLayoutEffect(() => {
     latestTaskIdentity.current = taskIdentity
@@ -75,13 +103,21 @@ export default function RichReviewModal({ task, onClose, onChanged }: { task: Ta
     if (!allowed) return
     const controller = new AbortController()
     pending.current = controller
+    writeIssued.current = false
+    originalAccess.current = null
     const ticket = ++epoch.current; const expected = taskIdentity
     queueMicrotask(() => {
       if (controller.signal.aborted || !current(ticket, expected)) return
-      setPreview(undefined); setLoading(true); setWorking(false); setError(''); setFrozen(false); setConfirmed(false); setAnchors({}); setCursors({})
+      setPreview(undefined); setLoading(true); setWorking(false); setError(''); setAnalysisWarning(''); setFrozen(false); setConfirmed(false); setAnchors({}); setCursors({})
     })
-    void richDocumentApi.review(task, controller.signal).then((data) => {
-      if (!controller.signal.aborted && current(ticket, expected)) setPreview(data)
+    void readAccess().then(async (access) => {
+      if (controller.signal.aborted || !current(ticket, expected)) return
+      if (!access) throw new Error('作品权限已变化，请重新打开任务。')
+      const data = await richDocumentApi.review(task, controller.signal)
+      if (!controller.signal.aborted && current(ticket, expected)) {
+        originalAccess.current = access
+        setPreview(data)
+      }
     }).catch((err: unknown) => {
       if (!controller.signal.aborted && current(ticket, expected)) setError(errorMessage(err))
     }).finally(() => {
@@ -99,29 +135,50 @@ export default function RichReviewModal({ task, onClose, onChanged }: { task: Ta
   const needsFormatConfirmation = !!shownPreview?.scenes.some((scene) => scene.format_loss)
   const positions = shownPreview ? reviewPositions(shownPreview, anchors) : null
   const apply = async () => {
-    if (!allowed || !shownPreview || shownPreview.status !== 'pending' || !positions || (needsFormatConfirmation && !confirmed) || working || frozen) return
+    if (!allowed || !current(epoch.current, taskIdentity) || !originalAccess.current || !shownPreview || shownPreview.status !== 'pending' || !positions
+      || (needsFormatConfirmation && !confirmed) || working || frozen || writeIssued.current) return
     const controller = new AbortController(); pending.current = controller
     const ticket = ++epoch.current; const expected = taskIdentity
+    writeIssued.current = true
     setWorking(true); setError('')
     let accepted = false
+    let permissionConfirmed = false
+    let warning: string | undefined
     try {
-      await richDocumentApi.acceptReview(task, positions, confirmed, controller.signal)
+      const outcome = await richDocumentApi.acceptReview(task, positions, confirmed, controller.signal)
       if (!current(ticket, expected) || controller.signal.aborted) return
-      accepted = true; setFrozen(true)
-      const next = await request<Task>(`/tasks/${task.id}`, { signal: controller.signal })
+      accepted = true; warning = outcome.analysis_warning; setFrozen(true)
+      const access = await readAccess()
+      if (!current(ticket, expected) || controller.signal.aborted) return
+      if (!access || access !== originalAccess.current) {
+        callbacks.current.onClose()
+        message.warning('作品权限已变化，无法核对采纳结果。')
+        return
+      }
+      permissionConfirmed = true
+      const next = await taskApi.get(task, controller.signal)
       if (!current(ticket, expected) || controller.signal.aborted) return
       // 任务整数 ID 可能复用；用原 task_key/run_key/token 再查提案，不能把新任务当作旧结果。
       const checked = await richDocumentApi.review(task, controller.signal)
       if (!current(ticket, expected) || controller.signal.aborted) return
-      if (checked.status !== 'applied' || next.id !== task.id
+      if (checked.status !== 'applied' || next.id !== task.id || next.task_key !== task.task_key || next.project_id !== task.project_id
         || next.rich_review && next.rich_review.task_key !== identity?.task_key) throw new Error('任务身份或提案状态已变化')
       callbacks.current.onChanged(next)
-      message.success(next.status === 'queued' ? '已采纳，批量任务将从分析阶段继续' : '已采纳候选稿')
+      if (!current(ticket, expected) || controller.signal.aborted) return
+      if (warning) message.warning(`已采纳候选稿。${warning}`, 8)
+      else message.success(next.status === 'queued' ? '已采纳，批量任务将从分析阶段继续' : '已采纳候选稿')
       callbacks.current.onClose()
     } catch (err) {
       if (current(ticket, expected) && !controller.signal.aborted) {
+        if (err instanceof ApiError && [401, 403, 404].includes(err.status)) {
+          callbacks.current.onClose()
+          message.warning('任务不可访问，无法核对采纳结果。')
+          return
+        }
         setFrozen(true)
-        setError(accepted ? `候选已采纳，但无法核对最新任务状态：${errorMessage(err)}。请关闭并刷新任务，不要重复采纳。`
+        if (accepted && permissionConfirmed && warning) setAnalysisWarning(warning)
+        setError(accepted && !permissionConfirmed ? '采纳结果已返回，但无法核对当前权限。请关闭并刷新任务，不要重复采纳。'
+          : accepted ? `候选已采纳，但无法核对最新任务状态：${errorMessage(err)}。请关闭并刷新任务，不要重复采纳。`
           : `无法确认本次采纳结果：${errorMessage(err)}。原预览已保留；请关闭并刷新任务核对，不要重复采纳。`)
       }
     } finally {
@@ -142,6 +199,7 @@ export default function RichReviewModal({ task, onClose, onChanged }: { task: Ta
       <Space direction="vertical" size={12} style={{ width: '100%', maxHeight: '68vh', overflowY: 'auto' }}>
         {!allowed ? <Alert type="warning" showIcon message="登录身份或授权已变化，请重新打开任务。" /> : <>
         <Alert type="info" showIcon message="确认前原章不变，候选会保留供对照" description="为每个未能可靠定位的作者区块选择候选中的位置；其内容及相对顺序会保留。冲突时不会自动重试或重新调用模型。" />
+        {analysisWarning && <Alert type="warning" showIcon message={analysisWarning} description="候选正文已采纳保存，请勿重复采纳。" />}
         {error && <Alert type="error" showIcon message={error} description="预览和已选位置仍在；请先核对最新章节或权限。" />}
         {shownPreview && shownPreview.status !== 'pending' && <Alert type="warning" showIcon message="该提案已不处于待核对状态，当前为只读对照。" />}
         {shownPreview?.scenes.map((scene, index) => <section key={scene.scene_id} aria-label={`场景 ${index + 1} 候选`}>

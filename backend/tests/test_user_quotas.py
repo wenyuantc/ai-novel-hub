@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import Project
-from tests.helpers import Gate, create_ai_config, create_project, register, wait_task
+from tests.helpers import Gate, create_ai_config, create_project, register, task_params, wait_task
 from tests.rbac_helpers import set_quota
 from tests.test_book_import import _start, upload
 from tests.test_system_settings import save_settings
@@ -145,7 +145,8 @@ async def test_task_zero_queues_then_raise_runs_and_lower_does_not_kill(
         await asyncio.wait_for(dispatched.wait(), 5)
         assert engine.admitted_count(user["id"]) == 0 and not fake_llm.calls
         for task in tasks:
-            assert (await client.get(f"/api/v1/tasks/{task['id']}")).json()["status"] == "queued"
+            status = await client.get(f"/api/v1/tasks/{task['id']}", params=task_params(task))
+            assert status.json()["status"] == "queued"
         await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 2}})
         await gates[0].wait_reached()
         await gates[1].wait_reached()
@@ -156,7 +157,7 @@ async def test_task_zero_queues_then_raise_runs_and_lower_does_not_kill(
         for gate in gates:
             gate.release()
     for task in tasks:
-        assert (await wait_task(client, task["id"]))["status"] == "succeeded"
+        assert (await wait_task(client, task))["status"] == "succeeded"
 
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
@@ -186,7 +187,7 @@ async def test_unlimited_task_quota_still_respects_global_cap(app, client, syste
         for gate in gates:
             gate.release()
     for task in tasks:
-        assert (await wait_task(client, task["id"]))["status"] == "succeeded"
+        assert (await wait_task(client, task))["status"] == "succeeded"
 
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
@@ -240,4 +241,4 @@ async def test_explicit_task_limit_replaces_default_and_inherit_uses_latest_defa
         for gate in gates:
             gate.release()
     for task in tasks:
-        assert (await wait_task(client, task["id"]))["status"] == "succeeded"
+        assert (await wait_task(client, task))["status"] == "succeeded"

@@ -1,7 +1,7 @@
 import asyncio
 
-from tests.helpers import Gate, create_project, register, wait_task
-from tests.test_agent_runtime import call, send, setup_agent
+from tests.helpers import Gate, create_project, register, task_params, wait_task
+from tests.test_agent_runtime import call, change_action, send_task, setup_agent, turn_action
 
 
 async def test_conversation_crud_and_project_preference(client):
@@ -21,17 +21,22 @@ async def test_busy_conversation_blocks_send_delete_resume_finish(client, fake_l
     _, base, url = await setup_agent(client)
     gate = Gate()
     fake_llm.push_tools([gate, call("create_character", {"name": "林远"})])
-    task_id = await send(client, url)
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
     await gate.wait_reached()
     assert (await client.post(url + "/messages", json={"content": "再次发送"})).status_code == 409
     assert (await client.delete(url)).status_code == 409
     gate.release()
-    await wait_task(client, task_id, statuses=("paused",))
+    await wait_task(client, task_ref, statuses=("paused",))
     assert (await client.post(url + "/messages", json={"content": "再次发送"})).status_code == 409
-    assert (await client.post(f"/api/v1/tasks/{task_id}/resume")).status_code == 409
-    assert (await client.post(f"/api/v1/tasks/{task_id}/finish")).status_code == 409
-    assert (await client.post(base + f"/turns/{task_id}/reject-all")).status_code == 200
-    await wait_task(client, task_id)
+    assert (await client.post(f"/api/v1/tasks/{task_id}/resume", params=task_params(task_ref))).status_code == 409
+    assert (await client.post(f"/api/v1/tasks/{task_id}/finish", params=task_params(task_ref))).status_code == 409
+    action_response = await client.post(
+        base + f"/turns/{task_id}/reject-all",
+        json=await turn_action(client, url, task_ref, "reject-all"),
+    )
+    assert action_response.status_code == 200
+    await wait_task(client, task_ref)
 
 
 async def test_confirmation_refreshes_stale_preview_then_undo_conflicts(client, fake_llm):
@@ -39,19 +44,21 @@ async def test_confirmation_refreshes_stale_preview_then_undo_conflicts(client, 
     char_url = f"/api/v1/projects/{project['id']}/characters"
     character = (await client.post(char_url, json={"name": "林远", "personality": "热情"})).json()
     fake_llm.push_tools([call("update_character", {"id": character["id"], "personality": "冷静"})])
-    task_id = await send(client, url, "请修改林远的性格")
-    await wait_task(client, task_id, statuses=("paused",))
+    task_ref = await send_task(client, url, "请修改林远的性格")
+    await wait_task(client, task_ref, statuses=("paused",))
     change = (await client.get(url)).json()["changes"][0]
     assert (await client.patch(char_url + f"/{character['id']}", json={"personality": "焦虑"})).status_code == 200
     path = base + f"/changes/{change['id']}"
-    response = await client.post(path + "/confirm")
+    response = await client.post(path + "/confirm", json=change_action(change))
     assert response.status_code == 409 and response.json()["code"] == "preview_changed", response.text
     assert "焦虑" in str(response.json()["change"]["preview"])
-    response = await client.post(path + "/confirm")
+    change = response.json()["change"]
+    response = await client.post(path + "/confirm", json=change_action(change))
     assert response.status_code == 200 and response.json()["status"] == "executed", response.text
-    await wait_task(client, task_id)
+    change = response.json()
+    await wait_task(client, task_ref)
     assert (await client.patch(char_url + f"/{character['id']}", json={"personality": "激动"})).status_code == 200
-    response = await client.post(path + "/undo")
+    response = await client.post(path + "/undo", json=change_action(change))
     assert response.status_code == 409 and response.json()["code"] == "undo_conflict", response.text
     assert (await client.get(char_url)).json()[0]["personality"] == "激动"
 
@@ -59,15 +66,21 @@ async def test_confirmation_refreshes_stale_preview_then_undo_conflicts(client, 
 async def test_confirm_concurrently_applies_only_once_and_turn_undo(client, fake_llm):
     project, base, url = await setup_agent(client)
     fake_llm.push_tools([call("create_character", {"name": "林远"})])
-    task_id = await send(client, url)
-    await wait_task(client, task_id, statuses=("paused",))
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=("paused",))
     change = (await client.get(url)).json()["changes"][0]
-    results = await asyncio.gather(*(client.post(base + f"/changes/{change['id']}/confirm") for _ in range(2)))
+    results = await asyncio.gather(*(
+        client.post(base + f"/changes/{change['id']}/confirm", json=change_action(change)) for _ in range(2)
+    ))
     assert all(r.status_code == 200 for r in results), [r.text for r in results]
-    await wait_task(client, task_id)
+    await wait_task(client, task_ref)
     char_url = f"/api/v1/projects/{project['id']}/characters"
     assert len((await client.get(char_url)).json()) == 1
-    response = await client.post(base + f"/turns/{task_id}/undo")
+    response = await client.post(
+        base + f"/turns/{task_id}/undo",
+        json=await turn_action(client, url, task_ref, "undo"),
+    )
     assert response.status_code == 200, response.text
     assert response.json()["changes"][0]["status"] == "undone"
     assert (await client.get(char_url)).json() == []
@@ -77,8 +90,9 @@ async def test_confirm_concurrently_applies_only_once_and_turn_undo(client, fake
 async def test_cross_user_every_agent_endpoint_is_not_found(client, make_client, fake_llm):
     _, base, url = await setup_agent(client)
     fake_llm.push_tools([call("create_character", {"name": "林远"})])
-    task_id = await send(client, url)
-    await wait_task(client, task_id, statuses=("paused",))
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=("paused",))
     change = (await client.get(url)).json()["changes"][0]
     stranger = make_client()
     await register(stranger, "stranger")
@@ -90,8 +104,10 @@ async def test_cross_user_every_agent_endpoint_is_not_found(client, make_client,
         ("patch", url, {"title": "侵入"}),
         ("delete", url, None),
         ("post", url + "/messages", {"content": "侵入"}),
-        *[("post", base + f"/changes/{change['id']}/{action}", None) for action in ("confirm", "reject", "undo")],
-        *[("post", base + f"/turns/{task_id}/{action}", None) for action in ("confirm-all", "reject-all", "undo")],
+        *[("post", base + f"/changes/{change['id']}/{action}", change_action(change))
+          for action in ("confirm", "reject", "undo")],
+        *[("post", base + f"/turns/{task_id}/{action}", await turn_action(client, url, task_ref, action))
+          for action in ("confirm-all", "reject-all", "undo")],
     ]
     for method, path, body in checks:
         response = await stranger.request(method, path, json=body)
@@ -101,14 +117,20 @@ async def test_cross_user_every_agent_endpoint_is_not_found(client, make_client,
 async def test_undo_turn_is_atomic_when_earlier_change_conflicts(client, fake_llm):
     project, base, url = await setup_agent(client, auto=True)
     fake_llm.push_tools([call("create_character", {"name": "甲"}, "a"), call("create_character", {"name": "乙"}, "b")])
-    task_id = await send(client, url)
-    task = await wait_task(client, task_id)
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    # 两次工具调用约八千次 SQLite 往返，耗时随机器负载线性增长（实测空载约 2 秒、8 路并行 4–5 秒，
+    # 无卡顿峰值）；放宽等待上限，不改断言，真正卡死仍会超时失败。
+    task = await wait_task(client, task_ref, within=30)
     assert task["status"] == "succeeded", task
     char_url = f"/api/v1/projects/{project['id']}/characters"
     rows = (await client.get(char_url)).json()
     first = next(c for c in rows if c["name"] == "甲")
     await client.patch(char_url + f"/{first['id']}", json={"personality": "手动修改"})
-    response = await client.post(base + f"/turns/{task_id}/undo")
+    response = await client.post(
+        base + f"/turns/{task_id}/undo",
+        json=await turn_action(client, url, task_ref, "undo"),
+    )
     assert response.status_code == 409, response.text
     assert len((await client.get(char_url)).json()) == 2
     assert all(c["status"] == "executed" for c in (await client.get(url)).json()["changes"])
@@ -137,17 +159,24 @@ async def test_text_edit_records_agent_version_and_undo_restore(client, fake_llm
             )
         ]
     )
-    task_id = await send(client, url)
-    await wait_task(client, task_id, statuses=("paused",))
-    response = await client.post(base + f"/turns/{task_id}/confirm-all")
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=("paused",))
+    response = await client.post(
+        base + f"/turns/{task_id}/confirm-all",
+        json=await turn_action(client, url, task_ref, "confirm-all"),
+    )
     assert response.status_code == 200, response.text
     assert response.json()["changes"][0]["status"] == "executed", response.text
-    await wait_task(client, task_id)
+    await wait_task(client, task_ref)
     chapter_url = f"/api/v1/projects/{project['id']}/chapters/{chapter['id']}"
     assert (await client.get(chapter_url)).json()["content"] == "林远推开门，踏入夜色。"
     versions = (await client.get(chapter_url + "/versions")).json()
     assert any(v["source"] == "agent" for v in versions), versions
-    response = await client.post(base + f"/turns/{task_id}/undo")
+    response = await client.post(
+        base + f"/turns/{task_id}/undo",
+        json=await turn_action(client, url, task_ref, "undo"),
+    )
     assert response.status_code == 200, response.text
     assert (await client.get(chapter_url)).json()["content"] == "林远推开门，走进雨夜。"
     versions = (await client.get(chapter_url + "/versions")).json()
@@ -173,20 +202,32 @@ async def test_start_task_is_confirmed_and_can_be_cancelled(client, fake_llm):
             call("start_task", {"kind": "chapter.analyze", "params": {"chapter_id": chapter["id"]}}, "start"),
         ]
     )
-    task_id = await send(client, url)
-    task = await wait_task(client, task_id, statuses=("paused", "failed"))
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    task = await wait_task(client, task_ref, statuses=("paused", "failed"))
     assert task["status"] == "paused", task
-    response = await client.post(base + f"/turns/{task_id}/confirm-all")
+    response = await client.post(
+        base + f"/turns/{task_id}/confirm-all",
+        json=await turn_action(client, url, task_ref, "confirm-all"),
+    )
     assert response.status_code == 200, response.text
     change = response.json()["changes"][-1]
     assert change["status"] == "executed", response.text
     child_id = change["result"]["task_id"]
     await gate.wait_reached()
-    assert (await client.post(f"/api/v1/tasks/{child_id}/cancel")).status_code == 200
-    assert (await wait_task(client, child_id))["status"] == "cancelled"
-    await wait_task(client, task_id)
-    assert (await client.post(base + f"/changes/{change['id']}/undo")).status_code == 409
-    undone = await client.post(base + f"/turns/{task_id}/undo")
+    # 从任务列表独立选择当前运行任务；结果中的整数 ID 尚不能证明子任务链接身份。
+    visible_tasks = (await client.get("/api/v1/tasks", params={"kind": "chapter.analyze"})).json()
+    children = [item for item in visible_tasks if item["chapter_id"] == chapter["id"]]
+    assert len(children) == 1 and children[0]["id"] == child_id
+    child = children[0]
+    assert (await client.post(f"/api/v1/tasks/{child_id}/cancel", params=task_params(child))).status_code == 200
+    assert (await wait_task(client, child))["status"] == "cancelled"
+    await wait_task(client, task_ref)
+    assert (await client.post(base + f"/changes/{change['id']}/undo", json=change_action(change))).status_code == 409
+    undone = await client.post(
+        base + f"/turns/{task_id}/undo",
+        json=await turn_action(client, url, task_ref, "undo"),
+    )
     assert undone.status_code == 200, undone.text
     assert len(undone.json()["changes"]) == 1 and undone.json()["changes"][0]["status"] == "undone"
     assert (await client.get(url)).json()["changes"][-1]["status"] == "executed"
@@ -202,15 +243,20 @@ async def test_agent_versions_and_success_error_logs_survive_backup(client, fake
         [call("replace_chapter_text", {"chapter_id": chapter["id"], "original": "唯一", "replacement": "修改"})]
     )
     fake_llm.push_tools(AIProviderError("测试模型失败"))
-    task_id = await send(client, url)
-    await wait_task(client, task_id, statuses=("paused",))
-    assert (await client.post(base + f"/turns/{task_id}/confirm-all")).status_code == 200
-    assert (await wait_task(client, task_id))["status"] == "failed"
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    await wait_task(client, task_ref, statuses=("paused",))
+    action_response = await client.post(
+        base + f"/turns/{task_id}/confirm-all",
+        json=await turn_action(client, url, task_ref, "confirm-all"),
+    )
+    assert action_response.status_code == 200
+    assert (await wait_task(client, task_ref))["status"] == "failed"
     backup = await _backup(client, project["id"], versions="1", logs="1")
     assert any(v["source"] == "agent" for v in backup["tables"]["chapter_versions"])
     imported = await _import(client, backup)
     copied = await _backup(client, imported["project"]["id"], versions="1", logs="1")
-    assert copied["app_schema"] == "0041" and copied["version"] == 9
+    assert copied["app_schema"] == "0052" and copied["version"] == 9
     assert {log["status"] for log in copied["tables"]["generation_logs"]} == {"success", "error"}
     assert all(log["kind"] == "agent.turn" for log in copied["tables"]["generation_logs"])
 
@@ -225,8 +271,9 @@ async def test_generation_logs_are_conversation_scoped_and_hide_native_metadata(
     payload["provider_metadata"] = {"provider": "anthropic", "content": [{"thinking": "私有思考"}]}
     fake_llm.push_tools([(event, payload), ("usage", {"input_tokens": 12, "output_tokens": 3})])
     fake_llm.push_tools([("text", {"text": "完成"}), ("usage", {"input_tokens": 20, "output_tokens": 4})])
-    task_id = await send(client, url)
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     response = await client.get(url + "/generation-logs")
     assert response.status_code == 200, response.text
     logs = response.json()
@@ -239,7 +286,8 @@ async def test_generation_logs_are_conversation_scoped_and_hide_native_metadata(
     # API key 不进入会话详情、生成记录、任务载荷与输出。
     secret = "sk-test-abcdefgh1234"
     for path in (url, url + "/generation-logs", f"/api/v1/tasks/{task_id}", f"/api/v1/tasks/{task_id}/output"):
-        assert secret not in (await client.get(path)).text, path
+        params = task_params(task_ref) if path.startswith("/api/v1/tasks/") else None
+        assert secret not in (await client.get(path, params=params)).text, path
     async with app.state.sessionmaker() as db:
         original = await db.scalar(select(GenerationLog).where(GenerationLog.task_id == task_id))
         assert "provider_metadata" in original.params["tool_calls"][0]
@@ -257,8 +305,8 @@ async def test_serialization_failure_rolls_back_write_and_keeps_proposal(client,
 
     project, base, url = await setup_agent(client)
     fake_llm.push_tools([call("create_character", {"name": "不能部分提交"})])
-    task_id = await send(client, url)
-    await wait_task(client, task_id, statuses=("paused",))
+    task_ref = await send_task(client, url)
+    await wait_task(client, task_ref, statuses=("paused",))
     change = (await client.get(url)).json()["changes"][0]
     tool = get_tool("create_character")
     execute = tool.execute
@@ -271,7 +319,7 @@ async def test_serialization_failure_rolls_back_write_and_keeps_proposal(client,
         raise DBAPIError("insert", {}, SerializationError("concurrent update"))
 
     monkeypatch.setattr(tool, "execute", conflicting)
-    response = await client.post(base + f"/changes/{change['id']}/confirm")
+    response = await client.post(base + f"/changes/{change['id']}/confirm", json=change_action(change))
     assert response.status_code == 409 and "同时被其他操作修改" in response.json()["detail"], response.text
     assert (await client.get(f"/api/v1/projects/{project['id']}/characters")).json() == []
     assert (await client.get(url)).json()["changes"][0]["status"] == "proposed"

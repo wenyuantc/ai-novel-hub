@@ -8,8 +8,8 @@ from sqlalchemy import select
 from app.models import AgentConversation, AgentMessage, AIConfig, AnalysisChange, ChapterAnalysis, Project
 from app.services.agent.context import build_messages, tool_result
 from app.services.agent.history import HistorySealedError
-from tests.helpers import Gate, wait_task
-from tests.test_agent_runtime import call, send, setup_agent
+from tests.helpers import Gate, task_params, wait_task
+from tests.test_agent_runtime import call, change_action, send_task, setup_agent, turn_action
 from tests.test_setting_fields import _definition, _fields, _versions
 
 
@@ -82,7 +82,7 @@ async def test_agent_scope_filters_directory_fields_links_and_hidden_tool_writes
         },
     })
     assert accepted.status_code == 202, accepted.text
-    assert (await wait_task(client, accepted.json()["task"]["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, accepted.json()["task"]))["status"] == "succeeded"
     results = _outgoing_results(fake_llm)
     assert results["catalog"]["total"] == 1
     assert [item["reference"]["id"] for item in results["catalog"]["items"]] == [visible["id"]]
@@ -106,11 +106,15 @@ async def test_write_confirmation_keeps_author_full_result_but_only_replays_mini
     await _set_visibility(client, project_url, character["id"], ai_hidden_builtin_fields=["background"])
     fake_llm.push_tools([call("update_character", {"id": character["id"], "personality": "谨慎"}, "edit")])
     fake_llm.push_tools([("text", {"text": "已保存"})])
-    task_id = await send(client, url, "请修改需要修改角色的性格")
-    assert (await wait_task(client, task_id, statuses=("paused", "failed")))["status"] == "paused"
-    result = await client.post(base + f"/turns/{task_id}/confirm-all")
+    task_ref = await send_task(client, url, "请修改需要修改角色的性格")
+    task_id = task_ref["id"]
+    assert (await wait_task(client, task_ref, statuses=("paused", "failed")))["status"] == "paused"
+    result = await client.post(
+        base + f"/turns/{task_id}/confirm-all",
+        json=await turn_action(client, url, task_ref, "confirm-all"),
+    )
     assert result.status_code == 200, result.text
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     assert _outgoing_results(fake_llm)["edit"] == {"ok": True}
     human = (await client.get(url)).json()
     assert human["changes"][0]["result"]["background"] == "private-write-result"
@@ -132,25 +136,30 @@ async def test_tightening_seals_old_summary_and_pending_task_but_not_empty_conve
         ))
         await db.commit()
     fake_llm.push_tools([call("create_character", {"name": "不得执行"})])
-    task_id = await send(client, url)
-    assert (await wait_task(client, task_id, statuses=("paused", "failed")))["status"] == "paused"
+    task_ref = await send_task(client, url)
+    task_id = task_ref["id"]
+    assert (await wait_task(client, task_ref, statuses=("paused", "failed")))["status"] == "paused"
     change = (await client.get(url)).json()["changes"][0]
     await _set_visibility(client, project_url, character["id"], ai_hidden_builtin_fields=["background"])
     detail = (await client.get(url)).json()
     assert detail["history_sealed"] and detail["summary"] == "previous-summary-sentinel"
     assert "previous-tool-sentinel" in json.dumps(detail, ensure_ascii=False)
     assert not (await client.get(empty_url)).json()["history_sealed"]
-    for path, body in (
-        (url + "/messages", {"content": "继续"}),
-        (base + f"/changes/{change['id']}/confirm", None),
-        (base + f"/turns/{task_id}/confirm-all", None),
-        (f"/api/v1/tasks/{task_id}/resume", None),
+    for path, body, params in (
+        (url + "/messages", {"content": "继续"}, None),
+        (base + f"/changes/{change['id']}/confirm", change_action(change), None),
+        (base + f"/turns/{task_id}/confirm-all", await turn_action(client, url, task_ref, "confirm-all"), None),
+        (f"/api/v1/tasks/{task_id}/resume", None, task_params(task_ref)),
     ):
-        response = await client.post(path, json=body)
+        response = await client.post(path, json=body, params=params)
         assert response.status_code == 409 and response.json()["code"] == "ai_history_sealed", response.text
-    assert (await client.post(base + f"/turns/{task_id}/reject-all")).status_code == 200
-    assert (await wait_task(client, task_id))["status"] == "cancelled"
-    retry = await client.post(f"/api/v1/tasks/{task_id}/retry")
+    action_response = await client.post(
+        base + f"/turns/{task_id}/reject-all",
+        json=await turn_action(client, url, task_ref, "reject-all"),
+    )
+    assert action_response.status_code == 200
+    assert (await wait_task(client, task_ref))["status"] == "cancelled"
+    retry = await client.post(f"/api/v1/tasks/{task_id}/retry", params=task_params(task_ref))
     assert retry.status_code == 409 and retry.json()["code"] == "ai_history_sealed"
     # 直接摘要入口同样先拒绝；不依赖前端封存展示。
     async with app.state.sessionmaker() as db:
@@ -162,7 +171,7 @@ async def test_tightening_seals_old_summary_and_pending_task_but_not_empty_conve
             )
     assert len(fake_llm.calls) == 1
     fake_llm.push_tools([("text", {"text": "从干净上下文继续"})])
-    assert (await wait_task(client, await send(client, empty_url)))["status"] == "succeeded"
+    assert (await wait_task(client, await send_task(client, empty_url)))["status"] == "succeeded"
     assert "previous-" not in json.dumps(fake_llm.tool_calls[-1]["messages"])
 
 
@@ -173,14 +182,17 @@ async def test_tightening_during_agent_reply_stops_tools_and_second_dispatch(cli
     first_reply = Gate()
     fake_llm.push_tools([first_reply, call("update_character", {"id": character["id"], "personality": "新性格"})])
     fake_llm.push_tools([("text", {"text": "不能开始第二次调用"})])
-    task_id = await send(client, url, "修改正在交谈的性格")
+    task_ref = await send_task(client, url, "修改正在交谈的性格")
     await first_reply.wait_reached()
     try:
         await _set_visibility(client, project_url, character["id"], ai_hidden_builtin_fields=["background"])
     finally:
         first_reply.release()
-    task = await wait_task(client, task_id)
-    assert task["status"] == "failed" and "AI 可见设置已变更" in task["error"], task
+    task = await wait_task(client, task_ref)
+    # 收紧可能先由发送门禁（已变更）或旧代次会话封存（已收紧）拦截，二者都是受控固定文案。
+    assert task["status"] == "failed" and task["error"] in (
+        "AI 可见设置已变更，已停止发送，请按当前设置重试", "AI 可见设置已收紧，旧会话只可查看，请新开会话继续",
+    ), task
     detail = (await client.get(url)).json()
     assert detail["history_sealed"] and not detail["changes"]
     assert len(fake_llm.tool_calls) == 1
@@ -209,7 +221,7 @@ async def test_new_match_competition_seals_previously_unique_agent_result(
     text = "查询 river bend 的档案"
     fake_llm.push_tools([call("get_character", {"id": original["id"]}, "unique")])
     fake_llm.push_tools([("text", {"text": "已读取"})])
-    assert (await wait_task(client, await send(client, url, text)))["status"] == "succeeded"
+    assert (await wait_task(client, await send_task(client, url, text)))["status"] == "succeeded"
     assert _outgoing_results(fake_llm)["unique"]["background"] == marker
 
     await _set_visibility(client, project_url, competitor["id"], **next_values)
@@ -225,7 +237,7 @@ async def test_new_match_competition_seals_previously_unique_agent_result(
     new_url = base + f"/conversations/{created.json()['id']}"
     fake_llm.push_tools([call("get_character", {"id": original["id"]}, "ambiguous")])
     fake_llm.push_tools([("text", {"text": "请明确对象"})])
-    assert (await wait_task(client, await send(client, new_url, text)))["status"] == "succeeded"
+    assert (await wait_task(client, await send_task(client, new_url, text)))["status"] == "succeeded"
     assert _outgoing_results(fake_llm)["ambiguous"] == {"error": "不存在"}
     assert marker not in json.dumps(fake_llm.tool_calls[-2:], ensure_ascii=False)
 
@@ -251,7 +263,7 @@ async def test_agent_analysis_filters_character_refs_inside_confirmed_foreshadow
         await db.commit()
     fake_llm.push_tools([call("get_chapter_analysis", {"chapter_id": chapter_id}, "analysis")])
     fake_llm.push_tools([("text", {"text": "完成"})])
-    task_id = await send(client, url, "请看分析可见在这一章的回写")
-    assert (await wait_task(client, task_id))["status"] == "succeeded"
+    task_ref = await send_task(client, url, "请看分析可见在这一章的回写")
+    assert (await wait_task(client, task_ref))["status"] == "succeeded"
     changes = _outgoing_results(fake_llm)["analysis"]["analysis"]["changes"]
     assert changes[0]["after"]["character_ids"] == [visible["id"]]

@@ -7,10 +7,12 @@ from app.ai.prompts.agent import SAFETY_RULES
 from app.ai.prompts.registry import render
 from app.ai.templating import PromptOverride
 from app.core.errors import BadRequestError
+from app.core.security import ACCESS_TOKEN_COOKIE, decode_access_token
 from app.models import AgentConversation, AgentMessage, AIConfig, GenerationLog, Project
 from app.services.agent.context import _fit_group, build_messages, tool_result, validate_page_context
 from tests.helpers import create_project
-from tests.test_agent_runtime import setup_agent
+from tests.test_agent_context_execution_identity import _capture_execution, _provider
+from tests.test_agent_runtime import send_task, setup_agent
 
 
 def test_tool_result_valid_json_bounded_and_marked():
@@ -27,16 +29,25 @@ def test_safety_rule_cannot_be_removed_by_override():
 
 
 async def test_history_summary_preserves_latest_user_and_protocol_groups(client, app, fake_llm):
-    project, _, _ = await setup_agent(client)
+    project, _, url = await setup_agent(client)
+    await app.state.task_engine.stop()
+    actor = decode_access_token(client.cookies[ACCESS_TOKEN_COOKIE], app.state.settings.jwt_secret)
+    assert actor is not None
     fake_llm.push("作者在创作科幻小说；已讨论角色设定。")
     async with app.state.sessionmaker() as db:
         conv = await db.scalar(select(AgentConversation))
+        assert actor[0] == conv.user_id
         cfg = await db.scalar(select(AIConfig))
         cfg.context_window_k = 4
         for index in range(8):
             db.add(AgentMessage(conversation_id=conv.id, role="user", content=f"早期问题{index}" + "很久以前" * 300))
             db.add(AgentMessage(conversation_id=conv.id, role="assistant", content="回答" * 300))
-        db.add(AgentMessage(conversation_id=conv.id, role="user", content="当前问题必须保留"))
+        await db.commit()
+    task_ref = await send_task(client, url, "当前问题必须保留")
+    execution = await _capture_execution(app, task_ref, actor)
+    async with app.state.sessionmaker() as db:
+        conv = await db.get(AgentConversation, execution.conversation_id)
+        cfg = await db.get(AIConfig, execution.model_binding.config_id)
         db.add(
             AgentMessage(
                 conversation_id=conv.id,
@@ -61,8 +72,11 @@ async def test_history_summary_preserves_latest_user_and_protocol_groups(client,
             )
         )
         await db.commit()
-        provider = fake_llm.factory("openai_compat", "x", None, 30)
-        messages, meta = await build_messages(db, conv, await db.get(Project, project["id"]), cfg, provider)
+        provider = await _provider(app, cfg, fake_llm.factory)
+        messages, meta = await build_messages(
+            db, conv, await db.get(Project, project["id"]), cfg, provider,
+            task_id=task_ref["id"], execution=execution,
+        )
         assert conv.summary and conv.summarized_until
         assert "当前问题必须保留" in str(messages)
         assert "早期问题0" not in str(messages)

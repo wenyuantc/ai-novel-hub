@@ -28,7 +28,7 @@ from app.schemas.scene_ai import (
     SectionRewriteRequest,
 )
 from app.schemas.task import TaskOut
-from app.services import rewrite_service, rich_document_section_ai, task_service
+from app.services import generation_service, rewrite_service, rich_document_section_ai
 
 router = APIRouter(tags=["scene-ai"])
 _BASE = "/projects/{project_id}/chapters/{chapter_id}/scenes/{scene_id}"
@@ -43,22 +43,22 @@ def _params(project_id: int, chapter_id: int, scene_id: int, body) -> dict:
 @router.post(f"{_BASE}/generate", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def generate_scene(project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneGenerateRequest,
                          user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
-    return await task_service.create_task(db, engine, user.id, "chapter.generate",
-                                          _params(project_id, chapter_id, scene_id, body))
+    return await generation_service.create_chapter_task(db, engine, user.id, "chapter.generate",
+                                                       _params(project_id, chapter_id, scene_id, body))
 
 
 @router.post(f"{_BASE}/polish", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def polish_scene(project_id: PathId, chapter_id: PathId, scene_id: PathId, body: ScenePolishRequest,
                        user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
-    return await task_service.create_task(db, engine, user.id, "chapter.polish",
-                                          _params(project_id, chapter_id, scene_id, body))
+    return await generation_service.create_chapter_task(db, engine, user.id, "chapter.polish",
+                                                       _params(project_id, chapter_id, scene_id, body))
 
 
 @router.post(f"{_BASE}/revise", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
 async def revise_scene(project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneReviseRequest,
                        user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut:
-    return await task_service.create_task(db, engine, user.id, "chapter.revise",
-                                          _params(project_id, chapter_id, scene_id, body))
+    return await generation_service.create_chapter_task(db, engine, user.id, "chapter.revise",
+                                                       _params(project_id, chapter_id, scene_id, body))
 
 
 @router.post(f"{_BASE}/rewrite", response_class=StreamingResponse)
@@ -71,7 +71,11 @@ async def rewrite_scene(project_id: PathId, chapter_id: PathId, scene_id: PathId
         allow_private=settings.allow_private_ai_endpoints, context_budget=settings.context_char_budget,
     )
     await db.close()
-    return sse_response(rewrite_service.run_rewrite_job(job, sessionmaker))
+    return sse_response(
+        rewrite_service.run_rewrite_job(job, sessionmaker),
+        frame_lease=rewrite_service.output_frame_lease(job, sessionmaker),
+        frame_timeout=rewrite_service.OUTPUT_LEASE_SECONDS,
+    )
 
 
 @router.post(f"{_BASE}/rewrite/apply", response_model=SceneOut)
@@ -92,7 +96,11 @@ async def rewrite_section(
         allow_private=settings.allow_private_ai_endpoints, context_budget=settings.context_char_budget,
     )
     await db.close()
-    return sse_response(rewrite_service.run_rewrite_job(job, sessionmaker))
+    return sse_response(
+        rewrite_service.run_rewrite_job(job, sessionmaker),
+        frame_lease=rewrite_service.output_frame_lease(job, sessionmaker),
+        frame_timeout=rewrite_service.OUTPUT_LEASE_SECONDS,
+    )
 
 
 @router.post(f"{_BASE}/sections/{{section_key}}/rewrite/apply", response_model=SceneDocumentOut)

@@ -1,6 +1,6 @@
 import { App, Button, Card, Empty, Input, InputNumber, List, Space, Typography } from 'antd'
 import { useState } from 'react'
-import { errorMessage } from '../../api/client'
+import { kbActionError } from '../../utils/kb'
 import { kbApi } from '../../api/kb'
 import type { KbSearchResult } from '../../api/types'
 import ScoreTags from './ScoreTags'
@@ -9,10 +9,12 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 interface Props {
   projectId: number
+  /** 协作者视图顶部说明（检索模式与费用来源，取自 index-status）；作者不传 */
+  notice?: string | null
 }
 
 /** 知识库检索调试：输入查询（可临时覆盖条数与最低分），列出命中的文件、标题路径、内容与三项分数。 */
-export default function KbSearchDebug({ projectId }: Props) {
+export default function KbSearchDebug({ projectId, notice }: Props) {
   const { message } = App.useApp()
   const { canReadNow } = useProjectAccess(projectId)
   const [query, setQuery] = useState('')
@@ -33,7 +35,7 @@ export default function KbSearchDebug({ projectId }: Props) {
       const result = await kbApi.search(projectId, { query: q, top_k: topK, min_score: minScore })
       if (canReadNow()) setResult(result)
     } catch (err) {
-      if (canReadNow()) message.error(errorMessage(err))
+      if (canReadNow()) message.error(kbActionError(err))
     } finally {
       if (canReadNow()) setLoading(false)
     }
@@ -42,6 +44,7 @@ export default function KbSearchDebug({ projectId }: Props) {
   return (
     <Card size="small" title="检索调试">
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {notice && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{notice}</Typography.Text>}
         <Input.TextArea
           value={query}
           onChange={(e) => setQuery(e.target.value)}

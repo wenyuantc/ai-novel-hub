@@ -8,7 +8,9 @@ import { useLoader } from '../../hooks/useLoader'
 import { useAuthorizationScope } from '../../hooks/useAuthorizationScope'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
+import { useProjectStore } from '../../stores/project'
 import { authorizationKey } from '../../utils/permissions'
+import { cardAccess, cardNeedsAccessRefresh } from './cardAccess'
 
 interface Props {
   projectId: number
@@ -23,11 +25,13 @@ interface Props {
 /** 导出当前快照，类型化字段使用包内身份及明确的外部依赖。 */
 export default function CardExportModal(props: Props) {
   const user = useAuthStore((state) => state.user)
-  const { canRead } = useProjectAccess(props.projectId)
+  const access = useProjectAccess(props.projectId)
+  const scopeVersion = useProjectStore((state) => state.scopeVersion)
+  const cards = cardAccess(access.role, access.isCollaborator, access.canRead, access.canEdit)
   // 仅在打开时挂载：每次打开都以当前勾选为初始值并拉取最新组织
   if (!props.open) return null
-  if (!user || !canRead) return null
-  return <Inner key={`${props.projectId}:${user.id}:${authorizationKey(user)}`} {...props} />
+  if (!user || !cards.canPreview) return null
+  return <Inner key={`${props.projectId}:${user.id}:${authorizationKey(user)}:${scopeVersion}`} {...props} />
 }
 
 function Inner({ projectId, projectTitle, open, characters, initialCharacterIds, onClose }: Props) {
@@ -40,12 +44,20 @@ function Inner({ projectId, projectTitle, open, characters, initialCharacterIds,
   const busy = useRef(false)
   const request = useRef<AbortController | null>(null)
   useEffect(() => () => request.current?.abort(), [])
+  const refreshIfDenied = useCallback((error: unknown) => {
+    if (cardNeedsAccessRefresh(error, canReadNow())) void useProjectStore.getState().refresh()
+  }, [canReadNow])
   const orgLoader = useCallback(async () => {
     if (!canReadNow()) throw new Error('作品访问权限已变更')
-    const items = await organizationApi.list(projectId)
-    if (!canReadNow()) throw new Error('作品访问权限已变更')
-    return items
-  }, [projectId, canReadNow])
+    try {
+      const items = await organizationApi.list(projectId)
+      if (!canReadNow()) throw new Error('作品访问权限已变更')
+      return items
+    } catch (error) {
+      refreshIfDenied(error)
+      throw error
+    }
+  }, [projectId, canReadNow, refreshIfDenied])
   const { data: orgs = [], loading, error, reload } = useLoader(orgLoader)
 
   const handleExport = async () => {
@@ -62,7 +74,10 @@ function Inner({ projectId, projectTitle, open, characters, initialCharacterIds,
       message.success(`已导出 ${charIds.length} 个角色、${orgIds.length} 个组织`)
       onClose()
     } catch (err) {
-      if (scope.current(ticket) && canReadNow()) message.error(errorMessage(err))
+      if (scope.current(ticket) && canReadNow()) {
+        refreshIfDenied(err)
+        message.error(errorMessage(err))
+      }
     } finally {
       busy.current = false
       if (scope.current(ticket) && canReadNow()) setExporting(false)

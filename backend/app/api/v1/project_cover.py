@@ -1,6 +1,8 @@
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, File, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 from app.ai.images import MAX_COVER_BYTES
 from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SettingsDep
@@ -9,11 +11,20 @@ from app.schemas.project_cover import CoverGenerateOut, CoverGenerateRequest, Co
 from app.services import cover_service as svc
 
 router = APIRouter(prefix="/projects/{project_id}/cover", tags=["project-cover"])
+_OUTPUT_LEASE_SECONDS = 5.0
+
+
+class _BoundedCoverResponse(JSONResponse):
+    """授权锁与响应同寿命，但慢客户端不能无限阻塞撤权。"""
+
+    async def __call__(self, scope, receive, send) -> None:
+        async with asyncio.timeout(_OUTPUT_LEASE_SECONDS):
+            await super().__call__(scope, receive, send)
 
 
 @router.get("")
 async def get_cover(project_id: int, user: CurrentUser, db: DbDep, v: str | None = None) -> Response:
-    cover = await svc.get_cover(db, user.id, project_id)
+    cover = await svc.get_manual_cover(db, user.id, project_id)
     return Response(
         content=cover.data,
         media_type=cover.mime_type,
@@ -38,11 +49,12 @@ async def delete_cover(project_id: int, user: CurrentUser, db: DbDep) -> Project
 
 
 @router.get("/prompt", response_model=CoverPromptOut)
-async def default_prompt(project_id: int, user: CurrentUser, db: DbDep) -> CoverPromptOut:
-    return await svc.default_prompt(db, user.id, project_id)
+async def default_prompt(project_id: int, user: CurrentUser, db: DbDep) -> CoverPromptOut | Response:
+    result = await svc.default_prompt(db, user.id, project_id)
+    return _BoundedCoverResponse(content=result.model_dump(mode="json"))
 
 
-@router.post("/generate", response_model=CoverGenerateOut)
+@router.post("/generate", response_model=CoverGenerateOut, response_model_exclude_none=True)
 async def generate_cover(
     project_id: int,
     body: CoverGenerateRequest,
@@ -51,8 +63,11 @@ async def generate_cover(
     settings: SettingsDep,
     cipher: CipherDep,
     factory: FactoryDep,
-) -> CoverGenerateOut:
-    return await svc.generate_cover(
+) -> CoverGenerateOut | Response:
+    result = await svc.generate_cover(
         db, user.id, project_id, body, cipher, factory,
         ai_timeout=settings.ai_request_timeout, allow_private=settings.allow_private_ai_endpoints,
     )
+    if result.model_source is not None:
+        return _BoundedCoverResponse(content=result.model_dump(mode="json", exclude_none=True))
+    return result

@@ -11,6 +11,7 @@ from app.models import Chapter, Outline
 from app.schemas.outline import OutlineAppendRequest, OutlineDetail, OutlineMoveRequest
 from app.schemas.story import OutlineOut
 from app.services import plan_service, planning_lifecycle, story_service
+from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
 
 
@@ -38,8 +39,13 @@ async def last_volume(db: AsyncSession, project_id: int) -> tuple[int, str]:
     return last_no, title
 
 
-async def outline_tree(db: AsyncSession, user_id: int, project_id: int) -> list[OutlineDetail]:
-    await get_manageable_project(db, user_id, project_id)
+async def outline_tree(
+    db: AsyncSession, user_id: int, project_id: int, *, manual: bool = False,
+) -> list[OutlineDetail]:
+    if manual:
+        await require_project(db, user_id, project_id, "content.read")
+    else:
+        await get_manageable_project(db, user_id, project_id)
     outlines = await list_outlines(db, project_id)
     plans = await plan_service.plans_of(db, [o.id for o in outlines])
     all_plans = [p for items in plans.values() for p in items]
@@ -69,7 +75,7 @@ async def outline_tree(db: AsyncSession, user_id: int, project_id: int) -> list[
 
 async def append_outlines(db: AsyncSession, user_id: int, project_id: int, data: OutlineAppendRequest) -> list[Outline]:
     """采纳续写结果：追加到末尾，章节号从当前最后一章之后顺延。单事务。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     start = await next_chapter_no(db, project_id)
     sort = await story_service.next_sort(db, Outline, project_id)
     created = []
@@ -100,8 +106,8 @@ async def move_outline(
     db: AsyncSession, user_id: int, project_id: int, outline_id: int, data: OutlineMoveRequest
 ) -> list[Outline]:
     """卷内上移 / 下移：先把该卷的 sort 规整为 1..n（按当前顺序），再与相邻一条交换。已在边界时不变。返回该卷的大纲。"""
-    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-    outline = await plan_service.get_project_outline(db, user_id, project_id, outline_id)
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
+    outline = await plan_service.get_manual_project_outline(db, user_id, project_id, outline_id)
     volume = [o for o in await list_outlines(db, project_id) if o.volume_no == outline.volume_no]
     idx = next(i for i, o in enumerate(volume) if o.id == outline.id)
     target = idx - 1 if data.direction == "up" else idx + 1

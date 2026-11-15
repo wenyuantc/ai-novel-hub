@@ -22,7 +22,7 @@ from app.models import (
 from app.services import project_lifecycle, recycle_bin_service
 from app.services.audit_writer import AuditOperation
 from tests.cover_fixtures import PNG
-from tests.helpers import create_project, register
+from tests.helpers import create_project, register, task_params
 from tests.test_project_transfer import _backup, _import, _project_tables, _seed
 
 PROJECTS = "/api/v1/projects"
@@ -85,6 +85,7 @@ async def test_complete_project_is_hidden_restored_in_place_then_purged(app, adm
         db.add(history)
         await db.commit()
         history_id = history.id
+        history_ref = (history.id, history.statistics_key)
     other = make_client()
     await register(other, "other")
     other_project = await create_project(other, title="其他作品")
@@ -119,7 +120,8 @@ async def test_complete_project_is_hidden_restored_in_place_then_purged(app, adm
             response = await viewer.get(f"{PROJECTS}/{pid}{path}")
             assert response.status_code == 404, (path, response.text)
     for suffix in ("", "/output", "/stream"):
-        assert (await client.get(f"/api/v1/tasks/{history_id}{suffix}")).status_code == 404
+        response = await client.get(f"/api/v1/tasks/{history_id}{suffix}", params=task_params(history_ref))
+        assert response.status_code == 404
     assert (await client.get("/api/v1/tasks")).json() == []
     assert (await client.delete("/api/v1/tasks")).json()["deleted"] == 0
     headers = {"X-API-Key": key}
@@ -127,7 +129,7 @@ async def test_complete_project_is_hidden_restored_in_place_then_purged(app, adm
     assert (await client.get(f"/api/open/v1/novels/{pid}", headers=headers)).status_code == 404
     assert (await client.patch(f"{PROJECTS}/{pid}", json={"title": "禁止修改"})).status_code == 404
     assert (await client.post(f"{PROJECTS}/{pid}/chapters", json={"content": "禁止新增"})).status_code == 404
-    assert (await client.post(f"/api/v1/tasks/{history_id}/retry")).status_code == 404
+    assert (await client.post(f"/api/v1/tasks/{history_id}/retry", params=task_params(history_ref))).status_code == 404
     assert (
         await admin.post(f"{RECYCLE}/{pid}/restore", json={"deleted_at": recycled["deleted_at"], "confirm": True})
     ).status_code == 204

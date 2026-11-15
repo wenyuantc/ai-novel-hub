@@ -3,6 +3,7 @@ import { Alert, Button, Input, Select, Skeleton, Space, Spin } from 'antd'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
+import { currentRequestGeneration, watchRequestGeneration } from '../api/client'
 import type { Project } from '../api/types'
 import ExportModal from '../components/ExportModal'
 import { StudioEmpty, StudioPage, StudioPanel } from '../components/StudioUI'
@@ -10,8 +11,10 @@ import ContinueWriting from '../components/shelf/ContinueWriting'
 import CreateProjectModal from '../components/shelf/CreateProjectModal'
 import LibraryBookCard from '../components/shelf/LibraryBookCard'
 import DeleteProjectModal from '../components/project/DeleteProjectModal'
+import Invitations from '../components/collaboration/Invitations'
 import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
+import { isProjectAccess } from '../utils/projectAccess'
 import { DEFAULT_SHELF_PREFS, filterAndSort, latestWritingProject, readShelfPrefs, SHELF_SORT_OPTIONS, shelfStats, writeShelfPrefs, type ShelfPrefs, type ShelfStatusFilter } from '../utils/shelf'
 import './ProjectListPage.css'
 
@@ -21,11 +24,24 @@ const STATUS_FILTERS: { value: ShelfStatusFilter; label: string }[] = [{ value: 
 
 /** 真实作品书库：横向作品卡片，沿用作品 API、阅读进度及全部原有作品操作。 */
 export default function ProjectListPage() {
+  const actorId = useAuthStore((s) => s.user?.id)
+  const revision = useAuthStore((s) => s.user?.authorization_revision)
+  const [generation, setGeneration] = useState(currentRequestGeneration)
+  useEffect(() => {
+    const watcher = watchRequestGeneration(() => setGeneration(currentRequestGeneration()))
+    return watcher.dispose
+  }, [])
+  return <ProjectListContent key={`${actorId ?? ''}:${revision ?? ''}:${generation}`} />
+}
+
+function ProjectListContent() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const author = useAuthStore((s) => s.user?.username)
   const loader = useCallback(() => projectApi.list(), [])
-  const { data: projects = [], loading, error, reload } = useLoader(loader)
+  const { data: loadedProjects = [], loading, error, reload } = useLoader(loader)
+  // 旧版或不完整的权限快照不能参与展示、统计或继续创作。
+  const projects = useMemo(() => loadedProjects.filter((project) =>
+    isProjectAccess(project.access) && project.access.can_read), [loadedProjects])
   const [importOpen, setImportOpen] = useState(false)
   const [exportId, setExportId] = useState<number | null>(null)
   const [backupId, setBackupId] = useState<number | null>(null)
@@ -34,7 +50,8 @@ export default function ProjectListPage() {
   useEffect(() => writeShelfPrefs(prefs), [prefs])
   const visible = useMemo(() => filterAndSort(projects, prefs), [projects, prefs])
   const stats = useMemo(() => shelfStats(projects), [projects])
-  const recent = useMemo(() => latestWritingProject(projects), [projects])
+  const recent = useMemo(() => latestWritingProject(projects.filter((project) =>
+    isProjectAccess(project.access) && project.access.can_edit_content)), [projects])
   const filtering = prefs.query.trim() !== '' || prefs.status !== 'all'
   const createOpen = searchParams.get('create') === '1'
   const setCreateOpen = (open: boolean) => {
@@ -47,6 +64,7 @@ export default function ProjectListPage() {
 
   return (
     <StudioPage title="我的作品" hint={hint} action={<Space wrap><Link to="/series">作品系列</Link><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button></Space>}>
+      <Invitations onChanged={reload} />
       {recent && <ContinueWriting key={recent.id} project={recent} />}
       <div className="library-toolbar">
         <div className="library-filters" role="group" aria-label="作品状态筛选">{STATUS_FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={prefs.status === item.value} onClick={() => setPrefs((p) => ({ ...p, status: item.value }))}>{item.label}</button>)}</div>
@@ -68,7 +86,7 @@ export default function ProjectListPage() {
             <div className="library-book-footer"><div className="library-book-summary"><Skeleton.Input active size="small" className="library-book-meta-skeleton" /><Skeleton.Button active className="library-book-action-skeleton" /></div></div>
           </div>
         ))}</div> : !error || projects.length > 0 ? (
-          visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} author={author} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => setDeleting(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' }))}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
+          visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => setDeleting(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' }))}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
         ) : null}
       </section>
       <footer className="library-footer">

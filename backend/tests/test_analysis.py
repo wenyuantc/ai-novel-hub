@@ -14,6 +14,7 @@ from tests.helpers import (
     create_project,
     register,
     run_task,
+    task_params,
     wait_task,
 )
 
@@ -163,7 +164,7 @@ async def test_inflight_analysis_does_not_apply_after_chapter_changes(app, clien
     changed = await client.patch(f"{base}/chapters/{ch['id']}", json=edit)
     assert changed.status_code == 200, changed.text
     gate.release()
-    result = await wait_task(client, task["id"])
+    result = await wait_task(client, task)
     assert result["status"] == "failed"
     assert "变化" in result["error"]
     assert (await client.get(f"{base}/characters/{hero['id']}")).json()["current_state"] == "练气"
@@ -205,7 +206,12 @@ async def test_stale_after_manual_edit_and_auto_analyze(app, client, fake_llm):
     assert task["status"] == "succeeded"
     auto = await _analysis_tasks(app)
     assert len(auto) == 2 and auto[-1].input.get("auto") is True and auto[-1].serial_key == f"analysis:{p['id']}"
-    done = await wait_task(client, auto[-1].id)
+    task_list = (await client.get("/api/v1/tasks", params={
+        "project_id": p["id"], "chapter_id": ch["id"], "kind": "chapter.analyze",
+    })).json()
+    assert len(task_list) == 2 and task_list[0]["id"] == auto[-1].id
+    auto_ref = task_list[0]  # 列表按创建次序倒序，最新的一条为生成后自动分析。
+    done = await wait_task(client, auto_ref)
     assert done["status"] == "succeeded"
     statuses = (await client.get(f"{base}/analysis/statuses")).json()
     assert statuses[0]["status"] == "analyzed"
@@ -237,42 +243,91 @@ async def test_deployment_switch_disables_auto_analyze(app, client, fake_llm):
     assert await _analysis_tasks(app) == []
 
 
-@pytest.mark.parametrize("settings_overrides", [AUTO_ON])
-async def test_enqueue_auto_dedup_queued_but_not_running(app, client, fake_llm):
+@pytest.mark.parametrize("settings_overrides", [{**AUTO_ON, "task_max_per_user": 1}])
+async def test_enqueue_auto_dedup_queued_but_not_running(app, client, fake_llm, monkeypatch):
     """enqueue_auto：同章已有排队中的分析不重复入队；运行中的不算（可再排以分析最新正文）；
-    空正文 / 项目开关关闭不入队。"""
-    from app.services.analysis_service import enqueue_auto
+    空正文 / 项目开关关闭不入队。原执行身份来自实际生成成功的完成回调。"""
+    from app.services import analysis_service
 
     p, base, (ch,) = await _setup(client)
     empty = (await client.post(f"{base}/chapters", json={"title": "空章", "chapter_no": 2})).json()
     engine = app.state.task_engine
     ctx = engine.ctx
-    await engine.stop()
-    first = await enqueue_auto(ctx, p["id"], ch["id"])
-    assert first is not None
-    assert await enqueue_auto(ctx, p["id"], ch["id"]) is None  # 已排队
-    assert await enqueue_auto(ctx, p["id"], empty["id"]) is None  # 正文为空
-    assert [t.id for t in await _analysis_tasks(app)] == [first]
-    (task,) = await _analysis_tasks(app)
-    owner = (await client.get("/api/v1/auth/me")).json()["id"]
-    assert (task.user_id, task.input["auto"], task.serial_key) == (owner, True, f"analysis:{p['id']}")
+    original_enqueue = analysis_service.enqueue_auto
+    captured: asyncio.Queue = asyncio.Queue()
 
+    async def held_enqueue(ctx, project_id, chapter_id, *, execution):
+        release = asyncio.Event()
+        await captured.put((execution, release))
+        await release.wait()
+        return await original_enqueue(ctx, project_id, chapter_id, execution=execution)
+
+    monkeypatch.setattr(analysis_service, "enqueue_auto", held_enqueue)
+
+    # 空章的原身份同样由实际受理与成功领取产生，随后用户清空正文。
+    fake_llm.push("临时正文")
+    accepted = await client.post(f"/api/v1/chapters/{empty['id']}/generate")
+    assert accepted.status_code == 202, accepted.text
+    empty_ref = accepted.json()
+    empty_execution, empty_release = await asyncio.wait_for(captured.get(), 10)
+    try:
+        assert empty_execution.task_key == empty_ref["task_key"]
+        assert (await client.patch(f"{base}/chapters/{empty['id']}", json={"content": ""})).status_code == 200
+        assert await original_enqueue(ctx, p["id"], empty["id"], execution=empty_execution) is None
+    finally:
+        empty_release.set()
+    await wait_task(client, empty_ref)
+    from tests.helpers import wait_until
+
+    await wait_until(lambda: empty_ref["id"] not in engine._running)
+
+    fake_llm.push("生成后的正文")
+    accepted = await client.post(f"/api/v1/chapters/{ch['id']}/generate")
+    assert accepted.status_code == 202, accepted.text
+    source_ref = accepted.json()
+    execution, source_release = await asyncio.wait_for(captured.get(), 10)
     gate = Gate()
-    fake_llm.push([gate, analysis_json()])
-    fake_llm.push(analysis_json(summary="第二次"))
-    await engine.start()
-    await gate.wait_reached()
-    assert (await client.get(f"/api/v1/tasks/{first}")).json()["status"] == "running"
-    second = await enqueue_auto(ctx, p["id"], ch["id"])  # 运行中不算已排队
-    assert second is not None and second != first
-    assert await enqueue_auto(ctx, p["id"], ch["id"]) is None
-    gate.release()
-    for tid in (first, second):
-        assert (await wait_task(client, tid))["status"] == "succeeded"
+    try:
+        assert execution.task_key == source_ref["task_key"]
+        first = await original_enqueue(ctx, p["id"], ch["id"], execution=execution)
+        assert first is not None
+        assert await original_enqueue(ctx, p["id"], ch["id"], execution=execution) is None  # 已排队
+        assert [t.id for t in await _analysis_tasks(app)] == [first]
+        (task,) = await _analysis_tasks(app)
+        owner = (await client.get("/api/v1/auth/me")).json()["id"]
+        assert (task.user_id, task.input["auto"], task.serial_key) == (owner, True, f"analysis:{p['id']}")
 
-    await client.patch(base, json={"auto_analyze": False})
-    assert await enqueue_auto(ctx, p["id"], ch["id"]) is None
-    assert len(await _analysis_tasks(app)) == 2
+        fake_llm.push([gate, analysis_json()])
+        fake_llm.push([analysis_json(summary="第二次")])
+        visible = (await client.get("/api/v1/tasks", params={
+            "project_id": p["id"], "chapter_id": ch["id"], "kind": "chapter.analyze",
+        })).json()
+        assert len(visible) == 1 and visible[0]["id"] == first
+        first_ref = visible[0]
+        # 成功回调仍持有原执行；放宽配额允许第一个分析真实运行。
+        app.state.settings.task_max_per_user = 2
+        engine.notify()
+        await gate.wait_reached(within=10)
+        assert (await client.get(f"/api/v1/tasks/{first}", params=task_params(first_ref))).json()["status"] == "running"
+        second = await original_enqueue(ctx, p["id"], ch["id"], execution=execution)  # 运行中可再排
+        assert second is not None and second != first
+        assert await original_enqueue(ctx, p["id"], ch["id"], execution=execution) is None
+        visible = (await client.get("/api/v1/tasks", params={
+            "project_id": p["id"], "chapter_id": ch["id"], "kind": "chapter.analyze",
+        })).json()
+        queued = [item for item in visible if item["status"] == "queued"]
+        assert len(queued) == 1 and queued[0]["id"] == second
+        second_ref = queued[0]
+        gate.release()
+        for ref in (first_ref, second_ref):
+            assert (await wait_task(client, ref, within=20))["status"] == "succeeded"
+
+        await client.patch(base, json={"auto_analyze": False})
+        assert await original_enqueue(ctx, p["id"], ch["id"], execution=execution) is None
+        assert len(await _analysis_tasks(app)) == 2
+    finally:
+        gate.release()
+        source_release.set()
 
 
 # ---------- AC3：一键分析、串行、去重、失败不阻塞 ----------
@@ -295,6 +350,12 @@ async def test_analyze_pending_serial_in_order_and_dedup(app, client, fake_llm):
     assert pending["queued"] == 2  # 第 2 章已排队、空章跳过
     tasks = await _analysis_tasks(app)
     assert [t.chapter_id for t in tasks] == [chs[1]["id"], chs[0]["id"], chs[2]["id"]]
+    visible = (await client.get("/api/v1/tasks", params={
+        "project_id": p["id"], "kind": "chapter.analyze",
+    })).json()
+    task_refs = {item["chapter_id"]: item for item in visible}
+    assert len(task_refs) == 3 and task_refs[chs[1]["id"]]["id"] == first.json()["id"]
+    assert {task_refs[ch["id"]]["id"] for ch in (chs[0], chs[2])} == set(pending["task_ids"])
     assert empty["id"] not in [t.chapter_id for t in tasks]
     states = {s["chapter_id"]: s["status"] for s in (await client.get(f"{base}/analysis/statuses")).json()}
     assert states[chs[0]["id"]] == "analyzing" and states[empty["id"]] == "none"
@@ -308,12 +369,15 @@ async def test_analyze_pending_serial_in_order_and_dedup(app, client, fake_llm):
     await asyncio.sleep(0.05)
     # 同项目串行：每用户上限为 2，但第二个分析仍在排队
     assert len(fake_llm.calls) == 1
-    assert (await client.get(f"/api/v1/tasks/{tasks[1].id}")).json()["status"] == "queued"
+    queued_task = await client.get(
+        f"/api/v1/tasks/{tasks[1].id}", params=task_params(task_refs[tasks[1].chapter_id]),
+    )
+    assert queued_task.json()["status"] == "queued"
     # 运行中（第 2 章）与排队中的章节都处于「分析中」：再次一键分析不重复入队
     assert (await client.post(f"{base}/analysis/analyze-pending")).json() == {"queued": 0, "task_ids": []}
     gate.release()
     for t in tasks:
-        assert (await wait_task(client, t.id))["status"] == "succeeded"
+        assert (await wait_task(client, task_refs[t.chapter_id]))["status"] == "succeeded"
     async with app.state.sessionmaker() as db:
         rows = list(await db.scalars(select(ChapterAnalysis).order_by(ChapterAnalysis.id)))
     assert [r.summary for r in rows] == ["二", "一", "三"]  # 按入队顺序执行
@@ -336,7 +400,7 @@ async def test_analysis_runs_parallel_across_projects_and_does_not_block_generat
     t2, _ = await run_task(client, await _analyze(client, other))
     assert t2["status"] == "succeeded"
     gate.release()
-    assert (await wait_task(client, t1["id"]))["status"] == "failed"
+    assert (await wait_task(client, t1))["status"] == "failed"
     # 分析失败不影响下一章生成
     fake_llm.push("第二章新正文")
     gen, _ = await run_task(client, await client.post(f"/api/v1/chapters/{ch2['id']}/generate"))

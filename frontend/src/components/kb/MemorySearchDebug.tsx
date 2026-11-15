@@ -1,19 +1,20 @@
 import { App, Button, Card, Checkbox, Empty, Input, InputNumber, List, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
-import { errorMessage } from '../../api/client'
 import { memoryApi } from '../../api/memories'
 import type { MemorySearchResult } from '../../api/types'
-import { MEMORY_KIND_COLORS, MEMORY_KIND_LABELS } from '../../utils/kb'
+import { kbActionError, MEMORY_KIND_COLORS, MEMORY_KIND_LABELS } from '../../utils/kb'
 import MemorySourceBadge from './MemorySourceBadge'
 import ScoreTags from './ScoreTags'
 import SearchResultSummary from './SearchResultSummary'
 
 interface Props {
   projectId: number
+  /** 协作者视图顶部说明（检索模式与费用来源，取自 index-status）；作者不传 */
+  notice?: string | null
 }
 
 /** 剧情记忆检索调试：查询 +「按第 N 章召回」（只在第 N 章之前检索）+ 包含已屏蔽，列出命中记忆与三项分数。 */
-export default function MemorySearchDebug({ projectId }: Props) {
+export default function MemorySearchDebug({ projectId, notice }: Props) {
   const { message } = App.useApp()
   const [query, setQuery] = useState('')
   const [beforeNo, setBeforeNo] = useState<number | null>(null)
@@ -41,7 +42,7 @@ export default function MemorySearchDebug({ projectId }: Props) {
         }),
       )
     } catch (err) {
-      message.error(errorMessage(err))
+      message.error(kbActionError(err))
     } finally {
       setLoading(false)
     }
@@ -50,6 +51,7 @@ export default function MemorySearchDebug({ projectId }: Props) {
   return (
     <Card size="small" title="检索调试">
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {notice && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{notice}</Typography.Text>}
         <Input.TextArea
           value={query}
           onChange={(e) => setQuery(e.target.value)}

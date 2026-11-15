@@ -175,7 +175,7 @@ async def test_inflight_analysis_rechecks_actual_source_before_write(app, client
         assert (await client.put(endpoint, json=edit)).status_code == 200
     finally:
         gate.release()
-    result = await wait_task(client, started.json()["id"])
+    result = await wait_task(client, started.json())
     assert result["status"] == expected, result
     async with app.state.sessionmaker() as db:
         rows = list(await db.scalars(select(ChapterAnalysis).where(ChapterAnalysis.chapter_id == chapter["id"])))

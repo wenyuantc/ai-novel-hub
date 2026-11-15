@@ -1,23 +1,45 @@
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useAuthStore } from '../stores/auth'
-import { useProjectStore } from '../stores/project'
+import {
+  captureProjectScope, isProjectScopeCurrent, useProjectStore, type ProjectCapability,
+} from '../stores/project'
+import { authorizationKey } from '../utils/permissions'
 import { projectAccess } from '../utils/projectAccess'
-import { useCallback, useEffect, useRef } from 'react'
-import { authorizationKey, can } from '../utils/permissions'
 
+/** UI 的服务端能力快照与请求回调守卫；真正授权仍由后端执行。 */
 export function useProjectAccess(projectId: number) {
   const user = useAuthStore((s) => s.user)
+  const status = useAuthStore((s) => s.status)
   const project = useProjectStore((s) => s.project)
+  const version = useProjectStore((s) => s.scopeVersion)
+  const identity = authorizationKey(user)
+  const userId = user?.id
+  const scope = useMemo(() => {
+    if (status !== 'authenticated' || userId === undefined) return null
+    const snapshot = captureProjectScope(projectId)
+    return snapshot?.version === version && snapshot.actorId === userId
+      && snapshot.identity.startsWith(`${userId}:${identity}:`) ? snapshot : null
+  }, [projectId, version, status, userId, identity])
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  const access = projectAccess(project, user, projectId)
-  const identity = authorizationKey(user)
-  const current = useCallback((permission: 'projects.read' | 'projects.edit' | 'projects.recycle') => {
-    const auth = useAuthStore.getState()
-    if (!mounted.current || !access.ready || useProjectStore.getState().project?.id !== projectId || auth.status !== 'authenticated' || auth.user?.id !== user?.id) return false
-    return !access.managingOther || (authorizationKey(auth.user) === identity && can(auth.user, permission))
-  }, [access.ready, access.managingOther, identity, projectId, user?.id])
-  const canEditNow = useCallback(() => current('projects.edit'), [current])
-  const canReadNow = useCallback(() => current('projects.read'), [current])
-  const canRecycleNow = useCallback(() => current('projects.recycle'), [current])
-  return { ...access, canReadNow, canEditNow, canRecycleNow }
+  const access = projectAccess(scope ? project : null, user, projectId)
+  const current = useCallback((capability: ProjectCapability) => (
+    mounted.current && isProjectScopeCurrent(scope, capability)
+  ), [scope])
+  const canReadNow = useCallback(() => current('canRead'), [current])
+  const canEditNow = useCallback(() => current('canEdit'), [current])
+  const canRecycleNow = useCallback(() => current('canRecycle'), [current])
+  const canExportNow = useCallback(() => current('canExport'), [current])
+  const canUseAINow = useCallback(() => current('canUseAI'), [current])
+  const canUseAIEntitledNow = useCallback(() => current('canUseAIEntitled'), [current])
+  const canUseOwnerAINow = useCallback(() => current('canUseOwnerAI'), [current])
+  const canUseAgentNow = useCallback(() => current('canUseAgent'), [current])
+  const canViewAgentNow = useCallback(() => current('canViewAgent'), [current])
+  const canManageCollaboratorsNow = useCallback(() => current('canManageCollaborators'), [current])
+  const canBackupNow = useCallback(() => current('canBackup'), [current])
+  const canWriteReadingProgressNow = useCallback(() => current('canWriteReadingProgress'), [current])
+  return {
+    ...access, canReadNow, canEditNow, canRecycleNow, canExportNow, canUseAINow, canUseAIEntitledNow, canUseOwnerAINow,
+    canUseAgentNow, canViewAgentNow, canManageCollaboratorsNow, canBackupNow, canWriteReadingProgressNow,
+  }
 }

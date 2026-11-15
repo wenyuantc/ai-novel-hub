@@ -11,6 +11,8 @@ interface Props<K extends WizardKind> {
   existingCount: number
   onClose: () => void
   onDone: (items: WizardItemMap[K][]) => void
+  /** 结果未发布时刷新列表（弹窗保持打开以显示说明）。 */
+  onRefresh?: () => void
 }
 
 /** 面板内的「AI 重新生成」弹窗，复用向导任务组件；重新打开时自动接上进行中的同类任务。 */
@@ -21,6 +23,7 @@ export default function WizardModal<K extends WizardKind>({
   existingCount,
   onClose,
   onDone,
+  onRefresh,
 }: Props<K>) {
   const { message } = App.useApp()
   const [running, setRunning] = useState(false)
@@ -49,6 +52,7 @@ export default function WizardModal<K extends WizardKind>({
           onDone(items)
           onClose()
         }}
+        onUnpublished={onRefresh}
       />
     </Modal>
   )

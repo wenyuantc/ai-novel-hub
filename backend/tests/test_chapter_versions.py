@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 
 from app.ai.providers import AIProviderError
-from app.models import Chapter, ChapterVersion, GenerationLog
+from app.models import Chapter, ChapterVersion, GenerationLog, Project
 from app.schemas.chapter import GenerateChapterRequest
 from app.services import generation_log_service, generation_service, scene_service, version_service
 from tests.helpers import (
@@ -244,7 +244,7 @@ async def test_auto_continue_rounds_and_join(app, client, fake_llm):
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 1000, "auto_continue": True}
     )
     assert resp.status_code == 202
-    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
+    events = parse_sse((await stream_with_gate(app, client, resp.json(), gate)).text)
     assert [d for e, d in events if e == "continue"] == [
         {"round": 1, "words": 400, "target": 1000},
         {"round": 2, "words": 700, "target": 1000},
@@ -277,7 +277,7 @@ async def test_auto_continue_capped_at_two_rounds(app, client, fake_llm):
     resp = await client.post(
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 3000, "auto_continue": True}
     )
-    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
+    events = parse_sse((await stream_with_gate(app, client, resp.json(), gate)).text)
     assert len([e for e, _ in events if e == "continue"]) == 2
     assert len(fake_llm.calls) == 3
     assert events[-1][1]["result"]["chapter"]["word_count"] == 300
@@ -291,14 +291,14 @@ async def test_auto_continue_disabled(app, client, fake_llm):
     resp = await client.post(
         f"/api/v1/chapters/{ch['id']}/generate", json={"target_words": 3000, "auto_continue": False}
     )
-    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
+    events = parse_sse((await stream_with_gate(app, client, resp.json(), gate)).text)
     assert not [e for e, _ in events if e == "continue"]
     assert len(fake_llm.calls) == 1 and events[-1][1]["task"]["stage"] == "已完成"
     # 接口默认不续写（兼容旧客户端）
     gate = Gate()
     fake_llm.push([gate, "乙" * 100])
     resp = await client.post(f"/api/v1/chapters/{ch['id']}/generate", json={})
-    events = parse_sse((await stream_with_gate(app, client, resp.json()["id"], gate)).text)
+    events = parse_sse((await stream_with_gate(app, client, resp.json(), gate)).text)
     assert not [e for e, _ in events if e == "continue"] and len(fake_llm.calls) == 2
     assert events[-1][1]["result"]["chapter"]["content"] == "乙" * 100
 
@@ -372,6 +372,7 @@ async def test_log_prune_per_project(app, client):
             await generation_log_service.write_log(
                 db,
                 project_id=p["id"],
+                actor_user_id=(await db.get(Project, p["id"])).user_id,
                 chapter_id=ch["id"],
                 kind="generate",
                 ai_config_id=None,

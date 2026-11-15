@@ -122,12 +122,30 @@ class ProjectSeriesBrief(BaseModel):
     id: int
     name: str
     revision: int
+    authorization_version: str | None
+
+
+class ProjectAccessOut(BaseModel):
+    role: Literal["owner", "viewer", "editor", "admin"] | None
+    is_collaborator: bool
+    # 仅用于客户端区分协作轮次；不是授权凭据。
+    authorization_version: str | None = None
+    allow_owner_ai: bool
+    can_read: bool
+    can_edit_content: bool
+    can_export: bool
+    can_use_ai: bool
+    can_manage_collaborators: bool
+    can_recycle: bool
+    can_backup: bool
+    can_write_reading_progress: bool
 
 
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    access: ProjectAccessOut
     owner: ProjectOwner | None = None
     series: ProjectSeriesBrief | None = None
     title: str

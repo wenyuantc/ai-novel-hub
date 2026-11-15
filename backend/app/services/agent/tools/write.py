@@ -55,8 +55,8 @@ from app.services import (
     story_service,
 )
 
-from .base import EmptyArgs, IdArgs, Tool, ToolCtx, arguments, serialized
-from .read import PageArgs, paged
+from .base import EmptyArgs, IdArgs, Tool, ToolCtx, arguments, collaborative, serialized
+from .read import PageArgs, paged, project_for_model, story_character
 from .visibility import timeline_allowed, timeline_fields_allowed
 
 
@@ -85,6 +85,8 @@ def crud_tools(
     create,
     update,
     delete,
+    *,
+    flag: str = "manual",
 ) -> list[Tool]:
     def operation(action, schema, with_id):
         async def invoke(ctx: ToolCtx, args: BaseModel):
@@ -93,7 +95,8 @@ def crud_tools(
                 params.append(args.id)
             if schema:
                 params.append(schema.model_validate(args.model_dump(exclude_unset=True, exclude={"id"})))
-            return await action(*params)
+            # 协作轮次走 service 的协作者分支；Agent 能力已由 _lock_write 在同一事务锁后判定。
+            return await action(*params, **collaborative(ctx, flag))
 
         return invoke
 
@@ -120,8 +123,8 @@ def crud_tools(
 
 # story_service 的 kind 位于第二个位置，单独闭包保持公共入口的参数契约。
 def story_action(action, kind):
-    async def invoke(db, user_id, project_id, *args):
-        return await action(db, kind, user_id, project_id, *args)
+    async def invoke(db, user_id, project_id, *args, **kwargs):
+        return await action(db, kind, user_id, project_id, *args, **kwargs)
 
     return invoke
 
@@ -149,7 +152,7 @@ ProjectArgs = create_model(
 async def update_project(ctx: ToolCtx, args: BaseModel):
     data = ProjectUpdate.model_validate(args.model_dump(exclude_unset=True))
     project, _ = await project_service.update_project(ctx.db, ctx.user_id, ctx.project_id, data)
-    return serialized(await project_service.project_out(ctx.db, project))
+    return await project_for_model(ctx, project)
 
 
 class MemberArgs(MemberCreate):
@@ -323,17 +326,21 @@ async def record_setting_field_progression(ctx: ToolCtx, args: FieldProgressionA
     })
     # 正式服务统一处理公共值编码、CAS、合法清空和物化，不在工具层复制写入规则。
     return await setting_progression_service.create_progression(
-        ctx.db, ctx.user_id, ctx.project_id, timeline.id, command,
+        ctx.db, ctx.user_id, ctx.project_id, timeline.id, command, **collaborative(ctx),
     )
 
 
 async def list_setting_timelines(ctx: ToolCtx, args: TimelineListArgs):
     filters = args.model_dump(exclude={"page", "page_size"}, exclude_none=True)
-    result = await setting_progression_service.list_timelines(ctx.db, ctx.user_id, ctx.project_id, **filters)
+    result = await setting_progression_service.list_timelines(
+        ctx.db, ctx.user_id, ctx.project_id, **filters, **collaborative(ctx),
+    )
     page = paged([item for item in result.items if timeline_allowed(ctx, item)], args)
     timeline_ids = [item["id"] for item in page["items"]]
     fields_by_timeline: dict[int, list[dict]] = {timeline_id: [] for timeline_id in timeline_ids}
-    definitions = await setting_field_service.list_definitions(ctx.db, ctx.user_id, ctx.project_id)
+    definitions = await setting_field_service.list_definitions(
+        ctx.db, ctx.user_id, ctx.project_id, **collaborative(ctx),
+    )
     by_id = {item.id: item for item in definitions.items}
     if timeline_ids:
         fields = await ctx.db.execute(
@@ -363,7 +370,7 @@ async def update_setting_baseline(ctx: ToolCtx, args: BaselineArgs):
     await timeline_fields_allowed(ctx, args.timeline_id, args.changes.model_fields_set)
     data = BaselineUpdate.model_validate(args.model_dump(exclude={"timeline_id"}, exclude_unset=True))
     return await setting_progression_service.update_baseline(
-        ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data
+        ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data, **collaborative(ctx),
     )
 
 
@@ -389,7 +396,7 @@ async def record_setting_progression(ctx: ToolCtx, args: ProgressionArgs):
     values = args.model_dump(exclude={"timeline_id", "value"}, exclude_unset=True)
     data = ProgressionCreate.model_validate({**values, "value": args.value.unpack()})
     return await setting_progression_service.create_progression(
-        ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data
+        ctx.db, ctx.user_id, ctx.project_id, args.timeline_id, data, **collaborative(ctx),
     )
 
 
@@ -415,6 +422,7 @@ async def set_member(ctx: ToolCtx, args: MemberArgs):
             args.organization_id,
             current.id,
             MemberUpdate.model_validate(data),
+            **collaborative(ctx),
         )
     return await organization_service.add_member(
         ctx.db,
@@ -422,6 +430,7 @@ async def set_member(ctx: ToolCtx, args: MemberArgs):
         ctx.project_id,
         args.organization_id,
         MemberCreate.model_validate({"character_id": args.character_id, **data}),
+        **collaborative(ctx),
     )
 
 
@@ -440,6 +449,7 @@ async def remove_member(ctx: ToolCtx, args: RemoveMemberArgs):
             chapter_id=args.chapter_id,
             chapter_no=args.chapter_no,
             boundary=args.boundary,
+            **collaborative(ctx),
         )
     elif args.edit_mode == "delete":
         if (
@@ -452,7 +462,8 @@ async def remove_member(ctx: ToolCtx, args: RemoveMemberArgs):
         if args.expected_revision is None:
             raise BadRequestError("删除成员资料必须指定设定版本")
         await organization_service.delete_membership_record(
-            ctx.db, ctx.user_id, ctx.project_id, args.organization_id, args.character_id, args.expected_revision
+            ctx.db, ctx.user_id, ctx.project_id, args.organization_id, args.character_id, args.expected_revision,
+            **collaborative(ctx),
         )
     elif (
         args.edit_mode is not None
@@ -484,10 +495,10 @@ async def assign_career(ctx: ToolCtx, args: AssignmentArgs):
         args.expected_revision is None
     ):
         raise BadRequestError("明确修改意图或章节时必须指定设定版本")
-    character = await story_service.get_owned(
-        ctx.db, story_service.CHARACTERS, ctx.user_id, ctx.project_id, args.character_id
+    character = await story_character(ctx, args.character_id)
+    career = await career_service.get_owned_career(
+        ctx.db, ctx.user_id, ctx.project_id, args.career_id, **collaborative(ctx),
     )
-    career = await career_service.get_owned_career(ctx.db, ctx.user_id, ctx.project_id, args.career_id)
     await career_service.apply_assignment(
         ctx.db,
         character,
@@ -530,6 +541,7 @@ async def remove_assignment(ctx: ToolCtx, args: RemoveAssignmentArgs):
         boundary=args.boundary,
         edit_mode=args.edit_mode,
         expected_revision=args.expected_revision,
+        **collaborative(ctx),
     )
     return {"ok": True}
 
@@ -540,7 +552,7 @@ class PlanArgs(PlansSync):
 
 async def update_plans(ctx: ToolCtx, args: PlanArgs):
     return await plan_service.sync_plans(
-        ctx.db, ctx.user_id, ctx.project_id, args.outline_id, PlansSync(plans=args.plans)
+        ctx.db, ctx.user_id, ctx.project_id, args.outline_id, PlansSync(plans=args.plans), **collaborative(ctx),
     )
 
 
@@ -550,7 +562,7 @@ class ChapterMetaArgs(IdArgs):
 
 async def update_chapter(ctx: ToolCtx, args: ChapterMetaArgs):
     row = await chapter_service.update_chapter(
-        ctx.db, ctx.user_id, ctx.project_id, args.id, ChapterUpdate(title=args.title)
+        ctx.db, ctx.user_id, ctx.project_id, args.id, ChapterUpdate(title=args.title), **collaborative(ctx),
     )
     return {"id": row.id, "title": row.title}
 
@@ -571,6 +583,7 @@ for noun, label, kind, create_schema, update_schema in (
             story_action(story_service.create_owned, kind),
             story_action(story_service.update_owned, kind),
             story_action(story_service.delete_owned, kind),
+            flag="manage",
         )
     )
 for noun, label, model, create_schema, update_schema, create, update, delete in (

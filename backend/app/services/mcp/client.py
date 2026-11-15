@@ -13,10 +13,11 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Literal, Protocol
+from weakref import WeakValueDictionary
 
 import httpx
 from jsonschema import validators
@@ -77,6 +78,91 @@ class McpTarget:
 
 
 McpConnector = Callable[..., AbstractAsyncContextManager[McpConnection]]
+
+
+_test_connectors: WeakValueDictionary[int, Any] = WeakValueDictionary()
+
+
+def _register_test_connector(connector: Any) -> None:
+    """测试替身须显式登记，且仍必须执行同一请求门禁。"""
+    _test_connectors[id(connector)] = connector
+
+
+def _trusted_connector(connector: Any) -> bool:
+    return connector is connect or _test_connectors.get(id(connector)) is connector
+
+
+class McpRequestGate:
+    """将一个串行工具调用绑定到 SDK 真正发出的唯一 JSON-RPC POST。"""
+
+    def __init__(self) -> None:
+        self._call = None
+        self._leases: dict[int, AsyncExitStack] = {}
+        self.failure: asyncio.Future | None = None
+
+    def arm(self, tool: str, arguments: dict, state: Any, acquire: Callable, *, future: asyncio.Future) -> None:
+        if self._call is not None or self._leases:
+            raise McpError("外部工具发送状态异常")
+        # 冻结参数，后续不能用修改后的可变对象替换原请求。
+        frozen = json.loads(json.dumps(arguments, ensure_ascii=False, sort_keys=True))
+        self._call = {"tool": tool, "arguments": frozen, "state": state, "acquire": acquire, "used": False,
+                      "future": future}
+        self.failure = asyncio.get_running_loop().create_future()
+
+    def disarm(self) -> None:
+        self._call = None
+
+    def _reject(self) -> None:
+        error = McpError("外部工具发送身份无法确认")
+        if self.failure is not None and not self.failure.done():
+            self.failure.set_result(error)
+        raise error
+
+    async def before_request(self, request: httpx.Request) -> None:
+        if request.method != "POST":
+            return
+        try:
+            body = json.loads(request.content)
+        except (ValueError, httpx.RequestNotRead):
+            if self._call is not None:
+                self._reject()
+            return
+        if not isinstance(body, dict):
+            if self._call is not None:
+                self._reject()
+            return
+        if body.get("method") != "tools/call":
+            return
+        call = self._call
+        if (call is None or call["used"] or not isinstance(body.get("params"), dict)
+                or body["params"].get("name") != call["tool"]
+                or body["params"].get("arguments", {}) != call["arguments"]
+                or type(body.get("id")) not in (str, int)):
+            self._reject()
+        # 在第一个 await 前占用一次性资格；重复 POST 无法重放。
+        call["used"] = True
+        lease = AsyncExitStack()
+        try:
+            await lease.enter_async_context(call["acquire"]())
+            if call["future"].cancelled():
+                raise McpError("外部工具调用已取消")
+            self._leases[id(request)] = lease
+            call["state"].started = True
+        except BaseException as exc:
+            await lease.aclose()
+            if self.failure is not None and not self.failure.done():
+                self.failure.set_result(exc)
+            raise
+
+    async def after_headers(self, response: httpx.Response) -> None:
+        if lease := self._leases.pop(id(response.request), None):
+            await lease.aclose()
+
+    async def aclose(self) -> None:
+        leases, self._leases = list(self._leases.values()), {}
+        for lease in leases:
+            await lease.aclose()
+        self.disarm()
 
 
 def schema_hash(schema: dict[str, Any]) -> str:
@@ -238,7 +324,9 @@ class _SdkConnection:
 
 
 @asynccontextmanager
-async def connect(target: McpTarget, *, allow_private: bool) -> AsyncIterator[McpConnection]:
+async def connect(
+    target: McpTarget, *, allow_private: bool, request_gate: McpRequestGate | None = None,
+) -> AsyncIterator[McpConnection]:
     """建立一次 MCP 会话（initialize 完成后 yield），退出时关闭连接。"""
     from mcp import ClientSession
     from mcp.client.sse import sse_client
@@ -261,7 +349,8 @@ async def connect(target: McpTarget, *, allow_private: bool) -> AsyncIterator[Mc
             # SDK 的 stream_within_origin 只看 max_redirects：0 = 任何重定向都不跟随
             max_redirects=0,
             limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
-            event_hooks={"request": [check_request]},
+            event_hooks={"request": [check_request, *([request_gate.before_request] if request_gate else [])],
+                         "response": [request_gate.after_headers] if request_gate else []},
         )
 
     stack_ready = False
@@ -293,8 +382,13 @@ async def connect(target: McpTarget, *, allow_private: bool) -> AsyncIterator[Mc
                     stack_ready = True
                     yield _SdkConnection(session, target.headers)
         finally:
-            if http_client is not None:
-                await http_client.aclose()
+            try:
+                if http_client is not None:
+                    await http_client.aclose()
+            finally:
+                if request_gate is not None:
+                    # 先结束 SDK 传输，再释放无响应头时仍持有的门禁。
+                    await request_gate.aclose()
     except BaseExceptionGroup as group:
         leaf = _leaf(group)
         if isinstance(leaf, Exception) and not stack_ready:

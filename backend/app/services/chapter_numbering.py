@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import ColumnElement, select, update
+from sqlalchemy import ColumnElement, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -31,6 +31,7 @@ from app.models import (
     SettingTimeline,
     StoryMemory,
 )
+from app.services import retrieval_service
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,44 @@ CHAPTER_NO_REFS: tuple[ChapterNoRef, ...] = (
 )
 
 
+async def preflight_chapter_shift(db: AsyncSession, project_id: int, from_no: int) -> None:
+    """在任何平移前检查所有受影响的章节、记忆与多态检索来源。"""
+    shifted_chapters = select(Chapter.id).where(Chapter.project_id == project_id, Chapter.chapter_no >= from_no)
+    with db.no_autoflush:
+        chapter_ids = list(await db.scalars(shifted_chapters))
+        for chapter_id in chapter_ids:
+            retrieval_service._require_clean_source_identity(
+                db, Chapter, chapter_id, ("id", "project_id", "chapter_no"),
+            )
+        foreign_memory = await db.scalar(select(StoryMemory.id).where(
+            StoryMemory.chapter_id.in_(shifted_chapters), StoryMemory.project_id.is_distinct_from(project_id),
+        ).limit(1))
+        if foreign_memory is not None:
+            raise retrieval_service._invalid_retrieval_reference()
+        memory_ids = list(await db.scalars(select(StoryMemory.id).where(
+            StoryMemory.project_id == project_id,
+            or_(StoryMemory.chapter_no >= from_no, StoryMemory.chapter_id.in_(shifted_chapters)),
+        )))
+        for memory_id in memory_ids:
+            retrieval_service._require_clean_source_identity(
+                db, StoryMemory, memory_id, ("id", "project_id", "chapter_id", "chapter_no", "origin"),
+            )
+        indexed = (await db.execute(select(RetrievalChunk.id, RetrievalChunk.source, RetrievalChunk.ref_id).where(
+            RetrievalChunk.project_id == project_id, RetrievalChunk.chapter_no.is_not(None),
+            RetrievalChunk.chapter_no >= from_no,
+        ))).all()
+        refs: dict[str, list[int]] = {"memory": memory_ids, "kb": []}
+        for row in indexed:
+            if row.source not in refs:
+                raise retrieval_service._invalid_retrieval_reference()
+            retrieval_service._require_clean_source_identity(
+                db, RetrievalChunk, row.id, ("id", "project_id", "source", "ref_id", "chapter_no", "version"),
+            )
+            refs[row.source].append(row.ref_id)
+        await retrieval_service.validate_project_source_refs(db, project_id, "memory", refs["memory"])
+        await retrieval_service.validate_project_source_refs(db, project_id, "kb", refs["kb"])
+
+
 async def shift_chapter_numbers(db: AsyncSession, project_id: int, *, from_no: int, delta: int) -> None:
     """把项目内所有 >= from_no 的章节号加上 delta（可为负）。不 commit。
 
@@ -98,6 +137,7 @@ async def shift_chapter_numbers(db: AsyncSession, project_id: int, *, from_no: i
     """
     if delta == 0:
         return
+    await preflight_chapter_shift(db, project_id, from_no)
     for ref in CHAPTER_NO_REFS:
         col = getattr(ref.model, ref.column)
         await db.execute(

@@ -33,6 +33,7 @@ from app.schemas.setting_ai_visibility import LegacyFieldAiVisibilityUpdate
 from app.services import setting_ai_visibility as visibility
 from app.services import setting_catalog_service as catalog
 from app.services.audit_writer import AuditOperation
+from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
 from app.services.setting_field_values import (
     CanonicalFieldValue,
@@ -90,14 +91,20 @@ async def claim_fields_revision(db: AsyncSession, project_id: int, expected: int
 @asynccontextmanager
 async def _editing(
     db: AsyncSession, user_id: int, project_id: int, *, configuration: bool = False, ai_visibility: bool = False,
+    manual: bool = False,
 ):
     async with AuditOperation(db, user_id, "project.update", "project", project_id, project_id=project_id) as audit:
         try:
-            project = (
-                await visibility.lock_author_visibility_write(db, user_id, project_id)
-                if ai_visibility else
-                await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
-            )
+            if manual:
+                project = await require_project(
+                    db, user_id, project_id, "content.edit", for_update=True, visibility_write=ai_visibility,
+                )
+            else:
+                project = (
+                    await visibility.lock_author_visibility_write(db, user_id, project_id)
+                    if ai_visibility else
+                    await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
+                )
             audit.target(project)
             audit.summary.changed_fields = ["field_definitions" if configuration else "setting_fields"]
             yield audit
@@ -170,9 +177,13 @@ async def list_definitions(
     *,
     types: Sequence[s.EntryType] | None = None,
     include_archived: bool = True,
+    manual: bool = False,
 ) -> s.DefinitionPage:
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        if manual:
+            await require_project(db, user_id, project_id, "content.read")
+        else:
+            await get_manageable_project(db, user_id, project_id)
         before = await fields_revision(db, project_id)
         definitions, options = await _metadata(db, project_id)
         items = [
@@ -186,8 +197,10 @@ async def list_definitions(
         return s.DefinitionPage(items=items, total=len(items), fields_revision=before)
 
 
-async def read_definition(db: AsyncSession, user_id: int, project_id: int, definition_id: int) -> s.DefinitionMutation:
-    page = await list_definitions(db, user_id, project_id)
+async def read_definition(
+    db: AsyncSession, user_id: int, project_id: int, definition_id: int, *, manual: bool = False,
+) -> s.DefinitionMutation:
+    page = await list_definitions(db, user_id, project_id, manual=manual)
     item = next((d for d in page.items if d.id == definition_id), None)
     if item is None:
         raise NotFoundError("字段定义不存在")
@@ -258,9 +271,13 @@ async def save_definition(
     project_id: int,
     data: s.DefinitionCreate | s.DefinitionUpdate,
     definition_id: int | None = None,
+    *, manual: bool = False,
 ) -> s.DefinitionMutation:
     visibility_write = data.ai_hidden is not None if definition_id is not None else bool(data.ai_hidden)
-    async with _editing(db, user_id, project_id, configuration=True, ai_visibility=visibility_write) as audit:
+    async with _editing(
+        db, user_id, project_id, configuration=True, ai_visibility=visibility_write,
+        manual=manual,
+    ) as audit:
         await check_fields_revision(db, project_id, data.expected_fields_revision)
         previous_hidden = False
         if visibility_write and definition_id is not None:
@@ -278,7 +295,6 @@ async def save_definition(
             await visibility.bump_visibility_revision(
                 db, project_id, tighten=definition_id is not None and definition.ai_hidden,
             )
-            audit.summary.changed_fields.append("ai_hidden")
         revision = await claim_fields_revision(db, project_id, data.expected_fields_revision)
         _, options = await _metadata(db, project_id)
         item = _definition_out(definition, options)
@@ -564,9 +580,9 @@ async def assert_option_unreferenced(db: AsyncSession, project_id: int, definiti
 
 
 async def delete_definition(
-    db: AsyncSession, user_id: int, project_id: int, definition_id: int, expected: int
+    db: AsyncSession, user_id: int, project_id: int, definition_id: int, expected: int, *, manual: bool = False,
 ) -> s.FieldRevision:
-    async with _editing(db, user_id, project_id, configuration=True) as audit:
+    async with _editing(db, user_id, project_id, configuration=True, manual=manual) as audit:
         await check_fields_revision(db, project_id, expected)
         definition = await get_definition(db, project_id, definition_id)
         await assert_definition_dependencies(db, definition)
@@ -585,8 +601,9 @@ async def save_option(
     definition_id: int,
     data: s.OptionCreate | s.OptionUpdate,
     option_id: int | None = None,
+    *, manual: bool = False,
 ) -> s.OptionMutation:
-    async with _editing(db, user_id, project_id, configuration=True) as audit:
+    async with _editing(db, user_id, project_id, configuration=True, manual=manual) as audit:
         await check_fields_revision(db, project_id, data.expected_fields_revision)
         definition = await get_definition(db, project_id, definition_id)
         if definition.field_type != "dropdown":
@@ -627,9 +644,10 @@ async def save_option(
 
 
 async def delete_option(
-    db: AsyncSession, user_id: int, project_id: int, definition_id: int, option_id: int, expected: int
+    db: AsyncSession, user_id: int, project_id: int, definition_id: int, option_id: int, expected: int,
+    *, manual: bool = False,
 ) -> s.FieldRevision:
-    async with _editing(db, user_id, project_id, configuration=True) as audit:
+    async with _editing(db, user_id, project_id, configuration=True, manual=manual) as audit:
         await check_fields_revision(db, project_id, expected)
         await get_definition(db, project_id, definition_id)
         option = await db.scalar(
@@ -791,8 +809,9 @@ async def write_baseline(
     entry_id: int,
     definition_id: int,
     data: s.FieldValueWrite,
+    *, manual: bool = False,
 ) -> s.EntryFieldsOut:
-    async with _editing(db, user_id, project_id) as audit:
+    async with _editing(db, user_id, project_id, manual=manual) as audit:
         timeline, definition = await _write_target(
             db,
             project_id,
@@ -819,10 +838,11 @@ async def create_field_progression(
     entry_id: int,
     definition_id: int,
     data: s.FieldProgressionCreate,
+    *, manual: bool = False,
 ) -> ProgressionMutationOut:
     from app.services import setting_progression_service as progressions
 
-    async with _editing(db, user_id, project_id) as audit:
+    async with _editing(db, user_id, project_id, manual=manual) as audit:
         timeline, definition = await _write_target(
             db,
             project_id,
@@ -864,10 +884,11 @@ async def bind_legacy(
     entry_id: int,
     field_id: int,
     data: s.LegacyBinding,
+    *, manual: bool = False,
 ) -> s.EntryFieldsOut:
     from app.services import setting_progression_service as progressions
 
-    async with _editing(db, user_id, project_id, ai_visibility=True) as audit:
+    async with _editing(db, user_id, project_id, ai_visibility=True, manual=manual) as audit:
         timeline, definition = await _write_target(
             db,
             project_id,
@@ -908,7 +929,6 @@ async def bind_legacy(
         await progressions._claim_revision(db, timeline, timeline.revision)
         if definition.ai_hidden:
             await visibility.bump_visibility_revision(db, project_id, tighten=not field.ai_hidden)
-            audit.summary.changed_fields.append("ai_hidden")
         # 关联只改变身份归属；旧行/旧事件的时间戳也保留。
         await db.execute(
             update(SettingTextField)
@@ -935,10 +955,11 @@ async def write_legacy_visibility(
     entry_id: int,
     field_id: int,
     data: LegacyFieldAiVisibilityUpdate,
+    *, manual: bool = False,
 ) -> s.EntryFieldsOut:
     from app.services import setting_progression_service as progressions
 
-    async with _editing(db, user_id, project_id, ai_visibility=True) as audit:
+    async with _editing(db, user_id, project_id, ai_visibility=True, manual=manual) as audit:
         entry = await catalog.get_entry(db, project_id, kind, entry_id)
         timeline = await catalog.find_entry_timeline(db, project_id, kind, entry_id)
         if timeline is None:
@@ -961,7 +982,6 @@ async def write_legacy_visibility(
             await visibility.bump_visibility_revision(db, project_id, expected=expected, tighten=data.ai_hidden)
             field.ai_hidden = data.ai_hidden
             await db.flush()
-            audit.summary.changed_fields.append("ai_hidden")
             audit.affected([field.id])
         result = (await resolve_entry_fields(db, project_id, [entry.reference]))[kind, entry_id]
         if changed:
@@ -1165,11 +1185,15 @@ async def read_entry_fields(
     chapter_no: int | None = None,
     scene_id: int | None = None,
     boundary="start",
+    manual: bool = False,
 ) -> s.EntryFieldsOut:
     from app.services.setting_progression_service import resolve_story_position
 
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        if manual:
+            await require_project(db, user_id, project_id, "content.read")
+        else:
+            await get_manageable_project(db, user_id, project_id)
         position = await resolve_story_position(
             db, project_id, chapter_id=chapter_id, chapter_no=chapter_no, scene_id=scene_id,
             boundary=boundary, optional=True,

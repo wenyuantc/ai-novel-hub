@@ -24,6 +24,7 @@ from app.schemas.system_settings import (
 )
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation, AuditOperationError
+from app.services.mcp import settings_gate
 
 logger = logging.getLogger(__name__)
 CONFLICT = "系统设置已被其他管理员修改，请刷新后重新确认"
@@ -37,6 +38,9 @@ class SystemSettingsManager:
         self.runtime = authz.runtime_for_factory(sessionmaker)
         self.notify = notify
         self._deployment = {key: getattr(settings, key) for key in SYSTEM_SETTING_KEYS}
+        settings_gate.configure_deployment_default(sessionmaker, self._deployment["mcp_enabled"])
+        # 必须先确认持久设置，再允许依赖运行设置的实际发送/准入。
+        self.runtime.settings_confirmed = False
         self._defaults = {key: Settings.model_fields[key].default for key in SYSTEM_SETTING_KEYS}
         self._deployment_sources = {
             key: "deployment" if key in settings.model_fields_set else "default" for key in SYSTEM_SETTING_KEYS
@@ -89,9 +93,11 @@ class SystemSettingsManager:
     async def _reload(self) -> SystemSettingsOut:
         async with self.runtime.hold():
             async with self.sessionmaker() as db:
+                await settings_gate.lock_for_reload(db)
                 row = await db.get(SystemSettings, 1)
                 values = self._validated(row)
-            return self._publish(*values)
+                # 发布时共享门禁仍在本事务内，避免其他实例提交穿过读/发布窗口。
+                return self._publish(*values)
 
     async def load(self) -> SystemSettingsOut:
         async with self._lock:
@@ -99,6 +105,7 @@ class SystemSettingsManager:
                 return await self._reload()
             except Exception:
                 logger.error("系统设置持久状态读取失败")
+                self._schedule_recovery()
                 raise AuditOperationError(UNKNOWN) from None
 
     def _track_write(self, task: asyncio.Task) -> None:
@@ -142,12 +149,16 @@ class SystemSettingsManager:
                 try:
                     async with self.sessionmaker() as db:
                         access = await authz.require(db, actor_id, "settings.update", write=True)
+                        # User → MCP 设置独占门禁 → SystemSettings；发送侧不持授权写门禁。
+                        await settings_gate.lock_for_update(db)
+                        current = self._validated(await db.get(SystemSettings, 1, populate_existing=True))
                         actor = await db.get(User, access.id, populate_existing=True)
                         async with AuditOperation(
                             db, actor, "system_settings.update", "system_settings", 1, operation_id=operation_id,
                         ) as audit:
                             audit.values["target_label"] = "系统设置"
-                            if request.revision != self._revision:
+                            if (request.revision != self._revision or current[0] != self._revision
+                                    or current[1] != self._overrides):
                                 raise ConflictError(CONFLICT)
                             before = self._overrides
                             audit.summary.settings_changes = [

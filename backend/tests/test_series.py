@@ -40,7 +40,8 @@ async def test_series_owner_revision_and_one_membership(client, make_client):
     book = await create_project(client)
     another_owners_book = await create_project(outsider)
     series = await _new_series(client, "  云境  ")
-    assert series == {"id": series["id"], "name": "云境", "revision": 0, "book_count": 0, "entry_count": 0}
+    assert series == {"id": series["id"], "name": "云境", "revision": 0, "book_count": 0, "entry_count": 0,
+                      "is_owner": True, "can_manage_collaborators": True, "authorization_version": None}
     path = f"{_SERIES}/{series['id']}"
     assert (await outsider.get(_SERIES)).json() == []
     assert (await outsider.get(path)).status_code == 404

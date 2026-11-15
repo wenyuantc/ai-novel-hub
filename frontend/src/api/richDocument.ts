@@ -1,6 +1,7 @@
 import { request } from './client'
 import { runGeneration } from './sse'
 import { parseSceneRewriteDone } from './scenes'
+import { hasTaskIdentity } from './tasks'
 import type { SceneRewriteDone, SkillInputValues, StyleChoice, Task } from './types'
 
 export interface RichInlineStyle { kind: 'bold' | 'italic'; start: number; end: number }
@@ -52,7 +53,11 @@ export interface RichReviewPreview {
   task_key: string; run_key: string; token: string; chapter_id: number; content_revision: number; scenes: RichReviewScene[]
 }
 export interface RichReviewPosition { scene_id: number; section_key: string; anchor: number }
-export interface RichReviewOutcome { status: 'applied'; task_status: 'succeeded' | 'queued'; chapter_id: number; content_revision: number }
+const ANALYSIS_NOT_QUEUED = '自动分析未排队，请检查模型设置后手动分析'
+export interface RichReviewOutcome {
+  status: 'applied'; task_status: 'succeeded' | 'queued'; chapter_id: number; content_revision: number
+  analysis_warning?: typeof ANALYSIS_NOT_QUEUED
+}
 
 const sceneBase = (pid: number, cid: number, sid: number) => `/projects/${pid}/chapters/${cid}/scenes/${sid}`
 const sectionBase = (pid: number, cid: number, sid: number, key: string) => `${sceneBase(pid, cid, sid)}/sections/${encodeURIComponent(key)}/rewrite`
@@ -70,7 +75,7 @@ export const richDocumentApi = {
   applySelection: (pid: number, cid: number, sid: number, key: string, body: SectionRewriteApply) => request<RichDocumentOut>(`${sectionBase(pid, cid, sid, key)}/apply`, { method: 'POST', body }),
   review: async (task: Task, signal?: AbortSignal) => {
     const identity = task.rich_review
-    if (!identity) throw new Error('任务缺少待核对提案身份')
+    if (!identity || !hasTaskIdentity(task) || task.task_key !== identity.task_key) throw new Error('任务缺少可验证的待核对提案身份')
     const value = await request<RichReviewPreview>(`/tasks/${task.id}/rich-proposals/${encodeURIComponent(identity.token)}`, {
       query: { task_key: identity.task_key, run_key: identity.run_key }, signal,
     })
@@ -80,12 +85,18 @@ export const richDocumentApi = {
     }
     return value
   },
-  acceptReview: (task: Task, sections: RichReviewPosition[], confirmFormatLoss: boolean, signal?: AbortSignal) => {
+  acceptReview: async (task: Task, sections: RichReviewPosition[], confirmFormatLoss: boolean, signal?: AbortSignal) => {
     const identity = task.rich_review
-    if (!identity) throw new Error('任务缺少待核对提案身份')
-    return request<RichReviewOutcome>(`/tasks/${task.id}/rich-proposals/${encodeURIComponent(identity.token)}/accept`, {
+    if (!identity || !hasTaskIdentity(task) || task.task_key !== identity.task_key) throw new Error('任务缺少可验证的待核对提案身份')
+    const result = await request<RichReviewOutcome>(`/tasks/${task.id}/rich-proposals/${encodeURIComponent(identity.token)}/accept`, {
       method: 'POST', body: { task_key: identity.task_key, run_key: identity.run_key, sections, confirm_format_loss: confirmFormatLoss }, signal,
     })
+    if (!result || result.status !== 'applied' || !['succeeded', 'queued'].includes(result.task_status)
+        || result.chapter_id !== identity.chapter_id || !Number.isSafeInteger(result.content_revision) || result.content_revision < 0
+        || (result.analysis_warning !== undefined && result.analysis_warning !== ANALYSIS_NOT_QUEUED)) {
+      throw new Error('采纳结果无法确认，请刷新任务后核对')
+    }
+    return result
   },
 }
 

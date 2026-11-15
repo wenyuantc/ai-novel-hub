@@ -15,7 +15,8 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -26,7 +27,7 @@ from app.ai.prompts import build_inspiration_messages
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
-from app.models import InspirationSession, Project
+from app.models import InspirationOrigin, InspirationSession, Project
 from app.schemas.inspiration import (
     APPLY_FIELDS,
     APPLY_LABELS,
@@ -60,7 +61,8 @@ from app.schemas.project import (
     WizardProgress,
     normalize_tags,
 )
-from app.services import ai_config_service, kb_service, project_service, prompt_service
+from app.services import ai_config_service, kb_service, project_access, project_service, prompt_service
+from app.services.audit_writer import AuditOperation
 
 logger = logging.getLogger(__name__)
 
@@ -151,22 +153,70 @@ def to_brief(session: InspirationSession) -> SessionBrief:
 
 
 async def _commit(db: AsyncSession, session: InspirationSession) -> SessionOut:
+    session_id, user_id = session.id, session.user_id
+    if session_id is None:
+        await db.flush()
+        session_id = session.id
     await db.commit()
-    await db.refresh(session)
-    return to_out(session)
+    # 共享来源可能在提交后撤销；投影前锁内复核原邀请，不返回旧快照。
+    return to_out(await get_owned_session(db, user_id, session_id))
 
 
 # ---------------------------------------------------------------- 会话增删查
 
 
-async def get_owned_session(db: AsyncSession, user_id: int, session_id: int) -> InspirationSession:
-    """他人的会话与不存在统一 404。"""
-    session = await db.scalar(
-        select(InspirationSession).where(InspirationSession.id == session_id, InspirationSession.user_id == user_id)
+def _uuid4(value: str) -> bool:
+    try:
+        value_uuid = UUID(value)
+        return str(value_uuid) == value and value_uuid.version == 4
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def _origin_valid(origin: InspirationOrigin) -> bool:
+    return (
+        type(origin.project_id) is int and origin.project_id > 0
+        and _uuid4(origin.invitation_id) and _uuid4(origin.origin_key)
     )
-    if session is None:
-        raise NotFoundError("灵感会话不存在")
-    return session
+
+
+async def get_owned_session(db: AsyncSession, user_id: int, session_id: int) -> InspirationSession:
+    """本人会话的项目来源必须仍是同一轮已接受邀请。"""
+    with db.no_autoflush:
+        session = await db.scalar(
+            select(InspirationSession).where(InspirationSession.id == session_id, InspirationSession.user_id == user_id)
+        )
+        if session is None:
+            raise NotFoundError("灵感会话不存在")
+        origin = await db.get(InspirationOrigin, session.id)
+        if origin is None:
+            if session.project_id is not None:
+                project = await db.get(Project, session.project_id)
+                # 旧作者会话没有来源行；不能把无来源的跨用户会话当成普通私人会话。
+                if project is not None and project.user_id != user_id:
+                    raise NotFoundError("灵感会话不存在")
+            return session
+        if not _origin_valid(origin) or session.project_id != origin.project_id:
+            raise NotFoundError("灵感会话不存在")
+        original = (origin.project_id, origin.invitation_id, origin.origin_key)
+        try:
+            _, access, member = await project_access.resolve_access(db, user_id, origin.project_id, for_update=True)
+        except NotFoundError:
+            raise NotFoundError("灵感会话不存在") from None
+        if not access.is_collaborator or member is None or member.invitation_id != origin.invitation_id:
+            raise NotFoundError("灵感会话不存在")
+        # 项目锁之后重新锁读会话和来源；整数 ID 复用不能让旧请求读取或覆盖新会话。
+        session = await db.scalar(select(InspirationSession).where(
+            InspirationSession.id == session_id, InspirationSession.user_id == user_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        fresh = await db.scalar(select(InspirationOrigin).where(
+            InspirationOrigin.session_id == session_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if (session is None or fresh is None or not _origin_valid(fresh)
+                or session.project_id != original[0]
+                or (fresh.project_id, fresh.invitation_id, fresh.origin_key) != original):
+            raise NotFoundError("灵感会话不存在")
+        return session
 
 
 async def list_sessions(db: AsyncSession, user_id: int) -> list[SessionBrief]:
@@ -177,7 +227,21 @@ async def list_sessions(db: AsyncSession, user_id: int) -> list[SessionBrief]:
             .order_by(InspirationSession.updated_at.desc(), InspirationSession.id.desc())
         )
     ).all()
-    return [to_brief(s) for s in rows]
+    if not rows:
+        return []
+    with db.no_autoflush:
+        origins = (await db.scalars(select(InspirationOrigin).where(
+            InspirationOrigin.session_id.in_([s.id for s in rows]),
+        ))).all()
+    origin_projects = {origin.session_id: origin.project_id for origin in origins}
+    visible: dict[int, InspirationSession] = {}
+    # 多个来源按作品 ID 稳定加锁，避免与其他会话读取/写入发生反序等待。
+    for row in sorted(rows, key=lambda s: (origin_projects.get(s.id, 0), s.id)):
+        try:
+            visible[row.id] = await get_owned_session(db, user_id, row.id)
+        except NotFoundError:
+            continue
+    return [to_brief(visible[s.id]) for s in rows if s.id in visible]
 
 
 async def get_session(db: AsyncSession, user_id: int, session_id: int) -> SessionOut:
@@ -214,7 +278,13 @@ async def create_session(db: AsyncSession, user_id: int, data: SessionCreate) ->
 
 
 async def delete_session(db: AsyncSession, user_id: int, session_id: int) -> None:
-    session = await get_owned_session(db, user_id, session_id)
+    # 清理本人会话不返回其内容；失权后仍可删除自己不可再读取的旧快照。
+    with db.no_autoflush:
+        session = await db.scalar(select(InspirationSession).where(
+            InspirationSession.id == session_id, InspirationSession.user_id == user_id,
+        ).with_for_update())
+    if session is None:
+        raise NotFoundError("灵感会话不存在")
     await db.delete(session)
     await db.commit()
 
@@ -440,6 +510,11 @@ async def prepare_generate(
     allow_private: bool,
 ) -> InspirationJob:
     session = await get_owned_session(db, user_id, session_id)
+    origin = await db.get(InspirationOrigin, session.id)
+    if origin is not None:
+        await project_access.require_project(db, user_id, origin.project_id, "ai.use", for_update=True)
+        # 共享向量、实际发送和结果屏障接齐前，不让个人会话绕过协作 AI 授权。
+        raise ConflictError("协作灵感生成暂不可用，请稍后重试", extra={"code": "collaboration_ai_unavailable"})
     state = load_state(session)
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
@@ -611,7 +686,7 @@ async def convert(db: AsyncSession, user_id: int, session_id: int, data: Convert
     _store(session, state)
     await db.commit()
     await db.refresh(project)
-    return await project_service.project_out(db, project)
+    return await project_service.project_out(db, project, actor_user_id=user_id)
 
 
 def _proposals(state: SessionState) -> dict[str, Any]:
@@ -625,9 +700,31 @@ def _is_empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or (isinstance(value, str) and not value.strip())
 
 
+async def _session_target(
+    db: AsyncSession, user_id: int, session_id: int, project_id: int,
+    capability: Literal["content.read", "content.edit"],
+) -> tuple[InspirationSession, Project]:
+    """需要两个作品时按 ID 顺序取锁，之后复验本人会话和原邀请。"""
+    with db.no_autoflush:
+        raw = await db.scalar(select(InspirationSession).where(
+            InspirationSession.id == session_id, InspirationSession.user_id == user_id,
+        ))
+        if raw is None:
+            raise NotFoundError("灵感会话不存在")
+        origin = await db.get(InspirationOrigin, session_id)
+        if origin is not None and not _origin_valid(origin):
+            raise NotFoundError("灵感会话不存在")
+        if origin is not None and project_id < origin.project_id:
+            project = await project_access.require_project(db, user_id, project_id, capability, for_update=True)
+            session = await get_owned_session(db, user_id, session_id)
+        else:
+            session = await get_owned_session(db, user_id, session_id)
+            project = await project_access.require_project(db, user_id, project_id, capability, for_update=True)
+        return session, project
+
+
 async def apply_preview(db: AsyncSession, user_id: int, session_id: int, project_id: int) -> list[ApplyPreviewItem]:
-    session = await get_owned_session(db, user_id, session_id)
-    project = await project_service.get_owned_project(db, user_id, project_id)
+    session, project = await _session_target(db, user_id, session_id, project_id, "content.read")
     proposed = _proposals(load_state(session))
     items: list[ApplyPreviewItem] = []
     for field in APPLY_FIELDS:
@@ -648,35 +745,46 @@ async def apply_preview(db: AsyncSession, user_id: int, session_id: int, project
 
 async def apply(db: AsyncSession, user_id: int, session_id: int, data: ApplyRequest) -> ProjectOut:
     """只写勾选的字段；会话状态不变，可以反复应用。"""
-    session = await get_owned_session(db, user_id, session_id)
-    project = await project_service.get_owned_project(db, user_id, data.project_id, lock=True)
-    proposed = _proposals(load_state(session))
-    for field in dict.fromkeys(data.fields):
-        if field not in proposed:
-            raise BadRequestError(f"「{APPLY_LABELS[field]}」没有可应用的内容")
-    for field in dict.fromkeys(data.fields):
-        value = proposed[field]
-        setattr(project, field, list(value) if isinstance(value, list) else value)
-    await db.commit()
+    session, project = await _session_target(db, user_id, session_id, data.project_id, "content.edit")
+    async with AuditOperation(db, user_id, "project.update", "project", project.id, project_id=project.id) as audit:
+        audit.target(project)
+        audit.track(project, data.fields)
+        proposed = _proposals(load_state(session))
+        for field in dict.fromkeys(data.fields):
+            if field not in proposed:
+                raise BadRequestError(f"「{APPLY_LABELS[field]}」没有可应用的内容")
+        for field in dict.fromkeys(data.fields):
+            value = proposed[field]
+            setattr(project, field, list(value) if isinstance(value, list) else value)
+        await audit.commit()
     await db.refresh(project)
     return await project_service.project_out(db, project, actor_user_id=user_id)
 
 
 async def from_project(db: AsyncSession, user_id: int, project_id: int) -> SessionOut:
     """用项目已有字段预填（非空的步骤为已定、source=project）；同一项目已有进行中的会话时直接返回它。"""
-    project = await project_service.get_owned_project(db, user_id, project_id, lock=True)
+    with db.no_autoflush:
+        project, access, member = await project_access.resolve_access(db, user_id, project_id, for_update=True)
+        if project.user_id != user_id and (not access.is_collaborator or member is None):
+            raise NotFoundError("项目不存在")
+        invitation_id = member.invitation_id if project.user_id != user_id and member is not None else None
+        if invitation_id is not None and not _uuid4(invitation_id):
+            raise NotFoundError("项目不存在")
     existing = await db.scalar(
         select(InspirationSession)
+        .outerjoin(InspirationOrigin, InspirationOrigin.session_id == InspirationSession.id)
         .where(
             InspirationSession.user_id == user_id,
             InspirationSession.project_id == project.id,
             InspirationSession.status == "active",
+            InspirationOrigin.invitation_id == invitation_id if invitation_id is not None
+            else InspirationOrigin.session_id.is_(None),
         )
         .order_by(InspirationSession.id.desc())
         .limit(1)
     )
     if existing is not None:
-        return to_out(existing)
+        return to_out(await get_owned_session(db, user_id, existing.id))
     await _ensure_capacity(db, user_id)
     state = SessionState(idea=(project.premise or "").strip()[:IDEA_MAX], genre=(project.genre or "").strip()[:100])
     for step in STEPS:
@@ -697,4 +805,9 @@ async def from_project(db: AsyncSession, user_id: int, project_id: int) -> Sessi
     session = InspirationSession(user_id=user_id, project_id=project.id, status="active")
     _store(session, state)
     db.add(session)
-    return await _commit(db, session)
+    await db.flush()
+    session_id = session.id
+    if invitation_id is not None:
+        db.add(InspirationOrigin(session_id=session_id, project_id=project.id, invitation_id=invitation_id))
+    await db.commit()
+    return to_out(await get_owned_session(db, user_id, session_id))

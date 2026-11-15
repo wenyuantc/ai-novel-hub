@@ -79,7 +79,7 @@ async def test_acceptance_commit_confirmation_loss_keeps_success_and_scan_drains
         if should_lose:
             raise RuntimeError(PRIVATE_ERROR)
 
-    async def abort(ctx, row):
+    async def abort(ctx, row, **_kwargs):
         aborts.append(row.statistics_key)
         reached.set()
         await release.wait()
@@ -137,7 +137,7 @@ async def test_cancelled_http_request_cannot_cancel_independent_registered_drain
         await hold_response.wait()  # 提交且登记独立 drain 后，HTTP 响应仍未交付。
         return result
 
-    async def abort(ctx, row):
+    async def abort(ctx, row, **_kwargs):
         aborts.append(row.statistics_key)
         abort_reached.set()
         await release_abort.wait()
@@ -179,16 +179,26 @@ async def test_cancelled_http_request_cannot_cancel_independent_registered_drain
 async def test_drain_commit_confirmation_loss_cannot_replay_old_abort_on_new_resource(
     app, client, monkeypatch
 ):
+    from app.services import chapter_claim, project_access
+    from app.services.task_engine.handlers import chapter as chapter_handler
+
     task = await _prepare(app, client, project=True)
     engine = app.state.task_engine
     async with app.state.sessionmaker() as db:
-        chapter = Chapter(project_id=task.project_id, chapter_no=1, title="资源代次", status="generating")
+        await project_access.require_project(db, task.user_id, task.project_id, "ai.use", for_update=True,
+                                             visibility_write=True)
+        chapter = Chapter(project_id=task.project_id, chapter_no=1, title="资源代次", status="draft")
         db.add(chapter)
         await db.flush()
         task = await db.get(Task, task.id)
-        task.kind, task.status, task.chapter_id = "chapter.generate", "running", chapter.id
+        task.kind, task.status, task.chapter_id = "chapter.generate", "queued", chapter.id
         task.resource_key = f"chapter:{chapter.id}"
-        task.input = {"chapter_id": chapter.id, "prev_status": "draft"}
+        task.input = {"request": {"chapter_id": chapter.id}, "chapter_id": chapter.id, "prev_status": "draft"}
+        await db.flush()
+        queued_claim = await chapter_handler.bind_queued_claim(db, task)
+        task.status, task.execution_key = "running", str(uuid4())
+        await db.flush()
+        running_claim = await chapter_claim.activate_queued_chapter(db, queued_claim, execution_key=task.execution_key)
         await task_statistics_service.record_state_change(db, task, "running")
         await db.commit()
     actual_signal = engine.request_admin_cancel
@@ -197,14 +207,15 @@ async def test_drain_commit_confirmation_loss_cannot_replay_old_abort_on_new_res
     assert response.status_code == 202, response.text
     operation_id = response.json()["operation_id"]
     handler = get_handler(task.kind)
-    actual_abort = handler.on_abort
+    actual_release = chapter_claim.release_chapter_claim
 
-    async def fail_abort(*args):
+    async def fail_abort(*args, **kwargs):
         raise RuntimeError(PRIVATE_ERROR)
 
     monkeypatch.setattr(handler, "on_abort", fail_abort)
     old_hub, _ = engine.ensure_hub(task.id, statistics_key=task.statistics_key, status="running")
-    await engine._finalize(task.id, task, handler, old_hub, status="cancelled", result=None, error="任务已取消")
+    await engine._finalize(task.id, task, handler, old_hub, status="cancelled", result=None, error="任务已取消",
+                           claim=running_claim)
     assert task.project_id in engine._abort_failures
     # owner 可以重连仍然 pending 的任务；后台成功后必须正确关闭这个新 Hub。
     hub, _ = engine.ensure_hub(task.id, statistics_key=task.statistics_key, status="running")
@@ -212,12 +223,11 @@ async def test_drain_commit_confirmation_loss_cannot_replay_old_abort_on_new_res
     lost = False
     aborts, replacement_key = [], None
 
-    async def abort(ctx, row):
-        aborts.append(row.statistics_key)
-        if row.statistics_key == replacement_key:
-            async with app.state.sessionmaker() as db:
-                assert (await db.get(Chapter, chapter.id)).status == "generating"
-        await actual_abort(ctx, row)
+    async def abort(db, claim):
+        aborts.append(claim.task_key)
+        if claim.task_key == replacement_key:
+            assert (await db.get(Chapter, chapter.id)).status == "generating"
+        return await actual_release(db, claim)
 
     async def commit(db):
         nonlocal lost
@@ -229,7 +239,7 @@ async def test_drain_commit_confirmation_loss_cannot_replay_old_abort_on_new_res
             lost = True
             raise RuntimeError(PRIVATE_ERROR)
 
-    monkeypatch.setattr(handler, "on_abort", abort)
+    monkeypatch.setattr(chapter_claim, "release_chapter_claim", abort)
     monkeypatch.setattr(AsyncSession, "commit", commit)
     actual_signal(task.statistics_key, operation_id)
     await asyncio.wait_for(engine.wait_admin_cancellations(), 3)
@@ -238,11 +248,15 @@ async def test_drain_commit_confirmation_loss_cannot_replay_old_abort_on_new_res
         assert lost and ended.status == "cancelled" and ended.admin_cancel_operation_id is None
         assert engine.admin_cancellations.completed_round(ended)
         assert hub.closed
+        await project_access.require_project(db, task.user_id, task.project_id, "ai.use", for_update=True,
+                                             visibility_write=True)
         fresh = Task(user_id=task.user_id, project_id=task.project_id, chapter_id=chapter.id,
-                     kind=task.kind, status="queued", resource_key=task.resource_key, input=task.input)
+                     kind=task.kind, status="queued", resource_key=task.resource_key, input={
+                         "request": {"chapter_id": chapter.id}, "chapter_id": chapter.id, "prev_status": "draft",
+                     })
         db.add(fresh)
-        (await db.get(Chapter, chapter.id)).status = "generating"
         await task_statistics_service.record_created(db, fresh)
+        await chapter_handler.bind_queued_claim(db, fresh)
         await db.commit()
         replacement_key = fresh.statistics_key
     async with app.state.sessionmaker() as db:

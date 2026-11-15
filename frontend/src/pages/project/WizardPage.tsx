@@ -10,8 +10,9 @@ import type { WizardKind, WizardProgressUpdate } from '../../api/types'
 import { markWizardStep, resumeWizardStep, WIZARD_FINISH_STEP } from '../../api/wizard'
 import WizardGenerator from '../../components/WizardGenerator'
 import { useLoader } from '../../hooks/useLoader'
-import { useProjectStore } from '../../stores/project'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useProjectAccess } from '../../hooks/useProjectAccess'
 
 const STEPS: { kind: WizardKind; title: string; description: string }[] = [
   { kind: 'world', title: '世界观', description: '时代背景、力量体系、势力与规则' },
@@ -45,6 +46,7 @@ export default function WizardPage() {
   const refreshProject = useProjectStore((s) => s.refresh)
   const project = useProjectStore((s) => s.project)
   const setProject = useProjectStore((s) => s.setProject)
+  const { canEditNow } = useProjectAccess(pid)
   // ProjectLayout 只在项目加载完成后渲染子路由，这里可直接读取进度
   const progress = project?.id === pid ? project.wizard_progress : null
   const [searchParams] = useSearchParams()
@@ -63,12 +65,16 @@ export default function WizardPage() {
   const [creating, setCreating] = useState(false)
 
   const saveProgress = async (update: WizardProgressUpdate) => {
+    if (!canEditNow()) return
+    const scope = captureProjectScope(pid)
+    if (!scope) return
     try {
       const updated = await projectApi.updateWizardProgress(pid, update)
+      if (!canEditNow() || !isProjectScopeCurrent(scope)) return
       const current = useProjectStore.getState().project
-      if (current?.id === updated.id) setProject({ ...current, wizard_progress: updated.wizard_progress })
+      if (current?.id === updated.id) setProject({ ...current, wizard_progress: updated.wizard_progress }, scope)
     } catch (err) {
-      message.error(`向导进度保存失败：${errorMessage(err)}`)
+      if (isProjectScopeCurrent(scope)) message.error(`向导进度保存失败：${errorMessage(err)}`)
     }
   }
 
@@ -80,12 +86,14 @@ export default function WizardPage() {
 
   /** 切换到某一步（上一步 / 点击步骤条）：只记录当前步骤 */
   const goTo = (target: number) => {
+    if (!canEditNow()) return
     setStep(target)
     void saveProgress({ current: stepKey(target) })
   }
 
   /** 完成（下一步）或跳过当前步骤 */
   const advance = (action: 'done' | 'skip') => {
+    if (!canEditNow()) return
     const kind = STEPS[step].kind
     setStep(step + 1)
     void saveProgress(markWizardStep(latestProgress(), kind, action, stepKey(step + 1)))
@@ -107,14 +115,18 @@ export default function WizardPage() {
   const current = STEPS[Math.min(step, STEPS.length - 1)]
 
   const createChapters = async () => {
+    if (!canEditNow()) return
+    const scope = captureProjectScope(pid)
+    if (!scope) return
     setCreating(true)
     try {
       const created = await chapterApi.fromOutlines(pid, null)
+      if (!canEditNow() || !isProjectScopeCurrent(scope)) return
       message.success(created.length > 0 ? `已按大纲创建 ${created.length} 个章节` : '大纲条目均已建章')
       void refreshProject()
       navigate(`/projects/${pid}/chapters`)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope)) message.error(errorMessage(err))
     } finally {
       setCreating(false)
     }
@@ -192,6 +204,10 @@ export default function WizardPage() {
                 // 生成成功即记为完成（不改当前步骤）
                 const { done, skipped } = markWizardStep(latestProgress(), current.kind, 'done', null)
                 void saveProgress({ done, skipped })
+              }}
+              onUnpublished={() => {
+                // 结果未发布：只刷新计数，不标记该步完成
+                reload()
               }}
             />
             <Space>

@@ -9,7 +9,6 @@ from app.core.deps import CurrentUser, DbDep
 from app.core.errors import AppError
 from app.schemas import planning as s
 from app.services import planning_service as svc
-from app.services.project_service import get_manageable_project
 
 router = APIRouter(tags=["planning"])
 BASE = "/projects/{project_id}/planning"
@@ -115,10 +114,9 @@ async def context_preview(
     scope: Literal["chapter", "selection"] = "chapter",
     budget: Annotated[int, Query(ge=256, le=20000)] = 4000,
 ):
-    from app.services.planning_context_service import context_preview as preview
+    from app.services.planning_context_service import manual_context_preview
 
-    project = await get_manageable_project(db, user.id, project_id)
-    return await preview(db, project, source_kind, source_id, scope=scope, budget=budget)
+    return await manual_context_preview(db, user.id, project_id, source_kind, source_id, scope=scope, budget=budget)
 
 
 @router.get(BASE + "/detached", response_model=s.PlanningDetached)

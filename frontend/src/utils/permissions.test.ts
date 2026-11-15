@@ -18,7 +18,11 @@ describe('明确操作权限，不由布尔管理员或跨域读取推导授权'
   })
   it('权限并集由服务端提供；授写不暗含read，不把他人AI或阅读进度扩权', () => {
     const actor = user(['projects.edit', 'users.read'])
-    const access = projectAccess({ id: 3, owner: { id: 2, username: 'other' } }, actor, 3)
+    const access = projectAccess({ id: 3, owner: { id: 2, username: 'other' }, access: {
+      role: 'admin', is_collaborator: false, authorization_version: null, allow_owner_ai: false, can_read: false, can_edit_content: true,
+      can_export: false, can_use_ai: false, can_manage_collaborators: false, can_recycle: false,
+      can_backup: false, can_write_reading_progress: false,
+    } }, actor, 3)
     expect(access).toMatchObject({ managingOther: true, canRead: false, canEdit: true, canRecycle: false, canUseAI: false })
     expect(can(actor, 'tasks.read')).toBe(false)
     expect(authorizationKey(actor)).not.toBe(authorizationKey({ ...actor, authorization_revision: 2 }))

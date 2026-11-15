@@ -5,13 +5,14 @@
 """
 
 from anyio import to_thread
-from sqlalchemy import and_, case, func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import hash_password
 from app.models import Project, Task, User
+from app.models.entities import FINISHED_TASK_STATUSES
 from app.schemas.admin import (
     AdminResourceUsage,
     AdminUserCreate,
@@ -25,10 +26,21 @@ from app.schemas.admin import (
 from app.services import auth_service, project_lifecycle, task_statistics_service
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation
-from app.services.project_service import chapter_stats_subquery
+from app.services.project_service import (
+    chapter_stats_subquery,
+    has_unsettled_external_change,
+    has_unsettled_user_task_receipts,
+)
 
 SELF_FORBIDDEN = "不能对自己执行该操作"
 LAST_ADMIN = "至少需要保留一名启用中的管理员"
+
+
+def _has_unflushed_changes(db: AsyncSession) -> bool:
+    return any(
+        entity in db.new or entity in db.deleted or db.is_modified(entity, include_collections=True)
+        for entity in set(db.new) | set(db.dirty) | set(db.deleted)
+    )
 
 
 def _project_count_subquery():
@@ -204,6 +216,15 @@ async def reset_password(db: AsyncSession, actor: User, user_id: int, data: Rese
 
 async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
     """只允许删除已无任何作品的用户；私人配置沿既有外键级联清理。"""
+    if _has_unflushed_changes(db):
+        # 只读权限检查与拒绝都在写屏障和审计回滚之前，保留调用方尚未提交的工作。
+        current = await authz.require(db, actor, "users.delete")
+        await authz.protect_target(db, current, user_id)
+        if current.id == user_id:
+            raise BadRequestError(SELF_FORBIDDEN)
+        raise ConflictError(
+            "存在尚未提交的更改，暂不能删除账号", extra={"code": "user_has_pending_tasks"},
+        )
     current = await authz.require(db, actor, "users.delete", write=True, targets=(user_id,))
     async with AuditOperation(db, actor, "user.delete", "user", user_id) as audit:
         await authz.protect_target(db, current, user_id)
@@ -221,11 +242,20 @@ async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
                 "该用户名下仍有作品（含回收站），请先禁用账号或彻底清理作品后再删除用户",
                 extra={"code": "user_has_projects", "project_count": count},
             )
-        if await db.scalar(select(Task.id).where(
-            Task.user_id == user_id, Task.admin_cancel_operation_id.is_not(None)
-        ).limit(1)) is not None:
+        # 名下作品已在上面排除；其余项目／章节任务属于他人作品，删除用户会级联删除任务，
+        # 使章节或索引占用失去清理依据。缺 project_id 的章节任务及未知状态也不能视为安全。
+        # 创建方必须先取得相同认证/User 屏障，再与任务插入一同提交。
+        pending = await db.scalar(select(Task.id).where(
+            Task.user_id == user_id,
+            or_(Task.admin_cancel_operation_id.is_not(None), Task.execution_key.is_not(None), and_(
+                or_(Task.project_id.is_not(None), Task.chapter_id.is_not(None)),
+                Task.status.not_in(FINISHED_TASK_STATUSES),
+            )),
+        ).limit(1))
+        if (pending is not None or await has_unsettled_user_task_receipts(db, user_id)
+                or await has_unsettled_external_change(db, user_id=user_id)):
             raise ConflictError(
-                "该用户仍有取消请求尚未安全收尾，暂不能删除账号", extra={"code": "user_has_pending_tasks"}
+                "该用户仍有尚未安全收尾的任务，暂不能删除账号", extra={"code": "user_has_pending_tasks"}
             )
         await task_statistics_service.mark_removed(db, Task.user_id == user_id)
         await authz.advance(db)

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models import Career, Character, Organization, SettingReferenceHandle, SettingTimeline, WorldSetting
 from app.schemas.setting_fields import EntityRef, EntryKind, EntryType, SettingEntry, SettingEntryPage
+from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
 
 ENTRY_MODELS = {"character": Character, "world": WorldSetting, "organization": Organization, "career": Career}
@@ -152,9 +153,13 @@ async def list_entries(
     page: int = 1,
     page_size: int = 50,
     allowed_ids: dict[str, set[int]] | None = None,
+    manual: bool = False,
 ) -> SettingEntryPage:
     with db.no_autoflush:
-        await get_manageable_project(db, user_id, project_id)
+        if manual:
+            await require_project(db, user_id, project_id, "content.read")
+        else:
+            await get_manageable_project(db, user_id, project_id)
         entries = _entry_union(project_id)
         predicates = _entry_filters(entries, types, q)
         if allowed_ids is not None:

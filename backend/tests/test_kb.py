@@ -9,7 +9,7 @@ from app.ai.providers import AIProviderError
 from app.core.errors import BadRequestError
 from app.models import KbChunk, RetrievalChunk
 from app.services import kb_parser, kb_service, retrieval_service
-from tests.helpers import create_ai_config, create_project, register, run_task, wait_task
+from tests.helpers import create_ai_config, create_project, register, run_task, task_params, wait_task
 from tests.kb_fixtures import make_docx, make_epub, make_pdf
 
 SECT = (
@@ -171,7 +171,7 @@ async def _upload(client, base, name="设定集.md", data: bytes = SECT.encode()
     assert resp.status_code == 202, resp.text
     body = resp.json()
     if wait:
-        task = await wait_task(client, body["task"]["id"])
+        task = await wait_task(client, body["task"])
         assert task["status"] == "succeeded", task
         assert task["kind"] == "kb.index" and task["project_id"] == body["document"]["project_id"]
     return body
@@ -188,7 +188,7 @@ async def test_upload_index_keyword_only(client, app):
     doc = await _doc(client, base, body["document"]["id"])
     assert doc["status"] == "ready_keyword_only" and doc["chunk_count"] == 3
     assert doc["char_count"] == len(SECT) and doc["mime"] == "text/markdown"
-    result = (await client.get(f"/api/v1/tasks/{body['task']['id']}")).json()
+    result = (await client.get(f"/api/v1/tasks/{body['task']['id']}", params=task_params(body["task"]))).json()
     assert result["progress"] == 100
     # 分块：带标题路径
     page = (await client.get(f"{base}/documents/{doc['id']}/chunks", params={"page_size": 2})).json()
@@ -207,6 +207,10 @@ async def test_upload_index_keyword_only(client, app):
         "stale_count": 0,
         "stale": {"kb": 0, "memory": 0},
         "indexing": False,
+        # E6-d 新增（作者视图同样返回）：未配置向量 → 关键词模式并说明原因
+        "owner_embedding_configured": False,
+        "retrieval_mode": "keyword",
+        "keyword_reason": "embedding_config_missing",
     }
 
 
@@ -292,22 +296,22 @@ async def test_index_failure_retry_and_delete(client, app, monkeypatch):
 
     monkeypatch.setattr(kb_parser, "chunk_text", broken)
     body = await _upload(client, base, wait=False)
-    task = await wait_task(client, body["task"]["id"])
+    task = await wait_task(client, body["task"])
     assert task["status"] == "failed" and "建索引失败" in task["error"]
     doc = await _doc(client, base, body["document"]["id"])
     assert doc["status"] == "failed" and doc["error"]
 
     monkeypatch.setattr(kb_parser, "chunk_text", original)
-    retry = await client.post(f"/api/v1/tasks/{task['id']}/retry")
+    retry = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
     assert retry.status_code == 202
-    assert (await wait_task(client, retry.json()["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, retry.json()))["status"] == "succeeded"
     doc = await _doc(client, base, doc["id"])
     assert doc["status"] == "ready_keyword_only" and doc["chunk_count"] == 3
 
     # 重建该文档：重新分块
     resp = await client.post(f"{base}/documents/{doc['id']}/reindex")
     assert resp.status_code == 202
-    assert (await wait_task(client, resp.json()["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, resp.json()))["status"] == "succeeded"
     assert (await _doc(client, base, doc["id"]))["chunk_count"] == 3
 
     # 删除：分块与检索单元一并删除
@@ -423,9 +427,9 @@ async def test_embedding_failure_keyword_only_with_warning(client, fake_llm):
     await create_ai_config(client, name="向量", model_type="embedding", model="emb")
     fake_llm.embed_error = AIProviderError("模型调用失败：额度不足")
     body = await _upload(client, base, wait=False)
-    task = await wait_task(client, body["task"]["id"])
+    task = await wait_task(client, body["task"])
     assert task["status"] == "succeeded"
-    result = (await client.get(f"/api/v1/tasks/{task['id']}")).json()
+    result = (await client.get(f"/api/v1/tasks/{task['id']}", params=task_params(task))).json()
     assert result["status"] == "succeeded"
     doc = await _doc(client, base, body["document"]["id"])
     assert doc["status"] == "ready_keyword_only" and any("额度不足" in w for w in doc["warnings"])
@@ -448,7 +452,7 @@ async def test_blocked_embedding_endpoint_reports_reason(client):
     doc = await _doc(client, base, body["document"]["id"])
     assert doc["status"] == "ready_keyword_only"
     assert any("向量模型不可用" in w and "内网" in w and "未配置" not in w for w in doc["warnings"])
-    task = await wait_task(client, (await client.post(f"{base}/rebuild")).json()["id"])
+    task = await wait_task(client, (await client.post(f"{base}/rebuild")).json())
     assert task["status"] == "failed" and "向量模型不可用" in task["error"] and "尚未配置" not in task["error"]
 
 
@@ -548,7 +552,7 @@ async def test_cross_user_kb_404(client, make_client):
     await register(bob, "bob")
     resp = await bob.post(f"{base}/documents", files={"file": ("x.txt", "资料".encode(), "text/plain")})
     assert resp.status_code == 404
-    assert (await bob.get(f"/api/v1/tasks/{body['task']['id']}")).status_code == 404
+    assert (await bob.get(f"/api/v1/tasks/{body['task']['id']}", params=task_params(body["task"]))).status_code == 404
     assert (await bob.post(f"{base}/documents/{doc_id}/reindex")).status_code == 404
     assert len((await client.get(f"{base}/documents")).json()) == 1
 

@@ -22,7 +22,16 @@ from app.schemas.career import CareerCreate, StageIn
 from app.schemas.organization import OrganizationCreate
 from app.services import career_service, organization_service, project_lifecycle, setting_catalog_service, story_service
 from app.services.book_import import reverse
-from tests.helpers import Gate, create_ai_config, create_project, parse_sse, purge_trashed_project, register, run_task
+from tests.helpers import (
+    Gate,
+    create_ai_config,
+    create_project,
+    parse_sse,
+    purge_trashed_project,
+    register,
+    run_task,
+    task_params,
+)
 
 KINDS = ("character", "world", "organization", "career")
 ENDPOINTS = {"character": "characters", "world": "world", "organization": "organizations", "career": "careers"}
@@ -253,7 +262,8 @@ async def test_wizard_rechecks_incoming_references_added_during_generation(clien
         await _reference(app, project_id, source_kind, source, target_kind, target, "inactive")
     finally:
         gate.release()
-    events = parse_sse((await client.get(f"/api/v1/tasks/{response.json()['id']}/stream")).text)
+    stream = await client.get(f"/api/v1/tasks/{response.json()['id']}/stream", params=task_params(response.json()))
+    events = parse_sse(stream.text)
     assert events[-1][0] == "error", events[-1]
     assert "引用来源" in events[-1][1]["detail"] and "牵挂" in events[-1][1]["detail"]
     assert (await client.get(f"{base}/{ENDPOINTS[target_kind]}/{target['id']}")).status_code == 200

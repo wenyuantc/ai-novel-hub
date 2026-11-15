@@ -153,10 +153,17 @@ AC4 生成提示词、排序、向导进度。
   `展开章数需大于已有正文的细纲数（N 章）`（运行时再查一次）。参考前后各 2 条章纲、角色名单、保留细纲（梗概 + 关键事件）。
   新草稿数 > 5 时每 5 章一批，后续批次附上已生成的关键事件；跨章重复的关键事件（忽略空白）去掉并给 warning。出场角色按名字 → 别名匹配。
 - 测试：`tests/test_outline_pro.py`（续写 / 开新卷截断 / 资源互斥 409、展开、分批去重、count ≤ 保留 400）。
+- **协作者（E4-g3a）**：作者与 accepted editor 共用这两个入口，契约见 [error-handling.md](./error-handling.md)「协作者执行（E4）」的大纲条目。
+  要点：按 `ai.use`（viewer 403，待接受/非成员/已撤权/仅管理员 404，零任务零调用）；模型本人优先，仅本人无配置且 `allow_owner_ai`
+  时用作者配置（`_project_model.source/config_owner_id` 记费用来源），本人配置无效不回退；Task 归真实触发者；作者私人风格/模板不进提示词；
+  检索按受理冻结的共享向量选择（E6-d：作者已授权且有向量 → 作者向量受控发送、读作者旧键；否则只用关键词、作者向量零调用，见 [retrieval.md](./retrieval.md)）；章纲按作品过滤（不再走作者/管理员专用 `plan_service.get_project_outline`）。
+  采纳草稿仍是人工写入（`content.edit`），任务本身不写大纲/细纲。回归：`tests/test_collaboration_outline_entry_e4g3.py` 与 `_postgresql.py`。
 
 ---
 
 ## 场景：向导的大纲模式与进度
+
+> 受控任务流（E5-c3，协作者订阅；生产路由自 E5-f 起对协作者挂载受控管线）：向导运行中帧（stage/delta/progress/error）以构建时的发送 guard（原执行带本轮未决凭据）证明，done 帧以保存后按「完成收据断点 + 保存事务内新可见性戳」构造的仅发布 guard 证明。修改向导未决凭据/完成收据形状、保存事务或事件顺序时，须同步 `handlers/wizard.py` 的 `stream_guard`、`SendGuard._wizard_stream_shape` 与 error-handling.md「受控任务流的向导运行中帧与 done 帧证明（E5-c3）」。向导按完成收据受限收尾（E4-g3c）时，终态帧为带任务快照的 `done {task, result: null, unpublished: true, detail: "向导结果已保存，请刷新后查看"}`，不带收据中的条目，见 error-handling.md「收据收尾的终态帧（E5-d）」。
 
 - `WizardRequest.outline_mode: "replace" | "append"`（默认 replace，与原行为一致）。replace：已有大纲时先存 `wizard_replace` 快照，再
   `delete(Outline)` 后插入（章节经外键解除关联）。append：不删旧大纲；提示词附已有大纲末尾 10 条，要求从「最后一卷 + 1」卷、
@@ -166,7 +173,10 @@ AC4 生成提示词、排序、向导进度。
   `params = {volume_count, chapters_per_volume, character_count}`（`WizardParams`，范围同 `WizardRequest`）只由灵感模式「转为项目」写入
   （见 [inspiration.md](./inspiration.md)），向导页优先用它初始化参数；`PATCH /wizard-progress` 不修改、也不会丢掉它。
   `PATCH /projects/{pid}/wizard-progress {done?, skipped?, current?}`：给出的字段整体替换（去空白、去重，单个 ≤32 字、最多 20 个），
-  未给的不变，`current` 显式 null 清空；返回 `ProjectOut`。步骤名由前端定义，后端不校验取值。
+  未给的不变，`current` 显式 null 清空；返回 `ProjectOut`（按真实 actor 投影）。步骤名由前端定义，后端不校验取值。
+  授权（E4-g3c 随向导开放）：`project_access.resolve_access(for_update=True)` 后仅作者与 accepted editor 可写；viewer 403，
+  非成员/待接受/已撤权 404。向导属 AI 工作流，管理员人工编辑权限（projects.edit）**不**扩展到此处：仅凭管理身份仍为原严格作者语义的 404，
+  管理员兼 viewer 403，管理员兼 editor 按 editor 可写（`test_collaboration_wizard_entry_e4g3c.py::test_wizard_progress_follows_content_edit`）。
 - 测试：`tests/test_wizard.py::test_wizard_outline_append_mode`、`test_wizard_outline_replace_saves_snapshot`、
   `tests/test_outline_pro.py::test_wizard_progress`。
 

@@ -3,7 +3,7 @@ import { Alert, Button, Collapse, Space, Spin, theme, Typography } from 'antd'
 import type { CSSProperties } from 'react'
 import { useState } from 'react'
 import { errorMessage } from '../../api/client'
-import { memoryApi } from '../../api/memories'
+import { contextPreviewDenied, memoryApi } from '../../api/memories'
 import type { ContextPreview } from '../../api/types'
 
 interface Props {
@@ -26,14 +26,20 @@ export default function ContextPreviewPanel({ chapterId }: Props) {
   const [data, setData] = useState<ContextPreview | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [denied, setDenied] = useState(false)
 
   const load = async () => {
     setLoading(true)
     setError(null)
+    setDenied(false)
     try {
       setData(await memoryApi.contextPreview(chapterId))
     } catch (err) {
-      setError(errorMessage(err))
+      // 查看者等无 AI 权限（403）只就地说明无权限，不当作错误；作品能力由全局 403 处理刷新
+      if (contextPreviewDenied(err)) {
+        setData(null)
+        setDenied(true)
+      } else setError(errorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -65,6 +71,7 @@ export default function ContextPreviewPanel({ chapterId }: Props) {
           children: (
             <Spin spinning={loading}>
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {denied && <Typography.Text type="secondary">无权限查看注入预览（需要可使用 AI 的编辑权限）。</Typography.Text>}
                 {error && <Alert type="error" showIcon message={error} />}
                 {data && !data.memories && !data.knowledge && (
                   <Typography.Text type="secondary">

@@ -1,7 +1,7 @@
 import { Alert, App, Button, Col, Form, Input, InputNumber, Progress, Radio, Row, Space, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../api/client'
-import { queueLabel, taskApi, wizardTaskKind } from '../api/tasks'
+import { hasTaskIdentity, queueLabel, taskApi, wizardTaskKind } from '../api/tasks'
 import type { OutlineMode, Task, WizardItemMap, WizardKind, WizardRequest } from '../api/types'
 import {
   canResumeWizard,
@@ -13,7 +13,7 @@ import {
 } from '../api/wizard'
 import { useHasAIConfig } from '../hooks/useHasAIConfig'
 import { useTaskStream } from '../hooks/useTaskStream'
-import { useProjectStore } from '../stores/project'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../stores/project'
 import { useTasksStore } from '../stores/tasks'
 import AIConfigSelect from './AIConfigSelect'
 import StreamOutput from './StreamOutput'
@@ -27,6 +27,8 @@ interface Props<K extends WizardKind> {
   /** 生成完成后是否在下方展示结构化结果 */
   showResult?: boolean
   onDone?: (items: WizardItemMap[K][]) => void
+  /** 结果未发布（收据受限收尾）：内容可能已保存但不确认条目，只刷新对应设定，不视为本步完成。 */
+  onUnpublished?: () => void
   onRunningChange?: (running: boolean) => void
 }
 
@@ -52,6 +54,7 @@ export default function WizardGenerator<K extends WizardKind>({
   existingCount = 0,
   showResult = false,
   onDone,
+  onUnpublished,
   onRunningChange,
 }: Props<K>) {
   const { message, modal } = App.useApp()
@@ -63,7 +66,9 @@ export default function WizardGenerator<K extends WizardKind>({
   const [result, setResult] = useState<WizardItemMap[K][] | null>(null)
   const task = useTaskStream()
   const [starting, setStarting] = useState(false)
+  const [resumeInvalid, setResumeInvalid] = useState(false)
   const trackTask = useTasksStore((s) => s.track)
+  const refreshTasks = useTasksStore((s) => s.refresh)
   const hasConfig = useHasAIConfig()
   const label = WIZARD_KIND_LABELS[kind]
   // 灵感模式转为项目时写入的向导参数建议（wizard_progress.params），有则优先作为初始值
@@ -76,7 +81,8 @@ export default function WizardGenerator<K extends WizardKind>({
     career_count: 4,
   }))
   const running = task.running || starting
-  const resumable = !running && canResumeWizard(task.task, task.text)
+  const hasPartial = !running && canResumeWizard(task.task, task.text)
+  const resumable = hasPartial && !resumeInvalid && hasTaskIdentity(task.task)
 
   // onRunningChange 用 ref 保存最新回调，避免父组件内联函数导致 effect 反复执行
   const runningCbRef = useRef(onRunningChange)
@@ -88,8 +94,16 @@ export default function WizardGenerator<K extends WizardKind>({
   }, [running])
 
   const followTask = async (t: Task) => {
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
     const outcome = await task.follow(t)
-    if (outcome.status === 'succeeded') {
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
+    // 结果未发布（收据受限收尾）：内容已保存但不报告生成条数，提示服务端说明并自动刷新对应设定；
+    // 不调用 onDone，向导步骤不标记完成（由作者/编辑者核对后手动「下一步」）。
+    if (outcome.status === 'succeeded' && outcome.unpublished) {
+      message.info(outcome.detail)
+      onUnpublished?.()
+    } else if (outcome.status === 'succeeded') {
       const items = parseWizardDone(kind, outcome.result) ?? []
       const warns = parseWizardWarnings(outcome.result)
       setResult(items)
@@ -126,11 +140,13 @@ export default function WizardGenerator<K extends WizardKind>({
   // 失败 / 中断且有部分输出 → 恢复错误与已输出内容，可从中断处继续
   useEffect(() => {
     let alive = true
+    const scope = captureProjectScope(projectId)
     taskApi
       .list({ project_id: projectId, kind: wizardTaskKind(kind), limit: 1 })
       .then((list) => {
         const latest = list[0]
-        if (!alive || !latest) return
+        if (!alive || !latest || !hasTaskIdentity(latest) || latest.project_id !== projectId || latest.kind !== wizardTaskKind(kind)
+          || !isProjectScopeCurrent(scope, 'canUseAI')) return
         if (['queued', 'running', 'paused', 'failed', 'interrupted'].includes(latest.status)) {
           void followRef.current(latest)
         }
@@ -166,13 +182,15 @@ export default function WizardGenerator<K extends WizardKind>({
     await startTask(body)
   }
 
-  // 从中断处继续：生成参数沿用失败任务的原请求，只传本次选择的 AI 配置
   const handleResume = async () => {
-    if (!task.task) return
-    await startTask({ ai_config_id: aiConfigId, continue_from_task_id: task.task.id })
+    const original = task.task
+    if (resumeInvalid || !hasTaskIdentity(original) || !canResumeWizard(original, task.text)) return
+    await startTask({ ai_config_id: aiConfigId, continue_from_task_id: original.id, continue_from_task_key: original.task_key })
   }
 
   const startTask = async (body: WizardRequest) => {
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
     setResult(null)
     setWarnings([])
     setStarting(true)
@@ -180,11 +198,17 @@ export default function WizardGenerator<K extends WizardKind>({
     try {
       created = await runWizard(projectId, kind, body)
     } catch (err) {
-      message.error(errorMessage(err))
-      setStarting(false)
+      if (isProjectScopeCurrent(scope, 'canUseAI')) {
+        if (body.continue_from_task_id !== undefined) {
+          setResumeInvalid(true)
+          void refreshTasks()
+          message.error(`无法确认续写结果或原任务身份：${errorMessage(err)}。部分输出已保留，请在任务列表核对。`)
+        } else message.error(errorMessage(err))
+      }
       return
-    }
-    setStarting(false)
+    } finally { setStarting(false) }
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
+    setResumeInvalid(false)
     trackTask(created)
     await followTask(created)
   }
@@ -290,8 +314,8 @@ export default function WizardGenerator<K extends WizardKind>({
           </Button>
         ) : (
           <>
-            {resumable && (
-              <Button type="primary" onClick={() => void handleResume()} disabled={hasConfig === false}>
+            {hasPartial && (
+              <Button type="primary" onClick={() => void handleResume()} disabled={!resumable || hasConfig === false} title={!resumable ? '请在任务列表核对原任务' : undefined}>
                 从中断处继续
               </Button>
             )}
@@ -325,11 +349,11 @@ export default function WizardGenerator<K extends WizardKind>({
           showIcon
           message="生成失败"
           description={
-            resumable ? (
+            hasPartial ? (
               <>
                 {task.error}
                 <br />
-                已保留 {task.text.length} 字符的部分输出，可「从中断处继续」（沿用原生成参数），或重新生成。
+                已保留 {task.text.length} 字符的部分输出。{resumable ? '可从中断处继续或重新生成。' : '无法确认原任务或续写结果，请保留输出并在任务列表核对。'}
               </>
             ) : (
               task.error

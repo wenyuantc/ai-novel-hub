@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
+    DDL,
     JSON,
     Boolean,
     CheckConstraint,
@@ -28,6 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.models.agent import _uuid_check
 from app.models.base import Base, TimestampMixin
 from app.models.style_presets import PRESET_STYLES
 
@@ -156,8 +158,17 @@ class User(TimestampMixin, Base):
 
 class AIConfig(TimestampMixin, Base):
     __tablename__ = "ai_configs"
+    __table_args__ = (
+        CheckConstraint(f"instance_key IS NULL OR ({_uuid_check('instance_key', version4=True)})",
+                        name="instance_key_uuid4"),
+        Index("ux_ai_configs_instance_key", "instance_key", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # 每次新建独立生成，不因整数 id、时间或配置内容相同而复用。
+    instance_key: Mapped[str] = mapped_column(
+        String(36), default=lambda: str(uuid4()), nullable=True,
+    )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -172,6 +183,54 @@ class AIConfig(TimestampMixin, Base):
     # 单位 K（×1000 tokens）；为空表示使用系统 / 接口默认
     context_window_k: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_output_k: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+# create_all 测试库与 Alembic 库采用同样的数据库级不可变约束。
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "CREATE TRIGGER ai_configs_instance_key_generate AFTER INSERT ON ai_configs "
+    "WHEN NEW.instance_key IS NULL BEGIN UPDATE ai_configs SET instance_key = ("
+    "WITH candidate(key) AS MATERIALIZED (SELECT "
+    "lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || "
+    "substr(lower(hex(randomblob(2))), 2, 3) || '-' || substr('89ab', (random() & 3) + 1, 1) || "
+    "substr(lower(hex(randomblob(2))), 2, 3) || '-' || lower(hex(randomblob(6)))) "
+    "SELECT candidate.key FROM candidate WHERE NOT EXISTS "
+    "(SELECT 1 FROM ai_configs WHERE instance_key = candidate.key)) WHERE id = NEW.id; "
+    "SELECT CASE WHEN (SELECT instance_key FROM ai_configs WHERE id = NEW.id) IS NULL "
+    "THEN RAISE(ABORT, 'AI config instance identity required') END; END"
+).execute_if(dialect="sqlite"))
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "CREATE TRIGGER ai_configs_instance_key_immutable BEFORE UPDATE OF instance_key ON ai_configs "
+    "WHEN OLD.instance_key IS NOT NULL AND NEW.instance_key IS NOT OLD.instance_key "
+    "BEGIN SELECT RAISE(ABORT, 'AI config instance identity is immutable'); END"
+).execute_if(dialect="sqlite"))
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "ALTER TABLE ai_configs ALTER COLUMN instance_key SET NOT NULL"
+).execute_if(dialect="postgresql"))
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "CREATE OR REPLACE FUNCTION ai_configs_instance_key_generate_fn() RETURNS trigger LANGUAGE plpgsql AS $$ "
+    "BEGIN IF NEW.instance_key IS NULL THEN NEW.instance_key := gen_random_uuid()::text; "
+    "END IF; RETURN NEW; END; $$"
+).execute_if(dialect="postgresql"))
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "CREATE TRIGGER ai_configs_instance_key_generate BEFORE INSERT ON ai_configs "
+    "FOR EACH ROW EXECUTE FUNCTION ai_configs_instance_key_generate_fn()"
+).execute_if(dialect="postgresql"))
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "CREATE OR REPLACE FUNCTION ai_configs_instance_key_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$ "
+    "BEGIN IF NEW.instance_key IS DISTINCT FROM OLD.instance_key THEN "
+    "RAISE EXCEPTION 'AI config instance identity is immutable' USING ERRCODE = '23514'; "
+    "END IF; RETURN NEW; END; $$"
+).execute_if(dialect="postgresql"))
+event.listen(AIConfig.__table__, "after_create", DDL(
+    "CREATE TRIGGER ai_configs_instance_key_immutable BEFORE UPDATE OF instance_key ON ai_configs "
+    "FOR EACH ROW EXECUTE FUNCTION ai_configs_instance_key_immutable_fn()"
+).execute_if(dialect="postgresql"))
+event.listen(AIConfig.__table__, "after_drop", DDL(
+    "DROP FUNCTION IF EXISTS ai_configs_instance_key_immutable_fn()"
+).execute_if(dialect="postgresql"))
+event.listen(AIConfig.__table__, "after_drop", DDL(
+    "DROP FUNCTION IF EXISTS ai_configs_instance_key_generate_fn()"
+).execute_if(dialect="postgresql"))
 
 
 class Project(TimestampMixin, Base):
@@ -519,7 +578,19 @@ class Outline(TimestampMixin, Base):
 
 class Chapter(TimestampMixin, Base):
     __tablename__ = "chapters"
-    __table_args__ = (CheckConstraint("content_revision >= 0", name="content_revision_nonnegative"),)
+    __table_args__ = (
+        CheckConstraint("content_revision >= 0", name="content_revision_nonnegative"),
+        CheckConstraint(
+            "(generation_claim_key IS NULL AND generation_claim_task_key IS NULL "
+            "AND generation_claim_prev_status IS NULL) OR "
+            "(generation_claim_key IS NOT NULL AND generation_claim_task_key IS NOT NULL "
+            "AND generation_claim_prev_status IS NOT NULL AND length(generation_claim_key) = 36 "
+            "AND length(generation_claim_task_key) = 36 AND generation_claim_prev_status IN ('draft', 'done') "
+            "AND status = 'generating')",
+            name="generation_claim_shape",
+        ),
+        Index("ix_chapters_generation_claim_task_key", "generation_claim_task_key"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -532,6 +603,10 @@ class Chapter(TimestampMixin, Base):
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     content_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    # 新任务逐次抢占身份。旧 generating 行可保持空值；不从历史状态猜测原占用者。
+    generation_claim_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    generation_claim_task_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    generation_claim_prev_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 对应的细纲；与 chapter_plans.chapter_id 双向冗余，由 plan_service 维护一致。
     # use_alter：chapters 与 chapter_plans 互相引用，建表后再加外键
@@ -586,9 +661,34 @@ class GenerationLog(TimestampMixin, Base):
     """一次 AI 调用的记录。provider / model 冗余存储，配置删除后仍可查看。"""
 
     __tablename__ = "generation_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "(model_source IS NULL AND model_config_owner_id IS NULL) OR "
+            "(model_source IS NOT NULL AND model_source IN ('actor', 'owner') "
+            "AND model_config_owner_id IS NOT NULL AND model_config_owner_id >= 1 "
+            "AND model_config_owner_id <= 2147483647 "
+            "AND model_config_owner_id = CAST(model_config_owner_id AS INTEGER))",
+            name="model_source_pair",
+        ),
+        CheckConstraint(f"log_instance_key IS NULL OR ({_uuid_check('log_instance_key', version4=True)})",
+                        name="log_instance_key_uuid4"),
+        CheckConstraint(
+            f"model_config_instance_key IS NULL OR ({_uuid_check('model_config_instance_key', version4=True)})",
+            name="model_config_instance_key_uuid4",
+        ),
+        Index("ux_generation_logs_log_instance_key", "log_instance_key", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # 0052：服务端为每条新记录独立生成，不随整数 id 复用、单书导入或客户端值继承；旧记录为 NULL（未知）。
+    log_instance_key: Mapped[str | None] = mapped_column(
+        String(36), default=lambda: str(uuid4()), nullable=True,
+    )
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    # 用户删除后不推断为作者；旧日志在 0044 升级时按当时的严格作者语义回填。
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     # 章节删除后记录保留在项目下
     chapter_id: Mapped[int | None] = mapped_column(
         ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
@@ -598,6 +698,11 @@ class GenerationLog(TimestampMixin, Base):
     ai_config_id: Mapped[int | None] = mapped_column(
         ForeignKey("ai_configs.id", ondelete="SET NULL"), index=True, nullable=True
     )
+    # 可信服务端选型快照；旧记录为未知，配置或账号被删除后不依赖外键猜测。
+    model_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    model_config_owner_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 写入时绑定的模型配置实例（AIConfig.instance_key）；只由 write_log 的服务端绑定写入。
+    model_config_instance_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
     provider: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     model: Mapped[str] = mapped_column(String(200), default="", nullable=False)
     params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
@@ -612,6 +717,49 @@ class GenerationLog(TimestampMixin, Base):
     # 产生该调用的后台任务；任务被清理后记录保留
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), index=True, nullable=True)
 
+
+# create_all 测试库与迁移 0052 采用完全相同的触发器：裸 SQL 插入必须携带日志实例键，
+# 两个实例键均不可修改，NULL 旧行也不能补写。
+event.listen(GenerationLog.__table__, "after_create", DDL(
+    "CREATE TRIGGER generation_logs_log_instance_key_required BEFORE INSERT ON generation_logs "
+    "WHEN NEW.log_instance_key IS NULL "
+    "BEGIN SELECT RAISE(ABORT, 'generation log instance identity required'); END"
+).execute_if(dialect="sqlite"))
+event.listen(GenerationLog.__table__, "after_create", DDL(
+    "CREATE TRIGGER generation_logs_instance_keys_immutable BEFORE UPDATE OF "
+    "log_instance_key, model_config_instance_key ON generation_logs "
+    "WHEN NEW.log_instance_key IS NOT OLD.log_instance_key "
+    "OR NEW.model_config_instance_key IS NOT OLD.model_config_instance_key "
+    "BEGIN SELECT RAISE(ABORT, 'generation log instance identity is immutable'); END"
+).execute_if(dialect="sqlite"))
+event.listen(GenerationLog.__table__, "after_create", DDL(
+    "CREATE OR REPLACE FUNCTION generation_logs_log_instance_key_required_fn() RETURNS trigger "
+    "LANGUAGE plpgsql AS $$ BEGIN IF NEW.log_instance_key IS NULL THEN "
+    "RAISE EXCEPTION 'generation log instance identity required' USING ERRCODE = '23502'; "
+    "END IF; RETURN NEW; END; $$"
+).execute_if(dialect="postgresql"))
+event.listen(GenerationLog.__table__, "after_create", DDL(
+    "CREATE TRIGGER generation_logs_log_instance_key_required BEFORE INSERT ON generation_logs "
+    "FOR EACH ROW EXECUTE FUNCTION generation_logs_log_instance_key_required_fn()"
+).execute_if(dialect="postgresql"))
+event.listen(GenerationLog.__table__, "after_create", DDL(
+    "CREATE OR REPLACE FUNCTION generation_logs_instance_keys_immutable_fn() RETURNS trigger "
+    "LANGUAGE plpgsql AS $$ BEGIN IF NEW.log_instance_key IS DISTINCT FROM OLD.log_instance_key "
+    "OR NEW.model_config_instance_key IS DISTINCT FROM OLD.model_config_instance_key THEN "
+    "RAISE EXCEPTION 'generation log instance identity is immutable' USING ERRCODE = '23514'; "
+    "END IF; RETURN NEW; END; $$"
+).execute_if(dialect="postgresql"))
+event.listen(GenerationLog.__table__, "after_create", DDL(
+    "CREATE TRIGGER generation_logs_instance_keys_immutable BEFORE UPDATE OF "
+    "log_instance_key, model_config_instance_key ON generation_logs "
+    "FOR EACH ROW EXECUTE FUNCTION generation_logs_instance_keys_immutable_fn()"
+).execute_if(dialect="postgresql"))
+event.listen(GenerationLog.__table__, "after_drop", DDL(
+    "DROP FUNCTION IF EXISTS generation_logs_instance_keys_immutable_fn()"
+).execute_if(dialect="postgresql"))
+event.listen(GenerationLog.__table__, "after_drop", DDL(
+    "DROP FUNCTION IF EXISTS generation_logs_log_instance_key_required_fn()"
+).execute_if(dialect="postgresql"))
 
 class ChapterVersion(TimestampMixin, Base):
     """章节正文快照（事件发生后的状态）。合并手动保存时会刷新 updated_at。"""
@@ -643,6 +791,7 @@ class Task(TimestampMixin, Base):
 
     __tablename__ = "tasks"
     __table_args__ = (
+        CheckConstraint("execution_key IS NULL OR length(execution_key) = 36", name="execution_key_length"),
         Index("ix_tasks_status_id", "status", "id"),
         Index("ix_tasks_user_id_id", "user_id", "id"),
         Index(
@@ -659,6 +808,8 @@ class Task(TimestampMixin, Base):
     statistics_key: Mapped[str | None] = mapped_column(
         String(36), default=lambda: str(uuid4()), unique=True, index=True, nullable=True
     )
+    # 由实际领取者生成并与 queued → running 同事务写入，不随整数 id 或队列时钟猜测。
+    execution_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # (user_id, id) 复合索引已覆盖按用户查询，不再单独建索引
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     project_id: Mapped[int | None] = mapped_column(
@@ -927,7 +1078,15 @@ class KbDocument(TimestampMixin, Base):
     """知识库文档：只保存解析出的全文（text），不保存原始文件；重建索引时从 text 重新分块。"""
 
     __tablename__ = "kb_documents"
-    __table_args__ = (UniqueConstraint("project_id", "sha256"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "sha256"),
+        CheckConstraint(
+            "(index_task_key IS NULL AND index_task_queued_at IS NULL AND index_claim_key IS NULL) OR "
+            "(index_task_key IS NOT NULL AND index_task_queued_at IS NOT NULL AND index_claim_key IS NOT NULL "
+            "AND length(index_task_key) = 36 AND length(index_claim_key) = 36)",
+            name="index_claim_shape",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -946,6 +1105,10 @@ class KbDocument(TimestampMixin, Base):
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     # 参与注入：关闭后该文档的检索单元 enabled=false，不再被召回
     inject: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    # 仅供索引执行/失败清理使用：排队 claim 与执行 claim 轮换，不能随单书备份导出。
+    index_task_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    index_task_queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    index_claim_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class KbChunk(TimestampMixin, Base):

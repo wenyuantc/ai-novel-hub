@@ -51,6 +51,9 @@ class TaskSpec:
 
 class TaskHandler(Protocol):
     kinds: tuple[str, ...]
+    # 显式 opt-in：build_job/on_abort/on_success 须接收领取时的 execution 关键字。
+    # 未迁移的作者 handler 保持旧签名；协作者任务不得走旧签名。
+    execution_identity_aware: bool
 
     async def validate_and_claim(
         self, db: AsyncSession, ctx: TaskContext, *, user_id: int, kind: str, params: dict[str, Any]
@@ -58,8 +61,8 @@ class TaskHandler(Protocol):
         """创建任务的请求内同步执行：鉴权、配置解析、SSRF / 参数校验、资源抢占。不 commit；业务错误抛 AppError。"""
         ...
 
-    async def build_job(self, ctx: TaskContext, task: Task) -> Any:
-        """任务开始运行时组装执行对象；抛 AppError 时任务失败（detail 即错误信息）。"""
+    async def build_job(self, ctx: TaskContext, task: Task, **options: Any) -> Any:
+        """opt-in 的 execution 来自领取事务，重读 Task 只用于验证，不能作为新身份。"""
         ...
 
     def run(self, job: Any, ctx: TaskContext) -> AsyncIterator[Event]:

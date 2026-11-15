@@ -31,6 +31,8 @@ await replace_chapter_contents(db, chapter, contents, expected_revision=revision
 await replace_legacy_content(db, chapter, content, expected_revision=revision)
 await capture_snapshot(db, chapter)
 await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
+await ensure_chapter_delete_isolation(db, project_id, chapter_ids)
+await validate_history_snapshot(db, project_id, chapter_id, snapshot, for_restore=True)
 ```
 
 以下路径位于 `/api/v1/projects/{pid}/chapters/{cid}`：
@@ -112,6 +114,31 @@ await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
   历史 Scene 或规划 unit 错所属章在 preview 拒绝。卡片格式仍 v6。
 - 本地／历史实体与规划标签引用保护真删除，不能让刚导出的合法完整备份变成不可导入资料；
   无 Scene 依赖的旧章标签删除保持原语义。新资料存在时拒绝有损 downgrade。
+- 历史详情、恢复预览和恢复前必须先调用 `validate_history_snapshot`：每个 Scene 属于该章；
+  历史规划单元、POV、标签、角色、世界、组织、职业和关系时间线属于该作品，关系时间线须为
+  `subject_kind=relationship`；富文档区块、退场区块及标记 UUID 必须能在同景持久身份中找到。
+  查询按最多400个身份分批且禁止自动 flush。损坏、未知字段、缺失或跨作品身份返回匿名
+  409 `scene_reference_invalid`，不回显快照、目标身份或异常。合法同书快照原样返回；
+  恢复还须先核对当前单元与 `binding_epoch`，确认后才写基线、改变 Scene 或 flush。
+  已删除而无法确认归属的历史身份也失败关闭，不能猜测其曾属于本书。
+
+### 协作章节删除和级联归属
+
+- 删除章节及细纲同步中直接删除已建章节，必须已持作品父锁，在任何 `detach_sources`、自动记忆删除、
+  快照创建及 `db.delete` 前调用 `ensure_chapter_delete_isolation`。此函数按最多500章分批，
+  反查 `Base.metadata` 中 chapters 开始所有直接及递归 CASCADE 关联，并与已审核的 FK 表对比；
+  新增或变更的外键动作须先分析后更新登记。数据库中没有映射到 ORM metadata 的约束不在此图内，
+  新迁移须同步模型和回归，不能把此检查当作数据库物理目录的完整扫描。
+- 对归属可确认的同书关联保持原删除行为；跨书、缺失或无法确认归属的关联统一返回匿名
+  409 `chapter_reference_invalid`。检查包括章／景规划和细纲、分析、日志、任务、角色、演变、
+  自动记忆及其无 FK 的检索分块、富文档来源链和审核收据；收据无法通过任务键确认归属也须拒绝。
+  调整章序号时自动记忆和检索分块同样需防止联动修改他书。
+- 纯协作者删章先取 AI 可见性发送写门禁，再持作品锁并锁后重验成员和管理身份；
+  若他人的 `queued/running/paused` 单章任务、待审核或批量任务涉及该章，或范围无法可靠判断，
+  返回匿名 409 `chapter_in_use`。任务范围策略对作者及原有 `projects.read` + `projects.edit` 管理路径保持原有行为；
+  权限来源在锁前后变化时返回 409 `collaboration_busy` 而非逆序补锁。
+  发送门禁只保护真实 HTTP 请求发出至收到响应头的窗口；收到响应头后不锁住正文／SSE 流，
+  不能据此声称已阻止删除正在接收响应、且没有任务记录的同步 AI 操作。
 
 ### AI 快照与前端草稿
 
@@ -119,7 +146,7 @@ await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
   `{kind:chapter}` 或 `{kind:scene,scene_id}`，旧缺省为 chapter。单景也占章写资源。
   历史任务列表投影先检查 input/request 是否为对象；坏 JSON 只读降级、不修写原载荷，不能把损坏 target 当作合法整章任务重放。
 - 单景按有效规划与 scene start 组装；结构化 POV／引用必须先过 AiScope 的 never／隐藏字段／系列采用门禁。
-  原始 ScenePlanningOut 只供作者，不能直接拼进模型范围块旁路。POV 不自动指定人称。
+  人工读取的 ScenePlanningOut 按内容读取权限返回，不能直接拼进模型范围块旁路。POV 不自动指定人称。
   自动检测素材保留章／细纲共同梗概，再补当前 Scene 素材；这不是把被覆盖的章手动角色重新 union 进来。
   普通上下文预算须扣除真实锁定范围块和规划块预留；测试计算实际块长度，不把单个样例的剩余额度写死。
 - 整章按当前 Scene 顺序暂存提案，后景衔接使用已生成前景，而非再混入旧 DB 前景；
@@ -153,6 +180,9 @@ await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
 | 旧整段多景覆盖／跨景局部范围 | 409 `scene_target_required` |
 | 最后一景删除 | 409 `scene_last_required` |
 | 保留引用／非法历史恢复 | 409 `scene_reference_conflict`，列阻塞摘要 |
+| 历史场景、规划引用或富文档身份跨书、缺失或不可确认 | 匿名 409 `scene_reference_invalid`；详情、预览和恢复均不暴露目标或原始快照 |
+| 删章关联跨书、归属不明或 ORM 新增未审核 FK | 匿名 409 `chapter_reference_invalid`；无级联与部分清理 |
+| 纯协作者删章时他人任务涉及该章或范围不明 | 匿名 409 `chapter_in_use`；不泄露任务详情 |
 | 合并／旧稿提取签名已变 | 409 `scene_preview_changed` |
 | 读取或 AI 快照变化 | 409 `scene_context_changed`／`planning_context_changed`；流内为明确失败 |
 | 有本地／历史引用的规划标签真删除 | 409 `planning_tag_in_use`，列可见来源 |
@@ -164,6 +194,8 @@ await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
 - Base：旧空章升级成一个空 Scene，旧纯文本版本 snapshot=null；只读浏览不新增规划或 Scene。
 - Bad：逐景生成完就 commit、用 Chapter.content 反推边界、复制 effective 值冒充 inherit、
   将本景 end 的晋升带入本景 start，或为通过备份验证删除历史引用。
+- Good：同书历史本地角色及富文档身份可原样展示和恢复；待审核批量覆盖某章时阻止协作者删章。
+- Bad：先 flush 场景恢复再校验他书规划引用；把无法归属的任务／收据视为无关，或允许未知级联静默执行。
 
 ## 6. 必需测试
 
@@ -174,6 +206,11 @@ await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
   全类型引用、只读不flush、同号章／场景边界、孤儿、非法重排整体回滚、never／字段隐藏。
 - `test_scene_transfer.py` 及独立检查回归：v7往返、真实旧格式、错章历史 unit、投影矛盾、
   历史标签保护、页头／行版本屏障、贴合 UI 全字段保存的10分钟合并。
+- `test_collaboration_chapter_fk_guard.py` 和 `test_collaboration_content_review*.py`：跨书 FK、
+  检索分块与未知 FK、合法同书引用、章重排、他人活动／待审核任务、发送门禁及真实 PG 事务竞争。
+- `test_collaboration_version_snapshot_isolation.py` 与对应 PG 用例：历史详情／预览／恢复的各类
+  越权引用、富文档身份、缺失与未知字段；异常被内部调用方捕获后提交仍无部分写入；
+  401 个合法引用跨分批边界、合法历史恢复和独立 PG schema 验证。
 - `test_scene_generation.py`：实际 FakeLLM messages、五局部 emoji、有效 log／版本、
   不混旧前景、整章取消／失败／规划与时间线竞态、只改目标、重试身份及旧入口。
 - `test_scenes_postgresql.py` 与 `test_scene_ai_postgresql.py`：真实 PG UUID schema，
@@ -199,4 +236,10 @@ await scene_service.replace_chapter_contents(
 )
 await version_service.record(db, chapter, "generate")
 # 外层服务统一 commit；失败 rollback，不逐景提交。
+
+# Wrong：先改 Scene/写版本，再检查 JSON 中的历史身份，调用方捕获错误后可能提交部分修改。
+# Correct：外层已持项目与章写屏障；先核验全部历史身份和当前绑定，再创建基线或恢复。
+await validate_history_snapshot(db, project_id, chapter.id, snapshot, for_restore=True)
+await version_service.ensure_baseline(db, chapter, force=True)
+await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
 ```

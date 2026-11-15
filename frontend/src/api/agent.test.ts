@@ -9,13 +9,13 @@ afterEach(() => vi.unstubAllGlobals())
 describe('智能体 API 与事件边界', () => {
   it('会话设置保存在服务端，写操作走项目限定的路径', async () => {
     const calls: { url: string; init: RequestInit }[] = []
-    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => { calls.push({ url, init }); return new Response('{}') })
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => { calls.push({ url, init }); return new Response(JSON.stringify(url.includes('/changes/5/') ? changeFixture({ id: 5 }) : url.includes('/turns/8/') ? { changes: [], task: null } : {})) })
     await agentApi.list(3)
     await agentApi.create(3)
     await agentApi.update(3, 2, { auto_execute: true })
     await agentApi.send(3, 2, { content: '检查伏笔', page_context: { route: '/projects/3/chapters/7', chapter_id: 7, selection: '原文' } })
-    await agentApi.change(3, 5, 'confirm')
-    await agentApi.turn(3, 8, 'undo')
+    await agentApi.change(3, changeFixture({ id: 5 }), 'confirm')
+    await agentApi.turn(3, { id: 8, task_key: '00000000-0000-4000-8000-000000000003' }, 'undo', [])
     expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual(['GET /api/v1/projects/3/agent/conversations', 'POST /api/v1/projects/3/agent/conversations', 'PATCH /api/v1/projects/3/agent/conversations/2', 'POST /api/v1/projects/3/agent/conversations/2/messages', 'POST /api/v1/projects/3/agent/changes/5/confirm', 'POST /api/v1/projects/3/agent/turns/8/undo'])
     expect(JSON.parse(String(calls[2].init.body))).toEqual({ auto_execute: true })
     expect(JSON.parse(String(calls[3].init.body)).page_context.selection).toBe('原文')
@@ -47,9 +47,12 @@ describe('智能体 API 与事件边界', () => {
     const events: [string, unknown][] = [['tool_start', { call_id: 'x', name: 'get_character', label: '读取角色' }], ['tool_end', { call_id: 'x', ok: true, summary: '林远' }], ['proposal', { change: proposal }], ['proposal', { change: { id: 1 } }], ['executed', { change: { ...proposal, status: 'executed' } }], ['paused', { result: { reason: 'confirm' } }]]
     vi.stubGlobal('fetch', async () => new Response(events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } }))
     const log: string[] = []
-    const end = await subscribeTask(4, { onToolStart: (e) => log.push(e.label), onToolEnd: (e) => log.push(e.summary), onProposal: (c) => log.push(c.status), onExecuted: (c) => log.push(c.status) })
+    const end = await subscribeTask({ id: 4, task_key: '00000000-0000-4000-8000-000000000003' }, { onToolStart: (e) => log.push(e.label), onToolEnd: (e) => log.push(e.summary), onProposal: (c) => log.push(c.status), onExecuted: (c) => log.push(c.status) })
     expect(log).toEqual(['读取角色', '林远', 'proposed', 'executed'])
     expect(end.status).toBe('paused')
     expect(readAgentChange({ change: { ...proposal, preview: { title: 'x', diff: [null], warnings: [] } } })).toBeNull()
+    expect(readAgentChange({ change: { ...proposal, change_key: null } })).toBeNull()
+    expect(readAgentChange({ change: { ...proposal, view_version: '' } })).toBeNull()
+    expect(readAgentChange({ change: { ...proposal, kind: 'external' } })).toMatchObject({ kind: 'external' })
   })
 })

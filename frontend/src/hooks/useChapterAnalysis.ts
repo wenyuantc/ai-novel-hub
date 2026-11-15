@@ -1,18 +1,16 @@
 import { App } from 'antd'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { analysisApi, changeCountsLabel, parseAnalyzeDone, replaceChange } from '../api/analysis'
-import { taskApi } from '../api/tasks'
 import type { Analysis, AnalysisChange, AnalysisStatus, ChapterAnalysisState, Task } from '../api/types'
 import { useTasksStore } from '../stores/tasks'
 import { useTaskStream, type TaskOutcome } from './useTaskStream'
 
 /**
  * 章节编辑器的分析状态：分析状态 + 最新一次分析详情 + 正在进行的 chapter.analyze 订阅。
- * 挂载后自动接上本章的活动分析任务（含生成 / 润色 / 重写成功后自动排队的）；卸载只断开订阅。
+ * 仅跟随当前页面明确发起并取得身份的任务；卸载只断开订阅。
  */
 export function useChapterAnalysis(chapterId: number, enabled = true) {
   const { message } = App.useApp()
-  const activeTasks = useTasksStore((s) => s.active)
   const trackTask = useTasksStore((s) => s.track)
   const stream = useTaskStream()
   const { follow } = stream
@@ -20,7 +18,6 @@ export function useChapterAnalysis(chapterId: number, enabled = true) {
   const [latest, setLatest] = useState<Analysis | null>(null)
   /** 每次刷新状态后递增，供面板重新加载历史 */
   const [version, setVersion] = useState(0)
-  const followedRef = useRef(new Set<number>())
 
   const latestId = state?.latest_analysis_id ?? null
 
@@ -75,10 +72,11 @@ export function useChapterAnalysis(chapterId: number, enabled = true) {
   const followAnalysis = useCallback(
     async (t: Task): Promise<TaskOutcome> => {
       if (!enabled) return { status: 'detached' }
-      followedRef.current.add(t.id)
       const outcome = await follow(t)
       if (outcome.status === 'detached') return outcome
-      if (outcome.status === 'succeeded') {
+      if (outcome.status === 'succeeded' && outcome.unpublished) {
+        message.info(outcome.detail)
+      } else if (outcome.status === 'succeeded') {
         const done = parseAnalyzeDone(outcome.result)
         const counts = done ? changeCountsLabel(done.change_counts) : ''
         message.success(counts ? `本章分析完成（回写：${counts}）` : '本章分析完成')
@@ -90,37 +88,6 @@ export function useChapterAnalysis(chapterId: number, enabled = true) {
     },
     [follow, refresh, message, enabled],
   )
-
-  // 接上活动分析任务：状态接口给出的 active_task_id，或任务列表里本章的 chapter.analyze
-  const followRef = useRef(followAnalysis)
-  useEffect(() => {
-    followRef.current = followAnalysis
-  })
-  const activeTaskId = state?.active_task_id ?? null
-  useEffect(() => {
-    if (!enabled || stream.running) return
-    const fromList = activeTasks.find(
-      (t) => t.kind === 'chapter.analyze' && t.chapter_id === chapterId && !followedRef.current.has(t.id),
-    )
-    if (fromList) {
-      void followRef.current(fromList)
-      return
-    }
-    if (activeTaskId === null || followedRef.current.has(activeTaskId)) return
-    followedRef.current.add(activeTaskId)
-    let alive = true
-    taskApi
-      .get(activeTaskId)
-      .then((t) => {
-        if (alive) void followRef.current(t)
-      })
-      .catch(() => {
-        // 任务已被删除：忽略
-      })
-    return () => {
-      alive = false
-    }
-  }, [activeTasks, activeTaskId, chapterId, stream.running, enabled])
 
   /** 手动分析：同章已排队时后端返回那条任务（200） */
   const start = useCallback(

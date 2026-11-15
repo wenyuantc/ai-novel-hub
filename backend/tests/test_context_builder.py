@@ -360,9 +360,12 @@ async def test_chapter_and_analysis_use_story_time_settings(app, client, fake_ll
         ])
         await db.commit()
         ids = (ch5.id, ch20.id, ch21.id)
+        current_project = await db.get(Project, pid)
         for chapter_id in ids:
             ch = await db.get(Chapter, chapter_id)
-            result = await build_chapter_context(db, await db.get(Project, pid), ch, 100_000)
+            result = await build_chapter_context(
+                db, current_project, ch, 100_000, actor_user_id=current_project.user_id,
+            )
             if chapter_id in ids[:2]:
                 assert "当前状态：练气状态" in result
                 assert "当前状态：金丹状态" not in result
@@ -438,7 +441,9 @@ async def test_context_read_does_not_flush_unrelated_changes(app, client, builde
 
         event.listen(db.sync_session, "before_flush", before_flush)
         if builder == "chapter":
-            result = await build_chapter_context(db, current_project, chapter, 10_000)
+            result = await build_chapter_context(
+                db, current_project, chapter, 10_000, actor_user_id=current_project.user_id,
+            )
         else:
             result = await build_setting_context(db, current_project, chapter, budget=10_000)
         assert "章初新城" in result

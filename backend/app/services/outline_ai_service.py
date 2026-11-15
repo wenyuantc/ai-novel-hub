@@ -6,11 +6,15 @@
 - outline.expand（resource_key = expand:{oid}）：把一条章纲展开为 count 章细纲（count 含已有正文、需保留的细纲）。
   参考前后各 2 条章纲、角色名单、保留细纲；新章数 > 5 时分批生成，每批附上已生成细纲的关键事件；
   跨章重复的关键事件在规范化时去掉并给出 warning。结果附当前已有细纲及其状态（has_content = 保留）。
+
+E4-g3a：作者与 accepted editor 共用。协作执行按原 grant 读取作品与章纲、按真实 actor 解析风格/模板，
+检索只用关键词（不向作者向量模型发送查询，E6 前保持）；作者直调（无执行身份）仍限定严格作者。
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -26,9 +30,9 @@ from app.ai.prompts import (
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
 from app.ai.templating import PromptOverride
-from app.core.errors import BadRequestError
+from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
-from app.models import Chapter, Foreshadow, Outline
+from app.models import Chapter, Foreshadow, Outline, Project
 from app.schemas.outline import (
     DEFAULT_EST_WORDS,
     MAX_EST_WORDS,
@@ -39,21 +43,25 @@ from app.schemas.outline import (
 )
 from app.services import (
     ai_config_service,
+    collaboration_ai_guard,
     foreshadow_service,
     kb_service,
     memory_service,
     outline_service,
     plan_service,
+    project_access,
+    project_ai_config,
     prompt_service,
     retrieval_service,
     story_service,
 )
-from app.services.ai_dispatch import guard_provider, visibility_sessionmaker
+from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, guard_provider, visibility_sessionmaker
 from app.services.context_builder import latest_summaries
 from app.services.entity_ai_service import resolve_name
 from app.services.generation_service import Event
-from app.services.project_service import get_owned_project, project_info
+from app.services.project_service import get_execution_project, project_info
 from app.services.setting_ai_context import build_scope, current_character_text, current_world_text
+from app.services.task_engine.execution_identity import TaskExecutionIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +85,8 @@ class OutlineJob:
     model: str
     thinking: ThinkingLevel = "off"
     max_tokens: int | None = None
+    guard: collaboration_ai_guard.SendGuard | None = field(default=None, repr=False)
+    execution: TaskExecutionIdentity | None = field(default=None, repr=False)
     # outline.continue：一次调用
     messages: list[ChatMessage] = field(default_factory=list)
     count: int = 0
@@ -224,28 +234,64 @@ async def validate_outline_task(
     kind: OutlineKind,
     project_id: int,
     params: dict[str, Any],
-    cipher: SecretCipher,
-    factory: ProviderFactory,
-    ai_timeout: float,
     allow_private: bool,
-) -> tuple[int, str, str]:
-    """创建任务时同步校验；返回 (ai_config_id, 标题, resource_key)。不修改任何数据。"""
-    await get_owned_project(db, user_id, project_id, lock=True)
+    admission: project_ai_config.ProjectModelPreflight,
+    accepted_model: project_ai_config.ResolvedProjectModel,
+) -> tuple[project_ai_config.ResolvedProjectModel, str, str]:
+    """创建任务时固定模型来源；返回 (绑定, 标题, resource_key)。不修改任何数据。"""
     if kind == "outline.expand":
         req = OutlineExpandRequest.model_validate(params)
         outline_id = int(params["outline_id"])
-        outline = await plan_service.get_project_outline(db, user_id, project_id, outline_id)
-        _check_total(req.count, len(await _kept_plans(db, project_id, outline_id)))
-        title = f"展开大纲 · 第{outline.chapter_no}章 {outline.title}"
-        resource_key = f"expand:{outline_id}"
         ai_config_id = req.ai_config_id
     else:
         ai_config_id = OutlineContinueRequest.model_validate(params).ai_config_id
+    admission = project_ai_config.require_original_preflight(admission)
+    if (type(accepted_model) is not project_ai_config.ResolvedProjectModel or accepted_model != admission.binding
+            or admission.actor.id != user_id or admission.binding.project_id != project_id
+            or admission.binding.model_type != "text" or admission.allow_private != allow_private):
+        raise ConflictError("任务模型预检身份已变化")
+    if project_ai_config.is_original_model_preflight(admission):
+        # 原重试凭据由中央在当前事务内唯一消费；此处只接受它返回的同一绑定对象。
+        if accepted_model is not admission.binding or accepted_model.config_id != ai_config_id:
+            raise ConflictError("任务模型预检身份已变化")
+        binding = accepted_model
+    else:
+        if admission.requested_config_id != ai_config_id:
+            raise ConflictError("任务模型预检身份已变化")
+        # 中央已在当前受理事务中完成 fresh accept 并固定事务/锁。
+        binding = accepted_model
+    # E4-g3a：作者与 accepted editor 共用；按中央接受的原 grant 在 认证 → 发送写门禁 → 作品 屏障内重验 ai.use。
+    with db.no_autoflush:
+        project = await project_access.require_project(
+            db, user_id, project_id, "ai.use", for_update=True, visibility_write=True,
+            grant_identity=binding.grant_identity,
+        )
+    if project.user_id != binding.project_owner_id:
+        raise ConflictError("任务模型预检身份已变化")
+    if kind == "outline.expand":
+        outline = await _project_outline(db, project.id, outline_id)
+        _check_total(req.count, len(await _kept_plans(db, project_id, outline_id)))
+        title = f"展开大纲 · 第{outline.chapter_no}章 {outline.title}"
+        resource_key = f"expand:{outline_id}"
+    else:
         title = "AI 续写大纲"
         resource_key = f"outline:{project_id}"
-    cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
-    await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    return cfg.id, title[:200], resource_key
+    return binding, title[:200], resource_key
+
+
+async def _project_outline(db: AsyncSession, project_id: int, outline_id: int) -> Outline:
+    """调用方已按真实 actor 完成作品能力校验；章纲只按同一作品过滤（不再走作者/管理员专用 helper）。"""
+    outline = await db.scalar(select(Outline).where(Outline.id == outline_id, Outline.project_id == project_id))
+    if outline is None:
+        raise NotFoundError(plan_service.OUTLINE_NOT_FOUND)
+    return outline
+
+
+async def _job_project(
+    db: AsyncSession, user_id: int, project_id: int, execution: TaskExecutionIdentity | None,
+) -> Project:
+    """作者（含直调）沿用严格归属；协作执行只按原领取 grant 读取，不借当前邀请补签（共用 helper）。"""
+    return await get_execution_project(db, user_id, project_id, execution)
 
 
 def _clip(text: str, limit: int) -> str:
@@ -315,21 +361,13 @@ async def build_outline_job(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    execution: TaskExecutionIdentity | None = None,
+    text_binding: project_ai_config.ResolvedProjectModel | None = None,
+    shared_embedding: project_ai_config.ResolvedSharedEmbedding | None = None,
 ) -> OutlineJob:
-    project = await get_owned_project(db, user_id, project_id)
-    cfg = await ai_config_service.resolve_config(db, user_id, params.get("ai_config_id"))
-    provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    info = await project_info(db, project)
+    project = await _job_project(db, user_id, project_id, execution)
+    info = await project_info(db, project, actor_user_id=user_id)
     outlines = await outline_service.list_outlines(db, project_id)
-    job = OutlineJob(
-        kind=kind,
-        project_id=project_id,
-        provider=provider,
-        model=cfg.model,
-        thinking=cfg.thinking_level,  # type: ignore[arg-type]
-        max_tokens=ai_config_service.max_output_tokens(cfg),
-        override=await prompt_service.get_override(db, user_id, kind),
-    )
     if kind == "outline.continue":
         req = OutlineContinueRequest.model_validate(params)
         scope = await build_scope(
@@ -337,6 +375,44 @@ async def build_outline_job(
             texts=(format_project_info(info), req.direction, *(o.summary for o in outlines[-RECENT_OUTLINES:])),
             kinds=("world",), legacy_all=True,
         )
+    else:
+        req_e = OutlineExpandRequest.model_validate(params)
+        outline_id = int(params["outline_id"])
+        outline = await _project_outline(db, project.id, outline_id)
+        scope = await build_scope(
+            db, project_id, texts=(outline.title, outline.summary, req_e.instruction),
+            kinds=("character",), legacy_metadata_kinds=("character",),
+        )
+    guard = None
+    if execution is None:
+        # 直接调用的作者上下文保留原有 API（_job_project 已限定严格作者）；后台任务只接受领取时冻结的身份与绑定。
+        if text_binding is not None or shared_embedding is not None:
+            raise ConflictError("任务模型身份无法验证")
+        cfg = await ai_config_service.resolve_config(db, user_id, params.get("ai_config_id"))
+        provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+        model, thinking, max_tokens = cfg.model, cfg.thinking_level, ai_config_service.max_output_tokens(cfg)
+    else:
+        if text_binding is None or shared_embedding is None:
+            raise ConflictError("任务模型身份无法验证")
+        guard = collaboration_ai_guard.for_task(
+            execution, text_binding, scope.stamp, cipher=cipher, allow_private=allow_private,
+            extra_bindings=(shared_embedding,),
+        )
+        bound = await guard.prepare_provider(visibility_sessionmaker(db), factory, request_timeout=ai_timeout)
+        provider, model, thinking = bound.provider, bound.model, bound.thinking_level
+        max_tokens = bound.max_output_k * ai_config_service.TOKENS_PER_K if bound.max_output_k else None
+    job = OutlineJob(
+        kind=kind,
+        project_id=project_id,
+        provider=provider,
+        model=model,
+        thinking=thinking,  # type: ignore[arg-type]
+        max_tokens=max_tokens,
+        guard=guard,
+        execution=execution,
+        override=await prompt_service.get_override(db, user_id, kind),
+    )
+    if kind == "outline.continue":
         next_no = await outline_service.next_chapter_no(db, project_id)
         last_no, last_title = await outline_service.last_volume(db, project_id)
         if req.new_volume is not None:
@@ -353,7 +429,9 @@ async def build_outline_job(
         # 检索：查询 = 作者给的方向 + 最近的章纲标题；旧情节只召回续写起点之前的
         query = "\n".join([req.direction, *(o.title for o in outlines[-RECENT_OUTLINES:])])
         knowledge, memories = await _retrieval(
-            db, project, next_no, query, summarized, cipher, factory, ai_timeout, allow_private, "大纲续写"
+            db, project, next_no, query, summarized, cipher, factory, ai_timeout, allow_private, "大纲续写",
+            visibility_stamp=scope.stamp, execution=execution, text_binding=text_binding,
+            shared_embedding=shared_embedding, text_guard=guard,
         )
         job.messages = build_outline_continue_messages(
             info,
@@ -374,16 +452,10 @@ async def build_outline_job(
         job.count = req.count
         job.new_volume = req.new_volume.model_dump() if req.new_volume is not None else None
         await scope.verify(db)
-        job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
+        if guard is None:
+            job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
         return job
 
-    req_e = OutlineExpandRequest.model_validate(params)
-    outline_id = int(params["outline_id"])
-    outline = await plan_service.get_project_outline(db, user_id, project_id, outline_id)
-    scope = await build_scope(
-        db, project_id, texts=(outline.title, outline.summary, req_e.instruction),
-        kinds=("character",), legacy_metadata_kinds=("character",),
-    )
     kept = await _kept_plans(db, project_id, outline_id)
     _check_total(req_e.count, len(kept))
     idx = next(i for i, o in enumerate(outlines) if o.id == outline.id)
@@ -403,6 +475,11 @@ async def build_outline_job(
         ai_timeout,
         allow_private,
         "大纲展开",
+        visibility_stamp=scope.stamp,
+        execution=execution,
+        text_binding=text_binding,
+        shared_embedding=shared_embedding,
+        text_guard=guard,
     )
     job.outline_id = outline_id
     job.total = req_e.count
@@ -419,7 +496,8 @@ async def build_outline_job(
         "memories": memories,
     }
     await scope.verify(db)
-    job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
+    if guard is None:
+        job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
     return job
 
 
@@ -434,14 +512,58 @@ async def _retrieval(
     ai_timeout: float,
     allow_private: bool,
     purpose: str,
+    *,
+    visibility_stamp: VisibilityStamp,
+    execution: TaskExecutionIdentity | None,
+    text_binding: project_ai_config.ResolvedProjectModel | None,
+    shared_embedding: project_ai_config.ResolvedSharedEmbedding | None,
+    text_guard: collaboration_ai_guard.SendGuard | None,
 ) -> tuple[str, str]:
     """(参考资料正文, 相关旧情节)；检索出错或没有内容时为空串。"""
-    embedder = await retrieval_service.get_embedder(
-        db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
-    )
-    knowledge = await kb_service.knowledge_text(db, project, query, embedder=embedder, purpose=purpose)
+    if execution is None:
+        embedder = await retrieval_service.get_embedder(
+            db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+        )
+        kb_embedder = memory_embedder = retrieval_service.guard_embedder(
+            embedder, visibility_stamp, visibility_sessionmaker(db),
+        )
+    else:
+        if text_guard is None or text_binding is None or shared_embedding is None:
+            raise ConflictError("任务检索身份无法验证")
+        if (shared_embedding.actor_id != execution.actor_id
+                or shared_embedding.grant_identity != execution.grant_identity
+                or shared_embedding.project_owner_id != project.user_id):
+            raise ConflictError("任务检索身份无法验证")
+        maker = visibility_sessionmaker(db)
+        # 短事务先验证原 actor / Task / 可见性 / 两个模型；不能把关键词选择当作授权证明。
+        async with maker() as verify_db:
+            await text_guard.require_task_write(verify_db)
+            # E6-d（裁决 9）：作者与授权编辑者共用受理时冻结的共享向量选择；未授权编辑者 / 作者无向量 → 关键词。
+            snapshot = (
+                await retrieval_service.load_bound_shared_embedding_config(
+                    verify_db, shared_embedding, cipher=cipher, allow_private=allow_private, for_update=True,
+                ) if shared_embedding.mode == "vector" else None
+            )
+        kb_embedder = memory_embedder = None
+        if snapshot is not None:
+            # 每次查询嵌入经 for_task 守卫在真实发送租约内重验原执行、原邀请轮次、作者授权与两份模型绑定。
+            vector_guard = collaboration_ai_guard.for_task(
+                execution, shared_embedding, visibility_stamp, cipher=cipher, allow_private=allow_private,
+                extra_bindings=(text_binding,),
+            )
+            # 裁决 17：构造普通故障锁内复核原执行、轮次、授权与冻结选择均未变 → 关键词继续；否则失败关闭。
+            bound = await collaboration_ai_guard.prepare_shared_embedding(
+                vector_guard, maker, factory, request_timeout=ai_timeout,
+            )
+            if bound is not None:
+                if (bound.provider_name, bound.model) != (snapshot.provider, snapshot.model):
+                    raise ConflictError("任务检索模型已变化")
+                # 裁决 1：只读作者旧键 provider:model:dim（作者与授权编辑者的索引任务都写这个空间）。
+                embedder = retrieval_service.Embedder(bound.provider, bound.provider_name, bound.model)
+                kb_embedder = memory_embedder = retrieval_service.guard_embedder(embedder, visibility_stamp, maker)
+    knowledge = await kb_service.knowledge_text(db, project, query, embedder=kb_embedder, purpose=purpose)
     recalled = await memory_service.recall(
-        db, project, chapter_no, query, embedder=embedder, summary_chapter_nos=summarized
+        db, project, chapter_no, query, embedder=memory_embedder, summary_chapter_nos=summarized
     )
     return knowledge, memory_service.format_lines(recalled)
 
@@ -535,11 +657,74 @@ async def expand_result(db: AsyncSession, job: OutlineJob, drafts: list[dict[str
 
 
 async def _stream(job: OutlineJob, messages: list[ChatMessage], pieces: list[str]) -> AsyncIterator[Event]:
-    stream_iter = job.provider.generate_stream(messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking)
-    async with aclosing(stream_iter) as stream:
-        async for piece in stream:
-            pieces.append(piece)
-            yield "delta", {"text": piece}
+    # SDK 的细小分片合并后再逐批经任务门禁，首片立即显示；慢流最多等 50ms。
+    queue: asyncio.Queue[tuple[str, str | BaseException | None]] = asyncio.Queue(maxsize=64)
+
+    async def produce() -> None:
+        try:
+            stream_iter = job.provider.generate_stream(
+                messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking,
+            )
+            async with aclosing(stream_iter) as stream:
+                async for piece in stream:
+                    await queue.put(("piece", piece))
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and not current.cancelling():
+                await queue.put(("cancelled", None))
+            raise
+        except Exception as exc:  # noqa: BLE001  将模型异常交回原执行体处理。
+            await queue.put(("error", exc))
+        else:
+            await queue.put(("done", None))
+
+    producer = asyncio.create_task(produce())
+    first = True
+    try:
+        while True:
+            kind, value = await queue.get()
+            if kind == "done":
+                return
+            if kind == "cancelled":
+                raise asyncio.CancelledError
+            if kind == "error":
+                assert isinstance(value, Exception)
+                raise value
+            assert isinstance(value, str)
+            pieces.append(value)
+            batch = [value]
+            size = len(value)
+            terminal: tuple[str, str | BaseException | None] | None = None
+            deadline = asyncio.get_running_loop().time() + 0.05
+            while not first and size < 256:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    next_kind, next_value = await asyncio.wait_for(queue.get(), remaining)
+                except TimeoutError:
+                    break
+                if next_kind != "piece":
+                    terminal = (next_kind, next_value)
+                    break
+                assert isinstance(next_value, str)
+                pieces.append(next_value)
+                batch.append(next_value)
+                size += len(next_value)
+            first = False
+            yield "delta", {"text": "".join(batch)}
+            if terminal is not None:
+                kind, value = terminal
+                if kind == "done":
+                    return
+                if kind == "cancelled":
+                    raise asyncio.CancelledError
+                assert isinstance(value, Exception)
+                raise value
+    finally:
+        producer.cancel()
+        with suppress(asyncio.CancelledError):
+            await producer
 
 
 async def run_outline_job(job: OutlineJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:
@@ -595,6 +780,8 @@ async def run_outline_job(job: OutlineJob, sessionmaker: async_sessionmaker[Asyn
         yield "error", {"detail": str(exc)}
     except BadRequestError as exc:
         yield "error", {"detail": exc.detail}
+    except VisibilityPolicyError:
+        yield "error", {"detail": "权限或模型授权已变化，已停止发送"}
     except Exception:  # noqa: BLE001
-        logger.exception("大纲生成失败 project=%s kind=%s", job.project_id, job.kind)
+        logger.error("大纲生成失败 project=%s kind=%s", job.project_id, job.kind)
         yield "error", {"detail": "生成失败：服务器内部错误"}

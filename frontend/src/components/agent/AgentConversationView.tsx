@@ -1,13 +1,17 @@
 import { ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import { Alert, AutoComplete, Button, Input, Popconfirm, Select, Skeleton, Space, Switch, Typography, theme } from 'antd'
+import { Alert, AutoComplete, Button, Input, Select, Skeleton, Space, Switch, Typography, theme } from 'antd'
 import { useCallback, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { mcpApi } from '../../api/mcp'
-import { canRetryTask } from '../../api/tasks'
+import { hasTaskIdentity } from '../../api/tasks'
 import { useAgentPageContext } from '../../hooks/useAgentPageContext'
+import { useAIModelSource } from '../../hooks/useAIModelSource'
+import { useIndexStatus } from '../../hooks/useIndexStatus'
 import { useLoader } from '../../hooks/useLoader'
 import { useAuthStore } from '../../stores/auth'
+import { useProjectStore } from '../../stores/project'
 import { useSkills } from '../../stores/skills'
+import { agentOwnerCostNotice } from '../../utils/kb'
 import { matchTrigger, triggerOptions } from '../../utils/skills'
 import AIConfigSelect from '../AIConfigSelect'
 import SkillChoiceField from '../skills/SkillChoiceField'
@@ -17,6 +21,7 @@ import AgentTimeline from './AgentTimeline'
 import { useAgentConversation } from './useAgentConversation'
 import { readMentionAnchor, readPositiveId } from '../../utils/mentions'
 import SourceMentionFocus from '../mentions/SourceMentionFocus'
+import TaskActionConfirm from '../TaskActionConfirm'
 
 interface Props { pid: number; cid: number; onUpdated: () => void; onCreate: () => void; creating: boolean }
 export default function AgentConversationView({ pid, cid, onUpdated, onCreate, creating }: Props) {
@@ -37,23 +42,35 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
   const mcpEnabled = useAuthStore((s) => s.mcpEnabled)
   const suggestions = useMemo(() => triggerOptions(input, skills), [input, skills])
   const triggered = useMemo(() => (skillId === null ? matchTrigger(input, skills) : null), [input, skills, skillId])
-  const { detail, stream, historySealed } = agent
+  const modelSource = useAIModelSource('text')
+  const { detail, stream, historySealed, writable } = agent
+  // 裁决 31：可写的协作者会话读 index-status，检索是否使用作者向量只看服务端投影；
+  // 键随作品 / 授权轮次 / 模型授权变化，旧响应不生效（currentIndexStatus），查看者与作者不读取。
+  const project = useProjectStore((s) => s.project)
+  const accessKey = `${project?.id === pid ? project.access?.authorization_version ?? '' : ''}:${project?.access?.allow_owner_ai ? 1 : 0}`
+  const { status: indexStatus } = useIndexStatus(pid, {
+    enabled: agent.collaborator && writable && !historySealed, foreground: true, revalidateKey: accessKey,
+  })
+  const costNotice = agentOwnerCostNotice({ collaborator: agent.collaborator, modelSource, status: indexStatus })
   const lastTask = agent.lastTask
   const openTask = detail?.active_task
-  const blocked = historySealed || agent.busy || !!openTask || stream.running
+  const blocked = historySealed || !writable || agent.busy || !!openTask || stream.running
   const send = async () => {
     if (blocked || !input.trim() || Array.from(input).length > 8000 || skillProblem) return
     if (await agent.send({ content: input.trim(), page_context: context, ai_config_id: configId, ...skillChoice.payload })) { setInput(''); skillChoice.setSkillId(null) }
   }
   if (!detail) return <div style={{ padding: 16 }}>{agent.error ? <Alert type="error" showIcon message={agent.error} action={<Button onClick={agent.refresh}>重试</Button>} /> : <Skeleton active paragraph={{ rows: 6 }} />}</div>
-  const persisted = detail.messages.filter((m) => m.role === 'assistant' && m.turn_task_id === stream.task?.id).map((m) => m.content).join('')
+  const persisted = detail.messages.filter((m) => m.role === 'assistant' && m.turn_task_id === stream.task?.id
+    && !!m.turn_task_key && m.turn_task_key === stream.task?.task_key).map((m) => m.content).join('')
   const liveText = persisted && stream.text.startsWith(persisted) ? stream.text.slice(persisted.length) : stream.text
   const contextLabel = context.chapter_id ? `当前章节 #${context.chapter_id}` : context.outline_id ? `当前大纲 #${context.outline_id}` : context.character_id ? `当前角色 #${context.character_id}` : '当前项目页面'
   return <>
     {historySealed && <Alert type="warning" showIcon message="此会话仅供查看"
-      description="设定 AI 可见策略已收紧。旧消息和工具记录仍保留，但不会再作为模型上下文；请新开会话继续。"
-      action={<Button size="small" loading={creating} onClick={onCreate}>新开会话</Button>} />}
-    {!historySealed && (
+      description={`设定 AI 可见策略已收紧。旧消息和工具记录仍保留，但不会再作为模型上下文${agent.canCreate ? '；请新开会话继续' : ''}。`}
+      action={agent.canCreate ? <Button size="small" loading={creating} onClick={onCreate}>新开会话</Button> : undefined} />}
+    {!historySealed && !writable && <Alert type="info" showIcon message="此会话仅供查看" description={agent.readOnlyNotice}
+      action={<Button size="small" icon={<ReloadOutlined />} aria-label="刷新对话" onClick={agent.refresh} />} />}
+    {!historySealed && writable && (
     <div style={{ padding: '8px 16px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
       <Space wrap size={8}>
         <Switch size="small" aria-label="自动执行小修改" checked={detail.auto_execute} loading={agent.busy} disabled={!!openTask} onChange={(auto_execute) => void agent.update({ auto_execute })} />
@@ -61,25 +78,30 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
         <Button type="text" size="small" icon={<ReloadOutlined />} aria-label="刷新对话" onClick={agent.refresh} />
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 0' }}>每轮首次不超过 3 项小修改可直接执行；删除、后续修改、启动任务和外部插件调用仍需确认。</Typography.Paragraph>
-      {mcpEnabled && <AgentPluginSelect value={detail.mcp_plugin_ids ?? []} disabled={!!openTask || agent.busy} onChange={(mcp_plugin_ids) => void agent.update({ mcp_plugin_ids })} />}
+      {/* 裁决 2：协作者 V1 不开放 MCP 插件，设置入口对协作者隐藏（服务端另以 403 兜底）。 */}
+      {mcpEnabled && !agent.collaborator && <AgentPluginSelect value={detail.mcp_plugin_ids ?? []} disabled={!!openTask || agent.busy} onChange={(mcp_plugin_ids) => void agent.update({ mcp_plugin_ids })} />}
     </div>
     )}
     {(agent.error || stream.error) && <Alert type="error" showIcon message={agent.error ?? stream.error} action={<Button size="small" onClick={agent.refresh}>刷新</Button>} />}
-    {!openTask && !stream.error && lastTask?.error && <Alert type="warning" showIcon message={lastTask.error} />}
+    {!openTask && !stream.error && lastTask?.error && <Alert type="warning" showIcon message={lastTask.error}
+      description={writable && !historySealed ? agent.retryHint : null} />}
     {stream.reconnecting && <Alert type="warning" showIcon message="连接中断，正在恢复对话…后台任务仍在继续。" />}
-    {openTask && <div role="status" style={{ padding: '8px 16px' }}><Space wrap>
+    {openTask && writable && <div role="status" style={{ padding: '8px 16px' }}><Space wrap>
       <Typography.Text type="secondary">{openTask.status === 'paused' ? historySealed ? '旧会话不能继续，可以停止这一轮。' : '请确认或拒绝修改，随后继续对话' : stream.task?.stage || openTask.stage || '正在思考…'}</Typography.Text>
-      <Popconfirm title="停止这一轮对话？" description="已经执行的修改会保留，可逐项撤销。" onConfirm={() => agent.cancel()}><Button size="small" icon={<StopOutlined />} loading={agent.busy}>停止</Button></Popconfirm>
+      <TaskActionConfirm task={openTask} title="停止这一轮对话？" description="已经执行的修改会保留，可逐项撤销。"
+        onConfirm={(selected) => { void agent.cancel(selected) }}><Button size="small" icon={<StopOutlined />} loading={agent.busy} disabled={!hasTaskIdentity(openTask)}>停止</Button></TaskActionConfirm>
     </Space></div>}
-    {!historySealed && lastTask && canRetryTask(lastTask.status) && !openTask && <div style={{ padding: '8px 16px' }}><Button size="small" loading={agent.busy} onClick={() => void agent.retry(lastTask)}>重试本轮</Button></div>}
+    {!historySealed && writable && lastTask && agent.retryAllowed && !openTask && <div style={{ padding: '8px 16px' }}><Button size="small" loading={agent.busy} disabled={!hasTaskIdentity(lastTask)} onClick={() => void agent.retry(lastTask)}>重试本轮</Button></div>}
     {focusMessageId && !detail.messages.some((m) => m.id === focusMessageId) && <Alert type="warning" message="指定消息不存在或已删除" />}
     {focusMessageId && mentionAnchor && detail.messages.some((m) => m.id === focusMessageId) && <SourceMentionFocus projectId={pid} type="chat" id={focusMessageId} anchor={mentionAnchor} />}
-    <AgentTimeline focusMessageId={focusMessageId} messages={detail.messages} changes={detail.changes} steps={agent.steps} text={liveText} running={stream.running} busy={agent.busy} actingId={agent.actingId} confirmationReady={!historySealed && openTask?.status === 'paused'} onAction={(item, action) => void agent.change(item, action)} onTurn={(id, action) => void agent.turn(id, action)} />
-    {!historySealed && (
+    <AgentTimeline focusMessageId={focusMessageId} messages={detail.messages} changes={detail.changes} steps={agent.steps} text={liveText} running={stream.running} busy={agent.busy} actingKey={agent.actingKey} confirmationReady={!historySealed && writable && openTask?.status === 'paused'} confirmationTask={openTask} canWrite={writable}
+      onAction={(item, action) => void agent.change(item, action)} onTurn={(task, action, shown) => void agent.turn(task, action, shown)} />
+    {!historySealed && writable && (
     <div style={{ padding: 16, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>{contextLabel}{context.selection ? ` · 已附带选中的 ${Array.from(context.selection).length} 字` : ''}</Typography.Paragraph>
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
         <AIConfigSelect value={configId} onChange={setConfigId} disabled={blocked} />
+        {costNotice && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{costNotice}</Typography.Text>}
         <SkillChoiceField aria-label="本轮启用的 Skill" choice={skillChoice} disabled={blocked} placeholder="Skill（可选，或输入 / 选择触发词）" />
         <AutoComplete
           value={input}

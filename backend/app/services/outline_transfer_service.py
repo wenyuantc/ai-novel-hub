@@ -42,11 +42,11 @@ from app.services import (
     story_service,
 )
 from app.services.entity_ai_service import resolve_name
-from app.services.project_service import get_owned_project
+from app.services.project_access import require_project
 
 
 async def export_outline(db: AsyncSession, user_id: int, project_id: int) -> dict[str, Any]:
-    await get_owned_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "export")
     outlines = await outline_service.list_outlines(db, project_id)
     plans = await plan_service.plans_of(db, [o.id for o in outlines])
     names = dict(
@@ -144,7 +144,7 @@ async def _importable_characters(db: AsyncSession, project_id: int) -> list[Char
 
 
 async def preview_import(db: AsyncSession, user_id: int, project_id: int, data: Any) -> OutlineImportPreview:
-    await get_owned_project(db, user_id, project_id)
+    await require_project(db, user_id, project_id, "content.read")
     parsed = parse_outline_file(data)
     characters = await _importable_characters(db, project_id)
     _, unresolved, warnings = _resolve_characters(parsed, characters)
@@ -157,7 +157,7 @@ async def preview_import(db: AsyncSession, user_id: int, project_id: int, data: 
 async def import_outline(
     db: AsyncSession, user_id: int, project_id: int, req: OutlineImportRequest
 ) -> OutlineImportResult:
-    await get_owned_project(db, user_id, project_id, lock=True)
+    await require_project(db, user_id, project_id, "content.edit", for_update=True)
     parsed = parse_outline_file(req.data)
     characters = await _importable_characters(db, project_id)
     mapping, unresolved, warnings = _resolve_characters(parsed, characters)

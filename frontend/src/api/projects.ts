@@ -25,7 +25,7 @@ export function uploadCover(id: number, file: Blob): Promise<Project> {
 }
 
 export const deleteCover = (id: number) => request<Project>(`/projects/${id}/cover`, { method: 'DELETE' })
-export const coverPrompt = (id: number) => api.get<{ prompt: string }>(`/projects/${id}/cover/prompt`)
+export const coverPrompt = (id: number) => api.get<{ prompt: string; warning: string | null }>(`/projects/${id}/cover/prompt`)
 export const generateCover = (id: number, body: CoverGenerateRequest, signal?: AbortSignal) =>
   api.post<CoverPreview>(`/projects/${id}/cover/generate`, body, signal)
 

@@ -126,4 +126,44 @@ describe('关系请求作用域', () => {
     expect(displayed).toEqual(['新人物对'])
     expect(scope.isCurrent(nextTicket, false)).toBe(false)
   })
+  it('授权变化时在途保存跨弹窗重开仍受阻，旧结果落定后必须核对才能继续', async () => {
+    const { createRelationRequestScope, relationSaveGuard } = await import('./relationForm')
+    const guard = relationSaveGuard('actor-1:project-9:relation-3')
+    const scope = createRelationRequestScope()
+    const oldScope = scope.capture()
+    const token = guard.begin(7)
+    expect(token).not.toBeNull()
+    let resolve!: () => void
+    const pending = new Promise<void>((done) => { resolve = done }).finally(() => guard.finish(token!, scope.isCurrent(oldScope, true)))
+    scope.invalidate()
+    const reopened = relationSaveGuard('actor-1:project-9:relation-3')
+    expect(reopened).toBe(guard)
+    expect(reopened.getSnapshot()).toMatchObject({ saving: true, uncertain: false, scopeVersion: 7 })
+    expect(reopened.begin(8)).toBeNull()
+    resolve()
+    await pending
+    expect(reopened.getSnapshot()).toMatchObject({ saving: false, uncertain: true })
+    expect(reopened.begin(8)).toBeNull()
+    reopened.acknowledge() // UI 仅在读取最新事实后调用。
+    const newer = reopened.begin(8)
+    expect(newer).not.toBeNull()
+    reopened.finish(token!, true) // 迟到的旧结束回调不能解锁新的写请求。
+    expect(reopened.getSnapshot()).toMatchObject({ saving: true, scopeVersion: 8 })
+    reopened.finish(newer!, true)
+    expect(reopened.getSnapshot()).toMatchObject({ saving: false, uncertain: false })
+  })
+
+  it('写请求发出后网络失败须核对，写入前校验失败不会误报未知结果', async () => {
+    const { RelationSaveGuard } = await import('./relationForm')
+    const { ApiError } = await import('../../api/client')
+    const guard = new RelationSaveGuard()
+    const first = guard.begin(1)!
+    guard.finish(first, true, { started: true, error: new ApiError(0, '网络中断') })
+    expect(guard.getSnapshot()).toMatchObject({ saving: false, uncertain: true })
+    expect(guard.begin(1)).toBeNull()
+    guard.acknowledge()
+    const second = guard.begin(1)!
+    guard.finish(second, true, { started: false, error: new Error('表单未通过校验') })
+    expect(guard.getSnapshot()).toMatchObject({ saving: false, uncertain: false })
+  })
 })

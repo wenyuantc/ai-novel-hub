@@ -1,6 +1,7 @@
 import { ApiError, errorMessage } from '../../api/client'
 import type { RichDocument, RichDocumentOut, RichDocumentSave } from '../../api/richDocument'
 import type { Scene, ScenePage, SceneUpdate } from '../../api/types'
+import { writeResultUnknown } from '../../utils/writeResult'
 import { validateSectionTitle } from './richSectionNode'
 import { sameSectionDocument } from './richSectionProjection'
 import { validSectionDocument } from './richSectionValidity'
@@ -89,27 +90,70 @@ export class SceneDraftController {
   private historyRestoredSectionKeys = new Set<string>()
   private explicitMarkerIntent = false
   private explicitSectionIntent = false
+  private saveSerial = 0
+  private activeSave: number | null = null
+  private requiresSaveReview = false
+  private boundAuthorityVersion: number
   private snapshot: SceneDraftSnapshot = { scene: null, draft: empty(), page: null, loading: true, saving: false, composing: false, error: null, conflict: null, externalChange: false, document: null, documentDraft: null, conflictDocument: null }
-  constructor(private readonly chapterId: number, private readonly api: SceneDraftApi, private readonly canRead: () => boolean, private readonly canEdit: () => boolean) {}
+  constructor(private readonly chapterId: number, private readonly api: SceneDraftApi, private readonly canRead: () => boolean,
+    private readonly canEdit: () => boolean, private readonly authorityVersion: () => number = () => 0) {
+    this.boundAuthorityVersion = authorityVersion()
+  }
   getSnapshot = () => this.snapshot
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   activate() { this.active = true }
   deactivate() { this.active = false; this.generation += 1; this.request?.abort(); this.request = null; this.pendingRefresh = false; this.snapshot = { ...this.snapshot, composing: false } }
+  private clearEvidence() {
+    this.mappedMarkerKeys.clear(); this.retiredMarkerKeys.clear(); this.historyRestoredKeys.clear(); this.explicitMarkerIntent = false
+    this.mappedSectionKeys.clear(); this.historyRestoredSectionKeys.clear(); this.explicitSectionIntent = false
+  }
+
+  /** 授权轮次变化时丢弃旧响应；仍有写权时保留草稿，已发送的保存先等待并要求核对。 */
+  authorizationChanged() {
+    this.boundAuthorityVersion = this.authorityVersion()
+    if (!this.active) return
+    const wasLoading = this.snapshot.loading
+    const unknownSave = this.snapshot.saving || this.activeSave !== null
+    if (unknownSave) this.requiresSaveReview = true
+    this.generation += 1
+    this.request?.abort(); this.request = null; this.pendingRefresh = false
+    if (!this.allowedRead()) {
+      this.clearEvidence()
+      this.requiresSaveReview = this.activeSave !== null
+      this.publish({ scene: null, page: null, draft: empty(), loading: false, saving: false, composing: false,
+        error: null, conflict: null, externalChange: false, document: null, documentDraft: null, conflictDocument: null })
+      return
+    }
+    if (!this.allowedEdit()) {
+      this.clearEvidence()
+      this.publish({ draft: this.snapshot.scene ? draftOf(this.snapshot.scene) : empty(),
+        documentDraft: this.snapshot.document?.document ?? null, conflict: null, conflictDocument: null,
+        loading: false, saving: this.activeSave !== null, composing: false, externalChange: unknownSave,
+        error: unknownSave ? '权限已变化，先前保存的结果尚待核对。' : null })
+    } else {
+      this.publish({ loading: false, saving: this.activeSave !== null, ...(unknownSave ? {
+        externalChange: true, error: '权限已变化，先前保存的结果尚待核对；本地草稿已保留。',
+      } : {}) })
+    }
+    if (wasLoading && this.activeSave === null) void this.load()
+  }
   private publish(patch: Partial<SceneDraftSnapshot>) { this.snapshot = { ...this.snapshot, ...patch }; this.listeners.forEach((fn) => fn()) }
-  private valid(generation: number) { return this.active && generation === this.generation && this.canRead() }
+  private allowedRead() { return this.boundAuthorityVersion === this.authorityVersion() && this.canRead() }
+  private allowedEdit() { return this.boundAuthorityVersion === this.authorityVersion() && this.canEdit() }
+  private valid(generation: number) { return this.active && generation === this.generation && this.allowedRead() }
   setComposing(composing: boolean) {
     if (!this.active || this.snapshot.composing === composing) return
     this.publish({ composing })
     if (!composing && this.pendingRefresh && !this.snapshot.saving) { this.pendingRefresh = false; void this.load() }
   }
   change(patch: Partial<SceneDraft>) {
-    if (!this.active || !this.canEdit() || this.snapshot.saving) return
+    if (!this.active || !this.allowedEdit() || this.snapshot.saving) return
     // 已加载完整文档后，字符串入口不能覆盖结构草稿。
     if (this.snapshot.document && patch.content !== undefined && patch.content !== this.snapshot.draft.content) return
     this.publish({ draft: { ...this.snapshot.draft, ...patch } })
   }
   changeDocument(document: RichDocument, evidence: RichEditEvidence = { mappedMarkerKeys: [], explicitMarkerIntent: false }) {
-    if (!this.active || !this.canEdit() || this.snapshot.saving || !this.snapshot.document || !this.snapshot.documentDraft) return
+    if (!this.active || !this.allowedEdit() || this.snapshot.saving || !this.snapshot.document || !this.snapshot.documentDraft) return
     const source = this.snapshot.documentDraft
     if (!validSectionDocument(document)) { this.publish({ error: '完整文档的正文、区块或标记结构无效，草稿保持不变。' }); return }
     const oldSections = new Map(source.sections.map((item) => [item.key, item]))
@@ -182,8 +226,8 @@ export class SceneDraftController {
     this.publish({ documentDraft: document, draft: { ...this.snapshot.draft, content: document.content }, error: null })
   }
   async load(preferredId?: number, preserveDraft = true): Promise<boolean> {
-    if (!this.active || !this.canRead()) return false
-    if (this.snapshot.saving || this.snapshot.composing) { this.pendingRefresh = true; return false }
+    if (!this.active || !this.allowedRead()) return false
+    if (this.snapshot.saving || this.activeSave !== null || this.snapshot.composing) { this.pendingRefresh = true; return false }
     this.request?.abort()
     const request = new AbortController()
     this.request = request
@@ -207,12 +251,12 @@ export class SceneDraftController {
       const document = this.api.getDocument ? await this.api.getDocument(sid, request.signal) : null
       if (!this.valid(generation)) return false
       if (document && (document.content_revision !== scene.content_revision || document.planning_revision !== scene.planning_revision || document.document.content !== scene.content)) throw new Error('完整文档与场景版本不一致，请重新加载后核对。')
-      if (preserveDraft && previousId === sid && (sceneDraftDirty(this.snapshot) || this.snapshot.conflict !== null)) {
+      if (preserveDraft && previousId === sid && (sceneDraftDirty(this.snapshot) || this.snapshot.conflict !== null || this.requiresSaveReview)) {
         const sameContentRevision = scene.content_revision === this.snapshot.scene?.content_revision
-        this.publish({ page, loading: false, ...(sameContentRevision ? { scene, document } : {}), ...(this.snapshot.conflict ? { conflict: scene, conflictDocument: document } : {}), externalChange: !sameContentRevision })
+        this.publish({ page, loading: false, ...(sameContentRevision ? { scene, document } : {}), ...(this.snapshot.conflict ? { conflict: scene, conflictDocument: document } : {}), externalChange: this.requiresSaveReview || !sameContentRevision })
       } else {
-        this.mappedMarkerKeys.clear(); this.retiredMarkerKeys.clear(); this.historyRestoredKeys.clear(); this.explicitMarkerIntent = false
-        this.mappedSectionKeys.clear(); this.historyRestoredSectionKeys.clear(); this.explicitSectionIntent = false
+        this.clearEvidence()
+        if (sid !== previousId || !preserveDraft) this.requiresSaveReview = false
         this.publish({ page, scene, document, documentDraft: document?.document ?? null, draft: draftOf(scene), loading: false, conflict: null, conflictDocument: null, externalChange: false })
       }
       return true
@@ -224,42 +268,62 @@ export class SceneDraftController {
   async save(): Promise<Scene | null> {
     const { scene, draft, saving, conflict, externalChange, composing } = this.snapshot
     if (composing) { this.publish({ error: '输入法组合尚未结束，请确认文字后再保存。' }); return null }
-    if (!scene || saving || conflict || externalChange || !this.active || !this.canEdit()) return null
+    if (!scene || saving || this.activeSave !== null || this.requiresSaveReview || conflict || externalChange || !this.active || !this.allowedEdit()) return null
     if (!sceneDraftDirty(this.snapshot)) return scene
     const generation = this.generation
+    const saveSerial = ++this.saveSerial
+    let writeStarted = false
+    this.activeSave = saveSerial
     this.publish({ saving: true, error: null })
     try {
       if (this.snapshot.document && this.snapshot.documentDraft && this.api.saveDocument) {
-        return await this.saveRich(generation, scene, draft, this.snapshot.document, this.snapshot.documentDraft)
+        return await this.saveRich(generation, scene, draft, this.snapshot.document, this.snapshot.documentDraft,
+          () => { writeStarted = true })
       }
+      writeStarted = true
       const saved = await this.api.update(scene.id, { ...draft, expected_content_revision: scene.content_revision })
-      if (!this.valid(generation) || !this.canEdit() || this.snapshot.scene?.id !== scene.id) return null
+      if (!this.valid(generation) || !this.allowedEdit() || this.snapshot.scene?.id !== scene.id) return null
       this.publish({ scene: saved, draft: draftOf(saved), externalChange: false, page: this.snapshot.page ? {
         ...this.snapshot.page, content_revision: saved.content_revision, planning_revision: saved.planning_revision,
         items: this.snapshot.page.items.map((item) => item.id === saved.id ? saved : { ...item, content_revision: saved.content_revision, planning_revision: saved.planning_revision }),
       } : null })
       return saved
     } catch (error) {
-      if (!this.valid(generation) || !this.canEdit()) return null
+      if (!this.valid(generation) || !this.allowedEdit()) return null
+      if (writeStarted && writeResultUnknown(error)) {
+        this.requiresSaveReview = true
+        this.publish({ error: '保存结果尚未确认，请读取最新场景并核对；本地草稿已保留。', externalChange: true })
+        return null
+      }
       this.publish({ error: richDocumentSaveError(errorMessage(error)) })
-      if (error instanceof ApiError && error.status === 409) await this.reviewLatest()
+      if (error instanceof ApiError && error.status === 409) await this.readLatest()
       return null
     } finally {
-      if (this.valid(generation)) {
-        this.publish({ saving: false })
-        if (this.pendingRefresh) { this.pendingRefresh = false; void this.load() }
+      if (this.activeSave === saveSerial) {
+        this.activeSave = null
+        if (this.valid(generation)) {
+          this.publish({ saving: false })
+          if (this.pendingRefresh) { this.pendingRefresh = false; void this.load() }
+        } else if (this.active && this.allowedRead()) {
+          // 旧请求可能已提交：禁止重发，直到调用方显式读取并核对当前事实。
+          this.requiresSaveReview = true
+          this.publish({ saving: false, externalChange: true,
+            error: '权限变化时保存结果未知，请读取最新场景并核对后再操作。' })
+        }
       }
     }
   }
-  private async saveRich(generation: number, original: Scene, draft: SceneDraft, base: RichDocumentOut, document: RichDocument): Promise<Scene | null> {
+  private async saveRich(generation: number, original: Scene, draft: SceneDraft, base: RichDocumentOut, document: RichDocument,
+    markWriteStarted: () => void): Promise<Scene | null> {
     if (!this.api.saveDocument) return null
     let scene = original; let current = base
     if (!sameDocument(base.document, document)) {
       const payload = documentSave(base, document, this.mappedMarkerKeys, this.explicitMarkerIntent,
         this.retiredMarkerKeys, this.historyRestoredKeys, this.mappedSectionKeys, this.explicitSectionIntent,
         this.historyRestoredSectionKeys)
+      markWriteStarted()
       current = await this.api.saveDocument(scene.id, payload)
-      if (!this.valid(generation) || !this.canEdit() || this.snapshot.scene?.id !== scene.id) return null
+      if (!this.valid(generation) || !this.allowedEdit() || this.snapshot.scene?.id !== scene.id) return null
       if (current.content_revision !== base.content_revision + 1 || !sameDocument(current.document, document)) {
         this.publish({ externalChange: true, error: '完整文档保存响应与本地草稿不一致，请核对，草稿仍保留。' })
         return null
@@ -274,7 +338,7 @@ export class SceneDraftController {
       this.mappedMarkerKeys.clear(); this.explicitMarkerIntent = false
       this.mappedSectionKeys.clear(); this.explicitSectionIntent = false
       const latest = await this.api.get(scene.id)
-      if (!this.valid(generation) || !this.canEdit()) return null
+      if (!this.valid(generation) || !this.allowedEdit()) return null
       if (latest.content_revision !== current.content_revision || latest.content !== current.document.content) {
         this.publish({ externalChange: true, error: '文档已保存，但场景随后又变化，请重新核对。' })
         return null
@@ -282,8 +346,9 @@ export class SceneDraftController {
       scene = latest
     }
     if (draft.title !== scene.title || draft.summary !== scene.summary) {
+      markWriteStarted()
       const saved = await this.api.update(scene.id, { title: draft.title, summary: draft.summary, expected_content_revision: scene.content_revision })
-      if (!this.valid(generation) || !this.canEdit()) return null
+      if (!this.valid(generation) || !this.allowedEdit()) return null
       if (saved.id !== scene.id || saved.chapter_id !== this.chapterId || saved.content !== current.document.content
         || saved.content_revision !== scene.content_revision + 1) {
         this.publish({ externalChange: true, error: '场景资料响应与已保存正文不一致，请核对，草稿仍保留。' })
@@ -299,15 +364,19 @@ export class SceneDraftController {
     return scene
   }
   async select(sid: number): Promise<boolean> {
-    if (this.snapshot.saving) return false
+    if (this.snapshot.saving || this.activeSave !== null) return false
     if (this.snapshot.scene?.id === sid) return true
     if (sceneDraftDirty(this.snapshot) && !(await this.save())) return false
     return this.load(sid, false)
   }
   async reviewLatest(): Promise<void> {
+    if (this.activeSave !== null) return
+    await this.readLatest()
+  }
+  private async readLatest(): Promise<void> {
     const sid = this.snapshot.scene?.id
     const generation = this.generation
-    if (!sid || !this.active || !this.canRead()) return
+    if (!sid || !this.active || !this.allowedRead()) return
     try {
       const latest = await this.api.get(sid)
       const document = this.api.getDocument ? await this.api.getDocument(sid) : null
@@ -317,7 +386,7 @@ export class SceneDraftController {
   }
   /** 作者看过对比后显式换用最新版本；本地输入不变，下一次保存仍由作者触发。 */
   acknowledgeLatest() {
-    if (!this.snapshot.conflict || !this.active || !this.canEdit()) return
+    if (!this.snapshot.conflict || !this.active || !this.allowedEdit()) return
     const { document, documentDraft, conflictDocument } = this.snapshot
     if (document && documentDraft && conflictDocument) {
       const locallyChanged = !sameDocument(document.document, documentDraft)
@@ -326,10 +395,12 @@ export class SceneDraftController {
         return
       }
       const nextDocument = locallyChanged ? documentDraft : conflictDocument.document
+      this.requiresSaveReview = false
       this.publish({ scene: this.snapshot.conflict, document: conflictDocument, documentDraft: nextDocument,
         draft: { ...this.snapshot.draft, content: nextDocument.content }, conflict: null, conflictDocument: null, externalChange: false, error: null })
       return
     }
+    this.requiresSaveReview = false
     this.publish({ scene: this.snapshot.conflict, conflict: null, externalChange: false, error: null })
   }
 }

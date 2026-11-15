@@ -6,27 +6,32 @@ import { errorMessage } from '../api/client'
 import { projectApi } from '../api/projects'
 import { seriesApi, type Series, type SeriesBook } from '../api/series'
 import { StudioPage } from '../components/StudioUI'
+import MemberPanel from '../components/collaboration/MemberPanel'
+import SeriesAccessBoundary from '../components/series/SeriesAccessBoundary'
 import SeriesLibrary from '../components/series/SeriesLibrary'
 import SeriesTransitionDialog from '../components/series/SeriesTransitionDialog'
+import { useSeriesAuthorization } from '../components/series/seriesAccessContext'
+import { validSeriesAccess } from '../components/series/seriesAuthorization'
 import { seriesNeedsReview, seriesSettingResources } from '../components/series/seriesState'
 import { useSeriesAction, useSeriesIdentity } from '../components/series/useSeriesAction'
+import { useSeriesLoader } from '../components/series/useSeriesLoader'
 import { useLoader } from '../hooks/useLoader'
 import { invalidateProject } from '../utils/projectRefresh'
 
 export default function SeriesPage() {
   const { sid } = useParams()
   const identity = useSeriesIdentity()
-  if (sid === undefined) return <SeriesList key={identity} />
+  if (sid === undefined) return <SeriesAccessBoundary key={identity}><SeriesList /></SeriesAccessBoundary>
   const id = Number(sid)
   if (!/^\d+$/.test(sid) || !Number.isSafeInteger(id) || id <= 0) {
     return <StudioPage title="系列不存在" action={<Link to="/series">返回系列</Link>}><Empty /></StudioPage>
   }
-  return <SeriesDetails key={`${identity}:${id}`} id={id} />
+  return <SeriesAccessBoundary key={`${identity}:${id}`}><SeriesDetails id={id} /></SeriesAccessBoundary>
 }
 
 function SeriesList() {
   const load = useCallback(() => seriesApi.list(), [])
-  const list = useLoader(load)
+  const list = useSeriesLoader(load)
   const [creating, setCreating] = useState(false)
   const navigate = useNavigate()
   return <StudioPage title="作品系列" hint="为同一世界的多部作品维护一份共享设定。"
@@ -34,10 +39,11 @@ function SeriesList() {
     <Card>
       {list.error && <Alert type="error" showIcon message={list.error} action={<Button size="small" onClick={list.reload}>重试</Button>} />}
       <Spin spinning={list.loading}>
-        <List dataSource={list.data ?? []} rowKey="id" locale={{ emptyText: list.loading || list.error ? null
+        <List dataSource={list.error ? [] : (list.data ?? []).filter(validSeriesAccess)} rowKey="id" locale={{ emptyText: list.loading || list.error ? null
           : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无系列。新建系列后，可从书库加入已有作品。" /> }}
           renderItem={(series) => <List.Item>
-            <List.Item.Meta title={<Link to={`/series/${series.id}`}>{series.name}</Link>}
+            <List.Item.Meta title={<Space wrap><Link to={`/series/${series.id}`}>{series.name}</Link>
+              {!series.is_owner && <Tag>设定协作者</Tag>}</Space>}
               description={`${series.book_count} 部成员作品 · ${series.entry_count} 条共享设定`} />
           </List.Item>} />
       </Spin>
@@ -54,15 +60,21 @@ function SeriesDetails({ id }: { id: number }) {
   const focusedEntryId = /^\d+$/.test(entryParam) && Number.isSafeInteger(Number(entryParam)) && Number(entryParam) > 0 ? Number(entryParam) : undefined
   const clearFocus = () => { setSearch((prev) => { const next = new URLSearchParams(prev); next.delete('entry'); return next }, { replace: true }) }
   const load = useCallback(() => seriesApi.get(id), [id])
-  const detail = useLoader(load)
+  const authorization = useSeriesAuthorization()
+  const observe = useCallback((series: Series) => {
+    if (!validSeriesAccess(series)) throw new Error('系列授权信息不完整，请重新读取')
+    authorization.adopt(series.authorization_version)
+  }, [authorization])
+  const detail = useSeriesLoader(load, undefined, observe)
   const [dialog, setDialog] = useState<{ kind: 'rename' | 'join' } | { kind: 'leave'; book: SeriesBook } | null>(null)
   const removal = useSeriesAction()
-  const series = detail.data
+  const series = detail.error ? undefined : detail.data
+  const isOwner = series?.is_owner === true
   const close = () => setDialog(null)
   const done = (text: string) => { detail.reload(); close(); message.success(text) }
   const canChange = !!series && !detail.loading && !detail.error && !removal.busy
   return <StudioPage title={series?.name ?? '作品系列'}
-    hint="共享基础统一维护，成员作品分别记录自己的剧情变化。"
+    hint={series && !isOwner ? '设定协作者可维护共享基础；作品访问权限由作者单独授予。' : '共享基础统一维护，成员作品分别记录自己的剧情变化。'}
     action={<Space wrap><Link to="/series">返回系列</Link><Link to="/projects">作品书库</Link></Space>}>
     <Space direction="vertical" size="middle" style={{ width: '100%', minWidth: 0 }}>
       {detail.error && <Alert type="error" showIcon message={detail.error} action={<Button size="small" onClick={detail.reload}>重试</Button>} />}
@@ -70,7 +82,7 @@ function SeriesDetails({ id }: { id: number }) {
         action={<Button size="small" onClick={() => { removal.clearError(); detail.reload() }}>重新读取</Button>} />}
       {!series && !detail.error && <Spin aria-label="正在读取系列" />}
       {series && !detail.error && <>
-        <Card title="成员作品" extra={<Space wrap>
+        <Card title="成员作品" extra={isOwner && <Space wrap>
           <Button disabled={!canChange} onClick={() => setDialog({ kind: 'rename' })}>重命名</Button>
           <Button type="primary" icon={<PlusOutlined />} disabled={!canChange} onClick={() => setDialog({ kind: 'join' })}>加入作品</Button>
           {series.book_count === 0 && series.entry_count === 0 && <Popconfirm title="删除空系列？"
@@ -79,8 +91,9 @@ function SeriesDetails({ id }: { id: number }) {
             <Button danger disabled={!canChange || !!removal.error}>删除空系列</Button>
           </Popconfirm>}
         </Space>}>
-          <List dataSource={series.books} rowKey="id" locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未加入作品" /> }}
-            renderItem={(book) => <List.Item actions={book.recycled ? [] : [
+          <List dataSource={series.books} rowKey="id" locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={!isOwner && series.book_count > 0 ? '没有可查看的成员作品' : '尚未加入作品'} /> }}
+            renderItem={(book) => <List.Item actions={!isOwner || book.recycled ? [] : [
               <Button key="leave" type="link" size="small" danger disabled={!canChange} onClick={() => setDialog({ kind: 'leave', book })}>退出系列</Button>,
             ]}>
               <Space wrap>
@@ -89,14 +102,17 @@ function SeriesDetails({ id }: { id: number }) {
               </Space>
             </List.Item>} />
         </Card>
-        <SeriesLibrary seriesId={id} seriesRevision={series.revision} books={series.books} focusedEntryId={focusedEntryId}
+        <SeriesLibrary seriesId={id} seriesRevision={series.revision} isOwner={isOwner} books={series.books} focusedEntryId={focusedEntryId}
           onClearFocus={clearFocus} onChange={detail.reload} />
+        {isOwner && series.can_manage_collaborators === true && <Card>
+          <MemberPanel scope="series" resourceId={id} canManage onChanged={detail.reload} />
+        </Card>}
       </>}
     </Space>
-    {series && dialog?.kind === 'rename' && <NameDialog series={series} onClose={close} onRefresh={detail.reload} onSaved={() => done('系列名称已保存')} />}
-    {series && dialog?.kind === 'join' && <JoinDialog series={series} onClose={close} onRefresh={detail.reload}
+    {series && isOwner && dialog?.kind === 'rename' && <NameDialog series={series} onClose={close} onRefresh={detail.reload} onSaved={() => done('系列名称已保存')} />}
+    {series && isOwner && dialog?.kind === 'join' && <JoinDialog series={series} onClose={close} onRefresh={detail.reload}
       onJoined={(pid) => { invalidateProject(pid, ['project']); done('作品已加入系列') }} />}
-    {series && dialog?.kind === 'leave' && <LeaveDialog seriesId={id} book={dialog.book} onClose={close}
+    {series && isOwner && dialog?.kind === 'leave' && <LeaveDialog seriesId={id} book={dialog.book} onClose={close}
       onDone={() => { invalidateProject(dialog.book.id, ['project', ...new Set([...seriesSettingResources('character'), ...seriesSettingResources('world')])]); done('作品已退出系列') }} />}
   </StudioPage>
 }
@@ -150,12 +166,13 @@ function JoinDialog({ series, onClose, onJoined, onRefresh }: {
   const projects = useLoader(load)
   const action = useSeriesAction()
   const [projectId, setProjectId] = useState<number>()
-  const options = (projects.data ?? []).filter((project) => !project.series).map((project) => ({ value: project.id, label: project.title }))
+  const options = (projects.error ? [] : projects.data ?? []).filter((project) => project.access.role === 'owner' && !project.series)
+    .map((project) => ({ value: project.id, label: project.title }))
   const stale = action.error !== null && seriesNeedsReview(action.error)
   const valid = projectId !== undefined && options.some((item) => item.value === projectId)
   return <Modal open title="加入已有作品" onCancel={onClose}
     onOk={() => { if (valid && !stale) void action.run(() => seriesApi.join(series.id, projectId, series.revision), () => onJoined(projectId)) }}
-    okText="加入系列" cancelText="取消" confirmLoading={action.busy} okButtonProps={{ disabled: !valid || stale || projects.loading }}
+    okText="加入系列" cancelText="取消" confirmLoading={action.busy} okButtonProps={{ disabled: !valid || stale || projects.loading || !!projects.error }}
     maskClosable={!action.busy} closable={!action.busy} keyboard={!action.busy} cancelButtonProps={{ disabled: action.busy }}>
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Typography.Text>作品一次只能加入一个系列。加入不会自动将共享条目用于该书。</Typography.Text>

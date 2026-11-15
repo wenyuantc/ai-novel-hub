@@ -12,7 +12,7 @@ import CoverPanel from '../../components/project/CoverPanel'
 import DeleteProjectModal from '../../components/project/DeleteProjectModal'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import StyleSelect from '../../components/styles/StyleSelect'
-import { useProjectStore } from '../../stores/project'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { formatWordCount, projectInfoBody, wordsProgress, type ProjectInfoValues } from '../../utils/projectFields'
 import { splitPane, splitRow } from '../../utils/layout'
@@ -40,35 +40,44 @@ export default function OverviewPanel() {
 /** 章节分析设置：自动分析开关（PATCH auto_analyze）与一键分析全部未分析 / 已过期章节。 */
 function AnalysisSettingsCard({ project }: { project: Project }) {
   const { message } = App.useApp()
+  const { canUseAINow, canManageCollaboratorsNow } = useProjectAccess(project.id)
   const setProject = useProjectStore((s) => s.setProject)
   const refreshTasks = useTasksStore((s) => s.refresh)
   const [toggling, setToggling] = useState(false)
   const [queueing, setQueueing] = useState(false)
 
   const handleToggle = async (checked: boolean) => {
+    if (!canUseAINow() || !canManageCollaboratorsNow()) return
+    const scope = captureProjectScope(project.id)
+    if (!scope) return
     setToggling(true)
     try {
       const updated = await projectApi.update(project.id, { auto_analyze: checked })
+      if (!canUseAINow() || !canManageCollaboratorsNow() || !isProjectScopeCurrent(scope)) return
       // 只合并 auto_analyze：若整体替换，updated_at 变化会让以其为 key 的项目信息表单重建、丢掉未保存的修改
       const current = useProjectStore.getState().project
-      if (current?.id === updated.id) setProject({ ...current, auto_analyze: updated.auto_analyze })
+      if (current?.id === updated.id) setProject({ ...current, auto_analyze: updated.auto_analyze }, scope)
       message.success(checked ? '已开启自动分析' : '已关闭自动分析')
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope)) message.error(errorMessage(err))
     } finally {
       setToggling(false)
     }
   }
 
   const handleAnalyzePending = async () => {
+    if (!canUseAINow()) return
+    const scope = captureProjectScope(project.id)
+    if (!scope) return
     setQueueing(true)
     try {
       const r = await analysisApi.analyzePending(project.id)
+      if (!canUseAINow() || !isProjectScopeCurrent(scope)) return
       if (r.queued > 0) message.success(`已加入 ${r.queued} 章分析，按章节顺序依次执行，可在后台任务中查看`)
       else message.info('没有需要分析的章节（未分析或已过期且正文非空的章节会被加入）')
       void refreshTasks()
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope)) message.error(errorMessage(err))
     } finally {
       setQueueing(false)
     }
@@ -78,7 +87,8 @@ function AnalysisSettingsCard({ project }: { project: Project }) {
     <Card title="章节分析">
       <Space direction="vertical">
         <Space wrap>
-          <Switch checked={project.auto_analyze} loading={toggling} onChange={(v) => void handleToggle(v)} />
+          {project.access.role === 'owner' ? <Switch checked={project.auto_analyze} loading={toggling} onChange={(v) => void handleToggle(v)} />
+            : <Typography.Text>{project.auto_analyze ? '已开启（由作者管理）' : '已关闭（由作者管理）'}</Typography.Text>}
           <Typography.Text>整章 AI 生成 / 润色 / 按建议重写成功后自动分析一次</Typography.Text>
         </Space>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -96,7 +106,7 @@ function AnalysisSettingsCard({ project }: { project: Project }) {
 
 function OverviewInner({ project }: { project: Project }) {
   const { message } = App.useApp()
-  const { managingOther, canUseAI, canEdit, canEditNow, canRecycle } = useProjectAccess(project.id)
+  const { managingOther, isCollaborator, canUseAI, canUseOwnerAI, canUseOwnerAINow, canEdit, canEditNow, canRecycle, canExport, canBackup } = useProjectAccess(project.id)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const navigate = useNavigate()
   const setProject = useProjectStore((s) => s.setProject)
@@ -109,14 +119,19 @@ function OverviewInner({ project }: { project: Project }) {
 
   /** 从本项目发起灵感会话（已有字段预填为已定；同一项目已有进行中的会话时直接打开它） */
   const handleInspire = async () => {
+    if (!canUseOwnerAINow()) return
+    const scope = captureProjectScope(project.id)
+    if (!scope) return
     setInspiring(true)
     try {
       // 按需加载：灵感模式的接口模块不进入口 chunk
       const { inspirationApi } = await import('../../api/inspiration')
+      if (!canUseOwnerAINow() || !isProjectScopeCurrent(scope)) return
       const s = await inspirationApi.fromProject(project.id)
+      if (!canUseOwnerAINow() || !isProjectScopeCurrent(scope)) return
       navigate(`/inspiration/${s.id}`)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope)) message.error(errorMessage(err))
     } finally {
       setInspiring(false)
     }
@@ -126,6 +141,8 @@ function OverviewInner({ project }: { project: Project }) {
     if (!canEditNow()) return
     const v = await form.validateFields()
     if (!canEditNow()) return
+    const scope = captureProjectScope(project.id)
+    if (!scope) return
     setSaving(true)
     try {
       if (!canEditNow()) return
@@ -139,12 +156,12 @@ function OverviewInner({ project }: { project: Project }) {
         // 目标总字数清空时显式发送 null
         ...projectInfoBody(v),
       })
-      if (!canEditNow()) return
-      setProject(updated)
+      if (!canEditNow() || !isProjectScopeCurrent(scope)) return
+      setProject(updated, scope)
       message.success('已保存')
       if (updated.notice) message.info(updated.notice)
     } catch (err) {
-      if (!canEditNow()) return
+      if (!canEditNow() || !isProjectScopeCurrent(scope)) return
       message.error(errorMessage(err))
     } finally {
       setSaving(false)
@@ -182,21 +199,21 @@ function OverviewInner({ project }: { project: Project }) {
             )}
           </Card>
         </div>
-        {canUseAI && <div style={splitPane(400)}>
+        {(canUseAI || canExport || canBackup) && <div style={splitPane(400)}>
           <Card>
             <Space wrap>
-              <Button icon={<RocketOutlined />} onClick={() => navigate(`/projects/${project.id}/wizard`)}>
+              {canUseAI && <Button icon={<RocketOutlined />} onClick={() => navigate(`/projects/${project.id}/wizard`)}>
                 创作向导
-              </Button>
-              <Button icon={<BulbOutlined />} loading={inspiring} onClick={() => void handleInspire()}>
+              </Button>}
+              {canUseOwnerAI && <Button icon={<BulbOutlined />} loading={inspiring} onClick={() => void handleInspire()}>
                 用灵感模式补全
-              </Button>
-              <Button type="primary" icon={<DownloadOutlined />} onClick={() => setExportOpen(true)}>
+              </Button>}
+              {canExport && <Button type="primary" icon={<DownloadOutlined />} onClick={() => setExportOpen(true)}>
                 导出 TXT / Markdown / EPUB
-              </Button>
-              <Button icon={<CloudDownloadOutlined />} onClick={() => setBackupOpen(true)}>
+              </Button>}
+              {canBackup && <Button icon={<CloudDownloadOutlined />} onClick={() => setBackupOpen(true)}>
                 备份项目
-              </Button>
+              </Button>}
             </Space>
           </Card>
         </div>}
@@ -280,9 +297,9 @@ function OverviewInner({ project }: { project: Project }) {
                 <Button type="primary" loading={saving} onClick={() => void handleSave()} disabled={!canEdit}>
                   保存
                 </Button>
-                <Button danger onClick={() => setDeleteOpen(true)} disabled={!canRecycle}>
+                {canRecycle && <Button danger onClick={() => setDeleteOpen(true)}>
                   删除项目
-                </Button>
+                </Button>}
               </Space>
             </Form>
             <Descriptions size="small" style={{ marginTop: 24 }} column={{ xs: 1, sm: 2 }}>
@@ -292,9 +309,9 @@ function OverviewInner({ project }: { project: Project }) {
           </div>
         </div>
       </Card>
-      {canUseAI && <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />}
-      {deleteOpen && canRecycle && <DeleteProjectModal project={{ id: project.id, title: project.title, owner: project.owner, owner_username: project.owner?.username }} onClose={() => setDeleteOpen(false)} onDeleted={() => navigate(managingOther ? '/admin/projects' : '/projects', { replace: true })} />}
-      {canUseAI && backupOpen && (
+      {canExport && <ExportModal projectId={project.id} open={exportOpen} onClose={() => setExportOpen(false)} />}
+      {deleteOpen && canRecycle && <DeleteProjectModal project={{ id: project.id, title: project.title, owner: project.owner, owner_username: project.owner?.username }} onClose={() => setDeleteOpen(false)} onDeleted={() => navigate(managingOther && !isCollaborator ? '/admin/projects' : '/projects', { replace: true })} />}
+      {canBackup && backupOpen && (
         <Suspense fallback={null}>
           <BackupModal projectId={project.id} onClose={() => setBackupOpen(false)} />
         </Suspense>

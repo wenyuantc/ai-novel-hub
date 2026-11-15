@@ -1,6 +1,6 @@
 import { ApiError } from '../../api/client'
-import type { SeriesAiSettings, SeriesEntry, SeriesKind } from '../../api/series'
-import type { CharacterInput, SettingOrigin } from '../../api/types'
+import type { SeriesAiSettings, SeriesBook, SeriesEntry, SeriesKind } from '../../api/series'
+import type { CharacterInput, ProjectAccess, SettingOrigin } from '../../api/types'
 import type { ProjectResource } from '../../utils/projectRefresh'
 import { rebaseSet } from '../settingAi/settingAiDraft'
 
@@ -26,6 +26,37 @@ export function seriesEntryName(entry: SeriesEntry) {
 
 export function projectReference(entry: SeriesEntry, projectId: number) {
   return entry.uses.find((use) => use.project_id === projectId && use.ref.kind === entry.kind)?.ref
+}
+
+/** uses 会过滤无权查看的书，只有 has_uses 能判断是否存在任意绑定。 */
+export function canDeleteSeriesEntry(entry: SeriesEntry, isOwner: boolean): boolean {
+  return isOwner || entry.has_uses === false
+}
+
+export function seriesUsageLabel(entry: SeriesEntry, isOwner: boolean): string {
+  if (isOwner) return `${entry.uses.length} 本作品采用`
+  if (entry.has_uses === true) return '已有作品采用'
+  if (entry.has_uses === false) return '尚未被作品采用'
+  return '采用情况未确认'
+}
+
+type ProjectSeriesAccess = { id: number; access: Pick<ProjectAccess, 'role' | 'is_collaborator' | 'can_edit_content'> }
+
+/** 此处只判断作品侧身份；系列侧授权和全部受影响书仍由服务端核验。 */
+export function canChangeSeriesBook(role: ProjectAccess['role'], isCollaborator: boolean, canEdit: boolean): boolean {
+  return canEdit && (role === 'owner' || (role === 'editor' && isCollaborator))
+}
+
+/** 管理员人工编辑权不授予系列/作品双重授权的归属操作。 */
+export function editableSeriesBooks(
+  books: readonly SeriesBook[], projects: readonly ProjectSeriesAccess[] | null, isOwner: boolean,
+): SeriesBook[] {
+  if (isOwner) return books.filter((book) => !book.recycled)
+  if (!projects) return []
+  const editable = new Set(projects.filter(({ access }) => canChangeSeriesBook(
+    access.role, access.is_collaborator === true, access.can_edit_content === true,
+  )).map(({ id }) => id))
+  return books.filter((book) => !book.recycled && editable.has(book.id))
 }
 
 export function seriesSettingResources(kind: SeriesKind): readonly ProjectResource[] {

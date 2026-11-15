@@ -377,6 +377,23 @@ export interface ProjectOwner {
   username: string
 }
 
+/** 后端针对当前登录者计算的作品能力；role 仅供展示，具体操作使用对应布尔值。 */
+export interface ProjectAccess {
+  role: 'owner' | 'viewer' | 'editor' | 'admin' | null
+  is_collaborator: boolean
+  /** 协作者授权轮次的不透明版本；作者及纯管理员为 null。 */
+  authorization_version: string | null
+  allow_owner_ai: boolean
+  can_read: boolean
+  can_edit_content: boolean
+  can_export: boolean
+  can_use_ai: boolean
+  can_manage_collaborators: boolean
+  can_recycle: boolean
+  can_backup: boolean
+  can_write_reading_progress: boolean
+}
+
 export interface AdminProject {
   id: number
   title: string
@@ -433,8 +450,10 @@ export interface RecyclePurgeRequest extends RecycleRestoreRequest {
 
 export interface Project {
   id: number
+  /** 必填的当前 actor 访问快照；它不是服务端动作授权的替代。 */
+  access: ProjectAccess
   /** 仅作品作者可读取所属系列摘要。 */
-  series?: { id: number; name: string; revision: number } | null
+  series?: { id: number; name: string; revision: number; authorization_version: string | null } | null
   /** 服务端确认的项目归属；旧的自有项目响应可省略。 */
   owner?: ProjectOwner | null
   title: string
@@ -475,6 +494,8 @@ export interface Project {
 export interface CoverPreview {
   image_base64: string
   mime_type: string
+  /** 协作者返回实际模型来源；旧作者响应可能缺失。 */
+  model_source?: 'actor' | 'owner' | null
 }
 
 export interface CoverGenerateRequest {
@@ -849,8 +870,9 @@ export interface WizardRequest {
   character_count?: number
   /** 仅 careers：1–12，默认 4 */
   career_count?: number
-  /** 从中断处继续：同项目同类型、失败 / 已取消 / 已中断且有部分输出的向导任务；生成参数沿用该任务（只有 AI 配置可换） */
+  /** 续写必须同时绑定原任务实例；不能由整数 ID 查询替代。 */
   continue_from_task_id?: number
+  continue_from_task_key?: string
 }
 
 export interface WizardItemMap {
@@ -1004,6 +1026,8 @@ export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed
 
 export interface Task {
   id: number
+  /** 不可复用的任务实例身份；历史任务可能缺失，此时不得按整数 ID 操作。 */
+  task_key: string | null
   kind: TaskKind
   status: TaskStatus
   /** 后端生成的展示标题，如「第 3 章 xx · AI 生成」「大纲向导」 */
@@ -1035,10 +1059,18 @@ export interface Task {
   step_cursor: number
   /** 仅 queued 有值：前面还在排队的任务数（0 = 下一个执行） */
   queue_position: number | null
+  /**
+   * 只读（后端 TaskOut.retry_blocked_reason）：任务输入本身决定不能直接重试的原因，与后端重试受理同一判定；
+   * 非空时不显示重试。为空不代表一定可重试（状态与授权仍由后端判定）。旧后端缺省视为 null。
+   */
+  retry_blocked_reason?: TaskRetryBlockedReason | null
   created_at: string
   started_at: string | null
   finished_at: string | null
 }
+
+/** 目前仅 kb.index：memory_bound = 记忆条目 / 分析派生绑定；legacy_index = 旧版无占用清理记录；其余为原绑定 / 请求破损。 */
+export type TaskRetryBlockedReason = 'memory_bound' | 'legacy_index' | 'binding_invalid' | 'request_invalid'
 
 export interface TaskListQuery {
   project_id?: number
@@ -2851,7 +2883,8 @@ export interface KbDocument {
 
 export interface KbUploadResult {
   document: KbDocument
-  task: Task
+  /** 编辑者只建关键词索引时同步完成，不创建后台任务。 */
+  task: Task | null
 }
 
 export interface KbChunk {
@@ -2897,8 +2930,14 @@ export interface KbSearchResult {
   candidates: number
 }
 
+/** index-status 关键词降级原因（backend/app/schemas/kb.py IndexStatus.keyword_reason） */
+export type IndexKeywordReason = 'owner_embedding_not_allowed' | 'embedding_config_missing' | 'owner_embedding_unavailable'
+
 export interface IndexStatus {
-  /** 当前默认向量模型（配置名 · 模型名）；未配置时为 null（只用关键词检索） */
+  /**
+   * 当前默认向量模型（配置名 · 模型名）；作者未配置时为 null（只用关键词检索）。
+   * 协作者视图恒为 null（不暴露作者配置），不代表「未配置」——须看 owner_embedding_configured。
+   */
   embedding_model: string | null
   /** 存在缺少当前向量模型向量的检索单元 */
   needs_rebuild: boolean
@@ -2906,6 +2945,12 @@ export interface IndexStatus {
   stale: { kb: number; memory: number }
   /** 项目有排队 / 运行中的建索引任务 */
   indexing: boolean
+  /** 作品作者是否配置了默认向量模型（作者与协作者视图都有） */
+  owner_embedding_configured: boolean
+  /** 当前请求者的同步检索 / AI 上下文用作者共享向量（vector）还是只用关键词（keyword） */
+  retrieval_mode: 'vector' | 'keyword'
+  /** keyword 时的原因；vector 时为 null */
+  keyword_reason: IndexKeywordReason | null
 }
 
 // ---------------- 剧情记忆（backend/app/schemas/memory.py） ----------------
@@ -3102,6 +3147,11 @@ export interface AgentConversation {
   last_message_at: string | null
   /** 本会话启用的 MCP 插件 id（[] = 不启用） */
   mcp_plugin_ids: number[]
+  /**
+   * 服务端计算：当前用户此刻能否写入该会话（作者，或当前邀请轮次的 accepted 编辑者）。
+   * 查看者、撤权后重邀的旧会话为 false；不含邀请标识，写入口仍以 409 permission_denied 兜底。
+   */
+  writable: boolean
   created_at: string
   updated_at: string
 }
@@ -3110,6 +3160,7 @@ export interface AgentMessage {
   id: number
   conversation_id: number
   turn_task_id: number | null
+  turn_task_key?: string | null
   role: 'user' | 'assistant' | 'tool'
   content: string
   tool_calls: AgentToolCall[] | null
@@ -3149,9 +3200,12 @@ export interface AgentEffect {
 }
 export interface AgentChange {
   id: number
+  change_key: string | null
+  view_version: string | null
   conversation_id: number
   project_id: number
   turn_task_id: number | null
+  turn_task_key?: string | null
   tool_call_id: string
   tool_name: string
   arguments: Record<string, unknown>

@@ -3,11 +3,11 @@ import { useCallback, useState } from 'react'
 import { ApiError, errorMessage } from '../../api/client'
 import { seriesApi, type SeriesImpactQuery, type SeriesMutation } from '../../api/series'
 import type { SettingAiMode } from '../../api/settingAiVisibility'
-import { useLoader } from '../../hooks/useLoader'
 import { SETTING_AI_MODE_OPTIONS } from '../settingAi/settingAiOptions'
 import SeriesBlockers from './SeriesBlockers'
 import { seriesNeedsReview } from './seriesState'
 import { useSeriesAction } from './useSeriesAction'
+import { useSeriesLoader } from './useSeriesLoader'
 
 const ACTIONS = {
   promote: { title: '提升为系列共享', detail: '将本书的基础档案纳入系列共享库。原书仍可使用此条目，已保存的出场、关联和剧情变化不变。' },
@@ -21,16 +21,17 @@ interface Props {
   seriesId: number
   request: SeriesImpactQuery
   label: string
+  canAct?: () => boolean
   onClose: () => void
   onDone: (affectedBookIds: number[], result: SeriesMutation) => void
 }
 
-export default function SeriesTransitionDialog({ seriesId, request, label, onClose, onDone }: Props) {
+export default function SeriesTransitionDialog({ seriesId, request, label, canAct, onClose, onDone }: Props) {
   const action = useSeriesAction()
   const [mode, setMode] = useState<SettingAiMode>('detected')
   const [tracking, setTracking] = useState(true)
   const load = useCallback(() => seriesApi.impact(seriesId, request), [seriesId, request])
-  const preview = useLoader(load)
+  const preview = useSeriesLoader(load)
   const impact = preview.data
   const meta = ACTIONS[request.action]
   const requiresReview = action.error !== null && seriesNeedsReview(action.error)
@@ -40,7 +41,7 @@ export default function SeriesTransitionDialog({ seriesId, request, label, onClo
     preview.reload()
   }
   const apply = () => {
-    if (!impact || previewInvalid || requiresReview) return
+    if (!impact || previewInvalid || requiresReview || (canAct && !canAct())) return
     const revision = impact.revision
     void action.run(async (): Promise<SeriesMutation> => {
       switch (request.action) {
@@ -62,10 +63,10 @@ export default function SeriesTransitionDialog({ seriesId, request, label, onClo
         case 'delete':
           return seriesApi.removeEntry(seriesId, request.entry_id, revision)
       }
-    }, (result) => onDone([...new Set([
+    }, (result) => { if (canAct && !canAct()) return; onDone([...new Set([
       ...impact.affected_books.map((book) => book.id),
       ...('project_id' in request ? [request.project_id] : []),
-    ])], result))
+    ])], result) })
   }
 
   const blockedDuringWrite = action.error instanceof ApiError && action.error.body?.code === 'series_setting_in_use'
@@ -77,7 +78,7 @@ export default function SeriesTransitionDialog({ seriesId, request, label, onClo
     okText={meta.title}
     cancelText="取消"
     confirmLoading={action.busy}
-    okButtonProps={{ disabled: previewInvalid || requiresReview || blockedDuringWrite, danger: request.action === 'delete' }}
+    okButtonProps={{ disabled: previewInvalid || requiresReview || blockedDuringWrite || (canAct !== undefined && !canAct()), danger: request.action === 'delete' }}
     closable={!action.busy}
     maskClosable={!action.busy}
     keyboard={!action.busy}

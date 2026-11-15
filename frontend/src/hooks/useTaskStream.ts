@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, errorMessage } from '../api/client'
+import { ApiError, captureProjectFailureForRequest, errorMessage, watchRequestGeneration, type CapturedProjectFailure } from '../api/client'
 import { isAbortError } from '../api/sse'
-import { subscribeTask, taskApi, type TaskEnd, type TaskStreamHandlers } from '../api/tasks'
+import { hasTaskIdentity, subscribeTask, taskApi, type TaskEnd, type TaskIdentity, type TaskStreamHandlers } from '../api/tasks'
 import type { ContinueEvent, Task } from '../api/types'
+import { useProjectStore } from '../stores/project'
 
 /**
  * follow 的结果：
@@ -28,25 +29,53 @@ export function useTaskStream() {
   const [continueInfo, setContinueInfo] = useState<ContinueEvent | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const controllerRef = useRef<AbortController | null>(null)
-  const taskIdRef = useRef<number | null>(null)
+  const taskIdRef = useRef<TaskIdentity | null>(null)
+  const projectRef = useRef<{ scope: CapturedProjectFailure } | null>(null)
 
-  useEffect(() => () => controllerRef.current?.abort(), [])
+  useEffect(() => {
+    const clear = () => {
+      projectRef.current = null
+      controllerRef.current?.abort()
+      controllerRef.current = null
+      taskIdRef.current = null
+      setTask(null); setText(''); setError(null); setContinueInfo(null); setRunning(false); setReconnecting(false)
+    }
+    const unsubscribe = useProjectStore.subscribe(() => {
+      const project = projectRef.current
+      if (!project || project.scope.isCurrent()) return
+      clear()
+    })
+    const generation = watchRequestGeneration(clear)
+    return () => { unsubscribe(); generation.dispose(); controllerRef.current?.abort() }
+  }, [])
 
   const follow = useCallback(async (initial: Task, extra?: TaskFollowExtra): Promise<TaskOutcome> => {
     controllerRef.current?.abort()
+    if (!hasTaskIdentity(initial)) {
+      controllerRef.current = null; projectRef.current = null; taskIdRef.current = null
+      setTask(null); setText(''); setContinueInfo(null); setRunning(false); setReconnecting(false)
+      const message = '任务身份不可确认，请刷新列表后重新打开。'
+      setError(message)
+      return { status: 'lost', message }
+    }
+    const identity = { id: initial.id, task_key: initial.task_key }
     const controller = new AbortController()
     controllerRef.current = controller
-    taskIdRef.current = initial.id
+    taskIdRef.current = identity
+    const projectId = initial.project_id
+    const projectFailure = typeof projectId === 'number' && Number.isSafeInteger(projectId) && projectId > 0
+      ? captureProjectFailureForRequest(`/projects/${projectId}/tasks`) : null
+    projectRef.current = projectFailure ? { scope: projectFailure } : null
     setTask(initial)
     setText('')
     setError(null)
     setContinueInfo(null)
     setReconnecting(false)
     setRunning(true)
-    const isCurrent = () => controllerRef.current === controller
+    const isCurrent = () => controllerRef.current === controller && (!projectFailure || projectFailure.isCurrent())
     try {
       const end = await subscribeTask(
-        initial.id,
+        identity,
         {
           onSnapshot: (t, snapshotText) => {
             if (!isCurrent()) return
@@ -100,8 +129,14 @@ export function useTaskStream() {
           onReconnect: () => {
             if (isCurrent()) setReconnecting(true)
           },
+          onProjectAccessDenied: () => {
+            if (!isCurrent()) return
+            taskIdRef.current = null
+            setTask(null); setText(''); setContinueInfo(null)
+          },
         },
         controller.signal,
+        { projectFailure },
       )
       if (!isCurrent()) return { status: 'detached' }
       if (end.task) setTask(end.task)
@@ -110,6 +145,10 @@ export function useTaskStream() {
       return end
     } catch (err) {
       if (isAbortError(err) || controller.signal.aborted || !isCurrent()) return { status: 'detached' }
+      if (err instanceof ApiError && [404, 409, 422].includes(err.status)) {
+        taskIdRef.current = null
+        setTask(null); setText(''); setContinueInfo(null)
+      }
       const message = errorMessage(err)
       setError(message)
       return { status: 'lost', message }
@@ -133,10 +172,10 @@ export function useTaskStream() {
    * 任务已结束（409）时静默——订阅会收到真实的终止事件；其他错误抛出。
    */
   const cancel = useCallback(async () => {
-    const id = taskIdRef.current
-    if (id === null) return
+    const identity = taskIdRef.current
+    if (identity === null) return
     try {
-      await taskApi.cancel(id)
+      await taskApi.cancel(identity)
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) return
       throw err

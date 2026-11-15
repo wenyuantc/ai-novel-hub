@@ -180,6 +180,7 @@ export default function CareersPanel() {
         existingCount={items.length}
         onClose={() => setWizardOpen(false)}
         onDone={() => reload()}
+        onRefresh={() => reload()}
       />)}
     </Card>
   )

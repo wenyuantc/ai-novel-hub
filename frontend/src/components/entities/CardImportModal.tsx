@@ -1,28 +1,30 @@
 import { InboxOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, List, Modal, Space, Tag, theme, Typography, Upload } from 'antd'
+import { useSyncExternalStore } from 'react'
+import { currentRequestGeneration, watchRequestGeneration } from '../../api/client'
 import type { CardPreview } from '../../api/types'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
-import { authorizationKey } from '../../utils/permissions'
 import CardDefinitionMappings from './CardDefinitionMappings'
 import CardImportEntities from './CardImportEntities'
 import CardImportResultView from './CardImportResultView'
 import CardReferenceMappings from './CardReferenceMappings'
+import { cardAccess } from './cardAccess'
 import { cardTagImportSummary, type CardTagSummary } from './cardImportMapping'
 import { useCardImport } from './useCardImport'
 
 interface Props { projectId: number; open: boolean; onClose: () => void; onImported: () => void }
+const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
 
 /** 保留旧版名称关联；新版字段和 AI 关联通过显式映射及相应目录版本确认。 */
 export default function CardImportModal(props: Props) {
   const user = useAuthStore((state) => state.user)
-  const { canEdit } = useProjectAccess(props.projectId)
+  const access = useProjectAccess(props.projectId)
+  const session = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
+  const cards = cardAccess(access.role, access.isCollaborator, access.canRead, access.canEdit)
   if (!props.open) return null
-  if (!user || !canEdit) return <Modal open title="导入卡片" onCancel={props.onClose} footer={<Button onClick={props.onClose}>关闭</Button>}>
-    <Alert type="info" showIcon message="当前为只读，不能导入卡片。" />
-  </Modal>
-  const identity = authorizationKey(user)
-  return <Inner key={`${props.projectId}:${user.id}:${identity}`} {...props} actorId={user.id} identity={identity} />
+  if (!user || !cards.canPreview) return null
+  return <Inner key={`${props.projectId}:${user.id}:${session}`} {...props} canImport={cards.canImport} />
 }
 
 function TagSnapshot({ items }: { items: CardTagSummary[] }) {
@@ -46,32 +48,35 @@ function PreviewSummary({ preview, title, tags, showAiRevision }: { preview: Car
   </Card>
 }
 
-function Inner({ projectId, onClose, onImported, actorId, identity }: Props & { actorId: number; identity: string }) {
+function Inner({ projectId, onClose, onImported, canImport }: Props & { canImport: boolean }) {
   const { token } = theme.useToken()
-  const { canEditNow } = useProjectAccess(projectId)
-  const { state, controller } = useCardImport(projectId, actorId, identity, onImported)
-  const busy = state.loading || state.importing
+  const { canReadNow, canEditNow } = useProjectAccess(projectId)
+  const { state, controller } = useCardImport(projectId, onImported)
+  const busy = state.loading || state.importing || state.accessUncertain
   const preview = state.reviewPreview ?? state.preview
   const version = state.metadata.version ?? 0
   const typed = version >= 4
   const tags = preview ? cardTagImportSummary(state.metadata, state.choices, preview) : []
-  return <Modal open title="导入卡片" width={820} onCancel={onClose} maskClosable={false} footer={null}
+  return <Modal open title={canImport ? '导入卡片' : '预览卡片'} width={820} onCancel={onClose} maskClosable={false} footer={null}
     closable={!state.importing} keyboard={!state.importing} destroyOnHidden>
     <Space direction="vertical" size={16} style={{ width: '100%', minWidth: 0 }}>
       {!state.result && <Upload.Dragger accept=".json,application/json" showUploadList={false} disabled={busy}
-        beforeUpload={(file) => { if (canEditNow()) void controller.selectFile(file); return false }}>
+        beforeUpload={(file) => { if (canReadNow()) void controller.selectFile(file); return false }}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p style={{ overflowWrap: 'anywhere' }}>{state.fileName ? `已选择：${state.fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
         <p style={{ color: token.colorTextTertiary }}>支持 ainovel.cards v1–v6，上限 2MB。</p>
       </Upload.Dragger>}
       {state.loading && !state.preview && <Typography.Text role="status">正在读取并校验卡片，请稍候……</Typography.Text>}
+      {!canImport && <Alert type="info" showIcon message="当前可以预览卡片；导入需要作品编辑权限。" />}
       {state.error && <Alert type="error" showIcon message={state.error} description={state.preview ? '文件与当前选择仍保留，未自动重提导入。' : undefined} />}
+      {state.accessUncertain && <Button loading={state.checkingAccess} onClick={() => void controller.recheckAccess()}>重新确认作品权限</Button>}
+      {state.data !== null && !state.preview && !state.accessUncertain && <Button loading={state.loading} onClick={() => void controller.refreshPreview()}>重新读取卡片预览</Button>}
       {state.reviewRequired && <Alert type="warning" showIcon message="请重新预览并比较后确认" description="原预览和版本仍保留。查看最新预览后，需要你明确采用；系统不会自动覆盖更新。" />}
       {state.needsPreview && !state.reviewRequired && <Alert type="info" showIcon message="处理方式或映射已改变，请更新预览后再确认。" />}
       {state.reviewPreview && state.preview && <>
         <PreviewSummary title="原预览" preview={state.preview} tags={cardTagImportSummary(state.metadata, state.choices, state.preview)} showAiRevision={version >= 6} />
         <PreviewSummary title="最新预览" preview={state.reviewPreview} tags={cardTagImportSummary(state.metadata, state.choices, state.reviewPreview)} showAiRevision={version >= 6} />
-        <Button disabled={busy} onClick={() => { if (canEditNow()) controller.acceptReview() }}>已核对，采用最新预览</Button>
+        <Button disabled={busy} onClick={() => { if (canReadNow()) controller.acceptReview() }}>已核对，采用最新预览</Button>
       </>}
       {preview && !state.result && <>
         {preview.warnings.map((warning, index) => <Alert key={index} type="warning" showIcon message={warning} />)}
@@ -86,9 +91,9 @@ function Inner({ projectId, onClose, onImported, actorId, identity }: Props & { 
           <CardReferenceMappings projectId={projectId} preview={preview} metadata={state.metadata} choices={state.choices} mappings={state.mappings.references} selected={state.selectedEntries} disabled={busy} onChange={controller.setReference} />
         </>}
         <Space wrap>
-          <Button icon={<ReloadOutlined />} loading={state.loading} disabled={state.importing} onClick={() => { if (canEditNow()) void controller.refreshPreview() }}>更新预览</Button>
-          <Button type="primary" loading={state.importing} disabled={busy || state.needsPreview || state.reviewRequired || !state.preview?.can_import}
-            onClick={() => { if (canEditNow()) void controller.confirm() }}>确认导入</Button>
+          <Button icon={<ReloadOutlined />} loading={state.loading} disabled={busy} onClick={() => { if (canReadNow()) void controller.refreshPreview() }}>更新预览</Button>
+          {canImport && <Button type="primary" loading={state.importing} disabled={busy || state.needsPreview || state.reviewRequired || !state.preview?.can_import}
+            onClick={() => { if (canEditNow()) void controller.confirm() }}>确认导入</Button>}
           <Button disabled={state.importing} onClick={onClose}>取消</Button>
         </Space>
       </>}

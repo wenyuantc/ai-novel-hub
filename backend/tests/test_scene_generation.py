@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.ai.providers import AIProviderError
 from app.models import ChapterAnalysis, Task
-from tests.helpers import Gate, create_ai_config, parse_sse, run_task, wait_task
+from tests.helpers import Gate, create_ai_config, parse_sse, run_task, task_params, wait_task
 from tests.test_scene_context import _policy
 from tests.test_scene_planning import planning_batch, scene_setup
 from tests.test_scene_progressions import _scene_change, _timeline
@@ -185,7 +185,8 @@ async def test_whole_chapter_failure_or_stale_context_never_commits_partial_scen
     assert response.status_code == 202, response.text
     await gate.wait_reached()
     if failure == "cancel":
-        assert (await client.post(f"/api/v1/tasks/{response.json()['id']}/cancel")).status_code == 200
+        cancel = await client.post(f"/api/v1/tasks/{response.json()['id']}/cancel", params=task_params(response.json()))
+        assert cancel.status_code == 200
     elif failure == "planning":
         changed = await planning_batch(
             client, base, url, [{"kind": "chapter", "id": chapter["id"]}], pov={"op": "clear"}
@@ -201,7 +202,7 @@ async def test_whole_chapter_failure_or_stale_context_never_commits_partial_scen
         )
         assert changed.status_code == 201, changed.text
     gate.release()
-    task = await wait_task(client, response.json()["id"])
+    task = await wait_task(client, response.json())
     assert task["status"] == ("cancelled" if failure == "cancel" else "failed"), task
     assert [row["content"] for row in await _contents(client, url)] == [row["content"] for row in before]
 
@@ -296,7 +297,7 @@ async def test_whole_edit_keeps_empty_scene_and_enqueues_exactly_one_full_analys
     assert [row["content"] for row in await _contents(client, url)] == ["首景整章修改", "", "末景整章修改"]
     analyses = (await client.get("/api/v1/tasks", params={"kind": "chapter.analyze"})).json()
     assert len(analyses) == 1
-    assert (await wait_task(client, analyses[0]["id"]))["status"] == "succeeded"
+    assert (await wait_task(client, analyses[0]))["status"] == "succeeded"
 
 
 async def test_scene_continuation_warning_only_keeps_current_primary_and_never_touches_next_scene(client, fake_llm):
@@ -404,7 +405,8 @@ async def test_explicit_retry_rechecks_stable_scene_and_new_revisions_but_keeps_
     assert changed.status_code == 200
     assert (await client.patch(f"/api/v1/skills/{skill['id']}", json={"body": "不能偷换的新工作流"})).status_code == 200
     fake_llm.push("显式重试成功")
-    retried, events = await run_task(client, await client.post(f"/api/v1/tasks/{task['id']}/retry"))
+    response = await client.post(f"/api/v1/tasks/{task['id']}/retry", params=task_params(task))
+    retried, events = await run_task(client, response)
     assert retried["status"] == "succeeded", events[-1]
     assert retried["scene_id"] == scenes[0]["id"] and retried["retry_of_id"] == task["id"]
     assert "原工作流必须保留" in _prompt(fake_llm) and "不能偷换的新工作流" not in _prompt(fake_llm)
@@ -420,7 +422,7 @@ async def test_explicit_retry_rechecks_stable_scene_and_new_revisions_but_keeps_
         },
     )
     assert deleted.status_code == 200, deleted.text
-    stale = await client.post(f"/api/v1/tasks/{failed['id']}/retry")
+    stale = await client.post(f"/api/v1/tasks/{failed['id']}/retry", params=task_params(failed))
     assert stale.status_code == 404 and stale.json()["detail"] == "场景不存在"
 
 
@@ -460,7 +462,7 @@ async def test_batch_skips_future_chapter_deleted_after_prior_commit_before_next
     assert persisted["content"] == "已提交的第一章" and persisted["status"] == "done"
     assert (await client.delete(f"{base}/chapters/{second['id']}")).status_code == 204
     gate.release()
-    task = await wait_task(client, response.json()["id"])
+    task = await wait_task(client, response.json())
     assert task["status"] == "succeeded", task
     assert [item["state"] for item in task["checkpoint"]["items"]] == ["done", "skipped_missing", "done"]
     assert (await client.get(f"{base}/chapters/{first['id']}")).json()["content"] == "已提交的第一章"

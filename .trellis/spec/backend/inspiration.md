@@ -122,6 +122,7 @@ async def convert / apply_preview / apply / from_project
 **应用到已有项目**：`GET /sessions/{id}/apply-preview?project_id=` → `[{field, label, current, proposed, default_checked}]`
 （只列会话里有值的字段：6 个步骤 + `premise`（想法）+ `target_words`（规模）；`default_checked` = 项目该字段为空）；
 `POST /sessions/{id}/apply {project_id, fields}` 只写勾选的字段，勾选了没有值的字段 → 400；会话状态不变，可反复应用。
+会话始终按本人隔离；目标作品预览要求 `content.read`，应用要求锁内 `content.edit`，因此已接受的查看者可预览、编辑者可应用，管理员按原人工权限判断。授权前不得 autoflush 调用方待写对象；写入按 User → 项目父行锁顺序重读成员权限。管理员写入使用 `project.update` 安全审计，同业务事务提交，不记录灵感正文。响应使用当前 actor 的 `ProjectOut` 投影。
 
 **从项目发起** `POST /sessions/from-project/{project_id}`：同一项目已有 active 会话 → 直接返回它；否则用项目非空字段预填为
 `decided / source=project`，`idea = premise`、`genre = 项目题材`，有 `target_words` 时预填 `suggest_scale`，`current` = 第一个 pending 步骤（都定了为 `scale`）。
@@ -131,7 +132,8 @@ async def convert / apply_preview / apply / from_project
 | 条件 | 结果 |
 |---|---|
 | 会话不存在或属于他人（所有 `/sessions/{id}...`） | 404 `灵感会话不存在` |
-| 项目不存在或属于他人（from-project / apply-preview / apply） | 404 `项目不存在` |
+| 项目不存在或无权访问（from-project / apply-preview / apply） | 404 `项目不存在` |
+| 查看者对共享作品执行 apply | 403；不得修改作品或提前 flush 其他待写对象 |
 | 未知步骤 / feedback > 500 / scale 越界 / note > 200 | 422 |
 | 定下的值为空、超长、类型标签超限 | 400 |
 | 没有 AI 配置 / Base URL 被拦截 | 400（不占锁） |
@@ -146,3 +148,4 @@ async def convert / apply_preview / apply / from_project
 连续 3 次非法（两个 `retry` + `error`、会话不变）、直接驱动 `run_generate` 在 Gate 处 `aclose()`（不落库、`fake.aborted == 1`）+ 同步骤 409 +
 释放后重试成功、`normalize_options`、规模建议边界（参数化）、转为项目（字段齐全、`wizard_progress.params`、409）、
 应用对比默认勾选与只写勾选字段、应用到他人项目 404、从项目预填与复用（填空不标 stale、换一批不带本步自己的值）、会话上限淘汰与 409、库里 state 损坏时 409 且列表 / 删除可用；`test_cross_user_isolation` 含灵感路由；`test_migrations.py::test_0014_inspiration`。
+`tests/test_collaboration_inspiration_manual.py` 验证独立会话与作品能力矩阵、本人隔离、管理员安全审计和拒绝前无 autoflush；`test_collaboration_inspiration_manual_postgresql.py` 验证撤权或降级先提交时，等待父行锁的旧应用不能写入。

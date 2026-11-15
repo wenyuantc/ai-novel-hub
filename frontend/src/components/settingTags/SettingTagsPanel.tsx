@@ -32,7 +32,7 @@ export default function SettingTagsPanel({ session, entry }: Props) {
 
   if (!canRead) return null
   const dirty = tagsDraftDirty(state)
-  const busy = state.saving || state.reviewing
+  const busy = state.saving || state.reviewing || state.accessUncertain
   const options = state.suggestions.filter((tag) => !state.draft.includes(tag)).map((value) => ({ label: value, value }))
   return (
     <section aria-labelledby={labelId} style={{ minWidth: 0, maxWidth: '100%', display: 'grid', gap: 16 }}>
@@ -43,8 +43,11 @@ export default function SettingTagsPanel({ session, entry }: Props) {
         </Typography.Paragraph>
       </div>
       {state.notice && <Alert type="info" showIcon message={state.notice} />}
-      {state.error && <Alert type="error" showIcon message={state.error} action={<Button size="small" onClick={() => void controller.refresh()} loading={state.loading} disabled={busy}>重试读取标签</Button>} />}
+      {state.error && <Alert type="error" showIcon message={state.error} action={state.accessUncertain
+        ? <Button size="small" onClick={() => void controller.recheckAccess()} loading={state.checkingAccess}>重新确认作品权限</Button>
+        : <Button size="small" onClick={() => void controller.refresh()} loading={state.loading} disabled={busy}>重试读取标签</Button>} />}
       {state.loading && !state.base && <Spin tip="正在读取整理标签"><div style={{ minHeight: 48 }} /></Spin>}
+      {!state.base && !state.loading && !state.error && <Button onClick={() => void controller.refresh()}>读取整理标签</Button>}
       {state.base && <>
         {!canEdit && <Alert type="info" showIcon message={dirty ? '当前为只读，未保存的标签草稿已保留。' : '当前为只读，可查看整理标签。'} />}
         <div style={{ minWidth: 0, display: 'grid', gap: 8 }}>
@@ -84,12 +87,12 @@ export default function SettingTagsPanel({ session, entry }: Props) {
             {state.latest && <div><Typography.Paragraph style={{ marginBottom: 4 }}>最新已读 · 版本 {state.latest.categories_revision}</Typography.Paragraph><Tags values={state.latest.setting_tags} /></div>}
             <div><Typography.Paragraph style={{ marginBottom: 4 }}>我的标签草稿</Typography.Paragraph><Tags values={[...state.draft, ...(state.search ? [state.search] : [])]} /></div>
             <Space wrap size={[8, 12]}>
-              <Button onClick={() => void controller.compare()} loading={state.reviewing} disabled={state.saving}>读取最新标签并对照</Button>
+              <Button onClick={() => void controller.compare()} loading={state.reviewing} disabled={busy}>读取最新标签并对照</Button>
               {canEdit && state.reviewed && <Button onClick={controller.acceptComparison} disabled={busy}>保留草稿，采用对照版本</Button>}
             </Space>
           </div>} />}
         {canEdit && <Space wrap size={[8, 16]}>
-          <Button type="primary" htmlType="button" loading={state.saving} disabled={state.loading || state.reviewing || state.reviewRequired || !dirty || !!state.draftError} onClick={() => void controller.save()}>保存整理标签</Button>
+          <Button type="primary" htmlType="button" loading={state.saving} disabled={state.loading || busy || state.reviewRequired || !dirty || !!state.draftError} onClick={() => void controller.save()}>保存整理标签</Button>
           <Button htmlType="button" disabled={busy || (!state.draft.length && !state.search)} onClick={() => controller.edit([])}>清空整理标签</Button>
           {dirty && <Typography.Text type="secondary">标签有未保存的修改</Typography.Text>}
         </Space>}

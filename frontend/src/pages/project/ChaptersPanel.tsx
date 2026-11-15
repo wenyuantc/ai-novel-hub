@@ -10,9 +10,9 @@ import { taskApi } from '../../api/tasks'
 import type { ChapterAnalysisState, ChapterBrief, ChapterStatus, Task } from '../../api/types'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useLoader } from '../../hooks/useLoader'
-import { useProjectStore } from '../../stores/project'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
-import { batchBannerState, queuedBatchChapterIds } from '../../utils/batchState'
+import { batchBannerState } from '../../utils/batchState'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
@@ -45,21 +45,23 @@ export default function ChaptersPanel() {
   const [creating, setCreating] = useState(false)
   const [form] = Form.useForm<{ title: string }>()
   const [batchOpen, setBatchOpen] = useState(false)
-  const [dismissedBatchId, setDismissedBatchId] = useState<number | null>(null)
+  const [dismissedBatchId, setDismissedBatchId] = useState<string | null>(null)
   const track = useTasksStore((s) => s.track)
   // 本项目未结束的批量（排队 / 运行中 / 待审核）以轮询的 store 为准；失败 / 中断的取最近一个批量任务
   const openBatch = useTasksStore((s) => s.active.find((t) => t.kind === 'chapter.batch' && t.project_id === pid))
   const latestBatchLoader = useCallback(() => {
     void tasksVersion // 有任务结束 / 本地操作时重新加载
-    return canUseAI ? taskApi.list({ project_id: pid, kind: 'chapter.batch', limit: 1 }).then((list) => list[0] ?? null) : Promise.resolve(null)
+    const scope = captureProjectScope(pid)
+    return canUseAI && isProjectScopeCurrent(scope, 'canUseAI')
+      ? taskApi.list({ project_id: pid, kind: 'chapter.batch', limit: 1 }).then((list) => isProjectScopeCurrent(scope, 'canUseAI') ? list[0] ?? null : null)
+      : Promise.resolve(null)
   }, [pid, tasksVersion, canUseAI])
   const { data: latestBatch = null } = useLoader(latestBatchLoader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const batchTask: Task | null =
     !canUseAI ? null : openBatch ??
-    (latestBatch && batchBannerState(latestBatch) === 'resumable' && latestBatch.id !== dismissedBatchId
+    (latestBatch && batchBannerState(latestBatch) === 'resumable' && `${latestBatch.id}:${latestBatch.task_key}` !== dismissedBatchId
       ? latestBatch
       : null)
-  const queuedIds = useMemo(() => queuedBatchChapterIds(openBatch), [openBatch])
 
   const totalWords = chapters.reduce((s, c) => s + c.word_count, 0)
 
@@ -124,13 +126,13 @@ export default function ChaptersPanel() {
       {batchTask && (
         <Suspense fallback={null}>
           <BatchBanner
-            key={batchTask.id}
+            key={`${batchTask.id}:${batchTask.task_key}`}
             task={batchTask}
             onChaptersChanged={() => {
               reload()
               void refreshProject()
             }}
-            onDismiss={() => setDismissedBatchId(batchTask.id)}
+            onDismiss={() => setDismissedBatchId(`${batchTask.id}:${batchTask.task_key}`)}
           />
         </Suspense>
       )}
@@ -181,7 +183,6 @@ export default function ChaptersPanel() {
                   </Typography.Text>
                   <Space size={4} wrap style={{ marginTop: 4 }}>
                     <Tag color={CHAPTER_STATUS[c.status].color}>{CHAPTER_STATUS[c.status].label}</Tag>
-                    {c.status !== 'generating' && queuedIds.has(c.id) && <Tag color="blue">排队批量</Tag>}
                     {st && <Tag color={ANALYSIS_STATUS[st.status].color}>{ANALYSIS_STATUS[st.status].label}</Tag>}
                     {st?.scores && <Typography.Text type="secondary">{formatScore(st.scores)} 分</Typography.Text>}
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -214,10 +215,9 @@ export default function ChaptersPanel() {
               title: '状态',
               dataIndex: 'status',
               width: 150,
-              render: (s: ChapterStatus, c) => (
+              render: (s: ChapterStatus) => (
                 <Space size={4} wrap>
                   <Tag color={CHAPTER_STATUS[s].color}>{CHAPTER_STATUS[s].label}</Tag>
-                  {s !== 'generating' && queuedIds.has(c.id) && <Tag color="blue">排队批量</Tag>}
                 </Space>
               ),
             },

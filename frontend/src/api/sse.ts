@@ -1,6 +1,6 @@
 // 基于 fetch + ReadableStream 的 SSE 客户端（局部改写为 POST + JSON body；任务订阅为 GET，同样走 fetch 以统一错误处理与 401）
 
-import { ApiError, buildUrl, handleErrorResponse, watchRequestGeneration } from './client'
+import { ApiError, buildUrl, captureProjectFailureForRequest, handleErrorResponse, watchRequestGeneration, type CapturedProjectFailure } from './client'
 
 export interface SSEMessage {
   event: string
@@ -94,10 +94,13 @@ async function readSSE(
   handlers: StreamHandlers,
   signal?: AbortSignal,
   onActivity?: () => void,
+  capturedProject?: CapturedProjectFailure | null,
 ): Promise<void> {
   const controller = new AbortController()
   const abort = () => controller.abort()
   const watch = watchRequestGeneration(abort)
+  const method = init.method as 'GET' | 'POST' | undefined
+  const onProjectFailure = capturedProject === undefined ? captureProjectFailureForRequest(path, method) : capturedProject
   signal?.addEventListener('abort', abort, { once: true })
   if (signal?.aborted) abort()
   const assertActive = () => {
@@ -114,7 +117,7 @@ async function readSSE(
       throw new ApiError(0, '网络错误，无法连接服务器')
     }
     assertActive()
-    if (!resp.ok) await handleErrorResponse(path, resp, watch.generation, init.method as 'GET' | 'POST' | undefined)
+    if (!resp.ok) await handleErrorResponse(path, resp, watch.generation, method, onProjectFailure)
     const contentType = resp.headers.get('content-type') ?? ''
     if (!contentType.includes('text/event-stream') || !resp.body) {
       throw new ApiError(resp.status, '服务器未返回流式响应')
@@ -177,7 +180,7 @@ export function postSSE(path: string, body: unknown, handlers: StreamHandlers, s
 const STREAM_IDLE_TIMEOUT_MS = 45_000
 
 /** GET 任务订阅：响应头或正文持续无数据时断开，由 subscribeTask 按原退避策略重连。 */
-export async function getSSE(path: string, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
+export async function getSSE(path: string, handlers: StreamHandlers, signal?: AbortSignal, projectFailure?: CapturedProjectFailure | null): Promise<void> {
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   const interrupted = new Promise<never>((_, reject) => {
@@ -193,7 +196,7 @@ export async function getSSE(path: string, handlers: StreamHandlers, signal?: Ab
     if (signal?.aborted) abort()
     else resetTimeout()
     await Promise.race([
-      readSSE(path, { method: 'GET', headers: { Accept: 'text/event-stream' } }, handlers, controller.signal, resetTimeout),
+      readSSE(path, { method: 'GET', headers: { Accept: 'text/event-stream' } }, handlers, controller.signal, resetTimeout, projectFailure),
       interrupted,
     ])
   } finally {

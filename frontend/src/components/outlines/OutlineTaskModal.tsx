@@ -2,11 +2,12 @@ import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Space, S
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../api/client'
 import { keptPlans, outlineProApi } from '../../api/outlines'
-import { queueLabel, TASK_KIND_LABELS, taskApi } from '../../api/tasks'
+import { hasTaskIdentity, queueLabel, TASK_KIND_LABELS, taskApi } from '../../api/tasks'
 import type { OutlineDetail, Task } from '../../api/types'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { useTaskStream } from '../../hooks/useTaskStream'
 import { useTasksStore } from '../../stores/tasks'
+import { captureProjectScope, isProjectScopeCurrent } from '../../stores/project'
 import AIConfigSelect from '../AIConfigSelect'
 import { TASK_RESULT_VIEWERS } from '../entities/taskResultViewers'
 import StreamOutput from '../StreamOutput'
@@ -34,12 +35,11 @@ interface FormValues {
 
 /**
  * 大纲 AI 任务弹窗（续写 / 展开）：填写参数 → 创建后台任务并订阅 → 完成后展示注册表中的可编辑预览 → 确认采纳。
- * 运行中可以关闭（任务在后台继续，完成后可在任务面板「查看结果」）；打开时接上活动任务：续写按 project + kind，
- * 展开再按 TaskOut.outline_id 区分大纲。
+ * 运行中可以关闭（任务在后台继续，完成后可在任务面板「查看结果」）；无原大纲实例证明的展开任务不自动恢复。
  */
 export default function OutlineTaskModal(props: Props) {
   if (!props.open) return null
-  return <Inner {...props} />
+  return <Inner key={`${props.projectId}:${props.kind}:${props.outline?.id ?? ''}`} {...props} />
 }
 
 function Inner({ projectId, kind, onClose, outline, onSaved }: Props) {
@@ -59,8 +59,11 @@ function Inner({ projectId, kind, onClose, outline, onSaved }: Props) {
   const newVolume = Form.useWatch('new_volume', form)
 
   const followTask = async (t: Task) => {
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI') || !hasTaskIdentity(t)) return
     setResult(undefined)
     const outcome = await stream.follow(t)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
     if (outcome.status === 'succeeded') setResult(outcome.result)
     else if (outcome.status === 'cancelled') message.info('已停止，未写入任何数据')
   }
@@ -70,13 +73,15 @@ function Inner({ projectId, kind, onClose, outline, onSaved }: Props) {
   })
 
   useEffect(() => {
-    if (kind === 'outline.expand' && outlineId === undefined) return
+    if (kind === 'outline.expand') return
     let alive = true
+    const scope = captureProjectScope(projectId)
     taskApi
-      .list({ project_id: projectId, kind, active: true, limit: kind === 'outline.expand' ? 50 : 1 })
+      .list({ project_id: projectId, kind, active: true, limit: 1 })
       .then((list) => {
-        const found = kind === 'outline.expand' ? list.find((t) => t.outline_id === outlineId) : list[0]
-        if (alive && found) void followRef.current(found)
+        const found = list[0]
+        if (alive && found && hasTaskIdentity(found) && found.project_id === projectId && found.kind === kind
+          && isProjectScopeCurrent(scope, 'canUseAI')) void followRef.current(found)
       })
       .catch(() => {
         // 查询失败按无活动任务处理
@@ -87,6 +92,8 @@ function Inner({ projectId, kind, onClose, outline, onSaved }: Props) {
   }, [projectId, kind, outlineId])
 
   const handleStart = async () => {
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
     const v = await form.validateFields()
     setStarting(true)
     let created: Task
@@ -106,11 +113,13 @@ function Inner({ projectId, kind, onClose, outline, onSaved }: Props) {
         })
       }
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope, 'canUseAI')) message.error(errorMessage(err))
       setStarting(false)
       return
     }
     setStarting(false)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
+    if (!hasTaskIdentity(created)) { message.warning('任务身份不可确认，请刷新任务列表。'); return }
     trackTask(created)
     await followTask(created)
   }

@@ -10,9 +10,10 @@ from copy import deepcopy
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError
+from app.core.errors import AppError, UnauthorizedError
 from app.models import AdminAuditLog, ChapterVersion, Project, Skill, User
 from app.schemas.audit import AuditAction, AuditSummary, AuditTargetType, AuditValueChange, AuditVersionRef
 
@@ -47,6 +48,12 @@ ERROR_MESSAGES = {
 
 def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class _SafeSerializationFailure(Exception):
+    """只保留供 Agent 识别的序列化冲突码，不持有原始数据库异常。"""
+
+    sqlstate = "40001"
 
 
 class AuditOperation:
@@ -86,31 +93,51 @@ class AuditOperation:
     async def __aenter__(self):
         if not self.enabled:
             return self
-        actor = await self.db.get(User, self.actor_id) if self.actor_id is not None else None
-        from app.services.authorization_service import snapshot
+        try:
+            # 此时业务权限和父行屏障尚未确认，所有初始化查询均不能 flush 调用方的待写实体。
+            with self.db.no_autoflush:
+                actor = await self.db.get(User, self.actor_id) if self.actor_id is not None else None
+                from app.services.authorization_service import snapshot
 
-        management = await snapshot(self.db, actor.id) if actor is not None else None
-        self.enabled = self.system_expiry or self.bootstrap or bool(
-            management and management.is_active and management.is_management_account
-        )
-        if not self.enabled:
-            return self
-        self.values.update(
-            actor_user_id=actor.id if actor is not None else None,
-            actor_username=actor.username if actor is not None else "管理员引导" if self.bootstrap else "系统自动清理",
-        )
-        project_id = self.values.get("project_id")
-        if project_id is not None:
-            project = await self.db.get(Project, project_id)
-            if project is not None:
-                if actor is not None and project.user_id == actor.id and not self.include_own_project:
-                    self.enabled = False
-                else:
-                    self.values.update(project_title=project.title, owner_user_id=project.user_id)
-                    self.values["owner_username"] = await self.db.scalar(
-                        select(User.username).where(User.id == project.user_id)
-                    )
-        return self
+                management = await snapshot(self.db, actor.id) if actor is not None else None
+                self.enabled = self.system_expiry or self.bootstrap or bool(
+                    management and management.is_active and management.is_management_account
+                )
+                if not self.enabled:
+                    return self
+                self.values.update(
+                    actor_user_id=actor.id if actor is not None else None,
+                    actor_username=(
+                        actor.username if actor is not None else "管理员引导" if self.bootstrap else "系统自动清理"
+                    ),
+                )
+                project_id = self.values.get("project_id")
+                if project_id is not None:
+                    project = await self.db.get(Project, project_id)
+                    if project is not None:
+                        if actor is not None and project.user_id == actor.id and not self.include_own_project:
+                            self.enabled = False
+                        else:
+                            self.values.update(project_title=project.title, owner_user_id=project.user_id)
+                            self.values["owner_username"] = await self.db.scalar(
+                                select(User.username).where(User.id == project.user_id)
+                            )
+                return self
+        except AppError:
+            raise
+        except Exception as exc:
+            # __aenter__ 失败不会调用 __aexit__。不能把 SQL 或参数交给上层的 traceback logger。
+            original = exc.orig if isinstance(exc, DBAPIError) else None
+            sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+            if sqlstate == "40001":
+                # Agent 依赖 DBAPIError + SQLSTATE 处理可重试的序列化冲突；只重建无敏感数据的异常。
+                failure = DBAPIError(None, None, _SafeSerializationFailure("事务序列化冲突"), hide_parameters=True)
+            else:
+                logger.error("管理员审计初始化失败 operation=%s", self.operation_id)
+                failure = AuditOperationError("服务器内部错误")
+            del original, sqlstate
+        # 离开 except 后抛出，避免 __context__ 持有原始数据库异常。
+        raise failure
 
     def target(self, obj, *, label: str | None = None):
         if not self.enabled:
@@ -202,6 +229,30 @@ class AuditOperation:
             error_message=ERROR_MESSAGES.get(code),
         )
 
+    def _failure_event(self, exc: BaseException | None) -> AdminAuditLog:
+        code = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict"}.get(
+            exc.status_code if isinstance(exc, AppError) else 500, "system_error"
+        )
+        if isinstance(exc, AppError) and (exc.extra or {}).get("code") in ERROR_MESSAGES:
+            code = exc.extra["code"]
+        # 失败不把未提交 after 值当成事实；原摘要仍供尚未结束的外层事务使用。
+        summary, version_ref = self.summary, self.version_ref
+        try:
+            if self.values["action"] == "audit.cleanup":
+                self.summary = AuditSummary(**{
+                    key: getattr(summary, key) for key in ("from_at", "to_at", "high_water_id", "expected_count")
+                })
+            elif self.values["action"] == "task.cancel_request":
+                self.summary = AuditSummary(**{
+                    key: getattr(summary, key) for key in ("task_key", "task_kind", "cancel_reason")
+                })
+            else:
+                self.summary = AuditSummary()
+            self.version_ref = None
+            return self._event("failure", code=code)
+        finally:
+            self.summary, self.version_ref = summary, version_ref
+
     async def commit(self, commit_fn=None, *, flush_fn=None):
         if self.enabled:
             self._finalize()
@@ -217,18 +268,48 @@ class AuditOperation:
             await self.db.commit()
         else:
             await commit_fn(self.db)
-        self.committed = True  # 必须在任何 refresh/输出投影之前设置。
+        scope = getattr(self.db, "_agent_audit_scope", None)
+        if scope is not None and self.enabled:
+            from app.services.agent.transactions import AgentAuditFailure
+
+            # 代理的 commit 只是 flush；预览将丢弃成功，执行须等待真正的根事务提交。
+            scope.coordinator.stage(AgentAuditFailure.from_event(self._failure_event(None)), mode=scope.mode)
+        else:
+            self.committed = True  # 必须在任何 refresh/输出投影之前设置。
 
     def _propagate(self, exc):
         if isinstance(exc, AppError) or not isinstance(exc, Exception):
             return False
+        original = exc.orig if isinstance(exc, DBAPIError) else None
+        if getattr(original, "sqlstate", None) == "40001" or getattr(original, "pgcode", None) == "40001":
+            # 保留可辨识的序列化冲突，但 SQL、参数和原异常链不得传给 Agent。
+            safe = DBAPIError(None, None, _SafeSerializationFailure("事务序列化冲突"), hide_parameters=True)
+            try:
+                raise safe from None
+            except DBAPIError as sanitized:
+                sanitized.__context__ = None
+                raise
         # 不把原始 SQLAlchemy 异常（其中可能有正文/密码 SQL 参数）交给全局 traceback logger。
         logger.error("管理员操作发生系统错误 operation=%s committed=%s", self.operation_id, self.committed)
-        raise AuditOperationError("服务器内部错误") from None
+        try:
+            raise AuditOperationError("服务器内部错误") from None
+        except AuditOperationError as safe:
+            safe.__context__ = None
+            raise
 
     async def __aexit__(self, exc_type, exc, tb):
         if exc is None or not self.enabled:
             return False
+        scope = getattr(self.db, "_agent_audit_scope", None)
+        if scope is not None:
+            from app.services.agent.transactions import AgentAuditFailure
+
+            if isinstance(exc, UnauthorizedError):
+                scope.coordinator.discard(self.operation_id)
+                return False
+            # 不能在 SAVEPOINT 内查询、提交或 flush 失败审计；由根事务协调器接手。
+            scope.coordinator.fail(AgentAuditFailure.from_event(self._failure_event(exc)))
+            return self._propagate(exc)
         if self.committed:
             return self._propagate(exc)
         try:
@@ -238,27 +319,7 @@ class AuditOperation:
                 select(AdminAuditLog.id).where(AdminAuditLog.operation_id == self.operation_id)
             )
             if exists is None:
-                code = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict"}.get(
-                    exc.status_code if isinstance(exc, AppError) else 500, "system_error"
-                )
-                if isinstance(exc, AppError) and (exc.extra or {}).get("code") in ERROR_MESSAGES:
-                    code = exc.extra["code"]
-                # 失败不把未提交 after 值当成事实；清理只保留已校验的范围和计数。
-                if self.values["action"] == "audit.cleanup":
-                    self.summary = AuditSummary(
-                        **{
-                            key: getattr(self.summary, key)
-                            for key in ("from_at", "to_at", "high_water_id", "expected_count")
-                        }
-                    )
-                elif self.values["action"] == "task.cancel_request":
-                    self.summary = AuditSummary(**{
-                        key: getattr(self.summary, key) for key in ("task_key", "task_kind", "cancel_reason")
-                    })
-                else:
-                    self.summary = AuditSummary()
-                self.version_ref = None
-                self.db.add(self._event("failure", code=code))
+                self.db.add(self._failure_event(exc))
                 await self.db.commit()
             else:
                 await self.db.rollback()

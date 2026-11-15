@@ -61,7 +61,7 @@ const PlanningMergeModal = lazy(() => import('../../components/planning/Planning
  */
 export default function OutlinesPanel() {
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
+  const { canUseAI, canEdit, canExport, canEditNow, canExportNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
@@ -236,9 +236,11 @@ export default function OutlinesPanel() {
   }
 
   const handleExport = async () => {
+    if (!canExportNow()) return
     setExporting(true)
     try {
       const fileData = await outlineProApi.export(pid)
+      if (!canExportNow()) return
       const name = outlineFilename(projectTitle)
       downloadJson(fileData, name)
       message.success(`已导出：${name}`)
@@ -262,10 +264,11 @@ export default function OutlinesPanel() {
           {canUseAI && (<Button icon={<RobotOutlined />} onClick={() => setTaskKind('outline.continue')}>
             AI 续写
           </Button>)}
-          {canUseAI && (<Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+          {/* 导入 / 导出不调用 AI：后端分别按 content.edit / export 校验 */}
+          {canEdit && (<Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
             导入
           </Button>)}
-          {canUseAI && (<Button icon={<DownloadOutlined />} loading={exporting} disabled={outlines.length === 0} onClick={() => void handleExport()}>
+          {canExport && (<Button icon={<DownloadOutlined />} loading={exporting} disabled={outlines.length === 0} onClick={() => void handleExport()}>
             导出
           </Button>)}
           <Button icon={<HistoryOutlined />} onClick={() => setSnapshotsOpen(true)}>
@@ -297,7 +300,7 @@ export default function OutlinesPanel() {
         </Space>
         <Spin spinning={loading}>
           {outlines.length === 0 ? (
-            <Empty description={canUseAI ? '暂无大纲，可手动新增、导入或使用 AI 生成' : '暂无大纲，可手动新增'} />
+            <Empty description={canUseAI ? '暂无大纲，可手动新增、导入或使用 AI 生成' : canEdit ? '暂无大纲，可手动新增或导入' : '暂无大纲'} />
           ) : (
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
               {groups.map((g) => (
@@ -491,6 +494,10 @@ export default function OutlinesPanel() {
           setSelected([])
           reload()
         }}
+        onRefresh={() => {
+          setSelected([])
+          reload()
+        }}
       />)}
       {canUseAI && (<OutlineTaskModal
         projectId={pid}
@@ -509,7 +516,7 @@ export default function OutlinesPanel() {
           afterChange()
         }}
       />)}
-      {canUseAI && (<OutlineImportModal
+      {canEdit && (<OutlineImportModal
         projectId={pid}
         open={importOpen}
         existingCount={outlines.length}

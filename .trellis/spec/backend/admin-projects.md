@@ -51,7 +51,7 @@ async def list_projects(db, *, q, owner_user_id, status, page, page_size) -> Adm
 - 共享的 `story_service` 入口默认严格，仅人工路由显式选择 `manage=True`；不能让 AI 等调用者随人工 CRUD 一起获得访问权限。
 - AI、智能体、任务、生成日志提示词、私人风格/模板/Skill/MCP、模型配置、平台 Key、阅读进度、导入导出/备份、知识库上传/重建/向量检索保持原有归属限制。
 - 跨用户项目 PATCH 不接受 `style`、`default_style_id`、`auto_analyze`；章节 PATCH 不接受 `style_id`。普通人工保存省略这些字段，保留已有引用，不绑定管理员的私人资源。
-- 剧情记忆 API 的 `_enqueue_vectors` 调用前检查 `memory_service.may_enqueue_vectors`：管理他人内容时不创建所有者向量任务。业务 service 仍更新关键词检索块、失效旧向量；自动记忆不可直接编辑正文/删除的原规则继续生效。
+- 剧情记忆 API 的 `_enqueue_vectors` 只对作者本人（全书补空向量）或已获作者模型授权的 accepted editor（只向量化本次条目，E6-c）派生：管理他人内容时不创建所有者向量任务（原 `memory_service.may_enqueue_vectors` 无调用方，E6-d 删除）。业务 service 仍更新关键词检索块、失效旧向量；自动记忆不可直接编辑正文/删除的原规则继续生效。
 - 章节修改/恢复仍遵守生成中状态、字数、版本和关联编号规则。写入口显式请求父项目生命周期锁，不能仅凭先前读取授权后无锁提交。普通作品DELETE改为停止目标任务执行链后移入回收站，保留30天；只有管理员purge或系统到期清理才物理级联目标数据，不删除用户级配置。已发出的外部模型请求不能通过删除撤回，管理员不因此获得通用他人任务操作权。
 
 ### 前端工作区

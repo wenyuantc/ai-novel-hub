@@ -34,8 +34,9 @@
 ### 身份、事务与旧入口
 
 - `PlanningSource={kind:chapter|plan|scene|detached,id}`；未建章细纲按卷／章纲／seq 展示，不能把其显示位置当成实际章号。默认章粒度中已建章细纲只展示对应章一行；scene粒度只展示真实活动场景。
-- 写入先通过 `get_manageable_project(..., lock=True, permission="projects.edit")` 和项目回收站屏障；持锁核验所有目标及引用，再在同一事务以 `planning_revision == expected_revision` 原子递增。任何目标失败整批回滚。
+- 人工写入先通过 `require_project(..., "content.edit", for_update=True)` 和项目回收站屏障；持锁重验协作与管理员能力并核验所有目标及引用，再在同一事务以 `planning_revision == expected_revision` 原子递增。任何目标失败整批回滚。只读人工入口校验 `content.read`；AI 上下文与 Agent 继续使用原有独立授权，不因人工入口扩权。大纲 AI 续写／展开（E4-g3a）按 `ai.use` 与原 grant 独立受控，只产出草稿、不写规划；其章纲读取按作品过滤，草稿采纳仍走本节的 `content.edit` 人工写入（见 [outline.md](./outline.md)）。
 - 所有旧入口影响来源身份或角色权威时调用 `planning_lifecycle`：创建／修改／建章／删章／删细纲／改纲／重新展开／向导覆盖／导入替换／恢复／设定真删除。辅助函数只 flush，由原有服务拥有 commit。`bump_revision` 必须使用 `no_autoflush`，不能提前提交调用方待写实体，绕过版本冲突与审计的专用flush边界。
+- 矩阵投影、规划来源解析和按章节读取细纲必须同时核对细纲本身与所属大纲的作品；章节异常指向别书的细纲或大纲时，投影隐藏对应 ID，不能物化为规划来源。`detach_outlines` 在调用方持有作品锁时预检即将删除的大纲及其细纲：其他作品的细纲、章节或规划单元若引用它们，返回通用 409 `outline_reference_conflict`，不暴露他书信息，也不清理他书数据。单纲删除、覆盖导入、快照恢复及向导覆盖共用此预检；`detach_sources` 也对即将删除的细纲检查其他作品的章节和规划单元引用。细纲同步若须删除空章，先调用章节删除隔离预检。失败时包括此前暂存快照在内的事务须整体回滚。
 - 已建章以 `ChapterCharacter` 为角色关联权威，`ChapterPlan.character_ids` 是镜像；未建章使用 plan 的 `character_ids`。首次建章合并双方角色；以后任何入口修改都同步，不得保留两套独立事实。
 - 章层来源消失时保存最后位置和 `detached_character_ids`（空数组也是有效作者选择）；节点和交汇继续跟随 unit。scene层保留本地角色join，不复制章层detached角色副本。双方已有实质规划时先报合并冲突；空单元可自动退役，不能静默覆盖有内容单元。
 - 显式改挂／合并递增 `binding_epoch`；正常建章／自动脱离不冒充新的作者意图。普通 API 和旧快照不能复活 retired 单元。
@@ -45,6 +46,8 @@
 ### 设定、矩阵与交织
 
 - `0039`增加`source_level=chapter|scene`、唯一可空`scene_id`及七项`inherit|override`模式和`planning_unit_characters`。scene层不同时绑定chapter/plan；inactive来源保留身份，在待关联中展示，物理失联后不能跨章认领。
+- 场景规划的 POV、标签和各类条目关联在投影 `raw`／`effective` 或捕获结构快照前，须核验目标与规划单元属于同一作品；关系引用还须指向关系时间线。异常跨作品或失效关联返回通用 409 `scene_reference_invalid`，不返回目标 ID，也不静默删改原意图。
+- 读取时刷新 `PlanningUnit` 必须保留调用方尚未提交的普通字段，不能因 `populate_existing` 抹掉草稿；来源身份、项目或绑定代次已有未提交修改时先返回 409，保留待写值。场景 POV 的内存待写值也须按其目标作品校验，不得仅检查数据库旧值。
 - 场景`ScenePlanningOut.raw`保存模式／本地值，`effective`逐项解析本章默认并带`sources`。明确空覆盖不同于继承。场景角色不反写章cast。batch写scene必须带`expected_content_revisions`，同章多目标只递增一次内容版本；完整继承／引用合同见[场景](./scenes.md)。
 - 标签被场景本地或结构历史引用时删除返回409`planning_tag_in_use`并列来源；不能删除标签后留下不可导入的结构历史。没有Scene依赖的旧章标签仍可删除。
 - 引用为判别联合：`{kind:character|world|organization|career,id}` 或 `{kind:relationship,timeline_id}`。world 覆盖全部现有分类；关系必须使用 `setting_timelines.id` 且 `subject_kind=relationship`，不能用当前 `relationships.id` 替代。隐藏或尚无当前载体的关系仍有稳定引用。
@@ -82,6 +85,8 @@
 | 可见但无写权限、回收站写屏障 | 沿用项目403／生命周期错误 |
 | 旧项目版本 | 409 `stale_planning_revision`，带 `current_revision` |
 | 来源已被重新关联 | 409 `planning_source_changed` |
+| 删除的大纲存在异常跨作品引用 | 409 `outline_reference_conflict`，不改任一作品 |
+| 场景规划包含异常跨作品关联 | 409 `scene_reference_invalid`，不暴露他书 ID 或改变规划 |
 | 两个来源都有独立规划 | 409 `planning_merge_conflict`，带双方 ID／版本／节点冲突信息 |
 | 支线仍被交汇引用 | 409，列出阻止删除的事件信息 |
 | 预览读取中规划变更 | 409 `planning_context_changed` |
@@ -100,6 +105,8 @@
 - `test_planning_lifecycle.py`：建章和冲突、全旧写入口、cast权威、ID复用／epoch／retired、快照、v3完整往返、effects作者编辑与恢复顺序。
 - `test_planning_context.py`：捕获真实FakeLLM messages，覆盖未来隔离、全部引用、关系历史、只有事件、五类局部、批量／续写、旧覆盖、预算。
 - `test_planning_readonly.py` 以SQLAlchemy before_flush屏障核验所有只读入口；`test_planning_access.py`覆盖22条路由的跨作品隔离和只读权限。
+- `test_collaboration_planning_access.py` 覆盖异作品细纲及章节投影；`test_collaboration_planning_foreign_cascades.py` 在 SQLite 覆盖四种删纲／替换入口、细纲同步、各类跨作品引用及事务回滚。`test_collaboration_planning_postgresql.py` 在真实 PostgreSQL 验证覆盖导入、细纲同步的异作品引用及协作撤权竞争；不把 SQLite 的向导和快照案例称为 PostgreSQL 验证。
+- `test_collaboration_scene_planning_isolation.py` 覆盖七种异常场景规划引用及快照捕获；PostgreSQL 验证只覆盖跨作品 POV 一例。
 - 前端 `api/planning.test.ts`／`utils/planning.test.ts`：请求编码、DELETE版本响应、冲突提取、引用与位置语义。
 - 真实PostgreSQL验证fresh迁移、同版本并发只成功一次、整作品交汇级联、快照恢复序列不回退；SQLite不能代替这些断言。
 - 浏览器验证矩阵→批量→建章→AI预览、两页冲突草稿、交汇管理、双轴／文本表、只读／键盘／375px／明暗主题。

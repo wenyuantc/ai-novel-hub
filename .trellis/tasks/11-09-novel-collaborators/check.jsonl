@@ -1,0 +1,30 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"核对新表外键、CASCADE 与迁移降级拒绝是否符合约定"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"核对 403/404 响应包与错误码不泄露资源存在性"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"核对管理员旁路、撤销并发与配额归属未被破坏"}
+{"file":".trellis/spec/backend/series-settings.md","reason":"核对系列协作未绕过引用预检与共享字段传播规则"}
+{"file":".trellis/spec/backend/setting-ai-visibility.md","reason":"核对真实模型出站与权限撤销的锁顺序和代次"}
+{"file":".trellis/spec/backend/retrieval.md","reason":"核对协作者不越权调用作者模型或覆盖作品共享向量"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"核对协作表排除、私人生成记录过滤、旧备份和版本日志引用"}
+{"file":".trellis/spec/backend/admin-projects.md","reason":"核对严格作者能力与管理员人工权限未被协作扩权"}
+{"file":".trellis/spec/backend/agent.md","reason":"核对会话、工具、任务恢复和生成日志按真实触发者隔离"}
+{"file":".trellis/spec/backend/recycle-bin.md","reason":"核对已删除/删除中作品对协作者不可见"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"对照门禁与禁止模式审查改动"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"核对前端类型与后端 schema 一一对应"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"对照前端门禁与评审清单验收"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-a-route-inventory.md", "reason": "复核操作清单及既有回归基线"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-c-implementation.md", "reason": "阶段 C 的能力与测试边界，供独立复核"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-d-story.md", "reason": "核对已迁移的人工入口及暂缓范围"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-d-planning.md", "reason": "核对规划、资料、分析的权限与隐私边界"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-d-content.md", "reason": "复核章节、阅读、导出及未完成 AI 边界"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-chapter-ai-map.md", "reason": "复核章节 AI 的发送、撤权、风格、向量和受限清理"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-agent-transactions.md", "reason": "复核 Agent 的认证、保存点和审计事实"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-retrieval-map.md", "reason": "复核共享向量的配置空间、批次写入及私人状态投影"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-chapter-claim-design.md", "reason": "复核章节保存和清理的任务及逐次抢占代次"}
+{"file": ".trellis/spec/backend/project-cover.md", "reason": "封面人工权限、协作模型来源和真实发送边界"}
+{"file": ".trellis/spec/backend/skills-mcp.md", "reason": "MCP 提案和外部副作用的既有确认、恢复及网络边界"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-a-reconciliation.md", "reason": "完整路由静态对账及尚需动态核验的范围"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-remaining-integration-map.md", "reason": "E1–E7 实际调用链、未完成接线和 PostgreSQL 验证清单；以最终代码为准"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-lifecycle-receipt-review.md", "reason": "未知提交收据和用户/作品删除的失败关闭边界"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-rewrite-output-lease-review.md", "reason": "同步改写实际 ASGI 帧发送、撤权和慢客户端锁释放证据"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-e-generation-log-source.md", "reason": "0048 模型来源证明、历史日志及单书备份隔离"}
+{"file": ".trellis/tasks/11-09-novel-collaborators/research/phase-d-inspiration-boundary.md", "reason": "本人灵感草稿的共享作品人工应用及关联作品 AI 尚未完成的边界"}

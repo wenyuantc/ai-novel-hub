@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import CurrentUser, TaskEngineDep
+from app.core.deps import CurrentUser, DbDep, TaskEngineDep
+from app.core.errors import UnauthorizedError
 from app.schemas.agent import (
+    ChangeAction,
     ChangeOut,
     ConversationCreate,
     ConversationDetail,
@@ -14,17 +16,28 @@ from app.schemas.agent import (
     ConversationUpdate,
     MessageAccepted,
     SendMessage,
+    TurnAction,
     TurnChangesOut,
 )
 from app.schemas.chapter_version import GenerationLogOut
 from app.services.agent import service as svc
 from app.services.agent import transactions
+from app.services.authorization_service import AuthenticatedActor, require_authenticated
 
 
-async def mutation_db(request: Request) -> AsyncIterator[AsyncSession]:
+async def mutation_db(request: Request, user: CurrentUser, authenticated_db: DbDep) -> AsyncIterator[AsyncSession]:
     # 与认证 DbDep 分离；在任何业务查询前设置隔离，每次 commit 后仍沿用同一配置。
+    # 认证时的原始令牌版本必须随会话传递；不能从数据库重读当前版本伪造请求凭据。
+    actor = authenticated_db.info.get("authenticated_actor")
+    if not isinstance(actor, AuthenticatedActor) or actor.id != user.id:
+        raise UnauthorizedError("未登录或登录已过期")
     async with transactions.session(request.app.state.sessionmaker) as db:
+        db.info["authenticated_actor"] = actor
         try:
+            # 独立会话不能沿用认证会话可能已过期的快照。
+            await require_authenticated(db, actor)
+            # Agent 使用 REPEATABLE READ；认证快照不能固定后续业务事务。
+            await db.rollback()
             yield db
         except DBAPIError as exc:
             await transactions.rollback_conflict(db, exc)
@@ -83,30 +96,42 @@ async def send_message(
 
 
 @router.post("/changes/{change_id}/confirm", response_model=ChangeOut)
-async def confirm_change(project_id: int, change_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep):
-    return await svc.decide_change(db, engine, user.id, project_id, change_id, confirm=True)
+async def confirm_change(
+    project_id: int, change_id: int, body: ChangeAction, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    return await svc.decide_change(db, engine, user.id, project_id, change_id, body, confirm=True)
 
 
 @router.post("/changes/{change_id}/reject", response_model=ChangeOut)
-async def reject_change(project_id: int, change_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep):
-    return await svc.decide_change(db, engine, user.id, project_id, change_id, confirm=False)
+async def reject_change(
+    project_id: int, change_id: int, body: ChangeAction, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    return await svc.decide_change(db, engine, user.id, project_id, change_id, body, confirm=False)
 
 
 @router.post("/turns/{task_id}/confirm-all", response_model=TurnChangesOut)
-async def confirm_turn(project_id: int, task_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep):
-    return await svc.decide_turn(db, engine, user.id, project_id, task_id, confirm=True)
+async def confirm_turn(
+    project_id: int, task_id: int, body: TurnAction, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    return await svc.decide_turn(db, engine, user.id, project_id, task_id, body, confirm=True)
 
 
 @router.post("/turns/{task_id}/reject-all", response_model=TurnChangesOut)
-async def reject_turn(project_id: int, task_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep):
-    return await svc.decide_turn(db, engine, user.id, project_id, task_id, confirm=False)
+async def reject_turn(
+    project_id: int, task_id: int, body: TurnAction, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    return await svc.decide_turn(db, engine, user.id, project_id, task_id, body, confirm=False)
 
 
 @router.post("/changes/{change_id}/undo", response_model=ChangeOut)
-async def undo_change(project_id: int, change_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep):
-    return await svc.undo_change(db, user.id, project_id, change_id, engine=engine)
+async def undo_change(
+    project_id: int, change_id: int, body: ChangeAction, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    return await svc.undo_change(db, user.id, project_id, change_id, body, engine=engine)
 
 
 @router.post("/turns/{task_id}/undo", response_model=TurnChangesOut)
-async def undo_turn(project_id: int, task_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep):
-    return await svc.undo_turn(db, engine, user.id, project_id, task_id)
+async def undo_turn(
+    project_id: int, task_id: int, body: TurnAction, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    return await svc.undo_turn(db, engine, user.id, project_id, task_id, body)

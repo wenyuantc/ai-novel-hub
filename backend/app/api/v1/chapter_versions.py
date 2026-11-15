@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.sse import sse_response
 from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SessionmakerDep, SettingsDep
-from app.models import Chapter, ChapterVersion, GenerationLog
+from app.models import GenerationLog
 from app.schemas.chapter import ChapterOut
 from app.schemas.chapter_version import (
     ChapterVersionBrief,
@@ -19,8 +19,8 @@ from app.schemas.chapter_version import (
     VersionRestore,
 )
 from app.schemas.scene import SceneOut
+from app.services import chapter_service, generation_log_service, rewrite_service
 from app.services import chapter_version_service as svc
-from app.services import generation_log_service, rewrite_service
 
 router = APIRouter(tags=["chapter-versions"])
 
@@ -28,21 +28,21 @@ _BASE = "/projects/{project_id}/chapters/{chapter_id}"
 
 
 @router.get(f"{_BASE}/versions", response_model=list[ChapterVersionBrief])
-async def list_versions(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> list[ChapterVersion]:
+async def list_versions(project_id: int, chapter_id: int, user: CurrentUser, db: DbDep) -> list[ChapterVersionBrief]:
     return await svc.list_versions(db, user.id, project_id, chapter_id)
 
 
 @router.get(f"{_BASE}/versions/{{version_id}}", response_model=ChapterVersionOut)
 async def get_version(
     project_id: int, chapter_id: int, version_id: int, user: CurrentUser, db: DbDep
-) -> ChapterVersion:
+) -> ChapterVersionOut:
     return await svc.get_version(db, user.id, project_id, chapter_id, version_id)
 
 
 @router.patch(f"{_BASE}/versions/{{version_id}}", response_model=ChapterVersionBrief)
 async def update_version(
     project_id: int, chapter_id: int, version_id: int, body: ChapterVersionUpdate, user: CurrentUser, db: DbDep
-) -> ChapterVersion:
+) -> ChapterVersionBrief:
     return await svc.update_version(db, user.id, project_id, chapter_id, version_id, body)
 
 
@@ -56,8 +56,9 @@ async def delete_version(project_id: int, chapter_id: int, version_id: int, user
 async def restore_version(
     project_id: int, chapter_id: int, version_id: int, user: CurrentUser, db: DbDep,
     body: VersionRestore | None = None,
-) -> Chapter:
-    return await svc.restore_version(db, user.id, project_id, chapter_id, version_id, body)
+) -> ChapterOut:
+    chapter = await svc.restore_version(db, user.id, project_id, chapter_id, version_id, body)
+    return (await chapter_service.manual_chapter_views(db, user.id, project_id, [chapter], full=True))[0]
 
 
 @router.get(f"{_BASE}/generation-logs", response_model=list[GenerationLogBrief])
@@ -71,8 +72,11 @@ async def get_log(project_id: int, chapter_id: int, log_id: int, user: CurrentUs
 
 
 @router.post(f"{_BASE}/rewrite/apply", response_model=ChapterOut)
-async def apply_rewrite(project_id: int, chapter_id: int, body: RewriteApply, user: CurrentUser, db: DbDep) -> Chapter:
-    return await rewrite_service.apply_rewrite(db, user.id, project_id, chapter_id, body)
+async def apply_rewrite(
+    project_id: int, chapter_id: int, body: RewriteApply, user: CurrentUser, db: DbDep,
+) -> ChapterOut:
+    chapter = await rewrite_service.apply_rewrite(db, user.id, project_id, chapter_id, body)
+    return (await chapter_service.manual_chapter_views(db, user.id, project_id, [chapter], full=True))[0]
 
 
 @router.post("/chapters/{chapter_id}/rewrite", response_class=StreamingResponse)
@@ -98,7 +102,11 @@ async def rewrite_preview(
         context_budget=settings.context_char_budget,
     )
     await db.close()
-    return sse_response(rewrite_service.run_rewrite_job(job, sessionmaker))
+    return sse_response(
+        rewrite_service.run_rewrite_job(job, sessionmaker),
+        frame_lease=rewrite_service.output_frame_lease(job, sessionmaker),
+        frame_timeout=rewrite_service.OUTPUT_LEASE_SECONDS,
+    )
 
 
 @router.get(f"{_BASE}/versions/{{version_id}}/restore-preview")

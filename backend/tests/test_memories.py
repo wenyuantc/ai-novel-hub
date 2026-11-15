@@ -290,8 +290,9 @@ async def test_recall_scope_pin_mute_and_position(client, fake_llm):
 
 
 async def test_recall_checks_muted_on_memory_rows(client, fake_llm, app):
-    """召回以记忆表的 muted 为准：即使检索单元的 enabled 没同步（数据漂移），屏蔽的记忆也不注入。"""
+    """召回以记忆表的 muted 为准：检索单元 enabled 没同步（数据漂移）时失败关闭，屏蔽的记忆绝不注入。"""
     from app.models import Project
+    from app.services.ai_dispatch import VisibilityPolicyError
 
     _, base, chs = await _setup(client, n=4)
     await _analyze(client, fake_llm, chs[0], **_quiet(plot_points=[{"text": "玉佩发光", "importance": 4}]))
@@ -301,8 +302,10 @@ async def test_recall_checks_muted_on_memory_rows(client, fake_llm, app):
         m.muted = True  # 只改记忆表，不经 update_memory（检索单元仍 enabled）
         await db.commit()
         project = await db.get(Project, m.project_id)
-        recalled = await memory_service.recall(db, project, 4, "玉佩发光", embedder=None)
-    assert recalled == []
+        # 阶段 E 起命中与来源标记不一致按 retrieval_reference_invalid 停止发送，而不是静默丢弃后继续。
+        with pytest.raises(VisibilityPolicyError) as caught:
+            await memory_service.recall(db, project, 4, "玉佩发光", embedder=None)
+    assert caught.value.extra["code"] == "retrieval_reference_invalid"
 
 
 async def test_pinned_first_and_budget(client, fake_llm):
@@ -332,7 +335,7 @@ async def test_memory_and_kb_separate_blocks(client, fake_llm):
         f"{base}/kb/documents",
         files={"file": ("设定.md", "# 门派\n\n天剑宗位于北境雪山。".encode(), "text/markdown")},
     )
-    await wait_task(client, resp.json()["task"]["id"])
+    await wait_task(client, resp.json()["task"])
     await client.patch(f"{base}/chapters/{chs[3]['id']}", json={"title": "天剑宗"})
     prompt = await _generate(client, fake_llm, chs[3])
     assert KB_HEADER in prompt and MEM_HEADER in prompt
@@ -377,7 +380,9 @@ async def test_memory_vectors_task(client, fake_llm, app):
 
         tasks = list(await db.scalars(select(Task).where(Task.kind == "kb.index")))
     assert len(tasks) == 1 and tasks[0].title == "剧情记忆向量"
-    assert (await wait_task(client, tasks[0].id))["status"] == "succeeded"
+    visible = (await client.get("/api/v1/tasks", params={"kind": "kb.index"})).json()
+    assert len(visible) == 1 and visible[0]["id"] == tasks[0].id
+    assert (await wait_task(client, visible[0]))["status"] == "succeeded"
     async with app.state.sessionmaker() as db:
         missing = await db.scalar(
             select(func.count(RetrievalChunk.id)).where(

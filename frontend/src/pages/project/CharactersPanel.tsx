@@ -25,8 +25,9 @@ import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
 import CharacterCard from '../../components/entities/CharacterCard'
+import { cardAccess } from '../../components/entities/cardAccess'
 import { BookSeriesLibrary, BookSeriesPromotion, BookSeriesScope, BookSeriesUnuse, SharedSettingNotice } from '../../components/series/BookSeriesSettings'
-import { bookCharacterPatch, inSettingScope, type SettingScope } from '../../components/series/seriesState'
+import { bookCharacterPatch, canChangeSeriesBook, inSettingScope, type SettingScope } from '../../components/series/seriesState'
 import {
   characterBaselineMatches,
   characterToBaselineForm,
@@ -72,13 +73,15 @@ export default function CharactersPanel() {
   const tagsSession = useSettingTagsSession(pid)
   const aiSession = useSettingAiSession(pid)
   const [searchParams] = useSearchParams()
-  const { canUseAI, canEdit, canReadNow, canEditNow, managingOther } = useProjectAccess(pid)
+  const { canUseAI, canRead, canEdit, canReadNow, canEditNow, role, isCollaborator } = useProjectAccess(pid)
   const { message } = App.useApp()
   const user = useAuthStore((s) => s.user)
   const authStatus = useAuthStore((s) => s.status)
   const identity = `${user?.id ?? 'none'}:${authStatus}:${authorizationKey(user)}`
   const projectTitle = useProjectStore((s) => s.project?.title ?? '')
-  const series = useProjectStore((s) => !managingOther && s.project?.id === pid ? s.project.series : null)
+  const series = useProjectStore((s) => canRead && s.project?.id === pid ? s.project.series : null)
+  const canChangeSeries = canChangeSeriesBook(role, isCollaborator, canEdit)
+  const cards = cardAccess(role, isCollaborator, canRead, canEdit)
   const [settingScope, setSettingScope] = useState<SettingScope>('all')
   const [promoting, setPromoting] = useState<Character | null>(null)
   const [unusing, setUnusing] = useState<{ id: number; title: string } | null>(null)
@@ -387,11 +390,15 @@ export default function CharactersPanel() {
           <p>管理人物设定，让每个角色鲜活而立体。</p>
         </div>
         <div className="characters-page-actions">
-          {canUseAI && <>
-            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入卡片</Button>
-            <Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)} disabled={items.length === 0}>
+          {cards.canPreview && <>
+            <Button icon={<UploadOutlined />} onClick={() => { if (canReadNow()) setImportOpen(true) }}>
+              {cards.canImport ? '导入卡片' : '预览卡片'}
+            </Button>
+            <Button icon={<DownloadOutlined />} onClick={() => { if (canReadNow()) setExportOpen(true) }} disabled={items.length === 0}>
               导出卡片{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
             </Button>
+          </>}
+          {canUseAI && <>
             <Dropdown trigger={['click']} menu={{
               items: [{ key: 'regenerate', label: 'AI 重新生成全部', disabled: items.some((item) => item.origin?.scope === 'series') }],
               onClick: ({ key }) => { if (key === 'regenerate') setWizardOpen(true) },
@@ -436,7 +443,7 @@ export default function CharactersPanel() {
       </div>
       <div className="characters-list-summary">
         <div className="characters-selection">
-          {canUseAI && <Checkbox
+          {cards.canPreview && <Checkbox
             checked={currentPage.items.length > 0 && currentPage.items.every((character) => selectedIds.includes(character.id))}
             indeterminate={currentPage.items.some((character) => selectedIds.includes(character.id)) && !currentPage.items.every((character) => selectedIds.includes(character.id))}
             onChange={(event) => {
@@ -445,7 +452,7 @@ export default function CharactersPanel() {
             }}
             disabled={currentPage.items.length === 0}
           >全选当前</Checkbox>}
-          {canUseAI && selectedIds.length > 0 && <>
+          {cards.canPreview && selectedIds.length > 0 && <>
             <span>已选 {selectedIds.length} 位</span>
             <Button type="text" size="small" onClick={() => setSelected([])}>清空选择</Button>
           </>}
@@ -454,7 +461,7 @@ export default function CharactersPanel() {
       </div>
       <Spin spinning={loading}>
         {scopedItems.length === 0 ? (
-          <div className="characters-empty"><Empty description={listError ? '角色列表暂不可用，请重试' : settingScope === 'series' ? '本书尚未采用系列角色' : canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : '暂无角色，可手动新增'} /></div>
+          <div className="characters-empty"><Empty description={listError ? '角色列表暂不可用，请重试' : settingScope === 'series' ? '本书尚未采用系列角色' : canUseAI ? '暂无角色，可手动新增、导入卡片或使用 AI 生成' : canEdit ? '暂无角色，可手动新增' : '暂无角色'} /></div>
         ) : shown.length === 0 ? (
           <div className="characters-empty"><Empty description="没有找到匹配的角色">
             <Button onClick={() => { setQuery(''); setFilter(ALL_CHARACTERS); setPage(1) }}>清除筛选</Button>
@@ -465,13 +472,13 @@ export default function CharactersPanel() {
               key={character.id}
               character={character}
               career={badges?.get(character.id)}
-              selectable={canUseAI}
+              selectable={cards.canPreview}
               selected={selectedIds.includes(character.id)}
               canEdit={canEdit}
               onSelect={(selected) => toggle(character.id, selected)}
               onOpen={() => openEdit(character)}
               onDelete={() => handleDelete(character)}
-              onPromote={series && character.origin?.scope !== 'series' ? () => { if (canEditNow()) setPromoting(character) } : undefined}
+              onPromote={series && canChangeSeries && character.origin?.scope !== 'series' ? () => { if (canEditNow()) setPromoting(character) } : undefined}
             />)}
           </div>
         )}
@@ -490,9 +497,9 @@ export default function CharactersPanel() {
       />}
 
       {series && settingScope !== 'book' && <BookSeriesLibrary key={`${pid}:${series.id}`} series={series} projectId={pid} kind="character" />}
-      {series && promoting && <BookSeriesPromotion seriesId={series.id} projectId={pid} kind="character" id={promoting.id}
+      {series && canChangeSeries && promoting && <BookSeriesPromotion seriesId={series.id} projectId={pid} kind="character" id={promoting.id}
         title={promoting.name} onClose={() => setPromoting(null)} />}
-      {series && unusing && <BookSeriesUnuse seriesId={series.id} seriesEntryId={unusing.id} projectId={pid} kind="character"
+      {series && canChangeSeries && unusing && <BookSeriesUnuse seriesId={series.id} seriesEntryId={unusing.id} projectId={pid} kind="character"
         title={unusing.title} onClose={() => setUnusing(null)} onDone={() => {
           setUnusing(null)
           gate.current.close()
@@ -529,7 +536,7 @@ export default function CharactersPanel() {
           </Button>
         )}
       >
-        <SharedSettingNotice origin={origin} onUnuse={series && sharedEntryId != null && editing
+        <SharedSettingNotice origin={origin} onUnuse={series && canChangeSeries && sharedEntryId != null && editing
           ? () => { if (canEditNow()) setUnusing({ id: sharedEntryId, title: editing.name }) } : undefined} />
         {!seriesManaged && editing && baseline && !baselineError && (
           <Alert
@@ -654,6 +661,10 @@ export default function CharactersPanel() {
           reload()
           reloadBadges()
         }}
+        onRefresh={() => {
+          reload()
+          reloadBadges()
+        }}
       />)}
       {canUseAI && (<EntityTaskModal
         projectId={pid}
@@ -665,7 +676,7 @@ export default function CharactersPanel() {
           reloadBadges()
         }}
       />)}
-      {canUseAI && (<CardExportModal
+      {cards.canPreview && (<CardExportModal
         projectId={pid}
         projectTitle={projectTitle}
         open={exportOpen}
@@ -673,7 +684,7 @@ export default function CharactersPanel() {
         initialCharacterIds={selectedIds}
         onClose={() => setExportOpen(false)}
       />)}
-      {canUseAI && (<CardImportModal
+      {cards.canPreview && (<CardImportModal
         projectId={pid}
         open={importOpen}
         onClose={() => setImportOpen(false)}

@@ -832,7 +832,8 @@ def build_cast_section(prepared: ChapterSettings, *, planning: "PlanningContext 
 
 
 async def build_chapter_context(
-    db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, embedder: Embedder | None = None,
+    db: AsyncSession, project: Project, chapter: Chapter, budget: int, *, actor_user_id: int,
+    embedder: Embedder | None = None,
     planning: "PlanningContext | None" = None,
     position: StoryPosition | None = None, manual_character_ids: Iterable[int] | None = None,
     source_text: str | None = None,
@@ -856,7 +857,7 @@ async def build_chapter_context(
             db, project, chapter, task, cast.names, prior, embedder=guarded_embedder,
         )
         text = assemble_context(
-            project_text=format_project_info(await project_info(db, project)),
+            project_text=format_project_info(await project_info(db, project, actor_user_id=actor_user_id)),
             world_text=await effective_world_text(
                 db, project, chapter, scope=scope, exclude_ids=planning.protected_world_ids if planning else None,
                 position=prepared.position,
@@ -1028,6 +1029,12 @@ async def retrieval_preview(db: AsyncSession, user_id: int, chapter_id: int, *, 
     from app.services.planning_context_service import load_planning_context
     from app.services.project_service import get_owned_project
 
+    with db.no_autoflush:
+        project_id = await db.scalar(select(Chapter.project_id).where(Chapter.id == chapter_id))
+        owner_id = (await db.scalar(select(Project.user_id).where(Project.id == project_id))
+                    if project_id is not None else None)
+    if project_id is not None and owner_id is not None and owner_id != user_id:
+        return await _collaborator_retrieval_preview(db, user_id, project_id, chapter_id, env=env)
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
     embedder = await env.embedder(db, user_id)
@@ -1042,6 +1049,47 @@ async def retrieval_preview(db: AsyncSession, user_id: int, chapter_id: int, *, 
         embedder=guard_embedder(embedder, scope.stamp, visibility_sessionmaker(db)) if embedder else None,
     )
     await scope.verify(db)
+    return (
+        f"{KNOWLEDGE_HEADER}\n{knowledge}" if knowledge.strip() else "",
+        MEMORY_HEADER + "\n" + "\n".join(m.text for m in memories.lines) if memories.lines else "",
+    )
+
+
+async def _collaborator_retrieval_preview(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, env: EmbedEnv,
+) -> tuple[str, str]:
+    """协作者的注入预览（E6-d）：与章节生成同口径的检索选择（``kb_service.search_access``）。
+
+    accepted editor：已授权且作者有向量 → 作者共享向量受控发送；否则只用关键词。viewer 403；
+    待接受 / 非成员 / 已撤权 / 仅管理员一律 404「章节不存在」（不区分章节是否存在）。返回前按原轮次复核。
+    """
+    from app.core.errors import NotFoundError
+    from app.services.planning_context_service import load_planning_context
+    from app.services.project_access import require_project
+
+    try:
+        await require_project(db, user_id, project_id, "ai.use")
+        embedder, grant = await kb_service.search_access(db, user_id, project_id, env)
+    except NotFoundError:
+        raise NotFoundError("章节不存在") from None
+    with db.no_autoflush:
+        chapter = await db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.project_id == project_id))
+        project = await db.scalar(select(Project).where(Project.id == project_id))
+    if chapter is None or project is None:
+        raise NotFoundError("章节不存在")
+    task = await chapter_task(db, chapter)
+    planning = await load_planning_context(db, project, "chapter", chapter.id)
+    prepared = planning.setting_scope
+    assert prepared is not None
+    scope = prepared.scope
+    prior = await prior_chapters(db, project, chapter)
+    knowledge, memories = await retrieval_blocks(
+        db, project, chapter, task, [c.name for c in prepared.effective.characters], prior,
+        # 查询文本按本次设定范围组装：发送租约同时验检索选择时与本次范围的可见性戳（两者不同即拒绝发送）。
+        embedder=guard_embedder(embedder, scope.stamp, visibility_sessionmaker(db)) if embedder else None,
+    )
+    await scope.verify(db)
+    await kb_service._lock_search_result(db, user_id, project_id, grant)
     return (
         f"{KNOWLEDGE_HEADER}\n{knowledge}" if knowledge.strip() else "",
         MEMORY_HEADER + "\n" + "\n".join(m.text for m in memories.lines) if memories.lines else "",

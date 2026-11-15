@@ -56,7 +56,7 @@ def _make_router(
     async def get_item(project_id: int, item_id: int, user: CurrentUser, db: DbDep) -> Any:
         if kind is not svc.OUTLINES:
             return (await series_read.read_book_settings(db, kind, user.id, project_id, item_id=item_id))[0]
-        return await svc.get_manageable(db, kind, user.id, project_id, item_id)
+        return await svc.get_collaborative(db, kind, user.id, project_id, item_id)
 
     @router.patch("/{item_id}", response_model=out_schema)
     async def update_item(
