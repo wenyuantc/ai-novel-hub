@@ -494,6 +494,62 @@ POST /turns/{task_id}/confirm-all | reject-all | undo   # → {changes, task, er
 
 ---
 
+## 场景：工具事件与任务进度的事务边界
+
+### 1. 范围 / 触发条件
+
+修改 `runner._process_calls`、`_external_call` 或任务引擎的事件消费 / 进度刷新时适用。引擎在消费事件时可能独立提交进度与授权门禁更新；runner 不能带着此前冻结的只读 RR 快照恢复后再取写门禁，否则正常进度刷新也会触发 `40001`。
+
+### 2. 签名
+
+- `_process_calls` 内部 `async def finish_read() -> None`：只用于已审查的纯查询 / 只读工具出口，不是通用提交方法。
+- `transactions.session` 仍使用 PostgreSQL `REPEATABLE READ`；事件类型、API、数据库结构和生产环境配置均不变。
+
+### 3. 契约
+
+- 去重查询、MCP 工具解析和只读工具结果读取完成后，以 `finish_read` 结束只读事务，再交付事件或进入原写入流程。已有消息 / 提案的跳过分支留下的只读快照，在下一实际处理分支或循环末尾结束。
+- helper 要求 `expire_on_commit=False`、无嵌套事务、未持授权门禁、无 ORM 待写 / 删除对象且无待决审计；不满足则失败关闭。只读提交保留已加载对象属性，避免 rollback 使 `assistant / project / batch` 过期后触发隐式异步 IO。**这些检查不能证明任意 Core SQL 只读**，不得将 helper 放到 `_lock_execution`、`_result`、`_checkpoint` 或通用服务中自动提交。
+- 循环后的自动执行判定先结束只读快照，再以原 `_lock_execution` 取得新事务的写门禁，随后读取会话与提案数量、推进断点。原 Task UUID、入队代次、执行 key、令牌、grant、模型与可见性保护保持不变。
+- 普通提案、外部提案和自动执行结果的顺序为 `flush → refresh → 原根事务 commit → yield`。刷新在原写事务内完成，提交成功后才交付事件；禁止 `commit → refresh → yield` 留下新的读事务。业务效果、提案状态与审计仍由原协调器同事务提交。
+- 自动执行遇到 `preview_changed` 时，服务已提交更新后的预览，随后刷新 / 投影又开启只读事务；runner 只在这个明确错误分支释放读快照，再按原身份保存待确认断点，不能把其他冲突也当作已提交处理。
+- 不跨事件交付持有写门禁，不重放模型 / 工具 / 整轮任务以消除冲突；MCP 执行占用与结果的原子收尾、外部结果未知屏障均不改变。上下文构建失败也先退出会话再交付错误事件。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 工具事件间正常刷新任务进度 | 继续生成或进入待确认，不因旧快照产生 `40001` |
+| 恢复执行时原令牌 / grant / 任务执行身份已失效 | 原门禁拒绝，不能用当前身份补签或继续写入 |
+| 提案与实际业务数据发生竞争 | 保留原 `preview_changed` / 安全并发冲突处理，不自动重复执行 |
+| 纯读出口发现待决写入、审计或写锁 | 失败关闭，不能顺手提交未完成业务 |
+
+### 5. 正例 / 基本 / 反例
+
+- 正例：进度刷新发生在 `stage / tool_start / proposal / executed` 之间，模型和工具各按原计划调用一次。
+- 基本：无并发时事件顺序、提案确认、自动执行阈值和断点幂等保持原行为。
+- 反例：降低隔离级别、删除授权校验，或捕获 `40001` 后重跑模型与工具。
+
+### 6. 必需测试
+
+`tests/test_agent_progress_flush_postgresql.py` 使用真实 PostgreSQL 与任务引擎刷新，覆盖提案、自动执行、多次只读工具、外部工具边界及关键撤权窗口；断言最终状态、持久结果和调用次数。既有 `test_agent_e4ig_postgresql.py`、执行身份 / 撤权与审计测试继续验证旧保护，真实业务冲突不能被这次修复吞掉。
+
+### 7. 错误与正确
+
+```python
+# 错误：提交后 refresh 开启新 RR 快照，事件消费者刷新进度后继续写会冲突。
+await commit()
+await db.refresh(change)
+yield "proposal", {"change": _out(change)}
+
+# 正确：在原写事务内刷新；原协调提交成功后才交付事件。
+await db.flush()
+await db.refresh(change)
+await commit()
+yield "proposal", {"change": _out(change)}
+```
+
+---
+
 ## 场景：安全规则
 
 - **锁定的安全规则**：`app/ai/prompts/agent.py::SAFETY_RULES` 是 `agent.system` 的锁定变量 `safety_rules`（覆盖必须原样出现一次）。渲染后若没有任何

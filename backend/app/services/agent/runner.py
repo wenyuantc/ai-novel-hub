@@ -19,6 +19,7 @@ from app.core.errors import AppError, ConflictError, ForbiddenError, NotFoundErr
 from app.models import AgentChange, AgentConversation, AgentMessage, AIConfig, Task
 from app.schemas.agent import ChangeOut
 from app.services import ai_config_service, project_access, project_ai_config, project_lifecycle, project_service
+from app.services import authorization_service as authz
 from app.services.agent import context, history, mcp_tools, transactions
 from app.services.agent.tools import get_tool, list_tools
 from app.services.agent.tools import tasks as tasks_tool
@@ -610,8 +611,9 @@ async def _external_call(
         seq=(count or 0) + 1,
     )
     db.add(change)
-    await (commit() if commit is not None else db.commit())
+    await db.flush()
     await db.refresh(change)
+    await (commit() if commit is not None else db.commit())
     batch.append(change)
     yield "proposal", {"change": _out(change)}
 
@@ -630,6 +632,17 @@ async def _process_calls(
     ):
         async def commit() -> None:
             await coordinator.commit(db, ctx.sessionmaker)
+
+        async def finish_read() -> None:
+            # 仅用于下方明确的查询 / 只读工具出口，不能推广为任意写事务的提交。
+            # 已 flush 的 Core 写入不一定留在 ORM 集合中；调用点的只读契约同样必要。
+            # expire_on_commit=False 保留 assistant / project / batch 属性，避免 rollback
+            # 令它们过期后在事件交付或下一轮工具中触发隐式异步 IO。
+            if (db.sync_session.expire_on_commit or db.in_nested_transaction() or authz.holds_gate(db)
+                    or db.new or db.dirty or db.deleted or coordinator.pending):
+                raise RuntimeError("只能结束无待决写入和审计的 Agent 只读事务")
+            if db.in_transaction():
+                await db.commit()
 
         await _lock_execution(db, job)
         await require_visibility_stamp(db, job.stamp)
@@ -678,6 +691,9 @@ async def _process_calls(
             if change is not None:
                 batch.append(change)
                 continue
+            # 进度事件会由引擎在另一事务写库。结束去重查询的 RR 快照，使之后的
+            # 写门禁从新事务开始；错误结果、内部工具和外部工具分支均遵守此边界。
+            await finish_read()
             if index >= checkpoint.get("allowed_calls", 0):
                 await _result(db, job, call, {"error": "本轮最多调用 8 次工具，请直接回答或分批进行"}, commit=commit)
                 continue
@@ -695,6 +711,7 @@ async def _process_calls(
                 external = await mcp_tools.resolve(
                     db, ctx.settings, job.user_id, job.conversation_id, tool_map, call["name"]
                 )
+                await finish_read()
                 async for event in _external_call(job, db, call, args, external, sessions, batch, commit, ctx=ctx):
                     yield event
                 continue
@@ -710,6 +727,7 @@ async def _process_calls(
                     raise
                 except AppError as exc:
                     value = {"error": exc.detail}
+                await finish_read()
                 await _result(db, job, call, value, commit=commit)
                 yield (
                     "tool_end",
@@ -761,10 +779,15 @@ async def _process_calls(
                 seq=(count or 0) + 1,
             )
             db.add(change)
-            await commit()
+            await db.flush()
             await db.refresh(change)
+            await commit()
             batch.append(change)
             yield "proposal", {"change": _out(change)}
+        # existing 消息 / 提案的 continue 可能留下只读快照。先结束它，再以原执行
+        # 身份取得写门禁；自动执行判定与随后 checkpoint 共享这个受保护的事务。
+        await finish_read()
+        await _lock_execution(db, job)
         pending = [c for c in batch if c.status == "proposed"]
         conversation = await db.get(AgentConversation, job.conversation_id, populate_existing=True)
         total = await db.scalar(select(func.count(AgentChange.id)).where(
@@ -802,9 +825,12 @@ async def _process_calls(
                     if not exc.extra or exc.extra.get("code") != "preview_changed":
                         raise
                     # 数据在提案到自动执行之间变化：保留最新预览并等待明确确认。
+                    # execute_change 已提交新预览，异常中的投影又开启了只读快照。
+                    await finish_read()
                     break
-                await commit()
+                await db.flush()
                 await db.refresh(change)
+                await commit()
                 yield "executed", {"change": _out(change)}
         pending = [c.id for c in batch if c.status in ("proposed", "executing")]
         checkpoint["pending_change_ids"] = pending
@@ -944,6 +970,7 @@ async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions
                     yield event
             if paused:
                 return
+        context_error = None
         async with transactions.session(ctx.sessionmaker) as db:
             await _lock_execution(db, job)
             await require_no_unknown_external(db, project_id=job.project_id, conversation_id=job.conversation_id)
@@ -958,21 +985,24 @@ async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions
                     scope=scope, execution=job,
                 )
             except (AppError, AIProviderError) as exc:
-                yield "error", {"detail": str(exc)}
-                return
-            external_specs = [] if _job_grant(job) is not None else (
-                await mcp_tools.tool_specs(
-                    db,
-                    ctx.settings,
-                    job.user_id,
-                    job.conversation_id,
-                    checkpoint.get("mcp_tool_map") or {},
-                    job.config.provider,
+                context_error = {"detail": str(exc)}
+            else:
+                external_specs = [] if _job_grant(job) is not None else (
+                    await mcp_tools.tool_specs(
+                        db,
+                        ctx.settings,
+                        job.user_id,
+                        job.conversation_id,
+                        checkpoint.get("mcp_tool_map") or {},
+                        job.config.provider,
+                    )
                 )
-            )
-            provider = await context.guard_agent_provider(
-                db, conversation, project, job.config, job.provider, execution=job,
-            )
+                provider = await context.guard_agent_provider(
+                    db, conversation, project, job.config, job.provider, execution=job,
+                )
+        if context_error is not None:
+            yield "error", context_error
+            return
         tools = [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in list_tools()]
         tools.extend(external_specs)
         used = checkpoint.get("tool_calls_used", 0)

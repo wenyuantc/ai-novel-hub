@@ -10,6 +10,7 @@
 """
 
 import asyncio
+from contextlib import aclosing
 from types import SimpleNamespace
 
 import pytest
@@ -233,15 +234,22 @@ async def test_running_turn_at_checkpoint_fails_and_voids_new_proposals(
     world = await _world(app, client, make_client)
     world.kind = kind
     reached, release = asyncio.Event(), asyncio.Event()
-    original = runner._checkpoint
+    # 第二提案已提交并交付，最终写门禁前暂停；此时撤权请求可以提交。
+    # _checkpoint 的调用者已持锁，不能在其入口等待撤权完成。
+    original = runner._process_calls
 
-    async def held(db, job, values, *, commit=None):
-        if values.get("pending_change_ids") and job.user_id == world.editor["id"] and not reached.is_set():
-            reached.set()
-            await release.wait()
-        return await original(db, job, values, commit=commit)
+    async def held(job, ctx, checkpoint, sessions, scope):
+        proposal_count = 0
+        async with aclosing(original(job, ctx, checkpoint, sessions, scope)) as events:
+            async for event in events:
+                yield event
+                if event[0] == "proposal" and job.user_id == world.editor["id"]:
+                    proposal_count += 1
+                    if proposal_count == 2 and not reached.is_set():
+                        reached.set()
+                        await asyncio.wait_for(release.wait(), 8)
 
-    monkeypatch.setattr(runner, "_checkpoint", held)
+    monkeypatch.setattr(runner, "_process_calls", held)
     if not notified:
         monkeypatch.setattr(app.state.task_engine, "notify_collaboration_change", lambda *args, **kwargs: None)
     fake_llm.push_tools(_two_proposals())
