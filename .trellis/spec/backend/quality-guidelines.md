@@ -128,7 +128,7 @@ def make_settings(tmp_path, **overrides) -> Settings:
 
 模型流使用有界 producer 后，`Gate.reached` 只证明模型读取到了该节点。依赖“首片已发布”的快照、取消或重启测试应先等待真实 `TaskHub.text` 或对应发送事件，再执行原断言；不得用固定 sleep 代替同步。
 
-全局注册的 handler 实例方法需要临时替换时，在 handler 类上打补丁并保留 `self` 参数。实例级方法补丁恢复时可能把原 bound method 留在实例 `__dict__`，遮蔽后续类级补丁；`blocking_outline` 与 PostgreSQL 锁顺序测试的顺序回归覆盖此问题。
+全局注册的 handler 实例方法需要临时替换时，在 handler 类上打补丁并保留 `self` 参数。实例级方法补丁恢复时可能把原 bound method 留在实例 `__dict__`，遮蔽后续类级补丁；`blocking_outline` 与 PostgreSQL 锁顺序测试、管理任务取消与智能体撤权续跑测试的顺序回归覆盖此问题。
 
 ### 跨数据库方言的建模隔离
 

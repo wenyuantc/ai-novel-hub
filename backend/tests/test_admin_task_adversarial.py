@@ -102,7 +102,9 @@ async def test_admin_acceptance_between_owner_check_and_update_is_a_real_cas_bar
         aborts.append(row.statistics_key)
 
     # 不测试 agent 的提案前置条件；只隔离恢复/结束预校验，真实条件写不能被替换。
-    monkeypatch.setattr(handler, "revalidate_resume", revalidate)
+    # 类方法需在类上替换，避免 monkeypatch 恢复时在单例实例上留下绑定方法，
+    # 遮住后续测试对类方法的替换。
+    monkeypatch.setattr(type(handler), "revalidate_resume", revalidate)
     monkeypatch.setattr(handler, "finish_result", lambda row: {"ended_early": True})
     monkeypatch.setattr(handler, "on_abort", abort)
     reached, release = asyncio.Event(), asyncio.Event()
