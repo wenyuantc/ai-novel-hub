@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Ruff/pytest、隔离PG、README与异步资源门禁"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"lint/build/Vitest、空白、主题和浏览器验收"}
+{"file":".trellis/spec/backend/scenes.md","reason":"选择与场景投影不变式"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"格式坐标、作者区块隔离与回归"}
+{"file":".trellis/spec/backend/setting-fields.md","reason":"字段公开值和跨批一致性"}
+{"file":".trellis/spec/backend/series-settings.md","reason":"未采用系列资料不得扩展进本书导出"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"旧导出与备份格式兼容"}
+{"file":".trellis/tasks/11-16-word-content-export/research/content-sources.md","reason":"关键权限和资料来源证据，旧聊天规范不可覆盖当前语义"}
+{"file":".trellis/tasks/11-16-word-content-export/research/docx-rendering.md","reason":"格式和真实文档验证边界"}
+{"file":".trellis/tasks/11-16-word-content-export/research/chat-export-review.md","reason":"批量核验的遗漏风险与必须覆盖的竞争测试"}

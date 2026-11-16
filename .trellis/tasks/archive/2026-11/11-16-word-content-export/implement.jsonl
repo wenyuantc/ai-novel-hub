@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"路由/服务/模型分层，新增导出模块位置"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"实现前遵守异步、测试隔离与README要求"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"实现前遵守网络调用、测试、主题和包体积要求"}
+{"file":".trellis/spec/backend/scenes.md","reason":"活动场景、章投影权威、顺序和版本"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"正文排版与作者资料隔离、码点和CRLF"}
+{"file":".trellis/spec/backend/setting-fields.md","reason":"当前自定义字段、引用名称和批量一致性"}
+{"file":".trellis/spec/backend/series-settings.md","reason":"只读取本书采用的系列投影"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"EPUB及项目JSON兼容边界"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"请求类型镜像和下载API边界"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"AntD、主题、窄屏和交互模式"}
+{"file":".trellis/tasks/11-16-word-content-export/research/content-sources.md","reason":"摘要来源、actor聊天隔离与安全投影、可读资料原语"}
+{"file":".trellis/tasks/11-16-word-content-export/research/docx-rendering.md","reason":"DOCX依赖依据、渲染及下载代次约束"}
+{"file":".trellis/tasks/11-16-word-content-export/research/chat-export-review.md","reason":"原actor/grant与生命周期、批量proofs兼容、最终一致快照及参数上限"}
