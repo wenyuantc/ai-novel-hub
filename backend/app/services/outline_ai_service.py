@@ -11,10 +11,9 @@ E4-g3a：作者与 accepted editor 共用。协作执行按原 grant 读取作�
 检索只用关键词（不向作者向量模型发送查询，E6 前保持）；作者直调（无执行身份）仍限定严格作者。
 """
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import aclosing, suppress
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -29,6 +28,7 @@ from app.ai.prompts import (
     format_project_info,
 )
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
+from app.ai.streaming import coalesce_buffered_text
 from app.ai.templating import PromptOverride
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
@@ -657,74 +657,11 @@ async def expand_result(db: AsyncSession, job: OutlineJob, drafts: list[dict[str
 
 
 async def _stream(job: OutlineJob, messages: list[ChatMessage], pieces: list[str]) -> AsyncIterator[Event]:
-    # SDK 的细小分片合并后再逐批经任务门禁，首片立即显示；慢流最多等 50ms。
-    queue: asyncio.Queue[tuple[str, str | BaseException | None]] = asyncio.Queue(maxsize=64)
-
-    async def produce() -> None:
-        try:
-            stream_iter = job.provider.generate_stream(
-                messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking,
-            )
-            async with aclosing(stream_iter) as stream:
-                async for piece in stream:
-                    await queue.put(("piece", piece))
-        except asyncio.CancelledError:
-            current = asyncio.current_task()
-            if current is not None and not current.cancelling():
-                await queue.put(("cancelled", None))
-            raise
-        except Exception as exc:  # noqa: BLE001  将模型异常交回原执行体处理。
-            await queue.put(("error", exc))
-        else:
-            await queue.put(("done", None))
-
-    producer = asyncio.create_task(produce())
-    first = True
-    try:
-        while True:
-            kind, value = await queue.get()
-            if kind == "done":
-                return
-            if kind == "cancelled":
-                raise asyncio.CancelledError
-            if kind == "error":
-                assert isinstance(value, Exception)
-                raise value
-            assert isinstance(value, str)
-            pieces.append(value)
-            batch = [value]
-            size = len(value)
-            terminal: tuple[str, str | BaseException | None] | None = None
-            deadline = asyncio.get_running_loop().time() + 0.05
-            while not first and size < 256:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    break
-                try:
-                    next_kind, next_value = await asyncio.wait_for(queue.get(), remaining)
-                except TimeoutError:
-                    break
-                if next_kind != "piece":
-                    terminal = (next_kind, next_value)
-                    break
-                assert isinstance(next_value, str)
-                pieces.append(next_value)
-                batch.append(next_value)
-                size += len(next_value)
-            first = False
-            yield "delta", {"text": "".join(batch)}
-            if terminal is not None:
-                kind, value = terminal
-                if kind == "done":
-                    return
-                if kind == "cancelled":
-                    raise asyncio.CancelledError
-                assert isinstance(value, Exception)
-                raise value
-    finally:
-        producer.cancel()
-        with suppress(asyncio.CancelledError):
-            await producer
+    stream_iter = job.provider.generate_stream(messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking)
+    async with aclosing(coalesce_buffered_text(stream_iter)) as ready:
+        async for piece in ready:
+            pieces.append(piece)
+            yield "delta", {"text": piece}
 
 
 async def run_outline_job(job: OutlineJob, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Event]:

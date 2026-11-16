@@ -146,6 +146,7 @@ interface EditorProps {
 }
 
 type AIMode = 'generate' | 'polish' | 'rewrite'
+type ChapterTaskRequest = { generation: number; scope: () => boolean }
 
 /** 正文卡片宽度达到它时工具栏放进卡片标题栏（≈ 1600px 视口、停靠面板关闭时正文栏的宽度，含竖向滚动条时约 935）。 */
 const TOOLBAR_IN_HEADER_MIN_WIDTH = 920
@@ -240,7 +241,33 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   // 整章生成 / 润色走后台任务；局部改写仍是 RewritePanel 内的同步流
   const aiTask = useTaskStream()
   // 正在创建任务（请求未返回）
-  const [starting, setStarting] = useState(false)
+  const [startingRequest, setStartingRequest] = useState<ChapterTaskRequest | null>(null)
+  const requestRef = useRef({ generation: 0, mounted: true, pending: null as ChapterTaskRequest | null })
+  // 授权代次变化后，旧请求不再占用当前页面；迟到响应仍须通过原作用域校验。
+  const starting = startingRequest !== null && startingRequest.scope === canEditNow
+  useEffect(() => {
+    const state = requestRef.current
+    state.mounted = true
+    return () => {
+      state.mounted = false
+      state.generation += 1
+      state.pending = null
+    }
+  }, [])
+  const beginTaskRequest = (): ChapterTaskRequest | null => {
+    if (!canEditNow() || requestRef.current.pending?.scope === canEditNow) return null
+    const request = { generation: ++requestRef.current.generation, scope: canEditNow }
+    requestRef.current.pending = request
+    setStartingRequest(request)
+    return request
+  }
+  const isCurrentRequest = (request: ChapterTaskRequest) => requestRef.current.mounted
+    && requestRef.current.generation === request.generation && request.scope()
+  const finishTaskRequest = (request: ChapterTaskRequest) => {
+    if (!requestRef.current.mounted || requestRef.current.pending !== request) return
+    requestRef.current.pending = null
+    setStartingRequest(null)
+  }
   // 旧任务的章节 / 场景整数 ID 无实例证明；只跟随本页面明确创建的任务。
   const attachChecked = true
   const detachWriteTask = aiTask.detach
@@ -290,6 +317,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   )
   const skillSelect = (disabled: boolean) => <SkillChoiceField choice={skillChoice} disabled={disabled} />
   const words = useMemo(() => countWords(content), [content])
+  const outputWords = useMemo(() => countWords(aiTask.text), [aiTask.text])
 
   const { prev, next } = useMemo(() => {
     const sorted = [...siblings].sort((a, b) => a.chapter_no - b.chapter_no || a.id - b.id)
@@ -390,10 +418,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     ({ currentLocation, nextLocation }) => chapterLeaveBlocked(pageGuard, noteDirty, currentLocation, nextLocation),
   )
 
-  const reloadChapter = async () => {
+  const reloadChapter = async (currentRequest: () => boolean = canReadNow) => {
+    if (!currentRequest()) return
     try {
       const fresh = await chapterApi.get(pid, chapter.id)
-      if (!canReadNow()) return
+      if (!canReadNow() || !currentRequest()) return
       // 只同步服务端状态，保留本地正文（生成失败/中止时正文未变）
       setChapter(fresh)
     } catch {
@@ -472,7 +501,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     const current = sceneEditor.controller.getSnapshot().scene
     if (!current) return
     const versions = { expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
-    setStarting(true)
+    const request = beginTaskRequest()
+    if (!request) return
     let created: Task
     try {
       if (mode === 'generate') {
@@ -482,13 +512,17 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         const body = { ai_config_id: aiConfigId, instruction: polishInstruction.trim(), style: styleChoice, ...skillChoice.payload, ...versions }
         created = aiScope === 'scene' ? await sceneApi.polish(pid, chapter.id, current.id, body) : await polishChapter(chapter.id, body)
       }
-      if (!canEditNow()) return
+      if (!isCurrentRequest(request)) return
       if (sceneEditor.controller.getSnapshot().scene?.id !== current.id) { trackTask(created); return }
     } catch (err) {
-      if (canEditNow() && sceneEditor.controller.getSnapshot().scene?.id === current.id) message.error(errorMessage(err))
-      await reloadChapter()
+      // 恢复读取也可能等待网络；先结束本次创建状态，不能被旧授权或恢复请求卡住。
+      finishTaskRequest(request)
+      if (isCurrentRequest(request)) {
+        if (sceneEditor.controller.getSnapshot().scene?.id === current.id) message.error(errorMessage(err))
+        await reloadChapter(() => isCurrentRequest(request))
+      }
       return
-    } finally { if (canEditNow()) setStarting(false) }
+    } finally { finishTaskRequest(request) }
     trackTask(created)
     setChapter((prev) => ({ ...prev, status: 'generating' }))
     await followTask(created)
@@ -499,22 +533,24 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     if (!canUseAI) return false
     if (skillProblem) { message.warning(skillProblem); return false }
     if (!(await ensureSaved())) return false
-    setStarting(true)
+    const current = sceneEditor.controller.getSnapshot().scene
+    if (!current) return false
+    const pending = beginTaskRequest()
+    if (!pending) return false
     let created: Task
     try {
-      const current = sceneEditor.controller.getSnapshot().scene
-      if (!current) { setStarting(false); return false }
       const request = { ...body, ai_config_id: aiConfigId, style: styleChoice, ...skillChoice.payload, expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
       created = aiScope === 'scene' ? await sceneApi.revise(pid, chapter.id, current.id, request) : await reviseChapter(chapter.id, request)
-      if (!canEditNow()) return false
-      if (sceneEditor.controller.getSnapshot().scene?.id !== current.id) { trackTask(created); setStarting(false); return true }
+      if (!isCurrentRequest(pending)) return false
+      if (sceneEditor.controller.getSnapshot().scene?.id !== current.id) { trackTask(created); return true }
     } catch (err) {
-      if (canEditNow() && sceneEditor.controller.getSnapshot().scene?.id === currentSceneId) message.error(errorMessage(err))
-      setStarting(false)
-      await reloadChapter()
+      finishTaskRequest(pending)
+      if (isCurrentRequest(pending)) {
+        if (sceneEditor.controller.getSnapshot().scene?.id === current.id) message.error(errorMessage(err))
+        await reloadChapter(() => isCurrentRequest(pending))
+      }
       return false
-    }
-    setStarting(false)
+    } finally { finishTaskRequest(pending) }
     trackTask(created)
     setReviseCompare(null)
     if (aiMode === 'rewrite') setAiMode('generate')
@@ -611,7 +647,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const stuck = canUseAI && !otherSceneWriting && chapter.status === 'generating' && !aiRunning && attachChecked && !batchWriting
   // 批量正在写本章：正文 / 标题只读、不能保存（后端对生成中章节的正文 PATCH 返回 409，写完后会用服务端正文覆盖本地）
   const batchLocked = otherSceneWriting || batchWriting && chapter.status === 'generating'
-  const status = aiRunning ? CHAPTER_STATUS.generating : CHAPTER_STATUS[chapter.status]
+  const status = starting ? { color: 'processing', label: '正在创建任务' }
+    : aiTask.running ? CHAPTER_STATUS.generating : CHAPTER_STATUS[chapter.status]
   const revising = aiTask.running && aiTask.task?.kind === 'chapter.revise'
   const reviseRunningCopy = reviseRunningPresentation(aiTask.task, autoAnalyze)
   const analysisStatus = ANALYSIS_STATUS[analysis.status]
@@ -767,12 +804,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           },
         ]}
       />
-      {aiTask.running && <><Typography.Text strong>{aiTask.task?.scene_id ? `场景任务 #${aiTask.task.scene_id} · 只读提案` : '整章保结构任务 · 只读提案'}</Typography.Text><StreamOutput text={aiTask.text} running maxHeight={320} /></>}
       {revising && (
         <Alert type="info" showIcon message={reviseRunningCopy.title} description={reviseRunningCopy.description} />
       )}
       {aiTask.running && aiStatus === 'queued' && aiTask.task && (
-        <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，稍后返回会自动接上。" />
+        <Alert type="info" showIcon message={queueLabel(aiTask.task)} description="任务在后台排队，可离开本页，在任务面板查看进度。" />
       )}
       {aiTask.running && aiStatus === 'running' && aiTask.task && (
         <div>
@@ -794,9 +830,11 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         />
       )}
       {skillProblem && !aiRunning && aiMode !== 'rewrite' && <Typography.Text type="warning" style={{ fontSize: 12 }}>{skillProblem}</Typography.Text>}
-      {aiMode === 'rewrite' ? null : aiRunning ? (
-        <Button danger block icon={<StopOutlined />} disabled={!aiTask.running} onClick={() => void handleCancel()}>
-          {aiStatus === 'queued' ? '取消排队' : `停止（已输出 ${countWords(aiTask.text)} 字）`}
+      {aiMode === 'rewrite' ? null : starting ? (
+        <Button block loading disabled>正在创建任务</Button>
+      ) : aiTask.running ? (
+        <Button danger block icon={<StopOutlined />} onClick={() => void handleCancel()}>
+          {aiStatus === 'queued' ? '取消排队' : outputWords > 0 ? `停止（已输出 ${outputWords} 字）` : '停止生成'}
         </Button>
       ) : aiMode === 'generate' ? (
         <Button
@@ -818,14 +856,6 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         >
           {aiScope === 'scene' ? '润色当前场景' : '逐场景润色整章'}
         </Button>
-      )}
-      {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
-        <Alert
-          type="error"
-          showIcon
-          message={aiStatus === 'interrupted' ? '任务已中断' : '生成失败'}
-          description={aiTask.error}
-        />
       )}
       {aiMode !== 'rewrite' && (
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
@@ -1097,6 +1127,43 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               </Space>
             </div>
             {otherSceneWriting && <Alert type="info" showIcon message="本章另一场景正在后台写作；当前草稿保留，完成后请核对最新版本。" style={{ marginBottom: 12 }} />}
+            {aiTask.error && !aiRunning && aiMode !== 'rewrite' && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={aiStatus === 'interrupted' ? '任务已中断' : '生成失败'}
+                description={aiTask.error}
+              />
+            )}
+            {(starting || (aiTask.running && (!aiTask.task?.scene_id || aiTask.task.scene_id === currentSceneId))) && (
+              <section aria-label="AI 实时预览" style={{ marginBottom: 16 }}>
+                <Card
+                  size="small"
+                  title={starting ? '正在创建任务' : aiTask.task?.scene_id ? `场景 ${scene ? scene.sort + 1 : ''}实时预览` : '整章实时预览'}
+                  extra={!starting && <Button danger size="small" icon={<StopOutlined />} onClick={() => void handleCancel()}>{aiStatus === 'queued' ? '取消排队' : '停止生成'}</Button>}
+                >
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                    {starting ? '正在确认生成任务，请稍候。' : '只读提案 · 原稿保留在下方，全部生成成功后保存。'}
+                  </Typography.Paragraph>
+                  {!starting && outputWords > 0 ? (
+                    <>
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                        {aiTask.task?.stage || `已输出 ${outputWords} 字`}
+                      </Typography.Paragraph>
+                      <StreamOutput text={aiTask.text} running maxHeight={420} />
+                    </>
+                  ) : (
+                    <Space role="status" style={{ padding: '16px 0' }}>
+                      <Spin size="small" />
+                      <Typography.Text type="secondary">
+                        {starting ? '正在创建任务…' : aiTask.task?.stage || (aiStatus === 'queued' && aiTask.task ? queueLabel(aiTask.task) : '等待模型输出…')}
+                      </Typography.Text>
+                    </Space>
+                  )}
+                </Card>
+              </section>
+            )}
             <SceneWritingPanel
               aiConfigId={aiConfigId}
               styleChoice={styleChoice}

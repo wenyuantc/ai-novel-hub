@@ -126,6 +126,10 @@ def make_settings(tmp_path, **overrides) -> Settings:
 `conftest.py` 会在导入 `app.main` **之前**在 `os.environ` 中设置 `JWT_SECRET`、`ENCRYPTION_KEY` 和 `FRONTEND_DIST_DIR`，
 因为 `app.main` 在导入时就会构建默认应用。
 
+模型流使用有界 producer 后，`Gate.reached` 只证明模型读取到了该节点。依赖“首片已发布”的快照、取消或重启测试应先等待真实 `TaskHub.text` 或对应发送事件，再执行原断言；不得用固定 sleep 代替同步。
+
+全局注册的 handler 实例方法需要临时替换时，在 handler 类上打补丁并保留 `self` 参数。实例级方法补丁恢复时可能把原 bound method 留在实例 `__dict__`，遮蔽后续类级补丁；`blocking_outline` 与 PostgreSQL 锁顺序测试的顺序回归覆盖此问题。
+
 ### 跨数据库方言的建模隔离
 
 PG测试建库统一调用`tests.schema_helpers.create_isolated_schema(connection)`，每次以`Table.to_metadata`创建独立MetaData，不在ORM共享`Base.metadata`上运行PG create_all。PG的AddConstraint会修改Constraint创建规则，使后续SQLite漏建`use_alter`外键；独立tmp_path不能隔离进程内MetaData状态，`foreign_key_check`也发现不了根本没有创建的FK。

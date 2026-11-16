@@ -355,13 +355,13 @@ async def test_run_with_unready_handler_finalizes_proven_round(app, client, make
 @pytest.fixture
 def blocking_outline(monkeypatch):
     """仅本测试临时让 outline.continue 接受协作执行，并以可控阻塞的 runner 代替模型调用。"""
-    handler = get_handler("outline.continue")
+    handler_cls = type(get_handler("outline.continue"))
     state = SimpleNamespace(reached=asyncio.Event(), release=asyncio.Event(), cancelled=0)
 
-    async def build_job(ctx, task, *, execution=None):
+    async def build_job(self, ctx, task, *, execution=None):
         return SimpleNamespace()
 
-    async def run(job, ctx):
+    async def run(self, job, ctx):
         state.reached.set()
         try:
             await state.release.wait()
@@ -371,19 +371,20 @@ def blocking_outline(monkeypatch):
         yield "delta", {"text": "旧授权下的输出"}
         yield "done", {"kind": "outline.continue", "items": []}
 
-    async def verify(db, task, **kwargs):
+    async def verify(self, db, task, **kwargs):
         return None
 
-    async def on_abort(ctx, task, *, execution=None):
+    async def on_abort(self, ctx, task, *, execution=None):
         return None
 
-    monkeypatch.setattr(handler, "collaboration_execution_ready", True, raising=False)
-    monkeypatch.setattr(handler, "build_job", build_job)
-    monkeypatch.setattr(handler, "run", run)
-    monkeypatch.setattr(handler, "verify_event", verify)
-    monkeypatch.setattr(handler, "verify_finalization", verify)
-    monkeypatch.setattr(handler, "stream_guard", None)
-    monkeypatch.setattr(handler, "on_abort", on_abort)
+    # 实例补丁恢复 bound method 后会遮蔽后续类级补丁；在类上替换以保留原方法查找语义。
+    monkeypatch.setattr(handler_cls, "collaboration_execution_ready", True, raising=False)
+    monkeypatch.setattr(handler_cls, "build_job", build_job)
+    monkeypatch.setattr(handler_cls, "run", run)
+    monkeypatch.setattr(handler_cls, "verify_event", verify)
+    monkeypatch.setattr(handler_cls, "verify_finalization", verify)
+    monkeypatch.setattr(handler_cls, "stream_guard", None)
+    monkeypatch.setattr(handler_cls, "on_abort", on_abort)
     return state
 
 

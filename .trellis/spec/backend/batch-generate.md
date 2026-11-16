@@ -22,6 +22,8 @@
 
 > 断点受限收尾（E5-d）：全部章节已持久、仅完成发布核验失败而按断点记 succeeded 时，终态帧为带任务快照的 `done {task, result: null, unpublished: true, detail: "批量已完成，请刷新后查看"}`（不带 summarize 结果）；按断点记 failed/cancelled/interrupted 时为带快照的普通 `error`。实时与回放一致，见 error-handling.md「收据收尾的终态帧（E5-d）」。
 
+> 本章占用已提交、`ChapterJob` 尚未构建时，阶段刷新可保存严格为空且与 `verified_text` 一致的正文；仍复用原 attempt guard 复核身份、占用、模型及授权。非空 `flush`、`delta`、`continue` 必须等本章 `ChapterJob` 与场景戳就绪。回归 `test_batch_stream_progress.py` 将刷新时点控制在第二章占用提交之后，覆盖正常跨章、伪造正文、静默权限变化及占用替换。
+
 ### 2. 签名
 
 ```python

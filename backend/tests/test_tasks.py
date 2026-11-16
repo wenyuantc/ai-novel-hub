@@ -70,10 +70,12 @@ async def test_subscribe_mid_stream_two_subscribers(app, client, fake_llm):
     fake_llm.push(["甲甲", gate, "乙乙", "丙丙"])
     task = (await _generate(client, ch, target_words=300)).json()
     await gate.wait_reached()
+    engine = app.state.task_engine
+    # 模型预读到 Gate 不代表该片已通过发布门禁；按实际已发布文本建立中途订阅点。
+    await wait_until(lambda: engine.hubs[task["id"]].text == "甲甲")
     # 运行中可直接查看已输出文本
     assert (await client.get(f"/api/v1/tasks/{task['id']}/output", params=task_params(task))).json()["text"] == "甲甲"
 
-    engine = app.state.task_engine
     first = asyncio.ensure_future(client.get(f"/api/v1/tasks/{task['id']}/stream", params=task_params(task)))
     second = asyncio.ensure_future(client.get(f"/api/v1/tasks/{task['id']}/stream", params=task_params(task)))
     await wait_until(lambda: engine.hubs[task["id"]].subscriber_count == 2)
@@ -197,6 +199,7 @@ async def test_disconnect_does_not_stop_task(app, client, fake_llm):
     task = (await _generate(client, ch)).json()
     await gate.wait_reached()
     engine = app.state.task_engine
+    await wait_until(lambda: engine.hubs[task["id"]].text == "开头")
     sub = engine.subscribe(task["id"])
     event, data = await sub.__anext__()
     assert event == "snapshot" and data["text"] == "开头"
@@ -240,6 +243,7 @@ async def test_cancel_running_task(app, client, fake_llm):
     task = (await _generate(client, ch)).json()
     await gate.wait_reached()
     engine = app.state.task_engine
+    await wait_until(lambda: engine.hubs[task["id"]].text == "第一块")
     subscriber = asyncio.ensure_future(client.get(f"/api/v1/tasks/{task['id']}/stream", params=task_params(task)))
     await wait_until(lambda: engine.hubs[task["id"]].subscriber_count == 1)
 
@@ -305,10 +309,11 @@ async def test_stop_interrupts_running_and_keeps_queued(app, client, fake_llm):
     fake_llm.push("乙章正文")
     t1 = (await _generate(client, ch1)).json()
     await gate.wait_reached()
+    engine = app.state.task_engine
+    await wait_until(lambda: engine.hubs[t1["id"]].text == "第一块")
     t2 = (await _generate(client, ch2)).json()
     assert t2["status"] == "queued"
 
-    engine = app.state.task_engine
     await engine.stop()
     a = (await client.get(f"/api/v1/tasks/{t1['id']}", params=task_params(t1))).json()
     assert a["status"] == "interrupted" and a["error"] == "服务重启，任务已中断" and a["finished_at"]

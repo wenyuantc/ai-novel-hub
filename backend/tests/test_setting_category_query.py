@@ -642,10 +642,10 @@ async def snapshot_database(request, app, client):
     if (
         parsed.drivername != "postgresql+asyncpg"
         or parsed.host != "127.0.0.1"
-        or parsed.port != 32814
+        or parsed.username != "field_test"
         or parsed.database != "fields_verify"
     ):
-        raise AssertionError("分类查询PG验证仅允许本任务的本机fields_verify隔离库")
+        raise AssertionError("分类查询PG验证仅允许本机field_test用户的fields_verify隔离库")
     schema = f"setting_category_query_test_{uuid4().hex}"
     admin_engine = create_async_engine(database_url)
     engine = create_async_engine(database_url, connect_args={"server_settings": {"search_path": schema}})

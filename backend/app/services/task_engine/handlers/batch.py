@@ -232,8 +232,9 @@ class BatchHandler:
         await ai_dispatch.require_visibility_stamp(db, job.visibility_stamp)
         if job.active_claim is not None:
             active, attempt = job.active_chapter_job, job.active_attempt
-            if attempt is None or (active is None and event != "stage"):
-                # 构建本章 ChapterJob 之前只允许本 attempt 的阶段刷新（E5-c2 发布来源），不允许任何正文。
+            if attempt is None or (active is None and event != "stage"
+                                   and not (event == "flush" and data.get("text") == job.verified_text == "")):
+                # 构建前只允许本 attempt 的阶段刷新及对应空正文落库；仍走下方原 guard，不允许任何正文。
                 raise ConflictError("批量章节输出身份已变化", extra={"code": "chapter_claim_changed"})
             if active is not None and (active.chapter_claim != job.active_claim
                                        or active.batch_attempt != attempt or active.execution != execution

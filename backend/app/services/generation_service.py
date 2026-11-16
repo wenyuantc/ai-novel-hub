@@ -38,6 +38,7 @@ from app.ai.prompts import (
 )
 from app.ai.prompts.registry import prompt_meta
 from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, ProviderFactory, ThinkingLevel
+from app.ai.streaming import coalesce_buffered_text
 from app.ai.templating import PromptOverride, TemplateRenderError
 from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
@@ -86,6 +87,8 @@ BATCH_RANGE_CONFLICT = "该章节在批量生成范围内，请等待批量完�
 # 字数低于目标的该比例时自动续写
 CONTINUE_RATIO = 0.85
 MAX_CONTINUE_ROUNDS = 2
+# 按有界批次交付模型文本，避免单字符碎片反复进入数据库事件校验和进度落库。
+STREAM_BATCH_CHARS = 4096
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -204,10 +207,10 @@ async def stream_pieces(
     pieces: list[str],
     prefix: str = "",
 ) -> AsyncIterator[Event]:
-    """流式调用模型：每个分块追加到 pieces 并产出 delta；prefix 在首个分块前作为 delta 发出。"""
+    """首片即时、后批有界合并后产出 delta；prefix 只在首个非空分块前发出。"""
     stream_iter = provider.generate_stream(messages, model, max_tokens=max_tokens, thinking=thinking)
-    async with aclosing(stream_iter) as stream:
-        async for piece in stream:
+    async with aclosing(coalesce_buffered_text(stream_iter, max_chars=STREAM_BATCH_CHARS)) as ready:
+        async for piece in ready:
             if prefix:
                 yield "delta", {"text": prefix}
                 prefix = ""
