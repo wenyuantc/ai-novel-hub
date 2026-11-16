@@ -362,6 +362,9 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 
 - runner 的 `stage` 事件不直接转发，只更新 hub 的阶段文案（经 `progress` 事件推送）。
 
+- **作者订阅首帧不能遗漏领取状态**：`out_json_live` 的权限投影会异步等待，期间任务可能从 queued 变为 running，唯一的领取 `progress` 可能在订阅注册前已经广播。最终原身份／授权复核后，作者路径须在与 `hub.subscribe()` 相同的无 `await` 区间刷新首帧的公开运行字段；使用本次已校验行及同 UUID、同入队轮次、执行键相容的 hub，不沿用异步投影之前的 queued 状态。已运行时清空排队位次，并带上最新可证明的阶段／进度；开始时间只使用已读取的事实，不猜测时间。正文快照和队列注册仍同步完成，首帧正文加后续 delta 必须无重复、无遗漏。
+  此刷新不重新查询或投影、不缓存授权、不提前注册订阅，仍经过原 `checked_frame` 和实际发送前的授权复核；协作者受控帧的来源证明与发送租约不变。回归 `test_task_stream_snapshot.py` 覆盖投影／最后读取期间领取、尚无正文、已有正文和发送前失权，失败与关闭后不得残留订阅。
+
 - 章节 `result`：`{"chapter": ChapterOut, "warning"?: "自动续写失败：…"}`；向导 `result`：`{"kind", "items": [Out...]}`。
 - 不重复不遗漏：`TaskHub.subscribe()` 在同一同步临界区内复制缓冲区并注册订阅队列（中间没有 `await`），
   快照之后的第一个 delta 恰好接在快照末尾。

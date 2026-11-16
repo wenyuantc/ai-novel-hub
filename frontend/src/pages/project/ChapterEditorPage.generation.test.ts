@@ -241,6 +241,31 @@ describe('章节生成的创建阶段和主区实时预览', () => {
     expect(net.fetch).toHaveBeenCalledOnce()
   })
 
+  it('202 排队任务收到运行中首快照后立即切换按钮与实际阶段，不等待正文首字', async () => {
+    const net = network()
+    page().click('重新生成当前场景')
+    net.created.resolve({ ...task('queued'), queue_position: 1 })
+    await vi.waitFor(() => expect(net.fetch.mock.calls.some(([url]) => url.includes('/stream?task_key='))).toBe(true))
+    expect(page().html).toContain('取消排队')
+
+    const running = { ...task('running'), stage: '正在构建场景上下文', progress: 10 }
+    net.send('snapshot', { task: running, text: '' })
+    await vi.waitFor(() => expect(page().html).toContain('正在构建场景上下文'))
+    const started = page().html
+    expect(started).toContain('停止生成')
+    expect(started).not.toContain('取消排队')
+    expect(started).not.toContain('已输出 0 字')
+    expect(started).toContain(view.draft)
+
+    net.send('delta', { text: '首段已实时到达主区。' })
+    await vi.waitFor(() => expect(page().html).toContain('首段已实时到达主区。'))
+    expect(view.changeDocument).not.toHaveBeenCalled()
+    expect(view.loadScene).not.toHaveBeenCalled()
+    net.send('done', { task: task('succeeded'), result: { chapter: { ...view.chapter, status: 'draft' } } })
+    await vi.waitFor(() => expect(view.loadScene).toHaveBeenCalledOnce())
+    expect(page().html).not.toContain('aria-label="AI 实时预览"')
+  })
+
   it.each([22, null])('任务范围 %s 的真实 delta 在正文主区逐步可见，原稿始终不变', async (sceneId) => {
     const net = network()
     let current = page()

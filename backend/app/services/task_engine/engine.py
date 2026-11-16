@@ -3270,6 +3270,21 @@ class TaskEngine:
                         if guarded and row is not None and persisted_source(row) != original_view:
                             row = None
                         if matches_binding(row) and row.status in ACTIVE_TASK_STATUSES and not hub.closed:
+                            if not guarded:
+                                # 投影等待期间领取 progress 可能已广播；最终 SELECT 返回前也可能完成领取。
+                                # 与正文快照/注册在同一无 await 段同步公开状态，不重新投影私人引用。
+                                live = task_service.to_out(row).model_dump(mode="json", include={
+                                    "status", "progress", "stage", "started_at",
+                                })
+                                if (self.hubs.get(task_id) is hub and hub.statistics_key == row.statistics_key
+                                        and hub.queued_at == row.queued_at and hub.status == "running"
+                                        and hub.execution_key is not None
+                                        and (hub.execution_key == row.execution_key
+                                             or (row.status == "queued" and row.execution_key is None))):
+                                    live.update(hub.progress_payload())
+                                out.update(live)
+                                if out["status"] != "queued":
+                                    out["queue_position"] = None
                             text, sub = hub.subscribe(guarded=guarded)
                             if row.project_id is not None and actor_id is not None:
                                 subscription_key = (row.project_id, actor_id)
