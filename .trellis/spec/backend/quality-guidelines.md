@@ -200,6 +200,10 @@ async def test_registration_disabled(client): ...
 `parse_sse(text)` 返回 `[(event, data)]`；`make_client()` 提供第二个拥有独立
 cookie jar 的客户端，用于跨用户测试。
 
+数据库任务终态不代表后台收尾已经结束：收据终态帧复核、历史裁剪和 hub 清理可能仍在执行。
+检查内存资源释放时，先有界等待原 runner 退出，再保留 `has_cleanup_failure == False`、hub 不存在等严格断言；
+用 gate 区分「已提交终态」与「执行体已退出」，不能把轮询到终态当成清理完成的屏障。
+
 ### 每个功能都需要
 
 - 通过 HTTP 的正常路径测试（`httpx.AsyncClient` + `ASGITransport`）。

@@ -571,6 +571,8 @@ async def _assert_receipt_completed(app, row, world, text, calls, fake_llm):
         # 不派生自动分析（收尾不借当前身份补签任何后续任务）。
         assert await db.scalar(select(func.count(Task.id)).where(Task.kind == "chapter.analyze")) == 0
     engine = app.state.task_engine
+    # 数据库终态早于收据终态帧重读与 hub 清理；先等原执行体完成，再严格检查内存资源已释放。
+    await wait_until(lambda: row.id not in engine._running, within=10)
     assert not engine.has_cleanup_failure(world.project["id"])
     assert row.id not in engine.hubs
 
