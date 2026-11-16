@@ -1,4 +1,4 @@
-import { api, ApiError } from './client'
+import { api, ApiError, request } from './client'
 import { hasTaskIdentity, type TaskIdentity } from './tasks'
 import type { AgentChange, AgentConversation, AgentConversationDetail, AgentConversationUpdate, AgentSendRequest, AgentSendResult, AgentTurnResult } from './types'
 
@@ -32,7 +32,8 @@ export function snapshotAgentTurn(task: TaskIdentity, action: AgentTurnAction, s
   return entries
 }
 export const agentApi = {
-  list: (pid: number) => api.get<AgentConversation[]>(`${base(pid)}/conversations`),
+  list: (pid: number, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<AgentConversation[]>(`${base(pid)}/conversations`, { signal, isCurrent }),
   create: (pid: number, title?: string) => api.post<AgentConversation>(`${base(pid)}/conversations`, { title }),
   get: (pid: number, cid: number) => api.get<AgentConversationDetail>(`${base(pid)}/conversations/${cid}`),
   /** mcp_plugin_ids：每个 id 须属于本人，否则 404 */

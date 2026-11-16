@@ -13,8 +13,8 @@ export interface SceneListQuery { offset?: number; limit?: number }
 export const sceneApi = {
   list: (pid: number, cid: number, query: SceneListQuery = {}, signal?: AbortSignal) =>
     request<ScenePage>(base(pid, cid), { query: { ...query }, signal }),
-  directory: (pid: number, query: SceneListQuery = {}, signal?: AbortSignal) =>
-    request<ScenePage>(`/projects/${pid}/scenes`, { query: { ...query }, signal }),
+  directory: (pid: number, query: SceneListQuery = {}, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<ScenePage>(`/projects/${pid}/scenes`, { query: { ...query }, signal, isCurrent }),
   get: (pid: number, cid: number, sid: number, signal?: AbortSignal) =>
     request<Scene>(`${base(pid, cid)}/${sid}`, { signal }),
   create: (pid: number, cid: number, body: SceneCreate) =>

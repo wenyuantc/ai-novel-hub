@@ -143,6 +143,7 @@ async def test_cross_user_isolation(client, make_client):
         ("POST", f"{base}/wizard/outline"),
         ("GET", f"{base}/export?format=txt"),
         ("GET", f"{base}/export?format=epub"),
+        ("POST", f"{base}/export-document"),
         ("GET", f"{base}/backup"),
         ("GET", f"{base}/backup/estimate"),
         ("GET", f"{base}/world?category=place"),
@@ -262,6 +263,7 @@ async def test_cross_user_isolation(client, make_client):
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
+        f"{base}/export-document": {"format": "docx"},
         f"{base}/setting-field-definitions": {
             "expected_fields_revision": 0, "label": "字段", "field_type": "text", "applicable_types": ["character"],
         },

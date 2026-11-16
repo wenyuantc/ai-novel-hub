@@ -14,8 +14,8 @@ const option = (pid: number, id: number, optionId: number) => `${definition(pid,
 const entryFields = (pid: number, entry: SettingEntryRef) => `/projects/${pid}/setting-entries/${entry.kind}/${entry.id}/fields`
 
 export const settingFieldsApi = {
-  listEntries: (pid: number, query: { types?: SettingEntryType[]; q?: string; page?: number; page_size?: number } = {}, signal?: AbortSignal) =>
-    request<SettingEntryPage>(`/projects/${pid}/setting-entries`, { query: { ...query }, signal }),
+  listEntries: (pid: number, query: { types?: SettingEntryType[]; q?: string; page?: number; page_size?: number } = {}, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<SettingEntryPage>(`/projects/${pid}/setting-entries`, { query: { ...query }, signal, isCurrent }),
   getEntryFields: (pid: number, entry: SettingEntryRef, position: ProgressionPositionInput | null = null, signal?: AbortSignal) =>
     request<SettingEntryFields>(entryFields(pid, entry), { query: position ? { ...storyPositionQuery(position) } : undefined, signal }),
   updateBaseline: (pid: number, entry: SettingEntryRef, definitionId: number, body: SettingFieldValueWrite, signal?: AbortSignal) =>

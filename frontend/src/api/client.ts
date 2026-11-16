@@ -139,12 +139,18 @@ export interface RequestOptions {
   body?: unknown
   query?: Record<string, QueryValue>
   signal?: AbortSignal
+  /** 可选的局部生命周期：失效后错误不能触发全局身份或作品权限副作用。 */
+  isCurrent?: () => boolean
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<Response> {
   const generation = requestGeneration
-  const { method = 'GET', body, query, signal } = options
-  const onProjectFailure = captureProjectFailureForRequest(path, method)
+  const { method = 'GET', body, query, signal, isCurrent } = options
+  const projectFailure = captureProjectFailureForRequest(path, method)
+  const onProjectFailure: CapturedProjectFailure | null = isCurrent ? {
+    isCurrent: () => isCurrent() && !signal?.aborted && (projectFailure?.isCurrent() ?? true),
+    refresh: () => projectFailure?.refresh(),
+  } : projectFailure
   const headers: Record<string, string> = { Accept: 'application/json' }
   let payload: string | FormData | undefined
   if (body instanceof FormData) {

@@ -681,6 +681,61 @@ async def project_log_payload(
     return await _project_payload(db, user_id, project_id, payload, log_provenance=provenance)
 
 
+async def project_document_payload_in_snapshot(
+    db: AsyncSession, user_id: int, project_id: int, payload: Any, *, is_owner: bool,
+) -> tuple[Any, dict[str, dict[int, Any]]]:
+    """在调用方已授权的同一只读快照中投影文档聊天，按语句分批，不另开验证会话。
+
+    调用方必须先在该快照验证 actor、作品生命周期及原协作授权，然后核验每个所选
+    会话/消息的完整冻结证据。该函数不是单独的授权入口。
+    """
+    refs: dict[str, set[int]] = {
+        kind: set() for kind in ("configs", "tasks", "logs", "styles", "skills", "plugins")
+    }
+    _collect(payload, refs)
+    visible = {kind: set() for kind in refs}
+    identities: dict[str, dict[int, Any]] = {"tasks": {}, "logs": {}}
+    fingerprints: dict[str, dict[int, Any]] = {"tasks": {}, "logs": {}}
+    with db.no_autoflush:
+        for kind, ids in refs.items():
+            values = sorted(ids)
+            for offset in range(0, len(values), 200):
+                batch = values[offset:offset + 200]
+                if kind == "tasks":
+                    statement = select(Task.id, Task.statistics_key, Task.queued_at, Task.status).where(
+                        Task.id.in_(batch), Task.project_id == project_id, task_visible_to_actor(db, user_id),
+                        or_(Task.status.not_in(OPEN_TASK_STATUSES),
+                            task_visible_to_actor(db, user_id, active_grant_required=True)),
+                    )
+                    for row in await db.execute(statement):
+                        visible[kind].add(row.id)
+                        identities[kind][row.id] = row.statistics_key
+                        fingerprints[kind][row.id] = (row.statistics_key, jsonable_encoder(row.queued_at), row.status)
+                    continue
+                if kind == "logs":
+                    statement = select(
+                        GenerationLog.id, GenerationLog.log_instance_key, GenerationLog.created_at,
+                    ).where(
+                        GenerationLog.id.in_(batch), GenerationLog.actor_user_id == user_id,
+                        GenerationLog.project_id == project_id,
+                    )
+                    for row in await db.execute(statement):
+                        visible[kind].add(row.id)
+                        identity = (row.log_instance_key, jsonable_encoder(row.created_at))
+                        identities[kind][row.id] = identity
+                        fingerprints[kind][row.id] = identity
+                    continue
+                model, condition = {
+                    "configs": (AIConfig, AIConfig.user_id == user_id),
+                    "styles": (WritingStyle, or_(WritingStyle.user_id == user_id, WritingStyle.user_id.is_(None))),
+                    "skills": (Skill, or_(Skill.owner_user_id == user_id, Skill.owner_user_id.is_(None))),
+                    "plugins": (McpPlugin, McpPlugin.user_id == user_id),
+                }[kind]
+                visible[kind].update(await db.scalars(select(model.id).where(model.id.in_(batch), condition)))
+    projected = _project(payload, visible, identities, user_id, project_id, is_owner)
+    return (None if projected is _DROP else projected), fingerprints
+
+
 async def _project_payload(
     db: AsyncSession, user_id: int, project_id: int, payload: Any, agent_proofs: dict[str, Any] | None = None,
     *, log_provenance: list[tuple[Any, Any]] | None = None,

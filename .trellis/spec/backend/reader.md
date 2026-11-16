@@ -33,7 +33,7 @@ project_service.WRITTEN = Chapter.word_count > 0   # 「已写章节」
 - `last_edited_chapter_id`：已写章节中 `updated_at` 最大（同时间取 id 大）的一个（`row_number() over (partition by project_id)`）。
 - 列表与详情都返回这两个字段；`list_projects` 查询次数固定（项目 + 统计 + 风格 1 次、最近编辑 1 次、进度至多 2 次），不随项目数增长。
 - 目录只含已写章节，按 `(chapter_no, id)` 排序；卷信息经 `outline_id` 取大纲 `volume_no` / `volume_title`，没有关联大纲时都为 null。侧边栏复用分析接口。
-- 阅读章接口以一致快照返回 `Chapter.content` 和仅面向读者的块／行内格式；无格式时 `blocks=null`，避免长纯文本膨胀。作者区块、区块标题和标记不出现在阅读载荷中。正文由 Scene 有序投影维护；排序、拆并、恢复和 AI 保存必须同步投影与字数。Reader 不在客户端重新拼场景、不跳过零字／空白景，不把摘要插入正文。TXT／Markdown／EPUB 和开放章正文沿用同一兼容投影；Markdown／EPUB 可包含读者格式，进度仍为章 ID＋ratio。见[场景合同](./scenes.md)、[富文档合同](./rich-documents.md)。
+- 阅读章接口以一致快照返回 `Chapter.content` 和仅面向读者的块／行内格式；无格式时 `blocks=null`，避免长纯文本膨胀。作者区块、区块标题和标记不出现在阅读载荷中。正文由 Scene 有序投影维护；排序、拆并、恢复和 AI 保存必须同步投影与字数。Reader 不在客户端重新拼场景、不跳过零字／空白景，不把摘要插入正文。旧 TXT／Markdown／EPUB 和开放章正文沿用完整章兼容投影；新 TXT／Markdown／Word 还可选择场景和摘要，Markdown／Word／EPUB 可包含读者格式。进度仍为章 ID＋ratio。见[场景合同](./scenes.md)、[富文档合同](./rich-documents.md)、[文档导出](./document-export.md)。
 - 备份：`reading_progress` 登记在 `PROJECT_RULE.json_refs`（`remap.reading_progress`），见 project-transfer.md。
 
 ### 4. 必需的测试

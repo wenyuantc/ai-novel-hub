@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
+from app.schemas.export import DocumentExportRequest
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgressUpdate
 from app.services import export_service, project_access
 from app.services import project_service as svc
@@ -69,6 +70,18 @@ async def export_project(
         include_synopsis=include_synopsis,
     )
     headers = {"Content-Disposition": file.content_disposition}
+    if file.warnings_header:
+        headers["X-Export-Warnings"] = file.warnings_header
+    return Response(content=file.body, media_type=file.media_type, headers=headers)
+
+
+@router.post("/{project_id}/export-document")
+async def export_document(project_id: int, body: DocumentExportRequest, user: CurrentUser, db: DbDep) -> Response:
+    """将已保存正文、摘要及所选资料组合为可阅读文档。"""
+    from app.services.document_export.service import export_document as build_document
+
+    file = await build_document(db, user.id, project_id, body)
+    headers = {"Content-Disposition": file.content_disposition, "Cache-Control": "no-store"}
     if file.warnings_header:
         headers["X-Export-Warnings"] = file.warnings_header
     return Response(content=file.body, media_type=file.media_type, headers=headers)

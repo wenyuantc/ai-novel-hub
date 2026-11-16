@@ -209,7 +209,7 @@ function OverviewInner({ project }: { project: Project }) {
                 用灵感模式补全
               </Button>}
               {canExport && <Button type="primary" icon={<DownloadOutlined />} onClick={() => setExportOpen(true)}>
-                导出 TXT / Markdown / EPUB
+                导出 TXT / Markdown / Word / EPUB
               </Button>}
               {canBackup && <Button icon={<CloudDownloadOutlined />} onClick={() => setBackupOpen(true)}>
                 备份项目

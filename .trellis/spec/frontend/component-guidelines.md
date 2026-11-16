@@ -380,7 +380,7 @@ dayjs.locale('zh-cn')
 
 ### 项目备份与导入 / EPUB 导出（`10-23-project-io-reader`）
 
-后端契约见 [../backend/project-transfer.md](../backend/project-transfer.md)。入口：项目概览「导出 TXT / Markdown / EPUB」（`ExportModal`）与「备份项目」（`BackupModal`）；项目列表页「导入备份」（`ImportBackupModal`，在「灵感模式」左侧）。两个弹窗都在打开时才挂载，由页面用 `React.lazy` + `<Suspense fallback={null}>` 按需加载。
+后端备份／EPUB 契约见 [../backend/project-transfer.md](../backend/project-transfer.md)，文档组合导出见 [../backend/document-export.md](../backend/document-export.md)。入口：项目概览「导出 TXT / Markdown / Word / EPUB」（`ExportModal`）与「备份项目」（`BackupModal`）；项目列表页「导入备份」（`ImportBackupModal`）。弹窗仅在打开时挂载；备份弹窗使用 `React.lazy` 按需加载，ExportModal 由概览页直接引用。
 
 | 组件 | 契约 |
 |-----------|------------------------|

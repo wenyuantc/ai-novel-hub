@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, request } from './client'
 import type {
   BatchGenerateRequest,
   BatchPreview,
@@ -14,7 +14,8 @@ import type {
 } from './types'
 
 export const chapterApi = {
-  list: (pid: number) => api.get<ChapterBrief[]>(`/projects/${pid}/chapters`),
+  list: (pid: number, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<ChapterBrief[]>(`/projects/${pid}/chapters`, { signal, isCurrent }),
   get: (pid: number, cid: number) => api.get<Chapter>(`/projects/${pid}/chapters/${cid}`),
   create: (pid: number, body: ChapterCreate) => api.post<Chapter>(`/projects/${pid}/chapters`, body),
   fromOutlines: (pid: number, outlineIds: number[] | null) =>

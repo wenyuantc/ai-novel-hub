@@ -1,4 +1,4 @@
-import { api, ApiError } from './client'
+import { api, ApiError, request } from './client'
 
 export interface ProjectNote {
   id: number
@@ -33,9 +33,9 @@ export interface NoteFlags { is_favorite?: boolean; is_pinned?: boolean }
 const base = (pid: number) => `/projects/${pid}/notes`
 
 export const noteApi = {
-  list: (pid: number, query: NoteQuery = {}) => api.get<NotePage>(base(pid), {
-    q: query.q?.trim() || undefined, favorite: query.favorite || undefined, pinned: query.pinned || undefined,
-    page: query.page, page_size: query.page_size,
+  list: (pid: number, query: NoteQuery = {}, signal?: AbortSignal, isCurrent?: () => boolean) => request<NotePage>(base(pid), {
+    query: { q: query.q?.trim() || undefined, favorite: query.favorite || undefined, pinned: query.pinned || undefined,
+      page: query.page, page_size: query.page_size }, signal, isCurrent,
   }),
   get: (pid: number, id: number) => api.get<ProjectNote>(`${base(pid)}/${id}`),
   create: (pid: number, body: NoteInput) => api.post<ProjectNote>(base(pid), body),

@@ -40,6 +40,7 @@
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
 | [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v9 格式（兼容 v1–v8）、表规则注册表、场景及历史核心引用、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
+| [可阅读文档组合导出](./document-export.md) | DOCX／Markdown／TXT 章景与摘要选择、设定／聊天／笔记、授权快照与下载竞态 | 已填写 |
 | [项目封面](./project-cover.md) | 人工与协作 AI 权限、本人模型优先及作者授权、受控发送和预览、魔数校验、微秒版本 URL、备份与 EPUB | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
 | [批量生成](./batch-generate.md) | `chapter.batch` 单任务逐章生成 + 任务内分析、断点（`step_cursor` / `checkpoint`）、待审核（`paused`）继续 / 结束、范围锁、失败重试与续跑 | 已填写 |
@@ -75,6 +76,7 @@
 | Skill 权限与导入格式、生成任务快照、正文组件引用、MCP 适配与安全、动态工具映射、external 提案与中断回收 | [skills-mcp.md](./skills-mcp.md) |
 | 检索打分与缓存、知识库建索引、剧情记忆同步与召回 | [retrieval.md](./retrieval.md) |
 | 项目备份注册表 / 导入映射、EPUB 结构 | [project-transfer.md](./project-transfer.md) |
+| Word 与正文／摘要／资料组合导出、最终授权快照 | [document-export.md](./document-export.md) |
 | 场景正文、局部码点、结构历史、继承与整章AI原子保存 | [scenes.md](./scenes.md) |
 | 场景富格式、作者区块、标记时间线与 AI 核对 | [rich-documents.md](./rich-documents.md) |
 | 封面上传与生成预览、版本 URL、图片备份与 EPUB | [project-cover.md](./project-cover.md) |

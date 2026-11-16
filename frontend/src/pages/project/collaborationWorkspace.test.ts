@@ -83,7 +83,7 @@ describe('共享作品的工作区能力', () => {
     expect(html).toContain('当前为查看者')
     expect(html).toContain('全部作品')
     expect(html).toContain('href="/projects"')
-    expect(html).toContain('导出 TXT / Markdown / EPUB')
+    expect(html).toContain('导出 TXT / Markdown / Word / EPUB')
     // 降为查看者后仍可读取本人已结束的任务记录（后端只返回本人任务）
     expect(html).toContain('data-testid="task-panel"')
     // 裁决 4：查看者可只读查看本人智能体会话（面板内不能新建 / 发送）。
@@ -125,7 +125,7 @@ describe('共享作品的工作区能力', () => {
     let html = renderWorkspace()
     expect(html).toContain('管理员正在管理')
     expect(html).toContain('href="/admin/projects"')
-    expect(html).not.toContain('导出 TXT / Markdown / EPUB')
+    expect(html).not.toContain('导出 TXT / Markdown / Word / EPUB')
     expect(html).not.toContain('data-testid="task-panel"')
     // 管理员人工 projects.edit 不并入智能体。
     expect(html).not.toContain('项目智能体')
