@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 45
-- **Last Active**: 2026-11-15
+- **Total Sessions**: 46
+- **Last Active**: 2026-11-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1515 | Active |
+| `journal-1.md` | ~1538 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 46 | 2026-11-16 | Word 导出与内容组合导出 | `cb3530f`, `2168681` | `codex/word-content-export` |
 | 45 | 2026-11-15 | 作品级协作者邀请：E4-i 收口、Gate E、文档与提交 | `4ecf119` | `codex/novel-collaborators` |
 | 44 | 2026-11-09 | Skill 自定义输入表单 | `baf7386` | `feat/prompt-inputs` |
 | 43 | 2026-11-09 | 提示词可复用组件 | `676afe1` | `feat/prompt-components-inputs` |

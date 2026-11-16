@@ -1513,3 +1513,26 @@ TODOS 第10项拆为父任务+组件/输入表单两个子任务并完成规划�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 46: Word 导出与内容组合导出
+<!-- trellis-session: v=2 fp=404a5cef0840050f -->
+
+**Date**: 2026-11-16
+**Task**: Word 导出与内容组合导出
+**Branch**: `codex/word-content-export`
+
+### Summary
+
+实现 DOCX、Markdown、TXT 内容组合导出与逐项资料选择；完成权限、浏览器和全量回归，修复测试顺序污染并归档任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cb3530f` | feat(export): 支持 Word 和内容组合导出 |
+| `2168681` | test(tasks): 修复处理器方法替换导致的测试污染 |
+
+### Status
+
+[OK] **Completed**
