@@ -1536,3 +1536,43 @@ TODOS 第10项拆为父任务+组件/输入表单两个子任务并完成规划�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 47: 笔名分组、小说模板与设定缩略图收口
+<!-- trellis-session: v=2 fp=7a738b569cb078a7 -->
+
+**Date**: 2026-11-17
+**Task**: 笔名分组、小说模板与设定缩略图收口
+**Branch**: `codex/pen-names-templates-thumbnails`
+
+### Summary
+
+独立复核追加的个人生图提示词模板，提交第 13 项全部改动并归档五个任务
+
+### Main Changes
+
+- 独立复核设定图片提示词模板：产品代码无需改动，修正一条断言旧默认文案的过期测试
+- 规范补记 setting.thumbnail 模板（key 计数 31→32、契约、必需测试、缩略图错误矩阵）
+- 重写过时的提交计划，一次提交笔名、设定缩略图、小说模板、缩略图 AI 生成及迁移 0055–0057
+- 归档四个子任务和父任务
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dfd50bc` | feat: 支持笔名分组、小说模板与设定缩略图 |
+
+### Testing
+
+- [OK] 后端受影响 5 个文件 66 passed，Ruff 通过；子代理另跑 10 个文件修复后通过
+- [OK] 前端 lint、build 通过，6 个相关 vitest 文件 38 passed
+- [OK] 未针对最终源码重跑后端完整 pytest 与前端完整 npm test；上次后端全量 7454 passed 早于提示词模板追加
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 需要时针对 main 重跑后端完整回归和前端完整测试
+- 为组件被删后读取 setting.thumbnail 模板返回 400 补专门测试
