@@ -1,5 +1,5 @@
 import { PictureOutlined, RobotOutlined } from '@ant-design/icons'
-import { Alert, Button, Popconfirm, Space, Typography, theme } from 'antd'
+import { Alert, Button, Image, Popconfirm, Space, Typography, theme } from 'antd'
 import { lazy, Suspense, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ApiError, currentRequestGeneration, errorMessage, request, watchRequestGeneration } from '../../api/client'
 import { deleteThumbnail, putThumbnail, thumbnailFileError, thumbnailUrl, type ThumbnailTarget } from '../../api/settingThumbnails'
@@ -26,10 +26,21 @@ interface ImageProps {
 export function SettingThumbnail({ target, thumbnail, name, size = 56 }: ImageProps) {
   const { token } = theme.useToken()
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const generation = useSyncExternalStore(subscribeGeneration, currentRequestGeneration, currentRequestGeneration)
   const url = thumbnail ? `${thumbnailUrl(target, thumbnail.version)}&g=${generation}` : null
   const style = { width: size, height: size, borderRadius: token.borderRadius, flexShrink: 0, background: token.colorFillAlter, objectFit: 'cover' as const }
-  if (url && failedUrl !== url) return <img src={url} alt={`${name}的缩略图`} loading="lazy" onError={() => setFailedUrl(url)} style={style} />
+  if (url && failedUrl !== url) return <>
+    {/* 列表卡片和树节点自身可点击，预览不触发外层的选择或跳转。 */}
+    <button type="button" aria-label={`预览${name}的缩略图`} title="点击预览" onClick={(event) => { event.stopPropagation(); setPreviewUrl(url) }}
+      style={{ width: size, height: size, padding: 0, border: 0, background: 'none', borderRadius: token.borderRadius, flexShrink: 0, lineHeight: 0, cursor: 'zoom-in' }}>
+      <img src={url} alt={`${name}的缩略图`} loading="lazy" onError={() => setFailedUrl(url)} style={style} />
+    </button>
+    {previewUrl === url && <span onClick={(event) => event.stopPropagation()}>
+      <Image src={url} alt={`${name}的缩略图`} style={{ display: 'none' }}
+        preview={{ visible: true, src: url, onVisibleChange: (visible) => { if (!visible) setPreviewUrl(null) } }} />
+    </span>}
+  </>
   return <span role="img" aria-label={url ? `${name}的缩略图加载失败` : `${name}暂无缩略图`} style={{ ...style, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextTertiary }}><PictureOutlined /></span>
 }
 

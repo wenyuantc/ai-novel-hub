@@ -13,6 +13,12 @@ describe('缩略图展示', () => {
     expect(html).toContain('林远的缩略图')
     expect(html).toContain('loading="lazy"')
   })
+  it('有图时提供可用键盘操作的预览按钮，无图占位不可点击', () => {
+    const withPicture = renderToStaticMarkup(createElement(SettingThumbnail, { target, thumbnail, name: '林远' }))
+    expect(withPicture).toMatch(/<button type="button" aria-label="预览林远的缩略图"/)
+    const empty = renderToStaticMarkup(createElement(SettingThumbnail, { target, name: '林远' }))
+    expect(empty).not.toContain('<button')
+  })
   it('无图展示可访问占位，查看权限没有修改按钮', () => {
     const html = renderToStaticMarkup(createElement(ThumbnailControls, { target, name: '林远', editable: false, busy: false,
       error: null, onFile: vi.fn(), onDelete: vi.fn() }))
