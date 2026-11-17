@@ -26,6 +26,8 @@ TaskKind = Literal[
     "chapter.batch",
     "kb.index",
     "book.import",
+    "consistency.check",
+    "consistency.impact",
 ]
 
 

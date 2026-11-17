@@ -314,6 +314,10 @@ function TaskList({ tasks, onView, onViewResult, onReview, onTrack, onRemoved, o
                     ? '已导入的项目、章节和已写入的设定都会保留。'
                     : t.kind === 'agent.turn'
                       ? '已执行的修改保留，可在会话中撤销。'
+                    : t.kind === 'consistency.check'
+                      ? '已完成章节的事实台账保留，重试时从未完成的章节继续。'
+                    : t.kind === 'consistency.impact'
+                      ? '尚未保存的评估结果会丢弃；已重新抽取的本章事实台账保留，正文与设定不受影响。'
                       : '已输出的内容不会保存，章节保持原样。'
               }
               okText="取消任务"

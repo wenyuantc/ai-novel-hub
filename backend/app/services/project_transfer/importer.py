@@ -46,7 +46,13 @@ from app.ai.images import IMAGE_MIMES, decode_image, validate_image
 from app.core.errors import AppError, BadRequestError
 from app.models import KbDocument, Project, ProjectCover, RelationshipType, StoryMemory, WritingStyle
 from app.models import entities as E
+from app.models.consistency import (
+    CONSISTENCY_CATEGORIES,
+    CONSISTENCY_ISSUE_STATUSES,
+    CONSISTENCY_SEVERITIES,
+)
 from app.models.entities import PROJECT_STATUSES
+from app.schemas import consistency as consistency_schema
 from app.schemas.planning import PLANNING_TONES
 from app.schemas.project import WizardProgress
 from app.schemas.setting_ai_visibility import MAX_AI_LINKS, StoredAiSettings, legacy_ai_settings
@@ -129,6 +135,9 @@ TABLE_LABELS: dict[str, str] = {
     "setting_categories": "设定分类",
     "setting_category_rules": "设定分类规则",
     "story_memories": "剧情记忆",
+    "consistency_ledgers": "事实台账",
+    "consistency_issues": "一致性问题",
+    "consistency_impacts": "修改影响记录",
     "kb_settings": "知识库设置",
     "kb_documents": "知识库文档",
     "outline_snapshots": "大纲快照",
@@ -182,6 +191,9 @@ ENUM_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
     ("setting_progressions", "protection"): ("automatic", "confirmed", "manual"),
     ("foreshadows", "status"): E.FORESHADOW_STATUSES,
     ("foreshadows", "source"): E.FORESHADOW_SOURCES,
+    ("consistency_issues", "category"): CONSISTENCY_CATEGORIES,
+    ("consistency_issues", "severity"): CONSISTENCY_SEVERITIES,
+    ("consistency_issues", "status"): CONSISTENCY_ISSUE_STATUSES,
     ("story_memories", "kind"): E.MEMORY_KINDS,
     ("story_memories", "origin"): E.MEMORY_ORIGINS,
     ("outline_snapshots", "reason"): E.OUTLINE_SNAPSHOT_REASONS,
@@ -508,8 +520,54 @@ def _migrate_v10_to_v11(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+CONSISTENCY_TABLES = ("consistency_ledgers", "consistency_issues")
+
+
+def _reject_future_consistency_data(data: dict[str, Any]) -> None:
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return
+    for name in CONSISTENCY_TABLES:
+        if name in tables and tables[name] != []:
+            raise BadRequestError("旧版备份不支持一致性检查资料，请使用原始版本文件")
+
+
+def _migrate_v11_to_v12(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        tables.update({name: [] for name in CONSISTENCY_TABLES})
+    return data
+
+
+IMPACT_TABLE = "consistency_impacts"
+LEDGER_PREV_COLUMNS = ("prev_facts", "prev_source_hash", "prev_text_hash")
+
+
+def _reject_future_impact_data(data: dict[str, Any]) -> None:
+    tables = data.get("tables")
+    if not isinstance(tables, dict):
+        return
+    ledgers = tables.get("consistency_ledgers")
+    if (IMPACT_TABLE in tables and tables[IMPACT_TABLE] != []) or any(
+        isinstance(row, dict) and row.get(column) is not None
+        for row in (ledgers if isinstance(ledgers, list) else []) for column in LEDGER_PREV_COLUMNS
+    ):
+        raise BadRequestError("旧版备份不支持修改影响资料，请使用原始版本文件")
+
+
+def _migrate_v12_to_v13(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        tables[IMPACT_TABLE] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
+    if version < 13:
+        _reject_future_impact_data(data)
+    if version < 12:
+        _reject_future_consistency_data(data)
     if version < 7:
         _reject_future_scene_data(data)
     if version < 6:
@@ -528,6 +586,8 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         8: _migrate_v8_to_v9,
         9: _migrate_v9_to_v10,
         10: _migrate_v10_to_v11,
+        11: _migrate_v11_to_v12,
+        12: _migrate_v12_to_v13,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -1009,6 +1069,75 @@ def _check_ai_data(backup: Backup, errors: _Errors) -> None:
             errors.add(f"设定 AI 关联第 {i} 行的源条目超过关联上限")
 
 
+def _check_consistency_data(backup: Backup, errors: _Errors) -> None:
+    """台账事实与问题证据是读取接口直接解析的 JSON：结构不符会让清单接口 500，预览阶段就拦下。"""
+
+    def _items(name: str, i: int, column: str, value: list[Any], schema, limit: int) -> list[Any]:
+        if len(value) > limit:
+            errors.add(f"{name}第 {i} 行字段 {column} 超过数量上限 {limit}")
+            return []
+        parsed = []
+        for item in value:
+            try:
+                parsed.append(schema.model_validate(item))
+            except ValidationError:
+                errors.add(f"{name}第 {i} 行字段 {column} 结构不正确")
+                return []
+        return parsed
+
+    name = label("consistency_ledgers")
+    chapters: set[int] = set()
+    for i, row in enumerate(backup.tables.get("consistency_ledgers") or [], start=1):
+        if row["chapter_id"] in chapters:
+            errors.add(f"{name}第 {i} 行的章节已有台账")
+        chapters.add(row["chapter_id"])
+        if row.get("schema_version", 1) < 1:
+            errors.add(f"{name}第 {i} 行字段 schema_version 必须为正整数")
+        facts = _items(name, i, "facts", row["facts"], consistency_schema.LedgerFact,
+                       consistency_schema.MAX_FACTS_PER_CHAPTER)
+        if len({fact.id for fact in facts}) != len(facts):
+            errors.add(f"{name}第 {i} 行字段 facts 的事实 id 重复")
+        previous = [row.get(column) for column in LEDGER_PREV_COLUMNS]
+        if any(value is not None for value in previous) and any(value is None for value in previous):
+            errors.add(f"{name}第 {i} 行的上一版台账（prev_*）必须同时给出或同时为空")
+        elif previous[0] is not None:
+            prev_facts = _items(name, i, "prev_facts", previous[0], consistency_schema.LedgerFact,
+                                consistency_schema.MAX_FACTS_PER_CHAPTER)
+            if len({fact.id for fact in prev_facts}) != len(prev_facts):
+                errors.add(f"{name}第 {i} 行字段 prev_facts 的事实 id 重复")
+    name = label("consistency_issues")
+    keys: set[str] = set()
+    for i, row in enumerate(backup.tables.get("consistency_issues") or [], start=1):
+        if row["identity_key"] in keys:
+            errors.add(f"{name}第 {i} 行的 identity_key 重复")
+        keys.add(row["identity_key"])
+        if row.get("revision", 1) < 1:
+            errors.add(f"{name}第 {i} 行字段 revision 必须为正整数")
+        if not row["title"].strip():
+            errors.add(f"{name}第 {i} 行字段 title 不能为空白")
+        _items(name, i, "evidence", row["evidence"], consistency_schema.IssueEvidence,
+               consistency_schema.MAX_EVIDENCE_PER_ISSUE)
+    name = label(IMPACT_TABLE)
+    chapters = set()
+    for i, row in enumerate(backup.tables.get(IMPACT_TABLE) or [], start=1):
+        if row["chapter_id"] in chapters:
+            errors.add(f"{name}第 {i} 行的章节已有影响记录")
+        chapters.add(row["chapter_id"])
+        if row.get("revision", 1) < 1:
+            errors.add(f"{name}第 {i} 行字段 revision 必须为正整数")
+        _items(name, i, "changes", row.get("changes") or [], consistency_schema.ImpactChange,
+               consistency_schema.MAX_IMPACT_CHANGES)
+        items = _items(name, i, "items", row.get("items") or [], consistency_schema.ImpactItem,
+                       consistency_schema.MAX_IMPACT_ITEMS)
+        if len({item.chapter_id for item in items}) != len(items):
+            errors.add(f"{name}第 {i} 行字段 items 的章节重复")
+        for column in ("uncovered", "acknowledged"):
+            value = row.get(column) or []
+            if (len(value) > consistency_schema.MAX_IMPACT_REFS or len(set(value)) != len(value)
+                    or any(item < 1 for item in value)):
+                errors.add(f"{name}第 {i} 行字段 {column} 结构不正确")
+
+
 def _check_styles(styles: Any, errors: _Errors) -> list[dict[str, Any]]:
     if styles is None:
         return []
@@ -1195,6 +1324,8 @@ def parse_backup(raw: bytes) -> Backup:
     validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
     validate_rich_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    _check_consistency_data(backup, errors)
     errors.raise_if_any()
     return backup
 

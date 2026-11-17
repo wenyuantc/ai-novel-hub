@@ -5,6 +5,7 @@ from app.models.audit import AdminAuditLog
 from app.models.backup import BackupArtifact, BackupRun, BackupSettings
 from app.models.base import Base
 from app.models.collaboration import CollaborationAuditEvent, ProjectCollaborator, SeriesCollaborator
+from app.models.consistency import ConsistencyImpact, ConsistencyIssue, ConsistencyLedger, ConsistencyRun
 from app.models.dashboard import DashboardDailySnapshot, DashboardTracking, TaskStatistic
 from app.models.entities import (
     AIConfig,
@@ -118,6 +119,10 @@ __all__ = [
     "ChapterPlan",
     "ChapterVersion",
     "CollaborationAuditEvent",
+    "ConsistencyImpact",
+    "ConsistencyIssue",
+    "ConsistencyLedger",
+    "ConsistencyRun",
     "Character",
     "CharacterCareer",
     "DashboardDailySnapshot",

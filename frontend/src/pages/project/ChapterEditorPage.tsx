@@ -36,7 +36,7 @@ import {
   Typography,
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ANALYSIS_STATUS, countPending, reviseChapter, reviseCompareFor, reviseRunningPresentation } from '../../api/analysis'
 import { versionApi } from '../../api/chapterVersions'
 import {
@@ -93,7 +93,9 @@ import { readAutoContinue } from '../../utils/preferences'
 import { splitPane, splitRow } from '../../utils/layout'
 import { formatTime } from '../../utils/time'
 import { useProjectId } from '../../hooks/useProjectId'
+import { useChapterImpactHint } from '../../hooks/useChapterImpactHint'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
+import { impactHref } from '../../utils/consistencyImpact'
 
 const SUCCESS_MESSAGES: Partial<Record<Task['kind'], string>> = {
   'chapter.generate': '生成完成，已保存',
@@ -233,6 +235,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [reviseCompare, setReviseCompare] = useState<ReviseCompare | null>(null)
   const analysis = useChapterAnalysis(initial.id, canUseAI)
   const refreshAnalysis = analysis.refresh
+  // 正文保存成功（内容版本变化）或重新分析完成后重新读取；只读取、失败静默，不参与保存与离页拦截
+  const impactHint = useChapterImpactHint(pid, initial.id, `${chapter.content_revision}:${analysis.state?.latest_analysis_id ?? ''}`)
   // 最新已知分析 id：followTask 可能经由旧闭包调用，用 ref 读取最新值
   const latestAnalysisIdRef = useRef<number | null>(null)
   useEffect(() => {
@@ -1075,6 +1079,9 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 {canUseAI && <Tag color={analysisStatus.color} style={{ cursor: 'pointer' }} onClick={() => setAnalysisOpen(true)}>
                   {analysisStatus.label}
                 </Tag>}
+                {impactHint && <Link to={impactHref(pid, chapter.id)} title="在一致性检查的「修改影响」页签查看并处理">
+                  <Tag color="gold" style={{ cursor: 'pointer', whiteSpace: 'normal', marginInlineEnd: 0 }}>{impactHint}</Tag>
+                </Link>}
               </Space>
             }
             extra={toolbarInHeader ? toolbar : undefined}

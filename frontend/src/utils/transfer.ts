@@ -42,6 +42,9 @@ export const TRANSFER_TABLE_LABELS: Record<string, string> = {
   kb_documents: '知识库文档',
   outline_snapshots: '大纲快照',
   inspiration_sessions: '灵感会话',
+  consistency_ledgers: '一致性事实台账',
+  consistency_issues: '一致性问题',
+  consistency_impacts: '修改影响记录',
 }
 
 export function tableLabel(table: string): string {

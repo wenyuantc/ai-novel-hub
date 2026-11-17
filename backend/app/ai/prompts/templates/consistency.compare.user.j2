@@ -1,0 +1,31 @@
+请比对下面按章节顺序排列的事实，找出潜在冲突。
+
+【事实台账】（[chapter_id=章节编号 fact_id=事实编号] 第N章｜类别｜主体｜陈述｜时间线索）
+{{ facts }}
+{% if foreshadows %}
+
+【伏笔记录】（#编号 标题｜内容｜状态｜埋设章｜回收章）
+{{ foreshadows }}
+{% endif %}
+{% if existing_issues %}
+
+【已有问题】（#编号 类别｜标题｜说明｜涉及章节编号）
+{{ existing_issues }}
+{% endif %}
+
+{{ output_schema }}
+
+【要求】
+1. 只报告两处事实不能同时成立的情况（例如物品已毁却仍在使用、人物已死却再次登场、时间先后颠倒）；信息只是有所补充、细化或合理变化的不要报告。
+2. 每个问题的 evidence 至少引用两个不同章节的事实，chapter_id 与 fact_id 必须原样取自【事实台账】，不要编造。
+3. title、description 表述为「潜在冲突」，不要下定论；suggestion 给出具体、可执行的修改建议。
+4. severity：high 为影响主线或读者一眼可见的硬伤，medium 为需要核对的明显出入，low 为细节出入。
+5. 没有发现冲突时输出空数组，不要省略字段。
+{% if foreshadows %}
+6. 事实与【伏笔记录】矛盾（例如伏笔尚未埋设就被回收、已回收的伏笔仍被当作悬念）时，category 填 foreshadow，并在 foreshadow_id 填写该伏笔的编号；这种情况 evidence 可以只引用一个章节的事实。其余情况 foreshadow_id 填 null。
+{% endif %}
+{% if existing_issues %}
+7. 发现的冲突与【已有问题】中的某一条是同一处矛盾时，在 existing_issue_id 填写该问题的编号（只填数字）；否则填 null。不要因为已有问题存在就重复报告已不成立的冲突。
+{% endif %}
+
+{{ json_rule }}

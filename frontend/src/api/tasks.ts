@@ -111,7 +111,7 @@ export function isChapterWriteKind(kind: TaskKind): boolean {
 }
 
 /**
- * 协作者可实时订阅的任务类型（与后端 stream_evidence 白名单一致）：单章、分析、批量、向导、大纲、实体。
+ * 协作者可实时订阅的任务类型（与后端 stream_evidence 白名单一致）：单章、分析、批量、向导、大纲、实体、一致性检查与修改影响评估。
  * 智能体、知识库索引、拆书等对协作者订阅返回 404，只展示状态与详情，不发起订阅。
  */
 export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
@@ -119,6 +119,7 @@ export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
   'wizard.outline', 'wizard.characters', 'wizard.world', 'wizard.careers',
   'outline.continue', 'outline.expand',
   'character.generate', 'organization.generate', 'career.generate', 'relations.parse', 'relations.generate',
+  'consistency.check', 'consistency.impact',
 ]
 
 /** 作者（及个人任务）可订阅全部类型；协作者只订阅白名单内类型。 */
@@ -161,6 +162,8 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'kb.index': '建索引',
   'book.import': '拆书反推',
   'agent.turn': '项目智能体',
+  'consistency.check': '一致性检查',
+  'consistency.impact': '修改影响评估',
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -176,9 +179,11 @@ export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
 /**
  * 任务面板「跳转」目标：无实例证明的章节任务 → 章节列表；向导任务 → 向导页对应步骤；
  * 角色生成 / 旧关系解析 → 角色页；组织生成 → 组织页；职业生成 → 职业页；大纲续写 / 展开 → 大纲页；批量生成 → 章节页；
- * 建索引（文档 / 重建 / 记忆向量）→ 知识库页；拆书反推 → 项目概览。无法定位时为 null。
+ * 建索引（文档 / 重建 / 记忆向量）→ 知识库页；拆书反推 → 项目概览；一致性检查 → 一致性检查页；
+ * 修改影响评估 → 一致性检查页的「修改影响」页签：评估任务本身不带章节（后端 Task.chapter_id 恒为空），带上任务 id，
+ * 由页面在「修改影响」概览里按进行中的评估或最近一次评估的任务找到对应章节。无法定位时为 null。
  */
-export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> & Partial<Pick<Task, 'scene_id'>>): string | null {
+export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> & Partial<Pick<Task, 'scene_id' | 'id'>>): string | null {
   if (task.project_id === null) return null
   const base = `/projects/${task.project_id}`
   switch (task.kind) {
@@ -208,6 +213,11 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> 
       return `${base}/overview?agent=open`
     case 'book.import':
       return `${base}/overview`
+    case 'consistency.check':
+      return `${base}/consistency`
+    case 'consistency.impact':
+      if (task.chapter_id !== null) return `${base}/consistency?tab=impact&chapter=${task.chapter_id}`
+      return `${base}/consistency?tab=impact${task.id === undefined ? '' : `&task=${task.id}`}`
     default:
       return `${base}/wizard?kind=${task.kind.slice('wizard.'.length)}`
   }

@@ -37,12 +37,13 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 ### 3. 契约
 
-**模板 key（32 个；批量关系生成新增 `relations.generate`、设定生图新增 `setting.thumbnail`，`test_prompt_templates` 的计数同步为 32）**
+**模板 key（35 个；批量关系生成新增 `relations.generate`、设定生图新增 `setting.thumbnail`、一致性检查新增 `consistency.extract` / `consistency.compare`、修改影响评估新增 `consistency.impact`（变量 `before_facts` / `after_facts`，只接收同一章改动前后字面不同的事实陈述），`test_prompt_templates` 的计数同步为 35）**
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
 | 章节 | `chapter.generate`、`chapter.continue`（只有 user 段，结果只取 user）、`chapter.polish`、`chapter.revise`、`chapter.rewrite`（`op` 在模板里 if 分支） | generate/polish/revise/rewrite：`planning_context`、`scene_context`；rewrite另有`setting_context` |
 | 分析 | `analysis.chapter` | `output_schema`（有伏笔清单时是带 ref_id 的结构）、`json_rule` |
+| 分析（一致性检查） | `consistency.extract`（变量 `chapter_no` / `title` / `heading` / `content`（必需）；只接收章节正文与开启 AI 可见的作者区块，不带作品信息与结构化设定）、`consistency.compare`（变量 `facts`（必需）/ `foreshadows` / `existing_issues`，后两者为空时整段与对应要求不输出）、`consistency.impact`（变量 `before_facts` / `after_facts`，为空时显示「（无）」）。分类沿用 `analysis`，构建函数在 `prompts/consistency.py` | `output_schema`（`formats.CONSISTENCY_EXTRACT_SCHEMA` / `CONSISTENCY_COMPARE_SCHEMA` / `CONSISTENCY_IMPACT_SCHEMA`）、`json_rule` |
 | 向导 | `wizard.world` / `wizard.characters` / `wizard.outline` / `wizard.careers`；`wizard.continue`（从中断处继续的续写指令，只有 user 段，变量 `generated_chars`，接在原对话 + assistant 已输出内容之后） | `json_rule`、`output_format`（`wizard.continue` 无） |
 | 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` / `relations.generate` | `json_rule`、`output_format` |
 | 实体（设定图片） | `setting.thumbnail`（名称「设定图片」，默认 system 段为空；变量 `subject` 设定类型、`fields` 已按 AI 可见性投影的已保存字段，均非必需、非锁定） | 无 |
@@ -122,7 +123,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 ### 6. 必需的测试
 
 - `tests/test_prompt_parity.py`：**每个 key 的每个条件分支**新旧输出 `==`（对照实现 `tests/prompt_legacy.py` 是改造前代码的逐字复制）。
-  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` / `book_import.*` / `agent.*` / `wizard.continue` / `relations.generate` / `setting.thumbnail` 没有对照。
+  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` / `book_import.*` / `agent.*` / `wizard.continue` / `relations.generate` / `setting.thumbnail` / `consistency.*` 没有对照（后者的渲染断言在 `tests/test_consistency_prompts.py`）。
 - `tests/test_setting_thumbnail_prompt_templates.py`：`setting.thumbnail` 无覆盖时四类默认文案与字段预算逐字一致；保存 / 停用 / 启用 / 版本恢复 / 恢复默认、组件展开与预览；两段合并、空与超 2000 字（含 emoji）报 400；作品协作者（作者代付模型）与系列 editor 只用本人模板，隐藏字段不进入变量；弹窗临时修改不回写覆盖。
 - `tests/test_templating.py`：每种校验错误、沙箱逃逸、range 禁用、渲染上限、锁定兜底、全部默认模板合法且能用示例值渲染。
 - `tests/test_prompt_templates.py`：覆盖生效 / 停用 / 启用 / 恢复默认、位置信息、预览、outdated + ack（monkeypatch `registry.TEMPLATES`）、

@@ -34,6 +34,9 @@ from app.models import (
     ChapterVersion,
     Character,
     CharacterCareer,
+    ConsistencyImpact,
+    ConsistencyIssue,
+    ConsistencyLedger,
     Foreshadow,
     ForeshadowCharacter,
     ForeshadowHistory,
@@ -88,6 +91,7 @@ OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "insp
 # 与项目相关、但不导出的表（理由见值）。
 # book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
+    "consistency_runs": "一致性检查的运行记录是任务运行态；问题对它的引用导入后为空，台账与问题随作品迁移",
     "novel_template_creation_receipts": "用户建书意图去重收据，不随单书备份迁移",
     "setting_image_resources": "当前缩略图单独导出到顶层 thumbnails，历史资源不随单书迁移",
     "setting_thumbnail_bindings": "缩略图绑定通过顶层 thumbnails 和新实体身份恢复",
@@ -450,6 +454,34 @@ RULES: tuple[TableRule, ...] = (
         fk={"chapter_id": "chapters", "analysis_id": "chapter_analyses"},
         # 相关角色名
         json_plain=("characters",),
+    ),
+    TableRule(
+        "consistency_ledgers", ConsistencyLedger, _own(ConsistencyLedger), fill=_P,
+        fk={"chapter_id": "chapters"},
+        # 任务不导出
+        exclude=("task_id",),
+        # 事实只有章内序号、文本与本章码点偏移，不含 id；上一版（prev_facts）同理
+        json_plain=("facts", "prev_facts"),
+    ),
+    TableRule(
+        "consistency_impacts", ConsistencyImpact, _own(ConsistencyImpact), fill=_P,
+        fk={"chapter_id": "chapters"},
+        # 评估人是原实例的用户身份；任务不导出
+        exclude=("actor_id", "task_id"),
+        # 影响项与未覆盖章节引用后续章节 id，acknowledged 引用设定变化 id；对应不上的丢弃
+        json_refs={
+            "items": remap.consistency_impact_items,
+            "uncovered": remap.consistency_impact_refs("chapters"),
+            "acknowledged": remap.consistency_impact_refs("setting_progressions"),
+        },
+        # 事实变化只有类别、主体与陈述文本
+        json_plain=("changes",),
+    ),
+    TableRule(
+        "consistency_issues", ConsistencyIssue, _own(ConsistencyIssue), fill=_P,
+        # 运行记录不导出：三个引用导入后为空（「本次未复现」自然为假）；状态修改人是原实例的用户身份。
+        exclude=("status_changed_by", "first_run_id", "last_seen_run_id", "last_checked_run_id"),
+        json_refs={"evidence": remap.consistency_evidence},
     ),
     TableRule(
         "planning_units", PlanningUnit, _own(PlanningUnit), fill=_P,

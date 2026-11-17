@@ -1053,6 +1053,8 @@ export type TaskKind =
   | 'kb.index'
   | 'book.import'
   | 'agent.turn'
+  | 'consistency.check'
+  | 'consistency.impact'
 
 /** paused = 待审核（多步任务到达审核点）：不占并发名额，可继续 / 结束 / 取消，不能删除 / 重试 */
 export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'

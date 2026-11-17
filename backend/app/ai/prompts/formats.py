@@ -181,3 +181,34 @@ BOOK_SYNTHESIZE_FORMAT = (
     '  "project": {"synopsis": "作品简介", "theme": "主题", "tags": ["类型标签"], "selling_points": "核心卖点",\n'
     '              "audience": "目标读者", "genre": "主题材"},\n' + _BOOK_ENTITIES + "}"
 )
+
+# 一致性检查：逐章事实台账。偏移由服务端按 quote 在正文中逐字定位，结构里不要求模型给位置。
+CONSISTENCY_EXTRACT_SCHEMA = """【输出 JSON 结构】
+{
+  "facts": [{"category": "character_history|character_state|item|timeline|foreshadow",
+             "subject": "主体原名（人物名、物品名；时间线索可留空）",
+             "statement": "一句话陈述正文明确写出的事实",
+             "time_hint": "正文给出的时间线索（可为空字符串）",
+             "quote": "支撑该事实的原文引句，必须逐字摘自正文"}]
+}"""
+
+# 一致性检查：跨章比对。证据只能引用输入里给出的 chapter_id + fact_id。
+CONSISTENCY_COMPARE_SCHEMA = """【输出 JSON 结构】
+{
+  "issues": [{"existing_issue_id": 已有问题编号或null,
+              "category": "character_history|character_state|item|timeline|foreshadow",
+              "title": "一句话概括这处潜在冲突",
+              "description": "说明两处事实为什么不能同时成立",
+              "suggestion": "具体、可执行的修改建议",
+              "severity": "high|medium|low",
+              "foreshadow_id": 与之矛盾的伏笔编号或null,
+              "evidence": [{"chapter_id": 章节编号, "fact_id": "事实编号"}]}]
+}"""
+
+# 修改影响：判定同一章改动前后哪些事实是真正的剧情变化。只能引用输入里给出的事实编号。
+CONSISTENCY_IMPACT_SCHEMA = """【输出 JSON 结构】
+{
+  "changes": [{"kind": "added|removed|changed",
+               "before_id": "改动前事实编号或null",
+               "after_id": "改动后事实编号或null"}]
+}"""

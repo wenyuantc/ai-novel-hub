@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { mentionApi, type MentionAnchor, type MentionSpan } from '../../api/mentions'
 import { useMentionQuery } from '../../hooks/useMentionQuery'
 import { useProjectRefresh } from '../../hooks/useProjectRefresh'
-import { MENTION_DICTIONARY_RESOURCES } from '../../utils/mentions'
+import { MENTION_DICTIONARY_RESOURCES, staleAnchorMessage } from '../../utils/mentions'
 import MentionText from './MentionText'
 
 export default function MentionPreview({ projectId, text, anchor, draft = false, onLocated, renderText }: { projectId: number; text: string; anchor?: MentionAnchor | null; draft?: boolean; onLocated?: () => void; renderText?: (spans: MentionSpan[], focus: MentionAnchor | null) => ReactNode }) {
@@ -23,7 +23,7 @@ export default function MentionPreview({ projectId, text, anchor, draft = false,
     {draft && <Typography.Paragraph type="secondary">当前草稿的提及标记；保存后计入全书统计。</Typography.Paragraph>}
     {result.loading && <span role="status"><Spin size="small" /> 正在识别提及…</span>}
     {result.error && <Alert type="error" showIcon message={result.error} action={<Button onClick={result.reload}>重试</Button>} />}
-    {anchor && result.data && !valid && <Alert type="warning" showIcon message="原文已变化，请重新查看提及列表定位。" />}
+    {anchor && result.data && !valid && <Alert type="warning" showIcon message={staleAnchorMessage(anchor, '原文已变化，请重新查看提及列表定位。')} />}
     {renderText ? renderText(result.data?.spans ?? [], valid ? anchor : null) : <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 'inherit' }}>
       {result.data ? <MentionText projectId={projectId} text={text} spans={result.data.spans} focus={valid ? anchor : null} /> : text}
     </div>}

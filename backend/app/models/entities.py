@@ -77,6 +77,8 @@ TASK_KINDS = (
     "kb.index",
     "book.import",
     "agent.turn",
+    "consistency.check",
+    "consistency.impact",
 )
 TASK_STATUSES = ("queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted")
 # 活动：占资源键（部分唯一索引）、由调度器领取

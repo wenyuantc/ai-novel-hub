@@ -306,22 +306,32 @@ async def get_project_memory(db: AsyncSession, user_id: int, project_id: int, me
     return m
 
 
-async def _memory_outputs(db: AsyncSession, rows: list[StoryMemory]) -> list[MemoryOut]:
-    """只标记有真实关联分析的自动记忆；不删除、屏蔽或改变召回。"""
+async def memory_source_stale(
+    db: AsyncSession,
+    rows: list[StoryMemory],
+    *,
+    chapter_states: dict[int, tuple[int, int, str]] | None = None,
+) -> dict[int, bool | None]:
+    """各条记忆的来源是否过期：{记忆 id: True / False / None}。
+
+    只判断有真实关联分析的自动记忆；None = 手动记忆或缺少可验证的分析来源。过期 = 来源分析的章号或
+    content_hash 与章节当前值不同。记忆页的 source_stale 与「修改影响」的第一级共用这一处判定。
+    chapter_states = 调用方已算好的 {章节 id: (project_id, 章号, 分析指纹)}，给出时不再重复读取章节。
+    """
     from app.services.rich_document_ai import analysis_fingerprints
 
     analysis_ids = {row.analysis_id for row in rows if row.origin == "auto" and row.analysis_id is not None}
     analyses = {row.id: row for row in await db.scalars(select(ChapterAnalysis).where(
         ChapterAnalysis.id.in_(analysis_ids),
     ))} if analysis_ids else {}
-    chapter_ids = {analysis.chapter_id for analysis in analyses.values()}
-    chapters = {}
+    chapters = dict(chapter_states or {})
+    chapter_ids = {analysis.chapter_id for analysis in analyses.values()} - set(chapters)
     for batch in batched(sorted(chapter_ids), 20):
         source = list(await db.scalars(select(Chapter).where(Chapter.id.in_(batch))))
         fingerprints = await analysis_fingerprints(db, source)
         chapters.update({chapter.id: (chapter.project_id, chapter.chapter_no, fingerprints[chapter.id])
                          for chapter in source})
-    result = []
+    result: dict[int, bool | None] = {}
     for row in rows:
         analysis = analyses.get(row.analysis_id) if row.origin == "auto" else None
         chapter = chapters.get(analysis.chapter_id) if analysis is not None else None
@@ -329,8 +339,14 @@ async def _memory_outputs(db: AsyncSession, rows: list[StoryMemory]) -> list[Mem
         if (analysis is not None and chapter is not None and row.project_id == analysis.project_id == chapter[0]
                 and row.chapter_id == analysis.chapter_id):
             stale = analysis.chapter_no != chapter[1] or analysis.content_hash != chapter[2]
-        result.append(MemoryOut.model_validate(row).model_copy(update={"source_stale": stale}))
+        result[row.id] = stale
     return result
+
+
+async def _memory_outputs(db: AsyncSession, rows: list[StoryMemory]) -> list[MemoryOut]:
+    """只标记有真实关联分析的自动记忆；不删除、屏蔽或改变召回。"""
+    stale = await memory_source_stale(db, rows)
+    return [MemoryOut.model_validate(row).model_copy(update={"source_stale": stale[row.id]}) for row in rows]
 
 
 async def list_memories(

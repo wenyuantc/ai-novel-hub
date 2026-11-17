@@ -35,10 +35,12 @@ KIND_LABELS = {
     "career.generate": "AI 生成职业", "wizard.careers": "职业体系向导", "chapter.analyze": "章节分析",
     "chapter.revise": "按建议重写", "outline.continue": "AI 续写大纲", "outline.expand": "AI 展开细纲",
     "chapter.batch": "批量生成", "kb.index": "建索引", "book.import": "拆书反推", "agent.turn": "项目智能体",
+    "consistency.check": "一致性检查", "consistency.impact": "修改影响评估",
 }
 # 只允许完全匹配的内部固定文案，绝不截断后透传任意原始阶段。
 SAFE_STAGES = frozenset((*STAGE_LABELS.values(), "调用工具", "写入设定", "排队深度分析", "提取写作风格",
-                         "汇总设定", "从中断处继续"))
+                         "汇总设定", "从中断处继续", "比对准备中", "合并问题",
+                         "抽取本章事实", "判定事实变化", "查找受影响章节", "保存评估结果"))
 NUMERIC_STAGES = (
     re.compile(r"字数不足，自动续写第 [1-2] 轮"),
     re.compile(r"第 [0-9]{1,8}/[0-9]{1,8} 章 · (?:生成中|分析中|生成失败，第 [0-9]{1,2} 次重试)"),
@@ -46,6 +48,8 @@ NUMERIC_STAGES = (
     re.compile(r"通读 第 [0-9]{1,8}/[0-9]{1,8} 批（第 [0-9]{1,8}(?:–[0-9]{1,8})? 章）"
                r"(?: · 失败，第 [0-9]{1,2} 次重试)?"),
     re.compile(r"(?:汇总设定|提取写作风格) · 失败，第 [0-9]{1,2} 次重试"),
+    re.compile(r"第 [0-9]{1,8}/[0-9]{1,8} 章 · 抽取事实"),
+    re.compile(r"比对 [0-9]{1,8}/[0-9]{1,8} 批"),
 )
 
 

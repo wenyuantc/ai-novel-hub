@@ -144,7 +144,7 @@ _COLLABORATION_QUEUED_CLEANUP_KINDS = frozenset({
     "chapter.generate", "chapter.polish", "chapter.revise", "chapter.batch", "chapter.analyze", "kb.index",
     "outline.continue", "outline.expand", "character.generate", "organization.generate", "career.generate",
     "relations.parse", "relations.generate", "wizard.outline", "wizard.characters", "wizard.world", "wizard.careers",
-    "agent.turn",
+    "agent.turn", "consistency.check", "consistency.impact",
 })
 # 待审核协作任务在降级/撤权/轮次失效后可由系统受限收尾的类型（E5-a；Agent 待确认轮次 E4-i 裁决 11）：
 # 知识库索引不会暂停，拆书不在白名单。
@@ -162,9 +162,12 @@ _SINGLE_CHAPTER_KINDS = frozenset({"chapter.generate", "chapter.polish", "chapte
 # 只产出草稿的任务：唯一持久化是 Task 自身的终态与 result（在终态事务内锁内重验后写入），没有已提交的业务副作用。
 # 成功终态核验失败（撤权/降级/关模型授权/改密/可见性变化）时可按原执行改记无结果失败并释放活动资源（E4-g3a 大纲；
 # E4-g3b 实体 AI：五类设定草稿同样只写 Task 终态，人工确认后才经 content.edit 接口保存）。
+# consistency.check 同样登记：台账与问题在各自事务内锁内重验后提交、无需证明也不回退，Task 终态只保存概要；
+# 终态核验失败时改记无结果失败并释放 consistency:{project}，已保存的台账与问题保留。
+# consistency.impact（修改影响评估）同理：台账与影响记录在各自事务内锁内重验后提交，Task 终态只保存概要。
 _DRAFT_ONLY_KINDS = frozenset({
     "outline.continue", "outline.expand", "character.generate", "organization.generate", "career.generate",
-    "relations.parse", "relations.generate",
+    "relations.parse", "relations.generate", "consistency.check", "consistency.impact",
 })
 # SSE 心跳帧标记（app.api.sse 渲染为注释帧 ": ping"）
 HEARTBEAT_EVENT = ""

@@ -11,6 +11,7 @@ import type { SkillRequestChoice } from '../../utils/skillInputs'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
 import { useProjectStore } from '../../stores/project'
+import { staleAnchorMessage } from '../../utils/mentions'
 import { authorizationKey } from '../../utils/permissions'
 import { projectAccess } from '../../utils/projectAccess'
 import type { TextSelection } from '../chapter/RewritePanel'
@@ -245,7 +246,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
     try {
       const resolved = await sceneApi.resolvePosition(projectId, chapter.id, mentionAnchor.content_hash, mentionAnchor.start, mentionAnchor.end)
       if (!canReadNow()) return
-      if (!resolved.scene_id || resolved.start === null || resolved.end === null) { setLocationMessage(resolved.reason === 'stale' ? '原文或顺序已变化，旧位置已失效，请回提及列表重新定位。' : '该命中跨场景或结构分隔，仅在整章通读中展示，不猜测场景归属。'); return }
+      if (!resolved.scene_id || resolved.start === null || resolved.end === null) { setLocationMessage(resolved.reason === 'stale' ? staleAnchorMessage(mentionAnchor, '原文或顺序已变化，旧位置已失效，请回提及列表重新定位。') : '该命中跨场景或结构分隔，仅在整章通读中展示，不猜测场景归属。'); return }
       if (!(await onSelect(resolved.scene_id)) || !canReadNow()) return
       const current = controller.getSnapshot().scene
       if (!current || current.id !== resolved.scene_id || current.content_revision !== resolved.content_revision) { setLocationMessage('定位期间原文又有变化，请重新定位。'); return }

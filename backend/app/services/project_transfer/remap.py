@@ -13,6 +13,9 @@
 - outline_snapshots.data：outlines / plans 的 id、plans 的 outline_id 与 character_ids、links 的 chapter_id /
   outline_id / plan_id；快照里引用的大纲 / 细纲在当前数据里已不存在时，分配一个不与现有行冲突的新 id（synthetic），
   保证快照内部自洽；links 指向已不存在的章节时去掉该条（恢复时本来也会跳过）。
+- consistency_issues.evidence：每处证据的 chapter_id 是章节 id；对应不上（证据章节已删除）时置 null、保留引句。
+- consistency_impacts.items / uncovered / acknowledged：影响项与未覆盖章节的章节 id、已确认的设定变化 id；
+  对应不上的整项去掉（影响项离开章节没有意义）。
 
 对应不上的引用计入 missing，由 importer 汇总成一条警告。预览时用 identity=True 的上下文：映射就是文件内的 id 集合，
 只统计 missing，不改写数值。
@@ -187,6 +190,55 @@ def foreshadow_candidates(value: Any, ctx: RemapContext) -> Any:
             item = {**item, "ref_id": item["ref_id"] if ctx.identity and new is not None else new}
         out.append(item)
     return out
+
+
+def consistency_evidence(value: Any, ctx: RemapContext) -> Any:
+    """consistency_issues.evidence：每处证据的 chapter_id 是章节 id；对应不上置 null，引句与指纹原样保留。"""
+    if not isinstance(value, list):
+        return value
+    out = []
+    for item in value:
+        if isinstance(item, dict) and "chapter_id" in item:
+            new = ctx.ref("chapters", item["chapter_id"], "一致性问题证据")
+            item = {**item, "chapter_id": item["chapter_id"] if ctx.identity and new is not None else new}
+        out.append(item)
+    return out
+
+
+IMPACT_WHERE = "修改影响记录"
+
+
+def consistency_impact_items(value: Any, ctx: RemapContext) -> Any:
+    """consistency_impacts.items：每个影响项的 chapter_id 是后续章节 id；对应不上的影响项整项去掉。"""
+    if not isinstance(value, list):
+        return value
+    out = []
+    for item in value:
+        if isinstance(item, dict) and "chapter_id" in item:
+            new = ctx.ref("chapters", item["chapter_id"], IMPACT_WHERE)
+            if new is None:
+                if item["chapter_id"] is None:
+                    ctx.missing[IMPACT_WHERE] += 1
+                continue
+            item = {**item, "chapter_id": item["chapter_id"] if ctx.identity else new}
+        out.append(item)
+    return out
+
+
+def consistency_impact_refs(table: str) -> JsonRemap:
+    """consistency_impacts.uncovered（章节 id）/ acknowledged（设定变化 id）：对应不上的去掉。"""
+
+    def _remap(value: Any, ctx: RemapContext) -> list[int]:
+        if not isinstance(value, list):
+            return []
+        out: list[int] = []
+        for v in value:
+            new = ctx.ref(table, v, IMPACT_WHERE)
+            if new is not None:
+                out.append(v if ctx.identity else new)
+        return out
+
+    return _remap
 
 
 def reading_progress(value: Any, ctx: RemapContext) -> dict[str, Any]:

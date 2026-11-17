@@ -23,6 +23,7 @@ from app.api.v1 import (
     chapters,
     character_actions,
     collaboration,
+    consistency,
     foreshadows,
     inspiration,
     kb,
@@ -100,6 +101,7 @@ api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
 api_router.include_router(scene_ai.router)
 api_router.include_router(batch.router)
+api_router.include_router(consistency.router)
 api_router.include_router(chapter_versions.router)
 api_router.include_router(analysis.router)
 api_router.include_router(wizard.router)

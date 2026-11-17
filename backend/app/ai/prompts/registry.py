@@ -241,6 +241,61 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         ),
     ),
     (
+        "consistency.extract",
+        "一致性检查：事实抽取",
+        "analysis",
+        "逐章抽取人物经历、人物状态、物品去向、时间线索与伏笔相关事实，每条带原文引句。只发送章节正文。",
+        (
+            T("chapter_no", "章节号", "int", sample=5),
+            T("title", "章节标题", sample="断剑"),
+            T("heading", "章节标题行（第N章 标题）", sample="第5章 断剑"),
+            T("content", "章节正文（含开启 AI 可见的作者区块）", required=True, sample="林远的佩剑在山门前断成两截。"),
+            L("output_schema", "JSON 输出结构（锁定）", F.CONSISTENCY_EXTRACT_SCHEMA),
+            JSON_RULE_VAR,
+        ),
+    ),
+    (
+        "consistency.compare",
+        "一致性检查：跨章比对",
+        "analysis",
+        "比对各章事实台账，找出前后不能同时成立的潜在冲突。只发送事实台账、允许进入上下文的伏笔记录与已有问题摘要。",
+        (
+            T(
+                "facts",
+                "事实台账（按章节顺序，每行带 chapter_id 与 fact_id）",
+                required=True,
+                sample=(
+                    "[chapter_id=5 fact_id=1] 第5章｜物品去向｜佩剑｜林远的佩剑断成两截｜\n"
+                    "[chapter_id=12 fact_id=3] 第12章｜物品去向｜佩剑｜林远拔出佩剑迎敌｜"
+                ),
+            ),
+            T("foreshadows", "伏笔记录（仅伏笔组，可能为空）", sample=""),
+            T("existing_issues", "已有问题摘要（可能为空）", sample=""),
+            L("output_schema", "JSON 输出结构（锁定）", F.CONSISTENCY_COMPARE_SCHEMA),
+            JSON_RULE_VAR,
+        ),
+    ),
+    (
+        "consistency.impact",
+        "修改影响：事实变化判定",
+        "analysis",
+        "比较同一章改动前后的事实，判断哪些是真正的剧情事实变化，忽略措辞差异。只发送两组事实陈述，不含正文。",
+        (
+            T(
+                "before_facts",
+                "改动前独有的事实（每行带编号，可能为空）",
+                sample="[A1] 物品去向｜佩剑｜林远的佩剑完好地挂在腰间｜",
+            ),
+            T(
+                "after_facts",
+                "改动后独有的事实（每行带编号，可能为空）",
+                sample="[B1] 物品去向｜佩剑｜林远的佩剑在山门前断成两截｜",
+            ),
+            L("output_schema", "JSON 输出结构（锁定）", F.CONSISTENCY_IMPACT_SCHEMA),
+            JSON_RULE_VAR,
+        ),
+    ),
+    (
         "wizard.world",
         "向导：世界观",
         "wizard",

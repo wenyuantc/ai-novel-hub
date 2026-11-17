@@ -76,6 +76,8 @@ vi.mock('../../hooks/useProjectRefresh', () => ({ useProjectRefresh: () => {} })
 vi.mock('../../hooks/useSkillChoice', () => ({ useSkillChoice: () => ({ payload: {} }) }))
 vi.mock('../../utils/skillInputs', () => ({ skillChoiceProblemText: () => '' }))
 vi.mock('../../hooks/useChapterAnalysis', () => ({ useChapterAnalysis: () => ({ state: null, latest: null, status: 'none', running: false, refresh: view.refresh }) }))
+// 页头的「派生内容可能过期」提示是独立的只读请求，不属于本文件验证的生成网络边界
+vi.mock('../../hooks/useChapterImpactHint', () => ({ useChapterImpactHint: () => null }))
 vi.mock('../../stores/project', () => ({ useProjectStore: Object.assign(
   (select: (state: unknown) => unknown) => select({ project: { id: 1, auto_analyze: false, default_style: null }, refresh: view.refresh }),
   { subscribe: () => () => {} },

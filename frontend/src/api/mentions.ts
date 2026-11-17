@@ -6,7 +6,8 @@ export type MentionEntityKind = SettingEntryKind
 export type MentionCategory = Exclude<SettingEntryKind, 'world'> | WorldCategory
 export interface MentionEntity { kind: MentionEntityKind; id: number; name: string; category: MentionCategory; aliases: string[] }
 export interface MentionSpan { start: number; end: number; text: string; entities: MentionEntity[] }
-export interface MentionAnchor { start: number; end: number; content_hash: string }
+/** origin 只由深链参数 mention_from 带入，标明跳转来源（用于位置失效时的提示措辞），不发往后端。 */
+export interface MentionAnchor { start: number; end: number; content_hash: string; origin?: 'consistency' }
 export interface MentionSource { type: MentionSourceType; id: number; title: string; chapter_no: number | null; conversation_id: number | null; created_at: string | null }
 export interface MentionOccurrence extends MentionAnchor { source: MentionSource; text: string; context_before: string; context_after: string; entities: MentionEntity[] }
 export interface MentionCatalog { entities: MentionEntity[]; dictionary_hash: string; available_source_types: MentionSourceType[] }

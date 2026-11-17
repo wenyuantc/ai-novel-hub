@@ -14,6 +14,7 @@ from app.models import (
     ChapterCharacter,
     ChapterPlan,
     Character,
+    ConsistencyLedger,
     GenerationLog,
     Outline,
     PlanningUnit,
@@ -51,6 +52,7 @@ async def books(app, client):
 @pytest.mark.parametrize("reference", [
     "plan", "planning_chapter", "planning_scene", "log", "task", "analysis", "memory", "retrieval",
     "character", "progression", "analysis_change", "proposal", "receipt", "marker_origin", "section_origin",
+    "ledger",
 ])
 async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books, reference):
     user, first, second, chapters, scenes = books
@@ -114,6 +116,9 @@ async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books
             else:
                 foreign = SceneReviewAnalysisReceipt(run_key=str(uuid4()), task_key=task.statistics_key,
                                                      chapter_id=chapter_id, content_hash="a", status="running")
+        elif reference == "ledger":
+            foreign = ConsistencyLedger(project_id=second_id, chapter_id=chapter_id, source_hash="a" * 64,
+                                        text_hash="a" * 64, facts=[])
         elif reference == "marker_origin":
             source = SceneMarker(scene_id=scenes[0], logical_key=str(uuid4()), status="deleted", color="yellow")
             db.add(source)
