@@ -47,6 +47,9 @@ pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# 通过的用例立即删除 tmp_path（每个用例一份约 1~2MB 的 SQLite 库，全量累计数 GB；
+# Ubuntu 26.04 的 /tmp 是内存盘）。失败用例的目录保留以便排查。
+tmp_path_retention_policy = "failed"
 
 [tool.ruff]
 line-length = 120

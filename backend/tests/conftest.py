@@ -145,6 +145,18 @@ async def app(tmp_path, fake_llm, settings_overrides):
         await application.state.engine.dispose()
         retrieval_service.invalidate()
         mention_cache.clear()
+        _drop_mapper_statement_caches()
+
+
+def _drop_mapper_statement_caches() -> None:
+    """清空 ORM 映射器的写语句编译缓存：它是进程级的，键含方言对象。
+
+    每个测试新建引擎（新方言），flush 编译出的 INSERT/UPDATE 连同方言、类型副本会留在映射器缓存里，
+    引擎销毁后也不释放。全量运行中堆随用例数线性增长（约 1700 对象/用例），全量 GC 单次暂停
+    从亚秒涨到数十秒，带固定等待预算的用例随机超时。生产进程只有一个引擎，不受影响。
+    """
+    for mapper in Base.registry.mappers:
+        mapper._compiled_cache.clear()
 
 
 def _new_client(app) -> httpx.AsyncClient:
