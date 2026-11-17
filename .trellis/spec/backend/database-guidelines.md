@@ -594,7 +594,7 @@ class Task(TimestampMixin, Base):   # tasks
 - 新增任务类型时在 `validate_and_claim` 里 commit：章节抢占与任务插入必须在同一事务，否则撞唯一索引时抢占无法回滚。
 - 部分唯一索引只写 `postgresql_where`：SQLite 测试会建成全表唯一索引，已结束任务也会阻止新任务（`uq_skills_global_slug` 同理：只写 PG 条件时，SQLite 上所有 Skill 的 slug 都变成全表唯一，私有 Skill 不能再与全局或他人的 Skill 同名）。
 - 以为普通唯一约束能约束可空列为 NULL 的行：`(owner_user_id, slug)` 对全局 Skill（owner 为 NULL）不生效，需要额外的部分唯一索引。
-- 将某个会被向导批量替换的表的外键改为 CASCADE。
+- 未审查便将指向向导可批量替换主体的外键改为 CASCADE。已审查的 `setting_thumbnail_bindings` 复合外键是例外：必须同步向导的固定外键图，核验绑定主体和资源属于目标作品，并以 SQLite／PostgreSQL 测试跨作品隔离、图片资源保留与撤销；详见[设定缩略图](./setting-thumbnails.md)。
 - 重新读写 `projects.style`：它自 0013 起只为 downgrade 保留；写作风格走 `writing_styles` + `default_style_id`（见 prompts-styles.md）。
 - 直接改 `Relationship` 字段而不经 `apply_change`：没有历史、绕过角色对唯一与同项目校验。
 - 直接改 `CharacterCareer.stage_id` / `note` 而不经 `career_service.apply_assignment`：没有挂接历史，绕过主 1 副 3 与类别校验。

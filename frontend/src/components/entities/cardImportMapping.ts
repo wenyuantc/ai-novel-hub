@@ -13,7 +13,7 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 const entryType = (value: unknown): value is SettingEntryType => typeof value === 'string' && Object.hasOwn(SETTING_ENTRY_TYPE_LABELS, value)
 const kind = (value: unknown): value is SettingEntryKind => value === 'character' || value === 'world' || value === 'organization' || value === 'career'
 const GROUP_KIND: Record<CardEntryGroup, SettingEntryKind> = { characters: 'character', organizations: 'organization', careers: 'career' }
-const cardVersion = (value: unknown): value is CardVersion => value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6
+const cardVersion = (value: unknown): value is CardVersion => value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6 || value === 7
 
 /** 仅提取界面所需局部图；完整文件结构仍由后端统一校验，旧版不解释未来字段。 */
 export function cardMetadata(data: unknown): CardMetadata {

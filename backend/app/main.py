@@ -183,12 +183,41 @@ def create_app(
     app.add_middleware(
         UploadLimitMiddleware,
         rules=[
+            ("POST", re.compile(r"/api/v1/projects/\d+/novel-template-preview"),
+             1024 * 1024, "模板选择请求过大"),
+            ("POST", re.compile(r"/api/v1/novel-templates"), 1024 * 1024, "模板选择请求过大"),
+            ("PUT", re.compile(r"/api/v1/novel-templates/\d+/snapshot"), 1024 * 1024, "模板选择请求过大"),
+            (
+                "POST", re.compile(
+                    r"/api/v1/(projects/\d+/settings/(character|world|organization|career)/\d+|"
+                    r"series/\d+/entries/\d+)/thumbnail/ai/generate"
+                ),
+                64 * 1024, "生成请求过大",
+            ),
+            (
+                "POST", re.compile(
+                    r"/api/v1/(projects/\d+/settings/(character|world|organization|career)/\d+|"
+                    r"series/\d+/entries/\d+)/thumbnail/ai/apply"
+                ),
+                768 * 1024, "生成图片请求过大",
+            ),
+            (
+                "PUT", re.compile(
+                    r"/api/v1/(projects/\d+/settings/(character|world|organization|career)/\d+|"
+                    r"series/\d+/entries/\d+)/thumbnail"
+                ),
+                MAX_COVER_BYTES + MULTIPART_OVERHEAD, "图片过大，上限为 10MB",
+            ),
             (
                 "PUT", re.compile(r"/api/v1/projects/\d+/cover"),
                 MAX_COVER_BYTES + MULTIPART_OVERHEAD, COVER_TOO_LARGE,
             ),
             ("POST", re.compile(r"/api/v1/workshop/(submissions|admin/items)"),
              1024 * 1024, "提交内容过大，上限为 1MB"),
+            (
+                "POST", re.compile(r"/api/v1/projects/\d+/cards/import(/preview)?"),
+                16 * 1024 * 1024 + MULTIPART_OVERHEAD, "设定卡内容过大，上限为 16MB",
+            ),
             (
                 "POST",
                 re.compile(r"/api/v1/projects/\d+/kb/documents"),

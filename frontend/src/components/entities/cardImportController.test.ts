@@ -19,6 +19,27 @@ function setup(initial = preview()) {
 }
 
 describe('卡片预览和确认的代次与显式核对', () => {
+  it('v7 图片默认不导入，只提交明确勾选且仍在预览中的 ref；重新选文件清空勾选', async () => {
+    const images = [{ ref: 'local', kind: 'character' as const, name: '林远' }, { ref: 'org', kind: 'organization' as const, name: '天机阁' }]
+    const first = setup(preview({ thumbnails: images }))
+    await first.controller.selectFile(file({ ...source, version: 7 }))
+    await first.controller.confirm()
+    expect(first.api.import.mock.calls[0][3]).toMatchObject({ thumbnail_refs: [] })
+
+    const second = setup(preview({ thumbnails: images }))
+    await second.controller.selectFile(file({ ...source, version: 7 }))
+    second.controller.setThumbnail('local', true)
+    second.controller.setThumbnail('unknown', true)
+    expect(second.controller.getSnapshot().thumbnailRefs).toEqual(['local'])
+    await second.controller.confirm()
+    expect(second.api.import.mock.calls[0][3]).toMatchObject({ thumbnail_refs: ['local'] })
+
+    const third = setup(preview({ thumbnails: images }))
+    await third.controller.selectFile(file({ ...source, version: 7 }))
+    third.controller.setThumbnail('local', true)
+    await third.controller.selectFile(file({ ...source, version: 7 }))
+    expect(third.controller.getSnapshot().thumbnailRefs).toEqual([])
+  })
   it('只读协作者可选择文件和更新预览，但不能提交导入', async () => {
     const api = { ...cardApi, preview: vi.fn<typeof cardApi.preview>(async () => preview()), import: vi.fn<typeof cardApi.import>(async () => result) }
     const controller = new CardImportController(1, api, () => true, () => {}, () => false)

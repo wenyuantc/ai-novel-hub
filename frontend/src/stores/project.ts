@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { ApiError, currentRequestGeneration, setProjectFailureCapture, watchRequestGeneration } from '../api/client'
+import { ApiError, currentRequestGeneration, setProjectFailureCapture, watchRequestGeneration, type RequestOptions } from '../api/client'
 import { projectApi } from '../api/projects'
 import type { Project, ProjectAccess, User } from '../api/types'
 import { useAuthStore } from './auth'
@@ -67,7 +67,7 @@ interface ProjectState {
   loading: boolean
   error: string | null
   scopeVersion: number
-  load: (id: number) => Promise<void>
+  load: (id: number, options?: Pick<RequestOptions, 'signal' | 'isCurrent'>) => Promise<void>
   /** 临时网络失败保留当前项目；明确失权时撤下项目。 */
   refresh: () => Promise<void>
   /** 与 refresh 使用同一权威读取，供冻结的草稿区分暂时失败与已确认权限。 */
@@ -91,7 +91,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loading: false,
   error: null,
   scopeVersion,
-  load: async (id) => {
+  load: async (id, options) => {
+    const requestCurrent = () => !options?.signal?.aborted && (options?.isCurrent?.() ?? true)
+    if (!requestCurrent()) return
     const identity = authIdentity()
     const actor = useAuthStore.getState().user
     const seq = ++requestSeq
@@ -101,9 +103,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!same) boundIdentity = null
     set({ loading: true, error: null, project: same ? get().project : null, scopeVersion: nextScope() })
     try {
-      const project = await projectApi.get(id)
+      const project = await (options ? projectApi.get(id, options) : projectApi.get(id))
       if (seq !== requestSeq || revision !== refreshSeq || identity === null || authIdentity() !== identity
-        || targetId !== id) return
+        || targetId !== id || !requestCurrent()) return
       if (!accessible(project, actor, id)) {
         boundIdentity = null
         set({ project: null, error: '没有读取此作品的权限', scopeVersion: nextScope() })
@@ -113,7 +115,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       boundIdentity = identity
       set({ project, scopeVersion: !previous || !sameAccess(previous.access, project.access) ? nextScope() : scopeVersion })
     } catch (err) {
-      if (seq !== requestSeq || revision !== refreshSeq || authIdentity() !== identity || targetId !== id) return
+      if (seq !== requestSeq || revision !== refreshSeq || authIdentity() !== identity || targetId !== id
+        || !requestCurrent()) return
       if (err instanceof ApiError && [403, 404].includes(err.status)) boundIdentity = null
       set({ ...(err instanceof ApiError && [403, 404].includes(err.status)
         ? { project: null, scopeVersion: nextScope() } : {}), error: err instanceof Error ? err.message : '加载项目失败' })

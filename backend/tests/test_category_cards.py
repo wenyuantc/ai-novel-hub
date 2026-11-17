@@ -45,7 +45,7 @@ async def test_cards_v6_exports_and_imports_tags_without_categories(client):
                                                              "organization_ids": [org["id"]]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 6 and "setting_categories" not in card and "setting_category_rules" not in card
+    assert card["version"] == 7 and "setting_categories" not in card and "setting_category_rules" not in card
     assert card["characters"][0]["setting_tags"] == ["人物"]
     assert card["organizations"][0]["setting_tags"] == ["组织"]
     assert card["careers"][0]["setting_tags"] == ["职业"]

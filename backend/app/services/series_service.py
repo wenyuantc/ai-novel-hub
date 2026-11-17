@@ -591,7 +591,7 @@ def _ref(use: SeriesEntryUse) -> s.SeriesLocalRef:
 
 
 def _entry_out(
-    entry: SeriesEntry, uses: Sequence[SeriesEntryUse], visible: Collection[int] | None = None,
+    entry: SeriesEntry, uses: Sequence[SeriesEntryUse], visible: Collection[int] | None = None, thumbnail=None,
 ) -> s.SeriesEntryOut:
     ai = s.SeriesAiOut.model_validate(entry.ai_settings)
     out_uses = [s.SeriesUseOut(project_id=use.project_id, ref=_ref(use)) for use in uses
@@ -599,19 +599,22 @@ def _entry_out(
     if entry.kind == "character":
         return s.SeriesCharacterOut(
             id=entry.id, data=s.SeriesCharacterData.model_validate(entry.data), ai_settings=ai,
-            has_uses=bool(uses), uses=out_uses,
+            has_uses=bool(uses), uses=out_uses, thumbnail=thumbnail,
         )
     return s.SeriesWorldOut(
         id=entry.id, data=s.SeriesWorldData.model_validate(entry.data), ai_settings=ai,
-        has_uses=bool(uses), uses=out_uses,
+        has_uses=bool(uses), uses=out_uses, thumbnail=thumbnail,
     )
 
 
 async def _entry_out_for_actor(
     db: AsyncSession, actor: int, series: Series, entry: SeriesEntry, uses: Sequence[SeriesEntryUse],
 ) -> s.SeriesEntryOut:
+    from app.services.setting_image_service import metadata_for_series
+
     visible = await _visible_project_ids(db, actor, series, [use.project_id for use in uses])
-    return _entry_out(entry, uses, visible)
+    thumbnails = await metadata_for_series(db, series.id, [entry.id])
+    return _entry_out(entry, uses, visible, thumbnails.get(entry.id))
 
 
 async def read_entry(db: AsyncSession, actor: int, sid: int, eid: int) -> s.SeriesEntryOut:
@@ -621,8 +624,11 @@ async def read_entry(db: AsyncSession, actor: int, sid: int, eid: int) -> s.Seri
         entry = await _entry(db, sid, eid)
         uses = await _uses(db, sid, entry_ids=[eid])
         visible = await _visible_project_ids(db, actor, series, [use.project_id for use in uses])
+        from app.services.setting_image_service import metadata_for_series
+
+        thumbnails = await metadata_for_series(db, sid, [entry.id])
         visible = await _verify_read_revision(db, actor, sid, series.revision, version, visible)
-        return _entry_out(entry, uses, visible)
+        return _entry_out(entry, uses, visible, thumbnails.get(entry.id))
 
 
 async def list_entries(
@@ -650,8 +656,11 @@ async def list_entries(
             uses[use.series_entry_id].append(use)
         all_ids = [use.project_id for group in uses.values() for use in group]
         visible = await _visible_project_ids(db, actor, series, all_ids)
+        from app.services.setting_image_service import metadata_for_series
+
+        thumbnails = await metadata_for_series(db, sid, [entry.id for entry in entries])
         visible = await _verify_read_revision(db, actor, sid, series.revision, version, visible)
-        items = [_entry_out(entry, uses[entry.id], visible) for entry in entries]
+        items = [_entry_out(entry, uses[entry.id], visible, thumbnails.get(entry.id)) for entry in entries]
         return s.SeriesEntryPage(items=items, total=total, revision=series.revision)
 
 
@@ -770,7 +779,12 @@ async def patch_entry(
                 raise
         row.data, row.ai_settings, row.display_name = data, ai, new_name
         series.revision += 1
-        return s.SeriesEntryMutation(revision=series.revision, item=_entry_out(row, uses, visible))
+        from app.services.setting_image_service import metadata_for_series
+
+        thumbnails = await metadata_for_series(db, sid, [row.id])
+        return s.SeriesEntryMutation(
+            revision=series.revision, item=_entry_out(row, uses, visible, thumbnails.get(row.id)),
+        )
 
 
 @dataclass(frozen=True)
@@ -781,6 +795,8 @@ class _Source:
 
 
 async def _source(db: AsyncSession, book: Project, ref: s.SeriesLocalRef) -> _Source:
+    from app.services.setting_image_service import metadata_for_book
+
     item = await _local(db, book.id, ref)
     await series_policy.reject_bound_entry(db, book.id, ref.kind, ref.id)
     timeline = await _baseline(db, book.id, ref)
@@ -791,6 +807,7 @@ async def _source(db: AsyncSession, book: Project, ref: s.SeriesLocalRef) -> _So
         for field in shared
     })
     ai = StoredAiSettings.model_validate(item).model_dump()
+    thumbnail = (await metadata_for_book(db, book.id, ref.kind, [ref.id])).get(ref.id)
     raw_stamp = {
         "project": book.id,
         "kind": ref.kind,
@@ -799,6 +816,7 @@ async def _source(db: AsyncSession, book: Project, ref: s.SeriesLocalRef) -> _So
         "timeline_revision": timeline.revision,
         "data": data,
         "ai": ai,
+        "thumbnail_version": thumbnail.version if thumbnail else None,
         "lifecycle_generation": book.last_deleted_at.isoformat() if book.last_deleted_at is not None else None,
     }
     stamp = hashlib.sha256(json.dumps(raw_stamp, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -814,6 +832,13 @@ def _binding(entry: SeriesEntry, pid: int, ref: s.SeriesLocalRef) -> SeriesEntry
 
 
 async def promote(db: AsyncSession, actor: int, sid: int, body: s.SeriesPromote) -> s.SeriesEntryMutation:
+    from app.services.setting_image_codec import StandardImage
+    from app.services.setting_image_service import (
+        _current_book_resource,
+        set_book_image_without_commit,
+        set_series_image_without_commit,
+    )
+
     async with _edit(db, actor, sid, body.expected_revision) as series:
         pid, ref = body.project_id, body.ref
         projects = await _lock_projects(db, actor, series, [pid], active=[pid])
@@ -839,6 +864,11 @@ async def promote(db: AsyncSession, actor: int, sid: int, body: s.SeriesPromote)
         row = SeriesEntry(series_id=sid, kind=ref.kind, display_name=_name(ref.kind, data), data=data, ai_settings=ai)
         db.add(row)
         await db.flush()
+        old_image = await _current_book_resource(db, pid, ref.kind, ref.id)
+        if old_image is not None:
+            image = StandardImage(old_image.data, old_image.width, old_image.height, old_image.mime_type)
+            await set_series_image_without_commit(db, sid, row.id, image)
+            await set_book_image_without_commit(db, pid, ref.kind, ref.id, None)
         use = _binding(row, pid, ref)
         db.add(use)
         await _project_settings(db, pid, ref, data, ai)
@@ -951,6 +981,9 @@ async def unuse(db: AsyncSession, actor: int, sid: int, eid: int, pid: int, expe
 async def _retire_entry(
     db: AsyncSession, actor: int, sid: int, eid: int, expected: int, *, move_to: int | None = None,
 ) -> s.SeriesEntryMutation:
+    from app.services.setting_image_codec import StandardImage
+    from app.services.setting_image_service import _series_image, set_book_image_without_commit
+
     async with _edit(db, actor, sid, expected) as series:
         row = await _entry(db, sid, eid)
         uses = await _uses(db, sid, entry_ids=[eid])
@@ -965,6 +998,7 @@ async def _retire_entry(
         projects = await _lock_projects(db, actor, series, ids.union(target_ids), active=target_ids)
         uses = await _uses(db, sid, entry_ids=[eid])
         target_ref = None
+        source_image = await _series_image(db, sid, eid) if move_to is not None else None
         if move_to is not None:
             await _member(db, sid, move_to)
         await _remove_projections(db, projects, [use for use in uses if use.project_id != move_to])
@@ -976,6 +1010,11 @@ async def _retire_entry(
                 await db.flush()
             else:
                 target_ref = await _new_local(db, move_to, row)
+            if source_image is not None:
+                image = StandardImage(
+                    source_image.data, source_image.width, source_image.height, source_image.mime_type,
+                )
+                await set_book_image_without_commit(db, move_to, target_ref.kind, target_ref.id, image)
             await _bump_project(db, move_to, tighten=existing is None, planning=True)
         await db.delete(row)
         series.revision += 1

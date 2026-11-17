@@ -9,6 +9,7 @@ import { readEntityFieldPosition } from '../../utils/entityLinks'
 import { invalidateProject } from '../../utils/projectRefresh'
 import AutoGrid from '../../components/AutoGrid'
 import CareerEditDrawer from '../../components/careers/CareerEditDrawer'
+import { SettingThumbnail } from '../../components/entities/SettingThumbnail'
 import { useSettingAiSession } from '../../components/settingAi/useSettingAiSession'
 import { useSettingTagsSession } from '../../components/settingTags/useSettingTagsSession'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
@@ -32,7 +33,7 @@ export default function CareersPanel() {
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => careerApi.list(pid), [pid])
-  const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
+  const { data: loadedItems, loading, error: listError, reload, setData } = useLoader(loader, { projectId: pid, resources: ['careers', 'characters'] })
   const items = loadedItems ?? []
   const [editing, setEditing] = useState<Career | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -95,6 +96,7 @@ export default function CareersPanel() {
         }
       >
         <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <SettingThumbnail target={{ scope: 'project', projectId: pid, kind: 'career', entryId: c.id }} thumbnail={c.thumbnail} name={c.name} />
           <Space size={[2, 4]} wrap>
             {c.stages.map((s, i) => (
               <span key={s.id}>
@@ -167,6 +169,7 @@ export default function CareersPanel() {
         career={editing}
         fieldPosition={fieldPosition}
         onClose={() => setDrawerOpen(false)}
+        onThumbnailChange={(id, thumbnail) => { setData((prev) => (prev ?? []).map((item) => item.id === id ? { ...item, thumbnail } : item)); invalidateProject(pid, ['careers']) }}
         onSaved={(c) => {
           setEditing(c)
           invalidateProject(pid, ['careers'])

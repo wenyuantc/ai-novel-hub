@@ -1,5 +1,6 @@
 """项目备份（ainovel.project）：导出 / 大小估算 / 导入预览 / 导入。他人项目一律 404，导入的项目归属当前用户。"""
 
+from tempfile import SpooledTemporaryFile
 from typing import Annotated
 
 import anyio
@@ -14,6 +15,39 @@ from app.schemas.transfer import BackupEstimate, BackupOptions, ImportPreview, I
 from app.services.project_transfer import exporter, importer
 
 router = APIRouter(prefix="/projects", tags=["project-transfer"])
+
+
+class _ClosingStreamingResponse(StreamingResponse):
+    """响应成功、断连或取消均立即释放私有暂存文件。"""
+
+    def __init__(self, *args, backing, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._backing = backing
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._backing.close()
+
+
+async def _validated_backup_stream(backing, length, sessionmaker, plan):
+    """先重验每个发送段的授权；最后两字节仅在完整快照复验后送出。"""
+    remaining = length
+    try:
+        while remaining > 2:
+            async with sessionmaker() as db:
+                await exporter.validate_export(db, plan, complete=False)
+            part = await anyio.to_thread.run_sync(backing.read, min(1024 * 1024, remaining - 2))
+            if not part:
+                raise RuntimeError("备份暂存文件意外结束")
+            remaining -= len(part)
+            yield part
+        async with sessionmaker() as db:
+            await exporter.validate_export(db, plan)
+        yield await anyio.to_thread.run_sync(backing.read, remaining)
+    finally:
+        backing.close()
 
 
 async def _read_backup(file: StarletteUploadFile) -> importer.Backup:
@@ -72,10 +106,23 @@ async def export_backup(
 ) -> StreamingResponse:
     options = BackupOptions(versions=versions, snapshots=snapshots, generation_logs=logs, inspiration=inspiration)
     plan = await exporter.prepare_export(db, user.id, project_id, options)
-    # 流式输出期间不占用请求 session：生成器自己开 session
+    # 完整生成并核对体积、版本及原身份后才发送状态行。小于 1 MiB 留在内存，大文件落入私有临时文件。
     await db.close()
-    return StreamingResponse(
-        exporter.stream_export(sessionmaker, plan),
+    backing = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    try:
+        async for chunk in exporter.stream_export(sessionmaker, plan):
+            # 避免单条超大文本在 SpooledTemporaryFile 溢写前再次完整复制进内存缓冲。
+            for offset in range(0, len(chunk), 1024 * 1024):
+                await anyio.to_thread.run_sync(backing.write, memoryview(chunk)[offset:offset + 1024 * 1024])
+        length = backing.tell()
+        await anyio.to_thread.run_sync(backing.seek, 0)
+        async with sessionmaker() as check_db:
+            await exporter.validate_export(check_db, plan)
+    except BaseException:
+        backing.close()
+        raise
+    return _ClosingStreamingResponse(
+        _validated_backup_stream(backing, length, sessionmaker, plan), backing=backing,
         media_type="application/json",
         headers={"Content-Disposition": plan.content_disposition},
     )

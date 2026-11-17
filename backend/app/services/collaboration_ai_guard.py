@@ -44,6 +44,7 @@ from app.services.task_engine import execution_identity
 
 type ModelBinding = project_ai_config.ResolvedProjectModel | project_ai_config.ResolvedSharedEmbedding
 type AfterVerify = Callable[[], Awaitable[None]]
+type HttpSourceVerify = Callable[[AsyncSession], Awaitable[None]]
 MODEL_KEY = "_project_model"
 EMBEDDING_KEY = "_shared_embedding"
 _PROVIDER_TYPES = {
@@ -463,6 +464,7 @@ class SendGuard:
     _embedding_inputs: tuple[object, ...] | None
     _scene: scene_ai_context.SceneContextStamp | None
     _after_verify: AfterVerify | None
+    _http_source_verify: HttpSourceVerify | None
     # 仅供受控任务流发布证明（批量章与章之间 E5-c2；向导保存后 done 帧 E5-c3）：不能用于任何发送、预检或写屏障。
     _publication_only: bool = False
     # 仅向导续写的保存后发布 guard（E5-c3）：构建戳 epoch，来源 epoch 与之比较（本任务覆盖保存可能推进 epoch）；
@@ -516,6 +518,13 @@ class SendGuard:
         await self._verify_entity_sources(db)
         await self._verify_resume(db)
         await self._verify_bindings(db)
+        if self._http_source_verify is not None:
+            # 仅内部 HTTP 调用方可附加来源核对；同一物理发送事务内不允许提交或挂起写入。
+            original_transaction = _transaction_identity(db)
+            await self._http_source_verify(db)
+            _reject_pending(db)
+            if _transaction_identity(db) is not original_transaction:
+                raise CollaborationSendBlocked()
 
     async def _verify_task(self, db: AsyncSession, *, write: bool = False, streaming: bool = False) -> None:
         if self._task is None:
@@ -1360,6 +1369,7 @@ def _make(
     embedding_inputs: tuple[object, ...] | None,
     scene: scene_ai_context.SceneContextStamp | None,
     after_verify: AfterVerify | None,
+    http_source_verify: HttpSourceVerify | None = None,
     publication_only: bool = False,
     resume_epoch: int | None = None,
 ) -> SendGuard:
@@ -1387,6 +1397,8 @@ def _make(
         ):
             raise CollaborationSendBlocked()
         if after_verify is not None and not callable(after_verify):
+            raise CollaborationSendBlocked()
+        if http_source_verify is not None and (task is not None or not callable(http_source_verify)):
             raise CollaborationSendBlocked()
         if chapter is not None and (task is None or not _matches_chapter_identity(chapter, task, binding, scene)):
             raise CollaborationSendBlocked()
@@ -1425,8 +1437,8 @@ def _make(
         _check_embedding_inputs(task, binding, embedding_inputs)
         guard = SendGuard(actor, binding, stamp, cipher, allow_private, task, chapter, batch_attempt,
                           analysis_execution, analysis_pending, analysis_reference, extra_bindings, resume,
-                          document_claim, entity_sources, embedding_inputs, scene, after_verify, publication_only,
-                          resume_epoch)
+                          document_claim, entity_sources, embedding_inputs, scene, after_verify, http_source_verify,
+                          publication_only, resume_epoch)
         if publication_only and task.kind in _WIZARD_KINDS and guard._wizard_stream_shape() != "completed":
             # 向导仅发布 guard（E5-c3）只能绑定已带本轮完成收据的断点。
             raise CollaborationSendBlocked()
@@ -1441,6 +1453,7 @@ def for_http(
     cipher: SecretCipher,
     allow_private: bool = False, scene: scene_ai_context.SceneContextStamp | None = None,
     after_verify: AfterVerify | None = None,
+    http_source_verify: HttpSourceVerify | None = None,
 ) -> SendGuard:
     """只从认证 session 捕获原始 actor，不能从当前数据库重新构造令牌版本。"""
     actor = None
@@ -1455,7 +1468,7 @@ def for_http(
     return _make(actor, binding, stamp, cipher=cipher, allow_private=allow_private, task=None, chapter=None,
                  batch_attempt=None, analysis_execution=None, analysis_pending=None, analysis_reference=None,
                  extra_bindings=(), resume=None, document_claim=None, entity_sources=None, embedding_inputs=None,
-                 scene=scene, after_verify=after_verify)
+                 scene=scene, after_verify=after_verify, http_source_verify=http_source_verify)
 
 
 def for_task(

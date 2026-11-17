@@ -196,6 +196,5 @@ async def export_novel(
         novel_id,
         fmt,
         ids,
-        author=principal.username,
         include_synopsis=include_synopsis,
     )

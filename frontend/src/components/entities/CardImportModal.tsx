@@ -1,5 +1,5 @@
 import { InboxOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, List, Modal, Space, Tag, theme, Typography, Upload } from 'antd'
+import { Alert, Button, Card, Checkbox, List, Modal, Space, Tag, theme, Typography, Upload } from 'antd'
 import { useSyncExternalStore } from 'react'
 import { currentRequestGeneration, watchRequestGeneration } from '../../api/client'
 import type { CardPreview } from '../../api/types'
@@ -64,7 +64,7 @@ function Inner({ projectId, onClose, onImported, canImport }: Props & { canImpor
         beforeUpload={(file) => { if (canReadNow()) void controller.selectFile(file); return false }}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p style={{ overflowWrap: 'anywhere' }}>{state.fileName ? `已选择：${state.fileName}（点击重新选择）` : '点击或拖拽卡片 JSON 文件到这里'}</p>
-        <p style={{ color: token.colorTextTertiary }}>支持 ainovel.cards v1–v6，上限 2MB。</p>
+        <p style={{ color: token.colorTextTertiary }}>支持 ainovel.cards v1–v7，紧凑 JSON 上限 16 MiB。</p>
       </Upload.Dragger>}
       {state.loading && !state.preview && <Typography.Text role="status">正在读取并校验卡片，请稍候……</Typography.Text>}
       {!canImport && <Alert type="info" showIcon message="当前可以预览卡片；导入需要作品编辑权限。" />}
@@ -85,6 +85,12 @@ function Inner({ projectId, onClose, onImported, canImport }: Props & { canImpor
         {version >= 6 && <Alert type="info" showIcon message="卡片带有 AI 与提及设置"
           description="只有新建和重命名新建的条目会写入卡片中的 AI 设置、字段隐藏和单向关联。跳过条目、复用职业均保留本作品原有设置。" />}
         {version >= 5 && <Card size="small" title="整理标签快照"><Typography.Paragraph type="secondary">仅新建或重命名新建的条目写入卡片标签；跳过内容、复用职业均保留已有标签。自动分类规则不会随卡片导入。</Typography.Paragraph><TagSnapshot items={tags} /></Card>}
+        {version >= 7 && (preview.thumbnails?.length ?? 0) > 0 && <Card size="small" title="选择导入的缩略图">
+          <Typography.Paragraph type="secondary">默认不导入图片。仅新建或重命名新建的条目可导入；跳过或复用的条目保留原有图片。</Typography.Paragraph>
+          <Space direction="vertical" style={{ maxWidth: '100%' }}>{preview.thumbnails?.map((item) => <Checkbox key={item.ref}
+            checked={state.thumbnailRefs.includes(item.ref)} disabled={busy || !canImport || !!state.reviewPreview}
+            onChange={(event) => controller.setThumbnail(item.ref, event.target.checked)}>{item.name} · {item.kind === 'character' ? '角色' : item.kind === 'organization' ? '组织' : '职业'}</Checkbox>)}</Space>
+        </Card>}
         <CardImportEntities preview={preview} choices={state.choices} v4={typed} disabled={busy} onChange={controller.setResolution} />
         {typed && <>
           <CardDefinitionMappings definitions={preview.field_definitions} mappings={state.mappings.definitions} selected={state.selectedDefinitions} disabled={busy} onChange={controller.setDefinition} />

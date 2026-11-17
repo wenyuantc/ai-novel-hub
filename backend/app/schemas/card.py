@@ -1,12 +1,15 @@
-"""角色 / 组织卡片（ainovel.cards v6，兼容导入 v1–v5），不含源数据库 ID。
+"""角色 / 组织卡片（ainovel.cards v7，兼容导入 v1–v6），不含源数据库 ID。
 
 v2 = v1 + 角色的职业挂接（characters[].careers）+ 所涉职业的完整定义（顶层 careers）。
 v3 = v2 + 角色自定义文本字段的最新快照（characters[].custom_text_fields）。
 v4 = v3 + 类型化字段配置及当前快照，以包内 ref 和显式外部映射解析引用。
 v5 = v4 + 包内实体当前整理标签，不携带作品分类规则。
 v6 = v5 + 条目 AI 设置、随包字段的 AI 可见性及显式定向关联。
+v7 = v6 + 可选的当前缩略图。
 """
 
+import base64
+import binascii
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
@@ -18,11 +21,11 @@ from app.schemas.setting_field_value import EntityKind, EntityRef, FieldType, Po
 from app.schemas.setting_fields import DefinitionCreate, DefinitionOut, OptionCreate
 
 CARD_FORMAT = "ainovel.cards"
-CARD_VERSION = 6
+CARD_VERSION = 7
 # 可导入的版本（旧版本不解释后版本的字段与局部引用）
-SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5, 6)
+SUPPORTED_CARD_VERSIONS = (1, 2, 3, 4, 5, 6, 7)
 # 导入数据大小上限（序列化后的 UTF-8 字节数）
-MAX_CARD_BYTES = 2 * 1024 * 1024
+MAX_CARD_BYTES = 16 * 1024 * 1024
 
 
 
@@ -86,10 +89,28 @@ class CardExternalReference(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
+class CardThumbnail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mime_type: Literal["image/webp"]
+    data: str = Field(max_length=4 * ((512 * 1024 + 2) // 3))
+
+    @model_validator(mode="after")
+    def validate_image(self):
+        from app.core.errors import AppError
+        from app.services.setting_image_codec import validate_standard_image
+
+        try:
+            validate_standard_image(base64.b64decode(self.data, validate=True), self.mime_type)
+        except (binascii.Error, ValueError, AppError) as exc:
+            raise ValueError("缩略图文件损坏或格式不受支持") from exc
+        return self
+
+
 class CardTaggedEntry(BaseModel):
     setting_tags: list[str] = Field(default_factory=list)
     ai_settings: StoredAiSettings | None = None
     ai_link_refs: list[str] = Field(default_factory=list, max_length=MAX_AI_LINKS)
+    thumbnail: CardThumbnail | None = None
 
     @field_validator("setting_tags", mode="before")
     @classmethod
@@ -227,6 +248,12 @@ class CardFile(BaseModel):
     def discard_future_fields(cls, data: Any) -> Any:
         if not isinstance(data, dict) or type(data.get("version")) is not int:
             return data
+        if data["version"] < 7:
+            for name in ("characters", "organizations", "careers"):
+                entries = data.get(name)
+                for entry in entries if isinstance(entries, list) else []:
+                    if isinstance(entry, dict) and entry.get("thumbnail") is not None:
+                        raise ValueError("旧版卡片不支持缩略图，请使用原始版本文件")
         if data["version"] < 6:
             def rows(container, key):
                 items = container.get(key)
@@ -369,6 +396,7 @@ class CardPreviewRequest(BaseModel):
 
 
 class CardImportRequest(CardPreviewRequest):
+    thumbnail_refs: list[str] = Field(default_factory=list, max_length=1700)
     expected_fields_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
     expected_categories_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
     expected_ai_visibility_revision: int | None = Field(default=None, strict=True, ge=0, le=2_147_483_647)
@@ -423,6 +451,12 @@ class PreviewCareer(BaseModel):
     stages_added: list[str] = Field(default_factory=list)
 
 
+class PreviewThumbnail(BaseModel):
+    ref: str
+    kind: Literal["character", "organization", "career"]
+    name: str
+
+
 class CardPreview(BaseModel):
     fields_revision: int = 0
     categories_revision: int = 0
@@ -430,6 +464,7 @@ class CardPreview(BaseModel):
     can_import: bool = True
     field_definitions: list[PreviewFieldDefinition] = Field(default_factory=list)
     references: list[PreviewReference] = Field(default_factory=list)
+    thumbnails: list[PreviewThumbnail] = Field(default_factory=list)
     characters: list[PreviewItem]
     organizations: list[PreviewItem]
     relationships: list[PreviewRelationship]

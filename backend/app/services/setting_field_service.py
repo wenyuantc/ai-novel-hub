@@ -133,6 +133,7 @@ async def _metadata(
     project_id: int,
     *,
     definition_ids: Collection[int] | None = None,
+    option_ids: Collection[int] | None = None,
 ) -> tuple[list[s.DefinitionOut], dict[int, list[s.OptionOut]]]:
     if definition_ids is not None and not definition_ids:
         return [], {}
@@ -151,15 +152,12 @@ async def _metadata(
         )
     ]
     options: dict[int, list[s.OptionOut]] = defaultdict(list)
-    for option in await db.execute(
-        select(SettingFieldOption.__table__)
-        .join(SettingFieldDefinition)
-        .where(
-            *predicates,
-        )
-        .order_by(SettingFieldOption.sort, SettingFieldOption.id)
-    ):
-        options[option.definition_id].append(s.OptionOut.model_validate(option))
+    if option_ids is None or option_ids:
+        option_query = select(SettingFieldOption.__table__).join(SettingFieldDefinition).where(*predicates)
+        if option_ids is not None:
+            option_query = option_query.where(SettingFieldOption.id.in_(option_ids))
+        for option in await db.execute(option_query.order_by(SettingFieldOption.sort, SettingFieldOption.id)):
+            options[option.definition_id].append(s.OptionOut.model_validate(option))
     return definitions, options
 
 
@@ -375,14 +373,18 @@ async def read_field_bindings(
     timeline_ids: Sequence[int],
     *,
     definition_ids: Collection[int] | None = None,
+    include_legacy: bool = False,
 ) -> list[FieldBindingSnapshot]:
     """只读值快照，不使用或覆盖 Session 中缓存/待保存的绑定实例。"""
     with db.no_autoflush:
-        if definition_ids is not None and not definition_ids:
+        if definition_ids is not None and not definition_ids and not include_legacy:
             return []
         predicates = [SettingTextField.timeline_id.in_(timeline_ids)]
         if definition_ids is not None:
-            predicates.append(SettingTextField.definition_id.in_(definition_ids))
+            match_definition = SettingTextField.definition_id.in_(definition_ids)
+            predicates.append(
+                or_(match_definition, SettingTextField.definition_id.is_(None)) if include_legacy else match_definition
+            )
         rows = await db.execute(
             select(
                 SettingTextField.id,
@@ -433,6 +435,8 @@ async def load_field_specs(
     fields: Sequence[SettingTextField | FieldBindingSnapshot],
     *,
     definition_ids: Collection[int] | None = None,
+    current_values_only: bool = False,
+    option_ids: Collection[int] | None = None,
 ) -> dict[int, FieldSpec]:
     """批量预取类型及全部合法历史身份；停用身份仍合法。只读，无 autoflush。"""
     with db.no_autoflush:
@@ -443,6 +447,7 @@ async def load_field_specs(
                 db,
                 project_id,
                 definition_ids=definition_ids,
+                option_ids=option_ids,
             )
         )
         by_id = {definition.id: definition for definition in definitions}
@@ -455,13 +460,14 @@ async def load_field_specs(
             ]
             if reference_fields:
                 values = [field.base_value for field in reference_fields]
-                values.extend(
-                    await db.scalars(
-                        select(SettingProgression.value).where(
-                            SettingProgression.custom_field_id.in_([field.id for field in reference_fields]),
+                if not current_values_only:
+                    values.extend(
+                        await db.scalars(
+                            select(SettingProgression.value).where(
+                                SettingProgression.custom_field_id.in_([field.id for field in reference_fields]),
+                            )
                         )
                     )
-                )
                 handle_ids = {
                     value["reference_handle_id"]
                     for value in values
@@ -998,6 +1004,8 @@ async def resolve_entry_fields(
     position: StoryPosition | None = None,
     *,
     definition_ids: Collection[int] | None = None,
+    include_legacy: bool = False,
+    current_limit_bytes: int | None = None,
 ) -> dict[tuple[str, int], s.EntryFieldsOut]:
     """共享的批量时点投影；目录/时间线前后版本一致，所有引用都已公开解码。"""
     from app.services import setting_progression_service as progressions
@@ -1048,17 +1056,37 @@ async def resolve_entry_fields(
                 db,
                 project_id,
                 definition_ids=definition_ids,
+                option_ids=set() if current_limit_bytes is not None else None,
             )
         )
-        fields = (
-            await read_field_bindings(db, list(revisions))
-            if definition_ids is None
-            else await read_field_bindings(
-                db,
-                list(revisions),
-                definition_ids=definition_ids,
+        if current_limit_bytes is not None:
+            if definition_ids is None or not include_legacy or position is not None:
+                raise ValueError("当前模板投影需要定义范围、旧字段和最新时点")
+            fields, values_by_timeline = await progressions._resolve_template_field_timelines(
+                db, project_id, timelines, definition_ids=definition_ids,
+                definition_types={definition.id: definition.field_type for definition in definitions},
+                max_bytes=current_limit_bytes,
             )
-        )
+            dropdown_definitions = {definition.id for definition in definitions if definition.field_type == "dropdown"}
+            current_option_ids = {
+                field.base_value["option_id"]
+                for field in fields
+                if field.definition_id in dropdown_definitions
+                and isinstance(field.base_value, dict)
+                and type(field.base_value.get("option_id")) is int
+            }
+            _, options = await _metadata(db, project_id, definition_ids=definition_ids, option_ids=current_option_ids)
+        else:
+            fields = (
+                await read_field_bindings(db, list(revisions))
+                if definition_ids is None
+                else await read_field_bindings(
+                    db,
+                    list(revisions),
+                    definition_ids=definition_ids,
+                    include_legacy=include_legacy,
+                )
+            )
         by_timeline: dict[int, list[FieldBindingSnapshot]] = defaultdict(list)
         for field in fields:
             by_timeline[field.timeline_id].append(field)
@@ -1068,14 +1096,20 @@ async def resolve_entry_fields(
             specs = await load_field_specs(db, project_id, fields)
             targets = await _handle_targets(db, project_id)
         else:
-            values_by_timeline = await progressions._resolve_field_timelines(
-                db,
-                project_id,
-                timelines,
-                position,
-                definition_ids=definition_ids,
+            if current_limit_bytes is None:
+                values_by_timeline = await progressions._resolve_field_timelines(
+                    db,
+                    project_id,
+                    timelines,
+                    position,
+                    definition_ids=definition_ids,
+                    include_legacy=include_legacy,
+                )
+            specs = await load_field_specs(
+                db, project_id, fields, definition_ids=definition_ids,
+                current_values_only=current_limit_bytes is not None,
+                option_ids=current_option_ids if current_limit_bytes is not None else None,
             )
-            specs = await load_field_specs(db, project_id, fields, definition_ids=definition_ids)
             handle_ids = {
                 value["reference_handle_id"]
                 for value in (

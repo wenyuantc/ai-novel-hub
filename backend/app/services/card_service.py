@@ -1,4 +1,4 @@
-"""角色 / 组织卡片导入导出（ainovel.cards v6，兼容导入 v1–v5）。
+"""角色 / 组织卡片导入导出（ainovel.cards v7，兼容导入 v1–v6）。
 
 - v4 类型化字段以文件局部 ref 关联；包外引用及同名跳过目标需要作者显式映射本作品身份。
 - 原有关系／成员／职业名称关联保持兼容，导出的卡片不包含源数据库 ID。
@@ -18,12 +18,14 @@
 - v6 保留条目设置及字段可见性；AI 关联使用与类型化字段相同的局部 ref／显式映射。
 """
 
+import base64
 import json
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,6 +66,7 @@ from app.schemas.card import (
     PreviewItem,
     PreviewReference,
     PreviewRelationship,
+    PreviewThumbnail,
 )
 from app.schemas.career import CareerCreate, StageIn
 from app.schemas.organization import MemberCreate
@@ -97,9 +100,13 @@ from app.services.cast_service import is_protagonist_role
 from app.services.mentions.context import MentionCandidate, load_candidates
 from app.services.organization_service import MAX_DEPTH
 from app.services.project_access import require_project
+from app.services.project_transfer import thumbnails
 from app.services.setting_field_values import has_field_content
+from app.services.setting_image_codec import validate_standard_image
+from app.services.setting_image_service import set_book_image_without_commit
 
 RENAME_SUFFIX = "（导入）"
+_parse_limiter = anyio.CapacityLimiter(2)
 
 
 # ---------------- 导出 ----------------
@@ -252,8 +259,28 @@ async def export_cards(db: AsyncSession, user_id: int, project_id: int, req: Car
     await _export_typed_fields(
         db, project_id, data, chars, orgs, list(sorted(used.values(), key=lambda x: (x.sort, x.id)))
     )
+    entries = {
+        "character": [entry.id for entry in chars],
+        "organization": [entry.id for entry in orgs],
+        "career": [entry.id for entry in sorted(used.values(), key=lambda x: (x.sort, x.id))],
+    }
+    versions = await thumbnails.versions_for_entries(db, project_id, entries)
+    images = await thumbnails.serialized(
+        db, versions, max_bytes=MAX_CARD_BYTES, too_large="卡片文件过大，上限为 16MB",
+    )
+    by_subject = {(image["ref"]["kind"], image["ref"]["id"]): image for image in images}
+    for kind, key in (("character", "characters"), ("organization", "organizations"), ("career", "careers")):
+        for ident, output in zip(entries[kind], data[key], strict=True):
+            image = by_subject.get((kind, ident))
+            if image:
+                output["thumbnail"] = {"mime_type": image["mime_type"], "data": image["data"]}
+    if len(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_CARD_BYTES:
+        raise BadRequestError("卡片文件过大，上限为 16MB")
     await categories.check_categories_revision(db, project_id, category_revision)
     await visibility.check_visibility_revision(db, project_id, ai_revision)
+    await require_project(db, user_id, project_id, "export")
+    if versions != await thumbnails.versions_for_entries(db, project_id, entries):
+        raise ConflictError("卡片导出期间缩略图已变化，请重新导出", extra={"code": "thumbnail_changed"})
     return data
 
 
@@ -358,7 +385,7 @@ def parse_card(data: Any) -> CardFile:
     except (TypeError, ValueError) as exc:
         raise BadRequestError("卡片文件格式不正确") from exc
     if size > MAX_CARD_BYTES:
-        raise BadRequestError("卡片文件过大，上限为 2MB")
+        raise BadRequestError("卡片文件过大，上限为 16MB")
     if not isinstance(data, dict):
         raise BadRequestError("卡片文件格式不正确：应为 JSON 对象")
     if data.get("format") != CARD_FORMAT:
@@ -651,7 +678,7 @@ def _reject_ambiguous_ai_links(entries, plan: _TypedPlan) -> None:
 async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: Any,
                         request: CardPreviewRequest | None = None) -> CardPreview:
     await require_project(db, user_id, project_id, "export")
-    card = parse_card(data)
+    card = await anyio.to_thread.run_sync(parse_card, data, limiter=_parse_limiter)
     request = request or CardPreviewRequest(data=data)
     ai_revision = await visibility.visibility_revision(db, project_id)
     category_revision = await categories.categories_revision(db, project_id)
@@ -723,6 +750,8 @@ async def preview_cards(db: AsyncSession, user_id: int, project_id: int, data: A
         ai_visibility_revision=ai_revision,
         fields_revision=typed.revision, can_import=typed.can_import,
         field_definitions=typed.definitions, references=typed.references,
+        thumbnails=[PreviewThumbnail(ref=item.ref, kind=kind, name=item.name)
+                    for kind, item in _card_entries(card) if item.thumbnail is not None],
         characters=_preview_items([c.name for c in chars], occupied_chars),
         organizations=_preview_items([o.name for o in orgs], existing_orgs),
         relationships=rels,
@@ -776,7 +805,12 @@ async def _import_cards(db: AsyncSession, user_id: int, project_id: int, req: Ca
     # 卡片原为严格作者能力，仅从已接受协作关系扩充；不能因管理员读写权开放给非成员。
     await require_project(db, user_id, project_id, "export", for_update=True, visibility_write=True)
     await require_project(db, user_id, project_id, "content.edit")
-    card = parse_card(req.data)
+    card = await anyio.to_thread.run_sync(parse_card, req.data, limiter=_parse_limiter)
+    image_entries = {item.ref: (kind, item.thumbnail) for kind, item in _card_entries(card)
+                     if item.thumbnail is not None}
+    if (len(set(req.thumbnail_refs)) != len(req.thumbnail_refs)
+            or set(req.thumbnail_refs).difference(image_entries)):
+        raise BadRequestError("所选缩略图引用不存在或重复")
     if card.version >= 6:
         if req.expected_ai_visibility_revision is None:
             raise BadRequestError("v6 卡片确认导入必须携带 AI 可见性版本，请先预览",
@@ -984,6 +1018,16 @@ async def _import_cards(db: AsyncSession, user_id: int, project_id: int, req: Ca
         for career in card.careers:
             if career.ref in typed.created:
                 typed_locals[career.ref] = EntityRef(kind="career", id=career_map[career.name].id)
+        for ref in req.thumbnail_refs:
+            target = typed_locals.get(ref)
+            if target is None:
+                continue
+            _, source = image_entries[ref]
+            image = await anyio.to_thread.run_sync(
+                validate_standard_image, base64.b64decode(source.data, validate=True), source.mime_type,
+                limiter=_parse_limiter,
+            )
+            await set_book_image_without_commit(db, project_id, target.kind, target.id, image)
         targets = {item.ref: item.target for item in typed.references if item.target is not None} | typed_locals
         await _apply_typed_fields(db, project_id, card, req.mappings, typed, typed_locals, targets)
         if card.version >= 6 and typed_locals:

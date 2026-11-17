@@ -25,6 +25,7 @@ import { errorMessage } from '../../api/client'
 import { organizationApi } from '../../api/organizations'
 import type { Organization, OrganizationInput } from '../../api/types'
 import EntityTaskModal from '../../components/entities/EntityTaskModal'
+import { ProjectThumbnailEditor, SettingThumbnail, ThumbnailNewHint } from '../../components/entities/SettingThumbnail'
 import { OrganizationMembershipsTab } from '../../components/entities/CharacterMembershipsTab'
 import { useLoader } from '../../hooks/useLoader'
 import { useEntityDeepLink } from '../../hooks/useEntityDeepLink'
@@ -60,6 +61,7 @@ function toTreeData(nodes: OrgTreeNode<Organization>[]): DataNode[] {
     key: n.org.id,
     title: (
       <span>
+        <SettingThumbnail target={{ scope: 'project', projectId: n.org.project_id, kind: 'organization', entryId: n.org.id }} thumbnail={n.org.thumbnail} name={n.org.name} size={32} />{' '}
         {n.org.name}
         {n.org.org_type && <Typography.Text type="secondary"> · {n.org.org_type}</Typography.Text>}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -81,7 +83,7 @@ export default function OrganizationsPanel() {
   const { canUseAI, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
   const { message } = App.useApp()
   const loader = useCallback(() => organizationApi.list(pid), [pid])
-  const { data: loadedOrgs, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
+  const { data: loadedOrgs, loading, error: listError, reload, setData } = useLoader(loader, { projectId: pid, resources: ['organizations', 'characters'] })
   const orgs = useMemo(() => loadedOrgs ?? [], [loadedOrgs])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [fieldPosition, setFieldPosition] = useState<ProgressionPositionInput | null>(null)
@@ -242,6 +244,10 @@ export default function OrganizationsPanel() {
         width={720}
         forceRender
       >
+        {orgOpen && editing && <ProjectThumbnailEditor key={`${pid}:organization:${editing.id}`} target={{ scope: 'project', projectId: pid, kind: 'organization', entryId: editing.id }}
+          thumbnail={(orgs.find((item) => item.id === editing.id) ?? editing).thumbnail} name={editing.name} editable={canEdit}
+          onChange={(thumbnail) => { setData((prev) => (prev ?? []).map((item) => item.id === editing.id ? { ...item, thumbnail } : item)); invalidateProject(pid, ['organizations']) }} />}
+        {orgOpen && !editing && canEdit && <ThumbnailNewHint />}
         <Form form={orgForm} layout="vertical" disabled={!canEdit}>
           <Row gutter={16}>
             <Col span={12}>
@@ -336,6 +342,7 @@ function OrgDetail({ projectId, org, orgs, onEdit, onDelete, onMembersChanged, f
           </Space>
         }
       >
+        <SettingThumbnail target={{ scope: 'project', projectId, kind: 'organization', entryId: org.id }} thumbnail={org.thumbnail} name={org.name} size={80} />
         <Descriptions size="small" column={2}>
           <Descriptions.Item label="类型">{org.org_type || '-'}</Descriptions.Item>
           <Descriptions.Item label="所在地">{org.location || '-'}</Descriptions.Item>

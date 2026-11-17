@@ -30,8 +30,10 @@ from app.api.v1 import (
     memories,
     mentions,
     notes,
+    novel_templates,
     organizations,
     outline_pro,
+    pen_names,
     planning,
     progressions,
     project_cover,
@@ -45,6 +47,7 @@ from app.api.v1 import (
     series,
     setting_categories,
     setting_fields,
+    setting_images,
     skills,
     story,
     styles,
@@ -71,9 +74,12 @@ api_router.include_router(api_keys.router)
 api_router.include_router(collaboration.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}
 api_router.include_router(transfer.router)
+api_router.include_router(pen_names.router)
+api_router.include_router(novel_templates.router)
 api_router.include_router(projects.router)
 api_router.include_router(series.router)
 api_router.include_router(project_cover.router)
+api_router.include_router(setting_images.router)
 api_router.include_router(reader.router)
 # 固定路径（with-relations / generate）先于通用 CRUD 的 /{item_id} 注册
 api_router.include_router(character_actions.router)

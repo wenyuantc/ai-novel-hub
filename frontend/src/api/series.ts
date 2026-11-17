@@ -1,6 +1,6 @@
 import { api, request } from './client'
 import type { SettingAiMode } from './settingAiVisibility'
-import type { WorldCategory } from './types'
+import type { SettingThumbnailInfo, WorldCategory } from './types'
 
 export interface Series {
   id: number
@@ -47,7 +47,7 @@ type EntryData =
   | { kind: 'world'; data: SeriesWorldData }
 
 /** has_uses 包含调用者无法访问及回收站中的成员书；uses 仅包含允许展示的书。 */
-export type SeriesEntry = EntryData & { id: number; ai_settings: SeriesAiSettings; has_uses: boolean; uses: SeriesUse[] }
+export type SeriesEntry = EntryData & { id: number; thumbnail?: SettingThumbnailInfo | null; ai_settings: SeriesAiSettings; has_uses: boolean; uses: SeriesUse[] }
 export type SeriesEntryInput = EntryData & { ai_settings: SeriesAiSettings }
 export interface SeriesEntryPage { items: SeriesEntry[]; total: number; revision: number }
 export interface SeriesMutation { revision: number; item?: SeriesEntry | null; ref?: SeriesBookRef | null }

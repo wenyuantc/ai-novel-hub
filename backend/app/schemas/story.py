@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from app.schemas.setting_image import ThumbnailMeta
+
 WorldCategory = Literal["place", "faction", "item", "rule", "history", "other"]
 LifeStatus = Literal["alive", "dead", "missing", "other"]
 
@@ -127,10 +129,14 @@ class SettingOrigin(BaseModel):
 
 class CharacterWithOrigin(CharacterOut):
     origin: SettingOrigin = Field(default_factory=SettingOrigin)
+    thumbnail: ThumbnailMeta | None = None
+    thumbnail_editable: bool = False
 
 
 class WorldSettingWithOrigin(WorldSettingOut):
     origin: SettingOrigin = Field(default_factory=SettingOrigin)
+    thumbnail: ThumbnailMeta | None = None
+    thumbnail_editable: bool = False
 
 
 class OutlineCreate(BaseModel):

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from app.schemas.progression import NonnegativeDbInt
 from app.schemas.setting_ai_visibility import MAX_MENTION_EXCLUSIONS, AiMode, BuiltinField, ExclusionPhrase
 from app.schemas.setting_field_value import PositiveDbInt
+from app.schemas.setting_image import ThumbnailMeta
 from app.schemas.story import Aliases, WorldCategory
 
 SeriesKind = Literal["character", "world"]
@@ -140,6 +141,7 @@ class _SeriesEntryOut(BaseModel):
     # 包含调用者不可见及回收站书籍的绑定，仅用于判断能否删除。
     has_uses: bool
     uses: list[SeriesUseOut]
+    thumbnail: ThumbnailMeta | None = None
 
 
 class SeriesCharacterOut(_SeriesEntryOut):

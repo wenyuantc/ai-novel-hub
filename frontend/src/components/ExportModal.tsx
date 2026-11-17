@@ -8,8 +8,9 @@ import { noteApi } from '../api/notes'
 import { sceneApi } from '../api/scenes'
 import { SETTING_ENTRY_TYPE_LABELS, SETTING_ENTRY_TYPE_OPTIONS, settingFieldsApi } from '../api/settingFields'
 import type { ChapterBrief, SettingEntryType } from '../api/types'
-import { useAuthStore } from '../stores/auth'
+import { capturePenNameActor } from '../hooks/usePenNames'
 import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../stores/project'
+import { epubAuthorOptions, epubAuthorText, prepareShelfExportScope } from './export/epub'
 import ExportPicker, { EXPORT_PICKER_PAGE_SIZE, type ExportPickerLoader } from './export/ExportPicker'
 import { buildDocumentRequest, type ExportItem } from './export/selection'
 
@@ -17,17 +18,48 @@ interface Props {
   projectId: number
   open: boolean
   onClose: () => void
+  /** 书架没有当前作品 store，打开时需要先加载授权作用域。 */
+  fromShelf?: boolean
 }
 
 type Format = DocumentFormat | 'epub'
 
 /** 作品可阅读文档组合导出，EPUB 保持原有导出方式。 */
-export default function ExportModal({ projectId, open, onClose }: Props) {
-  const scopeVersion = useProjectStore((state) => state.scopeVersion)
-  return open ? <ExportModalInner key={`${projectId}:${scopeVersion}`} projectId={projectId} onClose={onClose} /> : null
+export default function ExportModal({ projectId, open, onClose, fromShelf = false }: Props) {
+  return open ? <ExportModalScope key={`${projectId}:${fromShelf}`} projectId={projectId} fromShelf={fromShelf} onClose={onClose} /> : null
 }
 
-function ExportModalInner({ projectId, onClose }: Omit<Props, 'open'>) {
+function ExportModalScope({ projectId, onClose, fromShelf }: Omit<Props, 'open'>) {
+  const scopeVersion = useProjectStore((state) => state.scopeVersion)
+  const project = useProjectStore((state) => state.project)
+  const error = useProjectStore((state) => state.error)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(fromShelf ? 'loading' : 'ready')
+  const [attempt, setAttempt] = useState(0)
+  useEffect(() => {
+    if (!fromShelf) return
+    const controller = new AbortController()
+    const actorCurrent = capturePenNameActor()
+    let active = true
+    const isCurrent = () => active && !controller.signal.aborted && actorCurrent()
+    void prepareShelfExportScope(projectId, { signal: controller.signal, isCurrent }).then((scope) => {
+      if (isCurrent()) setStatus(scope ? 'ready' : 'error')
+    })
+    return () => { active = false; controller.abort() }
+  }, [fromShelf, projectId, attempt])
+  if (status === 'loading') return <Modal open title="导出小说" footer={<Button onClick={onClose}>取消</Button>} onCancel={onClose}>
+    <Typography.Text type="secondary">正在加载作品及导出权限…</Typography.Text>
+  </Modal>
+  const projectScope = captureProjectScope(projectId)
+  if (status === 'error' || !project || project.id !== projectId || !isProjectScopeCurrent(projectScope, 'canExport')) {
+    return <Modal open title="导出小说" footer={<Space><Button onClick={onClose}>关闭</Button>{fromShelf && <Button onClick={() => { setStatus('loading'); setAttempt((value) => value + 1) }}>重试</Button>}</Space>} onCancel={onClose}>
+      <Alert type="error" showIcon message={error ?? '无法读取作品或没有导出权限，请刷新后重试。'} />
+    </Modal>
+  }
+  const defaultAuthor = project.pen_name?.name ?? project.owner?.username ?? ''
+  return <ExportModalInner key={`${projectId}:${scopeVersion}`} projectId={projectId} onClose={onClose} defaultAuthor={defaultAuthor} />
+}
+
+function ExportModalInner({ projectId, onClose, defaultAuthor }: { projectId: number; onClose: () => void; defaultAuthor: string }) {
   const { message } = App.useApp()
   const [format, setFormat] = useState<Format>('txt')
   const [scope, setScope] = useState<StoryScope>('all')
@@ -40,8 +72,7 @@ function ExportModalInner({ projectId, onClose }: Omit<Props, 'open'>) {
   const [conversations, setConversations] = useState<ExportItem[]>([])
   const [notes, setNotes] = useState<ExportItem[]>([])
   const [exporting, setExporting] = useState(false)
-  const username = useAuthStore((state) => state.user?.username ?? '')
-  const [author, setAuthor] = useState(username)
+  const [authorDraft, setAuthorDraft] = useState<string | null>(null)
   const [includeSynopsis, setIncludeSynopsis] = useState(true)
   const projectScope = useMemo(() => captureProjectScope(projectId), [projectId])
   const mounted = useRef(false)
@@ -153,7 +184,7 @@ function ExportModalInner({ projectId, onClose }: Omit<Props, 'open'>) {
       const result = body
         ? await downloadDocument(projectId, body, { isCurrent, signal: controller.signal })
         : await downloadEpub(projectId, {
-          chapterIds: epubSelection.map((item) => Number(item.key)), author: author.trim(), includeSynopsis,
+          chapterIds: epubSelection.map((item) => Number(item.key)), ...epubAuthorOptions(authorDraft), includeSynopsis,
         }, { isCurrent, signal: controller.signal })
       if (!isCurrent() || !result) return
       message.success(`已导出：${result.filename}`)
@@ -201,7 +232,7 @@ function ExportModalInner({ projectId, onClose }: Omit<Props, 'open'>) {
         {format === 'epub' ? <>
           <Space wrap>
             <span>作者：</span>
-            <Input aria-label="EPUB 作者" value={author} onChange={(event) => setAuthor(event.target.value)}
+            <Input aria-label="EPUB 作者" value={epubAuthorText(defaultAuthor, authorDraft)} onChange={(event) => setAuthorDraft(event.target.value)}
               maxLength={100} placeholder="留空则不署名" style={{ width: 200, maxWidth: '100%' }} disabled={exporting} />
             <Checkbox checked={includeSynopsis} disabled={exporting} onChange={(event) => setIncludeSynopsis(event.target.checked)}>包含简介页</Checkbox>
           </Space>

@@ -43,7 +43,7 @@ describe('卡片导入', () => {
     expect(parseCardText('{"format":"ainovel.cards"}')).toEqual({ data: { format: 'ainovel.cards' }, error: null })
     expect(parseCardText('{oops').error).toBe('文件不是有效的 JSON')
     // 中文按 UTF-8 字节计（3 字节 / 字）
-    expect(parseCardText('"' + '中'.repeat(Math.ceil(MAX_CARD_BYTES / 3)) + '"').error).toBe('卡片文件过大，上限为 2MB')
+    expect(parseCardText('"' + '中'.repeat(Math.ceil(MAX_CARD_BYTES / 3)) + '"').error).toBe('卡片文件过大，紧凑 JSON 上限为 16 MiB')
     // 按紧凑序列化计：缩进 / 空白不计入（与后端口径一致）
     const padded = '{"a":' + ' '.repeat(MAX_CARD_BYTES) + '1}'
     expect(parseCardText(padded)).toEqual({ data: { a: 1 }, error: null })

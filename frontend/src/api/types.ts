@@ -377,6 +377,21 @@ export interface ProjectOwner {
   username: string
 }
 
+/** 作者私有的笔名；revision 用于改名及删除的并发检查。 */
+export interface PenName {
+  id: number
+  name: string
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+/** 非作者只能看到名称，库 ID 为 null。 */
+export interface ProjectPenName {
+  id: number | null
+  name: string
+}
+
 /** 后端针对当前登录者计算的作品能力；role 仅供展示，具体操作使用对应布尔值。 */
 export interface ProjectAccess {
   role: 'owner' | 'viewer' | 'editor' | 'admin' | null
@@ -456,6 +471,8 @@ export interface Project {
   series?: { id: number; name: string; revision: number; authorization_version: string | null } | null
   /** 服务端确认的项目归属；旧的自有项目响应可省略。 */
   owner?: ProjectOwner | null
+  /** 当前作品署名；未设置时回退真实作者账号名。 */
+  pen_name?: ProjectPenName | null
   title: string
   genre: string
   premise: string
@@ -552,6 +569,8 @@ export interface WizardProgressUpdate {
 
 export interface ProjectCreate {
   title: string
+  /** 创建者本人笔名；null 表示不设置。 */
+  pen_name_id?: number | null
   genre?: string
   premise?: string
   /** 项目默认写作风格；已废弃的 style 自由文本前端不再发送 */
@@ -565,7 +584,7 @@ export interface ProjectCreate {
   target_words?: number | null
 }
 
-export interface ProjectUpdate extends Partial<ProjectCreate> {
+export interface ProjectUpdate extends Partial<Omit<ProjectCreate, 'pen_name_id'>> {
   status?: ProjectStatus
   auto_analyze?: boolean
   /** 显式 null = 取消项目默认风格 */
@@ -580,8 +599,19 @@ export type SettingOrigin = { scope: 'book' } | {
   series_entry_id?: number | null
 }
 
+/** 图片内容通过受授权的独立接口读取，列表中只携带版本和尺寸。 */
+export interface SettingThumbnailInfo {
+  version: string
+  mime_type: string
+  width: number
+  height: number
+}
+
 export interface WorldSetting {
   id: number
+  thumbnail?: SettingThumbnailInfo | null
+  /** 持久化条目的服务端图片写权限；旧草稿可能没有此字段。 */
+  thumbnail_editable?: boolean
   origin?: SettingOrigin
   project_id: number
   title: string
@@ -605,6 +635,9 @@ export type LifeStatus = 'alive' | 'dead' | 'missing' | 'other'
 
 export interface Character {
   id: number
+  thumbnail?: SettingThumbnailInfo | null
+  /** 持久化条目的服务端图片写权限；旧草稿可能没有此字段。 */
+  thumbnail_editable?: boolean
   origin?: SettingOrigin
   project_id: number
   name: string
@@ -1391,6 +1424,7 @@ export type MemberStatus = 'active' | 'left' | 'expelled' | 'dead'
 
 export interface Organization {
   id: number
+  thumbnail?: SettingThumbnailInfo | null
   project_id: number
   name: string
   org_type: string
@@ -1626,8 +1660,8 @@ export interface RelationshipGraph {
   organizations: GraphOrganization[]
 }
 
-// 卡片（ainovel.cards v6，兼容导入 v1–v5）
-export type CardVersion = 1 | 2 | 3 | 4 | 5 | 6
+// 卡片（ainovel.cards v7，兼容导入 v1–v6）
+export type CardVersion = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 export interface CardExportRequest {
   character_ids: number[]
@@ -1646,6 +1680,7 @@ export interface CardDefinitionMapping { action: 'reuse' | 'rename'; target_defi
 export interface CardMappings { references: Record<string, SettingEntryRef>; definitions: Record<string, CardDefinitionMapping> }
 export interface CardPreviewRequest { data: unknown; resolutions?: CardResolutions; mappings?: CardMappings }
 export interface CardImportRequest extends CardPreviewRequest {
+  thumbnail_refs?: string[]
   expected_fields_revision?: number | null
   expected_categories_revision?: number | null
   expected_ai_visibility_revision?: number | null
@@ -1696,6 +1731,7 @@ export interface CardPreviewCareer {
 }
 
 export interface CardPreview {
+  thumbnails?: Array<{ ref: string; kind: 'character' | 'organization' | 'career'; name: string }>
   fields_revision: number
   categories_revision: number
   ai_visibility_revision: number
@@ -1877,6 +1913,7 @@ export interface StageInput {
 
 export interface Career {
   id: number
+  thumbnail?: SettingThumbnailInfo | null
   project_id: number
   name: string
   /** 后端为 str；正常取值为 CareerKind */

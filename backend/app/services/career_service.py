@@ -121,7 +121,10 @@ async def _holder_counts(db: AsyncSession, career_ids: list[int]) -> dict[int, i
 
 
 async def career_outs(db: AsyncSession, careers: list[Career]) -> list[CareerOut]:
+    from app.services.setting_image_service import metadata_for_book
+
     ids = [c.id for c in careers]
+    thumbnails = await metadata_for_book(db, careers[0].project_id, "career", ids) if careers else {}
     stages = await stages_of(db, ids)
     counts = await _holder_counts(db, ids)
     return [
@@ -137,6 +140,7 @@ async def career_outs(db: AsyncSession, careers: list[Career]) -> list[CareerOut
             sort=c.sort,
             stages=[StageOut.model_validate(s) for s in stages.get(c.id, [])],
             holder_count=counts.get(c.id, 0),
+            thumbnail=thumbnails.get(c.id),
             created_at=c.created_at,
             updated_at=c.updated_at,
         )

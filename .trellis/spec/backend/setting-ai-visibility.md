@@ -25,9 +25,10 @@
 - **SQLite 限时：** 协作可见性写入在认证写屏障之前启用既有短 `busy_timeout`；锁忙返回 `ai_visibility_busy`，并在回滚归还连接池之前恢复原超时。`visibility_write=True` 必须同时指定项目写锁，禁止静默跳过门禁。真实出站及连接复用覆盖 `test_collaboration_story_dispatch.py`。
 - **出站：** 构建前读 SQL 标量 `VisibilityStamp(project_id, revision, epoch, last_deleted_at)`。`guard_provider(provider, stamp, sessionmaker)` / `guard_embedder(...)` 保留构建戳，每个真实 HTTP 发送从独立事务验戳，不能给旧负载重签。PostgreSQL 项目级事务共享／独占 advisory lock；SQLite 实体 no-op UPDATE。响应头即释放，异常／取消兜底；新尝试、重定向、fallback 不绕过。无结构化设定的独立试写等不需要策略。更新前排空旧执行器，不混跑版本。
 - **协作执行（E4-g3b 实体等）：** 协作者经任务执行实体 AI 时，资格／投影／`EntitySourceSnapshot` 与作者完全相同，不因真实 actor 不同而改变；可见性戳与原 grant、两份模型绑定在同一 `for_task` lease／`require_task_write` 内逐次重验。作者私人风格与模板按真实 actor 解析，不进入协作者提示词。
+- **设定生图：** 显式选择当前条目，自动提示词仅使用已保存的可见字段；`never` 拒绝、`manual_only` 允许手动选择，不自动发送引用型字段或原图。作品与系列分别固定原来源和授权，在实际出站、回包及确认时重验；详见[缩略图 AI 生成合同](./setting-thumbnails.md#场景设定缩略图-ai-生成与确认)。
 - **场景写作：** `guard_provider(..., verify=callback)`在原真实发送lease内补查SceneContextStamp，不替代visibility检查。该stamp覆盖目标章内容／位置、项目规划和时间线／字段版本；只有可见性不变而目标正文已变也拒绝旧负载。前章普通正文只是构建时背景，不绑定其他章内容版本误伤合法并行。最终采纳／保存再次核验；首轮发送后作者收紧never不是普通续写warning，当前未提交章保留原稿。原始Scene规划只供作者，POV和引用经AiScope后才能进入锁定块。见[场景合同](./scenes.md)。
 - **历史：** Agent 在本轮作者输入上取资格并在搜索／分页前过滤；只用投影或最小写回执。收紧后有历史的旧 epoch 会话 `history_sealed`，历史仍能读，不再摘要、重放、确认后继续；无历史的空会话可采用当前代次。构建期冲突时可安全重建的首轮任务重新组装；带旧派生上下文的续跑停止，已有章节及副作用不回滚重做。
-- **格式：** 策略最初由v6／0037保存，当前项目备份为v8／0040，两端句柄仍显式重映射，不复制项目代次或Agent会话。卡片仍v6，包内`ai_settings/ai_link_refs`、字段flags和兼容角色的`legacy_always_in_context`随新建项，包外引用需显式映射；复用不改策略，定义复用必须匹配可见性。旧格式不接受夹带会被丢弃的新保护资料，人工文件仍含原值。当前effects v6，visibility兼容阈值保持5，合法v5不能被误判为缺策略。
+- **格式：** 策略最初由v6／0037保存，当前项目备份为v11，两端句柄仍显式重映射，不复制项目代次或Agent会话。卡片为v7，包内`ai_settings/ai_link_refs`、字段flags和兼容角色的`legacy_always_in_context`随新建项，包外引用需显式映射；复用不改策略，定义复用必须匹配可见性。旧格式不接受夹带会被丢弃的新保护资料，人工文件仍含原值。当前effects v7，visibility兼容阈值保持5，合法v5不能被误判为缺策略。
 - **前端：** 四种详情使用 `SettingAiPanel` 和 `api/settingAiVisibility.ts`；与详情外层独立草稿。409 后保留草稿，读取对照并显式采用新版本；列表逐项合并作者真实增删，不能把最新的隐藏字段一起取消。网络失败可重试，撤权不提交旧请求。字段页、旧字段、备份／卡片和 Agent 封存提供各自明确反馈。
 
 ## 4. 校验与错误

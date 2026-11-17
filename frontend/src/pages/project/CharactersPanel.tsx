@@ -25,6 +25,8 @@ import CharacterCareersTab from '../../components/careers/CharacterCareersTab'
 import CardExportModal from '../../components/entities/CardExportModal'
 import CardImportModal from '../../components/entities/CardImportModal'
 import CharacterCard from '../../components/entities/CharacterCard'
+import { ProjectThumbnailEditor, ThumbnailNewHint } from '../../components/entities/SettingThumbnail'
+import { createThumbnailRevision } from '../../components/entities/thumbnailSync'
 import { cardAccess } from '../../components/entities/cardAccess'
 import { BookSeriesLibrary, BookSeriesPromotion, BookSeriesScope, BookSeriesUnuse, SharedSettingNotice } from '../../components/series/BookSeriesSettings'
 import { bookCharacterPatch, canChangeSeriesBook, inSettingScope, type SettingScope } from '../../components/series/seriesState'
@@ -86,7 +88,7 @@ export default function CharactersPanel() {
   const [promoting, setPromoting] = useState<Character | null>(null)
   const [unusing, setUnusing] = useState<{ id: number; title: string } | null>(null)
   const loader = useCallback(() => characterApi.list(pid), [pid])
-  const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['characters', 'careers'] })
+  const { data: loadedItems, loading, error: listError, reload, setData } = useLoader(loader, { projectId: pid, resources: ['characters', 'careers'] })
   const items = useMemo(() => loadedItems ?? [], [loadedItems])
   // 卡片上的主职业·阶段：项目级挂接列表一次取回
   const badgeLoader = useCallback(async () => careerBadges(await assignmentApi.listProject(pid)), [pid])
@@ -119,6 +121,7 @@ export default function CharactersPanel() {
   const drafts = useRef(createCharacterDraftCache())
   const session = useRef<CharacterEditorTicket | null>(null)
   const editingRef = useRef<Character | null>(null)
+  const thumbnailRevision = useRef(createThumbnailRevision())
   const initialValues = useRef<CharacterFormValues | null>(null)
   const baselineRef = useRef<SettingBaseline | null>(null)
   const baselineAbort = useRef<AbortController | null>(null)
@@ -267,10 +270,11 @@ export default function CharactersPanel() {
     }
     savingRef.current = true
     setSaving(true)
+    const thumbnailTicket = thumbnailRevision.current.capture()
     let activeTicket = ticket
     try {
       if (!canEditNow()) return
-      const saved = editing
+      const result = editing
         ? await characterApi.update(pid, editing.id, {
             ...patch,
             edit_mode: 'baseline',
@@ -278,6 +282,7 @@ export default function CharactersPanel() {
           })
         : await characterApi.create(pid, formToCharacterInput(v))
       if (!isCurrent(ticket) || !canEditNow()) return
+      const saved = thumbnailRevision.current.merge(result, editingRef.current, thumbnailTicket)
       drafts.current.forget(ticket.characterId)
       if (!editing) {
         activeTicket = gate.current.open(pid, saved.id)
@@ -538,6 +543,18 @@ export default function CharactersPanel() {
       >
         <SharedSettingNotice origin={origin} onUnuse={series && canChangeSeries && sharedEntryId != null && editing
           ? () => { if (canEditNow()) setUnusing({ id: sharedEntryId, title: editing.name }) } : undefined} />
+        {drawerOpen && editing && <ProjectThumbnailEditor key={`${pid}:character:${editing.id}`} target={{ scope: 'project', projectId: pid, kind: 'character', entryId: editing.id }}
+          thumbnail={(items.find((item) => item.id === editing.id) ?? editing).thumbnail} name={editing.name} editable={canEdit && !seriesManaged}
+          thumbnailEditable={(items.find((item) => item.id === editing.id) ?? editing).thumbnail_editable}
+          onChange={(thumbnail, thumbnailEditable) => {
+            thumbnailRevision.current.changed()
+            const permission = thumbnailEditable === undefined ? {} : { thumbnail_editable: thumbnailEditable }
+            setData((prev) => (prev ?? []).map((item) => item.id === editing.id ? { ...item, thumbnail, ...permission } : item))
+            setEditing((old) => old?.id === editing.id ? { ...old, thumbnail, ...permission } : old)
+            if (editingRef.current?.id === editing.id) editingRef.current = { ...editingRef.current, thumbnail, ...permission }
+            invalidateProject(pid, ['characters'])
+          }} />}
+        {drawerOpen && !editing && canEdit && <ThumbnailNewHint />}
         {!seriesManaged && editing && baseline && !baselineError && (
           <Alert
             showIcon

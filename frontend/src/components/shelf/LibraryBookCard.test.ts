@@ -56,6 +56,13 @@ describe('共享书架卡片', () => {
     expect(html).not.toContain('原作者')
   })
 
+  it('协作作品只显示本书笔名，未设置时回退真实作者', () => {
+    const html = render({ ...project, pen_name: { id: null, name: '山客' } })
+    expect(html).toContain('作者：山客')
+    expect(html).not.toContain('作者：原作者')
+    expect(render({ ...project, pen_name: null })).toContain('作者：原作者')
+  })
+
   it('无有效读取能力的快照不渲染作品内容或操作', () => {
     expect(render({ ...project, access: { ...viewer, can_read: false } })).toBe('')
     expect(state.menu).toBeNull()

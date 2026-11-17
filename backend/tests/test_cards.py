@@ -65,7 +65,7 @@ async def test_cards_roundtrip_with_rename(client):
     )
     assert resp.status_code == 200, resp.text
     card = resp.json()
-    assert (card["format"], card["version"]) == ("ainovel.cards", 6)
+    assert (card["format"], card["version"]) == ("ainovel.cards", 7)
     # 没有挂职业：职业字段为空
     assert card["careers"] == [] and all(c["careers"] == [] for c in card["characters"])
     assert [c["name"] for c in card["characters"]] == ["林远", "张三", "李四"]
@@ -218,13 +218,14 @@ async def test_import_rejects_bad_files(client):
     cases = [
         ([1, 2], "应为 JSON 对象"),
         ({"format": "other", "version": 1}, "不是有效的卡片文件"),
-        ({"format": "ainovel.cards", "version": 7}, "不支持的卡片版本"),
+        ({"format": "ainovel.cards", "version": 8}, "不支持的卡片版本"),
         ({"format": "ainovel.cards", "version": True}, "不支持的卡片版本"),
         ({"format": "ainovel.cards", "version": 2, "careers": [{"name": "剑修", "stages": []}]}, "卡片文件格式不正确"),
         ({"format": "ainovel.cards", "version": 1, "characters": [{"name": ""}]}, "卡片文件格式不正确"),
         ({"format": "ainovel.cards", "version": 1, "characters": "x"}, "卡片文件格式不正确"),
         (
-            {"format": "ainovel.cards", "version": 1, "characters": [{"name": "大", "profile": "字" * (1024 * 1024)}]},
+            {"format": "ainovel.cards", "version": 1,
+             "characters": [{"name": "大", "profile": "x" * (16 * 1024 * 1024 + 1)}]},
             "卡片文件过大",
         ),
     ]
@@ -272,7 +273,7 @@ async def test_cards_v2_careers_roundtrip(client):
     await client.post(f"{base}/characters/{zhang['id']}/careers", json={"career_id": dan["id"]})
 
     card = (await client.post(f"{base}/cards/export", json={"character_ids": [lin["id"], zhang["id"]]})).json()
-    assert card["version"] == 6 and not _id_keys(card)
+    assert card["version"] == 7 and not _id_keys(card)
     assert card["characters"][0]["careers"] == [
         {"career_name": "剑修", "role": "main", "stage_name": "金丹", "note": "初入"},
         {"career_name": "丹师", "role": "sub", "stage_name": "一品", "note": ""},
@@ -398,7 +399,7 @@ async def test_cards_v3_custom_text_fields_roundtrip(client, app):
     exported = await client.post(f"{src_base}/cards/export", json={"character_ids": [char_id]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 6
+    assert card["version"] == 7
     assert not _id_keys(card)
     assert card["characters"][0]["current_state"] == "金丹期"
     assert card["characters"][0]["custom_text_fields"] == [
@@ -578,7 +579,7 @@ async def test_cards_v3_exports_effective_custom_fields_not_base_or_inactive_eve
     response = await client.post(f"{base}/cards/export", json={"character_ids": [char["id"]]})
     assert response.status_code == 200, response.text
     card = response.json()
-    assert card["version"] == 6 and not _id_keys(card)
+    assert card["version"] == 7 and not _id_keys(card)
     assert card["characters"][0]["custom_text_fields"] == [
         {"name": "功法", "value": "金丹", "ai_hidden": False},
         {"name": "武器", "value": "玄铁剑\n刻有纹路", "ai_hidden": False},
@@ -1003,7 +1004,7 @@ async def test_cards_v4_local_cycle_and_external_reference_require_explicit_mapp
     exported = await client.post(f"{base}/cards/export", json={"character_ids": [a["id"], b["id"]]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 6 and not _id_keys(card)
+    assert card["version"] == 7 and not _id_keys(card)
     assert len(card["external_references"]) == 1
     destination = await create_project(client, title="接收")
     target_base = f"/api/v1/projects/{destination['id']}"

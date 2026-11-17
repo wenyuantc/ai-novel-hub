@@ -17,6 +17,7 @@ from app.ai.providers.base import ChatMessage
 from app.ai.templating import PromptOverride, TemplateRenderError, TemplateVar, VarKind, render_messages
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+SETTING_THUMBNAIL_KEY = "setting.thumbnail"
 
 CATEGORIES: dict[str, str] = {
     "agent": "项目智能体",
@@ -362,6 +363,16 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             INSTRUCTION_VAR,
             JSON_RULE_VAR,
             _out(F.CAREER_FORMAT),
+        ),
+    ),
+    (
+        SETTING_THUMBNAIL_KEY,
+        "设定图片",
+        "entity",
+        "为角色、世界观、组织或职业生成图片。只带入已保存且允许发送的字段；系统段和用户段会合并，最多 2000 字。",
+        (
+            T("subject", "设定类型", sample="角色"),
+            T("fields", "当前设定的可见字段", sample="名称：青霜\n外貌：银色长发"),
         ),
     ),
     (

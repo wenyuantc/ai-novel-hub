@@ -4,6 +4,7 @@ import { renderToString } from 'react-dom/server'
 import { StaticRouter } from 'react-router-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WorldPanel from './WorldPanel'
+import type { WorldSetting } from '../../api/types'
 
 const view = vi.hoisted(() => ({
   canEdit: false,
@@ -11,7 +12,7 @@ const view = vi.hoisted(() => ({
   alerts: [] as AlertProps[],
   modals: [] as ModalProps[],
 }))
-const item = { id: 3, project_id: 8, title: '青云山', category: 'place', content: '山门完好', sort: 1 }
+const item: WorldSetting = { id: 3, project_id: 8, title: '青云山', category: 'place', content: '山门完好', sort: 1 }
 vi.mock('../../hooks/useProjectId', () => ({ useProjectId: () => 8 }))
 vi.mock('../../hooks/useProjectAccess', () => ({ useProjectAccess: () => ({
   canUseAI: false, canEdit: view.canEdit, canEditNow: () => view.canEdit, canReadNow: () => true,
@@ -31,10 +32,23 @@ vi.mock('antd', async (original) => {
   }
 })
 
-afterEach(() => { view.canEdit = false; view.status = 'confirmed'; view.alerts = []; view.modals = [] })
+afterEach(() => { view.canEdit = false; view.status = 'confirmed'; view.alerts = []; view.modals = []; delete item.thumbnail; delete item.thumbnail_editable })
 const renderWorld = () => renderToString(createElement(StaticRouter, { location: '/projects/8/world' }, createElement(App, null, createElement(WorldPanel))))
 
 describe('世界观基础设定权限文案', () => {
+  it('地点详情以图片写权限而非作品编辑权限控制替换、删除和上传', () => {
+    view.canEdit = true
+    item.thumbnail = { version: 'picture', mime_type: 'image/webp', width: 100, height: 100 }
+    item.thumbnail_editable = false
+    const shared = renderWorld()
+    expect(shared).toContain('青云山的缩略图')
+    expect(shared).not.toContain('替换图片')
+    expect(shared).not.toContain('删除图片')
+    item.thumbnail = null
+    expect(renderWorld()).not.toContain('上传图片')
+    item.thumbnail_editable = true
+    expect(renderWorld()).toContain('上传图片')
+  })
   it('只读时显示查看语义，保存按钮仍禁用', () => {
     renderWorld()
     expect(view.modals[0].title).toBe('查看世界观条目')

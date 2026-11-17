@@ -723,6 +723,8 @@ _WIZARD_DELETE_FKS = frozenset({
     ("careers", "character_careers", "career_id", "id", "CASCADE"),
     ("careers", "planning_unit_careers", "career_id", "id", "CASCADE"),
     ("careers", "setting_reference_handles", "career_id", "id", "NO ACTION"),
+    ("careers", "setting_thumbnail_bindings", "career_id", "id", "CASCADE"),
+    ("careers", "setting_thumbnail_bindings", "project_id", "project_id", "CASCADE"),
     ("careers", "setting_timelines", "career_id", "id", "CASCADE"),
     ("chapter_plans", "chapters", "plan_id", "id", "SET NULL"),
     ("chapter_plans", "planning_units", "plan_id", "id", "SET NULL"),
@@ -738,6 +740,8 @@ _WIZARD_DELETE_FKS = frozenset({
     ("characters", "series_entry_uses", "character_id", "id", ""),
     ("characters", "series_entry_uses", "project_id", "project_id", ""),
     ("characters", "setting_reference_handles", "character_id", "id", "NO ACTION"),
+    ("characters", "setting_thumbnail_bindings", "character_id", "id", "CASCADE"),
+    ("characters", "setting_thumbnail_bindings", "project_id", "project_id", "CASCADE"),
     ("characters", "setting_timelines", "character_id", "id", "CASCADE"),
     ("characters", "setting_timelines", "related_character_id", "id", "CASCADE"),
     ("outlines", "chapter_plans", "outline_id", "id", "CASCADE"),
@@ -755,6 +759,8 @@ _WIZARD_DELETE_FKS = frozenset({
     ("world_settings", "series_entry_uses", "project_id", "project_id", ""),
     ("world_settings", "series_entry_uses", "world_setting_id", "id", ""),
     ("world_settings", "setting_reference_handles", "world_setting_id", "id", "NO ACTION"),
+    ("world_settings", "setting_thumbnail_bindings", "world_setting_id", "id", "CASCADE"),
+    ("world_settings", "setting_thumbnail_bindings", "project_id", "project_id", "CASCADE"),
     ("world_settings", "setting_timelines", "world_setting_id", "id", "CASCADE"),
 })
 
@@ -853,6 +859,24 @@ async def _assert_replacement_isolation(db: AsyncSession, project_id: int, kind:
 
     if kind != "outline":
         ref_column = {"characters": "character_id", "world": "world_setting_id", "careers": "career_id"}[kind]
+        bindings, resources = tables["setting_thumbnail_bindings"], tables["setting_image_resources"]
+        # 只允许本作品的单主体绑定级联；保留不可变图片资源供历史或撤销使用。
+        # 损坏/旧库中的跨作品主体或资源不得因覆盖被默默删除。
+        checks.append(select(1).select_from(
+            bindings.outerjoin(resources, bindings.c.image_resource_id == resources.c.id)
+        ).where(
+            bindings.c[ref_column].in_(ids),
+            or_(
+                bindings.c.project_id.is_distinct_from(project_id),
+                bindings.c.series_id.is_not(None),
+                bindings.c.series_entry_id.is_not(None),
+                resources.c.project_id.is_distinct_from(project_id),
+                resources.c.series_id.is_not(None),
+                *(bindings.c[column].is_not(None) for column in (
+                    "character_id", "world_setting_id", "organization_id", "career_id",
+                ) if column != ref_column),
+            ),
+        ))
         handles, timelines = tables["setting_reference_handles"], tables["setting_timelines"]
         predicates = [timelines.c[ref_column].in_(ids)]
         if kind == "characters":

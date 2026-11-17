@@ -70,6 +70,62 @@ async def _overview(app, project_id, actor_id):
         return await get_tool("get_project_overview").run(ctx, {})
 
 
+async def test_project_tools_and_history_do_not_send_pen_name_to_model(app, client, fake_llm):
+    """人工 API 保留署名；实时工具输出及旧回执重放不能带用户私库身份。"""
+    owner = await register(client, "agent-pen-owner")
+    response = await client.post("/api/v1/pen-names", json={"name": "仅人工可见的笔名"})
+    assert response.status_code == 201, response.text
+    pen = response.json()
+    project = await create_project(client, pen_name_id=pen["id"])
+    assert project["pen_name"] == {"id": pen["id"], "name": "仅人工可见的笔名"}
+    config = await create_ai_config(client)
+
+    async with (
+        transactions.session(app.state.sessionmaker) as db,
+        transactions.audit_scope(db, app.state.sessionmaker) as coordinator,
+    ):
+        row = await project_access.require_project(
+            db, owner["id"], project["id"], "ai.use", for_update=True, visibility_write=True,
+        )
+        ctx = ToolCtx(db, row, owner["id"], app.state.task_engine.ctx,
+                      visibility_locked=True, audit_coordinator=coordinator)
+        overview = await get_tool("get_project_overview").run(ctx, {})
+        changed = await get_tool("update_project").execute(ctx, {"synopsis": "人工摘要仍可写"})
+        assert overview["title"] == project["title"] and "pen_name" not in overview
+        assert changed["synopsis"] == "人工摘要仍可写" and "pen_name" not in changed
+        await coordinator.commit(db, app.state.sessionmaker)
+
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Project, project["id"])
+        old = (await project_service.project_out(db, row, actor_user_id=owner["id"])).model_dump(mode="json")
+        assert old["pen_name"] == {"id": pen["id"], "name": "仅人工可见的笔名"}
+        conversation = AgentConversation(user_id=owner["id"], project_id=project["id"])
+        db.add(conversation)
+        await db.flush()
+        messages_to_add = [AgentMessage(conversation_id=conversation.id, role="user", content="继续创作")]
+        for index, name in enumerate(("get_project_overview", "update_project")):
+            call_id = f"legacy-{index}"
+            messages_to_add.extend([
+                AgentMessage(conversation_id=conversation.id, role="assistant", content="", tool_calls=[{
+                    "id": call_id, "name": name, "arguments": "{}",
+                }]),
+                AgentMessage(conversation_id=conversation.id, role="tool", tool_call_id=call_id,
+                             tool_name=name, content=context.tool_result(old)),
+            ])
+        db.add_all(messages_to_add)
+        await db.flush()
+        messages, _ = await context.build_messages(
+            db, conversation, row, await db.get(AIConfig, config["id"]),
+            fake_llm.factory("openai_compat", "test", None, 30),
+        )
+        replayed = [message for message in messages if message.get("tool_call_id", "").startswith("legacy-")]
+        assert len(replayed) == 2
+        for message in replayed:
+            data = json.loads(message["content"])["data"]
+            assert data["title"] == project["title"] and "pen_name" not in data
+        assert "仅人工可见的笔名" not in json.dumps(messages, ensure_ascii=False)
+
+
 def _assert_hidden(payload):
     assert payload["default_style_id"] is None and payload["default_style"] is None
     text = json.dumps(payload, ensure_ascii=False)

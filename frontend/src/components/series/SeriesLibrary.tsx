@@ -9,6 +9,7 @@ import { useLoader } from '../../hooks/useLoader'
 import { invalidateProject } from '../../utils/projectRefresh'
 import { WORLD_CATEGORY_LABELS } from '../../utils/world'
 import { SETTING_AI_MODES } from '../settingAi/settingAiOptions'
+import { SettingThumbnail } from '../entities/SettingThumbnail'
 import SeriesEntryEditor from './SeriesEntryEditor'
 import SeriesTransitionDialog from './SeriesTransitionDialog'
 import { canDeleteSeriesEntry, editableSeriesBooks, projectReference, seriesEntryName, seriesNeedsReview,
@@ -49,6 +50,7 @@ export default function SeriesLibrary({
   const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
   const [dialog, setDialog] = useState<LibraryDialog | null>(null)
+  const [thumbnailChanged, setThumbnailChanged] = useState(false)
   const selectedKind = kind ?? (filter === 'all' ? undefined : filter)
   const listKey = `${seriesId}:${seriesRevision}:${selectedKind ?? ''}:${q}:${page}:${focusedEntryId ?? ''}`
   const load = useCallback(async () => {
@@ -95,6 +97,7 @@ export default function SeriesLibrary({
             const text = entry.kind === 'character' ? entry.data.profile : entry.data.content
             return <List.Item>
               <Space direction="vertical" size={6} style={{ width: '100%', minWidth: 0 }}>
+                <SettingThumbnail target={{ scope: 'series', seriesId, entryId: entry.id }} thumbnail={entry.thumbnail} name={seriesEntryName(entry)} />
                 <Space size={4} wrap>
                   <Typography.Text strong>{seriesEntryName(entry)}</Typography.Text>
                   <Tag>{entry.kind === 'character' ? '角色' : WORLD_CATEGORY_LABELS[entry.data.category]}</Tag>
@@ -124,8 +127,14 @@ export default function SeriesLibrary({
         current={page} total={current.total} pageSize={PAGE_SIZE} showSizeChanger={false} onChange={setPage} size="small" />}
     </Space>
     {current && dialog?.mode === 'edit' && <SeriesEntryEditor seriesId={seriesId} kind={dialog.kind} entry={dialog.entry} revision={dialog.revision}
-      onClose={() => setDialog(null)} onDone={(value, previous) => changed(dialog.kind,
-        [...(previous?.uses ?? []), ...(value.item?.uses ?? [])].map((use) => use.project_id), '共享基础已保存')} />}
+      onClose={() => { setDialog(null); if (thumbnailChanged) { setThumbnailChanged(false); result.reload(); onChange?.() } }}
+      onThumbnailChange={(entry, thumbnail, revision) => {
+        setThumbnailChanged(true)
+        result.setData((old) => old && old.key === listKey ? { ...old, data: { ...old.data, revision,
+          items: old.data.items.map((item) => item.id === entry.id ? { ...item, thumbnail } : item) } } : { key: listKey, data: current }, { invalidatePending: true })
+        for (const use of entry.uses) invalidateProject(use.project_id, seriesSettingResources(entry.kind))
+      }} onDone={(value, previous) => { setThumbnailChanged(false); changed(dialog.kind,
+        [...(previous?.uses ?? []), ...(value.item?.uses ?? [])].map((use) => use.project_id), '共享基础已保存') }} />}
     {current && dialog?.mode === 'transition' && <SeriesTransitionDialog seriesId={seriesId} request={dialog.request}
       label={seriesEntryName(dialog.entry)} onClose={() => setDialog(null)} onDone={(ids) => {
         changed(dialog.entry.kind, ids, '归属已更新', dialog.request.action === 'delete' || dialog.request.action === 'move')

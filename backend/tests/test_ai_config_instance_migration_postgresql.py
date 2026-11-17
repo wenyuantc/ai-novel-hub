@@ -15,8 +15,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 
-from app.models import Base
 from app.services.backups.database import snapshot_database
+from tests.schema_helpers import assert_sqlite_chapter_plan_fk_intact, create_isolated_schema
 from tests.test_collaboration_access_postgresql import _wait_for_blocker
 from tests.test_setting_fields_migration import _config
 
@@ -140,7 +140,7 @@ def test_0049_postgresql_create_all_matches_direct_sql_and_immutability(pg_insta
     _, _, _, _, run, _, _ = pg_instance_db
 
     async def create_and_test(conn):
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_isolated_schema)
         await conn.execute(text("INSERT INTO users(id,username,password_hash) VALUES(1,'owner','hash')"))
         await conn.execute(text("INSERT INTO ai_configs(user_id,name,provider,api_key_enc,model,is_default) "
                                 "VALUES(1,'直接一','openai_compat','密文','model',false),"
@@ -155,6 +155,7 @@ def test_0049_postgresql_create_all_matches_direct_sql_and_immutability(pg_insta
         await conn.execute(text("UPDATE ai_configs SET instance_key=:key WHERE id=1"), {"key": str(uuid4())})
     with pytest.raises(IntegrityError):
         asyncio.run(run(change))
+    assert_sqlite_chapter_plan_fk_intact()
 
 
 def test_0049_postgresql_concurrent_binding_commit_blocks_downgrade(pg_instance_db):

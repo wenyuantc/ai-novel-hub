@@ -37,7 +37,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 
 ### 3. 契约
 
-**模板 key（31 个；批量关系生成新增 `relations.generate`，`test_prompt_templates` 的计数同步为 31）**
+**模板 key（32 个；批量关系生成新增 `relations.generate`、设定生图新增 `setting.thumbnail`，`test_prompt_templates` 的计数同步为 32）**
 
 | 分类 | key | 锁定变量 |
 |---|---|---|
@@ -45,6 +45,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 | 分析 | `analysis.chapter` | `output_schema`（有伏笔清单时是带 ref_id 的结构）、`json_rule` |
 | 向导 | `wizard.world` / `wizard.characters` / `wizard.outline` / `wizard.careers`；`wizard.continue`（从中断处继续的续写指令，只有 user 段，变量 `generated_chars`，接在原对话 + assistant 已输出内容之后） | `json_rule`、`output_format`（`wizard.continue` 无） |
 | 实体 | `entity.character` / `entity.organization` / `entity.career`、`relations.parse` / `relations.generate` | `json_rule`、`output_format` |
+| 实体（设定图片） | `setting.thumbnail`（名称「设定图片」，默认 system 段为空；变量 `subject` 设定类型、`fields` 已按 AI 可见性投影的已保存字段，均非必需、非锁定） | 无 |
 | 大纲 | `outline.continue` / `outline.expand` | `json_rule`、`output_format` |
 | 风格 | `style.block`（风格段，只取 user 段并 strip）、`style.extract`（JSON）、`style.trial` | extract：`json_rule`、`output_format` |
 | 灵感模式 | `inspiration.title` / `synopsis` / `theme` / `tags` / `selling_points` / `audience`（同一组变量 `idea / notes / decided / history / feedback / knowledge`，步骤约束写在各自模板里，见 [inspiration.md](./inspiration.md)） | `json_rule`、`output_format`（`{"options": [...]}`） |
@@ -59,6 +60,7 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
   build 函数新增关键字参数 `knowledge: str = ""`（大纲另有 `memories: str = ""`）。章节类模板不加变量：检索块由 `context_builder` 拼进 `{{ context }}`。
   新增这些变量会改变默认模板指纹，已覆盖的用户会看到「默认已更新」；覆盖里没有引用变量时不注入。
 
+- **设定图片模板**：`setting.thumbnail`（`registry.SETTING_THUMBNAIL_KEY`）由 `prompts/setting_thumbnail.py::build_thumbnail_prompt(kind, fields, *, override=None)` 渲染为图片模型的**单个字符串**：非空的 system／user 段按顺序以空行（`\n\n`）合并后 strip。字段先按默认模板的固定文字计算预算（每项值最多 400 字、总计 2000 字），再代入覆盖模板；合并结果为空或超过 2000 码点时抛 `BadRequestError`（400「设定图片提示词模板渲染后须为 1–2000 字，请检查或缩短模板和设定」），不静默截断自定义内容。作品与系列的 `default_prompt` 一律以真实发起人调用 `prompt_service.get_override(db, actor_id, SETTING_THUMBNAIL_KEY)`，协作者使用作者授权的图片模型时也不读取作者的覆盖或组件；`prompt_token` 不绑定模板版本，模板只决定弹窗的初始文本，弹窗内的修改不回写覆盖。默认文案（含结尾「画面中不要出现除了当前角色以外的人物、文字、字母、数字或水印。」）为用户确认的基线，改动须同步逐字断言的测试。见[设定缩略图 AI 生成](./setting-thumbnails.md#场景设定缩略图-ai-生成与确认)。
 - **规划块**：generate/polish/revise/rewrite使用锁定`planning_context`；空规划不增加剧情指令，旧覆盖漏变量由锁定兜底补一次。Scene使用逐项有效规划及scene start，排除never／隐藏字段，不含未来节点和作者支线概览；局部scope仅作背景。自动续写沿用首轮规划但每次发送核验原stamp，失效停止且不采纳旧提案。见[规划](./planning.md)。
 - **场景范围块**：上述四类builder另接`scene_context`，默认模板／registry同步声明锁定变量，旧覆盖缺失时追加一次。内部`scene.scope.user.j2`经`prompts/scene.py::render_scene_scope`渲染身份、标题、作者摘要、当前序号／总数、分配目标字数、前景衔接及selection范围，不是新增可编辑模板key。结构化POV／引用只从已过滤planning_context进入，不把原始ScenePlanningOut拼进范围块。整章后景用暂存前景而非旧DB正文；范围块非空时不承诺旧整条消息parity。见[场景](./scenes.md)。
 
@@ -120,7 +122,8 @@ def preview(key, PromptPreviewRequest) -> PromptPreviewOut
 ### 6. 必需的测试
 
 - `tests/test_prompt_parity.py`：**每个 key 的每个条件分支**新旧输出 `==`（对照实现 `tests/prompt_legacy.py` 是改造前代码的逐字复制）。
-  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` / `book_import.*` / `agent.*` / `wizard.continue` 没有对照。
+  新增 key 时 `test_every_legacy_key_is_covered` 会提醒；新增的 `style.*` / `inspiration.*` / `book_import.*` / `agent.*` / `wizard.continue` / `relations.generate` / `setting.thumbnail` 没有对照。
+- `tests/test_setting_thumbnail_prompt_templates.py`：`setting.thumbnail` 无覆盖时四类默认文案与字段预算逐字一致；保存 / 停用 / 启用 / 版本恢复 / 恢复默认、组件展开与预览；两段合并、空与超 2000 字（含 emoji）报 400；作品协作者（作者代付模型）与系列 editor 只用本人模板，隐藏字段不进入变量；弹窗临时修改不回写覆盖。
 - `tests/test_templating.py`：每种校验错误、沙箱逃逸、range 禁用、渲染上限、锁定兜底、全部默认模板合法且能用示例值渲染。
 - `tests/test_prompt_templates.py`：覆盖生效 / 停用 / 启用 / 恢复默认、位置信息、预览、outdated + ack（monkeypatch `registry.TEMPLATES`）、
   版本裁剪与回滚、导入导出、用户隔离。

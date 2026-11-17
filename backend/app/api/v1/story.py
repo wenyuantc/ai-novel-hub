@@ -50,7 +50,10 @@ def _make_router(
 
     @router.post("", response_model=out_schema, status_code=status.HTTP_201_CREATED)
     async def create_item(project_id: int, body: create_schema, user: CurrentUser, db: DbDep) -> Any:  # type: ignore[valid-type]
-        return await svc.create_owned(db, kind, user.id, project_id, body, manage=True)
+        item = await svc.create_owned(db, kind, user.id, project_id, body, manage=True)
+        if kind is not svc.OUTLINES:
+            return (await series_read.read_book_settings(db, kind, user.id, project_id, item_id=item.id))[0]
+        return item
 
     @router.get("/{item_id}", response_model=out_schema)
     async def get_item(project_id: int, item_id: int, user: CurrentUser, db: DbDep) -> Any:

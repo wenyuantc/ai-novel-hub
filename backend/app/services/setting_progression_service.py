@@ -10,10 +10,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import wraps
+from io import StringIO
 from typing import cast
 
 from pydantic import JsonValue, ValidationError
-from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy import LargeBinary, Text, and_, case, delete, func, or_, select, update
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -52,7 +54,7 @@ from app.schemas.progression import (
 )
 from app.services import project_access, series_policy
 from app.services.project_service import get_manageable_project
-from app.services.setting_field_values import CanonicalFieldValue
+from app.services.setting_field_values import CanonicalFieldValue, FieldSpec, validate_field_value
 from app.services.setting_progression_resolver import (
     EffectiveSnapshot,
     ProgressionEvent,
@@ -359,10 +361,242 @@ async def _resolve_field_timelines(
     position: StoryPosition | None,
     *,
     definition_ids: Collection[int],
+    include_legacy: bool = False,
 ) -> dict[int, dict[int, CanonicalFieldValue]]:
     """内部字段范围投影只返回值，不能被误用为完整事实快照。"""
-    snapshots = await _resolve_timeline_snapshots(db, project_id, timelines, position, definition_ids=definition_ids)
+    snapshots = await _resolve_timeline_snapshots(
+        db, project_id, timelines, position, definition_ids=definition_ids, include_legacy=include_legacy
+    )
     return {timeline_id: snapshot.field_values for timeline_id, snapshot in snapshots.items()}
+
+
+async def _resolve_template_field_timelines(
+    db: AsyncSession,
+    project_id: int,
+    timelines: Sequence[FieldTimelineSnapshot],
+    *,
+    definition_ids: Collection[int],
+    definition_types: dict[int, str],
+    max_bytes: int,
+):
+    """模板当前值专用：从最后有效 replace 开始，流式处理后续 append。
+
+    快照只使用字段的当前值；已被 replace 覆盖的旧值和孤儿事件无需读出。
+    SQL 排序与 resolver 的 story_position_key/_sort_key 一致，调用方提供一致读事务。
+    """
+    from app.services.setting_field_service import FieldBindingSnapshot
+
+    if not timelines:
+        return [], {}
+    timeline_ids = [item.id for item in timelines]
+    match_definition = SettingTextField.definition_id.in_(definition_ids)
+    metadata = (
+        await db.execute(
+            select(
+                SettingTextField.id,
+                SettingTextField.timeline_id,
+                SettingTextField.definition_id,
+                SettingTextField.label,
+                SettingTextField.sort,
+                SettingTextField.ai_hidden,
+            )
+            .where(
+                SettingTextField.timeline_id.in_(timeline_ids),
+                or_(match_definition, SettingTextField.definition_id.is_(None)),
+            )
+            .order_by(SettingTextField.timeline_id, SettingTextField.sort, SettingTextField.id)
+            .limit(len(timelines) * 1000 + 1)
+        )
+    ).all()
+    if len(metadata) > len(timelines) * 1000:
+        raise BadRequestError("模板内容过大，请减少所选设定、大纲或图片", extra={"code": "template_too_large"})
+    if not metadata:
+        return [], {timeline.id: {} for timeline in timelines}
+    by_id = {row.id: row for row in metadata}
+    mismatched = await db.scalar(
+        select(SettingProgression.id)
+        .join(SettingTextField, SettingTextField.id == SettingProgression.custom_field_id)
+        .where(
+            SettingProgression.custom_field_id.in_(by_id),
+            SettingProgression.timeline_id.in_(timeline_ids),
+            SettingProgression.timeline_id != SettingTextField.timeline_id,
+        )
+        .limit(1)
+    )
+    if mismatched is not None:
+        raise ValueError("字段事件不属于其时间线")
+
+    chapter, scene, scene_chapter = aliased(Chapter), aliased(Scene), aliased(Chapter)
+    is_scene = SettingProgression.anchor_kind == "scene"
+    chapter_number = case(
+        (SettingProgression.anchor_kind == "planned", SettingProgression.chapter_no),
+        (is_scene, scene_chapter.chapter_no),
+        else_=chapter.chapter_no,
+    )
+    position_kind = case((is_scene, 1), (SettingProgression.boundary == "start", 0), else_=2)
+    scene_chapter_id = case((is_scene, scene.chapter_id), else_=0)
+    scene_order = case((is_scene, scene.sort), else_=0)
+    scene_boundary = case((and_(is_scene, SettingProgression.boundary == "end"), 1), else_=0)
+    protection = case((SettingProgression.protection == "automatic", 0), else_=1)
+    rank = func.row_number().over(
+        partition_by=SettingProgression.custom_field_id,
+        order_by=(
+            chapter_number, position_kind, scene_chapter_id, scene_order, scene_boundary,
+            protection, SettingProgression.sort_order, SettingProgression.id,
+        ),
+    )
+    ranked = (
+        select(
+            SettingProgression.id.label("event_id"),
+            SettingProgression.custom_field_id.label("field_id"),
+            SettingProgression.timeline_id.label("timeline_id"),
+            SettingProgression.operation.label("operation"),
+            rank.label("position"),
+        )
+        .outerjoin(chapter, and_(chapter.id == SettingProgression.chapter_id, chapter.project_id == project_id))
+        .outerjoin(scene, and_(scene.id == SettingProgression.scene_id, scene.active.is_(True)))
+        .outerjoin(scene_chapter, and_(scene_chapter.id == scene.chapter_id, scene_chapter.project_id == project_id))
+        .where(
+            SettingProgression.custom_field_id.in_(by_id),
+            SettingProgression.timeline_id.in_(timeline_ids),
+            SettingProgression.active.is_(True),
+            chapter_number.is_not(None),
+        )
+        .subquery()
+    )
+    last_replace = (
+        select(
+            ranked.c.field_id,
+            func.max(case((ranked.c.operation == "replace", ranked.c.position), else_=0)).label("last_position"),
+        )
+        .group_by(ranked.c.field_id)
+        .subquery()
+    )
+    replaced = {
+        field_id
+        for field_id, last in await db.execute(select(last_replace.c.field_id, last_replace.c.last_position))
+        if last
+    }
+    baseline_ids = [field_id for field_id in by_id if field_id not in replaced]
+    current_events = (
+        select(ranked.c.event_id, ranked.c.field_id, ranked.c.timeline_id, ranked.c.operation, ranked.c.position)
+        .join(last_replace, last_replace.c.field_id == ranked.c.field_id)
+        .where(ranked.c.position >= case((last_replace.c.last_position > 0, last_replace.c.last_position), else_=1))
+        .subquery()
+    )
+    # SQLite JSON 可能以 \uXXXX 保存中文；除以 6 是实际 UTF-8 的保守下界。
+    def json_length(column):
+        value = sql_cast(column, Text)
+        if db.get_bind().dialect.name == "postgresql":
+            return func.octet_length(value)
+        return func.length(sql_cast(value, LargeBinary))
+
+    base_size, base_count = (
+        await db.execute(
+            select(func.coalesce(func.sum(json_length(SettingTextField.base_value)), 0), func.count())
+            .where(SettingTextField.id.in_(baseline_ids))
+        )
+    ).one()
+    event_size, event_count = (
+        await db.execute(
+            select(func.coalesce(func.sum(json_length(SettingProgression.value)), 0), func.count())
+            .join(current_events, current_events.c.event_id == SettingProgression.id)
+        )
+    ).one()
+    if base_size + event_size > 6 * max_bytes + 2 * (base_count + event_count):
+        raise BadRequestError("模板内容过大，请减少所选设定、大纲或图片", extra={"code": "template_too_large"})
+
+    values: dict[int, CanonicalFieldValue] = {}
+    text_bytes = 0
+
+    def assign(field_id, value):
+        nonlocal text_bytes
+        previous = values.get(field_id)
+        if isinstance(previous, str):
+            text_bytes -= len(previous.encode("utf-8"))
+        if isinstance(value, str):
+            text_bytes += len(value.encode("utf-8"))
+        if text_bytes > max_bytes:
+            raise BadRequestError("模板内容过大，请减少所选设定、大纲或图片", extra={"code": "template_too_large"})
+        values[field_id] = value
+
+    baselines = await db.stream(
+        select(SettingTextField.id, SettingTextField.base_value)
+        .where(SettingTextField.id.in_(baseline_ids))
+        .execution_options(yield_per=20)
+    )
+    try:
+        async for field_id, value in baselines:
+            assign(field_id, value)
+    finally:
+        await baselines.close()
+    events = await db.stream(
+        select(SettingProgression.value, current_events.c.field_id, current_events.c.timeline_id,
+               current_events.c.operation)
+        .join(current_events, current_events.c.event_id == SettingProgression.id)
+        .order_by(current_events.c.field_id, current_events.c.position)
+        .execution_options(yield_per=20)
+    )
+    buffer: StringIO | None = None
+    buffer_field = None
+    buffer_extra_bytes = 0
+    buffer_has_value = False
+
+    def flush_buffer():
+        nonlocal buffer, buffer_field, buffer_extra_bytes, buffer_has_value
+        if buffer is not None:
+            assign(buffer_field, buffer.getvalue())
+            buffer.close()
+        buffer, buffer_field, buffer_extra_bytes, buffer_has_value = None, None, 0, False
+
+    try:
+        async for value, field_id, timeline_id, operation in events:
+            if buffer is not None and field_id != buffer_field:
+                flush_buffer()
+            binding = by_id[field_id]
+            if binding.timeline_id != timeline_id:
+                raise ValueError("字段事件不属于其时间线")
+            field_type = definition_types.get(binding.definition_id) if binding.definition_id is not None else "text"
+            if field_type is None:
+                raise ValueError("字段定义不存在")
+            if operation == "append":
+                if field_type != "text" or not isinstance(values.get(field_id), str):
+                    raise ValueError("只有多行文本字段支持追加")
+                suffix = validate_field_value(FieldSpec("text"), value, operation="append")
+                if buffer is None:
+                    buffer, buffer_field = StringIO(), field_id
+                    buffer.write(values[field_id])
+                    buffer_has_value = bool(values[field_id])
+                if buffer_has_value:
+                    buffer.write("\n")
+                    buffer_extra_bytes += 1
+                buffer.write(suffix)
+                buffer_extra_bytes += len(suffix.encode("utf-8"))
+                buffer_has_value = True
+                if text_bytes + buffer_extra_bytes > max_bytes:
+                    raise BadRequestError(
+                        "模板内容过大，请减少所选设定、大纲或图片", extra={"code": "template_too_large"}
+                    )
+                continue
+            elif operation != "replace":
+                raise ValueError("不支持的变化模式")
+            assign(field_id, value)
+        flush_buffer()
+    finally:
+        if buffer is not None:
+            buffer.close()
+        await events.close()
+    if set(values) != set(by_id):
+        raise ValueError("字段当前值不存在")
+    bindings = [
+        FieldBindingSnapshot(row.id, row.timeline_id, row.definition_id, row.label, values[row.id], row.sort,
+                             row.ai_hidden)
+        for row in metadata
+    ]
+    by_timeline: dict[int, dict[int, CanonicalFieldValue]] = {timeline.id: {} for timeline in timelines}
+    for binding in bindings:
+        by_timeline[binding.timeline_id][binding.id] = binding.base_value
+    return bindings, by_timeline
 
 
 async def _resolve_timeline_snapshots(
@@ -373,6 +607,7 @@ async def _resolve_timeline_snapshots(
     *,
     exclude_event_ids: Iterable[int] = (),
     definition_ids: Collection[int] | None = None,
+    include_legacy: bool = False,
 ) -> dict[int, EffectiveSnapshot]:
     """共享SQL与纯resolver；部分快照只允许由内部字段入口消费。"""
     if not timelines:
@@ -412,6 +647,7 @@ async def _resolve_timeline_snapshots(
                 db,
                 ids,
                 definition_ids=definition_ids,
+                include_legacy=include_legacy,
             )
         )
         specs = (

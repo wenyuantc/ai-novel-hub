@@ -1,6 +1,6 @@
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { App, Button, Card, Col, Drawer, Empty, Form, Input, Row, Select, Table, Tag, Typography } from 'antd'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   CAREER_KIND_LABELS,
   CAREER_ROLE_LABELS,
@@ -13,7 +13,9 @@ import {
   type StageRow,
 } from '../../api/careers'
 import { errorMessage } from '../../api/client'
-import type { Career, CareerHolder, CareerKind, ProgressionPositionInput } from '../../api/types'
+import type { Career, CareerHolder, CareerKind, ProgressionPositionInput, SettingThumbnailInfo } from '../../api/types'
+import { ProjectThumbnailEditor, ThumbnailNewHint } from '../entities/SettingThumbnail'
+import { createThumbnailRevision } from '../entities/thumbnailSync'
 import { useLoader } from '../../hooks/useLoader'
 import StageListEditor from './StageListEditor'
 import SettingEntryFieldsPanel from '../settingFields/SettingEntryFieldsPanel'
@@ -31,6 +33,7 @@ interface Props {
   career: Career | null
   onClose: () => void
   onSaved: (career: Career) => void
+  onThumbnailChange?: (id: number, thumbnail: SettingThumbnailInfo | null) => void
   fieldPosition?: ProgressionPositionInput | null
 }
 
@@ -60,7 +63,7 @@ export default function CareerEditDrawer(props: Props) {
   )
 }
 
-function Inner({ projectId, career, onSaved, fieldPosition, tagsSession, aiSession }: Props) {
+function Inner({ projectId, career, onSaved, onThumbnailChange, fieldPosition, tagsSession, aiSession }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(projectId)
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
@@ -69,6 +72,8 @@ function Inner({ projectId, career, onSaved, fieldPosition, tagsSession, aiSessi
   )
   const [saving, setSaving] = useState(false)
   const [current, setCurrent] = useState<Career | null>(career)
+  const currentRef = useRef<Career | null>(career)
+  const thumbnailRevision = useRef(createThumbnailRevision())
   const currentId = current?.id ?? null
   const currentStamp = current?.updated_at ?? ''
   // 保存后（updated_at 变化）重新加载持有人
@@ -105,14 +110,17 @@ function Inner({ projectId, career, onSaved, fieldPosition, tagsSession, aiSessi
       stages: rowsToStages(stages),
     }
     setSaving(true)
+    const thumbnailTicket = thumbnailRevision.current.capture()
     try {
       if (!canEditNow()) return
       const saved = current ? await careerApi.update(projectId, current.id, body) : await careerApi.create(projectId, body)
       if (!canEditNow()) return
       message.success('已保存')
-      setCurrent(saved)
-      setStages(stagesToRows(saved.stages))
-      onSaved(saved)
+      const merged = thumbnailRevision.current.merge(saved, currentRef.current, thumbnailTicket)
+      currentRef.current = merged
+      setCurrent(merged)
+      setStages(stagesToRows(merged.stages))
+      onSaved(merged)
     } catch (err) {
       if (!canEditNow()) return
       message.error(errorMessage(err))
@@ -123,6 +131,17 @@ function Inner({ projectId, career, onSaved, fieldPosition, tagsSession, aiSessi
 
   return (
     <>
+      {current && <ProjectThumbnailEditor key={`${projectId}:career:${current.id}`} target={{ scope: 'project', projectId, kind: 'career', entryId: current.id }}
+        thumbnail={current.thumbnail} name={current.name} editable={canEdit} onChange={(thumbnail) => {
+          thumbnailRevision.current.changed()
+          const previous = currentRef.current
+          if (!previous) return
+          const next = { ...previous, thumbnail }
+          currentRef.current = next
+          setCurrent(next)
+          onThumbnailChange?.(next.id, thumbnail)
+        }} />}
+      {!current && canEdit && <ThumbnailNewHint />}
       <Form
         form={form}
         layout="vertical"

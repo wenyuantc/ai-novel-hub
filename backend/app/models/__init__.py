@@ -48,6 +48,8 @@ from app.models.entities import (
 )
 from app.models.inspiration_origin import InspirationOrigin
 from app.models.notes import ProjectNote
+from app.models.novel_templates import NovelTemplate, NovelTemplateCreationReceipt, NovelTemplateImage
+from app.models.pen_names import PenName, ProjectPenName
 from app.models.planning import (
     PlanningTag,
     PlanningUnit,
@@ -78,11 +80,17 @@ from app.models.scenes import Scene
 from app.models.series import Series, SeriesBook, SeriesEntry, SeriesEntryUse
 from app.models.setting_categories import SettingCategory, SettingCategoryRule
 from app.models.setting_fields import SettingAiLink, SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
+from app.models.setting_images import SettingImageResource, SettingThumbnailBinding
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 
 __all__ = [
+    "NovelTemplate",
+    "NovelTemplateCreationReceipt",
+    "NovelTemplateImage",
+    "SettingImageResource",
+    "SettingThumbnailBinding",
     "BackupArtifact",
     "BackupRun",
     "BackupSettings",
@@ -132,6 +140,8 @@ __all__ = [
     "ProjectCover",
     "ProjectCollaborator",
     "ProjectNote",
+    "PenName",
+    "ProjectPenName",
     "PlanningTag",
     "PlanningUnit",
     "PlanningUnitCareer",

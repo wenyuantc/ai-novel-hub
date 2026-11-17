@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError, NotFoundError
 from app.models import Base, Project
+from app.schemas.career import CareerOut
+from app.schemas.organization import OrganizationOut
+from app.schemas.story import CharacterWithOrigin, WorldSettingWithOrigin
 from app.services.ai_dispatch import VisibilityPolicyError
 from app.services.project_transfer.remap import RemapContext, setting_event_value, setting_payload
 from app.services.task_engine.registry import TaskContext
@@ -116,9 +119,31 @@ def arguments(name: str, schema: type[BaseModel], *, with_id: bool = False) -> t
     return create_model(name, __base__=schema, __config__=ConfigDict(extra="forbid"), **fields)
 
 
+_IMAGE_PROJECTIONS = (CareerOut, OrganizationOut, CharacterWithOrigin, WorldSettingWithOrigin)
+
+
+def _image_projection_exclusions(value: Any) -> dict:
+    """只排除明确的人工作品 DTO 的图片属性，不改写普通用户 JSON。"""
+    if isinstance(value, BaseModel):
+        excluded: dict = ({"thumbnail": True, "thumbnail_editable": True}
+                          if isinstance(value, _IMAGE_PROJECTIONS) else {})
+        for name in type(value).model_fields:
+            if name not in excluded:
+                nested = _image_projection_exclusions(getattr(value, name))
+                if nested:
+                    excluded[name] = nested
+        return excluded
+    if isinstance(value, (list, tuple)):
+        return {index: nested for index, item in enumerate(value)
+                if (nested := _image_projection_exclusions(item))}
+    if isinstance(value, dict):
+        return {key: nested for key, item in value.items() if (nested := _image_projection_exclusions(item))}
+    return {}
+
+
 def serialized(value: Any) -> Any:
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        return value.model_dump(mode="json", exclude=_image_projection_exclusions(value))
     if isinstance(value, list):
         return [serialized(item) for item in value]
     if isinstance(value, dict):
@@ -442,6 +467,9 @@ def preview_diff(changes: list[dict], *, include_insert_sort: bool = False) -> l
     result = []
     for change in changes:
         table = change["table"]
+        if table == "setting_thumbnail_bindings":
+            # 绑定资源身份只用于内部撤销，不进入模型或公开预览。
+            continue
         before, after = normalized(table, change["before"]), normalized(table, change["after"])
         pk = normalized(table, change["pk"])
         key = ":".join(str(value) for value in pk.values())

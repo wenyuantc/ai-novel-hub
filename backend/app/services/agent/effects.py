@@ -39,6 +39,7 @@ from app.models import (
 from app.models.planning import PlanningUnit
 from app.models.scenes import Scene
 from app.models.setting_fields import SettingReferenceHandle
+from app.models.setting_images import SettingImageResource, SettingThumbnailBinding
 from app.schemas.setting_ai_visibility import StoredAiSettings, legacy_ai_settings
 from app.services import (
     memory_service,
@@ -72,7 +73,7 @@ class Snapshot(dict[str, dict[str, dict[str, Any]]]):
 
 Effect = dict[str, Any]
 logger = logging.getLogger(__name__)
-EFFECT_VERSION = 6
+EFFECT_VERSION = 7
 _VISIBILITY_EFFECT_VERSION = 5
 _PROJECT_RUNTIME_REVISIONS = frozenset({
     "planning_revision", "fields_revision", "categories_revision", "ai_visibility_revision", "ai_history_epoch",
@@ -116,6 +117,7 @@ EFFECT_TABLES = frozenset(
         "setting_ai_links",
         "setting_categories",
         "setting_category_rules",
+        "setting_thumbnail_bindings",
         "chapter_versions",
         "generation_logs",
         "tasks",
@@ -126,6 +128,9 @@ _RULES = (
     PROJECT_RULE,
     *(rule for rule in RULES if rule.table in EFFECT_TABLES),
     TableRule("tasks", Task, lambda pid: Task.project_id == pid),
+    # 图片资源随项目保留，只有本地绑定参与撤销，且必须在四类主体之后恢复。
+    TableRule("setting_thumbnail_bindings", SettingThumbnailBinding,
+              lambda pid: and_(SettingThumbnailBinding.project_id == pid, SettingThumbnailBinding.series_id.is_(None))),
 )
 _BY_TABLE = {rule.table: rule for rule in _RULES}
 # created_at 创建后不变，须保留在快照中，撤销删除时才能原样恢复。
@@ -170,6 +175,7 @@ _LABELS = {
     "setting_ai_links": "设定 AI 关联",
     "setting_categories": "设定分类",
     "setting_category_rules": "分类规则",
+    "setting_thumbnail_bindings": "设定缩略图",
     "chapter_versions": "章节版本",
     "generation_logs": "生成记录",
     "tasks": "任务",
@@ -970,9 +976,18 @@ async def _preflight_series_effects(
             row[subject_column] for effect in timelines for row in (effect["before"], effect["after"])
             if row is not None and row.get("subject_kind") == kind and type(row.get(subject_column)) is int
         )
+        thumbnails = [effect for effect in effects if effect["table"] == "setting_thumbnail_bindings"]
+        candidates.update(
+            row[subject_column] for effect in thumbnails for row in (effect["before"], effect["after"])
+            if isinstance(row, dict) and type(row.get(subject_column)) is int
+        )
         bound = await series_policy.used_local_ids(db, project_id, kind, candidates)
         if not bound:
             continue
+        for effect in thumbnails:
+            if any(isinstance(row, dict) and row.get(subject_column) in bound
+                   for row in (effect["before"], effect["after"])):
+                conflicts.append(_conflict(effect, "撤销会改写系列共享图片"))
         baseline_fields = series_policy.shared_baseline_fields(kind)
         static_fields = (shared - baseline_fields) | series_policy.AI_SHARED_FIELDS
         for effect in entities:
@@ -1026,6 +1041,48 @@ async def _log_identity_matches(db: AsyncSession, effect: Effect) -> bool:
     return type(key) is str and bool(key) and current == key
 
 
+async def _valid_thumbnail_effect(db: AsyncSession, project_id: int, effect: Effect, effects: list[Effect]) -> bool:
+    """图片 UUID 与主体必须属于本书，允许主体随同一撤销恢复。"""
+    subjects = {
+        "character_id": "characters", "world_setting_id": "world_settings",
+        "organization_id": "organizations", "career_id": "careers",
+    }
+    pk = effect.get("pk")
+    if (effect.get("format_version", 1) < 7 or not isinstance(pk, dict) or set(pk) != {"id"}
+            or type(pk["id"]) is not int or pk["id"] <= 0
+            or (effect.get("before") is None and effect.get("after") is None)):
+        return False
+    for row in (effect.get("before"), effect.get("after")):
+        if row is None:
+            continue
+        if not isinstance(row, dict) or row.get("id") != pk["id"] or row.get("project_id") != project_id:
+            return False
+        if row.get("series_id") is not None or row.get("series_entry_id") is not None:
+            return False
+        chosen = [(column, table) for column, table in subjects.items() if row.get(column) is not None]
+        if len(chosen) != 1 or type(row[chosen[0][0]]) is not int or row[chosen[0][0]] <= 0:
+            return False
+        resource_id = row.get("image_resource_id")
+        if not isinstance(resource_id, str) or not await db.scalar(select(SettingImageResource.id).where(
+            SettingImageResource.id == resource_id, SettingImageResource.project_id == project_id,
+            SettingImageResource.series_id.is_(None),
+        )):
+            return False
+        column, table = chosen[0]
+        ident = row[column]
+        model = Base.metadata.tables[table]
+        exists = await db.scalar(select(model.c.id).where(model.c.id == ident, model.c.project_id == project_id))
+        restoring = any(
+            e.get("table") == table and isinstance(e.get("before"), dict)
+            and e["before"].get("id") == ident and e["before"].get("project_id") == project_id
+            and e.get("after") is None
+            for e in effects
+        )
+        if exists is None and not restoring:
+            return False
+    return True
+
+
 async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
     conflicts = []
     for effect in effects:
@@ -1040,6 +1097,10 @@ async def _validate(db: AsyncSession, project_id: int, effects: list[Effect]) ->
         ):
             conflicts.append(_conflict(effect, "记录不属于当前项目"))
             continue
+        if name == "setting_thumbnail_bindings":
+            if not await _valid_thumbnail_effect(db, project_id, effect, effects):
+                conflicts.append(_conflict(effect, "缩略图归属或资源已变化"))
+                continue
         if name in _LINK_ONLY and (before is None or after is None):
             # diff 只为两侧都存在的关联行产生效果；旧或伪造效果不能借撤销删除私人记录，
             # 也不能插入缺少服务端实例键的生成记录。

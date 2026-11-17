@@ -324,12 +324,12 @@ def test_default_template_matches_legacy(key, fn, kwargs):
 
 def test_every_legacy_key_is_covered():
     covered = {key for key, _, _ in CASES}
-    # style.* / inspiration.* / book_import.* / agent.* / wizard.continue 是新增模板，没有改造前的对照
+    # 新模板各自有专用测试，不属于本文件里的旧提示词对照。
     assert covered == {
         k
         for k in TEMPLATE_KEYS
         if not k.startswith(("style.", "inspiration.", "book_import.", "agent."))
-        and k not in {"wizard.continue", "relations.generate"}
+        and k not in {"wizard.continue", "relations.generate", "setting.thumbnail"}
     }
 
 

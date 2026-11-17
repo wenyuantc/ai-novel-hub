@@ -5,6 +5,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.progression import AnchorKind, Boundary, NonnegativeDbInt, PositiveDbInt
+from app.schemas.setting_image import ThumbnailMeta
 
 MemberStatus = Literal["active", "left", "expelled", "dead"]
 
@@ -62,6 +63,7 @@ class OrganizationOut(BaseModel):
     description: str
     sort: int
     member_count: int = 0
+    thumbnail: ThumbnailMeta | None = None
 
 
 class _MemberIntent(BaseModel):

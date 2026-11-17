@@ -23,7 +23,7 @@
 | [数据库规范](./database-guidelines.md) | 异步 engine/session、Alembic `0001`、外键 CASCADE 与 `outline_id` SET NULL、user_id 归属校验 → 404、长度限制、字数统计 | 已填写 |
 | [错误处理](./error-handling.md) | `AppError` 层级、`{"detail": ...}` 响应包、安全的 422/500 处理器、SSE 流式契约场景 | 已填写 |
 | [质量规范](./quality-guidelines.md) | ruff + pytest、功能增改删必须同步根目录 README、测试隔离、PG 隔离测试库环境变量与守卫、迁移冻结结构契约、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
-| [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v6 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
+| [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v7 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
 | [设定随剧情演变](./setting-progressions.md) | 基础值与章初/章末事件、七类主体、旧资料校准、写作上下文、事务与前端契约 | 已填写 |
 | [自定义设定字段](./setting-fields.md) | 四类字段、空槽首写、共享目录CAS、稳定选项／引用、按章投影、v4备份／卡片及effects v3 | 已填写 |
 | [整理标签与自动分类](./setting-categories.md) | 0036稳定身份、严格标签、ANY／ALL、一致快照批量按章查询、独立草稿／对照、v5备份／卡片与effects v4 | 已填写 |
@@ -35,11 +35,14 @@
 | [全文提及与作品笔记](./mention-tracking.md) | 四来源字面索引、歧义/Unicode/原文指纹、双向导航与章节热力图、笔记CAS、世界观别名及备份兼容 | 已填写 |
 | [AI 批量关系生成](./relationship-generation.md) | 所选 ID 范围、只读草稿与勾选保存、关系/类型并发冲突、事务所有权、任务重开及刷新 | 已填写 |
 | [大纲进阶](./outline.md) | 章节号平移登记表（新增章节号字段必须登记）、细纲与建章、大纲快照与恢复、`ainovel.outline` 导入导出、续写 / 展开任务、向导大纲模式与进度 | 已填写 |
-| [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（31 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、提示词组件（`{{> 标识 }}` 先展开再校验、引用完整性、修订号 CAS、`0042`）、写作风格库与解析优先级、风格段注入 | 已填写 |
+| [提示词模板与写作风格](./prompts-styles.md) | 沙箱 Jinja2 模板（32 个 key、锁定变量、校验规则）、parity 对照测试、用户覆盖 / 指纹 / 历史版本、提示词组件（`{{> 标识 }}` 先展开再校验、引用完整性、修订号 CAS、`0042`）、写作风格库与解析优先级、风格段注入 | 已填写 |
 | [实例内提示词工坊](./workshop.md) | 风格 / 单 key 模板共享（含组件引用的模板展开后写入快照）、审核快照、404/403 权限、匿名与删号署名、原子计数、导入前版本与恢复 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
-| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v9 格式（兼容 v1–v8）、表规则注册表、场景及历史核心引用、JSON 内 id 重映射、流式导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
+| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v11 格式（兼容 v1–v10）、表规则注册表、引用重映射、受限暂存导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
+| [作者私人笔名与作品署名](./pen-names.md) | 私库／单作品关联、协作者只读、User屏障、书架筛选、备份及双EPUB署名 | 已填写 |
+| [设定缩略图](./setting-thumbnails.md) | 四类主体、系列共享、权限和版本、标准图、备份／卡片／撤销 | 已填写 |
+| [个人小说模板](./novel-templates.md) | 私人快照、显式依赖、空正文建书、幂等收据与事务锁序 | 已填写 |
 | [可阅读文档组合导出](./document-export.md) | DOCX／Markdown／TXT 章景与摘要选择、设定／聊天／笔记、授权快照与下载竞态 | 已填写 |
 | [项目封面](./project-cover.md) | 人工与协作 AI 权限、本人模型优先及作者授权、受控发送和预览、魔数校验、微秒版本 URL、备份与 EPUB | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
@@ -80,6 +83,8 @@
 | 场景正文、局部码点、结构历史、继承与整章AI原子保存 | [scenes.md](./scenes.md) |
 | 场景富格式、作者区块、标记时间线与 AI 核对 | [rich-documents.md](./rich-documents.md) |
 | 封面上传与生成预览、版本 URL、图片备份与 EPUB | [project-cover.md](./project-cover.md) |
+| 四类设定缩略图、系列共享、图片权限和独立快照 | [setting-thumbnails.md](./setting-thumbnails.md) |
+| 小说模板快照、依赖预览、原子建书及重放 | [novel-templates.md](./novel-templates.md) |
 | 提示词模板（校验 / 渲染 / 覆盖）与写作风格解析 | [prompts-styles.md](./prompts-styles.md) |
 | 提示词组件（`{{> 标识 }}` 展开、行号映射、`component_in_use` / `component_breaks_usages` / `stale_revision`、导入导出、`0042`） | [prompts-styles.md](./prompts-styles.md)（「提示词组件」场景） |
 | 实例内共享（审核状态、署名、点赞 / 下载计数、模板导入恢复） | [workshop.md](./workshop.md) |

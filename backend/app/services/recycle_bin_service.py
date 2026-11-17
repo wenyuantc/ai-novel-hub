@@ -6,11 +6,33 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
-from app.models import Chapter, ChapterVersion, Project, Task, User
+from app.models import (
+    AnalysisChange,
+    Career,
+    Chapter,
+    ChapterAnalysis,
+    ChapterVersion,
+    Character,
+    Organization,
+    Project,
+    Scene,
+    SettingCategory,
+    SettingCategoryRule,
+    SettingFieldDefinition,
+    SettingFieldOption,
+    SettingProgression,
+    SettingReferenceHandle,
+    SettingTextField,
+    SettingTimeline,
+    Task,
+    User,
+    WorldSetting,
+)
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.recycle_bin import RecycleProjectList, RecycleProjectOut
 from app.services import authorization_service as authz
@@ -275,6 +297,131 @@ def _check_record(project: Project, deleted_at: datetime) -> None:
         raise ConflictError("回收站记录已变化，请刷新后重试", extra={"code": "recycle_record_stale"})
 
 
+async def _has_unsafe_setting_references(db: AsyncSession, project_id: int, *, incoming_only: bool = False) -> bool:
+    """只读检查，避免清理与其他作品互相引用的字段、事件或主体。"""
+
+    def scoped(statement, left, right):
+        # 分成出站／入站两个目标范围，避免跨表 OR 使 PostgreSQL 放弃项目及 FK 索引。
+        incoming = statement.where(right == project_id, left != project_id)
+        return [incoming] if incoming_only else [statement.where(left == project_id, right != project_id), incoming]
+
+    # 错误的跨作品引用既可能由目标指向外部，也可能从外部指入目标；两者均不能安全清理。
+    issues = []
+    if not incoming_only:
+        issues.extend(scoped(
+            select(SettingTextField.id).join(SettingTimeline, SettingTextField.timeline_id == SettingTimeline.id)
+            .join(SettingFieldDefinition, SettingTextField.definition_id == SettingFieldDefinition.id),
+            SettingTimeline.project_id, SettingFieldDefinition.project_id))
+        issues.extend(scoped(
+            select(SettingCategoryRule.id).join(SettingCategory, SettingCategoryRule.category_id == SettingCategory.id)
+            .join(SettingFieldDefinition, SettingCategoryRule.definition_id == SettingFieldDefinition.id),
+            SettingCategory.project_id, SettingFieldDefinition.project_id))
+        issues.extend(scoped(
+            select(SettingCategoryRule.id).join(SettingCategory, SettingCategoryRule.category_id == SettingCategory.id)
+            .join(SettingFieldOption, SettingCategoryRule.option_id == SettingFieldOption.id)
+            .join(SettingFieldDefinition, SettingFieldOption.definition_id == SettingFieldDefinition.id),
+            SettingCategory.project_id, SettingFieldDefinition.project_id))
+    for model, column in (
+        (Character, SettingTimeline.character_id),
+        (Character, SettingTimeline.related_character_id),
+        (WorldSetting, SettingTimeline.world_setting_id),
+        (Organization, SettingTimeline.organization_id),
+        (Career, SettingTimeline.career_id),
+    ):
+        issues.extend(scoped(select(SettingTimeline.id).join(model, column == model.id),
+                             SettingTimeline.project_id, model.project_id))
+    for model, column in (
+        (Character, SettingReferenceHandle.character_id),
+        (WorldSetting, SettingReferenceHandle.world_setting_id),
+        (Organization, SettingReferenceHandle.organization_id),
+        (Career, SettingReferenceHandle.career_id),
+    ):
+        issues.extend(scoped(select(SettingReferenceHandle.id).join(model, column == model.id),
+                             SettingReferenceHandle.project_id, model.project_id))
+
+    field_owner = aliased(SettingTimeline)
+    event_owner = aliased(SettingTimeline)
+    if not incoming_only:
+        query = (
+            select(SettingProgression.id).join(event_owner, SettingProgression.timeline_id == event_owner.id)
+            .join(SettingTextField, SettingProgression.custom_field_id == SettingTextField.id)
+            .join(field_owner, SettingTextField.timeline_id == field_owner.id)
+            .where(event_owner.id != field_owner.id)
+        )
+        issues.extend((query.where(event_owner.project_id == project_id),
+                       query.where(field_owner.project_id == project_id)))
+    for query, left, right in (
+        (select(SettingProgression.id).join(event_owner, SettingProgression.timeline_id == event_owner.id)
+         .join(Chapter, SettingProgression.chapter_id == Chapter.id), event_owner.project_id, Chapter.project_id),
+        (select(SettingProgression.id).join(event_owner, SettingProgression.timeline_id == event_owner.id)
+         .join(Scene, SettingProgression.scene_id == Scene.id).join(Chapter, Scene.chapter_id == Chapter.id),
+         event_owner.project_id, Chapter.project_id),
+        (select(SettingProgression.id).join(event_owner, SettingProgression.timeline_id == event_owner.id)
+         .join(AnalysisChange, SettingProgression.source_change_id == AnalysisChange.id),
+         event_owner.project_id, AnalysisChange.project_id),
+        (select(ChapterAnalysis.id).join(Chapter, ChapterAnalysis.chapter_id == Chapter.id),
+         ChapterAnalysis.project_id, Chapter.project_id),
+        (select(AnalysisChange.id).join(ChapterAnalysis, AnalysisChange.analysis_id == ChapterAnalysis.id),
+         AnalysisChange.project_id, ChapterAnalysis.project_id),
+    ):
+        issues.extend(scoped(query, left, right))
+    # JSON 内的句柄／选项没有数据库外键或反向索引，合法写入口会校验同书。
+    # superseded_by_id 没有反向索引且沿用原级联 SET NULL；都不为库外坏数据扫描全站。
+    return await db.scalar(union_all(*issues).limit(1)) is not None
+
+
+async def _purge_setting_history(db: AsyncSession, project_id: int) -> None:
+    """父作品已锁：先清理字段事件，避免 PG 级联定义与字段的次序冲突。"""
+    # 其他作品的旧坏数据可能用普通外键指向本书的主体或章锚。仅检查一次会留下
+    # 检查后并发插入的窗口；先锁本书中可被引用的父行，使 FK 的 KEY SHARE 等待。
+    # SQLite 的父项目 UPDATE 已持有全库写锁，不需要再做这些无行锁能力的查询。
+    if db.get_bind().dialect.name == "postgresql":
+        chapter_ids = select(Chapter.id).where(Chapter.project_id == project_id)
+        parents = [
+            (Character, select(Character.id).where(Character.project_id == project_id)),
+            (WorldSetting, select(WorldSetting.id).where(WorldSetting.project_id == project_id)),
+            (Organization, select(Organization.id).where(Organization.project_id == project_id)),
+            (Career, select(Career.id).where(Career.project_id == project_id)),
+            (Chapter, select(Chapter.id).where(Chapter.project_id == project_id)),
+            (Scene, select(Scene.id).where(Scene.chapter_id.in_(chapter_ids))),
+            (ChapterAnalysis, select(ChapterAnalysis.id).where(ChapterAnalysis.project_id == project_id)),
+            (AnalysisChange, select(AnalysisChange.id).where(AnalysisChange.project_id == project_id)),
+        ]
+        for model, statement in parents:
+            await db.execute(statement.order_by(model.id).with_for_update(of=model))
+    timeline_ids = select(SettingTimeline.id).where(SettingTimeline.project_id == project_id)
+    definition_ids = select(SettingFieldDefinition.id).where(SettingFieldDefinition.project_id == project_id)
+    relevant = union_all(
+        select(SettingFieldDefinition.id).where(SettingFieldDefinition.project_id == project_id),
+        select(SettingTextField.id).where(SettingTextField.timeline_id.in_(timeline_ids)),
+        select(SettingProgression.id).where(SettingProgression.timeline_id.in_(timeline_ids)),
+    ).limit(1)
+    if await db.scalar(relevant) is None:
+        # 空字段目录无需锁全图，但其他作品的异常事件仍可能指向本书主体或章锚。
+        if await _has_unsafe_setting_references(db, project_id, incoming_only=True):
+            raise ConflictError("设定数据存在跨作品引用，无法安全彻底删除",
+                                extra={"code": "invalid_setting_purge_graph"})
+        return
+
+    # 固定顺序仅锁目标身份，阻止新增指向待删字段/事件的外键，不等待其他作品的锁。
+    locks = [
+        (SettingTimeline, select(SettingTimeline.id).where(SettingTimeline.project_id == project_id)),
+        (SettingFieldDefinition, select(SettingFieldDefinition.id).where(
+            SettingFieldDefinition.project_id == project_id)),
+        (SettingFieldOption, select(SettingFieldOption.id).where(SettingFieldOption.definition_id.in_(definition_ids))),
+        (SettingTextField, select(SettingTextField.id).where(SettingTextField.timeline_id.in_(timeline_ids))),
+        (SettingProgression, select(SettingProgression.id).where(SettingProgression.timeline_id.in_(timeline_ids))),
+    ]
+    for model, statement in locks:
+        await db.execute(statement.order_by(model.id).with_for_update(of=model))
+    if await _has_unsafe_setting_references(db, project_id):
+        raise ConflictError("设定数据存在跨作品引用，无法安全彻底删除",
+                            extra={"code": "invalid_setting_purge_graph"})
+
+    await db.execute(delete(SettingProgression).where(SettingProgression.timeline_id.in_(timeline_ids)))
+    await db.execute(delete(SettingTextField).where(SettingTextField.timeline_id.in_(timeline_ids)))
+
+
 async def restore(db: AsyncSession, actor_id: int, project_id: int, deleted_at: datetime) -> None:
     record = await project_lifecycle.load_record(db, project_id)
     if record is None:
@@ -348,6 +495,7 @@ async def purge(
         task_keys = dict((await db.execute(
             select(Task.id, Task.statistics_key).where(Task.project_id == project_id)
         )).all())
+        await _purge_setting_history(db, project_id)
         await db.delete(project)
         await audit.commit()
         # commit 期间若仍出现尚未核实的收尾证据，不能通过清理内存掩盖它。

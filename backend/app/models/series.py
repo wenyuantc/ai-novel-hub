@@ -43,6 +43,7 @@ class SeriesEntry(TimestampMixin, Base):
     __tablename__ = "series_entries"
     __table_args__ = (
         UniqueConstraint("series_id", "id", "kind"),
+        Index("uq_series_entries_series_id_id", "series_id", "id", unique=True),
         CheckConstraint("kind IN ('character', 'world')", name="kind"),
         Index("ix_series_entries_series_id_kind_name", "series_id", "kind", "display_name"),
         {"sqlite_autoincrement": True},

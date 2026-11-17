@@ -88,6 +88,10 @@ OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "insp
 # 与项目相关、但不导出的表（理由见值）。
 # book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
+    "novel_template_creation_receipts": "用户建书意图去重收据，不随单书备份迁移",
+    "setting_image_resources": "当前缩略图单独导出到顶层 thumbnails，历史资源不随单书迁移",
+    "setting_thumbnail_bindings": "缩略图绑定通过顶层 thumbnails 和新实体身份恢复",
+    "project_pen_names": "当前作品署名以顶层笔名文本导出并在导入者私库恢复，不导出库身份",
     "analysis_index_receipts": "分析派生索引的去重收据属于任务运行态，不随单书备份迁移",
     "inspiration_origins": "个人灵感会话的原邀请身份不随单书备份迁移",
     "project_collaborators": "协作授权属于用户关系，不随单书备份迁移",

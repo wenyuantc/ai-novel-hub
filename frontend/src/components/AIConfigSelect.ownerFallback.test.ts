@@ -132,6 +132,13 @@ describe('AIConfigSelect 作者模型回退', () => {
     expect(html).not.toContain('作者费用')
   })
 
+  it('明确仅使用本人配置时，即使位于作品路由也不提示作者模型回退', () => {
+    setup(granted, [])
+    const html = render('/projects/9/chapters', '/projects/:pid/chapters', createElement(AIConfigSelect, { modelType: 'image', ownOnly: true }))
+    expect(html).toContain('尚未配置图片模型')
+    expect(html).not.toContain('作者费用')
+  })
+
   it('向量模型不在回退范围', () => {
     setup(granted, [])
     const html = render('/projects/9/knowledge', '/projects/:pid/knowledge', createElement(AIConfigSelect, { modelType: 'embedding' }))

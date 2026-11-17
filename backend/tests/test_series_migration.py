@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Base, Character, Project, Series, SeriesBook, SeriesEntry, SeriesEntryUse, User, WorldSetting
-from tests.test_setting_fields_migration import _config, _schema_contract
+from tests.test_setting_fields_migration import _config, _schema_0055_model_contract, _schema_contract
 
 _TABLES = ("series", "series_books", "series_entries", "series_entry_uses")
 
@@ -25,7 +25,9 @@ def test_0038_sqlite_upgrade_preserves_stored_books_and_safe_downgrade(tmp_path)
         command.upgrade(config, "0038")
         Base.metadata.create_all(expected)
         for table in (*_TABLES, "projects", "characters", "world_settings"):
-            assert _schema_contract(inspect(migrated), table) == _schema_contract(inspect(expected), table), table
+            assert _schema_contract(inspect(migrated), table) == _schema_0055_model_contract(
+                inspect(expected), table,
+            ), table
         with migrated.connect() as conn:
             assert conn.scalar(select(Character.name).where(Character.id == 90)) == "旧角色"
             assert conn.scalar(select(WorldSetting.title).where(WorldSetting.id == 100)) == "旧世界观"

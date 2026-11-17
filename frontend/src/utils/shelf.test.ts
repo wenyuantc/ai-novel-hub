@@ -8,6 +8,7 @@ import {
   COVER_HUES,
   DEFAULT_SHELF_PREFS,
   filterAndSort,
+  filterByPenName,
   latestWritingProject,
   parseShelfPrefs,
   readingLabel,
@@ -53,6 +54,18 @@ const list = [
 ]
 
 describe('书架筛选排序', () => {
+  it('笔名和未设置只筛本人作品，全部仍包含协作书，并可与搜索状态排序组合', () => {
+    const mine = p({ id: 1, title: '海', status: 'writing', pen_name: { id: 7, name: '山客' } })
+    const unset = p({ id: 2, title: '山', status: 'writing', pen_name: null })
+    const shared = p({ id: 3, title: '海边', status: 'writing', pen_name: { id: null, name: '山客' },
+      access: { ...mine.access, role: 'editor', is_collaborator: true, authorization_version: 'v1' } })
+    const books = [mine, unset, shared]
+    expect(filterByPenName(books, 'all')).toHaveLength(3)
+    expect(filterByPenName(books, 'unset').map((item) => item.id)).toEqual([2])
+    expect(filterByPenName(books, 7).map((item) => item.id)).toEqual([1])
+    expect(filterAndSort(filterByPenName(books, 7), { ...DEFAULT_SHELF_PREFS, query: '海', status: 'writing' }).map((item) => item.id)).toEqual([1])
+    expect(filterAndSort(filterByPenName(books, 7), { ...DEFAULT_SHELF_PREFS, query: '海', status: 'completed' })).toEqual([])
+  })
   it('搜索匹配书名与标签（大小写不敏感）', () => {
     expect(filterAndSort(list, { ...DEFAULT_SHELF_PREFS, query: 'space' }).map((x) => x.id)).toEqual([1])
     expect(filterAndSort(list, { ...DEFAULT_SHELF_PREFS, query: '仙' }).map((x) => x.id)).toEqual([3])

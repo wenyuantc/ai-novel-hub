@@ -1,10 +1,10 @@
-// 角色 / 组织卡片导入导出（ainovel.cards v6，兼容导入 v1–v5；JSON body）
+// 角色 / 组织卡片导入导出（ainovel.cards v7，兼容导入 v1–v6；JSON body）
 
 import { request } from './client'
 import type { CardExportRequest, CardImportRequest, CardImportResult, CardPreview, CardPreviewRequest, CardResolution, CardResolutions } from './types'
 
 /** 与后端 MAX_CARD_BYTES 一致：按「紧凑序列化后的 UTF-8 字节数」计（导出文件带缩进，文件本身可以略大） */
-export const MAX_CARD_BYTES = 2 * 1024 * 1024
+export const MAX_CARD_BYTES = 16 * 1024 * 1024
 /** 读取前按文件大小粗筛的上限（容纳缩进 / 换行），真正的判定见 parseCardText */
 export const MAX_CARD_FILE_BYTES = 4 * MAX_CARD_BYTES
 
@@ -16,7 +16,7 @@ export const cardApi = {
     request<CardImportResult>(`/projects/${pid}/cards/import`, { method: 'POST', body: { data, resolutions, ...options }, signal }),
 }
 
-const TOO_LARGE = '卡片文件过大，上限为 2MB'
+const TOO_LARGE = '卡片文件过大，紧凑 JSON 上限为 16 MiB'
 
 /**
  * 解析卡片文件文本：JSON 语法与大小在本地先查一遍，结构由后端校验。

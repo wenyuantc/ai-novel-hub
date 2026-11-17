@@ -1,10 +1,12 @@
-import { api, buildUrl, handleErrorResponse, ApiError, request, type QueryValue } from './client'
+import { api, buildUrl, handleErrorResponse, ApiError, request, type QueryValue, type RequestOptions } from './client'
 import type { CoverGenerateRequest, CoverPreview, Project, ProjectCreate, ProjectStatus, ProjectUpdate, WizardProgressUpdate } from './types'
 
 export const projectApi = {
   list: () => api.get<Project[]>('/projects'),
-  get: (id: number) => api.get<Project>(`/projects/${id}`),
-  create: (body: ProjectCreate) => api.post<Project>('/projects', body),
+  get: (id: number, options?: Pick<RequestOptions, 'signal' | 'isCurrent'>) =>
+    options ? request<Project>(`/projects/${id}`, options) : api.get<Project>(`/projects/${id}`),
+  create: (body: ProjectCreate, options?: Pick<RequestOptions, 'signal' | 'isCurrent'>) =>
+    request<Project>('/projects', { method: 'POST', body, ...options }),
   update: (id: number, body: ProjectUpdate) => api.patch<Project>(`/projects/${id}`, body),
   remove: (id: number) => api.del(`/projects/${id}`),
   /** 向导进度：给出的字段整体替换，返回最新 Project */
@@ -101,7 +103,7 @@ export async function downloadAttachment(
 export interface ExportOptions {
   /** 为空则导出全部章节（生成中的除外） */
   chapterIds?: number[]
-  /** 仅 EPUB：作者名（≤100 字）；不传时后端取用户名 */
+  /** 仅 EPUB：作者名（≤100 字）；不传时后端优先取作品笔名 */
   author?: string
   /** 仅 EPUB：是否生成简介页（默认 true） */
   includeSynopsis?: boolean

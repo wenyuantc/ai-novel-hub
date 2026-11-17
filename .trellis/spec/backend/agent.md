@@ -97,6 +97,7 @@ async def validate_references(ctx, args, *, id_model=None)   # tools/references.
 
 ### 2. 契约
 
+- **项目人工投影不等于模型白名单**：`ProjectOut.pen_name` 用于界面作品署名，但私人库 ID／笔名不会进入 `project_for_model` 的实时项目工具结果；历史项目工具回执通过 `ProjectOut` 校验重建时同样排除该字段。新增人工投影字段时须检查模型实时输出与历史重放，见[笔名契约](./pen-names.md)。
 - **注册表是白名单**：只从 `read.py` / `skills.py` / `write.py` / `write_text.py` / `tasks.py` 的 `TOOLS` 列表构建，不按模型给的名字动态导入。
   `test_registry_has_only_explicit_tools` 固定清单，新增工具要同步改测试。
 - **MCP 工具是动态工具，不进注册表**：每轮由 `mcp_tools.build_tool_map` 生成 `mcp__{插件}__{工具}` 名称并写入 `checkpoint.mcp_tool_map`，runner 在
@@ -396,7 +397,7 @@ async def undo(db, project_id, effects) -> bool            # 不 commit；返回
 - **列**：忽略 `updated_at` / `word_count`；`created_at` 必须保留（创建后不变，不影响冲突比较；撤销删除时靠它恢复原创建时间，见 `test_undo_delete_keeps_original_created_at`），但 `preview_diff` 必须跳过它，否则新建类提案的预览随秒变化，确认时误判 409，见 `test_preview_diff_ignores_created_at_of_inserted_rows`）；`chapters.content` 不进快照，只存 `_content_hash`，空白正文另存 `_empty_content`
   （唯一会被工具删除的章节是细纲同步删掉的空章节）；`chapter_versions` 只跟踪这些被删空章节的版本（正文修改产生的新版本属于历史，不撤销）；
   `generation_logs` / `tasks` 只取 `id / project_id / chapter_id`，只记录修改（章节删除导致的 SET NULL），不记录增删。
-- **效果版本**：新diff／chapter_text为`format_version:6`，登记scenes及新规划列／本地角色，章结构签名包含Scene和本地规划，内容版本不回退。可见性兼容阈值仍是5，不能因当前版本升6把合法v5误判为缺可见语义。合法旧v1–v5按各自时间线／typed／分类／可见保护预检；缺Scene语义的旧章文本仅安全单Scene桥接，不安全多Scene返回`legacy_effect_requires_manual_correction`。`preflight_effect_versions`仍按逆序before构造拟恢复图，不能覆盖后来作者限制。旧v2／v3 UPDATE缺标签时保留后来标签，旧CREATE遇后来非空标签拒删，合法旧DELETE补空。
+- **效果版本**：新diff／chapter_text为`format_version:7`；v6 登记 scenes 及新规划列／本地角色，v7 加入本地缩略图 binding，资源 bytes 不进入效果或公开投影。可见性兼容阈值仍是5，不能因当前版本升7把合法v5误判为缺可见语义。合法旧版本按各自时间线／typed／分类／可见保护预检；旧效果不得清除后来新增的图，系列提升后的撤销不得覆盖共享图。缺Scene语义的旧章文本仅安全单Scene桥接，不安全多Scene返回`legacy_effect_requires_manual_correction`。`preflight_effect_versions`仍按逆序before构造拟恢复图，不能覆盖后来作者限制。旧v2／v3 UPDATE缺标签时保留后来标签，旧CREATE遇后来非空标签拒删，合法旧DELETE补空。
 - **Scene恢复**：正文工具先把章绝对范围解析为唯一Scene，再调用`replace_scene_content`；预览签名绑定真实Scene和结构。新chapter_text前后结构snapshot必须可证明一致；恢复只改目标正文并推进新版本。Core撤销遵循注册表拓扑并核对章结构签名，恢复后统一刷新章投影／故事位置；真删除空章恢复也必须恢复初始Scene。不能直接赋`Chapter.content`绕过投影。详见[独立场景](./scenes.md)。
 - **结构历史引用**：Core undo删除实体前按语义扫描保留`ChapterVersion.scene_snapshot.raw`的POV／typed引用，不把任意JSON整数当ID。只剩历史引用也须拒绝删目标；本批effect将同一历史一起删除／撤回引用时按拟恢复图允许，不能blanket deny。失败保留历史和目标、完整备份仍可再导入。
 - **目录代次**：`fields_revision/categories_revision/ai_visibility_revision/ai_history_epoch` 从备份和 effects 项目列快照／比较／恢复集合排除；受影响目录从当前高水位递增，失败不增。还原后同事务重验字段、分类、链接及每行项目 scope，再 `materialize_project`。预览对新 ID 及 JSON 里的 option／handle 语义归一。详见[字段恢复合同](./setting-fields.md)与[分类恢复合同](./setting-categories.md)。

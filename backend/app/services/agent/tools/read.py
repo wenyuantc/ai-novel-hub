@@ -156,10 +156,13 @@ async def project_for_model(ctx: ToolCtx, project: Project) -> dict:
     visible = StyleBrief(
         id=style.id, name=style.name, description=style.description, is_preset=style.user_id is None,
     ) if style is not None else None
-    return serialized(out.model_copy(update={
+    # 笔名仅供人工署名展示；不能因 ProjectOut 增加字段而将私人库身份发给模型。
+    payload = serialized(out.model_copy(update={
         "default_style_id": style.id if style is not None else None,
         "default_style": visible,
     }))
+    payload.pop("pen_name", None)
+    return payload
 
 
 async def overview(ctx: ToolCtx, args: EmptyArgs) -> dict:

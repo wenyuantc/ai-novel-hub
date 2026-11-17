@@ -326,12 +326,19 @@ def _project(
         if parsed is not None:
             projected = _project(parsed, visible, identities, user_id, project_id, is_owner, depth + 1,
                                  inherited_task_key, in_preview)
+            if projected is _DROP:
+                return "[内部内容已隐藏]"
             return value if projected == parsed else json.dumps(projected, ensure_ascii=False)
         # 截断的 JSON 无法结构化投影；对可能包含内部预览 hash 的片段失败关闭。
         if partial_private(value, in_preview=in_preview):
             return "[内部内容已隐藏]"
         return value
+    # 内部图片绑定效果只供撤销：不能经 ChangeOut、聊天或历史投影泄露资源身份。
+    if value.get("table") == "setting_thumbnail_bindings":
+        return _DROP
     field = value.get("field")
+    if isinstance(field, str) and field.startswith("setting_thumbnail_bindings."):
+        return _DROP
     if normalized_private_path(field):
         return _DROP
     if isinstance(field, str) and field.startswith("projects.") and field.endswith(".style"):

@@ -5,6 +5,7 @@ import type { CharacterCareerBadge } from '../../api/careers'
 import { lifeStatusLabel, roleTypeColor } from '../../api/characters'
 import type { Character } from '../../api/types'
 import { characterAgeLabel } from '../../utils/characterList'
+import { SettingThumbnail } from './SettingThumbnail'
 
 interface Props {
   character: Character
@@ -55,6 +56,7 @@ export default function CharacterCard({ character, career, selectable, selected,
   return (
     <article className={`character-card${selected ? ' character-card-selected' : ''}`} aria-label={`角色：${character.name}`}>
       <header className="character-card-header">
+        <SettingThumbnail target={{ scope: 'project', projectId: character.project_id, kind: 'character', entryId: character.id }} thumbnail={character.thumbnail} name={character.name} />
         {selectable && <Checkbox aria-label={`选择角色：${character.name}`} checked={selected} onChange={(event) => onSelect(event.target.checked)} />}
         <h2 className="character-card-heading">
           <CharacterTextPreview title="角色姓名" text={character.name}>

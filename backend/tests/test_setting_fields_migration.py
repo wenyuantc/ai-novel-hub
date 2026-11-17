@@ -176,9 +176,25 @@ def _create_pre_scene_anchor_contract(connection):
     ).create(connection)
 
 
+def _schema_0055_model_contract(inspector, table):
+    """0056 为缩略图复合外键新增的索引不属于更早版本。"""
+    contract = _schema_contract(inspector, table)
+    added_index = {
+        "organizations": ("uq_organizations_project_id_id", "project_id"),
+        "careers": ("uq_careers_project_id_id", "project_id"),
+        "series_entries": ("uq_series_entries_series_id_id", "series_id"),
+    }.get(table)
+    if added_index is not None:
+        name, scope_column = added_index
+        columns, unique, options = contract["indexes"].pop(name)
+        assert columns == (scope_column, "id") and unique
+        assert not options.get("sqlite_where") and not options.get("postgresql_where")
+    return contract
+
+
 def _schema_0037_model_contract(inspector, table):
     """0038系列索引、0039场景锚点不混入0037及之前的冻结结构比较。"""
-    contract = _schema_contract(inspector, table)
+    contract = _schema_0055_model_contract(inspector, table)
     index = {
         "projects": "uq_projects_id_user_id",
         "characters": "uq_characters_project_id_id",

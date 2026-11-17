@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端架构和相关规范入口"}
+{"file":".trellis/spec/frontend/index.md","reason":"前端组件、状态及 API 规范入口"}
+{"file":".trellis/spec/backend/setting-thumbnails.md","reason":"缩略图存储、权限、标准化、版本与系列共享合同"}
+{"file":".trellis/spec/backend/setting-ai-visibility.md","reason":"条目 AI 资格、字段过滤及实际出站门禁"}
+{"file":".trellis/spec/backend/project-cover.md","reason":"图片模型选择、预览交互和作品协作发送保护"}
+{"file":".trellis/spec/backend/series-settings.md","reason":"系列共享条目和系列至作品的锁序及投影"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端质量、受信 Provider、隔离测试和 README 要求"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、构建、测试与用户交互质量要求"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"API、授权、图片及界面跨层变更检查"}
+{"file":".trellis/tasks/11-17-setting-thumbnail-ai-generation/research/image-generation-backend.md","reason":"现有图片模型、可见性、系列独立授权、确认凭据和 ABA 研究"}
+{"file":".trellis/tasks/11-17-setting-thumbnail-ai-generation/research/image-generation-frontend.md","reason":"现有图片控件、模型选择、草稿和 UI 竞态研究"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "提示词模板注册、个人覆盖、沙箱变量与组件引用合同"}
+{"file": ".trellis/tasks/11-17-setting-thumbnail-ai-generation/research/saved-thumbnail-prompt-templates.md", "reason": "提示词模板注册、单段渲染、用户覆盖和深链研究"}

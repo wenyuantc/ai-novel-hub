@@ -16,6 +16,7 @@ const GLOBAL_GROUPS: NavGroup[] = [
     { to: '/book-import', label: '拆书导入', icon: <ImportOutlined /> },
   ] },
   { title: '创作资源', items: [
+    { to: '/novel-templates', label: '小说模板', icon: <BookOutlined /> },
     { to: '/settings/ai', label: '模型配置', icon: <SettingOutlined /> },
     { to: '/settings/api-keys', label: 'API 密钥', icon: <KeyOutlined /> },
     { to: '/prompt-templates', label: '提示词模板', icon: <FileTextOutlined /> },

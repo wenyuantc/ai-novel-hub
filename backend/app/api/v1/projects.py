@@ -4,9 +4,11 @@ from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.export import DocumentExportRequest
+from app.schemas.pen_names import ProjectPenNameOut, ProjectPenNameUpdate
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, WizardProgressUpdate
 from app.services import export_service, project_access
 from app.services import project_service as svc
+from app.services.pen_name_service import set_project_pen_name
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -32,6 +34,13 @@ async def get_project(project_id: int, user: CurrentUser, db: DbDep) -> ProjectO
 async def update_project(project_id: int, body: ProjectUpdate, user: CurrentUser, db: DbDep) -> ProjectOut:
     project, notice = await svc.update_project(db, user.id, project_id, body)
     return await svc.project_out(db, project, notice, actor_user_id=user.id)
+
+
+@router.put("/{project_id}/pen-name", response_model=ProjectPenNameOut)
+async def update_project_pen_name(
+    project_id: int, body: ProjectPenNameUpdate, user: CurrentUser, db: DbDep,
+) -> ProjectPenNameOut:
+    return await set_project_pen_name(db, user.id, project_id, body.pen_name_id)
 
 
 @router.patch("/{project_id}/wizard-progress", response_model=ProjectOut)

@@ -1,10 +1,11 @@
 import { BulbOutlined, CloudDownloadOutlined, DownloadOutlined, ExperimentOutlined, RocketOutlined } from '@ant-design/icons'
 import { App, Button, Card, Descriptions, Form, Input, Progress, Select, Space, Statistic, Switch, Typography } from 'antd'
-import { lazy, Suspense, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type MutableRefObject } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { analysisApi } from '../../api/analysis'
 import { errorMessage } from '../../api/client'
 import { PROJECT_STATUS, projectApi } from '../../api/projects'
+import { penNamesApi } from '../../api/penNames'
 import type { Project, ProjectStatus, ProjectUpdate } from '../../api/types'
 import ExportModal from '../../components/ExportModal'
 import ProjectInfoFields from '../../components/ProjectInfoFields'
@@ -12,6 +13,7 @@ import CoverPanel from '../../components/project/CoverPanel'
 import DeleteProjectModal from '../../components/project/DeleteProjectModal'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import StyleSelect from '../../components/styles/StyleSelect'
+import PenNameSelect from '../../components/shelf/PenNameSelect'
 import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { formatWordCount, projectInfoBody, wordsProgress, type ProjectInfoValues } from '../../utils/projectFields'
@@ -20,20 +22,67 @@ import { formatTime } from '../../utils/time'
 
 // 备份弹窗（含 api/transfer.ts、utils/transfer.ts）按需加载，不进入口 chunk
 const BackupModal = lazy(() => import('../../components/transfer/BackupModal'))
+const SaveNovelTemplateModal = lazy(() => import('../../components/novelTemplates/SaveNovelTemplateModal'))
 
 /** 表单内的分栏：行距交给 Form.Item 自身的下边距。 */
 const formRow: CSSProperties = { ...splitRow, rowGap: 0 }
 
 export default function OverviewPanel() {
   const project = useProjectStore((s) => s.project)
+  const scopeVersion = useProjectStore((s) => s.scopeVersion)
   const { canUseAI } = useProjectAccess(project?.id ?? NaN)
+  const penNameVersionRef = useRef(0)
+  const [templateSession, setTemplateSession] = useState<{ projectId: number; scopeVersion: number } | null>(null)
   if (!project) return null
   // 以项目 id + 更新时间为 key，保存后表单以最新数据重建；分析设置不放在其中，切换开关不会重置未保存的表单
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <OverviewInner key={`${project.id}-${project.updated_at}`} project={project} />
+      <ProjectAuthor key={`${project.id}:${scopeVersion}`} project={project} penNameVersionRef={penNameVersionRef} />
+      <OverviewInner key={`${project.id}-${project.updated_at}`} project={project} penNameVersionRef={penNameVersionRef} onOpenTemplate={() => setTemplateSession({ projectId: project.id, scopeVersion })} />
       {canUseAI && <AnalysisSettingsCard project={project} />}
+      {project.access.role === 'owner' && templateSession?.projectId === project.id && templateSession.scopeVersion === scopeVersion && <Suspense fallback={null}>
+        <SaveNovelTemplateModal key={`${project.id}:${scopeVersion}`} projectId={project.id} projectTitle={project.title} onClose={() => setTemplateSession(null)} onSaved={() => setTemplateSession(null)} />
+      </Suspense>}
     </Space>
+  )
+}
+
+/** 署名独立写入：只合并笔名，不重建基本信息草稿。 */
+function ProjectAuthor({ project, penNameVersionRef }: { project: Project; penNameVersionRef: MutableRefObject<number> }) {
+  const { message } = App.useApp()
+  const setProject = useProjectStore((s) => s.setProject)
+  const [saving, setSaving] = useState(false)
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+
+  const change = async (penNameId: number | null) => {
+    if (saving || project.access.role !== 'owner') return
+    const scope = captureProjectScope(project.id)
+    const isCurrent = () => mounted.current && isProjectScopeCurrent(scope)
+      && useProjectStore.getState().project?.access.role === 'owner'
+    if (!isCurrent()) return
+    setSaving(true)
+    try {
+      const result = await penNamesApi.setProject(project.id, penNameId, { isCurrent })
+      const current = useProjectStore.getState().project
+      if (!isCurrent() || !current || result.project_id !== current.id) return
+      penNameVersionRef.current += 1
+      setProject({ ...current, pen_name: result.pen_name }, scope)
+      message.success('作品署名已更新')
+    } catch (err) {
+      if (isCurrent()) message.error(errorMessage(err))
+    } finally {
+      if (isCurrent()) setSaving(false)
+    }
+  }
+
+  return (
+    <Card size="small" title="作品署名">
+      {project.access.role === 'owner' ? <div style={{ maxWidth: 360 }}>
+        <PenNameSelect value={project.pen_name?.id ?? null} currentName={project.pen_name?.name} disabled={saving} onChange={(value) => void change(value)} />
+        <Typography.Text type="secondary">未设置时显示账号名；可在我的作品中管理笔名。</Typography.Text>
+      </div> : <Typography.Text>{project.pen_name?.name ?? project.owner?.username ?? '未设置'}</Typography.Text>}
+    </Card>
   )
 }
 
@@ -104,7 +153,7 @@ function AnalysisSettingsCard({ project }: { project: Project }) {
   )
 }
 
-function OverviewInner({ project }: { project: Project }) {
+function OverviewInner({ project, penNameVersionRef, onOpenTemplate }: { project: Project; penNameVersionRef: MutableRefObject<number>; onOpenTemplate: () => void }) {
   const { message } = App.useApp()
   const { managingOther, isCollaborator, canUseAI, canUseOwnerAI, canUseOwnerAINow, canEdit, canEditNow, canRecycle, canExport, canBackup } = useProjectAccess(project.id)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -143,6 +192,7 @@ function OverviewInner({ project }: { project: Project }) {
     if (!canEditNow()) return
     const scope = captureProjectScope(project.id)
     if (!scope) return
+    const currentPenNameVersion = penNameVersionRef.current
     setSaving(true)
     try {
       if (!canEditNow()) return
@@ -157,7 +207,10 @@ function OverviewInner({ project }: { project: Project }) {
         ...projectInfoBody(v),
       })
       if (!canEditNow() || !isProjectScopeCurrent(scope)) return
-      setProject(updated, scope)
+      const current = useProjectStore.getState().project
+      // 署名保存先于本请求返回时，保留本轮已确认的署名，避免旧表单响应覆盖。
+      setProject(current && current.id === updated.id && currentPenNameVersion !== penNameVersionRef.current
+        ? { ...updated, pen_name: current.pen_name } : updated, scope)
       message.success('已保存')
       if (updated.notice) message.info(updated.notice)
     } catch (err) {
@@ -199,7 +252,7 @@ function OverviewInner({ project }: { project: Project }) {
             )}
           </Card>
         </div>
-        {(canUseAI || canExport || canBackup) && <div style={splitPane(400)}>
+        {(canUseAI || canExport || canBackup || project.access.role === 'owner') && <div style={splitPane(400)}>
           <Card>
             <Space wrap>
               {canUseAI && <Button icon={<RocketOutlined />} onClick={() => navigate(`/projects/${project.id}/wizard`)}>
@@ -214,6 +267,7 @@ function OverviewInner({ project }: { project: Project }) {
               {canBackup && <Button icon={<CloudDownloadOutlined />} onClick={() => setBackupOpen(true)}>
                 备份项目
               </Button>}
+              {project.access.role === 'owner' && <Button onClick={onOpenTemplate}>保存为小说模板</Button>}
             </Space>
           </Card>
         </div>}

@@ -4,7 +4,8 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, errorMessage } from '../../api/client'
 import { progressionApi } from '../../api/progressions'
 import { worldApi } from '../../api/story'
-import type { SettingBaseline, WorldCategory, WorldSetting, WorldSettingInput } from '../../api/types'
+import type { SettingBaseline, SettingThumbnailInfo, WorldCategory, WorldSetting, WorldSettingInput } from '../../api/types'
+import { createThumbnailRevision } from '../entities/thumbnailSync'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
@@ -31,6 +32,7 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
   const loads = useRef(createRecycleRequestGate())
   const activeTicket = useRef<number | null>(null)
   const itemRef = useRef<WorldSetting | null>(null)
+  const thumbnailRevision = useRef(createThumbnailRevision())
   const initialRef = useRef<WorldFormValues | null>(null)
   const baselineRef = useRef<SettingBaseline | null>(null)
   const blocked = useRef(false)
@@ -60,9 +62,11 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
     setBaselineLoading(true)
     setBaselineError('')
     const stillLoading = () => current(ticket) && loads.current.isCurrent(loadTicket) && !controller.signal.aborted
+    const thumbnailTicket = thumbnailRevision.current.capture()
     try {
-      const { baseline: next, item: latest } = await readConsistentWorldSnapshot(projectId, item.id, controller.signal)
+      const { baseline: next, item: result } = await readConsistentWorldSnapshot(projectId, item.id, controller.signal)
       if (!stillLoading()) return
+      const latest = thumbnailRevision.current.merge(result, itemRef.current, thumbnailTicket)
       const initial = initialRef.current
       if (!initial || typeof next.baseline.content !== 'string') throw new Error('基础设定内容不完整，请刷新后重试')
       if (mode === 'reconcile' && (!worldBaselineMatches(initial, next.baseline) || !worldMetadataMatches(initial, latest))) {
@@ -179,6 +183,15 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
     }
   }
 
+  const updateThumbnail = (thumbnail: SettingThumbnailInfo | null, thumbnailEditable?: boolean) => {
+    const item = itemRef.current
+    if (!item) return
+    thumbnailRevision.current.changed()
+    const permission = thumbnailEditable === undefined ? {} : { thumbnail_editable: thumbnailEditable }
+    itemRef.current = { ...item, thumbnail, ...permission }
+    setEditing((previous) => previous?.id === item.id ? { ...previous, thumbnail, ...permission } : previous)
+  }
+
   const confirmBaseline = async () => {
     const ticket = activeTicket.current
     const base = baselineRef.current
@@ -223,6 +236,6 @@ export function useWorldBaselineEditor(projectId: number, form: FormInstance<Wor
 
   return {
     editing, open: open && openScope === scope && canRead, saving, baseline, baselineLoading, baselineError, baselineConflict,
-    openEditor, closeEditor, save, reloadBaseline, progressionChanged, confirmBaseline,
+    openEditor, closeEditor, save, reloadBaseline, progressionChanged, confirmBaseline, updateThumbnail,
   }
 }

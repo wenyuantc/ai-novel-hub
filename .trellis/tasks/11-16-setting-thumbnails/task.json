@@ -1,0 +1,28 @@
+{
+  "id": "setting-thumbnails",
+  "name": "setting-thumbnails",
+  "title": "设定条目缩略图",
+  "description": "为角色、地点等设定条目配置和展示缩略图，明确图片入口、设定类型和转移兼容。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-11-16",
+  "completedAt": null,
+  "branch": "codex/pen-names-templates-thumbnails",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "11-16-pen-names-templates-thumbnails",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_review": "approved_2026-11-16"
+  }
+}

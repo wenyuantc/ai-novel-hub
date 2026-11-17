@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.setting_image import ThumbnailMeta
+
 CareerKind = Literal["main", "sub"]
 
 MAX_STAGES = 100
@@ -64,6 +66,7 @@ class CareerOut(BaseModel):
     sort: int
     stages: list[StageOut]
     holder_count: int = 0
+    thumbnail: ThumbnailMeta | None = None
     created_at: datetime
     updated_at: datetime
 

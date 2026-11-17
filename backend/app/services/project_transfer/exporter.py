@@ -24,15 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, GenerationLog, InspirationSession, Project, ProjectCover, WritingStyle
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
-from app.services import personal_projection, project_lifecycle, setting_ai_visibility
+from app.services import authorization_service, personal_projection, project_lifecycle, setting_ai_visibility
 from app.services.project_service import get_owned_project
+from app.services.project_transfer import thumbnails
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 9
+VERSION = 11
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0052"
+APP_SCHEMA = "0057"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -45,8 +46,14 @@ STYLE_FIELDS = ("name", *FIELD_LIMITS)
 class ExportPlan:
     project_id: int
     owner_id: int
+    last_deleted_at: datetime | None
     title: str
     options: BackupOptions
+    actor: authorization_service.AuthenticatedActor | int
+    image_versions: dict[tuple[str, int], str]
+    ai_revision: int
+    planning_revision: int
+    content_revisions: dict[int, int]
 
     @property
     def filename(self) -> str:
@@ -66,7 +73,14 @@ def included_tables(options: BackupOptions) -> set[str]:
 
 async def prepare_export(db: AsyncSession, user_id: int, project_id: int, options: BackupOptions) -> ExportPlan:
     project = await get_owned_project(db, user_id, project_id)
-    return ExportPlan(project_id=project.id, owner_id=project.user_id, title=project.title, options=options)
+    content_revisions = dict((await db.execute(select(Chapter.id, Chapter.content_revision)
+        .where(Chapter.project_id == project.id))).all())
+    return ExportPlan(project_id=project.id, owner_id=project.user_id, last_deleted_at=project.last_deleted_at,
+                      title=project.title, options=options,
+                      actor=authorization_service.actor_snapshot(db, user_id),
+                      image_versions=await thumbnails.versions(db, project.id),
+                      ai_revision=project.ai_visibility_revision, planning_revision=project.planning_revision,
+                      content_revisions=content_revisions)
 
 
 def _value(v: Any) -> Any:
@@ -205,11 +219,22 @@ def _scope(rule: TableRule, plan: ExportPlan):
 
 
 async def _assert_export_active(db: AsyncSession, plan: ExportPlan) -> None:
-    if await db.scalar(select(Project.id).where(
-        Project.id == plan.project_id, *project_lifecycle.active_conditions()
-    )) is None:
+    row = (await db.execute(select(Project.last_deleted_at).where(
+        Project.id == plan.project_id, Project.user_id == plan.owner_id, *project_lifecycle.active_conditions()
+    ))).one_or_none()
+    if row is None:
         # 已发送的片段无法撤回，剩余文件必须中止，而不是生成貌似有效的空备份。
         raise NotFoundError("项目不存在，备份导出已中止")
+    _assert_same_lifecycle(plan, row.last_deleted_at)
+
+
+def _assert_same_lifecycle(plan: ExportPlan, current: datetime | None) -> None:
+    original = plan.last_deleted_at
+    if ((original is None) != (current is None)
+            or (original is not None and current is not None
+                and project_lifecycle.as_utc(original) != project_lifecycle.as_utc(current))):
+        raise ConflictError("备份导出期间作品已回收或恢复，请重新导出",
+                            extra={"code": "project_lifecycle_changed"})
 
 
 async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> AsyncIterator[Any]:
@@ -265,6 +290,11 @@ async def _styles(db: AsyncSession, project: Project) -> tuple[list[dict[str, An
 
 
 async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: ExportPlan) -> AsyncIterator[bytes]:
+    async for chunk in thumbnails.bounded_stream(_stream_export(sessionmaker, plan)):
+        yield chunk
+
+
+async def _stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: ExportPlan) -> AsyncIterator[bytes]:
     included = included_tables(plan.options)
     exported_log_ids: set[int] = set()
     async with sessionmaker() as db:
@@ -275,12 +305,12 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             # 校验归属之后、开始写出之前项目被删除：输出一个无法导入的空文件
             yield b"{}"
             return
-        ai_revision = project.ai_visibility_revision
-        planning_revision = project.planning_revision
-        content_revisions = dict((await db.execute(select(Chapter.id, Chapter.content_revision)
-            .where(Chapter.project_id == project.id))).all())
         styles, refs = await _styles(db, project)
         cover = await db.get(ProjectCover, project.id)
+        from app.services.pen_name_service import project_pen_name
+
+        pen_name = await project_pen_name(db, project.id)
+        await authorization_service.require_authenticated(db, plan.actor)
         head = {
             "format": FORMAT,
             "version": VERSION,
@@ -288,6 +318,7 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
             "app_schema": APP_SCHEMA,
             "options": plan.options.model_dump(),
             "styles": styles,
+            "pen_name": pen_name,
             "cover": {"mime_type": cover.mime_type, "data": base64.b64encode(cover.data).decode("ascii")}
             if cover is not None else None,
         }
@@ -295,7 +326,14 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
         project_row = (await db.execute(select(Project.__table__).where(Project.id == project.id))).mappings().one()
         project_data = _row(PROJECT_RULE, project_row, included)
         project_data["default_style_ref"] = refs.get(project.default_style_id) if project.default_style_id else None
-        yield (_dumps(head)[:-1] + ',"project":' + _dumps(project_data) + ',"tables":{').encode("utf-8")
+        yield (_dumps(head)[:-1] + ',"project":' + _dumps(project_data) + ',"thumbnails":[').encode("utf-8")
+        first_image = True
+        async for image in thumbnails.iter_serialized(db, plan.image_versions):
+            await _assert_export_active(db, plan)
+            yield (("" if first_image else ",") + _dumps(image)).encode("utf-8")
+            first_image = False
+        await _assert_export_active(db, plan)
+        yield b'],"tables":{'
         for t_index, rule in enumerate(r for r in RULES if r.table in included):
             await _assert_export_active(db, plan)
             prefix = "," if t_index else ""
@@ -324,13 +362,25 @@ async def stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: Ex
                 yield (("" if first else ",") + ",".join(buffer)).encode("utf-8")
             yield b"]"
         # 新策略跨实体、字段、链接多表写入。不能结束一个混合新旧限制的可导入文件。
-        await setting_ai_visibility.check_visibility_revision(db, plan.project_id, ai_revision)
-        current_revisions = dict((await db.execute(select(Chapter.id, Chapter.content_revision)
-            .where(Chapter.project_id == project.id))).all())
-        current_planning = await db.scalar(select(Project.planning_revision).where(Project.id == project.id))
-        if current_revisions != content_revisions or current_planning != planning_revision:
-            raise ConflictError("备份导出期间章节或场景已变化，请重新导出", extra={"code": "scene_context_changed"})
+        await validate_export(db, plan)
         yield b"}}"
+
+
+async def validate_export(db: AsyncSession, plan: ExportPlan, *, complete: bool = True) -> None:
+    """发送前和最后的闭合符之前复验原身份、作品及快照。"""
+    await authorization_service.require_authenticated(db, plan.actor)
+    project = await get_owned_project(db, plan.owner_id, plan.project_id)
+    _assert_same_lifecycle(plan, project.last_deleted_at)
+    if not complete:
+        return
+    await setting_ai_visibility.check_visibility_revision(db, plan.project_id, plan.ai_revision)
+    current_revisions = dict((await db.execute(select(Chapter.id, Chapter.content_revision)
+        .where(Chapter.project_id == plan.project_id))).all())
+    current_planning = await db.scalar(select(Project.planning_revision).where(Project.id == plan.project_id))
+    if await thumbnails.versions(db, plan.project_id) != plan.image_versions:
+        raise ConflictError("备份导出期间缩略图已变化，请重新导出", extra={"code": "thumbnail_changed"})
+    if current_revisions != plan.content_revisions or current_planning != plan.planning_revision:
+        raise ConflictError("备份导出期间章节或场景已变化，请重新导出", extra={"code": "scene_context_changed"})
 
 
 # ---------------- 大小估算 ----------------
@@ -364,4 +414,15 @@ async def estimate(db: AsyncSession, user_id: int, project_id: int) -> BackupEst
     cover_size = await db.scalar(select(func.length(ProjectCover.data)).where(ProjectCover.project_id == project_id))
     if cover_size is not None:
         groups["core"].bytes += 4 * ((cover_size + 2) // 3)
+    image_versions = await thumbnails.versions(db, project_id)
+    if image_versions:
+        from app.models.setting_images import SettingImageResource
+
+        ids = list(set(image_versions.values()))
+        sizes = {}
+        for offset in range(0, len(ids), 400):
+            rows = await db.execute(select(SettingImageResource.id, SettingImageResource.byte_size)
+                                    .where(SettingImageResource.id.in_(ids[offset:offset + 400])))
+            sizes.update(dict(rows.all()))
+        groups["core"].bytes += sum(4 * ((sizes.get(version, 0) + 2) // 3) for version in image_versions.values())
     return BackupEstimate(**groups)

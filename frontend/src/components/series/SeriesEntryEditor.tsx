@@ -1,13 +1,20 @@
 import { Alert, Button, Checkbox, Descriptions, Form, Input, Modal, Select, Space, Switch, Typography } from 'antd'
-import { useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import { cleanAliases } from '../../api/characters'
 import { ApiError, errorMessage } from '../../api/client'
 import { seriesApi, type SeriesAiSettings, type SeriesCharacterData, type SeriesEntry, type SeriesEntryInput, type SeriesKind, type SeriesMutation, type SeriesWorldData } from '../../api/series'
+import { deleteThumbnail, putThumbnail, thumbnailFileError } from '../../api/settingThumbnails'
+import type { SettingThumbnailInfo } from '../../api/types'
+import { ThumbnailControls, ThumbnailNewHint } from '../entities/SettingThumbnail'
+import { invalidateProject } from '../../utils/projectRefresh'
 import { WORLD_CATEGORIES, WORLD_CATEGORY_LABELS } from '../../utils/world'
 import { normalizeExclusions } from '../settingAi/settingAiDraft'
 import { SETTING_AI_MODES, SETTING_AI_MODE_OPTIONS, settingAiFieldLabel } from '../settingAi/settingAiOptions'
-import { diffSeriesValues, rebaseSeriesAi, SERIES_AI_DEFAULTS, seriesEntryName, seriesNeedsReview } from './seriesState'
-import { useSeriesAction } from './useSeriesAction'
+import { diffSeriesValues, rebaseSeriesAi, SERIES_AI_DEFAULTS, seriesEntryName, seriesNeedsReview, seriesSettingResources } from './seriesState'
+import { currentSeriesIdentity, useSeriesAction } from './useSeriesAction'
+import { useSeriesAccessLoss, useSeriesAuthorization } from './seriesAccessContext'
+
+const SettingThumbnailGenerateModal = lazy(() => import('../entities/SettingThumbnailGenerateModal'))
 
 type Draft = {
   data: Partial<SeriesCharacterData & SeriesWorldData>
@@ -47,21 +54,30 @@ interface Props {
   revision: number
   onClose: () => void
   onDone: (result: SeriesMutation, previous: SeriesEntry | null) => void
+  onThumbnailChange: (entry: SeriesEntry, thumbnail: SettingThumbnailInfo | null, revision: number) => void
 }
 
-export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onClose, onDone }: Props) {
+export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onClose, onDone, onThumbnailChange }: Props) {
   const [form] = Form.useForm<Draft>()
   const [base, setBase] = useState(() => ({ revision, draft: entry ? { data: entry.data, ai_settings: entry.ai_settings } : emptyEntry(kind) }))
   const [review, setReview] = useState(false)
+  const [thumbnail, setThumbnail] = useState(entry?.thumbnail ?? null)
+  const [thumbnailError, setThumbnailError] = useState<string | null>(null)
   const [latest, setLatest] = useState<{ revision: number; item: SeriesEntry | null } | null>(null)
+  const [generation, setGeneration] = useState<{ identity: string; ticket: number; revision: number; version: string | null } | null>(null)
   const action = useSeriesAction()
-  const waitingForReview = review || (action.error !== null && seriesNeedsReview(action.error))
+  const operation = useRef(false)
+  const authorization = useSeriesAuthorization()
+  const accessLoss = useSeriesAccessLoss()
+  const waitingForReview = review || (action.error !== null && (seriesNeedsReview(action.error)
+    || action.error instanceof ApiError && action.error.status === 409 && action.error.body?.code === 'thumbnail_changed'))
   const uncertainCreate = !entry && action.error !== null && seriesNeedsReview(action.error)
     && !(action.error instanceof ApiError && action.error.status === 409)
   const aiMode = Form.useWatch(['ai_settings', 'ai_mode'], form) ?? base.draft.ai_settings.ai_mode
 
   const save = () => {
-    if (waitingForReview) return
+    if (waitingForReview || operation.current) return
+    operation.current = true
     void action.run(async (current) => {
       const value = await form.validateFields().catch(() => null)
       if (!value || !current()) return null
@@ -71,10 +87,12 @@ export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onC
         data: diffSeriesValues(base.draft.data, input.data),
         ai_settings: diffSeriesValues(base.draft.ai_settings, input.ai_settings),
       })
-    }, (result) => { if (result) onDone(result, entry) })
+    }, (result) => { if (result) onDone(result, entry) }).finally(() => { operation.current = false })
   }
 
   const readLatest = () => {
+    if (operation.current) return
+    operation.current = true
     setReview(true)
     void action.run(async () => {
       const before = await seriesApi.get(seriesId)
@@ -83,7 +101,7 @@ export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onC
       const after = await seriesApi.get(seriesId)
       if (before.revision !== after.revision) throw new Error('共享库仍在变化，请再次读取最新版本。')
       return { revision: after.revision, item }
-    }, setLatest)
+    }, setLatest).finally(() => { operation.current = false })
   }
 
   const adoptLatest = () => {
@@ -96,18 +114,50 @@ export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onC
         ai_settings: rebaseSeriesAi(base.draft.ai_settings, draft.ai_settings, snapshot.ai_settings),
       })
       setBase({ revision: latest.revision, draft: snapshot })
+      setThumbnail(latest.item.thumbnail ?? null)
+      if (entry) onThumbnailChange(entry, latest.item.thumbnail ?? null, latest.revision)
     } else setBase((old) => ({ ...old, revision: latest.revision }))
     setLatest(null)
     setReview(false)
+    setThumbnailError(null)
     action.clearError()
+  }
+
+  const changeThumbnail = (file?: File) => {
+    if (!entry || waitingForReview || action.busy || generation || operation.current) return
+    const validation = file ? thumbnailFileError(file) : null
+    setThumbnailError(validation)
+    if (validation) return
+    operation.current = true
+    const target = { scope: 'series' as const, seriesId, entryId: entry.id }
+    void action.run(async (current) => {
+      const result = file ? await putThumbnail(target, file, thumbnail?.version ?? null, current, base.revision)
+        : await deleteThumbnail(target, thumbnail?.version ?? null, current, base.revision)
+      if (!result || !('thumbnail' in result)) throw new Error('图片保存响应无效，请重新读取。')
+      return result
+    }, (result) => {
+      setThumbnail(result.thumbnail)
+      setBase((old) => ({ ...old, revision: result.revision }))
+      onThumbnailChange(entry, result.thumbnail, result.revision)
+    }).finally(() => { operation.current = false })
   }
 
   return <Modal open title={entry ? `编辑共享基础 · ${seriesEntryName(entry)}` : kind === 'character' ? '新增共享角色' : '新增共享世界观'}
     onOk={save} onCancel={onClose} okText="保存共享基础" cancelText="取消" confirmLoading={action.busy}
-    okButtonProps={{ disabled: waitingForReview }} maskClosable={false} closable={!action.busy}
-    keyboard={!action.busy} cancelButtonProps={{ disabled: action.busy }} width={650}>
+    okButtonProps={{ disabled: waitingForReview || !!generation }} maskClosable={false} closable={!action.busy && !generation}
+    keyboard={!action.busy && !generation} cancelButtonProps={{ disabled: action.busy || !!generation }} width={650}>
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Alert type="info" showIcon message="修改共享基础会同步到采用此条目的作品；各书的剧情变化仍各自保留。" />
+      {entry && <ThumbnailControls target={{ scope: 'series', seriesId, entryId: entry.id }} thumbnail={thumbnail}
+        name={seriesEntryName(entry)} editable={!waitingForReview} busy={action.busy} disabled={!!generation} error={thumbnailError}
+        onFile={changeThumbnail} onDelete={() => changeThumbnail()}
+        onGenerate={() => {
+          if (action.busy || waitingForReview || operation.current) return
+          operation.current = true
+          setGeneration({ identity: currentSeriesIdentity(), ticket: authorization.capture(),
+            revision: base.revision, version: thumbnail?.version ?? null })
+        }} />}
+      {!entry && <ThumbnailNewHint />}
       {!!action.error && <Alert type="error" showIcon message={errorMessage(action.error)} description="草稿已保留。" />}
       {waitingForReview && <Alert type="warning" showIcon message="共享库版本已更新或写入结果未确认"
         description={uncertainCreate ? '请先回到共享库核对该条目是否已创建，不要直接重复提交。' : '请读取最新设置并核对，再决定是否继续保存；不会自动重发。'}
@@ -129,7 +179,7 @@ export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onC
         </Descriptions>}
         <Button onClick={adoptLatest} disabled={action.busy} style={{ marginTop: 8 }}>保留我的修改并采用最新版本</Button>
       </div>}
-      <Form form={form} layout="vertical" initialValues={base.draft} disabled={action.busy}>
+      <Form form={form} layout="vertical" initialValues={base.draft} disabled={action.busy || !!generation}>
         <Form.Item name={['data', kind === 'character' ? 'name' : 'title']} label={kind === 'character' ? '姓名' : '标题'}
           rules={[{ required: true, whitespace: true, max: kind === 'character' ? 100 : 200 }]}>
           <Input />
@@ -171,5 +221,32 @@ export default function SeriesEntryEditor({ seriesId, kind, entry, revision, onC
         </Form.Item>
       </Form>
     </Space>
+    {entry && generation && <Suspense fallback={null}><SettingThumbnailGenerateModal
+      target={{ scope: 'series', seriesId, entryId: entry.id }} name={seriesEntryName(entry)}
+      version={generation.version} revision={generation.revision}
+      current={() => generation.identity === currentSeriesIdentity() && authorization.current(generation.ticket)}
+      onClose={() => { operation.current = false; setGeneration(null) }} onRequestError={accessLoss}
+      onApplied={(result) => {
+        if ('thumbnail' in result && generation.identity === currentSeriesIdentity() && authorization.current(generation.ticket)) {
+          setThumbnail(result.thumbnail)
+          setBase((old) => ({ ...old, revision: result.revision }))
+          onThumbnailChange(entry, result.thumbnail, result.revision)
+          operation.current = false
+          setGeneration(null)
+        }
+      }}
+      onConflict={(err) => {
+        if (generation.identity !== currentSeriesIdentity() || !authorization.current(generation.ticket)) return
+        operation.current = false
+        setGeneration(null)
+        setThumbnailError(`${errorMessage(err)}。请先读取最新版本，文字草稿会保留。`)
+        setReview(true)
+      }}
+      onOrphan={() => {
+        if (generation.identity === currentSeriesIdentity() && authorization.current(generation.ticket)) {
+          for (const use of entry.uses) invalidateProject(use.project_id, seriesSettingResources(entry.kind))
+        }
+      }}
+    /></Suspense>}
   </Modal>
 }

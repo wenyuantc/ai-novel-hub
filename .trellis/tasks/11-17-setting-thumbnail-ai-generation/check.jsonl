@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/index.md","reason":"定位受变更影响的后端合同"}
+{"file":".trellis/spec/frontend/index.md","reason":"定位受变更影响的前端合同"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端 lint、全量测试、隔离和文档门禁"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、构建、全量测试、移动端和文档门禁"}
+{"file":".trellis/spec/backend/setting-thumbnails.md","reason":"现有图片安全、系列和 CAS 回归检查"}
+{"file":".trellis/spec/backend/setting-ai-visibility.md","reason":"检查不可见字段、来源变化和真实发送保护"}
+{"file":".trellis/spec/backend/project-cover.md","reason":"复核作品协作及图片 Provider 安全边界"}
+{"file":".trellis/spec/backend/series-settings.md","reason":"复核系列锁序及共享图片传播"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"跨层契约及权限数据流检查"}
+{"file":".trellis/tasks/11-17-setting-thumbnail-ai-generation/research/image-generation-backend.md","reason":"检查真实物理发送、原邀请和图片版本的风险"}
+{"file":".trellis/tasks/11-17-setting-thumbnail-ai-generation/research/image-generation-frontend.md","reason":"检查权限作用域、预览、未保存草稿和移动交互"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "检查提示词模板注册、保存恢复、组件和用户隔离"}
+{"file": ".trellis/tasks/11-17-setting-thumbnail-ai-generation/research/saved-thumbnail-prompt-templates.md", "reason": "独立复核模板用户隔离、长度、系统段和默认文案"}

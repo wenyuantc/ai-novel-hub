@@ -650,6 +650,11 @@ async def validate_page_context(
 
 _PROJECT_TOOLS = frozenset({"get_project_overview", "update_project"})
 _STYLE_FIELDS = frozenset({"default_style_id", "default_style"})
+_IMAGE_LIST_TOOLS = frozenset({"list_characters", "list_world_settings", "list_organizations", "list_careers"})
+_IMAGE_ITEM_TOOLS = frozenset({
+    "get_character", "get_organization", "create_character", "update_character", "create_world_setting",
+    "update_world_setting", "create_organization", "update_organization", "create_career", "update_career",
+})
 
 
 def _project_style_for_history(value: Any, style: _HistoryProjectStyle | None, depth: int = 0) -> Any:
@@ -708,7 +713,34 @@ def _project_style_for_history(value: Any, style: _HistoryProjectStyle | None, d
     return value
 
 
-def _history_tool_content(content: Any, style: _HistoryProjectStyle | None, *, project_tool: bool) -> Any:
+def _history_image_tool_content(content: Any, *, list_tool: bool) -> str:
+    """按已知工具的结果结构移除实体级图片元数据，无法验证的片段失败关闭。"""
+    try:
+        parsed = json.loads(content) if isinstance(content, str) else None
+    except (ValueError, RecursionError):
+        parsed = None
+    data = parsed.get("data") if isinstance(parsed, dict) and parsed.get("untrusted") is True else None
+    if not isinstance(data, dict):
+        return tool_result({"error": "历史设定工具结果无法验证"})
+
+    def without_image(item: dict) -> dict:
+        return {key: value for key, value in item.items() if key not in {"thumbnail", "thumbnail_editable"}}
+
+    if list_tool and "items" in data:
+        items = data["items"]
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            return tool_result({"error": "历史设定工具结果无法验证"})
+        data = {**data, "items": [without_image(item) for item in items]}
+    elif list_tool and "error" not in data:
+        return tool_result({"error": "历史设定工具结果无法验证"})
+    else:
+        data = without_image(data)
+    return tool_result(data)
+
+
+def _history_tool_content(
+    content: Any, style: _HistoryProjectStyle | None, *, project_tool: bool, image_tool: str | None = None,
+) -> Any:
     content = _model_value(content)
     if project_tool:
         # 项目工具输出应是原生 tool_result 包装的 ProjectOut；截断或无法证明结构时整段隐藏。
@@ -722,12 +754,17 @@ def _history_tool_content(content: Any, style: _HistoryProjectStyle | None, *, p
                 or not _STYLE_FIELDS.issubset(data)):
             return tool_result({"error": "历史项目工具结果无法验证"})
         try:
-            safe = ProjectOut.model_validate(_project_style_for_history(data, style)).model_dump(mode="json")
+            safe = ProjectOut.model_validate(_project_style_for_history(data, style)).model_dump(
+                mode="json", exclude={"pen_name"},
+            )
         except (ValidationError, ValueError, TypeError):
             return tool_result({"error": "历史项目工具结果无法验证"})
         # 重建白名单响应，丢弃不可信包装及扩展字段，不修改原始回执。
         return tool_result(safe)
-    return _project_style_for_history(content, style)
+    content = _project_style_for_history(content, style)
+    if image_tool is not None:
+        return _history_image_tool_content(content, list_tool=image_tool in _IMAGE_LIST_TOOLS)
+    return content
 
 
 def _history_tool_calls(calls: Any, style: _HistoryProjectStyle | None) -> Any:
@@ -744,14 +781,17 @@ def _history_tool_calls(calls: Any, style: _HistoryProjectStyle | None) -> Any:
 def message_dict(
     row: AgentMessage, style: _HistoryProjectStyle | None = None, *, expected_tool_name: str | None = None,
 ) -> dict:
+    image_tool = next((name for name in (expected_tool_name, row.tool_name)
+                       if name in _IMAGE_LIST_TOOLS or name in _IMAGE_ITEM_TOOLS), None)
     if row.role == "tool" and not row.tool_call_id:
         # 撤销备注没有对应的 assistant.tool_calls，不能冒充原生 tool_result。
         return {"role": "user", "content": untrusted_text(_history_tool_content(
-            row.content, style, project_tool=row.tool_name in _PROJECT_TOOLS,
+            row.content, style, project_tool=row.tool_name in _PROJECT_TOOLS, image_tool=image_tool,
         ))}
     if row.role == "tool":
         content = _history_tool_content(
             row.content, style, project_tool=row.tool_name in _PROJECT_TOOLS or expected_tool_name in _PROJECT_TOOLS,
+            image_tool=image_tool,
         )
     else:
         content = (_project_style_for_history(_model_value(row.content), style)

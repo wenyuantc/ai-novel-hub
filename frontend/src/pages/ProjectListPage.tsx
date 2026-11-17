@@ -10,12 +10,14 @@ import { StudioEmpty, StudioPage, StudioPanel } from '../components/StudioUI'
 import ContinueWriting from '../components/shelf/ContinueWriting'
 import CreateProjectModal from '../components/shelf/CreateProjectModal'
 import LibraryBookCard from '../components/shelf/LibraryBookCard'
+import PenNamesModal from '../components/shelf/PenNamesModal'
 import DeleteProjectModal from '../components/project/DeleteProjectModal'
 import Invitations from '../components/collaboration/Invitations'
 import { useLoader } from '../hooks/useLoader'
+import { usePenNames } from '../hooks/usePenNames'
 import { useAuthStore } from '../stores/auth'
 import { isProjectAccess } from '../utils/projectAccess'
-import { DEFAULT_SHELF_PREFS, filterAndSort, latestWritingProject, readShelfPrefs, SHELF_SORT_OPTIONS, shelfStats, writeShelfPrefs, type ShelfPrefs, type ShelfStatusFilter } from '../utils/shelf'
+import { DEFAULT_SHELF_PREFS, filterAndSort, filterByPenName, latestWritingProject, readShelfPrefs, SHELF_SORT_OPTIONS, shelfStats, writeShelfPrefs, type ShelfPenNameFilter, type ShelfPrefs, type ShelfStatusFilter } from '../utils/shelf'
 import './ProjectListPage.css'
 
 const ImportBackupModal = lazy(() => import('../components/transfer/ImportBackupModal'))
@@ -46,13 +48,16 @@ function ProjectListContent() {
   const [exportId, setExportId] = useState<number | null>(null)
   const [backupId, setBackupId] = useState<number | null>(null)
   const [deleting, setDeleting] = useState<Project | null>(null)
+  const [penNamesOpen, setPenNamesOpen] = useState(false)
+  const [penNameFilter, setPenNameFilter] = useState<ShelfPenNameFilter>('all')
+  const penNames = usePenNames()
   const [prefs, setPrefs] = useState<ShelfPrefs>(readShelfPrefs)
   useEffect(() => writeShelfPrefs(prefs), [prefs])
-  const visible = useMemo(() => filterAndSort(projects, prefs), [projects, prefs])
+  const visible = useMemo(() => filterAndSort(filterByPenName(projects, penNameFilter), prefs), [projects, prefs, penNameFilter])
   const stats = useMemo(() => shelfStats(projects), [projects])
   const recent = useMemo(() => latestWritingProject(projects.filter((project) =>
     isProjectAccess(project.access) && project.access.can_edit_content)), [projects])
-  const filtering = prefs.query.trim() !== '' || prefs.status !== 'all'
+  const filtering = prefs.query.trim() !== '' || prefs.status !== 'all' || penNameFilter !== 'all'
   const createOpen = searchParams.get('create') === '1'
   const setCreateOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams)
@@ -63,18 +68,20 @@ function ProjectListContent() {
   const hint = loading && !projects.length ? '正在载入你的作品…' : error && !projects.length ? '暂时无法读取作品，请重试。' : `${stats.count} 部作品 · ${stats.words.toLocaleString()} 字，每个世界都在这里。`
 
   return (
-    <StudioPage title="我的作品" hint={hint} action={<Space wrap><Link to="/series">作品系列</Link><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button></Space>}>
+    <StudioPage title="我的作品" hint={hint} action={<Space wrap><Link to="/series">作品系列</Link><Button onClick={() => setPenNamesOpen(true)}>管理笔名</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button></Space>}>
       <Invitations onChanged={reload} />
       {recent && <ContinueWriting key={recent.id} project={recent} />}
       <div className="library-toolbar">
         <div className="library-filters" role="group" aria-label="作品状态筛选">{STATUS_FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={prefs.status === item.value} onClick={() => setPrefs((p) => ({ ...p, status: item.value }))}>{item.label}</button>)}</div>
         <div className="library-controls">
           <Input className="library-search" allowClear prefix={<SearchOutlined />} placeholder="搜索作品、题材或标签" aria-label="搜索作品、题材或标签" maxLength={100} value={prefs.query} onChange={(e) => setPrefs((p) => ({ ...p, query: e.target.value }))} />
+          <Select<ShelfPenNameFilter> className="library-pen-filter" aria-label="按笔名筛选" value={penNameFilter} onChange={setPenNameFilter} loading={penNames.loading} disabled={!!penNames.error} options={[{ value: 'all', label: '全部笔名' }, { value: 'unset', label: '未设置笔名' }, ...penNames.items.map((item) => ({ value: item.id, label: item.name }))]} />
           <Select className="library-sort" value={prefs.sort} onChange={(sort) => setPrefs((p) => ({ ...p, sort }))} options={SHELF_SORT_OPTIONS} aria-label="作品排序" />
           <Button className="library-view-toggle" aria-label={prefs.view === 'shelf' ? '切换为列表视图' : '切换为书架视图'} title={prefs.view === 'shelf' ? '列表视图' : '书架视图'} icon={prefs.view === 'shelf' ? <UnorderedListOutlined /> : <AppstoreOutlined />} onClick={() => setPrefs((p) => ({ ...p, view: p.view === 'shelf' ? 'list' : 'shelf' }))} />
         </div>
       </div>
       {filtering && !loading && <p className="library-filter-count" role="status">显示 {visible.length} / {projects.length} 部作品</p>}
+      {penNames.error && <Alert className="library-error" type="warning" showIcon message={`笔名加载失败：${penNames.error}`} action={<Button size="small" onClick={penNames.reload}>重试</Button>} />}
       {error && <Alert className="library-error" type="error" showIcon message={error} action={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={reload}>重试</Button>} />}
       <section aria-label="作品书库" aria-busy={loading}>
         {loading && !projects.length ? <div className={`${prefs.view === 'shelf' ? 'library-grid' : 'library-list'} library-loading`} role="status" aria-label="正在加载作品">{[0, 1, 2, 3].map((i) => (
@@ -86,7 +93,7 @@ function ProjectListContent() {
             <div className="library-book-footer"><div className="library-book-summary"><Skeleton.Input active size="small" className="library-book-meta-skeleton" /><Skeleton.Button active className="library-book-action-skeleton" /></div></div>
           </div>
         ))}</div> : !error || projects.length > 0 ? (
-          visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => setDeleting(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' }))}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
+          visible.length ? <Spin spinning={loading}><div className={prefs.view === 'shelf' ? 'library-grid' : 'library-list'}>{visible.map((project) => <LibraryBookCard key={project.id} project={project} onExport={() => setExportId(project.id)} onBackup={() => setBackupId(project.id)} onDelete={() => setDeleting(project)} />)}</div></Spin> : <StudioPanel><StudioEmpty title={projects.length ? '没有符合条件的作品' : '这里还没有故事'} text={projects.length ? '试试其他关键词，或清除筛选，重新看看你的故事。' : '新建一部作品，或从一个灵感开始，让第一个念头落在纸上。'} action={projects.length ? <Button onClick={() => { setPenNameFilter('all'); setPrefs((p) => ({ ...p, query: DEFAULT_SHELF_PREFS.query, status: 'all' })) }}>清除筛选</Button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button>} /></StudioPanel>
         ) : null}
       </section>
       <footer className="library-footer">
@@ -94,11 +101,12 @@ function ProjectListContent() {
         <Link to="/book-import"><ImportOutlined />导入已有小说</Link>
         <button type="button" onClick={() => setImportOpen(true)}><CloudUploadOutlined />恢复项目备份</button>
       </footer>
-      {exportId !== null && <ExportModal projectId={exportId} open onClose={() => setExportId(null)} />}
+      {exportId !== null && <ExportModal projectId={exportId} open fromShelf onClose={() => setExportId(null)} />}
       {backupId !== null && <Suspense fallback={null}><BackupModal projectId={backupId} onClose={() => setBackupId(null)} /></Suspense>}
       {importOpen && <Suspense fallback={null}><ImportBackupModal onClose={() => setImportOpen(false)} onImported={(project) => { setImportOpen(false); navigate(`/projects/${project.id}`) }} /></Suspense>}
       {deleting && <DeleteProjectModal key={deleting.id} project={deleting} onClose={() => setDeleting(null)} onDeleted={() => { setDeleting(null); reload() }} />}
-      <CreateProjectModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={(id) => navigate(`/projects/${id}/wizard`)} />
+      {penNamesOpen && <PenNamesModal items={penNames.items} loading={penNames.loading} error={penNames.error} reload={penNames.reload} onClose={() => setPenNamesOpen(false)} onChanged={(deletedId) => { if (deletedId === penNameFilter) setPenNameFilter('all'); penNames.reload(); reload() }} />}
+      <CreateProjectModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={(id, destination) => navigate(`/projects/${id}/${destination}`)} />
     </StudioPage>
   )
 }

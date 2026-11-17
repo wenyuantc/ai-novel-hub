@@ -45,7 +45,7 @@ async def test_agent_v6_replaces_only_one_scene_and_undo_preserves_stable_struct
         assert "error" not in result, result
         after = await effects.snapshot(db, project["id"])
         changes = effects.diff(before, after) + [_text_effect(result)]
-        assert all(effect["format_version"] == 6 for effect in changes)
+        assert all(effect["format_version"] == 7 for effect in changes)
         assert {"chapters", "scenes", "chapter_text"} <= {effect["table"] for effect in changes}
         await db.commit()
         stored = await db.get(Chapter, chapter["id"])

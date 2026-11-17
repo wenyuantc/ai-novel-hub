@@ -1,6 +1,6 @@
 """测试建库入口，避免数据库方言的DDL状态影响后续隔离库。"""
 
-from sqlalchemy import DDL, CheckConstraint, MetaData, event
+from sqlalchemy import DDL, CheckConstraint, MetaData, create_engine, event, inspect, select
 
 from app.models import Base
 from app.models.entities import _seed_preset_styles, _seed_relationship_types
@@ -47,3 +47,43 @@ def seed_isolated_schema(connection):
         ("skills", _seed_builtin_skills),
     ):
         callback(Base.metadata.tables[table], connection)
+
+
+def assert_sqlite_chapter_plan_fk_intact():
+    """真实 PG 建库后，原 ORM 元数据仍须创建可执行 SET NULL 的 SQLite 外键。"""
+    engine = create_engine("sqlite://")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            Base.metadata.create_all(connection)
+            keys = inspect(connection).get_foreign_keys("chapters")
+            assert any(
+                key["constrained_columns"] == ["plan_id"]
+                and key["referred_table"] == "chapter_plans"
+                and key["referred_columns"] == ["id"]
+                and key["options"].get("ondelete") == "SET NULL"
+                for key in keys
+            ), keys
+
+            tables = Base.metadata.tables
+            user_id = connection.execute(tables["users"].insert().values(
+                username="cross-dialect", password_hash="synthetic",
+            )).inserted_primary_key[0]
+            project_id = connection.execute(tables["projects"].insert().values(
+                user_id=user_id, title="跨方言测试",
+            )).inserted_primary_key[0]
+            outline_id = connection.execute(tables["outlines"].insert().values(
+                project_id=project_id, title="大纲",
+            )).inserted_primary_key[0]
+            plan_id = connection.execute(tables["chapter_plans"].insert().values(
+                project_id=project_id, outline_id=outline_id, seq=1, title="细纲",
+            )).inserted_primary_key[0]
+            chapter_id = connection.execute(tables["chapters"].insert().values(
+                project_id=project_id, plan_id=plan_id, title="正文", content="保留正文",
+            )).inserted_primary_key[0]
+            connection.execute(tables["chapter_plans"].delete().where(tables["chapter_plans"].c.id == plan_id))
+            chapter = tables["chapters"]
+            assert tuple(connection.execute(select(chapter.c.plan_id, chapter.c.content)
+                       .where(chapter.c.id == chapter_id)).one()) == (None, "保留正文")
+    finally:
+        engine.dispose()

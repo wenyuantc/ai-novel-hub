@@ -11,15 +11,18 @@ from app.core.errors import ConflictError, ForbiddenError, NotFoundError, Unauth
 from app.models import (
     AuthorizationState,
     Chapter,
+    PenName,
     Project,
     ProjectCollaborator,
     ProjectCover,
+    ProjectPenName,
     Series,
     SeriesBook,
     SeriesCollaborator,
     User,
     WritingStyle,
 )
+from app.schemas.pen_names import PenNameBrief
 from app.schemas.project import (
     ProjectAccessOut,
     ProjectCreate,
@@ -344,6 +347,7 @@ class _FinalProjectProjection:
     deletion_started_at: datetime | None
     access: ProjectAccessOut
     series: ProjectSeriesBrief | None
+    pen_name: PenNameBrief | None
 
 
 async def _final_project_projections(
@@ -372,6 +376,7 @@ async def _final_project_projections(
                 Series.name.label("series_name"), Series.revision.label("series_revision"),
                 SeriesCollaborator.invitation_id.label("series_invitation"),
                 SeriesCollaborator.revision.label("series_member_revision"),
+                PenName.id.label("pen_name_id"), PenName.name.label("pen_name_text"),
             )
             .select_from(User)
             .outerjoin(AuthorizationState, AuthorizationState.id == 1)
@@ -386,6 +391,8 @@ async def _final_project_projections(
                 SeriesCollaborator.series_id == Series.id, SeriesCollaborator.user_id == user_id,
                 SeriesCollaborator.status == "accepted", SeriesCollaborator.role == "editor",
             ))
+            .outerjoin(ProjectPenName, ProjectPenName.project_id == Project.id)
+            .outerjoin(PenName, PenName.id == ProjectPenName.pen_name_id)
             .where(User.id == user_id)
         )).all()
     if not rows or not rows[0].is_active or rows[0].token_version != snapshot.token_version:
@@ -414,6 +421,8 @@ async def _final_project_projections(
         result[row.project_id] = _FinalProjectProjection(
             owner_id=row.owner_id, deleted_at=row.deleted_at, deletion_started_at=row.deletion_started_at,
             access=access, series=series,
+            pen_name=PenNameBrief(id=row.pen_name_id if row.owner_id == user_id else None, name=row.pen_name_text)
+            if row.pen_name_id is not None else None,
         )
     return snapshot, result
 
@@ -464,6 +473,7 @@ async def _list_projects(db: AsyncSession, user_id: int) -> list[ProjectOut]:
             out.default_style_id = None
         out.owner = ProjectOwner(id=owner.id, username=owner.username)
         out.series = fact.series
+        out.pen_name = fact.pen_name
         result.append(out)
     return result
 
@@ -519,6 +529,7 @@ async def _project_out(
             out.default_style_id = None
             out.default_style = None
         out.series = fact.series
+        out.pen_name = fact.pen_name
     return out
 
 
@@ -527,6 +538,8 @@ async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) ->
     from app.services.quota_service import check_project_creation
 
     await check_project_creation(db, user_id)
+    # 已持 User 屏障；只重验身份，不反向取得全局 gate。
+    await authz.require_authenticated(db, user_id)
     await style_service.ensure_assignable(db, user_id, data.default_style_id)
     project = Project(
         user_id=user_id,
@@ -546,6 +559,11 @@ async def create_project(db: AsyncSession, user_id: int, data: ProjectCreate) ->
     notice = None
     if data.style.strip():
         notice = await style_service.apply_legacy_style(db, project, data.style)
+    if data.pen_name_id is not None:
+        from app.services.pen_name_service import bind_without_commit
+
+        await db.flush()
+        await bind_without_commit(db, user_id, project.id, data.pen_name_id)
     await db.commit()
     await db.refresh(project)
     return project, notice

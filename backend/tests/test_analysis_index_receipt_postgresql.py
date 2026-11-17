@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 
-from app.models import Base
+from tests.schema_helpers import assert_sqlite_chapter_plan_fk_intact, create_isolated_schema
 from tests.test_analysis_index_receipt_migration import _insert, _receipt, _seed
 from tests.test_collaboration_access_postgresql import _wait_for_blocker
 
@@ -28,7 +28,7 @@ def test_0051_postgresql_create_all_matches_receipt_integrity(pg_instance_db):
     _, _, _, _, run, _, _ = pg_instance_db
 
     async def setup(conn):
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_isolated_schema)
         parent, child = await _seed_postgresql(conn)
         await _insert_postgresql(conn, _receipt(parent, child))
         await _insert_postgresql(conn, _receipt(parent, None, outcome="no_work", memory_refs="[]"))
@@ -58,6 +58,7 @@ def test_0051_postgresql_create_all_matches_receipt_integrity(pg_instance_db):
                                       "AND child_task_key IS NULL")) == 1
 
     asyncio.run(run(verify))
+    assert_sqlite_chapter_plan_fk_intact()
 
 
 def test_0051_postgresql_migrates_preserves_receipts_and_blocks_lossy_downgrade(pg_instance_db):

@@ -516,6 +516,31 @@ async def test_callback_cannot_end_transaction_before_network_send(app, fake_llm
     assert not fake_llm.calls
 
 
+@pytest.mark.parametrize("operation", ["commit", "rollback", "close", "nested", "dirty", "physical_rollback"])
+async def test_http_source_verify_cannot_change_send_transaction(app, fake_llm, world, operation):
+    armed = False
+
+    async def source_check(db):
+        if not armed:
+            return
+        if operation in {"commit", "rollback", "close"}:
+            await getattr(db, operation)()
+        elif operation == "nested":
+            await db.begin_nested()
+        elif operation == "dirty":
+            (await db.get(User, world["actor"])).username = "unexpected-write"
+        else:
+            await (await db.connection()).rollback()
+
+    checks = await _http_guard(app, world, http_source_verify=source_check)
+    bound = await _fake_bound(app, fake_llm, checks)
+    armed = True
+    expected = ai_dispatch.SendLeaseError if operation == "physical_rollback" else guard.CollaborationSendBlocked
+    with pytest.raises(expected):
+        await _fake_call(bound)
+    assert not fake_llm.calls
+
+
 @pytest.mark.parametrize("change", ["token", "grant", "config"])
 async def test_callback_cannot_change_credential_or_binding_in_same_transaction(
     app, fake_llm, world, change, monkeypatch,

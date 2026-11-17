@@ -364,7 +364,9 @@ class Character(SettingAiMetadata, TimestampMixin, Base):
 
 class Organization(SettingAiMetadata, TimestampMixin, Base):
     __tablename__ = "organizations"
-    __table_args__ = (UniqueConstraint("project_id", "name"), _ai_mode_constraint(), {"sqlite_autoincrement": True})
+    __table_args__ = (UniqueConstraint("project_id", "name"), _ai_mode_constraint(),
+                      Index("uq_organizations_project_id_id", "project_id", "id", unique=True),
+                      {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -488,7 +490,9 @@ class Career(SettingAiMetadata, TimestampMixin, Base):
     """职业定义。kind 决定只能挂为主职业（main）还是副职业（sub）。"""
 
     __tablename__ = "careers"
-    __table_args__ = (UniqueConstraint("project_id", "name"), _ai_mode_constraint(), {"sqlite_autoincrement": True})
+    __table_args__ = (UniqueConstraint("project_id", "name"), _ai_mode_constraint(),
+                      Index("uq_careers_project_id_id", "project_id", "id", unique=True),
+                      {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)

@@ -105,7 +105,7 @@ async def test_v6_roundtrip_retains_original_values_but_projects_only_allowed_se
     exported = await client.post(f"{src}/cards/export", json={"character_ids": [hero], "organization_ids": [org]})
     assert exported.status_code == 200, exported.text
     card = exported.json()
-    assert card["version"] == 6 and "world" not in card
+    assert card["version"] == 7 and "world" not in card
     assert card["characters"][0]["legacy_always_in_context"] is True
     assert card["characters"][0]["ai_settings"]["ai_mode"] is None
     assert card["characters"][0]["custom_text_fields"][0]["ai_hidden"] is True

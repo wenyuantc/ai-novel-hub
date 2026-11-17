@@ -5,6 +5,14 @@ import { parseServerTime } from './time'
 
 export type ShelfSort = 'updated' | 'created' | 'title' | 'words'
 export type ShelfStatusFilter = 'all' | ProjectStatus
+/** 笔名筛选仅保存在当前账号组件实例，不写入共享的书架偏好。 */
+export type ShelfPenNameFilter = 'all' | 'unset' | number
+
+export function filterByPenName<T extends Pick<Project, 'access' | 'pen_name'>>(projects: T[], filter: ShelfPenNameFilter): T[] {
+  if (filter === 'all') return projects
+  return projects.filter((project) => project.access.role === 'owner'
+    && (filter === 'unset' ? !project.pen_name : project.pen_name?.id === filter))
+}
 
 export interface ShelfPrefs {
   query: string

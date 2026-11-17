@@ -207,13 +207,17 @@ async def _member_counts(db: AsyncSession, org_ids: list[int]) -> dict[int, int]
 
 
 async def _outs(db: AsyncSession, orgs: list[Organization]) -> list[OrganizationOut]:
+    from app.services.setting_image_service import metadata_for_book
+
     counts = await _member_counts(db, [o.id for o in orgs])
+    thumbnails = await metadata_for_book(db, orgs[0].project_id, "organization", [o.id for o in orgs]) if orgs else {}
     parent_ids = {o.parent_id for o in orgs if o.parent_id is not None}
     parents = dict((await db.execute(select(Organization.id, Organization.project_id).where(
         Organization.id.in_(parent_ids),
     ))).all()) if parent_ids else {}
     return [OrganizationOut.model_validate(o).model_copy(update={
         "member_count": counts.get(o.id, 0),
+        "thumbnail": thumbnails.get(o.id),
         "parent_id": o.parent_id if parents.get(o.parent_id) == o.project_id else None,
     }) for o in orgs]
 

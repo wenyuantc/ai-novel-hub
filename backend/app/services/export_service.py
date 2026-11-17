@@ -105,11 +105,13 @@ async def export_project(
     fmt: ExportFormat,
     chapter_ids: list[int] | None,
     *,
-    author: str = "",
+    author: str | None = None,
     include_synopsis: bool = True,
 ) -> ExportFile:
     """开放 API 等既有调用保留严格作者限制。"""
     project = await get_owned_project(db, user_id, project_id)
+    if author is None:
+        author = await default_project_author(db, project)
     return await _export_authorized(db, project, fmt, chapter_ids, author=author, include_synopsis=include_synopsis)
 
 
@@ -120,8 +122,15 @@ async def export_manual_project(
     """站内作品文本导出显式允许已接受协作者。"""
     project = await project_access.require_project(db, user_id, project_id, "export")
     if author is None:
-        author = await db.scalar(select(User.username).where(User.id == project.user_id)) or ""
+        author = await default_project_author(db, project)
     return await _export_authorized(db, project, fmt, chapter_ids, author=author, include_synopsis=include_synopsis)
+
+
+async def default_project_author(db: AsyncSession, project: Project) -> str:
+    from app.services.pen_name_service import project_pen_name
+
+    return (await project_pen_name(db, project.id)
+            or await db.scalar(select(User.username).where(User.id == project.user_id)) or "")
 
 
 async def _export_authorized(

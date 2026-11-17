@@ -90,7 +90,7 @@ type QuotaConfig = { mode: 'inherit' } | { mode: 'unlimited' }
 UserQuotaOut包含 user_id/username/is_management_account/revision/authorization_revision/global_task_limit/project_count/task_concurrency。无行revision=0、两项inherit。作品inherit=默认不限，任务inherit=现有有效task_max_per_user；不加第七项系统设置。null有效上限仅表示不限，不能表示继承；0禁止新增/新启动。
 
 - `project_count.used` 包含全部未物理删除作品（正常/回收站/删除中/过期待清理）。降低不删数据、软删不释放、恢复不重复扣、purge完成才释放。所有角色含超管均不豁免。
-- 普通创建、灵感转换、备份实际导入、拆书start，均在任何作品/风格/状态/token消费/Task副作用前锁owner，并持至原整体提交。拆书按User→BookImport锁并重验revision，灵感锁后重读converted状态。预览不预占。
+- 普通创建、灵感转换、备份实际导入、拆书start及小说模板新建，均在任何作品/风格/状态/token消费/Task副作用前锁owner，并持至原整体提交。拆书按User→BookImport锁并重验revision，灵感锁后重读converted状态。模板先重放已成功的同一建书意图，再对新意图检查额度，详见[个人小说模板](./novel-templates.md)。预览不预占。
 - 派生任务（Agent受控受理的 `start_task`、分析派生的记忆向量 `kb.index`）的 `Task.user_id` 与令牌轮次继承原执行的真实actor，按该actor占用任务并发额度，不改记为作品作者，也不额外豁免；见[智能体](./agent.md)与[检索](./retrieval.md)。
 - 用户任务unlimited仍受全站task_max_concurrency硬顶。达到并发上限继续queued，不失败/取消；降低不强杀已执行体。
 - `_dispatch` 批量预筛选不等于准入；候选与admitted分离，真正claim在runtime/gate/User后用最新额度/全局顶复核。commit确认后在runtime内同步发布admitted才执行，直到真实_on_done（含on_success）释放；DB终态不是释放时刻。

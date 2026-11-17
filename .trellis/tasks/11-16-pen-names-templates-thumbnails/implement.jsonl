@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁、真实PG与测试隔离"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端lint/build/test、真实浏览器和新增文件质量门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "数据库、服务、API、UI及备份的跨层检查"}
+{"file": ".trellis/tasks/11-16-pen-names-templates-thumbnails/research/implementation-context.md", "reason": "领域规范与研究的强制加载导航；长文由子代理分段完整读取，不将路径或截断当成已读"}
+{"file": ".trellis/tasks/11-16-pen-names-templates-thumbnails/research/current-capabilities.md", "reason": "需求来源、三项确认范围和当前入口事实"}

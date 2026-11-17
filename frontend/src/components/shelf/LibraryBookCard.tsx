@@ -20,15 +20,16 @@ export default function LibraryBookCard({ project: p, onExport, onBackup, onDele
   const access = isProjectAccess(p.access) ? p.access : null
   if (!access?.can_read) return null
   const role = access?.is_collaborator ? access.role === 'editor' ? '编辑者' : '查看者' : null
+  const author = p.pen_name?.name ?? p.owner?.username
   return (
     <article className="library-book" aria-labelledby={`library-book-title-${p.id}`}>
       <div className="library-book-main">
-        <Link className="library-book-cover" to={overview} aria-label={`打开《${p.title}》`}><BookCover title={p.title} genre={p.genre} author={p.owner?.username} coverUrl={coverUrl(p)} /></Link>
+        <Link className="library-book-cover" to={overview} aria-label={`打开《${p.title}》`}><BookCover title={p.title} genre={p.genre} author={author} coverUrl={coverUrl(p)} /></Link>
         <div className="library-book-details">
           <div className="library-book-status"><ProjectBadge status={p.status} />{role && <span className="library-collaboration-role">共享 · {role}</span>}</div>
           <h2 className="library-book-heading" id={`library-book-title-${p.id}`}><Link to={overview} title={p.title}>{p.title}</Link></h2>
           {p.series && <Link className="library-book-series" to={`/series/${p.series.id}`} title={`所属系列：${p.series.name}`}>系列：{p.series.name}</Link>}
-          {p.owner?.username && <span className="library-book-author">作者：{p.owner.username}</span>}
+          {author && <span className="library-book-author">作者：{author}</span>}
           {access?.is_collaborator && <span className="library-book-author">{access.allow_owner_ai ? '作者模型已授权' : '作者模型未授权'}</span>}
           <p className="library-book-description" title={p.synopsis || p.premise}>{p.synopsis || p.premise || '故事尚在构思，写下第一段简介，让这个世界慢慢清晰。'}</p>
           <time className="library-book-updated" dateTime={p.updated_at} title={formatTime(p.updated_at)}>更新于 {formatRelative(p.updated_at)}</time>

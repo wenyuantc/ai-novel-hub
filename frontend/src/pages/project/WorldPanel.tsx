@@ -26,6 +26,7 @@ import { baselineEditorLabel } from '../../api/progressions'
 import { worldApi } from '../../api/story'
 import type { ProgressionPositionInput, WorldSetting } from '../../api/types'
 import WizardModal from '../../components/WizardModal'
+import { ProjectThumbnailEditor, SettingThumbnail, ThumbnailNewHint } from '../../components/entities/SettingThumbnail'
 import { BookSeriesLibrary, BookSeriesPromotion, BookSeriesScope, BookSeriesUnuse, SharedSettingNotice } from '../../components/series/BookSeriesSettings'
 import { canChangeSeriesBook, inSettingScope, type SettingScope } from '../../components/series/seriesState'
 import { useProjectStore } from '../../stores/project'
@@ -61,7 +62,7 @@ export default function WorldPanel() {
   const [promoting, setPromoting] = useState<WorldSetting | null>(null)
   const [unusing, setUnusing] = useState<{ id: number; title: string } | null>(null)
   const loader = useCallback(() => worldApi.list(pid), [pid])
-  const { data: loadedItems, loading, error: listError, reload } = useLoader(loader, { projectId: pid, resources: ['world'] })
+  const { data: loadedItems, loading, error: listError, reload, setData } = useLoader(loader, { projectId: pid, resources: ['world'] })
   const items = useMemo(() => loadedItems ?? [], [loadedItems])
   const [aiOpen, setAiOpen] = useState(false)
   const [tab, setTab] = useState('base')
@@ -164,6 +165,7 @@ export default function WorldPanel() {
                       ]}
                     >
                       <List.Item.Meta
+                        avatar={<SettingThumbnail target={{ scope: 'project', projectId: pid, kind: 'world', entryId: w.id }} thumbnail={w.thumbnail} name={w.title} />}
                         title={
                           <Space size={4}>
                             <Tag>{WORLD_CATEGORY_LABELS[asWorldCategory(w.category)]}</Tag>
@@ -214,6 +216,16 @@ export default function WorldPanel() {
       >
         <SharedSettingNotice origin={origin} onUnuse={series && canChangeSeries && sharedEntryId != null && editing
           ? () => { if (canEditNow()) setUnusing({ id: sharedEntryId, title: editing.title }) } : undefined} />
+        {open && editing && <ProjectThumbnailEditor key={`${pid}:world:${editing.id}`} target={{ scope: 'project', projectId: pid, kind: 'world', entryId: editing.id }}
+          thumbnail={(items.find((item) => item.id === editing.id) ?? editing).thumbnail} name={editing.title} editable={canEdit && !seriesManaged}
+          thumbnailEditable={(items.find((item) => item.id === editing.id) ?? editing).thumbnail_editable}
+          onChange={(thumbnail, thumbnailEditable) => {
+            editor.updateThumbnail(thumbnail, thumbnailEditable)
+            const permission = thumbnailEditable === undefined ? {} : { thumbnail_editable: thumbnailEditable }
+            setData((prev) => (prev ?? []).map((item) => item.id === editing.id ? { ...item, thumbnail, ...permission } : item))
+            invalidateProject(pid, ['world'])
+          }} />}
+        {open && !editing && canEdit && <ThumbnailNewHint />}
         <Tabs
           activeKey={tab}
           onChange={setTab}

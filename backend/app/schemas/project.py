@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.pen_names import PenNameBrief
 from app.schemas.style import StyleBrief
 
 ProjectStatus = Literal["planning", "writing", "completed"]
@@ -66,6 +67,7 @@ class ProjectCreate(BaseModel):
     # 已废弃（兼容一个版本）：非空时为项目创建「原风格」并设为默认，响应 notice 给出提示
     style: str = Field(default="", max_length=5000)
     default_style_id: int | None = None
+    pen_name_id: int | None = Field(default=None, ge=1, strict=True)
     synopsis: str = Field(default="", max_length=SYNOPSIS_MAX)
     theme: str = Field(default="", max_length=THEME_MAX)
     tags: list[str] = Field(default_factory=list, max_length=50)
@@ -96,6 +98,13 @@ class ProjectUpdate(BaseModel):
     audience: str | None = Field(default=None, max_length=AUDIENCE_MAX)
     # 显式 null = 清空目标总字数
     target_words: int | None = Field(default=None, ge=TARGET_WORDS_MIN, le=TARGET_WORDS_MAX)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_pen_name_update(cls, values):
+        if isinstance(values, dict) and ({"pen_name", "pen_name_id"} & values.keys()):
+            raise ValueError("请通过作品笔名接口设置署名")
+        return values
 
     @field_validator("tags")
     @classmethod
@@ -147,6 +156,7 @@ class ProjectOut(BaseModel):
     id: int
     access: ProjectAccessOut
     owner: ProjectOwner | None = None
+    pen_name: PenNameBrief | None = None
     series: ProjectSeriesBrief | None = None
     title: str
     genre: str

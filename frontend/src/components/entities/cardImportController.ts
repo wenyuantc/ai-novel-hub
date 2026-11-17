@@ -15,6 +15,7 @@ export interface CardImportState {
   mappings: CardMappings
   selectedEntries: Record<string, SettingEntry>
   selectedDefinitions: Record<string, SettingFieldDefinition>
+  thumbnailRefs: string[]
   loading: boolean
   importing: boolean
   needsPreview: boolean
@@ -26,7 +27,7 @@ export interface CardImportState {
   resultUnknown: boolean
 }
 const empty = (): CardImportState => ({ data: null, fileName: '', metadata: cardMetadata(null), preview: null, reviewPreview: null,
-  choices: { characters: {}, organizations: {}, careers: {} }, mappings: { references: {}, definitions: {} }, selectedEntries: {}, selectedDefinitions: {},
+  choices: { characters: {}, organizations: {}, careers: {} }, mappings: { references: {}, definitions: {} }, selectedEntries: {}, selectedDefinitions: {}, thumbnailRefs: [],
   loading: false, importing: false, needsPreview: false, reviewRequired: false, error: null, result: null,
   accessUncertain: false, checkingAccess: false, resultUnknown: false })
 function copyChoices(value: CardResolutions): CardResolutions { return { characters: { ...value.characters }, organizations: { ...value.organizations }, ...(value.careers ? { careers: { ...value.careers } } : {}) } }
@@ -101,7 +102,7 @@ export class CardImportController {
     const { request, generation } = this.begin()
     this.update({ ...empty(), fileName: file.name, loading: true })
     try {
-      if (file.size > MAX_CARD_FILE_BYTES) throw new Error('卡片文件过大，上限为 2MB')
+      if (file.size > MAX_CARD_FILE_BYTES) throw new Error('卡片文件过大，紧凑 JSON 上限为 16 MiB')
       const text = await file.text()
       if (!this.valid(generation, request)) return
       const parsed = parseCardText(text)
@@ -135,6 +136,10 @@ export class CardImportController {
     if (entry) { references[ref] = { ...entry.reference }; selectedEntries[ref] = entry }
     else { delete references[ref]; delete selectedEntries[ref] }
     this.edited({ mappings: { ...this.state.mappings, references }, selectedEntries })
+  }
+  setThumbnail = (ref: string, selected: boolean) => {
+    if (!this.editable() || !(this.state.preview?.thumbnails ?? []).some((item) => item.ref === ref)) return
+    this.update({ thumbnailRefs: selected ? [...new Set([...this.state.thumbnailRefs, ref])] : this.state.thumbnailRefs.filter((item) => item !== ref) })
   }
 
   invalidate = () => {
@@ -184,6 +189,7 @@ export class CardImportController {
     const options = version >= 4 ? { mappings: cleanCardMappings(this.state.mappings), expected_fields_revision: this.state.preview.fields_revision,
       ...(version >= 5 ? { expected_categories_revision: this.state.preview.categories_revision } : {}),
       ...(version >= 6 ? { expected_ai_visibility_revision: this.state.preview.ai_visibility_revision } : {}),
+      ...(version >= 7 ? { thumbnail_refs: this.state.thumbnailRefs.filter((ref) => (this.state.preview?.thumbnails ?? []).some((item) => item.ref === ref)) } : {}),
     } : {}
     this.update({ importing: true, error: null })
     try {

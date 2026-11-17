@@ -21,6 +21,8 @@ format / version（更新的版本 400，migrate 逐级升级）→ 结构与列
 任何一步出错整体回滚，400 并带上出错的表与行序号。PostgreSQL 序列：一律由数据库分配新 id，无需校正。
 """
 
+import base64
+import binascii
 import json
 import math
 import re
@@ -69,6 +71,7 @@ from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE
 from app.services.project_transfer.remap import RemapContext
 from app.services.project_transfer.rich_documents import validate_rich_tables
 from app.services.project_transfer.scenes import validate_scene_tables
+from app.services.project_transfer.thumbnails import TABLES as THUMBNAIL_TABLES
 from app.services.setting_category_validation import validate_category_graph_snapshot
 from app.services.setting_field_values import FieldSpec, has_field_content, validate_field_value
 from app.services.setting_progression_resolver import validate_baseline, validate_progression_value
@@ -201,6 +204,8 @@ class Backup:
     project: dict[str, Any]
     warnings: list[str] = field(default_factory=list)
     cover: tuple[bytes, str] | None = None
+    pen_name: str | None = None
+    thumbnails: list[tuple[str, int, Any]] = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -493,6 +498,16 @@ def _migrate_v8_to_v9(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v9_to_v10(data: dict[str, Any]) -> dict[str, Any]:
+    data["pen_name"] = None
+    return data
+
+
+def _migrate_v10_to_v11(data: dict[str, Any]) -> dict[str, Any]:
+    data["thumbnails"] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 7:
@@ -503,10 +518,16 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         _reject_future_rich_data(data)
     if version < 9:
         _reject_future_note_flags(data)
+    if version < 10 and data.get("pen_name") is not None:
+        raise BadRequestError("旧版备份不支持笔名，请使用原始版本文件")
+    if version < 11 and data.get("thumbnails") not in (None, []):
+        raise BadRequestError("旧版备份不支持设定缩略图，请使用原始版本文件")
     steps = {
         1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4,
         4: _migrate_v4_to_v5, 5: _migrate_v5_to_v6, 6: _migrate_v6_to_v7, 7: _migrate_v7_to_v8,
         8: _migrate_v8_to_v9,
+        9: _migrate_v9_to_v10,
+        10: _migrate_v10_to_v11,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -1042,6 +1063,47 @@ def _check_cover(raw: Any, errors: _Errors) -> tuple[bytes, str] | None:
     return data, mime_type
 
 
+def _check_thumbnails(raw: Any, tables: dict[str, list[dict[str, Any]]], errors: _Errors) -> list[tuple[str, int, Any]]:
+    from app.services.setting_image_codec import MAX_STANDARD_BYTES, validate_standard_image
+
+    if not isinstance(raw, list):
+        errors.add("缩略图应为数组")
+        return []
+    known = {kind: {row.get("id") for row in tables.get(table, [])
+                    if isinstance(row, dict) and _is_int(row.get("id"))}
+             for kind, table in THUMBNAIL_TABLES.items()}
+    result = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict) or set(item) != {"ref", "mime_type", "data"}:
+            errors.add("缩略图结构不正确")
+            continue
+        ref = item["ref"]
+        if not isinstance(ref, dict) or set(ref) != {"kind", "id"}:
+            errors.add("缩略图引用结构不正确")
+            continue
+        kind, ident = ref["kind"], ref["id"]
+        if not isinstance(kind, str) or kind not in known or not _is_int(ident) or ident not in known[kind]:
+            errors.add("缩略图引用的设定条目不存在")
+            continue
+        if (kind, ident) in seen:
+            errors.add("同一设定条目的缩略图不能重复")
+            continue
+        seen.add((kind, ident))
+        encoded = item["data"]
+        if (item["mime_type"] != "image/webp" or not isinstance(encoded, str)
+                or len(encoded) > 4 * ((MAX_STANDARD_BYTES + 2) // 3)):
+            errors.add("缩略图格式或大小不正确")
+            continue
+        try:
+            image = validate_standard_image(base64.b64decode(encoded, validate=True), "image/webp")
+        except (binascii.Error, ValueError, AppError):
+            errors.add("缩略图文件损坏或格式不受支持")
+            continue
+        result.append((kind, ident, image))
+    return result
+
+
 def parse_backup(raw: bytes) -> Backup:
     """解析并校验备份文件（不访问数据库）。不合法 → BadRequestError。"""
     if len(raw) > MAX_BYTES:
@@ -1089,6 +1151,14 @@ def parse_backup(raw: bytes) -> Backup:
             errors.add("项目字段 wizard_progress 结构不正确")
     styles = _check_styles(data.get("styles"), errors)
     cover = _check_cover(data.get("cover"), errors)
+    pen_name = data.get("pen_name")
+    if pen_name is not None and (
+        not isinstance(pen_name, str) or not pen_name.strip() or len(pen_name.strip()) > 100
+    ):
+        errors.add("笔名应为 1–100 个字符的文本")
+        pen_name = None
+    elif isinstance(pen_name, str):
+        pen_name = pen_name.strip()
     warnings: list[str] = []
     unknown = sorted(k for k in tables if k not in RULES_BY_TABLE)
     if unknown:
@@ -1101,13 +1171,16 @@ def parse_backup(raw: bytes) -> Backup:
         _check_rows(rule, rows, errors)
         if isinstance(rows, list):
             clean[rule.table] = rows
+    thumbnail_data = _check_thumbnails(data.get("thumbnails"), clean, errors)
     if rule_rows := clean.get("relationship_types"):
         for i, row in enumerate(rule_rows, start=1):
             if isinstance(row, dict) and not isinstance(row.get("global", False), bool):
                 errors.add(f"关系类型第 {i} 行的 global 应为布尔值")
     errors.raise_if_any()
     backup = Backup(
-        data=data, version=version, tables=clean, styles=styles, project=project, warnings=warnings, cover=cover
+        data=data, version=version, tables=clean, styles=styles, project=project, warnings=warnings, cover=cover,
+        pen_name=pen_name,
+        thumbnails=thumbnail_data,
     )
     _check_refs(backup, errors)
     errors.raise_if_any()
@@ -1596,8 +1669,23 @@ async def import_backup(db: AsyncSession, engine, user_id: int, backup: Backup, 
 
     importer = _Importer(db, user_id, backup)
     try:
+        from app.services import authorization_service as authz
+
         await check_project_creation(db, user_id)
+        # 与普通建书相同，先持 User 屏障再重验，不能反向获取全局 gate。
+        await authz.require_authenticated(db, user_id)
         project = await importer.run(title)
+        if backup.thumbnails:
+            from app.services.setting_image_service import set_book_image_without_commit
+
+            for kind, original_id, image in backup.thumbnails:
+                await set_book_image_without_commit(db, project.id, kind,
+                                                    importer.maps[THUMBNAIL_TABLES[kind]][original_id], image)
+        if backup.pen_name is not None:
+            from app.services.pen_name_service import bind_without_commit, find_or_create_without_commit
+
+            pen = await find_or_create_without_commit(db, user_id, backup.pen_name)
+            await bind_without_commit(db, user_id, project.id, pen.id)
         await db.commit()
     except _RowError as exc:
         await db.rollback()
