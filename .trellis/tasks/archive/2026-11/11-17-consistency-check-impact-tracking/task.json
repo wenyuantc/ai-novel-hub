@@ -1,0 +1,29 @@
+{
+  "id": "consistency-check-impact-tracking",
+  "name": "consistency-check-impact-tracking",
+  "title": "全书一致性检查与修改影响追踪",
+  "description": "TODOS 第 14 项：跨章节一致性问题清单（证据、状态、复核）与改稿后的后续影响提示",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-11-17",
+  "completedAt": "2026-11-17",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-17-consistency-check-issues",
+    "11-17-edit-impact-tracking"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

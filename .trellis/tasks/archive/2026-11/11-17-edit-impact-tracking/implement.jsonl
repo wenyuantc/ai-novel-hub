@@ -1,0 +1,26 @@
+{"file": ".trellis/tasks/11-17-consistency-check-impact-tracking/research/code-inventory.md", "reason": "现有代码基础与缺口盘点，含关键文件与行号"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "api → services → models 分层"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、外键与归属校验约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError、SSE 契约与协作者执行（E4/E5）重验要求"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "多步任务的断点、互斥、重试与协作标志模式"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "原文锚点、指纹失效与跳转契约"}
+{"file": ".trellis/spec/backend/rich-documents.md", "reason": "作者区块 AI 可见性与分析指纹"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "AI 出站边界"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板键登记、沙箱校验与 parity 测试"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份注册表、重映射与升版步骤"}
+{"file": ".trellis/spec/backend/outline.md", "reason": "章节号登记表约束"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端门禁、测试隔离与 README 同步"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范索引"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "前端目录与命名"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面与组件模式"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "任务流订阅与加载 Hook"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "任务 store 与本地状态边界"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型镜像后端 schema"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流检查"}
+{"file": ".trellis/spec/backend/consistency-check.md", "reason": "子任务 1 落地的台账、检查任务与前端契约"}
+{"file": ".trellis/tasks/11-17-consistency-check-issues/design.md", "reason": "一致性检查设计与已接受的实施偏差（第 14 节）"}
+{"file": ".trellis/tasks/11-17-consistency-check-issues/check-report.md", "reason": "已知限制：协作者任务流、拆批漏检"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "剧情记忆抽取与来源过期标记"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "设定演变来源与分析写入"}

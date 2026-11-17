@@ -1,0 +1,15 @@
+{"file": ".trellis/tasks/11-17-consistency-check-impact-tracking/research/code-inventory.md", "reason": "核对实现与既有契约的一致性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与测试"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与浏览器验收"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误矩阵与协作者执行重验"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "多步任务必需测试"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "锚点失效边界"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "备份覆盖与兼容测试"}
+{"file": ".trellis/spec/backend/prompts-styles.md", "reason": "模板 parity 测试"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "出站内容边界"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用检查"}
+{"file": ".trellis/spec/backend/consistency-check.md", "reason": "子任务 1 落地的台账、检查任务与前端契约"}
+{"file": ".trellis/tasks/11-17-consistency-check-issues/design.md", "reason": "一致性检查设计与已接受的实施偏差（第 14 节）"}
+{"file": ".trellis/tasks/11-17-consistency-check-issues/check-report.md", "reason": "已知限制：协作者任务流、拆批漏检"}
+{"file": ".trellis/spec/backend/retrieval.md", "reason": "剧情记忆抽取与来源过期标记"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "设定演变来源与分析写入"}
