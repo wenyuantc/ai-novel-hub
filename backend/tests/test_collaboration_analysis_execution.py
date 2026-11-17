@@ -1150,7 +1150,10 @@ async def test_real_sdk_analysis_redirect_rechecks_execution_each_send(app, clie
             async with aclosing(analysis_service.run_analysis_job(job, app.state.sessionmaker)) as events:
                 async for _ in events:
                     pass
-        assert changed and len(requests) == 1
+        # 只统计带请求体的模型发送：307 的后续跳会原样携带请求体，绕过复核时这里会是 2。
+        # 并行运行时本地临时端口偶尔会收到与本用例无关的空请求，不能计入发送次数。
+        sent = [request for request in requests if request]
+        assert changed and len(sent) == 1, requests
     await _assert_no_analysis_side_effects(app)
 
 
@@ -1183,7 +1186,9 @@ async def test_real_sdk_batch_analysis_redirect_rechecks_original_attempt(app, c
             async with aclosing(analysis_service.run_analysis_job(job, app.state.sessionmaker)) as events:
                 async for _ in events:
                     pass
-        assert changed and len(requests) == 1
+        # 与上一个用例相同：只统计带请求体的模型发送，忽略并行运行时无关的空请求。
+        sent = [request for request in requests if request]
+        assert changed and len(sent) == 1, requests
     await _assert_no_analysis_side_effects(app)
 
 
