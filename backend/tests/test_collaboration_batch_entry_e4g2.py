@@ -30,7 +30,14 @@ from app.models import (
 from app.services import batch_service, generation_service
 from app.services.task_engine import engine as engine_module
 from app.services.task_engine.registry import get_handler
-from tests.helpers import analysis_json, create_ai_config, create_project, register, wait_until
+from tests.helpers import (
+    analysis_json,
+    create_ai_config,
+    create_project,
+    drain_collaboration_checks,
+    register,
+    wait_until,
+)
 
 MESSAGES = engine_module.COLLABORATION_FAILURE_MESSAGES
 OWNER_KEY = "sk-owner-private-0001"
@@ -789,8 +796,7 @@ async def test_editor_resume_paused_batch_and_revoked_resume_rejected(app, clien
     blocked = await guest.post(f"/api/v1/tasks/{row.id}/resume", params={"task_key": row.statistics_key})
     assert blocked.status_code in (403, 404), blocked.text
     # E5-a：降级通知后系统按原轮次把待审核任务受限收尾为 failed（已保存的两章保留），不再永久停在 paused。
-    while engine._collaboration_checks:
-        await asyncio.gather(*list(engine._collaboration_checks), return_exceptions=True)
+    await drain_collaboration_checks(engine)
     async with app.state.sessionmaker() as db:
         stopped = await db.get(Task, row.id)
         assert (stopped.status, stopped.error) == ("failed", MESSAGES["collaboration_revoked"])

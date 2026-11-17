@@ -9,6 +9,7 @@
 from uuid import uuid4
 
 import pytest
+from fastapi import Request
 from sqlalchemy import update
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
@@ -28,16 +29,18 @@ DENIED = {"task": None, "detail": TASK_ACCESS_LOST_MESSAGE, "code": "permission_
 COLLAB_FAILED = "协作授权已失效，任务已停止"
 
 
+async def _replay_endpoint(
+    request: Request, task_id: int, task_key: str, user: CurrentUser, db: DbDep, engine: TaskEngineDep,
+):
+    task = await task_service.get_owned_task(db, user.id, task_id, expected_task_key=task_key)
+    binding = await _capture_stream_binding(db, task, db.info["authenticated_actor"])
+    await db.close()
+    return task_sse_response(_guarded(engine, binding), sessionmaker=request.app.state.sessionmaker, binding=binding)
+
+
 def _mount(app):
     """与生产订阅入口同样捕获原绑定，但一律走受控管线。"""
-
-    async def endpoint(task_id: int, task_key: str, user: CurrentUser, db: DbDep, engine: TaskEngineDep):
-        task = await task_service.get_owned_task(db, user.id, task_id, expected_task_key=task_key)
-        binding = await _capture_stream_binding(db, task, db.info["authenticated_actor"])
-        await db.close()
-        return task_sse_response(_guarded(engine, binding), sessionmaker=app.state.sessionmaker, binding=binding)
-
-    app.add_api_route("/_test/tasks/{task_id}/stream", endpoint, methods=["GET"])
+    app.add_api_route("/_test/tasks/{task_id}/stream", _replay_endpoint, methods=["GET"])
 
 
 def _guarded(engine, binding):

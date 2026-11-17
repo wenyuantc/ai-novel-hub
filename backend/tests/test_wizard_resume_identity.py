@@ -85,7 +85,9 @@ async def test_continue_key_without_task_id_is_rejected(app, client):
     assert response.status_code == 422, response.text
 
 
-@pytest.mark.parametrize("key", [str(uuid4()), "BAD", ""])
+@pytest.mark.parametrize(
+    "key", [str(uuid4()), "BAD", ""], ids=["different-uuid", "invalid-format", "empty"],
+)
 async def test_wrong_or_invalid_key_cannot_continue_source(app, client, fake_llm, key):
     _, project, source = await _source(app, client)
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={

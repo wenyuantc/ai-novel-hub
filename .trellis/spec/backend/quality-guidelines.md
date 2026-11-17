@@ -7,10 +7,10 @@
 ## 概述
 
 两道门禁都在 `backend/` 下运行，变更完成前必须全部通过
-（`README.md` 中也有说明）：
+（`README.md` 中也有说明）。未配置 PostgreSQL 测试连接串时，默认 SQLite 全量门禁为：
 
 ```bash
-cd backend && uv run ruff check . && uv run pytest
+cd backend && uv run ruff check . && uv run pytest -n 4 --dist loadfile --durations=20
 ```
 
 Ruff 配置（`backend/pyproject.toml`）：
@@ -33,7 +33,7 @@ Pytest 配置：`asyncio_mode = "auto"`、`asyncio_default_fixture_loop_scope = 
 `pythonpath = ["."]`、`testpaths = ["tests"]`。异步测试直接写成 `async def test_...`，
 无需标记（marker）。
 
-macOS 终端若使用 `LC_ALL=C`，Alembic/ConfigParser 的显式 `encoding="locale"` 会以 ASCII 读取带中文注释的 alembic.ini，导致迁移测试在执行迁移前 UnicodeDecodeError。先核对 locale；可在本次命令使用 `env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest`。不要因此修改迁移、删除中文配置、过滤失败或跳过测试；Python UTF-8 模式不等同于显式 locale 编码已正确。
+macOS 终端若使用 `LC_ALL=C`，Alembic/ConfigParser 的显式 `encoding="locale"` 会以 ASCII 读取带中文注释的 alembic.ini，导致迁移测试在执行迁移前 UnicodeDecodeError。先核对 locale；可在本次命令使用 `env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest -n 4 --dist loadfile --durations=20`（配置 PostgreSQL 时改用 `-n 0`）。不要因此修改迁移、删除中文配置、过滤失败或跳过测试；Python UTF-8 模式不等同于显式 locale 编码已正确。
 
 ---
 
@@ -101,6 +101,16 @@ macOS 终端若使用 `LC_ALL=C`，Alembic/ConfigParser 的显式 `encoding="loc
 
 ## 测试要求
 
+### 执行策略与耗时
+
+- 用 `uv sync --frozen --dev` 安装锁定的测试依赖；`pytest-xdist` 属于开发依赖，CI 与本地使用同一份 `uv.lock`。
+- 开发迭代先按影响范围运行文件或用例，例如 `uv run pytest tests/test_auth.py -q`；修复失败时可用 `uv run pytest --lf --lfnf=none -q`。定向测试不能替代最终完整门禁。
+- 代码定稿后执行一次完整门禁。代码、依赖、配置及测试环境未变化且已有完整通过记录时，复用该记录，不重复启动相同全量回归；记录实际命令、通过 / 跳过 / xfail 数量和耗时。
+- 默认 SQLite 全量回归显式使用 `-n 4 --dist loadfile --durations=20`，同一文件内用例由同一个 worker 执行。资源不足时降为 `-n 2`，调试时用 `-n 0`；不要在全局 `addopts` 中强制并行，以便 PostgreSQL 和调试命令保留串行入口。
+- 各 worker 必须收集到数量、顺序和 ID 完全一致的用例。参数化中的随机 UUID 等动态值需显式指定稳定 `ids`，无序参数集合需先排序；例如 `test_wizard_resume_identity.py` 的错误身份参数保留随机值，但用固定 ID 描述三个场景。
+- `.github/workflows/python-package.yml` 执行上述 SQLite 并行门禁。当前工作流未配置 PostgreSQL 服务及测试连接串，相应跳过不代表 PostgreSQL 验证通过。
+- 优化 fixture 前先比较相同用例集合的耗时与结果。保留每例独立应用 / 数据库、真实后台任务生命周期、断言和既有缓存清理；调整密码哈希成本必须限于测试且保留认证专项的真实配置，模板库必须保留原建表回调并逐例复制。尚未完整验证的实验不作为默认测试行为。
+
 ### 隔离（强制）
 
 每个测试都拥有独立的应用，以及位于 pytest 按测试创建的 `tmp_path` 下的独立 SQLite 文件
@@ -128,6 +138,8 @@ def make_settings(tmp_path, **overrides) -> Settings:
 
 模型流使用有界 producer 后，`Gate.reached` 只证明模型读取到了该节点。依赖“首片已发布”的快照、取消或重启测试应先等待真实 `TaskHub.text` 或对应发送事件，再执行原断言；不得用固定 sleep 代替同步。
 
+等待后台任务集合清空时，不能假设每次 `await` 都会让出事件循环：Python 3.12 的 `asyncio.gather` 在任务全部完成时可同步返回，忙循环会阻止负责清理集合的 done callback 执行。协作复查统一使用 `tests.helpers.drain_collaboration_checks`，在 gather 后以 `await asyncio.sleep(0)` 让完成回调运行。对应回归用有超时的独立进程验证，避免事件循环被阻塞时连 `asyncio.timeout` 都无法生效。
+
 全局注册的 handler 实例方法需要临时替换时，在 handler 类上打补丁并保留 `self` 参数。实例级方法补丁恢复时可能把原 bound method 留在实例 `__dict__`，遮蔽后续类级补丁；`blocking_outline` 与 PostgreSQL 锁顺序测试、管理任务取消与智能体撤权续跑测试的顺序回归覆盖此问题。
 
 ### 跨数据库方言的建模隔离
@@ -149,6 +161,8 @@ PG 测试缺对应环境变量时 `skip`，变量指错库时直接 `ValueError`
 | `AINOVEL_POSTGRES_TEST_URL` | 库 `ainovel_test` |
 
 - 守卫只校验库名与用户；表都建在随机 schema 内、用后删除，几类测试可以放在同一个测试容器里的不同库。
+- 配置 PostgreSQL 测试连接串时，当前默认执行 `uv run pytest -n 0 --durations=20`。同一数据库内的 advisory lock 不按 schema 隔离，多个 pytest 进程会因复用项目 / 用户 ID 而互相争锁；随机 schema 不足以支持并行。
+- PostgreSQL 并行必须先为每个 worker 分配独立数据库，并满足既有库名 / 用户守卫；可使用不同端口的独立测试实例保持固定库名。当前夹具未自动完成这一分配，不能直接对共享测试 URL 添加 `-n 4`。
 - 连接串含口令：写入 600 权限文件后 `export "VAR=$(cat file)"` 注入，不打印、不进日志。
 - 真实备份测试（`test_ai_config_instance_migration_postgresql.py`）需要 PATH 中的 `pg_dump` / `pg_restore`，且主版本必须与服务端一致：PG16 服务端搭配 18.x 客户端时，`pg_restore` 会发出 `SET transaction_timeout` 而失败。macOS 上应把 `libpq@16` 的 bin 放在 PATH 最前，不能用默认的 `libpq`（18）。
 
@@ -161,6 +175,8 @@ PG 测试缺对应环境变量时 `skip`，变量指错库时直接 `ValueError`
 路由处理器使用模块级函数，通过 `Request.app.state` 取得当前实例资源和缓存，不在每次 `create_app` 时注册捕获该 app 的闭包。FastAPI 的 callable 分类缓存会强持有处理器；捕获 app 会同时保留整个路由图、任务引擎和数据库 engine，关闭客户端／dispose 不能解除这条全局引用。实际例子见 `app/api/open/docs.py`。
 
 修改应用工厂或动态安装路由时，保留独立实例、部署 `root_path` 和权限语义；对应回归在客户端及资源关闭后，以弱引用和窗口外 `gc.collect()` 验证实例可释放，不能先清框架缓存来让断言通过。`tests/test_open_api.py::test_open_docs_do_not_retain_closed_applications` 同时验证两实例的文档缓存、路由名称及回收。
+
+此规则同样适用于 `/_test` 路由：带认证依赖的测试入口使用模块级处理器，持帧点放在 `request.app.state`；无参数、无依赖注入的响应工厂可通过 `tests/stream_helpers.py::mount_stream_response` 挂载，工厂仅由当前应用持有，不直接注册进 FastAPI。禁止用全局字典保存应用或持帧点。`tests/test_stream_route_lifecycle.py` 覆盖运行流、回放流、实体流的关闭回收，以及两应用、两路由和 `root_path` 的隔离。
 
 完整测试中出现不同任务流随机超时时，先对照任务终态、订阅队列、事件循环延迟和 GC，再追踪已关闭实例的强引用根。单独重跑通过不能证明环境原因；GC 与流窗口重叠是时序证据，只有修复后的完整门禁才能验证整体结果，不靠放宽超时或删除断言结束诊断。
 
@@ -472,7 +488,7 @@ ai_config_service.context_char_budget(cfg, default) -> int        # 取代 CONTE
 
 ## 代码评审清单
 
-- [ ] 在 `backend/` 中 `uv run ruff check .` 和 `uv run pytest` 均通过。
+- [ ] 在 `backend/` 中 `uv run ruff check .` 和按上述 SQLite 并行 / PostgreSQL 串行策略执行的完整 pytest 门禁均通过，并如实记录跳过项。
 - [ ] `app/api/v1/` 中没有 ORM 查询；新的 service 入口接收 `user_id` 并校验归属（他人资源返回 404）。
 - [ ] 人工项目管理员例外仅通过 `get_manageable_project` 及明确的人工子资源入口；AI/任务/日志/私有配置继续严格归属，跨用户记忆保存不排队所有者向量任务，见 [admin-projects.md](./admin-projects.md)。
 - [ ] 新增的归属路由已加入 `test_cross_user_isolation`。

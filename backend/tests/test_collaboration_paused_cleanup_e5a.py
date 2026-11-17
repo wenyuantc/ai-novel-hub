@@ -17,6 +17,7 @@ from app.models import Chapter, ProjectCollaborator, SceneReviewProposal, Task, 
 from app.models.dashboard import TaskStatistic
 from app.services.collaboration_task_access import task_grant_identity
 from app.services.task_engine import engine as engine_module
+from tests.helpers import drain_collaboration_checks as _drain_checks
 from tests.helpers import task_params
 from tests.test_collaboration_batch_entry_e4g2 import (
     _assert_saved,
@@ -48,11 +49,6 @@ async def _wait_status(app, task_id, statuses, within=15.0):
 async def _row(app, task_id):
     async with app.state.sessionmaker() as db:
         return await db.get(Task, task_id)
-
-
-async def _drain_checks(engine):
-    while engine._collaboration_checks:
-        await asyncio.gather(*list(engine._collaboration_checks), return_exceptions=True)
 
 
 async def _paused_batch(app, owner, guest, fake_llm, **world_kw):

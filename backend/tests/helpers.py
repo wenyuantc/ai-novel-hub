@@ -344,6 +344,15 @@ async def wait_until(predicate, within: float = 5.0) -> None:
         await asyncio.sleep(0.005)
 
 
+async def drain_collaboration_checks(engine) -> None:
+    """等协作复查完成，并让负责移出集合的 done callback 执行。"""
+    while engine._collaboration_checks:
+        await asyncio.gather(*list(engine._collaboration_checks), return_exceptions=True)
+        # Python 3.12 的 gather 在任务全部完成时可同步返回；必须让出事件循环，
+        # 否则集合中的已完成任务会被反复 gather，清理回调永远没有运行机会。
+        await asyncio.sleep(0)
+
+
 async def stream_task(
     client: httpx.AsyncClient, task: dict | tuple[int, str] | int, within: float = 10.0,
 ) -> list[tuple[str, dict]]:

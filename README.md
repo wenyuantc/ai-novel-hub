@@ -886,7 +886,14 @@ sqlite3 restored.sqlite3 'PRAGMA quick_check; PRAGMA foreign_key_check;'
 | `uv run alembic upgrade head` | 将数据库迁移到最新版本 |
 | `uv run alembic current` | 查看当前数据库迁移版本 |
 | `uv run ruff check .` | 执行 Python 代码检查 |
-| `uv run pytest` | 运行后端测试 |
+| `uv run pytest -n 4 --dist loadfile --durations=20` | 运行默认 SQLite 全量测试，4 进程按文件分配并报告最慢项 |
+| `uv run pytest tests/test_auth.py -q` | 开发中定向运行受影响模块，文件按实际改动替换 |
+| `uv run pytest --lf --lfnf=none -q` | 仅重跑上次失败项；没有失败记录时不运行 |
+| `uv run pytest -n 0 --durations=20` | 串行调试，或运行已配置 PostgreSQL 测试连接串的套件 |
+
+开发迭代先定向测试，代码定稿后执行一次完整门禁；没有代码、依赖、配置或测试环境变化时，复用已通过的完整验证记录。
+CI 使用同一份开发依赖锁文件执行 4 进程 SQLite 全量回归。PostgreSQL 用例缺少隔离测试连接串时会跳过，不能据此宣称 PostgreSQL 验证通过。
+配置 PostgreSQL 测试连接串时先使用 `-n 0`：同一数据库的 advisory lock 会跨 schema 争用，只有为每个 worker 准备满足现有守卫的独立数据库后才能并行。具体要求见[后端质量规范](.trellis/spec/backend/quality-guidelines.md#postgresql-隔离测试库与环境变量)。
 
 ### 前端命令
 

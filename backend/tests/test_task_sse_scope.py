@@ -21,6 +21,7 @@ from app.services.task_engine.stream_lease import (
     task_sse_response,
 )
 from tests.helpers import parse_sse, register
+from tests.stream_helpers import mount_stream_response
 from tests.test_collaboration_task_privacy import _setup, _tasks
 
 
@@ -277,7 +278,7 @@ async def test_sqlite_task_frame_send_and_revocation_are_serialized_over_tcp(app
         return task_sse_response(events(), sessionmaker=app.state.sessionmaker, binding=binding)
 
     monkeypatch.setattr(stream_evidence, "verify_stream_frame", _valid)
-    app.add_api_route("/_test/task-frame", endpoint, methods=["GET"])
+    mount_stream_response(app, "/_test/task-frame", endpoint)
     async with _tcp_server(app, entered, release) as tcp:
         pending = asyncio.create_task(tcp.get("/_test/task-frame"))
         revoke = None

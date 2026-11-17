@@ -12,6 +12,7 @@ from app.models import Task
 from app.services.task_engine import stream_evidence
 from app.services.task_engine.stream_lease import task_sse_response
 from tests.helpers import parse_sse
+from tests.stream_helpers import mount_stream_response
 from tests.test_collaboration_access_postgresql import _wait_for_blocker
 from tests.test_collaboration_access_postgresql import postgres_collaboration_apps as _postgres_fixture
 from tests.test_collaboration_paused_task_postgresql import _gate_revoke
@@ -70,7 +71,7 @@ def _mount(app, binding, monkeypatch, pid=None):
 
         return task_sse_response(events(), sessionmaker=app.state.sessionmaker, binding=binding)
 
-    app.add_api_route("/_test/task-frame", endpoint, methods=["GET"])
+    mount_stream_response(app, "/_test/task-frame", endpoint)
 
 
 async def _cancel(*tasks):

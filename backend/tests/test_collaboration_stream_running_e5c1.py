@@ -16,6 +16,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import uvicorn
+from fastapi import Request
 from sqlalchemy import select, update
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
@@ -51,29 +52,33 @@ class _Hold:
         self.item = None
 
 
+async def _running_endpoint(
+    request: Request, task_id: int, task_key: str, user: CurrentUser, db: DbDep, engine: TaskEngineDep,
+):
+    task = await task_service.get_owned_task(db, user.id, task_id, expected_task_key=task_key)
+    binding = await _capture_stream_binding(db, task, db.info["authenticated_actor"])
+    await db.close()
+    holds = request.app.state.test_stream_holds
+
+    async def events():
+        async with aclosing(_guarded(engine, binding)) as source:
+            async for item in source:
+                for hold in holds:
+                    if not hold.reached.is_set() and hold.predicate(item):
+                        hold.item = item
+                        hold.reached.set()
+                        await hold.proceed.wait()
+                        break
+                yield item
+
+    return task_sse_response(events(), sessionmaker=request.app.state.sessionmaker, binding=binding)
+
+
 def _mount(app, holds: list[_Hold] | None = None):
     """与生产订阅入口同样以真实认证捕获原绑定，但一律走受控管线。"""
     holds = holds if holds is not None else []
-
-    async def endpoint(task_id: int, task_key: str, user: CurrentUser, db: DbDep, engine: TaskEngineDep):
-        task = await task_service.get_owned_task(db, user.id, task_id, expected_task_key=task_key)
-        binding = await _capture_stream_binding(db, task, db.info["authenticated_actor"])
-        await db.close()
-
-        async def events():
-            async with aclosing(_guarded(engine, binding)) as source:
-                async for item in source:
-                    for hold in holds:
-                        if not hold.reached.is_set() and hold.predicate(item):
-                            hold.item = item
-                            hold.reached.set()
-                            await hold.proceed.wait()
-                            break
-                    yield item
-
-        return task_sse_response(events(), sessionmaker=app.state.sessionmaker, binding=binding)
-
-    app.add_api_route("/_test/tasks/{task_id}/stream", endpoint, methods=["GET"])
+    app.state.test_stream_holds = holds
+    app.add_api_route("/_test/tasks/{task_id}/stream", _running_endpoint, methods=["GET"])
     return holds
 
 

@@ -19,6 +19,7 @@ from app.services.task_engine.stream_lease import (
     task_sse_response,
 )
 from tests.helpers import register, wait_until
+from tests.stream_helpers import mount_stream_response
 
 
 async def _binding(app, client):
@@ -291,7 +292,7 @@ async def test_task_frame_lease_covers_real_asgi_send_and_tcp_client(app, client
     async def endpoint():
         return task_sse_response(events(), sessionmaker=app.state.sessionmaker, binding=binding)
 
-    app.add_api_route("/_test/frame-tcp", endpoint, methods=["GET"])
+    mount_stream_response(app, "/_test/frame-tcp", endpoint)
 
     async def wrapped(scope, receive, send):
         async def delayed(message):

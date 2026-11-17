@@ -11,7 +11,8 @@
 `.trellis/tasks/10-22-ai-novel-platform/design.md`。这些文件记录代码实际遵循的约定，
 并附有摘自真实文件的代码片段。
 
-质量门禁：`cd backend && uv run ruff check . && uv run pytest`。
+默认 SQLite 全量门禁：`cd backend && uv run ruff check . && uv run pytest -n 4 --dist loadfile --durations=20`。
+开发迭代先运行受影响模块，最终执行一次完整门禁；配置 PostgreSQL 测试连接串时改用 `pytest -n 0`，详见质量规范。
 
 ---
 

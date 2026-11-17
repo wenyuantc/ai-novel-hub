@@ -14,6 +14,7 @@ from app.models import Task
 from app.services.task_engine import stream_evidence, stream_lease
 from app.services.task_engine.stream_lease import task_sse_response
 from tests.helpers import create_ai_config, wait_until
+from tests.stream_helpers import mount_stream_response
 from tests.test_collaboration_access_postgresql import _wait_for_blocker
 from tests.test_collaboration_rewrite_identity_postgresql import _assert_no_idle_output_transaction
 from tests.test_collaboration_task_postgresql import postgres_collaboration_apps as _postgres_fixture
@@ -87,7 +88,7 @@ def _add_stream(app, binding, backend_pid, next_frame, monkeypatch, *, before_le
         return task_sse_response(events(), sessionmaker=app.state.sessionmaker, binding=binding,
                                  frame_timeout=frame_timeout)
 
-    app.add_api_route("/_test/task-frame", endpoint, methods=["GET"])
+    mount_stream_response(app, "/_test/task-frame", endpoint)
 
 
 async def test_send_holds_postgres_lease_until_revoke_then_blocks_next_frame(postgres_task_sse_apps, monkeypatch):

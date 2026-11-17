@@ -5,6 +5,7 @@ import json
 
 from app.services.task_engine.stream_lease import task_sse_response
 from tests.helpers import Gate, create_ai_config, create_project, parse_sse, register, wait_until
+from tests.stream_helpers import mount_stream_response
 from tests.test_task_sse_scope import _binding
 from tests.test_task_sse_scope_postgresql import _tcp_server
 
@@ -40,7 +41,7 @@ async def test_outline_engine_frames_pass_original_proof_over_tcp(app, client, f
         )
         return task_sse_response(events, sessionmaker=app.state.sessionmaker, binding=binding)
 
-    app.add_api_route("/_test/task-frame", endpoint, methods=["GET"])
+    mount_stream_response(app, "/_test/task-frame", endpoint)
     try:
         async with _tcp_server(app, entered, release) as tcp:
             pending = asyncio.create_task(tcp.get("/_test/task-frame"))

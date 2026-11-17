@@ -30,6 +30,7 @@ from tests.helpers import (
     wait_task,
     wait_until,
 )
+from tests.stream_helpers import mount_stream_response
 from tests.test_agent_providers import openai_chunk
 from tests.test_ai_visibility_dispatch import _server
 from tests.test_setting_ai_context import _settings
@@ -52,7 +53,7 @@ def _install_guarded_entity_stream(app, user_id: int, task: dict) -> None:
         )
         return stream_lease.task_sse_response(events, sessionmaker=app.state.sessionmaker, binding=binding)
 
-    app.add_api_route("/_test/entity-guarded-stream", endpoint, methods=["GET"])
+    mount_stream_response(app, "/_test/entity-guarded-stream", endpoint)
 
 
 @pytest.mark.parametrize("mutation", ["switch_default", "edit_selected"])
