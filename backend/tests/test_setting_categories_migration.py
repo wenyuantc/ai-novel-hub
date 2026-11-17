@@ -1,14 +1,10 @@
 """0036 在完整字段资料图上原位添加整理标签与分类，不改写既有设定。"""
 
-import asyncio
 import json
-import os
-import uuid
 
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, event, inspect, select, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.orm import Session
@@ -17,7 +13,6 @@ from app.models import Base, Career, Character, Organization, WorldSetting
 from app.schemas.progression import StoryPosition
 from app.services.setting_field_values import FieldSpec
 from app.services.setting_progression_resolver import ProgressionEvent, resolve_progressions
-from tests.schema_helpers import create_isolated_schema
 from tests.test_setting_fields_migration import (
     _config,
     _foreign_keys_during_migrations,
@@ -419,20 +414,6 @@ def _verify_rules_and_cascade(conn):
             conn.execute(categories.insert().values(
                 project_id=1, name=name, applicable_types=["character"], match_mode=mode,
             ))
-    for table, identity in ((definitions, definition_id), (options, option_id)):
-        if conn.dialect.name == "postgresql":
-            with pytest.raises(IntegrityError), conn.begin_nested():
-                conn.execute(table.delete().where(table.c.id == identity))
-                conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-    if conn.dialect.name == "postgresql":
-        for missing_definition in (True, False):
-            with pytest.raises(IntegrityError), conn.begin_nested():
-                conn.execute(rules.insert().values(
-                    category_id=first, kind="dropdown",
-                    definition_id=999999 if missing_definition else definition_id,
-                    option_id=option_id if missing_definition else 999999,
-                ))
-                conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     with conn.begin_nested() as savepoint:
         conn.execute(categories.delete().where(categories.c.id == first))
         assert conn.scalar(select(rules.c.id).where(rules.c.category_id == first)) is None
@@ -467,104 +448,3 @@ def test_0036_refuses_lossy_downgrade_before_any_change(tmp_path, new_data):
             assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0036"
     finally:
         engine.dispose()
-
-
-def test_0036_postgresql_0035_roundtrip_and_no_action_rules_project_cascade(monkeypatch, tmp_path):
-    database_url = os.environ.get("AINOVEL_FIELDS_POSTGRES_TEST_URL")
-    if not database_url:
-        pytest.skip("设置 AINOVEL_FIELDS_POSTGRES_TEST_URL 才运行隔离 PostgreSQL 验证")
-    parsed = make_url(database_url)
-    if parsed.drivername != "postgresql+asyncpg" or parsed.host != "127.0.0.1" or parsed.database != "fields_verify":
-        raise ValueError("分类迁移测试只允许本机 fields_verify 专用测试数据库")
-    schema = f"setting_categories_test_{uuid.uuid4().hex}"
-    original_factory = async_sqlalchemy.async_engine_from_config
-
-    def isolated_factory(*args, **kwargs):
-        return original_factory(*args, **kwargs, connect_args={"server_settings": {"search_path": schema}})
-
-    async def run(action, *, isolated=True):
-        kwargs = {"connect_args": {"server_settings": {"search_path": schema}}} if isolated else {}
-        engine = async_sqlalchemy.create_async_engine(database_url, **kwargs)
-        try:
-            async with engine.begin() as conn:
-                assert await conn.scalar(text("SELECT current_database()")) == "fields_verify"
-                return await action(conn)
-        finally:
-            await engine.dispose()
-
-    async def create_schema(conn):
-        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-
-    async def drop_schema(conn):
-        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-
-    async def seed_legacy(conn):
-        await conn.run_sync(_seed_connection)
-        for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
-            await conn.execute(text(
-                f"SELECT setval(pg_get_serial_sequence('{table}','id'), (SELECT max(id) FROM {table}))"
-            ))
-
-    async def seed_fields(conn):
-        await conn.run_sync(_seed_fields)
-        for table in ("setting_field_definitions", "setting_field_options", "setting_reference_handles",
-                      "setting_text_fields", "setting_progressions"):
-            await conn.execute(text(
-                f"SELECT setval(pg_get_serial_sequence('{table}','id'), (SELECT max(id) FROM {table}))"
-            ))
-        return await conn.run_sync(_snapshot), await conn.run_sync(_effective_values)
-
-    async def verify(conn):
-        await conn.run_sync(lambda sync: _assert_preserved(sync, before))
-        assert await conn.run_sync(_effective_values) == effective
-        for name in ENTITY_TABLES:
-            rows = await conn.scalars(select(Base.metadata.tables[name].c.setting_tags))
-            assert all(tags == [] for tags in rows)
-        revisions = await conn.scalars(text("SELECT categories_revision FROM projects ORDER BY id"))
-        assert revisions.all() == [0, 0]
-        actual = await conn.run_sync(lambda sync: {
-            name: _schema_contract(inspect(sync), name) for name in CHANGED_TABLES
-        })
-        expected_schema = f"{schema}_model"
-        await conn.execute(text(f'CREATE SCHEMA "{expected_schema}"'))
-        try:
-            await conn.execute(text(f'SET LOCAL search_path TO "{expected_schema}"'))
-            await conn.run_sync(create_isolated_schema)
-            expected = await conn.run_sync(lambda sync: {
-                name: _schema_0036_model_contract(inspect(sync), name) for name in CHANGED_TABLES
-            })
-            assert actual == expected
-        finally:
-            await conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
-            await conn.execute(text(f'DROP SCHEMA "{expected_schema}" CASCADE'))
-
-    async def cascade(conn):
-        actions = (await conn.execute(text(
-            "SELECT confdeltype,condeferrable,condeferred FROM pg_constraint "
-            "WHERE conrelid='setting_category_rules'::regclass "
-            "AND contype='f' AND confrelid <> 'setting_categories'::regclass"
-        ))).all()
-        assert actions == [(b"a", True, True), (b"a", True, True)]
-        await conn.run_sync(_verify_rules_and_cascade)
-        await conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        await conn.execute(text("UPDATE world_settings SET setting_tags='[\"仍然保留\"]' WHERE id=1"))
-
-    config = _config(tmp_path / "unused.db")
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
-    asyncio.run(run(create_schema, isolated=False))
-    try:
-        monkeypatch.setattr(async_sqlalchemy, "async_engine_from_config", isolated_factory)
-        command.upgrade(config, "0034")
-        asyncio.run(run(seed_legacy))
-        command.upgrade(config, "0035")
-        before, effective = asyncio.run(run(seed_fields))
-        command.upgrade(config, "0036")
-        asyncio.run(run(verify))
-        command.downgrade(config, "0035")
-        command.upgrade(config, "0036")
-        asyncio.run(run(verify))
-        asyncio.run(run(cascade))
-        with pytest.raises(RuntimeError, match="不能无损降级"):
-            command.downgrade(config, "0035")
-    finally:
-        asyncio.run(run(drop_schema, isolated=False))

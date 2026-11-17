@@ -31,12 +31,6 @@ from app.services import (
 )
 from app.services.setting_ai_context import build_scope
 from tests.helpers import Gate, analysis_json, create_ai_config, create_project, register, run_task, stream_task
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_app as postgres_fields_app,
-)
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_client as postgres_fields_client,
-)
 
 
 async def _settings(client, base, kind, ident, **patch):
@@ -457,32 +451,3 @@ async def test_other_model_consumers_use_same_hard_projection(app, client, fake_
     for marker in ("隐藏当前状态", "隐藏人物背景", "隐藏人物定位", "不可读人物",
                    "隐私别名", "隐藏世界观", "禁用世界观正文", "不可读组织描述"):
         assert marker not in prompt
-
-
-async def test_postgresql_identity_union_tracks_all_types_and_loads_directional_links(
-    postgres_fields_app, postgres_fields_client,
-):
-    app, client = postgres_fields_app, postgres_fields_client
-    await register(client)
-    pid = (await create_project(client))["id"]
-    base = f"/api/v1/projects/{pid}"
-    async with app.state.sessionmaker() as db:
-        hero = Character(project_id=pid, name="当前角色", aliases=["当前别名"])
-        org = Organization(project_id=pid, name="当前组织")
-        career = Career(project_id=pid, name="当前职业", kind="main")
-        world = WorldSetting(project_id=pid, title="当前物品", category="item")
-        db.add_all([hero, org, career, world])
-        await db.commit()
-    await _settings(client, base, "character", hero.id, links=[{"kind": "organization", "id": org.id}])
-    await _settings(client, base, "organization", org.id, ai_mode="manual_only")
-    response = await client.post(f"{base}/mentions/preview", json={
-        "text": "当前别名、当前组织、当前职业、当前物品",
-    })
-    assert response.status_code == 200, response.text
-    assert [s["entities"][0]["kind"] for s in response.json()["spans"]] == [
-        "character", "organization", "career", "world",
-    ]
-    async with app.state.sessionmaker() as db:
-        scope = await build_scope(db, pid, texts=("当前别名",))
-        assert scope.direct == {("character", hero.id)}
-        assert scope.selected == {("character", hero.id), ("organization", org.id)}

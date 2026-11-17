@@ -1,9 +1,6 @@
 """0035 在真实存量父子行上保留身份、原文、孤儿事件和回收站作品。"""
 
-import asyncio
 import json
-import os
-import uuid
 from pathlib import Path
 
 import pytest
@@ -19,15 +16,12 @@ from sqlalchemy import (
     create_engine,
     event,
     inspect,
-    select,
     text,
 )
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 
 from app.models import Base
-from tests.schema_helpers import create_isolated_schema
 
 BACKEND = Path(__file__).resolve().parents[1]
 LEGACY_TEXT = '原文\n"引号" 😀\\n {"option_id": 99}'
@@ -188,7 +182,7 @@ def _schema_0055_model_contract(inspector, table):
         name, scope_column = added_index
         columns, unique, options = contract["indexes"].pop(name)
         assert columns == (scope_column, "id") and unique
-        assert not options.get("sqlite_where") and not options.get("postgresql_where")
+        assert not options.get("sqlite_where")
     return contract
 
 
@@ -450,165 +444,3 @@ def test_0035_refuses_lossy_downgrade_before_mutation(tmp_path, new_data):
         assert conn.scalar(text("SELECT count(*) FROM setting_progressions")) >= 3
         assert conn.scalar(text("SELECT definition_id FROM setting_text_fields WHERE id=201")) is None
     engine.dispose()
-
-
-def test_0035_postgresql_preserves_text_json_null_and_no_action_project_cascade(monkeypatch):
-    """只在显式指定的本机临时库内创建随机 schema，不读写运行中的作品。"""
-    database_url = os.environ.get("AINOVEL_FIELDS_POSTGRES_TEST_URL")
-    if not database_url:
-        pytest.skip("设置 AINOVEL_FIELDS_POSTGRES_TEST_URL 才运行隔离 PostgreSQL 验证")
-    parsed = make_url(database_url)
-    if parsed.drivername != "postgresql+asyncpg" or parsed.host != "127.0.0.1" or parsed.database != "fields_verify":
-        raise ValueError("字段迁移测试只允许本机 fields_verify 专用测试数据库")
-    schema = f"setting_fields_test_{uuid.uuid4().hex}"
-    original_factory = async_sqlalchemy.async_engine_from_config
-
-    def isolated_factory(*args, **kwargs):
-        return original_factory(
-            *args, **kwargs, connect_args={"server_settings": {"search_path": schema, "timezone": "UTC"}},
-        )
-
-    async def run(action, *, isolated=True):
-        kwargs = {"connect_args": {"server_settings": {
-            "search_path": schema if isolated else "public", "timezone": "UTC",
-        }}}
-        engine = async_sqlalchemy.create_async_engine(database_url, **kwargs)
-        try:
-            async with engine.begin() as conn:
-                assert await conn.scalar(text("SELECT current_database()")) == "fields_verify"
-                await action(conn)
-        finally:
-            await engine.dispose()
-
-    async def create_schema(conn):
-        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-
-    async def drop_schema(conn):
-        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-
-    async def seed(conn):
-        await conn.run_sync(_seed_connection)
-        # 测试使用显式旧 ID；让 PostgreSQL 自增序列继续在高水位之后生成。
-        for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
-            await conn.execute(text(
-                f"SELECT setval(pg_get_serial_sequence('{table}','id'), (SELECT max(id) FROM {table}))"
-            ))
-
-    async def verify_legacy(conn):
-        fields = Base.metadata.tables["setting_text_fields"]
-        assert (await conn.execute(select(fields.c.base_value).where(fields.c.id == 201))).scalar_one() == LEGACY_TEXT
-        assert (await conn.execute(select(fields.c.base_value).where(fields.c.id == 202))).scalar_one() == "null"
-        assert (await conn.execute(select(fields.c.base_value).where(fields.c.id == 203))).scalar_one() == ""
-        assert (await conn.execute(text(
-            "SELECT id,custom_field_id,active FROM setting_progressions ORDER BY id"
-        ))).all() == [(301, 201, True), (302, 201, False), (303, 202, True)]
-        assert (await conn.execute(text(
-            "SELECT created_at::text,updated_at::text FROM setting_text_fields WHERE id=201"
-        ))).one() == ("2025-01-01 01:02:03+00", "2026-01-01 04:05:06+00")
-        assert await conn.scalar(text("SELECT count(*) FROM setting_timelines WHERE subject_kind='organization'")) == 2
-        assert await conn.scalar(text("SELECT count(*) FROM setting_timelines WHERE subject_kind='career_entry'")) == 2
-        assert await conn.scalar(text("SELECT deleted_at IS NOT NULL FROM projects WHERE id=2"))
-
-    async def verify_downgrade(conn):
-        assert await conn.scalar(text("SELECT base_value FROM setting_text_fields WHERE id=201")) == LEGACY_TEXT
-        assert await conn.scalar(text("SELECT count(*) FROM setting_progressions")) == 3
-        assert await conn.scalar(text("SELECT count(*) FROM setting_timelines")) == 5
-
-    async def verify_schema(conn):
-        actual = await conn.run_sync(lambda sync: {
-            table: _schema_contract(inspect(sync), table) for table in SCHEMA_TABLES
-        })
-        expected_schema = f"{schema}_model"
-        await conn.execute(text(f'CREATE SCHEMA "{expected_schema}"'))
-        try:
-            await conn.execute(text(f'SET LOCAL search_path TO "{expected_schema}"'))
-            await conn.run_sync(create_isolated_schema)
-            await conn.run_sync(_create_pre_scene_anchor_contract)
-            expected = await conn.run_sync(lambda sync: {
-                table: _schema_0035_model_contract(inspect(sync), table) for table in SCHEMA_TABLES
-            })
-            for table in SCHEMA_TABLES:
-                assert actual[table] == expected[table], table
-        finally:
-            await conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
-            await conn.execute(text(f'DROP SCHEMA "{expected_schema}" CASCADE'))
-
-    async def verify_new_data(conn):
-        fields = await conn.run_sync(_historical_table, "setting_text_fields")
-        handles = Base.metadata.tables["setting_reference_handles"]
-        definitions = await conn.run_sync(_historical_table, "setting_field_definitions")
-        options = Base.metadata.tables["setting_field_options"]
-        events = await conn.run_sync(_historical_table, "setting_progressions")
-        reference = await conn.scalar(definitions.insert().values(
-            project_id=1, label="牵挂", field_type="reference", applicable_types=["character"],
-            reference_types=["character", "world.place", "organization", "career"],
-        ).returning(definitions.c.id))
-        dropdown = await conn.scalar(definitions.insert().values(
-            project_id=1, label="立场", field_type="dropdown", applicable_types=["character"],
-        ).returning(definitions.c.id))
-        await conn.execute(options.insert().values(definition_id=dropdown, label="中立"))
-        await conn.execute(text(
-            "INSERT INTO world_settings(id,project_id,title,content,category,sort) VALUES(2,1,'本山','正文','place',0)"
-        ))
-        for kind, column, target_id in (
-            ("character", "character_id", 1), ("world", "world_setting_id", 2),
-            ("organization", "organization_id", 1), ("career", "career_id", 1),
-        ):
-            await conn.execute(handles.insert().values(project_id=1, kind=kind, **{column: target_id}))
-        target_fks = (await conn.execute(text(
-            "SELECT confdeltype FROM pg_constraint WHERE conrelid='setting_reference_handles'::regclass "
-            "AND contype='f' AND confrelid <> 'projects'::regclass"
-        ))).scalars().all()
-        assert target_fks == [b"a"] * 4
-        field_id = await conn.scalar(fields.insert().values(
-            timeline_id=101, definition_id=reference, label=None, base_value=None,
-        ).returning(fields.c.id))
-        await conn.execute(events.insert().values(
-            timeline_id=101, custom_field_id=field_id, operation="replace", value=None,
-            anchor_kind="planned", chapter_no=32,
-        ))
-        assert (await conn.execute(text(
-            "SELECT base_value IS NULL, json_typeof(base_value) FROM setting_text_fields WHERE id=:id"
-        ), {"id": field_id})).one() == (False, "null")
-        assert (await conn.execute(text(
-            "SELECT value IS NULL, json_typeof(value) FROM setting_progressions WHERE custom_field_id=:id"
-        ), {"id": field_id})).one() == (False, "null")
-        for statement in (
-            "DELETE FROM characters WHERE id=1", "DELETE FROM world_settings WHERE id=2",
-            "DELETE FROM organizations WHERE id=1", "DELETE FROM careers WHERE id=1",
-            "DELETE FROM setting_field_definitions WHERE label='牵挂'",
-        ):
-            with pytest.raises(IntegrityError):
-                async with conn.begin_nested():
-                    await conn.execute(text(statement))
-                    await conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        await conn.execute(text("DELETE FROM projects WHERE id=1"))
-        await conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        for table in ("setting_field_definitions", "setting_field_options", "setting_reference_handles"):
-            assert await conn.scalar(text(f"SELECT count(*) FROM {table}")) == 0
-        assert await conn.scalar(text("SELECT count(*) FROM projects")) == 1
-        assert await conn.scalar(text("SELECT count(*) FROM setting_progressions")) == 1
-        await conn.execute(definitions.insert().values(
-            project_id=2, label="保留的新配置", field_type="line", applicable_types=["career"],
-        ))
-
-    config = Config(str(BACKEND / "alembic.ini"))
-    config.set_main_option("script_location", str(BACKEND / "alembic"))
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
-    config.attributes["configure_logger"] = False
-    asyncio.run(run(create_schema, isolated=False))
-    try:
-        monkeypatch.setattr(async_sqlalchemy, "async_engine_from_config", isolated_factory)
-        command.upgrade(config, "0034")
-        asyncio.run(run(seed))
-        command.upgrade(config, "0035")
-        asyncio.run(run(verify_legacy))
-        asyncio.run(run(verify_schema))
-        command.downgrade(config, "0034")
-        asyncio.run(run(verify_downgrade))
-        command.upgrade(config, "0035")
-        asyncio.run(run(verify_new_data))
-        with pytest.raises(RuntimeError, match="不能无损降级"):
-            command.downgrade(config, "0034")
-    finally:
-        asyncio.run(run(drop_schema, isolated=False))

@@ -21,7 +21,7 @@ from app.services.task_engine.stream_lease import (
     task_sse_response,
 )
 from tests.helpers import parse_sse, register
-from tests.stream_helpers import mount_stream_response
+from tests.stream_helpers import _tcp_server, mount_stream_response
 from tests.test_collaboration_task_privacy import _setup, _tasks
 
 
@@ -261,8 +261,6 @@ async def test_personal_completed_task_stream_remains_available(app, client):
 
 
 async def test_sqlite_task_frame_send_and_revocation_are_serialized_over_tcp(app, client, make_client, monkeypatch):
-    from tests.test_task_sse_scope_postgresql import _tcp_server
-
     guest = make_client()
     owner, editor, project, member = await _setup(app, client, guest)
     tasks = await _tasks(app, owner["id"], editor["id"], project["id"], member["invitation_id"], member["revision"])

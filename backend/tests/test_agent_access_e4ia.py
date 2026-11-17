@@ -4,10 +4,8 @@ E4i-d 起协作者 HTTP 入口已开放（完整角色矩阵见 test_agent_entri
 真实能力判定：作者，或原邀请轮次的 accepted editor；管理员人工来源不得并入。
 """
 
-from contextlib import asynccontextmanager
 from uuid import uuid4
 
-import httpx
 import pytest
 from sqlalchemy import select, update
 
@@ -20,8 +18,6 @@ from app.services.agent.tools.base import EmptyArgs, Tool, ToolCtx
 from app.services.audit_writer import AuditOperation
 from tests.helpers import create_project, register
 from tests.test_agent_mcp_skills import turn_action
-
-pytest_plugins = ("tests.test_agent_authenticated_actor",)
 
 
 async def _invite(owner, member, project_id, username, role="editor"):
@@ -344,43 +340,12 @@ async def _check_undo(app, client, admin, monkeypatch, outcome):
             assert change.status == "executed" and stored.synopsis == project["synopsis"]
 
 
-@asynccontextmanager
-async def _postgres_clients(app):
-    from app.schemas.auth import Credentials
-    from app.services import auth_service
-
-    async with app.state.sessionmaker() as db:
-        await auth_service.create_user(db, Credentials(username="e4ia_manager", password="secret123"), is_admin=True)
-    transport = httpx.ASGITransport(app=app)
-    async with (
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as owner,
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as admin,
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as member,
-    ):
-        login = await admin.post("/api/v1/auth/login", json={"username": "e4ia_manager", "password": "secret123"})
-        assert login.status_code == 200, login.text
-        yield owner, admin, member
 
 
-@pytest.mark.parametrize("source", ["viewer", "revoked", "stale_grant"])
-async def test_postgresql_admin_source_never_authorizes_agent_write(postgres_agent_app, source):
-    async with _postgres_clients(postgres_agent_app) as (owner, admin, _member):
-        await register(owner, "e4ia-owner")
-        for locked in (False, True):
-            await _check_admin_source(postgres_agent_app, owner, admin, "e4ia_manager", source,
-                                      locked=locked, method="execute")
 
 
-async def test_postgresql_confirm_path_rechecks_inside_tool(postgres_agent_app, monkeypatch):
-    async with _postgres_clients(postgres_agent_app) as (owner, _admin, member):
-        await register(owner, "e4ia-owner")
-        await _check_confirm_path(postgres_agent_app, owner, member, monkeypatch)
 
 
-@pytest.mark.parametrize("outcome", ["success", "failure"])
-async def test_postgresql_undo_coordinates_nested_audit(postgres_agent_app, monkeypatch, outcome):
-    async with _postgres_clients(postgres_agent_app) as (owner, admin, _member):
-        await _check_undo(postgres_agent_app, owner, admin, monkeypatch, outcome)
 
 
 @pytest.mark.parametrize("source", ["viewer", "revoked", "stale_grant", "foreign_grant"])

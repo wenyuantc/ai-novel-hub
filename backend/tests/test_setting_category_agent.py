@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 from sqlalchemy import event as sqlalchemy_event
-from sqlalchemy import inspect, select, text, update
+from sqlalchemy import inspect, select, update
 
 from app.core.errors import ConflictError
 from app.models import (
@@ -770,8 +770,6 @@ async def test_real_database_deferred_rule_restore_and_legacy_preflight(snapshot
         ))
         await db.commit()
         await effects.undo(db, project.id, captured)
-        if db.bind.dialect.name == "postgresql":
-            await db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         await db.commit()
         assert await effects.snapshot(db, project.id) == before
         assert project.fields_revision == 12 and project.categories_revision == 18
@@ -784,8 +782,6 @@ async def test_real_database_deferred_rule_restore_and_legacy_preflight(snapshot
         deleted = effects.diff(before, await effects.snapshot(db, project.id))
         await db.commit()
         await effects.undo(db, project.id, deleted)
-        if db.bind.dialect.name == "postgresql":
-            await db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         await db.commit()
         assert (await db.get(SettingCategoryRule, rule_id)).category_id == category_id
         assert await effects.snapshot(db, project.id) == before

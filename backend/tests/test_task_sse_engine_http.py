@@ -5,9 +5,8 @@ import json
 
 from app.services.task_engine.stream_lease import task_sse_response
 from tests.helpers import Gate, create_ai_config, create_project, parse_sse, register, wait_until
-from tests.stream_helpers import mount_stream_response
+from tests.stream_helpers import _tcp_server, mount_stream_response
 from tests.test_task_sse_scope import _binding
-from tests.test_task_sse_scope_postgresql import _tcp_server
 
 
 async def test_outline_engine_frames_pass_original_proof_over_tcp(app, client, fake_llm):

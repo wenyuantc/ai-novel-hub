@@ -211,12 +211,7 @@ async def test_editor_terminal_receipt_rejects_damaged_origin(app, damage):
                     }
                     if damage == "log_model_instance":
                         # 模拟库外篡改：绕过应用层与数据库不可变触发器，直接改写已提交日志的模型实例键。
-                        if db.bind.dialect.name == "postgresql":
-                            await db.execute(text(
-                                "DROP TRIGGER generation_logs_instance_keys_immutable ON generation_logs"
-                            ))
-                        else:
-                            await db.execute(text("DROP TRIGGER generation_logs_instance_keys_immutable"))
+                        await db.execute(text("DROP TRIGGER generation_logs_instance_keys_immutable"))
                     await db.execute(update(GenerationLog).where(GenerationLog.id == log.id).values(**changes[damage]))
                 else:
                     checkpoint = deepcopy(task.checkpoint)

@@ -6,12 +6,6 @@ from app.models import Project, SettingFieldDefinition
 from app.services import setting_category_service as categories
 from tests.helpers import create_project, register
 from tests.test_cards import _career, _char, _source_project
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_app as postgres_fields_app,
-)
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_client as postgres_fields_client,
-)
 
 
 def _card(version=5, tags=None):
@@ -184,15 +178,3 @@ async def test_cards_v5_rejects_noncanonical_snapshot_tags(client):
         card["characters"][0]["setting_tags"] = value
         response = await client.post(f"{base}/cards/import/preview", json={"data": card})
         assert response.status_code == 400, (value, response.text)
-
-
-async def test_postgresql_cards_v6_tags_snapshot(postgres_fields_client):
-    await test_cards_v6_exports_and_imports_tags_without_categories(postgres_fields_client)
-
-
-async def test_postgresql_cards_v5_failure_rolls_back_both_revisions(
-    postgres_fields_client, postgres_fields_app, monkeypatch,
-):
-    await test_cards_v5_failed_tag_write_rolls_back_entities_fields_and_revisions(
-        postgres_fields_client, postgres_fields_app, monkeypatch,
-    )

@@ -155,7 +155,7 @@ def test_0030_constraints_active_lease_artifact_identity_and_big_file_size(tmp_p
                     "VALUES(1,'local','ready','{}','{}',CURRENT_TIMESTAMP)",
                 )
             )
-        # PostgreSQL列编译保留64位，不能因SQLite无界Integer碰巧通过而漏掉>2GB。
+        # 确认迁移保留大文件大小列的类型。
         size_type = next(
             column["type"]
             for column in inspect(engine).get_columns("backup_artifacts")

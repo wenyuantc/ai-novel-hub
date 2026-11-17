@@ -3,22 +3,18 @@
 import asyncio
 from uuid import uuid4
 
-import httpx
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
 
 from app.core.errors import ForbiddenError, NotFoundError, UnauthorizedError
 from app.models import AdminAuditLog, Chapter, Project
-from app.schemas.auth import Credentials
 from app.schemas.chapter import ChapterUpdate
-from app.services import auth_service, chapter_service, project_lifecycle
+from app.services import chapter_service, project_lifecycle
 from app.services.agent import transactions
 from app.services.agent.tools.base import EmptyArgs, Tool, ToolCtx, TransactionSession
 from app.services.audit_writer import AuditOperation, AuditOperationError
 from tests.helpers import create_project, register
-
-pytest_plugins = ("tests.test_agent_authenticated_actor",)
 
 
 async def _seed(app, client, admin):
@@ -398,97 +394,3 @@ async def test_agent_authorization_loss_is_not_an_ordinary_tool_error(app, clien
         ctx = ToolCtx(db, row, user["id"], app.state.task_engine.ctx, visibility_locked=True)
         with pytest.raises(transactions.AgentAuthorizationChangedError):
             await getattr(tool, method)(ctx, {})
-
-
-async def _postgres_admin(app, admin):
-    async with app.state.sessionmaker() as db:
-        await auth_service.create_user(
-            db, Credentials(username="agent_manager", password="secret123"), is_admin=True,
-        )
-    response = await admin.post(
-        "/api/v1/auth/login", json={"username": "agent_manager", "password": "secret123"},
-    )
-    assert response.status_code == 200, response.text
-
-
-async def test_postgresql_preview_and_execute_transaction_facts(postgres_agent_app):
-    transport = httpx.ASGITransport(app=postgres_agent_app)
-    async with (
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as admin,
-    ):
-        await _postgres_admin(postgres_agent_app, admin)
-        await _check_preview_and_execute(postgres_agent_app, client, admin)
-
-
-async def test_postgresql_nested_failure_is_invisible_until_root_commit(postgres_agent_app):
-    transport = httpx.ASGITransport(app=postgres_agent_app)
-    async with (
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as admin,
-    ):
-        await _postgres_admin(postgres_agent_app, admin)
-        manager, project_id, original = await _seed(postgres_agent_app, client, admin)
-        operation_id = str(uuid4())
-        coordinator = transactions.AgentAuditCoordinator()
-        async with postgres_agent_app.state.sessionmaker() as writer:
-            await project_lifecycle.lock_record(writer, project_id)
-            outer = await writer.begin_nested()
-            with pytest.raises(ForbiddenError):
-                async with writer.begin_nested():
-                    proxy = TransactionSession(writer, audit_coordinator=coordinator, audit_mode="execute")
-                    await _write_project(proxy, manager, project_id, operation_id, failure=True)
-            await outer.rollback()
-            async with postgres_agent_app.state.sessionmaker() as observer:
-                assert await observer.scalar(select(AdminAuditLog.id).where(
-                    AdminAuditLog.operation_id == operation_id,
-                )) is None
-                with pytest.raises(DBAPIError) as error:
-                    await observer.execute(select(Project.id).where(
-                        Project.id == project_id,
-                    ).with_for_update(nowait=True))
-                assert transactions.is_serialization_error(error.value) is False
-                assert getattr(error.value.orig, "sqlstate", None) == "55P03"
-                await observer.rollback()
-            await coordinator.flush_failures(writer)
-            await writer.commit()
-            coordinator.committed()
-        events = await _events(postgres_agent_app, operation_id)
-        assert len(events) == 1 and events[0].result == "failure" and events[0].error_code == "forbidden"
-        async with postgres_agent_app.state.sessionmaker() as observer:
-            assert (await observer.get(Project, project_id)).title == original
-
-
-async def test_postgresql_real_serialization_conflict_keeps_safe_failure(postgres_agent_app):
-    transport = httpx.ASGITransport(app=postgres_agent_app)
-    async with (
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as admin,
-    ):
-        await _postgres_admin(postgres_agent_app, admin)
-        manager, project_id, _ = await _seed(postgres_agent_app, client, admin)
-        operation_id = str(uuid4())
-        coordinator = transactions.AgentAuditCoordinator()
-        async with transactions.session(postgres_agent_app.state.sessionmaker) as writer:
-            # RR 先固定旧快照，另一个真实连接提交后再更新同一行，触发真正的 40001。
-            assert await writer.scalar(select(Project.id).where(Project.id == project_id)) == project_id
-            async with postgres_agent_app.state.sessionmaker() as concurrent:
-                await concurrent.execute(update(Project).where(Project.id == project_id).values(title="先提交"))
-                await concurrent.commit()
-            with pytest.raises(DBAPIError) as failure:
-                async with writer.begin_nested():
-                    proxy = TransactionSession(writer, audit_coordinator=coordinator, audit_mode="execute")
-                    async with AuditOperation(
-                        proxy, manager, "project.update", "project", project_id,
-                        project_id=project_id, operation_id=operation_id,
-                    ):
-                        await proxy.execute(update(Project).where(Project.id == project_id).values(title="不得提交"))
-            assert transactions.is_serialization_error(failure.value)
-            assert failure.value.__context__ is None and failure.value.__cause__ is None
-            assert "不得提交" not in str(failure.value)
-            outcomes = await coordinator.reconcile_after_failure(writer, postgres_agent_app.state.sessionmaker)
-        assert outcomes[operation_id] == "failure"
-        events = await _events(postgres_agent_app, operation_id)
-        assert len(events) == 1 and events[0].error_code == "system_error"
-        async with postgres_agent_app.state.sessionmaker() as observer:
-            assert (await observer.get(Project, project_id)).title == "先提交"

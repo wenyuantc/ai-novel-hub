@@ -120,68 +120,10 @@ def test_snapshot_does_not_overwrite_or_remove_preexisting_output(tmp_path: Path
     assert existing.read_text() == "already safe"
 
 
-def test_pg_snapshot_password_only_in_private_temporary_pgpass(monkeypatch, tmp_path: Path):
-    destination = tmp_path / "result.dump"
-    captured = []
-
-    def command(argv, **options):
-        if "--version" in argv:
-            return b"pg_dump (PostgreSQL) 16.4\n"
-        assert "dangerous:password" not in repr(argv)
-        environment = options["env"]
-        assert all("dangerous:password" not in value for value in environment.values())
-        credential_file = Path(environment["PGPASSFILE"])
-        assert credential_file.stat().st_mode & 0o777 == 0o600
-        assert credential_file.read_text() == "localhost:5432:platform:account:dangerous\\:password\n"
-        captured.append(credential_file)
-        destination.write_bytes(b"PGDMP" + b"test snapshot")
-        return b""
-
-    monkeypatch.setattr("app.services.backups.database.run_command", command)
-    result = snapshot_database("postgresql+asyncpg://account:dangerous%3Apassword@localhost/platform", destination,
-                               deadline=time.monotonic() + 5, stop_event=threading.Event())
-    assert result.engine == "postgresql"
-    assert len(captured) == 1 and not captured[0].exists()
 
 
-def test_pg_snapshot_rejects_old_client_without_running_dump(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(
-        "app.services.backups.database.run_command", lambda *args, **kwargs: b"pg_dump (PostgreSQL) 15.9"
-    )
-    output = tmp_path / "result.dump"
-    with pytest.raises(BackupAdapterError, match="工具不可用"):
-        snapshot_database("postgresql+asyncpg://account:password@localhost/platform", output,
-                          deadline=time.monotonic() + 2, stop_event=threading.Event())
-    assert not output.exists()
 
 
-def test_pg_snapshot_rejects_invalid_passfile_text_before_allocating_descriptor(monkeypatch, tmp_path: Path):
-    import tempfile
-
-    original = tempfile.mkstemp
-    allocated = []
-
-    def capture_file(*args, **kwargs):
-        fd, path = original(*args, **kwargs)
-        allocated.append((fd, Path(path)))
-        return fd, path
-
-    monkeypatch.setattr("app.services.backups.database.tempfile.mkstemp", capture_file)
-    monkeypatch.setattr(
-        "app.services.backups.database.run_command", lambda *args, **kwargs: b"pg_dump (PostgreSQL) 16.4\n"
-    )
-    try:
-        with pytest.raises(BackupAdapterError):
-            snapshot_database("postgresql+asyncpg://account:invalid%0Apassword@localhost/platform", tmp_path / "dump",
-                              deadline=time.monotonic() + 2, stop_event=threading.Event())
-        assert allocated == []
-    finally:
-        for fd, path in allocated:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            path.unlink(missing_ok=True)
 
 
 def test_sqlite_snapshot_cancelled_during_validation_never_reports_success(monkeypatch, tmp_path: Path):

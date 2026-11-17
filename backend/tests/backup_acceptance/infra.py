@@ -24,7 +24,6 @@ from cryptography.x509.oid import NameOID
 # https://docs.rustfs.com/en/integration/tls-configured；2026-11-02 查询官方 manifest。
 # MinIO 官方镜像已不允许匿名拉取，不能依赖会失败的历史 tag 或第三方重打包。
 S3_IMAGE = "rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2"
-PG_IMAGE = "postgres@sha256:deb28ee471183cb0c303113dac9b2433c51eeeeb678def7af9a9ec5820367815"
 HELPERS = Path(__file__).resolve().parent
 
 
@@ -98,8 +97,6 @@ class DockerLab:
         self.root.chmod(0o700)
         self.network = f"backup-acceptance-{self.token}"
         self._network_created = False
-        self.pg_user = "backup_acceptance"
-        self.pg_password = secrets.token_urlsafe(30)
         self.s3_access = "acceptance-" + secrets.token_hex(10)
         self.s3_secret = secrets.token_urlsafe(35)
         self.smtp_username = "smtp-" + secrets.token_hex(10)
@@ -110,7 +107,7 @@ class DockerLab:
         self.fernet_key = Fernet.generate_key().decode()
         self.jwt_secret = secrets.token_urlsafe(40)
         self.secrets_to_check.extend([
-            self.pg_password, self.s3_access, self.s3_secret, self.admin_password,
+            self.s3_access, self.s3_secret, self.admin_password,
             self.backup_password, self.provider_secret, self.fernet_key, self.jwt_secret,
             self.smtp_username, self.smtp_password,
         ])
@@ -129,11 +126,10 @@ class DockerLab:
         ).decode().strip()
         # 主会话可能同时重建同一个tag；本次所有容器必须使用同一不可变image ID。
         self._app_image = self.facts["app_image_id"]
-        self.facts["postgres_image"] = PG_IMAGE
         self.facts["s3_image"] = S3_IMAGE
         command(
             # Docker Desktop 的 internal bridge 不提供宿主机 publish 映射。
-            # 专属 bridge + 仅127.0.0.1发布应用端口；PG/S3/SMTP均不发布，且从不加入已有网络。
+            # 专属 bridge + 仅127.0.0.1发布应用端口；S3/SMTP均不发布，且从不加入已有网络。
             "docker", "network", "create", "--label", f"ainovel.backup.acceptance={self.token}",
             self.network, check="isolated_network_created",
         )
@@ -229,23 +225,6 @@ class DockerLab:
         )
         return json.loads(result)
 
-    def start_postgres(self) -> str:
-        env = self.envfile("postgres", {
-            "POSTGRES_USER": self.pg_user, "POSTGRES_PASSWORD": self.pg_password, "POSTGRES_DB": "source",
-        })
-        self.pg = self.run("pg", PG_IMAGE, options=(
-            "--network-alias", "pg.acceptance.test", "--env-file", str(env),
-            "--mount", f"type=volume,src={self.volume('pg')},dst=/var/lib/postgresql/data",
-        ))
-        deadline = time.monotonic() + 90
-        while time.monotonic() < deadline:
-            try:
-                self.exec(self.pg, "pg_isready", "--username", self.pg_user, "--dbname", "source")
-                return self.pg
-            except AcceptanceFailure:
-                time.sleep(0.5)
-        raise AcceptanceFailure("postgres_ready")
-
     def start_external_services(self) -> None:
         env = self.envfile("s3", {
             "RUSTFS_ACCESS_KEY": self.s3_access, "RUSTFS_SECRET_KEY": self.s3_secret,
@@ -269,10 +248,7 @@ class DockerLab:
         directory = self.root / engine
         directory.mkdir(mode=0o700)
         (directory / "backups").mkdir(mode=0o700)
-        url = (
-            f"postgresql+asyncpg://{self.pg_user}:{self.pg_password}@pg.acceptance.test:5432/source"
-            if engine == "postgresql" else "sqlite+aiosqlite:////acceptance-data/sqlite/source.sqlite3"
-        )
+        url = "sqlite+aiosqlite:////acceptance-data/sqlite/source.sqlite3"
         env = self.envfile(engine, self.application_env(url, f"/acceptance-data/{engine}/backups"))
         container = self.run(engine, self.image, options=(
             "--publish", "127.0.0.1::8000", "--env-file", str(env),

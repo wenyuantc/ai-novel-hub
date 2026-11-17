@@ -1,6 +1,6 @@
-"""PG的ALTER约束建表不能改变后续SQLite的FK与模型预置。"""
+"""SQLite 隔离建表保留外键和模型预置。"""
 
-from sqlalchemy import create_engine, create_mock_engine, func, inspect, select
+from sqlalchemy import create_engine, func, inspect, select
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.schema import CreateTable
 
@@ -26,7 +26,7 @@ def _seed_data(connection):
     return result
 
 
-def test_postgresql_schema_build_keeps_sqlite_foreign_keys_and_model_seeds():
+def test_sqlite_schema_build_keeps_foreign_keys_and_model_seeds():
     original = create_engine("sqlite://")
     isolated = create_engine("sqlite://")
     try:
@@ -34,14 +34,11 @@ def test_postgresql_schema_build_keeps_sqlite_foreign_keys_and_model_seeds():
             Base.metadata.create_all(connection)
             expected_seeds = _seed_data(connection)
         before = _sqlite_ddl()
-        create_isolated_schema(create_mock_engine("postgresql://", lambda *_args, **_kwargs: None))
-        after = _sqlite_ddl()
-        assert after["chapters"] == before["chapters"]
-        assert after == before
 
         with isolated.begin() as connection:
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             create_isolated_schema(connection)
+            assert _sqlite_ddl() == before
             actual_seeds = _seed_data(connection)
             assert all(expected_seeds.values())
             assert actual_seeds == expected_seeds

@@ -86,35 +86,10 @@ def fake_llm(monkeypatch) -> FakeLLM:
     return fake
 
 
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "pg_isolated_schema: 该测试会改 DDL，PostgreSQL 夹具为其单独建删 schema，不使用进程共享 schema",
-    )
 
 
-@pytest.fixture(scope="session")
-def pg_shared():
-    """进程级共享 PostgreSQL schema：每个测试库只 create_all 一次，会话结束时 DROP。"""
-    from tests.pg_support import SharedPostgres
-
-    shared = SharedPostgres()
-    try:
-        yield shared
-    finally:
-        shared.close()
 
 
-@pytest.fixture
-async def pg_schema_lease(pg_shared, request):
-    """本测试对共享 schema 的租用；收尾核对 DDL 指纹并 TRUNCATE 清空（标记 pg_isolated_schema 则独立建删）。"""
-    from tests.pg_support import SchemaLease
-
-    lease = SchemaLease(pg_shared, isolated=request.node.get_closest_marker("pg_isolated_schema") is not None)
-    try:
-        yield lease
-    finally:
-        await lease.release()
 
 
 @pytest.fixture

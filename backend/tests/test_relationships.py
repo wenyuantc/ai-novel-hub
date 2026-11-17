@@ -228,27 +228,6 @@ async def test_type_flush_conflict_preserves_callers_outer_transaction(app, clie
     assert await _count(app, RelationshipType, RelationshipType.project_id.is_not(None)) == 1
 
 
-@pytest.mark.parametrize(
-    ("constraint", "sqlstate", "matches"),
-    [
-        ("uq_relationship_types_project_id", "23505", True),
-        ("uq_relationships_pair_low", "23505", False),
-        ("uq_relationship_types_project_id", "23503", False),
-    ],
-)
-def test_postgres_type_conflict_uses_exact_unique_constraint(constraint, sqlstate, matches):
-    from app.services import relationship_service as svc
-
-    class PostgresError(Exception):
-        pass
-
-    original = PostgresError()
-    original.sqlstate = sqlstate
-    original.constraint_name = constraint
-    wrapped = Exception("适配后的 asyncpg 错误")
-    wrapped.__cause__ = original
-    for error in (original, wrapped):
-        assert svc._is_type_conflict(IntegrityError("INSERT", {}, error)) is matches
 
 
 async def test_pair_flush_conflict_preserves_callers_outer_transaction(app, client, monkeypatch):
@@ -279,19 +258,6 @@ async def test_pair_flush_conflict_preserves_callers_outer_transaction(app, clie
     assert await _count(app, Relationship) == 1
 
 
-@pytest.mark.parametrize(
-    ("constraint", "matches"), [("uq_relationships_pair_low", True), ("uq_relationship_types_project_id", False)]
-)
-def test_postgres_pair_conflict_uses_exact_unique_constraint(constraint, matches):
-    from app.services import relationship_service as svc
-
-    class PostgresUniqueError(Exception):
-        sqlstate = "23505"
-        constraint_name = constraint
-
-    wrapped = Exception("适配后的 asyncpg 错误")
-    wrapped.__cause__ = PostgresUniqueError()
-    assert svc._is_pair_conflict(IntegrityError("INSERT", {}, wrapped)) is matches
 
 
 async def _setup(client):

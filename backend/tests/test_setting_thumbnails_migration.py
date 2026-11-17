@@ -1,13 +1,10 @@
 """真实 0055 升级及复合外键、级联和有损降级防护。"""
 
 import asyncio
-import os
-from uuid import uuid4
 
 import pytest
 from alembic import command
 from sqlalchemy import event, inspect, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 
@@ -20,50 +17,23 @@ PARENT_INDEXES = {
 }
 
 
-@pytest.mark.parametrize("database", ["sqlite", "postgresql"])
-def test_0056_upgrade_constraints_and_cascades(tmp_path, monkeypatch, database):
-    schema = f"thumbnail_migration_{uuid4().hex}"
+def test_0056_upgrade_constraints_and_cascades(tmp_path, monkeypatch):
     config = _config(tmp_path / "thumbnail.db")
-    if database == "postgresql":
-        series_url = os.environ.get("AINOVEL_SERIES_POSTGRES_TEST_URL")
-        fields_url = os.environ.get("AINOVEL_FIELDS_POSTGRES_TEST_URL")
-        url = series_url or fields_url
-        if not url:
-            pytest.skip("设置 AINOVEL_SERIES_POSTGRES_TEST_URL 或 AINOVEL_FIELDS_POSTGRES_TEST_URL")
-        expected_database, expected_user = (("series_verify", "series_test") if series_url
-                                            else ("fields_verify", "field_test"))
-        parsed = make_url(url)
-        if (parsed.drivername, parsed.host, parsed.database, parsed.username) != (
-            "postgresql+asyncpg", "127.0.0.1", expected_database, expected_user,
-        ):
-            raise ValueError("缩略图迁移测试仅允许本机 series_test/series_verify 或 field_test/fields_verify")
-        config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
-        original_factory = async_sqlalchemy.async_engine_from_config
-        monkeypatch.setattr(async_sqlalchemy, "async_engine_from_config", lambda *args, **kwargs: original_factory(
-            *args, **kwargs, connect_args={"server_settings": {"search_path": schema}},
-        ))
-    else:
-        _foreign_keys_during_migrations(monkeypatch)
-        url = f"sqlite+aiosqlite:///{tmp_path / 'thumbnail.db'}"
+    _foreign_keys_during_migrations(monkeypatch)
+    url = f"sqlite+aiosqlite:///{tmp_path / 'thumbnail.db'}"
 
-    async def run(action, *, public=False):
-        kwargs = ({"connect_args": {"server_settings": {"search_path": "public" if public else schema}}}
-                  if database == "postgresql" else {})
-        engine = async_sqlalchemy.create_async_engine(url, **kwargs)
-        if database == "sqlite":
-            @event.listens_for(engine.sync_engine, "connect")
-            def foreign_keys(connection, _record):
-                connection.execute("PRAGMA foreign_keys=ON")
+    async def run(action):
+        engine = async_sqlalchemy.create_async_engine(url)
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def foreign_keys(connection, _record):
+            connection.execute("PRAGMA foreign_keys=ON")
+
         try:
             async with engine.begin() as db:
-                if database == "postgresql":
-                    assert await db.scalar(text("SELECT current_database()")) == expected_database
                 return await action(db)
         finally:
             await engine.dispose()
-
-    async def schema_action(db, *, create):
-        await db.execute(text(f'{"CREATE" if create else "DROP"} SCHEMA "{schema}"' + ("" if create else " CASCADE")))
 
     async def seed(db):
         statements = (
@@ -129,55 +99,46 @@ def test_0056_upgrade_constraints_and_cascades(tmp_path, monkeypatch, database):
         assert await db.scalar(text("SELECT count(*) FROM setting_image_resources WHERE series_id=1")) == 0
         assert await db.scalar(text("SELECT title FROM projects WHERE id=2")) == "旧作品二"
         await db.execute(text("DELETE FROM setting_image_resources"))
-        if database == "sqlite":
-            assert not (await db.execute(text("PRAGMA foreign_key_check"))).all()
+        assert not (await db.execute(text("PRAGMA foreign_key_check"))).all()
 
-    created = False
-    try:
-        if database == "postgresql":
-            asyncio.run(run(lambda db: schema_action(db, create=True), public=True))
-            created = True
-        command.upgrade(config, "0055")
-        asyncio.run(run(seed))
-        before_indexes = asyncio.run(run(parent_indexes))
-        for table, (name, _) in PARENT_INDEXES.items():
-            assert name not in before_indexes[table]
-        command.upgrade(config, "0056")
-        after_indexes = asyncio.run(run(parent_indexes))
-        for table, (name, columns) in PARENT_INDEXES.items():
-            assert after_indexes[table][name] == (columns, True)
-        foreign_keys = asyncio.run(run(binding_foreign_keys))
-        for name, local, table, remote in (
-            ("fk_thumbnail_organization", ("project_id", "organization_id"), "organizations", ("project_id", "id")),
-            ("fk_thumbnail_career", ("project_id", "career_id"), "careers", ("project_id", "id")),
-            ("fk_thumbnail_series_entry", ("series_id", "series_entry_id"), "series_entries", ("series_id", "id")),
-        ):
-            foreign_key = foreign_keys[name]
-            assert tuple(foreign_key["constrained_columns"]) == local
-            assert foreign_key["referred_table"] == table
-            assert tuple(foreign_key["referred_columns"]) == remote
-            assert foreign_key["options"].get("ondelete") == "CASCADE"
-        asyncio.run(run(resources))
-        for statement in (
-            "INSERT INTO setting_thumbnail_bindings(project_id,character_id,image_resource_id) VALUES(1,2,'p1')",
-            "INSERT INTO setting_thumbnail_bindings(project_id,character_id,image_resource_id) VALUES(1,1,'p2')",
-            "INSERT INTO setting_thumbnail_bindings(project_id,organization_id,image_resource_id) VALUES(1,2,'p1')",
-            "INSERT INTO setting_thumbnail_bindings(project_id,career_id,image_resource_id) VALUES(1,2,'p1')",
-            "INSERT INTO setting_thumbnail_bindings(project_id,character_id,world_setting_id,image_resource_id) "
-            "VALUES(1,1,1,'p1')",
-            "INSERT INTO setting_thumbnail_bindings(series_id,series_entry_id,image_resource_id) VALUES(1,2,'s1')",
-            "INSERT INTO setting_thumbnail_bindings(series_id,series_entry_id,image_resource_id) VALUES(1,1,'s2')",
-        ):
-            with pytest.raises(IntegrityError):
-                asyncio.run(run(lambda db, statement=statement: insert(db, statement)))
-        asyncio.run(run(valid_bindings))
-        with pytest.raises(RuntimeError, match="拒绝有损降级"):
-            command.downgrade(config, "0055")
-        asyncio.run(run(cascades))
+    command.upgrade(config, "0055")
+    asyncio.run(run(seed))
+    before_indexes = asyncio.run(run(parent_indexes))
+    for table, (name, _) in PARENT_INDEXES.items():
+        assert name not in before_indexes[table]
+    command.upgrade(config, "0056")
+    after_indexes = asyncio.run(run(parent_indexes))
+    for table, (name, columns) in PARENT_INDEXES.items():
+        assert after_indexes[table][name] == (columns, True)
+    foreign_keys = asyncio.run(run(binding_foreign_keys))
+    for name, local, table, remote in (
+        ("fk_thumbnail_organization", ("project_id", "organization_id"), "organizations", ("project_id", "id")),
+        ("fk_thumbnail_career", ("project_id", "career_id"), "careers", ("project_id", "id")),
+        ("fk_thumbnail_series_entry", ("series_id", "series_entry_id"), "series_entries", ("series_id", "id")),
+    ):
+        foreign_key = foreign_keys[name]
+        assert tuple(foreign_key["constrained_columns"]) == local
+        assert foreign_key["referred_table"] == table
+        assert tuple(foreign_key["referred_columns"]) == remote
+        assert foreign_key["options"].get("ondelete") == "CASCADE"
+    asyncio.run(run(resources))
+    for statement in (
+        "INSERT INTO setting_thumbnail_bindings(project_id,character_id,image_resource_id) VALUES(1,2,'p1')",
+        "INSERT INTO setting_thumbnail_bindings(project_id,character_id,image_resource_id) VALUES(1,1,'p2')",
+        "INSERT INTO setting_thumbnail_bindings(project_id,organization_id,image_resource_id) VALUES(1,2,'p1')",
+        "INSERT INTO setting_thumbnail_bindings(project_id,career_id,image_resource_id) VALUES(1,2,'p1')",
+        "INSERT INTO setting_thumbnail_bindings(project_id,character_id,world_setting_id,image_resource_id) "
+        "VALUES(1,1,1,'p1')",
+        "INSERT INTO setting_thumbnail_bindings(series_id,series_entry_id,image_resource_id) VALUES(1,2,'s1')",
+        "INSERT INTO setting_thumbnail_bindings(series_id,series_entry_id,image_resource_id) VALUES(1,1,'s2')",
+    ):
+        with pytest.raises(IntegrityError):
+            asyncio.run(run(lambda db, statement=statement: insert(db, statement)))
+    asyncio.run(run(valid_bindings))
+    with pytest.raises(RuntimeError, match="拒绝有损降级"):
         command.downgrade(config, "0055")
-        downgraded_indexes = asyncio.run(run(parent_indexes))
-        for table, (name, _) in PARENT_INDEXES.items():
-            assert name not in downgraded_indexes[table]
-    finally:
-        if created:
-            asyncio.run(run(lambda db: schema_action(db, create=False), public=True))
+    asyncio.run(run(cascades))
+    command.downgrade(config, "0055")
+    downgraded_indexes = asyncio.run(run(parent_indexes))
+    for table, (name, _) in PARENT_INDEXES.items():
+        assert name not in downgraded_indexes[table]

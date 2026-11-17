@@ -48,6 +48,36 @@ async def _http_clients(app):
         await asyncio.wait_for(runner, 10)
 
 
+@asynccontextmanager
+async def _delayed_editor(app, entered, release):
+    """在真正的 ASGI send 前暂停第一帧；传输本身仍由本机 TCP 客户端完成。"""
+    app.state.provider_factory = create_provider
+
+    async def wrapped(scope, receive, send):
+        async def delayed_send(message):
+            if message["type"] == "http.response.body" and b"event: delta" in message.get("body", b""):
+                entered.set()
+                await release.wait()
+            await send(message)
+
+        await app(scope, receive, delayed_send)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(100)
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(wrapped, lifespan="off", access_log=False, log_level="warning"))
+    runner = asyncio.create_task(server.serve(sockets=[sock]))
+    try:
+        await wait_until(lambda: server.started, within=10)
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=15) as client:
+            yield client
+    finally:
+        release.set()
+        server.should_exit = True
+        await asyncio.wait_for(runner, 10)
+
+
 async def _world(owner, editor, model_url, *, source="actor"):
     await register(owner, "rewrite-owner")
     editor_user = await register(editor, "rewrite-editor")
@@ -135,8 +165,6 @@ async def test_editor_scene_preview_uses_guarded_output(app):
 
 @pytest.mark.parametrize("termination", ["timeout", "client_cancel"])
 async def test_output_frame_releases_auth_and_closes_generator_on_interruption(app, monkeypatch, termination):
-    from tests.test_collaboration_rewrite_identity_postgresql import _delayed_editor
-
     entered, release, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
     monkeypatch.setattr(rewrite_service, "OUTPUT_LEASE_SECONDS", 0.8 if termination == "timeout" else 5.0)
     original_save = generation_log_service.save_log

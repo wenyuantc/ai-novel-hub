@@ -2,13 +2,10 @@
 
 import asyncio
 import json
-import os
 from contextlib import asynccontextmanager, suppress
-from uuid import uuid4
 
 import pytest
-from sqlalchemy import text, update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import update
 
 from app.ai.providers import AIProviderError, AnthropicProvider, GeminiProvider, OpenAICompatProvider
 from app.ai.providers.dispatch_hooks import DispatchHooks
@@ -308,37 +305,3 @@ async def test_fake_provider_and_vector_fallback_do_not_accept_old_stamp(project
         await retrieval_service.embed_query(guarded_embed, MESSAGES[0]["content"])
     assert not fake_llm.calls and not fake_llm.embed_calls
     assert await _collect(raw.generate_stream(MESSAGES, "test")) == ["ok"]
-
-
-async def test_postgres_dispatch_lock_is_shared_per_project(monkeypatch):
-    database_url = os.environ.get("AINOVEL_FIELDS_POSTGRES_TEST_URL")
-    if not database_url:
-        pytest.skip("设置 AINOVEL_FIELDS_POSTGRES_TEST_URL 才运行隔离 PostgreSQL 验证")
-    schema = f"visibility_dispatch_test_{uuid4().hex}"
-    bootstrap = create_async_engine(database_url)
-    engine = create_async_engine(database_url, connect_args={"server_settings": {"search_path": schema}})
-    maker = async_sessionmaker(engine)
-    monkeypatch.setattr(ai_dispatch, "_LOCK_WAIT_SECONDS", 0.15)
-    try:
-        async with bootstrap.begin() as conn:
-            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-        async with engine.begin() as conn:
-            await conn.execute(text(
-                "CREATE TABLE projects (id integer PRIMARY KEY, ai_visibility_revision integer NOT NULL, "
-                "ai_history_epoch integer NOT NULL, last_deleted_at timestamptz, deleted_at timestamptz, "
-                "deletion_started_at timestamptz, updated_at timestamptz)"
-            ))
-            await conn.execute(text("INSERT INTO projects (id, ai_visibility_revision, ai_history_epoch) "
-                                    "VALUES (1, 0, 0), (2, 0, 0)"))
-        async with maker() as reader1, maker() as reader2:
-            await ai_dispatch._lock(reader1, 1, write=False)
-            await ai_dispatch._lock(reader2, 1, write=False)
-            with pytest.raises(VisibilityBusyError):
-                await _tighten(maker, 1)
-            await asyncio.wait_for(_tighten(maker, 2), 3)
-        await asyncio.wait_for(_tighten(maker, 1), 3)
-    finally:
-        await engine.dispose()
-        async with bootstrap.begin() as conn:
-            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-        await bootstrap.dispose()

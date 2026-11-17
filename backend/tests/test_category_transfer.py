@@ -35,12 +35,6 @@ from tests.test_project_transfer import (
     _without_ai_settings,
 )
 from tests.test_recycle_bin import item as recycle_item
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_app as postgres_fields_app,
-)
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_client as postgres_fields_client,
-)
 
 ENTITY_TABLES = ("characters", "world_settings", "organizations", "careers")
 CATEGORY_TABLES = ("setting_categories", "setting_category_rules")
@@ -248,16 +242,8 @@ async def test_category_import_commit_failure_rolls_back_and_keeps_preview_token
     await _rollback_and_retry(client, app, monkeypatch)
 
 
-async def test_postgresql_category_backup_roundtrip(postgres_fields_client, postgres_fields_app):
-    await test_categories_v5_roundtrip_preserves_tags_rules_and_resets_both_revisions(
-        postgres_fields_client, postgres_fields_app,
-    )
 
 
-async def test_postgresql_category_import_deferred_commit_failure(
-    postgres_fields_client, postgres_fields_app, monkeypatch,
-):
-    await _rollback_and_retry(postgres_fields_client, postgres_fields_app, monkeypatch)
 
 
 async def test_category_graph_survives_native_whole_sqlite_backup(client, app, tmp_path):

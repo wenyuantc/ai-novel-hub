@@ -325,7 +325,7 @@ async def test_round_changed_between_read_and_lock_is_not_touched(app, client, m
     assert (await _row(app, row.id)).status == "failed"
 
 
-# ---------------- 本人操作与系统收尾的先后（SQLite 顺序版；PG 并发见 _postgresql 文件） ----------------
+# ---------------- 本人操作与系统收尾的先后（SQLite 顺序版） ----------------
 
 
 async def test_resume_before_revocation_is_failed_by_claim_not_paused_cleanup(app, client, make_client, fake_llm):

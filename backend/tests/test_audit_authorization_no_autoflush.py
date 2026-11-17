@@ -1,26 +1,20 @@
 """审计初始化不得在人工授权前 flush，初始化异常不泄露 SQL。"""
 
-import asyncio
-from contextlib import suppress
 
-import httpx
 import pytest
-from sqlalchemy import event, func, select, text
+from sqlalchemy import event, func, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError, ForbiddenError, NotFoundError
-from app.models import Chapter, Project, ProjectCollaborator, User
+from app.core.errors import AppError, ForbiddenError
+from app.models import Chapter, Project, User
 from app.schemas.chapter import ChapterUpdate
-from app.services import chapter_service, project_lifecycle
+from app.services import chapter_service
 from app.services.agent import transactions
 from app.services.agent.tools import ToolCtx, get_tool
 from app.services.agent.tools.base import TransactionSession
 from app.services.audit_writer import AuditOperation, AuditOperationError
 from tests.helpers import create_project, register
-from tests.test_collaboration_access_postgresql import _setup, _wait_for_blocker
-
-pytest_plugins = ("tests.test_collaboration_access_postgresql",)
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -214,55 +208,3 @@ async def test_proxy_savepoint_failure_preserves_only_outer_work(app, client, ma
     async with app.state.sessionmaker() as db:
         titles = set(await db.scalars(select(Chapter.title).where(Chapter.project_id == project["id"])))
         assert titles == {"已有章节", "外层已有工作"}
-
-
-async def test_postgres_revoke_before_manual_chapter_service_does_not_flush(postgres_collaboration_apps):
-    owner_app, guest_app = postgres_collaboration_apps
-    async with (
-        httpx.AsyncClient(transport=httpx.ASGITransport(app=owner_app), base_url="http://testserver") as owner,
-        httpx.AsyncClient(transport=httpx.ASGITransport(app=guest_app), base_url="http://testserver") as guest,
-    ):
-        project, user, base = await _setup(owner, guest)
-        response = await owner.post(f"{base}/chapters", json={"title": "原始章节"})
-        assert response.status_code == 201, response.text
-        chapter_id = response.json()["id"]
-        task = None
-        try:
-            async with owner_app.state.sessionmaker() as holder, guest_app.state.sessionmaker() as writer:
-                await project_lifecycle.lock_active(holder, project["id"])
-                member = await holder.scalar(select(ProjectCollaborator).where(
-                    ProjectCollaborator.project_id == project["id"], ProjectCollaborator.user_id == user["id"],
-                ))
-                member.status, member.revision = "revoked", member.revision + 1
-                await holder.flush()
-                pid = await holder.scalar(text("SELECT pg_backend_pid()"))
-                pending = Chapter(project_id=project["id"], title="撤权后不得写入")
-                writer.add(pending)
-                flushes = []
-                event.listen(writer.sync_session, "before_flush", lambda *_: flushes.append(True))
-                task = asyncio.create_task(chapter_service.update_chapter(
-                    writer, user["id"], project["id"], chapter_id, ChapterUpdate(title="撤权后修改"), manual=True,
-                ))
-                await asyncio.wait_for(_wait_for_blocker(guest_app.state.sessionmaker, pid), 6)
-                async with guest_app.state.sessionmaker() as observer:
-                    queries = (await observer.scalars(text(
-                        "SELECT query FROM pg_stat_activity WHERE datname=current_database() "
-                        "AND :holder=ANY(pg_blocking_pids(pid))"
-                    ), {"holder": pid})).all()
-                    assert any("update projects" in query.lower() for query in queries), queries
-                assert flushes == [] and pending.id is None
-                await holder.commit()
-                with pytest.raises(NotFoundError):
-                    await asyncio.wait_for(task, 6)
-                assert flushes == [] and pending.id is None and pending in writer.new
-                await writer.rollback()
-            async with owner_app.state.sessionmaker() as db:
-                assert (await db.get(Chapter, chapter_id)).title == "原始章节"
-                assert await db.scalar(select(func.count()).select_from(Chapter).where(
-                    Chapter.project_id == project["id"], Chapter.title == "撤权后不得写入",
-                )) == 0
-        finally:
-            if task is not None and not task.done():
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task

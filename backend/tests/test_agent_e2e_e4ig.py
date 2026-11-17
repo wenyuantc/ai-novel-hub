@@ -1,4 +1,4 @@
-"""E4i-g / E7：编辑者经真实 HTTP 入口跑 Agent 轮次的端到端账目（SQLite；PG 对照见 test_agent_e4ig_postgresql.py）。
+"""E4i-g / E7：编辑者经真实 HTTP 入口跑 Agent 轮次的 SQLite 端到端账目。
 
 一条轮次同时覆盖：会话压缩摘要（generate_stream）→ 工具轮（search_knowledge 查询向量 + start_task 提案）→ 确认后
 派生 chapter.generate（独立模型调用）→ 续跑第二轮。按三种模型来源断言：
@@ -103,7 +103,7 @@ async def test_editor_turn_request_ledger_and_config_source(app, client, make_cl
 
 
 async def check_request_ledger(app, client, editor_client, fake_llm, mode):
-    """供 SQLite 与 PostgreSQL（test_agent_e4ig_postgresql.py）共用的端到端账目断言。"""
+    """检查端到端账目。"""
     allow_owner_ai, own, text_key, source, vector = MODES[mode]
     owner, owner_cfg, project, chapter, editor, editor_cfg, member, base, cid = await _world(
         app, client, editor_client, mode,

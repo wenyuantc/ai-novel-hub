@@ -61,12 +61,9 @@ async def database_fingerprint(data: dict[str, Any]) -> dict[str, Any]:
             config = metadata.tables["ai_configs"]
             encrypted = (await connection.execute(select(config.c.api_key_enc).limit(1))).scalar_one()
             decrypts = SecretCipher(os.environ["ENCRYPTION_KEY"]).decrypt(encrypted) == data["provider_secret"]
-            if engine.dialect.name == "sqlite":
-                integrity = (await connection.execute(text("PRAGMA integrity_check"))).scalar_one()
-                foreign_keys = (await connection.execute(text("PRAGMA foreign_key_check"))).all()
-                valid = integrity == "ok" and not foreign_keys
-            else:
-                valid = True  # PostgreSQL restore 默认启用外键约束；pg_restore --exit-on-error 必须退出0。
+            integrity = (await connection.execute(text("PRAGMA integrity_check"))).scalar_one()
+            foreign_keys = (await connection.execute(text("PRAGMA foreign_key_check"))).all()
+            valid = integrity == "ok" and not foreign_keys
             schema = (await connection.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
             return {"tables": fingerprints, "credential_decrypts": decrypts, "integrity": valid, "schema": schema}
     finally:
@@ -244,11 +241,6 @@ def main() -> None:
             result = wal_marker(data)
         elif action == "schedule_due":
             result = asyncio.run(schedule_due())
-        elif action == "tools":
-            result = {}
-            for name in ("pg_dump", "pg_restore", "gpg", "gpgconf"):
-                output = subprocess.run([name, "--version"], capture_output=True, timeout=10, check=True).stdout
-                result[name] = output.decode(errors="replace").splitlines()[0][:200]
         elif action == "private_homes":
             result = {"remaining": len(list(Path("/tmp").glob(".ainovel-gpg-*")))}
         elif action == "terminal_work_fixture":

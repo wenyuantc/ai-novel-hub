@@ -9,14 +9,14 @@ uv run python tests/backup_acceptance.py --scenario all \
   --output ../.trellis/tasks/10-30-admin-backup-management/research/acceptance
 ```
 
-主机只需要 Docker 和项目 `uv` 环境。PostgreSQL 16 客户端、GPG、GPGCONF 均使用本次应用镜像的真实工具。
+主机只需要 Docker 和项目 `uv` 环境。GPG、GPGCONF 均使用本次应用镜像的真实工具。
 每次启动先冻结应用 image ID，即使其他会话同时重建同名 tag，本次全部容器仍使用同一镜像。
 可用 `--image` 指定另一个已构建镜像；缺少镜像或服务失败直接以非零退出，不以 skip 代替。
 
 `--scenario` 支持 `all`、`roundtrip`、`storage`、`smtp`、`reliability`。所有选择都会先执行真实 HTTP
 权限矩阵、配置默认值/CAS/秘密省略与非法秘密不回显、非超管执行和下载、跨 actor 请求身份冲突。
 
-- `roundtrip`：PG16/SQLite 各执行明文、GPG 加密及密码轮换；鉴权流式下载，先完整解密并核对退出码，
+- `roundtrip`：SQLite 执行明文、GPG 加密及密码轮换；鉴权流式下载，先完整解密并核对退出码，
   再恢复到另一个数据库。比较账号、角色、平台设置、作品、封面、引用和凭据密文指纹，验证原 Fernet
   密钥能解密。恢复目标使用独立备份目录，恢复完成后启动应用、用原 owner 登录并通过 HTTP 读取作品、
   章节和模型配置，然后停机。错误密码/损坏加密文件须拒绝，旧产物仍只认原密码和原格式。
@@ -44,7 +44,6 @@ S3 服务使用[官方 RustFS 容器](https://docs.rustfs.com/en/installation/co
 [官方 TLS 配置](https://docs.rustfs.com/en/integration/tls-configured)，固定为2026-11-02核对的
 `rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2`。
 官方 MinIO DockerHub 镜像已删除且 Quay 匿名拉取401，未换用第三方重打包镜像。
-PostgreSQL 使用核对过的官方16镜像 digest，完整值见 `infra.py` 和每轮脱敏结果。
 
 输出 `<scenario>.json` 是该场景最近一轮结果，`history.jsonl` 保留启动记录器后的脱敏历史。
 只有 `status=passed`、进程退出0且 `resource_cleanup=passed` 才表示该轮已完成；先前失败不改写为通过。

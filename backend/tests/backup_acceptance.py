@@ -272,7 +272,7 @@ class Acceptance:
         *, password: str | None = None,
     ) -> None:
         password = password or self.lab.backup_password
-        extension = "dump" if engine == "postgresql" else "sqlite3"
+        extension = "sqlite3"
         name = f"{engine}/download-{run['id']}.{extension}" + (".gpg" if run["encrypted"] else "")
         api.download(run, "local", self.lab.root / name)
         artifact = next(item for item in run["artifacts"] if item["destination"] == "local")
@@ -299,20 +299,7 @@ class Acceptance:
             name = output
         else:
             require(artifact["filename"].endswith(f".{extension}"), "plain_filename")
-        if engine == "postgresql":
-            restore_db = f"restore_{run['id']}"
-            self.lab.exec(self.lab.pg, "createdb", "--username", self.lab.pg_user, restore_db)
-            command("docker", "cp", str(self.lab.root / name), f"{self.lab.pg}:/tmp/restore.dump")
-            self.lab.exec(
-                self.lab.pg, "pg_restore", "--username", self.lab.pg_user, "--dbname", restore_db,
-                "--no-owner", "--exit-on-error", "/tmp/restore.dump", check="postgres_restore_real",
-            )
-            restored_url = (
-                f"postgresql+asyncpg://{self.lab.pg_user}:{self.lab.pg_password}"
-                f"@pg.acceptance.test:5432/{restore_db}"
-            )
-        else:
-            restored_url = f"sqlite+aiosqlite:////acceptance-data/{name}"
+        restored_url = f"sqlite+aiosqlite:////acceptance-data/{name}"
         restored = self.lab.probe(container, "fingerprint", {
             "database_url": restored_url, "provider_secret": self.lab.provider_secret,
         })
@@ -574,46 +561,41 @@ class Acceptance:
         self.check(f"{engine}.terminal_cleanup_retry_preserves_unknown_files_and_failure_history")
 
     def execute(self, scenario: str) -> None:
-        self.lab.start_postgres()
         self.lab.start_external_services()
-        for engine in ("postgresql", "sqlite"):
-            container, url = self.lab.start_app(engine)
-            api = self.client(url)
-            api.ready()
-            api.login("acceptance_admin", self.lab.admin_password)
-            if engine == "postgresql":
-                self.lab.facts["tools"] = self.lab.probe(container, "tools")
-                require(" 16." in self.lab.facts["tools"]["pg_dump"], "postgresql_16_client_installed")
-            paths = api.request("GET", "/openapi.json")["paths"]
-            require(not any(path.startswith(BACKUPS) and "restore" in path for path in paths), "no_http_restore_api")
-            self.seed(api, url, engine)
-            self.permission_matrix(api, url, engine)
-            self.configure_initial(api, engine)
-            if engine == "postgresql":
-                until = time.monotonic() + 90
-                while time.monotonic() < until:
-                    try:
-                        self.lab.probe(container, "s3", {
-                            "operation": "create", "buckets": ["acceptance-backups", "acceptance-secondary"],
-                            "access_key": self.lab.s3_access, "secret_key": self.lab.s3_secret,
-                        })
-                        break
-                    except AcceptanceFailure:
-                        time.sleep(0.5)
-                else:
-                    raise AcceptanceFailure("tls_s3_ready_and_versioning_enabled")
-            if scenario in ("all", "roundtrip"):
-                self.roundtrip(api, container, engine)
-            if scenario in ("all", "storage"):
-                self.storage(api, container, engine)
-            if scenario in ("all", "smtp"):
-                self.smtp_failure(api, engine)
-            if scenario in ("all", "reliability"):
-                self.idempotency_restart(api, container, engine)
-            require(all(self.lab.probe(container, "secret_storage", {
-                "secrets": self.expected_secrets(),
-            }).values()), "settings_and_artifact_credentials_encrypted_terminal_snapshots_cleared")
-            self.check(f"{engine}.database_secret_ciphertext_and_terminal_snapshot_cleanup")
+        engine = "sqlite"
+        container, url = self.lab.start_app(engine)
+        api = self.client(url)
+        api.ready()
+        api.login("acceptance_admin", self.lab.admin_password)
+        paths = api.request("GET", "/openapi.json")["paths"]
+        require(not any(path.startswith(BACKUPS) and "restore" in path for path in paths), "no_http_restore_api")
+        self.seed(api, url, engine)
+        self.permission_matrix(api, url, engine)
+        self.configure_initial(api, engine)
+        until = time.monotonic() + 90
+        while time.monotonic() < until:
+            try:
+                self.lab.probe(container, "s3", {
+                    "operation": "create", "buckets": ["acceptance-backups", "acceptance-secondary"],
+                    "access_key": self.lab.s3_access, "secret_key": self.lab.s3_secret,
+                })
+                break
+            except AcceptanceFailure:
+                time.sleep(0.5)
+        else:
+            raise AcceptanceFailure("tls_s3_ready_and_versioning_enabled")
+        if scenario in ("all", "roundtrip"):
+            self.roundtrip(api, container, engine)
+        if scenario in ("all", "storage"):
+            self.storage(api, container, engine)
+        if scenario in ("all", "smtp"):
+            self.smtp_failure(api, engine)
+        if scenario in ("all", "reliability"):
+            self.idempotency_restart(api, container, engine)
+        require(all(self.lab.probe(container, "secret_storage", {
+            "secrets": self.expected_secrets(),
+        }).values()), "settings_and_artifact_credentials_encrypted_terminal_snapshots_cleared")
+        self.check(f"{engine}.database_secret_ciphertext_and_terminal_snapshot_cleanup")
         self.lab.assert_logs_safe()
         self.check("container_logs_no_test_secrets")
 

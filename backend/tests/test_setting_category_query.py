@@ -1,17 +1,13 @@
 """分类只读查询：完整匹配分页、字段范围及真实跨连接一致快照。"""
 
 import asyncio
-import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, select, text, update
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.core.database import create_sessionmaker
 from app.core.errors import BadRequestError, ConflictError, NotFoundError, UnauthorizedError
 from app.models import (
     Career,
@@ -30,14 +26,12 @@ from app.models import (
 from app.models.setting_fields import SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 from app.schemas.setting_categories import CategoryEntryQuery, CategorySpec
 from app.schemas.setting_fields import EntityRef
-from app.services import authorization_service as authz
 from app.services import setting_catalog_service as catalog
 from app.services import setting_category_query_service as query
 from app.services import setting_field_service as fields
 from app.services.authorization_service import AuthenticatedActor
 from tests.helpers import create_project, register
 from tests.rbac_helpers import assign_roles, create_role
-from tests.schema_helpers import create_isolated_schema
 
 
 async def _seed(app, client, *, count=3):
@@ -626,110 +620,13 @@ async def test_projects_read_role_can_use_readonly_draft_preview(client, app, sy
     assert out.total == 2
 
 
-@pytest.fixture(params=["sqlite", "postgresql"])
-async def snapshot_database(request, app, client):
-    if request.param == "sqlite":
-        # 仅本测试隔离库启用WAL，让读快照未结束时另一真实连接可提交。
-        async with app.state.engine.connect() as conn:
-            assert await conn.scalar(text("PRAGMA journal_mode=WAL")) == "wal"
-        seeded = await _seed(app, client, count=405)
-        yield app.state.sessionmaker, seeded
-        return
-    database_url = os.environ.get("AINOVEL_FIELDS_POSTGRES_TEST_URL")
-    if not database_url:
-        pytest.skip("设置 AINOVEL_FIELDS_POSTGRES_TEST_URL 才运行隔离 PostgreSQL 一致快照验证")
-    parsed = make_url(database_url)
-    if (
-        parsed.drivername != "postgresql+asyncpg"
-        or parsed.host != "127.0.0.1"
-        or parsed.username != "field_test"
-        or parsed.database != "fields_verify"
-    ):
-        raise AssertionError("分类查询PG验证仅允许本机field_test用户的fields_verify隔离库")
-    schema = f"setting_category_query_test_{uuid4().hex}"
-    admin_engine = create_async_engine(database_url)
-    engine = create_async_engine(database_url, connect_args={"server_settings": {"search_path": schema}})
-    created_schema = False
-    try:
-        async with admin_engine.begin() as conn:
-            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-        created_schema = True
-        async with engine.begin() as conn:
-            await conn.run_sync(create_isolated_schema)
-        sessionmaker = create_sessionmaker(engine)
-        await authz.initialize(sessionmaker)
-        async with sessionmaker() as db:
-            owner = User(username="pg_author", password_hash="synthetic")
-            db.add(owner)
-            await db.flush()
-            project = Project(user_id=owner.id, title="PG隔离分类快照")
-            db.add(project)
-            await db.flush()
-            characters = [
-                Character(
-                    project_id=project.id, name=f"人物{i:03}", sort=i, setting_tags=["同盟"] if i % 2 == 0 else []
-                )
-                for i in range(405)
-            ]
-            db.add_all(characters)
-            definition = SettingFieldDefinition(
-                project_id=project.id, label="阵营", field_type="dropdown", applicable_types=["character"]
-            )
-            category = SettingCategory(
-                project_id=project.id, name="同行", applicable_types=["character"], match_mode="all"
-            )
-            db.add_all([definition, category])
-            await db.flush()
-            options = [SettingFieldOption(definition_id=definition.id, label=label) for label in ("旧阵营", "新阵营")]
-            db.add_all(options)
-            await db.flush()
-            timelines = [
-                SettingTimeline(project_id=project.id, subject_kind="character", character_id=row.id, baseline={})
-                for row in characters
-            ]
-            db.add_all(timelines)
-            await db.flush()
-            db.add_all(
-                [
-                    SettingTextField(
-                        timeline_id=row.id,
-                        definition_id=definition.id,
-                        label=None,
-                        base_value={"option_id": options[0].id},
-                    )
-                    for row in timelines
-                ]
-            )
-            db.add_all(
-                [
-                    SettingCategoryRule(category_id=category.id, sort=0, kind="tag", tag="同盟"),
-                    SettingCategoryRule(
-                        category_id=category.id,
-                        sort=1,
-                        kind="dropdown",
-                        definition_id=definition.id,
-                        option_id=options[0].id,
-                    ),
-                ]
-            )
-            await db.commit()
-            seeded = SimpleNamespace(
-                pid=project.id,
-                actor=AuthenticatedActor(owner.id, owner.token_version),
-                category=category.id,
-                definition=definition.id,
-                options=[row.id for row in options],
-                characters=[row.id for row in characters],
-            )
-        yield sessionmaker, seeded
-    finally:
-        await engine.dispose()
-        try:
-            if created_schema:
-                async with admin_engine.begin() as conn:
-                    await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-        finally:
-            await admin_engine.dispose()
+@pytest.fixture
+async def snapshot_database(app, client):
+    # 仅本测试隔离库启用 WAL，让读快照未结束时另一真实连接可提交。
+    async with app.state.engine.connect() as conn:
+        assert await conn.scalar(text("PRAGMA journal_mode=WAL")) == "wal"
+    seeded = await _seed(app, client, count=405)
+    yield app.state.sessionmaker, seeded
 
 
 @pytest.mark.parametrize("change", ["tags", "definition", "rules", "field"])

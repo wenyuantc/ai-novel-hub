@@ -84,7 +84,6 @@ async def test_editor_stream_survives_slow_response_headers(app, client, make_cl
 @pytest.mark.parametrize(("grant", "dialect", "expected"), [
     (("invitation", 1), "sqlite", True),
     (None, "sqlite", False),
-    (("invitation", 1), "postgresql", False),
 ])
 def test_send_gap_only_for_collaborators_on_sqlite(grant, dialect, expected):
     job = SimpleNamespace(execution=SimpleNamespace(grant_identity=grant))

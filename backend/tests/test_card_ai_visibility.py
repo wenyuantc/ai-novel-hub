@@ -9,12 +9,6 @@ from app.services import setting_ai_visibility as visibility
 from app.services.card_service import parse_card
 from tests.helpers import create_ai_config, create_project, register, run_task
 from tests.test_cards import _career
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_app as postgres_fields_app,
-)
-from tests.test_setting_fields_postgresql import (
-    postgres_fields_client as postgres_fields_client,
-)
 
 
 def _entry(name, ref, mode=None, *, links=(), **extra):
@@ -222,15 +216,6 @@ async def test_v6_definition_reuse_and_skip_preserve_settings_and_stale_ai_cas(c
     assert (await _settings(client, base, "organization", org))["ai_mode"] == "never"
 
 
-async def test_postgresql_card_v6_roundtrip(postgres_fields_client, postgres_fields_app, fake_llm):
-    engine = postgres_fields_app.state.task_engine
-    await engine.start()
-    try:
-        await test_v6_roundtrip_retains_original_values_but_projects_only_allowed_settings(
-            postgres_fields_client, postgres_fields_app, fake_llm,
-        )
-    finally:
-        await engine.stop()
 
 
 async def test_v6_ai_link_mappings_cannot_collapse_to_one_target_and_failure_rolls_back(client, monkeypatch):

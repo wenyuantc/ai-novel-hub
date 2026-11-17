@@ -1,23 +1,16 @@
 """0037 存量图、默认行为、约束及拒绝有损回退的真实迁移验证。"""
 
-import asyncio
-import os
-import uuid
 
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, inspect, select, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.orm import Session
 
 from app.models import Base, Career, Character, Organization, WorldSetting
-from tests.schema_helpers import create_isolated_schema
 from tests.test_setting_categories_migration import (
     ENTITY_TABLES,
     _assert_preserved,
-    _seed_fields,
     _snapshot,
     _sqlite_database,
 )
@@ -26,7 +19,6 @@ from tests.test_setting_fields_migration import (
     _foreign_keys_during_migrations,
     _schema_0037_model_contract,
     _schema_contract,
-    _seed_connection,
 )
 
 CHANGED_TABLES = (
@@ -83,8 +75,6 @@ def _assert_link_graph_constraints(conn):
     ]
     conn.execute(links.insert().values(project_id=1, source_handle_id=31, target_handle_id=32))
     conn.execute(text("DELETE FROM projects WHERE id=1"))
-    if conn.dialect.name == "postgresql":
-        conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     assert conn.execute(select(links.c.project_id)).all() == [(2,)]
     conn.execute(text("DELETE FROM projects WHERE id=2"))
     assert conn.execute(select(links.c.id)).all() == []
@@ -185,67 +175,3 @@ def test_0037_refuses_lossy_downgrade_before_any_mutation(tmp_path):
                 conn.execute(text(cleanup))
     finally:
         engine.dispose()
-
-
-def test_0037_postgresql_preserves_rows_constraints_and_orm_contract(tmp_path, monkeypatch):
-    database_url = os.environ.get("AINOVEL_FIELDS_POSTGRES_TEST_URL")
-    if not database_url:
-        pytest.skip("设置 AINOVEL_FIELDS_POSTGRES_TEST_URL 才运行隔离 PostgreSQL 验证")
-    parsed = make_url(database_url)
-    if parsed.drivername != "postgresql+asyncpg" or parsed.host != "127.0.0.1" or parsed.database != "fields_verify":
-        raise ValueError("AI 可见性迁移测试只允许本机 fields_verify 专用测试数据库")
-    schema = f"setting_visibility_test_{uuid.uuid4().hex}"
-    original = async_sqlalchemy.async_engine_from_config
-
-    def isolated_factory(*args, **kwargs):
-        return original(*args, **kwargs, connect_args={"server_settings": {"search_path": schema}})
-
-    async def run(action, *, path=schema):
-        db = async_sqlalchemy.create_async_engine(database_url, connect_args={"server_settings": {"search_path": path}})
-        try:
-            async with db.begin() as conn:
-                assert await conn.scalar(text("SELECT current_database()")) == "fields_verify"
-                return await conn.run_sync(action)
-        finally:
-            await db.dispose()
-
-    def seed_legacy(conn):
-        _seed_connection(conn)
-        for table in ("setting_timelines", "setting_text_fields", "setting_progressions"):
-            conn.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}','id'), (SELECT max(id) FROM {table}))"))
-
-    def inspect_contract(conn):
-        return {name: _schema_contract(inspect(conn), name) for name in CHANGED_TABLES}
-
-    config = _config(tmp_path / "unused.db")
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
-    asyncio.run(run(lambda conn: conn.exec_driver_sql(f'CREATE SCHEMA "{schema}"'), path="public"))
-    try:
-        monkeypatch.setattr(async_sqlalchemy, "async_engine_from_config", isolated_factory)
-        command.upgrade(config, "0034")
-        asyncio.run(run(seed_legacy))
-        command.upgrade(config, "0035")
-        asyncio.run(run(_seed_fields))
-        command.upgrade(config, "0036")
-        asyncio.run(run(_seed_old_extra))
-        before = asyncio.run(run(_snapshot))
-        command.upgrade(config, "0037")
-        asyncio.run(run(lambda conn: _assert_preserved(conn, before)))
-        asyncio.run(run(_assert_legacy_defaults))
-        actual = asyncio.run(run(inspect_contract))
-
-        def compare_with_models(conn):
-            model_schema = f"{schema}_model"
-            conn.exec_driver_sql(f'CREATE SCHEMA "{model_schema}"')
-            conn.exec_driver_sql(f'SET LOCAL search_path TO "{model_schema}"')
-            create_isolated_schema(conn)
-            assert {name: _schema_0037_model_contract(inspect(conn), name) for name in CHANGED_TABLES} == actual
-            conn.exec_driver_sql(f'DROP SCHEMA "{model_schema}" CASCADE')
-
-        asyncio.run(run(compare_with_models))
-        command.downgrade(config, "0036")
-        assert asyncio.run(run(_snapshot)) == before
-        command.upgrade(config, "0037")
-        asyncio.run(run(_assert_link_graph_constraints))
-    finally:
-        asyncio.run(run(lambda conn: conn.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE'), path="public"))

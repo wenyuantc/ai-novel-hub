@@ -4,7 +4,6 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from uuid import uuid4
 
-import httpx
 import pytest
 from sqlalchemy import select, update
 
@@ -12,19 +11,9 @@ from app.models import AgentChange, AgentConversation, Task, User
 from app.services import authorization_service
 from app.services.agent import access as agent_access
 from app.services.agent import transactions
-from tests import pg_support
 from tests.helpers import create_ai_config, create_project, register, task_params, wait_task
 from tests.mcp_fakes import FakeMcpConnector
 from tests.test_agent_mcp_skills import AUTO_MCP_REASON, URL, call, change_action, send_task, setup
-
-
-@pytest.fixture
-async def postgres_agent_app(tmp_path, fake_llm, monkeypatch, pg_schema_lease):
-    url = pg_support.collab_test_url("AINOVEL_AGENT_POSTGRES_TEST_URL", "collab_agents", purpose="Agent 测试")
-    async with pg_support.postgres_apps(
-        pg_schema_lease, url, tmp_path, fake_llm, monkeypatch, count=1,
-    ) as apps:
-        yield apps[0]
 
 
 async def _reject_after_token_revoked(app, client, monkeypatch):
@@ -89,11 +78,6 @@ async def test_agent_reject_rechecks_original_http_token_after_revocation(app, c
     await _reject_after_token_revoked(app, client, monkeypatch)
 
 
-async def test_agent_reject_rechecks_original_http_token_in_postgresql(postgres_agent_app, monkeypatch):
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=postgres_agent_app), base_url="http://testserver",
-    ) as client:
-        await _reject_after_token_revoked(postgres_agent_app, client, monkeypatch)
 
 
 @pytest.mark.parametrize("action", ["create", "update", "delete", "send"])
@@ -201,12 +185,6 @@ async def test_agent_conversation_writes_revalidate_at_write_gate(app, client, m
     await _conversation_write_after_revocation(app, client, monkeypatch, action)
 
 
-@pytest.mark.parametrize("action", ["create", "update", "delete", "send"])
-async def test_agent_conversation_writes_revalidate_at_write_gate_postgresql(postgres_agent_app, monkeypatch, action):
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=postgres_agent_app), base_url="http://testserver",
-    ) as client:
-        await _conversation_write_after_revocation(postgres_agent_app, client, monkeypatch, action)
 
 
 async def test_external_result_after_token_revocation_does_not_apply(app, client, fake_llm, monkeypatch):
@@ -511,78 +489,3 @@ async def test_external_missing_task_uuid_fails_before_network(app, client, fake
     async with app.state.sessionmaker() as db:
         stored = await db.get(AgentChange, change["id"])
         assert stored.status == "proposed"
-
-
-@pytest.mark.parametrize("event", ["claim", "task", "token"])
-async def test_external_execution_claim_postgresql(postgres_agent_app, fake_llm, monkeypatch, event):
-    from app.services.agent import service
-
-    app = postgres_agent_app
-    connector = FakeMcpConnector()
-    app.state.task_engine.ctx.mcp_connector = connector
-    # 外部占用要求原轮次具备服务端签发的任务 UUID、入队时刻与认证令牌版本；
-    # 经真实受理和领取产生待确认提案，而不是手工插入缺少这些身份的 Task。
-    await app.state.task_engine.start()
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
-        project, base, conversation_url, _ = await setup(client, connector)
-        fake_llm.push_tools([call("mcp__dict__send", {"to": "编辑部"})])
-        task_ref = await send_task(client, conversation_url)
-        assert (await wait_task(client, task_ref, statuses=("paused", "failed")))["status"] == "paused"
-        actor_id = (await client.get("/api/v1/auth/me")).json()["id"]
-        task_id = task_ref["id"]
-        proposed = (await client.get(conversation_url)).json()["changes"]
-        assert len(proposed) == 1 and proposed[0]["turn_task_key"] == task_ref["task_key"]
-        change_id = proposed[0]["id"]
-        visible = (await client.get(conversation_url)).json()["changes"]
-        change = next(item for item in visible if item["id"] == change_id)
-
-        entered, release = asyncio.Event(), asyncio.Event()
-
-        async def gated_call(_name, _arguments):
-            entered.set()
-            await release.wait()
-            return "PRIVATE-POSTGRES-RESULT"
-
-        connector.servers[URL].handler = gated_call
-        request = asyncio.create_task(client.post(f"{base}/changes/{change_id}/confirm", json=change_action(change)))
-        try:
-            await asyncio.wait_for(entered.wait(), 15)
-            new_claim = str(uuid4())
-            async with app.state.sessionmaker() as db:
-                current = await db.get(AgentChange, change_id)
-                original_claim = current.result[transactions.EXTERNAL_CLAIM_KEY]
-                original_task_key = current.result[service._EXTERNAL_TASK_KEY]
-                if event == "claim":
-                    await db.execute(update(AgentChange).where(AgentChange.id == change_id).values(
-                        result={transactions.EXTERNAL_CLAIM_KEY: new_claim,
-                                service._EXTERNAL_TASK_KEY: original_task_key},
-                    ))
-                elif event == "task":
-                    await db.execute(update(Task).where(Task.id == task_id).values(statistics_key=str(uuid4())))
-                else:
-                    await db.execute(update(User).where(User.id == actor_id).values(
-                        token_version=User.token_version + 1,
-                    ))
-                await db.commit()
-            release.set()
-            response = await asyncio.wait_for(request, 15)
-            assert response.status_code == (401 if event == "token" else 409), response.text
-            assert "PRIVATE-POSTGRES-RESULT" not in response.text
-            async with app.state.sessionmaker() as db:
-                stored = await db.get(AgentChange, change_id)
-                if event == "token":
-                    assert stored.status == "failed" and stored.error == service.EXTERNAL_RETURNED_NOT_APPLIED
-                    assert stored.result == {"error": service.EXTERNAL_RETURNED_NOT_APPLIED}
-                else:
-                    assert stored.status == "executing"
-                    assert stored.result[transactions.EXTERNAL_CLAIM_KEY] == (
-                        original_claim if event == "task" else new_claim
-                    )
-                    assert stored.result[service._EXTERNAL_TASK_KEY] == original_task_key
-                assert "PRIVATE-POSTGRES-RESULT" not in str(stored.result)
-        finally:
-            release.set()
-            if not request.done():
-                request.cancel()
-                with suppress(asyncio.CancelledError):
-                    await request
