@@ -19,7 +19,7 @@
 
 准备记录与结果更新用短事务。首先定位各入口可提交的发送边界，在模型操作开始时保留最少的尝试凭据，并在实际发送或得到响应时补充观察结果。计量写入放在发送授权租约之外，避免重新取得作者或任务锁，避免 SQLite 持有其他写事务时开启第二个写入。已发送的调用由尝试 ID 条件更新，计量写入重试不会触发模型重发。若进程中断留有未确认的尝试，按时间收尾为中断、发送状态待确认，汇总显示缺口。观测器、传输租约和内容写回分别收尾，保留当前任务的授权及撤权语义。
 
-代码入口可从 [Provider 契约](../../../backend/app/ai/providers/base.py)、[真实发送钩子](../../../backend/app/services/ai_dispatch.py#L479)、[协作模型绑定](../../../backend/app/services/collaboration_ai_guard.py#L124)、[生成与分析](../../../backend/app/services/batch_service.py#L1428)、[智能体轮次](../../../backend/app/services/agent/runner.py#L1011)、[向量分批](../../../backend/app/services/retrieval_service.py#L183)和[模型配置测试](../../../backend/app/services/ai_config_service.py#L306)追溯。
+代码入口可从 [Provider 契约](../../../../../backend/app/ai/providers/base.py)、[真实发送钩子](../../../../../backend/app/services/ai_dispatch.py#L479)、[协作模型绑定](../../../../../backend/app/services/collaboration_ai_guard.py#L124)、[生成与分析](../../../../../backend/app/services/batch_service.py#L1428)、[智能体轮次](../../../../../backend/app/services/agent/runner.py#L1011)、[向量分批](../../../../../backend/app/services/retrieval_service.py#L183)和[模型配置测试](../../../../../backend/app/services/ai_config_service.py#L306)追溯。
 
 ## 价格与预算
 
@@ -38,14 +38,14 @@
 | 批量生成预估 | 扩展现有 `POST /projects/{id}/batch-generate/preview`。复用章节范围、分析开关及执行侧模型解析，按章节目标字数、可得的输入规模和价格估算生成与分析金额。明确重试、额外检索等是否包含。预览只读，不调用模型、不占用额度。在使用作者模型的协作者视图提示作者承担费用，金额仅在可查看时返回。 |
 | 管理后台全站页 | 提供独立页面、导航及 `/api/v1/admin` 下的用量接口。沿用动作级 RBAC，为全站用量定义专门的读权限。可按真实发起账号、费用承担账号、作品、模型、任务类型、时间筛选分页明细与全站汇总，范围包含无作品归属及未知用量。API 字段白名单涵盖调用时间、标识、状态、用量、来源、币种和费用等元数据。 |
 
-汇总和明细从相同授权投影和筛选条件查询，使用一致的查询视图，提供稳定排序和服务端分页。现有后台权限按照 [RBAC 规范](../../spec/backend/rbac-quotas.md)接入，导航、页面、API 和权限变化后的迟到响应都需要覆盖。管理员可读范围来自全站用量权限，作品管理员路径与调用内容权限维持原有规则。提示词、正文、密钥、连接端点、鉴权信息和供应商原始响应均不纳入用量表与用量 DTO。
+汇总和明细从相同授权投影和筛选条件查询，使用一致的查询视图，提供稳定排序和服务端分页。现有后台权限按照 [RBAC 规范](../../../../spec/backend/rbac-quotas.md)接入，导航、页面、API 和权限变化后的迟到响应都需要覆盖。管理员可读范围来自全站用量权限，作品管理员路径与调用内容权限维持原有规则。提示词、正文、密钥、连接端点、鉴权信息和供应商原始响应均不纳入用量表与用量 DTO。
 
-批量弹窗当前只用范围和字数作为预览请求键。增加费用后，模型、风格、附加要求和 Skill 等影响估算的输入应进入请求和请求代次校验。保存、切换账号／作品或关闭弹窗时，作废相应的旧请求结果。[预览服务](../../../backend/app/services/batch_service.py#L180) · [批量弹窗](../../../frontend/src/components/batch/BatchGenerateModal.tsx#L97)
+批量弹窗当前只用范围和字数作为预览请求键。增加费用后，模型、风格、附加要求和 Skill 等影响估算的输入应进入请求和请求代次校验。保存、切换账号／作品或关闭弹窗时，作废相应的旧请求结果。[预览服务](../../../../../backend/app/services/batch_service.py#L180) · [批量弹窗](../../../../../frontend/src/components/batch/BatchGenerateModal.tsx#L97)
 
 ## 迁移与回退
 
 - 以当前 Alembic head 为基础新增用量、定价和预算存储及索引。为查询确立账号、作品、调用时间和稳定分页键。所有归属字段以可防止账号、作品或配置 ID 复用的方式绑定。删除资源时沿既有生命周期规则解除身份关联，历史账号累计不会因删章、清理任务或清空作品回收站被重算。已删除或无归属标识使用显式状态。
-- 新表记录计量覆盖起点。旧生成日志的 token 继续可见于既有历史视图。历史的价格、发送完整性及某些归属不可核实，作品备份导入会重新生成日志身份并清除模型来源。新计量和预算不从这些日志重建。单书备份导入沿用既有隔离，整库备份需验证新表是否随数据库快照恢复。[单书备份约定](../../spec/backend/project-transfer.md) · [日志导入](../../../backend/app/services/project_transfer/importer.py#L1609)
+- 新表记录计量覆盖起点。旧生成日志的 token 继续可见于既有历史视图。历史的价格、发送完整性及某些归属不可核实，作品备份导入会重新生成日志身份并清除模型来源。新计量和预算不从这些日志重建。单书备份导入沿用既有隔离，整库备份需验证新表是否随数据库快照恢复。[单书备份约定](../../../../spec/backend/project-transfer.md) · [日志导入](../../../../../backend/app/services/project_transfer/importer.py#L1609)
 - 更新前在 SQLite 和 PostgreSQL 隔离库验证向前迁移、旧数据查询和恢复。应用回退须使用能识别 `ai_usage.read` 的版本，保留 0061 的历史计量及定价快照。直接运行旧权限目录的应用会导致内置超管目录校验失败。涉及删除计量表的降级只在已核对备份并明确保留要求后进行。
 
 ## 分时单价补充设计
