@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 48
-- **Last Active**: 2026-11-17
+- **Total Sessions**: 49
+- **Last Active**: 2026-11-18
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1608 | Active |
+| `journal-1.md` | ~1644 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 49 | 2026-11-18 | 自动保存与异常草稿恢复 | `9ac487a6c7902661c9a1d371e47ae34b8e085f34`, `a6a097c1a8ba4910bd3b312f35d575967efd0a84`, `cff25abfeaf743ef79b0291e9a30f6a89653dd9b` | `codex/autosave-draft-recovery` |
 | 48 | 2026-11-17 | 全书一致性检查与修改影响追踪 | `7899de3` | `main` |
 | 47 | 2026-11-17 | 笔名分组、小说模板与设定缩略图收口 | `dfd50bc` | `codex/pen-names-templates-thumbnails` |
 | 46 | 2026-11-16 | Word 导出与内容组合导出 | `cb3530f`, `2168681` | `codex/word-content-export` |
