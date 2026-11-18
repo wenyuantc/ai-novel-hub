@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MENTION_CATEGORY_LABELS } from '../api/mentions'
 import { entityDetailHref } from './entityLinks'
-import { mentionHref, mentionSegments, readMentionAnchor, resolveEntityDeepLink, staleAnchorMessage } from './mentions'
+import { bookSearchHref, mentionHref, mentionSegments, readMentionAnchor, resolveEntityDeepLink, staleAnchorMessage } from './mentions'
 
 describe('提及原文定位', () => {
   it('九类提及有类型标签，同 ID 的不同设定仍跳到各自的详情入口', () => {
@@ -70,7 +70,7 @@ describe('提及原文定位', () => {
       expect(mentionSegments(text, [span(1, 3)], 0, { start: 6, end: 2 }).some((p) => p.focused)).toBe(false)
     })
   })
-  it('深链来源只认 consistency；提及追踪的位置失效提示保持原措辞', () => {
+  it('提及与一致性深链保留原有失效提示，忽略不认识的来源', () => {
     const base = `mention_start=1&mention_end=3&mention_hash=${'a'.repeat(64)}`
     expect(readMentionAnchor(new URLSearchParams(base))).toEqual({ start: 1, end: 3, content_hash: 'a'.repeat(64) })
     expect(readMentionAnchor(new URLSearchParams(`${base}&mention_from=other`))).toEqual({ start: 1, end: 3, content_hash: 'a'.repeat(64) })
@@ -78,6 +78,14 @@ describe('提及原文定位', () => {
     expect(staleAnchorMessage({}, '原文已变化，请重新查看提及列表定位。')).toBe('原文已变化，请重新查看提及列表定位。')
     expect(staleAnchorMessage(null, '原措辞')).toBe('原措辞')
     expect(staleAnchorMessage({ origin: 'consistency' }, '原措辞')).toContain('请回到来源页面重新定位')
+  })
+  it('全书搜索链接用章内码点和指纹定位，可区分同段的不同命中', () => {
+    const match = { start: 13, end: 16, content_hash: 'b'.repeat(64) }
+    const url = new URL(bookSearchHref(12, 7, match), 'https://reader.test')
+    expect(url.pathname).toBe('/projects/12/read/7')
+    const anchor = readMentionAnchor(url.searchParams)
+    expect(anchor).toEqual({ ...match, origin: 'book-search' })
+    expect(staleAnchorMessage(anchor, '提及')).toContain('重新搜索')
   })
   it('拒绝负数、反向范围和缺少原文指纹的旧位置', () => {
     expect(readMentionAnchor(new URLSearchParams('mention_start=-1&mention_end=3'))).toBeNull()

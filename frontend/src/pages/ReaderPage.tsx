@@ -16,6 +16,7 @@ import { readerApi, saveProgressKeepalive } from '../api/reader'
 import type { Project, ReaderTocItem, ReadingPosition } from '../api/types'
 import ReaderAnalysisPanel from '../components/reader/ReaderAnalysisPanel'
 import RichReaderContent from '../components/reader/RichReaderContent'
+import SearchHitContent from '../components/reader/SearchHitContent'
 import MentionPreview from '../components/mentions/MentionPreview'
 import { readMentionAnchor } from '../utils/mentions'
 import ProjectManagementNotice from '../components/project/ProjectManagementNotice'
@@ -168,7 +169,7 @@ function ReaderSession({ scope }: { scope: ReaderSessionScope }) {
       throw err
     }
   }, [pid, user, sessionCurrent, accessLostNow])
-  const { data, loading, error } = useLoader(loader)
+  const { data, loading, error, reload } = useLoader(loader)
 
   const currentData = data?.project.id === pid ? data : undefined
   // 仅作者使用自己的阅读进度；协作者与管理员均从首个已写章节开始。
@@ -190,7 +191,8 @@ function ReaderSession({ scope }: { scope: ReaderSessionScope }) {
   }
   if (accessLost) return wrap(<Result status="warning" title="无法继续读取此作品" extra={<Link to="/projects">返回书架</Link>} />)
   if (error) {
-    return wrap(<Result status="warning" title="无法打开阅读器" subTitle={error} extra={<Link to="/projects">返回书架</Link>} />)
+    return wrap(<Result status="warning" title="无法打开阅读器" subTitle={error}
+      extra={<Space><Button onClick={reload}>重试读取</Button><Link to="/projects">返回书架</Link></Space>} />)
   }
   if (!currentData || loading) {
     return wrap(
@@ -253,9 +255,10 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const navigate = useNavigate()
   const location = useLocation()
   const mentionAnchor = useMemo(() => readMentionAnchor(new URLSearchParams(location.search)), [location.search])
+  const searchAnchor = mentionAnchor?.origin === 'book-search' ? mentionAnchor : null
   const [showMentions, setShowMentions] = useState(false)
   const [dismissedAnchor, setDismissedAnchor] = useState('')
-  const mentionsVisible = showMentions || (!!mentionAnchor && dismissedAnchor !== location.search)
+  const mentionsVisible = showMentions || (!!mentionAnchor && !searchAnchor && dismissedAnchor !== location.search)
   const isMobile = useIsMobile()
   const { token } = theme.useToken()
   const colors = READER_TONES[tone]
@@ -284,7 +287,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
       throw err
     }
   }, [pid, chapterId, onAccessLost, project, user, sessionCurrent])
-  const { data: readerChapter, loading, error } = useLoader(loader)
+  const { data: readerChapter, loading, error, reload } = useLoader(loader)
   const chapter = readerChapter?.chapter.id === chapterId ? readerChapter.chapter : undefined
   const written = !!chapter?.content.trim()
   const paragraphs = useMemo(() => readerChapter?.blocks === null ? splitParagraphs(chapter?.content ?? '') : [], [readerChapter, chapter])
@@ -293,7 +296,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
     [toc, chapter],
   )
 
-  const from = (location.state as { from?: string } | null)?.from
+  const from = (location.state as { from?: string } | null)?.from ?? (searchAnchor ? `/projects/${pid}/book-search` : undefined)
   const goChapter = useCallback(
     (id: number) => navigate(`/projects/${pid}/read/${id}`, { replace: true, state: location.state }),
     [navigate, pid, location.state],
@@ -464,14 +467,17 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
             <Spin />
           </div>
         ) : error || !chapter ? (
-          <Result status="warning" title="章节不存在或无法读取" subTitle={error ?? undefined} />
+          <Result status="warning" title="章节不存在或无法读取" subTitle={error ?? undefined}
+            extra={searchAnchor && <Space><Button onClick={reload}>重试读取</Button><Link to={`/projects/${pid}/book-search`}>返回全书搜索</Link></Space>} />
         ) : (
           <>
             <h1 style={{ fontSize: Math.round(settings.fontSize * 1.4), lineHeight: 1.4, textAlign: 'center', margin: '0 0 1.2em' }}>
               {chapterTitle}
             </h1>
-            {written && mentionsVisible ? <MentionPreview projectId={pid} text={chapter.content} anchor={mentionAnchor}
-              renderText={readerChapter?.blocks ? (spans, focus) => <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks ?? []} mentions={{ spans, focus }} /> : undefined} /> : written ? (
+            {written && mentionsVisible ? <MentionPreview projectId={pid} text={chapter.content} anchor={searchAnchor ? null : mentionAnchor}
+              renderText={readerChapter?.blocks ? (spans, focus) => <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks ?? []} mentions={{ spans, focus }} /> : undefined} />
+              : searchAnchor && readerChapter ? <SearchHitContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks}
+                contentHash={readerChapter.content_hash} anchor={searchAnchor} /> : written ? (
               readerChapter?.blocks ? <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks} /> : paragraphs.map((p, i) => (
                 <p key={i} style={{ textIndent: '2em', margin: '0 0 0.6em', wordBreak: 'break-word' }}>{p}</p>
               ))

@@ -7,7 +7,7 @@ export interface ReaderBlock {
   kind: 'paragraph' | 'heading' | 'bullet_list' | 'ordered_list' | 'blockquote'
   start: number; end: number; level: number | null; runs: ReaderRun[]
 }
-export interface ReaderChapter { chapter: Chapter; blocks: ReaderBlock[] | null }
+export interface ReaderChapter { chapter: Chapter; blocks: ReaderBlock[] | null; content_hash: string }
 
 export const readerApi = {
   toc: (pid: number) => api.get<ReaderTocItem[]>(`/projects/${pid}/reader/toc`),

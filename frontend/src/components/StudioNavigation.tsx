@@ -1,7 +1,7 @@
 import {
   ApartmentOutlined, ApiOutlined, BgColorsOutlined, BlockOutlined, BookOutlined, BulbOutlined, ClusterOutlined,
   DashboardOutlined, DatabaseOutlined, FileTextOutlined, GlobalOutlined, HistoryOutlined,
-  ImportOutlined, KeyOutlined, OrderedListOutlined, RocketOutlined, SafetyCertificateOutlined, SettingOutlined, ShopOutlined, TeamOutlined, TrophyOutlined,
+  ImportOutlined, KeyOutlined, OrderedListOutlined, RocketOutlined, SafetyCertificateOutlined, SearchOutlined, SettingOutlined, ShopOutlined, TeamOutlined, TrophyOutlined,
 } from '@ant-design/icons'
 import type { ReactNode } from 'react'
 
@@ -47,6 +47,7 @@ const PROJECT_GROUPS = [
     { key: 'planning', label: '规划矩阵', icon: <DashboardOutlined /> },
     { key: 'chapters', label: '章节', icon: <BookOutlined /> },
     { key: 'foreshadows', label: '伏笔', icon: <BulbOutlined /> },
+    { key: 'book-search', label: '全书搜索', icon: <SearchOutlined /> },
     { key: 'mentions', label: '提及追踪', icon: <DashboardOutlined /> },
     { key: 'consistency', label: '一致性检查', icon: <SafetyCertificateOutlined /> },
     { key: 'notes', label: '笔记', icon: <FileTextOutlined /> },

@@ -120,6 +120,7 @@ export const router = createBrowserRouter([
           { path: 'knowledge', lazy: lazyPage(() => import('./pages/project/KnowledgePanel')) },
           { path: 'notes', lazy: lazyPage(() => import('./pages/project/NotesPanel')) },
           { path: 'mentions', lazy: lazyPage(() => import('./pages/project/MentionsPanel')) },
+          { path: 'book-search', lazy: lazyPage(() => import('./pages/project/BookSearchPage')) },
           { path: 'consistency', lazy: lazyPage(() => import('./pages/project/ConsistencyPage')) },
           { path: 'memories', lazy: lazyPage(() => import('./pages/project/MemoriesPanel')) },
           { path: 'outlines', lazy: lazyPage(() => import('./pages/project/OutlinesPanel')) },

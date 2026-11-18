@@ -8,6 +8,7 @@ import { readerApi } from '../api/reader'
 import { deferred } from '../components/systemSettings/systemSettingsTestFixtures'
 import { useAuthStore } from '../stores/auth'
 import ReaderPage from './ReaderPage'
+import { bookSearchHref } from '../utils/mentions'
 
 const view = vi.hoisted(() => ({
   effects: [] as Array<{ effect: () => void | (() => void); deps: readonly unknown[] | undefined }>,
@@ -15,6 +16,7 @@ const view = vi.hoisted(() => ({
   loads: [] as unknown[],
   loaders: [] as Array<() => Promise<unknown>>,
   params: { pid: '9', cid: '11' as string | undefined },
+  search: '',
   navigate: vi.fn(),
 }))
 vi.mock('react', async (original) => {
@@ -39,7 +41,7 @@ vi.mock('react-router-dom', () => ({
   Link: ({ children, to }: { children: import('react').ReactNode; to: string }) => createElement('a', { href: to }, children),
   useParams: () => view.params,
   useNavigate: () => view.navigate,
-  useLocation: () => ({ state: null, search: '', key: 'reader' }),
+  useLocation: () => ({ state: null, search: view.search, key: 'reader' }),
 }))
 vi.mock('../hooks/useLoader', () => ({ useLoader: (load: () => Promise<unknown>) => {
   view.loaders.push(load)
@@ -70,7 +72,8 @@ const project = (access: ProjectAccess): Project => ({
   reading: { chapter_id: 12, chapter_no: 2, ratio: 0.7 },
 })
 const chapter = { chapter: { id: 11, project_id: 9, outline_id: null, plan_id: null, style_id: null, chapter_no: 1,
-  title: '', status: 'done' as const, word_count: 4, content_revision: 1, updated_at: '', content: '已经写好的正文' }, blocks: null }
+  title: '', status: 'done' as const, word_count: 4, content_revision: 1, updated_at: '', content: '已经写好的正文' },
+content_hash: 'a'.repeat(64), blocks: null }
 
 function renderReader(access: ProjectAccess, user: User, withChapter = true) {
   view.effects = []
@@ -116,12 +119,21 @@ afterEach(() => {
   view.layouts = []
   view.loads = []
   view.loaders = []
+  view.search = ''
   view.navigate.mockClear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('阅读器的协作能力', () => {
+  it('只读协作者从搜索进入时直接高亮命中，保留只读能力', () => {
+    view.search = new URL(bookSearchHref(9, 11, { start: 5, end: 7, content_hash: chapter.content_hash }), 'https://reader.test').search
+    const html = renderReader(viewer, actor(3))
+    expect(html).toMatch(/data-mention-focus="true"[^>]*>正文<\/mark>/)
+    expect(html).toContain('查看本章')
+    expect(html).not.toContain('编辑本章')
+    expect(progressEffect(false)()).toBeUndefined()
+  })
   it.each([
     ['viewer', viewer, actor(3), false],
     ['editor', { ...viewer, role: 'editor' as const, can_edit_content: true, can_use_ai: true }, actor(3), true],

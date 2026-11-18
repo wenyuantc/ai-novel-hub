@@ -22,8 +22,10 @@ import {
 const g = (bytes: number, rows = 1) => ({ rows, chars: 0, bytes })
 
 describe('统计表格标签', () => {
-  it('保留原 27 类标签并识别场景与本地角色关联', () => {
-    expect(Object.keys(TRANSFER_TABLE_LABELS)).toHaveLength(32)
+  it('识别场景、作品历史与修订明细', () => {
+    expect(Object.keys(TRANSFER_TABLE_LABELS)).toHaveLength(34)
+    expect(tableLabel('revision_batches')).toBe('批量修订记录')
+    expect(tableLabel('revision_batch_scenes')).toBe('修订场景明细')
     expect(tableLabel('scenes')).toBe('场景')
     expect(tableLabel('planning_unit_characters')).toBe('场景角色关联')
     expect(tableLabel('chapter_plans')).toBe('细纲')

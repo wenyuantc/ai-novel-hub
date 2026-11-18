@@ -35,6 +35,8 @@ export const TRANSFER_TABLE_LABELS: Record<string, string> = {
   foreshadow_history: '伏笔历史',
   generation_logs: '生成记录',
   chapter_versions: '章节版本',
+  revision_batches: '批量修订记录',
+  revision_batch_scenes: '修订场景明细',
   chapter_analyses: '章节分析',
   analysis_changes: '分析回写条目',
   story_memories: '剧情记忆',
@@ -89,7 +91,7 @@ export interface BackupOptionItem {
 }
 
 export const BACKUP_OPTION_ITEMS: BackupOptionItem[] = [
-  { key: 'versions', label: '章节版本', hint: '每章的历史版本，可在导入后继续回滚' },
+  { key: 'versions', label: '章节版本', hint: '章节历史版本、批量修订记录及撤销所需的原稿' },
   { key: 'snapshots', label: '大纲快照', hint: '大纲覆盖 / 重新展开前自动保存的快照' },
   { key: 'generation_logs', label: '生成记录', hint: '每次 AI 生成的提示词与参数，体积通常最大' },
   { key: 'inspiration', label: '关联的灵感会话', hint: '从本项目发起或转为本项目的灵感会话' },

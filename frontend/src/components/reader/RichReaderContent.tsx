@@ -55,6 +55,17 @@ export default function RichReaderContent({ projectId, text, blocks, mentions }:
   // 提及 API 按原文顺序返回不重叠范围；每块二分起点，避免长章中反复扫描全书匹配。
   const mentionSpans = mentions?.spans ?? []
   const style: CSSProperties = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '0 0 0.6em' }
+  // 自然换行在富文档中是块间空隙。搜索词可只含换行，此时也要有可滚动的精确目标。
+  const searchGap = (start: number, end: number) => {
+    const focus = mentions?.focus
+    if (focus?.origin !== 'book-search') return null
+    const from = Math.max(start, focus.start), to = Math.min(end, focus.end)
+    if (from >= to) return null
+    return <mark data-mention-focus tabIndex={-1} aria-label="命中的换行"
+      style={{ whiteSpace: 'pre-wrap', background: token.colorWarningBg, borderInlineStart: `2px solid ${token.colorWarning}` }}>
+      {points.slice(from, to).join('')}
+    </mark>
+  }
   const children = (block: ReaderBlock) => {
     if (!mentions) return styledText(points, block.runs, block.start, block.end)
     const spans = []
@@ -70,16 +81,20 @@ export default function RichReaderContent({ projectId, text, blocks, mentions }:
   }
   return <div>{grouped.map((group, i) => {
     const first = group[0], key = `${first.start}:${first.end}:${i}`
+    const previous = grouped[i - 1]
+    const before = searchGap(previous ? previous[previous.length - 1].end : 0, first.start)
     if (first.kind === 'bullet_list' || first.kind === 'ordered_list') {
       const tag = first.kind === 'bullet_list' ? 'ul' : 'ol'
       return createElement(tag, { key, style: { margin: '0 0 0.6em', paddingInlineStart: '2em' } },
-        group.map((block, index) => <li key={`${block.start}:${index}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{children(block)}</li>))
+        group.map((block, index) => <li key={`${block.start}:${index}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+          {index === 0 ? before : searchGap(group[index - 1].end, block.start)}{children(block)}
+        </li>))
     }
     if (first.kind === 'heading') {
       const level = Math.max(1, Math.min(6, first.level ?? 1))
-      return createElement(`h${level}`, { key, style: { ...style, lineHeight: 1.4 } }, children(first))
+      return createElement(`h${level}`, { key, style: { ...style, lineHeight: 1.4 } }, before, children(first))
     }
-    if (first.kind === 'blockquote') return <blockquote key={key} style={{ ...style, borderInlineStart: `3px solid ${token.colorBorder}`, paddingInlineStart: '1em', marginInline: 0 }}>{children(first)}</blockquote>
-    return <p key={key} style={{ ...style, textIndent: '2em' }}>{children(first)}</p>
-  })}</div>
+    if (first.kind === 'blockquote') return <blockquote key={key} style={{ ...style, borderInlineStart: `3px solid ${token.colorBorder}`, paddingInlineStart: '1em', marginInline: 0 }}>{before}{children(first)}</blockquote>
+    return <p key={key} style={{ ...style, textIndent: '2em' }}>{before}{children(first)}</p>
+  })}{searchGap(blocks.length ? blocks[blocks.length - 1].end : 0, points.length)}</div>
 }

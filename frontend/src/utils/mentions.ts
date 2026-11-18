@@ -22,16 +22,26 @@ export function readMentionAnchor(params: URLSearchParams): MentionAnchor | null
   if (start === null || end === null || !/^\d+$/.test(start) || !/^\d+$/.test(end) || !hash || !/^[a-f0-9]{64}$/.test(hash)) return null
   const s = Number(start), e = Number(end)
   if (!Number.isSafeInteger(s) || !Number.isSafeInteger(e) || e <= s) return null
-  return params.get(MENTION_FROM_PARAM) === 'consistency' ? { start: s, end: e, content_hash: hash, origin: 'consistency' } : { start: s, end: e, content_hash: hash }
+  const origin = params.get(MENTION_FROM_PARAM)
+  const anchor = { start: s, end: e, content_hash: hash }
+  return origin === 'consistency' || origin === 'book-search' ? { ...anchor, origin } : anchor
 }
-/** 深链来源参数：一致性检查的证据跳转复用提及锚点，位置失效时不应提示「回提及列表」。 */
+/** 复用同一组章内坐标，依来源选择失效反馈。 */
 export const MENTION_FROM_PARAM = 'mention_from'
-/** 位置失效提示：提及追踪保持原措辞；来自一致性检查的跳转用不指向提及列表的中性措辞。 */
 export function staleAnchorMessage(anchor: Pick<MentionAnchor, 'origin'> | null | undefined, fallback: string): string {
+  if (anchor?.origin === 'book-search') return '搜索结果的位置已失效，请重新搜索当前正文。'
   return anchor?.origin === 'consistency' ? '原文已变化，旧位置已失效，请回到来源页面重新定位。' : fallback
 }
-export function mentionHref(pid: number, source: MentionSource, anchor: MentionAnchor): string {
+function anchorParams(anchor: MentionAnchor): URLSearchParams {
   const params = new URLSearchParams({ mention_start: String(anchor.start), mention_end: String(anchor.end), mention_hash: anchor.content_hash })
+  if (anchor.origin) params.set(MENTION_FROM_PARAM, anchor.origin)
+  return params
+}
+export function bookSearchHref(pid: number, chapterId: number, anchor: Pick<MentionAnchor, 'start' | 'end' | 'content_hash'>): string {
+  return `/projects/${pid}/read/${chapterId}?${anchorParams({ ...anchor, origin: 'book-search' })}`
+}
+export function mentionHref(pid: number, source: MentionSource, anchor: MentionAnchor): string {
+  const params = anchorParams(anchor)
   let path: string
   if (source.type === 'chapter') path = `read/${source.id}`
   else if (source.type === 'chat') { path = 'overview'; params.set('agent', 'open'); params.set('conversation_id', String(source.conversation_id)); params.set('message_id', String(source.id)) }
