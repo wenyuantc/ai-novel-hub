@@ -56,6 +56,7 @@ from app.services import (
     story_service,
 )
 from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, guard_provider, visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 from app.services.context_builder import latest_summaries
 from app.services.entity_ai_service import resolve_name
 from app.services.generation_service import Event
@@ -390,6 +391,11 @@ async def build_outline_job(
             raise ConflictError("任务模型身份无法验证")
         cfg = await ai_config_service.resolve_config(db, user_id, params.get("ai_config_id"))
         provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+        maker = visibility_sessionmaker(db)
+        provider = meter_provider(
+            guard_provider(provider, scope.stamp, maker), cfg, maker, actor_id=user_id, kind=kind,
+            project_id=project.id, project_owner_id=project.user_id,
+        )
         model, thinking, max_tokens = cfg.model, cfg.thinking_level, ai_config_service.max_output_tokens(cfg)
     else:
         if text_binding is None or shared_embedding is None:
@@ -452,8 +458,6 @@ async def build_outline_job(
         job.count = req.count
         job.new_volume = req.new_volume.model_dump() if req.new_volume is not None else None
         await scope.verify(db)
-        if guard is None:
-            job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
         return job
 
     kept = await _kept_plans(db, project_id, outline_id)
@@ -496,8 +500,6 @@ async def build_outline_job(
         "memories": memories,
     }
     await scope.verify(db)
-    if guard is None:
-        job.provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
     return job
 
 
@@ -522,7 +524,8 @@ async def _retrieval(
     """(参考资料正文, 相关旧情节)；检索出错或没有内容时为空串。"""
     if execution is None:
         embedder = await retrieval_service.get_embedder(
-            db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+            db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private,
+            project_id=project.id,
         )
         kb_embedder = memory_embedder = retrieval_service.guard_embedder(
             embedder, visibility_stamp, visibility_sessionmaker(db),

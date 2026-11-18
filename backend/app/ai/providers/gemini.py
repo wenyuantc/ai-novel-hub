@@ -2,6 +2,7 @@ import json
 import math
 import re
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import httpx
@@ -21,7 +22,8 @@ from app.ai.providers.base import (
     describe_tools_error,
     split_system,
 )
-from app.ai.providers.dispatch_hooks import current_dispatch_hooks
+from app.ai.providers.dispatch_hooks import current_dispatch_hooks, model_client_event_hooks
+from app.ai.providers.usage import ModelAttempt, model_attempt, valid_usage_count
 from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec, history_arguments, native_metadata
 
 # Gemini 1.x / 2.x 用 thinking_budget（-1 = 动态，由模型在自身上限内决定）；3 及以后用 thinking_level
@@ -176,11 +178,45 @@ def _tool_contents(messages: list[AgentMessage]) -> tuple[str, list[types.Conten
     return system, contents
 
 
+def _record_usage(
+    attempt: ModelAttempt,
+    usage: types.GenerateContentResponseUsageMetadata | None,
+    *,
+    include_cache: bool = True,
+) -> None:
+    if usage is None:
+        return
+    candidates = valid_usage_count(usage.candidates_token_count)
+    thinking = valid_usage_count(usage.thoughts_token_count)
+    attempt.set_usage(
+        input_tokens=usage.prompt_token_count,
+        output_tokens=candidates + (thinking or 0) if candidates is not None else None,
+        cached_input_tokens=usage.cached_content_token_count if include_cache else None,
+    )
+
+
+def _embedding_tokens(embeddings: list[types.ContentEmbedding]) -> int | None:
+    if not embeddings:
+        return None
+    total = 0
+    for embedding in embeddings:
+        count = embedding.statistics.token_count if embedding.statistics is not None else None
+        # Gemini SDK 把此整数计量字段声明为 float。
+        if isinstance(count, float) and count.is_integer():
+            count = int(count)
+        if (valid := valid_usage_count(count)) is None:
+            return None
+        total += valid
+    return valid_usage_count(total)
+
+
 class GeminiProvider(LLMProvider):
     uses_dispatch_hooks = True
+    reports_model_usage = True
 
     def _client(self) -> genai.Client:
         hooks = current_dispatch_hooks()
+        event_hooks = model_client_event_hooks()
         guarded_client = (
             hooks.own_client(httpx.AsyncClient(follow_redirects=self.follow_redirects, event_hooks=hooks.event_hooks))
             if hooks
@@ -189,45 +225,68 @@ class GeminiProvider(LLMProvider):
         http_options = types.HttpOptions(
             base_url=self.base_url,
             timeout=int(self.timeout * 1000),
-            async_client_args={"follow_redirects": self.follow_redirects},
+            async_client_args={
+                "follow_redirects": self.follow_redirects,
+                **({"event_hooks": event_hooks} if event_hooks and not hooks else {}),
+            },
             # 显式注入可确保装有 aiohttp 时也不绕开受控的 HTTPX 传输。
             httpx_async_client=guarded_client,
             retry_options=types.HttpRetryOptions(attempts=1) if hooks else None,
         )
         return genai.Client(api_key=self.api_key, http_options=http_options)
 
+    @asynccontextmanager
+    async def _content_attempt(self, client, **request):
+        async with model_attempt() as attempt:
+            stream = await attempt.invoke(client.aio.models.generate_content_stream(**request))
+            try:
+                yield attempt, stream
+            finally:
+                await stream.aclose()
+
     async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
         client = None
         try:
             client = self._client()
-            if "imagen" in model.lower():
-                try:
-                    result = await client.aio.models.generate_images(
-                        model=model,
-                        prompt=prompt,
-                        config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio="3:4"),
-                    )
-                except ValueError as exc:
-                    if "not in gemini developer api mode" not in str(exc).lower():
-                        raise
-                    raise AIProviderError(
-                        "当前接口或 SDK 不支持 Imagen 图片生成，请在「模型配置」中换用 Gemini 原生生图模型"
-                    ) from exc
-                images = result.generated_images or []
-                if images and images[0].image is not None and images[0].image.image_bytes:
-                    data = images[0].image.image_bytes
-                    return GeneratedImage(data=data, mime_type=validate_image(data))
-            else:
-                result = await client.aio.models.generate_content(
-                    model=model, contents=prompt,
-                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-                )
-                for candidate in result.candidates or []:
-                    for part in candidate.content.parts if candidate.content and candidate.content.parts else []:
-                        if part.inline_data is not None and part.inline_data.data:
-                            data = part.inline_data.data
-                            return GeneratedImage(data=data, mime_type=validate_image(data))
-            raise AIProviderError("图片模型未返回图片，可能被内容策略拦截，请调整提示词或更换模型")
+            async with model_attempt() as attempt:
+                if "imagen" in model.lower():
+                    try:
+                        result = await attempt.invoke(client.aio.models.generate_images(
+                            model=model,
+                            prompt=prompt,
+                            config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio="3:4"),
+                        ))
+                    except ValueError as exc:
+                        if "not in gemini developer api mode" not in str(exc).lower():
+                            raise
+                        attempt.mark_not_sent()
+                        raise AIProviderError(
+                            "当前接口或 SDK 不支持 Imagen 图片生成，请在「模型配置」中换用 Gemini 原生生图模型"
+                        ) from exc
+                    attempt.mark_response()
+                    images = result.generated_images or []
+                    attempt.set_usage(image_count=sum(bool(item.image and item.image.image_bytes) for item in images))
+                    if images and images[0].image is not None and images[0].image.image_bytes:
+                        data = images[0].image.image_bytes
+                        return GeneratedImage(data=data, mime_type=validate_image(data))
+                else:
+                    result = await attempt.invoke(client.aio.models.generate_content(
+                        model=model, contents=prompt,
+                        config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                    ))
+                    attempt.mark_response()
+                    images = [
+                        part.inline_data.data
+                        for candidate in result.candidates or []
+                        for part in (candidate.content.parts or [] if candidate.content else [])
+                        if part.inline_data is not None and part.inline_data.data
+                    ]
+                    attempt.set_usage(image_count=len(images))
+                    _record_usage(attempt, result.usage_metadata, include_cache=False)
+                    if images:
+                        data = images[0]
+                        return GeneratedImage(data=data, mime_type=validate_image(data))
+                raise AIProviderError("图片模型未返回图片，可能被内容策略拦截，请调整提示词或更换模型")
         except AIProviderError:
             raise
         except Exception as exc:
@@ -259,18 +318,26 @@ class GeminiProvider(LLMProvider):
             max_output_tokens=max_tokens,
             thinking_config=thinking_config(model, thinking),
         )
+        client = None
         try:
             client = self._client()
-            stream = await client.aio.models.generate_content_stream(model=model, contents=contents, config=config)
-            async for chunk in stream:
-                # chunk.text 已排除 thought 分片
-                text = chunk.text
-                if text:
-                    yield text
+            async with self._content_attempt(
+                client, model=model, contents=contents, config=config,
+            ) as (attempt, stream):
+                async for chunk in attempt.iterate(stream):
+                    _record_usage(attempt, chunk.usage_metadata)
+                    # chunk.text 已排除 thought 分片
+                    text = chunk.text
+                    if text:
+                        yield text
         except AIProviderError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise AIProviderError(describe_error(exc)) from exc
+        finally:
+            if client is not None:
+                await client.aio.aclose()
+                client.close()
 
     async def list_models(self) -> list[ModelInfo]:
         try:
@@ -298,7 +365,6 @@ class GeminiProvider(LLMProvider):
         temperature: float | None = None,
     ) -> AsyncIterator[AgentEvent]:
         client = None
-        stream = None
         try:
             system, contents = _tool_contents(messages)
             config = types.GenerateContentConfig(
@@ -329,43 +395,46 @@ class GeminiProvider(LLMProvider):
             # 历史可能已被摘要压缩，不能仅靠历史最大序号保证跨轮次唯一。
             request_id = uuid4().hex
             client = self._client()
-            stream = await client.aio.models.generate_content_stream(model=model, contents=contents, config=config)
             parts: list[dict] = []
             calls: list[ToolCall] = []
             reason = None
             usage = None
-            async for chunk in stream:
-                if chunk.usage_metadata is not None:
-                    usage = chunk.usage_metadata
-                if not chunk.candidates:
-                    continue
-                candidate = chunk.candidates[0]
-                for part in candidate.content.parts or [] if candidate.content else []:
-                    # JSON 模式将 bytes 签名编码；model_validate 能无损恢复，不能手工拼接/删除 thought 块。
-                    parts.append(part.model_dump(mode="json", exclude_none=True))
-                    if part.text and not part.thought:
-                        yield "text", {"text": part.text}
-                    if function := part.function_call:
-                        if function.will_continue or function.partial_args:
-                            raise AIProviderError("当前 Gemini 接口返回了不完整的工具参数，请重试")
-                        call_id = function.id or f"call_{request_id}_{len(calls)}"
-                        if not function.name:
-                            raise AIProviderError("模型返回的工具调用缺少名称，请重试")
-                        calls.append(
-                            ToolCall(
-                                id=call_id,
-                                name=function.name,
-                                arguments=json.dumps(
-                                    _gemini_tool_arguments(function.name, function.args or {}), ensure_ascii=False
-                                ),
+            async with self._content_attempt(
+                client, model=model, contents=contents, config=config,
+            ) as (attempt, stream):
+                async for chunk in attempt.iterate(stream):
+                    if chunk.usage_metadata is not None:
+                        usage = chunk.usage_metadata
+                        _record_usage(attempt, usage)
+                    if not chunk.candidates:
+                        continue
+                    candidate = chunk.candidates[0]
+                    for part in candidate.content.parts or [] if candidate.content else []:
+                        # JSON 模式保留供应商签名，重放可无损恢复 thought 块。
+                        parts.append(part.model_dump(mode="json", exclude_none=True))
+                        if part.text and not part.thought:
+                            yield "text", {"text": part.text}
+                        if function := part.function_call:
+                            if function.will_continue or function.partial_args:
+                                raise AIProviderError("当前 Gemini 接口返回了不完整的工具参数，请重试")
+                            call_id = function.id or f"call_{request_id}_{len(calls)}"
+                            if not function.name:
+                                raise AIProviderError("模型返回的工具调用缺少名称，请重试")
+                            calls.append(
+                                ToolCall(
+                                    id=call_id,
+                                    name=function.name,
+                                    arguments=json.dumps(
+                                        _gemini_tool_arguments(function.name, function.args or {}), ensure_ascii=False
+                                    ),
+                                )
                             )
-                        )
-                if candidate.finish_reason:
-                    reason = candidate.finish_reason.value
-            if reason is None:
-                raise AIProviderError("模型工具调用流意外中断，请重试")
-            if calls and reason != "STOP":
-                raise AIProviderError("模型工具调用未完整生成，请提高最大输出长度后重试")
+                    if candidate.finish_reason:
+                        reason = candidate.finish_reason.value
+                if reason is None:
+                    raise AIProviderError("模型工具调用流意外中断，请重试")
+                if calls and reason != "STOP":
+                    raise AIProviderError("模型工具调用未完整生成，请提高最大输出长度后重试")
             if usage:
                 yield (
                     "usage",
@@ -384,24 +453,29 @@ class GeminiProvider(LLMProvider):
         except Exception as exc:
             raise AIProviderError(describe_tools_error(exc)) from exc
         finally:
-            try:
-                if stream is not None:
-                    await stream.aclose()
-            finally:
-                if client is not None:
-                    await client.aio.aclose()
-                    client.close()
+            if client is not None:
+                await client.aio.aclose()
+                client.close()
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         """多条文本一次请求（Gemini API 走 batchEmbedContents）。"""
+        client = None
         try:
             client = self._client()
-            resp = await client.aio.models.embed_content(model=model, contents=list(texts))
-            vectors = [list(e.values or []) for e in (resp.embeddings or [])]
+            async with model_attempt() as attempt:
+                resp = await attempt.invoke(client.aio.models.embed_content(model=model, contents=list(texts)))
+                attempt.mark_response()
+                embeddings = resp.embeddings or []
+                vectors = [list(e.values or []) for e in embeddings]
+                if len(vectors) != len(texts):
+                    raise AIProviderError(f"模型调用失败：向量数量不符（请求 {len(texts)} 条，返回 {len(vectors)} 条）")
+                attempt.set_usage(input_tokens=_embedding_tokens(embeddings))
         except AIProviderError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise AIProviderError(describe_error(exc)) from exc
-        if len(vectors) != len(texts):
-            raise AIProviderError(f"模型调用失败：向量数量不符（请求 {len(texts)} 条，返回 {len(vectors)} 条）")
+        finally:
+            if client is not None:
+                await client.aio.aclose()
+                client.close()
         return vectors

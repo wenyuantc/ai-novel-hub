@@ -69,6 +69,7 @@ from app.services import (
     story_service,
 )
 from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, guard_provider, visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 from app.services.cast_service import is_protagonist_role
 from app.services.context_builder import MEMBER_STATUS_LABELS, format_card
 from app.services.generation_service import Event
@@ -1267,6 +1268,11 @@ async def build_entity_job(
     await scope.verify(db)
     if execution is None:
         provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+        maker = visibility_sessionmaker(db)
+        provider = meter_provider(
+            guard_provider(provider, scope.stamp, maker), cfg, maker, actor_id=user_id, kind=kind,
+            project_id=project.id, project_owner_id=project.user_id,
+        )
         checks = None
         model, thinking, max_tokens = cfg.model, cfg.thinking_level, ai_config_service.max_output_tokens(cfg)
     else:
@@ -1284,7 +1290,7 @@ async def build_entity_job(
     return EntityJob(
         kind=kind,
         project_id=project_id,
-        provider=guard_provider(provider, scope.stamp, visibility_sessionmaker(db)) if checks is None else provider,
+        provider=provider,
         model=model,
         messages=messages,
         thinking=thinking,  # type: ignore[arg-type]

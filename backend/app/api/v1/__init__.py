@@ -12,6 +12,7 @@ from app.api.v1 import (
     admin_tasks,
     agent,
     ai_configs,
+    ai_usage,
     analysis,
     api_keys,
     auth,
@@ -72,6 +73,7 @@ api_router.include_router(admin_recycle_bin.router)
 api_router.include_router(admin_system_settings.router)
 api_router.include_router(admin_tasks.router)
 api_router.include_router(ai_configs.router)
+api_router.include_router(ai_usage.router)
 api_router.include_router(api_keys.router)
 api_router.include_router(collaboration.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}

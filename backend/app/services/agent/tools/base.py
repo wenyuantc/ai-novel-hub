@@ -45,8 +45,8 @@ class ToolCtx:
     audit_coordinator: "AgentAuditCoordinator | None" = None
     # 轮次绑定的协作授权 (invitation_id, revision)；作者轮次为 None。
     grant: "GrantIdentity | None" = None
-    # 协作轮次（E4i-c）：当前已证明的执行身份与冻结文本模型绑定，仅供检索工具建立 for_task 守卫；
-    # 作者轮次、确认路径为 None（缺失时检索只用关键词，不调用作者向量）。
+    # 检索工具用已证明的执行身份关联用量，协作轮次还用冻结文本模型绑定建立 for_task 守卫。
+    # 确认路径无执行身份，不能使用作者共享向量。
     execution: "Callable[[], TaskExecutionIdentity] | None" = None
     text_binding: "ResolvedProjectModel | None" = None
 

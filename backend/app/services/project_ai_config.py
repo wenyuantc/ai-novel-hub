@@ -31,7 +31,7 @@ from app.models import AIConfig, Project, ProjectCollaborator, Task, User
 from app.schemas.ai_config import ModelType, ProviderName, check_embedding_provider, check_output_within_context
 from app.services import ai_dispatch, project_access
 from app.services.ai_config_service import MODEL_TYPE_LABELS, lock_config_owner
-from app.services.authorization_service import AuthenticatedActor
+from app.services.authorization_service import AuthenticatedActor, actor_snapshot
 
 GrantIdentity = tuple[str, int]
 ModelSource = Literal["actor", "owner"]
@@ -543,6 +543,20 @@ async def _read_project_model_preflight(
     binding = _bind(project, actor.id, grant, snapshot, source=source)
     serialize_project_model(binding)  # 对来源、邀请和配置实例格式做同一严格校验。
     return ProjectModelPreflight(actor, config_id, binding, snapshot, allow_private)
+
+
+async def preview_project_text_model(
+    db: AsyncSession, actor_id: int, project_id: int, *, cipher: SecretCipher,
+    config_id: int | None, allow_private: bool,
+) -> tuple[ResolvedProjectModel, ProjectModelConfigSnapshot]:
+    """只读估算使用同一候选选择；不做 DNS、受理或发送授权。"""
+    actor = actor_snapshot(db, actor_id)
+    if type(actor) is not AuthenticatedActor:
+        raise UnauthorizedError("未登录或登录已过期")
+    selection = await _read_project_model_preflight(
+        db, actor, project_id, "text", cipher=cipher, config_id=config_id, allow_private=allow_private,
+    )
+    return selection.binding, selection.config
 
 
 async def preflight_project_model(

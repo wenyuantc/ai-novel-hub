@@ -34,6 +34,7 @@ from app.services import (
     version_service,
 )
 from app.services.ai_dispatch import VisibilityPolicyError, guard_provider, visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 from app.services.chapter_service import commit_versioned, get_owned_chapter
 from app.services.generation_service import ensure_outside_batch
 from app.services.project_service import get_owned_project
@@ -198,8 +199,12 @@ async def prepare_section_rewrite(
     actor = None
     if binding is None:
         assert provider is not None
-        provider = guard_provider(provider, stamp.visibility, visibility_sessionmaker(db), verify=verify,
-                                  authorize=authorize)
+        maker = visibility_sessionmaker(db)
+        provider = guard_provider(provider, stamp.visibility, maker, verify=verify, authorize=authorize)
+        provider = meter_provider(
+            provider, cfg, maker, actor_id=user_id, kind="chapter.section.rewrite", project_id=project.id,
+            project_owner_id=project.user_id, chapter_id=chapter.id, chapter_created_at=chapter.created_at,
+        )
     else:
         async def mark_sent() -> None:
             nonlocal sent

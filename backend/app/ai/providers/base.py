@@ -41,6 +41,8 @@ class LLMProvider(ABC):
     follow_redirects: bool = True
     # 三种实际 SDK 均在 HTTPX 每次发送前执行策略钩子；测试替身由服务层校验。
     uses_dispatch_hooks: bool = False
+    # SDK 适配器在实际请求边界记录每次尝试；替身或其他实现可由调用方补充逻辑调用记录。
+    reports_model_usage: bool = False
 
     def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 300.0):
         self.api_key = api_key

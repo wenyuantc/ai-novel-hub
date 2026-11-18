@@ -45,6 +45,7 @@ from app.services import (
 from app.services import (
     authorization_service as authz,
 )
+from app.services.ai_usage_recording import meter_provider
 
 _PROMPT_PURPOSE = "series-thumbnail-prompt"
 _PREVIEW_PURPOSE = "series-thumbnail-preview"
@@ -264,11 +265,12 @@ async def generate(
     if not collaboration_ai_guard._trusted_provider(factory, provider, cfg.provider):
         raise collaboration_ai_guard.CollaborationSendBlocked()
     bound = collaboration_ai_guard._BoundModelProvider(provider, cfg.model, "image")
+    metered = meter_provider(bound, cfg, maker, actor_id=actor.id, kind="series.thumbnail")
     hooks = DispatchHooks(lambda: _send_lease(maker, actor, sid, eid, expected, config_proof))
     try:
         with use_dispatch_hooks(hooks):
             async with asyncio.timeout(ai_timeout):
-                image = await bound.generate_image(body.prompt, cfg.model)
+                image = await metered.generate_image(body.prompt, cfg.model)
     except TimeoutError:
         raise BadRequestError("图片生成超时，请稍后重试") from None
     except AIProviderError as exc:

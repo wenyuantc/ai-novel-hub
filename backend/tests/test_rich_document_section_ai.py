@@ -147,6 +147,8 @@ async def test_real_redirect_does_not_send_confirmed_section_selection_twice(app
         events = [event async for event in rewrite_service.run_rewrite_job(job, app.state.sessionmaker)]
         assert events[-1][0] == "error" and len(requests) == 1
         sent = json.loads(requests[0])
+        # 本次确认只能发送一跳。兼容端点拒绝用量选项时无法通过重发恢复，故沿用原请求字段。
+        assert "stream_options" not in sent
         text = "\n".join(item["content"] for item in sent["messages"])
         assert "选中🙂" in text and "关闭前缀" not in text and "关闭后缀" not in text
 

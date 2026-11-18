@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, BadRequestError, ConflictError
 from app.models import (
+    AiUsageCall,
     Base,
     Chapter,
     ChapterPlan,
@@ -885,9 +886,11 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
                 value = effect["pk"].get(fk.column.name)
                 if value is None:
                     continue  # 复合外键的附加归属列不是被撤销主键。
-                rows = (
-                    await db.execute(select(*table.primary_key.columns).where(fk.parent == value).with_for_update())
-                ).mappings()
+                statement = select(*table.primary_key.columns).where(fk.parent == value)
+                if table is AiUsageCall.__table__ and fk.parent.name == "chapter_id" and fk.ondelete == "SET NULL":
+                    # 同作品的用量元数据留账；撤销空章仅由外键清除该引用。
+                    statement = statement.where(AiUsageCall.project_id.is_distinct_from(project_id))
+                rows = (await db.execute(statement.with_for_update())).mappings()
                 for row in rows:
                     child = changes.get((table.name, _key(dict(row))))
                     # 同次插入会被一起删除；既有行只有原始外键不同才允许解除引用。

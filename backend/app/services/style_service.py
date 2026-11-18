@@ -45,6 +45,8 @@ from app.schemas.style import (
     StyleUpdate,
 )
 from app.services import ai_config_service, prompt_service
+from app.services.ai_dispatch import visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 
 logger = logging.getLogger(__name__)
 
@@ -449,10 +451,10 @@ class StyleAIJob:
     max_tokens: int | None = None
 
 
-async def _provider(db, user_id, ai_config_id, cipher, factory, ai_timeout, allow_private):
+async def _provider(db, user_id, ai_config_id, cipher, factory, ai_timeout, allow_private, *, kind: str):
     cfg = await ai_config_service.resolve_config(db, user_id, ai_config_id)
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
-    return cfg, provider
+    return cfg, meter_provider(provider, cfg, visibility_sessionmaker(db), actor_id=user_id, kind=kind)
 
 
 async def prepare_extract(
@@ -467,7 +469,9 @@ async def prepare_extract(
 ) -> StyleAIJob:
     if len(req.sample_text.strip()) < 200:
         raise BadRequestError("样文至少需要 200 字")
-    cfg, provider = await _provider(db, user_id, req.ai_config_id, cipher, factory, ai_timeout, allow_private)
+    cfg, provider = await _provider(
+        db, user_id, req.ai_config_id, cipher, factory, ai_timeout, allow_private, kind="style.extract",
+    )
     override = await prompt_service.get_override(db, user_id, "style.extract")
     return StyleAIJob(
         provider=provider,
@@ -497,7 +501,9 @@ async def prepare_trial(
     block = await render_block(db, user_id, fields)
     if not block:
         raise BadRequestError("风格内容为空，无法试写")
-    cfg, provider = await _provider(db, user_id, req.ai_config_id, cipher, factory, ai_timeout, allow_private)
+    cfg, provider = await _provider(
+        db, user_id, req.ai_config_id, cipher, factory, ai_timeout, allow_private, kind="style.trial",
+    )
     override: PromptOverride | None = await prompt_service.get_override(db, user_id, "style.trial")
     return StyleAIJob(
         provider=provider,

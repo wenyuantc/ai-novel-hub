@@ -62,6 +62,8 @@ from app.schemas.project import (
     normalize_tags,
 )
 from app.services import ai_config_service, kb_service, project_access, project_service, prompt_service
+from app.services.ai_dispatch import visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 from app.services.audit_writer import AuditOperation
 
 logger = logging.getLogger(__name__)
@@ -535,6 +537,13 @@ async def prepare_generate(
             allow_private=allow_private,
             purpose=f"灵感：{step}",
         )
+    else:
+        project = None
+    provider = meter_provider(
+        provider, cfg, visibility_sessionmaker(db), actor_id=user_id, kind=f"inspiration.{step}",
+        project_id=project.id if project is not None else None,
+        project_owner_id=project.user_id if project is not None else None,
+    )
     messages = build_inspiration_messages(
         step,
         idea=state.idea,

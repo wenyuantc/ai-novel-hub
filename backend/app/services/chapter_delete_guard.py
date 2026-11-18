@@ -8,6 +8,7 @@ from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError
 from app.models import (
+    AiUsageCall,
     AnalysisChange,
     Base,
     Chapter,
@@ -40,6 +41,8 @@ _REVIEWED_FKS = frozenset({
     ("chapter_analyses", "analysis_changes", "analysis_id", "id", "CASCADE"),
     ("chapter_analyses", "scene_review_analysis_receipts", "analysis_id", "id", "SET NULL"),
     ("chapter_analyses", "story_memories", "analysis_id", "id", "SET NULL"),
+    # 清除章节引用，保留账户与作品的计量记录。
+    ("chapters", "ai_usage_calls", "chapter_id", "id", "SET NULL"),
     ("chapters", "chapter_analyses", "chapter_id", "id", "CASCADE"),
     ("chapters", "chapter_characters", "chapter_id", "id", "CASCADE"),
     ("chapters", "chapter_plans", "chapter_id", "id", "SET NULL"),
@@ -122,6 +125,8 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                 )),
                 select(GenerationLog.id).where(GenerationLog.chapter_id.in_(batch),
                                                GenerationLog.project_id.is_distinct_from(project_id)),
+                select(AiUsageCall.id).where(AiUsageCall.chapter_id.in_(batch),
+                                             AiUsageCall.project_id.is_distinct_from(project_id)),
                 select(Task.id).where(Task.chapter_id.in_(batch), Task.project_id.is_distinct_from(project_id)),
                 select(ConsistencyLedger.id).where(ConsistencyLedger.chapter_id.in_(batch),
                                                    ConsistencyLedger.project_id.is_distinct_from(project_id)),

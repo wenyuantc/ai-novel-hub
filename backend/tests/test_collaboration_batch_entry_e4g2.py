@@ -27,7 +27,7 @@ from app.models import (
     User,
     WritingStyle,
 )
-from app.services import batch_service, generation_service
+from app.services import ai_usage_storage, batch_service, generation_service
 from app.services.task_engine import engine as engine_module
 from app.services.task_engine.registry import get_handler
 from tests.helpers import (
@@ -368,6 +368,30 @@ async def test_editor_preview_is_allowed(app, client, make_client, fake_llm):
     preview = await guest.post(f"{world.base}/batch-generate/preview", json=payload)
     assert preview.status_code == 200, preview.text
     assert [item["chapter_id"] for item in preview.json()["items"]] == [c["id"] for c in world.chapters]
+    assert fake_llm.calls == [] and await _task_count(app) == 0
+
+
+async def test_editor_preview_hides_author_price_and_token_estimate(app, client, make_client, fake_llm):
+    guest = make_client()
+    world = await _world(client, guest, allow_owner_ai=True, editor_model=False)
+    async with app.state.sessionmaker() as db:
+        config = await db.get(AIConfig, world.owner_config["id"])
+        await ai_usage_storage.set_price(
+            db, config, currency="CNY", input_price_nano=10**9, output_price_nano=10**9,
+            cached_input_price_nano=0,
+        )
+        await db.commit()
+    body = {"start_chapter_id": world.chapters[0]["id"], "end_chapter_id": world.chapters[-1]["id"]}
+    response = await guest.post(f"{world.base}/batch-generate/preview", json=body)
+    assert response.status_code == 200, response.text
+    estimate = response.json()["cost"]
+    assert estimate["status"] == "author_paid"
+    assert estimate["currency"] is None and estimate["estimated_amount"] is None and not estimate["budgets"]
+    assert estimate["price_period"] is None and estimate["price_timezone"] is None
+    assert estimate["assumes_uncached_input"] is False
+    assert [step["kind"] for step in estimate["steps"]] == ["generation"]
+    assert estimate["steps"][0]["estimated_input_tokens"] is None
+    assert "owner-model" not in response.text
     assert fake_llm.calls == [] and await _task_count(app) == 0
 
 

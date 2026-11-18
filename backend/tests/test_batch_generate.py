@@ -2,14 +2,16 @@
 取消 / 中断、目标字数、预览与校验，以及引擎对 paused 状态的处理。"""
 
 import asyncio
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import update
 
 from app.ai.providers import AIProviderError
 from app.core.errors import BadRequestError, ConflictError
-from app.models import Chapter, Task
-from app.services import batch_service, generation_service
+from app.models import AIConfig, Chapter, Project, Scene, Task
+from app.services import ai_config_service, batch_service, generation_service, project_lifecycle
 from tests.helpers import (
     Gate,
     analysis_json,
@@ -241,6 +243,10 @@ async def test_retry_succeeds_on_second_attempt(app, client, fake_llm):
     task, _ = await run_task(client, await _start(client, base, c1, c1))
     assert task["status"] == "succeeded" and len(fake_llm.calls) == 2
     assert (await _chapter(app, c1["id"])).content == "第一章正文"
+    usage = (await client.get(f"{base}/chapters/{c1['id']}/ai-usage")).json()
+    assert {(row["kind"], row["status"]) for row in usage["items"]} == {
+        ("chapter.generate", "failed"), ("chapter.generate.retry", "succeeded"),
+    }
 
 
 async def test_build_error_not_retried_and_restores_chapter(app, client, fake_llm, monkeypatch):
@@ -707,6 +713,123 @@ async def test_preview_estimate_with_analysis(app, client, fake_llm):
     body = {"start_chapter_id": c1["id"], "end_chapter_id": c2["id"], "target_words": 6000}
     preview = (await client.post(f"{base}/batch-generate/preview", json=body)).json()
     assert preview["analyze"] is True and preview["estimated_minutes"] == 10 and preview["warnings"] == []
+
+
+@pytest.mark.parametrize("settings_overrides", [AUTO_ON])
+async def test_preview_cost_lists_generation_and_analysis_without_sending(app, client, fake_llm):
+    _, base, (chapter,), _ = await _setup(client, [""])
+    body = {"start_chapter_id": chapter["id"], "end_chapter_id": chapter["id"], "target_words": 2300}
+    response = await client.post(f"{base}/batch-generate/preview", json=body)
+    assert response.status_code == 200, response.text
+    cost = response.json()["cost"]
+    assert cost["status"] == "missing_price"
+    assert cost["estimated_amount"] is None
+    assert [step["kind"] for step in cost["steps"]] == ["generation", "analysis"]
+    assert cost["steps"][0]["estimated_output_tokens"] == 2300
+
+    assert (await client.patch(base, json={"auto_analyze": False})).status_code == 200
+    response = await client.post(f"{base}/batch-generate/preview", json={**body, "instruction": "补充要求"})
+    assert response.status_code == 200, response.text
+    updated = response.json()["cost"]["steps"]
+    assert [step["kind"] for step in updated] == ["generation"]
+    assert updated[0]["estimated_input_tokens"] > cost["steps"][0]["estimated_input_tokens"]
+    assert not fake_llm.calls
+    assert (await client.get("/api/v1/tasks")).json() == []
+
+
+async def test_preview_cost_counts_one_generation_per_scene(app, client, fake_llm):
+    _, base, (chapter,), _ = await _setup(client, [""])
+    async with app.state.sessionmaker() as db:
+        db.add(Scene(chapter_id=chapter["id"], sort=1, title="第二场"))
+        await db.commit()
+
+    response = await client.post(f"{base}/batch-generate/preview", json={
+        "start_chapter_id": chapter["id"], "end_chapter_id": chapter["id"], "target_words": 3001,
+    })
+    assert response.status_code == 200, response.text
+    generation = response.json()["cost"]["steps"][0]
+    assert generation["kind"] == "generation" and generation["calls"] == 2
+    assert generation["estimated_output_tokens"] == 3001
+    assert not fake_llm.calls
+
+
+async def test_preview_price_uses_selected_model_and_projects_matching_budgets(app, client, fake_llm):
+    from app.services import ai_usage_storage
+
+    project, base, (chapter,), _ = await _setup(client, [""])
+    config = await create_ai_config(client, name="其他模型", model="other", is_default=False)
+    async with app.state.sessionmaker() as db:
+        cfg = await db.get(AIConfig, config["id"])
+        owner_id = (await db.get(Project, project["id"])).user_id
+        await ai_usage_storage.set_price(
+            db, cfg, currency="CNY", input_price_nano=10**9, output_price_nano=10**9,
+        )
+        await ai_usage_storage.set_budget(
+            db, user_id=owner_id, currency="CNY", limit_nano=10**6, threshold_percent=75,
+        )
+        await ai_usage_storage.set_budget(
+            db, project_id=project["id"], currency="CNY", limit_nano=10**6, threshold_percent=75,
+        )
+        await db.commit()
+
+    route = f"{base}/batch-generate/preview"
+    body = {"start_chapter_id": chapter["id"], "end_chapter_id": chapter["id"]}
+    default = await client.post(route, json=body)
+    assert default.status_code == 200, default.text
+    assert default.json()["cost"]["status"] == "missing_price"
+    response = await client.post(route, json={**body, "ai_config_id": config["id"]})
+    assert response.status_code == 200, response.text
+    cost = response.json()["cost"]
+    assert cost["status"] == "estimated" and cost["currency"] == "CNY"
+    assert cost["price_period"] == "fixed" and cost["price_timezone"] is None
+    assert cost["assumes_uncached_input"] is False
+    expected = sum(
+        Decimal(step["estimated_input_tokens"] + step["estimated_output_tokens"]) / 10**6
+        for step in cost["steps"]
+    )
+    assert Decimal(cost["estimated_amount"]) == expected
+    assert {row["scope"] for row in cost["budgets"]} == {"account", "project"}
+    assert all(row["state"] == "exceeded" and Decimal(row["projected_spent"]) == expected for row in cost["budgets"])
+    assert not fake_llm.calls
+
+
+async def test_batch_preview_uses_current_tariff_and_budget_projection(app, client, fake_llm, monkeypatch):
+    from app.services import ai_usage_storage
+
+    project, base, (chapter,), _ = await _setup(client, [""])
+    async with app.state.sessionmaker() as db:
+        owner_id = (await db.get(Project, project["id"])).user_id
+        cfg = await ai_config_service.resolve_config(db, owner_id, None)
+        await ai_usage_storage.set_price(
+            db, cfg, currency="CNY", input_price_nano=3 * 10**9, output_price_nano=3 * 10**9,
+            off_peak=ai_usage_storage.OffPeakPrice(
+                start="23:00", end="07:00", input_price_nano=10**9, output_price_nano=10**9,
+                cached_input_price_nano=0,
+                additional_windows=(ai_usage_storage.OffPeakWindow(start="13:00", end="14:00"),),
+            ),
+        )
+        await ai_usage_storage.set_budget(db, user_id=owner_id, currency="CNY", limit_nano=30_000_000,
+                                          threshold_percent=80)
+        await db.commit()
+
+    route = f"{base}/batch-generate/preview"
+    body = {"start_chapter_id": chapter["id"], "end_chapter_id": chapter["id"]}
+    for hour, period, rate, state in (
+        (15, "off_peak", 1, "normal"), (5, "off_peak", 1, "normal"), (6, "peak", 3, "exceeded"),
+    ):
+        now = datetime(2026, 11, 18, hour, tzinfo=UTC)
+        monkeypatch.setattr(project_lifecycle, "now_utc", lambda now=now: now)
+        response = await client.post(route, json=body)
+        assert response.status_code == 200, response.text
+        cost = response.json()["cost"]
+        assert cost["price_period"] == period and cost["price_timezone"] == "Asia/Shanghai"
+        assert cost["status"] == "estimated" and cost["currency"] == "CNY"
+        assert cost["assumes_uncached_input"] is (period == "off_peak")
+        tokens = sum(item["estimated_input_tokens"] + item["estimated_output_tokens"] for item in cost["steps"])
+        assert Decimal(cost["estimated_amount"]) == Decimal(tokens * rate) / 10**6
+        assert cost["budgets"][0]["state"] == state
+        assert cost["budgets"][0]["projected_spent"] == cost["estimated_amount"]
+    assert not fake_llm.calls
 
 
 async def test_validation_errors(app, client, fake_llm):

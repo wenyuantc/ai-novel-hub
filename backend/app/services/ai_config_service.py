@@ -24,7 +24,8 @@ from app.schemas.ai_config import (
     check_output_within_context,
 )
 from app.services import authorization_service as authz
-from app.services.ai_dispatch import is_sqlite_busy
+from app.services.ai_dispatch import is_sqlite_busy, visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 
 TEST_TIMEOUT_SECONDS = 30
 LIST_MODELS_TIMEOUT_SECONDS = 30
@@ -320,6 +321,7 @@ async def test_config(
         return AIConfigTestResult(ok=False, message=exc.detail, latency_ms=_elapsed(started))
     if cfg.model_type == "image":
         return await _test_image_config(provider, cfg.model, started)
+    provider = meter_provider(provider, cfg, visibility_sessionmaker(db), actor_id=user_id, kind="model.test")
     if cfg.model_type == "embedding":
         return await _test_embedding_config(provider, cfg.model, started)
     messages = [{"role": "user", "content": "这是一次连通性测试，请只回复：ok"}]

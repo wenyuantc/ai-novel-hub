@@ -21,10 +21,11 @@ from app.ai.providers import AnthropicProvider, GeminiProvider, OpenAICompatProv
 from app.ai.providers.base import ChatMessage, GeneratedImage, LLMProvider, ThinkingLevel
 from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
 from app.core.security import SecretCipher
-from app.models import AIConfig, Project, Task
+from app.models import AIConfig, Chapter, Project, Task, User
 from app.services import (
     ai_config_service,
     ai_dispatch,
+    ai_usage_recording,
     chapter_claim,
     project_ai_config,
     project_lifecycle,
@@ -131,6 +132,7 @@ class _BoundModelProvider(LLMProvider):
         super().__init__(provider.api_key, provider.base_url, provider.timeout)
         self.follow_redirects = provider.follow_redirects
         self.uses_dispatch_hooks = provider.uses_dispatch_hooks
+        self.reports_model_usage = provider.reports_model_usage
         self._provider = provider
         self._model = model
         self._model_type = model_type
@@ -916,6 +918,7 @@ class SendGuard:
 
     async def prepare_provider(
         self, sessionmaker: async_sessionmaker[AsyncSession], factory: ProviderFactory, *, request_timeout: float,
+        usage_kind: str | None = None, usage_chapter_id: int | None = None,
     ) -> BoundProvider:
         """仅从固定绑定构造 provider；不接受客户端 provider、端点或模型名。
 
@@ -926,6 +929,15 @@ class SendGuard:
         try:
             if not _trusted_factory(factory) or self._publication_only:
                 raise CollaborationSendBlocked()
+            task = self._task
+            chapter_id = usage_chapter_id
+            if chapter_id is None:
+                if self._chapter is not None:
+                    chapter_id = self._chapter.chapter_id
+                elif self._analysis_reference is not None:
+                    chapter_id = self._analysis_reference.chapter_id
+                elif task is not None:
+                    chapter_id = task.chapter_id
             async with sessionmaker() as db:
                 await self.authorize(db)
                 with db.no_autoflush:
@@ -948,10 +960,20 @@ class SendGuard:
                     if cfg is None:
                         raise CollaborationSendBlocked()
                     # 复制所需列，决不把 session、ORM 实例或连接锁带入 DNS／模型调用。
-                    snapshot = AIConfig(user_id=cfg.user_id, provider=cfg.provider, base_url=cfg.base_url,
+                    snapshot = AIConfig(id=cfg.id, instance_key=cfg.instance_key, user_id=cfg.user_id,
+                                        provider=cfg.provider, base_url=cfg.base_url,
                                         api_key_enc=cfg.api_key_enc, model=cfg.model, model_type=cfg.model_type,
                                         thinking_level=cfg.thinking_level, context_window_k=cfg.context_window_k,
                                         max_output_k=cfg.max_output_k)
+                    accounts = (await db.execute(select(User.id, User.created_at).where(
+                        User.id.in_((model_binding.actor_id, model_binding.config_owner_id)),
+                    ))).all()
+                    account_stamps = {row.id: row.created_at for row in accounts}
+                    chapter_created_at = None
+                    if chapter_id is not None:
+                        chapter_created_at = await db.scalar(select(Chapter.created_at).where(
+                            Chapter.id == chapter_id, Chapter.project_id == model_binding.project_id,
+                        ))
             selected_factory = ai_dispatch.chapter_provider_factory(factory) if self._chapter is not None else factory
             provider = await ai_config_service.build_provider(
                 snapshot, self._cipher, selected_factory, request_timeout, allow_private=self._allow_private,
@@ -974,6 +996,20 @@ class SendGuard:
                     constrained, self._stamp, sessionmaker, authorize=self.authorize, verify=self.verify,
                     verify_preflight=self.verify_without_one_shot,
                 )
+            kind = usage_kind or ("chapter.analyze" if self._analysis_execution is not None else
+                                  task.kind if task is not None else f"{snapshot.model_type}.generate")
+            if usage_kind is None and snapshot.model_type == "embedding":
+                kind = f"{task.kind}.embedding" if task is not None else "retrieval.embedding"
+            protected = ai_usage_recording.meter_provider(
+                protected, snapshot, sessionmaker,
+                actor_id=model_binding.actor_id, kind=kind, project_id=model_binding.project_id,
+                project_owner_id=model_binding.project_owner_id, chapter_id=chapter_id,
+                task_id=task.task_id if task is not None else None,
+                task_key=task.task_key if task is not None else None,
+                actor_created_at=self._actor.editor_created_at or account_stamps.get(model_binding.actor_id),
+                payer_created_at=account_stamps.get(model_binding.config_owner_id),
+                chapter_created_at=chapter_created_at,
+            )
             return BoundProvider(protected, snapshot.model, snapshot.provider, snapshot.thinking_level,
                                  snapshot.context_window_k, snapshot.max_output_k)
         except VisibilityPolicyError as exc:

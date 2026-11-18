@@ -1,5 +1,6 @@
 """章节删除及改号不得经损坏的跨书引用影响其他作品。"""
 
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -7,6 +8,7 @@ from sqlalchemy import Column, ForeignKey, Integer, Table, select
 
 from app.core.errors import ConflictError
 from app.models import (
+    AiUsageCall,
     AnalysisChange,
     Base,
     Chapter,
@@ -54,7 +56,7 @@ async def books(app, client):
 @pytest.mark.parametrize("reference", [
     "plan", "planning_chapter", "planning_scene", "log", "task", "analysis", "memory", "retrieval",
     "character", "progression", "analysis_change", "proposal", "receipt", "marker_origin", "section_origin",
-    "ledger", "revision_batch", "revision_scene",
+    "ledger", "revision_batch", "revision_scene", "usage",
 ])
 async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books, reference):
     user, first, second, chapters, scenes = books
@@ -77,6 +79,11 @@ async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books
         elif reference == "task":
             foreign = Task(user_id=user["id"], project_id=second_id, chapter_id=chapter_id,
                            kind="chapter.analyze", status="succeeded")
+        elif reference == "usage":
+            foreign = AiUsageCall(id=str(uuid4()), started_at=datetime.now(UTC), project_id=second_id,
+                                  had_project=True, chapter_id=chapter_id, actor_id=user["id"],
+                                  payer_id=user["id"], kind="chapter.generate", provider="test", model="test",
+                                  model_type="text")
         elif reference == "analysis":
             foreign = ChapterAnalysis(project_id=second_id, chapter_id=chapter_id, chapter_no=1, content_hash="a")
         elif reference in {"memory", "retrieval"}:
@@ -193,6 +200,7 @@ async def test_renumber_does_not_modify_cross_project_memory_or_index(app, clien
 async def test_same_project_cascade_references_keep_existing_deletion_behavior(app, client, books):
     user, first, _, chapters, scenes = books
     project_id, chapter_id = first["id"], chapters[0]["id"]
+    usage_id = str(uuid4())
     other = await client.post(f"/api/v1/projects/{project_id}/chapters", json={"title": "同书另一章"})
     assert other.status_code == 201, other.text
     async with app.state.sessionmaker() as db:
@@ -223,6 +231,9 @@ async def test_same_project_cascade_references_keep_existing_deletion_behavior(a
                            kind="character", status="pending"),
             GenerationLog(project_id=project_id, actor_user_id=user["id"], chapter_id=chapter_id,
                           kind="generate", provider="test", model="test", status="success"),
+            AiUsageCall(id=usage_id, started_at=datetime.now(UTC), project_id=project_id, had_project=True,
+                        chapter_id=chapter_id, actor_id=user["id"], payer_id=user["id"], author_paid=True,
+                        kind="chapter.generate", provider="test", model="test", model_type="text"),
             RetrievalChunk(project_id=project_id, source="memory", ref_id=memory.id, text="本书索引"),
             SceneReviewProposal(task_id=task.id, chapter_id=chapter_id, task_key=task.statistics_key,
                                 run_key=str(uuid4()), token=str(uuid4()), content_revision=0, payload={}),
@@ -241,3 +252,5 @@ async def test_same_project_cascade_references_keep_existing_deletion_behavior(a
         assert await db.get(Chapter, chapter_id) is None
         assert (await db.get(ChapterPlan, plan_id)).chapter_id is None
         assert await db.get(Chapter, other.json()["id"]) is not None
+        usage = await db.get(AiUsageCall, usage_id)
+        assert usage is not None and usage.chapter_id is None and usage.project_id == project_id

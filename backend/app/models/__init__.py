@@ -1,4 +1,5 @@
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
+from app.models.ai_usage import AiModelPrice, AiUsageBudget, AiUsageCall, AiUsageTracking
 from app.models.analysis_index_receipt import AnalysisIndexReceipt
 from app.models.api_key import ApiKey, ApiKeyProject
 from app.models.audit import AdminAuditLog
@@ -105,6 +106,10 @@ __all__ = [
     "AgentConversation",
     "AgentMessage",
     "AIConfig",
+    "AiModelPrice",
+    "AiUsageBudget",
+    "AiUsageCall",
+    "AiUsageTracking",
     "AnalysisChange",
     "AnalysisIndexReceipt",
     "ApiKey",

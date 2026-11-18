@@ -181,8 +181,10 @@ def analyze_enabled(settings: Any, project: Project) -> bool:
 
 
 async def preview(
-    db: AsyncSession, settings: Any, user_id: int, project_id: int, req: BatchGenerateRequest
+    db: AsyncSession, settings: Any, user_id: int, project_id: int, req: BatchGenerateRequest, *, cipher: SecretCipher,
 ) -> BatchPreview:
+    from app.services.batch_cost_service import estimate_batch_cost
+
     # 预览是发起批量的前置步骤：与发起同一能力（作者或 accepted editor 的 ai.use；viewer 403、无协作来源 404）。
     project = await project_access.require_project(db, user_id, project_id, "ai.use")
     chapters, _, _ = await _range_chapters(db, project.id, req)
@@ -234,6 +236,7 @@ async def preview(
         analyze=analyze,
         estimated_minutes=math.ceil(minutes),
         warnings=warnings,
+        cost=await estimate_batch_cost(db, settings, cipher, user_id, project, req, chapters, items, analyze),
     )
 
 
@@ -1504,6 +1507,7 @@ async def _generate_chapter(
                         model_binding=job.model_binding,
                         embedding_selection=job.embedding_selection,
                         skill=job.skill,
+                        usage_kind="chapter.generate.retry" if attempt > 1 else None,
                     )
                 job.active_chapter_job = chapter_job
             except AppError:

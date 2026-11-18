@@ -433,6 +433,9 @@ async def search(ctx: ToolCtx, args: SearchArgs, source: str) -> dict:
             factory=deps.factory,
             ai_timeout=deps.settings.ai_request_timeout,
             allow_private=deps.settings.allow_private_ai_endpoints,
+            project_id=ctx.project_id,
+            execution=ctx.execution() if ctx.execution is not None else None,
+            usage_kind="agent.turn.embedding",
         )
         if ctx.scope is not None:
             embedder = retrieval_service.guard_embedder(embedder, ctx.scope.stamp, visibility_sessionmaker(ctx.db))

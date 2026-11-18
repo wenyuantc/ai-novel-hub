@@ -204,7 +204,7 @@ async def generate(
     maker = ai_dispatch.visibility_sessionmaker(db)
     await db.rollback()
     try:
-        bound = await guard.prepare_provider(maker, factory, request_timeout=ai_timeout)
+        bound = await guard.prepare_provider(maker, factory, request_timeout=ai_timeout, usage_kind="setting.thumbnail")
         async with asyncio.timeout(ai_timeout):
             generated = await bound.provider.generate_image(body.prompt, bound.model)
         image = await setting_image_codec.normalize_image_async(generated.data, generated.mime_type)

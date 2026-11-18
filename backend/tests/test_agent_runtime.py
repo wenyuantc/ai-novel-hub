@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 
 from app.ai.providers import AIProviderError
 from app.models import AgentMessage, GenerationLog
+from app.models.ai_usage import AiUsageCall
 from tests.helpers import create_ai_config, create_project, register, task_params, wait_task
 
 
@@ -55,7 +56,7 @@ async def turn_action(client, url, task, action):
 
 
 async def test_read_then_answer_with_usage(client, fake_llm, app):
-    _, _, url = await setup_agent(client)
+    project, _, url = await setup_agent(client)
     fake_llm.push_tools([("text", {"text": "先了解项目"}), call("get_project_overview", {})])
     fake_llm.push_tools([("text", {"text": "当前是科幻小说。"}), ("usage", {"input_tokens": 100, "output_tokens": 20})])
     task_ref = await send_task(client, url)
@@ -72,6 +73,12 @@ async def test_read_then_answer_with_usage(client, fake_llm, app):
             await db.scalars(select(GenerationLog).where(GenerationLog.task_id == task_id).order_by(GenerationLog.id))
         )
         assert len(logs) == 2 and logs[-1].prompt_tokens == 100 and logs[-1].completion_tokens == 20
+        usage = list(await db.scalars(
+            select(AiUsageCall).where(AiUsageCall.task_id == task_id).order_by(AiUsageCall.started_at)
+        ))
+    assert [(row.input_tokens, row.output_tokens) for row in usage] == [(None, None), (100, 20)]
+    assert all(row.kind == "agent.turn" and row.task_key == task_ref["task_key"] for row in usage)
+    assert all(row.project_id == project["id"] and row.actor_id == row.payer_id and row.author_paid for row in usage)
 
 
 async def test_confirm_resume_reject_and_duplicate_confirmation(client, fake_llm):

@@ -23,6 +23,7 @@ from app.services import (
     project_service,
     style_service,
 )
+from app.services.ai_usage_recording import meter_provider
 
 # 仅在真实发送、撤权与结果投影均完成验证后开放。
 _COLLABORATION_IMAGE_ENABLED = True
@@ -138,9 +139,16 @@ async def _generate_cover(
         )
     cfg = await ai_config_service.resolve_config(db, user_id, body.config_id, model_type="image")
     provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    provider = meter_provider(
+        provider, cfg, ai_dispatch.visibility_sessionmaker(db), actor_id=user_id, kind="project.cover",
+        project_id=project.id, project_owner_id=project.user_id,
+    )
+    model = cfg.model
+    # 项目与模型均已读取，模型发送及计量使用各自的会话。
+    await db.rollback()
     try:
         async with asyncio.timeout(ai_timeout):
-            image = await provider.generate_image(body.prompt, cfg.model)
+            image = await provider.generate_image(body.prompt, model)
         mime_type = validate_image(image.data, image.mime_type)
     except TimeoutError as exc:
         raise BadRequestError("封面生成超时，请稍后重试") from exc
@@ -163,7 +171,7 @@ async def _generate_collaborator_cover(
     maker = ai_dispatch.visibility_sessionmaker(db)
     await db.rollback()  # 模型构造和外部发送期间不持请求事务及项目锁。
     try:
-        bound = await guard.prepare_provider(maker, factory, request_timeout=ai_timeout)
+        bound = await guard.prepare_provider(maker, factory, request_timeout=ai_timeout, usage_kind="project.cover")
         async with asyncio.timeout(ai_timeout):
             image = await bound.provider.generate_image(body.prompt, bound.model)
         mime_type = validate_image(image.data, image.mime_type)

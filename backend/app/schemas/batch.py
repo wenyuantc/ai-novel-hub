@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.ai_usage import PricePeriod
 from app.schemas.skill import SkillInputValues, require_skill_for_inputs
 from app.schemas.style import StyleChoice
 
@@ -53,6 +54,33 @@ class BatchSkippedItem(BaseModel):
     word_count: int
 
 
+class BatchCostStep(BaseModel):
+    kind: Literal["generation", "analysis"]
+    calls: int
+    estimated_input_tokens: int | None = None
+    estimated_output_tokens: int | None = None
+    estimated_amount: str | None = None
+
+
+class BatchBudgetEstimate(BaseModel):
+    scope: Literal["account", "project"]
+    limit: str
+    projected_spent: str
+    state: Literal["normal", "near", "exceeded"]
+    unpriced_calls: int
+
+
+class BatchCostEstimate(BaseModel):
+    status: Literal["estimated", "missing_price", "unavailable", "author_paid"]
+    currency: Literal["CNY", "USD"] | None = None
+    price_period: PricePeriod | None = None
+    price_timezone: str | None = None
+    estimated_amount: str | None = None
+    assumes_uncached_input: bool = False
+    steps: list[BatchCostStep]
+    budgets: list[BatchBudgetEstimate] = Field(default_factory=list)
+
+
 class BatchPreview(BaseModel):
     total: int
     items: list[BatchPreviewItem]
@@ -60,3 +88,4 @@ class BatchPreview(BaseModel):
     analyze: bool
     estimated_minutes: int
     warnings: list[str]
+    cost: BatchCostEstimate | None = None

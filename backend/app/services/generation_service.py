@@ -49,6 +49,7 @@ from app.schemas.scene_ai import ChapterTarget, SceneTarget
 from app.services import (
     ai_config_service,
     ai_dispatch,
+    ai_usage_recording,
     authorization_service,
     chapter_claim,
     collaboration_ai_guard,
@@ -1025,6 +1026,7 @@ async def build_chapter_job(
     batch_attempt: collaboration_ai_guard.BatchAttemptIdentity | None = None,
     skill: dict[str, Any] | None = None,
     target: ChapterTarget | SceneTarget | None = None,
+    usage_kind: str | None = None,
 ) -> ChapterJob:
     """按稳定 Scene 身份组装第一步；后续步骤只能使用暂存的最新前景。"""
     if batch_attempt is not None and (execution is None or claim != batch_attempt.claim):
@@ -1060,12 +1062,9 @@ async def build_chapter_job(
     if not steps:
         raise BadRequestError("章节正文为空，无法润色" if mode == "polish" else "章节正文为空，无法重写")
     if mode == "generate" or (mode == "revise" and req.target_words is not None):
-        total_words = req.target_words
-        if total_words < len(steps):
-            raise BadRequestError("整章目标字数不足以为每个场景分配正字数，请增大目标字数")
-        quotient, remainder = divmod(total_words, len(steps))
-        for index, step in enumerate(steps):
-            step["target_words"] = quotient + (index < remainder)
+        targets = scene_service.split_scene_target_words(req.target_words, len(steps))
+        for step, words in zip(steps, targets, strict=True):
+            step["target_words"] = words
     else:
         legacy_revise_floor = (mode == "revise" and isinstance(target, ChapterTarget) and len(scenes) == 1)
         for step in steps:
@@ -1116,6 +1115,7 @@ async def build_chapter_job(
         if claim is None:
             embedder = await retrieval_service.get_embedder(
                 db, user_id, cipher=cipher, factory=checked_factory, ai_timeout=ai_timeout, allow_private=allow_private,
+                project_id=project.id, chapter_id=chapter.id, chapter_created_at=chapter.created_at,
             )
         elif execution is None:
             # 只读取一次默认配置；绑定和 provider 都取同一快照，不能在两次选择间切换密钥。
@@ -1179,6 +1179,11 @@ async def build_chapter_job(
         embedder = retrieval_service.guard_embedder(
             embedder, stamp.visibility, sessions, chapter=claim,
         )
+        embedder.provider = ai_usage_recording.meter_provider(
+            embedder.provider, embedding_config, sessions, actor_id=user_id,
+            kind="chapter.context.embedding", project_id=project.id, project_owner_id=project.user_id,
+            chapter_id=chapter.id, chapter_created_at=chapter.created_at, task_id=task_id, task_key=task_key,
+        )
     suggestions = await resolve_revision(db, chapter, req) if isinstance(req, ReviseChapterRequest) else []
     params = {
         "instruction": req.instruction, "target": target.model_dump(),
@@ -1211,6 +1216,11 @@ async def build_chapter_job(
     previous = "".join(scene["separator_before"] + scene["content"] for scene in scenes
                        if scene["sort"] < steps[0]["sort"])
     await _prepare_scene_step(db, job, steps[0], previous)
+    job.provider = ai_usage_recording.meter_provider(
+        job.provider, cfg, visibility_sessionmaker(db), actor_id=user_id,
+        kind=usage_kind or f"chapter.{mode}", project_id=project.id, project_owner_id=project.user_id,
+        chapter_id=chapter.id, chapter_created_at=chapter.created_at, task_id=task_id, task_key=task_key,
+    )
     return job
 
 
@@ -1298,6 +1308,7 @@ async def _prepare_scene_step(db: AsyncSession, job: ChapterJob, step: dict[str,
     await planning.setting_scope.scope.verify(db)
     await scene_ai_context.require_stamp(db, job.context_stamp)
     job.messages = messages
+    previous_provider = job.provider
     if job.chapter_claim is not None:
         if (job.model_binding is None or job.model_cipher is None or job.model_transport is None
                 or job.model_transport.provider is not job.raw_provider):
@@ -1327,6 +1338,7 @@ async def _prepare_scene_step(db: AsyncSession, job: ChapterJob, step: dict[str,
             job.raw_provider, job.context_stamp.visibility, visibility_sessionmaker(db),
             verify=lambda session: scene_ai_context.require_stamp(session, job.context_stamp, sending=True),
         )
+    job.provider = ai_usage_recording.inherit_meter(job.provider, previous_provider)
     job.target_words = step["target_words"]
     data = {"scene_id": step["id"], "target_words": step["target_words"], "planning": planning.log_data("chapter")}
     data.update(scope_truncated=len(preceding) > clip or len(step["summary"]) > clip, scope_chars=len(scene_context))

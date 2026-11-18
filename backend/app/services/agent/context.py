@@ -53,6 +53,7 @@ from app.services.ai_dispatch import (
     require_visibility_stamp,
     visibility_sessionmaker,
 )
+from app.services.ai_usage_recording import meter_provider
 from app.services.authorization_service import AuthenticatedActor
 from app.services.collaboration_task_access import task_grant_identity
 from app.services.task_engine.execution_identity import (
@@ -453,7 +454,12 @@ async def guard_agent_provider(db, conversation, project, cfg, provider, *, exec
         expected = _summary_execution(
             execution, getattr(execution, "task_id", None), conversation, project, cfg, rows, style,
         )
-        return _summary_guard(provider, stamp, visibility_sessionmaker(db), expected)
+        maker = visibility_sessionmaker(db)
+        return meter_provider(
+            _summary_guard(provider, stamp, maker, expected), cfg, maker, actor_id=expected.actor_id,
+            kind="agent.turn", project_id=expected.project_id, project_owner_id=expected.project_owner_id,
+            task_id=expected.task_id, task_key=expected.task_key,
+        )
 
 
 async def _finish_summary(
@@ -991,7 +997,11 @@ async def build_messages(
         summary = ""
         # 上游可能按 RR 读过作品；网络期间不得持有其锁或旧写快照。
         await db.commit()
-        provider = _summary_guard(provider, stamp, maker, expected)
+        provider = meter_provider(
+            _summary_guard(provider, stamp, maker, expected), cfg, maker, actor_id=expected.actor_id,
+            kind="agent.summarize", project_id=expected.project_id, project_owner_id=expected.project_owner_id,
+            task_id=expected.task_id, task_key=expected.task_key,
+        )
         try:
             async with aclosing(
                 provider.generate_stream(summary_messages, cfg.model, max_tokens=min(2000, budget // 4))

@@ -14,6 +14,7 @@ class Permission:
 
 PERMISSIONS = (
     Permission("dashboard.read", "查看全站统计", "首页"),
+    Permission("ai_usage.read", "查看全站 AI 用量与费用", "AI 用量与费用"),
     Permission("users.read", "查看账号与基础用量", "账号"),
     Permission("users.create", "创建普通账号", "账号", requires=("users.read",)),
     Permission("users.status", "启用/禁用普通账号", "账号", True, ("users.read",)),

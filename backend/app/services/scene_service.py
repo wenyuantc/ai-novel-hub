@@ -81,6 +81,15 @@ async def list_active_scenes(db: AsyncSession, chapter_id: int) -> list[Scene]:
         ))
 
 
+def split_scene_target_words(total_words: int, scene_count: int) -> list[int]:
+    if scene_count < 1:
+        raise ConflictError("章节缺少活动场景，请检查创建或导入入口", extra={"code": "scene_invariant_error"})
+    if total_words < scene_count:
+        raise BadRequestError("整章目标字数不足以为每个场景分配正字数，请增大目标字数")
+    quotient, remainder = divmod(total_words, scene_count)
+    return [quotient + (index < remainder) for index in range(scene_count)]
+
+
 async def initialize_chapter(db: AsyncSession, chapter: Chapter) -> Scene:
     """仅供明确的新建／迁移入口。初始化不改旧章正文、时间与内容代次。"""
     if chapter.id is None:

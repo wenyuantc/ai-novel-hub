@@ -42,6 +42,7 @@ from app.services import (
     version_service,
 )
 from app.services.ai_dispatch import guard_provider, visibility_sessionmaker
+from app.services.ai_usage_recording import meter_provider
 from app.services.chapter_service import commit_versioned, count_words, get_manual_chapter, get_owned_chapter
 from app.services.collaboration_task_access import task_grant_identity
 from app.services.generation_service import Event, elapsed_ms, ensure_outside_batch, stream_pieces
@@ -358,8 +359,13 @@ async def prepare_rewrite_job(
     actor = None
     if binding is None:
         assert provider is not None
-        provider = guard_provider(provider, stamp.visibility, visibility_sessionmaker(db),
+        maker = visibility_sessionmaker(db)
+        provider = guard_provider(provider, stamp.visibility, maker,
                                   verify=lambda session: scene_ai_context.require_stamp(session, stamp, sending=True))
+        provider = meter_provider(
+            provider, cfg, maker, actor_id=user_id, kind="chapter.rewrite", project_id=project.id,
+            project_owner_id=project.user_id, chapter_id=chapter.id, chapter_created_at=chapter.created_at,
+        )
     else:
         send_guard = collaboration_ai_guard.for_http(
             db, user_id, binding, stamp.visibility, cipher=cipher, allow_private=allow_private, scene=stamp,
@@ -431,7 +437,11 @@ async def run_rewrite_job(job: RewriteJob, sessionmaker: async_sessionmaker[Asyn
     try:
         if job.send_guard is not None:
             assert job.factory is not None
-            bound = await job.send_guard.prepare_provider(sessionmaker, job.factory, request_timeout=job.ai_timeout)
+            bound = await job.send_guard.prepare_provider(
+                sessionmaker, job.factory, request_timeout=job.ai_timeout,
+                usage_kind="chapter.section.rewrite" if job.section_key is not None else "chapter.rewrite",
+                usage_chapter_id=job.chapter_id,
+            )
             job.provider, job.model = bound.provider, bound.model
         assert job.provider is not None
         async with aclosing(

@@ -168,7 +168,10 @@ async def _require_vector_task_owner(db: AsyncSession, user_id: int, project_id:
     return project
 
 
-async def search_access(db: AsyncSession, user_id: int, project_id: int, env: retrieval_service.EmbedEnv):
+async def search_access(
+    db: AsyncSession, user_id: int, project_id: int, env: retrieval_service.EmbedEnv, *,
+    chapter_id: int | None = None,
+):
     """同步检索（检索调试 / 注入预览 / HTTP 上下文）的向量选择，返回 ``(embedder, grant)``。
 
     - 作者：原有本人默认向量（行为不变），grant 为 None。
@@ -180,7 +183,7 @@ async def search_access(db: AsyncSession, user_id: int, project_id: int, env: re
     """
     project, access, member = await project_access.resolve_access(db, user_id, project_id)
     if project.user_id == user_id:
-        return await env.embedder(db, user_id), None
+        return await env.embedder(db, user_id, project_id=project_id, chapter_id=chapter_id), None
     _require_original_actor(db, user_id)
     if not access.can_use_ai or member is None or member.role != "editor":
         await require_project(db, user_id, project_id, "ai.use")
@@ -218,7 +221,10 @@ async def search_access(db: AsyncSession, user_id: int, project_id: int, env: re
         db, user_id, selection, stamp, cipher=env.cipher, allow_private=env.allow_private,
     )
     try:
-        bound = await guard.prepare_provider(maker, env.factory, request_timeout=env.ai_timeout)
+        bound = await guard.prepare_provider(
+            maker, env.factory, request_timeout=env.ai_timeout,
+            usage_kind="retrieval.query", usage_chapter_id=chapter_id,
+        )
     except VisibilityPolicyError:
         # prepare_provider 把授权变化与普通构造故障（DNS、端点暂不可达等）统一为阻断。锁内按原轮次复核：
         # 原授权、原选择仍完全成立 → 属普通故障，与作者本人检索一致退回关键词（裁决 11，持锁返回）；
@@ -742,7 +748,8 @@ async def knowledge_for_project(
     if has_docs is None:
         return ""
     embedder = await retrieval_service.get_embedder(
-        db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+        db, project.user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private,
+        project_id=project.id,
     )
     if embedder is not None and visibility_stamp is not None:
         embedder = retrieval_service.guard_embedder(embedder, visibility_stamp, visibility_sessionmaker(db))

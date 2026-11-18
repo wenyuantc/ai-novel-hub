@@ -1037,7 +1037,9 @@ async def retrieval_preview(db: AsyncSession, user_id: int, chapter_id: int, *, 
         return await _collaborator_retrieval_preview(db, user_id, project_id, chapter_id, env=env)
     chapter = await get_owned_chapter(db, user_id, chapter_id)
     project = await get_owned_project(db, user_id, chapter.project_id)
-    embedder = await env.embedder(db, user_id)
+    embedder = await env.embedder(
+        db, user_id, project_id=project.id, chapter_id=chapter.id, chapter_created_at=chapter.created_at,
+    )
     task = await chapter_task(db, chapter)
     planning = await load_planning_context(db, project, "chapter", chapter.id)
     prepared = planning.setting_scope
@@ -1069,7 +1071,7 @@ async def _collaborator_retrieval_preview(
 
     try:
         await require_project(db, user_id, project_id, "ai.use")
-        embedder, grant = await kb_service.search_access(db, user_id, project_id, env)
+        embedder, grant = await kb_service.search_access(db, user_id, project_id, env, chapter_id=chapter_id)
     except NotFoundError:
         raise NotFoundError("章节不存在") from None
     with db.no_autoflush:

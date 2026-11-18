@@ -664,8 +664,8 @@ async def _process_calls(
         grant = job.task_execution_identity.grant_identity
         tool_ctx = ToolCtx(
             db, project, job.user_id, ctx, scope, audit_coordinator=coordinator, grant=grant,
-            # 协作轮次的检索工具以当前已证明的执行身份与冻结文本绑定建立 for_task 守卫（E4i-c）。
-            execution=(lambda: job.task_execution_identity) if grant is not None else None,
+            # 检索按当前执行轮次记录用量；协作轮次另按冻结文本绑定重验发送授权。
+            execution=lambda: job.task_execution_identity,
             text_binding=job.model_binding if grant is not None else None,
         )
         batch = []

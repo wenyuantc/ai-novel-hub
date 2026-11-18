@@ -63,11 +63,14 @@ from app.services.ai_dispatch import (
     _bind_chapter_guard,
     _bound_chapter,
     _GuardedProvider,
+    visibility_sessionmaker,
 )
+from app.services.ai_usage_recording import inherit_meter, meter_provider, unmeter_provider
 
 if TYPE_CHECKING:
     from app.services.chapter_claim import ChapterClaim
     from app.services.project_ai_config import ResolvedSharedEmbedding
+    from app.services.task_engine.execution_identity import TaskExecutionIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -479,12 +482,14 @@ def guard_embedder(
         verify_preflight = _preflight_callback(verify)
         verify = _policy_callbacks(verify)
 
+    provider = unmeter_provider(provider)
     guarded = _GuardedEmbeddingProvider(
         provider, stamp, sessionmaker, authorize=authorize, verify=verify, verify_preflight=verify_preflight,
         chapter=chapter,
     )
     if chapter is not None:
         _bind_chapter_guard(guarded, chapter)
+    inherit_meter(guarded, embedder.provider)
 
     async def check_cache() -> None:
         try:
@@ -537,6 +542,11 @@ async def resolve_embedder(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    project_id: int | None = None,
+    chapter_id: int | None = None,
+    chapter_created_at: datetime | None = None,
+    execution: "TaskExecutionIdentity | None" = None,
+    usage_kind: str = "retrieval.query",
 ) -> tuple[Embedder | None, str | None]:
     """构建默认向量模型，返回 (向量模型, 不可用原因)。
 
@@ -552,6 +562,13 @@ async def resolve_embedder(
     except BadRequestError as exc:
         logger.warning("向量模型配置 %s 不可用：%s", cfg.id, exc.detail)
         return None, f"「{cfg.name}」{exc.detail}"
+    provider = meter_provider(
+        provider, cfg, visibility_sessionmaker(db), actor_id=user_id, kind=usage_kind,
+        project_id=project_id, project_owner_id=user_id if project_id is not None else None,
+        chapter_id=chapter_id, chapter_created_at=chapter_created_at,
+        task_id=execution.task_id if execution is not None else None,
+        task_key=execution.task_key if execution is not None else None,
+    )
     return Embedder(provider=provider, provider_name=cfg.provider, model=cfg.model, config_name=cfg.name), None
 
 
@@ -563,10 +580,14 @@ async def get_embedder(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    project_id: int | None = None,
+    chapter_id: int | None = None,
+    chapter_created_at: datetime | None = None,
 ) -> Embedder | None:
     """构建默认向量模型；没有配置或配置不可用时返回 None（调用方退回关键词检索）。"""
     embedder, _ = await resolve_embedder(
-        db, user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private
+        db, user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private,
+        project_id=project_id, chapter_id=chapter_id, chapter_created_at=chapter_created_at,
     )
     return embedder
 
@@ -580,7 +601,10 @@ class EmbedEnv:
     ai_timeout: float
     allow_private: bool
 
-    async def embedder(self, db: AsyncSession, user_id: int) -> Embedder | None:
+    async def embedder(
+        self, db: AsyncSession, user_id: int, *, project_id: int | None = None,
+        chapter_id: int | None = None, chapter_created_at: datetime | None = None,
+    ) -> Embedder | None:
         return await get_embedder(
             db,
             user_id,
@@ -588,6 +612,9 @@ class EmbedEnv:
             factory=self.factory,
             ai_timeout=self.ai_timeout,
             allow_private=self.allow_private,
+            project_id=project_id,
+            chapter_id=chapter_id,
+            chapter_created_at=chapter_created_at,
         )
 
 

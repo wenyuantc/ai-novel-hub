@@ -1,13 +1,15 @@
 """撤销使用真实 SQLite 外键 / 事务，覆盖级联、并发修改与检索恢复。"""
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, select, update
 
 from app.core.errors import ConflictError
 from app.models import (
+    AiUsageCall,
     AnalysisChange,
     Career,
     CareerHistory,
@@ -415,6 +417,38 @@ async def test_undo_inserted_chapter_does_not_delete_later_written_content(proje
     with pytest.raises(ConflictError):
         await effects.undo(db, project.id, delta)
     assert await db.scalar(select(Chapter.content).where(Chapter.id == chapter.id)) == "后来写的正文"
+
+
+@pytest.mark.parametrize("cross_project", [False, True])
+async def test_undo_inserted_chapter_preserves_usage_history(project_db, cross_project):
+    db, project = project_db
+    other = Project(user_id=project.user_id, title="另一作品")
+    db.add(other)
+    await db.flush()
+    before = await effects.snapshot(db, project.id)
+    chapter = Chapter(project_id=project.id, title="新章")
+    db.add(chapter)
+    await db.flush()
+    chapter_id = chapter.id
+    await scene_service.initialize_chapter(db, chapter)
+    delta = effects.diff(before, await effects.snapshot(db, project.id))
+    usage_id = str(uuid4())
+    db.add(AiUsageCall(id=usage_id, started_at=datetime.now(UTC), project_id=other.id if cross_project else project.id,
+                       had_project=True, chapter_id=chapter_id, actor_id=project.user_id, payer_id=project.user_id,
+                       kind="retrieval.query", provider="test", model="test", model_type="embedding"))
+    await db.commit()
+
+    if cross_project:
+        with pytest.raises(ConflictError):
+            await effects.undo(db, project.id, delta)
+        assert (await db.get(AiUsageCall, usage_id)).chapter_id == chapter_id
+    else:
+        await effects.undo(db, project.id, delta)
+        await db.commit()
+        db.expire_all()
+        usage = await db.get(AiUsageCall, usage_id)
+        assert usage is not None and usage.chapter_id is None
+        assert await db.get(Chapter, chapter_id) is None
 
 
 async def test_restore_unique_conflict_rolls_back_partial_reinsertion(project_db):

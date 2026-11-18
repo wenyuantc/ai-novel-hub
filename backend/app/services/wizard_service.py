@@ -96,6 +96,7 @@ from app.services.ai_dispatch import (
     require_visibility_stamp,
     visibility_sessionmaker,
 )
+from app.services.ai_usage_recording import meter_provider
 from app.services.cast_service import is_protagonist_role
 from app.services.collaboration_task_access import GRANT_KEY, GrantIdentity, task_grant_identity
 from app.services.entity_ai_service import normalize_aliases, normalize_career_assignments, normalize_category
@@ -1124,6 +1125,7 @@ async def build_wizard_job(
         if settings.auto_inject and query.strip() and has_docs is not None:
             embedder = await retrieval_service.get_embedder(
                 db, user_id, cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private,
+                project_id=project.id,
             )
             embedder = retrieval_service.guard_embedder(
                 embedder, scope.stamp, visibility_sessionmaker(db), authorize=authorize, verify=verify,
@@ -1195,12 +1197,15 @@ async def build_wizard_job(
         )
     await scope.verify(db)
     if execution is None:
+        maker = visibility_sessionmaker(db)
         if resume_binding is None:
-            provider = guard_provider(provider, scope.stamp, visibility_sessionmaker(db))
+            provider = guard_provider(provider, scope.stamp, maker)
         else:
-            provider = guard_provider(
-                provider, scope.stamp, visibility_sessionmaker(db), authorize=authorize, verify=verify,
-            )
+            provider = guard_provider(provider, scope.stamp, maker, authorize=authorize, verify=verify)
+        provider = meter_provider(
+            provider, cfg, maker, actor_id=user_id, kind=f"wizard.{kind}",
+            project_id=project.id, project_owner_id=project.user_id,
+        )
     return WizardJob(
         project_id=project_id,
         kind=kind,

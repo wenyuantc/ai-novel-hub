@@ -1,6 +1,7 @@
 import json
 import re
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 
@@ -14,7 +15,8 @@ from app.ai.providers.base import (
     describe_tools_error,
     split_system,
 )
-from app.ai.providers.dispatch_hooks import current_dispatch_hooks
+from app.ai.providers.dispatch_hooks import current_dispatch_hooks, model_client_event_hooks
+from app.ai.providers.usage import ModelAttempt, model_attempt, valid_usage_count
 from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec, history_arguments, native_metadata
 
 DEFAULT_MAX_TOKENS = 8192
@@ -76,13 +78,25 @@ def _tool_messages(messages: list[AgentMessage]) -> tuple[str, list[dict]]:
     return system, result
 
 
+def _record_usage(attempt: ModelAttempt, usage) -> None:
+    count = valid_usage_count(getattr(usage, "input_tokens", None))
+    cached = valid_usage_count(getattr(usage, "cache_read_input_tokens", None))
+    if count is not None:
+        count += valid_usage_count(getattr(usage, "cache_creation_input_tokens", None)) or 0
+        count += cached or 0
+    attempt.set_usage(
+        input_tokens=count, output_tokens=getattr(usage, "output_tokens", None), cached_input_tokens=cached,
+    )
+
+
 class AnthropicProvider(LLMProvider):
     uses_dispatch_hooks = True
+    reports_model_usage = True
 
     def _client(self) -> AsyncAnthropic:
-        hooks = current_dispatch_hooks()
-        http_options = {"event_hooks": hooks.event_hooks} if hooks else {}
-        sdk_options = {"max_retries": 0} if hooks else {}
+        hooks = model_client_event_hooks()
+        http_options = {"event_hooks": hooks} if hooks else {}
+        sdk_options = {"max_retries": 0} if current_dispatch_hooks() is not None else {}
         return AsyncAnthropic(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -90,6 +104,13 @@ class AnthropicProvider(LLMProvider):
             http_client=DefaultAsyncHttpxClient(follow_redirects=self.follow_redirects, **http_options),
             **sdk_options,
         )
+
+    @asynccontextmanager
+    async def _message_attempt(self, client, **request):
+        async with model_attempt() as attempt, AsyncExitStack() as stream_scope:
+            stream = await attempt.invoke(stream_scope.enter_async_context(client.messages.stream(**request)))
+            attempt.mark_response()
+            yield attempt, stream
 
     async def generate_stream(
         self,
@@ -109,16 +130,18 @@ class AnthropicProvider(LLMProvider):
         if temperature is not None and thinking == "off":
             kwargs["temperature"] = temperature
         try:
-            async with client.messages.stream(
+            async with self._message_attempt(
+                client,
                 model=model,
                 max_tokens=limit,
                 messages=[{"role": m["role"], "content": m["content"]} for m in rest],
                 **kwargs,
-            ) as stream:
-                # text_stream 只包含正文，不含 thinking 块
-                async for text in stream.text_stream:
-                    if text:
-                        yield text
+            ) as (attempt, stream):
+                async for event in attempt.iterate(stream):
+                    if event.type in ("message_start", "message_delta"):
+                        _record_usage(attempt, stream.current_message_snapshot.usage)
+                    elif event.type == "content_block_delta" and event.delta.type == "text_delta" and event.delta.text:
+                        yield event.delta.text
         except AIProviderError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -163,7 +186,8 @@ class AnthropicProvider(LLMProvider):
             initial_inputs: dict[int, dict] = {}
             completed: set[int] = set()
             stopped = False
-            async with client.messages.stream(
+            async with self._message_attempt(
+                client,
                 model=model,
                 max_tokens=limit,
                 messages=rest,
@@ -172,9 +196,11 @@ class AnthropicProvider(LLMProvider):
                 ],
                 tool_choice={"type": tool_choice},
                 **kwargs,
-            ) as stream:
-                async for event in stream:
-                    if event.type == "content_block_start":
+            ) as (attempt, stream):
+                async for event in attempt.iterate(stream):
+                    if event.type in ("message_start", "message_delta"):
+                        _record_usage(attempt, stream.current_message_snapshot.usage)
+                    elif event.type == "content_block_start":
                         block = event.content_block
                         if block.type == "tool_use":
                             calls[event.index] = ToolCall(id=block.id, name=block.name, arguments="")
@@ -193,6 +219,7 @@ class AnthropicProvider(LLMProvider):
                 if not stopped or not calls.keys() <= completed:
                     raise AIProviderError("模型工具调用流意外中断，请重试")
                 final = await stream.get_final_message()
+                _record_usage(attempt, final.usage)
             if calls and final.stop_reason not in ("tool_use", "end_turn"):
                 raise AIProviderError("模型工具调用未完整生成，请提高最大输出长度后重试")
             yield (

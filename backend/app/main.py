@@ -24,6 +24,7 @@ from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
 from app.services import (
     admin_dashboard_service,
+    ai_usage_recording,
     auth_service,
     authorization_service,
     kb_parser,
@@ -127,15 +128,18 @@ def create_app(
         await app_.state.dashboard_sampler.start()
         await app_.state.backup_runtime.start()
         try:
-            yield
+            async with ai_usage_recording.usage_maintenance(app_.state.sessionmaker):
+                try:
+                    yield
+                finally:
+                    await app_.state.backups.close()
+                    await app_.state.backup_runtime.stop()
+                    await app_.state.system_settings.close()
+                    await app_.state.dashboard_sampler.stop()
+                    await app_.state.recycle_bin_cleaner.stop()
+                    if start_task_engine:
+                        await app_.state.task_engine.stop()
         finally:
-            await app_.state.backups.close()
-            await app_.state.backup_runtime.stop()
-            await app_.state.system_settings.close()
-            await app_.state.dashboard_sampler.stop()
-            await app_.state.recycle_bin_cleaner.stop()
-            if start_task_engine:
-                await app_.state.task_engine.stop()
             await engine.dispose()
 
     app = FastAPI(title="AI 小说平台", version="0.1.0", lifespan=lifespan)

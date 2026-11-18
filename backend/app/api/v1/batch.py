@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, status
 
-from app.core.deps import CurrentUser, DbDep, SettingsDep, TaskEngineDep
+from app.core.deps import CipherDep, CurrentUser, DbDep, SettingsDep, TaskEngineDep
 from app.schemas.batch import BatchGenerateRequest, BatchPreview
 from app.schemas.task import TaskOut
 from app.services import batch_service
@@ -12,9 +12,9 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["batch-generate"])
 
 @router.post("/batch-generate/preview", response_model=BatchPreview)
 async def preview_batch(
-    project_id: int, body: BatchGenerateRequest, user: CurrentUser, db: DbDep, settings: SettingsDep
+    project_id: int, body: BatchGenerateRequest, user: CurrentUser, db: DbDep, settings: SettingsDep, cipher: CipherDep,
 ) -> BatchPreview:
-    return await batch_service.preview(db, settings, user.id, project_id, body)
+    return await batch_service.preview(db, settings, user.id, project_id, body, cipher=cipher)
 
 
 @router.post("/batch-generate", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)

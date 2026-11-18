@@ -1,4 +1,4 @@
-"""37项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
+"""38项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
 
 from app.core.permissions import PERMISSION_CODES, PERMISSIONS
 from tests.helpers import create_project, register
@@ -28,6 +28,7 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
     path = f"/api/v1/admin/users/{ordinary['id']}"
     cases = {
         "dashboard.read": ("GET", "/api/v1/admin/dashboard/overview", None, 200),
+        "ai_usage.read": ("GET", "/api/v1/admin/ai-usage", None, 200),
         "users.read": ("GET", "/api/v1/admin/users", None, 200),
         "users.create": ("POST", "/api/v1/admin/users", {"username": "授权创建账号", "password": "secret123"}, 201),
         "users.status": ("PATCH", path, {"is_active": True}, 200),
@@ -72,7 +73,7 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         "global_skills.delete": None,
         "global_skills.restore_builtin": None,
     }
-    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 37
+    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 38
     serial = 0
 
     async def prepare(code):

@@ -14,6 +14,7 @@ from app.ai.providers import create_provider
 from app.api.v1 import project_cover as cover_api
 from app.core.errors import AppError
 from app.models import AIConfig, Project, User, WritingStyle
+from app.models.ai_usage import AiUsageCall
 from app.services import (
     ai_dispatch,
     collaboration_ai_guard,
@@ -185,9 +186,9 @@ async def test_prompt_database_failure_does_not_log_private_sql(app, client, mak
 async def test_cover_generation_prefers_actor_and_only_falls_back_with_grant(
     app, client, make_client, system_admin,
 ):
-    await register(client, "cover-model-owner")
+    owner_user = await register(client, "cover-model-owner")
     editor, viewer = make_client(), make_client()
-    await register(editor, "cover-model-editor")
+    editor_user = await register(editor, "cover-model-editor")
     viewer_user = await register(viewer, "cover-model-viewer")
     project = await create_project(client)
     base = f"/api/v1/projects/{project['id']}"
@@ -227,6 +228,16 @@ async def test_cover_generation_prefers_actor_and_only_falls_back_with_grant(
         assert set(fallback.json()) == {"image_base64", "mime_type", "model_source"}
         assert "owner-private-model" not in fallback.text and str(owner_config["id"]) not in fallback.json()
         assert len(owner_calls) == 1 and len(actor_calls) == 1
+
+    async with app.state.sessionmaker() as db:
+        records = list(await db.scalars(select(AiUsageCall).order_by(AiUsageCall.started_at)))
+    assert len(records) == 2
+    own, authorized = records
+    for call in records:
+        assert call.kind == "project.cover" and call.actor_id == editor_user["id"]
+        assert call.project_id == project["id"] and call.image_count == 1 and call.status == "succeeded"
+    assert (own.payer_id, own.author_paid) == (editor_user["id"], False)
+    assert (authorized.payer_id, authorized.author_paid) == (owner_user["id"], True)
 
 
 @pytest.mark.parametrize("settings_overrides", [{"allow_private_ai_endpoints": True}])

@@ -25,6 +25,7 @@ from app.ai.providers.dispatch_hooks import DispatchHooks, use_dispatch_hooks
 from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Project
+from app.services.ai_usage_recording import UsageBinding, observed_call, observed_stream, record_operation
 from app.services.project_lifecycle import active_conditions
 
 # 两个有符号 int32 的 PostgreSQL advisory lock 命名空间，与其它资源锁隔离。
@@ -507,6 +508,7 @@ class _GuardedProvider(LLMProvider):
         self._authorize = authorize
         self._chapter = chapter
         self._verify_preflight = verify_preflight
+        self._usage_binding: UsageBinding | None = None
 
     @asynccontextmanager
     async def _send_lease(self) -> AsyncIterator[None]:
@@ -641,11 +643,10 @@ class _GuardedProvider(LLMProvider):
         finally:
             await hooks.aclose()
 
-    async def _stream[T](self, start: Callable[[LLMProvider], AsyncIterator[T]]) -> AsyncIterator[T]:
-        async with self._hooks() as hooks:
+    async def _stream[T](self, model: str, start: Callable[[LLMProvider], AsyncIterator[T]]) -> AsyncIterator[T]:
+        async with record_operation(self._usage_binding, model) as usage, self._hooks() as hooks:
             provider = self._operation_provider()
-            with use_dispatch_hooks(hooks):
-                stream = start(provider)
+            stream = observed_stream(provider, lambda: start(provider), usage)
             async with aclosing(stream):
                 while True:
                     # 不能把 ContextVar 留给 yield 的调用方，也不能跨任务 reset token。
@@ -656,11 +657,11 @@ class _GuardedProvider(LLMProvider):
                             return
                     yield item
 
-    async def _call[T](self, operation: Callable[[LLMProvider], Awaitable[T]]) -> T:
-        async with self._hooks() as hooks:
+    async def _call[T](self, operation: Callable[[LLMProvider], Awaitable[T]], *, model: str | None = None) -> T:
+        async with record_operation(self._usage_binding, model) as usage, self._hooks() as hooks:
             provider = self._operation_provider()
             with use_dispatch_hooks(hooks):
-                return await operation(provider)
+                return await observed_call(provider, lambda: operation(provider), usage)
 
     def generate_stream(
         self,
@@ -672,6 +673,7 @@ class _GuardedProvider(LLMProvider):
         thinking: ThinkingLevel = "off",
     ) -> AsyncIterator[str]:
         return self._stream(
+            model,
             lambda provider: provider.generate_stream(
                 messages, model, temperature=temperature, max_tokens=max_tokens, thinking=thinking,
             )
@@ -689,6 +691,7 @@ class _GuardedProvider(LLMProvider):
         temperature: float | None = None,
     ) -> AsyncIterator[AgentEvent]:
         return self._stream(
+            model,
             lambda provider: provider.chat_tools_stream(
                 messages, model, tools, tool_choice=tool_choice, max_tokens=max_tokens,
                 thinking=thinking, temperature=temperature,
@@ -696,10 +699,10 @@ class _GuardedProvider(LLMProvider):
         )
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
-        return await self._call(lambda provider: provider.embed(texts, model))
+        return await self._call(lambda provider: provider.embed(texts, model), model=model)
 
     async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
-        return await self._call(lambda provider: provider.generate_image(prompt, model))
+        return await self._call(lambda provider: provider.generate_image(prompt, model), model=model)
 
     async def list_models(self) -> list[ModelInfo]:
         return await self._call(lambda provider: provider.list_models())
