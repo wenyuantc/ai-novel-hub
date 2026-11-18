@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端全量门禁、迁移冻结、隔离 PostgreSQL 和假 Provider 测试。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"复核跨数据库精度、旧数据、外键和迁移。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"复核受控发送、任务完成收据、失败与撤权下的计量。"}
+{"file":".trellis/spec/backend/batch-generate.md","reason":"复核生成重试、分析与费用预估的一致性。"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"复核全站读权限、账号切换和撤权行为。"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"复核敏感字段白名单、组合查询与独立管理入口。"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"复核历史导入不累加费用，且既有备份读取兼容。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、构建、测试和浏览器验证。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"复核前后端精度、空值、枚举和时间字段契约。"}

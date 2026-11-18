@@ -32,11 +32,11 @@ class BatchGenerateRequest:  # start_chapter_id, end_chapter_id, include_written
                              # use_plan_words=True, auto_continue=True, review_every=0 (0–50), skip_on_fail=False,
                              # instruction ≤2000, ai_config_id?, style: inherit|none|风格 id（逐章解析，续跑沿用，见 prompts-styles.md）
 class BatchPreview: total, items[{chapter_id, chapter_no, title, target_words, words_source: plan|uniform, written}],
-                    skipped[{chapter_id, chapter_no, title, word_count}], analyze, estimated_minutes, warnings
+                    skipped[{chapter_id, chapter_no, title, word_count}], analyze, estimated_minutes, warnings, cost
 
 # backend/app/services/batch_service.py
 KIND = "chapter.batch"; MAX_CHAPTERS = 200; MAX_RETRIES = 2; RETRY_DELAYS = (5.0, 15.0)  # 测试 monkeypatch 为 0
-async def preview(db, settings, user_id, project_id, req) -> BatchPreview          # 不建任务；require_project(ai.use)
+async def preview(db, settings, user_id, project_id, req, *, cipher) -> BatchPreview # 只读预估；require_project(ai.use)
 async def create_batch_task(db, engine, user_id, project_id, req) -> TaskOut       # HTTP 入口：锁外 ai.use 短读 + 模型预检/DNS → 中央受控受理
 async def validate_start(db, ctx, *, user_id, project_id, req, accepted_model) -> dict  # 受理事务内，按原 grant 锁后重验，不解析 DNS
 async def revalidate(db, ctx, task, accepted_model=None) -> int                     # 重试（受控，原绑定须逐字一致）/ 继续前，返回 ai_config_id
@@ -57,6 +57,8 @@ POST /tasks/{id}/finish  -> 200 TaskOut（paused → succeeded，result.ended_ea
 ```
 
 ### 3. 契约
+
+- **费用预估**：按活动场景分摊正文目标字数，正文调用按场景计，自动分析按章计。费用计算与预算投影见[AI 用量与费用](./ai-usage.md)。
 
 - **范围**：两端章节须属于该项目（否则 400 `起止章节不存在或不属于该项目`），起始章号 ≤ 结束章号（400 `起始章节不能晚于结束章节`）；
   按 `chapter_no` 两端包含、`(chapter_no, id)` 排序定下 `input.chapter_ids`（> 200 章 → 400）。之后插入的章节不纳入；

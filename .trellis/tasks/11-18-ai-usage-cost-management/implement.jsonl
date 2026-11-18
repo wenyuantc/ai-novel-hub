@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/index.md","reason":"定位后端分层、Provider、任务与数据迁移约定。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"新增计量表、货币精度、索引、SQLite 与 PostgreSQL 迁移。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"受控模型发送、真实执行身份、协作模型绑定、取消与收尾。"}
+{"file":".trellis/spec/backend/batch-generate.md","reason":"费用预览、自动分析、断点和批量尝试的业务契约。"}
+{"file":".trellis/spec/backend/retrieval.md","reason":"向量分批、缓存与共享模型调用边界。"}
+{"file":".trellis/spec/backend/agent.md","reason":"智能体工具轮次 Provider 事件和任务执行方式。"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"管理员全站用量读权限及个人视图授权。"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"全站明细的安全投影、组合筛选、导航与权限复核。"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"单书历史日志导入来源和费用计量隔离。"}
+{"file":".trellis/spec/frontend/index.md","reason":"路由、接口类型、模型配置及前端状态管理。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"管理页、预览弹窗、菜单导航及组件约定。"}
