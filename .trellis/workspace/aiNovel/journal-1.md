@@ -1707,3 +1707,27 @@ TODOS 第 14 项：手动 AI 一致性检查与问题清单、两级修改影响
 ### Status
 
 [OK] **Completed**
+
+
+## Session 52: 第 18 项连载与存稿工作台
+<!-- trellis-session: v=2 fp=ba55c0b082c717a9 -->
+
+**Date**: 2026-11-18
+**Task**: 第 18 项连载与存稿工作台
+**Branch**: `codex/serialization-workbench`
+
+### Summary
+
+完成并归档作品共用排期、定稿存稿统计及分平台发布留档。桌面和窄屏 Chrome 验证同章跨平台仅扣一次存稿、历史正文对比与三格式导出。后端 6933 项通过，19 项预期失败，默认跳过的 9 项已在双库专项通过；前端 1803 项通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9fb891a` | feat(serialization): 实现定稿留档、共用排期与分平台发布 |
+| `bc4414a` | feat(serialization): 增加连载与存稿工作台 |
+| `e5742c2` | docs(serialization): 记录连载工作台规范与验收结果 |
+
+### Status
+
+[OK] **Completed**
