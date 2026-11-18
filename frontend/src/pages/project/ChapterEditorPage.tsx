@@ -163,7 +163,7 @@ type InspectorTab = 'ai' | 'scene' | 'chapter' | 'notes'
 const INSPECTOR_TITLES: Record<InspectorTab, string> = { ai: '🤖 AI 助手', scene: '📋 场景规划', chapter: '⚙️ 章节设置', notes: '📝 笔记' }
 
 function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
-  const { canUseAI, managingOther, canEdit, canEditNow, canReadNow } = useProjectAccess(pid)
+  const { canUseAI, managingOther, canEdit, canEditNow, canReadNow, role, isCollaborator } = useProjectAccess(pid)
   const isMobile = useIsMobile()
   // 工具栏按钮较多：只在正文卡片足够宽（约等于原 xxl 视口、停靠面板关闭时的宽度）时放进卡片标题栏，
   // 其余宽度放在正文上方，避免标题被挤压；按卡片实际宽度判断，右侧停靠面板打开时同样生效
@@ -740,6 +740,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
         版本历史
       </Button>
+      {(role === 'owner' || isCollaborator) && <Button size="small" onClick={() => navigate(`/projects/${pid}/ai-usage?chapter_id=${chapter.id}`)}>本章 AI 用量</Button>}
       <Button size="small" onClick={() => setDraftsOpen(true)}>本地草稿</Button>
       <Button size="small" disabled={!canEdit || (busy || editorLocked || stuck || batchLocked)} onClick={() => void handleToggleDone()}>
         {chapter.status === 'done' ? '标记为草稿' : '标记为完成'}

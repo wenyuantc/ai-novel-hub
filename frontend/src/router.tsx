@@ -47,6 +47,7 @@ export const router = createBrowserRouter([
       { path: 'series', lazy: lazyPage(() => import('./pages/SeriesPage')) },
       { path: 'series/:sid', lazy: lazyPage(() => import('./pages/SeriesPage')) },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
+      { path: 'settings/ai-usage', lazy: lazyPage(() => import('./pages/AIUsagePage')) },
       { path: 'settings/api-keys', lazy: lazyPage(() => import('./pages/ApiKeysPage')) },
       { path: 'novel-templates', lazy: lazyPage(() => import('./pages/NovelTemplatesPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },
@@ -79,6 +80,11 @@ export const router = createBrowserRouter([
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminTasksPage')) }],
       },
       {
+        path: 'admin/ai-usage',
+        element: <RequirePermission permission="ai_usage.read"><Outlet /></RequirePermission>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminAIUsagePage')) }],
+      },
+      {
         path: 'admin/recycle-bin',
         element: <RequirePermission permission="recycle_bin.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminRecycleBinPage')) }],
@@ -108,6 +114,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="overview" replace /> },
           { path: 'overview', element: <OverviewPanel /> },
+          { path: 'ai-usage', lazy: lazyPage(() => import('./pages/project/ProjectAIUsagePage')) },
           { path: 'wizard', element: <WizardPage /> },
           { path: 'world', element: <WorldPanel /> },
           { path: 'characters', element: <CharactersPanel /> },

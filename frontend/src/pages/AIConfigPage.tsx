@@ -19,6 +19,7 @@ import {
   Typography,
 } from 'antd'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   aiConfigApi,
   EMBEDDING_HELP,
@@ -39,6 +40,8 @@ import type {
   ThinkingLevel,
 } from '../api/types'
 import { useAIConfigStore } from '../stores/aiConfigs'
+import UsagePriceModal from '../components/aiUsage/UsagePriceModal'
+import { useAiUsageSession } from '../components/aiUsage/useAiUsageRequest'
 import { formatTime } from '../utils/time'
 
 interface FormValues {
@@ -93,6 +96,11 @@ export default function AIConfigPage() {
   const [editing, setEditing] = useState<AIConfig | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const usageSession = useAiUsageSession()
+  const [priceTarget, setPriceTarget] = useState<{ identity: string; config: AIConfig } | null>(null)
+  const priceConfig = priceTarget?.identity === usageSession?.key && priceTarget
+    ? configs.find((item) => item.id === priceTarget.config.id && item.updated_at === priceTarget.config.updated_at)
+    : undefined
   const [testing, setTesting] = useState<number | null>(null)
   const [testResults, setTestResults] = useState<Record<number, AIConfigTestResult>>({})
   const [form] = Form.useForm<FormValues>()
@@ -230,9 +238,10 @@ export default function AIConfigPage() {
       <Card
         title="模型配置"
         extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新增配置
-          </Button>
+          <Space wrap>
+            <Link to="/settings/ai-usage">AI 用量与费用</Link>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增配置</Button>
+          </Space>
         }
       >
         <Typography.Paragraph type="secondary">
@@ -356,6 +365,9 @@ export default function AIConfigPage() {
                   <Button type="link" size="small" onClick={() => openEdit(r)}>
                     编辑
                   </Button>
+                  {usageSession && <Button type="link" size="small" onClick={() => setPriceTarget({ identity: usageSession.key, config: r })}>
+                    设置单价
+                  </Button>}
                   {!r.is_default && (
                     <Button
                       type="link"
@@ -382,6 +394,9 @@ export default function AIConfigPage() {
           ]}
         />
       </Card>
+
+      {usageSession && priceConfig && <UsagePriceModal key={`${usageSession.key}:${priceConfig.id}`} config={priceConfig}
+        session={usageSession} onClose={() => setPriceTarget(null)} />}
 
       <Modal
         title={editing ? '编辑配置' : '新增配置'}

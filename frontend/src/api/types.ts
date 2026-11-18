@@ -1195,6 +1195,32 @@ export interface BatchPreview {
   analyze: boolean
   estimated_minutes: number
   warnings: string[]
+  cost: BatchCostEstimate | null
+}
+
+export type UsagePricePeriod = 'fixed' | 'peak' | 'off_peak'
+
+export interface BatchCostEstimate {
+  status: 'estimated' | 'missing_price' | 'unavailable' | 'author_paid'
+  currency: 'CNY' | 'USD' | null
+  estimated_amount: string | null
+  price_period?: UsagePricePeriod | null
+  price_timezone?: string | null
+  assumes_uncached_input?: boolean
+  steps: {
+    kind: 'generation' | 'analysis'
+    calls: number
+    estimated_input_tokens: number | null
+    estimated_output_tokens: number | null
+    estimated_amount: string | null
+  }[]
+  budgets: {
+    scope: 'account' | 'project'
+    limit: string
+    projected_spent: string
+    state: 'normal' | 'near' | 'exceeded'
+    unpriced_calls: number
+  }[]
 }
 
 export type BatchItemState = 'pending' | 'done' | 'skipped_written' | 'skipped_missing' | 'failed'
@@ -3644,6 +3670,7 @@ export interface UserQuota { user_id: number; username: string; is_management_ac
 export interface UserQuotaUpdate { authorization_revision: number; revision: number; changes: { project_count?: QuotaConfig; task_concurrency?: QuotaConfig } }
 export type PermissionCode =
   | 'dashboard.read'
+  | 'ai_usage.read'
   | 'users.read' | 'users.create' | 'users.status' | 'users.reset_password' | 'users.delete'
   | 'quotas.read' | 'quotas.update'
   | 'projects.read' | 'projects.edit' | 'projects.recycle'

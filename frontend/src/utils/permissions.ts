@@ -27,6 +27,7 @@ export function authorizationKey(user: AuthorizationSubject | null | undefined):
 export const ADMIN_DESTINATIONS: ReadonlyArray<{ key: string; path: string; label: string; permission?: PermissionCode; superOnly?: boolean }> = [
   { key: 'admin-dashboard', path: '/admin/dashboard', label: '管理员首页', permission: 'dashboard.read' },
   { key: 'admin-tasks', path: '/admin/tasks', label: '全站任务监控', permission: 'tasks.read' },
+  { key: 'admin-ai-usage', path: '/admin/ai-usage', label: '全站 AI 用量与费用', permission: 'ai_usage.read' },
   { key: 'admin', path: '/admin/users', label: '用户管理', permission: 'users.read' },
   { key: 'admin-roles', path: '/admin/roles', label: '角色与权限', superOnly: true },
   { key: 'admin-projects', path: '/admin/projects', label: '作品管理', permission: 'projects.read' },

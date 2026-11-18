@@ -1,6 +1,7 @@
 import {
   Alert,
   App,
+  Button,
   Checkbox,
   Form,
   Input,
@@ -20,12 +21,14 @@ import { errorMessage } from '../../api/client'
 import type { BatchGenerateRequest, BatchPreview, ChapterBrief, StyleChoice, Task } from '../../api/types'
 import { useHasAIConfig } from '../../hooks/useHasAIConfig'
 import { defaultBatchRange, endIdUpTo, formatEta, rangeChapters, sortChapters } from '../../utils/batch'
-import { useProjectStore } from '../../stores/project'
+import { useAuthStore } from '../../stores/auth'
+import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import AIConfigSelect from '../AIConfigSelect'
 import SkillChoiceField from '../skills/SkillChoiceField'
 import { useSkillChoice } from '../../hooks/useSkillChoice'
 import { skillChoiceProblemText } from '../../utils/skillInputs'
 import StyleChoiceSelect from '../styles/StyleChoiceSelect'
+import BatchCostPreview from './BatchCostPreview'
 
 interface Props {
   projectId: number
@@ -77,6 +80,8 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
   const { message } = App.useApp()
   const [form] = Form.useForm<FormValues>()
   const hasConfig = useHasAIConfig()
+  const actorId = useAuthStore((s) => s.user?.id)
+  const scopeVersion = useProjectStore((s) => s.scopeVersion)
   const projectDefaultStyle = useProjectStore((s) => (s.project?.id === projectId ? s.project.default_style : null))
   const styleContext = useMemo(() => ({ projectDefault: projectDefaultStyle }), [projectDefaultStyle])
   const sorted = useMemo(() => sortChapters(chapters), [chapters])
@@ -87,44 +92,39 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
     null,
   )
   const [starting, setStarting] = useState(false)
+  const [previewRetry, setPreviewRetry] = useState(0)
   const seqRef = useRef(0)
   // 整批共用一个 Skill 与一份输入值（创建时快照，每章相同；续跑 / 重试沿用）
   const skillChoice = useSkillChoice()
   const skillProblem = skillChoiceProblemText(skillChoice)
 
-  const request = useMemo(() => (values ? toRequest(values) : null), [values])
-  // 预览只依赖影响范围与字数的字段（附加要求 / 模型等变化不重新预览）
-  const previewKey = request
-    ? JSON.stringify([
-        request.start_chapter_id,
-        request.end_chapter_id,
-        request.include_written,
-        request.target_words,
-        request.use_plan_words,
-      ])
-    : ''
+  const request = values ? toRequest(values) : null
+  const previewBody = request && !skillProblem ? JSON.stringify({ ...request, ...skillChoice.payload }) : ''
+  const previewKey = previewBody && actorId !== undefined
+    ? `${projectId}:${actorId}:${scopeVersion}:${previewRetry}:${previewBody}` : ''
 
   useEffect(() => {
     if (!previewKey) return
-    const [start_chapter_id, end_chapter_id, include_written, target_words, use_plan_words] = JSON.parse(previewKey) as [
-      number,
-      number,
-      boolean,
-      number,
-      boolean,
-    ]
+    const scope = captureProjectScope(projectId)
+    if (!isProjectScopeCurrent(scope, 'canUseAI')) return
+    const controller = new AbortController()
+    const body = JSON.parse(previewBody) as BatchGenerateRequest
     const seq = ++seqRef.current
+    const current = () => seq === seqRef.current && !controller.signal.aborted && isProjectScopeCurrent(scope, 'canUseAI')
     const timer = setTimeout(() => {
-      previewBatch(projectId, { start_chapter_id, end_chapter_id, include_written, target_words, use_plan_words })
+      previewBatch(projectId, body, controller.signal)
         .then((p) => {
-          if (seq === seqRef.current) setPreviewState({ key: previewKey, preview: p, error: null })
+          if (current()) setPreviewState({ key: previewKey, preview: p, error: null })
         })
         .catch((err) => {
-          if (seq === seqRef.current) setPreviewState({ key: previewKey, preview: null, error: errorMessage(err) })
+          if (current()) setPreviewState({ key: previewKey, preview: null, error: errorMessage(err) })
         })
     }, PREVIEW_DEBOUNCE_MS)
-    return () => clearTimeout(timer)
-  }, [projectId, previewKey])
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [projectId, previewKey, previewBody])
 
   const fresh = previewKey !== '' && previewState?.key === previewKey
   const preview = fresh ? previewState.preview : null
@@ -132,18 +132,22 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
   const previewing = previewKey !== '' && !fresh
 
   const handleOk = async () => {
+    const scope = captureProjectScope(projectId)
+    if (!preview || !isProjectScopeCurrent(scope, 'canUseAI')) return
     const v = await form.validateFields()
     if (skillProblem) { message.warning(skillProblem); return }
     const base = toRequest(v)
     if (!base) return
     const body: BatchGenerateRequest = { ...base, ...skillChoice.payload }
+    if (JSON.stringify(body) !== previewBody || !isProjectScopeCurrent(scope, 'canUseAI')) return
     setStarting(true)
     try {
       const task = await startBatch(projectId, body)
+      if (!isProjectScopeCurrent(scope, 'canUseAI')) return
       message.success('已开始批量生成，可在章节列表顶部或任务面板查看进度')
       onStarted(task)
     } catch (err) {
-      message.error(errorMessage(err))
+      if (isProjectScopeCurrent(scope, 'canUseAI')) message.error(errorMessage(err))
     } finally {
       setStarting(false)
     }
@@ -169,7 +173,7 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
       onOk={() => void handleOk()}
       onCancel={onClose}
       confirmLoading={starting}
-      okButtonProps={{ disabled: hasConfig === false || rangeInvalid || nothing || !request || !!skillProblem }}
+      okButtonProps={{ disabled: hasConfig === false || rangeInvalid || nothing || !preview || !!skillProblem }}
       maskClosable={false}
       destroyOnHidden
     >
@@ -268,7 +272,10 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
         </Space>
       </Form>
       <Spin spinning={previewing}>
-        {previewError && <Alert type="error" showIcon message={previewError} />}
+        {previewError && (
+          <Alert type="error" showIcon message={previewError}
+            action={<Button size="small" onClick={() => setPreviewRetry((retry) => retry + 1)}>重试预估</Button>} />
+        )}
         {preview && (
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
             <Space wrap>
@@ -281,6 +288,7 @@ export default function BatchGenerateModal({ projectId, chapters, onClose, onSta
               <Typography.Text type="secondary">预计耗时 {formatEta(preview.estimated_minutes)}</Typography.Text>
               <Tag color={preview.analyze ? 'blue' : 'default'}>{preview.analyze ? '每章生成后分析' : '不分析'}</Tag>
             </Space>
+            {preview.cost && <BatchCostPreview estimate={preview.cost} />}
             {preview.warnings.length > 0 && (
               <Alert
                 type="warning"

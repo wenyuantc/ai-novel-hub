@@ -40,9 +40,9 @@ export function polishChapter(cid: number, body: PolishChapterRequest): Promise<
   return api.post<Task>(`/chapters/${cid}/polish`, body)
 }
 
-/** 批量顺序生成预览：不建任务、不校验模型配置 */
-export function previewBatch(pid: number, body: BatchGenerateRequest): Promise<BatchPreview> {
-  return api.post<BatchPreview>(`/projects/${pid}/batch-generate/preview`, body)
+/** 批量顺序生成预览，包含待生成章节及费用估算。 */
+export function previewBatch(pid: number, body: BatchGenerateRequest, signal?: AbortSignal): Promise<BatchPreview> {
+  return api.post<BatchPreview>(`/projects/${pid}/batch-generate/preview`, body, signal)
 }
 
 /** 发起批量顺序生成：创建 chapter.batch 任务（202）；继续 / 结束 / 取消 / 重试走 taskApi */

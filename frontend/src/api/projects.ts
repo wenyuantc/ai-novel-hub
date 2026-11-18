@@ -2,7 +2,7 @@ import { api, buildUrl, handleErrorResponse, ApiError, request, type QueryValue,
 import type { CoverGenerateRequest, CoverPreview, Project, ProjectCreate, ProjectStatus, ProjectUpdate, WizardProgressUpdate } from './types'
 
 export const projectApi = {
-  list: () => api.get<Project[]>('/projects'),
+  list: (options?: Pick<RequestOptions, 'signal' | 'isCurrent'>) => request<Project[]>('/projects', options),
   get: (id: number, options?: Pick<RequestOptions, 'signal' | 'isCurrent'>) =>
     options ? request<Project>(`/projects/${id}`, options) : api.get<Project>(`/projects/${id}`),
   create: (body: ProjectCreate, options?: Pick<RequestOptions, 'signal' | 'isCurrent'>) =>

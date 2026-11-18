@@ -1,6 +1,6 @@
 import {
   ApartmentOutlined, ApiOutlined, BgColorsOutlined, BlockOutlined, BookOutlined, BulbOutlined, ClusterOutlined,
-  DashboardOutlined, DatabaseOutlined, FileTextOutlined, GlobalOutlined, HistoryOutlined,
+  DashboardOutlined, DatabaseOutlined, FileTextOutlined, GlobalOutlined, HistoryOutlined, LineChartOutlined,
   ImportOutlined, KeyOutlined, OrderedListOutlined, RocketOutlined, SafetyCertificateOutlined, SearchOutlined, SettingOutlined, ShopOutlined, TeamOutlined, TrophyOutlined,
 } from '@ant-design/icons'
 import type { ReactNode } from 'react'
@@ -18,6 +18,7 @@ const GLOBAL_GROUPS: NavGroup[] = [
   { title: '创作资源', items: [
     { to: '/novel-templates', label: '小说模板', icon: <BookOutlined /> },
     { to: '/settings/ai', label: '模型配置', icon: <SettingOutlined /> },
+    { to: '/settings/ai-usage', label: 'AI 用量与费用', icon: <LineChartOutlined aria-hidden /> },
     { to: '/settings/api-keys', label: 'API 密钥', icon: <KeyOutlined /> },
     { to: '/prompt-templates', label: '提示词模板', icon: <FileTextOutlined /> },
     { to: '/prompt-components', label: '提示词组件', icon: <BlockOutlined /> },
@@ -32,6 +33,7 @@ const PROJECT_GROUPS = [
   { title: '作品', items: [
     { key: 'overview', label: '作品概览', icon: <DashboardOutlined /> },
     { key: 'wizard', label: '创作向导', icon: <RocketOutlined /> },
+    { key: 'ai-usage', label: 'AI 用量与费用', icon: <LineChartOutlined aria-hidden /> },
   ] },
   { title: '故事档案', items: [
     { key: 'world', label: '世界观', icon: <GlobalOutlined /> },
@@ -57,8 +59,10 @@ const PROJECT_GROUPS = [
 ]
 
 /** 桌面与移动导航共用定义；只映射项目已经存在的路由。 */
-export function studioNavigation(projectId: number | null, mcpEnabled: boolean, canUseAI = true): NavGroup[] {
-  if (projectId !== null) return PROJECT_GROUPS.map((group) => ({ title: group.title, items: group.items.filter((item) => canUseAI || item.key !== 'wizard').map(({ key, ...item }) => ({ ...item, to: `/projects/${projectId}/${key}` })) }))
+export function studioNavigation(projectId: number | null, mcpEnabled: boolean, canUseAI = true, canViewUsage = true): NavGroup[] {
+  if (projectId !== null) return PROJECT_GROUPS.map((group) => ({ title: group.title, items: group.items
+    .filter(({ key }) => (canUseAI || key !== 'wizard') && (canViewUsage || key !== 'ai-usage'))
+    .map(({ key, ...item }) => ({ ...item, to: `/projects/${projectId}/${key}` })) }))
   return GLOBAL_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => mcpEnabled || item.to !== '/mcp-plugins') }))
 }
 
