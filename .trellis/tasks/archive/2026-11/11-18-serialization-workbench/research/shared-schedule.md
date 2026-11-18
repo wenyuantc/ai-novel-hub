@@ -31,7 +31,7 @@
 
 以下规范篇幅较长。实施和检查代理从工作树直接打开对应章节，可读取完整内容。
 
-- 数据表、并发写入与删章引用查阅[原子状态迁移](../../../spec/backend/database-guidelines.md#原子状态迁移)和[外键规则](../../../spec/backend/database-guidelines.md#外键规则)。
-- 接口类型、业务日期和下载失效查阅[时间戳](../../../spec/frontend/type-safety.md#时间戳)及同文件的“API 客户端契约”。
-- 界面查阅[组件规范](../../../spec/frontend/component-guidelines.md)中的“章节编辑器”“主题与配色”“响应式”。
-- 数据库验收查阅[后端质量规范](../../../spec/backend/quality-guidelines.md)中的“跨数据库方言的建模隔离”“PostgreSQL 隔离测试库与环境变量”“代码评审清单”。
+- 数据表、并发写入与删章引用查阅[原子状态迁移](../../../../../spec/backend/database-guidelines.md#原子状态迁移)和[外键规则](../../../../../spec/backend/database-guidelines.md#外键规则)。
+- 接口类型、业务日期和下载失效查阅[时间戳](../../../../../spec/frontend/type-safety.md#时间戳)及同文件的“API 客户端契约”。
+- 界面查阅[组件规范](../../../../../spec/frontend/component-guidelines.md)中的“章节编辑器”“主题与配色”“响应式”。
+- 数据库验收查阅[后端质量规范](../../../../../spec/backend/quality-guidelines.md)中的“跨数据库方言的建模隔离”“PostgreSQL 隔离测试库与环境变量”“代码评审清单”。

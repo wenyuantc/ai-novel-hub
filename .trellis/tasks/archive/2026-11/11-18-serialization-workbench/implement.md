@@ -16,7 +16,7 @@
 
 | 验证 | 命令或操作 |
 | --- | --- |
-| 规划交付 | 从独立工作树运行 `python3 .trellis/scripts/task.py validate 11-18-serialization-workbench` 并检查 PRD、设计、实施计划的引用。 |
+| 规划交付 | 从独立工作树运行 `python3 .trellis/scripts/task.py validate .trellis/tasks/archive/2026-11/11-18-serialization-workbench` 并检查 PRD、设计、实施计划的引用。 |
 | 后端定向 | 在 backend 目录运行 `uv run pytest -q -k 'serialization or chapter_versions or document_export or project_transfer or chapter_fk_guard'`。新增连载用例按 serialization 命名。 |
 | 新旧数据库与并发 | 在隔离 SQLite、PostgreSQL 分别验升级、空表降级、有历史的保护与单书备份往返。在 PostgreSQL 用两个连接验证定稿与发布竞争、两个渠道并行登记、同次请求重放。核对实际结果和记录条数。 |
 | 前端定向 | 在 frontend 目录运行 `npm test -- serialization`。覆盖完整天数与余章、无目标、北京跨日、表单稿次、权限与过期响应。 |

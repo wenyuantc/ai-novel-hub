@@ -2,11 +2,11 @@
 
 ## 目标
 
-作者在作品内安排每日更新，知道手上的定稿够发几天，并能回答“某章当时在哪个平台发了哪一稿”。需求来源见 [待办第 18 项](../../../TODOS.md#18-连载与存稿工作台)。
+作者在作品内安排每日更新，知道手上的定稿够发几天，并能回答“某章当时在哪个平台发了哪一稿”。需求来源见 [待办第 18 项](../../../../../TODOS.md#18-连载与存稿工作台)。
 
 ## 现有能力
 
-章节的生成状态包含草稿、生成中和完成。普通编辑历史可以合并、裁剪和删除，章节编辑器已有正文差异视图。这些能力决定了工作台要单独保存作者确认的定稿。[章节状态](../../../backend/app/schemas/chapter.py#L11) · [历史保留](../../../backend/app/services/version_service.py#L8) · [版本删除](../../../backend/app/services/chapter_version_service.py#L129) · [正文对比](../../../frontend/src/components/chapter/VersionDrawer.tsx#L143)
+章节的生成状态包含草稿、生成中和完成。普通编辑历史可以合并、裁剪和删除，章节编辑器已有正文差异视图。这些能力决定了工作台要单独保存作者确认的定稿。[章节状态](../../../../../backend/app/schemas/chapter.py#L11) · [历史保留](../../../../../backend/app/services/version_service.py#L8) · [版本删除](../../../../../backend/app/services/chapter_version_service.py#L129) · [正文对比](../../../../../frontend/src/components/chapter/VersionDrawer.tsx#L143)
 
 ## 首版需求
 
