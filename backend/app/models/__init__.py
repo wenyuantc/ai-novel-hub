@@ -80,6 +80,12 @@ from app.models.rich_document import (
     SceneSelectionReceipt,
 )
 from app.models.scenes import Scene
+from app.models.serialization import (
+    SerializationEdition,
+    SerializationEntry,
+    SerializationGoal,
+    SerializationPublication,
+)
 from app.models.series import Series, SeriesBook, SeriesEntry, SeriesEntryUse
 from app.models.setting_categories import SettingCategory, SettingCategoryRule
 from app.models.setting_fields import SettingAiLink, SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
@@ -182,6 +188,10 @@ __all__ = [
     "SceneReviewPayloadChunk",
     "SceneSection",
     "SceneSelectionReceipt",
+    "SerializationEdition",
+    "SerializationEntry",
+    "SerializationGoal",
+    "SerializationPublication",
     "Series",
     "SeriesBook",
     "SeriesCollaborator",

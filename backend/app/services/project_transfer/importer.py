@@ -32,12 +32,12 @@ import types
 import typing
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, date, datetime
 from functools import cache
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text, func, select, update
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Float, Integer, String, Text, func, select, update
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,6 +78,7 @@ from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE
 from app.services.project_transfer.remap import RemapContext
 from app.services.project_transfer.rich_documents import validate_rich_tables
 from app.services.project_transfer.scenes import validate_scene_tables
+from app.services.project_transfer.serialization import SERIALIZATION_TABLES, validate_serialization_tables
 from app.services.project_transfer.thumbnails import TABLES as THUMBNAIL_TABLES
 from app.services.setting_category_validation import validate_category_graph_snapshot
 from app.services.setting_field_values import FieldSpec, has_field_content, validate_field_value
@@ -124,6 +125,10 @@ TABLE_LABELS: dict[str, str] = {
     "foreshadow_history": "伏笔历史",
     "generation_logs": "生成记录",
     "chapter_versions": "章节版本",
+    "serialization_goals": "日更目标",
+    "serialization_entries": "连载排期",
+    "serialization_editions": "章节定稿",
+    "serialization_publications": "发布记录",
     "revision_batches": "批量修订记录",
     "revision_batch_scenes": "修订场景明细",
     "chapter_analyses": "章节分析",
@@ -565,6 +570,16 @@ def _migrate_v12_to_v13(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v14_to_v15(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for name in SERIALIZATION_TABLES:
+            if name in tables and tables[name] != []:
+                raise BadRequestError("旧版备份不支持连载数据，请使用原始版本文件")
+            tables[name] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 14 and isinstance(tables := data.get("tables"), dict):
@@ -595,6 +610,7 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         11: _migrate_v11_to_v12,
         12: _migrate_v12_to_v13,
         13: lambda value: value,  # v14 只增加可选版本历史表，旧备份缺省为空。
+        14: _migrate_v14_to_v15,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -655,9 +671,23 @@ def _check_value(col, v: Any) -> str | None:
         if not isinstance(v, str):
             return "应为时间字符串"
         try:
-            datetime.fromisoformat(v)
-        except ValueError:
+            parsed = datetime.fromisoformat(v)
+            if col.table.name in SERIALIZATION_TABLES:
+                if "T" not in v:
+                    return "应为完整日期与时间"
+                if parsed.tzinfo is not None:
+                    parsed.astimezone(UTC)
+        except (ValueError, OverflowError):
             return "时间格式不正确"
+        return None
+    if isinstance(t, Date):
+        if not isinstance(v, str):
+            return "应为日期字符串"
+        try:
+            if date.fromisoformat(v).isoformat() != v:
+                return "应为 YYYY-MM-DD 日期"
+        except ValueError:
+            return "日期格式不正确"
         return None
     if isinstance(t, String | Text):
         if not isinstance(v, str):
@@ -1282,7 +1312,7 @@ def parse_backup(raw: bytes) -> Backup:
                 errors.add(f"备份缺少批量修订历史表 {table}")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
                   *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes",
-                  "scene_documents", "scene_sections", "scene_markers"):
+                  "scene_documents", "scene_sections", "scene_markers", *SERIALIZATION_TABLES):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -1337,6 +1367,8 @@ def parse_backup(raw: bytes) -> Backup:
     validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
     documents = validate_rich_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    validate_serialization_tables(backup.tables, backup.project["id"], errors.add)
     errors.raise_if_any()
     validate_revision_tables(backup.tables, documents, errors.add)
     errors.raise_if_any()
@@ -1547,7 +1579,13 @@ class _RowError(Exception):
 
 def _convert(col, v: Any) -> Any:
     if v is not None and isinstance(col.type, DateTime):
-        return datetime.fromisoformat(v)
+        timestamp = datetime.fromisoformat(v)
+        if col.table.name in SERIALIZATION_TABLES:
+            # SQLite 历史时间为无偏移的 UTC，外部备份也接受带偏移的实际发布时间。
+            return timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp.astimezone(UTC)
+        return timestamp
+    if v is not None and isinstance(col.type, Date):
+        return date.fromisoformat(v)
     return v
 
 

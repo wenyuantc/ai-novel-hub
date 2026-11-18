@@ -149,7 +149,7 @@ async def test_book_backup_omits_claim_and_import_never_restores_injected_claim(
     response = await client.get(f"/api/v1/projects/{pid}/backup")
     assert response.status_code == 200, response.text
     backup = response.json()
-    assert backup["app_schema"] == "0060"
+    assert backup["app_schema"] == "0064"
     doc = backup["tables"]["kb_documents"][0]
     fields = {"index_task_key", "index_task_queued_at", "index_claim_key"}
     assert not fields.intersection(doc)

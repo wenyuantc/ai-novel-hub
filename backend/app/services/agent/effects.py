@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import DateTime, and_, delete, inspect, select, update
+from sqlalchemy import DateTime, and_, delete, inspect, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,7 @@ from app.models import (
     Project,
     RelationshipType,
     RetrievalChunk,
+    SerializationEntry,
     SettingFieldDefinition,
     SettingProgression,
     SettingTextField,
@@ -56,6 +57,7 @@ from app.services import (
 )
 from app.services.ai_dispatch import lock_visibility_write
 from app.services.cast_service import is_protagonist_role
+from app.services.chapter_delete_guard import detach_serialization_chapters, has_serialization_work
 from app.services.chapter_service import count_words
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, TableRule
 from app.services.project_transfer.remap import RemapContext, scene_snapshot, setting_event_value, setting_payload
@@ -890,6 +892,9 @@ async def _check_dependents(db: AsyncSession, project_id: int, effects: list[Eff
                 if table is AiUsageCall.__table__ and fk.parent.name == "chapter_id" and fk.ondelete == "SET NULL":
                     # 同作品的用量元数据留账；撤销空章仅由外键清除该引用。
                     statement = statement.where(AiUsageCall.project_id.is_distinct_from(project_id))
+                if table is SerializationEntry.__table__ and fk.parent.name == "chapter_id":
+                    statement = statement.where(or_(SerializationEntry.project_id.is_distinct_from(project_id),
+                                                    has_serialization_work()))
                 rows = (await db.execute(statement.with_for_update())).mappings()
                 for row in rows:
                     child = changes.get((table.name, _key(dict(row))))
@@ -1548,6 +1553,9 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
             await retrieval_service.delete_project_refs(db, project_id, "memory", removed)
             # 恢复被删除记忆是重新建立来源，不能继承同 ID 的旧孤儿索引，即使孤儿标记为本书。
             await retrieval_service.require_unindexed_sources(db, "memory", recreated)
+            # 已验证待撤销的新建章最多只有默认空条目；与撤销同一保存点清理。
+            removed_chapters = [e["pk"]["id"] for e in effects if e["table"] == "chapters" and e["before"] is None]
+            await detach_serialization_chapters(db, project_id, removed_chapters)
             await _restore_rows(db, effects, preserve)
             await _validate_restored_scopes(db, project_id, effects)
             await _refresh_loaded(db, effects)

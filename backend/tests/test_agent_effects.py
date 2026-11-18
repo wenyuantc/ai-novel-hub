@@ -32,6 +32,7 @@ from app.models import (
     RelationshipHistory,
     RelationshipType,
     RetrievalChunk,
+    SerializationEntry,
     StoryMemory,
     Task,
     User,
@@ -417,6 +418,31 @@ async def test_undo_inserted_chapter_does_not_delete_later_written_content(proje
     with pytest.raises(ConflictError):
         await effects.undo(db, project.id, delta)
     assert await db.scalar(select(Chapter.content).where(Chapter.id == chapter.id)) == "后来写的正文"
+
+
+@pytest.mark.parametrize("stage", ["proofreading", "revision"])
+async def test_serialization_undo_new_chapter_respects_manual_work(project_db, stage):
+    db, project = project_db
+    before = await effects.snapshot(db, project.id)
+    chapter = Chapter(project_id=project.id, title="智能体建的空章")
+    db.add(chapter)
+    await db.flush()
+    await scene_service.initialize_chapter(db, chapter)
+    delta = effects.diff(before, await effects.snapshot(db, project.id))
+    entry = SerializationEntry(project_id=project.id, chapter_id=chapter.id, stage=stage)
+    db.add(entry)
+    await db.commit()
+    project_id, chapter_id, entry_id = project.id, chapter.id, entry.id
+    if stage == "proofreading":
+        with pytest.raises(ConflictError):
+            await effects.undo(db, project_id, delta)
+        attached_to = await db.scalar(select(SerializationEntry.chapter_id).where(SerializationEntry.id == entry_id))
+        assert attached_to == chapter_id
+    else:
+        await effects.undo(db, project_id, delta)
+        await db.commit()
+        assert await db.scalar(select(SerializationEntry.id).where(SerializationEntry.id == entry_id)) is None
+        assert await db.scalar(select(Chapter.id).where(Chapter.id == chapter_id)) is None
 
 
 @pytest.mark.parametrize("cross_project", [False, True])

@@ -32,7 +32,7 @@ from app.services import (
 )
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation
-from app.services.chapter_delete_guard import ensure_chapter_delete_isolation
+from app.services.chapter_delete_guard import detach_serialization_chapters, ensure_chapter_delete_isolation
 from app.services.project_service import get_manageable_project, get_owned_project
 
 _WS_RE = re.compile(r"\s+")
@@ -544,6 +544,7 @@ async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapte
         # 先删该章的自动记忆与检索单元（手动记忆保留，chapter_id 由外键置空）
         await planning_lifecycle.detach_sources(db, project_id, chapter_ids=[chapter.id])
         await memory_service.on_chapters_deleted(db, [chapter.id])
+        await detach_serialization_chapters(db, project_id, [chapter.id])
         await db.delete(chapter)
         # FK SET NULL 已生效后再重算，避免把已删除章节的变化继续作为最新状态。
         await db.flush()

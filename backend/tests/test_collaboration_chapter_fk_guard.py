@@ -28,6 +28,9 @@ from app.models import (
     SceneReviewAnalysisReceipt,
     SceneReviewProposal,
     SceneSection,
+    SerializationEdition,
+    SerializationEntry,
+    SerializationPublication,
     SettingProgression,
     SettingTimeline,
     StoryMemory,
@@ -56,7 +59,7 @@ async def books(app, client):
 @pytest.mark.parametrize("reference", [
     "plan", "planning_chapter", "planning_scene", "log", "task", "analysis", "memory", "retrieval",
     "character", "progression", "analysis_change", "proposal", "receipt", "marker_origin", "section_origin",
-    "ledger", "revision_batch", "revision_scene", "usage",
+    "ledger", "revision_batch", "revision_scene", "usage", "serialization_entry", "serialization_publication",
 ])
 async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books, reference):
     user, first, second, chapters, scenes = books
@@ -84,6 +87,18 @@ async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books
                                   had_project=True, chapter_id=chapter_id, actor_id=user["id"],
                                   payer_id=user["id"], kind="chapter.generate", provider="test", model="test",
                                   model_type="text")
+        elif reference == "serialization_entry":
+            foreign = SerializationEntry(project_id=second_id, chapter_id=chapter_id)
+        elif reference == "serialization_publication":
+            entry = SerializationEntry(project_id=first_id, chapter_id=chapter_id)
+            db.add(entry)
+            await db.flush()
+            edition = SerializationEdition(entry_id=entry.id, seq=1, chapter_no=1, title="标题",
+                                           content="定稿", fingerprint="a" * 64)
+            db.add(edition)
+            await db.flush()
+            foreign = SerializationPublication(project_id=second_id, edition_id=edition.id,
+                                               channel="签约平台", published_at=datetime.now(UTC))
         elif reference == "analysis":
             foreign = ChapterAnalysis(project_id=second_id, chapter_id=chapter_id, chapter_no=1, content_hash="a")
         elif reference in {"memory", "retrieval"}:

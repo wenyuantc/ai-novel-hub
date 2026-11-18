@@ -93,7 +93,7 @@ async def _seed(client, app) -> tuple[dict, list[int]]:
 async def test_v12_roundtrip_remaps_evidence_and_drops_runs(client, app):
     project, (first, second) = await _seed(client, app)
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (14, "0060")
+    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (15, "0064")
     tables = data["tables"]
     assert "consistency_runs" not in tables
     assert [row["chapter_id"] for row in tables["consistency_ledgers"]] == [first, second]
@@ -198,7 +198,7 @@ async def test_v11_backup_imports_with_empty_consistency_tables(client, app):
         imported = await _import(client, old)
         assert imported["preview"]["version"] == 11
         exported = await _backup(client, imported["project"]["id"])
-        assert exported["version"] == 14
+        assert exported["version"] == 15
         assert exported["tables"]["consistency_ledgers"] == [] == exported["tables"]["consistency_issues"]
         assert len(exported["tables"]["chapters"]) == 2
     # 旧版本不能夹带一致性检查资料。

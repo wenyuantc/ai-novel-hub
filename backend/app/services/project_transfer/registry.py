@@ -84,6 +84,12 @@ from app.models.planning import (
     SubplotCrossingParticipant,
     SubplotNode,
 )
+from app.models.serialization import (
+    SerializationEdition,
+    SerializationEntry,
+    SerializationGoal,
+    SerializationPublication,
+)
 from app.services.project_transfer import remap
 
 Option = Literal["versions", "snapshots", "generation_logs", "inspiration"]
@@ -307,6 +313,20 @@ RULES: tuple[TableRule, ...] = (
         # 单书导入不能继承旧书的生成占用或并发版本。
         exclude=("content_revision", "generation_claim_key", "generation_claim_task_key",
                  "generation_claim_prev_status"),
+    ),
+    TableRule("serialization_goals", SerializationGoal, _own(SerializationGoal), fill=_P, exclude=("revision",)),
+    TableRule(
+        "serialization_entries", SerializationEntry, _own(SerializationEntry), fill=_P,
+        fk={"chapter_id": "chapters"}, exclude=("revision",),
+    ),
+    TableRule(
+        "serialization_editions", SerializationEdition,
+        lambda pid: _in(SerializationEdition.entry_id, SerializationEntry, pid),
+        fk={"entry_id": "serialization_entries"}, json_plain=("blocks",),
+    ),
+    TableRule(
+        "serialization_publications", SerializationPublication, _own(SerializationPublication), fill=_P,
+        fk={"edition_id": "serialization_editions"}, exclude=("actor_id", "request_id", "payload_hash"),
     ),
     TableRule(
         "scenes", Scene, lambda pid: _in(Scene.chapter_id, Chapter, pid),

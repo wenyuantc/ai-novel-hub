@@ -2,7 +2,7 @@
 
 from itertools import batched
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import ColumnElement, and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -29,6 +29,9 @@ from app.models import (
     SceneReviewAnalysisReceipt,
     SceneReviewProposal,
     SceneSection,
+    SerializationEdition,
+    SerializationEntry,
+    SerializationPublication,
     SettingProgression,
     SettingTimeline,
     StoryMemory,
@@ -57,6 +60,7 @@ _REVIEWED_FKS = frozenset({
     ("chapters", "scene_review_analysis_receipts", "chapter_id", "id", "CASCADE"),
     ("chapters", "scene_review_proposals", "chapter_id", "id", "CASCADE"),
     ("chapters", "scenes", "chapter_id", "id", "CASCADE"),
+    ("chapters", "serialization_entries", "chapter_id", "id", "SET NULL"),
     ("chapters", "setting_progressions", "chapter_id", "id", "SET NULL"),
     ("chapters", "story_memories", "chapter_id", "id", "SET NULL"),
     ("chapters", "tasks", "chapter_id", "id", "SET NULL"),
@@ -127,6 +131,11 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                                                GenerationLog.project_id.is_distinct_from(project_id)),
                 select(AiUsageCall.id).where(AiUsageCall.chapter_id.in_(batch),
                                              AiUsageCall.project_id.is_distinct_from(project_id)),
+                select(SerializationEntry.id).where(SerializationEntry.chapter_id.in_(batch),
+                                                    SerializationEntry.project_id.is_distinct_from(project_id)),
+                select(SerializationPublication.id).join(SerializationEdition).join(SerializationEntry)
+                .where(SerializationEntry.chapter_id.in_(batch),
+                       SerializationPublication.project_id.is_distinct_from(project_id)),
                 select(Task.id).where(Task.chapter_id.in_(batch), Task.project_id.is_distinct_from(project_id)),
                 select(ConsistencyLedger.id).where(ConsistencyLedger.chapter_id.in_(batch),
                                                    ConsistencyLedger.project_id.is_distinct_from(project_id)),
@@ -197,3 +206,45 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                 if (row.chapter_project != project_id or row.task_project != project_id
                         or (row.analysis_id is not None and row.analysis_project != project_id)):
                     raise _invalid()
+
+
+def has_serialization_work() -> ColumnElement[bool]:
+    """智能体无法撤销的人工排程、校对状态或定稿。默认空条目没有作者内容。"""
+    editions = select(SerializationEdition.id).where(SerializationEdition.entry_id == SerializationEntry.id)
+    return or_(SerializationEntry.stage != "revision", SerializationEntry.planned_date.is_not(None), editions.exists())
+
+
+async def check_agent_serialization_removal(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:
+    for batch in batched(chapter_ids, 500):
+        work = select(SerializationEntry.id).where(
+            SerializationEntry.project_id == project_id, SerializationEntry.chapter_id.in_(batch),
+            has_serialization_work(),
+        )
+        if await db.scalar(work.limit(1)) is not None:
+            raise ConflictError("待移除的章节已有连载排期、编辑状态或定稿，请在工作台核对后手动处理")
+
+
+async def detach_serialization_chapters(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:
+    """删章事务中清理未发布定稿和排期。已发布稿继续通过永久条目关联其原始发布记录。"""
+    for batch in batched(chapter_ids, 500):
+        entries = select(SerializationEntry.id).where(
+            SerializationEntry.project_id == project_id, SerializationEntry.chapter_id.in_(batch),
+        )
+        has_publication = select(SerializationPublication.id).where(
+            SerializationPublication.edition_id == SerializationEdition.id,
+        ).exists()
+        await db.execute(delete(SerializationEdition).where(
+            SerializationEdition.entry_id.in_(entries), ~has_publication,
+        ).execution_options(synchronize_session=False))
+        has_edition = select(SerializationEdition.id).where(
+            SerializationEdition.entry_id == SerializationEntry.id,
+        ).exists()
+        await db.execute(delete(SerializationEntry).where(
+            SerializationEntry.project_id == project_id, SerializationEntry.chapter_id.in_(batch), ~has_edition,
+        ).execution_options(synchronize_session=False))
+        await db.execute(
+            update(SerializationEntry)
+            .where(SerializationEntry.project_id == project_id, SerializationEntry.chapter_id.in_(batch))
+            .values(planned_date=None, chapter_id=None, revision=SerializationEntry.revision + 1)
+            .execution_options(synchronize_session=False)
+        )

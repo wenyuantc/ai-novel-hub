@@ -47,6 +47,7 @@ from app.api.v1 import (
     relationships,
     scene_ai,
     scenes,
+    serialization,
     series,
     setting_categories,
     setting_fields,
@@ -102,6 +103,7 @@ api_router.include_router(careers.router)
 api_router.include_router(foreshadows.router)
 api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
+api_router.include_router(serialization.router)
 api_router.include_router(scene_ai.router)
 api_router.include_router(batch.router)
 api_router.include_router(consistency.router)

@@ -53,6 +53,16 @@ def _chat_nodes(model: DocumentModel, conversations: list[dict]) -> None:
             model.nodes.append(DocumentNode("text", message["content"], source="聊天"))
 
 
+async def render_document_attachment(model: DocumentModel, fmt: str, basename: str) -> ExportFile:
+    """渲染调用方已冻结的值对象。调用方负责在交付前复核本次下载权限。"""
+    base = _UNSAFE_FILENAME.sub("_", basename).strip() or "novel"
+    if fmt == "docx":
+        content = await asyncio.to_thread(render_docx, model)
+    else:
+        content = await asyncio.to_thread(render_text, model, markdown=fmt == "md")
+    return ExportFile(f"{base}.{fmt}", content, _MIME[fmt], model.warnings)
+
+
 async def export_document(
     db: AsyncSession, user_id: int, project_id: int, request: DocumentExportRequest,
 ) -> ExportFile:
@@ -79,13 +89,9 @@ async def export_document(
     _material_nodes(model, "设定", settings)
     _chat_nodes(model, capture.conversations)
     _material_nodes(model, "笔记", notes)
-    base = _UNSAFE_FILENAME.sub("_", title).strip() or "novel"
 
     # 完成读取后释放快照，避免长时间持有数据库事务。
     await db.rollback()
-    if request.format == "docx":
-        content = await asyncio.to_thread(render_docx, model)
-    else:
-        content = await asyncio.to_thread(render_text, model, markdown=request.format == "md")
+    attachment = await render_document_attachment(model, request.format, title)
     await verify_document_access(db, capture)
-    return ExportFile(f"{base}.{request.format}", content, _MIME[request.format], model.warnings)
+    return attachment

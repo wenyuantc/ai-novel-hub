@@ -552,7 +552,8 @@ class PlanArgs(PlansSync):
 
 async def update_plans(ctx: ToolCtx, args: PlanArgs):
     return await plan_service.sync_plans(
-        ctx.db, ctx.user_id, ctx.project_id, args.outline_id, PlansSync(plans=args.plans), **collaborative(ctx),
+        ctx.db, ctx.user_id, ctx.project_id, args.outline_id, PlansSync(plans=args.plans),
+        agent_undoable=True, **collaborative(ctx),
     )
 
 

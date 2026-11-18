@@ -33,6 +33,11 @@ from app.schemas.chapter import ChapterBrief
 from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
 from app.services import authorization_service as authz
 from app.services import memory_service, outline_snapshot_service, planning_lifecycle, setting_progression_service
+from app.services.chapter_delete_guard import (
+    check_agent_serialization_removal,
+    detach_serialization_chapters,
+    ensure_chapter_delete_isolation,
+)
 from app.services.chapter_numbering import preflight_chapter_shift, shift_chapter_numbers
 from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
@@ -211,6 +216,7 @@ async def chapter_plan_out(db: AsyncSession, user_id: int, project_id: int, chap
 
 async def sync_plans(
     db: AsyncSession, user_id: int, project_id: int, outline_id: int, data: PlansSync, *, manual: bool = False,
+    agent_undoable: bool = False,
 ) -> list[PlanOut]:
     with db.no_autoflush:
         gated = False
@@ -284,9 +290,9 @@ async def sync_plans(
             elif ch.status == "generating":
                 raise ConflictError("该章节正在生成中，请稍候再试")
         if removed_chapter_ids:
-            from app.services.chapter_delete_guard import ensure_chapter_delete_isolation
-
             await ensure_chapter_delete_isolation(db, project_id, removed_chapter_ids)
+            if agent_undoable:
+                await check_agent_serialization_removal(db, project_id, removed_chapter_ids)
             await memory_service.validate_chapters_deleted(db, removed_chapter_ids)
 
         # 倒序删除时先平移较大的章节；最后一章若保留占位则不平移。
@@ -313,6 +319,7 @@ async def sync_plans(
         await db.flush()
         # 空章节随细纲删除：从后往前删，其后的章节号整体 -1
         await memory_service.on_chapters_deleted(db, [c.id for c in ordered])
+        await detach_serialization_chapters(db, project_id, removed_chapter_ids)
         for i, ch in enumerate(ordered):
             no = ch.chapter_no
             await db.delete(ch)

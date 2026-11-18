@@ -28,12 +28,13 @@ from app.services import authorization_service, personal_projection, project_lif
 from app.services.project_service import get_owned_project
 from app.services.project_transfer import thumbnails
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
+from app.services.project_transfer.serialization import SerializationState, serialization_state
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 14
+VERSION = 15
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0060"
+APP_SCHEMA = "0064"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -54,6 +55,7 @@ class ExportPlan:
     ai_revision: int
     planning_revision: int
     content_revisions: dict[int, int]
+    serialization_state: SerializationState
 
     @property
     def filename(self) -> str:
@@ -80,7 +82,8 @@ async def prepare_export(db: AsyncSession, user_id: int, project_id: int, option
                       actor=authorization_service.actor_snapshot(db, user_id),
                       image_versions=await thumbnails.versions(db, project.id),
                       ai_revision=project.ai_visibility_revision, planning_revision=project.planning_revision,
-                      content_revisions=content_revisions)
+                      content_revisions=content_revisions,
+                      serialization_state=await serialization_state(db, project.id))
 
 
 def _value(v: Any) -> Any:
@@ -246,7 +249,7 @@ async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> Asy
             yield row
         return
     key = table.c.id if rule.has_id else table.c.scene_id
-    rich_row = rule.table in {"scene_documents", "scene_sections", "revision_batch_scenes"}
+    rich_row = rule.table in {"scene_documents", "scene_sections", "revision_batch_scenes", "serialization_editions"}
     page_size = RICH_ROW_BATCH if rich_row else BATCH
     last = 0
     while True:
@@ -384,6 +387,8 @@ async def validate_export(db: AsyncSession, plan: ExportPlan, *, complete: bool 
     current_planning = await db.scalar(select(Project.planning_revision).where(Project.id == plan.project_id))
     if await thumbnails.versions(db, plan.project_id) != plan.image_versions:
         raise ConflictError("备份导出期间缩略图已变化，请重新导出", extra={"code": "thumbnail_changed"})
+    if await serialization_state(db, plan.project_id) != plan.serialization_state:
+        raise ConflictError("备份导出期间连载数据已变化，请重新导出", extra={"code": "serialization_changed"})
     if current_revisions != plan.content_revisions or current_planning != plan.planning_revision:
         raise ConflictError("备份导出期间章节或场景已变化，请重新导出", extra={"code": "scene_context_changed"})
 

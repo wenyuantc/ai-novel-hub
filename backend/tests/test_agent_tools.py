@@ -1,6 +1,7 @@
 """工具真实服务集成：预览回滚、项目边界、正文校验和任务白名单。"""
 
 from copy import deepcopy
+from datetime import date
 
 import pytest
 from sqlalchemy import delete, func, select
@@ -21,6 +22,8 @@ from app.models import (
     Project,
     Relationship,
     RelationshipType,
+    SerializationEdition,
+    SerializationEntry,
     SettingProgression,
     SettingTextField,
     SettingTimeline,
@@ -752,6 +755,39 @@ async def test_plans_and_chapter_meta(ctx):
     ch = await new_chapter(ctx)
     result, preview = await apply(ctx, "update_chapter_meta", {"id": ch.id, "title": "初遇"})
     assert result["title"] == "初遇" and preview["diff"]
+
+
+@pytest.mark.parametrize("kind", ["proofreading", "planned", "edition", "empty"])
+async def test_serialization_plan_tool_preserves_manual_work(ctx, client, kind):
+    outline, _ = await apply(ctx, "create_outline", {"title": "起程"})
+    args = {"outline_id": outline["id"], "plans": [{"title": "空章"}]}
+    await apply(ctx, "update_chapter_plans", args)
+    built = await client.post(f"/api/v1/projects/{ctx.project_id}/outlines/{outline['id']}/plans/build")
+    assert built.status_code == 200, built.text
+    chapter_id = built.json()["chapters"][0]["id"]
+    stage = "proofreading" if kind == "proofreading" else "revision"
+    entry = SerializationEntry(project_id=ctx.project_id, chapter_id=chapter_id, stage=stage,
+                               planned_date=date(2026, 11, 18) if kind == "planned" else None)
+    ctx.db.add(entry)
+    await ctx.db.flush()
+    if kind == "edition":
+        ctx.db.add(SerializationEdition(entry_id=entry.id, seq=1, chapter_no=1, title="原稿",
+                                       content="已撤下的旧定稿", fingerprint="a" * 64))
+    await ctx.db.commit()
+    entry_id = entry.id
+    args["plans"] = []
+    tool = get_tool("update_chapter_plans")
+    preview = await tool.preview(ctx, args)
+    result = await tool.execute(ctx, args)
+    await ctx.db.commit()
+    if kind != "empty":
+        assert "连载" in str(preview["error"]) and "连载" in str(result["error"])
+        assert await ctx.db.get(Chapter, chapter_id) is not None
+        assert await ctx.db.scalar(select(SerializationEntry.stage).where(SerializationEntry.id == entry_id)) == stage
+    else:
+        assert "error" not in preview and "error" not in result
+        assert await ctx.db.scalar(select(Chapter.id).where(Chapter.id == chapter_id)) is None
+        assert await ctx.db.scalar(select(SerializationEntry.id).where(SerializationEntry.id == entry_id)) is None
 
 
 async def test_chapter_title_preview_execution_and_undo_preserve_monotonic_revision(ctx):
