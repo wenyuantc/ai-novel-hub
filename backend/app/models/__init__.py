@@ -4,6 +4,7 @@ from app.models.api_key import ApiKey, ApiKeyProject
 from app.models.audit import AdminAuditLog
 from app.models.backup import BackupArtifact, BackupRun, BackupSettings
 from app.models.base import Base
+from app.models.batch_revision import RevisionBatch, RevisionBatchScene
 from app.models.collaboration import CollaborationAuditEvent, ProjectCollaborator, SeriesCollaborator
 from app.models.consistency import ConsistencyImpact, ConsistencyIssue, ConsistencyLedger, ConsistencyRun
 from app.models.dashboard import DashboardDailySnapshot, DashboardTracking, TaskStatistic
@@ -165,6 +166,8 @@ __all__ = [
     "Relationship",
     "RelationshipHistory",
     "RelationshipType",
+    "RevisionBatch",
+    "RevisionBatchScene",
     "RetrievalChunk",
     "Scene",
     "SceneDocumentMeta",

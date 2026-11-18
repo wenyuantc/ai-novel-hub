@@ -145,6 +145,7 @@ def create_app(
     # 预览版本只使用域分离的派生密钥；会话不保存 JWT 原密钥。
     app.state.sessionmaker.configure(info={
         **app.state.sessionmaker.kw.get("info", {}),
+        "book_search_hmac_key": hmac.digest(settings.jwt_secret.encode(), b"ainovel/book-search/v1", "sha256"),
         "agent_view_hmac_key": hmac.digest(settings.jwt_secret.encode(), b"ainovel/agent-view-key/v1", "sha256"),
     })
     app.state.cipher = SecretCipher(settings.encryption_key)

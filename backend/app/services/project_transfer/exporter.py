@@ -31,9 +31,9 @@ from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRul
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 13
+VERSION = 14
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0059"
+APP_SCHEMA = "0060"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -246,7 +246,8 @@ async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> Asy
             yield row
         return
     key = table.c.id if rule.has_id else table.c.scene_id
-    page_size = RICH_ROW_BATCH if rule.table in {"scene_documents", "scene_sections"} else BATCH
+    rich_row = rule.table in {"scene_documents", "scene_sections", "revision_batch_scenes"}
+    page_size = RICH_ROW_BATCH if rich_row else BATCH
     last = 0
     while True:
         await _assert_export_active(db, plan)
@@ -348,6 +349,10 @@ async def _stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: E
                     exported_log_ids.add(row["id"])
                 elif rule.table == "chapter_versions" and data["generation_log_id"] not in exported_log_ids:
                     data["generation_log_id"] = None
+                elif rule.table == "revision_batch_scenes":
+                    cid = row["chapter_id"]
+                    data["matches_revision"] = (cid in plan.content_revisions and row["scene_id"] is not None
+                                                and row["applied_revision"] == plan.content_revisions[cid])
                 if rule.table == "chapters":
                     data["style_ref"] = refs.get(row["style_id"]) if row["style_id"] is not None else None
                 elif rule.table == "relationship_types":

@@ -59,7 +59,7 @@ async def test_v7_scenes_raw_planning_history_and_retired_ids_roundtrip(app, cli
                                   value="夜访后", anchor_kind="scene", scene_id=second["id"], boundary="end"))
         await db.commit()
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (13, "0059")
+    assert (data["version"], data["app_schema"]) == (14, "0060")
     assert "content_revision" not in data["tables"]["chapters"][0]
     imported = await _import(client, data)
     new_project_id = imported["project"]["id"]

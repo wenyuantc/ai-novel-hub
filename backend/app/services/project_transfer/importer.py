@@ -71,6 +71,7 @@ from app.services import (
     setting_progression_service,
 )
 from app.services.project_transfer import remap
+from app.services.project_transfer.batch_revisions import REVISION_TABLES, validate_revision_tables
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
@@ -123,6 +124,8 @@ TABLE_LABELS: dict[str, str] = {
     "foreshadow_history": "伏笔历史",
     "generation_logs": "生成记录",
     "chapter_versions": "章节版本",
+    "revision_batches": "批量修订记录",
+    "revision_batch_scenes": "修订场景明细",
     "chapter_analyses": "章节分析",
     "analysis_changes": "分析回写条目",
     "setting_timelines": "设定时间线",
@@ -564,6 +567,9 @@ def _migrate_v12_to_v13(data: dict[str, Any]) -> dict[str, Any]:
 
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
+    if version < 14 and isinstance(tables := data.get("tables"), dict):
+        if any(table in tables and tables[table] != [] for table in REVISION_TABLES):
+            raise BadRequestError("旧版备份不支持批量修订历史，请使用原始版本文件")
     if version < 13:
         _reject_future_impact_data(data)
     if version < 12:
@@ -588,6 +594,7 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         10: _migrate_v10_to_v11,
         11: _migrate_v11_to_v12,
         12: _migrate_v12_to_v13,
+        13: lambda value: value,  # v14 只增加可选版本历史表，旧备份缺省为空。
     }
     while version < VERSION:
         data = steps[version](data)
@@ -1267,6 +1274,12 @@ def parse_backup(raw: bytes) -> Backup:
     tables = data.get("tables")
     if not isinstance(tables, dict):
         raise BadRequestError("备份文件格式不正确：缺少 tables")
+    options = data.get("options")
+    has_version_history = isinstance(options, dict) and options.get("versions") is True
+    if version >= 14 and (has_version_history or any(table in tables for table in REVISION_TABLES)):
+        for table in REVISION_TABLES:
+            if not isinstance(tables.get(table), list):
+                errors.add(f"备份缺少批量修订历史表 {table}")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
                   *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes",
                   "scene_documents", "scene_sections", "scene_markers"):
@@ -1323,7 +1336,9 @@ def parse_backup(raw: bytes) -> Backup:
     errors.raise_if_any()
     validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
-    validate_rich_tables(backup.tables, errors.add)
+    documents = validate_rich_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    validate_revision_tables(backup.tables, documents, errors.add)
     errors.raise_if_any()
     _check_consistency_data(backup, errors)
     errors.raise_if_any()
@@ -1676,6 +1691,9 @@ class _Importer:
         elif rule.table == "kb_documents":
             values["status"] = "ready_keyword_only"
             values["chunk_count"] = 0
+        elif rule.table == "revision_batch_scenes":
+            # 章节在新作品的初始版本为 0；历史冲突用永不与版本号相等的 NULL 保存。
+            values["applied_revision"] = 0 if row["matches_revision"] else None
 
     async def _table(self, rule: TableRule, rows: list[dict[str, Any]]) -> None:
         if rule.table == "outline_snapshots":

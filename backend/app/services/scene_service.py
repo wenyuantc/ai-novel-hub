@@ -259,7 +259,7 @@ async def replace_legacy_content(
     await replace_scene_content(db, chapter, scene, content, expected_revision=expected_revision)
 
 
-def _range_target(ranges: list[SceneRange], start: int, end: int) -> tuple[SceneRange | None, str | None]:
+def range_target(ranges: list[SceneRange], start: int, end: int) -> tuple[SceneRange | None, str | None]:
     targets = [item for item in ranges if item.start <= start <= end <= item.end]
     # 空光标恰在多个场景共享的切点时没有唯一归属。
     if len(targets) == 1:
@@ -277,7 +277,7 @@ async def resolve_chapter_range(
     content, ranges = project_scenes(scenes)
     if not 0 <= start <= end <= len(content):
         raise BadRequestError("正文范围无效")
-    target, _ = _range_target(ranges, start, end)
+    target, _ = range_target(ranges, start, end)
     if target is None:
         raise ConflictError("该范围跨越场景或分隔，请明确选择一个场景", extra={"code": "scene_target_required"})
     return next(scene for scene in scenes if scene.id == target.scene_id), start - target.start, end - target.start
@@ -398,17 +398,23 @@ async def restore_snapshot(
 async def get_manual_write_chapter(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, *, visibility_write: bool = False,
 ) -> Chapter:
-    from app.services.generation_service import ensure_outside_batch
-
     chapter = await get_manual_chapter(
         db, user_id, project_id, chapter_id, "content.edit", for_update=True, visibility_write=visibility_write,
     )
+    await ensure_manual_write_available(db, chapter)
+    return chapter
+
+
+async def ensure_manual_write_available(db: AsyncSession, chapter: Chapter) -> None:
+    """调用方已持有作品编辑权限和章写锁。单章保存与跨章修订共用写入门禁。"""
+    from app.services.generation_service import ensure_outside_batch
+
     if chapter.status == "generating":
         raise ConflictError("该章节正在生成中，请等待完成后再编辑")
     await ensure_outside_batch(db, chapter)
-    if not await list_active_scenes(db, chapter.id):
+    active_scene = select(Scene.id).where(Scene.chapter_id == chapter.id, Scene.active.is_(True)).limit(1)
+    if await db.scalar(active_scene) is None:
         raise ConflictError("章节缺少活动场景，请检查创建或导入入口", extra={"code": "scene_invariant_error"})
-    return chapter
 
 
 async def _planning_revision(db: AsyncSession, project_id: int) -> int:
@@ -779,7 +785,7 @@ async def resolve_position(
             return result
         if not 0 <= start <= end <= len(content):
             raise BadRequestError("正文范围无效")
-        target, result.reason = _range_target(ranges, start, end)
+        target, result.reason = range_target(ranges, start, end)
         if target is not None:
             result.scene_id, result.start, result.end = target.scene_id, start - target.start, end - target.start
         return result

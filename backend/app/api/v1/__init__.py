@@ -17,6 +17,7 @@ from app.api.v1 import (
     auth,
     batch,
     book_imports,
+    book_search,
     cards,
     careers,
     chapter_versions,
@@ -118,5 +119,6 @@ api_router.include_router(mentions.router)
 api_router.include_router(notes.router)
 api_router.include_router(planning.router)
 api_router.include_router(book_imports.router)
+api_router.include_router(book_search.router)
 
 api_router.include_router(workshop.router)

@@ -21,6 +21,8 @@ from app.models import (
     Outline,
     PlanningUnit,
     RetrievalChunk,
+    RevisionBatch,
+    RevisionBatchScene,
     Scene,
     SceneMarker,
     SceneReviewAnalysisReceipt,
@@ -48,6 +50,7 @@ _REVIEWED_FKS = frozenset({
     ("chapters", "consistency_ledgers", "chapter_id", "id", "CASCADE"),
     ("chapters", "generation_logs", "chapter_id", "id", "SET NULL"),
     ("chapters", "planning_units", "chapter_id", "id", "SET NULL"),
+    ("chapters", "revision_batch_scenes", "chapter_id", "id", "SET NULL"),
     ("chapters", "scene_review_analysis_receipts", "chapter_id", "id", "CASCADE"),
     ("chapters", "scene_review_proposals", "chapter_id", "id", "CASCADE"),
     ("chapters", "scenes", "chapter_id", "id", "CASCADE"),
@@ -60,6 +63,7 @@ _REVIEWED_FKS = frozenset({
     ("scene_sections", "scene_markers", "section_id", "id", "CASCADE"),
     ("scene_sections", "scene_sections", "origin_section_id", "id", "SET NULL"),
     ("scenes", "planning_units", "scene_id", "id", "SET NULL"),
+    ("scenes", "revision_batch_scenes", "scene_id", "id", "SET NULL"),
     ("scenes", "scene_documents", "scene_id", "id", "CASCADE"),
     ("scenes", "scene_markers", "scene_id", "id", "CASCADE"),
     ("scenes", "scene_sections", "scene_id", "id", "CASCADE"),
@@ -123,6 +127,15 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                                                    ConsistencyLedger.project_id.is_distinct_from(project_id)),
                 select(ConsistencyImpact.id).where(ConsistencyImpact.chapter_id.in_(batch),
                                                    ConsistencyImpact.project_id.is_distinct_from(project_id)),
+                # 删章令本批次的章、景引用失效；不能借错配的外键改变另一作品的历史。
+                select(RevisionBatchScene.id)
+                .outerjoin(RevisionBatch, RevisionBatch.id == RevisionBatchScene.batch_id)
+                .outerjoin(Scene, Scene.id == RevisionBatchScene.scene_id)
+                .where(or_(RevisionBatchScene.chapter_id.in_(batch), RevisionBatchScene.scene_id.in_(scenes)),
+                       or_(RevisionBatch.project_id.is_distinct_from(project_id), and_(
+                           RevisionBatchScene.scene_id.is_not(None),
+                           Scene.chapter_id.is_distinct_from(RevisionBatchScene.chapter_id),
+                       ))),
                 select(ChapterAnalysis.id).where(ChapterAnalysis.chapter_id.in_(batch),
                                                  ChapterAnalysis.project_id.is_distinct_from(project_id)),
                 select(AnalysisChange.id).where(AnalysisChange.analysis_id.in_(analyses),

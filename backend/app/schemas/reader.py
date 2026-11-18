@@ -40,5 +40,6 @@ class ReaderBlock(BaseModel):
 
 class ReaderChapter(BaseModel):
     chapter: ChapterOut
+    content_hash: str
     # 无排版时不膨胀为逐行 JSON；阅读器沿用原纯文本渲染。
     blocks: list[ReaderBlock] | None

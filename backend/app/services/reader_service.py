@@ -61,6 +61,7 @@ async def toc(db: AsyncSession, user_id: int, project_id: int) -> list[TocItem]:
 async def chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: int) -> ReaderChapter:
     """一次读取正文和排版；不携带作者区块、标记或其他私有资料。"""
     from app.services.rich_document_render import load_chapter_projections
+    from app.services.scene_service import content_fingerprint
 
     await project_access.require_project(db, user_id, project_id, "content.read")
     projections = await load_chapter_projections(db, project_id, chapter_ids=[chapter_id])
@@ -68,4 +69,5 @@ async def chapter(db: AsyncSession, user_id: int, project_id: int, chapter_id: i
         raise NotFoundError("章节不存在")
     projection = projections[0]
     chapter = (await manual_chapter_views(db, user_id, project_id, [projection.chapter], full=True))[0]
-    return ReaderChapter(chapter=chapter, blocks=projection.blocks)
+    return ReaderChapter(chapter=chapter, content_hash=content_fingerprint(projection.chapter.content),
+                         blocks=projection.blocks)

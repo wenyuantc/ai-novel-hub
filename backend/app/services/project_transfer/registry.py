@@ -69,6 +69,7 @@ from app.models import (
     StoryMemory,
     WorldSetting,
 )
+from app.models.batch_revision import RevisionBatch, RevisionBatchScene
 from app.models.planning import (
     PlanningTag,
     PlanningUnit,
@@ -374,6 +375,18 @@ RULES: tuple[TableRule, ...] = (
         option="versions",
         fk={"chapter_id": "chapters", "generation_log_id": "generation_logs"},
         json_refs={"scene_snapshot": remap.scene_snapshot},
+    ),
+    TableRule(
+        "revision_batches", RevisionBatch, _own(RevisionBatch), option="versions", fill=_P,
+        # 导入的是作品历史，原操作者和去重凭据只属于原实例。
+        exclude=("actor_id", "request_id", "payload_hash"),
+    ),
+    TableRule(
+        "revision_batch_scenes", RevisionBatchScene,
+        lambda pid: _in(RevisionBatchScene.batch_id, RevisionBatch, pid), option="versions",
+        fk={"batch_id": "revision_batches", "chapter_id": "chapters", "scene_id": "scenes"},
+        # 新作品独立维护章修订号，文件只传当前版本是否仍匹配。
+        custom=("applied_revision",), json_plain=("before_document", "start_offsets"),
     ),
     TableRule(
         "chapter_analyses",

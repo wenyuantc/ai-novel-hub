@@ -1,5 +1,6 @@
 """正式正文投影、排版导出和作者资料隔离。"""
 
+import hashlib
 import io
 import random
 import re
@@ -58,6 +59,7 @@ async def test_reader_markdown_epub_share_format_without_author_material(client,
     assert reader.status_code == 200, reader.text
     body = reader.json()
     assert body["chapter"]["content"] == content
+    assert body["content_hash"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
     assert [block["kind"] for block in body["blocks"]] == [
         "heading", "paragraph", "bullet_list", "bullet_list", "ordered_list", "ordered_list", "blockquote",
         "paragraph",

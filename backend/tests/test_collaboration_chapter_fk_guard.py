@@ -19,6 +19,8 @@ from app.models import (
     Outline,
     PlanningUnit,
     RetrievalChunk,
+    RevisionBatch,
+    RevisionBatchScene,
     Scene,
     SceneMarker,
     SceneReviewAnalysisReceipt,
@@ -52,7 +54,7 @@ async def books(app, client):
 @pytest.mark.parametrize("reference", [
     "plan", "planning_chapter", "planning_scene", "log", "task", "analysis", "memory", "retrieval",
     "character", "progression", "analysis_change", "proposal", "receipt", "marker_origin", "section_origin",
-    "ledger",
+    "ledger", "revision_batch", "revision_scene",
 ])
 async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books, reference):
     user, first, second, chapters, scenes = books
@@ -119,6 +121,15 @@ async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books
         elif reference == "ledger":
             foreign = ConsistencyLedger(project_id=second_id, chapter_id=chapter_id, source_hash="a" * 64,
                                         text_hash="a" * 64, facts=[])
+        elif reference in {"revision_batch", "revision_scene"}:
+            batch = RevisionBatch(project_id=second_id if reference == "revision_batch" else first_id,
+                                  query="原词", replacement="新词", status="applied", chapter_count=1, hit_count=1)
+            db.add(batch)
+            await db.flush()
+            foreign = RevisionBatchScene(batch_id=batch.id, chapter_id=chapter_id,
+                                         scene_id=scenes[0] if reference == "revision_batch" else scenes[1],
+                                         chapter_slot=1, chapter_no_at_apply=1, chapter_title="正文",
+                                         applied_revision=0, before_document={}, start_offsets=[0], hit_count=1)
         elif reference == "marker_origin":
             source = SceneMarker(scene_id=scenes[0], logical_key=str(uuid4()), status="deleted", color="yellow")
             db.add(source)

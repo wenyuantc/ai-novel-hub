@@ -44,7 +44,7 @@ def _validate_lineage(rows: list[dict], field: str, label: str, error: Callable[
         done.update(chain)
 
 
-def validate_rich_tables(tables: dict[str, list[dict]], error: Callable[[str], None]) -> None:
+def validate_rich_tables(tables: dict[str, list[dict]], error: Callable[[str], None]) -> dict[int, SceneDocument]:
     scenes = {row["id"]: row for row in tables.get("scenes", [])}
     meta_by_scene: dict[int, dict] = {}
     for row in tables.get("scene_documents", []):
@@ -160,3 +160,4 @@ def validate_rich_tables(tables: dict[str, list[dict]], error: Callable[[str], N
             ])
         except ValueError as exc:
             error(f"章节 #{chapter_id} 的富文档结构无效：{exc}")
+    return documents
