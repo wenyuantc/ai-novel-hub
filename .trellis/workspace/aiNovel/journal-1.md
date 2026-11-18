@@ -1671,3 +1671,39 @@ TODOS 第 14 项：手动 AI 一致性检查与问题清单、两级修改影响
 ### Status
 
 [OK] **Completed**
+
+
+## Session 51: AI 用量与费用管理
+<!-- trellis-session: v=2 fp=b246b992e0842b05 -->
+
+**Date**: 2026-11-18
+**Task**: AI 用量与费用管理
+**Branch**: `codex/ai-usage-cost-management`
+
+### Summary
+
+完成并归档 TODOS.md 第 17 项。
+
+### Main Changes
+
+- 按每次发送记录模型用量与费用，支持缓存命中价和多个每日空闲时段。
+- 提供个人与作品预算、批量生成费用预估和管理员全站用量。
+- 应用迁移 0061 至 0063，降级时保护缓存费用和多时段配置及快照。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cbdd867` | feat(ai-usage): 记录模型用量并管理计费与预算 |
+| `6b14689` | feat(ai-usage): 增加费用视图和分时单价配置 |
+| `7f12e63` | docs(ai-usage): 记录定价规则、使用说明与验收 |
+
+### Testing
+
+- [OK] 后端全量 6900 项通过、19 项预期失败，Ruff 通过。
+- [OK] 前端全量 1789 项通过，lint、TypeScript 类型检查和构建通过。
+- [OK] SQLite 迁移专项 3 项通过。隔离 PostgreSQL 16 验证降级边界，隔离 Chrome 验证多时段配置、批量预估及重试计费。
+
+### Status
+
+[OK] **Completed**

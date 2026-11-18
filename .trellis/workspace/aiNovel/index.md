@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 50
+- **Total Sessions**: 51
 - **Last Active**: 2026-11-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1673 | Active |
+| `journal-1.md` | ~1709 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 51 | 2026-11-18 | AI 用量与费用管理 | `cbdd867`, `6b14689`, `7f12e63` | `codex/ai-usage-cost-management` |
 | 50 | 2026-11-18 | 全书搜索与批量修订 | `2e73db4`, `708aa7f`, `608a50e` | `codex/book-search-batch-revision` |
 | 49 | 2026-11-18 | 自动保存与异常草稿恢复 | `9ac487a6c7902661c9a1d371e47ae34b8e085f34`, `a6a097c1a8ba4910bd3b312f35d575967efd0a84`, `cff25abfeaf743ef79b0291e9a30f6a89653dd9b` | `codex/autosave-draft-recovery` |
 | 48 | 2026-11-17 | 全书一致性检查与修改影响追踪 | `7899de3` | `main` |
