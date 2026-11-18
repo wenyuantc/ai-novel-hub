@@ -13,7 +13,8 @@ from app.models import (
     User,
     WorldSetting,
 )
-from tests.helpers import create_project, register
+from app.services import scene_service
+from tests.helpers import chapter_title_save_body, create_project, register
 from tests.rbac_helpers import assign_roles, create_role
 
 
@@ -124,6 +125,9 @@ async def test_setting_context_preview_allows_readonly_manager_but_isolates_othe
     app, client, make_client, system_admin
 ):
     project_id, chapters, _ = await _seed_project(app, client)
+    async with app.state.sessionmaker() as db:
+        await scene_service.initialize_chapter(db, await db.get(Chapter, chapters[5]))
+        await db.commit()
     viewer = make_client()
     viewer_user = await register(viewer, "readonly")
     reading = await create_role(system_admin, "设定只读", ["projects.read"])
@@ -140,7 +144,9 @@ async def test_setting_context_preview_allows_readonly_manager_but_isolates_othe
     response = await viewer.get(url)
     assert response.status_code == 200, response.text
     assert "练气" in response.json()["text"]
-    update = await viewer.patch(f"/api/v1/projects/{project_id}/chapters/{chapters[5]}", json={"title": "越权"})
+    chapter_url = f"/api/v1/projects/{project_id}/chapters/{chapters[5]}"
+    rename = await chapter_title_save_body(viewer, chapter_url, "越权")
+    update = await viewer.patch(f"{chapter_url}/editor-title", json=rename)
     assert update.status_code == 403
     assert (await viewer.post(f"/api/v1/chapters/{chapters[5]}/generate")).status_code == 404
     assert (await outsider.get(url)).status_code == 404

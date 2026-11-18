@@ -7,7 +7,7 @@ from app.models import ConsistencyIssue, ConsistencyRun, Task
 from app.services.consistency import check
 from app.services.mentions.matcher import text_hash
 from tests.consistency_helpers import API, add_ledger, comparison, fact, new_run, seed
-from tests.helpers import create_ai_config, create_project, register, wait_task
+from tests.helpers import chapter_title_save_body, create_ai_config, create_project, register, wait_task
 
 A = "😀 林远的佩剑在山门前断成两截。"
 B = "林远拔出佩剑，一剑逼退来敌。"
@@ -210,7 +210,8 @@ async def test_renumber_and_content_writes_follow_current_chapter_state(app, cli
         await add_ledger(db, project["id"], chapters[2], [fact("1", B, "拔出佩剑")])
         await db.commit()
     url = f"{API}/{project['id']}/chapters/{chapters[2]['id']}"
-    moved = await client.patch(url, json={"chapter_no": 9, "title": "改名后"})
+    rename = await chapter_title_save_body(client, url, "改名后")
+    moved = await client.patch(url, json={**rename, "chapter_no": 9})
     assert moved.status_code == 200, moved.text
     body = (await client.get(f"{_base(project)}/issues/{ids['a']}")).json()
     assert [(item["chapter_no"], item["chapter_title"], item["stale"]) for item in body["evidence"]] == [

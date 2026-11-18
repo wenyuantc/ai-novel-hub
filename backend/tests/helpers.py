@@ -245,6 +245,19 @@ async def create_project(client: httpx.AsyncClient, **kw) -> dict:
     return resp.json()
 
 
+async def chapter_title_save_body(client: httpx.AsyncClient, chapter_url: str, title: str) -> dict:
+    response = await client.get(f"{chapter_url}/scenes")
+    assert response.status_code == 200, response.text
+    page = response.json()
+    scene = page["items"][0]
+    return {
+        "title": title,
+        "expected_title": scene["chapter_title"],
+        "expected_scene_id": scene["id"],
+        "expected_content_revision": page["content_revision"],
+    }
+
+
 async def mark_existing_settings(app, project_id: int) -> None:
     """将历史行为回归的测试档案标记为 0037 升级前已存在；新建默认另行验证。"""
     from sqlalchemy import update

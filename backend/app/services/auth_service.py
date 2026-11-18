@@ -32,7 +32,11 @@ async def create_user_uncommitted(db: AsyncSession, creds: Credentials, *, is_ad
     if exists is not None:
         raise ConflictError("用户名已存在")
     password_hash = await to_thread.run_sync(hash_password, creds.password)
-    user = User(username=creds.username, password_hash=password_hash, is_admin=is_admin, is_active=True)
+    created_at = _now_utc()
+    user = User(
+        username=creds.username, password_hash=password_hash, is_admin=is_admin, is_active=True,
+        created_at=created_at, updated_at=created_at,
+    )
     db.add(user)
     try:
         await db.flush()

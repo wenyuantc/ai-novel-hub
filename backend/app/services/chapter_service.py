@@ -38,6 +38,7 @@ from app.services.project_service import get_manageable_project, get_owned_proje
 _WS_RE = re.compile(r"\s+")
 _CHAPTER_TASK_KINDS = frozenset({"chapter.generate", "chapter.polish", "chapter.revise", "chapter.analyze"})
 _UNFINISHED_TASK_STATUSES = ("queued", "running", "paused")
+_CHAPTER_WRITE_CONDITIONS = {"expected_content_revision", "expected_scene_id", "expected_title"}
 
 
 def count_words(text: str) -> int:
@@ -336,9 +337,27 @@ async def create_from_outlines(
         return created
 
 
+async def _check_title_baseline(db: AsyncSession, chapter: Chapter, data: ChapterUpdate) -> None:
+    from app.services import scene_service
+
+    if data.expected_scene_id is None or data.expected_content_revision is None or data.expected_title is None:
+        raise BadRequestError("保存章节标题需要原始标题、场景和内容版本")
+    try:
+        await scene_service.require_scene(db, chapter, data.expected_scene_id)
+    except NotFoundError:
+        raise ConflictError("标题草稿对应的场景已变化，请核对后重试", extra={
+            "code": "editor_target_changed",
+        }) from None
+    await scene_service.check_revision(db, chapter, data.expected_content_revision)
+    if chapter.title != data.expected_title:
+        raise ConflictError("章节标题已被其他操作修改，请核对后重试", extra={"code": "stale_chapter_title"})
+
+
 async def update_chapter(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, data: ChapterUpdate, *, manual: bool = False,
 ) -> Chapter:
+    from app.services import scene_service
+
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
         if manual:
             chapter = await get_manual_chapter(db, user_id, project_id, chapter_id, "content.edit", for_update=True,
@@ -354,8 +373,8 @@ async def update_chapter(
             )
             project = await get_manageable_project(db, user_id, project_id, lock=True, permission="projects.edit")
         audit.target(chapter)
-        audit.track(chapter, data.model_fields_set - {"expected_content_revision"})
-        fields = data.model_fields_set
+        fields = data.model_fields_set - _CHAPTER_WRITE_CONDITIONS
+        audit.track(chapter, fields)
         if project.user_id != user_id:
             if "style_id" in fields:
                 raise ForbiddenError("管理他人项目时不能修改私有风格绑定")
@@ -368,6 +387,13 @@ async def update_chapter(
             and (data.content is not None or data.title is not None)
         ):
             raise ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")
+        if data.title is not None and (data.expected_title is not None or data.expected_scene_id is not None):
+            await _check_title_baseline(db, chapter, data)
+        original_revision = chapter.content_revision
+        title = data.title.strip() if data.title is not None else chapter.title
+        title_changed = title != chapter.title
+        if fields == {"title"} and not title_changed:
+            return chapter
         if chapter.status == "generating" and data.status is not None:
             from app.services import chapter_claim
 
@@ -414,22 +440,25 @@ async def update_chapter(
                 # 先 flush 让时间线按新的章节号排序；重算与原修改同一事务提交。
                 await db.flush()
                 await setting_progression_service.on_story_positions_changed(db, project_id)
-        if data.title is not None:
-            chapter.title = data.title.strip()
+        if title_changed:
+            chapter.title = title
         content_changed = data.content is not None and data.content != chapter.content
         if data.content is not None:
-            from app.services.scene_service import replace_legacy_content
-
             if content_changed and not data.content.strip():
                 await version_service.ensure_baseline(db, chapter, force=True)
-            await replace_legacy_content(db, chapter, data.content, expected_revision=data.expected_content_revision)
+            await scene_service.replace_legacy_content(
+                db, chapter, data.content, expected_revision=data.expected_content_revision,
+            )
+        if title_changed and chapter.content_revision == original_revision:
+            # 改回原名也必须消耗版本，迟到的旧标题请求不能重新满足写入条件。
+            await scene_service.touch_revision(db, chapter, original_revision)
         if data.status is not None:
             chapter.status = data.status
         if content_changed:
             # 手动保存：按 10 分钟窗口合并，与正文修改同一事务提交
             version = await version_service.record_manual(db, chapter)
             audit.version(version, project_id)
-        if fields.intersection({"outline_id", "chapter_no", "title"}):
+        if title_changed or fields.intersection({"outline_id", "chapter_no"}):
             await planning_lifecycle.bump_revision(db, project_id)
         await audit.commit(commit_versioned, flush_fn=version_service.flush_versioned)
         await db.refresh(chapter)

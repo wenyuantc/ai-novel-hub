@@ -1,7 +1,10 @@
+import re
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import Depends, Request, Response
+from fastapi import Depends, Header, Request, Response
+from pydantic import BeforeValidator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.providers import ProviderFactory
@@ -86,6 +89,36 @@ async def get_current_user(request: Request, db: DbDep, settings: SettingsDep) -
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def _parse_editor_actor_creation(value: str) -> datetime:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?", value):
+        raise ValueError("账号创建时间必须为 ISO 日期时间")
+    return datetime.fromisoformat(value)
+
+
+EditorActorCreatedAt = Annotated[datetime, BeforeValidator(_parse_editor_actor_creation)]
+
+
+async def get_editor_user(
+    user: CurrentUser,
+    db: DbDep,
+    expected_actor_id: Annotated[int | None, Header(alias="X-Editor-Actor-Id", ge=1, le=2_147_483_647)] = None,
+    expected_actor_created_at: Annotated[EditorActorCreatedAt | None, Header(alias="X-Editor-Actor-Created-At")] = None,
+) -> User:
+    """保存草稿的页面身份可能落后于其他标签页切换后的 Cookie。"""
+    authorization_service.check_editor_actor_identity(
+        user, expected_id=expected_actor_id, expected_created_at=expected_actor_created_at,
+    )
+    if expected_actor_created_at is not None:
+        # 保留页面身份至服务层已有的 User 写锁，避免锁前刚读取的账号身份被复用。
+        db.info["authenticated_actor"] = authorization_service.AuthenticatedActor(
+            user.id, user.token_version, editor_created_at=expected_actor_created_at,
+        )
+    return user
+
+
+EditorUser = Annotated[User, Depends(get_editor_user)]
 
 
 async def get_admin_user(user: CurrentUser, db: DbDep, response: Response) -> User:

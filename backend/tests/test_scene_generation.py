@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.ai.providers import AIProviderError
 from app.models import ChapterAnalysis, Task
-from tests.helpers import Gate, create_ai_config, parse_sse, run_task, task_params, wait_task
+from tests.helpers import Gate, chapter_title_save_body, create_ai_config, parse_sse, run_task, task_params, wait_task
 from tests.test_scene_context import _policy
 from tests.test_scene_planning import planning_batch, scene_setup
 from tests.test_scene_progressions import _scene_change, _timeline
@@ -590,7 +590,9 @@ async def test_scene_apply_requires_preview_log_and_rechecks_timeline_without_re
 async def test_long_chapter_title_keeps_scene_identity_and_style_id_stays_within_database_range(client, fake_llm):
     _, base, chapter, url, scenes = await scene_setup(client, count=1)
     await create_ai_config(client)
-    renamed = await client.patch(f"{base}/chapters/{chapter['id']}", json={"title": "章" * 200})
+    chapter_url = f"{base}/chapters/{chapter['id']}"
+    rename = await chapter_title_save_body(client, chapter_url, "章" * 200)
+    renamed = await client.patch(f"{chapter_url}/editor-title", json=rename)
     assert renamed.status_code == 200
     body = await _revisions(client, url)
     invalid = await client.post(f"{url}/{scenes[0]['id']}/generate", json={**body, "style": 10**50})

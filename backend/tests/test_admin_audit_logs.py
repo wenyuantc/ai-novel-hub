@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AdminAuditLog, Chapter, ChapterVersion, Project, User
 from app.services import admin_service, audit_service
 from app.services.audit_writer import AuditOperation, AuditOperationError
-from tests.helpers import create_project, register
+from tests.helpers import chapter_title_save_body, create_project, register
 
 URL = "/api/v1/admin/audit-logs"
 USERS = "/api/v1/admin/users"
@@ -721,6 +721,11 @@ async def test_version_unique_competition_remains_safe_409(admin, client, app, m
     p = await create_project(client)
     base = f"/api/v1/projects/{p['id']}/chapters"
     c = (await client.post(base, json={"title": "原名", "content": "原文"})).json()
+    chapter_url = f"{base}/{c['id']}"
+    data = (
+        await chapter_title_save_body(admin, chapter_url, "不得提交")
+        if phase == "business_flush" else {"content": "不得提交正文"}
+    )
     original = AsyncSession.flush
     once = False
 
@@ -738,8 +743,7 @@ async def test_version_unique_competition_remains_safe_409(admin, client, app, m
         return await original(db, objects)
 
     monkeypatch.setattr(AsyncSession, "flush", conflict)
-    data = {"title": "不得提交"} if phase == "business_flush" else {"content": "不得提交正文"}
-    response = await admin.patch(f"{base}/{c['id']}", json=data)
+    response = await admin.patch(chapter_url, json=data)
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == "正文同时被其他操作修改，请刷新后重试"
     event = (await rows(app))[-1]
@@ -747,6 +751,7 @@ async def test_version_unique_competition_remains_safe_409(admin, client, app, m
     async with app.state.sessionmaker() as db:
         chapter = await db.get(Chapter, c["id"])
         assert chapter.title == "原名" and chapter.content == "原文"
+        assert chapter.content_revision == c["content_revision"]
 
 
 async def test_audit_system_database_error_does_not_reach_raw_exception_logger(admin, client, app, monkeypatch, caplog):

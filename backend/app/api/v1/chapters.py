@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Response, status
 
-from app.core.deps import CurrentUser, DbDep, TaskEngineDep
+from app.core.deps import CurrentUser, DbDep, EditorUser, TaskEngineDep
 from app.schemas.chapter import (
     ChapterBrief,
     ChapterCreate,
+    ChapterEditorTitle,
     ChapterOut,
     ChaptersFromOutlines,
     ChapterUpdate,
     GenerateChapterRequest,
+    ManualChapterUpdate,
     PolishChapterRequest,
 )
 from app.schemas.progression import SettingContextOut, StoryPosition
@@ -88,9 +90,19 @@ async def get_setting_context(project_id: int, chapter_id: int, user: CurrentUse
 
 @router.patch("/projects/{project_id}/chapters/{chapter_id}", response_model=ChapterOut)
 async def update_chapter(
-    project_id: int, chapter_id: int, body: ChapterUpdate, user: CurrentUser, db: DbDep
+    project_id: int, chapter_id: int, body: ManualChapterUpdate, user: CurrentUser, db: DbDep
 ) -> ChapterOut:
     chapter = await svc.update_chapter(db, user.id, project_id, chapter_id, body, manual=True)
+    return (await svc.manual_chapter_views(db, user.id, project_id, [chapter], full=True))[0]
+
+
+@router.patch("/projects/{project_id}/chapters/{chapter_id}/editor-title", response_model=ChapterOut)
+async def save_editor_title(
+    project_id: int, chapter_id: int, body: ChapterEditorTitle, user: EditorUser, db: DbDep,
+) -> ChapterOut:
+    chapter = await svc.update_chapter(
+        db, user.id, project_id, chapter_id, ChapterUpdate(**body.model_dump()), manual=True,
+    )
     return (await svc.manual_chapter_views(db, user.id, project_id, [chapter], full=True))[0]
 
 

@@ -17,7 +17,7 @@
 - Scene：稳定自增 `id`、`chapter_id CASCADE`、`title`、`content`、`summary`、`sort >= 0`、
   `separator_before`、`active`、内部派生 `word_count`；活动行的 `(chapter_id, sort)` 部分唯一。
   退场不复用身份；SQLite 保留 AUTOINCREMENT 高水位。
-- `Chapter.content_revision >= 0`：正文、摘要、结构、本地规划修改推进；任务抢占／释放状态不推进。
+- `Chapter.content_revision >= 0`：章标题、正文、摘要、结构和本地规划的实际变更推进；任务抢占／释放状态不推进。
 - 只 flush 的内部原语（外层先鉴权和取写屏障，并拥有审计／版本／提交）：
 
 ```python
@@ -166,6 +166,21 @@ await validate_history_snapshot(db, project_id, chapter_id, snapshot, for_restor
 - 409 保留草稿和拟排序，展示最新内容／规划并由作者明确核对后更新版本再重试；不自动重放。
   排序先收齐同一版本的轻量目录，不能只提交当前分页 IDs。375px 提供目录抽屉及上／下移按钮。
 
+### 章节标题条件保存
+
+- `PATCH /projects/{project_id}/chapters/{chapter_id}/editor-title` 接受 `title`、`expected_title`、`expected_scene_id` 和 `expected_content_revision`，返回 `ChapterOut`。原章节 PATCH 发送非 null 的 `title` 时也必须携带相同条件；状态、风格和其他更新沿用各自条件。
+- 在原有人工权限和写锁内确认目标场景仍活动且属于该章，再核对版本和读取时的标题原值。先核对再判断同值，避免旧请求在服务器已是目标值时绕过校验。新标题按 `str.strip()` 保存，原标题原样比较。
+- 真正改名在同事务推进章内容版本和规划版本。纯标题变更沿用章更新审计；正文版本历史由正文变更驱动。目标相同且条件匹配时直接返回。标题和正文同一次提交共享一次内容版本推进，智能体改名及纯标题撤销同样消耗版本，避免 A→B→A 后迟到请求重新生效。
+- 章标题入口、场景 PATCH 与富文档 PUT 支持编辑器身份条件。当前前端同时发送 `X-Editor-Actor-Id` 和 `X-Editor-Actor-Created-At`，创建时间保留 `UserOut.created_at` 的原始微秒精度。服务器对本次已认证账号核对两项，并在写锁内的授权读取中再次校验创建时间，防止换号或 SQLite 数字 ID 复用。条件只约束草稿原作者，权限仍按原有认证与项目访问判断。
+
+### 章编辑器自动保存和恢复
+
+- `ChapterAutosave` 串行调度同一编辑器的标题和场景写入。已确认基线、冻结的请求快照及随后继续编辑的草稿分别维护。普通保存允许输入，自动范围为章标题和文档，手动模式另含场景标题与摘要。根据已确认写入推进版本，继后的编辑及其富文档证据保留。
+- IndexedDB 草稿以账号和作品身份查询，章标题也绑定原活动场景 ID。每个编辑实例分配独立写入者和草稿记录。`edit_seq` 记录有效输入，`record_seq` 另跟踪基线、请求及恢复阶段。只在事务完成后提示本地已保留。清理匹配草稿、写入者和记录版本，未同步手动字段、未知请求或恢复暂停保留记录。
+- 结果未知时比较服务器完整文档和预期版本。远端仍为请求基线时，旧请求仍可能提交，可以核对或按原条件显式重试原快照。确认远端已经提交该快照时只推进对应基线，版本有额外变化时等作者选择。不能把一次无变化读取当作旧请求已结束。
+- 恢复前核对真实账号、作品权限和原目标。恢复创建独立副本，先保留被替换的当前草稿。恢复到编辑区后暂停同步，作者明确保存或进一步编辑自动保存字段才允许提交。失效目标仅查看和导出，不能换绑到同号或同序目标。
+- AI、历史恢复和场景结构操作跨越保存与操作请求共享动作屏障。操作前等待保存并核对版本，所有权或目标变化使旧回执失效。安全比较须覆盖文档结构，现有映射规则无法证明可安全替换时保留导出入口。
+
 ## 4. 校验 / 错误矩阵
 
 | 条件 | 结果 |
@@ -175,6 +190,11 @@ await validate_history_snapshot(db, project_id, chapter_id, snapshot, for_restor
 | null PATCH、未知字段、重复 ID、非法拆分码点、非正数或超过DB int32的Scene ID／路径ID | 422；不写库 |
 | 排序漏景／跨章、不相邻合并 | 400 |
 | 内容版本过期 | 409 `stale_scene_revision`，含 current_revision |
+| 章节标题保存条件缺少／类型非法 | 422，不写入 |
+| 章标题保存的原场景已失效、原标题不匹配 | 分别返回 409 `editor_target_changed`、`stale_chapter_title` |
+| 编辑草稿账号或创建时间与本次请求身份不符 | 409 `editor_actor_changed`，保存操作不执行 |
+| 本地存储事务失败 | 明确提示保留失败；保留当前输入，已完成的旧本地记录仍可恢复 |
+| 草稿格式未知或原目标失效 | 不安装到其他目标；合法账号和作品访问通过后允许保留下载 |
 | 规划版本过期 | 409 `stale_planning_revision` |
 | 缺活动景或投影矛盾 | 409 `scene_invariant_error`，不在读取修复 |
 | 旧整段多景覆盖／跨景局部范围 | 409 `scene_target_required` |
@@ -196,6 +216,8 @@ await validate_history_snapshot(db, project_id, chapter_id, snapshot, for_restor
   将本景 end 的晋升带入本景 start，或为通过备份验证删除历史引用。
 - Good：同书历史本地角色及富文档身份可原样展示和恢复；待审核批量覆盖某章时阻止协作者删章。
 - Bad：先 flush 场景恢复再校验他书规划引用；把无法归属的任务／收据视为无关，或允许未知级联静默执行。
+- Good：请求保存正文 S 在途时，作者继续写出 D。S 的回执只确认自己的内容，余下 D 下次用已确认版本另存。
+- Bad：通过新读取覆盖草稿的版本条件，或用旧回执删除同章其他标签页的草稿。
 
 ## 6. 必需测试
 
@@ -213,6 +235,8 @@ await validate_history_snapshot(db, project_id, chapter_id, snapshot, for_restor
   401 个合法引用跨分批边界、合法历史恢复和独立 PG schema 验证。
 - `test_scene_generation.py`：实际 FakeLLM messages、五局部 emoji、有效 log／版本、
   不混旧前景、整章取消／失败／规划与时间线竞态、只改目标、重试身份及旧入口。
+- `test_chapter_title_save.py` 与 `test_agent_tools.py`：标题改回原值后拒绝迟到写入、场景锚点及编号复用、同值无副作用、撤销推进版本，两个合法编辑者更换会话仍拒绝提交旧账号草稿。
+- 前端 `chapterAutosave.test.ts`、`sceneRichDraftController.test.ts`、`editorDraftStorage.test.ts` 覆盖定时、一份在途快照、损失回执、富文档尾部事务和本地库事务边界。浏览器复验断网关闭后同一配置重开、双标签页冲突、权限变化及 AI 与恢复竞争。
 - `test_scenes_postgresql.py` 与 `test_scene_ai_postgresql.py`：真实 PG UUID schema，
   迁移、CAS／rank／级联及 AI 最终提交竞争；SQLite 不替代 PG。
 - 旧章、备份注册表／拓扑、Agent/effects、batch、reader/export/EPUB、mentions、权限全组必须回归。

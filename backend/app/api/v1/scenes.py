@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, status
 
-from app.core.deps import CurrentUser, DbDep
+from app.core.deps import CurrentUser, DbDep, EditorUser
 from app.schemas.progression import SettingContextOut
 from app.schemas.rich_document import (
     MarkerDeleteOut,
@@ -130,7 +130,7 @@ async def get_scene(project_id: PathId, chapter_id: PathId, scene_id: PathId, us
 
 @router.patch(f"{_BASE}/{{scene_id}}", response_model=SceneOut)
 async def update_scene(
-    project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneUpdate, user: CurrentUser, db: DbDep,
+    project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneUpdate, user: EditorUser, db: DbDep,
 ) -> SceneOut:
     return await svc.update_scene(db, user.id, project_id, chapter_id, scene_id, body)
 
@@ -168,7 +168,7 @@ async def get_document(
 
 @router.put(f"{_BASE}/{{scene_id}}/document", response_model=SceneDocumentOut)
 async def save_document(
-    project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneDocumentSave, user: CurrentUser, db: DbDep,
+    project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneDocumentSave, user: EditorUser, db: DbDep,
 ) -> SceneDocumentOut:
     return await rich_document_service.save_document(db, user.id, project_id, chapter_id, scene_id, body)
 

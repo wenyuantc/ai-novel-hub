@@ -13,6 +13,7 @@ from app.services import batch_service, generation_service
 from tests.helpers import (
     Gate,
     analysis_json,
+    chapter_title_save_body,
     create_ai_config,
     create_project,
     register,
@@ -468,7 +469,9 @@ async def test_range_lock_and_single_batch_per_project(app, client, fake_llm):
     resp = await _start(client, base, c4, c4, include_written=True)
     assert resp.status_code == 409
     # 手动编辑不受范围锁限制
-    assert (await client.patch(f"{base}/chapters/{c3['id']}", json={"title": "改名"})).status_code == 200
+    url = f"{base}/chapters/{c3['id']}"
+    rename = await chapter_title_save_body(client, url, "改名")
+    assert (await client.patch(f"{url}/editor-title", json=rename)).status_code == 200
     gate.release()
     # 人工维护被允许不代表在飞行的旧项目规划快照仍可提交；改名推进规划版本。
     assert (await wait_task(client, task_ref))["status"] == "failed"

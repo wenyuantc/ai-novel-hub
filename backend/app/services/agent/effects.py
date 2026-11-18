@@ -1384,11 +1384,16 @@ async def _restore_text(db: AsyncSession, project_id: int, effect: Effect) -> No
 
 
 async def _restore_scene_projections(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:
-    """旧删空章的恢复显式初始化；新结构/规划撤销推进当前内容代次，不倒灌旧值。"""
+    """初始化恢复的空章，推进撤销后受影响的内容版本。"""
     text_ids = {effect["pk"]["id"] for effect in effects if effect["table"] == "chapter_text"}
     chapter_ids = {effect["pk"]["id"] for effect in effects if effect["table"] == "chapters"
                    and effect["before"] is not None and effect["after"] is None}
     restored_ids = set(chapter_ids)
+    renamed_ids = {
+        effect["pk"]["id"] for effect in effects if effect["table"] == "chapters"
+        and effect["before"] is not None and effect["after"] is not None
+        and effect["before"].get("title") != effect["after"].get("title")
+    }
     for effect in effects:
         if effect["table"] == "scenes":
             chapter_ids.update(row["chapter_id"] for row in (effect["before"], effect["after"]) if row is not None)
@@ -1397,14 +1402,18 @@ async def _restore_scene_projections(db: AsyncSession, project_id: int, effects:
                          if row is not None and row.get("scene_id") is not None]
             if scene_ids:
                 chapter_ids.update(await db.scalars(select(Scene.chapter_id).where(Scene.id.in_(scene_ids))))
-    for chapter_id in sorted(chapter_ids - text_ids):
+    for chapter_id in sorted((chapter_ids | renamed_ids) - text_ids):
         chapter = await db.scalar(select(Chapter).where(
             Chapter.id == chapter_id, Chapter.project_id == project_id,
         ).execution_options(populate_existing=True))
         if chapter is not None:
-            if chapter_id in restored_ids and not await scene_service.list_active_scenes(db, chapter_id):
-                await scene_service.initialize_chapter(db, chapter)
-            await scene_service.refresh_projection(db, chapter)
+            if chapter_id in chapter_ids:
+                if chapter_id in restored_ids and not await scene_service.list_active_scenes(db, chapter_id):
+                    await scene_service.initialize_chapter(db, chapter)
+                await scene_service.refresh_projection(db, chapter)
+            else:
+                await scene_service.touch_revision(db, chapter)
+                await db.refresh(chapter, ["updated_at"])
 
 
 async def _guard_field_visibility_rebinding(db: AsyncSession, project_id: int, effects: list[Effect]) -> None:

@@ -1,7 +1,7 @@
 """操作权限事实、同快照投影和持到事务结束的管理写屏障。"""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, event, literal, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,6 +22,7 @@ class AuthorizationStorageError(AppError):
 class AuthenticatedActor:
     id: int
     token_version: int
+    editor_created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,22 @@ def actor_snapshot(db: AsyncSession, actor: User | int | AuthenticatedActor) -> 
     return actor_id if isinstance(actor, int) else AuthenticatedActor(actor.id, actor.token_version)
 
 
+def _assume_utc_if_naive(value: datetime) -> datetime:
+    # SQLite 按 UTC 保存时间但不返回时区，其他存储可能返回不同的等价 UTC 偏移表示。
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def check_editor_actor_identity(
+    current: User | AuthorizationSnapshot,
+    *, expected_id: int | None = None, expected_created_at: datetime | None = None,
+) -> None:
+    if (expected_id is not None and current.id != expected_id) or (
+        expected_created_at is not None
+        and _assume_utc_if_naive(current.created_at) != _assume_utc_if_naive(expected_created_at)
+    ):
+        raise ConflictError("当前登录账号已变化，请刷新后重新核对草稿", extra={"code": "editor_actor_changed"})
+
+
 async def require_authenticated(
     db: AsyncSession, actor: User | int | AuthenticatedActor, *, write: bool = False, targets: tuple[int, ...] = (),
 ) -> AuthorizationSnapshot:
@@ -235,6 +252,8 @@ async def require_authenticated(
         isinstance(original, AuthenticatedActor) and original.token_version != current.token_version
     ):
         raise UnauthorizedError("未登录或登录已过期")
+    if isinstance(original, AuthenticatedActor) and original.editor_created_at is not None:
+        check_editor_actor_identity(current, expected_created_at=original.editor_created_at)
     return current
 
 

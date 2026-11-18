@@ -6,10 +6,25 @@ from sqlalchemy import func, select
 
 from app.models import RetrievalChunk, StoryMemory
 from app.services import memory_service, retrieval_service
-from tests.helpers import analysis_json, create_ai_config, create_project, register, run_task, wait_task
+from tests.helpers import (
+    analysis_json,
+    chapter_title_save_body,
+    create_ai_config,
+    create_project,
+    register,
+    run_task,
+    wait_task,
+)
 
 MEM_HEADER = "【相关旧情节】"
 KB_HEADER = "【参考资料（来自知识库，仅供参考；与项目设定冲突时以设定为准）】"
+
+
+async def _rename_chapter(client, base, chapter, title):
+    url = f"{base}/chapters/{chapter['id']}"
+    rename = await chapter_title_save_body(client, url, title)
+    response = await client.patch(f"{url}/editor-title", json=rename)
+    assert response.status_code == 200, response.text
 
 
 @pytest.fixture(autouse=True)
@@ -263,7 +278,7 @@ async def test_recall_scope_pin_mute_and_position(client, fake_llm):
     # 钉住一条与查询无关的钩子
     await client.patch(f"{base}/memories/{items['龙宫夜宴的请柬']['id']}", json={"pinned": True})
 
-    await client.patch(f"{base}/chapters/{chs[4]['id']}", json={"title": "玉佩之谜"})
+    await _rename_chapter(client, base, chs[4], "玉佩之谜")
     prompt = await _generate(client, fake_llm, chs[4])
     assert MEM_HEADER in prompt
     block = prompt.split(MEM_HEADER + "\n", 1)[1].split("\n\n", 1)[0].splitlines()
@@ -318,7 +333,7 @@ async def test_pinned_first_and_budget(client, fake_llm):
     await client.patch(
         f"/api/v1/projects/{chs[0]['project_id']}/kb/settings", json={"memory_max_chars": 300, "memory_min_score": 0}
     )
-    await client.patch(f"{base}/chapters/{chs[4]['id']}", json={"title": "玉佩线索"})
+    await _rename_chapter(client, base, chs[4], "玉佩线索")
     prompt = await _generate(client, fake_llm, chs[4])
     block = prompt.split(MEM_HEADER + "\n", 1)[1].split("\n\n", 1)[0]
     lines = block.splitlines()
@@ -336,7 +351,7 @@ async def test_memory_and_kb_separate_blocks(client, fake_llm):
         files={"file": ("设定.md", "# 门派\n\n天剑宗位于北境雪山。".encode(), "text/markdown")},
     )
     await wait_task(client, resp.json()["task"])
-    await client.patch(f"{base}/chapters/{chs[3]['id']}", json={"title": "天剑宗"})
+    await _rename_chapter(client, base, chs[3], "天剑宗")
     prompt = await _generate(client, fake_llm, chs[3])
     assert KB_HEADER in prompt and MEM_HEADER in prompt
     kb_block = prompt.split(KB_HEADER + "\n", 1)[1].split("\n\n", 1)[0]
@@ -364,7 +379,7 @@ async def test_retrieval_error_does_not_block_generation(client, fake_llm, monke
         raise RuntimeError("索引损坏")
 
     monkeypatch.setattr(retrieval_service, "search", broken)
-    await client.patch(f"{base}/chapters/{chs[3]['id']}", json={"title": "天剑宗"})
+    await _rename_chapter(client, base, chs[3], "天剑宗")
     prompt = await _generate(client, fake_llm, chs[3])
     assert "参考资料（来自知识库" not in prompt
     # 记忆召回出错时整块不注入（包括钉住的），不出现空块

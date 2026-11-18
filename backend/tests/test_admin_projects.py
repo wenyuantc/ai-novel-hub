@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 
 from app.models import Chapter, Project, RetrievalChunk, Task, User
 from tests.cover_fixtures import PNG
-from tests.helpers import create_ai_config, create_project, register, wait_task
+from tests.helpers import chapter_title_save_body, create_ai_config, create_project, register, wait_task
 
 PROJECTS = "/api/v1/projects"
 ADMIN_PROJECTS = "/api/v1/admin/projects"
@@ -63,9 +63,9 @@ async def test_admin_edits_content_owner_sees_result_and_other_user_isolated(adm
     assert resp.json()["reading"] is None
     resp = await admin_client.patch(base, json={"title": "管理后书名", "status": "writing"})
     assert resp.status_code == 200 and resp.json()["owner"]["id"] == alice["id"]
-    resp = await admin_client.patch(
-        f"{base}/chapters/{chapter['id']}", json={"title": "新标题", "content": "甲 乙\n丙丁"}
-    )
+    chapter_url = f"{base}/chapters/{chapter['id']}"
+    rename = await chapter_title_save_body(admin_client, chapter_url, "新标题")
+    resp = await admin_client.patch(chapter_url, json={**rename, "content": "甲 乙\n丙丁"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["word_count"] == 4
     world = await admin_client.post(f"{base}/world", json={"title": "管理设定", "content": "新设定"})

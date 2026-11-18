@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.scene import ContentRevision, SceneId
 from app.schemas.skill import SkillInputValues, require_skill_for_inputs
 from app.schemas.style import StyleChoice
 
@@ -18,7 +19,9 @@ class ChapterCreate(BaseModel):
 
 
 class ChapterUpdate(BaseModel):
-    expected_content_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_content_revision: ContentRevision | None = None
+    expected_scene_id: SceneId | None = None
+    expected_title: str | None = Field(default=None, max_length=200, strict=True)
     outline_id: int | None = None
     # 本章写作风格覆盖；显式 null = 继承项目默认
     style_id: int | None = None
@@ -27,6 +30,25 @@ class ChapterUpdate(BaseModel):
     content: str | None = None
     # 不允许手动设为 generating；可用于把卡住的 generating 章节复位
     status: Literal["draft", "done"] | None = None
+
+
+class ManualChapterUpdate(ChapterUpdate):
+    @model_validator(mode="after")
+    def require_title_baseline(self) -> "ManualChapterUpdate":
+        if self.title is not None and (
+            self.expected_title is None or self.expected_scene_id is None or self.expected_content_revision is None
+        ):
+            raise ValueError("保存章节标题需要原始标题、场景和内容版本，请刷新编辑器后重试")
+        return self
+
+
+class ChapterEditorTitle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(max_length=200, strict=True)
+    expected_title: str = Field(max_length=200, strict=True)
+    expected_scene_id: SceneId
+    expected_content_revision: ContentRevision
 
 
 class ChaptersFromOutlines(BaseModel):

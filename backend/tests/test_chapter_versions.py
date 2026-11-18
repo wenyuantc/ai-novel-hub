@@ -8,6 +8,7 @@ from app.schemas.chapter import GenerateChapterRequest
 from app.services import generation_log_service, generation_service, scene_service, version_service
 from tests.helpers import (
     Gate,
+    chapter_title_save_body,
     create_ai_config,
     create_project,
     final_event,
@@ -72,7 +73,9 @@ async def test_manual_save_merges_within_window(client, monkeypatch):
 
     # 内容与最新版本相同：不写；清空在新场景合同下强制保留历史边界。
     await client.patch(url, json={"content": "三稿"})
-    await client.patch(url, json={"title": "改标题"})
+    rename = await chapter_title_save_body(client, url, "改标题")
+    renamed = await client.patch(f"{url}/editor-title", json=rename)
+    assert renamed.status_code == 200, renamed.text
     assert len(await _versions(client, url)) == 1
 
     # 超过 10 分钟：新建

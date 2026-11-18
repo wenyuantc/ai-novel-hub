@@ -754,6 +754,30 @@ async def test_plans_and_chapter_meta(ctx):
     assert result["title"] == "初遇" and preview["diff"]
 
 
+async def test_chapter_title_preview_execution_and_undo_preserve_monotonic_revision(ctx):
+    chapter = await new_chapter(ctx)
+    chapter_id, original_title, original_revision = chapter.id, chapter.title, chapter.content_revision
+    tool = get_tool("update_chapter_meta")
+    args = {"id": chapter_id, "title": "新章名"}
+    before = await effects.snapshot(ctx.db, ctx.project_id)
+    preview = await tool.preview(ctx, args)
+    assert "error" not in preview, preview
+    await ctx.db.refresh(chapter)
+    assert (chapter.title, chapter.content_revision) == (original_title, original_revision)
+
+    result = await tool.execute(ctx, args)
+    assert result["title"] == "新章名", result
+    await ctx.db.commit()
+    await ctx.db.refresh(chapter)
+    assert (chapter.title, chapter.content_revision) == ("新章名", original_revision + 1)
+
+    after = await effects.snapshot(ctx.db, ctx.project_id)
+    await effects.undo(ctx.db, ctx.project_id, effects.diff(before, after))
+    await ctx.db.commit()
+    await ctx.db.refresh(chapter)
+    assert (chapter.title, chapter.content_revision) == (original_title, original_revision + 2)
+
+
 async def test_read_tools_and_chapter_pagination(ctx):
     char = await new_character(ctx)
     org, _ = await apply(ctx, "create_organization", {"name": "天剑宗"})

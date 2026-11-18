@@ -14,7 +14,15 @@ from app.schemas.chapter import ChapterUpdate
 from app.services import ai_dispatch, chapter_service
 from app.services.ai_dispatch import VisibilityChangedError, guard_provider, read_visibility_stamp
 from tests.cover_fixtures import PNG
-from tests.helpers import Gate, create_ai_config, create_project, register, task_params, wait_task
+from tests.helpers import (
+    Gate,
+    chapter_title_save_body,
+    create_ai_config,
+    create_project,
+    register,
+    task_params,
+    wait_task,
+)
 from tests.rbac_helpers import assign_roles, create_role
 from tests.test_ai_visibility_dispatch import _collect, _server, _sse
 from tests.test_marker_lifecycle import create_stale_marker, digest
@@ -116,16 +124,19 @@ async def test_manual_writes_do_not_expand_internal_agent_or_trigger_owner_tasks
                 db, editor_user["id"], project["id"], chapter["id"], ChapterUpdate(title="内部调用"),
             )
 
-    assert (await viewer.patch(chapter_url, json={"title": "无权"})).status_code == 403
+    rename = await chapter_title_save_body(editor, chapter_url, "编辑后的章节")
+    assert (await viewer.patch(f"{chapter_url}/editor-title", json=rename)).status_code == 403
     assert (await viewer.post(f"{base}/chapters", json={"title": "无权"})).status_code == 403
     assert (await viewer.patch(scene_url, json={"expected_content_revision": 0, "title": "无权"})).status_code == 403
     assert (await viewer.patch(version_url, json={"starred": True})).status_code == 403
     assert (await viewer.put(f"{base}/cover", files={"file": ("cover.png", PNG)})).status_code == 403
     assert (await editor.patch(chapter_url, json={"style_id": None})).status_code == 403
     assert (await editor.patch(chapter_url, json={"style_id": project["default_style_id"]})).status_code == 403
-    changed = await editor.patch(chapter_url, json={"title": "编辑后的章节"})
+    changed = await editor.patch(f"{chapter_url}/editor-title", json=rename)
     assert changed.status_code == 200 and changed.json()["style_id"] is None
-    modified_scene = await editor.patch(scene_url, json={"expected_content_revision": 0, "title": "编辑场景"})
+    modified_scene = await editor.patch(scene_url, json={
+        "expected_content_revision": changed.json()["content_revision"], "title": "编辑场景",
+    })
     assert modified_scene.status_code == 200, modified_scene.text
     changed_content = await editor.patch(scene_url, json={
         "expected_content_revision": modified_scene.json()["content_revision"], "content": "协作编辑正文",
@@ -343,7 +354,12 @@ async def test_global_style_is_visible_and_cross_project_ids_are_rejected(app, c
     other_chapter = (await client.post(f"{other_base}/chapters", json={"title": "隔离章", "content": "私有"})).json()
     other_scene = (await client.get(f"{other_base}/chapters/{other_chapter['id']}/scenes")).json()["items"][0]
     assert (await viewer.get(f"{base}/chapters/{other_chapter['id']}")).status_code == 404
-    assert (await editor.patch(f"{base}/chapters/{other_chapter['id']}", json={"title": "越权"})).status_code == 404
+    rename = {
+        "title": "越权", "expected_title": other_chapter["title"], "expected_scene_id": other_scene["id"],
+        "expected_content_revision": other_chapter["content_revision"],
+    }
+    foreign_title_url = f"{base}/chapters/{other_chapter['id']}/editor-title"
+    assert (await editor.patch(foreign_title_url, json=rename)).status_code == 404
     assert (await viewer.get(f"{chapter_url}/scenes/{other_scene['id']}")).status_code == 404
     assert (await editor.patch(f"{chapter_url}/scenes/{other_scene['id']}", json={
         "expected_content_revision": 0, "title": "越权",
@@ -387,9 +403,11 @@ async def test_readonly_collaborator_with_admin_edit_retains_manual_permissions(
     (_, viewer_user, _, _, chapter, scene, base, chapter_url, viewer, _, _) = await _content_setup(client, make_client)
     role = await create_role(system_admin, "章节人工维护", ["projects.read", "projects.edit"])
     await assign_roles(system_admin, viewer_user["id"], [role["id"]])
-    assert (await viewer.patch(chapter_url, json={"title": "人工管理员"})).status_code == 200
+    rename = await chapter_title_save_body(viewer, chapter_url, "人工管理员")
+    renamed = await viewer.patch(f"{chapter_url}/editor-title", json=rename)
+    assert renamed.status_code == 200, renamed.text
     assert (await viewer.patch(f"{chapter_url}/scenes/{scene['id']}", json={
-        "expected_content_revision": chapter["content_revision"], "title": "人工管理场景",
+        "expected_content_revision": renamed.json()["content_revision"], "title": "人工管理场景",
     })).status_code == 200
     assert (await viewer.get(f"{base}/export?format=txt")).status_code == 200
     assert (await viewer.get(f"{base}/backup")).status_code == 404
