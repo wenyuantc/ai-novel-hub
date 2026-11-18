@@ -9,10 +9,12 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 import type { SceneDraftController } from './sceneDraftController'
 import { sceneDraftDirty } from './sceneDraftController'
 import { moveScene, sameSceneIds, sceneLabel } from './scenePresentation'
+import { runAfterSceneSave, type RunSavedSceneAction } from './sceneSavedAction'
 
 interface Props {
   projectId: number; chapterId: number; page: ScenePage | null; sceneId?: number; disabled: boolean
   controller: SceneDraftController; ensureSaved: () => Promise<boolean>; onChanged: () => void
+  runSavedAction?: RunSavedSceneAction
   onSelect: (id: number) => Promise<boolean>
   onDraftChange: (dirty: boolean) => void
   open?: boolean
@@ -20,7 +22,7 @@ interface Props {
 }
 interface OrderDraft { ids: number[]; revision: number; conflict: boolean; latest?: ScenePage }
 /** 章内轻量场景目录；拖动和上下移共用拟排序，冲突时保留原方案供核对。 */
-export default function SceneNavigator({ projectId, chapterId, page, sceneId, disabled, controller, ensureSaved, onChanged, onSelect, onDraftChange, open: openProp, onClose }: Props) {
+export default function SceneNavigator({ projectId, chapterId, page, sceneId, disabled, controller, ensureSaved, runSavedAction, onChanged, onSelect, onDraftChange, open: openProp, onClose }: Props) {
   const { message } = App.useApp()
   const { token } = theme.useToken()
   const { canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
@@ -39,24 +41,26 @@ export default function SceneNavigator({ projectId, chapterId, page, sceneId, di
     setOrder((old) => ({ ids: moveScene(old?.ids ?? page.items.map((item) => item.id), id, to), revision: old?.revision ?? page.content_revision!, conflict: old?.conflict ?? false, latest: old?.latest }))
   }
   const create = async () => {
-    if (!canEditNow() || working || disabled || !(await ensureSaved())) return
-    const originalScene = controller.getSnapshot().scene
-    if (originalScene?.id !== sceneId) return
-    const revision = originalScene?.content_revision
-    if (revision === undefined) return
+    if (!canEditNow() || working || disabled) return
     setWorking(true); setError('')
     try {
-      const added = await sceneApi.create(projectId, chapterId, { expected_content_revision: revision, title: '新场景', after_scene_id: sceneId })
-      if (!canEditNow()) return
-      const current = controller.getSnapshot()
-      if (current.scene?.id !== originalScene?.id || sceneDraftDirty(current)) {
-        await controller.load()
-        onChanged()
-        if (canReadNow() && current.scene?.id === originalScene?.id) message.warning('新场景已创建；创建期间输入的草稿已保留，请先核对最新版本再切换')
-        return
-      }
-      await controller.load(added.id, false)
-      setOrder(undefined); onChanged(); message.success('已创建独立场景')
+      await runAfterSceneSave(runSavedAction, ensureSaved, async () => {
+        const originalScene = controller.getSnapshot().scene
+        if (!originalScene || originalScene.id !== sceneId || !canEditNow()) return
+        const added = await sceneApi.create(projectId, chapterId, {
+          expected_content_revision: originalScene.content_revision, title: '新场景', after_scene_id: sceneId,
+        })
+        if (!canEditNow()) return
+        const current = controller.getSnapshot()
+        if (current.scene?.id !== originalScene.id || sceneDraftDirty(current)) {
+          await controller.load()
+          onChanged()
+          if (canReadNow() && current.scene?.id === originalScene.id) message.warning('新场景已创建，当前草稿仍待核对。')
+          return
+        }
+        await controller.load(added.id, false)
+        setOrder(undefined); onChanged(); message.success('已创建独立场景')
+      })
     } catch (err) { if (canEditNow()) setError(errorMessage(err)) }
     finally { if (canReadNow()) setWorking(false) }
   }
@@ -64,14 +68,17 @@ export default function SceneNavigator({ projectId, chapterId, page, sceneId, di
     if (!order || order.conflict || !canEditNow() || working || disabled) return
     // 未保存稿先保存，但不能偷偷使用已变更的排序版本；保存只改变正文时可沿用同一目录身份。
     const before = controller.getSnapshot().scene?.content_revision
-    if (!(await ensureSaved())) return
-    const revision = controller.getSnapshot().scene?.content_revision
-    const expected = before === order.revision && revision !== undefined ? revision : order.revision
     setWorking(true); setError('')
     try {
-      await sceneApi.reorder(projectId, chapterId, { expected_content_revision: expected, scene_ids: order.ids })
-      if (!canEditNow()) return
-      setOrder(undefined); await controller.load(); onChanged(); message.success('场景顺序已保存')
+      await runAfterSceneSave(runSavedAction, ensureSaved, async () => {
+        const current = controller.getSnapshot()
+        if (!canEditNow() || !current.scene || current.scene.id !== sceneId) return
+        const sameTargets = sameSceneIds(order.ids, current.page?.items.map((item) => item.id) ?? [])
+        const expected = before === order.revision && sameTargets ? current.scene.content_revision : order.revision
+        await sceneApi.reorder(projectId, chapterId, { expected_content_revision: expected, scene_ids: order.ids })
+        if (!canEditNow()) return
+        setOrder(undefined); await controller.load(); onChanged(); message.success('场景顺序已保存')
+      })
     } catch (err) {
       if (!canEditNow()) return
       setError(errorMessage(err))

@@ -1,5 +1,5 @@
 import type { JSONContent } from '@tiptap/core'
-import type { RichBlockStyle, RichDocument, RichFormatting, RichInlineStyle, RichSection } from '../../api/richDocument'
+import type { RichBlockStyle, RichDocument, RichFormatting, RichInlineStyle, RichMarker, RichSection } from '../../api/richDocument'
 import { UnsupportedRichDocument } from './richTextProjection'
 
 type Kind = 'paragraph' | RichBlockStyle['kind']
@@ -48,11 +48,13 @@ export function sameSectionDocument(a: RichDocument, b: RichDocument): boolean {
   const section = (item: RichSection) => ({ key: item.key, anchor: item.anchor, order: item.order, title: item.title,
     content: item.content, formatting: formatting(item.formatting), include_in_ai: item.include_in_ai })
   const order = (x: RichSection, y: RichSection) => x.anchor - y.anchor || x.order - y.order || x.key.localeCompare(y.key)
+  const markers = (document: RichDocument) => [...document.markers].sort((x, y) => x.key.localeCompare(y.key)).map((item: RichMarker) =>
+    [item.key, item.section_key, item.status, item.start, item.end, item.color, item.excerpt, item.excerpt_truncated, item.last_start,
+      item.draft_excerpt ?? null, item.draft_excerpt_truncated ?? false, item.draft_last_start ?? null])
   return a.content === b.content && JSON.stringify(formatting(a.formatting)) === JSON.stringify(formatting(b.formatting))
     && JSON.stringify([...a.sections].sort(order).map(section)) === JSON.stringify([...b.sections].sort(order).map(section))
     && JSON.stringify([...a.retired_section_keys].sort()) === JSON.stringify([...b.retired_section_keys].sort())
-    && JSON.stringify([...a.markers].sort((x, y) => x.key.localeCompare(y.key)))
-      === JSON.stringify([...b.markers].sort((x, y) => x.key.localeCompare(y.key)))
+    && JSON.stringify(markers(a)) === JSON.stringify(markers(b))
 }
 
 function makeTextBlocks(text: string, formatting: RichFormatting, sections: RichSection[]): JSONContent[] {

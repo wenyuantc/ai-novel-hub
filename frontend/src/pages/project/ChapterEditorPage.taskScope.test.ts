@@ -52,6 +52,9 @@ vi.mock('../../hooks/useElementWidth', () => ({ useElementWidth: () => [{ curren
 vi.mock('../../hooks/useHasAIConfig', () => ({ useHasAIConfig: () => true }))
 vi.mock('../../hooks/useAgentPageContext', () => ({ usePublishAgentContext: () => {} }))
 vi.mock('../../hooks/useProjectRefresh', () => ({ useProjectRefresh: () => {} }))
+vi.mock('../../components/editorDrafts/useChapterAutosave', async () => ({
+  useChapterAutosave: (await import('./ChapterEditorPage.testSupport')).autosavePageFixture,
+}))
 vi.mock('../../hooks/useChapterAnalysis', () => ({ useChapterAnalysis: () => ({ state: { latest_analysis_id: 5 }, latest: null, status: 'analyzed', running: false, refresh: view.refreshAnalysis, start: view.analyze }) }))
 vi.mock('../../hooks/useTaskStream', () => ({ useTaskStream: () => ({ running: false, task: null, text: '', error: null, follow: view.follow, detach: () => {} }) }))
 vi.mock('../../stores/project', () => ({ useProjectStore: (select: (state: unknown) => unknown) => select({ project: { auto_analyze: true, default_style: null }, refresh: view.refreshProject }) }))
@@ -103,7 +106,7 @@ beforeEach(() => {
   view.chapter = { id: 3, project_id: 1, outline_id: null, plan_id: null, style_id: null, chapter_no: 1, title: '章', status: 'draft', word_count: 10, content_revision: 1, content: '原整章正文', updated_at: '' }
   view.scene = scene(22)
   view.draft = '原场景正文'
-  view.controller = { getSnapshot: () => ({ scene: view.scene, draft: { content: view.draft } }), load: view.loadScene, change: view.changeScene }
+  view.controller = { getSnapshot: () => ({ scene: view.scene, draft: { content: view.draft } }), load: view.loadScene, change: view.changeScene, canAcknowledgeLatest: () => false }
   view.getChapter.mockResolvedValue({ ...view.chapter, content_revision: 2, content: '后台整章投影' })
   view.createTask.mockResolvedValue(task())
 })
@@ -165,7 +168,7 @@ describe('章节任务身份与终态', () => {
       ? { status, task: task(status), result: { chapter: { ...view.chapter, content: '后台整章稿，不能写入当前Scene' } } }
       : { status, task: task(status), detail: '已取消' })
     await vi.waitFor(() => expect(view.loadScene).toHaveBeenCalledExactlyOnceWith())
-    expect(view.getChapter).toHaveBeenCalledExactlyOnceWith(1, 3)
+    expect(view.getChapter).toHaveBeenCalledExactlyOnceWith(1, 3, expect.any(Function))
     expect(view.refreshAnalysis).toHaveBeenCalledTimes(status === 'succeeded' ? 1 : 0)
     expect(view.reloadSiblings).toHaveBeenCalledTimes(status === 'succeeded' ? 1 : 0)
     expect(view.refreshProject).toHaveBeenCalledTimes(status === 'succeeded' ? 1 : 0)

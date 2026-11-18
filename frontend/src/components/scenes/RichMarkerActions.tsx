@@ -66,7 +66,7 @@ export default function RichMarkerActions({ editor, readOnly }: { editor: Editor
     }
     editor.view.dispatch(closeHistory(editor.state.tr).setDocAttribute('markers', next).setMeta('rich-marker-intent', true))
     setSnapshot(null)
-    void message.success('标记已更新，请保存场景。')
+    void message.success('标记已更新。')
     editor.commands.focus()
   }
   return <>

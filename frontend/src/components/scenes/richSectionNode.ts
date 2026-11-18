@@ -136,6 +136,7 @@ export const AuthorSection = Node.create({
       const canEdit = () => !destroyed && editor.options.editable && view.editable
       // 人工管理他人作品时允许编辑区块，但不能调用作品所有者的 AI 能力。
       const canRewrite = () => canEdit() && view.dom.getAttribute('data-section-ai-enabled') !== 'false'
+      const canConvert = () => canEdit() && view.dom.getAttribute('data-section-convert-enabled') !== 'false'
       const locate = () => {
         if (destroyed) return null
         const pos = getPos()
@@ -187,8 +188,9 @@ export const AuthorSection = Node.create({
         nameInput.readOnly = !editable
         aiInput.disabled = !editable
         for (const control of editButtons) control.disabled = !editable
+        convert.disabled = !canConvert()
         rewrite.disabled = !canRewrite()
-        rewrite.title = editable && rewrite.disabled ? '仅作品所有者可以使用 AI 编辑。' : ''
+        rewrite.title = editable && rewrite.disabled ? '当前无法启动 AI 编辑。' : ''
         if (!editable && composing) {
           composing = false
           refreshNode()
@@ -290,7 +292,7 @@ export const AuthorSection = Node.create({
 
       const action = (element: HTMLButtonElement, name: SectionAction) => {
         element.addEventListener('click', () => {
-          if (!current() || (name === 'rewrite-selection' && !canRewrite())) return
+          if (!current() || (name === 'rewrite-selection' && !canRewrite()) || (name === 'convert' && !canConvert())) return
           dom.dispatchEvent(new CustomEvent('rich-section-action', {
             bubbles: true, detail: { action: name, key: initialNode.attrs.key },
           }))
@@ -306,7 +308,7 @@ export const AuthorSection = Node.create({
       refreshNode()
       refreshEditable()
       const editableObserver = new MutationObserver(refreshEditable)
-      editableObserver.observe(view.dom, { attributes: true, attributeFilter: ['contenteditable', 'data-section-ai-enabled'] })
+      editableObserver.observe(view.dom, { attributes: true, attributeFilter: ['contenteditable', 'data-section-ai-enabled', 'data-section-convert-enabled'] })
 
       return {
         dom,

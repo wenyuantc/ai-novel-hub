@@ -17,6 +17,7 @@ import StreamOutput from '../StreamOutput'
 import TextDiff from '../TextDiff'
 import { classifyRewriteApplyIssue, rewriteApplyBody, rewritePreviewProblem, type RewritePreviewTarget } from './RewritePanelModel'
 import { skillChoiceProblemText, type SkillRequestChoice } from '../../utils/skillInputs'
+import type { RunSavedAction } from '../editorDrafts/chapterAutosave'
 
 /** 单次选区上限（码点），与后端一致 */
 export const MAX_REWRITE_CHARS = 5000
@@ -42,6 +43,7 @@ interface Props {
   disabled: boolean
   /** 有未保存修改时先保存；失败返回 false */
   ensureSaved: () => Promise<boolean>
+  runSavedAction?: RunSavedAction
   /** 预览中（流式或待采纳）为 true：编辑器需把正文设为只读 */
   onLockChange: (locked: boolean) => void
   onApplied: (chapter: Chapter) => void
@@ -77,6 +79,7 @@ export default function RewritePanel({
   skill,
   disabled,
   ensureSaved,
+  runSavedAction,
   onLockChange,
   onApplied,
   sceneId,
@@ -166,9 +169,9 @@ export default function RewritePanel({
     if (!canStart || starting.current || !canUseAI || !canEditNow() || !authorizedForIdentity(pid, identity)) return
     const ticket = epoch.current
     starting.current = true
-    try {
-      // 先保存；若等待期间选区或草稿改变，不能把新正文误当成原选择发送。
-      if (!(await ensureSaved()) || ticket !== epoch.current || !canEditNow() || !authorizedForIdentity(pid, identity)) return
+    const start = async () => {
+      // 等待期间选区或草稿改变时，要求重新选择。
+      if (ticket !== epoch.current || !canEditNow() || !authorizedForIdentity(pid, identity)) return
       const current = latest.current
       if (current.content !== content || current.selection.start !== selection.start
           || current.selection.end !== selection.end || current.sceneId !== sceneId) {
@@ -186,6 +189,10 @@ export default function RewritePanel({
       const points = Array.from(content)
       await run({ chapterId, sceneId, request, original: points.slice(cpStart, cpEnd).join(''), identity,
         ...(sceneId !== undefined ? { revisions: versions!, before: points.slice(Math.max(0, cpStart - 200), cpStart).join('') } : {}) })
+    }
+    try {
+      if (runSavedAction) await runSavedAction(start)
+      else if (await ensureSaved()) await start()
     } catch (error) {
       if (ticket === epoch.current && authorizedForIdentity(pid, identity)) message.error(errorMessage(error))
     } finally {

@@ -134,6 +134,8 @@ export async function handleErrorResponse(path: string, resp: Response, generati
   throw new ApiError(resp.status, detail, body)
 }
 
+export interface EditorActorIdentity { id: number; createdAt: string }
+
 export interface RequestOptions {
   method?: 'GET' | 'HEAD' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   body?: unknown
@@ -141,17 +143,23 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** 可选的局部生命周期：失效后错误不能触发全局身份或作品权限副作用。 */
   isCurrent?: () => boolean
+  /** 草稿写入核对真实 Cookie 账号，避免其他标签页切换会话后以新账号提交旧稿。 */
+  editorActor?: EditorActorIdentity
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<Response> {
   const generation = requestGeneration
-  const { method = 'GET', body, query, signal, isCurrent } = options
+  const { method = 'GET', body, query, signal, isCurrent, editorActor } = options
   const projectFailure = captureProjectFailureForRequest(path, method)
   const onProjectFailure: CapturedProjectFailure | null = isCurrent ? {
     isCurrent: () => isCurrent() && !signal?.aborted && (projectFailure?.isCurrent() ?? true),
     refresh: () => projectFailure?.refresh(),
   } : projectFailure
   const headers: Record<string, string> = { Accept: 'application/json' }
+  if (editorActor) {
+    headers['X-Editor-Actor-Id'] = String(editorActor.id)
+    headers['X-Editor-Actor-Created-At'] = editorActor.createdAt
+  }
   let payload: string | FormData | undefined
   if (body instanceof FormData) {
     // multipart：不设 Content-Type，由浏览器带上 boundary

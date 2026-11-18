@@ -830,6 +830,16 @@ export interface ChapterUpdate {
   title?: string | null
   content?: string | null
   status?: 'draft' | 'done' | null
+  expected_title?: string
+  expected_scene_id?: number
+  expected_content_revision?: number
+}
+
+export interface ChapterTitleSave {
+  title: string
+  expected_title: string
+  expected_scene_id: number
+  expected_content_revision: number
 }
 
 export interface GenerateChapterRequest {

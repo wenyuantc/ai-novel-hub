@@ -1,16 +1,27 @@
 import { Extension } from '@tiptap/core'
 import { isHistoryTransaction } from '@tiptap/pm/history'
-import { Plugin } from '@tiptap/pm/state'
+import { Plugin, type EditorState, type Transaction } from '@tiptap/pm/state'
 import type { RichDocument } from '../../api/richDocument'
+import { historyRetiredSections, rebaseDraftDocument } from './sceneDraftEvidence'
 import { projectSectionDocument } from './richSectionProjection'
 
-/** 跨保存撤销/重做不能抹去已持久化的区块身份墓碑。 */
-export function historyRetiredSections(document: RichDocument, saved: RichDocument): string[] {
-  const active = new Set(document.sections.map((item) => item.key))
-  const retired = new Set([...document.retired_section_keys, ...saved.retired_section_keys])
-  for (const item of saved.sections) if (!active.has(item.key)) retired.add(item.key)
-  for (const key of active) retired.delete(key)
-  return [...retired]
+export { historyRetiredSections }
+export const SAVE_BASELINE_SYNC = 'rich-scene-save-sync'
+
+/** 对齐服务端新确认的墓碑与失效摘录，保持选区、正文和撤销历史。 */
+export function syncSceneSaveBaseline(state: EditorState, saved: RichDocument): Transaction | null {
+  const before = projectSectionDocument(state.doc.toJSON())
+  const next = rebaseDraftDocument(before, saved)
+  if (before === next) return null
+  const transaction = state.tr
+  if (JSON.stringify(next.retired_section_keys) !== JSON.stringify(before.retired_section_keys)) {
+    transaction.setDocAttribute('retiredSectionKeys', next.retired_section_keys)
+  }
+  if (JSON.stringify(next.markers) !== JSON.stringify(before.markers)) {
+    transaction.setDocAttribute('markers', next.markers)
+  }
+  // 既有标记插件不重新推导这笔业已校验的属性同步。
+  return transaction.setMeta(SAVE_BASELINE_SYNC, true).setMeta('rich-marker-sync', true).setMeta('addToHistory', false)
 }
 
 export const RichSectionHistory = Extension.create<{ getSavedDocument: () => RichDocument | null }>({

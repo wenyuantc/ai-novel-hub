@@ -1,4 +1,5 @@
 import { ApiError, request } from './client'
+import type { EditorActorIdentity } from './client'
 import type {
   Scene, SceneCreate, SceneMerge, SceneMergePreview, SceneMutation, ScenePage,
   ScenePositionResolution, SceneReferenceBlocker, SceneReorder, SceneSettingContext, SceneSplit, SceneUpdate,
@@ -11,16 +12,16 @@ export interface SceneListQuery { offset?: number; limit?: number }
 
 /** 场景正文与结构统一提交用户已核对的章内容版本；失败不重放。 */
 export const sceneApi = {
-  list: (pid: number, cid: number, query: SceneListQuery = {}, signal?: AbortSignal) =>
-    request<ScenePage>(base(pid, cid), { query: { ...query }, signal }),
+  list: (pid: number, cid: number, query: SceneListQuery = {}, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<ScenePage>(base(pid, cid), { query: { ...query }, signal, isCurrent }),
   directory: (pid: number, query: SceneListQuery = {}, signal?: AbortSignal, isCurrent?: () => boolean) =>
     request<ScenePage>(`/projects/${pid}/scenes`, { query: { ...query }, signal, isCurrent }),
-  get: (pid: number, cid: number, sid: number, signal?: AbortSignal) =>
-    request<Scene>(`${base(pid, cid)}/${sid}`, { signal }),
+  get: (pid: number, cid: number, sid: number, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<Scene>(`${base(pid, cid)}/${sid}`, { signal, isCurrent }),
   create: (pid: number, cid: number, body: SceneCreate) =>
     request<Scene>(base(pid, cid), { method: 'POST', body }),
-  update: (pid: number, cid: number, sid: number, body: SceneUpdate) =>
-    request<Scene>(`${base(pid, cid)}/${sid}`, { method: 'PATCH', body }),
+  update: (pid: number, cid: number, sid: number, body: SceneUpdate, isCurrent?: () => boolean, editorActor?: EditorActorIdentity) =>
+    request<Scene>(`${base(pid, cid)}/${sid}`, { method: 'PATCH', body, isCurrent, editorActor }),
   reorder: (pid: number, cid: number, body: SceneReorder) =>
     request<SceneMutation>(`${base(pid, cid)}/reorder`, { method: 'POST', body }),
   split: (pid: number, cid: number, sid: number, body: SceneSplit) =>
@@ -53,11 +54,12 @@ export function parseSceneRewriteDone(value: unknown): SceneRewriteDone {
 }
 
 /** 排序必须先收齐同一版本的轻量身份；页间版本变化不能拼成伪完整列表。 */
-export async function readChapterScenes(pid: number, cid: number, signal?: AbortSignal): Promise<ScenePage> {
-  const first = await sceneApi.list(pid, cid, { offset: 0, limit: 100 }, signal)
+export async function readChapterScenes(pid: number, cid: number, signal?: AbortSignal, isCurrent?: () => boolean): Promise<ScenePage> {
+  const first = await sceneApi.list(pid, cid, { offset: 0, limit: 100 }, signal, isCurrent)
   const items = [...first.items]
   while (items.length < first.total) {
-    const next = await sceneApi.list(pid, cid, { offset: items.length, limit: 100 }, signal)
+    if (isCurrent && !isCurrent()) throw new DOMException('场景目录读取已失效', 'AbortError')
+    const next = await sceneApi.list(pid, cid, { offset: items.length, limit: 100 }, signal, isCurrent)
     if (next.content_revision !== first.content_revision || next.planning_revision !== first.planning_revision || next.total !== first.total) {
       throw new ApiError(409, '加载期间场景顺序或规划已变化，请重新加载后核对。', { code: 'scene_preview_changed' })
     }

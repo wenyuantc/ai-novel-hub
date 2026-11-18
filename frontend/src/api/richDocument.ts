@@ -1,4 +1,5 @@
 import { request } from './client'
+import type { EditorActorIdentity } from './client'
 import { runGeneration } from './sse'
 import { parseSceneRewriteDone } from './scenes'
 import { hasTaskIdentity } from './tasks'
@@ -64,8 +65,10 @@ const sectionBase = (pid: number, cid: number, sid: number, key: string) => `${s
 
 /** 所有正文、格式与作者资料共享一个章内容版本；写冲突不重放。 */
 export const richDocumentApi = {
-  get: (pid: number, cid: number, sid: number, signal?: AbortSignal) => request<RichDocumentOut>(`${sceneBase(pid, cid, sid)}/document`, { signal }),
-  save: (pid: number, cid: number, sid: number, body: RichDocumentSave, signal?: AbortSignal) => request<RichDocumentOut>(`${sceneBase(pid, cid, sid)}/document`, { method: 'PUT', body, signal }),
+  get: (pid: number, cid: number, sid: number, signal?: AbortSignal, isCurrent?: () => boolean) =>
+    request<RichDocumentOut>(`${sceneBase(pid, cid, sid)}/document`, { signal, isCurrent }),
+  save: (pid: number, cid: number, sid: number, body: RichDocumentSave, signal?: AbortSignal, isCurrent?: () => boolean, editorActor?: EditorActorIdentity) =>
+    request<RichDocumentOut>(`${sceneBase(pid, cid, sid)}/document`, { method: 'PUT', body, signal, isCurrent, editorActor }),
   convert: (pid: number, cid: number, sid: number, key: string, revision: number) => request<RichDocumentOut>(`${sceneBase(pid, cid, sid)}/document/sections/${encodeURIComponent(key)}/convert`, { method: 'POST', body: { expected_content_revision: revision } }),
   timeline: (pid: number, query: { offset?: number; limit?: number; snapshot?: string } = {}, signal?: AbortSignal) => request<MarkerTimelinePage>(`/projects/${pid}/markers`, { query, signal }),
   relinkMarker: (pid: number, item: MarkerTimelineItem, body: MarkerRelink) => request<MarkerRelinkOut>(`/projects/${pid}/markers/${item.scene_id}/${encodeURIComponent(item.key)}/relink`, { method: 'POST', body }),

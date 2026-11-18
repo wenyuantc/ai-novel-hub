@@ -3,7 +3,7 @@ import { isHistoryTransaction } from '@tiptap/pm/history'
 import { Plugin } from '@tiptap/pm/state'
 import type { RichDocument } from '../../api/richDocument'
 import { repairRichPrefixes, verifyRichPrefixRepair } from './richPrefixRepair'
-import { historyRetiredSections } from './richSectionHistory'
+import { historyRetiredSections, SAVE_BASELINE_SYNC, syncSceneSaveBaseline } from './richSectionHistory'
 import { mapSectionMarkerTransaction } from './richSectionMarkerMapping'
 import { projectSectionDocument } from './richSectionProjection'
 import { mappedSectionIdentities, verifySectionMetadataTransaction, verifySectionPlanTransaction } from './richSectionTransaction'
@@ -41,6 +41,14 @@ export const RichSectionGuard = Extension.create<{ getSavedDocument: () => RichD
         }
         if (transaction.getMeta('rich-section-intent')) {
           if (!verifySectionMetadataTransaction(transaction, state) || !validSectionDocument(after)) throw new Error('区块元数据事务不可信')
+          return true
+        }
+        if (transaction.getMeta(SAVE_BASELINE_SYNC)) {
+          const saved = getSavedDocument()
+          const expected = saved && syncSceneSaveBaseline(state, saved)
+          if (isComposing() || !expected || !expected.doc.eq(transaction.doc)
+            || JSON.stringify(expected.steps.map((item) => item.toJSON())) !== JSON.stringify(transaction.steps.map((item) => item.toJSON()))
+            || !validSectionDocument(after)) throw new Error('保存后的资料同步无效')
           return true
         }
         if (transaction.getMeta('rich-section-history-sync')) {

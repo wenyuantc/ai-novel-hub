@@ -9,10 +9,11 @@ import type { CollectionDraft, PlanningBatchDraft } from '../../utils/planning'
 import { PlanningEntrySelect, PlanningTagSelect } from './PlanningFields'
 import PlanningRevisionReview from './PlanningRevisionReview'
 import { usePlanningMutation } from './usePlanningMutation'
+import type { RunSavedSceneAction } from '../scenes/sceneSavedAction'
 
-interface Props { projectId: number; rows: PlanningRow[]; revision: number; onClose: () => void; onSaved: (revision: number) => void }
+interface Props { projectId: number; rows: PlanningRow[]; revision: number; runSavedAction?: RunSavedSceneAction; onClose: () => void; onSaved: (revision: number) => void }
 /** 明确字段与集合操作的批量编辑，未选择的类型不会被写入。 */
-export default function PlanningBatchModal({ projectId, rows, revision: initialRevision, onClose, onSaved }: Props) {
+export default function PlanningBatchModal({ projectId, rows, revision: initialRevision, runSavedAction, onClose, onSaved }: Props) {
   const [revision, setRevision] = useState(initialRevision)
   const [draft, setDraft] = useState<PlanningBatchDraft>(emptyBatchDraft)
   const [currentRows, setCurrentRows] = useState(rows)
@@ -25,7 +26,7 @@ export default function PlanningBatchModal({ projectId, rows, revision: initialR
   const save = async () => {
     try {
       const body = batchPayload(revision, rows.map((row) => row.source), draft, currentRows)
-      const result = await mutation.run(() => planningApi.batch(projectId, body))
+      const result = await mutation.run(() => planningApi.batch(projectId, body), runSavedAction)
       if (result) onClose()
     } catch (err) { mutation.setError(err instanceof Error ? err.message : '请检查填写内容') }
   }

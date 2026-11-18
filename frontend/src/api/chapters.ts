@@ -1,4 +1,5 @@
 import { api, request } from './client'
+import type { EditorActorIdentity } from './client'
 import type {
   BatchGenerateRequest,
   BatchPreview,
@@ -7,6 +8,7 @@ import type {
   ChapterCreate,
   ChapterDone,
   ChapterStatus,
+  ChapterTitleSave,
   ChapterUpdate,
   GenerateChapterRequest,
   PolishChapterRequest,
@@ -16,12 +18,15 @@ import type {
 export const chapterApi = {
   list: (pid: number, signal?: AbortSignal, isCurrent?: () => boolean) =>
     request<ChapterBrief[]>(`/projects/${pid}/chapters`, { signal, isCurrent }),
-  get: (pid: number, cid: number) => api.get<Chapter>(`/projects/${pid}/chapters/${cid}`),
+  get: (pid: number, cid: number, isCurrent?: () => boolean) =>
+    request<Chapter>(`/projects/${pid}/chapters/${cid}`, { isCurrent }),
   create: (pid: number, body: ChapterCreate) => api.post<Chapter>(`/projects/${pid}/chapters`, body),
   fromOutlines: (pid: number, outlineIds: number[] | null) =>
     api.post<ChapterBrief[]>(`/projects/${pid}/chapters/from-outlines`, { outline_ids: outlineIds }),
   update: (pid: number, cid: number, body: ChapterUpdate) =>
     api.patch<Chapter>(`/projects/${pid}/chapters/${cid}`, body),
+  saveTitle: (pid: number, cid: number, body: ChapterTitleSave, editorActor: EditorActorIdentity, isCurrent: () => boolean) =>
+    request<Chapter>(`/projects/${pid}/chapters/${cid}/editor-title`, { method: 'PATCH', body, isCurrent, editorActor }),
   remove: (pid: number, cid: number) => api.del(`/projects/${pid}/chapters/${cid}`),
 }
 

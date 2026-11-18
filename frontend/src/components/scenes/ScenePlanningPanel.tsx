@@ -8,10 +8,11 @@ import { PLANNING_REFERENCE_LABELS, planningReferenceId } from '../../utils/plan
 import PlanningBatchModal from '../planning/PlanningBatchModal'
 import PlanningPreviewDrawer from '../planning/PlanningPreviewDrawer'
 import { scenePlanningRow } from './scenePresentation'
+import type { RunSavedSceneAction } from './sceneSavedAction'
 
-interface Props { projectId: number; scene: Scene; disabled: boolean; ensureSaved: () => Promise<boolean>; onChanged: () => void }
+interface Props { projectId: number; scene: Scene; disabled: boolean; ensureSaved: () => Promise<boolean>; runSavedAction?: RunSavedSceneAction; onChanged: () => void }
 /** 显示已保存的逐项来源；覆盖编辑复用矩阵的同一批量合同。 */
-export default function ScenePlanningPanel({ projectId, scene, disabled, ensureSaved, onChanged }: Props) {
+export default function ScenePlanningPanel({ projectId, scene, disabled, ensureSaved, runSavedAction, onChanged }: Props) {
   const { canEdit, canEditNow } = useProjectAccess(projectId)
   const [editing, setEditing] = useState(false)
   const [preview, setPreview] = useState(false)
@@ -29,7 +30,7 @@ export default function ScenePlanningPanel({ projectId, scene, disabled, ensureS
       <Typography.Text type="secondary">以上为已保存的有效值。明确无只清空手动项，不禁止自动候选或改变设定 AI 可见策略；POV 不自动指定人称。</Typography.Text>
       <Space wrap><Button disabled={!canEdit || disabled} onClick={() => void edit()}>设置继承／本场景自定义</Button><Button onClick={() => setPreview(true)}>预览实际 AI 规划</Button><Link to={`/projects/${projectId}/planning`}>打开规划矩阵</Link></Space>
     </Space> }]} />
-    {editing && <PlanningBatchModal projectId={projectId} rows={[row]} revision={scene.planning_revision} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged() }} />}
+    {editing && <PlanningBatchModal projectId={projectId} rows={[row]} revision={scene.planning_revision} runSavedAction={runSavedAction} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged() }} />}
     {preview && <PlanningPreviewDrawer projectId={projectId} row={row} onClose={() => setPreview(false)} />}
   </>
 }

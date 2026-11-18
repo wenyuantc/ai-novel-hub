@@ -106,7 +106,7 @@ TypeScript ~5.8，启用严格模式（`frontend/tsconfig.app.json`：`strict`�
 | 资源 | 规则 | 后端依据 |
 |----------|------|------------------|
 | 项目、世界观/角色/大纲 | 省略**或** `null` = 不变 | `model_dump(exclude_unset=True)` + `if value is None: continue`（`project_service.update_project`、`story_service.update_owned`） |
-| 章节 | 对 `chapter_no`、`title`、`content`、`status` 而言省略/`null` = 不变；显式发送 `outline_id: null` 会**解除**与大纲的关联 | `chapter_service.update_chapter` 检查 `"outline_id" in fields` |
+| 章节 | `chapter_no`、`title`、`content`、`status` 省略或 `null` 时不改。`outline_id: null` 解除关联。非空 `title` 必须带 `expected_title`、`expected_scene_id` 和 `expected_content_revision`。编辑器使用专用 `editor-title` 路由 | `ManualChapterUpdate`、`ChapterEditorTitle`、`chapter_service.update_chapter` |
 | `generating` 中的章节 | PATCH 带 `title`/`content` 且不带 `status` → 409；仅发送 `{ status: 'draft' }` 是复位路径 | `ConflictError("该章节正在生成中，请等待完成或先复位状态后再编辑")` |
 | 管理员用户 | 省略is_active=不变；角色整体替换走专用PUT并带authorization_revision，旧is_admin字段禁止；禁用会递增 `token_version`（目标用户的会话 → 401） | `admin_service.update_user` |
 | AI 配置 | 省略 `api_key` 或传 `''` 保留已存储的密钥；只要出现 `base_url`（包括 `null`/`''`）就会被应用，`null` = provider 默认值 | `ai_config_service.update_config` 中的 `if data.api_key:` / `if "base_url" in fields:` |

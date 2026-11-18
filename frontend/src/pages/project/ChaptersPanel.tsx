@@ -20,10 +20,11 @@ import { useProjectAccess } from '../../hooks/useProjectAccess'
 // 批量生成横幅 / 弹窗按需加载（章节页在入口 chunk 中）
 const BatchBanner = lazy(() => import('../../components/batch/BatchBanner'))
 const BatchGenerateModal = lazy(() => import('../../components/batch/BatchGenerateModal'))
+const DraftRecoveryPanel = lazy(() => import('../../components/editorDrafts/DraftRecoveryPanel'))
 
 export default function ChaptersPanel() {
   const pid = useProjectId()
-  const { canUseAI, canEdit, canEditNow } = useProjectAccess(pid)
+  const { canUseAI, canRead, canEdit, canEditNow } = useProjectAccess(pid)
   const { message, modal } = App.useApp()
   const confirm = useSettingsConfirmation(modal, !canEdit)
   const navigate = useNavigate()
@@ -42,6 +43,7 @@ export default function ChaptersPanel() {
   const { data: statuses = [] } = useLoader(statusLoader, { projectId: pid, resources: ['chapters', 'outlines'] })
   const statusById = useMemo(() => new Map(statuses.map((s) => [s.chapter_id, s])), [statuses])
   const [createOpen, setCreateOpen] = useState(false)
+  const [draftsOpen, setDraftsOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form] = Form.useForm<{ title: string }>()
   const [batchOpen, setBatchOpen] = useState(false)
@@ -107,6 +109,7 @@ export default function ChaptersPanel() {
       styles={isMobile ? { header: { flexWrap: 'wrap', paddingBlock: 8, gap: 8 }, body: { padding: 8 } } : undefined}
       extra={
         <Space wrap>
+          {canRead && <Button onClick={() => setDraftsOpen(true)}>本地草稿</Button>}
           {canUseAI && <Tooltip title={openBatch ? '已有进行中或待审核的批量生成' : undefined}>
             <Button
               icon={<ThunderboltOutlined />}
@@ -282,6 +285,9 @@ export default function ChaptersPanel() {
           />
         </Suspense>
       )}
+      {canRead && draftsOpen && <Suspense fallback={null}>
+        <DraftRecoveryPanel projectId={pid} open onClose={() => setDraftsOpen(false)} />
+      </Suspense>}
       <Modal
         okButtonProps={{ disabled: !canEdit }}
         title="新建章节"

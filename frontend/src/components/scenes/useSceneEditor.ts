@@ -5,6 +5,7 @@ import { richDocumentApi } from '../../api/richDocument'
 import { useAuthStore } from '../../stores/auth'
 import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
 import { SceneDraftController, sceneDraftDirty } from './sceneDraftController'
+import { invalidateMismatchedEditorActor } from '../editorDrafts/verifyDraftScope'
 
 const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
 
@@ -13,23 +14,33 @@ export function useSceneEditor(projectId: number, chapterId: number, initialScen
   const scopeVersion = useProjectStore((state) => state.scopeVersion)
   const status = useAuthStore((state) => state.status)
   const actorId = useAuthStore((state) => state.user?.id)
+  const actorCreatedAt = useAuthStore((state) => state.user?.created_at)
   const generation = useSyncExternalStore(subscribeSession, currentRequestGeneration, currentRequestGeneration)
   const identity = `${status}:${actorId ?? ''}:${generation}`
   const controller = useMemo(() => {
+    const actor = actorId !== undefined && actorCreatedAt ? { id: actorId, createdAt: actorCreatedAt } : undefined
     const belongs = () => {
       const state = useAuthStore.getState()
       return identity === `${state.status}:${state.user?.id ?? ''}:${currentRequestGeneration()}`
+        && state.user?.created_at === actorCreatedAt
+    }
+    const write = async <T,>(operation: () => Promise<T>, isCurrent?: () => boolean) => {
+      try { return await operation() }
+      catch (error) {
+        invalidateMismatchedEditorActor(error, isCurrent ?? belongs)
+        throw error
+      }
     }
     return new SceneDraftController(chapterId, {
-      list: (signal) => readChapterScenes(projectId, chapterId, signal),
-      get: (sid, signal) => sceneApi.get(projectId, chapterId, sid, signal),
-      update: (sid, body) => sceneApi.update(projectId, chapterId, sid, body),
-      getDocument: (sid, signal) => richDocumentApi.get(projectId, chapterId, sid, signal),
-      saveDocument: (sid, body) => richDocumentApi.save(projectId, chapterId, sid, body),
+      list: (signal, isCurrent) => readChapterScenes(projectId, chapterId, signal, isCurrent),
+      get: (sid, signal, isCurrent) => sceneApi.get(projectId, chapterId, sid, signal, isCurrent),
+      update: (sid, body, isCurrent) => write(() => sceneApi.update(projectId, chapterId, sid, body, isCurrent, actor), isCurrent),
+      getDocument: (sid, signal, isCurrent) => richDocumentApi.get(projectId, chapterId, sid, signal, isCurrent),
+      saveDocument: (sid, body, isCurrent) => write(() => richDocumentApi.save(projectId, chapterId, sid, body, undefined, isCurrent, actor), isCurrent),
     }, () => belongs() && isProjectScopeCurrent(captureProjectScope(projectId), 'canRead'),
-    () => belongs() && isProjectScopeCurrent(captureProjectScope(projectId), 'canEdit'),
+    () => !!actor && belongs() && isProjectScopeCurrent(captureProjectScope(projectId), 'canEdit'),
     () => useProjectStore.getState().scopeVersion)
-  }, [projectId, chapterId, identity])
+  }, [projectId, chapterId, identity, actorId, actorCreatedAt])
   useLayoutEffect(() => {
     controller.authorizationChanged()
   }, [controller, scopeVersion])
@@ -41,11 +52,6 @@ export function useSceneEditor(projectId: number, chapterId: number, initialScen
     void controller.load(requested.current)
     return () => controller.deactivate()
   }, [controller])
-  const lastQuery = useRef<{ controller: SceneDraftController; id: number }>()
-  useEffect(() => {
-    if (initialSceneId === undefined || snapshot.loading || !snapshot.scene || (lastQuery.current?.controller === controller && lastQuery.current.id === initialSceneId)) return
-    lastQuery.current = { controller, id: initialSceneId }
-    if (snapshot.scene.id !== initialSceneId) void controller.select(initialSceneId)
-  }, [controller, initialSceneId, snapshot.loading, snapshot.scene])
+  // 已经打开后的场景切换由章节页的保存屏障调度。
   return { ...snapshot, dirty: sceneDraftDirty(snapshot), controller }
 }

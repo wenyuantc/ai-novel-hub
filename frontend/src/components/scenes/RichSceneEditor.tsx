@@ -3,7 +3,7 @@ import { isHistoryTransaction } from '@tiptap/pm/history'
 import { EditorState } from '@tiptap/pm/state'
 import { StarterKit } from '@tiptap/starter-kit'
 import { App, Button, Space, Typography, theme } from 'antd'
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { RichDocument } from '../../api/richDocument'
 import { richMarkerPalette } from '../../theme/palette'
 import { useResolvedTheme } from '../../theme/themeStore'
@@ -15,7 +15,7 @@ import { RichMarkerDocument, RichMarkerState } from './richMarkerState'
 import RichMarkerActions from './RichMarkerActions'
 import { AuthorSection } from './richSectionNode'
 import { RichSectionGuard } from './richSectionGuard'
-import { RichSectionHistory } from './richSectionHistory'
+import { RichSectionHistory, SAVE_BASELINE_SYNC, syncSceneSaveBaseline } from './richSectionHistory'
 import { RichSectionDrag } from './richSectionDrag'
 import { editorFromSectionDocument, projectSectionDocument, sameSectionDocument } from './richSectionProjection'
 import { createSectionPlanTransaction, mappedSectionIdentities } from './richSectionTransaction'
@@ -128,9 +128,10 @@ const RichSceneEditor = forwardRef<RichSceneEditorHandle, Props>(function RichSc
         } }), AuthorSection, RichExactSelection, RichPlainPaste, RichEnter],
       content: editorFromSectionDocument(initial.current),
       editorProps: { attributes: { 'aria-label': '当前场景正文', role: 'textbox', 'aria-multiline': 'true', spellcheck: 'false',
-        'data-section-ai-enabled': String(!!callbacks.current.onSectionRewrite) } },
+        'data-section-ai-enabled': String(!!callbacks.current.onSectionRewrite),
+        'data-section-convert-enabled': String(!!callbacks.current.onSectionConvert) } },
       onUpdate({ editor, transaction, appendedTransactions }) {
-        if (composingRef.current) return
+        if (composingRef.current || transaction.getMeta(SAVE_BASELINE_SYNC)) return
         const history = isHistoryTransaction(transaction)
         const mapped = new Set<string>()
         const sections = new Set<string>()
@@ -242,19 +243,27 @@ const RichSceneEditor = forwardRef<RichSceneEditorHandle, Props>(function RichSc
 
   useEffect(() => {
     const dom = editorRef.current?.view.dom
-    const enabled = String(!!onSectionRewrite)
-    if (dom && dom.getAttribute('data-section-ai-enabled') !== enabled) dom.setAttribute('data-section-ai-enabled', enabled)
-  }, [onSectionRewrite, generation])
+    if (!dom) return
+    const attributes = { 'data-section-ai-enabled': !!onSectionRewrite, 'data-section-convert-enabled': !!onSectionConvert }
+    for (const [name, enabled] of Object.entries(attributes)) {
+      if (dom.getAttribute(name) !== String(enabled)) dom.setAttribute(name, String(enabled))
+    }
+  }, [onSectionRewrite, onSectionConvert, generation])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const editor = editorRef.current
     if (!editor || composingRef.current || sectionComposingRef.current.size) return
     const current = projectSectionDocument(editor.getJSON())
     if (sameSectionDocument(current, document)) return
+    const sync = savedDocument && syncSceneSaveBaseline(editor.state, savedDocument)
+    if (sync && sameSectionDocument(projectSectionDocument(sync.doc.toJSON()), document)) {
+      editor.view.dispatch(sync)
+      return
+    }
     // 只有外部基线变化才重建状态；本地事务和保存同值不清除撤销历史。
     const node = editor.schema.nodeFromJSON(editorFromSectionDocument(document))
     editor.view.updateState(EditorState.create({ schema: editor.schema, doc: node, plugins: editor.state.plugins }))
-  }, [document, generation])
+  }, [document, savedDocument, composing, generation])
 
   const editor = editorRef.current
   const button = (label: string, active: boolean, action: () => void) => <Button size="small" aria-pressed={active}

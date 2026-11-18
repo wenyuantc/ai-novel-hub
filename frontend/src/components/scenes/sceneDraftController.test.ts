@@ -46,7 +46,7 @@ describe('场景草稿控制器', () => {
     expect(controller.getSnapshot().scene?.content_revision).toBe(4)
     expect(controller.getSnapshot().draft.content).toBe('本地草稿')
     await controller.save()
-    expect(api.update.mock.calls[1]).toEqual([1, expect.objectContaining({ expected_content_revision: 4, content: '本地草稿' })])
+    expect(api.update.mock.calls[1]).toEqual([1, expect.objectContaining({ expected_content_revision: 4, content: '本地草稿' }), expect.any(Function)])
   })
   it('结构冲突即使没有正文草稿，后台刷新也不能绕过显式版本核对', async () => {
     const { api, controller } = setup()
@@ -178,7 +178,7 @@ describe('场景草稿控制器', () => {
     expect(controller.getSnapshot().draft.content).toBe('本地尚需核对')
     await controller.save()
     expect(api.update).toHaveBeenCalledTimes(2)
-    expect(api.update.mock.calls[1]).toEqual([1, expect.objectContaining({ expected_content_revision: 3, content: '本地尚需核对' })])
+    expect(api.update.mock.calls[1]).toEqual([1, expect.objectContaining({ expected_content_revision: 3, content: '本地尚需核对' }), expect.any(Function)])
   })
   it('降为只读时清除未提交草稿；完全撤权后清除场景并忽略迟到保存', async () => {
     let read = true
@@ -234,8 +234,9 @@ describe('场景草稿控制器', () => {
     expect(await controller.save()).toBeNull()
     expect(api.update).toHaveBeenCalledTimes(1)
     await controller.reviewLatest()
-    controller.acknowledgeLatest()
-    await controller.save()
+    expect(controller.acknowledgeLatest()).toBe(false)
+    api.update.mockResolvedValueOnce({ ...scene(1, 3), content: '本地待核对' })
+    expect(await controller.retryUnknown()).not.toBeNull()
     expect(api.update).toHaveBeenCalledTimes(2)
   })
 })

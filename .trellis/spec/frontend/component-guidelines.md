@@ -162,7 +162,7 @@ dayjs.locale('zh-cn')
 
 三层结构：`ChapterEditorPage`（解析 `:cid`，渲染 `<ChapterLoader key={chapterId} …/>`，使切换章节时重建全部状态）→ `ChapterLoader`（加载章节 + 同级章节列表）→ `ChapterEditor`。必须保留的行为：
 
-1. **场景草稿**：`dirty = sceneEditor.dirty || title !== chapter.title`，结构拟排序另有`structureDirty`。正文／作者摘要由`SceneDraftController`按稳定Scene身份隔离，章响应只更新章元数据，不把整章稿写入当前景；完整合同见[独立场景](../backend/scenes.md)。
+1. **场景草稿**由 `SceneDraftController` 按稳定场景身份持有，章标题由 `ChapterTitleDraft` 持有。拟排序、笔记和 AI 预览各自维护离开守卫。服务端章响应只更新相应基线，整章投影不写入当前场景编辑区。参见[章编辑器自动保存和恢复](../backend/scenes.md#章编辑器自动保存和恢复)。
 2. **AI 生成/润色走后台任务，开始前自动保存**（`10-23-task-engine`）：
    ```ts
    const runAI = async (mode: 'generate' | 'polish') => {
@@ -195,8 +195,8 @@ dayjs.locale('zh-cn')
    `followTask`成功后解析章结果并刷新场景目录，单景另核验result.scene的身份；不覆盖不同Scene或后来输入的草稿，warning单独提示。cancelled显示原稿保持，failed/interrupted/lost可见且重读状态，detached只断订阅不取消任务。新请求按目标调用sceneApi或原章API，均携当前内容／规划版本。
    **任务身份与请求失效**：仅跟随当前页面明确创建并返回有效 `task_key` 的任务；章节／场景整数 ID 不构成实例证明，不能按旧 ID 自动接回后台作业。离页任务仍可在后台任务面板查看输出。创建请求绑定组件存活、请求代次及原 `canEditNow` 作用域，离页／撤权后的迟到 202 不注册、不订阅；旧请求不能清除新请求的忙碌状态。创建失败先清理本地忙碌，再尝试恢复读取，恢复 GET 挂起或迟到不得锁住页面或覆盖后续请求状态。Task.scene_id决定稳定目标，另一景作业不能把其流接进当前景；脏稿保持并提示核对，不警告后直接覆盖。
 3. **任务期间只读与实时预览**：`aiRunning = aiTask.running || starting`（含排队）。Scene文本域始终显示自己的正文草稿；`aiTask.text`在正文主区、`SceneWritingPanel`之前的独立只读StreamOutput展示，绝不能写入草稿或自动保存。收起AI侧栏仍能查看预览和停止。创建期明确显示「正在创建任务」，不显示尚不可用的停止按钮；已绑定任务但未输出非空白正文时显示实际stage／排队信息或「等待模型输出」，收到delta后持续追加。成功才加载服务端稿，取消／失败结束预览并保留原稿。标题、AI表单和模型选择按锁禁用，保留排队／进度／stage／重连提示；另一景任务不能替当前景接入流。
-4. **Ctrl/Cmd+S**：只注册一次 window `keydown` 监听器；它通过 ref 调用最新的 `handleSave`（在无依赖的 effect 中执行 `saveShortcutRef.current = handleSave`），因此监听器永远不会捕获过期状态。`handleSave` 在运行/保存中不做任何事，无改动时显示 `没有需要保存的修改`。
-5. **未保存离开守卫**：`guard = dirty || rewriteLocked || structureDirty`。后台AI可直接离开且继续运行；场景正文／摘要草稿、拟排序、局部流或待采纳结果需离开确认。beforeunload与应用内useBlocker保留；卸载仅断任务订阅，不取消后台作业。确认框随actor／项目／章／授权代次失效关闭。
+4. **Ctrl/Cmd+S** 通过 ref 调用当前 `handleSave`。手动按钮和键盘请求进入同一保存队列，等在途请求结束后提交当前输入。无改动时显示「没有需要保存的修改」，存在冲突或输入法组合时提示先处理。
+5. **未保存离开守卫**覆盖未同步草稿、未知请求、拟排序、笔记和待采纳结果。正文与标题持续留存在本机，离开提示区分本地存储结果及其他未保存数据。`beforeunload` 只作提示。卸载断开后台任务订阅，确认框随账号、作品、章或授权代次失效。
 6. **未绑定任务的 `generating` 章节**：当前页面没有订阅、服务端章状态仍为 `generating` 时显示核对／复位提示。这不证明后台没有任务，不能自动接回或改写状态；应先在后台任务面板核对。显式复位调用 `chapterApi.update(pid, chapter.id, { status: 'draft' })`，后端保留真实活动占用检查。期间保存、标记完成和 AI 按钮禁用，因为后端会以 409 拒绝对生成中章节的正文/标题 PATCH（`backend/app/services/chapter_service.py` 中的 `ConflictError`），且生成/润色会返回 409 `该章节正在生成中，请稍候再试`。
 7. **覆盖已有正文的重新生成**通过 `modal.confirm` 询问（`重新生成正文？`）；正文为空时禁用润色。
 8. 上一章/下一章导航按 `chapter_no` 再按 `id` 对同级章节排序。
@@ -207,7 +207,7 @@ dayjs.locale('zh-cn')
 
 9. **编辑锁**：`const editorLocked = aiRunning || rewriteLocked`（`rewriteLocked` 由 `RewritePanel.onLockChange` 上报：改写流式中或有待采纳结果）。正文 `readOnly`、标题、保存、`AIConfigSelect`、生成/润色 Tab 都按 `editorLocked` 禁用；`handleSave` 在 `editorLocked` 时不做任何事。离开守卫包含 `rewriteLocked`：确认离开时 `RewritePanel` 卸载，其 `useStreamTask` 自动中止请求，预览结果丢弃（正文不受影响），弹窗文案区分「正在生成 / 有未保存的修改 / 局部改写结果未采纳」。
 10. **选区跟踪**：Scene文本域的onSelect/onKeyUp/onMouseUp/onChange保存本景UTF-16位置，发请求才转码点；拆分也用同一转换。局部done绑定Scene／章／两版本／log，按预览范围采纳，不拿最新版本自动重签。切换Scene重置选区；后续局部操作重新核对可见选区，不假定替换后旧范围自动扩成新全文。
-11. **自动保存**：`ensureSaved()`（无改动直接返回 true，否则 `save()` + `已自动保存当前修改`）被整章生成/润色、局部改写开始、回滚共用。
+11. **自动保存**由 `ChapterAutosave` 调度，停止输入 1500 ms 后同步标题与场景正文，持续输入的最长等待为 10 s。允许网络保存时继续输入，组合输入结束前暂停发送。AI、历史恢复与结构修改共用动作屏障，先排空保存再以当前版本执行。恢复草稿保留原稿副本，作者选择保存或再次编辑自动保存字段后才同步。
 12. **整章生成**：请求体显式带 `auto_continue: genOptions.autoContinue`（后端默认 false，开关默认开，`utils/preferences.ts` 记住选择）；订阅收到 `continue` 事件（`aiTask.continueInfo`）时显示 `字数不足，自动续写第 n 轮` 的 info `Alert`；`done.warning` 存在时用 `message.warning` 提示（正文已保存）。重新生成确认文案提示「当前正文会自动存为历史版本」。
 13. **版本历史**：标题栏可查看历史，写操作仍受editorLocked/saving/stuck限制。`SceneVersionActions`先预检两稿／结构／保留引用；新结构恢复带内容版本，多景旧纯文本只提供签名差异预览与明确提取到单景，不伪装整章恢复。409保留输入／选择，核对最新后显式重试。
 

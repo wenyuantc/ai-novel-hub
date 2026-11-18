@@ -23,6 +23,9 @@ vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }))
 vi.mock('../../hooks/useElementWidth', () => ({ useElementWidth: () => [{ current: null }, 1000] }))
 vi.mock('../../hooks/useAgentPageContext', () => ({ usePublishAgentContext: () => {} }))
 vi.mock('../../hooks/useProjectRefresh', () => ({ useProjectRefresh: () => {} }))
+vi.mock('../../components/editorDrafts/useChapterAutosave', async () => ({
+  useChapterAutosave: (await import('./ChapterEditorPage.testSupport')).autosavePageFixture,
+}))
 vi.mock('../../hooks/useChapterAnalysis', () => ({ useChapterAnalysis: () => ({ state: null, latest: null, status: 'none', running: false, refresh: async () => null, start: async () => {} }) }))
 vi.mock('../../hooks/useTaskStream', () => ({ useTaskStream: () => ({ running: false, task: null, text: '', error: null, follow: vi.fn(), detach: () => {} }) }))
 vi.mock('../../stores/project', () => ({ useProjectStore: (select: (state: unknown) => unknown) => select({
@@ -35,7 +38,7 @@ vi.mock('../../stores/auth', () => ({ useAuthStore: (select: (state: unknown) =>
 vi.mock('react-router-dom', () => ({ useParams: () => ({ pid: '1', cid: '3' }), useNavigate: () => () => {}, useLocation: () => ({ state: null }), useSearchParams: () => [new URLSearchParams(), () => {}], useBlocker: () => ({ state: 'unblocked' }) }))
 vi.mock('../../components/scenes/useSceneEditor', () => ({ useSceneEditor: () => ({
   scene: view.scene, draft: { title: '场景', content: '原场景正文', summary: '' }, dirty: false, saving: false, conflict: null, externalChange: false,
-  page: { items: [{ id: 22 }], total: 1 }, controller: { getSnapshot: () => ({ scene: view.scene, draft: { content: '原场景正文' } }), load: async () => true, change: () => {} },
+  page: { items: [{ id: 22 }], total: 1 }, controller: { getSnapshot: () => ({ scene: view.scene, draft: { content: '原场景正文' } }), load: async () => true, change: () => {}, canAcknowledgeLatest: () => false },
 }) }))
 vi.mock('../../components/chapter/AnalysisDrawer', () => ({ default: (props: { analyzeDisabled: boolean; reviseBlockedReason: string }) => { view.drawer = props; return null } }))
 vi.mock('../../components/scenes/SceneWritingPanel', () => ({ default: () => null }))

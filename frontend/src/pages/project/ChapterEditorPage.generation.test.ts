@@ -78,6 +78,9 @@ vi.mock('../../utils/skillInputs', () => ({ skillChoiceProblemText: () => '' }))
 vi.mock('../../hooks/useChapterAnalysis', () => ({ useChapterAnalysis: () => ({ state: null, latest: null, status: 'none', running: false, refresh: view.refresh }) }))
 // 页头的「派生内容可能过期」提示是独立的只读请求，不属于本文件验证的生成网络边界
 vi.mock('../../hooks/useChapterImpactHint', () => ({ useChapterImpactHint: () => null }))
+vi.mock('../../components/editorDrafts/useChapterAutosave', async () => ({
+  useChapterAutosave: (await import('./ChapterEditorPage.testSupport')).autosavePageFixture,
+}))
 vi.mock('../../stores/project', () => ({ useProjectStore: Object.assign(
   (select: (state: unknown) => unknown) => select({ project: { id: 1, auto_analyze: false, default_style: null }, refresh: view.refresh }),
   { subscribe: () => () => {} },
@@ -165,7 +168,7 @@ beforeEach(() => {
   view.scope = 1; view.cid = '3'; view.scopes.clear(); view.draft = '尚未替换的场景原稿'
   view.chapter = { id: 3, project_id: 1, outline_id: null, plan_id: null, style_id: null, chapter_no: 1, title: '章', status: 'draft', word_count: 10, content_revision: 1, content: view.draft, updated_at: '' }
   view.scene = { id: 22, chapter_id: 3, title: '场景', sort: 0, content: view.draft, content_revision: 1, planning_revision: 1 } as Scene
-  view.controller = { getSnapshot: () => ({ scene: view.scene, draft: { content: view.draft } }), load: view.loadScene, changeDocument: view.changeDocument }
+  view.controller = { getSnapshot: () => ({ scene: view.scene, draft: { content: view.draft } }), load: view.loadScene, changeDocument: view.changeDocument, canAcknowledgeLatest: () => false }
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
 })
 afterEach(async () => { unmount(); await Promise.resolve(); vi.unstubAllGlobals() })

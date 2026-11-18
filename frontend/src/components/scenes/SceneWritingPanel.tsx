@@ -17,7 +17,7 @@ import { projectAccess } from '../../utils/projectAccess'
 import type { TextSelection } from '../chapter/RewritePanel'
 import MentionPreview from '../mentions/MentionPreview'
 import type { SceneDraftController, SceneDraftSnapshot } from './sceneDraftController'
-import SceneConflictReview from './SceneConflictReview'
+import SceneConflictReview, { type SceneConflictActions } from './SceneConflictReview'
 import SceneNavigator from './SceneNavigator'
 import ScenePlanningPanel from './ScenePlanningPanel'
 import SceneSettingPreview from './SceneSettingPreview'
@@ -29,11 +29,14 @@ import RichSceneEditor, { type RichSceneEditorHandle, type RichSectionSelection 
 import RichSectionRewriteModal, { type SectionRewriteTarget } from './RichSectionRewriteModal'
 import { editorFromSectionDocument, sameSectionDocument } from './richSectionProjection'
 import { validSectionDocument } from './richSectionValidity'
+import { runAfterSceneSave, type RunSavedSceneAction } from './sceneSavedAction'
 
 interface Props {
   projectId: number; chapter: Chapter; state: SceneDraftSnapshot; controller: SceneDraftController
-  disabled: boolean; selection: TextSelection; onSelection: (selection: TextSelection) => void
+  disabled: boolean; editorDisabled?: boolean; selection: TextSelection; onSelection: (selection: TextSelection) => void
   ensureSaved: () => Promise<boolean>; onChanged: () => void; onSelect: (sid: number) => Promise<boolean>
+  runSavedAction?: RunSavedSceneAction
+  conflictActions?: SceneConflictActions
   mentionAnchor: MentionAnchor | null
   onStructureDirtyChange: (dirty: boolean) => void
   markerJump: MarkerLocation | null
@@ -43,7 +46,7 @@ interface Props {
   onOpenInspectorTab?: (tab: 'ai' | 'scene' | 'chapter') => void
 }
 /** 当前场景独立编辑；整章仅通读服务端投影，不在浏览器重造正文拼接规则。 */
-export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, selection, onSelection, ensureSaved, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skill, onSectionLockChange, onOpenInspectorTab }: Props) {
+export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, editorDisabled = disabled, selection, onSelection, ensureSaved, runSavedAction, conflictActions, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skill, onSectionLockChange, onOpenInspectorTab }: Props) {
   const { canEdit, canUseAI, canReadNow, canEditNow } = useProjectAccess(projectId)
   const { message, modal } = App.useApp()
   const { token } = theme.useToken()
@@ -62,6 +65,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
   const pendingTimelineFocus = useRef<(TextSelection & { sectionKey?: string }) | null>(null)
   const [focus, setFocus] = useState<(TextSelection & { sectionKey?: string }) | null>(null) // 各目标 Unicode 码点
   const scene = state.scene
+  const afterSave = <T,>(action: () => Promise<T>) => runAfterSceneSave(runSavedAction, ensureSaved, action)
   const processedMarker = useRef('')
   const unsupported = useMemo(() => {
     if (!state.documentDraft) return '完整场景文档尚未加载，不能编辑正文。'
@@ -122,47 +126,53 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
     return true
   }
   const relink = async (item: MarkerTimelineItem) => {
-    if (!canEditNow() || disabled || !(await ensureSaved()) || !canEditNow()) return false
-    const current = controller.getSnapshot().scene
-    if (!current) { message.warning('请先在当前场景正文中选中要关联的文字。'); return false }
-    const el = input.current?.resizableTextArea?.textArea
-    const section = richEditor.current?.sectionSelection()
-    const selectedRange = richEditor.current?.selection()
-    const start = section?.start ?? selectedRange?.start ?? (el ? reviewTextareaOffset(current.content, el.value, selection.start) : null)
-    const end = section?.end ?? selectedRange?.end ?? (el ? reviewTextareaOffset(current.content, el.value, selection.end) : null)
-    if (start === null || end === null || start >= end) { message.warning('请先在当前场景正文中选中完整文字，再打开标记时间线。'); return false }
-    if (item.chapter_id === chapter.id && item.content_revision !== current.content_revision) {
-      message.warning('标记目录已过期，请从第一页刷新后重试。'); return false
-    }
-    const selected = section?.selectedText ?? Array.from(current.content).slice(start, end).join('')
-    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(selected))
-    const latest = controller.getSnapshot()
-    const currentSectionSelection = richEditor.current?.sectionSelection()
-    const currentProseSelection = richEditor.current?.selection()
-    if (!canEditNow() || latest.scene?.id !== current.id || latest.scene.content_revision !== current.content_revision
-      || (section && (!currentSectionSelection || currentSectionSelection.sectionKey !== section.sectionKey
-        || currentSectionSelection.start !== start || currentSectionSelection.end !== end || currentSectionSelection.selectedText !== selected))
-      || (!section && selectedRange && (!currentProseSelection || currentProseSelection.start !== start || currentProseSelection.end !== end))) {
-      message.warning('计算期间场景、选区或权限已变化，请重新选择。'); return false
-    }
-    await richDocumentApi.relinkMarker(projectId, item, {
-      expected_source_revision: item.content_revision, target_chapter_id: chapter.id, target_scene_id: current.id,
-      expected_target_revision: current.content_revision, target_section_key: section?.sectionKey ?? null, start, end,
-      selected_hash: Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join(''),
-    })
-    if (!canReadNow()) return false
-    await controller.load(); onChanged(); message.success('标记已重新关联至所选正文'); return true
+    if (!canEditNow() || disabled) return false
+    return (await afterSave(async () => {
+      if (!canEditNow()) return false
+      const current = controller.getSnapshot().scene
+      if (!current) { message.warning('请先在当前场景正文中选中要关联的文字。'); return false }
+      const el = input.current?.resizableTextArea?.textArea
+      const section = richEditor.current?.sectionSelection()
+      const selectedRange = richEditor.current?.selection()
+      const start = section?.start ?? selectedRange?.start ?? (el ? reviewTextareaOffset(current.content, el.value, selection.start) : null)
+      const end = section?.end ?? selectedRange?.end ?? (el ? reviewTextareaOffset(current.content, el.value, selection.end) : null)
+      if (start === null || end === null || start >= end) { message.warning('请先在当前场景正文中选中完整文字，再打开标记时间线。'); return false }
+      if (item.chapter_id === chapter.id && item.content_revision !== current.content_revision) {
+        message.warning('标记目录已过期，请从第一页刷新后重试。'); return false
+      }
+      const selected = section?.selectedText ?? Array.from(current.content).slice(start, end).join('')
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(selected))
+      const latest = controller.getSnapshot()
+      const currentSectionSelection = richEditor.current?.sectionSelection()
+      const currentProseSelection = richEditor.current?.selection()
+      if (!canEditNow() || latest.scene?.id !== current.id || latest.scene.content_revision !== current.content_revision
+        || (section && (!currentSectionSelection || currentSectionSelection.sectionKey !== section.sectionKey
+          || currentSectionSelection.start !== start || currentSectionSelection.end !== end || currentSectionSelection.selectedText !== selected))
+        || (!section && selectedRange && (!currentProseSelection || currentProseSelection.start !== start || currentProseSelection.end !== end))) {
+        message.warning('计算期间场景、选区或权限已变化，请重新选择。'); return false
+      }
+      await richDocumentApi.relinkMarker(projectId, item, {
+        expected_source_revision: item.content_revision, target_chapter_id: chapter.id, target_scene_id: current.id,
+        expected_target_revision: current.content_revision, target_section_key: section?.sectionKey ?? null, start, end,
+        selected_hash: Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join(''),
+      })
+      if (!canReadNow()) return false
+      await controller.load(); onChanged(); message.success('标记已重新关联至所选正文'); return true
+    })) ?? false
   }
   const deleteMarker = async (item: MarkerTimelineItem) => {
-    if (!canEditNow() || disabled || !(await ensureSaved()) || !canEditNow()) return false
-    const current = controller.getSnapshot().scene
-    if (item.chapter_id === chapter.id && item.content_revision !== current?.content_revision) {
-      message.warning('标记目录已过期，请从第一页刷新后重试。'); return false
-    }
-    await richDocumentApi.deleteMarker(projectId, item)
-    if (!canReadNow()) return false
-    if (item.chapter_id === chapter.id) await controller.load()
-    onChanged(); message.success('标记已删除，正文未改变'); return true
+    if (!canEditNow() || disabled) return false
+    return (await afterSave(async () => {
+      if (!canEditNow()) return false
+      const current = controller.getSnapshot().scene
+      if (item.chapter_id === chapter.id && item.content_revision !== current?.content_revision) {
+        message.warning('标记目录已过期，请从第一页刷新后重试。'); return false
+      }
+      await richDocumentApi.deleteMarker(projectId, item)
+      if (!canReadNow()) return false
+      if (item.chapter_id === chapter.id) await controller.load()
+      onChanged(); message.success('标记已删除，正文未改变'); return true
+    })) ?? false
   }
   const convertSection = (key: string) => {
     const initial = controller.getSnapshot(); const originalScene = initial.scene; const draft = initial.documentDraft
@@ -178,21 +188,23 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
         setSectionBusy(true)
         let locked = false
         try {
-          if (!(await ensureSaved()) || !canEditNow()) return
-          const latest = controller.getSnapshot(); const savedSection = latest.document?.document.sections.find((item) => item.key === key)
-          if (latest.scene?.id !== originalScene.id || !savedSection || !latest.document || !latest.documentDraft
-            || !sameSectionDocument(latest.document.document, latest.documentDraft)) {
-            message.warning('区块或草稿已变化，请重新确认。'); return
-          }
-          onSectionLockChange(true); locked = true
-          const result = await richDocumentApi.convert(projectId, chapter.id, originalScene.id, key, latest.document.content_revision)
-          if (!canReadNow()) return
-          const loaded = await controller.load(originalScene.id, false)
-          onChanged()
-          if (!loaded || controller.getSnapshot().document?.content_revision !== result.content_revision) {
-            message.warning('转换已提交，但最新文档已变化或无法读取；请重新核对。'); return
-          }
-          message.success('区块已转为正文。')
+          await afterSave(async () => {
+            if (!canEditNow()) return
+            const latest = controller.getSnapshot(); const savedSection = latest.document?.document.sections.find((item) => item.key === key)
+            if (latest.scene?.id !== originalScene.id || !savedSection || !latest.document || !latest.documentDraft
+              || !sameSectionDocument(latest.document.document, latest.documentDraft)) {
+              message.warning('区块或草稿已变化，请重新确认。'); return
+            }
+            onSectionLockChange(true); locked = true
+            const result = await richDocumentApi.convert(projectId, chapter.id, originalScene.id, key, latest.document.content_revision)
+            if (!canReadNow()) return
+            const loaded = await controller.load(originalScene.id, false)
+            onChanged()
+            if (!loaded || controller.getSnapshot().document?.content_revision !== result.content_revision) {
+              message.warning('转换已提交，但最新文档已变化或无法读取；请重新核对。'); return
+            }
+            message.success('区块已转为正文。')
+          })
         } catch (error) { if (canReadNow()) message.error(`转换未确认：${errorMessage(error)}。请保留草稿并核对最新文档。`) }
         finally { if (locked) onSectionLockChange(false); setSectionBusy(false) }
       } })
@@ -211,19 +223,21 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
     if (!originalScene || disabled || sectionBusy || !canUseAINow()) return
     setSectionBusy(true)
     try {
-      if (!(await ensureSaved()) || !canUseAINow()) return
-      const latest = controller.getSnapshot(); const currentSelection = richEditor.current?.sectionSelection()
-      const section = latest.document?.document.sections.find((item) => item.key === selected.sectionKey)
-      if (latest.scene?.id !== originalScene.id || !section || !latest.document || !currentSelection
-        || currentSelection.sectionKey !== selected.sectionKey || currentSelection.start !== selected.start
-        || currentSelection.end !== selected.end || currentSelection.selectedText !== selected.selectedText
-        || Array.from(section.content).slice(selected.start, selected.end).join('') !== selected.selectedText
-        || !latest.documentDraft || !sameSectionDocument(latest.document.document, latest.documentDraft)) {
-        message.warning('保存期间选区、区块或场景已变化，请重新选择。'); return
-      }
-      setSectionTarget({ projectId, chapterId: chapter.id, sceneId: originalScene.id, sectionKey: section.key,
-        sectionTitle: section.title, includeInAi: section.include_in_ai, contentRevision: latest.document.content_revision,
-        planningRevision: latest.document.planning_revision, start: selected.start, end: selected.end, selectedText: selected.selectedText })
+      await afterSave(async () => {
+        if (!canUseAINow()) return
+        const latest = controller.getSnapshot(); const currentSelection = richEditor.current?.sectionSelection()
+        const section = latest.document?.document.sections.find((item) => item.key === selected.sectionKey)
+        if (latest.scene?.id !== originalScene.id || !section || !latest.document || !currentSelection
+          || currentSelection.sectionKey !== selected.sectionKey || currentSelection.start !== selected.start
+          || currentSelection.end !== selected.end || currentSelection.selectedText !== selected.selectedText
+          || Array.from(section.content).slice(selected.start, selected.end).join('') !== selected.selectedText
+          || !latest.documentDraft || !sameSectionDocument(latest.document.document, latest.documentDraft)) {
+          message.warning('保存期间选区、区块或场景已变化，请重新选择。'); return
+        }
+        setSectionTarget({ projectId, chapterId: chapter.id, sceneId: originalScene.id, sectionKey: section.key,
+          sectionTitle: section.title, includeInAi: section.include_in_ai, contentRevision: latest.document.content_revision,
+          planningRevision: latest.document.planning_revision, start: selected.start, end: selected.end, selectedText: selected.selectedText })
+      })
     } catch (error) { if (canReadNow()) message.error(`无法准备区块选区：${errorMessage(error)}`) }
     finally { setSectionBusy(false) }
   }
@@ -255,18 +269,21 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
     finally { if (canReadNow()) setLocating(false) }
   }
   const handleCreateScene = async () => {
-    if (!canEditNow() || disabled || sectionBusy || state.loading || state.composing || !(await ensureSaved())) return
-    const originalScene = controller.getSnapshot().scene
-    if (!originalScene || originalScene.content_revision === undefined) return
+    if (!canEditNow() || disabled || sectionBusy || state.loading || state.composing) return
     try {
-      const added = await sceneApi.create(projectId, chapter.id, {
-        expected_content_revision: originalScene.content_revision,
-        title: '新场景',
-        after_scene_id: originalScene.id,
+      await afterSave(async () => {
+        const originalScene = controller.getSnapshot().scene
+        if (!originalScene || originalScene.id !== scene?.id || !canEditNow()) return
+        const added = await sceneApi.create(projectId, chapter.id, {
+          expected_content_revision: originalScene.content_revision,
+          title: '新场景',
+          after_scene_id: originalScene.id,
+        })
+        if (!canEditNow()) return
+        await controller.load(added.id, false)
+        onChanged()
+        message.success('已创建独立场景')
       })
-      await controller.load(added.id, false)
-      onChanged()
-      message.success('已创建独立场景')
     } catch (err) {
       if (canEditNow()) message.error(errorMessage(err))
     }
@@ -276,6 +293,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
     const isSelected = item.id === scene?.id
     return {
       key: String(item.id),
+      disabled: !isSelected && (disabled || sectionBusy || state.loading || state.composing),
       label: (
         <Space size={6} style={{ fontWeight: isSelected ? 600 : 400 }}>
           <span>{`场景 ${index + 1}${item.title ? ` · ${item.title}` : ''}`}</span>
@@ -378,7 +396,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
               value={state.draft.title}
               maxLength={200}
               onChange={(event) => controller.change({ title: event.target.value })}
-              disabled={!canEdit || disabled || sectionBusy || state.loading}
+              disabled={!canEdit || editorDisabled || sectionBusy || state.loading}
               style={{ fontWeight: 600, fontSize: 14, padding: 0 }}
             />
           </Space>
@@ -405,6 +423,8 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
               selection={selection}
               disabled={disabled || sectionBusy || state.loading || state.composing || !!unsupported}
               ensureSaved={ensureSaved}
+              runSavedAction={runSavedAction}
+              conflictActions={conflictActions}
               onChanged={onChanged}
             />
             <Button
@@ -450,7 +470,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
             placeholder="在此输入当前场景摘要、情节推进或注意事项..."
             autoSize={{ minRows: 2, maxRows: 6 }}
             onChange={(event) => controller.change({ summary: event.target.value })}
-            disabled={!canEdit || disabled || sectionBusy || state.loading}
+            disabled={!canEdit || editorDisabled || sectionBusy || state.loading}
           />
         </div>
       )}
@@ -465,7 +485,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
           action={<Button disabled={state.saving || disabled} onClick={() => void controller.load()}>重新读取目录（保留草稿）</Button>}
         />
       )}
-      <SceneConflictReview state={state} controller={controller} disabled={!canEdit || disabled} />
+      <SceneConflictReview projectId={projectId} state={state} controller={controller} actions={conflictActions} disabled={!canEdit || disabled || sectionBusy} />
       {state.loading && <Spin style={{ display: 'block', margin: '16px auto' }} />}
 
       {/* 核心正文编辑器 */}
@@ -496,12 +516,12 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
               ref={richEditor}
               document={state.documentDraft}
               savedDocument={state.document?.document}
-              readOnly={!canEdit || disabled || sectionBusy || state.loading}
+              readOnly={!canEdit || editorDisabled || sectionBusy || state.loading}
               onDocument={(next, evidence) => controller.changeDocument(next, evidence)}
               onCompositionChange={(value) => controller.setComposing(value)}
               onSelection={onSelection}
-              onSectionConvert={convertSection}
-              onSectionRewrite={canUseAI ? (value) => void openSectionRewrite(value) : undefined}
+              onSectionConvert={disabled || sectionBusy ? undefined : convertSection}
+              onSectionRewrite={canUseAI && !disabled && !sectionBusy ? (value) => void openSectionRewrite(value) : undefined}
             />
           )}
         </>
@@ -516,6 +536,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
         disabled={disabled || sectionBusy || state.loading || state.composing}
         controller={controller}
         ensureSaved={ensureSaved}
+        runSavedAction={runSavedAction}
         onChanged={onChanged}
         onSelect={onSelect}
         onDraftChange={onStructureDirtyChange}
@@ -544,6 +565,7 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
               scene={scene}
               disabled={disabled || sectionBusy || state.loading || state.composing}
               ensureSaved={ensureSaved}
+              runSavedAction={runSavedAction}
               onChanged={() => { void controller.load(); onChanged() }}
             />
             <SceneSettingPreview
