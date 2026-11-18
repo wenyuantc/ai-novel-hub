@@ -1,0 +1,65 @@
+.serialization-workbench { min-width: 0; container-type: inline-size; }
+.serialization-workbench .studio-page { display: grid; gap: 18px; }
+.serialization-workbench .studio-page-heading { margin-bottom: 0; flex-wrap: wrap; align-items: center; }
+.serialization-panel, .serialization-stats {
+  background: var(--color-surface-raised); border: 1px solid var(--color-border); border-radius: var(--radius-card);
+}
+.serialization-panel { padding: 20px; min-width: 0; }
+.serialization-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 20px 0; }
+.serialization-stats > div { padding: 0 clamp(10px, 3cqi, 32px); }
+.serialization-stats > div + div { border-inline-start: 1px solid var(--color-border); }
+.serialization-stats dt, .serialization-muted, .serialization-item-main small, .serialization-heading small,
+.serialization-legend, .serialization-empty, .serialization-loading { color: var(--color-muted); font-size: 13px; }
+.serialization-stats dd { margin: 4px 0 0; line-height: 1.4; overflow-wrap: anywhere; }
+.serialization-stats strong { font: 500 clamp(22px, 4cqi, 35px) var(--font-display); color: var(--color-surface-foreground); }
+.serialization-stats dd small { color: var(--color-muted); margin-inline-start: 5px; }
+.serialization-unset { font-size: 14px; }
+.serialization-section-header, .serialization-heading, .serialization-controls, .serialization-tags, .serialization-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
+}
+.serialization-section-header { justify-content: space-between; gap: 10px; }
+.serialization-panel h2, .serialization-panel h3 { color: var(--color-surface-foreground); margin: 0; }
+.serialization-panel h2 { font: 500 21px var(--font-display); }
+.serialization-panel h3 { font: 500 18px var(--font-display); }
+.serialization-controls input[type='month'] { width: auto; max-width: 100%; }
+.serialization-calendar-layout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 22px; margin-top: 18px; }
+.serialization-calendar { min-width: 0; }
+.serialization-week, .serialization-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.serialization-week { text-align: center; font-size: 12px; color: var(--color-muted); margin-bottom: 7px; }
+.serialization-calendar-grid > button { display: flex; min-height: 43px; align-items: center; justify-content: center; flex-direction: column; gap: 2px;
+  background: transparent; color: var(--color-ink); border: 1px solid transparent; border-radius: var(--radius-control); cursor: pointer; font: inherit; padding: 2px; }
+.serialization-calendar-grid > button:hover, .serialization-row:hover { background: var(--color-panel); }
+.serialization-calendar-grid > button[aria-pressed='true'] { background: var(--color-panel); border-color: var(--color-primary); }
+.serialization-calendar-grid > button[aria-current='date'] .serialization-day-number { color: var(--color-primary); font-weight: 700; }
+.serialization-counts { display: flex; justify-content: center; gap: 4px; font-size: 10px; line-height: 1; }
+.serialization-legend { margin-top: 6px; justify-content: center; font-size: 11px; }
+.serialization-planned, .serialization-first { display: inline-flex; align-items: center; gap: 3px; }
+.serialization-planned::before, .serialization-first::before { content: ''; width: 6px; height: 6px; display: inline-block; border-radius: 50%; background: var(--color-warning); }
+.serialization-first::before { background: var(--color-success); border-radius: 1px; }
+.serialization-agenda { border-inline-start: 1px solid var(--color-border); padding-inline-start: 20px; min-width: 0; }
+.serialization-list { list-style: none; padding: 0; margin: 8px 0; }
+.serialization-list li + li { border-top: 1px solid var(--color-border); }
+.serialization-row { display: flex; border: none; padding: 10px 6px; width: 100%; text-align: left; background: transparent; align-items: center; gap: 8px; flex-wrap: wrap; cursor: pointer; color: inherit; font: inherit; }
+.serialization-item-main { display: grid; gap: 2px; flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+.serialization-item-main strong { font-weight: 550; }
+.serialization-channel { font-size: 13px; color: var(--color-muted); overflow-wrap: anywhere; }
+.serialization-tags { gap: 4px; }
+.serialization-tags .ant-tag { margin: 0; }
+.serialization-library .ant-tabs-nav { margin: 0 0 12px; }
+.serialization-library .ant-select { min-width: 130px; max-width: 100%; }
+.serialization-library form .ant-input-affix-wrapper { max-width: min(230px, 100%); }
+.serialization-loading, .serialization-empty { padding: 14px 0; margin: 0; }
+.serialization-loading .ant-spin { margin-inline-end: 6px; }
+.serialization-goal-field { display: grid; gap: 6px; margin-top: 12px; }
+@container (max-width: 740px) {
+  .serialization-calendar-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .serialization-agenda { padding: 14px 0 0; border-inline-start: none; border-top: 1px solid var(--color-border); }
+}
+@container (max-width: 440px) {
+  .serialization-workbench .studio-page-heading { gap: 8px; }
+  .serialization-panel { padding: 13px; }
+  .serialization-stats { padding: 14px 0; }
+  .serialization-unset { font-size: 12px; }
+  .serialization-stats dd small { display: block; margin: 0; }
+  .serialization-calendar-grid > button { min-height: 39px; }
+}

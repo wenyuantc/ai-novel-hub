@@ -428,6 +428,14 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     return (await autosave.runSavedAction(async () => true)) === true
   }
 
+  const openSerialization = async () => {
+    if (!canReadNow()) return
+    if (canEditNow() && (autosave.hasLocalChanges() || autosave.reviewNeeded || autosave.restored || saving)) {
+      if (!await ensureSaved()) return
+    }
+    if (canReadNow()) navigate(`/projects/${pid}/serialization?chapter=${chapter.id}`)
+  }
+
   const selectScene = useCallback(async (sid: number, updateUrl = true) => {
     if (!canReadNow()) return false
     const controller = sceneEditor.controller
@@ -737,6 +745,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         </Button>
       </Badge>}
       <ChapterForeshadowButton projectId={pid} chapterId={chapter.id} />
+      <Button size="small" disabled={actionLocked} onClick={() => void openSerialization()}>连载与存稿</Button>
       <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>
         版本历史
       </Button>

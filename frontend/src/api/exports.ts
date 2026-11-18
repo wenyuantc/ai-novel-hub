@@ -14,7 +14,7 @@ export interface DocumentExportRequest {
   materials: { settings: SettingEntryRef[]; conversation_ids: number[]; note_ids: number[] }
 }
 
-interface DownloadOptions {
+export interface DownloadOptions {
   signal?: AbortSignal
   /** 捕获的弹窗和作品权限作用域；blob 就绪后再次核验。 */
   isCurrent: () => boolean
@@ -37,7 +37,7 @@ function saveAttachment(blob: Blob, filename: string) {
   }
 }
 
-async function receiveAttachment(response: Response, fallback: string, options: DownloadOptions): Promise<ExportDownloadResult | null> {
+export async function receiveAttachment(response: Response, fallback: string, options: DownloadOptions): Promise<ExportDownloadResult | null> {
   const blob = await response.blob()
   if (options.signal?.aborted || !options.isCurrent()) return null
   const filename = parseContentDispositionFilename(response.headers.get('content-disposition')) ?? fallback

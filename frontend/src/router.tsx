@@ -133,6 +133,7 @@ export const router = createBrowserRouter([
           { path: 'outlines', lazy: lazyPage(() => import('./pages/project/OutlinesPanel')) },
           { path: 'planning', lazy: lazyPage(() => import('./pages/project/PlanningPanel')) },
           { path: 'chapters', element: <ChaptersPanel /> },
+          { path: 'serialization', lazy: lazyPage(() => import('./pages/project/SerializationPage')) },
           { path: 'chapters/:cid', lazy: lazyPage(() => import('./pages/project/ChapterEditorPage')) },
         ],
       },
