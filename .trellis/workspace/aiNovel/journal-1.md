@@ -1642,3 +1642,32 @@ TODOS 第 14 项：手动 AI 一致性检查与问题清单、两级修改影响
 ### Status
 
 [OK] **Completed**
+
+
+## Session 50: 全书搜索与批量修订
+<!-- trellis-session: v=2 fp=17861e2478d9defb -->
+
+**Date**: 2026-11-18
+**Task**: 全书搜索与批量修订
+**Branch**: `codex/book-search-batch-revision`
+
+### Summary
+
+支持章节范围搜索、阅读定位、跨页勾选替换和整批撤销。冲突保留整批现状，备份 v14 携带可选修订历史。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2e73db4` | feat(chapters): 实现全书检索、批量修订和整批撤销 |
+| `708aa7f` | feat(editor): 增加全书搜索工作台和阅读定位 |
+| `608a50e` | docs(book-search): 记录批量修订规范与验收结果 |
+
+### Testing
+
+- [OK] SQLite 全量 6805 项通过、19 项预期失败。提交前后端专项 34 项、前端 1771 项、两端 lint 与前端构建通过。
+- [OK] Chrome 实测双编辑会话、冲突保护和重试。PostgreSQL 16.15 验证迁移、并发及整批事务。
+
+### Status
+
+[OK] **Completed**
