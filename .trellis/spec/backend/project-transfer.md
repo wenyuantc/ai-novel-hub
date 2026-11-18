@@ -83,11 +83,11 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 ---
 
-## 场景：备份格式 v14 与导出
+## 场景：备份格式 v15 与导出
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 14, exported_at, app_schema: "0060"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 15, exported_at, app_schema: "0064"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
@@ -116,7 +116,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 |---|---|
 | 非 UTF-8 / 非 JSON / 非对象 | `备份文件不是 UTF-8 编码的 JSON` / `备份文件不是合法的 JSON：…` / `备份文件格式不正确：应为 JSON 对象` |
 | format 不符 | `不是有效的项目备份文件（format 应为 ainovel.project）` |
-| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v14），请升级后再导入` |
+| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v15），请升级后再导入` |
 | 嵌套 > 40 层 | `备份文件嵌套层级过深（上限 40 层）` |
 | 缺少 project / tables | `备份文件格式不正确：缺少 project` / `…缺少 tables` |
 | 行字段缺失（NOT NULL 且无默认）/ 类型不符 / 超长 / id 重复 | `备份文件校验失败：…`，errors 如 `角色第 1 行缺少字段 name`、`角色第 1 行字段 name 超过长度上限 100` |
@@ -155,6 +155,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - v12／0058 增加核心表 `consistency_ledgers`（`task_id` 不导出，`facts` 为 `json_plain`）与 `consistency_issues`（`status_changed_by` 及三个运行引用 `first_run_id` / `last_seen_run_id` / `last_checked_run_id` 不导出，导入后为空）；`consistency_runs` 是任务运行态，登记在 `NOT_EXPORTED`。v1–v11 缺表或规范空数组补空，夹带非空一致性表拒绝「旧版备份不支持一致性检查资料，请使用原始版本文件」。预览用 `schemas.consistency.LedgerFact` / `IssueEvidence` 校验 JSON 结构，并拒绝同章重复台账、重复 `identity_key`、非正 `revision` / `schema_version`。新增指向 `chapters` 的外键同时要登记 `chapter_delete_guard._REVIEWED_FKS` 并补归属检查。
 - v13／0059：`consistency_ledgers` 增加上一版三列 `prev_facts`（`json_plain`）/ `prev_source_hash` / `prev_text_hash`（须同时给出或同时为空）；新增 `consistency_impacts`（`actor_id`、`task_id` 不导出；`items[].chapter_id` 经 `remap.consistency_impact_items` 重映射、对应不上的影响项整项去掉；`uncovered` 的章节 id 与 `acknowledged` 的设定变化 id 经 `remap.consistency_impact_refs` 重映射、对应不上的去掉并告警；`changes` 为 `json_plain`）。`parse_backup` 用 `ImpactChange`／`ImpactItem` 校验结构、数量上限与重复章节。v1–v12 补空表导入；旧版本文件夹带影响表数据或非空 `prev_*` 时拒绝。
 - v14／0060 在可选 `versions` 分组加入批次头和场景明细。旧版补空历史。导入按原词、替换词和命中坐标重放富文档，核对 `matches_revision` 后映射成新作品的修订基线。已删除或过期的目标保留冲突，批次内的章节序号区分同号同名的已删章节。原实例去重凭据与操作者不导出。见[全书搜索与批量修订](./book-search.md)。
+- v15／0064 将连载目标、编辑与排期条目、冻结定稿、平台发布记录列入核心组。关闭 versions 时也能恢复实际发布正文。旧版补空表。登记重试所用的操作者和请求凭据仅用于源实例。导入规则与验收见[连载与存稿](./serialization.md)。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。
   例外：封面不进入通用表注册表，而是新增可选顶层字段，曾保持原格式版本；不能用此例外跳过其他新增表的格式迁移评估。
 

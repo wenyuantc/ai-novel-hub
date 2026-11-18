@@ -42,10 +42,11 @@
 | [实例内提示词工坊](./workshop.md) | 风格 / 单 key 模板共享（含组件引用的模板展开后写入快照）、审核快照、404/403 权限、匿名与删号署名、原子计数、导入前版本与恢复 | 已填写 |
 | [灵感模式](./inspiration.md) | 立项结构化字段与【作品信息】、灵感会话 `state` 结构、步骤与 stale 规则、生成选项同步 SSE（请求内重试 / `retry` 事件 / 断开不落库 / 进程内锁）、转为项目与应用到已有项目 | 已填写 |
 | [检索基建](./retrieval.md) | 统一检索单元 `retrieval_chunks`、BM25 + 向量混合打分（有界、阈值、旧向量不用）、向量模型（embedding）、知识库解析 / 分块 / `kb.index` 任务、剧情记忆抽取 / 召回、注入点接入方法 | 已填写 |
-| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v11 格式（兼容 v1–v10）、表规则注册表、引用重映射、受限暂存导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
+| [项目备份与 EPUB](./project-transfer.md) | `ainovel.project` v15 格式（兼容 v1–v14）、表规则注册表、引用重映射、受限暂存导出、预览令牌与单事务导入、EPUB 3 + NCX | 已填写 |
 | [作者私人笔名与作品署名](./pen-names.md) | 私库／单作品关联、协作者只读、User屏障、书架筛选、备份及双EPUB署名 | 已填写 |
 | [设定缩略图](./setting-thumbnails.md) | 四类主体、系列共享、权限和版本、标准图、备份／卡片／撤销 | 已填写 |
 | [个人小说模板](./novel-templates.md) | 私人快照、显式依赖、空正文建书、幂等收据与事务锁序 | 已填写 |
+| [连载与存稿工作台](./serialization.md) | 共用排期、稿件确认、首次发布统计、历史稿导出与单书恢复 | 已填写 |
 | [可阅读文档组合导出](./document-export.md) | DOCX／Markdown／TXT 章景与摘要选择、设定／聊天／笔记、授权快照与下载竞态 | 已填写 |
 | [项目封面](./project-cover.md) | 人工与协作 AI 权限、本人模型优先及作者授权、受控发送和预览、魔数校验、微秒版本 URL、备份与 EPUB | 已填写 |
 | [阅读器](./reader.md) | `projects.reading_progress`、`PUT /reading-progress`、`ProjectOut.last_edited_chapter_id` / `reading`（批量查询、删章兜底）、`/reader/toc` | 已填写 |
