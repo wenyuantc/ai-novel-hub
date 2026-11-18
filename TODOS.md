@@ -197,7 +197,7 @@
 
 当前状态：已实现。作品工作区支持按原文查找全部或指定范围内的章节，打开阅读页可定位到具体命中。编辑者可逐处勾选并提交修订。撤销时若任何受影响章节又被编辑或删除，整批停止并列出冲突章节。
 
-2026-11-18 已用真实浏览器验证搜索定位、跨页勾选、整批撤销、协作者编辑冲突及失败重试。备份 v14 的「章节版本」选项可携带批次历史。[任务需求](.trellis/tasks/11-18-book-search-batch-revision/prd.md) · [验收记录](.trellis/tasks/11-18-book-search-batch-revision/research/verification.md)
+2026-11-18 已用真实浏览器验证搜索定位、跨页勾选、整批撤销、协作者编辑冲突及失败重试。备份 v14 的「章节版本」选项可携带批次历史。[任务需求](.trellis/tasks/archive/2026-11/11-18-book-search-batch-revision/prd.md) · [验收记录](.trellis/tasks/archive/2026-11/11-18-book-search-batch-revision/research/verification.md)
 
 - [x] 搜索全书正文，支持限定章节范围，展示命中片段并跳转到对应段落。
 - [x] 支持人物改名、地名统一和术语调整等跨章节替换。
