@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/scenes.md","reason":"活动场景、章节修订、人工编辑和自动保存的写入条件"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"富格式、码点、区块、标记和安全映射"}
+{"file":".trellis/spec/backend/mention-tracking.md","reason":"正文指纹与定位结果失效时的处理"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"作品读写权限与协作者能力快照"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"可选版本历史、备份升级和导入引用重映射"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"作品级状态、跨资源刷新和会话切换"}

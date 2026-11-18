@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"核对权限、撤权和现有只读边界"}
+{"file":".trellis/spec/backend/scenes.md","reason":"核对自动保存、章景身份、版本竞争和原子撤销"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"核对格式、标记和作者区块往返"}
+{"file":".trellis/spec/backend/reader.md","reason":"核对阅读页命中定位、只读访问与阅读进度"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"核对不同版本备份、失效目标和批次重映射"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"验证前端覆盖、交互反馈和构建"}
