@@ -76,10 +76,10 @@
 
 ## Related Sources
 
-- `.trellis/tasks/11-17-autosave-draft-recovery/prd.md`
-- `.trellis/tasks/11-17-autosave-draft-recovery/design.md`
-- `.trellis/tasks/11-17-autosave-draft-recovery/implement.md`
-- `.trellis/tasks/11-17-autosave-draft-recovery/research/backend-save-contract.md`
+- `.trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/prd.md`
+- `.trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/design.md`
+- `.trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/implement.md`
+- `.trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/research/backend-save-contract.md`
 - `backend/app/services/chapter_service.py:111–155,339–435`
 - `backend/app/api/v1/chapters.py:89–94`
 - `backend/app/services/scene_service.py:115–163`

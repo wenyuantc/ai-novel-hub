@@ -191,7 +191,7 @@
 - [x] 检测多标签页或多端编辑冲突，让作者比较并选择保留的版本。
 - [x] 与后台 AI 写作任务、现有版本恢复机制协调，避免自动保存覆盖新生成的正文。
 
-2026-11-18 验收。前端 lint、构建及 1757 项测试通过，后端 Ruff 通过，SQLite 全量 6770 项通过、19 项预期失败。Chrome 实测断网后重开、回执丢失、多端冲突、权限变化和存储失败。详见[任务](.trellis/tasks/11-17-autosave-draft-recovery/prd.md)和[验收记录](.trellis/tasks/11-17-autosave-draft-recovery/research/verification.md)。
+2026-11-18 验收。前端 lint、构建及 1757 项测试通过，后端 Ruff 通过，SQLite 全量 6770 项通过、19 项预期失败。Chrome 实测断网后重开、回执丢失、多端冲突、权限变化和存储失败。详见[任务](.trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/prd.md)和[验收记录](.trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/research/verification.md)。
 
 ### 16. 全书搜索与批量修订
 

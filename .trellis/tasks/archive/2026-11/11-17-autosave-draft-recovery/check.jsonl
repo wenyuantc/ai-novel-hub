@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/research/applicable-guidelines.md", "reason": "大型事务/错误/质量/类型/组件规范的任务相关摘记与精确来源定位，避免上下文截断"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端三项门禁、README 与新文件空白检查"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端协议、持久化数据与身份边界的跨层核对"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "Scene 正文权威、内容 CAS、历史与 AI 快照；PG 测试旧说明以任务研究和当前 README 为准"}
+{"file": ".trellis/spec/backend/rich-documents.md", "reason": "完整文档、区块与标记的映射及恢复证据、组合输入和权限边界"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "状态唯一所有者、账号隔离、服务端派生字段及外部更新"}
+{"file": ".trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/research/backend-save-contract.md", "reason": "受保护标题路由、原值比较、稳定场景锚点、Agent 协议与 SQLite 验证边界"}
+{"file": ".trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/research/editor-state-contract.md", "reason": "B/S/D、在途尾部证据、墓碑同步、部分成功与富文档冲突限制"}
+{"file": ".trellis/tasks/archive/2026-11/11-17-autosave-draft-recovery/research/browser-persistence.md", "reason": "IndexedDB 事务完成、分支隔离、异常恢复与官方 API 依据"}
