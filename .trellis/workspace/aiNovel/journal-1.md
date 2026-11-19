@@ -1754,3 +1754,26 @@ TODOS 第 14 项：手动 AI 一致性检查与问题清单、两级修改影响
 ### Status
 
 [OK] **Completed**
+
+
+## Session 54: 修复 test_resource_conflicts 与向导撤权用例的偶发失败（TODOS 第 20 项）
+<!-- trellis-session: v=2 fp=95802838a0413820 -->
+
+**Date**: 2026-11-19
+**Task**: 修复 test_resource_conflicts 与向导撤权用例的偶发失败（TODOS 第 20 项）
+**Branch**: `main`
+
+### Summary
+
+test_resource_conflicts 根因为用例时序（向导写入使在途生成按可见性快照失效关闭、FakeLLM 按调用顺序出队错配），只改测试，并发 200 次通过。撤权收尾用例 296 次未复现，审查加诊断收口：补四个取消落点确定性用例与失败诊断，最可能原因为已修复的 GC 暂停超时（未证实）。规范补充并发 AI 任务测试时序。新发现 test_global_limit 重负载下偶发失败，未查。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0bf0515` | fix(tests): 修复 test_resource_conflicts 时序并为向导撤权用例补落点验证与诊断 |
+| `59d06c3` | docs(todos): 第 20 项根因记录链接改指归档目录 |
+
+### Status
+
+[OK] **Completed**
