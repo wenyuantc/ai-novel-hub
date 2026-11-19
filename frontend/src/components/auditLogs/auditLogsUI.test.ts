@@ -17,6 +17,8 @@ vi.mock('../../theme/ThemeSwitch', () => ({ default: () => null }))
 
 const { AuditLogDetailContent } = await import('./AuditLogDetailDrawer')
 const { AuditCleanupPreviewContent } = await import('./AuditCleanupModal')
+const { AdminCollaborationAuditResults } = await import('./AdminCollaborationAuditTab')
+const { CollaborationAuditDetailContent } = await import('./CollaborationAuditDetailDrawer')
 const { default: AdminAuditLogsPage, AuditLogResults } = await import('../../pages/AdminAuditLogsPage')
 const { default: AppLayout } = await import('../AppLayout')
 const { default: RequireAdmin } = await import('../RequireAdmin')
@@ -97,7 +99,7 @@ describe('清理二次确认说明', () => {
   it('显示独立日期、时区、预计/保护数量、不可恢复和并发说明，但不渲染令牌', () => {
     const preview: AuditCleanupPreview = { from_at: '2026-10-30T00:00:00Z', to_at: '2026-10-31T00:00:00Z', count: 12, protected_count: 3, expires_at: '2026-10-31T01:10:00Z', preview_token: 'do-not-render-token' }
     const html = render(createElement(AuditCleanupPreviewContent, { preview }))
-    for (const text of ['UTC', '（不含）', '12 条', '3 条（保留）', '不可恢复', '不继承列表', '成功和失败', '均受保护', '实际删除数与预计不同']) expect(html).toContain(text)
+    for (const text of ['UTC', '（不含）', '12 条', '3 条（保留）', '不可恢复', '仅清理管理操作日志，不影响协作审计', '不继承列表', '成功和失败', '均受保护', '实际删除数与预计不同']) expect(html).toContain(text)
     expect(html).not.toContain(preview.preview_token)
     expect(html).toContain('overflow-wrap')
   })
@@ -148,5 +150,69 @@ describe('管理员入口与守卫', () => {
     expect(admin).toContain('操作日志')
     state.admin = false
     expect(layout()).not.toContain('href="/admin/audit-logs"')
+  })
+})
+
+describe('管理员全站协作审计标签页与只读详情', () => {
+  const collabEvent = (over: Partial<import('../../api/collaborationAudit').CollaborationAuditEvent> = {}): import('../../api/collaborationAudit').CollaborationAuditEvent => ({
+    id: 88,
+    operation_id: '00000000-0000-4000-8000-000000000088',
+    occurred_at: '2026-11-19T08:30:00Z',
+    scope: 'project',
+    resource_id: 0,
+    resource_label: null,
+    invitation_id: '00000000-0000-4000-8000-000000000077',
+    actor_user_id: 11,
+    actor_username: 'stranger',
+    target_user_id: 11,
+    target_username: 'stranger',
+    action: 'accept',
+    result: 'failure',
+    error_code: 'not_found',
+    summary: { before_role: null, after_role: null, before_status: null, after_status: null, before_allow_owner_ai: null, after_allow_owner_ai: null },
+    ...over,
+  })
+
+  it('操作日志页同时呈现「管理操作日志」与「协作审计」标签页', () => {
+    const html = render(createElement(AdminAuditLogsPage))
+    expect(html).toContain('管理操作日志')
+    expect(html).toContain('协作审计')
+  })
+
+  it('桌面端使用表格展示范围/资源/操作人/目标，移动端使用可换行卡片并支持资源 #0 快照', () => {
+    const mobileHtml = render(createElement(AdminCollaborationAuditResults, { items: [collabEvent()], loading: false, mobile: true, onDetail: noop }))
+    expect(mobileHtml).toContain('未知资源（无效或非本人邀请） · #0')
+    expect(mobileHtml).toContain('对象不存在或无权限')
+    expect(mobileHtml).toContain('查看详情')
+    expect(mobileHtml).not.toContain('<table')
+    expect(mobileHtml).not.toContain('#null')
+
+    const desktopHtml = render(createElement(AdminCollaborationAuditResults, {
+      items: [collabEvent({ scope: 'series', resource_id: 5, resource_label: '已删系列', action: 'revoke', result: 'success', error_code: null })],
+      loading: false,
+      mobile: false,
+      onDetail: noop,
+    }))
+    for (const expected of ['范围与资源快照', '操作人快照', '目标成员快照', '系列 #5 · 已删系列', '撤销权限']) {
+      expect(desktopHtml).toContain(expected)
+    }
+    expect(desktopHtml).toContain('<table')
+  })
+
+  it('管理员协作审计详情只读并注明不受按日期清理影响', () => {
+    const html = render(createElement(CollaborationAuditDetailContent, {
+      event: collabEvent({
+        resource_id: 15,
+        resource_label: '已彻删作品',
+        action: 'modify',
+        result: 'success',
+        error_code: null,
+        summary: { before_role: 'viewer', after_role: 'editor', before_status: 'accepted', after_status: 'accepted', before_allow_owner_ai: false, after_allow_owner_ai: true },
+      }),
+    }))
+    for (const expected of ['作品 #15 · 已彻删作品', '不受「管理操作日志」按日期清理影响', '查看者 → 编辑者', '不允许使用作者模型 → 允许使用作者模型']) {
+      expect(html).toContain(expected)
+    }
+    expect(html).not.toContain('按日期清理</button>')
   })
 })

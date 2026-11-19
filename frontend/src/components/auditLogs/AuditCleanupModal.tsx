@@ -26,7 +26,7 @@ export function AuditCleanupPreviewContent({ preview }: { preview: AuditCleanupP
       <Descriptions.Item label="预览有效至">{formatTime(preview.expires_at, 'YYYY-MM-DD HH:mm:ss [UTC]Z')}</Descriptions.Item>
     </Descriptions>
     <Alert showIcon type="warning" message="删除不可恢复，请再次核对日期"
-      description="将清理该日期范围内全部可清理记录，不继承列表中的操作人、动作、结果或目标筛选。成功和失败的 audit.cleanup 清理事件均受保护，永不通过此入口删除。并发操作可能使实际删除数与预计不同；本次最多清理预览高水位以内的记录，不包含之后新分配 ID 的记录。" />
+      description="仅清理管理操作日志，不影响协作审计。将清理该日期范围内全部可清理记录，不继承列表中的操作人、动作、结果或目标筛选。成功和失败的 audit.cleanup 清理事件均受保护，永不通过此入口删除。并发操作可能使实际删除数与预计不同；本次最多清理预览高水位以内的记录，不包含之后新分配 ID 的记录。" />
   </Space>
 }
 
@@ -127,7 +127,7 @@ export default function AuditCleanupModal({ actorId, onClose, onCleaned }: Props
       {!result && <Button danger type="primary" loading={executing} disabled={!usable || !confirmed || previewing || executing} onClick={() => void handleCleanup()}>确认清理{preview ? ` ${preview.count.toLocaleString('zh-CN')} 条` : ''}</Button>}
     </Space>}>
     <Space direction="vertical" size={16} style={{ width: '100%', overflowWrap: 'anywhere' }}>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>审计日志长期保留，不自动过期。以下日期独立于列表筛选，按浏览器本地时区选择，包含结束日期全天；后端以 UTC 半开区间执行。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>仅清理管理操作日志，不影响独立保留的协作审计。管理操作日志长期保留，不自动过期；以下日期独立于列表筛选，按浏览器本地时区选择，包含结束日期全天，后端以 UTC 半开区间执行。</Typography.Paragraph>
       <Form layout="vertical" disabled={executing}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <Form.Item label="开始日期（含）" style={{ flex: '1 1 180px', minWidth: 0, marginBottom: 0 }}>

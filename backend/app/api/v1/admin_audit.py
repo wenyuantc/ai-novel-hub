@@ -13,7 +13,9 @@ from app.schemas.audit import (
     AuditLogFilters,
     AuditLogList,
 )
+from app.schemas.collaboration_audit import AdminCollaborationAuditFilters, CollaborationAuditList
 from app.services import audit_service as svc
+from app.services import collaboration_audit_query as collab_audit_svc
 
 PermissionAuditRead = Annotated[User, Depends(require_permission("audit.read"))]
 PermissionAuditCleanup = Annotated[User, Depends(require_permission("audit.cleanup"))]
@@ -26,6 +28,13 @@ async def list_logs(
     admin: PermissionAuditRead, db: DbDep, filters: Annotated[AuditLogFilters, Query()]
 ) -> AuditLogList:
     return await svc.list_logs(db, filters)
+
+
+@router.get("/collaboration", response_model=CollaborationAuditList)
+async def list_collaboration_logs(
+    admin: PermissionAuditRead, db: DbDep, filters: Annotated[AdminCollaborationAuditFilters, Query()]
+) -> CollaborationAuditList:
+    return await collab_audit_svc.list_for_admin(db, filters)
 
 
 @router.post("/cleanup-preview", response_model=AuditCleanupPreview)

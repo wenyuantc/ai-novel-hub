@@ -14,4 +14,11 @@
 .collaboration-fee-choice > span, .collaboration-modal-fields > .ant-space-item > span { color: var(--color-muted); font-size: 13px; }
 .collaboration-modal-fields { width: 100%; margin-bottom: 12px; }
 .collaboration-modal-fields .ant-select { min-width: 160px; }
+.collaboration-audit-panel { margin-bottom: 16px; min-width: 0; }
+.collaboration-audit-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.collaboration-audit-item { display: block !important; overflow-wrap: anywhere; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface-raised); padding: 12px 14px !important; margin-bottom: 8px; }
+.collaboration-audit-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.collaboration-audit-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--color-muted); }
+.collaboration-audit-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; }
+.collaboration-audit-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
 @media (max-width: 539.98px) { .collaboration-invite-form { flex-wrap: wrap; } .collaboration-invite-form .ant-input { flex-basis: 100%; } }

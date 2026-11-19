@@ -15,6 +15,8 @@ from app.schemas.collaboration import (
     Scope,
     SeriesInvite,
 )
+from app.schemas.collaboration_audit import AuthorCollaborationAuditFilters, CollaborationAuditList
+from app.services import collaboration_audit_query as audit_query
 from app.services import collaboration_service as svc
 
 router = APIRouter(tags=["collaboration"])
@@ -25,6 +27,18 @@ Revision = Annotated[int, Query(gt=0, le=2_147_483_647)]
 @router.get("/projects/{project_id}/collaborators", response_model=list[MemberOut])
 async def project_members(project_id: Id, user: CurrentUser, db: DbDep) -> list[MemberOut]:
     return await svc.list_members(db, user.id, "project", project_id)
+
+
+@router.get("/projects/{project_id}/collaborators/audit-logs", response_model=CollaborationAuditList)
+async def project_collaboration_audit_logs(
+    project_id: Id,
+    user: CurrentUser,
+    db: DbDep,
+    response: Response,
+    filters: Annotated[AuthorCollaborationAuditFilters, Query()],
+) -> CollaborationAuditList:
+    response.headers["Cache-Control"] = "no-store"
+    return await audit_query.list_for_owner(db, user.id, "project", project_id, filters)
 
 
 @router.post("/projects/{project_id}/collaborators", response_model=MemberOut, status_code=status.HTTP_201_CREATED)
@@ -59,6 +73,18 @@ async def revoke_project_member(
 @router.get("/series/{sid}/collaborators", response_model=list[MemberOut])
 async def series_members(sid: Id, user: CurrentUser, db: DbDep) -> list[MemberOut]:
     return await svc.list_members(db, user.id, "series", sid)
+
+
+@router.get("/series/{sid}/collaborators/audit-logs", response_model=CollaborationAuditList)
+async def series_collaboration_audit_logs(
+    sid: Id,
+    user: CurrentUser,
+    db: DbDep,
+    response: Response,
+    filters: Annotated[AuthorCollaborationAuditFilters, Query()],
+) -> CollaborationAuditList:
+    response.headers["Cache-Control"] = "no-store"
+    return await audit_query.list_for_owner(db, user.id, "series", sid, filters)
 
 
 @router.post("/series/{sid}/collaborators", response_model=MemberOut, status_code=status.HTTP_201_CREATED)

@@ -1,12 +1,13 @@
 import { useAuthorizationCleanup } from '../hooks/useAuthorizationCleanup'
 import { can } from '../utils/permissions'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Empty, Form, Input, InputNumber, List, Pagination, Result, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Empty, Form, Input, InputNumber, List, Pagination, Result, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useCallback, useState } from 'react'
 import { AUDIT_ACTION, AUDIT_RESULT, AUDIT_TARGET, auditLogApi, auditResult } from '../api/auditLogs'
 import { errorMessage } from '../api/client'
 import type { AuditAction, AuditLogBrief, AuditLogListQuery, AuditResult, AuditTargetType } from '../api/types'
+import AdminCollaborationAuditTab from '../components/auditLogs/AdminCollaborationAuditTab'
 import AuditCleanupModal from '../components/auditLogs/AuditCleanupModal'
 import AuditLogDetailDrawer from '../components/auditLogs/AuditLogDetailDrawer'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -48,9 +49,15 @@ export function AuditLogResults({ items, loading, mobile, onDetail }: ResultsPro
   </List.Item>} />
 }
 
+function initialAuditTab(): 'admin' | 'collaboration' {
+  if (typeof window === 'undefined') return 'admin'
+  return new URLSearchParams(window.location.search).get('tab') === 'collaboration' ? 'collaboration' : 'admin'
+}
+
 function AuditLogs({ actorId }: { actorId: number }) {
   const actor = useAuthStore((state) => state.user)
   const mobile = useIsMobile()
+  const [activeTab, setActiveTab] = useState<'admin' | 'collaboration'>(initialAuditTab)
   const [form] = Form.useForm<AuditFilterValues>()
   const [query, setQuery] = useState<AuditLogListQuery>({})
   const [filterError, setFilterError] = useState<string | null>(null)
@@ -84,33 +91,49 @@ function AuditLogs({ actorId }: { actorId: number }) {
     reload()
   }
   const fieldStyle = { flex: '1 1 150px', minWidth: 0, marginBottom: 0 }
+  const adminLogsContent = <Card styles={{ body: { padding: mobile ? 12 : 16, minWidth: 0 } }}>
+    <Form form={form} layout="vertical" onFinish={applyFilters}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+        <Form.Item name="actor_q" label="历史操作人用户名" style={fieldStyle}><Input allowClear placeholder="用户名快照，支持部分匹配" maxLength={64} /></Form.Item>
+        <Form.Item name="actor_user_id" label="操作人 ID" style={fieldStyle}><InputNumber min={1} max={Number.MAX_SAFE_INTEGER} precision={0} placeholder="用户 ID" style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="target_type" label="目标类型" style={fieldStyle}><Select<AuditTargetType> allowClear placeholder="全部类型" options={(Object.keys(AUDIT_TARGET) as AuditTargetType[]).map((value) => ({ value, label: AUDIT_TARGET[value] }))} /></Form.Item>
+        <Form.Item name="target_id" label="目标 ID" style={fieldStyle}><InputNumber min={1} max={Number.MAX_SAFE_INTEGER} precision={0} placeholder="目标 ID" style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="action" label="动作" style={{ ...fieldStyle, flexBasis: 200 }}><Select<AuditAction> allowClear showSearch optionFilterProp="label" placeholder="全部动作" options={(Object.keys(AUDIT_ACTION) as AuditAction[]).map((value) => ({ value, label: AUDIT_ACTION[value] }))} /></Form.Item>
+        <Form.Item name="result" label="结果" style={fieldStyle}><Select<AuditResult> allowClear placeholder="全部结果" options={(Object.keys(AUDIT_RESULT) as AuditResult[]).map((value) => ({ value, label: AUDIT_RESULT[value].label }))} /></Form.Item>
+        <Form.Item name="fromDate" label="开始日期（本地，含）" style={fieldStyle}><Input type="date" style={{ width: '100%', minWidth: 0 }} /></Form.Item>
+        <Form.Item name="toDate" label="结束日期（本地，含）" style={fieldStyle}><Input type="date" style={{ width: '100%', minWidth: 0 }} /></Form.Item>
+      </div>
+      <Space wrap style={{ marginBottom: 16 }}><Button type="primary" htmlType="submit">查询</Button><Button onClick={resetFilters}>重置筛选</Button></Space>
+    </Form>
+    {filterError && <Alert type="error" showIcon message={filterError} style={{ marginBottom: 16 }} />}
+    {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={reload}>重试</Button>} style={{ marginBottom: 16 }} />}
+    <AuditLogResults items={data?.items ?? []} loading={loading} mobile={mobile} onDetail={setDetailId} />
+    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginTop: 16 }}>
+      <Typography.Text type="secondary">共 {data?.total ?? 0} 条 · 时间与 ID 倒序</Typography.Text>
+      <Pagination current={currentPage} pageSize={pageSize} total={data?.total ?? 0} simple={mobile} showSizeChanger={!mobile} pageSizeOptions={[20, 50, 100]} onChange={(next, size) => { setPage(size !== pageSize ? 1 : next); setPageSize(size); reload() }} />
+    </div>
+  </Card>
+
   return <div style={{ maxWidth: 1500, minWidth: 0, margin: '0 auto', padding: mobile ? 12 : 24 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
-      <div><Typography.Title level={3} style={{ margin: '0 0 8px' }}>操作日志</Typography.Title><Typography.Text type="secondary">追溯真实管理员或系统清理、操作对象与结果。长期保留；仅含安全摘要，无正文全文差异。所有时间按浏览器本地时区显示。</Typography.Text></div>
-      <Space wrap><Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button><Button danger icon={<DeleteOutlined />} disabled={!can(actor, 'audit.cleanup')} onClick={() => setCleanupOpen(true)}>按日期清理</Button></Space>
-    </div>
-    <Card styles={{ body: { padding: mobile ? 12 : 16, minWidth: 0 } }}>
-      <Form form={form} layout="vertical" onFinish={applyFilters}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
-          <Form.Item name="actor_q" label="历史操作人用户名" style={fieldStyle}><Input allowClear placeholder="用户名快照，支持部分匹配" maxLength={64} /></Form.Item>
-          <Form.Item name="actor_user_id" label="操作人 ID" style={fieldStyle}><InputNumber min={1} max={Number.MAX_SAFE_INTEGER} precision={0} placeholder="用户 ID" style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="target_type" label="目标类型" style={fieldStyle}><Select<AuditTargetType> allowClear placeholder="全部类型" options={(Object.keys(AUDIT_TARGET) as AuditTargetType[]).map((value) => ({ value, label: AUDIT_TARGET[value] }))} /></Form.Item>
-          <Form.Item name="target_id" label="目标 ID" style={fieldStyle}><InputNumber min={1} max={Number.MAX_SAFE_INTEGER} precision={0} placeholder="目标 ID" style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="action" label="动作" style={{ ...fieldStyle, flexBasis: 200 }}><Select<AuditAction> allowClear showSearch optionFilterProp="label" placeholder="全部动作" options={(Object.keys(AUDIT_ACTION) as AuditAction[]).map((value) => ({ value, label: AUDIT_ACTION[value] }))} /></Form.Item>
-          <Form.Item name="result" label="结果" style={fieldStyle}><Select<AuditResult> allowClear placeholder="全部结果" options={(Object.keys(AUDIT_RESULT) as AuditResult[]).map((value) => ({ value, label: AUDIT_RESULT[value].label }))} /></Form.Item>
-          <Form.Item name="fromDate" label="开始日期（本地，含）" style={fieldStyle}><Input type="date" style={{ width: '100%', minWidth: 0 }} /></Form.Item>
-          <Form.Item name="toDate" label="结束日期（本地，含）" style={fieldStyle}><Input type="date" style={{ width: '100%', minWidth: 0 }} /></Form.Item>
-        </div>
-        <Space wrap style={{ marginBottom: 16 }}><Button type="primary" htmlType="submit">查询</Button><Button onClick={resetFilters}>重置筛选</Button></Space>
-      </Form>
-      {filterError && <Alert type="error" showIcon message={filterError} style={{ marginBottom: 16 }} />}
-      {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={reload}>重试</Button>} style={{ marginBottom: 16 }} />}
-      <AuditLogResults items={data?.items ?? []} loading={loading} mobile={mobile} onDetail={setDetailId} />
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginTop: 16 }}>
-        <Typography.Text type="secondary">共 {data?.total ?? 0} 条 · 时间与 ID 倒序</Typography.Text>
-        <Pagination current={currentPage} pageSize={pageSize} total={data?.total ?? 0} simple={mobile} showSizeChanger={!mobile} pageSizeOptions={[20, 50, 100]} onChange={(next, size) => { setPage(size !== pageSize ? 1 : next); setPageSize(size); reload() }} />
+      <div>
+        <Typography.Title level={3} style={{ margin: '0 0 8px' }}>操作日志</Typography.Title>
+        <Typography.Text type="secondary">追溯真实管理员操作、系统清理与全站协作审计记录。仅含安全摘要，无正文全文差异；所有时间按浏览器本地时区显示。</Typography.Text>
       </div>
-    </Card>
+      {activeTab === 'admin' && <Space wrap>
+        <Button icon={<ReloadOutlined />} onClick={reload} disabled={loading}>刷新</Button>
+        <Button danger icon={<DeleteOutlined />} disabled={!can(actor, 'audit.cleanup')} onClick={() => setCleanupOpen(true)}>按日期清理</Button>
+      </Space>}
+    </div>
+    <Tabs
+      activeKey={activeTab}
+      destroyOnHidden
+      onChange={(key) => setActiveTab(key === 'collaboration' ? 'collaboration' : 'admin')}
+      items={[
+        { key: 'admin', label: '管理操作日志', children: adminLogsContent },
+        { key: 'collaboration', label: '协作审计', children: activeTab === 'collaboration' ? <AdminCollaborationAuditTab actorId={actorId} /> : null },
+      ]}
+    />
     {detailId !== null && <AuditLogDetailDrawer key={`${actorId}:${detailId}`} id={detailId} actorId={actorId} onClose={() => setDetailId(null)} />}
     {cleanupOpen && can(actor, 'audit.cleanup') && <AuditCleanupModal key={actorId} actorId={actorId} onClose={() => setCleanupOpen(false)} onCleaned={() => { setDetailId(null); setPage(currentPage); reload() }} />}
   </div>

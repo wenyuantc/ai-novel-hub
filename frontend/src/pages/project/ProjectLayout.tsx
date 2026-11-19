@@ -60,7 +60,7 @@ export default function ProjectLayout() {
       {/* 作者与可用 AI 的编辑者可写；查看者 / 管理员兼查看者只读本人会话（裁决 1、4）；纯管理员不挂载。
           按作品 + 协作授权轮次 + 能力代次键控：授权变化后整体重挂，不沿用旧的可写状态。 */}
       {canViewAgent && <AgentDock key={`${pid}:${authorizationVersion ?? 'owner'}:${scopeVersion}`} projectId={pid} open={agentOpen} mobile={isMobile} width={agentPrefs.width} onWidth={(width) => setAgentPrefs((prev) => ({ ...prev, width }))} onClose={() => { setAgentPrefs((prev) => ({ ...prev, open: false })); setDismissedAgentRequest(location.key) }} />}
-      {canManageCollaborators && membersOpen && <Drawer title="作品协作者" open onClose={() => setMembersOpenAt(null)} width={isMobile ? '100%' : 520} destroyOnHidden>
+      {canManageCollaborators && membersOpen && <Drawer title="作品协作者" open onClose={() => setMembersOpenAt(null)} width={isMobile ? '100%' : 760} destroyOnHidden>
         <MemberPanel scope="project" resourceId={pid} canManage />
       </Drawer>}
     </div>

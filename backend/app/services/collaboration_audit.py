@@ -1,24 +1,26 @@
 """协作审计：成功与业务同事务，失败独立提交并核实未知提交结果。"""
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import CollaborationAuditEvent
+from app.schemas.collaboration import Role
+from app.schemas.collaboration_audit import (
+    CollaborationAuditAction,
+    CollaborationAuditErrorCode,
+    CollaborationAuditSummary,
+    MemberStatus,
+)
 
-_ACTIONS = frozenset({"invite", "accept", "decline", "modify", "revoke"})
-_ROLES = frozenset({"viewer", "editor"})
-_STATUSES = frozenset({"pending", "accepted", "declined", "revoked"})
-_ERRORS = frozenset({
-    "bad_request", "unauthorized", "conflict", "not_found", "permission_denied", "invitee_unavailable",
-    "stale_invitation", "cancelled", "already_collaborator", "self_invite", "collaboration_busy", "system_error",
-})
-_SUMMARY_KEYS = frozenset({
-    "before_role", "after_role", "before_status", "after_status", "before_allow_owner_ai", "after_allow_owner_ai",
-})
+_ACTIONS = frozenset(get_args(CollaborationAuditAction))
+_ROLES = frozenset(get_args(Role))
+_STATUSES = frozenset(get_args(MemberStatus))
+_ERRORS = frozenset(get_args(CollaborationAuditErrorCode))
+_SUMMARY_KEYS = frozenset(CollaborationAuditSummary.model_fields)
 
 
 @dataclass(frozen=True)

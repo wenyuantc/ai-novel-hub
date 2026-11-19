@@ -1,10 +1,12 @@
-import { Alert, Button, Checkbox, Input, Modal, Select, Space, Spin } from 'antd'
-import { useCallback, useState } from 'react'
+import { Alert, Button, Checkbox, Input, Modal, Select, Space, Spin, Tabs } from 'antd'
+import { lazy, Suspense, useCallback, useState } from 'react'
 import {
   collaborationApi, type CollaborationMember, type CollaborationRole, type CollaborationScope,
 } from '../../api/collaboration'
 import { useCollaborationFacts } from './useCollaborationFacts'
 import './collaboration.css'
+
+const CollaborationAuditPanel = lazy(() => import('./CollaborationAuditPanel'))
 
 export interface MemberPanelProps {
   scope: CollaborationScope
@@ -61,6 +63,9 @@ export default function MemberPanel({ scope, resourceId, canManage, onChanged }:
   const facts = useCollaborationFacts(`members:${scope}:${resourceId}`, canManage, read, onChanged)
   const [storedDraft, setStoredDraft] = useState<Draft>({ username: '', role: 'viewer', allowOwnerAi: false, identityKey: '' })
   const [storedIntent, setStoredIntent] = useState<Intent | null>(null)
+  const [storedTab, setStoredTab] = useState<{ scopeKey: string; tab: 'members' | 'audit' }>({ scopeKey: '', tab: 'members' })
+  const scopeKey = `${scope}:${resourceId}`
+  const activeTab = storedTab.scopeKey === scopeKey ? storedTab.tab : 'members'
   const draft = storedDraft.identityKey === facts.identityKey
     ? storedDraft : { username: '', role: 'viewer' as const, allowOwnerAi: false, identityKey: facts.identityKey }
   const changeDraft = (changes: Partial<Draft>) => setStoredDraft({ ...draft, ...changes, identityKey: facts.identityKey })
@@ -101,7 +106,7 @@ export default function MemberPanel({ scope, resourceId, canManage, onChanged }:
   }
   if (!canManage) return null
   const title = intent?.kind === 'invite' ? '确认发送邀请' : intent?.kind === 'update' ? '确认修改权限' : '确认撤销权限'
-  return <section className="collaboration-panel" aria-label={scope === 'project' ? '作品成员' : '系列成员'} aria-busy={facts.loading}>
+  const memberSection = <section className="collaboration-panel" aria-label={scope === 'project' ? '作品成员' : '系列成员'} aria-busy={facts.loading}>
     <div className="collaboration-heading"><h3>{scope === 'project' ? '作品成员' : '系列设定协作者'}</h3>
       <Button size="small" disabled={facts.busy} onClick={facts.refresh}>刷新</Button></div>
     {facts.error && <Alert type="error" showIcon message={facts.error} action={<Button size="small" disabled={facts.busy} onClick={facts.refresh}>重新加载</Button>} />}
@@ -149,4 +154,22 @@ export default function MemberPanel({ scope, resourceId, canManage, onChanged }:
       </>}
     </Modal>
   </section>
+
+  return <Tabs
+    activeKey={activeTab}
+    destroyOnHidden
+    onChange={(key) => setStoredTab({ scopeKey, tab: key === 'audit' ? 'audit' : 'members' })}
+    items={[
+      { key: 'members', label: '成员管理', children: memberSection },
+      {
+        key: 'audit',
+        label: '协作审计',
+        children: activeTab === 'audit'
+          ? <Suspense fallback={<div style={{ padding: 24, textAlign: 'center' }}><Spin /></div>}>
+              <CollaborationAuditPanel scope={scope} resourceId={resourceId} canManage={canManage} />
+            </Suspense>
+          : null,
+      },
+    ]}
+  />
 }
