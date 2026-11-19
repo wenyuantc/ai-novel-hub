@@ -102,6 +102,7 @@ import TitleDraftConflict from '../../components/editorDrafts/TitleDraftConflict
 import { useChapterAutosave } from '../../components/editorDrafts/useChapterAutosave'
 import { downloadJson } from '../../api/cards'
 import type { EditorDraftTarget } from '../../components/editorDrafts/editorDraftRecord'
+import './ChapterEditorPage.css'
 
 const SUCCESS_MESSAGES: Partial<Record<Task['kind'], string>> = {
   'chapter.generate': '生成完成，已保存',
@@ -1102,6 +1103,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
         <div ref={editorPaneRef} style={inspectorOpen && !isMobile ? splitPane(640) : { flex: '1 1 100%', minWidth: 0 }}>
           <Card
             size="small"
+            className="chapter-editor-card"
             title={
               <Space wrap>
                 <Button

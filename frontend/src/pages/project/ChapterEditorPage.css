@@ -1,0 +1,20 @@
+/*
+ * 章节编辑卡片页头：工具栏放进页头时（见 TOOLBAR_IN_HEADER_MIN_WIDTH），按钮越来越多会把标题区挤到 0 宽，
+ * 章号、状态、字数和「修改影响」提示随之不可见。这里让页头可以换行，并给标题区保留最小宽度：
+ * 放不下时工具栏整体换到第二行，而不是压缩标题。
+ */
+.chapter-editor-card > .ant-card-head > .ant-card-head-wrapper {
+  flex-wrap: wrap;
+  row-gap: 8px;
+  padding-block: 8px;
+}
+.chapter-editor-card > .ant-card-head > .ant-card-head-wrapper > .ant-card-head-title {
+  flex: 1 1 360px;
+  min-width: min(360px, 100%);
+  white-space: normal;
+  overflow: visible;
+}
+.chapter-editor-card > .ant-card-head > .ant-card-head-wrapper > .ant-card-extra {
+  max-width: 100%;
+  margin-inline-start: auto;
+}

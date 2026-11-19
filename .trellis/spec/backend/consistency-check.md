@@ -93,7 +93,7 @@
 - 任务结束（订阅或轮询发现）后刷新概要、列表与打开中的详情。文案一律表述为「潜在冲突」。
 - 进行中任务的接上、轮询、终态核对与取消统一在 `components/consistency/useRunningTaskFollow.ts`（检查页与「修改影响」页签共用，不各写一份）。有检查在进行时始终轮询概要（订阅中也保留）。订阅仍显示进行中而概要已不列该任务时（`streamWatchAction` → `verify`），读取任务真实状态，确认结束（`checkEndNotice`）后断开订阅并刷新；任务仍在运行则不动（概要可能是旧数据）。
 - 证据链接另带 `mention_from=consistency`：目标页位置失效时用 `staleAnchorMessage` 的中性措辞，不提示「回提及列表」。`mentionSegments` 的焦点高亮严格等于焦点区间，提及在焦点边界切段。
-- 详情抽屉：保存后焦点留在抽屉内的状态选项，关闭后焦点回到打开它的列表条目（`data-consistency-issue`）。
+- 详情抽屉：保存后焦点留在抽屉内的状态选项，关闭后焦点回到打开它的列表条目（`data-consistency-issue`）。焦点目标经 `statusFocusTarget`（`components/consistency/statusFocus.ts`）先取当前选中项、没有才退回第一个；不要写成选择器列表 `'input:checked, input'`，`querySelector` 按文档顺序返回第一个命中任一选择器的元素，会落到第一个单选上，键盘用户按空格就把状态改了（2026-11-18 浏览器验收 B-4）。
 
 ## 4. 校验与错误矩阵
 
@@ -208,6 +208,7 @@ covered_chapter_ids=frozenset() if failed_batches or incomplete else data.covere
 - 确认状态的本地勾选（`ImpactEdits`）叠加在服务端详情之上；409 `stale_revision` 保留勾选，刷新后只替换详情。`impactUpdateBody` 只提交改过的影响项与当前仍过期的设定变化中已确认的 id。
 - 显隐经 `impactPermissions`：确认需 `canEdit`，评估与发起检查需 `canUseAI`，取消只对发起者。
 - 章节编辑页的提示（`useChapterImpactHint`）在进入页面、内容版本变化、最新分析变化时读取单章接口；只读取、失败静默，不参与保存、草稿与离页拦截。
+- 提示显示在编辑卡片页头的标题区。页头靠 `ChapterEditorPage.css` 的 `chapter-editor-card` 允许换行并给标题区最小宽度 `min(360px, 100%)`；宽度达到 `TOOLBAR_IN_HEADER_MIN_WIDTH` 时工具栏进页头，按钮一多就会把不换行的标题区挤到 0 宽，提示与章号随之不可见（2026-11-18 浏览器验收 A-2，1280 宽复现）。给工具栏加按钮后在 1280 宽下看一眼标题区。
 - `uncovered` 提供「对这些章节运行一致性检查」，预填现存章节的起止范围。
 
 ### 8.7 校验与错误矩阵（影响追踪）

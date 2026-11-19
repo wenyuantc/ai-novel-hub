@@ -8,6 +8,7 @@ import {
 } from '../../utils/consistency'
 import { formatTime } from '../../utils/time'
 import { IssueTags } from './IssueList'
+import { statusFocusTarget } from './statusFocus'
 
 function EvidenceCard({ projectId, evidence, canEdit }: { projectId: number; evidence: IssueEvidence; canEdit: boolean }) {
   const link = evidenceLink(projectId, evidence)
@@ -64,7 +65,7 @@ export default function IssueDrawer({
     const root = formRef.current
     const active = document.activeElement
     const lost = !active || active === document.body || (active instanceof HTMLButtonElement && active.disabled && !!root?.contains(active))
-    if (root && lost) root.querySelector<HTMLElement>('input[type="radio"]:checked, input[type="radio"]')?.focus()
+    if (root && lost) statusFocusTarget(root)?.focus()
   }, [saving])
   const dirty = !!draft && isDraftDirty(draft)
   const hasLiveEvidence = !!issue && issue.evidence.some((item) => item.chapter_id !== null && item.chapter_no !== null)

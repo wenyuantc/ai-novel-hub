@@ -1,4 +1,6 @@
 import { App } from 'antd'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -107,5 +109,25 @@ describe('章节编辑页作者模型回退', () => {
       expect(result.generateDisabled).toBe(false)
       expect(result.drawer.analyzeDisabled).toBe(false)
     }
+  })
+})
+
+describe('章节编辑页页头布局', () => {
+  it('工具栏放进页头时，卡片带有防止标题被挤没的样式钩子', () => {
+    view.access = owner
+    view.configs = [textConfig]
+    const html = renderToStaticMarkup(createElement(App, null, createElement(ChapterEditorPage)))
+    expect(html).toMatch(/class="[^"]*\bchapter-editor-card\b/)
+    const title = html.match(/<div class="ant-card-head-title">(.*?)<\/div><div class="ant-card-extra">/s)
+    expect(title?.[1]).toContain('第 1 章')
+  })
+
+  it('样式允许页头换行，并给标题区保留最小宽度', () => {
+    const css = readFileSync(fileURLToPath(new URL('./ChapterEditorPage.css', import.meta.url)), 'utf8')
+    expect(css).toMatch(/\.chapter-editor-card > \.ant-card-head > \.ant-card-head-wrapper \{[^}]*flex-wrap: wrap/)
+    expect(css).toMatch(/\.ant-card-head-title \{[^}]*min-width: min\(360px, 100%\)/)
+    // antd 5 页头右侧容器的类名是 ant-card-extra（不是 ant-card-head-extra），写错选择器规则会静默失效
+    expect(css).toMatch(/> \.ant-card-extra \{[^}]*max-width: 100%/)
+    expect(css).not.toMatch(/ant-card-head-extra/)
   })
 })
