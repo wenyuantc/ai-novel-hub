@@ -1731,3 +1731,26 @@ TODOS 第 14 项：手动 AI 一致性检查与问题清单、两级修改影响
 ### Status
 
 [OK] **Completed**
+
+
+## Session 53: 补齐七组界面的浏览器验收（TODOS 第 19 项）
+<!-- trellis-session: v=2 fp=b6eb389aa6518c1b -->
+
+**Date**: 2026-11-19
+**Task**: 补齐七组界面的浏览器验收（TODOS 第 19 项）
+**Branch**: `main`
+
+### Summary
+
+在隔离环境（临时 SQLite、本地假模型、本机 Chrome、Playwright）验收 TODOS 第 19 项列出的七组 59 个场景，全部通过；D-3 经用户确认调整预期。就地修复两处前端小缺陷：章节编辑页页头在 1280 宽下被工具栏挤没、一致性问题抽屉保存后焦点落到第一个状态选项，均补测试并浏览器复验。会话详情偶发 404 记为 TODOS 第 33 项，test_resource_conflicts 偶发失败并入第 20 项。前端 lint/1808 测试/构建通过，后端 ruff 通过，pytest 除既有偶发用例外全部通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4cfd2d4` | fix(frontend): 修复编辑页页头被工具栏挤没与问题抽屉保存后焦点错位 |
+| `3b10ddb` | docs(acceptance): 补齐七组界面的浏览器验收并更新 TODOS |
+
+### Status
+
+[OK] **Completed**
