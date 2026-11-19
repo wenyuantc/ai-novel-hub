@@ -61,6 +61,7 @@
 | [管理员首页与全站统计](./admin-dashboard.md) | 含回收站的总量、北京时间日快照、独立任务累计、UUID执行身份、24h异常、历史缺口及刷新 | 已填写 |
 | [管理员全站任务监控](./admin-task-monitoring.md) | 现存安全元数据、单SQL筛选计数、本轮时间、持久取消受理/审计、资源屏障与轮次CAS、5秒刷新 | 已填写 |
 | [管理员操作审计](./admin-audit.md) | 真实 actor、同事务摘要与失败、版本关联、组合查询、日期预览/nonce/高水位清理与不可清理留痕 | 已填写 |
+| [协作审计查询](./collaboration-audit-query.md) | 作品/系列作者只读查询、越权排除与防枚举双层脱敏、管理员 `audit.read` 全站视图、清理隔离及 SQLite 整秒边界 | 已填写 |
 | [管理员作品管理](./admin-projects.md) | `/admin/projects` 查询与聚合、人工内容管理员例外、严格 owner helper、归属投影、私有资源/模型副作用/阅读进度边界 | 已填写 |
 | [作品回收站](./recycle-bin.md) | 30天软删除、管理员恢复/彻删、任务执行链排空、父行事务屏障、到期清理、RESTRICT删号与系统审计 | 已填写 |
 | [平台 API Key 与开放读取](./open-api.md) | 可再次查看 / 复制的密钥、小说授权、独立 X-API-Key、数据库原子分钟额度、20 个只读接口、专属 OpenAPI / Swagger UI、前端显隐与复制 | 已填写 |

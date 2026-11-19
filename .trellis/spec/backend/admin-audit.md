@@ -169,3 +169,7 @@ await db.refresh(chapter)
 ## 备份动作（0030）
 
 `backup.settings.update`/`backup.run.accept`/`backup.download.authorize`，目标backup_settings/backup_run。局部typed `backup_change`仅字段名、settings_revision、execution_key、destination和encrypted；不采集连接参数、收件人、秘密长度或原始错误。受理和授权成功不等于执行完成/文件送达。下载打开资源后复核原会话且GET成功审计同事务；HEAD不伪造已送达日志。详见[整库备份](./admin-backups.md)。
+
+## 协作审计全站只读入口
+
+`/api/v1/admin/audit-logs/collaboration` 注册于 `GET /{log_id}` 之前，复用 `audit.read` 查询独立的 `collaboration_audit_events` 表，并在 `/admin/audit-logs` 以「协作审计」只读标签页展示。该表独立长期保留，**不受 `audit.cleanup` 按日期清理影响**。完整跨层契约见[协作审计查询](./collaboration-audit-query.md)。
