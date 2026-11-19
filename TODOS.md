@@ -259,7 +259,7 @@
 
 ### 20. 向导协作撤权用例的偶发失败
 
-当前状态：已完成（2026-11-19），只改测试，未改产品代码。[根因记录](.trellis/tasks/11-19-flaky-wizard-revoke-resource-conflicts/research/root-cause.md)
+当前状态：已完成（2026-11-19），只改测试，未改产品代码。[根因记录](.trellis/tasks/archive/2026-11/11-19-flaky-wizard-revoke-resource-conflicts/research/root-cause.md)
 
 `test_resource_conflicts`：已查清并修复，属用例时序问题。用例在生成任务进行中提交的角色向导若先写入新角色，作品的 AI 可见性快照就会变化，生成任务按设计失效关闭；另有一处假模型响应取错。改为由用例控制先后后，并发重复 200 次全部通过。
 
