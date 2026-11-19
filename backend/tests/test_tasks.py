@@ -497,6 +497,8 @@ async def test_resource_conflicts(app, client, fake_llm):
     gate = Gate()
     fake_llm.push([gate, "新正文"])
     task = (await _generate(client, ch)).json()
+    # FakeLLM 按调用顺序出队：先确认生成任务已取走自己的响应，再提交向导，避免调度先后造成错配。
+    await gate.wait_reached()
     for path in ("generate", "polish"):
         resp = await client.post(f"/api/v1/chapters/{ch['id']}/{path}")
         assert resp.status_code == 409
@@ -509,16 +511,17 @@ async def test_resource_conflicts(app, client, fake_llm):
     resp = await client.post(f"/api/v1/projects/{p['id']}/wizard/world")
     assert resp.status_code == 409
     assert resp.json()["detail"] == "已有任务在进行中，请等待其完成后再试"
-    # FakeLLM 按调用顺序出队：先确认 world 已取走自己的响应，再提交其他向导，避免调度先后造成错配。
     await wgate.wait_reached()
-    # 不同类型的向导互不影响
+    # 生成任务须先收尾：角色向导写入新角色会使作品的 AI 可见性快照变化，在途生成任务按设计失效关闭
+    # （scene_context_changed）。先后若交给调度，用例会偶发失败。
+    gate.release()
+    assert (await wait_task(client, task))["status"] == "succeeded"
+    # 不同类型的向导互不影响：world 仍卡在 wgate 上，characters 照常受理并完成
     fake_llm.push('[{"name": "林舟"}]')
     other = await client.post(f"/api/v1/projects/{p['id']}/wizard/characters")
     assert other.status_code == 202
 
-    gate.release()
     wgate.release()
-    assert (await wait_task(client, task))["status"] == "succeeded"
     assert (await wait_task(client, w1.json()))["status"] == "failed"  # "[]" 解析不到条目
     assert (await wait_task(client, other.json()))["status"] == "succeeded"
     # 结束后可再次提交同类向导

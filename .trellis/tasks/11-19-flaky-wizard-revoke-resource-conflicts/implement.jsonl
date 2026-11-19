@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与质量约定，不得用放宽超时或跳过让用例变绿"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "场景上下文变化使在途生成失效的契约，A 的依据"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "设定可见性变化与失效关闭，A 的依据"}
+{"file": ".trellis/spec/backend/rbac-quotas.md", "reason": "协作授权与撤权相关约定，B 的背景"}
+{"file": ".trellis/tasks/archive/2026-11/11-07-independent-scenes/research/full-suite-ai-fixes.md", "reason": "同类 FakeLLM Gate 错位偶发的处理先例"}

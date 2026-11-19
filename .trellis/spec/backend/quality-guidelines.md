@@ -203,6 +203,11 @@ async def test_registration_disabled(client): ...
 `fake.embed_calls` 记录 `provider/model/texts`，`fake.embed_error` 抛出一次（`embed_error_sticky=True` 时持续抛出）。知识库样例文件由
 `tests/kb_fixtures.py` 现场生成（docx / epub 用 zipfile，pdf 用 pypdf），不提交二进制文件。
 
+**并发 AI 任务的时序**：响应按模型调用顺序出队，不按任务匹配。同一用例里先后提交多个 AI 任务时，提交下一个之前先
+`await gate.wait_reached()` 确认上一个已取走自己的响应，否则调度先后会让任务拿错响应。另外，向导等写入设定的任务
+会改变作品的 AI 可见性快照，同作品在途的生成任务会按设计以 `scene_context_changed` 失效关闭；需要两者都成功时，
+先等生成任务结束再提交向导，不要同时放行。先例：`test_user_quotas`、`test_resource_conflicts`（TODOS 第 20 项）。
+
 ### 不访问真实 DNS
 
 `fake_dns` 为 `autouse=True`，并对 `app.ai.endpoint_guard._resolve` 做 monkeypatch：

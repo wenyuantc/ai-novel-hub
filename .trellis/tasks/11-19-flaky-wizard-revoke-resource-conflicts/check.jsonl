@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对修复未放宽超时、未跳过、未弱化断言"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "核对 A 的修复没有绕开失效关闭"}
+{"file": ".trellis/spec/backend/rbac-quotas.md", "reason": "核对 B 的验证没有放松撤权收尾不变量"}

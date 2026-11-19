@@ -746,9 +746,23 @@ async def test_direct_role_downgrade_before_finalization_finalizes_from_receipt(
     assert await _names(app, world, "characters") == sorted(NEW_NAMES["characters"])
 
 
+def _diagnose(app, row, **extra):
+    """断言失败时的定位信息：只取状态与标记，不含任务输入、正文或模型输出。"""
+    checkpoint = row.checkpoint if isinstance(row.checkpoint, dict) else {}
+    engine = app.state.task_engine
+    return {
+        "status": row.status, "error": row.error, "execution_key_cleared": row.execution_key is None,
+        "pending": "_wizard_pending" in checkpoint, "completion": "_wizard_completion" in checkpoint,
+        "cleanup_failure": engine.has_cleanup_failure(row.project_id), **extra,
+    }
+
+
 async def test_revocation_notification_after_commit_still_finalizes_from_receipt(app, client, make_client, fake_llm,
                                                                                  monkeypatch):
-    """本进程撤权通知取消执行体、取消落在内容提交之后：同样凭收据收尾为 succeeded。"""
+    """本进程撤权通知取消执行体、取消落在内容提交之后：同样凭收据收尾为 succeeded。
+
+    取消的确切落点由调度决定；各落点另有下方 `test_revocation_cancel_window_*` 逐一固定验证。
+    """
     guest = make_client()
     world = await _world(client, guest)
     fired = _hook_after_commit(monkeypatch, app, "done_event", lambda: _change(app, client, world, "revoked"))
@@ -756,9 +770,155 @@ async def test_revocation_notification_after_commit_still_finalizes_from_receipt
     created = await _start(guest, world, "characters")
     assert created.status_code == 202, created.text
     row = await _terminal(app, created.json()["id"])
-    assert fired == ["done_event"]
-    assert row.status == "succeeded" and row.error == NOTE, (row.status, row.error)
-    assert await _names(app, world, "characters") == sorted(NEW_NAMES["characters"])
+    diag = _diagnose(app, row, fired=fired)
+    assert fired == ["done_event"], diag
+    assert row.status == "succeeded" and row.error == NOTE, diag
+    assert await _names(app, world, "characters") == sorted(NEW_NAMES["characters"]), diag
+    await _assert_released(app, client, world, fake_llm)
+
+
+# ---------------- 撤权通知取消的落点：逐一固定 ----------------
+
+
+def _record_revocation_cancel(monkeypatch, app):
+    """撤权复查调用 cancel_running 时置位；不改变取消行为本身。"""
+    engine_cls = type(app.state.task_engine)
+    original = engine_cls.cancel_running
+    reached = asyncio.Event()
+
+    async def recording(self, task_id, **kwargs):
+        reached.set()
+        return await original(self, task_id, **kwargs)
+
+    monkeypatch.setattr(engine_cls, "cancel_running", recording)
+    return reached
+
+
+async def _revoke_and_wait_cancel(app, client, world, reached, cancelled):
+    """真实撤权（含本进程通知），等到复查把取消投递给执行体；取消若打断当前协程则记下并原样传递。"""
+    await asyncio.shield(asyncio.ensure_future(_change(app, client, world, "revoked")))
+    try:
+        await asyncio.wait_for(reached.wait(), 5)
+        # 取消与置位在复查的同一步内发出；让出一次以便取消在此处落地。
+        await asyncio.sleep(0)
+    except asyncio.CancelledError:
+        cancelled.append(True)
+        raise
+
+
+async def _run_cancel_window(app, client, guest, world, fake_llm):
+    fake_llm.push(ANSWERS["characters"])
+    created = await _start(guest, world, "characters")
+    assert created.status_code == 202, created.text
+    return await _terminal(app, created.json()["id"])
+
+
+async def _assert_receipt_finalized(app, client, world, fake_llm, row, **extra):
+    diag = _diagnose(app, row, **extra)
+    assert row.status == "succeeded" and row.error == NOTE, diag
+    assert row.result == row.checkpoint["_wizard_completion"]["result"], diag
+    assert row.execution_key is None and _no_pending(row), diag
+    assert await _names(app, world, "characters") == sorted(NEW_NAMES["characters"]), diag
+    assert not app.state.task_engine.has_cleanup_failure(world.project["id"]), diag
+    async with app.state.sessionmaker() as db:
+        assert not await task_service.has_unresolved_receipt(db, row), diag
+    await _assert_released(app, client, world, fake_llm)
+
+
+async def test_revocation_cancel_window_during_done_verification(app, client, make_client, fake_llm, monkeypatch):
+    """W1：内容与收据已提交，取消投递时执行体正等待 done 事件核验（核验在独立协程中，取消不打断它）。
+    核验因撤权失败、取消被吞，执行体按收据收尾为 succeeded，不发布结果。"""
+    guest = make_client()
+    world = await _world(client, guest)
+    reached = _record_revocation_cancel(monkeypatch, app)
+    engine_cls = type(app.state.task_engine)
+    original_event = engine_cls._event_task
+    fired, cancelled, requested = [], [], []
+
+    async def before_done(self, db, execution, current, event):
+        if event == "done" and not fired and execution.kind == "wizard.characters":
+            fired.append(event)
+            await _revoke_and_wait_cancel(app, client, world, reached, cancelled)
+            requested.append(execution.task_id in self._cancel_requested)
+        return await original_event(self, db, execution, current, event)
+
+    monkeypatch.setattr(engine_cls, "_event_task", before_done)
+    row = await _run_cancel_window(app, client, guest, world, fake_llm)
+    # 复查确已对执行体发出取消。
+    assert fired == ["done"] and requested == [True], _diagnose(app, row, fired=fired, requested=requested)
+    # 核验协程受 shield 保护：取消只落在执行体上，不打断核验本身。
+    assert cancelled == [], _diagnose(app, row, cancelled=cancelled)
+    await _assert_receipt_finalized(app, client, world, fake_llm, row, window="W1")
+
+
+async def test_revocation_cancel_window_after_done_published(app, client, make_client, fake_llm, monkeypatch):
+    """W2：done 已通过核验并写入执行体结果，取消落在执行体进入收尾之前。按「done 后才收到取消」视作成功提交，
+    终态核验因撤权拒绝发布，再按收据收尾为 succeeded。"""
+    guest = make_client()
+    world = await _world(client, guest)
+    reached = _record_revocation_cancel(monkeypatch, app)
+    original_run = WizardHandler.run
+    fired, cancelled = [], []
+
+    async def run_then_revoke(self, job, ctx):
+        async for event, data in original_run(self, job, ctx):
+            yield event, data
+            if event == "done" and not fired:
+                fired.append(event)
+                await _revoke_and_wait_cancel(app, client, world, reached, cancelled)
+
+    monkeypatch.setattr(WizardHandler, "run", run_then_revoke)
+    row = await _run_cancel_window(app, client, guest, world, fake_llm)
+    assert fired == ["done"] and cancelled == [True], _diagnose(app, row, fired=fired, cancelled=cancelled)
+    await _assert_receipt_finalized(app, client, world, fake_llm, row, window="W2")
+
+
+async def test_revocation_cancel_window_during_finalization(app, client, make_client, fake_llm, monkeypatch):
+    """W3：撤权与通知落在执行体收尾（终态事务前）期间。复查见到收尾中的任务即跳过，不取消执行体；
+    终态核验按原 grant 拒绝发布，按收据收尾为 succeeded。"""
+    guest = make_client()
+    world = await _world(client, guest)
+    reached = _record_revocation_cancel(monkeypatch, app)
+    engine = app.state.task_engine
+    engine_cls = type(engine)
+    original_complete = engine_cls.complete_state
+    fired, observed = [], []
+
+    async def revoke_before_final(self, task, **kwargs):
+        if (not fired and task is not None and task.kind == "wizard.characters"
+                and kwargs.get("status") == "succeeded"):
+            fired.append(task.id)
+            await asyncio.shield(asyncio.ensure_future(_change(app, client, world, "revoked")))
+            checks = set(self._collaboration_checks)
+            if checks:
+                await asyncio.wait(checks, timeout=5)
+            observed.append((bool(checks), all(c.done() for c in checks), task.id in self._cancel_requested))
+        return await original_complete(self, task, **kwargs)
+
+    monkeypatch.setattr(engine_cls, "complete_state", revoke_before_final)
+    row = await _run_cancel_window(app, client, guest, world, fake_llm)
+    diag = _diagnose(app, row, fired=fired, observed=observed, cancel_reached=reached.is_set())
+    assert len(fired) == 1, diag
+    # 复查已运行并结束，且没有对收尾中的执行体发出取消。
+    assert observed == [(True, True, False)] and not reached.is_set(), diag
+    await _assert_receipt_finalized(app, client, world, fake_llm, row, window="W3")
+
+
+async def test_revocation_after_terminal_leaves_task_untouched(app, client, make_client, fake_llm):
+    """W4：执行体已结束后撤权：复查不再有运行中目标，已提交的成功终态与结果保持不变。"""
+    guest = make_client()
+    world = await _world(client, guest)
+    row = await _run_cancel_window(app, client, guest, world, fake_llm)
+    assert row.status == "succeeded" and row.error == "", _diagnose(app, row)
+    await _change(app, client, world, "revoked")
+    engine = app.state.task_engine
+    checks = set(engine._collaboration_checks)
+    if checks:
+        await asyncio.wait(checks, timeout=5)
+    async with app.state.sessionmaker() as db:
+        after = await db.get(Task, row.id)
+    assert (after.status, after.error, after.result) == (row.status, row.error, row.result), _diagnose(app, after)
+    assert not engine.has_cleanup_failure(world.project["id"])
     await _assert_released(app, client, world, fake_llm)
 
 
