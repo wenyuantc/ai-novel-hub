@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端 lint/pytest/隔离与 README 同步门禁"}
+{"file": ".trellis/spec/backend/admin-audit.md", "reason": "核对管理员操作日志与清理隔离契约"}
+{"file": ".trellis/spec/backend/rbac-quotas.md", "reason": "核对权限隔离与 no_autoflush 安全边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint/build/vitest、移动端适配与 README 同步门禁"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "核对前后端 Schema 类型镜像与 UTC 时间处理"}
+{"file": ".trellis/tasks/11-19-collaboration-audit-query-ui/research/codebase-findings.md", "reason": "核对防枚举脱敏、越权过滤与 SQLite 时间边界"}

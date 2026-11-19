@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端总规范与质量门禁入口"}
+{"file": ".trellis/spec/backend/admin-audit.md", "reason": "管理员操作日志查询、半开 UTC 时间区间、字面转义与清理保护契约"}
+{"file": ".trellis/spec/backend/rbac-quotas.md", "reason": "audit.read 权限校验、db.no_autoflush 约束与前端撤权契约"}
+{"file": ".trellis/spec/backend/admin-projects.md", "reason": "管理员不扩大作者专属能力与作品生命周期边界"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端总规范、类型安全、组件与质量门禁入口"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端跨层契约、类型镜像与隐私脱敏一致性"}
+{"file": ".trellis/tasks/11-19-collaboration-audit-query-ui/research/codebase-findings.md", "reason": "协作审计数据模型、既有写入行为与隐藏隐私边界调研"}
