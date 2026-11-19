@@ -1777,3 +1777,26 @@ test_resource_conflicts 根因为用例时序（向导写入使在途生成按�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 55: 协作审计查询界面（TODOS 第 21 项）
+<!-- trellis-session: v=2 fp=cd90ea968a9f0f57 -->
+
+**Date**: 2026-11-19
+**Task**: 协作审计查询界面（TODOS 第 21 项）
+**Branch**: `main`
+
+### Summary
+
+实现作品与系列作者协作审计查询接口与标签页界面（行级排除非作者越权尝试，SQL+序列化双层脱敏未确认目标的失败邀请，兼容 SQLite server_default 整秒时间边界），在管理员操作日志页新增复用 audit.read 权限的只读「协作审计」标签页并明确不受 audit.cleanup 影响；后端 ruff 与 SQLite 全量 6955 通过、隔离 PG16 专项通过、前端 lint/build/1821 用例通过、隔离真实 Chrome 桌面与 375px 移动端 8/8 场景验收通过，同步更新 README、TODOS 第 21 项与跨层规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9dca12a` | feat(collaboration): 新增作品/系列作者与管理员全站协作审计查询接口及界面 |
+| `506f9c7` | docs(audit): 同步协作审计查询 README、TODOS 第 21 项及跨层规范 |
+
+### Status
+
+[OK] **Completed**
