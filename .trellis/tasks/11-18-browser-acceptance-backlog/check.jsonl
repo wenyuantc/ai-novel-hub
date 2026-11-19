@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-18-browser-acceptance-backlog/research/acceptance-environment.md", "reason": "验收环境、假模型、账号与浏览器驱动的先例"}
+{"file": ".trellis/tasks/11-18-browser-acceptance-backlog/research/targets-consistency-collab.md", "reason": "G1-G4 的入口、预期与场景表"}
+{"file": ".trellis/tasks/11-18-browser-acceptance-backlog/research/targets-categories-notes-skills.md", "reason": "G5-G7 的入口、预期与场景表"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "断点、移动适配与 375px 验收断言"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "回环模型地址开关与测试隔离要求"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁"}
