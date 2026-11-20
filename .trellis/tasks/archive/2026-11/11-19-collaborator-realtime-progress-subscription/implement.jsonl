@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "受控任务流 SSE 帧契约、E5-b/c/d/e/f 帧证明与撤权通知规则"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "项目智能体协作执行、锁序、撤权收尾与提案安全契约"}
+{"file": ".trellis/spec/backend/consistency-check.md", "reason": "一致性检查与修改影响任务流及已知 SQLite 限制背景"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "SSE 客户端与任务订阅 Hook 契约"}
+{"file": ".trellis/tasks/11-19-collaborator-realtime-progress-subscription/research/codebase-findings.md", "reason": "代码调研、SQLite 锁实证与受影响测试清单"}

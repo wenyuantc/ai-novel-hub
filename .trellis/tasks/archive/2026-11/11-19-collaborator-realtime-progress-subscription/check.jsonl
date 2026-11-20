@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端测试隔离、双库验证、README 同步与禁止模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "受控任务流安全边界、帧租约与撤权断开校验清单"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "智能体协作权限与撤权收尾一致性核查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint/build/test 门禁与评审清单"}
+{"file": ".trellis/tasks/11-19-collaborator-realtime-progress-subscription/research/codebase-findings.md", "reason": "调研基线与既有断言更新范围核对"}
