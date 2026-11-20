@@ -276,7 +276,8 @@ RESULT_LIMIT = 8000                                                     # contex
     （不发网、不建未知结果屏障）；`mcp_tools._send_lease` 保持作品作者条件并拒绝带 `_collaboration_grant` 的任务。编辑者因此不会产生阻挡作者删除作品的
     `has_unsettled_external_change`。
   - 通用任务入口：协作者对本人轮次的取消 / 重试走 `task_service`（已协作感知）；viewer 重试 403、重邀旧轮次重试 400（模型绑定按 grant 失效）、
-    本人未结束旧轮次对其不可见 → 取消 404。`agent.turn` 订阅对协作者保持 404（裁决 10）。管理员兼编辑者经工具写入按人工路由规则记管理审计（裁决 6）。
+    本人未结束旧轮次对其不可见 → 取消 404。`agent.turn` 订阅现已通过 `AgentHandler.stream_guard` 对协作者开放受控 SSE 管线（见下「协作者实时流订阅」），
+    活动/待确认轮次对 viewer 与已撤权成员 404，已结束轮次按 E5-b 持久回放证明放行。管理员兼编辑者经工具写入按人工路由规则记管理审计（裁决 6）。
   - `require_write_execution` 对协作执行未显式传作者时，按 `frozen_project_owner_id` 默认预锁作者 User（快照缺绑定退回原锁集合），handler 内各处
     屏障与随后 `guard.require_task_write` 的作者 User 锁统一为升序；各 handler `on_abort` 只取作品父行锁，不涉 User / 发送门禁。
   - 会话可写性（E4i-f，裁决 23）：`ConversationOut.writable`（列表 / 详情 / 新建 / 改名）由服务端按 `access.conversation_writable(entry, uid, row)`
@@ -311,7 +312,17 @@ RESULT_LIMIT = 8000                                                     # contex
     `SendGuard._verify_bindings` 同序，避免持文本配置行再等作者向量门禁），再 `revalidate_project_model` 与 `revalidate_shared_embedding`。因此首次运行与
     paused → queued → running 的每次领取都重验冻结选择：作者向量配置改动 → 400「模型配置已失效，请重新选择」，runner 不启动（零模型 / 作者向量调用、
     无生成记录）；授权变化先在领取锁内受限收尾。`revalidate_resume` 不做此检查（否则确认已提交后续跑被拒，轮次滞留 paused）。
-  - 订阅：协作者 `agent.turn` 订阅仍 404（裁决 10），本片不开放。
+  - 协作者实时流订阅（2026-11-20，TODOS 第 22 项，取代原裁决 10 轮询限制）：`AgentHandler.stream_guard` 按当前已证明断点构造并缓存
+    `publication_only=True` 的 `SendGuard`（`_AgentExecutionState.publication_guard`，按 `(current_execution, model_binding, stamp, cipher, allow_private, extra_bindings)` 失效），
+    走中央受控管线（`engine.subscribe(guarded=True)` + `stream_lease.task_sse_response`）。`SendGuard._agent_stream_shape` 限定纯文本主绑定 +
+    至多一份同 grant 共享向量附加绑定 + 合法会话 ID / `resource_key` / 同代次 `history_epoch`；`require_task_read` 与 `require_terminal_read`
+    在锁内经 `_verify_agent_conversation` 复核会话归属、原 `collaboration_invitation_id` 与 `ai_history_epoch`（PG `FOR SHARE`）；
+    `stream_evidence._verify_agent_change_frame` 对 `proposal` / `executed` 帧锁内复核 `AgentChange` 存在且属于本任务/作品/会话。
+    断点推进后 `runner.py` 经 `_refresh_stage` 重发当前阶段文案（零广播、零多余 `_flush`）立即推进 `hub.source`；`publication_successor` 与 `TaskHub._can_advance_text_source`
+    允许同执行跨轮断点推进时在途帧与第 2 轮重连快照沿后继来源复核（要求 `step_cursor == 0`、`round` 与 `tool_calls_used` 单调不回退）。
+    撤权 / 降为 viewer / 关闭 `allow_owner_ai`（含无通知直接改库，经 `engine.subscribe.read_visible` 与帧租约双层复核）/ 改密 / 停用 / 重邀 /
+    收紧可见性后立即以 `error {code: "permission_denied"}` 断开且零泄露后续输出。回归：`test_collaboration_stream_agent.py`、
+    `test_collaboration_stream_agent_postgresql.py`。
   - 回归：`test_agent_revocation_e4ie.py`（4 种撤权 × queued / 待确认 / 已无待确认的 paused / 运行中断点（有无通知）；不误伤；外部屏障；
     续跑向量重验 4 例 + 正向对照；断点后 / paused 提交前撤权 4×2；仅通知收尾；SQLite 可见性锁取消不被掩盖）、
     `test_agent_revocation_e4ie_postgresql.py`（续跑持锁时撤权被阻塞、撤权先于续跑取锁两种顺序；续跑向量重验；跨实例 paused 提交前撤权）。

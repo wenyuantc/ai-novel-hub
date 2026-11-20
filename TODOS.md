@@ -283,10 +283,12 @@
 
 ### 22. 协作者的实时进度订阅
 
-当前状态：未开始。协作者查看智能体轮次只能轮询；SQLite 上协作者的任务进度流在慢模型下可能中断，页面靠轮询恢复（第 11、14 项）。
+当前状态：已完成（2026-11-20）。① 已通过 `AgentHandler.stream_guard`（`publication_only=True`）及 `SendGuard._agent_stream_shape` / `_verify_agent_conversation` / `stream_evidence._verify_agent_change_frame` / `publication_successor` 对协作者开放 `agent.turn` 受控 SSE 实时流订阅（含多轮跨断点续跑、中途重连快照与早订阅，`kb.index` / `book.import` 仍保持 404）；撤权、降为查看者、关闭 `allow_owner_ai`（含无通知直接改库）、改密、停用、重邀或收紧可见性时立即以 `error {code: "permission_denied"}` 断开且零泄露后续帧；前端将 `'agent.turn'` 纳入 `COLLABORATOR_STREAM_KINDS`，`useAgentConversation` 与 `useTaskStream` 为已就绪且具 `canUseAgent` 能力的协作者开启实时流并在失权时立即切只读或不可访问。② 修复 SQLite 慢模型下协作者任务进度流中断：在 SQLite 默认回滚日志模式下，`_task_frame_lease` 建立真实 C 层 `SHARED` 读事务并经 8 项物理身份校验供 4 处共享读核验复用（与出站 `_send_lease` 的 `RESERVED` 写锁零互斥、仍阻塞写方 `COMMIT`；WAL 模式保守回退写锁），同时修复持共享帧租约时 `personal_projection._final_visibility` 新开连接的三方死锁与 `engine.subscribe` 初始快照投影期间任务推进误报 `permission_denied` 的竞态，并移除 `consistency/check.py` 与 `impact_task.py` 中的 `SQLITE_SEND_GAP` 临时休眠。
 
-- [ ] 为协作者提供智能体轮次的实时流式订阅，撤权或降级后立即断开。
-- [ ] 修复 SQLite 上协作者任务进度流在慢模型下中断的问题。
+验收记录：后端 `ruff` 通过，SQLite 全量回归 `6976` 通过、`11` 跳过、`19` 预期失败；隔离 Docker PostgreSQL 16 专项（`test_collaboration_stream_agent_postgresql.py`）通过。前端 `eslint`、`tsc -b && vite build` 与 Vitest `262` 文件／`1822` 用例通过。隔离环境 + 本地假模型 + 本机 Chrome（`1440×960`）实测 3 项场景全部通过（编辑者智能体实时流与提案确认续跑、运行中降级 `43ms` / 撤权 `30ms` 即时断开且零泄露、SQLite 下响应头 `>5.5s` 慢模型一致性检查与智能体轮次全程单条 `200` SSE 不断线，`pageErrors: []`）。详见[验收记录](.trellis/tasks/archive/2026-11/11-19-collaborator-realtime-progress-subscription/research/verification.md)。
+
+- [x] 为协作者提供智能体轮次的实时流式订阅，撤权或降级后立即断开。
+- [x] 修复 SQLite 上协作者任务进度流在慢模型下中断的问题。
 
 ### 23. 笔记栏跨断点丢失未保存内容
 
