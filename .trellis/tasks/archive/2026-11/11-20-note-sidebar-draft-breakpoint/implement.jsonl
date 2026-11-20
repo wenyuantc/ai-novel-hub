@@ -1,0 +1,3 @@
+{"file":".trellis/spec/frontend/index.md","reason":"按索引查阅组件规范中的章节编辑器和响应式两节"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"明确组件草稿状态的归属及数据失效规则"}
+{"file":".trellis/spec/backend/mention-tracking.md","reason":"核对笔记编辑、显式保存、快捷键及未保存拦截契约"}
