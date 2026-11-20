@@ -1856,3 +1856,35 @@ test_resource_conflicts 根因为用例时序（向导写入使在途生成按�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 58: 场景跨章移动与 AI 拆并建议
+<!-- trellis-session: v=2 fp=b21b0a7c4704849a -->
+
+**Date**: 2026-11-20
+**Task**: 场景跨章移动与 AI 拆并建议
+**Branch**: `codex/scene-cross-chapter-ai-restructure`
+
+### Summary
+
+完成 TODO 第 24 项的同书场景移动和作者确认后应用 AI 拆并建议。
+
+### Main Changes
+
+- 跨章移动在同一事务更新两章和结构历史，保留场景身份、覆盖、设定锚点和提及。迁移为 0065，作品备份格式为 v16。
+- AI 按作者预览的保存稿生成建议，采纳复用手工拆并并校验版本与授权。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `627240c813b984c7b696453700a692d71e46fb4f` | feat: 支持场景跨章移动与 AI 拆并建议 |
+
+### Testing
+
+- [OK] 合并前后端定向 32 项通过，前端 1829 项、ESLint、构建和 Ruff 通过。
+- [OK] SQLite、PostgreSQL 与 Chrome 桌面及窄屏验收通过。后端首次并行未通过的 27 项全部在终版串行复跑通过。
+
+### Status
+
+[OK] **Completed**
