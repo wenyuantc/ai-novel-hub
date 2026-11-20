@@ -1800,3 +1800,28 @@ test_resource_conflicts 根因为用例时序（向导写入使在途生成按�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 56: 协作者的实时进度订阅（TODOS 第 22 项）
+<!-- trellis-session: v=2 fp=7339dd9555ab02cf -->
+
+**Date**: 2026-11-20
+**Task**: 协作者的实时进度订阅（TODOS 第 22 项）
+**Branch**: `main`
+
+### Summary
+
+完成 TODOS 第 22 项：1) 在 SQLite 默认回滚日志模式下为 _task_frame_lease 建立真实 SHARED 读事务并复用于 4 处共享读核验及 personal_projection._final_visibility，根治慢模型下协作者任务进度流中断并移除 SQLITE_SEND_GAP；2) 经 AgentHandler.stream_guard、会话/提案锁内核验与后继来源证明开放协作者 agent.turn 受控 SSE 实时流与即时撤权断开，修复 engine.subscribe 初始快照推进误报 permission_denied；3) 前端开放 agent.turn 协作者实时流并强化 accessLost 恢复，同步 README、TODOS 与四份规范；后端 SQLite 6976/6976、PG16 专项、前端 1822/1822 及隔离真 Chrome 3/3 场景全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af5d95d` | fix(task-engine): SQLite 慢模型下协作者任务进度流改用共享读帧租约 |
+| `b6bc864` | feat(collaboration): 开放协作者智能体轮次受控实时 SSE 流订阅与失权即时断开 |
+| `6556a53` | feat(frontend): 协作者智能体轮次启用实时 SSE 订阅并强化失权恢复 |
+| `86ffa50` | docs(collaboration): 同步协作者实时进度订阅 README、TODOS 第 22 项及跨层规范 |
+
+### Status
+
+[OK] **Completed**
