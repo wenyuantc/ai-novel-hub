@@ -1825,3 +1825,34 @@ test_resource_conflicts 根因为用例时序（向导写入使在途生成按�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 57: 章节编辑页跨断点保留笔记草稿（TODOS 第 23 项）
+<!-- trellis-session: v=2 fp=6f464ecf18a2a510 -->
+
+**Date**: 2026-11-20
+**Task**: 章节编辑页跨断点保留笔记草稿（TODOS 第 23 项）
+**Branch**: `codex/note-sidebar-draft-breakpoint`
+
+### Summary
+
+修复桌面侧栏和移动端抽屉切换时笔记草稿丢失的问题，完成浏览器验收并归档任务。
+
+### Main Changes
+
+- 使用同一笔记编辑器实例保留选中笔记、草稿和未保存状态，笔记浮层随辅助面板切换。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `250b0f7` | fix(frontend): 保留跨断点切换的笔记栏草稿 |
+
+### Testing
+
+- [OK] Chrome 在 1024 px 与 375 px 间双向验证已有和新建笔记、未保存确认、独立保存及只读权限。
+- [OK] 前端 lint、构建和 262 个文件的 1,822 项 Vitest 用例通过。
+
+### Status
+
+[OK] **Completed**

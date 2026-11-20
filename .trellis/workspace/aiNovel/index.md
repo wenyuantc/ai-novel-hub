@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 56
+- **Total Sessions**: 57
 - **Last Active**: 2026-11-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1827 | Active |
+| `journal-1.md` | ~1858 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 57 | 2026-11-20 | 章节编辑页跨断点保留笔记草稿（TODOS 第 23 项） | `250b0f7` | `codex/note-sidebar-draft-breakpoint` |
 | 56 | 2026-11-20 | 协作者的实时进度订阅（TODOS 第 22 项） | `af5d95d`, `b6bc864`, `6556a53`, `86ffa50` | `main` |
 | 55 | 2026-11-19 | 协作审计查询界面（TODOS 第 21 项） | `9dca12a`, `506f9c7` | `main` |
 | 54 | 2026-11-19 | 修复 test_resource_conflicts 与向导撤权用例的偶发失败（TODOS 第 20 项） | `0bf0515`, `59d06c3` | `main` |
