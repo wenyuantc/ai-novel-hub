@@ -3004,7 +3004,20 @@ class TaskEngine:
                         db, task_id, statistics_key=statistics_key, actor_id=actor_id,
                         token_version=token_version, active_grant_required=active_grant_required,
                     )
-                    return row if matches_binding(row) else None
+                    if not matches_binding(row):
+                        return None
+                    if active_grant_required and row.project_id is not None and actor_id is not None:
+                        from app.services.collaboration_task_access import (
+                            GRANT_KEY,
+                            owner_ai_allowed,
+                            task_requires_owner_ai,
+                        )
+
+                        if (isinstance(row.input, dict) and GRANT_KEY in row.input
+                                and task_requires_owner_ai(row.input)
+                                and not await owner_ai_allowed(db, row.project_id, actor_id)):
+                            return None
+                    return row
             except Exception as exc:  # noqa: BLE001
                 # 权限存储不可用时关闭流；不要把数据库异常/SQL 发给用户。
                 logger.warning("任务流授权检查失败 error_type=%s", type(exc).__name__)
@@ -3239,76 +3252,123 @@ class TaskEngine:
 
         sub = None
         subscription_key = None
+
+        def detach_sub() -> None:
+            nonlocal sub, subscription_key
+            if sub is not None:
+                hub.unsubscribe(sub)
+            if subscription_key is not None and sub is not None:
+                subscribers = self._collaboration_subscribers.get(subscription_key)
+                if subscribers is not None:
+                    subscribers.discard(sub)
+                    if not subscribers:
+                        self._collaboration_subscribers.pop(subscription_key, None)
+            sub = None
+            subscription_key = None
+
         try:
             snapshot = None
             # E5-e：受控订阅读到已提交的 running 行、而本进程领取者尚未登记领取来源（领取提交与登记之间）。
             awaiting_claim = False
-            try:
-                async with sm() as db:
-                    row = await self._visible_task(
-                        db, task_id, statistics_key=statistics_key, actor_id=actor_id,
-                        token_version=token_version, active_grant_required=active_grant_required,
-                    )
-                    if not matches_binding(row):
-                        row = None
-                    original_view = persisted_source(row) if guarded and row is not None else None
-                    if guarded and row is not None and row.status == "queued":
-                        # 排队快照只能来自同一持久行，不采信旧 hub 的进度或正文。
-                        from app.services.collaboration_task_access import task_grant_identity
-
-                        queued_out = task_service.to_out(row, queue_position=await task_service.queue_position(db, row))
-                        queued_out = await task_service.project_task_out(
-                            db, row.user_id, queued_out, active_grant_required=True, task_key=row.statistics_key,
-                            expected_grant=task_grant_identity(row.input), expected_queued_at=row.queued_at,
-                        )
-                        out = queued_out.model_dump(mode="json")
-                    else:
-                        out = await task_service.out_json_live(db, self, row) if row is not None else None
-                    if row is not None and row.status in ACTIVE_TASK_STATUSES:
-                        # 投影后再次读取授权，再同步注册订阅并立即发快照；订阅计数出现时快照已就绪。
+            for attempt in range(5):
+                retry_snapshot = False
+                queued_advance_view = None
+                try:
+                    async with sm() as db:
                         row = await self._visible_task(
                             db, task_id, statistics_key=statistics_key, actor_id=actor_id,
                             token_version=token_version, active_grant_required=active_grant_required,
                         )
-                        if guarded and row is not None and persisted_source(row) != original_view:
+                        if not matches_binding(row):
                             row = None
-                        if matches_binding(row) and row.status in ACTIVE_TASK_STATUSES and not hub.closed:
-                            if not guarded:
-                                # 投影等待期间领取 progress 可能已广播；最终 SELECT 返回前也可能完成领取。
-                                # 与正文快照/注册在同一无 await 段同步公开状态，不重新投影私人引用。
-                                live = task_service.to_out(row).model_dump(mode="json", include={
-                                    "status", "progress", "stage", "started_at",
-                                })
-                                if (self.hubs.get(task_id) is hub and hub.statistics_key == row.statistics_key
-                                        and hub.queued_at == row.queued_at and hub.status == "running"
-                                        and hub.execution_key is not None
-                                        and (hub.execution_key == row.execution_key
-                                             or (row.status == "queued" and row.execution_key is None))):
-                                    live.update(hub.progress_payload())
-                                out.update(live)
-                                if out["status"] != "queued":
-                                    out["queue_position"] = None
-                            text, sub = hub.subscribe(guarded=guarded)
-                            if row.project_id is not None and actor_id is not None:
-                                subscription_key = (row.project_id, actor_id)
-                                self._collaboration_subscribers.setdefault(subscription_key, set()).add(sub)
-                            source = hub.snapshot_source() if guarded else None
-                            unproven = guarded and (source is None or type(source) is QueuedSource)
-                            if unproven and row.status == "queued" and text == row.output_text:
-                                source = original_view
-                            elif unproven and row.status == "running" and not text:
-                                awaiting_claim = True
-                            if not awaiting_claim:
-                                safe = await checked_frame(("snapshot", {"task": out, "text": text}), source)
-                                if safe is None:
-                                    row = None
-                                elif safe[0] != _REDACTED_EVENT:
-                                    snapshot = safe
-                        elif not matches_binding(row):
-                            row = None
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("任务流授权检查失败 error_type=%s", type(exc).__name__)
-                row, out = None, None
+                        original_view = persisted_source(row) if guarded and row is not None else None
+                        if guarded and row is not None and row.status == "queued":
+                            # 排队快照只能来自同一持久行，不采信旧 hub 的进度或正文。
+                            from app.services.collaboration_task_access import task_grant_identity
+
+                            queued_out = task_service.to_out(
+                                row, queue_position=await task_service.queue_position(db, row),
+                            )
+                            queued_out = await task_service.project_task_out(
+                                db, row.user_id, queued_out, active_grant_required=True, task_key=row.statistics_key,
+                                expected_grant=task_grant_identity(row.input), expected_queued_at=row.queued_at,
+                            )
+                            out = queued_out.model_dump(mode="json")
+                        else:
+                            out = await task_service.out_json_live(db, self, row) if row is not None else None
+                        if row is not None and row.status in ACTIVE_TASK_STATUSES:
+                            # 投影后再次读取授权，再同步注册订阅并立即发快照；订阅计数出现时快照已就绪。
+                            row = await self._visible_task(
+                                db, task_id, statistics_key=statistics_key, actor_id=actor_id,
+                                token_version=token_version, active_grant_required=active_grant_required,
+                            )
+                            if not matches_binding(row):
+                                row = None
+                            elif guarded and persisted_source(row) != original_view:
+                                # 受控订阅投影期间任务正常推进（领取/进度刷新/断点更新/终态）且原绑定仍有效：
+                                # 活动态重读最新快照；已进入非活动态则保留最新 row 交由下方持久回放分支。
+                                if row.status in ACTIVE_TASK_STATUSES:
+                                    retry_snapshot = True
+                            elif row.status in ACTIVE_TASK_STATUSES and not hub.closed:
+                                if not guarded:
+                                    # 投影等待期间领取 progress 可能已广播；最终 SELECT 返回前也可能完成领取。
+                                    # 与正文快照/注册在同一无 await 段同步公开状态，不重新投影私人引用。
+                                    live = task_service.to_out(row).model_dump(mode="json", include={
+                                        "status", "progress", "stage", "started_at",
+                                    })
+                                    if (self.hubs.get(task_id) is hub and hub.statistics_key == row.statistics_key
+                                            and hub.queued_at == row.queued_at and hub.status == "running"
+                                            and hub.execution_key is not None
+                                            and (hub.execution_key == row.execution_key
+                                                 or (row.status == "queued" and row.execution_key is None))):
+                                        live.update(hub.progress_payload())
+                                    out.update(live)
+                                    if out["status"] != "queued":
+                                        out["queue_position"] = None
+                                text, sub = hub.subscribe(guarded=guarded)
+                                if row.project_id is not None and actor_id is not None:
+                                    subscription_key = (row.project_id, actor_id)
+                                    self._collaboration_subscribers.setdefault(subscription_key, set()).add(sub)
+                                source = hub.snapshot_source() if guarded else None
+                                unproven = guarded and (source is None or type(source) is QueuedSource)
+                                if guarded and row.status == "queued" and not unproven:
+                                    # 排队摘要刚投影完、hub 已挂上领取/发布来源：以新运行行重算快照，避免 status 失配。
+                                    detach_sub()
+                                    retry_snapshot = True
+                                else:
+                                    if unproven and row.status == "queued" and text == row.output_text:
+                                        source = original_view
+                                    elif unproven and row.status == "running" and not text:
+                                        awaiting_claim = True
+                                    if not awaiting_claim:
+                                        safe = await checked_frame(("snapshot", {"task": out, "text": text}), source)
+                                        if safe is None:
+                                            if guarded and source is original_view:
+                                                detach_sub()
+                                                queued_advance_view = original_view
+                                            else:
+                                                row = None
+                                        elif safe[0] != _REDACTED_EVENT:
+                                            snapshot = safe
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("任务流授权检查失败 error_type=%s", type(exc).__name__)
+                    detach_sub()
+                    row, out = None, None
+                    retry_snapshot = False
+                    queued_advance_view = None
+                if queued_advance_view is not None:
+                    # 排队快照在 checked_frame 期间恰逢任务推进（领取/终态）：在独立只读会话复核原绑定后重试/回放。
+                    latest_row = await read_visible()
+                    if latest_row is not None and persisted_source(latest_row) != queued_advance_view:
+                        row = latest_row
+                        if row.status in ACTIVE_TASK_STATUSES:
+                            retry_snapshot = True
+                    else:
+                        row = None
+                if not retry_snapshot:
+                    break
+                if attempt == 4:
+                    row = None
             if awaiting_claim and row is not None:
                 # 不持读取会话等待：领取者提交后会同步登记领取来源并发布领取帧（已注册的订阅队列不会错过）。
                 # 等到可证明来源后按最新持久行重新投影无正文快照；超时或 hub 无来源关闭时失败关闭。

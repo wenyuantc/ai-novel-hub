@@ -462,8 +462,8 @@ async def test_get_conversation_never_exposes_other_members_or_author_conversati
             assert patched.status_code == 404
 
 
-async def test_turn_subscription_stays_404_for_collaborators(app, client, make_client, fake_llm):
-    """裁决 10：协作者订阅 agent.turn 实时进度 V1 保持 404（前端改轮询）；作者不受影响。"""
+async def test_turn_subscription_uses_guarded_stream_for_collaborators(app, client, make_client, fake_llm):
+    """协作者订阅 agent.turn 经受控流管线放行（已完成任务可按持久回放证明读取）；作者不受影响。"""
     await register(client, "e4id-sse-owner")
     await create_ai_config(client, api_key=OWNER_KEY)
     project = await create_project(client)
@@ -476,7 +476,7 @@ async def test_turn_subscription_stays_404_for_collaborators(app, client, make_c
     turn = await _send(editor_client, base, cid)
     assert (await wait_task(editor_client, turn, within=8.0, statuses=STOP))["status"] == "succeeded"
     stream = await editor_client.get(f"/api/v1/tasks/{turn['id']}/stream", params=task_params(turn))
-    assert stream.status_code == 404, stream.text
+    assert stream.status_code == 200 and "event: snapshot" in stream.text and "event: done" in stream.text, stream.text
     owner_cid = await _new_conversation(client, base)
     owner_turn = await _send(client, base, owner_cid)
     await wait_task(client, owner_turn, within=8.0)

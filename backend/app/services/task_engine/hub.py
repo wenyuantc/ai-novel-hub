@@ -23,6 +23,18 @@ class Subscriber:
     overflowed: bool = False
 
 
+def _can_advance_text_source(previous: Any, current: Any) -> bool:
+    """同一 agent.turn 执行跨轮断点推进时允许升级 text_source，避免第 2 轮重连快照误判混合来源。"""
+    from app.services.collaboration_ai_guard import publication_successor
+    from app.services.task_engine.stream_evidence import PublicationSource
+
+    return (
+        type(previous) is PublicationSource and type(current) is PublicationSource
+        and previous.execution.kind == "agent.turn" and current.execution.kind == "agent.turn"
+        and publication_successor(previous.guard, previous.execution, current.guard, current.execution)
+    )
+
+
 class TaskHub:
     def __init__(
         self, task_id: int, *, statistics_key: str | None = None,
@@ -99,7 +111,10 @@ class TaskHub:
         if not self.text:
             self.text_source, self._mixed_text_source = self.source, False
         elif self.text_source != self.source:
-            self._mixed_text_source = True
+            if not self._mixed_text_source and _can_advance_text_source(self.text_source, self.source):
+                self.text_source = self.source
+            else:
+                self._mixed_text_source = True
         self.text += text
         self.dirty = True
         self.publish("delta", {"text": text})

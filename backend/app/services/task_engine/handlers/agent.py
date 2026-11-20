@@ -336,7 +336,7 @@ class AgentHandler:
     execution_identity_aware = True
     admission_preflight_aware = True
     # E4i-b：受理 / 重试 / 续跑 / 构建接受 accepted editor（原 grant，本人模型或授权回退作者模型）；
-    # 每次模型发送以 for_task guard 重验。协作者 HTTP 入口仍关闭（E4i-d 开放）；订阅保持 404（裁决 10）。
+    # 每次模型发送以 for_task guard 重验；协作者实时订阅经 stream_guard 走中央受控管线。
     collaboration_execution_ready = True
 
     async def validate_and_claim(self, db, ctx, *, user_id, kind, params, admission=None, accepted_model=None):
@@ -673,6 +673,27 @@ class AgentHandler:
             raise _retry_source_error()
         await verify_job_resources(db, job)
         await require_no_unknown_external(db, project_id=job.project_id, conversation_id=job.conversation_id)
+
+    def stream_guard(
+        self, job, *, execution: TaskExecutionIdentity, current_execution: TaskExecutionIdentity, event: str, data,
+    ) -> collaboration_ai_guard.SendGuard:
+        """把本执行刚通过 verify_event 的断点状态绑定成仅发布 guard 交给中央 ASGI 帧租约；不补签、不可发送。"""
+        if (type(job) is not AgentJob or job.execution_state is None or job.execution != execution
+                or not same_execution(execution, current_execution)
+                or current_execution != job.task_execution_identity
+                or job.model_binding is None or job.cipher is None or job.stamp is None):
+            raise collaboration_ai_guard.CollaborationSendBlocked()
+        extras = agent_access.text_guard_extras(current_execution, job.model_binding)
+        inputs = (current_execution, job.model_binding, job.stamp, job.cipher, job.allow_private, extras)
+        cached = job.execution_state.publication_guard
+        if cached is not None and cached[0] == inputs:
+            return cached[1]
+        guard = collaboration_ai_guard.for_task(
+            current_execution, job.model_binding, job.stamp,
+            cipher=job.cipher, allow_private=job.allow_private, extra_bindings=extras, publication_only=True,
+        )
+        job.execution_state.publication_guard = (inputs, guard)
+        return guard
 
     async def verify_finalization(self, db, task, *, job, execution, current_execution, status, result, text):
         await self.verify_event(

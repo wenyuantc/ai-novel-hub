@@ -161,9 +161,12 @@ async def test_paused_awaiting_confirm_turn_fails_and_voids_proposals(app, clien
     # 会话不再被待确认轮次占用。
     async with app.state.sessionmaker() as db:
         assert await service.active_turn(db, world.cid) is None
-    # 裁决 10：协作者订阅 agent.turn 仍为 404。
+    # agent.turn 已接入受控管线：撤权后 404；降级/关模型授权/重邀后仍是 accepted 成员，可回放本人已结束轮次。
     stream = await world.editor_client.get(f"/api/v1/tasks/{turn['id']}/stream", params=task_params(turn))
-    assert stream.status_code == 404, stream.text
+    if kind == "revoke":
+        assert stream.status_code == 404, stream.text
+    else:
+        assert stream.status_code == 200 and COLLAB_FAILED in stream.text, stream.text
 
 
 # ---------------- 待审核但已无待确认提案（paused，未续跑） ----------------

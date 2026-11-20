@@ -186,15 +186,25 @@ async def test_collaborator_stream_uses_guarded_pipeline_and_closed_kinds_stay_4
     assert "自己的活动输出" not in unproven.text
     async with app.state.sessionmaker() as db:
         closed = [Task(user_id=editor["id"], project_id=project["id"], kind=kind, status="succeeded",
-                       output_text="未开放类型的输出", title=kind) for kind in ("agent.turn", "kb.index")]
-        db.add_all(closed)
+                       output_text="未开放类型的输出", title=kind) for kind in ("kb.index", "book.import")]
+        open_agent = Task(user_id=editor["id"], project_id=project["id"], kind="agent.turn", status="succeeded",
+                          output_text="协作者智能体完成输出", title="agent-finished")
+        db.add_all([*closed, open_agent])
         await db.commit()
         closed = [(row.id, row.statistics_key) for row in closed]
+        agent_finished = (open_agent.id, open_agent.statistics_key)
     for task_id, task_key in closed:
         detail = await guest.get(f"/api/v1/tasks/{task_id}", params={"task_key": task_key})
         assert detail.status_code == 200, detail.text
         response = await guest.get(f"/api/v1/tasks/{task_id}/stream", params={"task_key": task_key})
         assert response.status_code == 404 and "未开放类型的输出" not in response.text
+    # agent.turn 已接入受控管线：已结束任务按持久回放证明放行。
+    agent_res = await guest.get(f"/api/v1/tasks/{agent_finished[0]}/stream",
+                                params={"task_key": agent_finished[1]})
+    assert agent_res.status_code == 200, agent_res.text
+    agent_events = parse_sse(agent_res.text)
+    assert [event for event, _ in agent_events] == ["snapshot", "done"]
+    assert agent_events[0][1]["text"] == "协作者智能体完成输出"
     # 作者自己的已结束任务仍走原管线回放（行为不变）。
     async with app.state.sessionmaker() as db:
         own = Task(user_id=owner["id"], project_id=project["id"], kind="agent.turn", status="succeeded",

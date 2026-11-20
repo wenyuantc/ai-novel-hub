@@ -46,6 +46,23 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class _AgentExecutionState:
     current: TaskExecutionIdentity
+    publication_guard: tuple[tuple, object] | None = None
+    stage_text: str = ""
+
+
+def _stage(job: "AgentJob", text: str) -> Event:
+    if job.execution_state is not None:
+        job.execution_state.stage_text = text
+    return "stage", {"stage": text}
+
+
+def _refresh_stage(job: "AgentJob") -> Event:
+    """断点已由本执行提交、尚无新事件时重发当前阶段：引擎随之核验并换上最新发布来源。
+
+    文案与 hub 当前阶段相同，作者与订阅者都不会多收 progress 帧，也不触发多余 _flush。
+    """
+    text = job.execution_state.stage_text if job.execution_state is not None else ""
+    return "stage", {"stage": text}
 
 
 @dataclass(frozen=True)
@@ -483,7 +500,7 @@ async def _external_call(
     if external is None:
         await _result(db, job, call, {"error": mcp_tools.CHANGED}, commit=commit)
         return
-    yield "stage", {"stage": f"调用工具：{external.label}"}
+    yield _stage(job, f"调用工具：{external.label}")
     yield "tool_start", {"call_id": call["id"], "name": call["name"], "label": external.label}
     invalid = mcp_tools.validate(external, args)
     if invalid is not None:
@@ -718,7 +735,7 @@ async def _process_calls(
             if tool is None:
                 await _result(db, job, call, {"error": "工具不存在"}, commit=commit)
                 continue
-            yield "stage", {"stage": f"调用工具：{tool.name}"}
+            yield _stage(job, f"调用工具：{tool.name}")
             yield "tool_start", {"call_id": call["id"], "name": tool.name, "label": tool.description}
             if tool.kind == "read":
                 try:
@@ -804,6 +821,7 @@ async def _process_calls(
         if auto:
             checkpoint["auto_execute_used"] = True
             await _checkpoint(db, job, checkpoint, commit=commit)
+            yield _refresh_stage(job)
             for change in pending:
                 try:
                     await _lock_execution(db, job)
@@ -853,12 +871,13 @@ async def _process_calls(
                 )
         if pending:
             await _checkpoint(db, job, checkpoint, commit=commit)
-            yield "stage", {"stage": f"等待确认 {len(pending)} 项修改"}
+            yield _stage(job, f"等待确认 {len(pending)} 项修改")
             yield "paused", {"reason": "confirm", "change_ids": pending}
             return
         checkpoint["processed_assistant_id"] = assistant.id
         checkpoint["pending_change_ids"] = []
         await _checkpoint(db, job, checkpoint, commit=commit)
+        yield _refresh_stage(job)
 
 
 async def _save_log(
@@ -1127,6 +1146,7 @@ async def _turn(job: AgentJob, ctx: TaskContext, sessions: mcp_tools.McpSessions
             yield "delta", {"text": final.content}
             yield "done", {"message_id": final.id, "usage": cumulative}
             return
+        yield _refresh_stage(job)
 
 
 async def run_agent(job: AgentJob, ctx: TaskContext) -> AsyncIterator[Event]:

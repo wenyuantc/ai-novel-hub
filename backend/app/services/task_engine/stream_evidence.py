@@ -218,9 +218,40 @@ def _queued_hub(source: object) -> object | None:
     return hub
 
 
-def _is_batch_guard(guard: object) -> bool:
+def _has_successor_guard(guard: object) -> bool:
+    """运行中会推进断点的任务类型（批量、智能体轮次）：落后来源可由同一 hub 已登记的后继来源替代复核。"""
     task = getattr(guard, "_task", None)
-    return type(task) is TaskExecutionIdentity and task.kind == "chapter.batch"
+    return type(task) is TaskExecutionIdentity and task.kind in ("chapter.batch", "agent.turn")
+
+
+async def _verify_agent_change_frame(db, task: Task, event: str, data: dict[str, Any]) -> bool:
+    """智能体 proposal / executed 帧：帧租约锁内复核 AgentChange 存在且属于本任务、本作品与本会话。"""
+    if task.kind != "agent.turn" or event not in ("proposal", "executed"):
+        return True
+    from sqlalchemy import select
+
+    from app.models import AgentChange
+
+    change = data.get("change") if isinstance(data, dict) else None
+    req = task.input.get("request") if isinstance(task.input, dict) else None
+    cid = req.get("conversation_id") if isinstance(req, dict) else None
+    if (not isinstance(change, dict) or type(cid) is not int or type(change.get("id")) is not int
+            or not isinstance(change.get("change_key"), str) or change.get("conversation_id") != cid
+            or change.get("project_id") != task.project_id
+            or change.get("turn_task_id") != task.id
+            or change.get("turn_task_key") != task.statistics_key):
+        return False
+    statement = select(AgentChange.id).where(
+        AgentChange.id == change["id"],
+        AgentChange.change_key == change["change_key"],
+        AgentChange.conversation_id == cid,
+        AgentChange.project_id == task.project_id,
+        AgentChange.turn_task_id == task.id,
+        AgentChange.turn_task_key == task.statistics_key,
+    )
+    if db.get_bind().dialect.name == "postgresql":
+        statement = statement.with_for_update(read=True)
+    return await db.scalar(statement) is not None
 
 
 def issue_terminal(execution: TaskExecutionIdentity, view: TaskViewEvidence) -> TerminalEvidence:
@@ -456,7 +487,7 @@ async def _verify_wizard_successor(
 
 def _stream_kind(kind: object) -> bool:
     """按 `_stream_readable` 白名单已开放的范围：只有实现 stream_guard 的任务类型（单章、分析、批量、向导、
-    大纲、实体）才可证明领取/排队帧；Agent、知识库、拆书等继续失败关闭。"""
+    大纲、实体、一致性、智能体）才可证明领取/排队帧；知识库、拆书等继续失败关闭。"""
     from app.services.task_engine.registry import get_handler
 
     if type(kind) is not str:
@@ -774,6 +805,8 @@ async def verify_stream_frame(
             return False
         if matches_running(original, task) and not stale_stamp:
             await guard.require_task_read(db)
+            if not await _verify_agent_change_frame(db, task, event, data):
+                return False
             await require_task_stream_lease(
                 db, task.user_id, task.project_id, task_id=task.id, task_key=task.statistics_key,
             )
@@ -785,9 +818,9 @@ async def verify_stream_frame(
             # 只能由同一 hub 登记的本执行完成仅发布 guard 证明；构建戳仍成立（大纲、非替换首次保存）时不进入。
             return await _verify_wizard_successor(db, task, evidence, hub, guard, original)
         terminal = evidence.terminal
-        if terminal is None and not hub.closed and _is_batch_guard(guard):
-            # 批量（E5-c2）：断点逐章推进，帧发出时原来源常已被同一执行后来的步骤取代。只接受同一 hub
-            # 已登记、由同一执行发布的最新来源与持锁行逐字一致，并以其 guard 在锁内复核当前授权与当前章；
+        if terminal is None and not hub.closed and _has_successor_guard(guard):
+            # 批量（E5-c2）与智能体轮次：断点会随步骤/轮次推进，帧发出时原来源可能已被同一执行后来的步骤取代。
+            # 只接受同一 hub 已登记、由同一执行发布的最新来源与持锁行逐字一致，并以其 guard 在锁内复核当前授权；
             # 不以持锁行补签，也不放宽到别的执行。行已推进而新来源尚未发布时，退出租约等下一个来源或终态。
             latest, changed = hub.source, hub.source_changed
             if (latest is not evidence.source and type(latest) is PublicationSource
@@ -795,6 +828,8 @@ async def verify_stream_frame(
                     and publication_successor(guard, original, latest.guard, latest.execution)
                     and matches_running(latest.execution, task)):
                 await latest.guard.require_task_read(db)
+                if not await _verify_agent_change_frame(db, task, event, data):
+                    return False
                 await require_task_stream_lease(
                     db, task.user_id, task.project_id, task_id=task.id, task_key=task.statistics_key,
                 )
@@ -809,6 +844,8 @@ async def verify_stream_frame(
                 or capture_task_view(task) != terminal.view):
             return False
         await guard.require_terminal_read(db, terminal)
+        if not await _verify_agent_change_frame(db, task, event, data):
+            return False
         review = rich_review_of(event, data)
         if review is not None and not await _bound_task_visible(db, task, project, review):
             # 待审核富文档终态帧（单章）：与持久回放同一联表证明，提案在发送前被丢弃/采纳即拒绝。

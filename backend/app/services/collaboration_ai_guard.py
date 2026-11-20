@@ -573,17 +573,83 @@ class SendGuard:
 
     def _stream_readable(self) -> bool:
         """受控任务流可证明的执行类型：大纲/实体（无占用）、单章（章节占用只读核对）、
-        单独的章节分析（原执行 + pending 共享锁核对），批量的三种发布 guard（E5-c2），
-        以及向导的两种发布 guard（E5-c3）。文档占用与向量输入尚无帧租约验证协议（E6），继续失败关闭。"""
+        单独的章节分析（原执行 + pending 共享锁核对）、批量的三种发布 guard（E5-c2）、
+        向导的两种发布 guard（E5-c3）、以及智能体轮次的仅发布 guard。
+        文档占用与向量输入尚无帧租约验证协议（E6），继续失败关闭。"""
         if self._task is not None and self._task.kind == "chapter.batch":
             return self._batch_stream_shape() is not None
         if self._task is not None and self._task.kind in _WIZARD_KINDS:
             return self._wizard_stream_shape() is not None
+        if self._task is not None and self._task.kind == "agent.turn":
+            return self._agent_stream_shape()
         return (self._task is not None
                 and self._batch_attempt is None and self._analysis_reference is None
                 and self._document_claim is None and self._embedding_inputs is None
                 and (self._chapter is None or (self._chapter.kind == "single" and self._analysis_execution is None))
                 and (self._analysis_execution is None or self._task.kind == "chapter.analyze"))
+
+    def _agent_stream_shape(self) -> bool:
+        """智能体轮次发布 guard 的形状；只接受 AgentHandler.stream_guard 构造的仅发布 guard。
+
+        不绑定章节/批量/分析/文档/向量输入/实体来源/向导续写/场景戳，也不带一次性回调；
+        主绑定必须是文本模型，附加绑定最多一份与原执行同 grant 的共享向量选择；任务输入须含
+        合法会话 ID（与 resource_key 一致）与同代次 history_epoch。
+        """
+        task = self._task
+        if (type(task) is not execution_identity.TaskExecutionIdentity or task.kind != "agent.turn"
+                or task.chapter_id is not None or not self._publication_only
+                or self._chapter is not None or self._batch_attempt is not None
+                or self._analysis_execution is not None or self._analysis_pending is not None
+                or self._analysis_reference is not None or self._document_claim is not None
+                or self._entity_sources is not None or self._embedding_inputs is not None
+                or self._resume is not None or self._resume_epoch is not None
+                or self._scene is not None or self._after_verify is not None
+                or self._http_source_verify is not None
+                or type(self._binding) is not project_ai_config.ResolvedProjectModel
+                or self._binding.model_type != "text"
+                or type(self._extra_bindings) is not tuple or len(self._extra_bindings) > 1
+                or any(type(extra) is not project_ai_config.ResolvedSharedEmbedding
+                       or extra.grant_identity != task.grant_identity for extra in self._extra_bindings)):
+            return False
+        try:
+            raw = task.input
+            req = raw.get("request") if type(raw) is dict else None
+            cid = req.get("conversation_id") if type(req) is dict else None
+            epoch = raw.get("history_epoch") if type(raw) is dict else None
+            return (
+                _positive(cid) and task.resource_key == f"agent:{cid}"
+                and type(epoch) is int and epoch == self._stamp.epoch
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _verify_agent_conversation(self, db: AsyncSession) -> None:
+        """智能体受控流帧租约内只读核对会话归属、原邀请轮次与开放历史代次。"""
+        if self._task is None or self._task.kind != "agent.turn":
+            return
+        from app.models import AgentConversation
+
+        raw = self._task.input
+        req = raw.get("request") if type(raw) is dict else None
+        cid = req.get("conversation_id") if type(req) is dict else None
+        if not _positive(cid):
+            raise CollaborationSendBlocked()
+        expected_invitation = None if self._task.grant_identity is None else self._task.grant_identity[0]
+        statement = select(
+            AgentConversation.id,
+            AgentConversation.collaboration_invitation_id,
+            AgentConversation.ai_history_epoch,
+        ).where(
+            AgentConversation.id == cid,
+            AgentConversation.project_id == self._task.project_id,
+            AgentConversation.user_id == self._task.actor_id,
+        )
+        if db.get_bind().dialect.name == "postgresql":
+            statement = statement.with_for_update(read=True)
+        row = (await db.execute(statement)).one_or_none()
+        if (row is None or row.collaboration_invitation_id != expected_invitation
+                or row.ai_history_epoch != self._stamp.epoch):
+            raise CollaborationSendBlocked()
 
     def _batch_stream_shape(self) -> str | None:
         """批量发布 guard 的形状；只接受 BatchHandler.stream_guard 构造的三种，其余为 None。
@@ -697,6 +763,7 @@ class SendGuard:
                     # E5-c1：只读核对本执行仍持原章节占用；不取写锁、不要求发送 lease，
                     # 以免与同一帧租约的共享锁或运行体的发送 lease 自锁。
                     await chapter_claim.require_streaming_chapter(db, self._chapter)
+                await self._verify_agent_conversation(db)
                 await self._verify_entity_sources(db, allow_changes=True)
                 await self._verify_resume(db)
                 await self._verify_bindings(db)
@@ -761,6 +828,7 @@ class SendGuard:
                         or row.retry_of_id != self._task.retry_of_id or capture_task_view(row) != terminal.view
                         or not self._terminal_input_matches(row.input)):
                     raise CollaborationSendBlocked()
+                await self._verify_agent_conversation(db)
                 await self._verify_entity_sources(db, allow_changes=True)
                 await self._verify_resume(db)
                 await self._verify_bindings(db)
@@ -1043,6 +1111,9 @@ def publication_execution_matches(guard: object, execution: object) -> bool:
         # 向导（E5-c3）：只接受两种已证明形状之一，且发布身份与 guard 原执行逐字相等。
         # 未决 → 完成收据的推进不在此放宽：done 帧由保存后另行构造的仅发布 guard 签发。
         return guard._wizard_stream_shape() is not None and execution == original
+    if original.kind == "agent.turn":
+        # 智能体轮次：只接受 AgentHandler.stream_guard 构造的仅发布 guard，且发布身份逐字相等。
+        return guard._agent_stream_shape() and execution == original
     if execution == original:
         return True
     if (guard._analysis_execution is None or guard._analysis_pending is None
@@ -1112,27 +1183,44 @@ def _batch_publication_matches(guard: SendGuard, execution: execution_identity.T
 def publication_successor(
     guard: object, execution: object, later_guard: object, later_execution: object,
 ) -> bool:
-    """批量帧的来源已被同一执行后来发布的来源取代时，可否改以后者在发送时复核（E5-c2）。
+    """批量（E5-c2）与智能体轮次帧的来源已被同一执行后来发布的来源取代时，可否改以后者在发送时复核。
 
-    只在两者都是已验证的批量发布 guard、同一 actor/绑定/原执行、后者游标不回退时成立；其余类型（单章、
-    分析、大纲等）不适用，仍只认原来源或终态证明。调用方另须证明后者由同一 hub 登记、且与持锁行逐字一致。
+    - 批量：两者都是已验证的批量发布 guard、同一 actor/绑定/原执行、后者游标不回退；
+    - 智能体轮次：两者都是已验证的智能体仅发布 guard、同一 actor/绑定/可见性戳/cipher/私网开关/原执行、
+      step_cursor 均为 0、断点已变化且 round 与 tool_calls_used 不回退。
+    其余类型（单章、分析、大纲等）不适用，仍只认原来源或终态证明。调用方另须证明后者由同一 hub 登记、
+    且与持锁行逐字一致。
     """
     try:
-        return bool(
-            type(guard) is SendGuard and type(later_guard) is SendGuard
-            and type(execution) is execution_identity.TaskExecutionIdentity
-            and type(later_execution) is execution_identity.TaskExecutionIdentity
-            and guard._task is not None and later_guard._task is not None
-            and guard._task.kind == "chapter.batch" and later_guard._task.kind == "chapter.batch"
-            and guard._actor == later_guard._actor and guard._binding == later_guard._binding
-            and guard._extra_bindings == later_guard._extra_bindings
-            and execution_identity.same_execution(guard._task, later_guard._task)
-            and execution_identity.same_execution(execution, later_execution)
-            and execution_identity.same_execution(guard._task, execution)
-            and later_execution.step_cursor >= execution.step_cursor
-            and publication_execution_matches(guard, execution)
-            and publication_execution_matches(later_guard, later_execution)
-        )
+        if not (type(guard) is SendGuard and type(later_guard) is SendGuard
+                and type(execution) is execution_identity.TaskExecutionIdentity
+                and type(later_execution) is execution_identity.TaskExecutionIdentity
+                and guard._task is not None and later_guard._task is not None
+                and guard._task.kind == later_guard._task.kind
+                and guard._actor == later_guard._actor and guard._binding == later_guard._binding
+                and guard._extra_bindings == later_guard._extra_bindings
+                and execution_identity.same_execution(guard._task, later_guard._task)
+                and execution_identity.same_execution(execution, later_execution)
+                and execution_identity.same_execution(guard._task, execution)
+                and publication_execution_matches(guard, execution)
+                and publication_execution_matches(later_guard, later_execution)):
+            return False
+        if guard._task.kind == "chapter.batch":
+            return later_execution.step_cursor >= execution.step_cursor
+        if guard._task.kind == "agent.turn":
+            if (not guard._agent_stream_shape() or not later_guard._agent_stream_shape()
+                    or guard._stamp != later_guard._stamp or guard._cipher is not later_guard._cipher
+                    or guard._allow_private is not later_guard._allow_private
+                    or execution.step_cursor != 0 or later_execution.step_cursor != 0
+                    or later_execution == execution):
+                return False
+            prev_cp = execution.checkpoint if type(execution.checkpoint) is dict else {}
+            next_cp = later_execution.checkpoint if type(later_execution.checkpoint) is dict else {}
+            prev_round, next_round = prev_cp.get("round", 0), next_cp.get("round", 0)
+            prev_used, next_used = prev_cp.get("tool_calls_used", 0), next_cp.get("tool_calls_used", 0)
+            return (type(prev_round) is int and type(next_round) is int and next_round >= prev_round
+                    and type(prev_used) is int and type(next_used) is int and next_used >= prev_used)
+        return False
     except Exception:  # noqa: BLE001
         return False
 
@@ -1411,7 +1499,7 @@ def _make(
 ) -> SendGuard:
     try:
         if type(publication_only) is not bool or (publication_only and (
-            task is None or task.kind not in ("chapter.batch", *_WIZARD_KINDS) or after_verify is not None
+            task is None or task.kind not in ("chapter.batch", "agent.turn", *_WIZARD_KINDS) or after_verify is not None
         )):
             raise CollaborationSendBlocked()
         # 构建戳 epoch 只属于向导续写的保存后发布 guard，且不晚于保存后的新戳；续写的发布 guard 必须携带。
@@ -1478,6 +1566,8 @@ def _make(
         if publication_only and task.kind in _WIZARD_KINDS and guard._wizard_stream_shape() != "completed":
             # 向导仅发布 guard（E5-c3）只能绑定已带本轮完成收据的断点。
             raise CollaborationSendBlocked()
+        if publication_only and task.kind == "agent.turn" and not guard._agent_stream_shape():
+            raise CollaborationSendBlocked()
         return guard
     except Exception:  # noqa: BLE001
         pass
@@ -1520,7 +1610,7 @@ def for_task(
 ) -> SendGuard:
     """接收领取事务冻结的原执行身份；缺少占用证据不对旧任务猜测。
 
-    ``publication_only`` 只供批量章与章之间（E5-c2）与向导保存后 done 帧（E5-c3）的受控任务流发布证明：
+    ``publication_only`` 只供批量章与章之间（E5-c2）、向导保存后 done 帧（E5-c3）与智能体轮次的受控任务流发布证明：
     得到的 guard 不能发送、预检或写入。向导续写的发布 guard 须带 ``resume_epoch``（构建戳 epoch）。
 
     调用方必须在本执行者成功领取时使用该领取结果建立 guard 并保存，之后不能

@@ -748,14 +748,14 @@ async def test_queued_source_only_proves_same_round_position(app, client, make_c
 
 
 async def test_claim_source_not_issued_for_unproven_kinds(app):
-    """未实现 stream_guard 的类型（Agent、知识库、拆书）领取后仍是原执行身份，受控流继续失败关闭。"""
+    """未实现 stream_guard 的类型（知识库、拆书）领取后仍是原执行身份，受控流继续失败关闭；agent.turn 已开放。"""
     from app.services.task_engine.engine import TaskEngine
 
-    for kind in ("agent.turn", "kb.index", "book.import"):
+    for kind in ("kb.index", "book.import"):
         assert getattr(get_handler(kind), "stream_guard", None) is None
         execution = type("E", (), {"kind": kind})()
         assert TaskEngine._claim_source(execution, None) is execution
-    for kind in TASK_KINDS.values():
+    for kind in (*TASK_KINDS.values(), "agent.turn"):
         assert callable(getattr(get_handler(kind), "stream_guard", None))
 
 

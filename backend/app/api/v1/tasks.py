@@ -70,7 +70,7 @@ async def stream_task(
     binding = await _capture_stream_binding(db, task, authenticated)
     if binding.member_grant is not None:
         # E5-f：协作者（含管理员兼协作者）只走受控管线——每帧在实际发送租约内按订阅原绑定复核授权与来源证明。
-        # 仅开放已有帧发布证明（stream_guard）的类型；Agent、知识库、拆书等继续失败关闭。
+        # 仅开放已有帧发布证明（stream_guard）的类型；知识库、拆书等继续失败关闭。
         if not stream_kind_open(task.kind):
             raise NotFoundError("任务不存在")
         await db.close()
