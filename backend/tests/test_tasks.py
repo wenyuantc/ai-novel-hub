@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import aclosing
 from uuid import uuid4
 
 import pytest
@@ -616,36 +617,54 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, mo
     assert t2["status"] == "queued"
 
     engine = app.state.task_engine
-    # cancel分支让真正close_hub先到；lifecycle分支在已提交删除意图后阻塞取消，
-    # 明确让心跳可见性检查获胜，不靠偶然的50ms调度先后。
+    # cancel分支让真正close_hub先到，并在落软删前等待订阅方消费取消帧；
+    # lifecycle分支在已提交删除意图后阻塞取消，明确让心跳可见性检查获胜，不靠偶然的调度先后。
     engine.heartbeat_seconds = 60 if first == "cancel" else 0.01
     deleting, release_cancel = asyncio.Event(), asyncio.Event()
     actual_stop = task_service.stop_project_tasks
 
     async def stop_after_intent(*args):
+        if first == "lifecycle":
+            deleting.set()
+            await release_cancel.wait()
+            return await actual_stop(*args)
+        cancelled = await actual_stop(*args)
         deleting.set()
         await release_cancel.wait()
-        return await actual_stop(*args)
+        return cancelled
 
-    if first == "lifecycle":
-        monkeypatch.setattr(task_service, "stop_project_tasks", stop_after_intent)
+    monkeypatch.setattr(task_service, "stop_project_tasks", stop_after_intent)
+    # hub.subscribe 先加 subscriber_count 再做 snapshot 的 checked_frame 投影/授权复核；
+    # 必须等首帧 snapshot 真正产出并进入等待循环后再发起删除，否则删除意图会直接拦下首帧。
+    snapshot_sent = asyncio.Event()
+    actual_subscribe = engine.subscribe
+
+    async def observe_subscribe(*args, **kwargs):
+        async with aclosing(actual_subscribe(*args, **kwargs)) as stream:
+            async for event in stream:
+                yield event
+                if event[0] == "snapshot":
+                    snapshot_sent.set()
+
+    monkeypatch.setattr(engine, "subscribe", observe_subscribe)
     async with app.state.sessionmaker() as db:
         original_key = (await db.get(Task, t2["id"])).statistics_key
     subscriber = asyncio.ensure_future(client.get(f"/api/v1/tasks/{t2['id']}/stream", params=task_params(t2)))
-    await wait_until(lambda: engine.hubs[t2["id"]].subscriber_count == 1)
-    deletion = asyncio.create_task(client.delete(f"/api/v1/projects/{p2['id']}"))
+    deletion = None
     try:
-        if first == "lifecycle":
-            await asyncio.wait_for(deleting.wait(), 3)
-            events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
-            assert not deletion.done()
-            release_cancel.set()
-        else:
-            events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
+        await asyncio.wait_for(snapshot_sent.wait(), 5)
+        assert engine.hubs[t2["id"]].subscriber_count == 1
+        deletion = asyncio.create_task(client.delete(f"/api/v1/projects/{p2['id']}"))
+        await asyncio.wait_for(deleting.wait(), 3)
+        events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
+        assert not deletion.done()
+        release_cancel.set()
         assert (await asyncio.wait_for(deletion, 5)).status_code == 204
     finally:
         release_cancel.set()
-        await asyncio.gather(deletion, subscriber, return_exceptions=True)
+        if not subscriber.done():
+            subscriber.cancel()
+        await asyncio.gather(*(task for task in (deletion, subscriber) if task is not None), return_exceptions=True)
     assert events[0][0] == "snapshot"
     assert events[-1][0] == "error"
     if first == "cancel":
