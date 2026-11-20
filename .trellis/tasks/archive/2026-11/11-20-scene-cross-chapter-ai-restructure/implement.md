@@ -28,7 +28,7 @@
 
 ## 验证命令
 
-在 backend 目录执行定向用例，再执行完整门禁。PostgreSQL 使用 [项目规定的隔离测试库](../../spec/backend/quality-guidelines.md#postgresql-隔离测试库与环境变量)，串行复跑迁移、并发、备份与撤权。所有命令使用可解析中文 Alembic 配置的 UTF-8 locale。
+在 backend 目录执行定向用例，再执行完整门禁。PostgreSQL 使用 [项目规定的隔离测试库](../../../../spec/backend/quality-guidelines.md#postgresql-隔离测试库与环境变量)，串行复跑迁移、并发、备份与撤权。所有命令使用可解析中文 Alembic 配置的 UTF-8 locale。
 
 ```bash
 uv run alembic heads

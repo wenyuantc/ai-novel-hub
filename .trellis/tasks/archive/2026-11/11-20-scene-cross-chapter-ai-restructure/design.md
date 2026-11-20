@@ -6,11 +6,11 @@
 
 | 当前实现 | 设计约束 |
 | --- | --- |
-| [scene_service.py](../../../backend/app/services/scene_service.py#L59) 以活动场景的 `separator_before + content` 更新章投影，写操作使用章内容版本。[章内拆并](../../../backend/app/services/scene_service.py#L609) 已有引用、富文档、规划和原文一致性检查。 | 移动当作两章结构写入。AI 确认委托同一套章内结构操作。 |
-| [planning_scene_service.py](../../../backend/app/services/planning_scene_service.py#L109) 以当前所属章解析继承。[故事位置重验](../../../backend/app/services/setting_progression_service.py#L891) 在刷新外键后检查历史时序并重算设定。 | 同一 Scene ID 带走场景引用，目标章提供新的继承值和章顺序。受影响的章级节点及事实继续以该章定位。 |
-| [chapter_version_snapshot.py](../../../backend/app/services/chapter_version_snapshot.py#L80) 和 [场景备份校验](../../../backend/app/services/project_transfer/scenes.py#L65) 以当前归属校验历史。 [批量修订备份](../../../backend/app/services/project_transfer/batch_revisions.py#L71) 还有独立的章景匹配。 | 合法跨章历史需要持久的归属证据。读取历史与恢复现稿使用各自的条件。 |
-| [连载章身份](../../../backend/app/services/serialization_snapshot.py#L47) 和 [全书搜索范围](../../../backend/app/services/book_search.py#L87) 都用最早场景 ID 识别被重建的章节。连载写入目前直接比较该场景的现归属。 | 章身份取最早在该章创建的场景，完整支持原场景已移出的情况。搜索和连载共用这条规则。 |
-| [批量修订](../../../backend/app/services/batch_revision.py#L52) 已有项目写屏障、按主键顺序锁章和无生成占用的条件。 [编辑器保存屏障](../../spec/backend/scenes.md#章编辑器自动保存和恢复) 负责本地草稿和迟到结果。 | 新入口沿用锁序、权限、预览和草稿保障。 |
+| [scene_service.py](../../../../../backend/app/services/scene_service.py#L59) 以活动场景的 `separator_before + content` 更新章投影，写操作使用章内容版本。[章内拆并](../../../../../backend/app/services/scene_service.py#L609) 已有引用、富文档、规划和原文一致性检查。 | 移动当作两章结构写入。AI 确认委托同一套章内结构操作。 |
+| [planning_scene_service.py](../../../../../backend/app/services/planning_scene_service.py#L109) 以当前所属章解析继承。[故事位置重验](../../../../../backend/app/services/setting_progression_service.py#L891) 在刷新外键后检查历史时序并重算设定。 | 同一 Scene ID 带走场景引用，目标章提供新的继承值和章顺序。受影响的章级节点及事实继续以该章定位。 |
+| [chapter_version_snapshot.py](../../../../../backend/app/services/chapter_version_snapshot.py#L80) 和 [场景备份校验](../../../../../backend/app/services/project_transfer/scenes.py#L65) 以当前归属校验历史。 [批量修订备份](../../../../../backend/app/services/project_transfer/batch_revisions.py#L71) 还有独立的章景匹配。 | 合法跨章历史需要持久的归属证据。读取历史与恢复现稿使用各自的条件。 |
+| [连载章身份](../../../../../backend/app/services/serialization_snapshot.py#L47) 和 [全书搜索范围](../../../../../backend/app/services/book_search.py#L87) 都用最早场景 ID 识别被重建的章节。连载写入目前直接比较该场景的现归属。 | 章身份取最早在该章创建的场景，完整支持原场景已移出的情况。搜索和连载共用这条规则。 |
+| [批量修订](../../../../../backend/app/services/batch_revision.py#L52) 已有项目写屏障、按主键顺序锁章和无生成占用的条件。 [编辑器保存屏障](../../../../spec/backend/scenes.md#章编辑器自动保存和恢复) 负责本地草稿和迟到结果。 | 新入口沿用锁序、权限、预览和草稿保障。 |
 
 ## 跨章移动
 
@@ -44,7 +44,7 @@
 
 ### 请求和模型结果
 
-- 复用任务引擎的只读草稿模式，以 [设定草稿任务](../../../backend/app/services/task_engine/handlers/entities.py#L40) 为参考。请求判别为 `split` 加一个场景 ID，或 `merge` 加同章原顺序的两个相邻场景 ID。发起前冻结章内容版本、规划版本和目标实际归属。沿用 AI 配额、模型绑定、出站门禁及任务属主校验。作业执行期间编辑器可继续写作。
+- 复用任务引擎的只读草稿模式，以 [设定草稿任务](../../../../../backend/app/services/task_engine/handlers/entities.py#L40) 为参考。请求判别为 `split` 加一个场景 ID，或 `merge` 加同章原顺序的两个相邻场景 ID。发起前冻结章内容版本、规划版本和目标实际归属。沿用 AI 配额、模型绑定、出站门禁及任务属主校验。作业执行期间编辑器可继续写作。
 - 服务端为拆分生成有限数量的保存稿段落候选，附短编号和对应的 Unicode 码点。重用手动拆分的合法文本边界、区块／标记映射和保留引用检查。有局部格式时仅给出可安全映射的候选。合并预检使用现有相邻性、引用和富文档检查。
 - 出站素材限选中的已保存正文与候选编号。模型输入有明确预算，超限提示缩小场景，完整预览与实际发送使用同一范围与快照。原任务的发起者、作品、章、授权、模型绑定及可见性在各自的真实发送、结果发布和确认路径按现有任务门禁校验，模型请求期间释放写事务。
 - 模型返回限定结构的条目 `{candidate_id, reason}`，拆分最多三条，合并最多一条，空列表有效。服务端检查编号存在、去重、类型和长度，再从原快照填充位置。无效结果以任务错误呈现。任务结果保存有界理由、目标、有效性条件和候选，作者可从任务记录重开核对。
