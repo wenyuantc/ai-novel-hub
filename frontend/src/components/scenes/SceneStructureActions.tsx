@@ -13,7 +13,7 @@ import { runAfterSceneSave, type RunSavedSceneAction } from './sceneSavedAction'
 interface Props { projectId: number; chapterId: number; state: SceneDraftSnapshot; controller: SceneDraftController; selection: TextSelection; disabled: boolean; ensureSaved: () => Promise<boolean>; runSavedAction?: RunSavedSceneAction; conflictActions?: SceneConflictActions; onChanged: () => void }
 type StructureAction = 'split' | 'merge' | 'delete'
 interface StructureTarget { action: StructureAction; sceneId: number; revision: number; offset: number }
-/** 手动光标拆分、相邻合并和受保护退场；不提供跨章入口。 */
+/** 手动光标拆分、相邻合并和受保护退场。 */
 export default function SceneStructureActions({ projectId, chapterId, state, controller, selection, disabled, ensureSaved, runSavedAction, conflictActions, onChanged }: Props) {
   const { canEdit, canEditNow, canReadNow } = useProjectAccess(projectId)
   const { message } = App.useApp()

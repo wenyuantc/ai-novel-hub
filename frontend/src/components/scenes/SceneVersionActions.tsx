@@ -2,7 +2,7 @@ import { Alert, Button, Modal, Select, Space, Typography } from 'antd'
 import { useState } from 'react'
 import { versionApi } from '../../api/chapterVersions'
 import { chapterApi } from '../../api/chapters'
-import { errorMessage } from '../../api/client'
+import { ApiError, errorMessage } from '../../api/client'
 import type { ChapterVersion, ChapterVersionBrief, SceneBrief, SceneExtractPreview, SceneRestorePreview } from '../../api/types'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import TextDiff from '../TextDiff'
@@ -17,7 +17,7 @@ export interface VersionSceneContext {
   onExtract: (version: ChapterVersionBrief, preview: SceneExtractPreview, confirmRichDocumentLoss: boolean) => Promise<boolean>
 }
 interface Props { projectId: number; chapterId: number; version: ChapterVersionBrief; context?: VersionSceneContext; disabled: boolean; onRestore: (version: ChapterVersionBrief, revision?: number, confirmRichDocumentLoss?: boolean) => Promise<boolean>; onRestored: () => void }
-/** 结构恢复先预检引用；多场景旧纯文本只能明确提取整份旧稿到一个目标。 */
+/** 结构恢复先预检引用。多场景或跨章移动后的旧纯文本支持明确提取。 */
 export default function SceneVersionActions({ projectId, chapterId, version, context, disabled, onRestore, onRestored }: Props) {
   const access = useProjectAccess(projectId)
   const [open, setOpen] = useState(false)
@@ -29,7 +29,8 @@ export default function SceneVersionActions({ projectId, chapterId, version, con
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [confirmRichDocumentLoss, setConfirmRichDocumentLoss] = useState(false)
-  const legacyExtraction = !version.has_scene_snapshot && (context?.scenes.length ?? 1) > 1
+  const [extractOnlyVersion, setExtractOnlyVersion] = useState<number>()
+  const legacyExtraction = !version.has_scene_snapshot && ((context?.scenes.length ?? 1) > 1 || extractOnlyVersion === version.id)
   const richPreview = legacyExtraction ? extract : restore
   const begin = async () => {
     if (!access.canEditNow() || disabled) return
@@ -45,7 +46,15 @@ export default function SceneVersionActions({ projectId, chapterId, version, con
         if (current.content_revision !== preview.content_revision || preview.content_revision !== revision) throw new Error('读取恢复预览期间正文又有变化，请重新核对')
         if (access.canReadNow()) { setRestore(preview); setVersionDetails(full); setCurrentBody(current.content) }
       }
-    } catch (err) { if (access.canReadNow()) setError(errorMessage(err)) }
+    } catch (err) {
+      if (!access.canReadNow()) return
+      if (context && !version.has_scene_snapshot && err instanceof ApiError && err.status === 409 && err.body?.code === 'scene_move_restore_conflict') {
+        setExtractOnlyVersion(version.id)
+        setTarget(context.currentSceneId ?? context.scenes[0]?.id)
+      } else {
+        setError(errorMessage(err))
+      }
+    }
     finally { if (access.canReadNow()) setWorking(false) }
   }
   const previewExtraction = async () => {

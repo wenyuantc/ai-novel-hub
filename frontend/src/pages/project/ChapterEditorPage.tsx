@@ -63,8 +63,8 @@ import StreamOutput from '../../components/StreamOutput'
 import { useAuthStore } from '../../stores/auth'
 import { authorizationKey } from '../../utils/permissions'
 import { outlineProApi } from '../../api/outlines'
-import { queueLabel } from '../../api/tasks'
-import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, StyleChoice, Task } from '../../api/types'
+import { isTaskKey, queueLabel, SCENE_RESTRUCTURE_TASK_QUERY } from '../../api/tasks'
+import type { Chapter, ChapterBrief, ChapterVersionBrief, Plan, ReviseChapterRequest, SceneMoveChapter, StyleChoice, Task } from '../../api/types'
 import AIConfigSelect from '../../components/AIConfigSelect'
 import AnalysisDrawer, { type ReviseCompare } from '../../components/chapter/AnalysisDrawer'
 import { GenerateForm, type GenerateOptions, PolishForm } from '../../components/chapter/ChapterAIForms'
@@ -192,11 +192,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const refreshProject = useProjectStore((s) => s.refresh)
+  const projectScopeVersion = useProjectStore((s) => s.scopeVersion)
   const trackTask = useTasksStore((s) => s.track)
   const hasConfig = useHasAIConfig()
   const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
   const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
   const [searchParams, setSearchParams] = useSearchParams()
+  const restructureTask = searchParams.get(SCENE_RESTRUCTURE_TASK_QUERY)
+  const restructureTaskKey = isTaskKey(restructureTask) ? restructureTask : undefined
+  const [lastSceneMove, setLastSceneMove] = useState<{ target: SceneMoveChapter; sceneId: number; scope: number }>()
   const markerJump = useMemo(() => readMarkerLocation(location.state, initial.id), [location.state, initial.id])
   const mentionAnchor = useMemo(() => readMentionAnchor(searchParams), [searchParams])
 
@@ -461,6 +465,31 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     }, { replace: true })
     return true
   }, [canReadNow, canEditNow, sceneEditor.controller, autosave, setSearchParams, setSelection])
+
+  const closeRestructureTask = () => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete(SCENE_RESTRUCTURE_TASK_QUERY)
+      return next
+    }, { replace: true })
+  }
+
+  const refreshSceneStructure = async (preferredId?: number, closeTask = false) => {
+    const loaded = await sceneEditor.controller.load(preferredId)
+    if (!canReadNow()) return
+    if (loaded || closeTask) {
+      const selected = loaded ? sceneEditor.controller.getSnapshot().scene?.id : undefined
+      setSelection({ start: 0, end: 0 })
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current)
+        if (selected !== undefined) next.set('scene_id', String(selected))
+        if (closeTask) next.delete(SCENE_RESTRUCTURE_TASK_QUERY)
+        return next
+      }, { replace: true })
+    }
+    void reloadChapter()
+    saved()
+  }
 
   const lastRequested = useRef(requestedSceneId)
   useEffect(() => {
@@ -1249,6 +1278,17 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
                 </Card>
               </section>
             )}
+            {lastSceneMove && lastSceneMove.scope === projectScopeVersion && <Alert
+              type="success"
+              showIcon
+              closable
+              onClose={() => setLastSceneMove(undefined)}
+              message={`场景当前位于第 ${lastSceneMove.target.chapter_no} 章 · ${lastSceneMove.target.title || '未命名'}`}
+              action={<Button size="small" onClick={() => {
+                if (canReadNow()) navigate(`/projects/${pid}/chapters/${lastSceneMove.target.chapter_id}?scene_id=${lastSceneMove.sceneId}`)
+              }}>打开目标场景</Button>}
+              style={{ marginBottom: 12, overflowWrap: 'anywhere' }}
+            />}
             <SceneWritingPanel
               aiConfigId={aiConfigId}
               styleChoice={styleChoice}
@@ -1279,6 +1319,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
               }}
               onChanged={() => { void reloadChapter(); saved() }}
               onSelect={selectScene}
+              hasModel={hasConfig}
+              restructureTaskKey={restructureTaskKey}
+              onCloseRestructureTask={closeRestructureTask}
+              onSceneMoved={async (target, sceneId) => {
+                if (!canReadNow()) return
+                setLastSceneMove({ target, sceneId, scope: projectScopeVersion })
+                await refreshSceneStructure()
+              }}
+              onRestructured={(sceneId) => refreshSceneStructure(sceneId, true)}
               mentionAnchor={mentionAnchor}
               markerJump={markerJump}
               onNavigateMarker={async (target: MarkerLocation) => {

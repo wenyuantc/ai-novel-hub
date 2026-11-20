@@ -36,6 +36,7 @@ KIND_LABELS = {
     "chapter.revise": "按建议重写", "outline.continue": "AI 续写大纲", "outline.expand": "AI 展开细纲",
     "chapter.batch": "批量生成", "kb.index": "建索引", "book.import": "拆书反推", "agent.turn": "项目智能体",
     "consistency.check": "一致性检查", "consistency.impact": "修改影响评估",
+    "scene.restructure": "场景拆并建议",
 }
 # 只允许完全匹配的内部固定文案，绝不截断后透传任意原始阶段。
 SAFE_STAGES = frozenset((*STAGE_LABELS.values(), "调用工具", "写入设定", "排队深度分析", "提取写作风格",

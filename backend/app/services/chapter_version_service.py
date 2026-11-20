@@ -17,6 +17,7 @@ from app.services import version_service
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import commit_versioned, get_manual_chapter
 from app.services.chapter_version_snapshot import validate_history_snapshot
+from app.services.scene_move_history import check_restore_move_boundary
 
 
 async def _visible_log_ids(
@@ -158,6 +159,8 @@ async def restore_preview(
         rich_changes = []
         requires_rich_confirmation = False
         candidate_snapshot = target.scene_snapshot
+        if candidate_snapshot is None:
+            await check_restore_move_boundary(db, chapter.id, target.seq, None)
         if candidate_snapshot is None and len(current) == 1:
             if await scene_service._rich_scene_ids(db, ids):
                 candidate_snapshot = await _legacy_plain_snapshot(db, chapter, target.content)
@@ -167,6 +170,7 @@ async def restore_preview(
             await validate_history_snapshot(db, project_id, chapter.id, candidate_snapshot, for_restore=True)
             snapshot = parse_scene_snapshot(candidate_snapshot)
             ids = [item.id for item in snapshot.scenes]
+            await check_restore_move_boundary(db, chapter.id, target.seq, set(ids))
             targets = [await scene_service.require_scene(db, chapter, scene_id, active=False) for scene_id in ids]
             retiring = [scene.id for scene in current if scene.id not in ids]
             blockers = await scene_service.reference_blockers(db, chapter, retiring, include_local=True)
@@ -210,6 +214,8 @@ async def restore_version(
             await scene_service.check_revision(db, chapter, expected)
         if target.scene_snapshot is not None and expected is None:
             raise BadRequestError("恢复场景结构必须提供当前内容版本")
+        if target.scene_snapshot is None:
+            await check_restore_move_boundary(db, chapter.id, target.seq, None)
         if target.scene_snapshot is None and len(await scene_service.list_active_scenes(db, chapter.id)) != 1:
             raise ConflictError("旧纯文本不包含场景结构，请预览后提取到指定场景", extra={
                 "code": "scene_target_required",
@@ -224,6 +230,8 @@ async def restore_version(
                 snapshot = await _legacy_plain_snapshot(db, chapter, content)
         if snapshot is not None:
             await validate_history_snapshot(db, project_id, chapter.id, snapshot, for_restore=True)
+            scene_ids = {item.id for item in parse_scene_snapshot(snapshot).scenes}
+            await check_restore_move_boundary(db, chapter.id, seq, scene_ids)
         await version_service.ensure_baseline(db, chapter, force=True)
         if snapshot is not None:
             await scene_service.restore_snapshot(

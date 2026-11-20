@@ -115,6 +115,7 @@ TABLE_LABELS: dict[str, str] = {
     "outlines": "大纲",
     "chapters": "章节",
     "scenes": "场景",
+    "scene_moves": "场景移动记录",
     "scene_documents": "场景格式",
     "scene_sections": "正文区块",
     "scene_markers": "正文标记",
@@ -580,6 +581,15 @@ def _migrate_v14_to_v15(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v15_to_v16(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        if "scene_moves" in tables and tables["scene_moves"] != []:
+            raise BadRequestError("旧版备份不支持场景移动记录，请使用原始版本文件")
+        tables["scene_moves"] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 14 and isinstance(tables := data.get("tables"), dict):
@@ -611,6 +621,7 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         12: _migrate_v12_to_v13,
         13: lambda value: value,  # v14 只增加可选版本历史表，旧备份缺省为空。
         14: _migrate_v14_to_v15,
+        15: _migrate_v15_to_v16,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -1312,7 +1323,7 @@ def parse_backup(raw: bytes) -> Backup:
                 errors.add(f"备份缺少批量修订历史表 {table}")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
                   *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes",
-                  "scene_documents", "scene_sections", "scene_markers", *SERIALIZATION_TABLES):
+                  "scene_documents", "scene_sections", "scene_markers", "scene_moves", *SERIALIZATION_TABLES):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -1364,13 +1375,13 @@ def parse_backup(raw: bytes) -> Backup:
     errors.raise_if_any()
     validate_planning_tables(backup.tables, errors.add)
     errors.raise_if_any()
-    validate_scene_tables(backup.tables, errors.add)
+    history = validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
     documents = validate_rich_tables(backup.tables, errors.add)
     errors.raise_if_any()
     validate_serialization_tables(backup.tables, backup.project["id"], errors.add)
     errors.raise_if_any()
-    validate_revision_tables(backup.tables, documents, errors.add)
+    validate_revision_tables(backup.tables, documents, history, errors.add)
     errors.raise_if_any()
     _check_consistency_data(backup, errors)
     errors.raise_if_any()
@@ -1738,6 +1749,9 @@ class _Importer:
             for t in ("outlines", "chapter_plans"):
                 model = RULES_BY_TABLE[t].model
                 self.ctx.synthetic_base[t] = int(await self.db.scalar(select(func.max(model.id))) or 0)
+        if rule.table == "scene_moves":
+            # 按原先的移动顺序分配新 ID，备份 JSON 的行顺序没有证明效力。
+            rows = sorted(rows, key=lambda row: row["id"])
         objs = []
         laters = []
         for row in rows:

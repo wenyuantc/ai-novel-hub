@@ -106,6 +106,26 @@ async def _raw_values(db: AsyncSession, units: Sequence[PlanningUnit]) -> dict[i
     return result
 
 
+def _effective_planning(
+    raw: s.ScenePlanningRaw, parent: s.PlanningRow, *,
+    local_pov_name: str | None, local_tags: list[s.PlanningTagOut],
+) -> s.ScenePlanningEffective:
+    sources = s.ScenePlanningSources(**{
+        field: "scene" if getattr(raw.modes, field) == "override" else "chapter" for field in PLANNING_FIELDS
+    })
+    pov = raw.pov_character_id if sources.pov == "scene" else parent.pov_character_id
+    name = local_pov_name if sources.pov == "scene" else parent.pov_character_name
+    references = [ref for ref in parent.references if getattr(sources, ref.kind) == "chapter"]
+    references += [ref for ref in raw.references if getattr(sources, ref.kind) == "scene"]
+    return s.ScenePlanningEffective(
+        pov_character_id=pov if name is not None else None,
+        pov_character_name=name,
+        tags=local_tags if sources.tags == "scene" else parent.tags,
+        references=sorted(references, key=query.reference_key),
+        sources=sources,
+    )
+
+
 async def resolve_scene_plannings(
     db: AsyncSession, project_id: int, scene_ids: Sequence[int], *, chapter_rows: list[s.PlanningRow] | None = None
 ) -> dict[int, s.ScenePlanningOut]:
@@ -157,20 +177,13 @@ async def resolve_scene_plannings(
                 raise NotFoundError("场景所属章节不存在")
             unit = units_by_scene.get(scene.id)
             raw = raw_by_unit[unit.id] if unit else s.ScenePlanningRaw()
-            sources = {field: "scene" if getattr(raw.modes, field) == "override" else "chapter"
-                       for field in PLANNING_FIELDS}
-            pov = raw.pov_character_id if sources["pov"] == "scene" else parent.pov_character_id
-            references = [ref for ref in parent.references if sources[ref.kind] == "chapter"]
-            references += [ref for ref in raw.references if sources[ref.kind] == "scene"]
             result[scene.id] = s.ScenePlanningOut(
                 revision=before, unit_id=unit.id if unit else None,
                 binding_epoch=unit.binding_epoch if unit else None, raw=raw,
-                effective=s.ScenePlanningEffective(
-                    pov_character_id=pov if pov in names else None, pov_character_name=names.get(pov),
-                    tags=([tags[tag_id] for tag_id in raw.tag_ids if tag_id in tags]
-                          if sources["tags"] == "scene" else parent.tags),
-                    references=sorted(references, key=query.reference_key),
-                    sources=s.ScenePlanningSources(**sources),
+                effective=_effective_planning(
+                    raw, parent,
+                    local_pov_name=names.get(raw.pov_character_id),
+                    local_tags=[tags[tag_id] for tag_id in raw.tag_ids if tag_id in tags],
                 ),
             )
         if await query.revision(db, project_id) != before:
@@ -180,6 +193,25 @@ async def resolve_scene_plannings(
 
 async def resolve_scene_planning(db: AsyncSession, project_id: int, scene_id: int) -> s.ScenePlanningOut:
     return (await resolve_scene_plannings(db, project_id, [scene_id]))[scene_id]
+
+
+async def preview_scene_planning_move(
+    db: AsyncSession, project_id: int, scene_id: int, target_chapter_id: int,
+) -> tuple[s.ScenePlanningOut, s.ScenePlanningEffective]:
+    with db.no_autoflush:
+        revision = await query.revision(db, project_id)
+        rows = await query.rows(db, project_id)
+        current = (await resolve_scene_plannings(db, project_id, [scene_id], chapter_rows=rows))[scene_id]
+        if current.revision != revision:
+            raise ConflictError("场景规划读取期间已变化，请重新预览", extra={"code": "planning_context_changed"})
+        target = next(
+            (row for row in rows if row.source.kind == "chapter" and row.chapter_id == target_chapter_id), None,
+        )
+        if target is None:
+            raise NotFoundError("目标章节不存在")
+    return current, _effective_planning(
+        current.raw, target, local_pov_name=current.effective.pov_character_name, local_tags=current.effective.tags,
+    )
 
 
 async def capture_scene_planning(

@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import (
     Chapter,
-    Scene,
     SerializationEdition,
     SerializationEntry,
     SerializationGoal,
@@ -29,6 +28,7 @@ from app.schemas.serialization import (
 from app.services import project_access, scene_service
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import get_manual_chapter
+from app.services.scene_move_history import matches_chapter_identity
 from app.services.serialization_snapshot import capture_draft
 
 
@@ -41,8 +41,7 @@ def _check_revision(actual: int, expected: int) -> None:
 
 async def _check_chapter_identity(db: AsyncSession, chapter_id: int, expected_scene_id: int) -> None:
     # SQLite 可复用已删除章节的数字 ID；退场的场景仍然可识别本章。
-    owner = await db.scalar(select(Scene.chapter_id).where(Scene.id == expected_scene_id))
-    if owner != chapter_id:
+    if not await matches_chapter_identity(db, chapter_id, expected_scene_id):
         raise ConflictError("预览中的章节已被替换，请刷新后重试", extra={"code": "stale_chapter_identity"})
 
 

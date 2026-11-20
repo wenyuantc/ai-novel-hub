@@ -144,7 +144,7 @@ _COLLABORATION_QUEUED_CLEANUP_KINDS = frozenset({
     "chapter.generate", "chapter.polish", "chapter.revise", "chapter.batch", "chapter.analyze", "kb.index",
     "outline.continue", "outline.expand", "character.generate", "organization.generate", "career.generate",
     "relations.parse", "relations.generate", "wizard.outline", "wizard.characters", "wizard.world", "wizard.careers",
-    "agent.turn", "consistency.check", "consistency.impact",
+    "agent.turn", "consistency.check", "consistency.impact", "scene.restructure",
 })
 # 待审核协作任务在降级/撤权/轮次失效后可由系统受限收尾的类型（E5-a；Agent 待确认轮次 E4-i 裁决 11）：
 # 知识库索引不会暂停，拆书不在白名单。
@@ -167,7 +167,7 @@ _SINGLE_CHAPTER_KINDS = frozenset({"chapter.generate", "chapter.polish", "chapte
 # consistency.impact（修改影响评估）同理：台账与影响记录在各自事务内锁内重验后提交，Task 终态只保存概要。
 _DRAFT_ONLY_KINDS = frozenset({
     "outline.continue", "outline.expand", "character.generate", "organization.generate", "career.generate",
-    "relations.parse", "relations.generate", "consistency.check", "consistency.impact",
+    "relations.parse", "relations.generate", "consistency.check", "consistency.impact", "scene.restructure",
 })
 # SSE 心跳帧标记（app.api.sse 渲染为注释帧 ": ping"）
 HEARTBEAT_EVENT = ""

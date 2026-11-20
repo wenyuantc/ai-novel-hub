@@ -6,7 +6,7 @@ import type { MentionAnchor } from '../../api/mentions'
 import { sceneApi } from '../../api/scenes'
 import { currentRequestGeneration, errorMessage } from '../../api/client'
 import { richDocumentApi, type MarkerTimelineItem } from '../../api/richDocument'
-import type { Chapter, StyleChoice } from '../../api/types'
+import type { Chapter, SceneMoveChapter, StyleChoice } from '../../api/types'
 import type { SkillRequestChoice } from '../../utils/skillInputs'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { useAuthStore } from '../../stores/auth'
@@ -22,6 +22,8 @@ import SceneNavigator from './SceneNavigator'
 import ScenePlanningPanel from './ScenePlanningPanel'
 import SceneSettingPreview from './SceneSettingPreview'
 import SceneStructureActions from './SceneStructureActions'
+import SceneMoveAction from './SceneMoveAction'
+import SceneRestructureAction from './SceneRestructureAction'
 import MarkerTimeline from './MarkerTimeline'
 import { markerLocation, type MarkerLocation } from './markerLocation'
 import { reviewTextareaOffset, sourceToTextareaOffset } from './reviewOffsets'
@@ -44,10 +46,21 @@ interface Props {
   aiConfigId: number | null; styleChoice: StyleChoice; skill: SkillRequestChoice
   onSectionLockChange: (locked: boolean) => void
   onOpenInspectorTab?: (tab: 'ai' | 'scene' | 'chapter') => void
+  hasModel: boolean | null
+  restructureTaskKey?: string
+  onCloseRestructureTask: () => void
+  onSceneMoved: (target: SceneMoveChapter, sceneId: number) => Promise<void>
+  onRestructured: (sceneId: number) => Promise<void>
 }
 /** 当前场景独立编辑；整章仅通读服务端投影，不在浏览器重造正文拼接规则。 */
-export default function SceneWritingPanel({ projectId, chapter, state, controller, disabled, editorDisabled = disabled, selection, onSelection, ensureSaved, runSavedAction, conflictActions, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId, styleChoice, skill, onSectionLockChange, onOpenInspectorTab }: Props) {
+export default function SceneWritingPanel({
+  projectId, chapter, state, controller, disabled, editorDisabled = disabled, selection, onSelection, ensureSaved, runSavedAction,
+  conflictActions, onChanged, onSelect, mentionAnchor, onStructureDirtyChange, markerJump, onNavigateMarker, aiConfigId,
+  styleChoice, skill, onSectionLockChange, onOpenInspectorTab, hasModel, restructureTaskKey, onCloseRestructureTask,
+  onSceneMoved, onRestructured,
+}: Props) {
   const { canEdit, canUseAI, canReadNow, canEditNow } = useProjectAccess(projectId)
+  const scopeVersion = useProjectStore((state) => state.scopeVersion)
   const { message, modal } = App.useApp()
   const { token } = theme.useToken()
   const [orderDrawerOpen, setOrderDrawerOpen] = useState(false)
@@ -426,6 +439,31 @@ export default function SceneWritingPanel({ projectId, chapter, state, controlle
               runSavedAction={runSavedAction}
               conflictActions={conflictActions}
               onChanged={onChanged}
+            />
+            <SceneMoveAction
+              key={`move:${scopeVersion}:${scene.id}`}
+              projectId={projectId}
+              chapterId={chapter.id}
+              sceneId={scene.id}
+              disabled={disabled || sectionBusy || state.loading || state.composing || !!unsupported || !!state.conflict}
+              controller={controller}
+              ensureSaved={ensureSaved}
+              runSavedAction={runSavedAction}
+              onMoved={onSceneMoved}
+            />
+            <SceneRestructureAction
+              key={`suggest:${scopeVersion}:${scene.id}`}
+              projectId={projectId}
+              chapterId={chapter.id}
+              state={state}
+              controller={controller}
+              disabled={disabled || sectionBusy || state.loading || state.composing || !!unsupported || !!state.conflict}
+              hasModel={hasModel}
+              ensureSaved={ensureSaved}
+              runSavedAction={runSavedAction}
+              taskKey={restructureTaskKey}
+              onCloseTask={onCloseRestructureTask}
+              onApplied={onRestructured}
             />
             <Button
               size="small"

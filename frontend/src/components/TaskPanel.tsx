@@ -200,7 +200,7 @@ function TaskList({ tasks, onView, onViewResult, onReview, onTrack, onRemoved, o
             </Button>,
           )
         }
-        if (link) {
+        if (link && (t.kind !== 'scene.restructure' || controls && (activeTask || t.status === 'succeeded'))) {
           actions.push(
             <Button
               key="go"
@@ -211,7 +211,7 @@ function TaskList({ tasks, onView, onViewResult, onReview, onTrack, onRemoved, o
                 navigate(link)
               }}
             >
-              跳转
+              {t.kind === 'scene.restructure' ? (activeTask ? '查看进度' : '查看建议') : '跳转'}
             </Button>,
           )
         }

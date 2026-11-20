@@ -4,12 +4,11 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError
-from app.models import Scene
+from app.core.errors import NotFoundError
 from app.services.rich_document_render import load_chapter_projections
+from app.services.scene_move_history import chapter_identity
 
 
 @dataclass(frozen=True)
@@ -45,8 +44,4 @@ async def capture_draft(db: AsyncSession, project_id: int, chapter_id: int) -> F
 
 
 async def chapter_scene_id(db: AsyncSession, chapter_id: int) -> int:
-    """场景 ID 永不复用；取最早的场景，退场后也仍然标识原章。调用方已经核验作品归属。"""
-    scene_id = await db.scalar(select(func.min(Scene.id)).where(Scene.chapter_id == chapter_id))
-    if scene_id is None:
-        raise ConflictError("章节缺少可识别的场景，请刷新后重试", extra={"code": "scene_invariant_error"})
-    return scene_id
+    return await chapter_identity(db, chapter_id)

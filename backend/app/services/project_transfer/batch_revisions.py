@@ -26,7 +26,8 @@ def _same_document(left: SceneDocument, right: SceneDocument) -> bool:
 
 
 def validate_revision_tables(
-    tables: dict[str, list[dict]], documents: dict[int, SceneDocument], error: Callable[[str], None],
+    tables: dict[str, list[dict]], documents: dict[int, SceneDocument], history: set[tuple[int, int]],
+    error: Callable[[str], None],
 ) -> None:
     batches = tables.get("revision_batches", [])
     if not batches:
@@ -79,7 +80,8 @@ def validate_revision_tables(
                         or cid is not None and chapter_slots.setdefault(cid, slot) != slot):
                     raise ValueError("同一章节的历史标签或版本条件不一致")
                 if sid is not None:
-                    if sid in scene_ids or scenes[sid]["chapter_id"] != cid:
+                    same_chapter = scenes[sid]["chapter_id"] == cid
+                    if sid in scene_ids or not (same_chapter or not matches and (sid, cid) in history):
                         raise ValueError("重复场景或场景不属于记录中的章节")
                     scene_ids.add(sid)
                 before = row["before_document"]

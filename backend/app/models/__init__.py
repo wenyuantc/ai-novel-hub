@@ -79,7 +79,7 @@ from app.models.rich_document import (
     SceneSection,
     SceneSelectionReceipt,
 )
-from app.models.scenes import Scene
+from app.models.scenes import Scene, SceneMove
 from app.models.serialization import (
     SerializationEdition,
     SerializationEntry,
@@ -183,6 +183,7 @@ __all__ = [
     "Scene",
     "SceneDocumentMeta",
     "SceneMarker",
+    "SceneMove",
     "SceneReviewAnalysisReceipt",
     "SceneReviewProposal",
     "SceneReviewPayloadChunk",

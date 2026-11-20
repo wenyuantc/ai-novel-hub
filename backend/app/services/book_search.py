@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from itertools import batched
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, UnauthorizedError
@@ -31,6 +31,7 @@ from app.services.book_search_mapping import (
 )
 from app.services.rich_document_mapping import UnsafeMapping
 from app.services.rich_document_store import capture_documents
+from app.services.scene_move_history import chapter_identity_expression
 
 CONTEXT_SIZE = 40
 CHAPTERS_PER_READ = 16
@@ -84,16 +85,11 @@ class RangeEnd:
 type Bounds = tuple[RangeEnd, RangeEnd] | None
 
 
-def _chapter_identity():
-    # 章的数字 ID 可复用；场景 AUTOINCREMENT 高水位在旧章删除后仍保留。
-    return select(func.min(Scene.id)).where(Scene.chapter_id == Chapter.id).correlate(Chapter).scalar_subquery()
-
-
 async def _bounds(db: AsyncSession, project_id: int, body: SearchScope) -> Bounds:
     if body.start_chapter_id is None:
         return None
     ends = {cid: RangeEnd((number, cid), identity) for cid, number, identity in await db.execute(
-        select(Chapter.id, Chapter.chapter_no, _chapter_identity()).where(
+        select(Chapter.id, Chapter.chapter_no, chapter_identity_expression()).where(
             Chapter.project_id == project_id, Chapter.id.in_((body.start_chapter_id, body.end_chapter_id)),
         )
     )}
@@ -108,7 +104,7 @@ async def _bounds(db: AsyncSession, project_id: int, body: SearchScope) -> Bound
 async def _catalog(db: AsyncSession, project_id: int, body: SearchRequest):
     bounds = await _bounds(db, project_id, body)
     statement = select(
-        Chapter.id, Chapter.chapter_no, Chapter.title, Chapter.content_revision, _chapter_identity(),
+        Chapter.id, Chapter.chapter_no, Chapter.title, Chapter.content_revision, chapter_identity_expression(),
     ).where(Chapter.project_id == project_id)
     if bounds:
         order = tuple_(Chapter.chapter_no, Chapter.id)

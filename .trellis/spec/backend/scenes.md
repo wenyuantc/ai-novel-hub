@@ -114,7 +114,7 @@ await validate_history_snapshot(db, project_id, chapter_id, snapshot, for_restor
   历史 Scene 或规划 unit 错所属章在 preview 拒绝。卡片格式仍 v6。
 - 本地／历史实体与规划标签引用保护真删除，不能让刚导出的合法完整备份变成不可导入资料；
   无 Scene 依赖的旧章标签删除保持原语义。新资料存在时拒绝有损 downgrade。
-- 历史详情、恢复预览和恢复前必须先调用 `validate_history_snapshot`：每个 Scene 属于该章；
+- 历史详情、恢复预览和恢复前必须先调用 `validate_history_snapshot`。读取可接受同书的已验证移动归属，恢复仍要求当前章身份，详见[跨章移动](#8-跨章移动与-ai-拆并建议)。
   历史规划单元、POV、标签、角色、世界、组织、职业和关系时间线属于该作品，关系时间线须为
   `subject_kind=relationship`；富文档区块、退场区块及标记 UUID 必须能在同景持久身份中找到。
   查询按最多400个身份分批且禁止自动 flush。损坏、未知字段、缺失或跨作品身份返回匿名
@@ -266,4 +266,69 @@ await version_service.record(db, chapter, "generate")
 await validate_history_snapshot(db, project_id, chapter.id, snapshot, for_restore=True)
 await version_service.ensure_baseline(db, chapter, force=True)
 await restore_snapshot(db, chapter, snapshot, expected_revision=revision)
+```
+
+## 8. 跨章移动与 AI 拆并建议
+
+### 1. 范围
+
+同一作品的单场景移动与同一章节的单次拆并。场景移动保留身份、正文、富文档及独立规划。AI 建议只处理作者预览过的保存稿。
+
+### 2. 接口与数据
+
+路径前缀为 `/api/v1/projects/{pid}/chapters/{cid}`。
+
+| 方法与后缀 | 请求与响应 |
+| --- | --- |
+| `POST /scenes/{sid}/move-preview` | `target_chapter_id, insert_before_scene_id`。空插入点表示章末。返回 `source, target, source_position, target_position, planning_revision, signature, source_will_be_empty, planning_changes, timeline_events, source_seam, target_seam, moved_start, moved_end, blockers` 和原场景 ID。 |
+| `POST /scenes/{sid}/move` | 相同位置与已核对的 `signature`。返回 `scene_id, source_chapter_id, target_chapter_id, source_content_revision, target_content_revision, planning_revision`。 |
+| `POST /scene-restructure/preview` | `operation:split\|merge, scene_ids, expected_content_revision`。返回保存正文、候选编号与 Unicode 码点、两版本、签名、元数据冲突与阻塞项。 |
+| `POST /scene-restructure/suggestions` | 预览条件加 `signature` → 202 `TaskOut`，任务类型为 `scene.restructure`。 |
+| `GET /scene-restructure/suggestions/{task_key}` | 本人有效的建议，含两版本、签名、冲突和 `proposals:[{candidate_id,reason,offset,before,after}]`。合并的 `offset` 为空。 |
+| `POST /scene-restructure/suggestions/{task_key}/apply` | `candidate_id, signature`，拆分可填写 `right_title`，合并明确选择 `metadata_source` → SceneMutation。 |
+
+迁移 `0065` 增加 `scene_moves`。场景 FK 级联删除，原章、目标章和规划单元 FK 删除时置空。记录首条移动标识、原章和目标章的结构版本序号。备份 v16 重映射场景、章和规划单元 ID。
+
+### 3. 写入与读取
+
+- 移动先持作品写屏障，再按章 ID 顺序锁两章。锁内重新解析活动归属、插入点、签名和写入占用。移动原场景的 `separator_before + content`，源章失去唯一活动景时创建空景。提交时两章内容版本推进到同一个大于原两章版本的值，规划版本与 AI 发送校验所用的可见性版本同步推进。显式启用 AI 的作者区块随场景移动时，历史保护代次也推进。
+- 场景覆盖模式和原值随场景移动。继承项实时读取目标章默认值，预览按项显示差异。场景演变保留原首尾边界，故事位置重验和设定求值与两章正文、版本及审计同事务。章级锚点、冻结定稿和发布记录按原来的章身份读取。
+- 现稿写入需要当前归属。历史读取可以使用同书的移动和规划归属证据。同一章的版本恢复使用实际归属与移入版本边界。旧纯文本通过显式提取入口选定当前目标。删章前核对删除集合外仍存的版本证据。若移出场景已成为某章唯一的原生身份，只在确有必要时创建退场空锚点以保留该章的可识别性。
+- 连载和搜索使用最早原生场景识别章节，包括已移出的首次归属。导出时保留旧历史关联，省略历史版本时清除移动的版本序号。批次撤销使用执行时的章、场景和版本。
+- AI 输入为选中的已保存正文及最多 32 个安全候选编号，任务复用身份、授权、模型绑定和发送守卫。结果持久化候选编号及短理由。空建议有效，合并至多一条，拆分至多三条。重开时按原签名和当前保存稿重建前后段落。采纳再次核对原任务、稿件版本、归属、引用和富文档条件，再使用同一人工拆并事务。预览或作业结束本身对稿件零写入。
+- 编辑器预览与确认各通过已有保存屏障。本地未同步草稿可查看或导出。页面切换或撤权后废弃旧响应。成功移动后的目标定位用新的章 ID 和同一个场景 ID。
+
+### 4. 校验与错误
+
+| 条件 | 行为 |
+| --- | --- |
+| 目标不在可读作品内，或场景不属于请求的章节 | 404，避免泄露目标归属 |
+| 输入不合法或插入点不在目标活动目录 | 422 或结构校验错误 |
+| 预览后章、规划或故事位置条件发生变化 | 409 `scene_move_preview_changed`，重新预览 |
+| 章节占用或文档无法安全拼接 | 409 `scene_move_blocked`，返回阻塞项 |
+| 恢复会跨越场景归属或旧的移入边界 | 409 `scene_move_restore_conflict`，继续支持旧版对比 |
+| AI 返回重复／未知候选或非法结构 | 任务失败，保留现稿 |
+| 确认建议时权限、版本、引用或富文档预检变化 | 现有权限或冲突响应，保留现稿和草稿 |
+
+### 5. 验收样例
+
+- 把带有章内分隔、作者区块和设定变化的场景移到另一章。新提及定位到目标章，源章历史仍能查看完整场景。只改变目标章默认值时，继承项实时刷新。
+- 源章唯一场景移出后仍能编辑一个空景。原定稿仍可查看，并显示现稿已改。
+- AI 找到两个段落之间的安全分界。采纳后两个活动场景的完整投影逐字符等于原稿，重复确认提示刷新。
+
+### 6. 必需测试
+
+- `test_scene_move.py` 与 `test_scene_move_roundtrip.py` 覆盖双章、继承差异、原文与引用回滚、双连接竞争、冻结稿、备份导入与再移动。
+- `test_scene_restructure.py` 覆盖 FakeLLM 实际输入边界、结果结构、取消、过期、采纳原子性与保留原文。
+- 浏览器回归覆盖原场景定位、移动预览、移动后跳转、建议重开、明确采纳及窄屏操作。
+
+### 7. 写入示例
+
+对同一个预览条件的重复请求应从当前归属和当前版本重新校验。直接更新 `Scene.chapter_id` 会让旧历史和两端章投影失配。移动应通过预览和同事务提交入口执行。
+
+```text
+POST /projects/9/chapters/12/scenes/34/move-preview
+{"target_chapter_id":18,"insert_before_scene_id":null}
+POST /projects/9/chapters/12/scenes/34/move
+{"target_chapter_id":18,"insert_before_scene_id":null,"signature":"<预览签名>"}
 ```

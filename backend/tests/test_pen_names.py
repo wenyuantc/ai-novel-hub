@@ -182,7 +182,7 @@ async def test_backup_only_current_pen_name_and_restores_per_importer(client, ma
     await make_pen(client, "绝不能导出")
     project = await create_project(client, pen_name_id=pen["id"])
     backup = await _backup(client, project["id"])
-    assert backup["version"] == 15 and backup["app_schema"] == "0064"
+    assert backup["version"] == 16 and backup["app_schema"] == "0065"
     assert backup["pen_name"] == "当前署名" and "绝不能导出" not in json.dumps(backup, ensure_ascii=False)
     guest = make_client()
     await register(guest, "backup-guest")

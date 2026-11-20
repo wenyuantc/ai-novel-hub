@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/scenes.md", "reason": "章投影、逐项继承、结构历史、权限和编辑器保存门禁"}
+{"file": ".trellis/spec/backend/rich-documents.md", "reason": "拆并保留格式、区块、标记及 Unicode 边界"}
+{"file": ".trellis/spec/backend/setting-progressions.md", "reason": "场景时点与整本书的设定重验"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "新历史关系的格式升级、FK 登记和显式重映射"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "任务真实出站、可见性变化和结果守卫"}
+{"file": ".trellis/spec/backend/relationship-generation.md", "reason": "AI 只读建议、结果重开与确认范式"}

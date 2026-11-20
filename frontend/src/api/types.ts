@@ -802,6 +802,72 @@ export interface SceneMerge extends SceneReorder {
   signature: string
   metadata_source: 'left' | 'right'
 }
+export interface SceneMoveSelection {
+  target_chapter_id: number
+  insert_before_scene_id: number | null
+}
+export interface SceneMoveChapter {
+  chapter_id: number
+  chapter_no: number
+  title: string
+  content_revision: number
+  scene_count: number
+}
+export interface SceneMovePreview {
+  scene_id: number
+  source: SceneMoveChapter
+  target: SceneMoveChapter
+  source_position: number
+  target_position: number
+  insert_before_scene_id: number | null
+  planning_revision: number
+  signature: string
+  source_will_be_empty: boolean
+  planning_changes: { field: ScenePlanningField; before: string[]; after: string[] }[]
+  timeline_events: { id: number; label: string; boundary: 'start' | 'end' }[]
+  source_seam: { before: string; after: string }
+  target_seam: { before: string; after: string }
+  moved_start: string
+  moved_end: string
+  blockers: SceneReferenceBlocker[]
+}
+export interface SceneMoveResult {
+  scene_id: number
+  source_chapter_id: number
+  target_chapter_id: number
+  source_content_revision: number
+  target_content_revision: number
+  planning_revision: number
+}
+export type SceneRestructureOperation = 'split' | 'merge'
+export type SceneRestructureRequest = { expected_content_revision: number } & (
+  | { operation: 'split'; scene_ids: [number] }
+  | { operation: 'merge'; scene_ids: [number, number] }
+)
+export interface SceneRestructurePreview {
+  operation: SceneRestructureOperation
+  scene_ids: number[]
+  content_revision: number
+  planning_revision: number
+  signature: string
+  scenes: { scene_id: number; title: string; content: string }[]
+  candidates: { candidate_id: number; offset: number | null }[]
+  blockers: SceneReferenceBlocker[]
+  conflicts: SceneMergePreview['conflicts']
+}
+export interface SceneRestructureResult {
+  operation: SceneRestructureOperation
+  scene_ids: number[]
+  content_revision: number
+  planning_revision: number
+  signature: string
+  proposals: { candidate_id: number; offset: number | null; before: string; after: string; reason: string }[]
+  conflicts: SceneMergePreview['conflicts']
+}
+export type SceneRestructureApply = { candidate_id: number; signature: string } & (
+  | { right_title: string; metadata_source?: never }
+  | { metadata_source: SceneMerge['metadata_source']; right_title?: never }
+)
 export interface ScenePositionResolution {
   scene_id: number | null
   start: number | null
@@ -1057,6 +1123,7 @@ export type TaskKind =
   | 'wizard.careers'
   | 'chapter.analyze'
   | 'chapter.revise'
+  | 'scene.restructure'
   | 'outline.continue'
   | 'outline.expand'
   | 'chapter.batch'

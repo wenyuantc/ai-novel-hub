@@ -32,11 +32,17 @@ from app.services import (
 )
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation
-from app.services.chapter_delete_guard import detach_serialization_chapters, ensure_chapter_delete_isolation
+from app.services.chapter_delete_guard import (
+    detach_scene_move_chapters,
+    detach_serialization_chapters,
+    ensure_chapter_delete_isolation,
+)
 from app.services.project_service import get_manageable_project, get_owned_project
 
 _WS_RE = re.compile(r"\s+")
-_CHAPTER_TASK_KINDS = frozenset({"chapter.generate", "chapter.polish", "chapter.revise", "chapter.analyze"})
+_CHAPTER_TASK_KINDS = frozenset({
+    "chapter.generate", "chapter.polish", "chapter.revise", "chapter.analyze", "scene.restructure",
+})
 _UNFINISHED_TASK_STATUSES = ("queued", "running", "paused")
 _CHAPTER_WRITE_CONDITIONS = {"expected_content_revision", "expected_scene_id", "expected_title"}
 
@@ -534,6 +540,7 @@ async def delete_chapter(db: AsyncSession, user_id: int, project_id: int, chapte
     async with AuditOperation(db, user_id, "chapter.delete", "chapter", chapter_id, project_id=project_id) as audit:
         chapter = await _lock_chapter_for_delete(db, user_id, project_id, chapter_id)
         await ensure_chapter_delete_isolation(db, project_id, [chapter.id])
+        await detach_scene_move_chapters(db, project_id, [chapter.id])
         audit.target(chapter)
         audit.summary.word_count_before = chapter.word_count
         if audit.enabled:

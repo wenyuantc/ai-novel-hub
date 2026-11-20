@@ -28,6 +28,7 @@ TaskKind = Literal[
     "book.import",
     "consistency.check",
     "consistency.impact",
+    "scene.restructure",
 ]
 
 

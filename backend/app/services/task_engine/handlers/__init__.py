@@ -10,7 +10,11 @@ from app.services.task_engine.handlers import (
     entities,
     kb,
     outline,
+    scene_restructure,
     wizard,
 )
 
-__all__ = ["agent", "analysis", "batch", "book_import", "chapter", "consistency", "entities", "kb", "outline", "wizard"]
+__all__ = [
+    "agent", "analysis", "batch", "book_import", "chapter", "consistency", "entities", "kb", "outline",
+    "scene_restructure", "wizard",
+]

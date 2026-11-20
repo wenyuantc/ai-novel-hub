@@ -26,3 +26,30 @@ class Scene(TimestampMixin, Base):
     sort: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     separator_before: Mapped[str] = mapped_column(Text, default="", server_default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+
+
+class SceneMove(Base):
+    """同书内移动的持久归属证据，与两章投影及版本在同一事务提交。"""
+
+    __tablename__ = "scene_moves"
+    __table_args__ = (
+        CheckConstraint("from_chapter_id <> to_chapter_id", name="distinct_chapters"),
+        CheckConstraint("from_version_seq > 0", name="from_version_positive"),
+        CheckConstraint("to_version_seq > 0", name="to_version_positive"),
+        Index(
+            "uq_scene_moves_first", "scene_id", unique=True,
+            sqlite_where=text("first_move"), postgresql_where=text("first_move"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scene_id: Mapped[int] = mapped_column(ForeignKey("scenes.id", ondelete="CASCADE"), index=True)
+    from_chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), index=True)
+    to_chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), index=True)
+    planning_unit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planning_units.id", ondelete="SET NULL"), index=True,
+    )
+    first_move: Mapped[bool] = mapped_column(Boolean)
+    from_version_seq: Mapped[int | None] = mapped_column(Integer)
+    to_version_seq: Mapped[int | None] = mapped_column(Integer)

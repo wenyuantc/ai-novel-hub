@@ -1,7 +1,7 @@
 // 后台任务：CRUD + 订阅（GET /tasks/{id}/stream，断线自动重连，snapshot 覆盖本地文本）
 
 import { isAgentToolStart, isAgentToolEnd, readAgentChange } from './agentEvents'
-import { ApiError, api, request, type CapturedProjectFailure, type QueryValue } from './client'
+import { ApiError, request, type CapturedProjectFailure, type QueryValue, type RequestOptions } from './client'
 import { getSSE, isAbortError, readDetail, readText, StreamError } from './sse'
 import type {
   AgentToolStart,
@@ -24,8 +24,11 @@ import type {
 export interface TaskReviewIdentity { task_key: string; run_key: string; token: string }
 export type TaskIdentity = Pick<Task, 'id' | 'task_key'>
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+export function isTaskKey(value: unknown): value is string {
+  return typeof value === 'string' && UUID.test(value)
+}
 export function hasTaskIdentity(task: TaskIdentity | null | undefined): task is TaskIdentity & { task_key: string } {
-  return !!task && Number.isSafeInteger(task.id) && task.id > 0 && typeof task.task_key === 'string' && UUID.test(task.task_key)
+  return !!task && Number.isSafeInteger(task.id) && task.id > 0 && isTaskKey(task.task_key)
 }
 function requireTaskIdentity(task: TaskIdentity): TaskIdentity & { task_key: string } {
   if (!hasTaskIdentity(task)) throw new Error('任务身份不可确认，请刷新列表后重新操作。')
@@ -46,7 +49,8 @@ export function taskReviewIdentity(task: Task, includeFinished = false): TaskRev
 }
 
 export const taskApi = {
-  list: (query: TaskListQuery = {}) => api.get<Task[]>('/tasks', { ...query } as Record<string, QueryValue>),
+  list: (query: TaskListQuery = {}, options: Pick<RequestOptions, 'signal' | 'isCurrent' | 'editorActor'> = {}) =>
+    request<Task[]>('/tasks', { ...options, query: { ...query } as Record<string, QueryValue> }),
   get: async (task: TaskIdentity, signal?: AbortSignal) => {
     const identity = requireTaskIdentity(task)
     return sameTask(await request<Task>(`/tasks/${identity.id}`, { query: reviewQuery(identity), signal }), identity)
@@ -116,7 +120,7 @@ export function isChapterWriteKind(kind: TaskKind): boolean {
  * 知识库索引、拆书等对协作者订阅返回 404，只展示状态与详情，不发起订阅。
  */
 export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
-  'chapter.generate', 'chapter.polish', 'chapter.revise', 'chapter.analyze', 'chapter.batch',
+  'chapter.generate', 'chapter.polish', 'chapter.revise', 'chapter.analyze', 'chapter.batch', 'scene.restructure',
   'wizard.outline', 'wizard.characters', 'wizard.world', 'wizard.careers',
   'outline.continue', 'outline.expand',
   'character.generate', 'organization.generate', 'career.generate', 'relations.parse', 'relations.generate',
@@ -158,6 +162,7 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'wizard.careers': '职业体系向导',
   'chapter.analyze': '章节分析',
   'chapter.revise': '按建议重写',
+  'scene.restructure': 'AI 场景拆并建议',
   'outline.continue': 'AI 续写大纲',
   'outline.expand': 'AI 展开细纲',
   'chapter.batch': '批量生成',
@@ -177,6 +182,7 @@ export function queueLabel(task: Pick<Task, 'status' | 'queue_position'>): strin
 
 /** 章节编辑器打开分析面板的查询串 */
 export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
+export const SCENE_RESTRUCTURE_TASK_QUERY = 'restructure_task'
 
 /**
  * 任务面板「跳转」目标：无实例证明的章节任务 → 章节列表；向导任务 → 向导页对应步骤；
@@ -185,7 +191,7 @@ export const ANALYSIS_PANEL_QUERY = 'panel=analysis'
  * 修改影响评估 → 一致性检查页的「修改影响」页签：评估任务本身不带章节（后端 Task.chapter_id 恒为空），带上任务 id，
  * 由页面在「修改影响」概览里按进行中的评估或最近一次评估的任务找到对应章节。无法定位时为 null。
  */
-export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> & Partial<Pick<Task, 'scene_id' | 'id'>>): string | null {
+export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> & Partial<Pick<Task, 'scene_id' | 'id' | 'task_key'>>): string | null {
   if (task.project_id === null) return null
   const base = `/projects/${task.project_id}`
   switch (task.kind) {
@@ -195,6 +201,10 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> 
     case 'chapter.revise':
       // 当前 TaskOut 的章节 / 场景整数 ID 未绑定实例证明，只能导航到章节列表。
       return task.chapter_id === null ? null : `${base}/chapters`
+    case 'scene.restructure':
+      // 打开提案须按不可复用的任务身份向服务端核对章节与场景范围。
+      return task.chapter_id !== null && isTaskKey(task.task_key)
+        ? `${base}/chapters/${task.chapter_id}?${SCENE_RESTRUCTURE_TASK_QUERY}=${task.task_key}` : null
     case 'character.generate':
     case 'relations.parse':
       return `${base}/characters`

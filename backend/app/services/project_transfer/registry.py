@@ -56,6 +56,7 @@ from app.models import (
     Scene,
     SceneDocumentMeta,
     SceneMarker,
+    SceneMove,
     SceneSection,
     SettingAiLink,
     SettingCategory,
@@ -523,6 +524,11 @@ RULES: tuple[TableRule, ...] = (
         fk={"chapter_id": "chapters", "plan_id": "chapter_plans", "scene_id": "scenes",
             "pov_character_id": "characters"},
         json_refs={"detached_character_ids": remap.id_list("characters")},
+    ),
+    TableRule(
+        "scene_moves", SceneMove, lambda pid: _in_scenes(SceneMove.scene_id, pid),
+        fk={"scene_id": "scenes", "from_chapter_id": "chapters", "to_chapter_id": "chapters",
+            "planning_unit_id": "planning_units"},
     ),
     TableRule("planning_tags", PlanningTag, _own(PlanningTag), fill=_P),
     TableRule(

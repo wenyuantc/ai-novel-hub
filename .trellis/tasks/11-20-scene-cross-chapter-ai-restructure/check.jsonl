@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/scenes.md", "reason": "结构、历史、协作权限、版本和草稿回归"}
+{"file": ".trellis/spec/backend/rich-documents.md", "reason": "富文档原样保存与拆并边界"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "格式迁移、备份重映射和坏引用拒绝"}
+{"file": ".trellis/spec/backend/book-search.md", "reason": "新搜索定位、跨章后的旧批次不可误撤销"}
+{"file": ".trellis/spec/backend/mention-tracking.md", "reason": "移动后新定位及旧指纹失效"}
+{"file": ".trellis/spec/backend/serialization.md", "reason": "章身份、冻结稿、已发布统计与删章行为"}
+{"file": ".trellis/spec/backend/setting-ai-visibility.md", "reason": "授权、发送范围与迟到结果回归"}

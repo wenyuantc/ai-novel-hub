@@ -32,9 +32,9 @@ from app.services.project_transfer.serialization import SerializationState, seri
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 15
+VERSION = 16
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0064"
+APP_SCHEMA = "0065"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -356,6 +356,8 @@ async def _stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: E
                     cid = row["chapter_id"]
                     data["matches_revision"] = (cid in plan.content_revisions and row["scene_id"] is not None
                                                 and row["applied_revision"] == plan.content_revisions[cid])
+                elif rule.table == "scene_moves" and "chapter_versions" not in included:
+                    data["from_version_seq"] = data["to_version_seq"] = None
                 if rule.table == "chapters":
                     data["style_ref"] = refs.get(row["style_id"]) if row["style_id"] is not None else None
                 elif rule.table == "relationship_types":

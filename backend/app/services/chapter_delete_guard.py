@@ -1,5 +1,6 @@
-"""删除章节前验证所有 ORM 外键级联的作品归属。"""
+"""删除章节前验证外键归属及存续章节的结构历史。"""
 
+from collections import defaultdict
 from itertools import batched
 
 from sqlalchemy import ColumnElement, and_, delete, or_, select, update
@@ -15,6 +16,7 @@ from app.models import (
     ChapterAnalysis,
     ChapterCharacter,
     ChapterPlan,
+    ChapterVersion,
     Character,
     ConsistencyImpact,
     ConsistencyLedger,
@@ -26,6 +28,7 @@ from app.models import (
     RevisionBatchScene,
     Scene,
     SceneMarker,
+    SceneMove,
     SceneReviewAnalysisReceipt,
     SceneReviewProposal,
     SceneSection,
@@ -37,6 +40,7 @@ from app.models import (
     StoryMemory,
     Task,
 )
+from app.services.scene_move_history import move_touches_chapter
 
 # (被删除表, 引用表, 引用列, 被引用列, 删除动作)。新关系必须分析后才能加入。
 _REVIEWED_FKS = frozenset({
@@ -59,6 +63,8 @@ _REVIEWED_FKS = frozenset({
     ("chapters", "revision_batch_scenes", "chapter_id", "id", "SET NULL"),
     ("chapters", "scene_review_analysis_receipts", "chapter_id", "id", "CASCADE"),
     ("chapters", "scene_review_proposals", "chapter_id", "id", "CASCADE"),
+    ("chapters", "scene_moves", "from_chapter_id", "id", "SET NULL"),
+    ("chapters", "scene_moves", "to_chapter_id", "id", "SET NULL"),
     ("chapters", "scenes", "chapter_id", "id", "CASCADE"),
     ("chapters", "serialization_entries", "chapter_id", "id", "SET NULL"),
     ("chapters", "setting_progressions", "chapter_id", "id", "SET NULL"),
@@ -73,6 +79,7 @@ _REVIEWED_FKS = frozenset({
     ("scenes", "revision_batch_scenes", "scene_id", "id", "SET NULL"),
     ("scenes", "scene_documents", "scene_id", "id", "CASCADE"),
     ("scenes", "scene_markers", "scene_id", "id", "CASCADE"),
+    ("scenes", "scene_moves", "scene_id", "id", "CASCADE"),
     ("scenes", "scene_sections", "scene_id", "id", "CASCADE"),
     ("scenes", "setting_progressions", "scene_id", "id", "SET NULL"),
 })
@@ -100,14 +107,101 @@ def _invalid() -> ConflictError:
     return ConflictError("章节存在无法安全处理的关联，请联系作者检查", extra={"code": "chapter_reference_invalid"})
 
 
+def _foreign_moves(project_id: int, chapter_ids: tuple[int, ...], scenes):
+    source, target, holder = aliased(Chapter), aliased(Chapter), aliased(Chapter)
+    return (
+        select(SceneMove.id)
+        .outerjoin(Scene, Scene.id == SceneMove.scene_id)
+        .outerjoin(holder, holder.id == Scene.chapter_id)
+        .outerjoin(source, source.id == SceneMove.from_chapter_id)
+        .outerjoin(target, target.id == SceneMove.to_chapter_id)
+        .outerjoin(PlanningUnit, PlanningUnit.id == SceneMove.planning_unit_id)
+        .where(
+            or_(SceneMove.scene_id.in_(scenes), SceneMove.from_chapter_id.in_(chapter_ids),
+                SceneMove.to_chapter_id.in_(chapter_ids)),
+            or_(holder.project_id.is_distinct_from(project_id),
+                and_(SceneMove.from_chapter_id.is_not(None), source.project_id.is_distinct_from(project_id)),
+                and_(SceneMove.to_chapter_id.is_not(None), target.project_id.is_distinct_from(project_id)),
+                and_(SceneMove.planning_unit_id.is_not(None),
+                     or_(PlanningUnit.project_id.is_distinct_from(project_id),
+                         PlanningUnit.source_level.is_distinct_from("scene")))),
+        )
+    )
+
+
+async def _check_surviving_history(db: AsyncSession, project_id: int, removed: set[int]) -> None:
+    lost_scenes: dict[int, set[int]] = defaultdict(set)
+    lost_units: dict[int, set[int]] = defaultdict(set)
+    for batch in batched(sorted(removed), 500):
+        rows = await db.execute(
+            select(SceneMove.scene_id, SceneMove.from_chapter_id, SceneMove.to_chapter_id, SceneMove.planning_unit_id)
+            .join(Scene, Scene.id == SceneMove.scene_id).where(Scene.chapter_id.in_(batch))
+        )
+        for sid, source, target, unit_id in rows:
+            for cid in (source, target):
+                if cid is None or cid in removed:
+                    continue
+                lost_scenes[cid].add(sid)
+                if unit_id is not None:
+                    lost_units[cid].add(unit_id)
+
+    # 同章重挂或另一条存续移动证据可继续证明规划归属，只有实际丢失的证据需要保护。
+    unit_ids = set().union(*lost_units.values())
+    for batch in batched(sorted(unit_ids), 500):
+        current = await db.execute(
+            select(PlanningUnit.id, Scene.chapter_id).join(Scene, Scene.id == PlanningUnit.scene_id)
+            .where(PlanningUnit.id.in_(batch), PlanningUnit.project_id == project_id)
+        )
+        for unit_id, cid in current:
+            if cid in lost_units:
+                lost_units[cid].discard(unit_id)
+        retained = await db.execute(
+            select(SceneMove.planning_unit_id, SceneMove.from_chapter_id, SceneMove.to_chapter_id, Scene.chapter_id)
+            .join(Scene, Scene.id == SceneMove.scene_id).join(Chapter, Chapter.id == Scene.chapter_id)
+            .where(SceneMove.planning_unit_id.in_(batch), Chapter.project_id == project_id)
+        )
+        for unit_id, source, target, holder in retained:
+            if holder not in removed:
+                for cid in (source, target):
+                    if cid in lost_units:
+                        lost_units[cid].discard(unit_id)
+
+    for batch in batched(sorted(lost_scenes), 500):
+        rows = await db.stream(
+            select(ChapterVersion.chapter_id, ChapterVersion.scene_snapshot)
+            .join(Chapter, Chapter.id == ChapterVersion.chapter_id)
+            .where(Chapter.project_id == project_id, ChapterVersion.chapter_id.in_(batch),
+                   ChapterVersion.scene_snapshot.is_not(None)).execution_options(yield_per=20)
+        )
+        try:
+            async for cid, snapshot in rows:
+                items = snapshot.get("scenes") if isinstance(snapshot, dict) else None
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    scene_id = item.get("id")
+                    plan = item.get("planning")
+                    unit_id = plan.get("unit_id") if isinstance(plan, dict) else None
+                    if ((type(scene_id) is int and scene_id in lost_scenes[cid])
+                            or (type(unit_id) is int and unit_id in lost_units.get(cid, ()))):
+                        raise ConflictError("其他章节的历史仍引用待删除场景，请先移出关联场景", extra={
+                            "code": "scene_move_history_in_use",
+                        })
+        finally:
+            await rows.close()
+
+
 async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:
     """调用方须先持有项目锁；越作品、无法确认归属或未审核的新外键都失败关闭。"""
     if not chapter_ids:
         return
     if _current_fk_graph() != _REVIEWED_FKS:
         raise _invalid()
+    removed = set(chapter_ids)
     with db.no_autoflush:
-        for batch in batched(sorted(set(chapter_ids)), 500):
+        for batch in batched(sorted(removed), 500):
             owned = set(await db.scalars(select(Chapter.id).where(
                 Chapter.id.in_(batch), Chapter.project_id == project_id,
             )))
@@ -121,7 +215,11 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
             source_section = aliased(SceneSection)
             markers = select(source_marker.id).where(source_marker.scene_id.in_(scenes))
             sections = select(source_section.id).where(source_section.scene_id.in_(scenes))
+            revision_history = select(SceneMove.id).where(
+                SceneMove.scene_id == Scene.id, move_touches_chapter(RevisionBatchScene.chapter_id),
+            ).exists()
             checks = [
+                _foreign_moves(project_id, batch, scenes),
                 select(ChapterPlan.id).outerjoin(Outline, Outline.id == ChapterPlan.outline_id)
                 .where(ChapterPlan.chapter_id.in_(batch), or_(
                     ChapterPlan.project_id.is_distinct_from(project_id),
@@ -145,10 +243,13 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                 select(RevisionBatchScene.id)
                 .outerjoin(RevisionBatch, RevisionBatch.id == RevisionBatchScene.batch_id)
                 .outerjoin(Scene, Scene.id == RevisionBatchScene.scene_id)
+                .outerjoin(Chapter, Chapter.id == Scene.chapter_id)
                 .where(or_(RevisionBatchScene.chapter_id.in_(batch), RevisionBatchScene.scene_id.in_(scenes)),
                        or_(RevisionBatch.project_id.is_distinct_from(project_id), and_(
                            RevisionBatchScene.scene_id.is_not(None),
-                           Scene.chapter_id.is_distinct_from(RevisionBatchScene.chapter_id),
+                           or_(Chapter.project_id.is_distinct_from(project_id), and_(
+                               Scene.chapter_id.is_distinct_from(RevisionBatchScene.chapter_id), ~revision_history,
+                           )),
                        ))),
                 select(ChapterAnalysis.id).where(ChapterAnalysis.chapter_id.in_(batch),
                                                  ChapterAnalysis.project_id.is_distinct_from(project_id)),
@@ -206,6 +307,32 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                 if (row.chapter_project != project_id or row.task_project != project_id
                         or (row.analysis_id is not None and row.analysis_project != project_id)):
                     raise _invalid()
+        await _check_surviving_history(db, project_id, removed)
+
+
+async def detach_scene_move_chapters(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:
+    """调用方已验证删章。断开批次历史定位，保留存续章节的最后原生身份。"""
+    removed = set(chapter_ids)
+    origins = set()
+    for batch in batched(sorted(removed), 500):
+        origins.update(await db.scalars(select(SceneMove.from_chapter_id).join(Scene, Scene.id == SceneMove.scene_id)
+            .where(SceneMove.first_move, SceneMove.from_chapter_id.is_not(None), Scene.chapter_id.in_(batch))))
+        await db.execute(update(RevisionBatchScene).where(
+            RevisionBatchScene.chapter_id.in_(batch), RevisionBatchScene.scene_id.is_not(None),
+        ).values(scene_id=None).execution_options(synchronize_session=False))
+
+    for batch in batched(sorted(origins - removed), 500):
+        known = set(await db.scalars(select(Scene.chapter_id).join(Chapter, Chapter.id == Scene.chapter_id).where(
+            Scene.chapter_id.in_(batch), Chapter.project_id == project_id,
+            ~select(SceneMove.id).where(SceneMove.scene_id == Scene.id).exists(),
+        ).distinct()))
+        moved = await db.execute(select(SceneMove.from_chapter_id, Scene.chapter_id)
+            .join(Scene, Scene.id == SceneMove.scene_id).join(Chapter, Chapter.id == Scene.chapter_id)
+            .where(SceneMove.first_move, SceneMove.from_chapter_id.in_(batch), Chapter.project_id == project_id))
+        known.update(origin for origin, holder in moved if holder not in removed)
+        # 一章仍有活动场景但原生身份全随待删章清除时，补身份锚点，保持投影不变。
+        db.add_all([Scene(chapter_id=cid, active=False) for cid in batch if cid not in known])
+    await db.flush()
 
 
 def has_serialization_work() -> ColumnElement[bool]:

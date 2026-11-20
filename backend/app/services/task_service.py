@@ -30,6 +30,7 @@ from app.models import AgentChange, Chapter, Project, Task, User
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
 from app.schemas.rich_document_review import ReviewIdentity
 from app.schemas.scene_ai import SceneTarget, parse_target
+from app.schemas.scene_restructure import RestructureTaskRequest
 from app.schemas.skill import SkillRef
 from app.schemas.task import TaskOut
 from app.services import authorization_service as authz
@@ -290,6 +291,14 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
     scene_id = (target.scene_id if isinstance(target, SceneTarget) and task.kind in (
         "chapter.generate", "chapter.polish", "chapter.revise",
     ) else None)
+    if task.kind == "scene.restructure":
+        try:
+            source = RestructureTaskRequest.model_validate(_request_dict(task))
+        except ValidationError:
+            pass
+        else:
+            if (source.project_id, source.chapter_id) == (task.project_id, task.chapter_id):
+                scene_id = source.scene_ids[0]
     update_fields: dict[str, Any] = {
         "queue_position": queue_position if task.status == "queued" else None,
         "character_id": _subject_character_id(task),

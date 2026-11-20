@@ -1,0 +1,17 @@
+{% if operation == "split" %}
+给出拆分位置建议。候选编号与对应位置：
+{% for candidate in candidates %}
+{{ candidate[0] }}：第 {{ candidate[1] }} 行开头
+{% endfor %}
+
+保存稿：
+{{ left }}
+{%- else %}
+判断是否适合合并为一个场景。候选编号 1。
+
+第一景保存稿：
+{{ left }}
+
+第二景保存稿：
+{{ right }}
+{%- endif %}

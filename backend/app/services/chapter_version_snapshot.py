@@ -3,16 +3,27 @@
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select, tuple_
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.models import Career, Character, Organization, SceneMarker, SceneSection, SettingTimeline, WorldSetting
+from app.models import (
+    Career,
+    Chapter,
+    Character,
+    Organization,
+    SceneMarker,
+    SceneMove,
+    SceneSection,
+    SettingTimeline,
+    WorldSetting,
+)
 from app.models.planning import PlanningTag, PlanningUnit
 from app.models.scenes import Scene
 from app.schemas.planning import ScenePlanningRaw
 from app.schemas.rich_document import SceneDocument
 from app.schemas.scene import SceneSnapshotV2, parse_scene_snapshot
+from app.services.scene_move_history import move_touches_chapter, restore_move_conflict
 
 
 class _PlanningSnapshot(BaseModel):
@@ -47,6 +58,35 @@ async def _check_document_keys(db: AsyncSession, model, keys: set[tuple[int, str
             raise _invalid() from None
 
 
+async def _check_scene_history(
+    db: AsyncSession, project_id: int, chapter_id: int, scene_ids: set[int], *, for_restore: bool,
+) -> None:
+    ordered = sorted(scene_ids)
+    evidence = select(SceneMove.id).where(SceneMove.scene_id == Scene.id, move_touches_chapter(chapter_id)).exists()
+    for start in range(0, len(ordered), 400):
+        batch = set(ordered[start:start + 400])
+        owners = dict((await db.execute(
+            select(Scene.id, Scene.chapter_id).join(Chapter, Chapter.id == Scene.chapter_id).where(
+                Scene.id.in_(batch), Chapter.project_id == project_id, or_(Scene.chapter_id == chapter_id, evidence),
+            )
+        )).all())
+        if owners.keys() != batch:
+            raise _invalid() from None
+        if for_restore and any(owner != chapter_id for owner in owners.values()):
+            raise restore_move_conflict("此版本中的场景已移到其他章节，请通过移动入口处理")
+
+
+async def _check_unit_history(db: AsyncSession, project_id: int, chapter_id: int, unit_ids: set[int]) -> None:
+    current_scenes = select(Scene.id).where(Scene.chapter_id == chapter_id)
+    history = (
+        select(SceneMove.id).join(Scene, Scene.id == SceneMove.scene_id).join(Chapter, Chapter.id == Scene.chapter_id)
+        .where(SceneMove.planning_unit_id == PlanningUnit.id, move_touches_chapter(chapter_id),
+               Chapter.project_id == project_id).exists()
+    )
+    await _check_ids(db, PlanningUnit, unit_ids, PlanningUnit.project_id == project_id,
+                     PlanningUnit.source_level == "scene", or_(PlanningUnit.scene_id.in_(current_scenes), history))
+
+
 async def validate_history_snapshot(
     db: AsyncSession, project_id: int, chapter_id: int, snapshot: dict, *, for_restore: bool = False,
 ) -> None:
@@ -78,14 +118,14 @@ async def validate_history_snapshot(
             refs[ref.kind].add(ref.timeline_id if ref.kind == "relationship" else ref.id)
 
     with db.no_autoflush:
-        await _check_ids(db, Scene, set(plans), Scene.chapter_id == chapter_id)
+        await _check_scene_history(db, project_id, chapter_id, set(plans), for_restore=for_restore)
         sections = {(scene_id, str(key)) for scene_id, doc in documents.items()
                     for key in (*[item.key for item in doc.sections], *doc.retired_section_keys)}
         markers = {(scene_id, str(item.key)) for scene_id, doc in documents.items() for item in doc.markers}
         await _check_document_keys(db, SceneSection, sections)
         await _check_document_keys(db, SceneMarker, markers)
-        await _check_ids(db, PlanningUnit, {plan.unit_id for plan in plans.values() if plan is not None},
-                         PlanningUnit.project_id == project_id)
+        unit_ids = {plan.unit_id for plan in plans.values() if plan is not None}
+        await _check_unit_history(db, project_id, chapter_id, unit_ids)
         for kind, model in (
             ("character", Character), ("tag", PlanningTag), ("world", WorldSetting),
             ("organization", Organization), ("career", Career), ("relationship", SettingTimeline),

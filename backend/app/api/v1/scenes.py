@@ -1,11 +1,11 @@
-"""章内场景：固定后缀先注册，路由只负责 schema 与 service 调用。"""
+"""场景目录、结构操作和富文档路由。"""
 
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, status
 
-from app.core.deps import CurrentUser, DbDep, EditorUser
+from app.core.deps import CurrentUser, DbDep, EditorUser, SettingsDep
 from app.schemas.progression import SettingContextOut
 from app.schemas.rich_document import (
     MarkerDeleteOut,
@@ -29,11 +29,13 @@ from app.schemas.scene import (
     SceneSplit,
     SceneUpdate,
 )
+from app.schemas.scene_move import SceneMove, SceneMoveOut, SceneMovePreview, SceneMovePreviewOut
 from app.services import (
     marker_lifecycle_service,
     marker_timeline_service,
     rich_document_conversion,
     rich_document_service,
+    scene_move,
 )
 from app.services import scene_service as svc
 
@@ -133,6 +135,26 @@ async def update_scene(
     project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneUpdate, user: EditorUser, db: DbDep,
 ) -> SceneOut:
     return await svc.update_scene(db, user.id, project_id, chapter_id, scene_id, body)
+
+
+@router.post(f"{_BASE}/{{scene_id}}/move-preview", response_model=SceneMovePreviewOut)
+async def preview_move_scene(
+    project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneMovePreview,
+    user: EditorUser, db: DbDep, settings: SettingsDep,
+) -> SceneMovePreviewOut:
+    return await scene_move.preview_move(
+        db, user.id, project_id, chapter_id, scene_id, body, signing_secret=settings.jwt_secret.encode(),
+    )
+
+
+@router.post(f"{_BASE}/{{scene_id}}/move", response_model=SceneMoveOut)
+async def move_scene(
+    project_id: PathId, chapter_id: PathId, scene_id: PathId, body: SceneMove,
+    user: EditorUser, db: DbDep, settings: SettingsDep,
+) -> SceneMoveOut:
+    return await scene_move.move(
+        db, user.id, project_id, chapter_id, scene_id, body, signing_secret=settings.jwt_secret.encode(),
+    )
 
 
 @router.post(f"{_BASE}/{{scene_id}}/split", response_model=SceneMutation)

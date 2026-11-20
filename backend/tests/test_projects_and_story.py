@@ -1,4 +1,4 @@
-from tests.helpers import create_project, register, wait_task
+from tests.helpers import create_ai_config, create_project, register, wait_task
 
 
 async def test_project_crud(client):
@@ -57,12 +57,18 @@ async def test_world_character_outline_crud(client):
     assert (await client.get(f"{base}/world")).status_code == 404
 
 
-async def test_cross_user_isolation(client, make_client):
+async def test_cross_user_isolation(client, make_client, fake_llm):
     await register(client, "alice")
     p = await create_project(client)
     base = f"/api/v1/projects/{p['id']}"
     w = (await client.post(f"{base}/world", json={"title": "设定"})).json()
-    ch = (await client.post(f"{base}/chapters", json={"title": "第一章", "content": "正文"})).json()
+    content = "第一段正文。\n\n第二段正文。"
+    ch = (await client.post(f"{base}/chapters", json={"title": "第一章", "content": content})).json()
+    target = (await client.post(f"{base}/chapters", json={"title": "第二章"})).json()
+    chapter_url = f"{base}/chapters/{ch['id']}"
+    scene = (await client.get(f"{chapter_url}/scenes")).json()["items"][0]
+    move_url = f"{chapter_url}/scenes/{scene['id']}/move"
+    restructure_url = f"{chapter_url}/scene-restructure"
     c1 = (await client.post(f"{base}/characters", json={"name": "甲", "relations_text": "乙的朋友"})).json()
     c2 = (await client.post(f"{base}/characters", json={"name": "乙"})).json()
     org = (await client.post(f"{base}/organizations", json={"name": "宗门"})).json()
@@ -86,6 +92,22 @@ async def test_cross_user_isolation(client, make_client):
     doc = upload.json()["document"]
     await wait_task(client, upload.json()["task"])
     mem = (await client.post(f"{base}/memories", json={"chapter_no": 1, "content": "备忘"})).json()
+
+    await create_ai_config(client)
+    position = {"target_chapter_id": target["id"], "insert_before_scene_id": None}
+    move_preview = await client.post(f"{move_url}-preview", json=position)
+    assert move_preview.status_code == 200, move_preview.text
+    proposal = {"operation": "split", "scene_ids": [scene["id"]], "expected_content_revision": ch["content_revision"]}
+    suggestion_preview = await client.post(f"{restructure_url}/preview", json=proposal)
+    assert suggestion_preview.status_code == 200, suggestion_preview.text
+    fake_llm.push('{"proposals":[{"candidate_id":1,"reason":"此处分段"}]}')
+    request = {**proposal, "signature": suggestion_preview.json()["signature"]}
+    suggestion = await client.post(f"{restructure_url}/suggestions", json=request)
+    assert suggestion.status_code == 202, suggestion.text
+    await wait_task(client, suggestion.json())
+    suggestion_url = f"{restructure_url}/suggestions/{suggestion.json()['task_key']}"
+    result = await client.get(suggestion_url)
+    assert result.status_code == 200, result.text
 
     bob = make_client()
     await register(bob, "bob")
@@ -132,6 +154,12 @@ async def test_cross_user_isolation(client, make_client):
         ("GET", f"{base}/chapters/{ch['id']}"),
         ("PATCH", f"{base}/chapters/{ch['id']}"),
         ("DELETE", f"{base}/chapters/{ch['id']}"),
+        ("POST", f"{move_url}-preview"),
+        ("POST", move_url),
+        ("POST", f"{restructure_url}/preview"),
+        ("POST", f"{restructure_url}/suggestions"),
+        ("GET", suggestion_url),
+        ("POST", f"{suggestion_url}/apply"),
         ("POST", f"/api/v1/chapters/{ch['id']}/generate"),
         ("POST", f"/api/v1/chapters/{ch['id']}/polish"),
         ("POST", f"/api/v1/chapters/{ch['id']}/analyze"),
@@ -263,6 +291,11 @@ async def test_cross_user_isolation(client, make_client):
     ]
     # 请求体在路由层通过 422 校验，确保 404 来自归属校验
     bodies = {
+        f"{move_url}-preview": position,
+        move_url: {**position, "signature": move_preview.json()["signature"]},
+        f"{restructure_url}/preview": proposal,
+        f"{restructure_url}/suggestions": request,
+        f"{suggestion_url}/apply": {"candidate_id": 1, "signature": result.json()["signature"]},
         f"{base}/export-document": {"format": "docx"},
         f"{base}/setting-field-definitions": {
             "expected_fields_revision": 0, "label": "字段", "field_type": "text", "applicable_types": ["character"],
@@ -329,7 +362,10 @@ async def test_cross_user_isolation(client, make_client):
         assert resp.status_code == 404, (method, url, resp.text)
 
     # bob 不能把 alice 的项目挂到自己名下的章节里，alice 数据保持不变
-    assert (await client.get(f"{base}/chapters/{ch['id']}")).json()["content"] == "正文"
+    assert (await client.get(chapter_url)).json()["content"] == content
+    scenes = (await client.get(f"{chapter_url}/scenes")).json()["items"]
+    assert [item["id"] for item in scenes] == [scene["id"]]
+    assert (await client.get(suggestion_url)).json() == result.json()
     assert len((await client.get(f"{base}/world")).json()) == 1
     assert len((await client.get(f"{base}/characters")).json()) == 2
     assert len((await client.get(f"{base}/relationships")).json()) == 1

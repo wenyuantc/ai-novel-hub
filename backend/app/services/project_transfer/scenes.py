@@ -1,4 +1,4 @@
-"""v7 场景核心图的纯校验；不从投影猜边界、不修复有损备份。"""
+"""场景核心图与移动证据的纯校验。"""
 
 from collections import defaultdict
 from collections.abc import Callable
@@ -11,12 +11,58 @@ from app.schemas.rich_document import SceneDocument
 from app.schemas.scene import SceneSnapshotV2, parse_scene_snapshot
 
 
-def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], None]) -> None:
+def _validate_moves(
+    tables: dict[str, list[dict]], scenes: dict[int, dict], units: dict[int, dict], error: Callable[[str], None],
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
+    scene_positions: set[tuple[int, int]] = set()
+    unit_positions: set[tuple[int, int]] = set()
+    last_positions: dict[int, int | None] = {}
+    origins: set[int] = set()
+    last_seqs: dict[int, int] = {}
+    max_seqs: dict[int, int] = {}
+    for row in tables.get("chapter_versions", []):
+        cid = row["chapter_id"]
+        max_seqs[cid] = max(max_seqs.get(cid, 0), row["seq"])
+    for row in sorted(tables.get("scene_moves", []), key=lambda item: item["id"]):
+        scene_id = row["scene_id"]
+        source, target = row.get("from_chapter_id"), row.get("to_chapter_id")
+        if (row["first_move"] != (scene_id not in last_positions)
+                or scene_id in last_positions and last_positions[scene_id] != source
+                or source is not None and source == target):
+            error("场景移动记录的首条归属或移动顺序不一致")
+        last_positions[scene_id] = target
+        if row["first_move"] and source is not None:
+            origins.add(source)
+        unit_id = row.get("planning_unit_id")
+        if unit_id is not None and units[unit_id].get("source_level", "chapter") != "scene":
+            error("场景移动记录的规划来源不是场景")
+        for cid, seq in ((source, row.get("from_version_seq")), (target, row.get("to_version_seq"))):
+            if seq is not None and (
+                seq <= 0 or cid is not None and not last_seqs.get(cid, 0) < seq <= max_seqs.get(cid, 0)
+            ):
+                error("场景移动的章节版本边界不合法")
+            if cid is None:
+                continue
+            if seq is not None:
+                last_seqs[cid] = seq
+            scene_positions.add((scene_id, cid))
+            if unit_id is not None:
+                unit_positions.add((unit_id, cid))
+    if any(scenes[sid]["chapter_id"] != target for sid, target in last_positions.items()):
+        error("场景当前归属与最后一次移动的目标章节不一致")
+    origins.update(row["chapter_id"] for sid, row in scenes.items() if sid not in last_positions)
+    if any(row["id"] not in origins for row in tables.get("chapters", [])):
+        error("章节缺少原生场景身份")
+    return scene_positions, unit_positions
+
+
+def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], None]) -> set[tuple[int, int]]:
     from app.services.chapter_service import count_words
 
     chapters = {row["id"]: row for row in tables.get("chapters", [])}
     scenes = {row["id"]: row for row in tables.get("scenes", [])}
     units = {row["id"]: row for row in tables.get("planning_units", [])}
+    scene_positions, unit_positions = _validate_moves(tables, scenes, units, error)
     by_chapter = defaultdict(list)
     for scene in scenes.values():
         if scene.get("chapter_id") not in chapters:
@@ -64,7 +110,10 @@ def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], 
             error("章节历史正文与场景快照投影矛盾")
         for item in parsed.scenes:
             carrier = scenes.get(item.id)
-            if carrier is None or carrier["chapter_id"] != version.get("chapter_id"):
+            chapter_id = version["chapter_id"]
+            if carrier is None or (
+                carrier["chapter_id"] != chapter_id and (item.id, chapter_id) not in scene_positions
+            ):
                 error("场景历史身份缺失或属于其他章节")
             if isinstance(parsed, SceneSnapshotV2):
                 document = SceneDocument.model_validate({"content": item.content, **item.document})
@@ -98,9 +147,10 @@ def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], 
                 error("场景历史引用的真实规划身份缺失")
             else:
                 source = scenes.get(unit.get("scene_id"))
-                # 合法后续改挂可以改变 scene_id / binding_epoch，但只能在同章。
-                # 历史引用另一个章节的真实单元同样是坏核心图，不能等恢复时才发现。
-                if source is None or source["chapter_id"] != version.get("chapter_id"):
+                # 改挂可以改变真实场景，显式移动记录可证明旧章中的规划身份。
+                if (source is None or source["chapter_id"] != chapter_id) and (
+                    (unit["id"], chapter_id) not in unit_positions
+                ):
                     error("场景历史规划身份不属于该章节")
             if raw.pov_character_id is not None and raw.pov_character_id not in ids.get("characters", set()):
                 error("场景历史 POV 引用缺失")
@@ -112,3 +162,4 @@ def validate_scene_tables(tables: dict[str, list[dict]], error: Callable[[str], 
                     error("场景历史设定引用缺失")
                 elif ref.kind == "relationship" and relationships[identity]["subject_kind"] != "relationship":
                     error("场景历史关系引用不是关系时间线")
+    return scene_positions
