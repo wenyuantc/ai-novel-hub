@@ -10,9 +10,9 @@ import { useProjectStore } from '../stores/project'
  * - succeeded / failed / cancelled / interrupted：任务已结束（TaskEnd）
  * - paused：多步任务到达审核点（待审核），订阅结束，任务可继续 / 结束
  * - detached：本地断开订阅（再次 follow / detach / 卸载），任务仍在后台继续
- * - lost：订阅失败（任务被删除 404、重连耗尽等），任务状态未知
+ * - lost：订阅失败（权限失效、任务被删除 404、重连耗尽等）；accessLost=true 表示权限/可见性失权
  */
-export type TaskOutcome = TaskEnd | { status: 'detached' } | { status: 'lost'; message: string }
+export type TaskOutcome = TaskEnd | { status: 'detached' } | { status: 'lost'; message: string; accessLost?: boolean }
 
 /** follow 的附加回调（批量生成的章节事件等）；在 hook 自身处理之后调用，仅当前订阅有效时触发 */
 export type TaskFollowExtra = Pick<TaskStreamHandlers, 'onSnapshot' | 'onChapterStart' | 'onChapterEnd' | 'onBatchEnd' | 'onToolStart' | 'onToolEnd' | 'onProposal' | 'onExecuted'>
@@ -73,6 +73,7 @@ export function useTaskStream() {
     setReconnecting(false)
     setRunning(true)
     const isCurrent = () => controllerRef.current === controller && (!projectFailure || projectFailure.isCurrent())
+    let deniedByAccess = false
     try {
       const end = await subscribeTask(
         identity,
@@ -131,6 +132,7 @@ export function useTaskStream() {
           },
           onProjectAccessDenied: () => {
             if (!isCurrent()) return
+            deniedByAccess = true
             taskIdRef.current = null
             setTask(null); setText(''); setContinueInfo(null)
           },
@@ -145,13 +147,14 @@ export function useTaskStream() {
       return end
     } catch (err) {
       if (isAbortError(err) || controller.signal.aborted || !isCurrent()) return { status: 'detached' }
-      if (err instanceof ApiError && [404, 409, 422].includes(err.status)) {
+      const accessLost = deniedByAccess || (err instanceof ApiError && [403, 404].includes(err.status))
+      if (err instanceof ApiError && [403, 404, 409, 422].includes(err.status)) {
         taskIdRef.current = null
         setTask(null); setText(''); setContinueInfo(null)
       }
       const message = errorMessage(err)
       setError(message)
-      return { status: 'lost', message }
+      return { status: 'lost', message, accessLost }
     } finally {
       if (isCurrent()) {
         controllerRef.current = null

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PollingVisibility } from '../../utils/visiblePolling'
 import { ApiError } from '../../api/client'
 import {
-  AGENT_COLLABORATOR_POLL_MS, AgentReadSuperseded, agentProgressMode, createAgentAccessRecovery, startAgentTurnPolling,
+  AGENT_TURN_FALLBACK_POLL_MS, AgentReadSuperseded, agentProgressMode, createAgentAccessRecovery, startAgentTurnPolling,
 } from './useAgentConversation'
 
 function fakeVisibility(initial: DocumentVisibilityState = 'visible') {
@@ -20,53 +20,51 @@ function fakeVisibility(initial: DocumentVisibilityState = 'visible') {
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
-describe('智能体轮次进度来源（裁决 10）', () => {
-  it('作者订阅活动轮次；协作者不订阅，未结束（含待确认）轮次改为轮询；失去权限后都停止', () => {
+describe('智能体轮次进度来源（实时订阅 + 兜底可见轮询）', () => {
+  it('作者与协作者均对活动轮次（queued / running）实时订阅；待审核与已结束不订阅；失去权限后停止', () => {
     expect(agentProgressMode(false, false, { status: 'running' })).toBe('stream')
+    expect(agentProgressMode(false, false, { status: 'queued' })).toBe('stream')
     expect(agentProgressMode(false, false, { status: 'paused' })).toBe('none')
-    expect(agentProgressMode(true, false, { status: 'running' })).toBe('poll')
-    expect(agentProgressMode(true, false, { status: 'queued' })).toBe('poll')
-    expect(agentProgressMode(true, false, { status: 'paused' })).toBe('poll')
+    expect(agentProgressMode(true, false, { status: 'running' })).toBe('stream')
+    expect(agentProgressMode(true, false, { status: 'queued' })).toBe('stream')
+    expect(agentProgressMode(true, false, { status: 'paused' })).toBe('none')
     expect(agentProgressMode(true, false, { status: 'failed' })).toBe('none')
     expect(agentProgressMode(true, false, null)).toBe('none')
     expect(agentProgressMode(true, true, { status: 'running' })).toBe('none')
     expect(agentProgressMode(false, true, { status: 'running' })).toBe('none')
   })
 
-  it('协作者：可见时按间隔轮询，隐藏暂停、回前台立即刷新；清理后完全停止', () => {
-    const refresh = vi.fn()
-    const visibility = fakeVisibility()
-    const stop = startAgentTurnPolling(refresh, { collaborator: true, lost: false, activeId: 8, activeOpen: true }, visibility)
-    vi.advanceTimersByTime(AGENT_COLLABORATOR_POLL_MS * 2)
-    expect(refresh).toHaveBeenCalledTimes(2)
-    visibility.set('hidden')
-    vi.advanceTimersByTime(AGENT_COLLABORATOR_POLL_MS * 3)
-    expect(refresh).toHaveBeenCalledTimes(2)
-    visibility.set('visible')
-    expect(refresh).toHaveBeenCalledTimes(3)
-    stop?.()
-    expect(visibility.size()).toBe(0)
-    vi.advanceTimersByTime(AGENT_COLLABORATOR_POLL_MS * 3)
-    expect(refresh).toHaveBeenCalledTimes(3)
+  it('存在未结束轮次时，作者与协作者均在页面可见时每 5 秒兜底核对，隐藏暂停、回前台立即刷新；清理后完全停止', () => {
+    for (const collaborator of [true, false]) {
+      const refresh = vi.fn()
+      const visibility = fakeVisibility()
+      const stop = startAgentTurnPolling(refresh, { collaborator, lost: false, activeId: 8, activeOpen: true }, visibility)
+      vi.advanceTimersByTime(AGENT_TURN_FALLBACK_POLL_MS * 2)
+      expect(refresh).toHaveBeenCalledTimes(2)
+      visibility.set('hidden')
+      vi.advanceTimersByTime(AGENT_TURN_FALLBACK_POLL_MS * 3)
+      expect(refresh).toHaveBeenCalledTimes(2)
+      visibility.set('visible')
+      expect(refresh).toHaveBeenCalledTimes(3)
+      stop?.()
+      expect(visibility.size()).toBe(0)
+      vi.advanceTimersByTime(AGENT_TURN_FALLBACK_POLL_MS * 3)
+      expect(refresh).toHaveBeenCalledTimes(3)
+    }
   })
 
-  it('协作者无未结束轮次只在回前台时刷新；作者有活动轮次每 5 秒核对', () => {
-    const idle = vi.fn()
-    const visibility = fakeVisibility()
-    const stopIdle = startAgentTurnPolling(idle, { collaborator: true, lost: false, activeId: undefined, activeOpen: false }, visibility)
-    vi.advanceTimersByTime(AGENT_COLLABORATOR_POLL_MS * 4)
-    expect(idle).not.toHaveBeenCalled()
-    visibility.set('visible')
-    expect(idle).toHaveBeenCalledTimes(1)
-    stopIdle?.()
-    const author = vi.fn()
-    const stopAuthor = startAgentTurnPolling(author, { collaborator: false, lost: false, activeId: 8, activeOpen: true }, visibility)
-    vi.advanceTimersByTime(10_000)
-    expect(author).toHaveBeenCalledTimes(2)
-    stopAuthor?.()
-    vi.advanceTimersByTime(10_000)
-    expect(author).toHaveBeenCalledTimes(2)
-    expect(visibility.size()).toBe(0)
+  it('无未结束轮次时只在回前台时刷新，不启动定时器', () => {
+    for (const collaborator of [true, false]) {
+      const idle = vi.fn()
+      const visibility = fakeVisibility()
+      const stopIdle = startAgentTurnPolling(idle, { collaborator, lost: false, activeId: undefined, activeOpen: false }, visibility)
+      vi.advanceTimersByTime(AGENT_TURN_FALLBACK_POLL_MS * 4)
+      expect(idle).not.toHaveBeenCalled()
+      visibility.set('visible')
+      expect(idle).toHaveBeenCalledTimes(1)
+      stopIdle?.()
+      expect(visibility.size()).toBe(0)
+    }
   })
 
   it('中途失去权限（409 permission_denied / 404）后不再轮询或监听', () => {

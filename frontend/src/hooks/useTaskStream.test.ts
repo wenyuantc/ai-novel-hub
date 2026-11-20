@@ -90,7 +90,7 @@ describe('任务流作品失效', () => {
     const cleanup = hooks.effects.map((effect) => effect())
     const result = hook.follow(task)
     first.send('event: delta\ndata: {"text":"旧输出"}\n\nevent: error\ndata: {"code":"permission_denied","detail":"权限已变化"}\n\n')
-    expect(await result).toMatchObject({ status: 'lost' })
+    expect(await result).toMatchObject({ status: 'lost', accessLost: true })
     expect(hooks.values[0]).toBeNull()
     expect(hooks.values[1]).toBe('')
     await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2))
@@ -116,10 +116,23 @@ describe('任务流作品失效', () => {
     stream.send('event: delta\ndata: {"text":"旧输出"}\n\n')
     await vi.waitFor(() => expect(hooks.values[1]).toBe('旧输出'))
     stream.send('event: snapshot\ndata: {"task":{"id":7,"task_key":"00000000-0000-4000-8000-000000000008","status":"running"},"text":"新任务输出"}\n\n')
-    expect(await result).toMatchObject({ status: 'lost' })
+    expect(await result).toMatchObject({ status: 'lost', accessLost: false })
     expect(hooks.values[0]).toBeNull()
     expect(hooks.values[1]).toBe('')
     expect(fetch).toHaveBeenCalledOnce()
+    cleanup.forEach((dispose) => { if (typeof dispose === 'function') dispose() })
+  })
+
+  it('404 订阅失败标记 accessLost=true 以便上层立即触发失权恢复', async () => {
+    vi.spyOn(projectApi, 'get').mockResolvedValue(project)
+    await useProjectStore.getState().load(2)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: '任务不存在' }), {
+      status: 404, headers: { 'content-type': 'application/json' },
+    })))
+    const hook = useTaskStream()
+    const cleanup = hooks.effects.map((effect) => effect())
+    expect(await hook.follow(task)).toMatchObject({ status: 'lost', accessLost: true })
+    expect(hooks.values[0]).toBeNull()
     cleanup.forEach((dispose) => { if (typeof dispose === 'function') dispose() })
   })
 

@@ -114,7 +114,9 @@ describe('服务端作品能力', () => {
     const base = { sessionCurrent: true, scoped: true, canRead: true, canUseAI: true, isCollaborator: true }
     expect(taskOutputMode({ ...base, live: true, kind: 'chapter.generate' })).toBe('stream')
     expect(taskOutputMode({ ...base, live: true, kind: 'wizard.world' })).toBe('stream')
-    for (const kind of ['agent.turn', 'kb.index', 'book.import'] as const) {
+    expect(taskOutputMode({ ...base, live: true, kind: 'agent.turn' })).toBe('stream')
+    expect(taskOutputMode({ ...base, live: false, kind: 'agent.turn' })).toBe('output')
+    for (const kind of ['kb.index', 'book.import'] as const) {
       expect(taskOutputMode({ ...base, live: true, kind })).toBe('status')
       expect(taskOutputMode({ ...base, live: false, kind })).toBe('output')
       // 作者（非协作者）仍订阅全部类型

@@ -111,8 +111,9 @@ export function isChapterWriteKind(kind: TaskKind): boolean {
 }
 
 /**
- * 协作者可实时订阅的任务类型（与后端 stream_evidence 白名单一致）：单章、分析、批量、向导、大纲、实体、一致性检查与修改影响评估。
- * 智能体、知识库索引、拆书等对协作者订阅返回 404，只展示状态与详情，不发起订阅。
+ * 协作者可实时订阅的任务类型（与后端 stream_evidence 白名单一致）：单章、分析、批量、向导、大纲、实体、
+ * 一致性检查、修改影响评估与项目智能体。
+ * 知识库索引、拆书等对协作者订阅返回 404，只展示状态与详情，不发起订阅。
  */
 export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
   'chapter.generate', 'chapter.polish', 'chapter.revise', 'chapter.analyze', 'chapter.batch',
@@ -120,6 +121,7 @@ export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
   'outline.continue', 'outline.expand',
   'character.generate', 'organization.generate', 'career.generate', 'relations.parse', 'relations.generate',
   'consistency.check', 'consistency.impact',
+  'agent.turn',
 ]
 
 /** 作者（及个人任务）可订阅全部类型；协作者只订阅白名单内类型。 */

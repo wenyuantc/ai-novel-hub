@@ -16,8 +16,8 @@ import {
 import { invalidateProject } from '../../utils/projectRefresh'
 import { startVisiblePolling, type PollingVisibility } from '../../utils/visiblePolling'
 
-/** 协作者轮次进度的轮询间隔（裁决 10：协作者订阅 agent.turn 为 404，改为页面可见时轮询会话详情）。 */
-export const AGENT_COLLABORATOR_POLL_MS = 3000
+/** 未结束轮次的兜底可见轮询间隔（跨标签页确认与流异常兜底；实时进度由 SSE 推送）。 */
+export const AGENT_TURN_FALLBACK_POLL_MS = 5000
 /** 写入被拒、正在按服务端事实核对权限时的只读提示。 */
 export const AGENT_ACCESS_RECHECK_TEXT = '协作权限已变化，正在重新核对，暂不能发送或确认。'
 /** 会话已不可访问（撤权 / 删除）时的提示。 */
@@ -83,29 +83,27 @@ export function createAgentAccessRecovery(deps: AgentAccessRecoveryDeps) {
 }
 
 /**
- * 本轮进度来源：作者实时订阅（stream）；协作者 agent.turn 订阅保持 404（裁决 10），未结束轮次改为轮询（poll）；
- * 中途失去权限（lost）后两者都停止。
+ * 本轮进度来源：作者与协作者（具备智能体使用权限）均对活动轮次（queued / running）实时订阅（stream）；
+ * 待审核（paused）与已结束轮次不订阅，中途失去权限（lost）后立即停止。
  */
-export function agentProgressMode(collaborator: boolean, lost: boolean, active: Pick<Task, 'status'> | null | undefined): 'stream' | 'poll' | 'none' {
+export function agentProgressMode(_collaborator: boolean, lost: boolean, active: Pick<Task, 'status'> | null | undefined): 'stream' | 'poll' | 'none' {
   if (lost || !active) return 'none'
-  if (collaborator) return isOpenTask(active.status) ? 'poll' : 'none'
   return isActiveTask(active.status) ? 'stream' : 'none'
 }
 
 /**
- * 会话详情的刷新节奏。协作者有未结束轮次时只在页面可见时轮询；作者有活动轮次时每 5 秒核对一次
- * （待确认轮次可能在另一设备继续）；其余情况只在回到前台时刷新。失去权限后不启动。返回值完整清理。
+ * 会话详情的刷新节奏：存在未结束轮次（含待确认跨标签页确认及流异常兜底）时仅在页面可见时每 5 秒核对一次，
+ * 切回前台立即刷新；无未结束轮次时只在回到前台时刷新。失去权限（lost）后不启动。返回值完整清理。
  */
 export function startAgentTurnPolling(
   refresh: () => void, input: { collaborator: boolean; lost: boolean; activeId: number | undefined; activeOpen: boolean },
   visibility: PollingVisibility,
 ): (() => void) | undefined {
   if (input.lost) return undefined
-  if (input.collaborator && input.activeOpen) return startVisiblePolling(refresh, visibility, AGENT_COLLABORATOR_POLL_MS)
-  const timer = !input.collaborator && input.activeId ? setInterval(refresh, 5000) : undefined
+  if (input.activeId && input.activeOpen) return startVisiblePolling(refresh, visibility, AGENT_TURN_FALLBACK_POLL_MS)
   const onVisible = () => { if (visibility.visibilityState === 'visible') refresh() }
   visibility.addEventListener('visibilitychange', onVisible)
-  return () => { clearInterval(timer); visibility.removeEventListener('visibilitychange', onVisible) }
+  return () => { visibility.removeEventListener('visibilitychange', onVisible) }
 }
 
 export interface AgentActionResult {
@@ -158,8 +156,8 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
   const { message } = App.useApp()
   const access = useProjectAccess(pid)
   const collaborator = access.isCollaborator
-  // 只有确认为作者本人时才订阅 agent.turn；权限快照未就绪时既不订阅也不按作者处理（裁决 10）。
-  const author = access.ready && access.role === 'owner'
+  // 权限快照就绪且具备智能体使用权限（作者或 accepted editor）时才订阅实时流，避免未就绪或 viewer 误发请求。
+  const canStream = access.ready && access.canUseAgent
   const [detail, setDetail] = useState<AgentConversationDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -176,6 +174,7 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
   const requestSeq = useRef(0)
   const alive = useRef(true)
   const following = useRef<string | null>(null)
+  const settledTurn = useRef<string | null>(null)
   const polledTurn = useRef<{ id: number; key: string | null } | null>(null)
   const busyRef = useRef(false)
   const track = useTasksStore((s) => s.track)
@@ -249,9 +248,9 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     return () => { current = false }
   }, [latestTurnId, latestTurnKey, detail?.active_task?.status])
   const active = detail?.active_task
-  // 作者：实时订阅本轮。协作者：agent.turn 订阅保持 404（裁决 10），由下方轮询读取进度。
+  // 作者与具备智能体使用权限的协作者均实时订阅活动轮次（协作者经后端受控 SSE 管线）。
   useEffect(() => {
-    if (!author || agentProgressMode(collaborator, lost, active) !== 'stream' || !active || !hasTaskIdentity(active)) return
+    if (!canStream || agentProgressMode(collaborator, lost, active) !== 'stream' || !active || !hasTaskIdentity(active)) return
     const identity = `${active.id}:${active.task_key}`
     if (following.current === identity) return
     following.current = identity
@@ -263,25 +262,37 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
       onExecuted: (change) => { updateChange(change); refreshSafe(); invalidate([change]) },
     }).then(async (end) => {
       if (end.status === 'detached' || !alive.current) return
-      if (end.status === 'lost') { if (following.current === identity) following.current = null; return }
+      if (end.status === 'lost') {
+        if (following.current === identity) following.current = null
+        setSteps([])
+        if (end.accessLost) void accessLost()
+        return
+      }
       try {
         const next = await refresh()
         if (!alive.current) return
         setSteps([])
+        settledTurn.current = identity
         invalidate(next.changes.filter((c) => c.turn_task_id === active.id && c.turn_task_key === active.task_key && c.status === 'executed'))
         onUpdated()
-      } catch (err) { if (alive.current) setError(errorMessage(err)) }
+      } catch (err) {
+        if (!alive.current || err instanceof AgentReadSuperseded) return
+        if (isAgentAccessLost(err)) void accessLost()
+        else setError(errorMessage(err))
+      }
       finally { if (following.current === identity) following.current = null }
     })
-  }, [active, author, collaborator, lost, follow, refreshSafe, refresh, updateChange, invalidate, onUpdated])
+  }, [active, canStream, collaborator, lost, follow, refreshSafe, refresh, updateChange, invalidate, onUpdated, accessLost])
 
-  // 协作者轮询发现本轮结束：与作者订阅结束时相同，失效已执行修改涉及的资源并刷新会话列表。
+  // 兜底轮询发现本轮结束（如网络断流后由可见轮询观察到完成）：失效已执行修改涉及的资源并刷新会话列表。
   useEffect(() => {
     if (!collaborator || !detail) return
     const open = detail.active_task && isOpenTask(detail.active_task.status) ? detail.active_task : null
     const previous = polledTurn.current
     polledTurn.current = open ? { id: open.id, key: open.task_key } : null
     if (!previous || (open && open.id === previous.id && open.task_key === previous.key)) return
+    const prevKey = `${previous.id}:${previous.key ?? ''}`
+    if (settledTurn.current === prevKey) return
     invalidate(detail.changes.filter((c) => c.turn_task_id === previous.id && c.turn_task_key === previous.key && c.status === 'executed'))
     onUpdated()
   }, [collaborator, detail, invalidate, onUpdated])
