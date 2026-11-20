@@ -21,6 +21,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfigProvider,
   Drawer,
   FloatButton,
   Input,
@@ -36,6 +37,7 @@ import {
   Typography,
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ANALYSIS_STATUS, countPending, reviseChapter, reviseCompareFor, reviseRunningPresentation } from '../../api/analysis'
 import { versionApi } from '../../api/chapterVersions'
@@ -175,8 +177,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const [selectedInspectorTab, setInspectorTab] = useState<InspectorTab>('ai')
   // 无 AI 权限时 AI 标签不可用，回退到场景规划（派生而非在 effect 中改写状态）
   const inspectorTab: InspectorTab = !canUseAI && selectedInspectorTab === 'ai' ? 'scene' : selectedInspectorTab
-  // 笔记栏草稿：笔记栏保持挂载（隐藏而非卸载），未保存状态并入本页离开拦截
+  // 未保存状态并入本页离开拦截。
   const [noteDirty, setNoteDirty] = useState(false)
+  // 同一容器在桌面侧栏和移动抽屉之间移动，保留笔记组件及其草稿。
+  const [notePanelHost] = useState(() => typeof document === 'undefined' ? null : document.createElement('div'))
+  const attachNotePanel = useCallback((slot: HTMLDivElement | null) => {
+    if (slot && notePanelHost) slot.appendChild(notePanelHost)
+  }, [notePanelHost])
+  // 搜索下拉等浮层随笔记栏移动和隐藏。
+  const getNotePopupContainer = useCallback(() => notePanelHost ?? document.body, [notePanelHost])
   // 移动端辅助面板收进底部抽屉（forceRender：关闭抽屉不丢局部改写等面板内状态）
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const { message, modal } = App.useApp()
@@ -1066,12 +1075,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     return items
   }, [canUseAI])
 
-  // 笔记栏始终挂载，非当前标签时隐藏，切换标签或收起侧栏都不丢草稿；桌面与移动端互斥只渲染一份
-  const notesContent = (
-    <div style={inspectorTab === 'notes' ? undefined : { display: 'none' }}>
-      <NoteSidePanel projectId={pid} onDirtyChange={setNoteDirty} />
-    </div>
-  )
+  const notesSlot = <div ref={attachNotePanel} style={inspectorTab === 'notes' ? undefined : { display: 'none' }} />
 
   const inspectorPanel = (
     <Card
@@ -1093,7 +1097,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       {inspectorOpen && inspectorTab === 'ai' && aiPanelContent}
       {inspectorOpen && inspectorTab === 'scene' && scenePlanningContent}
       {inspectorOpen && inspectorTab === 'chapter' && chapterSettingsContent}
-      {notesContent}
+      {notesSlot}
     </Card>
   )
 
@@ -1330,9 +1334,15 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
             {inspectorTab === 'ai' && aiPanelContent}
             {inspectorTab === 'scene' && scenePlanningContent}
             {inspectorTab === 'chapter' && chapterSettingsContent}
-            {notesContent}
+            {notesSlot}
           </Drawer>
         </>
+      )}
+      {notePanelHost && createPortal(
+        <ConfigProvider getPopupContainer={getNotePopupContainer}>
+          <NoteSidePanel projectId={pid} onDirtyChange={setNoteDirty} />
+        </ConfigProvider>,
+        notePanelHost,
       )}
       <DraftRecoveryPanel
         projectId={pid}

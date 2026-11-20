@@ -33,7 +33,8 @@
 - `SourceWindow {source,content_hash,stale,window_start,text,spans,target_start,target_end}`，spans 与 target 均为全文绝对码点位置。
 - 迁移 `0032`：`project_notes(id,project_id,title,content,revision,created_at,updated_at)`，project_id CASCADE，revision默认1。列表仅取180字 excerpt，不取长正文。
 - 迁移 `0041`：`project_notes.is_favorite/is_pinned` BOOLEAN NOT NULL 默认 false + 索引 `(project_id,is_pinned,updated_at)`；旧行不改 revision/updated_at。SQLite batch 重建保留 AUTOINCREMENT 高水位；存在任何收藏或固定标记时拒绝有损 downgrade。收藏／固定是作品级数据，不按用户区分。
-- 章节编辑页「笔记」检视标签（`components/notes/NoteSidePanel.tsx`）：固定笔记≤100篇＋搜索打开＋新建，嵌入 `NoteEditor embedded`。嵌入模式不渲染自身 `NoteRouteGuard`（全页只允许一个 `useBlocker`），未保存状态经 `onDirtyChange` 并入编辑页 guard；笔记草稿只在离开编辑页时拦截，不拦截切换 scene_id。笔记栏根节点拦截 Ctrl/⌘+S 冒泡，防止触发 window 级正文保存。笔记栏以 `display:none` 保持挂载（切标签、收起侧栏不丢草稿）；跨移动端断点会重建。
+- 章节编辑页「笔记」检视标签（`components/notes/NoteSidePanel.tsx`）：固定笔记≤100篇＋搜索打开＋新建，嵌入 `NoteEditor embedded`。嵌入模式不渲染自身 `NoteRouteGuard`（全页只允许一个 `useBlocker`），未保存状态经 `onDirtyChange` 并入编辑页 guard；笔记草稿只在离开编辑页时拦截，不拦截切换 scene_id。笔记栏根节点拦截 Ctrl/⌘+S 冒泡，防止触发 window 级正文保存。
+- `ChapterEditor` 的 `createPortal` 使用当前章节固定的容器。布局变化时将容器移到对应的侧栏或抽屉占位节点，保留选中笔记和草稿。笔记栏局部 `ConfigProvider` 将搜索下拉等浮层渲染在同一容器内，使其随面板隐藏。笔记内容遵守 `NoteSidePanel` 的作品、账号和权限边界。
 - 迁移 `0033`：`world_settings.aliases` JSON默认`[]`；API复用 `Aliases`（去空/去重、≤10项、每项≤50字），PATCH省略/null不改、`[]`清空。
 
 ## 3. 关键合同
@@ -101,7 +102,7 @@
 - `test_mentions.py`：四源全量分页、范围/空章/歧义、源与词典变化、删源/改号、AI保存/恢复、私有聊天、跨作品、非法查询、窗口上限、异步线程与不autoflush。
 - `test_mention_compat.py`：旧/新备份、非法新值拒绝、智能体旧v2效果与新增别名冲突、0033迁移；`test_notes.py` / `test_notes_migration.py`：CRUD/CAS并发/权限/回收站/备份/0032。
 - `test_mentions_scale.py`：500万码点正文+50万码点资料，HTTP全量计数正确并记录冷/热扫描，不把该合成基准当最大规模保证。
-- 前端 `api/{mentions,notes}.test.ts`、`utils/{mentions,mentionStats}.test.ts`、笔记/标记组件测试、世界观表单与只读测试。真实浏览器验证Unicode定位、未保存草稿、歧义候选、四源跳转、旧链接、375px/桌面/主题/键盘，以及刷新长聊天后定位不被粘底抢走。
+- 前端 `api/{mentions,notes}.test.ts`、`utils/{mentions,mentionStats}.test.ts`、笔记/标记组件测试、世界观表单与只读测试。真实浏览器验证Unicode定位、未保存草稿、歧义候选、四源跳转、旧链接、375px/桌面/主题/键盘，以及刷新长聊天后定位不被粘底抢走。在同一次页面访问中跨 768 px 往返验证已有和新建笔记的草稿、未保存确认与快捷键，打开搜索下拉跨断点以检查浮层随面板隐藏。
 
 ## 7. Wrong vs Correct
 
