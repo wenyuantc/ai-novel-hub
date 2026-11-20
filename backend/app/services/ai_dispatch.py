@@ -382,6 +382,17 @@ async def _lock(db: AsyncSession, project_id: int, *, write: bool, include_recyc
             case "postgresql":
                 await _lock_postgres(db, project_id, write=write)
             case "sqlite":
+                if not write:
+                    from app.services.task_engine.stream_lease import is_sqlite_shared_frame_lease
+
+                    if await is_sqlite_shared_frame_lease(db):
+                        # 帧租约已在默认回滚日志模式下持真实 SQLite SHARED 读锁，不与出站 _send_lease 争写锁。
+                        exists_id = await db.scalar(select(Project.id).where(
+                            Project.id == project_id, *(() if include_recycled else active_conditions()),
+                        ))
+                        if exists_id is None:
+                            raise NotFoundError("作品不存在")
+                        return
                 await _lock_sqlite(db, project_id, include_recycled=include_recycled)
             case _:
                 raise RuntimeError("受控 AI 请求不支持当前数据库")

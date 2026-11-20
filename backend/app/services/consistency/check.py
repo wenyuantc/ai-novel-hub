@@ -71,8 +71,6 @@ STOPPED = "权限或模型授权已变化，已停止发送"
 EMPTY_OUTPUT = "模型未返回任何内容"
 ISSUE_NOT_FOUND = "问题不存在"
 ISSUE_NO_CHAPTERS = "该问题的证据章节均已删除或没有正文，无法重新核查"
-# SQLite 下协作者任务每次出站前让出的库锁窗口（秒），见 _before_send。
-SQLITE_SEND_GAP = 0.25
 
 
 def resource_key(project_id: int) -> str:
@@ -670,23 +668,6 @@ def _record(job: CheckJob, chapter_id: int, step: _Step) -> None:
     job.cursor = max(job.cursor, index + 1)
 
 
-def _needs_send_gap(job: Any, sessionmaker: async_sessionmaker[AsyncSession]) -> bool:
-    bind = sessionmaker.kw.get("bind")
-    return job.execution.grant_identity is not None and getattr(getattr(bind, "dialect", None), "name", "") == "sqlite"
-
-
-async def _before_send(job: Any, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    """协作者任务在 SQLite 上每次出站前短暂让出库锁，让刚发布的进度帧先发出去。
-
-    出站 lease 从请求发出持有到响应头到达；协作者订阅的每一帧也要在自己的帧租约里取锁，超过帧期限
-    （5 秒）即中断整个订阅。PostgreSQL 上两者都是共享锁，互不阻塞；SQLite 只有一把库级写锁，两者互斥
-    且不排队。本任务在每次出站前都刚发布过阶段 / 进度事件，又连续多次出站：不让出窗口时，这些帧只能
-    等模型响应头，并可能被后续出站接连饿死。作者订阅不走帧租约，不需要等待。
-    """
-    if _needs_send_gap(job, sessionmaker):
-        await asyncio.sleep(SQLITE_SEND_GAP)
-
-
 def _line(position: int, total: int, step: _Step) -> str:
     text = {
         "extracted": f"抽取 {step.facts} 条事实",
@@ -714,7 +695,6 @@ async def run_check_job(job: CheckJob, sessionmaker: async_sessionmaker[AsyncSes
             if step.source is not None:
                 yield "stage", {"stage": f"第 {index + 1}/{total} 章 · 抽取事实"}
                 attempted += 1
-                await _before_send(job, sessionmaker)
                 step = await _extract_chapter(job, sessionmaker, step.source)
                 if step.state == "failed":
                     first_failure = first_failure or step.error
@@ -744,7 +724,6 @@ async def run_check_job(job: CheckJob, sessionmaker: async_sessionmaker[AsyncSes
         batch_failure = ""
         for number, batch in enumerate(batches, start=1):
             yield "stage", {"stage": f"比对 {number}/{len(batches)} 批"}
-            await _before_send(job, sessionmaker)
             try:
                 text = await complete(job.target, issues.build_compare_messages(batch, job.compare_override))
                 if not text.strip():

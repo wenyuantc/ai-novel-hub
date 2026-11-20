@@ -54,8 +54,44 @@ class _LeaseState:
     binding: object = None
 
 
+@dataclass(slots=True, repr=False)
+class _SqliteSharedLease:
+    owner: asyncio.Task
+    session_transaction: object
+    connection: object
+    connection_transaction: object
+    driver_connection: object
+
+
 # 唯一登记点在 _task_frame_lease 的真实锁序之后；不接受调用方提供的“已持锁”布尔值。
 _LIVE_STREAM_LEASES: WeakKeyDictionary[AsyncSession, _LeaseState] = WeakKeyDictionary()
+# 仅在 SQLite 非 WAL 模式的 _task_frame_lease 持有真实 SHARED 读事务期间登记，
+# 避免受控 SSE 帧租约与慢模型出站 _send_lease 的 RESERVED 写锁互斥。
+_SQLITE_SHARED_FRAME_LEASES: WeakKeyDictionary[AsyncSession, _SqliteSharedLease] = WeakKeyDictionary()
+
+
+async def is_sqlite_shared_frame_lease(db: AsyncSession) -> bool:
+    """确认当前会话与协程正处于 _task_frame_lease 建立的真实 SQLite SHARED 读事务内。"""
+    state = _SQLITE_SHARED_FRAME_LEASES.get(db)
+    if state is None or state.owner is not asyncio.current_task():
+        return False
+    try:
+        if db.get_bind().dialect.name != "sqlite":
+            return False
+        root = db.get_transaction()
+        if (root is None or not root.is_active or root.sync_transaction is not state.session_transaction
+                or db.get_nested_transaction() is not None):
+            return False
+        connection = await db.connection()
+        physical = connection.sync_connection
+        raw = getattr(physical.connection.dbapi_connection, "_connection", None)
+        return (not connection.closed and not connection.invalidated and physical is state.connection
+                and physical.get_transaction() is state.connection_transaction
+                and physical.get_nested_transaction() is None
+                and physical.connection.dbapi_connection is state.driver_connection
+                and getattr(raw, "in_transaction", False) is True)
+    except Exception:  # noqa: BLE001  任一校验失败按未持共享读租约处理（失败关闭）。
+        return False
 
 
 def _payload_hash(data: dict) -> str:
@@ -165,6 +201,27 @@ async def _task_frame_lease(
     db.info["authenticated_actor"] = binding.actor
     try:
         with db.no_autoflush:
+            if db.get_bind().dialect.name == "sqlite":
+                connection = await db.connection()
+                journal_mode = (await connection.exec_driver_sql("PRAGMA journal_mode")).scalar()
+                if isinstance(journal_mode, str) and journal_mode.lower() != "wal":
+                    # 默认回滚日志模式：显式开启读事务并先读一页，使 SQLite C 层真实持有 SHARED 锁；
+                    # 既不与慢模型 _send_lease 的 RESERVED 写锁冲突，又能阻塞撤权/改权限等写方 COMMIT（需 EXCLUSIVE）。
+                    # 若外部手工启用 WAL，SHARED 不阻塞写方提交，故保守回退既有写锁路径。
+                    await connection.exec_driver_sql("BEGIN")
+                    await connection.exec_driver_sql("SELECT 1 FROM sqlite_master LIMIT 1")
+                    root = db.get_transaction()
+                    owner = asyncio.current_task()
+                    physical = connection.sync_connection
+                    raw = getattr(physical.connection.dbapi_connection, "_connection", None)
+                    if (root is not None and root.is_active and db.get_nested_transaction() is None
+                            and owner is not None and not connection.closed and not connection.invalidated
+                            and physical.get_transaction() is not None and physical.get_nested_transaction() is None
+                            and getattr(raw, "in_transaction", False) is True):
+                        _SQLITE_SHARED_FRAME_LEASES[db] = _SqliteSharedLease(
+                            owner, root.sync_transaction, physical, physical.get_transaction(),
+                            physical.connection.dbapi_connection,
+                        )
             await authorization_service.require_authenticated_for_send(db, binding.actor)
             project = None
             if binding.project_id is not None:
@@ -216,6 +273,7 @@ async def _task_frame_lease(
                     raise NotFoundError("任务不存在")
         yield db, task, project
     finally:
+        _SQLITE_SHARED_FRAME_LEASES.pop(db, None)
         # 取消时也限时释放；若关闭失败则失效连接，不能把持锁连接归还池。
         closed = False
         with anyio.move_on_after(1, shield=True):

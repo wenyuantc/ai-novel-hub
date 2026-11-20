@@ -259,9 +259,11 @@ async def require_authenticated(
 
 async def require_authenticated_for_send(db: AsyncSession, actor: User | int | AuthenticatedActor) -> None:
     """发送 lease 持有单用户读锁，防停用/撤销令牌穿透；不把全局授权门禁持到网络上。"""
+    from app.services.task_engine.stream_lease import is_sqlite_shared_frame_lease
+
     original = actor_snapshot(db, actor)
     actor_id = original if isinstance(original, int) else original.id
-    if db.get_bind().dialect.name == "sqlite":
+    if db.get_bind().dialect.name == "sqlite" and not await is_sqlite_shared_frame_lease(db):
         await lock_users(db, actor_id, missing_ok=True)
     statement = select(User.is_active, User.token_version).where(User.id == actor_id)
     if db.get_bind().dialect.name == "postgresql":

@@ -443,10 +443,9 @@ async def _final_visibility(
     original = db.info.get("authenticated_actor")
     if isinstance(original, AuthenticatedActor) and original.id != user_id:
         raise UnauthorizedError("未登录或登录已过期")
-    factory = visibility_sessionmaker(db)
-    async with factory() as verify:
-        if isinstance(original, AuthenticatedActor):
-            verify.info["authenticated_actor"] = original
+    from app.services.task_engine.stream_lease import is_sqlite_shared_frame_lease
+
+    async def run(verify: AsyncSession):
         member = ProjectCollaborator
         auth = select(
             User.is_active.label("active"), User.token_version.label("token_version"),
@@ -561,7 +560,19 @@ async def _final_visibility(
                 )) \
                 .outerjoin(linked_task, linked_task.id == AgentChange.turn_task_id) \
                 .outerjoin(root_task, and_(refs.c.kind == "_agent_turn", root_task.id == refs.c.ref_id))
-        rows = (await verify.execute(statement)).all()
+        return (await verify.execute(statement.execution_options(populate_existing=True))).all()
+
+    if await is_sqlite_shared_frame_lease(db):
+        # 帧租约在 SQLite 回滚日志模式下已持 SHARED 锁，期间写方无法 COMMIT、库快照不会漂移；
+        # 禁止再开新连接，否则当写方恰在 COMMIT 持 PENDING 锁时会形成三方死锁。
+        with db.no_autoflush:
+            rows = await run(db)
+    else:
+        factory = visibility_sessionmaker(db)
+        async with factory() as verify:
+            if isinstance(original, AuthenticatedActor):
+                verify.info["authenticated_actor"] = original
+            rows = await run(verify)
 
     if not rows or not rows[0].active or (
         isinstance(original, AuthenticatedActor) and rows[0].token_version != original.token_version

@@ -52,6 +52,13 @@ async def lock_config_owner(db: AsyncSession, user_id: int, *, write: bool) -> N
                 fn = func.pg_advisory_xact_lock if write else func.pg_advisory_xact_lock_shared
                 await db.execute(select(fn(_CONFIG_LOCK_NAMESPACE, user_id)))
             elif dialect == "sqlite":
+                if not write:
+                    from app.services.task_engine.stream_lease import is_sqlite_shared_frame_lease
+
+                    if await is_sqlite_shared_frame_lease(db):
+                        if await db.scalar(select(User.id).where(User.id == user_id)) is None:
+                            raise NotFoundError("用户不存在")
+                        return
                 # SQLite 没有行级共享锁；两端用同一 User no-op UPDATE 取得物理写屏障。
                 result = await db.execute(update(User).where(User.id == user_id).values(
                     id=User.id, updated_at=User.updated_at,

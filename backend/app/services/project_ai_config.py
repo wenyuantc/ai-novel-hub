@@ -901,16 +901,19 @@ async def _validate_binding(
         # 发送期间共享锁防止配置在验证后被更新或删除；释放仍由调用方控制。
         statement = statement.with_for_update(read=True)
     elif lock_config and db.get_bind().dialect.name == "sqlite":
-        try:
-            # SQLite 没有行级共享锁；现有发送 lease 也使用同一数据库写屏障。
-            await db.execute(update(AIConfig).where(AIConfig.id == binding.config_id).values(
-                id=AIConfig.id, updated_at=AIConfig.updated_at,
-            ).execution_options(synchronize_session=False))
-        except OperationalError as exc:
-            if ai_dispatch.is_sqlite_busy(exc):
-                await db.rollback()
-                raise ConflictError("模型配置正在变化，请重试", extra={"code": "collaboration_busy"}) from None
-            raise
+        from app.services.task_engine.stream_lease import is_sqlite_shared_frame_lease
+
+        if not await is_sqlite_shared_frame_lease(db):
+            try:
+                # SQLite 没有行级共享锁；现有发送 lease 也使用同一数据库写屏障。
+                await db.execute(update(AIConfig).where(AIConfig.id == binding.config_id).values(
+                    id=AIConfig.id, updated_at=AIConfig.updated_at,
+                ).execution_options(synchronize_session=False))
+            except OperationalError as exc:
+                if ai_dispatch.is_sqlite_busy(exc):
+                    await db.rollback()
+                    raise ConflictError("模型配置正在变化，请重试", extra={"code": "collaboration_busy"}) from None
+                raise
     elif lock_config:
         raise RuntimeError("受控模型配置不支持当前数据库")
     row = (await db.execute(statement)).one_or_none()

@@ -404,7 +404,6 @@ async def run_impact_job(job: ImpactJob, sessionmaker: async_sessionmaker[AsyncS
             yield _log(job, "事实台账与当前正文一致，直接与上一版比较\n")
         else:
             yield "stage", {"stage": "抽取本章事实"}
-            await check._before_send(job, sessionmaker)  # noqa: SLF001
             text = await complete(job.target, ledger.build_extract_messages(source, job.extract_override))
             if not text.strip():
                 raise AIProviderError(check.EMPTY_OUTPUT)
@@ -425,7 +424,6 @@ async def run_impact_job(job: ImpactJob, sessionmaker: async_sessionmaker[AsyncS
         keys: set[str] = set()
         if old_only or new_only:
             yield "stage", {"stage": "判定事实变化"}
-            await check._before_send(job, sessionmaker)  # noqa: SLF001
             text = await complete(job.target, build_impact_messages(old_only, new_only, job.impact_override))
             if not text.strip():
                 raise AIProviderError(check.EMPTY_OUTPUT)
