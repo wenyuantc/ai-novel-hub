@@ -243,21 +243,18 @@ class _Scenario:
 
 POINTS = ("chapter", "between", "paused", "analysis")
 CHANGES = ("revoke", "viewer", "owner_ai", "password", "reinvite")
+POINT_SETTINGS = [(point, {**AUTO_ON, "auto_analyze_enabled": point == "analysis"}) for point in POINTS]
 
 
-@pytest.mark.parametrize("settings_overrides", [AUTO_ON])
 @pytest.mark.parametrize("notify", ["notify", "silent"])
 @pytest.mark.parametrize("change", CHANGES)
-@pytest.mark.parametrize("point", POINTS)
+@pytest.mark.parametrize(("point", "settings_overrides"), POINT_SETTINGS, ids=POINTS)
 async def test_batch_frame_produced_before_change_is_denied_at_send(
     app, client, make_client, fake_llm, monkeypatch, point, change, notify,
 ):
     guest = make_client()
     world = await _world(client, guest, allow_owner_ai=True)
     engine = app.state.task_engine
-    if point != "analysis":
-        # 只有逐章分析时点需要分析；其余时点关闭，避免分析模型调用打乱分片顺序。
-        app.state.task_engine.ctx.settings.auto_analyze_enabled = False
     scenario = _Scenario(point, fake_llm, monkeypatch)
     hold = _Hold(scenario.predicate)
     _mount(app, [hold])
@@ -310,15 +307,12 @@ async def test_batch_frame_produced_before_change_is_denied_at_send(
     assert row.status != "succeeded", (row.status, row.error)
 
 
-@pytest.mark.parametrize("settings_overrides", [AUTO_ON])
-@pytest.mark.parametrize("point", POINTS)
+@pytest.mark.parametrize(("point", "settings_overrides"), POINT_SETTINGS, ids=POINTS)
 async def test_held_batch_frame_is_sent_when_nothing_changes(app, client, make_client, fake_llm, monkeypatch, point):
     """正对照：同样持住已产出帧再发送，未改变授权时该帧与后续帧照常发出。"""
     guest = make_client()
     world = await _world(client, guest, allow_owner_ai=True)
     engine = app.state.task_engine
-    if point != "analysis":
-        app.state.task_engine.ctx.settings.auto_analyze_enabled = False
     scenario = _Scenario(point, fake_llm, monkeypatch)
     if point == "analysis":
         fake_llm.push(analysis_json(summary="第二章分析"))

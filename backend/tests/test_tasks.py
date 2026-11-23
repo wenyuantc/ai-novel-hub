@@ -5,11 +5,12 @@ import time
 from contextlib import aclosing
 from uuid import uuid4
 
+import httpx
 import pytest
 from sqlalchemy import func, select, update
 
 from app.ai.providers import AIProviderError
-from app.models import Chapter, Task
+from app.models import Chapter, Task, TaskExecutionSlot
 from app.services import chapter_claim, project_access, task_service
 from app.services.task_engine.handlers.chapter import capture_queued_claim
 from app.services.task_engine.hub import TaskHub
@@ -460,6 +461,56 @@ async def test_per_user_limit_and_queue_position(app, client, fake_llm):
         assert (await wait_task(client, t))["status"] == "succeeded"
 
 
+async def test_uncommitted_candidates_keep_global_position_in_list_detail_and_progress(
+    app, second_app, client, make_client, fake_llm, monkeypatch,
+):
+    engine = app.state.task_engine
+    await engine.stop()
+    other = make_client()
+    await register(other, "other-queue-owner")
+    project = await create_project(other)
+    await create_ai_config(other)
+    other_chapter = (await other.post(f"/api/v1/projects/{project['id']}/chapters", json={"title": "章"})).json()
+    _, _, chapters = await _setup(client, chapters=2)
+    hidden = (await _generate(other, other_chapter)).json()
+    tasks = [(await _generate(client, chapter)).json() for chapter in chapters]
+    expected_candidates = {ref["id"] for ref in [hidden, *tasks]}
+    subscriptions = [engine.hubs[ref["id"]].subscribe()[1] for ref in tasks]
+    selected = set()
+
+    async def hold_claim(task_id, _key):
+        selected.add(task_id)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(engine, "_claim_and_run", hold_claim)
+    try:
+        await engine.start()
+        await wait_until(lambda: selected == expected_candidates)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=second_app),
+                                     base_url="http://testserver", cookies=client.cookies) as peer:
+            for reader in (client, peer):
+                listing = await reader.get("/api/v1/tasks", params={"active": True})
+                assert listing.status_code == 200, listing.text
+                assert {row["id"]: row["queue_position"] for row in listing.json()} == {
+                    tasks[0]["id"]: 1, tasks[1]["id"]: 2,
+                }
+                for position, ref in enumerate(tasks, 1):
+                    detail = await reader.get(f"/api/v1/tasks/{ref['id']}", params=task_params(ref))
+                    assert detail.status_code == 200 and detail.json()["queue_position"] == position
+                other_detail = await reader.get(f"/api/v1/tasks/{hidden['id']}", params=task_params(hidden))
+                assert other_detail.status_code == 404
+            for position, sub in enumerate(subscriptions, 1):
+                event, data = await asyncio.wait_for(sub.queue.get(), 5)
+                assert event == "progress" and data["queue_position"] == position
+    finally:
+        for ref, sub in zip(tasks, subscriptions, strict=True):
+            engine.hubs[ref["id"]].unsubscribe(sub)
+        await engine.stop()
+    assert not fake_llm.calls
+    async with app.state.sessionmaker() as db:
+        assert set(await db.scalars(select(Task.id).where(Task.status == "queued"))) == expected_candidates
+
+
 @pytest.mark.parametrize("settings_overrides", [{"task_max_concurrency": 1}])
 async def test_global_limit(app, client, make_client, fake_llm):
     _, _, (ch,) = await _setup(client)
@@ -856,7 +907,10 @@ async def test_serial_key_after_restart(app, client, fake_llm):
     engine = app.state.task_engine
     await engine.stop()
     assert (await client.get(f"/api/v1/tasks/{t1['id']}", params=task_params(t1))).json()["status"] == "interrupted"
-    assert engine._running_serial == {}
+    async with app.state.sessionmaker() as db:
+        assert await db.scalar(select(TaskExecutionSlot.execution_key).where(
+            TaskExecutionSlot.serial_key == f"analysis:{a1['project_id']}",
+        )) is None
     fake_llm.push(analysis_json(summary="第二章"))
     await engine.start()
     assert (await wait_task(client, t2))["status"] == "succeeded"

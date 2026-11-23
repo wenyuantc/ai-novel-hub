@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import partial
 from typing import Any, Literal, Protocol
 from weakref import WeakValueDictionary
 
@@ -25,6 +26,7 @@ from jsonschema.exceptions import SchemaError
 
 from app.ai.endpoint_guard import ensure_endpoint_allowed
 from app.ai.providers.base import AIProviderError
+from app.services.mcp.management import ManagementHttpClient, ManagementRequestGate
 
 logger = logging.getLogger(__name__)
 
@@ -289,9 +291,10 @@ def _tool_info(tool: Any) -> McpToolInfo:
 
 
 class _SdkConnection:
-    def __init__(self, session: Any, headers: dict[str, str]):
+    def __init__(self, session: Any, headers: dict[str, str], *, management: bool):
         self._session = session
         self._headers = headers
+        self._management = management
 
     async def list_tools(self) -> list[McpToolInfo]:
         tools: list[McpToolInfo] = []
@@ -313,9 +316,27 @@ class _SdkConnection:
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> McpResult:
         try:
             async with asyncio.timeout(CALL_TIMEOUT):
-                result = await self._session.call_tool(
-                    name, arguments, read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT)
-                )
+                # SDK 在成功调用后会查首个工具页来验证 outputSchema。试用时先取得同一页，
+                # 这样关闭开关后仍能完成本地校验，无须再次外连或重放调用。
+                listed = True
+                if self._management:
+                    page = await self._session.list_tools()
+                    listed = any(item.name == name for item in page.tools)
+                if listed:
+                    result = await self._session.call_tool(
+                        name, arguments, read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT),
+                    )
+                else:
+                    # 旧插件可能仍可调用但没有在该页声明输出 schema。沿用 SDK 对这种结果的
+                    # CallToolResult 解析；已取得工具页，再次调用 list_tools 不能补充验证。
+                    from mcp import types
+
+                    result = await self._session.send_request(
+                        types.ClientRequest(types.CallToolRequest(
+                            params=types.CallToolRequestParams(name=name, arguments=arguments),
+                        )),
+                        types.CallToolResult, request_read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT),
+                    )
         except TimeoutError as exc:
             raise McpError(f"MCP 工具调用超时（{CALL_TIMEOUT:g} 秒）") from exc
         except Exception as exc:  # noqa: BLE001
@@ -325,23 +346,31 @@ class _SdkConnection:
 
 @asynccontextmanager
 async def connect(
-    target: McpTarget, *, allow_private: bool, request_gate: McpRequestGate | None = None,
+    target: McpTarget, *, allow_private: bool, request_gate: McpRequestGate | ManagementRequestGate | None = None,
 ) -> AsyncIterator[McpConnection]:
     """建立一次 MCP 会话（initialize 完成后 yield），退出时关闭连接。"""
     from mcp import ClientSession
     from mcp.client.sse import sse_client
     from mcp.client.streamable_http import streamable_http_client
 
+    management = request_gate if isinstance(request_gate, ManagementRequestGate) else None
+    if management is not None:
+        await management.check()
     await guard_url(target.url, allow_private=allow_private)
 
     async def check_request(request: httpx.Request) -> None:
-        # 每个请求都校验（SSE 的消息地址由服务端下发，DNS 也可能在两次请求之间变化）
+        # 对端可能提供新的 SSE 地址。DNS 在短读之后、物理发送门之前进行。
+        if management is not None and not allow_private:
+            await management.check(request)
         await guard_url(str(request.url), allow_private=allow_private)
+        if request_gate is not None:
+            await request_gate.before_request(request)
 
     def client_factory(
         headers: dict[str, str] | None = None, timeout: httpx.Timeout | None = None, auth: httpx.Auth | None = None
     ) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        client_type = partial(ManagementHttpClient, management) if management is not None else httpx.AsyncClient
+        return client_type(
             headers={**(headers or {}), **target.headers},
             timeout=httpx.Timeout(CALL_TIMEOUT, read=STREAM_READ_TIMEOUT),
             auth=auth,
@@ -349,7 +378,7 @@ async def connect(
             # SDK 的 stream_within_origin 只看 max_redirects：0 = 任何重定向都不跟随
             max_redirects=0,
             limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
-            event_hooks={"request": [check_request, *([request_gate.before_request] if request_gate else [])],
+            event_hooks={"request": [check_request],
                          "response": [request_gate.after_headers] if request_gate else []},
         )
 
@@ -380,7 +409,7 @@ async def connect(
                     except Exception as exc:  # noqa: BLE001
                         raise McpError(describe(exc, target.headers)) from exc
                     stack_ready = True
-                    yield _SdkConnection(session, target.headers)
+                    yield _SdkConnection(session, target.headers, management=management is not None)
         finally:
             try:
                 if http_client is not None:

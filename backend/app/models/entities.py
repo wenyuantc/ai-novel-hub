@@ -823,6 +823,20 @@ class TaskWorker(Base):
     peer_url: Mapped[str | None] = mapped_column(String(500))
 
 
+class TaskExecutionSlot(Base):
+    """原执行轮次占用的全站调度名额。任务被裁剪后，尚在收尾的执行体仍须占用名额。"""
+
+    __tablename__ = "task_execution_slots"
+
+    execution_key: Mapped[str] = mapped_column(String(36), primary_key=True)
+    worker_key: Mapped[str] = mapped_column(String(36), index=True)
+    task_id: Mapped[int] = mapped_column(Integer, unique=True)
+    statistics_key: Mapped[str] = mapped_column(String(36))
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    serial_key: Mapped[str | None] = mapped_column(String(100), index=True)
+
+
 class Task(TimestampMixin, Base):
     """持久化后台任务。tasks 表即队列：进程内调度器按 id 先进先出领取 queued 任务。"""
 

@@ -14,6 +14,7 @@ from app.services import api_key_service
 from app.services.agent import mcp_tools
 from app.services.ai_dispatch import VisibilityPolicyError, read_visibility_stamp
 from app.services.authorization_service import AuthenticatedActor
+from app.services.mcp.client import _register_test_connector
 from tests.helpers import (
     Gate,
     analysis_json,
@@ -278,12 +279,13 @@ async def test_mcp_close_during_connect_prevents_unstarted_trial_or_discovery(
     reached, release = asyncio.Event(), asyncio.Event()
 
     @asynccontextmanager
-    async def connector(target, *, allow_private):
-        async with fake(target, allow_private=allow_private) as connection:
+    async def connector(target, *, allow_private, request_gate):
+        async with fake(target, allow_private=allow_private, request_gate=request_gate) as connection:
             reached.set()
             await release.wait()
             yield connection
 
+    _register_test_connector(connector)
     app.state.task_engine.ctx.mcp_connector = connector
     pending = asyncio.create_task(client.post(
         f"/api/v1/mcp-plugins/{plugin['id']}/{operation}",

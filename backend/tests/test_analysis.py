@@ -17,6 +17,7 @@ from tests.helpers import (
     task_params,
     wait_task,
 )
+from tests.test_system_settings import save_settings
 
 AUTO_ON = {"auto_analyze_enabled": True}
 
@@ -244,7 +245,7 @@ async def test_deployment_switch_disables_auto_analyze(app, client, fake_llm):
 
 
 @pytest.mark.parametrize("settings_overrides", [{**AUTO_ON, "task_max_per_user": 1}])
-async def test_enqueue_auto_dedup_queued_but_not_running(app, client, fake_llm, monkeypatch):
+async def test_enqueue_auto_dedup_queued_but_not_running(app, client, system_admin, fake_llm, monkeypatch):
     """enqueue_auto：同章已有排队中的分析不重复入队；运行中的不算（可再排以分析最新正文）；
     空正文 / 项目开关关闭不入队。原执行身份来自实际生成成功的完成回调。"""
     from app.services import analysis_service
@@ -305,8 +306,7 @@ async def test_enqueue_auto_dedup_queued_but_not_running(app, client, fake_llm, 
         assert len(visible) == 1 and visible[0]["id"] == first
         first_ref = visible[0]
         # 成功回调仍持有原执行；放宽配额允许第一个分析真实运行。
-        app.state.settings.task_max_per_user = 2
-        engine.notify()
+        await save_settings(system_admin, task_max_per_user=2)
         await gate.wait_reached(within=10)
         assert (await client.get(f"/api/v1/tasks/{first}", params=task_params(first_ref))).json()["status"] == "running"
         second = await original_enqueue(ctx, p["id"], ch["id"], execution=execution)  # 运行中可再排

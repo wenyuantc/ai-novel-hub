@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.errors import ConflictError
-from app.models import AgentChange, Chapter, GenerationLog, Project, Task, TaskStatistic, TaskWorker
+from app.models import AgentChange, Chapter, GenerationLog, Project, Task, TaskExecutionSlot, TaskStatistic, TaskWorker
 from app.services import task_service, task_statistics_service
 from app.services.task_engine import workers
 from app.services.task_engine.execution_identity import require_write_execution
@@ -77,7 +77,8 @@ async def test_healthy_generation_survives_second_start(app, second_app, client,
         aborts.append(ref["id"])
         return await on_abort(*args, **kwargs)
 
-    monkeypatch.setattr(handler, "on_abort", count_abort)
+    # 注册表持有单例。撤销补丁时必须删掉实例属性，恢复类方法查找。
+    monkeypatch.setitem(vars(handler), "on_abort", count_abort)
     try:
         await gate.wait_reached()
         owner = app.state.task_engine.lease.worker_key
@@ -187,7 +188,7 @@ async def test_two_reapers_interrupt_and_count_once(app, second_app, client, mon
         return await adopt(db, task_id, statistics_key, execution_key, old_worker_key, me)
 
     monkeypatch.setattr(workers, "adopt", simultaneous_adopt)
-    monkeypatch.setattr(handler, "on_abort", counted_abort)
+    monkeypatch.setitem(vars(handler), "on_abort", counted_abort)
     monkeypatch.setattr(task_statistics_service, "record_state_change", counted_transition)
     await asyncio.gather(first.recover(), second.recover())
     await asyncio.gather(first.recover(), second.recover())
@@ -252,7 +253,7 @@ async def test_fenced_worker_cannot_write_or_claim_before_adoption(app, client, 
         calls.append(execution)
         return await original(ctx, task, claim=claim, execution=execution)
 
-    monkeypatch.setattr(handler, "build_job", capture)
+    monkeypatch.setitem(vars(handler), "build_job", capture)
     gate = Gate()
     fake_llm.push([gate, "旧写入"])
     ref = (await _generate(client, chapter)).json()
@@ -346,7 +347,7 @@ async def test_uncertain_task_is_visible_from_both_engines_without_repeated_clea
             actual = await db.get(Task, row.id)
             assert actual.recovered_at == original_stamp and actual.worker_key is None
             assert task_service.to_out(actual, engine=engine).stage == "结果待核对"
-        assert engine.admitted_count() == 0 and row.serial_key not in engine._running_serial.values()
+            assert await db.scalar(select(func.count()).select_from(TaskExecutionSlot)) == 0
 
     # 让新提交的真实任务使用相同串行键，验证待核对任务未阻止领取和落库。
     handler = get_handler("chapter.generate")
@@ -357,7 +358,7 @@ async def test_uncertain_task_is_visible_from_both_engines_without_repeated_clea
         spec.serial_key = row.serial_key
         return spec
 
-    monkeypatch.setattr(handler, "validate_and_claim", same_serial)
+    monkeypatch.setitem(vars(handler), "validate_and_claim", same_serial)
     fake_llm.push("新的同键任务已保存")
     response = await _generate(client, chapter)
     assert response.status_code == 202, response.text

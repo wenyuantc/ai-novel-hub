@@ -105,7 +105,9 @@ async def app(tmp_path, fake_llm, settings_overrides):
     # 签名可能与上一个测试的缓存相同，所以每个测试前后都清空
     retrieval_service.invalidate()
     mention_cache.clear()
+    deployment = settings.model_copy(deep=True)
     application = create_app(settings, provider_factory=fake_llm.factory, start_task_engine=False)
+    application.state.test_deployment = deployment
     async with application.state.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # 测试不触发 lifespan：显式启停任务引擎，结束前 stop，避免任务泄漏到下一个测试
@@ -116,8 +118,8 @@ async def app(tmp_path, fake_llm, settings_overrides):
     try:
         yield application
     finally:
-        await application.state.system_settings.close()
         await task_engine.stop()
+        await application.state.system_settings.close()
         await application.state.engine.dispose()
         retrieval_service.invalidate()
         mention_cache.clear()
@@ -141,11 +143,12 @@ async def peer_app_factory(app, fake_llm):
     async with AsyncExitStack() as stack:
         async def new_peer():
             peer = create_app(
-                app.state.settings.model_copy(deep=True), provider_factory=fake_llm.factory, start_task_engine=False,
+                app.state.test_deployment.model_copy(deep=True), provider_factory=fake_llm.factory,
+                start_task_engine=False,
             )
             stack.push_async_callback(peer.state.engine.dispose)
-            stack.push_async_callback(peer.state.task_engine.stop)
             stack.push_async_callback(peer.state.system_settings.close)
+            stack.push_async_callback(peer.state.task_engine.stop)
             await authorization_service.initialize(peer.state.sessionmaker)
             await peer.state.system_settings.load()
             return peer

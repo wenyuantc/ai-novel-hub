@@ -10,11 +10,13 @@ from sqlalchemy import case, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.core.errors import BadRequestError, ConflictError, NotFoundError, UnauthorizedError
 from app.core.security import SecretCipher, mask_secret
 from app.models import ApiKey, ApiKeyProject, Project, User
 from app.schemas.api_key import ApiKeyCreate, ApiKeyCreateOut, ApiKeyOut, ApiKeyUpdate
 from app.services import project_lifecycle
+from app.services.system_settings_snapshot import settings_for_consumer
 
 INVALID_KEY = "API Key 无效或已失效"
 
@@ -197,10 +199,11 @@ def _valid_key_conditions(now: datetime):
     )
 
 
-async def authenticate_key(db: AsyncSession, raw_key: str | None, limit_per_minute: int) -> ApiKeyPrincipal:
+async def authenticate_key(db: AsyncSession, raw_key: str | None, settings: Settings) -> ApiKeyPrincipal:
     """原子认证和扣减额度，短事务提交后才进入业务读取。"""
     if not raw_key or len(raw_key) != 47 or not raw_key.startswith("anv_"):
         raise UnauthorizedError(INVALID_KEY)
+    limit_per_minute = (await settings_for_consumer(db, settings)).open_api_rate_limit_per_minute
     digest = hashlib.sha256(raw_key.encode()).hexdigest()
     now = _now_utc()
     window = int(now.timestamp()) // 60

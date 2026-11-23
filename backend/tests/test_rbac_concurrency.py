@@ -4,18 +4,21 @@
 """
 
 import asyncio
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, Task, User, WritingStyle
+from app.models import Project, Task, TaskExecutionSlot, User, WritingStyle
 from app.services import authorization_service as authz
 from app.services import quota_service
 from app.services.audit_writer import AuditOperation
-from tests.helpers import Gate, create_ai_config, create_project, register, task_params, wait_task
-from tests.rbac_helpers import assign_roles, authorization_revision, create_role, set_quota
+from tests.helpers import Gate, analysis_json, create_ai_config, create_project, register, task_params, wait_task
+from tests.rbac_helpers import assign_roles, authorization_revision, create_role, set_quota, task_quota_used
 from tests.test_book_import import _start, upload
+from tests.test_tasks import _generate, _setup
 
 
 async def test_role_edit_commits_before_waiting_management_write_rechecks_actor(
@@ -195,7 +198,7 @@ async def test_mixed_creation_paths_compete_for_last_slot_under_owner_lock(
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
 async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_gap(
-    app, client, system_admin, fake_llm, monkeypatch,
+    app, second_app, client, system_admin, fake_llm, monkeypatch,
 ):
     user = await register(client)
     project = await create_project(client)
@@ -226,7 +229,7 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
     ids = [await asyncio.wait_for(selected.get(), 5) for _ in range(2)]
     assert set(ids) == {row["id"] for row in rows}
     task_refs = {row["id"]: row for row in rows}
-    assert engine.admitted_count(user["id"]) == 0
+    assert await task_quota_used(system_admin, user["id"]) == 0
     # 两个预候选都已登记，后来的降额必须在真实claim复核；候选本身不耗占用。
     await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 1}})
     committed, return_commit, attempting = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -261,7 +264,10 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
     try:
         candidates[ids[0]].set()
         await asyncio.wait_for(committed.wait(), 5)
-        assert engine.admitted_count(user["id"]) == 0
+        # 物理提交已落地，即使 A 未收到回执，B 的配额页也必须可见。
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=second_app),
+                                     base_url="http://testserver", cookies=system_admin.cookies) as peer_admin:
+            assert await task_quota_used(peer_admin, user["id"]) == 1
         async with app.state.sessionmaker() as db:
             assert (await db.get(Task, ids[0])).status == "running"
         candidates[ids[1]].set()
@@ -271,7 +277,7 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
         return_commit.set()
         await llm_gate.wait_reached()
         await asyncio.wait_for(completed.wait(), 5)
-        assert engine.admitted_count(user["id"]) == 1
+        assert await task_quota_used(system_admin, user["id"]) == 1
         assert (await client.get(f"/api/v1/tasks/{ids[1]}", params=task_params(task_refs[ids[1]]))).json()[
             "status"
         ] == "queued"
@@ -288,14 +294,29 @@ async def test_candidate_rechecks_lowered_quota_and_claim_holds_commit_return_ga
     assert cancel.status_code == 200
 
 
-@pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
+@pytest.mark.parametrize(("constraint", "settings_overrides"), [
+    ("user", {"task_max_concurrency": 2, "task_max_per_user": 1}),
+    ("global", {"task_max_concurrency": 1, "task_max_per_user": 2}),
+    ("serial", {"task_max_concurrency": 2, "task_max_per_user": 2}),
+])
 async def test_database_terminal_state_does_not_release_post_success_execution_slot(
-    app, client, system_admin, fake_llm, monkeypatch,
+    app, second_app, client, make_client, system_admin, fake_llm, monkeypatch, constraint,
 ):
     user = await register(client)
     project = await create_project(client)
     await create_ai_config(client)
-    await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 1}})
+    owner = client
+    next_project = project
+    if constraint == "global":
+        owner = make_client()
+        await register(owner, "second-slot-owner")
+        next_project = await create_project(owner)
+        await create_ai_config(owner)
+    chapters = []
+    for reader, book in [(client, project), (owner, next_project)]:
+        chapters.append((await reader.post(
+            f"/api/v1/projects/{book['id']}/chapters", json={"title": "章", "content": "原文"},
+        )).json())
     engine = app.state.task_engine
     original_success = engine._on_success
     terminal, finish_success = asyncio.Event(), asyncio.Event()
@@ -308,41 +329,43 @@ async def test_database_terminal_state_does_not_release_post_success_execution_s
         await original_success(handler, task, execution=execution)
 
     monkeypatch.setattr(engine, "_on_success", success)
-    generation = Gate()
-    fake_llm.push([generation, "第一章"])
-    second_generation = Gate()
-    fake_llm.push([second_generation, "第二章"])
-    rows = []
-    for index in range(2):
-        chapter = (await client.post(
-            f"/api/v1/projects/{project['id']}/chapters", json={"title": str(index)},
-        )).json()
-        response = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})
-        assert response.status_code == 202, response.text
-        rows.append(response.json())
-        if index == 0:
-            first_id = rows[0]["id"]
+    peer_engine = second_app.state.task_engine
+    # B 正常登记并续约。定向让 B 的后项先执行真实领取判定，排除因本地预筛跳过形成的假阳性。
+    monkeypatch.setattr(peer_engine, "_dispatch", AsyncMock())
+    await peer_engine.start()
+    assert engine.lease.worker_key != peer_engine.lease.worker_key
+    generation, second_generation = Gate(), Gate()
+    content = analysis_json() if constraint == "serial" else "正文"
+    fake_llm.push([generation, content])
+    fake_llm.push([second_generation, content])
+    operation = "analyze" if constraint == "serial" else "generate"
+    first = (await client.post(f"/api/v1/chapters/{chapters[0]['id']}/{operation}", json={})).json()
+    first_id = first["id"]
     try:
         await generation.wait_reached()
         generation.release()
         await asyncio.wait_for(terminal.wait(), 5)
+        later = (await owner.post(f"/api/v1/chapters/{chapters[1]['id']}/{operation}", json={})).json()
         async with app.state.sessionmaker() as db:
             assert (await db.get(Task, first_id)).status == "succeeded"
-        assert engine.admitted_count(user["id"]) == 1
-        quota = (await system_admin.get(f"/api/v1/admin/users/{user['id']}/quotas")).json()
-        assert quota["task_concurrency"]["used"] == 1
-        queued = await client.get(f"/api/v1/tasks/{rows[1]['id']}", params=task_params(rows[1]))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=second_app),
+                                     base_url="http://testserver", cookies=system_admin.cookies) as peer_admin:
+            for observer in (system_admin, peer_admin):
+                assert await task_quota_used(observer, user["id"]) == 1
+        await asyncio.wait_for(peer_engine._claim_and_run(later["id"], later["task_key"]), 5)
+        queued = await owner.get(f"/api/v1/tasks/{later['id']}", params=task_params(later))
         assert queued.json()["status"] == "queued"
         assert not second_generation.reached.is_set()
         finish_success.set()
         await second_generation.wait_reached()
-        assert engine.admitted_count(user["id"]) == 1
+        next_user_id = (await owner.get("/api/v1/auth/me")).json()["id"]
+        assert await task_quota_used(system_admin, next_user_id) == 1
     finally:
         generation.release()
         finish_success.set()
         second_generation.release()
-    for row in rows:
-        assert (await wait_task(client, row))["status"] == "succeeded"
+    assert (await wait_task(client, first))["status"] == "succeeded"
+    assert (await wait_task(owner, later))["status"] == "succeeded"
 
 
 @pytest.mark.parametrize("commit_was_applied", [False, True])
@@ -376,10 +399,48 @@ async def test_uncertain_claim_commit_reconciles_same_uuid_without_duplicate_exe
     started = await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})
     assert started.status_code == 202, started.text
     await asyncio.wait_for(claimed.wait(), 5)
-    finished = await wait_task(client, started.json())
+    # 提交未落库的候选在下一轮调度重试；留出一个轮询周期和一次真实处理的时间。
+    finished = await wait_task(client, started.json(), within=app.state.task_engine.poll_interval + 10)
     assert finished["status"] == "succeeded"
     assert len(fake_llm.calls) == 1
     assert finished["id"] == started.json()["id"]
+
+
+@pytest.mark.parametrize("settings_overrides", [{"task_max_concurrency": 1}])
+async def test_rolled_back_claim_yields_capacity_to_other_queued_tasks(app, client, fake_llm, monkeypatch):
+    engine = app.state.task_engine
+    _, _, (first_chapter, other_chapter) = await _setup(client, chapters=2)
+    await engine.stop()
+    # 两笔任务都在启动前入队。连续的领取尝试之间没有定时重试或外部通知。
+    monkeypatch.setattr(engine, "poll_interval", 120)
+    first = (await _generate(client, first_chapter)).json()
+    other = (await _generate(client, other_chapter)).json()
+    attempts = asyncio.Queue()
+    reject_first = True
+    commit = AsyncSession.commit
+
+    async def commit_with_failed_slot(db):
+        for slot in db.new:
+            if isinstance(slot, TaskExecutionSlot):
+                attempts.put_nowait(slot.task_id)
+                if reject_first and slot.task_id == first["id"]:
+                    raise OSError("模拟原轮次的领取提交未落库")
+        await commit(db)
+
+    monkeypatch.setattr(AsyncSession, "commit", commit_with_failed_slot)
+    fake_llm.push("甲")
+    fake_llm.push("乙")
+    await engine.start()
+    try:
+        async with asyncio.timeout(20):
+            assert await attempts.get() == first["id"]
+            assert await attempts.get() == other["id"]
+    finally:
+        reject_first = False
+        engine.notify()
+    for ref in (other, first):
+        assert (await wait_task(client, ref, within=15))["status"] == "succeeded"
+    assert len(fake_llm.calls) == 2
 
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
@@ -438,14 +499,16 @@ async def test_unknown_settings_commit_pauses_admission_until_confirmed_publish(
         assert committed and not engine.runtime.settings_confirmed
         start_claim.set()
         await asyncio.wait_for(rejected.wait(), 5)
-        assert engine.admitted_count(user["id"]) == 0 and not fake_llm.calls
+        async with app.state.sessionmaker() as db:
+            assert await db.scalar(select(func.count()).select_from(TaskExecutionSlot)) == 0
+        assert not fake_llm.calls
         queued = await client.get(f"/api/v1/tasks/{started.json()['id']}", params=task_params(started.json()))
         assert queued.json()["status"] == "queued"
         allow_read = True
         await manager.load()
         assert engine.runtime.settings_confirmed and app.state.settings.task_max_per_user == 1
         await generation.wait_reached()
-        assert engine.admitted_count(user["id"]) == 1
+        assert await task_quota_used(system_admin, user["id"]) == 1
     finally:
         allow_read = True
         start_claim.set()
@@ -477,9 +540,9 @@ async def test_settings_load_publishes_only_inside_shared_runtime(app, monkeypat
 @pytest.mark.parametrize("claim_gap", ["commit_return", "session_exit"])
 @pytest.mark.parametrize("stop_action", ["owner_cancel", "shutdown"])
 async def test_cancel_in_claim_gap_defers_signal_until_safe_finalize(
-    app, client, fake_llm, monkeypatch, claim_gap, stop_action,
+    app, client, system_admin, fake_llm, monkeypatch, claim_gap, stop_action,
 ):
-    await register(client)
+    user = await register(client)
     project = await create_project(client)
     await create_ai_config(client)
     engine = app.state.task_engine
@@ -532,7 +595,7 @@ async def test_cancel_in_claim_gap_defers_signal_until_safe_finalize(
     try:
         await asyncio.wait_for(committed.wait(), 5)
         assert task_id in engine._claiming
-        assert engine.admitted_count() == (1 if claim_gap == "session_exit" else 0)
+        assert await task_quota_used(system_admin, user["id"]) == 1
         pending = asyncio.create_task(
             client.post(f"/api/v1/tasks/{task_id}/cancel", params=task_params(task_ref))
             if stop_action == "owner_cancel" else engine.stop()
@@ -557,7 +620,7 @@ async def test_cancel_in_claim_gap_defers_signal_until_safe_finalize(
         task = await db.get(Task, task_id)
         assert task.status == ("cancelled" if stop_action == "owner_cancel" else "interrupted")
     assert not fake_llm.calls
-    assert engine.admitted_count() == 0 and task_id not in engine._claiming
+    assert await task_quota_used(system_admin, user["id"]) == 0 and task_id not in engine._claiming
     chapter = (await client.get(f"/api/v1/projects/{project['id']}/chapters/{chapter['id']}")).json()
     assert chapter["status"] == "draft"
 

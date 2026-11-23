@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.core.deps import CipherDep, CurrentUser, DbDep, SettingsDep
+from app.core.deps import CipherDep, CurrentUser, DbDep, SessionmakerDep, SettingsDep
 from app.schemas.mcp import (
     McpCallRequest,
     McpCallResult,
@@ -15,11 +15,13 @@ from app.schemas.mcp import (
     McpPluginUpdate,
     McpToolPrefUpdate,
 )
+from app.services.mcp import management
 from app.services.mcp import service as svc
 
 
-def require_mcp(settings: SettingsDep) -> None:
-    svc.ensure_enabled(settings)
+async def require_mcp(maker: SessionmakerDep) -> None:
+    async with maker() as db:
+        await management.require_enabled(db)
 
 
 def get_connector(request: Request) -> Any:
@@ -70,9 +72,10 @@ async def delete_plugin(plugin_id: int, user: CurrentUser, db: DbDep) -> Respons
 
 @router.post("/{plugin_id}/refresh", response_model=McpPluginOut)
 async def refresh_plugin(
-    plugin_id: int, user: CurrentUser, db: DbDep, settings: SettingsDep, cipher: CipherDep, connector: ConnectorDep
+    plugin_id: int, user: CurrentUser, db: DbDep, settings: SettingsDep, cipher: CipherDep, connector: ConnectorDep,
+    maker: SessionmakerDep,
 ) -> McpPluginOut:
-    return await svc.refresh_tools(db, settings, cipher, connector, user.id, plugin_id)
+    return await svc.refresh_tools(db, settings, cipher, connector, maker, user.id, plugin_id)
 
 
 @router.patch("/{plugin_id}/tools", response_model=McpPluginOut)
@@ -92,5 +95,6 @@ async def call_tool(
     settings: SettingsDep,
     cipher: CipherDep,
     connector: ConnectorDep,
+    maker: SessionmakerDep,
 ) -> McpCallResult:
-    return await svc.call_tool(db, settings, cipher, connector, user.id, plugin_id, body.tool, body.arguments)
+    return await svc.call_tool(db, settings, cipher, connector, maker, user.id, plugin_id, body.tool, body.arguments)

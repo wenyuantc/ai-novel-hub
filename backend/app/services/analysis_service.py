@@ -85,6 +85,7 @@ from app.services.project_access import require_project, resolve_access
 from app.services.project_service import get_owned_project, project_info
 from app.services.setting_ai_context import build_scope
 from app.services.setting_field_formatting import format_entry_fields
+from app.services.system_settings_snapshot import settings_for_consumer
 from app.services.task_engine.execution_identity import TaskExecutionIdentity, require_live_worker
 
 if TYPE_CHECKING:
@@ -951,8 +952,11 @@ async def enqueue_auto(
     协作者还须仍是同一 accepted editor 轮次、模型来源授权仍有效。无可信来源或已撤权时抛错不入队
     （由引擎记为成功回调失败，不影响已成功的章节），不能推断为作者任务。
     """
-    if project_id is None or chapter_id is None or not ctx.settings.auto_analyze_enabled:
+    if project_id is None or chapter_id is None:
         return None
+    async with ctx.sessionmaker() as db:
+        if not (await settings_for_consumer(db, ctx.settings)).auto_analyze_enabled:
+            return None
     from app.services import generation_service
 
     try:

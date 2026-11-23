@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.errors import ConflictError
-from app.models import Task, TaskWorker
+from app.models import Task, TaskExecutionSlot, TaskWorker
 from app.services.ai_dispatch import is_sqlite_busy
 from app.services.task_engine import sqlite_lease_pair, sqlite_worker_leases
 
@@ -129,14 +129,26 @@ async def lock_live_worker(
     return alive
 
 
+async def _release_confirmed_slots(db: AsyncSession, worker_key: str | None = None) -> None:
+    terminal = select(TaskWorker.worker_key).where(
+        or_(TaskWorker.stopped_at.is_not(None), TaskWorker.fenced_at.is_not(None)),
+    )
+    if worker_key is not None:
+        terminal = terminal.where(TaskWorker.worker_key == worker_key)
+    await db.execute(delete(TaskExecutionSlot).where(TaskExecutionSlot.worker_key.in_(terminal))
+                     .execution_options(synchronize_session=False))
+
+
 async def _pg_fence_expired(db: AsyncSession, cutoff: datetime | str) -> None:
     if db.get_bind().dialect.name != "postgresql":
         raise ValueError("仅 PostgreSQL 使用主库心跳判定失联")
     expired = (TaskWorker.stopped_at.is_(None), TaskWorker.fenced_at.is_(None), TaskWorker.heartbeat_at < cutoff)
     # 某个长事务可能仍持执行者共享锁；本轮先处理其他失联登记，下个周期再查它。
     locked = select(TaskWorker.worker_key).where(*expired).correlate(None).with_for_update(skip_locked=True)
-    await db.execute(update(TaskWorker).where(*expired, TaskWorker.worker_key.in_(locked))
-                     .values(fenced_at=func.now()).execution_options(synchronize_session=False))
+    fenced = await db.execute(update(TaskWorker).where(*expired, TaskWorker.worker_key.in_(locked))
+                              .values(fenced_at=func.now()).execution_options(synchronize_session=False))
+    if fenced.rowcount:
+        await _release_confirmed_slots(db)
 
 
 def _confirmed_absent():
@@ -165,6 +177,8 @@ async def prepare_orphan_scan(db: AsyncSession, seconds: float):
         ).values(stopped_at=datetime.fromisoformat(stopped) if stopped else None,
                  fenced_at=datetime.fromisoformat(fenced) if fenced else None)
             .execution_options(synchronize_session=False))
+    if terminal:
+        await _release_confirmed_slots(db)
     return and_(Task.status == "running", Task.recovered_at.is_(None), _confirmed_absent())
 
 
@@ -243,9 +257,14 @@ class WorkerLease:
             referenced = select(Task.id).where(
                 Task.worker_key == TaskWorker.worker_key, Task.status == "running",
             ).exists()
+            owns_slot = select(TaskExecutionSlot.execution_key).where(
+                TaskExecutionSlot.worker_key == TaskWorker.worker_key,
+            ).exists()
             await db.execute(delete(TaskWorker).where(
-                or_(TaskWorker.fenced_at < cutoff, TaskWorker.stopped_at < cutoff), ~referenced,
+                or_(TaskWorker.fenced_at < cutoff, TaskWorker.stopped_at < cutoff), ~referenced, ~owns_slot,
             ).execution_options(synchronize_session=False))
+            # 遗留占用仍能用其未裁剪的登记核对。下次启动再裁剪已清空的旧登记。
+            await _release_confirmed_slots(db)
             if pair is not None:
                 # 先取得主库写事务，再确认侧库有效；等待主库期间不占侧库的写槽。
                 if not await sqlite_worker_leases.live(pair, key, self.engine.lease_seconds):
@@ -308,6 +327,7 @@ class WorkerLease:
                     await db.scalar(select(TaskWorker.worker_key).where(TaskWorker.worker_key == key).with_for_update())
                 await db.execute(update(TaskWorker).where(TaskWorker.worker_key == key, TaskWorker.stopped_at.is_(None))
                                  .values(stopped_at=func.now()))
+                await _release_confirmed_slots(db, key)
                 await db.commit()
                 confirmed = True
         except OperationalError as exc:

@@ -35,3 +35,9 @@ async def set_quota(admin, user_id, changes):
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def task_quota_used(admin, user_id):
+    response = await admin.get(f"/api/v1/admin/users/{user_id}/quotas")
+    assert response.status_code == 200, response.text
+    return response.json()["task_concurrency"]["used"]

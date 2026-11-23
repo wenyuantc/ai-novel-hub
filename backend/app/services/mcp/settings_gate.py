@@ -1,36 +1,15 @@
 """MCP 系统开关的跨实例物理门禁；调用者负责在响应头后结束事务。"""
 
-from dataclasses import dataclass
-
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import SystemSettings
-from app.schemas.system_settings import SystemSettingsChanges
 from app.services import authorization_service as authz
 from app.services.ai_dispatch import VisibilityPolicyError
+from app.services.system_settings_snapshot import effective_settings
 
 # 与作品可见性、用户模型选择使用不同的双整数 advisory namespace。
 _MCP_SETTINGS_NAMESPACE = 0x41494D43
 _MCP_SETTINGS_ID = 1
-_DEPLOYMENT_KEY = "mcp_settings_deployment_default"
-
-
-@dataclass(frozen=True, slots=True)
-class _DeploymentDefault:
-    enabled: bool
-
-
-def configure_deployment_default(maker: async_sessionmaker[AsyncSession], enabled: bool) -> None:
-    """捕获本进程启动时的部署默认值；运行期可变 Settings 不再作为事实来源。"""
-    if type(enabled) is not bool:
-        raise ValueError("MCP 部署设置无效")
-    info = maker.kw.setdefault("info", {})
-    previous = info.get(_DEPLOYMENT_KEY)
-    value = _DeploymentDefault(enabled)
-    if previous is not None and previous != value:
-        raise ValueError("MCP 部署设置已固定")
-    info[_DEPLOYMENT_KEY] = value
 
 
 def _unavailable() -> VisibilityPolicyError:
@@ -67,6 +46,15 @@ async def lock_for_reload(db: AsyncSession) -> None:
         await _lock(db, exclusive=False)
 
 
+async def require_agent_enabled(db: AsyncSession) -> None:
+    try:
+        enabled = (await effective_settings(db)).mcp_enabled
+    except Exception:
+        raise _unavailable() from None
+    if not enabled:
+        raise _disabled()
+
+
 async def acquire_send(db: AsyncSession, actor: authz.AuthenticatedActor) -> None:
     """原 actor → MCP 设置共享门禁；仅在真实发送租约中使用，事务不在此处关闭。"""
     if (db.new or db.dirty or db.deleted or type(actor) is not authz.AuthenticatedActor
@@ -76,31 +64,11 @@ async def acquire_send(db: AsyncSession, actor: authz.AuthenticatedActor) -> Non
     bound = db.info.get("authenticated_actor")
     if bound is not None and bound != actor:
         raise _unavailable()
-    default = db.info.get(_DEPLOYMENT_KEY)
-    if type(default) is not _DeploymentDefault or type(default.enabled) is not bool:
-        raise _unavailable()
     try:
         with db.no_autoflush:
             await authz.require_authenticated_for_send(db, actor)
-            runtime = authz.runtime_for(db)
-            if runtime.settings_confirmed is not True:
-                raise _unavailable()
             await _lock(db, exclusive=False)
-            row = (await db.execute(select(SystemSettings.revision, SystemSettings.overrides)
-                                    .where(SystemSettings.id == 1))).one_or_none()
-            if row is None:
-                enabled = default.enabled
-            else:
-                if type(row.revision) is not int or row.revision < 1 or type(row.overrides) is not dict:
-                    raise _unavailable()
-                changes = SystemSettingsChanges.model_validate(row.overrides).model_dump(exclude_unset=True)
-                if any(value is None for value in changes.values()):
-                    raise _unavailable()
-                enabled = changes.get("mcp_enabled", default.enabled)
-            if runtime.settings_confirmed is not True or type(enabled) is not bool:
-                raise _unavailable()
-            if not enabled:
-                raise _disabled()
+            await require_agent_enabled(db)
     except VisibilityPolicyError:
         raise
     except Exception:

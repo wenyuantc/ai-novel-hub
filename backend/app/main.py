@@ -1,7 +1,7 @@
 import hmac
 import logging
 import re
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -105,42 +105,34 @@ def create_app(
     start_task_engine: bool = True,
 ) -> FastAPI:
     """start_task_engine：lifespan 中是否启停后台任务引擎（测试不触发 lifespan，由 fixture 显式 start/stop）。"""
-    settings = settings or get_settings()
+    settings = settings if settings is not None else get_settings().model_copy(deep=True)
     engine = create_engine(settings.database_url)
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI):
-        # 表结构由 alembic upgrade head 先行建立（Docker 入口已保证）
-        await authorization_service.initialize(app_.state.sessionmaker)
-        await app_.state.system_settings.load()
-        await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
-        # 按 preset_key 同步内置写作风格（代码里改了预设，库里跟着更新）
-        await style_service.sync_presets(app_.state.sessionmaker)
-        # 清理创建满 7 天仍未导入的拆书解析记录
-        await book_import_service.purge_expired_all(app_.state.sessionmaker)
-        await recycle_bin_service.recover_pending_deletions(app_.state.sessionmaker)
-        # 统计起点与存量先于恢复建立，遗留 running 的中断结果才不会遗漏。
-        await task_statistics_service.initialize_tracking(app_.state.sessionmaker)
-        if start_task_engine:
-            # 先处理已确认失去执行者的任务，再调度队列。
-            await app_.state.task_engine.start()
-        await app_.state.recycle_bin_cleaner.start()
-        await app_.state.dashboard_sampler.start()
-        await app_.state.backup_runtime.start()
-        try:
+        async with AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(engine.dispose)
+            cleanup.push_async_callback(app_.state.system_settings.close)
+            # 表结构由 alembic upgrade head 先行建立。启动中途出错也要收回已经启动的服务。
+            await authorization_service.initialize(app_.state.sessionmaker)
+            await app_.state.system_settings.load()
+            await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
+            await style_service.sync_presets(app_.state.sessionmaker)
+            await book_import_service.purge_expired_all(app_.state.sessionmaker)
+            await recycle_bin_service.recover_pending_deletions(app_.state.sessionmaker)
+            await task_statistics_service.initialize_tracking(app_.state.sessionmaker)
+            if start_task_engine:
+                cleanup.push_async_callback(app_.state.task_engine.stop)
+                await app_.state.task_engine.start()
+            cleanup.push_async_callback(app_.state.recycle_bin_cleaner.stop)
+            await app_.state.recycle_bin_cleaner.start()
+            cleanup.push_async_callback(app_.state.dashboard_sampler.stop)
+            await app_.state.dashboard_sampler.start()
+            cleanup.push_async_callback(app_.state.backup_runtime.stop)
+            cleanup.push_async_callback(app_.state.backups.close)
+            await app_.state.backup_runtime.start()
             async with ai_usage_recording.usage_maintenance(app_.state.sessionmaker):
-                try:
-                    yield
-                finally:
-                    await app_.state.backups.close()
-                    await app_.state.backup_runtime.stop()
-                    await app_.state.system_settings.close()
-                    await app_.state.dashboard_sampler.stop()
-                    await app_.state.recycle_bin_cleaner.stop()
-                    if start_task_engine:
-                        await app_.state.task_engine.stop()
-        finally:
-            await engine.dispose()
+                yield
 
     app = FastAPI(title="AI 小说平台", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -160,6 +152,7 @@ def create_app(
     app.state.provider_factory = provider_factory or create_provider
     app.state.system_settings = SystemSettingsManager(
         settings, app.state.sessionmaker, lambda: app.state.task_engine.notify(),
+        poll_interval=TaskEngine.poll_interval,
     )
     app.state.task_engine = TaskEngine(
         TaskContext(

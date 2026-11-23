@@ -19,7 +19,7 @@ key_header = APIKeyHeader(
 async def get_api_key_principal(
     db: DbDep, settings: SettingsDep, key: Annotated[str | None, Security(key_header)]
 ) -> ApiKeyPrincipal:
-    return await authenticate_key(db, key, settings.open_api_rate_limit_per_minute)
+    return await authenticate_key(db, key, settings)
 
 
 OpenApiUser = Annotated[ApiKeyPrincipal, Depends(get_api_key_principal)]

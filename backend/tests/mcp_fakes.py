@@ -65,6 +65,12 @@ class FakeMcpConnector:
 
         class _Conn:
             async def list_tools(self) -> list[McpToolInfo]:
+                if request_gate is not None:
+                    request = httpx.Request("POST", target.url, json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+                    })
+                    await request_gate.before_request(request)
+                    await request_gate.after_headers(httpx.Response(200, request=request))
                 return list(server.tools)
 
             async def call_tool(self, name: str, arguments: dict) -> McpResult:

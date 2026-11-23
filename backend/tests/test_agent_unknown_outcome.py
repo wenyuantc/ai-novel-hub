@@ -242,7 +242,8 @@ async def test_reused_connection_tracks_each_call_send_boundary_separately(app, 
         change_id=1, change_key=str(uuid4()), claim_id=str(uuid4()), tool_call_id="call",
         started_at=datetime.now(UTC), stamp=VisibilityStamp(1, 0, 0),
     )
-    worker = _Worker(connector, McpTarget("https://state.example/mcp", "sse", {}), False, settings, app.state.cipher)
+    worker = _Worker(connector, McpTarget("https://state.example/mcp", "sse", {}), False, settings, app.state.cipher,
+                     identity=identity)
     first, second = McpSendState(), McpSendState()
     try:
         await worker.call("read", {}, first, identity=identity, resolved=object())

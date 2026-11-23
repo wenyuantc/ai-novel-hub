@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -18,13 +19,13 @@ from app.schemas.system_settings import (
     SystemSettingAuditChange,
     SystemSettingBoolItem,
     SystemSettingIntItem,
-    SystemSettingsChanges,
     SystemSettingsOut,
     SystemSettingsUpdate,
 )
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation, AuditOperationError
 from app.services.mcp import settings_gate
+from app.services.system_settings_snapshot import configure_deployment, validated_row
 
 logger = logging.getLogger(__name__)
 CONFLICT = "系统设置已被其他管理员修改，请刷新后重新确认"
@@ -32,13 +33,16 @@ UNKNOWN = "系统设置保存状态暂时无法确认，请稍后刷新核实"
 
 
 class SystemSettingsManager:
-    def __init__(self, settings: Settings, sessionmaker: async_sessionmaker[AsyncSession], notify: Callable[[], None]):
+    def __init__(self, settings: Settings, sessionmaker: async_sessionmaker[AsyncSession], notify: Callable[[], None],
+                 *, poll_interval: float):
         self.settings = settings
         self.sessionmaker = sessionmaker
         self.runtime = authz.runtime_for_factory(sessionmaker)
         self.notify = notify
-        self._deployment = {key: getattr(settings, key) for key in SYSTEM_SETTING_KEYS}
-        settings_gate.configure_deployment_default(sessionmaker, self._deployment["mcp_enabled"])
+        self._source_state = configure_deployment(sessionmaker, settings)
+        self._deployment = {key: getattr(self._source_state.deployment, key) for key in SYSTEM_SETTING_KEYS}
+        self._poll_interval = poll_interval
+        self._poller: asyncio.Task | None = None
         # 必须先确认持久设置，再允许依赖运行设置的实际发送/准入。
         self.runtime.settings_confirmed = False
         self._defaults = {key: Settings.model_fields[key].default for key in SYSTEM_SETTING_KEYS}
@@ -81,32 +85,54 @@ class SystemSettingsManager:
             items.append(item_type(**values))
         return SystemSettingsOut(revision=self._revision, updated_at=self._updated_at, items=items)
 
-    @staticmethod
-    def _validated(row: SystemSettings | None) -> tuple[int, dict, datetime | None]:
-        if row is None:
-            return 0, {}, None
-        changes = SystemSettingsChanges.model_validate(row.overrides).model_dump(exclude_unset=True)
-        if row.revision < 1 or any(value is None for value in changes.values()):
-            raise ValueError("持久设置无效")
-        return row.revision, changes, row.updated_at
-
     async def _reload(self) -> SystemSettingsOut:
         async with self.runtime.hold():
             async with self.sessionmaker() as db:
+                # 在 SQLite 默认回滚日志模式，真实读事务保护读取到发布这段窗口。
+                # WAL 的读快照不阻挡写方提交，须短暂保留写权限。
+                if db.get_bind().dialect.name == "sqlite":
+                    conn = await db.connection()
+                    journal = (await conn.exec_driver_sql("PRAGMA journal_mode")).scalar()
+                    await conn.exec_driver_sql("BEGIN IMMEDIATE" if journal == "wal" else "BEGIN")
                 await settings_gate.lock_for_reload(db)
+                observed = time.monotonic()
                 row = await db.get(SystemSettings, 1)
-                values = self._validated(row)
+                values = validated_row(row)
                 # 发布时共享门禁仍在本事务内，避免其他实例提交穿过读/发布窗口。
+                self._source_state.verified_until = observed + self._poll_interval
+                if self.runtime.settings_confirmed and not self._uncertain and values[:2] == (
+                    self._revision, self._overrides,
+                ):
+                    return self._output()
                 return self._publish(*values)
 
     async def load(self) -> SystemSettingsOut:
         async with self._lock:
             try:
-                return await self._reload()
+                result = await self._reload()
+                if self._poller is None and not self._closing:
+                    self._poller = asyncio.create_task(self._poll(), name="system-settings-poll")
+                return result
             except Exception:
                 logger.error("系统设置持久状态读取失败")
                 self._schedule_recovery()
                 raise AuditOperationError(UNKNOWN) from None
+
+    async def _poll(self) -> None:
+        while not self._closing:
+            await asyncio.sleep(max(0, self._source_state.verified_until - time.monotonic()))
+            async with self._lock:
+                if self._closing:
+                    return
+                try:
+                    await self._reload()
+                except Exception:
+                    logger.error("系统设置持久状态读取失败")
+                    self._schedule_recovery()
+                    # 上一轮已过期；限制本轮失败后的重试频率，不延长消费者缓存。
+                else:
+                    continue
+            await asyncio.sleep(self._poll_interval)
 
     def _track_write(self, task: asyncio.Task) -> None:
         self._writes.add(task)
@@ -151,7 +177,7 @@ class SystemSettingsManager:
                         access = await authz.require(db, actor_id, "settings.update", write=True)
                         # User → MCP 设置独占门禁 → SystemSettings；发送侧不持授权写门禁。
                         await settings_gate.lock_for_update(db)
-                        current = self._validated(await db.get(SystemSettings, 1, populate_existing=True))
+                        current = validated_row(await db.get(SystemSettings, 1, populate_existing=True))
                         actor = await db.get(User, access.id, populate_existing=True)
                         async with AuditOperation(
                             db, actor, "system_settings.update", "system_settings", 1, operation_id=operation_id,
@@ -189,8 +215,12 @@ class SystemSettingsManager:
                                 )
                                 if result.scalar_one_or_none() is None:
                                     raise ConflictError(CONFLICT)
+                            # 其他实例可在物理提交后立即写下一版。回执迟到不能延长本版的新鲜期。
+                            valid_until = time.monotonic() + self._poll_interval
                             await audit.commit()
-                            # commit返回与发布之间没有await，HTTP取消由外层shield隔离。
+                            if time.monotonic() >= valid_until:
+                                return await self._reload()
+                            self._source_state.verified_until = valid_until
                             return self._publish(revision, candidate, now)
                 except BaseException:
                     # 包括commit已落盘但确认抛错；读取当前持久事实，不重试旧候选。
@@ -219,6 +249,9 @@ class SystemSettingsManager:
 
     async def close(self) -> None:
         self._closing = True
+        if self._poller is not None:
+            self._poller.cancel()
+            await asyncio.gather(self._poller, return_exceptions=True)
         if self._writes:
             await asyncio.gather(*self._writes, return_exceptions=True)
         if self._recovery is not None:

@@ -48,6 +48,7 @@ from app.services.rich_document_proposal_mapping import (
     build_scene_proposal,
     resolve_scene_proposal,
 )
+from app.services.system_settings_snapshot import settings_for_consumer
 
 if TYPE_CHECKING:
     from app.services.generation_service import ChapterJob
@@ -1185,7 +1186,7 @@ async def _accept_review(
             payload["scene"] = (await scene_service.scene_out(db, chapter, scene)).model_dump(mode="json")
         else:
             payload["scene_ids"] = [scene.id for scene in scenes]
-            if engine.ctx.settings.auto_analyze_enabled and project.auto_analyze:
+            if project.auto_analyze and (await settings_for_consumer(db, engine.ctx.settings)).auto_analyze_enabled:
                 if (type(authenticated_actor) is not authorization_service.AuthenticatedActor
                         or authenticated_actor.id != user_id):
                     raise UnauthorizedError("未登录或登录已过期")

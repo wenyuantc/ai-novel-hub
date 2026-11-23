@@ -3,7 +3,7 @@
 - tasks 表是唯一事实来源（数据库即队列）。调度器按 id 升序扫描 queued 任务，受全局 / 每用户并发上限约束，
   用条件 UPDATE（status='queued' → 'running'）领取，影响行数为 1 才算领到，然后 asyncio.create_task 执行。
 - 每次启动登记新的执行者租约，领取时记录归属；恢复只接管已失去执行者的任务。
-- 当前部署仍使用单进程，跨进程并发配额、取消和实时流转发另行处理。
+- 正常领取与并发名额一起提交。当前部署仍使用单进程，跨进程取消和实时流转发另行处理。
 - serial_key：同键任务排队串行。调度时同键已有运行中（或本轮已登记）的任务就跳过，留到下一轮；
   同键内按 id 先进先出（前一个同键任务因上限被跳过时，后面的同键任务也不越过它）。与全局 / 每用户上限同时生效。
 - on_success（可选）：任务写入 succeeded 后调用，异常只记日志（如章节任务成功后自动排队分析）。
@@ -22,7 +22,7 @@ import sqlite3
 import time
 from collections import Counter, deque
 from collections.abc import AsyncIterator
-from contextlib import aclosing, contextmanager, suppress
+from contextlib import AsyncExitStack, aclosing, contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任务类型
 from app.core.errors import AppError, ConflictError
-from app.models import Chapter, Project, ProjectCollaborator, Task, User
+from app.models import Chapter, Project, ProjectCollaborator, Task, TaskExecutionSlot, User
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES
 from app.services import (
     analysis_service,
@@ -60,7 +60,8 @@ from app.services.collaboration_task_access import (
     task_requires_owner_ai,
     task_visible_to_actor,
 )
-from app.services.task_engine import workers
+from app.services.system_settings_snapshot import effective_settings
+from app.services.task_engine import execution_slots, workers
 from app.services.task_engine.cancellation import AdminCancellationDrain
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
@@ -281,7 +282,6 @@ class TaskEngine:
         self._uncertain_executions: set[tuple[int, str | None, datetime | None, str | None]] = set()
         self._running_users: dict[int, int] = {}
         self._running_rounds: dict[int, Any] = {}
-        self._admitted: dict[int, tuple[str | None, Any, int]] = {}
         self._claiming: set[int] = set()
         self.runtime = authz.runtime_for_factory(ctx.sessionmaker)
         self._running_serial: dict[int, str] = {}
@@ -393,7 +393,7 @@ class TaskEngine:
         for hub in self.hubs.values():
             hub.close("error", {"task": None, "detail": INTERRUPTED_MESSAGE})
         self.hubs.clear()
-        self._admitted.clear()
+        self._running_execution_keys.clear()
         self._adopted.clear()
         self.admin_cancellations.recovering.clear()
         self._done_candidates.clear()
@@ -796,8 +796,7 @@ class TaskEngine:
                 async with asyncio.timeout(max(0.0, next_reap - time.monotonic())):
                     await self._wake.wait()
             except TimeoutError:
-                # 兜底轮询：重试此前无法前进的排队任务。
-                self._stalled.clear()
+                pass
             self._wake.clear()
             if self._stopping:
                 return
@@ -808,6 +807,8 @@ class TaskEngine:
                 if self._stopping:
                     return
                 if time.monotonic() >= next_reap:
+                    # 即使无关完成事件持续唤醒，也按定时期限重试排队任务。
+                    self._stalled.clear()
                     next_reap = time.monotonic() + self.poll_interval
                     await self._reap_orphans()
                 await self.scan_admin_cancellations()
@@ -829,25 +830,31 @@ class TaskEngine:
         async with sm() as db:
             rows = await db.execute(
                 select(Task.id, Task.statistics_key, Task.user_id, Task.serial_key, Task.project_id, Task.queued_at)
-                .outerjoin(Project, Project.id == Task.project_id)
-                .where(Task.status == "queued", Task.execution_key.is_(None), Task.admin_cancel_operation_id.is_(None),
-                       task_service.visible_project_condition())
+                .where(*execution_slots.dispatchable_tasks())
                 .order_by(Task.id)
             )
             queued = list(rows.all())
             limits = await quota_service.task_limits(db, (row.user_id for row in queued), settings)
-        per_user = Counter(self._running_users.values())
-        # 运行中占用的串行键；本轮被跳过的串行键也加入，保证同键内先进先出
-        busy_serial = set(self._running_serial.values())
+            slots = (await db.execute(select(
+                TaskExecutionSlot.task_id, TaskExecutionSlot.user_id, TaskExecutionSlot.serial_key,
+            ))).all() if queued else []
+        occupied = {row.task_id: (row.user_id, row.serial_key) for row in slots}
+        # 主库已登记的正常领取和本地未提交候选只预留一次；最终裁决在领取事务里。
+        for task_id, user_id in self._running_users.items():
+            occupied.setdefault(task_id, (user_id, self._running_serial.get(task_id)))
+        per_user = Counter(user_id for user_id, _ in occupied.values())
+        busy_serial = {key for _, key in occupied.values() if key is not None}
         current = {row.id: (row.statistics_key, row.queued_at) for row in queued}
         for stalled_id, identity in tuple(self._stalled.items()):
             if current.get(stalled_id) != identity:
                 # 已不再排队或已换入队轮次：不再退避。
                 self._stalled.pop(stalled_id, None)
         for task_id, statistics_key, user_id, serial_key, project_id, queued_at in queued:
-            if self._stopping or len(self._running) >= settings.task_max_concurrency:
+            if self._stopping or len(occupied) >= settings.task_max_concurrency:
                 break
-            if task_id in self._running:
+            if task_id in occupied or task_id in self._running:
+                if serial_key is not None:
+                    busy_serial.add(serial_key)
                 continue
             if serial_key is not None and serial_key in busy_serial:
                 continue
@@ -861,6 +868,7 @@ class TaskEngine:
                 if serial_key is not None:
                     busy_serial.add(serial_key)
                 continue
+            occupied[task_id] = (user_id, serial_key)
             per_user[user_id] += 1
             # 先登记 asyncio.Task 再领取：库里出现 running 时内存里一定有可取消的执行体
             self._running_projects[task_id] = project_id
@@ -882,8 +890,6 @@ class TaskEngine:
             rows = list((await db.execute(
                 select(Task.id, Task.statistics_key).where(Task.status == "queued").order_by(Task.id)
             )).all())
-        # 已登记、正在领取的任务不算排队
-        rows = [(task_id, key) for task_id, key in rows if task_id not in self._running]
         for position, (task_id, key) in enumerate(rows):
             hub = self.hubs.get(task_id)
             if hub is not None and hub.statistics_key == key and hub.status == "queued":
@@ -911,21 +917,19 @@ class TaskEngine:
             logger.error("任务执行体异常结束 task=%s", task_id)
         self._running_users.pop(task_id, None)
         self._running_rounds.pop(task_id, None)
-        self._admitted.pop(task_id, None)
         self._claiming.discard(task_id)
         self._running_statistics_keys.pop(task_id, None)
-        self._running_execution_keys.pop(task_id, None)
+        if self._running_execution_keys.pop(task_id, None) is not None:
+            # 真实执行已经收尾，因配额/串行键被挡的队首可立即重试。
+            self._stalled.clear()
         self._running_serial.pop(task_id, None)
         self._cancel_requested.discard(task_id)
         self._collaboration_revoked.pop(task_id, None)
-        # 只唤醒调度、不清空退避记录：否则无法前进的排队任务会被立即重新领取，形成热循环。
+        # 未领取的候选只唤醒，不重置退避，避免反复争用同一堵塞任务。
         if self._wake is not None:
             self._wake.set()
 
     # ---------------- 执行 ----------------
-
-    def admitted_count(self, user_id: int | None = None) -> int:
-        return sum(1 for _key, _round, owner in self._admitted.values() if user_id is None or owner == user_id)
 
     async def _fail_reset_queued_chapter(
         self, claim: chapter_claim.ChapterClaim, *, worker_key: str | None = None,
@@ -1352,8 +1356,34 @@ class TaskEngine:
                     await task_service.prune_finished(fresh, row.user_id)
         return True
 
+    async def _release_slot(self, execution: TaskExecutionIdentity) -> None:
+        # 在途归还也属于收尾。重复的取消/关停不得打断活游标，停机先等原执行体退出。
+        self._finalizing.add(execution.task_id)
+        try:
+            delay = 0.1
+            while True:
+                try:
+                    async with self.ctx.sessionmaker() as db:
+                        await execution_slots.release(db, execution)
+                    return
+                except Exception:  # noqa: BLE001  提交回执可能丢失，新事务按原轮次幂等归还。
+                    if delay == 0.1:
+                        logger.warning("任务名额归还尚未确认 task=%s", execution.task_id)
+                    if self._stopping or self._lease_lost or not self.lease.valid:
+                        # stop 或失联确认和这个 worker 的遗留名额清理在主库同事务提交。
+                        return
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 5.0)
+        finally:
+            self._finalizing.discard(execution.task_id)
+
     async def _claim_and_run(self, task_id: int, statistics_key: str | None) -> None:
-        """真正领取在共享发布临界段复核额度；候选登记不算admitted。"""
+        # 确认提交、启动模型、成功回调和异常退出共用一处释放出口。
+        async with AsyncExitStack() as finish:
+            await self._claim_and_execute(task_id, statistics_key, finish)
+
+    async def _claim_and_execute(self, task_id: int, statistics_key: str | None, finish: AsyncExitStack) -> None:
+        """在领取事务的授权门内复核额度、串行键和同键队首。"""
         worker_key = self.lease.worker_key
         if worker_key is None or not self.lease.valid or self._lease_lost or task_id in self._cancel_requested:
             return
@@ -1438,12 +1468,17 @@ class TaskEngine:
                 elif actor_unavailable:
                     self._mark_stalled(task_id, statistics_key, expected_round)
                     return
-                limit = (await quota_service.task_limits(db, [candidate.user_id], self.ctx.settings))[candidate.user_id]
-                if self._stopping or not self.lease.valid:
+                try:
+                    settings = await effective_settings(db)
+                except AppError:
+                    # 当前无法核验上限，等下一次设置通知或轮询再试。
+                    self._mark_stalled(task_id, statistics_key, expected_round)
                     return
-                if self.admitted_count() >= self.ctx.settings.task_max_concurrency or (
-                    limit is not None and self.admitted_count(candidate.user_id) >= limit
-                ) or task_id in self._cancel_requested:
+                limit = (await quota_service.task_limits(db, [candidate.user_id], settings))[candidate.user_id]
+                if not await execution_slots.can_claim(db, queued_task, settings.task_max_concurrency, limit):
+                    self._mark_stalled(task_id, statistics_key, expected_round)
+                    return
+                if self._stopping or not self.lease.valid or task_id in self._cancel_requested:
                     return
                 # 活驱动CAS/提交确认期间只登记取消意图，不cancel游标。
                 self._claiming.add(task_id)
@@ -1501,6 +1536,9 @@ class TaskEngine:
                 if self._lease_lost or not self.lease.valid:
                     return
                 self._running_statistics_keys[task_id] = row.statistics_key
+                execution_slots.reserve(db, execution)
+                # 从此处起即使提交确认失败或执行前返回，也按这个不可变身份归还。
+                finish.push_async_callback(self._release_slot, execution)
                 try:
                     await db.commit()
                 except Exception:
@@ -1513,6 +1551,8 @@ class TaskEngine:
                                     Task.id == task_id, Task.statistics_key == statistics_key,
                                     Task.queued_at == expected_round, Task.execution_key == execution_key,
                                     Task.worker_key == worker_key, workers.registered_worker_exists(worker_key),
+                                    select(TaskExecutionSlot.execution_key)
+                                    .where(*execution_slots.same_slot(execution)).exists(),
                                 ))
                                 persisted = "running" if matches_running(execution, persisted_task) else None
                                 if persisted == "running" and queued_claim is not None:
@@ -1536,11 +1576,12 @@ class TaskEngine:
                                 return
                             await asyncio.sleep(0.1)
                     if persisted != "running":
+                        # 本轮领取未获证实。单个候选不能因完成通知反复占住最后一个名额。
+                        self._mark_stalled(task_id, statistics_key, expected_round)
                         return
                 # 外层runtime尚未释放，覆盖DB已提交但commit await尚未返回的窗口。
                 if self._lease_lost or not self.lease.valid or self.lease.worker_key != worker_key:
                     return
-                self._admitted[task_id] = (statistics_key, expected_round, candidate.user_id)
                 self._running_execution_keys[task_id] = execution_key
         finally:
             # 会话退出也可能await；取消保护须无缝延续到_run的收尾try。

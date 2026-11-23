@@ -5,11 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ConflictError
-from app.models import Project, User, UserQuota
+from app.models import Project, SystemSettings, TaskExecutionSlot, User, UserQuota
 from app.schemas.audit import QuotaAuditChange, RbacAuditChange
 from app.schemas.rbac import InheritedQuota, LimitedQuota, QuotaItem, UnlimitedQuota, UserQuotaOut, UserQuotaUpdate
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation
+from app.services.system_settings_snapshot import EffectiveSettings, effective_settings_from_row
 
 
 def config(row: UserQuota | None, metric: str):
@@ -25,7 +26,7 @@ def config(row: UserQuota | None, metric: str):
     raise authz.AuthorizationStorageError("用户配额状态无效，请联系管理员")
 
 
-def resolve(row: UserQuota | None, metric: str, settings: Settings) -> tuple[int | None, str]:
+def resolve(row: UserQuota | None, metric: str, settings: Settings | EffectiveSettings) -> tuple[int | None, str]:
     selected = config(row, metric)
     if selected.mode == "limited":
         return selected.value, "user"
@@ -51,23 +52,29 @@ async def check_project_creation(db: AsyncSession, user_id: int) -> None:
             })
 
 
-async def task_limits(db: AsyncSession, user_ids, settings: Settings) -> dict[int, int | None]:
+async def task_limits(db: AsyncSession, user_ids, settings: Settings | EffectiveSettings) -> dict[int, int | None]:
     ids = set(user_ids)
     rows = {row.user_id: row for row in await db.scalars(select(UserQuota).where(UserQuota.user_id.in_(ids)))}
     return {user_id: resolve(rows.get(user_id), "task_concurrency", settings)[0] for user_id in ids}
 
 
-async def get_quotas(db: AsyncSession, user_id: int, settings: Settings, engine) -> UserQuotaOut:
-    counts = select(func.count(Project.id)).where(Project.user_id == User.id).correlate(User).scalar_subquery()
+async def get_quotas(db: AsyncSession, user_id: int) -> UserQuotaOut:
+    project_used = select(func.count(Project.id)).where(Project.user_id == User.id).correlate(User).scalar_subquery()
+    task_used = select(func.count(TaskExecutionSlot.execution_key)).where(
+        TaskExecutionSlot.user_id == User.id,
+    ).correlate(User).scalar_subquery()
     rows = (await db.execute(
         authz.snapshot_statement(include_token_version=False).outerjoin(UserQuota, UserQuota.user_id == User.id)
-        .add_columns(UserQuota, counts.label("project_used")).where(User.id == user_id)
+        .outerjoin(SystemSettings, SystemSettings.id == 1)
+        .add_columns(UserQuota, SystemSettings, project_used.label("project_used"), task_used.label("task_used"))
+        .where(User.id == user_id)
     )).all()
     if not rows:
         from app.core.errors import NotFoundError
         raise NotFoundError("用户不存在")
     target = authz.snapshots_from_rows(rows)[user_id]
     row = rows[0]._mapping[UserQuota]
+    settings = effective_settings_from_row(db, rows[0]._mapping[SystemSettings])
     project_limit, project_source = resolve(row, "project_count", settings)
     task_limit, task_source = resolve(row, "task_concurrency", settings)
     return UserQuotaOut(
@@ -80,13 +87,13 @@ async def get_quotas(db: AsyncSession, user_id: int, settings: Settings, engine)
         ),
         task_concurrency=QuotaItem(
             config=config(row, "task_concurrency"), effective_limit=task_limit,
-            source=task_source, used=engine.admitted_count(user_id),
+            source=task_source, used=int(rows[0].task_used),
         ),
     )
 
 
 async def update_quotas(
-    db: AsyncSession, actor: User, user_id: int, request: UserQuotaUpdate, settings: Settings, engine,
+    db: AsyncSession, actor: User, user_id: int, request: UserQuotaUpdate, engine,
 ) -> UserQuotaOut:
     current = await authz.require(db, actor, "quotas.update", write=True, targets=(user_id,))
     async with AuditOperation(db, actor, "user.quotas.update", "user", user_id) as audit:
@@ -110,6 +117,9 @@ async def update_quotas(
             setattr(row, f"{prefix}_value", value.value if value.mode == "limited" else None)
             changes.append(QuotaAuditChange(metric=metric, before=before[metric], after=value))
         audit.summary.rbac_change = RbacAuditChange(quotas=changes)
+        # 用本次更新的版本构造回包。读取配置或占用失败时，配额变更和成功审计一起回滚。
+        await db.flush()
+        result = await get_quotas(db, user_id)
         await audit.commit()
         engine.notify()
-        return await get_quotas(db, user_id, settings, engine)
+        return result

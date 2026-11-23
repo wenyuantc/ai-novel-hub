@@ -9,6 +9,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -16,10 +17,10 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.core.errors import AppError, BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
 from app.models import McpPlugin
 from app.schemas.mcp import (
@@ -32,11 +33,15 @@ from app.schemas.mcp import (
     McpToolOut,
     McpToolPrefUpdate,
 )
+from app.services import authorization_service as authz
+from app.services.mcp import management
 from app.services.mcp.client import (
     CALL_TIMEOUT,
+    McpConnection,
     McpConnector,
     McpError,
     McpTarget,
+    _trusted_connector,
     check_tool_schema,
     guard_url,
     schema_hash,
@@ -45,13 +50,7 @@ from app.services.mcp.client import (
 
 MAX_PLUGINS = 10
 TRIAL_LIMIT = 20000
-DISABLED = "管理员已关闭 MCP"
 NOT_FOUND = "插件不存在"
-
-
-def ensure_enabled(settings: Settings) -> None:
-    if not settings.mcp_enabled:
-        raise ForbiddenError(DISABLED)
 
 
 def headers_of(cipher: SecretCipher, plugin: McpPlugin) -> dict[str, str]:
@@ -160,13 +159,22 @@ async def _commit(db: AsyncSession) -> None:
         raise ConflictError("插件标识已被使用，请换一个") from exc
 
 
-async def create_plugin(
-    db: AsyncSession, settings: Settings, cipher: SecretCipher, user_id: int, req: McpPluginCreate
-) -> McpPluginOut:
+async def _check_capacity(db: AsyncSession, user_id: int) -> None:
     count = await db.scalar(select(func.count(McpPlugin.id)).where(McpPlugin.user_id == user_id))
     if (count or 0) >= MAX_PLUGINS:
         raise BadRequestError(f"每个用户最多 {MAX_PLUGINS} 个插件")
+
+
+async def create_plugin(
+    db: AsyncSession, settings: Settings, cipher: SecretCipher, user_id: int, req: McpPluginCreate
+) -> McpPluginOut:
+    await _check_capacity(db, user_id)
+    await management.require_enabled(db)
+    await db.close()
     url = await check_url(req.url, allow_private=settings.allow_private_ai_endpoints)
+    # DNS 在事务外等待。真正写入前，重新核对账号、设置和并发创建可能改变的个数。
+    await management.require_write(db, user_id)
+    await _check_capacity(db, user_id)
     plugin = McpPlugin(
         user_id=user_id,
         slug=req.slug or slugify(req.name),
@@ -187,8 +195,19 @@ async def create_plugin(
 async def update_plugin(
     db: AsyncSession, settings: Settings, cipher: SecretCipher, user_id: int, plugin_id: int, req: McpPluginUpdate
 ) -> McpPluginOut:
-    plugin = await get_owned_plugin(db, user_id, plugin_id)
     data = req.model_dump(exclude_unset=True)
+    previous_target = None
+    if data.get("url") is not None:
+        # 只为自己可见的插件解析地址；等待 DNS 期间不能持有数据库门禁。
+        current = await get_owned_plugin(db, user_id, plugin_id)
+        previous_target = (current.url, current.transport, current.headers_encrypted)
+        await management.require_enabled(db)
+        await db.close()
+        data["url"] = await check_url(data["url"], allow_private=settings.allow_private_ai_endpoints)
+    await management.require_write(db, user_id)
+    plugin = await get_owned_plugin(db, user_id, plugin_id)
+    if previous_target is not None and previous_target != (plugin.url, plugin.transport, plugin.headers_encrypted):
+        raise ConflictError("插件连接配置已修改，请重新保存")
     if data.get("name") is not None:
         plugin.name = data["name"].strip()
     if data.get("slug") is not None:
@@ -196,7 +215,7 @@ async def update_plugin(
     if data.get("transport") is not None:
         plugin.transport = data["transport"]
     if data.get("url") is not None:
-        plugin.url = await check_url(data["url"], allow_private=settings.allow_private_ai_endpoints)
+        plugin.url = data["url"]
     if "headers" in data:
         headers = data["headers"]
         plugin.headers_encrypted = cipher.encrypt(json.dumps(headers, ensure_ascii=False)) if headers else None
@@ -208,6 +227,7 @@ async def update_plugin(
 
 
 async def delete_plugin(db: AsyncSession, user_id: int, plugin_id: int) -> None:
+    await management.require_write(db, user_id)
     plugin = await get_owned_plugin(db, user_id, plugin_id)
     await db.delete(plugin)
     await db.commit()
@@ -243,6 +263,7 @@ async def import_servers(
 ) -> McpImportResult:
     items: list[McpImportItem] = []
     for name, value in servers.items():
+        await management.require_enabled(db)
         try:
             if not isinstance(value, dict):
                 raise BadRequestError("配置应为对象")
@@ -252,7 +273,8 @@ async def import_servers(
                     name=str(name), status="created", plugin=await create_plugin(db, settings, cipher, user_id, req)
                 )
             )
-        except AppError as exc:
+        except (BadRequestError, ConflictError) as exc:
+            await db.rollback()
             items.append(McpImportItem(name=str(name), status="error", detail=exc.detail))
     return McpImportResult(items=items)
 
@@ -283,24 +305,29 @@ async def refresh_tools(
     settings: Settings,
     cipher: SecretCipher,
     connector: McpConnector,
+    maker: async_sessionmaker[AsyncSession],
     user_id: int,
     plugin_id: int,
 ) -> McpPluginOut:
     """测试连接并刷新工具列表（存库）；失败写入 last_error 并返回 400。"""
     plugin = await get_owned_plugin(db, user_id, plugin_id)
     target = target_of(cipher, plugin)
+    actor = db.info["authenticated_actor"]
+    await db.close()
     error = ""
     infos: list[Any] = []
     try:
-        async with asyncio.timeout(CALL_TIMEOUT * 2):
-            ensure_enabled(settings)
-            async with connector(target, allow_private=settings.allow_private_ai_endpoints) as conn:
-                ensure_enabled(settings)
-                infos = await conn.list_tools()
+        infos = await _with_connection(
+            connector, target, settings, maker, actor, lambda conn: conn.list_tools(),
+        )
     except McpError as exc:
         error = exc.detail
     except TimeoutError:
         error = "MCP 服务响应超时"
+    await management.require_write(db, user_id)
+    plugin = await get_owned_plugin(db, user_id, plugin_id)
+    if target_of(cipher, plugin) != target:
+        raise ConflictError("插件地址或请求头已修改，请重新刷新")
     now = datetime.now(UTC)
     plugin.last_tested_at = now
     if error:
@@ -319,6 +346,7 @@ async def refresh_tools(
 async def update_tool_pref(
     db: AsyncSession, cipher: SecretCipher, user_id: int, plugin_id: int, req: McpToolPrefUpdate
 ) -> McpPluginOut:
+    await management.require_write(db, user_id)
     plugin = await get_owned_plugin(db, user_id, plugin_id)
     tool_name = req.tool
     if find_tool(plugin, tool_name) is None:
@@ -335,18 +363,22 @@ async def update_tool_pref(
     return to_out(cipher, plugin)
 
 
-async def call_once(
-    connector: McpConnector, target: McpTarget, tool: str, arguments: dict[str, Any], *, settings: Settings
-) -> Any:
-    """单独连接、调用一次、关闭；超时与连接失败统一为 McpError。"""
-    try:
-        async with asyncio.timeout(CALL_TIMEOUT * 2):
-            ensure_enabled(settings)
-            async with connector(target, allow_private=settings.allow_private_ai_endpoints) as conn:
-                ensure_enabled(settings)
-                return await conn.call_tool(tool, arguments)
-    except TimeoutError as exc:
-        raise McpError(f"MCP 工具调用超时（{CALL_TIMEOUT:g} 秒）") from exc
+async def _with_connection[T](
+    connector: McpConnector, target: McpTarget, settings: Settings, maker: async_sessionmaker[AsyncSession],
+    actor: authz.AuthenticatedActor, operation: Callable[[McpConnection], Awaitable[T]],
+) -> T:
+    if not _trusted_connector(connector):
+        raise McpError("无法确认 MCP 连接的发送门禁")
+    gate = management.ManagementRequestGate(maker, actor, sse=target.transport == "sse")
+
+    async def execute():
+        await gate.check()
+        async with connector(target, allow_private=settings.allow_private_ai_endpoints, request_gate=gate) as conn:
+            await gate.check()
+            return await operation(conn)
+
+    async with asyncio.timeout(CALL_TIMEOUT * 2):
+        return await gate.run(execute)
 
 
 async def call_tool(
@@ -354,6 +386,7 @@ async def call_tool(
     settings: Settings,
     cipher: SecretCipher,
     connector: McpConnector,
+    maker: async_sessionmaker[AsyncSession],
     user_id: int,
     plugin_id: int,
     tool_name: str,
@@ -368,11 +401,14 @@ async def call_tool(
     if errors:
         raise BadRequestError("工具参数校验失败", extra={"errors": errors})
     target = target_of(cipher, plugin)
+    actor = db.info["authenticated_actor"]
     await db.close()
     try:
-        result = await call_once(
-            connector, target, tool_name, arguments, settings=settings
+        result = await _with_connection(
+            connector, target, settings, maker, actor, lambda conn: conn.call_tool(tool_name, arguments),
         )
+    except TimeoutError as exc:
+        raise BadRequestError(f"MCP 工具调用超时（{CALL_TIMEOUT:g} 秒）") from exc
     except McpError as exc:
         raise BadRequestError(exc.detail) from exc
     text = result.text

@@ -27,6 +27,7 @@ from uuid import uuid4
 from sqlalchemy import String, cast, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.core.errors import AppError, BadRequestError, ConflictError
 from app.core.security import SecretCipher
 from app.models import (
@@ -62,6 +63,7 @@ from app.services.ai_dispatch import VisibilityPolicyError
 from app.services.authorization_service import AuthenticatedActor
 from app.services.collaboration_task_access import owner_ai_allowed, task_requires_owner_ai
 from app.services.project_service import get_owned_project
+from app.services.system_settings_snapshot import settings_for_consumer
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
     advance_checkpoint,
@@ -174,8 +176,8 @@ async def open_batch(db: AsyncSession, project_id: int, *, exclude_id: int | Non
     return await db.scalar(stmt.limit(1))
 
 
-def analyze_enabled(settings: Any, project: Project) -> bool:
-    return bool(settings.auto_analyze_enabled and project.auto_analyze)
+async def analyze_enabled(db: AsyncSession, settings: Settings, project: Project) -> bool:
+    return bool(project.auto_analyze and (await settings_for_consumer(db, settings)).auto_analyze_enabled)
 
 
 # ---------------- 预览 ----------------
@@ -190,7 +192,7 @@ async def preview(
     project = await project_access.require_project(db, user_id, project_id, "ai.use")
     chapters, _, _ = await _range_chapters(db, project.id, req)
     plans = await plan_words(db, chapters)
-    analyze = analyze_enabled(settings, project)
+    analyze = await analyze_enabled(db, settings, project)
     items: list[BatchPreviewItem] = []
     skipped: list[BatchSkippedItem] = []
     for c in chapters:
@@ -1578,7 +1580,7 @@ async def _analyze_chapter(
     settings = ctx.settings
     async with ctx.sessionmaker() as db:
         project = await db.get(Project, job.project_id)
-        enabled = project is not None and analyze_enabled(settings, project)
+        enabled = project is not None and await analyze_enabled(db, settings, project)
     if not enabled:
         item["analysis"] = "skipped"
         return

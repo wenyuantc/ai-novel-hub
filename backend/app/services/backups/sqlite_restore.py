@@ -25,6 +25,8 @@ def _snapshot_revision(path: Path) -> str:
         has_lease = {"task_workers", "task_lease_store"} & tables
         if (int(revision) >= 66 and len(has_lease) != 2) or (int(revision) < 66 and has_lease):
             raise ValueError("快照的租约表与迁移版本不一致")
+        if (int(revision) >= 67) != ("task_execution_slots" in tables):
+            raise ValueError("快照的任务占用表与迁移版本不一致")
         return revision
 
 

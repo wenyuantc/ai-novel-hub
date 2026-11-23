@@ -70,7 +70,7 @@ class McpPlugin(TimestampMixin, Base):
     """远程 MCP 服务（Streamable HTTP / SSE）。请求头整体 JSON 序列化后 Fernet 加密，接口只回显请求头名称。"""
 
     __tablename__ = "mcp_plugins"
-    __table_args__ = (UniqueConstraint("user_id", "slug"),)
+    __table_args__ = (UniqueConstraint("user_id", "slug"), {"sqlite_autoincrement": True})
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)

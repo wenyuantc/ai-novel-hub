@@ -2,16 +2,17 @@
 
 import asyncio
 import os
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from alembic import command, op
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from app.models import TaskLeaseStore, TaskWorker
+from app.models import AgentConversation, McpPlugin, Project, TaskExecutionSlot, TaskLeaseStore, TaskWorker
 from app.services.task_engine.sqlite_lease_pair import SQLiteLeasePairError, open_pair
 from tests.test_setting_fields_migration import _config
 
@@ -166,3 +167,133 @@ async def test_0066_upgrade_downgrade_guards_and_roundtrip(migration_db, monkeyp
     await asyncio.to_thread(command.downgrade, cfg, "base")
     async with engine.connect() as db:
         assert await db.run_sync(lambda conn: set(inspect(conn).get_table_names())) == {"alembic_version"}
+
+
+def _check_slot_schema(db):
+    inspector = inspect(db)
+    table = TaskExecutionSlot.__table__
+    columns = {c["name"]: c for c in inspector.get_columns(table.name)}
+    assert columns.keys() == set(table.columns.keys()) == {
+        "execution_key", "worker_key", "task_id", "statistics_key", "queued_at", "user_id", "serial_key",
+    }
+    for column in table.columns:
+        assert columns[column.name]["nullable"] == column.nullable == (column.name == "serial_key")
+        assert columns[column.name]["type"].compile(db.dialect) == column.type.compile(db.dialect)
+    assert inspector.get_pk_constraint(table.name)["constrained_columns"] == ["execution_key"]
+    assert [c["column_names"] for c in inspector.get_unique_constraints(table.name)] == [["task_id"]]
+    indexes = {tuple(i["column_names"]) for i in inspector.get_indexes(table.name)
+               if not i.get("duplicates_constraint")}
+    assert indexes == {("worker_key",), ("user_id",), ("serial_key",)}
+    assert inspector.get_foreign_keys(table.name) == []
+
+
+def _check_plugin_constraints(db):
+    inspector = inspect(db)
+    table = McpPlugin.__tablename__
+    assert inspector.get_pk_constraint(table)["constrained_columns"] == ["id"]
+    assert [(item["name"], item["column_names"]) for item in inspector.get_unique_constraints(table)] == [
+        ("uq_mcp_plugins_user_id", ["user_id", "slug"]),
+    ]
+    assert [(item["name"], item["column_names"]) for item in inspector.get_indexes(table)
+            if not item.get("duplicates_constraint")] == [("ix_mcp_plugins_user_id", ["user_id"])]
+    owner, = inspector.get_foreign_keys(table)
+    assert (owner["constrained_columns"], owner["referred_table"], owner["options"]["ondelete"]) == (
+        ["user_id"], "users", "CASCADE",
+    )
+
+
+async def test_0067_preserves_legacy_task_and_guards_execution_slots(migration_db, monkeypatch):
+    cfg, engine = migration_db
+    await asyncio.to_thread(command.upgrade, cfg, "0066")
+    async with engine.begin() as db:
+        await db.execute(text("INSERT INTO users(id, username, password_hash) VALUES(1,'slot-test','x')"))
+        await db.execute(text("INSERT INTO tasks(id,user_id,kind,status,input) "
+                              "VALUES(1,1,'chapter.generate','running','{}')"))
+        plugins = McpPlugin.__table__
+        plugin_row = dict(user_id=1, slug="existing", name="旧插件", transport="sse", url="https://old.example/mcp",
+                          headers_encrypted="opaque-existing-ciphertext", enabled=False,
+                          tools=[{"name": "example", "input_schema": {"type": "object"}}],
+                          tool_prefs={"example": {"enabled": False}}, last_error="原错误",
+                          tools_refreshed_at=datetime(2025, 1, 1, tzinfo=UTC),
+                          last_tested_at=datetime(2025, 1, 2, tzinfo=UTC))
+        original_id = await db.scalar(plugins.insert().values(**plugin_row).returning(plugins.c.id))
+        await db.execute(Project.__table__.insert().values(id=1, user_id=1, title="旧作品"))
+        conversations = AgentConversation.__table__
+        await db.execute(conversations.insert().values(id=1, user_id=1, project_id=1, mcp_plugin_ids=[original_id]))
+        read_selection = select(conversations.c.mcp_plugin_ids).where(conversations.c.id == 1)
+        read_plugin = select(plugins).where(plugins.c.id == original_id)
+        original_plugin = (await db.execute(read_plugin)).mappings().one()
+        plugin_ddl = text("SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_plugins'")
+
+    create_table = op.create_table
+
+    def fail_after_create(*args, **kwargs):
+        create_table(*args, **kwargs)
+        raise RuntimeError("模拟名额表创建中断")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(op, "create_table", fail_after_create)
+        with pytest.raises(RuntimeError, match="模拟名额表创建中断"):
+            await asyncio.to_thread(command.upgrade, cfg, "0067")
+    async with engine.connect() as db:
+        assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0066"
+        assert not await db.run_sync(lambda conn: inspect(conn).has_table("task_execution_slots"))
+        assert (await db.execute(read_plugin)).mappings().one() == original_plugin
+        if engine.dialect.name == "sqlite":
+            assert "AUTOINCREMENT" not in await db.scalar(plugin_ddl)
+
+    await asyncio.to_thread(command.upgrade, cfg, "0067")
+    key, worker = str(uuid4()), str(uuid4())
+    async with engine.begin() as db:
+        await db.run_sync(_check_slot_schema)
+        await db.run_sync(_check_plugin_constraints)
+        assert (await db.execute(read_plugin)).mappings().one() == original_plugin
+        inserted = plugins.insert().values(**{**plugin_row, "slug": "temporary"}).returning(plugins.c.id)
+        first_id = await db.scalar(inserted)
+        assert await db.scalar(read_selection) == [original_id]
+        await db.execute(plugins.delete().where(plugins.c.id == first_id))
+        assert await db.scalar(inserted) > first_id
+        if engine.dialect.name == "sqlite":
+            assert "AUTOINCREMENT" in await db.scalar(plugin_ddl)
+        assert await db.scalar(text("SELECT count(*) FROM task_execution_slots")) == 0
+        assert (await db.execute(text("SELECT status,worker_key FROM tasks WHERE id=1"))).one() == ("running", None)
+        await db.execute(text("INSERT INTO task_execution_slots(execution_key,worker_key,task_id,statistics_key,"
+                              "queued_at,user_id) VALUES(:key,:worker,1,:identity,CURRENT_TIMESTAMP,1)"),
+                         {"key": key, "worker": worker, "identity": str(uuid4())})
+    for existing_worker in (False, True):
+        if existing_worker:
+            async with engine.begin() as db:
+                await db.execute(text("INSERT INTO task_workers(worker_key,hostname,pid) VALUES(:w,'active',1)"),
+                                 {"w": worker})
+        with pytest.raises(RuntimeError, match="拒绝降级"):
+            await asyncio.to_thread(command.downgrade, cfg, "0066")
+        async with engine.connect() as db:
+            assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0067"
+            assert await db.scalar(text("SELECT execution_key FROM task_execution_slots")) == key
+
+    async with engine.begin() as db:
+        await db.execute(text("UPDATE task_workers SET stopped_at=CURRENT_TIMESTAMP WHERE worker_key=:w"),
+                         {"w": worker})
+    await asyncio.to_thread(command.downgrade, cfg, "0066")
+    async with engine.connect() as db:
+        assert not await db.run_sync(lambda conn: inspect(conn).has_table("task_execution_slots"))
+        assert await db.scalar(text("SELECT status FROM tasks WHERE id=1")) == "running"
+        await db.run_sync(_check_plugin_constraints)
+        assert (await db.execute(read_plugin)).mappings().one() == original_plugin
+        assert await db.scalar(read_selection) == [original_id]
+        if engine.dialect.name == "sqlite":
+            assert "AUTOINCREMENT" not in await db.scalar(plugin_ddl)
+    await asyncio.to_thread(command.upgrade, cfg, "0067")
+    async with engine.connect() as db:
+        assert await db.scalar(text("SELECT count(*) FROM task_execution_slots")) == 0
+    if engine.dialect.name == "sqlite":
+        async with async_sqlalchemy.AsyncSession(engine) as db:
+            pair = await open_pair(db)
+        try:
+            with pytest.raises(SQLiteLeasePairError, match="仍持有"):
+                await asyncio.to_thread(command.downgrade, cfg, "0065")
+        finally:
+            pair.close()
+        async with engine.connect() as db:
+            assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0067"
+    await asyncio.to_thread(command.downgrade, cfg, "0065")

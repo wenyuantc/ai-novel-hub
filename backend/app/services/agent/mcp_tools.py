@@ -38,6 +38,7 @@ from app.services.mcp import client as mcp_client
 from app.services.mcp import service as mcp_service
 from app.services.mcp import settings_gate
 from app.services.mcp.client import McpError, McpResult
+from app.services.system_settings_snapshot import effective_settings
 from app.services.task_engine.execution_identity import TaskExecutionIdentity, matches_running, require_live_worker
 
 MAX_TURN_TOOLS = 30
@@ -306,7 +307,7 @@ async def turn_plugins(db: AsyncSession, user_id: int, plugin_ids: list[int] | N
 async def build_tool_map(
     db: AsyncSession, settings: Settings, user_id: int, conversation: AgentConversation
 ) -> dict[str, dict[str, Any]]:
-    if not settings.mcp_enabled:
+    if not conversation.mcp_plugin_ids or not (await effective_settings(db)).mcp_enabled:
         return {}
     result: dict[str, dict[str, Any]] = {}
     for plugin in await turn_plugins(db, user_id, conversation.mcp_plugin_ids):
@@ -397,7 +398,7 @@ async def tool_specs(
     provider: str,
 ) -> list[ToolSpec]:
     specs: list[ToolSpec] = []
-    if not settings.mcp_enabled:
+    if not tool_map or not (await effective_settings(db)).mcp_enabled:
         return specs
     for name in tool_map:
         resolved = await resolve(db, settings, user_id, conversation_id, tool_map, name)
@@ -452,19 +453,22 @@ class _Worker:
     """在独立任务中持有一个 MCP 连接，串行处理调用。"""
 
     def __init__(self, connector: Any, target: Any, allow_private: bool, settings: Settings,
-                 cipher: SecretCipher | None = None):
+                 cipher: SecretCipher | None = None, *, identity: McpSendIdentity | None):
         self._settings = settings
         self._target = target
         self._cipher = cipher
         self._gate = mcp_client.McpRequestGate()
         self._queue: asyncio.Queue = asyncio.Queue()
         self._error: McpError | VisibilityPolicyError | None = None
-        self._task = asyncio.create_task(self._main(connector, target, allow_private))
+        self._task = asyncio.create_task(self._main(connector, target, allow_private, identity))
 
-    async def _main(self, connector: Any, target: Any, allow_private: bool) -> None:
+    async def _main(self, connector: Any, target: Any, allow_private: bool, identity: McpSendIdentity | None) -> None:
         try:
-            if not mcp_client._trusted_connector(connector):
+            if not mcp_client._trusted_connector(connector) or type(identity) is not McpSendIdentity:
                 raise ai_dispatch.SendLeaseError()
+            # 握手前核验，此短事务在打开连接前结束，真正的工具 POST 仍须完整发送租约。
+            async with identity.sessionmaker() as db:
+                await settings_gate.require_agent_enabled(db)
             async with connector(target, allow_private=allow_private, request_gate=self._gate) as conn:
                 while True:
                     item = await self._queue.get()
@@ -585,7 +589,7 @@ class McpSessions:
         if worker is None:
             target = mcp_service.target_of(self._cipher, plugin)
             worker = self._workers[plugin.id] = _Worker(
-                self._connector, target, self._allow_private, self._settings, self._cipher,
+                self._connector, target, self._allow_private, self._settings, self._cipher, identity=identity,
             )
         return await worker.call(tool, arguments, send_state, identity=identity, resolved=resolved)
 

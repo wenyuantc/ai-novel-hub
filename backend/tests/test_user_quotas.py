@@ -1,13 +1,16 @@
 """用户配额：四作品入口、严格配置及真正任务准入，不以DB running冒充占用。"""
 
 import asyncio
+from datetime import UTC, datetime
+from uuid import uuid4
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
-from app.models import Project
+from app.models import AdminAuditLog, Project, SystemSettings, TaskExecutionSlot, UserQuota
 from tests.helpers import Gate, create_ai_config, create_project, register, task_params, wait_task
-from tests.rbac_helpers import set_quota
+from tests.rbac_helpers import assign_roles, create_role, set_quota, task_quota_used
 from tests.test_book_import import _start, upload
 from tests.test_system_settings import save_settings
 
@@ -109,6 +112,57 @@ async def test_super_admin_still_obeys_project_quota(system_admin):
     assert response.status_code == 409 and response.json()["code"] == "quota_exceeded"
 
 
+async def test_quota_counts_frozen_actor_slots_once_after_task_pruning(
+    app, second_app, client, make_client, system_admin,
+):
+    user = await register(client)
+    other = await register(make_client(), "other-quota-owner")
+    roles = [await create_role(system_admin, name, []) for name in ("角色甲", "角色乙")]
+    await assign_roles(system_admin, user["id"], [role["id"] for role in roles])
+    # 在任务行已被裁剪、原执行体仍收尾时，任务当前用户与状态均无法再用于计数。
+    async with app.state.sessionmaker() as db:
+        for task_id, actor in enumerate([user, other], 100):
+            db.add(TaskExecutionSlot(
+                execution_key=str(uuid4()), statistics_key=str(uuid4()), task_id=task_id, user_id=actor["id"],
+                queued_at=datetime.now(UTC), worker_key=app.state.task_engine.lease.worker_key, serial_key=None,
+            ))
+        await db.commit()
+    await save_settings(system_admin, task_max_per_user=3, task_max_concurrency=5)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=second_app),
+                                 base_url="http://testserver", cookies=system_admin.cookies) as peer_admin:
+        for reader in (system_admin, peer_admin):
+            for actor in (user, other):
+                response = await reader.get(f"/api/v1/admin/users/{actor['id']}/quotas")
+                assert response.status_code == 200, response.text
+                quota = response.json()
+                assert quota["global_task_limit"] == 5
+                assert quota["task_concurrency"] == {
+                    "source": "system", "config": {"mode": "inherit"}, "effective_limit": 3, "used": 1,
+                }
+
+
+async def test_quota_update_rolls_back_if_its_settings_snapshot_is_invalid(app, client, system_admin):
+    user = await register(client)
+    path = f"/api/v1/admin/users/{user['id']}/quotas"
+    initial = (await system_admin.get(path)).json()
+    await save_settings(system_admin, task_max_per_user=3)
+    async with app.state.sessionmaker() as db:
+        row = await db.get(SystemSettings, 1)
+        row.overrides = {"task_max_per_user": "invalid"}
+        await db.commit()
+    response = await system_admin.patch(path, json={
+        "revision": initial["revision"], "authorization_revision": initial["authorization_revision"],
+        "changes": {"task_concurrency": {"mode": "limited", "value": 1}},
+    })
+    assert response.status_code == 503, response.text
+    async with app.state.sessionmaker() as db:
+        assert await db.get(UserQuota, user["id"]) is None
+        outcomes = await db.scalars(select(AdminAuditLog.result).where(
+            AdminAuditLog.action == "user.quotas.update", AdminAuditLog.target_id == user["id"],
+        ))
+        assert list(outcomes) == ["failure"]
+
+
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
 async def test_task_zero_queues_then_raise_runs_and_lower_does_not_kill(
     app, client, system_admin, fake_llm, monkeypatch,
@@ -143,14 +197,14 @@ async def test_task_zero_queues_then_raise_runs_and_lower_does_not_kill(
         dispatched.clear()
         engine.notify()
         await asyncio.wait_for(dispatched.wait(), 5)
-        assert engine.admitted_count(user["id"]) == 0 and not fake_llm.calls
+        assert await task_quota_used(system_admin, user["id"]) == 0 and not fake_llm.calls
         for task in tasks:
             status = await client.get(f"/api/v1/tasks/{task['id']}", params=task_params(task))
             assert status.json()["status"] == "queued"
         await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 2}})
         await gates[0].wait_reached()
         await gates[1].wait_reached()
-        assert engine.admitted_count(user["id"]) == 2
+        assert await task_quota_used(system_admin, user["id"]) == 2
         current = await set_quota(system_admin, user["id"], {"task_concurrency": {"mode": "limited", "value": 0}})
         assert current["task_concurrency"]["used"] == 2 and fake_llm.aborted == 0
     finally:
@@ -161,7 +215,7 @@ async def test_task_zero_queues_then_raise_runs_and_lower_does_not_kill(
 
 
 @pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": False}])
-async def test_unlimited_task_quota_still_respects_global_cap(app, client, system_admin, fake_llm):
+async def test_unlimited_task_quota_still_respects_global_cap(client, system_admin, fake_llm):
     user = await register(client)
     project = await create_project(client)
     await create_ai_config(client)
@@ -178,11 +232,11 @@ async def test_unlimited_task_quota_still_respects_global_cap(app, client, syste
             )).json()
             tasks.append((await client.post(f"/api/v1/chapters/{chapter['id']}/generate", json={})).json())
         await gates[0].wait_reached()
-        assert app.state.task_engine.admitted_count(user["id"]) == 1
+        assert await task_quota_used(system_admin, user["id"]) == 1
         assert len(fake_llm.calls) == 1
         gates[0].release()
         await gates[1].wait_reached()
-        assert app.state.task_engine.admitted_count(user["id"]) == 1
+        assert await task_quota_used(system_admin, user["id"]) == 1
     finally:
         for gate in gates:
             gate.release()
@@ -225,7 +279,7 @@ async def test_explicit_task_limit_replaces_default_and_inherit_uses_latest_defa
             tasks.append(response.json())
         await gates[0].wait_reached()
         await gates[1].wait_reached()
-        assert engine.admitted_count(user["id"]) == 2 and len(fake_llm.calls) == 2
+        assert await task_quota_used(system_admin, user["id"]) == 2 and len(fake_llm.calls) == 2
         await save_settings(system_admin, task_max_per_user=3)
         dispatched.clear()
         engine.notify()
@@ -236,7 +290,7 @@ async def test_explicit_task_limit_replaces_default_and_inherit_uses_latest_defa
         assert quota["task_concurrency"]["source"] == "system"
         await gates[2].wait_reached()
         await save_settings(system_admin, task_max_per_user=1)
-        assert engine.admitted_count(user["id"]) == 3 and fake_llm.aborted == 0
+        assert await task_quota_used(system_admin, user["id"]) == 3 and fake_llm.aborted == 0
     finally:
         for gate in gates:
             gate.release()

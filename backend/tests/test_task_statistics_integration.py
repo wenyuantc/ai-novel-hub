@@ -76,6 +76,7 @@ async def test_enqueue_pending_statistics_roll_back_without_own_commit(app, clie
         )) == 1
 
 
+@pytest.mark.parametrize("settings_overrides", [{"auto_analyze_enabled": True, "task_max_per_user": 1}])
 async def test_direct_auto_analysis_and_memory_enqueue_record_new_tasks(app, client, fake_llm, monkeypatch):
     owner = await register(client, "enqueue_owner")
     await create_ai_config(client)
@@ -84,8 +85,6 @@ async def test_direct_auto_analysis_and_memory_enqueue_record_new_tasks(app, cli
     chapter = await client.post(f"/api/v1/projects/{pid}/chapters", json={"content": "章节内容"})
     assert chapter.status_code == 201, chapter.text
     cid = chapter.json()["id"]
-    app.state.settings.auto_analyze_enabled = True
-    app.state.settings.task_max_per_user = 1
     original_enqueue = analysis_service.enqueue_auto
     captured: asyncio.Queue = asyncio.Queue()
     release = asyncio.Event()

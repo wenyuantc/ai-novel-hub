@@ -231,6 +231,11 @@ def _bootstrap(main: sqlite3.Connection, base: Path, *, cold: bool = False) -> N
         if cold:
             main.execute("UPDATE task_workers SET fenced_at=CURRENT_TIMESTAMP "
                          "WHERE stopped_at IS NULL AND fenced_at IS NULL")
+            has_slots = main.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_execution_slots'")
+            if has_slots.fetchone():
+                main.execute("DELETE FROM task_execution_slots WHERE worker_key IN "
+                             "(SELECT worker_key FROM task_workers "
+                             "WHERE stopped_at IS NOT NULL OR fenced_at IS NOT NULL)")
         established = _anchor(guard)
         generation = previous.generation if previous and not cold else str(uuid4())
         if previous is None and _side(base).exists():

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from app.core.config import Settings
 from app.core.deps import CurrentUser, DbDep, SettingsDep
@@ -6,6 +6,7 @@ from app.core.security import ACCESS_TOKEN_COOKIE, create_access_token
 from app.models import User
 from app.schemas.auth import AuthConfigOut, ChangePasswordRequest, Credentials, UserOut
 from app.services import auth_service, authorization_service
+from app.services.system_settings_snapshot import SettingsUnavailable, effective_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -24,14 +25,18 @@ def _set_auth_cookie(response: Response, user: User, settings: Settings) -> None
 
 
 @router.get("/config", response_model=AuthConfigOut)
-async def auth_config(settings: SettingsDep, response: Response) -> AuthConfigOut:
+async def auth_config(db: DbDep, response: Response) -> AuthConfigOut:
     response.headers["Cache-Control"] = "no-store"
+    try:
+        settings = await effective_settings(db)
+    except SettingsUnavailable as exc:
+        raise HTTPException(exc.status_code, exc.detail, headers={"Cache-Control": "no-store"}) from None
     return AuthConfigOut(registration_enabled=settings.registration_enabled, mcp_enabled=settings.mcp_enabled)
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def register(body: Credentials, response: Response, db: DbDep, settings: SettingsDep) -> User:
-    user = await auth_service.register(db, body, registration_enabled=settings.registration_enabled)
+    user = await auth_service.register(db, body)
     output = await _user_out(db, user)
     _set_auth_cookie(response, user, settings)
     return output

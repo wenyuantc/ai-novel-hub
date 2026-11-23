@@ -312,7 +312,7 @@ class AdminCancellationDrain:
                         return
                 if (task.kind in _CHAPTER_KINDS | {"chapter.analyze", "chapter.batch"} and task.status == "running"
                         and (task.id in engine._claiming or task.id in engine._finalizing
-                             or task.id in engine._admitted)):
+                             or task.id in engine._running_execution_keys)):
                     # 登记与退出的窗口不能只凭 _running 映射缺失推断执行体已经停止。
                     return
                 winner = self.winners.get(task_key)

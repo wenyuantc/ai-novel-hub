@@ -12,6 +12,8 @@ from app.core.errors import AppError, BadRequestError, ConflictError, ForbiddenE
 from app.core.security import hash_password, verify_password
 from app.models import User
 from app.schemas.auth import ChangePasswordRequest, Credentials
+from app.services import authorization_service as authz
+from app.services.system_settings_snapshot import effective_settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +28,14 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-async def create_user_uncommitted(db: AsyncSession, creds: Credentials, *, is_admin: bool = False) -> User:
+async def create_user_uncommitted(db: AsyncSession, creds: Credentials, *, is_admin: bool = False,
+                                  password_hash: str | None = None) -> User:
     """共用的不提交原语：重名检查、bcrypt、flush 唯一约束兜底。"""
     exists = await db.scalar(select(User.id).where(User.username == creds.username))
     if exists is not None:
         raise ConflictError("用户名已存在")
-    password_hash = await to_thread.run_sync(hash_password, creds.password)
+    if password_hash is None:
+        password_hash = await to_thread.run_sync(hash_password, creds.password)
     created_at = _now_utc()
     user = User(
         username=creds.username, password_hash=password_hash, is_admin=is_admin, is_active=True,
@@ -54,11 +58,20 @@ async def create_user(db: AsyncSession, creds: Credentials, *, is_admin: bool = 
     return user
 
 
-async def register(db: AsyncSession, creds: Credentials, *, registration_enabled: bool) -> User:
-    if not registration_enabled:
+async def _require_registration(db: AsyncSession) -> None:
+    if not (await effective_settings(db)).registration_enabled:
         raise ForbiddenError("注册已关闭，请联系管理员")
+
+
+async def register(db: AsyncSession, creds: Credentials) -> User:
     try:
-        user = await create_user_uncommitted(db, creds)
+        # 已关闭时不花费 bcrypt，计算密码时不持数据库事务。实际写入和关闭操作共用授权门。
+        await _require_registration(db)
+        await db.rollback()
+        password_hash = await to_thread.run_sync(hash_password, creds.password)
+        await authz.gate(db)
+        await _require_registration(db)
+        user = await create_user_uncommitted(db, creds, password_hash=password_hash)
         return await _record_successful_login(db, user)
     except AppError:
         raise
@@ -143,7 +156,6 @@ async def change_password(db: AsyncSession, user: User, data: ChangePasswordRequ
 async def bootstrap_admin(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings) -> None:
     """显式部署引导：启用超管而不覆盖密码，真实变更写窄内部系统审计。"""
     from app.schemas.audit import RbacAuditChange
-    from app.services import authorization_service as authz
     from app.services.audit_writer import AuditOperation
 
     creds = settings.admin_credentials

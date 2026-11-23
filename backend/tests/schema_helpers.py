@@ -1,6 +1,14 @@
 """测试建库入口，避免数据库方言的DDL状态影响后续隔离库。"""
 
+import os
+from contextlib import asynccontextmanager
+from uuid import uuid4
+
+import pytest
 from sqlalchemy import DDL, CheckConstraint, MetaData, create_engine, event, inspect, select
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.models import Base
 from app.models.entities import _seed_preset_styles, _seed_relationship_types
@@ -87,3 +95,36 @@ def assert_sqlite_chapter_plan_fk_intact():
                        .where(chapter.c.id == chapter_id)).one()) == (None, "保留正文")
     finally:
         engine.dispose()
+
+
+@asynccontextmanager
+async def isolated_worker_database(monkeypatch, *, required=False):
+    """共享隔离库的两个应用，在 SQLite 或本机专用 PostgreSQL schema 验收。"""
+    raw = os.getenv("AINOVEL_POSTGRES_TEST_URL")
+    if not raw:
+        if required:
+            pytest.skip("缺少隔离 PostgreSQL 测试库 AINOVEL_POSTGRES_TEST_URL")
+        yield {}
+        return
+    url = make_url(raw)
+    if (url.drivername != "postgresql+asyncpg" or url.host not in {"127.0.0.1", "localhost", "::1"}
+            or url.database != "ainovel_test" or url.query):
+        raise ValueError("AINOVEL_POSTGRES_TEST_URL 必须指向本机专用 ainovel_test 测试库")
+    schema = f"worker_lease_{uuid4().hex}"
+    admin = create_async_engine(url)
+    try:
+        async with admin.begin() as conn:
+            await conn.execute(CreateSchema(schema))
+        try:
+            def make_scoped_engine(database_url):
+                assert make_url(database_url) == url
+                return create_async_engine(url, connect_args={"server_settings": {"search_path": schema}})
+
+            monkeypatch.setattr("app.main.create_engine", make_scoped_engine)
+            monkeypatch.setattr(Base.metadata, "create_all", create_isolated_schema)
+            yield {"database_url": raw}
+        finally:
+            async with admin.begin() as conn:
+                await conn.execute(DropSchema(schema, cascade=True))
+    finally:
+        await admin.dispose()

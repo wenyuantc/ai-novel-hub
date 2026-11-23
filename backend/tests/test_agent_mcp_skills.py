@@ -330,9 +330,12 @@ async def test_mcp_result_untrusted_and_truncated(client, fake_llm, fake_mcp):
 
 
 @pytest.mark.parametrize("settings_overrides", [{"mcp_enabled": True}])
-async def test_admin_switch_hides_tools_at_runtime(client, fake_llm, fake_mcp, app):
+async def test_admin_switch_hides_tools_at_runtime(client, fake_llm, fake_mcp, app, system_admin):
+    from tests.test_system_settings import save_settings
+
     _, _, url, _ = await setup(client, fake_mcp)
-    app.state.settings.mcp_enabled = False
+    await save_settings(system_admin, mcp_enabled=False)
+    app.state.settings.mcp_enabled = True  # 即使本进程陈旧，映射与工具清单都按库内开关。
     fake_llm.push_tools([call("mcp__dict__send", {"to": "x"})])
     fake_llm.push_tools([("text", {"text": "好"})])
     assert (await wait_task(client, await send_task(client, url)))["status"] == "succeeded"

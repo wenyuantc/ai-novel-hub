@@ -358,7 +358,8 @@ async def test_admin_waits_for_original_running_executor_to_stop(app, client):
             assert chapter.generation_claim_key == running.claim_key
         release.set()
         await work
-        # 即使内存映射暂时没有活 coroutine，领取、完成或准入登记尚存时也不能猜它已退出。
+        engine._running_execution_keys.pop(task_id)
+        # 分别保留一个游标：领取、收尾或原执行身份独立存在时，都不能开始排空。
         for registry in (engine._claiming, engine._finalizing):
             registry.add(task_id)
             await engine.scan_admin_cancellations()
@@ -366,12 +367,12 @@ async def test_admin_waits_for_original_running_executor_to_stop(app, client):
             async with app.state.sessionmaker() as db:
                 assert (await db.get(Task, task_id)).admin_cancel_operation_id == operation
             registry.discard(task_id)
-        engine._admitted[task_id] = (task_key, running.queued_at, running.actor_id)
+        engine._running_execution_keys[task_id] = running.execution_key
         await engine.scan_admin_cancellations()
         await engine.wait_admin_cancellations()
         async with app.state.sessionmaker() as db:
             assert (await db.get(Task, task_id)).admin_cancel_operation_id == operation
-        engine._admitted.pop(task_id)
+        engine._running_execution_keys.pop(task_id)
         await engine.scan_admin_cancellations()
         await engine.wait_admin_cancellations()
         async with app.state.sessionmaker() as db:
@@ -388,7 +389,6 @@ async def test_admin_waits_for_original_running_executor_to_stop(app, client):
         engine._running_execution_keys.pop(task_id, None)
         engine._claiming.discard(task_id)
         engine._finalizing.discard(task_id)
-        engine._admitted.pop(task_id, None)
 
 
 async def test_unproven_legacy_analysis_does_not_retry_arbitrary_chapter_abort(app, client, monkeypatch):
