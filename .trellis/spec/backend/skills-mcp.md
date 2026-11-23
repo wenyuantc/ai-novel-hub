@@ -530,7 +530,7 @@ async def recover_external(db, *, task_id: int | None = None, stale_only: bool =
   用 UPDATE 把旧任务的提案移到新任务，会刷新 `updated_at`，用它会把早已中断的调用误当成刚开始。`executed_at` 为空的旧数据才回落到 `updated_at`；
   SQLite 读出 naive 时间，按 UTC 处理。时限 2 分钟 ≈ 调用上限 45 秒（30 + 15）+ 关闭连接 5 秒，留足余量，避免误伤正在进行的确认。
 - **触发点**：
-  - 进程启动：`TaskEngine.recover()` 末尾 `stale_only=False`，不看时限、不限任务（单进程部署，启动时不可能有进行中的确认请求）；
+  - 引擎启动及后续定时恢复使用 `recover_external(db, stale_only=True, engine=self)`。未满 2 分钟的 executing 调用保留；过期且符合身份与本地在途检查的调用只登记失败，不重新调用外部服务；
   - `decide_change`：取会话锁后、读取提案前，按该提案的轮次处理过期项；
   - `maybe_resume`：确认 / 拒绝 / 整轮确认之后判断能否续跑前；
   - runner `_process_calls` 开头（续跑与重试），按本轮任务处理过期项。

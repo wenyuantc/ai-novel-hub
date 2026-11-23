@@ -82,6 +82,9 @@ backend/
 │   │   ├── entity_ai_service.py   # character.generate / organization.generate / relations.parse（只产出草稿）
 │   │   └── task_engine/           # 统一持久化后台任务引擎（单进程，数据库即队列）
 │   │       ├── engine.py          # TaskEngine：start/stop/recover、调度循环、_run/_finalize、取消、订阅
+│   │       ├── workers.py         # 执行者登记、存活核验、孤立判定与条件认领
+│   │       ├── sqlite_worker_leases.py # SQLite 独立文件中的短事务续约、停止和围栏
+│   │       ├── sqlite_lease_pair.py   # 主库、租约库、生命周期锁的配对与冷恢复核验
 │   │       ├── hub.py             # TaskHub：已输出文本缓冲 + 订阅者队列（快照与注册同一同步临界区）
 │   │       ├── registry.py        # TaskHandler 协议、TaskContext、TaskSpec、register/get_handler
 │   │       └── handlers/          # 导入即注册：chapter.py（chapter.*）、wizard.py（wizard.*）、entities.py（三个设定 kind）

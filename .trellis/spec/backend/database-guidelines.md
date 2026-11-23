@@ -541,7 +541,8 @@ class Task(TimestampMixin, Base):   # tasks
     user_id, project_id?, chapter_id?, kind String(32), title String(200), resource_key String(100)?,
     serial_key String(100)?（索引 ix_tasks_serial_key）,
     status String(16), input JSON, result JSON?, output_text Text, progress int, stage String(100),
-    error Text, step_cursor int, checkpoint JSON?, retry_of_id?, started_at?, finished_at?
+    error Text, step_cursor int, checkpoint JSON?, retry_of_id?, started_at?, finished_at?,
+    worker_key String(36)?, recovered_at DateTime(tz)?
     # 索引：ix_tasks_status_id (status, id)、ix_tasks_user_id_id (user_id, id)，
     # uq_tasks_active_resource：resource_key 上的部分唯一索引
     #   WHERE status IN ('queued', 'running') AND resource_key IS NOT NULL（postgresql_where + sqlite_where 同时写）
@@ -549,9 +550,9 @@ class Task(TimestampMixin, Base):   # tasks
 
 ### 3. 契约
 
-- **单进程前提**：调度协程与 hub 都在进程内；`start()` 时把库里所有 `running` 任务视为上次进程遗留并置为
-  `interrupted`。部署必须是单进程（`Dockerfile` 中 `uvicorn` 不带 `--workers`）。改为多实例前须把领取改成
-  `SELECT ... FOR UPDATE SKIP LOCKED` 并引入心跳 / 租约，否则一个实例重启会把其他实例的运行中任务误判为中断。
+- 部署继续使用单个应用进程。0066 提供执行归属和恢复所需的租约，并发名额、串行调度、即时订阅和完整取消流程仍依赖进程内状态。
+- `task_workers` 以每次启动生成的 `worker_key` 为主键。登记、续约、停止与失联的时间均由数据库写入。PostgreSQL 在此表续约，SQLite 只在配对的 `<主库>.leases.sqlite3` 的 `worker_leases` 表续约；SQLite 主表的 `heartbeat_at` 是登记时刻。每 5 秒续约，租约 30 秒，执行者在距上次确认的心跳请求发起满 25 秒时自停；本地判断使用单调时钟。已停止或已围栏超过 7 天的登记，且无运行中任务引用时，可在启动登记时删除。
+- `0066` 降级须先取锁。存在未停止且未围栏的登记，或存在带归属的 running 任务，就拒绝降级。升级前的 running 行两列均为 NULL，按最早的业务凭据恢复。
 - **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`；`outline.continue` 为 `outline:{project_id}`、`outline.expand` 为 `expand:{outline_id}`；`kb.index` 文档模式为 `kbdoc:{document_id}`、重建为 `kbrebuild:{project_id}`、记忆模式为空，`serial_key = index:{project_id}`；`agent.turn` 为 `agent:{conversation_id}`，同会话待审核（paused）的轮次由服务层 `active_turn` 检查 → 409）。插入撞索引 →
   回滚 → 409。章节类还会先原子抢占 `chapters.status='generating'`（与插入同一事务，失败时一起回滚）。
   新任务类型若不需要互斥，`resource_key` 置空即可（`NULL` 不参与唯一约束）。`chapter.revise` 与生成 / 润色共用 `chapter:{id}`（互斥）。
@@ -560,8 +561,9 @@ class Task(TimestampMixin, Base):   # tasks
   与全局 / 每用户上限同时生效，不同键之间并行。`chapter.analyze` 使用 `analysis:{project_id}`（同项目串行，保证回写顺序与入队顺序一致）。
 - **成功回调**（可选 `handler.on_success(ctx, task)`，引擎 `getattr` 探测）：在 succeeded 写库之后、广播 `done` 之前调用，异常只记日志、
   不影响任务状态；失败 / 取消 / 中断不调用。它若新建任务（如自动分析）直接插入 queued 行即可，当前任务结束时引擎的完成回调会唤醒调度器。
-- **领取**：条件 `UPDATE ... SET status='running' WHERE id=? AND status='queued'`，影响行数为 1 才执行；
-  排队取消同样用 `WHERE status='queued'` 守卫，二者竞争时只有一方成功。
+- 领取在同一条件更新中写入 running、本轮执行键、已登记的执行者键并清空 `recovered_at`。接管仅替换执行者键，以保留业务收据对执行键的绑定。业务写事务先核对原轮次和 Task 归属，再核验执行者登记。PostgreSQL 的业务事务与普通心跳使用相容行锁，停止或围栏与在途写入互斥。 引擎在主库事务实际提交前检查原执行者身份及其本地安全期限；失效则整笔回滚。已经交给驱动的一次提交按主库锁排序。包括裁剪作者历史任务在内的后续事务，须重新核验来源任务和租约。
+- 启动与周期扫描均通过 `workers.prepare_orphan_scan(db, seconds)` 取得孤立任务条件。SQLite 先在租约库确认停止或失联，再在主库同步该决定。主库时间戳陈旧或侧库缺少某一身份，均不能证明持有归属的任务可接管。升级前没有归属的 running 任务可立即认领。随后以任务轮次、旧归属和执行键条件认领。认领者存活时，在下个周期重试临时存储错误；归属改变后，旧执行者和旧接管者都必须退出。待核对时原子写入 `recovered_at` 并清空归属，任何进程读到同一标记。
+- SQLite 主库的 `task_lease_store` 记录主库、租约文件、生命周期锁文件 `<主库>.leases.lock` 的物理身份和配对代次。活跃引擎持有锁文件上的 SQLite 共享读事务。每次核验和续约只在租约文件打开短事务，等模型响应头的主库事务可继续维持出站授权。主库写锁超时后，后台扫描回滚并在后续周期继续传播已确立的停止或失联决定。SQLite 保持 5 秒忙等待，正式双进程 32 条任务、真实 SDK 32 秒慢响应及持锁中强杀执行者均有回归。文件迁移、替换或从原生备份冷恢复需按 README「SQLite 文件恢复」建立新配对。
 - `input` 必须可 JSON 序列化，且含原始请求 `request`（重试时原样重新走 `validate_and_claim`）；章节类另存
   `chapter_id`、`prev_status`、`ai_config_id`、`source_words`。运行时按 `request.ai_config_id` 重新解析配置
   （未指定 = 运行时的默认配置）。
@@ -580,6 +582,8 @@ class Task(TimestampMixin, Base):   # tasks
 `tests/test_migrations.py::test_0006_tasks`；`tests/test_tasks.py`（见 `error-handling.md` 第 6 节）中的
 `test_finished_tasks_pruned_to_limit`、`test_resource_conflicts`、`test_cancel_queued_task`、`test_start_recovers_crashed_running_task`、
 `test_serial_key_same_key_serial_other_keys_parallel`、`test_serial_key_keeps_fifo_when_user_limit_blocks`、`test_on_success_failure_does_not_affect_task`。
+
+SQLite 还须运行 `test_task_worker_slow_headers.py`、`test_task_worker_sqlite_registration.py`、`test_task_worker_sqlite_recovery.py`、`test_sqlite_lease_pair.py`、`test_backup_sqlite_restore.py`，覆盖双文件提交中断、旧执行者迟到写及冷恢复。通用租约验收使用 `test_task_worker_lease.py`、`test_task_worker_recovery_crash.py`、`test_task_worker_lease_postgresql.py` 和 `test_task_worker_migration.py`。双引擎须证明健康任务成功完成且未触发回退，过期任务由一个接管者完成一次状态转换与统计。单章和向导须在清理前、清理后提交前、提交后确认丢失处注入故障，核对第三个引擎看到的任务、资源、重试资格和统计与正常组一致。
 
 ---
 

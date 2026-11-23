@@ -95,7 +95,7 @@ AuditAction=`task.cancel_request`，AuditTargetType=`task`。AuditSummary只增�
 - pending核心扫描与缓存生命周期核实分离；缓存键的IN查询按每批最多500个执行，不能随现存completed/winner数量无限扩展绑定参数并使整个pending扫描失败。
 - 所有原finalize/recover/drain提交确认丢失均须重读同UUID事实：已提交则回放真实状态、维护对应完成代次，不再次统计/abort；未确认真实提交则保留pending，不把成功误报为失败。不能只修_finalize调用者而漏共用状态提交边界。
 - 不认识handler的pending恢复/收尾fail-closed，保留意图和资源，不因找不到清理方法就释放为终态。
-- 重启遗留running仍按既有interrupted语义，安全清理与真实状态/统计/清marker同事务；queued/paused已受理意图继续收尾，不重放模型或外部工具。正常不留下“终态+pending”；异常组合不得盲abort或抹恢复依据。
+- 启动扫描仅将成功认领的孤立 running 登记为恢复中。管理员取消遇到归属其他存活执行者的 running 时，由持有者处理其已有意图。旧执行者停机或被围栏后，接管者按原意图和收据收尾；任务与统计使用同一终态提交。queued/paused 的已受理意图沿用原流程。完整跨进程取消与排空另由后续任务验收，当前仍按单进程部署。
 - 单删/清理/裁剪/无作品删号必须保护pending；项目purge/expire等待实际drain与执行链排空，不能只看OPEN计数。正常关闭先等待已登记清理再dispose数据库，不取消请求之外的收尾协程。
 
 ### 前端

@@ -910,15 +910,34 @@ docker compose up -d app
 
 #### SQLite 文件恢复
 
-后台使用 SQLite 在线 backup API，包含 WAL 中已提交数据。手工复制当前运行的主库文件不等同于一致备份。恢复前停止后端及所有其他 SQLite 客户端；核对 `DATABASE_URL` 中的实际文件路径，将旧主库与同名 `-wal` / `-shm` 文件一起移到独立回滚目录，不能让旧 WAL 应用到新恢复文件。
+后台使用 SQLite 在线 backup API，生成包含已提交 WAL 数据的单文件快照。迁移 `0066` 起，运行时会在主库所在目录创建两个文件。以 `dev.db` 为例，`dev.db.leases.sqlite3` 保存执行者心跳，`dev.db.leases.lock` 供引擎持有运行锁。应用账号需要能写入该目录。迁移磁盘或从快照恢复时，使用下面的冷恢复命令建立新配对。原任务的正文、收据和执行键会随主库保留，交由启动后的任务引擎接管。
 
-先对下载的 `.sqlite3` 或完整解密后的文件验证完整性：
+先停止使用源库及目标库的所有后端进程、后台命令和其他 SQLite 客户端。保存原 `ENCRYPTION_KEY`，核实 `DATABASE_URL` 指向的真实绝对文件路径。下面示例从项目的 `backend/` 运行，请先将 `db` 和 `snapshot` 改为实际路径。回滚目录需位于同一文件系统，并由应用账号独占。
 
 ```bash
-sqlite3 restored.sqlite3 'PRAGMA quick_check; PRAGMA foreign_key_check;'
+(
+  set -eu
+  umask 077
+  db=/absolute/path/to/dev.db
+  snapshot=/absolute/path/to/restored.sqlite3
+  rollback=$(mktemp -d "$(dirname "$db")/.ainovel-rollback.XXXXXXXX")
+  for base in "$db" "$db.leases.sqlite3" "$db.leases.lock"; do
+    for file in "$base" "$base-journal" "$base-wal" "$base-shm"; do
+      if [ -e "$file" ]; then mv "$file" "$rollback/"; fi
+    done
+  done
+  set --
+  if [ -f "$rollback/$(basename "$db").leases.lock" ]; then
+    set -- --previous-lock "$rollback/$(basename "$db").leases.lock"
+  fi
+  uv run python -m app.services.backups.sqlite_restore "$snapshot" "$db" "$@"
+  DATABASE_URL="sqlite+aiosqlite:///$db" uv run alembic upgrade head
+)
 ```
 
-`quick_check` 应为 `ok`，外键检查应无违规记录。验证成功后将恢复文件复制到已核对的目标数据库路径，设置仅应用账号可读写的权限，配置原 `ENCRYPTION_KEY` 并重新启动后端。先在隔离目标验证恢复，保留旧文件与配置，核对业务数据和凭据可解密后再恢复正常流量。
+恢复命令会在最终路径创建一个新的主库，验证完整性及外键。对于 `0066` 及之后的快照，它会关闭副本里的历史执行者身份，并建立与新主库配对的空租约文件。`0065` 及之前的快照先按原版本恢复，随后由迁移和首次启动建立配对。核对最终路径、迁移版本与原加密配置后启动后端，验证作品、账号及加密凭据可读，再恢复流量。
+
+全程保留原快照和回滚目录。如果恢复过程中报错且目标已生成文件，保持停机，将本次生成的整组文件移存后从原快照重试。需要回滚时先停掉新进程，移走新主库及其全部伴随文件，再将回滚目录中的整组原文件移回原来的路径；同一文件系统内的移动可以保留原文件身份。
 
 ## 开发与测试
 
@@ -1068,7 +1087,7 @@ aiNovel/
 
 ## 当前限制
 
-- **单进程任务调度。** 多个 Uvicorn worker 或多个实例会共享任务状态，而启动恢复逻辑会将遗留的运行中任务标记为中断，当前不支持这种部署方式。
+- **单进程任务调度。** 并发名额、串行执行、取消和实时订阅仍依赖进程内状态，请使用一个 Uvicorn worker。进程崩溃后立即重启时，任务可能继续显示运行中；通常会在上次心跳起约 35 秒内按已有正文、收据和占用状态完成恢复。若 SQLite 主库仍被占用，收尾会等待主库恢复可写。
 - **运行中的模型调用不能跨进程恢复。** 服务重启后，排队任务会继续被调度，原运行中任务会标记为中断；任务输出快照不代表能够从同一 token 位置继续生成。
 - **外部工具需要独立服务。** MCP 目前接入远程 Streamable HTTP / SSE，不提供本机 stdio 插件进程托管。
 - **认证方式为本地账号。** 当前未提供 OAuth 第三方登录。

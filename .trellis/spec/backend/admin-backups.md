@@ -55,6 +55,8 @@
 
 PostgreSQL用pg_dump -Fc，无shell，密码仅0600临时PGPASSFILE，实际schema_revision查询数据库。SQLite用Connection.backup包含已提交WAL，并quick_check，禁止内存库冒充持久备份。GPG对称AES256/loopback/passphrase-fd/no-symkey-cache，密码不进argv/env/密码文件；原生后缀.dump/.sqlite3，加密加.gpg。恢复先完整解密且验证成功，再导入隔离/已核对目标。明文0700/0600并及时清理。
 
+SQLite 备份包含主库中的作品、运行中任务、执行键、收据和历史执行者登记。心跳侧库及生命周期锁留在运行实例。冷恢复需停掉全部旧进程，在最终的空目标路径运行 `python -m app.services.backups.sqlite_restore 快照路径 主库路径`。恢复副本经完整性与外键检查，再围栏旧执行者，并为新物理主库配对全新代次与空侧库。迁移号低于 0066 的旧快照继续支持先恢复、再升级、再启动。原运行文件按组保存在同一文件系统的回滚目录。命令与回滚顺序见根目录 README 的「SQLite 文件恢复」。
+
 GPG2.2代理套接字受Unix路径长度限制，GNUPGHOME不能放在长备份工作目录下；使用短私有路径与实例/执行marker、uid/nosymlink校验，正常finally和重启只回收该执行自己的agent/home，不扫描或kill其他GPG代理。终态cleanup_status为failed/unknown/pending时，重启也按已知实例/执行身份精确清理.work目录，明文和加密模式均适用；GPG home与work目录独立尝试，回收成功不改写原保留清理失败历史。
 
 本地原子发布且不覆盖身份未知文件；根/实例/执行身份和无symlink校验。S3显式凭据、禁隐式代理/默认凭据链、有界managed multipart；每次请求校验HTTPS/fixed origin/全部DNS，跨origin不继续。私网仅部署显式许可，metadata/link-local始终禁；仍有DNS检查到连接的窗口，由部署出站策略兜底。旧对象保存原位置和加密访问快照，同位置优先最新凭据；清理指定version_id，不能仅造delete marker或清整个bucket。两处各自新成功后按该次冻结keep清成功副本；失败不挤占名额。

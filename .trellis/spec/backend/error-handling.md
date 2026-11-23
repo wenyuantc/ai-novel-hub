@@ -339,9 +339,8 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
   引擎 `uncancel()` 后照常收尾为 cancelled；已结束 → 409 `任务已结束，无法取消`。
   文档侧没有占用的旧 queued `kb.index` 文档任务（0045 前）：锁内可证明无执行体时由受限系统清理同事务记 cancelled 并把文档置 failed
   （见 [retrieval.md](./retrieval.md)「旧无占用文档任务」）；无法证明仍 409 `task_cleanup_unproven`。引擎领取同一函数记 failed，任务流以 `error` 帧结束。
-- 重启（D2）：`stop()` 把运行中任务标记为关停中断再 cancel → `interrupted`，`error = "服务重启，任务已中断"`，
-  `output_text` 保留；`start()` 先把库里遗留的 `running` 全部置为 interrupted 并 `on_abort`；queued 不受影响，照常调度。
-  **前提：单进程部署**（见 `database-guidelines.md`「后台任务表」）。
+- 正常停机时，`stop()` 等待本进程执行体和清理完成，再标记登记已停止。启动和周期恢复都只认领已失去执行者的 running 任务。健康执行者继续处理其任务。崩溃后立即重启时，旧心跳到期前仍显示运行中；默认租约 30 秒，通常在到期后的下一个 5 秒调度周期收尾。SQLite 主库被长写事务占用时，独立租约库照常续约、确认失联，主库恢复可写后继续认领和收尾。
+- 恢复按持久凭据决定中断、成功、暂停或待核对。单章释放占用与向导撤销可证未提交标记，须与任务终态、统计同事务提交。若先删除唯一凭据再另行提交终态，下一次故障恢复会失去判断依据。存储暂时不可用时保留认领重试。普通迟到的清理回调仍须核验原执行者存活。作品排空重试已提交的终态清理时，须在锁内证明任务、轮次、终态、原执行者、执行键和原章节占用完整匹配。无法证明的运行中任务持久标为“结果待核对”，再次扫描跳过，作品删除继续受保护。部署仍按单进程运行。
 - 重试：仅 `failed|cancelled|interrupted`，否则 409 `只有失败、已取消或已中断的任务可以重试`；用原 `input.request`
   重新走 `validate_and_claim`（重新校验配置、重新抢占章节）。被系统清理的旧无占用索引任务（input 含 `_kb_legacy_unclaimed_cleanup`）
   重试 → 409 `kb_legacy_task_not_retryable`，须经 `POST /documents/{id}/reindex` 新受理。
@@ -456,7 +455,7 @@ failed / cancelled / interrupted ──retry──> 新任务(queued, retry_of_i
 | 分析：自动入队的任务运行时没有可用模型配置 | 运行开始 | failed（`resolve_config` 的 detail） |
 | 重写：未选建议也未填要求 / 建议 id 不存在 / 分析不属于本章 / 正文为空 | 创建前 | 400 `请至少选择一条建议或填写修改要求` / `建议不存在：N` / `分析结果不存在或不属于该章节` / `章节正文为空，无法重写` |
 | 用户取消 | 运行中 | cancelled `任务已取消`，生成记录 `cancelled` |
-| 服务停止 / 崩溃后重启 | 运行中 | interrupted `服务重启，任务已中断`，保留 `output_text` |
+| 服务停止 / 崩溃后重启 | 运行中 | 正常停止处理本地执行体。崩溃后等旧租约到期，依持久证据收尾；普通中断保留 `output_text` |
 | 改写：选区 / op 非法 | 流开始前 | 400 / 422 JSON（见 `rewrite_service`）；改写意外异常 → `error {"detail": "改写失败：服务器内部错误"}` |
 | 请求 `style` 指定了不可见的风格（generate / polish / revise / rewrite / batch） | 创建前 / 流开始前 | 400 `指定的写作风格不存在或不可用`（不建任务、不抢占） |
 | 用户覆盖的模板运行时渲染失败 | 运行开始 | failed `提示词模板「X」模板渲染失败：…，请检查或恢复默认` |
