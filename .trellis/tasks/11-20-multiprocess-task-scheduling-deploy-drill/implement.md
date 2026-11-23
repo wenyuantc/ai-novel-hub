@@ -20,7 +20,7 @@ C1 执行者租约 → C2 调度约束与设置 → C3 跨进程取消 → C4 �
 - [ ] **C8** `11-20-collab-migration-deploy-drill`：协作迁移演练与 README 操作步骤。C7 收口时把排空开关与多进程运维内容并入这份操作步骤。
 - [ ] **父任务集成评审**：按 `prd.md` 的 AC1–AC13 逐条核对证据，更新 `TODOS.md` 第 11、25 项，归档。
 
-C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3 已在本地功能分支完成跨进程取消与作品删除排空，SQLite 全量、PostgreSQL 16 串行专项和双进程 HTTP 演练均通过。[C3 验收记录](../11-20-mp-cross-process-cancel/research/verification.md)C4–C8 开工前各自核对前序实现和规划资料。
+C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3 已在本地功能分支完成跨进程取消与作品删除排空，SQLite 全量、PostgreSQL 16 串行专项和双进程 HTTP 演练均通过。[C3 验收记录](../archive/2026-11/11-20-mp-cross-process-cancel/research/verification.md)C4–C8 开工前各自核对前序实现和规划资料。
 
 ## 每个子任务的开工门禁
 
