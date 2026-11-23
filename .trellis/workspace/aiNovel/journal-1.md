@@ -1962,3 +1962,39 @@ C2 的十项验收已通过，功能和验收资料已在本地提交并归档�
 ### Next Steps
 
 - 父任务后续从 C3 跨进程取消继续，当前部署仍使用单 worker。
+
+
+## Session 61: C3 跨进程取消与作品删除排空
+<!-- trellis-session: v=2 fp=dcf18335d2a6515a -->
+
+**Date**: 2026-11-23
+**Task**: C3 跨进程取消与作品删除排空
+**Branch**: `codex/mp-cross-process-cancel`
+
+### Summary
+
+本人和管理员跨进程取消、作品删除等待原执行与请求清理结束，完成双库、独立进程与离线回滚验收。
+
+### Main Changes
+
+- 0068 登记取消轮次、执行归属、请求清理与外部调用收据。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b476666` | feat(backend): 支持跨进程任务取消与作品删除排空 |
+| `4b82005` | docs(trellis): 记录 C3 跨进程取消与删除验收 |
+
+### Testing
+
+- [OK] SQLite 全量按用例标识核对 7296 项，7247 通过、30 个专用 PostgreSQL 用例另验、19 个既有预期失败。
+- [OK] PostgreSQL 16.15 串行 114 项全过，真实双进程 HTTP、离线升降级、Ruff、前端类型检查通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父任务 C1、C2、C3 已完成，后续子任务另行启动。
