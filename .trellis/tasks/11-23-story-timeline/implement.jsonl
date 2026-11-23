@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/scenes.md","reason":"场景身份、正文码点区间、跨章移动和拆并的既有契约"}
+{"file":".trellis/spec/backend/setting-progressions.md","reason":"现有按叙事位置求值的设定时间线边界"}
+{"file":".trellis/spec/backend/consistency-check.md","reason":"事实台账、比对分批、证据锚点及问题复查"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"单书格式版本、预览校验和 ID 重映射"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"区分人工写入、只读协作和 AI 权限"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"查询生命周期、身份切换和迟到响应处理"}

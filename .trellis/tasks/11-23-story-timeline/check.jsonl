@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"构建、组件测试、浏览器和 README 验收约定"}
+{"file":".trellis/spec/backend/consistency-check.md","reason":"验证旧证据兼容、比对范围、失效与授权"}
+{"file":".trellis/spec/backend/scenes.md","reason":"复核移动、拆并、恢复后的场景归属和定位"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"核查老版本导入、快照和引用重映射"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核从录入、继承、排序到证据和备份的跨层数据流"}
