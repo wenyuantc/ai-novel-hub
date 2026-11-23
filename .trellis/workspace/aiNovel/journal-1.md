@@ -1888,3 +1888,39 @@ test_resource_conflicts 根因为用例时序（向导写入使在途生成按�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 59: C1 执行者租约与失联接管
+<!-- trellis-session: v=2 fp=90d2ae03a751ee77 -->
+
+**Date**: 2026-11-23
+**Task**: C1 执行者租约与失联接管
+**Branch**: `main`
+
+### Summary
+
+完成执行者登记、续约、失联接管与 SQLite 原生快照冷恢复，C1 的 13 项验收已通过。
+
+### Main Changes
+
+- SQLite 将心跳保存在独立租约文件，PostgreSQL 使用主库登记。任务按原执行者和执行键认领，单章与向导的资源清理、终态和统计同事务提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dd65a06` | feat(backend): 增加任务执行者租约与失联接管 |
+| `43a8c83` | docs(trellis): 记录执行者租约与 SQLite 冷恢复验收 |
+
+### Testing
+
+- [OK] SQLite 全量 7,100 项通过、27 项跳过、19 项既有预期失败。跳过的 27 项另在 PostgreSQL 16 串行全部通过。后端 Ruff 和前端 TypeScript 检查通过。
+- [OK] 真实 SDK 延迟 32 秒返回响应头时正文完整、仅调用一次。双进程强杀后 29.93 秒确认失联，主库放锁后 0.10 秒完成接管。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父计划下一项为 C2 调度约束与系统设置跨进程一致，当前生产部署继续使用单进程。

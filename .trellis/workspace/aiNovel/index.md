@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 58
-- **Last Active**: 2026-11-20
+- **Total Sessions**: 59
+- **Last Active**: 2026-11-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1890 | Active |
+| `journal-1.md` | ~1926 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 59 | 2026-11-23 | C1 执行者租约与失联接管 | `dd65a06`, `43a8c83` | `main` |
 | 58 | 2026-11-20 | 场景跨章移动与 AI 拆并建议 | `627240c813b984c7b696453700a692d71e46fb4f` | `codex/scene-cross-chapter-ai-restructure` |
 | 57 | 2026-11-20 | 章节编辑页跨断点保留笔记草稿（TODOS 第 23 项） | `250b0f7` | `codex/note-sidebar-draft-breakpoint` |
 | 56 | 2026-11-20 | 协作者的实时进度订阅（TODOS 第 22 项） | `af5d95d`, `b6bc864`, `6556a53`, `86ffa50` | `main` |
