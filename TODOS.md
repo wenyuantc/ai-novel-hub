@@ -320,7 +320,7 @@
 
 ### 26. 写作统计与码字目标
 
-当前状态：未开始。现有的只有章节字数和连载的日更章数，没有按天记录的写作量。
+当前状态：已创建任务并编写计划（2026-11-23），待实施。每人每本书独立统计，手写新增和改写都计入目标，AI 只统计实际采纳进正文的字数。[任务需求](.trellis/tasks/11-23-writing-stats-goals/prd.md) · [技术设计](.trellis/tasks/11-23-writing-stats-goals/design.md) · [实施计划](.trellis/tasks/11-23-writing-stats-goals/implement.md)
 
 - [ ] 按天记录作者手动写作的字数，与 AI 生成字数分开统计。
 - [ ] 支持设置每日或每周码字目标，展示完成进度与连续写作天数。

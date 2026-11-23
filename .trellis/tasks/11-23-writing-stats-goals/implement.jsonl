@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/serialization.md", "reason": "复用北京时间、存稿可支撑天数与工作台的项目权限。"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "验证章景正文投影、版本冲突、结构调整及整章原子写入。"}
+{"file": ".trellis/spec/backend/rich-documents.md", "reason": "区分读者正文、作者区块、待核对提案与最终采纳。"}
+{"file": ".trellis/spec/backend/index.md", "reason": "定位异步事务和迁移规范，具体条款见实施计划。"}
+{"file": ".trellis/spec/backend/batch-generate.md", "reason": "区分批量预览、完成收据、核对与续跑。"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "注册单书备份排除项及导入兼容。"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "定位 API、日期类型和界面规范。"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "作品切换、查询失效与重试。"}

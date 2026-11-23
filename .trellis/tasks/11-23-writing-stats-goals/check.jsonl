@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/serialization.md", "reason": "复用北京时间、存稿可支撑天数与工作台的项目权限。"}
+{"file": ".trellis/spec/backend/scenes.md", "reason": "验证章景正文投影、版本冲突、结构调整及整章原子写入。"}
+{"file": ".trellis/spec/backend/rich-documents.md", "reason": "区分读者正文、作者区块、待核对提案与最终采纳。"}
+{"file": ".trellis/spec/backend/index.md", "reason": "定位后端质量门禁，计划列有双库与完整回归命令。"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "核对单书备份边界。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查真实页面和前端回归门禁。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "账号和页面作用域变更时隔离迟到响应。"}
