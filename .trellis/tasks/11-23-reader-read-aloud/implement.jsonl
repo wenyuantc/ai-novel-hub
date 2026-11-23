@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/reader.md","reason":"复用已鉴权的章节快照、读者格式与既有阅读进度边界"}
+{"file":".trellis/spec/backend/book-search.md","reason":"保留码点坐标、跨段搜索命中和指纹失效行为"}
+{"file":".trellis/spec/backend/mention-tracking.md","reason":"保留实体提及、点击预览与深链定位"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"组织会话内的浏览器订阅、生命周期和异步清理"}

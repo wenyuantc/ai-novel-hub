@@ -1,0 +1,4 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"执行前端测试、类型构建和 README 同步检查"}
+{"file":".trellis/spec/backend/reader.md","reason":"验证普通阅读、只读权限、进度写入和私有资料隔离"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"核对公共格式、列表语义和原文码点范围"}
+{"file":".trellis/spec/backend/book-search.md","reason":"回归搜索焦点、跨换行命中与正文版本变化"}

@@ -362,7 +362,7 @@
 
 ### 31. 朗读
 
-当前状态：未开始。阅读页没有语音朗读。
+已进入规划（2026-11-23）。使用本机中文声音逐段朗读当前章节，支持暂停、继续、调速和段落高亮。缺少本机中文声音时提示安装。[需求与验收](.trellis/tasks/11-23-reader-read-aloud/prd.md) · [技术设计](.trellis/tasks/11-23-reader-read-aloud/design.md) · [实施计划](.trellis/tasks/11-23-reader-read-aloud/implement.md)
 
 - [ ] 在阅读页提供朗读，支持调节语速、暂停并高亮当前段落，用于听稿校对。
 
