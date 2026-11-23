@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/scenes.md","reason":"场景身份、已保存正文、协作删章、跨章移动和自动保存"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"正文选区码点、作者区块、可靠映射与位置失效"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"分动作权限与当前身份、写锁内复核授权"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"单书核心资料注册、格式升级、预览、引用重映射与旧版本兼容"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"SQLite 与 PostgreSQL 原生整库备份和隔离恢复流程"}
+{"file":".trellis/spec/frontend/index.md","reason":"通过组件规范索引按需读取章节工作台、编辑器和移动端交互条目"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"账号切换及旧响应隔离"}

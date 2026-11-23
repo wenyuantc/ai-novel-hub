@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端全量门禁与质量规范入口，按需读取迁移及隔离 PostgreSQL 测试约定"}
+{"file":".trellis/spec/backend/scenes.md","reason":"退场、移章、删章与保存竞争回归"}
+{"file":".trellis/spec/backend/rich-documents.md","reason":"Unicode、重复文本、富文档选区和实际 AI 出站隔离验收"}
+{"file":".trellis/spec/backend/document-export.md","reason":"组合导出与可阅读文件内容隔离"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"单书批注完整往返、历史署名、成员授权隔离与旧版本校验"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"整库还原后核对讨论、账号及协作权限"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端门禁及桌面与窄屏浏览器验收"}
