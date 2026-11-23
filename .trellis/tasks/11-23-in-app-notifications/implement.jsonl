@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/index.md","reason":"数据库迁移、权限与事务规范入口；实施计划列出定向阅读位置"}
+{"file":".trellis/spec/backend/ai-usage.md","reason":"预算口径、月界、承担人与协作者费用隔离"}
+{"file":".trellis/spec/backend/consistency-check.md","reason":"检查运行、结果保存及作品读取权限"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"当前身份与资源权限"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"换号、登出和私有缓存清理"}
+{"file":".trellis/spec/frontend/index.md","reason":"工作台组件、移动布局和页面交互规范入口"}

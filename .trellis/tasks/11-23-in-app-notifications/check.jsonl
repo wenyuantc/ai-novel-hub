@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/index.md","reason":"SQLite 全量门禁及隔离 PostgreSQL 质量规范入口"}
+{"file":".trellis/spec/backend/ai-usage.md","reason":"预算跨档与私有视图验收"}
+{"file":".trellis/spec/backend/consistency-check.md","reason":"检查运行和结果读权限验收"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端门禁与真实浏览器走查"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"账号切换与迟到响应验收"}
