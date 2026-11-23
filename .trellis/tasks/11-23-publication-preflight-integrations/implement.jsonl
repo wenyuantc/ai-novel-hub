@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/serialization.md","reason":"定稿身份、手动登记重放、旧稿补录、存稿统计和历史下载"}
+{"file":".trellis/spec/backend/book-search.md","reason":"已保存正文的码点定位、原文指纹及富文本高亮"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"全站维护权限、按真实身份执行和作品写屏障"}
+{"file":".trellis/spec/backend/pen-names.md","reason":"账号私人资料与作品作者归属、管理员和协作边界"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"区分单书可携带事实、账号私有配置和本实例重试意图"}
+{"file":".trellis/spec/frontend/index.md","reason":"按索引读取章节工作台、管理界面及账号切换相关组件约定"}
+{"file":".trellis/tasks/11-23-publication-preflight-integrations/research/platforms.md","reason":"已核实的平台能力、证据缺口及直发启用条件"}

@@ -346,7 +346,7 @@
 
 ### 29. 发布前检查与外部平台对接
 
-当前状态：未开始。没有敏感词或违禁词检查；第 18 项首版把自动对接外部发布平台列为另行评估。
+已进入规划（2026-11-23）。定稿及登记发布前，用全站词表和作品作者的个人词表检查所选稿件，命中后可核对并确认继续。先核实各平台的发章能力，具备官方写入授权和可验证回执的平台再接入自动发布。详见[需求与验收](.trellis/tasks/11-23-publication-preflight-integrations/prd.md)、[实施计划](.trellis/tasks/11-23-publication-preflight-integrations/implement.md)和[平台调研](.trellis/tasks/11-23-publication-preflight-integrations/research/platforms.md)。
 
 - [ ] 支持维护敏感词表，在定稿或标记发布前检查并定位命中位置。
 - [ ] 评估主流连载平台的发布接口或导出格式，确定可自动对接的范围。
