@@ -93,7 +93,7 @@ async def _seed(client, app) -> tuple[dict, list[int]]:
 async def test_v12_roundtrip_remaps_evidence_and_drops_runs(client, app):
     project, (first, second) = await _seed(client, app)
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (16, "0065")
+    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (16, "0066")
     tables = data["tables"]
     assert "consistency_runs" not in tables
     assert [row["chapter_id"] for row in tables["consistency_ledgers"]] == [first, second]

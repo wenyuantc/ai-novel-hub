@@ -122,7 +122,7 @@ def create_app(
         # 统计起点与存量先于恢复建立，遗留 running 的中断结果才不会遗漏。
         await task_statistics_service.initialize_tracking(app_.state.sessionmaker)
         if start_task_engine:
-            # 先恢复（遗留 running → interrupted），再开始调度 queued 任务
+            # 先处理已确认失去执行者的任务，再调度队列。
             await app_.state.task_engine.start()
         await app_.state.recycle_bin_cleaner.start()
         await app_.state.dashboard_sampler.start()

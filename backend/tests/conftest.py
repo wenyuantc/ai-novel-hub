@@ -8,6 +8,7 @@ os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
 os.environ["FRONTEND_DIST_DIR"] = "/nonexistent-frontend-dist"
 
 from collections.abc import AsyncIterator  # noqa: E402
+from contextlib import AsyncExitStack  # noqa: E402
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -132,6 +133,30 @@ def _drop_mapper_statement_caches() -> None:
     """
     for mapper in Base.registry.mappers:
         mapper._compiled_cache.clear()
+
+
+@pytest.fixture
+async def peer_app_factory(app, fake_llm):
+    """共享已建好的数据库，每个对端拥有独立的连接池、任务引擎、设置和运行时。"""
+    async with AsyncExitStack() as stack:
+        async def new_peer():
+            peer = create_app(
+                app.state.settings.model_copy(deep=True), provider_factory=fake_llm.factory, start_task_engine=False,
+            )
+            stack.push_async_callback(peer.state.engine.dispose)
+            stack.push_async_callback(peer.state.task_engine.stop)
+            stack.push_async_callback(peer.state.system_settings.close)
+            await authorization_service.initialize(peer.state.sessionmaker)
+            await peer.state.system_settings.load()
+            return peer
+
+        yield new_peer
+
+
+@pytest.fixture
+async def second_app(peer_app_factory):
+    """调用方自行启动任务引擎，以便在真实任务已经运行之后再启动对端。"""
+    return await peer_app_factory()
 
 
 def _new_client(app) -> httpx.AsyncClient:

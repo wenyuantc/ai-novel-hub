@@ -339,7 +339,8 @@ async def test_unverifiable_committed_result_preserves_running_on_recovery(app, 
     events = parse_sse(stream.text)
     assert events[-1][0] == "error" and "尚未确认" in events[-1][1]["detail"]
     await wait_until(lambda: original["id"] not in app.state.task_engine._running)
-    await app.state.task_engine.recover()
+    await app.state.task_engine.stop()
+    await app.state.task_engine.start()
     async with app.state.sessionmaker() as db:
         task = await db.get(Task, original["id"])
         saved = await db.get(Chapter, chapter_id)

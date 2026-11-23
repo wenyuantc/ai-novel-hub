@@ -38,7 +38,7 @@ from app.services.mcp import client as mcp_client
 from app.services.mcp import service as mcp_service
 from app.services.mcp import settings_gate
 from app.services.mcp.client import McpError, McpResult
-from app.services.task_engine.execution_identity import TaskExecutionIdentity, matches_running
+from app.services.task_engine.execution_identity import TaskExecutionIdentity, matches_running, require_live_worker
 
 MAX_TURN_TOOLS = 30
 NAME_LIMIT = 64
@@ -239,6 +239,7 @@ async def _send_lease(
                         or identity.execution.actor_token_version != identity.actor.token_version
                         or not matches_running(identity.execution, task)):
                     raise ai_dispatch.SendLeaseError()
+                await require_live_worker(db, identity.execution.worker_key, read_only=True)
                 expected = {"queued_at": _utc(identity.queued_at).isoformat(),
                             "execution_key": identity.execution_key,
                             "actor_token_version": identity.actor.token_version}

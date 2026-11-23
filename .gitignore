@@ -11,6 +11,9 @@ __pycache__/
 .ruff_cache/
 *.db
 *.sqlite3
+*.leases.lock
+*.leases.lock-*
+*.leases.sqlite3-*
 
 # Node
 node_modules/

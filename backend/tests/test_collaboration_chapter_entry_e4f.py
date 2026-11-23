@@ -649,7 +649,8 @@ async def test_receipt_completion_rejects_tampered_receipt(app, client, make_cli
         assert row.status == "running" and row.execution_key is not None
     assert engine.has_cleanup_failure(world.project["id"])
     # 恢复路径同样拒绝伪造收据。
-    await engine.recover()
+    await engine.stop()
+    await engine.start()
     async with app.state.sessionmaker() as db:
         assert (await db.get(Task, task_id)).status == "running"
 
@@ -676,7 +677,8 @@ async def test_recover_completes_valid_receipt_left_running(app, client, make_cl
     async with app.state.sessionmaker() as db:
         assert (await db.get(Task, task_id)).status == "running"
     monkeypatch.undo()
-    await engine.recover()
+    await engine.stop()
+    await engine.start()
     row = await _terminal(app, task_id)
     assert row.result is None  # 恢复路径没有已验证的完成载荷，不伪造结果。
     assert row.status == "succeeded" and row.error == RECEIPT_NOTE and row.execution_key is None

@@ -3,6 +3,8 @@
 预览、互斥、上限、全流程、复用、取消与重试续跑、单章失败、检查期间改章、比对批次失败、范围口径、管理员监控。
 """
 
+from uuid import uuid4
+
 import pytest
 from sqlalchemy import select
 
@@ -20,6 +22,7 @@ from tests.helpers import (
     task_params,
     wait_task,
 )
+from tests.worker_helpers import fence_worker
 
 BROKEN = "😀 林远的佩剑在山门前断成两截。"
 USED = "林远拔出佩剑，一剑逼退来敌。"
@@ -72,6 +75,35 @@ async def _runs(app, project_id: int) -> list[ConsistencyRun]:
     async with app.state.sessionmaker() as db:
         return list(await db.scalars(select(ConsistencyRun).where(ConsistencyRun.project_id == project_id)
                                      .order_by(ConsistencyRun.id)))
+
+
+async def test_old_worker_cannot_close_running_consistency_check(app, second_app, client):
+    user, project, _ = await seed(client, {})
+    engine = app.state.task_engine
+    await engine.stop()
+    maker = app.state.sessionmaker
+    old = await engine.lease.register()
+    new = await second_app.state.task_engine.lease.register()
+    async with maker() as db:
+        original = Task(user_id=user["id"], project_id=project["id"], kind=check.KIND, status="running",
+                        worker_key=old, execution_key=str(uuid4()))
+        db.add(original)
+        await db.flush()
+        db.add(ConsistencyRun(task_id=original.id, project_id=project["id"], actor_id=user["id"]))
+        await db.commit()
+    await fence_worker(engine, mirror=False)
+    await check.close_run(maker, original, "failed", {"failed": 1}, worker_key=old)
+    assert (await _runs(app, project["id"]))[0].status == "running"
+    async with maker() as db:
+        adopted = await db.get(Task, original.id)
+        adopted.worker_key = new
+        await db.commit()
+    await check.close_run(maker, original, "failed", {"failed": 1}, worker_key=old)
+    run, = await _runs(app, project["id"])
+    assert (run.status, run.stats, run.finished_at) == ("running", {}, None)
+    await check.close_run(second_app.state.sessionmaker, adopted, "interrupted", worker_key=new)
+    run, = await _runs(app, project["id"])
+    assert run.status == "interrupted" and run.finished_at is not None
 
 
 async def test_preview_counts_and_range_errors(app, client):

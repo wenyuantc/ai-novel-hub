@@ -694,7 +694,8 @@ async def test_analysis_receipt_completion_rejects_tampered_receipt(app, client,
         row = await db.get(Task, task_id)
         assert row.status == "running" and row.execution_key is not None
     assert engine.has_cleanup_failure(world.project["id"])
-    await engine.recover()
+    await engine.stop()
+    await engine.start()
     async with app.state.sessionmaker() as db:
         assert (await db.get(Task, task_id)).status == "running"
 
@@ -721,7 +722,8 @@ async def test_recover_completes_valid_analysis_receipt_left_running(app, client
     async with app.state.sessionmaker() as db:
         assert (await db.get(Task, task_id)).status == "running"
     monkeypatch.undo()
-    await engine.recover()
+    await engine.stop()
+    await engine.start()
     row = await _terminal(app, task_id)
     assert row.status == "succeeded" and row.error == ANALYSIS_NOTE and row.execution_key is None
     async with app.state.sessionmaker() as db:

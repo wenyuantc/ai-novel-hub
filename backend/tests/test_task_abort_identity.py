@@ -99,6 +99,7 @@ async def test_old_failed_cleanup_never_releases_new_batch_claim(app, client, mo
         captured.append(kwargs["claim"])
 
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, key)
@@ -109,11 +110,11 @@ async def test_old_failed_cleanup_never_releases_new_batch_claim(app, client, mo
     real_abort = handler.on_abort
     calls = []
 
-    async def abort(ctx, task, *, claim=None):
+    async def abort(ctx, task, *, claim=None, terminal_status=None):
         calls.append(claim)
         if len(calls) == 1:
             raise RuntimeError("原执行体收尾失败")
-        await real_abort(ctx, task, claim=claim)
+        await real_abort(ctx, task, claim=claim, terminal_status=terminal_status)
 
     monkeypatch.setattr(handler, "on_abort", abort)
     with pytest.raises(RuntimeError):
@@ -177,7 +178,7 @@ async def test_recovery_never_replays_unproven_running_analysis(app, client, che
         await task_statistics_service.record_created(db, task)
         await db.commit()
         task_id = task.id
-    await engine.recover()
+    await engine.start()
     async with app.state.sessionmaker() as db:
         current = await db.get(Task, task_id)
         assert current.status == "running" and current.execution_key == execution

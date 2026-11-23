@@ -384,6 +384,32 @@ async def test_uncertain_batch_http_retry_is_blocked_and_marker_is_private(app, 
     assert response.status_code == 200 and "_batch_outcome_unknown" not in response.text
 
 
+async def test_idle_abort_snapshots_reject_new_worker_in_same_execution(app, client, make_client):
+    _, execution_key, task, job = await _batch_world(app, client, make_client)
+    engine = app.state.task_engine
+    task._batch_job = job
+    snapshot = engine.capture_abort_snapshot(task)
+    assert snapshot is not None and snapshot.claim.claim is None
+
+    # 同一轮的输入、断点和业务执行键全部保留，仅接管者发生变化。
+    new_worker = await engine.lease.register()
+    async with app.state.sessionmaker() as db:
+        current = await db.get(Task, task.id)
+        current.worker_key = new_worker
+        await db.commit()
+    with pytest.raises(ConflictError):
+        await batch_service.restore_abort_snapshot(engine.ctx, snapshot.claim)
+    for proof in ({"abort_snapshot": snapshot}, {"batch_snapshot": snapshot.claim}):
+        _, committed = await engine.complete_state(
+            current, expected_status="running", status="interrupted", result=None, error="",
+            text="", progress=0, abort_ok=True, **proof,
+        )
+        assert not committed
+    async with app.state.sessionmaker() as db:
+        current = await db.get(Task, task.id)
+        assert (current.status, current.execution_key, current.worker_key) == ("running", execution_key, new_worker)
+
+
 async def test_old_abort_snapshot_rejects_new_attempt_even_after_release(app, client, make_client):
     identity, execution, _task, _job, first, snapshot = await _captured_running_attempt(app, client, make_client)
     async with app.state.sessionmaker() as db:
@@ -803,13 +829,14 @@ async def test_recovery_of_batch_review_keeps_pending_without_model_replay(app, 
     task, events = await run_task(client, await _start(client, base, chapter, chapter, include_written=True))
     assert task["status"] == "paused"
     identity = events[-1][1]["result"]
+    await app.state.task_engine.stop()
     async with app.state.sessionmaker() as db:
         proposal = await db.scalar(select(SceneReviewProposal).where(SceneReviewProposal.token == identity["token"]))
         payload = await rich_document_review._read_payload(db, proposal)
         row = await db.get(Task, task["id"])
         row.status, row.execution_key, row.result = "running", payload["execution_receipt"]["execution_key"], None
         await db.commit()
-    await app.state.task_engine.recover()
+    await app.state.task_engine.start()
     recovered = await wait_task(client, task, within=15, statuses=("paused",))
     assert recovered["rich_review"]["token"] == identity["token"]
     assert (await client.get(document_url)).json() == source.json()

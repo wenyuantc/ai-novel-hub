@@ -66,6 +66,7 @@ from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
     advance_checkpoint,
     matches_running,
+    require_live_worker,
     require_write_execution,
 )
 
@@ -649,8 +650,11 @@ async def _require_batch_round(db: AsyncSession, job: BatchJob):
             Task.id == job.task_id, Task.statistics_key == job.task_key, Task.user_id == job.user_id,
             Task.project_id == job.project_id, Task.kind == KIND, Task.status == "running",
             Task.queued_at == job.queued_at, Task.execution_key == job.execution_key,
+            Task.worker_key == job.execution_identity.worker_key,
             Task.admin_cancel_operation_id.is_(None),
         ).with_for_update())).one_or_none()
+        if row is not None:
+            await require_live_worker(db, job.execution_identity.worker_key)
         if (row is None or not _same_json(row.checkpoint, job.persisted_checkpoint)
                 or row.step_cursor != job.persisted_cursor or not _same_json(row.input, job.original_input)
                 or chapter_claim._grant(row.input) != job.grant_identity):
@@ -668,6 +672,7 @@ async def _write_checkpoint(db: AsyncSession, job: BatchJob) -> None:
                 Task.id == job.task_id, Task.statistics_key == job.task_key, Task.user_id == job.user_id,
                 Task.project_id == job.project_id, Task.kind == KIND, Task.status == "running",
                 Task.queued_at == job.queued_at, Task.execution_key == job.execution_key,
+                Task.worker_key == job.execution_identity.worker_key,
                 Task.admin_cancel_operation_id.is_(None), Task.step_cursor == job.persisted_cursor,
                 cast(Task.checkpoint, String) == raw_checkpoint if raw_checkpoint is not None
                 else Task.checkpoint.is_(None),
@@ -691,14 +696,17 @@ async def _save(ctx: "TaskContext", job: BatchJob) -> None:
         )
 
 
-async def restore_current(ctx: "TaskContext", claim: chapter_claim.ChapterClaim) -> None:
+async def restore_current(
+    ctx: "TaskContext", claim: chapter_claim.ChapterClaim, *, terminal_status: str | None = None,
+) -> None:
     """仅清理执行体捕获的准确 attempt；不能重读数据库中的新 current。"""
     async with ctx.sessionmaker() as db:
-        released = await chapter_claim.release_chapter_claim(db, claim)
+        released = await chapter_claim.release_chapter_claim(db, claim, terminal_status=terminal_status)
         if not released:
             current = await db.scalar(select(Task.checkpoint).where(
                 Task.id == claim.task_id, Task.statistics_key == claim.task_key,
                 Task.queued_at == claim.queued_at, Task.execution_key == claim.execution_key,
+                Task.worker_key == claim.worker_key,
             ))
             if isinstance(current, dict) and current.get("current") is not None:
                 raise ConflictError("批量章节占用已变化，无法清理", extra={"code": "chapter_claim_changed"})
@@ -720,6 +728,7 @@ async def require_idle_snapshot(ctx: "TaskContext", task: Task, job: BatchJob | 
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.status == task.status,
             Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
+            Task.worker_key == task.worker_key,
         ).with_for_update())).one_or_none()
         if (row is None or not _same_json(row.checkpoint, checkpoint) or row.step_cursor != cursor
                 or not _same_json(row.input, original_input)):
@@ -739,7 +748,7 @@ def recovery_claim(task: Task) -> chapter_claim.ChapterClaim | None:
             task_id=task.id, task_key=task.statistics_key, actor_id=task.user_id, project_id=task.project_id,
             chapter_id=current["chapter_id"], queued_at=task.queued_at, execution_key=task.execution_key,
             claim_key=pointer["claim_key"], prev_status=current["prev_status"],
-            grant_identity=chapter_claim._grant(task.input), phase="running", kind="batch",
+            grant_identity=chapter_claim._grant(task.input), phase="running", kind="batch", worker_key=task.worker_key,
         )
         if (not chapter_claim._valid_identity(claim) or not chapter_claim._task_matches(task, claim, cleanup=True)
                 or not chapter_claim._pointer(task, claim)):
@@ -759,6 +768,7 @@ class BatchAbortSnapshot:
     project_id: int
     queued_at: datetime
     execution_key: str | None
+    worker_key: str | None
     cursor: int
     claim: chapter_claim.ChapterClaim | None
     _checkpoint_json: str
@@ -790,6 +800,7 @@ def capture_abort_snapshot(task: Task, *, recovery: bool = False) -> BatchAbortS
     if job is not None:
         if (job.task_id != task.id or job.task_key != task.statistics_key or job.user_id != task.user_id
                 or job.project_id != task.project_id or job.execution_key != task.execution_key
+                or job.task_execution_identity.worker_key != task.worker_key
                 or chapter_claim._utc(job.queued_at) != chapter_claim._utc(task.queued_at)
                 or not _same_json(job.original_input, task.input)):
             raise invalid
@@ -813,7 +824,8 @@ def capture_abort_snapshot(task: Task, *, recovery: bool = False) -> BatchAbortS
             raise invalid
     if claim is not None:
         pointer = {"chapter_id": claim.chapter_id, "claim_key": claim.claim_key, "prev_status": claim.prev_status}
-        if (not isinstance(checkpoint, dict) or not chapter_claim._uuid(checkpoint.get("_batch_attempt"))
+        if (claim.worker_key != task.worker_key or not isinstance(checkpoint, dict)
+                or not chapter_claim._uuid(checkpoint.get("_batch_attempt"))
                 or not _same_json(checkpoint.get("current"), {
                     "chapter_id": claim.chapter_id, "prev_status": claim.prev_status, "_chapter_claim": pointer,
                 })):
@@ -826,11 +838,13 @@ def capture_abort_snapshot(task: Task, *, recovery: bool = False) -> BatchAbortS
     return BatchAbortSnapshot(
         task_id=task.id, task_key=task.statistics_key, actor_id=task.user_id, project_id=task.project_id,
         queued_at=chapter_claim._utc(task.queued_at), execution_key=task.execution_key, cursor=cursor, claim=claim,
-        _checkpoint_json=checkpoint_json, _input_json=input_json,
+        worker_key=task.worker_key, _checkpoint_json=checkpoint_json, _input_json=input_json,
     )
 
 
-async def restore_abort_snapshot(ctx: "TaskContext", snapshot: BatchAbortSnapshot) -> BatchAbortSnapshot:
+async def restore_abort_snapshot(
+    ctx: "TaskContext", snapshot: BatchAbortSnapshot, *, terminal_status: str | None = None,
+) -> BatchAbortSnapshot:
     """失败后重试只凭原捕获值清理，并返回供终态 CAS 的新快照。"""
     if type(snapshot) is not BatchAbortSnapshot:
         raise ConflictError("批量清理凭据无效", extra={"code": "chapter_claim_changed"})
@@ -840,6 +854,7 @@ async def restore_abort_snapshot(ctx: "TaskContext", snapshot: BatchAbortSnapsho
                 or not chapter_claim._positive(snapshot.actor_id) or not chapter_claim._positive(snapshot.project_id)
                 or not isinstance(snapshot.queued_at, datetime)
                 or not (snapshot.execution_key is None or chapter_claim._uuid(snapshot.execution_key))
+                or not (snapshot.worker_key is None or chapter_claim._uuid(snapshot.worker_key))
                 or type(snapshot.cursor) is not int or snapshot.cursor < 0 or not isinstance(original_input, dict)
                 or (checkpoint is not None and not isinstance(checkpoint, dict))):
             raise ValueError
@@ -853,6 +868,7 @@ async def restore_abort_snapshot(ctx: "TaskContext", snapshot: BatchAbortSnapsho
             pointer = {"chapter_id": claim.chapter_id, "claim_key": claim.claim_key,
                        "prev_status": claim.prev_status}
             if (not chapter_claim._valid_identity(claim) or claim.kind != "batch" or claim.phase != "running"
+                    or claim.worker_key != snapshot.worker_key
                     or (claim.task_id, claim.task_key, claim.actor_id, claim.project_id, claim.execution_key)
                     != (snapshot.task_id, snapshot.task_key, snapshot.actor_id, snapshot.project_id,
                         snapshot.execution_key) or chapter_claim._utc(claim.queued_at) != snapshot.queued_at
@@ -865,7 +881,7 @@ async def restore_abort_snapshot(ctx: "TaskContext", snapshot: BatchAbortSnapsho
     except (TypeError, ValueError, AttributeError):
         raise ConflictError("批量清理凭据无效", extra={"code": "chapter_claim_changed"}) from None
     if snapshot.claim is not None:
-        await restore_current(ctx, snapshot.claim)
+        await restore_current(ctx, snapshot.claim, terminal_status=terminal_status)
         if not isinstance(checkpoint, dict):
             raise ConflictError("批量清理断点无效", extra={"code": "chapter_claim_changed"})
         checkpoint["current"] = None
@@ -877,7 +893,7 @@ async def restore_abort_snapshot(ctx: "TaskContext", snapshot: BatchAbortSnapsho
         row = (await db.execute(select(Task.checkpoint, Task.step_cursor, Task.input).where(
             Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key, Task.user_id == snapshot.actor_id,
             Task.project_id == snapshot.project_id, Task.kind == KIND, Task.queued_at == snapshot.queued_at,
-            Task.execution_key == snapshot.execution_key,
+            Task.execution_key == snapshot.execution_key, Task.worker_key == snapshot.worker_key,
             Task.status.in_(allowed),
         ).with_for_update())).one_or_none()
         if (row is None or not _same_json(row.checkpoint, checkpoint) or row.step_cursor != snapshot.cursor
@@ -898,6 +914,7 @@ def _uncertain_attempt_checkpoint(snapshot: BatchAbortSnapshot, operation_id: st
             raise invalid
         claim, checkpoint, original_input = snapshot.claim, snapshot.checkpoint, snapshot.input
         if (not chapter_claim._valid_identity(claim) or claim.kind != "batch" or claim.phase != "running"
+                or claim.worker_key != snapshot.worker_key
                 or (claim.task_id, claim.task_key, claim.actor_id, claim.project_id, claim.execution_key)
                 != (snapshot.task_id, snapshot.task_key, snapshot.actor_id, snapshot.project_id, snapshot.execution_key)
                 or not isinstance(snapshot.queued_at, datetime)
@@ -951,7 +968,7 @@ async def release_uncertain_attempt(
                 Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key,
                 Task.user_id == snapshot.actor_id, Task.project_id == snapshot.project_id, Task.kind == KIND,
                 Task.queued_at == snapshot.queued_at, Task.execution_key == snapshot.execution_key,
-                Task.status == "running",
+                Task.worker_key == snapshot.worker_key, Task.status == "running",
             ).with_for_update())).one_or_none()
             if (row is None or row.admin_cancel_operation_id != expected_operation_id
                     or row.step_cursor != snapshot.cursor or not _same_json(row.input, snapshot.input)
@@ -970,7 +987,7 @@ async def release_uncertain_attempt(
                 Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key,
                 Task.user_id == snapshot.actor_id, Task.project_id == snapshot.project_id, Task.kind == KIND,
                 Task.queued_at == snapshot.queued_at, Task.execution_key == snapshot.execution_key,
-                Task.status == "running", Task.step_cursor == snapshot.cursor,
+                Task.worker_key == snapshot.worker_key, Task.status == "running", Task.step_cursor == snapshot.cursor,
                 Task.admin_cancel_operation_id == expected_operation_id if expected_operation_id is not None
                 else Task.admin_cancel_operation_id.is_(None),
                 cast(Task.checkpoint, String) == released.checkpoint_raw,
@@ -1001,7 +1018,7 @@ async def confirm_uncertain_attempt(
             Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key,
             Task.user_id == snapshot.actor_id, Task.project_id == snapshot.project_id, Task.kind == KIND,
             Task.queued_at == snapshot.queued_at, Task.status == status, Task.execution_key.is_(None),
-            Task.admin_cancel_operation_id.is_(None),
+            Task.worker_key == snapshot.worker_key, Task.admin_cancel_operation_id.is_(None),
         ))).one_or_none()
     return bool(row is not None and row.step_cursor == snapshot.cursor and _same_json(row.input, snapshot.input)
                 and _same_json(row.checkpoint, checkpoint)
@@ -1132,6 +1149,7 @@ async def record_chapter_completion(
             Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.user_id == claim.actor_id,
             Task.project_id == claim.project_id, Task.kind == KIND, Task.status == "running",
             Task.queued_at == claim.queued_at, Task.execution_key == claim.execution_key,
+            Task.worker_key == claim.worker_key,
             Task.admin_cancel_operation_id.is_(None),
         ).with_for_update().execution_options(populate_existing=True))
         if (task is None or not chapter_claim._task_matches(task, claim)
@@ -1194,6 +1212,7 @@ async def confirm_chapter_completion(
             Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.user_id == claim.actor_id,
             Task.project_id == claim.project_id, Task.kind == KIND, Task.status == "running",
             Task.queued_at == claim.queued_at, Task.execution_key == claim.execution_key,
+            Task.worker_key == claim.worker_key,
         ).with_for_update().execution_options(populate_existing=True))
         if task is None or not chapter_claim._task_matches(task, claim) or not isinstance(task.checkpoint, dict):
             return False
@@ -1240,7 +1259,8 @@ def _require_job_claim(job: BatchJob, claim: chapter_claim.ChapterClaim) -> None
             or job.active_claim != claim or claim.task_id != job.task_id or claim.task_key != job.task_key
             or claim.actor_id != job.user_id or claim.project_id != job.project_id
             or chapter_claim._utc(claim.queued_at) != chapter_claim._utc(job.queued_at)
-            or claim.execution_key != job.execution_key or claim.grant_identity != job.grant_identity
+            or claim.execution_key != job.execution_key or claim.worker_key != job.execution_identity.worker_key
+            or claim.grant_identity != job.grant_identity
             or not isinstance(checkpoint, dict) or not _same_json(checkpoint.get("current"), expected_current)
             or not chapter_claim._uuid(checkpoint.get("_batch_attempt"))):
         raise ConflictError("批量章节执行身份已变化", extra={"code": "chapter_claim_changed"})
@@ -1259,6 +1279,7 @@ async def _sync_released(
             Task.id == job.task_id, Task.statistics_key == job.task_key, Task.user_id == job.user_id,
             Task.project_id == job.project_id, Task.status == "running", Task.queued_at == job.queued_at,
             Task.execution_key == job.execution_key,
+            Task.worker_key == job.execution_identity.worker_key,
         )
         if not cleanup:
             statement = statement.where(Task.admin_cancel_operation_id.is_(None))
@@ -1296,6 +1317,7 @@ async def _sync_pending_review(
             Task.id == job.task_id, Task.statistics_key == job.task_key, Task.user_id == job.user_id,
             Task.project_id == job.project_id, Task.status == "running", Task.queued_at == job.queued_at,
             Task.execution_key == job.execution_key, Task.admin_cancel_operation_id.is_(None),
+            Task.worker_key == job.execution_identity.worker_key,
         ).with_for_update())
         if (task is None or task.step_cursor != job.persisted_cursor or not _same_json(task.input, job.original_input)
                 or not _same_json(task.checkpoint, expected)):
@@ -1373,6 +1395,7 @@ async def _sync_completed(ctx: "TaskContext", job: BatchJob, claim: chapter_clai
         task = await db.scalar(select(Task).where(
             Task.id == job.task_id, Task.statistics_key == job.task_key, Task.queued_at == job.queued_at,
             Task.execution_key == job.execution_key, Task.status == "running",
+            Task.worker_key == job.execution_identity.worker_key,
         ))
         checkpoint = copy.deepcopy(task.checkpoint) if task is not None else None
         receipt = checkpoint.get("_batch_completion") if isinstance(checkpoint, dict) else None
@@ -1468,6 +1491,7 @@ async def _generate_chapter(
                     db, task_id=job.task_id, task_key=job.task_key, actor_id=job.user_id,
                     project_id=job.project_id, chapter_id=cid, queued_at=job.queued_at,
                     execution_key=job.execution_key, grant_identity=job.grant_identity,
+                    worker_key=job.execution_identity.worker_key,
                 )
                 batch_attempt = collaboration_ai_guard.BatchAttemptIdentity(claim, index, attempt_key)
                 # 即使 commit 的确认丢失，清理也只可使用本次申请的原身份。
@@ -1565,7 +1589,7 @@ async def _analyze_chapter(
         input_hash=analysis_service.analysis_input_hash(job.execution_identity.input),
         actor_token_version=job.execution_identity.actor_token_version,
         model_binding=job.model_binding, embedding_selection=job.embedding_selection,
-        task_identity=job.execution_identity,
+        task_identity=job.execution_identity, worker_key=job.execution_identity.worker_key,
     )
     review_ref = job.checkpoint.get("rich_analysis")
     if review_ref is None:

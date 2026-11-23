@@ -21,6 +21,7 @@ import json
 
 import pytest
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import OperationalError
 
 from app.ai.providers import AIProviderError
 from app.models import (
@@ -947,7 +948,8 @@ async def test_tampered_receipt_keeps_running_barrier_and_recover_refuses(app, c
     assert fired == ["done_event"]
     assert row.status == "running" and row.execution_key is not None
     assert app.state.task_engine.has_cleanup_failure(world.project["id"])
-    await app.state.task_engine.recover()
+    await app.state.task_engine.stop()
+    await app.state.task_engine.start()
     async with app.state.sessionmaker() as db:
         again = await db.get(Task, holder["id"])
         assert (again.status, again.execution_key) == ("running", row.execution_key)
@@ -956,8 +958,10 @@ async def test_tampered_receipt_keeps_running_barrier_and_recover_refuses(app, c
 # ---------------- 重启恢复 ----------------
 
 
-async def test_recover_finalizes_committed_receipt_when_in_process_finalize_unavailable(app, client, make_client,
-                                                                                        fake_llm, monkeypatch):
+@pytest.mark.parametrize("temporary_read_failure", [False, True])
+async def test_recover_finalizes_committed_receipt_when_in_process_finalize_unavailable(
+    app, client, make_client, fake_llm, monkeypatch, temporary_read_failure,
+):
     monkeypatch.setattr(app.state.task_engine, "notify_collaboration_change", lambda *a, **k: None)
     guest = make_client()
     world = await _world(client, guest)
@@ -975,7 +979,22 @@ async def test_recover_finalizes_committed_receipt_when_in_process_finalize_unav
     stuck = await _settled(app, created.json()["id"])
     assert fired == ["done_event"] and stuck.status == "running"
     monkeypatch.setattr(type(engine), "_complete_from_wizard_receipt", original)
-    await engine.recover()
+    await engine.stop()
+    if temporary_read_failure:
+        async def busy_on_read(*args, **kwargs):
+            raise OperationalError(None, None, RuntimeError("模拟收据读暂时失败"))
+
+        with monkeypatch.context() as patch:
+            patch.setattr(wizard_service, "completed_wizard_receipt", busy_on_read)
+            await engine.start()
+            async with app.state.sessionmaker() as db:
+                waiting = await db.get(Task, stuck.id)
+                assert waiting.status == "running" and waiting.worker_key == engine.lease.worker_key
+                assert waiting.recovered_at is None
+        # 继续由同一份有效登记处理原收据。无需重启进程或等待本进程失租。
+        await engine.recover()
+    else:
+        await engine.start()
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, stuck.id)
         assert (row.status, row.error, row.execution_key) == ("succeeded", NOTE, None)
@@ -1005,7 +1024,8 @@ async def test_recover_releases_provable_uncommitted_pending(app, client, make_c
     stuck = await _settled(app, created.json()["id"])
     assert stuck.status == "running" and "_wizard_pending" in stuck.checkpoint
     monkeypatch.setattr(wizard_service, "discard_wizard_pending", original)
-    await app.state.task_engine.recover()
+    await app.state.task_engine.stop()
+    await app.state.task_engine.start()
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, stuck.id)
         assert (row.status, row.execution_key) == ("interrupted", None) and _no_pending(row)
@@ -1039,7 +1059,8 @@ async def test_recover_keeps_damaged_pending_unresolved(app, client, make_client
             checkpoint["_wizard_completion"] = {**checkpoint["_wizard_pending"], "result": {"kind": "characters"}}
         row.checkpoint = checkpoint
         await db.commit()
-    await app.state.task_engine.recover()
+    await app.state.task_engine.stop()
+    await app.state.task_engine.start()
     async with app.state.sessionmaker() as db:
         again = await db.get(Task, stuck.id)
         assert (again.status, again.execution_key) == ("running", stuck.execution_key)

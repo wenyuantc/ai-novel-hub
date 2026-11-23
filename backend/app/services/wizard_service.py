@@ -106,6 +106,7 @@ from app.services.setting_ai_context import build_scope, current_character_text,
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
     advance_checkpoint,
+    require_live_worker,
     require_write_execution,
 )
 
@@ -203,6 +204,7 @@ async def begin_wizard_pending(
             result = await db.execute(update(Task).where(
                 Task.id == execution.task_id, Task.statistics_key == execution.task_key,
                 Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+                Task.worker_key == execution.worker_key,
                 Task.status == "running", Task.admin_cancel_operation_id.is_(None),
             ).values(checkpoint=checkpoint).execution_options(synchronize_session=False))
             if result.rowcount != 1:
@@ -221,12 +223,16 @@ async def _lock_original_task(db: AsyncSession, execution: TaskExecutionIdentity
         ).execution_options(synchronize_session=False))
         if locked.rowcount != 1:
             return None
-        return (await db.execute(select(Task.checkpoint).where(
+        row = (await db.execute(select(Task.checkpoint).where(
             Task.id == execution.task_id, Task.statistics_key == execution.task_key,
             Task.user_id == execution.actor_id, Task.project_id == execution.project_id, Task.kind == execution.kind,
             Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+            Task.worker_key == execution.worker_key,
             Task.status == "running", Task.admin_cancel_operation_id.is_(None),
         ).with_for_update())).one_or_none()
+        if row is not None:
+            await require_live_worker(db, execution.worker_key)
+        return row
 
 
 async def discard_wizard_pending(maker: async_sessionmaker[AsyncSession], pending: WizardPending) -> bool:
@@ -250,6 +256,7 @@ async def discard_wizard_pending(maker: async_sessionmaker[AsyncSession], pendin
             result = await db.execute(update(Task).where(
                 Task.id == pending.active.task_id, Task.statistics_key == pending.active.task_key,
                 Task.queued_at == pending.active.queued_at, Task.execution_key == pending.active.execution_key,
+                Task.worker_key == pending.active.worker_key,
                 Task.status == "running", Task.admin_cancel_operation_id.is_(None),
             ).values(checkpoint=pending.original.checkpoint).execution_options(synchronize_session=False))
             if result.rowcount != 1:
@@ -365,7 +372,7 @@ async def completed_wizard_receipt(db: AsyncSession, task: Task) -> dict[str, An
         row = await db.scalar(select(Task).where(
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.kind == task.kind, Task.queued_at == task.queued_at,
-            Task.execution_key == task.execution_key, Task.status == "running",
+            Task.execution_key == task.execution_key, Task.worker_key == task.worker_key, Task.status == "running",
             Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
         ).with_for_update().execution_options(populate_existing=True))
     try:
@@ -400,7 +407,7 @@ async def release_uncommitted_pending(db: AsyncSession, task: Task) -> bool:
         row = await db.scalar(select(Task).where(
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.kind == task.kind, Task.queued_at == task.queued_at,
-            Task.execution_key == task.execution_key, Task.status == "running",
+            Task.execution_key == task.execution_key, Task.worker_key == task.worker_key, Task.status == "running",
             Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
         ).with_for_update().execution_options(populate_existing=True))
     try:
@@ -416,7 +423,7 @@ async def release_uncommitted_pending(db: AsyncSession, task: Task) -> bool:
     remaining.pop("_wizard_pending")
     changed = await db.execute(update(Task).where(
         Task.id == row.id, Task.statistics_key == row.statistics_key, Task.queued_at == row.queued_at,
-        Task.execution_key == row.execution_key, Task.status == "running",
+        Task.execution_key == row.execution_key, Task.worker_key == task.worker_key, Task.status == "running",
         Task.admin_cancel_operation_id.is_(None),
     ).values(checkpoint=remaining or None).execution_options(synchronize_session=False))
     return changed.rowcount == 1
@@ -1680,6 +1687,7 @@ async def save_wizard_result(
             changed = await db.execute(update(Task).where(
                 Task.id == execution.task_id, Task.statistics_key == execution.task_key,
                 Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+                Task.worker_key == execution.worker_key,
                 Task.status == "running", Task.admin_cancel_operation_id.is_(None),
             ).values(checkpoint=checkpoint, output_text=output_text).execution_options(synchronize_session=False))
             if changed.rowcount != 1:

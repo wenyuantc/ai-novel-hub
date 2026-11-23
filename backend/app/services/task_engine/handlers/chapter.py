@@ -78,7 +78,7 @@ def _capture_claim(task: Task, *, phase: str) -> chapter_claim.ChapterClaim:
         task_id=task.id, task_key=task.statistics_key, actor_id=task.user_id, project_id=task.project_id,
         chapter_id=task.chapter_id,
         queued_at=chapter_claim._utc(task.queued_at) if isinstance(task.queued_at, datetime) else task.queued_at,
-        execution_key=task.execution_key,
+        execution_key=task.execution_key, worker_key=task.worker_key,
         claim_key=pointer["claim_key"], prev_status=pointer["prev_status"], grant_identity=grant,
         phase=phase, kind="single",
     )
@@ -421,7 +421,7 @@ class ChapterHandler:
 
     async def on_abort(
         self, ctx: TaskContext, task: Task, *, claim: chapter_claim.ChapterClaim | None = None,
-        execution: TaskExecutionIdentity | None = None,
+        execution: TaskExecutionIdentity | None = None, terminal_status: str | None = None,
     ) -> None:
         """只清理本执行体持有的原 claim；缺证据的历史任务不得推测章节归属。"""
         if claim is None:
@@ -429,6 +429,7 @@ class ChapterHandler:
         if execution is not None and (
             execution.task_id != claim.task_id or execution.task_key != claim.task_key
             or execution.actor_id != claim.actor_id or execution.execution_key != claim.execution_key
+            or execution.worker_key != claim.worker_key
         ):
             raise _changed()
         expected = capture_queued_claim(task) if claim.phase == "queued" else capture_running_claim(task)
@@ -436,7 +437,7 @@ class ChapterHandler:
             raise _changed()
         try:
             async with ctx.sessionmaker() as db:
-                await chapter_claim.release_chapter_claim(db, claim)
+                await chapter_claim.release_chapter_claim(db, claim, terminal_status=terminal_status)
                 await db.commit()
         except Exception:  # noqa: BLE001
             # 该收尾同样由管理员drain触发，原始SQL参数可能包含旧断点数据。

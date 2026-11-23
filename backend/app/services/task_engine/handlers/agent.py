@@ -34,6 +34,7 @@ from app.services.collaboration_task_access import GRANT_KEY, GrantIdentity, tas
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
     matches_running,
+    require_live_worker,
     require_write_execution,
     same_execution,
 )
@@ -42,7 +43,9 @@ from app.services.task_engine.registry import TaskSpec, register
 logger = logging.getLogger(__name__)
 
 
-async def _void_revoked_turn(ctx, task: Task) -> str | None:
+async def _void_revoked_turn(
+    ctx, task: Task, *, execution: TaskExecutionIdentity | None,
+) -> str | None:
     """锁序 gate → actor/作者 User 升序 → 发送写门禁 → 作品父行 → Task 内复核原协作轮次已失效，再作废待确认提案。
 
     先做无锁预筛（与待审核复查同一谓词）：授权仍有效时不取任何写锁。返回锁内确认的失效原因
@@ -71,9 +74,12 @@ async def _void_revoked_turn(ctx, task: Task) -> str | None:
             # 删除中 / 回收站：作品级排空负责收尾，这里不越过生命周期屏障。
             await db.rollback()
             return None
+        owner = execution.worker_key if execution is not None else task.worker_key
         current = await db.scalar(select(Task).where(
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.kind == "agent.turn",
+            Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
+            Task.worker_key == owner, Task.status == task.status,
         ).with_for_update().execution_options(populate_existing=True))
         failure = None
         if project.user_id == owner_id and current is not None and task_grant_identity(current.input) == grant:
@@ -81,6 +87,8 @@ async def _void_revoked_turn(ctx, task: Task) -> str | None:
         if failure is None:
             await db.rollback()
             return None
+        if current.status == "running" or execution is not None:
+            await require_live_worker(db, owner)
         await service.void_revoked_turn_changes(
             db, task_id=current.id, task_key=current.statistics_key, project_id=current.project_id,
         )
@@ -753,12 +761,12 @@ class AgentHandler:
                 or not _canonical_key(task.statistics_key)):
             return None
         try:
-            await _void_revoked_turn(ctx, task)
+            await _void_revoked_turn(ctx, task, execution=execution)
         except Exception:  # noqa: BLE001  作废失败不阻断收尾：轮次结束后不再是 paused，残留 proposed 也不能确认。
             logger.error("协作轮次提案作废未完成 task_key=%s", task.statistics_key)
         return None
 
-    async def finalize_revoked_pause(self, ctx, task) -> str | None:
+    async def finalize_revoked_pause(self, ctx, task, *, execution: TaskExecutionIdentity) -> str | None:
         """暂停终态核验因协作授权失效而失败（断点已提交、paused 未提交）时，引擎据此受限收尾为 failed。
 
         与 on_abort 相同的锁内复核与作废；返回失效原因，授权仍有效 / 无法证明时 None（保持原屏障）。
@@ -767,7 +775,7 @@ class AgentHandler:
         if (not isinstance(data, dict) or GRANT_KEY not in data or task.project_id is None
                 or not _canonical_key(task.statistics_key)):
             return None
-        return await _void_revoked_turn(ctx, task)
+        return await _void_revoked_turn(ctx, task, execution=execution)
 
 
 register(AgentHandler())

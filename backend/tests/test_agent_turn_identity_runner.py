@@ -354,6 +354,7 @@ async def test_queued_retry_rejects_deleted_and_reused_source_id(app, client, fa
         assert replacement.statistics_key != old["task_key"]
         queued = await db.get(Task, new["id"])
         engine._running_rounds[new["id"]], engine._stopping = queued.queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(new["id"], new["task_key"])
     async with app.state.sessionmaker() as db:
         proposal = await db.get(AgentChange, change["id"])

@@ -346,6 +346,7 @@ async def _check_task(
         raise CollaborationSendBlocked()
     if not execution_identity.matches_running_base(expected, row):
         raise CollaborationSendBlocked()
+    await execution_identity.require_live_worker(db, expected.worker_key, read_only=not write)
     if analysis_execution is not None:
         from app.services import analysis_service
 
@@ -434,7 +435,7 @@ def _matches_chapter_identity(
         and chapter.task_id == task.task_id and chapter.task_key == task.task_key
         and chapter.actor_id == task.actor_id and chapter.project_id == task.project_id
         and isinstance(chapter.queued_at, datetime) and _same_time(chapter.queued_at, task.queued_at)
-        and chapter.execution_key == task.execution_key
+        and chapter.execution_key == task.execution_key and chapter.worker_key == task.worker_key
         and chapter.grant_identity == binding.grant_identity
         and ((chapter.kind == "single" and task.kind in ("chapter.generate", "chapter.polish", "chapter.revise")
               and task.chapter_id == chapter.chapter_id)

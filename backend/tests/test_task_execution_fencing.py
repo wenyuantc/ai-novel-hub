@@ -57,6 +57,7 @@ async def test_claim_confirmation_loss_never_adopts_another_execution(app, clien
 
     monkeypatch.setattr(AsyncSession, "commit", lose_and_compete)
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     monkeypatch.setattr(engine, "_stopping", False)
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -86,6 +87,7 @@ async def test_claim_confirmation_loss_accepts_its_own_committed_execution(app, 
 
     monkeypatch.setattr(AsyncSession, "commit", commit_then_lose)
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     monkeypatch.setattr(engine, "_stopping", False)
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -177,6 +179,7 @@ async def test_kb_claim_failure_rolls_back_task_running_transition(app, client, 
 
     monkeypatch.setattr(kb_index_service, "activate_document_claim", fail)
     engine = app.state.task_engine
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     with pytest.raises(RuntimeError, match="占用轮换失败"):

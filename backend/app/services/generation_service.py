@@ -73,7 +73,12 @@ from app.services.chapter_service import count_words, get_owned_chapter, manual_
 from app.services.collaboration_ai_guard import _BoundModelProvider
 from app.services.context_builder import build_chapter_context, build_setting_context, chapter_task
 from app.services.project_service import get_owned_project
-from app.services.task_engine.execution_identity import TaskExecutionIdentity, matches_running, matches_running_base
+from app.services.task_engine.execution_identity import (
+    TaskExecutionIdentity,
+    matches_running,
+    matches_running_base,
+    require_live_worker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +401,7 @@ async def _write_completion_receipt(
         Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.user_id == claim.actor_id,
         Task.project_id == claim.project_id, Task.chapter_id == claim.chapter_id, Task.status == "running",
         Task.queued_at == claim.queued_at, Task.execution_key == claim.execution_key,
+        Task.worker_key == claim.worker_key,
     ).with_for_update())
     if (task is None or not isinstance(task.input, dict) or "_chapter_claim" in task.input
             or chapter_claim._grant(task.input) != claim.grant_identity):
@@ -567,12 +573,14 @@ async def completed_chapter_receipt(db: AsyncSession, claim: ChapterClaimIdentit
         if (project.user_id == claim.actor_id) != (claim.grant_identity is None):
             return None
         task = await chapter_claim._task(db, claim.task_id, write=True)
+        await require_live_worker(db, claim.worker_key)
         if (task is None or task.id != claim.task_id or task.statistics_key != claim.task_key
                 or task.user_id != claim.actor_id or task.project_id != claim.project_id
                 or task.chapter_id != claim.chapter_id or task.status != "running"
                 or not isinstance(task.queued_at, type(claim.queued_at))
                 or chapter_claim._utc(task.queued_at) != chapter_claim._utc(claim.queued_at)
-                or task.execution_key != claim.execution_key or task.kind not in {
+                or task.execution_key != claim.execution_key or task.worker_key != claim.worker_key
+                or task.kind not in {
                     "chapter.generate", "chapter.polish", "chapter.revise",
                 } or not isinstance(task.input, dict) or "_chapter_claim" in task.input
                 or not isinstance(task.checkpoint, dict)):
@@ -650,6 +658,7 @@ async def _completed_identity_chapter_receipt(
             project_id=execution.project_id, chapter_id=execution.chapter_id, queued_at=execution.queued_at,
             execution_key=execution.execution_key, claim_key=pointer["claim_key"],
             prev_status=pointer["prev_status"], grant_identity=execution.grant_identity, phase="running", kind="single",
+            worker_key=execution.worker_key,
         )
         if not chapter_claim._valid_identity(claim):
             return None
@@ -677,8 +686,10 @@ async def _completed_identity_chapter_receipt(
                 Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
                 Task.chapter_id == execution.chapter_id, Task.kind == execution.kind,
                 Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+                Task.worker_key == execution.worker_key,
                 Task.status == status, *conditions,
             ).with_for_update())).one_or_none()
+            await require_live_worker(db, execution.worker_key)
             if (row is None or not isinstance(row.input, dict) or not isinstance(row.checkpoint, dict)
                     or (operation_id is not None and not isinstance(row.admin_cancel_requested_at, datetime))
                     or row.resource_key != f"chapter:{execution.chapter_id}" or row.step_cursor != execution.step_cursor
@@ -1396,6 +1407,7 @@ async def _restore_collaborator_claim(
     try:
         if (type(execution) is not TaskExecutionIdentity or type(claim) is not ChapterClaimIdentity
                 or execution.grant_identity is None or claim.grant_identity != execution.grant_identity
+                or claim.worker_key != execution.worker_key
                 or not chapter_claim._valid_identity(claim) or claim.phase != "running"
                 or (claim.task_id, claim.task_key, claim.actor_id, claim.project_id, claim.execution_key,
                     chapter_claim._utc(claim.queued_at))
@@ -1455,6 +1467,7 @@ async def _admin_cancel_pending(sessionmaker: async_sessionmaker[AsyncSession], 
                 Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.user_id == claim.actor_id,
                 Task.project_id == claim.project_id, Task.status == "running", Task.queued_at == claim.queued_at,
                 Task.execution_key == claim.execution_key,
+                Task.worker_key == claim.worker_key,
             ))
             return operation is not None
     except Exception:  # noqa: BLE001
@@ -1765,7 +1778,7 @@ async def run_chapter_job(job: ChapterJob, sessionmaker: async_sessionmaker[Asyn
                         status, error = "cancelled", ""
                     await generation_log_service.save_log(
                         sessionmaker, **log_kwargs(status, error, count_words("".join(produced))),
-                        model_binding=job.model_binding,
+                        model_binding=job.model_binding, execution=job.execution,
                     )
 
             await _drain_cleanup(cleanup())

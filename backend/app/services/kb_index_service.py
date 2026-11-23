@@ -63,6 +63,7 @@ from app.services import authorization_service as authz
 from app.services.collaboration_task_access import GRANT_KEY, GrantIdentity, bind_task_grant, task_grant_identity
 from app.services.project_service import get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder
+from app.services.task_engine.execution_identity import require_live_worker
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class DocumentIndexClaim:
     queued_at: datetime
     claim_key: str
     phase: Literal["queued", "running"]
+    worker_key: str | None = None
 
 
 def _claim_changed() -> ConflictError:
@@ -209,7 +211,8 @@ def _claim_task_conditions(db: AsyncSession, claim: DocumentIndexClaim, *, clean
     if claim.phase == "queued":
         conditions.extend((Task.execution_key.is_(None), Task.status.in_(("queued", *terminal))))
     elif claim.phase == "running":
-        conditions.extend((Task.execution_key == claim.claim_key, Task.status.in_(("running", *terminal))))
+        conditions.extend((Task.execution_key == claim.claim_key, Task.status.in_(("running", *terminal)),
+                           Task.worker_key == claim.worker_key))
     else:
         raise ValueError("索引占用阶段无效")
     if not cleanup:
@@ -321,7 +324,7 @@ def running_document_claim(task: Task, execution_key: str | None = None) -> Docu
     if document_id is None or task.resource_key != f"kbdoc:{document_id}":
         return None
     return DocumentIndexClaim(task.id, task.statistics_key, task.user_id, task.project_id, document_id,
-                              _utc(task.queued_at), key, "running")
+                              _utc(task.queued_at), key, "running", task.worker_key)
 
 
 async def queued_document_claim(db: AsyncSession, task: Task) -> DocumentIndexClaim | None:
@@ -351,16 +354,19 @@ async def _lock_running_document(db: AsyncSession, claim: DocumentIndexClaim) ->
         task_id = await db.scalar(select(Task.id).where(
             *_claim_task_conditions(db, claim, cleanup=False),
         ).with_for_update())
+        if task_id is None:
+            raise _claim_changed()
+        await require_live_worker(db, claim.worker_key)
         doc = await db.scalar(select(KbDocument).where(
             *_claim_document_conditions(claim), KbDocument.status.in_(("pending", "indexing")),
         ).with_for_update())
-    if task_id is None or doc is None:
+    if doc is None:
         raise _claim_changed()
     return doc
 
 
 async def activate_document_claim(
-    db: AsyncSession, queued: DocumentIndexClaim, *, execution_key: str,
+    db: AsyncSession, queued: DocumentIndexClaim, *, execution_key: str, worker_key: str | None = None,
 ) -> DocumentIndexClaim:
     """领取者的 Task CAS 后、同事务提交前轮换文档 claim；失败须回滚整个领取。"""
     if queued.phase != "queued" or not _canonical_uuid(execution_key) \
@@ -368,7 +374,7 @@ async def activate_document_claim(
         raise _claim_changed()
     running = DocumentIndexClaim(
         queued.task_id, queued.task_key, queued.actor_id, queued.project_id, queued.document_id, queued.queued_at,
-        execution_key, "running",
+        execution_key, "running", worker_key,
     )
     with db.no_autoflush:
         expected_task = exists(select(Task.id).where(*_claim_task_conditions(db, running, cleanup=False)))
@@ -410,10 +416,13 @@ async def _lock_document_claim_rows(db: AsyncSession, claim: DocumentIndexClaim,
         task_id = await db.scalar(select(Task.id).where(
             *_claim_task_conditions(db, claim, cleanup=False),
         ).with_for_update(read=not write))
+        if task_id != claim.task_id:
+            raise _claim_changed()
+        await require_live_worker(db, claim.worker_key, read_only=not write)
         document_id = await db.scalar(select(KbDocument.id).where(
             *_claim_document_conditions(claim), KbDocument.status.in_(("pending", "indexing")),
         ).with_for_update(read=not write))
-    if task_id != claim.task_id or document_id != claim.document_id:
+    if document_id != claim.document_id:
         raise _claim_changed()
 
 
@@ -483,12 +492,27 @@ async def require_sending_document_claim(
     })
 
 
-async def release_document_claim(db: AsyncSession, claim: DocumentIndexClaim) -> bool:
+async def release_document_claim(
+    db: AsyncSession, claim: DocumentIndexClaim, *, terminal_status: str | None = None,
+) -> bool:
     """仅清理已停止/正在安全收尾的本轮占用；调用者须先证明执行体不会继续写入。"""
     with db.no_autoflush:
+        conditions = _claim_task_conditions(db, claim, cleanup=True)
+        if terminal_status is not None:
+            if terminal_status not in ("cancelled", "failed", "interrupted"):
+                raise _claim_changed()
+            conditions.append(Task.status == terminal_status)
+        locked = await db.execute(update(Task).where(*conditions).values(updated_at=Task.updated_at)
+                                  .execution_options(synchronize_session=False))
+        if locked.rowcount != 1:
+            return False
+        if terminal_status is None:
+            try:
+                await require_live_worker(db, claim.worker_key)
+            except ConflictError:
+                return False
         result = await db.execute(update(KbDocument).where(
             *_claim_document_conditions(claim), KbDocument.status.in_(("pending", "indexing")),
-            exists(select(Task.id).where(*_claim_task_conditions(db, claim, cleanup=True))),
         ).values(status="failed", error="建索引未完成（失败、取消或中断），请重试", index_task_key=None,
                  index_task_queued_at=None, index_claim_key=None)
             .execution_options(synchronize_session=False))
@@ -1449,6 +1473,7 @@ def _require_job_identity(job: IndexJob) -> None:
     if claim is not None and (
         claim.task_id != execution.task_id or claim.task_key != execution.task_key
         or claim.actor_id != execution.actor_id or claim.claim_key != execution.execution_key
+        or claim.worker_key != execution.worker_key
         or claim.project_id != job.project_id or claim.document_id != job.document_id
     ):
         raise _claim_changed()

@@ -22,6 +22,7 @@ from app.services.task_engine.execution_identity import from_queued_task, matche
 from tests.helpers import Gate, create_project, register, task_params, wait_task
 from tests.mcp_fakes import FakeMcpConnector, serve
 from tests.test_agent_mcp_skills import call, send_task, setup
+from tests.worker_helpers import fence_worker
 
 
 @pytest.fixture(autouse=True)
@@ -570,6 +571,7 @@ async def test_queued_retry_with_new_uuid_rechecks_unknown_before_dispatch(app, 
         change_id = old_change.id
         queued = await db.get(Task, retried["id"])
         engine._running_rounds[retried["id"]], engine._stopping = queued.queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(retried["id"], retried["task_key"])
     async with app.state.sessionmaker() as db:
         row = await db.get(AgentChange, change_id)
@@ -602,6 +604,7 @@ async def test_queued_retry_cannot_rebind_source_with_changed_model_instance(app
         await db.commit()
         target = await db.get(Task, retried["id"])
         engine._running_rounds[retried["id"]], engine._stopping = target.queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(retried["id"], retried["task_key"])
     async with app.state.sessionmaker() as db:
         message = await db.scalar(select(AgentMessage).where(
@@ -633,6 +636,7 @@ async def test_queued_agent_rejects_missing_or_replaced_original_actor(app, clie
         row.input = data
         await db.commit()
         engine._running_rounds[task["id"]], engine._stopping = row.queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(task["id"], task["task_key"])
     async with app.state.sessionmaker() as db:
         saved = await db.get(Task, task["id"])
@@ -655,6 +659,7 @@ async def test_queued_agent_does_not_adopt_a_newer_token(app, client, fake_llm):
         actor.token_version += 1
         await db.commit()
         engine._running_rounds[task["id"]], engine._stopping = row.queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(task["id"], task["task_key"])
     async with app.state.sessionmaker() as db:
         saved = await db.get(Task, task["id"])
@@ -683,6 +688,7 @@ async def test_queued_agent_rejects_model_id_reuse_even_with_same_fields(app, cl
         db.add(AIConfig(**fields))
         await db.commit()
         engine._running_rounds[task["id"]], engine._stopping = row.queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(task["id"], task["task_key"])
     async with app.state.sessionmaker() as db:
         saved = await db.get(Task, task["id"])
@@ -830,11 +836,20 @@ async def test_damaged_or_stale_external_evidence_blocks_new_turn(app, client, f
 
 
 @pytest.mark.parametrize("replacement", ["task_key", "execution", "queued", "change", "claim", "actor", "proof",
-                                          "proof_bool", "input", "checkpoint", "payload", "mac", "key_rotation"])
-async def test_old_cleanup_never_modifies_replaced_identity(app, client, replacement):
+                                          "proof_bool", "input", "checkpoint", "payload", "mac", "key_rotation",
+                                          "worker", "worker_fenced"])
+async def test_old_cleanup_never_modifies_replaced_identity(app, client, peer_app_factory, replacement):
     owner = await register(client)
     project = await create_project(client)
     now = datetime.now(UTC)
+    engine = app.state.task_engine
+    worker_key = next_owner = None
+    if replacement in {"worker", "worker_fenced"}:
+        await engine.stop()
+        worker_key = await engine.lease.register()
+        if replacement == "worker":
+            peer = await peer_app_factory()
+            next_owner = await peer.state.task_engine.lease.register()
     async with app.state.sessionmaker() as db:
         conv = AgentConversation(user_id=owner["id"], project_id=project["id"])
         task = Task(user_id=owner["id"], project_id=project["id"], kind="agent.turn", status="queued",
@@ -843,7 +858,8 @@ async def test_old_cleanup_never_modifies_replaced_identity(app, client, replace
         db.add_all([conv, task])
         await db.flush()
         execution_key = str(uuid4())
-        execution = from_queued_task(task, execution_key)
+        execution = from_queued_task(task, execution_key, worker_key=worker_key)
+        task.worker_key = worker_key
         task.status, task.execution_key = "running", execution_key
         job = runner.AgentJob(task.id, owner["id"], project["id"], conv.id, 1, None, None, None,
                               task_key=task.statistics_key, queued_at=now, execution_key=task.execution_key,
@@ -876,6 +892,8 @@ async def test_old_cleanup_never_modifies_replaced_identity(app, client, replace
             task.statistics_key = str(uuid4())
         elif replacement == "execution":
             task.execution_key = str(uuid4())
+        elif replacement == "worker":
+            task.worker_key = next_owner
         elif replacement == "queued":
             task.queued_at = now + timedelta(seconds=1)
         elif replacement == "change":
@@ -901,6 +919,8 @@ async def test_old_cleanup_never_modifies_replaced_identity(app, client, replace
             result = {**result, "_external_snapshot_mac": "a" * 64}
             row.result = result
         await db.commit()
+    if replacement == "worker_fenced":
+        await fence_worker(engine, mirror=False)
     info = app.state.sessionmaker.kw["info"]
     old_key = info["agent_view_hmac_key"]
     if replacement == "key_rotation":

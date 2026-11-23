@@ -330,6 +330,7 @@ async def test_engine_claim_runs_valid_collaborator_index_and_closes_invalid(
         assert response.status_code == 200, response.text
     engine = app.state.task_engine
     # 调度协程已停止；只恢复领取开关，直接驱动一次领取（与既有引擎测试相同）。
+    await engine.lease.register()
     engine._stopping = False
     await engine._claim_and_run(out.id, out.task_key)
     async with app.state.sessionmaker() as db:

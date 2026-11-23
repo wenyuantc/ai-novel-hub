@@ -121,7 +121,7 @@ class KbIndexHandler:
             task.id != execution.task_id or task.statistics_key != execution.task_key
             or task.user_id != execution.actor_id or task.project_id != execution.project_id
             or task.queued_at is None or kb_index_service._utc(task.queued_at) != execution.queued_at
-            or task.execution_key != execution.execution_key
+            or task.execution_key != execution.execution_key or task.worker_key != execution.worker_key
         ):
             raise kb_index_service._claim_changed()
         await kb_index_service.on_abort(ctx.sessionmaker, task)

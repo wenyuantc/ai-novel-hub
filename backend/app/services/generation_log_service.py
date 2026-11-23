@@ -11,6 +11,7 @@ from app.core.errors import NotFoundError
 from app.models import AIConfig, Chapter, GenerationLog, Project, Task
 from app.schemas.chapter_version import GenerationLogOut
 from app.services import personal_projection, project_ai_config, project_lifecycle
+from app.services.task_engine.execution_identity import TaskExecutionIdentity, require_live_worker
 
 logger = logging.getLogger(__name__)
 
@@ -141,13 +142,30 @@ async def write_log(
     raise safe_error
 
 
-async def save_log(sessionmaker: async_sessionmaker[AsyncSession], **kwargs: Any) -> int | None:
+async def save_log(
+    sessionmaker: async_sessionmaker[AsyncSession], *, execution: TaskExecutionIdentity | None = None, **kwargs: Any,
+) -> int | None:
     """在独立会话中写一条记录并提交（失败 / 取消路径使用）；出错只记日志，不向上抛。"""
     try:
         async with sessionmaker() as db:
             project = await project_lifecycle.lock_record(db, kwargs["project_id"])
             if project.deleted_at is not None:
                 return None
+            if execution is not None:
+                # 本轮占用可能刚刚正常释放，原任务与进程身份仍必须匹配。
+                if ((kwargs.get("task_id"), kwargs["project_id"], kwargs["actor_user_id"])
+                        != (execution.task_id, execution.project_id, execution.actor_id)):
+                    return None
+                source = await db.scalar(select(Task.id).where(
+                    Task.id == execution.task_id, Task.statistics_key == execution.task_key,
+                    Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
+                    Task.kind == execution.kind, Task.queued_at == execution.queued_at,
+                    Task.execution_key == execution.execution_key, Task.worker_key == execution.worker_key,
+                    Task.status == "running",
+                ).with_for_update())
+                if source is None:
+                    return None
+                await require_live_worker(db, execution.worker_key)
             log = await write_log(db, **kwargs)
             await db.commit()
             return log.id

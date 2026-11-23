@@ -199,6 +199,7 @@ async def test_delayed_retry_rechecks_source_before_transferring_changes(app, cl
         new_task = await db.get(Task, new_id)
         queued_at = new_task.queued_at
     engine._running_rounds[new_id], engine._stopping = queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(new_id, new_key)
     async with app.state.sessionmaker() as db:
         old_change = await db.get(AgentChange, change_id)
@@ -254,6 +255,7 @@ async def test_retry_rejects_source_identity_replacement_after_queueing(app, cli
         new_task = await db.get(Task, new_id)
         queued_at = new_task.queued_at
     engine._running_rounds[new_id], engine._stopping = queued_at, False
+    await engine.lease.register()
     await engine._claim_and_run(new_id, new_key)
     async with app.state.sessionmaker() as db:
         change, new_task = await db.get(AgentChange, change_id), await db.get(Task, new_id)

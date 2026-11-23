@@ -11,7 +11,7 @@ from app.models import Chapter, Project, Task, TaskStatistic, User
 from app.services import chapter_claim, project_access, task_service, task_statistics_service
 from app.services.task_engine.handlers import chapter as chapter_handler
 from app.services.task_engine.registry import get_handler
-from tests.helpers import create_ai_config, create_project, register
+from tests.helpers import Gate, create_ai_config, create_project, register
 
 
 async def _chapter_task(app, client):
@@ -54,6 +54,41 @@ async def _make_running(app, task_id):
         await task_statistics_service.record_state_change(db, task, "running")
         await db.commit()
         return running
+
+
+async def test_peer_start_leaves_admin_intent_and_chapter_for_live_worker(
+    app, second_app, client, fake_llm, monkeypatch,
+):
+    task_id, key, chapter_id = await _chapter_task(app, client)
+    owner, peer = app.state.task_engine, second_app.state.task_engine
+    stream = Gate()
+    fake_llm.push(["首段", stream, "尾段"])
+    try:
+        with monkeypatch.context() as hold:
+            # 取消意图已经提交，但原执行者尚未消费；此刻另一进程启动并完成自己的扫描。
+            hold.setattr(owner.admin_cancellations, "request", lambda *_: None)
+            await owner.start()
+            await stream.wait_reached()
+            operation = await _accept(client, key)
+            await peer.start()
+            await peer.wait_admin_cancellations()
+            async with second_app.state.sessionmaker() as db:
+                row = await db.get(Task, task_id)
+                chapter = await db.get(Chapter, chapter_id)
+                assert (row.status, row.worker_key, row.admin_cancel_operation_id) == (
+                    "running", owner.lease.worker_key, operation,
+                )
+                assert chapter.status == "generating" and chapter.generation_claim_task_key == key
+            assert not owner._running[task_id].done()
+        await owner.scan_admin_cancellations()
+        await owner.wait_admin_cancellations()
+        async with app.state.sessionmaker() as db:
+            row = await db.get(Task, task_id)
+            chapter = await db.get(Chapter, chapter_id)
+            assert (row.status, row.admin_cancel_operation_id, row.execution_key) == ("cancelled", None, None)
+            assert chapter.status == "draft" and chapter.generation_claim_key is None
+    finally:
+        stream.release()
 
 
 async def test_admin_queued_chapter_finishes_and_releases_same_claim(app, client):

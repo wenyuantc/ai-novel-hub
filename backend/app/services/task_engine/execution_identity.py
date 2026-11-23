@@ -69,6 +69,7 @@ class TaskExecutionIdentity:
     actor_token_version: int | None
     input_json: str
     checkpoint_json: str
+    worker_key: str | None = None
 
     @property
     def input(self) -> dict[str, Any]:
@@ -79,12 +80,13 @@ class TaskExecutionIdentity:
         return json.loads(self.checkpoint_json)
 
 
-def from_queued_task(task: Task, execution_key: str) -> TaskExecutionIdentity:
+def from_queued_task(task: Task, execution_key: str, *, worker_key: str | None = None) -> TaskExecutionIdentity:
     """仅领取者在原 queued Task 行锁内调用，execution_key 是本次 CAS 值。"""
     try:
         if (not isinstance(task, Task) or type(task.id) is not int or task.id <= 0
                 or type(task.user_id) is not int or task.user_id <= 0 or not _uuid(task.statistics_key)
                 or not _uuid(execution_key) or execution_key == task.statistics_key
+                or (worker_key is not None and not _uuid(worker_key))
                 or task.status != "queued" or task.execution_key is not None
                 or task.admin_cancel_operation_id is not None or task.admin_cancel_requested_at is not None
                 or not isinstance(task.queued_at, datetime)
@@ -117,7 +119,7 @@ def from_queued_task(task: Task, execution_key: str) -> TaskExecutionIdentity:
             task.id, task.statistics_key, task.user_id, task.project_id, task.chapter_id, task.kind,
             task.resource_key, task.serial_key, task.retry_of_id,
             _utc(task.queued_at), execution_key, grant, task.step_cursor, token_version, _json(task.input),
-            _json(task.checkpoint),
+            _json(task.checkpoint), worker_key,
         )
     except (TypeError, ValueError, RecursionError):
         raise _changed() from None
@@ -137,6 +139,7 @@ def matches_running_base(identity: TaskExecutionIdentity, task: Task) -> bool:
                     and task.retry_of_id == identity.retry_of_id
                     and isinstance(task.queued_at, datetime) and _utc(task.queued_at) == identity.queued_at
                     and task.execution_key == identity.execution_key and task.status == "running"
+                    and task.worker_key == identity.worker_key
                     and task.admin_cancel_operation_id is None and task.admin_cancel_requested_at is None
                     and _json(task.input) == identity.input_json)
     except (TypeError, ValueError, RecursionError):
@@ -207,6 +210,15 @@ def frozen_project_owner_id(identity: TaskExecutionIdentity) -> int | None:
     return owner
 
 
+async def require_live_worker(db: AsyncSession, worker_key: str | None, *, read_only: bool = False) -> None:
+    """调用方先锁定原 Task 并比对其 worker_key，再在同一事务内持有有效登记。"""
+    if worker_key is not None:
+        from app.services.task_engine.workers import lock_live_worker
+
+        if not await lock_live_worker(db, worker_key, read_only=read_only):
+            raise _changed()
+
+
 async def require_write_execution(
     db: AsyncSession, identity: TaskExecutionIdentity, *, project_owner_id: int | None = None,
 ) -> None:
@@ -259,6 +271,7 @@ async def require_write_execution(
             ).with_for_update().execution_options(populate_existing=True))
         if not matches_running(identity, task):
             raise _changed()
+        await require_live_worker(db, identity.worker_key)
         # 不只依赖“任何授权变更都递增 revision”的约定：作者模型来源须直接核对当前授权开关。
         if (identity.grant_identity is not None and identity.project_id is not None
                 and task_requires_owner_ai(task.input)

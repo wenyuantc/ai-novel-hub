@@ -74,6 +74,7 @@ async def state(app, legacy):
 
 async def claim_once(app, legacy):
     engine = app.state.task_engine
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[legacy["task_id"]] = legacy["queued_at"]
     try:

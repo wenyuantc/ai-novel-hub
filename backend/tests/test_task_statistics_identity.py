@@ -134,7 +134,10 @@ async def test_stale_prune_snapshot_cannot_remove_reused_active_task(app, monkey
 
 async def test_stale_dispatch_identity_does_not_claim_replacement(app):
     async with _reused_task(app) as (_, original, new_key, _):
-        await app.state.task_engine._claim_and_run(original.id, original.statistics_key)
+        engine = app.state.task_engine
+        await engine.lease.register()
+        engine._stopping = False
+        await engine._claim_and_run(original.id, original.statistics_key)
         await _assert_replacement_intact(app, original, new_key)
 
 
@@ -190,6 +193,8 @@ async def test_recovery_snapshot_does_not_interrupt_replacement(app, monkeypatch
         engine.ensure_hub(new_id, statistics_key=new_key, status="running", text="新用户内容")
 
     monkeypatch.setattr(engine_module, "_try_handler", lambda kind: SimpleNamespace(on_abort=replace_during_abort))
+    # 只运行一轮恢复，避免后台调度器把随后换入的另一条旧记录也当作恢复候选。
+    await engine.lease.register()
     await engine.recover()
     await _assert_replacement_intact(app, original, new_key, "running")
     assert engine.hubs[original.id].statistics_key == new_key and not engine.hubs[original.id].closed

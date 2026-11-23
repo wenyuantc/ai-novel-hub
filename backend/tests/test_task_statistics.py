@@ -192,7 +192,7 @@ async def test_startup_recovery_records_once(app):
         task = await _task(db, user.id, status="running", kind=_PLAIN_RUNNING_KIND)
         await db.commit()
         key = task.statistics_key
-    await engine.recover()
+    await engine.start()
     async with app.state.sessionmaker() as db:
         first = (await db.get(TaskStatistic, key)).finished_event_at
     await engine.recover()

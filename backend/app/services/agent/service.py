@@ -150,8 +150,8 @@ async def recover_external(
 ) -> int:
     """把中断的外部调用（kind=external、仍为 executing）标为 failed，返回处理的条数；不 commit。
 
-    只改状态、不重新调用外部服务（结果未知，重放可能重复执行发送类操作）。stale_only=False 用于进程启动：
-    单进程部署下启动时不可能有正在进行的确认请求。
+    启动与周期恢复均使用 stale_only：只处理超过时限、且本进程没有在途调用的记录。
+    收尾只标记结果未知；重新调用外部服务可能重复已经完成的操作。
     """
     if stale_only:
         from app.services.task_engine.engine import TaskEngine

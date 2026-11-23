@@ -330,7 +330,9 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
     ):
         # 进度 / 阶段以内存中的实时值为准（库里是节流刷新的）
         update_fields.update(progress=hub.progress, stage=hub.stage or out.stage)
-    if engine is not None and task.status == "running" and engine.execution_is_uncertain(task):
+    if task.status == "running" and (task.recovered_at is not None or (
+        engine is not None and engine.execution_is_uncertain(task)
+    )):
         update_fields.update(stage="结果待核对", error="任务保存结果尚未确认，请稍后核对")
     return out.model_copy(update=update_fields)
 
@@ -737,7 +739,7 @@ async def resume_task(
             .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
                    Task.admin_cancel_operation_id.is_(None), Task.execution_key.is_(None))
             .values(status="queued", error="", result=None, finished_at=None, stage=STAGE_LABELS["queued"],
-                    queued_at=_next_queued_at(task))
+                    queued_at=_next_queued_at(task), worker_key=None, recovered_at=None)
         )
         if result.rowcount == 1:
             await task_statistics_service.record_state_change(db, task, "queued")
@@ -1457,7 +1459,7 @@ async def clear_finished(db: AsyncSession, user_id: int, *, project_id: int | No
     return removed
 
 
-async def prune_finished(db: AsyncSession, user_id: int) -> None:
+async def prune_finished(db: AsyncSession, user_id: int, *, source: Task | None = None) -> None:
     """回收站历史不参与普通用户已结束任务裁剪；锁住将被裁剪的父项目直到提交。"""
     stale = (await db.execute(
         select(Task.id, Task.statistics_key, Task.project_id)
@@ -1467,9 +1469,27 @@ async def prune_finished(db: AsyncSession, user_id: int) -> None:
     )).all()
     if not stale:
         return
-    locked = await _lock_history_projects(db, user_id, {pid for _, _, pid in stale if pid is not None})
+    projects = {pid for _, _, pid in stale if pid is not None}
+    if source is not None and source.project_id is not None:
+        projects.add(source.project_id)
+    locked = await _lock_history_projects(db, user_id, projects)
     eligible = [(tid, key) for tid, key, pid in stale if pid is None or pid in locked]
     if eligible:
+        if source is not None:
+            from app.services.task_engine.workers import lock_live_worker
+
+            # 终态提交后才触发的裁剪仍属于原执行。作品、任务和租约锁覆盖下面的统计修改及删除。
+            origin = update(Task).where(
+                Task.id == source.id, Task.statistics_key == source.statistics_key, Task.user_id == user_id,
+                Task.project_id == source.project_id, Task.kind == source.kind, Task.queued_at == source.queued_at,
+                Task.worker_key == source.worker_key, Task.status.in_((*FINISHED_TASK_STATUSES, "paused")),
+                or_(Task.execution_key.is_(None), Task.execution_key == source.execution_key),
+                Task.admin_cancel_operation_id.is_(None),
+            ).values(updated_at=Task.updated_at).execution_options(synchronize_session=False)
+            if (await db.execute(origin)).rowcount != 1 or (source.worker_key is not None
+                    and not await lock_live_worker(db, source.worker_key)):
+                await db.rollback()
+                return
         identities = or_(
             Task.statistics_key.in_([key for _, key in eligible if key is not None]),
             and_(Task.id.in_([tid for tid, key in eligible if key is None]), Task.statistics_key.is_(None)),
@@ -1487,7 +1507,8 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
     task = await db.scalar(select(Task).where(
         Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key, Task.user_id == snapshot.actor_id,
         Task.project_id == snapshot.project_id, Task.kind == snapshot.kind, Task.queued_at == snapshot.queued_at,
-        Task.execution_key == snapshot.execution_key, Task.admin_cancel_operation_id.is_(None),
+        Task.execution_key == snapshot.execution_key, Task.worker_key == snapshot.worker_key,
+        Task.admin_cancel_operation_id.is_(None),
     ).with_for_update())
     if task is None or task.chapter_id != snapshot.chapter_id or task.resource_key != snapshot.resource_key \
             or task.step_cursor != snapshot.step_cursor:
@@ -1536,17 +1557,20 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
     await db.rollback()  # 原清理使用独立事务，不持有请求侧读/写锁等待它。
     original = snapshot.task()
     restored_batch = None
+    terminal = status if status not in {"queued", "running"} else None
     if snapshot.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
-        await get_handler(snapshot.kind).on_abort(engine.ctx, original, claim=snapshot.claim)
+        await get_handler(snapshot.kind).on_abort(engine.ctx, original, claim=snapshot.claim, terminal_status=terminal)
     elif snapshot.kind == "chapter.batch":
         from app.services import batch_service
 
-        restored_batch = await batch_service.restore_abort_snapshot(engine.ctx, snapshot.claim)
+        restored_batch = await batch_service.restore_abort_snapshot(
+            engine.ctx, snapshot.claim, terminal_status=terminal,
+        )
     elif snapshot.kind == "kb.index" and snapshot.claim is not None:
         from app.services import kb_index_service
 
         async with engine.ctx.sessionmaker() as cleanup:
-            await kb_index_service.release_document_claim(cleanup, snapshot.claim)
+            await kb_index_service.release_document_claim(cleanup, snapshot.claim, terminal_status=terminal)
             await cleanup.commit()
     else:
         await get_handler(snapshot.kind).on_abort(engine.ctx, original)
@@ -1575,7 +1599,7 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
         current = await db.scalar(select(Task).where(
             Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key, Task.user_id == snapshot.actor_id,
             Task.project_id == snapshot.project_id, Task.kind == snapshot.kind, Task.queued_at == snapshot.queued_at,
-            Task.execution_key == snapshot.execution_key, Task.status == status,
+            Task.execution_key == snapshot.execution_key, Task.status == status, Task.worker_key == snapshot.worker_key,
             Task.admin_cancel_operation_id.is_(None),
         ).with_for_update())
         if current is None:
@@ -1613,7 +1637,7 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
             conditions = [
                 Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key,
                 Task.queued_at == snapshot.queued_at, Task.execution_key == snapshot.execution_key,
-                Task.status == status, Task.admin_cancel_operation_id.is_(None),
+                Task.status == status, Task.worker_key == snapshot.worker_key, Task.admin_cancel_operation_id.is_(None),
             ]
             if restored_batch is not None:
                 raw_checkpoint = await db.scalar(select(cast(Task.checkpoint, String).label("checkpoint_raw")).where(
@@ -1652,6 +1676,9 @@ async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id:
                         Task.execution_key.is_not(None)),
                 ).execution_options(populate_existing=True)))
                 for task in tasks:
+                    if task.status == "running" and task.recovered_at is not None:
+                        raise ConflictError("任务保存结果尚未确认，作品未删除",
+                                            extra={"code": "project_tasks_not_stopped"})
                     if task.status in FINISHED_TASK_STATUSES and task.execution_key is not None:
                         continue
                     try:

@@ -21,6 +21,7 @@ from app.core.errors import AppError, ConflictError
 from app.models import Chapter, Project, Task
 from app.services import ai_dispatch, project_access, project_lifecycle
 from app.services.collaboration_task_access import GRANT_KEY, GrantIdentity, task_grant_identity
+from app.services.task_engine.execution_identity import require_live_worker
 
 _KEY = "_chapter_claim"
 _SINGLE_KINDS = frozenset({"chapter.generate", "chapter.polish", "chapter.revise"})
@@ -45,6 +46,7 @@ class ChapterClaim:
     grant_identity: GrantIdentity | None
     phase: Literal["queued", "running"]
     kind: Literal["single", "batch"]
+    worker_key: str | None = None
 
     def __repr__(self) -> str:
         return "<ChapterClaim>"
@@ -112,7 +114,9 @@ def _valid_identity(claim: ChapterClaim) -> bool:
         and isinstance(claim.prev_status, str) and claim.prev_status in _PREVIOUS
         and (grant is None or (isinstance(grant, tuple) and len(grant) == 2
                               and _uuid(grant[0]) and _positive(grant[1])))
-        and ((claim.phase == "queued" and claim.kind == "single" and claim.execution_key is None)
+        and (claim.worker_key is None or _uuid(claim.worker_key))
+        and ((claim.phase == "queued" and claim.worker_key is None and claim.kind == "single"
+              and claim.execution_key is None)
              or (claim.phase == "running" and claim.kind in ("single", "batch")
                  and _uuid(claim.execution_key) and claim.execution_key != claim.task_key))
     )
@@ -127,7 +131,7 @@ def _reject_dirty(db: AsyncSession, model, identity: int, fields: tuple[str, ...
 
 _TASK_FIELDS = (
     "id", "statistics_key", "user_id", "project_id", "chapter_id", "kind", "resource_key", "status",
-    "queued_at", "execution_key", "input", "checkpoint", "admin_cancel_operation_id",
+    "queued_at", "execution_key", "worker_key", "input", "checkpoint", "admin_cancel_operation_id",
 )
 _CHAPTER_FIELDS = (
     "id", "project_id", "status", "generation_claim_key", "generation_claim_task_key",
@@ -155,7 +159,8 @@ def _task_matches(task, claim: ChapterClaim, *, cleanup: bool = False) -> bool:
     if task is None or not _valid_identity(claim):
         return False
     if (task.id != claim.task_id or task.statistics_key != claim.task_key or task.user_id != claim.actor_id
-            or task.project_id != claim.project_id or not isinstance(task.queued_at, datetime)
+            or task.project_id != claim.project_id or task.worker_key != claim.worker_key
+            or not isinstance(task.queued_at, datetime)
             or _utc(task.queued_at) != _utc(claim.queued_at) or not isinstance(task.input, dict)):
         return False
     try:
@@ -252,17 +257,18 @@ async def _authorize(db: AsyncSession, claim: ChapterClaim, *, write: bool) -> P
 async def _claim(
     db: AsyncSession, *, task_id: int, task_key: str, actor_id: int, project_id: int, chapter_id: int,
     queued_at: datetime, grant_identity: GrantIdentity | None, execution_key: str | None,
-    kind: Literal["single", "batch"],
+    kind: Literal["single", "batch"], worker_key: str | None = None,
 ) -> ChapterClaim:
     phase: Literal["queued", "running"] = "queued" if kind == "single" else "running"
     identity = ChapterClaim(task_id, task_key, actor_id, project_id, chapter_id, queued_at, execution_key,
-                            str(uuid4()), "draft", grant_identity, phase, kind)
+                            str(uuid4()), "draft", grant_identity, phase, kind, worker_key)
     try:
         if not _valid_identity(identity):
             raise _changed()
         with db.no_autoflush:
             await _authorize(db, identity, write=True)
             task = await _task(db, task_id, write=True)
+            await require_live_worker(db, identity.worker_key)
             if not _task_matches(task, identity):
                 raise _changed()
             chapter = await _chapter(db, chapter_id, write=True)
@@ -295,6 +301,7 @@ async def _claim(
             changed = await db.execute(update(Task).where(
                 Task.id == task_id, Task.statistics_key == task_key, Task.user_id == actor_id,
                 Task.project_id == project_id, Task.status == task.status, Task.queued_at == queued_at,
+                Task.worker_key == identity.worker_key,
                 Task.execution_key == execution_key if execution_key is not None else Task.execution_key.is_(None),
                 Task.admin_cancel_operation_id.is_(None),
             ).values(**task_values, updated_at=Task.updated_at).execution_options(synchronize_session=False))
@@ -327,25 +334,28 @@ async def claim_queued_chapter(
 
 async def claim_batch_chapter(
     db: AsyncSession, *, task_id: int, task_key: str, actor_id: int, project_id: int, chapter_id: int,
-    queued_at: datetime, grant_identity: GrantIdentity | None, execution_key: str,
+    queued_at: datetime, grant_identity: GrantIdentity | None, execution_key: str, worker_key: str | None = None,
 ) -> ChapterClaim:
     """每次批量 attempt 生成不同 claim；与 checkpoint.current 同事务写入。"""
     return await _claim(db, task_id=task_id, task_key=task_key, actor_id=actor_id, project_id=project_id,
                         chapter_id=chapter_id, queued_at=queued_at, grant_identity=grant_identity,
-                        execution_key=execution_key, kind="batch")
+                        execution_key=execution_key, kind="batch", worker_key=worker_key)
 
 
-async def activate_queued_chapter(db: AsyncSession, queued: ChapterClaim, *, execution_key: str) -> ChapterClaim:
+async def activate_queued_chapter(
+    db: AsyncSession, queued: ChapterClaim, *, execution_key: str, worker_key: str | None = None,
+) -> ChapterClaim:
     """调用方先持项目屏障，再在同事务执行 queued→running CAS 后调用。"""
     try:
         if not _valid_identity(queued) or queued.phase != "queued" or queued.kind != "single":
             raise _changed()
-        running = replace(queued, phase="running", execution_key=execution_key)
+        running = replace(queued, phase="running", execution_key=execution_key, worker_key=worker_key)
         if execution_key == queued.task_key or not _valid_identity(running):
             raise _changed()
         with db.no_autoflush:
             await _authorize(db, running, write=True)
             task = await _task(db, running.task_id, write=True)
+            await require_live_worker(db, running.worker_key)
             chapter = await _chapter(db, running.chapter_id, write=True)
             if (not _task_matches(task, running) or not _pointer(task, running)
                     or not _chapter_matches(chapter, running)):
@@ -371,6 +381,7 @@ async def require_running_chapter(db: AsyncSession, claim: ChapterClaim, *, for_
         with db.no_autoflush:
             await _authorize(db, claim, write=True)
             task = await _task(db, claim.task_id, write=True)
+            await require_live_worker(db, claim.worker_key)
             chapter = await _chapter(db, claim.chapter_id, write=True)
             if not _task_matches(task, claim) or not _pointer(task, claim) or not _chapter_matches(chapter, claim):
                 raise _changed()
@@ -397,6 +408,7 @@ async def require_streaming_chapter(db: AsyncSession, claim: ChapterClaim) -> No
     with db.no_autoflush:
         await _authorize(db, claim, write=False)
         task = await _task(db, claim.task_id, write=False)
+        await require_live_worker(db, claim.worker_key, read_only=True)
         if not _task_matches(task, claim) or not _pointer(task, claim):
             raise _changed()
         chapter = await _chapter(db, claim.chapter_id, write=False)
@@ -420,6 +432,7 @@ async def require_sending_chapter(db: AsyncSession, claim: ChapterClaim) -> None
                 raise _changed()
             await _authorize(db, claim, write=False)
             task = await _task(db, claim.task_id, write=False)
+            await require_live_worker(db, claim.worker_key, read_only=True)
             if not _task_matches(task, claim) or not _pointer(task, claim):
                 raise _changed()
             chapter = await _chapter(db, claim.chapter_id, write=False)
@@ -440,14 +453,21 @@ async def require_sending_chapter(db: AsyncSession, claim: ChapterClaim) -> None
     })
 
 
-async def release_chapter_claim(db: AsyncSession, claim: ChapterClaim) -> bool:
-    """系统只按原身份回退本次占用，不要求撤权后仍为成员；调用方须已停止旧执行体。"""
+async def release_chapter_claim(
+    db: AsyncSession, claim: ChapterClaim, *, terminal_status: str | None = None,
+) -> bool:
+    """只按原身份回退占用。项目排空重试可用锁定的准确终态证明旧执行已结束。"""
     if not _valid_identity(claim):
         return False
     try:
         with db.no_autoflush:
             await project_lifecycle.lock_record(db, claim.project_id)
             task = await _task(db, claim.task_id, write=True)
+            if terminal_status is None:
+                await require_live_worker(db, claim.worker_key)
+            elif (terminal_status not in _CLEANUP_TERMINAL or task is None or task.status != terminal_status
+                  or task.admin_cancel_operation_id is not None):
+                return False
             chapter = await _chapter(db, claim.chapter_id, write=True)
             if (not _task_matches(task, claim, cleanup=True) or not _pointer(task, claim)
                     or not _chapter_matches(chapter, claim)):
@@ -473,6 +493,7 @@ async def release_chapter_claim(db: AsyncSession, claim: ChapterClaim) -> bool:
             changed = await db.execute(update(Task).where(
                 Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.user_id == claim.actor_id,
                 Task.project_id == claim.project_id, Task.queued_at == claim.queued_at,
+                Task.worker_key == claim.worker_key,
                 Task.execution_key == claim.execution_key if claim.execution_key is not None
                 else Task.execution_key.is_(None),
             ).values(**task_values, updated_at=Task.updated_at).execution_options(synchronize_session=False))

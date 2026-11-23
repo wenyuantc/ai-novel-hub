@@ -278,8 +278,8 @@ async def _close_send_session(db: AsyncSession) -> None:
     await _wait_send_cleanup(db.close())
 
 
-def is_sqlite_busy(exc: OperationalError) -> bool:
-    code = getattr(exc.orig, "sqlite_errorcode", None)
+def is_sqlite_busy(exc: OperationalError | sqlite3.OperationalError) -> bool:
+    code = getattr(getattr(exc, "orig", exc), "sqlite_errorcode", None)
     return isinstance(code, int) and (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 

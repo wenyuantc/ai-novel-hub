@@ -271,6 +271,7 @@ async def test_already_scanned_claim_loses_to_acceptance_and_atomically_releases
         await actual_claim(*args)
 
     monkeypatch.setattr(engine, "_claim_and_run", claim_after_scan)
+    await engine.lease.register()
     monkeypatch.setattr(engine, "_stopping", False)
     handler = get_handler(task.kind)
     aborts = []

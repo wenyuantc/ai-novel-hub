@@ -42,9 +42,12 @@ from app.models import (
     SettingTextField,
     SettingTimeline,
     StoryMemory,
+    Task,
+    TaskWorker,
     WorldSetting,
     WritingStyle,
 )
+from app.models.entities import TaskLeaseStore
 from app.services.project_transfer import exporter, importer
 from app.services.project_transfer.registry import NOT_EXPORTED, PROJECT_RULE, RULES
 from tests.helpers import create_ai_config, create_project, register, wait_task
@@ -632,7 +635,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 16 and data["app_schema"] == "0065"
+    assert data["version"] == 16 and data["app_schema"] == "0066"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1010,11 +1013,19 @@ async def test_round_trip_all_entities(client, app):
     src = await _backup(client, p["id"], **ALL)
     assert src["format"] == "ainovel.project" and src["version"] == 16
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
-    # 不导出任务 / 分块 / 检索单元
-    assert not {"tasks", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
+    # 执行者与任务归属属于源实例，和派生的索引数据一样不随作品导出。
+    assert not {"tasks", "task_workers", "task_lease_store", "kb_chunks", "retrieval_chunks"} & set(src["tables"])
     assert "project_id" not in src["tables"]["characters"][0] and "user_id" not in src["project"]
 
-    result = await _import(client, src)
+    foreign_worker = "b15da07f-311a-45e0-8b55-0b4dcaf82c32"
+    async with app.state.sessionmaker() as db:
+        original_generation = (await db.get(TaskLeaseStore, 1)).generation
+    imported_tables = {**src["tables"], "task_workers": [{"worker_key": foreign_worker}],
+                       "task_lease_store": [{"id": 1, "generation": foreign_worker}],
+                       "tasks": [{"worker_key": foreign_worker, "status": "running"}]}
+    result = await _import(client, {**src, "tables": imported_tables})
+    assert any(all(table in warning for table in ("task_lease_store", "task_workers", "tasks"))
+               for warning in result["preview"]["warnings"])
     new = result["project"]
     assert new["title"] == "星海纪元（导入）" and new["id"] != p["id"]
     assert result["counts"]["characters"] == 3 and result["counts"]["chapter_versions"] == 2
@@ -1033,6 +1044,9 @@ async def test_round_trip_all_entities(client, app):
     }
 
     async with app.state.sessionmaker() as db:
+        assert (await db.get(TaskLeaseStore, 1)).generation == original_generation
+        assert await db.get(TaskWorker, foreign_worker) is None
+        assert await db.scalar(select(Task.id).where(Task.worker_key == foreign_worker)) is None
         pid = new["id"]
         chars = list(await db.scalars(select(Character).where(Character.project_id == pid).order_by(Character.id)))
         assert [c.name for c in chars] == ["林远", "林远", "苏晴"] and chars[1].profile == "同名的另一个人"
@@ -1628,7 +1642,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (16, "0065")
+    assert (data["version"], data["app_schema"]) == (16, "0066")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)

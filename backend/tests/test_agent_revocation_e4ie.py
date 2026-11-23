@@ -12,6 +12,7 @@
 import asyncio
 from contextlib import aclosing
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
@@ -24,6 +25,7 @@ from tests.helpers import create_ai_config, create_project, register, task_param
 from tests.test_agent_entries_e4id import _detail, _invite, _new_conversation, _send
 from tests.test_agent_mcp_skills import change_action
 from tests.test_agent_runtime import call
+from tests.worker_helpers import fence_worker
 
 OWNER_KEY = "sk-owner-e4ie-000001"
 ORIGINAL = {"synopsis": "原简介", "theme": "原主题"}
@@ -136,6 +138,35 @@ async def _assert_cannot_confirm(world, view):
         assert response.status_code == 404, response.text
     else:
         assert response.status_code == 409, response.text
+
+
+async def test_only_current_recovery_worker_can_void_revoked_turn(app, second_app, client, make_client, fake_llm):
+    from app.services.task_engine.registry import get_handler
+
+    world = await _world(app, client, make_client)
+    turn, _ = await _paused_turn(app, world, fake_llm, _two_proposals())
+    engine = app.state.task_engine
+    await engine.stop()
+    old = await engine.lease.register()
+    peer = second_app.state.task_engine
+    new = await peer.lease.register()
+    async with app.state.sessionmaker() as db:
+        original = await db.get(Task, turn["id"])
+        original.status, original.execution_key, original.worker_key = "running", str(uuid4()), old
+        await db.commit()
+    await fence_worker(engine, mirror=False)
+    await _apply(world, "revoke")
+    handler = get_handler("agent.turn")
+    await handler.on_abort(engine.ctx, original)
+    assert [row.status for row in await _changes(app, turn["id"])] == ["proposed", "proposed"]
+    async with app.state.sessionmaker() as db:
+        adopted = await db.get(Task, turn["id"])
+        adopted.worker_key = new
+        await db.commit()
+    await handler.on_abort(engine.ctx, original)
+    assert [row.status for row in await _changes(app, turn["id"])] == ["proposed", "proposed"]
+    await handler.on_abort(peer.ctx, adopted)
+    assert [(row.status, row.error) for row in await _changes(app, turn["id"])] == [("failed", VOIDED)] * 2
 
 
 # ---------------- 待确认（paused + proposed） ----------------

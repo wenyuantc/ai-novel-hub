@@ -307,13 +307,14 @@ async def test_running_abort_failure_keeps_terminal_state_and_next_delete_can_re
     original = handler.on_abort
     attempts = 0
 
-    async def fail_once(ctx, row, *, claim=None, execution=None):
+    async def fail_once(ctx, row, *, claim=None, execution=None, terminal_status=None):
         nonlocal attempts
         assert claim is not None and claim.task_key == task["task_key"]
         attempts += 1
         if attempts == 1:
             raise RuntimeError("首次回退失败")
-        await original(ctx, row, claim=claim, execution=execution)
+        assert terminal_status == "cancelled"
+        await original(ctx, row, claim=claim, execution=execution, terminal_status=terminal_status)
 
     monkeypatch.setattr(handler, "on_abort", fail_once)
     assert (await client.delete(f"/api/v1/projects/{project['id']}")).status_code == 409

@@ -11,6 +11,7 @@ from app.core.errors import ConflictError
 from app.models import KbDocument, Task, User
 from app.services import kb_index_service as indexes
 from tests.helpers import create_project, register
+from tests.worker_helpers import fence_worker
 
 
 async def _seed(app, client, *, queued_at=datetime(2026, 1, 1, tzinfo=UTC)):
@@ -71,6 +72,47 @@ async def test_cancelled_old_task_cannot_release_new_task_claim(app, client):
     async with app.state.sessionmaker() as db:
         doc = await db.get(KbDocument, did)
         assert doc.index_task_key == new.task_key and doc.index_claim_key == new.claim_key and doc.status == "pending"
+
+
+@pytest.mark.parametrize("taken_over", [False, True], ids=["fenced", "adopted"])
+async def test_old_worker_cannot_release_an_indexing_document(app, second_app, client, taken_over):
+    _, _, doc_id, task_id, task_key = await _seed(app, client)
+    engine = app.state.task_engine
+    old_owner = await engine.lease.register()
+    new_owner = await second_app.state.task_engine.lease.register()
+    execution_key = str(uuid4())
+    maker = app.state.sessionmaker
+    async with maker() as db:
+        queued = await indexes.bind_queued_document_claim(db, task_id, task_key, queue_claim_key=str(uuid4()))
+        await db.execute(update(Task).where(Task.id == task_id).values(
+            status="running", execution_key=execution_key, worker_key=old_owner,
+        ))
+        old_claim = await indexes.activate_document_claim(db, queued, execution_key=execution_key,
+                                                         worker_key=old_owner)
+        await db.commit()
+    await fence_worker(engine, mirror=False)
+    if taken_over:
+        async with maker.begin() as db:
+            (await db.get(Task, task_id)).worker_key = new_owner
+    async with maker() as db:
+        assert not await indexes.release_document_claim(db, old_claim)
+        # 历史终态清理必须在数据库里锁到指定终态，不能用它绕过 running 的围栏。
+        assert not await indexes.release_document_claim(db, old_claim, terminal_status="interrupted")
+        await db.commit()
+        doc = await db.get(KbDocument, doc_id)
+        assert (doc.status, doc.index_task_key, doc.index_claim_key) == ("pending", task_key, execution_key)
+    async with second_app.state.sessionmaker() as db:
+        if taken_over:
+            new_claim = indexes.running_document_claim(await db.get(Task, task_id))
+            assert await indexes.release_document_claim(db, new_claim)
+        else:
+            # 后续系统修复精确命中已中断的原轮次时，旧进程可以已经退出。
+            (await db.get(Task, task_id)).status = "interrupted"
+            await db.commit()
+            assert await indexes.release_document_claim(db, old_claim, terminal_status="interrupted")
+        await db.commit()
+        doc = await db.get(KbDocument, doc_id)
+        assert (doc.status, doc.index_task_key, doc.index_claim_key) == ("failed", None, None)
 
 
 async def test_claim_requires_original_execution_and_queue_round(app, client):
@@ -149,7 +191,7 @@ async def test_book_backup_omits_claim_and_import_never_restores_injected_claim(
     response = await client.get(f"/api/v1/projects/{pid}/backup")
     assert response.status_code == 200, response.text
     backup = response.json()
-    assert backup["app_schema"] == "0065"
+    assert backup["app_schema"] == "0066"
     doc = backup["tables"]["kb_documents"][0]
     fields = {"index_task_key", "index_task_queued_at", "index_claim_key"}
     assert not fields.intersection(doc)

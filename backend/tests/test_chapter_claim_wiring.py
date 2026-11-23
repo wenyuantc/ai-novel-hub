@@ -111,6 +111,7 @@ async def test_claim_failure_rolls_back_task_running_transition(app, client, mon
         raise RuntimeError("激活失败")
 
     monkeypatch.setattr(chapter_claim, "activate_queued_chapter", fail)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     with pytest.raises(RuntimeError, match="激活失败"):
@@ -134,6 +135,7 @@ async def test_claim_passes_original_running_identity_to_execution(app, client, 
         started.append((args, kwargs))
 
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -173,6 +175,7 @@ async def test_unknown_claim_commit_requires_original_chapter_identity(app, clie
 
     monkeypatch.setattr(AsyncSession, "commit", lose_after_replacement)
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -202,6 +205,7 @@ async def test_unknown_claim_commit_accepts_only_own_persisted_claim(app, client
 
     monkeypatch.setattr(AsyncSession, "commit", lose_after_commit)
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -250,6 +254,7 @@ async def test_replaced_queued_claim_fails_old_task_without_touching_new_batch(a
             chapter_id=chapter_id, queued_at=batch.queued_at, grant_identity=None, execution_key=batch.execution_key,
         )
         await db.commit()
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -273,6 +278,7 @@ async def test_unclaimed_old_queued_task_cannot_run_or_release_chapter(app, clie
         started.append((args, kwargs))
 
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -306,6 +312,7 @@ async def test_uncertain_save_retains_running_execution_and_claim(app, client, m
     monkeypatch.setattr(handler, "build_job", build)
     monkeypatch.setattr(handler, "run", run)
     monkeypatch.setattr(engine_module, "get_handler", lambda _kind: handler)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)
@@ -326,7 +333,7 @@ async def test_recovery_retains_even_malformed_completion_receipt(app, client):
         task.status, task.execution_key = "running", execution
         task.checkpoint = {"_chapter_claim": {"damaged": True}}
         await db.commit()
-    await engine.recover()
+    await engine.start()
     async with maker() as db:
         task, chapter = await db.get(Task, task_id), await db.get(Chapter, chapter_id)
         assert task.status == "running" and task.execution_key == execution
@@ -347,6 +354,7 @@ async def test_finish_only_clears_matching_admin_chapter_intent(app, client, mon
         captured.append(kwargs["claim"])
 
     monkeypatch.setattr(engine, "_run", run)
+    await engine.lease.register()
     engine._stopping = False
     engine._running_rounds[task_id] = queued_at
     await engine._claim_and_run(task_id, task_key)

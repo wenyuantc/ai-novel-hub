@@ -157,9 +157,11 @@ class ConsistencyHandler:
         job = getattr(task, "_consistency_job", None)
         if type(job) is check.CheckJob and job.task_id == task.id:
             status = "cancelled" if job.cancelled else "failed"
-            await check.close_run(ctx.sessionmaker, task.id, status, check.run_stats(job))
+            await check.close_run(ctx.sessionmaker, task, status, check.run_stats(job),
+                                  worker_key=job.execution.worker_key)
         else:
-            await check.close_run(ctx.sessionmaker, task.id, "interrupted")
+            owner = execution.worker_key if execution is not None else task.worker_key
+            await check.close_run(ctx.sessionmaker, task, "interrupted", worker_key=owner)
 
 
 class ImpactHandler(ConsistencyHandler):

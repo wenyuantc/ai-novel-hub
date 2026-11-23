@@ -150,9 +150,14 @@ class AdminCancellationDrain:
 
     async def _load(self, task_key: str, operation_id: str) -> Task | None:
         async with self.engine.ctx.sessionmaker() as db:
-            return await db.scalar(select(Task).where(
+            row = await db.scalar(select(Task).where(
                 Task.statistics_key == task_key, Task.admin_cancel_operation_id == operation_id
             ))
+            # 非本进程的 running 意图留给其执行者，或等失联后由成功认领者收尾。
+            if (row is not None and row.status == "running" and row.worker_key is not None
+                    and (row.worker_key != self.engine.lease.worker_key or not self.engine.lease.valid)):
+                return None
+            return row
 
     async def _clear_chapter_receipt(self, task: Task, operation_id: str, receipt: dict) -> Task | None:
         """只清除已证明释放成功的同一操作收据；不会再次触碰章节。"""
@@ -161,7 +166,7 @@ class AdminCancellationDrain:
             row = await db.scalar(select(Task).where(
                 Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
                 Task.execution_key == receipt["completion_key"], Task.status == receipt["status"],
-                Task.admin_cancel_operation_id == operation_id,
+                Task.worker_key == task.worker_key, Task.admin_cancel_operation_id == operation_id,
             ).execution_options(populate_existing=True))
             if row is None or _chapter_receipt(row, operation_id) != receipt:
                 return None
@@ -170,7 +175,7 @@ class AdminCancellationDrain:
             changed = await db.execute(update(Task).where(
                 Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
                 Task.execution_key == receipt["completion_key"], Task.status == receipt["status"],
-                Task.admin_cancel_operation_id == operation_id,
+                Task.worker_key == task.worker_key, Task.admin_cancel_operation_id == operation_id,
                 Task.input[_CHAPTER_RECEIPT]["operation_id"].as_string() == operation_id,
                 Task.input[_CHAPTER_RECEIPT]["claim_key"].as_string() == receipt["claim_key"],
             ).values(input=payload, execution_key=None, admin_cancel_operation_id=None,
@@ -186,7 +191,8 @@ class AdminCancellationDrain:
                     row = await proof.scalar(select(Task).where(
                         Task.id == task.id, Task.statistics_key == task.statistics_key,
                         Task.queued_at == task.queued_at, Task.status == receipt["status"],
-                        Task.execution_key.is_(None), Task.admin_cancel_operation_id.is_(None),
+                        Task.worker_key == task.worker_key, Task.execution_key.is_(None),
+                        Task.admin_cancel_operation_id.is_(None),
                     ))
                 if row is None or not isinstance(row.input, dict) or _CHAPTER_RECEIPT in row.input:
                     raise
@@ -214,6 +220,7 @@ class AdminCancellationDrain:
                 Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.user_id == claim.actor_id,
                 Task.project_id == claim.project_id, Task.queued_at == claim.queued_at,
                 Task.execution_key == claim.execution_key, Task.status == task.status,
+                Task.worker_key == task.worker_key,
                 Task.admin_cancel_operation_id == operation_id,
                 Task.input[_CHAPTER_INTENT]["claim_key"].as_string() == claim.claim_key,
             ).values(status=status, error="服务重启，任务已中断" if status == "interrupted" else "任务已取消",
@@ -236,7 +243,7 @@ class AdminCancellationDrain:
             payload[_CHAPTER_RECEIPT] = receipt
             stored = await db.execute(update(Task).where(
                 Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.queued_at == claim.queued_at,
-                Task.execution_key == claim.execution_key, Task.status == status,
+                Task.execution_key == claim.execution_key, Task.status == status, Task.worker_key == task.worker_key,
                 Task.admin_cancel_operation_id == operation_id,
             ).values(input=payload, execution_key=marker).execution_options(synchronize_session=False))
             if stored.rowcount != 1:
@@ -251,7 +258,8 @@ class AdminCancellationDrain:
                     row = await proof.scalar(select(Task).where(
                         Task.id == claim.task_id, Task.statistics_key == claim.task_key,
                         Task.queued_at == claim.queued_at, Task.execution_key == marker,
-                        Task.status == status, Task.admin_cancel_operation_id == operation_id,
+                        Task.worker_key == task.worker_key, Task.status == status,
+                        Task.admin_cancel_operation_id == operation_id,
                     ))
                 if row is None or _chapter_receipt(row, operation_id) != receipt:
                     raise
@@ -260,7 +268,8 @@ class AdminCancellationDrain:
                     row = await proof.scalar(select(Task).where(
                         Task.id == claim.task_id, Task.statistics_key == claim.task_key,
                         Task.queued_at == claim.queued_at, Task.execution_key == marker,
-                        Task.status == status, Task.admin_cancel_operation_id == operation_id,
+                        Task.worker_key == task.worker_key, Task.status == status,
+                        Task.admin_cancel_operation_id == operation_id,
                     ))
                 if row is None or _chapter_receipt(row, operation_id) != receipt:
                     return None
@@ -290,7 +299,7 @@ class AdminCancellationDrain:
                 if task.status == "running" and execution is not None and not execution.done():
                     if engine._running_statistics_keys.get(task.id) != task_key:
                         return
-                    identity = (self.round_at(task), task.execution_key)
+                    identity = (self.round_at(task), task.execution_key, task.worker_key)
                     await engine.cancel_running(task.id, statistics_key=task_key,
                                                 expected_queued_at=task.queued_at,
                                                 expected_execution_key=task.execution_key)
@@ -299,7 +308,7 @@ class AdminCancellationDrain:
                         return
                     task = await self._load(task_key, operation_id)
                     if (task is None or task.status != "running"
-                            or (self.round_at(task), task.execution_key) != identity):
+                            or (self.round_at(task), task.execution_key, task.worker_key) != identity):
                         return
                 if (task.kind in _CHAPTER_KINDS | {"chapter.analyze", "chapter.batch"} and task.status == "running"
                         and (task.id in engine._claiming or task.id in engine._finalizing

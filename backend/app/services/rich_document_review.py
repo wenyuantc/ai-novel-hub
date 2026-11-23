@@ -563,7 +563,10 @@ async def recover_pending_identity(db: AsyncSession, task: Task) -> dict[str, An
             _require_proposal_round(task, proposal, chapter, payload, running=True)
             _stored_plans(payload)
             return review_identity(proposal)
-    except (AppError, SQLAlchemyError, ValueError, TypeError):
+    except SQLAlchemyError as exc:
+        # 存储暂不可用不能充当凭据损坏的证据。让接管者保留原认领并在下周期重试。
+        raise _safe_storage_error(exc) from None
+    except (AppError, ValueError, TypeError):
         pass
     # 不让错误链携带可能包含私密候选的 SQL/参数或畸形历史内容。
     raise ReviewRecoveryUncertain() from None
@@ -1171,6 +1174,7 @@ async def _accept_review(
         task.status, task.result, task.error = "queued", None, ""
         task.stage, task.finished_at = task_service.STAGE_LABELS["queued"], None
         task.queued_at = task_service._next_queued_at(task)
+        task.worker_key, task.recovered_at = None, None
         await task_statistics_service.record_state_change(db, task, "queued")
     else:
         chapter_view = await generation_service.chapter_ai_view(db, user_id, project_id, chapter)

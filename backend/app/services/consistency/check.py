@@ -38,6 +38,7 @@ from app.services import (
     collaboration_ai_guard,
     project_access,
     project_ai_config,
+    project_lifecycle,
     prompt_service,
 )
 from app.services.ai_dispatch import VisibilityPolicyError, read_visibility_stamp, visibility_sessionmaker
@@ -47,6 +48,7 @@ from app.services.project_service import get_execution_project
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
     matches_running,
+    require_live_worker,
     require_write_execution,
 )
 from app.services.task_engine.registry import Event, TaskContext
@@ -477,7 +479,8 @@ async def _save_run(db: AsyncSession, job: CheckJob, stats: dict[str, Any], *, s
 
 
 async def close_run(
-    sessionmaker: async_sessionmaker[AsyncSession], task_id: int, status: str, stats: dict[str, Any] | None = None,
+    sessionmaker: async_sessionmaker[AsyncSession], task: Task, status: str, stats: dict[str, Any] | None = None,
+    *, worker_key: str | None,
 ) -> None:
     """任务取消 / 失败 / 中断时把仍为 running 的运行记录置为终态（幂等）。已保存的台账与问题不动。
 
@@ -488,15 +491,27 @@ async def close_run(
         values["stats"] = stats
     try:
         async with sessionmaker() as db:
+            if task.project_id is None or task.statistics_key is None:
+                return
+            await project_lifecycle.lock_record(db, task.project_id)
+            found = await db.scalar(select(Task.id).where(
+                Task.id == task.id, Task.statistics_key == task.statistics_key, Task.project_id == task.project_id,
+                Task.user_id == task.user_id, Task.kind == KIND, Task.queued_at == task.queued_at,
+                Task.execution_key == task.execution_key, Task.status == task.status, Task.worker_key == worker_key,
+            ).with_for_update())
+            if found is None:
+                return
+            await require_live_worker(db, worker_key)
             await db.execute(
                 update(ConsistencyRun)
-                .where(ConsistencyRun.task_id == task_id, ConsistencyRun.status == "running")
+                .where(ConsistencyRun.task_id == task.id, ConsistencyRun.project_id == task.project_id,
+                       ConsistencyRun.status == "running")
                 .values(**values)
                 .execution_options(synchronize_session=False)
             )
             await db.commit()
     except Exception:  # noqa: BLE001  不输出可能含统计内容的 SQL 参数
-        logger.error("一致性检查运行记录收尾失败 task=%s", task_id)
+        logger.error("一致性检查运行记录收尾失败 task=%s", task.id)
 
 
 def _char_budget(bound: collaboration_ai_guard.BoundProvider, default: int) -> int:

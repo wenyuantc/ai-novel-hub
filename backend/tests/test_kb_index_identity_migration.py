@@ -37,7 +37,11 @@ def test_0045_sqlite_identity_constraints_and_lossless_downgrade(tmp_path):
         command.upgrade(config, "0045")
         Base.metadata.create_all(expected)
         assert _schema_contract(inspect(engine), "kb_documents") == _schema_contract(inspect(expected), "kb_documents")
-        assert _schema_contract(inspect(engine), "tasks") == _schema_contract(inspect(expected), "tasks")
+        expected_tasks = _schema_contract(inspect(expected), "tasks")
+        # 0066 才引入执行者归属与待核对时刻，0045 的任务表按当时的结构比较。
+        expected_tasks["columns"].pop("worker_key")
+        expected_tasks["columns"].pop("recovered_at")
+        assert _schema_contract(inspect(engine), "tasks") == expected_tasks
         with engine.connect() as conn:
             assert conn.execute(text("SELECT index_task_key,index_task_queued_at,index_claim_key "
                                      "FROM kb_documents")).one() == (None, None, None)

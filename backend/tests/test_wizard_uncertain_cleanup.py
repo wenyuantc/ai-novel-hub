@@ -27,7 +27,7 @@ async def _orphan(app, client, checkpoint, *, status="running", admin=False):
 async def test_recovery_keeps_orphan_wizard_running_and_blocks_retry(app, client, checkpoint):
     task_id, task_key, execution, _, project_id = await _orphan(app, client, checkpoint)
     engine = app.state.task_engine
-    await engine.recover()
+    await engine.start()
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, task_id)
         assert (row.status, row.execution_key, row.checkpoint) == ("running", execution, checkpoint)

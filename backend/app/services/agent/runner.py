@@ -32,7 +32,12 @@ from app.services.ai_dispatch import (
 )
 from app.services.authorization_service import AuthenticatedActor
 from app.services.project_ai_config import ResolvedProjectModel
-from app.services.task_engine.execution_identity import TaskExecutionIdentity, require_write_execution, same_execution
+from app.services.task_engine.execution_identity import (
+    TaskExecutionIdentity,
+    require_live_worker,
+    require_write_execution,
+    same_execution,
+)
 from app.services.task_engine.registry import Event, TaskContext
 
 MAX_TOOL_CALLS = 8
@@ -252,11 +257,11 @@ async def _claim_payload_matches(db, claim: _AutoExternalClaim) -> bool:
     return hmac.compare_digest(mac, claim.snapshot_mac)
 
 
-def _task_conditions(job: AgentJob):
+def _task_conditions(job: AgentJob, execution: TaskExecutionIdentity):
     return (
         Task.id == job.task_id, Task.statistics_key == job.task_key, Task.queued_at == job.queued_at,
         Task.execution_key == job.execution_key, Task.user_id == job.user_id, Task.project_id == job.project_id,
-        Task.kind == "agent.turn", Task.status == "running",
+        Task.kind == "agent.turn", Task.status == "running", Task.worker_key == execution.worker_key,
     )
 
 
@@ -297,11 +302,15 @@ async def _settle_external_claim(ctx: TaskContext, claim: _AutoExternalClaim, *,
         return
     async with ctx.sessionmaker() as db:
         await project_lifecycle.lock_record(db, claim.job.project_id)
-        locked = await db.execute(update(Task).where(*_task_conditions(claim.job)).values(
+        locked = await db.execute(update(Task).where(*_task_conditions(claim.job, claim.execution)).values(
             updated_at=Task.updated_at,
         ).execution_options(synchronize_session=False))
         if locked.rowcount != 1:
             await db.rollback()
+            return
+        try:
+            await require_live_worker(db, claim.execution.worker_key)
+        except ConflictError:
             return
         current = await db.get(Task, claim.job.task_id, populate_existing=True)
         if (not _task_actor_matches(current.input, claim.job.actor_token_version)

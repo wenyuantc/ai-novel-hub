@@ -75,6 +75,8 @@ async def test_accepted_queued_holds_resource_until_abort_and_blocks_claim(app, 
     accepted = await accept(app, actor, task)
     await asyncio.wait_for(reached.wait(), 3)
     engine = app.state.task_engine
+    await engine.lease.register()
+    engine._stopping = False
     await engine._claim_and_run(task.id, task.statistics_key)
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, task.id)
@@ -262,13 +264,21 @@ async def test_resume_starts_new_queued_clock(app, client):
     actor, task = await setup_task(app, client, status="paused", kind="chapter.analyze")
     old = datetime.now(UTC) - timedelta(days=4)
     async with app.state.sessionmaker() as db:
-        await db.execute(update(Task).where(Task.id == task.id).values(created_at=old, queued_at=old))
+        await db.execute(update(Task).where(Task.id == task.id).values(
+            created_at=old, queued_at=old, worker_key=str(uuid4()), recovered_at=old,
+        ))
         await db.commit()
         await task_service.resume_task(db, app.state.task_engine, actor.id, task.id)
     async with app.state.sessionmaker() as db:
         row = await db.get(Task, task.id)
         assert row.created_at.replace(tzinfo=UTC) == old
         assert row.queued_at.replace(tzinfo=UTC) > old + timedelta(days=3)
+        assert (row.status, row.worker_key, row.recovered_at) == ("queued", None, None)
+    await accept(app, actor, task)
+    await app.state.task_engine.wait_admin_cancellations()
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Task, task.id)
+        assert (row.status, row.admin_cancel_operation_id) == ("cancelled", None)
 
 
 @pytest.mark.parametrize("cancel_at", ["returning", "committed"])

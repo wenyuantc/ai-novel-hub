@@ -142,6 +142,7 @@ async def test_pending_review_is_recovered_from_running_checkpoint_without_model
     from app.services import rich_document_review
 
     _project, chapter, _url, _scene, document_url, source, task, identity = await _pending(app, client, fake_llm)
+    await app.state.task_engine.stop()
     async with app.state.sessionmaker() as db:
         proposal = await db.scalar(select(SceneReviewProposal).where(SceneReviewProposal.token == identity["token"]))
         receipt = (await rich_document_review._read_payload(db, proposal))["execution_receipt"]
@@ -150,7 +151,7 @@ async def test_pending_review_is_recovered_from_running_checkpoint_without_model
             Task.id == task["id"], Task.statistics_key == task["task_key"],
         ).values(status="running", execution_key=receipt["execution_key"], result=None))
         await db.commit()
-    await app.state.task_engine.recover()
+    await app.state.task_engine.start()
     current = (await client.get(f"/api/v1/tasks/{task['id']}", params=task_params(task))).json()
     assert current["status"] == "paused"
     assert (await stream_task(client, task))[-1][1]["result"] == identity
@@ -294,7 +295,8 @@ async def test_batch_review_resumes_at_next_phase_without_regenerating_current_c
     assert (await client.put(endpoint, json=draft)).status_code == 200
     fake_llm.push("第一章新稿")
     fake_llm.push("第二章候选")
-    fake_llm.push("第三章新稿")
+    last_chapter = Gate()
+    fake_llm.push([last_chapter, "第三章新稿"])
     task, events = await run_task(client, await _start(client, base, chapters[0], chapters[2], include_written=True))
     assert task["status"] == "paused" and events[-1][1]["result"]["reason"] == "rich_document_review"
     identity = events[-1][1]["result"]
@@ -302,6 +304,14 @@ async def test_batch_review_resumes_at_next_phase_without_regenerating_current_c
     assert (await client.get(f"{base}/chapters/{chapters[0]['id']}")).json()["content"] == "第一章新稿"
     assert (await client.get(url)).json()["content"] == "需要核对的原稿"
     assert (await client.get(f"{base}/chapters/{chapters[2]['id']}")).json()["content"] == "第三章"
+    engine = app.state.task_engine
+    old_worker = engine.lease.worker_key
+    await engine.stop()
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Task, task["id"])
+        assert old_worker is not None and row.worker_key == old_worker
+        row.recovered_at = row.queued_at
+        await db.commit()
     path = f"/api/v1/tasks/{task['id']}/rich-proposals/{identity['token']}"
     accepted = await client.post(f"{path}/accept", json={
         "task_key": identity["task_key"], "run_key": identity["run_key"],
@@ -309,6 +319,18 @@ async def test_batch_review_resumes_at_next_phase_without_regenerating_current_c
         "confirm_format_loss": False,
     })
     assert accepted.status_code == 200, accepted.text
+    async with app.state.sessionmaker() as db:
+        row = await db.get(Task, task["id"])
+        assert (row.status, row.worker_key, row.recovered_at) == ("queued", None, None)
+    await engine.start()
+    try:
+        await last_chapter.wait_reached()
+        async with app.state.sessionmaker() as db:
+            row = await db.get(Task, task["id"])
+            assert row.status == "running" and row.worker_key == engine.lease.worker_key
+            assert row.worker_key is not None and row.worker_key != old_worker
+    finally:
+        last_chapter.release()
     finished = await wait_task(client, task, statuses=("succeeded", "failed"), within=10)
     assert finished["status"] == "succeeded", finished
     assert [item["state"] for item in finished["checkpoint"]["items"]] == ["done", "done", "done"]

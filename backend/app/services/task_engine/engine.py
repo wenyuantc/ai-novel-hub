@@ -2,8 +2,8 @@
 
 - tasks 表是唯一事实来源（数据库即队列）。调度器按 id 升序扫描 queued 任务，受全局 / 每用户并发上限约束，
   用条件 UPDATE（status='queued' → 'running'）领取，影响行数为 1 才算领到，然后 asyncio.create_task 执行。
-- 前提：单进程部署（Dockerfile 中 uvicorn 不带 --workers）。start() 时的恢复逻辑会把所有 running 任务
-  标记为 interrupted；多实例部署会误伤其他进程的任务，届时需改为 FOR UPDATE SKIP LOCKED + 心跳租约。
+- 每次启动登记新的执行者租约，领取时记录归属；恢复只接管已失去执行者的任务。
+- 当前部署仍使用单进程，跨进程并发配额、取消和实时流转发另行处理。
 - serial_key：同键任务排队串行。调度时同键已有运行中（或本轮已登记）的任务就跳过，留到下一轮；
   同键内按 id 先进先出（前一个同键任务因上限被跳过时，后面的同键任务也不越过它）。与全局 / 每用户上限同时生效。
 - on_success（可选）：任务写入 succeeded 后调用，异常只记日志（如章节任务成功后自动排队分析）。
@@ -18,6 +18,7 @@
 import asyncio
 import json
 import logging
+import sqlite3
 import time
 from collections import Counter, deque
 from collections.abc import AsyncIterator
@@ -29,6 +30,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import String, cast, func, select, update
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任务类型
@@ -46,19 +48,26 @@ from app.services import (
     task_statistics_service,
 )
 from app.services import authorization_service as authz
-from app.services.ai_dispatch import VisibilityChangedError, VisibilityPolicyError, lock_visibility_write
+from app.services.ai_dispatch import (
+    VisibilityChangedError,
+    VisibilityPolicyError,
+    is_sqlite_busy,
+    lock_visibility_write,
+)
 from app.services.collaboration_task_access import (
     GRANT_KEY,
     task_grant_identity,
     task_requires_owner_ai,
     task_visible_to_actor,
 )
+from app.services.task_engine import workers
 from app.services.task_engine.cancellation import AdminCancellationDrain
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
     from_queued_task,
     frozen_project_owner_id,
     matches_running,
+    require_live_worker,
     require_write_execution,
     same_execution,
 )
@@ -83,6 +92,14 @@ _POLICY_MESSAGES = {
     # analysis_service.AnalysisExecutionChanged：分析写回/派生前锁内重验原执行、邀请轮次或模型来源失败（E4-g1）。
     "analysis_execution_changed": "分析任务执行身份或授权已变化，已停止",
 }
+
+
+def _receipt_storage_failure(exc: Exception) -> bool:
+    """已知的业务凭据缺损可保留待核对，存储异常交给原接管者重试。"""
+    if isinstance(exc, AppError):
+        return exc.status_code >= 500 or isinstance(exc.__context__, DBAPIError)
+    return not isinstance(exc, (TypeError, ValueError, RecursionError, analysis_service.AnalysisCommitUncertain,
+                                generation_service.ChapterCommitUncertain))
 
 
 def _policy_code(exc: BaseException) -> str | None:
@@ -199,11 +216,13 @@ class AbortSnapshot:
     checkpoint_json: str
     step_cursor: int
     claim: Any
+    worker_key: str | None
 
     def task(self) -> Task:
         return Task(id=self.task_id, statistics_key=self.task_key, user_id=self.actor_id, project_id=self.project_id,
                     kind=self.kind, chapter_id=self.chapter_id, resource_key=self.resource_key,
-                    queued_at=self.queued_at, execution_key=self.execution_key, status=self.status,
+                    queued_at=self.queued_at, execution_key=self.execution_key, worker_key=self.worker_key,
+                    status=self.status,
                     input=json.loads(self.input_json), checkpoint=json.loads(self.checkpoint_json),
                     step_cursor=self.step_cursor)
 
@@ -224,6 +243,10 @@ async def _finish_before_cancel(coro) -> Any:
         raise
 
 
+class _UnprovenRecoveryResource(Exception):
+    """原始业务凭据与锁内资源不符，清理事务须全部回滚。"""
+
+
 class TaskEngine:
     # output_text / 进度节流刷库间隔（秒）
     flush_interval = 2.0
@@ -231,6 +254,9 @@ class TaskEngine:
     heartbeat_seconds = 15.0
     # 调度器兜底轮询间隔（秒）；正常由 notify() 唤醒
     poll_interval = 5.0
+    heartbeat_interval = 5.0
+    lease_seconds = 30.0
+    lease_safety_seconds = 5.0
     # 取消运行中任务时等待其收尾的上限（秒）
     cancel_wait_seconds = 10.0
     # 待审核协作任务授权失效的数据库全量复查间隔（秒）；本进程撤权通知会立即复查对应成员。
@@ -269,6 +295,13 @@ class TaskEngine:
         # 外部 notify() 或兜底轮询超时会清空，届时按数据库事实重新领取，不掩盖已变为可处理的情形。
         self._stalled: dict[int, tuple[str | None, Any]] = {}
         self._loop_task: asyncio.Task[None] | None = None
+        self.lease = workers.WorkerLease(self)
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._heartbeat_stop = asyncio.Event()
+        self._lease_lost = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._reap_lock = asyncio.Lock()
+        self._adopted: set[tuple[int, str | None, str | None]] = set()
         self._stopping = False
         self.admin_cancellations = AdminCancellationDrain(self)
         self._collaboration_subscribers: dict[tuple[int, int], set[Subscriber]] = {}
@@ -290,23 +323,108 @@ class TaskEngine:
         return self._loop_task is not None
 
     async def start(self) -> None:
-        if self._loop_task is not None:
+        async with self._lifecycle_lock:
+            if self._loop_task is not None:
+                return
+            self._wake = asyncio.Event()
+            self._stopping = self._lease_lost = False
+            self._paused_scan_at = None
+            # 正在发送的 SQLite 实例可能持有主库写锁直到模型返回响应头。
+            # 在现有请求超时范围内用新事务重新登记，不中断另一实例。
+            deadline = time.monotonic() + self.ctx.settings.ai_request_timeout
+            while True:
+                self._heartbeat_stop = asyncio.Event()
+                try:
+                    await task_statistics_service.initialize_tracking(self.ctx.sessionmaker)
+                    await self.lease.register()
+                    self._heartbeat_task = asyncio.create_task(self._heartbeat(), name="task-engine-heartbeat")
+                    await self.recover()
+                    await self.scan_admin_cancellations()
+                    break
+                except (OperationalError, sqlite3.OperationalError) as exc:
+                    await self._stop_worker()
+                    remaining = deadline - time.monotonic()
+                    if not is_sqlite_busy(exc) or remaining <= 0:
+                        raise
+                    await asyncio.sleep(min(1.0, remaining))
+                except BaseException:
+                    await self._stop_worker()
+                    raise
+            self._loop_task = asyncio.create_task(self._scheduler(), name="task-engine-scheduler")
+            self.notify()
+
+    def _mark_lease_lost(self) -> None:
+        if self._lease_lost:
             return
-        self._wake = asyncio.Event()
-        self._stopping = False
-        self._paused_scan_at = None
-        await task_statistics_service.initialize_tracking(self.ctx.sessionmaker)
-        await self.recover()
-        await self.scan_admin_cancellations()
-        self._loop_task = asyncio.create_task(self._scheduler(), name="task-engine-scheduler")
+        self._lease_lost = True
+        self.lease.invalidate()
+        logger.warning("执行者租约已失效，停止领取与执行")
+        for task_id, task in self._running.items():
+            # 活游标或正在退出的执行体由其已有写屏障退出；再次 cancel 会打断驱动清理。
+            if task_id not in self._claiming and task_id not in self._finalizing and not task.cancelling():
+                task.cancel()
         self.notify()
+
+    async def _heartbeat(self) -> None:
+        while not self._heartbeat_stop.is_set():
+            try:
+                async with asyncio.timeout(self.heartbeat_interval):
+                    await self._heartbeat_stop.wait()
+                return
+            except TimeoutError:
+                pass
+            if self._lease_lost:
+                continue
+            key = self.lease.worker_key
+            try:
+                if (not await self.lease.heartbeat() and key == self.lease.worker_key
+                        and not self._heartbeat_stop.is_set()):
+                    self._mark_lease_lost()
+            except Exception:  # noqa: BLE001  事务已回滚，下个周期重新连接。
+                logger.warning("执行者心跳未确认")
+                if key == self.lease.worker_key and not self._heartbeat_stop.is_set() and not self.lease.valid:
+                    self._mark_lease_lost()
+
+    async def _replace_lost_worker(self) -> None:
+        self._mark_lease_lost()
+        active = list(self._running.values())
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
+        for hub in self.hubs.values():
+            hub.close("error", {"task": None, "detail": INTERRUPTED_MESSAGE})
+        self.hubs.clear()
+        self._admitted.clear()
+        self._adopted.clear()
+        self.admin_cancellations.recovering.clear()
+        self._done_candidates.clear()
+        if self._stopping:
+            return
+        await self.lease.stop()
+        if self._stopping:
+            return
+        await self.lease.register()
+        self._lease_lost = False
+        self.notify()
+
+    async def _stop_worker(self) -> None:
+        # 本地执行与收尾均已排空。让在途心跳结束后再持久标记停止，避免晚到的应答影响下一代。
+        self._heartbeat_stop.set()
+        if self._heartbeat_task is not None:
+            await asyncio.gather(self._heartbeat_task, return_exceptions=True)
+            self._heartbeat_task = None
+        await self.lease.stop()
 
     async def stop(self) -> None:
         """停止调度；运行中的任务标记为关停中断后取消（→ interrupted），等待其收尾。"""
+        async with self._lifecycle_lock:
+            await self._stop_tasks()
+            await self._stop_worker()
+
+    async def _stop_tasks(self) -> None:
         loop_task, self._loop_task = self._loop_task, None
+        self._stopping = True
         if loop_task is not None:
             # 让调度器在两次领取之间退出，避免领取（已提交 running）后来不及启动执行
-            self._stopping = True
             self.notify()
             try:
                 await asyncio.wait_for(loop_task, timeout=5)
@@ -380,6 +498,7 @@ class TaskEngine:
                 task.resource_key, queued, task.execution_key, task.status,
                 json.dumps(original_input, sort_keys=True, separators=(",", ":")),
                 json.dumps(original_checkpoint, sort_keys=True, separators=(",", ":")), original_cursor, claim,
+                task.worker_key,
             )
         except Exception:  # noqa: BLE001  旧任务不完整时不得根据状态推断资源归属。
             return None
@@ -406,8 +525,9 @@ class TaskEngine:
         ))
 
     def execution_is_uncertain(self, task: Task) -> bool:
-        return (task.id, task.statistics_key, self.admin_cancellations.round_at(task), task.execution_key) \
-            in self._uncertain_executions
+        return task.recovered_at is not None or (
+            task.id, task.statistics_key, self.admin_cancellations.round_at(task), task.execution_key,
+        ) in self._uncertain_executions
 
     def forget_abort_failure(self, snapshot: AbortSnapshot | None) -> None:
         if snapshot is None or self._failed_cleanups.get(snapshot.task_id) != snapshot:
@@ -427,6 +547,7 @@ class TaskEngine:
             row = await db.scalar(select(Task).where(
                 Task.id == task.id, Task.statistics_key == task.statistics_key,
                 Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
+                Task.worker_key == task.worker_key,
             ))
             if row is None or row.status != "running":
                 return None
@@ -434,153 +555,190 @@ class TaskEngine:
             return (row, identity) if identity is not None else None
 
     async def recover(self) -> None:
-        """把上次进程遗留的 running 任务置为 interrupted，并还原其占用的资源；queued 任务保持不变。"""
-        sm = self.ctx.sessionmaker
-        async with sm() as db:
-            stale = list(await db.scalars(select(Task).where(Task.status == "running").order_by(Task.id)))
-        for task in stale:
-            if task.id in self._running:
-                continue
-            if task.statistics_key is not None:
-                self.admin_cancellations.recovering[task.statistics_key] = (
-                    self.admin_cancellations.round_at(task), task.execution_key,
-                )
-            if (task.kind == "chapter.analyze" and task.admin_cancel_operation_id is None
-                    and isinstance(task.checkpoint, dict) and "_analysis_completion" in task.checkpoint
-                    and await self._complete_from_analysis_receipt(task) is not None):
-                # 旧进程已排空；完成收据逐字可证分析已提交，按原轮次受限收尾、释放串行键。
-                if task.statistics_key is not None:
-                    self.admin_cancellations.recovering.pop(task.statistics_key, None)
-                self.close_hub(task.id, "error", {"task": None, "detail": ANALYSIS_RECEIPT_FINALIZED_DETAIL},
-                               statistics_key=task.statistics_key)
-                continue
-            wizard_released = False
-            if (task.kind in _WIZARD_KINDS and task.admin_cancel_operation_id is None
-                    and isinstance(task.checkpoint, dict)):
-                if ("_wizard_completion" in task.checkpoint
-                        and await self._complete_from_wizard_receipt(task) is not None):
-                    # 旧进程已排空；完成收据逐字可证内容已与收据同事务提交：按原轮次受限收尾、释放向导资源键。
-                    if task.statistics_key is not None:
-                        self.admin_cancellations.recovering.pop(task.statistics_key, None)
-                    self.close_hub(task.id, "error", {"task": None, "detail": WIZARD_RECEIPT_FINALIZED_DETAIL},
-                                   statistics_key=task.statistics_key)
-                    continue
-                if "_wizard_completion" not in task.checkpoint and "_wizard_pending" in task.checkpoint:
-                    # 只有逐字可证的本轮未决凭据、没有完成收据：内容保存从未提交（二者同事务替换），撤销凭据后
-                    # 按普通中断收尾（E4-g3c）；凭据破损时仍保留待核对。
-                    wizard_released = await self._release_wizard_pending(task)
-            if task.kind == "chapter.analyze" or (task.kind.startswith("wizard.") and not wizard_released):
-                # 旧执行可能已提交结果但丢失确认；缺失或损坏收据也不能推断可重发。
-                if task.project_id is not None:
-                    self.remember_abort_failure(task.project_id, None)
-                self.remember_uncertain_execution(task)
-                logger.error("任务执行事实待核对 task=%s", task.id)
-                continue
-            try:
-                pending = await self._durable_rich_review(task)
-            except Exception:  # noqa: BLE001  坏提案或存储异常都不能当作无提案清理。
-                if task.project_id is not None:
-                    self.remember_abort_failure(task.project_id, None)
-                self.remember_uncertain_execution(task)
-                logger.error("富文档提案恢复事实待核对 task=%s", task.id)
-                continue
-            if pending is not None:
-                current, identity = pending
-                if current.admin_cancel_operation_id is not None:
-                    continue
-                try:
-                    row, committed = await self.complete_state(
-                        current, expected_status="running", status="paused", result=identity, error="",
-                        text=current.output_text, progress=current.progress, abort_ok=True, review_proof=identity,
-                    )
-                except Exception:
-                    logger.error("富文档提案启动恢复尚未完成 task_key=%s", task.statistics_key)
-                    continue
-                if committed and task.statistics_key is not None:
-                    self.admin_cancellations.recovering.pop(task.statistics_key, None)
-                if row is not None and row.status == "paused":
-                    self.close_hub(task.id, "paused", {"task": task_service.out_json(row), "result": identity},
-                                   statistics_key=task.statistics_key)
-                continue
-            if ((task.kind in _SINGLE_CHAPTER_KINDS and isinstance(task.checkpoint, dict)
-                 and "_chapter_claim" in task.checkpoint)
-                    or (task.kind == "chapter.batch" and (
-                        not isinstance(task.checkpoint, dict) or task.checkpoint.get("phase") != "generate"
-                        or "_batch_completion" in task.checkpoint
-                    ))):
-                if (task.kind in _SINGLE_CHAPTER_KINDS and task.admin_cancel_operation_id is None
-                        and await self._complete_from_chapter_receipt(task) is not None):
-                    # 旧进程已排空；完成收据逐字可证本轮保存已提交，按原轮次受限收尾、释放章节活动资源。
-                    if task.statistics_key is not None:
-                        self.admin_cancellations.recovering.pop(task.statistics_key, None)
-                    self.close_hub(task.id, "error", {"task": None, "detail": RECEIPT_FINALIZED_DETAIL},
-                                   statistics_key=task.statistics_key)
-                    continue
-                # 原收据绑定正文和分析占用时，仅凭同事务核验才保留 analyze 断点并结束原执行。
-                if (task.kind == "chapter.batch" and isinstance(task.checkpoint, dict)
-                        and "_batch_completion" in task.checkpoint and task.admin_cancel_operation_id is None):
-                    try:
-                        row, committed = await self.complete_state(
-                            task, expected_status="running", status="interrupted", result=None,
-                            error=INTERRUPTED_MESSAGE, text=task.output_text, progress=task.progress,
-                            abort_ok=True, batch_receipt_proof=True,
-                        )
-                    except Exception:
-                        row, committed = None, False
-                    if committed:
-                        self.admin_cancellations.recovering.pop(task.statistics_key, None)
-                        self.close_hub(task.id, "error", {"task": task_service.out_json(row),
-                                                          "detail": INTERRUPTED_MESSAGE},
-                                       statistics_key=task.statistics_key)
-                        continue
-                if task.project_id is not None:
-                    self.remember_abort_failure(task.project_id, None)
-                self.remember_uncertain_execution(task)
-                logger.error("章节完成凭据待核对 task=%s", task.id)
-                continue
-            if task.kind in _SINGLE_CHAPTER_KINDS and task.admin_cancel_operation_id is not None:
-                # 管理员 drain 负责同一持久意图及原执行身份，不在启动恢复中抢先释放章节。
-                continue
-            handler = _try_handler(task.kind)
-            abort_ok = handler is not None
-            if handler is not None:
-                abort_snapshot = self.capture_abort_snapshot(task, recovery=True)
-                try:
-                    if task.kind in _SINGLE_CHAPTER_KINDS:
-                        from app.services.task_engine.handlers import chapter as chapter_handler
+        """启动时立即处理孤立任务，随后扫描超过阈值的外部调用。"""
+        await self._reap_orphans()
 
-                        # 仅启动恢复在旧进程排空的前提下，从持久身份重建清理证据。
-                        claim = chapter_handler.capture_running_claim(task)
-                        await handler.on_abort(self.ctx, task, claim=claim)
-                    elif task.kind == "chapter.batch":
-                        await handler.on_abort(self.ctx, task, recovery=True)
-                    else:
-                        await handler.on_abort(self.ctx, task)
-                except Exception:
-                    abort_ok = False
-                    if task.project_id is not None:
-                        self.remember_abort_failure(task.project_id, abort_snapshot)
-            try:
-                row, committed = await self.complete_state(
-                    task, expected_status="running", status="interrupted", result=None, error=INTERRUPTED_MESSAGE,
-                    text=task.output_text, progress=task.progress, abort_ok=abort_ok,
-                )
-            except Exception:
-                # 意图仍持久存在，后续scan可重试；日志不输出带任务输入的SQL异常参数。
-                logger.error("任务启动恢复尚未完成 task_key=%s", task.statistics_key)
-                continue
-            if committed and task.statistics_key is not None:
-                self.admin_cancellations.recovering.pop(task.statistics_key, None)
-            out = task_service.out_json(row) if row is not None and handler is not None else None
-            self.close_hub(
-                task.id, "error", {"task": out, "detail": INTERRUPTED_MESSAGE}, statistics_key=task.statistics_key
-            )
-        # 上次进程在确认外部（MCP）调用期间退出：提案停在 executing，结果未知，判为失败（不重新调用）
+    async def _reap_orphans(self) -> None:
+        async with self._reap_lock:
+            me = self.lease.worker_key
+            if me is None or not self.lease.valid:
+                return
+            sm = self.ctx.sessionmaker
+            async with sm() as db:
+                orphan = await workers.prepare_orphan_scan(db, self.lease_seconds)
+                candidates = (await db.execute(select(
+                    Task.id, Task.statistics_key, Task.execution_key, Task.worker_key,
+                ).where(orphan).order_by(Task.id))).all()
+                await db.commit()
+            for task_id, task_key, execution_key, previous in candidates:
+                if self.lease.worker_key != me or not self.lease.valid:
+                    return
+                try:
+                    async with sm() as db:
+                        if not await workers.adopt(db, task_id, task_key, execution_key, previous, me):
+                            continue
+                        # 即便提交确认丢失，也会在下面按原轮次查回本次认领。
+                        self._adopted.add((task_id, task_key, execution_key))
+                        await db.commit()
+                except Exception:  # noqa: BLE001  下次重新查库；一条记录的暂错不能阻塞其他任务的收尾。
+                    logger.error("孤立任务认领暂未完成 task_key=%s", task_key)
+            for token in sorted(self._adopted.copy(), key=lambda t: t[0]):
+                if self.lease.worker_key != me or not self.lease.valid:
+                    return
+                task_id, task_key, execution_key = token
+                try:
+                    async with sm() as db:
+                        task = await db.scalar(select(Task).where(
+                            Task.id == task_id, Task.statistics_key == task_key,
+                            Task.execution_key == execution_key, Task.worker_key == me,
+                            Task.status == "running", Task.recovered_at.is_(None),
+                        ))
+                    if task is None or await self._recover_adopted(task):
+                        self._adopted.discard(token)
+                except Exception:  # noqa: BLE001  存储暂不可用时保留认领、下个周期重试；SQL 参数可能包含正文。
+                    logger.error("任务接管暂未完成 task_key=%s", task_key)
+            await self._recover_external()
+
+    async def _recover_external(self) -> None:
         from app.services.agent.service import recover_external
 
-        async with sm() as db:
-            if await recover_external(db, stale_only=False):
+        async with self.ctx.sessionmaker() as db:
+            if await recover_external(db, stale_only=True, engine=self):
                 await db.commit()
+
+    async def _mark_recovery_uncertain(self, task: Task) -> bool:
+        async with self.ctx.sessionmaker() as db:
+            conditions = (
+                Task.id == task.id, Task.statistics_key == task.statistics_key,
+                Task.worker_key == task.worker_key, Task.queued_at == task.queued_at,
+                Task.execution_key == task.execution_key, Task.status == "running",
+                Task.admin_cancel_operation_id == task.admin_cancel_operation_id,
+                Task.recovered_at.is_(None),
+            )
+            if await db.scalar(select(Task.id).where(*conditions).with_for_update()) is None:
+                return False
+            await require_live_worker(db, task.worker_key)
+            changed = await db.execute(update(Task).where(*conditions).values(recovered_at=func.now(), worker_key=None))
+            if changed.rowcount != 1:
+                return False
+            await db.commit()
+        self.remember_uncertain_execution(task)
+        if task.project_id is not None:
+            self.remember_abort_failure(task.project_id, None)
+        logger.error("任务执行事实待核对 task=%s", task.id)
+        return True
+
+    async def _recover_adopted(self, task: Task) -> bool:
+        """只消费本次认领的快照。True 表示已收尾或交由管理员 drain，False 留待下一轮。"""
+        from app.services.rich_document_review import ReviewRecoveryUncertain
+
+        if task.statistics_key is not None:
+            self.admin_cancellations.recovering[task.statistics_key] = (
+                self.admin_cancellations.round_at(task), task.execution_key,
+            )
+        complete_receipt = None
+        detail = None
+        checkpoint = task.checkpoint if isinstance(task.checkpoint, dict) else {}
+        if task.admin_cancel_operation_id is None:
+            if task.kind == "chapter.analyze" and "_analysis_completion" in checkpoint:
+                complete_receipt = self._complete_from_analysis_receipt
+                detail = ANALYSIS_RECEIPT_FINALIZED_DETAIL
+            elif task.kind in _WIZARD_KINDS and "_wizard_completion" in checkpoint:
+                complete_receipt = self._complete_from_wizard_receipt
+                detail = WIZARD_RECEIPT_FINALIZED_DETAIL
+            elif task.kind in _SINGLE_CHAPTER_KINDS and "_chapter_claim" in checkpoint:
+                complete_receipt = self._complete_from_chapter_receipt
+                detail = RECEIPT_FINALIZED_DETAIL
+        if complete_receipt is not None and await complete_receipt(task) is not None:
+            self.admin_cancellations.recovering.pop(task.statistics_key, None)
+            self.close_hub(task.id, "error", {"task": None, "detail": detail}, statistics_key=task.statistics_key)
+            return True
+
+        wizard_pending = (task.kind in _WIZARD_KINDS and task.admin_cancel_operation_id is None
+                          and "_wizard_pending" in checkpoint and "_wizard_completion" not in checkpoint)
+        if task.kind == "chapter.analyze" or (task.kind.startswith("wizard.") and not wizard_pending):
+            return await self._mark_recovery_uncertain(task)
+
+        try:
+            pending = await self._durable_rich_review(task)
+        except ReviewRecoveryUncertain:
+            return await self._mark_recovery_uncertain(task)
+        if pending is not None:
+            current, identity = pending
+            if current.admin_cancel_operation_id is not None:
+                return True
+            row, committed = await self.complete_state(
+                current, expected_status="running", status="paused", result=identity, error="",
+                text=current.output_text, progress=current.progress, abort_ok=True, review_proof=identity,
+            )
+            if committed:
+                self.admin_cancellations.recovering.pop(task.statistics_key, None)
+                self.close_hub(task.id, "paused", {"task": task_service.out_json(row), "result": identity},
+                               statistics_key=task.statistics_key)
+            return committed
+
+        if (task.kind in _SINGLE_CHAPTER_KINDS and "_chapter_claim" in checkpoint
+                or task.kind == "chapter.batch" and (
+                    checkpoint.get("phase") != "generate" or "_batch_completion" in checkpoint
+                )):
+            if (task.kind == "chapter.batch" and "_batch_completion" in checkpoint
+                    and task.admin_cancel_operation_id is None):
+                try:
+                    row, committed = await self.complete_state(
+                        task, expected_status="running", status="interrupted", result=None,
+                        error=INTERRUPTED_MESSAGE, text=task.output_text, progress=task.progress,
+                        abort_ok=True, batch_receipt_proof=True,
+                    )
+                except ConflictError:
+                    committed = False
+                if committed:
+                    self.admin_cancellations.recovering.pop(task.statistics_key, None)
+                    self.close_hub(task.id, "error", {"task": task_service.out_json(row),
+                                                      "detail": INTERRUPTED_MESSAGE},
+                                   statistics_key=task.statistics_key)
+                    return True
+            return await self._mark_recovery_uncertain(task)
+
+        if task.kind in _SINGLE_CHAPTER_KINDS and task.admin_cancel_operation_id is not None:
+            return True
+        handler = _try_handler(task.kind)
+        abort_ok = handler is not None
+        snapshot = self.capture_abort_snapshot(task, recovery=True)
+        chapter_resource = None
+        if task.kind in _SINGLE_CHAPTER_KINDS:
+            # 缺损的历史占用不能仅凭章节状态推断为清理成功。
+            chapter_resource = snapshot.claim if snapshot is not None else None
+            abort_ok = chapter_resource is not None
+        elif handler is not None and not wizard_pending:
+            try:
+                if task.kind == "chapter.batch":
+                    await handler.on_abort(self.ctx, task, recovery=True)
+                else:
+                    await handler.on_abort(self.ctx, task)
+            except AppError:
+                abort_ok = False
+        try:
+            row, committed = await self.complete_state(
+                task, expected_status="running", status="interrupted", result=None, error=INTERRUPTED_MESSAGE,
+                text=task.output_text, progress=task.progress, abort_ok=abort_ok,
+                recovery_claim=chapter_resource, wizard_pending=wizard_pending,
+            )
+        except _UnprovenRecoveryResource:
+            if wizard_pending:
+                return await self._mark_recovery_uncertain(task)
+            abort_ok = False
+            row, committed = await self.complete_state(
+                task, expected_status="running", status="interrupted", result=None, error=INTERRUPTED_MESSAGE,
+                text=task.output_text, progress=task.progress, abort_ok=False,
+            )
+        if committed:
+            if not abort_ok and handler is not None and task.project_id is not None:
+                self.remember_abort_failure(task.project_id, snapshot)
+            self.admin_cancellations.recovering.pop(task.statistics_key, None)
+            out = task_service.out_json(row) if row is not None and handler is not None else None
+            self.close_hub(task.id, "error", {"task": out, "detail": INTERRUPTED_MESSAGE},
+                           statistics_key=task.statistics_key)
+        return committed
 
     # ---------------- hub ----------------
 
@@ -632,9 +790,10 @@ class TaskEngine:
 
     async def _scheduler(self) -> None:
         assert self._wake is not None
+        next_reap = time.monotonic() + self.poll_interval
         while not self._stopping:
             try:
-                async with asyncio.timeout(self.poll_interval):
+                async with asyncio.timeout(max(0.0, next_reap - time.monotonic())):
                     await self._wake.wait()
             except TimeoutError:
                 # 兜底轮询：重试此前无法前进的排队任务。
@@ -643,16 +802,27 @@ class TaskEngine:
             if self._stopping:
                 return
             try:
+                if not self.lease.valid or self._lease_lost:
+                    await self._replace_lost_worker()
+                    next_reap = time.monotonic()
+                if self._stopping:
+                    return
+                if time.monotonic() >= next_reap:
+                    next_reap = time.monotonic() + self.poll_interval
+                    await self._reap_orphans()
                 await self.scan_admin_cancellations()
                 self._maybe_scan_collaboration_paused_soon()
                 await self._dispatch()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
-                logger.exception("任务调度失败")
+            except Exception as exc:  # noqa: BLE001
+                # 登记失败需退避。普通唤醒中的调度故障不能推迟已经排定的失联扫描。
+                if not self.lease.valid or self._lease_lost:
+                    next_reap = time.monotonic() + self.poll_interval
+                logger.error("任务调度失败，下个周期重试 error_type=%s", type(exc).__name__)
 
     async def _dispatch(self) -> None:
-        if not self.runtime.settings_confirmed:
+        if self._lease_lost or not self.lease.valid or not self.runtime.settings_confirmed:
             return
         settings = self.ctx.settings
         sm = self.ctx.sessionmaker
@@ -731,7 +901,12 @@ class TaskEngine:
         task = self._running.pop(task_id, None)
         project_id = self._running_projects.pop(task_id, None)
         if task is not None and not task.cancelled() and task.exception() is not None:
-            if project_id is not None:
+            execution_key = self._running_execution_keys.get(task_id)
+            if execution_key is not None:
+                # 此执行体已退出，仍然有效的本进程租约会把它排除在孤立扫描之外。
+                # 用已领取的轮次登记恢复；恢复事务在锁内重新核实 worker、执行键与 running 状态。
+                self._adopted.add((task_id, self._running_statistics_keys.get(task_id), execution_key))
+            elif project_id is not None:
                 self.remember_abort_failure(project_id, None)
             logger.error("任务执行体异常结束 task=%s", task_id)
         self._running_users.pop(task_id, None)
@@ -752,7 +927,9 @@ class TaskEngine:
     def admitted_count(self, user_id: int | None = None) -> int:
         return sum(1 for _key, _round, owner in self._admitted.values() if user_id is None or owner == user_id)
 
-    async def _fail_reset_queued_chapter(self, claim: chapter_claim.ChapterClaim) -> None:
+    async def _fail_reset_queued_chapter(
+        self, claim: chapter_claim.ChapterClaim, *, worker_key: str | None = None,
+    ) -> None:
         """章被人工复位或其他抢占取代时，只结束原 queued Task，绝不回退当前章节。"""
         from app.services.task_engine.handlers import chapter as chapter_handler
 
@@ -779,6 +956,8 @@ class TaskEngine:
                 Task.admin_cancel_operation_id.is_(None),
             ).with_for_update())
             if task is None or chapter_handler.capture_queued_claim(task) != claim:
+                return
+            if worker_key is not None and not await workers.lock_live_worker(db, worker_key):
                 return
             chapter = await db.scalar(select(Chapter).where(
                 Chapter.id == claim.chapter_id, Chapter.project_id == claim.project_id,
@@ -1175,7 +1354,8 @@ class TaskEngine:
 
     async def _claim_and_run(self, task_id: int, statistics_key: str | None) -> None:
         """真正领取在共享发布临界段复核额度；候选登记不算admitted。"""
-        if task_id in self._cancel_requested:
+        worker_key = self.lease.worker_key
+        if worker_key is None or not self.lease.valid or self._lease_lost or task_id in self._cancel_requested:
             return
         running_stage = task_service.STAGE_LABELS["running"]
         try:
@@ -1218,7 +1398,7 @@ class TaskEngine:
                 )
                 queued_select = queued_select.with_for_update()
                 queued_task = await db.scalar(queued_select)
-                if queued_task is None:
+                if queued_task is None or not await workers.lock_live_worker(db, worker_key):
                     return
                 queued_claim = None
                 chapter_queued_claim = None
@@ -1259,7 +1439,9 @@ class TaskEngine:
                     self._mark_stalled(task_id, statistics_key, expected_round)
                     return
                 limit = (await quota_service.task_limits(db, [candidate.user_id], self.ctx.settings))[candidate.user_id]
-                if self._stopping or self.admitted_count() >= self.ctx.settings.task_max_concurrency or (
+                if self._stopping or not self.lease.valid:
+                    return
+                if self.admitted_count() >= self.ctx.settings.task_max_concurrency or (
                     limit is not None and self.admitted_count(candidate.user_id) >= limit
                 ) or task_id in self._cancel_requested:
                     return
@@ -1267,7 +1449,7 @@ class TaskEngine:
                 self._claiming.add(task_id)
                 execution_key = str(uuid4())
                 try:
-                    execution = from_queued_task(queued_task, execution_key)
+                    execution = from_queued_task(queued_task, execution_key, worker_key=worker_key)
                     actor = (authz.AuthenticatedActor(execution.actor_id, execution.actor_token_version)
                              if execution.actor_token_version is not None else execution.actor_id)
                     await authz.require_authenticated(db, actor)
@@ -1289,9 +1471,11 @@ class TaskEngine:
                         Task.user_id == candidate.user_id, Task.project_id == candidate.project_id,
                         Task.kind == candidate.kind, Task.status == "queued", Task.execution_key.is_(None),
                         task_service.visible_task_project_exists(),
+                        workers.registered_worker_exists(worker_key),
                         Task.admin_cancel_operation_id.is_(None),
                     )
-                    .values(status="running", execution_key=execution_key, started_at=func.now(), stage=running_stage)
+                    .values(status="running", execution_key=execution_key, worker_key=worker_key,
+                            recovered_at=None, started_at=func.now(), stage=running_stage)
                 )
                 if result.rowcount != 1:
                     return
@@ -1300,20 +1484,22 @@ class TaskEngine:
                 running_chapter_claim = None
                 if queued_claim is not None:
                     running_claim = await kb_index_service.activate_document_claim(
-                        db, queued_claim, execution_key=execution_key,
+                        db, queued_claim, execution_key=execution_key, worker_key=worker_key,
                     )
                 if chapter_queued_claim is not None:
                     try:
                         running_chapter_claim = await chapter_claim.activate_queued_chapter(
-                            db, chapter_queued_claim, execution_key=execution_key,
+                            db, chapter_queued_claim, execution_key=execution_key, worker_key=worker_key,
                         )
                     except ConflictError as exc:
                         if (exc.extra or {}).get("code") != "chapter_claim_changed":
                             raise
                         # activate 失败已回滚 running CAS；新事务确认原占用确实已变化后才关闭旧任务。
-                        await self._fail_reset_queued_chapter(chapter_queued_claim)
+                        await self._fail_reset_queued_chapter(chapter_queued_claim, worker_key=worker_key)
                         return
                 await task_statistics_service.record_state_change(db, row, "running")
+                if self._lease_lost or not self.lease.valid:
+                    return
                 self._running_statistics_keys[task_id] = row.statistics_key
                 try:
                     await db.commit()
@@ -1326,6 +1512,7 @@ class TaskEngine:
                                 persisted_task = await verify.scalar(select(Task).where(
                                     Task.id == task_id, Task.statistics_key == statistics_key,
                                     Task.queued_at == expected_round, Task.execution_key == execution_key,
+                                    Task.worker_key == worker_key, workers.registered_worker_exists(worker_key),
                                 ))
                                 persisted = "running" if matches_running(execution, persisted_task) else None
                                 if persisted == "running" and queued_claim is not None:
@@ -1345,12 +1532,14 @@ class TaskEngine:
                                         persisted = None
                             break
                         except Exception:
-                            if self._stopping:
+                            if self._stopping or not self.lease.valid:
                                 return
                             await asyncio.sleep(0.1)
                     if persisted != "running":
                         return
                 # 外层runtime尚未释放，覆盖DB已提交但commit await尚未返回的窗口。
+                if self._lease_lost or not self.lease.valid or self.lease.worker_key != worker_key:
+                    return
                 self._admitted[task_id] = (statistics_key, expected_round, candidate.user_id)
                 self._running_execution_keys[task_id] = execution_key
         finally:
@@ -1405,7 +1594,8 @@ class TaskEngine:
             if (execution is None or task is None or not matches_running(execution, task)
                     or task.admin_cancel_operation_id is not None):
                 # 不从新读到的行补原 actor/project/kind/input 或领取断点。
-                if execution is not None and execution.project_id is not None:
+                if (execution is not None and execution.project_id is not None
+                        and (task is None or task.worker_key == execution.worker_key)):
                     self.remember_abort_failure(execution.project_id, None)
                 if self.hubs.get(task_id) is hub:
                     self.hubs.pop(task_id, None)
@@ -1536,7 +1726,7 @@ class TaskEngine:
                     Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
                     Task.chapter_id == execution.chapter_id, Task.kind == execution.kind,
                     Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
-                    Task.status == "running",
+                    Task.status == "running", Task.worker_key == current.worker_key,
                 )
                 if event != "done":
                     statement = statement.where(Task.admin_cancel_operation_id.is_(None),
@@ -1544,6 +1734,7 @@ class TaskEngine:
                 row = await db.scalar(statement.with_for_update())
             if row is None:
                 raise VisibilityPolicyError("任务执行身份已变化")
+            await require_live_worker(db, current.worker_key)
             return row
         await require_write_execution(db, current, project_owner_id=owner_id)
         row = await db.get(Task, current.task_id)
@@ -1634,7 +1825,12 @@ class TaskEngine:
                         raise VisibilityPolicyError(_POLICY_MESSAGES[code], extra={"code": code}) from None
                     raise VisibilityPolicyError("任务输出授权已变化", extra={"code": "task_output_changed"}) from None
             else:
-                publish(event, data)
+                # 无专门事件验证的 handler 也须核验执行者，然后在同一事务内发布。
+                async with self.ctx.sessionmaker() as db:
+                    if (execution is None or execution.worker_key != task.worker_key
+                            or not await self._owns_task_round(db, task, status="running")):
+                        raise VisibilityPolicyError("任务执行身份已变化")
+                    publish(event, data)
 
         async with aclosing(handler.run(job, self.ctx)) as events:
             async for event, data in events:
@@ -1672,6 +1868,7 @@ class TaskEngine:
                 conditions = [
                     Task.id == hub.task_id, Task.statistics_key == hub.statistics_key, Task.status == "running",
                     Task.queued_at == hub.queued_at, Task.execution_key == hub.execution_key,
+                    Task.worker_key == (execution.worker_key if execution is not None else None),
                 ]
                 if handler is not None and getattr(handler, "execution_identity_aware", False) is True:
                     current = getattr(job, "task_execution_identity", execution)
@@ -1703,6 +1900,8 @@ class TaskEngine:
                 )
                 if changed.rowcount != 1 and execution is not None:
                     raise VisibilityPolicyError("任务输出身份已变化")
+                if execution is not None and not getattr(handler, "execution_identity_aware", False):
+                    await require_live_worker(db, execution.worker_key)
                 await db.commit()
         except Exception as exc:  # noqa: BLE001
             logger.error("任务 %s 刷新输出失败", hub.task_id)
@@ -1712,6 +1911,26 @@ class TaskEngine:
                 if code is not None:
                     raise VisibilityPolicyError(_POLICY_MESSAGES[code], extra={"code": code}) from None
                 raise VisibilityPolicyError("任务输出授权已变化", extra={"code": "task_output_changed"}) from None
+
+    @staticmethod
+    async def _owns_task_round(db: AsyncSession, task: Task, *, status: str) -> bool:
+        """核验原任务轮次和执行者，用于无授权回调的发布及收尾入口。"""
+        conditions = (
+            Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
+            Task.execution_key == task.execution_key, Task.worker_key == task.worker_key, Task.status == status,
+        )
+        if db.get_bind().dialect.name == "sqlite":
+            # SQLite 的 SELECT 不持有行锁；先取得写事务，直到事件发布或检查返回。
+            locked = await db.execute(update(Task).where(*conditions).values(updated_at=Task.updated_at))
+            if locked.rowcount != 1:
+                return False
+        elif await db.scalar(select(Task.id).where(*conditions).with_for_update()) is None:
+            return False
+        try:
+            await require_live_worker(db, task.worker_key)
+        except ConflictError:
+            return False
+        return True
 
     async def _finalize(
         self,
@@ -1739,6 +1958,14 @@ class TaskEngine:
         # 收据受限收尾（E5-d）提交后的行；终态帧由按原轮次重读的已提交行构造。
         receipt_row: Task | None = None
         try:
+            if task is not None and execution is not None and task.worker_key != execution.worker_key:
+                status, result, error = "interrupted", None, TASK_GONE_MESSAGE
+                return
+            if task is not None and task.worker_key is not None:
+                async with self.ctx.sessionmaker() as db:
+                    if not await self._owns_task_round(db, task, status="running"):
+                        status, result, error = "interrupted", None, TASK_GONE_MESSAGE
+                        return
             try:
                 pending = await self._durable_rich_review(task)
             except Exception:  # noqa: BLE001
@@ -1884,7 +2111,7 @@ class TaskEngine:
                                 self.remember_uncertain_execution(task)
                             status, result, error = "failed", None, "任务保存结果尚未确认，请稍后核对"
                     async with self.ctx.sessionmaker() as db:
-                        await task_service.prune_finished(db, row.user_id)
+                        await task_service.prune_finished(db, row.user_id, source=task)
                 else:
                     if key is not None:
                         self.admin_cancellations.winners.pop(key, None)
@@ -1898,7 +2125,7 @@ class TaskEngine:
                         async with self.ctx.sessionmaker() as db:
                             fact = await db.scalar(select(Task).where(
                                 Task.id == task_id, Task.statistics_key == task.statistics_key,
-                                Task.queued_at == task.queued_at,
+                                Task.queued_at == task.queued_at, Task.worker_key == task.worker_key,
                                 Task.execution_key == (task.execution_key if status == "succeeded" or not abort_ok
                                                        else None),
                             ))
@@ -1983,7 +2210,7 @@ class TaskEngine:
                         # 与普通终态一致按用户上限裁剪已结束任务；裁剪失败不影响已提交的终态。
                         try:
                             async with self.ctx.sessionmaker() as db:
-                                await task_service.prune_finished(db, row.user_id)
+                                await task_service.prune_finished(db, row.user_id, source=task)
                         except Exception:  # noqa: BLE001
                             logger.error("草稿任务终态后裁剪失败 task=%s", task_id)
                         return
@@ -1995,7 +2222,7 @@ class TaskEngine:
                     # 本轮提案后按原 UUID/轮次/执行键 CAS 为 failed，不能停在 running 占用会话直到重启。
                     # 授权仍有效（其他核验失败）时保持原屏障。
                     try:
-                        code = await finalize(self.ctx, task)
+                        code = await finalize(self.ctx, task, execution=execution)
                     except Exception:  # noqa: BLE001  不输出可能含任务输入的 SQL 参数。
                         code = None
                         logger.error("协作轮次暂停核验失败后的受限收尾未完成 task_key=%s", task.statistics_key)
@@ -2017,7 +2244,7 @@ class TaskEngine:
                             status, result, error = row.status, row.result, row.error
                             try:
                                 async with self.ctx.sessionmaker() as db:
-                                    await task_service.prune_finished(db, row.user_id)
+                                    await task_service.prune_finished(db, row.user_id, source=task)
                             except Exception:  # noqa: BLE001
                                 logger.error("协作轮次终态后裁剪失败 task=%s", task_id)
                             return
@@ -2038,7 +2265,7 @@ class TaskEngine:
                             out = {**out, "error": warning}
                 await self.clear_finished_execution(task)
                 async with self.ctx.sessionmaker() as db:
-                    await task_service.prune_finished(db, task.user_id)
+                    await task_service.prune_finished(db, task.user_id, source=task)
             if committed and task is not None and execution is not None and status != "running":
                 try:
                     from app.services.task_engine.stream_evidence import capture_task_view, issue_terminal
@@ -2048,6 +2275,7 @@ class TaskEngine:
                             Task.id == execution.task_id, Task.statistics_key == execution.task_key,
                             Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
                             Task.kind == execution.kind, Task.queued_at == execution.queued_at, Task.status == status,
+                            Task.worker_key == execution.worker_key,
                         ))
                         if (fact is not None and json.dumps(fact.result, sort_keys=True, separators=(",", ":"))
                                 == json.dumps(result, sort_keys=True, separators=(",", ":"))
@@ -2096,7 +2324,7 @@ class TaskEngine:
             fact = await db.scalar(select(Task).where(
                 Task.id == row.id, Task.statistics_key == row.statistics_key, Task.user_id == row.user_id,
                 Task.project_id == row.project_id, Task.kind == row.kind, Task.queued_at == row.queued_at,
-                Task.status == row.status, Task.execution_key.is_(None),
+                Task.status == row.status, Task.execution_key.is_(None), Task.worker_key == row.worker_key,
             ).execution_options(populate_existing=True))
             if fact is None or (fact.status == "succeeded" and receipt_unpublished_detail(fact) is None):
                 return None
@@ -2124,7 +2352,11 @@ class TaskEngine:
         if (task.kind not in _SINGLE_CHAPTER_KINDS or task.statistics_key is None or task.project_id is None
                 or task.execution_key is None or task.chapter_id is None or not isinstance(task.queued_at, datetime)):
             return None
+        worker_key = original_claim.worker_key if original_claim is not None else task.worker_key
+        if task.worker_key != worker_key:
+            return None
         conditions = (
+            Task.worker_key == worker_key,
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.chapter_id == task.chapter_id, Task.kind == task.kind,
             Task.queued_at == task.queued_at, Task.execution_key == task.execution_key, Task.status == "running",
@@ -2143,7 +2375,7 @@ class TaskEngine:
                     chapter_id=task.chapter_id, queued_at=chapter_claim._utc(task.queued_at),
                     execution_key=task.execution_key, claim_key=pending.get("claim_key"),
                     prev_status=pending.get("prev_status"), grant_identity=chapter_claim._grant(probe.input),
-                    phase="running", kind="single",
+                    phase="running", kind="single", worker_key=worker_key,
                 )
                 if original_claim is not None and original_claim != claim:
                     return None
@@ -2151,6 +2383,7 @@ class TaskEngine:
                 if receipt is None:
                     await db.rollback()
                     return None
+                await require_live_worker(db, worker_key)
                 verified = (result if isinstance(result, dict)
                             and generation_service._receipt_digest(result) == receipt.get("result_hash") else None)
                 stamp = task_statistics_service.now_utc()
@@ -2172,15 +2405,21 @@ class TaskEngine:
                         row = await proof.scalar(select(Task).where(
                             Task.id == task.id, Task.statistics_key == task.statistics_key,
                             Task.queued_at == task.queued_at, Task.status == "succeeded",
-                            Task.execution_key.is_(None), Task.error == RECEIPT_FINALIZED_NOTE,
+                            Task.worker_key == worker_key, Task.execution_key.is_(None),
+                            Task.error == RECEIPT_FINALIZED_NOTE,
                         ))
                     if row is None:
+                        if original_claim is None:
+                            raise
                         return None
             async with self.ctx.sessionmaker() as db:
-                await task_service.prune_finished(db, row.user_id)
+                await task_service.prune_finished(db, row.user_id, source=task)
             logger.warning("单章任务按完成收据受限收尾 task_key=%s", task.statistics_key)
             return row
-        except Exception:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
+        except Exception as exc:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
+            if original_claim is None and _receipt_storage_failure(exc):
+                # 暂时存储故障需由原接管者在下个周期重试，不能转成永久待核对。
+                raise
             logger.error("单章完成收据收尾未完成 task_key=%s", task.statistics_key)
             return None
 
@@ -2198,7 +2437,11 @@ class TaskEngine:
         if (task.kind != analysis_service.KIND or task.statistics_key is None or task.project_id is None
                 or task.execution_key is None or task.chapter_id is None or not isinstance(task.queued_at, datetime)):
             return None
+        worker_key = original.worker_key if original is not None else task.worker_key
+        if task.worker_key != worker_key:
+            return None
         conditions = (
+            Task.worker_key == worker_key,
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.chapter_id == task.chapter_id, Task.kind == task.kind,
             Task.queued_at == task.queued_at, Task.execution_key == task.execution_key, Task.status == "running",
@@ -2227,6 +2470,7 @@ class TaskEngine:
                 if proof is None:
                     await db.rollback()
                     return None
+                await require_live_worker(db, worker_key)
                 stamp = task_statistics_service.now_utc()
                 changed = await db.execute(update(Task).where(*conditions).values(
                     status="succeeded", result=proof[1], error=ANALYSIS_RECEIPT_FINALIZED_NOTE, progress=100,
@@ -2246,15 +2490,21 @@ class TaskEngine:
                         done = await verify.scalar(select(Task).where(
                             Task.id == task.id, Task.statistics_key == task.statistics_key,
                             Task.queued_at == task.queued_at, Task.status == "succeeded",
-                            Task.execution_key.is_(None), Task.error == ANALYSIS_RECEIPT_FINALIZED_NOTE,
+                            Task.worker_key == worker_key, Task.execution_key.is_(None),
+                            Task.error == ANALYSIS_RECEIPT_FINALIZED_NOTE,
                         ))
                     if done is None:
+                        if original is None:
+                            raise
                         return None
             async with self.ctx.sessionmaker() as db:
-                await task_service.prune_finished(db, done.user_id)
+                await task_service.prune_finished(db, done.user_id, source=task)
             logger.warning("章节分析按完成收据受限收尾 task_key=%s", task.statistics_key)
             return done
-        except Exception:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
+        except Exception as exc:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
+            if original is None and _receipt_storage_failure(exc):
+                # 暂时存储故障需由原接管者在下个周期重试，不能转成永久待核对。
+                raise
             logger.error("章节分析完成收据收尾未完成 task_key=%s", task.statistics_key)
             return None
 
@@ -2280,7 +2530,11 @@ class TaskEngine:
             original.execution_key,
         ) != (task.id, task.statistics_key, task.user_id, task.project_id, task.kind, task.execution_key):
             return None
+        worker_key = original.worker_key if original is not None else task.worker_key
+        if task.worker_key != worker_key:
+            return None
         conditions = (
+            Task.worker_key == worker_key,
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.kind == task.kind, Task.queued_at == task.queued_at,
             Task.execution_key == task.execution_key, Task.status == "running",
@@ -2297,6 +2551,7 @@ class TaskEngine:
                 if verified is None:
                     await db.rollback()
                     return None
+                await require_live_worker(db, worker_key)
                 stamp = task_statistics_service.now_utc()
                 changed = await db.execute(update(Task).where(*conditions).values(
                     status="succeeded", result=verified, error=WIZARD_RECEIPT_FINALIZED_NOTE, progress=100,
@@ -2315,33 +2570,23 @@ class TaskEngine:
                         done = await verify.scalar(select(Task).where(
                             Task.id == task.id, Task.statistics_key == task.statistics_key,
                             Task.queued_at == task.queued_at, Task.status == "succeeded",
-                            Task.execution_key.is_(None), Task.error == WIZARD_RECEIPT_FINALIZED_NOTE,
+                            Task.worker_key == worker_key, Task.execution_key.is_(None),
+                            Task.error == WIZARD_RECEIPT_FINALIZED_NOTE,
                         ))
                     if done is None:
+                        if original is None:
+                            raise
                         return None
             async with self.ctx.sessionmaker() as db:
-                await task_service.prune_finished(db, done.user_id)
+                await task_service.prune_finished(db, done.user_id, source=task)
             logger.warning("向导任务按完成收据受限收尾 task_key=%s", task.statistics_key)
             return done
-        except Exception:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
+        except Exception as exc:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
+            if original is None and _receipt_storage_failure(exc):
+                # 暂时存储故障需由原接管者在下个周期重试，不能转成永久待核对。
+                raise
             logger.error("向导完成收据收尾未完成 task_key=%s", task.statistics_key)
             return None
-
-    async def _release_wizard_pending(self, task: Task) -> bool:
-        """启动恢复专用：撤销逐字可证、且内容从未提交的本轮向导未决凭据；失败时保留待核对屏障。"""
-        from app.services import wizard_service
-
-        try:
-            async with self.ctx.sessionmaker() as db:
-                released = await wizard_service.release_uncommitted_pending(db, task)
-                if not released:
-                    await db.rollback()
-                    return False
-                await db.commit()
-                return True
-        except Exception:  # noqa: BLE001
-            logger.error("向导未决凭据恢复未完成 task_key=%s", task.statistics_key)
-            return False
 
     async def _complete_from_batch_checkpoint(
         self, task: Task, *, original: TaskExecutionIdentity, status: str, error: str,
@@ -2360,7 +2605,7 @@ class TaskEngine:
         from app.services.task_engine.execution_identity import _json
 
         if (task.kind != batch_service.KIND or type(original) is not TaskExecutionIdentity
-                or original.kind != batch_service.KIND
+                or original.kind != batch_service.KIND or original.worker_key != task.worker_key
                 or status not in ("succeeded", "failed", "cancelled", "interrupted")
                 or task.statistics_key is None or task.project_id is None or task.execution_key is None
                 or not isinstance(task.queued_at, datetime)
@@ -2370,6 +2615,7 @@ class TaskEngine:
                 or chapter_claim._utc(task.queued_at) != original.queued_at):
             return None
         conditions = (
+            Task.worker_key == original.worker_key,
             Task.id == task.id, Task.statistics_key == task.statistics_key, Task.user_id == task.user_id,
             Task.project_id == task.project_id, Task.kind == task.kind, Task.queued_at == task.queued_at,
             Task.execution_key == task.execution_key, Task.status == "running",
@@ -2386,6 +2632,7 @@ class TaskEngine:
                     if found is None:
                         await db.rollback()
                         return None
+                    await require_live_worker(db, original.worker_key)
                     row, raw_checkpoint, raw_input = found
                     checkpoint = row.checkpoint
                     original_input = original.input
@@ -2444,11 +2691,12 @@ class TaskEngine:
                         done = await verify.scalar(select(Task).where(
                             Task.id == task.id, Task.statistics_key == task.statistics_key,
                             Task.queued_at == task.queued_at, Task.status == status, Task.execution_key.is_(None),
+                            Task.worker_key == original.worker_key,
                         ))
                     if done is None:
                         return None
             async with self.ctx.sessionmaker() as db:
-                await task_service.prune_finished(db, done.user_id)
+                await task_service.prune_finished(db, done.user_id, source=task)
             logger.warning("批量任务按持久断点受限收尾 task_key=%s", task.statistics_key)
             return done
         except Exception:  # noqa: BLE001  无法证明时保留原屏障，不输出含任务输入的异常参数。
@@ -2460,6 +2708,7 @@ class TaskEngine:
         error: str, text: str, progress: int, abort_ok: bool, operation_id: str | None = None,
         batch_snapshot: Any = None, abort_snapshot: AbortSnapshot | None = None, batch_receipt_proof: bool = False,
         batch_uncertain_attempt: bool = False,
+        recovery_claim: chapter_claim.ChapterClaim | None = None, wizard_pending: bool = False,
         review_proof: dict[str, Any] | None = None,
         execution_identity: TaskExecutionIdentity | None = None,
         current_execution_identity: TaskExecutionIdentity | None = None,
@@ -2472,6 +2721,16 @@ class TaskEngine:
             return None, False
         if (current_execution_identity is not None
                 and not same_execution(execution_identity, current_execution_identity)):
+            return None, False
+        worker_key = execution_identity.worker_key if execution_identity is not None else task.worker_key
+        if expected_status == "running" and worker_key is not None and self.lease.worker_key != worker_key:
+            return None, False
+        recovery_cleanup = recovery_claim is not None or wizard_pending
+        if recovery_cleanup and (
+            expected_status != "running" or status != "interrupted" or not abort_ok or worker_key is None
+            or recovery_claim is not None and (task.kind not in _SINGLE_CHAPTER_KINDS or wizard_pending)
+            or wizard_pending and task.kind not in _WIZARD_KINDS
+        ):
             return None, False
         system_cleanup = bool(execution_identity is not None and not abort_ok and result is None
                               and status in ("failed", "cancelled", "interrupted"))
@@ -2500,9 +2759,9 @@ class TaskEngine:
         if abort_snapshot is not None:
             if (abort_snapshot.task_id, abort_snapshot.task_key, abort_snapshot.actor_id, abort_snapshot.project_id,
                     abort_snapshot.kind, chapter_claim._utc(abort_snapshot.queued_at),
-                    abort_snapshot.execution_key) != (
+                    abort_snapshot.execution_key, abort_snapshot.worker_key) != (
                     task.id, task.statistics_key, task.user_id, task.project_id, task.kind,
-                    chapter_claim._utc(task.queued_at), task.execution_key):
+                    chapter_claim._utc(task.queued_at), task.execution_key, worker_key):
                 return None, False
             expected_input_json = abort_snapshot.input_json
         if task.kind == "chapter.batch":
@@ -2512,9 +2771,9 @@ class TaskEngine:
                 if (not isinstance(batch_snapshot, batch_service.BatchAbortSnapshot)
                         or (batch_snapshot.task_id, batch_snapshot.task_key, batch_snapshot.actor_id,
                             batch_snapshot.project_id, chapter_claim._utc(batch_snapshot.queued_at),
-                            batch_snapshot.execution_key) != (
+                            batch_snapshot.execution_key, batch_snapshot.worker_key) != (
                             task.id, task.statistics_key, task.user_id, task.project_id,
-                            chapter_claim._utc(task.queued_at), task.execution_key)
+                            chapter_claim._utc(task.queued_at), task.execution_key, worker_key)
                         or json.dumps(batch_snapshot.input, sort_keys=True, separators=(",", ":"))
                         != json.dumps(task.input, sort_keys=True, separators=(",", ":"))):
                     return None, False
@@ -2565,7 +2824,7 @@ class TaskEngine:
                                  "interrupted": INTERRUPTED_MESSAGE}[status]
                         continue
                 if (task.kind in _SINGLE_CHAPTER_KINDS | {"chapter.batch"} or abort_snapshot is not None
-                        or analysis_success or execution_identity is not None) \
+                        or analysis_success or execution_identity is not None or recovery_cleanup) \
                         and task.project_id is not None:
                     # 每次回滚重试都重取 Project → Task 锁，不能沿用上一事务的门禁。
                     await project_lifecycle.lock_record(db, task.project_id)
@@ -2573,6 +2832,7 @@ class TaskEngine:
                     Task.id == task.id, Task.statistics_key == task.statistics_key,
                     Task.user_id == task.user_id, Task.project_id == task.project_id, Task.kind == task.kind,
                     Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
+                    Task.worker_key == worker_key,
                 ).execution_options(populate_existing=True)
                 raw_checkpoint = raw_input = None
                 if (task.kind == "chapter.batch" or abort_snapshot is not None or analysis_success or chapter_success
@@ -2588,7 +2848,7 @@ class TaskEngine:
                         row.input, sort_keys=True, separators=(",", ":"),
                     ) != expected_input_json):
                         return row, False
-                elif task.kind in _SINGLE_CHAPTER_KINDS:
+                elif task.kind in _SINGLE_CHAPTER_KINDS or recovery_cleanup or worker_key is not None:
                     statement = statement.with_for_update()
                     row = await db.scalar(statement)
                 else:
@@ -2598,6 +2858,24 @@ class TaskEngine:
                 if (execution_identity is not None and task.kind not in _SINGLE_CHAPTER_KINDS | {"chapter.analyze"}
                         and not matches_running(current_execution_identity or execution_identity, row)):
                     return row, False
+                if expected_status == "running":
+                    await require_live_worker(db, worker_key)
+                if recovery_cleanup:
+                    if row.admin_cancel_operation_id is not None or row.admin_cancel_requested_at is not None:
+                        return row, False
+                    if recovery_claim is not None:
+                        released = await chapter_claim.release_chapter_claim(db, recovery_claim)
+                    else:
+                        from app.services import wizard_service
+
+                        released = await wizard_service.release_uncommitted_pending(db, row)
+                    if not released:
+                        raise _UnprovenRecoveryResource()
+                    # 两种释放都会修改 Task 的输入或断点。终态 CAS 只能使用本事务刚写完的值。
+                    row, raw_checkpoint, raw_input = (await db.execute(statement.add_columns(
+                        cast(Task.checkpoint, String).label("checkpoint_raw"),
+                        cast(Task.input, String).label("input_raw"),
+                    ).with_for_update())).one()
                 if analysis_success:
                     verified = await analysis_service.completed_analysis_receipt(db, analysis_execution)
                     if verified is None or json.dumps(verified[1], sort_keys=True, separators=(",", ":")) \
@@ -2712,12 +2990,13 @@ class TaskEngine:
                     Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == expected_status,
                     Task.user_id == task.user_id, Task.project_id == task.project_id, Task.kind == task.kind,
                     Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
+                    Task.worker_key == worker_key,
                     Task.admin_cancel_operation_id == observed if observed is not None else (
                         Task.admin_cancel_operation_id.is_(None)
                     ),
                 ]
                 if (task.kind == "chapter.batch" or abort_snapshot is not None or analysis_success or chapter_success
-                        or execution_identity is not None):
+                        or execution_identity is not None or recovery_cleanup):
                     if task.kind == "chapter.batch" or abort_snapshot is not None:
                         conditions.append(Task.step_cursor == batch_cursor)
                     elif execution_identity is not None:
@@ -2754,10 +3033,30 @@ class TaskEngine:
                                 raise
                         fact = await proof_db.scalar(select(Task).where(
                             Task.id == task.id, Task.statistics_key == task.statistics_key,
+                            Task.worker_key == worker_key, Task.queued_at == task.queued_at,
                             Task.execution_key == (
                                 task.execution_key if status == "succeeded" or not abort_ok else None
                             ),
                         ))
+                        if recovery_cleanup:
+                            from app.models import TaskStatistic
+
+                            statistic = await proof_db.get(TaskStatistic, task.statistics_key)
+                            if (fact is None or statistic is None or statistic.status != status
+                                    or statistic.finished_event_at is None or fact.finished_at is None
+                                    or chapter_claim._utc(statistic.finished_event_at)
+                                    != chapter_claim._utc(fact.finished_at)):
+                                raise
+                            if recovery_claim is not None:
+                                held = await proof_db.scalar(select(Chapter.id).where(
+                                    Chapter.id == recovery_claim.chapter_id,
+                                    Chapter.generation_claim_task_key == recovery_claim.task_key,
+                                    Chapter.generation_claim_key == recovery_claim.claim_key,
+                                ))
+                                if held is not None or "_chapter_claim" in (fact.input or {}):
+                                    raise
+                            elif "_wizard_pending" in (fact.checkpoint or {}):
+                                raise
                     if (fact is None or fact.status != status or fact.admin_cancel_operation_id is not None
                             or self.admin_cancellations.round_at(fact) != self.admin_cancellations.round_at(task)):
                         raise
@@ -2771,12 +3070,18 @@ class TaskEngine:
         if task.statistics_key is None or task.execution_key is None:
             return
         async with self.ctx.sessionmaker() as db:
-            await db.execute(update(Task).where(
+            changed = await db.execute(update(Task).where(
                 Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
-                Task.execution_key == task.execution_key, Task.status == "succeeded",
+                Task.execution_key == task.execution_key, Task.worker_key == task.worker_key,
+                Task.status == "succeeded",
                 Task.admin_cancel_operation_id.is_(None),
             ).values(execution_key=None))
-            await db.commit()
+            if changed.rowcount == 1:
+                try:
+                    await require_live_worker(db, task.worker_key)
+                except ConflictError:
+                    return
+                await db.commit()
 
     async def _mark_followup_warning(self, task: Task, warning: str) -> bool:
         """不触碰结果收据；未知派生结果只提示核对，绝不自动重发。"""
@@ -2787,9 +3092,11 @@ class TaskEngine:
                     Task.project_id == task.project_id, Task.kind == task.kind, Task.queued_at == task.queued_at,
                     Task.execution_key == task.execution_key, Task.status == "succeeded",
                     Task.admin_cancel_operation_id.is_(None),
+                    Task.worker_key == task.worker_key,
                 ).values(error=warning).execution_options(synchronize_session=False))
                 if changed.rowcount != 1:
                     return False
+                await require_live_worker(db, task.worker_key)
                 await db.commit()
                 return True
         except Exception:  # noqa: BLE001  提示写入未知时只以原轮次持久事实确认。
@@ -2801,6 +3108,7 @@ class TaskEngine:
                     Task.user_id == task.user_id, Task.project_id == task.project_id, Task.kind == task.kind,
                     Task.queued_at == task.queued_at, Task.execution_key == task.execution_key,
                     Task.status == "succeeded", Task.admin_cancel_operation_id.is_(None),
+                    Task.worker_key == task.worker_key,
                 ))
                 return actual == warning
         except Exception:
@@ -2813,6 +3121,12 @@ class TaskEngine:
         if hook is None:
             return True
         try:
+            if execution is not None and execution.worker_key != task.worker_key:
+                return False
+            if task.worker_key is not None:
+                async with self.ctx.sessionmaker() as db:
+                    if not await self._owns_task_round(db, task, status="succeeded"):
+                        return False
             if getattr(handler, "execution_identity_aware", False) is True:
                 await hook(self.ctx, task, execution=execution)
             else:

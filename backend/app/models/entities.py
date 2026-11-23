@@ -24,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     false,
+    func,
     text,
     true,
 )
@@ -793,6 +794,35 @@ class ChapterVersion(TimestampMixin, Base):
         return self.scene_snapshot is not None
 
 
+class TaskLeaseStore(Base):
+    """SQLite 主库及租约文件的配对身份。首次启用时登记唯一一行。"""
+
+    __tablename__ = "task_lease_store"
+    __table_args__ = (CheckConstraint("id = 1", name="singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    generation: Mapped[str] = mapped_column(String(36))
+    main_path: Mapped[str] = mapped_column(Text)
+    main_file: Mapped[str] = mapped_column(String(64))
+    lock_file: Mapped[str] = mapped_column(String(64))
+    lease_file: Mapped[str | None] = mapped_column(String(64))
+
+
+class TaskWorker(Base):
+    """一次任务引擎启动登记。执行者身份由 worker_key 标识，主机名和 PID 仅用于诊断。"""
+
+    __tablename__ = "task_workers"
+
+    worker_key: Mapped[str] = mapped_column(String(36), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fenced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hostname: Mapped[str] = mapped_column(String(255))
+    pid: Mapped[int] = mapped_column(Integer)
+    peer_url: Mapped[str | None] = mapped_column(String(500))
+
+
 class Task(TimestampMixin, Base):
     """持久化后台任务。tasks 表即队列：进程内调度器按 id 先进先出领取 queued 任务。"""
 
@@ -817,6 +847,9 @@ class Task(TimestampMixin, Base):
     )
     # 由实际领取者生成并与 queued → running 同事务写入，不随整数 id 或队列时钟猜测。
     execution_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # 接管更换 worker_key，但保留 execution_key 以核验同轮业务收据。
+    worker_key: Mapped[str | None] = mapped_column(String(36))
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # (user_id, id) 复合索引已覆盖按用户查询，不再单独建索引
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     project_id: Mapped[int | None] = mapped_column(

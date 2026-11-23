@@ -593,8 +593,8 @@ async def test_recent_executing_external_still_409(client, fake_llm, fake_mcp, a
 
 
 async def test_executing_external_failed_on_engine_restart(client, fake_llm, fake_mcp, app):
-    """重启后的原外部操作结果未知，不因恢复而允许继续或重发。"""
-    base, url, task_ref, change = await _stuck_external(client, fake_llm, fake_mcp, app, minutes_ago=0)
+    """超过时限的原外部操作结果未知，重启收尾后仍不可继续或重发。"""
+    base, url, task_ref, change = await _stuck_external(client, fake_llm, fake_mcp, app, minutes_ago=3)
     task_id = task_ref["id"]
     await app.state.task_engine.stop()
     await app.state.task_engine.start()

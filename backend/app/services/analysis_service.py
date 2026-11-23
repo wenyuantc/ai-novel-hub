@@ -85,12 +85,12 @@ from app.services.project_access import require_project, resolve_access
 from app.services.project_service import get_owned_project, project_info
 from app.services.setting_ai_context import build_scope
 from app.services.setting_field_formatting import format_entry_fields
+from app.services.task_engine.execution_identity import TaskExecutionIdentity, require_live_worker
 
 if TYPE_CHECKING:
     from app.schemas.task import TaskOut
     from app.services.collaboration_ai_guard import SendGuard
     from app.services.task_engine.engine import TaskEngine
-    from app.services.task_engine.execution_identity import TaskExecutionIdentity
     from app.services.task_engine.registry import TaskContext
 
 logger = logging.getLogger(__name__)
@@ -871,7 +871,7 @@ async def enqueue_pending(
     同项目串行；当前任务结束时引擎的完成回调会唤醒调度器。不 commit。
     """
     from app.services import task_service
-    from app.services.task_engine.execution_identity import TaskExecutionIdentity, matches_running
+    from app.services.task_engine.execution_identity import matches_running
 
     try:
         if (db.new or db.dirty or db.deleted or type(execution) is not TaskExecutionIdentity
@@ -902,6 +902,7 @@ async def enqueue_pending(
             source = await db.scalar(select(Task).where(
                 Task.id == execution.task_id, Task.statistics_key == execution.task_key,
             ).with_for_update().execution_options(populate_existing=True))
+            await require_live_worker(db, execution.worker_key)
             step = replace(execution, step_cursor=expected_cursor, checkpoint_json=checkpoint_json)
             if source is None or source.admin_cancel_operation_id is not None or not matches_running(step, source):
                 raise AnalysisExecutionChanged()
@@ -953,7 +954,6 @@ async def enqueue_auto(
     if project_id is None or chapter_id is None or not ctx.settings.auto_analyze_enabled:
         return None
     from app.services import generation_service
-    from app.services.task_engine.execution_identity import TaskExecutionIdentity
 
     try:
         if (type(execution) is not TaskExecutionIdentity
@@ -1134,6 +1134,7 @@ class AnalysisExecution:
     embedding_selection: project_ai_config.ResolvedSharedEmbedding | None = None
     task_identity: "TaskExecutionIdentity | None" = None
     proposal_source: object = None
+    worker_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -1262,6 +1263,11 @@ def _valid_execution(execution: object) -> bool:
         ))
         and _execution_uuid(execution.task_key) and _execution_uuid(execution.execution_key)
         and execution.task_key != execution.execution_key and isinstance(execution.queued_at, datetime)
+        and (execution.worker_key is None or _execution_uuid(execution.worker_key))
+        and (execution.task_identity is None or (
+            type(execution.task_identity) is TaskExecutionIdentity
+            and execution.task_identity.worker_key == execution.worker_key
+        ))
         and type(execution.input_hash) is str and re.fullmatch(r"[0-9a-f]{64}", execution.input_hash) is not None
         and type(execution.actor_token_version) is int and execution.actor_token_version >= 0
         and _valid_analysis_bindings(execution)
@@ -1297,7 +1303,6 @@ def capture_analysis_execution(task: Task) -> AnalysisExecution:
 
 def analysis_execution_from_claim(identity: "TaskExecutionIdentity") -> AnalysisExecution:
     """只转换领取事务冻结的身份，不能从后续重读的 Task 推断原输入。"""
-    from app.services.task_engine.execution_identity import TaskExecutionIdentity
 
     if type(identity) is not TaskExecutionIdentity or identity.kind != KIND:
         raise AnalysisExecutionChanged()
@@ -1317,7 +1322,7 @@ def analysis_execution_from_claim(identity: "TaskExecutionIdentity") -> Analysis
             grant_identity=identity.grant_identity, task_kind=identity.kind, task_chapter_id=identity.chapter_id,
             input_hash=analysis_input_hash(original_input), actor_token_version=identity.actor_token_version,
             model_binding=model, embedding_selection=selection,
-            task_identity=identity,
+            task_identity=identity, worker_key=identity.worker_key,
             proposal_source=proposal_source,
         )
     except (TypeError, ValueError):
@@ -1344,7 +1349,7 @@ def _capture_analysis_execution(task: Task, *, allow_admin_cancel: bool) -> Anal
         task.id, task.statistics_key, task.user_id, task.project_id, task.queued_at, task.execution_key,
         grant, task.kind, task.chapter_id, task.step_cursor if task.kind == "chapter.batch" else None,
         analysis_input_hash(task.input), task.input.get("_task_actor_token_version"), model, selection,
-        proposal_source=proposal_source,
+        proposal_source=proposal_source, worker_key=task.worker_key,
     )
     if (not _valid_execution(execution)
             or (task.admin_cancel_requested_at is not None
@@ -1375,8 +1380,11 @@ async def _lock_analysis_execution(
             Task.chapter_id == execution.task_chapter_id,
             Task.kind == execution.task_kind, Task.queued_at == execution.queued_at,
             Task.execution_key == execution.execution_key, Task.status == status,
+            Task.worker_key == execution.worker_key,
             Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
         ).with_for_update(read=read_lock))).one_or_none()
+        if row is not None:
+            await require_live_worker(db, execution.worker_key, read_only=read_lock)
         if (row is None or not isinstance(row.input, dict) or task_grant_identity(row.input) != execution.grant_identity
                 or analysis_input_hash(row.input) != execution.input_hash
                 or analysis_bindings(row.input, actor_id=execution.actor_id, project_id=execution.project_id)
@@ -1418,6 +1426,7 @@ async def _require_batch_analysis(
             Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
             Task.kind == execution.task_kind, Task.queued_at == execution.queued_at,
             Task.execution_key == execution.execution_key, Task.status == "running",
+            Task.worker_key == execution.worker_key,
             Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
         ).with_for_update(read=read_lock))).one_or_none()
         if row is None or row.step_cursor != execution.batch_cursor or not isinstance(row.checkpoint, dict):
@@ -1534,6 +1543,7 @@ async def _analysis_initial_check(db: AsyncSession, execution: AnalysisExecution
                 Task.chapter_id == execution.task_chapter_id,
                 Task.kind == execution.task_kind, Task.queued_at == execution.queued_at,
                 Task.execution_key == execution.execution_key, Task.status == "running",
+                Task.worker_key == execution.worker_key,
                 Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
                 User.token_version == execution.actor_token_version,
                 *project_lifecycle.active_conditions(),
@@ -1558,6 +1568,7 @@ async def _require_analysis_pending(db: AsyncSession, pending: AnalysisPending) 
         checkpoint = await db.scalar(select(Task.checkpoint).where(
             Task.id == execution.task_id, Task.statistics_key == execution.task_key,
             Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+            Task.worker_key == execution.worker_key,
             Task.status == "running",
         ).with_for_update(read=True))
     if (not isinstance(checkpoint, dict) or "_analysis_completion" in checkpoint
@@ -1591,13 +1602,17 @@ async def _system_receipt_task(db: AsyncSession, execution: AnalysisExecution, *
         ).execution_options(synchronize_session=False))
         if project.rowcount != 1:
             return None
-        return (await db.execute(select(Task.checkpoint, Task.input, Task.result).where(
+        row = (await db.execute(select(Task.checkpoint, Task.input, Task.result).where(
             Task.id == execution.task_id, Task.statistics_key == execution.task_key,
             Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
             Task.chapter_id == execution.task_chapter_id, Task.kind == execution.task_kind,
             Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+            Task.worker_key == execution.worker_key,
             Task.status == status,
         ).with_for_update())).one_or_none()
+        if row is not None:
+            await require_live_worker(db, execution.worker_key)
+        return row
 
 
 async def begin_analysis_pending(
@@ -1624,6 +1639,7 @@ async def begin_analysis_pending(
             changed = await db.execute(update(Task).where(
                 Task.id == execution.task_id, Task.statistics_key == execution.task_key,
                 Task.queued_at == execution.queued_at, Task.execution_key == execution.execution_key,
+                Task.worker_key == execution.worker_key,
                 Task.status == "running",
             ).values(checkpoint=checkpoint).execution_options(synchronize_session=False))
             if changed.rowcount != 1:
@@ -1660,6 +1676,7 @@ async def discard_analysis_pending(
             changed = await db.execute(update(Task).where(
                 Task.id == pending.execution.task_id, Task.statistics_key == pending.execution.task_key,
                 Task.queued_at == pending.execution.queued_at, Task.execution_key == pending.execution.execution_key,
+                Task.worker_key == pending.execution.worker_key,
                 Task.status == "running",
             ).values(checkpoint=original).execution_options(synchronize_session=False))
             if changed.rowcount != 1:
@@ -1713,6 +1730,7 @@ async def _write_analysis_completion(
     changed = await db.execute(update(Task).where(
         Task.id == pending.execution.task_id, Task.statistics_key == pending.execution.task_key,
         Task.queued_at == pending.execution.queued_at, Task.execution_key == pending.execution.execution_key,
+        Task.worker_key == pending.execution.worker_key,
         Task.status == "running",
     ).values(checkpoint=checkpoint).execution_options(synchronize_session=False))
     if changed.rowcount != 1:
