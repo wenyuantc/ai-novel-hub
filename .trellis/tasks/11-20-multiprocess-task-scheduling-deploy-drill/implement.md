@@ -11,7 +11,7 @@ C1 执行者租约 → C2 调度约束与设置 → C3 跨进程取消 → C4 �
 ```
 
 - [x] **C1** `11-20-mp-worker-lease`：执行者登记、租约、接管协议、SQLite 争用基线。其余多进程子任务都依赖它提供的「孤立任务」判定。
-- [ ] **C2** `11-20-mp-scheduling-constraints`：串行键与并发上限读库、系统设置跨进程生效。
+- [x] **C2** `11-20-mp-scheduling-constraints`：串行键与并发上限读库、系统设置跨进程生效。
 - [ ] **C3** `11-20-mp-cross-process-cancel`：取消请求、管理员 drain、作品删除排空、删除意图。
 - [ ] **C4** `11-20-mp-peer-channel-stream`：内部通道、流转发、降级路径、活动任务读路径。
 - [ ] **C5** `11-20-mp-outside-engine-state`：备份、灵感、项目导入、智能体会话锁。
@@ -20,7 +20,7 @@ C1 执行者租约 → C2 调度约束与设置 → C3 跨进程取消 → C4 �
 - [ ] **C8** `11-20-collab-migration-deploy-drill`：协作迁移演练与 README 操作步骤。C7 收口时把排空开关与多进程运维内容并入这份操作步骤。
 - [ ] **父任务集成评审**：按 `prd.md` 的 AC1–AC13 逐条核对证据，更新 `TODOS.md` 第 11、25 项，归档。
 
-当前只有 C1 写好了 `design.md` 与 `implement.md`。C2–C8 只有 `prd.md`：它们的设计依赖前序子任务落地后的实际代码，开工前各自补一轮针对性研究并写 `design.md`、`implement.md`，经评审后再 `task.py start`。
+C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3–C8 开工前各自核对前序实现，补齐设计与实施清单，再按下列门禁评审。
 
 ## 每个子任务的开工门禁
 

@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"SQLite 全量门禁、PostgreSQL 隔离库与迁移验证"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"配额接口、三态额度、在途任务及收尾可见性"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"保存审计、未知提交、开关与普通设置生效时点"}
+{"file":".trellis/spec/backend/open-api.md","reason":"开放接口同一分钟内调整阈值的限流与响应契约"}
+{"file":".trellis/spec/backend/skills-mcp.md","reason":"插件管理、错误处理与真实工具调用"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"原生快照和 SQLite 离线冷恢复约束"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"管理员排空与原轮次的取消保护"}
+{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/occupancy.md","reason":"逐个核对旧内存断言的替代证据与异常收尾"}
+{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/claim-concurrency.md","reason":"强制交错、验实门内争用、独立观察者及峰值"}
+{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/settings-and-gates.md","reason":"独立设置对象、故障恢复、SDK 发包与关闭顺序"}

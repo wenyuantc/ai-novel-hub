@@ -407,11 +407,13 @@ def tool_pref(plugin, name) -> (enabled, auto_confirm)   # 缺省 (True, False)
 
 ### 2. 契约
 
-- **管理员开关**：有效mcp_enabled关闭时，路由级require_mcp使所有 `/mcp-plugins` 接口403。部署MCP_ENABLED可被[系统设置](./system-settings.md)持久覆盖；公开auth/config no-store，前端可见30秒/回前台同步。build_tool_map/resolve之外，refresh_tools/call_once在连接前与连接建立后实际调用前、智能体Worker在出队call_tool前均重查共享Settings；不捕获旧bool。关闭阻断未发调用，已发调用不主动取消；不改变插件持久数据/SSRF/回收规则。
+- **管理员开关**：关闭先提交时，所有进程的 `/mcp-plugins` 新请求返回 403。入口核对数据库中的有效值，插件写入在实际写事务内再核对。逐项导入遇到关闭时返回 403，此前已提交的项目保留。刷新和试用在连接前、握手后及真实业务请求的发送边界复核。等待已发握手的响应时允许其他实例关闭，新一页工具发现或新工具调用按当时的开关判定。已发工具请求收到响应头后可以继续读正文。智能体真实发送还须通过原有身份租约。前端的可见轮询为 30 秒，详见[系统设置](./system-settings.md)。
+- 插件地址的 DNS 校验在数据库写锁外完成。实际写入前再检查账号、归属、开关与连接配置。解析期间目标配置已变化时返回 409，插件已删除则返回 404。刷新等待网络后也须核对原插件身份与目标。0067 起 SQLite 通过 AUTOINCREMENT 为新插件分配 ID，保持迁移时已有的 ID、工具和请求头。PostgreSQL 沿用原序列。
 - **归属**：插件按用户私有，他人一律 404 `插件不存在`；每人最多 10 个（400）。`(user_id, slug)` 唯一，冲突 409 `插件标识已被使用，请换一个`。
   slug 为空时由名称生成（只保留小写字母数字，其余转连字符，≤ 24），生成不出来 → 400 要求改用英文名称或填写标识。
 - **地址**：必须是 `http(s)://` 且有主机名；**不能带用户名密码**（凭据只能放加密的请求头）；保存时（新建、PATCH 改 url）做 SSRF 校验，失败 400；
-  每次连接再校验（上一场景）。
+  每次连接再校验（上一场景）。创建或修改插件地址在数据库事务外等待 DNS，保存前再次核对账号、持久开关和插件归属。并发创建还须在门内重查上限。
+  改地址期间若原插件的地址、传输方式或请求头已被修改，则返回 409。原插件已删除时，迟到的保存或刷新返回 404。0067 起 SQLite 使用 AUTOINCREMENT，PostgreSQL 使用已有序列，两者均为新插件分配新 ID。
 - **请求头**：最多 20 个；名称符合 HTTP token 且 ≤ 100；`host` / `content-length` / `content-type` / `transfer-encoding` / `connection` / `accept` /
   `mcp-session-id` / `mcp-protocol-version` / `last-event-id` 由传输层管理，禁止自定义；取值是字符串、≤ 4096、不含 CR / LF / NUL，保存前 strip。
   - **加密**：整个 dict 先 `json.dumps` 再 Fernet 加密存 `headers_encrypted`，空 dict / null 存 NULL。

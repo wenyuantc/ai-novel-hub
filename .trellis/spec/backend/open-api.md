@@ -13,9 +13,11 @@
 OpenApiUser = Annotated[ApiKeyPrincipal, Depends(get_api_key_principal)]
 
 # backend/app/services/api_key_service.py
-async def authenticate_key(db, raw_key: str | None, limit_per_minute: int) -> ApiKeyPrincipal
+async def authenticate_key(db, raw_key: str | None, settings: Settings) -> ApiKeyPrincipal
 async def get_authorized_project(db, principal: ApiKeyPrincipal, project_id: int) -> Project
 ```
+
+密钥缺失或格式错误时直接返回 401。格式有效后取当前限流设置，超过本实例的刷新期限时从当前事务读取持久值，再使用原子 UPDATE 验证密钥并计入当分钟次数。调高或调低阈值均保留已用次数。
 
 `ApiKeyPrincipal` 仅含 key_id、name、user_id、username、all_projects、project_ids、expires_at，不携带完整 Key、密文或摘要。开放路由位于 `app/api/open/`，业务查询与序列化位于 `app/services/open_api/`，字段白名单位于 `app/schemas/open_api.py`。
 

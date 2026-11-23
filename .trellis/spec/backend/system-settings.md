@@ -2,13 +2,13 @@
 
 ## 1. 范围 / 触发
 
-适用于六项业务运行配置、`SystemSettingsManager`、`/admin/system-settings`、公开开关同步与设置审计。修改配置读取、部署优先级、任务/MCP执行或管理表单时遵守本契约。继续沿用任务引擎已有的单进程部署前提，不提供多worker广播。
+适用于六项业务运行配置、`SystemSettingsManager`、`/admin/system-settings`、公开开关同步与设置审计。修改配置读取、部署优先级、任务/MCP执行或管理表单时遵守本契约。各应用分别维护已确认设置的缓存，同库实例使用相同的部署基线。受支持的生产部署仍使用一个 worker。
 
 ## 2. 签名与存储
 
 ```python
 # app/services/system_settings_service.py
-SystemSettingsManager(settings, sessionmaker, notify)
+SystemSettingsManager(settings, sessionmaker, notify, *, poll_interval)
 async def load(self) -> SystemSettingsOut
 async def update(self, actor_id: int, request: SystemSettingsUpdate) -> SystemSettingsOut
 async def close(self) -> None
@@ -36,15 +36,15 @@ bool键为registration_enabled/auto_analyze_enabled/mcp_enabled；正整数键�
 - PATCH两层extra=forbid；省略保持、false明确关闭、null删除覆盖恢复部署值，changes不能为空。严格布尔/整数，拒绝布尔冒充整数及字符串/浮点；正整数最小1；开放API限额还须≤2_147_483_647（数据库Integer计数边界，部署基线同样fail-fast），不可存入超大值再让后续认证溢出500。不要求单用户≤全局，两级约束共同生效。
 - 管理写锁序为既有_lock→共享AuthorizationRuntime→auth DB gate→User升序→设置资源，自有会话及revision条件UPDATE（首次唯一INSERT），真实管理员和成功审计同事务。先确认commit，后无await同步发布六字段，再notify调度；不先发布再存库。
 - 正常失败回滚不发布。提交确认丢失重读持久状态，保留既有审计的真实结果，不盲重发旧候选。自有shield写工作不因HTTP调用者取消被拆断，关停close等待写任务；无法确认时settings_confirmed=False暂停新准入，dispatch直接返回避免热循环；即时重读仍须处于同runtime，后台恢复确认后再开放。load/reload/recovery所有发布路径共用runtime，禁止继续覆盖，不回退默认或宣称离线一致。
-- 应用启动在bootstrap/任务恢复前load；持久值非法或读库失败不静默忽略。create_all测试不运行lifespan，fixture显式load/close。
+- 启动时在 bootstrap 和任务恢复前 `load()`。管理器自有的周期读取独立于任务引擎，空闲应用也会刷新。普通消费者最多使用一个调度周期内确认的设置，过期时在自己的事务中读取有效值。相同 revision 和覆盖内容无需再次发布。回执迟到不得重新延长旧设置的有效期。显式 load/close 的夹具与应用 lifespan 都要收回轮询和在途写入。
 - 审计action=system_settings.update、target_type=system_settings、固定目标。settings_changes最多6项，仅本动作可用；key/before_override/after_override/before_effective/after_effective/before_source/after_source均类型受限，失败不保留未提交after。禁止带入密钥、原始请求或异常。
 
 ### 真实消费
 
-- 注册关闭不影响登录、管理员创建用户或bootstrap。
-- 全站硬顶由同一ctx.settings读取；用户上限由[用户配额](./rbac-quotas.md)统一解析，inherit才取task_max_per_user，limited0禁止新准入、unlimited仍受全站硬顶；降低只停止不符合新限额的后续调度，不取消运行任务，提高notify；原FIFO/资源互斥/取消不变。
+- 注册先检查开关，再计算密码哈希，最后在建账号事务取得授权门并重查持久值。关闭先提交则返回 403，无新用户、登录记录或 Cookie。登录、管理端建号和 bootstrap 沿用各自入口。
+- 全站硬顶与用户默认值由领取事务读库，用户显式限额优先于默认值。用户限额为零时继续排队，显式不限仍受全站硬顶。降额保留已经开始的执行。见[用户配额](./rbac-quotas.md)。
 - enqueue_auto及batch后续分析阶段使用最新开关，已排队/运行/手动分析不取消；项目auto_analyze仍需同时开启。
-- MCP路由require_mcp并非唯一边界：试用/工具发现连接前、连接建立后实际调用前，及智能体Worker出队实际call_tool前均读共享Settings；已发出的call_tool不强杀。不能将一次性bool传入Worker替代实时引用。
+- MCP 插件入口、实际写入和出站业务请求各自核对持久开关。公开配置从数据库返回两个开关，继续发送 `Cache-Control: no-store`。传输与智能体调用的锁边界见 [MCP 插件规范](./skills-mcp.md)。
 - API Key认证每请求使用最新限额，不清空rate_count/rate_window，UTC分钟/429/Retry-After保持原契约。
 
 ### 前端
@@ -75,6 +75,7 @@ bool键为registration_enabled/auto_analyze_enabled/mcp_enabled；正整数键�
 
 - `tests/test_system_settings.py`：六项安全纯读、false/partial/reset真实注册、非法批次/权限、同revision唯一赢家、新应用重启与新部署、审计故障无发布/无泄露、commit确认丢失无相反审计、HTTP取消后写入发布完整、未知提交后台恢复及坏持久值、摘要类型/动作约束。
 - `tests/test_system_settings_runtime.py`：Gate控制两级并发降/升、普通及batch自动分析、同分钟限额计数、MCP连接中关闭/Worker出队关闭/已发调用完成。
+- `tests/test_system_settings_cross_process.py` 与 `tests/test_system_settings_publication_races.py` 在独立应用之间交错设置提交、注册写入、迟到回执和限流请求，验证每种先后顺序下的 HTTP 回包和实际副作用。
 - `tests/test_system_settings_migrations.py`：0026→0027→0026，固定单行/正revision、旧业务保留；原head/base与项目备份反射仍通过。
 - 前端API/controller/publicConfig/auth/结构测试：null/false、Cookie/AbortSignal、409/权限/脏编辑/未知结果、StrictMode双setup、慢请求/同步抛错清single-flight、30秒/隐藏/前台/focus/时钟回拨、保存后旧响应不反写、本页确认框清理。
 - 真实浏览器补保存/逐项恢复/来源、匿名与普通用户/降权、两会话公开同步、375px/浅暗/错误恢复。node SSR不是交互验收。

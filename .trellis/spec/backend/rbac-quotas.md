@@ -74,7 +74,7 @@ DB 新增四表，不重建 users/projects：
 
 认证与能力解析在授权确认前必须保持 `db.no_autoflush`，包括账号不存在／授权状态缺失的备用 SELECT 和项目锁后的协作成员重读。待写实体不得因查询而提前 flush；退出作用域后恢复 session 原本的 autoflush 设置。调用方若捕获授权拒绝，必须回滚本操作未经授权的待写数据，不能直接提交；Agent 工具由外层 SAVEPOINT 回滚。新授权路径用 `test_collaboration_access_no_autoflush.py` 和 `test_audit_authorization_no_autoflush.py` 验证待写实体、失败认证及 PostgreSQL 撤权先提交时不会先执行写入。
 
-作品创建只取owner User屏障（无可编辑的全局作品默认，不反向取gate），与所有配额修改同序。设置load/reload/recovery/保存的**所有发布路径**与领取共用runtime；commit确认后无await同步发布。提交事实未知时 `settings_confirmed=False` 暂停新准入，dispatch返回而非热循环；在同runtime内恢复确认后再开放。继续沿用单进程TaskEngine，不宣称多实例租约。
+作品创建只取owner User屏障（无可编辑的全局作品默认，不反向取gate），与所有配额修改同序。设置load/reload/recovery/保存的**所有发布路径**与领取共用runtime；commit确认后无await同步发布。提交事实未知时 `settings_confirmed=False` 暂停新准入，dispatch返回而非热循环；在同runtime内恢复确认后再开放。同一数据库的领取通过持久门和占用表串行裁决。
 
 新增 `role.create/update/delete`、`user.roles.update/bootstrap`、`user.quotas.update` 审计，安全类型化 `rbac_change` 只存角色ID/允许权限/两项额度前后值；原已采集管理动作在自定义角色下也不能漏审。**不扩大全量人工子模块/本人日常/普通AI审计**。业务与成功日志同事务，未知提交不补相反失败。
 
@@ -93,7 +93,7 @@ UserQuotaOut包含 user_id/username/is_management_account/revision/authorization
 - 普通创建、灵感转换、备份实际导入、拆书start及小说模板新建，均在任何作品/风格/状态/token消费/Task副作用前锁owner，并持至原整体提交。拆书按User→BookImport锁并重验revision，灵感锁后重读converted状态。模板先重放已成功的同一建书意图，再对新意图检查额度，详见[个人小说模板](./novel-templates.md)。预览不预占。
 - 派生任务（Agent受控受理的 `start_task`、分析派生的记忆向量 `kb.index`）的 `Task.user_id` 与令牌轮次继承原执行的真实actor，按该actor占用任务并发额度，不改记为作品作者，也不额外豁免；见[智能体](./agent.md)与[检索](./retrieval.md)。
 - 用户任务unlimited仍受全站task_max_concurrency硬顶。达到并发上限继续queued，不失败/取消；降低不强杀已执行体。
-- `_dispatch` 批量预筛选不等于准入；候选与admitted分离，真正claim在runtime/gate/User后用最新额度/全局顶复核。commit确认后在runtime内同步发布admitted才执行，直到真实_on_done（含on_success）释放；DB终态不是释放时刻。
+- 候选预选后，领取事务在授权门内重读两级有效上限，核对全站持久占用与同键队首。领取一旦物理提交，两个进程的配额 API 都能读到该笔占用。配额查询在同一条 SELECT 内按冻结的发起人统计名额。任务已标为成功但回调、裁剪或最终发布尚未结束时仍计入已用，直到原执行体归还或执行者已确认停止、失联。
 - `_claiming` 保护须覆盖领取session的异步 `__aexit__`，随后无await进入 `_run` 的try/finalize。提前清标记会使owner取消/stop留下孤立running；取消只登记意图，由真正运行体安全收尾。
 
 ### 前端读取、异步失效和人工只读
@@ -130,6 +130,7 @@ UserQuotaOut包含 user_id/username/is_management_account/revision/authorization
 
 - `test_rbac.py`、`test_rbac_permissions.py`：38动作直接HTTP正反、内置/自定义/多角色、超管复制、管理目标/旧字段/自身/在用/CAS、明确审计范围及owner隔离。
 - `test_rbac_concurrency.py`：Event控制双向撤权、User锁顺序、角色编辑/删除/分配竞争；四真实入口同时争最后作品名额最多1成功，失败无风格/Task半成品、token未消费/灵感及解析状态不变；claim提交/会话退出×owner cancel/stop、设置未知发布窗口、真实执行峰值/on_success未完。
+- `test_task_scheduling_constraints.py` 用两个执行者争不同候选的最后一个名额，验证同键队首、全站峰值以及降额后原执行继续。 `test_task_slot_lifecycle.py` 验证提交回执或归还回执丢失、原轮次延迟归还和终态收尾。
 - `test_user_quotas.py`：继承/0/正整数/不限、全部生命周期、超管不豁免、四入口原子拒绝、任务排队/全局硬顶/调低不强杀。
 - `test_rbac_migrations.py`：0028代表性存量启用/禁用超管和普通账号，以及作品/章节/私人AI密文子行逐字段不变、FK完整、角色ID不复用、守护降级；create_all不能冒充Alembic。
 - 前端auth/privateCaches/API/controller、`manualReadOnly.test.ts`、`AdminRolesPage.test.ts`、`AppLayout.test.ts`：真实异步prepare/submit回调、迟到logout/me/401、撤写保读/撤读清数据、关联子表单零API调用、375px卡片；角色名称100/说明500需保持前后端一致。本轮卡片测试覆盖布局/动作/空态/非超管，不能据此宣称已自动覆盖表单长度。
