@@ -32,6 +32,16 @@ function text(extra: Partial<ComponentProps<typeof AnalysisDrawer>> = {}) {
 const sceneScope = { kind: 'scene', sceneId: 22, sceneTitle: '桥头初遇', sceneOrder: 1 } as const
 
 describe('按建议重写的范围和分析提示', () => {
+  it('后台正在自动分析时显示进度，并等待首份结果', () => {
+    const rendered = text({ analysis: {
+      ...analysis, status: 'analyzing', latest: null,
+      state: { chapter_id: 3, status: 'analyzing', latest_analysis_id: null, scores: null, analyzed_at: null, active_task_id: 7 },
+    } })
+    expect(rendered).toContain('正在分析')
+    expect(rendered).not.toContain('本章尚未分析')
+    expect(rendered).not.toContain('分析本章')
+    expect(rendered).not.toContain('取消分析')
+  })
   it('明确当前场景的稳定身份，留空按场景原字数，不套用章级300字默认下限', () => {
     const rendered = text({ reviseScope: sceneScope })
     expect(rendered).toContain('本次重写范围')

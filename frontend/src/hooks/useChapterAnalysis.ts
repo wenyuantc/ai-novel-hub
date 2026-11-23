@@ -2,7 +2,8 @@ import { App } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { analysisApi, changeCountsLabel, parseAnalyzeDone, replaceChange } from '../api/analysis'
 import type { Analysis, AnalysisChange, AnalysisStatus, ChapterAnalysisState, Task } from '../api/types'
-import { useTasksStore } from '../stores/tasks'
+import { POLL_ACTIVE_MS, useTasksStore } from '../stores/tasks'
+import { startVisiblePolling } from '../utils/visiblePolling'
 import { useTaskStream, type TaskOutcome } from './useTaskStream'
 
 /**
@@ -21,36 +22,41 @@ export function useChapterAnalysis(chapterId: number, enabled = true) {
 
   const latestId = state?.latest_analysis_id ?? null
 
-  const refresh = useCallback(async (): Promise<ChapterAnalysisState | null> => {
-    if (!enabled) return null
-    try {
-      const s = await analysisApi.status(chapterId)
-      setState(s)
-      setVersion((v) => v + 1)
-      return s
-    } catch {
-      // 状态查询失败时保持原状态（不打断编辑）
-      return null
-    }
-  }, [chapterId, enabled])
+  const [refreshKey, setRefreshKey] = useState(0)
+  const refresh = useCallback(() => setRefreshKey((key) => key + 1), [])
 
   useEffect(() => {
     if (!enabled) return
     let alive = true
-    analysisApi
-      .status(chapterId)
-      .then((s) => {
+    let reading = false
+    let stopPolling: (() => void) | undefined
+    const read = async () => {
+      if (reading) return
+      reading = true
+      try {
+        const s = await analysisApi.status(chapterId)
         if (!alive) return
         setState(s)
-        setVersion((v) => v + 1)
-      })
-      .catch(() => {
-        // 忽略：按「未分析」显示
-      })
+        // 自动分析由后台创建。只读章节状态，完成后再刷新详情与历史。
+        if (!stopPolling || s.status !== 'analyzing') setVersion((v) => v + 1)
+        if (s.status === 'analyzing' && !stopPolling && typeof document !== 'undefined') {
+          stopPolling = startVisiblePolling(read, document, POLL_ACTIVE_MS)
+        } else if (s.status !== 'analyzing') {
+          stopPolling?.()
+          stopPolling = undefined
+        }
+      } catch {
+        // 状态查询失败时保留原状态，轮询期间会在下一次重试。
+      } finally {
+        reading = false
+      }
+    }
+    void read()
     return () => {
       alive = false
+      stopPolling?.()
     }
-  }, [chapterId, enabled])
+  }, [chapterId, enabled, refreshKey])
 
   // 最新分析变化 / 刷新后重新加载详情（回写条目可能被其他入口修改）
   useEffect(() => {
@@ -83,7 +89,7 @@ export function useChapterAnalysis(chapterId: number, enabled = true) {
       } else if (outcome.status === 'failed') {
         message.warning(`本章分析失败：${outcome.detail}`)
       }
-      await refresh()
+      refresh()
       return outcome
     },
     [follow, refresh, message, enabled],

@@ -13,7 +13,7 @@ const hooks = vi.hoisted(() => ({
 }))
 const view = vi.hoisted(() => ({
   chapter: null as Chapter | null, scene: null as Scene | null,
-  draft: '尚未替换的场景原稿', scope: 1, cid: '3', loaders: 0,
+  draft: '尚未替换的场景原稿', scope: 1, cid: '3', loaders: 0, autoAnalyze: false, sceneIds: [22],
   controller: null as Record<string, unknown> | null,
   scopes: new Map<number, () => boolean>(),
   track: vi.fn(), loadScene: vi.fn(async () => true), changeDocument: vi.fn(),
@@ -82,7 +82,7 @@ vi.mock('../../components/editorDrafts/useChapterAutosave', async () => ({
   useChapterAutosave: (await import('./ChapterEditorPage.testSupport')).autosavePageFixture,
 }))
 vi.mock('../../stores/project', () => ({ useProjectStore: Object.assign(
-  (select: (state: unknown) => unknown) => select({ project: { id: 1, auto_analyze: false, default_style: null }, refresh: view.refresh }),
+  (select: (state: unknown) => unknown) => select({ project: { id: 1, auto_analyze: view.autoAnalyze, default_style: null }, refresh: view.refresh }),
   { subscribe: () => () => {} },
 ) }))
 vi.mock('../../stores/tasks', () => ({ useTasksStore: (select: (state: unknown) => unknown) => select({ active: [], track: view.track }) }))
@@ -91,7 +91,7 @@ vi.mock('react-router-dom', () => ({ useParams: () => ({ cid: view.cid }), useNa
 vi.mock('../../components/systemSettings/useSettingsConfirmation', () => ({ useSettingsConfirmation: () => (options: { onOk: () => void }) => options.onOk() }))
 vi.mock('../../components/scenes/useSceneEditor', () => ({ useSceneEditor: () => ({
   scene: view.scene, draft: { title: '场景', content: view.draft, summary: '' }, dirty: false, saving: false, conflict: null, externalChange: false,
-  page: { items: [{ id: 22 }], total: 1 }, controller: view.controller,
+  page: { items: view.sceneIds.map((id) => ({ id })), total: view.sceneIds.length }, controller: view.controller,
 }) }))
 vi.mock('../../components/scenes/SceneWritingPanel', () => ({ default: ({ state }: { state: { draft: { content: string } } }) => createElement('textarea', { 'aria-label': '当前场景正文', value: state.draft.content, readOnly: true }) }))
 vi.mock('../../components/chapter/AnalysisDrawer', () => ({ default: () => null }))
@@ -166,14 +166,47 @@ beforeEach(() => {
   vi.clearAllMocks()
   hooks.slots = []; hooks.effects = []; hooks.index = 0; hooks.active = false
   view.scope = 1; view.cid = '3'; view.scopes.clear(); view.draft = '尚未替换的场景原稿'
+  view.autoAnalyze = false; view.sceneIds = [22]
   view.chapter = { id: 3, project_id: 1, outline_id: null, plan_id: null, style_id: null, chapter_no: 1, title: '章', status: 'draft', word_count: 10, content_revision: 1, content: view.draft, updated_at: '' }
   view.scene = { id: 22, chapter_id: 3, title: '场景', sort: 0, content: view.draft, content_revision: 1, planning_revision: 1 } as Scene
-  view.controller = { getSnapshot: () => ({ scene: view.scene, draft: { content: view.draft } }), load: view.loadScene, changeDocument: view.changeDocument, canAcknowledgeLatest: () => false }
+  view.controller = { getSnapshot: () => ({ scene: view.scene, page: { total: view.sceneIds.length }, draft: { content: view.draft } }), load: view.loadScene, changeDocument: view.changeDocument, canAcknowledgeLatest: () => false }
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
 })
 afterEach(async () => { unmount(); await Promise.resolve(); vi.unstubAllGlobals() })
 
 describe('章节生成的创建阶段和主区实时预览', () => {
+  it('单场景默认整章生成在发送前发现新增场景时，提示重新选择范围', async () => {
+    view.autoAnalyze = true
+    const current = page()
+    const net = network()
+    view.sceneIds = [22, 23]
+    current.click('按现有场景生成整章')
+    await vi.waitFor(() => expect(view.message.warning).toHaveBeenCalledWith('场景目录已变化，请重新选择 AI 处理范围。'))
+    expect(net.fetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { autoAnalyze: true, sceneIds: [22], chooseScene: false, whole: true },
+    { autoAnalyze: true, sceneIds: [22], chooseScene: true, whole: false },
+    { autoAnalyze: true, sceneIds: [22, 23], chooseScene: false, whole: false },
+    { autoAnalyze: false, sceneIds: [22], chooseScene: false, whole: false },
+  ])('自动分析 $autoAnalyze，场景 $sceneIds，手选当前场景 $chooseScene 时使用正确的生成接口', async ({ autoAnalyze, sceneIds, chooseScene, whole }) => {
+    view.autoAnalyze = autoAnalyze
+    view.sceneIds = []
+    page()
+    view.sceneIds = sceneIds
+    let current = page()
+    if (chooseScene) {
+      const scope = elements(current.tree).find((element) => element.type === Segmented && element.props['aria-label'] === 'AI处理范围')
+      ;(scope?.props.onChange as (value: string) => void)('scene')
+      current = page()
+    }
+    const net = network()
+    current.click(whole ? '按现有场景生成整章' : '重新生成当前场景')
+    const url = whole ? '/api/v1/chapters/3/generate' : '/api/v1/projects/1/chapters/3/scenes/22/generate'
+    await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'POST' })))
+  })
+
   it('延迟 POST 明确显示正在创建任务，不显示灰色停止或伪运行状态', async () => {
     const net = network()
     page().click('重新生成当前场景')

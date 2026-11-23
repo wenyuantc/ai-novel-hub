@@ -71,7 +71,7 @@ function render(access: ProjectAccess, configs: AIConfig[]) {
   view.configs = configs
   view.drawer = null
   const html = renderToStaticMarkup(createElement(App, null, createElement(ChapterEditorPage)))
-  const button = html.match(/<button[^>]*>(?:(?!<\/button>).)*重新生成当前场景(?:(?!<\/button>).)*<\/button>/s)
+  const button = html.match(/<button[^>]*>(?:(?!<\/button>).)*按现有场景生成整章(?:(?!<\/button>).)*<\/button>/s)
   if (!button || !view.drawer) throw new Error('未渲染生成按钮或分析抽屉')
   const drawer: { analyzeDisabled: boolean; reviseBlockedReason: string } = view.drawer
   return { generateDisabled: /\sdisabled(=""|\s|>)/.test(button[0].replace(/<span.*$/s, '')), drawer }

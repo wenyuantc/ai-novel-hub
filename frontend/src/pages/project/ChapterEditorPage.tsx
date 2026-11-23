@@ -195,7 +195,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const projectScopeVersion = useProjectStore((s) => s.scopeVersion)
   const trackTask = useTasksStore((s) => s.track)
   const hasConfig = useHasAIConfig()
-  const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze ?? true)
+  const autoAnalyze = useProjectStore((s) => s.project?.auto_analyze === true)
   const projectDefaultStyle = useProjectStore((s) => s.project?.default_style ?? null)
   const [searchParams, setSearchParams] = useSearchParams()
   const restructureTask = searchParams.get(SCENE_RESTRUCTURE_TASK_QUERY)
@@ -219,7 +219,8 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const currentSceneId = scene?.id
   const confirm = useSettingsConfirmation(modal, !canEdit, `${pid}:${initial.id}:${currentSceneId ?? ''}`)
   const content = sceneEditor.draft.content
-  const [aiScope, setAiScope] = useState<'scene' | 'chapter'>('scene')
+  const [chosenAIScope, setAiScope] = useState<'scene' | 'chapter'>()
+  const aiScope = chosenAIScope ?? (autoAnalyze && sceneEditor.page?.total === 1 ? 'chapter' : 'scene')
   const [aiMode, setAiMode] = useState<AIMode>('generate')
   const [aiConfigId, setAiConfigId] = useState<number | null>(null)
   // 本次生成 / 润色 / 重写 / 局部改写临时使用的风格（inherit = 本章风格 > 项目默认）
@@ -541,7 +542,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
       }
       onChanged()
       void refreshProject()
-      // 成功后后端可能已自动排队分析本章：刷新状态以接上分析任务
+      // 整章保存后读取自动分析的排队状态。
       void refreshAnalysis()
       return
     }
@@ -551,11 +552,20 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   // 当前数据没有章节 / 场景实例证明，不按后台任务里的旧整数关联自动恢复订阅。
   const batchWriting = false
 
+  const sceneForAI = () => {
+    const snapshot = sceneEditor.controller.getSnapshot()
+    if (!chosenAIScope && aiScope === 'chapter' && (snapshot.page?.total !== 1 || snapshot.scene?.id !== currentSceneId)) {
+      message.warning('场景目录已变化，请重新选择 AI 处理范围。')
+      return null
+    }
+    return snapshot.scene
+  }
+
   const runAI = async (mode: 'generate' | 'polish') => {
     if (skillProblem) { message.warning(skillProblem); return }
     if (!canUseAI || !canEditNow()) return
     await autosave.runSavedAction(async () => {
-      const current = sceneEditor.controller.getSnapshot().scene
+      const current = sceneForAI()
       if (!current) return
       const versions = { expected_content_revision: current.content_revision, expected_planning_revision: current.planning_revision }
       const request = beginTaskRequest()
@@ -591,7 +601,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
     if (!canUseAI) return false
     if (skillProblem) { message.warning(skillProblem); return false }
     return (await autosave.runSavedAction(async () => {
-      const current = sceneEditor.controller.getSnapshot().scene
+      const current = sceneForAI()
       if (!current) return false
       const pending = beginTaskRequest()
       if (!pending) return false
@@ -820,7 +830,12 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
   const aiPanelContent = (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Segmented aria-label="AI处理范围" value={aiScope} disabled={editorLocked || saving} options={[{ value: 'scene', label: '当前场景' }, { value: 'chapter', label: '整章保结构' }]} onChange={setAiScope} />
-      <Typography.Text type="secondary">{aiScope === 'scene' ? `只更新场景 ${(scene?.sort ?? 0) + 1} 的正文；摘要与规划不变` : '逐场景生成提案，整章统一保存；目标字数为整章总量'}</Typography.Text>
+      <Typography.Text type="secondary">
+        {aiScope === 'scene'
+          ? `只更新场景 ${(scene?.sort ?? 0) + 1} 的正文，保留摘要与规划。`
+          : '按场景顺序生成，整章统一保存。目标字数是整章总量。'}
+        {autoAnalyze && (aiScope === 'chapter' ? '保存后按设置自动分析本章。' : '如需自动分析，请选择「整章保结构」。')}
+      </Typography.Text>
       <div>
         <Typography.Text type="secondary">AI 配置</Typography.Text>
         <AIConfigSelect value={aiConfigId} onChange={setAiConfigId} disabled={editorLocked} />

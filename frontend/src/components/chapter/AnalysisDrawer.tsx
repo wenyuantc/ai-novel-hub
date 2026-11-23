@@ -197,8 +197,8 @@ function AnalysisBody({
     return idx >= 0 && idx + 1 < history.length ? history[idx + 1].scores : null
   }, [detail, history])
 
-  const running = analysis.running
-  const task = analysis.task
+  const running = analysis.status === 'analyzing' || analysis.running
+  const task = analysis.running ? analysis.task : null
   const hasAnalysis = latestId !== null
 
   return (
@@ -210,14 +210,14 @@ function AnalysisBody({
             <Typography.Text type="secondary">
               {task?.status === 'queued' ? queueLabel(task) : task?.stage || '正在分析…'}
             </Typography.Text>
-            <Button
+            {task && <Button
               size="small"
               danger
               icon={<StopOutlined />}
               onClick={() => void analysis.cancel().catch((err: unknown) => message.error(errorMessage(err)))}
             >
               取消分析
-            </Button>
+            </Button>}
           </>
         ) : (
           <Button
