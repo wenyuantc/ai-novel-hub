@@ -4,7 +4,7 @@
 
 适用于作品删除、管理员回收站、任务准入/收尾、删号保护、到期清理、审计和相关前端。作品删除不再是物理删除；任何新增作品内容读写、直接 ID 查询、自动任务入队或独立流会话，都必须接入本契约。
 
-沿用单进程任务引擎前提。删除期间对目标任务的内部取消不是通用的他人任务/模型权限；单独的安全任务监控/取消受理权限见[任务监控](./admin-task-monitoring.md)，不授予读取模型凭据、输出或接管任务。
+部署仍使用单 worker；作品排空从主库读取所有实例的工作。删除期间对目标任务的内部取消不是通用的他人任务/模型权限；单独的安全任务监控/取消受理权限见[任务监控](./admin-task-monitoring.md)，不授予读取模型凭据、输出或接管任务。
 
 0026后排空还须覆盖持久admin_cancel_operation_id与独立drain的真实project_work，不能只看OPEN计数。pending不被purge/expire/普通历史清理/无作品删号提前移除；管理员先安全abort再终态释放资源。项目级_abort_failures重试不能重放已经完成的旧管理员abort，完成知识须按UUID+queued_at本轮绑定；同UUID暂停后继续是新轮，不能让旧completed跳过新轮必要修复。完整CAS/恢复/提交确认丢失边界以任务监控契约为准。
 
@@ -14,7 +14,7 @@
 
 迁移 `0024_project_recycle_bin`（父0023）：
 
-- `projects.deleted_at`、`last_deleted_at`、`deleted_by_user_id`、`deleted_by_username`、`deletion_started_at`、`deletion_token` 均可空；删除人是无业务外键的快照，last_deleted_at是跨恢复保留的内部代次高水位。
+- `projects.deleted_at`、`last_deleted_at`、`deleted_by_user_id`、`deleted_by_username`、`deletion_started_at`、`deletion_token`、`deletion_worker_key` 均可空；删除人是无业务外键的快照，last_deleted_at是跨恢复保留的内部代次高水位。
 - `(deleted_at, id)` 索引；已删除和删除中不能并存，意图时间/token 必须同时为空或非空。
 - SQLite projects启用AUTOINCREMENT，物理purge后不复用实体ID；PostgreSQL保持既有序列。仅时间高水位不能保护“purge→同名新实体且ID复用”的情况，两者必须配套。
 - `projects.user_id` → users 改为 RESTRICT；项目向下关联外键不变。
@@ -70,10 +70,11 @@ async def stop_project_tasks(db, engine, project_id) -> int
 - 写入口显式 `lock=True`，在同一事务中用集中条件 no-op UPDATE 锁父项目并检查生命周期；显式保留 updated_at。所有权检查仍由 owner/manageable helper 负责，生命周期锁本身不是授权。
 - 不能只在请求开始查一次：旧请求可能在删除后才提交。多事务/独立 session 必须在后续项目写入前重新获取屏障；智能体工具、分析回写、直接章节 ID 同样适用。
 - 删除先提交自己的意图，封住普通写入与新建/重试/继续/自动派生任务，再取消排队、运行、待审核任务。等待期间不持有父行事务锁，以免收尾等待同一行死锁。
-- 必须等待真实运行体、请求侧取消清理和成功回调；数据库任务终态、`cancel_running` 返回或活动任务数量为零都不是充分条件。引擎 `cleanup_scope` / `project_work` 也覆盖请求侧收尾。
+- 删除方按原任务轮次登记取消，等待执行体退出、请求侧清理和成功回调完成。领取时写入的作品工作记录持续到原协程已从执行者索引摘除。即使任务行已裁剪或 C2 名额已归还，仍按冻结的作品和执行 UUID 等待。最终软删除、永久删除和到期清理须复核清理失败及外部调用证据。
+- 排空为运行中的任务新登记取消时，在同一事务锁定目标作品，复核本次删除 token、原请求 worker 和当前权限。独立重试旧清理仅消费原轮次的资源凭据。遇到尚未获准取消的新 running 时返回 409 `project_tasks_not_stopped`。正式删除接管批量任务后，按本轮断点和章节上匹配的占用 UUID 释放资源。章节占用已变化时保留现场并拒绝删除。
 - 排空遇到 0045 前文档侧没有占用的旧 queued `kb.index` 文档任务：在 `lock_record` 父行锁内走与取消/领取共用的受限系统清理（Task 记 cancelled、文档 failed，不动正文/分块/向量），可证明时作品可删除；任一证明不成立仍 409 `project_tasks_not_stopped`，作品不删除。证明条件见 [retrieval.md](./retrieval.md)「旧无占用文档任务」。
 - 只有排空执行链、资源状态可恢复且重新核实 actor 权限后，才在锁定父行的事务中写 deleted_at/删除者、清除意图和提交成功审计。
-- 失败只释放本次 token 的意图。请求取消需可靠 finally；数据库暂不可用留下的意图仅在下次单进程启动、引擎运行前解除，不能自动完成旧删除。
+- 失败按本次 token 和请求 worker 释放意图。另一进程启动时保留健康请求的意图；确认原发起者已停止或被围栏后，恢复只解除原意图。删除期间重试产生的新 token 仍有效。
 
 ### 访问与完整性
 

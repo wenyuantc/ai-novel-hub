@@ -4,7 +4,7 @@
 
 适用于 `/api/v1/admin/tasks`、Task 入队时间/管理员取消标记、任务状态条件写、引擎取消 drain/finalize/recover、管理审计 task 动作、项目排空与前端 `/admin/tasks`。修改任一 Task 状态入口、恢复入队、资源清理或管理元数据投影时，必须检查本契约。
 
-仍为单进程数据库队列，不提供长期明细归档、阈值告警、自动取消或管理员重试/继续/成功提前结束/接管他人任务。普通 owner API 和私有模型/Skill/MCP/输出权限不放宽。已提交正文、已执行智能体修改及外部工具效果不会因取消自动撤销。
+部署仍使用单 worker，管理员取消通过数据库协调，不提供长期明细归档、阈值告警、自动取消或管理员重试/继续/成功提前结束/接管他人任务。普通 owner API 和私有模型/Skill/MCP/输出权限不放宽。已提交正文、已执行智能体修改及外部工具效果不会因取消自动撤销。
 
 ## 2. 签名、传输与存储
 
@@ -86,7 +86,7 @@ AuditAction=`task.cancel_request`，AuditTargetType=`task`。AuditSummary只增�
 
 ### 真实执行、CAS与资源代次
 
-- AdminCancellationDrain按`(task_key,operation_id)`single-flight，独立HTTP生存、独立session；清理全过程登记cleanup_scope/project_work。周期扫描不能在scheduler主循环串行等待全部10秒收尾。
+- 管理员 POST 在意图和成功审计提交后返回 202。两个进程看到同一 pending 时，数据库中的操作与原任务轮次决定谁执行清理。处理器的资源变更与该步骤的收据原子提交，回执丢失按原操作重读。周期扫描通知原执行者后继续调度。
 - queued同时在扫描与实际claim条件UPDATE拒绝pending。管理取消保留原queued及其资源索引，**先成功abort，再终态+统计+清marker提交**；失败继续保留屏障。paused不重新占并发，也不能回滚后来任务资源；不安全/未知暂停断点fail-closed。
 - running使用原UUID的一次cancel_running；等待10秒未完成仍pending，不二次取消执行中的SQLite保存游标。正文提交前取消回滚，提交已开始则保存获胜；late succeeded/paused保留真实结果。
 - complete_state在同一条件事务写真实状态、统计、清两列marker；条件含原UUID/原状态与观察到的marker（含null）。存在pending且abort失败时保持running/资源屏障，不写假cancelled。

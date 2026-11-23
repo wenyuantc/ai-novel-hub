@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端开发规范入口"}
+{"file":".trellis/spec/backend/skills-mcp.md","reason":"真实 MCP 发包与发送保护"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"单书 v16 和实例表范围"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"任务身份、领取、租约、SQLite 配对与接管"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"管理员 202 受理、审计、回执与终态赢家"}
+{"file":".trellis/spec/backend/recycle-bin.md","reason":"删除冻结、排空、失败重试、永久删除"}
+{"file":".trellis/spec/backend/agent.md","reason":"提案确认、原轮次与未知结果"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"本人授权、协作撤权、写门与锁序"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/owner-cancel.md","reason":"每个 handler 的副作用、本人取消和真实退出"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/admin-drain.md","reason":"单飞清理、恢复与收据竞争用例"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/project-drain.md","reason":"请求在途、作品失败证明、租约与迁移"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/external-call-ownership.md","reason":"阈值、真实发送、claim 及故障矩阵"}

@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"受控竞态、PostgreSQL 隔离库及迁移往返"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"公开 HTTP 状态、SSE 及原授权返回"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"原生备份和 SQLite 离线冷恢复"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"任务身份、领取、租约、SQLite 配对与接管"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"管理员 202 受理、审计、回执与终态赢家"}
+{"file":".trellis/spec/backend/recycle-bin.md","reason":"删除冻结、排空、失败重试、永久删除"}
+{"file":".trellis/spec/backend/agent.md","reason":"提案确认、原轮次与未知结果"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"本人授权、协作撤权、写门与锁序"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/owner-cancel.md","reason":"每个 handler 的副作用、本人取消和真实退出"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/admin-drain.md","reason":"单飞清理、恢复与收据竞争用例"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/project-drain.md","reason":"请求在途、作品失败证明、租约与迁移"}
+{"file":".trellis/tasks/11-20-mp-cross-process-cancel/research/external-call-ownership.md","reason":"阈值、真实发送、claim 及故障矩阵"}

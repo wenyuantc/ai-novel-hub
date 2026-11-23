@@ -329,7 +329,7 @@ RESULT_LIMIT = 8000                                                     # contex
 - **external 提案的确认**（`_execute_external`）：不走 snapshot / SAVEPOINT；重新 `resolve` 生成预览（`guards` 为插件 id、当前 `schema_hash`、是否可用）比较，
   不同 → 409 `preview_changed`；相同 → 条件 UPDATE `proposed → executing`（`executed_at` 记开始时间）并**先 commit**，再在确认请求内同步调用一次 MCP（单独连接，
   30 秒）；成功 `executed`（`result = {"text"}`、`effects = []`），失败 `failed`。停在 `executing` 的中断调用由 `recover_external` 判为失败，**从不重调**。
-  `decide_change` 取锁后、`maybe_resume`、runner 处理调用前都会先回收该轮超过 2 分钟的项，进程启动时全部回收。细节见 skills-mcp.md。
+  `decide_change`、`maybe_resume`、runner 和启动恢复都按原调用的 worker、claim 及收据判定。健康的在途调用超过两分钟仍可完成。已确认失联的调用可提前登记结果未知。细节见 skills-mcp.md。
 - **受控受理的 `start_task`（E3，仅作者链路）**：`tools/tasks.admission_required(kind)` 为真（handler 声明 `admission_preflight_aware`：章节
   generate/polish/revise、大纲、角色/组织/职业生成）的提案只能经确认服务受理，通用 `execute` 与自动执行一律拒绝。
   - 提案：runner 在写提案的同一锁内 `sign_origin`，存入 `result["_agent_task_origin"]`（提案时 `result` 只含此键）。HMAC 密钥为启动时由 `jwt_secret`

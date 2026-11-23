@@ -528,15 +528,9 @@ async def recover_external(db, *, task_id: int | None = None, stale_only: bool =
   `maybe_resume` 认为还有未处理项，这一轮再也无法继续。
 - **处理**：条件 UPDATE（仍为 `executing` 的 external）→ `failed`，`error` 与 `result.error` 都是「执行中断，结果未知，请检查外部系统」，记 warning 日志。
   **从不重新调用外部服务**——结果未知，重放可能把「发送」类操作执行两次。模型续跑时拿到的就是这个错误。
-- **计时用 `executed_at`，不用 `updated_at`**：`executed_at` 在领取 `executing` 时写入开始调用的时间（完成时改为完成时间）。重试时 `build_job`
-  用 UPDATE 把旧任务的提案移到新任务，会刷新 `updated_at`，用它会把早已中断的调用误当成刚开始。`executed_at` 为空的旧数据才回落到 `updated_at`；
-  SQLite 读出 naive 时间，按 UTC 处理。时限 2 分钟 ≈ 调用上限 45 秒（30 + 15）+ 关闭连接 5 秒，留足余量，避免误伤正在进行的确认。
-- **触发点**：
-  - 引擎启动及后续定时恢复使用 `recover_external(db, stale_only=True, engine=self)`。未满 2 分钟的 executing 调用保留；过期且符合身份与本地在途检查的调用只登记失败，不重新调用外部服务；
-  - `decide_change`：取会话锁后、读取提案前，按该提案的轮次处理过期项；
-  - `maybe_resume`：确认 / 拒绝 / 整轮确认之后判断能否续跑前；
-  - runner `_process_calls` 开头（续跑与重试），按本轮任务处理过期项。
-  后三处只处理开始调用超过 2 分钟的，2 分钟内仍是 `executing` 的照常 409「修改正在处理中」。
+- 手动确认把实际处理 HTTP 的 worker 和原 claim 绑定，自动执行绑定原任务 worker。新凭据将 worker 纳入签名。取得 `executing`、实际发送和结果回写分别核对原身份，结果与活动记录的归还在同一事务内。
+- 计时使用 `executed_at` 的 UTC 时间。完整的旧记录及已证明退出的工作沿用两分钟阈值。能证明原调用仍在途时保留 `executing`，即使已经超时；原 worker 确认停止或被围栏时可以提前登记结果未知。起始时间缺失、签名损坏或归属被替换时保留原记录。
+- 引擎启动和周期扫描、确认或拒绝、`maybe_resume` 和 runner 均复用该判定。等待期间的重复确认继续返回 409。恢复仅写持久结果，第三方调用次数应保持一次。
 - 调用完成时若提案已被回收（不再是 `executing`），`_execute_external` 不覆盖结果，保留已告知模型的状态。
 
 ### 3. 必需的测试

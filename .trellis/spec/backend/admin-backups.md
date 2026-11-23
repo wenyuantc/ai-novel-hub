@@ -55,7 +55,7 @@
 
 PostgreSQL用pg_dump -Fc，无shell，密码仅0600临时PGPASSFILE，实际schema_revision查询数据库。SQLite用Connection.backup包含已提交WAL，并quick_check，禁止内存库冒充持久备份。GPG对称AES256/loopback/passphrase-fd/no-symkey-cache，密码不进argv/env/密码文件；原生后缀.dump/.sqlite3，加密加.gpg。恢复先完整解密且验证成功，再导入隔离/已核对目标。明文0700/0600并及时清理。
 
-SQLite 备份包含主库中的作品、运行中任务、执行键、收据和历史执行者登记。心跳侧库及生命周期锁留在运行实例。冷恢复需停掉全部旧进程，在最终的空目标路径运行 `python -m app.services.backups.sqlite_restore 快照路径 主库路径`。恢复副本经完整性与外键检查，再围栏旧执行者，为新物理主库配对全新代次与空侧库。0067 起，冷恢复在围栏事务中一并归还已确认旧执行者的调度名额。迁移号低于 0066 的旧快照继续支持先恢复、再升级、再启动。原运行文件按组保存在同一文件系统的回滚目录。命令与回滚顺序见根目录 README 的「SQLite 文件恢复」。
+SQLite 备份包含主库中的作品、运行中任务、执行键、收据和历史执行者登记。心跳侧库及生命周期锁留在运行实例。0068 的 HTTP 请求执行者也持有生命周期锁。仅停止调度器时服务仍可受理请求，离线恢复须等整个应用退出。快照恢复后，按已确认终止的 worker 归还正常执行记录，保留清理失败、外部结果未知及归属不可证的记录。冷恢复需停掉全部旧进程，在最终的空目标路径运行 `python -m app.services.backups.sqlite_restore 快照路径 主库路径`。恢复副本经完整性与外键检查，再围栏旧执行者，为新物理主库配对全新代次与空侧库。0067 起，冷恢复在围栏事务中一并归还已确认旧执行者的调度名额。迁移号低于 0066 的旧快照继续支持先恢复、再升级、再启动。原运行文件按组保存在同一文件系统的回滚目录。命令与回滚顺序见根目录 README 的「SQLite 文件恢复」。
 
 GPG2.2代理套接字受Unix路径长度限制，GNUPGHOME不能放在长备份工作目录下；使用短私有路径与实例/执行marker、uid/nosymlink校验，正常finally和重启只回收该执行自己的agent/home，不扫描或kill其他GPG代理。终态cleanup_status为failed/unknown/pending时，重启也按已知实例/执行身份精确清理.work目录，明文和加密模式均适用；GPG home与work目录独立尝试，回收成功不改写原保留清理失败历史。
 

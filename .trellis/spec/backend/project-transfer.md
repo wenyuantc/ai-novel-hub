@@ -87,10 +87,10 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 16, exported_at, app_schema: "0067"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 16, exported_at, app_schema: "0068"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
-- 执行者登记、租约配对和 0067 的执行名额都属于实例。作品 JSON 使用 v16。导入和导出只遍历作品表注册清单，额外传入 `tasks`、`task_workers`、`task_lease_store` 或 `task_execution_slots` 会提示已忽略。SQLite 整库恢复另用单主库原生快照，在全部旧进程停止后建立新一代租约，详见[整库备份](./admin-backups.md)。
+- 执行者登记、租约配对、0067 的执行名额与 0068 的任务工作记录都属于实例。删除请求的 worker 也排除在作品字段之外。作品 JSON 使用 v16。导入和导出只遍历作品表注册清单，额外传入 `tasks`、`task_workers`、`task_lease_store`、`task_execution_slots` 或 `task_work_records` 会提示已忽略。SQLite 整库恢复另用单主库原生快照，在全部旧进程停止后建立新一代租约，详见[整库备份](./admin-backups.md)。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
 - 0024新增的Project生命周期/删除者/协调字段全部在PROJECT_RULE.exclude，导出不携带、导入总是正常作品；当时不因排除运行状态提升备份格式。备份独立流会话必须重新检查项目生命周期，不能因软删行仍存在就继续导出回收站正文；恶意备份注入删除/协调状态需回归测试。
 - 可选顶层 `cover: {mime_type, data: base64} | null`；无封面字段的 v1 旧备份正常导入。封面只占核心组估算字节，计入 base64 编码后的大小。
