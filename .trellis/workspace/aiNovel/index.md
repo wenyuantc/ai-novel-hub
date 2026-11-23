@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 59
+- **Total Sessions**: 60
 - **Last Active**: 2026-11-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1926 | Active |
+| `journal-1.md` | ~1964 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 60 | 2026-11-23 | C2 跨进程调度约束与系统设置 | `c593a20`, `4646b6d`, `fbb4715` | `codex/mp-scheduling-constraints` |
 | 59 | 2026-11-23 | C1 执行者租约与失联接管 | `dd65a06`, `43a8c83` | `main` |
 | 58 | 2026-11-20 | 场景跨章移动与 AI 拆并建议 | `627240c813b984c7b696453700a692d71e46fb4f` | `codex/scene-cross-chapter-ai-restructure` |
 | 57 | 2026-11-20 | 章节编辑页跨断点保留笔记草稿（TODOS 第 23 项） | `250b0f7` | `codex/note-sidebar-draft-breakpoint` |

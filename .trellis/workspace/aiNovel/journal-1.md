@@ -1924,3 +1924,41 @@ test_resource_conflicts 根因为用例时序（向导写入使在途生成按�
 ### Next Steps
 
 - 父计划下一项为 C2 调度约束与系统设置跨进程一致，当前生产部署继续使用单进程。
+
+
+## Session 60: C2 跨进程调度约束与系统设置
+<!-- trellis-session: v=2 fp=136d079d42f5801e -->
+
+**Date**: 2026-11-23
+**Task**: C2 跨进程调度约束与系统设置
+**Branch**: `codex/mp-scheduling-constraints`
+
+### Summary
+
+C2 的十项验收已通过，功能和验收资料已在本地提交并归档。
+
+### Main Changes
+
+- 数据库统一管理已领取任务的全站、用户和串行键占用。两个进程读取相同的配额和排队位次。
+- 注册与 MCP 在下一次操作时核对持久开关，普通设置在一个调度周期内同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c593a20` | feat(backend): 统一跨进程任务调度与系统设置 |
+| `4646b6d` | docs(trellis): 记录 C2 调度与系统设置验收 |
+| `fbb4715` | chore(task): archive 11-20-mp-scheduling-constraints |
+
+### Testing
+
+- [OK] SQLite 全量 7,156 项通过，0 项失败，19 项既有预期失败。PostgreSQL 16.15 专项 77 项通过，包含 SQLite 按条件跳过的 28 项。
+- [OK] 真实双进程 HTTP 演练两轮通过，后端 Ruff、前端 TypeScript 及 415 条 OpenAPI 路径对照通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父任务后续从 C3 跨进程取消继续，当前部署仍使用单 worker。
