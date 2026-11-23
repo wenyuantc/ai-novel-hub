@@ -1,4 +1,4 @@
-"""0066 原位升级、租约降级保护与 SQLite / PostgreSQL 往返。"""
+"""任务引擎迁移，包含 SQLite / PostgreSQL 原位升级、降级保护及往返。"""
 
 import asyncio
 import os
@@ -12,7 +12,16 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from app.models import AgentConversation, McpPlugin, Project, TaskExecutionSlot, TaskLeaseStore, TaskWorker
+from app.models import (
+    AgentChange,
+    AgentConversation,
+    McpPlugin,
+    Project,
+    TaskExecutionSlot,
+    TaskLeaseStore,
+    TaskWorker,
+    TaskWorkRecord,
+)
 from app.services.task_engine.sqlite_lease_pair import SQLiteLeasePairError, open_pair
 from tests.test_setting_fields_migration import _config
 
@@ -297,3 +306,126 @@ async def test_0067_preserves_legacy_task_and_guards_execution_slots(migration_d
         async with engine.connect() as db:
             assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0067"
     await asyncio.to_thread(command.downgrade, cfg, "0065")
+
+
+def _check_work_schema(db):
+    inspector = inspect(db)
+    table = TaskWorkRecord.__table__
+    columns = {c["name"]: c for c in inspector.get_columns(table.name)}
+    assert columns.keys() == set(table.columns.keys()) == {
+        "work_key", "kind", "project_id", "worker_key", "task_id", "task_key", "queued_at",
+        "execution_key", "operation_id", "state", "evidence",
+    }
+    for column in table.columns:
+        assert columns[column.name]["nullable"] == column.nullable
+        assert columns[column.name]["type"].compile(db.dialect) == column.type.compile(db.dialect)
+    assert inspector.get_pk_constraint(table.name)["constrained_columns"] == ["work_key"]
+    assert inspector.get_foreign_keys(table.name) == []
+    assert {tuple(i["column_names"]) for i in inspector.get_indexes(table.name)} == {("project_id",), ("worker_key",)}
+    for name, col in (("projects", "deletion_worker_key"), ("tasks", "cancel_requested_at"),
+                      ("agent_changes", "external_worker_key")):
+        assert next(c for c in inspector.get_columns(name) if c["name"] == col)["nullable"]
+
+
+async def test_0068_preserves_legacy_claim_and_guards_work(migration_db, monkeypatch):
+    cfg, engine = migration_db
+    await asyncio.to_thread(command.upgrade, cfg, "0067")
+    worker, execution, task_key, change_key, token = [str(uuid4()) for _ in range(5)]
+    params = {"worker": worker, "execution": execution, "task_key": task_key, "token": token}
+    legacy_result = {"_external_claim": str(uuid4()), "variant": "legacy"}
+    projects = Project.__table__
+    changes = AgentChange.__table__
+    async with engine.begin() as db:
+        await db.execute(text("INSERT INTO users(id, username, password_hash) VALUES(1, 'old-author', 'x')"))
+        await db.execute(projects.insert().values(id=1, user_id=1, title="原作品", deletion_token=token,
+                                                  deletion_started_at=datetime.now(UTC)))
+        if db.dialect.name == "sqlite":
+            await db.execute(projects.insert().values(id=20, user_id=1, title="曾存在的作品"))
+            await db.execute(text("DELETE FROM projects WHERE id=20"))
+        await db.execute(AgentConversation.__table__.insert().values(id=1, project_id=1, user_id=1))
+        await db.execute(changes.insert().values(id=1, project_id=1, conversation_id=1, tool_call_id="a",
+                                                 tool_name="t", kind="external", status="executing",
+                                                 change_key=change_key, result=legacy_result))
+        await db.execute(text("INSERT INTO task_workers(worker_key,hostname,pid) VALUES(:worker,'old',1)"), params)
+        await db.execute(text("INSERT INTO tasks(id,user_id,project_id,kind,status,input,execution_key,worker_key,"
+                              "statistics_key,queued_at) VALUES(1,1,1,'outline.continue','running','{}',"
+                              ":execution,:worker,:task_key,CURRENT_TIMESTAMP)"), params)
+        await db.execute(text("INSERT INTO task_execution_slots(execution_key,worker_key,task_id,statistics_key,"
+                              "queued_at,user_id) SELECT execution_key,worker_key,id,statistics_key,queued_at,user_id "
+                              "FROM tasks WHERE id=1"))
+    with pytest.raises(RuntimeError, match="未停止的执行者"):
+        await asyncio.to_thread(command.upgrade, cfg, "0068")
+    async with engine.begin() as db:
+        await db.execute(text("UPDATE task_workers SET fenced_at=CURRENT_TIMESTAMP"))
+        await db.execute(text("UPDATE task_execution_slots SET task_id=2"))
+    with pytest.raises(RuntimeError, match="归属无法确认"):
+        await asyncio.to_thread(command.upgrade, cfg, "0068")
+    async with engine.begin() as db:
+        assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0067"
+        assert await db.scalar(text("SELECT deletion_token FROM projects")) == token
+        assert not await db.run_sync(lambda c: inspect(c).has_table("task_work_records"))
+        await db.execute(text("UPDATE task_execution_slots SET task_id=1"))
+
+    create_index = op.create_index
+
+    def interrupt(*args, **kwargs):
+        create_index(*args, **kwargs)
+        raise RuntimeError("原位 DDL 写入后中断")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(op, "create_index", interrupt)
+        with pytest.raises(RuntimeError, match="DDL"):
+            await asyncio.to_thread(command.upgrade, cfg, "0068")
+    async with engine.begin() as db:
+        cols = await db.run_sync(lambda c: inspect(c).get_columns("projects"))
+        assert "deletion_worker_key" not in {c["name"] for c in cols}
+        assert await db.scalar(text("SELECT deletion_token FROM projects")) == token
+    await asyncio.to_thread(command.upgrade, cfg, "0068")
+    async with engine.begin() as db:
+        await db.run_sync(_check_work_schema)
+        intent = await db.execute(text("SELECT deletion_token,deletion_started_at,deletion_worker_key FROM projects"))
+        assert intent.one() == (None, None, None)
+        if db.dialect.name == "sqlite":
+            assert await db.scalar(text("SELECT seq FROM sqlite_sequence WHERE name='projects'")) == 20
+            assert not (await db.execute(text("PRAGMA foreign_key_check"))).all()
+        legacy = (await db.execute(select(changes.c.result, changes.c.external_worker_key))).one()
+        assert legacy == (legacy_result, None)
+        assert await db.scalar(text("SELECT execution_key FROM task_execution_slots")) == execution
+        assert await db.scalar(text("SELECT count(*) FROM task_work_records")) == 0
+
+    # 每种新事实独立阻止降级，阻止后原版本、列和值均保持可读。
+    cases = [
+        ("task_execution_slots", None, "DELETE FROM task_execution_slots"),
+        ("task_work_records",
+         "INSERT INTO task_work_records(work_key,kind,state,project_id) VALUES(:execution,'cleanup','failed',1)",
+         "DELETE FROM task_work_records"),
+        ("tasks", None, "UPDATE tasks SET status='interrupted',worker_key=NULL,execution_key=NULL"),
+        ("tasks", "UPDATE tasks SET cancel_requested_at=CURRENT_TIMESTAMP",
+         "UPDATE tasks SET cancel_requested_at=NULL"),
+        ("projects", "UPDATE projects SET deletion_started_at=CURRENT_TIMESTAMP,deletion_token=:token,"
+         "deletion_worker_key=:worker", "UPDATE projects SET deletion_started_at=NULL,deletion_token=NULL,"
+         "deletion_worker_key=NULL"),
+        ("agent_changes", None, """UPDATE agent_changes SET status='failed',
+         result='{"error":"unknown","_external_outcome_unknown": true}'"""),
+        ("agent_changes", None, """UPDATE agent_changes SET status='failed',result='{"error":"not_sent"}'"""),
+        ("agent_changes", "UPDATE agent_changes SET external_worker_key=:worker",
+         "UPDATE agent_changes SET external_worker_key=NULL"),
+    ]
+    for table, insert, remove in cases:
+        if insert:
+            async with engine.begin() as db:
+                await db.execute(text(insert), params)
+        with pytest.raises(RuntimeError, match=table):
+            await asyncio.to_thread(command.downgrade, cfg, "0067")
+        async with engine.begin() as db:
+            assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0068"
+            await db.execute(text(remove))
+    await asyncio.to_thread(command.downgrade, cfg, "0067")
+    async with engine.begin() as db:
+        assert not await db.run_sync(lambda c: inspect(c).has_table("task_work_records"))
+        assert (await db.execute(text("SELECT title,user_id FROM projects"))).one() == ("原作品", 1)
+        assert await db.scalar(select(changes.c.result)) == {"error": "not_sent"}
+        assert (await db.execute(text("SELECT statistics_key,status FROM tasks"))).one() == (task_key, "interrupted")
+    await asyncio.to_thread(command.upgrade, cfg, "0068")
+    async with engine.begin() as db:
+        await db.run_sync(_check_work_schema)

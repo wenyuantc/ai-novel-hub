@@ -464,7 +464,7 @@ async def test_stream_storage_error_is_a_safe_failure(app, client, make_client, 
     await stream.aclose()
 
 
-async def test_system_can_cancel_revoked_collaborator_task(app, client, make_client, monkeypatch):
+async def test_system_can_cancel_revoked_collaborator_task(app, client, make_client):
     guest = make_client()
     owner_user, guest_user, project, member = await _setup(app, client, guest)
     async with app.state.sessionmaker() as db:
@@ -479,11 +479,6 @@ async def test_system_can_cancel_revoked_collaborator_task(app, client, make_cli
     })
     assert revoked.status_code == 204
 
-    async def successful_cleanup(*_args, **_kwargs):
-        return None
-
-    # 此用例只验证系统收尾不依赖旧成员授权；具体章节资源的 CAS 清理由后续执行集成验证。
-    monkeypatch.setattr(task_service, "_abort_loaded_task", successful_cleanup)
     async with app.state.sessionmaker() as db:
         assert await task_service.stop_project_tasks(db, app.state.task_engine, project["id"]) == 1
     async with app.state.sessionmaker() as db:

@@ -27,6 +27,19 @@ def _snapshot_revision(path: Path) -> str:
             raise ValueError("快照的租约表与迁移版本不一致")
         if (int(revision) >= 67) != ("task_execution_slots" in tables):
             raise ValueError("快照的任务占用表与迁移版本不一致")
+        work_schema = (
+            "task_work_records" in tables,
+            any(row[1] == "cancel_requested_at" for row in db.execute("PRAGMA table_info(tasks)")),
+            any(row[1] == "deletion_worker_key" for row in db.execute("PRAGMA table_info(projects)")),
+            any(row[1] == "external_worker_key" for row in db.execute("PRAGMA table_info(agent_changes)")),
+        )
+        if any(present != (int(revision) >= 68) for present in work_schema):
+            raise ValueError("快照的跨进程取消结构与迁移版本不一致")
+        if int(revision) >= 68:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(task_work_records)")}
+            if not {"work_key", "kind", "project_id", "worker_key", "task_id", "task_key", "queued_at",
+                    "execution_key", "operation_id", "state", "evidence"} <= columns:
+                raise ValueError("快照的跨进程工作证据不完整")
         return revision
 
 

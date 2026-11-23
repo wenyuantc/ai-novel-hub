@@ -112,6 +112,7 @@ class AgentChange(TimestampMixin, Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     effects: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, server_default="[]")
     error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    external_worker_key: Mapped[str | None] = mapped_column(String(36))
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seq: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

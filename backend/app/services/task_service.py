@@ -26,7 +26,7 @@ from sqlalchemy.orm import aliased
 
 import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任务类型
 from app.core.errors import ConflictError, NotFoundError
-from app.models import AgentChange, Chapter, Project, Task, User
+from app.models import AgentChange, Chapter, Project, Task, TaskWorkRecord, User
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
 from app.schemas.rich_document_review import ReviewIdentity
 from app.schemas.scene_ai import SceneTarget, parse_target
@@ -37,6 +37,7 @@ from app.services import authorization_service as authz
 from app.services import project_access, project_lifecycle, task_statistics_service
 from app.services.collaboration_task_access import GRANT_KEY, task_grant_identity, task_visible_to_actor
 from app.services.project_service import get_owned_project
+from app.services.task_engine import cleanup_work
 from app.services.task_engine.registry import get_handler
 
 if TYPE_CHECKING:
@@ -739,7 +740,7 @@ async def resume_task(
             .where(Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "paused",
                    Task.admin_cancel_operation_id.is_(None), Task.execution_key.is_(None))
             .values(status="queued", error="", result=None, finished_at=None, stage=STAGE_LABELS["queued"],
-                    queued_at=_next_queued_at(task), worker_key=None, recovered_at=None)
+                    queued_at=_next_queued_at(task), worker_key=None, recovered_at=None, cancel_requested_at=None)
         )
         if result.rowcount == 1:
             await task_statistics_service.record_state_change(db, task, "queued")
@@ -1020,7 +1021,7 @@ async def cancel_task(
         expected_grant=expected_grant, expected_queued_at=expected_queued_at,
     )
     task_key = task.statistics_key
-    with engine.cleanup_scope(task):
+    async with cleanup_work.request_scope(db, engine):
         out = await _cancel_loaded_task(db, engine, task, expected_review=expected_review, verify_review=True)
         try:
             return await project_task_out(
@@ -1073,7 +1074,7 @@ async def _cancel_loaded_task(
     verify_review: bool = False,
 ) -> TaskOut:
     """调用者已核实归属或删除项目范围；只共享取消，不伪装成目标 owner。"""
-    with engine.cleanup_scope(task):
+    async with cleanup_work.request_scope(db, engine):
         return await _cancel_loaded_impl(db, engine, task, expected_review=expected_review, verify_review=verify_review)
 
 
@@ -1097,6 +1098,7 @@ async def _cancel_legacy_document_task(
         cleaned = await kb_index_service.cleanup_legacy_unclaimed_document_task(db, legacy, status=status)
         if cleaned is None:
             raise unproven
+        await cleanup_work.register(db, engine, task, settled=True)
         try:
             await db.commit()
         except Exception:
@@ -1131,24 +1133,11 @@ async def _cancel_loaded_impl(
         await require_review_identity(db, task, expected_review)
     if task.admin_cancel_operation_id is not None:
         return await _wait_admin_cancel(db, engine, task)
-    if task.kind == "chapter.analyze" and task.status == "running":
-        execution = engine._running.get(task.id)
-        if execution is None or execution.done():
-            raise ConflictError("分析执行结果尚未核对，不能取消")
     if (task.kind == "chapter.analyze" and task.status == "paused" and isinstance(task.checkpoint, dict)
             and any(key in task.checkpoint for key in ("_analysis_pending", "_analysis_completion"))):
         raise ConflictError("分析执行结果尚未核对，不能取消")
-    if task.kind.startswith("wizard."):
-        if task.status == "running":
-            execution = engine._running.get(task.id)
-            if (execution is None or execution.done() or not isinstance(task.statistics_key, str)
-                    or not isinstance(task.execution_key, str)
-                    or engine._running_statistics_keys.get(task.id) != task.statistics_key
-                    or engine._running_rounds.get(task.id) != task.queued_at
-                    or engine._running_execution_keys.get(task.id) != task.execution_key):
-                raise ConflictError("向导执行结果尚未核对，不能取消")
-        elif task.status in ("queued", "paused") and _has_wizard_receipt(task):
-            raise ConflictError("向导执行结果尚未核对，不能取消")
+    if task.kind.startswith("wizard.") and task.status in ("queued", "paused") and _has_wizard_receipt(task):
+        raise ConflictError("向导执行结果尚未核对，不能取消")
     if task.status == "queued":
         if task.execution_key is not None:
             raise ConflictError("任务正在安全收尾，请稍后重试")
@@ -1195,7 +1184,10 @@ async def _cancel_loaded_impl(
                         "finished_at": stamp} if atomic_cleanup else {"execution_key": cleanup_key}))
         )
         try:
+            if result.rowcount == 1:
+                await cleanup_work.register(db, engine, task, settled=atomic_cleanup, phase="queued")
             if result.rowcount == 1 and atomic_cleanup:
+                await cleanup_work.clear_proven_failure(db, original_cleanup)
                 if is_document and queued_claim is not None \
                         and not await kb_index_service.release_document_claim(db, queued_claim):
                     raise ConflictError("原知识库占用已变化，请刷新后重试")
@@ -1206,7 +1198,9 @@ async def _cancel_loaded_impl(
                         raise ConflictError("原章节占用已变化，请刷新后重试")
                 await task_statistics_service.record_state_change(db, task, "cancelled", finished_at=stamp)
             try:
-                await db.commit()
+                # 没有赢得 CAS 时，后续 running 登记仍须使用原来的鉴权与作品锁。
+                if result.rowcount == 1:
+                    await db.commit()
             except Exception:
                 # 只在独立事务确认本次 queued claim 已随同原 Task 终态释放后接受确认丢失。
                 await db.rollback()
@@ -1238,7 +1232,7 @@ async def _cancel_loaded_impl(
                 # 任务与原 queued claim 均回滚；项目排空时只能按这个仍持久的原身份重试。
                 claim_project = original_cleanup.project_id if original_cleanup is not None else task_project_id
                 if claim_project is not None:
-                    engine.remember_abort_failure(claim_project, original_cleanup)
+                    await engine.record_abort_failure(claim_project, original_cleanup, registration_rolled_back=True)
             raise
         if result.rowcount == 1:
             engine.forget_abort_failure(original_cleanup)
@@ -1260,6 +1254,8 @@ async def _cancel_loaded_impl(
             engine.notify()
             return to_out(task)
         await refresh_same_task(db, task)
+        if task.queued_at != expected_queued_at:
+            raise ConflictError("任务执行轮次已变化，请刷新后重试", extra={"code": "task_round_changed"})
         if task.admin_cancel_operation_id is not None:
             return await _wait_admin_cancel(db, engine, task)
     if task.status == "paused":
@@ -1279,13 +1275,18 @@ async def _cancel_loaded_impl(
             from app.services.rich_document_review import discard_pending
 
             discarded_review = await discard_pending(db, task)
+            await cleanup_work.register(
+                db, engine, task, settled=discarded_review or had_released_review, phase="paused",
+            )
             await task_statistics_service.record_state_change(db, task, "cancelled", finished_at=stamp)
-        await db.commit()
+            await db.commit()
         if result.rowcount == 1:
             # 待审核时没有执行体，资源也已释放；on_abort 幂等，照常调用
             # 富文档提案已在暂停前释放章抢占，不能误回滚后来另一个任务的 generating。
             if not discarded_review and not had_released_review:
                 await _abort_loaded_task(engine, task)
+                await cleanup_work.settle(db, engine)
+                await db.commit()
             await refresh_same_task(db, task)
             await prune_finished(db, task.user_id)
             return to_out(task)
@@ -1300,54 +1301,26 @@ async def _cancel_loaded_impl(
             # 与继续竞争：已重新排队，按排队中取消
             return await _cancel_loaded_task(db, engine, task)
     if task.status == "running":
-        # 等待独立执行体收尾前结束请求侧事务，不能持有它需要的数据库锁。
-        await db.commit()
-        execution = engine._running.get(task.id)
-        if execution is None or execution.done():
-            # 结束状态落库曾失败的孤立 running；单进程中已无执行体，可重试幂等收尾。
-            await _abort_loaded_task(engine, task)
-            stamp = task_statistics_service.now_utc()
-            result = await db.execute(update(Task).where(
-                Task.id == task.id, Task.statistics_key == task.statistics_key, Task.status == "running",
-                Task.queued_at == expected_queued_at, Task.execution_key == task.execution_key,
-                Task.admin_cancel_operation_id.is_(None),
-            ).values(
-                status="cancelled", error="任务已取消", stage=STAGE_LABELS["cancelled"], finished_at=stamp,
-                execution_key=None,
-            ))
-            if result.rowcount == 1:
-                await task_statistics_service.record_state_change(db, task, "cancelled", finished_at=stamp)
-            await db.commit()
-            await refresh_same_task(db, task)
-            if task.admin_cancel_operation_id is not None:
-                return await _wait_admin_cancel(db, engine, task)
-            engine.close_hub(
-                task.id, "error", {"task": out_json(task), "detail": task.error},
-                statistics_key=task.statistics_key, queued_at=expected_queued_at,
-            )
-            return to_out(task)
-        await engine.cancel_running(task.id, statistics_key=task.statistics_key, expected_queued_at=expected_queued_at,
-                                    expected_execution_key=task.execution_key)
-        await refresh_same_task(db, task)
-        return to_out(task, queue_position=await queue_position(db, task), engine=engine)
+        from app.services.task_engine import owner_cancellation
+
+        row = await owner_cancellation.request_running(db, engine, task)
+        return to_out(row, queue_position=await queue_position(db, row), engine=engine)
     raise ConflictError("任务已结束，无法取消")
 
 
 async def _wait_admin_cancel(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
+    from app.services.task_engine import owner_cancellation
+
     task_id, key, operation_id = task.id, task.statistics_key, task.admin_cancel_operation_id
+    queued_at, execution = task.queued_at, task.execution_key
     await db.rollback()
     if key is None or operation_id is None:
         raise ConflictError("任务取消状态已变化，请刷新后重试")
     engine.request_admin_cancel(key, operation_id)
-    work = engine.admin_cancellations.work.get((key, operation_id))
-    if work is not None:
-        await asyncio.wait({work}, timeout=engine.cancel_wait_seconds)
-    task = await db.scalar(select(Task).where(Task.id == task_id, Task.statistics_key == key).execution_options(
-        populate_existing=True
-    ))
-    if task is None:
-        raise NotFoundError("任务不存在")
-    return to_out(task, queue_position=await queue_position(db, task), engine=engine)
+    deadline = asyncio.get_running_loop().time() + engine.cancel_wait_seconds
+    row = await owner_cancellation.wait_for_result(db, engine, task_id, key, queued_at, execution,
+                                                   admin_operation=operation_id, deadline=deadline)
+    return to_out(row, queue_position=await queue_position(db, row), engine=engine)
 
 
 async def delete_task(
@@ -1501,14 +1474,19 @@ async def prune_finished(db: AsyncSession, user_id: int, *, source: Task | None 
         await db.commit()
 
 
-async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot: "AbortSnapshot") -> None:
+async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot: "AbortSnapshot", *,
+                                work_key: str | None = None, worker_key: str | None = None,
+                                effect_applied: bool = False) -> bool:
     """重试最初失败的身份；任何 Task/轮次/资源快照变化都保留项目屏障。"""
-    await project_lifecycle.lock_record(db, snapshot.project_id)
+    if snapshot.project_id is not None:
+        await project_lifecycle.lock_record(db, snapshot.project_id)
+    allowed_admin = (Task.status == "queued" if snapshot.status == "queued" and snapshot.execution_key
+                     else Task.admin_cancel_operation_id.is_(None))
     task = await db.scalar(select(Task).where(
         Task.id == snapshot.task_id, Task.statistics_key == snapshot.task_key, Task.user_id == snapshot.actor_id,
         Task.project_id == snapshot.project_id, Task.kind == snapshot.kind, Task.queued_at == snapshot.queued_at,
         Task.execution_key == snapshot.execution_key, Task.worker_key == snapshot.worker_key,
-        Task.admin_cancel_operation_id.is_(None),
+        (Task.admin_cancel_operation_id.is_(None) | allowed_admin),
     ).with_for_update())
     if task is None or task.chapter_id != snapshot.chapter_id or task.resource_key != snapshot.resource_key \
             or task.step_cursor != snapshot.step_cursor:
@@ -1536,7 +1514,7 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
         raise ConflictError("原任务清理身份已变化，作品未删除", extra={"code": "project_tasks_not_stopped"})
     if engine.admin_cancellations.completed_round(task):
         engine.forget_abort_failure(snapshot)
-        return
+        return True
     if task.status == "queued" and task.execution_key is None:
         if snapshot.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
             from app.services.task_engine.handlers import chapter as chapter_handler
@@ -1548,32 +1526,44 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
 
             if await kb_index_service.queued_document_claim(db, task) != snapshot.claim:
                 raise ConflictError("原索引占用已变化，作品未删除")
-        return  # 原排队身份将在以下主循环里同事务取消。
-    if task.status == "running" and (work := engine._running.get(task.id)) is not None and not work.done():
-        return  # 主循环先停止原执行体；不能并发清理。
+        return False  # 原排队身份将在以下主循环里同事务取消。
+    if task.status == "running":
+        return False  # 主循环先请求原执行者或由 C1 接管；本机没有执行体不能证明已经退出。
     if task.status not in {"queued", "running", "cancelled", "failed", "interrupted"}:
         raise ConflictError("原任务状态已变化，作品未删除")
     status, text, progress = task.status, task.output_text, task.progress
+    operation = task.admin_cancel_operation_id
     await db.rollback()  # 原清理使用独立事务，不持有请求侧读/写锁等待它。
     original = snapshot.task()
-    restored_batch = None
     terminal = status if status not in {"queued", "running"} else None
-    if snapshot.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
-        await get_handler(snapshot.kind).on_abort(engine.ctx, original, claim=snapshot.claim, terminal_status=terminal)
-    elif snapshot.kind == "chapter.batch":
-        from app.services import batch_service
 
-        restored_batch = await batch_service.restore_abort_snapshot(
-            engine.ctx, snapshot.claim, terminal_status=terminal,
-        )
-    elif snapshot.kind == "kb.index" and snapshot.claim is not None:
-        from app.services import kb_index_service
+    async def abort(ctx):
+        if snapshot.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
+            await get_handler(snapshot.kind).on_abort(ctx, original, claim=snapshot.claim, terminal_status=terminal)
+        elif snapshot.kind == "chapter.batch":
+            from app.services import batch_service
 
-        async with engine.ctx.sessionmaker() as cleanup:
-            await kb_index_service.release_document_claim(cleanup, snapshot.claim, terminal_status=terminal)
-            await cleanup.commit()
+            return await batch_service.restore_abort_snapshot(ctx, snapshot.claim, terminal_status=terminal)
+        elif snapshot.kind == "kb.index" and snapshot.claim is not None:
+            from app.services import kb_index_service
+
+            async with ctx.sessionmaker() as cleanup:
+                await kb_index_service.release_document_claim(cleanup, snapshot.claim, terminal_status=terminal)
+                await cleanup.commit()
+        else:
+            await get_handler(snapshot.kind).on_abort(ctx, original)
+
+    if effect_applied:
+        restored_batch = None
+        if snapshot.kind == "chapter.batch":
+            checkpoint = snapshot.claim.checkpoint
+            if snapshot.claim.claim is not None:
+                checkpoint["current"] = None
+            restored_batch = replace(snapshot.claim, claim=None, _checkpoint_json=json.dumps(
+                checkpoint, ensure_ascii=False, sort_keys=True, allow_nan=False,
+            ))
     else:
-        await get_handler(snapshot.kind).on_abort(engine.ctx, original)
+        restored_batch = await cleanup_work.apply_effect(engine, abort, work_key=work_key, worker_key=worker_key)
     if status in {"queued", "running"}:
         expected_input = json.loads(snapshot.input_json)
         if snapshot.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
@@ -1589,7 +1579,7 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
         _, committed = await engine.complete_state(
             original, expected_status=status, status="cancelled", result=None, error="任务已取消",
             text=text, progress=progress, abort_ok=True, batch_snapshot=restored_batch,
-            abort_snapshot=completion_snapshot,
+            abort_snapshot=completion_snapshot, operation_id=operation,
         )
         if not committed:
             raise ConflictError("原任务轮次已变化，作品未删除")
@@ -1649,66 +1639,195 @@ async def _retry_failed_cleanup(db: AsyncSession, engine: "TaskEngine", snapshot
             changed = await db.execute(update(Task).where(*conditions).values(execution_key=None))
             if changed.rowcount != 1:
                 raise ConflictError("原任务执行已变化，作品未删除")
+        if snapshot.execution_key is not None or work_key is not None:
+            await cleanup_work.finish_retry(db, engine)
             await db.commit()
         else:
             await db.rollback()
     engine.forget_abort_failure(snapshot)
+    return True
+
+
+async def project_work_exists(db: AsyncSession, project_id: int) -> bool:
+    return await db.scalar(select(TaskWorkRecord.work_key).where(
+        TaskWorkRecord.project_id == project_id, ~cleanup_work.settled_request_is_releasable(),
+    ).limit(1)) is not None
+
+
+async def retry_project_cleanup_failures(
+    db: AsyncSession, engine: "TaskEngine", project_id: int | None, *, queued_admin=None,
+) -> None:
+    """项目排空重试原失败，管理员仅接回同一带清理标记、原 HTTP 已退出的排队任务。"""
+    from app.services.task_engine import workers
+
+    target = ()
+    local = {}
+    if queued_admin is not None:
+        tid, key, queued_at, execution, operation = queued_admin
+        if not execution or not await db.scalar(select(Task.id).where(
+            Task.id == tid, Task.statistics_key == key, Task.queued_at == queued_at, Task.execution_key == execution,
+            Task.project_id == project_id, Task.status == "queued", Task.admin_cancel_operation_id == operation,
+        )):
+            return
+        target = (TaskWorkRecord.task_id == tid, TaskWorkRecord.task_key == key,
+                  TaskWorkRecord.queued_at == queued_at, TaskWorkRecord.execution_key == execution)
+    else:
+        await cleanup_work.reap_settled_requests(db, project_id)
+    await cleanup_work.recover_exited_requests(db, engine, project_id, target=target)
+    if queued_admin is None:
+        if not await cleanup_work.has_failure(db, engine, project_id):
+            await db.commit()
+            return
+        local = {item.task_id: item for item in engine._failed_cleanups.values() if item.project_id == project_id}
+    records = (await db.execute(select(TaskWorkRecord.work_key, TaskWorkRecord.task_id).where(
+        TaskWorkRecord.kind == "abort_failure", TaskWorkRecord.project_id == project_id, *target,
+    ))).all()
+    if queued_admin is None and (project_id in engine._unproven_abort_failures or (not local and not records)):
+        raise cleanup_work.blocked()
+    if len({tid for _, tid in records}) != len(records):
+        raise cleanup_work.blocked()
+    for key, task_id in records:
+        if project_id is not None:
+            await project_lifecycle.lock_record(db, project_id)
+        row = await db.get(TaskWorkRecord, key, populate_existing=True)
+        if row is None:
+            local.pop(task_id, None)
+            continue
+        snapshot = await cleanup_work.restore_snapshot(db, engine, row)
+        if (original := local.pop(task_id, None)) is not None and original != snapshot:
+            raise cleanup_work.blocked()
+        previous, previous_owner = row.state, row.worker_key
+        effect_applied = previous in ("failed_applied", "retry_applied")
+        claimable = (TaskWorkRecord.state.in_(("failed", "failed_applied"))
+                     | (TaskWorkRecord.state.in_(("retrying", "retry_applied"))
+                        & workers.confirmed_terminal(TaskWorkRecord.worker_key)))
+        worker = await engine.request_worker.require(db)
+        attempt = str(uuid4())
+        owned = (TaskWorkRecord.kind == "abort_failure", TaskWorkRecord.work_key == key)
+        changed = await db.execute(update(TaskWorkRecord).where(
+            *owned, TaskWorkRecord.state == previous, TaskWorkRecord.worker_key == previous_owner, claimable,
+        ).values(state="retry_applied" if effect_applied else "retrying", worker_key=worker, operation_id=attempt)
+          .execution_options(synchronize_session=False))
+        if changed.rowcount != 1:
+            raise cleanup_work.blocked()
+        owned = (*owned, TaskWorkRecord.worker_key == worker, TaskWorkRecord.operation_id == attempt)
+        try:
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                if not await db.scalar(select(TaskWorkRecord.work_key).where(*owned)):
+                    raise
+                await db.rollback()
+            with cleanup_work.finishing_retry(key, worker, attempt):
+                resolved = await _retry_failed_cleanup(db, engine, snapshot, work_key=key, worker_key=worker,
+                                                       effect_applied=effect_applied)
+            if resolved:
+                # 管理员已核实同一轮端态时也可消除原屏障。
+                await db.execute(delete(TaskWorkRecord).where(*owned))
+                await db.commit()
+        finally:
+            await cleanup_work.relinquish_retry(db, engine, key, worker, attempt, snapshot.worker_key)
+    for snapshot in local.values():
+        await _retry_failed_cleanup(db, engine, snapshot)
+    await db.commit()
 
 
 async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id: int) -> int:
-    """准入已冻结后排空整个项目执行链；统一超时但不二次 cancel 引擎执行体。"""
-    stopped: set[int] = set()
-    retry_abort = engine.has_cleanup_failure(project_id)
+    """冻结准入后向本作品全部原执行者登记取消，再等待它们及请求侧清理退出。"""
+    from app.services.task_engine import owner_cancellation
+
+    stopped = set()
+    intent = db.info.get("project_deletion_intent")
+    pending = (Task.project_id == project_id, or_(Task.status.in_(OPEN_TASK_STATUSES),
+               Task.admin_cancel_operation_id.is_not(None), Task.execution_key.is_not(None)))
     try:
         async with asyncio.timeout(engine.cancel_wait_seconds):
-            if retry_abort:
-                original = [snapshot for snapshot in engine._failed_cleanups.values()
-                            if snapshot.project_id == project_id]
-                if project_id in engine._unproven_abort_failures or not original:
-                    raise ConflictError("任务收尾缺少原始身份，作品未删除",
-                                        extra={"code": "project_tasks_not_stopped"})
-                for snapshot in original:
-                    await _retry_failed_cleanup(db, engine, snapshot)
+            if intent is not None:
+                if intent.project_id != project_id:
+                    raise ConflictError("作品删除请求与排空目标不一致", extra={"code": "project_tasks_not_stopped"})
+                await intent.lock(db, engine)
+            await retry_project_cleanup_failures(db, engine, project_id)
+            await db.rollback()
             while True:
-                tasks = list(await db.scalars(select(Task).where(
-                    Task.project_id == project_id,
-                    or_(Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None),
-                        Task.execution_key.is_not(None)),
-                ).execution_options(populate_existing=True)))
-                for task in tasks:
-                    if task.status == "running" and task.recovered_at is not None:
-                        raise ConflictError("任务保存结果尚未确认，作品未删除",
+                tasks = list(await db.scalars(select(Task).where(*pending).order_by(Task.id)
+                                              .execution_options(populate_existing=True)))
+                running = [task for task in tasks if task.status == "running"
+                           and task.admin_cancel_operation_id is None and task.cancel_requested_at is None]
+                recoveries = [(task.id, task.statistics_key, task.queued_at, task.execution_key) for task in tasks
+                              if task.status == "running" and task.cancel_requested_at is not None]
+                if any(task.status == "running" and task.recovered_at is not None for task in tasks):
+                    raise ConflictError("任务保存结果尚未确认，作品未删除", extra={"code": "project_tasks_not_stopped"})
+                ready = [(task.id, task.statistics_key, task.queued_at) for task in tasks
+                         if task.status in {"queued", "paused"} and task.admin_cancel_operation_id is None]
+                admins = [(task.statistics_key, task.admin_cancel_operation_id) for task in tasks
+                          if task.statistics_key is not None and task.admin_cancel_operation_id is not None]
+                # 已受理的本人/管理员意图也加入本次排空，审计按原轮次去重。
+                stopped.update((task.id, task.statistics_key, task.queued_at) for task in tasks
+                               if (task.admin_cancel_operation_id is not None or task.cancel_requested_at is not None)
+                               and not (task.status in FINISHED_TASK_STATUSES and task.execution_key is not None))
+                if running:
+                    # 旧收尾可凭自己的资源快照重试；停止其他 running 的新授权必须来自本作品的冻结请求。
+                    if intent is None:
+                        raise ConflictError("缺少本次作品删除凭据，不能取消新的运行中任务",
                                             extra={"code": "project_tasks_not_stopped"})
-                    if task.status in FINISHED_TASK_STATUSES and task.execution_key is not None:
-                        continue
+                    await intent.lock(db, engine)
+                    signals = []
+                    for task in running:
+                        if await owner_cancellation.record_request(db, task):
+                            stopped.add((task.id, task.statistics_key, task.queued_at))
+                            recoveries.append((task.id, task.statistics_key, task.queued_at, task.execution_key))
+                            if task.worker_key == engine.lease.worker_key and engine.lease.valid:
+                                signals.append((task.id, task.statistics_key, task.queued_at, task.execution_key))
                     try:
-                        await _cancel_loaded_task(db, engine, task)
-                        stopped.add(task.id)
-                    except ConflictError as exc:
-                        # 状态可能刚被其他取消/正常完成改变；下一轮重新检查。
-                        await db.rollback()
-                        if (exc.extra or {}).get("code") == "task_cleanup_unproven":
-                            raise ConflictError("任务收尾缺少原始身份，作品未删除",
-                                                extra={"code": "project_tasks_not_stopped"}) from None
-                work = engine.project_work(project_id)
-                if work:
+                        await db.commit()
+                    except (asyncio.CancelledError, Exception):
+                        for identity in recoveries:
+                            engine.request_worker.recover_cancel(*identity)
+                        raise
+                    for tid, key, stamp, execution in signals:
+                        engine.signal_running_cancel(tid, statistics_key=key, expected_queued_at=stamp,
+                                                     expected_execution_key=execution)
+                    engine.notify()
+                else:
                     await db.rollback()
-                    await asyncio.wait(work)
-                    continue
-                remaining = (await db.execute(select(Task.id, Task.execution_key).where(
-                    Task.project_id == project_id,
-                    or_(Task.status.in_(OPEN_TASK_STATUSES), Task.admin_cancel_operation_id.is_not(None),
-                        Task.execution_key.is_not(None)),
-                ).limit(1))).first()
-                if remaining is None:
-                    break
-                if remaining.execution_key is not None:
-                    raise ConflictError("任务仍有未完成的安全收尾，作品未删除",
-                                        extra={"code": "project_tasks_not_stopped"})
+                for identity in recoveries:
+                    engine.request_worker.recover_cancel(*identity)
+                for key, operation in admins:
+                    engine.request_admin_cancel(key, operation)
+                for tid, key, stamp in ready:
+                    if intent is not None:
+                        await intent.lock(db, engine)
+                    task = await db.scalar(select(Task).where(
+                        Task.id == tid, Task.statistics_key == key, Task.queued_at == stamp,
+                        Task.project_id == project_id, Task.status.in_(("queued", "paused")),
+                        Task.admin_cancel_operation_id.is_(None),
+                    ).execution_options(populate_existing=True))
+                    if task is not None:
+                        try:
+                            await _cancel_loaded_task(db, engine, task)
+                            stopped.add((tid, key, stamp))
+                        except ConflictError as exc:
+                            if (exc.extra or {}).get("code") == "task_cleanup_unproven":
+                                raise ConflictError("任务收尾缺少原始身份，作品未删除",
+                                                    extra={"code": "project_tasks_not_stopped"}) from None
+                    await db.rollback()
+                if await cleanup_work.has_failure(db, engine, project_id):
+                    raise ConflictError("任务收尾失败，作品未删除", extra={"code": "project_tasks_not_stopped"})
+                work = engine.project_work(project_id)
+                active = await project_work_exists(db, project_id)
+                remaining = (await db.execute(select(Task.status, Task.execution_key).where(*pending).limit(1))).first()
+                if not work and not active:
+                    if remaining is None:
+                        break
+                    if remaining.status in FINISHED_TASK_STATUSES and remaining.execution_key is not None:
+                        raise ConflictError("任务仍有未完成的安全收尾，作品未删除",
+                                            extra={"code": "project_tasks_not_stopped"})
                 await db.rollback()
-                await asyncio.sleep(0)
-            if engine.has_cleanup_failure(project_id):
-                raise ConflictError("任务收尾失败，作品未删除", extra={"code": "project_tasks_not_stopped"})
+                if work:
+                    await asyncio.wait(work, timeout=0.05, return_when=asyncio.FIRST_COMPLETED)
+                else:
+                    await asyncio.sleep(0.05)
             generating = await db.scalar(select(Chapter.id).where(
                 Chapter.project_id == project_id, Chapter.status == "generating"
             ).limit(1))
@@ -1731,7 +1850,7 @@ async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id:
 
 async def _abort_loaded_task(engine: "TaskEngine", task: Task) -> None:
     snapshot = engine.capture_abort_snapshot(task)
-    try:
+    async def abort(ctx):
         handler = get_handler(task.kind)
         if task.kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
             from app.services.task_engine.handlers import chapter as chapter_handler
@@ -1741,12 +1860,15 @@ async def _abort_loaded_task(engine: "TaskEngine", task: Task) -> None:
                 raise ConflictError("章节任务仍在执行，不能清理")
             # 只在原执行体已停止且持久字段完整时恢复；缺失身份的旧记录不得猜测。
             claim = chapter_handler.capture_running_claim(task)
-            await handler.on_abort(engine.ctx, task, claim=claim)
+            await handler.on_abort(ctx, task, claim=claim)
         else:
-            await handler.on_abort(engine.ctx, task)
+            await handler.on_abort(ctx, task)
+
+    try:
+        await cleanup_work.apply_effect(engine, abort)
     except Exception:
         if task.project_id is not None:
-            engine.remember_abort_failure(task.project_id, snapshot)
+            await engine.record_abort_failure(task.project_id, snapshot)
         raise
 
 

@@ -125,7 +125,9 @@ def from_queued_task(task: Task, execution_key: str, *, worker_key: str | None =
         raise _changed() from None
 
 
-def matches_running_base(identity: TaskExecutionIdentity, task: Task) -> bool:
+def matches_running_base(
+    identity: TaskExecutionIdentity, task: Task, *, cancellation_operation: str | None = None,
+) -> bool:
     """比较不随合法多步执行推进的原身份；调用者另须证明当前 attempt。"""
     try:
         return bool(type(identity) is TaskExecutionIdentity and isinstance(task, Task)
@@ -140,16 +142,20 @@ def matches_running_base(identity: TaskExecutionIdentity, task: Task) -> bool:
                     and isinstance(task.queued_at, datetime) and _utc(task.queued_at) == identity.queued_at
                     and task.execution_key == identity.execution_key and task.status == "running"
                     and task.worker_key == identity.worker_key
-                    and task.admin_cancel_operation_id is None and task.admin_cancel_requested_at is None
+                    and task.admin_cancel_operation_id == cancellation_operation
+                    and ((task.admin_cancel_requested_at is None) == (cancellation_operation is None))
                     and _json(task.input) == identity.input_json)
     except (TypeError, ValueError, RecursionError):
         return False
 
 
-def matches_running(identity: TaskExecutionIdentity, task: Task) -> bool:
+def matches_running(
+    identity: TaskExecutionIdentity, task: Task, *, cancellation_operation: str | None = None,
+) -> bool:
     """初次构建或已确认推进后比全部快照，不提供认证或发送 lease。"""
     try:
-        return bool(matches_running_base(identity, task) and type(task.step_cursor) is int
+        return bool(matches_running_base(identity, task, cancellation_operation=cancellation_operation)
+                    and type(task.step_cursor) is int
                     and task.step_cursor == identity.step_cursor and _json(task.checkpoint) == identity.checkpoint_json)
     except (TypeError, ValueError, RecursionError):
         return False

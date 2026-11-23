@@ -272,9 +272,9 @@ async def test_external_confirmation_request_is_drained_before_trash(app, admin,
     change = (await client.get(url)).json()["changes"][0]
     original_wait = recycle_bin_service._wait_for_external_work
 
-    async def wait(db, engine, actor_id, owner_id, pid, token):
+    async def wait(db, engine, intent):
         deleting.set()
-        return await original_wait(db, engine, actor_id, owner_id, pid, token)
+        return await original_wait(db, engine, intent)
 
     monkeypatch.setattr(recycle_bin_service, "_wait_for_external_work", wait)
     confirmation = asyncio.create_task(client.post(

@@ -43,7 +43,7 @@ async def _revised(client, *, same_label=False):
 async def test_batch_revision_transfer_roundtrip_and_undo(app, client):
     pid, cid, _later, sid = await _revised(client)
     backup = await _backup(client, pid)
-    assert (backup["version"], backup["app_schema"]) == (16, "0067")
+    assert (backup["version"], backup["app_schema"]) == (16, "0068")
     batch, = backup["tables"]["revision_batches"]
     assert not {"actor_id", "request_id", "payload_hash"} & batch.keys()
     details = backup["tables"]["revision_batch_scenes"]

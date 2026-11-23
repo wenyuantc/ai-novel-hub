@@ -41,6 +41,8 @@ def test_0045_sqlite_identity_constraints_and_lossless_downgrade(tmp_path):
         # 0066 才引入执行者归属与待核对时刻，0045 的任务表按当时的结构比较。
         expected_tasks["columns"].pop("worker_key")
         expected_tasks["columns"].pop("recovered_at")
+        # 本人跨进程取消意图由 0068 引入。
+        expected_tasks["columns"].pop("cancel_requested_at")
         assert _schema_contract(inspect(engine), "tasks") == expected_tasks
         with engine.connect() as conn:
             assert conn.execute(text("SELECT index_task_key,index_task_queued_at,index_claim_key "

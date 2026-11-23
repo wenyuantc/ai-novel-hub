@@ -13,7 +13,7 @@ from alembic import command
 from sqlalchemy import select
 
 from app.main import create_app
-from app.models import Task, TaskExecutionSlot, TaskStatistic, TaskWorker, User
+from app.models import Task, TaskExecutionSlot, TaskStatistic, TaskWorker, TaskWorkRecord, User
 from app.services import authorization_service, task_statistics_service
 from app.services.backups.database import snapshot_database
 from app.services.backups.sqlite_restore import restore_sqlite_snapshot
@@ -39,7 +39,7 @@ async def test_new_copy_rotates_lease_authority_and_recovers_saved_task(tmp_path
     try:
         old_worker = await old_engine.lease.register()
         previous_generation = old_engine.lease.sqlite_pair.generation
-        execution = str(uuid4())
+        execution, failure = str(uuid4()), str(uuid4())
         async with original.state.sessionmaker() as db:
             user = User(username="restore-test", password_hash="test")
             db.add(user)
@@ -50,6 +50,9 @@ async def test_new_copy_rotates_lease_authority_and_recovers_saved_task(tmp_path
             await task_statistics_service.record_created(db, task)
             db.add(TaskExecutionSlot(execution_key=execution, task_id=task.id, worker_key=old_worker,
                                      statistics_key=task.statistics_key, queued_at=task.queued_at, user_id=user.id))
+            db.add(TaskWorkRecord(work_key=failure, worker_key=old_worker, kind="cleanup", state="failed",
+                                  task_id=task.id, task_key=task.statistics_key, queued_at=task.queued_at,
+                                  evidence={"claim": execution}))
             await db.commit()
             task_id, task_key = task.id, task.statistics_key
         await asyncio.to_thread(_backup, live, snapshot)
@@ -103,7 +106,7 @@ async def test_new_copy_rotates_lease_authority_and_recovers_saved_task(tmp_path
         with pytest.raises(SQLiteLeasePairError):
             await asyncio.to_thread(restore_sqlite_snapshot, snapshot, live, previous_lock=previous_lock)
         assert not live.exists()
-    assert await asyncio.to_thread(restore_sqlite_snapshot, snapshot, live, previous_lock=previous_lock) == "0067"
+    assert await asyncio.to_thread(restore_sqlite_snapshot, snapshot, live, previous_lock=previous_lock) == "0068"
     assert hashlib.sha256(snapshot.read_bytes()).digest() == digest
     restored = create_app(settings, start_task_engine=False)
     new_engine = restored.state.task_engine
@@ -111,6 +114,9 @@ async def test_new_copy_rotates_lease_authority_and_recovers_saved_task(tmp_path
         async with restored.state.sessionmaker() as db:
             assert (await db.get(TaskWorker, old_worker)).fenced_at
             assert await db.get(TaskExecutionSlot, execution) is None
+            retained = await db.get(TaskWorkRecord, failure)
+            assert (retained.worker_key, retained.state) == (old_worker, "failed")
+            assert retained.evidence == {"claim": execution}
             task = await db.get(Task, task_id)
             assert (task.status, task.worker_key, task.execution_key) == ("running", old_worker, execution)
         with closing(sqlite3.connect(f"{live}.leases.sqlite3")) as authority:
@@ -144,12 +150,16 @@ async def test_pre_lease_snapshot_restores_before_upgrade(tmp_path, app):
     with pytest.raises(SQLiteLeasePairError):
         await asyncio.to_thread(restore_sqlite_snapshot, snapshot, restored, previous_lock=previous_lock)
     await app.state.task_engine.stop()
+    # 调度器已退出，但仍提供 HTTP 的应用持有自己的请求租约，不能视为整站下线。
+    with pytest.raises(SQLiteLeasePairError):
+        await asyncio.to_thread(restore_sqlite_snapshot, snapshot, restored, previous_lock=previous_lock)
+    await app.state.task_engine.request_worker.stop()
     assert await asyncio.to_thread(restore_sqlite_snapshot, snapshot, restored, previous_lock=previous_lock) == "0065"
     assert not (tmp_path / "restored.db.leases.sqlite3").exists()
     await asyncio.to_thread(command.upgrade, _config(restored), "head")
     with closing(sqlite3.connect(restored)) as db:
         assert db.execute("SELECT username FROM users").fetchone() == ("legacy-user",)
-        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == ("0067",)
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == ("0068",)
         assert db.execute("SELECT count(*) FROM task_workers").fetchone() == (0,)
 
 
@@ -164,6 +174,25 @@ def test_restore_requires_slot_table_to_match_snapshot_revision(tmp_path, revisi
             db.execute("CREATE TABLE task_execution_slots(execution_key TEXT)")
         db.commit()
     with pytest.raises(ValueError, match="任务占用表与迁移版本不一致"):
+        restore_sqlite_snapshot(source, target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("change", [
+    "DROP TABLE task_work_records",
+    "ALTER TABLE task_work_records DROP COLUMN evidence",
+    "ALTER TABLE projects DROP COLUMN deletion_worker_key",
+    "ALTER TABLE tasks DROP COLUMN cancel_requested_at",
+    "ALTER TABLE agent_changes DROP COLUMN external_worker_key",
+    "UPDATE alembic_version SET version_num='0067'",
+])
+def test_cold_restore_checks_work_identity_shape_before_installing_copy(tmp_path, change):
+    source, target = tmp_path / "source.db", tmp_path / "restored.db"
+    command.upgrade(_config(source), "0068")
+    with closing(sqlite3.connect(source)) as db:
+        db.execute(change)
+        db.commit()
+    with pytest.raises(ValueError, match="跨进程"):
         restore_sqlite_snapshot(source, target)
     assert not target.exists()
 

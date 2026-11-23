@@ -176,7 +176,7 @@ PROJECT_RULE = TableRule(
     # 旧的写作风格自由文本：迁移 0013 起不再读写
     exclude=(
         "style", "deleted_at", "last_deleted_at", "deleted_by_user_id",
-        "deleted_by_username", "deletion_started_at", "deletion_token",
+        "deleted_by_username", "deletion_started_at", "deletion_token", "deletion_worker_key",
         "planning_revision",  # 新作品独立的并发版本，不导出或随效果回退。
         "fields_revision",  # 字段目录版本属于新作品，不复制源作品的并发代次。
         "categories_revision",  # 整理标签／分类目录同样使用新作品的独立代次。

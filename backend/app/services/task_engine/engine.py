@@ -24,7 +24,7 @@ from collections import Counter, deque
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, aclosing, contextmanager, suppress
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -61,7 +61,14 @@ from app.services.collaboration_task_access import (
     task_visible_to_actor,
 )
 from app.services.system_settings_snapshot import effective_settings
-from app.services.task_engine import execution_slots, workers
+from app.services.task_engine import (
+    admin_cleanup,
+    cleanup_work,
+    execution_slots,
+    execution_work,
+    owner_cancellation,
+    workers,
+)
 from app.services.task_engine.cancellation import AdminCancellationDrain
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
@@ -74,6 +81,7 @@ from app.services.task_engine.execution_identity import (
 )
 from app.services.task_engine.hub import Subscriber, TaskHub
 from app.services.task_engine.registry import Event, TaskContext, TaskHandler, get_handler
+from app.services.task_engine.request_worker import RequestWorker
 
 logger = logging.getLogger(__name__)
 
@@ -201,12 +209,12 @@ _REBUILDABLE_VISIBILITY_JOBS = frozenset({
 
 @dataclass(frozen=True, slots=True, repr=False)
 class AbortSnapshot:
-    """本进程首次收尾失败时持有的不可变身份；不得由重读行替换。"""
+    """收尾失败时冻结的原始身份；不能用后来同 ID 的任务替换。"""
 
     task_id: int
     task_key: str
     actor_id: int
-    project_id: int
+    project_id: int | None
     kind: str
     chapter_id: int | None
     resource_key: str | None
@@ -277,6 +285,7 @@ class TaskEngine:
         self._running_projects: dict[int, int | None] = {}
         self._cleanup_work: dict[int, dict[asyncio.Task, int]] = {}
         self._abort_failures: set[int] = set()
+        self._durable_abort_failures: dict[str, tuple[int, AbortSnapshot | None]] = {}
         self._failed_cleanups: dict[int, AbortSnapshot] = {}
         self._unproven_abort_failures: set[int] = set()
         self._uncertain_executions: set[tuple[int, str | None, datetime | None, str | None]] = set()
@@ -296,6 +305,9 @@ class TaskEngine:
         self._stalled: dict[int, tuple[str | None, Any]] = {}
         self._loop_task: asyncio.Task[None] | None = None
         self.lease = workers.WorkerLease(self)
+        self.request_worker = RequestWorker(self)
+        self._project_executions: dict[int, TaskExecutionIdentity] = {}
+        self._exit_confirmations: set[asyncio.Task] = set()
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._heartbeat_stop = asyncio.Event()
         self._lease_lost = False
@@ -412,6 +424,8 @@ class TaskEngine:
         if self._heartbeat_task is not None:
             await asyncio.gather(self._heartbeat_task, return_exceptions=True)
             self._heartbeat_task = None
+        if self._exit_confirmations:
+            await asyncio.gather(*self._exit_confirmations)
         await self.lease.stop()
 
     async def stop(self) -> None:
@@ -466,7 +480,8 @@ class TaskEngine:
     ) -> AbortSnapshot | None:
         """捕获原 Task 和具体资源凭据；格式缺损时仅保留项目级未证明屏障。"""
         try:
-            if (type(task.id) is not int or type(task.user_id) is not int or type(task.project_id) is not int
+            if (type(task.id) is not int or type(task.user_id) is not int or (type(task.project_id) is not int
+                    and not (recovery and task.project_id is None and task.status == "queued" and task.execution_key))
                     or not isinstance(task.statistics_key, str) or str(UUID(task.statistics_key)) != task.statistics_key
                     or not isinstance(task.queued_at, datetime)):
                 return None
@@ -514,6 +529,45 @@ class TaskEngine:
         else:
             self._unproven_abort_failures.add(project_id)
 
+    @staticmethod
+    def _same_accepted_cancellation(execution: TaskExecutionIdentity, task: Task) -> bool:
+        operation = task.admin_cancel_operation_id
+        if operation is None:
+            return False
+        if task.kind in _SINGLE_CHAPTER_KINDS:
+            from app.services.task_engine.cancellation import _CHAPTER_INTENT, chapter_cancel_intent
+
+            intent = chapter_cancel_intent(task, operation)
+            if intent is None or not isinstance(task.input, dict) or task.input.get(_CHAPTER_INTENT) != intent:
+                return False
+            expected = {**execution.input, _CHAPTER_INTENT: intent}
+            execution = replace(execution, input_json=json.dumps(expected, ensure_ascii=False, sort_keys=True,
+                                                                 separators=(",", ":"), allow_nan=False))
+        return matches_running(execution, task, cancellation_operation=operation)
+
+    async def _record_uncertain_claim(self, execution: TaskExecutionIdentity) -> None:
+        if execution.project_id is None:
+            return
+        original = Task(id=execution.task_id, project_id=execution.project_id, statistics_key=execution.task_key,
+                        queued_at=execution.queued_at, execution_key=execution.execution_key,
+                        worker_key=execution.worker_key)
+        await self.record_abort_failure(execution.project_id, None, task=original)
+
+    async def record_abort_failure(
+        self, project_id: int, snapshot: AbortSnapshot | None, *, task=None, registration_rolled_back=False,
+    ) -> None:
+        if await cleanup_work.record_failure(
+            self, project_id, snapshot, task=task, registration_rolled_back=registration_rolled_back,
+        ):
+            self.remember_abort_failure(project_id, snapshot)
+
+    async def clear_abort_failure(self, snapshot: AbortSnapshot | None) -> None:
+        if snapshot is not None and self._failed_cleanups.get(snapshot.task_id) == snapshot:
+            async with self.ctx.sessionmaker() as db:
+                await cleanup_work.clear_proven_failure(db, snapshot)
+                await db.commit()
+            self.forget_abort_failure(snapshot)
+
     def has_cleanup_failure(self, project_id: int) -> bool:
         """三类证据独立判断；任何单个缓存意外清除都不能放开项目删除。"""
         return (project_id in self._abort_failures or project_id in self._unproven_abort_failures
@@ -558,6 +612,67 @@ class TaskEngine:
         """启动时立即处理孤立任务，随后扫描超过阈值的外部调用。"""
         await self._reap_orphans()
 
+    async def recover_requested_round(
+        self, task_id: int, task_key: str, queued_at: datetime | None, execution_key: str | None, worker: str,
+    ) -> bool | Exception:
+        """没有后台调度器时，由请求执行者接管一条已获准取消的原轮次。"""
+        same_round = (Task.id == task_id, Task.statistics_key == task_key, Task.queued_at == queued_at)
+        original = (*same_round, Task.execution_key == execution_key, Task.status == "running",
+                    Task.recovered_at.is_(None), Task.cancel_requested_at.is_not(None))
+        admin_handoff = select(Task.admin_cancel_operation_id).where(*same_round, Task.worker_key == worker)
+        token = (task_id, task_key, execution_key)
+        async with self._reap_lock:
+            if not self.request_worker.valid or self.request_worker.worker_key != worker:
+                return False
+            async with self.ctx.sessionmaker() as db:
+                row = (await db.execute(select(Task.worker_key).where(*original))).one_or_none()
+                if row is None:
+                    operation = await db.scalar(admin_handoff)
+                    if operation is not None:
+                        # 管理员章节收据可能已更换执行键，操作本身仍需排空。
+                        self.request_admin_cancel(task_key, operation)
+                    return operation is None
+                previous = row.worker_key
+                if previous not in (None, worker):
+                    orphan = await workers.prepare_orphan_scan(db, self.lease_seconds, worker_key=previous)
+                    candidate = await db.scalar(select(Task.id).where(*original, Task.worker_key == previous, orphan))
+                    await db.commit()
+                    if candidate is None:
+                        return False
+            self._adopted.add(token)
+            try:
+                if previous != worker:
+                    async with self.ctx.sessionmaker() as db:
+                        # 原轮次核对与 C1 的认领在同一事务，覆盖扫描后重新入队的窗口。
+                        if await db.scalar(select(Task.id).where(*original, Task.worker_key == previous)
+                                           .with_for_update(skip_locked=True)) is None:
+                            return False
+                        if not await workers.adopt(db, task_id, task_key, execution_key, previous, worker):
+                            return False
+                        await admin_cleanup.reserve_adopted(db, task_id, recovery=True)
+                        await db.commit()
+                async with self.ctx.sessionmaker() as db:
+                    owned = await db.scalar(select(Task).where(*original, Task.worker_key == worker))
+                    if owned is not None and not await workers.lock_live_worker(db, worker, read_only=True):
+                        return False
+                if owned is None:
+                    return True
+                try:
+                    if not await self._recover_adopted(owned):
+                        return False
+                except Exception as exc:
+                    # 此时已重新证明本 worker 持有原轮次；让仍等待的请求核对持久状态后获知业务收尾错误。
+                    return exc
+            finally:
+                self._adopted.discard(token)
+        async with self.ctx.sessionmaker() as db:
+            operation = await db.scalar(admin_handoff)
+        if operation is not None:
+            # 旧 drain 可能在接管期间看到 _adopted 而退出；归还后唤醒并保留定向重查。
+            self.request_admin_cancel(task_key, operation)
+            return False
+        return True
+
     async def _reap_orphans(self) -> None:
         async with self._reap_lock:
             me = self.lease.worker_key
@@ -570,6 +685,9 @@ class TaskEngine:
                     Task.id, Task.statistics_key, Task.execution_key, Task.worker_key,
                 ).where(orphan).order_by(Task.id))).all()
                 await db.commit()
+            from app.services.recycle_bin_service import recover_pending_deletions
+
+            await recover_pending_deletions(sm, workers_checked=True)
             for task_id, task_key, execution_key, previous in candidates:
                 if self.lease.worker_key != me or not self.lease.valid:
                     return
@@ -577,6 +695,7 @@ class TaskEngine:
                     async with sm() as db:
                         if not await workers.adopt(db, task_id, task_key, execution_key, previous, me):
                             continue
+                        await admin_cleanup.reserve_adopted(db, task_id, recovery=True)
                         # 即便提交确认丢失，也会在下面按原轮次查回本次认领。
                         self._adopted.add((task_id, task_key, execution_key))
                         await db.commit()
@@ -618,13 +737,15 @@ class TaskEngine:
             if await db.scalar(select(Task.id).where(*conditions).with_for_update()) is None:
                 return False
             await require_live_worker(db, task.worker_key)
-            changed = await db.execute(update(Task).where(*conditions).values(recovered_at=func.now(), worker_key=None))
+            changed = await db.execute(update(Task).where(*conditions).values(
+                recovered_at=func.now(), worker_key=None, cancel_requested_at=None,
+            ))
             if changed.rowcount != 1:
                 return False
             await db.commit()
         self.remember_uncertain_execution(task)
         if task.project_id is not None:
-            self.remember_abort_failure(task.project_id, None)
+            await self.record_abort_failure(task.project_id, None, task=task)
         logger.error("任务执行事实待核对 task=%s", task.id)
         return True
 
@@ -636,6 +757,9 @@ class TaskEngine:
             self.admin_cancellations.recovering[task.statistics_key] = (
                 self.admin_cancellations.round_at(task), task.execution_key,
             )
+        if task.admin_cancel_operation_id is not None and task.statistics_key is not None:
+            self.request_admin_cancel(task.statistics_key, task.admin_cancel_operation_id)
+            return True
         complete_receipt = None
         detail = None
         checkpoint = task.checkpoint if isinstance(task.checkpoint, dict) else {}
@@ -701,6 +825,11 @@ class TaskEngine:
 
         if task.kind in _SINGLE_CHAPTER_KINDS and task.admin_cancel_operation_id is not None:
             return True
+        async with self.ctx.sessionmaker() as db:
+            uncertain = await owner_cancellation.requested_result_unproven(db, task)
+        if uncertain:
+            # 本人受理以后原执行才进入待核对；已有完成/审核收据在上方处理。
+            return await self._mark_recovery_uncertain(task)
         handler = _try_handler(task.kind)
         abort_ok = handler is not None
         snapshot = self.capture_abort_snapshot(task, recovery=True)
@@ -721,7 +850,7 @@ class TaskEngine:
             row, committed = await self.complete_state(
                 task, expected_status="running", status="interrupted", result=None, error=INTERRUPTED_MESSAGE,
                 text=task.output_text, progress=task.progress, abort_ok=abort_ok,
-                recovery_claim=chapter_resource, wizard_pending=wizard_pending,
+                recovery_claim=chapter_resource, wizard_pending=wizard_pending, owner_recovery=True,
             )
         except _UnprovenRecoveryResource:
             if wizard_pending:
@@ -729,14 +858,15 @@ class TaskEngine:
             abort_ok = False
             row, committed = await self.complete_state(
                 task, expected_status="running", status="interrupted", result=None, error=INTERRUPTED_MESSAGE,
-                text=task.output_text, progress=task.progress, abort_ok=False,
+                text=task.output_text, progress=task.progress, abort_ok=False, owner_recovery=True,
             )
         if committed:
             if not abort_ok and handler is not None and task.project_id is not None:
-                self.remember_abort_failure(task.project_id, snapshot)
+                await self.record_abort_failure(task.project_id, snapshot)
             self.admin_cancellations.recovering.pop(task.statistics_key, None)
             out = task_service.out_json(row) if row is not None and handler is not None else None
-            self.close_hub(task.id, "error", {"task": out, "detail": INTERRUPTED_MESSAGE},
+            detail = row.error if row is not None else INTERRUPTED_MESSAGE
+            self.close_hub(task.id, "error", {"task": out, "detail": detail},
                            statistics_key=task.statistics_key)
         return committed
 
@@ -812,6 +942,7 @@ class TaskEngine:
                     next_reap = time.monotonic() + self.poll_interval
                     await self._reap_orphans()
                 await self.scan_admin_cancellations()
+                await owner_cancellation.scan(self)
                 self._maybe_scan_collaboration_paused_soon()
                 await self._dispatch()
             except asyncio.CancelledError:
@@ -906,6 +1037,8 @@ class TaskEngine:
     def _on_done(self, task_id: int) -> None:
         task = self._running.pop(task_id, None)
         project_id = self._running_projects.pop(task_id, None)
+        execution = self._project_executions.pop(task_id, None)
+        failed_project = None
         if task is not None and not task.cancelled() and task.exception() is not None:
             execution_key = self._running_execution_keys.get(task_id)
             if execution_key is not None:
@@ -914,7 +1047,12 @@ class TaskEngine:
                 self._adopted.add((task_id, self._running_statistics_keys.get(task_id), execution_key))
             elif project_id is not None:
                 self.remember_abort_failure(project_id, None)
+                failed_project = project_id
             logger.error("任务执行体异常结束 task=%s", task_id)
+        if execution is not None or failed_project is not None:
+            confirmation = asyncio.create_task(self._confirm_project_exit(execution, failed_project))
+            self._exit_confirmations.add(confirmation)
+            confirmation.add_done_callback(self._exit_confirmations.discard)
         self._running_users.pop(task_id, None)
         self._running_rounds.pop(task_id, None)
         self._claiming.discard(task_id)
@@ -1086,6 +1224,7 @@ class TaskEngine:
                 await db.rollback()
                 return False
             if paused:
+                await cleanup_work.register(db, self, task, settled=True)
                 from app.services.rich_document_review import discard_pending
 
                 # 与终态同事务丢弃待审核提案；断点中的审核阶段一并复位，不写正文。
@@ -1241,8 +1380,8 @@ class TaskEngine:
         """与领取相同的锁序（gate → actor/作者 User → 发送写门禁 → 作品）内复核并受限收尾单个待审核任务。"""
         if self._stopping:
             return False
-        with self.cleanup_scope(Task(project_id=project_id)):
-            async with self.ctx.sessionmaker() as db:
+        async with self.ctx.sessionmaker() as db:
+            async with cleanup_work.request_scope(db, self):
                 try:
                     owner_id = await db.scalar(select(Project.user_id).where(Project.id == project_id))
                     if owner_id is None or owner_id == actor_id:
@@ -1376,6 +1515,26 @@ class TaskEngine:
                     delay = min(delay * 2, 5.0)
         finally:
             self._finalizing.discard(execution.task_id)
+
+    async def _confirm_project_exit(
+        self, execution: TaskExecutionIdentity | None, failed_project: int | None = None,
+    ) -> None:
+        delay = 0.1
+        while True:
+            try:
+                if failed_project is not None:
+                    await self.record_abort_failure(failed_project, None)
+                if execution is not None:
+                    async with self.ctx.sessionmaker() as db:
+                        await execution_work.confirm_exit(db, execution)
+                return
+            except Exception:  # noqa: BLE001  回执丢失时用新事务按原身份重试。
+                if delay == 0.1:
+                    logger.warning("作品执行体退出尚未确认")
+                if self._stopping or self._lease_lost or not self.lease.valid:
+                    return
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 5.0)
 
     async def _claim_and_run(self, task_id: int, statistics_key: str | None) -> None:
         # 确认提交、启动模型、成功回调和异常退出共用一处释放出口。
@@ -1537,6 +1696,13 @@ class TaskEngine:
                     return
                 self._running_statistics_keys[task_id] = row.statistics_key
                 execution_slots.reserve(db, execution)
+                if execution.project_id is not None:
+                    execution_work.register(db, execution)
+                    if self._running.get(task_id) is asyncio.current_task():
+                        self._project_executions[task_id] = execution
+                    else:
+                        # 直接驱动一次领取时没有调度器的完成回调，此作用域即原执行体。
+                        finish.push_async_callback(self._confirm_project_exit, execution)
                 # 从此处起即使提交确认失败或执行前返回，也按这个不可变身份归还。
                 finish.push_async_callback(self._release_slot, execution)
                 try:
@@ -1635,9 +1801,9 @@ class TaskEngine:
             if (execution is None or task is None or not matches_running(execution, task)
                     or task.admin_cancel_operation_id is not None):
                 # 不从新读到的行补原 actor/project/kind/input 或领取断点。
-                if (execution is not None and execution.project_id is not None
-                        and (task is None or task.worker_key == execution.worker_key)):
-                    self.remember_abort_failure(execution.project_id, None)
+                if (execution is not None and (task is None or (task.worker_key == execution.worker_key
+                        and not self._same_accepted_cancellation(execution, task)))):
+                    await self._record_uncertain_claim(execution)
                 if self.hubs.get(task_id) is hub:
                     self.hubs.pop(task_id, None)
                 hub.close("error", {"task": None, "detail": TASK_GONE_MESSAGE})
@@ -1654,7 +1820,7 @@ class TaskEngine:
                 unconfirmed = True
             elif task_id in self._shutdown:
                 status, error = "interrupted", INTERRUPTED_MESSAGE
-            elif task_id in self._cancel_requested:
+            elif task.cancel_requested_at is not None or task_id in self._cancel_requested:
                 # 领取与取消请求几乎同时发生：不再执行
                 revoked = self._collaboration_revoked.get(task_id)
                 if revoked is not None and revoked[:2] == (execution.task_key, execution.execution_key):
@@ -1702,7 +1868,7 @@ class TaskEngine:
         except (generation_service.ChapterCommitUncertain, analysis_service.AnalysisCommitUncertain):
             # 原事务可能已经提交正文；不能触发 on_abort、清除 execution 或开放重试。
             if task is not None and task.project_id is not None:
-                self.remember_abort_failure(task.project_id, None)
+                await self.record_abort_failure(task.project_id, None, task=task)
             if task is not None:
                 self.remember_uncertain_execution(task)
             if self.hubs.get(task_id) is hub:
@@ -1730,8 +1896,7 @@ class TaskEngine:
             current_execution, valid_execution = None, False
         if not valid_execution:
             # job 快照与领取身份不一致：无法证明属于本轮，保留 running 屏障交由恢复/管理员排空。
-            if execution.project_id is not None:
-                self.remember_abort_failure(execution.project_id, None)
+            await self._record_uncertain_claim(execution)
             hub.close("error", {"task": None, "detail": "任务执行身份尚未确认"})
             return
         if unconfirmed and execution is not None and execution.actor_token_version is None:
@@ -2011,7 +2176,7 @@ class TaskEngine:
                 pending = await self._durable_rich_review(task)
             except Exception:  # noqa: BLE001
                 if task is not None and task.project_id is not None:
-                    self.remember_abort_failure(task.project_id, None)
+                    await self.record_abort_failure(task.project_id, None, task=task)
                 if task is not None:
                     self.remember_uncertain_execution(task)
                 status, result, error = "failed", None, "提案保存结果尚未确认，请稍后核对"
@@ -2075,11 +2240,11 @@ class TaskEngine:
                         if not same_execution(execution, advanced):
                             raise ConflictError("任务执行身份已变化")
                         current_execution = advanced
-                    self.forget_abort_failure(abort_snapshot)
+                    await self.clear_abort_failure(abort_snapshot)
                 except Exception:
                     abort_ok = False
                     if task.project_id is not None:
-                        self.remember_abort_failure(task.project_id, abort_snapshot)
+                        await self.record_abort_failure(task.project_id, abort_snapshot)
                         abort_failure_snapshotted = abort_snapshot is not None
                     error = "任务收尾失败，请稍后重试"
                     logger.error("任务取消收尾失败 task=%s", task_id)
@@ -2136,7 +2301,7 @@ class TaskEngine:
                                   task, original=execution, status=intended_status, error=run_error,
                               )) is not None):
                             # 执行体快照无法证明（如取消落在某章保存提交之后），由持久断点证明本轮事实后收尾。
-                            self.forget_abort_failure(abort_snapshot)
+                            await self.clear_abort_failure(abort_snapshot)
                             out, result = None, None
                             status, error = "receipt_completed", (
                                 BATCH_RECEIPT_FINALIZED_DETAIL if intended_status == "succeeded" else run_error
@@ -2147,7 +2312,7 @@ class TaskEngine:
                             status, result, error = "failed", None, "任务收尾失败，请稍后重试"
                         else:
                             if task is not None and task.project_id is not None:
-                                self.remember_abort_failure(task.project_id, None)
+                                await self.record_abort_failure(task.project_id, None, task=task)
                             if task is not None:
                                 self.remember_uncertain_execution(task)
                             status, result, error = "failed", None, "任务保存结果尚未确认，请稍后核对"
@@ -2219,7 +2384,7 @@ class TaskEngine:
                     if (receipt_row := await self._complete_from_batch_checkpoint(
                         task, original=execution, status=fallback_status, error=fallback_error,
                     )) is not None:
-                        self.forget_abort_failure(abort_snapshot)
+                        await self.clear_abort_failure(abort_snapshot)
                         out, result = None, None
                         status, error = "receipt_completed", (
                             BATCH_RECEIPT_FINALIZED_DETAIL if fallback_status == "succeeded" else fallback_error
@@ -2295,7 +2460,7 @@ class TaskEngine:
                             and self.admin_cancellations.winners.get(task.statistics_key) is winner_marker):
                         self.admin_cancellations.winners.pop(task.statistics_key, None)
                     if task is not None and task.project_id is not None:
-                        self.remember_abort_failure(task.project_id, None)
+                        await self.record_abort_failure(task.project_id, None, task=task)
                     status, result, error = "failed", None, "任务结束状态保存失败，请稍后重试"
             if committed and status == "succeeded" and handler is not None and task is not None:
                 callback_ok = await self._on_success(handler, task, execution=execution)
@@ -2430,6 +2595,7 @@ class TaskEngine:
                 stamp = task_statistics_service.now_utc()
                 # completed_chapter_receipt 已在本事务内锁作品与 Task 行；条件 UPDATE 仍按原轮次逐字 CAS。
                 changed = await db.execute(update(Task).where(*conditions).values(
+                    cancel_requested_at=None,
                     status="succeeded", result=verified, error=RECEIPT_FINALIZED_NOTE, progress=100,
                     stage=task_service.STAGE_LABELS["succeeded"], finished_at=stamp, execution_key=None,
                 ).execution_options(synchronize_session="fetch"))
@@ -2514,6 +2680,7 @@ class TaskEngine:
                 await require_live_worker(db, worker_key)
                 stamp = task_statistics_service.now_utc()
                 changed = await db.execute(update(Task).where(*conditions).values(
+                    cancel_requested_at=None,
                     status="succeeded", result=proof[1], error=ANALYSIS_RECEIPT_FINALIZED_NOTE, progress=100,
                     stage=task_service.STAGE_LABELS["succeeded"], finished_at=stamp, execution_key=None,
                 ).execution_options(synchronize_session="fetch"))
@@ -2595,6 +2762,7 @@ class TaskEngine:
                 await require_live_worker(db, worker_key)
                 stamp = task_statistics_service.now_utc()
                 changed = await db.execute(update(Task).where(*conditions).values(
+                    cancel_requested_at=None,
                     status="succeeded", result=verified, error=WIZARD_RECEIPT_FINALIZED_NOTE, progress=100,
                     stage=task_service.STAGE_LABELS["succeeded"], finished_at=stamp, execution_key=None,
                 ).execution_options(synchronize_session="fetch"))
@@ -2714,7 +2882,7 @@ class TaskEngine:
                         cast(Task.checkpoint, String) == raw_checkpoint,
                         cast(Task.input, String) == raw_input,
                     ).values(
-                        status=status, result=result,
+                        cancel_requested_at=None, status=status, result=result,
                         error=BATCH_RECEIPT_FINALIZED_NOTE if status == "succeeded" else error,
                         output_text="", progress=100 if status == "succeeded" else row.progress,
                         stage=task_service.STAGE_LABELS[status], finished_at=stamp, execution_key=None,
@@ -2750,6 +2918,7 @@ class TaskEngine:
         batch_snapshot: Any = None, abort_snapshot: AbortSnapshot | None = None, batch_receipt_proof: bool = False,
         batch_uncertain_attempt: bool = False,
         recovery_claim: chapter_claim.ChapterClaim | None = None, wizard_pending: bool = False,
+        owner_recovery: bool = False,
         review_proof: dict[str, Any] | None = None,
         execution_identity: TaskExecutionIdentity | None = None,
         current_execution_identity: TaskExecutionIdentity | None = None,
@@ -2764,7 +2933,11 @@ class TaskEngine:
                 and not same_execution(execution_identity, current_execution_identity)):
             return None, False
         worker_key = execution_identity.worker_key if execution_identity is not None else task.worker_key
-        if expected_status == "running" and worker_key is not None and self.lease.worker_key != worker_key:
+        request_owns = self.request_worker.worker_key == worker_key and (
+            operation_id is not None or (task.id, task.statistics_key, task.execution_key) in self._adopted
+        )
+        if expected_status == "running" and worker_key is not None and self.lease.worker_key != worker_key \
+                and not request_owns:
             return None, False
         recovery_cleanup = recovery_claim is not None or wizard_pending
         if recovery_cleanup and (
@@ -2896,9 +3069,15 @@ class TaskEngine:
                     row = await db.scalar(statement)
                 if row is None or row.status != expected_status:
                     return row, False
-                if (execution_identity is not None and task.kind not in _SINGLE_CHAPTER_KINDS | {"chapter.analyze"}
-                        and not matches_running(current_execution_identity or execution_identity, row)):
-                    return row, False
+                if execution_identity is not None and task.kind not in _SINGLE_CHAPTER_KINDS | {"chapter.analyze"}:
+                    # 原停止及已产出的批量结果可与迟到的管理员意图一起提交。仍需原轮次、
+                    # 输入和完整断点，批量赢家还会在下方锁内重新核对模型、结果和输出。
+                    proved_stop = status == "cancelled" and abort_ok and result is None
+                    batch_winner = task.kind == "chapter.batch" and status in ("succeeded", "paused") and abort_ok
+                    stopping_for = row.admin_cancel_operation_id if proved_stop or batch_winner else None
+                    if not matches_running(current_execution_identity or execution_identity, row,
+                                           cancellation_operation=stopping_for):
+                        return row, False
                 if expected_status == "running":
                     await require_live_worker(db, worker_key)
                 if recovery_cleanup:
@@ -3019,12 +3198,15 @@ class TaskEngine:
                 if status == "paused" and isinstance(result, dict) and result.get("reason") == "rich_document_review" \
                         and observed is not None:
                     status, result, error = "cancelled", None, "任务已取消，候选未采纳"
+                if owner_recovery and observed is None and abort_ok and row.cancel_requested_at is not None:
+                    # 回退已确认时在终态锁内裁决迟到的本人意图；凭据缺损仍沿用 C1 的结果与屏障。
+                    status, error = "cancelled", CANCELLED_MESSAGE
                 stamp = None if status == "paused" else task_statistics_service.now_utc()
                 values = dict(status=status, result=result, error=error, output_text=text,
                               progress=100 if status == "succeeded" else progress,
                               stage=task_service.STAGE_LABELS[status], finished_at=stamp,
                               execution_key=task.execution_key if status == "succeeded" or not abort_ok else None,
-                              admin_cancel_operation_id=None, admin_cancel_requested_at=None)
+                              cancel_requested_at=None, admin_cancel_operation_id=None, admin_cancel_requested_at=None)
                 if next_input is not None:
                     values["input"] = next_input
                 conditions = [
@@ -3058,6 +3240,10 @@ class TaskEngine:
 
                     await discard_pending(db, row)
                 await task_statistics_service.record_state_change(db, row, status, finished_at=stamp)
+                await cleanup_work.settle(db, self)
+                await cleanup_work.finish_retry(db, self)
+                if observed is not None:
+                    await admin_cleanup.finish(db, task, observed)
                 try:
                     await db.commit()
                 except Exception:
@@ -3188,28 +3374,37 @@ class TaskEngine:
     async def wait_admin_cancellations(self) -> None:
         await self.admin_cancellations.wait()
 
+    def signal_running_cancel(
+        self, task_id: int, *, statistics_key: str | None, expected_queued_at: Any,
+        expected_execution_key: Any,
+    ) -> asyncio.Task | None:
+        if self._running_statistics_keys.get(task_id) != statistics_key:
+            return None
+        if (expected_queued_at is not _UNSET_BINDING
+                and self._running_rounds.get(task_id, _UNSET_BINDING) != expected_queued_at):
+            return None
+        if (expected_execution_key is not _UNSET_BINDING
+                and self._running_execution_keys.get(task_id) != expected_execution_key):
+            return None
+        t = self._running.get(task_id)
+        if t is None:
+            # 已经收尾完毕（库里的 running 是读取时的旧值）
+            return None
+        if task_id not in self._cancel_requested and task_id not in self._finalizing:
+            self._cancel_requested.add(task_id)
+            if task_id not in self._claiming:
+                t.cancel()
+        return t
+
     async def cancel_running(
         self, task_id: int, *, statistics_key: str | None = None, expected_queued_at: Any = _UNSET_BINDING,
         expected_execution_key: Any = _UNSET_BINDING,
     ) -> None:
         """取消运行中的任务并等待其收尾（最多 cancel_wait_seconds 秒）。"""
-        if self._running_statistics_keys.get(task_id) != statistics_key:
-            return
-        if (expected_queued_at is not _UNSET_BINDING
-                and self._running_rounds.get(task_id, _UNSET_BINDING) != expected_queued_at):
-            return
-        if (expected_execution_key is not _UNSET_BINDING
-                and self._running_execution_keys.get(task_id) != expected_execution_key):
-            return
-        t = self._running.get(task_id)
-        if t is None:
-            # 已经收尾完毕（库里的 running 是读取时的旧值）
-            return
-        if task_id not in self._cancel_requested and task_id not in self._finalizing:
-            self._cancel_requested.add(task_id)
-            if task_id not in self._claiming:
-                t.cancel()
-        await asyncio.wait({t}, timeout=self.cancel_wait_seconds)
+        t = self.signal_running_cancel(task_id, statistics_key=statistics_key, expected_queued_at=expected_queued_at,
+                                       expected_execution_key=expected_execution_key)
+        if t is not None:
+            await asyncio.wait({t}, timeout=self.cancel_wait_seconds)
 
     @contextmanager
     def cleanup_scope(self, task: Task):

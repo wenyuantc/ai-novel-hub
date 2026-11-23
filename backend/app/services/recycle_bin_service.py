@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 from sqlalchemy import and_, delete, func, or_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -38,8 +39,10 @@ from app.schemas.recycle_bin import RecycleProjectList, RecycleProjectOut
 from app.services import authorization_service as authz
 from app.services import project_lifecycle, retrieval_service, task_service, task_statistics_service
 from app.services.admin_service import _escape_like
+from app.services.agent import external_activity
 from app.services.audit_writer import AuditOperation
 from app.services.project_service import chapter_stats_subquery, get_manageable_project, has_unsettled_external_change
+from app.services.task_engine import cleanup_work, workers
 
 if TYPE_CHECKING:
     from app.services.task_engine.engine import TaskEngine
@@ -47,6 +50,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 CLEANUP_INTERVAL = 3600.0
 CLEANUP_BATCH = 100
+# 只有请求自己的 finally 能登记已退出、但 token 释放回执不明的操作。
+_failed_releases: WeakKeyDictionary[async_sessionmaker, set[project_lifecycle.DeletionIntent]] = WeakKeyDictionary()
 
 
 def _has_pending_session_writes(db: AsyncSession) -> bool:
@@ -96,25 +101,33 @@ async def _actor(db: AsyncSession, actor_id: int, *, admin: bool = False, permis
     return actor
 
 
-async def _release_intent(sessionmaker, project_id: int, token: str) -> None:
+async def _release_intent(sessionmaker, intent: project_lifecycle.DeletionIntent) -> None:
     try:
         async with sessionmaker() as db:
             await db.execute(
                 update(Project)
-                .where(Project.id == project_id, Project.deletion_token == token, Project.deleted_at.is_(None))
-                .values(deletion_started_at=None, deletion_token=None, updated_at=Project.updated_at)
+                .where(Project.id == intent.project_id, Project.deletion_token == intent.token,
+                       Project.deletion_worker_key == intent.worker_key, Project.deleted_at.is_(None))
+                .values(deletion_started_at=None, deletion_token=None, deletion_worker_key=None,
+                        updated_at=Project.updated_at)
             )
             await db.commit()
     except Exception:
-        # 数据库不可用时下次启动恢复，不记录包含业务 SQL 参数的异常。
-        logger.error("作品删除意图清理失败 project=%s", project_id)
+        # 活着的 worker 不能由对端代为释放；自己恢复可写后仍需归还原 token。
+        _failed_releases.setdefault(sessionmaker, set()).add(intent)
+        logger.error("作品删除意图清理失败 project=%s", intent.project_id)
+    else:
+        if pending := _failed_releases.get(sessionmaker):
+            pending.discard(intent)
+            if not pending:
+                del _failed_releases[sessionmaker]
 
 
 async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: int, project_id: int) -> None:
     if _has_pending_session_writes(db):
         await _reject_pending_soft_delete(db, actor_id, project_id)
     token = str(uuid4())
-    started = False
+    intent = None
     try:
         async with AuditOperation(
             db, actor_id, "project.delete", "project", project_id, project_id=project_id
@@ -128,27 +141,25 @@ async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: 
             audit.target(project)
             # 本地 work 只能提示有机会等到收尾，不能证明任何具体 claim 属于该进程。
             unsettled = await has_unsettled_external_change(db, project_id=project_id)
-            if unsettled and not engine.project_work(project_id):
+            if unsettled and not engine.project_work(project_id) and not await external_activity.has_active_call(
+                db, project_id
+            ):
                 raise ConflictError("作品仍有操作尚未安全收尾", extra={"code": "project_tasks_not_stopped"})
+            worker_key = await engine.request_worker.require(db)
+            owner_id = project.user_id
+            intent = project_lifecycle.DeletionIntent(project_id, owner_id, actor_id, token, worker_key)
+            db.info["project_deletion_intent"] = intent
             project.deletion_started_at = project_lifecycle.now_utc()
             project.deletion_token = token
-            started = True
-            owner_id = project.user_id
+            project.deletion_worker_key = worker_key
             await db.commit()
             if unsettled:
                 # 意图只冻结新写入；等待时绝不取消任务。等待后必须重新锁内检查持久状态。
-                await _wait_for_external_work(db, engine, actor_id, owner_id, project_id, token)
+                await _wait_for_external_work(db, engine, intent)
             cancelled = await task_service.stop_project_tasks(db, engine, project_id)
             await db.rollback()
-            await authz.require_authenticated(db, actor_id, write=True, targets=(owner_id,))
-            if owner_id != actor_id:
-                await authz.require(db, actor_id, "projects.recycle", write=True, targets=(owner_id,))
-            project = await project_lifecycle.lock_record(db, project_id)
-            if project.deletion_token != token or project.deleted_at is not None:
-                raise ConflictError("作品状态已变化，请刷新后重试")
+            project = await intent.lock(db, engine)
             actor = await _actor(db, actor_id)
-            if project.user_id != actor.id:
-                await authz.require(db, actor_id, "projects.recycle")
             await _ensure_idle(db, engine, project_id)
             stamp = project_lifecycle.now_utc()
             if project.last_deleted_at is not None:
@@ -158,6 +169,7 @@ async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: 
             project.deleted_by_username = actor.username
             project.deletion_started_at = None
             project.deletion_token = None
+            project.deletion_worker_key = None
             audit.summary.lifecycle_action = "soft_delete"
             audit.summary.retention_days = project_lifecycle.RETENTION_DAYS
             audit.summary.cancelled_task_count = cancelled
@@ -167,39 +179,38 @@ async def move_to_recycle_bin(db: AsyncSession, engine: "TaskEngine", actor_id: 
             retrieval_service.invalidate(project_id)
     finally:
         # 先释放请求事务再用独立会话清理，避免异常/取消路径等待自己持有的锁。
-        await db.rollback()
-        if started:
-            cleanup = asyncio.create_task(_release_intent(engine.ctx.sessionmaker, project_id, token))
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                await cleanup
-                raise
+        try:
+            await db.rollback()
+        finally:
+            if intent is not None:
+                db.info.pop("project_deletion_intent", None)
+                cleanup = asyncio.create_task(_release_intent(engine.ctx.sessionmaker, intent))
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    await cleanup
+                    raise
 
 
 async def _wait_for_external_work(
-    db: AsyncSession, engine: "TaskEngine", actor_id: int, owner_id: int, project_id: int, token: str,
+    db: AsyncSession, engine: "TaskEngine", intent: project_lifecycle.DeletionIntent,
 ) -> None:
+    project_id = intent.project_id
     try:
         async with asyncio.timeout(engine.cancel_wait_seconds):
             while True:
-                work = engine.project_work(project_id)
-                if work:
-                    await db.rollback()
-                    # 任一工作结束即可重查；其他工作仍可按原有排空流程取消。
-                    await asyncio.wait(work, return_when=asyncio.FIRST_COMPLETED)
-                await authz.require_authenticated(db, actor_id, write=True, targets=(owner_id,))
-                if owner_id != actor_id:
-                    await authz.require(db, actor_id, "projects.recycle", write=True, targets=(owner_id,))
-                project = await project_lifecycle.lock_record(db, project_id)
-                if project.deletion_token != token or project.deleted_at is not None or project.user_id != owner_id:
-                    raise ConflictError("作品状态已变化，请刷新后重试")
+                await intent.lock(db, engine)
                 if not await has_unsettled_external_change(db, project_id=project_id):
                     await db.rollback()
                     return
-                if not engine.project_work(project_id):
+                work = engine.project_work(project_id)
+                if not work and not await external_activity.has_active_call(db, project_id):
                     raise ConflictError("作品仍有操作尚未安全收尾", extra={"code": "project_tasks_not_stopped"})
                 await db.rollback()
+                if work:
+                    await asyncio.wait(work, timeout=0.05, return_when=asyncio.FIRST_COMPLETED)
+                else:
+                    await asyncio.sleep(0.05)
     except TimeoutError as exc:
         raise ConflictError("等待操作安全收尾超时，作品未删除", extra={"code": "project_tasks_not_stopped"}) from exc
 
@@ -219,7 +230,9 @@ async def _counts(db: AsyncSession, audit: AuditOperation, project_id: int) -> N
 
 
 async def _ensure_idle(db: AsyncSession, engine: "TaskEngine", project_id: int) -> None:
-    if engine.project_work(project_id) or engine.has_cleanup_failure(project_id):
+    await cleanup_work.reap_settled_requests(db, project_id)
+    if (engine.project_work(project_id) or await cleanup_work.has_failure(db, engine, project_id)
+            or await task_service.project_work_exists(db, project_id)):
         raise ConflictError("任务尚未安全收尾，作品未删除", extra={"code": "project_tasks_not_stopped"})
     if await has_unsettled_external_change(db, project_id=project_id):
         raise ConflictError("作品仍有操作尚未安全收尾", extra={"code": "project_tasks_not_stopped"})
@@ -504,14 +517,33 @@ async def purge(
         retrieval_service.invalidate(project_id)
 
 
-async def recover_pending_deletions(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    """仅在单进程启动、引擎尚未运行时调用：失败的旧请求不会自动完成删除。"""
+async def _release_abandoned_deletion_intents(db: AsyncSession) -> None:
+    """只释放已持久确认停止或围栏的发起者留下的同一删除请求。"""
+    abandoned = workers.confirmed_terminal(Project.deletion_worker_key)
+    rows = (await db.execute(select(Project.id, Project.deletion_token, Project.deletion_worker_key).where(
+        Project.deleted_at.is_(None), Project.deletion_token.is_not(None), abandoned,
+    ))).all()
+    for project_id, token, worker_key in rows:
+        await db.execute(update(Project).where(
+            Project.id == project_id, Project.deleted_at.is_(None),
+            Project.deletion_token == token, Project.deletion_worker_key == worker_key,
+        ).values(deletion_started_at=None, deletion_token=None, deletion_worker_key=None,
+                 updated_at=Project.updated_at))
+
+
+async def recover_pending_deletions(
+    sessionmaker: async_sessionmaker[AsyncSession], *, seconds: float = 30, workers_checked: bool = False,
+) -> None:
+    for intent in tuple(_failed_releases.get(sessionmaker, ())):
+        await _release_intent(sessionmaker, intent)
     async with sessionmaker() as db:
-        await db.execute(
-            update(Project)
-            .where(Project.deleted_at.is_(None))
-            .values(deletion_started_at=None, deletion_token=None, updated_at=Project.updated_at)
-        )
+        if await db.scalar(select(Project.id).where(Project.deletion_worker_key.is_not(None)).limit(1)) is None:
+            return
+        if not workers_checked:
+            await workers.prepare_orphan_scan(db, seconds)
+            # 围栏/worker 锁先释放，随后才做作品更新，锁顺序与删除请求兼容。
+            await db.commit()
+        await _release_abandoned_deletion_intents(db)
         await db.commit()
 
 
@@ -568,6 +600,7 @@ class RecycleBinCleaner:
 
     async def _pass(self) -> None:
         try:
+            await recover_pending_deletions(self.engine.ctx.sessionmaker, seconds=self.engine.lease_seconds)
             await purge_expired(self.engine)
         except Exception:
             logger.error("回收站定时清理暂时失败，下个周期重试")

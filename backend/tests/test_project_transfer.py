@@ -45,6 +45,7 @@ from app.models import (
     Task,
     TaskExecutionSlot,
     TaskWorker,
+    TaskWorkRecord,
     WorldSetting,
     WritingStyle,
 )
@@ -636,7 +637,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 16 and data["app_schema"] == "0067"
+    assert data["version"] == 16 and data["app_schema"] == "0068"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1015,9 +1016,10 @@ async def test_round_trip_all_entities(client, app):
     assert src["format"] == "ainovel.project" and src["version"] == 16
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 执行者与任务归属属于源实例，和派生的索引数据一样不随作品导出。
-    assert not {"tasks", "task_workers", "task_lease_store", "task_execution_slots",
+    assert not {"tasks", "task_workers", "task_lease_store", "task_execution_slots", "task_work_records",
                 "kb_chunks", "retrieval_chunks"} & set(src["tables"])
     assert "project_id" not in src["tables"]["characters"][0] and "user_id" not in src["project"]
+    assert "deletion_worker_key" not in src["project"]
 
     foreign_worker = "b15da07f-311a-45e0-8b55-0b4dcaf82c32"
     async with app.state.sessionmaker() as db:
@@ -1025,10 +1027,12 @@ async def test_round_trip_all_entities(client, app):
     imported_tables = {**src["tables"], "task_workers": [{"worker_key": foreign_worker}],
                        "task_execution_slots": [{"execution_key": foreign_worker, "worker_key": foreign_worker}],
                        "task_lease_store": [{"id": 1, "generation": foreign_worker}],
+                       "task_work_records": [{"work_key": foreign_worker, "kind": "execution", "state": "active"}],
                        "tasks": [{"worker_key": foreign_worker, "status": "running"}]}
-    result = await _import(client, {**src, "tables": imported_tables})
-    assert any(all(table in warning for table in ("task_lease_store", "task_workers", "task_execution_slots", "tasks"))
-               for warning in result["preview"]["warnings"])
+    foreign_project = {**src["project"], "deletion_worker_key": foreign_worker}
+    result = await _import(client, {**src, "project": foreign_project, "tables": imported_tables})
+    excluded = ("task_lease_store", "task_workers", "task_execution_slots", "task_work_records", "tasks")
+    assert any(all(table in warning for table in excluded) for warning in result["preview"]["warnings"])
     new = result["project"]
     assert new["title"] == "星海纪元（导入）" and new["id"] != p["id"]
     assert result["counts"]["characters"] == 3 and result["counts"]["chapter_versions"] == 2
@@ -1049,6 +1053,8 @@ async def test_round_trip_all_entities(client, app):
     async with app.state.sessionmaker() as db:
         assert (await db.get(TaskLeaseStore, 1)).generation == original_generation
         assert await db.get(TaskWorker, foreign_worker) is None
+        assert await db.get(TaskWorkRecord, foreign_worker) is None
+        assert (await db.get(Project, new["id"])).deletion_worker_key is None
         assert await db.get(TaskExecutionSlot, foreign_worker) is None
         assert await db.scalar(select(Task.id).where(Task.worker_key == foreign_worker)) is None
         pid = new["id"]
@@ -1646,7 +1652,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (16, "0067")
+    assert (data["version"], data["app_schema"]) == (16, "0068")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)

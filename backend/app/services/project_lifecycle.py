@@ -1,7 +1,9 @@
 """作品生命周期的显式查询条件与父行事务屏障，不改变拥有权规则。"""
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,9 @@ from sqlalchemy.orm.util import identity_key
 
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Project
+
+if TYPE_CHECKING:
+    from app.services.task_engine.engine import TaskEngine
 
 RETENTION_DAYS = 30
 LIFECYCLE_FIELDS = frozenset(
@@ -19,8 +24,33 @@ LIFECYCLE_FIELDS = frozenset(
         "deleted_by_username",
         "deletion_started_at",
         "deletion_token",
+        "deletion_worker_key",
     }
 )
+
+
+
+@dataclass(frozen=True)
+class DeletionIntent:
+    project_id: int
+    owner_id: int
+    actor_id: int
+    token: str
+    worker_key: str
+
+    async def lock(self, db: AsyncSession, engine: "TaskEngine") -> Project:
+        """每次跨事务写入前确认仍是被授权、未被接管的同一删除请求。"""
+        from app.services import authorization_service as authz
+
+        await authz.require_authenticated(db, self.actor_id, write=True, targets=(self.owner_id,))
+        if self.actor_id != self.owner_id:
+            await authz.require(db, self.actor_id, "projects.recycle", write=True, targets=(self.owner_id,))
+        project = await lock_record(db, self.project_id)
+        if (project.deletion_token != self.token or project.deletion_worker_key != self.worker_key
+                or project.user_id != self.owner_id or project.deleted_at is not None):
+            raise ConflictError("作品状态已变化，请刷新后重试")
+        await engine.request_worker.require(db, self.worker_key)
+        return project
 
 
 def now_utc() -> datetime:

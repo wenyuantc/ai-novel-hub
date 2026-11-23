@@ -21,6 +21,7 @@ from app.schemas.agent import ChangeOut
 from app.services import ai_config_service, project_access, project_ai_config, project_lifecycle, project_service
 from app.services import authorization_service as authz
 from app.services.agent import context, history, mcp_tools, transactions
+from app.services.agent.external_activity import ExternalActivity, drain
 from app.services.agent.tools import get_tool, list_tools
 from app.services.agent.tools import tasks as tasks_tool
 from app.services.agent.tools.base import ToolCtx
@@ -174,12 +175,12 @@ async def require_no_unknown_external(db, *, project_id: int, conversation_id: i
     from app.services.agent import service
 
     rows = await db.execute(select(AgentChange.project_id, AgentChange.kind, AgentChange.status,
-                                   AgentChange.result, AgentChange.error).where(
+                                   AgentChange.result, AgentChange.error, AgentChange.external_worker_key).where(
         AgentChange.conversation_id == conversation_id,
     ))
     private_keys = {"_external_outcome_unknown", "_external_claim_id", "_external_task_key", "_external_execution",
                     "_external_snapshot_mac"}
-    for row_project_id, kind, status, result, error in rows:
+    for row_project_id, kind, status, result, error, owner in rows:
         marked = isinstance(result, dict) and bool(private_keys.intersection(result))
         invalid_external = kind == "external" and (
             status not in {"proposed", "rejected", "executed", "failed", "undone"}
@@ -191,7 +192,7 @@ async def require_no_unknown_external(db, *, project_id: int, conversation_id: i
                 not isinstance(result, dict) or not isinstance(result.get("text"), str)
             )
         )
-        if marked or invalid_external or kind == "external" and row_project_id != project_id:
+        if owner is not None or marked or invalid_external or kind == "external" and row_project_id != project_id:
             raise _external_unknown_error()
 
 
@@ -208,16 +209,18 @@ class _AutoExternalClaim:
     change_snapshot: str
     task_snapshot: str
     snapshot_mac: str
+    activity: ExternalActivity | None = None
 
 
 def _claim_conditions(claim: _AutoExternalClaim):
     job = claim.job
-    return (
+    conditions = (
         AgentChange.id == claim.change_id, AgentChange.change_key == claim.change_key,
         AgentChange.conversation_id == job.conversation_id, AgentChange.project_id == job.project_id,
         AgentChange.turn_task_id == job.task_id, AgentChange.turn_task_key == job.task_key,
         AgentChange.tool_call_id == claim.call_id, AgentChange.kind == "external",
         AgentChange.status == "executing", AgentChange.executed_at == claim.started_at,
+        AgentChange.external_worker_key == (claim.activity.worker_key if claim.activity else None),
         AgentChange.result["_external_claim_id"].as_string() == claim.claim_id,
         AgentChange.result["_external_task_key"].as_string() == job.task_key,
         AgentChange.result["_external_snapshot_mac"].as_string() == claim.snapshot_mac,
@@ -229,6 +232,7 @@ def _claim_conditions(claim: _AutoExternalClaim):
             AgentConversation.project_id == job.project_id,
         )),
     )
+    return (*conditions, claim.activity.active()) if claim.activity is not None else conditions
 
 
 async def _claim_payload_matches(db, claim: _AutoExternalClaim) -> bool:
@@ -250,7 +254,7 @@ async def _claim_payload_matches(db, claim: _AutoExternalClaim) -> bool:
             task_key=job.task_key, queued_at=job.queued_at, execution_key=job.execution_key,
             change_id=claim.change_id, change_key=claim.change_key, claim_id=claim.claim_id,
             tool_call_id=claim.call_id, started_at=claim.started_at, task_evidence=claim.task_snapshot,
-            change_evidence=claim.change_snapshot,
+            change_evidence=claim.change_snapshot, worker_key=claim.activity.worker_key if claim.activity else None,
         )
     except Exception:  # noqa: BLE001
         return False
@@ -326,8 +330,10 @@ async def _settle_external_claim(ctx: TaskContext, claim: _AutoExternalClaim, *,
             data["_external_snapshot_mac"] = claim.snapshot_mac
         await db.execute(update(AgentChange).where(*_claim_conditions(claim)).values(
             status="failed", error=service.EXTERNAL_INTERRUPTED if unknown else service.EXTERNAL_NOT_SENT,
-            result=data,
+            result=data, external_worker_key=None,
         ).execution_options(synchronize_session=False))
+        if claim.activity is not None:
+            await claim.activity.finish(db)
         await db.commit()
 
 
@@ -347,17 +353,6 @@ async def _confirm_external_result(ctx: TaskContext, claim: _AutoExternalClaim, 
             AgentChange.tool_call_id == call["id"],
         ))
         return stored is not None and stored.content == context.tool_result(value) and remaining is None
-
-
-async def _drain(coro):
-    """取消不能中断独立数据库收尾或遗留的 MCP 网络工作。"""
-    task = asyncio.create_task(coro)
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            continue
-    return task.result()
 
 
 def _canonical_uuid(value: object) -> bool:
@@ -531,19 +526,21 @@ async def _external_call(
             queued = (job.queued_at.replace(tzinfo=UTC) if job.queued_at.tzinfo is None
                       else job.queued_at.astimezone(UTC)).isoformat()
             claim_id, change_key, started_at = str(uuid4()), str(uuid4()), datetime.now(UTC)
+            current_execution = job.execution_state.current
+            if not current_execution.worker_key:
+                raise _StaleAgentExecution()
             change = AgentChange(
                 change_key=change_key, conversation_id=job.conversation_id, project_id=job.project_id,
                 turn_task_id=job.task_id, turn_task_key=job.task_key, tool_call_id=call["id"],
                 tool_name=call["name"], arguments=args, kind="external",
                 preview=mcp_tools.preview(external.entry, external, args), seq=(count or 0) + 1,
-                status="executing", executed_at=started_at,
+                status="executing", executed_at=started_at, external_worker_key=current_execution.worker_key,
                 result={"_external_claim_id": claim_id, "_external_task_key": job.task_key,
                         "_external_execution": {"queued_at": queued, "execution_key": job.execution_key,
                                                 "actor_token_version": job.actor_token_version}},
             )
             db.add(change)
             await db.flush()
-            current_execution = job.execution_state.current
             task_snapshot = _execution_task_snapshot(current_execution)
             original_task = await db.get(Task, job.task_id, populate_existing=True)
             if mcp_tools.task_snapshot(original_task) != task_snapshot:
@@ -556,12 +553,15 @@ async def _external_call(
                 change_id=change.id, change_key=change_key, claim_id=claim_id,
                 tool_call_id=call["id"], started_at=started_at, stamp=job.stamp,
                 execution=current_execution, task_snapshot=task_snapshot, change_snapshot=change_snapshot,
+                worker_key=current_execution.worker_key,
             )
             mac = mcp_tools.identity_snapshot_mac(db.info.get("agent_view_hmac_key"), send_identity)
+            activity = send_identity.activity()
+            activity.register(db)
             change.result = {**change.result, "_external_snapshot_mac": mac}
             await db.flush()
             claim = _AutoExternalClaim(job, change.id, change_key, claim_id, call["id"], started_at, queued,
-                                       current_execution, change_snapshot, task_snapshot, mac)
+                                       current_execution, change_snapshot, task_snapshot, mac, activity)
             state = mcp_tools.McpSendState()
             value = None
             try:
@@ -577,34 +577,36 @@ async def _external_call(
                 removed = await db.execute(delete(AgentChange).where(*_claim_conditions(claim)))
                 if removed.rowcount != 1:
                     raise _external_unknown_error()
+                await activity.finish(db)
                 # 移除占用和持久工具结果同事务；成功时不改变公开提案列表。
                 await _result(db, job, call, value, commit=commit)
             except BaseException as exc:
                 # 事务确认未知、权限变化和取消均不能用现在的任务值冒认原调用。
                 # 开始发送后不能继续模型或重放；未发送则记录明确的普通失败。
                 try:
-                    await _drain(db.rollback())
+                    await drain(db.rollback())
                 except Exception:  # noqa: BLE001
                     try:
-                        await _drain(db.invalidate())
+                        await drain(db.invalidate())
                     except Exception:  # noqa: BLE001
                         pass
                 try:
-                    await _drain(sessions.aclose())
+                    await drain(sessions.aclose())
                 except Exception:  # noqa: BLE001
                     pass
                 confirmed = False
                 if state.started and isinstance(value, dict) and not isinstance(exc, asyncio.CancelledError):
                     try:
-                        confirmed = await _drain(_confirm_external_result(ctx, claim, call, value))
+                        confirmed = await drain(_confirm_external_result(ctx, claim, call, value))
                     except Exception:  # noqa: BLE001
                         pass
                 if not confirmed:
                     try:
-                        await _drain(_settle_external_claim(ctx, claim, unknown=state.started))
+                        await drain(_settle_external_claim(ctx, claim, unknown=state.started))
                     except Exception:  # noqa: BLE001
-                        # 收尾不可证明时留下 executing 作为永久屏障。
+                        # 收尾不可证明时保留 executing；原调用退出后只允许按原身份恢复。
                         pass
+                    await drain(activity.confirm_exit(ctx.task_engine.lease))
                 if confirmed:
                     # 已确证同事务的结果，不需要也不能重复发送。
                     pass

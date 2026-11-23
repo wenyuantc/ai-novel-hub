@@ -40,6 +40,7 @@ from app.services.project_transfer import importer as transfer_importer
 from app.services.system_settings_service import SystemSettingsManager
 from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
+from app.services.task_engine.request_worker import RequestWorkerScope
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,8 @@ def create_app(
             await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
             await style_service.sync_presets(app_.state.sessionmaker)
             await book_import_service.purge_expired_all(app_.state.sessionmaker)
-            await recycle_bin_service.recover_pending_deletions(app_.state.sessionmaker)
+            cleanup.push_async_callback(app_.state.task_engine.request_worker.stop)
+            await app_.state.task_engine.request_worker.start()
             await task_statistics_service.initialize_tracking(app_.state.sessionmaker)
             if start_task_engine:
                 cleanup.push_async_callback(app_.state.task_engine.stop)
@@ -249,6 +251,7 @@ def create_app(
     register_error_handlers(app)
 
     app.add_middleware(_BackupResponseHeaders)
+    app.add_middleware(RequestWorkerScope, worker=app.state.task_engine.request_worker)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict:

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import text
+from sqlalchemy import Connection, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -231,11 +231,18 @@ def _bootstrap(main: sqlite3.Connection, base: Path, *, cold: bool = False) -> N
         if cold:
             main.execute("UPDATE task_workers SET fenced_at=CURRENT_TIMESTAMP "
                          "WHERE stopped_at IS NULL AND fenced_at IS NULL")
-            has_slots = main.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_execution_slots'")
-            if has_slots.fetchone():
-                main.execute("DELETE FROM task_execution_slots WHERE worker_key IN "
-                             "(SELECT worker_key FROM task_workers "
-                             "WHERE stopped_at IS NOT NULL OR fenced_at IS NOT NULL)")
+            terminal_owners = ("worker_key IN (SELECT worker_key FROM task_workers "
+                               "WHERE stopped_at IS NOT NULL OR fenced_at IS NOT NULL)")
+            tables = {row[0] for row in main.execute(
+                "SELECT name FROM sqlite_schema WHERE type='table' "
+                "AND name IN ('task_execution_slots','task_work_records')"
+            )}
+            if "task_execution_slots" in tables:
+                main.execute("DELETE FROM task_execution_slots WHERE " + terminal_owners)
+            if "task_work_records" in tables:
+                # 旧执行者已离线；请求清理和失败记录仍须凭原收据单独核对。
+                main.execute("DELETE FROM task_work_records WHERE kind='execution' AND state='active' AND "
+                             + terminal_owners)
         established = _anchor(guard)
         generation = previous.generation if previous and not cold else str(uuid4())
         if previous is None and _side(base).exists():
@@ -434,6 +441,18 @@ def _guard_offline(stack: ExitStack, path: Path, *, expected: _Binding | None = 
         raise _invalid()
 
 
+def _guard_paired_side(stack: ExitStack, path: Path, binding: _Binding) -> None:
+    _guard_offline(stack, _lock(path), expected=binding)
+    if binding.lease_file != _identity(_side(path)):
+        raise _invalid()
+    with closing(_connect(_side(path), "ro")) as side:
+        if _side_meta(side) != (binding.generation, binding.main_path, binding.main_file, binding.lock_file):
+            raise _invalid()
+        if side.execute("SELECT 1 FROM worker_leases WHERE stopped_at IS NULL AND fenced_at IS NULL LIMIT 1"
+                        ).fetchone():
+            raise SQLiteLeasePairError("租约库中仍有未停止的执行者，拒绝降级")
+
+
 def guard_downgrade(path: Path) -> ExitStack:
     """持有生命周期独占锁到 Alembic 归还连接，覆盖旁库已启动、主库登记尚未提交的窗口。"""
     with _pair_errors(), ExitStack() as stack:
@@ -443,15 +462,20 @@ def guard_downgrade(path: Path) -> ExitStack:
             return stack.pop_all()
         if not binding.lease_file or binding.main_file != _identity(path) or binding.main_path != str(path):
             raise _invalid()
-        _guard_offline(stack, _lock(path), expected=binding)
-        if binding.lease_file != _identity(_side(path)):
-            raise _invalid()
-        with closing(_connect(_side(path), "ro")) as side:
-            if _side_meta(side) != (binding.generation, binding.main_path, binding.main_file, binding.lock_file):
+        _guard_paired_side(stack, path, binding)
+        return stack.pop_all()
+
+
+def guard_memory_migration(db: Connection) -> ExitStack:
+    """用内存主库已登记的代次核对其旁库，防止启动者只完成了侧库登记。"""
+    with _pair_errors(), ExitStack() as stack:
+        row = db.exec_driver_sql(_BINDING).first()
+        if row is not None:
+            binding = _Binding(*row)
+            if (not _valid_generation(binding.generation) or binding.main_path != ":memory:"
+                    or binding.main_file != binding.generation or not binding.lease_file):
                 raise _invalid()
-            if side.execute("SELECT 1 FROM worker_leases WHERE stopped_at IS NULL AND fenced_at IS NULL LIMIT 1"
-                            ).fetchone():
-                raise SQLiteLeasePairError("租约库中仍有未停止的执行者，拒绝降级")
+            _guard_paired_side(stack, Path(_memory_directory().name) / binding.generation, binding)
         return stack.pop_all()
 
 

@@ -221,11 +221,13 @@ class BatchHandler:
     async def verify_event(
         self, db: AsyncSession, task: Task, *, job: batch_service.BatchJob,
         execution: TaskExecutionIdentity, current_execution: TaskExecutionIdentity, event: str, data: dict[str, Any],
+        cancellation_operation: str | None = None,
     ) -> None:
         """引擎持原认证和任务锁；输出只能来自已验证的批量轮次及本章 attempt。"""
         if (type(job) is not batch_service.BatchJob or job.execution_identity != execution
                 or job.task_execution_identity != current_execution or not same_execution(execution, current_execution)
-                or not matches_running(current_execution, task) or not isinstance(data, dict)):
+                or not matches_running(current_execution, task, cancellation_operation=cancellation_operation)
+                or not isinstance(data, dict)):
             raise ConflictError("批量输出身份已变化", extra={"code": "chapter_claim_changed"})
         if event in {"delta", "continue"} and job.active_claim is None:
             raise ConflictError("批量正文缺少当前章节占用", extra={"code": "chapter_claim_changed"})
@@ -300,7 +302,8 @@ class BatchHandler:
         if status not in {"succeeded", "paused"} or not isinstance(result, dict) or text != job.verified_text:
             raise ConflictError("批量结果身份已变化", extra={"code": "chapter_claim_changed"})
         await self.verify_event(db, task, job=job, execution=execution, current_execution=current_execution,
-                                event="done" if status == "succeeded" else "paused", data=result)
+                                event="done" if status == "succeeded" else "paused", data=result,
+                                cancellation_operation=task.admin_cancel_operation_id)
 
     def progress(self, task: Task, text: str) -> int:
         job = self._jobs.get(self._identity(task.id, task.statistics_key, task.queued_at, task.execution_key))

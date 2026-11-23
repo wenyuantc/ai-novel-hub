@@ -1,4 +1,4 @@
-"""引擎内的持久取消意图 drain：单进程 single-flight，独立于 HTTP 生存。"""
+"""引擎内的持久取消意图 drain：按原轮次和操作号认领，独立于受理 HTTP 请求。"""
 
 import asyncio
 import logging
@@ -8,9 +8,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
 
-from app.models import Task
+from app.models import Task, TaskWorkRecord
 from app.models.entities import OPEN_TASK_STATUSES
 from app.services import chapter_claim, project_lifecycle, task_service, task_statistics_service
+from app.services.task_engine import admin_cleanup, cleanup_work, workers
 from app.services.task_engine.registry import get_handler
 
 if TYPE_CHECKING:
@@ -81,6 +82,10 @@ def _chapter_receipt(task: Task, operation_id: str) -> dict | None:
 class AdminCancellationDrain:
     def __init__(self, engine: "TaskEngine"):
         self.engine = engine
+        self.attempts: set[str] = set()
+        self.pending_releases: dict[str, TaskWorkRecord] = {}
+        self.uncertain_claims: set[tuple[str, str]] = set()
+        self.release_task: asyncio.Task | None = None
         self.work: dict[tuple[str, str], asyncio.Task] = {}
         # 启动遗留running即使第一次abort失败，后续仍按原重启中断语义收尾。
         self.recovering: dict[str, tuple[datetime | None, str | None]] = {}
@@ -97,10 +102,35 @@ class AdminCancellationDrain:
         self.work[identity] = work
         work.add_done_callback(lambda t: self.work.pop(identity, None))
 
+    async def commit_claim(self, db, task_key: str, operation_id: str) -> None:
+        try:
+            await db.commit()
+        except (Exception, asyncio.CancelledError):
+            self.uncertain_claims.add((task_key, operation_id))
+            raise
+
+    def schedule_confirmations(self) -> None:
+        for key in self.uncertain_claims.copy():
+            if key not in self.work:
+                self.request(*key)
+        if self.pending_releases and (self.release_task is None or self.release_task.done()):
+            self.release_task = asyncio.create_task(self.retry_releases(), name="admin-cleanup-exit-confirmation")
+
+    async def retry_releases(self) -> None:
+        """HTTP worker 保持心跳期间，即使调度已停止仍确认归还已退出的清理。"""
+        for attempt, record in list(self.pending_releases.items()):
+            try:
+                await admin_cleanup.relinquish(self.engine, record)
+            except Exception:  # noqa: BLE001  精确 attempt 继续保留，绝不凭更新回执猜测已归还。
+                logger.warning("管理员取消清理退出确认待重试 operation=%s", record.operation_id)
+            else:
+                self.pending_releases.pop(attempt, None)
+
     async def scan(self) -> None:
         completed, winners = dict(self.completed), dict(self.winners)
         cached_keys = set(completed) | set(winners) | set(self.recovering)
         async with self.engine.ctx.sessionmaker() as db:
+            await admin_cleanup.reap_finished(db)
             metadata = select(
                 Task.statistics_key, Task.admin_cancel_operation_id, Task.queued_at, Task.status, Task.execution_key
             )
@@ -154,9 +184,13 @@ class AdminCancellationDrain:
                 Task.statistics_key == task_key, Task.admin_cancel_operation_id == operation_id
             ))
             # 非本进程的 running 意图留给其执行者，或等失联后由成功认领者收尾。
-            if (row is not None and row.status == "running" and row.worker_key is not None
-                    and (row.worker_key != self.engine.lease.worker_key or not self.engine.lease.valid)):
-                return None
+            if row is not None and row.status == "running" and row.worker_key is not None:
+                if not any(lease.valid and lease.worker_key == row.worker_key
+                           for lease in (self.engine.lease, self.engine.request_worker)):
+                    return None
+                if (row.id, task_key, row.execution_key) in self.engine._adopted:
+                    # C1 正在恢复该轮，等它核对完收据并移交，不能同时调用回退。
+                    return None
             return row
 
     async def _clear_chapter_receipt(self, task: Task, operation_id: str, receipt: dict) -> Task | None:
@@ -179,10 +213,13 @@ class AdminCancellationDrain:
                 Task.input[_CHAPTER_RECEIPT]["operation_id"].as_string() == operation_id,
                 Task.input[_CHAPTER_RECEIPT]["claim_key"].as_string() == receipt["claim_key"],
             ).values(input=payload, execution_key=None, admin_cancel_operation_id=None,
-                     admin_cancel_requested_at=None).execution_options(synchronize_session="fetch"))
+                     admin_cancel_requested_at=None, cancel_requested_at=None)
+                .execution_options(synchronize_session="fetch"))
             if changed.rowcount != 1:
                 await db.rollback()
                 return None
+            await cleanup_work.clear_chapter_failure(db, task, receipt)
+            await admin_cleanup.finish(db, task, operation_id)
             try:
                 await db.commit()
             except Exception:
@@ -223,12 +260,17 @@ class AdminCancellationDrain:
                 Task.worker_key == task.worker_key,
                 Task.admin_cancel_operation_id == operation_id,
                 Task.input[_CHAPTER_INTENT]["claim_key"].as_string() == claim.claim_key,
-            ).values(status=status, error="服务重启，任务已中断" if status == "interrupted" else "任务已取消",
+            ).values(status=status, cancel_requested_at=None,
+                     error="服务重启，任务已中断" if status == "interrupted" else "任务已取消",
                      stage=task_service.STAGE_LABELS[status], finished_at=stamp)
                 .execution_options(synchronize_session=False))
             if changed.rowcount != 1:
                 await db.rollback()
                 return None
+            await admin_cleanup.check_owner(db)
+            if task.status == "running" and task.worker_key is not None:
+                if not await workers.lock_live_worker(db, task.worker_key):
+                    return None
             if not await chapter_claim.release_chapter_claim(db, claim):
                 await db.rollback()
                 return None
@@ -277,9 +319,14 @@ class AdminCancellationDrain:
 
     async def _drain(self, task_key: str, operation_id: str) -> None:
         engine = self.engine
+        attempt = str(uuid4())
+        record = None
+        token = None
+        self.attempts.add(attempt)
         try:
             task = await self._load(task_key, operation_id)
             if task is None:
+                self.uncertain_claims.discard((task_key, operation_id))
                 return
             with engine.cleanup_scope(task):
                 if task.status not in OPEN_TASK_STATUSES:
@@ -293,7 +340,12 @@ class AdminCancellationDrain:
                     logger.error("任务取消标记与终态不一致 task_key=%s operation=%s", task_key, operation_id)
                     return
                 if task.status == "queued" and task.execution_key is not None:
-                    # 用户取消已保留原资源与清理标记，不能并发重复执行 abort。
+                    # 本人先保留原资源；只接续已证明退出的请求，不并发执行同一 abort。
+                    async with engine.ctx.sessionmaker() as db:
+                        await task_service.retry_project_cleanup_failures(
+                            db, engine, task.project_id,
+                            queued_admin=(task.id, task_key, task.queued_at, task.execution_key, operation_id),
+                        )
                     return
                 execution = engine._running.get(task.id)
                 if task.status == "running" and execution is not None and not execution.done():
@@ -315,11 +367,35 @@ class AdminCancellationDrain:
                              or task.id in engine._running_execution_keys)):
                     # 登记与退出的窗口不能只凭 _running 映射缺失推断执行体已经停止。
                     return
+                round_at = self.round_at(task)
+                recovering = (task.status == "running"
+                              and self.recovering.get(task_key) == (round_at, task.execution_key))
+                if task.status == "running" and task.worker_key is None and task.recovered_at is None:
+                    # 在线受理的旧无主执行通过 C1 取得处理权，另一次启动已接管的行不能在这里再领。
+                    owner = engine.lease.worker_key if engine.lease.valid else engine.request_worker.worker_key
+                    if owner is None:
+                        return
+                    async with engine.ctx.sessionmaker() as db:
+                        await workers.prepare_orphan_scan(db, engine.lease_seconds)
+                        if not await workers.adopt(db, task.id, task_key, task.execution_key, None, owner):
+                            return
+                        await admin_cleanup.reserve_adopted(db, task.id, recovery=recovering)
+                        await self.commit_claim(db, task_key, operation_id)
+                    task = await self._load(task_key, operation_id)
+                    if task is None:
+                        return
                 winner = self.winners.get(task_key)
-                round_at = task.queued_at.replace(tzinfo=None) if task.queued_at is not None else None
+                record = await admin_cleanup.claim(engine, task, operation_id, attempt, recovery=recovering)
+                self.uncertain_claims.discard((task_key, operation_id))
+                if record is None:
+                    return
+                token = admin_cleanup.current.set(record)
+                recovering = record.evidence["recovery"]
                 if (task.status == "running" and winner is not None and winner[0] == round_at
                         and (winner[2] if len(winner) > 2 else None) == task.execution_key):
                     winner_task = winner[3] if len(winner) > 3 else task
+                    if winner_task.worker_key is None and winner[1].get("execution_identity") is None:
+                        winner_task.worker_key = task.worker_key
                     row, committed = await engine.complete_state(
                         winner_task, expected_status="running", abort_ok=True, operation_id=operation_id, **winner[1]
                     )
@@ -358,7 +434,7 @@ class AdminCancellationDrain:
                     except Exception:  # noqa: BLE001  收据或存储不可核验时保留原执行和意图。
                         pass
                     if task.project_id is not None:
-                        engine.remember_abort_failure(task.project_id, None)
+                        await engine.record_abort_failure(task.project_id, None, task=task)
                     engine.remember_uncertain_execution(task)
                     logger.error("管理员取消的分析执行事实待核对 task=%s", task.id)
                     return
@@ -367,7 +443,7 @@ class AdminCancellationDrain:
                 ):
                     # 原向导可能已发送或提交，孤立执行的缺证状态不能当作安全 abort。
                     if task.project_id is not None:
-                        engine.remember_abort_failure(task.project_id, None)
+                        await engine.record_abort_failure(task.project_id, None, task=task)
                     engine.remember_uncertain_execution(task)
                     logger.error("管理员取消的向导执行事实待核对 task=%s", task.id)
                     return
@@ -398,7 +474,7 @@ class AdminCancellationDrain:
                                 return
                             snapshot = batch_service.capture_abort_snapshot(task, recovery=True)
                             if snapshot.claim is not None:
-                                interrupted = self.recovering.get(task_key) == (round_at, task.execution_key)
+                                interrupted = recovering
                                 status = "interrupted" if interrupted else "cancelled"
                                 row, committed = await engine.complete_state(
                                     task, expected_status="running", status=status, result=None,
@@ -413,7 +489,7 @@ class AdminCancellationDrain:
                     except Exception:  # noqa: BLE001  未证实的提案/章节收据都继续持有屏障。
                         pass
                     if task.project_id is not None:
-                        engine.remember_abort_failure(task.project_id, None)
+                        await engine.record_abort_failure(task.project_id, None, task=task)
                     engine.remember_uncertain_execution(task)
                     logger.error("管理员取消的批量执行事实待核对 task=%s", task.id)
                     return
@@ -425,7 +501,7 @@ class AdminCancellationDrain:
                                for work in engine._cleanup_work.get(task.project_id, {})):
                             return
                     interrupted = (task.status == "running"
-                                   and self.recovering.get(task_key) == (round_at, task.execution_key))
+                                   and recovering)
                     row = await self._complete_chapter(
                         task, operation_id, status="interrupted" if interrupted else "cancelled",
                     )
@@ -446,11 +522,12 @@ class AdminCancellationDrain:
                     return
                 # 未知kind不能猜测如何安全释放资源，保留pending供后续修复。
                 handler = get_handler(task.kind)
-                if not released_review:
-                    await handler.on_abort(engine.ctx, task)
+                if task.status == "running" and task.recovered_at is not None:
+                    return
+                if not released_review and not await admin_cleanup.abort_once(engine, task, record, handler):
+                    return
                 interrupted = (task.status == "running"
-                               and self.recovering.get(task_key) == (round_at, task.execution_key)
-                               and not released_review)
+                               and recovering and not released_review)
                 status = "interrupted" if interrupted else "cancelled"
                 error = "服务重启，任务已中断" if interrupted else "任务已取消"
                 row, committed = await engine.complete_state(
@@ -463,6 +540,13 @@ class AdminCancellationDrain:
         except Exception:
             # 不输出SQL参数、私有插件异常或上游错误；marker是唯一重试依据。
             logger.error("管理员取消安全收尾未完成 task_key=%s operation=%s", task_key, operation_id)
+        finally:
+            if token is not None:
+                admin_cleanup.current.reset(token)
+            self.attempts.discard(attempt)
+            if record is not None:
+                self.pending_releases[attempt] = record
+                await self.retry_releases()
 
     def _forget_released_chapter_failure(self, task: Task) -> None:
         """本轮已按同一 claim 原子释放；仅精确同一轮次的失败快照可遗忘，不推断其他代次。"""

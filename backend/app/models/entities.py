@@ -261,6 +261,7 @@ class Project(TimestampMixin, Base):
     deleted_by_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     deletion_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deletion_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    deletion_worker_key: Mapped[str | None] = mapped_column(String(36))
     # 旧的写作风格自由文本：迁移 0013 起不再读写（已迁移为项目的「原风格」），下一个大版本删除
     style: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="planning", nullable=False)
@@ -837,6 +838,24 @@ class TaskExecutionSlot(Base):
     serial_key: Mapped[str | None] = mapped_column(String(100), index=True)
 
 
+class TaskWorkRecord(Base):
+    """在途执行、清理与失败证明。原任务裁剪后仍按独立工作身份保留。"""
+
+    __tablename__ = "task_work_records"
+
+    work_key: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    project_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    worker_key: Mapped[str | None] = mapped_column(String(36), index=True)
+    task_id: Mapped[int | None] = mapped_column(Integer)
+    task_key: Mapped[str | None] = mapped_column(String(36))
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_key: Mapped[str | None] = mapped_column(String(36))
+    operation_id: Mapped[str | None] = mapped_column(String(36))
+    state: Mapped[str] = mapped_column(String(32))
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
+
+
 class Task(TimestampMixin, Base):
     """持久化后台任务。tasks 表即队列：进程内调度器按 id 先进先出领取 queued 任务。"""
 
@@ -899,7 +918,9 @@ class Task(TimestampMixin, Base):
     queued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=True
     )
-    # 受理与成功审计同事务；真实收尾的状态提交原子清空，不代表已取消。
+    # 本人或作品删除对当前运行轮次提交的停止请求。
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 管理员受理与成功审计同事务，真实收尾的状态提交原子清空。
     admin_cancel_operation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     admin_cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

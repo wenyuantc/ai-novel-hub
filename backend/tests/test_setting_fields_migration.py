@@ -171,8 +171,11 @@ def _create_pre_scene_anchor_contract(connection):
 
 
 def _schema_0055_model_contract(inspector, table):
-    """0056 为缩略图复合外键新增的索引不属于更早版本。"""
+    """从当前 ORM 的反射结果中移除 0055 之后新增的字段和索引。"""
     contract = _schema_contract(inspector, table)
+    if table == "projects":
+        # 删除请求的执行者归属由 0068 引入。
+        assert contract["columns"].pop("deletion_worker_key") == ("VARCHAR(36)", True, None)
     added_index = {
         "organizations": ("uq_organizations_project_id_id", "project_id"),
         "careers": ("uq_careers_project_id_id", "project_id"),

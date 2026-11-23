@@ -82,11 +82,15 @@ async def stop(pair: SQLiteLeasePair, key: str) -> None:
     await asyncio.to_thread(_transaction, pair, True, halt)
 
 
-async def fence_expired(pair: SQLiteLeasePair, seconds: float) -> None:
+async def fence_expired(pair: SQLiteLeasePair, seconds: float, worker_key: str | None = None) -> None:
     def fence(db: sqlite3.Connection) -> None:
-        db.execute(f"UPDATE worker_leases SET fenced_at = {_NOW} WHERE stopped_at IS NULL AND fenced_at IS NULL "
-                   "AND julianday(heartbeat_at) < julianday('now', ?)",
-                   (f"-{seconds:g} seconds",))
+        statement = (f"UPDATE worker_leases SET fenced_at = {_NOW} WHERE stopped_at IS NULL AND fenced_at IS NULL "
+                     "AND julianday(heartbeat_at) < julianday('now', ?)")
+        parameters = [f"-{seconds:g} seconds"]
+        if worker_key is not None:
+            statement += " AND worker_key = ?"
+            parameters.append(worker_key)
+        db.execute(statement, parameters)
 
     await asyncio.to_thread(_transaction, pair, True, fence)
 

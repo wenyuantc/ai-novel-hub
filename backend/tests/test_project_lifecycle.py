@@ -195,11 +195,15 @@ async def test_restart_clears_only_pending_intents_without_undeleting_trash(app,
     pending = await create_project(client)
     trashed = await create_project(client, title="已删除")
     assert (await client.delete(f"/api/v1/projects/{trashed['id']}")).status_code == 204
+    previous_worker = app.state.task_engine.request_worker.worker_key
     await app.state.task_engine.stop()
+    await app.state.task_engine.request_worker.stop()
     async with app.state.sessionmaker() as db:
         row = await db.get(Project, pending["id"])
+        row.deletion_worker_key = previous_worker
         row.deletion_started_at, row.deletion_token = project_lifecycle.now_utc() - timedelta(hours=1), "old-process"
         await db.commit()
+    await app.state.task_engine.request_worker.start()
     await recycle_bin_service.recover_pending_deletions(app.state.sessionmaker)
     await app.state.task_engine.start()
     async with app.state.sessionmaker() as db:

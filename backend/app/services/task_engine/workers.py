@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.errors import ConflictError
-from app.models import Task, TaskExecutionSlot, TaskWorker
+from app.models import AgentChange, Project, Task, TaskExecutionSlot, TaskWorker, TaskWorkRecord
 from app.services.ai_dispatch import is_sqlite_busy
 from app.services.task_engine import sqlite_lease_pair, sqlite_worker_leases
 
@@ -84,6 +85,13 @@ def registered_worker_exists(worker_key: str | InstrumentedAttribute[str | None]
     ).exists()
 
 
+def confirmed_terminal(worker_key: str | InstrumentedAttribute[str | None]):
+    """已提交到主库的不可逆终止决定，未登记或暂不可核验的 worker 不匹配。"""
+    return select(TaskWorker.worker_key).where(
+        TaskWorker.worker_key == worker_key, or_(TaskWorker.stopped_at.is_not(None), TaskWorker.fenced_at.is_not(None)),
+    ).exists()
+
+
 def _pg_orphan_running_condition(cutoff: datetime | str):
     live_owner = select(TaskWorker.worker_key).where(
         TaskWorker.worker_key == Task.worker_key, _pg_live_worker_condition(cutoff),
@@ -137,18 +145,24 @@ async def _release_confirmed_slots(db: AsyncSession, worker_key: str | None = No
         terminal = terminal.where(TaskWorker.worker_key == worker_key)
     await db.execute(delete(TaskExecutionSlot).where(TaskExecutionSlot.worker_key.in_(terminal))
                      .execution_options(synchronize_session=False))
+    # 只收回正常执行体的工作登记。请求侧清理、失败屏障及外部调用另有业务收据。
+    await db.execute(delete(TaskWorkRecord).where(
+        TaskWorkRecord.kind == "execution", TaskWorkRecord.state == "active", TaskWorkRecord.worker_key.in_(terminal),
+    ).execution_options(synchronize_session=False))
 
 
-async def _pg_fence_expired(db: AsyncSession, cutoff: datetime | str) -> None:
+async def _pg_fence_expired(db: AsyncSession, cutoff: datetime | str, worker_key: str | None = None) -> None:
     if db.get_bind().dialect.name != "postgresql":
         raise ValueError("仅 PostgreSQL 使用主库心跳判定失联")
     expired = (TaskWorker.stopped_at.is_(None), TaskWorker.fenced_at.is_(None), TaskWorker.heartbeat_at < cutoff)
+    if worker_key is not None:
+        expired += (TaskWorker.worker_key == worker_key,)
     # 某个长事务可能仍持执行者共享锁；本轮先处理其他失联登记，下个周期再查它。
     locked = select(TaskWorker.worker_key).where(*expired).correlate(None).with_for_update(skip_locked=True)
     fenced = await db.execute(update(TaskWorker).where(*expired, TaskWorker.worker_key.in_(locked))
                               .values(fenced_at=func.now()).execution_options(synchronize_session=False))
     if fenced.rowcount:
-        await _release_confirmed_slots(db)
+        await _release_confirmed_slots(db, worker_key)
 
 
 def _confirmed_absent():
@@ -159,17 +173,21 @@ def _confirmed_absent():
     return or_(Task.worker_key.is_(None), terminal)
 
 
-async def prepare_orphan_scan(db: AsyncSession, seconds: float):
+async def prepare_orphan_scan(db: AsyncSession, seconds: float, *, worker_key: str | None = None):
     """先提交 SQLite 侧库的不可逆决定；主库暂不可写时，下一轮仍能取回相同决定。"""
     if db.get_bind().dialect.name != "sqlite":
         cutoff = await _db_cutoff(db, seconds)
-        await _pg_fence_expired(db, cutoff)
+        await _pg_fence_expired(db, cutoff, worker_key)
         return _pg_orphan_running_condition(cutoff)
     pair = _pair_for_db(db)
-    await sqlite_worker_leases.fence_expired(pair, seconds)
-    active = list(await db.scalars(select(TaskWorker.worker_key).where(
-        TaskWorker.stopped_at.is_(None), TaskWorker.fenced_at.is_(None),
-    )))
+    if worker_key is None:
+        await sqlite_worker_leases.fence_expired(pair, seconds)
+        active = list(await db.scalars(select(TaskWorker.worker_key).where(
+            TaskWorker.stopped_at.is_(None), TaskWorker.fenced_at.is_(None),
+        )))
+    else:
+        await sqlite_worker_leases.fence_expired(pair, seconds, worker_key)
+        active = [worker_key]
     terminal = await sqlite_worker_leases.terminal_registrations(pair, active)
     for key, stopped, fenced in terminal:
         await db.execute(update(TaskWorker).where(
@@ -178,7 +196,7 @@ async def prepare_orphan_scan(db: AsyncSession, seconds: float):
                  fenced_at=datetime.fromisoformat(fenced) if fenced else None)
             .execution_options(synchronize_session=False))
     if terminal:
-        await _release_confirmed_slots(db)
+        await _release_confirmed_slots(db, worker_key)
     return and_(Task.status == "running", Task.recovered_at.is_(None), _confirmed_absent())
 
 
@@ -200,8 +218,9 @@ async def adopt(db: AsyncSession, task_id: int, statistics_key: str | None, exec
 
 
 class WorkerLease:
-    def __init__(self, engine: TaskEngine):
+    def __init__(self, engine: TaskEngine, *, on_expire: Callable[[], None] | None = None):
         self.engine = engine
+        self._on_expire = on_expire if on_expire is not None else engine._mark_lease_lost
         self.worker_key: str | None = None
         self.sqlite_pair: sqlite_lease_pair.SQLiteLeasePair | None = None
         self._last_ok: float | None = None
@@ -230,7 +249,7 @@ class WorkerLease:
             # 事件循环的定时器可能按单调时钟分辨率被略微提前触发。
             self._confirmed(self._last_ok)
         else:
-            self.engine._mark_lease_lost()
+            self._on_expire()
 
     async def register(self) -> str:
         if self.worker_key is not None:
@@ -260,8 +279,16 @@ class WorkerLease:
             owns_slot = select(TaskExecutionSlot.execution_key).where(
                 TaskExecutionSlot.worker_key == TaskWorker.worker_key,
             ).exists()
+            owns_work = select(TaskWorkRecord.work_key).where(
+                TaskWorkRecord.worker_key == TaskWorker.worker_key,
+            ).exists()
+            owns_deletion = select(Project.id).where(Project.deletion_worker_key == TaskWorker.worker_key).exists()
+            owns_external = select(AgentChange.id).where(
+                AgentChange.external_worker_key == TaskWorker.worker_key,
+            ).exists()
             await db.execute(delete(TaskWorker).where(
-                or_(TaskWorker.fenced_at < cutoff, TaskWorker.stopped_at < cutoff), ~referenced, ~owns_slot,
+                or_(TaskWorker.fenced_at < cutoff, TaskWorker.stopped_at < cutoff),
+                ~referenced, ~owns_slot, ~owns_work, ~owns_deletion, ~owns_external,
             ).execution_options(synchronize_session=False))
             # 遗留占用仍能用其未裁剪的登记核对。下次启动再裁剪已清空的旧登记。
             await _release_confirmed_slots(db)

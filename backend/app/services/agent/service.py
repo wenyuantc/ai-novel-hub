@@ -26,7 +26,7 @@ from app.core.errors import (
     NotFoundError,
     UnauthorizedError,
 )
-from app.models import AgentChange, AgentConversation, AgentMessage, GenerationLog, Task
+from app.models import AgentChange, AgentConversation, AgentMessage, GenerationLog, Task, TaskWorkRecord
 from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.agent import (
     ChangeAction,
@@ -53,10 +53,12 @@ from app.services import (
 )
 from app.services.agent import access as agent_access
 from app.services.agent import effects, history, mcp_tools, transactions
+from app.services.agent.external_activity import ExternalActivity, drain
 from app.services.agent.tools import get_tool
 from app.services.agent.tools import tasks as tasks_tool
 from app.services.agent.tools.base import ToolCtx, TransactionSession
 from app.services.ai_dispatch import VisibilityPolicyError, read_visibility_stamp, require_visibility_stamp
+from app.services.task_engine import workers
 from app.services.task_engine.registry import TaskContext
 
 if TYPE_CHECKING:
@@ -69,7 +71,7 @@ _locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
 
 # 外部（MCP）调用先提交 executing 再发起网络请求；进程在调用期间崩溃或请求被取消时提案会停在 executing。
-# 单次调用最长约 CALL_TIMEOUT + CONNECT_TIMEOUT（45 秒）加关闭连接的 5 秒，超过 2 分钟仍是 executing 的视为中断。
+# 工作已退出或属于旧格式时，至少等待两分钟再按原凭据恢复；可证明仍在途的健康调用继续执行。
 EXTERNAL_STALE_AFTER = timedelta(minutes=2)
 EXTERNAL_INTERRUPTED = "外部调用结果未知，请核对"
 EXTERNAL_RETURNED_NOT_APPLIED = "外部调用已返回，结果未应用"
@@ -150,7 +152,7 @@ async def recover_external(
 ) -> int:
     """把中断的外部调用（kind=external、仍为 executing）标为 failed，返回处理的条数；不 commit。
 
-    启动与周期恢复均使用 stale_only：只处理超过时限、且本进程没有在途调用的记录。
+    新调用依原 worker 的停止决定或明确退出且超时的记录恢复；旧调用保留两分钟保护。
     收尾只标记结果未知；重新调用外部服务可能重复已经完成的操作。
     """
     if stale_only:
@@ -163,7 +165,7 @@ async def recover_external(
         AgentChange.turn_task_id,
         AgentChange.turn_task_key,
         AgentChange.tool_call_id, AgentChange.tool_name, AgentChange.arguments, AgentChange.preview,
-        AgentChange.executed_at, AgentChange.result,
+        AgentChange.executed_at, AgentChange.result, AgentChange.external_worker_key,
         Task.statistics_key, Task.user_id.label("task_user_id"), Task.project_id.label("task_project_id"),
         Task.queued_at.label("task_queued_at"), Task.execution_key.label("task_execution_key"),
         Task.input.label("task_input"), Task.checkpoint.label("task_checkpoint"),
@@ -201,11 +203,10 @@ async def recover_external(
                 or type(row.task_input.get(_AGENT_ACTOR_TOKEN_VERSION)) is not int
                 or type(row.task_input.get(_TASK_ACTOR_TOKEN_VERSION)) is not int
                 or row.task_input[_AGENT_ACTOR_TOKEN_VERSION] < 0
-                or row.task_input[_AGENT_ACTOR_TOKEN_VERSION] != row.task_input[_TASK_ACTOR_TOKEN_VERSION]
-                or (stale_only and _aware(row.executed_at) > cutoff)):
+                or row.task_input[_AGENT_ACTOR_TOKEN_VERSION] != row.task_input[_TASK_ACTOR_TOKEN_VERSION]):
             continue
-        if stale_only and (
-            engine.project_work(row.project_id)
+        if row.external_worker_key is None and stale_only and (
+            _aware(row.executed_at) > cutoff or engine.project_work(row.project_id)
             or any(not work.done() for work in engine._cleanup_work.get(row.project_id, {}))
         ):
             # cleanup_scope 登记执行中的 HTTP 请求；project_work 自身会排除当前协程，故还须包含自身。
@@ -236,6 +237,7 @@ async def recover_external(
                 execution_key=row.task_execution_key if _EXTERNAL_EXECUTION in row.result else None,
                 change_id=row.id, change_key=row.change_key, claim_id=claim, tool_call_id=row.tool_call_id,
                 started_at=row.executed_at, task_evidence=task_evidence, change_evidence=change_evidence,
+                worker_key=row.external_worker_key,
             )
         except (TypeError, ValueError, RecursionError, VisibilityPolicyError):
             continue
@@ -292,6 +294,22 @@ async def recover_external(
         else:
             task_conditions.append(Task.execution_key.is_(None))
             marker_condition = func.json_type(AgentChange.result, f'$."{_EXTERNAL_EXECUTION}"').is_(None)
+        activity = None
+        recovery_conditions = [AgentChange.external_worker_key == row.external_worker_key]
+        if row.external_worker_key is not None:
+            activity = ExternalActivity(claim, row.external_worker_key, row.project_id, row.turn_task_id,
+                                        row.statistics_key, row.task_queued_at,
+                                        row.task_execution_key if automatic else None, row.change_key)
+            eligible = workers.confirmed_terminal(row.external_worker_key)
+            if _aware(row.executed_at) <= cutoff:
+                registered = workers.registered_worker_exists(row.external_worker_key)
+                eligible |= (TaskWorkRecord.state == "exited") & registered
+            recovering = select(TaskWorkRecord.work_key).where(
+                *activity.conditions(), TaskWorkRecord.state.in_(("active", "exited")), eligible,
+            ).exists()
+            if not await db.scalar(select(recovering)):
+                continue
+            recovery_conditions.append(recovering)
         # 锁住扫描到的原任务直至提交；单条 UPDATE 的 EXISTS 本身不能阻止另一事务先提交任务替换。
         if await db.scalar(select(Task.id).where(*task_conditions).with_for_update()) is None:
             continue
@@ -317,11 +335,13 @@ async def recover_external(
             AgentChange.result[transactions.EXTERNAL_CLAIM_KEY].as_string() == claim,
             AgentChange.result[_EXTERNAL_TASK_KEY].as_string() == row.statistics_key,
             AgentChange.result[_EXTERNAL_SNAPSHOT_MAC].as_string() == snapshot_mac,
-            original_task, original_conversation, marker_condition,
+            original_task, original_conversation, marker_condition, *recovery_conditions,
         ).values(status="failed", error=EXTERNAL_INTERRUPTED,
-                 result=recovered_result)
+                 result=recovered_result, external_worker_key=None)
             .execution_options(synchronize_session=False))
         if result.rowcount == 1:
+            if activity is not None:
+                await activity.finish(db)
             recovered.append(row.id)
     if recovered:
         logger.info("已暂存 %s 项中断外部调用的恢复，待事务提交：%s", len(recovered), recovered)
@@ -1035,7 +1055,12 @@ class _ExternalClaim:
     claim_id: str
     task_snapshot: str
     change_snapshot: str
+    worker_key: str
     snapshot_mac: str = ""
+
+    def activity(self) -> ExternalActivity:
+        return ExternalActivity(self.claim_id, self.worker_key, self.project_id, self.task_id, self.task_key,
+                                self.task_queued_at, None, self.change_key)
 
 
 async def _original_external_rows(db: AsyncSession, claim: _ExternalClaim) -> bool:
@@ -1051,6 +1076,7 @@ async def _original_external_rows(db: AsyncSession, claim: _ExternalClaim) -> bo
         AgentChange.turn_task_id == claim.task_id, AgentChange.turn_task_key == claim.task_key,
         AgentChange.tool_call_id == claim.tool_call_id, AgentChange.kind == "external",
         AgentChange.status == "executing", AgentChange.executed_at == claim.started_at,
+        AgentChange.external_worker_key == claim.worker_key, claim.activity().active(),
     ).with_for_update().execution_options(populate_existing=True))
     try:
         return bool(task is not None and change is not None
@@ -1085,20 +1111,24 @@ async def _interrupt_external_claim(
         Task.user_id == claim.user_id, Task.queued_at == claim.task_queued_at, Task.execution_key.is_(None),
     ))
     message = EXTERNAL_INTERRUPTED if outcome_unknown else known_message
-    await db.execute(update(AgentChange).where(
+    await task_context.task_engine.request_worker.require(db, claim.worker_key)
+    result = await db.execute(update(AgentChange).where(
         AgentChange.id == claim.change_id, AgentChange.change_key == claim.change_key,
         AgentChange.project_id == claim.project_id,
         AgentChange.conversation_id == claim.conversation_id, AgentChange.turn_task_id == claim.task_id,
         AgentChange.turn_task_key == claim.task_key,
         AgentChange.tool_call_id == claim.tool_call_id, AgentChange.status == "executing",
-        AgentChange.executed_at == claim.started_at,
-        AgentChange.result[transactions.EXTERNAL_CLAIM_KEY].as_string() == claim.claim_id,
+        AgentChange.executed_at == claim.started_at, AgentChange.external_worker_key == claim.worker_key,
+        claim.activity().active(), AgentChange.result[transactions.EXTERNAL_CLAIM_KEY].as_string() == claim.claim_id,
         AgentChange.result[_EXTERNAL_TASK_KEY].as_string() == claim.task_key,
         AgentChange.result[_EXTERNAL_SNAPSHOT_MAC].as_string() == claim.snapshot_mac, original_task,
     ).values(status="failed", error=message,
+             external_worker_key=None,
              result=(_unknown_external_result(claim.claim_id, claim.task_key, snapshot_mac=claim.snapshot_mac)
                      if outcome_unknown
                      else {"error": message})))
+    if result.rowcount == 1:
+        await claim.activity().finish(db)
     await coordinator.commit(db, task_context.sessionmaker)
     return True
 
@@ -1163,13 +1193,14 @@ async def _execute_external_impl(
         task_queued_at=task.queued_at,
         tool_call_id=change.tool_call_id, user_id=user_id, started_at=datetime.now(UTC), claim_id=str(uuid4()),
         task_snapshot=mcp_tools.task_snapshot(task), change_snapshot=mcp_tools.change_snapshot(change),
+        worker_key=await task_context.task_engine.request_worker.require(db),
     )
     send_identity = mcp_tools.McpSendIdentity(
         sessionmaker=task_context.sessionmaker, actor=actor, project_id=claim.project_id,
         conversation_id=claim.conversation_id, task_id=task.id, task_key=task.statistics_key,
         queued_at=task.queued_at, execution_key=None, change_id=claim.change_id, change_key=claim.change_key,
         claim_id=claim.claim_id, tool_call_id=claim.tool_call_id, started_at=claim.started_at, stamp=stamp,
-        task_snapshot=claim.task_snapshot, change_snapshot=claim.change_snapshot,
+        task_snapshot=claim.task_snapshot, change_snapshot=claim.change_snapshot, worker_key=claim.worker_key,
     )
     claim = replace(claim, snapshot_mac=mcp_tools.identity_snapshot_mac(db.info.get("agent_view_hmac_key"),
                                                                       send_identity))
@@ -1177,14 +1208,27 @@ async def _execute_external_impl(
         update(AgentChange)
         .where(AgentChange.id == change.id, AgentChange.change_key == change.change_key,
                AgentChange.turn_task_id == claim.task_id, AgentChange.turn_task_key == claim.task_key,
-               AgentChange.status == "proposed")
-        .values(status="executing", executed_at=claim.started_at,
+               AgentChange.status == "proposed", AgentChange.external_worker_key.is_(None),
+               ~exists(select(TaskWorkRecord.work_key).where(
+                   TaskWorkRecord.kind == "external", TaskWorkRecord.operation_id == claim.change_key,
+               )))
+        .values(status="executing", executed_at=claim.started_at, external_worker_key=claim.worker_key,
                 result={transactions.EXTERNAL_CLAIM_KEY: claim.claim_id, _EXTERNAL_TASK_KEY: claim.task_key,
                         _EXTERNAL_SNAPSHOT_MAC: claim.snapshot_mac})
     )
     if claimed.rowcount != 1:
         raise ConflictError("修改正在处理中，请刷新后重试")
-    await audit_coordinator.commit(db, task_context.sessionmaker)
+    activity = claim.activity()
+    activity.register(db)
+    db.info["external_call_in_progress"] = activity
+    try:
+        await audit_coordinator.commit(db, task_context.sessionmaker)
+    except BaseException:
+        # 尚未创建网络会话。提交回执丢失时只对可重读的原 claim 保存“未发送”。
+        await drain(_interrupt_external_claim(
+            db, task_context, audit_coordinator, claim, outcome_unknown=False, known_message=EXTERNAL_NOT_SENT,
+        ))
+        raise
     sessions = mcp_tools.McpSessions(
         task_context.mcp_connector,
         task_context.cipher,
@@ -1215,7 +1259,7 @@ async def _execute_external_impl(
         finally:
             await sessions.aclose()
     except asyncio.CancelledError:
-        await asyncio.shield(_interrupt_external_claim(
+        await drain(_interrupt_external_claim(
             db, task_context, audit_coordinator, claim, outcome_unknown=send_state.started,
             known_message=EXTERNAL_NOT_SENT,
         ))
@@ -1249,6 +1293,7 @@ async def _execute_external_impl(
         Task.id == claim.task_id, Task.statistics_key == claim.task_key, Task.project_id == claim.project_id,
         Task.user_id == claim.user_id, Task.queued_at == claim.task_queued_at, Task.execution_key.is_(None),
     ))
+    await task_context.task_engine.request_worker.require(db, claim.worker_key)
     if outcome_unknown:
         values = {"status": "failed", "error": EXTERNAL_INTERRUPTED,
                   "result": _unknown_external_result(claim.claim_id, claim.task_key, snapshot_mac=claim.snapshot_mac)}
@@ -1263,13 +1308,14 @@ async def _execute_external_impl(
         AgentChange.conversation_id == claim.conversation_id, AgentChange.turn_task_id == claim.task_id,
         AgentChange.turn_task_key == claim.task_key,
         AgentChange.tool_call_id == claim.tool_call_id, AgentChange.status == "executing",
-        AgentChange.executed_at == claim.started_at,
-        AgentChange.result[transactions.EXTERNAL_CLAIM_KEY].as_string() == claim.claim_id,
+        AgentChange.executed_at == claim.started_at, AgentChange.external_worker_key == claim.worker_key,
+        claim.activity().active(), AgentChange.result[transactions.EXTERNAL_CLAIM_KEY].as_string() == claim.claim_id,
         AgentChange.result[_EXTERNAL_TASK_KEY].as_string() == claim.task_key,
         AgentChange.result[_EXTERNAL_SNAPSHOT_MAC].as_string() == claim.snapshot_mac, original_task,
-    ).values(**values).execution_options(synchronize_session=False))
+    ).values(**values, external_worker_key=None).execution_options(synchronize_session=False))
     if result.rowcount != 1:
         raise ConflictError("外部操作的执行状态已变化，结果未应用", extra={"code": "external_execution_changed"})
+    await activity.finish(db)
     change = await db.get(AgentChange, claim.change_id, populate_existing=True)
     return change
 
@@ -1328,11 +1374,20 @@ async def decide_change(
     confirm: bool,
     resume: bool = True,
 ) -> ChangeOut:
-    async with transactions.audit_scope(db, engine.ctx.sessionmaker) as coordinator:
-        return await _decide_change(
-            db, engine, user_id, project_id, change_id, expected, confirm=confirm, resume=resume,
-            coordinator=coordinator,
-        )
+    try:
+        async with transactions.audit_scope(db, engine.ctx.sessionmaker) as coordinator:
+            return await _decide_change(
+                db, engine, user_id, project_id, change_id, expected, confirm=confirm, resume=resume,
+                coordinator=coordinator,
+            )
+    except BaseException:
+        # audit_scope 已结束请求事务；晚于最终结果提交或回滚才可宣布原调用退出。
+        activity = db.info.get("external_call_in_progress")
+        if activity is not None:
+            await drain(activity.confirm_exit(engine.request_worker.lease))
+        raise
+    finally:
+        db.info.pop("external_call_in_progress", None)
 
 
 async def _decide_change(

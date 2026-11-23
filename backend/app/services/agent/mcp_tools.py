@@ -32,6 +32,7 @@ from app.core.errors import AppError
 from app.core.security import SecretCipher
 from app.models import AgentChange, AgentConversation, McpPlugin, Project, Task
 from app.services import ai_dispatch, project_ai_config
+from app.services.agent.external_activity import ExternalActivity
 from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp
 from app.services.authorization_service import AuthenticatedActor
 from app.services.mcp import client as mcp_client
@@ -88,6 +89,13 @@ class McpSendIdentity:
     execution: TaskExecutionIdentity | None = None
     task_snapshot: str | None = None
     change_snapshot: str | None = None
+    worker_key: str | None = None
+
+    def activity(self) -> ExternalActivity:
+        if self.worker_key is None:
+            raise ai_dispatch.SendLeaseError()
+        return ExternalActivity(self.claim_id, self.worker_key, self.project_id, self.task_id, self.task_key,
+                                self.queued_at, self.execution_key, self.change_key)
 
 
 def _utc(value: datetime) -> datetime:
@@ -134,6 +142,7 @@ def external_snapshot_mac(
     key: bytes, *, actor_id: int, token_version: int, project_id: int, conversation_id: int, task_id: int,
     task_key: str, queued_at: datetime, execution_key: str | None, change_id: int, change_key: str,
     claim_id: str, tool_call_id: str, started_at: datetime, task_evidence: str, change_evidence: str,
+    worker_key: str | None = None,
 ) -> str:
     if not isinstance(key, bytes) or len(key) != 32:
         raise ai_dispatch.SendLeaseError()
@@ -145,7 +154,12 @@ def external_snapshot_mac(
         "started_at": _utc(started_at).isoformat(), "task_snapshot": task_evidence,
         "change_snapshot": change_evidence,
     }).encode("utf-8")
-    return hmac.new(key, b"ainovel/agent-external-claim/v1\x00" + payload, hashlib.sha256).hexdigest()
+    domain = b"ainovel/agent-external-claim/v1\x00"
+    if worker_key is not None:
+        if not isinstance(worker_key, str) or str(UUID(worker_key)) != worker_key:
+            raise ValueError("外部调用的执行者身份无效")
+        domain = b"ainovel/agent-external-claim/v2\x00" + worker_key.encode("ascii") + b"\x00"
+    return hmac.new(key, domain + payload, hashlib.sha256).hexdigest()
 
 
 def identity_snapshot_mac(key: bytes, identity: McpSendIdentity) -> str:
@@ -157,6 +171,7 @@ def identity_snapshot_mac(key: bytes, identity: McpSendIdentity) -> str:
         queued_at=identity.queued_at, execution_key=identity.execution_key, change_id=identity.change_id,
         change_key=identity.change_key, claim_id=identity.claim_id, tool_call_id=identity.tool_call_id,
         started_at=identity.started_at, task_evidence=identity.task_snapshot, change_evidence=identity.change_snapshot,
+        worker_key=identity.worker_key,
     )
 
 
@@ -211,6 +226,7 @@ async def _send_lease(
                 AgentChange.turn_task_id == identity.task_id, AgentChange.turn_task_key == identity.task_key,
                 AgentChange.tool_call_id == identity.tool_call_id, AgentChange.kind == "external",
                 AgentChange.status == "executing", AgentChange.executed_at == identity.started_at,
+                AgentChange.external_worker_key == identity.worker_key, identity.activity().active(),
             ).with_for_update(read=True))
             plugin = await db.scalar(select(McpPlugin).where(
                 McpPlugin.id == resolved.plugin.id, McpPlugin.user_id == identity.actor.id,
@@ -235,12 +251,13 @@ async def _send_lease(
             expected_mac = identity_snapshot_mac(db.info.get("agent_view_hmac_key"), identity)
             if not isinstance(mac, str) or not hmac.compare_digest(mac, expected_mac):
                 raise ai_dispatch.SendLeaseError()
+            await require_live_worker(db, identity.worker_key, read_only=True)
             if identity.execution_key is not None:
                 if (type(identity.execution) is not TaskExecutionIdentity
+                        or identity.execution.worker_key != identity.worker_key
                         or identity.execution.actor_token_version != identity.actor.token_version
                         or not matches_running(identity.execution, task)):
                     raise ai_dispatch.SendLeaseError()
-                await require_live_worker(db, identity.execution.worker_key, read_only=True)
                 expected = {"queued_at": _utc(identity.queued_at).isoformat(),
                             "execution_key": identity.execution_key,
                             "actor_token_version": identity.actor.token_version}

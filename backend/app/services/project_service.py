@@ -126,6 +126,7 @@ async def has_unsettled_external_change(
 
     # 正常终态不保留内部 claim；状态、载荷或内部标记损坏时不能推断远端已经退出。
     uncertain = or_(
+        AgentChange.external_worker_key.is_not(None),
         AgentChange.status.not_in(("proposed", "rejected", "executed", "failed", "undone")),
         claim_type.is_not(None), task_key_type.is_not(None), execution_type.is_not(None), outcome_type.is_not(None),
         snapshot_mac_type.is_not(None),

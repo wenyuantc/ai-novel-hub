@@ -114,11 +114,13 @@ async def app(tmp_path, fake_llm, settings_overrides):
     task_engine = application.state.task_engine
     await authorization_service.initialize(application.state.sessionmaker)
     await application.state.system_settings.load()
-    await task_engine.start()
+    await task_engine.request_worker.start()
     try:
+        await task_engine.start()
         yield application
     finally:
         await task_engine.stop()
+        await task_engine.request_worker.stop()
         await application.state.system_settings.close()
         await application.state.engine.dispose()
         retrieval_service.invalidate()
@@ -148,9 +150,11 @@ async def peer_app_factory(app, fake_llm):
             )
             stack.push_async_callback(peer.state.engine.dispose)
             stack.push_async_callback(peer.state.system_settings.close)
+            stack.push_async_callback(peer.state.task_engine.request_worker.stop)
             stack.push_async_callback(peer.state.task_engine.stop)
             await authorization_service.initialize(peer.state.sessionmaker)
             await peer.state.system_settings.load()
+            await peer.state.task_engine.request_worker.start()
             return peer
 
         yield new_peer

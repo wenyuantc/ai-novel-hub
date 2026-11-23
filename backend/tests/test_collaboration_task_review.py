@@ -57,11 +57,7 @@ async def test_personal_task_cannot_cancel_after_original_token_is_revoked(app, 
         await release.wait()
         return result
 
-    async def no_abort(*_args, **_kwargs):
-        return None
-
     monkeypatch.setattr(task_service, 'get_owned_task', gated)
-    monkeypatch.setattr(task_service, '_abort_loaded_task', no_abort)
     request = asyncio.create_task(client.post(f'/api/v1/tasks/{task_id}/cancel', params={'task_key': task_key}))
     try:
         await asyncio.wait_for(reached.wait(), 5)
@@ -94,9 +90,6 @@ async def test_cancel_response_does_not_adopt_reused_task_id(app, client, make_c
     new_key = str(uuid4())
     swapped = False
 
-    async def no_abort(*_args, **_kwargs):
-        return None
-
     async def replace_after_projection(*args, **kwargs):
         nonlocal swapped
         result = await original(*args, **kwargs)
@@ -113,7 +106,6 @@ async def test_cancel_response_does_not_adopt_reused_task_id(app, client, make_c
                 await db.commit()
         return result
 
-    monkeypatch.setattr(task_service, '_abort_loaded_task', no_abort)
     monkeypatch.setattr(personal_projection, 'project_payload', replace_after_projection)
     response = await guest.post(f'/api/v1/tasks/{task_id}/cancel', params={'task_key': old_key})
     assert response.status_code == 404, response.text
@@ -292,7 +284,6 @@ async def test_cancel_does_not_target_resumed_round(app, client, monkeypatch, wi
         return None
 
     monkeypatch.setattr(task_service, 'get_owned_task', blocked)
-    monkeypatch.setattr(task_service, '_abort_loaded_task', no_abort)
     # 此用例只验证任务控制并发；拆书来源及模型参数在单独业务测试中验证。
     monkeypatch.setattr(get_handler('book.import'), 'revalidate_resume', no_abort)
     request = asyncio.create_task(client.post(f'/api/v1/tasks/{task_id}/cancel', params={'task_key': task_key}))

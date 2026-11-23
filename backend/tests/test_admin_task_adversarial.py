@@ -91,6 +91,8 @@ async def test_admin_acceptance_between_owner_check_and_update_is_a_real_cas_bar
     _, owner_id = await _actors(app, client, make_client)
     task = await _task(app, owner_id, initial_status)
     engine = app.state.task_engine
+    # 此用例故意停止全部 drain。本人应在本次等待预算用完后返回持久 pending。
+    monkeypatch.setattr(engine, "cancel_wait_seconds", 0.05)
     signals, aborts = [], []
     monkeypatch.setattr(engine, "request_admin_cancel", lambda *args: signals.append(args))
     handler = get_handler(task.kind)
