@@ -5,6 +5,6 @@
 {"file":".trellis/spec/backend/skills-mcp.md","reason":"插件管理、错误处理与真实工具调用"}
 {"file":".trellis/spec/backend/admin-backups.md","reason":"原生快照和 SQLite 离线冷恢复约束"}
 {"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"管理员排空与原轮次的取消保护"}
-{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/occupancy.md","reason":"逐个核对旧内存断言的替代证据与异常收尾"}
-{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/claim-concurrency.md","reason":"强制交错、验实门内争用、独立观察者及峰值"}
-{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/settings-and-gates.md","reason":"独立设置对象、故障恢复、SDK 发包与关闭顺序"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/occupancy.md","reason":"逐个核对旧内存断言的替代证据与异常收尾"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/claim-concurrency.md","reason":"强制交错、验实门内争用、独立观察者及峰值"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/settings-and-gates.md","reason":"独立设置对象、故障恢复、SDK 发包与关闭顺序"}

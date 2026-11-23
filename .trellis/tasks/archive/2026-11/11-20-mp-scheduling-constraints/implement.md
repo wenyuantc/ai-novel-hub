@@ -2,7 +2,7 @@
 
 依赖 C1 已归档。基于 `main` 上的 `dd65a06` 核对过领取、收尾和租约实现。下列清单记录各项实施结果，实际观测见[验收记录](research/verification.md)。
 
-Trellis 自动载入长规范时只取开头的 32 KiB。实施或验收时按标题打开相关原文。后台任务表从第 520 行起，MCP 适配、插件管理和智能体工具分别从第 331、385、445 行起，PostgreSQL 隔离库与迁移冻结结构从第 151、169 行起。[数据库规范](../../spec/backend/database-guidelines.md) · [MCP 规范](../../spec/backend/skills-mcp.md) · [质量规范](../../spec/backend/quality-guidelines.md)
+Trellis 自动载入长规范时只取开头的 32 KiB。实施或验收时按标题打开相关原文。后台任务表从第 520 行起，MCP 适配、插件管理和智能体工具分别从第 331、385、445 行起，PostgreSQL 隔离库与迁移冻结结构从第 151、169 行起。[数据库规范](../../../../spec/backend/database-guidelines.md) · [MCP 规范](../../../../spec/backend/skills-mcp.md) · [质量规范](../../../../spec/backend/quality-guidelines.md)
 
 ## 1. 建立可观察的双实例基线
 

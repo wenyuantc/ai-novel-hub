@@ -4,6 +4,6 @@
 {"file":".trellis/spec/backend/system-settings.md","reason":"六项设置的部署基线、持久覆盖、发布与保存错误"}
 {"file":".trellis/spec/backend/skills-mcp.md","reason":"插件管理、两种传输与工具调用约束"}
 {"file":".trellis/spec/backend/project-transfer.md","reason":"实例运行表排除、单书备份版本与导入兼容"}
-{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/occupancy.md","reason":"正常领取、成功回调、恢复接管及归还的生命周期"}
-{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/claim-concurrency.md","reason":"领取事务的锁顺序、队首谓词与双引擎竞争"}
-{"file":".trellis/tasks/11-20-mp-scheduling-constraints/research/settings-and-gates.md","reason":"普通设置的消费端、注册事务及 MCP 发送边界"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/occupancy.md","reason":"正常领取、成功回调、恢复接管及归还的生命周期"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/claim-concurrency.md","reason":"领取事务的锁顺序、队首谓词与双引擎竞争"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/settings-and-gates.md","reason":"普通设置的消费端、注册事务及 MCP 发送边界"}

@@ -7,7 +7,7 @@
 从仓库根目录复跑。两条命令分别采用全站上限 2 / 用户上限 6，以及全站上限 6 / 用户上限 2。以下变量指向仓库内本演练文件。
 
 ```bash
-probe=.trellis/tasks/11-20-mp-scheduling-constraints/research/sqlite_http_processes.py
+probe=.trellis/tasks/archive/2026-11/11-20-mp-scheduling-constraints/research/sqlite_http_processes.py
 PYTHONPATH=backend backend/.venv/bin/python "$probe" --backend backend --limit global
 PYTHONPATH=backend backend/.venv/bin/python "$probe" --backend backend --limit user
 ```
