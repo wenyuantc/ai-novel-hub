@@ -352,6 +352,32 @@ async def require_applied_review_analysis_source(
                 or _source_hash(identity.input_json) != child_execution.input_hash
                 or not _same_json(identity.input.get("_analysis_proposal_source"), source)):
             raise invalid
+        await _require_applied_analysis_rows(
+            db, source, child_execution.task_id, child_execution.task_key, child_execution.queued_at,
+            child_execution.execution_key, identity.input_json, read_lock=read_lock,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        raise invalid from None
+
+
+async def require_applied_analysis_stream_rows(db: AsyncSession, task: Task) -> None:
+    """在已核对原轮次/输入摘要的帧事务中只读核对父提案、正文与应用收据。"""
+    source = capture_applied_review_source(task.input["_analysis_proposal_source"]).value
+    if ((task.user_id, task.project_id, task.chapter_id, task.input.get("_task_actor_token_version"),
+         task_grant_identity(task.input)) != (source["actor_id"], source["project_id"], source["chapter_id"],
+                                              source["actor_token_version"], tuple(source["grant"]))):
+        raise ConflictError("原提案分析来源已变化", extra={"code": "rich_review_task_changed"})
+    await _require_applied_analysis_rows(
+        db, source, task.id, task.statistics_key, task.queued_at, task.execution_key,
+        _source_json(task.input), read_lock=True,
+    )
+
+
+async def _require_applied_analysis_rows(db, source, child_id, child_key, queued_at, execution_key,
+                                        child_input_json, *, read_lock) -> None:
+    invalid = ConflictError("原提案分析来源已变化", extra={"code": "rich_review_task_changed"})
+    grant = (source["grant"][0], source["grant"][1])
+    try:
         actor = authorization_service.AuthenticatedActor(source["actor_id"], source["actor_token_version"])
         with db.no_autoflush:
             await authorization_service.require_authenticated(
@@ -364,11 +390,11 @@ async def require_applied_review_analysis_source(
             if project.user_id != source["owner_id"]:
                 raise invalid
             child = await db.scalar(select(Task).where(
-                Task.id == child_execution.task_id, Task.statistics_key == child_execution.task_key,
+                Task.id == child_id, Task.statistics_key == child_key,
                 Task.user_id == actor.id, Task.project_id == source["project_id"],
                 Task.chapter_id == source["chapter_id"], Task.kind == "chapter.analyze",
-                Task.status.in_(("running", "succeeded")), Task.queued_at == child_execution.queued_at,
-                Task.execution_key == child_execution.execution_key, Task.admin_cancel_operation_id.is_(None),
+                Task.status.in_(("running", "succeeded")), Task.queued_at == queued_at,
+                Task.execution_key == execution_key, Task.admin_cancel_operation_id.is_(None),
                 Task.admin_cancel_requested_at.is_(None),
                 task_visible_to_actor(db, actor.id, active_grant_required=True, token_version=actor.token_version),
             ).with_for_update(read=read_lock))
@@ -398,7 +424,7 @@ async def require_applied_review_analysis_source(
                     or chapter_claim._grant(original.input) != grant
                     or type(original.input.get("_task_actor_token_version")) is not int
                     or original.input["_task_actor_token_version"] != actor.token_version
-                    or _source_json(child.input) != identity.input_json
+                    or _source_json(child.input) != child_input_json
                     or not _same_json(child.input.get("_project_model"), original.input.get("_project_model"))
                     or not _same_json(child.input.get("_shared_embedding"), original.input.get("_shared_embedding"))
                     or chapter.content_revision != source["applied_revision"] or chapter.status != "done"
@@ -1160,6 +1186,7 @@ async def _accept_review(
     review["phase"] = "applied"
     checkpoint["rich_review"] = review
     analysis_warning = None
+    analysis_task = None
     if task.kind == "chapter.batch":
         items = checkpoint.get("items") or []
         if task.step_cursor >= len(items) or items[task.step_cursor].get("chapter_id") != chapter.id:
@@ -1207,7 +1234,7 @@ async def _accept_review(
                             receipt_json=_source_json(proposal_data["execution_receipt"]),
                             accepted_decision_json=_source_json(decision),
                         )
-                        await analysis_service.enqueue_auto_in_transaction(
+                        analysis_task = await analysis_service.enqueue_auto_in_transaction(
                             db, project, chapter.id, actor=authenticated_actor, cipher=engine.ctx.cipher,
                             allow_private=engine.ctx.settings.allow_private_ai_endpoints, review_source=source,
                         )
@@ -1215,7 +1242,7 @@ async def _accept_review(
                         # 历史任务缺少原执行身份或原授权已被撤销：不以本次会话或当前数据库值补签派生任务。
                         analysis_warning = REVIEW_AUTO_ORIGIN_UNTRUSTED
                     else:
-                        await analysis_service.enqueue_auto_in_transaction(
+                        analysis_task = await analysis_service.enqueue_auto_in_transaction(
                             db, project, chapter.id, actor=authenticated_actor, cipher=engine.ctx.cipher,
                             allow_private=engine.ctx.settings.allow_private_ai_endpoints,
                         )
@@ -1240,6 +1267,9 @@ async def _accept_review(
             "code": "rich_review_task_changed",
         })
     else:
-        engine.notify()
+        if outcome["task_status"] == "queued" or analysis_task is not None:
+            engine.notify_queue_changed()
+        else:
+            engine.notify()
         return outcome
     raise failure from None

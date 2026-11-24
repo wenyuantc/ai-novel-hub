@@ -287,6 +287,47 @@ async def _lock_active_project(db: AsyncSession, project_id: int) -> None:
         raise CollaborationSendBlocked()
 
 
+async def require_model_bindings(db, primary, extras, *, cipher, allow_private, write=False) -> None:
+    # 多绑定不能先锁文本配置行再等向量配置选择门禁，否则与配置写入的门禁→行锁顺序相反。
+    for owner_id in sorted({primary.actor_id, primary.project_owner_id}):
+        await ai_config_service.lock_config_owner(db, owner_id, write=False)
+    bindings = sorted((primary, *extras),
+                      key=lambda value: type(value) is project_ai_config.ResolvedSharedEmbedding)
+    for binding in bindings:
+        if type(binding) is project_ai_config.ResolvedSharedEmbedding:
+            await project_ai_config.revalidate_shared_embedding(
+                db, binding, cipher=cipher, allow_private=allow_private,
+                for_update=write, lock_config=True,
+            )
+        else:
+            await project_ai_config.revalidate_project_model(
+                db, binding, cipher=cipher, allow_private=allow_private,
+                for_update=write, lock_config=True,
+            )
+
+
+async def require_agent_stream_conversation(db, actor_id, project_id, cid, grant_identity, epoch) -> None:
+    """单帧共享锁内复验会话的原归属、邀请及历史代次。"""
+    from app.models import AgentConversation
+
+    expected_invitation = None if grant_identity is None else grant_identity[0]
+    statement = select(
+        AgentConversation.id,
+        AgentConversation.collaboration_invitation_id,
+        AgentConversation.ai_history_epoch,
+    ).where(
+        AgentConversation.id == cid,
+        AgentConversation.project_id == project_id,
+        AgentConversation.user_id == actor_id,
+    )
+    if db.get_bind().dialect.name == "postgresql":
+        statement = statement.with_for_update(read=True)
+    row = (await db.execute(statement)).one_or_none()
+    if (row is None or row.collaboration_invitation_id != expected_invitation
+            or row.ai_history_epoch != epoch):
+        raise CollaborationSendBlocked()
+
+
 def _matches_batch_attempt(task: Task, expected: execution_identity.TaskExecutionIdentity,
                            attempt: BatchAttemptIdentity) -> bool:
     """只允许本次章节 attempt 改变游标和断点；不得从新断点重新签发身份。"""
@@ -555,22 +596,8 @@ class SendGuard:
             )
 
     async def _verify_bindings(self, db: AsyncSession, *, write: bool = False) -> None:
-        # 多绑定不能先锁文本配置行再等向量配置选择门禁，否则与配置写入的门禁→行锁顺序相反。
-        for owner_id in sorted({self._binding.actor_id, self._binding.project_owner_id}):
-            await ai_config_service.lock_config_owner(db, owner_id, write=False)
-        bindings = sorted((self._binding, *self._extra_bindings),
-                          key=lambda value: type(value) is project_ai_config.ResolvedSharedEmbedding)
-        for binding in bindings:
-            if type(binding) is project_ai_config.ResolvedSharedEmbedding:
-                await project_ai_config.revalidate_shared_embedding(
-                    db, binding, cipher=self._cipher, allow_private=self._allow_private,
-                    for_update=write, lock_config=True,
-                )
-            else:
-                await project_ai_config.revalidate_project_model(
-                    db, binding, cipher=self._cipher, allow_private=self._allow_private,
-                    for_update=write, lock_config=True,
-                )
+        await require_model_bindings(db, self._binding, self._extra_bindings, cipher=self._cipher,
+                                     allow_private=self._allow_private, write=write)
 
     def _stream_readable(self) -> bool:
         """受控任务流可证明的执行类型：大纲/实体（无占用）、单章（章节占用只读核对）、
@@ -628,29 +655,14 @@ class SendGuard:
         """智能体受控流帧租约内只读核对会话归属、原邀请轮次与开放历史代次。"""
         if self._task is None or self._task.kind != "agent.turn":
             return
-        from app.models import AgentConversation
-
         raw = self._task.input
         req = raw.get("request") if type(raw) is dict else None
         cid = req.get("conversation_id") if type(req) is dict else None
         if not _positive(cid):
             raise CollaborationSendBlocked()
-        expected_invitation = None if self._task.grant_identity is None else self._task.grant_identity[0]
-        statement = select(
-            AgentConversation.id,
-            AgentConversation.collaboration_invitation_id,
-            AgentConversation.ai_history_epoch,
-        ).where(
-            AgentConversation.id == cid,
-            AgentConversation.project_id == self._task.project_id,
-            AgentConversation.user_id == self._task.actor_id,
+        await require_agent_stream_conversation(
+            db, self._task.actor_id, self._task.project_id, cid, self._task.grant_identity, self._stamp.epoch,
         )
-        if db.get_bind().dialect.name == "postgresql":
-            statement = statement.with_for_update(read=True)
-        row = (await db.execute(statement)).one_or_none()
-        if (row is None or row.collaboration_invitation_id != expected_invitation
-                or row.ai_history_epoch != self._stamp.epoch):
-            raise CollaborationSendBlocked()
 
     def _batch_stream_shape(self) -> str | None:
         """批量发布 guard 的形状；只接受 BatchHandler.stream_guard 构造的三种，其余为 None。

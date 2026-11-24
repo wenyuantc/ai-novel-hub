@@ -1,5 +1,6 @@
 """按真实触发者投影项目私人引用；不会修改 ORM 中的内部快照。"""
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -707,6 +708,14 @@ async def project_document_payload_in_snapshot(
     调用方必须先在该快照验证 actor、作品生命周期及原协作授权，然后核验每个所选
     会话/消息的完整冻结证据。该函数不是单独的授权入口。
     """
+    visible, identities, fingerprints = await _snapshot_references(db, user_id, project_id, payload)
+    projected = _project(payload, visible, identities, user_id, project_id, is_owner)
+    return (None if projected is _DROP else projected), fingerprints
+
+
+async def _snapshot_references(
+    db: AsyncSession, user_id: int, project_id: int, payload: Any, *, lock_rows: bool = False,
+) -> tuple[dict[str, set[int]], dict[str, dict[int, Any]], dict[str, dict[int, Any]]]:
     refs: dict[str, set[int]] = {
         kind: set() for kind in ("configs", "tasks", "logs", "styles", "skills", "plugins")
     }
@@ -714,6 +723,10 @@ async def project_document_payload_in_snapshot(
     visible = {kind: set() for kind in refs}
     identities: dict[str, dict[int, Any]] = {"tasks": {}, "logs": {}}
     fingerprints: dict[str, dict[int, Any]] = {"tasks": {}, "logs": {}}
+
+    def locked(statement):
+        return statement.with_for_update(read=True) if lock_rows else statement
+
     with db.no_autoflush:
         for kind, ids in refs.items():
             values = sorted(ids)
@@ -725,7 +738,7 @@ async def project_document_payload_in_snapshot(
                         or_(Task.status.not_in(OPEN_TASK_STATUSES),
                             task_visible_to_actor(db, user_id, active_grant_required=True)),
                     )
-                    for row in await db.execute(statement):
+                    for row in await db.execute(locked(statement)):
                         visible[kind].add(row.id)
                         identities[kind][row.id] = row.statistics_key
                         fingerprints[kind][row.id] = (row.statistics_key, jsonable_encoder(row.queued_at), row.status)
@@ -737,7 +750,7 @@ async def project_document_payload_in_snapshot(
                         GenerationLog.id.in_(batch), GenerationLog.actor_user_id == user_id,
                         GenerationLog.project_id == project_id,
                     )
-                    for row in await db.execute(statement):
+                    for row in await db.execute(locked(statement)):
                         visible[kind].add(row.id)
                         identity = (row.log_instance_key, jsonable_encoder(row.created_at))
                         identities[kind][row.id] = identity
@@ -749,9 +762,20 @@ async def project_document_payload_in_snapshot(
                     "skills": (Skill, or_(Skill.owner_user_id == user_id, Skill.owner_user_id.is_(None))),
                     "plugins": (McpPlugin, McpPlugin.user_id == user_id),
                 }[kind]
-                visible[kind].update(await db.scalars(select(model.id).where(model.id.in_(batch), condition)))
-    projected = _project(payload, visible, identities, user_id, project_id, is_owner)
-    return (None if projected is _DROP else projected), fingerprints
+                statement = select(model.id).where(model.id.in_(batch), condition)
+                visible[kind].update(await db.scalars(locked(statement)))
+    return visible, identities, fingerprints
+
+
+async def stream_reference_digest(
+    db: AsyncSession, user_id: int, project_id: int, payload: Any, *, is_owner: bool,
+) -> str:
+    """只取公开帧实际引用的可见行并加共享锁。跨端只比较摘要，私人行和凭据留在本机。"""
+    visible, _, instances = await _snapshot_references(db, user_id, project_id, payload, lock_rows=True)
+    # 状态可在同一任务轮次合法推进。查询已据当前活动态权限筛选可见任务。
+    tasks = {key: value[:2] for key, value in instances["tasks"].items()}
+    values = [is_owner, {kind: sorted(ids) for kind, ids in visible.items()}, tasks, instances["logs"]]
+    return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 async def _project_payload(

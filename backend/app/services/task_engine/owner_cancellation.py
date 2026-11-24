@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from app.services.task_engine.engine import TaskEngine
 
 
-def _unproven_execution():
+def unproven_execution():
     # 作品上的其他错误不是这条任务的证据，必须命中同一 UUID、轮次和原执行。
     return select(TaskWorkRecord.work_key).where(
         TaskWorkRecord.kind == "abort_failure", TaskWorkRecord.state == "failed", TaskWorkRecord.evidence.is_(None),
@@ -29,7 +29,7 @@ async def requested_result_unproven(db: AsyncSession, task: Task) -> bool:
     return await db.scalar(select(Task.id).where(
         Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
         Task.execution_key == task.execution_key, Task.worker_key == task.worker_key, Task.status == "running",
-        Task.cancel_requested_at.is_not(None), _unproven_execution(),
+        Task.cancel_requested_at.is_not(None), unproven_execution(),
     )) is not None
 
 
@@ -41,7 +41,7 @@ async def record_request(db: AsyncSession, task: Task) -> bool:
         Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
         Task.execution_key == task.execution_key, Task.status == "running", Task.recovered_at.is_(None),
         Task.user_id == task.user_id, Task.project_id == task.project_id, Task.kind == task.kind,
-        Task.admin_cancel_operation_id.is_(None), ~_unproven_execution(),
+        Task.admin_cancel_operation_id.is_(None), ~unproven_execution(),
     )
     if task.kind == "chapter.analyze" or task.kind.startswith("wizard."):
         # 收据尚未核对的遗留 running 不能作为活模型取消，删除排空也必须有同样的原执行证据。
@@ -66,7 +66,7 @@ def _uncertain(task: Task) -> ConflictError:
 async def _original(
     db: AsyncSession, task_id: int, key: str | None, queued_at: datetime | None, *, check_uncertain: bool = True,
 ) -> Task:
-    found = (await db.execute(select(Task, _unproven_execution()).where(Task.id == task_id, Task.statistics_key == key)
+    found = (await db.execute(select(Task, unproven_execution()).where(Task.id == task_id, Task.statistics_key == key)
                               .execution_options(populate_existing=True))).one_or_none()
     if found is None:
         raise NotFoundError("任务不存在")
@@ -147,6 +147,7 @@ async def request_running(db: AsyncSession, engine: "TaskEngine", task: Task) ->
             await db.rollback()
     deadline = asyncio.get_running_loop().time() + engine.cancel_wait_seconds
     engine.notify()
+    engine.peer_wakes.schedule(worker)
     local_work = None
     if operation is not None:
         engine.request_admin_cancel(key, operation)

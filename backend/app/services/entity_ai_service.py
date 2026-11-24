@@ -135,6 +135,27 @@ class _EntitySourceGroup:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class EntityStreamGroup:
+    """独立接收进程只保留选择条件、该组摘要及复核跨书移动所需的旧行 ID。"""
+
+    kind: str
+    parents: tuple[int, ...]
+    extra: tuple[int, ...]
+    prior_ids: tuple[int, ...]
+    fingerprint: str
+
+    @classmethod
+    def from_source(cls, group: _EntitySourceGroup) -> "EntityStreamGroup":
+        ids = tuple(key for key, _ in group.rows) if group.kind in ("relation", "type") else ()
+        return cls(group.kind, group.parents, group.extra, ids, _group_fingerprint(group.rows))
+
+
+def _group_fingerprint(rows: tuple[tuple[int, str], ...]) -> str:
+    # 输入为已排序的 ID 与 SHA-256，不携带原提示词字段。
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode("ascii")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class EntitySourceSnapshot:
     """与原领取轮次绑定的私有提示词来源；正文只以摘要保留。"""
 
@@ -258,20 +279,33 @@ async def require_entity_source_snapshot(
     if (type(snapshot) is not EntitySourceSnapshot or type(for_update) is not bool or type(allow_changes) is not bool
             or type(snapshot.execution.project_id) is not int):
         raise _entity_source_changed()
+    await _require_source_groups(db, snapshot.execution.project_id, snapshot.groups,
+                                 for_update=for_update, allow_changes=allow_changes)
+
+
+async def _require_source_groups(
+    db: AsyncSession, project_id: int, groups: tuple[_EntitySourceGroup | EntityStreamGroup, ...], *,
+    for_update: bool, allow_changes: bool,
+) -> None:
     with db.no_autoflush:
-        for group in snapshot.groups:
-            rows = await _source_rows(db, snapshot.execution.project_id, group.kind, group.parents, group.extra,
+        for group in groups:
+            if type(group) is EntityStreamGroup and (for_update or not allow_changes):
+                raise _entity_source_changed()
+            rows = await _source_rows(db, project_id, group.kind, group.parents, group.extra,
                                       for_update=for_update)
             current = tuple((_source_id(group.kind, row), _source_digest(group.kind, row)) for row in rows)
-            if current == group.rows:
+            if type(group) is EntityStreamGroup:
+                matches = _group_fingerprint(current) == group.fingerprint
+            else:
+                matches = current == group.rows
+            if matches:
                 continue
             if not allow_changes or group.kind not in ("relation", "type"):
                 raise _entity_source_changed()
             # 已发送的提示词当时已通过原来源校验。响应后允许本书关系/类型变动，结果必须在
             # 同一屏障内重新解析；筛选集合消失的旧行可能被移至他书，须按原 ID 再锁查归属。
-            expected = dict(group.rows)
-            observed = dict(current)
-            missing = set(expected) - set(observed)
+            prior_ids = group.prior_ids if type(group) is EntityStreamGroup else (key for key, _ in group.rows)
+            missing = set(prior_ids).difference(key for key, _ in current)
             previous = []
             if missing:
                 model = _SOURCE_FIELDS[group.kind][0]
@@ -280,7 +314,7 @@ async def require_entity_source_snapshot(
                 previous = list(await db.scalars(statement))
             current_rows = [*rows, *previous]
             if group.kind == "relation":
-                if any(row.project_id != snapshot.execution.project_id
+                if any(row.project_id != project_id
                        or (row.pair_low, row.pair_high) != (min(row.a_id, row.b_id), max(row.a_id, row.b_id))
                        for row in current_rows):
                     raise _entity_source_changed()
@@ -289,16 +323,16 @@ async def require_entity_source_snapshot(
                 character_statement = character_statement.order_by(Character.id).with_for_update(read=not for_update)
                 characters = list(await db.scalars(character_statement))
                 if (len(characters) != len(character_ids)
-                        or any(row.project_id != snapshot.execution.project_id for row in characters)):
+                        or any(row.project_id != project_id for row in characters)):
                     raise _entity_source_changed()
                 type_ids = {row.type_id for row in current_rows}
                 statement = select(RelationshipType).where(RelationshipType.id.in_(type_ids))
                 statement = statement.order_by(RelationshipType.id).with_for_update(read=not for_update)
                 types = list(await db.scalars(statement))
                 if (len(types) != len(type_ids)
-                        or any(row.project_id not in (None, snapshot.execution.project_id) for row in types)):
+                        or any(row.project_id not in (None, project_id) for row in types)):
                     raise _entity_source_changed()
-            elif any(row.project_id not in (None, snapshot.execution.project_id) for row in current_rows):
+            elif any(row.project_id not in (None, project_id) for row in current_rows):
                 raise _entity_source_changed()
 
 

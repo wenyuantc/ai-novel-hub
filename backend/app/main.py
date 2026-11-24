@@ -120,12 +120,17 @@ def create_app(
             await auth_service.bootstrap_admin(app_.state.sessionmaker, settings)
             await style_service.sync_presets(app_.state.sessionmaker)
             await book_import_service.purge_expired_all(app_.state.sessionmaker)
+            # 先绑定真实地址，让随后所有 worker 代次在登记事务中通告同一监听。
+            cleanup.push_async_callback(app_.state.task_engine.peer.stop)
+            await app_.state.task_engine.peer.start()
             cleanup.push_async_callback(app_.state.task_engine.request_worker.stop)
             await app_.state.task_engine.request_worker.start()
             await task_statistics_service.initialize_tracking(app_.state.sessionmaker)
             if start_task_engine:
                 cleanup.push_async_callback(app_.state.task_engine.stop)
                 await app_.state.task_engine.start()
+            # 成功启动后先关闭内部流，再释放两份租约。较早的回调也覆盖部分启动失败。
+            cleanup.push_async_callback(app_.state.task_engine.peer.stop)
             cleanup.push_async_callback(app_.state.recycle_bin_cleaner.stop)
             await app_.state.recycle_bin_cleaner.start()
             cleanup.push_async_callback(app_.state.dashboard_sampler.stop)
@@ -165,6 +170,8 @@ def create_app(
         )
     )
 
+    app.state.system_settings.notify_peers = app.state.task_engine.peer_wakes.settings
+    app.state.task_engine.peer_wakes.refresh_settings = app.state.system_settings.request_refresh
     app.state.recycle_bin_cleaner = recycle_bin_service.RecycleBinCleaner(app.state.task_engine)
     app.state.dashboard_sampler = admin_dashboard_service.DashboardSampler(app.state.sessionmaker)
 

@@ -997,6 +997,8 @@ async def enqueue_auto(
             if task is None:
                 return None
             await db.commit()
+            if ctx.task_engine is not None:
+                ctx.task_engine.notify_queue_changed()
             return task.id
     except Exception:  # noqa: BLE001
         raise AnalysisExecutionChanged() from None
@@ -1416,31 +1418,53 @@ async def _require_batch_analysis(
     """
     if streaming and (not read_lock or status != "running"):
         raise AnalysisExecutionChanged()
-    from app.models import SceneReviewAnalysisReceipt
-
     if (not _valid_execution(execution) or execution.task_kind != "chapter.batch"
             or type(reference) is not AnalysisReference or execution.batch_cursor is None
             or status not in {"running", "completed"}):
         raise AnalysisExecutionChanged()
     if capture_analysis_reference(reference.as_dict()) != reference:
         raise AnalysisExecutionChanged()
+    await _require_batch_receipt_rows(
+        db, execution.task_id, execution.task_key, execution.actor_id, execution.project_id, execution.queued_at,
+        execution.execution_key, execution.worker_key, execution.batch_cursor, reference, read_lock=read_lock,
+        status=status, streaming=streaming,
+    )
+
+
+async def require_batch_analysis_stream_rows(db: AsyncSession, task: Task, reference: AnalysisReference) -> None:
+    """受控帧已固定原 Task 及断点，仅以共享锁读取本章收据和批量祖先。"""
+    if (task.kind != "chapter.batch" or task.status != "running"
+            or type(task.step_cursor) is not int or task.step_cursor < 0
+            or type(reference) is not AnalysisReference
+            or capture_analysis_reference(reference.as_dict()) != reference):
+        raise AnalysisExecutionChanged()
+    await _require_batch_receipt_rows(
+        db, task.id, task.statistics_key, task.user_id, task.project_id, task.queued_at, task.execution_key,
+        task.worker_key, task.step_cursor, reference, read_lock=True, status="running", streaming=True,
+    )
+
+
+async def _require_batch_receipt_rows(db, task_id, task_key, actor_id, project_id, queued_at, execution_key,
+                                      worker_key, cursor, reference, *, read_lock, status, streaming) -> None:
+    from app.models import SceneReviewAnalysisReceipt
+
     with db.no_autoflush:
         row = (await db.execute(select(Task.step_cursor, Task.checkpoint).where(
-            Task.id == execution.task_id, Task.statistics_key == execution.task_key,
-            Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
-            Task.kind == execution.task_kind, Task.queued_at == execution.queued_at,
-            Task.execution_key == execution.execution_key, Task.status == "running",
-            Task.worker_key == execution.worker_key,
+            Task.id == task_id, Task.statistics_key == task_key,
+            Task.user_id == actor_id, Task.project_id == project_id,
+            Task.kind == "chapter.batch", Task.queued_at == queued_at,
+            Task.execution_key == execution_key, Task.status == "running",
+            Task.worker_key == worker_key,
             Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
         ).with_for_update(read=read_lock))).one_or_none()
-        if row is None or row.step_cursor != execution.batch_cursor or not isinstance(row.checkpoint, dict):
+        if row is None or row.step_cursor != cursor or not isinstance(row.checkpoint, dict):
             raise AnalysisExecutionChanged()
         checkpoint = row.checkpoint
         items = checkpoint.get("items")
         if (checkpoint.get("phase") != "analyze" or not isinstance(items, list)
-                or execution.batch_cursor >= len(items) or not isinstance(items[execution.batch_cursor], dict)
-                or type(items[execution.batch_cursor].get("chapter_id")) is not int
-                or items[execution.batch_cursor]["chapter_id"] != reference.chapter_id
+                or cursor >= len(items) or not isinstance(items[cursor], dict)
+                or type(items[cursor].get("chapter_id")) is not int
+                or items[cursor]["chapter_id"] != reference.chapter_id
                 or json.dumps(checkpoint.get("rich_analysis"), sort_keys=True, separators=(",", ":"))
                 != json.dumps(reference.as_dict(), sort_keys=True, separators=(",", ":"))):
             raise AnalysisExecutionChanged()
@@ -1451,14 +1475,14 @@ async def _require_batch_analysis(
             SceneReviewAnalysisReceipt.task_key == reference.task_key,
             SceneReviewAnalysisReceipt.chapter_id == reference.chapter_id,
             SceneReviewAnalysisReceipt.content_hash == reference.content_hash,
-            Chapter.project_id == execution.project_id,
+            Chapter.project_id == project_id,
         ).with_for_update(read=read_lock))).one_or_none()
     if streaming and receipt is not None and receipt.status == "completed":
         status = "completed"
     if receipt is None or receipt.status != status:
         raise AnalysisExecutionChanged()
     ancestors: set[int] = set()
-    cursor_id: int | None = execution.task_id
+    cursor_id: int | None = task_id
     origin = None
     with db.no_autoflush:
         # retry_of_id 的数据库 FK 删除时会置空；只沿真实同作者/作品的 batch 祖先追到原 UUID。
@@ -1469,13 +1493,13 @@ async def _require_batch_analysis(
                 Task.id, Task.statistics_key, Task.retry_of_id, Task.checkpoint, Task.status, Task.execution_key,
                 Task.admin_cancel_operation_id, Task.admin_cancel_requested_at,
             ).where(
-                Task.id == cursor_id, Task.user_id == execution.actor_id, Task.project_id == execution.project_id,
+                Task.id == cursor_id, Task.user_id == actor_id, Task.project_id == project_id,
                 Task.kind == "chapter.batch",
             ).with_for_update(read=True))).one_or_none()
             if entry is None:
                 raise AnalysisExecutionChanged()
             ancestors.add(entry.id)
-            if entry.id != execution.task_id and (
+            if entry.id != task_id and (
                 entry.status not in {"failed", "cancelled", "interrupted"} or entry.execution_key is not None
                 or entry.admin_cancel_operation_id is not None or entry.admin_cancel_requested_at is not None
             ):
@@ -1496,7 +1520,7 @@ async def _require_batch_analysis(
         raise AnalysisExecutionChanged()
     with db.no_autoflush:
         analysis = (await db.execute(select(ChapterAnalysis.task_id).where(
-            ChapterAnalysis.id == receipt.analysis_id, ChapterAnalysis.project_id == execution.project_id,
+            ChapterAnalysis.id == receipt.analysis_id, ChapterAnalysis.project_id == project_id,
             ChapterAnalysis.chapter_id == reference.chapter_id, ChapterAnalysis.content_hash == reference.content_hash,
         ).with_for_update(read=streaming))).one_or_none()
         if analysis is None or analysis.task_id is None:
@@ -1930,7 +1954,7 @@ async def enqueue_memory_for_execution(
             # 已有收据且当时无需向量化：同样是“已是最新”，不能报告为已排队。
             return AnalysisIndexOutcome("current")
         if admission.state == "created" and engine is not None:
-            engine.notify()
+            engine.notify_queue_changed()
         return AnalysisIndexOutcome("queued", task_id=admission.task_id)
     return AnalysisIndexOutcome(
         "keyword" if execution.embedding_selection.mode == "keyword" else "unavailable",

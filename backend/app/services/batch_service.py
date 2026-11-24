@@ -670,6 +670,9 @@ async def _write_checkpoint(db: AsyncSession, job: BatchJob) -> None:
         with db.no_autoflush:
             row = await _require_batch_round(db, job)
             raw_checkpoint = row[1]
+            values = {"step_cursor": job.cursor, "checkpoint": copy.deepcopy(job.checkpoint)}
+            if job.cursor != job.persisted_cursor:
+                values["output_text"] = ""
             changed = await db.execute(update(Task).where(
                 Task.id == job.task_id, Task.statistics_key == job.task_key, Task.user_id == job.user_id,
                 Task.project_id == job.project_id, Task.kind == KIND, Task.status == "running",
@@ -678,7 +681,7 @@ async def _write_checkpoint(db: AsyncSession, job: BatchJob) -> None:
                 Task.admin_cancel_operation_id.is_(None), Task.step_cursor == job.persisted_cursor,
                 cast(Task.checkpoint, String) == raw_checkpoint if raw_checkpoint is not None
                 else Task.checkpoint.is_(None),
-            ).values(step_cursor=job.cursor, checkpoint=copy.deepcopy(job.checkpoint))
+            ).values(**values)
                 .execution_options(synchronize_session=False))
             if changed.rowcount != 1:
                 raise ConflictError("批量任务身份或断点已变化", extra={"code": "rich_review_task_changed"})

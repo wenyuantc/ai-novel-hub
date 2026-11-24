@@ -164,7 +164,7 @@ def _request_params(project_id: int, args: StartArgs) -> dict:
 
 
 class DeferredEngine:
-    """task_service 的窄接口：审批提交后真实 engine.notify() 才调度，预览没有外部副作用。"""
+    """提案预览只构造受理结果，真实调度由审批根事务提交后触发。"""
 
     def __init__(self, context: TaskContext):
         self.ctx = context
@@ -173,7 +173,7 @@ class DeferredEngine:
     def ensure_hub(self, task_id: int, **kwargs) -> None:
         pass
 
-    def notify(self) -> None:
+    def notify_queue_changed(self) -> None:
         pass
 
 

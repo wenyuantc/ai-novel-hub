@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import NotFoundError
-from app.models import Project, ProjectCollaborator, Task
+from app.models import Project, ProjectCollaborator, Task, User
 from app.models.entities import OPEN_TASK_STATUSES
 from app.services import ai_config_service, ai_dispatch, authorization_service, project_lifecycle, task_service
 from app.services.authorization_service import AuthenticatedActor
@@ -129,11 +129,14 @@ async def require_task_stream_lease(
 async def _require_frame_integrity(
     db: AsyncSession, state: _LeaseState, event: str, data: dict, evidence: object,
 ) -> None:
+    from app.services.task_engine.peer_guard import ReceivedFrame
+
     await require_task_stream_lease(
         db, state.actor.id, state.project_id, task_id=state.task_id, task_key=state.task_key,
     )
     try:
-        if state.event != event or state.evidence is not evidence or state.payload_hash != _payload_hash(data):
+        if (state.event != event or state.evidence is not evidence or state.payload_hash != _payload_hash(data)
+                or type(evidence) is ReceivedFrame and not evidence.current()):
             raise TaskStreamLeaseError()
     except Exception:
         state.valid = False
@@ -223,6 +226,13 @@ async def _task_frame_lease(
                             physical.connection.dbapi_connection,
                         )
             await authorization_service.require_authenticated_for_send(db, binding.actor)
+            if binding.actor.editor_created_at is not None:
+                # 上一行已锁住同一账号。SQLite 可复用整数 ID，原账号创建时间也是身份的一部分。
+                from app.services.task_engine.stream_evidence import _time
+
+                created_at = await db.scalar(select(User.created_at).where(User.id == binding.actor.id))
+                if _time(created_at) != _time(binding.actor.editor_created_at):
+                    raise NotFoundError("任务不存在")
             project = None
             if binding.project_id is not None:
                 await ai_dispatch._lock(db, binding.project_id, write=False, include_recycled=True)
@@ -264,7 +274,7 @@ async def _task_frame_lease(
                     ProjectCollaborator.user_id == binding.actor.id, ProjectCollaborator.status == "accepted",
                     ProjectCollaborator.invitation_id == binding.member_grant[0],
                     ProjectCollaborator.revision == binding.member_grant[1],
-                ))
+                ).with_for_update(read=True))
                 if member is None or (binding.active_grant_required and member.role != "editor"):
                     raise NotFoundError("任务不存在")
                 # E5-f：活动协作订阅依赖作者模型时，锁内直接核对当前 allow_owner_ai（不只依赖成员轮次递增）。
@@ -333,6 +343,123 @@ def _format_task_frame(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
+async def _send_guarded_frame(
+    sessionmaker, binding: _StreamBinding, event: str, data: dict, evidence: object, *,
+    send=None, peer_write=None, source_worker: str | None = None, frame_timeout: float,
+) -> str:
+    from app.services.task_engine import peer_guard, stream_evidence
+
+    @asynccontextmanager
+    async def registered_frame():
+        """只在真正负责写出的协程登记物理事务；本地、内部和最终客户端写入共享锁序。"""
+        async with _task_frame_lease(sessionmaker, binding, event, data) as (db, task, project):
+            root = db.get_transaction()
+            connection = await db.connection()
+            owner = asyncio.current_task()
+            physical = connection.sync_connection
+            if (root is None or not root.is_active or db.get_nested_transaction() is not None or owner is None
+                    or connection.closed or connection.invalidated or physical.get_transaction() is None
+                    or physical.get_nested_transaction() is not None or db in _LIVE_STREAM_LEASES):
+                raise TaskStreamLeaseError()
+            state = _LeaseState(
+                binding.actor, binding.project_id, binding.task_id, binding.task_key,
+                binding.queued_at, event, _payload_hash(data), evidence, owner, root.sync_transaction,
+                physical, physical.get_transaction(), physical.connection.dbapi_connection,
+                binding=binding,
+            )
+
+            def transaction_created(_session, transaction) -> None:
+                if transaction.nested:
+                    state.valid = False
+
+            def transaction_ended(_session, transaction) -> None:
+                if transaction is state.session_transaction:
+                    state.valid = False
+
+            watching = False
+            try:
+                _LIVE_STREAM_LEASES[db] = state
+                sqlalchemy_event.listen(db.sync_session, "after_transaction_create", transaction_created)
+                sqlalchemy_event.listen(db.sync_session, "after_transaction_end", transaction_ended)
+                watching = True
+                yield db, task, project, state
+            finally:
+                state.valid = False
+                if _LIVE_STREAM_LEASES.get(db) is state:
+                    del _LIVE_STREAM_LEASES[db]
+                if watching:
+                    sqlalchemy_event.remove(db.sync_session, "after_transaction_create", transaction_created)
+                    sqlalchemy_event.remove(db.sync_session, "after_transaction_end", transaction_ended)
+
+    entered = False
+    try:
+        with anyio.fail_after(frame_timeout):
+            while True:
+                try:
+                    async with registered_frame() as (db, task, project, state):
+                        conditions = None
+                        if peer_write is not None:
+                            conditions = await peer_guard.capture(
+                                db, binding, task, project, event, data, evidence, source_worker=source_worker,
+                            )
+                        elif type(evidence) is peer_guard.ReceivedFrame:
+                            if evidence.ctx.sessionmaker is not sessionmaker:
+                                raise NotFoundError("任务不存在")
+                            await peer_guard.validate(db, binding, task, project, event, data, evidence)
+                        elif not await stream_evidence.verify_stream_frame(db, task, project, event, data, evidence):
+                            raise NotFoundError("任务不存在")
+                        await _require_frame_integrity(db, state, event, data, evidence)
+                        entered = True
+                        if peer_write is None:
+                            await send({"type": "http.response.body", "body": _format_task_frame(event, data),
+                                        "more_body": True})
+                        else:
+                            await peer_write(event, data, conditions)
+                        await _require_frame_integrity(db, state, event, data, evidence)
+                    return "sent"
+                except Exception as exc:
+                    if entered:
+                        raise
+                    if isinstance(exc, stream_evidence.TerminalEvidencePending):
+                        # 此时已释放所有锁；等待原执行的终态/后继，再用原证据重取租约。
+                        await exc.wait()
+                    elif isinstance(exc, peer_guard.PeerFrameAdvanced) and type(evidence) is peer_guard.ReceivedFrame:
+                        evidence = await evidence.refresh()
+                    else:
+                        raise
+    except Exception as exc:
+        if isinstance(exc, TimeoutError) and (entered or type(evidence) is not peer_guard.ReceivedFrame):
+            return "abort"
+        if entered:
+            if isinstance(exc, OSError):
+                raise OSError("任务流连接已断开") from None
+            raise RuntimeError("任务流传输中断") from None
+        denied = {"task": None, "detail": "任务访问权限已失效", "code": "permission_denied"}
+        try:
+            with anyio.fail_after(frame_timeout):
+                if peer_write is None:
+                    await send({"type": "http.response.body", "body": _format_task_frame("error", denied),
+                                "more_body": True})
+                else:
+                    await peer_write("error", denied, None)
+        except (TimeoutError, OSError):
+            return "abort"
+        except Exception:
+            raise RuntimeError("任务流传输中断") from None
+        return "error"
+
+
+async def send_peer_source_frame(
+    sessionmaker, binding: _StreamBinding, event: str, data: dict, evidence: object, write, *,
+    source_worker: str, frame_timeout: float = 5.0,
+) -> str:
+    """执行端仅在原来源验证通过的真实帧租约中写出；确认及重核由调用方在返回后处理。"""
+    return await _send_guarded_frame(
+        sessionmaker, binding, event, data, evidence, peer_write=write, frame_timeout=frame_timeout,
+        source_worker=source_worker,
+    )
+
+
 class _TaskFrameGuardedResponse(StreamingResponse):
     """唯一证明登记点：实际 ASGI send 循环内持有该帧的根事务及全部锁。"""
 
@@ -347,89 +474,9 @@ class _TaskFrameGuardedResponse(StreamingResponse):
         self._frame_timeout = frame_timeout
 
     async def _send_frame(self, send, event: str, data: dict, evidence: object) -> str:
-        from app.services.task_engine import stream_evidence
-
-        entered = False
-
-        async def attempt() -> None:
-            nonlocal entered
-            async with _task_frame_lease(self._sessionmaker, self._binding, event, data) as (db, task, project):
-                root = db.get_transaction()
-                connection = await db.connection()
-                owner = asyncio.current_task()
-                physical = connection.sync_connection
-                if (root is None or not root.is_active or db.get_nested_transaction() is not None or owner is None
-                        or connection.closed or connection.invalidated or physical.get_transaction() is None
-                        or physical.get_nested_transaction() is not None or db in _LIVE_STREAM_LEASES):
-                    raise TaskStreamLeaseError()
-                state = _LeaseState(
-                    self._binding.actor, self._binding.project_id, self._binding.task_id, self._binding.task_key,
-                    self._binding.queued_at, event, _payload_hash(data), evidence, owner, root.sync_transaction,
-                    physical, physical.get_transaction(), physical.connection.dbapi_connection,
-                    binding=self._binding,
-                )
-
-                def transaction_created(_session, transaction) -> None:
-                    if transaction.nested:
-                        state.valid = False
-
-                def transaction_ended(_session, transaction) -> None:
-                    if transaction is state.session_transaction:
-                        state.valid = False
-
-                watching = False
-                try:
-                    _LIVE_STREAM_LEASES[db] = state
-                    sqlalchemy_event.listen(db.sync_session, "after_transaction_create", transaction_created)
-                    sqlalchemy_event.listen(db.sync_session, "after_transaction_end", transaction_ended)
-                    watching = True
-                    if not await stream_evidence.verify_stream_frame(db, task, project, event, data, evidence):
-                        raise NotFoundError("任务不存在")
-                    await _require_frame_integrity(db, state, event, data, evidence)
-                    entered = True
-                    await send({"type": "http.response.body", "body": _format_task_frame(event, data),
-                                "more_body": True})
-                    await _require_frame_integrity(db, state, event, data, evidence)
-                finally:
-                    state.valid = False
-                    if _LIVE_STREAM_LEASES.get(db) is state:
-                        del _LIVE_STREAM_LEASES[db]
-                    if watching:
-                        sqlalchemy_event.remove(db.sync_session, "after_transaction_create", transaction_created)
-                        sqlalchemy_event.remove(db.sync_session, "after_transaction_end", transaction_ended)
-
-        try:
-            with anyio.fail_after(self._frame_timeout):
-                pending_type = getattr(stream_evidence, "TerminalEvidencePending", None)
-                while True:
-                    try:
-                        await attempt()
-                        break
-                    except Exception as exc:
-                        if entered or pending_type is None or not isinstance(exc, pending_type):
-                            raise
-                        # attempt 已退出并释放全部锁；等原帧的终态 latch（或批量 hub 的下一个已发布来源，
-                        # E5-c2）后以原身份重新验证。终态 latch 只触发一次：其后 hub 已关闭，不会再等待。
-                        await exc.wait()
-            return "sent"
-        except TimeoutError:
-            return "abort"
-        except Exception as exc:
-            if entered:
-                if isinstance(exc, OSError):
-                    raise OSError("任务流连接已断开") from None
-                raise RuntimeError("任务流传输中断") from None
-            chunk = _format_task_frame("error", {
-                "task": None, "detail": "任务访问权限已失效", "code": "permission_denied",
-            })
-            try:
-                with anyio.fail_after(self._frame_timeout):
-                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
-            except (TimeoutError, OSError):
-                return "abort"
-            except Exception:
-                raise RuntimeError("任务流传输中断") from None
-            return "error"
+        return await _send_guarded_frame(
+            self._sessionmaker, self._binding, event, data, evidence, send=send, frame_timeout=self._frame_timeout,
+        )
 
     async def _close_events(self) -> None:
         failed = False
@@ -459,6 +506,15 @@ class _TaskFrameGuardedResponse(StreamingResponse):
                     with anyio.fail_after(self._frame_timeout):
                         await send({"type": "http.response.body", "body": _format_task_frame(event, data),
                                     "more_body": True})
+                    from app.services.task_engine.peer_guard import ReceivedFrame
+
+                    if type(evidence) is ReceivedFrame and evidence.current():
+                        # 公网已收到固定终态。对端已关闭时仍正常结束本次响应。
+                        try:
+                            with anyio.fail_after(self._frame_timeout):
+                                await evidence.subscriber.ack()
+                        except Exception:
+                            pass
                     break
                 outcome = await self._send_frame(send, event, data, evidence)
                 if outcome == "abort":

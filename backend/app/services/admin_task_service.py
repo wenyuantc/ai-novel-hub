@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
 from app.models import AdminAuditLog, Project, Task, User
-from app.models.entities import ACTIVE_TASK_STATUSES, OPEN_TASK_STATUSES, TASK_KINDS, TASK_STATUSES
+from app.models.entities import OPEN_TASK_STATUSES, TASK_KINDS, TASK_STATUSES
 from app.schemas.admin_task import (
     AdminTaskBrief,
     AdminTaskCancelOut,
@@ -79,6 +79,7 @@ def _columns():
     # 不选择 Task 整行：title/input/result/output_text/checkpoint/配置均不进入读取面。
     return (
         Task.id, Task.statistics_key.label("task_key"), Task.kind, Task.status, Task.progress, Task.stage,
+        Task.worker_key, Task.execution_key, Task.step_cursor,
         Task.user_id.label("owner_user_id"), User.username.label("owner_username"), Task.project_id,
         Project.title.label("project_title"), Project.deleted_at, Project.deletion_started_at, Task.chapter_id,
         Task.created_at, Task.queued_at, Task.started_at, Task.finished_at, Task.admin_cancel_operation_id,
@@ -92,17 +93,23 @@ def _base_query():
     )
 
 
-def _project(row, engine: "TaskEngine", as_of: datetime) -> AdminTaskBrief:
+def _live_output_hub(row, engine: "TaskEngine"):
+    return engine.live_output_hub(
+        row["id"], task_key=_task_key(row["task_key"]), status=row["status"], queued_at=row["queued_at"],
+        execution_key=row["execution_key"], worker_key=row["worker_key"],
+        batch_cursor=row["step_cursor"] if row["kind"] == "chapter.batch" else None,
+    )
+
+
+def _project(row, engine: "TaskEngine", as_of: datetime, *, use_hub: bool) -> AdminTaskBrief:
     status = row["status"] if row["status"] in TASK_STATUSES else "unknown"
     kind = safe_kind(row["kind"])
     task_key = _task_key(row["task_key"])
     pending = row["admin_cancel_operation_id"] is not None
     progress, raw_stage = row["progress"], row["stage"]
-    hub = engine.hubs.get(row["id"])
-    if hub is not None and task_key is not None and hub.statistics_key == task_key and not hub.closed and (
-        status in ACTIVE_TASK_STATUSES
-    ):
-        progress, raw_stage = hub.progress, hub.stage
+    hub = _live_output_hub(row, engine) if use_hub else None
+    if hub is not None:
+        progress, raw_stage = hub.progress, hub.stored_stage
     stage = raw_stage if raw_stage in SAFE_STAGES or any(p.fullmatch(raw_stage) for p in NUMERIC_STAGES) else (
         "调用工具" if kind == "agent.turn" and raw_stage.startswith("调用") else STAGE_LABELS.get(status, "未知状态")
     )
@@ -173,7 +180,8 @@ async def list_tasks(db: AsyncSession, engine: "TaskEngine", filters: AdminTaskF
         *page_order
     ))).mappings().all()
     counts = AdminTaskCounts(**{status: rows[0][f"count_{status}"] for status in (*TASK_STATUSES, "unknown")})
-    return AdminTaskList(items=[_project(row, engine, as_of) for row in rows if row["id"] is not None],
+    use_hub = any(_live_output_hub(row, engine) is not None for row in rows) and await engine.lease.confirms_output(db)
+    return AdminTaskList(items=[_project(row, engine, as_of, use_hub=use_hub) for row in rows if row["id"] is not None],
                          total=rows[0]["total"], counts=counts, as_of=as_of)
 
 
@@ -182,7 +190,8 @@ async def get_task(db: AsyncSession, engine: "TaskEngine", task_key: str) -> Adm
     if row is None:
         raise NotFoundError("任务不存在或已移除")
     as_of = task_statistics_service.now_utc()
-    return AdminTaskDetail(**_project(row, engine, as_of).model_dump(), as_of=as_of)
+    use_hub = _live_output_hub(row, engine) is not None and await engine.lease.confirms_output(db)
+    return AdminTaskDetail(**_project(row, engine, as_of, use_hub=use_hub).model_dump(), as_of=as_of)
 
 
 async def cancel_task(db: AsyncSession, engine: "TaskEngine", actor: User, task_key: str,
@@ -249,9 +258,11 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", actor: User, task_
             ))
             if task is None:
                 raise NotFoundError("任务不存在或已移除")
+        worker_key = task.worker_key
         audit.summary.accepted_from_status = previous
         await audit.commit()
         accepted = AdminTaskCancelOut(operation_id=audit.operation_id, audit_log_id=audit.row.id)
     # 到此只有安全primitive；不再refresh/读取已过期ORM。断开不能取消这个独立后台工作。
     engine.request_admin_cancel(task_key, accepted.operation_id)
+    engine.peer_wakes.schedule(worker_key)
     return accepted

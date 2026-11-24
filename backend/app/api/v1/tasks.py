@@ -7,12 +7,11 @@ from fastapi.responses import StreamingResponse
 from app.api.sse import sse_response
 from app.core.deps import CurrentUser, DbDep, SessionmakerDep, TaskEngineDep
 from app.core.errors import ConflictError, NotFoundError
-from app.models.entities import OPEN_TASK_STATUSES
 from app.schemas.rich_document_review import ReviewAccept, ReviewIdentity
 from app.schemas.task import TaskClearResult, TaskKind, TaskOut, TaskOutput
 from app.services import authorization_service, project_access, project_ai_config, rich_document_review
 from app.services import task_service as svc
-from app.services.collaboration_task_access import task_grant_identity
+from app.services.task_engine import peer_stream
 from app.services.task_engine.admission import capture_retry_source, prepare_task_admission
 from app.services.task_engine.execution_identity import _TASK_TOKEN_KEY, _TOKEN_KEYS
 from app.services.task_engine.registry import get_handler
@@ -61,32 +60,20 @@ async def get_output(task_id: int, task_key: str, user: CurrentUser, db: DbDep, 
 async def stream_task(
     task_id: int, task_key: str, user: CurrentUser, db: DbDep, engine: TaskEngineDep, sessionmaker: SessionmakerDep,
 ) -> StreamingResponse:
+    # 由这个 HTTP 请求冻结任务轮次和账号实例，连接换进程时仍使用同一绑定。
+    authenticated = authorization_service.actor_snapshot(db, user.id)
+    if not isinstance(authenticated, authorization_service.AuthenticatedActor):
+        raise NotFoundError("任务不存在")
+    actor = authorization_service.AuthenticatedActor(authenticated.id, authenticated.token_version, user.created_at)
     task = await svc.get_owned_task(db, user.id, task_id, expected_task_key=task_key)
-    project_id, queued_at = task.project_id, task.queued_at
-    grant = task_grant_identity(task.input)
-    authenticated = db.info["authenticated_actor"]
-    actor_id, token_version = authenticated.id, authenticated.token_version
-    active_grant_required = task.status in OPEN_TASK_STATUSES
-    binding = await _capture_stream_binding(db, task, authenticated)
-    if binding.member_grant is not None:
-        # E5-f：协作者（含管理员兼协作者）只走受控管线——每帧在实际发送租约内按订阅原绑定复核授权与来源证明。
-        # 仅开放已有帧发布证明（stream_guard）的类型；知识库、拆书等继续失败关闭。
-        if not stream_kind_open(task.kind):
-            raise NotFoundError("任务不存在")
-        await db.close()
-        return task_sse_response(engine.subscribe(
-            binding.task_id, statistics_key=binding.task_key, actor_id=binding.actor.id,
-            token_version=binding.actor.token_version, active_grant_required=binding.active_grant_required,
-            initial_project_id=binding.project_id, initial_queued_at=binding.queued_at,
-            initial_grant=binding.task_grant, guarded=True,
-        ), sessionmaker=sessionmaker, binding=binding)
-    # 作者 / 个人任务：既有管线不变。订阅可能持续很久：先释放请求会话
+    binding = await _capture_stream_binding(db, task, actor)
+    if binding.member_grant is not None and not stream_kind_open(task.kind):
+        raise NotFoundError("任务不存在")
     await db.close()
-    return sse_response(engine.subscribe(
-        task_id, statistics_key=task_key, actor_id=actor_id, token_version=token_version,
-        active_grant_required=active_grant_required, initial_project_id=project_id,
-        initial_queued_at=queued_at, initial_grant=grant,
-    ))
+    events = peer_stream.subscribe(engine, binding)
+    if binding.member_grant is not None:
+        return task_sse_response(events, sessionmaker=sessionmaker, binding=binding)
+    return sse_response(events)
 
 
 @router.post("/{task_id}/cancel", response_model=TaskOut)

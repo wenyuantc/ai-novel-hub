@@ -281,9 +281,12 @@ async def record_failure(engine, project_id, snapshot, *, task=None, registratio
     proof = _proof(snapshot) if snapshot is not None else None
     source = task if snapshot is None and task is not None and task.project_id == project_id else None
     key = _failure_key(project_id, snapshot, proof)
-    if source is not None and source.queued_at is not None:
+    if project_id is None and (source is None or source.statistics_key is None):
+        return False
+    if source is not None and source.statistics_key is not None:
         key = str(uuid5(NAMESPACE_URL, "ainovel/unproven/" + _canonical(
-            [project_id, source.id, source.statistics_key, _utc(source.queued_at).isoformat(), source.execution_key],
+            [project_id, source.id, source.statistics_key,
+             _utc(source.queued_at).isoformat() if source.queued_at is not None else None, source.execution_key],
         )))
     async with engine.ctx.sessionmaker() as db:
         insert = sqlite_insert if db.get_bind().dialect.name == "sqlite" else pg_insert
@@ -292,6 +295,12 @@ async def record_failure(engine, project_id, snapshot, *, task=None, registratio
         ident = snapshot or source
         scope = _current(engine)
         state = "failed"
+        if project_id is None and await db.scalar(select(Task.id).where(
+            Task.id == source.id, Task.statistics_key == source.statistics_key, Task.project_id.is_(None),
+            Task.queued_at == source.queued_at, Task.execution_key == source.execution_key,
+            Task.worker_key == source.worker_key, Task.status == "running",
+        ).with_for_update()) is None:
+            return False
         if scope is not None and scope.work_key is not None:
             same = (TaskWorkRecord.kind == "request_cleanup", TaskWorkRecord.work_key == scope.work_key,
                     TaskWorkRecord.worker_key == scope.worker_key)
@@ -321,7 +330,8 @@ async def record_failure(engine, project_id, snapshot, *, task=None, registratio
             state=state, evidence=proof,
         ).on_conflict_do_nothing(index_elements=["work_key"]))
         await db.commit()
-    engine._durable_abort_failures[key] = (project_id, snapshot)
+    if project_id is not None:
+        engine._durable_abort_failures[key] = (project_id, snapshot)
     return True
 
 

@@ -38,6 +38,7 @@ from app.services import project_access, project_lifecycle, task_statistics_serv
 from app.services.collaboration_task_access import GRANT_KEY, task_grant_identity, task_visible_to_actor
 from app.services.project_service import get_owned_project
 from app.services.task_engine import cleanup_work
+from app.services.task_engine.owner_cancellation import unproven_execution
 from app.services.task_engine.registry import get_handler
 
 if TYPE_CHECKING:
@@ -283,7 +284,32 @@ def _skill_ref(task: Task) -> SkillRef | None:
         return None
 
 
-def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine | None" = None) -> TaskOut:
+def _live_output_hub(engine: "TaskEngine | None", task: Task):
+    if engine is None or task.status != "running":
+        return None
+    return engine.live_output_hub(
+        task.id, task_key=task.statistics_key, status=task.status, queued_at=task.queued_at,
+        execution_key=task.execution_key, worker_key=task.worker_key,
+        batch_cursor=task.step_cursor if task.kind == "chapter.batch" else None,
+    )
+
+
+async def result_unproven(db: AsyncSession, task: Task) -> bool:
+    if task.status != "running":
+        return False
+    if task.recovered_at is not None:
+        return True
+    with db.no_autoflush:
+        return await db.scalar(select(Task.id).where(
+            Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
+            Task.execution_key == task.execution_key, Task.status == "running", unproven_execution(),
+        )) is not None
+
+
+def to_out(
+    task: Task, *, queue_position: int | None = None, engine: "TaskEngine | None" = None, unproven: bool = False,
+    use_hub: bool = True,
+) -> TaskOut:
     out = TaskOut.model_validate(task)
     try:
         target = parse_target(_request_dict(task).get("target"))
@@ -322,16 +348,11 @@ def to_out(task: Task, *, queue_position: int | None = None, engine: "TaskEngine
     checkpoint_out = getattr(get_handler(task.kind), "checkpoint_out", None)
     if checkpoint_out is not None:
         update_fields["checkpoint"] = checkpoint_out(task)
-    hub = engine.hubs.get(task.id) if engine is not None else None
-    if (
-        hub is not None and task.statistics_key is not None
-        and hub.statistics_key == task.statistics_key and task.status in ACTIVE_TASK_STATUSES
-        and (hub.queued_at is None or hub.queued_at == task.queued_at)
-        and (task.execution_key is None or hub.execution_key == task.execution_key)
-    ):
+    hub = _live_output_hub(engine, task) if use_hub else None
+    if hub is not None:
         # 进度 / 阶段以内存中的实时值为准（库里是节流刷新的）
-        update_fields.update(progress=hub.progress, stage=hub.stage or out.stage)
-    if task.status == "running" and (task.recovered_at is not None or (
+        update_fields.update(progress=hub.progress, stage=hub.stored_stage)
+    if task.status == "running" and (unproven or task.recovered_at is not None or (
         engine is not None and engine.execution_is_uncertain(task)
     )):
         update_fields.update(stage="结果待核对", error="任务保存结果尚未确认，请稍后核对")
@@ -359,7 +380,9 @@ async def task_out(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOu
     active = task.status in OPEN_TASK_STATUSES
     grant = task_grant_identity(task.input) if active else _UNSET
     queued_at = task.queued_at if active else _UNSET
-    out = to_out(task, queue_position=await queue_position(db, task), engine=engine)
+    use_hub = _live_output_hub(engine, task) is not None and await engine.lease.confirms_output(db)
+    out = to_out(task, queue_position=await queue_position(db, task), engine=engine,
+                 unproven=await result_unproven(db, task), use_hub=use_hub)
     return await project_task_out(
         db, task.user_id, out, active_grant_required=active, task_key=task_key,
         expected_grant=grant, expected_queued_at=queued_at,
@@ -656,13 +679,14 @@ async def create_task(
     else:
         task = await admit(db)
     await refresh_same_task(db, task)
-    if task.status in ACTIVE_TASK_STATUSES:
+    if not caller_transaction and task.status in ACTIVE_TASK_STATUSES:
         engine.ensure_hub(
             task.id, statistics_key=task.statistics_key, status=task.status,
             text=task.output_text, progress=task.progress, stage=task.stage, queued_at=task.queued_at,
             execution_key=task.execution_key,
         )
-    engine.notify()
+    if not caller_transaction:
+        engine.notify_queue_changed()
     return await task_out(db, engine, task)
 
 
@@ -760,7 +784,7 @@ async def resume_task(
             text=task.output_text, progress=task.progress, stage=task.stage, queued_at=task.queued_at,
             execution_key=task.execution_key,
         )
-    engine.notify()
+    engine.notify_queue_changed()
     return await task_out(db, engine, task)
 
 
@@ -909,14 +933,10 @@ async def get_output(
     active_grant_required = task.status in OPEN_TASK_STATUSES
     expected_grant = task_grant_identity(task.input) if active_grant_required else _UNSET
     expected_queued_at = task.queued_at if active_grant_required else _UNSET
-    hub = engine.hubs.get(task.id)
-    if (
-        hub is not None and task.statistics_key is not None
-        and hub.statistics_key == task.statistics_key and task.status in ACTIVE_TASK_STATUSES
-    ):
-        output = hub.text
-    else:
-        output = task.output_text
+    hub = None
+    if _live_output_hub(engine, task) is not None and await engine.lease.confirms_output(db):
+        hub = _live_output_hub(engine, task)
+    output = hub.text if hub is not None else task.output_text
     if project_id is not None:
         from app.services.personal_projection import project_payload
 
@@ -940,7 +960,7 @@ async def list_tasks(
     active: bool | None = None,
     limit: int = 50,
 ) -> list[TaskOut]:
-    stmt = select(Task).where(task_visible_to_actor(db, user_id))
+    stmt = select(Task, and_(Task.status == "running", unproven_execution())).where(task_visible_to_actor(db, user_id))
     if project_id is not None:
         stmt = stmt.where(Task.project_id == project_id)
     if chapter_id is not None:
@@ -953,16 +973,19 @@ async def list_tasks(
     elif active is False:
         stmt = stmt.where(Task.status.in_(FINISHED_TASK_STATUSES))
     with db.no_autoflush:
-        tasks = list(await db.scalars(stmt.order_by(Task.id.desc()).limit(limit)))
+        rows = (await db.execute(stmt.order_by(Task.id.desc()).limit(limit))).all()
+    tasks = [t for t, _ in rows]
     bindings = [
         (task.id, task.statistics_key, task.project_id, task.status in OPEN_TASK_STATUSES,
          task_grant_identity(task.input), task.queued_at)
         for task in tasks
     ]
     queued = await _queued_ids(db) if any(t.status == "queued" for t in tasks) else []
+    use_hub = any(_live_output_hub(engine, t) is not None for t in tasks) and await engine.lease.confirms_output(db)
     outputs = [
-        to_out(t, queue_position=bisect.bisect_left(queued, t.id) if t.status == "queued" else None, engine=engine)
-        for t in tasks
+        to_out(t, queue_position=bisect.bisect_left(queued, t.id) if t.status == "queued" else None,
+               engine=engine, unproven=unproven, use_hub=use_hub)
+        for t, unproven in rows
     ]
     # 同一作品批量投影，避免对列表中的每条任务重复检查私人引用。
     from app.services.personal_projection import project_payload
@@ -1773,8 +1796,10 @@ async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id:
                                             extra={"code": "project_tasks_not_stopped"})
                     await intent.lock(db, engine)
                     signals = []
+                    owners = set()
                     for task in running:
                         if await owner_cancellation.record_request(db, task):
+                            owners.add(task.worker_key)
                             stopped.add((task.id, task.statistics_key, task.queued_at))
                             recoveries.append((task.id, task.statistics_key, task.queued_at, task.execution_key))
                             if task.worker_key == engine.lease.worker_key and engine.lease.valid:
@@ -1785,6 +1810,8 @@ async def stop_project_tasks(db: AsyncSession, engine: "TaskEngine", project_id:
                         for identity in recoveries:
                             engine.request_worker.recover_cancel(*identity)
                         raise
+                    for worker_key in owners:
+                        engine.peer_wakes.schedule(worker_key)
                     for tid, key, stamp, execution in signals:
                         engine.signal_running_cancel(tid, statistics_key=key, expected_queued_at=stamp,
                                                      expected_execution_key=execution)

@@ -403,8 +403,8 @@ export async function subscribeTask(
   let failures = 0
   for (;;) {
     const holder: { end: TaskEnd | null; denied: Record<string, unknown> | null } = { end: null, denied: null }
-    // 本次连接收到 snapshot 的时间；断开时据此判断连接是否稳定
-    let snapshotAt: number | null = null
+    // 降级后的同一条连接可持续推送快照；连接的稳定时长从首帧快照起算。
+    let firstSnapshotAt: number | null = null
     try {
       if (projectFailure && !projectFailure.isCurrent()) throw new DOMException('aborted', 'AbortError')
       await getSSE(
@@ -427,7 +427,7 @@ export async function subscribeTask(
             }
             switch (msg.event) {
               case 'snapshot':
-                snapshotAt = now()
+                firstSnapshotAt ??= now()
                 handlers.onSnapshot?.(readTask(data), readText(data))
                 break
               case 'delta': {
@@ -528,7 +528,7 @@ export async function subscribeTask(
       if (isAbortError(err) || signal?.aborted) throw err
       if (!isRetryable(err)) throw err
       // 稳定连接（snapshot 后存活满 stableMs）之后的断开视为新一轮故障，计数清零；否则继续累计并退避
-      if (snapshotAt !== null && now() - snapshotAt >= stableMs) failures = 0
+      if (firstSnapshotAt !== null && now() - firstSnapshotAt >= stableMs) failures = 0
       if (failures >= maxRetries) throw err
       failures += 1
       const delay = reconnectDelay(failures, baseDelayMs, maxDelayMs)

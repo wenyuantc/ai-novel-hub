@@ -127,6 +127,7 @@ def _snapshot(value: object) -> tuple[Any, ...]:
 
 _PUBLICATIONS: weakref.WeakKeyDictionary[PublicationSource, tuple[object, ...]] = weakref.WeakKeyDictionary()
 _TERMINALS: weakref.WeakKeyDictionary[TerminalEvidence, tuple[object, ...]] = weakref.WeakKeyDictionary()
+_ORIGINAL_PROJECTIONS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _FRAMES: weakref.WeakKeyDictionary[TaskStreamEvidence, tuple[object, ...]] = weakref.WeakKeyDictionary()
 
 
@@ -261,6 +262,12 @@ def issue_terminal(execution: TaskExecutionIdentity, view: TaskViewEvidence) -> 
     return terminal
 
 
+def registered_terminal(terminal: object) -> bool:
+    if type(terminal) is not TerminalEvidence or terminal not in _TERMINALS:
+        return False
+    return _TERMINALS[terminal] == (_snapshot(terminal.execution), _snapshot(terminal.view))
+
+
 def capture_task_view(task: Task) -> TaskViewEvidence:
     if not isinstance(task.statistics_key, str):
         raise ValueError("任务身份无效")
@@ -278,11 +285,24 @@ def capture_task_view(task: Task) -> TaskViewEvidence:
 
 def frame_evidence(
     event: str, data: dict[str, Any], source: PublicationSource | TaskViewEvidence,
-    visibility: VisibilityStamp | None, terminal: TerminalEvidence | None = None,
+    visibility: VisibilityStamp | None, terminal: TerminalEvidence | None = None, *, original_projection=None,
 ) -> TaskStreamEvidence:
     evidence = TaskStreamEvidence(source, terminal, visibility, event, _digest(data))
     _FRAMES[evidence] = (source, terminal, visibility, event, evidence.payload_hash)
+    if original_projection is not None and type(source) is not TaskViewEvidence:
+        # 原投影输入只在执行端随本帧存活。若 hub 后续改动此对象，就不能再证明原公开内容。
+        _ORIGINAL_PROJECTIONS[evidence] = (original_projection, _digest(original_projection))
     return evidence
+
+
+def projection_input(evidence: TaskStreamEvidence):
+    entry = _ORIGINAL_PROJECTIONS.get(evidence)
+    if entry is None:
+        return None
+    original, frozen = entry
+    if _digest(original) != frozen:
+        raise ValueError("帧的投影来源已变化")
+    return original
 
 
 _FRAME_TASK_EVENTS = ("snapshot", "done", "error", "paused")
@@ -392,6 +412,8 @@ async def _bound_task_visible(db, task: Task, project: Project | None, review: d
                 queued_at=binding.queued_at, review=review,
             ),
         )
+        if db.get_bind().dialect.name == "postgresql":
+            statement = statement.with_for_update(read=True, of=SceneReviewProposal)
     row = (await db.execute(statement)).first()
     return row is not None and task_grant_identity(row.input) == binding.task_grant
 
@@ -445,6 +467,7 @@ def _project_at_stamp(project: Project | None, stamp: object) -> bool:
 
 async def _verify_wizard_successor(
     db, task: Task, evidence: TaskStreamEvidence, hub: object, guard: object, original: TaskExecutionIdentity,
+    selected: list[PublicationSource] | None,
 ) -> bool:
     """设定类向导「同执行戳后继」（2026-11-13）：保存前产出、在本任务收紧可见性的保存提交后才发出的帧。
 
@@ -479,6 +502,8 @@ async def _verify_wizard_successor(
         await require_task_stream_lease(
             db, task.user_id, task.project_id, task_id=task.id, task_key=task.statistics_key,
         )
+        if selected is not None:
+            selected.append(latest)
         return True
     if evidence.terminal is None and not hub.closed:
         raise PublicationSourcePending(hub, changed)
@@ -646,6 +671,13 @@ async def _verify_claim_frame(
     return True
 
 
+def queued_progress_shape(event: str, data: dict[str, Any]) -> bool:
+    position = data.get("queue_position")
+    return (event == "progress" and set(data) == {"status", "progress", "stage", "queue_position"}
+            and data.get("status") == "queued" and _bounded_progress(data)
+            and (position is None or (type(position) is int and position >= 0)))
+
+
 async def _verify_queued_frame(
     db, task: Task, project: Project | None, event: str, data: dict[str, Any], evidence: TaskStreamEvidence,
 ) -> bool:
@@ -653,14 +685,11 @@ async def _verify_queued_frame(
     from app.services.task_engine.stream_lease import require_task_stream_lease
 
     source = evidence.source
-    if (_queued_hub(source) is None or project is None or not isinstance(data, dict) or event != "progress"
+    if (_queued_hub(source) is None or project is None or not isinstance(data, dict)
             or task.id != source.task_id or task.statistics_key != source.task_key
             or _time(task.queued_at) != source.queued_at or not _stream_kind(task.kind)):
         return False
-    position = data.get("queue_position")
-    if (set(data) != {"status", "progress", "stage", "queue_position"} or data.get("status") != "queued"
-            or not _bounded_progress(data)
-            or not (position is None or (type(position) is int and position >= 0))):
+    if not queued_progress_shape(event, data):
         return False
     if not await _bound_task_visible(db, task, project, None) or not await _owner_ai_current(db, task):
         return False
@@ -715,8 +744,56 @@ async def _verify_late_queued_snapshot(
     return True
 
 
+async def verify_view_frame(
+    db, task: Task, project: Project | None, event: str, data: dict[str, Any], source: TaskViewEvidence,
+) -> bool:
+    """用本次帧租约自有的持久行重新计算投影。不能给运行中正文补签。"""
+    if source.status == "queued" and task.status != "queued":
+        # E5-e：排队快照的实际发送恰逢领取提交（不以持锁行补签正文）。
+        return await _verify_late_queued_snapshot(db, task, project, event, data, source)
+    if task.status == "queued":
+        # 排队行没有执行体来源，不能为 delta 或任意客户端正文补签。
+        # 快照的全部公开字段和正文必须由同一持锁任务重新投影证明。
+        if (event != "snapshot" or set(data) != {"task", "text"}
+                or capture_task_view(task) != source or not await _owner_ai_current(db, task)):
+            return False
+        from app.services import task_service
+        from app.services.collaboration_task_access import task_grant_identity
+
+        out = task_service.to_out(task, queue_position=await task_service.queue_position(db, task))
+        out = await task_service.project_task_out(
+            db, task.user_id, out, active_grant_required=True, task_key=task.statistics_key,
+            expected_grant=task_grant_identity(task.input), expected_queued_at=task.queued_at,
+        )
+        return _digest(data) == _digest({"task": out.model_dump(mode="json"),
+                                         "text": task.output_text or ""})
+    if project is None or (project.deleted_at is None and project.deletion_started_at is None):
+        # 已结束 / 待审核回放：同一持锁行按订阅原绑定重算 _finished_events 的公开投影。
+        return await _verify_persisted_replay(db, task, project, event, data, source)
+    # 删除中的作者仅可收到不含私有引用的固定取消通知。
+    safe_task = data.get("task") if isinstance(data, dict) else None
+    if (project is not None and project.user_id == task.user_id and project.deleted_at is None
+            and project.deletion_started_at is not None and task.status == "cancelled"
+            and event == "error" and set(data) == {"task", "detail"} and data.get("detail") == "任务已取消"
+            and isinstance(safe_task, dict) and all(safe_task.get(key) is None for key in (
+                "checkpoint", "skill", "rich_review", "retry_of_id", "chapter_id", "scene_id",
+                "analysis_id", "character_id", "outline_id",
+            ))):
+        from app.services import task_service
+
+        safe = task_service.to_out(task).model_copy(update={
+            "checkpoint": None, "skill": None, "rich_review": None, "retry_of_id": None,
+            "chapter_id": None, "scene_id": None, "analysis_id": None, "character_id": None,
+            "outline_id": None,
+        })
+        return (capture_task_view(task) == source
+                and _digest(safe_task) == _digest(safe.model_dump(mode="json")))
+    return False
+
+
 async def verify_stream_frame(
     db, task: Task, project: Project | None, event: str, data: dict[str, Any], evidence: object,
+    *, selected: list[PublicationSource] | None = None,
 ) -> bool:
     """调用方已持原认证、可见性、Project 与 Task 共享锁，锁到实际 ASGI send。"""
     try:
@@ -750,47 +827,7 @@ async def verify_stream_frame(
             # E5-e：排队位次帧。
             return await _verify_queued_frame(db, task, project, event, data, evidence)
         if type(evidence.source) is TaskViewEvidence:
-            if evidence.source.status == "queued" and task.status != "queued":
-                # E5-e：排队快照的实际发送恰逢领取提交（不以持锁行补签正文）。
-                return await _verify_late_queued_snapshot(db, task, project, event, data, evidence.source)
-            if task.status == "queued":
-                # 排队行没有执行体来源，不能为 delta 或任意客户端正文补签。
-                # 快照的全部公开字段和正文必须由同一持锁任务重新投影证明。
-                if (event != "snapshot" or set(data) != {"task", "text"}
-                        or capture_task_view(task) != evidence.source or not await _owner_ai_current(db, task)):
-                    return False
-                from app.services import task_service
-                from app.services.collaboration_task_access import task_grant_identity
-
-                out = task_service.to_out(task, queue_position=await task_service.queue_position(db, task))
-                out = await task_service.project_task_out(
-                    db, task.user_id, out, active_grant_required=True, task_key=task.statistics_key,
-                    expected_grant=task_grant_identity(task.input), expected_queued_at=task.queued_at,
-                )
-                return _digest(data) == _digest({"task": out.model_dump(mode="json"),
-                                                 "text": task.output_text or ""})
-            if project is None or (project.deleted_at is None and project.deletion_started_at is None):
-                # 已结束 / 待审核回放：同一持锁行按订阅原绑定重算 _finished_events 的公开投影。
-                return await _verify_persisted_replay(db, task, project, event, data, evidence.source)
-            # 删除中的作者仅可收到不含私有引用的固定取消通知。
-            safe_task = data.get("task") if isinstance(data, dict) else None
-            if (project is not None and project.user_id == task.user_id and project.deleted_at is None
-                    and project.deletion_started_at is not None and task.status == "cancelled"
-                    and event == "error" and set(data) == {"task", "detail"} and data.get("detail") == "任务已取消"
-                    and isinstance(safe_task, dict) and all(safe_task.get(key) is None for key in (
-                        "checkpoint", "skill", "rich_review", "retry_of_id", "chapter_id", "scene_id",
-                        "analysis_id", "character_id", "outline_id",
-                    ))):
-                from app.services import task_service
-
-                safe = task_service.to_out(task).model_copy(update={
-                    "checkpoint": None, "skill": None, "rich_review": None, "retry_of_id": None,
-                    "chapter_id": None, "scene_id": None, "analysis_id": None, "character_id": None,
-                    "outline_id": None,
-                })
-                return (capture_task_view(task) == evidence.source
-                        and _digest(safe_task) == _digest(safe.model_dump(mode="json")))
-            return False
+            return await verify_view_frame(db, task, project, event, data, evidence.source)
         if type(evidence.source) is not PublicationSource:
             return False
         from app.services.collaboration_ai_guard import (
@@ -810,13 +847,15 @@ async def verify_stream_frame(
             await require_task_stream_lease(
                 db, task.user_id, task.project_id, task_id=task.id, task_key=task.statistics_key,
             )
+            if selected is not None:
+                selected.append(evidence.source)
             return True
         if _wizard_successor_source(evidence.source) and (
             stale_stamp or not _project_at_stamp(project, getattr(guard, "_stamp", None))
         ):
             # 设定类向导（2026-11-13）：构建戳已不再成立时，未决帧不走下方终态证明（构建 guard 必然失败），
             # 只能由同一 hub 登记的本执行完成仅发布 guard 证明；构建戳仍成立（大纲、非替换首次保存）时不进入。
-            return await _verify_wizard_successor(db, task, evidence, hub, guard, original)
+            return await _verify_wizard_successor(db, task, evidence, hub, guard, original, selected)
         terminal = evidence.terminal
         if terminal is None and not hub.closed and _has_successor_guard(guard):
             # 批量（E5-c2）与智能体轮次：断点会随步骤/轮次推进，帧发出时原来源可能已被同一执行后来的步骤取代。
@@ -833,6 +872,8 @@ async def verify_stream_frame(
                 await require_task_stream_lease(
                     db, task.user_id, task.project_id, task_id=task.id, task_key=task.statistics_key,
                 )
+                if selected is not None:
+                    selected.append(latest)
                 return True
             raise PublicationSourcePending(hub, changed)
         if terminal is None and not hub.closed:
@@ -853,6 +894,8 @@ async def verify_stream_frame(
         await require_task_stream_lease(
             db, task.user_id, task.project_id, task_id=task.id, task_key=task.statistics_key,
         )
+        if selected is not None:
+            selected.append(evidence.source)
         return True
     except TerminalEvidencePending:
         raise

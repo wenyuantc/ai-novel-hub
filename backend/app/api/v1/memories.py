@@ -77,7 +77,7 @@ async def _enqueue_vectors(engine, db, write_actor: kb_service.ContentWriteActor
                 memory_ids=[memory_id],
             )
         if queued is not None:
-            engine.notify()
+            engine.notify_queue_changed()
     except Exception:
         # 不输出 SQL 参数、配置或输入正文；人工记忆已提交，不能把派生故障误报为写入失败。
         logger.warning("记忆向量任务未能排队")

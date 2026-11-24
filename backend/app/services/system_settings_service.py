@@ -43,6 +43,8 @@ class SystemSettingsManager:
         self._deployment = {key: getattr(self._source_state.deployment, key) for key in SYSTEM_SETTING_KEYS}
         self._poll_interval = poll_interval
         self._poller: asyncio.Task | None = None
+        self._refresh = asyncio.Event()
+        self.notify_peers: Callable[[], None] | None = None
         # 必须先确认持久设置，再允许依赖运行设置的实际发送/准入。
         self.runtime.settings_confirmed = False
         self._defaults = {key: Settings.model_fields[key].default for key in SYSTEM_SETTING_KEYS}
@@ -118,9 +120,19 @@ class SystemSettingsManager:
                 self._schedule_recovery()
                 raise AuditOperationError(UNKNOWN) from None
 
+    def request_refresh(self) -> None:
+        """只提示本实例重读数据库，由一个轮询协程合并重复请求。"""
+        self._refresh.set()
+
     async def _poll(self) -> None:
         while not self._closing:
-            await asyncio.sleep(max(0, self._source_state.verified_until - time.monotonic()))
+            delay = max(0, self._source_state.verified_until - time.monotonic())
+            try:
+                async with asyncio.timeout(delay):
+                    await self._refresh.wait()
+            except TimeoutError:
+                pass
+            self._refresh.clear()
             async with self._lock:
                 if self._closing:
                     return
@@ -218,6 +230,8 @@ class SystemSettingsManager:
                             # 其他实例可在物理提交后立即写下一版。回执迟到不能延长本版的新鲜期。
                             valid_until = time.monotonic() + self._poll_interval
                             await audit.commit()
+                            if self.notify_peers is not None:
+                                self.notify_peers()
                             if time.monotonic() >= valid_until:
                                 return await self._reload()
                             self._source_state.verified_until = valid_until

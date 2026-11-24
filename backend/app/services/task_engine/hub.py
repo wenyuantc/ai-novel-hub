@@ -5,6 +5,7 @@
 """
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -55,6 +56,8 @@ class TaskHub:
         # runner 产出的 paused 载荷（多步任务到达审核点，断点已落库）
         self.paused: dict[str, Any] | None = None
         self.closed = False
+        # 仅本机确认领取后短期记录；其他 hub 沿用单进程发布路径。
+        self.capture_handoff: Callable[[str, dict], None] | None = None
         # 自上次刷库后是否有新的输出 / 进度
         self.dirty = False
         self._subscribers: set[Subscriber] = set()
@@ -93,6 +96,8 @@ class TaskHub:
         self._subscribers.discard(sub)
 
     def publish(self, event: str, data: dict[str, Any]) -> None:
+        if self.capture_handoff is not None:
+            self.capture_handoff(event, data)
         for sub in list(self._subscribers):
             try:
                 if sub.guarded:
@@ -130,6 +135,11 @@ class TaskHub:
         if self.text and self._mixed_text_source:
             return None
         return self.text_source if self.text else self.source
+
+    @property
+    def stored_stage(self) -> str:
+        """普通读取与 tasks.stage 的持久快照共享同一长度。"""
+        return self.stage[:100]
 
     def progress_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"status": self.status, "progress": self.progress, "stage": self.stage}

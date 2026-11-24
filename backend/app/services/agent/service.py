@@ -1455,8 +1455,12 @@ async def _decide_change(
             await db.flush()
             await db.refresh(change)
             original_result = ChangeOut.model_validate(change).model_dump(mode="json")
+            admitted = confirm and change.tool_name == "start_task" and change.status == "executed"
             await coordinator.commit(db, engine.ctx.sessionmaker)
-            engine.notify()
+            if admitted:
+                engine.notify_queue_changed()
+            else:
+                engine.notify()
             await db.refresh(change)
         else:
             original_result = ChangeOut.model_validate(change).model_dump(mode="json")
@@ -1577,7 +1581,7 @@ async def _enqueue_collaborator_memories(
         logger.warning("智能体协作撤销后的记忆索引排队失败 error_type=%s", type(exc).__name__)
         return
     if task_id is not None:
-        engine.notify()
+        engine.notify_queue_changed()
 
 
 async def _undo_grant(db: AsyncSession, rows: list[AgentChange]) -> "GrantIdentity | None":
@@ -1656,7 +1660,7 @@ async def _undo_changes(
         from app.services import kb_index_service
 
         try:
-            await kb_index_service.enqueue_memory(
+            queued = await kb_index_service.enqueue_memory(
                 engine.ctx.sessionmaker, actor_id=user_id, project_id=project_id,
                 authenticated_actor=db.info.get("authenticated_actor"),
             )
@@ -1664,7 +1668,8 @@ async def _undo_changes(
             # 撤销已提交，不能把派生索引排队失败伪装成撤销失败，诱导重复提交。
             logger.warning("智能体撤销后的记忆索引排队失败 error_type=%s", type(exc).__name__)
         else:
-            engine.notify()
+            if queued is not None:
+                engine.notify_queue_changed()
     for row in rows:
         await db.refresh(row)
     return await public_changes(db, user_id, project_id, rows)

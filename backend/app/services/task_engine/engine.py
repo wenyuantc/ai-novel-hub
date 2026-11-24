@@ -80,6 +80,10 @@ from app.services.task_engine.execution_identity import (
     same_execution,
 )
 from app.services.task_engine.hub import Subscriber, TaskHub
+from app.services.task_engine.output_flush import OutputFlushTimer, OutputSnapshot
+from app.services.task_engine.peer_handoff import ClaimHandoff, HandoffUnavailable, PeerHandoffs
+from app.services.task_engine.peer_transport import PeerTransport
+from app.services.task_engine.peer_wake import PeerWakes
 from app.services.task_engine.registry import Event, TaskContext, TaskHandler, get_handler
 from app.services.task_engine.request_worker import RequestWorker
 
@@ -269,7 +273,7 @@ class TaskEngine:
     # 取消运行中任务时等待其收尾的上限（秒）
     cancel_wait_seconds = 10.0
     # 待审核协作任务授权失效的数据库全量复查间隔（秒）；本进程撤权通知会立即复查对应成员。
-    collaboration_scan_interval = 15.0
+    collaboration_scan_interval: float | None = None  # 默认随调度器绝对轮询期限运行
     # 全量复查的键集分页大小（每批一个短只读会话）。
     collaboration_scan_batch = 100
     # 受控订阅恰逢领取提交、引擎尚未登记领取来源时，等待该来源的上限（秒，E5-e）；超时失败关闭。
@@ -277,8 +281,10 @@ class TaskEngine:
 
     def __init__(self, ctx: TaskContext):
         self.ctx = ctx
+        self.peer_wakes = PeerWakes(self)
         self.ctx.task_engine = self
         self.hubs: dict[int, TaskHub] = {}
+        self.peer_handoffs = PeerHandoffs()
         self._running: dict[int, asyncio.Task[None]] = {}
         self._running_statistics_keys: dict[int, str | None] = {}
         self._running_execution_keys: dict[int, str] = {}
@@ -305,6 +311,8 @@ class TaskEngine:
         self._stalled: dict[int, tuple[str | None, Any]] = {}
         self._loop_task: asyncio.Task[None] | None = None
         self.lease = workers.WorkerLease(self)
+        self.peer = PeerTransport(self)
+        self.peer.on_wake = self.peer_wakes.receive
         self.request_worker = RequestWorker(self)
         self._project_executions: dict[int, TaskExecutionIdentity] = {}
         self._exit_confirmations: set[asyncio.Task] = set()
@@ -323,6 +331,8 @@ class TaskEngine:
         # 待审核协作任务的全量复查（E5-a）：上次启动时刻、在途扫描、串行锁与不可证明任务的去重日志。
         self._paused_scan_at: float | None = None
         self._paused_scans: set[asyncio.Task] = set()
+        self._pending_paused_scans: set[tuple[int | None, int | None]] = set()
+        self._pending_run_checks: dict[tuple[int, int], set[int]] = {}
         self._paused_scan_lock = asyncio.Lock()
         self._paused_unproven_logged: set[tuple[int, str | None, Any]] = set()
         # 本进程原执行体产出的单章 done 载荷（task_id → (执行键, 载荷)），仅供收据收尾比对 result_hash。
@@ -370,6 +380,7 @@ class TaskEngine:
             return
         self._lease_lost = True
         self.lease.invalidate()
+        self.peer_handoffs.clear()
         logger.warning("执行者租约已失效，停止领取与执行")
         for task_id, task in self._running.items():
             # 活游标或正在退出的执行体由其已有写屏障退出；再次 cancel 会打断驱动清理。
@@ -420,6 +431,7 @@ class TaskEngine:
 
     async def _stop_worker(self) -> None:
         # 本地执行与收尾均已排空。让在途心跳结束后再持久标记停止，避免晚到的应答影响下一代。
+        self.peer_handoffs.clear()
         self._heartbeat_stop.set()
         if self._heartbeat_task is not None:
             await asyncio.gather(self._heartbeat_task, return_exceptions=True)
@@ -465,12 +477,19 @@ class TaskEngine:
         if cleanup:
             await asyncio.gather(*cleanup, return_exceptions=True)
         self._shutdown.clear()
+        self._pending_paused_scans.clear()
+        self._pending_run_checks.clear()
 
     def notify(self) -> None:
         # 外部事件可能让此前无法前进的排队任务变得可处理：清空本进程退避记录后重新领取。
         self._stalled.clear()
         if self._wake is not None:
             self._wake.set()
+
+    def notify_queue_changed(self) -> None:
+        """业务队列变更已提交；唤醒本机并提示对端重查。"""
+        self.notify()
+        self.peer_wakes.schedule()
 
     def _mark_stalled(self, task_id: int, statistics_key: str | None, queued_at: Any) -> None:
         self._stalled[task_id] = (statistics_key, queued_at)
@@ -546,19 +565,17 @@ class TaskEngine:
         return matches_running(execution, task, cancellation_operation=operation)
 
     async def _record_uncertain_claim(self, execution: TaskExecutionIdentity) -> None:
-        if execution.project_id is None:
-            return
         original = Task(id=execution.task_id, project_id=execution.project_id, statistics_key=execution.task_key,
                         queued_at=execution.queued_at, execution_key=execution.execution_key,
                         worker_key=execution.worker_key)
         await self.record_abort_failure(execution.project_id, None, task=original)
 
     async def record_abort_failure(
-        self, project_id: int, snapshot: AbortSnapshot | None, *, task=None, registration_rolled_back=False,
+        self, project_id: int | None, snapshot: AbortSnapshot | None, *, task=None, registration_rolled_back=False,
     ) -> None:
         if await cleanup_work.record_failure(
             self, project_id, snapshot, task=task, registration_rolled_back=registration_rolled_back,
-        ):
+        ) and project_id is not None:
             self.remember_abort_failure(project_id, snapshot)
 
     async def clear_abort_failure(self, snapshot: AbortSnapshot | None) -> None:
@@ -578,10 +595,42 @@ class TaskEngine:
             task.id, task.statistics_key, self.admin_cancellations.round_at(task), task.execution_key,
         ))
 
+    async def record_uncertain_execution(self, task: Task) -> None:
+        self.remember_uncertain_execution(task)
+        await self.record_abort_failure(task.project_id, None, task=task)
+
     def execution_is_uncertain(self, task: Task) -> bool:
         return task.recovered_at is not None or (
             task.id, task.statistics_key, self.admin_cancellations.round_at(task), task.execution_key,
         ) in self._uncertain_executions
+
+    def live_output_hub(
+        self, task_id: int, *, task_key: str | None, status: str, queued_at: datetime | None,
+        execution_key: str | None, worker_key: str | None, batch_cursor: int | None = None,
+    ) -> TaskHub | None:
+        """只为已确认的本地执行轮次提供实时文本与进度。入队或订阅也能创建 hub。"""
+        if (status != "running" or task_key is None or execution_key is None or worker_key is None
+                or worker_key != self.lease.worker_key or not self.lease.valid
+                or self._running_statistics_keys.get(task_id) != task_key
+                or self._running_rounds.get(task_id) != queued_at
+                or self._running_execution_keys.get(task_id) != execution_key):
+            return None
+        runner, hub = self._running.get(task_id), self.hubs.get(task_id)
+        if (runner is None or runner.done() or hub is None or hub.closed or hub.status != "running"
+                or hub.statistics_key != task_key
+                or hub.queued_at != queued_at or hub.execution_key != execution_key):
+            return None
+        current = getattr(hub.source, "execution", hub.source)
+        if (not isinstance(current, TaskExecutionIdentity) or current.task_id != task_id
+                or current.task_key != task_key or current.execution_key != execution_key
+                or current.worker_key != worker_key):
+            return None
+        if batch_cursor is not None:
+            for source in (hub.source, hub.snapshot_source()):
+                execution = getattr(source, "execution", None)
+                if execution is None or execution.step_cursor != batch_cursor:
+                    return None
+        return hub
 
     def forget_abort_failure(self, snapshot: AbortSnapshot | None) -> None:
         if snapshot is None or self._failed_cleanups.get(snapshot.task_id) != snapshot:
@@ -743,9 +792,7 @@ class TaskEngine:
             if changed.rowcount != 1:
                 return False
             await db.commit()
-        self.remember_uncertain_execution(task)
-        if task.project_id is not None:
-            await self.record_abort_failure(task.project_id, None, task=task)
+        await self.record_uncertain_execution(task)
         logger.error("任务执行事实待核对 task=%s", task.id)
         return True
 
@@ -936,14 +983,17 @@ class TaskEngine:
                     next_reap = time.monotonic()
                 if self._stopping:
                     return
-                if time.monotonic() >= next_reap:
+                periodic = time.monotonic() >= next_reap
+                if periodic:
+                    self._recheck_active_members()
                     # 即使无关完成事件持续唤醒，也按定时期限重试排队任务。
                     self._stalled.clear()
                     next_reap = time.monotonic() + self.poll_interval
                     await self._reap_orphans()
                 await self.scan_admin_cancellations()
                 await owner_cancellation.scan(self)
-                self._maybe_scan_collaboration_paused_soon()
+                if periodic or self._paused_scan_at is None or self.collaboration_scan_interval is not None:
+                    self._maybe_scan_collaboration_paused_soon()
                 await self._dispatch()
             except asyncio.CancelledError:
                 raise
@@ -1431,28 +1481,37 @@ class TaskEngine:
     def _maybe_scan_collaboration_paused_soon(self) -> None:
         """调度循环内按间隔发起全量复查；进程启动后的第一轮立即复查（覆盖重启前遗留的待审核任务）。"""
         now = time.monotonic()
-        if self._paused_scan_at is not None and now - self._paused_scan_at < self.collaboration_scan_interval:
-            return
-        if any(not work.done() for work in self._paused_scans):
+        if (self.collaboration_scan_interval is not None and self._paused_scan_at is not None
+                and now - self._paused_scan_at < self.collaboration_scan_interval):
             return
         self._paused_scan_at = now
         self._spawn_paused_scan(None, None)
 
     def _spawn_paused_scan(self, project_id: int | None, actor_id: int | None) -> None:
-        async def run() -> None:
-            try:
-                await self.scan_collaboration_paused(project_id=project_id, actor_id=actor_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001
-                logger.warning("待审核协作任务复查失败 project=%s", project_id)
+        # 全量扫描已经覆盖期间积压的成员键；提交在扫描进行中时仍安排一轮复查。
+        key = (project_id, actor_id)
+        pending = self._pending_paused_scans
+        if key == (None, None) or len(pending) >= self.collaboration_scan_batch:
+            pending.clear()
+            pending.add((None, None))
+        elif (None, None) not in pending:
+            pending.add(key)
+        if any(not work.done() for work in self._paused_scans):
+            return
 
-        work = asyncio.create_task(run(), name=f"collaboration-paused-{project_id}-{actor_id}")
+        async def run() -> None:
+            while pending:
+                project, actor = pending.pop()
+                try:
+                    await self.scan_collaboration_paused(project_id=project, actor_id=actor)
+                except Exception:
+                    logger.warning("待审核协作任务复查失败 project=%s", project)
+
+        work = asyncio.create_task(run(), name="collaboration-paused")
         self._collaboration_checks.add(work)
         work.add_done_callback(self._collaboration_checks.discard)
-        if project_id is None:
-            self._paused_scans.add(work)
-            work.add_done_callback(self._paused_scans.discard)
+        self._paused_scans.add(work)
+        work.add_done_callback(self._paused_scans.discard)
 
     def _log_legacy_document_unproven(self, task_id: int, statistics_key: str | None) -> None:
         # 无法证明时任务仍排队并会被反复扫描；同一任务只记一次，避免日志刷屏。
@@ -1589,6 +1648,7 @@ class TaskEngine:
                 queued_task = await db.scalar(queued_select)
                 if queued_task is None or not await workers.lock_live_worker(db, worker_key):
                     return
+                queued_had_text = bool(queued_task.output_text)
                 queued_claim = None
                 chapter_queued_claim = None
                 if queued_task.kind in _SINGLE_CHAPTER_KINDS:
@@ -1755,7 +1815,10 @@ class TaskEngine:
         hub, _ = self.ensure_hub(task_id, statistics_key=statistics_key, status="running",
                                  queued_at=expected_round, execution_key=execution_key)
         hub.source = self._claim_source(execution, hub)
-        if hub.text:
+        peer_active = self.peer.url is not None
+        if peer_active:
+            self.peer_handoffs.begin(hub, worker_key)
+        if hub.text or (peer_active and queued_had_text):
             # 续跑的旧缓存属于上一执行体；新轮必须从它自己经验证的输出开始。
             hub.reset()
         hub.set_queue_position(None)
@@ -1867,10 +1930,8 @@ class TaskEngine:
                 status, error = "cancelled", CANCELLED_MESSAGE
         except (generation_service.ChapterCommitUncertain, analysis_service.AnalysisCommitUncertain):
             # 原事务可能已经提交正文；不能触发 on_abort、清除 execution 或开放重试。
-            if task is not None and task.project_id is not None:
-                await self.record_abort_failure(task.project_id, None, task=task)
             if task is not None:
-                self.remember_uncertain_execution(task)
+                await self.record_uncertain_execution(task)
             if self.hubs.get(task_id) is hub:
                 self.hubs.pop(task_id, None)
             hub.close("error", {"task": None, "detail": "任务保存结果尚未确认，请稍后核对"})
@@ -1996,6 +2057,7 @@ class TaskEngine:
                 hub.publish(event, data)
 
         async def checked(event: str, data: dict[str, Any]) -> None:
+            await timer.settle()
             if getattr(handler, "execution_identity_aware", False) is True:
                 try:
                     verify = getattr(handler, "verify_event", None)
@@ -2038,7 +2100,16 @@ class TaskEngine:
                         raise VisibilityPolicyError("任务执行身份已变化")
                     publish(event, data)
 
-        async with aclosing(handler.run(job, self.ctx)) as events:
+        timer = OutputFlushTimer()
+
+        async def flush_idle() -> bool:
+            nonlocal last_flush
+            persisted = await self._flush(hub, handler=handler, job=job, execution=execution, idle_snapshot=pending)
+            last_flush = time.monotonic()
+            return persisted is not False
+
+        async with aclosing(handler.run(job, self.ctx)) as events, AsyncExitStack() as timers:
+            timers.push_async_callback(timer.settle)
             async for event, data in events:
                 if event == "done" and task.kind in _SINGLE_CHAPTER_KINDS and isinstance(data, dict):
                     self._done_candidates[task.id] = (hub.execution_key, deepcopy(data))
@@ -2054,21 +2125,34 @@ class TaskEngine:
                         raise
                 else:
                     await _finish_before_cancel(checked(event, data))
-                if (hub.dirty and event not in ("done", "paused")
-                        and time.monotonic() - last_flush >= self.flush_interval):
-                    await _finish_before_cancel(self._flush(hub, handler=handler, job=job, execution=execution))
-                    last_flush = time.monotonic()
+                if hub.dirty and event not in ("done", "paused"):
+                    remaining = last_flush + self.flush_interval - time.monotonic()
+                    if remaining <= 0:
+                        await _finish_before_cancel(self._flush(hub, handler=handler, job=job, execution=execution))
+                        last_flush = time.monotonic()
+                        remaining = max(0.05, self.flush_interval)
+                    if hub.dirty:
+                        pending = OutputSnapshot.capture(hub)
+                        timer.arm(remaining, flush_idle, self.flush_interval)
         if not error and hub.result is None and hub.paused is None:
             error = "任务意外结束，未产出结果"
         return error
 
     async def _flush(
         self, hub: TaskHub, *, handler: TaskHandler | None = None, job: Any = None,
-        execution: TaskExecutionIdentity | None = None,
-    ) -> None:
-        hub.dirty = False
+        execution: TaskExecutionIdentity | None = None, idle_snapshot: OutputSnapshot | None = None,
+    ) -> bool:
+        from app.services.task_engine.stream_evidence import PublicationSource
+
+        snapshot = idle_snapshot or OutputSnapshot.capture(hub)
+        origin = snapshot.source
         if hub.statistics_key is None:
-            return
+            return True
+        if (hub.text and isinstance(origin, PublicationSource) and origin.execution.kind == "chapter.batch"
+                and isinstance(snapshot.text_source, PublicationSource)
+                and snapshot.text_source.execution.step_cursor != origin.execution.step_cursor):
+            # chapter_end 的持久断点已确认推进，而下一章尚未产出 reset；不能给新 cursor 写上一章正文。
+            return True
         try:
             async with self.ctx.sessionmaker() as db:
                 conditions = [
@@ -2081,11 +2165,20 @@ class TaskEngine:
                     verify = getattr(handler, "verify_event", None)
                     if execution is None or current is None or verify is None:
                         raise VisibilityPolicyError("任务输出身份无法验证")
+                    if idle_snapshot is not None and (OutputSnapshot.capture(hub) != snapshot or current != (
+                        origin.execution if isinstance(origin, PublicationSource) else origin
+                    )):
+                        return True
                     row = await self._event_task(db, execution, current, "flush")
                     transaction = await self._callback_transaction(db)
                     await verify(db, row, job=job, execution=execution, current_execution=current,
-                                 event="flush", data={"text": hub.text})
+                                 event="flush", data={"text": snapshot.text})
                     await self._require_callback_transaction(db, transaction)
+                    if idle_snapshot is not None and isinstance(origin, PublicationSource):
+                        guard = handler.stream_guard(job, execution=execution, current_execution=current,
+                                                     event="flush", data={"text": snapshot.text})
+                        if guard is not origin.guard or getattr(job, "task_execution_identity", execution) != current:
+                            return True
                     raw_input, raw_checkpoint = (await db.execute(select(
                         cast(Task.input, String).label("input_raw"),
                         cast(Task.checkpoint, String).label("checkpoint_raw"),
@@ -2102,14 +2195,24 @@ class TaskEngine:
                 changed = await db.execute(
                     update(Task)
                     .where(*conditions)
-                    .values(output_text=hub.text, progress=hub.progress, stage=hub.stage[:100])
+                    .values(output_text=snapshot.text, progress=snapshot.progress, stage=snapshot.stage)
                 )
                 if changed.rowcount != 1 and execution is not None:
                     raise VisibilityPolicyError("任务输出身份已变化")
                 if execution is not None and not getattr(handler, "execution_identity_aware", False):
                     await require_live_worker(db, execution.worker_key)
                 await db.commit()
+                if OutputSnapshot.capture(hub) == snapshot:
+                    hub.dirty = False
+                return True
         except Exception as exc:  # noqa: BLE001
+            if idle_snapshot is not None:
+                # 断点、占用、授权可能先于下一事件推进。该来源已失效；仅存储等暂时故障按窗口重试。
+                if isinstance(exc, AppError) and exc.status_code < 500 and not isinstance(exc.__context__, DBAPIError):
+                    logger.debug("任务 %s 的定时输出未通过原执行核验", hub.task_id)
+                    return True
+                logger.error("任务 %s 定时刷新输出失败", hub.task_id)
+                return False
             logger.error("任务 %s 刷新输出失败", hub.task_id)
             if handler is not None and getattr(handler, "execution_identity_aware", False) is True:
                 hub.text, hub.result, hub.paused = "", None, None
@@ -2117,6 +2220,7 @@ class TaskEngine:
                 if code is not None:
                     raise VisibilityPolicyError(_POLICY_MESSAGES[code], extra={"code": code}) from None
                 raise VisibilityPolicyError("任务输出授权已变化", extra={"code": "task_output_changed"}) from None
+            return False
 
     @staticmethod
     async def _owns_task_round(db: AsyncSession, task: Task, *, status: str) -> bool:
@@ -2175,10 +2279,8 @@ class TaskEngine:
             try:
                 pending = await self._durable_rich_review(task)
             except Exception:  # noqa: BLE001
-                if task is not None and task.project_id is not None:
-                    await self.record_abort_failure(task.project_id, None, task=task)
                 if task is not None:
-                    self.remember_uncertain_execution(task)
+                    await self.record_uncertain_execution(task)
                 status, result, error = "failed", None, "提案保存结果尚未确认，请稍后核对"
                 return
             if pending is not None and status not in ("succeeded", "paused"):
@@ -2311,10 +2413,8 @@ class TaskEngine:
                             # 原快照已登记，不能再记为无身份失败，否则项目永远无法按原身份重试排空。
                             status, result, error = "failed", None, "任务收尾失败，请稍后重试"
                         else:
-                            if task is not None and task.project_id is not None:
-                                await self.record_abort_failure(task.project_id, None, task=task)
                             if task is not None:
-                                self.remember_uncertain_execution(task)
+                                await self.record_uncertain_execution(task)
                             status, result, error = "failed", None, "任务保存结果尚未确认，请稍后核对"
                     async with self.ctx.sessionmaker() as db:
                         await task_service.prune_finished(db, row.user_id, source=task)
@@ -2459,8 +2559,8 @@ class TaskEngine:
                             and task.statistics_key is not None
                             and self.admin_cancellations.winners.get(task.statistics_key) is winner_marker):
                         self.admin_cancellations.winners.pop(task.statistics_key, None)
-                    if task is not None and task.project_id is not None:
-                        await self.record_abort_failure(task.project_id, None, task=task)
+                    if task is not None:
+                        await self.record_uncertain_execution(task)
                     status, result, error = "failed", None, "任务结束状态保存失败，请稍后重试"
             if committed and status == "succeeded" and handler is not None and task is not None:
                 callback_ok = await self._on_success(handler, task, execution=execution)
@@ -3441,7 +3541,21 @@ class TaskEngine:
     # ---------------- 订阅 ----------------
 
     def notify_collaboration_change(self, project_id: int, actor_id: int) -> None:
-        """变更提交后唤醒本进程订阅；最终是否放行仍以数据库为准。"""
+        """业务变更完成后提醒本机和对端，授权只取决于库内状态。"""
+        self.recheck_collaboration(project_id, actor_id)
+        self.peer_wakes.collaboration(project_id, actor_id)
+
+    def recheck_all_collaboration(self) -> None:
+        """批量通知超过容量时，让所有本机活动订阅/执行各自核验原绑定。"""
+        for project_id, actor_id in tuple(self._collaboration_subscribers):
+            self._signal_collaboration_subscribers(project_id, actor_id)
+        if self.running and not self._stopping:
+            self._recheck_active_members()
+            self._spawn_paused_scan(None, None)
+            self.notify()
+
+    def _signal_collaboration_subscribers(self, project_id: int, actor_id: int) -> None:
+        self.peer_wakes.member_changed(project_id, actor_id)
         for subscriber in tuple(self._collaboration_subscribers.get((project_id, actor_id), ())):
             try:
                 event = (_COLLABORATION_CHECK_EVENT, {}, None) if subscriber.guarded else (
@@ -3451,6 +3565,9 @@ class TaskEngine:
             except asyncio.QueueFull:
                 # 已有待消费帧时，消费前同样会重验，不能因唤醒帧挤满而放行。
                 pass
+
+    def recheck_collaboration(self, project_id: int, actor_id: int) -> None:
+        self._signal_collaboration_subscribers(project_id, actor_id)
         # 唤醒调度器：排队中的协作任务在领取锁内按数据库复核并受限收尾。
         self.notify()
         # 待审核（paused）协作任务没有执行体：按数据库复核后由系统受限收尾（E5-a）。
@@ -3460,16 +3577,43 @@ class TaskEngine:
             task_id for task_id, owner in tuple(self._running_users.items())
             if owner == actor_id and self._running_projects.get(task_id) == project_id
         ]
-        if targets:
-            work = asyncio.create_task(self._check_collaboration_runs(project_id, actor_id, targets),
-                                       name=f"collaboration-check-{project_id}-{actor_id}")
-            self._collaboration_checks.add(work)
-            work.add_done_callback(self._collaboration_checks.discard)
+        self._request_run_check(project_id, actor_id, targets)
+
+    def _recheck_active_members(self) -> None:
+        # 只复查本机已领取且使用协作授权的执行；授权有效时只读，不取得业务写锁。
+        groups: dict[tuple[int, int], list[int]] = {}
+        for execution in self._project_executions.values():
+            if execution.project_id is not None and execution.grant_identity is not None:
+                groups.setdefault((execution.project_id, execution.actor_id), []).append(execution.task_id)
+        for (project_id, actor_id), tasks in groups.items():
+            self._request_run_check(project_id, actor_id, tasks)
+
+    def _request_run_check(self, project_id: int, actor_id: int, tasks: list[int]) -> None:
+        if not tasks or self._stopping:
+            return
+        key = (project_id, actor_id)
+        if key in self._pending_run_checks:
+            self._pending_run_checks[key].update(tasks)
+            return
+        pending = self._pending_run_checks[key] = set(tasks)
+
+        async def run() -> None:
+            try:
+                while pending:
+                    targets = list(pending)
+                    pending.clear()
+                    await self._check_collaboration_runs(project_id, actor_id, targets)
+            finally:
+                self._pending_run_checks.pop(key, None)
+
+        work = asyncio.create_task(run(), name=f"collaboration-check-{project_id}-{actor_id}")
+        self._collaboration_checks.add(work)
+        work.add_done_callback(self._collaboration_checks.discard)
 
     async def _check_collaboration_runs(self, project_id: int, actor_id: int, task_ids: list[int]) -> None:
         """通知只触发复查：数据库确认原协作轮次失效后，才按原执行键取消本进程执行体。
 
-        未收到通知（跨实例、进程重启）时，执行体仍在下一次受控发送/写入检查点失败关闭。
+        通知丢失时，调度器也会定期复查仍在运行的协作任务。
         """
         for task_id in task_ids:
             task_key = self._running_statistics_keys.get(task_id)
@@ -3521,8 +3665,12 @@ class TaskEngine:
         token_version: int | None = None, active_grant_required: bool = False,
         initial_project_id: Any = _UNSET_BINDING, initial_queued_at: Any = _UNSET_BINDING,
         initial_grant: Any = _UNSET_BINDING, guarded: bool = False,
+        db_snapshot_only: bool = False, handoff: ClaimHandoff | None = None,
+        follow_local_queue: bool = False, source_worker: str | None = None, source_execution: str | None = None,
+        peer_owner_projection: bool = False,
     ) -> AsyncIterator[Event]:
         """快照 + 增量；任务结束（done / error）或暂停（paused）后结束。断开只移除该订阅者，不影响任务执行。"""
+        from app.services.task_engine.peer_protocol import PeerUnavailable
         from app.services.task_engine.stream_evidence import QueuedSource
 
         sm = self.ctx.sessionmaker
@@ -3541,10 +3689,25 @@ class TaskEngine:
             if initial_queued_at is not _UNSET_BINDING and task.queued_at != initial_queued_at:
                 return False
             if active_grant_required and initial_grant is not _UNSET_BINDING:
-                from app.services.collaboration_task_access import task_grant_identity
-
                 if task_grant_identity(task.input) != initial_grant:
                     return False
+            if task.status == "running" and (follow_local_queue or source_worker is not None) and (
+                not self.lease.valid or task.worker_key != self.lease.worker_key
+                or (source_worker is not None and task.worker_key != source_worker)
+                or (source_execution is not None and task.execution_key != source_execution)
+                or task.recovered_at is not None
+            ):
+                raise PeerUnavailable()
+            if handoff is not None and (
+                not self.lease.valid or self.lease.worker_key != handoff.worker_key
+                or task.status == "queued" or task.worker_key not in (None, handoff.worker_key)
+                or (task.status == "running" and (
+                    task.worker_key != handoff.worker_key or task.execution_key != handoff.execution_key
+                    or task.recovered_at is not None
+                ))
+                or (handoff.hub.closed and task.status not in ACTIVE_TASK_STATUSES and not handoff.matches_row(task))
+            ):
+                raise HandoffUnavailable()
             return True
 
         async def read_visible() -> Task | None:
@@ -3568,6 +3731,8 @@ class TaskEngine:
                                 and not await owner_ai_allowed(db, row.project_id, actor_id)):
                             return None
                     return row
+            except (HandoffUnavailable, PeerUnavailable):
+                raise
             except Exception as exc:  # noqa: BLE001
                 # 权限存储不可用时关闭流；不要把数据库异常/SQL 发给用户。
                 logger.warning("任务流授权检查失败 error_type=%s", type(exc).__name__)
@@ -3616,12 +3781,7 @@ class TaskEngine:
             ))
             if not matches_binding(task):
                 return None
-            safe = task_service.to_out(task).model_copy(update={
-                "checkpoint": None, "skill": None, "rich_review": None, "retry_of_id": None,
-                "chapter_id": None, "scene_id": None, "analysis_id": None, "character_id": None,
-                "outline_id": None,
-            })
-            value = ("error", {"task": safe.model_dump(mode="json"), "detail": "任务已取消"})
+            value = deletion_cancel_event(task)
             if guarded:
                 from app.services.ai_dispatch import VisibilityStamp
                 from app.services.task_engine.stream_evidence import capture_task_view, frame_evidence
@@ -3745,8 +3905,16 @@ class TaskEngine:
                         from app.services.task_engine.stream_evidence import frame_evidence
 
                         terminal = hub.terminal_source if hub is not None else None
-                        return event[0], data, frame_evidence(event[0], data, source, stamp, terminal)
+                        return event[0], data, frame_evidence(
+                            event[0], data, source, stamp, terminal,
+                            original_projection=event[1] if source_worker is not None else None,
+                        )
+                    if peer_owner_projection and data is not None:
+                        # 原件只交给本机发送者重核投影，内部通道只传公开帧与引用摘要。
+                        return event[0], data, event[1]
                     return (event[0], data) if data is not None else (_REDACTED_EVENT, {})
+            except (HandoffUnavailable, PeerUnavailable):
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.warning("任务流授权或投影检查失败 error_type=%s", type(exc).__name__)
                 return None
@@ -3763,12 +3931,57 @@ class TaskEngine:
         if initial_queued_at is _UNSET_BINDING:
             initial_queued_at = row.queued_at
         if active_grant_required and initial_grant is _UNSET_BINDING:
-            from app.services.collaboration_task_access import task_grant_identity
-
             initial_grant = task_grant_identity(row.input)
         hub = self.hubs.get(task_id)
-        # 数据库终态优先：即使内存残留排队 hub，也必须回放结果，不能只发送心跳。
-        if (row.status not in ACTIVE_TASK_STATUSES or hub is None or hub.statistics_key != statistics_key
+        if db_snapshot_only:
+            # 从库内读取一个当前视图，绝不为其他进程的执行创建本地订阅或借用其残留 hub。
+            hub = None
+            source = persisted_source(row)
+            if row.status in ACTIVE_TASK_STATUSES:
+                if guarded and row.status != "queued":
+                    yield await public_error()
+                    return
+                async with sm() as db:
+                    out = task_service.to_out(row, queue_position=await task_service.queue_position(db, row))
+                    out = await task_service.project_task_out(
+                        db, row.user_id, out, active_grant_required=active_grant_required, task_key=statistics_key,
+                        expected_grant=task_grant_identity(row.input), expected_queued_at=row.queued_at,
+                    )
+                candidates = (("snapshot", {"task": out.model_dump(mode="json"), "text": row.output_text or ""}),)
+            else:
+                candidates = _finished_events(row)
+            for candidate in candidates:
+                safe = await checked_frame(candidate, source)
+                if safe is None:
+                    # 排队快照在投影期间被同轮领取，调用方将重新定位到当前执行者。
+                    if guarded and row.status == "queued" and await read_visible() is not None:
+                        return
+                    yield await public_error()
+                    return
+                if safe[0] != _REDACTED_EVENT:
+                    yield safe
+            return
+        sub = None
+        if handoff is not None:
+            hub = handoff.hub
+            if row.status not in ACTIVE_TASK_STATUSES and not hub.closed:
+                # 数据库刚结束，本地执行还在发布终态收据。只在锁外等这一轮的原 hub。
+                try:
+                    async with asyncio.timeout(self.claim_source_wait_seconds):
+                        await hub.terminal_ready.wait()
+                except TimeoutError:
+                    raise HandoffUnavailable() from None
+            if hub.closed:
+                row = await read_visible()
+                if row is None:
+                    yield await public_error()
+                    return
+            elif (self.hubs.get(task_id) is not hub or task_id not in self._running
+                  or self._running_execution_keys.get(task_id) != handoff.execution_key):
+                raise HandoffUnavailable()
+            sub = self.peer_handoffs.attach(handoff, row, worker_key=self.lease.worker_key, guarded=guarded)
+        # 除了已经观察到 queued 的交接，数据库终态优先于所有本地缓存。
+        elif (row.status not in ACTIVE_TASK_STATUSES or hub is None or hub.statistics_key != statistics_key
                 or (hub.queued_at is not None and hub.queued_at != row.queued_at)
                 or (row.execution_key is not None and hub.execution_key != row.execution_key)):
             if row.status in ACTIVE_TASK_STATUSES:
@@ -3800,7 +4013,6 @@ class TaskEngine:
                         yield safe
                 return
 
-        sub = None
         subscription_key = None
 
         def detach_sub() -> None:
@@ -3818,9 +4030,15 @@ class TaskEngine:
 
         try:
             snapshot = None
+            if sub is not None and row.project_id is not None and actor_id is not None:
+                subscription_key = (row.project_id, actor_id)
+                self._collaboration_subscribers.setdefault(subscription_key, set()).add(sub)
             # E5-e：受控订阅读到已提交的 running 行、而本进程领取者尚未登记领取来源（领取提交与登记之间）。
             awaiting_claim = False
             for attempt in range(5):
+                if handoff is not None:
+                    # 原排队快照已送出；队列从领取帧开始，后续走相同投影与帧验证。
+                    break
                 retry_snapshot = False
                 queued_advance_view = None
                 try:
@@ -3834,8 +4052,6 @@ class TaskEngine:
                         original_view = persisted_source(row) if guarded and row is not None else None
                         if guarded and row is not None and row.status == "queued":
                             # 排队快照只能来自同一持久行，不采信旧 hub 的进度或正文。
-                            from app.services.collaboration_task_access import task_grant_identity
-
                             queued_out = task_service.to_out(
                                 row, queue_position=await task_service.queue_position(db, row),
                             )
@@ -3900,6 +4116,8 @@ class TaskEngine:
                                                 row = None
                                         elif safe[0] != _REDACTED_EVENT:
                                             snapshot = safe
+                except (HandoffUnavailable, PeerUnavailable):
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("任务流授权检查失败 error_type=%s", type(exc).__name__)
                     detach_sub()
@@ -3963,6 +4181,8 @@ class TaskEngine:
                 yield await public_error()
                 return
             buffered: deque[tuple[str, dict, Any]] = deque()
+            next_heartbeat = time.monotonic() + self.heartbeat_seconds
+            watch_grant = actor_id is not None and active_grant_required and initial_grant is not None
             while True:
                 if sub.overflowed and sub.queue.empty() and not buffered:
                     return
@@ -3970,7 +4190,13 @@ class TaskEngine:
                     if buffered:
                         event, data, source = buffered.popleft()
                     else:
-                        async with asyncio.timeout(self.heartbeat_seconds):
+                        remaining = max(0.0, next_heartbeat - time.monotonic())
+                        # 静默读者自行核验，调度停止及提醒丢失都不能推迟复查。
+                        if follow_local_queue:
+                            remaining = min(0.2, self.poll_interval, remaining)
+                        elif watch_grant:
+                            remaining = min(remaining, self.poll_interval)
+                        async with asyncio.timeout(remaining):
                             queued = await sub.queue.get()
                         if guarded:
                             event, data, source = queued
@@ -3988,7 +4214,19 @@ class TaskEngine:
                             )
                         yield await public_error()
                         return
-                    yield (HEARTBEAT_EVENT, {}, None) if guarded else (HEARTBEAT_EVENT, {})
+                    if follow_local_queue:
+                        if (row.status == "running" and row.worker_key != self.lease.worker_key) or (
+                            row.status not in ACTIVE_TASK_STATUSES and not hub.closed
+                            and not (task_id in self._running and self._running_statistics_keys.get(task_id)
+                                     == statistics_key and self._running_rounds.get(task_id) == row.queued_at)
+                        ):
+                            raise PeerUnavailable() from None
+                        if row.status == "running" and row.worker_key == self.lease.worker_key:
+                            follow_local_queue = False
+                            source_worker, source_execution = row.worker_key, row.execution_key
+                    if time.monotonic() >= next_heartbeat:
+                        yield (HEARTBEAT_EVENT, {}, None) if guarded else (HEARTBEAT_EVENT, {})
+                        next_heartbeat = time.monotonic() + self.heartbeat_seconds
                     continue
                 if event == _COLLABORATION_CHECK_EVENT:
                     if await read_visible() is None:
@@ -4027,6 +4265,7 @@ class TaskEngine:
                 if event == _COLLABORATION_CHECK_EVENT or safe[0] == _REDACTED_EVENT:
                     continue
                 yield safe
+                next_heartbeat = time.monotonic() + self.heartbeat_seconds
                 if event in ("done", "error", "paused"):
                     return
         finally:
@@ -4088,6 +4327,16 @@ class TaskEngine:
         except Exception:  # noqa: BLE001
             logger.exception("任务 %s 存在性检查失败", task_id)
             return False
+
+
+def deletion_cancel_event(task: Task) -> Event:
+    """作品删除期间只允许原作者看取消摘要，去掉全部内容引用与断点。"""
+    safe = task_service.to_out(task).model_copy(update={
+        "checkpoint": None, "skill": None, "rich_review": None, "retry_of_id": None,
+        "chapter_id": None, "scene_id": None, "analysis_id": None, "character_id": None,
+        "outline_id": None,
+    })
+    return "error", {"task": safe.model_dump(mode="json"), "detail": "任务已取消"}
 
 
 def _finished_events(task: Task) -> tuple[Event, Event]:

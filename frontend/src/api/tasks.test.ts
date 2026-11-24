@@ -448,6 +448,35 @@ describe('subscribeTask', () => {
     expect(sleeps).toEqual([1000, 1000, 1000])
   })
 
+  it('稳定连接在转发途中改发持久快照，之后断线仍能重新订阅', async () => {
+    const live = task()
+    const saved = task({ status: 'succeeded' })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(sseResponse([
+        frame('snapshot', { task: live, text: '开头' }),
+        frame('delta', { text: '临时输出' }),
+        frame('snapshot', { task: live, text: '开头' }),
+      ]))
+      .mockResolvedValueOnce(sseResponse([
+        frame('snapshot', { task: saved, text: '最终正文' }),
+        frame('done', { task: saved, result: {} }),
+      ]))
+    vi.stubGlobal('fetch', fetchMock)
+    let clock = 0
+    const reconnect = vi.fn()
+    const snapshots: string[] = []
+    const end = await subscribeTask(live, {
+      onSnapshot: (_, text) => snapshots.push(text),
+      onDelta: () => { clock += 6000 },
+      onReconnect: reconnect,
+    }, undefined, { maxRetries: 1, stableMs: 5000, now: () => clock, sleep: noSleep })
+    expect(end.status).toBe('succeeded')
+    expect(snapshots).toEqual(['开头', '开头', '最终正文'])
+    expect(reconnect.mock.calls).toEqual([[1, 1000], [1, 1000]])
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('中止 signal 抛 AbortError（等待重连期间中止也一样）', async () => {
     vi.stubGlobal('fetch', async () => sseResponse([frame('snapshot', { task: task(), text: '' })]))
     const controller = new AbortController()

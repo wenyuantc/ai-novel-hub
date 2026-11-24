@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     ai_request_timeout: float = Field(default=300.0, gt=0)
     # 是否允许 AI Base URL 指向本地 / 内网地址（接入 Ollama 等本地模型时开启）；开放注册的公网部署请保持关闭
     allow_private_ai_endpoints: bool = False
+    # 任务进程内部通道；默认用私有 UDS，跨实例显式配置私网主机及允许的网络。
+    task_peer_enabled: bool = True
+    task_peer_socket_dir: str | None = None
+    task_peer_bind_host: str | None = None
+    task_peer_advertise_host: str | None = None
+    task_peer_port: int = Field(default=0, ge=0, le=65535)
+    task_peer_networks: str = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7"
     # 后台任务运行时上限：全局/每用户，其余排队；降低不取消已运行任务。
     task_max_concurrency: int = Field(default=4, ge=1)
     task_max_per_user: int = Field(default=2, ge=1)

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import socket
+import sqlite3
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -231,6 +232,26 @@ class WorkerLease:
         return (self._last_ok is not None and time.monotonic() - self._last_ok
                 < self.engine.lease_seconds - self.engine.lease_safety_seconds)
 
+    async def confirms_output(self, db: AsyncSession) -> bool:
+        """读请求只观察实际租约。即使本机尚未收到已在对端提交的围栏，也只采用持久输出。"""
+        key = self.worker_key
+        if key is None or not self.valid:
+            return False
+        with db.no_autoflush:
+            if db.get_bind().dialect.name == "sqlite":
+                if self.sqlite_pair is None or not await db.scalar(select(registered_worker_exists(key))):
+                    return False
+                try:
+                    live = await sqlite_worker_leases.live(self.sqlite_pair, key, self.engine.lease_seconds)
+                except (sqlite_lease_pair.SQLiteLeasePairError, sqlite3.OperationalError):
+                    return False
+            else:
+                cutoff = await _db_cutoff(db, self.engine.lease_seconds)
+                live = await db.scalar(select(TaskWorker.worker_key).where(
+                    TaskWorker.worker_key == key, _pg_live_worker_condition(cutoff),
+                )) is not None
+        return live and self.worker_key == key and self.valid
+
     def invalidate(self) -> None:
         self._last_ok = None
         if self._deadline is not None:
@@ -298,7 +319,8 @@ class WorkerLease:
                     raise sqlite_lease_pair.SQLiteLeasePairError("SQLite 执行者登记已过期")
                 retained = list(await db.scalars(select(TaskWorker.worker_key)))
                 await sqlite_worker_leases.prune_terminal(pair, retained)
-            db.add(TaskWorker(worker_key=key, started_at=func.now(), heartbeat_at=func.now(),
+            address = self.engine.peer.url
+            db.add(TaskWorker(worker_key=key, peer_url=address, started_at=func.now(), heartbeat_at=func.now(),
                               hostname=socket.gethostname()[:255], pid=os.getpid()))
             try:
                 await db.commit()
@@ -306,7 +328,10 @@ class WorkerLease:
                 # 数据库已提交但确认丢失：只认本次 UUID，不重放 INSERT。
                 await db.rollback()
                 async with maker() as proof:
-                    if not await proof.scalar(select(registered_worker_exists(key))):
+                    if await proof.scalar(select(TaskWorker.worker_key).where(
+                        TaskWorker.worker_key == key, TaskWorker.peer_url.is_not_distinct_from(address),
+                        registered_worker_exists(key),
+                    )) != key:
                         raise
         if pair is not None and not await sqlite_worker_leases.live(pair, key, self.engine.lease_seconds):
             raise sqlite_lease_pair.SQLiteLeasePairError("SQLite 执行者登记未获确认")

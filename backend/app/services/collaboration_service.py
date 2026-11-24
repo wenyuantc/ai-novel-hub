@@ -113,7 +113,7 @@ async def _reconcile_protected(
 
 
 def _notify_project_change(state: dict[str, Any], notify: ProjectChangeNotifier | None) -> None:
-    """仅发无内容的本进程唤醒；通知失败不得改变已提交业务的事实。"""
+    """仅发无内容的授权复查提醒；通知失败不得改变已提交业务的事实。"""
     project_id, target_id = state.get("resource_id"), state.get("target_user_id")
     if (notify is None or state.get("scope") != "project" or type(project_id) is not int or project_id <= 0
             or type(target_id) is not int or target_id <= 0):
@@ -121,7 +121,7 @@ def _notify_project_change(state: dict[str, Any], notify: ProjectChangeNotifier 
     try:
         notify(project_id, target_id)
     except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
-        # 回调仅触发本进程复验；不能输出异常原文，也不能把已提交操作记作失败。
+        # 回调仅触发授权复验；不能输出异常原文，也不能把已提交操作记作失败。
         logger.warning("协作变更通知失败 error_type=%s", type(exc).__name__)
 
 
@@ -131,7 +131,7 @@ async def _write[T](
     *, notify: ProjectChangeNotifier | None = None,
 ) -> T:
     if scope == "project" and not callable(notify):
-        # 所有项目写调用方都必须显式接入本进程唤醒，不能新增一个静默漏通知的入口。
+        # 所有项目写调用方都必须显式接入授权复查提醒，不能新增一个静默漏通知的入口。
         raise ValueError("作品协作写入需要授权变更通知器")
     state: dict[str, Any] = {
         "operation_id": str(uuid4()), "scope": scope, "resource_id": resource_id, "action": action,

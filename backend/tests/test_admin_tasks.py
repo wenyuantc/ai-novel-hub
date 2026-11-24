@@ -102,7 +102,7 @@ async def test_unknown_and_old_clock_and_hub_identity(app, monitor_admin):
     hub.statistics_key = tasks[0].statistics_key
     hub.stage, hub.progress = "私密插件正文", 32
     fresh = (await monitor_admin.get(f"{ROOT}/{tasks[0].statistics_key}")).json()
-    assert fresh["progress"] == 32 and fresh["stage"] == "排队中"
+    assert fresh["progress"] == 0 and fresh["stage"] == "调用工具"
     hub.closed = True
     assert (await monitor_admin.get(f"{ROOT}/{tasks[0].statistics_key}")).json()["progress"] == 0
 

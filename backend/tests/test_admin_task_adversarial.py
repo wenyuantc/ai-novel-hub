@@ -375,7 +375,7 @@ async def test_private_title_hub_stage_error_and_content_are_neither_projected_s
 ):
     owner, owner_id = await _actors(app, client, make_client)
     task = await _task(
-        app, owner_id, "running", title=PRIVATE_PARTS[0], stage=f"调用{PRIVATE_PARTS[3]}",
+        app, owner_id, "running", title=PRIVATE_PARTS[0], progress=27, stage=f"调用{PRIVATE_PARTS[3]}",
         error=" / ".join(PRIVATE_PARTS[1:]), input={"request": PRIVATE_PARTS[0]},
         output_text=PRIVATE_PARTS[-1], checkpoint={"private": PRIVATE_PARTS[-1]},
         result={"private": PRIVATE_PARTS[-1]},
@@ -389,7 +389,7 @@ async def test_private_title_hub_stage_error_and_content_are_neither_projected_s
     detail = await client.get(f"/api/v1/admin/tasks/{task.statistics_key}")
     assert listing.status_code == detail.status_code == 200
     projected = listing.json()["items"][0]
-    assert projected["progress"] == 63 and projected["stage"] == "调用工具"
+    assert projected["progress"] == 27 and projected["stage"] == "调用工具"
     assert projected["title"] == f"项目智能体 #{task.id}"
     # 原始 error 可能是旧值；running 不能因此被管理投影误标为执行失败。
     assert projected["error_code"] is projected["error_message"] is None

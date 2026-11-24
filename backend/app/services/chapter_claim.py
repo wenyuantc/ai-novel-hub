@@ -213,10 +213,15 @@ def _pointer(task, claim: ChapterClaim) -> bool:
 
 
 def _chapter_matches(row, claim: ChapterClaim) -> bool:
-    return bool(row is not None and row.id == claim.chapter_id and row.project_id == claim.project_id
-                and row.status == "generating" and row.generation_claim_key == claim.claim_key
-                and row.generation_claim_task_key == claim.task_key
-                and row.generation_claim_prev_status == claim.prev_status)
+    return chapter_has_claim_pointer(row, project_id=claim.project_id, chapter_id=claim.chapter_id,
+                                     task_key=claim.task_key, claim_key=claim.claim_key, prev_status=claim.prev_status)
+
+
+def chapter_has_claim_pointer(row, *, project_id, chapter_id, task_key, claim_key, prev_status) -> bool:
+    """共享锁读取的章节仍属该作品，且正由原任务持有同一占用。"""
+    return bool(row is not None and row.id == chapter_id and row.project_id == project_id
+                and row.status == "generating" and row.generation_claim_key == claim_key
+                and row.generation_claim_task_key == task_key and row.generation_claim_prev_status == prev_status)
 
 
 def _cache(db: AsyncSession, model, identity: int, values: dict[str, Any]) -> None:

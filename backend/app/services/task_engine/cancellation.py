@@ -433,18 +433,14 @@ class AdminCancellationDrain:
                                 return
                     except Exception:  # noqa: BLE001  收据或存储不可核验时保留原执行和意图。
                         pass
-                    if task.project_id is not None:
-                        await engine.record_abort_failure(task.project_id, None, task=task)
-                    engine.remember_uncertain_execution(task)
+                    await engine.record_uncertain_execution(task)
                     logger.error("管理员取消的分析执行事实待核对 task=%s", task.id)
                     return
                 if task.kind.startswith("wizard.") and (
                     task.status == "running" or task_service._has_wizard_receipt(task)
                 ):
                     # 原向导可能已发送或提交，孤立执行的缺证状态不能当作安全 abort。
-                    if task.project_id is not None:
-                        await engine.record_abort_failure(task.project_id, None, task=task)
-                    engine.remember_uncertain_execution(task)
+                    await engine.record_uncertain_execution(task)
                     logger.error("管理员取消的向导执行事实待核对 task=%s", task.id)
                     return
                 if task.status == "running" and task.kind == "chapter.batch":
@@ -488,9 +484,7 @@ class AdminCancellationDrain:
                                     return
                     except Exception:  # noqa: BLE001  未证实的提案/章节收据都继续持有屏障。
                         pass
-                    if task.project_id is not None:
-                        await engine.record_abort_failure(task.project_id, None, task=task)
-                    engine.remember_uncertain_execution(task)
+                    await engine.record_uncertain_execution(task)
                     logger.error("管理员取消的批量执行事实待核对 task=%s", task.id)
                     return
                 if task.kind in _CHAPTER_KINDS and task.status in ("queued", "running"):
