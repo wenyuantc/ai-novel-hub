@@ -104,13 +104,13 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 ### 契约
 
 - `POST /projects/import/preview`（multipart `file`）→ `ImportPreview {token, title, final_title, version, exported_at, app_schema, options,
-  counts, styles: [{name, preset_key, action: preset|reuse|create|copy}], warnings, expires_in}`；不写库。
+  counts, styles: [{name, preset_key, action: preset|reuse|create|copy}], warnings, expires_in}`。预览仅写入加密暂存。
 - `POST /projects/import`：JSON `{token, title?}`，或 multipart（`file` + 可选 `title`）直接导入 → 201 `ImportResult {project: ProjectOut, counts,
   warnings, task_id}`。成功后令牌失效；失败时令牌仍可用。
 - 上传：`UploadLimitMiddleware` 规则 `POST /api/v1/projects/import(/preview)?`，上限 100MB + multipart 开销（detail `备份文件过大，上限为 100MB`），
   路由再 `read(MAX_BYTES + 1)` 兜底。解析在线程中进行。
-- 令牌：进程内缓存（单进程前提，同 tasks），按用户隔离，`TOKEN_TTL = 600` 秒，每个用户最多 2 份（新的挤掉旧的），全实例最多 `MAX_TOKENS_TOTAL = 6` 份（超出时淘汰最早到期的，被淘汰的确认时按过期处理）；
-  过期 / 他人 / 不存在 → 400 `导入凭据已过期，请重新选择备份文件`。
+- `0069` 将预览令牌摘要、所属用户、期限和文件密文分块存到数据库。各进程使用相同 `ENCRYPTION_KEY` 派生加密密钥，分块认证绑定令牌、用户、修订、长度与序号。加密原始上传字节，确认时复用原解析校验。份数与过期操作由配额行串行，每用户最多 2 份、全站 6 份，保留最新预览。有效期 600 秒。
+- 确认在创建作品的事务中按同一令牌身份删除预览及分块。并发确认至多创建一个作品。失败回滚后，仍未过期且未被淘汰的令牌可以重试。过期、已用、他人或不存在均为 400「导入凭据已过期，请重新选择备份文件」。存储不可用返回受控 503。SQLite 冷恢复在新副本上清除全部预览。
 - 校验（一律 400；文件内问题响应体带 `errors`，前 20 条）：
 
 | 条件 | detail |

@@ -20,7 +20,7 @@
 
 后三项动作权限均显式 requires `backups.read` 且 dangerous。0030（父0029）创建三个实例表：`BackupSettings` 单行 id=1/CAS/实例身份/计划游标；`BackupRun` 有整数自增ID及不可复用execution_key，request_id和scheduled_date分别唯一，queued/running必须active_slot=1，唯一约束兜底互斥；`BackupArtifact` 每执行/目的地唯一，私有locator/访问密文/S3版本与multipart身份。文件字节数为BigInteger，不能使用PG的32位Integer。实例表不指向projects、不登记作品备份规则；0030 当时保留作品 JSON v1。0031 起作品 JSON 为 v2、APP_SCHEMA 为 0031，见 [项目备份](./project-transfer.md)。
 
-`BackupManager(settings,cipher,sessionmaker,notify)` 提供load/update/accept_manual/accept_scheduled/read_settings/overview/list_runs/get_run/authorize_download/close；`BackupRuntime(manager)` 提供start/stop/notify/prepare_download。快照、GPG、SMTP和文件/S3阻塞工作通过 `process.run_blocking` 在线程执行。
+`BackupManager(settings,cipher,sessionmaker,notify)` 提供load/update/accept_manual/accept_scheduled/read_settings/overview/list_runs/get_run/authorize_download/close。`BackupRuntime(manager, worker=...)` 提供start/stop/notify/prepare_download，运行时使用应用请求执行者的租约。快照、GPG、SMTP 和文件/S3 阻塞工作通过 `process.run_blocking` 在线程执行。
 
 0030只更新现存内置super_admin为37项并递增角色与授权revision；其他内置和自定义角色不增权。历史0029固定33项，禁止改写历史常量。初始化只补缺失角色，已有内置角色严格校验，故不能仅改运行时代码而遗漏迁移。存在备份数据、新权限分配或备份审计时禁止有损downgrade。
 
@@ -51,7 +51,9 @@
 
 锁序：manager锁→共享AuthorizationRuntime→授权DB gate→actor User→备份资源。配置和受理成功审计与业务同事务，commit事实确认后发布/唤醒；调用者取消不能拆断shield写任务。未知提交重读，已存在成功不补相反失败。局部审计`backup.settings.update`、`backup.run.accept`、`backup.download.authorize`的backup_change仅受限字段名/版本/执行UUID/目的地/加密标志，不存连接参数、密码长度、原异常或SQL。
 
-受理冻结配置；之后关闭目的地、改密码/份数只影响新受理。长I/O不持SQL事务/授权锁。取消/关停必须等底层线程和进程组结束再终态释放active_slot；shield等待者自身取消也不得提前返回。定时持久next_scheduled_at，Asia/Shanghai日期键每日去重，离线只补最近到期一次，忙碌保留意图。重启将遗留活动执行记interrupted，按已知locator/大小/hash核对可用产物，不自动重放外部副作用。
+受理冻结配置，之后关闭目的地、改密码和份数影响新受理。长 I/O 不持 SQL 事务或授权锁。取消和关停须等底层线程、进程组结束再释放活动槽。定时持久化 `next_scheduled_at`，按北京时间日期每日去重，离线只补最近一次。并发受理失败方核实活动槽或同日记录后正常跳过。
+
+`0069` 记录受理、执行和恢复者。领取从排队状态条件更新，一次提交写入运行状态及执行归属。运行及恢复时持有同备份目录的文件锁，产物、通知状态和执行终态检查原归属。存活执行者受保护，永久围栏后的遗留活动执行由取得恢复权的实例记为中断。停机前留下无归属的旧活动记录按原语义处理中断。恢复依据定位、大小和校验和核对产物，已开始的外部写入和 SMTP 保留原结果或未知状态。下载本地文件时，其他主机或旧记录写入者未知且文件不可访问，返回 503 并保留副本状态。写入者确认缺失后返回 410。
 
 PostgreSQL用pg_dump -Fc，无shell，密码仅0600临时PGPASSFILE，实际schema_revision查询数据库。SQLite用Connection.backup包含已提交WAL，并quick_check，禁止内存库冒充持久备份。GPG对称AES256/loopback/passphrase-fd/no-symkey-cache，密码不进argv/env/密码文件；原生后缀.dump/.sqlite3，加密加.gpg。恢复先完整解密且验证成功，再导入隔离/已核对目标。明文0700/0600并及时清理。
 

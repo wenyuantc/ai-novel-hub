@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端规范与默认验收入口"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"隔离 PostgreSQL、SQLite 回归和迁移检查"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"事务锁序、租约围栏及降级核查"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"对照备份错误码、停机、产物和远端恢复"}
+{"file":".trellis/spec/backend/inspiration.md","reason":"对照灵感 SSE、重试和会话写入"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"对照预览与确认、输入限制及备份格式"}
+{"file":".trellis/spec/backend/agent.md","reason":"对照会话授权与外部确认原语义"}
+{"file":".trellis/spec/backend/skills-mcp.md","reason":"复核未知结果和外部副作用恢复"}

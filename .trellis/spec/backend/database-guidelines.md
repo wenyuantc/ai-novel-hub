@@ -611,3 +611,48 @@ SQLite 还须运行 `test_task_worker_slow_headers.py`、`test_task_worker_sqlit
 - 直接改 `ChapterPlan.chapter_id` / `Chapter.plan_id` 的一侧：双向冗余不一致；只经 `plan_service`。
 - 用 `resource_key` 实现「同类排队串行」：它是冲突即拒绝（409）；需要排队等待用 `serial_key`。
 - 新增与项目相关的表却没有登记到 `project_transfer/registry.py`：项目备份会静默丢掉这张表的数据（反射测试会失败）。
+## 引擎外跨进程状态（0069）
+
+### 适用范围
+
+整库备份、灵感生成、项目两步导入、智能体会话操作及周期维护。生产部署仍使用单个 Uvicorn worker。跨进程验证使用同机 SQLite 文件及配对租约侧库，或共享 PostgreSQL。
+
+### 数据库接口
+
+| 状态 | 持久身份 |
+|---|---|
+| 备份运行与恢复 | `backup_runs.worker_key`、`recovery_worker_key`、`execution_host`，以及 `backup_artifacts.writer_host` |
+| 灵感步骤 | `inspiration_generation_claims(session_id, step, operation_key, worker_key)` 和 `inspiration_sessions.state_revision` |
+| 智能体会话 | `agent_conversation_operations(conversation_id, operation_key, worker_key)` 和 `agent_conversations.instance_key` |
+| 项目导入 | `project_import_preview_quota`、`project_import_previews`、`project_import_preview_chunks` |
+
+### 事务约定
+
+- 短事务保存领取事实，提交成功后再执行长 I/O。旧持有者写入和释放时须条件匹配原操作键。
+- 新执行者在主库确认 `workers.confirmed_terminal` 后才接管。暂时读不到租约时保留原归属。登记裁剪须保留被运行、恢复或持久占用引用的 worker。
+- 智能体会话预检记录内部 UUID。等待占用、提交及回读时核对原 UUID，避免 SQLite 复用已经删除的会话整数编号后，旧请求作用于新会话。
+- `periodic_database.retry_contended_write` 用于每次启动新事务、可重复提交的维护操作。只对 SQLite 忙锁及 PostgreSQL 事务冲突有限重试。回收站取得父行锁后复核到期记录，再写清理审计。
+- 现有版本导出的作品 JSON 继续使用 v16。新增的持久执行身份和项目导入暂存均属于运行状态。
+
+### 运行结果
+
+| 情形 | 约定结果 |
+|---|---|
+| 备份被其他运行器领取 | 跳过，保持现有记录与通知 |
+| 同一灵感步骤正在生成 | HTTP 409 与原文案 |
+| 导入预览已消费、淘汰、过期或身份不符 | HTTP 400 与原过期文案 |
+| 外部提案尚在执行 | 会话占用保持到操作结束。执行者失联后的未知结果仍按原提案收据核对 |
+| 清理扫描后同一到期记录已处理 | 跳过，保持已写入的审计结果 |
+| 活跃 worker、持久占用或待核对的外部效果仍存在 | 拒绝降级 |
+
+### 兼容与恢复
+
+从 `0068` 停机升级时，旧备份归属初始为空，旧灵感状态修订初始为 0。SQLite 冷恢复围栏旧执行者并清除新副本中的导入预览。原备份文件保留。PostgreSQL 原生应用备份保留预览表结构，以空的预览内容恢复。
+
+### 验证
+
+运行 `tests/test_c5_*.py` 验证双应用竞争、领取条件、轮次合并、导入回滚、永久围栏、迁移往返和降级保护。实际进程故障验证使用同一隔离库及独立 HTTP 端口。特意让两个实例先读到相同候选，再用可重复的屏障交错操作和提交。
+
+### 容易出错的实现
+
+进程启动后直接扫描并清理全部活动备份，会让后启动的进程破坏仍在工作的前一实例。先核对原执行者的永久停止证据，再以当前记录的执行键、状态和归属竞争恢复权，最后在文件访问锁内收尾。

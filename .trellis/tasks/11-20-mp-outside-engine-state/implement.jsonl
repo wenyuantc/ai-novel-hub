@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端入口、模块边界及质量门禁"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"数据库事务、迁移、worker 归属和 SQLite 配对库约束"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"受控错误、流断开和现有跨进程授权复核"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"备份文件、通知、状态恢复与部署契约"}
+{"file":".trellis/spec/backend/inspiration.md","reason":"灵感状态写入、SSE 出站和断连契约"}
+{"file":".trellis/spec/backend/project-transfer.md","reason":"项目导入权限、令牌限额、备份格式及导出登记口径"}
+{"file":".trellis/spec/backend/agent.md","reason":"会话轮次、提案、授权与跨提交副作用"}
+{"file":".trellis/spec/backend/skills-mcp.md","reason":"外部工具调用收据和未知结果恢复"}
+{"file":".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md","reason":"C5 原始源码调查与跨进程失败路径"}

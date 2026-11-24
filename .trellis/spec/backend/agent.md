@@ -189,9 +189,11 @@ RESULT_LIMIT = 8000                                                     # contex
   `execute_change`（照常比较预览）；遇到 `preview_changed` 停止，剩余项等待确认。同轮后续写批次一律需要确认，也不回滚先前已自动执行的修改。
 - **暂停**：本批仍有 `proposed / executing` → 保存 `pending_change_ids`，产出 `stage`「等待确认 N 项修改」与 `paused {reason: "confirm", change_ids}`；
   已处理（执行 / 拒绝 / 失败）的提案补写 tool 消息（`change.result` 或 `{"error": change.error}`）。
-- **确认 / 拒绝**（`decide_change`）：先 rollback 释放旧快照，再取进程内会话锁（`conversation_lock`，SQLite 没有行锁）并对会话行 `FOR UPDATE`；
+- **确认 / 拒绝**（`decide_change`）。先 rollback 释放旧快照，再通过 `agent.conversation_operations.hold` 取得会话持久操作占用。业务事务中用 `guard` 锁住会话行并复核原 worker 与操作键。
   `executing` → 409「修改正在处理中」；`proposed` 但轮次不是 `paused` → 409「请等待本轮暂停确认，或先重试中断的轮次」；拒绝写
   `result = {"message": "用户拒绝了该修改"}`（续跑时作为工具结果交给模型）。
+- **同一会话的跨提交占用**由 `0069` 的 `agent_conversation_operations` 记录。发送、重命名、确认、拒绝、撤销和删除获取同一会话占用。领取与中央任务受理、继续、重试共享会话行屏障。等待期间释放数据库事务，批量审核内部沿用外层占用。等待、领取和提交后的响应投影保留原会话 `instance_key`，SQLite 上的整数 ID 复用不能替换原会话。外部提案先提交原 `executing` 收据，发出前与回写时复核会话占用和原调用身份。其他 worker 只接管已停止或永久围栏的占用，原调用的未知结果按 MCP 契约保留。
+- 领取事务先锁会话行，再条件写入占用。只有取得占用才提交整个事务。竞争落败时连同前面的会话空更新一起回滚，避免 PostgreSQL 改变行版本后使赢家的可重复读事务冲突。
 - **确认时的预览比较**（`execute_change`）：重新 `preview`；出错 → `failed`；与存储的 `preview` **不相等** → 用新预览覆盖、commit，抛
   409 `{detail: "数据已经变化，请检查最新预览后重新确认", code: "preview_changed", change: ChangeOut}`，**不执行**，用户须对新预览再次确认。
   相等 → 条件 UPDATE `proposed → executing`（影响 0 行 → 409，防重复点击）→ SAVEPOINT 内 `snapshot → execute → flush → snapshot → diff`

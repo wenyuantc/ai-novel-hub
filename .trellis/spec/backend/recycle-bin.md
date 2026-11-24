@@ -36,7 +36,7 @@ async def lock_active(db, project_id) -> Project
 async def move_to_recycle_bin(db, engine, actor_id, project_id) -> None
 async def list_projects(db, *, q, owner_user_id, page, page_size) -> RecycleProjectList
 async def restore(db, actor_id, project_id, deleted_at) -> None
-async def purge(db, engine, actor_id, project_id, deleted_at, *, title=None, cutoff=None) -> None
+async def purge(db, engine, actor_id, project_id, deleted_at, *, title=None, cutoff=None) -> bool
 async def recover_pending_deletions(sessionmaker) -> None
 async def purge_expired(engine, *, now=None) -> int
 class RecycleBinCleaner:  # start()/stop()，默认 interval=3600 秒
@@ -91,6 +91,7 @@ async def stop_project_tasks(db, engine, project_id) -> int
 ### 保留期、清理、删号与审计
 
 - UTC 连续30天；`now < deleted_at + 30天` 才可恢复，等于即过期。清理延迟或停机不延长恢复窗口。
+- 多进程可从同一批到期记录中挑选候选。定时清理锁住作品后复核原回收站代次，再开始审计和删除。另一实例已处理或管理员已恢复的候选直接跳过。清理中的真冲突或持续数据库故障仍记录诊断。
 - 启动补清一次，之后每小时清理；一次固定 cutoff，按删除时间/ID 每批100条键集读取，每个作品独立事务重检期限。失败项下轮重试，不死循环、不饿死其他目标；有异常执行体时拒绝物理删。
 - shutdown 等待 cleaner，再停任务引擎，最后关闭 DB；测试不靠页面访问触发后台清理，也不泄漏后台任务。
 - 删号锁定目标用户，计数其全部作品（包括回收站/过期待清理），非零409；清空后仍有原自身/最后管理员护栏。数据库 RESTRICT 兜底并发和未来漏查，不能靠过滤正常作品的 count 判断。

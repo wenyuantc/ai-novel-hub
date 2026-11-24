@@ -528,7 +528,7 @@ async def recover_external(db, *, task_id: int | None = None, stale_only: bool =
   `maybe_resume` 认为还有未处理项，这一轮再也无法继续。
 - **处理**：条件 UPDATE（仍为 `executing` 的 external）→ `failed`，`error` 与 `result.error` 都是「执行中断，结果未知，请检查外部系统」，记 warning 日志。
   **从不重新调用外部服务**——结果未知，重放可能把「发送」类操作执行两次。模型续跑时拿到的就是这个错误。
-- 手动确认把实际处理 HTTP 的 worker 和原 claim 绑定，自动执行绑定原任务 worker。新凭据将 worker 纳入签名。取得 `executing`、实际发送和结果回写分别核对原身份，结果与活动记录的归还在同一事务内。
+- 手动确认把实际处理 HTTP 的 worker 和原 claim 绑定，自动执行绑定原任务 worker。新凭据将 worker 纳入签名。取得 `executing`、实际发送和结果回写分别核对原身份，结果与活动记录的归还在同一事务内。手动确认跨提交仍持有同一会话操作键，真实 `tools/call` 发送前及结果回写都复核该键。
 - 计时使用 `executed_at` 的 UTC 时间。完整的旧记录及已证明退出的工作沿用两分钟阈值。能证明原调用仍在途时保留 `executing`，即使已经超时；原 worker 确认停止或被围栏时可以提前登记结果未知。起始时间缺失、签名损坏或归属被替换时保留原记录。
 - 引擎启动和周期扫描、确认或拒绝、`maybe_resume` 和 runner 均复用该判定。等待期间的重复确认继续返回 409。恢复仅写持久结果，第三方调用次数应保持一次。
 - 调用完成时若提案已被回收（不再是 `executing`），`_execute_external` 不覆盖结果，保留已告知模型的状态。
