@@ -1,6 +1,7 @@
 """仅访问本实例拥有的备份；阻塞文件/S3操作必须通过 run_blocking 消费。"""
 
 import contextlib
+import fcntl
 import hashlib
 import os
 import re
@@ -85,6 +86,31 @@ class LocalStore:
         except OSError:
             raise BackupAdapterError("storage_failed") from None
 
+    def try_runtime_lock(self) -> BinaryIO | None:
+        directory = lock = None
+        try:
+            directory = self._directory_fd()
+            lock = os.open(
+                ".runtime.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory,
+            )
+            info = os.fstat(lock)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                raise BackupAdapterError("storage_identity")
+            # 文件不能在释放后删除，否则后来者可能在不同 inode 上分别取得排他锁。
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            resource = os.fdopen(lock, "rb")
+            lock = None
+            return resource
+        except BlockingIOError:
+            return None
+        except OSError:
+            raise BackupAdapterError("storage_failed") from None
+        finally:
+            if lock is not None:
+                os.close(lock)
+            if directory is not None:
+                os.close(directory)
+
     def _filename(self, locator: dict) -> str:
         instance, execution, name = locator.get("instance_key"), locator.get("execution_key"), locator.get("filename")
         if instance != self.instance_key or not isinstance(name, str):
@@ -163,24 +189,52 @@ class LocalStore:
     def verify(self, locator: dict, size_bytes: int | None, checksum: str | None) -> bool:
         return self.verified_locator(locator, size_bytes, checksum) is not None
 
-    def verified_locator(self, locator: dict, size_bytes: int | None, checksum: str | None) -> dict | None:
+    def open_verified(
+        self, locator: dict, size_bytes: int | None, checksum: str | None, *, portable: bool,
+        deadline: float, stop_event: threading.Event,
+    ) -> BinaryIO:
+        if size_bytes is None or not checksum:
+            raise BackupAdapterError("storage_identity")
+        # 远端文件系统的 st_dev 在不同挂载点间可能不同。走散列核对后复用同一 fd。
+        identity = locator
+        if portable:
+            identity = {key: value for key, value in locator.items() if key not in ("device", "inode")}
+        source = self.open(identity, size_bytes)
+        try:
+            digest = hashlib.sha256()
+            while block := source.read(CHUNK_SIZE):
+                check_running(deadline, stop_event)
+                digest.update(block)
+            if digest.hexdigest() != checksum:
+                raise BackupAdapterError("storage_identity")
+            source.seek(0)
+            return source
+        except OSError:
+            source.close()
+            raise BackupAdapterError("storage_failed") from None
+        except BaseException:
+            source.close()
+            raise
+
+    def verified_locator(
+        self, locator: dict, size_bytes: int | None, checksum: str | None, *, portable: bool = False,
+        deadline: float = float("inf"), stop_event: threading.Event | None = None,
+    ) -> dict | None:
         if size_bytes is None or not checksum:
             return None
         try:
-            with self.open(locator, size_bytes) as source:
-                digest = hashlib.sha256()
-                while block := source.read(CHUNK_SIZE):
-                    digest.update(block)
+            with self.open_verified(
+                locator, size_bytes, checksum, portable=portable, deadline=deadline,
+                stop_event=stop_event if stop_event is not None else threading.Event(),
+            ) as source:
                 info = os.fstat(source.fileno())
-                if digest.hexdigest() != checksum:
-                    raise BackupAdapterError("storage_identity")
                 return {**locator, "device": info.st_dev, "inode": info.st_ino}
         except BackupAdapterError as exc:
             if exc.code == "storage_missing":
                 return None
             raise
 
-    def delete(self, locator: dict) -> None:
+    def delete(self, locator: dict, *, missing_is_error: bool = False) -> None:
         directory = None
         try:
             name = self._filename(locator)
@@ -188,6 +242,8 @@ class LocalStore:
             try:
                 info = os.stat(name, dir_fd=directory, follow_symlinks=False)
             except FileNotFoundError:
+                if missing_is_error:
+                    raise BackupAdapterError("storage_missing") from None
                 return
             if not self._identity_matches(info, locator):
                 raise BackupAdapterError("storage_identity")
@@ -214,9 +270,10 @@ class LocalStore:
             if directory is not None:
                 os.close(directory)
 
-    def clean_temporary(self, execution_key: str) -> None:
+    def clean_temporary(self, execution_key: str) -> bool:
         execution = _uuid(execution_key)
         directory = None
+        removed = False
         try:
             directory = self._directory_fd()
             name = f".work-{execution}"
@@ -229,6 +286,7 @@ class LocalStore:
                     raise BackupAdapterError("storage_identity")
                 # fd版rmtree在支持dir_fd的平台抵抗目录替换，并且不追随目录内symlink。
                 shutil.rmtree(name, dir_fd=directory)
+                removed = True
             # 崩溃可能发生在原子发布前；只清该实例、该次执行的受控中间文件。
             pattern = re.compile(
                 rf"^\.ainovel-{re.escape(execution)}\.(?:dump|sqlite3)(?:\.gpg)?\."
@@ -237,6 +295,8 @@ class LocalStore:
             for entry in os.listdir(directory):
                 if pattern.fullmatch(entry):
                     os.unlink(entry, dir_fd=directory)
+                    removed = True
+            return removed
         except OSError:
             raise BackupAdapterError("cleanup_failed") from None
         finally:

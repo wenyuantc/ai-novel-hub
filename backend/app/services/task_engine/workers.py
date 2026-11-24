@@ -21,7 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.errors import ConflictError
-from app.models import AgentChange, Project, Task, TaskExecutionSlot, TaskWorker, TaskWorkRecord
+from app.models import (
+    AgentChange,
+    AgentConversationOperation,
+    BackupRun,
+    InspirationGenerationClaim,
+    Project,
+    Task,
+    TaskExecutionSlot,
+    TaskWorker,
+    TaskWorkRecord,
+)
 from app.services.ai_dispatch import is_sqlite_busy
 from app.services.task_engine import sqlite_lease_pair, sqlite_worker_leases
 
@@ -307,9 +317,20 @@ class WorkerLease:
             owns_external = select(AgentChange.id).where(
                 AgentChange.external_worker_key == TaskWorker.worker_key,
             ).exists()
+            owns_backup = select(BackupRun.id).where(
+                or_(BackupRun.worker_key == TaskWorker.worker_key,
+                    BackupRun.recovery_worker_key == TaskWorker.worker_key),
+            ).exists()
+            owns_inspiration = select(InspirationGenerationClaim.session_id).where(
+                InspirationGenerationClaim.worker_key == TaskWorker.worker_key,
+            ).exists()
+            owns_conversation = select(AgentConversationOperation.conversation_id).where(
+                AgentConversationOperation.worker_key == TaskWorker.worker_key,
+            ).exists()
             await db.execute(delete(TaskWorker).where(
                 or_(TaskWorker.fenced_at < cutoff, TaskWorker.stopped_at < cutoff),
                 ~referenced, ~owns_slot, ~owns_work, ~owns_deletion, ~owns_external,
+                ~owns_backup, ~owns_inspiration, ~owns_conversation,
             ).execution_options(synchronize_session=False))
             # 遗留占用仍能用其未裁剪的登记核对。下次启动再裁剪已清空的旧登记。
             await _release_confirmed_slots(db)

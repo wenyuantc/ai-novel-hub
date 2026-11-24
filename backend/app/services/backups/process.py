@@ -12,6 +12,9 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
+
+backup_lock_fd: ContextVar[int | None] = ContextVar("backup_lock_fd", default=None)
 
 _MESSAGES = {
     "interrupted": "备份执行已中断",
@@ -89,11 +92,14 @@ def run_command(
     """argv来自部署与服务端，绝不经shell；stderr始终丢弃，版本输出有界。"""
     check_running(deadline, stop_event)
     captured = tempfile.TemporaryFile() if capture_output else None
+    lock_fd = backup_lock_fd.get()
     try:
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
             stdout=captured if captured is not None else subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, env=env, start_new_session=True,
+            # 快照和加密子进程在父进程异常终止后仍可能短暂运行，文件锁应覆盖这段时间。
+            pass_fds=(lock_fd,) if lock_fd is not None else (),
         )
     except (OSError, ValueError):
         if captured is not None:

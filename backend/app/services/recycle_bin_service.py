@@ -1,8 +1,9 @@
-"""作品删除协调、管理员恢复/清理与单进程到期清理。"""
+"""作品删除协调、管理员恢复/清理与到期清理。"""
 
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from functools import partial
 from typing import TYPE_CHECKING
 from uuid import uuid4
 from weakref import WeakKeyDictionary
@@ -41,6 +42,7 @@ from app.services import project_lifecycle, retrieval_service, task_service, tas
 from app.services.admin_service import _escape_like
 from app.services.agent import external_activity
 from app.services.audit_writer import AuditOperation
+from app.services.periodic_database import retry_contended_write
 from app.services.project_service import chapter_stats_subquery, get_manageable_project, has_unsettled_external_change
 from app.services.task_engine import cleanup_work, workers
 
@@ -468,11 +470,20 @@ async def purge(
     *,
     title: str | None = None,
     cutoff: datetime | None = None,
-) -> None:
+) -> bool:
     system = actor_id is None and cutoff is not None
     if _has_pending_session_writes(db):
         await _reject_pending_purge(db, actor_id, project_id, system=system)
-    if not system:
+    project = None
+    if system:
+        try:
+            project = await project_lifecycle.lock_record(db, project_id)
+            _check_record(project, deleted_at)
+        except (NotFoundError, ConflictError):
+            # 扫描与取得父行锁之间可能已由另一实例清理，或有人恢复了作品。
+            # 尚未进入审计和清理阶段，因此没有失败事件需要记录。
+            return False
+    else:
         if actor_id is None:
             raise ForbiddenError("需要管理员权限")
         record = await project_lifecycle.load_record(db, project_id)
@@ -490,8 +501,9 @@ async def purge(
         include_own_project=True,
         system_expiry=system,
     ) as audit:
-        project = await project_lifecycle.lock_record(db, project_id)
-        _check_record(project, deleted_at)
+        if project is None:
+            project = await project_lifecycle.lock_record(db, project_id)
+            _check_record(project, deleted_at)
         if system:
             if project_lifecycle.expires_at(project.deleted_at) > cutoff:
                 raise ConflictError("作品尚未到期")
@@ -515,6 +527,7 @@ async def purge(
         if not engine.has_cleanup_failure(project_id):
             engine.forget_project_hubs(list(task_keys), statistics_keys=task_keys)
         retrieval_service.invalidate(project_id)
+    return True
 
 
 async def _release_abandoned_deletion_intents(db: AsyncSession) -> None:
@@ -552,6 +565,11 @@ async def purge_expired(engine: "TaskEngine", *, now: datetime | None = None) ->
     deleted_before = cutoff - timedelta(days=project_lifecycle.RETENTION_DAYS)
     cursor: tuple[datetime, int] | None = None
     count = 0
+
+    async def purge_one(project_id: int, stamp: datetime) -> bool:
+        async with engine.ctx.sessionmaker() as db:
+            return await purge(db, engine, None, project_id, stamp, cutoff=cutoff)
+
     while True:
         async with engine.ctx.sessionmaker() as db:
             statement = select(Project.deleted_at, Project.id).where(Project.deleted_at <= deleted_before)
@@ -566,9 +584,8 @@ async def purge_expired(engine: "TaskEngine", *, now: datetime | None = None) ->
         for stamp, pid in rows:
             cursor = (stamp, pid)
             try:
-                async with engine.ctx.sessionmaker() as db:
-                    await purge(db, engine, None, pid, stamp, cutoff=cutoff)
-                count += 1
+                if await retry_contended_write(partial(purge_one, pid, stamp)):
+                    count += 1
             except (ConflictError, NotFoundError):
                 logger.warning("到期作品清理跳过 project=%s", pid)
             except Exception:
@@ -600,7 +617,9 @@ class RecycleBinCleaner:
 
     async def _pass(self) -> None:
         try:
-            await recover_pending_deletions(self.engine.ctx.sessionmaker, seconds=self.engine.lease_seconds)
+            await retry_contended_write(
+                partial(recover_pending_deletions, self.engine.ctx.sessionmaker, seconds=self.engine.lease_seconds),
+            )
             await purge_expired(self.engine)
         except Exception:
             logger.error("回收站定时清理暂时失败，下个周期重试")

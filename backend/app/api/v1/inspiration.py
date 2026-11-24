@@ -1,12 +1,14 @@
 """灵感模式。固定路径（/sessions/from-project/...、/scale-suggest）先于 /sessions/{session_id} 注册。"""
 
+from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response, status
+import anyio
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.sse import sse_response
-from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SessionmakerDep, SettingsDep
+from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SessionmakerDep, SettingsDep, TaskEngineDep
 from app.schemas.inspiration import (
     ApplyPreviewItem,
     ApplyRequest,
@@ -81,8 +83,7 @@ async def delete_note(session_id: int, index: int, user: CurrentUser, db: DbDep)
     return await svc.delete_note(db, user.id, session_id, index)
 
 
-@router.post("/sessions/{session_id}/steps/{step}/generate", response_class=StreamingResponse)
-async def generate_options(
+async def _generate_events(
     session_id: int,
     step: StepKey,
     user: CurrentUser,
@@ -91,8 +92,9 @@ async def generate_options(
     cipher: CipherDep,
     factory: FactoryDep,
     sessionmaker: SessionmakerDep,
+    engine: TaskEngineDep,
     body: GenerateRequest | None = None,
-) -> StreamingResponse:
+) -> AsyncIterator[AsyncIterator[tuple[str, dict]]]:
     job = await svc.prepare_generate(
         db,
         user_id=user.id,
@@ -103,9 +105,23 @@ async def generate_options(
         factory=factory,
         ai_timeout=settings.ai_request_timeout,
         allow_private=settings.allow_private_ai_endpoints,
+        worker=engine.request_worker,
     )
-    await db.close()
-    return sse_response(svc.run_generate(job, sessionmaker))
+    events = svc.run_generate(job, sessionmaker)
+    try:
+        yield events
+    finally:
+        # 请求退出栈包含 headers 和流的发送，即使生成器从未开始，也要撤销占用。
+        with anyio.CancelScope(shield=True):
+            try:
+                await events.aclose()
+            finally:
+                await svc.release_generate(job, sessionmaker)
+
+
+@router.post("/sessions/{session_id}/steps/{step}/generate", response_class=StreamingResponse)
+async def generate_options(events: Annotated[AsyncIterator[tuple[str, dict]], Depends(_generate_events)]):
+    return sse_response(events)
 
 
 @router.post("/sessions/{session_id}/convert", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)

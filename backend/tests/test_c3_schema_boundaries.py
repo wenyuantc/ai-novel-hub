@@ -52,7 +52,7 @@ def test_0068_cold_copy_releases_only_confirmed_execution_work(tmp_path):
     with closing(sqlite3.connect(snapshot)) as db:
         assert db.execute("SELECT count(*) FROM task_work_records").fetchone() == (4,)
 
-    assert restore_sqlite_snapshot(snapshot, restored) == "0068"
+    assert restore_sqlite_snapshot(snapshot, restored) == "0069"
     with closing(sqlite3.connect(restored)) as db:
         assert db.execute("SELECT fenced_at FROM task_workers WHERE worker_key=?", (owner,)).fetchone()[0]
         assert set(db.execute("SELECT work_key,kind,worker_key,state FROM task_work_records")) == set(rows[1:])
@@ -99,7 +99,7 @@ def test_0068_roundtrip_preserves_project_high_water_and_children(tmp_path):
 
 async def test_0068_downgrade_observes_concurrent_committed_work(migration_db):
     cfg, db_engine = migration_db
-    await asyncio.to_thread(command.upgrade, cfg, "head")
+    await asyncio.to_thread(command.upgrade, cfg, "0068")
     dialect = db_engine.dialect.name
     loop = asyncio.get_running_loop()
     entering = asyncio.Event()

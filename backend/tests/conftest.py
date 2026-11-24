@@ -39,16 +39,6 @@ def fake_dns(monkeypatch):
     monkeypatch.setattr(endpoint_guard, "_resolve", _resolve)
 
 
-@pytest.fixture(autouse=True)
-def isolated_conversation_locks(monkeypatch):
-    """会话进程锁按会话 id 缓存；每个测试换新事件循环且 id 从 1 复用，须隔离注册表。"""
-    from weakref import WeakValueDictionary
-
-    from app.services.agent import service as agent_service
-
-    monkeypatch.setattr(agent_service, "_locks", WeakValueDictionary())
-
-
 @pytest.fixture
 def fake_llm(monkeypatch) -> FakeLLM:
     """仅本测试的纯内存 provider 可走测试门禁；生产工厂仍按原规则验证。"""

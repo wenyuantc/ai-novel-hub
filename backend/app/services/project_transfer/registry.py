@@ -108,12 +108,14 @@ NOT_EXPORTED: dict[str, str] = {
     "project_pen_names": "当前作品署名以顶层笔名文本导出并在导入者私库恢复，不导出库身份",
     "analysis_index_receipts": "分析派生索引的去重收据属于任务运行态，不随单书备份迁移",
     "inspiration_origins": "个人灵感会话的原邀请身份不随单书备份迁移",
+    "inspiration_generation_claims": "灵感步骤的生成占用依赖当前执行者，不随单书备份迁移",
     "project_collaborators": "协作授权属于用户关系，不随单书备份迁移",
     "series_books": "系列成员关系是跨作品授权；单书始终恢复为独立作品",
     "series_entry_uses": "本书采用的条目以已存在的书内投影导出，不携带共享绑定",
     "api_key_projects": "访问密钥的小说授权属于用户凭据，不随小说备份迁移",
     "project_covers": "二进制图片单独导出导入为备份顶层 cover 字段，不走通用表序列化",
     "agent_conversations": "智能体会话属于运行时数据，不跨实例迁移",
+    "agent_conversation_operations": "智能体会话的操作占用依赖当前执行者，不跨实例迁移",
     "agent_messages": "智能体消息属于运行时数据，不跨实例迁移",
     "agent_changes": "智能体提案和效果属于运行时数据，不跨实例迁移",
     "tasks": "后台任务是运行时状态，导入后没有意义；导入后按需重新排队建索引",
@@ -595,6 +597,7 @@ RULES: tuple[TableRule, ...] = (
         lambda pid: or_(InspirationSession.project_id == pid, InspirationSession.converted_project_id == pid),
         option="inspiration",
         fill={"user_id": "user"},
+        exclude=("state_revision",),
         # 都指向新项目（指向其他项目的置空）
         fk={"project_id": "projects", "converted_project_id": "projects"},
         # 结构见 schemas.inspiration.SessionState，只有文本，不含 id

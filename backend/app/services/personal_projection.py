@@ -548,7 +548,7 @@ async def _final_visibility(
                 AgentConversation.id.label("agent_conversation_id"),
                 AgentConversation.project_id.label("agent_conversation_project_id"),
                 AgentConversation.user_id.label("agent_conversation_user_id"),
-                AgentConversation.created_at.label("agent_conversation_created_at"),
+                AgentConversation.instance_key.label("agent_conversation_instance_key"),
                 linked_task.id.label("linked_task_id"), linked_task.statistics_key.label("linked_task_key"),
                 linked_task.project_id.label("linked_task_project_id"),
                 linked_task.user_id.label("linked_task_user_id"), root_task,
@@ -600,8 +600,10 @@ async def _final_visibility(
                     or ChangeOut.model_validate(change).model_dump(mode="json") != expected
                     or row.agent_conversation_id != expected["conversation_id"]
                     or row.agent_conversation_project_id != project_id or row.agent_conversation_user_id != user_id
-                    or jsonable_encoder(row.agent_conversation_created_at)
-                    != agent_proofs["conversations"].get(expected["conversation_id"])):
+                    or not row.agent_conversation_instance_key
+                    or row.agent_conversation_instance_key != agent_proofs["conversations"].get(
+                        expected["conversation_id"],
+                    )):
                 raise NotFoundError("修改提案不存在")
             task_id = expected["turn_task_id"]
             if task_id is not None:
@@ -640,7 +642,8 @@ async def _final_visibility(
                     or current.agent_conversation_id != conversation["id"]
                     or current.agent_conversation_project_id != project_id
                     or current.agent_conversation_user_id != user_id
-                    or jsonable_encoder(current.agent_conversation_created_at) != conversation["created_at"]):
+                    or not current.agent_conversation_instance_key
+                    or current.agent_conversation_instance_key != conversation["instance_key"]):
                 raise NotFoundError("会话不存在")
             if "snapshot" in conversation:
                 # writable 按本次核验快照的作者 / 成员事实重算（与 agent.access.conversation_writable 同口径）。

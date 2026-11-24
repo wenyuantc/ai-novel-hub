@@ -2,9 +2,11 @@
 
 import json
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 
 import pytest
-from sqlalchemy import JSON, func, select
+from sqlalchemy import JSON, func, select, update
 
 from app.models import (
     AnalysisChange,
@@ -50,7 +52,8 @@ from app.models import (
     WritingStyle,
 )
 from app.models.entities import TaskLeaseStore
-from app.services.project_transfer import exporter, importer
+from app.models.project_import_preview import ProjectImportPreview
+from app.services.project_transfer import exporter, importer, preview_store
 from app.services.project_transfer.registry import NOT_EXPORTED, PROJECT_RULE, RULES
 from tests.helpers import create_ai_config, create_project, register, wait_task
 
@@ -1468,23 +1471,25 @@ async def test_import_error_rolls_back(client, app):
     assert resp.status_code == 400 and resp.json()["table"] == "organizations"
 
 
-async def test_token_expiry_and_isolation(client, app, make_client, monkeypatch):
+async def test_token_expiry_and_isolation(client, app, make_client):
     p, _ = await _setup(client, app)
     raw = json.dumps(await _backup(client, p["id"]), ensure_ascii=False).encode()
     token = (await _preview_raw(client, raw)).json()["token"]
     bob = make_client()
     await register(bob, "bob")
     resp = await bob.post(f"{API}/import", json={"token": token})
-    assert resp.status_code == 400 and resp.json()["detail"] == importer.TOKEN_EXPIRED
+    assert resp.status_code == 400 and resp.json()["detail"] == preview_store.TOKEN_EXPIRED
     resp = await client.post(f"{API}/import", json={"token": token, "title": "新书名"})
     assert resp.status_code == 201 and resp.json()["project"]["title"] == "新书名"
     # 用过即失效
     resp = await client.post(f"{API}/import", json={"token": token})
-    assert resp.status_code == 400 and resp.json()["detail"] == importer.TOKEN_EXPIRED
+    assert resp.status_code == 400 and resp.json()["detail"] == preview_store.TOKEN_EXPIRED
     # 过期
     token = (await _preview_raw(client, raw)).json()["token"]
-    now = importer._now()
-    monkeypatch.setattr(importer, "_now", lambda: now + importer.TOKEN_TTL + 1)
+    async with app.state.sessionmaker.begin() as db:
+        await db.execute(update(ProjectImportPreview)
+                         .where(ProjectImportPreview.token_hash == sha256(token.encode()).hexdigest())
+                         .values(expires_at=datetime.now(UTC) - timedelta(seconds=2)))
     resp = await client.post(f"{API}/import", json={"token": token})
     assert resp.status_code == 400 and resp.json()["detail"] == "导入凭据已过期，请重新选择备份文件"
     resp = await client.post(f"{API}/import", json={"title": "x"})
@@ -1572,17 +1577,6 @@ async def test_import_queues_rebuild_with_embedding_model(client, app):
     assert docs[0]["status"] == "ready"
     kb = (await client.post(f"{API}/{pid}/kb/search", json={"query": "天剑宗", "min_score": 0})).json()
     assert kb["mode"] == "hybrid"
-
-
-def test_token_cache_global_cap(monkeypatch):
-    """全实例缓存份数有上限：超出时淘汰最早到期的预览，被淘汰的凭据视为过期。"""
-    importer.clear_tokens()
-    monkeypatch.setattr(importer, "MAX_TOKENS_TOTAL", 3)
-    tokens = [importer.put_token(uid, {"n": uid}) for uid in (1, 2, 3, 4)]
-    assert len(importer._CACHE) == 3
-    assert tokens[0] not in importer._CACHE
-    assert all(t in importer._CACHE for t in tokens[1:])
-    importer.clear_tokens()
 
 
 async def _typed_fields_backup(client, app):

@@ -13,6 +13,8 @@
 
 import hashlib
 import logging
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
 import anyio
@@ -608,9 +610,11 @@ async def search_hits(
     top_k: int,
     min_score: float,
     embedder: Embedder | None,
+    query_embed_scope: Callable[[], AbstractAsyncContextManager[None]] | None = None,
 ) -> tuple[list[KbHit], retrieval_service.SearchResult]:
     result = await retrieval_service.search(
-        db, project_id, "kb", query, top_k=top_k, min_score=min_score, embedder=embedder
+        db, project_id, "kb", query, top_k=top_k, min_score=min_score, embedder=embedder,
+        query_embed_scope=query_embed_scope,
     )
     return await _materialize_search_hits(db, project_id, result), result
 
@@ -702,7 +706,8 @@ def format_lines(hits: list[KbHit], max_chars: int) -> list[str]:
 
 
 async def knowledge_text(
-    db: AsyncSession, project: Project, query: str, *, embedder: Embedder | None, purpose: str = ""
+    db: AsyncSession, project: Project, query: str, *, embedder: Embedder | None, purpose: str = "",
+    query_embed_scope: Callable[[], AbstractAsyncContextManager[None]] | None = None,
 ) -> str:
     """注入用的参考资料正文（不含标题行，标题由模板 / 上下文组装输出）；不注入时为空串。"""
     if not query.strip():
@@ -712,7 +717,8 @@ async def knowledge_text(
         if not settings.auto_inject:
             return ""
         hits, _ = await search_hits(
-            db, project.id, query, top_k=settings.top_k, min_score=settings.min_score, embedder=embedder
+            db, project.id, query, top_k=settings.top_k, min_score=settings.min_score, embedder=embedder,
+            query_embed_scope=query_embed_scope,
         )
         return "\n".join(format_lines(hits, settings.max_chars))
     except VisibilityPolicyError:
@@ -723,7 +729,9 @@ async def knowledge_text(
                 "code": "retrieval_reference_invalid",
             }) from None
         raise
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        if query_embed_scope is not None and isinstance(exc, UnauthorizedError):
+            raise
         logger.warning("知识库检索失败（项目 %s，%s），本次不注入参考资料", project.id, purpose, exc_info=True)
         return ""
 
@@ -739,6 +747,7 @@ async def knowledge_for_project(
     allow_private: bool,
     purpose: str = "",
     visibility_stamp: VisibilityStamp | None = None,
+    query_embed_scope: Callable[[], AbstractAsyncContextManager[None]] | None = None,
 ) -> str:
     """向导 / 实体生成 / 灵感模式用：按项目所有者的向量模型检索参考资料（没有向量模型时只用关键词）。"""
     settings = await load_settings(db, project.id)
@@ -753,7 +762,9 @@ async def knowledge_for_project(
     )
     if embedder is not None and visibility_stamp is not None:
         embedder = retrieval_service.guard_embedder(embedder, visibility_stamp, visibility_sessionmaker(db))
-    return await knowledge_text(db, project, query, embedder=embedder, purpose=purpose)
+    return await knowledge_text(
+        db, project, query, embedder=embedder, purpose=purpose, query_embed_scope=query_embed_scope,
+    )
 
 
 async def knowledge_for_http(

@@ -235,7 +235,7 @@ def _bootstrap(main: sqlite3.Connection, base: Path, *, cold: bool = False) -> N
                                "WHERE stopped_at IS NOT NULL OR fenced_at IS NOT NULL)")
             tables = {row[0] for row in main.execute(
                 "SELECT name FROM sqlite_schema WHERE type='table' "
-                "AND name IN ('task_execution_slots','task_work_records')"
+                "AND name IN ('task_execution_slots','task_work_records','project_import_previews')"
             )}
             if "task_execution_slots" in tables:
                 main.execute("DELETE FROM task_execution_slots WHERE " + terminal_owners)
@@ -243,6 +243,10 @@ def _bootstrap(main: sqlite3.Connection, base: Path, *, cold: bool = False) -> N
                 # 旧执行者已离线；请求清理和失败记录仍须凭原收据单独核对。
                 main.execute("DELETE FROM task_work_records WHERE kind='execution' AND state='active' AND "
                              + terminal_owners)
+            if "project_import_previews" in tables:
+                # 恢复快照不能让已消费的临时令牌复活。配对连接未启用外键，按依赖顺序清理。
+                main.execute("DELETE FROM project_import_preview_chunks")
+                main.execute("DELETE FROM project_import_previews")
         established = _anchor(guard)
         generation = previous.generation if previous and not cold else str(uuid4())
         if previous is None and _side(base).exists():

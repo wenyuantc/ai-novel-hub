@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -43,6 +44,8 @@ class RequestWorker:
         self._requests: set[asyncio.Future] = set()
         self._cancel_rounds: set[_CancelRound] = set()
         self._recoveries: dict[_CancelRound, asyncio.Task] = {}
+        self._inspiration_release: asyncio.Task | None = None
+        self._lease_loss_handlers: set[Callable[[], None]] = set()
 
     @property
     def worker_key(self) -> str | None:
@@ -54,6 +57,19 @@ class RequestWorker:
 
     def _expire(self) -> None:
         self.lease.invalidate()
+        handlers = tuple(self._lease_loss_handlers)
+        self._lease_loss_handlers.clear()
+        for handler in handlers:
+            handler()
+
+    @contextmanager
+    def on_lease_loss(self, handler: Callable[[], None]) -> Iterator[None]:
+        """使本代次正在等待的外部 I/O 随安全期限结束。"""
+        self._lease_loss_handlers.add(handler)
+        try:
+            yield
+        finally:
+            self._lease_loss_handlers.discard(handler)
 
     def recover_cancel(self, task_id: int, task_key: str | None, queued_at: datetime | None,
                        execution_key: str | None, *, retry: bool = False) -> asyncio.Task | None:
@@ -147,6 +163,8 @@ class RequestWorker:
         self._heartbeat = asyncio.create_task(self._maintain(), name="request-worker-heartbeat")
 
     async def _maintain(self) -> None:
+        from app.services.inspiration_service import schedule_releases
+
         while not self._closing.is_set():
             try:
                 await asyncio.wait_for(self._closing.wait(), timeout=self.engine.heartbeat_interval)
@@ -156,12 +174,13 @@ class RequestWorker:
             try:
                 if self.lease.valid and await self.lease.heartbeat():
                     if not self._quiescing:
+                        self._inspiration_release = schedule_releases(self, self._inspiration_release)
                         self.engine.admin_cancellations.schedule_confirmations()
                         for identity in self._cancel_rounds.copy():
                             self._start_recovery(identity)
                     continue
                 # 旧请求每次发包/提交都须持原代次。新的请求只使用新登记的身份。
-                self.lease.invalidate()
+                self._expire()
                 await self._drain()
                 if not self._quiescing and not self._closing.is_set():
                     await self.lease.register()
@@ -170,6 +189,10 @@ class RequestWorker:
 
     async def _drain(self) -> None:
         current = asyncio.current_task()
+        if self._inspiration_release is not None:
+            self._inspiration_release.cancel()
+            await asyncio.gather(self._inspiration_release, return_exceptions=True)
+            self._inspiration_release = None
         if self._recoveries:
             await asyncio.gather(*(asyncio.shield(t) for t in self._recoveries.values()), return_exceptions=True)
         cleanup = {task for scope in self.engine._cleanup_work.values() for task in scope if task is not current}

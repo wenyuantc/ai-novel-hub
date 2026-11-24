@@ -31,7 +31,9 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.security import SecretCipher
 from app.models import AgentChange, AgentConversation, McpPlugin, Project, Task
+from app.models.agent_operation import AgentConversationOperation
 from app.services import ai_dispatch, project_ai_config
+from app.services.agent.conversation_operations import operation_matches
 from app.services.agent.external_activity import ExternalActivity
 from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp
 from app.services.authorization_service import AuthenticatedActor
@@ -90,6 +92,7 @@ class McpSendIdentity:
     task_snapshot: str | None = None
     change_snapshot: str | None = None
     worker_key: str | None = None
+    conversation_operation_key: str | None = None
 
     def activity(self) -> ExternalActivity:
         if self.worker_key is None:
@@ -263,8 +266,16 @@ async def _send_lease(
                             "actor_token_version": identity.actor.token_version}
                 if change.result["_external_execution"] != expected:
                     raise ai_dispatch.SendLeaseError()
-            elif identity.execution is not None or "_external_execution" in change.result:
-                raise ai_dispatch.SendLeaseError()
+            else:
+                if (identity.execution is not None or "_external_execution" in change.result
+                        or identity.conversation_operation_key is None or identity.worker_key is None):
+                    raise ai_dispatch.SendLeaseError()
+                match = operation_matches(
+                    identity.conversation_id, identity.conversation_operation_key, identity.worker_key,
+                )
+                operation = await db.scalar(select(AgentConversationOperation.conversation_id).where(*match))
+                if operation is None:
+                    raise ai_dispatch.SendLeaseError()
             tool_map = task.checkpoint.get("mcp_tool_map") if isinstance(task.checkpoint, dict) else None
             latest = await _resolve_entry(db, identity.actor.id, identity.conversation_id,
                                           tool_map if isinstance(tool_map, dict) else {}, resolved.name)

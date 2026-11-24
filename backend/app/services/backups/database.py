@@ -107,7 +107,10 @@ def snapshot_database(
                     environment[variable] = value
             run_command(
                 [pg_dump_path, "--no-password", "--format=custom", "--host", host, "--port", port,
-                 "--username", user, "--dbname", database, "--file", str(destination)],
+                 "--username", user, "--dbname", database, "--file", str(destination),
+                 # 恢复须保留暂存表结构，短时导入凭据和上传分块不能随快照复活。
+                 "--exclude-table-data=*.project_import_previews",
+                 "--exclude-table-data=*.project_import_preview_chunks"],
                 deadline=deadline, stop_event=stop_event, env=environment,
             )
             with destination.open("rb") as artifact:

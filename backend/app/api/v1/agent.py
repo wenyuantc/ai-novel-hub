@@ -70,9 +70,10 @@ async def get_conversation(
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
 async def update_conversation(
-    project_id: int, conversation_id: int, body: ConversationUpdate, user: CurrentUser, db: AgentDbDep
+    project_id: int, conversation_id: int, body: ConversationUpdate, user: CurrentUser, db: AgentDbDep,
+    engine: TaskEngineDep,
 ):
-    return await svc.update_conversation(db, user.id, project_id, conversation_id, body)
+    return await svc.update_conversation(db, engine, user.id, project_id, conversation_id, body)
 
 
 @router.get("/conversations/{conversation_id}/generation-logs", response_model=list[GenerationLogOut])
@@ -81,8 +82,10 @@ async def list_generation_logs(project_id: int, conversation_id: int, user: Curr
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_conversation(project_id: int, conversation_id: int, user: CurrentUser, db: AgentDbDep):
-    await svc.delete_conversation(db, user.id, project_id, conversation_id)
+async def delete_conversation(
+    project_id: int, conversation_id: int, user: CurrentUser, db: AgentDbDep, engine: TaskEngineDep,
+):
+    await svc.delete_conversation(db, engine, user.id, project_id, conversation_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

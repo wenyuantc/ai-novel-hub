@@ -1,11 +1,11 @@
-"""项目备份导入：解析校验 → 预览（令牌缓存）→ 单事务导入为新项目。
+"""项目备份导入：解析校验 → 预览（加密暂存）→ 单事务导入为新项目。
 
 解析（parse_backup，纯函数，CPU 密集，路由放进线程）：大小 ≤ 100MB → UTF-8 → json.loads（嵌套深度 ≤ MAX_DEPTH）→
 format / version（更新的版本 400，migrate 逐级升级）→ 结构与列类型 / 长度 / 必填 → 文件内引用完整性
 （每个外键都能在文件内找到，风格 ref 都能在 styles[] 中找到）。任何一项不通过 → 400（响应体 errors 列出前 20 条）。
 
-预览（preview）：不写库；解析结果放进进程内缓存（按用户隔离，TOKEN_TTL 秒，每个用户最多 MAX_TOKENS_PER_USER 份），
-返回 token、统计、风格对应方式与警告。确认导入时凭 token 取回；过期 → 400，提示重新选择文件。
+预览（preview）：原文经校验后限量加密暂存，返回令牌、统计、风格对应方式与警告。
+确认时凭原账号与令牌取回。失效 → 400，提示重新选择文件。成功导入与令牌消费同事务。
 
 导入（import_backup，单事务）：
 1. 风格：预设按 preset_key 对应（缺失 → 复制为导入者的自定义风格 + 警告）；
@@ -26,8 +26,6 @@ import binascii
 import json
 import math
 import re
-import secrets
-import time
 import types
 import typing
 from collections import Counter
@@ -70,10 +68,11 @@ from app.services import (
     setting_category_service,
     setting_progression_service,
 )
-from app.services.project_transfer import remap
+from app.services.project_transfer import preview_store, remap
 from app.services.project_transfer.batch_revisions import REVISION_TABLES, validate_revision_tables
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
+from app.services.project_transfer.preview_store import MAX_BYTES, TOO_LARGE
 from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
 from app.services.project_transfer.remap import RemapContext
 from app.services.project_transfer.rich_documents import validate_rich_tables
@@ -85,15 +84,8 @@ from app.services.setting_field_values import FieldSpec, has_field_content, vali
 from app.services.setting_progression_resolver import validate_baseline, validate_progression_value
 from app.services.style_service import FIELD_LIMITS, IMPORT_SUFFIX, NAME_LIMIT, unique_name
 
-MAX_BYTES = 100 * 1024 * 1024
-TOO_LARGE = "备份文件过大，上限为 100MB"
 MAX_DEPTH = 40
 MAX_ERRORS = 20
-TOKEN_TTL = 600
-MAX_TOKENS_PER_USER = 2
-# 全实例最多缓存的预览份数：解析后的备份可能是文件体积的数倍，超出时淘汰最早到期的（被淘汰者确认时提示重新选择文件）
-MAX_TOKENS_TOTAL = 6
-TOKEN_EXPIRED = "导入凭据已过期，请重新选择备份文件"
 TITLE_SUFFIX = "（导入）"
 TITLE_LIMIT = 200
 INSERT_BATCH = 500
@@ -1281,7 +1273,7 @@ def _check_thumbnails(raw: Any, tables: dict[str, list[dict[str, Any]]], errors:
     return result
 
 
-def parse_backup(raw: bytes) -> Backup:
+def parse_backup(raw: bytes | bytearray) -> Backup:
     """解析并校验备份文件（不访问数据库）。不合法 → BadRequestError。"""
     if len(raw) > MAX_BYTES:
         raise BadRequestError(TOO_LARGE)
@@ -1386,59 +1378,6 @@ def parse_backup(raw: bytes) -> Backup:
     _check_consistency_data(backup, errors)
     errors.raise_if_any()
     return backup
-
-
-# ---------------- 令牌缓存 ----------------
-
-
-@dataclass
-class _Entry:
-    user_id: int
-    expires_at: float
-    backup: Backup
-
-
-_CACHE: dict[str, _Entry] = {}
-
-
-def _now() -> float:
-    return time.monotonic()
-
-
-def _purge() -> None:
-    now = _now()
-    for token in [t for t, e in _CACHE.items() if e.expires_at <= now]:
-        _CACHE.pop(token, None)
-
-
-def put_token(user_id: int, backup: Backup) -> str:
-    _purge()
-    mine = sorted((e.expires_at, t) for t, e in _CACHE.items() if e.user_id == user_id)
-    for _, token in mine[: max(0, len(mine) - MAX_TOKENS_PER_USER + 1)]:
-        _CACHE.pop(token, None)
-    overflow = len(_CACHE) - MAX_TOKENS_TOTAL + 1
-    if overflow > 0:
-        for _, token in sorted((e.expires_at, t) for t, e in _CACHE.items())[:overflow]:
-            _CACHE.pop(token, None)
-    token = secrets.token_urlsafe(24)
-    _CACHE[token] = _Entry(user_id=user_id, expires_at=_now() + TOKEN_TTL, backup=backup)
-    return token
-
-
-def get_token(user_id: int, token: str) -> Backup:
-    _purge()
-    entry = _CACHE.get(token)
-    if entry is None or entry.user_id != user_id:
-        raise BadRequestError(TOKEN_EXPIRED)
-    return entry.backup
-
-
-def drop_token(token: str) -> None:
-    _CACHE.pop(token, None)
-
-
-def clear_tokens() -> None:
-    _CACHE.clear()
 
 
 # ---------------- 风格与书名 ----------------
@@ -1556,18 +1495,20 @@ def _global_type_warning(a: str, b: str) -> str:
     return f"预置关系类型「{a}/{b}」在当前版本中不存在，已改为项目自定义类型"
 
 
-async def preview(db: AsyncSession, user_id: int, backup: Backup) -> ImportPreview:
+async def preview(db: AsyncSession, user_id: int, backup: Backup, raw: bytes, encryption_key: str) -> ImportPreview:
     plans = await _plan_styles(db, user_id, backup.styles)
     warnings = list(backup.warnings)
     warnings += _style_warnings(plans)
     warnings += [_global_type_warning(a, b) for a, b in await _missing_global_types(db, backup)]
     warnings += _missing_warnings(_dry_run_missing(backup))
     title = str(backup.project.get("title") or "")
-    token = put_token(user_id, backup)
+    final_title = await _final_title(db, user_id, title)
+    await db.rollback()
+    token = await preview_store.store(db, user_id, raw, encryption_key)
     return ImportPreview(
         token=token,
         title=title,
-        final_title=await _final_title(db, user_id, title),
+        final_title=final_title,
         version=backup.version,
         exported_at=backup.data.get("exported_at") if isinstance(backup.data.get("exported_at"), str) else None,
         app_schema=backup.data.get("app_schema") if isinstance(backup.data.get("app_schema"), str) else None,
@@ -1575,7 +1516,7 @@ async def preview(db: AsyncSession, user_id: int, backup: Backup) -> ImportPrevi
         counts=backup.counts,
         styles=[ImportStyleBrief(name=p.name, preset_key=p.preset_key, action=p.action) for p in plans],
         warnings=warnings,
-        expires_in=TOKEN_TTL,
+        expires_in=preview_store.TOKEN_TTL,
     )
 
 
@@ -1865,16 +1806,25 @@ class _Importer:
         return project
 
 
-async def import_backup(db: AsyncSession, engine, user_id: int, backup: Backup, title: str | None) -> ImportResult:
+async def import_backup(
+    db: AsyncSession, engine, user_id: int, backup: Backup, title: str | None,
+    *, preview: preview_store.PreviewIdentity | None = None,
+) -> ImportResult:
     from app.services.quota_service import check_project_creation
 
     importer = _Importer(db, user_id, backup)
     try:
         from app.services import authorization_service as authz
 
+        if preview is not None:
+            await authz.lock_users(db, user_id, missing_ok=True)
+            await authz.require_authenticated(db, user_id)
+            # 同一账号的竞争者退出 User 屏障后，先看到令牌失效，再检查作品额度。
+            await preview_store.require_available(db, preview)
         await check_project_creation(db, user_id)
-        # 与普通建书相同，先持 User 屏障再重验，不能反向获取全局 gate。
-        await authz.require_authenticated(db, user_id)
+        if preview is None:
+            # 与普通建书相同，先持 User 屏障再重验，不能反向获取全局 gate。
+            await authz.require_authenticated(db, user_id)
         project = await importer.run(title)
         if backup.thumbnails:
             from app.services.setting_image_service import set_book_image_without_commit
@@ -1887,6 +1837,8 @@ async def import_backup(db: AsyncSession, engine, user_id: int, backup: Backup, 
 
             pen = await find_or_create_without_commit(db, user_id, backup.pen_name)
             await bind_without_commit(db, user_id, project.id, pen.id)
+        if preview is not None:
+            await preview_store.consume(db, preview)
         await db.commit()
     except _RowError as exc:
         await db.rollback()

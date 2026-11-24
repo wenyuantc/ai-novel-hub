@@ -7,14 +7,13 @@ from uuid import uuid4
 
 import pytest
 from alembic import command, op
-from sqlalchemy import inspect, select, text
+from sqlalchemy import MetaData, Table, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.models import (
     AgentChange,
-    AgentConversation,
     McpPlugin,
     Project,
     TaskExecutionSlot,
@@ -227,7 +226,7 @@ async def test_0067_preserves_legacy_task_and_guards_execution_slots(migration_d
                           last_tested_at=datetime(2025, 1, 2, tzinfo=UTC))
         original_id = await db.scalar(plugins.insert().values(**plugin_row).returning(plugins.c.id))
         await db.execute(Project.__table__.insert().values(id=1, user_id=1, title="旧作品"))
-        conversations = AgentConversation.__table__
+        conversations = await db.run_sync(lambda conn: Table("agent_conversations", MetaData(), autoload_with=conn))
         await db.execute(conversations.insert().values(id=1, user_id=1, project_id=1, mcp_plugin_ids=[original_id]))
         read_selection = select(conversations.c.mcp_plugin_ids).where(conversations.c.id == 1)
         read_plugin = select(plugins).where(plugins.c.id == original_id)
@@ -342,7 +341,7 @@ async def test_0068_preserves_legacy_claim_and_guards_work(migration_db, monkeyp
         if db.dialect.name == "sqlite":
             await db.execute(projects.insert().values(id=20, user_id=1, title="曾存在的作品"))
             await db.execute(text("DELETE FROM projects WHERE id=20"))
-        await db.execute(AgentConversation.__table__.insert().values(id=1, project_id=1, user_id=1))
+        await db.execute(text("INSERT INTO agent_conversations (id, project_id, user_id) VALUES (1,1,1)"))
         await db.execute(changes.insert().values(id=1, project_id=1, conversation_id=1, tool_call_id="a",
                                                  tool_name="t", kind="external", status="executing",
                                                  change_key=change_key, result=legacy_result))

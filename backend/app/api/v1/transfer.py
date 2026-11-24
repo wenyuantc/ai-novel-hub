@@ -9,10 +9,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from app.core.deps import CurrentUser, DbDep, SessionmakerDep, TaskEngineDep
+from app.core.deps import CurrentUser, DbDep, SessionmakerDep, SettingsDep, TaskEngineDep
 from app.core.errors import BadRequestError
 from app.schemas.transfer import BackupEstimate, BackupOptions, ImportPreview, ImportRequest, ImportResult
-from app.services.project_transfer import exporter, importer
+from app.services.project_transfer import exporter, importer, preview_store
 
 router = APIRouter(prefix="/projects", tags=["project-transfer"])
 
@@ -50,28 +50,33 @@ async def _validated_backup_stream(backing, length, sessionmaker, plan):
         backing.close()
 
 
-async def _read_backup(file: StarletteUploadFile) -> importer.Backup:
+async def _read_backup(file: StarletteUploadFile) -> bytes:
     # 多读 1 字节即可判断是否超限（请求体总量已由 UploadLimitMiddleware 在解析前拦截）
     data = await file.read(importer.MAX_BYTES + 1)
     if len(data) > importer.MAX_BYTES:
         raise BadRequestError(importer.TOO_LARGE)
-    return await anyio.to_thread.run_sync(importer.parse_backup, data)
+    return data
 
 
 @router.post("/import/preview", response_model=ImportPreview)
 async def preview_import(
     user: CurrentUser,
     db: DbDep,
+    settings: SettingsDep,
     file: Annotated[UploadFile, File(description="ainovel.project 备份文件（JSON），≤ 100MB")],
 ) -> ImportPreview:
-    backup = await _read_backup(file)
-    return await importer.preview(db, user.id, backup)
+    raw = await _read_backup(file)
+    backup = await anyio.to_thread.run_sync(importer.parse_backup, raw)
+    return await importer.preview(db, user.id, backup, raw, settings.encryption_key)
 
 
 @router.post("/import", response_model=ImportResult, status_code=status.HTTP_201_CREATED)
-async def import_project(request: Request, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> ImportResult:
+async def import_project(
+    request: Request, user: CurrentUser, db: DbDep, engine: TaskEngineDep, settings: SettingsDep,
+) -> ImportResult:
     """JSON {token, title?}（先预览）；或 multipart（file + 可选 title）直接上传导入。"""
-    token: str | None = None
+    user_id = user.id
+    preview = None
     if request.headers.get("content-type", "").startswith("multipart/form-data"):
         form = await request.form()
         file = form.get("file")
@@ -79,18 +84,19 @@ async def import_project(request: Request, user: CurrentUser, db: DbDep, engine:
             raise BadRequestError("请选择备份文件")
         raw_title = form.get("title")
         title = raw_title.strip()[:200] if isinstance(raw_title, str) else None
-        backup = await _read_backup(file)
+        raw = await _read_backup(file)
     else:
         try:
             body = ImportRequest.model_validate(await request.json())
         except (ValueError, ValidationError) as exc:
             raise BadRequestError("请求参数格式不正确：需要 token") from exc
-        token, title = body.token, body.title
-        backup = importer.get_token(user.id, token)
-    result = await importer.import_backup(db, engine, user.id, backup, title)
-    if token is not None:
-        importer.drop_token(token)
-    return result
+        title = body.title
+        preview, raw = await preview_store.load(db, user_id, body.token, settings.encryption_key)
+        # 不持读取事务解析近上限的备份。提交前重新验证并消费同一条暂存记录。
+        await db.rollback()
+    backup = await anyio.to_thread.run_sync(importer.parse_backup, raw)
+    del raw
+    return await importer.import_backup(db, engine, user_id, backup, title, preview=preview)
 
 
 @router.get("/{project_id}/backup")

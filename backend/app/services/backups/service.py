@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -133,6 +133,7 @@ class BackupManager:
         self.sessionmaker = sessionmaker
         self.notify = notify
         self.tool_readiness: Callable[[BackupConfiguration], list[str]] = lambda configuration: []
+        self.admission_worker: Callable[[AsyncSession], Awaitable[str | None]] | None = None
         self.authorization = authz.runtime_for_factory(sessionmaker)
         self.lock = asyncio.Lock()
         self.closing = False
@@ -382,6 +383,7 @@ class BackupManager:
         scheduled_now: datetime | None,
     ) -> BackupRunOut | None:
         async with self.lock:
+            scheduled_date = None
             try:
                 await self._load_locked()
                 snapshot = self._snapshot
@@ -399,7 +401,6 @@ class BackupManager:
                                 raise ConflictError("请求标识已用于其他备份意图", extra={"code": "request_conflict"})
                             return await self._run_from_db(db, existing)
                     now = as_utc(scheduled_now or datetime.now(UTC))
-                    scheduled_date = None
                     if actor is None:
                         due = snapshot.next_scheduled_at
                         if not snapshot.configuration.schedule_enabled or due is None or due > now:
@@ -410,10 +411,22 @@ class BackupManager:
                         if slot > local:
                             slot -= timedelta(days=1)
                         scheduled_date = slot.date().isoformat()
+                        # 先锁仍由这一版配置负责的到期意图，再读当日记录。
+                        # SQLite 以首条 DML 取写槽，PostgreSQL 以这行串行化同一天的调度。
+                        schedule_guard = (
+                            BackupSettings.id == 1, BackupSettings.revision == snapshot.revision,
+                            BackupSettings.next_scheduled_at == due,
+                        )
+                        locked = await db.execute(
+                            update(BackupSettings).where(*schedule_guard)
+                            .values(next_scheduled_at=BackupSettings.next_scheduled_at)
+                        )
+                        if locked.rowcount != 1:
+                            return None
                         if await db.scalar(select(BackupRun.id).where(BackupRun.scheduled_date == scheduled_date)):
                             await db.execute(
                                 update(BackupSettings)
-                                .where(BackupSettings.id == 1)
+                                .where(*schedule_guard)
                                 .values(
                                     next_scheduled_at=next_schedule(snapshot.configuration, now),
                                 )
@@ -455,6 +468,7 @@ class BackupManager:
                         file_format=file_format + (".gpg" if encrypted else ""),
                         status="queued",
                         active_slot=1,
+                        worker_key=await self.admission_worker(db) if self.admission_worker else None,
                         created_at=now,
                         notification_status="not_configured",
                         cleanup_status="not_required",
@@ -473,7 +487,7 @@ class BackupManager:
                         await self._insert_run(db, run, snapshot, now)
                         await db.execute(
                             update(BackupSettings)
-                            .where(BackupSettings.id == 1)
+                            .where(*schedule_guard)
                             .values(
                                 next_scheduled_at=next_schedule(snapshot.configuration, now),
                             )
@@ -482,6 +496,14 @@ class BackupManager:
                     self.notify()
                     return await self._run_from_db(db, run)
             except AppError as exc:
+                if scheduled_date is not None and isinstance(exc, ConflictError):
+                    # 手动受理不占计划行锁。只有新事务证实是已受理或忙碌时才消化竞争。
+                    async with self.sessionmaker() as db:
+                        competing = await db.scalar(select(BackupRun.id).where(
+                            (BackupRun.scheduled_date == scheduled_date) | (BackupRun.active_slot == 1),
+                        ).limit(1))
+                    if competing is not None:
+                        return None
                 if isinstance(exc, AuditOperationError):
                     await self._confirm_after_error()
                 raise

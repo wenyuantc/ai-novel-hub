@@ -37,6 +37,7 @@ from app.services.backups.runtime import BackupRuntime
 from app.services.backups.service import BackupManager
 from app.services.book_import import service as book_import_service
 from app.services.project_transfer import importer as transfer_importer
+from app.services.project_transfer import preview_store
 from app.services.system_settings_service import SystemSettingsManager
 from app.services.task_engine.engine import TaskEngine
 from app.services.task_engine.registry import TaskContext
@@ -138,7 +139,10 @@ def create_app(
             cleanup.push_async_callback(app_.state.backup_runtime.stop)
             cleanup.push_async_callback(app_.state.backups.close)
             await app_.state.backup_runtime.start()
-            async with ai_usage_recording.usage_maintenance(app_.state.sessionmaker):
+            async with (
+                ai_usage_recording.usage_maintenance(app_.state.sessionmaker),
+                preview_store.preview_maintenance(app_.state.sessionmaker),
+            ):
                 yield
 
     app = FastAPI(title="AI 小说平台", version="0.1.0", lifespan=lifespan)
@@ -153,9 +157,6 @@ def create_app(
     })
     app.state.cipher = SecretCipher(settings.encryption_key)
     app.state.backups = BackupManager(settings, app.state.cipher, app.state.sessionmaker)
-    app.state.backup_runtime = BackupRuntime(app.state.backups)
-    app.state.backups.notify = app.state.backup_runtime.notify
-    app.state.backups.tool_readiness = app.state.backup_runtime.tool_readiness
     app.state.provider_factory = provider_factory or create_provider
     app.state.system_settings = SystemSettingsManager(
         settings, app.state.sessionmaker, lambda: app.state.task_engine.notify(),
@@ -169,6 +170,9 @@ def create_app(
             factory=app.state.provider_factory,
         )
     )
+    app.state.backup_runtime = BackupRuntime(app.state.backups, worker=app.state.task_engine.request_worker)
+    app.state.backups.notify = app.state.backup_runtime.notify
+    app.state.backups.tool_readiness = app.state.backup_runtime.tool_readiness
 
     app.state.system_settings.notify_peers = app.state.task_engine.peer_wakes.settings
     app.state.task_engine.peer_wakes.refresh_settings = app.state.system_settings.request_refresh

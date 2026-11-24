@@ -1,4 +1,5 @@
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
+from app.models.agent_operation import AgentConversationOperation
 from app.models.ai_usage import AiModelPrice, AiUsageBudget, AiUsageCall, AiUsageTracking
 from app.models.analysis_index_receipt import AnalysisIndexReceipt
 from app.models.api_key import ApiKey, ApiKeyProject
@@ -53,6 +54,7 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.inspiration_generation import InspirationGenerationClaim
 from app.models.inspiration_origin import InspirationOrigin
 from app.models.notes import ProjectNote
 from app.models.novel_templates import NovelTemplate, NovelTemplateCreationReceipt, NovelTemplateImage
@@ -72,6 +74,7 @@ from app.models.planning import (
     SubplotNode,
 )
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
+from app.models.project_import_preview import ProjectImportPreview, ProjectImportPreviewChunk, ProjectImportPreviewQuota
 from app.models.prompt_components import PromptComponent
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.rich_document import (
@@ -114,6 +117,7 @@ __all__ = [
     "AdminAuditLog",
     "AgentChange",
     "AgentConversation",
+    "AgentConversationOperation",
     "AgentMessage",
     "AIConfig",
     "AiModelPrice",
@@ -147,6 +151,7 @@ __all__ = [
     "ForeshadowCharacter",
     "ForeshadowHistory",
     "GenerationLog",
+    "InspirationGenerationClaim",
     "InspirationOrigin",
     "InspirationSession",
     "KbChunk",
@@ -160,6 +165,9 @@ __all__ = [
     "Project",
     "ProjectCover",
     "ProjectCollaborator",
+    "ProjectImportPreview",
+    "ProjectImportPreviewChunk",
+    "ProjectImportPreviewQuota",
     "ProjectNote",
     "PenName",
     "ProjectPenName",

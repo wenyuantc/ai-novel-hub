@@ -1122,9 +1122,15 @@ class InspirationSession(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", nullable=False)
     state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    state_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     converted_project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True
     )
+
+    __mapper_args__ = {
+        "version_id_col": state_revision,
+        "version_id_generator": lambda current: 0 if current is None else current + 1,
+    }
 
 
 # 知识库与剧情记忆（迁移 0015）

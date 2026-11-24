@@ -8,19 +8,25 @@
 - 不写生成记录：generation_logs.project_id 不能为空，而立项时会话可能还没有项目。
 """
 
+import asyncio
 import logging
 import math
-import time
-from collections.abc import AsyncIterator
-from contextlib import aclosing
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, Literal
+from uuid import UUID, uuid4
+from weakref import WeakKeyDictionary
 
+import anyio
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.ai.json_extract import JSONExtractError, extract_json
 from app.ai.prompts import build_inspiration_messages
@@ -28,6 +34,7 @@ from app.ai.providers import AIProviderError, ChatMessage, LLMProvider, Provider
 from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher
 from app.models import InspirationOrigin, InspirationSession, Project
+from app.models.inspiration_generation import InspirationGenerationClaim
 from app.schemas.inspiration import (
     APPLY_FIELDS,
     APPLY_LABELS,
@@ -62,9 +69,14 @@ from app.schemas.project import (
     normalize_tags,
 )
 from app.services import ai_config_service, kb_service, project_access, project_service, prompt_service
-from app.services.ai_dispatch import visibility_sessionmaker
+from app.services.ai_dispatch import is_sqlite_busy, visibility_sessionmaker
 from app.services.ai_usage_recording import meter_provider
 from app.services.audit_writer import AuditOperation
+from app.services.authorization_service import AuthenticatedActor, actor_snapshot, require_authenticated
+from app.services.task_engine import workers
+
+if TYPE_CHECKING:
+    from app.services.task_engine.request_worker import RequestWorker
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +102,7 @@ OPTION_COUNTS: dict[str, tuple[int, int]] = {step: (4, 6) for step in STEPS}
 OPTION_COUNTS["tags"] = (6, 10)
 MAX_RETRIES = 2
 SESSION_TITLE_LEN = 30
-# 进程内的生成锁（单进程部署）；条目超过 TTL 视为遗留（例如响应体从未开始迭代、finally 没有执行）
-LOCK_TTL_SECONDS = 600.0
-_generating: dict[tuple[int, str], float] = {}
+STATE_WRITE_ATTEMPTS = 5
 
 
 # ---------------------------------------------------------------- 状态读写
@@ -161,6 +171,41 @@ async def _commit(db: AsyncSession, session: InspirationSession) -> SessionOut:
         session_id = session.id
     await db.commit()
     # 共享来源可能在提交后撤销；投影前锁内复核原邀请，不返回旧快照。
+    return to_out(await get_owned_session(db, user_id, session_id))
+
+
+def _serialized_write_failed(exc: DBAPIError) -> bool:
+    return (getattr(exc.orig, "sqlstate", None) in ("40001", "40P01")
+            or (isinstance(exc, OperationalError) and is_sqlite_busy(exc)))
+
+
+async def _commit_state_change[T](db: AsyncSession, change: Callable[[], Awaitable[T]]) -> T:
+    """只在可确认撤销的冲突下重读和重放。外部调用和提交后的投影由调用方处理。"""
+    for attempt in range(STATE_WRITE_ATTEMPTS):
+        try:
+            result = await change()
+            await db.commit()
+            return result
+        except DBAPIError as exc:
+            if not _serialized_write_failed(exc):
+                raise
+        except StaleDataError:
+            pass
+        await db.rollback()
+        await asyncio.sleep(0.01 * (attempt + 1))
+    raise ConflictError("灵感会话正在更新，请刷新后重试")
+
+
+async def _change_state(
+    db: AsyncSession, user_id: int, session_id: int, change: Callable[[SessionState], None],
+) -> SessionOut:
+    async def write() -> None:
+        session = await get_owned_session(db, user_id, session_id)
+        state = load_state(session)
+        change(state)
+        _store(session, state)
+
+    await _commit_state_change(db, write)
     return to_out(await get_owned_session(db, user_id, session_id))
 
 
@@ -281,35 +326,35 @@ async def create_session(db: AsyncSession, user_id: int, data: SessionCreate) ->
 
 async def delete_session(db: AsyncSession, user_id: int, session_id: int) -> None:
     # 清理本人会话不返回其内容；失权后仍可删除自己不可再读取的旧快照。
-    with db.no_autoflush:
-        session = await db.scalar(select(InspirationSession).where(
-            InspirationSession.id == session_id, InspirationSession.user_id == user_id,
-        ).with_for_update())
-    if session is None:
-        raise NotFoundError("灵感会话不存在")
-    await db.delete(session)
-    await db.commit()
+    async def remove() -> None:
+        with db.no_autoflush:
+            session = await db.scalar(select(InspirationSession).where(
+                InspirationSession.id == session_id, InspirationSession.user_id == user_id,
+            ).with_for_update())
+        if session is None:
+            raise NotFoundError("灵感会话不存在")
+        await db.delete(session)
+
+    await _commit_state_change(db, remove)
 
 
 async def update_session(db: AsyncSession, user_id: int, session_id: int, data: SessionUpdate) -> SessionOut:
-    session = await get_owned_session(db, user_id, session_id)
-    state = load_state(session)
-    fields = data.model_fields_set
-    if data.idea is not None:
-        idea = data.idea.strip()
-        if not idea:
-            raise BadRequestError("想法不能为空")
-        if idea != state.idea:
-            state.idea = idea
-            for step in state.steps.values():
-                if step.status == "decided":
-                    step.stale = True
-    if data.current is not None:
-        state.current = data.current
-    if "scale" in fields:
-        state.scale = data.scale
-    _store(session, state)
-    return await _commit(db, session)
+    def change(state: SessionState) -> None:
+        if data.idea is not None:
+            idea = data.idea.strip()
+            if not idea:
+                raise BadRequestError("想法不能为空")
+            if idea != state.idea:
+                state.idea = idea
+                for step in state.steps.values():
+                    if step.status == "decided":
+                        step.stale = True
+        if data.current is not None:
+            state.current = data.current
+        if "scale" in data.model_fields_set:
+            state.scale = data.scale
+
+    return await _change_state(db, user_id, session_id, change)
 
 
 # ---------------------------------------------------------------- 步骤决定与 stale
@@ -369,37 +414,31 @@ def apply_step(state: SessionState, step: str, data: StepUpdate) -> None:
 
 
 async def update_step(db: AsyncSession, user_id: int, session_id: int, step: str, data: StepUpdate) -> SessionOut:
-    session = await get_owned_session(db, user_id, session_id)
-    state = load_state(session)
-    apply_step(state, step, data)
-    _store(session, state)
-    return await _commit(db, session)
+    return await _change_state(db, user_id, session_id, lambda state: apply_step(state, step, data))
 
 
 # ---------------------------------------------------------------- 补充想法
 
 
 async def add_note(db: AsyncSession, user_id: int, session_id: int, data: NoteCreate) -> SessionOut:
-    session = await get_owned_session(db, user_id, session_id)
-    state = load_state(session)
-    text = data.text.strip()
-    if not text:
-        raise BadRequestError("补充想法不能为空")
-    if len(state.notes) >= MAX_NOTES:
-        raise BadRequestError(f"补充想法最多 {MAX_NOTES} 条")
-    state.notes.append(text)
-    _store(session, state)
-    return await _commit(db, session)
+    def change(state: SessionState) -> None:
+        text = data.text.strip()
+        if not text:
+            raise BadRequestError("补充想法不能为空")
+        if len(state.notes) >= MAX_NOTES:
+            raise BadRequestError(f"补充想法最多 {MAX_NOTES} 条")
+        state.notes.append(text)
+
+    return await _change_state(db, user_id, session_id, change)
 
 
 async def delete_note(db: AsyncSession, user_id: int, session_id: int, index: int) -> SessionOut:
-    session = await get_owned_session(db, user_id, session_id)
-    state = load_state(session)
-    if not 0 <= index < len(state.notes):
-        raise NotFoundError("补充想法不存在")
-    state.notes.pop(index)
-    _store(session, state)
-    return await _commit(db, session)
+    def change(state: SessionState) -> None:
+        if not 0 <= index < len(state.notes):
+            raise NotFoundError("补充想法不存在")
+        state.notes.pop(index)
+
+    return await _change_state(db, user_id, session_id, change)
 
 
 # ---------------------------------------------------------------- 规模建议
@@ -472,6 +511,55 @@ def build_history(state: SessionState, step: str) -> str:
     return "\n\n".join(blocks)
 
 
+@dataclass(frozen=True, slots=True)
+class _GenerationKey:
+    worker_key: str
+    operation_key: str
+    session_id: int
+    step: str
+
+    def predicates(self):
+        return (
+            InspirationGenerationClaim.session_id == self.session_id,
+            InspirationGenerationClaim.step == self.step,
+            InspirationGenerationClaim.operation_key == self.operation_key,
+            InspirationGenerationClaim.worker_key == self.worker_key,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _GenerationClaim:
+    worker: "RequestWorker"
+    actor: AuthenticatedActor | int
+    key: _GenerationKey
+
+    def require_local(self) -> None:
+        if not self.worker.valid or self.worker.worker_key != self.key.worker_key:
+            raise ConflictError("灵感生成状态已变化，请重试")
+
+    @asynccontextmanager
+    async def watch_external_io(self) -> AsyncIterator[None]:
+        self.require_local()
+        loop = asyncio.get_running_loop()
+        try:
+            async with asyncio.timeout(None) as deadline:
+                with self.worker.on_lease_loss(lambda: deadline.reschedule(loop.time())):
+                    yield
+                    self.require_local()
+        except TimeoutError:
+            self.require_local()
+            raise
+
+    async def require(self, db: AsyncSession, *, write: bool = False) -> None:
+        await self.worker.require(db, self.key.worker_key, read_only=not write)
+        statement = select(InspirationGenerationClaim.operation_key).where(*self.key.predicates())
+        if write:
+            statement = statement.with_for_update(read=True)
+        if await db.scalar(statement) is None:
+            raise ConflictError("灵感会话已被删除，选项未保存")
+        self.require_local()
+
+
 @dataclass
 class InspirationJob:
     user_id: int
@@ -481,22 +569,121 @@ class InspirationJob:
     provider: LLMProvider
     model: str
     messages: list[ChatMessage]
+    claim: _GenerationClaim
     thinking: ThinkingLevel = "off"
     max_tokens: int | None = None
-    lock_key: tuple[int, str] | None = None
+    released: bool = False
 
 
-def _acquire(key: tuple[int, str]) -> None:
-    now = time.monotonic()
-    started = _generating.get(key)
-    if started is not None and now - started < LOCK_TTL_SECONDS:
-        raise ConflictError("该步骤正在生成选项，请稍候再试")
-    _generating[key] = now
+# 仅登记已结束、可由原代次条件删除的占用。存活判定和竞争仍由数据库负责。
+_pending_releases: WeakKeyDictionary["RequestWorker", set[_GenerationKey]] = WeakKeyDictionary()
 
 
-def _release(key: tuple[int, str] | None) -> None:
-    if key is not None:
-        _generating.pop(key, None)
+async def _require_generation_session(
+    db: AsyncSession, user_id: int, session_id: int, *, lock: bool = False,
+) -> InspirationSession:
+    session = await get_owned_session(db, user_id, session_id)
+    origin = await db.get(InspirationOrigin, session.id)
+    if origin is not None:
+        await project_access.require_project(db, user_id, origin.project_id, "ai.use", for_update=True)
+        # 共享向量、实际发送和结果屏障接齐前，不让个人会话绕过协作 AI 授权。
+        raise ConflictError("协作灵感生成暂不可用，请稍后重试", extra={"code": "collaboration_ai_unavailable"})
+    if lock:
+        session = await db.scalar(select(InspirationSession).where(
+            InspirationSession.id == session_id, InspirationSession.user_id == user_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if session is None:
+            raise NotFoundError("灵感会话不存在")
+    return session
+
+
+async def _acquire(
+    sessionmaker: async_sessionmaker[AsyncSession], claim: _GenerationClaim, user_id: int,
+) -> tuple[SessionState, int | None]:
+    step_key = (
+        InspirationGenerationClaim.session_id == claim.key.session_id,
+        InspirationGenerationClaim.step == claim.key.step,
+    )
+    # 对已存在的占用按原 worker 核实；此事务结束后才加用户、会话及新 worker 的锁。
+    async with sessionmaker() as db:
+        async def refresh_old_owner() -> str | None:
+            current = await db.scalar(select(InspirationGenerationClaim.worker_key).where(*step_key))
+            if current is not None and not await db.scalar(select(workers.confirmed_terminal(current))):
+                await workers.prepare_orphan_scan(db, claim.worker.engine.lease_seconds, worker_key=current)
+            return current
+
+        old_key = await _commit_state_change(db, refresh_old_owner)
+    async with sessionmaker() as db:
+        async def acquire() -> tuple[SessionState, int | None]:
+            await require_authenticated(db, claim.actor, write=True)
+            session = await _require_generation_session(db, user_id, claim.key.session_id, lock=True)
+            state = load_state(session)
+            await claim.worker.require(db, claim.key.worker_key)
+            insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+            row = insert(InspirationGenerationClaim).values(
+                session_id=claim.key.session_id, step=claim.key.step,
+                operation_key=claim.key.operation_key, worker_key=claim.key.worker_key,
+            )
+            result = await db.execute(row.on_conflict_do_nothing(
+                index_elements=[InspirationGenerationClaim.session_id, InspirationGenerationClaim.step],
+            ))
+            if result.rowcount != 1 and old_key is not None:
+                result = await db.execute(update(InspirationGenerationClaim).where(
+                    *step_key, InspirationGenerationClaim.worker_key == old_key, workers.confirmed_terminal(old_key),
+                ).values(operation_key=claim.key.operation_key, worker_key=claim.key.worker_key))
+            if result.rowcount != 1:
+                raise ConflictError("该步骤正在生成选项，请稍候再试")
+            return state, session.project_id
+
+        return await _commit_state_change(db, acquire)
+
+
+async def _delete_claim(sessionmaker: async_sessionmaker[AsyncSession], key: _GenerationKey) -> None:
+    async with sessionmaker() as db:
+        async def release() -> None:
+            await db.execute(delete(InspirationGenerationClaim).where(*key.predicates()))
+
+        await _commit_state_change(db, release)
+
+
+async def _release(sessionmaker: async_sessionmaker[AsyncSession], claim: _GenerationClaim) -> None:
+    with anyio.CancelScope(shield=True):
+        try:
+            await _delete_claim(sessionmaker, claim.key)
+        except Exception:  # noqa: BLE001 用原身份重新核对，不记录请求或 SQL。
+            _pending_releases.setdefault(claim.worker, set()).add(claim.key)
+            logger.warning("灵感生成占用暂未释放")
+
+
+async def release_generate(job: InspirationJob, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+    if not job.released:
+        await _release(sessionmaker, job.claim)
+        job.released = True
+
+
+async def _retry_releases(worker: "RequestWorker") -> None:
+    pending = _pending_releases.get(worker)
+    if not pending:
+        return
+    for key in tuple(pending):
+        try:
+            await _delete_claim(worker.engine.ctx.sessionmaker, key)
+        except Exception:  # noqa: BLE001 下一次心跳继续按原身份处理。
+            return
+        pending.discard(key)
+
+
+def schedule_releases(worker: "RequestWorker", active: asyncio.Task | None) -> asyncio.Task | None:
+    if _pending_releases.get(worker) and (active is None or active.done()):
+        return asyncio.create_task(_retry_releases(worker), name="inspiration-release")
+    return active
+
+
+async def _require_send(sessionmaker: async_sessionmaker[AsyncSession], claim: _GenerationClaim) -> None:
+    async with sessionmaker() as db:
+        await require_authenticated(db, claim.actor)
+        await claim.require(db)
+    claim.require_local()
 
 
 async def prepare_generate(
@@ -510,56 +697,56 @@ async def prepare_generate(
     factory: ProviderFactory,
     ai_timeout: float,
     allow_private: bool,
+    worker: "RequestWorker",
 ) -> InspirationJob:
-    session = await get_owned_session(db, user_id, session_id)
-    origin = await db.get(InspirationOrigin, session.id)
-    if origin is not None:
-        await project_access.require_project(db, user_id, origin.project_id, "ai.use", for_update=True)
-        # 共享向量、实际发送和结果屏障接齐前，不让个人会话绕过协作 AI 授权。
-        raise ConflictError("协作灵感生成暂不可用，请稍后重试", extra={"code": "collaboration_ai_unavailable"})
-    state = load_state(session)
+    load_state(await _require_generation_session(db, user_id, session_id))
     cfg = await ai_config_service.resolve_config(db, user_id, req.ai_config_id)
-    provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
     override = await prompt_service.get_override(db, user_id, f"inspiration.{step}")
-    decided = build_decided(state, step)
-    knowledge = ""
-    project = await db.get(Project, session.project_id) if session.project_id is not None else None
-    if (project is not None and project.user_id == user_id
-            and project.deleted_at is None and project.deletion_started_at is None):
-        # 从已有项目发起：用该项目的知识库，查询 = 想法 + 补充想法 + 已定内容
-        knowledge = await kb_service.knowledge_for_project(
-            db,
-            project,
-            "\n".join([state.idea, *state.notes, decided]),
-            cipher=cipher,
-            factory=factory,
-            ai_timeout=ai_timeout,
-            allow_private=allow_private,
-            purpose=f"灵感：{step}",
+    sessionmaker = visibility_sessionmaker(db)
+    actor = actor_snapshot(db, user_id)
+    await db.close()
+    provider = await ai_config_service.build_provider(cfg, cipher, factory, ai_timeout, allow_private=allow_private)
+    key = worker.worker_key
+    if key is None:
+        raise ConflictError("灵感生成状态暂不可用，请稍后再试")
+    claim = _GenerationClaim(worker, actor, _GenerationKey(key, str(uuid4()), session_id, step))
+    try:
+        state, project_id = await _acquire(sessionmaker, claim, user_id)
+        decided = build_decided(state, step)
+        knowledge = ""
+        async with sessionmaker() as read:
+            project = await read.get(Project, project_id) if project_id is not None else None
+            if (project is not None and project.user_id == user_id
+                    and project.deleted_at is None and project.deletion_started_at is None):
+                @asynccontextmanager
+                async def query_embed_scope() -> AsyncIterator[None]:
+                    await read.close()
+                    await _require_send(sessionmaker, claim)
+                    async with claim.watch_external_io():
+                        yield
+
+                knowledge = await kb_service.knowledge_for_project(
+                    read, project, "\n".join([state.idea, *state.notes, decided]),
+                    cipher=cipher, factory=factory, ai_timeout=ai_timeout, allow_private=allow_private,
+                    purpose=f"灵感：{step}", query_embed_scope=query_embed_scope,
+                )
+            else:
+                project = None
+        provider = meter_provider(
+            provider, cfg, sessionmaker, actor_id=user_id, kind=f"inspiration.{step}",
+            project_id=project.id if project is not None else None,
+            project_owner_id=project.user_id if project is not None else None,
         )
-    else:
-        project = None
-    provider = meter_provider(
-        provider, cfg, visibility_sessionmaker(db), actor_id=user_id, kind=f"inspiration.{step}",
-        project_id=project.id if project is not None else None,
-        project_owner_id=project.user_id if project is not None else None,
-    )
-    messages = build_inspiration_messages(
-        step,
-        idea=state.idea,
-        notes=state.notes,
-        decided=decided,
-        history=build_history(state, step),
-        feedback=req.feedback,
-        knowledge=knowledge,
-        override=override,
-    )
-    key = (session.id, step)
-    # 所有校验都通过后才占锁；锁由 run_generate 的 finally 释放
-    _acquire(key)
+        messages = build_inspiration_messages(
+            step, idea=state.idea, notes=state.notes, decided=decided, history=build_history(state, step),
+            feedback=req.feedback, knowledge=knowledge, override=override,
+        )
+    except BaseException:
+        await _release(sessionmaker, claim)
+        raise
     return InspirationJob(
         user_id=user_id,
-        session_id=session.id,
+        session_id=session_id,
         step=step,
         feedback=req.feedback.strip(),
         provider=provider,
@@ -567,7 +754,7 @@ async def prepare_generate(
         messages=messages,
         thinking=cfg.thinking_level,  # type: ignore[arg-type]
         max_tokens=ai_config_service.max_output_tokens(cfg),
-        lock_key=key,
+        claim=claim,
     )
 
 
@@ -588,20 +775,24 @@ def _parse(step: str, text: str) -> tuple[list[str] | None, str]:
 async def _save_round(
     sessionmaker: async_sessionmaker[AsyncSession], job: InspirationJob, options: list[str]
 ) -> tuple[Round, SessionOut] | None:
+    rnd = Round(options=options, feedback=job.feedback, created_at=datetime.now(UTC).isoformat())
     async with sessionmaker() as db:
-        session = await db.scalar(
-            select(InspirationSession).where(
+        async def append_round() -> bool:
+            session = await db.scalar(select(InspirationSession).where(
                 InspirationSession.id == job.session_id, InspirationSession.user_id == job.user_id
-            )
-        )
-        if session is None:
+            ).with_for_update())
+            if session is None:
+                return False
+            await job.claim.require(db, write=True)
+            state = load_state(session)
+            rounds = [*state.steps[job.step].rounds, rnd]  # type: ignore[index]
+            state.steps[job.step].rounds = rounds[-MAX_ROUNDS:]  # type: ignore[index]
+            _store(session, state)
+            return True
+
+        if not await _commit_state_change(db, append_round):
             return None
-        state = load_state(session)
-        rnd = Round(options=options, feedback=job.feedback, created_at=datetime.now(UTC).isoformat())
-        rounds = [*state.steps[job.step].rounds, rnd]  # type: ignore[index]
-        state.steps[job.step].rounds = rounds[-MAX_ROUNDS:]  # type: ignore[index]
-        _store(session, state)
-        return rnd, await _commit(db, session)
+        return rnd, to_out(await get_owned_session(db, job.user_id, job.session_id))
 
 
 async def run_generate(
@@ -613,12 +804,18 @@ async def run_generate(
         for attempt in range(MAX_RETRIES + 1):
             if attempt:
                 yield "retry", {"attempt": attempt, "max": MAX_RETRIES, "reason": reason}
+            await _require_send(sessionmaker, job.claim)
             pieces: list[str] = []
             stream_iter = job.provider.generate_stream(
                 job.messages, job.model, max_tokens=job.max_tokens, thinking=job.thinking
             )
             async with aclosing(stream_iter) as stream:
-                async for piece in stream:
+                while True:
+                    try:
+                        async with job.claim.watch_external_io():
+                            piece = await anext(stream)
+                    except StopAsyncIteration:
+                        break
                     pieces.append(piece)
                     yield "delta", {"text": piece}
             options, reason = _parse(job.step, "".join(pieces))
@@ -637,10 +834,10 @@ async def run_generate(
     except AppError as exc:
         yield "error", {"detail": exc.detail}
     except Exception:  # noqa: BLE001
-        logger.exception("灵感模式生成选项失败")
+        logger.warning("灵感模式生成选项失败")
         yield "error", {"detail": "生成失败：服务器内部错误"}
     finally:
-        _release(job.lock_key)
+        await release_generate(job, sessionmaker)
 
 
 # ---------------------------------------------------------------- 转为项目 / 应用到已有项目 / 从项目发起
@@ -652,6 +849,12 @@ def _decided(state: SessionState, step: str) -> Any:
 
 
 async def convert(db: AsyncSession, user_id: int, session_id: int, data: ConvertRequest) -> ProjectOut:
+    project = await _commit_state_change(db, lambda: _convert_without_commit(db, user_id, session_id, data))
+    await db.refresh(project)
+    return await project_service.project_out(db, project, actor_user_id=user_id)
+
+
+async def _convert_without_commit(db: AsyncSession, user_id: int, session_id: int, data: ConvertRequest) -> Project:
     from app.services.quota_service import check_project_creation
 
     await check_project_creation(db, user_id)
@@ -693,9 +896,7 @@ async def convert(db: AsyncSession, user_id: int, session_id: int, data: Convert
     session.status = "converted"
     session.converted_project_id = project.id
     _store(session, state)
-    await db.commit()
-    await db.refresh(project)
-    return await project_service.project_out(db, project, actor_user_id=user_id)
+    return project
 
 
 def _proposals(state: SessionState) -> dict[str, Any]:

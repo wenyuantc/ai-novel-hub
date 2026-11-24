@@ -363,6 +363,7 @@ async def test_generate_disconnect_not_saved_and_concurrent_409(app, client, fak
             factory=app.state.provider_factory,
             ai_timeout=30,
             allow_private=False,
+            worker=app.state.task_engine.request_worker,
         )
     gen = inspiration_service.run_generate(job, app.state.sessionmaker)
     assert await gen.__anext__() == ("delta", {"text": '{"options": ["甲'})

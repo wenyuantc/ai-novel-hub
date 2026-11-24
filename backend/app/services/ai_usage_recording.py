@@ -18,6 +18,7 @@ from app.ai.providers.dispatch_hooks import current_dispatch_hooks
 from app.ai.providers.usage import ModelUsage, model_attempt, observe_model_usage
 from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
 from app.services import ai_usage_storage as storage
+from app.services.periodic_database import retry_contended_write
 
 logger = logging.getLogger(__name__)
 _PENDING_MAX_AGE = timedelta(days=1)
@@ -121,10 +122,13 @@ def _transient_storage_error(exc: DBAPIError) -> bool:
 async def recover_stale_usage(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """超时遗留尝试失去可确认结果。保持其他实例近期发送的记录可收尾。"""
     now = datetime.now(UTC)
-    try:
+    async def write() -> None:
         async with sessionmaker() as db:
             await storage.interrupt_stale_calls(db, before=now - _PENDING_MAX_AGE, finished_at=now)
             await db.commit()
+
+    try:
+        await retry_contended_write(write)
     except Exception:  # noqa: BLE001  避免后台异常泄漏连接、SQL 与参数。
         logger.warning("模型用量中断记录收尾暂不可用")
 

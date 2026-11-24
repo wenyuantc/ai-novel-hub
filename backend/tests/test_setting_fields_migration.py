@@ -176,6 +176,10 @@ def _schema_0055_model_contract(inspector, table):
     if table == "projects":
         # 删除请求的执行者归属由 0068 引入。
         assert contract["columns"].pop("deletion_worker_key") == ("VARCHAR(36)", True, None)
+    if table == "agent_conversations":
+        # 0069 才引入防止整数 ID 复用的内部会话身份。
+        assert contract["columns"].pop("instance_key") == ("VARCHAR(36)", False, None)
+        assert contract["indexes"].pop("uq_agent_conversations_instance_key") == (("instance_key",), True, {})
     added_index = {
         "organizations": ("uq_organizations_project_id_id", "project_id"),
         "careers": ("uq_careers_project_id_id", "project_id"),

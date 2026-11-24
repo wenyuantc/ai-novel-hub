@@ -32,6 +32,7 @@ from app.schemas.admin_dashboard import (
     DashboardTaskDay,
     DashboardTotals,
 )
+from app.services.periodic_database import retry_contended_write
 from app.services.project_lifecycle import as_utc, now_utc
 
 logger = logging.getLogger(__name__)
@@ -242,7 +243,7 @@ async def collect_snapshot(
 
 
 class DashboardSampler:
-    """单进程采样协程；页面未打开也采样，停止时撤销正在等待或写入的采样。"""
+    """页面未打开也采样。多进程可重复采样，较旧结果不能覆盖较新结果。"""
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], *, interval: float = SAMPLE_INTERVAL):
         if interval <= 0:
@@ -263,9 +264,9 @@ class DashboardSampler:
 
     async def _pass(self) -> None:
         try:
-            await collect_snapshot(self.sessionmaker)
+            await retry_contended_write(lambda: collect_snapshot(self.sessionmaker))
         except Exception:
-            logger.exception("管理员统计采样失败，下个周期重试")
+            logger.error("管理员统计采样失败，下个周期重试")
 
     async def _run(self) -> None:
         while not self._stop.is_set():

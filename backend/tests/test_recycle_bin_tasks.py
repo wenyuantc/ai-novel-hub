@@ -1,16 +1,16 @@
 """使用事件屏障验证删除必须等待真实执行链，而不是只看数据库终态。"""
 
 import asyncio
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 
-from app.models import AgentChange, Chapter, KbDocument, Project, Task
+from app.models import AgentChange, AgentConversation, Chapter, KbDocument, Project, Task
 from app.services import recycle_bin_service, task_service
-from app.services.agent import service as agent_service
+from app.services.agent import conversation_operations
 from app.services.task_engine.registry import get_handler
 from tests.helpers import Gate, create_ai_config, create_project, register, stream_task, task_params, wait_task
 from tests.mcp_fakes import FakeMcpConnector
@@ -413,6 +413,27 @@ async def test_unprovable_legacy_document_task_still_blocks_project_deletion(app
         assert queued.status == "queued" and queued.statistics_key == task_key
 
 
+@asynccontextmanager
+async def _hold_conversation_operation(app, monkeypatch, change_id, task_id, project_id):
+    waiting = asyncio.Event()
+    original = conversation_operations._claim_or_wait
+
+    async def observe(*args):
+        waiting.set()
+        return await original(*args)
+
+    async with app.state.sessionmaker() as db:
+        cid = (await db.get(AgentChange, change_id)).conversation_id
+        user_id = (await db.get(Task, task_id)).user_id
+        conversation_key = (await db.get(AgentConversation, cid)).instance_key
+        await db.rollback()
+        async with conversation_operations.hold(
+            db, app.state.task_engine.request_worker, cid, user_id, project_id, conversation_key=conversation_key,
+        ):
+            monkeypatch.setattr(conversation_operations, "_claim_or_wait", observe)
+            yield waiting
+
+
 async def test_waiting_for_conversation_lock_cannot_recover_external_after_trash(app, client, fake_llm, monkeypatch):
     connector = FakeMcpConnector()
     app.state.task_engine.ctx.mcp_connector = connector
@@ -427,38 +448,22 @@ async def test_waiting_for_conversation_lock_cannot_recover_external_after_trash
     assert (await wait_task(client, task))["status"] == "succeeded"
     change = completed.json()
     pid = project["id"]
-    async with app.state.sessionmaker() as db:
-        cid = (await db.get(AgentChange, change["id"])).conversation_id
-    lock = agent_service.conversation_lock(cid)
-    waiting = asyncio.Event()
-
-    class ObservedLock:
-        async def __aenter__(self):
-            waiting.set()
-            return await lock.__aenter__()
-
-        async def __aexit__(self, *args):
-            return await lock.__aexit__(*args)
-
-    await lock.acquire()
-    monkeypatch.setattr(agent_service, "conversation_lock", lambda conversation_id: ObservedLock())
-    confirmation = asyncio.create_task(
-        client.post(f"{base}/changes/{change['id']}/confirm", json=change_action(change))
-    )
+    confirmation = None
     try:
-        try:
+        async with _hold_conversation_operation(app, monkeypatch, change["id"], task["id"], pid) as waiting:
+            confirmation = asyncio.create_task(
+                client.post(f"{base}/changes/{change['id']}/confirm", json=change_action(change))
+            )
             await asyncio.wait_for(waiting.wait(), 3)
             assert (await client.delete(f"/api/v1/projects/{pid}")).status_code == 204
             async with app.state.sessionmaker() as db:
                 before = (await db.get(AgentChange, change["id"])).status
-        finally:
-            lock.release()
         assert (await confirmation).status_code == 404
         async with app.state.sessionmaker() as db:
             assert (await db.get(AgentChange, change["id"])).status == before == "executed"
         assert len(connector.calls) == 1
     finally:
-        if not confirmation.done():
+        if confirmation is not None and not confirmation.done():
             confirmation.cancel()
             with suppress(asyncio.CancelledError):
                 await confirmation
@@ -469,26 +474,12 @@ async def test_unproven_external_blocks_trash_while_confirmation_waits(app, clie
     app.state.task_engine.ctx.mcp_connector = connector
     base, _, task, change = await _stuck_external(client, fake_llm, connector, app, minutes_ago=3, signed=False)
     pid = int(base.split("/")[-2])
-    async with app.state.sessionmaker() as db:
-        cid = (await db.get(AgentChange, change["id"])).conversation_id
-    lock = agent_service.conversation_lock(cid)
-    waiting = asyncio.Event()
-
-    class ObservedLock:
-        async def __aenter__(self):
-            waiting.set()
-            return await lock.__aenter__()
-
-        async def __aexit__(self, *args):
-            return await lock.__aexit__(*args)
-
-    await lock.acquire()
-    monkeypatch.setattr(agent_service, "conversation_lock", lambda conversation_id: ObservedLock())
-    confirmation = asyncio.create_task(
-        client.post(f"{base}/changes/{change['id']}/confirm", json=change_action(change))
-    )
+    confirmation = None
     try:
-        try:
+        async with _hold_conversation_operation(app, monkeypatch, change["id"], task["id"], pid) as waiting:
+            confirmation = asyncio.create_task(
+                client.post(f"{base}/changes/{change['id']}/confirm", json=change_action(change))
+            )
             await asyncio.wait_for(waiting.wait(), 3)
             denied = await client.delete(f"/api/v1/projects/{pid}")
             assert denied.status_code == 409 and denied.json()["code"] == "project_tasks_not_stopped", denied.text
@@ -498,8 +489,6 @@ async def test_unproven_external_blocks_trash_while_confirmation_waits(app, clie
                 assert project.deletion_token is None
                 assert (await db.get(AgentChange, change["id"])).status == "executing"
                 assert (await db.get(Task, task["id"])).status == "paused"
-        finally:
-            lock.release()
         recovered = await confirmation
         assert recovered.status_code == 409 and recovered.json()["detail"] == "修改正在处理中，请刷新后重试"
         async with app.state.sessionmaker() as db:
@@ -510,7 +499,7 @@ async def test_unproven_external_blocks_trash_while_confirmation_waits(app, clie
             assert stored.result["_external_task_key"] == task["task_key"]
         assert connector.calls == []
     finally:
-        if not confirmation.done():
+        if confirmation is not None and not confirmation.done():
             confirmation.cancel()
             with suppress(asyncio.CancelledError):
                 await confirmation

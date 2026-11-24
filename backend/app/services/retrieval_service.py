@@ -28,7 +28,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -1883,6 +1883,7 @@ async def search(
     min_score: float,
     embedder: Embedder | None = None,
     filters: SearchFilter | None = None,
+    query_embed_scope: Callable[[], AbstractAsyncContextManager[None]] | None = None,
 ) -> SearchResult:
     """混合检索（见模块说明）。不抛提供方错误：查询向量失败时退回关键词并给出 warning。"""
     await _preflight_guarded_embedder(embedder, project_id)
@@ -1900,7 +1901,8 @@ async def search(
     if embedder is not None and query.strip():
         cand_keys = index.keys[mask]
         if all(isinstance(k, str) and key_matches_model(k, embedder.model_key) for k in cand_keys):
-            qvec, warning = await embed_query(embedder, query)
+            async with (query_embed_scope() if query_embed_scope is not None else nullcontext()):
+                qvec, warning = await embed_query(embedder, query)
             if warning:
                 result.warnings.append(warning)
             key = embedder.key

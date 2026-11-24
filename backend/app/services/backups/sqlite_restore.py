@@ -40,6 +40,29 @@ def _snapshot_revision(path: Path) -> str:
             if not {"work_key", "kind", "project_id", "worker_key", "task_id", "task_key", "queued_at",
                     "execution_key", "operation_id", "state", "evidence"} <= columns:
                 raise ValueError("快照的跨进程工作证据不完整")
+        outside_engine_tables = {
+            "inspiration_generation_claims": {"session_id", "step", "operation_key", "worker_key"},
+            "agent_conversation_operations": {"conversation_id", "operation_key", "worker_key"},
+            "project_import_preview_quota": {"id", "revision"},
+            "project_import_previews": {"token_hash", "user_id", "expires_at", "revision", "size_bytes"},
+            "project_import_preview_chunks": {"token_hash", "chunk_index", "ciphertext"},
+        }
+        outside_engine_columns = {
+            "agent_conversations": {"instance_key"},
+            "inspiration_sessions": {"state_revision"},
+            "backup_runs": {"worker_key", "recovery_worker_key", "execution_host"},
+            "backup_artifacts": {"writer_host"},
+        }
+        expected = int(revision) >= 69
+        for table, required in outside_engine_tables.items():
+            if (table in tables) != expected:
+                raise ValueError("快照的引擎外状态结构与迁移版本不一致")
+            if expected and not required <= {row[1] for row in db.execute(f"PRAGMA table_info({table})")}:
+                raise ValueError("快照的引擎外状态结构不完整")
+        for table, required in outside_engine_columns.items():
+            present = required & {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+            if present != (required if expected else set()):
+                raise ValueError("快照的引擎外状态结构与迁移版本不一致")
         return revision
 
 

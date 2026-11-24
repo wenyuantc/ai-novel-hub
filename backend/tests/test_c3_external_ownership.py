@@ -144,13 +144,19 @@ async def test_peer_requires_original_external_worker_and_call(
                     assert detail.status_code == 200, detail.text
                     viewed = detail.json()["changes"][0]
                     assert viewed["status"] == "executing" and viewed["result"] is None
-                    # 两个测试 app 共用解释器。A 已持原锁；B 使用独立进程实际拥有的空会话锁表。
-                    with monkeypatch.context() as process:
-                        process.setattr(service, "_locks", {})
-                        duplicate = await peer.post(
-                            f"{base}/changes/{change['id']}/confirm", json=change_action(viewed),
-                        )
-                    assert duplicate.status_code == 409 and "正在处理" in duplicate.text, duplicate.text
+                    # B 等待 A 的持久会话占用，释放后读取同一次已提交的执行结果。
+                    duplicate = asyncio.create_task(peer.post(
+                        f"{base}/changes/{change['id']}/confirm", json=change_action(viewed),
+                    ))
+                    try:
+                        with pytest.raises(TimeoutError):
+                            await asyncio.wait_for(asyncio.shield(duplicate), 0.25)
+                    finally:
+                        release.set()
+                        completed = await asyncio.wait_for(duplicate, 10)
+                    assert completed.status_code == 200, completed.text
+                    assert completed.json()["status"] == "executed"
+                    assert completed.json()["result"] == {"text": "完成"}
         finally:
             release.set()
             response = await asyncio.wait_for(pending, 10)

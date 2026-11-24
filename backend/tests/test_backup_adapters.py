@@ -120,6 +120,29 @@ def test_snapshot_does_not_overwrite_or_remove_preexisting_output(tmp_path: Path
     assert existing.read_text() == "already safe"
 
 
+def test_postgres_snapshot_omits_only_transient_project_preview_data(tmp_path, monkeypatch):
+    artifact = tmp_path / "snapshot.dump"
+    commands = []
+
+    def dump(argv, **kwargs):
+        commands.append(argv)
+        if "--version" in argv:
+            return b"pg_dump (PostgreSQL) 16.1\n"
+        artifact.write_bytes(b"PGDMP")
+        return b""
+
+    monkeypatch.setattr("app.services.backups.database.run_command", dump)
+    result = snapshot_database(
+        "postgresql+asyncpg://test@127.0.0.1/ainovel_test", artifact,
+        deadline=time.monotonic() + 1, stop_event=threading.Event(),
+    )
+    assert result.engine == "postgresql"
+    assert {arg for arg in commands[1] if arg.startswith("--exclude")} == {
+        "--exclude-table-data=*.project_import_previews",
+        "--exclude-table-data=*.project_import_preview_chunks",
+    }
+
+
 
 
 

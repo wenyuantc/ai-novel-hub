@@ -19,7 +19,7 @@ from app.services import (
     skill_service,
 )
 from app.services.agent import access as agent_access
-from app.services.agent import context, history, service
+from app.services.agent import context, conversation_operations, history, service
 from app.services.agent.runner import (
     AgentJob,
     _AgentExecutionState,
@@ -357,7 +357,7 @@ class AgentHandler:
         # 中央受理再锁内核对，使任何创建入口都不能向旧轮次 / 未经协作入口创建的会话发起新轮次。
         if conversation.collaboration_invitation_id != (None if grant is None else grant[0]):
             agent_access.deny_changed()
-        await db.execute(select(AgentConversation.id).where(AgentConversation.id == cid).with_for_update())
+        await conversation_operations.guard(db, cid, conversation_key=conversation.instance_key)
         await require_no_unknown_external(db, project_id=pid, conversation_id=cid)
         stamp = await history.require_open_history(db, conversation, adopt_empty=True)
         if await service.active_turn(db, cid):
@@ -420,6 +420,7 @@ class AgentHandler:
             raise _retry_source_error()
         cid = int(req["conversation_id"])
         owner_id, conversation = await _lock_turn_conversation(db, user_id, task.project_id, cid, grant)
+        await conversation_operations.guard(db, cid, conversation_key=conversation.instance_key)
         await require_no_unknown_external(db, project_id=task.project_id, conversation_id=cid)
         await history.require_open_history(db, conversation, expected_epoch=task.input.get("history_epoch"))
         if await service.active_turn(db, cid):
@@ -482,6 +483,7 @@ class AgentHandler:
         owner_id, conversation = await _lock_turn_conversation(
             db, task.user_id, task.project_id, req["conversation_id"], grant, lock=False,
         )
+        await conversation_operations.guard(db, conversation.id, conversation_key=conversation.instance_key)
         await require_no_unknown_external(db, project_id=task.project_id, conversation_id=conversation.id)
         await history.require_open_history(db, conversation, expected_epoch=data.get("history_epoch"))
         binding = project_ai_config.deserialize_project_model(

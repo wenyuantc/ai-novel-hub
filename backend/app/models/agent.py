@@ -43,8 +43,11 @@ def _uuid_check(column: str, *, version4: bool = False) -> str:
 
 class AgentConversation(TimestampMixin, Base):
     __tablename__ = "agent_conversations"
+    __table_args__ = (Index("uq_agent_conversations_instance_key", "instance_key", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # 数字 ID 可能被 SQLite 重用，跨事务操作必须绑定原会话。
+    instance_key: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid4()), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="", server_default="")
