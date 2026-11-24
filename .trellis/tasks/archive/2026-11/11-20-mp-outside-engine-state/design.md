@@ -1,6 +1,6 @@
 # C5 引擎外状态多进程设计
 
-需求和验收口径见 [PRD](prd.md)，上游依据见[父任务设计](../11-20-multiprocess-task-scheduling-deploy-drill/design.md)和[源码调研](../11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md)。基线为当前已归档 C4 的分支，迁移头为 0068。应用实例通过同一业务数据库协调。SQLite 使用同机文件库及 C1 的配对租约侧库，PostgreSQL 可跨主机。两阶段项目导入通过数据库共享状态，无需内部通道在线。
+需求和验收口径见 [PRD](prd.md)，上游依据见[父任务设计](../../../11-20-multiprocess-task-scheduling-deploy-drill/design.md)和[源码调研](../../../11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md)。基线为当前已归档 C4 的分支，迁移头为 0068。应用实例通过同一业务数据库协调。SQLite 使用同机文件库及 C1 的配对租约侧库，PostgreSQL 可跨主机。两阶段项目导入通过数据库共享状态，无需内部通道在线。
 
 ## 整库备份
 

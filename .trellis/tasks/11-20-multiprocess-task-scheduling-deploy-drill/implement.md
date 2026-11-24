@@ -22,9 +22,9 @@ C1 执行者租约 → C2 调度约束与设置 → C3 跨进程取消 → C4 �
 
 C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3 已在本地功能分支完成跨进程取消与作品删除排空，SQLite 全量、PostgreSQL 16 串行专项和双进程 HTTP 演练均通过。[C3 验收记录](../archive/2026-11/11-20-mp-cross-process-cancel/research/verification.md)
 
-C4 已在本地功能分支完成验收并归档，生产继续使用单个 Uvicorn worker。C5–C8 开工前各自核对前序实现和规划资料。[C4 验收记录](../archive/2026-11/11-20-mp-peer-channel-stream/research/verification.md)
+C4 已在本地功能分支完成验收并归档，生产继续使用单个 Uvicorn worker。C6–C8 开工前各自核对前序实现和规划资料。[C4 验收记录](../archive/2026-11/11-20-mp-peer-channel-stream/research/verification.md)
 
-C5 已通过 SQLite 全量分组及复跑、PostgreSQL 16 专项和双进程 HTTP 演练，迁移为 `0069`。当前待提交和归档。[C5 验收记录](../11-20-mp-outside-engine-state/research/verification.md)
+C5 已通过 SQLite 全量分组及复跑、PostgreSQL 16 专项和双进程 HTTP 演练，迁移为 `0069`。已在本地功能分支提交并归档。[C5 验收记录](../archive/2026-11/11-20-mp-outside-engine-state/research/verification.md)
 
 ## 每个子任务的开工门禁
 

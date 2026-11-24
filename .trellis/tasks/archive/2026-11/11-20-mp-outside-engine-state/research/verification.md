@@ -15,7 +15,7 @@
 另一次独立双进程演练在灵感请求的模型连接仍阻塞时强停执行进程。另一进程在 25.46 秒内接管同一步骤，旧请求的半截内容没有进入轮次。在健康进程互斥和失联重试两轮成功场景中，最终只有两笔完整结果。
 
 ```sh
-LC_ALL=en_US.UTF-8 PYTHONPATH=. uv run --no-sync python ../.trellis/tasks/11-20-mp-outside-engine-state/research/process_c5.py
+LC_ALL=en_US.UTF-8 PYTHONPATH=. uv run --no-sync python ../.trellis/tasks/archive/2026-11/11-20-mp-outside-engine-state/research/process_c5.py
 ```
 
 ## 数据库专项
