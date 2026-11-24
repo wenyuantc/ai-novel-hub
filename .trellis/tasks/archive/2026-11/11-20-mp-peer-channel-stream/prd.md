@@ -1,6 +1,6 @@
 # C4 进程间内部通道与实时流转发
 
-> 遵循[父任务设计第 5 节](../11-20-multiprocess-task-scheduling-deploy-drill/design.md)与用户决策 D2。C1 执行者租约、C2 调度约束及 C3 跨进程取消均已归档。C4 接续 C3 的本地分支基线 `aabd3c3`。十项验收对应的设计和测试分别列于[技术设计](design.md)和[实施清单](implement.md)。
+> 遵循[父任务设计第 5 节](../../../11-20-multiprocess-task-scheduling-deploy-drill/design.md)与用户决策 D2。C1 执行者租约、C2 调度约束及 C3 跨进程取消均已归档。C4 接续 C3 的本地分支基线 `aabd3c3`。十项验收对应的设计和测试分别列于[技术设计](design.md)和[实施清单](implement.md)。
 
 ## Goal
 

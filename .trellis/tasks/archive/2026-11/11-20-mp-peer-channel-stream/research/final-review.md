@@ -20,7 +20,7 @@
 
 ## 独立检查命令
 
-在仓库根运行 `backend/.venv/bin/ruff check backend`、`backend/.venv/bin/ruff check --config backend/pyproject.toml .trellis/tasks/11-20-mp-peer-channel-stream/research/process_stream.py` 和 `git diff --check`，均通过。在 `frontend` 运行 `./node_modules/.bin/tsc -b --pretty false`，退出码为 0。后端没有单独配置静态类型检查器。
+在仓库根运行 `backend/.venv/bin/ruff check backend`、`backend/.venv/bin/ruff check --config backend/pyproject.toml .trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/process_stream.py` 和 `git diff --check`，均通过。在 `frontend` 运行 `./node_modules/.bin/tsc -b --pretty false`，退出码为 0。后端没有单独配置静态类型检查器。
 
 独立通过两个实际 HTTP 端口比较作者和协作者收到的正文。模型输出包含一条有权查看的相关任务效果，来源中附有内部身份证据。两端收到相同的公开 JSON，均保留该效果并移除证据。两项通过，耗时 5.78 秒。针对编码边界和整包分配的两项协议用例另行通过，耗时 0.08 秒。
 

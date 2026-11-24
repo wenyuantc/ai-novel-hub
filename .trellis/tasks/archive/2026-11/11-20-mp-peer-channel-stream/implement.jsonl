@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"定位任务引擎、数据库、错误处理与部署规范。"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/frame-authorization.md","reason":"核对原绑定、实际发送时的两次授权、合法后继及回放。"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/transport-lifecycle.md","reason":"区分 HTTP 与调度进程身份、连接收发、背压和资源关闭。"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/reads-wake-fallback.md","reason":"覆盖活动读取、进程接管、无后续输出的节流及通知丢失。"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"保留管理投影、脱敏与取消语义。"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"设置的全局 revision、轮询与发布顺序。"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"保留公开 SSE、快照覆盖和有限重连契约。"}

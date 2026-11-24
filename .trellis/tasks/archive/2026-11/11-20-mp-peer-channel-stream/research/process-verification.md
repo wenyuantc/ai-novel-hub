@@ -13,12 +13,12 @@
 
 ## 复跑
 
-从仓库根目录进入 backend。脚本通过运行时路径找到 Trellis 资料，归档后将命令中的任务路径替换为实际归档路径。
+从仓库根目录进入 backend。脚本会按所在位置找到归档的 Trellis 资料。
 
 ```sh
 cd backend
-PYTHONPATH=. uv run python ../.trellis/tasks/11-20-mp-peer-channel-stream/research/process_stream.py --backend . --transport uds --cases forward revoke kill
-PYTHONPATH=. uv run python ../.trellis/tasks/11-20-mp-peer-channel-stream/research/process_stream.py --backend . --transport tcp --wal --cases forward
+PYTHONPATH=. uv run python ../.trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/process_stream.py --backend . --transport uds --cases forward revoke kill
+PYTHONPATH=. uv run python ../.trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/process_stream.py --backend . --transport tcp --wal --cases forward
 ```
 
 双应用回归文件为 `backend/tests/test_c4_multiapp_streams.py`。它在同一个 Python 测试进程内为 A、B 分别构建生产应用、连接池、HTTP 端口和真实私有 TCP 监听。只有 A 启动调度；B 经持久化数据库确认任务由 A 执行后才连接真实订阅。用例逐帧比较单章、批量和智能体事件，对照作者与协作者两种身份，另验断线、剩余正文持久化、终态重连和客户端空闲退订。
