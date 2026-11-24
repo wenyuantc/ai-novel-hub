@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/11-20-mp-peer-channel-stream/research/frame-authorization.md","reason":"核对原绑定、实际发送时的两次授权、合法后继及回放。"}
+{"file":".trellis/tasks/11-20-mp-peer-channel-stream/research/transport-lifecycle.md","reason":"区分 HTTP 与调度进程身份、连接收发、背压和资源关闭。"}
+{"file":".trellis/tasks/11-20-mp-peer-channel-stream/research/reads-wake-fallback.md","reason":"覆盖活动读取、进程接管、无后续输出的节流及通知丢失。"}
+{"file":".trellis/tasks/11-20-mp-peer-channel-stream/research/independent-review.md","reason":"复核双跳授权、交接、故障和性能验收边界。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"内部签名、正文、密钥及 SQL 不进入日志。"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"验证账号授权、配额和任务名额的现有口径。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、build、Vitest 以及页面验证。"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"原任务身份、受控重订阅与 UI 终态。"}

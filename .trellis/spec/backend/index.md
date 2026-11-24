@@ -73,6 +73,7 @@
 | 契约 | 位置 |
 |----------|----------|
 | SSE 流式（帧、事件、状态生命周期、回滚） | [error-handling.md](./error-handling.md#场景sse-流式契约-generate--polish--wizard) |
+| 跨进程订阅、逐帧授权和故障回放 | [task-stream-peers.md](./task-stream-peers.md) |
 | SSRF 端点防护（`ALLOW_PRIVATE_AI_ENDPOINTS`、`build_provider`） | [quality-guidelines.md](./quality-guidelines.md#场景用户提供的-ai-base-url-的-ssrf-防护) |
 | 认证与密钥环境（cookie、JWT、Fernet、密钥掩码） | [quality-guidelines.md](./quality-guidelines.md#场景认证与密钥环境契约) |
 | 设定时间线（章初/章末、旧资料、五类主体、写作上下文与前端） | [setting-progressions.md](./setting-progressions.md) |

@@ -36,7 +36,7 @@ bool键为registration_enabled/auto_analyze_enabled/mcp_enabled；正整数键�
 - PATCH两层extra=forbid；省略保持、false明确关闭、null删除覆盖恢复部署值，changes不能为空。严格布尔/整数，拒绝布尔冒充整数及字符串/浮点；正整数最小1；开放API限额还须≤2_147_483_647（数据库Integer计数边界，部署基线同样fail-fast），不可存入超大值再让后续认证溢出500。不要求单用户≤全局，两级约束共同生效。
 - 管理写锁序为既有_lock→共享AuthorizationRuntime→auth DB gate→User升序→设置资源，自有会话及revision条件UPDATE（首次唯一INSERT），真实管理员和成功审计同事务。先确认commit，后无await同步发布六字段，再notify调度；不先发布再存库。
 - 正常失败回滚不发布。提交确认丢失重读持久状态，保留既有审计的真实结果，不盲重发旧候选。自有shield写工作不因HTTP调用者取消被拆断，关停close等待写任务；无法确认时settings_confirmed=False暂停新准入，dispatch直接返回避免热循环；即时重读仍须处于同runtime，后台恢复确认后再开放。load/reload/recovery所有发布路径共用runtime，禁止继续覆盖，不回退默认或宣称离线一致。
-- 启动时在 bootstrap 和任务恢复前 `load()`。管理器自有的周期读取独立于任务引擎，空闲应用也会刷新。普通消费者最多使用一个调度周期内确认的设置，过期时在自己的事务中读取有效值。相同 revision 和覆盖内容无需再次发布。回执迟到不得重新延长旧设置的有效期。显式 load/close 的夹具与应用 lifespan 都要收回轮询和在途写入。
+- 启动时在 bootstrap 和任务恢复前 `load()`。管理器自有的周期读取独立于任务引擎，空闲应用也会刷新。普通消费者最多使用一个调度周期内确认的设置，过期时在自己的事务中读取有效值。保存后可经内部通道请求其他进程重读库内 revision；收包、定时重载和本地发布不会再次广播。相同 revision 和覆盖内容无需再次发布。回执迟到不得重新延长旧设置的有效期。显式 load/close 的夹具与应用 lifespan 都要收回轮询和在途写入。
 - 审计action=system_settings.update、target_type=system_settings、固定目标。settings_changes最多6项，仅本动作可用；key/before_override/after_override/before_effective/after_effective/before_source/after_source均类型受限，失败不保留未提交after。禁止带入密钥、原始请求或异常。
 
 ### 真实消费
