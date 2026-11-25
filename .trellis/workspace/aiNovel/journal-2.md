@@ -95,3 +95,40 @@ C6 九项验收完成，已在本地功能分支提交并归档，父计划进�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 65: C7 多进程部署与迁移验收
+<!-- trellis-session: v=2 fp=368b4508cf97ead1 -->
+
+**Date**: 2026-11-25
+**Task**: C7 多进程部署与迁移验收
+**Branch**: `codex/mp-peer-channel-stream`
+
+### Summary
+
+完成并发迁移保护、多进程部署、真实进程验收与运维文档；C8 旧版回退和跨主机共享文件锁仍待验证。
+
+### Main Changes
+
+- 默认一个 worker；支持满足数据库、内网和共享目录前提的多进程与多实例部署。
+- SQLite 与 PostgreSQL 迁移互斥、失败回滚和恢复流程已验证；OrbStack 默认 bridge 隔离不满足要求。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e2eda468322a240e36fb6b36f7af17263c962541` | feat(deploy): 支持安全迁移与多进程启动 |
+| `dbe7fc88490a4b31151f7a075e49806f2ee51d7d` | docs(trellis): 记录 C7 部署与验收 |
+
+### Testing
+
+- [OK] 后端完整回归 7519 通过、76 跳过、19 xfailed；PostgreSQL 迁移专项 22 项通过。
+- [OK] 前端 lint、构建和 1849 项测试通过；真实部署与恢复演练见 C7 验收记录。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Daybreak 高深度扫描待 C7 分支推送后启动；C8 旧版升级与回滚独立推进。

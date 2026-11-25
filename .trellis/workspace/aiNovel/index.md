@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 64
+- **Total Sessions**: 65
 - **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~97 | Active |
+| `journal-2.md` | ~134 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 65 | 2026-11-25 | C7 多进程部署与迁移验收 | `e2eda468322a240e36fb6b36f7af17263c962541`, `dbe7fc88490a4b31151f7a075e49806f2ee51d7d` | `codex/mp-peer-channel-stream` |
 | 64 | 2026-11-25 | C6 停止受理新任务的排空开关 | `018faa6a3792943b87c181a3f8fdd9e9f18f1b86`, `ff0352ab093fd5ec0f6bfa65554a64ca8ce88bce` | `codex/mp-peer-channel-stream` |
 | 63 | 2026-11-24 | C5 引擎外状态跨进程协调 | `dccbb0b`, `08fc00b` | `codex/mp-peer-channel-stream` |
 | 62 | 2026-11-24 | C4 跨进程任务流转发与断线回放 | `15778d0`, `3981070` | `codex/mp-peer-channel-stream` |
