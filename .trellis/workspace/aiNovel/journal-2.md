@@ -200,3 +200,25 @@ C6 九项验收完成，已在本地功能分支提交并归档，父计划进�
 ### Next Steps
 
 - 未排空旧任务及未决提案治理见 TODO 第 34 项；跨主机共享文件锁须在目标环境验证。
+
+
+## Session 68: 个人写作统计与码字目标
+<!-- trellis-session: v=2 fp=57ef8669cb40e6f2 -->
+
+**Date**: 2026-11-25
+**Task**: 个人写作统计与码字目标
+**Branch**: `codex/writing-stats-goals`
+
+### Summary
+
+完成 TODO 第26项，按本人和作品区分手写与 AI 落稿，接入连载工作台。SQLite 全量、PostgreSQL 定向、前端测试构建及浏览器验收已记录。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `03bcb30` | feat: 新增个人写作统计与码字目标 |
+
+### Status
+
+[OK] **Completed**
