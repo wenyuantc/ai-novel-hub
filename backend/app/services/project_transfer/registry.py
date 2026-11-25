@@ -70,6 +70,7 @@ from app.models import (
     StoryMemory,
     WorldSetting,
 )
+from app.models.annotations import AnnotationMessage, AnnotationThread
 from app.models.batch_revision import RevisionBatch, RevisionBatchScene
 from app.models.planning import (
     PlanningTag,
@@ -535,6 +536,16 @@ RULES: tuple[TableRule, ...] = (
         "scene_moves", SceneMove, lambda pid: _in_scenes(SceneMove.scene_id, pid),
         fk={"scene_id": "scenes", "from_chapter_id": "chapters", "to_chapter_id": "chapters",
             "planning_unit_id": "planning_units"},
+    ),
+    TableRule(
+        "annotation_threads", AnnotationThread, _own(AnnotationThread), fill=_P,
+        fk={"chapter_id": "chapters", "scene_id": "scenes"},
+    ),
+    TableRule(
+        "annotation_messages", AnnotationMessage, lambda pid: _in(AnnotationMessage.thread_id, AnnotationThread, pid),
+        fk={"thread_id": "annotation_threads"},
+        # 署名按发表时的显示值保留。账号和重试凭据只在源实例有效。
+        exclude=("author_id", "operation_id"),
     ),
     TableRule("planning_tags", PlanningTag, _own(PlanningTag), fill=_P),
     TableRule(

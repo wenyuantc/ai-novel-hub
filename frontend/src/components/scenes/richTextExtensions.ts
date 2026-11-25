@@ -129,8 +129,8 @@ export const RichEnter = Extension.create({
 })
 
 /** 正文旧调用只接受明确的正文选区，不能跨过区块或把区块文字当正文。 */
-export function editorCodePointSelection(editor: Editor): { start: number; end: number } | null {
-  const { from, to } = editor.state.selection
+export function editorCodePointSelection(editor: Editor, range: { from: number; to: number } = editor.state.selection): { start: number; end: number } | null {
+  const { from, to } = range
   const selected = resolveRichSelection(editor.state.doc, from, to)
   if (!selected || selected.start.scope !== 'prose' || selected.end.scope !== 'prose') return null
   let crossesSection = false
@@ -141,16 +141,31 @@ export function editorCodePointSelection(editor: Editor): { start: number; end: 
 }
 
 /** 整数反向有多个落点时拒绝；调用方须另携区块身份及边向。 */
-export function selectEditorCodePoints(editor: Editor, start: number, end: number): boolean {
-  const from = richCursorCandidates(editor.state.doc, { scope: 'prose', offset: start })
-  const to = richCursorCandidates(editor.state.doc, { scope: 'prose', offset: end })
-  if (from.length !== 1 || to.length !== 1 || from[0].pm > to[0].pm) return false
+export function selectEditorCodePoints(editor: Editor, start: number, end: number, proseOnly = false): boolean {
+  const starts = richCursorCandidates(editor.state.doc, { scope: 'prose', offset: start })
+  const ends = richCursorCandidates(editor.state.doc, { scope: 'prose', offset: end })
+  // 非空的纯正文批注在零宽作者区块边界必取内侧，原选区不能包含区块。
+  const inward = proseOnly && start < end
+  if (!inward && (starts.length !== 1 || ends.length !== 1)) return false
+  const from = starts[inward ? starts.length - 1 : 0]?.pm
+  const to = ends[0]?.pm
+  if (from === undefined || to === undefined || from > to) return false
   let crossesSection = false
-  if (from[0].pm !== to[0].pm) editor.state.doc.nodesBetween(from[0].pm, to[0].pm, (node) => {
+  if (from !== to) editor.state.doc.nodesBetween(from, to, (node) => {
     if (node.type.name === 'authorSection') { crossesSection = true; return false }
   })
   if (crossesSection) return false
-  editor.chain().focus().setTextSelection({ from: from[0].pm, to: to[0].pm }).run()
+  if (!editor.isEditable) {
+    const dom = editor.view.dom
+    const selection = dom.ownerDocument.getSelection()
+    if (!selection) return false
+    const a = editor.view.domAtPos(from)
+    const b = editor.view.domAtPos(to)
+    selection.setBaseAndExtent(a.node, a.offset, b.node, b.offset)
+    a.node.parentElement?.scrollIntoView({ block: 'nearest' })
+    return true
+  }
+  editor.chain().focus().setTextSelection({ from, to }).run()
   return true
 }
 

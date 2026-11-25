@@ -69,6 +69,7 @@ from app.services import (
     setting_progression_service,
 )
 from app.services.project_transfer import preview_store, remap
+from app.services.project_transfer.annotations import ANNOTATION_TABLES, validate_annotation_tables
 from app.services.project_transfer.batch_revisions import REVISION_TABLES, validate_revision_tables
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
@@ -107,6 +108,8 @@ TABLE_LABELS: dict[str, str] = {
     "outlines": "大纲",
     "chapters": "章节",
     "scenes": "场景",
+    "annotation_threads": "批注讨论",
+    "annotation_messages": "批注留言",
     "scene_moves": "场景移动记录",
     "scene_documents": "场景格式",
     "scene_sections": "正文区块",
@@ -582,6 +585,16 @@ def _migrate_v15_to_v16(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v16_to_v17(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for name in ANNOTATION_TABLES:
+            if name in tables and tables[name] != []:
+                raise BadRequestError("旧版备份不支持协作批注，请使用原始版本文件")
+            tables[name] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 14 and isinstance(tables := data.get("tables"), dict):
@@ -614,6 +627,7 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         13: lambda value: value,  # v14 只增加可选版本历史表，旧备份缺省为空。
         14: _migrate_v14_to_v15,
         15: _migrate_v15_to_v16,
+        16: _migrate_v16_to_v17,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -675,7 +689,7 @@ def _check_value(col, v: Any) -> str | None:
             return "应为时间字符串"
         try:
             parsed = datetime.fromisoformat(v)
-            if col.table.name in SERIALIZATION_TABLES:
+            if col.table.name in SERIALIZATION_TABLES + ANNOTATION_TABLES:
                 if "T" not in v:
                     return "应为完整日期与时间"
                 if parsed.tzinfo is not None:
@@ -1315,7 +1329,8 @@ def parse_backup(raw: bytes | bytearray) -> Backup:
                 errors.add(f"备份缺少批量修订历史表 {table}")
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
                   *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes",
-                  "scene_documents", "scene_sections", "scene_markers", "scene_moves", *SERIALIZATION_TABLES):
+                  "scene_documents", "scene_sections", "scene_markers", "scene_moves", *SERIALIZATION_TABLES,
+                  *ANNOTATION_TABLES):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -1370,6 +1385,8 @@ def parse_backup(raw: bytes | bytearray) -> Backup:
     history = validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
     documents = validate_rich_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    validate_annotation_tables(backup.tables, documents, backup.project["id"], errors.add)
     errors.raise_if_any()
     validate_serialization_tables(backup.tables, backup.project["id"], errors.add)
     errors.raise_if_any()
@@ -1532,7 +1549,7 @@ class _RowError(Exception):
 def _convert(col, v: Any) -> Any:
     if v is not None and isinstance(col.type, DateTime):
         timestamp = datetime.fromisoformat(v)
-        if col.table.name in SERIALIZATION_TABLES:
+        if col.table.name in SERIALIZATION_TABLES + ANNOTATION_TABLES:
             # SQLite 历史时间为无偏移的 UTC，外部备份也接受带偏移的实际发布时间。
             return timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp.astimezone(UTC)
         return timestamp
@@ -1692,8 +1709,8 @@ class _Importer:
             for t in ("outlines", "chapter_plans"):
                 model = RULES_BY_TABLE[t].model
                 self.ctx.synthetic_base[t] = int(await self.db.scalar(select(func.max(model.id))) or 0)
-        if rule.table == "scene_moves":
-            # 按原先的移动顺序分配新 ID，备份 JSON 的行顺序没有证明效力。
+        if rule.table in {"scene_moves", "annotation_messages"}:
+            # 移动证据和讨论中的发言均以原 ID 定序。
             rows = sorted(rows, key=lambda row: row["id"])
         objs = []
         laters = []

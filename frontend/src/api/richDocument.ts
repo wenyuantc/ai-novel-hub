@@ -18,7 +18,9 @@ export interface RichMarker {
 }
 export interface RichDocument { content: string; formatting: RichFormatting; sections: RichSection[]; retired_section_keys: string[]; markers: RichMarker[] }
 export interface RichDocumentOut { content_revision: number; planning_revision: number; document: RichDocument }
+export interface ProseEdit { start: number; end: number; insert: string }
 export interface RichDocumentSave {
+  prose_edits?: ProseEdit[]
   expected_content_revision: number; document: RichDocument
   add_section_keys: string[]; delete_section_keys: string[]; add_marker_keys: string[]; delete_marker_keys: string[]
   restore_section_keys?: string[]; restore_marker_keys?: string[]

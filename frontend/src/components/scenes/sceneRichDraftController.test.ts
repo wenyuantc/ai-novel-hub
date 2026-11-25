@@ -8,6 +8,8 @@ import type { RichDocument, RichDocumentOut } from '../../api/richDocument'
 import type { Scene, ScenePage } from '../../api/types'
 import { planSectionCreation, planSectionDeletion } from './richSectionOperations'
 import { RichMarkerDocument } from './richMarkerState'
+import { richCursorCandidates } from './richEditorPositions'
+import { transactionProseEdits } from './richProseEdits'
 import { AuthorSection } from './richSectionNode'
 import { mapSectionMarkerTransaction } from './richSectionMarkerMapping'
 import { syncSceneSaveBaseline } from './richSectionHistory'
@@ -45,6 +47,81 @@ function setup() {
 }
 
 describe('完整场景文档草稿', () => {
+  it('同句出现两次时跟随实际输入，正文保存期间的新步骤从已提交版本继续', async () => {
+    const { api, controller } = setup()
+    const source = document('🙂原句原句')
+    api.get.mockResolvedValueOnce({ ...scene(), content: source.content })
+    api.getDocument.mockResolvedValueOnce(out(1, source))
+    await controller.load()
+    const state = editorState(source)
+    // 1 个代理对和第一句之后插入，随后在同一事务再输入一个字。
+    const tr = state.tr.insertText('重', 5).insertText('看', 6)
+    const edits = transactionProseEdits([tr])
+    expect(edits).toEqual([{ start: 3, end: 3, insert: '重' }, { start: 4, end: 4, insert: '看' }])
+    const sent = projectSectionDocument(tr.doc.toJSON())
+    controller.changeDocument(sent, { mappedMarkerKeys: [], explicitMarkerIntent: false, proseEdits: edits })
+    let finish!: (result: RichDocumentOut) => void
+    api.saveDocument.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    api.get.mockResolvedValueOnce({ ...scene(2), content: sent.content })
+    const pending = controller.save('document')
+    expect(api.saveDocument.mock.calls[0][1]).toMatchObject({ expected_content_revision: 1, prose_edits: edits })
+    const tail = state.apply(tr).tr.insertText('！', 7)
+    const next = projectSectionDocument(tail.doc.toJSON())
+    controller.changeDocument(next, { mappedMarkerKeys: [], explicitMarkerIntent: false, proseEdits: transactionProseEdits([tail]) })
+    finish(out(2, sent))
+    await pending
+    api.saveDocument.mockResolvedValueOnce(out(3, next))
+    api.get.mockResolvedValueOnce({ ...scene(3), content: next.content })
+    await controller.save('document')
+    expect(api.saveDocument.mock.calls[1][1]).toMatchObject({ expected_content_revision: 2,
+      prose_edits: [{ start: 5, end: 5, insert: '！' }] })
+  })
+
+  it('回车拆段时保留选定的具体换行位置，作者区块中的输入不改变正文偏移', () => {
+    const source = document('原句原句')
+    source.sections = [{ key: SECTION, title: '备注', anchor: 4, order: 0, include_in_ai: false,
+      content: '草稿', formatting: source.formatting }]
+    const state = editorState(source)
+    // 富编辑器拆段后可能通过第二步设置换行前缀。
+    const tr = state.tr.split(3)
+    const right = tr.doc.nodeAt(4)!
+    tr.setNodeMarkup(4, undefined, { ...right.attrs, prefix: '\n' })
+    expect(projectSectionDocument(tr.doc.toJSON()).content).toBe('原句\n原句')
+    const edits = transactionProseEdits([tr])
+    expect(edits).toEqual([{ start: 2, end: 2, insert: '\n' }])
+    const inner = richCursorCandidates(state.doc, { scope: 'section', sectionKey: SECTION, offset: 1 })[0]
+    expect(transactionProseEdits([state.tr.insertText('新', inner.pm)])).toEqual([])
+  })
+
+  it('来源不明的整景覆盖后继续输入，整次保存不使用局部步骤', async () => {
+    const { api, controller } = setup()
+    await controller.load()
+    controller.changeDocument(document('原句原句'))
+    const tr = editorState(document('原句原句')).tr.insertText('重看', 3)
+    controller.changeDocument(projectSectionDocument(tr.doc.toJSON()), {
+      mappedMarkerKeys: [], explicitMarkerIntent: false, proseEdits: transactionProseEdits([tr]),
+    })
+    await controller.save('document')
+    expect(api.saveDocument.mock.calls[0][1]).not.toHaveProperty('prose_edits')
+  })
+
+  it('恢复没有编辑步骤的旧草稿后仍能保存，并避免把后续输入当成整份草稿的来源', async () => {
+    const original = setup()
+    await original.controller.load()
+    original.controller.changeDocument(document('之前的草稿'))
+    const record = structuredClone(original.controller.captureDraft()!)
+    delete record.evidence.proseEdits
+    const { controller, api } = setup()
+    await controller.load()
+    expect(await controller.restoreDraft(record)).toBe('restored')
+    const tr = editorState(document('之前的草稿')).tr.insertText('！', 6)
+    const next = projectSectionDocument(tr.doc.toJSON())
+    controller.changeDocument(next, { mappedMarkerKeys: [], explicitMarkerIntent: false, proseEdits: transactionProseEdits([tr]) })
+    api.get.mockResolvedValueOnce({ ...scene(2), content: next.content })
+    expect(await controller.save('document')).not.toBeNull()
+    expect(api.saveDocument.mock.calls[0][1]).not.toHaveProperty('prose_edits')
+  })
+
   it('请求发送前持久化冻结快照，期间撤权使网络写入不发生', async () => {
     const { controller, api } = setup()
     await controller.load()

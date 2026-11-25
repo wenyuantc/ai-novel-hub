@@ -27,6 +27,8 @@ export const TRANSFER_TABLE_LABELS: Record<string, string> = {
   outlines: '大纲',
   chapters: '章节',
   scenes: '场景',
+  annotation_threads: '批注讨论',
+  annotation_messages: '批注留言',
   chapter_plans: '细纲',
   chapter_characters: '出场角色',
   planning_unit_characters: '场景角色关联',

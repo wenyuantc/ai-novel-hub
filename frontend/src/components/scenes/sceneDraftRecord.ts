@@ -1,11 +1,13 @@
-import type { RichDocument, RichDocumentOut, RichDocumentSave, RichFormatting, RichMarker, RichSection } from '../../api/richDocument'
+import type { ProseEdit, RichDocument, RichDocumentOut, RichDocumentSave, RichFormatting, RichMarker, RichSection } from '../../api/richDocument'
 import type { Scene } from '../../api/types'
 import { stripSettingWhitespace } from '../settingTags/tagDraft'
+import { MAX_PROSE_EDITS } from './richProseEdits'
 import { validSectionDocument } from './richSectionValidity'
 
 export interface SceneDraft { title: string; content: string; summary: string }
 
 export interface RichEditEvidence {
+  proseEdits?: ProseEdit[] | null
   mappedMarkerKeys: string[]
   explicitMarkerIntent: boolean
   restoredMarkerKeys?: string[]
@@ -14,7 +16,7 @@ export interface RichEditEvidence {
   restoredSectionKeys?: string[]
 }
 
-export type SceneEditEvidence = Required<RichEditEvidence>
+export type SceneEditEvidence = Required<Omit<RichEditEvidence, 'proseEdits'>> & Pick<RichEditEvidence, 'proseEdits'>
 export type SceneDraftBase = Pick<Scene,
   'id' | 'chapter_id' | 'created_at' | 'title' | 'summary' | 'content' | 'content_revision' | 'planning_revision'>
 
@@ -106,8 +108,13 @@ function documentOut(value: unknown): value is RichDocumentOut {
   return record(value) && revision(value.content_revision) && revision(value.planning_revision) && richDocument(value.document)
 }
 
+function validProseEdits(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= MAX_PROSE_EDITS && value.every((item) =>
+    record(item) && offset(item.start) && offset(item.end) && item.end >= item.start && typeof item.insert === 'string')
+}
+
 function editEvidence(value: unknown, target: RichDocument | null): value is SceneEditEvidence {
-  if (!record(value) || typeof value.explicitMarkerIntent !== 'boolean' || typeof value.explicitSectionIntent !== 'boolean'
+  if (!record(value) || value.proseEdits != null && !validProseEdits(value.proseEdits) || typeof value.explicitMarkerIntent !== 'boolean' || typeof value.explicitSectionIntent !== 'boolean'
     || !keys(value.mappedMarkerKeys) || !keys(value.mappedSectionKeys)
     || !keys(value.restoredMarkerKeys) || !keys(value.restoredSectionKeys)) return false
   if (value.restoredMarkerKeys.length && !value.explicitMarkerIntent
@@ -120,6 +127,7 @@ function editEvidence(value: unknown, target: RichDocument | null): value is Sce
 
 function documentSave(value: unknown): value is RichDocumentSave {
   return record(value) && revision(value.expected_content_revision) && richDocument(value.document)
+    && (value.prose_edits === undefined || validProseEdits(value.prose_edits))
     && keys(value.add_marker_keys) && keys(value.delete_marker_keys) && keys(value.restore_marker_keys)
     && keys(value.add_section_keys) && keys(value.delete_section_keys) && keys(value.restore_section_keys)
     && keys(value.mapped_marker_keys) && keys(value.mapped_section_keys)

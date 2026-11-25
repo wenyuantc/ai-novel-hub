@@ -1,3 +1,4 @@
+import { selectedHash } from '../../utils/textOffset'
 import { Alert, Button, Input, Modal, Radio, Space, Typography } from 'antd'
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ApiError, currentRequestGeneration, errorMessage, watchRequestGeneration } from '../../api/client'
@@ -53,13 +54,6 @@ const options: { value: RewriteOp; label: string }[] = [
 
 const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
 
-async function selectedHash(text: string): Promise<string> {
-  if (!globalThis.crypto?.subtle || typeof globalThis.crypto.randomUUID !== 'function') {
-    throw new Error('当前浏览器环境无法安全确认选区，请使用 HTTPS 或本机地址重试。')
-  }
-  const bytes = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, '0')).join('')
-}
 
 /**
  * 每次出站都重新取得明确确认；预览和采纳绑定同一身份、选区与章版本。

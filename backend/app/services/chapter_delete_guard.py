@@ -11,6 +11,7 @@ from app.core.errors import ConflictError
 from app.models import (
     AiUsageCall,
     AnalysisChange,
+    AnnotationThread,
     Base,
     Chapter,
     ChapterAnalysis,
@@ -44,6 +45,9 @@ from app.services.scene_move_history import move_touches_chapter
 
 # (被删除表, 引用表, 引用列, 被引用列, 删除动作)。新关系必须分析后才能加入。
 _REVIEWED_FKS = frozenset({
+    ("annotation_threads", "annotation_messages", "thread_id", "id", "CASCADE"),
+    ("chapters", "annotation_threads", "chapter_id", "id", "CASCADE"),
+    ("scenes", "annotation_threads", "scene_id", "id", "CASCADE"),
     ("analysis_changes", "setting_progressions", "source_change_id", "id", "SET NULL"),
     ("chapter_analyses", "analysis_changes", "analysis_id", "id", "CASCADE"),
     ("chapter_analyses", "scene_review_analysis_receipts", "analysis_id", "id", "SET NULL"),
@@ -220,6 +224,10 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
             ).exists()
             checks = [
                 _foreign_moves(project_id, batch, scenes),
+                select(AnnotationThread.id).outerjoin(Scene, Scene.id == AnnotationThread.scene_id)
+                .where(or_(AnnotationThread.chapter_id.in_(batch), AnnotationThread.scene_id.in_(scenes)),
+                       or_(AnnotationThread.project_id.is_distinct_from(project_id),
+                           Scene.chapter_id.is_distinct_from(AnnotationThread.chapter_id))),
                 select(ChapterPlan.id).outerjoin(Outline, Outline.id == ChapterPlan.outline_id)
                 .where(ChapterPlan.chapter_id.in_(batch), or_(
                     ChapterPlan.project_id.is_distinct_from(project_id),

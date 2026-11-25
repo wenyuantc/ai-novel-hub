@@ -23,13 +23,15 @@ const g = (bytes: number, rows = 1) => ({ rows, chars: 0, bytes })
 
 describe('统计表格标签', () => {
   it('识别场景、作品历史与修订明细', () => {
-    expect(Object.keys(TRANSFER_TABLE_LABELS)).toHaveLength(38)
+    expect(Object.keys(TRANSFER_TABLE_LABELS)).toHaveLength(40)
     expect(tableLabel('serialization_goals')).toBe('日更目标')
     expect(tableLabel('serialization_entries')).toBe('连载排期')
     expect(tableLabel('serialization_editions')).toBe('章节定稿')
     expect(tableLabel('serialization_publications')).toBe('发布记录')
     expect(tableLabel('revision_batches')).toBe('批量修订记录')
     expect(tableLabel('revision_batch_scenes')).toBe('修订场景明细')
+    expect(tableLabel('annotation_threads')).toBe('批注讨论')
+    expect(tableLabel('annotation_messages')).toBe('批注留言')
     expect(tableLabel('scenes')).toBe('场景')
     expect(tableLabel('planning_unit_characters')).toBe('场景角色关联')
     expect(tableLabel('chapter_plans')).toBe('细纲')

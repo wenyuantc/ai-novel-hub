@@ -640,7 +640,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 16 and data["app_schema"] == "0073"
+    assert data["version"] == 17 and data["app_schema"] == "0074"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1016,7 +1016,7 @@ async def test_v2_import_rolls_back_when_materialized_history_is_invalid(client,
 async def test_round_trip_all_entities(client, app):
     p, ids = await _setup(client, app)
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 16
+    assert src["format"] == "ainovel.project" and src["version"] == 17
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 执行者与任务归属属于源实例，和派生的索引数据一样不随作品导出。
     assert not {"tasks", "task_workers", "task_lease_store", "task_execution_slots", "task_work_records",
@@ -1646,7 +1646,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (16, "0073")
+    assert (data["version"], data["app_schema"]) == (17, "0074")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)
@@ -1780,7 +1780,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
             field.pop("definition_id")
         result = await _import(client, data)
         exported = await _backup(client, result["project"]["id"])
-        assert exported["version"] == 16
+        assert exported["version"] == 17
         assert all(not exported["tables"][table] for table in importer.FIELD_TABLES)
         assert len(exported["tables"]["setting_progressions"]) == len(data["tables"]["setting_progressions"])
         assert [f["base_value"] for f in exported["tables"]["setting_text_fields"]] == [

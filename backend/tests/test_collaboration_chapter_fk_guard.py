@@ -10,6 +10,7 @@ from app.core.errors import ConflictError
 from app.models import (
     AiUsageCall,
     AnalysisChange,
+    AnnotationThread,
     Base,
     Chapter,
     ChapterAnalysis,
@@ -59,7 +60,8 @@ async def books(app, client):
 @pytest.mark.parametrize("reference", [
     "plan", "planning_chapter", "planning_scene", "log", "task", "analysis", "memory", "retrieval",
     "character", "progression", "analysis_change", "proposal", "receipt", "marker_origin", "section_origin",
-    "ledger", "revision_batch", "revision_scene", "usage", "serialization_entry", "serialization_publication",
+    "annotation_project", "annotation_scene", "ledger", "revision_batch", "revision_scene", "usage",
+    "serialization_entry", "serialization_publication",
 ])
 async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books, reference):
     user, first, second, chapters, scenes = books
@@ -140,6 +142,13 @@ async def test_chapter_deletion_rejects_cross_project_cascade(app, client, books
             else:
                 foreign = SceneReviewAnalysisReceipt(run_key=str(uuid4()), task_key=task.statistics_key,
                                                      chapter_id=chapter_id, content_hash="a", status="running")
+        elif reference in {"annotation_project", "annotation_scene"}:
+            foreign = AnnotationThread(
+                project_id=second_id if reference == "annotation_project" else first_id, chapter_id=chapter_id,
+                scene_id=scenes[0] if reference == "annotation_project" else scenes[1],
+                original_start=0, original_end=1, start_offset=0, end_offset=1,
+                excerpt="故", selection_hash="a" * 64, scene_hash="b" * 64,
+            )
         elif reference == "ledger":
             foreign = ConsistencyLedger(project_id=second_id, chapter_id=chapter_id, source_hash="a" * 64,
                                         text_hash="a" * 64, facts=[])

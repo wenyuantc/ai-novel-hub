@@ -272,6 +272,8 @@ async def preview_move(
 
 
 async def _relocate(db: AsyncSession, source: Chapter, target: Chapter, plan: MovePlan) -> None:
+    from app.services.annotation_anchors import move_with_scene
+
     # 暂时退出活动顺序的唯一约束，直到两章排序均已完成。
     plan.scene.active = False
     plan.scene.chapter_id = target.id
@@ -283,6 +285,7 @@ async def _relocate(db: AsyncSession, source: Chapter, target: Chapter, plan: Mo
     await scene_service._set_order(db, plan.target_scenes)
     plan.scene.active = True
     await db.flush()
+    await move_with_scene(db, plan.scene, source.id)
 
 
 async def move(

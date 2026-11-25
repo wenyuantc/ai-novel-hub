@@ -36,3 +36,11 @@ export function codePointToUtf16(text: string, cp: number): number {
 export function codePointLength(text: string): number {
   return utf16ToCodePoint(text, text.length)
 }
+
+export async function selectedHash(text: string): Promise<string> {
+  if (!globalThis.crypto?.subtle || typeof globalThis.crypto.randomUUID !== 'function') {
+    throw new Error('当前浏览器环境无法安全确认选区，请使用 HTTPS 或本机地址重试。')
+  }
+  const bytes = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, '0')).join('')
+}

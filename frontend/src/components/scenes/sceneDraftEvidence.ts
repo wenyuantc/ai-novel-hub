@@ -1,4 +1,5 @@
 import type { RichDocument, RichDocumentOut, RichDocumentSave, RichMarker } from '../../api/richDocument'
+import { appendProseEdits } from './richProseEdits'
 import { richDocumentCapacityProblem } from './richDocumentCapacity'
 import { snapshotInvalidatedMarker } from './richMarkerMapping'
 import type { RichEditEvidence, SceneEditEvidence } from './sceneDraftRecord'
@@ -9,7 +10,7 @@ import { validSectionDocument } from './richSectionValidity'
 export const sameDocument = (a: RichDocument, b: RichDocument): boolean => a === b || sameSectionDocument(a, b)
 
 export const emptyEvidence = (): SceneEditEvidence => ({
-  mappedMarkerKeys: [], restoredMarkerKeys: [], mappedSectionKeys: [], restoredSectionKeys: [],
+  proseEdits: [], mappedMarkerKeys: [], restoredMarkerKeys: [], mappedSectionKeys: [], restoredSectionKeys: [],
   explicitMarkerIntent: false, explicitSectionIntent: false,
 })
 
@@ -21,6 +22,7 @@ export function appendSceneEvidence(previous: SceneEditEvidence, next: RichEditE
   const markers = new Set(document.markers.map((item) => item.key))
   const sections = new Set(document.sections.map((item) => item.key))
   return {
+    proseEdits: appendProseEdits(previous.proseEdits, next.proseEdits),
     mappedMarkerKeys: keep(previous.mappedMarkerKeys, next.mappedMarkerKeys, markers),
     mappedSectionKeys: keep(previous.mappedSectionKeys, next.mappedSectionKeys ?? [], sections),
     explicitMarkerIntent: previous.explicitMarkerIntent || next.explicitMarkerIntent,
@@ -143,6 +145,7 @@ export function documentSave(source: RichDocumentOut, draft: RichDocument, evide
   return {
     expected_content_revision: source.content_revision,
     document: draft,
+    ...(evidence.proseEdits?.length ? { prose_edits: evidence.proseEdits } : {}),
     add_section_keys: addedSections, delete_section_keys: deletedSections, restore_section_keys: restoredSections,
     add_marker_keys: added, delete_marker_keys: deleted, restore_marker_keys: restored,
     mapped_section_keys: [...originalSections.keys()].filter((key) => nextSections.has(key) && mappedSections.has(key)),

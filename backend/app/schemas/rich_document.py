@@ -239,7 +239,15 @@ class SceneDocument(StrictDocumentModel):
         return self
 
 
+class ProseEdit(StrictDocumentModel):
+    start: TextOffset
+    end: TextOffset
+    insert: str = Field(max_length=MAX_SECTION_CONTENT)
+
+
 class SceneDocumentSave(StrictDocumentModel):
+    # 编辑器可附实际替换步骤；老客户端或无法重放的保存仍可正常落稿。
+    prose_edits: list[ProseEdit] | None = Field(default=None, max_length=256)
     expected_content_revision: Annotated[int, Field(strict=True, ge=0)]
     document: SceneDocument
     # 不通过遗漏字段或身份推断删除；这些集合描述本次作者操作。
@@ -256,6 +264,8 @@ class SceneDocumentSave(StrictDocumentModel):
 
     @model_validator(mode="after")
     def explicit_document_and_unique_intents(self):
+        if self.prose_edits and sum(len(edit.insert) for edit in self.prose_edits) > MAX_SECTION_CONTENT:
+            raise ValueError("正文编辑步骤的插入总量过大")
         required = {"content", "formatting", "sections", "retired_section_keys", "markers"}
         if not required <= self.document.model_fields_set:
             raise ValueError("完整文档的正文、格式、区块、退场身份和标记都必须显式提供")

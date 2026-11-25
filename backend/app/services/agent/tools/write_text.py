@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter
+from app.schemas.rich_document import ProseEdit
 from app.services import analysis_service, generation_service, scene_service, version_service
 from app.services.writing_stats import count_added_words, record_words
 
@@ -75,6 +76,7 @@ async def execute(ctx: ToolCtx, args: ReplaceArgs) -> dict:
     await scene_service.replace_scene_content(
         ctx.db, chapter, scene, scene.content[:start] + args.replacement + scene.content[end:],
         expected_revision=chapter.content_revision,
+        prose_edits=[ProseEdit(start=start, end=end, insert=args.replacement)],
     )
     await record_words(
         ctx.db, user_id=ctx.user_id, project_id=ctx.project_id, source="ai",

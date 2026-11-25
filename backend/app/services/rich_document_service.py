@@ -318,6 +318,10 @@ async def save_document(
                                     planning_revision=await scene_service._planning_revision(db, project_id),
                                     document=current)
         await version_service.ensure_baseline(db, chapter, force=True)
+        if body.prose_edits:
+            from app.services.annotation_anchors import map_edits
+
+            await map_edits(db, scene, body.document.content, body.prose_edits)
         await _write_document_rows(db, project_id, scene, body, current, section_rows, marker_rows)
         await scene_service.refresh_projection(db, chapter, expected_revision=body.expected_content_revision)
         if converted_section_key is None:

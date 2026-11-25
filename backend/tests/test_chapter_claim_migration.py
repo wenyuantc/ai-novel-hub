@@ -126,7 +126,7 @@ async def test_single_book_backup_never_transfers_or_accepts_chapter_claim(app, 
     response = await client.get(f"/api/v1/projects/{project['id']}/backup")
     assert response.status_code == 200, response.text
     backup = response.json()
-    assert backup["app_schema"] == "0073"
+    assert backup["app_schema"] == "0074"
     row = backup["tables"]["chapters"][0]
     fields = {"generation_claim_key", "generation_claim_task_key", "generation_claim_prev_status"}
     assert fields <= set(RULES_BY_TABLE["chapters"].exclude)

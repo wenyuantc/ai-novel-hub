@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, RevisionBatch, RevisionBatchScene
 from app.schemas.book_search import ApplyRequest, BatchSummary, SelectedHit
-from app.schemas.rich_document import SceneDocument
+from app.schemas.rich_document import ProseEdit, SceneDocument
 from app.services import book_search, project_access, rich_document_service, scene_service, version_service
+from app.services.annotation_anchors import map_edits
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import lock_manual_project_visibility
 from app.services.rich_document_store import capture_documents
@@ -80,10 +81,21 @@ async def _apply_plans(
 
 async def _write_chapter(
     db: AsyncSession, chapter: Chapter, changes: list[book_search.SceneChange],
+    query: str, replacement: str, *, undoing: bool = False,
 ) -> None:
     revision = chapter.content_revision
     await version_service.ensure_baseline(db, chapter, force=True)
     for change in changes:
+        # 批次起点相对原稿。撤销时先换算为修订后的起点，再从右至左恢复。
+        delta = len(replacement) - len(query)
+        edits = []
+        for i, start in reversed(list(enumerate(change.start_offsets))):
+            if undoing:
+                start += i * delta
+                edits.append(ProseEdit(start=start, end=start + len(replacement), insert=query))
+            else:
+                edits.append(ProseEdit(start=start, end=start + len(query), insert=replacement))
+        await map_edits(db, change.scene, change.after.content, edits)
         await rich_document_service.write_mapped_document(
             db, chapter.project_id, change.scene, change.before, change.after, revision,
         )
@@ -122,7 +134,7 @@ async def apply(db: AsyncSession, user_id: int, project_id: int, body: ApplyRequ
         db.add(batch)
         await db.flush()
         for slot, (chapter, changes) in enumerate(plans, start=1):
-            await _write_chapter(db, chapter, changes)
+            await _write_chapter(db, chapter, changes, body.query, body.replacement)
             for change in changes:
                 db.add(RevisionBatchScene(
                     batch_id=batch.id, chapter_id=chapter.id, scene_id=change.scene.id, chapter_slot=slot,
@@ -198,7 +210,7 @@ async def undo(db: AsyncSession, user_id: int, project_id: int, batch_id: int) -
             return BatchSummary.model_validate(batch, from_attributes=True)
         plans = await _undo_plans(db, batch)
         for chapter, changes in plans:
-            await _write_chapter(db, chapter, changes)
+            await _write_chapter(db, chapter, changes, batch.query, batch.replacement, undoing=True)
         batch.status, batch.undone_at = "undone", datetime.now(UTC)
         _record_audit(audit, [chapter.id for chapter, _ in plans])
         await audit.commit(flush_fn=version_service.flush_versioned)

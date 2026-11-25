@@ -17,7 +17,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter, Project, Scene, SceneDocumentMeta, SceneMarker, SceneSection
-from app.schemas.rich_document import SceneDocument
+from app.schemas.rich_document import ProseEdit, SceneDocument
 from app.schemas.scene import (
     SceneBrief,
     SceneCreate,
@@ -33,7 +33,7 @@ from app.schemas.scene import (
     SceneUpdate,
     parse_scene_snapshot,
 )
-from app.services import project_access, setting_progression_service, version_service, writing_stats
+from app.services import annotation_anchors, project_access, setting_progression_service, version_service, writing_stats
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import count_words, get_manual_chapter
 
@@ -180,6 +180,7 @@ async def refresh_projection(
     chapter.content = projection
     chapter.word_count = count_words(chapter.content)
     await db.flush()
+    await annotation_anchors.reconcile_chapter(db, chapter, scenes)
     # 原子 UPDATE 的服务端 onupdate 会使属性过期；响应前显式加载，避免异步隐式 IO。
     await db.refresh(chapter, ["updated_at"])
 
@@ -241,9 +242,12 @@ async def _require_safe_legacy_edit(db: AsyncSession, scene: Scene, content: str
 
 async def replace_scene_content(
     db: AsyncSession, chapter: Chapter, scene: Scene, content: str, *, expected_revision: int | None = None,
+    prose_edits: list[ProseEdit] | None = None,
 ) -> None:
     target = await require_scene(db, chapter, scene.id)
     await _require_safe_legacy_edit(db, target, content)
+    if prose_edits:
+        await annotation_anchors.map_edits(db, target, content, prose_edits)
     target.content = content
     await refresh_projection(db, chapter, expected_revision=expected_revision)
 
@@ -673,6 +677,9 @@ async def split_scene_locked(db: AsyncSession, chapter: Chapter, scene_id: int, 
         raise BadRequestError("场景顺序超过可安全调整的范围")
     right = Scene(chapter_id=chapter.id, title=data.right_title.strip(), content=scene.content[data.offset:],
                   summary="", sort=max(s.sort for s in scenes) + 1, separator_before="", active=True)
+    await annotation_anchors.map_edits(db, scene, scene.content[:data.offset], [
+        ProseEdit(start=data.offset, end=len(scene.content), insert=""),
+    ])
     scene.content = scene.content[:data.offset]
     db.add(right)
     await db.flush()
@@ -777,7 +784,11 @@ async def merge_scenes_locked(db: AsyncSession, chapter: Chapter, data: SceneMer
     if data.metadata_source == "right":
         left.title, left.summary = right.title, right.summary
         await clone_scene_planning(db, chapter.project_id, right.id, left.id)
-    left.content += right.separator_before + right.content
+    suffix = right.separator_before + right.content
+    await annotation_anchors.map_edits(db, left, left.content + suffix, [ProseEdit.model_construct(
+        start=len(left.content), end=len(left.content), insert=suffix,
+    )])
+    left.content += suffix
     if merged_doc is not None:
         await apply_merge(db, left, right, merged_doc)
         if moving_enabled:

@@ -4,13 +4,14 @@ import { EditorState } from '@tiptap/pm/state'
 import { StarterKit } from '@tiptap/starter-kit'
 import { App, Button, Space, Typography, theme } from 'antd'
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
-import type { RichDocument } from '../../api/richDocument'
+import type { ProseEdit, RichDocument } from '../../api/richDocument'
 import { richMarkerPalette } from '../../theme/palette'
 import { useResolvedTheme } from '../../theme/themeStore'
 import { codePointToUtf16 } from '../../utils/textOffset'
 import type { TextSelection } from '../chapter/RewritePanel'
 import { editorCodePointSelection, FocusableListItem, PreserveRichPrefixes, RichEnter, RichExactSelection, RichPlainPaste, RichPrefixes, selectEditorCodePoints, selectSectionCodePoints } from './richTextExtensions'
 import { findRichCursor, resolveRichCursor, resolveRichSelection, richCursorCandidates } from './richEditorPositions'
+import { appendProseEdits, transactionProseEdits } from './richProseEdits'
 import { RichMarkerDocument, RichMarkerState } from './richMarkerState'
 import RichMarkerActions from './RichMarkerActions'
 import { AuthorSection } from './richSectionNode'
@@ -24,7 +25,8 @@ import './RichSceneEditor.css'
 
 export interface RichSceneEditorHandle {
   selection: () => { start: number; end: number } | null
-  select: (start: number, end: number) => boolean
+  annotationSelection: () => { start: number; end: number } | null
+  select: (start: number, end: number, proseOnly?: boolean) => boolean
   sectionSelection: () => RichSectionSelection | null
   selectSection: (key: string, start: number, end: number) => boolean
 }
@@ -95,7 +97,20 @@ const RichSceneEditor = forwardRef<RichSceneEditorHandle, Props>(function RichSc
   }
   useImperativeHandle(ref, () => ({
     selection: () => editorRef.current ? editorCodePointSelection(editorRef.current) : null,
-    select: (start, end) => editorRef.current ? selectEditorCodePoints(editorRef.current, start, end) : false,
+    annotationSelection: () => {
+      const editor = editorRef.current
+      if (!editor) return null
+      const dom = editor.view.dom
+      const native = dom.ownerDocument.getSelection()
+      if (!native || native.rangeCount !== 1) return null
+      const range = native.getRangeAt(0)
+      if (!dom.contains(range.startContainer) || !dom.contains(range.endContainer) || range.collapsed) return null
+      return editorCodePointSelection(editor, {
+        from: editor.view.posAtDOM(range.startContainer, range.startOffset),
+        to: editor.view.posAtDOM(range.endContainer, range.endOffset),
+      })
+    },
+    select: (start, end, proseOnly) => editorRef.current ? selectEditorCodePoints(editorRef.current, start, end, proseOnly) : false,
     sectionSelection: () => editorRef.current ? sectionSelection(editorRef.current) : null,
     selectSection: (key, start, end) => editorRef.current ? selectSectionCodePoints(editorRef.current, key, start, end) : false,
   }), [])
@@ -103,6 +118,7 @@ const RichSceneEditor = forwardRef<RichSceneEditorHandle, Props>(function RichSc
   useEffect(() => {
     if (!mount.current) return
     let live = true
+    let composingEdits: ProseEdit[] | null = []
     const reportComposition = () => {
       const active = composingRef.current || sectionComposingRef.current.size > 0
       if (live) setComposing(active)
@@ -119,19 +135,24 @@ const RichSceneEditor = forwardRef<RichSceneEditorHandle, Props>(function RichSc
       RichSectionHistory.configure({ getSavedDocument: () => callbacks.current.savedDocument ?? initial.current }),
       RichSectionDrag.configure({ getSavedDocument: () => callbacks.current.savedDocument ?? initial.current }),
       RichMarkerState.configure({ sectionMode: true, getSavedDocument: () => callbacks.current.savedDocument ?? initial.current,
-        onCompositionChange: (value) => { composingRef.current = value; reportComposition() },
+        onCompositionChange: (value) => { if (value) composingEdits = []; composingRef.current = value; reportComposition() },
         onCompositionCommit: (keys, sectionKeys) => {
           if (!live || !editorRef.current) return
           callbacks.current.onDocument(projectSectionDocument(editorRef.current.getJSON()), {
-            mappedMarkerKeys: keys, explicitMarkerIntent: false, mappedSectionKeys: sectionKeys,
+            proseEdits: composingEdits, mappedMarkerKeys: keys, explicitMarkerIntent: false, mappedSectionKeys: sectionKeys,
           })
         } }), AuthorSection, RichExactSelection, RichPlainPaste, RichEnter],
       content: editorFromSectionDocument(initial.current),
-      editorProps: { attributes: { 'aria-label': '当前场景正文', role: 'textbox', 'aria-multiline': 'true', spellcheck: 'false',
+      editorProps: { attributes: { 'aria-label': '当前场景正文', tabindex: '0', role: 'textbox', 'aria-multiline': 'true', spellcheck: 'false',
         'data-section-ai-enabled': String(!!callbacks.current.onSectionRewrite),
         'data-section-convert-enabled': String(!!callbacks.current.onSectionConvert) } },
       onUpdate({ editor, transaction, appendedTransactions }) {
-        if (composingRef.current || transaction.getMeta(SAVE_BASELINE_SYNC)) return
+        if (transaction.getMeta(SAVE_BASELINE_SYNC)) return
+        const proseEdits = transactionProseEdits([transaction, ...appendedTransactions])
+        if (composingRef.current) {
+          composingEdits = appendProseEdits(composingEdits, proseEdits)
+          return
+        }
         const history = isHistoryTransaction(transaction)
         const mapped = new Set<string>()
         const sections = new Set<string>()
@@ -157,7 +178,7 @@ const RichSceneEditor = forwardRef<RichSceneEditorHandle, Props>(function RichSc
         const current = projectSectionDocument(editor.getJSON())
         const restoredSections = history ? current.sections.filter((item) => !originalSections.has(item.key)).map((item) => item.key) : []
         callbacks.current.onDocument(current, {
-          mappedMarkerKeys: [...mapped], explicitMarkerIntent: history || !!transaction.getMeta('rich-marker-intent'),
+          proseEdits, mappedMarkerKeys: [...mapped], explicitMarkerIntent: history || !!transaction.getMeta('rich-marker-intent'),
           restoredMarkerKeys: restored, mappedSectionKeys: [...sections], explicitSectionIntent: history || !!plan || !!sectionIntent,
           restoredSectionKeys: restoredSections,
         })

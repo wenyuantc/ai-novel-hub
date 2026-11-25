@@ -244,7 +244,9 @@ export class SceneDraftController {
         this.publish({ error: '标记缺少可靠事务映射，完整文档保持不变。' }); return
       }
     }
-    this.evidence = appendSceneEvidence(this.evidence, evidence, document,
+    this.evidence = appendSceneEvidence(this.evidence, { ...evidence,
+      proseEdits: evidence.proseEdits === undefined && source.content === document.content ? [] : evidence.proseEdits,
+    }, document,
       (evidence.restoredMarkerKeys ?? []).filter((key) => !before.has(key) && after.has(key)),
       (evidence.restoredSectionKeys ?? []).filter((key) => !oldSections.has(key) && newSections.has(key)))
     this.publishDraft({ documentDraft: document, draft: { ...this.snapshot.draft, content: document.content },
@@ -749,6 +751,10 @@ export class SceneDraftController {
     } else if (this.attempt?.payload && documentDraft) {
       this.evidence = appendSceneEvidence(this.attempt.evidence, this.evidence, documentDraft,
         this.evidence.restoredMarkerKeys, this.evidence.restoredSectionKeys)
+    }
+    if (dirtyBody && base.content !== latest.scene.content) {
+      // 已核对的远端正文成为新的保存起点，本地输入步骤仅能证明旧底稿上的编辑。
+      this.evidence = { ...this.evidence, proseEdits: null }
     }
     for (const marker of latest.document?.document.markers ?? []) this.retiredMarkerKeys.delete(marker.key)
     this.attempt = null

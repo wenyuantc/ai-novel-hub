@@ -2,6 +2,9 @@ import { BookOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, OrderedLi
 import { Alert, App, Button, Drawer, Input, Modal, Space, Spin, Tabs, Tag, theme, Typography } from 'antd'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { annotationEvidence, type AnnotationThread } from '../../api/annotations'
+import AnnotationPanel, { type AnnotationTarget } from './AnnotationPanel'
+import { sceneDraftDirty } from './sceneDraftController'
 import type { MentionAnchor } from '../../api/mentions'
 import { sceneApi } from '../../api/scenes'
 import { currentRequestGeneration, errorMessage } from '../../api/client'
@@ -59,7 +62,7 @@ export default function SceneWritingPanel({
   styleChoice, skill, onSectionLockChange, onOpenInspectorTab, hasModel, restructureTaskKey, onCloseRestructureTask,
   onSceneMoved, onRestructured,
 }: Props) {
-  const { canEdit, canUseAI, canReadNow, canEditNow } = useProjectAccess(projectId)
+  const { role, isCollaborator, canEdit, canUseAI, canReadNow, canEditNow } = useProjectAccess(projectId)
   const scopeVersion = useProjectStore((state) => state.scopeVersion)
   const { message, modal } = App.useApp()
   const { token } = theme.useToken()
@@ -75,8 +78,9 @@ export default function SceneWritingPanel({
   const [sectionTarget, setSectionTarget] = useState<SectionRewriteTarget | null>(null)
   const input = useRef<TextAreaRef>(null)
   const richEditor = useRef<RichSceneEditorHandle>(null)
+  const pendingAnnotationFocus = useRef<AnnotationThread | null>(null)
   const pendingTimelineFocus = useRef<(TextSelection & { sectionKey?: string }) | null>(null)
-  const [focus, setFocus] = useState<(TextSelection & { sectionKey?: string }) | null>(null) // 各目标 Unicode 码点
+  const [focus, setFocus] = useState<(TextSelection & { sectionKey?: string; annotation?: AnnotationThread }) | null>(null) // 各目标 Unicode 码点
   const scene = state.scene
   const afterSave = <T,>(action: () => Promise<T>) => runAfterSceneSave(runSavedAction, ensureSaved, action)
   const processedMarker = useRef('')
@@ -90,9 +94,16 @@ export default function SceneWritingPanel({
   useEffect(() => {
     if (!focus || mentions || state.loading) return
     const frame = requestAnimationFrame(() => {
+      if (focus.annotation) {
+        const current = controller.getSnapshot()
+        if (!canReadNow() || current.scene?.id !== focus.annotation.scene_id
+          || current.scene.content_revision !== focus.annotation.content_revision || sceneDraftDirty(current)) {
+          setFocus(null); return
+        }
+      }
       if (richEditor.current) {
         const selected = focus.sectionKey ? richEditor.current.selectSection(focus.sectionKey, focus.start, focus.end)
-          : richEditor.current.select(focus.start, focus.end)
+          : richEditor.current.select(focus.start, focus.end, !!focus.annotation)
         if (!selected) message.warning('目标位置不能可靠映射，请重新定位。')
         setFocus(null)
       } else {
@@ -107,7 +118,7 @@ export default function SceneWritingPanel({
       }
     })
     return () => cancelAnimationFrame(frame)
-  }, [focus, mentions, state.loading, state.documentDraft, controller, message, onSelection])
+  }, [focus, mentions, state.loading, state.documentDraft, controller, message, onSelection, canReadNow])
   useEffect(() => {
     if (!markerJump || !scene || state.loading || processedMarker.current) return
     const frame = requestAnimationFrame(() => {
@@ -137,6 +148,57 @@ export default function SceneWritingPanel({
     pendingTimelineFocus.current = { start: location.start, end: location.end, sectionKey: location.sectionKey }
     setMentions(false); setTimelineOpen(false)
     return true
+  }
+  const captureAnnotation = async (): Promise<AnnotationTarget | null> => {
+    const source = controller.getSnapshot()
+    if (!canReadNow() || !source.scene || source.loading || source.composing || mentions) return null
+    const textarea = input.current?.resizableTextArea?.textArea
+    const range = richEditor.current?.annotationSelection()
+    const start = range?.start ?? (textarea ? reviewTextareaOffset(source.draft.content, textarea.value, textarea.selectionStart) : null)
+    const end = range?.end ?? (textarea ? reviewTextareaOffset(source.draft.content, textarea.value, textarea.selectionEnd) : null)
+    if (start === null || end === null || start >= end) {
+      throw new Error('请先在当前场景的正式正文中选中一段文字；选区不能穿过作者区块。')
+    }
+    const sceneId = source.scene.id
+    const text = Array.from(source.draft.content).slice(start, end).join('')
+    if (sceneDraftDirty(source)) {
+      if (!canEditNow() || !await ensureSaved()) return null
+      const savedRange = richEditor.current?.annotationSelection()
+      if (!savedRange || savedRange.start !== start || savedRange.end !== end) {
+        throw new Error('保存期间选区已变化，请重新选择原文。')
+      }
+    }
+    const beforeHash = controller.getSnapshot()
+    const evidence = await annotationEvidence(text)
+    const latest = controller.getSnapshot()
+    if (!canReadNow() || latest.scene?.id !== sceneId || latest.scene.content_revision !== beforeHash.scene?.content_revision
+        || latest.scene.content !== source.draft.content || sceneDraftDirty(latest) || latest.conflict || latest.unknownSave) {
+      throw new Error('保存期间稿件已变化，请重新核对并选择原文。')
+    }
+    return { text, selection: { scene_id: sceneId, expected_content_revision: latest.scene.content_revision, start, end, ...evidence } }
+  }
+  const jumpAnnotation = async (item: AnnotationThread) => {
+    if (!canReadNow() || !item.anchor_valid || item.start === null || item.end === null) return false
+    if (sceneDraftDirty(controller.getSnapshot())) throw new Error('请先保存当前草稿，再跳到原文。')
+    if (!await onSelect(item.scene_id) || !canReadNow()) return false
+    const server = await sceneApi.get(projectId, chapter.id, item.scene_id, undefined, canReadNow)
+    const snapshot = controller.getSnapshot()
+    if (!canReadNow() || snapshot.scene?.id !== item.scene_id || sceneDraftDirty(snapshot)
+      || server.content_revision !== item.content_revision || snapshot.scene.content_revision !== item.content_revision) {
+      throw new Error('原稿版本已变化，请重新读取正文和本章批注。')
+    }
+    pendingAnnotationFocus.current = item
+    setMentions(false)
+    return true
+  }
+  const finishAnnotationJump = () => {
+    const item = pendingAnnotationFocus.current
+    pendingAnnotationFocus.current = null
+    const snapshot = controller.getSnapshot()
+    if (item && canReadNow() && !sceneDraftDirty(snapshot) && snapshot.scene?.id === item.scene_id
+      && snapshot.scene.content_revision === item.content_revision && item.start !== null && item.end !== null) {
+      setFocus({ start: item.start, end: item.end, annotation: item })
+    }
   }
   const relink = async (item: MarkerTimelineItem) => {
     if (!canEditNow() || disabled) return false
@@ -427,6 +489,15 @@ export default function SceneWritingPanel({
             >
               {summaryOpen ? '收起摘要' : '作者摘要'}
             </Button>
+            {(role === 'owner' || isCollaborator) && <AnnotationPanel
+              key={`annotations:${projectId}:${chapter.id}:${scopeVersion}`}
+              pid={projectId} cid={chapter.id} owner={role === 'owner'} current={canReadNow}
+              selectionDisabled={state.composing || state.loading || sectionBusy || mentions}
+              capture={captureAnnotation} jump={jumpAnnotation} finishJump={finishAnnotationJump}
+              refreshScene={async () => {
+                if (!canReadNow() || !await controller.load()) throw new Error('无法读取最新稿件，请重试。')
+              }}
+            />}
             <SceneStructureActions
               key={`structure:${scene.id}`}
               projectId={projectId}

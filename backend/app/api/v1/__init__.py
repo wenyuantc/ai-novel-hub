@@ -14,6 +14,7 @@ from app.api.v1 import (
     ai_configs,
     ai_usage,
     analysis,
+    annotations,
     api_keys,
     auth,
     batch,
@@ -106,6 +107,7 @@ api_router.include_router(careers.router)
 api_router.include_router(foreshadows.router)
 api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
+api_router.include_router(annotations.router)
 api_router.include_router(serialization.router)
 api_router.include_router(writing_stats.router)
 api_router.include_router(scene_ai.router)

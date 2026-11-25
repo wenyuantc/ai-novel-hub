@@ -589,10 +589,14 @@ async def _apply(
         except UnsafeMapping as exc:
             raise ConflictError(str(exc), extra={"code": "rich_document_unmapped"}) from exc
     await version_service.ensure_baseline(db, chapter)
+    from app.schemas.rich_document import ProseEdit
+    from app.services.annotation_anchors import map_edits
+
+    edits = [ProseEdit(start=start, end=end, insert=data.replacement)]
     if mapped is None:
         await scene_service.replace_scene_content(
             db, chapter, scene, content[:start] + data.replacement + content[end:],
-            expected_revision=data.expected_content_revision,
+            expected_revision=data.expected_content_revision, prose_edits=edits,
         )
     else:
         from app.services.rich_document_service import write_mapped_document
@@ -600,6 +604,7 @@ async def _apply(
         assert current is not None
         expected = (data.expected_content_revision if data.expected_content_revision is not None
                     else chapter.content_revision)
+        await map_edits(db, scene, mapped.content, edits)
         await write_mapped_document(db, project_id, scene, current, mapped, expected)
         await scene_service.refresh_projection(db, chapter, expected_revision=expected)
     # 新预览已在上面核验位置和场景快照。无绑定的兼容请求照常保存，无法归入 AI 写作。

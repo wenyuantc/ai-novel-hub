@@ -106,8 +106,10 @@ async def convert_section(
             "code": "stale_scene_revision", "current_revision": current.content_revision,
         })
     converted = conversion(current.document, section_key)
+    section = next(item for item in current.document.sections if item.key == section_key)
     body = SceneDocumentSave.model_validate({
         "expected_content_revision": expected_revision, "document": converted.model_dump(mode="json"),
+        "prose_edits": [{"start": section.anchor, "end": section.anchor, "insert": section.content}],
         "add_section_keys": [], "delete_section_keys": [str(section_key)],
         "add_marker_keys": [], "delete_marker_keys": [],
         "mapped_section_keys": [str(item.key) for item in current.document.sections if item.key != section_key],

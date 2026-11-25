@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import hash_password
-from app.models import Project, Task, User
+from app.models import AnnotationMessage, Project, Task, User
 from app.models.entities import FINISHED_TASK_STATUSES
 from app.schemas.admin import (
     AdminResourceUsage,
@@ -259,6 +259,12 @@ async def delete_user(db: AsyncSession, actor: User, user_id: int) -> None:
             )
         await task_statistics_service.mark_removed(db, Task.user_id == user_id)
         await authz.advance(db)
+        authored = AnnotationMessage.author_id == user_id
+        # 发言与删号共用 User 写屏障。无历史留言时跳过对留言表的空更新。
+        if await db.scalar(select(AnnotationMessage.id).where(authored).limit(1)) is not None:
+            await db.execute(update(AnnotationMessage).where(authored).values(
+                author_name="已注销用户", operation_id=None,
+            ))
         await db.delete(user)
         await audit.commit(flush_fn=_flush_user_delete)
 

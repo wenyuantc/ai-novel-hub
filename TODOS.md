@@ -338,11 +338,11 @@
 
 ### 28. 协作批注
 
-已进入规划（2026-11-23）。计划让查看者和编辑者在章节工作台就一段正文讨论，由作者处理意见。详见[需求与验收](.trellis/tasks/11-23-collaboration-annotations/prd.md)和[实施计划](.trellis/tasks/11-23-collaboration-annotations/implement.md)。
+已实现。查看者和编辑者可从章节「查看」页选中原句发起讨论，作者可在同一处回复和处理。已验证重复原句定位、改稿后平移或失效、过期选区保留草稿，以及 v17 单书备份和两种数据库的整库恢复。详见[浏览器验收](.trellis/tasks/archive/2026-11/11-23-collaboration-annotations/research/browser.md)和[整库恢复记录](.trellis/tasks/archive/2026-11/11-23-collaboration-annotations/research/native-backup-validation.md)。
 
-- [ ] 允许协作者对正文选区添加批注并回复，作者可标记为已处理。
-- [ ] 正文修改后批注位置失效时给出提示，而不是静默错位。
-- [ ] 普通阅读、书稿导出和 AI 上下文默认排除批注。单书备份和整库备份都完整保留批注与回复，恢复后可继续审阅。
+- [x] 允许协作者对正文选区添加批注并回复，作者可标记为已处理。
+- [x] 正文修改后批注位置失效时给出提示，而不是静默错位。
+- [x] 普通阅读、书稿导出和 AI 上下文默认排除批注。单书备份和整库备份都完整保留批注与回复，恢复后可继续审阅。
 
 ### 29. 发布前检查与外部平台对接
 

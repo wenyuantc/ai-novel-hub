@@ -27,14 +27,15 @@ from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
 from app.services import authorization_service, personal_projection, project_lifecycle, setting_ai_visibility
 from app.services.project_service import get_owned_project
 from app.services.project_transfer import thumbnails
+from app.services.project_transfer.annotations import AnnotationState, annotation_state, export_threads
 from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
 from app.services.project_transfer.serialization import SerializationState, serialization_state
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 16
+VERSION = 17
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0073"
+APP_SCHEMA = "0074"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -55,6 +56,7 @@ class ExportPlan:
     ai_revision: int
     planning_revision: int
     content_revisions: dict[int, int]
+    annotation_state: AnnotationState
     serialization_state: SerializationState
 
     @property
@@ -83,6 +85,7 @@ async def prepare_export(db: AsyncSession, user_id: int, project_id: int, option
                       image_versions=await thumbnails.versions(db, project.id),
                       ai_revision=project.ai_visibility_revision, planning_revision=project.planning_revision,
                       content_revisions=content_revisions,
+                      annotation_state=await annotation_state(db, project.id),
                       serialization_state=await serialization_state(db, project.id))
 
 
@@ -255,6 +258,8 @@ async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> Asy
     while True:
         await _assert_export_active(db, plan)
         rows = (await db.execute(base.where(key > last).order_by(key).limit(page_size))).mappings().all()
+        if rule.table == "annotation_threads":
+            rows = await export_threads(db, rows)
         casts: dict[int, list[int]] = {}
         if rule.table == "chapter_plans":
             chapter_ids = [row["chapter_id"] for row in rows if row["chapter_id"] is not None]
@@ -389,6 +394,8 @@ async def validate_export(db: AsyncSession, plan: ExportPlan, *, complete: bool 
     current_planning = await db.scalar(select(Project.planning_revision).where(Project.id == plan.project_id))
     if await thumbnails.versions(db, plan.project_id) != plan.image_versions:
         raise ConflictError("备份导出期间缩略图已变化，请重新导出", extra={"code": "thumbnail_changed"})
+    if await annotation_state(db, plan.project_id) != plan.annotation_state:
+        raise ConflictError("备份导出期间协作批注已变化，请重新导出", extra={"code": "annotation_changed"})
     if await serialization_state(db, plan.project_id) != plan.serialization_state:
         raise ConflictError("备份导出期间连载数据已变化，请重新导出", extra={"code": "serialization_changed"})
     if current_revisions != plan.content_revisions or current_planning != plan.planning_revision:

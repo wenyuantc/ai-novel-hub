@@ -1,12 +1,12 @@
-import { getSchema } from '@tiptap/core'
+import { type Editor, getSchema } from '@tiptap/core'
 import { StarterKit } from '@tiptap/starter-kit'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { RichDocument, RichSection } from '../../api/richDocument'
 import { findRichCursor, resolveRichCursor, resolveRichSelection, richCursorCandidates } from './richEditorPositions'
 import { RichMarkerDocument } from './richMarkerState'
 import { AuthorSection } from './richSectionNode'
 import { editorFromSectionDocument } from './richSectionProjection'
-import { FocusableListItem, RichPrefixes } from './richTextExtensions'
+import { editorCodePointSelection, FocusableListItem, RichPrefixes, selectEditorCodePoints } from './richTextExtensions'
 
 const format = () => ({ version: 1 as const, boundaries: [], inline: [], blocks: [] })
 const section = (key: string, anchor: number, order: number): RichSection => ({
@@ -45,5 +45,22 @@ describe('正文／区块结构化光标', () => {
     expect(inner.cursor).toEqual({ scope: 'section', sectionKey: 'a', offset: 1 })
     expect(findRichCursor(doc, inner.cursor)).toBe(inner.pm)
     expect(resolveRichSelection(doc, before.pm, inner.pm)).toBeNull()
+  })
+  it('只读批注能定位到区块后第二个相同原句，跨区块选区无法建立或跳转', () => {
+    const doc = make('甲🙂甲🙂', [section('a', 2, 0)])
+    const select = vi.fn()
+    const node = {}
+    const editor = { isEditable: false, state: { doc }, view: {
+      dom: { ownerDocument: { getSelection: () => ({ setBaseAndExtent: select }) } },
+      domAtPos: (pos: number) => ({ node, offset: pos }),
+    } } as unknown as Editor
+    const afterSection = richCursorCandidates(doc, { scope: 'prose', offset: 2 }).at(-1)!.pm
+    const end = richCursorCandidates(doc, { scope: 'prose', offset: 4 })[0].pm
+    const first = richCursorCandidates(doc, { scope: 'prose', offset: 0 })[0].pm
+    expect(editorCodePointSelection(editor, { from: afterSection, to: end })).toEqual({ start: 2, end: 4 })
+    expect(editorCodePointSelection(editor, { from: first, to: end })).toBeNull()
+    expect(selectEditorCodePoints(editor, 0, 4, true)).toBe(false)
+    expect(selectEditorCodePoints(editor, 2, 4, true)).toBe(true)
+    expect(select).toHaveBeenCalledExactlyOnceWith(node, afterSection, node, end)
   })
 })
