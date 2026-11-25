@@ -114,7 +114,7 @@ async def test_series_backup_materializes_only_the_book_and_remaps_cast(
 
     file = await _backup(client, b["id"])
     assert file["version"] == 16
-    assert file["app_schema"] == "0068"
+    assert file["app_schema"] == "0071"
     assert not {"series_books", "series_entry_uses", "series_entries"} & set(file["tables"])
     assert [(r["id"], r["name"]) for r in file["tables"]["characters"]] == [(local_id, "林青")]
     assert [(r["id"], r["title"]) for r in file["tables"]["world_settings"]] == [

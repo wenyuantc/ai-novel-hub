@@ -5,11 +5,12 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
 from app.models import AIConfig, Chapter, GenerationLog, KbChunk, KbDocument, RetrievalChunk, Task
+from app.models.writing_stats import WritingDailyStat
 from app.services import ai_config_service, chapter_claim, generation_service, retrieval_service
 from app.services.task_engine.handlers.chapter import ChapterHandler, bind_queued_claim, capture_queued_claim
 from tests.helpers import Gate, create_ai_config, create_project, parse_sse, register, wait_task, wait_until
@@ -294,6 +295,10 @@ async def test_lost_commit_confirmation_recovers_exact_completed_result(app, cli
         receipt = row.checkpoint["_chapter_claim"]
         assert receipt["phase"] == "completed" and receipt["task_key"] == row.statistics_key
         assert chapter.content == "只提交一次的新正文" and chapter.generation_claim_key is None
+        ai_words = await db.scalar(select(func.sum(WritingDailyStat.ai_words)).where(
+            WritingDailyStat.user_id == row.user_id, WritingDailyStat.project_id == project["id"],
+        ))
+        assert ai_words == len("只提交一次的新")
     response = await client.get(f"/api/v1/tasks/{task['id']}", params={"task_key": task["task_key"]})
     assert "_chapter_claim" not in response.text and receipt["claim_key"] not in response.text
     assert "_chapter_claim" not in repr(events) and receipt["claim_key"] not in repr(events)

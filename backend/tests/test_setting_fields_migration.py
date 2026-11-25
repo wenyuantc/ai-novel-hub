@@ -179,6 +179,8 @@ def _schema_0055_model_contract(inspector, table):
     """从当前 ORM 的反射结果中移除 0055 之后新增的字段和索引。"""
     contract = _schema_contract(inspector, table)
     if table == "projects":
+        # 0071 单书导入在本实例中的个人统计起点。
+        assert contract["columns"].pop("writing_stats_started_at") == ("DATETIME", True, None)
         # 删除请求的执行者归属由 0068 引入。
         assert contract["columns"].pop("deletion_worker_key") == ("VARCHAR(36)", True, None)
     if table == "agent_conversations":

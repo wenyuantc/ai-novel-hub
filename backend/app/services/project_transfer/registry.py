@@ -99,6 +99,8 @@ OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "insp
 # 与项目相关、但不导出的表（理由见值）。
 # book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
+    "writing_daily_stats": "每日写作量属于本实例的操作者与作品，导入的新作品从零统计",
+    "writing_goals": "个人码字目标由操作者在新作品中独立设置",
     "ai_usage_calls": "调用用量记录属于发出请求的实例，导入不产生本实例费用",
     "ai_usage_budgets": "预算是本实例的费用配置，单书导入后由作者独立配置",
     "consistency_runs": "一致性检查的运行记录是任务运行态；问题对它的引用导入后为空，台账与问题随作品迁移",
@@ -177,7 +179,7 @@ PROJECT_RULE = TableRule(
     custom=("default_style_id",),
     # 旧的写作风格自由文本：迁移 0013 起不再读写
     exclude=(
-        "style", "deleted_at", "last_deleted_at", "deleted_by_user_id",
+        "style", "deleted_at", "last_deleted_at", "deleted_by_user_id", "writing_stats_started_at",
         "deleted_by_username", "deletion_started_at", "deletion_token", "deletion_worker_key",
         "planning_revision",  # 新作品独立的并发版本，不导出或随效果回退。
         "fields_revision",  # 字段目录版本属于新作品，不复制源作品的并发代次。

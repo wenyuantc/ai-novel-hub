@@ -47,6 +47,7 @@ from app.services.chapter_service import commit_versioned, count_words, get_manu
 from app.services.collaboration_task_access import task_grant_identity
 from app.services.generation_service import Event, elapsed_ms, ensure_outside_batch, stream_pieces
 from app.services.project_service import get_owned_project
+from app.services.writing_stats import count_added_words, record_words
 
 logger = logging.getLogger(__name__)
 
@@ -601,6 +602,13 @@ async def _apply(
                     else chapter.content_revision)
         await write_mapped_document(db, project_id, scene, current, mapped, expected)
         await scene_service.refresh_projection(db, chapter, expected_revision=expected)
+    # 新预览已在上面核验位置和场景快照。无绑定的兼容请求照常保存，无法归入 AI 写作。
+    if (log is not None and log.status == "success" and log.kind in REWRITE_KINDS
+            and "scene_id" in log.params and "section_key" not in log.params):
+        await record_words(
+            db, user_id=user_id, project_id=project_id, source="ai",
+            words=count_added_words(data.original, data.replacement),
+        )
     await version_service.record(db, chapter, "rewrite", log_id=log.id if log else None)
     return chapter, scene
 

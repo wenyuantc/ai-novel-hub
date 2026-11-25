@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError
 from app.models import Scene, SceneDocumentMeta, SceneMarker, SceneSection
 from app.schemas.rich_document import SceneDocument, SceneDocumentOut, SceneDocumentSave, marker_excerpt
-from app.services import scene_service, setting_ai_visibility, version_service
+from app.services import scene_service, setting_ai_visibility, version_service, writing_stats
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import get_manual_chapter
 from app.services.rich_document_core import validate_storage_bounds
@@ -320,6 +320,11 @@ async def save_document(
         await version_service.ensure_baseline(db, chapter, force=True)
         await _write_document_rows(db, project_id, scene, body, current, section_rows, marker_rows)
         await scene_service.refresh_projection(db, chapter, expected_revision=body.expected_content_revision)
+        if converted_section_key is None:
+            await writing_stats.record_words(
+                db, user_id=user_id, project_id=project_id, source="manual",
+                words=writing_stats.count_added_words(current.content, body.document.content),
+            )
         version = await version_service.record_manual(db, chapter)
         audit.version(version, project_id)
         audit.summary.changed_fields = ["content"]

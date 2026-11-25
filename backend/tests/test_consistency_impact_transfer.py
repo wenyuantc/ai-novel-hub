@@ -56,7 +56,7 @@ async def _seed_impact(client, app) -> tuple[dict, list[int]]:
 async def test_v13_roundtrip_remaps_impact_references(client, app):
     project, (first, second) = await _seed_impact(client, app)
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (16, "0068")
+    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (16, "0071")
     (row,) = data["tables"]["consistency_impacts"]
     assert not {"project_id", "actor_id", "task_id"} & set(row) and row["chapter_id"] == first
     ledger_row = next(r for r in data["tables"]["consistency_ledgers"] if r["chapter_id"] == first)

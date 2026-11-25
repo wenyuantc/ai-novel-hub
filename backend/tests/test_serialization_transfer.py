@@ -60,7 +60,7 @@ async def test_serialization_transfer_roundtrip(app, client, detached):
         result = await client.delete(chapter_url)
         assert result.is_success, result.text
     data = await _backup(client, pid, versions=0)
-    assert (data["version"], data["app_schema"]) == (16, "0068")
+    assert (data["version"], data["app_schema"]) == (16, "0071")
     tables = data["tables"]
     assert "chapter_versions" not in tables
     assert tables["serialization_goals"] == [{"daily_goal": 2}]

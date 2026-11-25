@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter
 from app.services import analysis_service, generation_service, scene_service, version_service
+from app.services.writing_stats import count_added_words, record_words
 
 from .base import EmptyArgs, Tool, ToolCtx
 
@@ -74,6 +75,10 @@ async def execute(ctx: ToolCtx, args: ReplaceArgs) -> dict:
     await scene_service.replace_scene_content(
         ctx.db, chapter, scene, scene.content[:start] + args.replacement + scene.content[end:],
         expected_revision=chapter.content_revision,
+    )
+    await record_words(
+        ctx.db, user_id=ctx.user_id, project_id=ctx.project_id, source="ai",
+        words=count_added_words(args.original, args.replacement),
     )
     content = chapter.content
     after = await version_service.record(ctx.db, chapter, "agent", note="智能体局部替换")

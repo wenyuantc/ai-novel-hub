@@ -79,6 +79,7 @@ from app.services.task_engine.execution_identity import (
     matches_running_base,
     require_live_worker,
 )
+from app.services.writing_stats import count_added_words, record_words
 
 logger = logging.getLogger(__name__)
 
@@ -1537,6 +1538,7 @@ async def _save_chapter_result(
                         raise asyncio.CancelledError
                     await db.commit()
                     return {"rich_review": review}
+            previous_contents = {scene.id: scene.content for scene in scenes}
             await version_service.ensure_baseline(db, chapter)
             if plans is not None:
                 from app.services.rich_document_proposal_mapping import resolve_scene_proposal
@@ -1566,6 +1568,10 @@ async def _save_chapter_result(
                 )
             if job.chapter_claim is not None and not await chapter_claim.release_chapter_claim(db, job.chapter_claim):
                 raise ConflictError("章节生成状态已变化，生成结果未保存", extra={"code": "chapter_claim_changed"})
+            await record_words(
+                db, user_id=job.user_id, project_id=job.project_id, source="ai",
+                words=sum(count_added_words(previous_contents[scene.id], scene.content) for scene in scenes),
+            )
             chapter.status = "done"
             log = await generation_log_service.write_log(db, **log_values, model_binding=job.model_binding)
             version = await version_service.record(db, chapter, job.mode, log_id=log.id)

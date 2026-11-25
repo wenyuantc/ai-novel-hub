@@ -29,6 +29,7 @@ from app.services import (
     setting_progression_service,
     style_service,
     version_service,
+    writing_stats,
 )
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation
@@ -277,7 +278,10 @@ async def create_chapter(db: AsyncSession, user_id: int, project_id: int, data: 
 
         await db.flush()
         await initialize_chapter(db, chapter)
-        if data.content.strip():
+        if chapter.word_count:
+            await writing_stats.record_words(
+                db, user_id=user_id, project_id=project_id, source="manual", words=chapter.word_count,
+            )
             await db.flush()
             version = await version_service.record_manual(db, chapter)
             audit.version(version, project_id)
@@ -452,9 +456,14 @@ async def update_chapter(
         if data.content is not None:
             if content_changed and not data.content.strip():
                 await version_service.ensure_baseline(db, chapter, force=True)
-            await scene_service.replace_legacy_content(
+            before, after = await scene_service.replace_legacy_content(
                 db, chapter, data.content, expected_revision=data.expected_content_revision,
             )
+            if manual and content_changed:
+                await writing_stats.record_words(
+                    db, user_id=user_id, project_id=project_id, source="manual",
+                    words=writing_stats.count_added_words(before, after),
+                )
         if title_changed and chapter.content_revision == original_revision:
             # 改回原名也必须消耗版本，迟到的旧标题请求不能重新满足写入条件。
             await scene_service.touch_revision(db, chapter, original_revision)

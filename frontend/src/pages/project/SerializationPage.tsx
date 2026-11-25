@@ -8,6 +8,7 @@ import DailyGoalModal from '../../components/serialization/DailyGoalModal'
 import ReleaseCalendar from '../../components/serialization/ReleaseCalendar'
 import SerializationChapterDrawer from '../../components/serialization/SerializationChapterDrawer'
 import SerializationPublicationDrawer from '../../components/serialization/SerializationPublicationDrawer'
+import WritingStatsPanel from '../../components/serialization/WritingStatsPanel'
 import WorkbenchLibrary from '../../components/serialization/WorkbenchLibrary'
 import { deepLinkId } from '../../components/serialization/calendarModel'
 import { QueryFeedback } from '../../components/serialization/SerializationLists'
@@ -61,6 +62,7 @@ function Workbench({ projectId }: { projectId: number }) {
     }}>设置日更目标</Button>}>
     <QueryFeedback {...summary} onReload={summary.reload} />
     {summary.data && <StockSummary data={summary.data} />}
+    <WritingStatsPanel projectId={projectId} version={version} />
     <ReleaseCalendar projectId={projectId} date={date} onDate={setDate} overview={summary.data} version={version}
       onChapter={onChapter} onPublication={onPublication} />
     <WorkbenchLibrary projectId={projectId} version={version} onChapter={onChapter} onPublication={onPublication} />

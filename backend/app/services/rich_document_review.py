@@ -50,6 +50,7 @@ from app.services.rich_document_proposal_mapping import (
 )
 from app.services.system_settings_snapshot import settings_for_consumer
 from app.services.task_engine.drain import TaskAdmissionClosed, require_task_admission_open
+from app.services.writing_stats import count_added_words, record_words
 
 if TYPE_CHECKING:
     from app.services.generation_service import ChapterJob
@@ -1173,6 +1174,10 @@ async def _accept_review(
         else:
             scene.content = document.content
     await scene_service.refresh_projection(db, chapter, expected_revision=proposal.content_revision)
+    await record_words(
+        db, user_id=task.user_id, project_id=project_id, source="ai",
+        words=sum(count_added_words(source[scene.id].content, scene.content) for scene in scenes),
+    )
     chapter.status = "done"
     # 升级前已持久化的提案没有 actor；绑定的任务本人是可信历史身份。
     values["actor_user_id"] = task.user_id

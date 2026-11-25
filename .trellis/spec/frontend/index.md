@@ -27,6 +27,7 @@
 | [全文提及与作品笔记跨层契约](../backend/mention-tracking.md) | 草稿/阅读标记、设定预览、四来源深链、失效位置、热力图、笔记保存与加载重试 | 已填写 |
 | [全书搜索与批量修订](../backend/book-search.md) | 字面搜索、阅读定位、逐项预览、整批撤销与版本冲突 | 已填写 |
 | [连载与存稿工作台](../backend/serialization.md) | 共用排期、稿件确认、首次发布统计、历史稿导出与单书恢复 | 已填写 |
+| [个人写作统计与码字目标](../backend/writing-stats.md) | 按人和作品计字、AI 实际落稿、目标修订号与趋势区间 | 已填写 |
 | [可阅读文档组合导出跨层契约](../backend/document-export.md) | 章景及资料多选、DOCX／MD／TXT、下载身份与弹窗失效 | 已填写 |
 | [组件规范](./component-guidelines.md) | AntD/zh_CN 配置、可复用组件、页面模式、章节编辑器行为、AI 配置页提示、管理页 / `RequirePermission`、项目智能体面板与 external 提案卡片、Skill / MCP 插件页（`SkillSelect` 复用、请求头编辑语义）、提示词组件库页（`ComponentRefs` 插入引用、修订冲突保留草稿、`?id` / `?skill=` 深链） | 已填写 |
 | [角色、授权与配额跨层契约](../backend/rbac-quotas.md) | required能力快照、角色/分配/配额三态、逐动作路由、同actor撤权与旧响应隔离、完整人工只读面 | 已填写 |

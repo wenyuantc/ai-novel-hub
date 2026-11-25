@@ -259,6 +259,7 @@ class Project(TimestampMixin, Base):
     last_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     deleted_by_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    writing_stats_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deletion_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deletion_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     deletion_worker_key: Mapped[str | None] = mapped_column(String(36))

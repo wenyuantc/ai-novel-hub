@@ -1623,6 +1623,8 @@ class _Importer:
         values["title"] = await _final_title(
             self.db, self.user_id, title if title and title.strip() else str(self.backup.project.get("title") or "")
         )
+        # created_at 保留原作资料，个人计量从本实例导入时刻开始。
+        values["writing_stats_started_at"] = datetime.now(UTC)
         ref = self.backup.project.get("default_style_ref")
         project = Project(user_id=self.user_id, default_style_id=self.style_ids.get(ref) if ref else None, **values)
         self.db.add(project)

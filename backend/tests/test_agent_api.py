@@ -136,7 +136,17 @@ async def test_undo_turn_is_atomic_when_earlier_change_conflicts(client, fake_ll
     assert all(c["status"] == "executed" for c in (await client.get(url)).json()["changes"])
 
 
-async def test_text_edit_records_agent_version_and_undo_restore(client, fake_llm):
+async def test_text_edit_records_agent_version_and_undo_restore(app, client, fake_llm):
+    from sqlalchemy import func, select
+
+    from app.models.writing_stats import WritingDailyStat
+
+    async def ai_words():
+        async with app.state.sessionmaker() as db:
+            return (await db.scalar(select(func.sum(WritingDailyStat.ai_words)).where(
+                WritingDailyStat.project_id == project["id"],
+            ))) or 0
+
     project, base, url = await setup_agent(client)
     chapter = (
         await client.post(
@@ -162,6 +172,7 @@ async def test_text_edit_records_agent_version_and_undo_restore(client, fake_llm
     task_ref = await send_task(client, url)
     task_id = task_ref["id"]
     await wait_task(client, task_ref, statuses=("paused",))
+    assert await ai_words() == 0
     response = await client.post(
         base + f"/turns/{task_id}/confirm-all",
         json=await turn_action(client, url, task_ref, "confirm-all"),
@@ -173,6 +184,7 @@ async def test_text_edit_records_agent_version_and_undo_restore(client, fake_llm
     assert (await client.get(chapter_url)).json()["content"] == "林远推开门，踏入夜色。"
     versions = (await client.get(chapter_url + "/versions")).json()
     assert any(v["source"] == "agent" for v in versions), versions
+    assert await ai_words() == 3
     response = await client.post(
         base + f"/turns/{task_id}/undo",
         json=await turn_action(client, url, task_ref, "undo"),
@@ -181,6 +193,7 @@ async def test_text_edit_records_agent_version_and_undo_restore(client, fake_llm
     assert (await client.get(chapter_url)).json()["content"] == "林远推开门，走进雨夜。"
     versions = (await client.get(chapter_url + "/versions")).json()
     assert any(v["source"] == "restore" for v in versions), versions
+    assert await ai_words() == 3
 
 
 async def test_start_task_is_confirmed_and_can_be_cancelled(client, fake_llm):
@@ -256,7 +269,7 @@ async def test_agent_versions_and_success_error_logs_survive_backup(client, fake
     assert any(v["source"] == "agent" for v in backup["tables"]["chapter_versions"])
     imported = await _import(client, backup)
     copied = await _backup(client, imported["project"]["id"], versions="1", logs="1")
-    assert copied["app_schema"] == "0068" and copied["version"] == 16
+    assert copied["app_schema"] == "0071" and copied["version"] == 16
     assert {log["status"] for log in copied["tables"]["generation_logs"]} == {"success", "error"}
     assert all(log["kind"] == "agent.turn" for log in copied["tables"]["generation_logs"])
 

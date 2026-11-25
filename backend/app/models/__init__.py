@@ -100,8 +100,12 @@ from app.models.setting_images import SettingImageResource, SettingThumbnailBind
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
 from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
+from app.models.writing_stats import WritingDailyStat, WritingGoal, WritingStatsTracking
 
 __all__ = [
+    "WritingDailyStat",
+    "WritingGoal",
+    "WritingStatsTracking",
     "NovelTemplate",
     "NovelTemplateCreationReceipt",
     "NovelTemplateImage",

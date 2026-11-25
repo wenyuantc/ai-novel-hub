@@ -30,7 +30,7 @@ BEIJING = ZoneInfo("Asia/Shanghai")
 
 
 @asynccontextmanager
-async def _read_snapshot(db: AsyncSession, user_id: int, project_id: int):
+async def workbench_read_snapshot(db: AsyncSession, user_id: int, project_id: int):
     actor = db.info.get("authenticated_actor")
     if not isinstance(actor, AuthenticatedActor) or actor.id != user_id:
         raise UnauthorizedError("未登录或登录已过期")
@@ -137,7 +137,7 @@ async def overview(db: AsyncSession, user_id: int, project_id: int, month: date)
     days = {first_day.replace(day=i): {"date": first_day.replace(day=i), "planned_count": 0, "first_published_count": 0}
             for i in range(1, length + 1)}
     last_day = first_day.replace(day=length)
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         goal = await reader.get(Goal, project_id)
         target = goal.daily_goal if goal else None
         stock = await reader.scalar(select(func.count()).select_from(_chapters(project_id, stock_only=True).subquery()))
@@ -171,7 +171,7 @@ async def list_chapters(db: AsyncSession, user_id: int, project_id: int, *, plan
         statement = statement.where(Entry.planned_date == planned_date)
     if stage is not None:
         statement = statement.where(func.coalesce(Entry.stage, "revision") == stage)
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         return await _page(reader, statement.order_by(Chapter.chapter_no, Chapter.id), offset, limit)
 
 
@@ -182,7 +182,7 @@ async def day_detail(db: AsyncSession, user_id: int, project_id: int, day: date,
     first_rows = _publications(project_id).join(first, first.c.publication_id == Publication.id).where(
         first.c.position == 1, first.c.published_at >= _day_start(day), first.c.published_at < _end_after(day),
     ).order_by(Publication.published_at, Publication.id)
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         return {"planned": await _page(reader, planned, offset, limit),
                 "first_published": await _page(reader, first_rows, offset, limit)}
 
@@ -195,7 +195,7 @@ async def list_publications(db: AsyncSession, user_id: int, project_id: int, *, 
     if channel is not None:
         statement = statement.where(Publication.channel == channel.strip())
     statement = statement.order_by(Publication.published_at.desc(), Publication.id.desc())
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         return await _page(reader, statement, offset, limit)
 
 
@@ -211,7 +211,7 @@ def _draft_data(draft: FrozenDraft) -> dict:
 
 async def chapter_detail(db: AsyncSession, user_id: int, project_id: int, chapter_id: int,
                          edition_id: int | None = None) -> dict:
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         chapter = (await reader.execute(_chapters(project_id).where(Chapter.id == chapter_id))).mappings().one_or_none()
         if chapter is None:
             raise NotFoundError("章节不存在")
@@ -254,7 +254,7 @@ async def _read_publication(db: AsyncSession, project_id: int, publication_id: i
 
 
 async def publication_detail(db: AsyncSession, user_id: int, project_id: int, publication_id: int) -> dict:
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         status, record, edition = await _read_publication(reader, project_id, publication_id)
         draft = (await capture_draft(reader, project_id, record["chapter_id"])
                  if status is not None and status != "generating" else None)
@@ -266,7 +266,7 @@ async def publication_detail(db: AsyncSession, user_id: int, project_id: int, pu
 async def export_publication(db: AsyncSession, user_id: int, project_id: int, publication_id: int,
                              format: str) -> ExportFile:
     # 在同一只读快照内核验导出能力并读取当次原稿，离开事务后才渲染。
-    async with _read_snapshot(db, user_id, project_id) as reader:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
         capture = await capture_document_access(reader, user_id, project_id, [])
         _, _, edition = await _read_publication(reader, project_id, publication_id)
         heading = chapter_heading(edition)

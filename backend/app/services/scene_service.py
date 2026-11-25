@@ -33,7 +33,7 @@ from app.schemas.scene import (
     SceneUpdate,
     parse_scene_snapshot,
 )
-from app.services import project_access, setting_progression_service, version_service
+from app.services import project_access, setting_progression_service, version_service, writing_stats
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import count_words, get_manual_chapter
 
@@ -263,7 +263,8 @@ async def replace_chapter_contents(
 
 async def replace_legacy_content(
     db: AsyncSession, chapter: Chapter, content: str, *, expected_revision: int | None = None,
-) -> None:
+) -> tuple[str, str]:
+    """返回该场景写入前后的正文，分隔符由章投影处理。"""
     scenes = await list_active_scenes(db, chapter.id)
     if len(scenes) != 1:
         raise ConflictError("多场景章节需要明确选择目标场景", extra={"code": "scene_target_required"})
@@ -277,7 +278,9 @@ async def replace_legacy_content(
         # 在改变分隔符之前完成预检，失败时调用方的会话内对象也保持原样。
         await _require_safe_legacy_edit(db, scene, content)
         scene.separator_before = ""
+    before = scene.content
     await replace_scene_content(db, chapter, scene, content, expected_revision=expected_revision)
+    return before, content
 
 
 def range_target(ranges: list[SceneRange], start: int, end: int) -> tuple[SceneRange | None, str | None]:
@@ -562,6 +565,9 @@ async def create_scene(
         scenes.insert(index, scene)
         await _set_order(db, scenes)
         await refresh_projection(db, chapter, expected_revision=data.expected_content_revision)
+        await writing_stats.record_words(
+            db, user_id=user_id, project_id=project_id, source="manual", words=count_words(scene.content),
+        )
         await _finish_structure(db, chapter, audit, "新增场景")
         return await scene_out(db, chapter, scene)
 
@@ -585,9 +591,15 @@ async def update_scene(
         clear = "content" in values and bool(scene.content.strip()) and not values["content"].strip()
         if metadata or clear:
             await version_service.ensure_baseline(db, chapter, force=True)
+        before = scene.content
         for field, value in values.items():
             setattr(scene, field, value)
         await refresh_projection(db, chapter, expected_revision=data.expected_content_revision)
+        if "content" in values:
+            await writing_stats.record_words(
+                db, user_id=user_id, project_id=project_id, source="manual",
+                words=writing_stats.count_added_words(before, scene.content),
+            )
         if metadata or clear:
             version = await version_service.record(
                 db, chapter, "manual", note="修改场景资料" if metadata else "清空场景正文",

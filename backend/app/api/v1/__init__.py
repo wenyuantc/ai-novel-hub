@@ -59,6 +59,7 @@ from app.api.v1 import (
     transfer,
     wizard,
     workshop,
+    writing_stats,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -104,6 +105,7 @@ api_router.include_router(foreshadows.router)
 api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
 api_router.include_router(serialization.router)
+api_router.include_router(writing_stats.router)
 api_router.include_router(scene_ai.router)
 api_router.include_router(batch.router)
 api_router.include_router(consistency.router)

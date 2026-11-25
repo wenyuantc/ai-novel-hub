@@ -63,3 +63,26 @@
   .serialization-stats dd small { display: block; margin: 0; }
   .serialization-calendar-grid > button { min-height: 39px; }
 }
+
+.writing-stats-panel { display: grid; gap: 12px; }
+.writing-stats-panel p { margin: 0; }
+.writing-stats-numbers { display: flex; flex-wrap: wrap; gap: 12px clamp(18px, 5cqi, 56px); margin: 0; }
+.writing-stats-numbers dt { color: var(--color-muted); font-size: 13px; }
+.writing-stats-numbers dd { margin: 3px 0 0; }
+.writing-stats-numbers strong { font: 500 24px var(--font-display); }
+.writing-goal-progress { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; }
+.writing-goal-progress progress { accent-color: var(--color-primary); max-width: 100%; }
+.writing-stats-panel h3 { margin-top: 6px; }
+.writing-trend-range { align-items: end; }
+.writing-trend-range label { display: grid; gap: 3px; color: var(--color-muted); font-size: 13px; min-width: 0; max-width: 100%; }
+.writing-trend-scroll { overflow: auto; max-height: 16rem; }
+.writing-trend-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.writing-trend-table th, .writing-trend-table td { text-align: start; padding: 5px 6px; border-bottom: 1px solid var(--color-border); }
+.writing-trend-table thead th { position: sticky; top: 0; z-index: 1; background: var(--color-surface-raised); }
+.writing-trend-table tbody th { font-weight: 400; }
+.writing-trend-table th small { color: var(--color-muted); margin-inline-start: 5px; display: inline-block; }
+.writing-trend-table td { position: relative; width: 30%; }
+.writing-trend-table td[colspan] { width: auto; }
+.writing-trend-bar { background: var(--color-primary); opacity: .18; height: 62%; position: absolute; top: 19%; left: 0; }
+.writing-trend-table td:nth-child(3) .writing-trend-bar { background: var(--color-warning); }
+.writing-trend-value { position: relative; }
