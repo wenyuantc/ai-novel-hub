@@ -27,4 +27,4 @@
 - [x] 执行隔离脚本两种数据库及各场景的完整复跑；检查失败清理、禁止读取 `.env`、敏感内容脱敏、资源归属和版本固定。
 - [x] 运行演练脚本的 Ruff / 格式检查；README 中新增 Shell 段执行语法检查，实际运行关键恢复命令并验证错误时不继续。按父任务门禁执行后端完整 SQLite 回归：`cd backend && env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run ruff check . && env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 uv run pytest -n 4 --dist loadfile --durations=20`。如有未通过项，保留结果并如实说明。
 - [x] 由 Trellis 检查子代理交叉核对 AC1–AC10、任务边界、命令安全、实际证据和 README；检查新旧代码从未同时连接同一个演练库。
-- [ ] 按结果更新适用的 `.trellis/spec/backend/`，完成任务记录和父任务集成检查后再提交／归档；不包含其他任务的未跟踪文件。若有验收无法完成或发现产品缺陷，保留未完成状态与明确后续处理。
+- [x] 按结果更新适用的 `.trellis/spec/backend/`，完成任务记录和父任务集成检查后再提交／归档；不包含其他任务的未跟踪文件。若有验收无法完成或发现产品缺陷，保留未完成状态与明确后续处理。

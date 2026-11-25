@@ -3,8 +3,8 @@
 2026-11-25（北京时间），对 SHA-256 为 `d1f43f9a32258a01acd7c54b20a939707438465d7ef1afedbc347eb44b2d093b` 的 README 执行：
 
 ```bash
-# c8_dir 指向本任务目录；归档后改为对应的 archive 目录。
-c8_dir=.trellis/tasks/11-20-collab-migration-deploy-drill
+# c8_dir 指向本任务的归档目录；移动后按实际位置修改。
+c8_dir=.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill
 backend/.venv/bin/python "$c8_dir/research/check_readme_commands.py"
 backend/.venv/bin/python "$c8_dir/research/check_readme_postgres_compose.py"
 ```

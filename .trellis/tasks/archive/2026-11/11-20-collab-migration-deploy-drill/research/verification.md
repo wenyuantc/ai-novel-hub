@@ -30,10 +30,10 @@
 - 主会话对 README SHA-256 `d1f43f9a32258a01acd7c54b20a939707438465d7ef1afedbc347eb44b2d093b` 复跑 [check_readme_commands.py](check_readme_commands.py)：28 个 Shell 块的语法检查通过；实际检查 SQLite 未 checkpoint 的已提交 WAL、单文件快照、0043／0070 版本、特殊路径、拒绝覆盖／错误版本与 SHA，并以假 Docker 检查 PG 正常及失败分支。
 - 同一 README 版本的 [check_readme_postgres_compose.py](check_readme_postgres_compose.py) 在随机专属 Compose 项目的 PG16 tmpfs 容器中真实停止 app、执行 `pg_dump` 得到 1,745 字节快照，并恢复到独立空库，核对 `0043` 和虚构标记；专属项目及资源已清理。运行时镜像 ID 为 `sha256:c54a696c68013b2f8f42f479e00a2b6ad24c5ef10ee31cdfb8972cec3dad7eb7`。该最小虚构库只验证命令，不代替完整旧应用 PG 演练。复验命令及边界见[独立命令记录](readme-command-verification.md)。
 
-从 `backend/` 执行（任务归档后将 `c8_dir` 改为归档位置）：
+从 `backend/` 执行（若任务移动，按实际路径修改 `c8_dir`）：
 
 ```bash
-c8_dir=../.trellis/tasks/11-20-collab-migration-deploy-drill/research
+c8_dir=../.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research
 set +x
 c8_env=(env -i PATH="$PATH" HOME="$HOME" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8)
 for c8_name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION XDG_RUNTIME_DIR SSH_AUTH_SOCK; do
@@ -55,10 +55,10 @@ done
 
 这些命令使用 Bash 数组和白名单环境；`set +x` 避免 shell 调试输出连接配置。Docker 连接变量若已设置则原样传入，避免静默切换 daemon；Git 和一般应用不继承这些变量，PG 活动备份补验为调用容器内 `pg_dump` 而有意向该测试应用及适配器传入相同白名单。PostgreSQL 需要 Docker、支持容器 tmpfs 的运行环境和本地 `postgres:16-alpine` 镜像；脚本使用 `--pull never`，为专属数据目录设置 1 GiB 的 tmpfs 上限。每条 JSON 事件中的 `elapsed_s` 为自各脚本启动以来的累计秒数；本轮新增 `timestamp_utc`，记录事件的实际 UTC 时间。此前 JSONL 没有绝对时间戳，也没有可靠起止时间，不以文件修改时间追认。完整过程及实际耗时以各对应结果文件为准。
 
-为全新执行者准备独立 SQLite 夹具时，可在单独终端从项目根目录执行下列命令；归档后将 `c8_dir` 改为该任务的归档目录。它会打印专属 `fixture.json` 路径后等待 `finish` 标记，不打印文件中的虚构密钥。保持该进程运行，在另一终端将路径保存到 `fixture_path`，依次准备旧前端和测试维护代理。代理最初未开启，执行者按夹具控制信息自行启停；环境信息不代替 README 的升级和回滚步骤。
+为全新执行者准备独立 SQLite 夹具时，可在单独终端从项目根目录执行下列命令；若任务移动，按实际路径修改 `c8_dir`。它会打印专属 `fixture.json` 路径后等待 `finish` 标记，不打印文件中的虚构密钥。保持该进程运行，在另一终端将路径保存到 `fixture_path`，依次准备旧前端和测试维护代理。代理最初未开启，执行者按夹具控制信息自行启停；环境信息不代替 README 的升级和回滚步骤。
 
 ```bash
-c8_dir=.trellis/tasks/11-20-collab-migration-deploy-drill/research
+c8_dir=.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research
 env -i PATH="$PATH" HOME="$HOME" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
   backend/.venv/bin/python "$c8_dir/c8_drill.py" --shape sqlite --prepare-only
 ```
@@ -66,7 +66,7 @@ env -i PATH="$PATH" HOME="$HOME" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
 在另一个终端重新设置 `c8_dir`，并将 `fixture_path` 设为准备进程输出中的 `fixture.json` 路径，再执行：
 
 ```bash
-c8_dir=.trellis/tasks/11-20-collab-migration-deploy-drill/research
+c8_dir=.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research
 c8_tool=(env -i PATH="$PATH" HOME="$HOME" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 backend/.venv/bin/python)
 "${c8_tool[@]}" "$c8_dir/prepare_old_frontend.py" "$fixture_path"
 "${c8_tool[@]}" "$c8_dir/prepare_maintenance_proxy.py" "$fixture_path"
@@ -95,7 +95,7 @@ fi
 收到两者的成功确认后才在夹具目录创建 `finish`，并等待准备进程退出。认证失败、监督者异常死亡或退出结果未知时不对 JSON 中 PID 盲发信号；按报告的身份人工核查，不能声称清理成功。临时验证用的维护标记只在文件身份未变化时删除。准备前端还需要 `npm`、锁文件依赖及 `lsof`。真实故障检查涵盖组长先退出、派生子进程忽略 SIGTERM、错误凭证、无效帧、监督者 SIGTERM／SIGKILL、受控服务自退出、控制端口伪装和重复清理。监督者被 `SIGKILL` 或宿主断电时无法保证自动回收。
 
 ```bash
-c8_dir=.trellis/tasks/11-20-collab-migration-deploy-drill/research
+c8_dir=.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research
 c8_tool=(env -i PATH="$PATH" HOME="$HOME" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 backend/.venv/bin/python)
 "${c8_tool[@]}" "$c8_dir/check_fixture_process_safety.py"
 "${c8_tool[@]}" "$c8_dir/check_controller_safety.py"
@@ -248,3 +248,7 @@ README 在独立复核中途修订：第一次停服 `0043` 快照使用原硬�
 | AC8 | [网页独立 SQLite 复做](readme-independent-verification.md)只依据同一哈希的 README，用命令完成迁移、快照及恢复，业务操作和验证通过页面完成；另记原加密备份配置未恢复等环境边界。 |
 | AC9 | 可复跑脚本、最终双数据库日志、旧任务补验、失败清理与独立复核已记录；未覆盖生产环境及文中所列情形。 |
 | AC10 | README 的操作步骤和 `TODOS.md` 第 11、25 项已按双库及独立复核结果更新；未排空旧任务另列第 34 项。 |
+
+## 归档路径复核
+
+2026-11-25 归档后更新了任务上下文清单及本文复跑命令中的任务路径。`task.py validate` 通过；三份较大的规范或历史资料仍会被自动注入截断，需按清单提示直接完整阅读。C8 文档和 `TODOS.md` 的 99 个本地文件链接均存在。使用归档路径重跑 README 的命令检查和真实 PostgreSQL Compose 快照恢复，两项均通过，README SHA-256 仍为 `d1f43f9a32258a01acd7c54b20a939707438465d7ef1afedbc347eb44b2d093b`。这些复验不代替前述完整双库演练。
