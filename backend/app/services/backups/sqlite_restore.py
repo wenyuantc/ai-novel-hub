@@ -107,7 +107,12 @@ def main() -> None:
         revision = restore_sqlite_snapshot(args.source, args.destination, previous_lock=args.previous_lock)
     except (OSError, ValueError, sqlite3.Error, SQLiteLeasePairError) as exc:
         parser.exit(1, f"SQLite 恢复失败：{exc}\n")
-    print(f"已恢复 SQLite 数据库（迁移 {revision}）。请核对 DATABASE_URL 并执行 alembic upgrade head。")
+    print(
+        f"已恢复 SQLite 数据库（快照版本：{revision}）。\n"
+        "请先核对 DATABASE_URL 指向的数据库路径、目标代码版本和快照版本。\n"
+        "如需迁移，请使用目标代码将数据库迁移到目标版本；回退旧版时，"
+        "不要运行当前版本的 alembic upgrade head，并保留与旧版匹配的快照结构。"
+    )
 
 
 if __name__ == "__main__":

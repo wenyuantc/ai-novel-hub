@@ -16,7 +16,7 @@ from tests.test_setting_categories_migration import (
 )
 from tests.test_setting_fields_migration import (
     _config,
-    _foreign_keys_during_migrations,
+    _migration_fk_on_connect,
     _schema_0037_model_contract,
     _schema_contract,
 )
@@ -92,7 +92,7 @@ def test_0037_preserves_real_0036_rows_and_schema_then_safe_roundtrip(tmp_path, 
             before = _snapshot(conn)
             sequences = dict(conn.exec_driver_sql("SELECT name,seq FROM sqlite_sequence").all())
         if foreign_keys:
-            _foreign_keys_during_migrations(monkeypatch)
+            _migration_fk_on_connect(monkeypatch)
         command.upgrade(config, "0037")
         Base.metadata.create_all(expected)
         for table in CHANGED_TABLES:

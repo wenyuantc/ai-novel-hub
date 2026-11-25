@@ -7,12 +7,12 @@ from alembic import command
 from sqlalchemy import create_engine, event, inspect, text
 
 from app.models import Base
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations, _schema_contract
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect, _schema_contract
 
 
 @pytest.fixture(autouse=True)
 def _foreign_keys(monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
 
 
 def test_0050_preserves_origin_after_project_purge_and_blocks_lossy_downgrade(tmp_path):

@@ -6,11 +6,11 @@ from alembic import command
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect
 
 
 def test_0055_existing_projects_cross_owner_fk_and_safe_downgrade(tmp_path, monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
     path = tmp_path / "pen_names.db"
     config = _config(path)
     engine = create_engine(f"sqlite:///{path}")

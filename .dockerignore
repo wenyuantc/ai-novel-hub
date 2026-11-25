@@ -1,6 +1,37 @@
 .git
-.env
-**/.env
+# 环境变量可包含真实密钥；只保留不含凭据的示例。
+**/.env*
+!**/.env.example
+# SQLite 主库、事务伴随文件和租约锁（包括备份、加密副本）。
+**/*.[dD][bB]
+**/*.[dD][bB]-*
+**/*.[dD][bB].*
+**/*.[dD][bB]3
+**/*.[dD][bB]3-*
+**/*.[dD][bB]3.*
+**/*.[sS][qQ][lL][iI][tT][eE]
+**/*.[sS][qQ][lL][iI][tT][eE]-*
+**/*.[sS][qQ][lL][iI][tT][eE].*
+**/*.[sS][qQ][lL][iI][tT][eE]3
+**/*.[sS][qQ][lL][iI][tT][eE]3-*
+**/*.[sS][qQ][lL][iI][tT][eE]3.*
+**/*.leases.lock
+# 数据库导出和日志可能包含业务数据与凭据。
+**/*.[dD][uU][mM][pP]
+**/*.[dD][uU][mM][pP].*
+**/*.[bB][aA][cC][kK][uU][pP]
+**/*.[bB][aA][cC][kK][uU][pP].*
+**/*.[bB][aA][kK]
+**/*.[bB][aA][kK].*
+**/*.[sS][qQ][lL]
+**/*.[sS][qQ][lL].*
+**/*.[tT][aA][rR]
+**/*.[tT][aA][rR].*
+**/*.[tT][gG][zZ]
+**/*.[zZ][iI][pP]
+**/*.7[zZ]
+**/*.[lL][oO][gG]
+**/*.[lL][oO][gG].*
 **/node_modules
 **/.venv
 **/__pycache__

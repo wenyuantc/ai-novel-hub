@@ -11,12 +11,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.services.backups.database import _sqlite_snapshot
 from tests.test_generation_log_source_migration import _seed
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect
 
 
 @pytest.fixture(autouse=True)
 def _sqlite_foreign_keys(monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
 
 
 def test_0052_legacy_rows_identity_constraints_backup_and_safe_downgrade(tmp_path):

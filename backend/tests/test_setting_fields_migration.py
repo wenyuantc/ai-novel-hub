@@ -103,7 +103,12 @@ def _historical_table(conn, name):
     return Table(name, MetaData(), autoload_with=conn, resolve_fks=False)
 
 
-def _foreign_keys_during_migrations(monkeypatch):
+def _migration_fk_on_connect(monkeypatch):
+    """模拟迁移专用连接创建时 FK 已开启，而非迁移过程始终开启。
+
+    C7 在取得迁移事务之前会关闭该连接的 FK，并在提交前执行 foreign_key_check。
+    该夹具不覆盖旧迁移内部要求 FK 初始开启的独立执行分支。
+    """
     original = async_sqlalchemy.async_engine_from_config
 
     def enabled(*args, **kwargs):
@@ -316,7 +321,7 @@ def test_0035_preserves_legacy_children_and_safe_empty_downgrade(tmp_path, monke
     with engine.connect() as conn:
         before = {table: _snapshot(conn, table) for table in tables}
     if foreign_keys:
-        _foreign_keys_during_migrations(monkeypatch)
+        _migration_fk_on_connect(monkeypatch)
 
     command.upgrade(config, "0035")
     with engine.begin() as conn:

@@ -4,11 +4,11 @@
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
 
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect
 
 
 def test_0044_empty_sqlite_upgrade_and_downgrade(tmp_path, monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
     file = tmp_path / "empty-collaboration.db"
     config = _config(file)
     engine = create_engine(f"sqlite:///{file}")

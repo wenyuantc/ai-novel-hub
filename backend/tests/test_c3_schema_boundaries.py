@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import threading
 from contextlib import closing
 from uuid import uuid4
 
@@ -11,6 +12,8 @@ from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -100,28 +103,93 @@ def test_0068_roundtrip_preserves_project_high_water_and_children(tmp_path):
         assert new.lastrowid == 51
 
 
-async def test_0068_downgrade_observes_concurrent_committed_work(migration_db):
+async def test_0068_downgrade_observes_concurrent_committed_work(migration_db, monkeypatch):
     cfg, db_engine = migration_db
     await asyncio.to_thread(command.upgrade, cfg, "0068")
     dialect = db_engine.dialect.name
     loop = asyncio.get_running_loop()
     entering = asyncio.Event()
-    prefix = "UPDATE alembic_version SET version_num=version_num" if dialect == "sqlite" else "LOCK TABLE task_workers"
+    sqlite_engine_ready = asyncio.Event()
+    sqlite_proceed = threading.Event()
+    sqlite_errors = []
+    sqlite_timeouts = []
+    sqlite_listeners = []
 
     def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-        if statement.startswith(prefix):
+        if statement.startswith("LOCK TABLE task_workers"):
             loop.call_soon_threadsafe(entering.set)
+
+    if dialect == "sqlite":
+        original_factory = async_sqlalchemy.async_engine_from_config
+
+        def migration_factory(*args, **kwargs):
+            migration_engine = original_factory(*args, **kwargs)
+            sync_engine = migration_engine.sync_engine
+
+            def short_busy_timeout(connection, _record):
+                cursor = connection.cursor()
+                try:
+                    cursor.execute("PRAGMA busy_timeout=0")
+                    cursor.execute("PRAGMA busy_timeout")
+                    sqlite_timeouts.append(cursor.fetchone()[0])
+                finally:
+                    cursor.close()
+
+            def migration_error(context):
+                code = getattr(context.original_exception, "sqlite_errorcode", None)
+                if (
+                    context.engine is sync_engine
+                    and context.statement == "BEGIN IMMEDIATE"
+                    and isinstance(code, int)
+                    and code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                ):
+                    def notify():
+                        sqlite_errors.append(code & 0xFF)
+                        entering.set()
+
+                    loop.call_soon_threadsafe(notify)
+
+            event.listen(sync_engine, "connect", short_busy_timeout)
+            sqlite_listeners.append((sync_engine, "connect", short_busy_timeout))
+            event.listen(sync_engine, "handle_error", migration_error)
+            sqlite_listeners.append((sync_engine, "handle_error", migration_error))
+            loop.call_soon_threadsafe(sqlite_engine_ready.set)
+            if not sqlite_proceed.wait(30):
+                raise RuntimeError("测试未放行迁移连接")
+            return migration_engine
+
+        monkeypatch.setattr(async_sqlalchemy, "async_engine_from_config", migration_factory)
 
     evidence = str(uuid4())
     async with db_engine.connect() as writer:
         await writer.execute(text("INSERT INTO task_work_records(work_key,kind,state) "
                                   "VALUES(:k,'abort_failure','failed')"), {"k": evidence})
-        event.listen(Engine, "before_cursor_execute", before_cursor_execute)
-        migration = asyncio.create_task(asyncio.to_thread(command.downgrade, cfg, "0067"))
+        migration = None
+        pg_listener_added = False
         try:
+            if dialect == "postgresql":
+                event.listen(Engine, "before_cursor_execute", before_cursor_execute)
+                pg_listener_added = True
+            migration = asyncio.create_task(asyncio.to_thread(command.downgrade, cfg, "0067"))
+            if dialect == "sqlite":
+                await asyncio.wait_for(sqlite_engine_ready.wait(), 10)
+                # 同库的另一连接也实际遇到忙锁；它不能触发只属于迁移引擎的观察信号。
+                async with db_engine.connect() as unrelated:
+                    assert (await unrelated.exec_driver_sql("PRAGMA busy_timeout")).scalar_one() == 5000
+                    with pytest.raises(OperationalError) as blocked:
+                        await unrelated.exec_driver_sql("BEGIN IMMEDIATE")
+                    assert blocked.value.orig.sqlite_errorcode & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                    assert not entering.is_set() and not sqlite_errors
+                    await unrelated.rollback()
+                sqlite_proceed.set()
             await asyncio.wait_for(entering.wait(), 10)
             assert not migration.done()
-            if dialect == "postgresql":
+            if dialect == "sqlite":
+                assert sqlite_timeouts == [0]
+                assert sqlite_errors and all(
+                    code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) for code in sqlite_errors
+                )
+            else:
                 writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
                 async with db_engine.connect() as observer, asyncio.timeout(5):
                     while not await observer.scalar(text(
@@ -133,9 +201,21 @@ async def test_0068_downgrade_observes_concurrent_committed_work(migration_db):
             with pytest.raises(RuntimeError, match="task_work_records"):
                 await migration
         finally:
-            event.remove(Engine, "before_cursor_execute", before_cursor_execute)
-            await writer.rollback()
-            await asyncio.gather(migration, return_exceptions=True)
+            sqlite_proceed.set()
+            try:
+                await writer.rollback()
+            finally:
+                try:
+                    if migration is not None:
+                        await asyncio.gather(migration, return_exceptions=True)
+                finally:
+                    if pg_listener_added:
+                        event.remove(Engine, "before_cursor_execute", before_cursor_execute)
+                    for target, event_name, listener in sqlite_listeners:
+                        event.remove(target, event_name, listener)
+                    if pg_listener_added:
+                        assert not event.contains(Engine, "before_cursor_execute", before_cursor_execute)
+                    assert all(not event.contains(*listener) for listener in sqlite_listeners)
         assert await writer.scalar(text("SELECT version_num FROM alembic_version")) == "0068"
         stored = (await writer.execute(text("SELECT work_key,state FROM task_work_records"))).one()
         assert stored == (evidence, "failed")

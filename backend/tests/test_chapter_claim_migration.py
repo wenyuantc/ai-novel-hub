@@ -18,7 +18,7 @@ from app.services import scene_service
 from app.services.backups.database import snapshot_database
 from app.services.project_transfer.registry import RULES_BY_TABLE
 from tests.helpers import create_project, register
-from tests.test_setting_fields_migration import _foreign_keys_during_migrations, _schema_contract
+from tests.test_setting_fields_migration import _migration_fk_on_connect, _schema_contract
 
 
 def _config(path):
@@ -30,8 +30,8 @@ def _config(path):
 
 
 @pytest.fixture(autouse=True)
-def _enforce_migration_foreign_keys(monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+def _migration_connection_starts_with_fk_on(monkeypatch):
+    _migration_fk_on_connect(monkeypatch)
 
 
 def test_0046_sqlite_upgrade_preserves_children_and_refuses_lossy_downgrade(tmp_path):

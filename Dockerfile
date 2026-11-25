@@ -34,4 +34,4 @@ COPY --from=frontend /build/dist /app/frontend/dist
 ENV PATH="/app/backend/.venv/bin:/usr/lib/postgresql/16/bin:$PATH" \
     BACKUP_DIR="/app/backups"
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+CMD ["sh", "/app/backend/docker-entrypoint.sh"]

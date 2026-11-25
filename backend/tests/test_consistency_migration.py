@@ -5,7 +5,7 @@ from alembic import command
 from sqlalchemy import create_engine, event, inspect, text
 
 from app.models import Base
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations, _schema_contract
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect, _schema_contract
 
 TABLES = ("consistency_ledgers", "consistency_runs", "consistency_issues")
 HASH = "a" * 64
@@ -49,7 +49,7 @@ def test_0058_schema_matches_models(tmp_path):
 
 
 def test_0058_upgrade_cascades_and_guarded_downgrade(tmp_path, monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
     path = tmp_path / "consistency.sqlite3"
     config = _config(path)
     engine = _engine(path)

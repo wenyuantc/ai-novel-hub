@@ -2,10 +2,14 @@
 
 import asyncio
 import hashlib
+import os
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from contextlib import closing
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -26,6 +30,54 @@ from tests.test_setting_fields_migration import _config
 def _backup(source, snapshot):
     snapshot_database(f"sqlite+aiosqlite:///{source}", snapshot,
                       deadline=time.monotonic() + 20, stop_event=threading.Event())
+
+
+def test_restore_cli_reports_version_safe_next_steps_and_failures(tmp_path):
+    snapshot, restored = tmp_path / "snapshot.sqlite3", tmp_path / "restored.db"
+    command.upgrade(_config(snapshot), "0065")
+    with closing(sqlite3.connect(snapshot)) as db:
+        db.execute("INSERT INTO users(username, password_hash) VALUES ('cli-fixture', 'fixture')")
+        db.commit()
+        schema = db.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        ).fetchall()
+    digest = hashlib.sha256(snapshot.read_bytes()).digest()
+    env = {
+        "PATH": os.defpath,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        "TMPDIR": str(tmp_path),
+        "LC_ALL": "en_US.UTF-8",
+        "LANG": "en_US.UTF-8",
+    }
+    args = [sys.executable, "-m", "app.services.backups.sqlite_restore", str(snapshot), str(restored)]
+
+    success = subprocess.run(args, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30, check=False)
+    assert success.returncode == 0, success.stderr
+    assert success.stderr == ""
+    with closing(sqlite3.connect(restored)) as db:
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == ("0065",)
+        assert db.execute("SELECT username FROM users").fetchone() == ("cli-fixture",)
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        ).fetchall() == schema
+    assert hashlib.sha256(snapshot.read_bytes()).digest() == digest
+
+    failed = subprocess.run(args, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30, check=False)
+    assert failed.returncode == 1
+    assert failed.stdout == ""
+    assert "SQLite 恢复失败" in failed.stderr
+    with closing(sqlite3.connect(restored)) as db:
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == ("0065",)
+        assert db.execute("SELECT username FROM users").fetchone() == ("cli-fixture",)
+    for detail in (
+        "0065", "DATABASE_URL 指向的数据库路径", "目标代码版本", "快照版本",
+        "如需迁移", "使用目标代码将数据库迁移到目标版本", "回退旧版",
+        "不要运行当前版本的 alembic upgrade head", "保留与旧版匹配的快照结构",
+    ):
+        assert detail in success.stdout, success.stdout
 
 
 @pytest.mark.parametrize("corrupt_side", [False, True], ids=["intact", "damaged-header"])

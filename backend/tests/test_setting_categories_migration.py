@@ -1,22 +1,28 @@
 """0036 在完整字段资料图上原位添加整理标签与分类，不改写既有设定。"""
 
+import asyncio
 import json
+from contextlib import contextmanager
 
 import pytest
 from alembic import command
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 from sqlalchemy.orm import Session
 
+from app.core.database import create_engine as create_application_engine
 from app.models import Base, Career, Character, Organization, WorldSetting
 from app.schemas.progression import StoryPosition
 from app.services.setting_field_values import FieldSpec
 from app.services.setting_progression_resolver import ProgressionEvent, resolve_progressions
 from tests.test_setting_fields_migration import (
     _config,
-    _foreign_keys_during_migrations,
     _historical_table,
+    _migration_fk_on_connect,
     _schema_0036_model_contract,
     _schema_contract,
     _seed_connection,
@@ -160,25 +166,89 @@ def _assert_sqlite_rebuild_integrity(conn, before_sequences, *, upgraded):
 
 def _record_migration_fk_states(monkeypatch, foreign_keys):
     if foreign_keys:
-        _foreign_keys_during_migrations(monkeypatch)
+        _migration_fk_on_connect(monkeypatch)
     original = async_sqlalchemy.async_engine_from_config
-    states = []
+    observations = []
+
+    def read_fk(connection):
+        cursor = connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys")
+            return cursor.fetchone()[0]
+        finally:
+            cursor.close()
 
     def factory(*args, **kwargs):
         engine = original(*args, **kwargs)
+        events = []
+        observations.append(events)
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def record_connect(connection, _record):
+            # 先观察既有测试夹具设置后的初始值；C7 随后关闭该专用连接的 FK。
+            events.append(("connect", read_fk(connection)))
+
+        @event.listens_for(engine.sync_engine, "before_cursor_execute")
+        def record_statement(connection, _cursor, statement, _parameters, _context, _executemany):
+            sql = statement.lstrip().upper()
+            if sql.startswith(("CREATE ", "ALTER ", "DROP ")):
+                events.append(("ddl", read_fk(connection.connection.dbapi_connection)))
+            elif sql.startswith("PRAGMA FOREIGN_KEY_CHECK"):
+                events.append(("fk_check", read_fk(connection.connection.dbapi_connection)))
+            elif sql.startswith("UPDATE ALEMBIC_VERSION"):
+                events.append(("revision", read_fk(connection.connection.dbapi_connection)))
+
+        @event.listens_for(engine.sync_engine, "commit")
+        def record_commit(connection):
+            events.append(("commit", read_fk(connection.connection.dbapi_connection)))
+
+        @event.listens_for(engine.sync_engine, "rollback")
+        def record_rollback(connection):
+            events.append(("rollback", read_fk(connection.connection.dbapi_connection)))
 
         @event.listens_for(engine.sync_engine, "checkin")
-        def record(connection, _record):
+        def record_checkin(connection, _record):
             if connection is not None:
-                cursor = connection.cursor()
-                cursor.execute("PRAGMA foreign_keys")
-                states.append(cursor.fetchone()[0])
-                cursor.close()
+                events.append(("checkin", read_fk(connection)))
+
+        @event.listens_for(engine.sync_engine, "close")
+        def record_close(connection, _record):
+            events.append(("close", read_fk(connection)))
 
         return engine
 
     monkeypatch.setattr(async_sqlalchemy, "async_engine_from_config", factory)
-    return states
+    return observations
+
+
+def _assert_migration_fk_states(observations, *, initial, count, rebuilt):
+    assert len(observations) == count
+    for events in observations:
+        assert events[0] == ("connect", int(initial))
+        assert events[-2:] == [("checkin", 0), ("close", 0)]
+        assert all(value == 0 for name, value in events if name != "connect")
+        ddl = [index for index, (name, _) in enumerate(events) if name == "ddl"]
+        checks = [index for index, (name, _) in enumerate(events) if name == "fk_check"]
+        assert checks
+        if rebuilt:
+            commits = [index for index, (name, _) in enumerate(events) if name == "commit"]
+            revisions = [index for index, (name, _) in enumerate(events) if name == "revision"]
+            assert ddl and revisions and commits and max(ddl) < max(revisions) < max(checks) < max(commits)
+            first_change = min(*ddl, *revisions)
+            assert not [index for index in commits if first_change < index < max(checks)], events
+        else:
+            assert not ddl
+            assert any(name == "rollback" for name, _ in events)
+
+
+@pytest.mark.parametrize("after", ["ddl", "revision"])
+def test_migration_fk_observation_rejects_early_commit(after):
+    events = [("connect", 1), ("commit", 0), ("ddl", 0), ("revision", 0), ("fk_check", 0),
+              ("commit", 0), ("checkin", 0), ("close", 0)]
+    index = next(index for index, (name, _) in enumerate(events) if name == after)
+    events.insert(index + 1, ("commit", 0))
+    with pytest.raises(AssertionError):
+        _assert_migration_fk_states([events], initial=True, count=1, rebuilt=True)
 
 
 def _effective_values(conn):
@@ -216,9 +286,10 @@ def test_0036_preserves_every_0035_value_anchor_and_revision_then_empty_downgrad
         assert effective[(20, "end")][224] == {"reference_handle_id": 32}
         states = _record_migration_fk_states(monkeypatch, foreign_keys)
         command.upgrade(config, "0036")
-        assert states and set(states) == {int(foreign_keys)}
+        _assert_migration_fk_states(states, initial=foreign_keys, count=1, rebuilt=True)
         with engine.begin() as conn:
             conn.execute(text("PRAGMA foreign_keys=ON"))
+            assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0036"
             _assert_preserved(conn, before)
             _assert_sqlite_rebuild_integrity(conn, before_sequences, upgraded=True)
             assert _effective_values(conn) == effective
@@ -230,8 +301,9 @@ def test_0036_preserves_every_0035_value_anchor_and_revision_then_empty_downgrad
             # 目录代次是并发元数据；清空新资料后并不妨碍无损退回旧结构。
             conn.execute(text("UPDATE projects SET categories_revision=9 WHERE id=1"))
         command.downgrade(config, "0035")
-        assert set(states) == {int(foreign_keys)}
+        _assert_migration_fk_states(states, initial=foreign_keys, count=2, rebuilt=True)
         with engine.connect() as conn:
+            assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0035"
             _assert_preserved(conn, before)
             _assert_sqlite_rebuild_integrity(conn, before_sequences, upgraded=False)
             assert {name: _schema_contract(inspect(conn), name) for name in ENTITY_TABLES} == before_schema
@@ -239,8 +311,9 @@ def test_0036_preserves_every_0035_value_anchor_and_revision_then_empty_downgrad
             assert conn.exec_driver_sql("PRAGMA foreign_key_check").all() == []
         assert not set(NEW_TABLES) & set(inspect(engine).get_table_names())
         command.upgrade(config, "0036")
-        assert set(states) == {int(foreign_keys)}
+        _assert_migration_fk_states(states, initial=foreign_keys, count=3, rebuilt=True)
         with engine.connect() as conn:
+            assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0036"
             _assert_preserved(conn, before)
             _assert_sqlite_rebuild_integrity(conn, before_sequences, upgraded=True)
             assert _effective_values(conn) == effective
@@ -259,12 +332,76 @@ def test_0036_rejects_invalid_legacy_fk_before_rebuilding_any_table(tmp_path, mo
         states = _record_migration_fk_states(monkeypatch, foreign_keys)
         with pytest.raises(RuntimeError, match="旧资料存在无效外键"):
             command.upgrade(config, "0036")
-        assert states and set(states) == {int(foreign_keys)}
+        _assert_migration_fk_states(states, initial=foreign_keys, count=1, rebuilt=False)
         with engine.connect() as conn:
             _assert_preserved(conn, before)
             assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0035"
             assert not set(NEW_TABLES) & set(inspect(conn).get_table_names())
             assert not any(name.startswith("_alembic_tmp_") for name in inspect(conn).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def test_0036_keeps_external_application_connection_foreign_keys_enabled(tmp_path):
+    config, engine = _sqlite_database(tmp_path)
+
+    async def verify():
+        application_engine = create_application_engine(config.get_main_option("sqlalchemy.url"))
+        try:
+            async with application_engine.connect() as conn:
+                assert (await conn.exec_driver_sql("PRAGMA foreign_keys")).scalar_one() == 1
+                await asyncio.to_thread(command.upgrade, config, "0036")
+                assert (await conn.exec_driver_sql("PRAGMA foreign_keys")).scalar_one() == 1
+                assert (await conn.exec_driver_sql("PRAGMA foreign_key_check")).all() == []
+                with pytest.raises(IntegrityError):
+                    await conn.exec_driver_sql(
+                        "INSERT INTO setting_categories(project_id,name,applicable_types,match_mode) "
+                        "VALUES(999999,'外部连接验证','[\"character\"]','all')"
+                    )
+                await conn.rollback()
+                assert (await conn.exec_driver_sql("PRAGMA foreign_keys")).scalar_one() == 1
+        finally:
+            await application_engine.dispose()
+
+    try:
+        asyncio.run(verify())
+    finally:
+        engine.dispose()
+
+
+def test_0036_legacy_rebuild_restores_foreign_keys_when_initially_enabled(tmp_path, monkeypatch):
+    """独立于 C7 的在线入口，验证历史 0036 的 FK 开启分支。"""
+    config, engine = _sqlite_database(tmp_path)
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            before = _snapshot(conn)
+            conn.commit()
+            migration = ScriptDirectory.from_config(config).get_revision("0036").module
+            context = MigrationContext.configure(conn, opts={"transaction_per_migration": True})
+            monkeypatch.setattr(migration, "op", Operations(context))
+            original = context.autocommit_block
+            observed = []
+
+            @contextmanager
+            def record_autocommit():
+                with original():
+                    observed.append(conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one())
+                    yield
+
+            monkeypatch.setattr(context, "autocommit_block", record_autocommit)
+            with context.begin_transaction(_per_migration=True):
+                with migration._sqlite_rebuild(preserve_entity_sequences=True):
+                    assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 0
+                    migration._alter_entity_tags(add=True)
+            assert observed == [1, 0]
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            assert conn.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+            assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0035"
+            _assert_preserved(conn, before)
+            for table in ENTITY_TABLES:
+                assert "setting_tags" in {column["name"] for column in inspect(conn).get_columns(table)}
     finally:
         engine.dispose()
 

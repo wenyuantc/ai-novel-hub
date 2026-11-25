@@ -8,12 +8,12 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Base
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations, _schema_contract
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect, _schema_contract
 
 
 @pytest.fixture(autouse=True)
-def _sqlite_migration_connections_enforce_foreign_keys(monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+def _migration_connection_starts_with_fk_on(monkeypatch):
+    _migration_fk_on_connect(monkeypatch)
 
 
 def _seed_legacy(conn):

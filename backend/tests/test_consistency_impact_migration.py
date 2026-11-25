@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from app.models import Base
 from tests.test_consistency_migration import HASH, _engine
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations, _schema_contract
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect, _schema_contract
 
 TABLES = ("consistency_ledgers", "consistency_impacts")
 PREV = {"prev_facts", "prev_source_hash", "prev_text_hash"}
@@ -33,7 +33,7 @@ def test_0059_schema_matches_models(tmp_path):
 
 
 def test_0059_upgrade_keeps_ledgers_and_guards_downgrade(tmp_path, monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
     path = tmp_path / "impact.sqlite3"
     config = _config(path)
     engine = _engine(path)

@@ -1,0 +1,78 @@
+# 同机两个独立应用实例示例。两个服务在 Compose 私网内互联，端口分配给每个 worker。
+x-app: &app
+  build: .
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+  volumes:
+    - ${BACKUP_DIR:-./backups}:/app/backups
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ainovel}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ainovel}
+  JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?请在 .env 中设置 ENCRYPTION_KEY}
+  REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+  OPEN_API_RATE_LIMIT_PER_MINUTE: ${OPEN_API_RATE_LIMIT_PER_MINUTE:-120}
+  CONTEXT_CHAR_BUDGET: ${CONTEXT_CHAR_BUDGET:-12000}
+  AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-300}
+  UVICORN_WORKERS: ${UVICORN_WORKERS-1}
+  TASK_MAX_CONCURRENCY: ${TASK_MAX_CONCURRENCY:-4}
+  TASK_MAX_PER_USER: ${TASK_MAX_PER_USER:-2}
+  TASK_ADMISSION_CLOSED: ${TASK_ADMISSION_CLOSED:-false}
+  AUTO_ANALYZE_ENABLED: ${AUTO_ANALYZE_ENABLED:-true}
+  MCP_ENABLED: ${MCP_ENABLED:-true}
+  ALLOW_PRIVATE_AI_ENDPOINTS: ${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
+  TASK_PEER_ENABLED: ${TASK_PEER_ENABLED:-true}
+  TASK_PEER_PORT: "0"
+  TASK_PEER_NETWORKS: ${TASK_PEER_NETWORKS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7}
+  BACKUP_DIR: /app/backups
+  BACKUP_PG_DUMP_PATH: ${BACKUP_PG_DUMP_PATH:-/usr/lib/postgresql/16/bin/pg_dump}
+  BACKUP_GPG_PATH: ${BACKUP_GPG_PATH:-gpg}
+  BACKUP_GPGCONF_PATH: ${BACKUP_GPGCONF_PATH:-gpgconf}
+  BACKUP_TIMEOUT_SECONDS: ${BACKUP_TIMEOUT_SECONDS:-3600}
+  ALLOW_PRIVATE_BACKUP_ENDPOINTS: ${ALLOW_PRIVATE_BACKUP_ENDPOINTS:-false}
+  BACKUP_CA_BUNDLE: ${BACKUP_CA_BUNDLE:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ainovel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ainovel}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -tAc 'SELECT 1' > /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app1:
+    <<: *app
+    environment:
+      <<: *app-environment
+      TASK_PEER_BIND_HOST: app1
+      TASK_PEER_ADVERTISE_HOST: app1
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+  app2:
+    <<: *app
+    environment:
+      <<: *app-environment
+      TASK_PEER_BIND_HOST: app2
+      TASK_PEER_ADVERTISE_HOST: app2
+    ports:
+      - "${APP2_PORT:-8001}:8000"
+
+volumes:
+  pgdata:

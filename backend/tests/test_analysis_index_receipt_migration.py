@@ -11,12 +11,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import AnalysisIndexReceipt, Base
 from tests.helpers import create_project, register
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations, _schema_contract
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect, _schema_contract
 
 
 @pytest.fixture(autouse=True)
 def _foreign_keys(monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
 
 
 def _seed(connection):

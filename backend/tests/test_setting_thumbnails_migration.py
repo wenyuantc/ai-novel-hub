@@ -8,7 +8,7 @@ from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext import asyncio as async_sqlalchemy
 
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect
 
 PARENT_INDEXES = {
     "organizations": ("uq_organizations_project_id_id", ("project_id", "id")),
@@ -19,7 +19,7 @@ PARENT_INDEXES = {
 
 def test_0056_upgrade_constraints_and_cascades(tmp_path, monkeypatch):
     config = _config(tmp_path / "thumbnail.db")
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
     url = f"sqlite+aiosqlite:///{tmp_path / 'thumbnail.db'}"
 
     async def run(action):

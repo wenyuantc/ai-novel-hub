@@ -668,10 +668,11 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, mo
     assert t2["status"] == "queued"
 
     engine = app.state.task_engine
-    # cancel分支让真正close_hub先到，并在落软删前等待订阅方消费取消帧；
+    # cancel分支暂停快照后的消费，直到真实取消提交、close_hub和资源收尾完成；
     # lifecycle分支在已提交删除意图后阻塞取消，明确让心跳可见性检查获胜，不靠偶然的调度先后。
     engine.heartbeat_seconds = 60 if first == "cancel" else 0.01
-    deleting, release_cancel = asyncio.Event(), asyncio.Event()
+    deleting, release_cancel, resume_stream = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    subscribed_hub = None
     actual_stop = task_service.stop_project_tasks
 
     async def stop_after_intent(*args):
@@ -680,7 +681,14 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, mo
             await release_cancel.wait()
             return await actual_stop(*args)
         cancelled = await actual_stop(*args)
+        assert cancelled == 1 and subscribed_hub is not None and subscribed_hub.closed
+        async with app.state.sessionmaker() as db:
+            cancelled_task = await db.get(Task, t2["id"])
+            released_chapter = await db.get(Chapter, ch2["id"])
+            assert cancelled_task.statistics_key == t2["task_key"] and cancelled_task.status == "cancelled"
+            assert released_chapter.status == "draft"
         deleting.set()
+        resume_stream.set()
         await release_cancel.wait()
         return cancelled
 
@@ -696,6 +704,8 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, mo
                 yield event
                 if event[0] == "snapshot":
                     snapshot_sent.set()
+                    if first == "cancel":
+                        await resume_stream.wait()
 
     monkeypatch.setattr(engine, "subscribe", observe_subscribe)
     async with app.state.sessionmaker() as db:
@@ -704,7 +714,8 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, mo
     deletion = None
     try:
         await asyncio.wait_for(snapshot_sent.wait(), 5)
-        assert engine.hubs[t2["id"]].subscriber_count == 1
+        subscribed_hub = engine.hubs[t2["id"]]
+        assert subscribed_hub.subscriber_count == 1
         deletion = asyncio.create_task(client.delete(f"/api/v1/projects/{p2['id']}"))
         await asyncio.wait_for(deleting.wait(), 3)
         events = parse_sse((await asyncio.wait_for(subscriber, 5)).text)
@@ -712,6 +723,7 @@ async def test_subscribed_task_deleted_ends_with_error(app, client, fake_llm, mo
         release_cancel.set()
         assert (await asyncio.wait_for(deletion, 5)).status_code == 204
     finally:
+        resume_stream.set()
         release_cancel.set()
         if not subscriber.done():
             subscriber.cancel()

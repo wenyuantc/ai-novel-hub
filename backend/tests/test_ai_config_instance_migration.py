@@ -14,12 +14,12 @@ from sqlalchemy.ext import asyncio as async_sqlalchemy
 from app.models import AIConfig, Base
 from app.services.backups.database import _sqlite_snapshot
 from tests.helpers import create_ai_config, create_project, register
-from tests.test_setting_fields_migration import _config, _foreign_keys_during_migrations
+from tests.test_setting_fields_migration import _config, _migration_fk_on_connect
 
 
 @pytest.fixture(autouse=True)
 def _foreign_keys(monkeypatch):
-    _foreign_keys_during_migrations(monkeypatch)
+    _migration_fk_on_connect(monkeypatch)
 
 
 def _seed(conn):
