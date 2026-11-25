@@ -1,0 +1,7 @@
+{"phase": "备份脚本版本", "elapsed_s": 0.0, "sha256": "070b0f9c0894f8c9b668c89842d3f0ee403771f1941da23a7e483af89b889981", "engine": "sqlite"}
+{"phase": "隔离版本就绪", "elapsed_s": 0.653, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6"}
+{"phase": "隔离版本就绪", "elapsed_s": 1.419, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154"}
+{"phase": "旧版屏障应用就绪", "elapsed_s": 17.555, "pid": 39320}
+{"phase": "备份快照入口被屏障暂停", "elapsed_s": 18.255, "run_id": 1, "active_status": "running", "drained": false}
+{"phase": "旧版活动备份完成并恢复验证", "elapsed_s": 18.412, "run_id": 1, "status": "succeeded", "active_run_after": null, "restored_revision": "0043", "restored_project": true, "bytes": 1568768, "sha256": "e72a11fe24f0c0535374c3291a64ef5732dd91ae244b37615632b9c19e6d13d5", "checksum_matches_backup_record": true, "pg_dump": null}
+{"phase": "旧版屏障应用退出", "elapsed_s": 18.573, "pid": 39320, "exit_code": -15}

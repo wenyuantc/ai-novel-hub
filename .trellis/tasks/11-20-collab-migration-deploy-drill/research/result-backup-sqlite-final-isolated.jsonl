@@ -1,0 +1,8 @@
+{"phase": "备份脚本版本", "timestamp_utc": "2026-11-25T06:55:21.125Z", "elapsed_s": 0.001, "sha256": "7f7fd04d207d7cfa1ecd24e0d37707816bdead716a7616e4eeb74ac321db67a9", "engine": "sqlite"}
+{"phase": "隔离版本就绪", "timestamp_utc": "2026-11-25T06:55:23.077Z", "elapsed_s": 1.952, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6", "python_version": "Python 3.12.10"}
+{"phase": "隔离版本就绪", "timestamp_utc": "2026-11-25T06:55:24.327Z", "elapsed_s": 3.202, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154", "python_version": "Python 3.12.10"}
+{"phase": "旧版屏障应用就绪", "timestamp_utc": "2026-11-25T06:55:42.593Z", "elapsed_s": 21.469, "pid": 9048}
+{"phase": "旧版每日备份开关", "timestamp_utc": "2026-11-25T06:55:43.212Z", "elapsed_s": 22.087, "initial": false, "enabled": true, "disabled": true, "future_schedule": true}
+{"phase": "备份快照入口被屏障暂停", "timestamp_utc": "2026-11-25T06:55:43.294Z", "elapsed_s": 22.169, "run_id": 1, "active_status": "running", "drained": false}
+{"phase": "旧版活动备份完成并恢复验证", "timestamp_utc": "2026-11-25T06:55:43.447Z", "elapsed_s": 22.322, "run_id": 1, "status": "succeeded", "active_run_after": null, "restored_revision": "0043", "restored_project": true, "bytes": 1568768, "sha256": "3143e8ebfba50af2dcf059f063538a810ebe3c5eb7b4da4d7a47cb27eb32ee9d", "checksum_matches_backup_record": true, "pg_dump": null}
+{"phase": "旧版屏障应用退出", "timestamp_utc": "2026-11-25T06:55:43.609Z", "elapsed_s": 22.485, "pid": 9048, "exit_code": -15}

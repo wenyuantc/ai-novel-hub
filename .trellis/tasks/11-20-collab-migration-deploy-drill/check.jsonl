@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引和全量验收门禁"}
+{"file": ".trellis/spec/backend/deployment-migrations.md", "reason": "迁移互斥、部署和恢复约束"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库、迁移与 SQLite／PostgreSQL 约束；文件可能被注入截断，必须直接完整读取"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "隔离、测试与密钥处理规范；文件可能被注入截断，必须直接完整读取"}
+{"file": ".trellis/spec/backend/system-settings.md", "reason": "新版排空开关及其边界"}
+{"file": ".trellis/spec/backend/admin-backups.md", "reason": "整库备份与恢复约束"}
+{"file": ".trellis/tasks/11-20-collab-migration-deploy-drill/research/legacy-background-2026-11-20.md", "reason": "旧版协作迁移及遗留任务的历史研究，结论需按当前版本复验；文件可能被注入截断，必须直接完整读取"}
+{"file": ".trellis/tasks/11-20-collab-migration-deploy-drill/research/planning-evidence.md", "reason": "当前分支、旧版与 C7 边界的规划期核对"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-mp-deploy-acceptance/research/verification.md", "reason": "C7 已有的验收证据及未覆盖范围"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-mp-deploy-acceptance/research/c7_operation_acceptance/verification.md", "reason": "可复用的隔离、备份恢复与脱敏方法及限制"}

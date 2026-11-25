@@ -1,0 +1,44 @@
+{"phase": "补验脚本版本", "elapsed_s": 0.0, "sha256": "81ce8dd32cb9cc385e80a10c7fae486b966aadebee5de2d390235d1ea338b854", "engine": "sqlite"}
+{"phase": "隔离版本就绪", "elapsed_s": 0.641, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6"}
+{"phase": "隔离版本就绪", "elapsed_s": 1.321, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154"}
+{"phase": "应用启动", "elapsed_s": 18.366, "version": "old-seed", "pid": 42132}
+{"phase": "旧版业务数据创建", "elapsed_s": 21.148, "users": 2, "projects": 3, "finished": 1, "agent_proposals": 1, "knowledge_document": 1, "paused_batch": 1, "interrupted_inflight": 1}
+{"phase": "应用退出", "elapsed_s": 21.346, "version": "old-seed", "pid": 42132, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 24.722, "version": "old-drain", "pid": 42460}
+{"phase": "未排空旧版清单", "elapsed_s": 26.25, "counts": {"queued": 3, "running": 2, "paused": 2, "succeeded": 2, "failed": 0, "cancelled": 0, "interrupted": 1, "unknown": 0}, "task_ids": {"analysis_running": 6, "analysis_queued": 7, "generating": 8, "paused_batch": 4, "queued_generation": 9, "paused_agent": 3, "interrupted": 5, "kb_queued": 10}}
+{"phase": "快照", "elapsed_s": 26.263, "name": "undrained", "bytes": 1593344, "sha256": "b9eba745ff106d5def3c03c418ae638ee4d14e85a01ac91502facb6da00f83b0"}
+{"phase": "旧版任务收尾", "elapsed_s": 27.242, "kind": "analysis_running", "status": "succeeded"}
+{"phase": "旧版任务收尾", "elapsed_s": 27.353, "kind": "analysis_queued", "status": "succeeded"}
+{"phase": "旧版任务收尾", "elapsed_s": 27.464, "kind": "generating_task", "status": "succeeded"}
+{"phase": "快照", "elapsed_s": 27.503, "name": "before_stop", "bytes": 1601536, "sha256": "1cbcd48b892af839c155c45dab7824dff924da5196a08b291aa7ac4ac59e356f"}
+{"phase": "旧版已排空", "elapsed_s": 27.513, "counts": {"queued": 0, "running": 0, "paused": 0, "succeeded": 5, "failed": 0, "cancelled": 4, "interrupted": 1, "unknown": 0}, "scheduled_backup": false, "active_backup": false, "maintenance_proxy_denied_new_write": true}
+{"phase": "应用退出", "elapsed_s": 27.903, "version": "old-drain", "pid": 42460, "exit_code": -15}
+{"phase": "快照", "elapsed_s": 27.913, "name": "final_old", "bytes": 1601536, "sha256": "1cbcd48b892af839c155c45dab7824dff924da5196a08b291aa7ac4ac59e356f"}
+{"phase": "应用启动", "elapsed_s": 44.7, "version": "matrix-running_analysis_owner", "pid": 42746}
+{"phase": "旧任务取消补验", "elapsed_s": 50.067, "case": "running_analysis_owner", "before": "running", "http": 409, "after": "running", "observation_seconds": 2}
+{"phase": "应用退出", "elapsed_s": 50.307, "version": "matrix-running_analysis_owner", "pid": 42746, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 55.206, "version": "matrix-running_analysis_admin", "pid": 43399}
+{"phase": "旧任务取消补验", "elapsed_s": 70.331, "case": "running_analysis_admin", "before": "running", "http": 202, "after": "running", "observation_seconds": 12}
+{"phase": "应用退出", "elapsed_s": 70.528, "version": "matrix-running_analysis_admin", "pid": 43399, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 74.805, "version": "matrix-queued_analysis_admin", "pid": 44449}
+{"phase": "旧任务取消补验", "elapsed_s": 98.024, "case": "queued_analysis_admin", "before": "queued", "http": 202, "after": "cancelled", "observation_seconds": 12, "reissue": {"http": 202, "status_after_8s": "running", "model_called": true}}
+{"phase": "应用退出", "elapsed_s": 98.296, "version": "matrix-queued_analysis_admin", "pid": 44449, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 102.625, "version": "matrix-paused_batch_owner", "pid": 45226}
+{"phase": "旧任务取消补验", "elapsed_s": 115.852, "case": "paused_batch_owner", "before": "paused", "http": 200, "after": "cancelled", "observation_seconds": 2, "reissue": {"http": 202, "status_after_8s": "running", "model_called": true}}
+{"phase": "应用退出", "elapsed_s": 116.056, "version": "matrix-paused_batch_owner", "pid": 45226, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 120.261, "version": "matrix-paused_batch_admin", "pid": 45806}
+{"phase": "旧任务取消补验", "elapsed_s": 135.369, "case": "paused_batch_admin", "before": "paused", "http": 202, "after": "cancelled", "observation_seconds": 12}
+{"phase": "应用退出", "elapsed_s": 135.57, "version": "matrix-paused_batch_admin", "pid": 45806, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 140.335, "version": "matrix-paused_agent_owner", "pid": 46437}
+{"phase": "旧任务取消补验", "elapsed_s": 145.503, "case": "paused_agent_owner", "before": "paused", "http": 200, "after": "cancelled", "observation_seconds": 2}
+{"phase": "应用退出", "elapsed_s": 145.706, "version": "matrix-paused_agent_owner", "pid": 46437, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 150.277, "version": "matrix-paused_agent_admin", "pid": 46739}
+{"phase": "旧任务取消补验", "elapsed_s": 165.543, "case": "paused_agent_admin", "before": "paused", "http": 202, "after": "cancelled", "observation_seconds": 12}
+{"phase": "应用退出", "elapsed_s": 165.667, "version": "matrix-paused_agent_admin", "pid": 46739, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 169.875, "version": "matrix-interrupted_chapter_owner", "pid": 47432}
+{"phase": "旧任务取消补验", "elapsed_s": 175.028, "case": "interrupted_chapter_owner", "before": "interrupted", "http": 409, "after": "interrupted", "observation_seconds": 2, "chapter_status": "generating", "reissue_http": 409}
+{"phase": "应用退出", "elapsed_s": 175.238, "version": "matrix-interrupted_chapter_owner", "pid": 47432, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 179.883, "version": "matrix-interrupted_chapter_admin", "pid": 47734}
+{"phase": "旧任务取消补验", "elapsed_s": 185.123, "case": "interrupted_chapter_admin", "before": "interrupted", "http": 409, "after": "interrupted", "observation_seconds": 2, "chapter_status": "generating", "reissue_http": 409}
+{"phase": "应用退出", "elapsed_s": 185.328, "version": "matrix-interrupted_chapter_admin", "pid": 47734, "exit_code": -15}
+{"phase": "旧任务取消补验完成", "elapsed_s": 185.328, "engine": "sqlite", "cases": 9, "unexpected_model_calls": 0}

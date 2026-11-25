@@ -258,7 +258,7 @@ docker compose -f docker-compose.multi.yml exec -T app1 python -c \
 4. 确认服务正常后关闭排空开关，验证新任务受理。单独重启其中一个进程时，原运行中的模型调用通常不能继续，任务按租约及持久凭据收尾。
 5. 需要回退时先停止全部新实例，恢复升级前快照和匹配的旧代码及密钥，再验证后恢复流量；不能让旧代码直接连接已经升级的库。SQLite 按[文件恢复流程](#sqlite-文件恢复)一并处理租约侧库与锁文件。
 
-本次代码升级演练两侧数据库版本均为 `0070`；从协作功能旧版升级并恢复快照的演练尚未完成，应先在隔离环境单独验证。
+上面的代码升级演练两侧数据库版本均为 `0070`。从协作功能旧版升级请参照[从 0043 升级作品协作](#从-0043-升级作品协作)，并先在目标部署的隔离环境验证。
 
 ## 本地开发
 
@@ -623,7 +623,7 @@ Skill 可以声明最多 20 个**输入项**，让同一份工作流在不同场
 - 编辑者可以在共享作品中使用项目智能体。会话归本人所有，作者和其他成员看不到。查看者只能查看自己已有的会话，不能新建会话或发送消息。
 - 协作者的会话不能启用 MCP 插件。智能体提出的修改仍需确认后才会执行，执行前会按编辑者权限重新校验。
 - 作者撤销成员、将其降为查看者，或关闭本轮所依赖的作者模型授权后，进行中的轮次会停止；待确认的提案会标为「已作废」，不会再写入作品。已执行的修改仍会保留。撤销后再次邀请时，旧会话保持只读，需要新建会话继续。
-- 协作者的智能体轮次不提供实时流式订阅，界面通过轮询显示进度。
+- 具备智能体使用权限的协作者可实时订阅排队或运行中的轮次；页面可见时仍会轮询核对未结束轮次，权限失效后停止订阅。
 
 ### 知识库与向量索引
 
@@ -939,6 +939,107 @@ PostgreSQL 数据保存在命名卷 `pgdata` 中，实际卷名通常带有 Comp
 
 更新前应备份数据库和原配置。数据库迁移不等于完整回滚机制；需要回退版本时，应先确认代码与数据库结构兼容，必要时恢复配套备份。
 
+### 从 0043 升级作品协作
+
+以下步骤适用于作品协作上线前的 `0043` 旧版。先核对当前部署使用的代码、数据库类型和迁移版本，并保存旧镜像或源码、部署配置、原 `ENCRYPTION_KEY` 和备份密码。旧版没有「停止受理新任务」开关；不要套用新版的开关步骤。升级期间不能让新旧版本同时连接同一个库，也不能让旧代码直接连接已升级的库：旧版按作品读取生成记录，可能将协作者的记录展示给作者，即使旧版能够启动也不代表安全。
+
+准备具有 `tasks.read`、`tasks.cancel`、`backups.read`、`backups.configure`、`backups.run` 和 `backups.download` 权限的维护账号，并预留可写入备份的独立空间。
+
+旧版应用仍在运行时，可在旧部署的项目目录核对迁移版本；其他 Compose 项目名或服务名需按实际情况指定：
+
+```bash
+docker compose exec -T app alembic current
+```
+
+本地后端则在旧版源码的 `backend/` 目录执行 `uv run alembic current`。确认输出为 `0043`，并核对命令使用的数据库地址确实是准备升级的库。
+
+1. 通过已有反向代理或其他部署控制阻止普通用户和开放 API 的新业务写入，保留仅供维护人员使用的管理及验收通道，以便稍后使用测试账号验证业务。等待已在途的编辑、导入、同步 AI 和流式请求结束；维护模式的具体配置取决于部署环境，不能仅隐藏前端入口。
+2. 在旧版「整库备份」设置中记下原定时配置，关闭「每日定时备份」，确认概览中的「当前执行」为空闲。随后在「全站任务监控」重置所有筛选，至少刷新两次，确认排队、运行中、待审核均为 0；等待任务完成，或逐个申请取消并等待收尾。取消受理不代表取消已完成。核对中断任务和仍显示生成中的章节；有无法确认的在途工作、取消中任务或异常章节时，先排查，不继续升级。
+3. 在旧版「整库备份」中执行一次手动备份，下载并核对大小及 SHA-256，在独立环境恢复并检查版本、账号和作品。保持维护模式，停止**全部**旧版应用、后台写入进程和其他数据库写入方。停服前的备份验证不能证明停服后没有新写入，因此还要生成并验证下述停服后的最终快照，作为实际回滚点。
+
+   本地如果使用 `uvicorn --reload`，应在启动终端按 `Ctrl+C` 停止整个命令，确认重载父进程及其子进程均已退出；不要只停止处理请求的子进程。可用 `lsof -nP -iTCP:8000 -sTCP:LISTEN` 检查示例端口是否仍有监听，端口号按实际配置替换。
+
+4. PostgreSQL 单实例 Compose 可使用下列命令生成最终快照；命令在旧部署的项目目录执行，若原部署指定了 `-p`，这里也要使用相同项目名。自定义服务名或双实例部署时，先按实际配置停止全部应用，并使用对应的 Compose 文件。数据库服务须保持运行。
+
+   ```bash
+   (
+     set -eu
+     umask 077
+     mkdir -p backups
+     snapshot=backups/ainovel-before-collaboration.dump
+     test ! -e "$snapshot"
+     docker compose stop app
+     docker compose exec -T db sh -c \
+       'PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+       > "$snapshot"
+     test -s "$snapshot"
+     printf '%s\n' '最终快照已生成；恢复验证通过后再升级。'
+   )
+   ```
+
+   SQLite 停止所有连接主库的进程后，可以用 Python 的 SQLite backup 生成单文件最终快照。将两个路径改成实际绝对路径；目标文件必须不存在，且目标目录须已创建。
+
+   ```bash
+   (
+     set -eu
+     umask 077
+     db=/absolute/path/to/old.sqlite3
+     snapshot=/absolute/path/to/before-collaboration.sqlite3
+     expected_revision=0043
+     python3 - "$db" "$snapshot" "$expected_revision" <<'PY'
+   import os
+   import sqlite3
+   import sys
+   from contextlib import closing
+   from pathlib import Path
+
+   source = Path(sys.argv[1]).resolve(strict=True)
+   destination_arg = Path(sys.argv[2])
+   destination = destination_arg.parent.resolve(strict=True) / destination_arg.name
+   if not source.is_file() or source == destination:
+       raise SystemExit("请核对来源和目标路径")
+   with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as old:
+       version = old.execute("SELECT version_num FROM alembic_version").fetchall()
+       if not sys.argv[3].isdecimal() or version != [(sys.argv[3],)]:
+           raise SystemExit("来源迁移版本与预期不符；不要继续")
+       fd = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+       os.close(fd)
+       with closing(sqlite3.connect(destination)) as backup:
+           old.backup(backup)
+           if backup.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+               raise SystemExit("快照完整性检查失败")
+           if backup.execute("PRAGMA foreign_key_check").fetchone() is not None:
+               raise SystemExit("快照外键检查失败")
+   print("最终快照已生成；恢复验证通过后再升级。")
+   PY
+   )
+   ```
+
+5. 任一步失败都保持停机，不使用可能不完整的文件。计算并记录最终快照 SHA-256（将路径替换成实际的 PostgreSQL 或 SQLite 快照）：
+
+   ```bash
+   snapshot=/absolute/path/to/final-snapshot
+   python3 - "$snapshot" <<'PY'
+   import hashlib
+   import sys
+
+   digest = hashlib.sha256()
+   with open(sys.argv[1], "rb") as source:
+       for chunk in iter(lambda: source.read(1024 * 1024), b""):
+           digest.update(chunk)
+   print(digest.hexdigest())
+   PY
+   ```
+
+   按下方[数据库备份与恢复](#数据库备份)步骤，在**独立环境**恢复到新的空数据库或 SQLite 文件，核对迁移版本为 `0043`、账号和作品可读。启动验证用的旧版之前，确认其 `DATABASE_URL` 指向隔离副本，并限制它访问真实业务数据库和外部服务。使用原密钥启动配套旧版后，登录原账号并进入「模型配置」，确认已有配置的密钥掩码没有显示「解密失败」；如果原库没有模型配置，此项无法验证，需另行核对密钥。保留原快照及旧配置。
+6. 确认所有旧进程仍已停止，切换到新版代码或镜像。默认单实例 Compose 在新版项目目录执行 `docker compose up -d --build`，容器入口会先执行迁移；本地后端按[本地启动步骤](#2-选择数据库并启动后端)执行迁移并启动。迁移或启动失败时保持维护模式，排查后再操作。检查数据库版本、作品、历史生成记录、模型配置和任务受理；确认协作邀请可用后再恢复流量与计划备份。新版和旧版的镜像、迁移与数据库必须相互匹配。
+
+如果已经在未排空的情况下升级，先保持维护模式，确认旧执行进程全部停止，保存当前库和日志，逐个核对遗留任务及章节。旧排队任务可能使同一串行键的新任务继续等待；待审核任务不一定能在新版继续，任务中断也不保证章节状态已恢复。演练中，旧批量任务无法继续，但可以使用「结束」；旧知识库索引失败后，可核对文档并重新发起索引。旧智能体任务取消后即使可以重新发消息，原提案仍可能保留待确认，不能当作已处理。不同任务类型的取消和收尾结果可能不同，管理员取消被受理也不等于已经完成；应查看实际终态，不直接修改数据库或补造任务身份。无法确认安全收尾时，停止新版并按下面的快照流程回退。
+
+需要回滚时先再次限制访问，记下当前数据库的迁移版本，停止全部新版进程。另行备份当前新版数据库并保留原配置，供之后核对：PostgreSQL 可复用上面的 `pg_dump` 命令，将 `snapshot` 换成一个不存在的新文件；SQLite 可复用上面的 Python 快照命令，将 `db` 改为当前新版库、`snapshot` 改为一个不存在的新文件，并把 `expected_revision` 改为刚才记录的新版本号。两者都要核对 SHA-256 并验证备份可恢复。
+
+然后按下方恢复步骤把**升级前最终快照**恢复到新空库或安全的新 SQLite 文件，核对版本后启动配套旧代码和原密钥。验证登录、作品读取、模型配置解密和任务运行后再恢复流量。快照之后在新版产生的数据不会自动回到旧库，保留新版备份也不等于能自动合并；应在回滚前明确这部分数据的处置。即使升级后没有新数据，旧智能体提案或中断任务也可能让降级被拒。不要通过清空协作数据、只撤前端入口或执行降级来替代快照恢复。
+
 ### HTTPS 与反向代理
 
 公网部署时，可在应用前设置 HTTPS 反向代理，并将 `COOKIE_SECURE=true`。代理需正确转发 `Host`、`X-Forwarded-For` 和 `X-Forwarded-Proto`，应用默认启动参数已启用 `--proxy-headers`。
@@ -1135,7 +1236,7 @@ except Exception:
 DATABASE_URL="sqlite+aiosqlite:////absolute/path/to/dev.db" uv run alembic upgrade head
 ```
 
-若要回退到旧代码，不要运行当前代码的 `upgrade head`；应先确认恢复工具与快照兼容，再使用匹配旧版本的代码和配置。旧版协作迁移的升级与回滚尚未完成演练，应先在隔离环境验证。核对最终路径、迁移版本与原加密配置后启动后端，验证作品、账号及加密凭据可读，再恢复流量。
+若要回退到旧代码，不要运行当前代码的 `upgrade head`；应先确认恢复工具与快照兼容，再使用匹配旧版本的代码和配置。`0043` 旧版不包含上述 SQLite 恢复模块：执行恢复命令时使用包含该模块的新版源码与依赖；它只恢复快照，不会自动升级数据库。完成后再切换到配套旧代码启动。旧版协作迁移仅在本地隔离环境演练过，目标部署仍应先在隔离环境验证。核对最终路径、迁移版本与原加密配置后启动后端，验证作品、账号及加密凭据可读，再恢复流量。
 
 全程保留原快照和回滚目录。如果恢复过程中报错且目标已生成文件，保持停机，将本次生成的整组文件移存后从原快照重试。需要回滚时先停掉新进程，移走新主库及其全部伴随文件，再将回滚目录中的整组原文件移回原来的路径；同一文件系统内的移动可以保留原文件身份。
 

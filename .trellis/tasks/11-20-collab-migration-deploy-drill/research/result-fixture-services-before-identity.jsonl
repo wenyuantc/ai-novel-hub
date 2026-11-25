@@ -1,0 +1,3 @@
+{"phase": "夹具集成脚本版本", "timestamp_utc": "2026-11-25T07:14:04.903Z", "elapsed_s": 0.005, "sha256": "61ec6d2c14e9b98233c700dfcc47767e6b67f0a4282a6fb6e10659b898e05e9f", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9"}
+{"phase": "固定前端和代理夹具验证", "timestamp_utc": "2026-11-25T07:14:22.312Z", "elapsed_s": 17.414, "old_ui": 200, "new_ui": 200, "api_proxy": 200, "private_controls": true}
+{"phase": "夹具认证清理完成", "timestamp_utc": "2026-11-25T07:14:29.136Z", "elapsed_s": 24.238, "old": true, "new": true, "backend": true, "removed": true, "run_failed": false}

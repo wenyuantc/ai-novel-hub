@@ -1,0 +1,68 @@
+{"phase": "脚本版本", "elapsed_s": 0.0, "sha256": "502b6151d4a5272f43955e0ec8d387b0e58471b660ff025339c77bd5f4a9fbc4"}
+{"phase": "隔离版本就绪", "elapsed_s": 0.728, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6", "python_version": "Python 3.12.10"}
+{"phase": "隔离版本就绪", "elapsed_s": 2.137, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154", "python_version": "Python 3.12.10"}
+{"phase": "旧版迁移", "elapsed_s": 9.452, "revision": "0043", "engine": "sqlite"}
+{"phase": "应用启动", "elapsed_s": 21.377, "version": "old-seed", "pid": 63389}
+{"phase": "旧版业务数据创建", "elapsed_s": 23.866, "users": 2, "projects": 3, "finished": 1, "agent_proposals": 1, "knowledge_document": 1, "paused_batch": 1, "interrupted_inflight": 1}
+{"phase": "应用退出", "elapsed_s": 24.086, "version": "old-seed", "pid": 63389, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 28.034, "version": "old-drain", "pid": 63704}
+{"phase": "未排空旧版清单", "elapsed_s": 29.744, "counts": {"queued": 3, "running": 2, "paused": 2, "succeeded": 2, "failed": 0, "cancelled": 0, "interrupted": 1, "unknown": 0}, "task_ids": {"analysis_running": 6, "analysis_queued": 7, "generating": 8, "paused_batch": 4, "queued_generation": 9, "paused_agent": 3, "interrupted": 5, "kb_queued": 10}}
+{"phase": "快照", "elapsed_s": 29.756, "name": "undrained", "bytes": 1593344, "sha256": "4a8b8cd056555bde9d65a2b813adcdff0950ec9279b3414d2e48a496ef33479d"}
+{"phase": "旧版任务收尾", "elapsed_s": 30.757, "kind": "analysis_running", "status": "succeeded"}
+{"phase": "旧版任务收尾", "elapsed_s": 30.874, "kind": "analysis_queued", "status": "succeeded"}
+{"phase": "旧版任务收尾", "elapsed_s": 30.989, "kind": "generating_task", "status": "succeeded"}
+{"phase": "快照", "elapsed_s": 31.036, "name": "before_stop", "bytes": 1601536, "sha256": "efcfb9627d80b39c69ebcd50ea99fb4dac3579aa7e6607b8be4bdf62eabfc5b1"}
+{"phase": "旧版已排空", "elapsed_s": 31.045, "counts": {"queued": 0, "running": 0, "paused": 0, "succeeded": 5, "failed": 0, "cancelled": 4, "interrupted": 1, "unknown": 0}, "scheduled_backup": false, "active_backup": false, "maintenance_proxy_denied_new_write": true}
+{"phase": "应用退出", "elapsed_s": 31.393, "version": "old-drain", "pid": 63704, "exit_code": -15}
+{"phase": "快照", "elapsed_s": 31.404, "name": "final_old", "bytes": 1601536, "sha256": "efcfb9627d80b39c69ebcd50ea99fb4dac3579aa7e6607b8be4bdf62eabfc5b1"}
+{"phase": "旧版源库准备完毕", "elapsed_s": 31.414, "undrained": "undrained.sqlite3", "drained": "final_old.sqlite3", "calls": 7, "authenticated": true, "unexpected": 0}
+{"phase": "旧数据迁移后核对", "elapsed_s": 35.029, "revision": "0070", "legacy_non_owner_logs": 0, "agent_proposals": 1, "model_configs": 2}
+{"phase": "应用启动", "elapsed_s": 50.961, "version": "new-clean", "pid": 63993}
+{"phase": "新版业务验证", "elapsed_s": 53.559, "author_login": true, "old_project": true, "old_chapter": true, "invitation": true, "author_task": "succeeded", "collaborator_task": "succeeded", "separate_personal_logs": true, "author_log_http": 200, "member_log_http": 200, "project_id": 1, "chapter_id": 9, "author_id": 2, "member_id": 3, "author_log_ids": [6], "member_log_ids": [7], "real_model_calls": true}
+{"phase": "应用退出", "elapsed_s": 53.76, "version": "new-clean", "pid": 63993, "exit_code": -15}
+{"phase": "快照", "elapsed_s": 53.788, "name": "after_upgrade", "bytes": 2289664, "sha256": "ac4bf24850799534f9598a7879ad36eb2cd6ae4eac619faa236846ef44cd4570"}
+{"phase": "新版数据降级保护", "elapsed_s": 55.553, "rejected": true, "first_guard": "仍有 AI 用量、价格或预算数据", "revision": "0070", "schema_unchanged": true, "table_count": 135, "all_rows_unchanged": true}
+{"phase": "应用启动", "elapsed_s": 59.493, "version": "old-on-new", "pid": 64613}
+{"phase": "应用退出", "elapsed_s": 60.219, "version": "old-on-new", "pid": 64613, "exit_code": -15}
+{"phase": "旧代码直连新版库反例", "elapsed_s": 60.219, "started": true, "author_login": true, "old_owner_sees_guest_log": true, "log_http": 200, "old_owner_log_ids": [7, 6]}
+{"phase": "应用启动", "elapsed_s": 63.208, "version": "old-restored", "pid": 64800}
+{"phase": "快照回滚旧版验证", "elapsed_s": 64.145, "revision": "0043", "old_login": true, "old_project": true, "new_project_absent": true, "original_encryption_key_and_model_credential": true, "task": "succeeded"}
+{"phase": "应用退出", "elapsed_s": 64.332, "version": "old-restored", "pid": 64800, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 70.131, "version": "legacy-observe", "pid": 64885}
+{"phase": "未排空旧任务实测", "elapsed_s": 81.473, "scenario": "observe", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "successor_http": 202, "successor_status_after_8s": "queued", "successor_model_called": false, "analysis_running_after_8s": "running", "analysis_queued_after_8s": "queued"}
+{"phase": "应用退出", "elapsed_s": 81.665, "version": "legacy-observe", "pid": 64885, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 85.666, "version": "legacy-observe-restart", "pid": 65260}
+{"phase": "旧任务重启后观察", "elapsed_s": 94.226, "observation_seconds": 8, "analysis_running": "running", "analysis_queued": "queued", "model_calls": 0}
+{"phase": "应用退出", "elapsed_s": 94.404, "version": "legacy-observe-restart", "pid": 65260, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 100.84, "version": "legacy-resume", "pid": 65628}
+{"phase": "未排空旧任务实测", "elapsed_s": 107.444, "scenario": "resume", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "action_http": 400, "error_code": null, "error_summary": "模型绑定无效或已失效", "after_status": "paused", "model_calls_after": 0}
+{"phase": "应用退出", "elapsed_s": 107.685, "version": "legacy-resume", "pid": 65628, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 112.284, "version": "legacy-finish", "pid": 66095}
+{"phase": "未排空旧任务实测", "elapsed_s": 116.447, "scenario": "finish", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "action_http": 200, "after_status": "succeeded", "model_calls_after": 0}
+{"phase": "应用退出", "elapsed_s": 116.646, "version": "legacy-finish", "pid": 66095, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 121.064, "version": "legacy-owner_cancel", "pid": 66388}
+{"phase": "未排空旧任务实测", "elapsed_s": 126.243, "scenario": "owner_cancel", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "action_http": 200, "after_status": "cancelled"}
+{"phase": "应用退出", "elapsed_s": 126.495, "version": "legacy-owner_cancel", "pid": 66388, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 131.693, "version": "legacy-chapter_owner_cancel", "pid": 66669}
+{"phase": "未排空旧任务实测", "elapsed_s": 136.919, "scenario": "chapter_owner_cancel", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "action_http": 409, "after_status": "queued", "observation_seconds": 2, "chapter_after_cancel": "generating", "restart_http": 409}
+{"phase": "应用退出", "elapsed_s": 137.076, "version": "legacy-chapter_owner_cancel", "pid": 66669, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 141.75, "version": "legacy-admin_cancel", "pid": 66956}
+{"phase": "未排空旧任务实测", "elapsed_s": 156.96, "scenario": "admin_cancel", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "action_http": 202, "after_status": "queued", "observation_seconds": 12, "chapter_after_cancel": "generating", "restart_http": 409}
+{"phase": "应用退出", "elapsed_s": 157.084, "version": "legacy-admin_cancel", "pid": 66956, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 162.122, "version": "legacy-retry_interrupted", "pid": 67424}
+{"phase": "未排空旧任务实测", "elapsed_s": 165.282, "scenario": "retry_interrupted", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "action_http": 409, "error_code": "task_actor_unavailable", "after_status": "interrupted"}
+{"phase": "应用退出", "elapsed_s": 165.501, "version": "legacy-retry_interrupted", "pid": 67424, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 170.718, "version": "legacy-kb_reindex", "pid": 67617}
+{"phase": "未排空旧任务实测", "elapsed_s": 174.469, "scenario": "kb_reindex", "states": {"analysis_running": "running", "analysis_queued": "queued", "generating_task": "interrupted", "queued_generation": "queued", "paused_batch": "paused", "kb_queued": "failed"}, "chapter_states": [[7, "generating"], [8, "generating"]], "kb_document_status": "failed", "legacy_model_calls": 0, "reindex_http": 202, "reindex_task_status": "succeeded"}
+{"phase": "应用退出", "elapsed_s": 174.641, "version": "legacy-kb_reindex", "pid": 67617, "exit_code": -15}
+{"phase": "两个实例并发启动迁移", "elapsed_s": 180.048, "process_ids": [67848, 67849], "revision": "0070", "migrations_each": [0, 27], "ready_seconds": [5.386, 5.349], "business_database_reads": 2}
+{"phase": "应用启动", "elapsed_s": 186.999, "version": "old-minimal", "pid": 68188}
+{"phase": "快照", "elapsed_s": 188.411, "name": "minimal_old", "bytes": 1572864, "sha256": "758712a2960f817806ab442591c4024e6167f337fab4a5c351af91ff13cdc1ff"}
+{"phase": "应用退出", "elapsed_s": 189.189, "version": "old-minimal", "pid": 68188, "exit_code": -15}
+{"phase": "快照", "elapsed_s": 189.207, "name": "proposal_old", "bytes": 1576960, "sha256": "59f3b6a5cca3cf56f764209726387bf593dd2cfeed408182da869166858cd368"}
+{"phase": "无新版写入的降级", "elapsed_s": 192.647, "case": "simple", "accepted": true, "revision": "0043"}
+{"phase": "无新版写入的降级", "elapsed_s": 195.814, "case": "proposal", "accepted": false, "first_guard": "仍有智能体提案身份", "revision": "0070", "schema_unchanged": true, "all_rows_unchanged": true}
+{"phase": "无新版写入的降级", "elapsed_s": 199.212, "case": "interrupted", "accepted": false, "first_guard": "仍有模型实例绑定或未决执行事实", "revision": "0070", "schema_unchanged": true, "all_rows_unchanged": true}
+{"phase": "旧数据单迁移保护", "elapsed_s": 201.193, "case": "generating_chapter", "from_revision": "0046", "to_revision": "0045", "first_guard": "仍有生成中章节或章节占用身份", "schema_unchanged": true, "all_rows_unchanged": true}
+{"phase": "旧数据单迁移保护", "elapsed_s": 202.952, "case": "unfinished_analysis", "from_revision": "0051", "to_revision": "0050", "first_guard": "仍有未完成的分析或索引任务", "schema_unchanged": true, "all_rows_unchanged": true}
+{"phase": "脚本场景完成", "elapsed_s": 202.953, "engine": "sqlite", "model_calls": 12, "unexpected_model_calls": 0}

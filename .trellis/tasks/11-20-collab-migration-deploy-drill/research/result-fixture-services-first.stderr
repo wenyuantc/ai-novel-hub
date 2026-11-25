@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/.trellis/tasks/11-20-collab-migration-deploy-drill/research/check_fixture_services.py", line 88, in main
+    prepare_maintenance_proxy.install(metadata)
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/.trellis/tasks/11-20-collab-migration-deploy-drill/research/prepare_maintenance_proxy.py", line 186, in install
+    assert status(proxy_url + "/api/v1/projects", "POST") == 401
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/.trellis/tasks/11-20-collab-migration-deploy-drill/research/check_fixture_services.py", line 127, in <module>
+    main()
+  File "/Users/wenyuantc/IdeaProjects/my/aiNovel/.trellis/tasks/11-20-collab-migration-deploy-drill/research/check_fixture_services.py", line 116, in main
+    raise RuntimeError("fixture_cleanup_unverified")
+RuntimeError: fixture_cleanup_unverified

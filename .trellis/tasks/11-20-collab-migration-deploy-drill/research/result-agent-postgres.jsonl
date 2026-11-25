@@ -1,0 +1,24 @@
+{"phase": "智能体补验脚本版本", "elapsed_s": 0.001, "sha256": "b6f00412043c80f79e9b766f08244c7b3daf7e3fe908b900614d1721e237f716", "engine": "postgres"}
+{"phase": "专属数据库就绪", "elapsed_s": 18.033, "engine": "postgres", "version": "postgres (PostgreSQL) 16.15", "container": "ainovel-c8-941bcbbf0860491dac6ada82359db748"}
+{"phase": "隔离版本就绪", "elapsed_s": 18.599, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6"}
+{"phase": "隔离版本就绪", "elapsed_s": 19.417, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154"}
+{"phase": "应用启动", "elapsed_s": 38.443, "version": "old-seed", "pid": 55755}
+{"phase": "旧版业务数据创建", "elapsed_s": 42.288, "users": 2, "projects": 3, "finished": 1, "agent_proposals": 1, "knowledge_document": 1, "paused_batch": 1, "interrupted_inflight": 1}
+{"phase": "应用退出", "elapsed_s": 42.625, "version": "old-seed", "pid": 55755, "exit_code": -15}
+{"phase": "快照", "elapsed_s": 42.831, "name": "agent_paused", "bytes": 407801, "sha256": "ab689836ebdf67f74c4f1fb3e4da9d987cecc26899f85cb4b8f6aea905113653"}
+{"phase": "应用启动", "elapsed_s": 66.126, "version": "agent-message_paused", "pid": 56582}
+{"phase": "旧智能体任务补验", "elapsed_s": 69.324, "case": "message_paused", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "elapsed_s": 69.582, "version": "agent-message_paused", "pid": 56582, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 84.595, "version": "agent-resume", "pid": 57265}
+{"phase": "旧智能体任务补验", "elapsed_s": 87.431, "case": "resume", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "elapsed_s": 87.616, "version": "agent-resume", "pid": 57265, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 98.61, "version": "agent-finish", "pid": 57700}
+{"phase": "旧智能体任务补验", "elapsed_s": 102.042, "case": "finish", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "elapsed_s": 102.257, "version": "agent-finish", "pid": 57700, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 110.48, "version": "agent-reject", "pid": 58333}
+{"phase": "旧智能体任务补验", "elapsed_s": 113.535, "case": "reject", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "elapsed_s": 113.726, "version": "agent-reject", "pid": 58333, "exit_code": -15}
+{"phase": "应用启动", "elapsed_s": 121.979, "version": "agent-cancel_and_send", "pid": 58547}
+{"phase": "旧智能体任务补验", "elapsed_s": 134.159, "case": "cancel_and_send", "before": "paused", "proposal_before": "proposed", "cancel_http": 200, "after_cancel": "cancelled", "http": 202, "old_task_after": "cancelled", "model_called": true, "new_task_after": "succeeded", "proposal_after": ["proposed"]}
+{"phase": "应用退出", "elapsed_s": 134.347, "version": "agent-cancel_and_send", "pid": 58547, "exit_code": -15}
+{"phase": "旧智能体任务补验完成", "elapsed_s": 134.347, "engine": "postgres", "cases": 5, "unexpected_model_calls": 0}

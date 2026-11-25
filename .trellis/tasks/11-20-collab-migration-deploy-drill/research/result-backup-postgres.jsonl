@@ -1,0 +1,8 @@
+{"phase": "备份脚本版本", "elapsed_s": 0.0, "sha256": "070b0f9c0894f8c9b668c89842d3f0ee403771f1941da23a7e483af89b889981", "engine": "postgres"}
+{"phase": "专属数据库就绪", "elapsed_s": 3.475, "engine": "postgres", "version": "postgres (PostgreSQL) 16.15", "container": "ainovel-c8-cb03c0dbb4b94c56aac191019186f8ca"}
+{"phase": "隔离版本就绪", "elapsed_s": 3.998, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6"}
+{"phase": "隔离版本就绪", "elapsed_s": 4.68, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154"}
+{"phase": "旧版屏障应用就绪", "elapsed_s": 21.137, "pid": 39588}
+{"phase": "备份快照入口被屏障暂停", "elapsed_s": 22.184, "run_id": 1, "active_status": "running", "drained": false}
+{"phase": "旧版活动备份完成并恢复验证", "elapsed_s": 28.455, "run_id": 1, "status": "succeeded", "active_run_after": null, "restored_revision": "0043", "restored_project": true, "bytes": 400794, "sha256": "d7c8897963a26af9a1423fc76c6271513e380b164b44019c6a75b6bfffa3a881", "checksum_matches_backup_record": true, "pg_dump": "专属容器原生命令"}
+{"phase": "旧版屏障应用退出", "elapsed_s": 28.656, "pid": 39588, "exit_code": -15}

@@ -1,0 +1,14 @@
+{"phase": "进程隔离脚本版本", "timestamp_utc": "2026-11-25T07:21:59.017Z", "elapsed_s": 0.001, "sha256": "519f133eeb08819540f24865d57f6eb9e9ca9006ea7741dabe8a03a38831aa8f", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9"}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:21:59.201Z", "elapsed_s": 0.184, "version": "isolation-term", "pid": 61265}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:21:59.316Z", "elapsed_s": 0.3, "version": "isolation-term", "pid": 61265, "exit_code": -15}
+{"phase": "应用进程组隔离验证", "timestamp_utc": "2026-11-25T07:21:59.325Z", "elapsed_s": 0.308, "mode": "term", "app_exit": -15, "app_port_closed": true, "model_http": 200, "controller_alive": true, "descendant_stopped": true, "ignored_term_escalated": false}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:21:59.391Z", "elapsed_s": 0.375, "version": "isolation-kill", "pid": 61317}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:21:59.554Z", "elapsed_s": 0.537, "version": "isolation-kill", "pid": 61317, "exit_code": -9}
+{"phase": "应用进程组隔离验证", "timestamp_utc": "2026-11-25T07:21:59.561Z", "elapsed_s": 0.544, "mode": "kill", "app_exit": -9, "app_port_closed": true, "model_http": 200, "controller_alive": true, "descendant_stopped": true, "ignored_term_escalated": false}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:21:59.624Z", "elapsed_s": 0.608, "version": "isolation-stubborn", "pid": 61333}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:22:00.078Z", "elapsed_s": 1.061, "version": "isolation-stubborn", "pid": 61333, "exit_code": -15}
+{"phase": "应用进程组隔离验证", "timestamp_utc": "2026-11-25T07:22:00.085Z", "elapsed_s": 1.068, "mode": "stubborn", "app_exit": -15, "app_port_closed": true, "model_http": 200, "controller_alive": true, "descendant_stopped": true, "ignored_term_escalated": true}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:22:00.150Z", "elapsed_s": 1.134, "version": "isolation-context", "pid": 61378}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:22:00.257Z", "elapsed_s": 1.241, "version": "isolation-context", "pid": 61378, "exit_code": -15}
+{"phase": "应用进程组隔离验证", "timestamp_utc": "2026-11-25T07:22:00.279Z", "elapsed_s": 1.262, "mode": "context", "app_exit": -15, "app_port_closed": true, "model_http": 200, "controller_alive": true, "descendant_stopped": true, "ignored_term_escalated": false}
+{"phase": "进程隔离检查完成", "timestamp_utc": "2026-11-25T07:22:00.279Z", "elapsed_s": 1.262, "cases": 4, "unexpected_model_calls": 0}

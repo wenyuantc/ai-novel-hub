@@ -1,0 +1,26 @@
+{"phase": "智能体补验脚本版本", "timestamp_utc": "2026-11-25T07:16:24.239Z", "elapsed_s": 0.002, "sha256": "cf64e368875b2f6ecdf3243ea55122b40733233c888d553b8c7f3d93c35c2768", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9", "engine": "postgres"}
+{"phase": "专属数据库存储就绪", "timestamp_utc": "2026-11-25T07:16:24.949Z", "elapsed_s": 0.711, "container": "ainovel-c8-87924338f0e442d0afb45cc8a53d83fc", "data_mount": "tmpfs", "anonymous_volumes": 0}
+{"phase": "专属数据库就绪", "timestamp_utc": "2026-11-25T07:16:25.713Z", "elapsed_s": 1.476, "engine": "postgres", "version": "postgres (PostgreSQL) 16.15", "container": "ainovel-c8-87924338f0e442d0afb45cc8a53d83fc", "image_id": "sha256:c54a696c68013b2f8f42f479e00a2b6ad24c5ef10ee31cdfb8972cec3dad7eb7"}
+{"phase": "隔离版本就绪", "timestamp_utc": "2026-11-25T07:16:27.118Z", "elapsed_s": 2.88, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6", "python_version": "Python 3.12.10"}
+{"phase": "隔离版本就绪", "timestamp_utc": "2026-11-25T07:16:28.345Z", "elapsed_s": 4.108, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154", "python_version": "Python 3.12.10"}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:16:48.481Z", "elapsed_s": 24.243, "version": "old-seed", "pid": 50485}
+{"phase": "旧版业务数据创建", "timestamp_utc": "2026-11-25T07:16:50.946Z", "elapsed_s": 26.708, "users": 2, "projects": 3, "finished": 1, "agent_proposals": 1, "knowledge_document": 1, "paused_batch": 1, "interrupted_inflight": 1}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:16:51.291Z", "elapsed_s": 27.053, "version": "old-seed", "pid": 50485, "exit_code": -15}
+{"phase": "快照", "timestamp_utc": "2026-11-25T07:16:51.602Z", "elapsed_s": 27.364, "name": "agent_paused", "bytes": 407816, "sha256": "ba00ca2d8931daa710cacaea4c61a9a00c24e205d078ee9e4f24274b9a56053d"}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:17:10.307Z", "elapsed_s": 46.069, "version": "agent-message_paused", "pid": 51216}
+{"phase": "旧智能体任务补验", "timestamp_utc": "2026-11-25T07:17:13.173Z", "elapsed_s": 48.936, "case": "message_paused", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:17:13.504Z", "elapsed_s": 49.267, "version": "agent-message_paused", "pid": 51216, "exit_code": -15}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:17:18.666Z", "elapsed_s": 54.428, "version": "agent-resume", "pid": 51748}
+{"phase": "旧智能体任务补验", "timestamp_utc": "2026-11-25T07:17:21.523Z", "elapsed_s": 57.285, "case": "resume", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:17:21.855Z", "elapsed_s": 57.617, "version": "agent-resume", "pid": 51748, "exit_code": -15}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:17:27.834Z", "elapsed_s": 63.597, "version": "agent-finish", "pid": 51976}
+{"phase": "旧智能体任务补验", "timestamp_utc": "2026-11-25T07:17:30.646Z", "elapsed_s": 66.409, "case": "finish", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:17:30.977Z", "elapsed_s": 66.74, "version": "agent-finish", "pid": 51976, "exit_code": -15}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:17:36.189Z", "elapsed_s": 71.951, "version": "agent-reject", "pid": 52241}
+{"phase": "旧智能体任务补验", "timestamp_utc": "2026-11-25T07:17:39.067Z", "elapsed_s": 74.829, "case": "reject", "before": "paused", "proposal_before": "proposed", "http": 409, "old_task_after": "paused", "model_called": false, "proposal_after": ["proposed"]}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:17:39.316Z", "elapsed_s": 75.078, "version": "agent-reject", "pid": 52241, "exit_code": -15}
+{"phase": "应用启动", "timestamp_utc": "2026-11-25T07:17:44.170Z", "elapsed_s": 79.933, "version": "agent-cancel_and_send", "pid": 52516}
+{"phase": "旧智能体任务补验", "timestamp_utc": "2026-11-25T07:17:56.228Z", "elapsed_s": 91.99, "case": "cancel_and_send", "before": "paused", "proposal_before": "proposed", "cancel_http": 200, "after_cancel": "cancelled", "http": 202, "old_task_after": "cancelled", "model_called": true, "new_task_after": "succeeded", "proposal_after": ["proposed"]}
+{"phase": "应用退出", "timestamp_utc": "2026-11-25T07:17:56.566Z", "elapsed_s": 92.328, "version": "agent-cancel_and_send", "pid": 52516, "exit_code": -15}
+{"phase": "旧智能体任务补验完成", "timestamp_utc": "2026-11-25T07:17:56.567Z", "elapsed_s": 92.329, "engine": "postgres", "cases": 5, "unexpected_model_calls": 0}
+{"phase": "专属数据库清理完成", "timestamp_utc": "2026-11-25T07:17:57.536Z", "elapsed_s": 93.299, "container": "ainovel-c8-87924338f0e442d0afb45cc8a53d83fc", "container_id": "60b66581f2a6bb260b41e9ac34db875b5874a26ee23e2ff1d48ab92301e659d5", "remove_exit": 0, "verified_absent": true, "creation_id_known": true, "absence_checks": 1}

@@ -284,8 +284,8 @@ PostgreSQL 会拒绝超长的 `VARCHAR` 值（SQLite 不会），因此漏掉截
 - 针对某个版本的回填测试必须 `upgrade` 到**该版本号**再 `downgrade -1`，不要写 `upgrade head`——
   否则后续新增版本后 `-1` 回退的是最新版本，测试会失效（`test_0004_*` 曾因此在 0005 合入时调整）。
 - 应用：`cd backend && uv run alembic upgrade head`。Docker 镜像运行
-  `alembic upgrade head && uvicorn app.main:app ...`（`Dockerfile`）。
-- 回滚：`uv run alembic downgrade -1` / `base`。
+  `backend/docker-entrypoint.sh`，先校验 worker 数并迁移，成功后再启动 Uvicorn，见[部署与迁移](./deployment-migrations.md)。
+- 在隔离数据库验证迁移降级时可执行 `uv run alembic downgrade -1` / `base` 并检查有损保护。已运行新版的业务回滚使用升级前快照与匹配旧代码，不以这些命令或清除新数据替代恢复；具体流程见[部署与迁移](./deployment-migrations.md)。
 - 新建版本：先修改模型，然后执行
   `uv run alembic revision --autogenerate -m "<message>"`，审查生成的文件，并保持
   `ondelete=` 和命名约定名称（`op.f('fk_...')`）不变。

@@ -1,0 +1,6 @@
+{"phase": "夹具监督故障脚本版本", "timestamp_utc": "2026-11-25T07:24:13.703Z", "elapsed_s": 0.011, "sha256": "0b32099d80d0c8fc5a5bbf8d6e62ec07f0c6afd87078218b5e0b204cd52a9c24", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9", "supervisor_sha256": "83656f588db11cc09dc18a4706d68230b799584de093e398aa126c71a5045baa", "process_sha256": "8efbb8677e99e89c7bf9a018f5023f515d3343e22f5f2d761129e08dccda6dd7", "proxy_sha256": "5a4ee0cb20721285e16efa4e57e1fb89afd2f247d2f95eeea0063e744eafa53d"}
+{"phase": "监督无效请求拒绝", "timestamp_utc": "2026-11-25T07:24:14.340Z", "elapsed_s": 0.648, "invalid_frames": 6, "service_alive": true, "plaintext_token_sent": false}
+{"phase": "受控服务自退出", "timestamp_utc": "2026-11-25T07:24:18.925Z", "elapsed_s": 5.233, "recorded_status": "failed", "exit_code": 23, "remaining_group_members": 0}
+{"phase": "监督进程 SIGTERM", "timestamp_utc": "2026-11-25T07:24:20.687Z", "elapsed_s": 6.995, "recorded_status": "interrupted", "remaining_group_members": 0}
+{"phase": "监督端口冒充", "timestamp_utc": "2026-11-25T07:24:21.006Z", "elapsed_s": 7.314, "forged_response_rejected": true, "plaintext_token_sent": false, "service_still_alive": true}
+{"phase": "夹具监督故障检查完成", "timestamp_utc": "2026-11-25T07:24:21.180Z", "elapsed_s": 7.488, "stopped_ignoring_term": true, "unverified_pid_refused": true, "marker_identity_checked": true}

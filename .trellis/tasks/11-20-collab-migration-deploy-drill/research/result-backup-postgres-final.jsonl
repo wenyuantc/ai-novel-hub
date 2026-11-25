@@ -1,0 +1,9 @@
+{"phase": "备份脚本版本", "elapsed_s": 0.001, "sha256": "928632167b7d5ca34c669f85b4aa0e59759f53546cee120fd3660aa9a300e8ce", "engine": "postgres"}
+{"phase": "专属数据库就绪", "elapsed_s": 10.034, "engine": "postgres", "version": "postgres (PostgreSQL) 16.15", "container": "ainovel-c8-43f7c09141e142e2aeb6a0ba68a1e439", "image_id": "sha256:c54a696c68013b2f8f42f479e00a2b6ad24c5ef10ee31cdfb8972cec3dad7eb7"}
+{"phase": "隔离版本就绪", "elapsed_s": 10.785, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6", "python_version": "Python 3.12.10"}
+{"phase": "隔离版本就绪", "elapsed_s": 11.723, "version": "new", "commit": "b7b3d248a7462deedd0507275a0e6fd0a6ec8e0e", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154", "python_version": "Python 3.12.10"}
+{"phase": "旧版屏障应用就绪", "elapsed_s": 39.249, "pid": 68848}
+{"phase": "旧版每日备份开关", "elapsed_s": 40.04, "initial": false, "enabled": true, "disabled": true, "future_schedule": true}
+{"phase": "备份快照入口被屏障暂停", "elapsed_s": 40.168, "run_id": 1, "active_status": "running", "drained": false}
+{"phase": "旧版活动备份完成并恢复验证", "elapsed_s": 45.027, "run_id": 1, "status": "succeeded", "active_run_after": null, "restored_revision": "0043", "restored_project": true, "bytes": 400912, "sha256": "73fd3003595cb81d9b25137cf4d72346fd07d1a63a22e6489191297c6b30dd07", "checksum_matches_backup_record": true, "pg_dump": "专属容器原生命令"}
+{"phase": "旧版屏障应用退出", "elapsed_s": 45.199, "pid": 68848, "exit_code": -15}

@@ -1,0 +1,6 @@
+{"phase": "夹具集成脚本版本", "timestamp_utc": "2026-11-25T07:18:02.478Z", "elapsed_s": 0.005, "sha256": "8093fdc907b7ebb9777ccc9972ce428d45f8f8613eabf9a6779ec98ca94f46ec", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9"}
+{"phase": "无关后端拒绝验证", "timestamp_utc": "2026-11-25T07:18:03.342Z", "elapsed_s": 0.869, "wrong_pid": true, "wrong_port": true, "wrong_cwd": true, "exited": true, "forwarded_requests": 0}
+{"phase": "固定前端和代理夹具验证", "timestamp_utc": "2026-11-25T07:18:18.795Z", "elapsed_s": 16.322, "old_ui": 200, "new_ui": 200, "api_proxy": 200, "private_controls": true}
+{"phase": "旧端口被其他进程复用", "timestamp_utc": "2026-11-25T07:18:19.034Z", "elapsed_s": 16.562, "proxy_http": 503, "unrelated_requests": 0}
+{"phase": "回滚代理认证重定向", "timestamp_utc": "2026-11-25T07:18:21.724Z", "elapsed_s": 19.252, "maintenance_preserved": true, "blocked_post": 503, "old_control_stopped": true}
+{"phase": "夹具认证清理完成", "timestamp_utc": "2026-11-25T07:18:31.412Z", "elapsed_s": 28.94, "old": true, "new": true, "backend": true, "removed": true, "run_failed": false}

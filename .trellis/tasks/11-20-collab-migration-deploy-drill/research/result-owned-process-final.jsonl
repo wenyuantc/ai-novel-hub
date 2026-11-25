@@ -1,0 +1,11 @@
+{"phase": "进程清理脚本版本", "timestamp_utc": "2026-11-25T07:21:59.014Z", "elapsed_s": 0.001, "sha256": "71139f3d563cb06e2bd4443dd0bef911e032a8d44a1470f5f87c41ad29bb0fea", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9"}
+{"phase": "环境白名单验证", "timestamp_utc": "2026-11-25T07:21:59.207Z", "elapsed_s": 0.193, "command_private_value_excluded": true, "docker_connection_forwarded": true}
+{"phase": "继承管道的后代清理", "timestamp_utc": "2026-11-25T07:22:00.570Z", "elapsed_s": 1.557, "mode": "timeout", "leader_exited": true, "child_ignored_term": true, "child_stopped": true, "elapsed_s_test": 1.356}
+{"phase": "继承管道的后代清理", "timestamp_utc": "2026-11-25T07:22:01.254Z", "elapsed_s": 2.241, "mode": "cancel", "leader_exited": true, "child_ignored_term": true, "child_stopped": true, "elapsed_s_test": 0.677}
+{"phase": "进程组清理未确认", "timestamp_utc": "2026-11-25T07:22:01.298Z", "elapsed_s": 2.285, "pid": 61468, "guardian_pid": 61469, "reason": "ownership_or_exit_unverified"}
+{"phase": "守护身份错误验证", "timestamp_utc": "2026-11-25T07:22:01.335Z", "elapsed_s": 2.321, "rejected": true, "target_still_alive": true, "no_group_signal": true}
+{"phase": "重复清理验证", "timestamp_utc": "2026-11-25T07:22:01.406Z", "elapsed_s": 2.393, "idempotent": true}
+{"phase": "进程组清理未确认", "timestamp_utc": "2026-11-25T07:22:01.461Z", "elapsed_s": 2.448, "pid": 61497, "guardian_pid": 61498, "reason": "ownership_or_exit_unverified"}
+{"phase": "守护先退出验证", "timestamp_utc": "2026-11-25T07:22:01.462Z", "elapsed_s": 2.448, "rejected": true, "target_still_alive": true, "no_group_signal": true}
+{"phase": "创建期间取消验证", "timestamp_utc": "2026-11-25T07:22:01.781Z", "elapsed_s": 2.768, "created_process_exited": true, "owned_group_empty": true}
+{"phase": "进程清理故障检查完成", "timestamp_utc": "2026-11-25T07:22:01.781Z", "elapsed_s": 2.768, "cases": 7}
