@@ -132,3 +132,37 @@ C6 九项验收完成，已在本地功能分支提交并归档，父计划进�
 ### Next Steps
 
 - Daybreak 高深度扫描待 C7 分支推送后启动；C8 旧版升级与回滚独立推进。
+
+
+## Session 66: C8 协作迁移及回滚演练
+<!-- trellis-session: v=2 fp=95bd9f10bc08eac7 -->
+
+**Date**: 2026-11-25
+**Task**: C8 协作迁移及回滚演练
+**Branch**: `codex/mp-peer-channel-stream`
+
+### Summary
+
+隔离演练 0043 到 0070 的迁移、排空、备份与快照回滚，并由独立执行者按 README 完成页面复做。
+
+### Main Changes
+
+- 更新升级操作步骤、后端规范和待办；记录旧任务及未决提案治理问题。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a1ed1ad` | docs(trellis): 完成协作迁移与回滚演练 |
+
+### Testing
+
+- [OK] SQLite 后端全量 7519 通过、76 跳过、19 xfailed；SQLite 与 PostgreSQL 的 10 项场景复跑均通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 研究 TODO 第 34 项旧任务和未决提案的安全核对；目标部署需独立验证环境。
