@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/research/task-engine-single-process-inventory.md", "reason": "引擎内单进程状态清单"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md", "reason": "引擎外进程内状态清单"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/research/deployment-migration-rollback-background.md", "reason": "部署、迁移与回滚背景"}

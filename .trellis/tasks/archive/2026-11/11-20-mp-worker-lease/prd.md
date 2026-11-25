@@ -1,6 +1,6 @@
 # C1 执行者登记、租约与启动恢复不误伤
 
-> 父任务：`.trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill`（需求全集见其 `prd.md`，总体设计见其 `design.md` 第 2 节）。本子任务无前置依赖，是 C2–C7 的基础。
+> 父任务：`.trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill`（需求全集见其 `prd.md`，总体设计见其 `design.md` 第 2 节）。本子任务无前置依赖，是 C2–C7 的基础。
 
 ## Goal
 

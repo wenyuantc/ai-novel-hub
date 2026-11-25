@@ -1,6 +1,6 @@
 # C7 部署、迁移与多进程验收设计
 
-需求与验收见 [prd.md](prd.md)，总体约束见[父任务设计](../../../11-20-multiprocess-task-scheduling-deploy-drill/design.md)。C1–C6 已收口；C8 尚未实施。预研和未验证边界见[迁移预研](research/migration-research.md)。
+需求与验收见 [prd.md](prd.md)，总体约束见[父任务设计](../11-20-multiprocess-task-scheduling-deploy-drill/design.md)。C1–C6 已收口；C8 尚未实施。预研和未验证边界见[迁移预研](research/migration-research.md)。
 
 ## 1. 交付边界
 

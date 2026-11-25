@@ -1,6 +1,6 @@
 {"file":".trellis/spec/backend/index.md","reason":"后端规范索引及开发前检查；质量规范超过自动注入限额，须直接读取 .trellis/spec/backend/quality-guidelines.md 全文"}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"镜像启动、数据库迁移与运行期跨层契约"}
-{"file":".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/design.md","reason":"父任务已确认的迁移和多进程整体设计"}
+{"file":".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/design.md","reason":"父任务已确认的迁移和多进程整体设计"}
 {"file":".trellis/tasks/archive/2026-11/11-20-mp-worker-lease/design.md","reason":"租约、SQLite 侧库、迁移和恢复约束"}
 {"file":".trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/transport-lifecycle.md","reason":"内部通道生命周期和部署地址限制"}
 {"file":".trellis/tasks/archive/2026-11/11-20-mp-drain-switch/design.md","reason":"排空开关和运维状态契约"}

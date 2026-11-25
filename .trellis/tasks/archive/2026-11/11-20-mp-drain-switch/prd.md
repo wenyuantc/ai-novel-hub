@@ -1,6 +1,6 @@
 # C6 停止受理新任务的排空开关
 
-本任务落实父任务「多进程任务调度与部署演练」的 D3 和 R8，需求位于 `.trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/prd.md`。C1 的执行者登记与 C2 的共享系统设置已完成。C3 至 C5 提供了跨进程取消、流转发和备份受理的现行基线。
+本任务落实父任务「多进程任务调度与部署演练」的 D3 和 R8，需求位于 `.trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/prd.md`。C1 的执行者登记与 C2 的共享系统设置已完成。C3 至 C5 提供了跨进程取消、流转发和备份受理的现行基线。
 
 ## 目标
 

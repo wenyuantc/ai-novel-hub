@@ -1,6 +1,6 @@
 # C8 协作迁移部署、排空与回滚演练及操作步骤
 
-> 父任务：`.trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill`（决策 D5–D7）；历史调研来源快照见本任务 `research/legacy-background-2026-11-20.md`。
+> 父任务：`.trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill`（决策 D5–D7）；历史调研来源快照见本任务 `research/legacy-background-2026-11-20.md`。
 > 依赖：C7 已完成本地验收。本任务不改产品代码；演练以包含 C1–C7 的版本为新版。
 
 ## Goal

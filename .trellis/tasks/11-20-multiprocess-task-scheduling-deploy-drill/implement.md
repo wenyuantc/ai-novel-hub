@@ -19,17 +19,17 @@ C1 执行者租约 → C2 调度约束与设置 → C3 跨进程取消 → C4 �
 - [x] **C7** `11-20-mp-deploy-acceptance`：迁移并发保护、启动方式、真实多进程验收、README 与规范收口。
 - [x] **C8** `11-20-collab-migration-deploy-drill`：协作迁移演练与 README 操作步骤。C7 收口时把排空开关与多进程运维内容并入这份操作步骤。
 - [x] **父任务集成评审**：按 `prd.md` 的 AC1–AC13 逐条核对证据，并更新 `TODOS.md` 第 11、25 项；详见 C8 的 `research/parent-integration-review.md`。
-- [ ] **父任务归档**：父任务目录原有未跟踪文件仍保留在原处，本轮不将其移动或纳入提交。
+- [x] **父任务归档**：父任务规划资料、验收核对与既有研究随任务归档；证据及适用边界见 `research/parent-closeout-review.md`。
 
-C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3 已在本地功能分支完成跨进程取消与作品删除排空，SQLite 全量、PostgreSQL 16 串行专项和双进程 HTTP 演练均通过。[C3 验收记录](../archive/2026-11/11-20-mp-cross-process-cancel/research/verification.md)
+C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3 已在本地功能分支完成跨进程取消与作品删除排空，SQLite 全量、PostgreSQL 16 串行专项和双进程 HTTP 演练均通过。[C3 验收记录](../11-20-mp-cross-process-cancel/research/verification.md)
 
-C4 已在本地功能分支完成验收并归档；当时生产仍使用单个 Uvicorn worker，新的部署前提由 C7 验收。[C4 验收记录](../archive/2026-11/11-20-mp-peer-channel-stream/research/verification.md)
+C4 已在本地功能分支完成验收并归档；当时生产仍使用单个 Uvicorn worker，新的部署前提由 C7 验收。[C4 验收记录](../11-20-mp-peer-channel-stream/research/verification.md)
 
-C5 已通过 SQLite 全量分组及复跑、PostgreSQL 16 专项和双进程 HTTP 演练，迁移为 `0069`。已在本地功能分支提交并归档。[C5 验收记录](../archive/2026-11/11-20-mp-outside-engine-state/research/verification.md)
+C5 已通过 SQLite 全量分组及复跑、PostgreSQL 16 专项和双进程 HTTP 演练，迁移为 `0069`。已在本地功能分支提交并归档。[C5 验收记录](../11-20-mp-outside-engine-state/research/verification.md)
 
-C6 的全站排空开关、管理状态、计划备份暂停和迁移 `0070` 已通过九项验收，功能提交为 `018faa6`。[C6 验收记录](../archive/2026-11/11-20-mp-drain-switch/research/verification.md)
+C6 的全站排空开关、管理状态、计划备份暂停和迁移 `0070` 已通过九项验收，功能提交为 `018faa6`。[C6 验收记录](../11-20-mp-drain-switch/research/verification.md)
 
-C7 已完成本地多进程、迁移、部署及全量回归验收。跨主机共享文件锁尚未实测，OrbStack 内置 Docker 的默认 bridge 隔离未通过；部署需遵守 README 的前提并验证目标环境。C8 已完成两种数据库的旧版升级与快照回滚演练，未排空升级的旧任务治理另列 `TODOS.md` 第 34 项。[C7 验收记录](../archive/2026-11/11-20-mp-deploy-acceptance/research/verification.md)
+C7 已完成本地多进程、迁移、部署及全量回归验收。跨主机共享文件锁尚未实测，OrbStack 内置 Docker 的默认 bridge 隔离未通过；部署需遵守 README 的前提并验证目标环境。C8 已完成两种数据库的旧版升级与快照回滚演练，未排空升级的旧任务治理另列 `TODOS.md` 第 34 项。[C7 验收记录](../11-20-mp-deploy-acceptance/research/verification.md)
 
 ## 每个子任务的开工门禁
 

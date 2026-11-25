@@ -1,6 +1,6 @@
 # C7 部署形态、并发迁移保护与多进程验收
 
-> 父任务：`.trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill`（总体设计见其 `design.md` 第 9、10 节）。
+> 父任务：`.trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill`（总体设计见其 `design.md` 第 9、10 节）。
 > 依赖：C1–C6 全部收口。C8 的操作步骤若已写入 README，本子任务在其基础上补充；C8 尚未完成时，先写当前版本的多进程停服与启动步骤，旧版升级和回滚演练仍由 C8 完成。
 
 ## Goal

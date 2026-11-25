@@ -1,6 +1,6 @@
 # C5 引擎外进程内状态的多进程改造
 
-父任务[总体设计第 6 节](../../../11-20-multiprocess-task-scheduling-deploy-drill/design.md#6-引擎外状态c5)和[原始调研](../../../11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md)定义了范围。基于已验收的 C4 继续，复用 C1 的执行者存活判定。具体方案和开工顺序分别见[设计](design.md)和[实施计划](implement.md)。
+父任务[总体设计第 6 节](../11-20-multiprocess-task-scheduling-deploy-drill/design.md#6-引擎外状态c5)和[原始调研](../11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md)定义了范围。基于已验收的 C4 继续，复用 C1 的执行者存活判定。具体方案和开工顺序分别见[设计](design.md)和[实施计划](implement.md)。
 
 ## 目标
 

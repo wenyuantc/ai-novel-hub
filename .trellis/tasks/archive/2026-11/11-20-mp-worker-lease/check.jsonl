@@ -2,8 +2,8 @@
 {"file": ".trellis/spec/backend/database-guidelines.md", "reason": "后台任务表契约与迁移惯例"}
 {"file": ".trellis/spec/backend/error-handling.md", "reason": "任务收尾与重启契约"}
 {"file": ".trellis/spec/backend/admin-task-monitoring.md", "reason": "管理员取消与孤立任务契约"}
-{"file": ".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/design.md", "reason": "父任务总体设计，核对实现是否偏离"}
-{"file": ".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/research/task-engine-single-process-inventory.md", "reason": "受影响测试清单与恢复分支证据"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/design.md", "reason": "父任务总体设计，核对实现是否偏离"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/research/task-engine-single-process-inventory.md", "reason": "受影响测试清单与恢复分支证据"}
 {"file": ".trellis/tasks/11-20-mp-worker-lease/research/takeover-fencing.md", "reason": "11 个 handler 与公共写入事务的归属核验清单"}
 {"file": ".trellis/tasks/11-20-mp-worker-lease/research/recovery-reentry.md", "reason": "单章和向导接管中途失联的 SQLite 对照与事务要求"}
 {"file": ".trellis/tasks/11-20-mp-worker-lease/research/sqlite-contention.md", "reason": "真实双进程 SQLite 基线、忙等待与正式租约复跑方式"}

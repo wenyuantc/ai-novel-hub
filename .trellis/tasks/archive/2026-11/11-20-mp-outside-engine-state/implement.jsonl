@@ -6,4 +6,4 @@
 {"file":".trellis/spec/backend/project-transfer.md","reason":"项目导入权限、令牌限额、备份格式及导出登记口径"}
 {"file":".trellis/spec/backend/agent.md","reason":"会话轮次、提案、授权与跨提交副作用"}
 {"file":".trellis/spec/backend/skills-mcp.md","reason":"外部工具调用收据和未知结果恢复"}
-{"file":".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md","reason":"C5 原始源码调查与跨进程失败路径"}
+{"file":".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/research/in-process-state-outside-engine.md","reason":"C5 原始源码调查与跨进程失败路径"}

@@ -6,8 +6,8 @@
 {"file": ".trellis/spec/backend/directory-structure.md", "reason": "任务引擎目录结构与新模块落点"}
 {"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "心跳、围栏、接管日志的写法与脱敏要求"}
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层改动的思考清单"}
-{"file": ".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/design.md", "reason": "父任务总体设计，第 2 节为本子任务的上位设计"}
-{"file": ".trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill/research/task-engine-single-process-inventory.md", "reason": "引擎内单进程状态清单、恢复分支与受影响测试列表"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/design.md", "reason": "父任务总体设计，第 2 节为本子任务的上位设计"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill/research/task-engine-single-process-inventory.md", "reason": "引擎内单进程状态清单、恢复分支与受影响测试列表"}
 {"file": ".trellis/tasks/11-20-mp-worker-lease/research/takeover-fencing.md", "reason": "11 个 handler 与公共写入事务的归属核验清单"}
 {"file": ".trellis/tasks/11-20-mp-worker-lease/research/recovery-reentry.md", "reason": "单章和向导接管中途失联的 SQLite 对照与事务要求"}
 {"file": ".trellis/tasks/11-20-mp-worker-lease/research/sqlite-contention.md", "reason": "真实双进程 SQLite 基线、忙等待与正式租约复跑方式"}

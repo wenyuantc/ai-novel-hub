@@ -1,6 +1,6 @@
 # C2 调度约束与系统设置跨进程一致
 
-> 父任务：`.trellis/tasks/11-20-multiprocess-task-scheduling-deploy-drill`（总体设计见其 `design.md` 第 3 节）。
+> 父任务：`.trellis/tasks/archive/2026-11/11-20-multiprocess-task-scheduling-deploy-drill`（总体设计见其 `design.md` 第 3 节）。
 > C1（`11-20-mp-worker-lease`）已归档。执行者的停止或失联确认沿用 C1。C2 的占用生命周期见 [设计](design.md)，验证顺序见 [实施清单](implement.md)。
 
 ## Goal
