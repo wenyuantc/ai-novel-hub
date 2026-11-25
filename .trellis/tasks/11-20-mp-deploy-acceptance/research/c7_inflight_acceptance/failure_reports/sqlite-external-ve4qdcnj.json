@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "topology": "sqlite",
+  "case": "external",
+  "phase": "application_setup",
+  "started_utc": "2026-11-25T02:45:57.717187+00:00",
+  "failed_utc": "2026-11-25T02:45:57.718922+00:00",
+  "processes": {
+    "runner_pid": 56903,
+    "applications": null,
+    "registered_worker_pids": null
+  },
+  "error": {
+    "category": "RuntimeError",
+    "locations": [
+      {
+        "file": "run_inflight.py",
+        "line": 344
+      },
+      {
+        "file": "verify_failure_reporting.py",
+        "line": 78
+      }
+    ]
+  },
+  "http_5xx": {
+    "count": 1,
+    "by_status": {
+      "503": 1
+    },
+    "invalid_records": 1
+  },
+  "sqlite_busy_log_hits": 1
+}

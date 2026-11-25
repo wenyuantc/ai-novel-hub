@@ -93,17 +93,23 @@ flowchart LR
 
 Docker 构建会先编译前端，再将构建产物放入后端镜像，由 FastAPI 统一提供页面和 API，因此默认只需暴露一个应用端口。当前部署无需额外启动 Redis、Celery 或独立向量数据库。
 
-**后台任务引擎目前要求单进程运行。** 请保持 Dockerfile 默认的 Uvicorn 启动方式，不要添加多个 `--workers`，也不要让多个应用实例共享同一数据库调度任务。详见[当前限制](#当前限制)。
+默认启动一个 Uvicorn worker。需要多进程或多实例时，请先核对[多进程与两实例部署](#多进程与两实例部署)的数据库、内部网络和共享目录条件。
 
 ## Docker 部署
 
 ### 1. 准备环境
 
-需要安装 Docker，并确保可以使用 `docker compose` 命令。以下命令均在项目根目录执行；生成密钥的示例另外使用本机 Python 3。
+需要安装 Docker，并确保可以使用 `docker compose` 命令。以下命令均在项目根目录执行；生成密钥的示例另外使用本机 Python 3。首次安装且没有 `.env` 时，复制配置模板：
 
 ```bash
-cp .env.example .env
+if [ -e .env ] || [ -L .env ]; then
+  printf '%s\n' '.env 已存在，保留原有配置'
+else
+  cp .env.example .env
+fi
 ```
+
+已有部署请保留原 `.env`，不要覆盖或重新生成已有密钥；可对照模板补充缺少的变量。
 
 ### 2. 填写配置
 
@@ -132,6 +138,8 @@ python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).de
 
 请保管好 `.env`，尤其是 `ENCRYPTION_KEY`。后续更新、迁移或恢复数据库时需要继续使用原来的加密密钥。
 
+Compose 也会把 `POSTGRES_USER` 和 `POSTGRES_DB` 直接拼进数据库连接串；自定义用户名和数据库名同样只使用字母、数字、`-`、`_`。已有数据库使用其他字符时，不要直接修改环境变量或假定账号和数据库已重命名，应显式修改或覆盖 Compose 的 `DATABASE_URL`，对连接串中的账号和库名正确编码，并验证原有数据可访问。仅在 `.env` 增加 `DATABASE_URL` 不会覆盖 Compose 中自动构造的连接串。
+
 ### 3. 构建并启动
 
 ```bash
@@ -156,6 +164,101 @@ docker compose logs --tail=100 app
 ### 4. 开始使用
 
 注册账号，或使用配置的管理员账号登录，然后进入「模型配置」添加并测试一个文本模型。接下来新建作品，按照[创作流程](#创作流程)完成设定与章节写作。
+
+### 多进程与两实例部署
+
+镜像中的 `UVICORN_WORKERS` 为正整数，未设置时为 1。容器先执行数据库迁移；迁移失败会退出，不启动 HTTP 服务。不要同时运行不同代码版本的实例。计划变更数据库结构或切换代码前，应先排空并停止全部旧实例。
+
+`docker-compose.multi.yml` 是同一宿主机上两个应用实例共用 PostgreSQL 的独立示例，不与默认 Compose 文件叠加。首次安装按上方步骤创建根目录 `.env` 并填写三个密钥；已有部署沿用原 `.env`、数据库账号与密码、`JWT_SECRET`、`ENCRYPTION_KEY` 和备份目录，只补充需要的新变量。两个实例自动共用这些配置与 `BACKUP_DIR`。`APP_PORT`、`APP2_PORT` 的默认值为 8000、8001；`UVICORN_WORKERS` 决定每个实例的进程数。
+
+部署前可先检查本机 Docker daemon 上新建的用户定义 bridge 网络的隔离行为。脚本另建一次性 PostgreSQL、两个应用和测试网络，分别运行每实例 1 个及 4 个 worker；不读取项目 `.env` 或现有数据库，正常结束后清理这些测试资源。运行前请确认有足够的计算资源。此自检要求执行命令的机器与 Docker daemon 共享回环地址和临时目录；使用远程 Docker context 时，请在 daemon 所在机器执行。
+
+```sh
+probe_image=$(docker build -q .)
+test -n "$probe_image"
+python3 backend/tests/c7_container_smoke.py --image "$probe_image"
+```
+
+脚本失败时不要继续部署，应先查看它提示的诊断。脚本仅验证新建测试网络的 TCP 行为；即使通过，也必须检查实际部署网络、其他主机及防火墙。
+
+已有单实例部署切换到此示例前，先按下方步骤排空并备份。然后比较旧数据库容器使用的命名卷与新配置将使用的卷；只有一致时才停止旧应用并继续：
+
+```sh
+(
+  set -eu
+  old_db=$(docker compose ps -q db)
+  test -n "$old_db"
+  old_volume=$(docker inspect "$old_db" --format '{{range .Mounts}}{{if and (eq .Destination "/var/lib/postgresql/data") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}')
+  new_volume=$(docker compose -f docker-compose.multi.yml config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["volumes"]["pgdata"]["name"])')
+  test -n "$old_volume"
+  test "$old_volume" = "$new_volume"
+  printf '数据库卷匹配：%s\n' "$old_volume"
+  docker compose stop app
+)
+```
+
+上面和下面的命令须使用旧部署原有的 Compose 项目名；如果原来使用了 `-p <项目名>`，每条 `docker compose` 命令都要继续加同一个项目名。同一目录默认项目名不变。若命令失败或卷不一致，请停止并核对配置，不要继续；旧部署使用绑定目录或其他卷配置时，也应先调整双实例配置并再次核对。启动后再次检查 `db` 容器的数据卷是否仍是刚才记录的卷。不要让旧应用与新实例同时运行；后续状态查看、停服等命令均使用同一个 `-f docker-compose.multi.yml`。
+
+启动实际实例前，先配置仅可信实例可访问 peer 地址与动态端口的网络策略。验证期间不要对公网放行应用端口，例如可先将 `APP_PORT` 和 `APP2_PORT` 分别设置为 `127.0.0.1:8000`、`127.0.0.1:8001`；核对实际内部网络和应用后再开放代理或流量。
+
+```sh
+docker compose -f docker-compose.multi.yml config --quiet
+docker compose -f docker-compose.multi.yml up -d --build
+docker compose -f docker-compose.multi.yml ps
+docker compose -f docker-compose.multi.yml logs --tail=100 app1 app2
+```
+
+分别访问两个应用的 `/healthz` 和 `/api/v1/auth/config`；前者只检查应用响应，后者还会读取数据库。管理后台「系统设置」的「任务排空状态」列出存活进程；每个进程会登记请求和调度两个租约，检查进程数时按实例与 PID 去重，不能把两条租约算作两个进程。
+
+双实例实时转发需要 `TASK_PEER_ENABLED=true`。每个实例的内部通道绑定并通告各自可直达的 `app1` 或 `app2`，`TASK_PEER_PORT=0` 让每个 worker 使用不同动态端口。不得使用所有实例共用的负载均衡地址作为单个进程的通告地址。其他容器须能通过通告地址到达所有实际端口。浏览器和代理只使用应用公开端口。
+
+内部协议会验证身份，但不加密。`TASK_PEER_NETWORKS` 校验监听、通告和出站目标地址，不限制入站来源。必须由部署环境阻止不受信网络连接这些动态端口；存在窃听风险的链路还须提供加密。配置后从其他实例和不受信网络分别测试所有动态端口：前者应能连接，后者应不能连接。**仅未发布端口或使用 `internal` 网络不足以证明隔离。** 当前 OrbStack 环境的独立 Docker bridge 实测可以直连未发布端口；部署前须改用能提供隔离的环境或实施并验证额外的网络策略。
+
+可先查询各进程最近登记的通道地址（每进程两份租约，查询时去重）：
+
+```sh
+docker compose -f docker-compose.multi.yml exec -T db sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+SELECT DISTINCT hostname, pid, peer_url FROM task_workers
+WHERE stopped_at IS NULL AND fenced_at IS NULL
+  AND heartbeat_at >= CURRENT_TIMESTAMP - INTERVAL '30 seconds'
+ORDER BY hostname, pid;
+SQL
+```
+
+核对每个存活进程均有非空的 `tcp://app1:端口` 或 `tcp://app2:端口`，且对应正确的实例；缺失时先检查内部通道配置和日志。
+
+对于上面列出的每个 `app2` 端口，可从 `app1` 测试直连；将 `peer_port` 替换为实际数字，并对 `app1` 的端口从 `app2` 同样测试。正常时命令成功退出：
+
+```sh
+peer_port=12345  # 替换为实际端口
+docker compose -f docker-compose.multi.yml exec -T app1 python -c \
+  'import socket,sys; socket.create_connection(("app2", int(sys.argv[1])), timeout=3).close()' "$peer_port"
+```
+
+另从目标部署环境的不受信网络测试这些地址和端口，必须全部无法连接；也要覆盖目标环境可能存在的其他主机和网络路径。不同部署平台的网络策略不同，测试应使用该环境实际隔离的外部探针。受信宿主机本身能否直连不等于外部网络能否直连。
+
+跨主机部署须保证所有实例共用相同数据库、`JWT_SECRET`、`ENCRYPTION_KEY` 和备份目录，并为每个实例配置可直达的私有监听及通告地址。逐主机实测共享目录内容可互见且文件锁有效；本次同机容器演练不能证明跨主机文件系统行为。SQLite 只支持同机进程共享同一数据库文件及其租约侧库和锁文件，不能跨主机共享。
+
+迁移使用 PostgreSQL 会话级锁；启动迁移的连接必须直连数据库或使用会话级连接池，不可使用事务级连接池。公开代理需关闭 SSE 响应缓冲和缓存，并把读取超时设得足以覆盖长连接。
+
+### 多进程运行行为
+
+后台任务的全站和每用户并发限制由共享数据库协调；它们不是每个 worker 各有一份。图片、导入等 CPU 密集操作的部分 `CapacityLimiter(2)` 按进程且按具体限制器分别生效，增加进程会增加潜在资源占用。
+
+默认执行者心跳 5 秒、租约 30 秒、安全余量 5 秒、调度扫描 5 秒、输出持久化节流 2 秒，SSE 心跳 15 秒。本人取消在意图提交后，等待终态的预算为 10 秒；数据库操作及故障可能让整个请求耗时更长。健康数据库、事件循环和没有持续写锁争用时，从最后一次确认心跳算起，失联任务通常在约 35 秒内被存活进程发现并收尾；这不是对持续争用、数据库故障或待核对外部副作用的无条件保证。进程重启不会立即认定未过期的租约失效。收尾按已保存的收据和状态判断，不能从同一 token 位置续接原模型调用。
+
+内部通道中断时，作者可按已保存快照继续跟随；协作者在运行中无法证明实时帧来源时受控结束，可重新连接。不能为保持实时显示而绕过权限校验。
+
+### 多实例排空、升级与回退
+
+1. 先通过代理维护模式等方式阻止普通用户的新业务写入，并保留管理员操作通道；等待已在途的编辑、导入及同步 AI 等请求完成。在「系统设置」开启「停止受理新任务」并保存，在「任务排空状态」等待排队、运行、待审核、收尾和活动备份均归零；待审核任务需取消或按其功能支持的方式提前结束。排空期间计划备份暂停。
+2. 在「整库备份」手动生成快照，下载后核对大小及 SHA-256，并在隔离环境验证可恢复；保存配套的旧代码、配置、原加密密钥和备份密码。
+3. 停止全部旧应用实例，再更新代码或镜像并启动新实例。等待迁移完成，确认两个应用的数据库请求、存活进程、排空状态及关键数据正常。不要让新旧版本混跑。
+4. 确认服务正常后关闭排空开关，验证新任务受理。单独重启其中一个进程时，原运行中的模型调用通常不能继续，任务按租约及持久凭据收尾。
+5. 需要回退时先停止全部新实例，恢复升级前快照和匹配的旧代码及密钥，再验证后恢复流量；不能让旧代码直接连接已经升级的库。SQLite 按[文件恢复流程](#sqlite-文件恢复)一并处理租约侧库与锁文件。
+
+本次代码升级演练两侧数据库版本均为 `0070`；从协作功能旧版升级并恢复快照的演练尚未完成，应先在隔离环境单独验证。
 
 ## 本地开发
 
@@ -572,7 +675,8 @@ Skill 可以声明最多 20 个**输入项**，让同一份工作流在不同场
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` | 登录有效期，单位分钟，默认 7 天，必须大于 0 |
 | `OPEN_API_RATE_LIMIT_PER_MINUTE` | `120` | 每把平台 API Key 每分钟的开放接口请求上限，范围 1–2,147,483,647（数据库计数上限） |
 | `CORS_ORIGINS` | 空 | 后端允许的跨域来源，逗号分隔；后端示例文件预填本地开发来源 |
-| `APP_PORT` | `8000` | Compose 发布到宿主机的端口，不会改变容器内监听端口 |
+| `APP_PORT` | `8000` | Compose 第一个实例发布到宿主机的端口，不会改变容器内监听端口 |
+| `APP2_PORT` | `8001` | 双实例 Compose 中第二个实例发布到宿主机的端口 |
 | `FRONTEND_DIST_DIR` | `frontend/dist` 的绝对路径 | 后端托管的前端构建目录；不存在时只提供 API |
 
 ### 模型与后台任务
@@ -582,17 +686,18 @@ Skill 可以声明最多 20 个**输入项**，让同一份工作流在不同场
 | `ALLOW_PRIVATE_AI_ENDPOINTS` | `false` | 是否允许模型接口访问本地 / 内网地址 |
 | `CONTEXT_CHAR_BUDGET` | `12000` | 章节上下文字符预算，最小 1000；这是字符预算，不是模型 token 上限 |
 | `AI_REQUEST_TIMEOUT` | `300` | 单次模型请求超时秒数，必须大于 0，不是整个多步任务的总时限 |
+| `UVICORN_WORKERS` | `1` | 每个容器的应用进程数，必须是正整数；由 Docker 入口使用 |
 | `TASK_MAX_CONCURRENCY` | `4` | 后台任务全局并发上限，最小 1，其余任务排队 |
 | `TASK_MAX_PER_USER` | `2` | 用户未配置独立配额时的后台任务并发上限，最小 1；所有用户仍受全局上限约束 |
 | `TASK_ADMISSION_CLOSED` | `false` | 停止受理新建、重试、继续后台任务及新的计划备份，已受理的工作可以排空 |
 | `AUTO_ANALYZE_ENABLED` | `true` | 是否允许生成、润色或重写成功后自动排队章节分析 |
 | `MCP_ENABLED` | `true` | 是否开放远程 MCP 插件能力；关闭后插件接口返回 `403`，智能体不暴露 MCP 工具 |
 
-任务订阅的内部通道默认使用本机私有套接字。单进程部署沿用默认设置。本机多进程演练可用 `TASK_PEER_SOCKET_DIR` 指定所有进程共享、仅服务账号可访问的短路径目录。`TASK_PEER_ENABLED=false` 可关闭内部监听，验证任务在连接中断时如何按已保存的进度收尾。
+任务订阅的内部通道默认使用本机私有套接字。同机多进程可用 `TASK_PEER_SOCKET_DIR` 指定所有进程共享、仅服务账号可访问的短路径目录。`TASK_PEER_ENABLED=false` 可关闭内部监听；通道断开时，流按原有授权和已保存的进度降级。
 
-跨实例演练同时指定 `TASK_PEER_BIND_HOST` 和 `TASK_PEER_ADVERTISE_HOST`，后者必须能从其他实例直达这个进程。`TASK_PEER_PORT` 默认为 0，由系统分配端口。`TASK_PEER_NETWORKS` 用于校验监听地址、通告地址和出站连接的目标地址。各实例使用相同的部署密钥，TCP 链路使用受信私网或加密隧道。浏览器只连接应用的公开端口。
+跨实例部署同时指定 `TASK_PEER_BIND_HOST` 和 `TASK_PEER_ADVERTISE_HOST`，后者必须能从其他实例直达这个进程。`TASK_PEER_PORT` 默认为 0，由系统分配端口。`TASK_PEER_NETWORKS` 用于校验监听地址、通告地址和出站连接的目标地址，不限制入站来源。各实例使用相同的部署密钥，TCP 链路需要实际验证网络隔离；存在窃听风险时还需加密隧道。浏览器只连接应用的公开端口。
 
-本地直接启动后端时，可以在 `backend/.env` 设置上述变量。Docker Compose 使用根目录 `.env` 做变量替换，并通过 `app.environment` 向容器传值。若要在容器中覆盖 `TASK_PEER_*`、`CORS_ORIGINS` 或 `FRONTEND_DIST_DIR`，需在 Compose 配置中显式添加对应映射。
+本地直接启动后端时，可以在 `backend/.env` 设置上述变量。Docker Compose 使用根目录 `.env` 做变量替换，并通过 `app.environment` 向容器传值。默认 Compose 已映射 `TASK_PEER_*`；若要在容器中覆盖 `CORS_ORIGINS` 或 `FRONTEND_DIST_DIR`，需在 Compose 配置中显式添加对应映射。
 
 注册、两级任务并发、停止受理新任务、自动分析、MCP 和开放 API 限流支持后台持久覆盖，优先级为 **后台保存值 > 环境变量/.env > 代码默认值**。表中这些环境变量是部署基线。已有后台覆盖时，需在「系统设置」逐项恢复部署值。数据库连接、密钥和私网访问许可由部署管理。
 
@@ -802,7 +907,7 @@ Key 的生命周期独立于网页登录：登出、修改或重置密码不会�
 
 ### 常用管理命令
 
-以下命令在项目根目录执行：
+以下命令在项目根目录执行，适用于默认单实例 Compose。双实例部署应在每条 `docker compose` 命令中使用 `-f docker-compose.multi.yml`，并使用 `app1 app2` 作为应用服务名。
 
 ```bash
 # 查看容器状态和应用日志
@@ -819,7 +924,16 @@ docker compose up -d --build
 docker compose down
 ```
 
-`docker compose restart` 不会重新读取 Compose 环境变量。修改根目录 `.env` 后应使用 `docker compose up -d`。
+`docker-compose.multi.yml` 的状态和日志应使用对应的文件与服务名：
+
+```bash
+docker compose -f docker-compose.multi.yml ps
+docker compose -f docker-compose.multi.yml logs -f --tail=100 app1 app2
+```
+
+双实例升级或需要重新创建容器时，先按[多实例排空、升级与回退](#多实例排空升级与回退)停止受理并排空，停止全部旧应用后再更新、构建和启动。需要停止整套双实例服务时，排空后运行 `docker compose -f docker-compose.multi.yml down`，该命令保留默认数据卷。
+
+`docker compose restart` 不会重新读取 Compose 环境变量。单实例修改根目录 `.env` 后可使用 `docker compose up -d`；双实例需要重新创建应用时先按上方排空与停服步骤处理。
 
 PostgreSQL 数据保存在命名卷 `pgdata` 中，实际卷名通常带有 Compose 项目前缀。**`docker compose down -v` 会删除数据卷和数据库内容**，日常停止或升级不要使用这个参数。
 
@@ -902,21 +1016,86 @@ docker compose exec -T db sh -c \
 
 请同时在安全位置保存该数据库对应的 `.env` 或等效配置，尤其是原 `ENCRYPTION_KEY`。仅恢复数据库而丢失加密密钥，无法解密原有模型凭据等敏感信息。
 
-恢复时应先备份目标数据库，并确认备份文件和目标实例。下面的 `--clean` 会删除备份中对应的已有数据库对象，再恢复数据；请将示例文件名替换为真实备份：
+双实例示例使用相同导出方式，但命令必须指定配置文件：
 
 ```bash
-docker compose stop app
-docker compose up -d --wait db
-docker compose exec -T db sh -c \
-  'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --exit-on-error --clean --if-exists --no-owner --no-privileges' \
-  < backups/ainovel-YYYYMMDD-HHMMSS.dump
+mkdir -p backups
+docker compose -f docker-compose.multi.yml exec -T db sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+  > "backups/ainovel-$(date +%Y%m%d-%H%M%S).dump"
 ```
 
-确认恢复命令成功后，再启动应用：
+回退应恢复到一个**全新空数据库**，不要在仍使用的新库上直接执行 `pg_restore --clean`：该选项不会删除备份中不存在的新对象，失败时也可能留下部分结果。先限制业务写入、停止所有连接该库的应用与后台进程，保留原库、快照和原配置；确认下面的数据库服务是预期的目标。
+
+在同一个 Bash 会话中，默认单实例保留下面两行；使用双实例示例时，将它们替换为两条注释行。若原部署使用了 `-p <项目名>`，也要加入相同项目名。先停止其他 Compose 项目和主机的全部应用；下面的代码块会停止本项目应用、等待数据库、创建新库并恢复。将数据库名和备份路径替换为实际值。
 
 ```bash
-docker compose up -d app
+compose=(docker compose)
+apps=(app)
+# 双实例：compose=(docker compose -f docker-compose.multi.yml)
+# 双实例：apps=(app1 app2)
+restore_db=ainovel_restore_20261125
+snapshot=backups/ainovel-YYYYMMDD-HHMMSS.dump
+restore_ok=0
+if (
+  set -u
+  case "$restore_db" in ''|*[!A-Za-z0-9_]*) printf '%s\n' '数据库名无效' >&2; exit 1;; esac &&
+  test -f "$snapshot" && test -r "$snapshot" &&
+  "${compose[@]}" stop "${apps[@]}" &&
+  "${compose[@]}" up -d --wait db &&
+  "${compose[@]}" exec -T db sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" exec createdb -h 127.0.0.1 -U "$POSTGRES_USER" --maintenance-db=postgres --template=template0 -- "$1"' sh "$restore_db" &&
+  "${compose[@]}" exec -T db sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" exec pg_restore -h 127.0.0.1 -U "$POSTGRES_USER" --exit-on-error --no-owner --no-privileges --dbname="$1"' sh "$restore_db" \
+    < "$snapshot" &&
+  "${compose[@]}" exec -T db sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$1" -v ON_ERROR_STOP=1 -c "SELECT version_num FROM alembic_version"' sh "$restore_db"
+); then
+  restore_ok=1
+  printf '%s\n' '恢复命令完成；请先核验数据、目标版本及密钥。'
+else
+  printf '%s\n' '恢复失败，不要切换数据库或启动应用。' >&2
+  false
+fi
 ```
+
+每步均须成功。恢复失败的新库可能只恢复了一部分，不要切换流量；保留原库并查明原因，重新选择不存在的库名再试。创建数据库需要相应权限；若来源使用特殊编码、排序规则或扩展，需按来源配置新库并核验。上面的 `--no-owner --no-privileges` 不恢复原所有者和授权，需另行检查并按需要配置权限。
+
+核对版本、账号、授权、作品及加密配置后，准备并核验与该快照匹配的旧镜像及原密钥，再将 `.env` 的 `POSTGRES_DB` 改成新库名，保留旧库名以便撤回。若从旧源码构建，先在应用停机时执行 `"${compose[@]}" build "${apps[@]}"`，并核对生成的镜像确为预期旧版本；仅切换源码不会自动替换已存在的镜像。无法确认镜像版本时不要启动，以免启动入口再次把旧库迁移到新版本。
+
+确认所有应用仍停机、旧镜像和配置均已核验后，在同一个 Bash 会话中执行；`restore_ok` 会阻止在上述恢复失败后继续。以下校验针对仓库提供的 Compose 配置，要求应用连接 `db:5432`，并使用数据库服务的账号与密码；自定义角色或数据库地址时，须按实际配置调整并验证目标校验，不能直接跳过：
+
+```bash
+(
+  set -euo pipefail
+  test "${restore_ok:-0}" = 1
+  "${compose[@]}" config --format json | python3 -c '
+import json, sys
+from urllib.parse import unquote, urlsplit
+try:
+    config = json.load(sys.stdin)
+    expected = sys.argv[1]
+    services = config["services"]
+    db = services["db"]["environment"]
+    if db["POSTGRES_DB"] != expected:
+        raise ValueError
+    for name in sys.argv[2:]:
+        url = urlsplit(services[name]["environment"]["DATABASE_URL"])
+        if (url.scheme != "postgresql+asyncpg" or url.hostname != "db" or url.port != 5432
+                or url.path != "/" + expected or url.query or url.fragment
+                or unquote(url.username or "") != db["POSTGRES_USER"]
+                or unquote(url.password or "") != db["POSTGRES_PASSWORD"]):
+            raise ValueError
+except Exception:
+    print("Compose 数据库目标不匹配或无法核对；请停止并检查配置。", file=sys.stderr)
+    sys.exit(1)
+' "$restore_db" "${apps[@]}"
+  "${compose[@]}" up -d --wait db
+  "${compose[@]}" up -d --no-build "${apps[@]}"
+)
+```
+
+再次核验版本、数据与凭据可读后，才关闭排空并恢复流量。
 
 后台下载的 `.dump` 或完整解密后的 `restored.dump` 也可作为上方恢复命令的输入。恢复工具的主版本需兼容来源数据库；恢复成功后配置对应的原 `ENCRYPTION_KEY`，核对账号、授权、作品和加密配置可读，再启用应用。
 
@@ -947,11 +1126,16 @@ docker compose up -d app
     set -- --previous-lock "$rollback/$(basename "$db").leases.lock"
   fi
   uv run python -m app.services.backups.sqlite_restore "$snapshot" "$db" "$@"
-  DATABASE_URL="sqlite+aiosqlite:///$db" uv run alembic upgrade head
 )
 ```
 
-恢复命令会在最终路径创建一个新的主库，验证完整性及外键。对于 `0066` 及之后的快照，它会关闭副本里的历史执行者身份，并建立与新主库配对的空租约文件。`0065` 及之前的快照先按原版本恢复，随后由迁移和首次启动建立配对。核对最终路径、迁移版本与原加密配置后启动后端，验证作品、账号及加密凭据可读，再恢复流量。
+恢复命令会在最终路径创建一个新的主库，验证完整性及外键。对于 `0066` 及之后的快照，它会关闭副本里的历史执行者身份，并建立与新主库配对的空租约文件。`0065` 及之前的快照先按原版本恢复。**恢复到当前代码版本时**，在确认绝对路径后再执行当前版本迁移：
+
+```bash
+DATABASE_URL="sqlite+aiosqlite:////absolute/path/to/dev.db" uv run alembic upgrade head
+```
+
+若要回退到旧代码，不要运行当前代码的 `upgrade head`；应先确认恢复工具与快照兼容，再使用匹配旧版本的代码和配置。旧版协作迁移的升级与回滚尚未完成演练，应先在隔离环境验证。核对最终路径、迁移版本与原加密配置后启动后端，验证作品、账号及加密凭据可读，再恢复流量。
 
 全程保留原快照和回滚目录。如果恢复过程中报错且目标已生成文件，保持停机，将本次生成的整组文件移存后从原快照重试。需要回滚时先停掉新进程，移走新主库及其全部伴随文件，再将回滚目录中的整组原文件移回原来的路径；同一文件系统内的移动可以保留原文件身份。
 
@@ -1103,8 +1287,8 @@ aiNovel/
 
 ## 当前限制
 
-- **生产部署使用一个 Uvicorn worker。** 数据库协调并发名额、同键排队、任务取消和作品删除。跨进程演练中，用户可从另一个服务进程查看执行中的正文和进度。内部通道断开后，作者按已保存的快照跟随到任务结束。协作者只能收到仍有授权和来源依据的内容，依据不足时订阅结束。进程崩溃后立即重启时，任务可能继续显示运行中，通常会在上次心跳起约 35 秒内按已有正文、收据和占用状态完成恢复。若 SQLite 主库仍被占用，收尾会等待主库恢复可写。
-- **运行中的模型调用不能跨进程恢复。** 服务重启后，排队任务会继续被调度，原运行中任务会标记为中断；任务输出快照不代表能够从同一 token 位置继续生成。
+- **多进程部署需要满足数据库、网络和共享目录前提。** SQLite 仅支持同机进程共享同一组主库与租约文件；跨主机需要 PostgreSQL、可验证隔离的内部网络及支持文件锁的共享备份目录。实际环境须自行检查这些前提，详见[多进程与两实例部署](#多进程与两实例部署)。
+- **运行中的模型调用不能跨进程续传。** 服务重启后，排队任务继续调度，原执行按租约、已保存正文和收据收尾；结果无法证明时会保留待核对。输出快照不代表能从同一 token 位置继续生成。
 - **外部工具需要独立服务。** MCP 目前接入远程 Streamable HTTP / SSE，不提供本机 stdio 插件进程托管。
 - **认证方式为本地账号。** 当前未提供 OAuth 第三方登录。
 - **阅读同步接口存在内容边界。** 开放 API 提供当前设定及章节行更新筛选，不提供完整删除事件流或按章节回溯的历史设定。

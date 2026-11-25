@@ -1,0 +1,84 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "phase": "scenario",
+  "scenario": "forward",
+  "completed_scenarios": [],
+  "started_at_utc": "2026-11-25T02:41:30.245+00:00",
+  "failed_at_utc": "2026-11-25T02:41:40.312+00:00",
+  "runner_pid": 45449,
+  "observed_worker_pids": [
+    45731,
+    45856
+  ],
+  "error_category": "AssertionError",
+  "traceback": [
+    {
+      "file": "process_tasks.py",
+      "function": "main",
+      "line": 1380
+    },
+    {
+      "file": "verify_failure_diagnostics.py",
+      "function": "fail_with_private_data",
+      "line": 76
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [
+      {
+        "pid": 45731,
+        "status": 503,
+        "time": 1795574499.866132
+      }
+    ],
+    "log_counts": {
+      "sqlite_busy": 1,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 45659,
+        "returncode": null,
+        "time": 1795574490.254
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 45659,
+        "returncode": 0,
+        "time": 1795574492.931
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 45731,
+        "returncode": null,
+        "time": 1795574492.95
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 45856,
+        "returncode": null,
+        "time": 1795574496.347
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 45856,
+        "returncode": -15,
+        "time": 1795574499.988
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 45731,
+        "returncode": -15,
+        "time": 1795574500.181
+      }
+    ],
+    "log_pids": [
+      45731,
+      45856
+    ]
+  }
+}

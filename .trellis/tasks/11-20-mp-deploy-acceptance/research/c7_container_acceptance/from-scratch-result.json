@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "steps": [
+    {
+      "stage": "workspace",
+      "exit_status": 0
+    },
+    {
+      "stage": "git_archive",
+      "exit_status": 0
+    },
+    {
+      "stage": "c7_overlay",
+      "exit_status": 0
+    },
+    {
+      "stage": "test_env",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_config",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_up_build",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_ps",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_services",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_logs",
+      "exit_status": 0
+    },
+    {
+      "stage": "http",
+      "exit_status": 0
+    }
+  ],
+  "http": [
+    {
+      "endpoint": "healthz",
+      "status": 200
+    },
+    {
+      "endpoint": "auth_config",
+      "status": 200
+    },
+    {
+      "endpoint": "healthz",
+      "status": 200
+    },
+    {
+      "endpoint": "auth_config",
+      "status": 200
+    }
+  ],
+  "cleanup_confirmed": true,
+  "error": null
+}

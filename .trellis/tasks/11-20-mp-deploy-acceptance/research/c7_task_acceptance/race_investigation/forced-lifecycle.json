@@ -1,0 +1,76 @@
+{
+  "mode": "lifecycle_first",
+  "exitstatus": 1,
+  "events": [
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.632728,
+      "task_id": 2,
+      "follow_local_queue": true,
+      "heartbeat_s": 60,
+      "poll_s": 5.0
+    },
+    {
+      "event": "queued_snapshot",
+      "elapsed_s": 4.661272,
+      "task_id": 2
+    },
+    {
+      "event": "stop_enter",
+      "elapsed_s": 4.675527,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.864525,
+      "task_id": 2
+    },
+    {
+      "event": "lost_before",
+      "elapsed_s": 4.867267,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "lost_result",
+      "elapsed_s": 4.869596,
+      "task_id": 2,
+      "detail": "任务不存在",
+      "task_null": true
+    },
+    {
+      "event": "real_stop_begin",
+      "elapsed_s": 5.676603,
+      "task_id": 2
+    },
+    {
+      "event": "close_hub",
+      "elapsed_s": 5.702385,
+      "task_id": 2,
+      "frame": "error",
+      "detail": "任务已取消"
+    },
+    {
+      "event": "real_stop_done",
+      "elapsed_s": 5.711307,
+      "task_id": 2,
+      "cancelled_count": 1,
+      "task_present": true,
+      "status": "cancelled",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "pytest_result",
+      "elapsed_s": 5.727202,
+      "outcome": "failed"
+    }
+  ]
+}

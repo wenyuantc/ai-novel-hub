@@ -1,0 +1,93 @@
+{
+  "format_version": 1,
+  "topology": "pg-instances",
+  "started_at_utc": "2026-11-25T02:50:56.832+00:00",
+  "finished_at_utc": "2026-11-25T02:51:20.648+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "author-off",
+      "recorded_at_utc": "2026-11-25T02:51:19.731+00:00",
+      "checks_passed": [
+        "remote_snapshot_while_running",
+        "remote_done_succeeded"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 69768,
+          "public_port": 53761
+        },
+        "executor_pid": {
+          "pid": 69625,
+          "public_port": 53711
+        }
+      },
+      "services": [
+        {
+          "process_pid": 69625,
+          "public_port": 53711,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 69768,
+          "public_port": 53761,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "remote_events": [
+          "snapshot",
+          "delta",
+          "progress",
+          "snapshot",
+          "snapshot",
+          "snapshot",
+          "done"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 69401,
+        "returncode": null,
+        "time": 1795575060.838
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 69401,
+        "returncode": 0,
+        "time": 1795575065.592
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 69625,
+        "returncode": null,
+        "time": 1795575065.611
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 69768,
+        "returncode": null,
+        "time": 1795575069.764
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      69625,
+      69768
+    ]
+  }
+}

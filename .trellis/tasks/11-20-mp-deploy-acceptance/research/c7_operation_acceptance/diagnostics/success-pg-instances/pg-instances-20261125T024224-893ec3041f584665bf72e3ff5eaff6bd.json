@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "recorded_at_utc": "2026-11-25T02:42:24.628562+00:00",
+  "elapsed_s": 7.96,
+  "shape": "pg-instances",
+  "from_c6": false,
+  "phase": "初始数据库迁移",
+  "category": "runtime",
+  "exception_type": "RuntimeError",
+  "frames": [
+    {
+      "file": "run_operations.py",
+      "line": 1121,
+      "function": "<module>"
+    },
+    {
+      "file": "runners.py",
+      "line": 195,
+      "function": "run"
+    },
+    {
+      "file": "runners.py",
+      "line": 118,
+      "function": "run"
+    },
+    {
+      "file": "base_events.py",
+      "line": 691,
+      "function": "run_until_complete"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 1106,
+      "function": "main"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 897,
+      "function": "run_shape"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 883,
+      "function": "migrate"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 232,
+      "function": "command"
+    }
+  ],
+  "events": [
+    {
+      "phase": "准备隔离环境",
+      "elapsed_s": 0.002
+    },
+    {
+      "phase": "初始数据库迁移",
+      "elapsed_s": 6.966
+    }
+  ],
+  "processes": [],
+  "worker_pids": [],
+  "observed_http_500": 0,
+  "unhandled_async_types": [],
+  "log_summaries": []
+}

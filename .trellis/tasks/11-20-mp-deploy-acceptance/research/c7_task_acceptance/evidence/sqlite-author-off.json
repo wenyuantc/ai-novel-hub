@@ -1,0 +1,93 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "started_at_utc": "2026-11-25T02:50:28.376+00:00",
+  "finished_at_utc": "2026-11-25T02:50:50.552+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "author-off",
+      "recorded_at_utc": "2026-11-25T02:50:50.045+00:00",
+      "checks_passed": [
+        "remote_snapshot_while_running",
+        "remote_done_succeeded"
+      ],
+      "endpoints": {
+        "executor_pid": {
+          "pid": 68394,
+          "public_port": 53150
+        },
+        "other_pid": {
+          "pid": 68714,
+          "public_port": 53255
+        }
+      },
+      "services": [
+        {
+          "process_pid": 68394,
+          "public_port": 53150,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 68714,
+          "public_port": 53255,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "remote_events": [
+          "snapshot",
+          "delta",
+          "progress",
+          "snapshot",
+          "snapshot",
+          "snapshot",
+          "done"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 68252,
+        "returncode": null,
+        "time": 1795575028.395
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 68252,
+        "returncode": 0,
+        "time": 1795575033.38
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 68394,
+        "returncode": null,
+        "time": 1795575033.409
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 68714,
+        "returncode": null,
+        "time": 1795575038.917
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      68394,
+      68714
+    ]
+  }
+}

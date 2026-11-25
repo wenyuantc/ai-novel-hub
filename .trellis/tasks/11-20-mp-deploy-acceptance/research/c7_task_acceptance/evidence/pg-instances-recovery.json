@@ -1,0 +1,172 @@
+{
+  "format_version": 1,
+  "topology": "pg-instances",
+  "started_at_utc": "2026-11-25T02:57:07.809+00:00",
+  "finished_at_utc": "2026-11-25T02:58:38.632+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "kill",
+      "recorded_at_utc": "2026-11-25T02:58:05.049+00:00",
+      "checks_passed": [
+        "interrupted",
+        "chapter_claim_released",
+        "terminal_facts_stable",
+        "retry_succeeded"
+      ],
+      "endpoints": {
+        "replacement_pid": {
+          "pid": 83656,
+          "public_port": 61305
+        },
+        "executor_pid": {
+          "pid": 83346,
+          "public_port": 61148
+        },
+        "other_pid": {
+          "pid": 83467,
+          "public_port": 61229
+        }
+      },
+      "services": [
+        {
+          "process_pid": 83346,
+          "public_port": 61148,
+          "returncode": -9,
+          "role": "application"
+        },
+        {
+          "process_pid": 83467,
+          "public_port": 61229,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 83656,
+          "public_port": 61305,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "recovery_s": 33.771,
+        "retry_status": "queued",
+        "status": "interrupted",
+        "retry_final": "succeeded"
+      }
+    },
+    {
+      "case": "kill-serial",
+      "recorded_at_utc": "2026-11-25T02:58:37.906+00:00",
+      "checks_passed": [
+        "result_requires_review",
+        "immediate_retry_rejected",
+        "serial_successor_succeeded"
+      ],
+      "endpoints": {
+        "replacement_pid": {
+          "pid": 84850,
+          "public_port": 62095
+        },
+        "executor_pid": {
+          "pid": 83467,
+          "public_port": 61229
+        },
+        "other_pid": {
+          "pid": 83656,
+          "public_port": 61305
+        }
+      },
+      "services": [
+        {
+          "process_pid": 83346,
+          "public_port": 61148,
+          "returncode": -9,
+          "role": "application"
+        },
+        {
+          "process_pid": 83467,
+          "public_port": 61229,
+          "returncode": -9,
+          "role": "application"
+        },
+        {
+          "process_pid": 83656,
+          "public_port": 61305,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 84850,
+          "public_port": 62095,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "recovery_s": 30.425,
+        "original_retry": 409,
+        "original_status": "结果待核对",
+        "serial_order": [
+          "K1",
+          "K2"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 83258,
+        "returncode": null,
+        "time": 1795575431.853
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 83258,
+        "returncode": 0,
+        "time": 1795575435.469
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 83346,
+        "returncode": null,
+        "time": 1795575435.488
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 83467,
+        "returncode": null,
+        "time": 1795575439.661
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 83656,
+        "returncode": null,
+        "time": 1795575444.629
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 84850,
+        "returncode": null,
+        "time": 1795575486.248
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      83346,
+      83467,
+      83656,
+      84850
+    ]
+  }
+}

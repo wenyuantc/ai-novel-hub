@@ -1,0 +1,93 @@
+{"c6_alembic_sha256": "06e971abd3add578f7be88c0335c9a8ba5fa895d7c987b765af0bea401b5dc16", "c7_alembic_sha256": "b6ac783774743001035f57d4f314e2b6d0e89e9bc2dc581a65feec60b468e057"}
+pg-instances backup: {"run_id": 1, "executor_pid": 94747, "late_start_pid": 95036, "snapshot_calls": 1, "ready_artifacts": 1, "download_checksum_verified": true, "restored_revision": "0070", "restored_users": 2, "restored_projects": 0, "status": "succeeded"}
+pg-instances settings: {"registration": 403, "mcp_list_refresh_trial": [403, 403, 403], "mcp_network_calls": 0, "checked_s": 0.307, "limits": [3, 2], "limits_converged_s": 0.317, "worker_pids": [94747, 94918]}
+pg-instances import_inspiration: {"preview_pid": 94747, "import_pid": 94918, "imported_once": true, "inspiration_conflict": 409, "inspiration_rounds": 1}
+pg-instances agent: {"first_pid": 94747, "second_pid": 94918, "second_waited": true, "first_status": 202, "second_status": 409, "user_messages": 1}
+pg-instances drain: {"both_workers_rejected_create_retry_resume": true, "running_finished": true, "queued_finished": true, "paused_cancelled": true, "active_count": 0, "admission_still_closed": true}
+pg-instances drained_backup: {"run_id": 2, "drain_enabled": true, "active_before": 0, "status": "succeeded", "download_checksum_verified": true, "restored_revision": "0070", "restored_users": 2, "restored_projects": 4}
+{
+  "shape": "pg-instances",
+  "database": "postgres (PostgreSQL) 16.15",
+  "initial_pids": [
+    94747,
+    94918
+  ],
+  "initial_revision": "0070",
+  "initial_source": "C6 d9d234c",
+  "backup": {
+    "run_id": 1,
+    "executor_pid": 94747,
+    "late_start_pid": 95036,
+    "snapshot_calls": 1,
+    "ready_artifacts": 1,
+    "download_checksum_verified": true,
+    "restored_revision": "0070",
+    "restored_users": 2,
+    "restored_projects": 0,
+    "status": "succeeded"
+  },
+  "settings": {
+    "registration": 403,
+    "mcp_list_refresh_trial": [
+      403,
+      403,
+      403
+    ],
+    "mcp_network_calls": 0,
+    "checked_s": 0.307,
+    "limits": [
+      3,
+      2
+    ],
+    "limits_converged_s": 0.317,
+    "worker_pids": [
+      94747,
+      94918
+    ]
+  },
+  "import_inspiration": {
+    "preview_pid": 94747,
+    "import_pid": 94918,
+    "imported_once": true,
+    "inspiration_conflict": 409,
+    "inspiration_rounds": 1
+  },
+  "agent": {
+    "first_pid": 94747,
+    "second_pid": 94918,
+    "second_waited": true,
+    "first_status": 202,
+    "second_status": 409,
+    "user_messages": 1
+  },
+  "drain": {
+    "both_workers_rejected_create_retry_resume": true,
+    "running_finished": true,
+    "queued_finished": true,
+    "paused_cancelled": true,
+    "active_count": 0,
+    "admission_still_closed": true
+  },
+  "drained_backup": {
+    "run_id": 2,
+    "drain_enabled": true,
+    "active_before": 0,
+    "status": "succeeded",
+    "download_checksum_verified": true,
+    "restored_revision": "0070",
+    "restored_users": 2,
+    "restored_projects": 4
+  },
+  "restart": {
+    "stopped_all": true,
+    "migration": "head",
+    "final_revision": "0070",
+    "final_source": "C7 工作区",
+    "after_pids": [
+      96223,
+      96363
+    ],
+    "drain_preserved": true,
+    "reopened_task": "succeeded"
+  }
+}

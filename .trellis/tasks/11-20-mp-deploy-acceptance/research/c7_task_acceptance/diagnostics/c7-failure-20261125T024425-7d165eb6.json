@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "phase": "setup",
+  "scenario": null,
+  "completed_scenarios": [],
+  "started_at_utc": "2026-11-25T02:44:25.006+00:00",
+  "failed_at_utc": "2026-11-25T02:44:25.006+00:00",
+  "runner_pid": 52005,
+  "observed_worker_pids": [],
+  "error_category": "RuntimeError",
+  "traceback": [
+    {
+      "file": "process_tasks.py",
+      "function": "main",
+      "line": 1428
+    },
+    {
+      "file": "verify_failure_diagnostics.py",
+      "function": "fail_temporary_directory",
+      "line": 156
+    }
+  ],
+  "diagnostics": {
+    "collection_error": "TemporaryDirectoryNotAvailable"
+  }
+}

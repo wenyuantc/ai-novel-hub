@@ -1,0 +1,82 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "phase": "setup",
+  "scenario": null,
+  "completed_scenarios": [],
+  "started_at_utc": "2026-11-25T02:42:54.149+00:00",
+  "failed_at_utc": "2026-11-25T02:43:05.853+00:00",
+  "runner_pid": 48147,
+  "observed_worker_pids": [],
+  "error_category": "RuntimeError",
+  "traceback": [
+    {
+      "file": "process_tasks.py",
+      "function": "main",
+      "line": 1374
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aenter__",
+      "line": 210
+    },
+    {
+      "file": "process_tasks.py",
+      "function": "world",
+      "line": 623
+    },
+    {
+      "file": "contextlib.py",
+      "function": "enter_async_context",
+      "line": 659
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aenter__",
+      "line": 210
+    },
+    {
+      "file": "verify_failure_diagnostics.py",
+      "function": "fail_second_start",
+      "line": 117
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 49066,
+        "returncode": null,
+        "time": 1795574574.156
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 49066,
+        "returncode": 0,
+        "time": 1795574578.414
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 49243,
+        "returncode": null,
+        "time": 1795574578.432
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 49243,
+        "returncode": -15,
+        "time": 1795574585.684
+      }
+    ],
+    "log_pids": [
+      49243
+    ]
+  }
+}

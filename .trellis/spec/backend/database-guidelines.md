@@ -550,7 +550,7 @@ class Task(TimestampMixin, Base):   # tasks
 
 ### 3. 契约
 
-- 部署使用单个应用进程。0066 提供执行者租约，0067 新增实例表 `task_execution_slots`，每次正常领取和占用登记在同一事务提交。执行 UUID 为主键，任务整数 ID 唯一，另存原 worker、任务 UUID、排队时刻、发起人及可空串行键。表独立于任务行，任务历史裁剪后，尚在收尾的执行仍占名额。0068 在领取事务内同时登记作品执行体。名额可在协程返回前归还，作品排空另等原执行体退出。实时订阅由后续子任务处理。
+- 部署条件见[部署与迁移](./deployment-migrations.md)。0066 提供执行者租约，0067 新增实例表 `task_execution_slots`，每次正常领取和占用登记在同一事务提交。执行 UUID 为主键，任务整数 ID 唯一，另存原 worker、任务 UUID、排队时刻、发起人及可空串行键。表独立于任务行，任务历史裁剪后，尚在收尾的执行仍占名额。0068 在领取事务内同时登记作品执行体。名额可在协程返回前归还，作品排空另等原执行体退出。实时订阅及跨进程来源约束见[内部通道](./task-stream-peers.md)。
 - `task_workers` 以每次启动生成的 `worker_key` 为主键。登记、续约、停止与失联的时间均由数据库写入。PostgreSQL 在此表续约，SQLite 只在配对的 `<主库>.leases.sqlite3` 的 `worker_leases` 表续约；SQLite 主表的 `heartbeat_at` 是登记时刻。每 5 秒续约，租约 30 秒，执行者在距上次确认的心跳请求发起满 25 秒时自停；本地判断使用单调时钟。已停止或已围栏超过 7 天的登记，且无运行中任务引用时，可在启动登记时删除。
 - `0066` 降级须先取锁。存在未停止且未围栏的登记，或存在带归属的 running 任务，就拒绝降级。升级前的 running 行两列均为 NULL，按最早的业务凭据恢复。
 - **资源互斥**由部分唯一索引保证原子性：`resource_key` = `chapter:{id}`、`wizard:{project_id}:{kind}` 或 `relparse:{character_id}`（`character.generate` / `organization.generate` / `career.generate` 为空，允许并发；`wizard.careers` 为 `wizard:{project_id}:careers`；`outline.continue` 为 `outline:{project_id}`、`outline.expand` 为 `expand:{outline_id}`；`kb.index` 文档模式为 `kbdoc:{document_id}`、重建为 `kbrebuild:{project_id}`、记忆模式为空，`serial_key = index:{project_id}`；`agent.turn` 为 `agent:{conversation_id}`，同会话待审核（paused）的轮次由服务层 `active_turn` 检查 → 409）。插入撞索引 →
@@ -615,7 +615,7 @@ SQLite 还须运行 `test_task_worker_slow_headers.py`、`test_task_worker_sqlit
 
 ### 适用范围
 
-整库备份、灵感生成、项目两步导入、智能体会话操作及周期维护。生产部署仍使用单个 Uvicorn worker。跨进程验证使用同机 SQLite 文件及配对租约侧库，或共享 PostgreSQL。
+整库备份、灵感生成、项目两步导入、智能体会话操作及周期维护。部署可使用同机 SQLite 文件及配对租约侧库，或共享 PostgreSQL；具体条件见[部署与迁移](./deployment-migrations.md)。
 
 ### 数据库接口
 

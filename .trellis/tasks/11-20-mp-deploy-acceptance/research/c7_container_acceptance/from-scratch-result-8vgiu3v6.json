@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "steps": [
+    {
+      "stage": "workspace_preflight",
+      "exit_status": 0
+    },
+    {
+      "stage": "workspace",
+      "exit_status": 0
+    },
+    {
+      "stage": "workspace_verify",
+      "exit_status": 0
+    },
+    {
+      "stage": "git_archive",
+      "exit_status": 0
+    },
+    {
+      "stage": "c7_overlay",
+      "exit_status": 0
+    },
+    {
+      "stage": "probes",
+      "exit_status": 0
+    },
+    {
+      "stage": "dockerignore_sha",
+      "exit_status": 0
+    },
+    {
+      "stage": "test_env",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_config",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_up_build",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_ps",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_services",
+      "exit_status": 0
+    },
+    {
+      "stage": "compose_logs",
+      "exit_status": 0
+    },
+    {
+      "stage": "http",
+      "exit_status": 0
+    },
+    {
+      "stage": "migration_sha",
+      "exit_status": 0
+    },
+    {
+      "stage": "migration_sha",
+      "exit_status": 0
+    },
+    {
+      "stage": "restore_helper_sha",
+      "exit_status": 0
+    },
+    {
+      "stage": "restore_helper_sha",
+      "exit_status": 0
+    },
+    {
+      "stage": "admin_ui",
+      "exit_status": 0
+    },
+    {
+      "stage": "peer_checks",
+      "exit_status": 0
+    }
+  ],
+  "http": [
+    {
+      "endpoint": "healthz",
+      "status": 200
+    },
+    {
+      "endpoint": "auth_config",
+      "status": 200
+    },
+    {
+      "endpoint": "healthz",
+      "status": 200
+    },
+    {
+      "endpoint": "auth_config",
+      "status": 200
+    }
+  ],
+  "cleanup_confirmed": true,
+  "error": null,
+  "dockerignore_sha256": "ebdad1ffde4c13468dad78d4e7fe575a507ff359992b5c0b9fc786b4b2bb26b4",
+  "alembic_sha256": "2f49468408f6c0ef12ba0cf70294845cd3676860ff27f91be278effd984b9eed",
+  "sqlite_restore_sha256": "68839655d5a7f62c1eabc17ca6fdc7a06057165608e7f678e97d00d5bd61098c",
+  "ui_workers": [
+    {
+      "hostname": "02a5430656bb",
+      "pid": 1
+    },
+    {
+      "hostname": "d8fc5073192e",
+      "pid": 1
+    }
+  ],
+  "peer_workers": [
+    {
+      "hostname": "02a5430656bb",
+      "pid": 1,
+      "service": "app1",
+      "peer_port": 40265
+    },
+    {
+      "hostname": "d8fc5073192e",
+      "pid": 1,
+      "service": "app2",
+      "peer_port": 42025
+    }
+  ],
+  "peer_checks": {
+    "trusted_before_after": true,
+    "positive_control": true,
+    "external_blocked": true,
+    "cleanup_confirmed": true
+  }
+}

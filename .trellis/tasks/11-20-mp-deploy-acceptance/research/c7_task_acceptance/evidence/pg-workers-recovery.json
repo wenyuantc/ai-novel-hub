@@ -1,0 +1,125 @@
+{
+  "format_version": 1,
+  "topology": "pg-workers",
+  "started_at_utc": "2026-11-25T02:55:36.971+00:00",
+  "finished_at_utc": "2026-11-25T02:57:00.134+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "kill",
+      "recorded_at_utc": "2026-11-25T02:56:25.626+00:00",
+      "checks_passed": [
+        "interrupted",
+        "chapter_claim_released",
+        "terminal_facts_stable",
+        "retry_succeeded"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 80247,
+          "public_port": 58499
+        },
+        "replacement_pid": {
+          "pid": 80446,
+          "public_port": 58499
+        },
+        "executor_pid": {
+          "pid": 80248,
+          "public_port": 58499
+        }
+      },
+      "services": [
+        {
+          "process_pid": 80245,
+          "public_port": 58499,
+          "returncode": null,
+          "role": "uvicorn_supervisor"
+        }
+      ],
+      "facts": {
+        "recovery_s": 28.601,
+        "retry_final": "succeeded",
+        "retry_status": "queued",
+        "status": "interrupted"
+      }
+    },
+    {
+      "case": "kill-serial",
+      "recorded_at_utc": "2026-11-25T02:56:59.111+00:00",
+      "checks_passed": [
+        "result_requires_review",
+        "immediate_retry_rejected",
+        "serial_successor_succeeded"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 80247,
+          "public_port": 58499
+        },
+        "replacement_pid": {
+          "pid": 81782,
+          "public_port": 58499
+        },
+        "executor_pid": {
+          "pid": 80446,
+          "public_port": 58499
+        }
+      },
+      "services": [
+        {
+          "process_pid": 80245,
+          "public_port": 58499,
+          "returncode": null,
+          "role": "uvicorn_supervisor"
+        }
+      ],
+      "facts": {
+        "recovery_s": 30.187,
+        "original_retry": 409,
+        "original_status": "结果待核对",
+        "serial_order": [
+          "K1",
+          "K2"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 80162,
+        "returncode": null,
+        "time": 1795575341.592
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 80162,
+        "returncode": 0,
+        "time": 1795575345.027
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 80245,
+        "returncode": null,
+        "time": 1795575345.045
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      80245,
+      80247,
+      80248,
+      80446,
+      81782
+    ]
+  }
+}

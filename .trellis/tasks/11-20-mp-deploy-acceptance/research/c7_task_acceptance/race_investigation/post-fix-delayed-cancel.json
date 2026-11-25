@@ -1,0 +1,92 @@
+{
+  "mode": "lifecycle_first",
+  "exitstatus": 0,
+  "events": [
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.638437,
+      "task_id": 2,
+      "follow_local_queue": true,
+      "heartbeat_s": 60,
+      "poll_s": 5.0
+    },
+    {
+      "event": "queued_snapshot",
+      "elapsed_s": 4.673514,
+      "task_id": 2
+    },
+    {
+      "event": "stop_enter",
+      "elapsed_s": 4.692116,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false,
+      "chapter_status": "generating"
+    },
+    {
+      "event": "real_stop_begin",
+      "elapsed_s": 5.693253,
+      "task_id": 2
+    },
+    {
+      "event": "close_hub",
+      "elapsed_s": 5.740388,
+      "task_id": 2,
+      "frame": "error",
+      "detail": "任务已取消",
+      "had_hub": true,
+      "hub_closed": true
+    },
+    {
+      "event": "real_stop_done",
+      "elapsed_s": 5.753638,
+      "task_id": 2,
+      "cancelled_count": 1,
+      "task_present": true,
+      "status": "cancelled",
+      "deletion_intent": true,
+      "deleted": false,
+      "chapter_status": "draft"
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 5.757888,
+      "task_id": 2
+    },
+    {
+      "event": "cancel_projection",
+      "elapsed_s": 5.75959,
+      "task_id": 2,
+      "status": "cancelled",
+      "private_references_removed": true
+    },
+    {
+      "event": "public_error",
+      "elapsed_s": 5.759882,
+      "task_id": 2,
+      "detail": "任务已取消",
+      "task_null": false,
+      "task_status": "cancelled"
+    },
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 5.792812,
+      "task_id": 2,
+      "follow_local_queue": false,
+      "heartbeat_s": 60,
+      "poll_s": 5.0
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 5.794617,
+      "task_id": 2
+    },
+    {
+      "event": "pytest_result",
+      "elapsed_s": 6.217899,
+      "outcome": "passed"
+    }
+  ]
+}

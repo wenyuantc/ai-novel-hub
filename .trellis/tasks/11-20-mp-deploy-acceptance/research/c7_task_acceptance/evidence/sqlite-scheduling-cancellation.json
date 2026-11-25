@@ -1,0 +1,322 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "started_at_utc": "2026-11-25T02:54:48.281+00:00",
+  "finished_at_utc": "2026-11-25T02:55:18.746+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "scheduling",
+      "recorded_at_utc": "2026-11-25T02:55:15.851+00:00",
+      "checks_passed": [
+        "global_limit",
+        "per_user_limit",
+        "serial_fifo",
+        "two_real_executors",
+        "bounded_barriers"
+      ],
+      "endpoints": {
+        "executor_pid": {
+          "pid": 78567,
+          "public_port": 57592
+        },
+        "other_pid": {
+          "pid": 78657,
+          "public_port": 57667
+        }
+      },
+      "services": [
+        {
+          "process_pid": 78567,
+          "public_port": 57592,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 78657,
+          "public_port": 57667,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "barrier_seconds": [
+          0.583,
+          0.161
+        ],
+        "global": {
+          "peak": 2,
+          "starts": [
+            {
+              "tag": "X1",
+              "task_id": 1,
+              "executor": {
+                "pid": 78567,
+                "public_port": 57592
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            },
+            {
+              "tag": "Y1",
+              "task_id": 2,
+              "executor": {
+                "pid": 78657,
+                "public_port": 57667
+              },
+              "request": {
+                "pid": 78657,
+                "public_port": 57667
+              }
+            },
+            {
+              "tag": "Y2",
+              "task_id": 5,
+              "executor": {
+                "pid": 78657,
+                "public_port": 57667
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            },
+            {
+              "tag": "X2",
+              "task_id": 3,
+              "executor": {
+                "pid": 78567,
+                "public_port": 57592
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            },
+            {
+              "tag": "X3",
+              "task_id": 4,
+              "executor": {
+                "pid": 78567,
+                "public_port": 57592
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            }
+          ]
+        },
+        "per_user": {
+          "peak": 3,
+          "peak_by_user": {
+            "A": 2,
+            "B": 1
+          },
+          "starts": [
+            {
+              "tag": "A1",
+              "task_id": 6,
+              "executor": {
+                "pid": 78567,
+                "public_port": 57592
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            },
+            {
+              "tag": "A2",
+              "task_id": 7,
+              "executor": {
+                "pid": 78657,
+                "public_port": 57667
+              },
+              "request": {
+                "pid": 78657,
+                "public_port": 57667
+              }
+            },
+            {
+              "tag": "B1",
+              "task_id": 8,
+              "executor": {
+                "pid": 78567,
+                "public_port": 57592
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            },
+            {
+              "tag": "A3",
+              "task_id": 9,
+              "executor": {
+                "pid": 78657,
+                "public_port": 57667
+              },
+              "request": {
+                "pid": 78567,
+                "public_port": 57592
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case": "cancel",
+      "recorded_at_utc": "2026-11-25T02:55:16.570+00:00",
+      "checks_passed": [
+        "remote_cancel_accepted",
+        "model_connection_closed",
+        "cancelled",
+        "chapter_claim_released"
+      ],
+      "endpoints": {
+        "executor_pid": {
+          "pid": 78567,
+          "public_port": 57592
+        },
+        "other_pid": {
+          "pid": 78657,
+          "public_port": 57667
+        }
+      },
+      "services": [
+        {
+          "process_pid": 78567,
+          "public_port": 57592,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 78657,
+          "public_port": 57667,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "elapsed_s": 0.109
+      }
+    },
+    {
+      "case": "admin-cancel",
+      "recorded_at_utc": "2026-11-25T02:55:17.556+00:00",
+      "checks_passed": [
+        "remote_admin_cancel_accepted",
+        "model_connection_closed",
+        "cancelled",
+        "chapter_claim_released"
+      ],
+      "endpoints": {
+        "executor_pid": {
+          "pid": 78567,
+          "public_port": 57592
+        },
+        "other_pid": {
+          "pid": 78657,
+          "public_port": 57667
+        }
+      },
+      "services": [
+        {
+          "process_pid": 78567,
+          "public_port": 57592,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 78657,
+          "public_port": 57667,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "elapsed_s": 0.436
+      }
+    },
+    {
+      "case": "delete",
+      "recorded_at_utc": "2026-11-25T02:55:18.180+00:00",
+      "checks_passed": [
+        "remote_delete_accepted",
+        "model_connection_closed_before_delete_returned"
+      ],
+      "endpoints": {
+        "executor_pid": {
+          "pid": 78567,
+          "public_port": 57592
+        },
+        "other_pid": {
+          "pid": 78657,
+          "public_port": 57667
+        }
+      },
+      "services": [
+        {
+          "process_pid": 78567,
+          "public_port": 57592,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 78657,
+          "public_port": 57667,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "elapsed_s": 0.107
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 78493,
+        "returncode": null,
+        "time": 1795575288.29
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 78493,
+        "returncode": 0,
+        "time": 1795575290.504
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 78567,
+        "returncode": null,
+        "time": 1795575290.523
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 78657,
+        "returncode": null,
+        "time": 1795575294.764
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      78567,
+      78657
+    ]
+  }
+}

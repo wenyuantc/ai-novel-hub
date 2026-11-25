@@ -1,0 +1,105 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "phase": "teardown",
+  "scenario": "forward",
+  "completed_scenarios": [
+    "forward"
+  ],
+  "started_at_utc": "2026-11-25T02:43:05.859+00:00",
+  "failed_at_utc": "2026-11-25T02:43:22.623+00:00",
+  "runner_pid": 48147,
+  "observed_worker_pids": [
+    50136,
+    50276
+  ],
+  "error_category": "AssertionError",
+  "traceback": [
+    {
+      "file": "process_tasks.py",
+      "function": "main",
+      "line": 1374
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aexit__",
+      "line": 217
+    },
+    {
+      "file": "process_tasks.py",
+      "function": "world",
+      "line": 557
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aexit__",
+      "line": 754
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aexit__",
+      "line": 737
+    },
+    {
+      "file": "contextlib.py",
+      "function": "_exit_wrapper",
+      "line": 642
+    },
+    {
+      "file": "verify_failure_diagnostics.py",
+      "function": "fail_cleanup",
+      "line": 157
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 49874,
+        "returncode": null,
+        "time": 1795574585.869
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 49874,
+        "returncode": 0,
+        "time": 1795574591.677
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 50136,
+        "returncode": null,
+        "time": 1795574591.701
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 50276,
+        "returncode": null,
+        "time": 1795574596.389
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 50276,
+        "returncode": -15,
+        "time": 1795574602.353
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 50136,
+        "returncode": -15,
+        "time": 1795574602.513
+      }
+    ],
+    "log_pids": [
+      50136,
+      50276
+    ]
+  }
+}

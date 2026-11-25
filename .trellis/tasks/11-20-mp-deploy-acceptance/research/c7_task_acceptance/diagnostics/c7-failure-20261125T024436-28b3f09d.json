@@ -1,0 +1,107 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "phase": "teardown",
+  "scenario": "forward",
+  "completed_scenarios": [
+    "forward"
+  ],
+  "started_at_utc": "2026-11-25T02:44:25.007+00:00",
+  "failed_at_utc": "2026-11-25T02:44:36.914+00:00",
+  "runner_pid": 52005,
+  "observed_worker_pids": [
+    52793,
+    52917
+  ],
+  "error_category": "AssertionError",
+  "traceback": [
+    {
+      "file": "process_tasks.py",
+      "function": "main",
+      "line": 1431
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aexit__",
+      "line": 217
+    },
+    {
+      "file": "process_tasks.py",
+      "function": "world",
+      "line": 557
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aexit__",
+      "line": 754
+    },
+    {
+      "file": "contextlib.py",
+      "function": "__aexit__",
+      "line": 737
+    },
+    {
+      "file": "contextlib.py",
+      "function": "_exit_wrapper",
+      "line": 642
+    },
+    {
+      "file": "verify_failure_diagnostics.py",
+      "function": "fail_cleanup",
+      "line": 185
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 52730,
+        "returncode": null,
+        "time": 1795574665.015
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 52730,
+        "returncode": 0,
+        "time": 1795574667.357
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 52793,
+        "returncode": null,
+        "time": 1795574667.376
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 52917,
+        "returncode": null,
+        "time": 1795574671.007
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 52917,
+        "returncode": -15,
+        "time": 1795574676.562
+      },
+      {
+        "kind": "uvicorn_stop",
+        "pid": 52793,
+        "returncode": -15,
+        "time": 1795574676.74
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      52793,
+      52917
+    ]
+  }
+}

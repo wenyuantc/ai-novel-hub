@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端规范索引；质量规范超过自动注入限额，须直接读取 .trellis/spec/backend/quality-guidelines.md 全文"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端完整回归门禁"}
+{"file":".trellis/spec/guides/index.md","reason":"跨层和复用检查指引"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-worker-lease/research/verification.md","reason":"已有执行者租约和故障恢复证据"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-peer-channel-stream/research/process-verification.md","reason":"真实进程流和撤权检查基线"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-outside-engine-state/research/verification.md","reason":"备份及引擎外状态检查基线"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-drain-switch/research/verification.md","reason":"排空功能及双进程检查基线"}
+{"file":".trellis/tasks/archive/2026-11/11-20-mp-deploy-acceptance/research/migration-research.md","reason":"迁移隔离实验及未覆盖边界"}

@@ -1,0 +1,278 @@
+{
+  "format_version": 1,
+  "topology": "pg-instances",
+  "started_at_utc": "2026-11-25T02:49:36.014+00:00",
+  "finished_at_utc": "2026-11-25T02:50:23.944+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "restart",
+      "recorded_at_utc": "2026-11-25T02:50:09.345+00:00",
+      "checks_passed": [
+        "running_identity_unchanged",
+        "other_process_started",
+        "original_task_succeeded"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 66974,
+          "public_port": 52097
+        },
+        "new_pid": {
+          "pid": 67288,
+          "public_port": 52437
+        },
+        "executor_pid": {
+          "pid": 66829,
+          "public_port": 51992
+        }
+      },
+      "services": [
+        {
+          "process_pid": 66829,
+          "public_port": 51992,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 66974,
+          "public_port": 52097,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 67288,
+          "public_port": 52437,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "running_samples": 40
+      }
+    },
+    {
+      "case": "forward",
+      "recorded_at_utc": "2026-11-25T02:50:12.758+00:00",
+      "checks_passed": [
+        "direct_and_remote_events_equal",
+        "task_succeeded"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 67288,
+          "public_port": 52437
+        },
+        "executor_pid": {
+          "pid": 66829,
+          "public_port": 51992
+        }
+      },
+      "services": [
+        {
+          "process_pid": 66829,
+          "public_port": 51992,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 66974,
+          "public_port": 52097,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 67288,
+          "public_port": 52437,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "events": [
+          "snapshot",
+          "delta",
+          "progress",
+          "delta",
+          "done"
+        ]
+      }
+    },
+    {
+      "case": "revoke",
+      "recorded_at_utc": "2026-11-25T02:50:16.557+00:00",
+      "checks_passed": [
+        "both_streams_permission_denied",
+        "post_revocation_content_not_sent"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 67288,
+          "public_port": 52437
+        },
+        "executor_pid": {
+          "pid": 66974,
+          "public_port": 52097
+        }
+      },
+      "services": [
+        {
+          "process_pid": 66829,
+          "public_port": 51992,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 66974,
+          "public_port": 52097,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 67288,
+          "public_port": 52437,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {}
+    },
+    {
+      "case": "downgrade",
+      "recorded_at_utc": "2026-11-25T02:50:19.265+00:00",
+      "checks_passed": [
+        "both_streams_permission_denied",
+        "post_downgrade_content_not_sent"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 67288,
+          "public_port": 52437
+        },
+        "executor_pid": {
+          "pid": 66829,
+          "public_port": 51992
+        }
+      },
+      "services": [
+        {
+          "process_pid": 66829,
+          "public_port": 51992,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 66974,
+          "public_port": 52097,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 67288,
+          "public_port": 52437,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {}
+    },
+    {
+      "case": "agent-structured",
+      "recorded_at_utc": "2026-11-25T02:50:22.843+00:00",
+      "checks_passed": [
+        "direct_and_remote_events_equal",
+        "tool_start_and_proposal",
+        "proposed_and_paused"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 67288,
+          "public_port": 52437
+        },
+        "executor_pid": {
+          "pid": 66829,
+          "public_port": 51992
+        }
+      },
+      "services": [
+        {
+          "process_pid": 66829,
+          "public_port": 51992,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 66974,
+          "public_port": 52097,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 67288,
+          "public_port": 52437,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "events": [
+          "snapshot",
+          "progress",
+          "progress",
+          "tool_start",
+          "proposal",
+          "progress",
+          "paused"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 66639,
+        "returncode": null,
+        "time": 1795574983.199
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 66639,
+        "returncode": 0,
+        "time": 1795574989.214
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 66829,
+        "returncode": null,
+        "time": 1795574989.276
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 66974,
+        "returncode": null,
+        "time": 1795574993.706
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 67288,
+        "returncode": null,
+        "time": 1795575003.053
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      66829,
+      66974,
+      67288
+    ]
+  }
+}

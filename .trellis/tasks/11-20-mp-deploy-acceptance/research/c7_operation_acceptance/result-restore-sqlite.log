@@ -1,0 +1,35 @@
+{
+  "shape": "sqlite",
+  "database": "SQLite",
+  "initial_pids": [
+    16859,
+    16971
+  ],
+  "restored_pids": [
+    17232,
+    17338
+  ],
+  "all_source_processes_stopped": true,
+  "drain_rejected_new_before_backup": true,
+  "already_running_finished": true,
+  "backup_checksum_verified": true,
+  "backup_bytes": 2236416,
+  "backup_revision": "0070",
+  "restoration": {
+    "previous_group_saved": true,
+    "new_lease_pair": true,
+    "moved_files": 3
+  },
+  "restored_revision_before_after_migration": [
+    "0070",
+    "0070"
+  ],
+  "restored_author_login": true,
+  "restored_admin_login": true,
+  "restored_project_and_chapter": true,
+  "same_encryption_key_and_model_credential_usable": true,
+  "restored_drain_rejected_new": true,
+  "reopened_task": "succeeded",
+  "model_calls": 2,
+  "alembic_sha256": "2f49468408f6c0ef12ba0cf70294845cd3676860ff27f91be278effd984b9eed"
+}

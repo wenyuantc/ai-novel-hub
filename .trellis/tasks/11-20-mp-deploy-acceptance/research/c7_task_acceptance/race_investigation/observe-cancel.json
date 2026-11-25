@@ -1,0 +1,73 @@
+{
+  "mode": "observe",
+  "exitstatus": 0,
+  "events": [
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.381745,
+      "task_id": 2,
+      "follow_local_queue": true,
+      "heartbeat_s": 60,
+      "poll_s": 5.0
+    },
+    {
+      "event": "queued_snapshot",
+      "elapsed_s": 4.414366,
+      "task_id": 2
+    },
+    {
+      "event": "stop_enter",
+      "elapsed_s": 4.428093,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "real_stop_begin",
+      "elapsed_s": 4.428097,
+      "task_id": 2
+    },
+    {
+      "event": "close_hub",
+      "elapsed_s": 4.454838,
+      "task_id": 2,
+      "frame": "error",
+      "detail": "任务已取消"
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.459134,
+      "task_id": 2
+    },
+    {
+      "event": "real_stop_done",
+      "elapsed_s": 4.469714,
+      "task_id": 2,
+      "cancelled_count": 1,
+      "task_present": true,
+      "status": "cancelled",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.501209,
+      "task_id": 2,
+      "follow_local_queue": false,
+      "heartbeat_s": 60,
+      "poll_s": 5.0
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.502681,
+      "task_id": 2
+    },
+    {
+      "event": "pytest_result",
+      "elapsed_s": 4.811527,
+      "outcome": "passed"
+    }
+  ]
+}

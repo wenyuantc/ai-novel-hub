@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "machine": "c7accept0f743c4e85a8",
+  "scenario": "README candidate network preflight with isolated Engine",
+  "candidate_sha256": "0d7dd48585ad00ae11f32e8677f503505f5c0acc7b3678187953f7291f92b146",
+  "image_id": "sha256:d3c5c0b94c1918351a14bd81f2dcb3fca542a87b8c525afd5780feb385952da0",
+  "dockerignore_sha256": "ebdad1ffde4c13468dad78d4e7fe575a507ff359992b5c0b9fc786b4b2bb26b4",
+  "alembic_sha256": "2f49468408f6c0ef12ba0cf70294845cd3676860ff27f91be278effd984b9eed",
+  "sqlite_restore_sha256": "68839655d5a7f62c1eabc17ca6fdc7a06057165608e7f678e97d00d5bd61098c",
+  "smoke_script_sha256": "0b75ae00d2bbc055105d10c0daad1f1bd1cbc3726174acf7bb54b95f2361ac55",
+  "exit_status": 0,
+  "scenarios": [
+    {
+      "workers_per_instance": 1,
+      "peer_ports": 2,
+      "untrusted_bridge_reachable": 0,
+      "trusted_host_reachable": 2,
+      "trusted_host_total": 2,
+      "same_network_positive_control": true,
+      "trusted_peer_before_after": true
+    },
+    {
+      "workers_per_instance": 4,
+      "peer_ports": 8,
+      "untrusted_bridge_reachable": 0,
+      "trusted_host_reachable": 8,
+      "trusted_host_total": 8,
+      "same_network_positive_control": true,
+      "trusted_peer_before_after": true
+    }
+  ],
+  "cleanup_confirmed": true
+}

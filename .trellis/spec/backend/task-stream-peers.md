@@ -2,7 +2,7 @@
 
 ## 适用入口
 
-公开入口 `GET /api/v1/tasks/{task_id}/stream?task_key=…` 使用请求所在实例完成身份和权限校验。数据库中的 `Task.worker_key` 标识当前持有人。C3 的请求 worker 可以接管取消收尾，只有仍持原执行现场的调度 worker 能发布运行中的事件。生产发布继续使用一个 Uvicorn worker。
+公开入口 `GET /api/v1/tasks/{task_id}/stream?task_key=…` 使用请求所在实例完成身份和权限校验。数据库中的 `Task.worker_key` 标识当前持有人。C3 的请求 worker 可以接管取消收尾，只有仍持原执行现场的调度 worker 能发布运行中的事件。部署条件见[部署与迁移](./deployment-migrations.md)。
 
 ## 接口与身份
 

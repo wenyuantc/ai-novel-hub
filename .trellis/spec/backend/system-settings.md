@@ -2,7 +2,7 @@
 
 ## 1. 范围 / 触发
 
-适用于七项业务运行配置、`SystemSettingsManager`、`/admin/system-settings`、公开开关同步与设置审计。修改配置读取、部署优先级、任务/MCP执行或管理表单时遵守本契约。各应用分别维护已确认设置的缓存，同库实例使用相同的部署基线。受支持的生产部署仍使用一个 worker。
+适用于七项业务运行配置、`SystemSettingsManager`、`/admin/system-settings`、公开开关同步与设置审计。修改配置读取、部署优先级、任务/MCP执行或管理表单时遵守本契约。各应用分别维护已确认设置的缓存，同库实例使用相同的部署基线。部署条件见[部署与迁移](./deployment-migrations.md)。
 
 ## 2. 签名与存储
 

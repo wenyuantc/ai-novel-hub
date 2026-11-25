@@ -1,0 +1,89 @@
+{
+  "mode": "observe",
+  "exitstatus": 0,
+  "events": [
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.36804,
+      "task_id": 2,
+      "follow_local_queue": true,
+      "heartbeat_s": 0.01,
+      "poll_s": 5.0
+    },
+    {
+      "event": "queued_snapshot",
+      "elapsed_s": 4.401389,
+      "task_id": 2
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.427582,
+      "task_id": 2
+    },
+    {
+      "event": "lost_before",
+      "elapsed_s": 4.43082,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "lost_result",
+      "elapsed_s": 4.433604,
+      "task_id": 2,
+      "detail": "任务不存在",
+      "task_null": true
+    },
+    {
+      "event": "stop_enter",
+      "elapsed_s": 4.435294,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "real_stop_begin",
+      "elapsed_s": 4.435297,
+      "task_id": 2
+    },
+    {
+      "event": "close_hub",
+      "elapsed_s": 4.461709,
+      "task_id": 2,
+      "frame": "error",
+      "detail": "任务已取消"
+    },
+    {
+      "event": "real_stop_done",
+      "elapsed_s": 4.473038,
+      "task_id": 2,
+      "cancelled_count": 1,
+      "task_present": true,
+      "status": "cancelled",
+      "deletion_intent": true,
+      "deleted": false
+    },
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.503719,
+      "task_id": 2,
+      "follow_local_queue": false,
+      "heartbeat_s": 0.01,
+      "poll_s": 5.0
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.505458,
+      "task_id": 2
+    },
+    {
+      "event": "pytest_result",
+      "elapsed_s": 4.821392,
+      "outcome": "passed"
+    }
+  ]
+}

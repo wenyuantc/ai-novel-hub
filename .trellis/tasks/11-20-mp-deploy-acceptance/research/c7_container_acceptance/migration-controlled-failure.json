@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "suite": "migration",
+  "scenario": "pg_old",
+  "stage": "fault_migration",
+  "error": {
+    "category": "migration_failure",
+    "exit_status": null
+  },
+  "container_exit_statuses": [
+    {
+      "index": 0,
+      "status": 1,
+      "state": "exited"
+    },
+    {
+      "index": 1,
+      "status": 1,
+      "state": "exited"
+    },
+    {
+      "index": 2,
+      "status": 1,
+      "state": "exited"
+    }
+  ],
+  "http": [
+    {
+      "index": 0,
+      "endpoint": "healthz",
+      "status": null,
+      "category": "connection_error"
+    },
+    {
+      "index": 1,
+      "endpoint": "healthz",
+      "status": null,
+      "category": "connection_error"
+    },
+    {
+      "index": 2,
+      "endpoint": "healthz",
+      "status": null,
+      "category": "connection_error"
+    }
+  ],
+  "cleanup": {
+    "confirmed": true
+  },
+  "migration_logs": [
+    {
+      "phase": "fault",
+      "index": 0,
+      "available": true,
+      "transitions": [
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0034",
+          "to": "0035"
+        },
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0035",
+          "to": "0036"
+        },
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0036",
+          "to": "0037"
+        }
+      ],
+      "exception_counts": {
+        "RuntimeError": 1
+      }
+    },
+    {
+      "phase": "fault",
+      "index": 1,
+      "available": true,
+      "transitions": [
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0034",
+          "to": "0035"
+        },
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0035",
+          "to": "0036"
+        },
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0036",
+          "to": "0037"
+        }
+      ],
+      "exception_counts": {
+        "RuntimeError": 1
+      }
+    },
+    {
+      "phase": "fault",
+      "index": 2,
+      "available": true,
+      "transitions": [
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0034",
+          "to": "0035"
+        },
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0035",
+          "to": "0036"
+        },
+        {
+          "level": "INFO",
+          "action": "upgrade",
+          "from": "0036",
+          "to": "0037"
+        }
+      ],
+      "exception_counts": {
+        "RuntimeError": 1
+      }
+    }
+  ],
+  "raw_log_retained": false,
+  "snapshots": [
+    {
+      "kind": "postgresql",
+      "file": "pg-c7_empty.dump"
+    },
+    {
+      "kind": "postgresql",
+      "file": "pg-c7_old.dump"
+    }
+  ],
+  "snapshot_failed": false,
+  "trace": [
+    {
+      "file": "c7_migration_container_smoke.py",
+      "line": 426
+    },
+    {
+      "file": "c7_migration_container_smoke.py",
+      "line": 302
+    }
+  ]
+}

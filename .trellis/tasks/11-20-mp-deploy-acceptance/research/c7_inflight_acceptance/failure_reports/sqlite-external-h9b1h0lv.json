@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "topology": "sqlite",
+  "case": "external",
+  "phase": "scenario",
+  "started_utc": "2026-11-25T02:45:07.275891+00:00",
+  "failed_utc": "2026-11-25T02:45:29.549481+00:00",
+  "processes": {
+    "runner_pid": 54380,
+    "applications": [
+      {
+        "role": "A",
+        "pid": 55081,
+        "returncode": null
+      },
+      {
+        "role": "B",
+        "pid": 55302,
+        "returncode": null
+      },
+      {
+        "role": "external-new",
+        "pid": 55679,
+        "returncode": null
+      }
+    ],
+    "registered_worker_pids": [
+      55081,
+      55302,
+      55679
+    ]
+  },
+  "error": {
+    "category": "AssertionError",
+    "locations": [
+      {
+        "file": "run_inflight.py",
+        "line": 347
+      },
+      {
+        "file": "verify_failure_reporting.py",
+        "line": 65
+      }
+    ]
+  },
+  "http_5xx": {
+    "count": 1,
+    "by_status": {
+      "503": 1
+    },
+    "invalid_records": 1
+  },
+  "sqlite_busy_log_hits": 1
+}

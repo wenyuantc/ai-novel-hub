@@ -1,0 +1,102 @@
+{
+  "mode": "observe",
+  "exitstatus": 0,
+  "events": [
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.672212,
+      "task_id": 2,
+      "follow_local_queue": true,
+      "heartbeat_s": 0.01,
+      "poll_s": 5.0
+    },
+    {
+      "event": "queued_snapshot",
+      "elapsed_s": 4.708338,
+      "task_id": 2
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.73762,
+      "task_id": 2
+    },
+    {
+      "event": "lost_before",
+      "elapsed_s": 4.741569,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false,
+      "chapter_status": "generating"
+    },
+    {
+      "event": "lost_result",
+      "elapsed_s": 4.744608,
+      "task_id": 2,
+      "detail": "任务不存在",
+      "task_null": true
+    },
+    {
+      "event": "public_error",
+      "elapsed_s": 4.744615,
+      "task_id": 2,
+      "detail": "任务不存在",
+      "task_null": true,
+      "task_status": null
+    },
+    {
+      "event": "stop_enter",
+      "elapsed_s": 4.746655,
+      "task_id": 2,
+      "task_present": true,
+      "status": "queued",
+      "deletion_intent": true,
+      "deleted": false,
+      "chapter_status": "generating"
+    },
+    {
+      "event": "real_stop_begin",
+      "elapsed_s": 4.74666,
+      "task_id": 2
+    },
+    {
+      "event": "close_hub",
+      "elapsed_s": 4.781003,
+      "task_id": 2,
+      "frame": "error",
+      "detail": "任务已取消",
+      "had_hub": true,
+      "hub_closed": true
+    },
+    {
+      "event": "real_stop_done",
+      "elapsed_s": 4.791805,
+      "task_id": 2,
+      "cancelled_count": 1,
+      "task_present": true,
+      "status": "cancelled",
+      "deletion_intent": true,
+      "deleted": false,
+      "chapter_status": "draft"
+    },
+    {
+      "event": "subscribe_enter",
+      "elapsed_s": 4.824002,
+      "task_id": 2,
+      "follow_local_queue": false,
+      "heartbeat_s": 0.01,
+      "poll_s": 5.0
+    },
+    {
+      "event": "visibility_lost",
+      "elapsed_s": 4.825695,
+      "task_id": 2
+    },
+    {
+      "event": "pytest_result",
+      "elapsed_s": 5.105302,
+      "outcome": "passed"
+    }
+  ]
+}

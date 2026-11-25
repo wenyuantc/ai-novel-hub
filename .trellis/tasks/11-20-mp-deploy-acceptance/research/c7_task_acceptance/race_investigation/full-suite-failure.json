@@ -1,0 +1,12 @@
+{
+  "source": "backend full pytest junit",
+  "source_path": "/tmp/ainovel-c7-01a2104f-pytest.xml",
+  "test": "tests/test_tasks.py::test_subscribed_task_deleted_ends_with_error[cancel-settings_overrides0]",
+  "duration_s": 7.665,
+  "outcome": "failed",
+  "frame": "error",
+  "expected_detail": "任务已取消",
+  "observed_detail": "任务不存在",
+  "failure_line": "tests/test_tasks.py:722",
+  "note": "JUnit failure reports assertion and outcome, not the internal event ordering."
+}

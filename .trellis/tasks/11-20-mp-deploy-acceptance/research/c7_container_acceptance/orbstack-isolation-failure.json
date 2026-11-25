@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "suite": "compose",
+  "scenario": "default_workers",
+  "stage": "external_network",
+  "error": {
+    "category": "external_network_reachable",
+    "exit_status": null
+  },
+  "container_exit_statuses": [
+    {
+      "index": 0,
+      "status": null,
+      "state": "running"
+    },
+    {
+      "index": 1,
+      "status": null,
+      "state": "running"
+    },
+    {
+      "index": 2,
+      "status": null,
+      "state": "running"
+    }
+  ],
+  "http": [
+    {
+      "index": 0,
+      "endpoint": "healthz",
+      "status": 200,
+      "category": "ok"
+    },
+    {
+      "index": 0,
+      "endpoint": "auth_config",
+      "status": 200,
+      "category": "ok"
+    },
+    {
+      "index": 1,
+      "endpoint": "healthz",
+      "status": 200,
+      "category": "ok"
+    },
+    {
+      "index": 1,
+      "endpoint": "auth_config",
+      "status": 200,
+      "category": "ok"
+    }
+  ],
+  "cleanup": {
+    "confirmed": true
+  },
+  "migration_logs": [],
+  "raw_log_retained": false,
+  "snapshots": [],
+  "snapshot_failed": false,
+  "trace": [
+    {
+      "file": "c7_container_smoke.py",
+      "line": 351
+    },
+    {
+      "file": "c7_container_smoke.py",
+      "line": 298
+    },
+    {
+      "file": "c7_container_smoke.py",
+      "line": 164
+    },
+    {
+      "file": "c7_container_smoke.py",
+      "line": 108
+    }
+  ]
+}

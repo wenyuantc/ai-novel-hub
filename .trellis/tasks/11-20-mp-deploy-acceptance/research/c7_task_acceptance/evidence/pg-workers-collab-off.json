@@ -1,0 +1,83 @@
+{
+  "format_version": 1,
+  "topology": "pg-workers",
+  "started_at_utc": "2026-11-25T02:51:27.245+00:00",
+  "finished_at_utc": "2026-11-25T02:51:48.730+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "collab-off",
+      "recorded_at_utc": "2026-11-25T02:51:47.751+00:00",
+      "checks_passed": [
+        "remote_permission_denied",
+        "later_content_not_sent",
+        "reconnect_done_succeeded"
+      ],
+      "endpoints": {
+        "executor_pid": {
+          "pid": 71474,
+          "public_port": 54144
+        },
+        "other_pid": {
+          "pid": 71475,
+          "public_port": 54144
+        }
+      },
+      "services": [
+        {
+          "process_pid": 71470,
+          "public_port": 54144,
+          "returncode": null,
+          "role": "uvicorn_supervisor"
+        }
+      ],
+      "facts": {
+        "remote_events": [
+          "snapshot",
+          "delta",
+          "error"
+        ],
+        "replay_events": [
+          "snapshot",
+          "done"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 70805,
+        "returncode": null,
+        "time": 1795575091.795
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 70805,
+        "returncode": 0,
+        "time": 1795575098.462
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 71470,
+        "returncode": null,
+        "time": 1795575098.479
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      71470,
+      71474,
+      71475
+    ]
+  }
+}

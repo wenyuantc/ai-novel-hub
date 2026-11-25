@@ -1,0 +1,94 @@
+{
+  "format_version": 1,
+  "topology": "sqlite",
+  "started_at_utc": "2026-11-25T02:50:28.350+00:00",
+  "finished_at_utc": "2026-11-25T02:50:47.810+00:00",
+  "outcome": "passed",
+  "cases": [
+    {
+      "case": "collab-off",
+      "recorded_at_utc": "2026-11-25T02:50:47.309+00:00",
+      "checks_passed": [
+        "remote_permission_denied",
+        "later_content_not_sent",
+        "reconnect_done_succeeded"
+      ],
+      "endpoints": {
+        "other_pid": {
+          "pid": 68724,
+          "public_port": 53264
+        },
+        "executor_pid": {
+          "pid": 68429,
+          "public_port": 53163
+        }
+      },
+      "services": [
+        {
+          "process_pid": 68429,
+          "public_port": 53163,
+          "returncode": null,
+          "role": "application"
+        },
+        {
+          "process_pid": 68724,
+          "public_port": 53264,
+          "returncode": null,
+          "role": "application"
+        }
+      ],
+      "facts": {
+        "remote_events": [
+          "snapshot",
+          "delta",
+          "error"
+        ],
+        "replay_events": [
+          "snapshot",
+          "done"
+        ]
+      }
+    }
+  ],
+  "diagnostics": {
+    "http_5xx": [],
+    "invalid_http_records": 0,
+    "log_counts": {
+      "sqlite_busy": 0,
+      "traceback": 0,
+      "timeout": 0,
+      "connection_error": 0
+    },
+    "process_events": [
+      {
+        "kind": "migration_start",
+        "pid": 68251,
+        "returncode": null,
+        "time": 1795575028.362
+      },
+      {
+        "kind": "migration_stop",
+        "pid": 68251,
+        "returncode": 0,
+        "time": 1795575033.934
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 68429,
+        "returncode": null,
+        "time": 1795575034.049
+      },
+      {
+        "kind": "uvicorn_start",
+        "pid": 68724,
+        "returncode": null,
+        "time": 1795575039.22
+      }
+    ],
+    "invalid_process_records": 0,
+    "log_pids": [
+      68429,
+      68724
+    ]
+  }
+}

@@ -138,7 +138,7 @@ C1 在启动及每次定时接管时检查已超过 2 分钟阈值的外部调�
 
 ## 9. 迁移、部署与兼容（C7）
 
-- **迁移并发保护**：`alembic/env.py` 在执行前取得跨进程互斥（PostgreSQL 用会话级 advisory lock，这里只保护迁移这一运维动作，不承担运行期正确性；SQLite 用对版本表的写事务），后到者等待后发现已是 head 即直接返回。
+- **迁移并发保护**：`alembic/env.py` 在检查版本前取得跨进程互斥。PostgreSQL 在同一数据库会话持有 advisory lock，这里只保护迁移这一运维动作，不承担运行期正确性；SQLite 在迁移专用连接关闭外键后显式使用 `BEGIN IMMEDIATE`，将版本检查、结构变更和版本更新纳入同一受控事务。迁移完成前核验外键，异常回滚；不得用历史迁移中的自动提交块提前释放保护。后到者重新检查版本，已是目标版本即无需再迁移。[C7 设计](../archive/2026-11/11-20-mp-deploy-acceptance/design.md) · [迁移预研](../archive/2026-11/11-20-mp-deploy-acceptance/research/migration-research.md)
 - **新增迁移**（编号在各子任务中按当时 head 顺延）：`task_workers`、SQLite 的配对表 `task_lease_store` 与 `tasks.worker_key`／`recovered_at`（C1，0066）；`task_work_records`、`tasks.cancel_requested_at`、删除与外部调用的发起 worker（C3，0068）；备份执行进程标记与灵感互斥所需列（C5）；排空开关（C6）。降级遵循现有惯例：存在新语义数据时拒绝。
 - **升级到含租约的版本仍需停机**（D5）。旧版本遗留的 running 行没有 `worker_key`，按孤立处理。
 - **启动方式**：镜像默认仍是单进程；通过环境变量选择 worker 数。多实例部署的内部通道地址、共享 `BACKUP_DIR`、相同的 `JWT_SECRET` 与 `ENCRYPTION_KEY` 写入 README。

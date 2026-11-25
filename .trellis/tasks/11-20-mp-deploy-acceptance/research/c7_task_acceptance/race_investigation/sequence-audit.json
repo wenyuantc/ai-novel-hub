@@ -1,0 +1,7 @@
+{
+  "before_fix": "forced lifecycle read wins and cancel assertion fails",
+  "after_fix": "real cancellation, hub closure, chapter release and permission-aware projection precede cancelled frame",
+  "lifecycle_branch": "task-not-found frame precedes real cancellation and still passes",
+  "delayed_cancel_injection_s": 1.0,
+  "original_full_suite_order": "not recorded"
+}

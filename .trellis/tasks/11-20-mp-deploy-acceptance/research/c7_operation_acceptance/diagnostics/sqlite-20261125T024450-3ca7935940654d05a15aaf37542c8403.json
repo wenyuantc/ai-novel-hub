@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "recorded_at_utc": "2026-11-25T02:44:50.686146+00:00",
+  "elapsed_s": 0.077,
+  "shape": "sqlite",
+  "from_c6": false,
+  "phase": "受控子进程故障",
+  "category": "connection_refused",
+  "exception_type": "CommandFailure",
+  "frames": [
+    {
+      "file": "run_operations.py",
+      "line": 1200,
+      "function": "<module>"
+    },
+    {
+      "file": "runners.py",
+      "line": 195,
+      "function": "run"
+    },
+    {
+      "file": "runners.py",
+      "line": 118,
+      "function": "run"
+    },
+    {
+      "file": "base_events.py",
+      "line": 691,
+      "function": "run_until_complete"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 1166,
+      "function": "main"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 281,
+      "function": "command"
+    }
+  ],
+  "events": [
+    {
+      "phase": "准备隔离环境",
+      "elapsed_s": 0.013
+    },
+    {
+      "phase": "受控子进程故障",
+      "elapsed_s": 0.013
+    }
+  ],
+  "processes": [],
+  "commands": [
+    {
+      "program": "python",
+      "phase": "受控子进程故障",
+      "pid": 53711,
+      "started_s": 0.051,
+      "exit_code": 17,
+      "ended_s": 0.074
+    }
+  ],
+  "worker_pids": [],
+  "observed_http_500": 0,
+  "unhandled_async_types": [],
+  "log_summaries": [],
+  "command_failure": {
+    "program": "python",
+    "exit_code": 17,
+    "pid": 53711
+  }
+}

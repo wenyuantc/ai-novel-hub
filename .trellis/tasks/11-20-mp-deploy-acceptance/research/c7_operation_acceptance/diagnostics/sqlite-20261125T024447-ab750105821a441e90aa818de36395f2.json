@@ -1,0 +1,121 @@
+{
+  "schema": 1,
+  "recorded_at_utc": "2026-11-25T02:44:47.244038+00:00",
+  "elapsed_s": 12.066,
+  "shape": "sqlite",
+  "from_c6": false,
+  "phase": "受控故障",
+  "category": "controlled_failure",
+  "exception_type": "ControlledFailure",
+  "frames": [
+    {
+      "file": "run_operations.py",
+      "line": 1200,
+      "function": "<module>"
+    },
+    {
+      "file": "runners.py",
+      "line": 195,
+      "function": "run"
+    },
+    {
+      "file": "runners.py",
+      "line": 118,
+      "function": "run"
+    },
+    {
+      "file": "base_events.py",
+      "line": 691,
+      "function": "run_until_complete"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 1170,
+      "function": "main"
+    },
+    {
+      "file": "run_operations.py",
+      "line": 1040,
+      "function": "run_shape"
+    }
+  ],
+  "events": [
+    {
+      "phase": "准备隔离环境",
+      "elapsed_s": 0.001
+    },
+    {
+      "phase": "初始数据库迁移",
+      "elapsed_s": 0.002
+    },
+    {
+      "phase": "启动初始应用进程",
+      "elapsed_s": 2.327
+    },
+    {
+      "phase": "登录及核对执行者",
+      "elapsed_s": 10.557
+    },
+    {
+      "phase": "受控故障",
+      "elapsed_s": 11.493
+    }
+  ],
+  "processes": [
+    {
+      "name": "A",
+      "pid": 53247,
+      "workers": 1,
+      "started_s": 2.332,
+      "exit_code": -15,
+      "ended_s": 11.872
+    },
+    {
+      "name": "B",
+      "pid": 53407,
+      "workers": 1,
+      "started_s": 6.354,
+      "exit_code": -15,
+      "ended_s": 11.658
+    }
+  ],
+  "commands": [
+    {
+      "program": "python",
+      "phase": "初始数据库迁移",
+      "pid": 53181,
+      "started_s": 0.009,
+      "exit_code": 0,
+      "ended_s": 2.315
+    }
+  ],
+  "worker_pids": [
+    53247,
+    53407
+  ],
+  "observed_http_500": 0,
+  "unhandled_async_types": [],
+  "log_summaries": [
+    {
+      "file": "A.log",
+      "error_lines": 0,
+      "traceback_lines": 0,
+      "sqlite_busy_lines": 0,
+      "startup_failed_lines": 0
+    },
+    {
+      "file": "B.log",
+      "error_lines": 0,
+      "traceback_lines": 0,
+      "sqlite_busy_lines": 0,
+      "startup_failed_lines": 0
+    },
+    {
+      "file": "controlled-fault.log",
+      "error_lines": 1,
+      "traceback_lines": 0,
+      "sqlite_busy_lines": 0,
+      "startup_failed_lines": 0
+    }
+  ]
+}

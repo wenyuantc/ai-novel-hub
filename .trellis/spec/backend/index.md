@@ -22,6 +22,7 @@
 |-------|-------------|--------|
 | [目录结构](./directory-structure.md) | `app/` 分层（api/v1 → services → models、ai/providers、ai/prompts）；路由绝不直接接触 ORM | 已填写 |
 | [数据库规范](./database-guidelines.md) | 异步 engine/session、Alembic `0001`、外键 CASCADE 与 `outline_id` SET NULL、user_id 归属校验 → 404、长度限制、字数统计 | 已填写 |
+| [部署启动与在线迁移](./deployment-migrations.md) | 迁移互斥与事务、worker 参数、SQLite 配对、多实例内部通道和验证边界 | 已填写 |
 | [错误处理](./error-handling.md) | `AppError` 层级、`{"detail": ...}` 响应包、安全的 422/500 处理器、SSE 流式契约场景 | 已填写 |
 | [质量规范](./quality-guidelines.md) | ruff + pytest、功能增改删必须同步根目录 README、测试隔离、PG 隔离测试库环境变量与守卫、迁移冻结结构契约、FakeLLM/fake_dns、禁止模式、SSRF 防护与认证/密钥场景 | 已填写 |
 | [结构化设定](./story-entities.md) | 关系 `apply_change` 契约、组织循环检测、卡片 v7 导入导出、设定类 AI 任务、章节选角与上下文裁剪顺序 | 已填写 |
@@ -72,6 +73,7 @@
 
 | 契约 | 位置 |
 |----------|----------|
+| 部署启动、数据库迁移与多进程连接契约 | [部署启动与在线迁移](./deployment-migrations.md) |
 | SSE 流式（帧、事件、状态生命周期、回滚） | [error-handling.md](./error-handling.md#场景sse-流式契约-generate--polish--wizard) |
 | 跨进程订阅、逐帧授权和故障回放 | [task-stream-peers.md](./task-stream-peers.md) |
 | SSRF 端点防护（`ALLOW_PRIVATE_AI_ENDPOINTS`、`build_provider`） | [quality-guidelines.md](./quality-guidelines.md#场景用户提供的-ai-base-url-的-ssrf-防护) |

@@ -80,7 +80,7 @@ backend/
 │   │   ├── organization_service.py # 组织 CRUD（循环检测）、成员、with-members
 │   │   ├── card_service.py        # 卡片导出 / 预览 / 单事务导入
 │   │   ├── entity_ai_service.py   # character.generate / organization.generate / relations.parse（只产出草稿）
-│   │   └── task_engine/           # 统一持久化后台任务引擎（单进程，数据库即队列）
+│   │   └── task_engine/           # 统一持久化后台任务引擎（数据库即队列，支持跨进程协调）
 │   │       ├── engine.py          # TaskEngine：start/stop/recover、调度循环、_run/_finalize、取消、订阅
 │   │       ├── workers.py         # 执行者登记、存活核验、孤立判定与条件认领
 │   │       ├── sqlite_worker_leases.py # SQLite 独立文件中的短事务续约、停止和围栏
