@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -90,12 +91,25 @@ class AiUsageBudget(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    instance_key: Mapped[str] = mapped_column(
+        String(36), nullable=False, server_default="", default=lambda: str(uuid4()),
+    )
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     limit_nano: Mapped[int] = mapped_column(BigInteger, nullable=False)
     threshold_percent: Mapped[int] = mapped_column(nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class AiBudgetPeriod(Base):
+    """同一版预算、同一周期内的累计额，达到额度后封顶。"""
+    __tablename__ = "ai_budget_periods"
+    __table_args__ = (CheckConstraint("spent_nano >= 0", name="spent"),)
+
+    budget_id: Mapped[int] = mapped_column(ForeignKey("ai_usage_budgets.id", ondelete="CASCADE"), primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), primary_key=True)
+    spent_nano: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class AiUsageCall(Base):

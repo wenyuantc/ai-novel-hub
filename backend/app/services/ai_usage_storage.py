@@ -3,11 +3,11 @@
 import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from itertools import pairwise
 from typing import Literal, Protocol, Self
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import String, case, cast, delete, func, or_, select, text, update
@@ -24,11 +24,12 @@ from app.models.ai_usage import (
     NANOS_PER_UNIT,
     PENDING_CALL_WHERE,
 )
+from app.services import ai_budget_notifications
+from app.services.ai_usage_totals import monthly_budget_window as monthly_budget_window
 from app.services.project_lifecycle import as_utc
 
 CURRENCIES = ("CNY", "USD")
 TOKENS_PER_PRICE_UNIT = 1_000_000
-_STATISTICS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _AMOUNT = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,9})?\Z")
 _LOCAL_MINUTE = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 UsageSource = Literal["provider", "estimated", "unknown"]
@@ -209,14 +210,6 @@ def nano_to_amount(value: int | None) -> str | None:
     return f"{whole}.{fractional:09d}".rstrip("0").rstrip(".") if fractional else str(whole)
 
 
-def monthly_budget_window(now: datetime) -> tuple[datetime, datetime]:
-    local = as_utc(now).astimezone(_STATISTICS_TIMEZONE)
-    first = datetime(local.year, local.month, 1, tzinfo=_STATISTICS_TIMEZONE)
-    year, month = divmod(local.month, 12)
-    next_first = datetime(local.year + year, month + 1, 1, tzinfo=_STATISTICS_TIMEZONE)
-    return first.astimezone(UTC), next_first.astimezone(UTC)
-
-
 def _reported(quantity: int | None, source: UsageSource, maximum: int) -> tuple[int | None, UsageSource]:
     if type(quantity) is int and 0 <= quantity <= maximum and source in ("provider", "estimated"):
         return quantity, source
@@ -376,19 +369,28 @@ async def set_budget(
         raise ValueError("预算金额须大于零且不超过十亿")
     if type(threshold_percent) is not int or not 1 <= threshold_percent <= 100:
         raise ValueError("提醒阈值须为 1 到 100 的整数")
-    values = {"limit_nano": limit_nano, "threshold_percent": threshold_percent, "updated_at": func.now()}
-    statement = (
-        _insert(db)(AiUsageBudget).values(**key, **values)
-        .on_conflict_do_update(index_elements=list(key), set_=values)
-        .returning(AiUsageBudget).execution_options(populate_existing=True)
-    )
-    return (await db.scalars(statement)).one()
+    await ai_budget_notifications.lock_budget_scope(db, user_id=user_id, project_id=project_id)
+    values = {
+        "limit_nano": limit_nano, "threshold_percent": threshold_percent,
+        "updated_at": func.now(), "instance_key": str(uuid4()),
+    }
+    statement = _insert(db)(AiUsageBudget).values(**key, **values).on_conflict_do_update(
+        index_elements=list(key), set_=values,
+        where=or_(AiUsageBudget.limit_nano != limit_nano, AiUsageBudget.threshold_percent != threshold_percent),
+    ).returning(AiUsageBudget).execution_options(populate_existing=True)
+    changed = await db.scalar(statement)
+    if changed is not None:
+        await ai_budget_notifications.reset_progress(db, changed)
+        return changed
+    return (await db.scalars(select(AiUsageBudget).filter_by(**key).execution_options(populate_existing=True))).one()
 
 
 async def delete_budget(
     db: AsyncSession, *, user_id: int | None = None, project_id: int | None = None, currency: str,
 ) -> None:
-    await db.execute(delete(AiUsageBudget).filter_by(**_budget_key(user_id, project_id, currency)))
+    key = _budget_key(user_id, project_id, currency)
+    await ai_budget_notifications.lock_budget_scope(db, user_id=user_id, project_id=project_id)
+    await db.execute(delete(AiUsageBudget).filter_by(**key))
 
 
 async def price_snapshot(db: AsyncSession, identity: UsageCallIdentity) -> UsagePriceSnapshot | None:
@@ -549,6 +551,8 @@ async def finish_call(
         amount_nano=amount, pricing_status=pricing_status, pending_price_schedule=None,
         **price_fields, **asdict(measurement),
     ).returning(AiUsageCall.id))
+    if updated is not None and amount:
+        await ai_budget_notifications.record_settlement(db, call, amount)
     return updated is not None
 
 

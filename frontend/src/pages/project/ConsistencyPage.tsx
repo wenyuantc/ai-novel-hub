@@ -1,13 +1,17 @@
 import { ReloadOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Skeleton, Space, Tabs, Tooltip, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { chapterApi } from '../../api/chapters'
 import { ApiError, errorMessage } from '../../api/client'
 import { consistencyApi, type ConsistencyIssue } from '../../api/consistency'
 import CheckModal from '../../components/consistency/CheckModal'
 import CheckProgress from '../../components/consistency/CheckProgress'
-import CheckSummary from '../../components/consistency/CheckSummary'
+import { parseUsageId } from '../../components/aiUsage/usagePresentation'
+import UnavailableTarget from '../../components/notifications/UnavailableTarget'
+import { useNotificationTarget } from '../../components/notifications/useNotificationTarget'
+import { useProjectStore } from '../../stores/project'
+import CheckSummary, { RunSummary } from '../../components/consistency/CheckSummary'
 import ImpactPanel from '../../components/consistency/ImpactPanel'
 import IssueDrawer from '../../components/consistency/IssueDrawer'
 import IssueList, { IssueFilters } from '../../components/consistency/IssueList'
@@ -35,9 +39,30 @@ export default function ConsistencyPage() {
   const pid = useProjectId()
   const { ready, canRead } = useProjectAccess(pid)
   const identity = useAuthStore((state) => `${state.status}:${state.user?.id ?? ''}:${authorizationKey(state.user)}`)
+  const [params] = useSearchParams()
+  const navigation = useLocation().key
+  const version = useProjectStore((s) => s.scopeVersion)
+  const linked = params.has('run_id')
+  const notificationId = params.get('notification_id') ?? undefined
+  const runId = parseUsageId(params.get('run_id'))
   if (!ready) return <Skeleton active />
+  if (linked) {
+    if (!canRead || !runId || notificationId === '') return <UnavailableTarget />
+    return <HistoricRun key={`${pid}:${identity}:${version}:${navigation}`} projectId={pid} runId={runId} notificationId={notificationId} />
+  }
   if (!canRead) return <Alert type="warning" showIcon message="当前无权查看此作品的一致性检查" />
   return <ConsistencyContent key={`${pid}:${identity}`} projectId={pid} />
+}
+
+function HistoricRun({ projectId, runId, notificationId }: { projectId: number; runId: number; notificationId?: string }) {
+  const read = useCallback((signal: AbortSignal) => consistencyApi.run(projectId, runId, signal, notificationId), [projectId, runId, notificationId])
+  const { result, retry } = useNotificationTarget(read)
+  return <Space direction="vertical" style={{ width: '100%' }}>
+    <Link to={`/projects/${projectId}/consistency`}>返回一致性检查</Link>
+    {!result ? <Skeleton active /> : 'missing' in result ? <UnavailableTarget />
+      : 'error' in result ? <Alert type="error" showIcon message={result.error} action={<Button onClick={retry}>重试</Button>} />
+        : <RunSummary title={`检查概要 #${runId}`} run={result.data} chapters={[]} />}
+  </Space>
 }
 
 function ConsistencyContent({ projectId }: { projectId: number }) {

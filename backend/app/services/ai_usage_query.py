@@ -3,6 +3,7 @@
 import json
 from datetime import datetime
 from hashlib import sha256
+from uuid import UUID
 
 from sqlalchemy import and_, case, func, null, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,6 @@ from app.schemas.ai_usage import (
     AdminUsageFilters,
     BudgetInput,
     BudgetProgress,
-    BudgetState,
     Currency,
     ModelOffPeakPrice,
     ModelOffPeakWindow,
@@ -36,6 +36,7 @@ from app.services import (
     personal_projection,
     project_lifecycle,
 )
+from app.services.ai_usage_totals import budget_state, combined_cost, sum_cost
 
 
 async def _personal_scope(
@@ -131,19 +132,6 @@ def _visible_calls(actor_id: int | None):
     ).outerjoin(Project, Project.id == call.project_id).where(scope, call.status != "not_sent").cte("visible_usage")
 
 
-def _sum_cost(amount, prefix: str):
-    # SQLite 的 SUM(int64) 可能溢出。先按整币和不足一币分开做整数加总，再在 Python 合并。
-    unit = ai_usage_storage.NANOS_PER_UNIT
-    return (
-        func.coalesce(func.sum(amount.op("/")(unit)), 0).label(f"{prefix}_whole"),
-        func.coalesce(func.sum(amount % unit), 0).label(f"{prefix}_remainder"),
-    )
-
-
-def _combined_cost(row, prefix: str) -> int:
-    return int(row[f"{prefix}_whole"]) * ai_usage_storage.NANOS_PER_UNIT + int(row[f"{prefix}_remainder"])
-
-
 def _required_amount(amount_nano: int) -> str:
     result = ai_usage_storage.nano_to_amount(amount_nano)
     assert result is not None
@@ -160,7 +148,7 @@ def _usage_summary(visible):
     currency_columns = []
     for currency in CURRENCIES:
         price = case((c.currency == currency, c.amount_nano), else_=null())
-        currency_columns.extend(_sum_cost(price, currency))
+        currency_columns.extend(sum_cost(price, currency))
         currency_columns.append(func.count(price).label(f"{currency}_calls"))
     return select(
         func.count().label("total"),
@@ -251,7 +239,7 @@ async def list_usage(
             unpriced_calls=first["unpriced_calls"],
             costs=[UsageCurrencyTotal(
                 currency=currency,
-                amount=_required_amount(_combined_cost(first, currency)),
+                amount=_required_amount(combined_cost(first, currency)),
                 calls=first[f"{currency}_calls"],
             ) for currency in CURRENCIES if first[f"{currency}_calls"]],
         ),
@@ -400,6 +388,7 @@ async def _require_budget_project(db: AsyncSession, actor_id: int, project_id: i
 
 async def budget_progress(
     db: AsyncSession, actor_id: int, *, project_id: int | None = None, now: datetime | None = None,
+    budget_key: UUID | None = None,
 ) -> list[BudgetProgress]:
     budget, call = AiUsageBudget, AiUsageCall
     period_start, period_end = None, None
@@ -421,44 +410,50 @@ async def budget_progress(
         or_(call.currency == budget.currency, call.currency.is_(None)),
     )
     stmt = select(
-        budget.currency, budget.limit_nano, budget.threshold_percent,
-        *_sum_cost(call.amount_nano, "spent"),
+        budget.instance_key, budget.currency, budget.limit_nano, budget.threshold_percent,
+        *sum_cost(call.amount_nano, "spent"),
         func.count(case((and_(call.id.is_not(None), call.amount_nano.is_(None)), 1))).label("unpriced_calls"),
     ).select_from(budget).outerjoin(call, join_on).where(budget_scope).group_by(
-        budget.currency, budget.limit_nano, budget.threshold_percent,
+        budget.instance_key, budget.currency, budget.limit_nano, budget.threshold_percent,
     ).order_by(budget.currency)
+    if budget_key is not None:
+        stmt = stmt.where(budget.instance_key == str(budget_key))
     progress = []
     for row in (await db.execute(stmt)).mappings():
-        spent = _combined_cost(row, "spent")
+        spent = combined_cost(row, "spent")
         limit = row["limit_nano"]
         threshold = row["threshold_percent"]
-        state: BudgetState = "normal"
-        if spent >= limit:
-            state = "exceeded"
-        elif spent * 100 >= limit * threshold:
-            state = "near"
         progress.append(BudgetProgress(
+            instance_key=row["instance_key"],
             scope=scope,
             currency=row["currency"],
             limit=_required_amount(limit),
             threshold_percent=threshold,
             spent=_required_amount(spent),
             unpriced_calls=row["unpriced_calls"],
-            state=state,
+            state=budget_state(spent, limit, threshold),
             period_start=period_start,
             period_end=period_end,
         ))
+    if budget_key is not None and not progress:
+        raise NotFoundError("预算已失效或不存在")
     return progress
 
 
 async def update_budget(
     db: AsyncSession, actor_id: int, currency: Currency, body: BudgetInput | None, *, project_id: int | None = None,
+    budget_key: UUID | None = None,
 ) -> BudgetProgress | None:
     if project_id is None:
         await authorization_service.require_authenticated(db, actor_id, write=True)
     else:
         await _require_budget_project(db, actor_id, project_id, write=True)
     user_id = actor_id if project_id is None else None
+    if budget_key is not None:
+        # 写鉴权已锁定账号或作品父行；读取与随后修改属于同一个受保护的配置轮次。
+        current = await ai_usage_storage.get_budget(db, user_id=user_id, project_id=project_id, currency=currency)
+        if current is None or current.instance_key != str(budget_key):
+            raise NotFoundError("预算已失效或不存在")
     response = None
     try:
         if body is None:

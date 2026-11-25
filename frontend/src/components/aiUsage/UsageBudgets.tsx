@@ -1,8 +1,13 @@
 import { Alert, Button, Card, Form, Input, InputNumber, Popconfirm, Progress, Skeleton, Space, Tag, Typography } from 'antd'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useCallback, useState } from 'react'
 import { aiUsageApi, type BudgetScope, type UsageBudget, type UsageBudgetInput, type UsageCurrency } from '../../api/aiUsage'
 import { useAiUsageMutation, useAiUsageRequest, type UsageReadOptions, type UsageSession } from './useAiUsageRequest'
 import { usageMoney, USAGE_CURRENCIES, validUsageDecimal } from './usagePresentation'
+
+import { invalidateNotifications } from '../../api/notifications'
+import { ApiError } from '../../api/client'
+import UnavailableTarget from '../notifications/UnavailableTarget'
 
 const budgetState = {
   normal: { label: '预算内', color: 'success' },
@@ -12,10 +17,12 @@ const budgetState = {
 
 interface BudgetProps { scope: BudgetScope; session: UsageSession; canAccess?: () => boolean }
 
-function BudgetCard({ scope, session, canAccess, currency, label, initial }: BudgetProps & {
+function BudgetCard({ scope, session, canAccess, currency, label, initial, budgetKey, refreshTarget }: BudgetProps & {
   currency: UsageCurrency
   label: string
   initial: UsageBudget | null
+  budgetKey?: string
+  refreshTarget?: () => void
 }) {
   const [budget, setBudget] = useState(initial)
   const [form] = Form.useForm<UsageBudgetInput>()
@@ -23,7 +30,16 @@ function BudgetCard({ scope, session, canAccess, currency, label, initial }: Bud
   const status = budget === null ? null : budgetState[budget.state]
   const save = (values: UsageBudgetInput | null) => {
     const body = values ? { ...values, limit: values.limit.trim() } : null
-    void commit((options) => aiUsageApi.setBudget(scope, currency, body, options), (updated) => {
+    void commit(async (options) => {
+      try { return await aiUsageApi.setBudget(scope, currency, body, options, budgetKey) } catch (error) {
+        if (options.isCurrent() && budgetKey && error instanceof ApiError && [403, 404].includes(error.status)) refreshTarget?.()
+        throw error
+      }
+    }, (updated) => {
+      if (!updated || updated.instance_key !== budget?.instance_key) {
+        invalidateNotifications()
+        refreshTarget?.()
+      }
       setBudget(updated)
       form.setFieldsValue({ limit: updated?.limit ?? '', threshold_percent: updated?.threshold_percent ?? 80 })
     }, body ? '预算已保存' : '预算已移除')
@@ -57,7 +73,24 @@ function BudgetCard({ scope, session, canAccess, currency, label, initial }: Bud
 }
 
 export default function UsageBudgets({ scope, session, canAccess }: BudgetProps) {
-  const load = useCallback((options: UsageReadOptions) => aiUsageApi.getBudgets(scope, options), [scope])
+  const [params] = useSearchParams()
+  const { pathname, key } = useLocation()
+  const target = params.get('budget_currency')
+  const budgetKey = params.get('budget_key') ?? undefined
+  if ((target !== null || budgetKey !== undefined) && (!budgetKey || !target)) return <UnavailableTarget />
+  return <BudgetList key={target === null ? 'all' : `${target}:${key}`} scope={scope} session={session}
+    canAccess={canAccess} target={target} pathname={pathname} budgetKey={budgetKey} />
+}
+
+function BudgetList({ scope, session, canAccess, target, pathname, budgetKey }: BudgetProps & {
+  target: string | null; pathname: string; budgetKey?: string
+}) {
+  const load = useCallback(async (options: UsageReadOptions) => {
+    try { return await aiUsageApi.getBudgets(scope, options, budgetKey) } catch (error) {
+      if (target !== null && error instanceof ApiError && [403, 404].includes(error.status)) return []
+      throw error
+    }
+  }, [scope, target, budgetKey])
   const { data, error, refresh, loading } = useAiUsageRequest(load, session, canAccess)
   return <Card size="small" title={scope.kind === 'project' ? '作品预算' : '账号预算'}>
     <Typography.Paragraph type="secondary">
@@ -65,9 +98,11 @@ export default function UsageBudgets({ scope, session, canAccess }: BudgetProps)
     </Typography.Paragraph>
     {error ? <Alert type="error" showIcon message={error} action={<Button size="small" onClick={refresh}>重试</Button>} />
       : loading || !data ? <Skeleton active paragraph={{ rows: 2 }} />
-        : <div className="ai-usage-budget-grid">{USAGE_CURRENCIES.map(({ value, label }) => (
+        : target !== null && !data.some((item) => item.currency === target && item.instance_key === budgetKey) ? <UnavailableTarget />
+          : <div className="ai-usage-budget-grid">{USAGE_CURRENCIES.filter(({ value }) => target === null || value === target).map(({ value, label }) => (
           <BudgetCard key={value} label={label} currency={value} initial={data.find((item) => item.currency === value) ?? null}
-            scope={scope} session={session} canAccess={canAccess} />
+            scope={scope} session={session} canAccess={canAccess} budgetKey={budgetKey} refreshTarget={target !== null ? refresh : undefined} />
         ))}</div>}
+    {target !== null && <Link to={pathname}>查看全部预算</Link>}
   </Card>
 }

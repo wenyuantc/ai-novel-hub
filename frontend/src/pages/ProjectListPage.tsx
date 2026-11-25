@@ -1,7 +1,7 @@
 import { AppstoreOutlined, BulbOutlined, CloudUploadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { Alert, Button, Input, Select, Skeleton, Space, Spin } from 'antd'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { PROJECT_STATUS, projectApi } from '../api/projects'
 import { currentRequestGeneration, watchRequestGeneration } from '../api/client'
 import type { Project } from '../api/types'
@@ -38,6 +38,7 @@ export default function ProjectListPage() {
 
 function ProjectListContent() {
   const navigate = useNavigate()
+  const navigation = useLocation().key
   const [searchParams, setSearchParams] = useSearchParams()
   const loader = useCallback(() => projectApi.list(), [])
   const { data: loadedProjects = [], loading, error, reload } = useLoader(loader)
@@ -69,7 +70,7 @@ function ProjectListContent() {
 
   return (
     <StudioPage title="我的作品" hint={hint} action={<Space wrap><Link to="/series">作品系列</Link><Button onClick={() => setPenNamesOpen(true)}>管理笔名</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建作品</Button></Space>}>
-      <Invitations onChanged={reload} />
+      <Invitations key={searchParams.has('invitation_id') ? navigation : 'all'} onChanged={reload} invitationId={searchParams.get('invitation_id')} invitationScope={searchParams.get('invitation_scope')} />
       {recent && <ContinueWriting key={recent.id} project={recent} />}
       <div className="library-toolbar">
         <div className="library-filters" role="group" aria-label="作品状态筛选">{STATUS_FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={prefs.status === item.value} onClick={() => setPrefs((p) => ({ ...p, status: item.value }))}>{item.label}</button>)}</div>

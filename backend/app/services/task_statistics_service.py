@@ -11,6 +11,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.models import DashboardTracking, Task, TaskStatistic
 from app.models.entities import FINISHED_TASK_STATUSES
+from app.services.task_notifications import notify_terminal
 
 
 def now_utc() -> datetime:
@@ -76,11 +77,13 @@ async def record_state_change(
     values: dict = {"status": status}
     if status in FINISHED_TASK_STATUSES:
         values["finished_event_at"] = _as_utc(finished_at) if finished_at is not None else now_utc()
-    await db.execute(
+    changed = await db.execute(
         update(TaskStatistic)
         .where(TaskStatistic.key == record.key, TaskStatistic.finished_event_at.is_(None))
         .values(**values)
     )
+    if changed.rowcount == 1 and status in ("succeeded", "failed"):
+        await notify_terminal(db, task, status)
 
 
 async def mark_removed(db: AsyncSession, *conditions: ColumnElement[bool]) -> list[str]:

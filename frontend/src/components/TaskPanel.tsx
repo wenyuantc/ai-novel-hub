@@ -1,9 +1,9 @@
 import { ClearOutlined, ReloadOutlined, UnorderedListOutlined } from '@ant-design/icons'
-import { App, Button, Drawer, Empty, FloatButton, List, Modal, Popconfirm, Progress, Space, Spin, Tabs, Tag, Typography } from 'antd'
+import { Alert, App, Button, Drawer, Empty, FloatButton, List, Modal, Popconfirm, Progress, Space, Spin, Tabs, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { currentRequestGeneration, errorMessage, watchRequestGeneration } from '../api/client'
-import { canRetryTask, canStreamTask, hasTaskIdentity, isActiveTask, queueLabel, TASK_STATUS, taskApi, taskLink, taskReviewIdentity } from '../api/tasks'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { ApiError, currentRequestGeneration, errorMessage, watchRequestGeneration } from '../api/client'
+import { canRetryTask, canStreamTask, hasTaskIdentity, isActiveTask, isTaskKey, queueLabel, TASK_STATUS, taskApi, taskLink, taskReviewIdentity } from '../api/tasks'
 import type { Task } from '../api/types'
 import { useLoader } from '../hooks/useLoader'
 import { useTaskStream } from '../hooks/useTaskStream'
@@ -21,6 +21,9 @@ import TaskResultModal from './entities/TaskResultModal'
 import StreamOutput from './StreamOutput'
 import RichReviewModal from './scenes/RichReviewModal'
 import TaskActionConfirm from './TaskActionConfirm'
+import { parseUsageId } from './aiUsage/usagePresentation'
+import UnavailableTarget from './notifications/UnavailableTarget'
+import { useNotificationTarget } from './notifications/useNotificationTarget'
 import { AGENT_DOCK_WIDTH_VAR } from '../utils/agentPreferences'
 
 const subscribeSession = (notify: () => void) => watchRequestGeneration(notify).dispose
@@ -67,6 +70,7 @@ export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrig
 
   return (
     <>
+      <LinkedTask />
       {!hideTrigger && <FloatButton
         icon={<UnorderedListOutlined />}
         tooltip="后台任务"
@@ -127,6 +131,36 @@ export default function TaskPanel({ open: controlledOpen, onOpenChange, hideTrig
       {reviewing && <RichReviewModal key={`${reviewing.id}:${reviewing.task_key}:${reviewing.rich_review?.run_key}`} task={reviewing} onClose={() => setReviewing(null)} onChanged={(updated) => { track(updated); bump() }} />}
     </>
   )
+}
+
+/** 从书架通知按数字 ID 和 UUID 读取任务，不依赖最近 50 条历史。 */
+function LinkedTask() {
+  const location = useLocation()
+  const [params, setParams] = useSearchParams()
+  const scope = useProjectStore((s) => s.scopeVersion)
+  const actor = useAuthStore((s) => authorizationKey(s.user))
+  if (location.pathname !== '/projects' || (!params.has('task_id') && !params.has('task_key'))) return null
+  const id = parseUsageId(params.get('task_id'))
+  const key = params.get('task_key')
+  const close = () => {
+    const next = new URLSearchParams(params)
+    next.delete('task_id')
+    next.delete('task_key')
+    setParams(next, { replace: true })
+  }
+  return id && isTaskKey(key)
+    ? <LinkedTaskDetail key={`${location.key}:${scope}:${actor}`} id={id} taskKey={key} onClose={close} />
+    : <Modal open title="后台任务" onCancel={close} footer={null}><UnavailableTarget /></Modal>
+}
+
+function LinkedTaskDetail({ id, taskKey, onClose }: { id: number; taskKey: string; onClose: () => void }) {
+  const read = useCallback((signal: AbortSignal) => taskApi.get({ id, task_key: taskKey }, signal), [id, taskKey])
+  const { result, retry } = useNotificationTarget(read)
+  if (result && 'data' in result) return <TaskOutputModal task={result.data} onClose={onClose} notificationTarget />
+  return <Modal open title="后台任务" onCancel={onClose} footer={null}>
+    {!result ? <Spin /> : 'missing' in result ? <UnavailableTarget />
+      : <Alert type="error" showIcon message={result.error} action={<Button onClick={retry}>重试</Button>} />}
+  </Modal>
 }
 
 interface ListProps {
@@ -434,7 +468,7 @@ function BookImportPauseLine({ task }: { task: Task }) {
 }
 
 /** 查看任务输出：进行中实时订阅，已结束读取 /output。 */
-export function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => void }) {
+export function TaskOutputModal({ task, onClose, notificationTarget = false }: { task: Task; onClose: () => void; notificationTarget?: boolean }) {
   const [boundSession] = useState(currentRequestGeneration)
   const [scope] = useState(() => task.project_id === null ? null : captureProjectScope(task.project_id))
   const scopeVersion = useProjectStore((state) => state.scopeVersion)
@@ -456,8 +490,14 @@ export function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => 
   const stream = useTaskStream()
   const { follow } = stream
   const loader = useCallback(
-    () => (mode !== 'output' ? Promise.resolve('') : taskApi.output({ id: task.id, task_key: task.task_key }).then((r) => r.text)),
-    [mode, task.id, task.task_key],
+    async () => {
+      if (mode !== 'output') return ''
+      try { return (await taskApi.output({ id: task.id, task_key: task.task_key })).text } catch (error) {
+        if (notificationTarget && error instanceof ApiError && [403, 404, 409].includes(error.status)) return null
+        throw error
+      }
+    },
+    [mode, task.id, task.task_key, notificationTarget],
   )
   const { data: finishedText = '', loading, error } = useLoader(loader)
   // 拆书反推：通读批次进度（初值取断点摘要，batch_end 事件推进）
@@ -472,7 +512,10 @@ export function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, task.id, task.task_key, follow])
 
-  const text = mode === 'stream' ? stream.text : mode === 'output' ? finishedText : ''
+  if (notificationTarget && (!allowed || finishedText === null)) {
+    return <Modal open title="后台任务" onCancel={onClose} footer={null}><UnavailableTarget /></Modal>
+  }
+  const text = mode === 'stream' ? stream.text : mode === 'output' ? finishedText ?? '' : ''
   const current = live ? (stream.task ?? task) : task
   return (
     <Modal open title={task.title} footer={null} width={760} onCancel={onClose} destroyOnHidden>
@@ -482,6 +525,7 @@ export function TaskOutputModal({ task, onClose }: { task: Task; onClose: () => 
           {task.skill && <Tag>Skill：{task.skill.name}</Tag>}
           {current.status === 'queued' && <Typography.Text type="secondary">{queueLabel(current)}</Typography.Text>}
           {current.stage && current.status !== 'queued' && <Typography.Text type="secondary">{current.stage}</Typography.Text>}
+          {current.status === 'failed' && current.error && <Typography.Text type="danger">{current.error}</Typography.Text>}
           {batches && (
             <Typography.Text type="secondary">
               通读 {batches.done}/{batches.total} 批

@@ -5,8 +5,9 @@
 """
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Path, Query, status
 
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.schemas.consistency import (
@@ -25,11 +26,13 @@ from app.schemas.consistency import (
     IssueStatus,
     IssueUpdate,
     RecheckRequest,
+    RunOut,
 )
 from app.schemas.task import TaskOut
 from app.services.consistency import check, impact, impact_task, query
 
 router = APIRouter(prefix="/projects/{project_id}/consistency", tags=["consistency"])
+RunPathId = Annotated[int, Path(ge=1, le=2_147_483_647)]
 
 
 @router.post("/checks/preview", response_model=CheckPreview)
@@ -48,6 +51,13 @@ async def start_check(
 @router.get("/summary", response_model=ConsistencySummary)
 async def get_summary(project_id: int, user: CurrentUser, db: DbDep) -> ConsistencySummary:
     return await query.summary(db, user.id, project_id)
+
+
+@router.get("/runs/{run_id}", response_model=RunOut)
+async def get_run(
+    project_id: RunPathId, run_id: RunPathId, user: CurrentUser, db: DbDep, notification_id: UUID | None = None,
+) -> RunOut:
+    return await query.get_run(db, user.id, project_id, run_id, notification_id=notification_id)
 
 
 @router.get("/issues", response_model=IssuePage)

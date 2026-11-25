@@ -57,6 +57,7 @@ from app.models.entities import (
 from app.models.inspiration_generation import InspirationGenerationClaim
 from app.models.inspiration_origin import InspirationOrigin
 from app.models.notes import ProjectNote
+from app.models.notifications import Notification, NotificationPreference
 from app.models.novel_templates import NovelTemplate, NovelTemplateCreationReceipt, NovelTemplateImage
 from app.models.pen_names import PenName, ProjectPenName
 from app.models.planning import (
@@ -106,6 +107,8 @@ __all__ = [
     "WritingDailyStat",
     "WritingGoal",
     "WritingStatsTracking",
+    "Notification",
+    "NotificationPreference",
     "NovelTemplate",
     "NovelTemplateCreationReceipt",
     "NovelTemplateImage",

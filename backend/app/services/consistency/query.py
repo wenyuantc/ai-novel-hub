@@ -7,6 +7,7 @@
 from datetime import UTC, datetime
 from itertools import batched
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,7 @@ from app.schemas.consistency import (
 )
 from app.services.consistency import check, issues, ledger
 from app.services.mentions.matcher import text_hash
+from app.services.notification_service import consistency_run_visible
 from app.services.project_access import require_project
 
 ISSUE_NOT_FOUND = check.ISSUE_NOT_FOUND
@@ -193,13 +195,7 @@ async def update_issue(
     return await _detail(db, project_id, issue_id)
 
 
-async def _last_run(db: AsyncSession, project_id: int) -> RunOut | None:
-    run = await db.scalar(
-        select(ConsistencyRun).where(ConsistencyRun.project_id == project_id)
-        .order_by(ConsistencyRun.id.desc()).limit(1)
-    )
-    if run is None:
-        return None
+async def _run_out(db: AsyncSession, run: ConsistencyRun) -> RunOut:
     out = RunOut.model_validate(run)
     if run.status != "succeeded":
         # 运行记录的终态由任务收尾时尽力写入；任务行仍在时以任务的真实终态为准，
@@ -211,10 +207,33 @@ async def _last_run(db: AsyncSession, project_id: int) -> RunOut | None:
             out.status = "interrupted"
     if out.stats.skipped_chapters:
         info = await _chapter_info(
-            db, project_id, {item.chapter_id for item in out.stats.skipped_chapters}, hashes=False,
+            db, run.project_id, {item.chapter_id for item in out.stats.skipped_chapters}, hashes=False,
         )
         for item in out.stats.skipped_chapters:
             item.chapter_no, item.chapter_title, _ = info.get(item.chapter_id, (None, None, ""))
+    return out
+
+
+async def get_run(
+    db: AsyncSession, user_id: int, project_id: int, run_id: int, *, notification_id: UUID | None = None,
+) -> RunOut:
+    await require_project(db, user_id, project_id, "content.read")
+    statement = select(ConsistencyRun).where(
+        ConsistencyRun.project_id == project_id, ConsistencyRun.id == run_id, ConsistencyRun.status == "succeeded",
+    )
+    if notification_id is not None:
+        statement = statement.where(consistency_run_visible(db, user_id, str(notification_id), project_id, run_id))
+    run = await db.scalar(statement)
+    if run is None:
+        raise NotFoundError("检查记录不存在")
+    out = await _run_out(db, run)
+    # 历史概要可分享给作品读者。底层错误与比对告警可能包含模型服务响应，只保留计数与跳过章节。
+    if out.stats.warnings:
+        out.stats.warnings = ["本次检查有提醒，请结合检查范围和统计查看结果。"]
+    for chapter in out.stats.skipped_chapters:
+        chapter.error = ""
+    if run.actor_id != user_id:
+        out.task_id = None
     return out
 
 
@@ -236,8 +255,11 @@ async def summary(db: AsyncSession, user_id: int, project_id: int) -> Consistenc
     for state in (await ledger.ledger_states(db, project_id, chapters)).values():
         setattr(coverage, state, getattr(coverage, state) + 1)
     running = await check.open_check(db, project_id)
+    last_run = await db.scalar(select(ConsistencyRun).where(
+        ConsistencyRun.project_id == project_id,
+    ).order_by(ConsistencyRun.id.desc()).limit(1))
     return ConsistencySummary(
-        last_run=await _last_run(db, project_id),
+        last_run=await _run_out(db, last_run) if last_run else None,
         counts_by_status=counts,
         ledger_coverage=coverage,
         running_task_id=running[0] if running is not None else None,

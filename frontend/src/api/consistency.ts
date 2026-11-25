@@ -294,6 +294,8 @@ export const consistencyApi = {
   preview: (pid: number, scope: CheckScope, signal?: AbortSignal) =>
     request<CheckPreview>(`${base(pid)}/checks/preview`, { method: 'POST', body: scope, signal }),
   start: (pid: number, body: CheckRequest) => request<Task>(`${base(pid)}/checks`, { method: 'POST', body }),
+  run: (pid: number, runId: number, signal?: AbortSignal, notificationId?: string) =>
+    request<ConsistencyRun>(`${base(pid)}/runs/${runId}`, { signal, query: { notification_id: notificationId } }),
   summary: (pid: number, signal?: AbortSignal) => request<ConsistencySummary>(`${base(pid)}/summary`, { signal }),
   issues: (pid: number, query: IssueQuery = {}, signal?: AbortSignal) =>
     request<IssuePage>(`${base(pid)}/issues`, { query: { ...query }, signal }),

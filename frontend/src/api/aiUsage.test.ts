@@ -41,6 +41,17 @@ describe('AI 用量请求', () => {
     } })
   })
 
+  it('通知预算的读取、保存和移除始终绑定原配置', async () => {
+    const fetch = fetchJson()
+    vi.stubGlobal('fetch', fetch)
+    const budgetKey = '1a946f74-497a-44cb-b33d-f3b3aa691445'
+    const scope = { kind: 'account' } as const
+    await aiUsageApi.getBudgets(scope, {}, budgetKey)
+    await aiUsageApi.setBudget(scope, 'CNY', { limit: '42', threshold_percent: 50 }, { editorActor: session }, budgetKey)
+    await aiUsageApi.setBudget(scope, 'CNY', null, { editorActor: session }, budgetKey)
+    for (const [url] of fetch.mock.calls) expect(new URL(url, 'http://local').searchParams.get('budget_key')).toBe(budgetKey)
+  })
+
   it('分时价保留追加时段、零元命中价和显式清除命中价', async () => {
     const fetch = fetchJson()
     vi.stubGlobal('fetch', fetch)

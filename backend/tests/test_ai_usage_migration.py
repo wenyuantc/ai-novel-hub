@@ -20,6 +20,14 @@ CACHED_COLUMNS = {
 }
 
 
+def _schema_before_budget_notifications(reference, table):
+    schema = _schema_contract(inspect(reference), table)
+    if table == "ai_usage_budgets":
+        # 0073 新增配置身份；0061–0063 的迁移契约仍需与其余全部字段一致。
+        del schema["columns"]["instance_key"]
+    return schema
+
+
 def _without_cached_input(schema, table):
     for name in CACHED_COLUMNS.get(table, ()):
         del schema["columns"][name]
@@ -75,7 +83,7 @@ def test_0061_preserves_legacy_usage_and_migrates_super_admin(tmp_path):
 
         Base.metadata.create_all(reference)
         for table in TABLES:
-            expected = _without_cached_input(_schema_contract(inspect(reference), table), table)
+            expected = _without_cached_input(_schema_before_budget_notifications(reference, table), table)
             if table == "ai_model_prices":
                 del expected["columns"]["off_peak"]
             if table == "ai_usage_calls":
@@ -138,7 +146,7 @@ def test_0062_preserves_fixed_rates_and_protects_period_history(tmp_path):
         Base.metadata.create_all(reference)
         for table in TABLES:
             assert _schema_contract(inspect(migrated), table) == _without_cached_input(
-                _schema_contract(inspect(reference), table), table,
+                _schema_before_budget_notifications(reference, table), table,
             )
 
         with migrated.begin() as db:
@@ -185,7 +193,7 @@ def test_0063_preserves_legacy_amounts_and_protects_cached_input_history(tmp_pat
         command.upgrade(config, "0063")
         Base.metadata.create_all(reference)
         for table in TABLES:
-            assert _schema_contract(inspect(migrated), table) == _schema_contract(inspect(reference), table)
+            assert _schema_contract(inspect(migrated), table) == _schema_before_budget_notifications(reference, table)
 
         with migrated.begin() as db:
             assert db.execute(text(

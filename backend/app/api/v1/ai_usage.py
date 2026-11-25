@@ -1,6 +1,7 @@
 """个人 AI 用量与预算，以及全站用量读接口。"""
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 
@@ -72,26 +73,30 @@ async def update_model_price(config_id: EntityId, user: EditorUser, db: DbDep, b
 
 
 @router.get("/ai-usage/budgets", response_model=list[BudgetProgress])
-async def list_account_budgets(user: CurrentUser, db: DbDep) -> list[BudgetProgress]:
-    return await svc.budget_progress(db, user.id)
+async def list_account_budgets(user: CurrentUser, db: DbDep, budget_key: UUID | None = None) -> list[BudgetProgress]:
+    return await svc.budget_progress(db, user.id, budget_key=budget_key)
 
 
 @router.put("/ai-usage/budgets/{currency}", response_model=BudgetProgress | None)
 async def update_account_budget(
     currency: Currency, request: Request, user: EditorUser, db: DbDep, body: BudgetBody = None,
+    budget_key: UUID | None = None,
 ) -> BudgetProgress | None:
     await _validate_budget_body(request, body)
-    return await svc.update_budget(db, user.id, currency, body)
+    return await svc.update_budget(db, user.id, currency, body, budget_key=budget_key)
 
 
 @router.get("/projects/{project_id}/ai-usage/budgets", response_model=list[BudgetProgress])
-async def list_project_budgets(project_id: EntityId, user: CurrentUser, db: DbDep) -> list[BudgetProgress]:
-    return await svc.budget_progress(db, user.id, project_id=project_id)
+async def list_project_budgets(
+    project_id: EntityId, user: CurrentUser, db: DbDep, budget_key: UUID | None = None,
+) -> list[BudgetProgress]:
+    return await svc.budget_progress(db, user.id, project_id=project_id, budget_key=budget_key)
 
 
 @router.put("/projects/{project_id}/ai-usage/budgets/{currency}", response_model=BudgetProgress | None)
 async def update_project_budget(
     project_id: EntityId, currency: Currency, request: Request, user: EditorUser, db: DbDep, body: BudgetBody = None,
+    budget_key: UUID | None = None,
 ) -> BudgetProgress | None:
     await _validate_budget_body(request, body)
-    return await svc.update_budget(db, user.id, currency, body, project_id=project_id)
+    return await svc.update_budget(db, user.id, currency, body, project_id=project_id, budget_key=budget_key)

@@ -10,6 +10,7 @@ import { parseUsageId } from '../../components/aiUsage/usagePresentation'
 import { useProjectId } from '../../hooks/useProjectId'
 import { useProjectAccess } from '../../hooks/useProjectAccess'
 import { captureProjectScope, isProjectScopeCurrent, useProjectStore } from '../../stores/project'
+import UnavailableTarget from '../../components/notifications/UnavailableTarget'
 import '../../components/aiUsage/aiUsage.css'
 
 function ProjectUsage({ session, projectId, owner, canRead }: {
@@ -19,11 +20,12 @@ function ProjectUsage({ session, projectId, owner, canRead }: {
   canRead: () => boolean
 }) {
   const [params] = useSearchParams()
+  const linkedBudget = params.has('budget_currency')
   const initialChapter = parseUsageId(params.get('chapter_id'))
   const scope = useMemo(() => ({ kind: 'project', projectId }) as const, [projectId])
   const loadChapters = useCallback(({ signal, isCurrent }: UsageReadOptions) => chapterApi.list(projectId, signal, isCurrent), [projectId])
   const chapters = useAiUsageRequest(loadChapters, session, canRead)
-  const budget = owner ? <UsageBudgets scope={scope} session={session} canAccess={canRead} /> : null
+  const budget = owner ? <UsageBudgets scope={scope} session={session} canAccess={canRead} /> : linkedBudget ? <UnavailableTarget /> : null
   return <div className="ai-usage-page"><StudioPage title={initialChapter ? '章节 AI 用量与费用' : '作品 AI 用量与费用'}
     action={initialChapter ? <Link to={`/projects/${projectId}/ai-usage`}>查看全书用量</Link> : <Link to="/settings/ai-usage">查看账号预算</Link>}>
     {!initialChapter && budget}

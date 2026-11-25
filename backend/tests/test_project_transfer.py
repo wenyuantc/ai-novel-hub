@@ -640,7 +640,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 16 and data["app_schema"] == "0071"
+    assert data["version"] == 16 and data["app_schema"] == "0073"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1646,7 +1646,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (16, "0071")
+    assert (data["version"], data["app_schema"]) == (16, "0073")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)
@@ -1792,3 +1792,25 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
     malformed["tables"]["setting_text_fields"] = 5
     response = await _preview_raw(client, json.dumps(malformed).encode())
     assert response.status_code == 400
+
+
+async def test_personal_inbox_stays_with_source_book(client, make_client):
+    await register(client, "source-author")
+    guest = make_client()
+    await register(guest, "invited-reader")
+    source = await create_project(client)
+    invite = await client.post(
+        f"{API}/{source['id']}/collaborators", json={"username": "invited-reader", "role": "viewer"}
+    )
+    assert invite.status_code == 201, invite.text
+    inbox = "/api/v1/notifications"
+    original = (await guest.get(inbox)).json()["items"]
+    assert len(original) == 1
+    assert (await guest.put(f"{inbox}/preferences/invitation", json={"enabled": False})).status_code == 200
+
+    backup = await _backup(client, source["id"])
+    assert invite.json()["invitation_id"] not in json.dumps(backup)
+    await _import(guest, backup, title="独立副本")
+    assert (await guest.get(inbox)).json()["items"] == original
+    assert (await guest.get(f"{inbox}/preferences")).json()["invitation"] is False
+    assert (await client.get(f"{inbox}/preferences")).json()["invitation"] is True

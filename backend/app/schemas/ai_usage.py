@@ -186,6 +186,7 @@ class BudgetInput(BaseModel):
 
 
 class BudgetProgress(BaseModel):
+    instance_key: str
     scope: UsageScope
     currency: Currency
     limit: str

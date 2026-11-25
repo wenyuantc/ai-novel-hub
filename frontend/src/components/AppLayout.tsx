@@ -11,6 +11,7 @@ import { useTasksStore } from '../stores/tasks'
 import ThemeSwitch from '../theme/ThemeSwitch'
 import { projectAccess, showsTaskPanel } from '../utils/projectAccess'
 import { can, isSuperAdmin, firstAdminPath } from '../utils/permissions'
+import NotificationInbox from './notifications/NotificationInbox'
 import ChangePasswordModal from './ChangePasswordModal'
 import { navigationItem, studioNavigation } from './StudioNavigation'
 import { StudioBrand } from './StudioUI'
@@ -148,7 +149,12 @@ export default function AppLayout() {
             {project && <><Link to={`/projects/${project.id}/overview`} title={project.title}>{project.title}</Link><RightOutlined /></>}
             <span aria-current="page">{pageName}</span>
           </nav>
-          <div className="studio-topbar-account"><span className="studio-tagline">把想象，写成一页页故事。</span>{account(true)}</div>
+          <div className="studio-topbar-account">
+            <span className="studio-tagline">把想象，写成一页页故事。</span>
+            {user && <NotificationInbox key={`${sessionGeneration}:${user.id}:${user.created_at}:${user.authorization_revision}:${scopeVersion}`}
+              actorId={user.id} createdAt={user.created_at} />}
+            {account(true)}
+          </div>
         </header>
         <div className="studio-content"><Outlet /></div>
       </div>

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
 from app.models import Project, ProjectCollaborator, Series, SeriesCollaborator, User
 from app.schemas.collaboration import InvitationOut, MemberOut, ProjectMemberUpdate, Scope
-from app.services import ai_dispatch, project_lifecycle
+from app.services import ai_dispatch, notification_service, project_lifecycle
 from app.services import authorization_service as authz
 from app.services.collaboration_audit import AuditSnapshot, add_success, get_result, record_failure
 
@@ -280,6 +280,11 @@ async def invite(
             state["summary"]["after_allow_owner_ai"] = member.allow_owner_ai
         await db.flush()
         await db.refresh(member)
+        await notification_service.deliver(
+            db, recipient_id=target.id, kind="invitation", event_key=f"invitation:{invitation_id}",
+            grant_id=invitation_id, project_id=resource_id if scope == "project" else None,
+            series_id=resource_id if scope == "series" else None,
+        )
         return _out(member, target.username)
 
     return await _write(db, factory, actor, scope, resource_id, "invite", operation, notify=notify)

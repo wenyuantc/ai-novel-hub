@@ -112,6 +112,7 @@ export interface UsagePriceRevision {
 export interface UsageBudgetInput { limit: string; threshold_percent: number }
 
 export interface UsageBudget extends UsageBudgetInput {
+  instance_key: string
   scope: BudgetScope['kind']
   currency: UsageCurrency
   spent: string
@@ -140,10 +141,10 @@ export const aiUsageApi = {
     }
     return request<UsagePage>(usagePath(scope, filters.chapter_id), { query, ...options })
   },
-  getBudgets: (scope: BudgetScope, options: ReadOptions) =>
-    request<UsageBudget[]>(`${usagePath(scope)}/budgets`, options),
-  setBudget: (scope: BudgetScope, currency: UsageCurrency, body: UsageBudgetInput | null, options: WriteOptions) =>
-    request<UsageBudget | null>(`${usagePath(scope)}/budgets/${currency}`, { method: 'PUT', body, ...options }),
+  getBudgets: (scope: BudgetScope, options: ReadOptions, budgetKey?: string) =>
+    request<UsageBudget[]>(`${usagePath(scope)}/budgets`, { ...options, query: { budget_key: budgetKey } }),
+  setBudget: (scope: BudgetScope, currency: UsageCurrency, body: UsageBudgetInput | null, options: WriteOptions, budgetKey?: string) =>
+    request<UsageBudget | null>(`${usagePath(scope)}/budgets/${currency}`, { method: 'PUT', body, ...options, query: { budget_key: budgetKey } }),
   getPrice: (id: number, options: ReadOptions) => request<UsagePriceRevision>(`/ai-configs/${id}/price`, options),
   setPrice: (id: number, version: string, price: UsageModelPrice | null, options: WriteOptions) =>
     request<UsagePriceRevision>(`/ai-configs/${id}/price`, { method: 'PUT', body: { expected_version: version, price }, ...options }),
