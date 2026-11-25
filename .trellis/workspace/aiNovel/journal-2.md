@@ -62,3 +62,36 @@ C4 十项验收通过，已在本地功能分支提交并归档。
 ### Status
 
 [OK] **Completed**
+
+
+## Session 64: C6 停止受理新任务的排空开关
+<!-- trellis-session: v=2 fp=3c79b00759880cbd -->
+
+**Date**: 2026-11-25
+**Task**: C6 停止受理新任务的排空开关
+**Branch**: `codex/mp-peer-channel-stream`
+
+### Summary
+
+C6 九项验收完成，已在本地功能分支提交并归档，父计划进度为 6/8。迁移头为 0070。
+
+### Main Changes
+
+- 设置保存后，所有进程立即停止受理新建、重试和继续。已受理任务及其派生继续执行。
+- 系统设置页读共享排空状态，显示收尾、活动备份和存活进程。计划备份暂停受理，手动备份可用。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `018faa6a3792943b87c181a3f8fdd9e9f18f1b86` | feat(tasks): 支持全站后台任务排空 |
+| `ff0352ab093fd5ec0f6bfa65554a64ca8ce88bce` | docs(trellis): 记录 C6 排空开关设计与验收 |
+
+### Testing
+
+- [OK] SQLite 全量与串行复验合计 7,430 项通过，54 项条件跳过，19 项预期失败。 PostgreSQL 16 专项 36 项、前端全量 1,849 项通过。双 Uvicorn 进程及 Chrome 验收通过。
+- [OK] 收尾复验后端专项 26 项、前端相关 78 项通过。Ruff 和 Git 差异检查通过。
+
+### Status
+
+[OK] **Completed**

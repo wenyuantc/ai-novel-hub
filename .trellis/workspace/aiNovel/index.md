@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 63
-- **Last Active**: 2026-11-24
+- **Total Sessions**: 64
+- **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~64 | Active |
+| `journal-2.md` | ~97 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 64 | 2026-11-25 | C6 停止受理新任务的排空开关 | `018faa6a3792943b87c181a3f8fdd9e9f18f1b86`, `ff0352ab093fd5ec0f6bfa65554a64ca8ce88bce` | `codex/mp-peer-channel-stream` |
 | 63 | 2026-11-24 | C5 引擎外状态跨进程协调 | `dccbb0b`, `08fc00b` | `codex/mp-peer-channel-stream` |
 | 62 | 2026-11-24 | C4 跨进程任务流转发与断线回放 | `15778d0`, `3981070` | `codex/mp-peer-channel-stream` |
 | 61 | 2026-11-23 | C3 跨进程取消与作品删除排空 | `b476666`, `4b82005` | `codex/mp-cross-process-cancel` |
