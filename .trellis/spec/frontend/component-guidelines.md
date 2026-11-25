@@ -10,7 +10,7 @@ AdminRolesPage仅超管，桌面Table/375px List卡片共享操作；名称100/�
 
 ## 管理员系统设置
 
-`AdminSystemSettingsPage` 的六项表单/来源、逐项恢复待保存、版本冲突/dirty保护、StrictMode及本页确认框清理、公开配置30秒同步，遵守[系统设置跨层契约](../backend/system-settings.md)。不得用定期auth.init代替公开配置刷新，也不能让过期响应/离页确认框复活。
+`AdminSystemSettingsPage` 的七项表单、逐项恢复、脏草稿保护、权限失效和确认框清理遵循[系统设置跨层契约](../backend/system-settings.md)。排空状态独立按可见周期刷新。只读设置首次加载和公开配置同步各自维护请求生命周期。
 
 ## 管理员全站任务监控
 

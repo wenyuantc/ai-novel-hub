@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/system-settings.md","reason":"校验发布、审计、跨进程生效和历史兼容"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"校验状态计数、任务轮次、取消和结束行为"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"复核计划、手动、已受理备份和权限语义"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"校验用户可见行为、lint/build/test 和 README 同步"}

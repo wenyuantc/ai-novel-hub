@@ -50,7 +50,7 @@ async def flush_versioned(db) -> None
 
 ## 3. 契约
 
-0027接入 `system_settings.update` / target_type=`system_settings`，变更与持久覆盖同事务；settings_changes为最多六项的局部类型化摘要（key、覆盖前后、有效前后、来源），只该动作可携带。不得记录完整Settings或任意JSON；失败不保留未提交after。运行时发布/提交确认协调见[系统设置](./system-settings.md)。
+0027 接入 `system_settings.update` / target_type=`system_settings`，变更与持久覆盖同事务。0070 加入布尔键 `task_admission_closed`。settings_changes 仅用于该动作，最多七项，限定为 key、覆盖前后、有效前后和来源。失败不保留未提交 after。运行时发布和提交确认见[系统设置](./system-settings.md)。
 
 ### 写入与结果
 

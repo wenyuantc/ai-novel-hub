@@ -15,16 +15,18 @@ C1 执行者租约 → C2 调度约束与设置 → C3 跨进程取消 → C4 �
 - [x] **C3** `11-20-mp-cross-process-cancel`：取消请求、管理员 drain、作品删除排空、删除意图。
 - [x] **C4** `11-20-mp-peer-channel-stream`：内部通道、流转发、降级路径、活动任务读路径。
 - [x] **C5** `11-20-mp-outside-engine-state`：备份、灵感、项目导入、智能体会话锁。
-- [ ] **C6** `11-20-mp-drain-switch`：排空开关与管理端展示。
+- [x] **C6** `11-20-mp-drain-switch`：排空开关与管理端展示。
 - [ ] **C7** `11-20-mp-deploy-acceptance`：迁移并发保护、启动方式、真实多进程验收、README 与规范收口。
 - [ ] **C8** `11-20-collab-migration-deploy-drill`：协作迁移演练与 README 操作步骤。C7 收口时把排空开关与多进程运维内容并入这份操作步骤。
 - [ ] **父任务集成评审**：按 `prd.md` 的 AC1–AC13 逐条核对证据，更新 `TODOS.md` 第 11、25 项，归档。
 
 C1 已归档。C2 已完成 SQLite 全量、PostgreSQL 16 专项和双进程 HTTP 演练，实现在本地功能分支。C3 已在本地功能分支完成跨进程取消与作品删除排空，SQLite 全量、PostgreSQL 16 串行专项和双进程 HTTP 演练均通过。[C3 验收记录](../archive/2026-11/11-20-mp-cross-process-cancel/research/verification.md)
 
-C4 已在本地功能分支完成验收并归档，生产继续使用单个 Uvicorn worker。C6–C8 开工前各自核对前序实现和规划资料。[C4 验收记录](../archive/2026-11/11-20-mp-peer-channel-stream/research/verification.md)
+C4 已在本地功能分支完成验收并归档，生产继续使用单个 Uvicorn worker。C7、C8 开工前各自核对前序实现和规划资料。[C4 验收记录](../archive/2026-11/11-20-mp-peer-channel-stream/research/verification.md)
 
 C5 已通过 SQLite 全量分组及复跑、PostgreSQL 16 专项和双进程 HTTP 演练，迁移为 `0069`。已在本地功能分支提交并归档。[C5 验收记录](../archive/2026-11/11-20-mp-outside-engine-state/research/verification.md)
+
+C6 的全站排空开关、管理状态、计划备份暂停和迁移 `0070` 已通过九项验收，功能提交为 `018faa6`。[C6 验收记录](../archive/2026-11/11-20-mp-drain-switch/research/verification.md)
 
 ## 每个子任务的开工门禁
 

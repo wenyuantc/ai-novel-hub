@@ -2,7 +2,7 @@
 
 RBAC传输镜像app/schemas/rbac.py：User必含is_super_admin/roles/effective_permissions:PermissionCode[]/authorization_revision，AdminUser必含is_super_admin/is_management_account/roles/authorization_revision但不含目标完整权限；不能将新字段改optional迁就旧fixture，或用is_admin fallback。[完整角色/配额API与错误契约](../backend/rbac-quotas.md)。QuotaConfig为inherit/unlimited/limited(value)判别联合，limited严格整数0..2147483647；revision（对象）与authorization_revision（全局）不能混用。
 
-管理员系统设置镜像 `SystemSettingsOut/SystemSettingsUpdate` 与bool/int区分式items；该PATCH的null明确表示取消后台覆盖，不是忽略。审计settings_changes仅六项受限值，公开配置请求代次独立于登录态；详见[系统设置](../backend/system-settings.md)。
+管理员系统设置镜像 `SystemSettingsOut/SystemSettingsUpdate` 及按布尔、整数区分的 items。PATCH 中的 null 取消后台覆盖，省略键保留原值。审计 settings_changes 允许七项受限值，`TaskDrainStatus` 用独立请求读取排空状态。详见[系统设置](../backend/system-settings.md)。
 
 管理员任务的AdminTaskBrief/Detail/List/Counts、AdminTaskListQuery及AdminTaskCancelRequest/Out独立镜像schemas/admin_task.py，不能把普通Task通过强转复用；未知kind/status为unknown、旧入队时间/本轮时长为null。UUID深链比较规范化，原因按Unicode字符计数及控制字符规则校验；task.cancel_request审计新增专用有界字段，其成功只表示受理。详见[任务监控](../backend/admin-task-monitoring.md)。
 

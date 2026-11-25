@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端结构、持久配置和测试规范入口"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"设置覆盖、共享门禁、审计、发布与前端草稿"}
+{"file":".trellis/spec/backend/admin-task-monitoring.md","reason":"活动状态、待审核、取消和安全管理投影"}
+{"file":".trellis/spec/backend/admin-backups.md","reason":"手动与计划受理、并发去重和活动状态"}
+{"file":".trellis/spec/frontend/index.md","reason":"前端组件、API 和真实浏览器验收入口"}
