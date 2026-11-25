@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 68
+- **Total Sessions**: 69
 - **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~224 | Active |
+| `journal-2.md` | ~246 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 69 | 2026-11-25 | 站内通知实施与验收 | `a24b807` | `codex/in-app-notifications` |
 | 68 | 2026-11-25 | 个人写作统计与码字目标 | `03bcb30` | `codex/writing-stats-goals` |
 | 67 | 2026-11-25 | 多进程父任务集成核对与归档 | `76b2889aa2a07247184658620bd064c5a6bc5299` | `codex/mp-peer-channel-stream` |
 | 66 | 2026-11-25 | C8 协作迁移及回滚演练 | `a1ed1ad` | `codex/mp-peer-channel-stream` |

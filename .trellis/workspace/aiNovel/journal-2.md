@@ -222,3 +222,25 @@ C6 九项验收完成，已在本地功能分支提交并归档，父计划进�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 69: 站内通知实施与验收
+<!-- trellis-session: v=2 fp=8ca4849263873486 -->
+
+**Date**: 2026-11-25
+**Task**: 站内通知实施与验收
+**Branch**: `codex/in-app-notifications`
+
+### Summary
+
+交付协作邀请、任务、预算与检查结果四类站内提醒；验证桌面与移动端、撤权、恢复后旧链接、并发入账和旧库升级。SQLite 全量 7575 项通过，前端 1865 项通过，PostgreSQL 专项 5 项通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a24b807` | feat: 新增站内通知 |
+
+### Status
+
+[OK] **Completed**
