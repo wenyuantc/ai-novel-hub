@@ -166,3 +166,37 @@ C6 九项验收完成，已在本地功能分支提交并归档，父计划进�
 ### Next Steps
 
 - 研究 TODO 第 34 项旧任务和未决提案的安全核对；目标部署需独立验证环境。
+
+
+## Session 67: 多进程父任务集成核对与归档
+<!-- trellis-session: v=2 fp=25424610f410df4e -->
+
+**Date**: 2026-11-25
+**Task**: 多进程父任务集成核对与归档
+**Branch**: `codex/mp-peer-channel-stream`
+
+### Summary
+
+核对 C1–C8 的归档和父任务验收证据，整理既有规划资料并完成父任务归档。
+
+### Main Changes
+
+- 补齐父任务验收状态和归档引用，保留既有研究与边界。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `76b2889aa2a07247184658620bd064c5a6bc5299` | docs(trellis): 核对多进程父任务验收及归档引用 |
+
+### Testing
+
+- [OK] 归档后核对 33 条 Markdown 链接、10 条清单引用及 13 项验收状态；本轮未重跑产品测试。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 未排空旧任务及未决提案治理见 TODO 第 34 项；跨主机共享文件锁须在目标环境验证。
