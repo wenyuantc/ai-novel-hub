@@ -14,17 +14,17 @@ const blocks: ReaderBlock[] = [
   { kind: 'paragraph', start: 0, end: 2, level: null, runs: [{ start: 0, end: 2, bold: false, italic: false }] },
   secondBlock,
 ]
-function render(start: number, end: number, options: { rich?: boolean; contentHash?: string; content?: string } = {}) {
+function render(start: number, end: number, options: { rich?: boolean; contentHash?: string; content?: string; activeStart?: number } = {}) {
   return renderToStaticMarkup(createElement(MemoryRouter, {}, createElement(SearchHitContent, {
     projectId: 7, text: options.content ?? text, blocks: options.rich ? blocks : null, contentHash: options.contentHash ?? hash,
-    anchor: { start, end, content_hash: hash, origin: 'book-search' },
+    activeStart: options.activeStart, anchor: { start, end, content_hash: hash, origin: 'book-search' },
   })))
 }
 
 describe('全书搜索的阅读器定位', () => {
   it('精确高亮第二处未登记词，保留换行与补充平面字符', () => {
     const page = render(6, 7)
-    expect(page).toContain('🙂乙\r\n𠮷地<mark')
+    expect(page.replace(/<[^>]*>/g, '')).toBe(text)
     expect(page).toMatch(/data-mention-focus="true"[^>]*>乙<\/mark>/)
     expect(page).not.toContain('正在识别提及')
   })
@@ -36,6 +36,15 @@ describe('全书搜索的阅读器定位', () => {
     expect(page).toContain('<strong>𠮷</strong>')
     expect(page).toContain('<h2')
     expect(render(2, 4, { rich: true })).toMatch(/aria-label="命中的换行"[^>]*>\r\n<\/mark>/)
+  })
+  it.each([false, true])('朗读与跨行搜索分别标记，只有换行的搜索仍可定位（富格式 %s）', (rich) => {
+    const page = render(1, 5, { rich, activeStart: 4 })
+    expect(page.match(/data-read-aloud-active=/g)).toHaveLength(1)
+    expect(page).toMatch(rich ? /<h2[^>]+data-read-aloud-active/ : /<span data-read-aloud-active/)
+    const marks = (html: string) => [...html.matchAll(/<mark[^>]*data-mention-focus[^>]*>([\s\S]*?)<\/mark>/g)]
+      .map((m) => m[1].replace(/<[^>]*>/g, '')).join('')
+    expect(marks(page)).toBe('乙\r\n𠮷')
+    expect(marks(render(2, 4, { rich, activeStart: 4 }))).toBe('\r\n')
   })
   it('指纹变化、内容清空或范围越界时不高亮旧位置，提供重新搜索入口', () => {
     for (const page of [render(0, 2, { contentHash: 'b'.repeat(64) }), render(0, 2, { content: '' }), render(0, 8)]) {

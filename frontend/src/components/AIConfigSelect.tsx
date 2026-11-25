@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { PROVIDER_LABELS } from '../api/aiConfigs'
 import { errorMessage } from '../api/client'
-import type { ModelType } from '../api/types'
+import type { ModelType, Project } from '../api/types'
 import { useShallow } from 'zustand/react/shallow'
 import { useAIModelSource } from '../hooks/useAIModelSource'
 import { useAIConfigStore } from '../stores/aiConfigs'
@@ -16,18 +16,20 @@ interface Props {
   modelType?: ModelType
   /** 系列等独立作用域绝不借用当前作品的作者模型。 */
   ownOnly?: boolean
+  /** 独立阅读器使用自己已核验的作品快照。 */
+  projectSnapshot?: Project
 }
 
 /**
  * 按模型类型选择配置；留空表示使用该类型默认配置。无配置时引导去配置页。
  * 作品内无本人该类型配置、但已获作者模型授权的编辑者：不显示警告，说明将回退作者默认配置（value 保持 null）。
  */
-export default function AIConfigSelect({ id, value, onChange, disabled, modelType = 'text', ownOnly = false }: Props) {
+export default function AIConfigSelect({ id, value, onChange, disabled, modelType = 'text', ownOnly = false, projectSnapshot }: Props) {
   const { message } = App.useApp()
   const { loaded, loading, load } = useAIConfigStore()
   const configs = useAIConfigStore(useShallow((s) => s.configs.filter((c) => c.model_type === modelType)))
   const typeLabel = modelType === 'image' ? '图片' : modelType === 'embedding' ? '向量' : '文本'
-  const scopedSource = useAIModelSource(modelType)
+  const scopedSource = useAIModelSource(modelType, projectSnapshot)
   const source = ownOnly ? 'actor' : scopedSource
 
   useEffect(() => {

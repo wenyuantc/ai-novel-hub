@@ -1,11 +1,13 @@
 // 阅读器纯函数：阅读设置（localStorage）、进度 ratio、目录分组 / 相邻章节、正文分段
 import type { ReaderTocItem, ReadingPosition } from '../api/types'
+import type { ReaderBlock } from '../api/reader'
 import type { ReaderTone, ResolvedTheme } from '../theme/palette'
 
 export type ReaderBackground = ReaderTone | 'theme'
 export type ReaderFont = 'serif' | 'sans'
 
 export interface ReaderSettings {
+  speechRate: number
   fontSize: number
   lineHeight: number
   width: number
@@ -14,6 +16,7 @@ export interface ReaderSettings {
 }
 
 export const READER_STORAGE_KEY = 'ainovel.reader'
+export const READER_SPEECH_RATES = [0.75, 1, 1.25, 1.5, 2] as const
 export const READER_FONT_SIZE = { min: 14, max: 24 } as const
 export const READER_LINE_HEIGHTS = [1.5, 1.8, 2.0, 2.2] as const
 export const READER_WIDTHS = [560, 680, 800] as const
@@ -32,6 +35,7 @@ export const READER_FONTS: Record<ReaderFont, { label: string; stack: string }> 
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
+  speechRate: 1,
   fontSize: 18,
   lineHeight: 1.8,
   width: 680,
@@ -46,6 +50,7 @@ export function normalizeReaderSettings(raw: unknown): ReaderSettings {
   const o = raw as Record<string, unknown>
   const size = typeof o.fontSize === 'number' && Number.isFinite(o.fontSize) ? Math.round(o.fontSize) : d.fontSize
   return {
+    speechRate: READER_SPEECH_RATES.find((rate) => rate === o.speechRate) ?? d.speechRate,
     fontSize: Math.min(READER_FONT_SIZE.max, Math.max(READER_FONT_SIZE.min, size)),
     lineHeight: (READER_LINE_HEIGHTS as readonly number[]).includes(o.lineHeight as number) ? (o.lineHeight as number) : d.lineHeight,
     width: (READER_WIDTHS as readonly number[]).includes(o.width as number) ? (o.width as number) : d.width,
@@ -148,12 +153,30 @@ export function tocNeighbors(
   return { prev, next }
 }
 
-/** 正文按换行切段，去掉首尾空白，空行忽略 */
+export interface ReaderParagraph { start: number; end: number; text: string }
+
+/** 与提及、搜索和服务端读者块共用原文码点坐标。保留非空段的首尾空白。 */
+export function readerParagraphs(content: string, blocks: ReaderBlock[] | null = null): ReaderParagraph[] {
+  const paragraphs: ReaderParagraph[] = []
+  if (blocks !== null) {
+    const points = Array.from(content)
+    for (const { start, end } of blocks) {
+      const text = points.slice(start, end).join('')
+      if (text.trim()) paragraphs.push({ start, end, text })
+    }
+  } else {
+    let start = 0
+    for (const text of content.split(/(\r\n|[\r\n])/)) {
+      const end = start + Array.from(text).length
+      if (text.trim()) paragraphs.push({ start, end, text })
+      start = end
+    }
+  }
+  return paragraphs
+}
+
 export function splitParagraphs(content: string): string[] {
-  return content
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return readerParagraphs(content).map(({ text }) => text.trim())
 }
 
 /** 键盘切章：焦点在输入控件 / 可编辑区域、或按着修饰键时不响应 */

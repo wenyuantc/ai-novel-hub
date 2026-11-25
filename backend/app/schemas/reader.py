@@ -43,3 +43,41 @@ class ReaderChapter(BaseModel):
     content_hash: str
     # 无排版时不膨胀为逐行 JSON；阅读器沿用原纯文本渲染。
     blocks: list[ReaderBlock] | None
+
+
+ReaderEmotion = Literal["neutral", "happy", "angry", "afraid", "sad", "whisper"]
+
+
+class CastingRange(BaseModel):
+    start: int = Field(strict=True, ge=0)
+    end: int = Field(strict=True, gt=0)
+
+
+class CastingVoice(BaseModel):
+    id: str = Field(min_length=1, max_length=1024)
+    name: str = Field(min_length=1, max_length=160)
+    lang: str = Field(max_length=40, pattern=r"(?i)^(zh|cmn|yue)([-_][a-z0-9]+)*$")
+
+
+class ReaderCastingRequest(BaseModel):
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cues: list[CastingRange] = Field(max_length=400)
+    voices: list[CastingVoice] = Field(min_length=1, max_length=128)
+    ai_config_id: int | None = Field(None, gt=0, le=2_147_483_647, strict=True)
+
+
+class CastCue(BaseModel):
+    start: int
+    speaker: str | None
+    emotion: ReaderEmotion
+
+
+class CastVoice(BaseModel):
+    speaker: str
+    voice_id: str
+
+
+class ReaderCastingResult(BaseModel):
+    content_hash: str
+    cues: list[CastCue]
+    voices: list[CastVoice]

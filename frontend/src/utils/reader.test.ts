@@ -6,6 +6,7 @@ import {
   groupToc,
   normalizeReaderSettings,
   readerTone,
+  readerParagraphs,
   restoreRatio,
   scrollRatio,
   scrollTopForRatio,
@@ -39,8 +40,14 @@ describe('阅读设置', () => {
   })
 
   it('合法值原样保留', () => {
-    const v = { fontSize: 20, lineHeight: 2.2, width: 800, background: 'sepia', font: 'sans' }
+    const v = { speechRate: 1.5, fontSize: 20, lineHeight: 2.2, width: 800, background: 'sepia', font: 'sans' }
     expect(normalizeReaderSettings(v)).toEqual(v)
+  })
+
+  it('旧设置和非法语速回落到正常语速', () => {
+    for (const speechRate of [undefined, null, NaN, 10, '1.5']) {
+      expect(normalizeReaderSettings({ speechRate }).speechRate).toBe(1)
+    }
   })
 
   it('背景跟随全局', () => {
@@ -111,5 +118,23 @@ describe('目录', () => {
     expect(arrowDirection({ key: 'ArrowRight', target: { tagName: 'DIV', isContentEditable: true } })).toBeNull()
     expect(arrowDirection({ key: 'ArrowRight', metaKey: true })).toBeNull()
     expect(arrowDirection({ key: 'a' })).toBeNull()
+  })
+})
+
+
+describe('朗读段落', () => {
+  it('跳过空段，保留缩进、重复段和换行后的原始码点位置', () => {
+    expect(readerParagraphs('  🌸甲  \r\n \n  🌸甲  \r结')).toEqual([
+      { start: 0, end: 6, text: '  🌸甲  ' },
+      { start: 10, end: 16, text: '  🌸甲  ' },
+      { start: 17, end: 18, text: '结' },
+    ])
+  })
+
+  it('富文本限定在读者块范围内，整段引用可以有换行', () => {
+    const block = { kind: 'blockquote' as const, level: null, runs: [] }
+    expect(readerParagraphs('🌸\n甲\n乙\n尾', [{ ...block, start: 0, end: 1 }, { ...block, start: 2, end: 5 }])).toEqual([
+      { start: 0, end: 1, text: '🌸' }, { start: 2, end: 5, text: '甲\n乙' },
+    ])
   })
 })

@@ -96,6 +96,13 @@ describe('AIConfigSelect 作者模型回退', () => {
     expect(html).toContain('作者费用')
   })
 
+  it('独立阅读器复用自己的已核验作品快照判定回退，不沿用工作区的作品授权', () => {
+    setup(editor, [])
+    const html = render('/projects/9/read/5', '/projects/:pid/read/:cid',
+      createElement(AIConfigSelect, { projectSnapshot: project(granted) }))
+    expect(html).toContain('作者授权的默认文本模型')
+  })
+
   it('编辑者未获授权、作者本人无配置：仍显示尚未配置', () => {
     for (const snapshot of [editor, owner]) {
       setup(snapshot, [])

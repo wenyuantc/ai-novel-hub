@@ -1,0 +1,121 @@
+.reader-speech-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.reader-speech-select {
+  min-height: 28px;
+  color: inherit;
+  background: inherit;
+  font: inherit;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.reader-speech-message {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline: 0;
+  background: inherit;
+}
+
+.reader-speech-message:not(:empty) {
+  padding: 8px 16px;
+  border-bottom: 1px solid currentColor;
+}
+
+[data-read-aloud-active] {
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+  background-color: color-mix(in srgb, currentColor 9%, transparent);
+  border-radius: 2px;
+}
+
+@media (max-width: 767px) {
+  .reader-speech-controls[data-open] {
+    order: 1;
+    flex-basis: 100%;
+    justify-content: center;
+  }
+}
+
+.reader-casting-panel h3 {
+  font-size: 1rem;
+  margin: 0 0 12px;
+}
+
+.reader-casting-panel h3:not(:first-child) {
+  margin-top: 24px;
+}
+
+.reader-casting-voice,
+.reader-casting-field,
+.reader-casting-voice label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.reader-casting-voice,
+.reader-casting-field {
+  margin-bottom: 8px;
+}
+
+.reader-casting-voice label,
+.reader-casting-field input,
+.reader-casting-field select,
+.reader-casting-voice select {
+  flex: 1;
+  min-width: 0;
+}
+
+.reader-casting-voice label span {
+  max-width: 30%;
+  overflow-wrap: anywhere;
+}
+
+.reader-casting-voice select,
+.reader-casting-field select,
+.reader-casting-field input {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  min-height: 32px;
+}
+
+.reader-casting-cues {
+  margin-block: 0 16px;
+  padding-inline-start: 1.6em;
+}
+
+.reader-casting-cue {
+  margin-block-end: 16px;
+}
+
+.reader-casting-cue p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.reader-speech-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 8em;
+}
+
+.reader-ai-casting {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.reader-ai-casting h3,
+.reader-ai-casting .ant-typography {
+  margin: 0;
+}

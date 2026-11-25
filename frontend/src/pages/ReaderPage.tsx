@@ -1,8 +1,13 @@
 import {
   ArrowLeftOutlined,
   EditOutlined,
+  CustomerServiceOutlined,
   LeftOutlined,
   ProfileOutlined,
+  SoundOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  StopOutlined,
   RightOutlined,
   SettingOutlined,
   UnorderedListOutlined,
@@ -15,6 +20,14 @@ import { ApiError, currentRequestGeneration, watchRequestGeneration } from '../a
 import { readerApi, saveProgressKeepalive } from '../api/reader'
 import type { Project, ReaderTocItem, ReadingPosition } from '../api/types'
 import ReaderAnalysisPanel from '../components/reader/ReaderAnalysisPanel'
+import PlainReaderContent from '../components/reader/PlainReaderContent'
+import ReaderCastingPanel from '../components/reader/ReaderCastingPanel'
+import ReaderAICasting from '../components/reader/ReaderAICasting'
+import { applyReaderAiCues, applyReaderCastOverrides, useReaderCasting } from '../hooks/useReaderCasting'
+import { readerRoleLabel } from '../utils/readerVoices'
+import { buildReaderScript, READER_EMOTION_LABELS } from '../utils/readerDialogue'
+import { useReadAloud } from '../hooks/useReadAloud'
+import './ReaderPage.css'
 import RichReaderContent from '../components/reader/RichReaderContent'
 import SearchHitContent from '../components/reader/SearchHitContent'
 import MentionPreview from '../components/mentions/MentionPreview'
@@ -40,7 +53,8 @@ import {
   restoreRatio,
   scrollRatio,
   scrollTopForRatio,
-  splitParagraphs,
+  readerParagraphs,
+  READER_SPEECH_RATES,
   startChapterId,
   tocNeighbors,
   writeReaderSettings,
@@ -223,6 +237,7 @@ function ReaderSession({ scope }: { scope: ReaderSessionScope }) {
     <ReaderView
       key={cid}
       project={currentData.project}
+      actorId={scope.actorId}
       toc={currentData.toc}
       chapterId={cid}
       settings={settings}
@@ -236,6 +251,7 @@ function ReaderSession({ scope }: { scope: ReaderSessionScope }) {
 }
 
 interface ViewProps {
+  actorId: number
   project: Project
   toc: ReaderTocItem[]
   chapterId: number
@@ -247,7 +263,7 @@ interface ViewProps {
   onAccessLost: () => void
 }
 
-function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readingRef, sessionCurrent, onAccessLost }: ViewProps) {
+function ReaderView({ project, actorId, toc, chapterId, settings, onSettings, tone, readingRef, sessionCurrent, onAccessLost }: ViewProps) {
   const pid = project.id
   const user = useAuthStore((s) => s.user)
   const { managingOther, isCollaborator, canUseAI, canEdit, canWriteReadingProgress } = projectAccess(project, user, pid)
@@ -265,6 +281,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const [tocOpen, setTocOpen] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [castingOpen, setCastingOpen] = useState(false)
   const alive = useRef(true)
   const chapterLoadSeq = useRef(0)
   useLayoutEffect(() => () => { chapterLoadSeq.current += 1 }, [chapterId, project.id, project.owner?.id,
@@ -290,7 +307,18 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   const { data: readerChapter, loading, error, reload } = useLoader(loader)
   const chapter = readerChapter?.chapter.id === chapterId ? readerChapter.chapter : undefined
   const written = !!chapter?.content.trim()
-  const paragraphs = useMemo(() => readerChapter?.blocks === null ? splitParagraphs(chapter?.content ?? '') : [], [readerChapter, chapter])
+  const blocks = readerChapter?.blocks ?? null
+  const paragraphs = useMemo(() => readerParagraphs(error ? '' : chapter?.content ?? '', blocks), [error, chapter?.content, blocks])
+  const snapshot = chapter && !error ? `${chapter.id}:${readerChapter?.content_hash}` : ''
+  const casting = useReaderCasting(actorId, pid, chapterId, chapter && !error ? readerChapter?.content_hash ?? '' : '')
+  const localScript = useMemo(() => buildReaderScript(paragraphs), [paragraphs])
+  const dialogueCues = useMemo(() => localScript.filter((cue) => cue.kind === 'dialogue'), [localScript])
+  const detected = useMemo(() => applyReaderAiCues(localScript, casting.aiResult), [localScript, casting.aiResult])
+  const script = useMemo(() => applyReaderCastOverrides(detected, casting.overrides), [detected, casting.overrides])
+  const speech = useReadAloud(paragraphs, snapshot, settings.speechRate, sessionCurrent, { script, roleVoices: casting.effectiveVoices, expressive: true })
+  const speaking = speech.status !== 'idle'
+  const paused = speech.status === 'paused'
+  const speechLabel = !speaking ? '朗读' : paused ? '继续' : '暂停'
   const { prev, next } = useMemo(
     () => (chapter ? tocNeighbors(toc, chapter.chapter_no) : { prev: null, next: null }),
     [toc, chapter],
@@ -378,7 +406,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
   }, [written, schedule, report, canWriteReadingProgress, sessionCurrent])
 
   // ←/→ 切章（抽屉打开、焦点在输入控件时不响应）
-  const anyDrawer = tocOpen || panelOpen || settingsOpen
+  const anyDrawer = tocOpen || panelOpen || settingsOpen || castingOpen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (anyDrawer) return
@@ -403,6 +431,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
     zIndex: 10,
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 4,
     padding: isMobile ? '6px 8px' : '8px 16px',
     background: colors.bg,
@@ -438,6 +467,29 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
             </Typography.Text>
           )}
         </div>
+        <div className="reader-speech-controls" data-open={speaking || undefined} style={{ colorScheme: colors.dark ? 'dark' : 'light' }}>
+          <Tooltip title={isMobile && !speaking ? speechLabel : undefined}>
+            <Button type="text" icon={!speaking ? <SoundOutlined /> : paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+              aria-label={speechLabel} onClick={!speaking ? speech.start : paused ? speech.resume : speech.pause} disabled={!paragraphs.length}>
+              {(!isMobile || speaking) && speechLabel}
+            </Button>
+          </Tooltip>
+          {speaking && <>
+            {speech.activeRole && <span className="reader-speech-current" title={readerRoleLabel(speech.activeRole)}>
+              {readerRoleLabel(speech.activeRole)}{speech.activeEmotion && speech.activeEmotion !== 'neutral' ? ` · ${READER_EMOTION_LABELS[speech.activeEmotion]}` : ''}
+            </span>}
+            <Button type="text" icon={<StopOutlined />} onClick={speech.stop}>停止</Button>
+            <label htmlFor="reader-speech-rate">语速</label>
+            <select className="reader-speech-select" id="reader-speech-rate" value={settings.speechRate}
+              onChange={(e) => onSettings({ ...settings, speechRate: Number(e.target.value) })}>
+              {READER_SPEECH_RATES.map((rate) => <option key={rate} value={rate}>{rate} 倍</option>)}
+            </select>
+          </>}
+        </div>
+        <Tooltip title="角色配音">
+          <Button type="text" icon={<CustomerServiceOutlined />} aria-label="角色配音" disabled={!paragraphs.length}
+            onClick={() => setCastingOpen(true)}>{!isMobile && '配音'}</Button>
+        </Tooltip>
         <Tooltip title="目录">
           <Button type="text" icon={<UnorderedListOutlined />} aria-label="目录" onClick={() => setTocOpen(true)} />
         </Tooltip>
@@ -458,6 +510,7 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
             {!isMobile && (canEdit ? '编辑本章' : '查看本章')}
           </Button>
         </Tooltip>
+        <div role="status" className="reader-speech-message">{speech.message ?? (speech.status === 'waiting' && speech.activeStart === null ? '正在等待本机语音…' : '')}</div>
       </div>
 
       {administeringOther && project.owner && <div style={{ padding: '12px 16px 0' }}><ProjectManagementNotice owner={project.owner} /></div>}
@@ -475,12 +528,13 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
               {chapterTitle}
             </h1>
             {written && mentionsVisible ? <MentionPreview projectId={pid} text={chapter.content} anchor={searchAnchor ? null : mentionAnchor}
-              renderText={readerChapter?.blocks ? (spans, focus) => <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks ?? []} mentions={{ spans, focus }} /> : undefined} />
-              : searchAnchor && readerChapter ? <SearchHitContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks}
-                contentHash={readerChapter.content_hash} anchor={searchAnchor} /> : written ? (
-              readerChapter?.blocks ? <RichReaderContent projectId={pid} text={chapter.content} blocks={readerChapter.blocks} /> : paragraphs.map((p, i) => (
-                <p key={i} style={{ textIndent: '2em', margin: '0 0 0.6em', wordBreak: 'break-word' }}>{p}</p>
-              ))
+              renderText={(spans, focus) => blocks
+                ? <RichReaderContent projectId={pid} text={chapter.content} blocks={blocks} mentions={{ spans, focus }} activeStart={speech.activeStart} />
+                : <PlainReaderContent projectId={pid} text={chapter.content} paragraphs={paragraphs} mentions={{ spans, focus }} activeStart={speech.activeStart} />} />
+              : searchAnchor && readerChapter ? <SearchHitContent projectId={pid} text={chapter.content} blocks={blocks}
+                contentHash={readerChapter.content_hash} anchor={searchAnchor} paragraphs={paragraphs} activeStart={speech.activeStart} /> : written ? (
+              blocks ? <RichReaderContent projectId={pid} text={chapter.content} blocks={blocks} activeStart={speech.activeStart} />
+                : <PlainReaderContent projectId={pid} text={chapter.content} paragraphs={paragraphs} activeStart={speech.activeStart} />
             ) : (
               <Empty description="本章还没有正文">
                 {canEdit && <Link to={`/projects/${pid}/chapters/${chapterId}`}>去写作</Link>}
@@ -520,6 +574,19 @@ function ReaderView({ project, toc, chapterId, settings, onSettings, tone, readi
       {canUseAI && <Drawer title="本章分析" open={panelOpen} onClose={() => setPanelOpen(false)} mask={isMobile} destroyOnHidden {...sideDrawer('right')}>
         <ReaderAnalysisPanel projectId={pid} chapterId={chapterId} />
       </Drawer>}
+      <Drawer title="角色配音" open={castingOpen} onClose={() => {
+        if (speech.previewing) speech.stop()
+        setCastingOpen(false)
+      }} {...sideDrawer('right')}
+        width={isMobile ? undefined : 460} destroyOnHidden>
+        {castingOpen && chapter && !error && <ReaderCastingPanel key={snapshot} casting={casting} detected={detected} script={script} player={speech}>
+          {canUseAI && readerChapter && <ReaderAICasting project={project} chapterId={chapterId} contentHash={readerChapter.content_hash}
+            hasText={written} cues={dialogueCues} voices={speech.voices} sessionCurrent={sessionCurrent} saveResult={casting.saveAiResult} reload={reload}
+            recheckAccess={async (current) => {
+              if (await readerAccessLostAfterFailure(pid, project, user, current)) onAccessLost()
+            }} />}
+        </ReaderCastingPanel>}
+      </Drawer>
       <Drawer title="阅读设置" open={settingsOpen} onClose={() => setSettingsOpen(false)} {...sideDrawer('right')} height={isMobile ? 'auto' : undefined}>
         <SettingsForm value={settings} onChange={onSettings} />
       </Drawer>
@@ -625,6 +692,11 @@ function SettingsForm({ value, onChange }: { value: ReaderSettings; onChange: (s
             A+
           </Button>
         </Space.Compact>,
+      )}
+      {row(
+        '朗读语速',
+        <Segmented<number> block aria-label="朗读语速" value={value.speechRate}
+          onChange={(v) => set('speechRate', v)} options={READER_SPEECH_RATES.map((v) => ({ value: v, label: `${v}×` }))} />,
       )}
       {row(
         '行距',

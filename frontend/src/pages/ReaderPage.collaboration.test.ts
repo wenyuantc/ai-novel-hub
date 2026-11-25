@@ -8,6 +8,8 @@ import { readerApi } from '../api/reader'
 import { deferred } from '../components/systemSettings/systemSettingsTestFixtures'
 import { useAuthStore } from '../stores/auth'
 import ReaderPage from './ReaderPage'
+import * as readerCasting from '../hooks/useReaderCasting'
+import * as readAloud from '../hooks/useReadAloud'
 import { bookSearchHref } from '../utils/mentions'
 
 const view = vi.hoisted(() => ({
@@ -75,12 +77,12 @@ const chapter = { chapter: { id: 11, project_id: 9, outline_id: null, plan_id: n
   title: '', status: 'done' as const, word_count: 4, content_revision: 1, updated_at: '', content: '已经写好的正文' },
 content_hash: 'a'.repeat(64), blocks: null }
 
-function renderReader(access: ProjectAccess, user: User, withChapter = true) {
+function renderReader(access: ProjectAccess, user: User, withChapter = true, snapshot = chapter) {
   view.effects = []
   view.layouts = []
   view.loaders = []
   view.params.cid = withChapter ? '11' : undefined
-  view.loads = [{ project: project(access), toc }, ...(withChapter ? [chapter] : [])]
+  view.loads = [{ project: project(access), toc }, ...(withChapter ? [snapshot] : [])]
   useAuthStore.setState({ status: 'authenticated', user })
   return renderToString(createElement(ReaderPage))
 }
@@ -126,6 +128,59 @@ afterEach(() => {
 })
 
 describe('阅读器的协作能力', () => {
+  it.each([['作者', owner, actor(2)], ['只读协作者', viewer, actor(3)]] as const)('%s 可从本章正文开启朗读，退出会话后回调立即失效', (_role, access, user) => {
+    const hook = vi.spyOn(readAloud, 'useReadAloud')
+    const html = renderReader(access, user)
+    expect(html).toMatch(/<button[^>]*aria-label="朗读"[^>]*>/)
+    const [paragraphs, snapshotKey, rate, current] = hook.mock.calls[0]
+    expect(paragraphs.map((p) => p.text)).toEqual([chapter.chapter.content])
+    expect(snapshotKey).toContain(chapter.content_hash)
+    expect(rate).toBe(1)
+    expect(current()).toBe(true)
+    useAuthStore.getState().clear()
+    expect(current()).toBe(false)
+  })
+
+  it('将当前账号、本书、本章指纹和手动配音校正接入朗读，不改写原文', () => {
+    const cast = vi.spyOn(readerCasting, 'useReaderCasting').mockReturnValue({
+      voices: { '阿蓝': 'local-voice' }, overrides: { '4': { speaker: '阿蓝', emotion: 'sad' } },
+      aiResult: null, effectiveVoices: { '阿蓝': 'local-voice' }, saveAiResult: vi.fn(),
+      setVoice: vi.fn(), setOverride: vi.fn(),
+    })
+    const speech = vi.spyOn(readAloud, 'useReadAloud')
+    const text = '阿青说：“别怕。”'
+    const html = renderReader(viewer, actor(3), true, { ...chapter, chapter: { ...chapter.chapter, content: text } })
+    expect(html).toContain('aria-label="角色配音"')
+    expect(cast).toHaveBeenCalledWith(3, 9, 11, chapter.content_hash)
+    const options = speech.mock.calls[0][4]
+    expect(options?.script.map((p) => p.text).join('')).toBe(text)
+    expect(options?.script.find((p) => p.kind === 'dialogue')).toMatchObject({ start: 4, speaker: '阿蓝', emotion: 'sad' })
+    expect(options?.roleVoices).toEqual({ '阿蓝': 'local-voice' })
+    expect(options?.expressive).toBe(true)
+  })
+
+  it('空白章禁用朗读；同章正文换版会替换语音快照', () => {
+    const hook = vi.spyOn(readAloud, 'useReadAloud')
+    renderReader(owner, actor(2))
+    const blank = { ...chapter, content_hash: 'b'.repeat(64), chapter: { ...chapter.chapter, content: '  \n' } }
+    const html = renderReader(owner, actor(2), true, blank)
+    const button = html.match(/<button[^>]*aria-label="朗读"[^>]*>/)?.[0]
+    expect(button).toContain('disabled')
+    expect(hook.mock.calls[1][0]).toEqual([])
+    expect(hook.mock.calls[0][1]).not.toBe(hook.mock.calls[1][1])
+  })
+
+  it('权威作品确认撤权后，语音衔接下一句前即可查到会话失效', async () => {
+    const hook = vi.spyOn(readAloud, 'useReadAloud')
+    vi.spyOn(readerApi, 'chapter').mockRejectedValue(new ApiError(404, '无法读取'))
+    vi.spyOn(projectApi, 'get').mockRejectedValue(new ApiError(403, '作品无权访问'))
+    renderReader(viewer, actor(3))
+    const current = hook.mock.calls[0][3]
+    expect(current()).toBe(true)
+    await expect(view.loaders[1]()).rejects.toBeInstanceOf(ApiError)
+    expect(current()).toBe(false)
+  })
+
   it('只读协作者从搜索进入时直接高亮命中，保留只读能力', () => {
     view.search = new URL(bookSearchHref(9, 11, { start: 5, end: 7, content_hash: chapter.content_hash }), 'https://reader.test').search
     const html = renderReader(viewer, actor(3))

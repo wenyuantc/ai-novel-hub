@@ -73,3 +73,14 @@ export function mentionSegments(text: string, spans: MentionSpan[], offset = 0, 
   add(cursor, end)
   return result
 }
+
+/** 读者格式与提及均按原文排序，二分定位落在当前码点窗口内的片段。 */
+export function firstEndingAfter(items: { end: number }[], start: number): number {
+  let lo = 0, hi = items.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (items[mid].end <= start) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}

@@ -1,24 +1,15 @@
+import { firstEndingAfter } from '../../utils/mentions'
 import { theme } from 'antd'
 import { createElement, Fragment, useMemo, type CSSProperties, type ReactNode } from 'react'
-import type { MentionAnchor, MentionSpan } from '../../api/mentions'
+import { ReaderMentionText, type ReaderMentions } from './ReaderMentionText'
 import type { ReaderBlock, ReaderRun } from '../../api/reader'
-import MentionText from '../mentions/MentionText'
 
 interface Props {
   projectId: number
   text: string
   blocks: ReaderBlock[]
-  mentions?: { spans: MentionSpan[]; focus: MentionAnchor | null }
-}
-
-function firstEndingAfter(items: { end: number }[], start: number): number {
-  let lo = 0, hi = items.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    if (items[mid].end <= start) lo = mid + 1
-    else hi = mid
-  }
-  return lo
+  mentions?: ReaderMentions
+  activeStart?: number | null
 }
 
 /** 后端返回码点坐标；只截取正文，不把作者文字解释成 HTML。 */
@@ -48,12 +39,10 @@ function groups(points: string[], blocks: ReaderBlock[]): ReaderBlock[][] {
   return result
 }
 
-export default function RichReaderContent({ projectId, text, blocks, mentions }: Props) {
+export default function RichReaderContent({ projectId, text, blocks, mentions, activeStart }: Props) {
   const { token } = theme.useToken()
   const points = useMemo(() => Array.from(text), [text])
   const grouped = useMemo(() => groups(points, blocks), [points, blocks])
-  // 提及 API 按原文顺序返回不重叠范围；每块二分起点，避免长章中反复扫描全书匹配。
-  const mentionSpans = mentions?.spans ?? []
   const style: CSSProperties = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '0 0 0.6em' }
   // 自然换行在富文档中是块间空隙。搜索词可只含换行，此时也要有可滚动的精确目标。
   const searchGap = (start: number, end: number) => {
@@ -68,33 +57,28 @@ export default function RichReaderContent({ projectId, text, blocks, mentions }:
   }
   const children = (block: ReaderBlock) => {
     if (!mentions) return styledText(points, block.runs, block.start, block.end)
-    const spans = []
-    for (let i = firstEndingAfter(mentionSpans, block.start); i < mentionSpans.length && mentionSpans[i].start < block.end; i += 1) {
-      const span = mentionSpans[i]
-      spans.push({ ...span, start: Math.max(span.start, block.start), end: Math.min(span.end, block.end) })
-    }
-    const focus = mentions.focus && mentions.focus.start < block.end && mentions.focus.end > block.start
-      ? { start: Math.max(mentions.focus.start, block.start), end: Math.min(mentions.focus.end, block.end) }
-      : null
-    return <MentionText projectId={projectId} text={points.slice(block.start, block.end).join('')} offset={block.start}
-      spans={spans} focus={focus} renderPart={(start, end) => styledText(points, block.runs, start, end)} />
+    return <ReaderMentionText projectId={projectId} mentions={mentions} text={points.slice(block.start, block.end).join('')}
+      offset={block.start} end={block.end} renderPart={(start, end) => styledText(points, block.runs, start, end)} />
   }
+  // 空格式块可以与下一段共享起点，只有含正文的块可以跟随声音高亮。
+  const isActive = (block: ReaderBlock) => (block.start === activeStart && block.end > block.start) || undefined
   return <div>{grouped.map((group, i) => {
     const first = group[0], key = `${first.start}:${first.end}:${i}`
+    const active = isActive(first)
     const previous = grouped[i - 1]
     const before = searchGap(previous ? previous[previous.length - 1].end : 0, first.start)
     if (first.kind === 'bullet_list' || first.kind === 'ordered_list') {
       const tag = first.kind === 'bullet_list' ? 'ul' : 'ol'
       return createElement(tag, { key, style: { margin: '0 0 0.6em', paddingInlineStart: '2em' } },
-        group.map((block, index) => <li key={`${block.start}:${index}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+        group.map((block, index) => <li key={`${block.start}:${index}`} data-read-aloud-active={isActive(block)} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
           {index === 0 ? before : searchGap(group[index - 1].end, block.start)}{children(block)}
         </li>))
     }
     if (first.kind === 'heading') {
       const level = Math.max(1, Math.min(6, first.level ?? 1))
-      return createElement(`h${level}`, { key, style: { ...style, lineHeight: 1.4 } }, before, children(first))
+      return createElement(`h${level}`, { key, 'data-read-aloud-active': active, style: { ...style, lineHeight: 1.4 } }, before, children(first))
     }
-    if (first.kind === 'blockquote') return <blockquote key={key} style={{ ...style, borderInlineStart: `3px solid ${token.colorBorder}`, paddingInlineStart: '1em', marginInline: 0 }}>{before}{children(first)}</blockquote>
-    return <p key={key} style={{ ...style, textIndent: '2em' }}>{before}{children(first)}</p>
+    if (first.kind === 'blockquote') return <blockquote key={key} data-read-aloud-active={active} style={{ ...style, borderInlineStart: `3px solid ${token.colorBorder}`, paddingInlineStart: '1em', marginInline: 0 }}>{before}{children(first)}</blockquote>
+    return <p key={key} data-read-aloud-active={active} style={{ ...style, textIndent: '2em' }}>{before}{children(first)}</p>
   })}{searchGap(blocks.length ? blocks[blocks.length - 1].end : 0, points.length)}</div>
 }

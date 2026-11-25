@@ -362,9 +362,9 @@
 
 ### 31. 朗读
 
-已进入规划（2026-11-23）。使用本机中文声音逐段朗读当前章节，支持暂停、继续、调速和段落高亮。缺少本机中文声音时提示安装。[需求与验收](.trellis/tasks/11-23-reader-read-aloud/prd.md) · [技术设计](.trellis/tasks/11-23-reader-read-aloud/design.md) · [实施计划](.trellis/tasks/11-23-reader-read-aloud/implement.md)
+阅读页已接入本机中文朗读、逐段高亮、角色选声与情绪朗读，可用已配置的文本模型分析本章、选择角色音色，再逐句纠正或试听。macOS Chrome 已验证多个本机角色声音和情绪参数，待人工确认听感。[需求与验收](.trellis/tasks/archive/2026-11/11-23-reader-read-aloud/prd.md) · [实施与验证记录](.trellis/tasks/archive/2026-11/11-23-reader-read-aloud/implement.md)
 
-- [ ] 在阅读页提供朗读，支持调节语速、暂停并高亮当前段落，用于听稿校对。
+- [x] 在阅读页提供朗读，支持调节语速、暂停并高亮当前段落，用于听稿校对。
 
 ### 32. 多语言界面、登录方式与本机 MCP 插件
 

@@ -1,5 +1,7 @@
 // 阅读器：目录、阅读进度（reader-ui）
-import { api, buildUrl } from './client'
+import { api, ApiError, buildUrl, request } from './client'
+import type { ReaderEmotion } from '../utils/readerDialogue'
+import type { ReaderVoice } from '../utils/readerVoices'
 import type { Chapter, ReaderTocItem, ReadingProgressUpdate } from './types'
 
 export interface ReaderRun { start: number; end: number; bold: boolean; italic: boolean }
@@ -9,9 +11,28 @@ export interface ReaderBlock {
 }
 export interface ReaderChapter { chapter: Chapter; blocks: ReaderBlock[] | null; content_hash: string }
 
+export interface ReaderAICastingRequest {
+  content_hash: string
+  cues: { start: number; end: number }[]
+  voices: ReaderVoice[]
+  ai_config_id: number | null
+}
+
+export interface ReaderAICastingResult {
+  content_hash: string
+  cues: { start: number; speaker: string | null; emotion: ReaderEmotion }[]
+  voices: { speaker: string; voice_id: string }[]
+}
+
+export function castingContentChanged(error: unknown) {
+  return error instanceof ApiError && error.status === 409 && error.body?.code === 'reader_casting_content_changed'
+}
+
 export const readerApi = {
   toc: (pid: number) => api.get<ReaderTocItem[]>(`/projects/${pid}/reader/toc`),
   chapter: (pid: number, cid: number) => api.get<ReaderChapter>(`/projects/${pid}/reader/chapters/${cid}`),
+  aiCasting: (pid: number, cid: number, body: ReaderAICastingRequest, signal: AbortSignal, isCurrent: () => boolean) =>
+    request<ReaderAICastingResult>(`/projects/${pid}/reader/chapters/${cid}/ai-casting`, { method: 'POST', body, signal, isCurrent }),
   saveProgress: (pid: number, body: ReadingProgressUpdate) => api.put<void>(`/projects/${pid}/reading-progress`, body),
 }
 
