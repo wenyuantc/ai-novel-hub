@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 69
+- **Total Sessions**: 70
 - **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~246 | Active |
+| `journal-2.md` | ~268 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 70 | 2026-11-25 | 完成协作批注与备份恢复验收 | `70b93a3` | `codex/collaboration-annotations` |
 | 69 | 2026-11-25 | 站内通知实施与验收 | `a24b807` | `codex/in-app-notifications` |
 | 68 | 2026-11-25 | 个人写作统计与码字目标 | `03bcb30` | `codex/writing-stats-goals` |
 | 67 | 2026-11-25 | 多进程父任务集成核对与归档 | `76b2889aa2a07247184658620bd064c5a6bc5299` | `codex/mp-peer-channel-stream` |

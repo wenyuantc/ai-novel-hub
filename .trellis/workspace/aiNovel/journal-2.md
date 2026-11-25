@@ -244,3 +244,25 @@ C6 九项验收完成，已在本地功能分支提交并归档，父计划进�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 70: 完成协作批注与备份恢复验收
+<!-- trellis-session: v=2 fp=edb87e54704b7f52 -->
+
+**Date**: 2026-11-25
+**Task**: 完成协作批注与备份恢复验收
+**Branch**: `codex/collaboration-annotations`
+
+### Summary
+
+TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v17 以及 SQLite 和 PostgreSQL 整库恢复通过。后端全量 7594 项通过，前端 1874 项通过，桌面与 375px 窄屏实测通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `70b93a3` | feat: 新增协作批注 |
+
+### Status
+
+[OK] **Completed**
