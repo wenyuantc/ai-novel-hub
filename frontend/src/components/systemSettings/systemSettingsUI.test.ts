@@ -12,7 +12,7 @@ import { publicConfigFromSettings, SYSTEM_SETTING_LABELS } from '../../utils/sys
 import AppLayout from '../AppLayout'
 import { SystemSettingsController } from './systemSettingsController'
 import type { useSystemSettings } from './useSystemSettings'
-import { boolItem, settings } from './systemSettingsTestFixtures'
+import { boolItem, drainStatus, settings } from './systemSettingsTestFixtures'
 import routerSource from '../../router.tsx?raw'
 import appSource from '../../App.tsx?raw'
 import pageSource from '../../pages/AdminSystemSettingsPage.tsx?raw'
@@ -36,14 +36,42 @@ function render(element: ReactElement) {
 afterEach(() => { view = initialView(); useAuthStore.setState({ user: null, status: 'anonymous' }) })
 
 describe('系统设置页面与安全投影', () => {
-  it('紧凑分组显示恰好六项、来源/默认/恢复及即时生效边界', () => {
+  it('紧凑分组显示七项、来源/默认/恢复及即时生效边界', () => {
     useAuthStore.setState({ user: admin, status: 'authenticated' })
     const html = render(createElement(AdminSystemSettingsPage))
     for (const label of Object.values(SYSTEM_SETTING_LABELS)) expect(html).toContain(label)
     for (const text of ['系统设置', '注册与外部能力', '任务与自动分析', '开放 API', '部署值', '代码默认', '恢复部署值', '保存设置', '每 30 秒同步', '无需重启', '不会取消运行中的任务', '不清空本分钟计数', '不能撤回已有外部副作用']) expect(html).toContain(text)
-    expect(html.match(/class="system-setting-row"/g)).toHaveLength(6)
+    expect(html.match(/class="system-setting-row"/g)).toHaveLength(7)
+    expect(html).toMatch(/<button(?=[^>]*role="switch")(?=[^>]*aria-labelledby="setting-label-task_admission_closed")(?=[^>]*aria-checked="false")[^>]*>/)
     expect(html).not.toContain('<table')
     expect(html).not.toMatch(/(?:min-)?width:\s*\d{3,}px/)
+  })
+  it('收尾或备份尚有工作时继续显示排空进度，完整取样归零才报告已排空', () => {
+    useAuthStore.setState({ user: admin, status: 'authenticated' })
+    const worker = { hostname: 'worker-a', pid: 42, started_at: '2026-11-24T03:00:00Z', heartbeat_at: '2026-11-24T04:00:00Z' }
+    view.state.drain = { data: drainStatus({ enabled: true, paused: 1, finalizing: 2, workers: [worker] }), loading: false, error: null, stale: false }
+    const working = render(createElement(AdminSystemSettingsPage))
+    for (const label of ['任务排空状态', '正在排空', '提前结束或取消', '存活进程', 'worker-a（PID 42）', '最近心跳']) expect(working).toContain(label)
+    expect(working).toContain('<dt>收尾中</dt><dd>2</dd>')
+    expect(working).toContain('href="/admin/tasks"')
+    expect(working).not.toContain('已排空')
+    view.state.drain.data = drainStatus({ enabled: true, active_backups: 1 })
+    expect(render(createElement(AdminSystemSettingsPage))).not.toContain('已排空')
+    view.state.drain.data = drainStatus({ enabled: true })
+    expect(render(createElement(AdminSystemSettingsPage))).toContain('已排空')
+    view.state.drain.stale = true
+    const stale = render(createElement(AdminSystemSettingsPage))
+    expect(stale).toContain('排空状态已过期')
+    expect(stale).toContain('最近一次成功取样')
+    expect(stale).not.toContain('已排空')
+  })
+  it('设置只读角色可以查看排空状态，无法修改开关或跳转无权限的任务监控', () => {
+    useAuthStore.setState({ user: { ...admin, is_super_admin: false, effective_permissions: ['settings.read'] }, status: 'authenticated' })
+    view.state.drain.data = drainStatus()
+    const html = render(createElement(AdminSystemSettingsPage))
+    expect(html).toContain('正在受理新任务')
+    expect(html).not.toContain('href="/admin/tasks"')
+    expect(html).toMatch(/<button(?=[^>]*aria-labelledby="setting-label-task_admission_closed")(?=[^>]*disabled="")[^>]*>/)
   })
   it('恢复加入待保存修改，不把null当立即关闭；当前有效来源仍保留', () => {
     const html = render(createElement(SystemSettingRow, { item: boolItem('registration_enabled', false, true), changes: { registration_enabled: null }, invalid: false, disabled: false, onBoolean: noop, onNumber: noop, onRestore: noop }))
@@ -87,12 +115,16 @@ describe('系统设置页面与安全投影', () => {
   it('系统设置审计显示覆盖与有效值/来源，其他动作忽略该局部摘要', () => {
     const summary = {
       changed_fields: [], changes: [], word_count_before: null, word_count_after: null, body_chars_before: null, body_chars_after: null, reference_count_before: null, reference_count_after: null, affected_count: null, affected_ids: [], ids_truncated: false, chapter_count: null, version_count: null, from_at: null, to_at: null, expected_count: null, deleted_count: null, high_water_id: null,
-      settings_changes: [{ key: 'registration_enabled', before_override: false, after_override: null, before_effective: false, after_effective: true, before_source: 'admin', after_source: 'deployment' }],
+      settings_changes: [
+        { key: 'registration_enabled', before_override: false, after_override: null, before_effective: false, after_effective: true, before_source: 'admin', after_source: 'deployment' },
+        { key: 'task_admission_closed', before_override: null, after_override: true, before_effective: false, after_effective: true, before_source: 'default', after_source: 'admin' },
+      ],
     } satisfies AuditSummary
     const rows = auditSummaryRows(summary, 'system_settings.update')
     expect(AUDIT_ACTION['system_settings.update']).toBe('修改系统设置')
     expect(AUDIT_TARGET.system_settings).toBe('系统设置')
     expect(rows).toContainEqual(expect.objectContaining({ label: '开放自主注册', value: expect.stringContaining('关闭（后台覆盖） → 开启（部署配置）') }))
+    expect(rows).toContainEqual(expect.objectContaining({ label: '停止受理新任务', value: expect.stringContaining('关闭（代码默认） → 开启（后台覆盖）') }))
     expect(rows).toContainEqual(expect.objectContaining({ value: expect.stringContaining('后台覆盖：关闭 → 沿用部署值') }))
     expect(auditSummaryRows(summary, 'user.update').some((row) => row.label === '开放自主注册')).toBe(false)
   })

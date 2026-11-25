@@ -118,6 +118,26 @@ async def app(tmp_path, fake_llm, settings_overrides):
         _drop_mapper_statement_caches()
 
 
+@pytest.fixture
+def paused_task_dispatch(app, monkeypatch):
+    """保持执行者租约和周期扫描，暂停调度器领取排队任务。"""
+    engine = app.state.task_engine
+    dispatch = engine._dispatch
+    paused = True
+
+    async def dispatch_if_resumed():
+        if not paused:
+            await dispatch()
+
+    def resume():
+        nonlocal paused
+        paused = False
+        engine.notify()
+
+    monkeypatch.setattr(engine, "_dispatch", dispatch_if_resumed)
+    return resume
+
+
 def _drop_mapper_statement_caches() -> None:
     """清空 ORM 映射器的写语句编译缓存：它是进程级的，键含方言对象。
 

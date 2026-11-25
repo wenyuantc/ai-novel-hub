@@ -1,4 +1,4 @@
-"""应用部署配置：环境变量 / .env 为基线，六项业务设置可由后台持久覆盖。
+"""应用部署配置：环境变量 / .env 为基线，业务设置白名单可由后台持久覆盖。
 
 关键密钥（JWT_SECRET、ENCRYPTION_KEY）缺失或非法时实例化即抛错，实现启动 fail-fast，
 避免 API Key 以明文或弱密钥落库。
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://ainovel:ainovel@localhost:5432/ainovel"
     jwt_secret: str = Field(min_length=16)
     encryption_key: str
-    # 以下六项业务设置由 SystemSettingsManager 在启动/管理保存后发布有效值；其余字段仍仅部署配置。
+    # 业务设置白名单由 SystemSettingsManager 在启动和管理保存后发布有效值。
     registration_enabled: bool = True
     cookie_secure: bool = False
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, gt=0)
@@ -50,11 +50,13 @@ class Settings(BaseSettings):
     # 后台任务运行时上限：全局/每用户，其余排队；降低不取消已运行任务。
     task_max_concurrency: int = Field(default=4, ge=1)
     task_max_per_user: int = Field(default=2, ge=1)
+    # 停止受理新任务，已排队与运行的任务照常完成。
+    task_admission_closed: bool = False
     # 实例级自动分析有效开关：关闭后不触发后续自动分析，手动/已排队分析不受影响。
     auto_analyze_enabled: bool = True
     # 实例级MCP有效开关：关闭后插件接口403，智能体禁止后续调用，已发调用允许结束。
     mcp_enabled: bool = True
-    # 整库备份的部署边界；S3/SMTP及计划保存在独立BackupSettings，不进入六项业务设置。
+    # 整库备份的部署边界。S3、SMTP 和计划使用独立的 BackupSettings。
     backup_dir: str = Field(default="./backups", min_length=1)
     backup_pg_dump_path: str = Field(default="pg_dump", min_length=1)
     backup_gpg_path: str = Field(default="gpg", min_length=1)

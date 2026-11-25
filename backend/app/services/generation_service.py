@@ -276,6 +276,7 @@ async def prepare_chapter_task_admission(
     model = await project_ai_config.preflight_project_model(
         ctx.sessionmaker, actor, project_id, "text", cipher=ctx.cipher,
         config_id=params.get("ai_config_id"), allow_private=ctx.settings.allow_private_ai_endpoints,
+        for_task_admission=True,
     )
     return await prepare_task_admission(ctx, actor, kind, params, model_preflight=model)
 

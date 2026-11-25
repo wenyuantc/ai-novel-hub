@@ -329,6 +329,7 @@ async def test_author_embedding_prepare_failure_with_changed_frozen_config_fails
         assert wizard_tests._no_pending(row)
 
 
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_author_wizard_resume_vector_query_rechecks_resume_source(app, client, fake_llm, monkeypatch):
     """作者续写的查询向量经带续写来源的 for_task 守卫发送：向量 provider 构造后来源被改，查询向量零发送。"""
     from app.models import KbChunk, KbDocument, RetrievalChunk
@@ -357,7 +358,6 @@ async def test_author_wizard_resume_vector_query_rechecks_resume_source(app, cli
         ))
         await db.commit()
     retrieval_service.invalidate(project["id"])
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"], "instruction": "天剑宗",
     })

@@ -371,6 +371,15 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     const updated = await taskApi.cancel(task)
     if (isProjectScopeCurrent(scope, 'canUseAgent')) track(updated)
   }, '已取消本轮对话')
+  const resume = (task: Task) => historySealed ? Promise.resolve(false) : run(async () => {
+    const scope = captureProjectScope(pid)
+    const updated = await taskApi.resume(task)
+    if (!isProjectScopeCurrent(scope, 'canUseAgent')) return
+    // 同一个任务身份会开始新一轮执行，先卸下待审核前的订阅。
+    following.current = null
+    detach()
+    track(updated)
+  }, '已继续本轮对话')
   const retry = (task: Task) => historySealed ? Promise.resolve(false) : run(async () => {
     const scope = captureProjectScope(pid)
     let updated: Task
@@ -394,6 +403,6 @@ export function useAgentConversation(pid: number, cid: number, onUpdated: () => 
     detail, error, busy, historySealed, actingKey, steps, stream, lastTask: shownTask, refresh: refreshSafe,
     collaborator, writable, lost, canCreate: access.canUseAgent, readOnlyNotice: !detail ? null : lost ? AGENT_ACCESS_RECHECK_TEXT : agentReadOnlyNotice(writable, access.canUseAgent),
     retryAllowed: retryState.retry, retryHint: retryState.hint,
-    send, change, turn, cancel, retry, update,
+    send, change, turn, cancel, resume, retry, update,
   }
 }

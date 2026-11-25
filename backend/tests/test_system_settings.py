@@ -1,4 +1,4 @@
-"""六项白名单、来源/恢复、真实注册、权限、并发编辑及安全审计。"""
+"""系统设置白名单、来源/恢复、真实注册、权限、并发编辑及安全审计。"""
 
 import asyncio
 import json
@@ -41,12 +41,49 @@ async def test_safe_read_is_pure_and_sources_are_accurate(app, system_admin):
     assert data["auto_analyze_enabled"]["value"] is False
     assert data["auto_analyze_enabled"]["default_value"] is True
     assert data["mcp_enabled"]["source"] == "default"
+    assert data["task_admission_closed"] == {
+        "key": "task_admission_closed",
+        "value": False,
+        "deployment_value": False,
+        "default_value": False,
+        "source": "default",
+        "deployment_source": "default",
+        "overridden": False,
+        "requires_restart": False,
+    }
     assert all(not row["overridden"] and not row["requires_restart"] for row in body["items"])
     async with app.state.sessionmaker() as db:
         assert await db.scalar(select(func.count(SystemSettings.id))) == 0
         assert await db.scalar(select(func.count(AdminAuditLog.id))) == 0
     for secret in (app.state.settings.jwt_secret, app.state.settings.encryption_key, "database_url", "admin_password"):
         assert secret not in response.text
+
+
+async def test_drain_toggle_participates_in_all_settings_audit_and_can_reset(app, system_admin, make_client):
+    body = await save_settings(
+        system_admin, registration_enabled=False, task_max_concurrency=3, task_max_per_user=1,
+        auto_analyze_enabled=True, mcp_enabled=False, open_api_rate_limit_per_minute=45,
+        task_admission_closed=True,
+    )
+    assert items(body)["task_admission_closed"]["value"] is True
+    assert app.state.settings.task_admission_closed is True
+    public = await make_client().get("/api/v1/auth/config")
+    assert public.json() == {"registration_enabled": False, "mcp_enabled": False}
+
+    body = await save_settings(system_admin, task_admission_closed=None)
+    assert items(body)["task_admission_closed"]["value"] is False
+    assert app.state.settings.task_admission_closed is False
+    async with app.state.sessionmaker() as db:
+        log = list(await db.scalars(select(AdminAuditLog).order_by(AdminAuditLog.id)))
+        assert len(log) == 2
+        entered = AuditSummary.model_validate(log[0].summary)
+        assert {change.key for change in entered.settings_changes} == set(SYSTEM_SETTING_KEYS)
+        changed = next(change for change in entered.settings_changes if change.key == "task_admission_closed")
+        assert changed.before_effective is False and changed.after_effective is True
+        assert changed.before_source == "default" and changed.after_source == "admin"
+        restored = AuditSummary.model_validate(log[1].summary).settings_changes
+        assert len(restored) == 1 and restored[0].key == "task_admission_closed"
+        assert restored[0].before_override is True and restored[0].after_override is None
 
 
 async def test_false_partial_and_reset_immediately_control_real_registration(app, system_admin, make_client):
@@ -90,6 +127,7 @@ async def test_false_partial_and_reset_immediately_control_real_registration(app
     {"open_api_rate_limit_per_minute": MAX_OPEN_API_RATE_LIMIT_PER_MINUTE + 1},
     {"open_api_rate_limit_per_minute": 10**30},
     {"registration_enabled": 0}, {"mcp_enabled": "false"}, {"auto_analyze_enabled": "true"},
+    {"task_admission_closed": 1}, {"task_admission_closed": "false"},
     {"database_url": "credential-injection"}, {"jwt_secret": "sensitive-input"}, {},
 ])
 async def test_invalid_batch_is_rejected_without_any_write(app, system_admin, bad):
@@ -321,7 +359,7 @@ def test_setting_audit_summary_is_typed_bounded_and_action_scoped():
         with pytest.raises(ValidationError):
             AuditSummary(settings_changes=[invalid])
     with pytest.raises(ValidationError):
-        AuditSummary(settings_changes=[change] * 7)
+        AuditSummary(settings_changes=[change] * (len(SYSTEM_SETTING_KEYS) + 1))
     assert "secret" not in json.dumps(AuditSummary(settings_changes=[change]).model_dump())
     operation = AuditOperation(None, 1, "user.update", "user", 1)
     operation.summary = AuditSummary(settings_changes=[change])

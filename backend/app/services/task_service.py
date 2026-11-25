@@ -38,6 +38,7 @@ from app.services import project_access, project_lifecycle, task_statistics_serv
 from app.services.collaboration_task_access import GRANT_KEY, task_grant_identity, task_visible_to_actor
 from app.services.project_service import get_owned_project
 from app.services.task_engine import cleanup_work
+from app.services.task_engine.drain import require_task_admission_open
 from app.services.task_engine.owner_cancellation import unproven_execution
 from app.services.task_engine.registry import get_handler
 
@@ -516,7 +517,7 @@ async def create_task(
 ) -> TaskOut:
     """同步校验并抢占资源，与任务插入同一事务提交；同资源已有活动任务 → 409。
 
-    caller_transaction=True 仅供已持根事务的智能体提案确认：必须携带锁外准备的受理证明，
+    caller_transaction=True 供已持根事务的智能体提案确认和一键分析：携带锁外准备的受理证明，
     在根事务中消费并重选模型后，于本次保存点内校验、插入并绑定占用；不提交调用方事务，
     失败只回滚该保存点。模型重选失败已回滚根事务时直接抛出，由调用方整体失败关闭。
     """
@@ -541,6 +542,7 @@ async def create_task(
                 or (token_key is not None and (type(alias) is not int or alias != old))):
             raise ConflictError("原认证身份无法验证", extra={"code": "task_actor_unavailable"})
     await authz.require_authenticated(db, actor, write=True)
+    await require_task_admission_open(db)
     handler = get_handler(kind)
     preflight = accepted_model = None
     admission_aware = getattr(handler, "admission_preflight_aware", False) is True
@@ -751,6 +753,7 @@ async def resume_task(
         raise ConflictError("批量执行结果尚未核对，不能继续")
     if _has_wizard_receipt(task):
         raise ConflictError("向导执行结果尚未核对，不能继续")
+    await require_task_admission_open(db)
     from app.services.rich_document_review import pending_for_task
 
     if await pending_for_task(db, task) is not None:

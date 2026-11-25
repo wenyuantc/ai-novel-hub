@@ -690,6 +690,7 @@ async def create_wizard_task(db: AsyncSession, engine, user_id: int, kind: str, 
     model = await project_ai_config.preflight_project_model(
         ctx.sessionmaker, actor, project_id, "text", cipher=ctx.cipher,
         config_id=config_id, allow_private=ctx.settings.allow_private_ai_endpoints,
+        for_task_admission=True,
     )
     proof = await prepare_task_admission(ctx, actor, kind, params, model_preflight=model)
     return await task_service.create_task(db, engine, user_id, kind, params, admission=proof)

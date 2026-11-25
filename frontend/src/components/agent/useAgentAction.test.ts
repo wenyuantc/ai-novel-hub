@@ -66,6 +66,15 @@ describe('智能体写操作：受理即视为已发送（E4i-h 问题 1）', ()
     expect(calls).toMatchObject({ rejectRefresh: 1, reread: 0, fail: [denied] })
   })
 
+  it('排空拒绝保留中文说明和输入，关闭后由用户重新提交', async () => {
+    const denied = new ApiError(503, '系统正在维护，暂不受理新任务，请稍后再试', { code: 'task_admission_closed' })
+    const operation = vi.fn(async () => { throw denied })
+    const { value, calls } = deps({ operation })
+    expect(await runAgentAction(value)).toEqual({ accepted: false, ok: false })
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(calls).toMatchObject({ rejectRefresh: 0, reread: 0, fail: [denied] })
+  })
+
   it('服务端撤权拒绝后按事实重读被取代：仍把原 409 permission_denied 交给失败处理（触发撤权恢复），不被静默吞掉', async () => {
     const denied = new ApiError(409, '权限已变化', { detail: '权限已变化', code: 'permission_denied' })
     const { value, calls } = deps({

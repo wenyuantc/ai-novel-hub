@@ -54,8 +54,8 @@ def _valid_parameters(key: str, seconds: float) -> tuple[str, str]:
     return key, f"-{seconds:g} seconds"
 
 
-_VALID = ("worker_key = ? AND stopped_at IS NULL AND fenced_at IS NULL "
-          "AND julianday(heartbeat_at) >= julianday('now', ?)")
+_LIVE = "stopped_at IS NULL AND fenced_at IS NULL AND julianday(heartbeat_at) >= julianday('now', ?)"
+_VALID = f"worker_key = ? AND {_LIVE}"
 
 
 async def live(pair: SQLiteLeasePair, key: str, seconds: float) -> bool:
@@ -64,6 +64,21 @@ async def live(pair: SQLiteLeasePair, key: str, seconds: float) -> bool:
             is not None
 
     return await asyncio.to_thread(_transaction, pair, False, check)
+
+
+async def live_heartbeats(pair: SQLiteLeasePair, keys: list[str], seconds: float) -> dict[str, str]:
+    def lookup(db: sqlite3.Connection) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for offset in range(0, len(keys), 500):
+            batch = keys[offset:offset + 500]
+            placeholders = ", ".join("?" for _ in batch)
+            result.update(db.execute(
+                f"SELECT worker_key, heartbeat_at FROM worker_leases WHERE worker_key IN ({placeholders}) AND {_LIVE}",
+                [*batch, f"-{seconds:g} seconds"],
+            ))
+        return result
+
+    return await asyncio.to_thread(_transaction, pair, False, lookup)
 
 
 async def heartbeat(pair: SQLiteLeasePair, key: str, seconds: float) -> bool:

@@ -86,6 +86,7 @@ from app.services.project_service import get_owned_project, project_info
 from app.services.setting_ai_context import build_scope
 from app.services.setting_field_formatting import format_entry_fields
 from app.services.system_settings_snapshot import settings_for_consumer
+from app.services.task_engine.drain import require_task_admission_open
 from app.services.task_engine.execution_identity import TaskExecutionIdentity, require_live_worker
 
 if TYPE_CHECKING:
@@ -745,7 +746,7 @@ async def _preflight_analysis_model(
         await require_project(read, actor.id, project_id, "ai.use")
     return await project_ai_config.preflight_project_model(
         ctx.sessionmaker, actor, project_id, "text", cipher=ctx.cipher, config_id=ai_config_id,
-        allow_private=ctx.settings.allow_private_ai_endpoints,
+        allow_private=ctx.settings.allow_private_ai_endpoints, for_task_admission=True,
     )
 
 
@@ -755,9 +756,11 @@ async def _lock_analysis_admission(
     """锁序与中央受理一致：认证/授权门禁（runtime → gate → User）→ 发送写门禁 → 作品；锁后按原 grant 重验。"""
     await authorization_service.require_authenticated(db, actor, write=True)
     with db.no_autoflush:
-        return await require_project(
+        project = await require_project(
             db, actor.id, project_id, "ai.use", for_update=True, visibility_write=True, grant_identity=grant,
         )
+        await require_task_admission_open(db)
+        return project
 
 
 async def request_analyze(
@@ -854,11 +857,23 @@ async def analyze_pending(
     with db.no_autoflush:
         targets = await pending_chapter_ids(db, project_id, actor_id=actor.id, grant_identity=grant)
     task_ids: list[int] = []
-    for cid in targets:
-        if cid not in admissions:
-            continue
-        params, admission = admissions[cid]
-        task_ids.append((await task_service.create_task(db, engine, user_id, KIND, params, admission=admission)).id)
+    try:
+        # 一个请求共用同一授权门禁和根事务，排空切换只能发生在整批受理之前或之后。
+        for cid in targets:
+            if cid not in admissions:
+                continue
+            params, admission = admissions[cid]
+            task = await task_service.create_task(
+                db, engine, user_id, KIND, params, admission=admission, caller_transaction=True,
+            )
+            task_ids.append(task.id)
+        if task_ids:
+            await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+    if task_ids:
+        engine.notify_queue_changed()
     return AnalyzePendingResult(queued=len(task_ids), task_ids=task_ids)
 
 
@@ -1028,6 +1043,7 @@ async def enqueue_auto_in_transaction(
             if locked.id != project.id or locked.user_id != review_source.owner_id:
                 raise AnalysisExecutionChanged()
             project = locked
+            await require_task_admission_open(db)
             model, selection = analysis_bindings(original_input, actor_id=actor.id, project_id=project.id)
             if (model.project_owner_id != project.user_id or model.grant_identity != grant
                     or selection.grant_identity != grant):
@@ -1051,6 +1067,7 @@ async def enqueue_auto_in_transaction(
             )
             if project.user_id != actor.id:
                 raise AnalysisExecutionChanged()
+            await require_task_admission_open(db)
             try:
                 model = await project_ai_config.resolve_project_model(
                     db, actor.id, project.id, "text", cipher=cipher, allow_private=allow_private, for_update=True,

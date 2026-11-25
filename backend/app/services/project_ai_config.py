@@ -32,6 +32,7 @@ from app.schemas.ai_config import ModelType, ProviderName, check_embedding_provi
 from app.services import ai_dispatch, project_access
 from app.services.ai_config_service import MODEL_TYPE_LABELS, lock_config_owner
 from app.services.authorization_service import AuthenticatedActor, actor_snapshot
+from app.services.task_engine.drain import require_task_admission_open
 
 GrantIdentity = tuple[str, int]
 ModelSource = Literal["actor", "owner"]
@@ -470,6 +471,7 @@ def _bind(
 async def _read_project_model_preflight(
     db: AsyncSession, actor: AuthenticatedActor, project_id: int, model_type: TextImageType, *,
     cipher: SecretCipher, config_id: int | None, allow_private: bool,
+    for_task_admission: bool = False,
 ) -> ProjectModelPreflight:
     """一条只读 SQL 固定 actor、授权与两方候选，避免混合不同提交快照。"""
     personal, owner = aliased(AIConfig), aliased(AIConfig)
@@ -525,6 +527,8 @@ async def _read_project_model_preflight(
         raise ConflictError("作品正在删除，请稍后重试", extra={"code": "project_deleting"})
     if not is_owner and row["member_role"] != "editor":
         raise ForbiddenError("当前作品没有执行该操作的权限", extra={"code": "project_readonly"})
+    if for_task_admission:
+        await require_task_admission_open(db)
     grant = None if is_owner else (row["invitation_id"], row["invitation_revision"])
     source: ModelSource = "actor"
     prefix = "personal"
@@ -562,9 +566,9 @@ async def preview_project_text_model(
 async def preflight_project_model(
     sessionmaker: async_sessionmaker[AsyncSession], actor: AuthenticatedActor, project_id: int,
     model_type: TextImageType, *, cipher: SecretCipher, config_id: int | None = None,
-    allow_private: bool = False,
+    allow_private: bool = False, for_task_admission: bool = False,
 ) -> ProjectModelPreflight:
-    """自管理短只读 session；返回前已释放，调用方此后才可做 DNS/provider 预检。"""
+    """短只读模型预检；后台受理在身份及作品权限核验后读取维护开关。"""
     if (type(actor) is not AuthenticatedActor or not _positive_db_int(actor.id)
             or type(actor.token_version) is not int or not 0 <= actor.token_version <= 2**31 - 1):
         raise UnauthorizedError("未登录或登录已过期")
@@ -583,6 +587,7 @@ async def preflight_project_model(
                 raise ConflictError("模型预检不可用，请稍后重试", extra={"code": "collaboration_busy"})
             result = await _read_project_model_preflight(
                 db, actor, project_id, model_type, cipher=cipher, config_id=config_id, allow_private=allow_private,
+                for_task_admission=for_task_admission,
             )
             current_origin = _session_engine_origin(db)
             if current_origin is None or current_origin[0] is not origin[0] or current_origin[1] is not origin[1]:
@@ -598,7 +603,7 @@ async def preflight_project_model(
 
 async def preflight_original_project_model(
     sessionmaker: async_sessionmaker[AsyncSession], actor: AuthenticatedActor, retry_source: object, *,
-    cipher: SecretCipher, allow_private: bool = False,
+    cipher: SecretCipher, allow_private: bool = False, for_task_admission: bool = False,
 ) -> ProjectModelPreflight:
     """原任务重试的短读预检；只能沿用原配置，不按当前默认重新选择。"""
     from app.services.collaboration_task_access import GRANT_KEY, task_grant_identity
@@ -687,8 +692,11 @@ async def preflight_original_project_model(
                 project_owner_id=row["project_owner_id"],
             )
             if (binding is None or binding.model_type not in ("text", "image") or binding.grant_identity != grant
-                    or (binding.source == "owner" and row["allow_owner_ai"] is not True)
-                    or row["config_id"] is None):
+                    or (binding.source == "owner" and row["allow_owner_ai"] is not True)):
+                raise _invalid_binding()
+            if for_task_admission:
+                await require_task_admission_open(db)
+            if row["config_id"] is None:
                 raise _invalid_binding()
             snapshot = ProjectModelConfigSnapshot(**{name: row[f"config_{name}"] for name in columns})
             project = SimpleNamespace(id=row["project_id"], user_id=row["project_owner_id"])

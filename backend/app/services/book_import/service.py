@@ -32,9 +32,11 @@ from app.schemas.book_import import (
     WarningCounts,
 )
 from app.schemas.task import TaskOut
+from app.services import authorization_service as authz
 from app.services import kb_parser, task_service, version_service
 from app.services.book_import import reverse, splitter
 from app.services.chapter_service import count_words
+from app.services.task_engine.drain import require_task_admission_open
 
 if TYPE_CHECKING:
     from app.services.task_engine.engine import TaskEngine
@@ -302,6 +304,7 @@ async def start(db: AsyncSession, engine: "TaskEngine", user_id: int, import_id:
     # 拆书任务互斥的快速检查（建项目之前）；validate_and_claim 里还会再查一次
     if await reverse.open_import(db, user_id) is not None:
         raise ConflictError(reverse.OPEN_CONFLICT)
+    await require_task_admission_open(db)
     selected = record.chapters[a - 1 : b]
 
     def bodies() -> list[tuple[str, int]]:
@@ -313,10 +316,13 @@ async def start(db: AsyncSession, engine: "TaskEngine", user_id: int, import_id:
 
     # 3000 章 / 500 万字的正文拼接与字数统计放到线程里
     contents = await anyio.to_thread.run_sync(bodies)
+    # 开关与作品额度都在入队事务内复核，先取得授权门禁再锁 User 与导入记录。
+    await authz.gate(db)
     await check_project_creation(db, user_id)
     record = await get_owned_import(db, user_id, import_id, lock=True)
     if record.revision != req.revision:
         raise _stale()
+    await require_task_admission_open(db)
     try:
         project = Project(
             user_id=user_id,

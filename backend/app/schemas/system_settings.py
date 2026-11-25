@@ -3,9 +3,19 @@
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
-BoolSettingKey = Literal["registration_enabled", "auto_analyze_enabled", "mcp_enabled"]
+BoolSettingKey = Literal["registration_enabled", "auto_analyze_enabled", "mcp_enabled", "task_admission_closed"]
 IntSettingKey = Literal["task_max_concurrency", "task_max_per_user", "open_api_rate_limit_per_minute"]
 SystemSettingKey = BoolSettingKey | IntSettingKey
 SystemSettingSource = Literal["admin", "deployment", "default"]
@@ -16,7 +26,7 @@ MAX_OPEN_API_RATE_LIMIT_PER_MINUTE = 2_147_483_647
 RateLimitSettingInt = Annotated[StrictInt, Field(ge=1, le=MAX_OPEN_API_RATE_LIMIT_PER_MINUTE)]
 SYSTEM_SETTING_KEYS: tuple[SystemSettingKey, ...] = (
     "registration_enabled", "task_max_concurrency", "task_max_per_user", "auto_analyze_enabled",
-    "mcp_enabled", "open_api_rate_limit_per_minute",
+    "mcp_enabled", "open_api_rate_limit_per_minute", "task_admission_closed",
 )
 
 
@@ -29,6 +39,7 @@ class SystemSettingsChanges(BaseModel):
     auto_analyze_enabled: StrictBool | None = None
     mcp_enabled: StrictBool | None = None
     open_api_rate_limit_per_minute: RateLimitSettingInt | None = None
+    task_admission_closed: StrictBool | None = None
 
 
 class SystemSettingsUpdate(BaseModel):
@@ -76,6 +87,28 @@ class SystemSettingsOut(BaseModel):
         if value is None:
             return None
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+class TaskDrainWorker(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    hostname: str
+    pid: int
+    started_at: AwareDatetime
+    heartbeat_at: AwareDatetime
+
+
+class TaskDrainStatus(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    enabled: bool
+    sampled_at: AwareDatetime
+    queued: NonNegativeInt
+    running: NonNegativeInt
+    paused: NonNegativeInt
+    finalizing: NonNegativeInt
+    active_backups: NonNegativeInt
+    workers: list[TaskDrainWorker]
 
 
 class SystemSettingAuditChange(BaseModel):

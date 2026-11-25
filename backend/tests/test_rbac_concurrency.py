@@ -155,14 +155,25 @@ async def test_mixed_creation_paths_compete_for_last_slot_under_owner_lock(
         before_styles = await db.scalar(select(func.count(WritingStyle.id)))
     reached, release, attempted = asyncio.Event(), asyncio.Event(), asyncio.Queue()
     original = quota_service.check_project_creation
+    original_gate = authz.gate
     original_lock = authz.lock_users
     contenders = set()
 
-    async def watch_owner_lock(db, *ids, **kwargs):
+    def record_attempt():
         name = asyncio.current_task().get_name()
-        if name.startswith("competing-project-") and user["id"] in ids and name not in contenders:
+        if name.startswith("competing-project-") and name not in contenders:
             contenders.add(name)
             attempted.put_nowait(name)
+
+    async def watch_gate(db):
+        # 拆书受理先取授权写门禁。SQLite 在竞争 User 写锁时会先被这条 DML 阻塞。
+        if asyncio.current_task().get_name() == "competing-project-book":
+            record_attempt()
+        return await original_gate(db)
+
+    async def watch_owner_lock(db, *ids, **kwargs):
+        if user["id"] in ids:
+            record_attempt()
         return await original_lock(db, *ids, **kwargs)
 
     async def check(db, user_id):
@@ -171,6 +182,7 @@ async def test_mixed_creation_paths_compete_for_last_slot_under_owner_lock(
             reached.set()
             await release.wait()
 
+    monkeypatch.setattr(authz, "gate", watch_gate)
     monkeypatch.setattr(authz, "lock_users", watch_owner_lock)
     monkeypatch.setattr(quota_service, "check_project_creation", check)
     first = asyncio.create_task(client.post("/api/v1/projects", json={"title": "先到"}), name="first-project")

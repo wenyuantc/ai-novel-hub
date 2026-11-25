@@ -17,7 +17,7 @@ export interface AuthConfig {
   mcp_enabled?: boolean
 }
 
-export type SystemSettingBoolKey = 'registration_enabled' | 'auto_analyze_enabled' | 'mcp_enabled'
+export type SystemSettingBoolKey = 'registration_enabled' | 'auto_analyze_enabled' | 'mcp_enabled' | 'task_admission_closed'
 export type SystemSettingIntKey = 'task_max_concurrency' | 'task_max_per_user' | 'open_api_rate_limit_per_minute'
 export type SystemSettingKey = SystemSettingBoolKey | SystemSettingIntKey
 export type SystemSettingSource = 'admin' | 'deployment' | 'default'
@@ -58,12 +58,29 @@ export interface SystemSettingChanges {
   task_max_per_user?: number | null
   auto_analyze_enabled?: boolean | null
   mcp_enabled?: boolean | null
+  task_admission_closed?: boolean | null
   open_api_rate_limit_per_minute?: number | null
 }
 
 export interface SystemSettingsUpdate {
   revision: number
   changes: SystemSettingChanges
+}
+
+export interface TaskDrainStatus {
+  enabled: boolean
+  sampled_at: string
+  queued: number
+  running: number
+  paused: number
+  finalizing: number
+  active_backups: number
+  workers: Array<{
+    hostname: string
+    pid: number
+    started_at: string
+    heartbeat_at: string
+  }>
 }
 
 export interface SystemSettingAuditChange {

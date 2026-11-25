@@ -33,7 +33,9 @@ from app.services import analysis_service, project_ai_config
 from app.services.ai_dispatch import VisibilityPolicyError
 from app.services.authorization_service import AuthenticatedActor
 from app.services.collaboration_task_access import task_grant_identity
+from app.services.system_settings_snapshot import SettingsUnavailable
 from app.services.task_engine.admission import TaskAdmission
+from app.services.task_engine.drain import TaskAdmissionClosed, require_task_admission_open
 from app.services.task_engine.execution_identity import _utc
 from app.services.task_engine.registry import TaskContext, get_handler
 
@@ -452,6 +454,7 @@ async def prepare_confirmed_admission(
         # 参数非法时锁内的最新预览会失败并记录；这里不受理。
         return None
     params_json = _canonical(params).decode()
+    await require_task_admission_open(db)
     try:
         if kind in _DERIVED_CHAPTER_KINDS:
             admission = await generation_service.prepare_chapter_task_admission(db, deps, user_id, kind, params)
@@ -460,9 +463,10 @@ async def prepare_confirmed_admission(
             model = await project_ai_config.preflight_project_model(
                 deps.sessionmaker, actor, project_id, "text", cipher=deps.cipher,
                 config_id=params.get("ai_config_id"), allow_private=deps.settings.allow_private_ai_endpoints,
+                for_task_admission=True,
             )
             admission = await prepare_task_admission(deps, actor, kind, params, model_preflight=model)
-    except VisibilityPolicyError:
+    except (VisibilityPolicyError, TaskAdmissionClosed, SettingsUnavailable):
         raise
     except AppError as exc:
         return PreparedTaskAdmission(change.change_key, kind, params_json, None, exc.detail)

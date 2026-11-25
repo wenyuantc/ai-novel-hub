@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import select
 
 from app.main import create_app
@@ -31,7 +32,9 @@ def _backup(source, snapshot):
 async def test_new_copy_rotates_lease_authority_and_recovers_saved_task(tmp_path, corrupt_side):
     live = tmp_path / "live.db"
     snapshot = tmp_path / "snapshot.sqlite3"
-    await asyncio.to_thread(command.upgrade, _config(live), "head")
+    config = _config(live)
+    head = ScriptDirectory.from_config(config).get_current_head()
+    await asyncio.to_thread(command.upgrade, config, "head")
     settings = make_settings(tmp_path, database_url=f"sqlite+aiosqlite:///{live}")
     original = create_app(settings, start_task_engine=False)
     old_engine = original.state.task_engine
@@ -106,7 +109,7 @@ async def test_new_copy_rotates_lease_authority_and_recovers_saved_task(tmp_path
         with pytest.raises(SQLiteLeasePairError):
             await asyncio.to_thread(restore_sqlite_snapshot, snapshot, live, previous_lock=previous_lock)
         assert not live.exists()
-    assert await asyncio.to_thread(restore_sqlite_snapshot, snapshot, live, previous_lock=previous_lock) == "0069"
+    assert await asyncio.to_thread(restore_sqlite_snapshot, snapshot, live, previous_lock=previous_lock) == head
     assert hashlib.sha256(snapshot.read_bytes()).digest() == digest
     restored = create_app(settings, start_task_engine=False)
     new_engine = restored.state.task_engine
@@ -156,10 +159,12 @@ async def test_pre_lease_snapshot_restores_before_upgrade(tmp_path, app):
     await app.state.task_engine.request_worker.stop()
     assert await asyncio.to_thread(restore_sqlite_snapshot, snapshot, restored, previous_lock=previous_lock) == "0065"
     assert not (tmp_path / "restored.db.leases.sqlite3").exists()
-    await asyncio.to_thread(command.upgrade, _config(restored), "head")
+    config = _config(restored)
+    head = ScriptDirectory.from_config(config).get_current_head()
+    await asyncio.to_thread(command.upgrade, config, "head")
     with closing(sqlite3.connect(restored)) as db:
         assert db.execute("SELECT username FROM users").fetchone() == ("legacy-user",)
-        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == ("0069",)
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (head,)
         assert db.execute("SELECT count(*) FROM task_workers").fetchone() == (0,)
 
 

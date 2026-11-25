@@ -65,6 +65,7 @@ async def _create_outline_task(db, engine, user_id: int, kind: str, params: dict
     model = await project_ai_config.preflight_project_model(
         ctx.sessionmaker, actor, params["project_id"], "text", cipher=ctx.cipher,
         config_id=params.get("ai_config_id"), allow_private=ctx.settings.allow_private_ai_endpoints,
+        for_task_admission=True,
     )
     proof = await prepare_task_admission(ctx, actor, kind, params, model_preflight=model)
     return await task_service.create_task(db, engine, user_id, kind, params, admission=proof)

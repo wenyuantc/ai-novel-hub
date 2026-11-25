@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
@@ -27,7 +28,9 @@ migration_db = test_task_worker_migration.migration_db
 
 def test_0068_cold_copy_releases_only_confirmed_execution_work(tmp_path):
     source, snapshot, restored = (tmp_path / name for name in ("live.db", "snapshot.db", "restored.db"))
-    command.upgrade(_config(source), "head")
+    config = _config(source)
+    head = ScriptDirectory.from_config(config).get_current_head()
+    command.upgrade(config, "head")
     credentials = {"username": "cold-owner", "password": "local-test-credential"}
     old_app = create_app(make_settings(tmp_path, database_url=f"sqlite+aiosqlite:///{source}"), start_task_engine=False)
     with TestClient(old_app) as client:
@@ -52,7 +55,7 @@ def test_0068_cold_copy_releases_only_confirmed_execution_work(tmp_path):
     with closing(sqlite3.connect(snapshot)) as db:
         assert db.execute("SELECT count(*) FROM task_work_records").fetchone() == (4,)
 
-    assert restore_sqlite_snapshot(snapshot, restored) == "0069"
+    assert restore_sqlite_snapshot(snapshot, restored) == head
     with closing(sqlite3.connect(restored)) as db:
         assert db.execute("SELECT fenced_at FROM task_workers WHERE worker_key=?", (owner,)).fetchone()[0]
         assert set(db.execute("SELECT work_key,kind,worker_key,state FROM task_work_records")) == set(rows[1:])

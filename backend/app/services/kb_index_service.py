@@ -63,6 +63,8 @@ from app.services import authorization_service as authz
 from app.services.collaboration_task_access import GRANT_KEY, GrantIdentity, bind_task_grant, task_grant_identity
 from app.services.project_service import get_owned_project
 from app.services.retrieval_service import ChunkInput, Embedder
+from app.services.system_settings_snapshot import effective_settings
+from app.services.task_engine.drain import TaskAdmissionClosed
 from app.services.task_engine.execution_identity import require_live_worker
 
 logger = logging.getLogger(__name__)
@@ -840,7 +842,7 @@ async def enqueue_collaborator_memory(
                 "project_id": project_id, "mode": "memory", "memory_ids": list(memory_ids),
                 "expected_grant": [grant[0], grant[1]],
             })
-        except MemoryIndexCurrent:
+        except (MemoryIndexCurrent, TaskAdmissionClosed):
             return None
         return out.id
 
@@ -1156,6 +1158,8 @@ async def enqueue_memory(
             )
             if project.user_id != actor_id:
                 raise NotFoundError("项目不存在")
+            if (await effective_settings(db)).task_admission_closed:
+                return None
         task_id = await _enqueue_memory_locked(
             db, actor_id=actor_id, project_id=project_id, actor_token_version=authenticated_actor.token_version,
         )

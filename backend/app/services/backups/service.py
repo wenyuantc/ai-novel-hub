@@ -33,6 +33,7 @@ from app.schemas.backup import (
 )
 from app.services import authorization_service as authz
 from app.services.audit_writer import AuditOperation, AuditOperationError
+from app.services.system_settings_snapshot import SettingsUnavailable, effective_settings
 
 logger = logging.getLogger(__name__)
 BEIJING = ZoneInfo("Asia/Shanghai")
@@ -405,6 +406,15 @@ class BackupManager:
                         due = snapshot.next_scheduled_at
                         if not snapshot.configuration.schedule_enabled or due is None or due > now:
                             return None
+                        # 与维护开关保存共用写门禁，跳过受理时保留原计划游标。
+                        await authz.gate(db)
+                        try:
+                            settings = await effective_settings(db)
+                        except SettingsUnavailable:
+                            # 配置暂不可核实时只跳过新计划，运行器仍能执行已经排队的备份。
+                            return None
+                        if settings.task_admission_closed:
+                            return None
                         local = now.astimezone(BEIJING)
                         hour, minute = map(int, snapshot.configuration.schedule_time.split(":"))
                         slot = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -412,7 +422,7 @@ class BackupManager:
                             slot -= timedelta(days=1)
                         scheduled_date = slot.date().isoformat()
                         # 先锁仍由这一版配置负责的到期意图，再读当日记录。
-                        # SQLite 以首条 DML 取写槽，PostgreSQL 以这行串行化同一天的调度。
+                        # 授权门禁已取得写槽，这里仍校验备份配置版本与原游标。
                         schedule_guard = (
                             BackupSettings.id == 1, BackupSettings.revision == snapshot.revision,
                             BackupSettings.next_scheduled_at == due,

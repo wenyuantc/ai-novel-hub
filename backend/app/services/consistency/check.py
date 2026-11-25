@@ -263,7 +263,7 @@ async def admit_task(
         await require_free(read, project_id)
     model = await project_ai_config.preflight_project_model(
         ctx.sessionmaker, actor, project_id, "text", cipher=ctx.cipher, config_id=request["ai_config_id"],
-        allow_private=ctx.settings.allow_private_ai_endpoints,
+        allow_private=ctx.settings.allow_private_ai_endpoints, for_task_admission=True,
     )
     admission = await prepare_task_admission(ctx, actor, kind, request, model_preflight=model)
     return await task_service.create_task(db, engine, user_id, kind, request, admission=admission)

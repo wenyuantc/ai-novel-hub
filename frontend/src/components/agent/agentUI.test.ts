@@ -31,7 +31,7 @@ const conversation = (over: Record<string, unknown> = {}) => ({
   historySealed: false, busy: false, steps: [], stream: { running: false, text: '' }, collaborator: false, writable: true, canCreate: true,
   readOnlyNotice: null, retryAllowed: false, retryHint: null, lastTask: null, error: null, actingKey: null,
   refresh: () => {}, send: async () => true, change: async () => true, turn: async () => true, cancel: async () => true,
-  retry: async () => true, update: async () => true,
+  resume: async () => true, retry: async () => true, update: async () => true,
   detail: { auto_execute: false, mcp_plugin_ids: [], active_task: { id: 8, task_key: TURN_KEY, status: 'paused' },
     messages: [{ id: 1, conversation_id: 2, turn_task_id: 8, turn_task_key: TURN_KEY, role: 'user', content: '仍可阅读的原消息' }],
     changes: [changeFixture({ turn_task_id: 8, status: 'proposed' })] },
@@ -82,6 +82,19 @@ describe('智能体 UI', () => {
     expect(html).not.toContain('此会话仅供查看')
     expect(html).toMatch(/<button[^>]*><span>确\s*认<\/span><\/button>/)
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*><span>确\s*认<\/span><\/button>/)
+  })
+  it('已处理全部提案的可写待审核轮次显示手动继续，其他轮次不显示', () => {
+    const detail = {
+      ...conversation().detail,
+      changes: [changeFixture({ turn_task_id: 8, turn_task_key: TURN_KEY, status: 'rejected' })],
+    }
+    expect(renderView({ detail })).toContain('继续本轮')
+    expect(renderView({ detail, historySealed: true })).not.toContain('继续本轮')
+    expect(renderView({ detail, writable: false })).not.toContain('继续本轮')
+    expect(renderView({ detail: { ...detail, active_task: { ...detail.active_task, task_key: null } } })).not.toContain('继续本轮')
+    expect(renderView({ detail: { ...detail, active_task: { ...detail.active_task, status: 'running' } } })).not.toContain('继续本轮')
+    expect(renderView()).not.toContain('继续本轮')
+    expect(renderView({ detail: { ...detail, changes: [{ ...detail.changes[0], status: 'executing' }] } })).not.toContain('继续本轮')
   })
   it('可写编辑者：不显示 MCP 设置（裁决 2）；回退作者模型时说明外部费用由作者承担', () => {
     view.source = 'owner'

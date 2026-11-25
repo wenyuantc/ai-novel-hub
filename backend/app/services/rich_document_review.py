@@ -49,6 +49,7 @@ from app.services.rich_document_proposal_mapping import (
     resolve_scene_proposal,
 )
 from app.services.system_settings_snapshot import settings_for_consumer
+from app.services.task_engine.drain import TaskAdmissionClosed, require_task_admission_open
 
 if TYPE_CHECKING:
     from app.services.generation_service import ChapterJob
@@ -1136,6 +1137,7 @@ async def _accept_review(
         raise ConflictError("章节状态已变化，请保留提案并重新核对", extra={"code": "scene_context_changed"})
     await scene_ai_context.require_stamp(db, proposal_data.get("stamp") or {})
     if task.kind == "chapter.batch":
+        await require_task_admission_open(db)
         await batch_service.revalidate(db, engine.ctx, task)
     else:
         from app.services.generation_service import ensure_outside_batch
@@ -1246,6 +1248,8 @@ async def _accept_review(
                             db, project, chapter.id, actor=authenticated_actor, cipher=engine.ctx.cipher,
                             allow_private=engine.ctx.settings.allow_private_ai_endpoints,
                         )
+                except TaskAdmissionClosed:
+                    analysis_warning = "系统维护期间未排队自动分析，请稍后手动分析"
                 except analysis_service.AutoAnalysisUnavailable:
                     analysis_warning = "自动分析未排队，请检查模型设置后手动分析"
         stamp = task_statistics_service.now_utc()

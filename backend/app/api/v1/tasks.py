@@ -125,6 +125,7 @@ async def retry_task(task_id: int, task_key: str, user: CurrentUser, db: DbDep, 
     # 原任务专用预检绑定已注册的 RetrySource；锁内再消费同事务来源证明。
     preflight = await project_ai_config.preflight_original_project_model(
         ctx.sessionmaker, actor, source, cipher=ctx.cipher, allow_private=ctx.settings.allow_private_ai_endpoints,
+        for_task_admission=True,
     )
     if preflight.binding != model:
         raise ConflictError("原任务模型绑定已变化，请重新创建任务", extra={"code": "task_admission_changed"})

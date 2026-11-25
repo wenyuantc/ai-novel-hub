@@ -60,6 +60,8 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
     if (await agent.send({ content: input.trim(), page_context: context, ai_config_id: configId, ...skillChoice.payload })) { setInput(''); skillChoice.setSkillId(null) }
   }
   if (!detail) return <div style={{ padding: 16 }}>{agent.error ? <Alert type="error" showIcon message={agent.error} action={<Button onClick={agent.refresh}>重试</Button>} /> : <Skeleton active paragraph={{ rows: 6 }} />}</div>
+  const canResume = !historySealed && hasTaskIdentity(openTask) && openTask.status === 'paused'
+    && !detail.changes.some((change) => change.turn_task_id === openTask.id && (change.status === 'proposed' || change.status === 'executing'))
   const persisted = detail.messages.filter((m) => m.role === 'assistant' && m.turn_task_id === stream.task?.id
     && !!m.turn_task_key && m.turn_task_key === stream.task?.task_key).map((m) => m.content).join('')
   const liveText = persisted && stream.text.startsWith(persisted) ? stream.text.slice(persisted.length) : stream.text
@@ -86,8 +88,11 @@ export default function AgentConversationView({ pid, cid, onUpdated, onCreate, c
     {!openTask && !stream.error && lastTask?.error && <Alert type="warning" showIcon message={lastTask.error}
       description={writable && !historySealed ? agent.retryHint : null} />}
     {stream.reconnecting && <Alert type="warning" showIcon message="连接中断，正在恢复对话…后台任务仍在继续。" />}
-    {openTask && writable && <div role="status" style={{ padding: '8px 16px' }}><Space wrap>
-      <Typography.Text type="secondary">{openTask.status === 'paused' ? historySealed ? '旧会话不能继续，可以停止这一轮。' : '请确认或拒绝修改，随后继续对话' : stream.task?.stage || openTask.stage || '正在思考…'}</Typography.Text>
+    {openTask && writable && <div style={{ padding: '8px 16px' }}><Space wrap>
+      <Typography.Text type="secondary" role="status">{openTask.status === 'paused'
+        ? historySealed ? '旧会话不能继续，可以停止这一轮。' : canResume ? '本轮提案已处理，等待继续' : '请确认或拒绝修改，随后继续对话'
+        : stream.task?.stage || openTask.stage || '正在思考…'}</Typography.Text>
+      {canResume && <Button size="small" type="primary" loading={agent.busy} onClick={() => void agent.resume(openTask)}>继续本轮</Button>}
       <TaskActionConfirm task={openTask} title="停止这一轮对话？" description="已经执行的修改会保留，可逐项撤销。"
         onConfirm={(selected) => { void agent.cancel(selected) }}><Button size="small" icon={<StopOutlined />} loading={agent.busy} disabled={!hasTaskIdentity(openTask)}>停止</Button></TaskActionConfirm>
     </Space></div>}

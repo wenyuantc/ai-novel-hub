@@ -1,4 +1,4 @@
-"""在调用者的事务内读取六项运行设置，共用同一份冻结部署基线。"""
+"""在调用者的事务内读取运行设置，共用同一份冻结部署基线。"""
 
 import time
 from dataclasses import dataclass, replace
@@ -28,6 +28,7 @@ class EffectiveSettings:
     auto_analyze_enabled: bool
     mcp_enabled: bool
     open_api_rate_limit_per_minute: int
+    task_admission_closed: bool
 
 
 @dataclass(slots=True)

@@ -97,9 +97,9 @@ async def test_wrong_or_invalid_key_cannot_continue_source(app, client, fake_llm
     assert not fake_llm.calls
 
 
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_valid_source_key_is_fixed_in_new_task(app, client):
     _, project, source = await _source(app, client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"],
     })
@@ -113,9 +113,9 @@ async def test_valid_source_key_is_fixed_in_new_task(app, client):
         assert (await db.get(Project, project["id"])).user_id == stored.user_id
 
 
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_new_job_wont_read_replacement_source_after_accepted(app, client, fake_llm):
     owner, project, source = await _source(app, client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"],
     })
@@ -138,9 +138,9 @@ async def test_new_job_wont_read_replacement_source_after_accepted(app, client, 
 
 
 @pytest.mark.parametrize("changed", ["replaced", "updated"])
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_changed_source_after_build_prevents_prefix_and_model_send(app, client, fake_llm, changed):
     owner, project, source = await _source(app, client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"],
     })
@@ -166,9 +166,9 @@ async def test_changed_source_after_build_prevents_prefix_and_model_send(app, cl
     assert not fake_llm.calls
 
 
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_changed_source_after_prefix_preflight_is_stopped_before_model_send(app, client, fake_llm):
     _, project, source = await _source(app, client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"],
     })
@@ -189,9 +189,9 @@ async def test_changed_source_after_prefix_preflight_is_stopped_before_model_sen
 
 
 @pytest.mark.parametrize("change", ["source", "disabled_actor"])
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_changed_source_after_send_does_not_save_old_result(app, client, fake_llm, change):
     user, project, source = await _source(app, client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"],
     })
@@ -263,13 +263,13 @@ async def _task_input(app, task_id):
         return (await db.get(Task, task_id)).input
 
 
+@pytest.mark.usefixtures("paused_task_dispatch")
 async def test_changed_source_before_kb_embedding_never_sends(app, client, fake_llm, monkeypatch):
     _, project, source = await _source(app, client)
     await create_ai_config(client, name="向量模型", model_type="embedding", model="embedding-test")
     async with app.state.sessionmaker() as db:
         db.add(KbDocument(project_id=project["id"], filename="资料.txt", sha256="1" * 64, text="资料内容"))
         await db.commit()
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/outline", json={
         "continue_from_task_id": source["id"], "continue_from_task_key": source["task_key"],
     })

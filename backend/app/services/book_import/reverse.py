@@ -1253,6 +1253,7 @@ async def skip_paused(
 ) -> Any:
     """跳过因失败暂停的当前步骤后续跑（同一任务）。"""
     from app.services import task_service
+    from app.services.task_engine.drain import require_task_admission_open
 
     if expected_task_key is None:
         raise NotFoundError("任务不存在")
@@ -1265,6 +1266,7 @@ async def skip_paused(
     if (task.kind != KIND or task.status != "paused" or reason.get("reason") != "failed"
             or task.admin_cancel_operation_id is not None or task.execution_key is not None):
         raise ConflictError(SKIP_CONFLICT)
+    await require_task_admission_open(db)
     await revalidate(db, engine.ctx, task)
     cp = copy.deepcopy(task.checkpoint)
     cursor = apply_skip(cp, task.step_cursor)

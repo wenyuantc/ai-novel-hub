@@ -85,28 +85,25 @@ async def test_resume_without_original_actor_token_evidence_is_rejected(app, cli
     assert not fake_llm.calls
 
 
-async def test_queued_wizard_keeps_accepted_model_if_default_changes(app, client, fake_llm):
+async def test_queued_wizard_keeps_accepted_model_if_default_changes(client, fake_llm, paused_task_dispatch):
     await register(client)
     await create_ai_config(client, name="原模型", model="model-original")
     project = await create_project(client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/world", json={})
     assert response.status_code == 202, response.text
     await create_ai_config(client, name="新默认模型", model="model-new", is_default=True)
     fake_llm.push('[{"title":"山川","content":"旧绑定"}]')
-    app.state.task_engine.runtime.settings_confirmed = True
-    app.state.task_engine.notify()
+    paused_task_dispatch()
     finished = await wait_task(client, response.json(), within=15)
     assert finished["status"] == "succeeded", finished
     assert fake_llm.calls[-1]["model"] == "model-original"
 
 
 @pytest.mark.parametrize("change", ["deleted", "modified"])
-async def test_queued_wizard_rejects_changed_accepted_model(app, client, fake_llm, change):
+async def test_queued_wizard_rejects_changed_accepted_model(client, fake_llm, paused_task_dispatch, change):
     await register(client)
     config = await create_ai_config(client, name="原模型", model="model-original")
     project = await create_project(client)
-    app.state.task_engine.runtime.settings_confirmed = False
     response = await client.post(f"/api/v1/projects/{project['id']}/wizard/world", json={})
     assert response.status_code == 202, response.text
     if change == "deleted":
@@ -116,8 +113,7 @@ async def test_queued_wizard_rejects_changed_accepted_model(app, client, fake_ll
         updated = await client.patch(f"/api/v1/ai-configs/{config['id']}", json={"model": "model-modified"})
         assert updated.status_code == 200, updated.text
     fake_llm.push('[{"title":"山川","content":"不应写入"}]')
-    app.state.task_engine.runtime.settings_confirmed = True
-    app.state.task_engine.notify()
+    paused_task_dispatch()
     finished = await wait_task(client, response.json(), within=15)
     assert finished["status"] == "failed", finished
     assert not fake_llm.calls

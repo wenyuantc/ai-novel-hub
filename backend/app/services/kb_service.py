@@ -42,6 +42,7 @@ from app.services import authorization_service, kb_parser, project_access, retri
 from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp, visibility_sessionmaker
 from app.services.project_access import require_project
 from app.services.retrieval_service import Embedder
+from app.services.task_engine.drain import require_task_admission_open
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +446,8 @@ async def upload_document(
     dup = await db.scalar(select(KbDocument).where(KbDocument.project_id == project_id, KbDocument.sha256 == sha))
     if dup is not None:
         raise ConflictError(DUPLICATE.format(name=dup.filename), extra={"document_id": dup.id})
+    if keyword_warning is None:
+        await require_task_admission_open(db)
     parsed = await anyio.to_thread.run_sync(kb_parser.parse, filename, data)
     doc = KbDocument(
         project_id=project_id,
@@ -556,6 +559,7 @@ async def reindex_document(db: AsyncSession, engine, user_id: int, project_id: i
         _require_document_identity(doc, project_id, document_id)
         if await _active_doc_task(db, document_id) is not None:
             raise ConflictError("该文档正在建索引，请稍候再试")
+        await require_task_admission_open(db)
         await _clear_chunks(db, project_id, doc)
     doc.status, doc.error = "pending", ""
     await db.flush()

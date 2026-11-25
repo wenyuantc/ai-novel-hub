@@ -209,7 +209,7 @@ async def create_task(
         await confirmed_plan(read, chapter, data, actor, grant, settings=ctx.settings)
     model = await project_ai_config.preflight_project_model(
         ctx.sessionmaker, actor, project_id, "text", cipher=ctx.cipher,
-        allow_private=ctx.settings.allow_private_ai_endpoints,
+        allow_private=ctx.settings.allow_private_ai_endpoints, for_task_admission=True,
     )
     params = {"project_id": project_id, "chapter_id": chapter_id, **data.model_dump(mode="json")}
     admission = await prepare_task_admission(ctx, actor, KIND, params, model_preflight=model)

@@ -56,7 +56,9 @@ from app.services.agent.tools import get_tool
 from app.services.agent.tools import tasks as tasks_tool
 from app.services.agent.tools.base import ToolCtx, TransactionSession
 from app.services.ai_dispatch import VisibilityPolicyError, read_visibility_stamp, require_visibility_stamp
+from app.services.system_settings_snapshot import SettingsUnavailable
 from app.services.task_engine import workers
+from app.services.task_engine.drain import TaskAdmissionClosed, require_task_admission_open
 from app.services.task_engine.registry import TaskContext
 
 if TYPE_CHECKING:
@@ -783,7 +785,7 @@ async def send_message(
     conversation_key = await _precheck_conversation(db, user_id, project_id, conversation_id)
     model_preflight = await project_ai_config.preflight_project_model(
         engine.ctx.sessionmaker, actor, project_id, "text", cipher=engine.ctx.cipher, config_id=req.ai_config_id,
-        allow_private=engine.ctx.settings.allow_private_ai_endpoints,
+        allow_private=engine.ctx.settings.allow_private_ai_endpoints, for_task_admission=True,
     )
     params = {**req.model_dump(mode="json"), "project_id": project_id, "conversation_id": conversation_id}
     admission = await prepare_task_admission(engine.ctx, actor, "agent.turn", params, model_preflight=model_preflight)
@@ -948,6 +950,8 @@ async def execute_change(
     tool = get_tool(change.tool_name)
     if tool is None:
         raise BadRequestError("工具不存在")
+    if tool.name == "start_task":
+        await require_task_admission_open(db)
     ctx = ToolCtx(
         db, project, user_id, task_context, scope, visibility_locked=True, audit_coordinator=audit_coordinator,
         grant=grant,
@@ -1002,8 +1006,8 @@ async def execute_change(
                     )
                 )
             captured.extend(result.pop("_effects", []))
-    except VisibilityPolicyError:
-        # 撤权、代次变化及发送策略失效必须终止轮次，不能当作一般工具失败继续。
+    except (VisibilityPolicyError, TaskAdmissionClosed, SettingsUnavailable):
+        # 授权或受理屏障的失败由根事务回滚，保留待确认的提案。
         raise
     except AppError as exc:
         failure = exc.detail
@@ -1036,7 +1040,7 @@ async def _execute_admitted_task(
         await db.flush()
         after = await effects.snapshot(db, project_id)
         captured = effects.diff(before, after)
-    except VisibilityPolicyError:
+    except (VisibilityPolicyError, TaskAdmissionClosed, SettingsUnavailable):
         raise
     except AppError as exc:
         current = db.get_transaction()
@@ -1366,9 +1370,9 @@ async def _execute_external_impl(
 
 async def maybe_resume(
     db: AsyncSession, engine: "TaskEngine", user_id: int, task_id: int | None, *, task_key: str | None = None,
-) -> None:
+) -> str | None:
     if task_id is None:
-        return
+        return None
     linked = await db.get(Task, task_id)
     if linked is None or not task_key or linked.statistics_key != task_key or linked.user_id != user_id:
         raise NotFoundError("智能体轮次不存在")
@@ -1405,8 +1409,16 @@ async def maybe_resume(
         except history.HistorySealedError:
             # 人工仍可拒绝最后一项旧提案，但不能由此续跑旧上下文。
             await task_service.cancel_task(db, engine, user_id, task.id, expected_task_key=task_key)
-            return
-        await task_service.resume_task(db, engine, user_id, task.id, expected_task_key=task_key)
+            return None
+        try:
+            await task_service.resume_task(db, engine, user_id, task.id, expected_task_key=task_key)
+        except (TaskAdmissionClosed, SettingsUnavailable) as exc:
+            # 先前的提案决定已提交。保留它和待审核轮次，允许之后从原任务继续。
+            if isinstance(exc, SettingsUnavailable):
+                # 设置读取可能使连接失效。响应投影前结束无业务写入的续跑事务。
+                await db.rollback()
+            return exc.detail
+    return None
 
 
 async def decide_change(
@@ -1432,10 +1444,12 @@ async def decide_change(
     task_admission = None
     if confirm:
         # 受控受理任务：取得任何写锁前核对来源证明并完成模型预检/DNS；锁内再重验原身份。
-        task_admission = await tasks_tool.prepare_confirmed_admission(
-            db, engine.ctx, initial_snapshot, user_id=user_id, project_id=project_id,
-        )
-        await db.rollback()
+        try:
+            task_admission = await tasks_tool.prepare_confirmed_admission(
+                db, engine.ctx, initial_snapshot, user_id=user_id, project_id=project_id,
+            )
+        finally:
+            await db.rollback()
     async with conversation_operations.hold(
         db, engine.request_worker, cid, user_id, project_id, conversation_key=conversation_key,
     ):
@@ -1578,6 +1592,8 @@ async def _decide_turn(
         except VisibilityPolicyError:
             raise
         except AppError as exc:
+            if isinstance(exc, (TaskAdmissionClosed, SettingsUnavailable)) and not changes:
+                raise
             error = exc.detail
             row = await owned_change(db, user_id, project_id, change_id, lock=True)
             changes.extend(await public_changes(db, user_id, project_id, [row]))
@@ -1594,7 +1610,7 @@ async def _decide_turn(
         raise NotFoundError("修改提案不存在")
     payload, proofs = await _prepare_committed_changes(db, user_id, project_id, [by_id[item] for item in change_ids])
     proofs["conversation"] = conversation_proof
-    await maybe_resume(db, engine, user_id, task_id, task_key=task_key)
+    notice = await maybe_resume(db, engine, user_id, task_id, task_key=task_key)
     task = await task_service.get_owned_task(db, user_id, task_id)
     if task.statistics_key != task_key or task.project_id != project_id:
         raise NotFoundError("智能体轮次不存在")
@@ -1604,7 +1620,8 @@ async def _decide_turn(
         "snapshot": personal_projection.agent_task_evidence(task),
     }
     projected = await personal_projection.project_agent_payload(
-        db, user_id, project_id, {"changes": payload, "task": task_out.model_dump(mode="json"), "error": error},
+        db, user_id, project_id,
+        {"changes": payload, "task": task_out.model_dump(mode="json"), "error": error, "notice": notice},
         proofs,
     )
     projected_changes = _public_change_models(projected["changes"], proofs, db)

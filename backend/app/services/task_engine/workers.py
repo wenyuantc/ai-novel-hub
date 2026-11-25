@@ -10,7 +10,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 from uuid import uuid4
 from weakref import WeakKeyDictionary, WeakSet, WeakValueDictionary
 
@@ -87,6 +87,38 @@ async def _db_cutoff(db: AsyncSession, seconds: float = 30) -> datetime | str:
 
 def _pg_live_worker_condition(cutoff: datetime | str):
     return and_(TaskWorker.stopped_at.is_(None), TaskWorker.fenced_at.is_(None), TaskWorker.heartbeat_at >= cutoff)
+
+
+class LiveWorkerRegistration(NamedTuple):
+    hostname: str
+    pid: int
+    peer_url: str | None
+    started_at: datetime
+    heartbeat_at: datetime
+
+
+async def live_registrations(db: AsyncSession, seconds: float) -> list[LiveWorkerRegistration]:
+    """读取存活的登记及权威心跳时间。运维观察不会锁定或围栏执行者。"""
+    statement = select(
+        TaskWorker.worker_key, TaskWorker.hostname, TaskWorker.pid, TaskWorker.peer_url,
+        TaskWorker.started_at, TaskWorker.heartbeat_at,
+    )
+    if db.get_bind().dialect.name != "sqlite":
+        rows = await db.execute(statement.where(_pg_live_worker_condition(await _db_cutoff(db, seconds))))
+        return [
+            LiveWorkerRegistration(row.hostname, row.pid, row.peer_url, row.started_at, row.heartbeat_at)
+            for row in rows
+        ]
+
+    rows = (await db.execute(statement.where(TaskWorker.stopped_at.is_(None), TaskWorker.fenced_at.is_(None)))).all()
+    if not rows:
+        return []
+    heartbeats = await sqlite_worker_leases.live_heartbeats(_pair_for_db(db), [row.worker_key for row in rows], seconds)
+    return [
+        LiveWorkerRegistration(row.hostname, row.pid, row.peer_url,
+                               row.started_at, datetime.fromisoformat(heartbeats[row.worker_key]))
+        for row in rows if row.worker_key in heartbeats
+    ]
 
 
 def registered_worker_exists(worker_key: str | InstrumentedAttribute[str | None]):
