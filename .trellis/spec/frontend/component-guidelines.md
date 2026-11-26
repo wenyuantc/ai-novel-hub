@@ -574,10 +574,11 @@ dayjs.locale('zh-cn')
   Skill 列表未加载时只带 `skill_id`，由服务端校验。`SkillEditDrawer` 用 `SkillInputsEditor` 编辑定义，占位提示在草稿与上次保存一致时用服务端 `input_warnings`（展开组件后），否则按草稿原文实时计算。
 - **生成记录与任务**：`GenerationLogList` 用 `skillRef(params.skill)` 收窄后显示所用 Skill；`TaskPanel` 行与 `TaskOutputModal` 在 `task.skill` 存在时显示「Skill：名称」Tag（创建时的快照）。
 - **`pages/McpPluginsPage`**：卡片网格（`Col xs=24 md=12 xl=8`），达到 `MAX_MCP_PLUGINS`（10）时禁用添加；刷新失败时 `message.error` 后再 `GET` 一次插件以显示最新 `last_error`。
+- **服务器插件列表**：`McpCatalogModal` 打开时读取 `GET /mcp-plugins/catalog`，显示部署名称、版本、说明及节点可用性。作者选择启用后以登记 ID 与所见版本调用 `POST /mcp-plugins/catalog/{id}/enable?catalog_version=…`。已添加、不可用或个人数量已满时禁用添加。已登记程序更新时，目录提供「更新工具」并提交新版本；个人卡片刷新使用当前记录版本。个人列表负责停用和移除，启用状态及工具偏好按作者隔离。
 - **`mcp/McpPluginCard`**：名称、传输类型、地址（长地址 `overflowWrap: anywhere`）、`pluginStatus`（连接失败 > 已连接 > 未测试）、工具数量、启用 `Switch`；
-  有请求头时只显示「请求头 N 个」，**不显示取值**（名称在编辑弹窗里以 `名称: ••••` 显示）。
+  本机卡片用登记标识与版本替代地址，隐藏编辑入口，停用后禁用刷新和试用。远程插件有请求头时只显示「请求头 N 个」，**不显示取值**（名称在编辑弹窗里以 `名称: ••••` 显示）。
 - **`mcp/McpPluginFormModal`**：Tabs「填写表单」/「粘贴 JSON」。JSON 先经 `utils/mcp.ts::parseMcpServersJson` 本地解析（也接受不带外层 `mcpServers` 的映射，
-  ≤ 20 项），stdio（`command` / `args` / `type=stdio`）在本地识别、跳过并用 `stdioNotice` 提示，只把远程服务原样交给 `POST /import`，逐项结果用 `List` 显示。
+  ≤ 20 项），stdio（`command` / `args` / `catalog_id` / `type=stdio`）在本地识别、跳过并用 `stdioNotice` 提示从服务器列表启用，只把远程服务原样交给 `POST /import`，逐项结果用 `List` 显示。
 - **请求头编辑语义**（`mcp/HeadersEditor` + `HeadersState`）：`{mode: 'keep'}` = 保持已保存的值，只显示 `名称: ••••`（`MASK`），**不渲染输入框**，PATCH
   **不带** `headers` 字段；「重新设置」进入 `{mode: 'edit', rows}`，取值用 `Input.Password`（`autoComplete="new-password"`），需要重新填写全部取值，保存时
   整体替换；「清空请求头」= `edit` 且没有行 → 提交 `{}`；「取消，保持原值」回到 keep。`pluginUpdateBody` 只提交变化的字段，`pluginCreateBody` 没有请求头时不提交。

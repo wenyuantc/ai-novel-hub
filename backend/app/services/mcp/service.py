@@ -34,7 +34,7 @@ from app.schemas.mcp import (
     McpToolPrefUpdate,
 )
 from app.services import authorization_service as authz
-from app.services.mcp import management
+from app.services.mcp import catalog, management
 from app.services.mcp.client import (
     CALL_TIMEOUT,
     McpConnection,
@@ -70,7 +70,22 @@ def _header_names(cipher: SecretCipher, plugin: McpPlugin) -> list[str]:
         return ["（解密失败）"]
 
 
-def target_of(cipher: SecretCipher, plugin: McpPlugin) -> McpTarget:
+def target_of(
+    cipher: SecretCipher, plugin: McpPlugin, settings: Settings | None = None, *, refresh: bool = False,
+) -> McpTarget:
+    if plugin.transport == "stdio":
+        from app.services.mcp.stdio import StdioProgram
+
+        if not plugin.enabled or not settings or not plugin.catalog_id:
+            raise BadRequestError("本机插件未启用")
+        entry = catalog.resolve(settings, plugin.catalog_id)
+        if not refresh and entry.version != plugin.catalog_version:
+            raise ConflictError("本机插件版本已更新，请先刷新工具列表")
+        program = StdioProgram(
+            command=entry.command, args=tuple(entry.args), cwd=entry.cwd, env=entry.environment(),
+            catalog_id=entry.id, version=entry.version, secret_keys=tuple(entry.env_from),
+        )
+        return McpTarget(url="", transport="stdio", stdio=program)
     return McpTarget(url=plugin.url, transport=plugin.transport, headers=headers_of(cipher, plugin))  # type: ignore[arg-type]
 
 
@@ -106,6 +121,8 @@ def to_out(cipher: SecretCipher, plugin: McpPlugin) -> McpPluginOut:
         name=plugin.name,
         transport=plugin.transport,  # type: ignore[arg-type]
         url=plugin.url,
+        catalog_id=plugin.catalog_id,
+        catalog_version=plugin.catalog_version,
         enabled=plugin.enabled,
         header_names=names,
         has_headers=bool(plugin.headers_encrypted),
@@ -192,6 +209,33 @@ async def create_plugin(
     return to_out(cipher, plugin)
 
 
+async def enable_catalog_plugin(
+    db: AsyncSession, settings: Settings, cipher: SecretCipher, user_id: int, catalog_id: str,
+    expected_version: str | None = None,
+) -> McpPluginOut:
+    await management.require_write(db, user_id)
+    entry = catalog.resolve(settings, catalog_id)
+    if expected_version is not None and entry.version != expected_version:
+        raise ConflictError("当前节点插件版本与目录不符，请刷新目录或联系部署者")
+    plugin = await db.scalar(select(McpPlugin).where(McpPlugin.user_id == user_id, McpPlugin.catalog_id == catalog_id))
+    if plugin is None:
+        await _check_capacity(db, user_id)
+        slugs = set(await db.scalars(select(McpPlugin.slug).where(McpPlugin.user_id == user_id)))
+        slug = entry.id
+        suffix = 2
+        while slug in slugs:
+            tail = f"-{suffix}"
+            slug = entry.id[: 24 - len(tail)] + tail
+            suffix += 1
+        plugin = McpPlugin(user_id=user_id, slug=slug, name=entry.name, transport="stdio", url="",
+                           catalog_id=entry.id, catalog_version=entry.version, tools=[], tool_prefs={})
+        db.add(plugin)
+    plugin.enabled = True
+    await _commit(db)
+    await db.refresh(plugin)
+    return to_out(cipher, plugin)
+
+
 async def update_plugin(
     db: AsyncSession, settings: Settings, cipher: SecretCipher, user_id: int, plugin_id: int, req: McpPluginUpdate
 ) -> McpPluginOut:
@@ -200,12 +244,19 @@ async def update_plugin(
     if data.get("url") is not None:
         # 只为自己可见的插件解析地址；等待 DNS 期间不能持有数据库门禁。
         current = await get_owned_plugin(db, user_id, plugin_id)
+        if current.transport == "stdio":
+            raise BadRequestError("本机插件只允许修改启用状态")
         previous_target = (current.url, current.transport, current.headers_encrypted)
         await management.require_enabled(db)
         await db.close()
         data["url"] = await check_url(data["url"], allow_private=settings.allow_private_ai_endpoints)
     await management.require_write(db, user_id)
     plugin = await get_owned_plugin(db, user_id, plugin_id)
+    if plugin.transport == "stdio":
+        if data.keys() - {"enabled"}:
+            raise BadRequestError("本机插件只允许修改启用状态")
+        if data.get("enabled"):
+            catalog.resolve(settings, plugin.catalog_id)
     if previous_target is not None and previous_target != (plugin.url, plugin.transport, plugin.headers_encrypted):
         raise ConflictError("插件连接配置已修改，请重新保存")
     if data.get("name") is not None:
@@ -234,8 +285,10 @@ async def delete_plugin(db: AsyncSession, user_id: int, plugin_id: int) -> None:
 
 
 def _server_request(name: str, value: dict[str, Any]) -> McpPluginCreate:
-    if "command" in value or "args" in value:
-        raise BadRequestError("不支持 stdio 类型的 MCP（command），只能接入远程 Streamable HTTP 或 SSE 服务")
+    if {"command", "args", "cwd", "env", "catalog_id"} & value.keys():
+        raise BadRequestError("请从服务器插件列表启用 stdio 插件，导入仅支持远程服务")
+    if str(value.get("type") or value.get("transport") or "").lower().strip() == "stdio":
+        raise BadRequestError("请从服务器插件列表启用 stdio 插件")
     url = value.get("url") or value.get("serverUrl")
     if not isinstance(url, str) or not url.strip():
         raise BadRequestError("缺少 url")
@@ -244,8 +297,6 @@ def _server_request(name: str, value: dict[str, Any]) -> McpPluginCreate:
         transport = "streamable_http"
     elif kind == "sse":
         transport = "sse"
-    elif kind == "stdio":
-        raise BadRequestError("不支持 stdio 类型的 MCP，只能接入远程 Streamable HTTP 或 SSE 服务")
     else:
         raise BadRequestError(f"不支持的传输类型：{kind[:30]}")
     headers = value.get("headers")
@@ -308,10 +359,14 @@ async def refresh_tools(
     maker: async_sessionmaker[AsyncSession],
     user_id: int,
     plugin_id: int,
+    expected_version: str | None = None,
 ) -> McpPluginOut:
     """测试连接并刷新工具列表（存库）；失败写入 last_error 并返回 400。"""
     plugin = await get_owned_plugin(db, user_id, plugin_id)
-    target = target_of(cipher, plugin)
+    starting_version = plugin.catalog_version
+    target = target_of(cipher, plugin, settings, refresh=True)
+    if target.stdio and target.stdio.version != (expected_version or plugin.catalog_version):
+        raise ConflictError("当前节点插件版本与选择不符，请刷新目录并重新刷新工具")
     actor = db.info["authenticated_actor"]
     await db.close()
     error = ""
@@ -319,6 +374,7 @@ async def refresh_tools(
     try:
         infos = await _with_connection(
             connector, target, settings, maker, actor, lambda conn: conn.list_tools(),
+            local_check=_local_guard(settings, cipher, user_id, plugin_id, target, starting_version),
         )
     except McpError as exc:
         error = exc.detail
@@ -326,7 +382,11 @@ async def refresh_tools(
         error = "MCP 服务响应超时"
     await management.require_write(db, user_id)
     plugin = await get_owned_plugin(db, user_id, plugin_id)
-    if target_of(cipher, plugin) != target:
+    if plugin.catalog_version != starting_version:
+        raise ConflictError("插件工具版本已变化，请重新刷新")
+    if target_of(cipher, plugin, settings, refresh=True) != target:
+        if target.stdio:
+            raise ConflictError("本机插件登记已变化，请重新刷新")
         raise ConflictError("插件地址或请求头已修改，请重新刷新")
     now = datetime.now(UTC)
     plugin.last_tested_at = now
@@ -335,6 +395,9 @@ async def refresh_tools(
         await db.commit()
         raise BadRequestError(error)
     tools, dropped = normalize_tools(infos)
+    if target.stdio and target.stdio.version != plugin.catalog_version:
+        plugin.catalog_version = target.stdio.version
+        plugin.tool_prefs = {}
     plugin.tools = tools
     plugin.tools_refreshed_at = now
     plugin.last_error = f"已丢弃 {len(dropped)} 个参数结构不合法的工具：{'、'.join(dropped[:10])}" if dropped else ""
@@ -363,13 +426,37 @@ async def update_tool_pref(
     return to_out(cipher, plugin)
 
 
+def _local_guard(
+    settings: Settings, cipher: SecretCipher, user_id: int, plugin_id: int, target: McpTarget,
+    starting_version: str | None, tool: dict[str, Any] | None = None, arguments: dict[str, Any] | None = None,
+):
+    if target.transport != "stdio":
+        return None
+
+    async def check(db: AsyncSession, body: dict | None) -> None:
+        current = await get_owned_plugin(db, user_id, plugin_id)
+        if (current.catalog_version != starting_version
+                or target_of(cipher, current, settings, refresh=tool is None) != target):
+            raise ConflictError("本机插件登记已变化，请刷新工具列表")
+        if tool is not None:
+            if find_tool(current, tool["name"]) != tool or not tool_pref(current, tool["name"])[0]:
+                raise ConflictError("本机插件工具已变化或停用")
+        if body is not None and body.get("method") == "tools/call":
+            params = body.get("params") or {}
+            if tool is None or params.get("name") != tool["name"] or params.get("arguments", {}) != arguments:
+                raise BadRequestError("本机插件试用请求不匹配")
+
+    return check
+
+
 async def _with_connection[T](
     connector: McpConnector, target: McpTarget, settings: Settings, maker: async_sessionmaker[AsyncSession],
     actor: authz.AuthenticatedActor, operation: Callable[[McpConnection], Awaitable[T]],
+    *, local_check=None,
 ) -> T:
-    if not _trusted_connector(connector):
+    if not _trusted_connector(connector) or (target.transport == "stdio" and local_check is None):
         raise McpError("无法确认 MCP 连接的发送门禁")
-    gate = management.ManagementRequestGate(maker, actor, sse=target.transport == "sse")
+    gate = management.ManagementRequestGate(maker, actor, sse=target.transport == "sse", local_check=local_check)
 
     async def execute():
         await gate.check()
@@ -400,12 +487,14 @@ async def call_tool(
     errors = validate_arguments(tool.get("input_schema") or {}, arguments)
     if errors:
         raise BadRequestError("工具参数校验失败", extra={"errors": errors})
-    target = target_of(cipher, plugin)
+    starting_version = plugin.catalog_version
+    target = target_of(cipher, plugin, settings)
     actor = db.info["authenticated_actor"]
     await db.close()
     try:
         result = await _with_connection(
             connector, target, settings, maker, actor, lambda conn: conn.call_tool(tool_name, arguments),
+            local_check=_local_guard(settings, cipher, user_id, plugin_id, target, starting_version, tool, arguments),
         )
     except TimeoutError as exc:
         raise BadRequestError(f"MCP 工具调用超时（{CALL_TIMEOUT:g} 秒）") from exc

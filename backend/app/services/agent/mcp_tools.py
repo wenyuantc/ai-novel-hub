@@ -37,9 +37,9 @@ from app.services.agent.conversation_operations import operation_matches
 from app.services.agent.external_activity import ExternalActivity
 from app.services.ai_dispatch import VisibilityPolicyError, VisibilityStamp
 from app.services.authorization_service import AuthenticatedActor
+from app.services.mcp import catalog, settings_gate
 from app.services.mcp import client as mcp_client
 from app.services.mcp import service as mcp_service
-from app.services.mcp import settings_gate
 from app.services.mcp.client import McpError, McpResult
 from app.services.system_settings_snapshot import effective_settings
 from app.services.task_engine.execution_identity import TaskExecutionIdentity, matches_running, require_live_worker
@@ -183,7 +183,7 @@ async def _send_lease(
     identity: McpSendIdentity, resolved: "Resolved", target: mcp_client.McpTarget,
     cipher: SecretCipher, settings: Settings, arguments: dict[str, Any],
 ) -> AsyncIterator[None]:
-    """仅在真实 tools/call HTTP request hook 内持有到响应头。"""
+    """在本机进程启动、工具请求的物理写入或 HTTP 发送边界持有。"""
     if (type(identity) is not McpSendIdentity or type(identity.actor) is not AuthenticatedActor
             or type(identity.actor.token_version) is not int or identity.actor.token_version < 0
             or not isinstance(identity.queued_at, datetime) or not isinstance(identity.started_at, datetime)
@@ -277,11 +277,11 @@ async def _send_lease(
                 if operation is None:
                     raise ai_dispatch.SendLeaseError()
             tool_map = task.checkpoint.get("mcp_tool_map") if isinstance(task.checkpoint, dict) else None
-            latest = await _resolve_entry(db, identity.actor.id, identity.conversation_id,
+            latest = await _resolve_entry(db, settings, identity.actor.id, identity.conversation_id,
                                           tool_map if isinstance(tool_map, dict) else {}, resolved.name)
             if (latest is None or latest.entry != resolved.entry or latest.plugin.id != plugin.id
                     or (identity.execution_key is not None and not latest.auto_confirm)
-                    or mcp_service.target_of(cipher, plugin) != target):
+                    or mcp_service.target_of(cipher, plugin, settings) != target):
                 raise ai_dispatch.SendLeaseError()
             binding = project_ai_config.deserialize_project_model(
                 task.input.get("_project_model"), actor_id=identity.actor.id, project_id=identity.project_id,
@@ -332,6 +332,19 @@ async def turn_plugins(db: AsyncSession, user_id: int, plugin_ids: list[int] | N
     return [rows[i] for i in ids if i in rows]
 
 
+def _catalog_snapshot(settings: Settings, plugin: McpPlugin) -> dict[str, str] | None:
+    """仅有效目录项可以暴露工具；远程插件保留旧 checkpoint 形状。"""
+    if plugin.transport != "stdio":
+        return {}
+    try:
+        current = catalog.resolve(settings, plugin.catalog_id)
+    except AppError:
+        return None
+    if current.version != plugin.catalog_version:
+        return None
+    return {"catalog_id": plugin.catalog_id, "catalog_version": current.version}
+
+
 async def build_tool_map(
     db: AsyncSession, settings: Settings, user_id: int, conversation: AgentConversation
 ) -> dict[str, dict[str, Any]]:
@@ -339,6 +352,9 @@ async def build_tool_map(
         return {}
     result: dict[str, dict[str, Any]] = {}
     for plugin in await turn_plugins(db, user_id, conversation.mcp_plugin_ids):
+        catalog_snapshot = _catalog_snapshot(settings, plugin)
+        if catalog_snapshot is None:
+            continue
         for tool in sorted(plugin.tools or [], key=lambda t: t["name"]):
             if len(result) >= MAX_TURN_TOOLS:
                 return result
@@ -351,6 +367,7 @@ async def build_tool_map(
                 "plugin_name": plugin.name,
                 "tool": tool["name"],
                 "schema_hash": tool.get("schema_hash", ""),
+                **catalog_snapshot,
             }
     return result
 
@@ -378,11 +395,12 @@ async def resolve(
 ) -> Resolved | None:
     """只认本轮映射表；插件或工具已停用、不再属于本会话、schema 已变化 → None。"""
     # 参数继续保留兼容；真实发送时由持久系统设置门禁决定，不采信可能陈旧的进程快照。
-    return await _resolve_entry(db, user_id, conversation_id, tool_map, name)
+    return await _resolve_entry(db, settings, user_id, conversation_id, tool_map, name)
 
 
 async def _resolve_entry(
-    db: AsyncSession, user_id: int, conversation_id: int, tool_map: dict[str, dict[str, Any]], name: str,
+    db: AsyncSession, settings: Settings, user_id: int, conversation_id: int, tool_map: dict[str, dict[str, Any]],
+    name: str,
 ) -> Resolved | None:
     """真实发送租约已经验证持久系统开关，此处只检查原工具的当前配置。"""
     entry = tool_map.get(name)
@@ -397,6 +415,10 @@ async def _resolve_entry(
         .execution_options(populate_existing=True)
     )
     if plugin is None or not plugin.enabled:
+        return None
+    catalog_snapshot = _catalog_snapshot(settings, plugin)
+    recorded_catalog = {k: entry[k] for k in ("catalog_id", "catalog_version") if k in entry}
+    if catalog_snapshot != recorded_catalog:
         return None
     tool = mcp_service.find_tool(plugin, entry["tool"])
     if tool is None or tool.get("schema_hash") != entry["schema_hash"]:
@@ -461,6 +483,9 @@ def preview(entry: dict[str, Any], resolved: Resolved | None, arguments: dict[st
     plugin_name = resolved.plugin.name if resolved else entry.get("plugin_name", "")
     plugin_slug = resolved.plugin.slug if resolved else entry.get("plugin_slug", "")
     current_hash = resolved.tool.get("schema_hash") if resolved else None
+    guard = {"plugin_id": entry["plugin_id"], "schema_hash": current_hash, "enabled": resolved is not None}
+    if "catalog_id" in entry:
+        guard.update(catalog_id=entry["catalog_id"], catalog_version=entry["catalog_version"])
     return {
         "title": f"调用外部插件「{plugin_name}」的工具 {entry['tool']}",
         "target": plugin_name,
@@ -473,7 +498,7 @@ def preview(entry: dict[str, Any], resolved: Resolved | None, arguments: dict[st
         "diff": [],
         # 刷新后的预览只有 guards 变化时用户看不出原因，不可用时须明确提示
         "warnings": [IRREVERSIBLE] if resolved is not None else [IRREVERSIBLE, UNAVAILABLE],
-        "guards": [{"plugin_id": entry["plugin_id"], "schema_hash": current_hash, "enabled": resolved is not None}],
+        "guards": [guard],
     }
 
 
@@ -481,18 +506,29 @@ class _Worker:
     """在独立任务中持有一个 MCP 连接，串行处理调用。"""
 
     def __init__(self, connector: Any, target: Any, allow_private: bool, settings: Settings,
-                 cipher: SecretCipher | None = None, *, identity: McpSendIdentity | None):
+                 cipher: SecretCipher | None = None, *, identity: McpSendIdentity | None, start_lease=None):
         self._settings = settings
         self._target = target
         self._cipher = cipher
         self._gate = mcp_client.McpRequestGate()
+        self._startup_future: asyncio.Future | None = None
+        if start_lease is not None:
+            @asynccontextmanager
+            async def start_if_current():
+                async with start_lease():
+                    if self._startup_future is None or self._startup_future.cancelled():
+                        raise McpError("外部工具调用已取消")
+                    yield
+
+            self._gate.start_lease = start_if_current
         self._queue: asyncio.Queue = asyncio.Queue()
         self._error: McpError | VisibilityPolicyError | None = None
         self._task = asyncio.create_task(self._main(connector, target, allow_private, identity))
 
     async def _main(self, connector: Any, target: Any, allow_private: bool, identity: McpSendIdentity | None) -> None:
         try:
-            if not mcp_client._trusted_connector(connector) or type(identity) is not McpSendIdentity:
+            if (not mcp_client._trusted_connector(connector) or type(identity) is not McpSendIdentity
+                    or (target.transport == "stdio" and connector is not mcp_client.connect)):
                 raise ai_dispatch.SendLeaseError()
             # 握手前核验，此短事务在打开连接前结束，真正的工具 POST 仍须完整发送租约。
             async with identity.sessionmaker() as db:
@@ -567,6 +603,8 @@ class _Worker:
         if self._task.done():
             raise self._error or McpError("MCP 连接已关闭")
         future = asyncio.get_running_loop().create_future()
+        if self._startup_future is None:
+            self._startup_future = future
         send_state = send_state if send_state is not None else McpSendState()
         await self._queue.put((tool, arguments, future, send_state, identity, resolved))
         try:
@@ -615,9 +653,16 @@ class McpSessions:
     ) -> McpResult:
         worker = self._workers.get(plugin.id)
         if worker is None:
-            target = mcp_service.target_of(self._cipher, plugin)
+            target = mcp_service.target_of(self._cipher, plugin, self._settings)
+            start_lease = None
+            if target.transport == "stdio":
+                if identity is None or resolved is None:
+                    raise ai_dispatch.SendLeaseError()
+                start_lease = partial(_send_lease, identity, resolved, target, self._cipher, self._settings,
+                                      json.loads(_json(arguments)))
             worker = self._workers[plugin.id] = _Worker(
-                self._connector, target, self._allow_private, self._settings, self._cipher, identity=identity,
+                self._connector, target, self._allow_private, self._settings, self._cipher,
+                identity=identity, start_lease=start_lease,
             )
         return await worker.call(tool, arguments, send_state, identity=identity, resolved=resolved)
 

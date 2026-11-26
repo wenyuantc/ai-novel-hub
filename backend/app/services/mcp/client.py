@@ -1,4 +1,4 @@
-"""MCP 适配层：官方 mcp SDK（1.x）的远程客户端（Streamable HTTP / 旧版 SSE），不支持 stdio。
+"""MCP 适配层：官方 mcp SDK（1.x）的远程客户端，以及部署者登记的本机 stdio 连接器。
 
 - 连接前与每个 HTTP 请求前都做 SSRF 校验（endpoint_guard，沿用 ALLOW_PRIVATE_AI_ENDPOINTS）；
 - 不跟随任何重定向：SDK 1.x 会自行跟随同源重定向（不看 follow_redirects），这里用 max_redirects=0 关掉；
@@ -24,13 +24,14 @@ import httpx
 from jsonschema import validators
 from jsonschema.exceptions import SchemaError
 
-from app.ai.endpoint_guard import ensure_endpoint_allowed
 from app.ai.providers.base import AIProviderError
+from app.core.errors import AppError
 from app.services.mcp.management import ManagementHttpClient, ManagementRequestGate
+from app.services.mcp.stdio import StdioProgram
 
 logger = logging.getLogger(__name__)
 
-Transport = Literal["streamable_http", "sse"]
+Transport = Literal["streamable_http", "sse", "stdio"]
 CONNECT_TIMEOUT = 15.0
 CALL_TIMEOUT = 30.0
 # 长连接流（SSE / Streamable HTTP 的 GET 流）在两次调用之间可能空闲较久；调用本身由 CALL_TIMEOUT 限制
@@ -77,6 +78,7 @@ class McpTarget:
     url: str
     transport: Transport
     headers: dict[str, str] = field(default_factory=dict)
+    stdio: StdioProgram | None = None
 
 
 McpConnector = Callable[..., AbstractAsyncContextManager[McpConnection]]
@@ -99,6 +101,7 @@ class McpRequestGate:
 
     def __init__(self) -> None:
         self._call = None
+        self.start_lease: Callable | None = None
         self._leases: dict[int, AsyncExitStack] = {}
         self.failure: asyncio.Future | None = None
 
@@ -133,6 +136,9 @@ class McpRequestGate:
             if self._call is not None:
                 self._reject()
             return
+        await self._before_message(body, id(request))
+
+    async def _before_message(self, body: dict, key: int) -> None:
         if body.get("method") != "tools/call":
             return
         call = self._call
@@ -148,13 +154,30 @@ class McpRequestGate:
             await lease.enter_async_context(call["acquire"]())
             if call["future"].cancelled():
                 raise McpError("外部工具调用已取消")
-            self._leases[id(request)] = lease
+            self._leases[key] = lease
             call["state"].started = True
         except BaseException as exc:
             await lease.aclose()
             if self.failure is not None and not self.failure.done():
                 self.failure.set_result(exc)
             raise
+
+    @asynccontextmanager
+    async def stdio_start(self):
+        if self.start_lease is None:
+            raise McpError("无法确认本机插件启动资格")
+        async with self.start_lease():
+            yield
+
+    @asynccontextmanager
+    async def stdio_write(self, body: dict):
+        key = id(body)
+        await self._before_message(body, key)
+        try:
+            yield
+        finally:
+            if lease := self._leases.pop(key, None):
+                await lease.aclose()
 
     async def after_headers(self, response: httpx.Response) -> None:
         if lease := self._leases.pop(id(response.request), None):
@@ -271,6 +294,8 @@ def _plugin_wording(text: str) -> str:
 
 
 async def guard_url(url: str, *, allow_private: bool) -> None:
+    from app.ai.endpoint_guard import ensure_endpoint_allowed
+
     if allow_private:
         return
     try:
@@ -307,7 +332,7 @@ class _SdkConnection:
                     cursor = page.nextCursor
                     if not cursor:
                         break
-        except McpError:
+        except (AppError, McpError):
             raise
         except Exception as exc:  # noqa: BLE001
             raise McpError(describe(exc, self._headers)) from exc
@@ -337,6 +362,8 @@ class _SdkConnection:
                         )),
                         types.CallToolResult, request_read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT),
                     )
+        except (AppError, McpError):
+            raise
         except TimeoutError as exc:
             raise McpError(f"MCP 工具调用超时（{CALL_TIMEOUT:g} 秒）") from exc
         except Exception as exc:  # noqa: BLE001
@@ -352,6 +379,15 @@ async def connect(
     from mcp import ClientSession
     from mcp.client.sse import sse_client
     from mcp.client.streamable_http import streamable_http_client
+
+    if target.transport == "stdio":
+        from app.services.mcp.stdio import connect_stdio
+
+        if target.stdio is None or request_gate is None:
+            raise McpError("本机插件缺少登记或授权")
+        async with connect_stdio(target.stdio, request_gate) as local:
+            yield local
+        return
 
     management = request_gate if isinstance(request_gate, ManagementRequestGate) else None
     if management is not None:

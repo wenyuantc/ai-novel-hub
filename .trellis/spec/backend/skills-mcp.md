@@ -334,10 +334,10 @@ async def snapshot(db, user_id, skill_id, inputs=None); def skill_log(snap) -> {
 
 ```python
 CONNECT_TIMEOUT = 15.0; CALL_TIMEOUT = 30.0; STREAM_READ_TIMEOUT = 300.0; MAX_TOOLS = 100; DESCRIPTION_LIMIT = 2000
-class McpError(Exception): detail          # 可展示的中文，不含请求头
+class McpError(Exception): detail          # 可展示的中文，不含请求头及本机环境值
 @dataclass McpToolInfo(name, description, input_schema, read_only_hint: bool | None)
 @dataclass McpResult(text, is_error); def as_tool_data() -> {"text"} | {"error"}
-@dataclass(frozen=True) McpTarget(url, transport: "streamable_http" | "sse", headers)
+@dataclass(frozen=True) McpTarget(url, transport: "streamable_http" | "sse" | "stdio", headers, stdio: StdioProgram | None)
 @asynccontextmanager async def connect(target, *, allow_private) -> AsyncIterator[McpConnection]   # list_tools() / call_tool(name, args)
 def to_text(result) -> McpResult; def schema_hash(schema) -> str; def check_tool_schema(schema) -> bool
 def validate_arguments(schema, arguments) -> [{field, message}]; def describe(exc, headers) -> str; async def guard_url(url, *, allow_private)
@@ -345,8 +345,8 @@ def validate_arguments(schema, arguments) -> [{field, message}]; def describe(ex
 
 ### 2. 契约
 
-- **依赖**：`mcp>=1.2,<2`（锁定 1.30.0；v2 改用 httpx2，仓库保持 httpx 0.28）、`jsonschema`、`pyyaml`。只支持远程传输，**没有 stdio**。
-  SDK 在 `connect` 内部延迟导入。
+- **依赖**：`mcp>=1.2,<2`（锁定 1.30.0；v2 改用 httpx2，仓库保持 httpx 0.28）、`jsonschema`、`pyyaml`。远程传输保留原 HTTP 检查。stdio 仅由部署目录提供启动定义，作者从目录启用。
+  本机传输通过受管进程及标准输入输出连接到 SDK。
 - **SDK 1.30 的写法**：Streamable HTTP 用 `streamable_http_client(url, http_client=client)`（自己创建 httpx 客户端并在 `finally` 关闭；
   不用已废弃的 `streamablehttp_client`）；SSE 用 `sse_client(url, timeout=30, sse_read_timeout=300, httpx_client_factory=factory)`；
   然后 `ClientSession(read, write, read_timeout_seconds=timedelta(seconds=30))`，`initialize()` 套 `asyncio.timeout(15)`；`list_tools` 按
@@ -391,14 +391,16 @@ MAX_PLUGINS = 10; TRIAL_LIMIT = 20000; DISABLED = "管理员已关闭 MCP"; NOT_
 PLUGIN_SLUG_RE = r"^[a-z0-9][a-z0-9-]{0,23}$"; MAX_HEADERS = 20
 McpPluginCreate(name, slug?, transport="streamable_http", url ≤500, headers?, enabled=True)   # extra="forbid"
 McpPluginUpdate(name?, slug?, transport?, url?, headers?, enabled?)   # headers：不提交 = 保持；提交 = 整体替换
-McpPluginOut{id, slug, name, transport, url, enabled, header_names, has_headers, tools: [McpToolOut], tools_refreshed_at, last_tested_at, last_error, …}
+McpPluginOut{id, slug, name, transport, url, catalog_id, catalog_version, enabled, header_names, has_headers, tools: [McpToolOut], tools_refreshed_at, last_tested_at, last_error, …}
 McpToolOut{name, description, input_schema, read_only_hint, schema_hash, enabled, auto_confirm}
 def tool_pref(plugin, name) -> (enabled, auto_confirm)   # 缺省 (True, False)
 ```
 
 | 方法与路径 | 说明 |
 |---|---|
-| `GET` / `POST /mcp-plugins` | 列表 / 新建（201） |
+| `GET` / `POST /mcp-plugins` | 个人插件列表 / 新建远程插件（201） |
+| `GET /mcp-plugins/catalog` | 本节点部署目录 [{id,name,description,version,available}] |
+| `POST /mcp-plugins/catalog/{id}/enable` | 选用或重新启用个人目录项（200）；可用查询参数 `catalog_version` 校验页面所见版本。 |
 | `POST /mcp-plugins/import` | `{mcpServers: {名称: {...}}}`（1–20 项）→ `{items: [{name, status: created\|error, detail, plugin}]}` |
 | `GET \| PATCH \| DELETE /mcp-plugins/{id}` | 读 / 改 / 删 |
 | `POST /mcp-plugins/{id}/refresh` | 测试连接并刷新工具列表（共用） |
@@ -411,7 +413,7 @@ def tool_pref(plugin, name) -> (enabled, auto_confirm)   # 缺省 (True, False)
 - 插件地址的 DNS 校验在数据库写锁外完成。实际写入前再检查账号、归属、开关与连接配置。解析期间目标配置已变化时返回 409，插件已删除则返回 404。刷新等待网络后也须核对原插件身份与目标。0067 起 SQLite 通过 AUTOINCREMENT 为新插件分配 ID，保持迁移时已有的 ID、工具和请求头。PostgreSQL 沿用原序列。
 - **归属**：插件按用户私有，他人一律 404 `插件不存在`；每人最多 10 个（400）。`(user_id, slug)` 唯一，冲突 409 `插件标识已被使用，请换一个`。
   slug 为空时由名称生成（只保留小写字母数字，其余转连字符，≤ 24），生成不出来 → 400 要求改用英文名称或填写标识。
-- **地址**：必须是 `http(s)://` 且有主机名；**不能带用户名密码**（凭据只能放加密的请求头）；保存时（新建、PATCH 改 url）做 SSRF 校验，失败 400；
+- **远程地址**：必须是 `http(s)://` 且有主机名；**不能带用户名密码**（凭据只能放加密的请求头）；保存时（新建、PATCH 改 url）做 SSRF 校验，失败 400；
   每次连接再校验（上一场景）。创建或修改插件地址在数据库事务外等待 DNS，保存前再次核对账号、持久开关和插件归属。并发创建还须在门内重查上限。
   改地址期间若原插件的地址、传输方式或请求头已被修改，则返回 409。原插件已删除时，迟到的保存或刷新返回 404。0067 起 SQLite 使用 AUTOINCREMENT，PostgreSQL 使用已有序列，两者均为新插件分配新 ID。
 - **请求头**：最多 20 个；名称符合 HTTP token 且 ≤ 100；`host` / `content-length` / `content-type` / `transfer-encoding` / `connection` / `accept` /
@@ -422,7 +424,7 @@ def tool_pref(plugin, name) -> (enabled, auto_confirm)   # 缺省 (True, False)
   - **整体替换语义**：PATCH 不提交 `headers` 字段 = 保持原值；提交 `{...}` = 整体替换；提交 `{}` 或 `null` = 清空。不支持只改其中一项
     （取值不回显，前端无法做逐项合并）。其他字段为 null 视为不变。
 - **导入 JSON 逐项校验**：每一项单独处理、单独提交，失败只让该项 `status=error`，其他项照常创建（达到 10 个上限后的项同样单独报错）：
-  - 值不是对象 →「配置应为对象」；含 `command` 或 `args` →「不支持 stdio 类型的 MCP（command）…」；
+  - 值必须是对象。遇到 stdio 或自定义启动字段，逐项提示「请从服务器插件列表启用 stdio 插件」。
   - 地址取 `url` 或 `serverUrl`，缺失 →「缺少 url」；
   - 传输取 `type` 或 `transport`（小写、`-` 转 `_`）：空 / `http` / `streamable_http` / `streamablehttp` → `streamable_http`，`sse` → `sse`，
     `stdio` → 拒绝，其他 →「不支持的传输类型」；
@@ -433,7 +435,7 @@ def tool_pref(plugin, name) -> (enabled, auto_confirm)   # 缺省 (True, False)
 - **工具偏好**：工具名放在**请求体**里（`McpToolPrefUpdate.tool`），不放路径——MCP 工具名可以含 `/`，放进路径会被路由拆开而 404。
   工具不在缓存列表中 → 404 `工具不存在`。偏好存 `tool_prefs[name] = {enabled, auto_confirm}`，未设置的字段保持当前值。
 - **试用调用**：本人发起，不经提案；工具不在缓存 → 404「工具不存在，请先刷新工具列表」；参数先按 `inputSchema` 校验，失败 400
-  `工具参数校验失败` + `errors: [{field, message}]`；校验通过后**先关闭请求 session 再联网**；结果截到 20000 字并给 `truncated`。插件停用时仍可试用。
+  `工具参数校验失败` + `errors: [{field, message}]`；校验通过后**先关闭请求 session 再联网**；结果截到 20000 字并给 `truncated`。远程插件停用时仍可试用。stdio 的管理试用在实际创建进程和写入时都要求所有者、启用状态、登记版本及工具偏好有效。
 
 ### 3. 必需的测试
 
@@ -469,7 +471,7 @@ async def call_data(sessions, resolved, arguments) -> {"text"} | {"error"}
 - **命名**：`mcp__{插件 slug}__{工具名}`，工具名中 `[A-Za-z0-9_-]` 以外的字符换成 `_`。超过 64 字符或与已生成的名称冲突 → 截到 55 字符再加
   `_` + sha256(`slug\0原工具名`) 前 8 位；仍冲突再追加序号。插件 slug 只含小写字母数字和连字符，所以不会和分隔符 `__` 混淆；但**解析从不拆分字符串**。
 - **映射写入 checkpoint**：`_turn` 第一次运行时（`"mcp_tool_map" not in checkpoint`）计算并保存 `checkpoint.mcp_tool_map`；续跑、重试（`create_task`
-  复制断点）都沿用，确认期间用户改了配置也不会让名称漂移。
+  复制断点）都沿用。stdio 条目另存 `catalog_id` 与工具缓存对应的 `catalog_version`，解析和确认时按当前登记版本重新核验，版本变化需重新刷新工具并发起新的调用。
 - **解析只认映射表**：runner 先查内置注册表，查不到且名称在映射表中才走 MCP。模型编造的 `mcp__other__x`、他人插件的名称、本轮开始后才启用的插件都
   不在映射表里 →「工具不存在」。在映射表里时 `resolve` 再逐项重查：MCP 总开关、会话仍启用该插件、插件属于本人且启用（`populate_existing`
   读最新行）、工具仍在缓存列表且 `schema_hash` 相同、工具仍启用；任一不满足 →「工具不存在或已变更」。
@@ -478,7 +480,7 @@ async def call_data(sessions, resolved, arguments) -> {"text"} | {"error"}
 - **调用流程**（`runner._external_call`，与其他工具一样计入 8 次调用上限）：
   1. `tool_start` 的 label 为「外部插件「名称」：工具名」；
   2. 参数按 `inputSchema`（jsonschema）校验，失败作为工具结果返回；
-  3. 免确认工具（`tool_prefs.auto_confirm`）直接经 `McpSessions` 调用，结果写 tool 消息，不生成提案；超时、连接失败作为 `{"error"}` 返回给模型，**这一轮不失败**；
+  3. 作者对部署登记的 stdio 工具设置免确认后，先持久化一次性外部调用占用，再由真实 stdio 连接器执行。启动子进程和向 stdin 写入工具请求分别取得租约，核验当前执行者、作者权限、工具及目录版本、确认偏好和已冻结参数。成功时移除占用并将工具消息一同提交。已发送后断连或结果丢失时保留未知结果，阻止重复发送。远程 HTTP／SSE 的自动调用继续受 `_require_auto_external_transport` 限制。
   4. 其他工具受单轮 50 项提案上限约束，生成 `AgentChange(kind="external")`。
 - **`readOnlyHint` 只是提示**：在预览和插件页显示，不会让工具免确认。
 - **external 提案的 preview**：
@@ -488,6 +490,7 @@ async def call_data(sessions, resolved, arguments) -> {"text"} | {"error"}
    "diff": [], "warnings": ["外部操作，执行后无法撤销"],
    "guards": [{"plugin_id", "schema_hash": 当前 hash 或 None, "enabled": resolve 是否成功}]}
   ```
+- 本机登记插件的外部提案还在 guards 中保存 `catalog_id` 和 `catalog_version`。
 - **不自动执行**：`_can_auto_execute` 对 `external` 返回 False；自动执行要求本批全部可自动，所以批次里只要有一项 external，整批都等待确认。
 - **确认时同步调用**（`service._execute_external`）：从轮次任务的 `checkpoint.mcp_tool_map` 取条目（没有 → failed「工具不存在或已变更」）→ 重新 `resolve`
   并生成预览 → 与存储的预览不同（插件或工具被停用、移出会话、schema 变化）→ 覆盖预览、commit、409 `preview_changed`，不调用 → 相同则再次校验参数 →
@@ -579,3 +582,9 @@ slug, tool = name.removeprefix("mcp__").split("__", 1)
 - 快照 / `load_skill` / 导出直接用 `skill.body`——含组件引用的 Skill 会把 `{{> x }}` 字面交给模型或他人；必须走 `expanded_body`。
 - 给 `chapter.continue` 加 `skill_guide`——续写消息已带着原 system，会重复注入。
 - 把三张用户级表登记进 `NOT_EXPORTED`——反射测试要求它的键都与项目相关，会直接失败（见 project-transfer.md）。
+
+## 部署目录中的 stdio 插件
+
+`MCP_STDIO_CATALOG` 引用部署者管理的清单。登录用户可获取登记项的名称、说明、标识、版本和当前节点可用状态。作者的启用记录沿用个人归属和数量上限，唯一约束防止重复选择。 本机行的 URL 为空字符串，保存目录 ID 和工具缓存版本。远程行保留原 URL、加密请求头，两列目录字段为空。只有 `enabled` 可通过个人 PATCH 修改。节点版本与指定版本不一致时启用、刷新和试用均应阻止。显式刷新新目录版本成功后更新缓存并清空旧工具确认偏好；刷新并发跨版本时返回 409。表单、创建/更新 API 和 JSON 导入均不能接受作者的启动命令、参数、工作目录或环境变量。浏览目录、保存选择、导入 JSON 不得启动本地程序。
+
+刷新、试用与智能体调用都要在实际启动子进程处复核本机目录、版本、权限和全站 MCP 开关。工具发送检查覆盖实际标准输入写入。已发送且结果未知的调用在 worker 接管时保留未知状态，避免回放外部副作用。轮次结束、取消和超时均须回收会话子进程，远程传输保留原有连接策略。

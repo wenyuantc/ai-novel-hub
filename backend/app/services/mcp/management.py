@@ -30,10 +30,12 @@ async def require_write(db: AsyncSession, user_id: int) -> None:
 class ManagementRequestGate:
     """每个刷新或试用操作单独使用，支持 SDK 并行的控制流和业务请求。"""
 
-    def __init__(self, maker: async_sessionmaker[AsyncSession], actor: authz.AuthenticatedActor, *, sse: bool):
+    def __init__(self, maker: async_sessionmaker[AsyncSession], actor: authz.AuthenticatedActor, *,
+                 sse: bool, local_check=None):
         self.maker = maker
         self.actor = actor
         self.sse = sse
+        self.local_check = local_check
         self._leases: dict[httpx.Request, AsyncExitStack] = {}
         self._failure = asyncio.get_running_loop().create_future()
 
@@ -52,16 +54,24 @@ class ManagementRequestGate:
             raise
 
     @asynccontextmanager
-    async def lease(self):
+    async def lease(self, body: dict | None = None):
         async with self.maker() as db:
             # PG 持有用户与设置的共享锁，SQLite 的 User 写屏障与设置写入互斥。
             try:
                 await authz.require_authenticated_for_send(db, self.actor)
                 await settings_gate.lock_for_reload(db)
                 await require_enabled(db)
+                if self.local_check is not None:
+                    await self.local_check(db, body)
             except SQLAlchemyError:
                 raise SettingsUnavailable() from None
             yield
+
+    def stdio_start(self):
+        return self.lease()
+
+    def stdio_write(self, body: dict):
+        return self.lease(body)
 
     async def before_request(self, request: httpx.Request) -> None:
         lease = AsyncExitStack()

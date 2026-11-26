@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     auto_analyze_enabled: bool = True
     # 实例级MCP有效开关：关闭后插件接口403，智能体禁止后续调用，已发调用允许结束。
     mcp_enabled: bool = True
+    mcp_stdio_catalog: str = ""
     # 整库备份的部署边界。S3、SMTP 和计划使用独立的 BackupSettings。
     backup_dir: str = Field(default="./backups", min_length=1)
     backup_pg_dump_path: str = Field(default="pg_dump", min_length=1)

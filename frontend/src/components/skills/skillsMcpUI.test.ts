@@ -33,7 +33,7 @@ const render = (el: ReactElement) => renderToString(createElement(MemoryRouter, 
 const noop = () => {}
 const pluginFixture = (over: Partial<McpPlugin> = {}): McpPlugin => ({
   id: 1, slug: 'dict', name: '词典', transport: 'streamable_http', url: 'https://example.com/a/very/long/path/that/should/wrap/mcp?token-free=1',
-  enabled: true, header_names: ['Authorization'], has_headers: true,
+  catalog_id: null, catalog_version: null, enabled: true, header_names: ['Authorization'], has_headers: true,
   tools: [{ name: 'lookup', description: '查词', input_schema: { type: 'object' }, read_only_hint: true, schema_hash: 'h', enabled: true, auto_confirm: false }],
   tools_refreshed_at: '2026-10-27T08:00:00', last_tested_at: '2026-10-27T08:00:00', last_error: '', created_at: '', updated_at: '', ...over,
 })
@@ -108,6 +108,19 @@ describe('375 宽度渲染', () => {
   it('请求头编辑行在窄屏下换行', () => {
     const html = render(createElement(HeadersEditor, { value: { mode: 'edit', rows: [headerRow('A', 'b')] }, onChange: noop, savedNames: [] }))
     expect(html).toContain('flex-wrap:wrap')
+    expectNoFixedWidth(html)
+  })
+})
+
+describe('本机插件卡片', () => {
+  it('展示目录与版本，只有作者侧的工具、启停和移除操作', () => {
+    const html = render(createElement(McpPluginCard, {
+      plugin: pluginFixture({ transport: 'stdio', url: '', has_headers: false, header_names: [], catalog_id: 'local-dict', catalog_version: '1.0' }),
+      onAction: noop, onToggle: noop,
+    }))
+    expect(html).toContain('服务器本机（stdio）')
+    expect(html).toContain('目录项 local-dict · 1.0')
+    expect(html).not.toContain('编辑')
     expectNoFixedWidth(html)
   })
 })

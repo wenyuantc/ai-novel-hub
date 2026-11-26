@@ -146,7 +146,7 @@ export default function McpPluginFormModal({ plugin, onClose, onSaved }: Props) 
   const jsonBody = (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Typography.Text type="secondary">
-        粘贴标准的 mcpServers 配置；每个服务单独创建。stdio（command）类型不支持，会被跳过。
+        粘贴 mcpServers 配置以导入远程服务。本机插件请从「服务器插件列表」启用。
       </Typography.Text>
       <Input.TextArea
         aria-label="mcpServers JSON"
@@ -154,6 +154,7 @@ export default function McpPluginFormModal({ plugin, onClose, onSaved }: Props) 
         onChange={(e) => {
           setJsonText(e.target.value)
           setJsonNotice(null)
+          setResults(null)
         }}
         placeholder={JSON_PLACEHOLDER}
         autoSize={{ minRows: 8, maxRows: 16 }}

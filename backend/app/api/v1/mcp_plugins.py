@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.core.deps import CipherDep, CurrentUser, DbDep, SessionmakerDep, SettingsDep
 from app.schemas.mcp import (
+    CatalogEnableRequest,
+    CatalogItemOut,
     McpCallRequest,
     McpCallResult,
     McpImportRequest,
@@ -15,7 +17,7 @@ from app.schemas.mcp import (
     McpPluginUpdate,
     McpToolPrefUpdate,
 )
-from app.services.mcp import management
+from app.services.mcp import catalog, management
 from app.services.mcp import service as svc
 
 
@@ -52,6 +54,21 @@ async def import_plugins(
     return await svc.import_servers(db, settings, cipher, user.id, body.mcpServers)
 
 
+@router.get("/catalog", response_model=list[CatalogItemOut])
+async def list_catalog(user: CurrentUser, settings: SettingsDep, response: Response) -> list[CatalogItemOut]:
+    response.headers["Cache-Control"] = "no-store"
+    return [CatalogItemOut(id=e.id, name=e.name, description=e.description, version=e.version, available=e.available)
+            for e in catalog.read(settings).values()]
+
+
+@router.post("/catalog/{catalog_id}/enable", response_model=McpPluginOut)
+async def enable_catalog(
+    catalog_id: str, user: CurrentUser, db: DbDep, settings: SettingsDep, cipher: CipherDep,
+    body: CatalogEnableRequest | None = None, catalog_version: str | None = None,
+) -> McpPluginOut:
+    return await svc.enable_catalog_plugin(db, settings, cipher, user.id, catalog_id, catalog_version)
+
+
 @router.get("/{plugin_id}", response_model=McpPluginOut)
 async def get_plugin(plugin_id: int, user: CurrentUser, db: DbDep, cipher: CipherDep) -> McpPluginOut:
     return svc.to_out(cipher, await svc.get_owned_plugin(db, user.id, plugin_id))
@@ -73,9 +90,9 @@ async def delete_plugin(plugin_id: int, user: CurrentUser, db: DbDep) -> Respons
 @router.post("/{plugin_id}/refresh", response_model=McpPluginOut)
 async def refresh_plugin(
     plugin_id: int, user: CurrentUser, db: DbDep, settings: SettingsDep, cipher: CipherDep, connector: ConnectorDep,
-    maker: SessionmakerDep,
+    maker: SessionmakerDep, catalog_version: str | None = None,
 ) -> McpPluginOut:
-    return await svc.refresh_tools(db, settings, cipher, connector, maker, user.id, plugin_id)
+    return await svc.refresh_tools(db, settings, cipher, connector, maker, user.id, plugin_id, catalog_version)
 
 
 @router.patch("/{plugin_id}/tools", response_model=McpPluginOut)

@@ -23,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStdio(value: Record<string, unknown>): boolean {
   const kind = String(value.type ?? value.transport ?? '').trim().toLowerCase()
-  return 'command' in value || 'args' in value || kind === 'stdio'
+  return 'command' in value || 'args' in value || 'catalog_id' in value || kind === 'stdio'
 }
 
 /**
@@ -71,7 +71,7 @@ export function parseMcpServersJson(text: string): ServersParse {
 }
 
 export function stdioNotice(names: string[]): string {
-  return `已跳过 stdio 类型的服务：${names.join('、')}。只支持远程 Streamable HTTP 或 SSE 服务，不会在服务器上启动本地进程。`
+  return `已跳过 stdio 类型的服务：${names.join('、')}。请从「服务器插件列表」启用部署者已登记的插件。`
 }
 
 // ---------------- 请求头编辑 ----------------

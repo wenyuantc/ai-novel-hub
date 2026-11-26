@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/11-26-login-methods-local-mcp/research/mcp-contracts.md","reason":"远程插件、作者界面、智能体发送与外部调用恢复的现有约束及规范定位"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"全站 MCP 开关在管理页和实际发送边界的行为"}
+{"file":".trellis/spec/backend/deployment-migrations.md","reason":"单实例、多 worker 和双实例迁移与排空"}

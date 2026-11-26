@@ -27,7 +27,7 @@ describe('mcpServers JSON 导入', () => {
     const r = parseMcpServersJson(JSON.stringify({ mcpServers: { fs: { command: 'npx', args: ['server'] }, py: { type: 'stdio' }, web: { url: 'https://w.example' } } }))
     expect(r).toMatchObject({ ok: true, stdio: ['fs', 'py'], servers: { web: { url: 'https://w.example' } } })
     expect(stdioNotice(['fs', 'py'])).toContain('fs、py')
-    expect(stdioNotice(['fs'])).toContain('只支持远程 Streamable HTTP 或 SSE')
+    expect(stdioNotice(['fs'])).toContain('请从「服务器插件列表」启用')
     const onlyStdio = parseMcpServersJson('{"mcpServers": {"fs": {"command": "node"}}}')
     expect(onlyStdio.ok && Object.keys(onlyStdio.servers)).toEqual([])
   })

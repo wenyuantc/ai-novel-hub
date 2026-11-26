@@ -16,6 +16,7 @@ services:
 
   app:
     build: .
+    init: true
     restart: unless-stopped
     depends_on:
       db:
@@ -44,6 +45,7 @@ services:
       TASK_ADMISSION_CLOSED: ${TASK_ADMISSION_CLOSED:-false}
       AUTO_ANALYZE_ENABLED: ${AUTO_ANALYZE_ENABLED:-true}
       MCP_ENABLED: ${MCP_ENABLED:-true}
+      MCP_STDIO_CATALOG: ${MCP_STDIO_CATALOG:-}
       ALLOW_PRIVATE_AI_ENDPOINTS: ${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
       TASK_PEER_ENABLED: ${TASK_PEER_ENABLED:-true}
       TASK_PEER_SOCKET_DIR: ${TASK_PEER_SOCKET_DIR:-}

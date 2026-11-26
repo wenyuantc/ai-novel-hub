@@ -3519,7 +3519,15 @@ export type SkillUpdate = Partial<Pick<SkillCreate, 'slug' | 'name' | 'descripti
 
 // ---------------- MCP 插件（backend/app/schemas/mcp.py） ----------------
 
-export type McpTransport = 'streamable_http' | 'sse'
+export type McpTransport = 'streamable_http' | 'sse' | 'stdio'
+
+export interface McpCatalogEntry {
+  available: boolean
+  id: string
+  name: string
+  description: string
+  version: string
+}
 export interface McpTool {
   name: string
   description: string
@@ -3534,6 +3542,8 @@ export interface McpPlugin {
   slug: string
   name: string
   transport: McpTransport
+  catalog_id: string | null
+  catalog_version: string | null
   url: string
   enabled: boolean
   /** 只回显请求头名称；取值加密存储，任何接口都不返回 */
@@ -3549,7 +3559,7 @@ export interface McpPlugin {
 export interface McpPluginCreate {
   name: string
   slug?: string | null
-  transport: McpTransport
+  transport: Exclude<McpTransport, 'stdio'>
   url: string
   headers?: Record<string, string> | null
   enabled?: boolean

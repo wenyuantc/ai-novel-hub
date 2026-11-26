@@ -217,7 +217,7 @@ async def test_0067_preserves_legacy_task_and_guards_execution_slots(migration_d
         await db.execute(text("INSERT INTO users(id, username, password_hash) VALUES(1,'slot-test','x')"))
         await db.execute(text("INSERT INTO tasks(id,user_id,kind,status,input) "
                               "VALUES(1,1,'chapter.generate','running','{}')"))
-        plugins = McpPlugin.__table__
+        plugins = await db.run_sync(lambda conn: Table("mcp_plugins", MetaData(), autoload_with=conn))
         plugin_row = dict(user_id=1, slug="existing", name="旧插件", transport="sse", url="https://old.example/mcp",
                           headers_encrypted="opaque-existing-ciphertext", enabled=False,
                           tools=[{"name": "example", "input_schema": {"type": "object"}}],

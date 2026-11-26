@@ -3,6 +3,7 @@
 import { api } from './client'
 import type {
   McpCallResult,
+  McpCatalogEntry,
   McpImportResult,
   McpPlugin,
   McpPluginCreate,
@@ -12,6 +13,9 @@ import type {
 } from './types'
 
 export const mcpApi = {
+  catalog: () => api.get<McpCatalogEntry[]>('/mcp-plugins/catalog'),
+  enableCatalog: (id: string, version: string) =>
+    api.post<McpPlugin>(`/mcp-plugins/catalog/${encodeURIComponent(id)}/enable?catalog_version=${encodeURIComponent(version)}`),
   list: () => api.get<McpPlugin[]>('/mcp-plugins'),
   get: (id: number) => api.get<McpPlugin>(`/mcp-plugins/${id}`),
   create: (body: McpPluginCreate) => api.post<McpPlugin>('/mcp-plugins', body),
@@ -22,7 +26,10 @@ export const mcpApi = {
   update: (id: number, body: McpPluginUpdate) => api.patch<McpPlugin>(`/mcp-plugins/${id}`, body),
   remove: (id: number) => api.del(`/mcp-plugins/${id}`),
   /** 测试连接并刷新工具列表；失败 400（last_error 同时写库） */
-  refresh: (id: number) => api.post<McpPlugin>(`/mcp-plugins/${id}/refresh`),
+  refresh: (id: number, version?: string | null) => {
+    const query = version ? `?catalog_version=${encodeURIComponent(version)}` : ''
+    return api.post<McpPlugin>(`/mcp-plugins/${id}/refresh${query}`)
+  },
   /** 工具名放在请求体里（工具名可以含 /，放进路径会 404） */
   updateTool: (id: number, tool: string, body: McpToolPrefUpdate) =>
     api.patch<McpPlugin>(`/mcp-plugins/${id}/tools`, { ...body, tool } satisfies McpToolPrefRequest),
@@ -35,4 +42,5 @@ export const MAX_MCP_PLUGINS = 10
 export const MCP_TRANSPORT_LABELS: Record<McpPlugin['transport'], string> = {
   streamable_http: 'Streamable HTTP',
   sse: 'SSE（旧版）',
+  stdio: '服务器本机（stdio）',
 }

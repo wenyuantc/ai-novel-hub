@@ -47,7 +47,7 @@ function Inner({ plugin, onChanged }: { plugin: McpPlugin; onChanged: (plugin: M
   const refresh = async () => {
     setRefreshing(true)
     try {
-      onChanged(await mcpApi.refresh(plugin.id))
+      onChanged(await mcpApi.refresh(plugin.id, plugin.catalog_version))
       message.success('连接成功，工具列表已更新')
     } catch (err) {
       message.error(errorMessage(err))
@@ -78,11 +78,11 @@ function Inner({ plugin, onChanged }: { plugin: McpPlugin; onChanged: (plugin: M
       <Space wrap>
         <Tag color={status.color}>{status.label}</Tag>
         {plugin.last_tested_at && <Typography.Text type="secondary">最近测试 {formatTime(plugin.last_tested_at)}</Typography.Text>}
-        <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refresh()}>
+        <Button icon={<ReloadOutlined />} loading={refreshing} disabled={plugin.transport === 'stdio' && !plugin.enabled} onClick={() => void refresh()}>
           测试连接并刷新工具
         </Button>
       </Space>
-      {!plugin.enabled && <Alert type="info" showIcon message="插件已停用：智能体不会使用它的工具，仍可在这里试用" />}
+      {!plugin.enabled && <Alert type="info" showIcon message={plugin.transport === 'stdio' ? '本机插件已停用。重新启用后可刷新和试用工具。' : '插件已停用：智能体不会使用它的工具，仍可在这里试用'} />}
       {plugin.last_error && <Alert type="error" showIcon message="最近一次连接失败" description={<span style={{ overflowWrap: 'anywhere' }}>{plugin.last_error}</span>} />}
       <div>
         <Typography.Title level={5}>工具（{plugin.tools.length}）</Typography.Title>
@@ -130,7 +130,7 @@ function Inner({ plugin, onChanged }: { plugin: McpPlugin; onChanged: (plugin: M
           />
         )}
       </div>
-      {plugin.tools.length > 0 && <ToolTrial plugin={plugin} />}
+      {plugin.tools.length > 0 && (plugin.transport !== 'stdio' || plugin.enabled) && <ToolTrial plugin={plugin} />}
       <Modal open={schemaOf !== null} title={schemaOf ? `参数：${schemaOf.name}` : ''} footer={null} onCancel={() => setSchemaOf(null)} destroyOnHidden>
         <pre style={{ ...mono, background: token.colorFillQuaternary, padding: 8, borderRadius: token.borderRadius }}>
           {schemaOf ? JSON.stringify(schemaOf.input_schema, null, 2) : ''}

@@ -512,7 +512,9 @@ async def _external_call(
         yield "tool_end", {"call_id": call["id"], "ok": False, "summary": invalid["error"]}
         return
     if external.auto_confirm:
-        _require_auto_external_transport()
+        # 本机连接器在 spawn 与 stdin 写入处均持有发送租约；远程自动执行沿用既有门禁。
+        if external.plugin.transport != "stdio":
+            _require_auto_external_transport()
         if ctx is None:
             raise _external_unknown_error()
         # cleanup_scope 覆盖 claim 提交、真实发送、网络关闭及结果收尾。

@@ -43,7 +43,8 @@ async def test_terms_native_restore_and_single_book_owner(tmp_path, dialect):
         await asyncio.to_thread(command.downgrade, cfg, "0075")
         async with engine.begin() as db:
             assert await db.scalar(roles) == old
-        await asyncio.to_thread(command.upgrade, cfg, "0076")
+        # 运行当前应用前升级到当前 head，保留上面的 0075 → 0076 独立迁移断言。
+        await asyncio.to_thread(command.upgrade, cfg, "head")
 
         site_path = "/api/v1/admin/publication-terms"
         personal_path = "/api/v1/publication-terms"
@@ -77,6 +78,7 @@ async def test_terms_native_restore_and_single_book_owner(tmp_path, dialect):
                                     stop_event=threading.Event())
             await _ok(author.put(personal_path, json={"terms": [], "expected_revision": 2}))
 
+        await asyncio.to_thread(command.downgrade, cfg, "0076")
         with pytest.raises(RuntimeError, match="先备份"):
             await asyncio.to_thread(command.downgrade, cfg, "0075")
         async with engine.connect() as db:

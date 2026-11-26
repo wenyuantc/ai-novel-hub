@@ -122,11 +122,25 @@ class McpToolOut(BaseModel):
     auto_confirm: bool
 
 
+class CatalogItemOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    version: str
+    available: bool
+
+
+class CatalogEnableRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class McpPluginOut(BaseModel):
     id: int
     slug: str
     name: str
-    transport: McpTransport
+    transport: Literal["streamable_http", "sse", "stdio"]
+    catalog_id: str | None = None
+    catalog_version: str | None = None
     url: str
     enabled: bool
     # 只回显请求头名称；取值加密存储，任何接口都不返回

@@ -1,6 +1,7 @@
 # 同机两个独立应用实例示例。两个服务在 Compose 私网内互联，端口分配给每个 worker。
 x-app: &app
   build: .
+  init: true
   restart: unless-stopped
   depends_on:
     db:
@@ -34,6 +35,7 @@ x-app-environment: &app-environment
   TASK_ADMISSION_CLOSED: ${TASK_ADMISSION_CLOSED:-false}
   AUTO_ANALYZE_ENABLED: ${AUTO_ANALYZE_ENABLED:-true}
   MCP_ENABLED: ${MCP_ENABLED:-true}
+  MCP_STDIO_CATALOG: ${MCP_STDIO_CATALOG:-}
   ALLOW_PRIVATE_AI_ENDPOINTS: ${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
   TASK_PEER_ENABLED: ${TASK_PEER_ENABLED:-true}
   TASK_PEER_PORT: "0"

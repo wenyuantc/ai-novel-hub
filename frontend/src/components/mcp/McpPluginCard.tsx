@@ -42,12 +42,12 @@ export default function McpPluginCard({ plugin, busy, onAction, onToggle }: Prop
         <Button key="open" type="link" size="small" icon={<ToolOutlined />} onClick={() => onAction(plugin, 'open')}>
           工具
         </Button>,
-        <Button key="refresh" type="link" size="small" icon={<ReloadOutlined />} loading={busy} onClick={() => onAction(plugin, 'refresh')}>
+        <Button key="refresh" type="link" size="small" icon={<ReloadOutlined />} loading={busy} disabled={plugin.transport === 'stdio' && !plugin.enabled} onClick={() => onAction(plugin, 'refresh')}>
           测试
         </Button>,
-        <Button key="edit" type="link" size="small" icon={<EditOutlined />} onClick={() => onAction(plugin, 'edit')}>
+        ...(plugin.transport === 'stdio' ? [] : [<Button key="edit" type="link" size="small" icon={<EditOutlined />} onClick={() => onAction(plugin, 'edit')}>
           编辑
-        </Button>,
+        </Button>]),
         <Button key="delete" type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => onAction(plugin, 'delete')}>
           删除
         </Button>,
@@ -63,7 +63,7 @@ export default function McpPluginCard({ plugin, busy, onAction, onToggle }: Prop
           {plugin.has_headers && <Tag>请求头 {plugin.header_names.length} 个</Tag>}
         </Space>
         <Typography.Text type="secondary" style={{ fontSize: 12, overflowWrap: 'anywhere', wordBreak: 'break-all' }}>
-          {plugin.url}
+          {plugin.transport === 'stdio' ? `目录项 ${plugin.catalog_id} · ${plugin.catalog_version}` : plugin.url}
         </Typography.Text>
         <Typography.Text style={{ fontSize: 12 }}>
           {plugin.tools_refreshed_at

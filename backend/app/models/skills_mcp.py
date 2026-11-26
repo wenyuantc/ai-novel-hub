@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -70,7 +71,19 @@ class McpPlugin(TimestampMixin, Base):
     """远程 MCP 服务（Streamable HTTP / SSE）。请求头整体 JSON 序列化后 Fernet 加密，接口只回显请求头名称。"""
 
     __tablename__ = "mcp_plugins"
-    __table_args__ = (UniqueConstraint("user_id", "slug"), {"sqlite_autoincrement": True})
+    __table_args__ = (
+        UniqueConstraint("user_id", "slug"),
+        Index("uq_mcp_plugins_user_catalog", "user_id", "catalog_id", unique=True),
+        CheckConstraint(
+            "(transport = 'stdio' AND catalog_id IS NOT NULL AND catalog_version IS NOT NULL "
+            "AND url = '' AND headers_encrypted IS NULL) OR "
+            "(transport IN ('sse','streamable_http') AND catalog_id IS NULL AND catalog_version IS NULL AND url <> '')",
+            name="transport_target",
+        ),
+        {"sqlite_autoincrement": True},
+    )
+    catalog_id: Mapped[str | None] = mapped_column(String(24))
+    catalog_version: Mapped[str | None] = mapped_column(String(80))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
