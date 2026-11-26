@@ -1,0 +1,4 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"联合核对账号、权限、配置和前后端边界"}
+{"file":".trellis/spec/backend/auth-admin.md","reason":"账号兼容和会话版本"}
+{"file":".trellis/tasks/11-26-login-methods-local-mcp/research/mcp-contracts.md","reason":"远程插件、作者界面、智能体发送与外部调用恢复的现有约束及规范定位"}
+{"file":".trellis/spec/backend/deployment-migrations.md","reason":"两个子任务的数据库迁移与升级顺序"}

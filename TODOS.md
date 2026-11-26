@@ -368,10 +368,11 @@
 
 ### 32. 登录方式与本机 MCP 插件
 
-当前状态：认证只有本地账号，MCP 只接入远程 Streamable HTTP／SSE。仅在对外开放或多人部署时需要。
+Linux DO、GitHub 登录、验证器动态码、一次性恢复码和带审计的人工恢复已接入。双进程验证了同一作者从两个入口完成第二步后仍能访问原书架及私人插件。两家的外部身份交换使用测试适配器，真实平台授权仍待已登记的测试应用验收。[登录验证](.trellis/tasks/11-26-oauth-two-step-login/research/verification.md) · [联合验收](.trellis/tasks/11-26-login-methods-local-mcp/research/integration.md)
 
-- [ ] 支持 OAuth 第三方登录与两步验证。
-- [ ] 支持托管本机 stdio 类型的 MCP 插件进程。
+- [x] 支持 OAuth 第三方登录与两步验证。
+- [x] 支持托管部署者预装并登记的本机 stdio MCP 插件。已验证作者自行启用、真实工具调用、双实例版本差异与进程回收。[插件验收](.trellis/tasks/11-26-managed-stdio-mcp/research/verification.md)
+- [ ] 分别用真实 Linux DO 和 GitHub 应用完成一次从平台授权页回到原书架的验收。
 
 ### 33. 智能体轮次进行时会话详情偶发 404
 

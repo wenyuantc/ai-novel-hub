@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/auth-admin.md","reason":"联合验证第三方登录后保留原用户身份"}
+{"file":".trellis/spec/backend/admin-audit.md","reason":"人工恢复两种来源和成功审计事务"}
+{"file":".trellis/tasks/11-26-login-methods-local-mcp/research/mcp-contracts.md","reason":"远程插件、作者界面、智能体发送与外部调用恢复的现有约束及规范定位"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"联合检查注册与 MCP 开关"}
+{"file":".trellis/spec/backend/deployment-migrations.md","reason":"SQLite 与 PostgreSQL、多 worker 和多实例验收"}

@@ -1,0 +1,29 @@
+{
+  "id": "login-methods-local-mcp",
+  "name": "login-methods-local-mcp",
+  "title": "TODO #32 登录方式与本机 MCP 插件",
+  "description": "规划第三方登录、两步验证与服务端本机 stdio 插件托管，分别验收账号和插件链路。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "aiNovel",
+  "assignee": "aiNovel",
+  "createdAt": "2026-11-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-26-oauth-two-step-login",
+    "11-26-managed-stdio-mcp"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
