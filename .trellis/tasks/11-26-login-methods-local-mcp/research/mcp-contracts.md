@@ -8,4 +8,4 @@
 | 智能体与外部副作用 | 按当前用户、轮次和工具偏好决定可用工具。外部提案确认和自动调用都需复核当前授权和发送资格。已发出但未获结果的调用保持未知，不自动重放。见同一规范中“智能体中的 MCP 工具”（第 447 行）、“中断的外部调用回收”（第 516 行），以及[智能体规范](../../../spec/backend/agent.md)。 |
 | 作者操作页面 | 创作资源导航与智能体面板遵循 MCP 总开关。已有插件页支持表单、JSON、逐项提示、刷新、试用和工具确认偏好，协作者界面隐藏 MCP 控件。本机目录把每位作者的选择接入这些现有入口。见[前端组件规范](../../../spec/frontend/component-guidelines.md)第 511、553、576–591 行。 |
 
-管理路径实际发送检查在 `backend/app/services/mcp/management.py:30`，智能体发送租约在 `backend/app/services/agent/mcp_tools.py:182`，同一轮复用会话在该文件第 602 行。实施 stdio 应在真实子进程和标准输入写入处验证相同约束。[本机插件设计](../../11-26-managed-stdio-mcp/design.md)
+管理路径实际发送检查在 `backend/app/services/mcp/management.py:30`，智能体发送租约在 `backend/app/services/agent/mcp_tools.py:182`，同一轮复用会话在该文件第 602 行。实施 stdio 应在真实子进程和标准输入写入处验证相同约束。[本机插件设计](../../archive/2026-11/11-26-managed-stdio-mcp/design.md)

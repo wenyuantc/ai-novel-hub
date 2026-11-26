@@ -1,6 +1,6 @@
 # 部署目录与真实 stdio 验收
 
-2026-11-26，在隔离数据库和仓库中的字符计数插件上执行。示例插件以标准输入输出运行，工具名为 `count_characters`，参数为 `text`。它统计非空白字符，无需网络和外部凭据。[示例程序](../../../../backend/examples/manuscript_stats_mcp.py) · [端到端回归](../../../../backend/tests/test_managed_stdio_workflow.py)
+2026-11-26，在隔离数据库和仓库中的字符计数插件上执行。示例插件以标准输入输出运行，工具名为 `count_characters`，参数为 `text`。它统计非空白字符，无需网络和外部凭据。[示例程序](../../../../../../backend/examples/manuscript_stats_mcp.py) · [端到端回归](../../../../../../backend/tests/test_managed_stdio_workflow.py)
 
 ## 升级旧数据
 
