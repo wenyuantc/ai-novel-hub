@@ -23,6 +23,8 @@ AuditAction = Literal[
     "user.create",
     "user.update",
     "user.reset_password",
+    "user.two_step.reset",
+    "user.two_step.local_recovery",
     "user.delete",
     "project.update",
     "planning.update",

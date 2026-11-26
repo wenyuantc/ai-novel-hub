@@ -173,3 +173,7 @@ await db.refresh(chapter)
 ## 协作审计全站只读入口
 
 `/api/v1/admin/audit-logs/collaboration` 注册于 `GET /{log_id}` 之前，复用 `audit.read` 查询独立的 `collaboration_audit_events` 表，并在 `/admin/audit-logs` 以「协作审计」只读标签页展示。该表独立长期保留，**不受 `audit.cleanup` 按日期清理影响**。完整跨层契约见[协作审计查询](./collaboration-audit-query.md)。
+
+## 两步验证人工恢复
+
+后台重置普通用户使用 `user.two_step.reset`，记录真实超级管理员。部署者本机恢复唯一启用超级管理员使用 `user.two_step.local_recovery`，空站内 actor 与专用内部来源配对。审计查询和显示区分这两个操作；审计成功记录随清除凭据及会话版本变更同事务提交，禁止采集动态码、恢复码或核实身份的材料。

@@ -121,7 +121,7 @@ export async function readErrorDetail(resp: Response): Promise<string> {
 
 /** 判断某路径的 401 是否应触发全局登出跳转（登录类接口自身的 401 由页面处理）。 */
 function shouldRedirectOn401(path: string): boolean {
-  return !path.startsWith('/auth/login') && !path.startsWith('/auth/me')
+  return !path.startsWith('/auth/login') && !path.startsWith('/auth/me') && path !== '/auth/two-step/verify'
 }
 
 export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration, method: RequestOptions['method'] = 'GET', projectFailure: CapturedProjectFailure | null = null): Promise<never> {

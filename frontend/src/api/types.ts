@@ -1,6 +1,7 @@
 // 与后端 app/schemas/*.py 对齐的类型定义
 
 export interface User {
+  has_local_password?: boolean
   id: number
   username: string
   is_admin: boolean
@@ -131,6 +132,7 @@ export interface AdminResourceUsage {
 
 /** 安全账号详情；全部作品数包括正常、回收站及删除中。 */
 export interface AdminUserDetail extends AdminUser {
+  two_step_enabled?: boolean
   last_login_at: string | null
   usage: {
     active: AdminResourceUsage
@@ -161,6 +163,7 @@ export interface ResetPasswordRequest {
 
 // 管理员审计；与 schemas/audit.py 保持一致，不包含正文或凭据。
 export type AuditAction =
+  | 'user.two_step.reset' | 'user.two_step.local_recovery'
   | 'planning.update'
   | 'role.create' | 'role.update' | 'role.delete' | 'user.roles.update' | 'user.roles.bootstrap' | 'user.quotas.update'
   | 'task.cancel_request'

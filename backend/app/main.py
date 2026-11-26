@@ -20,6 +20,7 @@ from app.api.v1 import api_router
 from app.core.config import Settings, get_settings
 from app.core.database import create_engine, create_sessionmaker
 from app.core.errors import register_error_handlers
+from app.core.oauth_access_log import redact_oauth_callback
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
 from app.services import (
@@ -108,6 +109,7 @@ def create_app(
 ) -> FastAPI:
     """start_task_engine：lifespan 中是否启停后台任务引擎（测试不触发 lifespan，由 fixture 显式 start/stop）。"""
     settings = settings if settings is not None else get_settings().model_copy(deep=True)
+    logging.getLogger("uvicorn.access").addFilter(redact_oauth_callback)
     engine = create_engine(settings.database_url)
 
     @asynccontextmanager

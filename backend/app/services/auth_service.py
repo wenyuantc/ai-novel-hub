@@ -79,13 +79,24 @@ async def register(db: AsyncSession, creds: Credentials) -> User:
         await _authentication_storage_failure(db, exc)
 
 
-async def authenticate(db: AsyncSession, creds: Credentials) -> User:
+async def verify_credentials(db: AsyncSession, creds: Credentials) -> User:
     user = await db.scalar(select(User).where(User.username == creds.username))
-    if user is None or not await to_thread.run_sync(verify_password, creds.password, user.password_hash):
+    if user is None or not user.has_local_password or not await to_thread.run_sync(
+        verify_password, creds.password, user.password_hash,
+    ):
         raise UnauthorizedError("用户名或密码错误")
     # 密码正确后才提示禁用，避免向不知道密码的人暴露账号状态
     if not user.is_active:
         raise ForbiddenError("账号已被禁用，请联系管理员")
+    return user
+
+
+async def authenticate(db: AsyncSession, creds: Credentials) -> User:
+    from app.services import two_step
+
+    user = await verify_credentials(db, creds)
+    if await two_step.enabled(db, user.id):
+        raise UnauthorizedError("需要两步验证")
     return await _record_successful_login(db, user)
 
 
@@ -143,14 +154,37 @@ async def get_user(db: AsyncSession, user_id: int) -> User | None:
 
 async def change_password(db: AsyncSession, user: User, data: ChangePasswordRequest) -> User:
     """自助改密：校验原密码后更新，并递增 token_version 使其他会话失效（调用方为当前会话重新签发 Cookie）。"""
+    if not user.has_local_password:
+        raise BadRequestError("当前账号使用第三方登录，尚未设置本地密码")
     if not await to_thread.run_sync(verify_password, data.old_password, user.password_hash):
         raise BadRequestError("原密码不正确")
-    user.password_hash = await to_thread.run_sync(hash_password, data.new_password)
-    # SQL 端自增，避免与并发的管理员重置 / 禁用基于旧值写回同一版本号
-    user.token_version = User.token_version + 1
-    await db.commit()
-    await db.refresh(user)
-    return user
+    new_hash = await to_thread.run_sync(hash_password, data.new_password)
+    try:
+        await authz.gate(db)
+        await authz.lock_users(db, user.id)
+        persisted_creation = await db.scalar(select(User.created_at).where(User.id == user.id))
+        if persisted_creation != user.created_at:
+            raise UnauthorizedError("登录已失效，请重新登录")
+        result = await db.execute(
+            update(User)
+            .where(
+                User.id == user.id, User.is_active.is_(True),
+                User.token_version == user.token_version, User.password_hash == user.password_hash,
+            )
+            .values(password_hash=new_hash, token_version=User.token_version + 1)
+            .returning(User)
+            .execution_options(populate_existing=True, synchronize_session=False)
+        )
+        updated = result.scalar_one_or_none()
+        if updated is None:
+            await db.rollback()
+            raise UnauthorizedError("登录已失效，请重新登录")
+        await db.commit()
+        return updated
+    except AppError:
+        raise
+    except Exception as exc:
+        await _authentication_storage_failure(db, exc)
 
 
 async def bootstrap_admin(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings) -> None:

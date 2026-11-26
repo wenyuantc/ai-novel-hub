@@ -151,6 +151,7 @@ class User(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    has_local_password: Mapped[bool] = mapped_column(Boolean, server_default=true(), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)

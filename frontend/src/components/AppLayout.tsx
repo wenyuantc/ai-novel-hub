@@ -50,7 +50,7 @@ export default function AppLayout() {
   const groups = studioNavigation(projectId, mcpEnabled, canUseAI, access.canRead && (access.role === 'owner' || isCollaborator))
   const current = navigationItem(groups, location.pathname)
   const adminSection = location.pathname.startsWith('/admin/')
-  const pageName = location.pathname === '/admin/publication-terms' ? '全站发布词表' : location.pathname.startsWith('/admin/ai-usage') ? '全站 AI 用量与费用' : location.pathname.startsWith('/admin/backups') ? '整库备份' : location.pathname.startsWith('/admin/roles') ? '角色与权限' : location.pathname.startsWith('/admin/system-settings') ? '系统设置' : location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const pageName = location.pathname === '/settings/security' ? '账号安全' : location.pathname === '/admin/publication-terms' ? '全站发布词表' : location.pathname.startsWith('/admin/ai-usage') ? '全站 AI 用量与费用' : location.pathname.startsWith('/admin/backups') ? '整库备份' : location.pathname.startsWith('/admin/roles') ? '角色与权限' : location.pathname.startsWith('/admin/system-settings') ? '系统设置' : location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
@@ -69,12 +69,14 @@ export default function AppLayout() {
       ...(can(user, 'publication_terms.read') ? [{ key: 'admin-publication-terms', icon: <BookOutlined />, label: '全站发布词表' }] : []),
       { type: 'divider' },
       { key: 'publication-terms', icon: <BookOutlined />, label: '个人发布词表' },
-      { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
+      { key: 'security', icon: <KeyOutlined />, label: '账号安全' },
+      ...(user?.has_local_password === false ? [] : [{ key: 'password', icon: <KeyOutlined />, label: '修改密码' }]),
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
     ],
     onClick: async ({ key }) => {
       setNavOpenAt(null)
-      if (key === 'admin-dashboard') navigate('/admin/dashboard')
+      if (key === 'security') navigate('/settings/security')
+      else if (key === 'admin-dashboard') navigate('/admin/dashboard')
       else if (key === 'admin-tasks') navigate('/admin/tasks')
       else if (key === 'admin-ai-usage') navigate('/admin/ai-usage')
       else if (key === 'admin') navigate('/admin/users')

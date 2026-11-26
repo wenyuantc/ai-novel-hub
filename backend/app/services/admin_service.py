@@ -13,6 +13,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import hash_password
 from app.models import AnnotationMessage, Project, Task, User
 from app.models.entities import FINISHED_TASK_STATUSES
+from app.models.two_step import TwoStepFactor
 from app.schemas.admin import (
     AdminResourceUsage,
     AdminUserCreate,
@@ -127,6 +128,9 @@ async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail:
     rows = (await db.execute(
         authz.snapshot_statement(include_token_version=False).outerjoin(counts, counts.c.user_id == User.id)
         .add_columns(
+            select(TwoStepFactor.user_id).where(
+                TwoStepFactor.user_id == User.id, TwoStepFactor.enabled.is_(True),
+            ).exists().label("two_step_enabled"),
             User.last_login_at, func.coalesce(counts.c.project_count, 0).label("project_count"),
             *(func.coalesce(counts.c[name], 0).label(name) for name in names),
         )
@@ -142,7 +146,7 @@ async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail:
     }
     return AdminUserDetail(
         **_to_out(access, int(row["project_count"])).model_dump(),
-        last_login_at=row["last_login_at"], usage=AdminUserUsage(**usage),
+        two_step_enabled=row["two_step_enabled"], last_login_at=row["last_login_at"], usage=AdminUserUsage(**usage),
     )
 
 
@@ -208,6 +212,7 @@ async def reset_password(db: AsyncSession, actor: User, user_id: int, data: Rese
         await authz.protect_target(db, current, user_id)
         user = await _get_user(db, user_id)
         audit.target(user)
+        user.has_local_password = True
         user.password_hash = await to_thread.run_sync(hash_password, data.new_password)
         # SQL 端自增，避免并发的禁用 / 改密基于旧值写回同一版本号
         user.token_version = User.token_version + 1

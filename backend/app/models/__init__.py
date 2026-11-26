@@ -1,3 +1,4 @@
+from app.models import two_step as two_step
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
 from app.models.agent_operation import AgentConversationOperation
 from app.models.ai_usage import AiModelPrice, AiUsageBudget, AiUsageCall, AiUsageTracking
@@ -60,6 +61,7 @@ from app.models.inspiration_origin import InspirationOrigin
 from app.models.notes import ProjectNote
 from app.models.notifications import Notification, NotificationPreference
 from app.models.novel_templates import NovelTemplate, NovelTemplateCreationReceipt, NovelTemplateImage
+from app.models.oauth import OAuthIdentity, OAuthState
 from app.models.pen_names import PenName, ProjectPenName
 from app.models.planning import (
     PlanningTag,
@@ -245,6 +247,8 @@ __all__ = [
     "TaskStatistic",
     "TaskWorker",
     "TaskWorkRecord",
+    "OAuthIdentity",
+    "OAuthState",
     "User",
     "WorldSetting",
     "WritingStyle",

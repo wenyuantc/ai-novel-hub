@@ -103,3 +103,31 @@ describe('认证与公开配置独立同步', () => {
     expect(useAuthStore.getState()).not.toHaveProperty('items')
   })
 })
+
+describe('两步验证登录', () => {
+  it('第一步通过仍是匿名，验证码无效可重试，恢复码验证成功才建立本地登录状态', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ two_step_required: true })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: '验证码无效' }), { status: 401 }))
+      .mockResolvedValueOnce(response(actor()))
+    vi.stubGlobal('fetch', fetcher)
+    await expect(useAuthStore.getState().login({ username: '作者', password: 'password' })).resolves.toBe('challenge')
+    expect(useAuthStore.getState()).toMatchObject({ user: null, status: 'anonymous' })
+    await expect(useAuthStore.getState().verify('000000')).rejects.toThrow('验证码无效')
+    expect(useAuthStore.getState().user).toBeNull()
+    await useAuthStore.getState().verify('TEST-RECOVERY')
+    expect(useAuthStore.getState()).toMatchObject({ user: actor(), status: 'authenticated' })
+    expect(fetcher.mock.calls[2][0]).toBe('/api/v1/auth/two-step/verify')
+    expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ code: 'TEST-RECOVERY' })
+  })
+
+  it('旧挑战完成时不得覆盖已切换的账号', async () => {
+    const old = deferred<Response>()
+    vi.stubGlobal('fetch', vi.fn().mockReturnValueOnce(old.promise).mockResolvedValueOnce(response(actor({ id: 2 }))))
+    const pending = useAuthStore.getState().verify('012345')
+    await useAuthStore.getState().login({ username: '新账号', password: 'password' })
+    old.resolve(response(actor()))
+    await pending
+    expect(useAuthStore.getState().user?.id).toBe(2)
+  })
+})

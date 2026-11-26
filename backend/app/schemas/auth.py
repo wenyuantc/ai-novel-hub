@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
@@ -38,6 +38,7 @@ class UserOut(AuthorizationOut):
     id: int
     username: str
     is_admin: bool
+    has_local_password: bool
     created_at: datetime
 
 
@@ -51,3 +52,12 @@ class ChangePasswordRequest(BaseModel):
     # 原密码只做长度上限，规则不符时也应走「原密码不正确」而不是 422
     old_password: str = Field(min_length=1, max_length=200)
     new_password: Password
+
+
+
+class TwoStepRequired(BaseModel):
+    two_step_required: Literal[True] = True
+
+
+class FactorCode(BaseModel):
+    code: str = Field(min_length=1, max_length=100)

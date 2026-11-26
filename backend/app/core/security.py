@@ -1,13 +1,48 @@
 """密码哈希、JWT 与 API Key 对称加密。"""
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import bcrypt
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
+from starlette.requests import Request
+
+from app.core.errors import ForbiddenError
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
+    from app.models import User
 
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_COOKIE = "access_token"
+
+
+def extract_access_token(request: Request) -> str | None:
+    token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+    if token:
+        return token
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
+    return None
+
+
+def require_recent_login(request: Request, settings: "Settings", user: "User") -> None:
+    token = extract_access_token(request)
+    try:
+        payload = jwt.decode(token or "", settings.jwt_secret, algorithms=[JWT_ALGORITHM])
+        issued = payload.get("iat")
+        if (
+            payload.get("sub") == str(user.id)
+            and payload.get("ver", 0) == user.token_version
+            and type(issued) is int
+            and 0 <= datetime.now(UTC).timestamp() - issued <= 600
+        ):
+            return
+    except jwt.PyJWTError:
+        pass
+    raise ForbiddenError("最近登录已过期，请重新登录后再操作")
 
 
 def hash_password(password: str) -> str:

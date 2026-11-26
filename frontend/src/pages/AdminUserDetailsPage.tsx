@@ -17,7 +17,8 @@ import { parseAdminUserId } from '../utils/adminUserDetails'
 import RoleTags from '../components/adminUsers/RoleTags'
 import UserRolesButton from '../components/adminUsers/UserRolesButton'
 import UserQuotaPanel from '../components/adminUsers/UserQuotaPanel'
-import { can } from '../utils/permissions'
+import ResetTwoStepButton from '../components/adminUsers/ResetTwoStepButton'
+import { can, isSuperAdmin } from '../utils/permissions'
 import { formatTime } from '../utils/time'
 
 interface SummaryProps { user: AdminUserDetail; actorId: number; mobile: boolean }
@@ -98,7 +99,8 @@ function UserContent({ user, actorId, mobile, loading, refreshVersion, onRefresh
   return <Space direction="vertical" size={20} style={{ width: '100%', minWidth: 0 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
       <Typography.Title level={3} style={{ margin: 0, overflowWrap: 'anywhere' }}>{user.username} 的用户详情</Typography.Title>
-      <Space wrap><UserRolesButton user={user} onChanged={onRefresh} disabled={loading} /><AdminUserActionButtons user={user} actorId={actorId} disabled={loading || state.target !== null} onAction={controller.open} /></Space>
+      <Space wrap>{isSuperAdmin(actor) && !user.is_management_account && !isSuperAdmin(user) && user.two_step_enabled &&
+        <ResetTwoStepButton key={user.id} user={user} onChanged={onRefresh} disabled={loading} />}<UserRolesButton user={user} onChanged={onRefresh} disabled={loading} /><AdminUserActionButtons user={user} actorId={actorId} disabled={loading || state.target !== null} onAction={controller.open} /></Space>
     </div>
     <AdminUserSummary user={user} actorId={actorId} mobile={mobile} />
     <UserQuotaPanel userId={user.id} />

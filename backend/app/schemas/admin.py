@@ -56,6 +56,7 @@ class AdminUserUsage(BaseModel):
 
 
 class AdminUserDetail(AdminUserOut):
+    two_step_enabled: bool
     last_login_at: datetime | None
     usage: AdminUserUsage
 
@@ -67,6 +68,11 @@ class AdminUserCreate(Credentials):
 class AdminUserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     is_active: bool | None = None
+
+
+class ResetTwoStepRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    identity_verified: bool
 
 
 class ResetPasswordRequest(BaseModel):

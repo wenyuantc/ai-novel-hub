@@ -57,3 +57,11 @@ describe('外壳账号菜单的迟到退出回调', () => {
     }
   })
 })
+
+it.each([true, false])('账号菜单按本地密码可用状态显示改密入口 %s', hasPassword => {
+  useAuthStore.setState({ status: 'authenticated', user: { ...user(1), has_local_password: hasPassword } })
+  renderToString(createElement(App, null, createElement(AppLayout)))
+  const keys = screen.menus.flatMap(menu => menu.items?.map(item => item && 'key' in item ? item.key : null) ?? [])
+  expect(keys.includes('password')).toBe(hasPassword)
+  expect(keys).toContain('security')
+})

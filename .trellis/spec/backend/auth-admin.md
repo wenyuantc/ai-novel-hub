@@ -184,7 +184,7 @@ async def get_user_detail(db: AsyncSession, user_id: int) -> AdminUserDetail
 
 **登录与事务**
 
-- 只有成功密码登录和注册后的自动登录记录时间；管理员创建/bootstrap、日常请求、改密续签、API Key 使用、失败/禁用登录不更新。
+- 只有成功完成全部登录步骤（密码或已绑定的第三方身份）和注册后的自动登录记录时间；管理员创建/bootstrap、日常请求、改密续签、API Key 使用、失败/禁用登录不更新。
 - register 调用 create_user_uncommitted，再通过 _record_successful_login 提交；管理员创建仍由 AuditOperation 提交，bootstrap使用内部user.roles.bootstrap同事务边界。不能在共用创建函数或 _set_auth_cookie 中通用记录，否则会误算未登录账号或续签。
 - bcrypt 后的条件 UPDATE 同时核对用户ID、is_active、已验 password_hash、token_version；SQL CASE 保持 last_login_at 不倒退，显式 updated_at=User.updated_at，不把登录算作账号资料编辑。
 - UPDATE RETURNING(User) 的已验证快照提交后直接返回，不再 refresh 成并发重置后的新版本。并发禁用/重置若发生在该事务之后，只使旧快照 Cookie 失效，不能让旧密码签出新版本。
@@ -268,3 +268,9 @@ if authenticated is None:
 await db.commit()
 return authenticated
 ```
+
+## 登录方式和账号恢复（迁移 0077–0078）
+
+- 每个平台用独立回调、一次性状态与浏览器 Cookie；绑定时复核发起的本地账号与会话版本。外部身份唯一键包含平台，不能通过相同用户名或邮箱合并。第三方首次建号与本地注册使用相同的有效注册开关，后台关闭注册不会阻断已绑定者。
+- 普通用户和管理员共用自愿启用的验证器。存在有效第二步时，第一步只建立短期挑战。正式 Cookie 及最近成功登录时间要等动态码或未使用的恢复码验证成功。启用时展示 10 枚各 80 位随机恢复码，只存 SHA-256 摘要，每枚最多使用一次。动态码使用 30 秒时间步，允许相邻前后一步，已用时间步不能重用。绑定信息有效 10 分钟，挑战有效 5 分钟，同一账号 5 分钟内最多允许 5 次错误。绑定、解绑和两步验证设置校验最近 10 分钟内的登录会话。用户对象通过 `has_local_password` 区分当前是否有密码入口。
+- 人工恢复清除验证器与恢复码并推进会话版本。后台仅允许超级管理员核实普通用户后操作。本机命令须核实目标是唯一启用的超级管理员。两者与成功审计同事务提交，原有第一步凭据和书架继续归同一账号。

@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     encryption_key: str
     # 业务设置白名单由 SystemSettingsManager 在启动和管理保存后发布有效值。
     registration_enabled: bool = True
+    oauth_github_client_id: str = ""
+    oauth_github_client_secret: str = Field(default="", repr=False)
+    oauth_github_redirect_uri: str = ""
+    oauth_linuxdo_client_id: str = ""
+    oauth_linuxdo_client_secret: str = Field(default="", repr=False)
+    oauth_linuxdo_redirect_uri: str = ""
     cookie_secure: bool = False
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, gt=0)
     # 开放API可运行时覆盖的每Key/UTC分钟上限；不影响网页登录，不重置当前分钟计数。
@@ -113,6 +119,24 @@ class Settings(BaseSettings):
                 reasons = "；".join(str(e.get("msg", "")).removeprefix("Value error, ") for e in exc.errors())
                 raise ValueError(f"ADMIN_USERNAME / ADMIN_PASSWORD 不符合注册规则：{reasons}") from None
             self.admin_username = creds.username
+        return self
+
+    @model_validator(mode="after")
+    def _validate_oauth(self) -> "Settings":
+        from urllib.parse import urlsplit
+
+        for name in ("github", "linuxdo"):
+            prefix = f"oauth_{name}_"
+            values = [getattr(self, prefix + key) for key in ("client_id", "client_secret", "redirect_uri")]
+            if not any(values):
+                continue
+            if not all(value and value.strip() == value for value in values):
+                raise ValueError(f"{name} 登录需要完整的 Client ID、Secret 和回调地址")
+            url = urlsplit(values[2])
+            local_http = url.scheme == "http" and url.hostname in {"localhost", "127.0.0.1", "::1"}
+            if (not url.hostname or not (url.scheme == "https" or local_http) or url.username or url.password
+                    or url.query or url.fragment or url.path != f"/api/v1/auth/oauth/{name}/callback"):
+                raise ValueError(f"{name} 登录回调地址无效")
         return self
 
     @property

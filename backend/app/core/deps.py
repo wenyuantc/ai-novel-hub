@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.ai.providers import ProviderFactory
 from app.core.config import Settings
 from app.core.errors import UnauthorizedError
-from app.core.security import ACCESS_TOKEN_COOKIE, SecretCipher, decode_access_token
+from app.core.security import SecretCipher, decode_access_token, extract_access_token
 from app.models import User
 from app.services import auth_service, authorization_service
 from app.services.retrieval_service import EmbedEnv
@@ -67,18 +67,8 @@ SystemSettingsDep = Annotated[SystemSettingsManager, Depends(get_system_settings
 EmbedEnvDep = Annotated[EmbedEnv, Depends(get_embed_env)]
 
 
-def _extract_token(request: Request) -> str | None:
-    token = request.cookies.get(ACCESS_TOKEN_COOKIE)
-    if token:
-        return token
-    auth = request.headers.get("Authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip() or None
-    return None
-
-
 async def get_current_user(request: Request, db: DbDep, settings: SettingsDep) -> User:
-    token = _extract_token(request)
+    token = extract_access_token(request)
     decoded = decode_access_token(token, settings.jwt_secret) if token else None
     user = await auth_service.get_user(db, decoded[0]) if decoded is not None else None
     # 令牌版本不一致（已重置密码 / 已禁用 / 已改密）或账号被禁用：一律按未登录处理，前端统一跳转登录页

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/auth-admin.md","reason":"沿用会话版本、账号启用状态和最近成功登录规则"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"沿用注册开关的有效值和并发写入边界"}
+{"file":".trellis/spec/backend/admin-audit.md","reason":"后台及本机恢复分别标识来源，与成功变更共同提交"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"超级管理员身份与最后启用超级管理员的并发复核"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"登录中的挑战与已认证用户状态分开处理"}

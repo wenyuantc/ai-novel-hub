@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { accountSecurityApi } from '../api/accountSecurity'
 import { authApi } from '../api/auth'
 import { ApiError, invalidateRequestGeneration } from '../api/client'
 import type { AuthConfig, Credentials, User } from '../api/types'
@@ -19,7 +20,8 @@ interface AuthState {
   cancelAuthorization: () => void
   applyAuthorization: (user: User) => void
   init: () => Promise<void>
-  login: (cred: Credentials) => Promise<void>
+  login: (cred: Credentials) => Promise<'challenge' | 'complete' | undefined>
+  verify: (code: string) => Promise<void>
   register: (cred: Credentials) => Promise<void>
   logout: () => Promise<void>
   /** 会话失效（任意接口 401）时调用 */
@@ -90,6 +92,19 @@ export const useAuthStore = create<AuthState>((set, get) => {
     cancelAuthorization()
     const generation = epoch
     const user = await authApi.login(cred)
+    if (generation !== epoch) return
+    if ('two_step_required' in user) {
+      set({ status: 'anonymous', user: null })
+      return 'challenge'
+    }
+    set({ status: 'authenticated', user })
+    return 'complete'
+  },
+
+  verify: async (code) => {
+    cancelAuthorization()
+    const generation = epoch
+    const user = await accountSecurityApi.verify(code)
     if (generation !== epoch) return
     set({ status: 'authenticated', user })
   },

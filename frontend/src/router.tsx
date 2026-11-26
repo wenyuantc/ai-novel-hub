@@ -48,6 +48,7 @@ export const router = createBrowserRouter([
       { path: 'series/:sid', lazy: lazyPage(() => import('./pages/SeriesPage')) },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
       { path: 'settings/ai-usage', lazy: lazyPage(() => import('./pages/AIUsagePage')) },
+      { path: 'settings/security', lazy: lazyPage(() => import('./pages/AccountSecurityPage')) },
       { path: 'settings/publication-terms', lazy: lazyPage(() => import('./pages/PublicationTermsPage')) },
       { path: 'settings/api-keys', lazy: lazyPage(() => import('./pages/ApiKeysPage')) },
       { path: 'novel-templates', lazy: lazyPage(() => import('./pages/NovelTemplatesPage')) },

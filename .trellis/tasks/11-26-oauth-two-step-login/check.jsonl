@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/auth-admin.md","reason":"检查三个登录入口、旧账号、会话吊销及登录时间"}
+{"file":".trellis/spec/backend/admin-audit.md","reason":"检查恢复日志来源、凭据脱敏、失败回滚和提交不确定时的处理"}
+{"file":".trellis/spec/backend/rbac-quotas.md","reason":"复核只授予超级管理员的权限及并发目标检查"}
+{"file":".trellis/spec/backend/system-settings.md","reason":"覆盖第三方授权回调期间关闭注册的行为"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"核对第一步完成前后前端登录状态和失效会话清理"}

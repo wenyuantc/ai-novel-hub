@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from app.core.deps import DbDep, require_permission
+from app.core.deps import AdminUser, DbDep, require_permission
 from app.models import User
 from app.schemas.admin import (
     AdminProjectList,
@@ -12,9 +12,10 @@ from app.schemas.admin import (
     AdminUserOut,
     AdminUserUpdate,
     ResetPasswordRequest,
+    ResetTwoStepRequest,
 )
 from app.schemas.project import ProjectStatus
-from app.services import admin_project_service
+from app.services import admin_project_service, two_step_recovery
 from app.services import admin_service as svc
 
 PermissionProjectsRead = Annotated[User, Depends(require_permission("projects.read"))]
@@ -73,6 +74,12 @@ async def reset_password(
     user_id: int, body: ResetPasswordRequest, admin: PermissionUsersResetPassword, db: DbDep
 ) -> Response:
     await svc.reset_password(db, admin, user_id, body)
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/users/{user_id}/reset-two-step", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_two_step(user_id: int, body: ResetTwoStepRequest, admin: AdminUser, db: DbDep) -> Response:
+    await two_step_recovery.reset_for_user(db, admin, user_id, identity_verified=body.identity_verified)
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Cache-Control": "no-store"})
 
 

@@ -71,12 +71,16 @@ class AuditOperation:
         include_own_project: bool = False,
         system_expiry: bool = False,
         bootstrap: bool = False,
+        local_recovery: bool = False,
     ):
         self.db = db
         if system_expiry and (actor is not None or action != "project.expire"):
             raise ValueError("系统身份仅允许内部到期清理")
         if bootstrap and (actor is not None or action != "user.roles.bootstrap"):
             raise ValueError("引导系统身份仅允许内部启动角色变更")
+        if local_recovery and (actor is not None or action != "user.two_step.local_recovery" or target_type != "user"):
+            raise ValueError("本机恢复身份仅用于超级管理员两步验证恢复")
+        self.local_recovery = local_recovery
         self.bootstrap = bootstrap
         self.system_expiry = system_expiry
         self.include_own_project = include_own_project
@@ -100,16 +104,17 @@ class AuditOperation:
                 from app.services.authorization_service import snapshot
 
                 management = await snapshot(self.db, actor.id) if actor is not None else None
-                self.enabled = self.system_expiry or self.bootstrap or bool(
+                self.enabled = self.system_expiry or self.bootstrap or self.local_recovery or bool(
                     management and management.is_active and management.is_management_account
                 )
                 if not self.enabled:
                     return self
+                internal_source = "管理员引导" if self.bootstrap else "系统自动清理"
+                if self.local_recovery:
+                    internal_source = "部署者本机恢复"
                 self.values.update(
                     actor_user_id=actor.id if actor is not None else None,
-                    actor_username=(
-                        actor.username if actor is not None else "管理员引导" if self.bootstrap else "系统自动清理"
-                    ),
+                    actor_username=actor.username if actor is not None else internal_source,
                 )
                 project_id = self.values.get("project_id")
                 if project_id is not None:
