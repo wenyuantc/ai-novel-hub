@@ -92,6 +92,7 @@ from app.models.serialization import (
     SerializationGoal,
     SerializationPublication,
 )
+from app.models.story_timeline import ChapterStoryDate, SceneStoryDate, StoryCalendar
 from app.services.project_transfer import remap
 
 Option = Literal["versions", "snapshots", "generation_logs", "inspiration"]
@@ -339,6 +340,18 @@ RULES: tuple[TableRule, ...] = (
     TableRule(
         "scenes", Scene, lambda pid: _in(Scene.chapter_id, Chapter, pid),
         fk={"chapter_id": "chapters"},
+    ),
+    TableRule(
+        "story_calendars", StoryCalendar, _own(StoryCalendar), fill=_P, exclude=("revision",),
+        json_plain=("months",),
+    ),
+    TableRule(
+        "chapter_story_dates", ChapterStoryDate, lambda pid: _in(ChapterStoryDate.chapter_id, Chapter, pid),
+        fk={"chapter_id": "chapters"},
+    ),
+    TableRule(
+        "scene_story_dates", SceneStoryDate, lambda pid: _in_scenes(SceneStoryDate.scene_id, pid),
+        fk={"scene_id": "scenes"},
     ),
     TableRule(
         "scene_documents", SceneDocumentMeta, lambda pid: _in_scenes(SceneDocumentMeta.scene_id, pid),

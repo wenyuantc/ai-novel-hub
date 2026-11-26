@@ -34,8 +34,9 @@ from app.schemas.outline import PlanBuildResult, PlanOut, PlansSync, PlanUpdate
 from app.services import authorization_service as authz
 from app.services import memory_service, outline_snapshot_service, planning_lifecycle, setting_progression_service
 from app.services.chapter_delete_guard import (
+    check_agent_date_removal,
     check_agent_serialization_removal,
-    detach_scene_move_chapters,
+    detach_chapter_structure,
     detach_serialization_chapters,
     ensure_chapter_delete_isolation,
 )
@@ -293,6 +294,7 @@ async def sync_plans(
         if removed_chapter_ids:
             await ensure_chapter_delete_isolation(db, project_id, removed_chapter_ids)
             if agent_undoable:
+                await check_agent_date_removal(db, removed_chapter_ids)
                 await check_agent_serialization_removal(db, project_id, removed_chapter_ids)
             await memory_service.validate_chapters_deleted(db, removed_chapter_ids)
 
@@ -320,7 +322,7 @@ async def sync_plans(
         await db.flush()
         # 空章节随细纲删除：从后往前删，其后的章节号整体 -1
         await memory_service.on_chapters_deleted(db, [c.id for c in ordered])
-        await detach_scene_move_chapters(db, project_id, removed_chapter_ids)
+        await detach_chapter_structure(db, project_id, removed_chapter_ids)
         await detach_serialization_chapters(db, project_id, removed_chapter_ids)
         for i, ch in enumerate(ordered):
             no = ch.chapter_no

@@ -201,6 +201,10 @@ def consistency_evidence(value: Any, ctx: RemapContext) -> Any:
         if isinstance(item, dict) and "chapter_id" in item:
             new = ctx.ref("chapters", item["chapter_id"], "一致性问题证据")
             item = {**item, "chapter_id": item["chapter_id"] if ctx.identity and new is not None else new}
+        snapshot = item.get("story_time") if isinstance(item, dict) else None
+        if isinstance(snapshot, dict) and "scene_id" in snapshot:
+            sid = ctx.ref("scenes", snapshot["scene_id"], "故事日期证据")
+            item = {**item, "story_time": {**snapshot, "scene_id": sid}}
         out.append(item)
     return out
 

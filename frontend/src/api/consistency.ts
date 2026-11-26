@@ -104,6 +104,16 @@ export interface IssueEvidence {
   start: number | null
   end: number | null
   text_hash: string
+  story_time?: {
+    scene_id: number | null
+    source: 'scene' | 'chapter' | 'unmarked' | 'unknown'
+    label: string
+    year: number | null
+    month_id: string | null
+    month_order: number | null
+    day: number | null
+  } | null
+  story_time_stale?: boolean
   /** 章节已删除，或当前正文指纹与 text_hash 不同 */
   stale: boolean
 }

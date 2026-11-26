@@ -332,3 +332,7 @@ POST /projects/9/chapters/12/scenes/34/move-preview
 POST /projects/9/chapters/12/scenes/34/move
 {"target_chapter_id":18,"insert_before_scene_id":null,"signature":"<预览签名>"}
 ```
+
+### 故事日期与结构操作
+
+场景显式日期以场景 ID 为键。无覆盖的活动场景在读取时沿用当前章的默认日期。移动预览显示出发章和目标章的日期来源，确认需重验预览依据。拆分时右段沿用左段的日期来源；合并比较显式与继承来源，即使当天的显示日期相同也要明确选择保留哪侧。退场场景保留日期以供恢复，历法修改须校验退场记录。

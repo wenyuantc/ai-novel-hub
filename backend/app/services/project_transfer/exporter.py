@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Chapter, ChapterCharacter, GenerationLog, InspirationSession, Project, ProjectCover, WritingStyle
+from app.models.story_timeline import StoryCalendar
 from app.schemas.transfer import BackupEstimate, BackupOptions, EstimateGroup
 from app.services import authorization_service, personal_projection, project_lifecycle, setting_ai_visibility
 from app.services.project_service import get_owned_project
@@ -33,9 +34,9 @@ from app.services.project_transfer.serialization import SerializationState, seri
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 17
+VERSION = 18
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0074"
+APP_SCHEMA = "0075"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -56,6 +57,7 @@ class ExportPlan:
     ai_revision: int
     planning_revision: int
     content_revisions: dict[int, int]
+    timeline_revision: int | None
     annotation_state: AnnotationState
     serialization_state: SerializationState
 
@@ -85,6 +87,7 @@ async def prepare_export(db: AsyncSession, user_id: int, project_id: int, option
                       image_versions=await thumbnails.versions(db, project.id),
                       ai_revision=project.ai_visibility_revision, planning_revision=project.planning_revision,
                       content_revisions=content_revisions,
+                      timeline_revision=await _timeline_revision(db, project.id),
                       annotation_state=await annotation_state(db, project.id),
                       serialization_state=await serialization_state(db, project.id))
 
@@ -246,15 +249,15 @@ def _assert_same_lifecycle(plan: ExportPlan, current: datetime | None) -> None:
 async def _iter_rows(db: AsyncSession, rule: TableRule, plan: ExportPlan) -> AsyncIterator[Any]:
     table = rule.model.__table__
     base = select(table).where(_scope(rule, plan))
-    if not rule.has_id and rule.table != "scene_documents":
+    if len(table.primary_key.columns) != 1:
         await _assert_export_active(db, plan)
         for row in (await db.execute(base.order_by(*table.primary_key.columns))).mappings():
             yield row
         return
-    key = table.c.id if rule.has_id else table.c.scene_id
+    key = next(iter(table.primary_key.columns))
     rich_row = rule.table in {"scene_documents", "scene_sections", "revision_batch_scenes", "serialization_editions"}
     page_size = RICH_ROW_BATCH if rich_row else BATCH
-    last = 0
+    last = 0  # 已登记表的单列主键均为正整数，首页也使用同一游标条件。
     while True:
         await _assert_export_active(db, plan)
         rows = (await db.execute(base.where(key > last).order_by(key).limit(page_size))).mappings().all()
@@ -381,6 +384,10 @@ async def _stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: E
         yield b"}}"
 
 
+async def _timeline_revision(db: AsyncSession, pid: int) -> int | None:
+    return await db.scalar(select(StoryCalendar.revision).where(StoryCalendar.project_id == pid))
+
+
 async def validate_export(db: AsyncSession, plan: ExportPlan, *, complete: bool = True) -> None:
     """发送前和最后的闭合符之前复验原身份、作品及快照。"""
     await authorization_service.require_authenticated(db, plan.actor)
@@ -394,6 +401,8 @@ async def validate_export(db: AsyncSession, plan: ExportPlan, *, complete: bool 
     current_planning = await db.scalar(select(Project.planning_revision).where(Project.id == plan.project_id))
     if await thumbnails.versions(db, plan.project_id) != plan.image_versions:
         raise ConflictError("备份导出期间缩略图已变化，请重新导出", extra={"code": "thumbnail_changed"})
+    if await _timeline_revision(db, plan.project_id) != plan.timeline_revision:
+        raise ConflictError("备份导出期间故事日期已变化，请重新导出", extra={"code": "story_timeline_changed"})
     if await annotation_state(db, plan.project_id) != plan.annotation_state:
         raise ConflictError("备份导出期间协作批注已变化，请重新导出", extra={"code": "annotation_changed"})
     if await serialization_state(db, plan.project_id) != plan.serialization_state:

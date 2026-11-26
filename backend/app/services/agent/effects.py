@@ -58,7 +58,7 @@ from app.services import (
 from app.services.ai_dispatch import lock_visibility_write
 from app.services.cast_service import is_protagonist_role
 from app.services.chapter_delete_guard import (
-    detach_scene_move_chapters,
+    detach_chapter_structure,
     detach_serialization_chapters,
     ensure_chapter_delete_isolation,
     has_serialization_work,
@@ -1561,7 +1561,7 @@ async def undo(db: AsyncSession, project_id: int, effects: list[Effect], *, disc
             # 已验证待撤销的新建章最多只有默认空条目；与撤销同一保存点清理。
             removed_chapters = [e["pk"]["id"] for e in effects if e["table"] == "chapters" and e["before"] is None]
             await ensure_chapter_delete_isolation(db, project_id, removed_chapters)
-            await detach_scene_move_chapters(db, project_id, removed_chapters)
+            await detach_chapter_structure(db, project_id, removed_chapters)
             await detach_serialization_chapters(db, project_id, removed_chapters)
             await _restore_rows(db, effects, preserve)
             await _validate_restored_scopes(db, project_id, effects)

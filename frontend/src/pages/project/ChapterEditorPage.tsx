@@ -1,3 +1,4 @@
+import ChapterDatesButton from '../../components/storyTimeline/ChapterDatesButton'
 import { useSettingsConfirmation } from '../../components/systemSettings/useSettingsConfirmation'
 import { readMentionAnchor } from '../../utils/mentions'
 import {
@@ -793,6 +794,7 @@ function ChapterEditor({ pid, initial, siblings, onChanged }: EditorProps) {
           分析
         </Button>
       </Badge>}
+      <ChapterDatesButton key={`${chapter.id}:${currentSceneId}:${projectScopeVersion}`} pid={pid} chapterId={chapter.id} sceneId={currentSceneId} />
       <ChapterForeshadowButton projectId={pid} chapterId={chapter.id} />
       <Button size="small" disabled={actionLocked} onClick={() => void openSerialization()}>连载与存稿</Button>
       <Button size="small" icon={<HistoryOutlined />} onClick={() => setVersionsOpen(true)}>

@@ -136,6 +136,16 @@ async def test_native_restore_with_collaborator_and_review_history(tmp_path, eng
             await _ok(owner.patch(f"{scenes}/{second['id']}", json={
                 "expected_content_revision": revision, "content": "已经拆掉",
             }))
+            timeline = f"{base}/story-timeline"
+            saved = await _ok(owner.put(timeline + "/calendar", json={
+                "expected_revision": 0, "era_name": "星历", "months": [{"id": "fog", "name": "雾月", "days": 20}],
+            }))
+            for kind, target_id, day in (("chapter", chapter["id"], 10), ("scene", second["id"], 3)):
+                saved = await _ok(owner.put(f"{timeline}/{kind}/{target_id}/date", json={
+                    "expected_revision": saved["revision"], "date": {"year": 3, "month_id": "fog", "day": day},
+                }))
+            dated = await _ok(reviewer.get(timeline))
+            assert [item["source"] for item in dated["items"]] == ["scene", "chapter", "inherited"]
             history = await _history(owner, path)
             states = {row["id"]: (row["anchor_valid"], row["resolved"]) for row in history[0]}
             assert states == {ids[0]: (True, False), ids[1]: (True, True), ids[2]: (False, False)}
@@ -163,6 +173,7 @@ async def test_native_restore_with_collaborator_and_review_history(tmp_path, eng
         async with _clients(tmp_path, target) as (owner, reviewer, outsider):
             for client, name in ((owner, "review-owner"), (reviewer, "review-guest"), (outsider, "review-outsider")):
                 await _ok(client.post("/api/v1/auth/login", json={"username": name, "password": "secret123"}))
+            assert await _ok(reviewer.get(timeline)) == dated
             assert await _history(reviewer, path) == history
             assert (await outsider.get(path)).status_code == 404
             assert (await reviewer.post(f"{path}/{ids[2]}/resolve")).status_code == 403

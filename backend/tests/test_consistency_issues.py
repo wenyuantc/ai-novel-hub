@@ -432,7 +432,8 @@ async def test_issue_flags_are_computed_in_batch(app, client, fake_llm):
         assert svc.needs_recheck(orphan, await svc.chapter_text_hashes(db, project["id"], [])) is True
         # 其他作品查不到本作品的章节：全部视为失效
         assert (await svc.issue_flags(db, project["id"] + 999, rows))[rows[2].id].stale == (True, True)
-    assert len(statements) == 1
+    # 一批分别读取正文指纹、历法、章投影与活动场景；问题数量和证据条数均不增加查询次数。
+    assert len(statements) == 4
     sword, hall, same = (flags[row.id] for row in rows)
     assert (sword.needs_recheck, sword.stale) == (True, (False, True))
     assert (hall.needs_recheck, hall.stale) == (True, (True, False))

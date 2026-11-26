@@ -27,6 +27,7 @@ const preview: SceneMovePreview = {
   scene_id: 8, source: { chapter_id: 2, chapter_no: 2, title: '河岸', content_revision: 3, scene_count: 3 },
   target: { chapter_id: 3, chapter_no: 3, title: '码头', content_revision: 5, scene_count: 2 },
   insert_before_scene_id: 13, source_position: 2, target_position: 1, planning_revision: 6,
+  story_date_before: '未标时间', story_date_after: '未标时间',
   signature: 'a'.repeat(64), source_will_be_empty: false, planning_changes: [], timeline_events: [],
   source_seam: { before: '', after: '' }, target_seam: { before: '', after: '' }, moved_start: '', moved_end: '', blockers: [],
 }

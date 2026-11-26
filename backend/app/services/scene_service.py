@@ -36,6 +36,13 @@ from app.schemas.scene import (
 from app.services import annotation_anchors, project_access, setting_progression_service, version_service, writing_stats
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import count_words, get_manual_chapter
+from app.services.scene_story_dates import (
+    advance_timeline_revision,
+    copy_explicit_date,
+    date_source_label,
+    require_same_date_revision,
+)
+from app.services.story_timeline import get_item as get_story_date_item
 
 _MAX_SORT = 2**31 - 1
 
@@ -421,6 +428,8 @@ async def restore_snapshot(
         await restore_scene_planning(db, chapter.project_id, item.id, item.planning)
     await refresh_projection(db, chapter, expected_revision=expected_revision)
     await setting_progression_service.on_story_positions_changed(db, chapter.project_id)
+    if ids != [scene.id for scene in current]:
+        await advance_timeline_revision(db, chapter.project_id)
 
 
 async def get_manual_write_chapter(
@@ -529,6 +538,7 @@ async def _finish_structure(db: AsyncSession, chapter: Chapter, audit: AuditOper
 
     await setting_progression_service.on_story_positions_changed(db, chapter.project_id)
     await bump_revision(db, chapter.project_id)
+    await advance_timeline_revision(db, chapter.project_id)
     version = await version_service.record(db, chapter, "manual", note=note)
     audit.version(version, chapter.project_id)
     audit.summary.changed_fields = ["content"]
@@ -688,6 +698,7 @@ async def split_scene_locked(db: AsyncSession, chapter: Chapter, scene_id: int, 
         if any(section.include_in_ai for section in split_docs[1].sections):
             await bump_visibility_revision(db, chapter.project_id, tighten=True)
     await clone_scene_planning(db, chapter.project_id, scene.id, right.id)
+    await copy_explicit_date(db, scene.id, right.id)
     scenes.insert(scenes.index(scene) + 1, right)
     await _set_order(db, scenes)
     await refresh_projection(db, chapter, expected_revision=data.expected_content_revision)
@@ -722,6 +733,11 @@ async def _merge_preview(db: AsyncSession, chapter: Chapter, data: SceneMergePre
     for field in ("title", "summary"):
         if getattr(left, field) != getattr(right, field):
             conflicts.append({"field": field, "left": getattr(left, field), "right": getattr(right, field)})
+    left_date, right_date = [await get_story_date_item(db, chapter.project_id, "scene", s.id) for s in selected]
+    require_same_date_revision(left_date, right_date)
+    if left_date.explicit_date != right_date.explicit_date:
+        conflicts.append({"field": "story_date", "left": date_source_label(left_date),
+                          "right": date_source_label(right_date)})
     raw_left = (planning.get(left.id) or {}).get("raw")
     raw_right = (planning.get(right.id) or {}).get("raw")
     if raw_left != raw_right:
@@ -730,7 +746,7 @@ async def _merge_preview(db: AsyncSession, chapter: Chapter, data: SceneMergePre
     digest = {"chapter": chapter.id, "content_revision": chapter.content_revision, "planning_revision": revision,
               "scenes": [{"id": s.id, "title": s.title, "summary": s.summary, "content": s.content,
                           "sort": s.sort, "separator_before": s.separator_before} for s in selected],
-              "planning": planning, "blockers": blockers}
+              "planning": planning, "blockers": blockers, "date_revision": left_date.revision}
     signature = content_fingerprint(json.dumps(digest, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
     return SceneMergePreviewOut(scene_ids=data.scene_ids, content_revision=chapter.content_revision,
                                 planning_revision=revision, signature=signature, blockers=blockers, conflicts=conflicts)
@@ -784,6 +800,7 @@ async def merge_scenes_locked(db: AsyncSession, chapter: Chapter, data: SceneMer
     if data.metadata_source == "right":
         left.title, left.summary = right.title, right.summary
         await clone_scene_planning(db, chapter.project_id, right.id, left.id)
+        await copy_explicit_date(db, right.id, left.id)
     suffix = right.separator_before + right.content
     await annotation_anchors.map_edits(db, left, left.content + suffix, [ProseEdit.model_construct(
         start=len(left.content), end=len(left.content), insert=suffix,

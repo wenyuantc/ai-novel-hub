@@ -48,6 +48,7 @@ const PROJECT_GROUPS = [
     { key: 'outlines', label: '大纲', icon: <OrderedListOutlined /> },
     { key: 'planning', label: '规划矩阵', icon: <DashboardOutlined /> },
     { key: 'chapters', label: '章节', icon: <BookOutlined /> },
+    { key: 'story-timeline', label: '故事时间线', icon: <HistoryOutlined /> },
     { key: 'serialization', label: '连载与存稿', icon: <CalendarOutlined /> },
     { key: 'foreshadows', label: '伏笔', icon: <BulbOutlined /> },
     { key: 'book-search', label: '全书搜索', icon: <SearchOutlined /> },

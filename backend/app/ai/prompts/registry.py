@@ -17,6 +17,10 @@ from app.ai.providers.base import ChatMessage
 from app.ai.templating import PromptOverride, TemplateRenderError, TemplateVar, VarKind, render_messages
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+STORY_CALENDAR_FORMAT = (
+    '输出 {"era_name":"纪年名称","months":[{"existing_id":null,"name":"月份名","days":30}]}。'
+    '已有月份的 existing_id 使用提供的 id。月份按年内顺序列出 1 到 128 个，每月天数在 1 到 999999 之间。'
+)
 SETTING_THUMBNAIL_KEY = "setting.thumbnail"
 
 CATEGORIES: dict[str, str] = {
@@ -262,7 +266,7 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
         (
             T(
                 "facts",
-                "事实台账（按章节顺序，每行带 chapter_id 与 fact_id）",
+                "事实台账（按章序，含事实编号、引句、可定位的场景与作者登记日期）",
                 required=True,
                 sample=(
                     "[chapter_id=5 fact_id=1] 第5章｜物品去向｜佩剑｜林远的佩剑断成两截｜\n"
@@ -545,6 +549,15 @@ _DEFS: list[tuple[str, str, str, str, tuple[TemplateVar, ...]]] = [
             T("style", "写作风格段", required=True, sample=SAMPLE_STYLE),
             T("scene", "场景描述", required=True, sample="雨夜，主角在旧码头等一个迟到的人。"),
             T("words", "字数", "int", sample=500),
+        ),
+    ),
+    (
+        "story_timeline.calendar", "故事历法草稿", "entity", "根据作品背景和当前历法生成可编辑的固定历法。",
+        (
+            T("calendar_context", "作品信息、当前历法和作者要求", required=True,
+              sample='{"project":{"title":"山海"},"calendar":{"era_name":null,"months":[]},"instruction":"四季各一月"}'),
+            JSON_RULE_VAR,
+            _out(STORY_CALENDAR_FORMAT),
         ),
     ),
     _inspiration("title", "书名", "根据创作想法给出 4~6 个书名候选。"),

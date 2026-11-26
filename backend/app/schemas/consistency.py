@@ -9,6 +9,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
+from app.schemas.story_timeline import MonthId, Positive
+
 FactCategory = Literal["character_history", "character_state", "item", "timeline", "foreshadow"]
 IssueSeverity = Literal["high", "medium", "low"]
 IssueStatus = Literal["open", "resolved", "ignored"]
@@ -64,6 +66,38 @@ class LedgerFact(_Anchored):
     time_hint: str = Field(default="", max_length=TIME_HINT_LIMIT)
 
 
+class StoryTimeEvidence(BaseModel):
+    """服务端保留的场景日期快照；月份使用书内稳定标识，月序是核查时的位置。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scene_id: Annotated[int, Field(ge=1, strict=True)] | None = None
+    source: Literal["scene", "chapter", "unmarked", "unknown"]
+    label: str = Field(default="", max_length=512)
+    year: Positive | None = None
+    month_id: MonthId | None = None
+    month_order: Annotated[int, Field(ge=1, le=128, strict=True)] | None = None
+    day: Positive | None = None
+
+    @model_validator(mode="after")
+    def _date_fields(self):
+        if self.source == "unknown" and self.scene_id is not None:
+            raise ValueError("无法定位的证据不能指定场景")
+        fields = (self.year, self.month_id, self.month_order, self.day)
+        if self.source in ("scene", "chapter"):
+            if any(value is None for value in fields) or not self.label.strip():
+                raise ValueError("有日期的证据须保存完整日期、月序及显示名称")
+        elif any(value is not None for value in fields) or self.label:
+            raise ValueError("缺少日期的证据不能携带日期值")
+        return self
+
+    @property
+    def sort_key(self) -> tuple[int, int, int] | None:
+        if self.year is None or self.month_order is None or self.day is None:
+            return None
+        return self.year, self.month_order, self.day
+
+
 class IssueEvidence(_Anchored):
     """问题的一处证据（consistency_issues.evidence 的元素）。chapter_id 为 null = 章节在导入的备份中已不存在。"""
 
@@ -73,6 +107,7 @@ class IssueEvidence(_Anchored):
     fact_id: str = Field(max_length=FACT_ID_LIMIT)
     # 记录证据时该章正文的指纹；与当前正文不同即位置失效
     text_hash: Sha256
+    story_time: StoryTimeEvidence | None = None
 
 
 class LedgerOut(BaseModel):
@@ -225,6 +260,8 @@ class EvidenceOut(BaseModel):
     start: int | None
     end: int | None
     text_hash: str
+    story_time: StoryTimeEvidence | None = None
+    story_time_stale: bool = False
     # 章节已删除，或当前正文指纹与 text_hash 不同
     stale: bool
 

@@ -61,6 +61,7 @@ export const USAGE_KIND_LABELS: Record<string, string> = {
   'chapter.generate': '章节生成',
   'chapter.generate.retry': '章节生成重试',
   'chapter.analyze': '章节分析',
+  'story_timeline.calendar.generate': 'AI 生成故事历法',
   'reader.ai_casting': '阅读页 AI 自动配音',
   'model.test': '模型连通性测试',
 }

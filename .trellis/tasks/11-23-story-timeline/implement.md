@@ -13,7 +13,7 @@
 
 ## 验证安排
 
-修改迁移和共享数据时参阅[数据库规范](../../spec/backend/database-guidelines.md)和[后端质量规范](../../spec/backend/quality-guidelines.md)中的 PostgreSQL 隔离测试库与迁移冻结结构契约。步骤 2 对照[组件规范](../../spec/frontend/component-guidelines.md)的章节编辑器部分，步骤 5 对照[提示词模板规范](../../spec/backend/prompts-styles.md)核对系统模板、既有用户覆盖和锁定变量。
+修改迁移和共享数据时参阅[数据库规范](../../../../spec/backend/database-guidelines.md)和[后端质量规范](../../../../spec/backend/quality-guidelines.md)中的 PostgreSQL 隔离测试库与迁移冻结结构契约。步骤 2 对照[组件规范](../../../../spec/frontend/component-guidelines.md)的章节编辑器部分，步骤 5 对照[提示词模板规范](../../../../spec/backend/prompts-styles.md)核对系统模板、既有用户覆盖和锁定变量。
 
 1. 在 `backend/` 先运行 `uv run pytest -q tests/test_scene_move.py tests/test_scene_restructure.py tests/test_consistency_prompts.py tests/test_consistency_issues.py tests/test_consistency_transfer.py tests/test_scene_transfer.py`，再运行新增的历法、章景日期、过期结果与迁移／备份用例。分别断言服务端输入、证据和状态；假模型写死了问题答案时，其结果不能用于评价模型的校对能力。
 2. SQLite 全量门禁为 `uv run ruff check .` 和 `uv run pytest -n 4 --dist loadfile --durations=20`。在隔离 PostgreSQL 测试库串行运行迁移、并发写入与备份恢复专项。以真实事务覆盖“检查读到旧日期、作者先提交新日期”的交错。
@@ -25,3 +25,7 @@
 - [ ] 对照 `prd.md` 逐项核验 R1–R5，记录双库、旧书、权限、桌面和窄屏结果。
 - [ ] 核对迁移头、单书版本和同期开发表，避免版本占用；验证备份往返和有数据时的降级保护。
 - [ ] 对照旧设定演变、伏笔、连载排期和修改影响检查回归，确认各自仍按原有维度工作。
+
+## AI 历法草稿
+
+接入作品文本模型与协作 AI 授权，验证模型输出符合固定历法限制。前端提供生成、查看、采用草稿操作，后续复用历法影响预览和提交时的修订检查。通过服务端出站测试和浏览器保存／刷新核对完整流程。

@@ -56,6 +56,7 @@ from app.api.v1 import (
     setting_images,
     skills,
     story,
+    story_timeline,
     styles,
     tasks,
     transfer,
@@ -108,6 +109,7 @@ api_router.include_router(foreshadows.router)
 api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
 api_router.include_router(annotations.router)
+api_router.include_router(story_timeline.router)
 api_router.include_router(serialization.router)
 api_router.include_router(writing_stats.router)
 api_router.include_router(scene_ai.router)

@@ -12,7 +12,7 @@ import { captureProjectScope } from '../../stores/project'
 import { useTasksStore } from '../../stores/tasks'
 import { verifyDraftScope } from '../editorDrafts/verifyDraftScope'
 import type { SceneDraftController, SceneDraftSnapshot } from './sceneDraftController'
-import { sceneLabel } from './scenePresentation'
+import { sceneConflictLabels, sceneLabel } from './scenePresentation'
 import { runAfterSceneSave, type RunSavedSceneAction } from './sceneSavedAction'
 import { matchesRestructureScope, restructureRequest } from './sceneStructureState'
 import { useSceneStructureRequest } from './useSceneStructureRequest'
@@ -30,8 +30,6 @@ interface Props {
   onCloseTask: () => void
   onApplied: (sceneId: number) => Promise<void>
 }
-
-const FIELDS: Record<string, string> = { title: '标题', summary: '摘要', planning: '本地规划' }
 
 function SavedExcerpt({ text }: { text: string }) {
   return <Typography.Paragraph style={{
@@ -342,9 +340,9 @@ function SuggestDialog({
               </Form.Item>
               : <>
                 {result.conflicts.map((conflict) => <Alert key={conflict.field} type="warning"
-                  message={FIELDS[conflict.field] ?? conflict.field}
+                  message={sceneConflictLabels[conflict.field] ?? conflict.field}
                   description={<><div>左：{conflict.left || '无'}</div><div>右：{conflict.right || '无'}</div></>} />)}
-                <Typography.Text strong>选择保留哪一侧的标题、摘要和本地规划</Typography.Text>
+                <Typography.Text strong>选择保留哪一侧的标题、摘要、本地规划和故事日期</Typography.Text>
                 <Radio.Group aria-label="合并后的元数据" disabled={busy} value={metadata} options={[
                   { value: 'left', label: '保留左侧' }, { value: 'right', label: '保留右侧' },
                 ]} onChange={(event) => {

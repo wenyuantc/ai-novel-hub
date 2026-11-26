@@ -1,5 +1,9 @@
 import type { PlanningRow, SceneBrief } from '../../api/types'
 
+export const sceneConflictLabels: Record<string, string> = {
+  title: '标题', summary: '摘要', planning: '本地规划', story_date: '故事日期',
+}
+
 /** 场景卡片、规划覆盖与 AI 预览都指向同一个已保存来源。 */
 export function scenePlanningRow(scene: SceneBrief): PlanningRow {
   return {

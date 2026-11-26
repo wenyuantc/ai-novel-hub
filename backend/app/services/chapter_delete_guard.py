@@ -17,6 +17,7 @@ from app.models import (
     ChapterAnalysis,
     ChapterCharacter,
     ChapterPlan,
+    ChapterStoryDate,
     ChapterVersion,
     Character,
     ConsistencyImpact,
@@ -33,11 +34,13 @@ from app.models import (
     SceneReviewAnalysisReceipt,
     SceneReviewProposal,
     SceneSection,
+    SceneStoryDate,
     SerializationEdition,
     SerializationEntry,
     SerializationPublication,
     SettingProgression,
     SettingTimeline,
+    StoryCalendar,
     StoryMemory,
     Task,
 )
@@ -46,6 +49,9 @@ from app.services.scene_move_history import move_touches_chapter
 # (被删除表, 引用表, 引用列, 被引用列, 删除动作)。新关系必须分析后才能加入。
 _REVIEWED_FKS = frozenset({
     ("annotation_threads", "annotation_messages", "thread_id", "id", "CASCADE"),
+    # 章、景日期仅引用自身目标，删除已移出场景的原章时不会影响当前场景。
+    ("chapters", "chapter_story_dates", "chapter_id", "id", "CASCADE"),
+    ("scenes", "scene_story_dates", "scene_id", "id", "CASCADE"),
     ("chapters", "annotation_threads", "chapter_id", "id", "CASCADE"),
     ("scenes", "annotation_threads", "scene_id", "id", "CASCADE"),
     ("analysis_changes", "setting_progressions", "source_change_id", "id", "SET NULL"),
@@ -318,8 +324,12 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
         await _check_surviving_history(db, project_id, removed)
 
 
-async def detach_scene_move_chapters(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:
-    """调用方已验证删章。断开批次历史定位，保留存续章节的最后原生身份。"""
+async def detach_chapter_structure(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:
+    """调用方已验证删章。撤销旧日期编辑依据，断开批次定位，保留存续章的原生身份。"""
+    if not chapter_ids:
+        return
+    await db.execute(update(StoryCalendar).where(StoryCalendar.project_id == project_id)
+                     .values(revision=StoryCalendar.revision + 1))
     removed = set(chapter_ids)
     origins = set()
     for batch in batched(sorted(removed), 500):
@@ -347,6 +357,16 @@ def has_serialization_work() -> ColumnElement[bool]:
     """智能体无法撤销的人工排程、校对状态或定稿。默认空条目没有作者内容。"""
     editions = select(SerializationEdition.id).where(SerializationEdition.entry_id == SerializationEntry.id)
     return or_(SerializationEntry.stage != "revision", SerializationEntry.planned_date.is_not(None), editions.exists())
+
+
+async def check_agent_date_removal(db: AsyncSession, chapter_ids: list[int]) -> None:
+    for batch in batched(chapter_ids, 500):
+        chapter_dates = select(ChapterStoryDate.chapter_id).where(ChapterStoryDate.chapter_id.in_(batch))
+        scene_dates = select(SceneStoryDate.scene_id).join(Scene, Scene.id == SceneStoryDate.scene_id).where(
+            Scene.chapter_id.in_(batch),
+        )
+        if await db.scalar(select(or_(chapter_dates.exists(), scene_dates.exists()))):
+            raise ConflictError("待移除的章节或场景已有故事日期，请在工作台核对后手动处理")
 
 
 async def check_agent_serialization_removal(db: AsyncSession, project_id: int, chapter_ids: list[int]) -> None:

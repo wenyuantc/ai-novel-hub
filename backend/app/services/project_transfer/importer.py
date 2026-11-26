@@ -79,6 +79,7 @@ from app.services.project_transfer.remap import RemapContext
 from app.services.project_transfer.rich_documents import validate_rich_tables
 from app.services.project_transfer.scenes import validate_scene_tables
 from app.services.project_transfer.serialization import SERIALIZATION_TABLES, validate_serialization_tables
+from app.services.project_transfer.story_timeline import TIMELINE_TABLES, validate_timeline_tables
 from app.services.project_transfer.thumbnails import TABLES as THUMBNAIL_TABLES
 from app.services.setting_category_validation import validate_category_graph_snapshot
 from app.services.setting_field_values import FieldSpec, has_field_content, validate_field_value
@@ -138,6 +139,9 @@ TABLE_LABELS: dict[str, str] = {
     "setting_ai_links": "设定 AI 关联",
     "setting_categories": "设定分类",
     "setting_category_rules": "设定分类规则",
+    "story_calendars": "作品历法",
+    "chapter_story_dates": "章节默认日期",
+    "scene_story_dates": "场景日期覆盖",
     "story_memories": "剧情记忆",
     "consistency_ledgers": "事实台账",
     "consistency_issues": "一致性问题",
@@ -595,6 +599,23 @@ def _migrate_v16_to_v17(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v17_to_v18(data: dict[str, Any]) -> dict[str, Any]:
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for name in TIMELINE_TABLES:
+            if name in tables and tables[name] != []:
+                raise BadRequestError("旧版备份不支持故事时间线，请使用原始版本文件")
+            tables[name] = []
+        issues = tables.get("consistency_issues")
+        for row in issues if isinstance(issues, list) else []:
+            evidence = row.get("evidence") if isinstance(row, dict) else None
+            if isinstance(evidence, list) and any(
+                isinstance(item, dict) and item.get("story_time") is not None for item in evidence
+            ):
+                raise BadRequestError("旧版备份不支持故事日期证据，请使用原始版本文件")
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 14 and isinstance(tables := data.get("tables"), dict):
@@ -628,6 +649,7 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         14: _migrate_v14_to_v15,
         15: _migrate_v15_to_v16,
         16: _migrate_v16_to_v17,
+        17: _migrate_v17_to_v18,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -1330,7 +1352,7 @@ def parse_backup(raw: bytes | bytearray) -> Backup:
     for table in ("setting_timelines", "setting_text_fields", "setting_progressions",
                   *FIELD_TABLES, *CATEGORY_TABLES, *PLANNING_TABLES, "setting_ai_links", "scenes",
                   "scene_documents", "scene_sections", "scene_markers", "scene_moves", *SERIALIZATION_TABLES,
-                  *ANNOTATION_TABLES):
+                  *ANNOTATION_TABLES, *TIMELINE_TABLES):
         if table not in tables or tables[table] is None:
             errors.add(f"备份缺少核心表 {table}")
     _check_rows(PROJECT_RULE, [project], errors)
@@ -1385,6 +1407,8 @@ def parse_backup(raw: bytes | bytearray) -> Backup:
     history = validate_scene_tables(backup.tables, errors.add)
     errors.raise_if_any()
     documents = validate_rich_tables(backup.tables, errors.add)
+    errors.raise_if_any()
+    validate_timeline_tables(backup.tables, backup.project["id"], errors.add)
     errors.raise_if_any()
     validate_annotation_tables(backup.tables, documents, backup.project["id"], errors.add)
     errors.raise_if_any()
@@ -1700,6 +1724,8 @@ class _Importer:
         elif rule.table == "kb_documents":
             values["status"] = "ready_keyword_only"
             values["chunk_count"] = 0
+        elif rule.table == "story_calendars":
+            values["revision"] = 1
         elif rule.table == "revision_batch_scenes":
             # 章节在新作品的初始版本为 0；历史冲突用永不与版本号相等的 NULL 保存。
             values["applied_revision"] = 0 if row["matches_revision"] else None

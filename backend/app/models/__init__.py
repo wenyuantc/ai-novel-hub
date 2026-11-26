@@ -100,11 +100,15 @@ from app.models.setting_categories import SettingCategory, SettingCategoryRule
 from app.models.setting_fields import SettingAiLink, SettingFieldDefinition, SettingFieldOption, SettingReferenceHandle
 from app.models.setting_images import SettingImageResource, SettingThumbnailBinding
 from app.models.skills_mcp import McpPlugin, Skill, SkillReference
+from app.models.story_timeline import ChapterStoryDate, SceneStoryDate, StoryCalendar
 from app.models.system_settings import SystemSettings
 from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, WorkshopSubmission
 from app.models.writing_stats import WritingDailyStat, WritingGoal, WritingStatsTracking
 
 __all__ = [
+    "StoryCalendar",
+    "ChapterStoryDate",
+    "SceneStoryDate",
     "WritingDailyStat",
     "WritingGoal",
     "WritingStatsTracking",

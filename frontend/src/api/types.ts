@@ -839,6 +839,8 @@ export interface SceneMovePreview {
   insert_before_scene_id: number | null
   planning_revision: number
   signature: string
+  story_date_before: string
+  story_date_after: string
   source_will_be_empty: boolean
   planning_changes: { field: ScenePlanningField; before: string[]; after: string[] }[]
   timeline_events: { id: number; label: string; boundary: 'start' | 'end' }[]

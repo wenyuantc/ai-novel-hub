@@ -51,6 +51,8 @@ class SceneMovePreviewOut(BaseModel):
     insert_before_scene_id: int | None
     planning_revision: int
     signature: str
+    story_date_before: str
+    story_date_after: str
     source_will_be_empty: bool
     planning_changes: list[SceneMovePlanningChange]
     timeline_events: list[SceneMoveTimelineEvent]

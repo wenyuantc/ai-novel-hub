@@ -25,7 +25,7 @@ from app.schemas.consistency import (
     LedgerCoverage,
     RunOut,
 )
-from app.services.consistency import check, issues, ledger
+from app.services.consistency import check, issues, ledger, story_time
 from app.services.mentions.matcher import text_hash
 from app.services.notification_service import consistency_run_visible
 from app.services.project_access import require_project
@@ -71,7 +71,9 @@ async def _chapter_info(
     return result
 
 
-def _issue_out(issue: ConsistencyIssue, info: dict[int, tuple[int, str, str]]) -> IssueOut:
+def _issue_out(
+    issue: ConsistencyIssue, info: dict[int, tuple[int, str, str]], dates: story_time.DateContext,
+) -> IssueOut:
     evidence = _evidence(issue)
     stale = issues.evidence_stale(evidence, {chapter_id: value[2] for chapter_id, value in info.items()})
     items = []
@@ -88,6 +90,8 @@ def _issue_out(issue: ConsistencyIssue, info: dict[int, tuple[int, str, str]]) -
             end=item.get("end"),
             text_hash=str(item.get("text_hash") or ""),
             stale=flag,
+            story_time=item.get("story_time"),
+            story_time_stale=story_time.date_stale(dates, item),
         ))
     return IssueOut(
         id=issue.id,
@@ -104,7 +108,7 @@ def _issue_out(issue: ConsistencyIssue, info: dict[int, tuple[int, str, str]]) -
         revision=issue.revision,
         evidence=items,
         reappeared=issue.reappeared,
-        needs_recheck=any(stale),
+        needs_recheck=any(item.stale or item.story_time_stale for item in items),
         not_reproduced=issues.not_reproduced(issue),
         created_at=issue.created_at,
         updated_at=issue.updated_at,
@@ -125,6 +129,7 @@ async def list_issues(
         _STATUS_ORDER, _SEVERITY_ORDER, ConsistencyIssue.id.desc(),
     )
     offset = (page - 1) * page_size
+    dates = None
     if chapter_id is None and needs_recheck is None:
         total = await db.scalar(select(func.count(ConsistencyIssue.id)).where(*conditions)) or 0
         rows = list(await db.scalars(statement.offset(offset).limit(page_size)))
@@ -138,12 +143,20 @@ async def list_issues(
         if needs_recheck is not None:
             info = await _chapter_info(db, project_id, _chapter_ids(rows))
             hashes = {key: value[2] for key, value in info.items()}
-            rows = [row for row in rows if issues.needs_recheck(_evidence(row), hashes) is needs_recheck]
+            dates = await issues.issue_date_context(db, project_id, rows)
+            rows = [
+                row for row in rows if (
+                    issues.needs_recheck(_evidence(row), hashes)
+                    or any(story_time.date_stale(dates, item) for item in _evidence(row))
+                ) is needs_recheck
+            ]
         total = len(rows)
         rows = rows[offset:offset + page_size]
         if info is None:
             info = await _chapter_info(db, project_id, _chapter_ids(rows))
-    return IssuePage(items=[_issue_out(row, info) for row in rows], total=total, page=page, page_size=page_size)
+    if dates is None:
+        dates = await issues.issue_date_context(db, project_id, rows)
+    return IssuePage(items=[_issue_out(row, info, dates) for row in rows], total=total, page=page, page_size=page_size)
 
 
 async def _issue(db: AsyncSession, project_id: int, issue_id: int) -> ConsistencyIssue:
@@ -159,7 +172,8 @@ async def _issue(db: AsyncSession, project_id: int, issue_id: int) -> Consistenc
 
 async def _detail(db: AsyncSession, project_id: int, issue_id: int) -> IssueOut:
     issue = await _issue(db, project_id, issue_id)
-    return _issue_out(issue, await _chapter_info(db, project_id, _chapter_ids([issue])))
+    info = await _chapter_info(db, project_id, _chapter_ids([issue]))
+    return _issue_out(issue, info, await issues.issue_date_context(db, project_id, [issue]))
 
 
 async def get_issue(db: AsyncSession, user_id: int, project_id: int, issue_id: int) -> IssueOut:

@@ -12,12 +12,16 @@ import { statusFocusTarget } from './statusFocus'
 
 function EvidenceCard({ projectId, evidence, canEdit }: { projectId: number; evidence: IssueEvidence; canEdit: boolean }) {
   const link = evidenceLink(projectId, evidence)
+  const date = evidence.story_time
   const { token } = theme.useToken()
   return <Card size="small" title={evidenceChapterLabel(evidence)} styles={{ body: { minWidth: 0 } }}>
     <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
       <blockquote style={{ margin: 0, paddingInlineStart: 12, borderInlineStart: `3px solid ${token.colorBorder}` }}>{evidence.quote || '（无引句）'}</blockquote>
     </Typography.Paragraph>
     <Space size={[8, 4]} wrap style={{ marginTop: 8 }}>
+      {date && <Tag>{date.source === 'unknown' ? '日期依据不明' : date.source === 'unmarked' ? '未标时间'
+        : `检查时：${date.label} · ${date.source === 'scene' ? '场景指定' : '沿用本章'}`}</Tag>}
+      {evidence.story_time_stale && <Tag color="warning">日期或场景归属已变化</Tag>}
       {link.notes.map((note) => <Tag key={note} color={link.kind === 'deleted' ? 'default' : 'warning'} style={{ whiteSpace: 'normal' }}>{note}</Tag>)}
       {link.kind !== 'deleted' && <>
         <Link to={link.readerHref}>{link.kind === 'anchored' ? '在阅读器中定位' : '在阅读器中打开该章'}</Link>
@@ -78,7 +82,7 @@ export default function IssueDrawer({
       <IssueTags issue={issue} />
       <Typography.Text type="secondary">由 AI 根据各章事实判断，属于潜在冲突，仅供参考；是否修改由你决定。</Typography.Text>
       {issue.needs_recheck && <Alert type="warning" showIcon message="需重新核查"
-        description="证据所在章节的正文在检查之后发生了变化（或章节已被删除），下面的证据位置可能失效，结论也可能不再成立。" />}
+        description="检查后有证据发生变化，请核对下方标记的正文、日期或场景归属。" />}
       {issue.reappeared && <Alert type="warning" showIcon message="再次出现" description="该问题曾标记为已解决，最近一次检查再次检出，已重新变为待处理。" />}
       {issue.not_reproduced && <Alert type="info" showIcon message="本次未复现" description="最近一次检查没有再检出这个矛盾；状态不会自动改变，确认后可自行标记为已解决。" />}
       <section aria-label="说明">

@@ -30,6 +30,7 @@ from app.services.chapter_service import lock_manual_project_visibility
 from app.services.planning_lifecycle import bump_revision
 from app.services.planning_scene_service import preview_scene_planning_move
 from app.services.scene_move_history import chapter_identity, chapter_identity_expression, record_scene_move
+from app.services.scene_story_dates import advance_timeline_revision, move_dates
 from app.services.setting_ai_visibility import bump_visibility_revision
 
 _EXCERPT_SIZE = 80
@@ -172,7 +173,7 @@ async def _project_stamp(db: AsyncSession, project_id: int) -> tuple[int, int, s
 async def _sign(
     db: AsyncSession, project_id: int, user_id: int, data: SceneMovePreviewOut, *,
     signing_secret: bytes, identities: tuple[int, int], stamps: tuple[int, int, str | None],
-    timeline_stamp: list[tuple[int, int, int, int]],
+    timeline_stamp: list[tuple[int, int, int, int]], date_revision: int,
 ) -> str:
     actor = (await db.execute(
         select(User.token_version, User.created_at, ProjectCollaborator.invitation_id, ProjectCollaborator.revision)
@@ -184,7 +185,7 @@ async def _sign(
         raise UnauthorizedError("账号已变化，请重新登录")
     message = json.dumps(
         ["ainovel/scene-move/v1", project_id, user_id, actor.token_version, actor.created_at.isoformat(),
-         actor.invitation_id, actor.revision, identities, stamps, timeline_stamp,
+         actor.invitation_id, actor.revision, identities, stamps, timeline_stamp, date_revision,
          data.model_dump(mode="json", exclude={"signature"})],
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     ).encode()
@@ -231,11 +232,13 @@ async def _plan(
     planning, after = await preview_scene_planning_move(db, project_id, scene_id, target.id)
     changes = await _planning_changes(db, project_id, planning.effective, after)
     events, timeline_stamp = await _timeline_events(db, project_id, scene_id)
+    before_date, after_date, date_revision = await move_dates(db, project_id, scene_id, target.id)
     moved_text = moved.separator_before + moved.content
     preview = SceneMovePreviewOut(
         scene_id=scene_id, source=_summary(source, len(source_scenes)), target=_summary(target, len(target_scenes)),
         source_position=source_index + 1, target_position=target_index + 1,
         insert_before_scene_id=data.insert_before_scene_id, planning_revision=planning.revision, signature="",
+        story_date_before=before_date, story_date_after=after_date,
         source_will_be_empty=not remaining, planning_changes=changes, timeline_events=events, blockers=blockers,
         source_seam=_seam(remaining, source_index), target_seam=_seam(target_scenes, target_index),
         moved_start=_excerpt(moved_text), moved_end=_excerpt(moved_text, tail=True),
@@ -256,7 +259,7 @@ async def _plan(
         raise _preview_changed()
     preview.signature = await _sign(
         db, project_id, user_id, preview, signing_secret=signing_secret,
-        identities=identities, stamps=stamps, timeline_stamp=timeline_stamp,
+        identities=identities, stamps=stamps, timeline_stamp=timeline_stamp, date_revision=date_revision,
     )
     return MovePlan(moved, remaining, inserted, planning.unit_id, preview)
 
@@ -308,6 +311,7 @@ async def move(
         for chapter in (source, target):
             await version_service.ensure_baseline(db, chapter, force=True)
         await _relocate(db, source, target, plan)
+        await advance_timeline_revision(db, project_id)
         revision = max(source.content_revision, target.content_revision) + 1
         for chapter in (source, target):
             await scene_service.refresh_projection(db, chapter, next_revision=revision)

@@ -13,7 +13,7 @@
 """
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import batched
 from typing import Any
 
@@ -26,8 +26,9 @@ from app.ai.providers.base import AIProviderError, ChatMessage
 from app.ai.templating import PromptOverride
 from app.models import Chapter, ConsistencyIssue, ConsistencyLedger, Foreshadow
 from app.models.consistency import CONSISTENCY_CATEGORIES, CONSISTENCY_SEVERITIES
-from app.schemas.consistency import MAX_EVIDENCE_PER_ISSUE, IssueEvidence
-from app.services import prompt_service
+from app.schemas.consistency import MAX_EVIDENCE_PER_ISSUE, IssueEvidence, StoryTimeEvidence
+from app.services import project_lifecycle, prompt_service
+from app.services.consistency import story_time
 from app.services.consistency.ledger import DEFAULT_CHAR_BUDGET, is_fresh
 from app.services.consistency.model_call import ModelTarget, complete
 from app.services.mentions.matcher import text_hash
@@ -75,6 +76,8 @@ class FactRef:
     text_hash: str
     in_scope: bool
     fact: dict[str, Any]
+    story_time: StoryTimeEvidence | None = None
+    story_order: int | None = None
 
     @property
     def key(self) -> tuple[int, str]:
@@ -117,6 +120,7 @@ class CompareInput:
     existing: tuple[ExistingIssue, ...]
     # 允许进入上下文的伏笔记录总数（foreshadows 最多取 MAX_FORESHADOWS 条，差额进入 warning）
     foreshadow_total: int = 0
+    date_revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,7 @@ class CompareBatch:
     # 因数量上限或预算未能随本批发送的伏笔记录数、已有问题 id
     foreshadows_omitted: int = 0
     existing_omitted: tuple[int, ...] = ()
+    char_budget: int = DEFAULT_CHAR_BUDGET
 
     @property
     def fact_index(self) -> dict[tuple[int, str], tuple[int, FactRef]]:
@@ -157,12 +162,14 @@ async def load_compare_input(db: AsyncSession, project_id: int, scope_chapter_id
         )
     chapters.sort(key=lambda chapter: (chapter.chapter_no, chapter.id))
     fingerprints = await analysis_fingerprints(db, chapters)
+    fresh = {c.id for c in chapters if is_fresh(ledgers[c.id], fingerprints.get(c.id))}
+    dates = await story_time.load_context(db, project_id, fresh)
     facts: list[FactRef] = []
     covered: set[int] = set()
     stale_outside = 0
     for chapter in chapters:
         ledger = ledgers[chapter.id]
-        if not is_fresh(ledger, fingerprints.get(chapter.id)):
+        if chapter.id not in fresh:
             stale_outside += chapter.id not in scope
             continue
         covered.add(chapter.id)
@@ -176,6 +183,7 @@ async def load_compare_input(db: AsyncSession, project_id: int, scope_chapter_id
                         text_hash=ledger.text_hash,
                         in_scope=chapter.id in scope,
                         fact=fact,
+                        story_time=dates.locate(chapter.id, fact),
                     )
                 )
     foreshadows = tuple(
@@ -216,9 +224,12 @@ async def load_compare_input(db: AsyncSession, project_id: int, scope_chapter_id
             select(ConsistencyIssue).where(ConsistencyIssue.project_id == project_id).order_by(ConsistencyIssue.id)
         )
     )
+    keys = sorted({ref.story_time.sort_key for ref in facts if ref.story_time and ref.story_time.sort_key})
+    ranks = {key: i for i, key in enumerate(keys, 1)}
     return CompareInput(
+        date_revision=dates.revision,
         project_id=project_id,
-        facts=tuple(facts),
+        facts=tuple(replace(ref, story_order=ranks.get(ref.story_time.sort_key)) for ref in facts),
         scope_ids=scope,
         covered_ids=frozenset(covered),
         stale_outside=stale_outside,
@@ -262,13 +273,32 @@ def _inline(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
-def fact_line(ref: FactRef) -> str:
+def fact_line(ref: FactRef, *, char_budget: int = DEFAULT_CHAR_BUDGET) -> str:
     fact = ref.fact
-    return (
+    line = (
         f"[chapter_id={ref.chapter_id} fact_id={fact['id']}] 第{ref.chapter_no}章｜"
         f"{CATEGORY_LABELS[fact['category']]}｜{_inline(fact.get('subject'))}｜"
         f"{_inline(fact.get('statement'))}｜{_inline(fact.get('time_hint'))}"
     )
+    date = ref.story_time
+    if date is None:
+        return line
+    if ref.story_order is not None:
+        source = "场景指定" if date.source == "scene" else "沿用本章"
+        line += (
+            f"｜场景 ID={date.scene_id}｜登记日期：{_inline(date.label)}"
+            f"（{source}，故事日序 {ref.story_order}）"
+        )
+    elif date.source == "unmarked":
+        line += f"｜场景 ID={date.scene_id} 未标时间"
+    else:
+        line += "｜无法确定引句所属场景"
+    line += "｜原文引句："
+    quote = _inline(fact.get("quote"))
+    remaining = max(1, char_budget - len(line) - 1)  # 同批各行还需要一个换行符
+    if len(quote) > remaining:
+        quote = quote[:remaining - 1] + "…"
+    return line + quote
 
 
 def _chapter_label(actual: int | None, planned: int | None) -> str:
@@ -325,7 +355,7 @@ def plan_batches(
         keys, refs, used = [], [], 0
 
     for group in groups:
-        sizes = [len(fact_line(ref)) + 1 for ref in group.facts]
+        sizes = [len(fact_line(ref, char_budget=budget)) + 1 for ref in group.facts]
         total = sum(sizes)
         if total > budget:
             # 大组独占若干批；跨批的矛盾可能漏检，属已知取舍（批次标记 partial，由 batch_notices 告知作者）
@@ -365,6 +395,7 @@ def plan_batches(
         batches.append(
             CompareBatch(
                 index=index,
+                char_budget=budget,
                 group_keys=tuple(group_keys),
                 facts=tuple(facts),
                 foreshadows=foreshadows,
@@ -399,7 +430,7 @@ def batch_notices(batches: list[CompareBatch]) -> list[str]:
 def build_compare_messages(batch: CompareBatch, override: PromptOverride | None = None) -> list[ChatMessage]:
     """只含事实台账、允许进入上下文的伏笔记录与已有问题摘要；不含正文与结构化设定。"""
     return build_consistency_compare_messages(
-        facts_text="\n".join(fact_line(ref) for ref in batch.facts),
+        facts_text="\n".join(fact_line(ref, char_budget=batch.char_budget) for ref in batch.facts),
         foreshadows_text="\n".join(foreshadow_line(record) for record in batch.foreshadows),
         existing_issues_text="\n".join(existing_line(issue) for issue in batch.existing),
         override=override,
@@ -521,6 +552,7 @@ def parse_comparison(text: str, batch: CompareBatch) -> tuple[list[Finding], lis
                         "start": ref.fact.get("start"),
                         "end": ref.fact.get("end"),
                         "text_hash": ref.text_hash,
+                        "story_time": ref.story_time.model_dump() if ref.story_time else None,
                     }
                     for ref in refs
                 ),
@@ -568,6 +600,22 @@ def _evidence_chapters(evidence: Any) -> tuple[set[int], bool]:
         else:
             orphan = True
     return ids, orphan
+
+
+STORY_TIME_CHANGED = "比对期间本书的日期、历法或所查章景已变化，本次比对结果未保存，请重新核查"
+
+
+async def compare_dates_changed(db: AsyncSession, data: CompareInput) -> bool:
+    """调用方持作品写锁。同一事务中重查日期和归属，禁止覆盖旧问题或误标未复现。"""
+    dates = await story_time.load_context(db, data.project_id, set(data.covered_ids))
+    if dates.revision != data.date_revision or set(dates.chapters) != data.covered_ids:
+        return True
+    hashes = {cid: text_hash(content) for cid, (content, _) in dates.chapters.items()}
+    return any(
+        hashes[ref.chapter_id] != ref.text_hash or dates.chapter_numbers[ref.chapter_id] != ref.chapter_no
+        or dates.locate(ref.chapter_id, ref.fact) != ref.story_time
+        for ref in data.facts
+    )
 
 
 async def merge_findings(
@@ -703,15 +751,28 @@ def not_reproduced(issue: ConsistencyIssue) -> bool:
     return issue.last_seen_run_id is None or issue.last_checked_run_id > issue.last_seen_run_id
 
 
+async def issue_date_context(db: AsyncSession, project_id: int, rows: list[ConsistencyIssue]) -> story_time.DateContext:
+    ids = {
+        entry["chapter_id"] for row in rows for entry in row.evidence or []
+        if isinstance(entry, dict) and entry.get("story_time") is not None and entry.get("chapter_id") is not None
+    }
+    return await story_time.load_context(db, project_id, ids)
+
+
 async def issue_flags(db: AsyncSession, project_id: int, issues: list[ConsistencyIssue]) -> dict[int, IssueFlags]:
     """一次查询取全部所涉章节的指纹，再在内存里计算每个问题的派生字段。"""
     chapter_ids: set[int] = set()
     for issue in issues:
         chapter_ids |= _evidence_chapters(issue.evidence)[0]
     hashes = await chapter_text_hashes(db, project_id, chapter_ids)
+    dates = await issue_date_context(db, project_id, issues)
     result = {}
     for issue in issues:
-        stale = evidence_stale(issue.evidence, hashes)
+        text_flags = evidence_stale(issue.evidence, hashes)
+        stale = tuple(
+            flag or story_time.date_stale(dates, entry)
+            for flag, entry in zip(text_flags, issue.evidence or [], strict=True)
+        )
         result[issue.id] = IssueFlags(needs_recheck=any(stale), not_reproduced=not_reproduced(issue), stale=stale)
     return result
 
@@ -738,7 +799,7 @@ async def compare_and_merge(
     scope_chapter_ids: list[int],
     char_budget: int = DEFAULT_CHAR_BUDGET,
 ) -> CompareOutcome:
-    """比对并合并（便捷入口，自行提交；不加作品行锁，需要与状态 CAS 串行的调用方请分步调用）。
+    """比对并合并（便捷入口，合并时持作品行锁并自行提交）。
 
     单批模型或解析失败只记 warning、其余批次照常合并；有批次失败或大组被拆批时不标记「本次未复现」。
     user_id 只用于读取本人的提示词覆盖。
@@ -764,6 +825,10 @@ async def compare_and_merge(
         findings.extend(found)
         outcome.warnings.extend(warnings)
     async with sessionmaker() as db:
+        await project_lifecycle.lock_record(db, project_id)
+        if await compare_dates_changed(db, data):
+            outcome.warnings.append(STORY_TIME_CHANGED)
+            return outcome
         outcome.stats = await merge_findings(
             db,
             project_id=project_id,

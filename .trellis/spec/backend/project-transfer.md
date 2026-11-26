@@ -83,11 +83,11 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 ---
 
-## 场景：备份格式 v17 与导出
+## 场景：备份格式 v18 与导出
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 17, exported_at, app_schema: "0074"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 18, exported_at, app_schema: "0075"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - 每日写作统计、个人码字目标和计量起点属于本实例。导入创建新作品时保留原作建书时间，另用服务端导入时刻初始化该作品的计量起点。整库备份保留统计与目标。
@@ -118,7 +118,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 |---|---|
 | 非 UTF-8 / 非 JSON / 非对象 | `备份文件不是 UTF-8 编码的 JSON` / `备份文件不是合法的 JSON：…` / `备份文件格式不正确：应为 JSON 对象` |
 | format 不符 | `不是有效的项目备份文件（format 应为 ainovel.project）` |
-| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v17），请升级后再导入` |
+| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v18），请升级后再导入` |
 | 嵌套 > 40 层 | `备份文件嵌套层级过深（上限 40 层）` |
 | 缺少 project / tables | `备份文件格式不正确：缺少 project` / `…缺少 tables` |
 | 行字段缺失（NOT NULL 且无默认）/ 类型不符 / 超长 / id 重复 | `备份文件校验失败：…`，errors 如 `角色第 1 行缺少字段 name`、`角色第 1 行字段 name 超过长度上限 100` |
@@ -158,6 +158,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - v13／0059：`consistency_ledgers` 增加上一版三列 `prev_facts`（`json_plain`）/ `prev_source_hash` / `prev_text_hash`（须同时给出或同时为空）；新增 `consistency_impacts`（`actor_id`、`task_id` 不导出；`items[].chapter_id` 经 `remap.consistency_impact_items` 重映射、对应不上的影响项整项去掉；`uncovered` 的章节 id 与 `acknowledged` 的设定变化 id 经 `remap.consistency_impact_refs` 重映射、对应不上的去掉并告警；`changes` 为 `json_plain`）。`parse_backup` 用 `ImpactChange`／`ImpactItem` 校验结构、数量上限与重复章节。v1–v12 补空表导入；旧版本文件夹带影响表数据或非空 `prev_*` 时拒绝。
 - v14／0060 在可选 `versions` 分组加入批次头和场景明细。旧版补空历史。导入按原词、替换词和命中坐标重放富文档，核对 `matches_revision` 后映射成新作品的修订基线。已删除或过期的目标保留冲突，批次内的章节序号区分同号同名的已删章节。原实例去重凭据与操作者不导出。见[全书搜索与批量修订](./book-search.md)。
 - v15／0064 将连载目标、编辑与排期条目、冻结定稿、平台发布记录列入核心组。关闭 versions 时也能恢复实际发布正文。旧版补空表。登记重试所用的操作者和请求凭据仅用于源实例。导入规则与验收见[连载与存稿](./serialization.md)。
+- v18／0075 加入 `story_calendars`、`chapter_story_dates`、`scene_story_dates`。只备份显式日期，恢复后按新书内的章景归属求继承值。月份标识在书内有效，问题证据保留历史日期并重映射场景引用。v17 及更早的合法备份导入后可从空历法开始登记。
 - v17／0074 增加核心表 `annotation_threads` 和 `annotation_messages`。所有选项关闭时仍需往返已处理、已失效的讨论和全部回复，并保留历史署名、时间和发言顺序。导入重映射章、景和讨论，重新验证有效选区。新作品的权限由新书成员关系决定。v16 及更早的合法备份导入为空讨论列表。
 - v16／0065 增加核心表 `scene_moves`，旧 v15 资料补空表。预览核对移动顺序、首条标识、场景和规划归属及保留的版本边界。作品独立恢复后，移动证据和结构快照重映射到新书。导出省略章节版本时，移动归属仍随作品保存，两侧版本序号清空。见[跨章移动](./scenes.md#8-跨章移动与-ai-拆并建议)。
 - 格式升级：`importer.migrate(data, version)` 逐级升级；新增表时登记注册表、提升 `exporter.VERSION`、补上旧版本到新版本的转换步骤。

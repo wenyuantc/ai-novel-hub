@@ -329,7 +329,7 @@ def test_every_legacy_key_is_covered():
         k
         for k in TEMPLATE_KEYS
         if not k.startswith(("style.", "inspiration.", "book_import.", "agent.", "consistency."))
-        and k not in {"wizard.continue", "relations.generate", "setting.thumbnail"}
+        and k not in {"wizard.continue", "relations.generate", "setting.thumbnail", "story_timeline.calendar"}
     }
 
 

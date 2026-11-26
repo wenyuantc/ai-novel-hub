@@ -47,8 +47,8 @@ function MovePreview({ value }: { value: SceneMovePreview }) {
   return (
     <Space direction="vertical" size={10} style={{ display: 'flex' }}>
       <div style={{ overflowWrap: 'anywhere' }}>
-        <div>原位置 · {chapterLabel(value.source, value.source_position)}</div>
-        <div>新位置 · {chapterLabel(value.target, value.target_position)}</div>
+        <div>原位置 · {chapterLabel(value.source, value.source_position)} · {value.story_date_before}</div>
+        <div>新位置 · {chapterLabel(value.target, value.target_position)} · {value.story_date_after}</div>
       </div>
       {value.source_will_be_empty && <Alert type="info" showIcon message="源章移出最后一个场景后会创建空场景。" />}
       {value.planning_changes.length > 0 && <div>

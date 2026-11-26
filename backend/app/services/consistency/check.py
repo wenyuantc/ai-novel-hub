@@ -768,6 +768,10 @@ async def run_check_job(job: CheckJob, sessionmaker: async_sessionmaker[AsyncSes
         async with sessionmaker() as db:
             # require_task_write 持有作品行锁直到提交：合并与作者的状态 / 备注 CAS 串行。
             await job.guard.require_task_write(db)
+            if await issues.compare_dates_changed(db, data):
+                findings.clear()
+                incomplete = True
+                _warn(job, issues.STORY_TIME_CHANGED)
             merged = await issues.merge_findings(
                 db,
                 project_id=job.project_id,
