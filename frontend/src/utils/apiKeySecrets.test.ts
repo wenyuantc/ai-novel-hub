@@ -69,6 +69,14 @@ describe('密钥显隐与复制会话', () => {
 })
 
 describe('受限剪贴板', () => {
+  it('多行恢复码按显示顺序一次写入剪贴板', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const displayed = 'sample-first\nsample-second'
+    await expect(writeKeyToClipboard(displayed)).resolves.toBe(true)
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(displayed)
+  })
+
   it('不存在 Clipboard API 时保留手动复制路径', async () => {
     vi.stubGlobal('navigator', {})
     await expect(writeKeyToClipboard('anv_secret')).resolves.toBe(false)

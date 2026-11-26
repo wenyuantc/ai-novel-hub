@@ -42,7 +42,7 @@ def require_recent_login(request: Request, settings: "Settings", user: "User") -
             return
     except jwt.PyJWTError:
         pass
-    raise ForbiddenError("最近登录已过期，请重新登录后再操作")
+    raise ForbiddenError("最近登录已过期，请重新登录后再操作", extra={"code": "recent_login_required"})
 
 
 def hash_password(password: str) -> str:

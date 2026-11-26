@@ -1,10 +1,11 @@
-import { Alert, Button, Card, Form, Input, List, Popconfirm, QRCode, Space, Spin, Typography } from 'antd'
+import { Alert, App, Button, Card, Form, Input, List, Popconfirm, QRCode, Space, Spin, Typography } from 'antd'
 import { useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { accountSecurityApi as security, providerName, type LoginProvider } from '../api/accountSecurity'
-import { errorMessage } from '../api/client'
+import { ApiError, errorMessage } from '../api/client'
 import { useLoader } from '../hooks/useLoader'
 import { useAuthStore } from '../stores/auth'
+import { writeKeyToClipboard } from '../utils/apiKeySecrets'
 
 async function loadSettings() {
   const [status, identities, configured] = await Promise.all([security.status(), security.identities(), security.providers()])
@@ -12,20 +13,38 @@ async function loadSettings() {
 }
 
 function Settings() {
+  const { message } = App.useApp()
   const { data, loading, error, reload } = useLoader(loadSettings)
   const location = useLocation()
   const [failure, setFailure] = useState<string | null>(location.state?.bindingError ?? null)
+  const logout = useAuthStore(s => s.logout)
+  const [needsLogin, setNeedsLogin] = useState(false)
   const [busy, setBusy] = useState(false)
   const [setup, setSetup] = useState<Awaited<ReturnType<typeof security.setup>> | null>(null)
   const [codes, setCodes] = useState<string[]>([])
+  const recoveryText = codes.join('\n')
   const [disabling, setDisabling] = useState(false)
   const run = async (action: () => Promise<void>) => {
     if (busy) return
     setBusy(true)
     setFailure(null)
+    setNeedsLogin(false)
     try { await action() }
-    catch (err) { setFailure(errorMessage(err)) }
+    catch (err) {
+      setFailure(errorMessage(err))
+      setNeedsLogin(err instanceof ApiError && err.body?.code === 'recent_login_required')
+    }
     finally { setBusy(false) }
+  }
+  const signInAgain = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      // 路由守卫在退出成功后记住账号安全页，登录完成后由用户重新选择操作。
+      await logout({ requireServerConfirmation: true })
+    } catch (err) {
+      setFailure(errorMessage(err))
+    } finally { setBusy(false) }
   }
   const startBinding = (provider: LoginProvider) => run(async () => {
     const { url } = await security.start(provider, 'bind')
@@ -34,7 +53,10 @@ function Settings() {
   return <main style={{ maxWidth: 720, margin: '0 auto', padding: 20 }}>
     <Typography.Title level={2}>账号安全</Typography.Title>
     <Space direction="vertical" style={{ width: '100%' }} size="large">
-      {(failure || error) && <Alert role="alert" type="error" showIcon message={failure || error} action={error ? <Button onClick={reload}>重新加载</Button> : undefined} />}
+      {(failure || error) && <Alert role="alert" type="error" showIcon message={failure || error}
+        description={needsLogin ? '请使用当前账号重新登录。返回账号安全页后，再次选择要进行的操作。' : undefined}
+        action={needsLogin ? <Button loading={busy} onClick={() => void signInAgain()}>重新登录</Button>
+          : error ? <Button onClick={reload}>重新加载</Button> : undefined} />}
       {!data && loading && <Spin />}
       {data && <>
         <Card title="第三方账号">
@@ -51,8 +73,14 @@ function Settings() {
         <Card title="两步验证">
           {codes.length > 0 ? <Space direction="vertical">
             <Alert type="success" showIcon message="两步验证已开启" description="请把恢复码保存到安全的地方。每枚只能使用一次，离开后无法再次查看。" />
-            <pre aria-label="一次性恢复码">{codes.join('\n')}</pre>
-            <Button onClick={() => setCodes([])}>我已保存恢复码</Button>
+            <pre aria-label="一次性恢复码">{recoveryText}</pre>
+            <Space wrap>
+              <Button onClick={() => setCodes([])}>我已保存恢复码</Button>
+              <Button onClick={async () => {
+                if (await writeKeyToClipboard(recoveryText)) void message.success('已复制全部恢复码')
+                else void message.warning('无法访问剪贴板，请选中上方恢复码手动复制。')
+              }}>复制全部恢复码</Button>
+            </Space>
           </Space> : setup ? <>
             <Typography.Paragraph>用验证器扫描二维码，或在验证器中手动输入设置密钥。</Typography.Paragraph>
             <QRCode value={setup.otpauth_uri} />

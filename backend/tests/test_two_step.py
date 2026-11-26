@@ -2,6 +2,7 @@ import asyncio
 import base64
 import time
 
+import pytest
 from sqlalchemy import select
 
 from app.models import User
@@ -95,8 +96,6 @@ async def test_dynamic_code_login_cannot_replay_same_step(client, make_client):
 
 
 async def test_password_change_from_pre_enrollment_session_cannot_mint_new_cookie(app, client):
-    import pytest
-
     from app.core.errors import UnauthorizedError
     from app.schemas.auth import ChangePasswordRequest
     from app.services.auth_service import change_password
@@ -112,7 +111,8 @@ async def test_password_change_from_pre_enrollment_session_cannot_mint_new_cooki
     await challenge(client)
 
 
-async def test_enrollment_requires_recent_login(app, client):
+@pytest.mark.parametrize("has_issued_at", [True, False], ids=["older-than-ten-minutes", "legacy-session"])
+async def test_enrollment_requires_recent_login(app, client, has_issued_at):
     from datetime import UTC, datetime, timedelta
 
     import jwt
@@ -122,12 +122,14 @@ async def test_enrollment_requires_recent_login(app, client):
     details = await register(client)
     client.cookies.clear()
     now = datetime.now(UTC)
-    token = jwt.encode(
-        {"sub": str(details["id"]), "ver": 0, "iat": now - timedelta(minutes=11), "exp": now + timedelta(hours=1)},
-        app.state.settings.jwt_secret, algorithm=JWT_ALGORITHM,
-    )
+    claims = {"sub": str(details["id"]), "ver": 0, "exp": now + timedelta(hours=1)}
+    if has_issued_at:
+        claims["iat"] = now - timedelta(minutes=11)
+    token = jwt.encode(claims, app.state.settings.jwt_secret, algorithm=JWT_ALGORITHM)
     client.headers["Authorization"] = "Bearer " + token
     assert (await client.get(f"{AUTH}/me")).status_code == 200
     denied = await client.post(f"{AUTH}/two-step/setup")
     assert denied.status_code == 403
-    assert "重新登录" in denied.text
+    assert denied.json()["code"] == "recent_login_required"
+    assert (await client.post(f"{AUTH}/login", json=CREDS)).status_code == 200
+    assert (await client.post(f"{AUTH}/two-step/setup")).status_code == 200

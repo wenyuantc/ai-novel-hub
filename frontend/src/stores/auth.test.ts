@@ -56,6 +56,17 @@ describe('私有授权同步的会话与异步隔离', () => {
     expect(useAuthStore.getState().user?.id).toBe(2)
     expect(useAuthStore.getState().user?.is_super_admin).toBe(false)
   })
+  it('重新登录时须先确认服务端已退出，失败可留在账号安全页重试', async () => {
+    useAuthStore.setState({ status: 'authenticated', user: actor() })
+    const fetcher = vi.fn().mockRejectedValueOnce(new TypeError('offline')).mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetcher)
+    const logout = () => useAuthStore.getState().logout({ requireServerConfirmation: true })
+    await expect(logout()).rejects.toThrow()
+    expect(useAuthStore.getState().status).toBe('authenticated')
+    await logout()
+    expect(useAuthStore.getState()).toMatchObject({ status: 'anonymous', user: null })
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/v1/auth/logout', '/api/v1/auth/logout'])
+  })
   it.each(['login', 'register'] as const)('旧logout在新%s成功后迟到，不能清掉新会话', async (method) => {
     useAuthStore.setState({ status: 'authenticated', user: actor() })
     const slow = deferred<Response>()

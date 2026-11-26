@@ -23,7 +23,7 @@ interface AuthState {
   login: (cred: Credentials) => Promise<'challenge' | 'complete' | undefined>
   verify: (code: string) => Promise<void>
   register: (cred: Credentials) => Promise<void>
-  logout: () => Promise<void>
+  logout: (options?: { requireServerConfirmation?: boolean }) => Promise<void>
   /** 会话失效（任意接口 401）时调用 */
   clear: () => void
 }
@@ -117,14 +117,16 @@ export const useAuthStore = create<AuthState>((set, get) => {
     set({ status: 'authenticated', user })
   },
 
-  logout: async () => {
+  logout: async (options) => {
     cancelAuthorization()
     const generation = epoch
     try {
       await authApi.logout()
-    } finally {
-      if (generation === epoch) clear()
+    } catch (err) {
+      if (!options?.requireServerConfirmation && generation === epoch) clear()
+      throw err
     }
+    if (generation === epoch) clear()
   },
 
   clear,
