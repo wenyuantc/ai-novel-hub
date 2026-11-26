@@ -209,6 +209,17 @@ def _draft_data(draft: FrozenDraft) -> dict:
             "content_revision": draft.content_revision, "fingerprint": draft.fingerprint}
 
 
+def _available_editions(project_id: int, chapter_id: int, latest_id: int | None):
+    published = select(Publication.id).where(
+        Publication.edition_id == Edition.id, Publication.project_id == project_id,
+    ).exists()
+    return (
+        select(Edition).join(Entry, Entry.id == Edition.entry_id)
+        .where(Entry.chapter_id == chapter_id, Entry.project_id == project_id,
+               (Edition.id == latest_id) | published)
+    )
+
+
 async def chapter_detail(db: AsyncSession, user_id: int, project_id: int, chapter_id: int,
                          edition_id: int | None = None) -> dict:
     async with workbench_read_snapshot(db, user_id, project_id) as reader:
@@ -216,19 +227,9 @@ async def chapter_detail(db: AsyncSession, user_id: int, project_id: int, chapte
         if chapter is None:
             raise NotFoundError("章节不存在")
         draft = (await capture_draft(reader, project_id, chapter_id) if chapter.status != "generating" else None)
-        published_edition = (
-            select(Publication.id)
-            .where(Publication.edition_id == Edition.id,
-                   Publication.project_id == project_id).exists()
-        )
-        available = (
-            select(Edition.id, Edition.seq, Edition.chapter_no,
-                   Edition.title, Edition.created_at)
-            .join(Entry, Entry.id == Edition.entry_id)
-            .where(Entry.chapter_id == chapter_id, Entry.project_id == project_id,
-                   (Edition.id == chapter.latest_edition_id) | published_edition)
-            .order_by(Edition.seq.desc())
-        )
+        available = _available_editions(project_id, chapter_id, chapter.latest_edition_id).with_only_columns(
+            Edition.id, Edition.seq, Edition.chapter_no, Edition.title, Edition.created_at,
+        ).order_by(Edition.seq.desc())
         choices = (await reader.execute(available)).mappings().all()
         selected_id = edition_id if edition_id is not None else chapter.latest_edition_id
         edition = None
@@ -263,20 +264,45 @@ async def publication_detail(db: AsyncSession, user_id: int, project_id: int, pu
                 "draft_changed": draft is not None and draft.fingerprint != edition.fingerprint}
 
 
+def _edition_document(edition: Edition, suffix: str) -> tuple[DocumentModel, str]:
+    heading = chapter_heading(edition)
+    blocks = [ReaderBlock.model_validate(block) for block in edition.blocks] if edition.blocks is not None else None
+    model = DocumentModel(nodes=[
+        DocumentNode("heading", heading, level=1, source="发布章标题"),
+        DocumentNode("prose", edition.content, blocks=blocks, source="发布正文"),
+    ])
+    short_heading = heading.encode("utf-8")[:160].decode("utf-8", errors="ignore")
+    return model, f"{short_heading}-{suffix}"
+
+
 async def export_publication(db: AsyncSession, user_id: int, project_id: int, publication_id: int,
                              format: str) -> ExportFile:
     # 在同一只读快照内核验导出能力并读取当次原稿，离开事务后才渲染。
     async with workbench_read_snapshot(db, user_id, project_id) as reader:
         capture = await capture_document_access(reader, user_id, project_id, [])
         _, _, edition = await _read_publication(reader, project_id, publication_id)
-        heading = chapter_heading(edition)
-        blocks = [ReaderBlock.model_validate(block) for block in edition.blocks] if edition.blocks is not None else None
-        model = DocumentModel(nodes=[
-            DocumentNode("heading", heading, level=1, source="发布章标题"),
-            DocumentNode("prose", edition.content, blocks=blocks, source="发布正文"),
-        ])
-        short_heading = heading.encode("utf-8")[:160].decode("utf-8", errors="ignore")
-        basename = f"{short_heading}-发布记录{publication_id}"
+        model, basename = _edition_document(edition, f"发布记录{publication_id}")
     attachment = await render_document_attachment(model, format, basename)
+    await verify_document_access(db, capture)
+    return attachment
+
+
+async def export_edition(
+    db: AsyncSession, user_id: int, project_id: int, chapter_id: int, edition_id: int,
+) -> ExportFile:
+    async with workbench_read_snapshot(db, user_id, project_id) as reader:
+        capture = await capture_document_access(reader, user_id, project_id, [])
+        chapter = (await reader.execute(
+            _chapters(project_id).where(Chapter.id == chapter_id),
+        )).mappings().one_or_none()
+        if chapter is None:
+            raise NotFoundError("章节不存在")
+        edition = await reader.scalar(
+            _available_editions(project_id, chapter_id, chapter.latest_edition_id).where(Edition.id == edition_id),
+        )
+        if edition is None:
+            raise NotFoundError("定稿不存在")
+        model, basename = _edition_document(edition, f"定稿{edition.seq}")
+    attachment = await render_document_attachment(model, "txt", basename)
     await verify_document_access(db, capture)
     return attachment

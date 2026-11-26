@@ -47,7 +47,7 @@ export default function RichReaderContent({ projectId, text, blocks, mentions, a
   // 自然换行在富文档中是块间空隙。搜索词可只含换行，此时也要有可滚动的精确目标。
   const searchGap = (start: number, end: number) => {
     const focus = mentions?.focus
-    if (focus?.origin !== 'book-search') return null
+    if (focus?.origin !== 'book-search' && focus?.origin !== 'preflight') return null
     const from = Math.max(start, focus.start), to = Math.min(end, focus.end)
     if (from >= to) return null
     return <mark data-mention-focus tabIndex={-1} aria-label="命中的换行"

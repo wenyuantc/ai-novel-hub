@@ -48,6 +48,7 @@ export const router = createBrowserRouter([
       { path: 'series/:sid', lazy: lazyPage(() => import('./pages/SeriesPage')) },
       { path: 'settings/ai', lazy: lazyPage(() => import('./pages/AIConfigPage')) },
       { path: 'settings/ai-usage', lazy: lazyPage(() => import('./pages/AIUsagePage')) },
+      { path: 'settings/publication-terms', lazy: lazyPage(() => import('./pages/PublicationTermsPage')) },
       { path: 'settings/api-keys', lazy: lazyPage(() => import('./pages/ApiKeysPage')) },
       { path: 'novel-templates', lazy: lazyPage(() => import('./pages/NovelTemplatesPage')) },
       { path: 'prompt-templates', lazy: lazyPage(() => import('./pages/PromptTemplatesPage')) },
@@ -59,6 +60,11 @@ export const router = createBrowserRouter([
       { path: 'inspiration', lazy: lazyPage(() => import('./pages/InspirationListPage')) },
       { path: 'inspiration/:sid', lazy: lazyPage(() => import('./pages/InspirationSessionPage')) },
       { path: 'book-import', lazy: lazyPage(() => import('./pages/BookImportPage')) },
+      {
+        path: 'admin/publication-terms',
+        element: <RequirePermission permission="publication_terms.read"><Outlet /></RequirePermission>,
+        children: [{ index: true, lazy: async () => ({ Component: (await import('./pages/PublicationTermsPage')).AdminPublicationTermsPage }) }],
+      },
       {
         path: 'admin/backups',
         element: <RequirePermission permission="backups.read"><Outlet /></RequirePermission>,

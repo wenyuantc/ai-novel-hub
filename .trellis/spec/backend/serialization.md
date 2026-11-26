@@ -16,6 +16,7 @@
 | PATCH /chapters/{id} | 必须携带 `expected_scene_id` 和 `expected_revision`。未传的状态或日期保持原值，`planned_date=null` 清除排期。 |
 | POST /chapters/{id}/editions | 额外传 `expected_content_revision` 与 `expected_fingerprint`，冻结确认时读者可见的章号、标题、正文和排版。 |
 | POST /chapters/{id}/publications | 传 `expected_revision`、`edition_id`、渠道、实际时间及请求 UUID，返回发布记录 ID。 |
+| GET /chapters/{id}/editions/{edition_id}/export | 按作品、章节及所选有效稿次读取原稿，首发登记前即可下载 UTF-8 TXT。 |
 | GET /publications、GET /publications/{id}、GET /publications/{id}/export | 支持按渠道和现存章节筛选。详情可对比草稿，下载格式为 txt、md、docx。 |
 
 迁移 0064 建立 `serialization_goals`、`serialization_entries`、`serialization_editions` 和 `serialization_publications`。冻结章号使用物理列 `chapter_no_at_confirmation`，避免被章节重排规则改写。
@@ -51,3 +52,18 @@
 ## 7. 常见错误与正确读取方式
 
 将发布记录数从定稿章数直接减去，会让同章第二个平台再扣一次。统计时从现存章节出发，检查有无有效定稿及任一发布记录。导出历史时若再次按源章读取当前正文，修订 B 会覆盖读者看到的 A。应按发布记录绑定的冻结定稿构建导出文件。
+
+## 发布前词表检查
+
+| 操作 | 输入与结果 |
+| --- | --- |
+| GET / PUT `/api/v1/publication-terms` 和 `/api/v1/admin/publication-terms` | GET 返回 `{terms, revision}`；PUT 提交 `{terms, expected_revision}`，返回保存后的内容与版本。同表重复、空白或超长词条返回 422，旧版本返回 409。每表最多 1000 个词，每词最多 128 个码点。 |
+| 既有定稿、发布登记 POST | 首次命中返回 409 和 `serialization_preflight_required`；`preflight` 包含 `hits`、总数、分页及 `confirmation_token`。保留原请求体，带上该凭据确认。旧凭据可产生 `stale_serialization_preflight`，现有身份或稿件冲突仍沿用原错误。 |
+| POST 加 `?preflight_offset=N` | 仅读取第 N 个命中起的一页，最多 50 条。重新取页后若凭据已变，界面须显示新一轮核对。 |
+| GET `.../chapters/{chapter_id}/editions/{edition_id}/export` | 首发前可获取有效定稿，已发布过的旧稿也可补录；附件渲染后再次复核导出授权。 |
+
+- 个人词表与账号绑定，全站词表由具备对应动作权限的管理员维护。整库备份保留两级词表和修订号。单书导入后使用目标作者的词表。
+- 定稿检查已保存草稿的章名与可见正文，登记检查所选不可变稿次。两份词表中相同的字面词去重，不同词重叠和同词多次出现均保留；每个位置以 Unicode 码点的左闭右开区间表示。例如“😀甲甲”中第二个“甲”的区间是 [2, 3)。
+- 有命中时，写接口返回 409，由操作者核对后带确认凭据重试。确认绑定操作者、动作、作品、章节、稿件与两份有效词表的版本，发布还绑定提交目标。稿件或词表版本变化后重验；已成功登记的相同请求仍返回原收据。
+- 词表从作品作者取用。协作者只拿到实际稿件中的命中及位置。以操作人的个人词表代替作者词表会让同一本书得到不同结果。
+- 通用 TXT 供作者手动投稿。下载、进入平台审核队列均不写发布记录。作者确认远端已发布后沿用原登记和首发统计。

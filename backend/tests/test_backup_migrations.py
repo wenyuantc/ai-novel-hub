@@ -59,7 +59,7 @@ def test_0030_upgrades_existing_builtin_only_and_keeps_business_and_custom_grant
                 )
             ).one()
             # 0030 冻结当时的37项权限，后续的 AI 用量权限由0061引入。
-            expected = [code for code in PERMISSION_CODES if code != "ai_usage.read"]
+            expected = [code for code in PERMISSION_CODES if not code.startswith(("ai_usage.", "publication_terms."))]
             assert json.loads(permissions) == expected and revision == 2
             assert db.execute(text("SELECT revision FROM authorization_state")).scalar_one() == 1
             assert db.execute(text("SELECT permissions FROM roles WHERE id=10")).scalar_one() == old_super

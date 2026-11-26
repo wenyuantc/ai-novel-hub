@@ -34,6 +34,7 @@ export const ADMIN_DESTINATIONS: ReadonlyArray<{ key: string; path: string; labe
   { key: 'admin-recycle-bin', path: '/admin/recycle-bin', label: '作品回收站', permission: 'recycle_bin.read' },
   { key: 'admin-audit-logs', path: '/admin/audit-logs', label: '操作日志', permission: 'audit.read' },
   { key: 'admin-backups', path: '/admin/backups', label: '整库备份', permission: 'backups.read' },
+  { key: 'admin-publication-terms', path: '/admin/publication-terms', label: '全站发布词表', permission: 'publication_terms.read' },
   { key: 'admin-system-settings', path: '/admin/system-settings', label: '系统设置', permission: 'settings.read' },
 ]
 

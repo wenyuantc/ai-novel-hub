@@ -34,6 +34,8 @@ PERMISSIONS = (
     Permission("audit.cleanup", "清理操作日志", "日志", True, ("audit.read",)),
     Permission("settings.read", "查看系统运行设置", "系统设置"),
     Permission("settings.update", "修改系统运行设置", "系统设置", True, ("settings.read",)),
+    Permission("publication_terms.read", "查看全站发布检查词表", "发布检查"),
+    Permission("publication_terms.update", "修改全站发布检查词表", "发布检查", True, ("publication_terms.read",)),
     Permission("backups.read", "查看整库备份记录", "备份"),
     Permission("backups.configure", "配置整库备份与连接", "备份", True, ("backups.read",)),
     Permission("backups.run", "手动受理整库备份", "备份", True, ("backups.read",)),

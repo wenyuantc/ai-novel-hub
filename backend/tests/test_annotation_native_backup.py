@@ -79,6 +79,18 @@ async def _postgres_pair():
         yield pair
 
 
+async def _restore(snapshot, target):
+    if make_url(target).get_backend_name() == "sqlite":
+        await asyncio.to_thread(restore_sqlite_snapshot, snapshot, Path(make_url(target).database))
+    else:
+        url = make_url(target)
+        await asyncio.to_thread(subprocess.run, [
+            "pg_restore", "--single-transaction", "--no-owner", "--no-privileges", "--no-password",
+            "--host", url.host, "--port", str(url.port or 5432), "--username", url.username,
+            "--dbname", url.database, str(snapshot),
+        ], env={"PATH": os.environ["PATH"], "PGPASSWORD": url.password or ""}, timeout=60, check=True)
+
+
 async def _history(user, path):
     threads = (await _ok(user.get(path)))["items"]
     messages = {
@@ -160,15 +172,7 @@ async def test_native_restore_with_collaborator_and_review_history(tmp_path, eng
                 "body": "快照后的留言", "operation_id": str(uuid4()),
             }))
 
-        if engine == "sqlite":
-            await asyncio.to_thread(restore_sqlite_snapshot, snapshot, Path(make_url(target).database))
-        else:
-            url = make_url(target)
-            await asyncio.to_thread(subprocess.run, [
-                "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges", "--no-password",
-                "--host", url.host, "--port", str(url.port or 5432), "--username", url.username,
-                "--dbname", url.database, str(snapshot),
-            ], env={"PATH": os.environ["PATH"], "PGPASSWORD": url.password or ""}, timeout=60, check=True)
+        await _restore(snapshot, target)
 
         async with _clients(tmp_path, target) as (owner, reviewer, outsider):
             for client, name in ((owner, "review-owner"), (reviewer, "review-guest"), (outsider, "review-outsider")):

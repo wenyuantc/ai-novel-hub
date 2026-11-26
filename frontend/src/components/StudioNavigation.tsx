@@ -19,6 +19,7 @@ const GLOBAL_GROUPS: NavGroup[] = [
     { to: '/novel-templates', label: '小说模板', icon: <BookOutlined /> },
     { to: '/settings/ai', label: '模型配置', icon: <SettingOutlined /> },
     { to: '/settings/ai-usage', label: 'AI 用量与费用', icon: <LineChartOutlined aria-hidden /> },
+    { to: '/settings/publication-terms', label: '个人发布词表', icon: <SafetyCertificateOutlined /> },
     { to: '/settings/api-keys', label: 'API 密钥', icon: <KeyOutlined /> },
     { to: '/prompt-templates', label: '提示词模板', icon: <FileTextOutlined /> },
     { to: '/prompt-components', label: '提示词组件', icon: <BlockOutlined /> },

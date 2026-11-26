@@ -47,3 +47,25 @@ describe('连载登记预览与重试', () => {
     expect(html).toContain('<strong>河🙂</strong>')
   })
 })
+
+it('章名与正文均按码点定位，保留跨样式和跨段的命中', () => {
+  const manuscript = { chapter_no: 8, title: '乙🙂乙', content: '🙂乙\n𠮷乙', blocks: [
+    { kind: 'paragraph' as const, level: null, start: 0, end: 2, runs: [{ start: 0, end: 2, bold: false, italic: false }] },
+    { kind: 'heading' as const, level: 2, start: 3, end: 5, runs: [
+      { start: 3, end: 4, bold: true, italic: false }, { start: 4, end: 5, bold: false, italic: true },
+    ] },
+  ] }
+  const render = (field: 'title' | 'content', term: string, start: number, end: number, plain = false) => {
+    const hit = { field, term, start, end, context: '' }
+    return renderToStaticMarkup(createElement(SerializationManuscript, {
+      projectId: 1, manuscript: plain ? { ...manuscript, blocks: null } : manuscript, hit,
+    }))
+  }
+  const title = render('title', '乙', 2, 3)
+  expect(title).toMatch(/乙🙂<mark[^>]*>乙<\/mark>/)
+  const rich = render('content', '乙\n𠮷乙', 1, 5)
+  const covered = [...rich.matchAll(/<mark[^>]*>([\s\S]*?)<\/mark>/g)].map((m) => m[1].replace(/<[^>]*>/g, '')).join('')
+  expect(covered).toBe('乙\n𠮷乙')
+  expect(rich).toContain('<strong>𠮷</strong><em>乙</em>')
+  expect(render('content', '乙', 4, 5, true)).toMatch(/🙂乙\n𠮷<mark[^>]*>乙<\/mark>/)
+})

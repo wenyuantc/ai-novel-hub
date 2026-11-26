@@ -69,3 +69,37 @@ it('失效作品的晚到详情错误不触发全局登出', async () => {
   await expect(serializationApi.chapter(2, 3, undefined, { isCurrent: () => false })).rejects.toThrow('已退出')
   expect(logout).not.toHaveBeenCalled()
 })
+
+it('分页仅取核对清单，明确确认时保留原来的登记请求', async () => {
+  const page = { confirmation_token: 'signed', total: 60, offset: 50, limit: 50, hits: [] }
+  const send = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'serialization_preflight_required', preflight: page }), { status: 409 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'stale_serialization_preflight', preflight: { ...page, total: 0 } }), { status: 409 }))
+    .mockResolvedValueOnce(new Response('{"id":17}'))
+  vi.stubGlobal('fetch', send)
+  const request = { expected_revision: 7, edition_id: 20, channel: '渠道甲', published_at: '2026-11-17T22:00:00Z', request_id: 'one-intent' }
+  await expect(serializationApi.publish(3, 12, request, undefined, 50)).resolves.toEqual({ kind: 'review', stale: false, page })
+  const confirmed = { ...request, confirmation_token: 'signed' }
+  await expect(serializationApi.publish(3, 12, confirmed)).resolves.toMatchObject({ kind: 'review', stale: true, page: { total: 0 } })
+  await expect(serializationApi.publish(3, 12, confirmed)).resolves.toEqual({ kind: 'saved', result: { id: 17 } })
+  expect(send.mock.calls[0][0]).toContain('/chapters/12/publications?preflight_offset=50')
+  expect(JSON.parse(send.mock.calls[0][1].body)).toEqual(request)
+  expect(send.mock.calls[1][0]).toMatch(/\/chapters\/12\/publications$/)
+  expect(JSON.parse(send.mock.calls[1][1].body)).toEqual(confirmed)
+})
+
+it('按所选定稿下载 TXT，读取途中作用域失效则取消保存', async () => {
+  let current = true
+  const save = vi.fn()
+  const raw = '第 3 章 · 旧章名\n\n中文🙂\n第二段'
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response(raw))
+    .mockResolvedValueOnce({ ok: true, headers: new Headers(), blob: async () => { current = false; return new Blob([raw]) } })
+  vi.stubGlobal('fetch', fetcher)
+  const opts = { isCurrent: () => current, save }
+  await expect(serializationApi.downloadEdition(2, 3, 9, opts)).resolves.toMatchObject({ filename: '定稿-9.txt' })
+  expect(await save.mock.calls[0][0].text()).toBe(raw)
+  expect(fetcher.mock.calls[0][0]).toBe('/api/v1/projects/2/serialization/chapters/3/editions/9/export')
+  await expect(serializationApi.downloadEdition(2, 3, 9, opts)).resolves.toBeNull()
+  expect(save).toHaveBeenCalledTimes(1)
+})

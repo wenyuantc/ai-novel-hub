@@ -49,13 +49,17 @@ class EntryUpdate(WriteRequest):
         return self
 
 
-class FinalizeRequest(WriteRequest):
+class PreflightWriteRequest(WriteRequest):
+    confirmation_token: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class FinalizeRequest(PreflightWriteRequest):
     expected_scene_id: PositiveDbInt
     expected_content_revision: Revision
     expected_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class PublishRequest(WriteRequest):
+class PublishRequest(PreflightWriteRequest):
     edition_id: PositiveDbInt
     channel: str = Field(min_length=1, max_length=100)
     published_at: AwareDatetime

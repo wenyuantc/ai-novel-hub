@@ -86,3 +86,8 @@
 .writing-trend-bar { background: var(--color-primary); opacity: .18; height: 62%; position: absolute; top: 19%; left: 0; }
 .writing-trend-table td:nth-child(3) .writing-trend-bar { background: var(--color-warning); }
 .writing-trend-value { position: relative; }
+
+.serialization-preflight { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+.serialization-preflight-hits { margin: 0; padding-inline-start: 2.5em; max-height: 35vh; overflow: auto; }
+.serialization-preflight-hits li + li { border-top: 1px solid var(--color-border); }
+.serialization-preflight mark[data-mention-focus] { text-decoration: underline; }

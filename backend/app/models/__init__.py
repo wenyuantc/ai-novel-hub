@@ -78,6 +78,7 @@ from app.models.planning import (
 from app.models.progressions import SettingProgression, SettingTextField, SettingTimeline
 from app.models.project_import_preview import ProjectImportPreview, ProjectImportPreviewChunk, ProjectImportPreviewQuota
 from app.models.prompt_components import PromptComponent
+from app.models.publication_terms import PublicationTerms
 from app.models.rbac import AuthorizationState, Role, UserQuota, UserRole
 from app.models.rich_document import (
     SceneDocumentMeta,
@@ -183,6 +184,7 @@ __all__ = [
     "ProjectImportPreviewChunk",
     "ProjectImportPreviewQuota",
     "ProjectNote",
+    "PublicationTerms",
     "PenName",
     "ProjectPenName",
     "PlanningTag",

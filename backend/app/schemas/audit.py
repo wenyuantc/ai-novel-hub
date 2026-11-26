@@ -54,13 +54,14 @@ AuditAction = Literal[
     "audit.cleanup",
     "task.cancel_request",
     "system_settings.update",
+    "publication_terms.update",
     "backup.settings.update",
     "backup.run.accept",
     "backup.download.authorize",
 ]
 AuditTargetType = Literal[
     "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task",
-    "system_settings", "role", "backup_settings", "backup_run",
+    "publication_terms", "system_settings", "role", "backup_settings", "backup_run",
 ]
 AuditResult = Literal["success", "failure"]
 AuditErrorCode = Literal[

@@ -29,6 +29,7 @@ from app.services import project_access, scene_service
 from app.services.audit_writer import AuditOperation
 from app.services.chapter_service import get_manual_chapter
 from app.services.scene_move_history import matches_chapter_identity
+from app.services.serialization_preflight import require_confirmation
 from app.services.serialization_snapshot import capture_draft
 
 
@@ -102,6 +103,7 @@ async def update_entry(
 
 async def finalize(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, body: FinalizeRequest,
+    *, signing_secret: str, preflight_offset: int | None = None,
 ) -> EditionBrief:
     async with AuditOperation(db, user_id, "chapter.update", "chapter", chapter_id, project_id=project_id) as audit:
         chapter = await scene_service.get_manual_write_chapter(db, user_id, project_id, chapter_id)
@@ -114,6 +116,10 @@ async def finalize(
             raise ConflictError("预览后草稿已变化，请重新核对定稿", extra={"code": "stale_serialization_draft"})
         if not draft.content.strip():
             raise BadRequestError("正文为空，无法确认定稿")
+        await require_confirmation(
+            db, actor_id=user_id, project_id=project_id, chapter_id=chapter_id, body=body,
+            manuscript=draft, signing_secret=signing_secret, offset=preflight_offset, audit=audit,
+        )
         if entry is None:
             entry = _new_entry(db, project_id, chapter_id)
             await db.flush()
@@ -133,6 +139,7 @@ async def finalize(
 
 async def publish(
     db: AsyncSession, user_id: int, project_id: int, chapter_id: int, body: PublishRequest,
+    *, signing_secret: str, preflight_offset: int | None = None,
 ) -> PublicationReceipt:
     # 统一时间偏移后判别重放，路由中的章节也是请求的一部分。
     try:
@@ -164,7 +171,7 @@ async def publish(
         if entry is None:
             raise NotFoundError("未找到该章节的定稿")
         _check_revision(entry.revision, body.expected_revision)
-        edition = await db.scalar(select(SerializationEdition.id).where(
+        edition = await db.scalar(select(SerializationEdition).where(
             SerializationEdition.entry_id == entry.id, SerializationEdition.id == body.edition_id,
         ))
         if edition is None:
@@ -178,6 +185,10 @@ async def publish(
             ).limit(1))
             if already_published is None:
                 raise ConflictError("请选择当前有效定稿，或补录已发布过的版本")
+        await require_confirmation(
+            db, actor_id=user_id, project_id=project_id, chapter_id=chapter_id, body=body,
+            manuscript=edition, signing_secret=signing_secret, offset=preflight_offset, audit=audit,
+        )
         row = SerializationPublication(
             project_id=project_id, edition_id=body.edition_id, channel=channel, published_at=published_at,
             actor_id=user_id, request_id=str(body.request_id), payload_hash=digest,

@@ -1,4 +1,4 @@
-"""38项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
+"""40项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
 
 from app.core.permissions import PERMISSION_CODES, PERMISSIONS
 from tests.helpers import create_project, register
@@ -52,6 +52,10 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         }, 200),
         "settings.read": ("GET", "/api/v1/admin/system-settings", None, 200),
         "settings.update": None,
+        "publication_terms.read": ("GET", "/api/v1/admin/publication-terms", None, 200),
+        "publication_terms.update": ("PUT", "/api/v1/admin/publication-terms", {
+            "terms": ["测试全站"], "expected_revision": 0,
+        }, 200),
         "backups.read": ("GET", "/api/v1/admin/backups/runs", None, 200),
         "backups.configure": None,
         # 当前未设备份密码，最小run授权应到达配置就绪检查，而非被403拦截。
@@ -73,7 +77,7 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         "global_skills.delete": None,
         "global_skills.restore_builtin": None,
     }
-    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 38
+    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 40
     serial = 0
 
     async def prepare(code):

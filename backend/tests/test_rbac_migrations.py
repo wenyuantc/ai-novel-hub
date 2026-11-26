@@ -51,9 +51,9 @@ def test_0029_preserves_users_sessions_and_business_foreign_keys(tmp_path):
             assert len(roles) == 4
             for key, name, permissions in roles:
                 assert name == BUILTIN_ROLES[key][0]
-                # 历史0029冻结33项。备份权限由0030、AI用量权限由0061加入超管角色。
+                # 历史0029冻结33项。备份权限由0030、AI用量权限由0061、发布检查词表权限由0076加入超管角色。
                 expected = {code for code in BUILTIN_ROLES[key][2]
-                            if not code.startswith(("backups.", "ai_usage."))}
+                            if not code.startswith(("backups.", "ai_usage.", "publication_terms."))}
                 assert set(json.loads(permissions)) == expected
             assert db.execute(text("PRAGMA foreign_key_check")).all() == []
         for sql in (

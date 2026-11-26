@@ -16,6 +16,7 @@ export const AUDIT_ACTION: Record<AuditAction, string> = {
   'planning.update': '维护作品规划',
   'role.create': '创建角色', 'role.update': '修改角色', 'role.delete': '删除角色',
   'user.roles.update': '分配用户角色', 'user.roles.bootstrap': '引导超级管理员', 'user.quotas.update': '修改用户配额',
+  'publication_terms.update': '修改全站发布词表',
   'system_settings.update': '修改系统设置',
   'backup.settings.update': '保存备份配置', 'backup.run.accept': '受理整库备份', 'backup.download.authorize': '授权下载备份',
   'task.cancel_request': '受理任务取消请求',
@@ -30,7 +31,7 @@ export const AUDIT_ACTION: Record<AuditAction, string> = {
 }
 
 export const AUDIT_TARGET: Record<AuditTargetType, string> = {
-  role: '角色', backup_settings: '备份配置', backup_run: '整库备份',
+  publication_terms: '全站发布词表', role: '角色', backup_settings: '备份配置', backup_run: '整库备份',
   user: '用户', project: '作品', chapter: '章节', chapter_version: '章节版本', workshop_item: '工坊资源', workshop_submission: '工坊投稿', skill: '全局 Skill', audit: '审计日志', task: '任务', system_settings: '系统设置',
 }
 

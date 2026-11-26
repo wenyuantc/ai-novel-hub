@@ -45,6 +45,7 @@ from app.api.v1 import (
     projects,
     prompt_components,
     prompt_templates,
+    publication_terms,
     reader,
     relationships,
     scene_ai,
@@ -85,6 +86,7 @@ api_router.include_router(collaboration.router)
 # 固定路径 /projects/import... 先于 /projects/{project_id}
 api_router.include_router(transfer.router)
 api_router.include_router(pen_names.router)
+api_router.include_router(publication_terms.router)
 api_router.include_router(novel_templates.router)
 api_router.include_router(projects.router)
 api_router.include_router(series.router)

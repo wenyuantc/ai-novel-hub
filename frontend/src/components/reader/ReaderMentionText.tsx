@@ -3,7 +3,8 @@ import type { ReactNode } from 'react'
 import type { MentionAnchor, MentionSpan } from '../../api/mentions'
 import MentionText from '../mentions/MentionText'
 
-export interface ReaderMentions { spans: MentionSpan[]; focus: MentionAnchor | null }
+type ReaderFocus = MentionAnchor | { start: number; end: number; origin: 'preflight' }
+export interface ReaderMentions { spans: MentionSpan[]; focus: ReaderFocus | null }
 
 export function ReaderMentionText({ projectId, text, offset, end, mentions, renderPart }: {
   projectId: number

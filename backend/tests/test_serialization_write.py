@@ -121,6 +121,7 @@ async def test_retired_unpublished_edition_cannot_be_registered_but_published_ed
     assert (await client.patch(chapter, json=body)).json() == {"revision": 2}
     retry = await client.post(f"{chapter}/publications", json=registration(first["id"], 2))
     assert retry.status_code == 409
+    assert (await client.get(f"{chapter}/editions/{first['id']}/export")).status_code == 404
     second = (await client.post(f"{chapter}/editions", json=confirmation(await preview(client, chapter)))).json()
     assert (await client.post(f"{chapter}/publications", json=registration(second["id"], 3))).is_success
     assert (await client.patch(url, json={"content": "新版", "expected_content_revision": 0})).is_success

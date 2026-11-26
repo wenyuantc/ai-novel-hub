@@ -80,6 +80,7 @@ def test_0061_preserves_legacy_usage_and_migrates_super_admin(tmp_path):
                 "VALUES(1,1,1,'generate','openai','legacy','{}','[]','succeeded','',0,0,199,:log_key)"
             ), {"log_key": str(uuid4())})
         command.upgrade(config, "0061")
+        expected_super = [code for code in PERMISSION_CODES if not code.startswith("publication_terms.")]
 
         Base.metadata.create_all(reference)
         for table in TABLES:
@@ -93,7 +94,7 @@ def test_0061_preserves_legacy_usage_and_migrates_super_admin(tmp_path):
             assert _schema_contract(inspect(migrated), table) == expected
 
         with migrated.begin() as db:
-            assert _permissions(db) == list(PERMISSION_CODES)
+            assert _permissions(db) == expected_super
             assert _permissions(db, "content_admin") == old_content
             assert db.scalar(text("SELECT revision FROM authorization_state WHERE id=1")) == (
                 old_authorization_revision + 1
@@ -115,7 +116,7 @@ def test_0061_preserves_legacy_usage_and_migrates_super_admin(tmp_path):
         with pytest.raises(RuntimeError, match="仍有 AI 用量、价格或预算数据"):
             command.downgrade(config, "0060")
         with migrated.begin() as db:
-            assert _permissions(db) == list(PERMISSION_CODES)
+            assert _permissions(db) == expected_super
             db.execute(text("DELETE FROM ai_usage_budgets"))
 
         command.downgrade(config, "0060")
@@ -125,7 +126,7 @@ def test_0061_preserves_legacy_usage_and_migrates_super_admin(tmp_path):
             assert not set(TABLES).intersection(inspect(db).get_table_names())
         command.upgrade(config, "0061")
         with migrated.begin() as db:
-            assert _permissions(db) == list(PERMISSION_CODES)
+            assert _permissions(db) == expected_super
     finally:
         migrated.dispose()
         reference.dispose()

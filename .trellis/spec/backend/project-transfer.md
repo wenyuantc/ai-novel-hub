@@ -87,7 +87,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 18, exported_at, app_schema: "0075"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 18, exported_at, app_schema: "0076"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - 每日写作统计、个人码字目标和计量起点属于本实例。导入创建新作品时保留原作建书时间，另用服务端导入时刻初始化该作品的计量起点。整库备份保留统计与目标。
@@ -188,3 +188,5 @@ target / before / after / field_key；快照自洽且可恢复）、可选项、
 - 正文：按换行切段，空行忽略；纯正文为 `<p>`，已保存的标题、列表、引用和行内格式按可读结构呈现，不包括作者区块或标记；全部文本 XML 转义并去掉 XML 1.0 不允许的字符（C0 控制字符除制表 / 换行 / 回车、代理区、U+FFFE/FFFF）。
   CSS：`p { text-indent: 2em; line-height: 1.6; margin: 0 0 .4em; }`，标题居中，不指定字体。
 - 测试：`tests/test_epub.py`（结构、有卷 / 无卷、nav 与 ncx 层级、扉页与简介页开关、作者默认值与上限、控制字符、只导出选中章节、空章提示、跨用户、分卷规则）。
+
+迁移 0076 的全站词表与个人词表随整库恢复。单书 v18 仅更新导出元信息中的数据库版本；导入作品使用目标实例和新作者的词表。

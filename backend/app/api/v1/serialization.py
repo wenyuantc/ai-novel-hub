@@ -5,14 +5,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response
 
-from app.core.deps import CurrentUser, DbDep, EditorUser
+from app.core.deps import CurrentUser, DbDep, EditorUser, SettingsDep
 from app.schemas import serialization as schema
 from app.services import serialization_read, serialization_write
+from app.services.export_service import ExportFile
 
 router = APIRouter(prefix="/projects/{project_id}/serialization", tags=["serialization"])
 ResourceId = Annotated[int, Path(ge=1, le=2_147_483_647)]
 OptionalId = Annotated[int | None, Query(ge=1, le=2_147_483_647)]
 Offset = Annotated[int, Query(ge=0, le=2_147_483_647)]
+PreflightOffset = Annotated[int | None, Query(ge=0, le=2_147_483_647)]
 Limit = Annotated[int, Query(ge=1, le=200)]
 
 
@@ -68,15 +70,23 @@ async def update_entry(
 @router.post("/chapters/{chapter_id}/editions", response_model=schema.EditionBrief)
 async def finalize(
     project_id: ResourceId, chapter_id: ResourceId, body: schema.FinalizeRequest, user: EditorUser, db: DbDep,
+    settings: SettingsDep, preflight_offset: PreflightOffset = None,
 ):
-    return await serialization_write.finalize(db, user.id, project_id, chapter_id, body)
+    return await serialization_write.finalize(
+        db, user.id, project_id, chapter_id, body,
+        signing_secret=settings.jwt_secret, preflight_offset=preflight_offset,
+    )
 
 
 @router.post("/chapters/{chapter_id}/publications", response_model=schema.PublicationReceipt)
 async def publish(
     project_id: ResourceId, chapter_id: ResourceId, body: schema.PublishRequest, user: EditorUser, db: DbDep,
+    settings: SettingsDep, preflight_offset: PreflightOffset = None,
 ):
-    return await serialization_write.publish(db, user.id, project_id, chapter_id, body)
+    return await serialization_write.publish(
+        db, user.id, project_id, chapter_id, body,
+        signing_secret=settings.jwt_secret, preflight_offset=preflight_offset,
+    )
 
 
 @router.get("/publications", response_model=schema.Page[schema.PublicationRow])
@@ -95,12 +105,24 @@ async def publication_detail(project_id: ResourceId, publication_id: ResourceId,
     return await serialization_read.publication_detail(db, user.id, project_id, publication_id)
 
 
+@router.get("/chapters/{chapter_id}/editions/{edition_id}/export")
+async def export_edition(
+    project_id: ResourceId, chapter_id: ResourceId, edition_id: ResourceId, user: CurrentUser, db: DbDep,
+) -> Response:
+    file = await serialization_read.export_edition(db, user.id, project_id, chapter_id, edition_id)
+    return _attachment_response(file)
+
+
 @router.get("/publications/{publication_id}/export")
 async def export_publication(
     project_id: ResourceId, publication_id: ResourceId, user: CurrentUser, db: DbDep,
     format: schema.Format,
 ) -> Response:
     file = await serialization_read.export_publication(db, user.id, project_id, publication_id, format)
+    return _attachment_response(file)
+
+
+def _attachment_response(file: ExportFile) -> Response:
     headers = {"Content-Disposition": file.content_disposition, "Cache-Control": "no-store"}
     if file.warnings_header:
         headers["X-Export-Warnings"] = file.warnings_header

@@ -5,6 +5,7 @@ import io
 import threading
 from datetime import UTC, date, datetime
 
+import pytest
 from docx import Document
 from sqlalchemy import update
 
@@ -118,20 +119,27 @@ async def test_backdated_earlier_month_moves_first_publication_without_changing_
     assert (await client.get(f"{base}/chapters/{cid}?edition_id=9999999")).status_code == 404
 
 
-async def test_publication_download_rechecks_authorization_after_render(app, client, monkeypatch):
-    base, _, _, _, first, _ = await _book(app, client)
+@pytest.mark.parametrize("source", ["publication", "edition"])
+async def test_download_rechecks_authorization_after_render(app, client, monkeypatch, source):
+    base, _, cid, edition_id, first, _ = await _book(app, client)
+    if source == "publication":
+        endpoint = f"{base}/publications/{first}/export?format=docx"
+        renderer = "render_docx"
+    else:
+        endpoint = f"{base}/chapters/{cid}/editions/{edition_id}/export"
+        renderer = "render_text"
     entered = threading.Event()
     release = threading.Event()
-    original = document_export.render_docx
+    original = getattr(document_export, renderer)
 
-    def pause(model):
+    def pause(*args, **kwargs):
         entered.set()
         if not release.wait(10):
-            raise RuntimeError("测试未能释放 Word 渲染")
-        return original(model)
+            raise RuntimeError("测试未能释放文件渲染")
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(document_export, "render_docx", pause)
-    request = asyncio.create_task(client.get(f"{base}/publications/{first}/export?format=docx"))
+    monkeypatch.setattr(document_export, renderer, pause)
+    request = asyncio.create_task(client.get(endpoint))
     try:
         assert await asyncio.to_thread(entered.wait, 10)
         async with app.state.sessionmaker() as db:
