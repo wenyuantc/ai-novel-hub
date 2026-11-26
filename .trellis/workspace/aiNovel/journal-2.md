@@ -332,3 +332,27 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 74: TODO 32 第三方登录、两步验证与本机 MCP
+<!-- trellis-session: v=2 fp=13df89bfdbe5b371 -->
+
+**Date**: 2026-11-26
+**Task**: TODO 32 第三方登录、两步验证与本机 MCP
+**Branch**: `main`
+
+### Summary
+
+功能与联合验收已本地提交，MCP 子任务已归档。后端 7687 通过，前端 1964 通过。Linux DO 与 GitHub 真实授权仍待测试应用凭据。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e3666ff` | feat(auth): 支持 Linux DO、GitHub 登录和可恢复的两步验证 |
+| `29d0ae1` | feat(mcp): 支持按部署目录启用和运行本机 stdio 插件 |
+| `009a2af` | docs: 记录登录与本机插件联合验收及回归结果 |
+
+### Status
+
+[OK] **Completed**
