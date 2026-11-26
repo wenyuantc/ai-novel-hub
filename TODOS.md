@@ -346,7 +346,7 @@
 
 ### 29. 发布前检查与外部平台对接
 
-已实现两级词表、定稿和发布前的原稿定位、首次投稿前的定稿 TXT 下载。起点、番茄和晋江均提供人工投稿途径；三家的第三方发章授权、测试作品和发布回执仍待核验。[平台调研](.trellis/tasks/11-23-publication-preflight-integrations/research/platforms.md) · [浏览器验收](.trellis/tasks/11-23-publication-preflight-integrations/research/browser-verification.md) · [数据库验收](.trellis/tasks/11-23-publication-preflight-integrations/research/database-verification.md)
+已实现两级词表、定稿和发布前的原稿定位、首次投稿前的定稿 TXT 下载。起点、番茄和晋江均提供人工投稿途径；三家的第三方发章授权、测试作品和发布回执仍待核验。[平台调研](.trellis/tasks/archive/2026-11/11-23-publication-preflight-integrations/research/platforms.md) · [浏览器验收](.trellis/tasks/archive/2026-11/11-23-publication-preflight-integrations/research/browser-verification.md) · [数据库验收](.trellis/tasks/archive/2026-11/11-23-publication-preflight-integrations/research/database-verification.md)
 
 - [x] 支持维护敏感词表，在定稿或标记发布前检查并定位命中位置。
 - [x] 评估主流连载平台的发布接口或导出格式，确定可自动对接的范围。

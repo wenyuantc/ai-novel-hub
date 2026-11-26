@@ -4,4 +4,4 @@
 {"file":".trellis/spec/backend/admin-backups.md","reason":"核对双库整库备份恢复、历史状态和恢复后重复出站风险"}
 {"file":".trellis/spec/backend/index.md","reason":"按索引读取后端质量规范中的双库隔离、迁移并发与全量门禁"}
 {"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端构建、测试及浏览器交互验收"}
-{"file":".trellis/tasks/11-23-publication-preflight-integrations/research/platforms.md","reason":"区分人工途径、模拟测试与真实写入回执"}
+{"file":".trellis/tasks/archive/2026-11/11-23-publication-preflight-integrations/research/platforms.md","reason":"区分人工途径、模拟测试与真实写入回执"}
