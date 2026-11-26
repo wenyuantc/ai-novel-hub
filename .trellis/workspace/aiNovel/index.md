@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 72
+- **Total Sessions**: 73
 - **Last Active**: 2026-11-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~312 | Active |
+| `journal-2.md` | ~334 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 73 | 2026-11-26 | 发布前用词核对与定稿投稿导出 | `0c12ebb` | `codex/publication-preflight-integrations` |
 | 72 | 2026-11-26 | 故事内时间线与 AI 历法生成 | `7026420` | `codex/story-timeline` |
 | 71 | 2026-11-25 | 阅读页朗读与 AI 角色配音 | `3720926` | `main` |
 | 70 | 2026-11-25 | 完成协作批注与备份恢复验收 | `70b93a3` | `codex/collaboration-annotations` |

@@ -310,3 +310,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 73: 发布前用词核对与定稿投稿导出
+<!-- trellis-session: v=2 fp=c4532dc6c6cd3b08 -->
+
+**Date**: 2026-11-26
+**Task**: 发布前用词核对与定稿投稿导出
+**Branch**: `codex/publication-preflight-integrations`
+
+### Summary
+
+完成两级词表、原稿核对与首次投稿 TXT 导出，通过双库、浏览器及全量回归。平台直发授权和回执留在 TODO #29。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0c12ebb` | feat: 增加发布前用词核对与定稿投稿导出 |
+
+### Status
+
+[OK] **Completed**
