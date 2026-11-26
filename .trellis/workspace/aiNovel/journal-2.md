@@ -288,3 +288,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 72: 故事内时间线与 AI 历法生成
+<!-- trellis-session: v=2 fp=d56567c9523842eb -->
+
+**Date**: 2026-11-26
+**Task**: 故事内时间线与 AI 历法生成
+**Branch**: `codex/story-timeline`
+
+### Summary
+
+完成章景日期、双序时间线、日期证据校对及 AI 历法草稿。后端 7636 项、前端 1939 项通过；已验证桌面与窄屏、单书与整库恢复。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7026420` | feat: 新增故事内时间线与 AI 历法生成 |
+
+### Status
+
+[OK] **Completed**
