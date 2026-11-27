@@ -24,6 +24,8 @@ from app.core.errors import register_error_handlers
 from app.core.oauth_access_log import redact_oauth_callback
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
+from app.media import cleanup as media_cleanup
+from app.media.config import MediaSettings
 from app.plugins.deps import PluginScope, require_plugin
 from app.services import (
     admin_dashboard_service,
@@ -146,6 +148,7 @@ def create_app(
             cleanup.push_async_callback(app_.state.backups.close)
             await app_.state.backup_runtime.start()
             async with (
+                media_cleanup.maintenance(app_.state.sessionmaker, app_.state.task_engine.request_worker),
                 ai_usage_recording.usage_maintenance(app_.state.sessionmaker),
                 preview_store.preview_maintenance(app_.state.sessionmaker),
             ):
@@ -157,12 +160,14 @@ def create_app(
     app.state.feature_plugins = registry
     app.state.sessionmaker = create_sessionmaker(engine)
     # 预览版本只使用域分离的派生密钥；会话不保存 JWT 原密钥。
+    app.state.cipher = SecretCipher(settings.encryption_key)
     app.state.sessionmaker.configure(info={
         **app.state.sessionmaker.kw.get("info", {}),
+        "media_settings": MediaSettings.from_deployment(settings),
+        "media_cipher": app.state.cipher,
         "book_search_hmac_key": hmac.digest(settings.jwt_secret.encode(), b"ainovel/book-search/v1", "sha256"),
         "agent_view_hmac_key": hmac.digest(settings.jwt_secret.encode(), b"ainovel/agent-view-key/v1", "sha256"),
     })
-    app.state.cipher = SecretCipher(settings.encryption_key)
     app.state.backups = BackupManager(settings, app.state.cipher, app.state.sessionmaker)
     app.state.provider_factory = provider_factory or create_provider
     app.state.system_settings = SystemSettingsManager(

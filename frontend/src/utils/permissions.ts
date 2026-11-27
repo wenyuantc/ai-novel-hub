@@ -35,6 +35,7 @@ export const ADMIN_DESTINATIONS: ReadonlyArray<{ key: string; path: string; labe
   { key: 'admin-audit-logs', path: '/admin/audit-logs', label: '操作日志', permission: 'audit.read' },
   { key: 'admin-backups', path: '/admin/backups', label: '整库备份', permission: 'backups.read' },
   { key: 'admin-publication-terms', path: '/admin/publication-terms', label: '全站发布词表', permission: 'publication_terms.read' },
+  { key: 'admin-media-storage', path: '/admin/media-storage', label: '媒体存储', permission: 'media_storage.read' },
   { key: 'admin-plugins', path: '/admin/plugins', label: '功能插件', permission: 'plugins.read' },
   { key: 'admin-system-settings', path: '/admin/system-settings', label: '系统设置', permission: 'settings.read' },
 ]

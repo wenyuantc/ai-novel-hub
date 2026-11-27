@@ -5,6 +5,7 @@ from app.api.v1 import (
     admin_audit,
     admin_backups,
     admin_dashboard,
+    admin_media_storage,
     admin_plugins,
     admin_quotas,
     admin_recycle_bin,
@@ -32,6 +33,7 @@ from app.api.v1 import (
     inspiration,
     kb,
     mcp_plugins,
+    media,
     memories,
     mentions,
     notes,
@@ -74,6 +76,7 @@ api_router.include_router(oauth.router)
 api_router.include_router(notifications.router)
 api_router.include_router(agent.router)
 api_router.include_router(admin.router)
+api_router.include_router(admin_media_storage.router)
 api_router.include_router(admin_plugins.router)
 api_router.include_router(admin_roles.router)
 api_router.include_router(admin_quotas.router)
@@ -95,6 +98,7 @@ api_router.include_router(novel_templates.router)
 api_router.include_router(projects.router)
 api_router.include_router(series.router)
 api_router.include_router(project_cover.router)
+api_router.include_router(media.router)
 api_router.include_router(setting_images.router)
 api_router.include_router(reader.router)
 # 固定路径（with-relations / generate）先于通用 CRUD 的 /{item_id} 注册

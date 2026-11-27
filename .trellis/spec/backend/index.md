@@ -20,6 +20,7 @@
 
 | 规范 | 说明 | 状态 |
 |-------|-------------|--------|
+| [媒体文件存储](./media-storage.md) | 图片和视频的存储、鉴权、分段读取、配额与清理 | 已填写 |
 | [功能插件](./feature-plugins.md) | 内置清单、持久启停、访问控制、后台任务取消与跨实例验证 | 已填写 |
 | [目录结构](./directory-structure.md) | `app/` 分层（api/v1 → services → models、ai/providers、ai/prompts）；路由绝不直接接触 ORM | 已填写 |
 | [数据库规范](./database-guidelines.md) | 异步 engine/session、Alembic `0001`、外键 CASCADE 与 `outline_id` SET NULL、user_id 归属校验 → 404、长度限制、字数统计 | 已填写 |
@@ -60,7 +61,7 @@
 | [项目智能体](./agent.md) | Provider 工具调用协议（`chat_tools_stream`、`TOOLS_UNSUPPORTED`、三家差异、`provider_metadata` 重放）、工具层与新增工具检查清单（kind 分级、`validate_references`、`id_model`）、提案 / 自动执行（首批 ≤3 项）/ 确认时预览比较 409、效果快照与撤销（`EFFECT_TABLES`、冲突检测、外键顺序）、`agent.turn` 断点续跑、安全规则；`external` kind、动态 MCP 工具、Skill 读工具与强制启用 | 已填写 |
 | [Skill 与 MCP 插件](./skills-mcp.md) | Skill 两级归属（不可见 404 / 可见不可写 403）、复制与上限、SKILL.md / zip 格式与安全限制、触发词前缀匹配、生成任务 Skill 快照与 `validate_retry`、正文组件引用（保存严格 / 运行时宽松展开）；MCP 适配层（SDK 1.30、逐请求 SSRF、`max_redirects=0`、超时、脱敏、`to_text`）、请求头加密与整体替换、`mcpServers` 导入、本轮映射表（命名 / 64 字 / 30 项 / checkpoint）、`external` 提案、中断回收 `recover_external`、`MCP_ENABLED` | 已填写 |
 | [管理员与会话](./auth-admin.md) | 管理员初始化、用户列表/详情、最近成功登录与三组资源计数、账号防护/会话版本、共享操作异步边界、全局Skill权限与MCP开关 | 已填写 |
-| [角色、授权与用户配额](./rbac-quotas.md) | 四内置/自定义多角色、42动作、唯一超管事实、管理目标保护、共同写屏障、两项额度/四创建入口/真实任务占用及前端撤权 | 已填写 |
+| [角色、授权与用户配额](./rbac-quotas.md) | 四内置/自定义多角色、44动作、唯一超管事实、管理目标保护、共同写屏障、两项额度/四创建入口/真实任务占用及前端撤权 | 已填写 |
 | [管理员系统设置](./system-settings.md) | 七项白名单、持久覆盖、原子审计发布、后台排空、MCP 调用边界及公开配置同步 | 已填写 |
 | [管理员首页与全站统计](./admin-dashboard.md) | 含回收站的总量、北京时间日快照、独立任务累计、UUID执行身份、24h异常、历史缺口及刷新 | 已填写 |
 | [管理员全站任务监控](./admin-task-monitoring.md) | 现存安全元数据、单SQL筛选计数、本轮时间、持久取消受理/审计、资源屏障与轮次CAS、5秒刷新 | 已填写 |

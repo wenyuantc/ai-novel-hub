@@ -55,6 +55,7 @@ AuditAction = Literal[
     "skill.restore_builtin",
     "audit.cleanup",
     "task.cancel_request",
+    "media_storage.update",
     "feature_plugin.enable",
     "feature_plugin.disable",
     "system_settings.update",
@@ -65,6 +66,7 @@ AuditAction = Literal[
 ]
 AuditTargetType = Literal[
     "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task",
+    "media_storage",
     "feature_plugin", "publication_terms", "system_settings", "role", "backup_settings", "backup_run",
 ]
 AuditResult = Literal["success", "failure"]
@@ -115,6 +117,8 @@ AuditField = Literal[
     "field_definitions",
     "setting_categories",
     "setting_tags",
+    "storage_location",
+    "default_quota_bytes",
     "builtin_key",
     "hidden_by",
 ]

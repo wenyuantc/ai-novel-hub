@@ -234,7 +234,7 @@ async def test_note_flags_backup_v9_roundtrip_v8_defaults_and_rejections(client)
     await client.put(f"{base}/notes/{pinned['id']}/flags", json={"is_pinned": True})
     await client.put(f"{base}/notes/{favorite['id']}/flags", json={"is_favorite": True})
     backup = (await client.get(f"{base}/backup")).json()
-    assert (backup["version"], backup["app_schema"]) == (18, "0080")
+    assert (backup["version"], backup["app_schema"]) == (18, "0081")
     flags = {row["title"]: (row["is_favorite"], row["is_pinned"]) for row in backup["tables"]["project_notes"]}
     assert flags == {"固定": (False, True), "收藏": (True, False), "普通": (False, False)}
 

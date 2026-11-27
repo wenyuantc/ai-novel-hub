@@ -12,7 +12,16 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.models import Base
 from app.models.entities import _seed_preset_styles, _seed_relationship_types
+from app.models.media import _seed_local, _seed_settings
 from app.models.skills_mcp import _seed_builtin_skills
+
+SCHEMA_SEEDS = (
+    ("relationship_types", _seed_relationship_types),
+    ("writing_styles", _seed_preset_styles),
+    ("skills", _seed_builtin_skills),
+    ("media_storage_locations", _seed_local),
+    ("media_storage_settings", _seed_settings),
+)
 
 
 def create_isolated_schema(connection):
@@ -38,22 +47,14 @@ def create_isolated_schema(connection):
                 if isinstance(listener, DDL) and not event.contains(copied, name, listener):
                     event.listen(copied, name, listener)
     # to_metadata不传播未声明propagate的事件；复用现有预置回调，不复制预置内容。
-    for table, callback in (
-        ("relationship_types", _seed_relationship_types),
-        ("writing_styles", _seed_preset_styles),
-        ("skills", _seed_builtin_skills),
-    ):
+    for table, callback in SCHEMA_SEEDS:
         event.listen(metadata.tables[table], "after_create", callback)
     metadata.create_all(connection)
 
 
 def seed_isolated_schema(connection):
     """重放 create_all 的预置数据（共享 schema 每次 TRUNCATE 后调用），与新建 schema 的初始数据一致。"""
-    for table, callback in (
-        ("relationship_types", _seed_relationship_types),
-        ("writing_styles", _seed_preset_styles),
-        ("skills", _seed_builtin_skills),
-    ):
+    for table, callback in SCHEMA_SEEDS:
         callback(Base.metadata.tables[table], connection)
 
 

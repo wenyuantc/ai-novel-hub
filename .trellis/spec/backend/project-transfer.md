@@ -87,7 +87,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 18, exported_at, app_schema: "0080"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 18, exported_at, app_schema: "0081"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - 每日写作统计、个人码字目标和计量起点属于本实例。导入创建新作品时保留原作建书时间，另用服务端导入时刻初始化该作品的计量起点。整库备份保留统计与目标。
@@ -192,3 +192,7 @@ target / before / after / field_key；快照自洽且可恢复）、可选项、
 迁移 0077–0078 引入的登录凭据、第三方身份绑定和两步验证数据只随整库备份恢复，不写入单书 v18。迁移 0079 的本机 MCP 个人选择和远程插件具有相同的备份边界；程序和只读部署清单由部署者另行配置。迁移 0080 的功能插件开关属于全站配置，随整库备份恢复。单书格式仍为 v18。
 
 迁移 0076 的全站词表与个人词表随整库恢复。单书 v18 仅更新导出元信息中的数据库版本；导入作品使用目标实例和新作者的词表。
+
+## 单书备份与库外媒体
+
+`media_objects` 有作品外键，必须登记在 `NOT_EXPORTED`。单书 JSON 的封面与设定缩略图继续使用原导出格式。保存在媒体目录或 S3 的图片、视频及其派生文件由部署者另行备份。[媒体文件存储](./media-storage.md)

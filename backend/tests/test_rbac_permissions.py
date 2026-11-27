@@ -1,4 +1,4 @@
-"""42项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
+"""44项目录逐项通过真实HTTP验证：最小授权放行，只有依赖读权不放行写。"""
 
 from app.core.permissions import PERMISSION_CODES, PERMISSIONS
 from tests.helpers import create_project, register
@@ -52,6 +52,8 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         }, 200),
         "plugins.read": ("GET", "/api/v1/admin/plugins", None, 200),
         "plugins.update": ("PATCH", "/api/v1/admin/plugins/absent", {"enabled": True, "revision": 0}, 404),
+        "media_storage.read": ("GET", "/api/v1/admin/media-storage", None, 200),
+        "media_storage.configure": ("POST", "/api/v1/admin/media-storage/test", {"kind": "local"}, 200),
         "settings.read": ("GET", "/api/v1/admin/system-settings", None, 200),
         "settings.update": None,
         "publication_terms.read": ("GET", "/api/v1/admin/publication-terms", None, 200),
@@ -79,7 +81,7 @@ async def test_every_delegable_permission_direct_request(client, system_admin, m
         "global_skills.delete": None,
         "global_skills.restore_builtin": None,
     }
-    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 42
+    assert set(cases) == set(PERMISSION_CODES) and len(cases) == 44
     serial = 0
 
     async def prepare(code):

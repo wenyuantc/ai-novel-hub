@@ -22,6 +22,9 @@ def _snapshot_revision(path: Path) -> str:
         versions = db.execute("SELECT version_num FROM alembic_version").fetchall()
         if len(versions) != 1 or not isinstance(revision := versions[0][0], str) or not revision.isdecimal():
             raise ValueError("无法识别快照的迁移版本")
+        media_tables = {"media_objects", "media_storage_locations", "media_storage_settings", "media_volume_reports"}
+        if tables & media_tables != (media_tables if int(revision) >= 81 else set()):
+            raise ValueError("快照的媒体存储表与迁移版本不一致")
         if ("feature_plugin_states" in tables) != (int(revision) >= 80):
             raise ValueError("快照的插件状态表与迁移版本不一致")
         if "feature_plugin_states" in tables:

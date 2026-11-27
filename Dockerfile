@@ -32,6 +32,7 @@ RUN uv sync --frozen --no-dev
 COPY --from=frontend /build/dist /app/frontend/dist
 
 ENV PATH="/app/backend/.venv/bin:/usr/lib/postgresql/16/bin:$PATH" \
+    MEDIA_DIR="/app/media" \
     BACKUP_DIR="/app/backups"
 EXPOSE 8000
 CMD ["sh", "/app/backend/docker-entrypoint.sh"]

@@ -170,7 +170,7 @@ export type AuditAction =
   | 'role.create' | 'role.update' | 'role.delete' | 'user.roles.update' | 'user.roles.bootstrap' | 'user.quotas.update'
   | 'task.cancel_request'
   | 'publication_terms.update'
-  | 'feature_plugin.enable' | 'feature_plugin.disable'
+  | 'feature_plugin.enable' | 'feature_plugin.disable' | 'media_storage.update'
   | 'system_settings.update'
   | 'backup.settings.update' | 'backup.run.accept' | 'backup.download.authorize'
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
@@ -181,10 +181,11 @@ export type AuditAction =
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
   | 'skill.restore_builtin' | 'audit.cleanup'
-export type AuditTargetType = 'feature_plugin' | 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'publication_terms' | 'role' | 'backup_settings' | 'backup_run'
+export type AuditTargetType = 'media_storage' | 'feature_plugin' | 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'publication_terms' | 'role' | 'backup_settings' | 'backup_run'
 export type AuditResult = 'success' | 'failure'
 export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
 export type AuditField =
+  | 'storage_location' | 'default_quota_bytes'
   | 'username' | 'is_admin' | 'is_active' | 'title' | 'genre' | 'premise' | 'synopsis' | 'theme' | 'tags'
   | 'selling_points' | 'audience' | 'target_words' | 'status' | 'style' | 'default_style_id' | 'auto_analyze'
   | 'chapter_no' | 'outline_id' | 'plan_id' | 'style_id' | 'content' | 'starred' | 'note' | 'cast'
@@ -3784,6 +3785,7 @@ export type PermissionCode =
   | 'tasks.read' | 'tasks.cancel' | 'audit.read' | 'audit.cleanup'
   | 'publication_terms.read' | 'publication_terms.update'
   | 'plugins.read' | 'plugins.update'
+  | 'media_storage.read' | 'media_storage.configure'
   | 'settings.read' | 'settings.update'
   | 'backups.read' | 'backups.configure' | 'backups.run' | 'backups.download'
   | 'workshop.read' | 'workshop.approve' | 'workshop.reject' | 'workshop.publish' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
@@ -4378,3 +4380,41 @@ export interface PlanningContextPreview extends PlanningRevision {
   truncated: boolean
 }
 export interface PlanningDetached extends PlanningPage<PlanningRow> { updated_at: string | null }
+
+export type MediaStorageKind = 'local' | 's3'
+export interface MediaLocationConfig {
+  endpoint?: string
+  bucket?: string
+  region?: string
+  prefix?: string
+  path_style?: boolean
+}
+export interface MediaLocationInput extends MediaLocationConfig {
+  kind: MediaStorageKind
+  access_key?: string
+  secret_key?: string
+}
+export type MediaConnectionTest = MediaLocationInput | { location_id: number }
+export interface MediaStorageLocation {
+  id: number
+  kind: MediaStorageKind
+  state: 'active' | 'readonly' | 'retired'
+  configuration: MediaLocationConfig
+  has_access_key: boolean
+  has_secret_key: boolean
+  file_count: number
+  size_bytes: number
+}
+export interface MediaStorageOverview {
+  revision: number
+  default_quota_bytes: number
+  total_bytes: number
+  locations: MediaStorageLocation[]
+  volume_mismatch: boolean
+  volume_reports: { worker_key: string; volume_id: string; seen_at: string }[]
+}
+export interface MediaStoragePatch {
+  revision: number
+  default_quota_bytes?: number
+  location?: MediaLocationInput
+}

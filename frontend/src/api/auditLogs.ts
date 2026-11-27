@@ -18,6 +18,7 @@ export const AUDIT_ACTION: Record<AuditAction, string> = {
   'role.create': '创建角色', 'role.update': '修改角色', 'role.delete': '删除角色',
   'user.roles.update': '分配用户角色', 'user.roles.bootstrap': '引导超级管理员', 'user.quotas.update': '修改用户配额',
   'publication_terms.update': '修改全站发布词表',
+  'media_storage.update': '更新媒体存储配置',
   'feature_plugin.enable': '启用功能插件', 'feature_plugin.disable': '停用功能插件',
   'system_settings.update': '修改系统设置',
   'backup.settings.update': '保存备份配置', 'backup.run.accept': '受理整库备份', 'backup.download.authorize': '授权下载备份',
@@ -33,7 +34,7 @@ export const AUDIT_ACTION: Record<AuditAction, string> = {
 }
 
 export const AUDIT_TARGET: Record<AuditTargetType, string> = {
-  feature_plugin: '功能插件', publication_terms: '全站发布词表', role: '角色', backup_settings: '备份配置', backup_run: '整库备份',
+  media_storage: '媒体存储', feature_plugin: '功能插件', publication_terms: '全站发布词表', role: '角色', backup_settings: '备份配置', backup_run: '整库备份',
   user: '用户', project: '作品', chapter: '章节', chapter_version: '章节版本', workshop_item: '工坊资源', workshop_submission: '工坊投稿', skill: '全局 Skill', audit: '审计日志', task: '任务', system_settings: '系统设置',
 }
 
@@ -57,6 +58,7 @@ export const AUDIT_STATE: Record<AuditSafeState, string> = {
 }
 
 export const AUDIT_FIELD: Record<AuditField, string> = {
+  storage_location: '媒体存储位置', default_quota_bytes: '默认存储配额',
   setting_fields: '设定字段值', field_definitions: '设定字段配置',
   setting_categories: '设定分类', setting_tags: '整理标签',
   username: '用户名', is_admin: '管理员角色', is_active: '启用状态', title: '标题', genre: '题材', premise: '创意', synopsis: '简介', theme: '主题', tags: '标签',

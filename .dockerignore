@@ -47,3 +47,5 @@ frontend/dist
 .opencode
 /backups/
 /backend/backups/
+/media/
+/backend/media/

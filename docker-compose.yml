@@ -53,6 +53,8 @@ services:
       TASK_PEER_ADVERTISE_HOST: ${TASK_PEER_ADVERTISE_HOST:-}
       TASK_PEER_PORT: ${TASK_PEER_PORT:-0}
       TASK_PEER_NETWORKS: ${TASK_PEER_NETWORKS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7}
+      MEDIA_DIR: /app/media
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       BACKUP_DIR: /app/backups
       BACKUP_PG_DUMP_PATH: ${BACKUP_PG_DUMP_PATH:-/usr/lib/postgresql/16/bin/pg_dump}
       BACKUP_GPG_PATH: ${BACKUP_GPG_PATH:-gpg}
@@ -61,6 +63,7 @@ services:
       ALLOW_PRIVATE_BACKUP_ENDPOINTS: ${ALLOW_PRIVATE_BACKUP_ENDPOINTS:-false}
       BACKUP_CA_BUNDLE: ${BACKUP_CA_BUNDLE:-}
     volumes:
+      - ${MEDIA_DIR:-./media}:/app/media
       - ${BACKUP_DIR:-./backups}:/app/backups
     extra_hosts:
       - "host.docker.internal:host-gateway"

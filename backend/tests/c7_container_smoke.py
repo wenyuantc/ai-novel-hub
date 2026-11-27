@@ -253,6 +253,7 @@ def execute(args, diagnostic):
     with tempfile.TemporaryDirectory(prefix="ainovel-c7-deploy-") as temporary:
         directory = Path(temporary)
         (directory / "backups").mkdir()
+        (directory / "media").mkdir()
         port1, port2 = free_port(), free_port()
         while port2 == port1:
             port2 = free_port()
@@ -266,6 +267,7 @@ def execute(args, diagnostic):
             f"JWT_SECRET={signing_key}\nENCRYPTION_KEY={secret}\n"
             f"APP_PORT=127.0.0.1:{port1}\nAPP2_PORT=127.0.0.1:{port2}\n"
             f"BACKUP_DIR={directory / 'backups'}\n"
+            f"MEDIA_DIR={directory / 'media'}\n"
         )
         env_path.chmod(0o600)
         compose = ["docker", "compose", "--env-file", str(env_path), "-p", project, "-f", str(COMPOSE)]

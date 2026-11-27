@@ -21,7 +21,7 @@ backend/app/media/
   access.py       # 读写鉴权
   signing.py      # 外部访问地址（M4）
 backend/app/models/media.py
-backend/app/schemas/media.py
+backend/app/schemas/media_storage.py
 backend/app/api/v1/media.py                 # GET /media/{id}（含分段读取）
 backend/app/api/v1/admin_media_storage.py   # 管理页接口
 backend/alembic/versions/0081_media_storage.py   # 编号以实施时的链尾为准
@@ -61,10 +61,12 @@ frontend/src/components/media/{MediaImage,MediaVideo}.tsx   # 统一的图片 / 
 | `project_id` | 可空外键 → projects，`SET NULL` |
 | `scope` | `project` / `user`：决定鉴权方式；`scope=project` 而 `project_id` 为空即孤儿 |
 | `plugin_id` | 可空；非空时读取还须该插件已启用（父任务 D5） |
-| `kind` | `image` / `video` |
+| `kind`、`source` | 图片或视频，以及写入来源 |
+| `volume_id` | 本地写入卷的标识，用于读取诊断及避免其他实例误清理；S3 为空 |
 | `mime`、`size_bytes`、`sha256` | |
 | `width`、`height`、`duration_ms` | 可空 |
 | `parent_id`、`variant` | 派生文件（`thumb` 缩略图、`poster` 海报帧）指向原文件，随原文件删除 |
+| `cleanup_token`、`cleanup_claimed_at` | 清理者短事务领取的令牌及领取时间 |
 | `status` | `pending`（已占位、内容未写完）/ `ready` / `deleting` |
 | `created_at`、`deleted_at` | |
 
@@ -77,7 +79,7 @@ frontend/src/components/media/{MediaImage,MediaVideo}.tsx   # 统一的图片 / 
 ```python
 class Backend(Protocol):
     async def put(self, key: str, source: AsyncIterator[bytes], *, size_hint: int | None) -> int
-    async def open(self, key: str, *, start: int | None, end: int | None) -> AsyncIterator[bytes]
+    def open(self, key: str, *, start: int | None, end: int | None) -> AsyncIterator[bytes]
     async def stat(self, key: str) -> int | None        # 字节数；不存在返回 None
     async def delete(self, key: str) -> None             # 幂等
     async def copy(self, src: str, dst: str) -> None
@@ -95,27 +97,26 @@ class Backend(Protocol):
 ```python
 async def store(db, *, owner_id, project_id, scope, plugin_id, kind, mime, source, max_bytes) -> MediaObject
 async def store_derived(db, parent: MediaObject, variant: str, mime, data: bytes) -> MediaObject
-async def open_range(obj: MediaObject, start, end) -> AsyncIterator[bytes]
+async def open_range(db, obj: MediaObject, start, end) -> AsyncIterator[bytes]
 async def copy(db, obj: MediaObject, *, owner_id, project_id, scope, plugin_id) -> MediaObject   # 画布「存回」用
-def mark_deleted(db, obj_ids: Iterable[str]) -> None           # 只改状态，随调用方事务提交
-async def mark_project_deleted(db, project_id: int) -> None    # 作品彻底删除时调用
+async def mark_deleted(db, obj_ids: Iterable[str]) -> None           # 只改状态，随调用方事务提交
+async def mark_project_deleted(db, project_id: int) -> list[str]    # 作品彻底删除时调用
 async def usage_of(db, user_id: int) -> int
 async def sweep(sessionmaker, *, now) -> SweepReport           # 清理任务
 ```
 
-写入流程：校验配额 → 插入 `pending` 行并提交 → 流式写后端（边写边算大小与 sha256，超过 `max_bytes` 即中止并删除）→
-图片用 Pillow 读尺寸并生成 `thumb`（最长边 400、WebP）→ 置 `ready`。内容类型按文件头判定，不信扩展名与客户端声明
+写入流程：将输入分块写入临时文件并校验大小、类型与 SHA-256；图片用 Pillow 读尺寸并生成 `thumb`（最长边 400、WebP）。一次预留原件和派生文件的配额，提交 `pending` 行，再分块写入后端，最后按状态条件发布为 `ready`。内容类型按文件头判定，不信扩展名与客户端声明
 （沿用 `backend/app/ai/images.py:8` 的做法，视频另加容器头识别）。
 
 配额：`usage_of` 统计该用户 `pending + ready` 的 `size_bytes` 之和；超出 `default_quota_bytes` 时 `store` 拒绝，
-错误码 `media_quota_exceeded`。并发写入可能短暂超额一个文件，接受。
+错误码 `media_quota_exceeded`。原件与派生文件使用同一短事务预留，按用户串行检查可用配额；传输期间释放数据库写锁。
 
 ### 4.3 删除与清理（M6）
 
-- 业务删除：业务事务内 `mark_deleted`（置 `deleting`、写 `deleted_at`）。提交后由调用方触发一次即时清理；失败不影响业务结果。
+- 业务删除：业务事务内 `mark_deleted` 为已就绪对象设置 `deleting` 与 `deleted_at`。正在传输的 `pending` 保留预留，通过 `deleted_at` 阻止发布。提交后由调用方触发一次即时清理；失败不影响业务结果。
 - 作品进回收站：不动媒体。彻底删除：`recycle_bin_service.purge`（`backend/app/services/recycle_bin_service.py:464`）在删除作品前调用
   `mark_project_deleted`。外键 `SET NULL` 是兜底：任何绕过该调用的删除都会产生孤儿行，由清理任务回收。
-- 清理任务 `sweep`（应用生命周期内的周期任务，默认每 10 分钟，多实例用数据库行锁避免重复处理）回收四类：
+- 清理任务 `sweep`（应用生命周期内的周期任务，默认每 10 分钟，多实例以短事务领取十分钟清理租约，事务外删文件，按领取令牌确认；进程意外退出后可接管）回收四类：
   `deleting` 行；超过 24 小时的 `pending` 行；`scope=project` 且 `project_id` 为空的孤儿；`owner_user_id` 为空的行。
   处理顺序：先删派生文件，再删后端文件，最后删行；后端删除失败则保留行、下轮重试。
 - 位置在其下再无任何行时由清理任务置 `retired`。
@@ -131,15 +132,15 @@ async def sweep(sessionmaker, *, now) -> SweepReport           # 清理任务
 3. `scope=project`：对 `project_id` 具备 `content.read`（`backend/app/services/project_access.py:17`）；`scope=user`：本人。
 4. `plugin_id` 非空时该插件已启用（`app.plugins.state.is_enabled`）。
 
-响应：支持 `Range`，返回 `206` 与 `Content-Range`、`Accept-Ranges: bytes`（M3）；`Cache-Control: private, max-age=31536000, immutable`
-（对象内容不可变，id 即版本）；`Content-Disposition` 默认 inline，带 `?download=1` 时为 attachment。
+响应：支持 `Range`，返回 `206` 与 `Content-Range`、`Accept-Ranges: bytes`（M3）；`Cache-Control: private, no-store`
+（每次请求重新校验登录、作品授权与插件状态）；`Content-Disposition` 默认 inline，带 `?download=1` 时为 attachment。
 S3 位置采用服务端流式转发而不是跳转到预签名地址：鉴权与停用语义保持在应用内，代价是流量经过应用。
 
-本地文件在本实例不存在但行为 `ready`（双实例未共享卷）：返回 503，错误码 `media_unavailable_on_instance`，并记一条告警日志（M7）。
+本地对象记录的写入卷与本实例卷不同（双实例未共享卷）：返回 503，错误码 `media_unavailable_on_instance`，并记一条告警日志（M7）。
 
 ### 4.5 外部访问地址（M4）
 
-`signing.external_url(obj, *, expires=3600) -> str | None`：
+`signing.external_url(db, obj, *, expires=3600) -> str | None`：
 
 - S3：后端预签名 GET。
 - 本地：`{PUBLIC_BASE_URL}/api/v1/media/external/{token}`，`token` 为对象 id + 过期时间的 HMAC 签名；该路径不需要登录，只校验签名与过期。

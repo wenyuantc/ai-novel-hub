@@ -6,6 +6,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
 from pydantic import Field, ValidationError, field_validator, model_validator
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
     # 实例级MCP有效开关：关闭后插件接口403，智能体禁止后续调用，已发调用允许结束。
     mcp_enabled: bool = True
     mcp_stdio_catalog: str = ""
+    media_dir: str = Field(default="./media", min_length=1)
+    public_base_url: str = ""
     # 整库备份的部署边界。S3、SMTP 和计划使用独立的 BackupSettings。
     backup_dir: str = Field(default="./backups", min_length=1)
     backup_pg_dump_path: str = Field(default="pg_dump", min_length=1)
@@ -88,6 +91,17 @@ class Settings(BaseSettings):
                 '`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成'
             ) from exc
         return v
+
+    @field_validator("public_base_url")
+    @classmethod
+    def _validate_public_base_url(cls, value: str) -> str:
+        if not value:
+            return ""
+        url = urlsplit(value)
+        if (url.scheme not in {"http", "https"} or not url.hostname or url.username is not None
+                or url.password is not None or url.query or url.fragment or any(c.isspace() for c in value)):
+            raise ValueError("PUBLIC_BASE_URL 需要有效的 HTTP(S) 站点地址")
+        return value.rstrip("/")
 
     @field_validator("backup_ca_bundle", mode="before")
     @classmethod
@@ -124,8 +138,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_oauth(self) -> "Settings":
-        from urllib.parse import urlsplit
-
         for name in ("github", "linuxdo"):
             prefix = f"oauth_{name}_"
             values = [getattr(self, prefix + key) for key in ("client_id", "client_secret", "redirect_uri")]

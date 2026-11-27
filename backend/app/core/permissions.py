@@ -34,6 +34,8 @@ PERMISSIONS = (
     Permission("audit.cleanup", "清理操作日志", "日志", True, ("audit.read",)),
     Permission("plugins.read", "查看功能插件", "功能插件"),
     Permission("plugins.update", "启用/停用功能插件", "功能插件", True, ("plugins.read",)),
+    Permission("media_storage.read", "查看媒体存储", "媒体存储"),
+    Permission("media_storage.configure", "配置媒体存储", "媒体存储", True, ("media_storage.read",)),
     Permission("settings.read", "查看系统运行设置", "系统设置"),
     Permission("settings.update", "修改系统运行设置", "系统设置", True, ("settings.read",)),
     Permission("publication_terms.read", "查看全站发布检查词表", "发布检查"),

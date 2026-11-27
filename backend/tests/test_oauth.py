@@ -131,6 +131,14 @@ def test_access_log_masks_callback_query_only():
     assert "sample" not in record.getMessage()
 
 
+def test_access_log_masks_media_external_token():
+    target = "/api/v1/media/external/example-signed-token?client=vendor"
+    record = logging.LogRecord("uvicorn.access", 20, "", 0, '%s - "%s %s HTTP/%s" %d',
+                               ("peer", "GET", target, "1.1", 206), None)
+    assert redact_oauth_callback(record)
+    assert record.args[2] == "/api/v1/media/external/[redacted]"
+
+
 @pytest.mark.parametrize("provider", ["github", "linuxdo"])
 async def test_oauth_waits_for_second_factor_before_login(app, client, provider, mock_identity):
     import time

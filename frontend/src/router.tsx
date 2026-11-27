@@ -46,6 +46,11 @@ export const router = createBrowserRouter([
     children: [
       ...pluginRoutes(PLUGINS, 'global'),
       {
+        path: 'admin/media-storage',
+        element: <RequirePermission permission="media_storage.read"><Outlet /></RequirePermission>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminMediaStoragePage')) }],
+      },
+      {
         path: 'admin/plugins',
         element: <RequirePermission permission="plugins.read"><Outlet /></RequirePermission>,
         children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminPluginsPage')) }],

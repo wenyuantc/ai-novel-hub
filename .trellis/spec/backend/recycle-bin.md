@@ -162,3 +162,7 @@ await audit.commit(flush_fn=version_service.flush_versioned)
 错误：客户端把 deleted_at 经 `new Date(...).toISOString()` 回传，或给名称确认输入增加按UTF-16计数的200长度截断。
 
 正确：原始 `project.deleted_at` 字符串回传；名称逐字比较当前完整标题，服务器再执行字符数、代次和权限校验。
+
+## 作品媒体的清理
+
+软删除和恢复保留原文件。彻底删除在作品事务中标记原文件和派生文件，提交后清理存储。清理失败保留元数据供下次重试。[媒体文件存储](./media-storage.md)

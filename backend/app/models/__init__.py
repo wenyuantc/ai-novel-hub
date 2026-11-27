@@ -59,6 +59,7 @@ from app.models.entities import (
 from app.models.feature_plugins import FeaturePluginState
 from app.models.inspiration_generation import InspirationGenerationClaim
 from app.models.inspiration_origin import InspirationOrigin
+from app.models.media import MediaObject, MediaStorageLocation, MediaStorageSettings, MediaVolumeReport
 from app.models.notes import ProjectNote
 from app.models.notifications import Notification, NotificationPreference
 from app.models.novel_templates import NovelTemplate, NovelTemplateCreationReceipt, NovelTemplateImage
@@ -110,6 +111,10 @@ from app.models.workshop import WorkshopImport, WorkshopItem, WorkshopLike, Work
 from app.models.writing_stats import WritingDailyStat, WritingGoal, WritingStatsTracking
 
 __all__ = [
+    "MediaObject",
+    "MediaStorageLocation",
+    "MediaStorageSettings",
+    "MediaVolumeReport",
     "StoryCalendar",
     "ChapterStoryDate",
     "SceneStoryDate",

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
+from app.media import cleanup as media_cleanup
 from app.models import (
     AnalysisChange,
     Career,
@@ -521,12 +522,18 @@ async def purge(
             select(Task.id, Task.statistics_key).where(Task.project_id == project_id)
         )).all())
         await _purge_setting_history(db, project_id)
+        media_ids = await media_cleanup.mark_project_deleted(db, project_id)
         await db.delete(project)
         await audit.commit()
         # commit 期间若仍出现尚未核实的收尾证据，不能通过清理内存掩盖它。
         if not engine.has_cleanup_failure(project_id):
             engine.forget_project_hubs(list(task_keys), statistics_keys=task_keys)
         retrieval_service.invalidate(project_id)
+    if media_ids:
+        try:
+            await media_cleanup.sweep(engine.ctx.sessionmaker, object_ids=media_ids)
+        except Exception:
+            logger.warning("作品已彻删，剩余媒体由定时任务回收 project=%s", project_id)
     return True
 
 
