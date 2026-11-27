@@ -803,6 +803,26 @@ class TaskEngine:
         logger.error("任务执行事实待核对 task=%s", task.id)
         return True
 
+    async def _requeue_adopted(self, task: Task) -> bool:
+        """保留原任务输入、断点及入队轮次。清除旧执行身份后交给常规领取路径重新鉴权。"""
+        async with self.ctx.sessionmaker() as db:
+            # 与本人取消/插件停用共用写门禁，避免对方已读取 running、登记意图前被重新排队。
+            await authz.gate(db)
+            changed = await db.execute(update(Task).where(
+                Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
+                Task.worker_key == task.worker_key, Task.execution_key == task.execution_key,
+                Task.status == "running", Task.recovered_at.is_(None), Task.cancel_requested_at.is_(None),
+                Task.admin_cancel_operation_id.is_(None), Task.admin_cancel_requested_at.is_(None),
+            ).values(status="queued", worker_key=None, execution_key=None, started_at=None,
+                     stage="等待恢复执行"))
+            if changed.rowcount != 1:
+                return False
+            await require_live_worker(db, task.worker_key)
+            await task_statistics_service.record_state_change(db, task, "queued")
+            await db.commit()
+        self.notify_queue_changed()
+        return True
+
     async def _recover_adopted(self, task: Task) -> bool:
         """只消费本次认领的快照。True 表示已收尾或交由管理员 drain，False 留待下一轮。"""
         from app.services.rich_document_review import ReviewRecoveryUncertain
@@ -813,6 +833,14 @@ class TaskEngine:
             )
         if task.admin_cancel_operation_id is not None and task.statistics_key is not None:
             self.request_admin_cancel(task.statistics_key, task.admin_cancel_operation_id)
+            return True
+        handler = _try_handler(task.kind)
+        if (getattr(handler, "resume_after_interrupt", False) is True
+                and task.cancel_requested_at is None and task.execution_key is not None):
+            # 只有任务锁内再次证明无取消意图才可排队；撞上取消时下一轮走正常终止/清理。
+            if not await self._requeue_adopted(task):
+                return False
+            self.admin_cancellations.recovering.pop(task.statistics_key, None)
             return True
         complete_receipt = None
         detail = None
@@ -884,7 +912,6 @@ class TaskEngine:
         if uncertain:
             # 本人受理以后原执行才进入待核对；已有完成/审核收据在上方处理。
             return await self._mark_recovery_uncertain(task)
-        handler = _try_handler(task.kind)
         abort_ok = handler is not None
         snapshot = self.capture_abort_snapshot(task, recovery=True)
         chapter_resource = None
@@ -1973,6 +2000,13 @@ class TaskEngine:
             await self._record_uncertain_claim(execution)
             hub.close("error", {"task": None, "detail": "任务执行身份尚未确认"})
             return
+        if (execution is not None and (status == "interrupted" and task_id in self._shutdown or self._lease_lost)
+                and getattr(_try_handler(execution.kind), "resume_after_interrupt", False) is True):
+            # 保留 running 直到旧租约真正停止或被围栏，下一执行者再按持久取消意图决定接管或收尾。
+            self.close_hub(task_id, "error", {"task": None, "detail": "执行者已退出，等待恢复任务"},
+                           statistics_key=execution.task_key, queued_at=execution.queued_at,
+                           execution_key=execution.execution_key)
+            return
         if unconfirmed and execution is not None and execution.actor_token_version is None:
             # 缺令牌版本时不能用执行身份补签认证；仅以原 UUID/轮次/execution_key 的普通 CAS 收尾。
             execution = current_execution = None
@@ -2063,7 +2097,9 @@ class TaskEngine:
             elif event == "reset":
                 hub.reset()
             elif event == "stage":
-                hub.set_progress(stage=str(data.get("stage") or ""))
+                progress = data.get("progress")
+                hub.set_progress(stage=str(data.get("stage") or ""),
+                                 progress=progress if type(progress) is int and 0 <= progress < 100 else None)
             elif event == "error":
                 error = str(data.get("detail") or "生成失败")
             else:
@@ -2365,6 +2401,8 @@ class TaskEngine:
                         else {}
                     if task.kind in _SINGLE_CHAPTER_KINDS:
                         options["claim"] = claim
+                    if getattr(handler, "abort_status_aware", False) is True:
+                        options["terminal_status"] = status
                     await handler.on_abort(self.ctx, task, **options)
                     if execution is not None and job is not None:
                         advanced = getattr(job, "task_execution_identity", current_execution)

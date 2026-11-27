@@ -522,7 +522,8 @@ class AdminCancellationDrain:
                 if not released_review and not await admin_cleanup.abort_once(engine, task, record, handler):
                     return
                 interrupted = (task.status == "running"
-                               and recovering and not released_review)
+                               and recovering and not released_review
+                               and getattr(handler, "resume_after_interrupt", False) is not True)
                 status = "interrupted" if interrupted else "cancelled"
                 error = "服务重启，任务已中断" if interrupted else "任务已取消"
                 row, committed = await engine.complete_state(

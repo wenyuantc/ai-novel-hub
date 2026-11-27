@@ -81,13 +81,18 @@ class TaskHandler(Protocol):
         """任务失败/取消/中断时幂等清理资源，失败须抛出供引擎/删除协调器登记。"""
         ...
 
+    # 可选：abort_status_aware = True。执行体收尾时 on_abort 接收 terminal_status（失败/取消/中断），
+    # 独立清理入口从持久取消意图取证，此参数可省略。
+    # 可选：resume_after_interrupt = True。仅限可从持久断点幂等续跑的处理器。
+    # 关停/失联后以新执行键重新领取同一任务，用户/管理员取消仍调用 on_abort。
     # 可选：async def on_success(self, ctx: TaskContext, task: Task) -> None
     #   任务写入 succeeded 后、广播 done 之前调用（引擎用 getattr 探测）；异常只记日志，不影响任务状态。
     # 可选（多步任务，task_service 用 getattr 探测）：
     #   async def validate_retry(self, db, ctx, *, user_id: int, task: Task) -> TaskSpec   重试时代替 validate_and_claim
     #   async def revalidate_resume(self, db, ctx, task: Task) -> None                     待审核任务继续前重新校验
     #   def finish_result(self, task: Task) -> dict                                         待审核任务被结束时的 result
-    # run 还可产出：paused（到达审核点，任务转为待审核）、reset（清空实时输出）、stage（只更新阶段文案）
+    # run 还可产出：paused（到达审核点，任务转为待审核）、reset（清空实时输出），
+    # stage（阶段文案及可选的 0 至 99 整数 progress）
     #   以及任意自定义事件（原样广播）。
 
 
