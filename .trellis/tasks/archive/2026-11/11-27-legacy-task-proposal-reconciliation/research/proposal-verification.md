@@ -31,9 +31,12 @@
 
 在项目根目录执行，先准备本地 Python 3.12、uv、backend/.venv，以及已缓存的 postgres:16-alpine 镜像。每条命令只使用临时数据和测试账号。
 
+归档后复跑时，请在仓库根目录的同一终端执行下列命令。第一行指定 C8 控制器的位置，以保留原演练脚本及其校验值。
+
 ```sh
-backend/.venv/bin/python .trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/proposal_drill.py --shape sqlite
-backend/.venv/bin/python .trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/proposal_drill.py --shape postgres
+export PYTHONPATH="$PWD/.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research"
+backend/.venv/bin/python .trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/proposal_drill.py --shape sqlite
+backend/.venv/bin/python .trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/proposal_drill.py --shape postgres
 ```
 
 [复跑脚本](proposal_drill.py) · [SQLite 逐阶段日志](proposal-sqlite.jsonl) · [PostgreSQL 逐阶段日志](proposal-postgres.jsonl)

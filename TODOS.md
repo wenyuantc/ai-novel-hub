@@ -384,12 +384,12 @@ Linux DO、GitHub 登录、验证器动态码、一次性恢复码和带审计�
 
 ### 34. 旧任务与未决提案的安全核对
 
-当前状态：已完成真实 0043 → 0079 快照的 SQLite、PostgreSQL 隔离验证。现场处置见[人工核对方案](.trellis/tasks/11-27-legacy-task-proposal-reconciliation/design.md)。
+当前状态：已完成真实 0043 → 0079 快照的 SQLite、PostgreSQL 隔离验证。现场处置见[人工核对方案](.trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/design.md)。
 
-- [x] 核实旧执行体退出、原章节状态和当前占用。在受控单任务副本中分别恢复草稿和已完成，重启后正文及历史保持一致，原任务仍中断，项目级清理失败记录仍保留。排队、来源不明或已有后继占用时停止复位。[章节实测](.trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/chapter-results.md)
-- [x] 核对旧版取消与升级后取消重发。受测创建角色提案的全部 18 个旧字段保持一致，重启后仍待确认，角色数为零。外部工具须另查实际回执。[提案实测](.trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/proposal-verification.md)
+- [x] 核实旧执行体退出、原章节状态和当前占用。在受控单任务副本中分别恢复草稿和已完成，重启后正文及历史保持一致，原任务仍中断，项目级清理失败记录仍保留。排队、来源不明或已有后继占用时停止复位。[章节实测](.trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/chapter-results.md)
+- [x] 核对旧版取消与升级后取消重发。受测创建角色提案的全部 18 个旧字段保持一致，重启后仍待确认，角色数为零。外部工具须另查实际回执。[提案实测](.trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/proposal-verification.md)
 
-有可用升级前最终快照时，按 [0043 升级与回滚步骤](README.md#从-0043-升级作品协作) 恢复到独立目标；恢复快照后仍须分别核对任务、章节及提案。[回退对照](.trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/restore.md)
+有可用升级前最终快照时，按 [0043 升级与回滚步骤](README.md#从-0043-升级作品协作) 恢复到独立目标；恢复快照后仍须分别核对任务、章节及提案。[回退对照](.trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/restore.md)
 
 ## 已有能力，不重复列入待办
 

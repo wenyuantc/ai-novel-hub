@@ -15,9 +15,12 @@
 
 在仓库根目录可分别运行以下命令。脚本调用 C8 的旧源码导出、迁移、快照、恢复和应用进程管理；执行需要本地 uv、Python 3.12、后端依赖，PG 另需 Docker 和 C8 的 PostgreSQL 镜像。
 
+归档后复跑时，请在仓库根目录的同一终端执行下列命令。第一行指定 C8 控制器的位置，以保留原演练脚本及其校验值。
+
 ```sh
-backend/.venv/bin/python .trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/restore_control.py sqlite
-backend/.venv/bin/python .trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/restore_control.py postgres
+export PYTHONPATH="$PWD/.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research"
+backend/.venv/bin/python .trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/restore_control.py sqlite
+backend/.venv/bin/python .trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/restore_control.py postgres
 ```
 
 这里验证的是已排空快照的独立恢复，以及保留新版库以便核对差异。未排空旧任务的专门证据见同目录章节演练。再次恢复旧快照仍会保留快照中原本未决的提案。

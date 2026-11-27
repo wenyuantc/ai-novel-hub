@@ -41,8 +41,11 @@
 
 在仓库根目录分别指定数据库和生成前状态。done 轮次另含排空对照、旧在线排队、缺少基线及真实新占用的停止判定。每次启动会创建全新临时资源。
 
+归档后复跑时，请在仓库根目录的同一终端执行下列命令。第一行指定 C8 控制器的位置，以保留原演练脚本及其校验值。
+
 ```sh
-probe=.trellis/tasks/11-27-legacy-task-proposal-reconciliation/research/chapter_drill.py
+export PYTHONPATH="$PWD/.trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research"
+probe=.trellis/tasks/archive/2026-11/11-27-legacy-task-proposal-reconciliation/research/chapter_drill.py
 backend/.venv/bin/python -B "$probe" sqlite --original-status draft
 backend/.venv/bin/python -B "$probe" postgres --original-status draft
 backend/.venv/bin/python -B "$probe" sqlite --original-status done
