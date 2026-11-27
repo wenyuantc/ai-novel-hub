@@ -372,7 +372,7 @@ Linux DO、GitHub 登录、验证器动态码、一次性恢复码和带审计�
 
 - [x] 支持 OAuth 第三方登录与两步验证。
 - [x] 支持托管部署者预装并登记的本机 stdio MCP 插件。已验证作者自行启用、真实工具调用、双实例版本差异与进程回收。[插件验收](.trellis/tasks/archive/2026-11/11-26-managed-stdio-mcp/research/verification.md)
-- [ ] 分别用真实 Linux DO 和 GitHub 应用完成一次从平台授权页回到原书架的验收。
+- [x] 分别用真实 Linux DO 和 GitHub 应用完成一次从平台授权页回到原书架的验收。
 
 ### 33. 智能体轮次进行时会话详情偶发 404
 
