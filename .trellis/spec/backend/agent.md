@@ -287,6 +287,9 @@ RESULT_LIMIT = 8000                                                     # contex
     不输出邀请标识。`get_conversation` 把 writable 放进投影快照；`personal_projection._final_visibility` 在核验快照中按同一 SQL 的作者 / 成员
     （`member_role`、`member_invitation_id`）事实以 `access.conversation_writable_fact` 重算并比对，两次读取间授权变化即 404 失败关闭。
     writable 只改善界面，写入口仍以 409 `permission_denied` 兜底。新增会话输出字段时须同步两处口径。回归：`test_agent_writable_e4if.py`。
+  - 会话详情 GET 在组装和核验之间遇到同一可见轮次推进时，可丢弃旧详情，在一个固定的只读快照内重新读取一次会话、消息、提案和活动任务。
+    重读须绑定原登录身份、协作授权、会话实例和轮次身份，并对新数据执行完整的私人字段过滤与提案签名。轮次已结束时，按当前快照选择活动任务。
+    提案确认等写入口继续严格核对原预览。并发回归见 `test_agent_conversation_final_snapshot.py`。
   - 回归：`test_agent_entries_e4id.py`（9 身份 × 全入口矩阵：状态码、副作用、审计；派生任务费用来源；会话私有；订阅 404；预锁；0054 往返）、
     `test_agent_entries_e4id_postgresql.py`（编辑者发送→工具→确认→撤销端到端；拒绝与撤权并发两种提交顺序，`pg_blocking_pids` 观测）。
 - **协作轮次的撤权受限收尾（E4i-e，裁决 11）**：编辑者被撤权、降为 viewer、关闭作者模型授权（轮次依赖作者模型 / 向量时）、邀请轮次变化（重邀）或

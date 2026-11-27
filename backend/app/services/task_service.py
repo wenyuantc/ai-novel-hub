@@ -376,12 +376,14 @@ async def queue_position(db: AsyncSession, task: Task) -> int | None:
         return await db.scalar(select(func.count(Task.id)).where(Task.status == "queued", Task.id < task.id))
 
 
-async def task_out(db: AsyncSession, engine: "TaskEngine", task: Task) -> TaskOut:
+async def task_out(db: AsyncSession, engine: "TaskEngine | None", task: Task) -> TaskOut:
     task_key = task.statistics_key
     active = task.status in OPEN_TASK_STATUSES
     grant = task_grant_identity(task.input) if active else _UNSET
     queued_at = task.queued_at if active else _UNSET
-    use_hub = _live_output_hub(engine, task) is not None and await engine.lease.confirms_output(db)
+    use_hub = (
+        engine is not None and _live_output_hub(engine, task) is not None and await engine.lease.confirms_output(db)
+    )
     out = to_out(task, queue_position=await queue_position(db, task), engine=engine,
                  unproven=await result_unproven(db, task), use_hub=use_hub)
     return await project_task_out(

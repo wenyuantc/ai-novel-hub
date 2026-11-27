@@ -616,6 +616,21 @@ async def create_conversation(
 async def get_conversation(
     db: AsyncSession, engine: "TaskEngine", user_id: int, project_id: int, conversation_id: int
 ) -> ConversationDetail:
+    async with personal_projection.agent_detail_snapshot(db, user_id, project_id) as reader:
+        payload, proofs = await _conversation_payload(reader, engine, user_id, project_id, conversation_id)
+    try:
+        return await _project_conversation(db, user_id, project_id, payload, proofs)
+    except personal_projection.AgentDetailAdvanced:
+        pass
+    async with personal_projection.agent_detail_snapshot(db, user_id, project_id, proofs) as reader:
+        # 整份详情在此固定快照内重建，避免拼接旧消息、最新提案和内存中的实时输出。
+        payload, proofs = await _conversation_payload(reader, None, user_id, project_id, conversation_id)
+        return await _project_conversation(reader, user_id, project_id, payload, proofs)
+
+
+async def _conversation_payload(
+    db: AsyncSession, engine: "TaskEngine | None", user_id: int, project_id: int, conversation_id: int,
+) -> tuple[dict, dict]:
     entry, row = await _conversation_entry(db, user_id, project_id, conversation_id, lock=False)
     messages = await db.scalars(
         select(AgentMessage).where(AgentMessage.conversation_id == row.id).order_by(AgentMessage.id)
@@ -650,13 +665,16 @@ async def get_conversation(
     task_output = None
     if task is not None:
         proofs["turn"] = {"id": task.id, "statistics_key": task.statistics_key, "queued_at": task.queued_at,
-                          "snapshot": personal_projection.agent_task_evidence(task)}
+                          "snapshot": personal_projection.agent_task_evidence(task),
+                          "detail_status": task.status, "grant": entry.current_grant(user_id)}
         task_output = (await task_service.task_out(db, engine, task)).model_dump(mode="json")
-    projected = await personal_projection.project_agent_payload(
-        db, user_id, project_id,
-        {"conversation": public, "messages": message_payload, "changes": change_payload, "task": task_output},
-        proofs,
-    )
+    return {"conversation": public, "messages": message_payload, "changes": change_payload, "task": task_output}, proofs
+
+
+async def _project_conversation(
+    db: AsyncSession, user_id: int, project_id: int, payload: dict, proofs: dict,
+) -> ConversationDetail:
+    projected = await personal_projection.project_agent_payload(db, user_id, project_id, payload, proofs)
     return ConversationDetail(
         **projected["conversation"],
         messages=[MessageOut.model_validate(message) for message in projected["messages"]],

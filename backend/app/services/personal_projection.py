@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
@@ -435,6 +436,36 @@ async def require_personal_project(db: AsyncSession, user_id: int, project_id: i
         return project
 
 
+class AgentDetailAdvanced(Exception):
+    """同一可见轮次提交了新内容，调用者必须丢弃整份旧详情。"""
+
+
+def _only_fields_changed(before: dict, after: dict, mutable: set[str]) -> bool:
+    return before.keys() == after.keys() and all(before[k] == after[k] for k in before.keys() - mutable)
+
+
+@asynccontextmanager
+async def agent_detail_snapshot(db: AsyncSession, user_id: int, project_id: int, original_proofs: dict | None = None):
+    """组装详情时固定整份读取；重读时先绑定回原会话、授权和轮次。"""
+    from app.services.setting_category_query_service import category_read_snapshot
+
+    actor = db.info.get("authenticated_actor")
+    if not isinstance(actor, AuthenticatedActor) or actor.id != user_id:
+        raise UnauthorizedError("未登录或登录已过期")
+    factory = visibility_sessionmaker(db)
+    # 入口是详情 GET。归还上一次只读所占连接，避免并发请求各持一个连接再等待第二个。
+    await db.rollback()
+    async with category_read_snapshot(factory, actor, project_id, manual=True) as reader:
+        reader.info["agent_view_hmac_key"] = db.info.get("agent_view_hmac_key")
+        reader.info["agent_detail_read_transaction"] = reader.get_transaction()
+        if original_proofs is not None:
+            try:
+                await _final_visibility(reader, user_id, project_id, {}, {}, {}, original_proofs)
+            except AgentDetailAdvanced:
+                pass  # 只接受原轮次的执行变化；其他核验错误直接交还 HTTP 层。
+        yield reader
+
+
 async def _final_visibility(
     db: AsyncSession, user_id: int, project_id: int, visible: dict[str, set[int]],
     identities: dict[str, dict[int, Any]], task_rounds: dict[int, tuple[Any, str]],
@@ -454,7 +485,7 @@ async def _final_visibility(
             Project.deleted_at.label("deleted_at"), Project.deletion_started_at.label("deletion_started_at"),
             Project.ai_history_epoch.label("history_epoch"),
             member.status.label("member_status"), member.role.label("member_role"),
-            member.invitation_id.label("member_invitation_id"),
+            member.invitation_id.label("member_invitation_id"), member.revision.label("member_revision"),
         ).select_from(User).outerjoin(Project, Project.id == project_id).outerjoin(member, and_(
             member.project_id == Project.id, member.user_id == user_id,
         )).where(User.id == user_id).cte("personal_auth")
@@ -520,7 +551,7 @@ async def _final_visibility(
                     literal("_agent_turn").label("kind"), Task.id.label("ref_id"),
                     Task.statistics_key.label("identity"), Task.queued_at.label("stamp"),
                 ).where(Task.id == turn["id"], Task.project_id == project_id,
-                        task_visible_to_actor(verify, user_id)))
+                        task_visible_to_actor(verify, user_id, active_grant_required="detail_status" in turn)))
             conversation = agent_proofs.get("conversation")
             if conversation is not None:
                 queries.append(select(
@@ -563,7 +594,9 @@ async def _final_visibility(
                 .outerjoin(root_task, and_(refs.c.kind == "_agent_turn", root_task.id == refs.c.ref_id))
         return (await verify.execute(statement.execution_options(populate_existing=True))).all()
 
-    if await is_sqlite_shared_frame_lease(db):
+    pinned = db.info.get("agent_detail_read_transaction")
+    if (pinned is not None and pinned is db.get_transaction()) or await is_sqlite_shared_frame_lease(db):
+        # 详情读取固定在显式事务中，引用和内容必须共享该快照。
         # 帧租约在 SQLite 回滚日志模式下已持 SHARED 锁，期间写方无法 COMMIT、库快照不会漂移；
         # 禁止再开新连接，否则当写方恰在 COMMIT 持 PENDING 锁时会形成三方死锁。
         with db.no_autoflush:
@@ -587,9 +620,16 @@ async def _final_visibility(
     if fact.deletion_started_at is not None:
         raise ConflictError("作品正在删除，请稍后重试", extra={"code": "project_deleting"})
     if agent_proofs is not None:
-        # 人工 Agent 当前仍只对作品作者开放；不能将管理员权限或协作者身份当作 Agent 授权。
+        # 需要作者身份的操作仍单独核验；个人会话详情已按 accepted 成员和本人会话授权。
         if agent_proofs.get("owner_only", True) and fact.owner_id != user_id:
             raise NotFoundError("修改提案不存在")
+        turn = agent_proofs.get("turn")
+        detail_turn = turn if turn is not None and "detail_status" in turn else None
+        advanced = False
+        if detail_turn:
+            grant = None if fact.owner_id == user_id else (fact.member_invitation_id, fact.member_revision)
+            if grant != detail_turn["grant"]:
+                raise NotFoundError("智能体轮次不存在")
         found = set()
         for row in rows:
             if row.kind != "_agent_change":
@@ -597,7 +637,6 @@ async def _final_visibility(
             expected = agent_proofs["changes"].get(row.ref_id)
             change = row.AgentChange
             if (expected is None or change is None
-                    or ChangeOut.model_validate(change).model_dump(mode="json") != expected
                     or row.agent_conversation_id != expected["conversation_id"]
                     or row.agent_conversation_project_id != project_id or row.agent_conversation_user_id != user_id
                     or not row.agent_conversation_instance_key
@@ -605,6 +644,15 @@ async def _final_visibility(
                         expected["conversation_id"],
                     )):
                 raise NotFoundError("修改提案不存在")
+            actual = ChangeOut.model_validate(change).model_dump(mode="json")
+            if actual != expected:
+                if (not detail_turn or expected["turn_task_id"] != detail_turn["id"]
+                        or expected["turn_task_key"] != detail_turn["statistics_key"]
+                        or not _only_fields_changed(expected, actual, {
+                            "preview", "status", "result", "effects", "error", "executed_at", "undone_at", "updated_at",
+                        })):
+                    raise NotFoundError("修改提案不存在")
+                advanced = True
             task_id = expected["turn_task_id"]
             if task_id is not None:
                 task_key = expected.get("turn_task_key")
@@ -656,15 +704,31 @@ async def _final_visibility(
                 }).model_dump(mode="json")
                 sealed = (current.AgentConversation.ai_history_epoch != current.history_epoch
                           and bool(current.agent_has_history))
-                if snapshot != conversation["snapshot"] or sealed != conversation["sealed"]:
+                if sealed != conversation["sealed"]:
                     raise NotFoundError("会话不存在")
-        turn = agent_proofs.get("turn")
-        if turn is not None and not any(
-            row.kind == "_agent_turn" and row.ref_id == turn["id"] and row.identity == turn["statistics_key"]
-            and row.stamp == turn["queued_at"] and row.agent_root_task is not None
-            and agent_task_evidence(row.agent_root_task) == turn["snapshot"] for row in rows
-        ):
-            raise NotFoundError("智能体轮次不存在")
+                if snapshot != conversation["snapshot"]:
+                    if not detail_turn or not _only_fields_changed(conversation["snapshot"], snapshot, {
+                        "summary", "summarized_until", "last_message_at", "updated_at",
+                    }):
+                        raise NotFoundError("会话不存在")
+                    advanced = True
+        if turn is not None:
+            task = next((row.agent_root_task for row in rows if row.kind == "_agent_turn"
+                         and row.ref_id == turn["id"] and row.identity == turn["statistics_key"]
+                         and row.stamp == turn["queued_at"]), None)
+            if task is None or (detail_turn and (
+                task.kind != "agent.turn" or task.resource_key != f"agent:{conversation['id']}"
+            )):
+                raise NotFoundError("智能体轮次不存在")
+            actual = agent_task_evidence(task)
+            if actual != turn["snapshot"]:
+                if not detail_turn or not _only_fields_changed(turn["snapshot"], actual, {
+                    "checkpoint", "output_text", "error", "step_cursor",
+                }):
+                    raise NotFoundError("智能体轮次不存在")
+                advanced = True
+            if advanced or (detail_turn and task.status != detail_turn["detail_status"]):
+                raise AgentDetailAdvanced
     allowed = {kind: set() for kind in visible}
     for row in rows:
         if row.kind is None or row.kind not in allowed or row.ref_id is None:
