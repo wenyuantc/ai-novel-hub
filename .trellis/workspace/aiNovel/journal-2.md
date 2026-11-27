@@ -378,3 +378,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 76: 修复智能体会话详情并发读取 404
+<!-- trellis-session: v=2 fp=5914b6d381238521 -->
+
+**Date**: 2026-11-27
+**Task**: 修复智能体会话详情并发读取 404
+**Branch**: `codex/agent-conversation-transient-404`
+
+### Summary
+
+同一可见轮次推进时重读整份详情，验证 SQLite 和 PostgreSQL 并发与真实撤权场景。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4213398` | fix(agent): 修复轮次推进时会话详情偶发 404 |
+
+### Status
+
+[OK] **Completed**
