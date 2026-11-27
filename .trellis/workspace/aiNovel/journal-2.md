@@ -470,3 +470,26 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 80: 图片参考图与视频模型生成
+<!-- trellis-session: v=2 fp=2ae3e547b85d6612 -->
+
+**Date**: 2026-11-28
+**Task**: 图片参考图与视频模型生成
+**Branch**: `codex/ai-media-models`
+
+### Summary
+
+图片参考图、视频探针、后台续等与按秒计量已完成并在本地分支归档。后端 7843 项、前端 1994 项通过；浏览器模拟厂商硬杀重启后播放、取消与不重复计费通过，SQLite 和 PostgreSQL 迁移备份恢复通过。四家真实账号验收待进行。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e8c6eb` | feat: 支持后台任务在执行进程重启后自动续跑 |
+| `ec4d801` | feat: 支持参考图生图和四类视频模型生成 |
+
+### Status
+
+[OK] **Completed**
