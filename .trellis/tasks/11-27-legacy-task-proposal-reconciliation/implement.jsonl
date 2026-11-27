@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/deployment-migrations.md", "reason": "升级排空、独立快照与恢复限制"}
+{"file": ".trellis/spec/backend/agent.md", "reason": "提案审核、执行和历史身份"}
+{"file": ".trellis/spec/backend/admin-task-monitoring.md", "reason": "取消受理与实际收尾"}
+{"file": ".trellis/tasks/archive/2026-11/11-20-collab-migration-deploy-drill/research/verification.md", "reason": "C8 双库场景、快照来源与观察窗口"}

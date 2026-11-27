@@ -1,0 +1,11 @@
+{"phase": "回退对照启动", "timestamp_utc": "2026-11-27T03:23:58.640Z", "elapsed_s": 0.002, "engine": "sqlite", "script_sha256": "93de60fabaebfb532e07eb922be86f3780cb0145f87f6c2c548582684c8b3998", "controller_sha256": "96ce03bda4d896789b011b06dc641aed58df6029e76964a60bcdea4bb50a1df9"}
+{"phase": "隔离版本就绪", "timestamp_utc": "2026-11-27T03:24:01.486Z", "elapsed_s": 2.848, "version": "old", "commit": "4501f18da97502eb3e352bf85b1853bb0903d60e", "lock_sha256": "5c089b8d0f7ba8f593557545980cbe8749fafa302c3469af5d6d8942bba97ae6", "python_version": "Python 3.12.10"}
+{"phase": "隔离版本就绪", "timestamp_utc": "2026-11-27T03:24:04.754Z", "elapsed_s": 6.115, "version": "new", "commit": "ac97d4de084c60c9b50df32143623ae34cc9c546", "lock_sha256": "9b452dbd015244ced12447b9528a0f9453cde15ca9fd58eea43a2498b655f154", "python_version": "Python 3.12.10"}
+{"phase": "应用启动", "timestamp_utc": "2026-11-27T03:24:37.792Z", "elapsed_s": 39.153, "version": "create", "pid": 45787}
+{"phase": "应用退出", "timestamp_utc": "2026-11-27T03:24:40.568Z", "elapsed_s": 41.929, "version": "create", "pid": 45787, "exit_code": -15}
+{"phase": "快照", "timestamp_utc": "2026-11-27T03:24:40.586Z", "elapsed_s": 41.947, "name": "drained", "bytes": 1576960, "sha256": "7fadb415676a6a3e0908acc618a49119de86a751e8cb92bcdf5e76104b08d9a4"}
+{"phase": "应用启动", "timestamp_utc": "2026-11-27T03:25:24.206Z", "elapsed_s": 85.567, "version": "upgraded", "pid": 47246}
+{"phase": "应用退出", "timestamp_utc": "2026-11-27T03:25:26.258Z", "elapsed_s": 87.62, "version": "upgraded", "pid": 47246, "exit_code": -15}
+{"phase": "应用启动", "timestamp_utc": "2026-11-27T03:25:31.722Z", "elapsed_s": 93.083, "version": "restored", "pid": 48125}
+{"phase": "应用退出", "timestamp_utc": "2026-11-27T03:25:33.197Z", "elapsed_s": 94.558, "version": "restored", "pid": 48125, "exit_code": -15}
+{"phase": "回退对照通过", "timestamp_utc": "2026-11-27T03:25:33.198Z", "elapsed_s": 94.559, "engine": "sqlite", "old_revision": "0043", "upgraded_revision": "0079", "new_only_project": 2, "restored_chapter_status": "done", "task_statuses": ["succeeded", "cancelled"], "proposal_status": "proposed", "restored_public_proposal_sha256": "d62bb8c162f742109b9d0ef29e3e6b7cffc218186b3d7716bb4790745e64f51a", "authenticated_model_requests": 3, "unexpected_model_requests": 0}
