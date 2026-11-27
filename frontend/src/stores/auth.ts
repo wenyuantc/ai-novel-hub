@@ -13,6 +13,8 @@ interface AuthState {
   registrationEnabled: boolean
   /** 当前有效 MCP 开关；刷新失败保留最近成功值，后端始终校验。 */
   mcpEnabled: boolean
+  enabledPlugins: string[]
+  pluginConfigReady: boolean
   refreshConfig: () => Promise<void>
   applyConfig: (config: AuthConfig) => void
   cancelConfig: () => void
@@ -29,11 +31,20 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>((set, get) => {
-  const config = new PublicConfigController(authApi.config, (value) => set({ registrationEnabled: value.registration_enabled, mcpEnabled: value.mcp_enabled !== false }))
+  const config = new PublicConfigController(authApi.config, (value) => set({
+    registrationEnabled: value.registration_enabled,
+    mcpEnabled: value.mcp_enabled !== false,
+    enabledPlugins: value.enabled_plugins ?? [],
+    pluginConfigReady: true,
+  }))
   let epoch = 0
   let current: { controller: AbortController; promise: Promise<void> } | null = null
   const cancelAuthorization = () => { epoch += 1; invalidateRequestGeneration(); current?.controller.abort(); current = null }
-  const clear = () => { cancelAuthorization(); set({ status: 'anonymous', user: null }) }
+  const clear = () => {
+    cancelAuthorization()
+    config.cancel()
+    set({ status: 'anonymous', user: null, enabledPlugins: [], pluginConfigReady: false })
+  }
   const applyAuthorization = (user: User) => {
     if (get().status !== 'authenticated' || get().user?.id !== user.id) return
     cancelAuthorization()
@@ -44,6 +55,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
   user: null,
   registrationEnabled: true,
   mcpEnabled: true,
+  enabledPlugins: [],
+  pluginConfigReady: false,
   refreshConfig: config.refresh,
   applyConfig: config.apply,
   cancelConfig: config.cancel,

@@ -4,6 +4,7 @@ from app.core.config import Settings
 from app.core.deps import CipherDep, CurrentUser, DbDep, SettingsDep
 from app.core.security import ACCESS_TOKEN_COOKIE, create_access_token, require_recent_login
 from app.models import User
+from app.plugins.state import enabled_ids
 from app.schemas.auth import AuthConfigOut, ChangePasswordRequest, Credentials, FactorCode, TwoStepRequired, UserOut
 from app.services import auth_service, authorization_service, two_step
 from app.services.system_settings_snapshot import SettingsUnavailable, effective_settings
@@ -31,7 +32,8 @@ async def auth_config(db: DbDep, response: Response) -> AuthConfigOut:
         settings = await effective_settings(db)
     except SettingsUnavailable as exc:
         raise HTTPException(exc.status_code, exc.detail, headers={"Cache-Control": "no-store"}) from None
-    return AuthConfigOut(registration_enabled=settings.registration_enabled, mcp_enabled=settings.mcp_enabled)
+    return AuthConfigOut(registration_enabled=settings.registration_enabled, mcp_enabled=settings.mcp_enabled,
+                         enabled_plugins=await enabled_ids(db))
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)

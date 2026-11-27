@@ -90,7 +90,7 @@ create_user(db, actor, data) / update_user(db, actor, user_id, data) / reset_pas
 
 - **管理员的其他权限**（`10-23-skills-mcp`，见 [skills-mcp.md](./skills-mcp.md)）：
   - **全局 Skill**：新建/导入、修改、删除、参考资料、恢复分别检查 `global_skills.create/update/delete/references/restore_builtin`。普通用户可见但无相应动作则403；他人私有 Skill 对所有管理角色同样404，不能用editable推导全部动作。撤权不需要递增token_version。
-  - **MCP有效开关**（部署基线 `MCP_ENABLED`，不是用户级）：管理员可通过[系统设置](./system-settings.md)持久覆盖，后台覆盖优先；关闭后 `/api/v1/mcp-plugins/*` 全部 403 `管理员已关闭 MCP`，智能体不暴露MCP工具，连接/排队后尚未发出的调用也受约束；已发调用可结束、插件保留。`GET /auth/config` no-store返回 `{registration_enabled, mcp_enabled}`，前端可见时30秒/回前台同步。注册开关同样可后台覆盖；未覆盖沿用环境/.env/代码默认，Compose已转发两变量。
+  - **MCP有效开关**（部署基线 `MCP_ENABLED`，不是用户级）：管理员可通过[系统设置](./system-settings.md)持久覆盖，后台覆盖优先；关闭后 `/api/v1/mcp-plugins/*` 全部 403 `管理员已关闭 MCP`，智能体不暴露MCP工具，连接/排队后尚未发出的调用也受约束；已发调用可结束、插件保留。`GET /auth/config` no-store返回 `{registration_enabled, mcp_enabled, enabled_plugins}`，前端可见时30秒/回前台同步。注册开关同样可后台覆盖；未覆盖沿用环境/.env/代码默认，Compose已转发两变量。
   - 删除用户时其私有 Skill、MCP 插件经外键 CASCADE 删除；全局 Skill 不属于任何用户，不受影响。
 
 ### 4. 校验与错误矩阵

@@ -27,7 +27,7 @@ GET需settings.read、PATCH需settings.update，响应no-store，前缀 `/api/v1
 | PATCH | `{revision,changes:{七项可选字段}}`，成功返回同一投影 |
 | GET `/drain-status` | `{enabled,sampled_at,queued,running,paused,finalizing,active_backups,workers}`，需要 `settings.read`。每个 worker 含 `hostname,pid,started_at,heartbeat_at`，时间为 UTC。 |
 
-布尔键为 `registration_enabled`、`auto_analyze_enabled`、`mcp_enabled`、`task_admission_closed`。正整数键为 `task_max_concurrency`、`task_max_per_user`、`open_api_rate_limit_per_minute`。用 SystemSettingBoolItem/IntItem 区分，来源枚举 admin/deployment/default。公开 auth/config 两项为 registration_enabled/mcp_enabled，no-store。
+布尔键为 `registration_enabled`、`auto_analyze_enabled`、`mcp_enabled`、`task_admission_closed`。正整数键为 `task_max_concurrency`、`task_max_per_user`、`open_api_rate_limit_per_minute`。用 SystemSettingBoolItem/IntItem 区分，来源枚举 admin/deployment/default。公开 `GET /api/v1/auth/config` 返回注册开关 `registration_enabled`、MCP 开关 `mcp_enabled` 和已启用功能插件标识列表 `enabled_plugins`，响应使用 `Cache-Control: no-store`。插件标识取自功能插件的登记表与独立状态表。[功能插件](./feature-plugins.md)
 
 ## 3. 契约
 
@@ -46,7 +46,7 @@ GET需settings.read、PATCH需settings.update，响应no-store，前缀 `/api/v1
 - 注册先检查开关，再计算密码哈希，最后在建账号事务取得授权门并重查持久值。关闭先提交则返回 403，无新用户、登录记录或 Cookie。登录、管理端建号和 bootstrap 沿用各自入口。
 - 全站硬顶与用户默认值由领取事务读库，用户显式限额优先于默认值。用户限额为零时继续排队，显式不限仍受全站硬顶。降额保留已经开始的执行。见[用户配额](./rbac-quotas.md)。
 - enqueue_auto及batch后续分析阶段使用最新开关，已排队/运行/手动分析不取消；项目auto_analyze仍需同时开启。
-- MCP 插件入口、实际写入和出站业务请求各自核对持久开关。公开配置从数据库返回两个开关，继续发送 `Cache-Control: no-store`。传输与智能体调用的锁边界见 [MCP 插件规范](./skills-mcp.md)。
+- MCP 插件入口、实际写入和出站业务请求各自核对持久开关。公开配置从数据库读取注册、MCP 开关和已启用的功能插件，继续发送 `Cache-Control: no-store`。传输与智能体调用的锁边界见 [MCP 插件规范](./skills-mcp.md)。
 - API Key认证每请求使用最新限额，不清空rate_count/rate_window，UTC分钟/429/Retry-After保持原契约。
 
 ### 后台任务排空

@@ -41,8 +41,11 @@ vi.mock('../api/tasks', async (original) => {
   return { ...actual, taskApi: { ...actual.taskApi, list: view.list } }
 })
 
-const running = { id: 7, task_key: '00000000-0000-4000-8000-000000000007', kind: 'wizard.characters', status: 'running',
-  project_id: 1 } as Task
+const running: Task = { id: 7, task_key: '00000000-0000-4000-8000-000000000007', kind: 'wizard.characters', status: 'running',
+  title: '角色向导', project_id: 1, chapter_id: null, progress: 0, stage: '', error: '', retry_of_id: null,
+  character_id: null, outline_id: null, analysis_id: null, checkpoint: null, step_cursor: 0, queue_position: null,
+  created_at: '', started_at: null, finished_at: null,
+}
 
 async function mountWith(outcome: TaskOutcome) {
   view.effects = []

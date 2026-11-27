@@ -49,7 +49,9 @@ async def test_closed_registration_wins_before_preselected_peer_request(
         assert result.status_code == 403, result.text
         assert "set-cookie" not in result.headers
         public = await peer.get("/api/v1/auth/config")
-        assert public.json() == {"registration_enabled": False, "mcp_enabled": False}
+        assert public.json() == {
+            "registration_enabled": False, "mcp_enabled": False, "enabled_plugins": [],
+        }
         assert public.headers["cache-control"] == "no-store"
         async with app.state.sessionmaker() as db:
             assert await db.scalar(select(User.id).where(User.username == "racing_user")) is None

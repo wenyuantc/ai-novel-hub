@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom'
+import { PLUGINS, pluginRoutes } from './plugins/registry'
 import AppLayout from './components/AppLayout'
 import RequirePermission from './components/RequirePermission'
 import RequireAuth from './components/RequireAuth'
@@ -43,6 +44,12 @@ export const router = createBrowserRouter([
       </RequireAuth>
     ),
     children: [
+      ...pluginRoutes(PLUGINS, 'global'),
+      {
+        path: 'admin/plugins',
+        element: <RequirePermission permission="plugins.read"><Outlet /></RequirePermission>,
+        children: [{ index: true, lazy: lazyPage(() => import('./pages/AdminPluginsPage')) }],
+      },
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'series', lazy: lazyPage(() => import('./pages/SeriesPage')) },
       { path: 'series/:sid', lazy: lazyPage(() => import('./pages/SeriesPage')) },
@@ -120,6 +127,7 @@ export const router = createBrowserRouter([
         element: <ProjectLayout />,
         children: [
           { index: true, element: <Navigate to="overview" replace /> },
+          ...pluginRoutes(PLUGINS, 'project'),
           { path: 'overview', element: <OverviewPanel /> },
           { path: 'ai-usage', lazy: lazyPage(() => import('./pages/project/ProjectAIUsagePage')) },
           { path: 'wizard', element: <WizardPage /> },

@@ -2,7 +2,7 @@ import { App as AntApp, ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { useEffect } from 'react'
 import { RouterProvider } from 'react-router-dom'
-import { setUnauthorizedHandler, setPermissionDeniedHandler } from './api/client'
+import { setPluginDisabledHandler, setUnauthorizedHandler, setPermissionDeniedHandler } from './api/client'
 import { router } from './router'
 import { useAIConfigStore } from './stores/aiConfigs'
 import { useAuthStore } from './stores/auth'
@@ -25,8 +25,9 @@ export default function App() {
     // 任意接口返回 401：清空会话，RequireAuth 会跳转到登录页
     setUnauthorizedHandler(() => useAuthStore.getState().clear())
     setPermissionDeniedHandler(() => { void useAuthStore.getState().refreshAuthorization() })
+    setPluginDisabledHandler(() => { void useAuthStore.getState().refreshConfig() })
     void init()
-    return () => { setUnauthorizedHandler(null); setPermissionDeniedHandler(null) }
+    return () => { setPluginDisabledHandler(null); setUnauthorizedHandler(null); setPermissionDeniedHandler(null) }
   }, [init])
 
   useEffect(() => {

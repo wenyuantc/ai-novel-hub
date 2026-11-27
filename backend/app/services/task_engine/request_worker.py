@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.errors import ConflictError
+from app.plugins.registry import use_registry
 from app.services.ai_dispatch import is_sqlite_busy
 from app.services.task_engine import workers
 
@@ -160,7 +161,8 @@ class RequestWorker:
             except BaseException:
                 await self.lease.stop()
                 raise
-        self._heartbeat = asyncio.create_task(self._maintain(), name="request-worker-heartbeat")
+        with use_registry(self.engine.feature_plugins):
+            self._heartbeat = asyncio.create_task(self._maintain(), name="request-worker-heartbeat")
 
     async def _maintain(self) -> None:
         from app.services.inspiration_service import schedule_releases

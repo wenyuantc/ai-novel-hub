@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, AuditOutlined, BookOutlined, CloudDownloadOutlined, DashboardOutlined, DeleteOutlined, KeyOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, ArrowLeftOutlined, AuditOutlined, BookOutlined, CloudDownloadOutlined, DashboardOutlined, DeleteOutlined, KeyOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined, PlusOutlined, RightOutlined, SettingOutlined, ShopOutlined, TeamOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import { Button, Drawer, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { useState, useSyncExternalStore } from 'react'
@@ -25,6 +25,7 @@ export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const mcpEnabled = useAuthStore((s) => s.mcpEnabled)
+  const enabledPlugins = useAuthStore((s) => s.enabledPlugins)
   const cachedProject = useProjectStore((s) => s.project)
   const scopeVersion = useProjectStore((s) => s.scopeVersion)
   const activeCount = useTasksStore((s) => s.active.length)
@@ -47,10 +48,10 @@ export default function AppLayout() {
   const showTaskPanel = showsTaskPanel(projectId, access)
   const taskScope = `${sessionGeneration}:${user?.id ?? ''}:${projectId ?? 'global'}:${projectId === null ? '' : scopeVersion}`
   const tasksOpen = tasksOpenAt === taskScope
-  const groups = studioNavigation(projectId, mcpEnabled, canUseAI, access.canRead && (access.role === 'owner' || isCollaborator))
+  const groups = studioNavigation(projectId, mcpEnabled, canUseAI, access.canRead && (access.role === 'owner' || isCollaborator), enabledPlugins)
   const current = navigationItem(groups, location.pathname)
   const adminSection = location.pathname.startsWith('/admin/')
-  const pageName = location.pathname === '/settings/security' ? '账号安全' : location.pathname === '/admin/publication-terms' ? '全站发布词表' : location.pathname.startsWith('/admin/ai-usage') ? '全站 AI 用量与费用' : location.pathname.startsWith('/admin/backups') ? '整库备份' : location.pathname.startsWith('/admin/roles') ? '角色与权限' : location.pathname.startsWith('/admin/system-settings') ? '系统设置' : location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
+  const pageName = location.pathname === '/admin/plugins' ? '功能插件' : location.pathname === '/settings/security' ? '账号安全' : location.pathname === '/admin/publication-terms' ? '全站发布词表' : location.pathname.startsWith('/admin/ai-usage') ? '全站 AI 用量与费用' : location.pathname.startsWith('/admin/backups') ? '整库备份' : location.pathname.startsWith('/admin/roles') ? '角色与权限' : location.pathname.startsWith('/admin/system-settings') ? '系统设置' : location.pathname.startsWith('/admin/tasks') ? '全站任务监控' : location.pathname.startsWith('/admin/dashboard') ? '管理员首页' : location.pathname.startsWith('/admin/recycle-bin') ? '作品回收站' : location.pathname.startsWith('/admin/audit-logs') ? '操作日志' : location.pathname.startsWith('/admin/projects') ? '作品管理' : location.pathname.startsWith('/admin/users') ? '用户管理' : current?.label ?? '创作空间'
   const initial = Array.from(user?.username ?? '').at(0) ?? '我'
 
   const accountMenu: MenuProps = {
@@ -64,6 +65,7 @@ export default function AppLayout() {
       ...(can(user, 'recycle_bin.read') ? [{ key: 'admin-recycle-bin', icon: <DeleteOutlined />, label: '作品回收站' }] : []),
       ...(can(user, 'audit.read') ? [{ key: 'admin-audit-logs', icon: <AuditOutlined />, label: '操作日志' }] : []),
       ...(can(user, 'backups.read') ? [{ key: 'admin-backups', icon: <CloudDownloadOutlined />, label: '整库备份' }] : []),
+      ...(can(user, 'plugins.read') ? [{ key: 'admin-plugins', icon: <AppstoreOutlined />, label: '功能插件' }] : []),
       ...(can(user, 'settings.read') ? [{ key: 'admin-system-settings', icon: <SettingOutlined />, label: '系统设置' }] : []),
       ...(isSuperAdmin(user) ? [{ key: 'admin-roles', icon: <TeamOutlined />, label: '角色与权限' }] : []),
       ...(can(user, 'publication_terms.read') ? [{ key: 'admin-publication-terms', icon: <BookOutlined />, label: '全站发布词表' }] : []),
@@ -76,6 +78,7 @@ export default function AppLayout() {
     onClick: async ({ key }) => {
       setNavOpenAt(null)
       if (key === 'security') navigate('/settings/security')
+      else if (key === 'admin-plugins') navigate('/admin/plugins')
       else if (key === 'admin-dashboard') navigate('/admin/dashboard')
       else if (key === 'admin-tasks') navigate('/admin/tasks')
       else if (key === 'admin-ai-usage') navigate('/admin/ai-usage')
@@ -138,6 +141,7 @@ export default function AppLayout() {
         {can(user, 'audit.read') && projectId === null && <Link className="studio-nav-action" to="/admin/audit-logs" aria-current={location.pathname.startsWith('/admin/audit-logs') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><AuditOutlined />操作日志</Link>}
         {can(user, 'backups.read') && projectId === null && <Link className="studio-nav-action" to="/admin/backups" aria-current={location.pathname.startsWith('/admin/backups') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><CloudDownloadOutlined />整库备份</Link>}
         {can(user, 'publication_terms.read') && projectId === null && <Link className="studio-nav-action" to="/admin/publication-terms" aria-current={location.pathname === '/admin/publication-terms' ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><BookOutlined />全站发布词表</Link>}
+        {can(user, 'plugins.read') && projectId === null && <Link className="studio-nav-action" to="/admin/plugins" aria-current={location.pathname === '/admin/plugins' ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><AppstoreOutlined />功能插件</Link>}
         {can(user, 'settings.read') && projectId === null && <Link className="studio-nav-action" to="/admin/system-settings" aria-current={location.pathname.startsWith('/admin/system-settings') ? 'page' : undefined} onClick={() => setNavOpenAt(null)}><SettingOutlined />系统设置</Link>}
         {isSuperAdmin(user) && projectId === null && <Link className="studio-nav-action" to="/admin/roles" onClick={() => setNavOpenAt(null)}><TeamOutlined />角色与权限</Link>}
         <div className="studio-sidebar-account">{account()}<ThemeSwitch compact /></div>

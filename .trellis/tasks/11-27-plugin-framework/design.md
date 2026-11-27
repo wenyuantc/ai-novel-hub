@@ -52,11 +52,11 @@ class PluginManifest:
     task_handlers: tuple[TaskHandler, ...] = ()
 ```
 
-`registry.register(manifest)` 在登记时校验并在失败时抛异常（应用启动失败，F2 / AC10）：
+`PluginRegistry(manifests)` 在登记时校验并在失败时抛异常（应用启动失败，F2 / AC10）：
 
 - `id` 格式合法且未被登记过。
-- 每个 `task_handler.kinds` 中的类型都以 `f"{id}."` 开头，且未被核心或其他插件占用。
-- 每个 router 的 `prefix` 以 `/plugins/{id}` 开头（见 3.3），避免与核心路径冲突。
+- 每个 `task_handler.kinds` 中的类型都以 `f"{id}."` 开头，长度至多 32，与其他类型不重复，并避开核心任务的命名空间（如 `wizard.*`）。
+- 每个 router 的前缀与实际接口路径均位于 `/plugins/{id}` 的完整路径分段下；只接受可附加 FastAPI 依赖的 HTTP 接口，以保证每条路由都经过启用检查。
 
 注册表提供：`all()`、`get(plugin_id)`、`plugin_of_kind(kind) -> str | None`。登记完成后只读。
 
@@ -82,7 +82,7 @@ class PluginManifest:
 - 没有行 = 从未被操作过 = 停用，`revision = 0`（F6）。
 - 代码里已不存在的 `plugin_id` 的行被忽略，不报错（插件将来被移除时不需要数据迁移）。
 - 与作品无关，不进作品备份；按项目规范登记到作品备份注册表的 `NOT_EXPORTED` 不适用（那只容纳作品相关表），
-  做法与 `system_settings` 相同，并补上对应的反射测试断言。整库备份的表目录需要加上这张表。
+  做法与 `system_settings` 相同，并补上对应的反射测试断言。整库原生快照自动包含这张表，SQLite 恢复时按版本校验表和列。
 
 ```python
 # app/plugins/state.py
@@ -99,8 +99,7 @@ async def set_enabled(db, actor, plugin_id, *, revision: int, enabled: bool) -> 
 
 1. `authz.require(db, actor, "plugins.update", write=True)` 取得授权写屏障。
 2. 未登记的 `plugin_id` → 404。
-3. 按 `revision` 条件写：无行且 `revision == 0` 时 INSERT（唯一约束兜住并发首写），否则 `UPDATE ... WHERE revision = :revision`；
-   影响 0 行 → 409 `{"code": "stale_revision"}`（F5 / AC5）。状态未变化（已是目标值）同样走修订号校验后返回当前值，不写审计。
+3. 在各实例共用的授权写门内锁定并重读状态行，核对修订号后写入（首次为 INSERT，后续为 UPDATE）。修订号不符 → 409 `{"code": "stale_revision"}`（F5 / AC5）。状态未变化（已是目标值）同样走修订号校验后返回当前值，不写审计。
 4. 同一事务内写审计：动作 `feature_plugin.enable` / `feature_plugin.disable`，目标类型 `feature_plugin`，目标标签为插件名。
 5. 停用时，同一事务内把该插件尚未结束的任务标记为待取消（见 3.4），然后提交。
 6. 提交确认后，再通知本进程的任务引擎处理这些任务；其他进程靠各自的调度周期与领取时门禁发现。
@@ -127,33 +126,20 @@ def require_plugin(plugin_id: str):
 
 ### 3.4 后台任务门禁
 
-登记：`load()` 对每个插件的 `task_handlers` 调用现有的 `task_engine.registry.register`（`backend/app/services/task_engine/registry.py:93`），
-并记录 kind → 插件。核心的 `handlers/__init__.py` 不改。
+每个应用创建自己的插件注册表。请求、调度器和请求执行者各自在该应用的上下文内运行。核心任务沿用现有注册表，插件任务由同一个 `get_handler(kind)` 从当前应用查找，两个应用的处理器互不覆盖。本人任务列表、详情以及任务类型筛选都识别已登记的插件任务类型。
 
-三道门，全部读持久值：
+| 时机 | 事务和行为 |
+| --- | --- |
+| 新建及重试 | `task_service.create_task` 在持有授权写门禁的受理事务中检查插件状态，随后校验请求、创建并提交任务。重试复用这条路径。 |
+| 继续 | `task_service.resume_task` 在同一写门禁内检查插件状态，再将原暂停任务重新入队。 |
+| 领取 | 执行者在授权写门禁和队列行锁内读取开关。未启用时写入取消意图并提交，然后唤醒取消处理。已有取消意图的任务无法通过领取条件更新。 |
+| 运行中的事件 | 插件输出在事件核验事务中检查原 UUID、入队轮次和执行者对应的取消意图。即使插件随后重新启用，持有者仍会在下一事件或调度扫描时停止这一轮。 |
 
-| 时机 | 位置 | 行为 |
-| --- | --- | --- |
-| 受理（新建） | `task_service` 中紧随 `require_task_admission_open(db)` 之后（`backend/app/services/task_service.py:547`） | `plugin_of_kind(kind)` 非空时 `await state.require_enabled(db, plugin_id)`；与受理在同一根事务，提交时一并生效 |
-| 重试 / 继续 | 同文件 `:758` 处的同一检查之后 | 同上 |
-| 领取（执行前） | 引擎领取事务内取处理器处（`backend/app/services/task_engine/engine.py:1710`） | 插件已停用 → 不执行，按「已取消」收尾 |
+停用事务从清单收集准确的任务类型，通过 `Task.kind.in_(kinds)` 查找尚未结束的任务。含下划线的插件标识也只匹配自己的任务。按任务行锁顺序留下独立的 `admin_cancel_operation_id` 和受理时间，保存已有意图，一并提交开关与停用审计。提交后通知本机取消处理和对应的远端执行者，后台扫描可以补上丢失的通知。
 
-把受理检查做成一个函数 `plugins.state.require_kind_enabled(db, kind)`，其余直接写入排队状态的业务入口
-（仓库里凡是调用 `require_task_admission_open` 的地方，共 5 个模块）在引入插件任务时沿用同一函数；
-本子任务只改 `task_service` 的两处，因为示例插件只经由标准受理入口建任务，其余入口都不可能产生插件类型的任务。这一点在实现时用 grep 复核并写进测试说明。
+复用 `AdminCancellationDrain`，由它验证任务原轮次和执行者、协调已启动的执行体、运行处理器的幂等 `on_abort` 并提交终态和统计。排队和暂停中的插件任务也走同一条收尾路径。处理器的回退只释放原任务持有的资源；停用不会清除插件业务数据。若原任务已经提交结果，则沿用引擎原有的终态核验规则。
 
-停用时取消未结束的任务（F9 / AC6）：
-
-- 不新造终态路径。复用引擎已有的取消机制（所有者取消与管理端取消最终汇入的同一条路径，见
-  `backend/app/services/task_engine/cancellation.py` 与 `owner_cancellation.py`）。
-- `set_enabled(..., enabled=False)` 在事务内查出 `kind LIKE '{id}.%' AND status IN OPEN_TASK_STATUSES` 的任务，逐个登记取消意图；
-  提交后由引擎完成取消。跨实例运行中的任务由持有它的那个实例在下一个调度周期、或处理器下一次产出事件时发现并停止。
-- 领取时门禁兜住「停用提交与排队任务被领取」之间的竞争：即使取消登记漏掉了刚入队的任务，它也不会被执行。
-- 取消的审计：整个停用操作只写一条 `feature_plugin.disable`，摘要里带被取消任务的数量；不为每个任务单独写管理端取消审计。
-
-**这是本子任务风险最高的部分。** 引擎的取消路径有章节占用、执行槽、收尾回调等既有约束（`engine.py` 四千余行）。
-实施计划把它单列为一步，先读代码确认可复用的最小入口，再写实现；若发现现有取消入口都绑定了具体任务类型的前置条件，
-回到本设计文档修订后再继续，不绕开。
+其余受理检查分布在分析、知识库、导入、富文档、模型和智能体模块，处理各自的核心类型或在准备阶段检查通用维护开关。具体核对结果和真实任务验收见 `backend/tests/test_feature_plugins_tasks.py`。
 
 ### 3.5 管理接口
 
@@ -169,7 +155,7 @@ def require_plugin(plugin_id: str):
 - `plugins.read`「查看功能插件」
 - `plugins.update`「启用/停用功能插件」，`dangerous=True`，`requires=("plugins.read",)`
 
-超级管理员自动获得（`BUILTIN_ROLES["super_admin"]` 取全部）。其余内置角色不变。权限总数由 38 变为 40，
+超级管理员自动获得（`BUILTIN_ROLES["super_admin"]` 取全部）。其余内置角色不变。权限总数由 40 变为 42，
 `.trellis/spec/backend/rbac-quotas.md` 与相关测试里的数量断言同步修改。
 
 ### 3.6 对前端公开的状态
@@ -186,37 +172,21 @@ def require_plugin(plugin_id: str):
 
 ### 4.1 插件类型与登记
 
-```ts
-// src/plugins/types.ts
-export interface FeaturePlugin {
-  id: string
-  /** 挂在 projects/:pid 之下的路由，path 必须以 `${id}` 开头 */
-  projectRoutes?: RouteObject[]
-  /** 作品内导航：归入已有分组或新分组 */
-  projectNav?: { group: string; items: { key: string; label: string; icon: ReactNode }[] }
-  /** 作品之外的全局路由与导航（本期示例插件不使用，类型先留） */
-  globalRoutes?: RouteObject[]
-  globalNav?: { group: string; items: { to: string; label: string; icon: ReactNode }[] }
-}
-```
+`src/plugins/types.ts` 的 `FeaturePlugin` 声明 `id` 和两个可选页面列表 `project`、`global`。每个页面有相对路径 `path`、异步组件加载函数 `load`，以及可选的导航配置 `nav: { group, label, icon }`。
 
-`src/plugins/registry.ts`：`export const PLUGINS: FeaturePlugin[] = []`（唯一登记处），以及纯函数：
+清单内的 `path` 从插件标识开始，首个路径段必须完整等于 `id`。注册表统一添加 `features/` 前缀，全局页面挂在 `/features/<id>`，作品内页面挂在 `/projects/:pid/features/<id>`。例如 `id = "sample"`、`path = "sample/editor"` 的页面，登记在 `project` 下时，作品 42 中的链接是 `/projects/42/features/sample/editor`。
 
-- `pluginProjectRoutes(plugins)`：把每个插件的 `projectRoutes` 包进 `<RequirePlugin id>` 后返回，供 `router.tsx` 展开到 `projects/:pid` 的 children。
-- `pluginGlobalRoutes(plugins)`：同理。
-- `withPluginNav(groups, plugins, enabledIds, scope)`：在现有导航分组上追加已启用插件的入口。
+`src/plugins/registry.tsx` 的 `PLUGINS` 是前端登记入口。路由和导航使用同一份清单：
 
-插件页面继续用 `lazyPage(() => import(...))` 按需加载，未启用的插件不会下载其页面代码。
+- `pluginRoutes(plugins, scope)` 按作用域生成路由，将用 `React.lazy(load)` 包装的页面置于 `RequirePlugin` 内，只有守卫放行后才下载页面模块。
+- `withPluginNav(groups, plugins, enabled, projectId)` 根据作品 ID 或全局作用域构造完整地址，仅把已启用插件的入口加入对应导航分组。
 
 ### 4.2 状态与守卫
 
-- `stores/auth.ts` 增加 `enabledPlugins: string[]`，由公开配置的 `enabled_plugins` 写入。**初始值为空数组**（与 `mcpEnabled` 初始为 `true` 不同）：
-  配置尚未取到时宁可不显示入口。
-- `RequirePlugin`：`enabledPlugins` 含该 id → 渲染子路由；否则显示「该功能插件未启用，请联系管理员」的提示（F11）。
-  公开配置尚未首次返回时显示加载态，避免先闪一下「未启用」。
-- API 客户端收到 `code === "plugin_disabled"` 的 403 时触发一次 `refreshConfig()`，让导航尽快收起。
-- `StudioNavigation.tsx:65` 的 `studioNavigation(...)` 增加 `enabledPlugins` 参数并调用 `withPluginNav`；`AppLayout.tsx:50` 传入。
-- `router.tsx:119` 的 `projects/:pid` children 末尾展开 `pluginProjectRoutes(PLUGINS)`。
+- `stores/auth.ts` 的 `enabledPlugins` 初始为空数组，从公开配置的 `enabled_plugins` 更新。旧服务缺失该字段时按空数组处理。
+- `RequirePlugin` 通过 `pluginConfigReady` 区分首次加载与已停用。取得配置后，已启用则渲染页面，已停用则给出「功能插件未启用」提示。
+- API 客户端收到带 `plugin_disabled` 的 403 时触发配置刷新。导航复用可见页面的公开配置轮询和切回前台刷新。
+- `router.tsx` 分别在全局和作品路由下展开相应作用域的 `pluginRoutes`；两者均使用上述固定前缀。
 
 ### 4.3 管理页
 
@@ -231,7 +201,7 @@ export interface FeaturePlugin {
 
 ## 5. 兼容与迁移
 
-- `0080` 只新增一张表，可降级（删表）；降级后所有插件视为停用。
+- `0080` 新增状态表，并更新内置超级管理员权限及授权修订号。降级会移除该表并恢复旧权限；如存在插件状态修订、旧版本无法读取的任务或取消审计、插件启停审计、涉及插件权限的角色审计或仍持有这些权限的角色，降级会拒绝，以保留现存数据及审计。
 - 不登记任何插件时：`api_router` 不多挂任何路由，任务注册表不变，前端路由与导航不变（F14 / AC11）。
 - `AuthConfigOut` 新增字段，旧前端忽略未知字段；新前端对缺失字段按空数组处理。
 

@@ -14,6 +14,7 @@ import type {
   Task,
   TaskClearResult,
   TaskKind,
+  CoreTaskKind,
   TaskListQuery,
   TaskOutput,
   TaskProgress,
@@ -148,7 +149,7 @@ export const TASK_STATUS: Record<TaskStatus, { label: string; color: string }> =
   interrupted: { label: '已中断', color: 'magenta' },
 }
 
-export const TASK_KIND_LABELS: Record<TaskKind, string> = {
+export const TASK_KIND_LABELS: Record<CoreTaskKind, string> = {
   'chapter.generate': 'AI 生成',
   'chapter.polish': 'AI 润色',
   'wizard.outline': '大纲向导',
@@ -171,6 +172,14 @@ export const TASK_KIND_LABELS: Record<TaskKind, string> = {
   'agent.turn': '项目智能体',
   'consistency.check': '一致性检查',
   'consistency.impact': '修改影响评估',
+}
+
+export function isCoreTaskKind(kind: string): kind is CoreTaskKind {
+  return Object.hasOwn(TASK_KIND_LABELS, kind)
+}
+
+export function taskKindLabel(kind: string): string {
+  return isCoreTaskKind(kind) ? TASK_KIND_LABELS[kind] : '其他任务'
 }
 
 /** 「排队中，前面还有 N 个」 */
@@ -230,8 +239,13 @@ export function taskLink(task: Pick<Task, 'kind' | 'project_id' | 'chapter_id'> 
     case 'consistency.impact':
       if (task.chapter_id !== null) return `${base}/consistency?tab=impact&chapter=${task.chapter_id}`
       return `${base}/consistency?tab=impact${task.id === undefined ? '' : `&task=${task.id}`}`
-    default:
+    case 'wizard.outline':
+    case 'wizard.characters':
+    case 'wizard.world':
+    case 'wizard.careers':
       return `${base}/wizard?kind=${task.kind.slice('wizard.'.length)}`
+    default:
+      return null
   }
 }
 

@@ -19,6 +19,8 @@ export class ApiError extends Error {
 
 type UnauthorizedHandler = () => void
 let unauthorizedHandler: UnauthorizedHandler | null = null
+let pluginDisabledHandler: (() => void) | null = null
+export function setPluginDisabledHandler(handler: (() => void) | null) { pluginDisabledHandler = handler }
 let permissionDeniedHandler: (() => void) | null = null
 type ProjectFailureTarget = { projectId: number } | { chapterId: number }
 export interface CapturedProjectFailure {
@@ -127,6 +129,7 @@ function shouldRedirectOn401(path: string): boolean {
 export async function handleErrorResponse(path: string, resp: Response, generation = requestGeneration, method: RequestOptions['method'] = 'GET', projectFailure: CapturedProjectFailure | null = null): Promise<never> {
   const { detail, body } = await readErrorBody(resp)
   const isCurrent = () => generation === requestGeneration && (projectFailure?.isCurrent() ?? true)
+  if (isCurrent() && resp.status === 403 && body?.code === 'plugin_disabled' && path !== '/auth/config') pluginDisabledHandler?.()
   if (isCurrent() && resp.status === 401 && shouldRedirectOn401(path)) notifyUnauthorized()
   // HEAD按HTTP语义没有正文，无法依赖JSON中的permission_denied；仍只刷新同一会话，不重放业务。
   if (isCurrent() && resp.status === 403 && (method === 'HEAD' || body?.code === 'permission_denied') && !path.startsWith('/auth/me')) permissionDeniedHandler?.()

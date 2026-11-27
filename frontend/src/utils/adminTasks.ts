@@ -1,5 +1,5 @@
-import { TASK_KIND_LABELS, TASK_STATUS } from '../api/tasks'
-import type { AdminTaskBrief, AdminTaskError, AdminTaskListQuery, AdminTaskSort, AdminTaskStatus, TaskKind, TaskStatus } from '../api/types'
+import { isCoreTaskKind, taskKindLabel, TASK_STATUS } from '../api/tasks'
+import type { AdminTaskBrief, AdminTaskError, AdminTaskListQuery, AdminTaskSort, AdminTaskStatus, TaskStatus } from '../api/types'
 import { auditDateRange } from './auditLogs'
 
 export const ADMIN_TASK_SORT: Record<AdminTaskSort, string> = {
@@ -13,7 +13,7 @@ export const ADMIN_TASK_LIFECYCLE: Record<AdminTaskBrief['project_lifecycle'], s
 }
 export const ADMIN_TASK_STATUSES: AdminTaskStatus[] = [...Object.keys(TASK_STATUS) as TaskStatus[], 'unknown']
 export const adminTaskStatus = (status: AdminTaskStatus) => Object.hasOwn(TASK_STATUS, status) ? TASK_STATUS[status as TaskStatus] : { label: '未知状态', color: 'default' }
-export const adminTaskKind = (kind: AdminTaskBrief['kind']) => Object.hasOwn(TASK_KIND_LABELS, kind) ? TASK_KIND_LABELS[kind as TaskKind] : '其他任务'
+export const adminTaskKind = taskKindLabel
 export const adminTaskTitle = (task: Pick<AdminTaskBrief, 'kind' | 'id'>) => `${adminTaskKind(task.kind)} #${task.id}`
 export const adminTaskLink = (taskKey: string) => `/admin/tasks?task_key=${encodeURIComponent(taskKey)}`
 
@@ -59,7 +59,7 @@ export function adminTaskInitialQuery(params: URLSearchParams): AdminTaskListQue
   return {
     q: params.get('q')?.slice(0, 200) || undefined,
     owner_user_id: positive('owner_user_id'), project_id: positive('project_id'), task_id: positive('task_id'),
-    kind: kind && Object.hasOwn(TASK_KIND_LABELS, kind) ? kind as TaskKind : undefined,
+    kind: kind && isCoreTaskKind(kind) ? kind : undefined,
     status: [...new Set(statuses)], sort: sort && Object.hasOwn(ADMIN_TASK_SORT, sort) ? sort as AdminTaskSort : 'created_desc',
     page: 1, page_size: 20,
   }

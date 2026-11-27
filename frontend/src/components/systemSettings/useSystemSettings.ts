@@ -26,7 +26,7 @@ export function useSystemSettings(actorId: number) {
   const [controller] = useState(() => new SystemSettingsController(undefined, () => {
     const auth = useAuthStore.getState()
     return auth.status === 'authenticated' && auth.user?.id === actorId && can(auth.user, 'settings.read')
-  }, (config) => useAuthStore.getState().applyConfig(config), () => can(useAuthStore.getState().user, 'settings.update')))
+  }, (config) => useAuthStore.getState().applyConfig({ ...config, enabled_plugins: useAuthStore.getState().enabledPlugins }), () => can(useAuthStore.getState().user, 'settings.update')))
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   useEffect(() => {
     controller.activate()

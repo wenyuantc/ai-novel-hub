@@ -68,7 +68,9 @@ def _task_key(value: str | None) -> str | None:
 
 
 def safe_kind(kind: str) -> str:
-    return kind if kind in TASK_KINDS else "unknown"
+    from app.plugins.registry import current
+
+    return kind if kind in TASK_KINDS or current.get().plugin_of_kind(kind) else "unknown"
 
 
 def safe_title(kind: str, task_id: int) -> str:

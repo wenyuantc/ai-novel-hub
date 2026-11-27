@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -11,6 +11,9 @@ from app.core.config import Settings
 from app.core.errors import BadRequestError
 from app.core.security import SecretCipher
 from app.models import Task
+
+if TYPE_CHECKING:
+    from app.plugins.registry import PluginRegistry
 
 Event = tuple[str, dict[str, Any]]
 
@@ -32,6 +35,7 @@ class TaskContext:
     # MCP 连接工厂 connector(McpTarget, *, allow_private) -> async context manager；测试替换为假实现
     mcp_connector: Any = field(default_factory=_default_mcp_connector)
     task_engine: Any = field(default=None, repr=False)
+    feature_plugins: "PluginRegistry | None" = field(default=None, repr=False)
 
 
 @dataclass
@@ -98,6 +102,10 @@ def register(handler: TaskHandler) -> TaskHandler:
 
 def get_handler(kind: str) -> TaskHandler:
     handler = _HANDLERS.get(kind)
+    if handler is None:
+        from app.plugins.registry import current
+
+        handler = current.get().handler(kind)
     if handler is None:
         raise BadRequestError(f"不支持的任务类型：{kind}")
     return handler

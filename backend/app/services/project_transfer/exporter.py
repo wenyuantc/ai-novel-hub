@@ -36,7 +36,7 @@ from app.services.style_service import FIELD_LIMITS
 FORMAT = "ainovel.project"
 VERSION = 18
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0079"
+APP_SCHEMA = "0080"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1

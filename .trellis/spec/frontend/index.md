@@ -14,6 +14,7 @@
 
 | 规范 | 说明 | 状态 |
 |-------|-------------|--------|
+| [功能插件](./feature-plugins.md) | 页面与导航登记、公开配置刷新、管理页的冲突与权限处理 | 已填写 |
 | [目录结构](./directory-structure.md) | `src/api`、`stores`、`hooks`、`components`、`pages/project`、`utils`、`router.tsx` 的布局与命名 | 已填写 |
 | [设定随剧情演变跨层契约](../backend/setting-progressions.md) | 基础值、按章变化、草稿与只读预览 | 已填写 |
 | [自定义设定字段跨层契约](../backend/setting-fields.md) | 四类控件、配置页、空槽首写、领域条目选择、独立草稿、四实体字段与卡片显式映射 | 已填写 |

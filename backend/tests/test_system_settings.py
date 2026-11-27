@@ -68,7 +68,9 @@ async def test_drain_toggle_participates_in_all_settings_audit_and_can_reset(app
     assert items(body)["task_admission_closed"]["value"] is True
     assert app.state.settings.task_admission_closed is True
     public = await make_client().get("/api/v1/auth/config")
-    assert public.json() == {"registration_enabled": False, "mcp_enabled": False}
+    assert public.json() == {
+        "registration_enabled": False, "mcp_enabled": False, "enabled_plugins": [],
+    }
 
     body = await save_settings(system_admin, task_admission_closed=None)
     assert items(body)["task_admission_closed"]["value"] is False
@@ -96,7 +98,9 @@ async def test_false_partial_and_reset_immediately_control_real_registration(app
     assert app.state.settings is original is app.state.task_engine.ctx.settings
     anonymous = make_client()
     public = await anonymous.get("/api/v1/auth/config")
-    assert public.json() == {"registration_enabled": False, "mcp_enabled": True}
+    assert public.json() == {
+        "registration_enabled": False, "mcp_enabled": True, "enabled_plugins": [],
+    }
     assert public.headers["cache-control"] == "no-store"
     blocked = await anonymous.post("/api/v1/auth/register", json={"username": "new_user", "password": "secret123"})
     assert blocked.status_code == 403
@@ -183,7 +187,7 @@ async def test_all_management_routes_require_admin(app, client, system_admin, ma
     for method in ("GET", "PATCH"):
         assert (await client.request(method, URL, json=body if method == "PATCH" else None)).status_code == 403
     public = await make_client().get("/api/v1/auth/config")
-    assert set(public.json()) == {"registration_enabled", "mcp_enabled"}
+    assert set(public.json()) == {"registration_enabled", "mcp_enabled", "enabled_plugins"}
     async with app.state.sessionmaker() as db:
         assert await db.scalar(select(func.count(AdminAuditLog.id))) == 0
 

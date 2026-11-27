@@ -46,6 +46,7 @@ class AuthConfigOut(BaseModel):
     registration_enabled: bool
     # 部署是否开启 MCP 插件（关闭时前端隐藏入口）
     mcp_enabled: bool = True
+    enabled_plugins: list[str] = Field(default_factory=list)
 
 
 class ChangePasswordRequest(BaseModel):

@@ -20,6 +20,8 @@
 
 后三项动作权限均显式 requires `backups.read` 且 dangerous。0030（父0029）创建三个实例表：`BackupSettings` 单行 id=1/CAS/实例身份/计划游标；`BackupRun` 有整数自增ID及不可复用execution_key，request_id和scheduled_date分别唯一，queued/running必须active_slot=1，唯一约束兜底互斥；`BackupArtifact` 每执行/目的地唯一，私有locator/访问密文/S3版本与multipart身份。文件字节数为BigInteger，不能使用PG的32位Integer。实例表不指向projects、不登记作品备份规则；0030 当时保留作品 JSON v1。0031 起作品 JSON 为 v2、APP_SCHEMA 为 0031，见 [项目备份](./project-transfer.md)。
 
+整库快照包含 `0080` 新增的 `feature_plugin_states` 表，恢复后按当前应用登记的插件标识读取开关和修订号。开关是全站配置，单部作品的 JSON 备份不导入或导出该表。[功能插件](./feature-plugins.md)
+
 `BackupManager(settings,cipher,sessionmaker,notify)` 提供load/update/accept_manual/accept_scheduled/read_settings/overview/list_runs/get_run/authorize_download/close。`BackupRuntime(manager, worker=...)` 提供start/stop/notify/prepare_download，运行时使用应用请求执行者的租约。快照、GPG、SMTP 和文件/S3 阻塞工作通过 `process.run_blocking` 在线程执行。
 
 0030只更新现存内置super_admin为37项并递增角色与授权revision；其他内置和自定义角色不增权。历史0029固定33项，禁止改写历史常量。初始化只补缺失角色，已有内置角色严格校验，故不能仅改运行时代码而遗漏迁移。存在备份数据、新权限分配或备份审计时禁止有损downgrade。

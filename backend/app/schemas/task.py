@@ -1,12 +1,12 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, AliasChoices, BaseModel, ConfigDict, Field
 
 from app.schemas.skill import SkillRef
 
 TaskStatus = Literal["queued", "running", "paused", "succeeded", "failed", "cancelled", "interrupted"]
-TaskKind = Literal[
+CoreTaskKind = Literal[
     "agent.turn",
     "chapter.generate",
     "chapter.polish",
@@ -30,6 +30,17 @@ TaskKind = Literal[
     "consistency.impact",
     "scene.restructure",
 ]
+
+
+def _plugin_kind(kind: str) -> str:
+    from app.plugins.registry import current
+
+    if current.get().plugin_of_kind(kind) is None:
+        raise ValueError("未登记的插件任务类型")
+    return kind
+
+
+TaskKind = CoreTaskKind | Annotated[str, AfterValidator(_plugin_kind)]
 
 
 class TaskOut(BaseModel):

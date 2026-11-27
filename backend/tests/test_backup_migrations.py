@@ -9,8 +9,6 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.core.permissions import PERMISSION_CODES
-
 
 def config_engine(tmp_path):
     backend = Path(__file__).resolve().parents[1]
@@ -58,8 +56,9 @@ def test_0030_upgrades_existing_builtin_only_and_keeps_business_and_custom_grant
                     "SELECT permissions,revision FROM roles WHERE system_key='super_admin'",
                 )
             ).one()
-            # 0030 冻结当时的37项权限，后续的 AI 用量权限由0061引入。
-            expected = [code for code in PERMISSION_CODES if not code.startswith(("ai_usage.", "publication_terms."))]
+            expected = json.loads(old_super)
+            start = expected.index("settings.update") + 1
+            expected[start:start] = ["backups.read", "backups.configure", "backups.run", "backups.download"]
             assert json.loads(permissions) == expected and revision == 2
             assert db.execute(text("SELECT revision FROM authorization_state")).scalar_one() == 1
             assert db.execute(text("SELECT permissions FROM roles WHERE id=10")).scalar_one() == old_super

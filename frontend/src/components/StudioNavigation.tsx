@@ -3,6 +3,7 @@ import {
   DashboardOutlined, DatabaseOutlined, FileTextOutlined, GlobalOutlined, HistoryOutlined, LineChartOutlined,
   ImportOutlined, KeyOutlined, OrderedListOutlined, RocketOutlined, SafetyCertificateOutlined, SearchOutlined, SettingOutlined, ShopOutlined, TeamOutlined, TrophyOutlined,
 } from '@ant-design/icons'
+import { PLUGINS, withPluginNav } from '../plugins/registry'
 import type { ReactNode } from 'react'
 
 interface NavItem { to: string; label: string; icon: ReactNode }
@@ -62,11 +63,12 @@ const PROJECT_GROUPS = [
 ]
 
 /** 桌面与移动导航共用定义；只映射项目已经存在的路由。 */
-export function studioNavigation(projectId: number | null, mcpEnabled: boolean, canUseAI = true, canViewUsage = true): NavGroup[] {
-  if (projectId !== null) return PROJECT_GROUPS.map((group) => ({ title: group.title, items: group.items
+export function studioNavigation(projectId: number | null, mcpEnabled: boolean, canUseAI = true, canViewUsage = true, enabledPlugins: readonly string[] = []): NavGroup[] {
+  const groups = projectId !== null ? PROJECT_GROUPS.map((group) => ({ title: group.title, items: group.items
     .filter(({ key }) => (canUseAI || key !== 'wizard') && (canViewUsage || key !== 'ai-usage'))
     .map(({ key, ...item }) => ({ ...item, to: `/projects/${projectId}/${key}` })) }))
-  return GLOBAL_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => mcpEnabled || item.to !== '/mcp-plugins') }))
+    : GLOBAL_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => mcpEnabled || item.to !== '/mcp-plugins') }))
+  return withPluginNav(groups, PLUGINS, enabledPlugins, projectId)
 }
 
 export function navigationItem(groups: NavGroup[], path: string) {

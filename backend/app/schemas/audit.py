@@ -55,6 +55,8 @@ AuditAction = Literal[
     "skill.restore_builtin",
     "audit.cleanup",
     "task.cancel_request",
+    "feature_plugin.enable",
+    "feature_plugin.disable",
     "system_settings.update",
     "publication_terms.update",
     "backup.settings.update",
@@ -63,7 +65,7 @@ AuditAction = Literal[
 ]
 AuditTargetType = Literal[
     "user", "project", "chapter", "chapter_version", "workshop_item", "workshop_submission", "skill", "audit", "task",
-    "publication_terms", "system_settings", "role", "backup_settings", "backup_run",
+    "feature_plugin", "publication_terms", "system_settings", "role", "backup_settings", "backup_run",
 ]
 AuditResult = Literal["success", "failure"]
 AuditErrorCode = Literal[

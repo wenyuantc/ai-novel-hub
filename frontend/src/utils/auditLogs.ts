@@ -1,7 +1,7 @@
 import dayjs from 'dayjs'
 import type { AuditAction, AuditCleanupPreview, AuditDateRange, AuditLogListQuery, AuditSafeState, AuditSummary } from '../api/types'
 import { AUDIT_BACKUP_FIELD, AUDIT_FIELD, AUDIT_STATE, AUDIT_SYSTEM_SETTING, AUDIT_TARGET } from '../api/auditLogs'
-import { TASK_KIND_LABELS } from '../api/tasks'
+import { taskKindLabel } from '../api/tasks'
 import { formatTime, parseServerTime } from './time'
 import { settingValue, SYSTEM_SETTING_SOURCE } from './systemSettings'
 
@@ -92,7 +92,7 @@ export function auditSummaryRows(summary: AuditSummary, action?: AuditAction): A
   }
   if (action === 'task.cancel_request') {
     if (summary.task_key) rows.push({ label: '任务执行标识', value: summary.task_key })
-    if (summary.task_kind) rows.push({ label: '任务类型', value: summary.task_kind !== 'unknown' && Object.hasOwn(TASK_KIND_LABELS, summary.task_kind) ? TASK_KIND_LABELS[summary.task_kind] : '其他任务' })
+    if (summary.task_kind) rows.push({ label: '任务类型', value: taskKindLabel(summary.task_kind) })
     const statuses = { queued: '排队中', running: '运行中', paused: '待审核' } as const
     if (summary.accepted_from_status) rows.push({ label: '受理时状态', value: statuses[summary.accepted_from_status] ?? '未知状态' })
     if (summary.cancel_reason) rows.push({ label: '管理员取消原因', value: summary.cancel_reason })

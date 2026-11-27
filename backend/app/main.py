@@ -4,13 +4,14 @@ import re
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app import plugins
 from app.ai.images import MAX_COVER_BYTES
 from app.ai.images import TOO_LARGE as COVER_TOO_LARGE
 from app.ai.providers import ProviderFactory, create_provider
@@ -23,6 +24,7 @@ from app.core.errors import register_error_handlers
 from app.core.oauth_access_log import redact_oauth_callback
 from app.core.security import SecretCipher
 from app.core.upload_limit import MULTIPART_OVERHEAD, UploadLimitMiddleware
+from app.plugins.deps import PluginScope, require_plugin
 from app.services import (
     admin_dashboard_service,
     ai_usage_recording,
@@ -106,10 +108,12 @@ def create_app(
     provider_factory: ProviderFactory | None = None,
     *,
     start_task_engine: bool = True,
+    extra_plugins: tuple[plugins.PluginManifest, ...] = (),
 ) -> FastAPI:
     """start_task_engine：lifespan 中是否启停后台任务引擎（测试不触发 lifespan，由 fixture 显式 start/stop）。"""
     settings = settings if settings is not None else get_settings().model_copy(deep=True)
     logging.getLogger("uvicorn.access").addFilter(redact_oauth_callback)
+    registry = plugins.load(extra_plugins)
     engine = create_engine(settings.database_url)
 
     @asynccontextmanager
@@ -150,6 +154,7 @@ def create_app(
     app = FastAPI(title="AI 小说平台", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
+    app.state.feature_plugins = registry
     app.state.sessionmaker = create_sessionmaker(engine)
     # 预览版本只使用域分离的派生密钥；会话不保存 JWT 原密钥。
     app.state.sessionmaker.configure(info={
@@ -170,6 +175,7 @@ def create_app(
             settings=settings,
             cipher=app.state.cipher,
             factory=app.state.provider_factory,
+            feature_plugins=registry,
         )
     )
     app.state.backup_runtime = BackupRuntime(app.state.backups, worker=app.state.task_engine.request_worker)
@@ -270,7 +276,11 @@ def create_app(
     async def healthz() -> dict:
         return {"status": "ok"}
 
+    app.add_middleware(PluginScope, registry=registry)
     app.include_router(api_router)
+    for manifest in registry.all():
+        for router in manifest.routers:
+            app.include_router(router, prefix="/api/v1", dependencies=[Depends(require_plugin(manifest.id))])
     app.include_router(open_api_router)
     install_open_api_docs(app)
     _mount_frontend(app, settings.frontend_dist_dir)

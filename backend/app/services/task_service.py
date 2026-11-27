@@ -28,6 +28,7 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import ConflictError, NotFoundError
 from app.models import AgentChange, Chapter, Project, Task, TaskWorkRecord, User
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES, OPEN_TASK_STATUSES
+from app.plugins.state import require_kind_enabled
 from app.schemas.rich_document_review import ReviewIdentity
 from app.schemas.scene_ai import SceneTarget, parse_target
 from app.schemas.scene_restructure import RestructureTaskRequest
@@ -545,6 +546,7 @@ async def create_task(
             raise ConflictError("原认证身份无法验证", extra={"code": "task_actor_unavailable"})
     await authz.require_authenticated(db, actor, write=True)
     await require_task_admission_open(db)
+    await require_kind_enabled(db, kind)
     handler = get_handler(kind)
     preflight = accepted_model = None
     admission_aware = getattr(handler, "admission_preflight_aware", False) is True
@@ -756,6 +758,7 @@ async def resume_task(
     if _has_wizard_receipt(task):
         raise ConflictError("向导执行结果尚未核对，不能继续")
     await require_task_admission_open(db)
+    await require_kind_enabled(db, task.kind)
     from app.services.rich_document_review import pending_for_task
 
     if await pending_for_task(db, task) is not None:

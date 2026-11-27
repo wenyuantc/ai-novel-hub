@@ -142,3 +142,20 @@ describe('两步验证登录', () => {
     expect(useAuthStore.getState().user?.id).toBe(2)
   })
 })
+
+describe('功能插件开关', () => {
+  it('旧后端缺少清单按空数组处理；清理会话后忽略迟到配置', async () => {
+    const state = useAuthStore.getState()
+    state.applyConfig({ registration_enabled: true, enabled_plugins: ['sample'] })
+    expect(useAuthStore.getState().enabledPlugins).toEqual(['sample'])
+    state.applyConfig({ registration_enabled: true })
+    expect(useAuthStore.getState()).toMatchObject({ enabledPlugins: [], pluginConfigReady: true })
+    const delayed = deferred<Response>()
+    vi.stubGlobal('fetch', () => delayed.promise)
+    const pending = state.refreshConfig()
+    state.clear()
+    delayed.resolve(new Response('{"registration_enabled":true,"enabled_plugins":["sample"]}'))
+    await pending
+    expect(useAuthStore.getState()).toMatchObject({ enabledPlugins: [], pluginConfigReady: false })
+  })
+})

@@ -5,6 +5,7 @@ from app.api.v1 import (
     admin_audit,
     admin_backups,
     admin_dashboard,
+    admin_plugins,
     admin_quotas,
     admin_recycle_bin,
     admin_roles,
@@ -73,6 +74,7 @@ api_router.include_router(oauth.router)
 api_router.include_router(notifications.router)
 api_router.include_router(agent.router)
 api_router.include_router(admin.router)
+api_router.include_router(admin_plugins.router)
 api_router.include_router(admin_roles.router)
 api_router.include_router(admin_quotas.router)
 api_router.include_router(admin_audit.router)

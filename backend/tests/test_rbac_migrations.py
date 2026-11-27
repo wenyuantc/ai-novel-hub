@@ -11,7 +11,6 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.core.permissions import BUILTIN_ROLES
 from app.core.security import hash_password
 from app.main import create_app
 from tests.helpers import make_settings
@@ -48,13 +47,28 @@ def test_0029_preserves_users_sessions_and_business_foreign_keys(tmp_path):
             assert db.execute(text("SELECT count(*) FROM user_roles")).scalar_one() == 0
             assert db.execute(text("SELECT count(*) FROM user_quotas")).scalar_one() == 0
             roles = db.execute(text("SELECT system_key,name,permissions FROM roles")).all()
-            assert len(roles) == 4
-            for key, name, permissions in roles:
-                assert name == BUILTIN_ROLES[key][0]
-                # 历史0029冻结33项。备份权限由0030、AI用量权限由0061、发布检查词表权限由0076加入超管角色。
-                expected = {code for code in BUILTIN_ROLES[key][2]
-                            if not code.startswith(("backups.", "ai_usage.", "publication_terms."))}
-                assert set(json.loads(permissions)) == expected
+            expected_roles = {
+                "super_admin": ("超级管理员", [
+                    "dashboard.read", "users.read", "users.create", "users.status", "users.reset_password",
+                    "users.delete", "quotas.read", "quotas.update", "projects.read", "projects.edit",
+                    "projects.recycle", "recycle_bin.read", "recycle_bin.restore", "recycle_bin.purge",
+                    "tasks.read", "tasks.cancel",
+                    "audit.read", "audit.cleanup", "settings.read", "settings.update", "workshop.read",
+                    "workshop.approve", "workshop.reject", "workshop.publish", "workshop.update", "workshop.hide",
+                    "workshop.unhide", "workshop.delete", "global_skills.create", "global_skills.update",
+                    "global_skills.references", "global_skills.delete", "global_skills.restore_builtin",
+                ]),
+                "content_admin": ("内容管理员", [
+                    "projects.read", "projects.edit", "projects.recycle", "workshop.read", "workshop.approve",
+                    "workshop.reject", "workshop.publish", "workshop.update", "workshop.hide", "workshop.unhide",
+                    "workshop.delete", "recycle_bin.read", "recycle_bin.restore",
+                ]),
+                "reviewer": ("审核员", [
+                    "workshop.read", "workshop.approve", "workshop.reject", "workshop.hide", "workshop.unhide",
+                ]),
+                "user": ("普通用户", []),
+            }
+            assert {key: (name, json.loads(permissions)) for key, name, permissions in roles} == expected_roles
             assert db.execute(text("PRAGMA foreign_key_check")).all() == []
         for sql in (
             "INSERT INTO authorization_state(id,revision) VALUES(2,0)",

@@ -47,8 +47,8 @@ DB 新增四表，不重建 users/projects：
 
 ### 身份、目录与目标保护
 
-- **唯一超管事实为 `User.is_admin`**；`is_super_admin` 是其安全输出名。super_admin角色元数据由此投影；无显式成员的非超管投影普通用户。复制super只复制40项可委派动作，不复制身份、角色/授权管理权。
-- 四内置角色只读可复制：super_admin全部40项；content_admin为projects三项、workshop八项、recycle_bin.read/restore共13项；reviewer为workshop.read/approve/reject/hide/unhide五项；user无后台项。任意角色都保留本人个人能力。
+- **唯一超管事实为 `User.is_admin`**；`is_super_admin` 是其安全输出名。super_admin角色元数据由此投影；无显式成员的非超管投影普通用户。复制super只复制42项可委派动作，不复制身份、角色/授权管理权。
+- 四内置角色只读可复制：super_admin全部42项；content_admin为projects三项、workshop八项、recycle_bin.read/restore共13项；reviewer为workshop.read/approve/reject/hide/unhide五项；user无后台项。任意角色都保留本人个人能力。
 - 账号可多角色、取权限并集。权限目录唯一来源为 `PERMISSIONS`；变更动作的requires必须显式存在，后端不暗补。角色名trim后非空≤100、说明≤500，未知/重复项拒绝。
 - 只有超管管理角色/分配。非超管即使拥有全部可委派项，也不能更改任何管理账号的状态、管理员重置密码、删除或配额；管理账号指超管或有效权限非空，禁用后仍受保护。安全读取和本人自助改密不误禁。
 - `AdminUserCreate={username,password}`；PATCH仅 `is_active?`，旧HTTP `is_admin` 字段422，不能留无revision提权旁路。自身/最后启用超管保护继续执行。
@@ -128,7 +128,7 @@ UserQuotaOut包含 user_id/username/is_management_account/revision/authorization
 
 ## 6. 必需测试（断言点）
 
-- `test_rbac.py`、`test_rbac_permissions.py`：40动作直接HTTP正反、内置/自定义/多角色、超管复制、管理目标/旧字段/自身/在用/CAS、明确审计范围及owner隔离。
+- `test_rbac.py`、`test_rbac_permissions.py`：42动作直接HTTP正反、内置/自定义/多角色、超管复制、管理目标/旧字段/自身/在用/CAS、明确审计范围及owner隔离。
 - `test_rbac_concurrency.py`：Event控制双向撤权、User锁顺序、角色编辑/删除/分配竞争；四真实入口同时争最后作品名额最多1成功，失败无风格/Task半成品、token未消费/灵感及解析状态不变；claim提交/会话退出×owner cancel/stop、设置未知发布窗口、真实执行峰值/on_success未完。
 - `test_task_scheduling_constraints.py` 用两个执行者争不同候选的最后一个名额，验证同键队首、全站峰值以及降额后原执行继续。 `test_task_slot_lifecycle.py` 验证提交回执或归还回执丢失、原轮次延迟归还和终态收尾。
 - `test_user_quotas.py`：继承/0/正整数/不限、全部生命周期、超管不豁免、四入口原子拒绝、任务排队/全局硬顶/调低不强杀。
@@ -168,3 +168,7 @@ if (useAuthStore.getState().status === 'anonymous') navigate('/login')
 0061 将目录升级到38项，新增 `ai_usage.read`。迁移只更新内置 `super_admin` 的动作目录并推进授权代次。自定义角色可按需授予此只读动作，现有内容管理员与审核员的授权集合维持原有目录。用量页面与 API 按该独立动作取授权。[AI 用量与费用](./ai-usage.md)
 
 0076 新增全站发布词表的 `publication_terms.read`、`publication_terms.update`。读取和更新分别校验对应权限。个人词表接口始终使用登录账号，检查作品时由服务端解析作品作者。
+
+## 0080 功能插件权限升级
+
+新增 `plugins.read` 和 `plugins.update` 后，目录共 42 项。修改开关属于危险操作，分配修改权限时需显式勾选查看权限。迁移同步已有超级管理员角色目录，其他角色的授权保持原范围。[功能插件](./feature-plugins.md)

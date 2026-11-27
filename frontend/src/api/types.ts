@@ -14,6 +14,8 @@ export interface User {
 
 export interface AuthConfig {
   registration_enabled: boolean
+  /** 已启用的内置功能插件标识。旧后端缺失时视为空。 */
+  enabled_plugins?: string[]
   /** 部署是否开启 MCP 插件（关闭时隐藏入口）；旧后端没有该字段时按开启处理 */
   mcp_enabled?: boolean
 }
@@ -168,6 +170,7 @@ export type AuditAction =
   | 'role.create' | 'role.update' | 'role.delete' | 'user.roles.update' | 'user.roles.bootstrap' | 'user.quotas.update'
   | 'task.cancel_request'
   | 'publication_terms.update'
+  | 'feature_plugin.enable' | 'feature_plugin.disable'
   | 'system_settings.update'
   | 'backup.settings.update' | 'backup.run.accept' | 'backup.download.authorize'
   | 'user.create' | 'user.update' | 'user.reset_password' | 'user.delete'
@@ -178,7 +181,7 @@ export type AuditAction =
   | 'workshop.reject' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'
   | 'skill.create' | 'skill.import' | 'skill.update' | 'skill.references.replace' | 'skill.delete'
   | 'skill.restore_builtin' | 'audit.cleanup'
-export type AuditTargetType = 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'publication_terms' | 'role' | 'backup_settings' | 'backup_run'
+export type AuditTargetType = 'feature_plugin' | 'user' | 'project' | 'chapter' | 'chapter_version' | 'workshop_item' | 'workshop_submission' | 'skill' | 'audit' | 'task' | 'system_settings' | 'publication_terms' | 'role' | 'backup_settings' | 'backup_run'
 export type AuditResult = 'success' | 'failure'
 export type AuditErrorCode = 'bad_request' | 'forbidden' | 'not_found' | 'conflict' | 'system_error' | 'invalid_preview' | 'preview_actor_mismatch' | 'preview_replayed'
 export type AuditField =
@@ -1132,7 +1135,7 @@ export interface RewriteApply {
 
 // ---------------- 后台任务（backend/app/schemas/task.py） ----------------
 
-export type TaskKind =
+export type CoreTaskKind =
   | 'chapter.generate'
   | 'chapter.polish'
   | 'wizard.outline'
@@ -1155,6 +1158,9 @@ export type TaskKind =
   | 'agent.turn'
   | 'consistency.check'
   | 'consistency.impact'
+
+/** 插件任务使用 <插件标识>.<任务名>。核心目录仍须穷尽所有内置类型。 */
+export type TaskKind = CoreTaskKind | `${string}.${string}`
 
 /** paused = 待审核（多步任务到达审核点）：不占并发名额，可继续 / 结束 / 取消，不能删除 / 重试 */
 export type TaskStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
@@ -3777,6 +3783,7 @@ export type PermissionCode =
   | 'recycle_bin.read' | 'recycle_bin.restore' | 'recycle_bin.purge'
   | 'tasks.read' | 'tasks.cancel' | 'audit.read' | 'audit.cleanup'
   | 'publication_terms.read' | 'publication_terms.update'
+  | 'plugins.read' | 'plugins.update'
   | 'settings.read' | 'settings.update'
   | 'backups.read' | 'backups.configure' | 'backups.run' | 'backups.download'
   | 'workshop.read' | 'workshop.approve' | 'workshop.reject' | 'workshop.publish' | 'workshop.update' | 'workshop.hide' | 'workshop.unhide' | 'workshop.delete'

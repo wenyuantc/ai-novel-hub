@@ -56,6 +56,7 @@ from app.models.entities import (
     WorldSetting,
     WritingStyle,
 )
+from app.models.feature_plugins import FeaturePluginState
 from app.models.inspiration_generation import InspirationGenerationClaim
 from app.models.inspiration_origin import InspirationOrigin
 from app.models.notes import ProjectNote
@@ -240,6 +241,7 @@ __all__ = [
     "Skill",
     "SkillReference",
     "StoryMemory",
+    "FeaturePluginState",
     "SystemSettings",
     "Task",
     "TaskExecutionSlot",

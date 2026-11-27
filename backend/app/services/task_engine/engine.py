@@ -37,6 +37,8 @@ import app.services.task_engine.handlers  # noqa: F401  导入即注册内置任
 from app.core.errors import AppError, ConflictError
 from app.models import Chapter, Project, ProjectCollaborator, Task, TaskExecutionSlot, User
 from app.models.entities import ACTIVE_TASK_STATUSES, FINISHED_TASK_STATUSES
+from app.plugins import state as plugin_state
+from app.plugins.registry import EMPTY, use_registry
 from app.services import (
     analysis_service,
     chapter_claim,
@@ -281,6 +283,7 @@ class TaskEngine:
 
     def __init__(self, ctx: TaskContext):
         self.ctx = ctx
+        self.feature_plugins = ctx.feature_plugins or EMPTY
         self.peer_wakes = PeerWakes(self)
         self.ctx.task_engine = self
         self.hubs: dict[int, TaskHub] = {}
@@ -345,6 +348,10 @@ class TaskEngine:
         return self._loop_task is not None
 
     async def start(self) -> None:
+        with use_registry(self.feature_plugins):
+            await self._start()
+
+    async def _start(self) -> None:
         async with self._lifecycle_lock:
             if self._loop_task is not None:
                 return
@@ -1648,6 +1655,12 @@ class TaskEngine:
                 queued_task = await db.scalar(queued_select)
                 if queued_task is None or not await workers.lock_live_worker(db, worker_key):
                     return
+                owner = self.feature_plugins.plugin_of_kind(queued_task.kind)
+                if owner and not await plugin_state.is_enabled(db, owner):
+                    operation = plugin_state.mark_for_cancellation(queued_task, datetime.now(UTC))
+                    await db.commit()
+                    self.request_admin_cancel(statistics_key, operation)
+                    return
                 queued_had_text = bool(queued_task.output_text)
                 queued_claim = None
                 chapter_queued_claim = None
@@ -2056,6 +2069,17 @@ class TaskEngine:
             else:
                 hub.publish(event, data)
 
+        plugin_task = self.feature_plugins.plugin_of_kind(task.kind) is not None
+
+        async def check_plugin_cancellation(db: AsyncSession) -> None:
+            # 停用后立即重开仍须停止原轮次；持久取消意图比当前插件开关更精确。
+            operation = await db.scalar(select(Task.admin_cancel_operation_id).where(
+                Task.id == task.id, Task.statistics_key == task.statistics_key, Task.queued_at == task.queued_at,
+                Task.execution_key == task.execution_key, Task.worker_key == task.worker_key, Task.status == "running",
+            ))
+            if operation is not None:
+                raise asyncio.CancelledError
+
         async def checked(event: str, data: dict[str, Any]) -> None:
             await timer.settle()
             if getattr(handler, "execution_identity_aware", False) is True:
@@ -2065,6 +2089,9 @@ class TaskEngine:
                     if verify is None or execution is None or current is None:
                         raise VisibilityPolicyError("任务输出身份无法验证")
                     async with self.ctx.sessionmaker() as db:
+                        if plugin_task:
+                            await authz.gate(db)
+                            await check_plugin_cancellation(db)
                         row = await self._event_task(db, execution, current, event)
                         transaction = await self._callback_transaction(db)
                         await verify(db, row, job=job, execution=execution, current_execution=current,
@@ -2098,6 +2125,8 @@ class TaskEngine:
                     if (execution is None or execution.worker_key != task.worker_key
                             or not await self._owns_task_round(db, task, status="running")):
                         raise VisibilityPolicyError("任务执行身份已变化")
+                    if plugin_task:
+                        await check_plugin_cancellation(db)
                     publish(event, data)
 
         timer = OutputFlushTimer()

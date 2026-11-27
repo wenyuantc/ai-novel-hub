@@ -32,6 +32,8 @@ PERMISSIONS = (
     Permission("tasks.cancel", "受理全站任务取消", "任务", True, ("tasks.read",)),
     Permission("audit.read", "查看操作日志摘要", "日志"),
     Permission("audit.cleanup", "清理操作日志", "日志", True, ("audit.read",)),
+    Permission("plugins.read", "查看功能插件", "功能插件"),
+    Permission("plugins.update", "启用/停用功能插件", "功能插件", True, ("plugins.read",)),
     Permission("settings.read", "查看系统运行设置", "系统设置"),
     Permission("settings.update", "修改系统运行设置", "系统设置", True, ("settings.read",)),
     Permission("publication_terms.read", "查看全站发布检查词表", "发布检查"),

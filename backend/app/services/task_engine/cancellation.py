@@ -511,7 +511,8 @@ class AdminCancellationDrain:
                         return
                 released_review = ((task.checkpoint or {}).get("rich_review") or {}).get("phase") == "awaiting_review"
                 if (task.status == "paused" and not released_review
-                        and task.kind not in ("chapter.batch", "book.import", "agent.turn")):
+                        and task.kind not in ("chapter.batch", "book.import", "agent.turn")
+                        and engine.feature_plugins.plugin_of_kind(task.kind) is None):
                     logger.error("未知暂停任务禁止资源回滚 task_key=%s operation=%s", task_key, operation_id)
                     return
                 # 未知kind不能猜测如何安全释放资源，保留pending供后续修复。

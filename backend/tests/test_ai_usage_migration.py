@@ -8,7 +8,6 @@ from alembic import command
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.core.permissions import PERMISSION_CODES
 from app.models import Base
 from tests.test_consistency_migration import _engine
 from tests.test_setting_fields_migration import _config, _schema_contract
@@ -80,7 +79,8 @@ def test_0061_preserves_legacy_usage_and_migrates_super_admin(tmp_path):
                 "VALUES(1,1,1,'generate','openai','legacy','{}','[]','succeeded','',0,0,199,:log_key)"
             ), {"log_key": str(uuid4())})
         command.upgrade(config, "0061")
-        expected_super = [code for code in PERMISSION_CODES if not code.startswith("publication_terms.")]
+        expected_super = old_super.copy()
+        expected_super.insert(expected_super.index("dashboard.read") + 1, "ai_usage.read")
 
         Base.metadata.create_all(reference)
         for table in TABLES:

@@ -22,6 +22,12 @@ def _snapshot_revision(path: Path) -> str:
         versions = db.execute("SELECT version_num FROM alembic_version").fetchall()
         if len(versions) != 1 or not isinstance(revision := versions[0][0], str) or not revision.isdecimal():
             raise ValueError("无法识别快照的迁移版本")
+        if ("feature_plugin_states" in tables) != (int(revision) >= 80):
+            raise ValueError("快照的插件状态表与迁移版本不一致")
+        if "feature_plugin_states" in tables:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(feature_plugin_states)")}
+            if not {"plugin_id", "enabled", "revision", "updated_at", "last_operation_id"} <= columns:
+                raise ValueError("快照的插件状态表不完整")
         has_lease = {"task_workers", "task_lease_store"} & tables
         if (int(revision) >= 66 and len(has_lease) != 2) or (int(revision) < 66 and has_lease):
             raise ValueError("快照的租约表与迁移版本不一致")

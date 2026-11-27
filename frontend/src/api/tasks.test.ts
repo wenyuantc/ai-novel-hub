@@ -586,6 +586,7 @@ describe('task helpers', () => {
   it('taskLink：章节任务到编辑器，向导任务到向导页对应步骤', () => {
     expect(taskLink(task())).toBe('/projects/2/chapters')
     expect(taskLink(task({ chapter_id: null }))).toBeNull()
+    expect(taskLink(task({ kind: 'sample.run' }))).toBeNull()
     expect(taskLink(task({ kind: 'wizard.characters', chapter_id: null }))).toBe('/projects/2/wizard?kind=characters')
     expect(taskLink(task({ project_id: null }))).toBeNull()
   })

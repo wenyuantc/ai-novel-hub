@@ -386,7 +386,7 @@ response.set_cookie(
 - 认证解析（`deps._extract_token`）：优先读取 cookie，其次读取 `Authorization: Bearer <token>`。
   任何解码失败 → `None` → 401 `未登录或登录已过期`。
 - JWT payload 为 `{"sub": str(user_id), "iat", "exp"}`，HS256。
-- `GET /auth/config` → `{"registration_enabled": bool, "mcp_enabled": bool}`（`mcp_enabled` 见 [auth-admin.md](./auth-admin.md)）；注册关闭时注册 → 403 `注册已关闭，请联系管理员`。
+- `GET /auth/config` → `{"registration_enabled": bool, "mcp_enabled": bool, "enabled_plugins": list[str]}`（`mcp_enabled` 见 [auth-admin.md](./auth-admin.md)）；注册关闭时注册 → 403 `注册已关闭，请联系管理员`。
 - 以下 API key 加密与掩码规则针对 **AI 模型供应商配置**。平台签发的访问 Key 另有“加密密文 + 摘要索引、本人主动再次显示”的 [独立契约](./open-api.md)。供应商 API key 仅以 `api_key_enc = cipher.encrypt(api_key.strip())` 的形式存储；响应中携带
   由 `mask_secret` 生成的 `api_key_masked`：
 
