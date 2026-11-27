@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 76
+- **Total Sessions**: 77
 - **Last Active**: 2026-11-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~402 | Active |
+| `journal-2.md` | ~424 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 77 | 2026-11-27 | 第 34 项旧任务与未决提案双库验证归档 | `0842721` | `main` |
 | 76 | 2026-11-27 | 修复智能体会话详情并发读取 404 | `4213398` | `codex/agent-conversation-transient-404` |
 | 75 | 2026-11-27 | 账号安全页重新登录与恢复码复制收尾 | `eb8b810` | `main` |
 | 74 | 2026-11-26 | TODO 32 第三方登录、两步验证与本机 MCP | `e3666ff`, `29d0ae1`, `009a2af` | `main` |

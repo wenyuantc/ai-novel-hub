@@ -400,3 +400,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 77: 第 34 项旧任务与未决提案双库验证归档
+<!-- trellis-session: v=2 fp=159c9e214192ba55 -->
+
+**Date**: 2026-11-27
+**Task**: 第 34 项旧任务与未决提案双库验证归档
+**Branch**: `main`
+
+### Summary
+
+归档真实 0043 快照在 SQLite、PostgreSQL 的章节复位、提案完整性与回滚验证，核验八份日志及归档后的复跑入口。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0842721` | docs(task): 记录第 34 项旧任务与未决提案双库验证 |
+
+### Status
+
+[OK] **Completed**
