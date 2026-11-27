@@ -422,3 +422,29 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 78: 内置功能插件框架与管理员启停
+<!-- trellis-session: v=2 fp=87dad01f6e01725b -->
+
+**Date**: 2026-11-27
+**Task**: 内置功能插件框架与管理员启停
+**Branch**: `codex/plugin-framework`
+
+### Summary
+
+完成插件登记、管理员启停、跨实例门禁和后台任务取消，归档本子任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a27607d` | feat: 增加内置功能插件框架与管理员启停 |
+
+### Testing
+
+- [OK] 后端全量 7730 项通过，138 项跳过、19 项预期失败；前端 1977 项通过。PostgreSQL 16、浏览器双会话及移动端验收通过。
+
+### Status
+
+[OK] **Completed**
