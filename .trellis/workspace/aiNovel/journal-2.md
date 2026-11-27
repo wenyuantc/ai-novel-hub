@@ -356,3 +356,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 75: 账号安全页重新登录与恢复码复制收尾
+<!-- trellis-session: v=2 fp=acc05c04e387d138 -->
+
+**Date**: 2026-11-27
+**Task**: 账号安全页重新登录与恢复码复制收尾
+**Branch**: `main`
+
+### Summary
+
+已验证旧会话重新登录后继续绑定，以及逐行复制恢复码。前端全量 1966 项通过，后端 7688 项通过、111 项条件跳过、19 项预期失败。登录实现已归档，TODO #32 父任务继续跟踪 Linux DO 和 GitHub 真实授权回调。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eb8b810` | fix(auth): 引导重新登录绑定验证器并支持复制恢复码 |
+
+### Status
+
+[OK] **Completed**
