@@ -33,7 +33,7 @@ from app.services import analysis_service
 from app.services.task_engine import engine as engine_module
 from app.services.task_engine.handlers.chapter import ChapterHandler
 from app.services.task_engine.registry import get_handler
-from tests.helpers import Gate, analysis_json, create_ai_config
+from tests.helpers import Gate, analysis_json, create_ai_config, wait_until
 from tests.test_collaboration_chapter_entry_e4f import (
     EDITOR_KEY,
     OWNER_KEY,
@@ -656,6 +656,8 @@ async def test_change_between_writeback_commit_and_done_completes_from_receipt(
         # 收尾不派生记忆索引等后续任务。
         assert await db.scalar(select(func.count(Task.id)).where(Task.kind == "kb.index")) == 0
     engine = app.state.task_engine
+    # 数据库终态先提交，执行协程随后才释放 hub。
+    await wait_until(lambda: row.id not in engine._running, within=10)
     assert not engine.has_cleanup_failure(world.project["id"]) and row.id not in engine.hubs
     assert len(fake_llm.calls) == 1
     # 串行键已释放：仍有权的用户可立即再次分析并成功（作者改密后其旧会话已失效，改由编辑者发起）。
