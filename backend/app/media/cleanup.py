@@ -41,7 +41,9 @@ async def mark_project_deleted(db: AsyncSession, project_id: int) -> list[str]:
 def _eligible(now):
     orphan = or_(MediaObject.owner_user_id.is_(None),
                  and_(MediaObject.scope == "project", MediaObject.project_id.is_(None)))
-    return or_(and_(MediaObject.status == "pending", MediaObject.created_at < now - timedelta(hours=24)),
+    expired_probe = and_(MediaObject.scope == "user", MediaObject.source.in_(("video_probe", "video_probe_reference")),
+                         MediaObject.created_at <= now - timedelta(hours=24))
+    return or_(expired_probe, and_(MediaObject.status == "pending", MediaObject.created_at < now - timedelta(hours=24)),
                and_(MediaObject.status != "pending", or_(MediaObject.status == "deleting", orphan)))
 
 

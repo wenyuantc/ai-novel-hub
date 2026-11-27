@@ -17,11 +17,12 @@
 
 ```
 backend/app/ai/providers/
-  base.py            # 扩展：ImageOptions、参考图能力；新增 VideoProvider 协议
+  base.py            # ImageInput、ImageOptions 与参考图能力
   openai_compat.py   # 生图支持尺寸与参考图
   gemini.py          # 生图支持画幅与参考图
   video/
     __init__.py      # 视频适配器注册表
+    base.py          # VideoProvider、VideoRequest、VideoPoll 及受控 HTTP
     volcengine.py    # 火山引擎 Seedance
     openai_video.py  # OpenAI 兼容视频接口
     minimax.py
@@ -51,7 +52,7 @@ async def generate_image(self, prompt: str, model: str, *, options: ImageOptions
 
 - `options=None` 时行为与现在完全一致（封面、设定缩略图三处调用方不改，`backend/app/ai/providers/base.py:68`）。
 - OpenAI 兼容：无参考图走 `images.generate`，按画幅映射到该模型支持的尺寸；有参考图走 `images.edit` 的多图上传。
-  现有「尺寸被拒则去掉尺寸重试一次」的兜底保留（`openai_compat.py:173`）。
+  仅调用方未显式指定画幅时保留旧的「尺寸被拒则去掉尺寸重试一次」兜底（`openai_compat.py:173`）。
 - Gemini：Imagen 模型传 `aspect_ratio`，不支持参考图；原生图片模型把参考图作为 `inline_data` 放进 `contents`（`gemini.py:247`）。
 - 模型不支持参考图却传入时，抛 `AIProviderError("该模型不支持参考图…")`，不静默丢弃（G1）。
 - 外层三处封装（`ai_dispatch.py:715`、`ai_usage_recording.py:255`、`collaboration_ai_guard.py:202`）同步增加 `options` 透传。
@@ -97,19 +98,19 @@ class VideoProvider(Protocol):
     async def cancel(self, external_id: str) -> None                     # 不支持时为空操作
 ```
 
-四家的请求形态以参考项目为蓝本重新实现（调研 A.2 的表与输入形态）：
+四家的公开接口已按厂商文档核实。详细型号和限制见[厂商协议记录](research/providers.md)。
 
 | 厂商 | 提交 | 查询 | 参考图上限 | 时长 |
 | --- | --- | --- | --- | --- |
-| 火山引擎 Seedance | `POST /api/v3/contents/generations/tasks` | `GET .../tasks/{id}` | 9 | 4–15 秒 |
+| 火山引擎 Seedance | `POST /api/v3/contents/generations/tasks` | `GET .../tasks/{id}` | 2.0 为 9；2.5 按型号限制，核心单次最多 16 张 | 2.0 为 4–15 秒，2.5 最长 30 秒 |
 | OpenAI 兼容 | multipart `POST /v1/videos` | `GET /v1/videos/{id}`，结果经 `/content` 带鉴权下载 | 1（首帧） | 由模型决定 |
 | MiniMax | `POST /v2/video_generation` | `GET /v2/query/video_generation/{id}` | 以厂商为准 | 4–15 秒 |
 | 阿里云百炼 Wan | `POST .../video-synthesis`（异步头） | `GET /api/v1/tasks/{id}` | 10 | 2–30 秒 |
 
+- OpenAI 官方 Videos API 已于 2026-09-24 关闭。此协议用于仍提供相应路由的兼容服务，验收须配置对应服务的地址和密钥。[官方停用记录](https://developers.openai.com/api/docs/deprecations)
 - 具体字段与上限在实现各适配器时对照厂商当前文档核实，不以参考项目代码为准；差异记入规范。
 - 请求超出该模型能力（参考图过多、时长越界）时在提交前拒绝并说明，不交给厂商报错。
-- 参考图默认内联；厂商要求地址或图片过大时用媒体存储签发的外部地址（子任务 2 的 `signing.external_url`），
-  拿不到地址时给出明确错误（G6）。
+- 参考图通过归一化图片字节发送（内联或 multipart），超过媒体图片大小上限时拒绝。参考视频、音频使用 `signing.external_url` 签发的外链，无法签发时给出明确错误（G6）。
 - 网络防护：适配器的 HTTP 客户端经现有的受控钩子创建（`backend/app/ai/providers/dispatch_hooks.py`），
   用户自填的接口地址沿用内网地址防护（G8）。结果下载地址由厂商返回、可能是第三方域名：下载前单独做一次公网地址校验，
   禁止重定向到内网，限制最大体积（默认 1 GiB）。
@@ -126,7 +127,7 @@ class VideoProvider(Protocol):
 | `kind` | `video`（图片仍是同步调用，不进台账） |
 | `request` | JSON：提示词、时长、画幅、分辨率、参考图的媒体对象 id 列表（不存图片字节） |
 | `external_id` | 厂商任务号；为空表示尚未提交 |
-| `state` | `created` → `submitted` → `succeeded` / `failed` / `cancelled` / `expired` |
+| `state` | `created` → `submitting` → `submitted` → `succeeded` / `failed` / `cancelled` / `expired` |
 | `progress` | 0–100，可空 |
 | `result_object_id` | 结果的媒体对象 id |
 | `error_code`、`error_message` | 失败原因，文案面向用户 |
@@ -137,16 +138,15 @@ class VideoProvider(Protocol):
 ### 5.2 驱动器
 
 ```python
-async def drive(ctx: TaskContext, job_ids: Sequence[str], *, emit, parallel: int = 3, target) -> None
+async def drive(ctx: TaskContext, job_ids: Sequence[str], *, execution, emit, parallel: int = 3) -> list[str]
 ```
 
 对每个台账行按状态推进，幂等：
 
-1. `created`：构建请求 → `submit` → **在独立短事务里写入 `external_id`、`state=submitted`、`deadline_at` 并提交** → 进入轮询。
-   提交请求本身不重试（重复提交会产生重复任务与重复费用，调研 A.2）。提交已发出但写库前进程崩溃的窗口无法完全消除：
-   该行停在 `created`，重跑时会再次提交；把这个窗口压到最小，并在规范里写明。
+1. `created`：构建请求 → 持久化 `submitting` → `submit` → **在独立短事务里写入 `external_id`、`state=submitted`、`deadline_at` 并提交** → 进入轮询。
+   发请求前先持久化 `submitting`。如果进程在收到并保存厂商任务号之前退出，恢复时将此单标为提交结果未知，提示核查厂商记录。只有保存了任务号才自动续等，以免重复付费。
 2. `submitted`：每 10 秒 `poll`（带抖动，连续失败退避到 30 秒）；单次查询失败不算任务失败；超过 `deadline_at` 置 `expired`。
-3. 厂商成功：流式 `download` → 存入媒体存储（归属与作用域由 `target` 给出）→ 同一事务内置 `succeeded`、写 `result_object_id`、记用量。
+3. 厂商成功：流式 `download` → 存入媒体存储（归属与作用域由受理时保存的作品和发起人确定）→ 同一事务内置 `succeeded`、写 `result_object_id`、记用量。
 4. 厂商失败：置 `failed`，把厂商原因翻译为可读文案（内容审核、额度不足、参数不合法、其他）。
 5. 取消：对 `submitted` 行尽力调用 `cancel`，置 `cancelled`，不下载结果。
 
@@ -157,14 +157,16 @@ async def drive(ctx: TaskContext, job_ids: Sequence[str], *, emit, parallel: int
 一个后台任务可以驱动多个台账行（短剧的批量生视频即如此），只占一个并发名额，避免为每条视频各占一个名额导致排队
 （现有名额默认全局 4、每用户 2，按流式文本设计，调研 B.9）。
 
-重启恢复：引擎现在的语义是把租约过期的运行中任务标为「已中断」，由用户手动重试（调研 B.9）。本设计分两层：
+重启恢复由处理器显式声明 `resume_after_interrupt = True`。正常关停时引擎停止本地等待并保留
+运行行。进程崩溃时该行也保留。新执行者须先走现有租约围栏并接管任务，确认旧执行者已经停止
+或失联。重新排队使用一次条件更新，核对任务 UUID、原入队时间、执行键、接管者和两类取消意图，
+并在同一事务校验接管者租约、登记统计状态。保留任务输入、断点及外部台账引用，普通调度重新校验
+权限、插件开关和并发名额，使用新执行键领取原任务。恢复请求与取消相遇时，已受理的取消优先走
+原有清理流程。其余处理器继续使用各自的中断与收据恢复规则。
 
-- **保底（不改引擎）**：任务被标为已中断后，用户点重试，处理器的 `validate_retry` 沿用原来的台账行，驱动器从 `submitted` 续等，不重复提交。
-- **目标（改引擎）**：处理器声明 `resume_after_interrupt = True` 时，引擎在接管租约过期任务时把它重新排队而不是标为中断，
-  实现自动续等。这是对引擎恢复路径的改动，风险高；实施时先读代码评估，若不能安全实现，则只交付保底方案，
-  并把验收里「重启后任务继续」改为「重启后一键继续且不重复提交」，改动前先征得用户同意。
-
-取消：处理器的 `on_abort` 调用驱动器的取消逻辑，对所有未结束的台账行尽力通知厂商。
+视频探针声明 `abort_status_aware = True`。引擎把当前执行体的停止原因传给 `on_abort`，
+使探针仅在取消时通知厂商。排队、管理员和接管后的独立清理入口依据持久取消意图判断。
+处理器的 `stage` 事件可携带 0 至 99 的整数 `progress`，100 由成功收尾统一写入。
 
 ## 6. 用量与费用（G7）
 
@@ -183,7 +185,7 @@ async def drive(ctx: TaskContext, job_ids: Sequence[str], *, emit, parallel: int
 ## 8. 兼容
 
 - 现有文本、图片、向量调用路径与测试不变；`generate_image` 的新参数是仅关键字且可省略。
-- 迁移只新增一张表与两个可空列，可降级。
+- 迁移 0082 增加视频任务表、视频用量及定价快照列，并扩展模型类别、提供方与媒体类别约束。降级前检查旧版本能否表示已有数据。
 - `TASK_KINDS` 增加 `ai.video_probe`。
 
 ## 9. 权衡记录

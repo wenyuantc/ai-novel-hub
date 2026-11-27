@@ -64,7 +64,7 @@ class MediaStorageSettings(Base):
 class MediaObject(Base):
     __tablename__ = "media_objects"
     __table_args__ = (
-        CheckConstraint("kind IN ('image','video')", name="kind_valid"),
+        CheckConstraint("kind IN ('image','video','audio')", name="kind_valid"),
         CheckConstraint("scope IN ('user','project')", name="scope_valid"),
         CheckConstraint("status IN ('pending','ready','deleting')", name="status_valid"),
         CheckConstraint("size_bytes >= 0", name="nonnegative_size"),

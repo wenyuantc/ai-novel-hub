@@ -17,6 +17,10 @@ from app.ai.providers.base import AIProviderError
 PRIVATE_BLOCKED_HINT = "如需接入本地或内网模型（如 Ollama），请在部署配置中设置 ALLOW_PRIVATE_AI_ENDPOINTS=true"
 
 
+class AIEndpointError(AIProviderError):
+    """可含自定义端点地址，仅允许配置所有者查看原始文案。"""
+
+
 def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
@@ -35,22 +39,22 @@ async def ensure_endpoint_allowed(base_url: str | None) -> None:
         return
     parts = urlsplit(base_url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise AIProviderError("Base URL 格式不正确，应以 http:// 或 https:// 开头")
+        raise AIEndpointError("Base URL 格式不正确，应以 http:// 或 https:// 开头")
     host = parts.hostname
     try:
         port = parts.port or (443 if parts.scheme == "https" else 80)
     except ValueError as exc:
-        raise AIProviderError("Base URL 端口不正确") from exc
+        raise AIEndpointError("Base URL 端口不正确") from exc
 
     try:
         addresses = [host] if _is_ip_literal(host) else await _resolve(host, port)
     except OSError as exc:
-        raise AIProviderError(f"无法解析 Base URL 的域名：{host}") from exc
+        raise AIEndpointError(f"无法解析 Base URL 的域名：{host}") from exc
 
     for addr in addresses:
         # 去掉 IPv6 zone id（如 fe80::1%eth0）
         if is_blocked_ip(ipaddress.ip_address(addr.split("%", 1)[0])):
-            raise AIProviderError(f"Base URL 指向本地或内网地址（{host}），当前部署禁止访问。{PRIVATE_BLOCKED_HINT}")
+            raise AIEndpointError(f"Base URL 指向本地或内网地址（{host}），当前部署禁止访问。{PRIVATE_BLOCKED_HINT}")
 
 
 def _is_ip_literal(host: str) -> bool:

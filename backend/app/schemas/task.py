@@ -25,6 +25,7 @@ CoreTaskKind = Literal[
     "outline.expand",
     "chapter.batch",
     "kb.index",
+    "ai.video_probe",
     "book.import",
     "consistency.check",
     "consistency.impact",
@@ -57,6 +58,7 @@ class TaskOut(BaseModel):
     scene_id: int | None = None
     progress: int
     stage: str
+    video_object_id: str | None = None
     error: str
     retry_of_id: int | None
     # 任务针对的角色（取自 input.request.character_id，目前只有 relations.parse 有值），前端据此按角色接上活动任务

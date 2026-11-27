@@ -27,6 +27,7 @@ import {
   MODEL_TYPE_LABELS,
   modelTypesFor,
   PROVIDER_LABELS,
+  providersFor,
   THINKING_LABELS,
 } from '../api/aiConfigs'
 import { errorMessage } from '../api/client'
@@ -40,6 +41,7 @@ import type {
   ThinkingLevel,
 } from '../api/types'
 import { useAIConfigStore } from '../stores/aiConfigs'
+import VideoProbeModal from '../components/media/VideoProbeModal'
 import UsagePriceModal from '../components/aiUsage/UsagePriceModal'
 import { useAiUsageSession } from '../components/aiUsage/useAiUsageRequest'
 import { formatTime } from '../utils/time'
@@ -70,7 +72,7 @@ function paramTags(c: AIConfig): string[] {
   return [`思考 ${THINKING_LABELS[c.thinking_level]}`, `上下文 ${k(c.context_window_k)}`, `输出 ${k(c.max_output_k)}`]
 }
 
-const MODEL_HINTS: Record<ModelType, Record<ProviderName, string>> = {
+const MODEL_HINTS: Record<ModelType, Partial<Record<ProviderName, string>>> = {
   text: {
     openai_compat: '例如：gpt-4o-mini、deepseek-chat、qwen2.5:14b',
     anthropic: '例如：claude-sonnet-4-5',
@@ -81,6 +83,12 @@ const MODEL_HINTS: Record<ModelType, Record<ProviderName, string>> = {
     anthropic: '填写接口提供的图片模型名',
     gemini: '例如：imagen-4.0-generate-001',
   },
+  video: {
+    volcengine: '填写 Seedance 模型或推理接入点 ID',
+    openai_compat: '填写兼容服务提供的视频模型名',
+    minimax: '例如：MiniMax-H3',
+    aliyun_wan: '例如：wan3.0-video',
+  },
   embedding: {
     openai_compat: '例如：text-embedding-3-small、bge-m3、nomic-embed-text',
     anthropic: 'Anthropic 不提供向量模型',
@@ -88,7 +96,7 @@ const MODEL_HINTS: Record<ModelType, Record<ProviderName, string>> = {
   },
 }
 
-const MODEL_TYPE_COLORS: Record<ModelType, string> = { text: 'green', image: 'purple', embedding: 'cyan' }
+const MODEL_TYPE_COLORS: Record<ModelType, string> = { text: 'green', image: 'purple', embedding: 'cyan', video: 'blue' }
 
 export default function AIConfigPage() {
   const { message } = App.useApp()
@@ -100,6 +108,10 @@ export default function AIConfigPage() {
   const [priceTarget, setPriceTarget] = useState<{ identity: string; config: AIConfig } | null>(null)
   const priceConfig = priceTarget?.identity === usageSession?.key && priceTarget
     ? configs.find((item) => item.id === priceTarget.config.id && item.updated_at === priceTarget.config.updated_at)
+    : undefined
+  const [probeTarget, setProbeTarget] = useState<{ sessionKey: string; config: AIConfig } | null>(null)
+  const probeConfig = probeTarget && probeTarget.sessionKey === usageSession?.key
+    ? configs.find((item) => item.id === probeTarget.config.id && item.updated_at === probeTarget.config.updated_at)
     : undefined
   const [testing, setTesting] = useState<number | null>(null)
   const [testResults, setTestResults] = useState<Record<number, AIConfigTestResult>>({})
@@ -245,8 +257,7 @@ export default function AIConfigPage() {
         }
       >
         <Typography.Paragraph type="secondary">
-          支持 OpenAI 兼容接口（含各类中转、DeepSeek、本地 Ollama 等）、Anthropic Claude 与 Google Gemini。API Key
-          在服务端加密存储，此处仅显示掩码。文本模型、图片模型与向量模型各自可设一个「默认」，生成时未指定配置则使用对应类型的默认配置。向量模型{EMBEDDING_HELP}（Anthropic 不提供）。
+          文本、图片、向量和视频模型可分别设置默认配置。API Key 在服务端加密存储，此处仅显示掩码。向量模型{EMBEDDING_HELP}。
         </Typography.Paragraph>
         <Table<AIConfig>
           rowKey="id"
@@ -330,6 +341,8 @@ export default function AIConfigPage() {
               key: 'test',
               width: 160,
               render: (_, r) => {
+                if (r.model_type === 'video') return <Button type="link" size="small" disabled={!usageSession}
+                  onClick={() => usageSession && setProbeTarget({ sessionKey: usageSession.key, config: r })}>测试生成</Button>
                 const t = testResults[r.id]
                 if (!t) return <Typography.Text type="secondary">未测试</Typography.Text>
                 return (
@@ -359,9 +372,8 @@ export default function AIConfigPage() {
               width: 200,
               render: (_, r) => (
                 <Space size={0} wrap>
-                  <Button type="link" size="small" loading={testing === r.id} onClick={() => void handleTest(r)}>
-                    测试
-                  </Button>
+                  {r.model_type !== 'video' && <Button type="link" size="small" loading={testing === r.id}
+                    onClick={() => void handleTest(r)}>测试</Button>}
                   <Button type="link" size="small" onClick={() => openEdit(r)}>
                     编辑
                   </Button>
@@ -395,6 +407,8 @@ export default function AIConfigPage() {
         />
       </Card>
 
+      {usageSession && probeConfig && <VideoProbeModal key={usageSession.key + ':' + probeConfig.id}
+        session={usageSession} config={probeConfig} onClose={() => setProbeTarget(null)} />}
       {usageSession && priceConfig && <UsagePriceModal key={`${usageSession.key}:${priceConfig.id}`} config={priceConfig}
         session={usageSession} onClose={() => setPriceTarget(null)} />}
 
@@ -421,7 +435,12 @@ export default function AIConfigPage() {
             <Radio.Group
               optionType="button"
               buttonStyle="solid"
-              options={modelTypesFor(provider).map((t) => ({
+              onChange={(event) => {
+                const next = event.target.value as ModelType
+                setModels([])
+                if (!modelTypesFor(provider).includes(next)) form.setFieldValue('provider', providersFor(next)[0])
+              }}
+              options={modelTypesFor().map((t) => ({
                 value: t,
                 label: MODEL_TYPE_LABELS[t],
               }))}
@@ -429,14 +448,8 @@ export default function AIConfigPage() {
           </Form.Item>
           <Form.Item name="provider" label="接口类型" rules={[{ required: true }]}>
             <Select
-              onChange={(p: ProviderName) => {
-                setModels([])
-                // Anthropic 不提供向量模型：切换过去时退回文本模型
-                if (!modelTypesFor(p).includes(form.getFieldValue('model_type') as ModelType)) {
-                  form.setFieldValue('model_type', 'text')
-                }
-              }}
-              options={(Object.keys(PROVIDER_LABELS) as ProviderName[]).map((p) => ({
+              onChange={() => setModels([])}
+              options={providersFor(modelType).map((p) => ({
                 value: p,
                 label: PROVIDER_LABELS[p],
               }))}
@@ -446,13 +459,18 @@ export default function AIConfigPage() {
             name="base_url"
             label="Base URL"
             extra={
-              provider === 'openai_compat'
-                ? '可填写中转地址或本地 LLM，例如 https://api.deepseek.com/v1、http://host.docker.internal:11434/v1（Docker 部署下的本机 Ollama，需部署方开启 ALLOW_PRIVATE_AI_ENDPOINTS）；留空使用 OpenAI 官方地址'
+              provider === 'aliyun_wan'
+                ? '填写百炼工作空间所在地域的接口地址，例如 https://你的工作空间ID.cn-beijing.maas.aliyuncs.com/api/v1。'
+                : modelType === 'video' && provider === 'openai_compat'
+                ? '填写提供 /videos 的兼容服务地址，包含版本前缀（如 /v1）。'
+                : provider === 'openai_compat'
+                  ? '可填写中转地址或本地 LLM，例如 https://api.deepseek.com/v1、http://host.docker.internal:11434/v1（Docker 部署下的本机 Ollama，需部署方开启 ALLOW_PRIVATE_AI_ENDPOINTS）；留空使用 OpenAI 官方地址'
                 : '一般留空使用官方地址；使用代理时填写'
             }
-            rules={[{ type: 'url', message: '请输入合法的 URL（以 http:// 或 https:// 开头）' }]}
+            rules={[{ required: modelType === 'video' && (provider === 'openai_compat' || provider === 'aliyun_wan'), message: '请输入视频服务地址' },
+              { type: 'url', message: '请输入合法的 URL（以 http:// 或 https:// 开头）' }]}
           >
-            <Input placeholder="https://api.openai.com/v1" maxLength={500} />
+            <Input placeholder={modelType === 'video' ? undefined : 'https://api.openai.com/v1'} maxLength={500} />
           </Form.Item>
           <Form.Item
             name="api_key"
@@ -460,7 +478,7 @@ export default function AIConfigPage() {
             extra={
               editing
                 ? `当前：${editing.api_key_masked || '（未设置）'}；留空表示不修改`
-                : provider === 'openai_compat'
+                : provider === 'openai_compat' && modelType !== 'video'
                   ? '本地 LLM（如 Ollama）可留空'
                   : undefined
             }
@@ -496,13 +514,13 @@ export default function AIConfigPage() {
                   }
                 />
               </Form.Item>
-              <Button
+              {modelType !== 'video' && <Button
                 icon={<CloudDownloadOutlined />}
                 loading={fetchingModels}
                 onClick={() => void handleFetchModels()}
               >
                 获取模型
-              </Button>
+              </Button>}
             </Space.Compact>
           </Form.Item>
           {modelType === 'text' && (

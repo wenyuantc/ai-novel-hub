@@ -1,15 +1,19 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from httpx import AsyncClient
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
+from app.ai import references
 from app.ai.endpoint_guard import ensure_endpoint_allowed
 from app.ai.images import MAX_COVER_BYTES, TOO_LARGE, decode_image, validate_image
 from app.ai.providers.base import (
     AIProviderError,
     ChatMessage,
     GeneratedImage,
+    ImageCapabilityError,
+    ImageOptions,
     LLMProvider,
     ModelInfo,
     ThinkingLevel,
@@ -19,6 +23,17 @@ from app.ai.providers.base import (
 from app.ai.providers.dispatch_hooks import current_dispatch_hooks, model_client_event_hooks
 from app.ai.providers.usage import ModelAttempt, may_request_usage_options, model_attempt, valid_usage_count
 from app.ai.tools import AgentEvent, AgentMessage, ToolCall, ToolChoice, ToolSpec
+
+
+def _image_size(model: str, ratio: str | None) -> str:
+    if ratio is None:
+        return "1024x1536"
+    exact = {"1:1": "1024x1024", "16:9": "1536x864", "9:16": "864x1536",
+             "4:3": "1536x1152", "3:4": "1152x1536"}
+    # 第一代 GPT Image 和 DALL·E 接口没有可精确表示这些长方形画幅的尺寸。
+    if ratio != "1:1" and model.lower().startswith(("gpt-image-1", "dall-e-")):
+        raise ImageCapabilityError("该模型不支持所选画幅，请选择 1:1 或换用支持自定义尺寸的模型")
+    return exact[ratio]
 
 
 def _tool_messages(messages: list[AgentMessage]) -> list[dict]:
@@ -170,16 +185,25 @@ class OpenAICompatProvider(LLMProvider):
                     body.extend(chunk)
                 return bytes(body)
 
-    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+    async def generate_image(self, prompt: str, model: str, *, options: ImageOptions | None = None) -> GeneratedImage:
+        request = {}
+        if options and options.references:
+            if model.lower() in ("dall-e-3", "dall-e-2"):
+                raise ImageCapabilityError("该模型不支持参考图，请换用 GPT Image 图片模型")
+            inputs = await asyncio.to_thread(references.normalize_images, options.references)
+            request["image"] = [(f"reference-{i}.jpg", item.data, item.mime_type) for i, item in enumerate(inputs)]
+        size = _image_size(model, options.aspect_ratio if options else None)
         client = self._client()
         try:
             try:
-                result = await self._request_image(client, model, prompt, size="1024x1536")
+                result = await self._request_image(client, model, prompt, size=size, **request)
             except Exception as exc:
                 # 只有明确的尺寸参数拒绝才重试，避免配额/鉴权失败被重复计费。
                 if getattr(exc, "status_code", None) != 400 or "size" not in str(exc).lower():
                     raise
-                result = await self._request_image(client, model, prompt)
+                if options and options.aspect_ratio:
+                    raise ImageCapabilityError("该图片接口不支持所选画幅，请更换模型或画幅") from exc
+                result = await self._request_image(client, model, prompt, **request)
             if not result.data:
                 raise AIProviderError("图片模型未返回图片，请调整提示词或更换模型")
             image = result.data[0]
@@ -199,7 +223,20 @@ class OpenAICompatProvider(LLMProvider):
 
     async def _request_image(self, client, model: str, prompt: str, **options):
         async with model_attempt() as attempt:
-            result = await attempt.invoke(client.images.generate(model=model, prompt=prompt, n=1, **options))
+            method = client.images.edit if "image" in options else client.images.generate
+            try:
+                result = await attempt.invoke(method(model=model, prompt=prompt, n=1, **options))
+            except Exception as exc:
+                status = getattr(exc, "status_code", None)
+                if "image" in options:
+                    reason = str(exc).lower()
+                    unsupported = any(word in reason for word in ("not support", "unsupported", "not available"))
+                    edit_rejected = status in (400, 422) and unsupported and (
+                        "edit" in reason or "reference" in reason or "input image" in reason
+                    )
+                    if status in (404, 405, 501) or edit_rejected:
+                        raise ImageCapabilityError("该模型或接口不支持参考图编辑，请更换图片模型") from exc
+                raise
             attempt.mark_response()
             usage = getattr(result, "usage", None)
             attempt.set_usage(

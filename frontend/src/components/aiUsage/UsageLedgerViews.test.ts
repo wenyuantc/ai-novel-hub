@@ -13,7 +13,7 @@ const baseline: UsageRow = {
   id: 'test-call', started_at: '2026-11-18T05:00:00Z', actor_id: 1, actor_name: null, payer_id: 1, payer_name: null,
   project_id: null, project_title: null, project_state: 'none', chapter_id: null, task_id: null,
   provider: 'openai_compat', model: 'test-model', kind: 'chapter.generate', model_type: 'text', status: 'succeeded',
-  input_tokens: 500, cached_input_tokens: 300, output_tokens: 100, image_count: null,
+  input_tokens: 500, cached_input_tokens: 300, output_tokens: 100, video_seconds: null, image_count: null,
   input_source: 'provider', output_source: 'provider', image_source: 'unknown',
   currency: 'CNY', estimated_cost: '0.001', pricing_status: 'priced', price_period: 'off_peak', billing_source: 'own',
   input_per_million: '1', cached_input_per_million: '0', output_per_million: '2', per_image: null,
@@ -23,12 +23,20 @@ function renderDetail(row: UsageRow) {
   return renderToStaticMarkup(createElement(UsageRowDetail, { row, scope: { kind: 'account' }, onClose: () => {} }))
 }
 
+it('展示视频实际秒数和每秒单价，保护作者单价', () => {
+  const video: UsageRow = { ...baseline, model_type: 'video', kind: 'ai.video_probe', video_seconds: 6,
+    per_video_second: '0.25', input_per_million: null, output_per_million: null, cached_input_per_million: null }
+  expect(renderDetail(video)).toContain('视频 6 秒')
+  expect(renderDetail(video)).toContain('每秒视频')
+  expect(renderDetail({ ...video, pricing_status: 'private' })).not.toContain('每秒视频')
+})
+
 describe('调用账单的缓存命中', () => {
   it('在输入总量中展示命中用量、归属档位及零元单价', () => {
     const data: UsagePage = {
       items: [baseline], total: 1, page: 1, page_size: 20, tracking_since: null,
       summary: {
-        input_tokens: 500, cached_input_tokens: 300, output_tokens: 100, image_count: 0,
+        input_tokens: 500, cached_input_tokens: 300, output_tokens: 100, video_seconds: 0, image_count: 0,
         costs: [], unknown_usage_calls: 0, unpriced_calls: 0,
       },
     }

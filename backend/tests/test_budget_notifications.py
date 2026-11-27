@@ -125,6 +125,11 @@ async def test_legacy_baseline_and_concurrent_crossing(migration_db):
     async with factory.begin() as db:
         rows = (await db.scalars(select(AiBudgetPeriod))).all()
         assert {(r.period, r.spent_nano) for r in rows} == {("all", 79), ("2026-11", 79)}
+        assert await db.scalar(select(func.count()).select_from(Notification)) == 0
+
+    # 先验证 0073 当时的历史回填，再让现行计费服务在实际部署版本并发入账。
+    await asyncio.to_thread(command.upgrade, cfg, "head")
+    async with factory.begin() as db:
         assert await inbox.unread_count(db, 1) == 0
         assert await _settle(db, await _reserve(db, 1, 1, 1, 1))
         assert await inbox.unread_count(db, 1) == 2
@@ -140,7 +145,8 @@ async def test_legacy_baseline_and_concurrent_crossing(migration_db):
         assert await inbox.unread_count(db, 1) == 4
         assert await db.scalar(select(func.count()).select_from(Notification).where(
             Notification.variant == "exceeded")) == 2
-    with pytest.raises(RuntimeError, match="请先备份"):
+    await asyncio.to_thread(command.downgrade, cfg, "0073")
+    with pytest.raises(RuntimeError, match="存在预算通知或周期进度，请先备份"):
         await asyncio.to_thread(command.downgrade, cfg, "0072")
 
 

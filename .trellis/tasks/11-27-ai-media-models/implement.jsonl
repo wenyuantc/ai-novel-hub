@@ -15,4 +15,4 @@
 {"file": ".trellis/spec/backend/project-cover.md", "reason": "现有生图调用方与预览约定"}
 {"file": ".trellis/spec/backend/setting-thumbnails.md", "reason": "另一处生图调用方"}
 {"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-media-infra-and-gap.md", "reason": "四家视频厂商的调用形态与任务生命周期"}
-{"file": ".trellis/tasks/11-27-media-storage/design.md", "reason": "媒体存储设计（规范未落地前的依据）"}
+{"file": ".trellis/spec/backend/media-storage.md", "reason": "已归档媒体存储的实际接口与授权约定"}

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Response, UploadFile, status
 
-from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SettingsDep
+from app.core.deps import CipherDep, CurrentUser, DbDep, FactoryDep, SessionmakerDep, SettingsDep, TaskEngineDep
 from app.schemas.ai_config import (
     AIConfigCreate,
     AIConfigOut,
@@ -8,8 +8,12 @@ from app.schemas.ai_config import (
     AIConfigUpdate,
     ModelListRequest,
     ModelListResult,
+    VideoProbeRequest,
+    VideoReferenceOut,
 )
+from app.schemas.task import TaskOut
 from app.services import ai_config_service as svc
+from app.services import task_service, video_probe_service
 
 router = APIRouter(prefix="/ai-configs", tags=["ai-configs"])
 
@@ -61,3 +65,25 @@ async def test_config(
     return await svc.test_config(
         db, cipher, factory, user.id, config_id, allow_private=settings.allow_private_ai_endpoints
     )
+
+
+@router.post("/{config_id}/video-probe", response_model=TaskOut, status_code=status.HTTP_202_ACCEPTED)
+async def start_video_probe(
+    config_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep, body: VideoProbeRequest | None = None,
+) -> TaskOut:
+    params = {"config_id": config_id, "image_ids": [str(item) for item in body.image_ids] if body else []}
+    return await task_service.create_task(db, engine, user.id, video_probe_service.KIND, params)
+
+
+@router.get("/{config_id}/video-probe", response_model=TaskOut | None)
+async def latest_video_probe(config_id: int, user: CurrentUser, db: DbDep, engine: TaskEngineDep) -> TaskOut | None:
+    return await video_probe_service.latest(db, engine, user.id, config_id)
+
+
+@router.post("/{config_id}/video-probe/reference", response_model=VideoReferenceOut,
+             status_code=status.HTTP_201_CREATED)
+async def upload_video_reference(
+    config_id: int, file: UploadFile, user: CurrentUser, db: DbDep, sessionmaker: SessionmakerDep,
+) -> VideoReferenceOut:
+    oid = await video_probe_service.store_reference(db, sessionmaker, user.id, config_id, file)
+    return VideoReferenceOut(object_id=oid)

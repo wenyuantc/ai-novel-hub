@@ -104,6 +104,7 @@ def _visible_calls(actor_id: int | None):
         call.cached_input_tokens,
         call.output_tokens,
         call.image_count,
+        call.video_seconds,
         call.input_source,
         call.output_source,
         call.image_source,
@@ -113,6 +114,7 @@ def _visible_calls(actor_id: int | None):
         allowed(can_price, call.price_cached_input_nano, "price_cached_input_nano"),
         allowed(can_price, call.price_output_nano, "price_output_nano"),
         allowed(can_price, call.price_image_nano, "price_image_nano"),
+        allowed(can_price, call.price_video_nano, "price_video_nano"),
         allowed(can_price, call.price_period, "price_period"),
         case((can_price, call.pricing_status), else_="private").label("pricing_status"),
         case(
@@ -144,6 +146,7 @@ def _usage_summary(visible):
         and_(c.model_type == "text", or_(c.input_tokens.is_(None), c.output_tokens.is_(None))),
         and_(c.model_type == "embedding", c.input_tokens.is_(None)),
         and_(c.model_type == "image", c.image_count.is_(None)),
+        and_(c.model_type == "video", c.video_seconds.is_(None)),
     )
     currency_columns = []
     for currency in CURRENCIES:
@@ -156,6 +159,7 @@ def _usage_summary(visible):
         func.coalesce(func.sum(c.cached_input_tokens), 0).label("total_cached_input_tokens"),
         func.coalesce(func.sum(c.output_tokens), 0).label("total_output_tokens"),
         func.coalesce(func.sum(c.image_count), 0).label("total_image_count"),
+        func.coalesce(func.sum(c.video_seconds), 0).label("total_video_seconds"),
         func.count(case((missing_usage, 1))).label("unknown_usage_calls"),
         func.count(case((and_(c.pricing_status != "private", c.amount_nano.is_(None)), 1))).label("unpriced_calls"),
         *currency_columns,
@@ -222,6 +226,7 @@ async def list_usage(
             "cached_input_per_million": ai_usage_storage.nano_to_amount(row["price_cached_input_nano"]),
             "output_per_million": ai_usage_storage.nano_to_amount(row["price_output_nano"]),
             "per_image": ai_usage_storage.nano_to_amount(row["price_image_nano"]),
+            "per_video_second": ai_usage_storage.nano_to_amount(row["price_video_nano"]),
         }))
     since = first["tracking_since"]
     return UsagePage(
@@ -235,6 +240,7 @@ async def list_usage(
             cached_input_tokens=first["total_cached_input_tokens"],
             output_tokens=first["total_output_tokens"],
             image_count=first["total_image_count"],
+            video_seconds=first["total_video_seconds"],
             unknown_usage_calls=first["unknown_usage_calls"],
             unpriced_calls=first["unpriced_calls"],
             costs=[UsageCurrencyTotal(
@@ -261,6 +267,7 @@ def _price_view(config: AIConfig, row: AiModelPrice | None) -> ModelPriceOut:
             cached_input_per_million=ai_usage_storage.nano_to_amount(snapshot.cached_input_price_nano),
             output_per_million=ai_usage_storage.nano_to_amount(row.output_price_nano),
             per_image=ai_usage_storage.nano_to_amount(row.image_price_nano),
+            per_video_second=ai_usage_storage.nano_to_amount(row.video_price_nano),
             off_peak=None if off_peak is None else ModelOffPeakPrice(
                 timezone=off_peak.timezone,
                 start=off_peak.start,
@@ -269,6 +276,7 @@ def _price_view(config: AIConfig, row: AiModelPrice | None) -> ModelPriceOut:
                 cached_input_per_million=ai_usage_storage.nano_to_amount(off_peak.cached_input_price_nano),
                 output_per_million=ai_usage_storage.nano_to_amount(off_peak.output_price_nano),
                 per_image=ai_usage_storage.nano_to_amount(off_peak.image_price_nano),
+                per_video_second=ai_usage_storage.nano_to_amount(off_peak.video_price_nano),
                 **({"additional_windows": windows} if windows else {}),
             ),
         )
@@ -307,6 +315,7 @@ def _rates_in_nanos(
             ("cached_input_price_nano", price.cached_input_per_million),
             ("output_price_nano", price.output_per_million),
             ("image_price_nano", price.per_image),
+            ("video_price_nano", price.per_video_second),
         )
     }
     if existing_cached_rate is not None and "cached_input_per_million" not in price.model_fields_set:

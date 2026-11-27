@@ -505,3 +505,7 @@ ai_config_service.context_char_budget(cfg, default) -> int        # 取代 CONTE
 - [ ] 普通响应和日志中没有密钥；已审查 Out schema。平台 Key 的本人创建 / reveal 专用响应遵守 open-api.md，列表、编辑及对外读取仍不得含完整 Key。
 - [ ] 模型变更附带 Alembic revision；`test_migrations.py` 通过。
 - [ ] 测试使用 `tmp_path`、`FakeLLM` 和 `fake_dns`；不访问网络，不使用固定临时路径。
+
+## 视频模型
+
+视频厂商查询与下载须覆盖重定向、私有地址、凭据作用域和流式大小限制。厂商提交成功到厂商编号持久化的间隙须有恢复用例，验证此时不会重复发起付费请求。详见[媒体模型契约](./ai-media-models.md)。

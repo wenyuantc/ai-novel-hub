@@ -1,6 +1,7 @@
 from app.models import two_step as two_step
 from app.models.agent import AgentChange, AgentConversation, AgentMessage
 from app.models.agent_operation import AgentConversationOperation
+from app.models.ai_external_jobs import AiExternalJob
 from app.models.ai_usage import AiModelPrice, AiUsageBudget, AiUsageCall, AiUsageTracking
 from app.models.analysis_index_receipt import AnalysisIndexReceipt
 from app.models.annotations import AnnotationMessage, AnnotationThread
@@ -141,6 +142,7 @@ __all__ = [
     "AgentConversationOperation",
     "AgentMessage",
     "AIConfig",
+    "AiExternalJob",
     "AiModelPrice",
     "AiUsageBudget",
     "AiUsageCall",

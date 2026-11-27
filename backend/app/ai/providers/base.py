@@ -26,8 +26,28 @@ class AIProviderError(Exception):
     """模型调用失败（网络、鉴权、配额等），message 为可直接展示给用户的中文说明。"""
 
 
+class ImageCapabilityError(AIProviderError):
+    """不含厂商私有信息，可直接告诉调用人的图片能力限制。"""
+
+
 class RequestPolicyError(AIProviderError):
     """受控请求被本地策略拒绝，不应归类为网络故障或模型不支持。"""
+
+
+@dataclass(frozen=True)
+class ImageInput:
+    data: bytes
+    mime_type: str
+
+
+@dataclass(frozen=True)
+class ImageOptions:
+    aspect_ratio: str | None = None
+    references: tuple[ImageInput, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.aspect_ratio not in (None, "1:1", "16:9", "9:16", "4:3", "3:4"):
+            raise ImageCapabilityError("不支持的图片画幅，请使用 1:1、16:9、9:16、4:3 或 3:4")
 
 
 @dataclass(frozen=True)
@@ -65,7 +85,7 @@ class LLMProvider(ABC):
         """列出接口可用模型。失败时抛 AIProviderError。"""
         raise AIProviderError("该接口类型不支持获取模型列表")
 
-    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+    async def generate_image(self, prompt: str, model: str, *, options: ImageOptions | None = None) -> GeneratedImage:
         raise AIProviderError(
             "该接口类型不支持图片生成，请在「模型配置」中换用 OpenAI 兼容或 Gemini 的图片模型"
         )

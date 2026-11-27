@@ -84,6 +84,7 @@ class UsageRow(BaseModel):
     cached_input_tokens: int | None
     output_tokens: int | None
     image_count: int | None
+    video_seconds: int | None
     input_source: UsageSource
     output_source: UsageSource
     image_source: UsageSource
@@ -93,6 +94,7 @@ class UsageRow(BaseModel):
     cached_input_per_million: str | None
     output_per_million: str | None
     per_image: str | None
+    per_video_second: str | None
     price_period: PricePeriod | None = None
     pricing_status: PricingStatus
     billing_source: Literal["own", "author", "other", "unknown"]
@@ -110,6 +112,7 @@ class UsageSummary(BaseModel):
     cached_input_tokens: int
     output_tokens: int
     image_count: int
+    video_seconds: int
     unknown_usage_calls: int
     unpriced_calls: int
     costs: list[UsageCurrencyTotal]
@@ -141,12 +144,15 @@ class ModelOffPeakPrice(BaseModel):
     cached_input_per_million: MoneyInput | None = None
     output_per_million: MoneyInput | None = None
     per_image: MoneyInput | None = None
+    per_video_second: MoneyInput | None = None
     # 每个空闲区间最短一分钟，第一条单独存于 start、end。
     additional_windows: list[ModelOffPeakWindow] = Field(default_factory=list, max_length=1439)
 
     @model_serializer(mode="wrap")
     def _serialize(self, serialize: SerializerFunctionWrapHandler):
         data = serialize(self)
+        if self.per_video_second is None:
+            data.pop("per_video_second", None)
         if "additional_windows" not in self.model_fields_set:
             data.pop("additional_windows", None)
         return data
@@ -160,7 +166,15 @@ class ModelPrice(BaseModel):
     cached_input_per_million: MoneyInput | None = None
     output_per_million: MoneyInput | None = None
     per_image: MoneyInput | None = None
+    per_video_second: MoneyInput | None = None
     off_peak: ModelOffPeakPrice | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serialize: SerializerFunctionWrapHandler):
+        data = serialize(self)
+        if self.per_video_second is None:
+            data.pop("per_video_second", None)
+        return data
 
 
 class ModelPriceOut(BaseModel):

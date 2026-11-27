@@ -13,7 +13,7 @@ from typing import Protocol
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai.providers.base import ChatMessage, GeneratedImage, LLMProvider, ModelInfo, ThinkingLevel
+from app.ai.providers.base import ChatMessage, GeneratedImage, ImageOptions, LLMProvider, ModelInfo, ThinkingLevel
 from app.ai.providers.dispatch_hooks import current_dispatch_hooks
 from app.ai.providers.usage import ModelUsage, model_attempt, observe_model_usage
 from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
@@ -155,6 +155,11 @@ async def record_operation(binding: UsageBinding | None, model: str | None) -> A
     if binding is None or model != binding.identity.model:
         yield None
         return
+    if binding.identity.model_type == "image":
+        from app.services.ai_media_billing import check_image_budget
+
+        async with binding.sessionmaker() as db:
+            await check_image_budget(db, binding.identity, now=datetime.now(UTC))
     recorder = UsageRecorder(binding)
     try:
         yield recorder
@@ -252,8 +257,9 @@ class _MeteredProvider(LLMProvider):
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         return await self._call(model, lambda: self._provider.embed(texts, model))
 
-    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
-        return await self._call(model, lambda: self._provider.generate_image(prompt, model))
+    async def generate_image(self, prompt: str, model: str, *, options: ImageOptions | None = None) -> GeneratedImage:
+        kwargs = {"options": options} if options is not None else {}
+        return await self._call(model, lambda: self._provider.generate_image(prompt, model, **kwargs))
 
     async def list_models(self) -> list[ModelInfo]:
         return await self._provider.list_models()

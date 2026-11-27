@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from itertools import pairwise
@@ -21,6 +21,7 @@ from app.models.ai_usage import (
     MAX_IMAGES,
     MAX_RATE_NANO,
     MAX_TOKENS,
+    MAX_VIDEO_SECONDS,
     NANOS_PER_UNIT,
     PENDING_CALL_WHERE,
 )
@@ -75,6 +76,7 @@ class UsageMeasurement:
     input_tokens: int | None = None
     output_tokens: int | None = None
     image_count: int | None = None
+    video_seconds: int | None = None
     input_source: UsageSource = "unknown"
     output_source: UsageSource = "unknown"
     image_source: UsageSource = "unknown"
@@ -109,6 +111,7 @@ class OffPeakPrice:
     input_price_nano: int | None = None
     output_price_nano: int | None = None
     image_price_nano: int | None = None
+    video_price_nano: int | None = None
     cached_input_price_nano: int | None = None
     additional_windows: tuple[OffPeakWindow, ...] = ()
 
@@ -143,6 +146,7 @@ class UsagePriceSnapshot:
     input_price_nano: int | None = None
     output_price_nano: int | None = None
     image_price_nano: int | None = None
+    video_price_nano: int | None = None
     off_peak: OffPeakPrice | None = None
     cached_input_price_nano: int | None = None
 
@@ -155,6 +159,7 @@ class EffectiveUsagePrice:
     input_price_nano: int | None
     output_price_nano: int | None
     image_price_nano: int | None
+    video_price_nano: int | None = None
     cached_input_price_nano: int | None = None
 
 
@@ -162,6 +167,7 @@ def model_price_snapshot(price: AiModelPrice) -> UsagePriceSnapshot:
     return UsagePriceSnapshot(
         currency=price.currency, input_price_nano=price.input_price_nano,
         output_price_nano=price.output_price_nano, image_price_nano=price.image_price_nano,
+        video_price_nano=price.video_price_nano,
         off_peak=OffPeakPrice.from_payload(price.off_peak) if price.off_peak is not None else None,
         cached_input_price_nano=price.cached_input_price_nano,
     )
@@ -171,7 +177,8 @@ def _price_payload(price: OffPeakPrice | UsagePriceSnapshot) -> dict:
     # 省略尚未使用的新字段，旧单时段价表和待发送快照沿用原结构。
     return asdict(price, dict_factory=lambda fields: {
         key: value for key, value in fields
-        if (key != "cached_input_price_nano" or value is not None) and (key != "additional_windows" or value)
+        if (key not in ("cached_input_price_nano", "video_price_nano") or value is not None)
+        and (key != "additional_windows" or value)
     })
 
 
@@ -189,6 +196,7 @@ def price_at(snapshot: UsagePriceSnapshot, timestamp: datetime) -> EffectiveUsag
     return EffectiveUsagePrice(
         currency=snapshot.currency, period=period, timezone=rule.timezone if rule is not None else None,
         input_price_nano=rates.input_price_nano, output_price_nano=rates.output_price_nano,
+        video_price_nano=rates.video_price_nano,
         image_price_nano=rates.image_price_nano, cached_input_price_nano=rates.cached_input_price_nano,
     )
 
@@ -226,10 +234,14 @@ def _normalized(model_type: str, measurement: UsageMeasurement) -> UsageMeasurem
     input_tokens, input_source = _reported(measurement.input_tokens, measurement.input_source, MAX_TOKENS)
     output_tokens, output_source = _reported(measurement.output_tokens, measurement.output_source, MAX_TOKENS)
     image_count, image_source = _reported(measurement.image_count, measurement.image_source, MAX_IMAGES)
+    seconds = measurement.video_seconds
+    if model_type != "video" or type(seconds) is not int or not 0 <= seconds <= MAX_VIDEO_SECONDS:
+        seconds = None
     return UsageMeasurement(
         input_tokens=input_tokens, input_source=input_source,
         output_tokens=output_tokens, output_source=output_source,
         image_count=image_count, image_source=image_source,
+        video_seconds=seconds,
         cached_input_tokens=(
             _reported_cached_input(measurement.cached_input_tokens, input_tokens) if model_type == "text" else None
         ),
@@ -239,10 +251,13 @@ def _normalized(model_type: str, measurement: UsageMeasurement) -> UsageMeasurem
 def _price_measurement(
     model_type: str, measurement: UsageMeasurement, *,
     input_price_nano: int | None, output_price_nano: int | None, image_price_nano: int | None,
-    cached_input_price_nano: int | None,
+    cached_input_price_nano: int | None, video_price_nano: int | None,
 ) -> tuple[int | None, str]:
     if model_type == "image":
         components = ((measurement.image_count, image_price_nano),)
+        denominator = 1
+    elif model_type == "video":
+        components = ((measurement.video_seconds, video_price_nano),)
         denominator = 1
     elif model_type == "embedding":
         components = ((measurement.input_tokens, input_price_nano),)
@@ -271,12 +286,12 @@ def _price_measurement(
 def estimate_amount_nano(
     model_type: str, measurement: UsageMeasurement, *,
     input_price_nano: int | None = None, output_price_nano: int | None = None, image_price_nano: int | None = None,
-    cached_input_price_nano: int | None = None,
+    cached_input_price_nano: int | None = None, video_price_nano: int | None = None,
 ) -> int | None:
     amount, _ = _price_measurement(
         model_type, measurement, input_price_nano=input_price_nano,
         output_price_nano=output_price_nano, image_price_nano=image_price_nano,
-        cached_input_price_nano=cached_input_price_nano,
+        cached_input_price_nano=cached_input_price_nano, video_price_nano=video_price_nano,
     )
     return amount
 
@@ -294,9 +309,9 @@ async def get_price(db: AsyncSession, cfg: PriceConfig) -> AiModelPrice | None:
 
 def _validate_rates(
     model_type: str, input_price_nano: int | None, output_price_nano: int | None, image_price_nano: int | None,
-    cached_input_price_nano: int | None,
+    cached_input_price_nano: int | None, video_price_nano: int | None,
 ) -> None:
-    rates = input_price_nano, output_price_nano, image_price_nano, cached_input_price_nano
+    rates = input_price_nano, output_price_nano, image_price_nano, cached_input_price_nano, video_price_nano
     if any(rate is not None and (type(rate) is not int or not 0 <= rate <= MAX_RATE_NANO) for rate in rates):
         raise ValueError("单价币种或范围无效")
     match model_type:
@@ -306,9 +321,14 @@ def _validate_rates(
             valid = input_price_nano is not None and output_price_nano is None and image_price_nano is None
         case "image":
             valid = image_price_nano is not None and input_price_nano is None and output_price_nano is None
+        case "video":
+            valid = video_price_nano is not None and all(
+                rate is None for rate in (input_price_nano, output_price_nano, image_price_nano)
+            )
         case _:
             valid = False
-    if not valid or (model_type != "text" and cached_input_price_nano is not None):
+    if (not valid or (model_type != "text" and cached_input_price_nano is not None)
+            or (model_type != "video" and video_price_nano is not None)):
         raise ValueError("单价须与模型计量单位匹配")
 
 
@@ -316,21 +336,22 @@ async def set_price(
     db: AsyncSession, cfg: PriceConfig, *, currency: str,
     input_price_nano: int | None = None, output_price_nano: int | None = None, image_price_nano: int | None = None,
     off_peak: OffPeakPrice | None = None,
-    cached_input_price_nano: int | None = None,
+    cached_input_price_nano: int | None = None, video_price_nano: int | None = None,
 ) -> AiModelPrice:
     if currency not in CURRENCIES:
         raise ValueError("单价币种或范围无效")
-    _validate_rates(cfg.model_type, input_price_nano, output_price_nano, image_price_nano, cached_input_price_nano)
+    _validate_rates(cfg.model_type, input_price_nano, output_price_nano, image_price_nano,
+                    cached_input_price_nano, video_price_nano)
     if off_peak is not None:
         _validate_rates(
             cfg.model_type, off_peak.input_price_nano, off_peak.output_price_nano, off_peak.image_price_nano,
-            off_peak.cached_input_price_nano,
+            off_peak.cached_input_price_nano, off_peak.video_price_nano,
         )
     values = {
         "currency": currency, "provider": cfg.provider, "model": cfg.model, "model_type": cfg.model_type,
         "input_price_nano": input_price_nano, "output_price_nano": output_price_nano,
         "cached_input_price_nano": cached_input_price_nano,
-        "image_price_nano": image_price_nano, "updated_at": func.now(),
+        "image_price_nano": image_price_nano, "video_price_nano": video_price_nano, "updated_at": func.now(),
         "off_peak": _price_payload(off_peak) if off_peak is not None else None,
     }
     statement = (
@@ -425,7 +446,8 @@ def _live_user(db: AsyncSession, user_id: int | None, created_at: datetime | Non
 
 async def reserve_call(
     db: AsyncSession, identity: UsageCallIdentity, *, call_id: str, started_at: datetime,
-    price: UsagePriceSnapshot | None | Literal["current"] = "current", verify_identity: bool = False,
+    price: UsagePriceSnapshot | EffectiveUsagePrice | None | Literal["current"] = "current",
+    verify_identity: bool = False,
 ) -> None:
     """在可发送的边界预留尝试。重复持久化保留首次记录和价格。"""
     key = UUID(call_id)
@@ -433,7 +455,7 @@ async def reserve_call(
         raise ValueError("调用标识无效")
     if price == "current":
         price = await price_snapshot(db, identity)
-    schedule = _price_payload(price) if price is not None and price.off_peak is not None else None
+    schedule = _price_payload(price) if isinstance(price, UsagePriceSnapshot) and price.off_peak is not None else None
     fixed = price if schedule is None else None
     project = None
     if identity.project_id is not None:
@@ -478,6 +500,8 @@ async def reserve_call(
             price_cached_input_nano=fixed.cached_input_price_nano if fixed else None,
             price_output_nano=fixed.output_price_nano if fixed else None,
             price_image_nano=fixed.image_price_nano if fixed else None,
+            price_video_nano=fixed.video_price_nano if fixed else None,
+            price_period=price.period if isinstance(price, EffectiveUsagePrice) else None,
             pending_price_schedule=schedule,
         ).on_conflict_do_nothing(index_elements=[AiUsageCall.id])
     )
@@ -501,12 +525,13 @@ def _call_price(call: AiUsageCall) -> EffectiveUsagePrice | None:
         snapshot = UsagePriceSnapshot(
             currency=call.currency, input_price_nano=call.price_input_nano,
             output_price_nano=call.price_output_nano, image_price_nano=call.price_image_nano,
-            cached_input_price_nano=call.price_cached_input_nano,
+            cached_input_price_nano=call.price_cached_input_nano, video_price_nano=call.price_video_nano,
         )
     else:
         off_peak = OffPeakPrice.from_payload(schedule["off_peak"])
         snapshot = UsagePriceSnapshot(**(schedule | {"off_peak": off_peak}))
-    return price_at(snapshot, call.started_at)
+    price = price_at(snapshot, call.started_at)
+    return replace(price, period=call.price_period) if call.price_period is not None else price
 
 
 async def finish_call(
@@ -537,11 +562,13 @@ async def finish_call(
                 "price_period": selected.period, "price_input_nano": selected.input_price_nano,
                 "price_output_nano": selected.output_price_nano, "price_image_nano": selected.image_price_nano,
                 "price_cached_input_nano": selected.cached_input_price_nano,
+                "price_video_nano": selected.video_price_nano,
             }
         amount, pricing_status = _price_measurement(
             call.model_type, measurement, input_price_nano=selected.input_price_nano if selected else None,
             output_price_nano=selected.output_price_nano if selected else None,
             image_price_nano=selected.image_price_nano if selected else None,
+            video_price_nano=selected.video_price_nano if selected else None,
             cached_input_price_nano=selected.cached_input_price_nano if selected else None,
         )
     updated = await db.scalar(update(AiUsageCall).where(

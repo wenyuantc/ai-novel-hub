@@ -76,6 +76,7 @@ TASK_KINDS = (
     "outline.expand",
     "chapter.batch",
     "kb.index",
+    "ai.video_probe",
     "book.import",
     "agent.turn",
     "consistency.check",

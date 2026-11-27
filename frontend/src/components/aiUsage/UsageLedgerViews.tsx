@@ -15,6 +15,7 @@ const PRICE_LABELS = [
   ['cached_input_per_million', '缓存命中输入 / 百万 tokens'],
   ['output_per_million', '输出 / 百万 tokens'],
   ['per_image', '每张图片'],
+  ['per_video_second', '每秒视频'],
 ] as const
 
 function modelLabel(row: UsageRow): string {
@@ -40,6 +41,7 @@ function accountLabel(name: string | null, id: number | null): string {
 }
 
 function RowUsage({ row }: { row: UsageRow }) {
+  if (row.model_type === 'video') return <span>视频 {row.video_seconds == null ? '时长未知' : row.video_seconds.toLocaleString('zh-CN') + ' 秒'}</span>
   if (row.model_type === 'image') return <span>图片 {usageCount(row.image_count, row.image_source)}</span>
   return <Space direction="vertical" size={0}>
     <span>输入 {usageCount(row.input_tokens, row.input_source)}</span>
@@ -57,6 +59,7 @@ export function UsageLedgerSummary({ data }: { data: UsagePage }) {
       <span>{data.total.toLocaleString('zh-CN')} 次调用</span>
       <span>已记录输入 {summary.input_tokens.toLocaleString('zh-CN')} tokens{cachedTokens > 0 && `（其中缓存命中 ${cachedTokens.toLocaleString('zh-CN')} tokens）`}</span>
       <span>已记录输出 {summary.output_tokens.toLocaleString('zh-CN')} tokens</span>
+      {summary.video_seconds > 0 && <span>已记录视频 {summary.video_seconds.toLocaleString('zh-CN')} 秒</span>}
       {summary.image_count > 0 && <span>已记录图片 {summary.image_count.toLocaleString('zh-CN')} 张</span>}
     </Space>
     <Space wrap size={[16, 8]}>

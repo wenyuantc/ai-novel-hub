@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, a
 from app.ai.providers.base import (
     ChatMessage,
     GeneratedImage,
+    ImageOptions,
     LLMProvider,
     ModelInfo,
     RequestPolicyError,
@@ -712,8 +713,9 @@ class _GuardedProvider(LLMProvider):
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         return await self._call(lambda provider: provider.embed(texts, model), model=model)
 
-    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
-        return await self._call(lambda provider: provider.generate_image(prompt, model), model=model)
+    async def generate_image(self, prompt: str, model: str, *, options: ImageOptions | None = None) -> GeneratedImage:
+        kwargs = {"options": options} if options is not None else {}
+        return await self._call(lambda provider: provider.generate_image(prompt, model, **kwargs), model=model)
 
     async def list_models(self) -> list[ModelInfo]:
         return await self._call(lambda provider: provider.list_models())

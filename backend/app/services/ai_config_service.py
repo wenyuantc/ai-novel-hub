@@ -12,6 +12,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.security import SecretCipher, mask_secret
 from app.models import AIConfig, User
 from app.schemas.ai_config import (
+    VIDEO_ONLY_PROVIDERS,
     AIConfigCreate,
     AIConfigOut,
     AIConfigTestResult,
@@ -20,8 +21,9 @@ from app.schemas.ai_config import (
     ModelListRequest,
     ModelListResult,
     ModelType,
-    check_embedding_provider,
+    check_model_provider,
     check_output_within_context,
+    check_video_endpoint,
 )
 from app.services import authorization_service as authz
 from app.services.ai_dispatch import is_sqlite_busy, visibility_sessionmaker
@@ -197,7 +199,8 @@ async def update_config(
         cfg.max_output_k = data.max_output_k
     try:
         check_output_within_context(cfg.context_window_k, cfg.max_output_k)
-        check_embedding_provider(cfg.provider, cfg.model_type)
+        check_model_provider(cfg.provider, cfg.model_type)
+        check_video_endpoint(cfg.provider, cfg.model_type, cfg.base_url)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
     type_changed = cfg.model_type != old_type
@@ -257,7 +260,7 @@ async def _promote_default(db: AsyncSession, user_id: int, model_type: str) -> N
         nxt.is_default = True
 
 
-MODEL_TYPE_LABELS = {"text": "文本", "image": "图片", "embedding": "向量"}
+MODEL_TYPE_LABELS = {"text": "文本", "image": "图片", "embedding": "向量", "video": "视频"}
 
 
 async def resolve_config(
@@ -321,6 +324,8 @@ async def test_config(
     allow_private: bool,
 ) -> AIConfigTestResult:
     cfg = await get_config(db, user_id, config_id)
+    if cfg.model_type == "video":
+        raise BadRequestError("请使用视频模型的「测试生成」")
     started = time.perf_counter()
     try:
         provider = await build_provider(cfg, cipher, factory, TEST_TIMEOUT_SECONDS, allow_private=allow_private)
@@ -405,6 +410,8 @@ async def list_models(
     allow_private: bool,
 ) -> ModelListResult:
     """用表单中尚未保存的参数拉取模型列表；Key 为空时可回退到已保存配置的 Key。"""
+    if req.provider in VIDEO_ONLY_PROVIDERS:
+        raise BadRequestError("请从厂商控制台获取视频模型名称并手动填写")
     api_key = (req.api_key or "").strip()
     if not api_key and req.config_id is not None:
         saved = await get_config(db, user_id, req.config_id)

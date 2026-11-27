@@ -34,6 +34,7 @@ KIND_LABELS = {
     "organization.generate": "AI 生成组织", "relations.parse": "解析旧关系", "relations.generate": "AI 生成关系",
     "career.generate": "AI 生成职业", "wizard.careers": "职业体系向导", "chapter.analyze": "章节分析",
     "chapter.revise": "按建议重写", "outline.continue": "AI 续写大纲", "outline.expand": "AI 展开细纲",
+    "ai.video_probe": "视频测试生成",
     "chapter.batch": "批量生成", "kb.index": "建索引", "book.import": "拆书反推", "agent.turn": "项目智能体",
     "consistency.check": "一致性检查", "consistency.impact": "修改影响评估",
     "scene.restructure": "场景拆并建议",
@@ -237,6 +238,10 @@ async def cancel_task(db: AsyncSession, engine: "TaskEngine", actor: User, task_
                 return AdminTaskCancelOut(operation_id=operation_id, audit_log_id=log_id)
             if task.status not in OPEN_TASK_STATUSES:
                 raise ConflictError("任务已结束，无法受理取消请求")
+            if task.kind == "ai.video_probe":
+                from app.services.video_probe_service import require_cancellable
+
+                await require_cancellable(db, task)
             previous = task.status
             values = {"admin_cancel_operation_id": audit.operation_id,
                       "admin_cancel_requested_at": task_statistics_service.now_utc()}

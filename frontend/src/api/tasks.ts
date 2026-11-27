@@ -150,6 +150,7 @@ export const TASK_STATUS: Record<TaskStatus, { label: string; color: string }> =
 }
 
 export const TASK_KIND_LABELS: Record<CoreTaskKind, string> = {
+  'ai.video_probe': '视频测试生成',
   'chapter.generate': 'AI 生成',
   'chapter.polish': 'AI 润色',
   'wizard.outline': '大纲向导',

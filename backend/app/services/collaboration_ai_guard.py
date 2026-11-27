@@ -18,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.providers import AnthropicProvider, GeminiProvider, OpenAICompatProvider, ProviderFactory, create_provider
-from app.ai.providers.base import ChatMessage, GeneratedImage, LLMProvider, ThinkingLevel
+from app.ai.providers.base import ChatMessage, GeneratedImage, ImageOptions, LLMProvider, ThinkingLevel
 from app.ai.tools import AgentEvent, AgentMessage, ToolChoice, ToolSpec
 from app.core.security import SecretCipher
 from app.models import AIConfig, Chapter, Project, Task, User
@@ -199,10 +199,11 @@ class _BoundModelProvider(LLMProvider):
                 raise
         raise failure()
 
-    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+    async def generate_image(self, prompt: str, model: str, *, options: ImageOptions | None = None) -> GeneratedImage:
+        kwargs = {"options": options} if options is not None else {}
         self._check(model, "image")
         try:
-            return await self._provider.generate_image(prompt, model)
+            return await self._provider.generate_image(prompt, model, **kwargs)
         except Exception as exc:
             failure = _database_failure_type(exc)
             if failure is None:

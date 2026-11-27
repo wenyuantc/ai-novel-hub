@@ -413,3 +413,61 @@ async def test_recorder_prices_each_dispatch_from_its_frozen_rule(storage_sessio
         assert all(row.input_tokens == 1_000_000 and row.cached_input_tokens == 500_000 for row in rows)
         assert all(row.pending_price_schedule is None for row in rows)
         assert [row.started_at.replace(tzinfo=UTC) for row in rows] == [before, edge, edge + timedelta(seconds=1)]
+
+
+async def test_video_charge_is_frozen_once_and_budgets_follow_payer(storage_sessionmaker):
+    from app.core.errors import BadRequestError
+    from app.schemas.ai_usage import UsageFilters
+    from app.services import ai_media_billing, ai_usage_query, authorization_service
+
+    await authorization_service.initialize(storage_sessionmaker)
+    async with storage_sessionmaker() as db:
+        identity, cfg = await _seed(db)
+        cfg.model_type = "video"
+        cfg.provider = "openai_compat"
+        identity = replace(identity, provider=cfg.provider, model_type="video", author_paid=True)
+        unit = usage.amount_to_nano("1")
+        await usage.set_price(db, cfg, currency="CNY", video_price_nano=unit, off_peak=usage.OffPeakPrice(
+            start="22:00", end="07:00", video_price_nano=unit // 2,
+        ))
+        await usage.set_budget(db, user_id=identity.payer_id, currency="CNY", limit_nano=4 * unit, threshold_percent=90)
+        await usage.set_budget(db, project_id=identity.project_id, currency="CNY", limit_nano=2 * unit,
+                               threshold_percent=90)
+        with pytest.raises(BadRequestError, match="预算"):
+            await ai_media_billing.check_video_budget(db, identity, seconds=5, now=NOW)
+        personal = replace(identity, project_id=None, author_paid=False)
+        with pytest.raises(BadRequestError, match="预算"):
+            await ai_media_billing.check_video_budget(db, personal, seconds=9, now=NOW)
+        frozen = await ai_media_billing.check_video_budget(db, identity, seconds=4, now=NOW)
+        await usage.set_price(db, cfg, currency="USD", video_price_nano=2 * unit)
+        with pytest.raises(BadRequestError, match="预算"):
+            await ai_media_billing.check_frozen_video_budget(
+                db, identity, seconds=5, now=NOW + timedelta(hours=12), price=frozen,
+            )
+        await ai_media_billing.check_frozen_video_budget(
+            db, identity, seconds=4, now=NOW + timedelta(hours=12), price=frozen,
+        )
+        job_id = str(uuid4())
+        for _ in range(2):
+            await ai_media_billing.settle_video(
+                db, identity, job_id=job_id, started_at=NOW, finished_at=NOW + timedelta(minutes=1),
+                seconds=4, price=frozen,
+            )
+        owner = await ai_usage_query.list_usage(db, UsageFilters(), actor_id=identity.payer_id)
+        project = await ai_usage_query.list_usage(
+            db, UsageFilters(), actor_id=identity.payer_id, project_id=identity.project_id,
+        )
+        assert project.total == owner.total == 1 and project.summary.video_seconds == owner.summary.video_seconds == 4
+        assert owner.items[0].per_video_second == "0.5"
+        assert owner.items[0].price_period == "off_peak"
+        assert [(cost.currency, cost.amount) for cost in owner.summary.costs] == [("CNY", "2")]
+        editor = await ai_usage_query.list_usage(db, UsageFilters(), actor_id=identity.actor_id)
+        assert editor.items[0].per_video_second is None and not editor.summary.costs
+
+        await usage.delete_price(db, cfg)
+        no_price = await ai_media_billing.check_video_budget(db, identity, seconds=4, now=NOW)
+        free_id = await ai_media_billing.settle_video(
+            db, identity, job_id=str(uuid4()), started_at=NOW, finished_at=NOW, seconds=4, price=no_price,
+        )
+        free = await db.get(AiUsageCall, free_id)
+        assert (free.video_seconds, free.amount_nano, free.pricing_status) == (4, None, "missing_price")

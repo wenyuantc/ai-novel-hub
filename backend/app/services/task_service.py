@@ -336,6 +336,10 @@ def to_out(
         "outline_id": _request_int(task, "outline_id") if task.kind == "outline.expand" else None,
         "skill": _skill_ref(task),
     }
+    if task.kind == "ai.video_probe" and task.status == "succeeded" and isinstance(task.result, dict):
+        object_id = task.result.get("result_object_id")
+        if isinstance(object_id, str):
+            update_fields["video_object_id"] = object_id
     review = (task.checkpoint or {}).get("rich_review") if isinstance(task.checkpoint, dict) else None
     if (isinstance(review, dict) and task.statistics_key is not None and review.get("phase") in
             ("awaiting_review", "applied", "discarded") and all(
@@ -1164,6 +1168,10 @@ async def _cancel_loaded_impl(
         await require_review_identity(db, task, expected_review)
     if task.admin_cancel_operation_id is not None:
         return await _wait_admin_cancel(db, engine, task)
+    if task.kind == "ai.video_probe":
+        from app.services.video_probe_service import require_cancellable
+
+        await require_cancellable(db, task)
     if (task.kind == "chapter.analyze" and task.status == "paused" and isinstance(task.checkpoint, dict)
             and any(key in task.checkpoint for key in ("_analysis_pending", "_analysis_completion"))):
         raise ConflictError("分析执行结果尚未核对，不能取消")

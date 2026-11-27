@@ -1,11 +1,12 @@
 from datetime import datetime
 from typing import Literal, Self
+from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ProviderName = Literal["openai_compat", "anthropic", "gemini"]
+ProviderName = Literal["openai_compat", "anthropic", "gemini", "volcengine", "minimax", "aliyun_wan"]
 # embedding = 向量模型（知识库与剧情记忆的语义检索），Anthropic 不提供
-ModelType = Literal["text", "image", "embedding"]
+ModelType = Literal["text", "image", "embedding", "video"]
 ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 # 单位 K（×1000 tokens）
@@ -22,9 +23,34 @@ EMBEDDING_UNSUPPORTED_PROVIDERS = ("anthropic",)
 EMBEDDING_UNSUPPORTED = "该提供方不支持向量模型"
 
 
-def check_embedding_provider(provider: str | None, model_type: str | None) -> None:
+VIDEO_ONLY_PROVIDERS = frozenset({"volcengine", "minimax", "aliyun_wan"})
+
+
+def check_model_provider(provider: str | None, model_type: str | None) -> None:
+    if provider in VIDEO_ONLY_PROVIDERS and model_type != "video":
+        raise ValueError("该提供方仅支持视频模型")
+    if model_type == "video" and provider not in VIDEO_ONLY_PROVIDERS | {"openai_compat"}:
+        raise ValueError("该提供方不支持视频模型")
     if model_type == "embedding" and provider in EMBEDDING_UNSUPPORTED_PROVIDERS:
         raise ValueError(EMBEDDING_UNSUPPORTED)
+
+
+def check_video_endpoint(provider: str, model_type: str, base_url: str | None) -> None:
+    if model_type != "video" or (base_url or "").strip():
+        return
+    if provider == "aliyun_wan":
+        raise ValueError("请填写百炼工作空间对应地域的 Base URL")
+    if provider == "openai_compat":
+        raise ValueError("请填写兼容视频接口的 Base URL")
+
+
+class VideoProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image_ids: list[UUID] = Field(default_factory=list, max_length=9)
+
+
+class VideoReferenceOut(BaseModel):
+    object_id: str
 
 
 class AIConfigCreate(BaseModel):
@@ -43,7 +69,8 @@ class AIConfigCreate(BaseModel):
     @model_validator(mode="after")
     def _check_limits(self) -> Self:
         check_output_within_context(self.context_window_k, self.max_output_k)
-        check_embedding_provider(self.provider, self.model_type)
+        check_model_provider(self.provider, self.model_type)
+        check_video_endpoint(self.provider, self.model_type, self.base_url)
         return self
 
 

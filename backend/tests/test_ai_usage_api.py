@@ -445,3 +445,23 @@ async def test_cached_model_rates_keep_versioned_updates_and_call_history(app, c
     assert history["currency"] == "CNY" and history["estimated_cost"] == "0.00004"
     assert history["price_period"] == "off_peak"
     assert history["cached_input_tokens"] == 10 and history["cached_input_per_million"] == "1"
+
+
+async def test_video_price_api_accepts_only_per_second_and_preserves_schedule(client):
+    await register(client)
+    result = await client.post(f"{_API}/ai-configs", json={
+        "name": "视频", "model_type": "video", "provider": "minimax", "model": "MiniMax-Hailuo-2.3",
+    })
+    assert result.status_code == 201, result.text
+    url = f"{_API}/ai-configs/{result.json()['id']}/price"
+    initial = (await client.get(url)).json()
+    price = {"currency": "CNY", "per_video_second": "0.125",
+             "off_peak": {"start": "22:00", "end": "06:00", "per_video_second": "0"}}
+    for invalid in ({"per_image": "1"}, {"input_per_million": "1"}, {"per_video_second": None}):
+        rejected = await client.put(url, json={"expected_version": initial["version"], "price": price | invalid})
+        assert rejected.status_code == 400
+    saved = await client.put(url, json={"expected_version": initial["version"], "price": price})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["price"]["per_video_second"] == "0.125"
+    assert saved.json()["price"]["off_peak"]["per_video_second"] == "0"
+    assert saved.json() == (await client.get(url)).json()

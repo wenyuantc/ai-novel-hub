@@ -28,7 +28,7 @@ from app.core.authorization_runtime import AuthorizationRuntime
 from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
 from app.core.security import SecretCipher
 from app.models import AIConfig, Project, ProjectCollaborator, Task, User
-from app.schemas.ai_config import ModelType, ProviderName, check_embedding_provider, check_output_within_context
+from app.schemas.ai_config import ModelType, ProviderName, check_model_provider, check_output_within_context
 from app.services import ai_dispatch, project_access
 from app.services.ai_config_service import MODEL_TYPE_LABELS, lock_config_owner
 from app.services.authorization_service import AuthenticatedActor, actor_snapshot
@@ -36,7 +36,7 @@ from app.services.task_engine.drain import require_task_admission_open
 
 GrantIdentity = tuple[str, int]
 ModelSource = Literal["actor", "owner"]
-TextImageType = Literal["text", "image"]
+ProjectGenerationType = Literal["text", "image", "video"]
 EmbeddingReason = Literal["owner_embedding_not_allowed", "embedding_config_missing"]
 PROJECT_MODEL_ABSENT = object()
 SHARED_EMBEDDING_ABSENT = object()
@@ -224,7 +224,7 @@ def deserialize_project_model(
     if not _positive_db_int(payload["config_id"]) or not _positive_db_int(payload["config_owner_id"]):
         raise _invalid_binding()
     model_type, source = payload["model_type"], payload["source"]
-    if type(model_type) is not str or model_type not in ("text", "image", "embedding"):
+    if type(model_type) is not str or model_type not in ("text", "image", "embedding", "video"):
         raise _invalid_binding()
     if type(source) is not str or source not in ("actor", "owner"):
         raise _invalid_binding()
@@ -410,7 +410,7 @@ async def _default_config(db: AsyncSession, user_id: int, model_type: ModelType)
     )).one_or_none()
 
 
-async def _explicit_config(db: AsyncSession, user_id: int, config_id: int, model_type: TextImageType):
+async def _explicit_config(db: AsyncSession, user_id: int, config_id: int, model_type: ProjectGenerationType):
     if not _positive_db_int(config_id):
         raise NotFoundError("模型配置不存在")
     row = (await db.execute(
@@ -436,7 +436,7 @@ def _validate_local(row, cipher: SecretCipher, *, allow_private: bool, source: M
         cipher.decrypt(row.api_key_enc)
         if row.provider not in get_args(ProviderName) or not row.model.strip():
             raise ValueError("模型提供方或模型名称无效")
-        check_embedding_provider(row.provider, row.model_type)
+        check_model_provider(row.provider, row.model_type)
         check_output_within_context(row.context_window_k, row.max_output_k)
         if row.base_url:
             parts = urlsplit(row.base_url)
@@ -469,7 +469,7 @@ def _bind(
 
 
 async def _read_project_model_preflight(
-    db: AsyncSession, actor: AuthenticatedActor, project_id: int, model_type: TextImageType, *,
+    db: AsyncSession, actor: AuthenticatedActor, project_id: int, model_type: ProjectGenerationType, *,
     cipher: SecretCipher, config_id: int | None, allow_private: bool,
     for_task_admission: bool = False,
 ) -> ProjectModelPreflight:
@@ -565,7 +565,7 @@ async def preview_project_text_model(
 
 async def preflight_project_model(
     sessionmaker: async_sessionmaker[AsyncSession], actor: AuthenticatedActor, project_id: int,
-    model_type: TextImageType, *, cipher: SecretCipher, config_id: int | None = None,
+    model_type: ProjectGenerationType, *, cipher: SecretCipher, config_id: int | None = None,
     allow_private: bool = False, for_task_admission: bool = False,
 ) -> ProjectModelPreflight:
     """短只读模型预检；后台受理在身份及作品权限核验后读取维护开关。"""
@@ -574,7 +574,7 @@ async def preflight_project_model(
         raise UnauthorizedError("未登录或登录已过期")
     if not _positive_db_int(project_id):
         raise NotFoundError("项目不存在")
-    if model_type not in ("text", "image") or type(allow_private) is not bool:
+    if model_type not in ("text", "image", "video") or type(allow_private) is not bool:
         raise _invalid_binding()
     if config_id is not None and not _positive_db_int(config_id):
         raise NotFoundError("模型配置不存在")
@@ -691,7 +691,8 @@ async def preflight_original_project_model(
                 task.input.get("_project_model"), actor_id=actor.id, project_id=source.project_id,
                 project_owner_id=row["project_owner_id"],
             )
-            if (binding is None or binding.model_type not in ("text", "image") or binding.grant_identity != grant
+            if (binding is None or binding.model_type not in ("text", "image", "video")
+                    or binding.grant_identity != grant
                     or (binding.source == "owner" and row["allow_owner_ai"] is not True)):
                 raise _invalid_binding()
             if for_task_admission:
@@ -852,11 +853,11 @@ async def accept_original_preflight_project_model(
 
 
 async def resolve_project_model(
-    db: AsyncSession, actor_id: int, project_id: int, model_type: TextImageType, *, cipher: SecretCipher,
+    db: AsyncSession, actor_id: int, project_id: int, model_type: ProjectGenerationType, *, cipher: SecretCipher,
     config_id: int | None = None, allow_private: bool = False, for_update: bool = False,
 ) -> ResolvedProjectModel:
     """文本/图片：配置来源在同一屏障中选择；受理任务还须持项目父行锁。"""
-    if model_type not in ("text", "image"):
+    if model_type not in ("text", "image", "video"):
         raise ValueError("共享向量必须使用独立的解析策略")
     with db.no_autoflush:
         project, member, grant = await _access(db, actor_id, project_id, for_update=for_update)

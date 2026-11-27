@@ -20,6 +20,7 @@
 
 | 规范 | 说明 | 状态 |
 |-------|-------------|--------|
+| [图片参考图与视频生成](./ai-media-models.md) | 生图画幅、视频厂商、后台任务续等与按秒计费 | 已填写 |
 | [媒体文件存储](./media-storage.md) | 图片和视频的存储、鉴权、分段读取、配额与清理 | 已填写 |
 | [功能插件](./feature-plugins.md) | 内置清单、持久启停、访问控制、后台任务取消与跨实例验证 | 已填写 |
 | [目录结构](./directory-structure.md) | `app/` 分层（api/v1 → services → models、ai/providers、ai/prompts）；路由绝不直接接触 ORM | 已填写 |

@@ -26,6 +26,7 @@ MAX_RATE_NANO = 1_000_000 * NANOS_PER_UNIT
 MAX_BUDGET_NANO = 1_000_000_000 * NANOS_PER_UNIT
 MAX_TOKENS = 1_000_000_000
 MAX_IMAGES = 1_000
+MAX_VIDEO_SECONDS = 1_000
 MAX_CALL_AMOUNT_NANO = 2 * MAX_BUDGET_NANO
 PENDING_CALL_WHERE = "status = 'pending'"
 
@@ -46,17 +47,19 @@ class AiModelPrice(Base):
     __table_args__ = (
         CheckConstraint("currency IN ('CNY', 'USD')", name="currency"),
         CheckConstraint(
-            "(model_type = 'text' AND image_price_nano IS NULL "
+            "((model_type = 'text' AND image_price_nano IS NULL "
             "AND (input_price_nano IS NOT NULL OR output_price_nano IS NOT NULL)) OR "
             "(model_type = 'embedding' AND input_price_nano IS NOT NULL "
             "AND output_price_nano IS NULL AND image_price_nano IS NULL) OR "
             "(model_type = 'image' AND image_price_nano IS NOT NULL "
+            "AND input_price_nano IS NULL AND output_price_nano IS NULL)) AND video_price_nano IS NULL OR "
+            "(model_type = 'video' AND video_price_nano IS NOT NULL AND image_price_nano IS NULL "
             "AND input_price_nano IS NULL AND output_price_nano IS NULL)",
             name="rate_shape",
         ),
         *(
             CheckConstraint(f"{column} BETWEEN 0 AND {MAX_RATE_NANO}", name=column)
-            for column in ("input_price_nano", "output_price_nano", "image_price_nano")
+            for column in ("input_price_nano", "output_price_nano", "image_price_nano", "video_price_nano")
         ),
     )
 
@@ -75,6 +78,7 @@ class AiModelPrice(Base):
     ))
     output_price_nano: Mapped[int | None] = mapped_column(BigInteger)
     image_price_nano: Mapped[int | None] = mapped_column(BigInteger)
+    video_price_nano: Mapped[int | None] = mapped_column(BigInteger)
     off_peak: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -117,7 +121,7 @@ class AiUsageCall(Base):
     __table_args__ = (
         CheckConstraint("length(id) = 36", name="id_length"),
         CheckConstraint("project_id IS NULL OR had_project", name="project_origin"),
-        CheckConstraint("model_type IN ('text', 'embedding', 'image')", name="model_type"),
+        CheckConstraint("model_type IN ('text', 'embedding', 'image', 'video')", name="model_type"),
         CheckConstraint("currency IN ('CNY', 'USD')", name="currency"),
         CheckConstraint(
             "(status = 'pending' AND finished_at IS NULL AND pricing_status = 'pending' AND sent IS NOT FALSE) OR "
@@ -141,6 +145,14 @@ class AiUsageCall(Base):
                 ("output_tokens", "output_source", MAX_TOKENS),
                 ("image_count", "image_source", MAX_IMAGES),
             )
+        ),
+        CheckConstraint(
+            f"video_seconds IS NULL OR (model_type = 'video' AND video_seconds BETWEEN 0 AND {MAX_VIDEO_SECONDS})",
+            name="video_seconds",
+        ),
+        CheckConstraint(
+            f"price_video_nano IS NULL OR (model_type = 'video' AND price_video_nano BETWEEN 0 AND {MAX_RATE_NANO})",
+            name="price_video_nano",
         ),
         Index("ix_ai_usage_calls_started_id", "started_at", "id"),
         Index("ix_ai_usage_calls_actor_started_id", "actor_id", "started_at", "id"),
@@ -179,6 +191,7 @@ class AiUsageCall(Base):
         name="cached_input_tokens",
     ))
     output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    video_seconds: Mapped[int | None] = mapped_column(BigInteger)
     image_count: Mapped[int | None] = mapped_column(BigInteger)
     input_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unknown")
     output_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unknown")
@@ -191,6 +204,7 @@ class AiUsageCall(Base):
         name="price_cached_input_nano",
     ))
     price_output_nano: Mapped[int | None] = mapped_column(BigInteger)
+    price_video_nano: Mapped[int | None] = mapped_column(BigInteger)
     price_image_nano: Mapped[int | None] = mapped_column(BigInteger)
     price_period: Mapped[str | None] = mapped_column(
         String(16), CheckConstraint("price_period IN ('fixed', 'peak', 'off_peak')", name="price_period"),

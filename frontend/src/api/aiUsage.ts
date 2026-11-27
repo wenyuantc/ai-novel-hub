@@ -45,6 +45,7 @@ export interface UsageRow {
   input_tokens: number | null
   cached_input_tokens: number | null
   output_tokens: number | null
+  video_seconds: number | null
   image_count: number | null
   input_source: UsageSource
   output_source: UsageSource
@@ -57,6 +58,7 @@ export interface UsageRow {
   input_per_million: string | null
   cached_input_per_million?: string | null
   output_per_million: string | null
+  per_video_second?: string | null
   per_image: string | null
 }
 
@@ -64,6 +66,7 @@ export interface UsageSummary {
   input_tokens: number
   cached_input_tokens: number
   output_tokens: number
+  video_seconds: number
   image_count: number
   unknown_usage_calls: number
   unpriced_calls: number
@@ -83,6 +86,7 @@ export interface UsagePriceRates {
   input_per_million: string | null
   cached_input_per_million?: string | null
   output_per_million: string | null
+  per_video_second?: string | null
   per_image: string | null
 }
 

@@ -21,6 +21,23 @@ CACHED_COLUMNS = {
 
 def _schema_before_budget_notifications(reference, table):
     schema = _schema_contract(inspect(reference), table)
+    # 0082 才允许视频秒数、单价与价格快照；冻结 0061–0063 的类型与费率约束。
+    if table in {"ai_model_prices", "ai_usage_calls"}:
+        added = ("video_price_nano",) if table == "ai_model_prices" else ("video_seconds", "price_video_nano")
+        for column in added:
+            del schema["columns"][column]
+            del schema["check_constraints"][f"ck_{table}_{column}"]
+        if table == "ai_model_prices":
+            schema["check_constraints"]["ck_ai_model_prices_rate_shape"] = (
+                "(model_type = 'text' AND image_price_nano IS NULL "
+                "AND (input_price_nano IS NOT NULL OR output_price_nano IS NOT NULL)) OR "
+                "(model_type = 'embedding' AND input_price_nano IS NOT NULL "
+                "AND output_price_nano IS NULL AND image_price_nano IS NULL) OR "
+                "(model_type = 'image' AND image_price_nano IS NOT NULL "
+                "AND input_price_nano IS NULL AND output_price_nano IS NULL)"
+            )
+        else:
+            schema["check_constraints"]["ck_ai_usage_calls_model_type"] = "model_type IN ('text', 'embedding', 'image')"
     if table == "ai_usage_budgets":
         # 0073 新增配置身份；0061–0063 的迁移契约仍需与其余全部字段一致。
         del schema["columns"]["instance_key"]

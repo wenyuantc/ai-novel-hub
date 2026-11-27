@@ -336,11 +336,11 @@ export interface ApiKeyRevealed {
   key: string
 }
 
-export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini'
+export type ProviderName = 'openai_compat' | 'anthropic' | 'gemini' | 'volcengine' | 'minimax' | 'aliyun_wan'
 
 /** off = 不发送思考参数 */
 /** embedding = 向量模型（知识库与剧情记忆的语义检索；Anthropic 不支持） */
-export type ModelType = 'text' | 'image' | 'embedding'
+export type ModelType = 'text' | 'image' | 'embedding' | 'video'
 
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -1137,6 +1137,7 @@ export interface RewriteApply {
 // ---------------- 后台任务（backend/app/schemas/task.py） ----------------
 
 export type CoreTaskKind =
+  | 'ai.video_probe'
   | 'chapter.generate'
   | 'chapter.polish'
   | 'wizard.outline'
@@ -1183,6 +1184,7 @@ export interface Task {
   stage: string
   error: string
   retry_of_id: number | null
+  video_object_id?: string | null
   /** 任务针对的角色（目前仅 relations.parse 有值），用于按角色接上活动任务 */
   character_id: number | null
   /** 按建议重写引用的分析（仅 chapter.revise 有值），用于重写前后评分对比 */

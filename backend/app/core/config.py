@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     context_char_budget: int = Field(default=12000, ge=1000)
     # 单次 AI 请求超时（秒）
     ai_request_timeout: float = Field(default=300.0, gt=0)
+    video_job_timeout_seconds: int = Field(default=1800, gt=0, le=86400)
     # 是否允许 AI Base URL 指向本地 / 内网地址（接入 Ollama 等本地模型时开启）；开放注册的公网部署请保持关闭
     allow_private_ai_endpoints: bool = False
     # 任务进程内部通道；默认用私有 UDS，跨实例显式配置私网主机及允许的网络。

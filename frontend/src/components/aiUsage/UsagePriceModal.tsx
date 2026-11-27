@@ -22,6 +22,7 @@ const priceFields: Record<AIConfig['model_type'], readonly PriceField[]> = {
     { name: 'output_per_million', label: '每百万输出 tokens' },
   ],
   embedding: [{ name: 'input_per_million', label: '每百万输入 tokens' }],
+  video: [{ name: 'per_video_second', label: '每秒生成视频' }],
   image: [{ name: 'per_image', label: '每张返回图片' }],
 }
 

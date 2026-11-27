@@ -101,6 +101,7 @@ OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "insp
 # 与项目相关、但不导出的表（理由见值）。
 # book_imports（拆书解析记录）只引用 users、与任何项目都无关，不在这张注册表的范围内（反射测试也不会把它算进来）
 NOT_EXPORTED: dict[str, str] = {
+    "ai_external_jobs": "厂商任务号与用量记录只归属原部署",
     "media_objects": "媒体文件及元数据不随单书备份迁移",
     "notifications": "个人收件箱记录本实例事件和协作授权轮次，不随单书迁移",
     "ai_budget_periods": "预算跨档记录属于原实例的费用配置和结算周期",

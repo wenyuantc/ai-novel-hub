@@ -22,6 +22,22 @@ def _snapshot_revision(path: Path) -> str:
         versions = db.execute("SELECT version_num FROM alembic_version").fetchall()
         if len(versions) != 1 or not isinstance(revision := versions[0][0], str) or not revision.isdecimal():
             raise ValueError("无法识别快照的迁移版本")
+        video_schema = {
+            "ai_external_jobs": {"id", "task_id", "actor_id", "payer_id", "project_id", "config_id",
+                                 "config_instance_key", "provider", "model", "kind", "request", "external_id",
+                                 "state", "progress", "result_object_id", "error_code", "error_message",
+                                 "usage_call_id", "created_at", "submitted_at", "finished_at", "deadline_at",
+                                 "owner_ref"},
+            "ai_model_prices": {"video_price_nano"},
+            "ai_usage_calls": {"video_seconds", "price_video_nano"},
+        }
+        expects_video = int(revision) >= 82
+        if ("ai_external_jobs" in tables) != expects_video:
+            raise ValueError("快照的外部视频任务表与迁移版本不一致")
+        for table, required in video_schema.items():
+            present = required & {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+            if present != (required if expects_video else set()):
+                raise ValueError("快照的视频任务或计费字段与迁移版本不一致")
         media_tables = {"media_objects", "media_storage_locations", "media_storage_settings", "media_volume_reports"}
         if tables & media_tables != (media_tables if int(revision) >= 81 else set()):
             raise ValueError("快照的媒体存储表与迁移版本不一致")

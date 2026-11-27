@@ -247,3 +247,22 @@ async def test_recovery_finishes_only_stale_pending_attempts(app):
     assert still_running.status == "pending" and still_running.finished_at is None
     assert unresolved.status == "interrupted" and unresolved.sent is None
     assert unresolved.amount_nano is None and unresolved.pricing_status == "unconfirmed"
+
+
+async def test_over_budget_image_is_refused_before_provider_call(app, client, fake_llm):
+    from app.core.errors import BadRequestError
+
+    user = await register(client)
+    cfg_data = await create_ai_config(client, model_type="image", model="test-picture")
+    maker = app.state.sessionmaker
+    async with maker() as db:
+        cfg = await db.get(AIConfig, cfg_data["id"])
+        await ai_usage_storage.set_price(db, cfg, currency="CNY", image_price_nano=2_000_000_000)
+        await ai_usage_storage.set_budget(db, user_id=user["id"], currency="CNY",
+                                          limit_nano=1_000_000_000, threshold_percent=90)
+        await db.commit()
+        raw = await ai_config_service.build_provider(cfg, app.state.cipher, fake_llm.factory, 2, allow_private=False)
+        provider = ai_usage_recording.meter_provider(raw, cfg, maker, actor_id=user["id"], kind="project.cover")
+        with pytest.raises(BadRequestError, match="预算"):
+            await provider.generate_image("超预算", cfg.model)
+        assert await db.scalar(select(AiUsageCall.id)) is None

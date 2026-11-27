@@ -25,21 +25,33 @@ export const PROVIDER_LABELS: Record<AIConfig['provider'], string> = {
   openai_compat: 'OpenAI 兼容',
   anthropic: 'Anthropic Claude',
   gemini: 'Google Gemini',
+  volcengine: '火山引擎 Seedance',
+  minimax: 'MiniMax',
+  aliyun_wan: '阿里云百炼 Wan',
 }
 
 export const MODEL_TYPE_LABELS: Record<ModelType, string> = {
   text: '文本模型',
   image: '图片模型',
   embedding: '向量模型',
+  video: '视频模型',
 }
 
-/** 不提供向量（embedding）接口的提供方（与后端 EMBEDDING_UNSUPPORTED_PROVIDERS 一致） */
-export const EMBEDDING_UNSUPPORTED_PROVIDERS: readonly AIConfig['provider'][] = ['anthropic']
+const PROVIDER_MODEL_TYPES: Record<AIConfig['provider'], readonly ModelType[]> = {
+  openai_compat: ['text', 'image', 'embedding', 'video'],
+  anthropic: ['text', 'image'],
+  gemini: ['text', 'image', 'embedding'],
+  volcengine: ['video'],
+  minimax: ['video'],
+  aliyun_wan: ['video'],
+}
 
-/** 某提供方可选的模型类型：Anthropic 不显示向量模型 */
-export function modelTypesFor(provider: AIConfig['provider'] | undefined): ModelType[] {
-  const all = Object.keys(MODEL_TYPE_LABELS) as ModelType[]
-  return provider && EMBEDDING_UNSUPPORTED_PROVIDERS.includes(provider) ? all.filter((t) => t !== 'embedding') : all
+export function modelTypesFor(provider?: AIConfig['provider']): readonly ModelType[] {
+  return provider ? PROVIDER_MODEL_TYPES[provider] : Object.keys(MODEL_TYPE_LABELS) as ModelType[]
+}
+
+export function providersFor(type: ModelType) {
+  return (Object.keys(PROVIDER_LABELS) as AIConfig['provider'][]).filter((p) => modelTypesFor(p).includes(type))
 }
 
 export const EMBEDDING_HELP = '用于知识库与剧情记忆的语义检索，不配置时使用关键词检索'

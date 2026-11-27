@@ -3,7 +3,8 @@
 import asyncio
 import hashlib
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator
+import wave
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import ExitStack, aclosing
 from dataclasses import dataclass
 from io import BytesIO
@@ -17,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.images import IMAGE_EXTENSIONS, sniff_image
 from app.core.errors import AppError, BadRequestError, ConflictError, NotFoundError
-from app.media import locations
+from app.media import locations, mp4
 from app.media.cleanup import mark_deleted as mark_deleted
 from app.media.cleanup import mark_project_deleted as mark_project_deleted
 from app.media.cleanup import sweep as sweep
@@ -25,7 +26,7 @@ from app.models import User
 from app.models.media import MediaObject, MediaStorageLocation, MediaStorageSettings
 from app.services import project_lifecycle
 
-_EXTENSIONS = {**IMAGE_EXTENSIONS, "video/mp4": "mp4", "video/webm": "webm"}
+_EXTENSIONS = {**IMAGE_EXTENSIONS, "video/mp4": "mp4", "video/webm": "webm", "audio/wav": "wav"}
 _BLOCK_SIZE = 256 * 1024
 
 
@@ -50,6 +51,8 @@ def _type_error() -> BadRequestError:
 
 
 def _sniff(head: bytes) -> str | None:
+    if head.startswith(b"RIFF") and head[8:12] == b"WAVE":
+        return "audio/wav"
     if head[4:8] == b"ftyp" and len(head) >= 12:
         box_size = min(len(head), int.from_bytes(head[:4]))
         brands = [head[8:12]]
@@ -60,6 +63,22 @@ def _sniff(head: bytes) -> str | None:
     if head.startswith(b"\x1a\x45\xdf\xa3") and b"webm" in head:
         return "video/webm"
     return sniff_image(head)
+
+
+def _wav_duration(file: BinaryIO) -> int:
+    file.seek(0)
+    try:
+        with wave.open(file, "rb") as audio:
+            frames = audio.getnframes()
+            if not frames or not audio.getframerate() or audio.getsampwidth() > 8:
+                raise _type_error()
+            # 定位最后一帧，避免一次读入整段音频，同时拒绝数据区截断的文件。
+            audio.setpos(frames - 1)
+            if len(audio.readframes(1)) != audio.getnchannels() * audio.getsampwidth():
+                raise _type_error()
+            return frames * 1000 // audio.getframerate()
+    except (EOFError, OSError, RuntimeError, wave.Error) as exc:
+        raise _type_error() from exc
 
 
 def _read_image(content: _Content, *, thumbnail: bool) -> _Content | None:
@@ -96,7 +115,12 @@ async def _prepare(stack, source, *, mime, kind, max_bytes, variant=None) -> _Co
     detected = _sniff(file.read(256))
     if detected is None or detected != mime or detected.split("/")[0] != kind:
         raise _type_error()
-    return _Content(file, detected, size, digest.hexdigest(), variant=variant)
+    duration = None
+    if detected == "audio/wav":
+        duration = await asyncio.to_thread(_wav_duration, file)
+    elif detected == "video/mp4":
+        duration = await asyncio.to_thread(mp4.duration_ms, file, size)
+    return _Content(file, detected, size, digest.hexdigest(), variant=variant, duration_ms=duration)
 
 
 async def _chunks(file: BinaryIO) -> AsyncIterator[bytes]:
@@ -111,10 +135,13 @@ async def usage_of(db: AsyncSession, user_id: int) -> int:
     ))
 
 
-async def _publish(db, parts, *, owner_id, project_id, scope, plugin_id, origin, parent=None):
+async def _publish(db, parts, *, owner_id, project_id, scope, plugin_id, origin, parent=None,
+                   object_id=None, write_guard=None):
     try:
         if scope not in {"project", "user"} or (scope == "project") != (project_id is not None):
             raise BadRequestError("媒体归属范围无效")
+        if write_guard is not None:
+            await write_guard(db)
         # 同一用户在统计占用与预留字节之间不能并发插入另一份预留。提交后即释放用户锁。
         locked = await db.execute(update(User).where(User.id == owner_id)
                                   .values(id=User.id, updated_at=User.updated_at))
@@ -147,7 +174,7 @@ async def _publish(db, parts, *, owner_id, project_id, scope, plugin_id, origin,
         volume_id = await locations.local_volume_id(db) if location.kind == "local" else None
         rows = []
         for part in parts:
-            uid = str(uuid4())
+            uid = object_id if object_id is not None and not rows else str(uuid4())
             root_id = rows[0].id if rows else None
             row = MediaObject(
                 id=uid, location_id=location.id, volume_id=volume_id,
@@ -172,6 +199,8 @@ async def _publish(db, parts, *, owner_id, project_id, scope, plugin_id, origin,
         async with asyncio.timeout(6 * 3600):
             for row, part in zip(rows, parts, strict=True):
                 await backend.put(row.storage_key, _chunks(part.file), size_hint=part.size, max_bytes=part.size)
+        if write_guard is not None:
+            await write_guard(db)
         published = await db.execute(update(MediaObject).where(
             MediaObject.id.in_(ids), MediaObject.status == "pending", MediaObject.deleted_at.is_(None),
             MediaObject.owner_user_id == owner_id, MediaObject.project_id == project_id,
@@ -191,7 +220,8 @@ async def _publish(db, parts, *, owner_id, project_id, scope, plugin_id, origin,
 
 async def store(db: AsyncSession, *, owner_id: int, scope: str, kind: str, mime: str, source: AsyncIterator[bytes],
                 max_bytes: int, project_id: int | None = None, plugin_id: str | None = None,
-                origin: str = "upload") -> MediaObject:
+                origin: str = "upload", object_id: str | None = None,
+                write_guard: Callable[[AsyncSession], Awaitable[None]] | None = None) -> MediaObject:
     with ExitStack() as stack:
         content = await _prepare(stack, source, mime=mime, kind=kind, max_bytes=max_bytes)
         parts = [content]
@@ -200,7 +230,7 @@ async def store(db: AsyncSession, *, owner_id: int, scope: str, kind: str, mime:
             stack.callback(thumb.file.close)
             parts.append(thumb)
         return await _publish(db, parts, owner_id=owner_id, project_id=project_id, scope=scope,
-                              plugin_id=plugin_id, origin=origin)
+                              plugin_id=plugin_id, origin=origin, object_id=object_id, write_guard=write_guard)
 
 
 async def store_derived(db: AsyncSession, parent: MediaObject, variant: str, mime: str, data: bytes) -> MediaObject:

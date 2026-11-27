@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 import re
@@ -10,11 +11,14 @@ from google import genai
 from google.genai import types
 from pydantic import TypeAdapter, ValidationError
 
+from app.ai import references
 from app.ai.images import validate_image
 from app.ai.providers.base import (
     AIProviderError,
     ChatMessage,
     GeneratedImage,
+    ImageCapabilityError,
+    ImageOptions,
     LLMProvider,
     ModelInfo,
     ThinkingLevel,
@@ -244,17 +248,24 @@ class GeminiProvider(LLMProvider):
             finally:
                 await stream.aclose()
 
-    async def generate_image(self, prompt: str, model: str) -> GeneratedImage:
+    async def generate_image(self, prompt: str, model: str, *, options: ImageOptions | None = None) -> GeneratedImage:
+        imagen = "imagen" in model.lower()
+        inputs = ()
+        if options and options.references:
+            if imagen:
+                raise ImageCapabilityError("该模型不支持参考图，请换用 Gemini 原生生图模型")
+            inputs = await asyncio.to_thread(references.normalize_images, options.references)
+        ratio = options.aspect_ratio if options else None
         client = None
         try:
             client = self._client()
             async with model_attempt() as attempt:
-                if "imagen" in model.lower():
+                if imagen:
                     try:
                         result = await attempt.invoke(client.aio.models.generate_images(
                             model=model,
                             prompt=prompt,
-                            config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio="3:4"),
+                            config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio=ratio or "3:4"),
                         ))
                     except ValueError as exc:
                         if "not in gemini developer api mode" not in str(exc).lower():
@@ -270,9 +281,16 @@ class GeminiProvider(LLMProvider):
                         data = images[0].image.image_bytes
                         return GeneratedImage(data=data, mime_type=validate_image(data))
                 else:
+                    contents = prompt
+                    if inputs:
+                        parts = [types.Part.from_text(text=prompt)]
+                        parts.extend(types.Part.from_bytes(data=item.data, mime_type=item.mime_type) for item in inputs)
+                        contents = types.Content(role="user", parts=parts)
+                    config = types.GenerateContentConfig(response_modalities=["IMAGE"])
+                    if ratio:
+                        config.image_config = types.ImageConfig(aspect_ratio=ratio)
                     result = await attempt.invoke(client.aio.models.generate_content(
-                        model=model, contents=prompt,
-                        config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                        model=model, contents=contents, config=config,
                     ))
                     attempt.mark_response()
                     images = [

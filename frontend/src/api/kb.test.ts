@@ -121,7 +121,11 @@ describe('memoryApi', () => {
 describe('向量模型配置', () => {
   it('Anthropic 不显示向量模型', () => {
     expect(modelTypesFor('anthropic')).toEqual(['text', 'image'])
-    expect(modelTypesFor('openai_compat')).toEqual(['text', 'image', 'embedding'])
+    expect(modelTypesFor('openai_compat')).toEqual(['text', 'image', 'embedding', 'video'])
+    expect(modelTypesFor('gemini')).not.toContain('video')
+    for (const provider of ['volcengine', 'minimax', 'aliyun_wan'] as const) {
+      expect(modelTypesFor(provider)).toEqual(['video'])
+    }
     expect(modelTypesFor('gemini')).toContain('embedding')
     expect(modelTypesFor(undefined)).toContain('embedding')
   })

@@ -640,3 +640,7 @@ dayjs.locale('zh-cn')
 ## 库外媒体
 
 `components/media/MediaImage` 使用 `objectId`、`alt` 和可选 `variant` 渲染鉴权图片；`MediaVideo` 使用 `objectId` 与可选 `label`，从同一对象的 `poster` 取海报。视频走浏览器原生控件和字节范围请求。图片或视频加载失败时显示“文件暂不可用”。管理页的两项权限和外链约定见[媒体文件存储](../backend/media-storage.md)。
+
+## 视频模型
+
+视频配置仅列支持的厂商，隐藏文本参数。测试生成展示费用提示、可选参考图、阶段与取消按钮，成功后用鉴权的 `MediaVideo` 播放。弹窗重开与断线重连应重新取得原任务状态。价格输入为每秒，账单展示视频秒数。详见[媒体模型契约](../backend/ai-media-models.md)。
