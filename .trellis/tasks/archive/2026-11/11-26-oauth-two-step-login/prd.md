@@ -1,6 +1,6 @@
 # 第三方登录与两步验证
 
-首版支持 Linux DO 和 GitHub。作者可以把两家身份分别绑定到自己的 aiNovel 账号，用任一已绑定入口回到原书架，账号开启的两步验证适用于所有登录入口。[父任务](../11-26-login-methods-local-mcp/prd.md)
+首版支持 Linux DO 和 GitHub。作者可以把两家身份分别绑定到自己的 aiNovel 账号，用任一已绑定入口回到原书架，账号开启的两步验证适用于所有登录入口。[父任务](../../../11-26-login-methods-local-mcp/prd.md)
 
 ## 当前行为
 
