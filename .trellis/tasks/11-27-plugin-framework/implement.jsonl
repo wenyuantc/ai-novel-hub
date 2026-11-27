@@ -1,0 +1,18 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范总索引与全量门禁命令"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "app 分层约定；新增 app/plugins 目录需与之相容"}
+{"file": ".trellis/spec/backend/system-settings.md", "reason": "实例级开关的持久化、修订号、同事务审计、公开配置同步，是插件状态的参照做法"}
+{"file": ".trellis/spec/backend/rbac-quotas.md", "reason": "后台权限目录与授权写屏障；新增 plugins.read / plugins.update"}
+{"file": ".trellis/spec/backend/admin-audit.md", "reason": "管理操作审计的动作、摘要与同事务要求"}
+{"file": ".trellis/spec/backend/admin-task-monitoring.md", "reason": "持久取消受理与轮次约束；停用插件取消任务时复用"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError 层级与响应包；PluginDisabled 的定义方式"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "模型、迁移与约束的写法"}
+{"file": ".trellis/spec/backend/deployment-migrations.md", "reason": "迁移事务与多实例启动约束"}
+{"file": ".trellis/spec/backend/admin-backups.md", "reason": "整库备份表目录；新增表需要登记"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ruff / pytest、测试隔离、README 同步要求"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范总索引"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "src 目录布局；新增 src/plugins"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "管理页、RequirePermission、导航的既有模式"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "auth store 与公开配置；登出 / 401 清空"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像后端 schema 的约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint / test / build 门禁与评审清单"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "启用状态从数据库到接口、公开配置、store、导航的跨层流动"}
