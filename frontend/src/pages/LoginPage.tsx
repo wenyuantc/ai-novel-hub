@@ -1,3 +1,4 @@
+import { GithubFilled } from '@ant-design/icons'
 import { Alert, Button, Form, Input, Space, Tabs } from 'antd'
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -6,6 +7,7 @@ import { useLoader } from '../hooks/useLoader'
 import { loginReturnPath, readLoginReturn, rememberLoginReturn } from '../utils/loginReturn'
 import { errorMessage } from '../api/client'
 import type { Credentials } from '../api/types'
+import linuxDoLogo from '../assets/linux-do.png'
 import mountainStory from '../assets/auth-mountain-story.jpg'
 import { FullPageSpin } from '../components/RequireAuth'
 import { StudioBrand } from '../components/StudioUI'
@@ -124,7 +126,18 @@ export default function LoginPage() {
           <Button className="auth-submit" type="primary" htmlType="submit" block loading={submitting} disabled={submitting}>{registering ? '创建账户' : '登录知页'}</Button>
         </Form>
         <Space wrap style={{ marginTop: 12 }}>
-          {providers.data?.providers.map((provider) => <Button key={provider} disabled={submitting} onClick={() => void startProvider(provider)}>{providerName[provider]} 登录</Button>)}
+          {providers.data?.providers.map((provider) => (
+            <Button
+              key={provider}
+              icon={provider === 'github'
+                ? <GithubFilled aria-hidden="true" style={{ fontSize: 16 }} />
+                : <img src={linuxDoLogo} alt="" width={16} height={16} style={{ display: 'block' }} />}
+              disabled={submitting}
+              onClick={() => void startProvider(provider)}
+            >
+              {providerName[provider]} 登录
+            </Button>
+          ))}
           {providers.error && <Button onClick={providers.reload}>重新加载第三方登录方式</Button>}
         </Space>
         {!registrationEnabled && <p className="auth-registration-closed">注册已关闭，如需账号请联系管理员。</p>}
