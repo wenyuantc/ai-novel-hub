@@ -16,7 +16,14 @@ class DocumentNode:
     source: str = "文档"
 
 
+@dataclass(frozen=True)
+class DocumentTable:
+    headers: tuple[str, ...]
+    rows: list[tuple[str, ...]]
+    source: str
+
+
 @dataclass
 class DocumentModel:
-    nodes: list[DocumentNode] = field(default_factory=list)
+    nodes: list[DocumentNode | DocumentTable] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)

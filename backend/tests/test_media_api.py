@@ -6,7 +6,6 @@ import httpx
 import pytest
 from PIL import Image
 
-from app import plugins
 from app.media import service, signing
 from app.models.media import MediaObject, MediaStorageLocation
 from tests.helpers import create_project, register
@@ -17,7 +16,7 @@ VIDEO = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + bytes(range(64))
 
 @pytest.fixture
 def settings_overrides(tmp_path, monkeypatch):
-    monkeypatch.setattr(plugins, "REGISTERED", (SAMPLE,))
+    monkeypatch.setattr("app.plugins.builtins.REGISTERED", (SAMPLE,))
     return {"media_dir": str(tmp_path / "media"), "public_base_url": "https://media.example.org/"}
 
 

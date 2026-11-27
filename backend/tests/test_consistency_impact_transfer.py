@@ -56,7 +56,7 @@ async def _seed_impact(client, app) -> tuple[dict, list[int]]:
 async def test_v13_roundtrip_remaps_impact_references(client, app):
     project, (first, second) = await _seed_impact(client, app)
     data = await _backup(client, project["id"])
-    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (18, "0082")
+    assert (data["version"], data["app_schema"]) == (exporter.VERSION, exporter.APP_SCHEMA) == (19, "0083")
     (row,) = data["tables"]["consistency_impacts"]
     assert not {"project_id", "actor_id", "task_id"} & set(row) and row["chapter_id"] == first
     ledger_row = next(r for r in data["tables"]["consistency_ledgers"] if r["chapter_id"] == first)
@@ -168,7 +168,7 @@ async def test_v12_backup_imports_and_old_versions_cannot_carry_impact_data(clie
         imported = await _import(client, old)
         assert imported["preview"]["version"] == 12
         exported = await _backup(client, imported["project"]["id"])
-        assert exported["version"] == 18 and exported["tables"]["consistency_impacts"] == []
+        assert exported["version"] == 19 and exported["tables"]["consistency_impacts"] == []
         assert len(exported["tables"]["consistency_ledgers"]) == 2 and len(exported["tables"]["chapters"]) == 2
         assert all(row["prev_facts"] is None for row in exported["tables"]["consistency_ledgers"])
         assert len(exported["tables"]["consistency_issues"]) == 2

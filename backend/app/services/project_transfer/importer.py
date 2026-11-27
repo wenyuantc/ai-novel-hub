@@ -74,7 +74,7 @@ from app.services.project_transfer.batch_revisions import REVISION_TABLES, valid
 from app.services.project_transfer.exporter import FORMAT, STYLE_FIELDS, VERSION
 from app.services.project_transfer.planning import validate_planning_tables
 from app.services.project_transfer.preview_store import MAX_BYTES, TOO_LARGE
-from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, RULES, RULES_BY_TABLE, TableRule
+from app.services.project_transfer.registry import PLANNING_TABLES, PROJECT_RULE, TableRule, transfer_catalog
 from app.services.project_transfer.remap import RemapContext
 from app.services.project_transfer.rich_documents import validate_rich_tables
 from app.services.project_transfer.scenes import validate_scene_tables
@@ -229,14 +229,14 @@ class Backup:
 
     @property
     def counts(self) -> dict[str, int]:
-        return {t: len(self.tables.get(t) or []) for t in (r.table for r in RULES) if self.tables.get(t)}
+        return {table: len(self.tables[table]) for table in transfer_catalog().by_table if self.tables.get(table)}
 
     @property
     def options(self) -> BackupOptions:
         raw = self.data.get("options") if isinstance(self.data.get("options"), dict) else {}
         values = {k: bool(raw.get(k)) for k in BackupOptions.model_fields}
         # 以实际包含的数据为准
-        for rule in RULES:
+        for rule in transfer_catalog().rules:
             if rule.option is not None and self.tables.get(rule.table):
                 values[rule.option] = True
         return BackupOptions(**values)
@@ -616,6 +616,23 @@ def _migrate_v17_to_v18(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+# v19 首次引入短剧文字资料，此处固定当时格式，后续插件新增表独立升版。
+_V19_DRAMA_TABLES = (
+    "drama_series", "drama_episodes", "drama_episode_sources", "drama_characters", "drama_looks",
+    "drama_scenes", "drama_props", "drama_shots", "drama_episode_looks", "drama_episode_scenes",
+    "drama_episode_props", "drama_shot_looks", "drama_shot_props",
+)
+
+
+def _migrate_v18_to_v19(data: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(tables := data.get("tables"), dict):
+        for name in _V19_DRAMA_TABLES:
+            if tables.get(name, []) != []:
+                raise BadRequestError("旧版备份不支持短剧资料，请使用原始版本文件")
+            tables[name] = []
+    return data
+
+
 def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
     """按版本逐级升级到当前版本。"""
     if version < 14 and isinstance(tables := data.get("tables"), dict):
@@ -650,6 +667,7 @@ def migrate(data: dict[str, Any], version: int) -> dict[str, Any]:
         15: _migrate_v15_to_v16,
         16: _migrate_v16_to_v17,
         17: _migrate_v17_to_v18,
+        18: _migrate_v18_to_v19,
     }
     while version < VERSION:
         data = steps[version](data)
@@ -800,7 +818,7 @@ def _check_rows(rule: TableRule, rows: Any, errors: _Errors) -> None:
 
 def _id_sets(project: dict[str, Any], tables: dict[str, list[dict[str, Any]]]) -> dict[str, set[int]]:
     sets = {"projects": {project["id"]} if _is_int(project.get("id")) else set()}
-    for rule in RULES:
+    for rule in transfer_catalog().rules:
         if rule.has_id:
             sets[rule.table] = {r["id"] for r in tables.get(rule.table) or [] if isinstance(r, dict)}
     return sets
@@ -812,7 +830,7 @@ def _check_refs(backup: Backup, errors: _Errors) -> None:
     ref = backup.project.get("default_style_ref")
     if ref is not None and ref not in refs:
         errors.add(f"项目引用的风格 {ref} 不在 styles 中")
-    for rule in RULES:
+    for rule in transfer_catalog().rules:
         name = label(rule.table)
         for i, row in enumerate(backup.tables.get(rule.table) or [], start=1):
             for col, target in rule.fk.items():
@@ -1372,11 +1390,11 @@ def parse_backup(raw: bytes | bytearray) -> Backup:
     elif isinstance(pen_name, str):
         pen_name = pen_name.strip()
     warnings: list[str] = []
-    unknown = sorted(k for k in tables if k not in RULES_BY_TABLE)
+    unknown = sorted(k for k in tables if k not in transfer_catalog().by_table)
     if unknown:
         warnings.append(f"备份中有当前版本不认识的数据，已忽略：{'、'.join(unknown)}")
     clean: dict[str, list[dict[str, Any]]] = {}
-    for rule in RULES:
+    for rule in transfer_catalog().rules:
         rows = tables.get(rule.table)
         if rows is None:
             continue
@@ -1396,6 +1414,8 @@ def parse_backup(raw: bytes | bytearray) -> Backup:
     )
     _check_refs(backup, errors)
     errors.raise_if_any()
+    for validate in transfer_catalog().validators:
+        validate(backup.tables)
     _check_ai_data(backup, errors)
     errors.raise_if_any()
     _check_setting_data(backup, errors)
@@ -1505,7 +1525,7 @@ def _dry_run_missing(backup: Backup) -> Counter[str]:
     for col, fn in PROJECT_RULE.json_refs.items():
         if col in backup.project:
             fn(backup.project[col], ctx)
-    for rule in RULES:
+    for rule in transfer_catalog().rules:
         if not (rule.json_refs or rule.str_refs):
             continue
         for row in backup.tables.get(rule.table) or []:
@@ -1694,7 +1714,7 @@ class _Importer:
             if key in custom:
                 mapping[row["id"]] = custom[key]
                 continue
-            values, _ = self._values(RULES_BY_TABLE["relationship_types"], row)
+            values, _ = self._values(transfer_catalog().by_table["relationship_types"], row)
             t = RelationshipType(project_id=self.project_id, **values)
             self.db.add(t)
             await self.db.flush()
@@ -1733,7 +1753,7 @@ class _Importer:
     async def _table(self, rule: TableRule, rows: list[dict[str, Any]]) -> None:
         if rule.table == "outline_snapshots":
             for t in ("outlines", "chapter_plans"):
-                model = RULES_BY_TABLE[t].model
+                model = transfer_catalog().by_table[t].model
                 self.ctx.synthetic_base[t] = int(await self.db.scalar(select(func.max(model.id))) or 0)
         if rule.table in {"scene_moves", "annotation_messages"}:
             # 移动证据和讨论中的发言均以原 ID 定序。
@@ -1787,7 +1807,7 @@ class _Importer:
             )
 
     async def _scene_history(self) -> None:
-        rule = RULES_BY_TABLE["chapter_versions"]
+        rule = transfer_catalog().by_table["chapter_versions"]
         for row in self.backup.tables.get("chapter_versions", []):
             if row.get("scene_snapshot") is None:
                 continue
@@ -1825,7 +1845,7 @@ class _Importer:
         if self.backup.cover is not None:
             data, mime_type = self.backup.cover
             self.db.add(ProjectCover(project_id=project.id, data=data, mime_type=mime_type))
-        for rule in RULES:
+        for rule in transfer_catalog().rules:
             rows = self.backup.tables.get(rule.table) or []
             if rule.table == "relationship_types":
                 await self._relationship_types(rows)

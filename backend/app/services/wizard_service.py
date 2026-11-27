@@ -102,6 +102,7 @@ from app.services.collaboration_task_access import GRANT_KEY, GrantIdentity, tas
 from app.services.entity_ai_service import normalize_aliases, normalize_career_assignments, normalize_category
 from app.services.generation_service import Event
 from app.services.project_service import get_execution_project, project_info
+from app.services.project_transfer.plugin_links import nullable_links
 from app.services.setting_ai_context import build_scope, current_character_text, current_world_text
 from app.services.task_engine.execution_identity import (
     TaskExecutionIdentity,
@@ -795,13 +796,14 @@ def _wizard_delete_fk_graph() -> frozenset[tuple[str, str, str, str, str]]:
 
 async def _assert_replacement_isolation(db: AsyncSession, project_id: int, kind: WizardKind) -> None:
     """覆盖目标及级联引用均须能证明属于当前作品；新外键未经审查一律阻止。"""
-    if _wizard_delete_fk_graph() != _WIZARD_DELETE_FKS:
+    plugin_links = nullable_links({"characters", "world_settings"})
+    if _wizard_delete_fk_graph() != _WIZARD_DELETE_FKS | {link.edge for link in plugin_links}:
         raise ConflictError("向导关联结构已变化，无法安全覆盖", extra={"code": "wizard_reference_invalid"})
     tables = Base.metadata.tables
     target = tables[{"characters": "characters", "world": "world_settings", "careers": "careers",
                      "outline": "outlines"}[kind]]
     ids = select(target.c.id).where(target.c.project_id == project_id)
-    checks = []
+    checks = [link.foreign(project_id, ids) for link in plugin_links if link.target == target.name]
 
     def owner_ref(child_name: str, target_column: str, owner_name: str, owner_column: str):
         child, owner = tables[child_name], tables[owner_name]

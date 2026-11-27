@@ -8,6 +8,7 @@ from fastapi import routing
 
 from app.models.entities import TASK_KINDS
 from app.plugins.manifest import PluginManifest
+from app.services.project_transfer.registry import build_transfer_catalog
 from app.services.task_engine.registry import TaskHandler
 
 _CORE_NAMESPACES = {kind.partition(".")[0] for kind in TASK_KINDS}
@@ -28,6 +29,7 @@ def _check_router(router: routing.APIRouter, prefix: str) -> None:
 
 class PluginRegistry:
     def __init__(self, manifests: tuple[PluginManifest, ...]):
+        self.transfer_catalog = build_transfer_catalog(manifests)
         self._manifests = manifests
         self._by_id = {}
         self._owners = {}

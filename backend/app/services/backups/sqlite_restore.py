@@ -22,6 +22,13 @@ def _snapshot_revision(path: Path) -> str:
         versions = db.execute("SELECT version_num FROM alembic_version").fetchall()
         if len(versions) != 1 or not isinstance(revision := versions[0][0], str) or not revision.isdecimal():
             raise ValueError("无法识别快照的迁移版本")
+        drama_tables = {
+            "drama_series", "drama_episodes", "drama_episode_sources", "drama_characters", "drama_looks",
+            "drama_scenes", "drama_props", "drama_shots", "drama_episode_looks", "drama_episode_scenes",
+            "drama_episode_props", "drama_shot_looks", "drama_shot_props",
+        }
+        if tables & drama_tables != (drama_tables if int(revision) >= 83 else set()):
+            raise ValueError("快照的短剧数据表与迁移版本不一致")
         video_schema = {
             "ai_external_jobs": {"id", "task_id", "actor_id", "payer_id", "project_id", "config_id",
                                  "config_instance_key", "provider", "model", "kind", "request", "external_id",

@@ -222,7 +222,13 @@ def _queued_hub(source: object) -> object | None:
 def _has_successor_guard(guard: object) -> bool:
     """运行中会推进断点的任务类型（批量、智能体轮次）：落后来源可由同一 hub 已登记的后继来源替代复核。"""
     task = getattr(guard, "_task", None)
-    return type(task) is TaskExecutionIdentity and task.kind in ("chapter.batch", "agent.turn")
+    if type(task) is not TaskExecutionIdentity:
+        return False
+    if task.kind in ("chapter.batch", "agent.turn"):
+        return True
+    from app.plugins.registry import current
+
+    return callable(getattr(current.get().handler(task.kind), "checkpoint_successor", None))
 
 
 async def _verify_agent_change_frame(db, task: Task, event: str, data: dict[str, Any]) -> bool:

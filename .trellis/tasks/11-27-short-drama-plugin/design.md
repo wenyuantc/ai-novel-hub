@@ -33,7 +33,7 @@ frontend/src/plugins/drama/
   components/        # 按步骤拆分：SourceStep、ScriptStep、AssetStep、ShotStep …
 ```
 
-登记：后端在 `app/plugins/__init__.py` 的 `REGISTERED` 加一行；前端在 `src/plugins/registry.tsx` 的 `PLUGINS` 加一行。
+登记：后端在 `app/plugins/builtins.py` 的 `REGISTERED` 加一行；前端在 `src/plugins/catalog.ts` 的 `PLUGINS` 加一行。
 插件标识 `drama`，接口前缀 `/api/v1/plugins/drama`，任务类型前缀 `drama.`，页面路径 `features/drama/...`。
 
 ## 3. 本子任务需要给框架补的接入点
@@ -42,7 +42,7 @@ frontend/src/plugins/drama/
 
 | 接入点 | 做法 |
 | --- | --- |
-| 作品备份规则 | `PluginManifest` 增加 `transfer_rules: tuple[TableRule, ...]` 与 `not_exported: dict[str, str]`；作品备份注册表在构建 `RULES`、`NOT_EXPORTED` 时并入已登记插件的贡献（`backend/app/services/project_transfer/registry.py:103`、`:199`）。规则与插件是否启用无关：停用时数据仍在，备份仍应带上。 |
+| 作品备份规则 | `PluginManifest` 增加 `transfer_rules: tuple[TableRule, ...]` 与 `not_exported: dict[str, str]`；每个应用装配自己的 `transfer_catalog`，与核心规则合并。插件还提供 `transfer_snapshot` 和 `transfer_validator`，分别处理导出期间编辑与导入时跨行约束。规则与插件是否启用无关：停用时数据仍在，备份仍应带上。 |
 | 作品彻底删除 | 不加钩子。`drama_*` 表经外键 `ON DELETE CASCADE` 挂在 `projects` 下，随作品删除。 |
 
 这两项改动连同测试在本子任务内完成，并补进框架规范。
@@ -122,6 +122,14 @@ frontend/src/plugins/drama/
   使编辑者在获得作者模型授权时可以发起任务（S9）。这是本子任务里与核心耦合最深的部分，实施计划单列一步并先读规范。
 - 用量：经现有调度层调用，自动计入 AI 用量与预算，`kind` 记为任务类型。
 
+### 5.1 已核实的执行引擎约定
+
+- 受理路由通过 `EditorUser` 核对页面账号，并在锁外预检文本模型。引擎在写事务内消费受理证明，冻结原模型、操作者和协作邀请轮次。重试复核原模型，已生成的场景批次还要核对原始输入签名。
+- 领取后用原执行身份建立 `collaboration_ai_guard.for_task`。同一守卫控制真实模型发送、用量计费、SSE 发布与成功写入。任务只向模型传已选择的作品材料，关联小说设定按当前 AI 可见性过滤。
+- 分批任务把已验证的批次和材料签名写入 Task 断点。上一轮身份在提交后按已知断点推进；协作者滞后的 SSE 帧只允许在同一执行内使用内容前缀不变的后继批次证明。
+- 成功回调在引擎持有的同一个数据库事务中写业务表并推进修订号。校验失败则回滚业务变更，按原执行身份释放活动资源。发送或输出时权限被撤销时不会保存剧本、资产和分镜。
+- 成功事件在 `data.result` 中返回 `applied` 和 `draft`。发生版本冲突时采用动作须验证原任务 UUID、作品写权限及冲突时观察到的版本；人工再次修改后须重新生成。
+
 ## 6. 接口
 
 前缀 `/api/v1/plugins/drama`，框架已在挂载处加了「插件已启用」的门禁。作品级鉴权用现有的作品访问判定：读需 `content.read`，
@@ -154,7 +162,7 @@ frontend/src/plugins/drama/
 - 集工作台的步骤（本子任务交付前四步的文字部分）：原始内容 → 剧本 → 资产 → 分镜。「视频制作」「导出」「画布」的入口在后续子任务加入。
   参考项目把工作台写成一个 6600 多行的文件（调研 8.1）；这里按步骤拆成独立组件，状态用本地状态加请求钩子，不新建全局 store。
 - 原始内容步骤：章节多选器（按卷分组、显示字数、连续性校验）加文本框。
-- 剧本步骤：发起改写后用现有的流式任务钩子显示实时输出（`useStreamTask`，见前端 Hook 规范），可取消；完成后进入可编辑状态。
+- 剧本步骤：发起改写后用现有的流式任务钩子显示实时输出（`useTaskStream`，见前端 Hook 规范），可取消；完成后进入可编辑状态。
 - 资产步骤：角色卡片（含造型条）、场景、道具三栏；提取按钮；关联小说设定的标记与编辑。图片位置在本子任务里显示占位。
 - 分镜步骤：左侧分镜列表（拖动排序、新增、删除），右侧检查器编辑描述、景别、氛围、时长、引用的场景 / 造型 / 道具、视频提示词。
   视频提示词输入支持 `@名称` 引用已绑定素材的着色提示。

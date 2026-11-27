@@ -1,5 +1,6 @@
 // 后台任务：CRUD + 订阅（GET /tasks/{id}/stream，断线自动重连，snapshot 覆盖本地文本）
 
+import { pluginTaskInfo } from '../plugins/catalog'
 import { isAgentToolStart, isAgentToolEnd, readAgentChange } from './agentEvents'
 import { ApiError, request, type CapturedProjectFailure, type QueryValue, type RequestOptions } from './client'
 import { getSSE, isAbortError, readDetail, readText, StreamError } from './sse'
@@ -131,7 +132,7 @@ export const COLLABORATOR_STREAM_KINDS: readonly TaskKind[] = [
 
 /** 作者（及个人任务）可订阅全部类型；协作者只订阅白名单内类型。 */
 export function canStreamTask(kind: TaskKind, isCollaborator: boolean): boolean {
-  return !isCollaborator || COLLABORATOR_STREAM_KINDS.includes(kind)
+  return !isCollaborator || COLLABORATOR_STREAM_KINDS.includes(kind) || pluginTaskInfo(kind)?.collaboratorStream === true
 }
 
 /** 只有失败、已取消、已中断的任务可以重试（与后端一致） */
@@ -180,7 +181,7 @@ export function isCoreTaskKind(kind: string): kind is CoreTaskKind {
 }
 
 export function taskKindLabel(kind: string): string {
-  return isCoreTaskKind(kind) ? TASK_KIND_LABELS[kind] : '其他任务'
+  return isCoreTaskKind(kind) ? TASK_KIND_LABELS[kind] : (pluginTaskInfo(kind)?.label ?? '其他任务')
 }
 
 /** 「排队中，前面还有 N 个」 */

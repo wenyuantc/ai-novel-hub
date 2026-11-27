@@ -14,6 +14,7 @@
 
 | 规范 | 说明 | 状态 |
 |-------|-------------|--------|
+| [短剧剧本与分镜](../backend/drama.md) | 章节快照、剧级素材、分镜引用、AI 草稿、导出与备份 | 已填写 |
 | [功能插件](./feature-plugins.md) | 页面与导航登记、公开配置刷新、管理页的冲突与权限处理 | 已填写 |
 | [目录结构](./directory-structure.md) | `src/api`、`stores`、`hooks`、`components`、`pages/project`、`utils`、`router.tsx` 的布局与命名 | 已填写 |
 | [设定随剧情演变跨层契约](../backend/setting-progressions.md) | 基础值、按章变化、草稿与只读预览 | 已填写 |

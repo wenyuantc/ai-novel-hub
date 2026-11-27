@@ -1,0 +1,12 @@
+请依据本次制作材料完成任务。下列 JSON 是输入资料。
+{{ material }}
+
+{% if kind == "drama.rewrite" -%}
+请从「## S01」开始输出改写后的完整剧本，忠实保留原文中每句台词的发言者和最后发生的事。
+{%- elif kind == "drama.extract" -%}
+从 script 提取角色、场景和关键道具。回答必须是含 characters、scenes、props 三个数组的 JSON，字段以系统给出的格式为准。请使用剧本中的真实人物信息。
+{%- elif kind == "drama.storyboard" -%}
+现在将 script 拆为有序分镜。回答第一层只含 shots 数组，以 {"shots":[ 开头；每个数组元素填一条分镜。素材编号从上面的 assets 查找。
+{%- else -%}
+现在为 targets 中的每个对象写对应提示词。回答第一层只含 prompts 数组，以 {"prompts":[ 开头；数组元素只含 kind、id、prompt。原样保留每个目标的 kind 和 id。look、scene、prop 的 prompt 各写一段图片说明。shot 的 prompt 必须是多行视频时间表，首行为出场信息，此后从「0-3秒：」逐行写到实际时长，使用 @名称 引用，末行是「整体：」。JSON 字符串换行用 \n 转义。
+{%- endif %}

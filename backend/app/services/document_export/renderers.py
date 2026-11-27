@@ -1,5 +1,6 @@
 """将同一份可阅读节点渲染为 TXT、Markdown 或 Word。"""
 
+import html
 import io
 import re
 
@@ -8,17 +9,32 @@ from docx.oxml.ns import qn
 from docx.shared import Pt
 
 from app.core.errors import BadRequestError
-from app.services.document_export.model import DocumentModel, DocumentNode
+from app.services.document_export.model import DocumentModel, DocumentNode, DocumentTable
 from app.services.rich_document_render import render_markdown
 
 _NEWLINE = re.compile(r"\r\n|\r|\n")
 _INVALID_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 
+def _text_table(table: DocumentTable, *, markdown: bool) -> str:
+    rows = [table.headers, *table.rows]
+    if not markdown:
+        return "\n".join("\t".join(row) for row in rows)
+
+    def cell(value: str) -> str:
+        escaped = html.escape(value, quote=False).replace("\\", "\\\\").replace("|", "\\|")
+        return _NEWLINE.sub("<br>", escaped)
+
+    rows.insert(1, tuple("---" for _ in table.headers))
+    return "\n".join("| " + " | ".join(cell(value) for value in row) + " |" for row in rows)
+
+
 def render_text(model: DocumentModel, *, markdown: bool) -> str:
     parts = []
     for node in model.nodes:
-        if node.kind == "heading":
+        if isinstance(node, DocumentTable):
+            parts.append(_text_table(node, markdown=markdown))
+        elif node.kind == "heading":
             parts.append(f"{'#' * (node.level + 1)} {node.text}" if markdown else node.text)
         elif node.kind == "prose" and markdown and node.blocks:
             parts.append(render_markdown(node.text, node.blocks))
@@ -60,7 +76,10 @@ def _docx_paragraphs(document, node: DocumentNode) -> None:
 
 def render_docx(model: DocumentModel) -> bytes:
     for node in model.nodes:
-        if _INVALID_XML.search(node.text):
+        cells = (value for row in [node.headers, *node.rows] for value in row) if isinstance(
+            node, DocumentTable
+        ) else (node.text,)
+        if any(_INVALID_XML.search(value) for value in cells):
             raise BadRequestError(f"{node.source}包含 Word 不支持的控制字符，请检查后重试")
     document = Document()
     normal = document.styles["Normal"]
@@ -68,7 +87,14 @@ def render_docx(model: DocumentModel) -> bytes:
     normal.font.size = Pt(11)
     normal._element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "宋体")
     for node in model.nodes:
-        if node.kind == "heading":
+        if isinstance(node, DocumentTable):
+            table = document.add_table(rows=0, cols=len(node.headers))
+            table.style = "Table Grid"
+            for index, values in enumerate([node.headers, *node.rows]):
+                for cell, value in zip(table.add_row().cells, values, strict=True):
+                    run = cell.paragraphs[0].add_run(value)
+                    run.bold = index == 0
+        elif node.kind == "heading":
             paragraph = document.add_heading(node.text, level=node.level)
             if node.new_page:
                 paragraph.paragraph_format.page_break_before = True

@@ -9,7 +9,6 @@ import asyncio
 
 import pytest
 
-from app import plugins
 from app.core.deps import CurrentUser, DbDep, TaskEngineDep
 from app.models import FeaturePluginState, Task
 from app.plugins import PluginManifest
@@ -70,7 +69,7 @@ def handlers(request):
 @pytest.fixture
 async def settings_overrides(monkeypatch, handlers):
     manifests = tuple(PluginManifest(h.kinds[0].split(".")[0], "示例", "", "1", task_handlers=(h,)) for h in handlers)
-    monkeypatch.setattr(plugins, "REGISTERED", manifests)
+    monkeypatch.setattr("app.plugins.builtins.REGISTERED", manifests)
     async with isolated_worker_database(monkeypatch) as overrides:
         yield overrides
 

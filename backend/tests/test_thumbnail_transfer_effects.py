@@ -52,7 +52,7 @@ async def test_backup_and_card_images_roundtrip_with_explicit_selection(client):
     backup = await client.get(f"{base}/backup")
     assert backup.status_code == 200, backup.text
     data = backup.json()
-    assert data["version"] == 18
+    assert data["version"] == 19
     assert {item["ref"]["kind"] for item in data["thumbnails"]} == {"character", "organization", "career", "world"}
     assert all(set(item) == {"ref", "mime_type", "data"} for item in data["thumbnails"])
     assert all("id" not in item for item in data["thumbnails"])

@@ -1234,6 +1234,14 @@ def publication_successor(
             prev_used, next_used = prev_cp.get("tool_calls_used", 0), next_cp.get("tool_calls_used", 0)
             return (type(prev_round) is int and type(next_round) is int and next_round >= prev_round
                     and type(prev_used) is int and type(next_used) is int and next_used >= prev_used)
+        from app.plugins.registry import current
+
+        check = getattr(current.get().handler(execution.kind), "checkpoint_successor", None)
+        if (callable(check) and execution == guard._task and later_execution == later_guard._task
+                and guard._stamp == later_guard._stamp and guard._cipher is later_guard._cipher
+                and guard._allow_private == later_guard._allow_private
+                and later_execution.step_cursor > execution.step_cursor):
+            return check(execution, later_execution) is True
         return False
     except Exception:  # noqa: BLE001
         return False

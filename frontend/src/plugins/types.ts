@@ -9,6 +9,7 @@ export interface PluginPage {
 
 export interface FeaturePlugin {
   id: string
+  tasks?: Readonly<Record<string, { label: string; collaboratorStream: boolean }>>
   project?: readonly PluginPage[]
   global?: readonly PluginPage[]
 }

@@ -29,14 +29,14 @@ from app.services import authorization_service, personal_projection, project_lif
 from app.services.project_service import get_owned_project
 from app.services.project_transfer import thumbnails
 from app.services.project_transfer.annotations import AnnotationState, annotation_state, export_threads
-from app.services.project_transfer.registry import PROJECT_RULE, RULES, TableRule
+from app.services.project_transfer.registry import PROJECT_RULE, TableRule, transfer_catalog
 from app.services.project_transfer.serialization import SerializationState, serialization_state
 from app.services.style_service import FIELD_LIMITS
 
 FORMAT = "ainovel.project"
-VERSION = 18
+VERSION = 19
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0082"
+APP_SCHEMA = "0083"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -60,6 +60,7 @@ class ExportPlan:
     timeline_revision: int | None
     annotation_state: AnnotationState
     serialization_state: SerializationState
+    plugin_state: dict[str, object]
 
     @property
     def filename(self) -> str:
@@ -74,7 +75,11 @@ class ExportPlan:
 
 def included_tables(options: BackupOptions) -> set[str]:
     chosen = options.model_dump()
-    return {r.table for r in RULES if r.option is None or chosen.get(r.option)}
+    return {r.table for r in transfer_catalog().rules if r.option is None or chosen.get(r.option)}
+
+
+async def _plugin_state(db: AsyncSession, project_id: int) -> dict[str, object]:
+    return {name: await snapshot(db, project_id) for name, snapshot in transfer_catalog().snapshots.items()}
 
 
 async def prepare_export(db: AsyncSession, user_id: int, project_id: int, options: BackupOptions) -> ExportPlan:
@@ -89,7 +94,8 @@ async def prepare_export(db: AsyncSession, user_id: int, project_id: int, option
                       content_revisions=content_revisions,
                       timeline_revision=await _timeline_revision(db, project.id),
                       annotation_state=await annotation_state(db, project.id),
-                      serialization_state=await serialization_state(db, project.id))
+                      serialization_state=await serialization_state(db, project.id),
+                      plugin_state=await _plugin_state(db, project.id))
 
 
 def _value(v: Any) -> Any:
@@ -346,7 +352,7 @@ async def _stream_export(sessionmaker: async_sessionmaker[AsyncSession], plan: E
             first_image = False
         await _assert_export_active(db, plan)
         yield b'],"tables":{'
-        for t_index, rule in enumerate(r for r in RULES if r.table in included):
+        for t_index, rule in enumerate(r for r in transfer_catalog().rules if r.table in included):
             await _assert_export_active(db, plan)
             prefix = "," if t_index else ""
             yield f'{prefix}"{rule.table}":['.encode()
@@ -407,6 +413,8 @@ async def validate_export(db: AsyncSession, plan: ExportPlan, *, complete: bool 
         raise ConflictError("备份导出期间协作批注已变化，请重新导出", extra={"code": "annotation_changed"})
     if await serialization_state(db, plan.project_id) != plan.serialization_state:
         raise ConflictError("备份导出期间连载数据已变化，请重新导出", extra={"code": "serialization_changed"})
+    if await _plugin_state(db, plan.project_id) != plan.plugin_state:
+        raise ConflictError("备份导出期间插件资料已变化，请重新导出", extra={"code": "plugin_data_changed"})
     if current_revisions != plan.content_revisions or current_planning != plan.planning_revision:
         raise ConflictError("备份导出期间章节或场景已变化，请重新导出", extra={"code": "scene_context_changed"})
 
@@ -432,7 +440,7 @@ async def estimate(db: AsyncSession, user_id: int, project_id: int) -> BackupEst
     groups: dict[str, EstimateGroup] = {
         k: EstimateGroup() for k in ("core", "versions", "snapshots", "generation_logs", "inspiration")
     }
-    for rule in RULES:
+    for rule in transfer_catalog().rules:
         rows, chars = await _measure(db, rule, plan)
         g = groups[rule.option or "core"]
         g.rows += rows

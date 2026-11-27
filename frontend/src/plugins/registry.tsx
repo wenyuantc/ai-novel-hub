@@ -4,7 +4,9 @@ import type { NavGroup } from '../components/StudioNavigation'
 import RequirePlugin from './RequirePlugin'
 import type { FeaturePlugin } from './types'
 
-export const PLUGINS: readonly FeaturePlugin[] = []
+import { PLUGINS as registeredPlugins } from './catalog'
+
+export const PLUGINS = registeredPlugins
 
 export function pluginRoutes(plugins: readonly FeaturePlugin[], scope: 'project' | 'global'): RouteObject[] {
   const ids = new Set<string>()

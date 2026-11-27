@@ -24,7 +24,7 @@ SAMPLE = plugins.PluginManifest("example", "示例插件", "双实例开关验�
 
 @pytest.fixture
 def settings_overrides(monkeypatch):
-    monkeypatch.setattr(plugins, "REGISTERED", (SAMPLE,))
+    monkeypatch.setattr("app.plugins.builtins.REGISTERED", (SAMPLE,))
     return {}
 
 

@@ -15,7 +15,7 @@
 ### 2. 签名
 
 ```python
-# backend/app/services/project_transfer/registry.py
+# backend/app/services/project_transfer/rules.py
 @dataclass(frozen=True)
 class TableRule:
     table: str; model; scope: Callable[[int], ColumnElement[bool]]   # 选出属于项目 pid 的行
@@ -28,7 +28,10 @@ class TableRule:
     json_refs: dict[str, JsonRemap]           # 含 id 的 JSON 列 → 重映射函数（remap.py）
     json_plain: tuple[str, ...]               # 不含 id 的 JSON 列
     str_refs: dict[str, Callable]             # 含 id 的字符串列（analysis_changes.field_key）
-PROJECT_RULE: TableRule; RULES: tuple[TableRule, ...]   # RULES 的顺序就是导入顺序
+# backend/app/services/project_transfer/registry.py
+PROJECT_RULE: TableRule
+RULES: tuple[TableRule, ...]   # 核心表按依赖顺序排列
+transfer_catalog().rules      # 完整导入顺序，包含当前实例已登记插件的规则
 NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_changes": 理由,
                 "tasks": 理由, "kb_chunks": 理由, "retrieval_chunks": 理由}   # 智能体三张表是运行时数据，不跨实例迁移
 ```
@@ -69,7 +72,7 @@ NOT_EXPORTED = {"agent_conversations": 理由, "agent_messages": 理由, "agent_
 
 ### 4. 必需的测试
 
-`tests/test_project_transfer.py::test_registry_covers_all_project_tables`（沿外键扩散找出所有与项目相关的表，必须等于 RULES ∪ NOT_EXPORTED ∪ {projects}）、
+`tests/test_project_transfer.py::test_registry_covers_all_project_tables`（沿外键扩散找出所有与项目相关的表，必须等于完整登记表中的 rules ∪ not_exported ∪ {projects}）、
 `test_registry_handles_every_fk_and_json_column`（每个外键列在 fk / fill / custom / exclude 之一；每个 JSON 列恰好在 json_refs 或 json_plain 之一；
 fk 声明的被引用表与模型一致）、`test_registry_import_order`（非 deferred 的外键只能引用排在前面的表）。
 
@@ -83,13 +86,15 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 ---
 
-## 场景：备份格式 v18 与导出
+## 备份格式 v19 与导出
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 18, exported_at, app_schema: "0082"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 19, exported_at, app_schema: "0083"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
+- v19 的核心组包含短剧的 13 张文字资料表。已登记插件处于停用状态时，导出、导入和估算仍遍历它贡献的规则。导入为剧、集、素材和分镜分配新的 ID，同时重映射来源章节、小说角色、地点和剧内素材引用。同一集的非空来源章节 ID 必须唯一，多个已删除章节各自保留标题和顺序。小说地点在建联后重新分类时仍保留原关联。
+- v18 及更早的备份逐级补空短剧表。旧版本中带有非空短剧数据、v19 缺少短剧表、角色没有唯一的默认造型、跨剧绑定素材或重复关联时，预览返回 400。导出前后比对剧、集的修订号和小说设定关联，变化时返回 409 `plugin_data_changed`。
 - 每日写作统计、个人码字目标和计量起点属于本实例。导入创建新作品时保留原作建书时间，另用服务端导入时刻初始化该作品的计量起点。整库备份保留统计与目标。
 - 执行者登记、租约配对、0067 的执行名额与 0068 的任务工作记录都属于实例。删除请求的 worker 也排除在作品字段之外。导入和导出只遍历作品表注册清单，额外传入 `tasks`、`task_workers`、`task_lease_store`、`task_execution_slots` 或 `task_work_records` 会提示已忽略。SQLite 整库恢复另用单主库原生快照，在全部旧进程停止后建立新一代租约，详见[整库备份](./admin-backups.md)。
 - `0032/0033` 的笔记原文、世界观别名随核心资料备份；旧备份无笔记/别名可导入，别名默认[]。导入校验笔记标题/正文/revision与别名约束；提及为原文派生的有界内存缓存，无持久副本迁移。详见[全文提及与作品笔记](./mention-tracking.md)。
@@ -118,7 +123,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 |---|---|
 | 非 UTF-8 / 非 JSON / 非对象 | `备份文件不是 UTF-8 编码的 JSON` / `备份文件不是合法的 JSON：…` / `备份文件格式不正确：应为 JSON 对象` |
 | format 不符 | `不是有效的项目备份文件（format 应为 ainovel.project）` |
-| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v18），请升级后再导入` |
+| version 非整数或 < 1 / 大于当前 | `不支持的备份版本：N` / `备份来自更新的版本（vN，当前支持 v19），请升级后再导入` |
 | 嵌套 > 40 层 | `备份文件嵌套层级过深（上限 40 层）` |
 | 缺少 project / tables | `备份文件格式不正确：缺少 project` / `…缺少 tables` |
 | 行字段缺失（NOT NULL 且无默认）/ 类型不符 / 超长 / id 重复 | `备份文件校验失败：…`，errors 如 `角色第 1 行缺少字段 name`、`角色第 1 行字段 name 超过长度上限 100` |
@@ -131,7 +136,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 > 这几类值能写进库，但会让导入响应或之后的列表接口 500（Out schema 校验失败 / PG 溢出 / JSON 编码 NaN 失败），所以在预览阶段就拦下。
 > 新增 `Literal` 取值的字符串列时同步登记 `ENUM_COLUMNS`。
 
-- 导入（单事务）：风格 → 项目 → 按 RULES 顺序插入 → deferred 回填（显式写回 `updated_at` 原值）→ 知识库 `kb_index_service.chunk_document`
+- 导入（单事务）：风格 → 项目 → 按 transfer_catalog().rules 顺序插入 → deferred 回填（显式写回 `updated_at` 原值）→ 知识库 `kb_index_service.chunk_document`
   （从 text 重新分块 + 关键词检索单元，文档状态 `ready_keyword_only`，更新时间改回原值）→ `memory_service.index_memories`（保留钉住 / 屏蔽 / content_key）
   → 同事务 `materialize_project` 校验并重算时间线投影 → commit → 导入者有默认向量模型时 `kb_service.start_rebuild`（`task_id`，失败只记警告）。
 - 风格：预设按 `preset_key`（缺失 → 复制为自定义风格 + 警告）；自定义风格在导入者库里有**名称与全部字段都相同**的 → 复用，否则新建
@@ -189,7 +194,7 @@ target / before / after / field_key；快照自洽且可恢复）、可选项、
   CSS：`p { text-indent: 2em; line-height: 1.6; margin: 0 0 .4em; }`，标题居中，不指定字体。
 - 测试：`tests/test_epub.py`（结构、有卷 / 无卷、nav 与 ncx 层级、扉页与简介页开关、作者默认值与上限、控制字符、只导出选中章节、空章提示、跨用户、分卷规则）。
 
-迁移 0077–0078 引入的登录凭据、第三方身份绑定和两步验证数据只随整库备份恢复，不写入单书 v18。迁移 0079 的本机 MCP 个人选择和远程插件具有相同的备份边界；程序和只读部署清单由部署者另行配置。迁移 0080 的功能插件开关属于全站配置，随整库备份恢复。单书格式仍为 v18。
+迁移 0077–0078 引入的登录凭据、第三方身份绑定和两步验证数据只随整库备份恢复，不写入单书 v18。迁移 0079 的本机 MCP 个人选择和远程插件具有相同的备份边界；程序和只读部署清单由部署者另行配置。迁移 0080 的功能插件开关属于全站配置，随整库备份恢复。该迁移沿用当时的单书 v18 格式。
 
 迁移 0076 的全站词表与个人词表随整库恢复。单书 v18 仅更新导出元信息中的数据库版本；导入作品使用目标实例和新作者的词表。
 

@@ -55,8 +55,11 @@ from app.models import (
 from app.models.entities import TaskLeaseStore
 from app.models.project_import_preview import ProjectImportPreview
 from app.services.project_transfer import exporter, importer, preview_store
-from app.services.project_transfer.registry import NOT_EXPORTED, PROJECT_RULE, RULES
+from app.services.project_transfer.registry import PROJECT_RULE, transfer_catalog
 from tests.helpers import create_ai_config, create_project, register, wait_task
+
+RULES = transfer_catalog().rules
+NOT_EXPORTED = transfer_catalog().not_exported
 
 
 def _project_tables() -> set[str]:
@@ -644,7 +647,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 18 and data["app_schema"] == "0082"
+    assert data["version"] == 19 and data["app_schema"] == "0083"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1026,7 +1029,7 @@ async def test_round_trip_all_entities(client, app):
             state="submitted", external_id="original-provider-id",
         ))
     src = await _backup(client, p["id"], **ALL)
-    assert src["format"] == "ainovel.project" and src["version"] == 18
+    assert src["format"] == "ainovel.project" and src["version"] == 19
     assert src["options"] == {"versions": True, "snapshots": True, "generation_logs": True, "inspiration": True}
     # 执行者与任务归属属于源实例，和派生的索引数据一样不随作品导出。
     assert not {"tasks", "task_workers", "task_lease_store", "task_execution_slots", "task_work_records",
@@ -1659,7 +1662,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (18, "0082")
+    assert (data["version"], data["app_schema"]) == (19, "0083")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)
@@ -1793,7 +1796,7 @@ async def test_old_v2_v3_backups_upgrade_legacy_fields_without_replaying_events(
             field.pop("definition_id")
         result = await _import(client, data)
         exported = await _backup(client, result["project"]["id"])
-        assert exported["version"] == 18
+        assert exported["version"] == 19
         assert all(not exported["tables"][table] for table in importer.FIELD_TABLES)
         assert len(exported["tables"]["setting_progressions"]) == len(data["tables"]["setting_progressions"])
         assert [f["base_value"] for f in exported["tables"]["setting_text_fields"]] == [

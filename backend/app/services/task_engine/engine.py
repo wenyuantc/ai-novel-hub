@@ -2558,7 +2558,8 @@ class TaskEngine:
                         )
                         return
                 if (not committed and status == "succeeded" and pending is None and task is not None
-                        and execution is not None and task.kind in _DRAFT_ONLY_KINDS):
+                        and execution is not None and (task.kind in _DRAFT_ONLY_KINDS
+                            or getattr(get_handler(task.kind), "atomic_finalization", False) is True)):
                     # 草稿任务的成功终态核验失败：没有已提交的业务副作用需要证明，按原 UUID/轮次/执行键改记
                     # 无结果失败（不发布草稿），避免以授权失效为由永久占用活动资源键。
                     if self.admin_cancellations.winners.get(task.statistics_key) is winner_marker:

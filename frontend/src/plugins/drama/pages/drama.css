@@ -1,0 +1,32 @@
+.drama-page {
+  min-width: 0;
+}
+.drama-page .ant-tabs-content-holder {
+  min-width: 0;
+}
+.drama-field {
+  margin-block: 1em;
+}
+.drama-field label > span {
+  display: block;
+  margin-bottom: 0.45em;
+}
+.drama-output {
+  max-height: 22rem;
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.drama-page .ant-card {
+  min-width: 0;
+}
+@media (max-width: 767px) {
+  .drama-page .studio-page-heading {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .drama-page .ant-list-item {
+    flex-wrap: wrap;
+  }
+}

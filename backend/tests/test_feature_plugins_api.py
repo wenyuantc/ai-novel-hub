@@ -3,7 +3,6 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
-from app import plugins
 from app.models import AdminAuditLog, FeaturePluginState
 from app.services.audit_writer import AuditOperation
 from tests.helpers import register
@@ -16,7 +15,7 @@ RECORDS = "/api/v1/plugins/example/records"
 
 @pytest.fixture
 def settings_overrides(monkeypatch):
-    monkeypatch.setattr(plugins, "REGISTERED", (SAMPLE,))
+    monkeypatch.setattr("app.plugins.builtins.REGISTERED", (SAMPLE,))
     return {}
 
 

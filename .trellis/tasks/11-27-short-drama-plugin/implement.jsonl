@@ -18,4 +18,4 @@
 {"file": ".trellis/spec/backend/prompts-styles.md", "reason": "沙箱模板渲染的做法"}
 {"file": ".trellis/spec/frontend/state-management.md", "reason": "全局与本地状态的划分"}
 {"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-drama-pipeline.md", "reason": "参考项目的流程、数据模型、提示词结构"}
-{"file": ".trellis/tasks/11-27-plugin-framework/design.md", "reason": "框架设计（规范未落地前的依据）"}
+{"file": ".trellis/tasks/archive/2026-11/11-27-plugin-framework/design.md", "reason": "已归档的框架设计，实施以现行插件规范为准"}

@@ -16,14 +16,14 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import dataclass
+from functools import cache
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ColumnElement, or_, select
 
 from app.models import (
     AnalysisChange,
-    Base,
     Career,
     CareerHistory,
     CareerStage,
@@ -94,8 +94,11 @@ from app.models.serialization import (
 )
 from app.models.story_timeline import ChapterStoryDate, SceneStoryDate, StoryCalendar
 from app.services.project_transfer import remap
+from app.services.project_transfer.rules import Option, TableRule, TransferSnapshot, TransferValidator
 
-Option = Literal["versions", "snapshots", "generation_logs", "inspiration"]
+if TYPE_CHECKING:
+    from app.plugins.manifest import PluginManifest
+
 OPTIONS: tuple[Option, ...] = ("versions", "snapshots", "generation_logs", "inspiration")
 
 # 与项目相关、但不导出的表（理由见值）。
@@ -133,33 +136,6 @@ NOT_EXPORTED: dict[str, str] = {
     "kb_chunks": "由知识库文档的 text 重新分块得到，导入时在同一事务里重新生成",
     "retrieval_chunks": "检索单元（关键词 / 向量）是派生数据，导入时经业务写入点重建关键词部分，向量由重建任务生成",
 }
-
-
-@dataclass(frozen=True)
-class TableRule:
-    table: str
-    model: type[Base]
-    # 选出属于项目 pid 的行（导出用）
-    scope: Callable[[int], ColumnElement[bool]]
-    option: Option | None = None
-    fill: dict[str, Literal["project", "user"]] = field(default_factory=dict)
-    fk: dict[str, str] = field(default_factory=dict)
-    deferred: frozenset[str] = frozenset()
-    custom: tuple[str, ...] = ()
-    exclude: tuple[str, ...] = ()
-    json_refs: dict[str, remap.JsonRemap] = field(default_factory=dict)
-    json_plain: tuple[str, ...] = ()
-    str_refs: dict[str, Callable[[Any, remap.RemapContext], Any]] = field(default_factory=dict)
-
-    @property
-    def has_id(self) -> bool:
-        return "id" in self.model.__table__.columns
-
-    @property
-    def columns(self) -> list[str]:
-        """导出的普通列（含 id、fk、json），不含 fill / custom / exclude。"""
-        skip = set(self.fill) | set(self.custom) | set(self.exclude)
-        return [c.name for c in self.model.__table__.columns if c.name not in skip]
 
 
 def _in(column, model, pid: int):
@@ -640,3 +616,53 @@ TABLE_NAMES: tuple[str, ...] = tuple(r.table for r in RULES)
 PLANNING_TABLES: tuple[str, ...] = tuple(
     name for name in TABLE_NAMES if name.startswith(("planning_", "subplot"))
 )
+
+
+@dataclass(frozen=True)
+class TransferCatalog:
+    rules: tuple[TableRule, ...]
+    by_table: dict[str, TableRule]
+    not_exported: dict[str, str]
+    validators: tuple[TransferValidator, ...]
+    snapshots: dict[str, TransferSnapshot]
+
+
+def build_transfer_catalog(manifests: tuple["PluginManifest", ...]) -> TransferCatalog:
+    rules = list(RULES)
+    excluded = NOT_EXPORTED.copy()
+    names = {"projects", *RULES_BY_TABLE, *excluded}
+    validators = []
+    snapshots = {}
+    for manifest in manifests:
+        for table in (*[rule.table for rule in manifest.transfer_rules], *manifest.not_exported):
+            if table in names or not table.startswith(manifest.id + "_"):
+                raise ValueError(f"插件备份表名无效或重复：{table}")
+            names.add(table)
+        for rule in manifest.transfer_rules:
+            if rule.table != rule.model.__table__.name:
+                raise ValueError(f"插件备份表名与模型不符：{rule.table}")
+            rules.append(rule)
+        for table, reason in manifest.not_exported.items():
+            if not reason.strip():
+                raise ValueError(f"插件备份排除表缺少原因：{table}")
+            excluded[table] = reason
+        if manifest.transfer_snapshot is not None:
+            snapshots[manifest.id] = manifest.transfer_snapshot
+        if manifest.transfer_validator is not None:
+            validators.append(manifest.transfer_validator)
+    return TransferCatalog(tuple(rules), {r.table: r for r in rules}, excluded, tuple(validators), snapshots)
+
+
+@cache
+def _builtin_catalog() -> TransferCatalog:
+    from app.plugins import load
+
+    return load().transfer_catalog
+
+
+def transfer_catalog() -> TransferCatalog:
+    """请求和任务使用本应用的登记表；离线备份使用当前安装的内置插件。"""
+    from app.plugins.registry import current
+
+    registry = current.get(None)
+    return registry.transfer_catalog if registry is not None else _builtin_catalog()

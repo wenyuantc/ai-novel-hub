@@ -9,6 +9,7 @@ from collections.abc import Collection, Sequence
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import batched
 from typing import cast
 
 from pydantic import ValidationError
@@ -35,6 +36,7 @@ from app.services import setting_catalog_service as catalog
 from app.services.audit_writer import AuditOperation
 from app.services.project_access import require_project
 from app.services.project_service import get_manageable_project
+from app.services.project_transfer.plugin_links import nullable_links
 from app.services.setting_field_values import (
     CanonicalFieldValue,
     FieldSpec,
@@ -1242,6 +1244,14 @@ async def assert_targets_unreferenced(db: AsyncSession, project_id: int, targets
     with db.no_autoflush:
         from app.services.planning_scene_service import assert_settings_unreferenced
 
+        # 数据库会自动解除本书短剧的关联；不能因此改动归属其他作品的插件记录。
+        by_table: dict[str, list[int]] = defaultdict(list)
+        for target in targets:
+            by_table[catalog.ENTRY_MODELS[target.kind].__tablename__].append(target.id)
+        for link in nullable_links(set(by_table)):
+            for batch in batched(by_table[link.target], 500):
+                if await db.scalar(link.foreign(project_id, batch).limit(1)) is not None:
+                    raise ConflictError("设定的插件关联归属不一致", extra={"code": "setting_reference_invalid"})
         await assert_settings_unreferenced(db, project_id, targets)
         handles = await _handle_targets(db, project_id)
         requested = {(target.kind, target.id) for target in targets}

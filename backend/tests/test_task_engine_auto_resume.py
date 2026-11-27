@@ -56,7 +56,7 @@ def manifest(directory):
 
 @pytest.fixture
 def settings_overrides(monkeypatch, tmp_path):
-    monkeypatch.setattr(plugins, "REGISTERED", (manifest(tmp_path),))
+    monkeypatch.setattr("app.plugins.builtins.REGISTERED", (manifest(tmp_path),))
     return {}
 
 

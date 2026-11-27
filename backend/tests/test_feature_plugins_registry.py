@@ -7,7 +7,8 @@ from app.plugins import load
 from tests.plugins.sample_plugin import SAMPLE, Handler
 
 
-def test_registry_isolated_and_reverse_lookup():
+def test_registry_isolated_and_reverse_lookup(monkeypatch):
+    monkeypatch.setattr("app.plugins.builtins.REGISTERED", ())
     registry = load((SAMPLE,))
     assert registry.get("example") == SAMPLE
     assert registry.plugin_of_kind("example.render") == "example"

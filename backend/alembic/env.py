@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, async_engine_from_config
 
 from app.models import Base
+from app.plugins import builtins  # noqa: F401 — 自动生成迁移时也要加载已登记插件的表模型。
 
 config = context.config
 

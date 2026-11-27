@@ -44,6 +44,7 @@ from app.models import (
     StoryMemory,
     Task,
 )
+from app.services.project_transfer.plugin_links import nullable_links
 from app.services.scene_move_history import move_touches_chapter
 
 # (被删除表, 引用表, 引用列, 被引用列, 删除动作)。新关系必须分析后才能加入。
@@ -207,7 +208,9 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
     """调用方须先持有项目锁；越作品、无法确认归属或未审核的新外键都失败关闭。"""
     if not chapter_ids:
         return
-    if _current_fk_graph() != _REVIEWED_FKS:
+    plugin_links = nullable_links({"chapters"})
+    allowed_links = {link.edge for link in plugin_links}
+    if _current_fk_graph() != _REVIEWED_FKS | allowed_links:
         raise _invalid()
     removed = set(chapter_ids)
     with db.no_autoflush:
@@ -303,6 +306,7 @@ async def ensure_chapter_delete_isolation(db: AsyncSession, project_id: int, cha
                 .outerjoin(Chapter, Chapter.id == Scene.chapter_id)
                 .where(SceneSection.origin_section_id.in_(sections), Chapter.project_id.is_distinct_from(project_id)),
             ]
+            checks.extend(link.foreign(project_id, batch) for link in plugin_links)
             for statement in checks:
                 if await db.scalar(statement.limit(1)) is not None:
                     raise _invalid()

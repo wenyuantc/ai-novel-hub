@@ -5,86 +5,86 @@
 
 ## 开始前复核
 
-- [ ] 框架的实际契约：`backend/app/plugins/manifest.py`、`registry.py`（标识与前缀校验）、`frontend/src/plugins/types.ts`、`registry.tsx`
+- [x] 框架的实际契约：`backend/app/plugins/manifest.py`、`registry.py`（标识与前缀校验）、`frontend/src/plugins/types.ts`、`registry.tsx`
       （页面路径规则、导航合成）。与本设计第 2、3、7 节不一致处先改设计。
-- [ ] 页面路径是否支持带参数的段（`drama/:sid`）：读 `registry.tsx` 的路径校验并用测试确认。
-- [ ] 迁移链尾与本子任务的迁移编号。
-- [ ] 读 `.trellis/spec/backend/project-transfer.md`（表规则、引用重映射、版本兼容）、`batch-generate.md`（断点）、
+- [x] 页面路径是否支持带参数的段（`drama/:sid`）：读 `registry.tsx` 的路径校验并用测试确认。
+- [x] 迁移链尾与本子任务的迁移编号。
+- [x] 读 `.trellis/spec/backend/project-transfer.md`（表规则、引用重映射、版本兼容）、`batch-generate.md`（断点）、
       `relationship-generation.md` 或 `story-entities.md` 中设定类 AI 任务的受理与协作约定、`document-export.md`。
-- [ ] 读参考项目的四份中文提示词与对应技能全文（`ai-drama-workshop/backend/workspace/prompts/*.md`、`workspace/skills/*/SKILL.md`），
+- [x] 读参考项目的四份中文提示词与对应技能全文（`ai-drama-workshop/backend/workspace/prompts/*.md`、`workspace/skills/*/SKILL.md`），
       作为改写蓝本；只读，不改该仓库。
 
 ## 步骤
 
 ### 1. 框架补接入点：作品备份规则
 
-- [ ] `PluginManifest` 增加 `transfer_rules`、`not_exported`；注册表校验（表名须以插件标识为前缀、不与核心规则重名）。
-- [ ] 作品备份注册表并入插件贡献；现有反射测试改为同时覆盖插件表。
-- [ ] 测试：示例插件贡献一张表后能导出导入；未声明规则的插件表使反射测试失败；不登记插件时注册表与改动前一致。
+- [x] `PluginManifest` 增加 `transfer_rules`、`not_exported`；注册表校验（表名须以插件标识为前缀、不与核心规则重名）。
+- [x] 作品备份注册表并入插件贡献；现有反射测试改为同时覆盖插件表。
+- [x] 测试：示例插件贡献一张表后能导出导入；未声明规则的插件表使反射测试失败；不登记插件时注册表与改动前一致。
 
 验证：`cd backend && uv run pytest tests/test_feature_plugins_registry.py tests/test_project_transfer.py -q`
 
 ### 2. 插件骨架与登记
 
-- [ ] `backend/app/plugins/drama/` 骨架与 `MANIFEST`；`REGISTERED` 加一行。
-- [ ] `frontend/src/plugins/drama/index.ts` 与一个占位列表页；`PLUGINS` 加一行。
-- [ ] 测试：插件出现在管理页列表；未启用时接口 403、导航无入口；启用后入口出现。
+- [x] `backend/app/plugins/drama/` 骨架与 `MANIFEST`；`builtins.REGISTERED` 登记。
+- [x] `frontend/src/plugins/drama/index.ts` 与剧列表页；`PLUGINS` 加一行。
+- [x] 测试：插件出现在管理页列表；未启用时接口 403、导航无入口；启用后入口出现。
 
 ### 3. 数据模型与迁移
 
-- [ ] `models.py` 全部表、约束与索引；迁移含降级。
-- [ ] 迁移往返与结构测试；整库备份表目录更新。
+- [x] `models.py` 全部表、约束与索引；迁移含降级。
+- [x] 迁移往返与结构测试；整库备份表目录更新。
 
 ### 4. 剧、集与原始内容
 
-- [ ] 剧与集的增改查删；建集时按章节 id 复制正文快照并记录来源；上限校验；修订号冲突。
-- [ ] 鉴权矩阵测试：作者、编辑者、查看者、无关用户、管理员人工维护；跨作品的章节 id 被拒；章节后续修改不影响已建集。
+- [x] 剧与集的增改查删；建集时按章节 id 复制正文快照并记录来源；上限校验；修订号冲突。
+- [x] 鉴权矩阵测试：作者、编辑者、查看者、无关用户、管理员人工维护；跨作品的章节 id 被拒；章节后续修改不影响已建集。
 
 ### 5. 资产与关联
 
-- [ ] 角色、造型、场景、道具的增改删与约束（至少一套造型、唯一默认、唯一名）；集与资产的关联。
-- [ ] `services/linking.py`：名称与别名匹配、初值带入、手动改关联与解除。
-- [ ] 测试：约束逐条；同名角色自动关联并带入样貌；改短剧角色名不影响小说角色；删除小说角色后短剧角色保留且关联为空。
+- [x] 角色、造型、场景、道具的增改删与约束（至少一套造型、唯一默认、唯一名）；集与资产的关联。
+- [x] `services/linking.py`：名称与别名匹配、初值带入、手动改关联与解除。
+- [x] 测试：约束逐条；同名角色自动关联并带入样貌；改短剧角色名不影响小说角色；删除小说角色后短剧角色保留且关联为空。
 
 ### 6. 分镜
 
-- [ ] 分镜增改删、整集排序、引用的场景 / 造型 / 道具（必须属于本剧）。
-- [ ] 测试：排序后的顺序稳定；引用他剧资产被拒；并发排序 409；删除资产后分镜引用被清理。
+- [x] 分镜增改删、整集排序、引用的场景 / 造型 / 道具（必须属于本剧）。
+- [x] 测试：排序后的顺序稳定；引用他剧资产被拒；并发排序 409；删除资产后分镜引用被清理。
 
 ### 7. 提示词与输出解析（纯函数，先于任务处理器）
 
-- [ ] `prompts/` 四组模板与渲染；`styles.py`；JSON 输出的 Pydantic 模型与解析（含围栏、前后缀文字的容错）。
-- [ ] 测试：模板渲染的快照；合法与各种不合法输出的解析结果；剧本格式的基本校验。
+- [x] `prompts/` 四组模板与渲染；`styles.py`；JSON 输出的 Pydantic 模型与解析（含围栏、前后缀文字的容错）。
+- [x] 测试：模板渲染的快照；合法与各种不合法输出的解析结果；剧本格式的基本校验。
 
 ### 8. 任务处理器（与核心耦合最深，先读后写）
 
-- [ ] **先读代码**：`backend/app/services/task_engine/handlers/entities.py` 全文与 `batch.py` 的断点部分，
+- [x] **先读代码**：`backend/app/services/task_engine/handlers/entities.py` 全文与 `batch.py` 的断点部分，
       弄清受理预检、执行身份、协作执行三项声明各自要求实现什么；结论补进 `design.md` 第 5 节。
-- [ ] `drama.rewrite`（流式）→ `drama.extract` → `drama.storyboard`（分批与断点）→ `drama.prompts`，逐个实现并登记。
-- [ ] 终态写库与修订号核对；修订号已变时结果留在任务里；提取的合并规则；重新拆分的替换。
-- [ ] 测试（用项目的假模型）：四种任务的正常路径；输出不合法时重试一次后失败；取消后不写库；运行中内容被改则不覆盖；
+- [x] `drama.rewrite`（流式）→ `drama.extract` → `drama.storyboard`（分批与断点）→ `drama.prompts`，逐个实现并登记。
+- [x] 终态写库与修订号核对；修订号已变时结果留在任务里；提取的合并规则；重新拆分的替换。
+- [x] 测试（用项目的假模型）：四种任务的正常路径；输出不合法时重试一次后失败；取消后不写库；运行中内容被改则不覆盖；
       分镜中断后从断点继续；同一集并发第二个任务被拒；编辑者在有 / 无作者模型授权时的受理结果；用量被记录；插件停用时受理被拒且运行中任务被取消。
 
 回滚点：处理器逐个提交；任一个出问题可单独回退而保留手动编辑功能。
 
 ### 9. 备份规则与导出
 
-- [ ] `transfer.py` 全部规则；格式版本升到 19；旧版本样例仍可导入。
-- [ ] 文档导出接口（DOCX、Markdown）。
-- [ ] 测试：含短剧的作品导出再导入后各表行数与内容一致、与小说设定的关联指向新 id；旧版本备份导入不报错；
+- [x] `transfer.py` 全部规则；格式版本升到 19；旧版本样例仍可导入。
+- [x] 文档导出接口（DOCX、Markdown）。
+- [x] 测试：含短剧的作品导出再导入后各表行数与内容一致、与小说设定的关联指向新 id；旧版本备份导入不报错；
       作品彻底删除后无短剧残留；查看者无导出权限时被拒。
 
 ### 10. 前端页面
 
-- [ ] `api.ts`、`types.ts`；剧列表页、剧详情页（剧集、素材库）、集工作台及四个步骤组件。
-- [ ] 测试：章节选择器的连续性与上限；改写的流式显示与取消；提取后的关联标记；分镜的增删与排序；409 保留草稿；查看者只读；无模型配置时的引导。
-- [ ] 浏览器走查：从选章到得到分镜与提示词的完整流程；375px 宽度；浅色与深色；管理员停用后页面显示未启用。
+- [x] `api.ts`、`types.ts`；剧列表页、剧详情页（剧集、素材库）、集工作台及四个步骤组件。
+- [x] 测试：章节选择器的连续性与上限；改写的流式显示与取消；提取后的关联标记；分镜的增删与排序；409 保留草稿；查看者只读；无模型配置时的引导。
+- [x] 浏览器走查：从选章到得到分镜与提示词的完整流程；375px 宽度；浅色与深色；管理员停用后页面显示未启用。
 
 ### 11. 文档与收口
 
-- [ ] 规范与 README（见 `design.md` 第 11 节）。
-- [ ] 逐条核对 `prd.md` 的验收标准并勾选。
-- [ ] 全量门禁：
+- [x] 规范与 README（见 `design.md` 第 11 节）。
+- [x] 逐条核对 `prd.md` 的验收标准并勾选。
+- [x] 全量门禁：
   - `cd backend && uv run ruff check . && uv run pytest -n 4 --dist loadfile --durations=20`
   - `cd frontend && npm run lint && npm run test && npm run build`
 
@@ -101,6 +101,8 @@
 
 ## 开始实现前的检查
 
-- [ ] 用户已批准本子任务的规划；`11-27-plugin-framework` 已完成并归档。
-- [ ] `implement.jsonl` 与 `check.jsonl` 各有至少一条真实的规范条目。
-- [ ] 工作区干净，或已与用户确认现有改动的归属。
+- [x] 用户已批准本子任务的规划；`11-27-plugin-framework` 已完成并归档。
+- [x] `implement.jsonl` 与 `check.jsonl` 各有至少一条真实的规范条目。
+- [x] 工作区干净，或已与用户确认现有改动的归属。
+
+实际验证命令与结果见[逐项验收记录](research/verification.md)。
