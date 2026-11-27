@@ -1,0 +1,18 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范总索引与全量门禁命令"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ruff / pytest、测试隔离、README 同步要求"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "模型、迁移与约束的写法"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误层级与响应包"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范总索引"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面、管理页与可复用组件的既有模式"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useStreamTask 等钩子与 SSE 客户端"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像后端 schema 的约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint / test / build 门禁"}
+{"file": ".trellis/spec/backend/feature-plugins.md", "reason": "插件框架契约"}
+{"file": ".trellis/spec/backend/ai-usage.md", "reason": "用量与预算"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "不导出规则的声明"}
+{"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-drama-pipeline.md", "reason": "分镜版本、参考图、导出的参考做法"}
+{"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-media-infra-and-gap.md", "reason": "生图、生视频、FFmpeg 的参考做法"}
+{"file": ".trellis/tasks/11-27-media-storage/design.md", "reason": "媒体存储设计"}
+{"file": ".trellis/tasks/11-27-ai-media-models/design.md", "reason": "模型接入设计"}
+{"file": ".trellis/tasks/11-27-short-drama-plugin/design.md", "reason": "短剧文本段设计"}

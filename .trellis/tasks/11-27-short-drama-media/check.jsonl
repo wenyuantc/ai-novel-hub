@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与禁止模式"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与评审清单"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对未重复造已有工具"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对跨层数据流一致"}
+{"file": ".trellis/spec/backend/ai-usage.md", "reason": "核对计费与预算"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "核对媒体不进备份"}

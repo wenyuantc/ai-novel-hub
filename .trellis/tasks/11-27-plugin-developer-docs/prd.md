@@ -1,7 +1,7 @@
 # 开发文档：/developers 增加插件开发指南
 
 > 父任务：`11-27-admin-plugin-packages`。决定编号 D1–D15、共同需求 R1–R7 见父任务 `prd.md`。
-> 规划深度：本文件现在只定需求与验收；`design.md`、`implement.md` 在轮到本子任务、其依赖已落地时再写，届时重新走一次评审。
+> 技术设计见同目录 `design.md`，实施计划见 `implement.md`。
 
 ## Goal
 

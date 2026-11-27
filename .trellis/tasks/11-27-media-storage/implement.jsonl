@@ -1,0 +1,20 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范总索引与全量门禁命令"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ruff / pytest、测试隔离、README 同步要求"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "模型、迁移与约束的写法"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误层级与响应包"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范总索引"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面、管理页与可复用组件的既有模式"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useStreamTask 等钩子与 SSE 客户端"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "types.ts 镜像后端 schema 的约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint / test / build 门禁"}
+{"file": ".trellis/spec/backend/admin-backups.md", "reason": "本地与 S3 存储的既有实现、加密配置与表目录；本子任务的参照与边界"}
+{"file": ".trellis/spec/backend/recycle-bin.md", "reason": "作品彻底删除的事务与锁序；媒体清理要挂在其上"}
+{"file": ".trellis/spec/backend/project-transfer.md", "reason": "NOT_EXPORTED 登记与反射测试"}
+{"file": ".trellis/spec/backend/rbac-quotas.md", "reason": "后台权限目录与授权写屏障"}
+{"file": ".trellis/spec/backend/system-settings.md", "reason": "管理写约定：修订号、同事务审计"}
+{"file": ".trellis/spec/backend/admin-audit.md", "reason": "审计动作与摘要约束"}
+{"file": ".trellis/spec/backend/project-cover.md", "reason": "现有库内图片的校验与鉴权读取做法"}
+{"file": ".trellis/spec/backend/deployment-migrations.md", "reason": "多实例部署与迁移约束"}
+{"file": ".trellis/spec/backend/feature-plugins.md", "reason": "插件启用状态的判定方式"}
+{"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-media-infra-and-gap.md", "reason": "参考项目的文件基础设施与 aiNovel 差距"}

@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范总索引"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面与组件的既有模式"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint / test / build 门禁"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型约束的写法"}
+{"file": ".trellis/spec/backend/feature-plugins.md", "reason": "插件框架契约：文档必须与之一致"}
+{"file": ".trellis/spec/backend/open-api.md", "reason": "/developers 页面现有内容的来源与约定"}
+{"file": ".trellis/tasks/11-27-plugin-framework/design.md", "reason": "框架设计"}
+{"file": ".trellis/tasks/11-27-short-drama-plugin/design.md", "reason": "短剧设计"}

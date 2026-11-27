@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与评审清单"}
+{"file": ".trellis/spec/backend/feature-plugins.md", "reason": "核对文档与框架契约一致"}
+{"file": ".trellis/spec/backend/open-api.md", "reason": "核对现有开放 API 指南未被改动"}
