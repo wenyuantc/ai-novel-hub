@@ -448,3 +448,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 79: 媒体文件存储与管理
+<!-- trellis-session: v=2 fp=51f6fd9792411e06 -->
+
+**Date**: 2026-11-27
+**Task**: 媒体文件存储与管理
+**Branch**: `codex/11-27-media-storage`
+
+### Summary
+
+实现本地与 S3 媒体存储、分段鉴权读取、配额、清理与管理页。验证真实 HTTPS RustFS 跨实例读取、错卷诊断及 Chrome 大视频拖动；后端 7769 项、前端 1988 项通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ff7e8b5` | feat: 增加媒体文件存储与管理 |
+
+### Status
+
+[OK] **Completed**
