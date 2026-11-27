@@ -493,3 +493,25 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 81: 短剧剧本与分镜插件实现及验收
+<!-- trellis-session: v=2 fp=41c03c9242fe0996 -->
+
+**Date**: 2026-11-28
+**Task**: 短剧剧本与分镜插件实现及验收
+**Branch**: `codex/short-drama-plugin`
+
+### Summary
+
+完成短剧文字工作台及 10 项验收。后端全量 7902 通过，前端 2013 通过；验证了 PostgreSQL 16、跨实例备份、Chrome 和本地真实模型。仅本地提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `850dcf6` | feat: 支持小说章节改编短剧剧本与分镜 |
+
+### Status
+
+[OK] **Completed**
