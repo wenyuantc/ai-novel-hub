@@ -94,7 +94,7 @@ from app.models.serialization import (
 )
 from app.models.story_timeline import ChapterStoryDate, SceneStoryDate, StoryCalendar
 from app.services.project_transfer import remap
-from app.services.project_transfer.rules import Option, TableRule, TransferSnapshot, TransferValidator
+from app.services.project_transfer.rules import Option, TableRule, TransferNotice, TransferSnapshot, TransferValidator
 
 if TYPE_CHECKING:
     from app.plugins.manifest import PluginManifest
@@ -625,6 +625,7 @@ class TransferCatalog:
     not_exported: dict[str, str]
     validators: tuple[TransferValidator, ...]
     snapshots: dict[str, TransferSnapshot]
+    notices: tuple[TransferNotice, ...]
 
 
 def build_transfer_catalog(manifests: tuple["PluginManifest", ...]) -> TransferCatalog:
@@ -650,7 +651,8 @@ def build_transfer_catalog(manifests: tuple["PluginManifest", ...]) -> TransferC
             snapshots[manifest.id] = manifest.transfer_snapshot
         if manifest.transfer_validator is not None:
             validators.append(manifest.transfer_validator)
-    return TransferCatalog(tuple(rules), {r.table: r for r in rules}, excluded, tuple(validators), snapshots)
+    notices = tuple(m.transfer_notice for m in manifests if m.transfer_notice is not None)
+    return TransferCatalog(tuple(rules), {r.table: r for r in rules}, excluded, tuple(validators), snapshots, notices)
 
 
 @cache

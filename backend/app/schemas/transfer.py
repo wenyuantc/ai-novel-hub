@@ -20,6 +20,7 @@ class EstimateGroup(BaseModel):
 
 
 class BackupEstimate(BaseModel):
+    warnings: list[str] = Field(default_factory=list)
     core: EstimateGroup
     versions: EstimateGroup
     snapshots: EstimateGroup

@@ -1,3 +1,6 @@
+import { Link } from 'react-router-dom'
+import LookPictures from './LookPictures'
+import type { LookImageAction } from './TaskPanel'
 import { PictureOutlined } from '@ant-design/icons'
 import {
   Alert,
@@ -38,6 +41,7 @@ export interface AssetStepProps {
   eid?: number
   canEdit: boolean
   canEditNow: () => boolean
+  imageAction?: LookImageAction
   episodeRevision?: number
   onTask?: (kind: 'drama.extract' | 'drama.prompts', params: Record<string, unknown>) => void
   reloadKey?: number
@@ -133,6 +137,7 @@ function AssetPanel({
   canEdit,
   canEditNow,
   onTask,
+  imageAction,
   episodeRevision,
   onChange,
   reloadKey,
@@ -151,6 +156,14 @@ function AssetPanel({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const assets = loaded.data
+  const waitingForImages = assets?.characters.some((person) =>
+    person.looks.some((look) => look.pending_image_count > 0),
+  )
+  useEffect(() => {
+    if (!waitingForImages || loaded.loading || loaded.error) return
+    const timer = window.setTimeout(reload, 2500)
+    return () => window.clearTimeout(timer)
+  }, [waitingForImages, loaded.loading, loaded.error, reload])
   function changed() {
     loaded.reload()
     onChange?.()
@@ -254,6 +267,14 @@ function AssetPanel({
       {(error || loaded.error) && (
         <Alert type="error" message={error || loaded.error} action={<Button onClick={changed}>刷新</Button>} />
       )}
+      {!eid && canEdit && imageAction?.model === 'none' && (
+        <Alert
+          type="info"
+          showIcon
+          message="生成造型图需要图片模型"
+          action={<Link to="/settings/ai">配置图片模型</Link>}
+        />
+      )}
       {canEdit && eid && (
         <Space wrap>
           {onTask && (
@@ -298,12 +319,19 @@ function AssetPanel({
                   style={{ borderInlineStart: '2px solid currentColor', marginBlock: 12, paddingInlineStart: 10 }}
                 >
                   <Space wrap>
-                    <ImagePlaceholder />
                     <Typography.Text strong>{look.name}</Typography.Text>
                     {look.is_default && <Tag>默认造型</Tag>}
                   </Space>
                   <Detail>{look.styling}</Detail>
                   {look.image_prompt && <Detail>图片提示词 · {look.image_prompt}</Detail>}
+                  <LookPictures
+                    look={look}
+                    person={person.name}
+                    canEdit={canEdit}
+                    canEditNow={canEditNow}
+                    action={imageAction}
+                    onChange={reload}
+                  />
                   {controls('looks', look, person.id)}
                 </div>
               ))}

@@ -1,6 +1,7 @@
 """手工录入与编辑素材的字段边界。PATCH 只写入请求实际携带的字段。"""
 
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -136,7 +137,36 @@ class PropOut(BaseModel):
     image_prompt: str
 
 
+class ImageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    owner_type: Literal["look"]
+    owner_id: int
+    source: Literal["generated", "uploaded", "novel"]
+    status: Literal["pending", "ready", "failed"]
+    media_object_id: str | None
+    prompt: str
+    reference_image_ids: list[int]
+    error_message: str
+    is_selected: bool
+    task_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class LibraryLookOut(LookOut):
+    selected_image: ImageOut | None
+    image_count: int
+    pending_image_count: int
+    latest_image_error: str | None
+
+
+class LibraryCharacterOut(CharacterOut):
+    looks: list[LibraryLookOut]
+
+
 class AssetsOut(BaseModel):
-    characters: list[CharacterOut]
+    characters: list[LibraryCharacterOut]
     scenes: list[SceneOut]
     props: list[PropOut]

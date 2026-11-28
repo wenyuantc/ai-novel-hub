@@ -643,4 +643,4 @@ dayjs.locale('zh-cn')
 
 ## 视频模型
 
-视频配置仅列支持的厂商，隐藏文本参数。测试生成展示费用提示、可选参考图、阶段与取消按钮，成功后用鉴权的 `MediaVideo` 播放。弹窗重开与断线重连应重新取得原任务状态。价格输入为每秒，账单展示视频秒数。详见[媒体模型契约](../backend/ai-media-models.md)。
+视频配置仅列支持的厂商，隐藏文本参数。`AIConfigPage` 选择 `model_type=video` 且 `provider=openai_compat` 时显示「获取模型」，使用所填 Base URL 下的 `/models` 列出当前 Key 可用的模型；结果可能混有非视频模型，仍允许手动输入。`volcengine`、`minimax`、`aliyun_wan` 只手动填写。辅助按钮使用 `htmlType="button"`；Base URL 校验失败只展示字段错误，不发起列表请求。测试生成展示费用提示、可选参考图、阶段与取消按钮，成功后用鉴权的 `MediaVideo` 播放。弹窗重开与断线重连应重新取得原任务状态。价格输入为每秒，账单展示视频秒数。详见[媒体模型契约](../backend/ai-media-models.md)。

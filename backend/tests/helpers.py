@@ -57,6 +57,7 @@ class FakeLLM:
     tool_calls: list[dict] = field(default_factory=list)
     images: list[GeneratedImage | Exception] = field(default_factory=list)
     image_calls: list[dict] = field(default_factory=list)
+    image_after_gates: list[Gate | None] = field(default_factory=list)
     _providers: set[LLMProvider] = field(default_factory=set, repr=False)
     _provider_names: dict[LLMProvider, str] = field(default_factory=dict, repr=False)
 
@@ -87,9 +88,16 @@ class FakeLLM:
                 for hook in hooks.event_hooks["response"]:
                     await hook(response)
 
-            async def generate_image(self, prompt, model):
+            async def generate_image(self, prompt, model, *, options=None):
                 await self._preflight()
-                fake.image_calls.append({"provider": provider, "model": model, "prompt": prompt})
+                call = {"provider": provider, "model": model, "prompt": prompt}
+                if options is not None:
+                    call["options"] = options
+                fake.image_calls.append(call)
+                gate = fake.image_after_gates.pop(0) if fake.image_after_gates else None
+                if gate is not None:
+                    gate.reached.set()
+                    await gate.released.wait()
                 if provider == "anthropic":
                     return await super().generate_image(prompt, model)
                 item = fake.images.pop(0) if fake.images else AIProviderError("未设置测试图片")

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Path, Query, Response
 
 from app.core.deps import CurrentUser, DbDep, EditorUser
 from app.plugins.drama import episode_schemas as schema
-from app.plugins.drama.services import episodes, export, shots
+from app.plugins.drama.services import episode_models, episodes, export, shots
 from app.plugins.drama.styles import STYLES
 
 router = APIRouter(prefix="/plugins/drama", tags=["短剧"])
@@ -67,6 +67,20 @@ async def patch_episode(eid: ResourceId, body: schema.EpisodePatch, user: Editor
 async def delete_episode(eid: ResourceId, revision: Revision, user: EditorUser, db: DbDep):
     await episodes.delete_episode(db, user.id, eid, revision)
     return Response(status_code=204)
+
+
+@router.get("/episodes/{eid}/models", response_model=schema.EpisodeModels)
+async def read_episode_models(eid: ResourceId, user: EditorUser, db: DbDep, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await episode_models.read_models(db, user.id, eid)
+
+
+@router.patch("/episodes/{eid}/models", response_model=schema.EpisodeModels)
+async def update_episode_models(
+    eid: ResourceId, body: schema.EpisodeModels, user: EditorUser, db: DbDep, response: Response,
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await episode_models.update_models(db, user.id, eid, body)
 
 
 @router.get("/episodes/{eid}/shots", response_model=list[schema.ShotOut])

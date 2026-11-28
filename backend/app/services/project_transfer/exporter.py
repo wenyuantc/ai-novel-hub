@@ -36,7 +36,7 @@ from app.services.style_service import FIELD_LIMITS
 FORMAT = "ainovel.project"
 VERSION = 19
 # 导出时的数据库迁移版本，仅供参考（新增迁移时同步更新）
-APP_SCHEMA = "0083"
+APP_SCHEMA = "0085"
 BATCH = 500
 # 单个富文档 JSON 的上限远高于普通行：逐行查询避免一个批次放大到数 GB。
 RICH_ROW_BATCH = 1
@@ -440,7 +440,8 @@ async def estimate(db: AsyncSession, user_id: int, project_id: int) -> BackupEst
     groups: dict[str, EstimateGroup] = {
         k: EstimateGroup() for k in ("core", "versions", "snapshots", "generation_logs", "inspiration")
     }
-    for rule in transfer_catalog().rules:
+    catalog = transfer_catalog()
+    for rule in catalog.rules:
         rows, chars = await _measure(db, rule, plan)
         g = groups[rule.option or "core"]
         g.rows += rows
@@ -461,4 +462,9 @@ async def estimate(db: AsyncSession, user_id: int, project_id: int) -> BackupEst
                                     .where(SettingImageResource.id.in_(ids[offset:offset + 400])))
             sizes.update(dict(rows.all()))
         groups["core"].bytes += sum(4 * ((sizes.get(version, 0) + 2) // 3) for version in image_versions.values())
-    return BackupEstimate(**groups)
+    warnings = []
+    for notice in catalog.notices:
+        message = await notice(db, project_id)
+        if message:
+            warnings.append(message)
+    return BackupEstimate(**groups, warnings=warnings)

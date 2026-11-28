@@ -9,7 +9,7 @@ async def start(db, engine, actor_id, data, *, episode_id=None, series_id=None):
     actor = authz.actor_snapshot(db, actor_id)
     if not isinstance(actor, authz.AuthenticatedActor) or db.new or db.dirty or db.deleted:
         raise ConflictError("原认证身份无法验证", extra={"code": "task_actor_unavailable"})
-    if episode_id is None and data.kind != "drama.prompts":
+    if episode_id is None and data.kind not in ("drama.prompts", "drama.image"):
         raise BadRequestError("该任务需从本集发起")
     series, episode = await subjects(db, episode_id=episode_id, series_id=series_id)
     project_id = series.project_id
@@ -26,7 +26,7 @@ async def start(db, engine, actor_id, data, *, episode_id=None, series_id=None):
         ctx.sessionmaker,
         actor,
         project_id,
-        "text",
+        "image" if data.kind == "drama.image" else "text",
         config_id=data.ai_config_id,
         cipher=ctx.cipher,
         allow_private=ctx.settings.allow_private_ai_endpoints,

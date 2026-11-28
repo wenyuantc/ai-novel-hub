@@ -4,6 +4,7 @@ import type { FeaturePlugin } from '../types'
 export const dramaPlugin: FeaturePlugin = {
   id: 'drama',
   tasks: {
+    'drama.image': { label: '生成造型图片', collaboratorStream: true },
     'drama.rewrite': { label: '改写短剧剧本', collaboratorStream: true },
     'drama.extract': { label: '提取短剧素材', collaboratorStream: true },
     'drama.storyboard': { label: '拆解短剧分镜', collaboratorStream: true },

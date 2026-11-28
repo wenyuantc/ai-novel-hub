@@ -22,6 +22,24 @@ def _snapshot_revision(path: Path) -> str:
         versions = db.execute("SELECT version_num FROM alembic_version").fetchall()
         if len(versions) != 1 or not isinstance(revision := versions[0][0], str) or not revision.isdecimal():
             raise ValueError("无法识别快照的迁移版本")
+        preferences = "drama_episode_model_preferences"
+        if (preferences in tables) != (int(revision) >= 85):
+            raise ValueError("快照的短剧模型偏好表与迁移版本不一致")
+        preference_columns = {"episode_id", "user_id", "text_config_id", "image_config_id", "video_config_id"}
+        if preferences in tables and not preference_columns <= {
+            row[1] for row in db.execute("PRAGMA table_info(drama_episode_model_preferences)")
+        }:
+            raise ValueError("快照的短剧模型偏好表不完整")
+        image_columns = {
+            "id", "series_id", "owner_type", "owner_id", "media_object_id", "task_id", "source",
+            "status", "prompt", "reference_image_ids", "error_message", "is_selected", "created_at", "updated_at",
+        }
+        if ("drama_asset_images" in tables) != (int(revision) >= 84):
+            raise ValueError("快照的短剧资产图表与迁移版本不一致")
+        if "drama_asset_images" in tables and not image_columns <= {
+            row[1] for row in db.execute("PRAGMA table_info(drama_asset_images)")
+        }:
+            raise ValueError("快照的短剧资产图表不完整")
         drama_tables = {
             "drama_series", "drama_episodes", "drama_episode_sources", "drama_characters", "drama_looks",
             "drama_scenes", "drama_props", "drama_shots", "drama_episode_looks", "drama_episode_scenes",

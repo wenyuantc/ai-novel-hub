@@ -11,9 +11,10 @@ export function StudioBrand({ onClick }: { onClick?: () => void }) {
 }
 
 /** 设计稿的页面标题与内容容器；表单、按钮和弹窗继续使用 Ant Design。 */
-export function StudioPage({ title, hint, action, children }: { title: string; hint?: string; action?: ReactNode; children: ReactNode }) {
+export function StudioPage({ title, hint, action, beforeHeading, children }: { title: string; hint?: string; action?: ReactNode; beforeHeading?: ReactNode; children: ReactNode }) {
   return (
     <main className="studio-page">
+      {beforeHeading}
       <div className="studio-page-heading">
         <div><h1>{title}</h1>{hint && <p>{hint}</p>}</div>
         {action && <div className="studio-page-action">{action}</div>}

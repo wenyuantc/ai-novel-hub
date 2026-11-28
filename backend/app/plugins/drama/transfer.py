@@ -16,6 +16,15 @@ def _series(pid):
     return select(m.DramaSeries.id).where(m.DramaSeries.project_id == pid)
 
 
+async def backup_notice(db: AsyncSession, project_id: int) -> str | None:
+    history = select(m.DramaAssetImage.id).where(
+        m.DramaAssetImage.owner_type == "look", m.DramaAssetImage.series_id.in_(_series(project_id))
+    )
+    if await db.scalar(select(history.exists())):
+        return "短剧造型和当前图片提示词随备份保存。造型图片文件及图片历史（含选定记录）留在原实例，导入后可重新生图。"
+    return None
+
+
 def _episodes(pid):
     return select(m.DramaEpisode.id).where(m.DramaEpisode.series_id.in_(_series(pid)))
 

@@ -11,8 +11,8 @@
 {"file": ".trellis/spec/backend/feature-plugins.md", "reason": "插件框架契约"}
 {"file": ".trellis/spec/backend/ai-usage.md", "reason": "用量与预算"}
 {"file": ".trellis/spec/backend/project-transfer.md", "reason": "不导出规则的声明"}
-{"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-drama-pipeline.md", "reason": "分镜版本、参考图、导出的参考做法"}
-{"file": ".trellis/tasks/11-27-short-drama-plugin/research/reference-media-infra-and-gap.md", "reason": "生图、生视频、FFmpeg 的参考做法"}
-{"file": ".trellis/tasks/11-27-media-storage/design.md", "reason": "媒体存储设计"}
-{"file": ".trellis/tasks/11-27-ai-media-models/design.md", "reason": "模型接入设计"}
-{"file": ".trellis/tasks/11-27-short-drama-plugin/design.md", "reason": "短剧文本段设计"}
+{"file": ".trellis/tasks/archive/2026-11/11-27-short-drama-plugin/research/reference-drama-pipeline.md", "reason": "分镜版本、参考图、导出的参考做法"}
+{"file": ".trellis/tasks/archive/2026-11/11-27-short-drama-plugin/research/reference-media-infra-and-gap.md", "reason": "生图、生视频、FFmpeg 的参考做法"}
+{"file": ".trellis/tasks/archive/2026-11/11-27-media-storage/design.md", "reason": "媒体存储设计"}
+{"file": ".trellis/tasks/archive/2026-11/11-27-ai-media-models/design.md", "reason": "模型接入设计"}
+{"file": ".trellis/tasks/archive/2026-11/11-27-short-drama-plugin/design.md", "reason": "短剧文本段设计"}

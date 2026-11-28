@@ -1,9 +1,21 @@
 import { api } from '../../api/client'
 import { dramaWrite } from './write'
-import type { AssetFields, AssetKind, DramaAsset, DramaAssets, EpisodeVersion, MemberKind } from './assetTypes'
+import type {
+  AssetFields,
+  AssetKind,
+  DramaAsset,
+  DramaAssets,
+  LookImage,
+  EpisodeVersion,
+  MemberKind,
+} from './assetTypes'
 
 const base = '/plugins/drama'
 export const dramaAssetApi = {
+  lookImages: (id: number) => api.get<LookImage[]>(`${base}/assets/look/${id}/images`),
+  selectImage: (id: number) =>
+    dramaWrite<LookImage>(`${base}/asset-images/${id}`, { method: 'PATCH', body: { is_selected: true } }),
+  deleteImage: (id: number) => dramaWrite<void>(`${base}/asset-images/${id}`, { method: 'DELETE' }),
   series: (id: number) => api.get<DramaAssets>(`${base}/series/${id}/assets`),
   episode: (id: number) => api.get<DramaAssets>(`${base}/episodes/${id}/assets`),
   create: (kind: AssetKind, parent: number, body: AssetFields, episode?: EpisodeVersion) =>

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 from fastapi import APIRouter
 
-from app.services.project_transfer.rules import TableRule, TransferSnapshot, TransferValidator
+from app.services.project_transfer.rules import TableRule, TransferNotice, TransferSnapshot, TransferValidator
 from app.services.task_engine.registry import TaskHandler
 
 
@@ -18,3 +18,4 @@ class PluginManifest:
     not_exported: dict[str, str] = field(default_factory=dict)
     transfer_snapshot: TransferSnapshot | None = None
     transfer_validator: TransferValidator | None = None
+    transfer_notice: TransferNotice | None = None

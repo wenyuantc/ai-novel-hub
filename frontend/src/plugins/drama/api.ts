@@ -1,4 +1,4 @@
-import { dramaWrite } from './write'
+import { dramaActorRequest, dramaWrite } from './write'
 import { api, rawRequest } from '../../api/client'
 import { receiveAttachment } from '../../api/exports'
 import type { Task } from '../../api/types'
@@ -28,12 +28,19 @@ export interface Episode extends EpisodeSummary {
   script_skipped: boolean
 }
 
-export type DramaTaskKind = 'drama.rewrite' | 'drama.extract' | 'drama.storyboard' | 'drama.prompts'
+export type EpisodeModelType = 'text' | 'image' | 'video'
+export type EpisodeModelIds = Record<EpisodeModelType, number | null>
+
+export type DramaTaskKind = 'drama.rewrite' | 'drama.extract' | 'drama.storyboard' | 'drama.prompts' | 'drama.image'
 export type SeriesInput = Pick<Series, 'title' | 'aspect_ratio' | 'style' | 'description'>
 const base = '/plugins/drama'
 const series = (id: number) => base + '/series/' + id
 const episode = (id: number) => base + '/episodes/' + id
 export const dramaApi = {
+  episodeModels: (eid: number, isCurrent: () => boolean) =>
+    dramaActorRequest<EpisodeModelIds>(episode(eid) + '/models', {method:'GET', isCurrent}),
+  setEpisodeModel: (eid: number, type: EpisodeModelType, id: number | null, isCurrent: () => boolean) =>
+    dramaWrite<EpisodeModelIds>(episode(eid) + '/models', {method:'PATCH', body:{[type]:id}, isCurrent}),
   styles: () => api.get<{ key: string; label: string }[]>(base + '/styles'),
   list: (pid: number) => api.get<Series[]>(base + '/projects/' + pid + '/series'),
   create: (pid: number, body: SeriesInput) =>

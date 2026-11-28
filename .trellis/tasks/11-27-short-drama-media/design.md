@@ -73,10 +73,13 @@ Dockerfile           # 运行镜像安装 ffmpeg
 
 ### 3.4 已有表追加的列
 
-- `drama_episodes`：`image_config_key`、`video_config_key`（本集锁定的图片 / 视频模型配置，可空；建集或首次生成时写入，可在顶栏更换）。
+- 工作台顶栏统一选择文本、图片、视频三类模型。`0085` 新增 `drama_episode_model_preferences`，按集和当前账号保存三个可空配置引用，防止协作者相互覆盖或看到别人的私有配置。删除配置时引用置空。
 - 媒体对象的归属：`scope=project`、`project_id` 为所属作品、`plugin_id='drama'`（停用插件后不可访问，P10）。
 
 ## 4. 资产图（P1–P3）
+
+本轮先交付剧级素材库和集工作台的角色造型。单目标 `drama.image` 使用图片模型，即使没有文本模型也可发起。优先使用造型已保存的图片提示词；留空时，从允许发送给模型的角色外貌、造型和视觉风格直接组装输入。服务端记录实际使用的提示词及参考图。迁移 `0084_drama_asset_images` 只建立此次需要的图片历史表。后续视频与导出表使用新的迁移编号。
+
 
 - 生成：任务 `drama.image`，输入为一组目标（若干造型 / 场景 / 道具）。逐个目标：
   缺图片提示词时先在任务内生成（复用文本段的提示词逻辑）→ 组装选项 → 调用图片模型 → 存入媒体存储 → 新增一行并置 `ready`。
@@ -160,7 +163,7 @@ Dockerfile           # 运行镜像安装 ffmpeg
 | `PATCH /shot-videos/{id}`、`DELETE` | 选定、删除 |
 | `GET /episodes/{eid}/exports`、`DELETE /exports/{id}` | 成片列表、删除 |
 | `POST /episodes/{eid}/tasks` | 复用文本段的任务受理入口，`kind` 增加 `drama.image`、`drama.video`、`drama.merge` |
-| `GET /episodes/{eid}/models`、`PATCH` | 本集使用的图片 / 视频模型与其能力 |
+| `GET /episodes/{eid}/models`、`PATCH` | 当前账号在本集选用的文本、图片、视频模型 |
 
 ## 8. 前端
 
@@ -173,8 +176,8 @@ Dockerfile           # 运行镜像安装 ffmpeg
 
 ## 9. 备份与删除（D18、P10）
 
-- 四类新数据在作品备份规则里：`drama_asset_images`、`drama_shot_videos`、`drama_exports` 整表不导出（内容全是媒体引用）；
-  `drama_episodes` 的两个模型配置列不导出。导出对话框在作品含短剧媒体时显示「短剧的图片与视频不包含在备份中」。
+- `drama_asset_images`、`drama_shot_videos`、`drama_exports` 整表不导出（内容全是媒体引用）；
+  `drama_episode_model_preferences` 是个人模型偏好，也整表不导出。导出对话框在作品含短剧媒体时显示「短剧的图片与视频不包含在备份中」。
 - 删除资产、分镜、集、剧时，服务层先标记其下全部媒体对象删除，再删业务行；作品彻底删除由媒体存储的作品级标记处理。
 - 插件停用：媒体对象带 `plugin_id='drama'`，读取接口拒绝；数据与文件保留。
 

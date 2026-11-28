@@ -11,6 +11,7 @@ from app.models.base import Base
 from app.services.project_transfer import remap
 
 Option = Literal["versions", "snapshots", "generation_logs", "inspiration"]
+TransferNotice = Callable[[AsyncSession, int], Awaitable[str | None]]
 TransferSnapshot = Callable[[AsyncSession, int], Awaitable[object]]
 TransferValidator = Callable[[dict[str, list[dict[str, Any]]]], None]
 

@@ -8,6 +8,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Chapter
 from app.plugins.drama.episode_schemas import EpisodeCreate, EpisodeOut, EpisodePatch, SeriesCreate, SeriesPatch
 from app.plugins.drama.models import DramaEpisode, DramaEpisodeSource, DramaSeries
+from app.plugins.drama.services.image_lifecycle import discard_owner_images
 from app.plugins.drama.styles import STYLES
 from app.services import project_access
 from app.services.project_access import Capability
@@ -88,6 +89,7 @@ async def update_series(db, actor, sid, body: SeriesPatch):
 async def delete_series(db, actor, sid, revision):
     row = await get_series(db, actor, sid, "content.edit")
     check_revision(row, revision)
+    await discard_owner_images(db, row, row)
     await db.delete(row)
     await db.commit()
 

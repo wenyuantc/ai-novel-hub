@@ -200,7 +200,8 @@ export default function AIConfigPage() {
   }
 
   const handleFetchModels = async () => {
-    const v = await form.validateFields(['provider', 'base_url'])
+    const v = await form.validateFields(['provider', 'base_url']).catch(() => null)
+    if (!v) return
     const key = (form.getFieldValue('api_key') as string | undefined)?.trim() ?? ''
     setFetchingModels(true)
     try {
@@ -492,7 +493,13 @@ export default function AIConfigPage() {
           >
             <Input.Password placeholder={editing ? '留空不修改' : 'sk-...'} autoComplete="new-password" />
           </Form.Item>
-          <Form.Item label="模型" required extra={models.length ? `可选 ${models.length} 个模型，也可手动输入` : undefined}>
+          <Form.Item
+            label="模型"
+            required
+            extra={modelType === 'video' && provider === 'openai_compat'
+              ? `列表可能包含其他类型的模型，请选择视频模型；也可手动输入${models.length ? `（已获取 ${models.length} 个）` : ''}`
+              : models.length ? `可选 ${models.length} 个模型，也可手动输入` : undefined}
+          >
             <Space.Compact style={{ width: '100%', display: 'flex' }}>
               <Form.Item
                 name="model"
@@ -514,7 +521,8 @@ export default function AIConfigPage() {
                   }
                 />
               </Form.Item>
-              {modelType !== 'video' && <Button
+              {(modelType !== 'video' || provider === 'openai_compat') && <Button
+                htmlType="button"
                 icon={<CloudDownloadOutlined />}
                 loading={fetchingModels}
                 onClick={() => void handleFetchModels()}

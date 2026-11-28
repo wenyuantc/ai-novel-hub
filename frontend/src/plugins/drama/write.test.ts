@@ -27,6 +27,25 @@ describe('短剧写入绑定页面账号', () => {
       { task_key: 'unique-task-key' },
     ])
   })
+  it('按当前账号读取剧集模型，PATCH 只保存变更类型并可显式清除', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async () => Response.json({ text: 1, image: 2, video: 3 }))
+    vi.stubGlobal('fetch', fetch)
+    const current = () => true
+    expect(await dramaApi.episodeModels(7, current)).toEqual({ text: 1, image: 2, video: 3 })
+    await dramaApi.setEpisodeModel(7, 'video', 3, current)
+    await dramaApi.setEpisodeModel(7, 'text', null, current)
+    for (const [url, init] of fetch.mock.calls) {
+      expect(url).toBe('/api/v1/plugins/drama/episodes/7/models')
+      expect(init?.headers).toMatchObject({ 'X-Editor-Actor-Id': '31', 'X-Editor-Actor-Created-At': user.created_at })
+    }
+    expect(fetch.mock.calls.map(([, init]) => [init?.method, init?.body])).toEqual([
+      ['GET', undefined],
+      ['PATCH', '{"video":3}'],
+      ['PATCH', '{"text":null}'],
+    ])
+  })
   it('另一标签页已切换账号时，清理失效页面的授权快照', async () => {
     const clear = vi.fn()
     useAuthStore.setState({ clear })

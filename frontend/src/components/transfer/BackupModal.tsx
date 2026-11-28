@@ -59,6 +59,7 @@ export default function BackupModal({ projectId, onClose }: Props) {
           已在本书使用的系列设定会作为独立快照保存；不会导出系列归属或其他书的设定，恢复后不会自动接回原系列。
           后台任务、知识库分块与向量不导出，导入后会重新建立。
         </Typography.Text>
+        {estimate?.warnings?.map((warning) => <Alert key={warning} type="info" showIcon message={warning} />)}
         {error && <Alert type="error" showIcon message={error} />}
         <Spin spinning={loading}>
           <Space direction="vertical">

@@ -60,3 +60,26 @@ it('集内新建随同剧集修订号原子绑定，素材库新建不带剧集'
     expect.objectContaining({ method: 'POST' }),
   )
 })
+
+it('历史、选用和删除造型图片通过独立接口，写入携带编辑身份', async () => {
+  vi.stubGlobal('fetch', fetchMock)
+  await dramaAssetApi.lookImages(9)
+  await dramaAssetApi.selectImage(23)
+  await dramaAssetApi.deleteImage(23)
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    '/api/v1/plugins/drama/assets/look/9/images',
+    expect.objectContaining({ method: 'GET' }),
+  )
+  const headers = expect.objectContaining({ 'X-Editor-Actor-Id': '7' })
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    '/api/v1/plugins/drama/asset-images/23',
+    expect.objectContaining({ method: 'PATCH', headers, body: '{"is_selected":true}' }),
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    '/api/v1/plugins/drama/asset-images/23',
+    expect.objectContaining({ method: 'DELETE', headers }),
+  )
+})

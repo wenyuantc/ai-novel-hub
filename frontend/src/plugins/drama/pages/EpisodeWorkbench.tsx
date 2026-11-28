@@ -9,6 +9,8 @@ import { dramaApi, type Episode } from '../api'
 import AssetStep from '../components/AssetStep'
 import EpisodeText from '../components/EpisodeText'
 import PageScope, { LoadError, type Access } from '../components/PageScope'
+import EpisodeModelSettings from '../components/EpisodeModelSettings'
+import { useEpisodeModelSettings } from '../useEpisodeModelSettings'
 import ShotStep from '../components/ShotStep'
 import TaskPanel from '../components/TaskPanel'
 import './drama.css'
@@ -21,6 +23,8 @@ function EpisodeWorkbench({ pid, sid, eid, access }: { pid: number; sid: number;
       return { series, episode }
     }, [pid, sid, eid]),
   )
+  const showModels = Boolean(data) && access.canEdit && access.canUseAI
+  const models = useEpisodeModelSettings(eid, showModels, access.canUseAINow)
   const navigate = useNavigate()
   const mobile = useIsMobile()
   const [failure, setFailure] = useState('')
@@ -65,6 +69,7 @@ function EpisodeWorkbench({ pid, sid, eid, access }: { pid: number; sid: number;
   }
   return (
     <StudioPage
+      beforeHeading={showModels && <EpisodeModelSettings settings={models} />}
       title={'第 ' + episode.number + ' 集 · ' + episode.title}
       action={
         <Space wrap>
@@ -99,8 +104,8 @@ function EpisodeWorkbench({ pid, sid, eid, access }: { pid: number; sid: number;
       }
     >
       {failure && <Alert type="error" message={failure} />}
-      <TaskPanel sid={sid} eid={eid} access={access} refresh={refresh}>
-        {(run) => {
+      <TaskPanel sid={sid} eid={eid} access={access} refresh={refresh} modelBinding={models.binding}>
+        {(run, imageAction) => {
           const onTask = Object.values(dirty).some(Boolean) ? undefined : run
           return (
             <Tabs
@@ -175,6 +180,7 @@ function EpisodeWorkbench({ pid, sid, eid, access }: { pid: number; sid: number;
                       canEdit={access.canEdit}
                       canEditNow={access.canEditNow}
                       onTask={onTask}
+                      imageAction={imageAction}
                       episodeRevision={episode.revision}
                       reloadKey={reloadKey}
                       onChange={refresh}

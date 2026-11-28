@@ -2,12 +2,12 @@ from app.plugins import load
 from tests.helpers import create_project, register
 
 
-def test_drama_registers_four_tasks():
+def test_drama_registers_text_and_image_tasks():
     registry = load()
     manifest = registry.get("drama")
     assert manifest is not None
     kinds = {kind for handler in manifest.task_handlers for kind in handler.kinds}
-    assert kinds == {"drama.rewrite", "drama.extract", "drama.storyboard", "drama.prompts"}
+    assert kinds == {"drama.rewrite", "drama.extract", "drama.storyboard", "drama.prompts", "drama.image"}
     assert all(registry.plugin_of_kind(kind) == "drama" for kind in kinds)
 
 

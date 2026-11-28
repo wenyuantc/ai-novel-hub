@@ -35,6 +35,7 @@
 - 在清单的 `transfer_rules` 按外键依赖顺序登记 `app.services.project_transfer.rules.TableRule`。表名使用插件标识加下划线前缀，与 ORM 模型一致且全局唯一。`not_exported` 为排除的表记录原因。
 - `transfer_catalog()` 返回当前应用的规则。离线导入和导出使用安装的内置清单。停用开关只影响创作入口。
 - `transfer_validator(tables)` 在导入时核对跨行约束，例如角色默认造型与分镜素材同剧。`transfer_snapshot(db, project_id)` 用于出包前后复核数据；期间发生变化则返回冲突，用户可重试。
+- `transfer_notice(db, project_id)` 可在有权导出本书的用户打开备份窗口时，按本书实际数据返回一条排除项说明或 `None`。作品备份对已登记且停用的插件同样展示说明。
 - 核心实体被删除时，按已登记的可空外键和作品过滤条件核对归属。删除来源章节时可保留本书剧集，解除小说角色或地点关联时可保留本书素材。发现跨作品引用须拒绝操作。
 
 ## 管理接口
@@ -56,6 +57,8 @@
 ### 任务终态与多批订阅
 
 处理器若声明 `atomic_finalization = True`，所有业务写入必须与成功终态共用一个事务。提交前的权限复核失败应回滚该事务，由任务引擎在原执行身份下记失败并释放资源。需要在协作者订阅中推进断点的处理器可实现 `checkpoint_successor(original, later)`。核心核对执行身份、模型、可见性及游标；处理器还须证明输入材料相同并且已完成批次只追加。短剧分镜用两批真实 SSE 订阅覆盖这一契约。
+
+需为任务预留业务记录时，可实现 `bind_queued(db, task)`，在受理事务中将记录绑定到已分配的任务 ID。可选的 `finalize_failure(db, task)` 在赢得失败终态更新后的同一事务清理预留记录及未关联媒体。两个钩子均由引擎提交事务。插件处理器声明 `admission_model_type = "image"` 时，重试必须核对原受理图片配置与授权；未声明时沿用文本模型。造型图的失败、取消与重试回归见 `test_drama_image_task.py`。
 
 ## 错误与回归断言
 

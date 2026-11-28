@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.core.deps import DbDep, EditorUser, TaskEngineDep
 from app.plugins.drama.api.episodes import ResourceId
+from app.plugins.drama.image_handler import ImageStart
 from app.plugins.drama.services import task_results, task_start
 from app.plugins.drama.services.task_material import StartDramaTask
 from app.schemas.task import TaskOut
@@ -19,13 +20,15 @@ class ConfirmDraft(BaseModel):
 
 @router.post("/episodes/{episode_id}/tasks", status_code=202, response_model=TaskOut)
 async def episode_task(
-    episode_id: ResourceId, data: StartDramaTask, user: EditorUser, db: DbDep, engine: TaskEngineDep
+    episode_id: ResourceId, data: StartDramaTask | ImageStart, user: EditorUser, db: DbDep, engine: TaskEngineDep
 ):
     return await task_start.start(db, engine, user.id, data, episode_id=episode_id)
 
 
 @router.post("/series/{series_id}/tasks", status_code=202, response_model=TaskOut)
-async def series_task(series_id: ResourceId, data: StartDramaTask, user: EditorUser, db: DbDep, engine: TaskEngineDep):
+async def series_task(
+    series_id: ResourceId, data: StartDramaTask | ImageStart, user: EditorUser, db: DbDep, engine: TaskEngineDep
+):
     return await task_start.start(db, engine, user.id, data, series_id=series_id)
 
 

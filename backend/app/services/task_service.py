@@ -654,6 +654,10 @@ async def create_task(
         db.add(task)
         try:
             await task_statistics_service.record_created(db, task)
+            # 插件占位记录可与刚分配的 Task.id 同事务绑定，排队即对读取者可见。
+            bind_queued = getattr(handler, "bind_queued", None)
+            if bind_queued is not None:
+                await bind_queued(db, task)
             if kind in ("chapter.generate", "chapter.polish", "chapter.revise"):
                 from app.services.task_engine.handlers import chapter as chapter_handler
 

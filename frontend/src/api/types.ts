@@ -3244,6 +3244,7 @@ export interface EstimateGroup {
 
 /** GET /projects/{pid}/backup/estimate */
 export interface BackupEstimate {
+  warnings?: string[]
   core: EstimateGroup
   versions: EstimateGroup
   snapshots: EstimateGroup

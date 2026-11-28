@@ -90,10 +90,12 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 
 - `GET /projects/{pid}/backup?versions=1&snapshots=0&logs=0&inspiration=0` → `application/json` 附件，
   `书名-备份-YYYYMMDD.ainovel.json`（RFC 5987）。他人项目 404。
-- 结构：`{format: "ainovel.project", version: 19, exported_at, app_schema: "0083"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
+- 结构：`{format: "ainovel.project", version: 19, exported_at, app_schema: "0085"（仅供参考，新增迁移时同步 exporter.APP_SCHEMA）,
   options, styles: [{ref, preset_key, name, 全部风格字段}], pen_name: string|null, project: {…, default_style_ref}, thumbnails: [{ref, mime_type, data}], tables: {表名: [行]}}`。
   `kb_settings` 也是数组（0 或 1 行）；行里保留原 `id` 与外键原值，`project_id` / `user_id` 不导出，`created_at` / `updated_at` 原样导出。
 - v19 的核心组包含短剧的 13 张文字资料表。已登记插件处于停用状态时，导出、导入和估算仍遍历它贡献的规则。导入为剧、集、素材和分镜分配新的 ID，同时重映射来源章节、小说角色、地点和剧内素材引用。同一集的非空来源章节 ID 必须唯一，多个已删除章节各自保留标题和顺序。小说地点在建联后重新分类时仍保留原关联。
+- 0085 的剧集模型偏好按当前账号隔离。单书导入会使用新实例各自的模型选择，偏好表只随整库备份恢复。
+- 0084 的资产图历史、原图与缩略图存于原部署，不随单书 v19 备份导出。导入保留各造型的文字提示词，允许在新实例重新生成。
 - v18 及更早的备份逐级补空短剧表。旧版本中带有非空短剧数据、v19 缺少短剧表、角色没有唯一的默认造型、跨剧绑定素材或重复关联时，预览返回 400。导出前后比对剧、集的修订号和小说设定关联，变化时返回 409 `plugin_data_changed`。
 - 每日写作统计、个人码字目标和计量起点属于本实例。导入创建新作品时保留原作建书时间，另用服务端导入时刻初始化该作品的计量起点。整库备份保留统计与目标。
 - 执行者登记、租约配对、0067 的执行名额与 0068 的任务工作记录都属于实例。删除请求的 worker 也排除在作品字段之外。导入和导出只遍历作品表注册清单，额外传入 `tasks`、`task_workers`、`task_lease_store`、`task_execution_slots` 或 `task_work_records` 会提示已忽略。SQLite 整库恢复另用单主库原生快照，在全部旧进程停止后建立新一代租约，详见[整库备份](./admin-backups.md)。
@@ -102,8 +104,7 @@ class NewThing(TimestampMixin, Base):        # 新表引用 projects / character
 - 可选顶层 `cover: {mime_type, data: base64} | null`；无封面字段的 v1 旧备份正常导入。封面只占核心组估算字节，计入 base64 编码后的大小。
 - 被引用表因可选项未勾选而不导出时，外键导出为 null（如不导出生成记录时 `chapter_versions.generation_log_id`）。
 - 导出：路由校验归属后 `db.close()`，生成器用自己的 session，按注册表逐表键集分页（每批 500 行），图片小批编码到受限暂存文件。完整生成并校验总大小、图片版本和授权后才发送响应；发送期间逐段复验原身份、作品状态及回收代次，回收后恢复不会使旧导出继续有效。逐段检查与发送之间存在窗口，已发送字节无法撤回；不持数据库锁等待网络客户端。结束前复核图片快照，成功、异常或断连均关闭暂存文件。
-- 估算 `GET /projects/{pid}/backup/estimate` → `{core, versions, snapshots, generation_logs, inspiration}`，每项 `{rows, chars, bytes}`
-  （chars = 文本 / JSON 列长度之和；bytes = chars × 3 + rows × 150，粗估）。
+- 估算 `GET /projects/{pid}/backup/estimate` 返回五组大小（`core`、`versions`、`snapshots`、`generation_logs`、`inspiration`）及 `warnings: string[]`。大小按 `{rows, chars, bytes}` 表示，chars 为文本与 JSON 列的长度总和，bytes 粗估为 chars × 3 + rows × 150。书架下载前显示本书的提示。短剧只要存有图片历史（含失败记录）就提示造型图文件及历史留在原实例；停用插件后同样提示。
 
 ## 场景：导入
 

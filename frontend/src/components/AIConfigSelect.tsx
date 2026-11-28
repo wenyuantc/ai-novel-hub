@@ -1,7 +1,7 @@
 import { Alert, App, Select, Space, Typography } from 'antd'
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { PROVIDER_LABELS } from '../api/aiConfigs'
+import { MODEL_TYPE_LABELS, PROVIDER_LABELS } from '../api/aiConfigs'
 import { errorMessage } from '../api/client'
 import type { ModelType, Project } from '../api/types'
 import { useShallow } from 'zustand/react/shallow'
@@ -28,7 +28,7 @@ export default function AIConfigSelect({ id, value, onChange, disabled, modelTyp
   const { message } = App.useApp()
   const { loaded, loading, load } = useAIConfigStore()
   const configs = useAIConfigStore(useShallow((s) => s.configs.filter((c) => c.model_type === modelType)))
-  const typeLabel = modelType === 'image' ? '图片' : modelType === 'embedding' ? '向量' : '文本'
+  const typeLabel = MODEL_TYPE_LABELS[modelType]
   const scopedSource = useAIModelSource(modelType, projectSnapshot)
   const source = ownOnly ? 'actor' : scopedSource
 
@@ -46,7 +46,7 @@ export default function AIConfigSelect({ id, value, onChange, disabled, modelTyp
       <Alert
         type="info"
         showIcon
-        message={`未配置本人${typeLabel}模型，将使用作者授权的默认${typeLabel}模型`}
+        message={`未配置本人${typeLabel}，将使用作者授权的默认${typeLabel}`}
         description="本次可能使用作者密钥并产生作者费用，实际来源以生成结果为准。"
       />
     )
@@ -57,10 +57,10 @@ export default function AIConfigSelect({ id, value, onChange, disabled, modelTyp
       <Alert
         type="warning"
         showIcon
-        message={`尚未配置${typeLabel}模型`}
+        message={`尚未配置${typeLabel}`}
         description={
           <span>
-            请先前往 <Link to="/settings/ai">模型配置</Link> 添加一个{typeLabel}模型后再生成。
+            请先前往 <Link to="/settings/ai">模型配置</Link> 添加一个{typeLabel}后再生成。
           </span>
         }
       />

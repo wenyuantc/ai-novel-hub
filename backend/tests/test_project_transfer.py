@@ -647,7 +647,7 @@ async def test_progressions_round_trip_preserves_historical_references(client, a
     p, ids = await _setup(client, app)
     temporal = await _seed_progression_changes(app, p["id"], ids)
     data = await _backup(client, p["id"])
-    assert data["version"] == 19 and data["app_schema"] == "0083"
+    assert data["version"] == 19 and data["app_schema"] == "0085"
     types = data["tables"]["relationship_types"]
     assert {temporal["friend"], temporal["enemy"], temporal["confidant"], temporal["kin"]} <= {t["id"] for t in types}
     # 强制全局关系类型映射：朋友只被历史基线引用，模拟不同实例中的原 ID。
@@ -1547,7 +1547,8 @@ async def test_cross_user(client, app, make_client):
 async def test_estimate(client, app):
     p, _ = await _setup(client, app)
     est = (await client.get(f"{API}/{p['id']}/backup/estimate")).json()
-    assert set(est) == {"core", "versions", "snapshots", "generation_logs", "inspiration"}
+    assert set(est) == {"core", "versions", "snapshots", "generation_logs", "inspiration", "warnings"}
+    assert est["warnings"] == []
     assert est["versions"]["rows"] == 2 and est["generation_logs"]["rows"] == 1
     assert est["snapshots"]["rows"] == 1 and est["inspiration"]["rows"] == 1
     assert est["core"]["rows"] > 20 and est["core"]["chars"] > len(KB_TEXT) and est["core"]["bytes"] > 0
@@ -1662,7 +1663,7 @@ async def _typed_fields_backup(client, app):
 
 async def test_typed_v4_roundtrip_remaps_all_history_and_resets_revision(client, app):
     project, data = await _typed_fields_backup(client, app)
-    assert (data["version"], data["app_schema"]) == (19, "0083")
+    assert (data["version"], data["app_schema"]) == (19, "0085")
     assert "fields_revision" not in data["project"]
     assert len(data["tables"]["setting_reference_handles"]) == 2
     imported = await _import(client, data)

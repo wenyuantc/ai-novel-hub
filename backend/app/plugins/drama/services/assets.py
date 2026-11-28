@@ -20,6 +20,7 @@ from app.plugins.drama.models import (
 )
 from app.plugins.drama.services import linking
 from app.plugins.drama.services.episodes import check_revision, get_episode, get_series
+from app.plugins.drama.services.image_lifecycle import discard_owner_images
 
 MODEL = {"characters": DramaCharacter, "looks": DramaLook, "scenes": DramaScene, "props": DramaProp}
 MEMBERSHIP = {
@@ -66,7 +67,7 @@ def _for_episode(query, model, episode_id):
     return query.join(rel, getattr(rel, key) == model.id).where(rel.episode_id == episode_id)
 
 
-async def library(db: AsyncSession, series_id: int, episode_id: int | None = None) -> dict:
+async def library(db: AsyncSession, series_id: int, episode_id: int | None = None, *, include_images=False) -> dict:
     look_query = (
         select(DramaLook)
         .join(DramaCharacter, DramaCharacter.id == DramaLook.character_id)
@@ -75,9 +76,19 @@ async def library(db: AsyncSession, series_id: int, episode_id: int | None = Non
         )
         .order_by(DramaLook.is_default.desc(), DramaLook.sort, DramaLook.id)
     )
+    look_query = _for_episode(look_query, DramaLook, episode_id)
+    overviews = None
+    if include_images:
+        from app.plugins.drama.services.images import library_overviews
+
+        look_ids = look_query.with_only_columns(DramaLook.id, maintain_column_froms=True).order_by(None)
+        overviews = await library_overviews(db, series_id, look_ids)
     looks = defaultdict(list)
-    for look in await db.scalars(_for_episode(look_query, DramaLook, episode_id)):
-        looks[look.character_id].append(_fields(look))
+    for look in await db.scalars(look_query):
+        value = _fields(look)
+        if overviews is not None:
+            value.update(overviews[look.id])
+        looks[look.character_id].append(value)
     char_query = (
         select(DramaCharacter, Character.name)
         .outerjoin(
@@ -232,6 +243,7 @@ async def delete_asset(db, actor_id, kind, resource_id, revision):
     if isinstance(row, DramaLook) and row.is_default:
         raise BadRequestError("默认造型不能删除，请先将另一套造型设为默认")
     series.revision += 1
+    await discard_owner_images(db, series, row)
     await db.delete(row)
     await db.flush()
 

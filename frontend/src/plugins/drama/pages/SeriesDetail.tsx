@@ -96,7 +96,7 @@ function SeriesDetail({ pid, sid, access }: { pid: number; sid: number; access: 
             label: '素材库',
             children: (
               <TaskPanel sid={sid} access={access} refresh={refresh}>
-                {(run) => (
+                {(run, imageAction) => (
                   <AssetStep
                     pid={pid}
                     sid={sid}
@@ -104,6 +104,7 @@ function SeriesDetail({ pid, sid, access }: { pid: number; sid: number; access: 
                     canEditNow={access.canEditNow}
                     reloadKey={refreshKey}
                     onTask={run}
+                    imageAction={imageAction}
                     onChange={reload}
                   />
                 )}

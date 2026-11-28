@@ -1,3 +1,19 @@
+export interface LookImage {
+  id: number
+  media_object_id: string | null
+  prompt: string
+  status: 'pending' | 'ready' | 'failed'
+  error_message: string
+  is_selected: boolean
+  created_at: string
+}
+export interface LibraryLook extends DramaLook {
+  selected_image: LookImage | null
+  image_count: number
+  pending_image_count: number
+  latest_image_error: string | null
+}
+
 export interface DramaLook {
   id: number
   revision: number
@@ -42,7 +58,7 @@ export interface DramaProp {
 }
 
 export interface DramaAssets {
-  characters: DramaCharacter[]
+  characters: (Omit<DramaCharacter, 'looks'> & { looks: LibraryLook[] })[]
   scenes: DramaScene[]
   props: DramaProp[]
 }

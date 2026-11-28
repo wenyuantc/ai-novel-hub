@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, UniqueConstraint, false, text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, UniqueConstraint, false, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -176,3 +176,52 @@ class DramaShotProp(Base):
     __tablename__ = "drama_shot_props"
     shot_id: Mapped[int] = mapped_column(ForeignKey("drama_shots.id", ondelete="CASCADE"), primary_key=True)
     prop_id: Mapped[int] = mapped_column(ForeignKey("drama_props.id", ondelete="CASCADE"), primary_key=True, index=True)
+
+
+class DramaAssetImage(TimestampMixin, Base):
+    """资产图版本归属剧级素材；整部作品删除时由剧外键清除版本。"""
+
+    __tablename__ = "drama_asset_images"
+    __table_args__ = (
+        CheckConstraint("owner_type IN ('look','scene','prop') AND owner_id > 0", name="owner"),
+        CheckConstraint("source IN ('generated','uploaded','novel')", name="source"),
+        CheckConstraint("status IN ('pending','ready','failed')", name="status"),
+        CheckConstraint("(status = 'ready') = (media_object_id IS NOT NULL)", name="ready_object"),
+        CheckConstraint("NOT is_selected OR status = 'ready'", name="selected_ready"),
+        UniqueConstraint("task_id", "owner_type", "owner_id"),
+        Index("ix_drama_asset_images_owner", "series_id", "owner_type", "owner_id"),
+        Index(
+            "uq_drama_asset_images_selected",
+            "owner_type",
+            "owner_id",
+            unique=True,
+            sqlite_where=text("is_selected"),
+            postgresql_where=text("is_selected"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
+    id: Mapped[Id]
+    series_id: Mapped[int] = mapped_column(ForeignKey("drama_series.id", ondelete="CASCADE"))
+    owner_type: Mapped[str] = mapped_column(String(8))
+    owner_id: Mapped[int]
+    media_object_id: Mapped[str | None] = mapped_column(
+        ForeignKey("media_objects.id", ondelete="RESTRICT"), unique=True
+    )
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
+    source: Mapped[str] = mapped_column(String(12), default="generated", server_default="generated")
+    status: Mapped[str] = mapped_column(String(12), default="pending", server_default="pending")
+    prompt: Mapped[Description]
+    reference_image_ids: Mapped[list[int]] = mapped_column(JSON, default=list, server_default="[]")
+    error_message: Mapped[Description]
+    is_selected: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+
+class DramaEpisodeModelPreference(Base):
+    """操作账号在当前剧集选择的模型，仅作为下次打开工作台时的初值。"""
+
+    __tablename__ = "drama_episode_model_preferences"
+    episode_id: Mapped[int] = mapped_column(ForeignKey("drama_episodes.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    text_config_id: Mapped[int | None] = mapped_column(ForeignKey("ai_configs.id", ondelete="SET NULL"), index=True)
+    image_config_id: Mapped[int | None] = mapped_column(ForeignKey("ai_configs.id", ondelete="SET NULL"), index=True)
+    video_config_id: Mapped[int | None] = mapped_column(ForeignKey("ai_configs.id", ondelete="SET NULL"), index=True)

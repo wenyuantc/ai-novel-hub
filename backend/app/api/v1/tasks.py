@@ -117,7 +117,7 @@ async def retry_task(task_id: int, task_key: str, user: CurrentUser, db: DbDep, 
     model = project_ai_config.deserialize_project_model(
         payload.get("_project_model"), actor_id=actor_id, project_id=source.project_id, project_owner_id=owner_id,
     )
-    if model is None or model.model_type != "text":
+    if model is None or model.model_type != getattr(handler, "admission_model_type", "text"):
         raise ConflictError("原任务模型绑定无法验证，请重新创建任务", extra={"code": "task_admission_changed"})
     # 原请求只读事务也在外部 DNS/provider 预检前结束；锁内由 service 再验证原来源。
     await db.rollback()

@@ -30,3 +30,17 @@
     flex-wrap: wrap;
   }
 }
+
+.drama-model-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: .75rem 1rem;
+  min-width: 0;
+  margin-bottom: 1rem;
+}
+.drama-model-bar label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: .35rem;
+}
+.drama-model-bar > div { min-width: 0; }

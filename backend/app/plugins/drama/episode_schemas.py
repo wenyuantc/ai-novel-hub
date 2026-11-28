@@ -140,3 +140,12 @@ class ShotOut(ShotCreate):
 class ShotOrder(Body):
     revision: Revision
     shot_ids: Ids
+
+
+ConfigId = Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)]
+
+
+class EpisodeModels(Body):
+    text: ConfigId | None = None
+    image: ConfigId | None = None
+    video: ConfigId | None = None

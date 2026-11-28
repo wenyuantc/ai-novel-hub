@@ -3403,6 +3403,11 @@ class TaskEngine:
                 if changed.rowcount != 1:
                     await db.rollback()
                     continue
+                if status in ("failed", "cancelled", "interrupted"):
+                    # 已登记插件可在终态 CAS 的事务内释放它在受理时预留的业务记录和媒体。
+                    finalize_failure = getattr(self.feature_plugins.handler(task.kind), "finalize_failure", None)
+                    if finalize_failure is not None:
+                        await finalize_failure(db, row)
                 if status == "cancelled":
                     from app.services.rich_document_review import discard_pending
 

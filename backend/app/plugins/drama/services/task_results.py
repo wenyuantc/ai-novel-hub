@@ -1,11 +1,20 @@
 """业务表的终态写入及人工采纳；调用者持有作品写锁，控制整个事务。"""
 
+from typing import get_args
+
 from sqlalchemy import select
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import Task
 from app.plugins.drama.models import DramaLook, DramaProp, DramaScene, DramaShot
-from app.plugins.drama.services.task_material import TaskRequest, material, revisions, subjects, validate_references
+from app.plugins.drama.services.task_material import (
+    TaskKind,
+    TaskRequest,
+    material,
+    revisions,
+    subjects,
+    validate_references,
+)
 from app.services import project_access, task_service
 
 
@@ -51,7 +60,7 @@ async def confirm(db, actor_id, task_id, task_key, *, series_id=None, episode_id
     if (
         task is None
         or task.status != "succeeded"
-        or not task.kind.startswith("drama.")
+        or task.kind not in get_args(TaskKind)
         or not isinstance(task.result, dict)
     ):
         raise NotFoundError("短剧草稿不存在")

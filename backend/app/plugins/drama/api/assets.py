@@ -20,13 +20,13 @@ MemberKind = Literal["looks", "scenes", "props"]
 @router.get("/series/{sid}/assets", response_model=schema.AssetsOut)
 async def series_assets(sid: Resource, db: DbDep, user: CurrentUser):
     series = await get_series(db, user.id, sid)
-    return await assets.library(db, series.id)
+    return await assets.library(db, series.id, include_images=True)
 
 
 @router.get("/episodes/{eid}/assets", response_model=schema.AssetsOut)
 async def episode_assets(eid: Resource, db: DbDep, user: CurrentUser):
     series, episode = await get_episode(db, user.id, eid)
-    return await assets.library(db, series.id, episode.id)
+    return await assets.library(db, series.id, episode.id, include_images=True)
 
 
 async def _create(db, user, kind, parent_id, body, eid, revision):
