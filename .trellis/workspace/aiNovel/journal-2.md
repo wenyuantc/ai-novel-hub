@@ -515,3 +515,38 @@ TODO #28 已实现选区批注、回复、作者处理和失效定位。单书 v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 82: 短剧媒体首批交付与模型列表修复
+<!-- trellis-session: v=2 fp=b94a2b85da9d135b -->
+
+**Date**: 2026-11-28
+**Task**: 短剧媒体首批交付与模型列表修复
+**Branch**: `codex/short-drama-media`
+
+### Summary
+
+完成角色造型生图、按剧集保存模型选择，并开放 OpenAI 兼容视频模型列表；阶段性合并，后续继续分镜视频和成片导出。
+
+### Main Changes
+
+- 角色造型图片生成、参考图、历史选用、媒体清理及权限和备份规则
+- 剧集工作台文本/图片/视频模型偏好与 new-api 兼容模型列表
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7a660b4` | feat(drama): 支持角色造型生图与剧集模型选择 |
+
+### Testing
+
+- [OK] 前端 2024 项测试、lint、build；后端 Ruff 和 358 项相关测试通过（20 项条件跳过）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 继续场景/道具图片、分镜视频、成片导出；完成后跑 8094 项后端全量门禁

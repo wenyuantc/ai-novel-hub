@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 81
+- **Total Sessions**: 82
 - **Last Active**: 2026-11-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~517 | Active |
+| `journal-2.md` | ~552 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 82 | 2026-11-28 | 短剧媒体首批交付与模型列表修复 | `7a660b4` | `codex/short-drama-media` |
 | 81 | 2026-11-28 | 短剧剧本与分镜插件实现及验收 | `850dcf6` | `codex/short-drama-plugin` |
 | 80 | 2026-11-28 | 图片参考图与视频模型生成 | `5e8c6eb`, `ec4d801` | `codex/ai-media-models` |
 | 79 | 2026-11-27 | 媒体文件存储与管理 | `ff7e8b5` | `codex/11-27-media-storage` |
